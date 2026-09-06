@@ -10,6 +10,16 @@
     python3 tools/os88marty.py 127.0.0.1:9001 dump 0060:0000 71624 -o /tmp/k.dump
     python3 tools/os88marty.py 127.0.0.1:9001            # a REPL
 
+    python3 tools/os88marty.py instances                 # what is RUNNING
+    python3 tools/os88marty.py reap                      # ...and what is stray
+
+From a script, do not hand-roll any of the above - `launch()` is below, and it
+gives every instance its own port, run directory and disks, so several run at
+once with nothing arranged between them:
+
+    with os88marty.launch("build/os8088-360.img") as m:
+        m.vram("cga")                                    # m.addr, m.port
+
 This talks to the EMULATOR, and that is the whole of what makes it usable:
 it costs the guest not one cycle, needs nothing installed, answers on a
 machine that has hard-frozen, and does the things a stub running INSIDE the
@@ -43,11 +53,18 @@ offset with no instrumentation added. `verify` is that check as one command.
 """
 import argparse
 import json
+import os
+import re
 import socket
 import sys
 import threading
+import time
 
 DEFAULT_TIMEOUT = 60.0
+# How long a fresh connection waits for its `ping`. Short on purpose: a server
+# that has a client answers this in microseconds, and one that does NOT answer
+# is the failure this deadline exists to name rather than to sit through.
+HELLO_TIMEOUT = 5.0
 KERNEL_SEG = 0x0060
 
 
@@ -71,6 +88,58 @@ class Marty:
         self.f = self.s.makefile("rwb")
         self._lock = threading.Lock()   # cmd() is a request/reply PAIR
         self._log = []          # every input, stamped with its guest cycle
+        self.addr = "%s:%s" % (host, port)
+        self.port = int(port)
+        self.run_dir = None     # launch() fills these in; a bare attach has
+        self.pid = None         # no run tree and no process of its own
+        self._proc = None
+        self._rec = None
+        self._greet(timeout)
+
+    def _greet(self, timeout):
+        """One `ping` on connect, and the reason is the SECOND CLIENT.
+
+        The server takes one client. It refuses a second in words now
+        (debug_server.rs), but that refusal arrives UNSOLICITED - the moment
+        the connection is accepted - so something has to read it, and the only
+        place that can is here. Without this the refusal sits in the socket
+        buffer and is picked up as the answer to whatever the caller asks
+        first, which fails somewhere else entirely with `KeyError: 'data'`.
+
+        Against an emulator built before that change there is no refusal at
+        all: the connection succeeds and the first read blocks until the
+        timeout - sixty seconds of nothing, reported as a hung guest. So this
+        handshake uses a SHORT deadline of its own and says what a silence
+        there means.
+        """
+        was = self.s.gettimeout()
+        self.s.settimeout(min(HELLO_TIMEOUT, timeout))
+        try:
+            r = self.cmd(cmd="ping")
+        except MartyError as e:
+            self.close()
+            if "already has a client" in str(e) or "busy" in str(e).lower():
+                raise MartyError(
+                    "%s: %s\n  The debug server takes ONE client. Share the "
+                    "connection you have (`Flush(marty=m)`, `Mouse(marty=m)`) "
+                    "or launch a second emulator - os88marty.launch() gives "
+                    "every instance its own port." % (self.addr, e)) from None
+            raise
+        except (socket.timeout, OSError) as e:
+            self.close()
+            raise MartyError(
+                "%s: connected, then nothing came back in %.0fs (%s). A debug "
+                "server that accepts and never answers ALREADY HAS A CLIENT - "
+                "it takes one at a time - or is an emulator built before it "
+                "learned to say so (`make marty`)."
+                % (self.addr, min(HELLO_TIMEOUT, timeout),
+                   type(e).__name__)) from None
+        finally:
+            try:
+                self.s.settimeout(was)
+            except OSError:
+                pass
+        self.pid = r.get("pid")
 
     def __enter__(self):
         return self
@@ -92,6 +161,16 @@ class Marty:
                 proc.wait(timeout=5)
             except Exception:
                 pass
+        rec = getattr(self, "_rec", None)        # ...and its registry entry,
+        if rec is not None:                      # or `instances` grows a ghost
+            self._rec = None                     # for every run of the suite
+            try:
+                rec["ended"] = True
+                rec["ended_at"] = time.time()
+                _write_record(rec)
+                _drop_instance(rec, heavy_only=KEEP_MINUTES > 0)
+            except Exception:
+                pass
 
     def cmd(self, **kw):
         """One request, one reply - and ATOMICALLY, because tests thread.
@@ -105,16 +184,59 @@ class Marty:
         the two only rarely collided, and a timing change elsewhere in the
         kernel was enough to make it every run.
         """
-        with self._lock:
-            self.f.write((json.dumps(kw) + "\n").encode())
-            self.f.flush()
-            line = self.f.readline()
+        try:
+            with self._lock:
+                self.f.write((json.dumps(kw) + "\n").encode())
+                self.f.flush()
+                line = self.f.readline()
+        except OSError as e:
+            # THE EMULATOR WENT AWAY MID-SESSION, and this is where it is
+            # named. A socket to a process that no longer exists raises
+            # BrokenPipeError or ConnectionResetError - both OSError, neither
+            # a MartyError - so without this it escapes as a traceback from
+            # whatever call happened to be next, and points at the guest.
+            raise MartyError(self._gone(type(e).__name__ + ": " + str(e))) from None
         if not line:
-            raise MartyError("server closed the connection")
+            raise MartyError(self._gone("it closed the connection"))
         r = json.loads(line)
         if not r.get("ok", False):
             raise MartyError(r.get("err", "refused"))
         return r
+
+    def _gone(self, how):
+        """One sentence for "the emulator is not there any more".
+
+        It used to have a second, guessed cause that is now impossible and is
+        deliberately not repeated: `launch()` swept every martypc_headless on
+        the box, so two harnesses in one checkout took turns killing each
+        other and the victim landed exactly here. Instances are isolated now,
+        so the honest list is short - it crashed, the host killed it, or
+        something outside this harness did.
+        """
+        bits = ["the debug server at %s is gone (%s)" % (self.addr, how)]
+        proc = getattr(self, "_proc", None)
+        if proc is not None and proc.poll() is not None:
+            # OURS, and it has exited: the return code is the whole answer,
+            # and -9 is the host's OOM killer or a hand.
+            bits.append("the emulator we started (pid %d) exited rc=%s"
+                        % (self.pid or -1, proc.returncode))
+        elif self.pid is not None:
+            # `_is_marty` and not `_pid_alive`: a killed child nobody has
+            # waited on is a ZOMBIE, and signal 0 succeeds on one - so the
+            # cheap liveness test reports a process that is already dead as
+            # "still running", which is precisely the wrong thing to tell
+            # somebody chasing a machine that went away.
+            rec = getattr(self, "_rec", None)
+            start = (rec or {}).get("pid_start")
+            bits.append("emulator pid %d is %s" % (
+                self.pid, "still running - so this is the SOCKET rather than "
+                          "the process" if _is_marty(self.pid, start)
+                          else "gone"))
+        rd = getattr(self, "run_dir", None)
+        if rd:
+            bits.append("its log: %s" % os.path.join(rd, "martypc.log"))
+        bits.append("`os88marty.py instances` lists what is still running")
+        return ".\n  ".join(bits)
 
     # --- state ---------------------------------------------------------------
 
@@ -639,50 +761,92 @@ def _png(path, w, h, raw, colour_type):
 
 
 # =============================================================================
-# LAUNCHING ONE. Every scripted session needs a fresh emulator, and until this
-# existed every one of them hand-rolled the same twenty lines - which is where
-# essentially all of this harness's lost time has gone. The failures do not
-# announce themselves:
+# LAUNCHING ONE - AND LAUNCHING SEVERAL. Every scripted session needs a fresh
+# emulator, and until this existed every one of them hand-rolled the same
+# twenty lines - which is where essentially all of this harness's lost time
+# has gone. The failures do not announce themselves, so each one is gated
+# here, once, with a sentence saying which it was.
 #
-#   * A SURVIVOR FROM A PREVIOUS RUN KEEPS PORT 9001. The new emulator cannot
-#     bind, says so only in its log, and the client then drives the STALE
-#     machine - a different image, at a different point in its boot. It reads
-#     as the guest hanging, or as a change that did nothing.
-#   * `pkill -f martypc_headless` IS NOT RELIABLE HERE. The pattern matches
-#     the calling shell's own command line, so it can kill the caller instead
-#     of (or as well as) the target; the `[m]artypc` bracket dodge fixes that
-#     one and not the rest. This kills by PID, read out of /proc.
-#   * `pgrep -f <pattern>` SELF-MATCHES for the same reason, so the obvious
-#     `until ! pgrep -f foo; do sleep; done` wait never finishes.
-#   * THE SERVER TAKES ONE CLIENT. A second connection does not error, it
-#     HANGS until the read times out - so a script that wants both the mouse
-#     driver and the framebuffer must share one Marty, never build two.
-#   * TWO CONCURRENT SESSIONS ON ONE BOX DESTROY EACH OTHER, BY CONSTRUCTION.
-#     The sweep below kills EVERY martypc_headless before starting its own -
-#     which is right for the first hazard above and fatal for two people, two
-#     terminals or two agents working in one checkout: each new launch kills
-#     the other's running machine. The victim sees BrokenPipeError or
-#     ConnectionResetError from a socket to a process that no longer exists,
-#     and every symptom points at the emulator or the guest while the cause is
-#     somewhere else entirely. `serial=True` in tests/suite.py does NOT cover
-#     it: that orders rows within ONE runner process (tools/os88test.py), and
-#     nothing coordinates two runners.
+# INSTANCES ARE ISOLATED BY CONSTRUCTION NOW, and that is the change to
+# understand before reading anything below. It used to be one emulator per
+# box: `launch()` killed EVERY martypc_headless before starting its own -
+# right for a survivor holding the fixed port, and fatal for two people, two
+# terminals or two agents in one checkout, each new launch killing the other's
+# running machine. The victim saw BrokenPipeError from a socket to a process
+# that no longer existed, and every symptom pointed at the emulator or the
+# guest while the cause was somewhere else entirely.
 #
-#     Two things make it hard to see. Because the sweep kills BEFORE it
-#     starts, the two emulators never coexist, so a `ps` that only ever shows
-#     one process looks like proof that nothing is competing - it is not.
-#     And a MartyPC that loses the race does NOT exit: it reports
-#     "Could not bind debug server to 127.0.0.1:9001: Address already in use"
-#     to its LOG ONLY and runs on headless and unreachable forever, which is
-#     where survivors come from in the first place.
-#     The way to be sure is the exit code: hold an idle emulator, and if it
-#     dies with -9 while your own close() has not run, another launch() killed
-#     it. THE FIX IS NOT TO RETRY - a retry races the same way. It is to not
-#     run two.
+# Three things were shared and now are not:
 #
-# All of that is handled once, here, and loudly: every failure raises with a
-# sentence saying which of the above it was.
+#   * THE PORT. `MARTYPC_DEBUG_ADDR=127.0.0.1:0` has the OS pick a free one
+#     under the bind and `MARTYPC_DEBUG_PORTFILE=` publishes what it picked.
+#     That ordering is the point: picking a quiet port from the client and
+#     then launching is a RACE - the probe lets go of the port before the
+#     emulator binds it, so two launchers a millisecond apart pick the same
+#     one and the second dies. Nothing here probes for a port any more.
+#   * THE RUN TREE. MartyPC resolves everything relative to its working
+#     directory, and the staged tree held one `media/floppies/run0.img` per
+#     DRIVE - so two sessions booting different images wrote over each other's
+#     disk. Each instance now gets its own directory under `build/martypc/inst/`
+#     with the read-only parts symlinked (the binary, `configs/`, the ROMs)
+#     and everything writable real and private: floppies, hard disks, the log.
+#   * THE PROCESS TABLE. Nothing sweeps by pattern any more. `launch()` reaps
+#     ORPHANS - an emulator whose owning script is gone - and leaves every
+#     live, owned instance alone. `kill_all()` is still here for "clear this
+#     box", and it is never automatic.
+#
+# What has NOT changed, and cannot:
+#
+#   * THE SERVER TAKES ONE CLIENT. A second connection to the SAME instance is
+#     now refused in words rather than left hanging in the accept backlog
+#     (debug_server.rs), but it is still refused - so a script that wants both
+#     the mouse driver and the framebuffer shares one Marty, and a script that
+#     wants two machines launches two.
+#   * EVERY INSTANCE COSTS A CORE. MartyPC runs the guest as fast as it can,
+#     so N instances on an N-core box is the ceiling. Past it, GUEST CYCLE
+#     COUNTS STAY EXACT - they are counted, not timed - and everything
+#     measured in host seconds does not: `settle`, `until`, a row's timeout.
+#     `launch()` says so once when the count goes over.
+#
+# The remaining traps are the ones a fixed port never caused:
+#
+#   * `pkill -f martypc_headless` IS NOT RELIABLE HERE, and is now also wrong:
+#     the pattern matches the calling shell's own command line, so it can kill
+#     the caller instead of the target - and it kills every OTHER session's
+#     emulator besides. `pgrep -f <pattern>` self-matches for the same reason,
+#     so the obvious `until ! pgrep -f foo; do sleep; done` never finishes.
+#     Everything here kills by PID, read out of /proc, and only its own.
+#   * A SURVIVOR IS NOW VISIBLE RATHER THAN INVISIBLE. `os88marty.py instances`
+#     lists what is running, whose it is and whether the owner still exists;
+#     `reap` clears the orphans. Before this the only evidence was a `ps` that
+#     looked identical whether or not you were about to destroy someone's run.
 # =============================================================================
+
+
+def _pid_cmdline(pid):
+    """One process's command line, or None. Linux reads /proc; Darwin `ps`.
+
+    THIS IS NOT PORTABLE AND DARWIN HAS NO /proc. The harness ran on Linux
+    only until a macOS box tried it and every marty row died in launch() with
+    FileNotFoundError('/proc') before starting anything - which reads as the
+    emulator being broken rather than as the process lister being Linux-only,
+    and macOS is a supported dev platform here (tools/setup-macos.sh).
+    """
+    if os.path.isdir("/proc"):
+        try:
+            with open("/proc/%d/cmdline" % pid, "rb") as f:
+                return f.read().replace(b"\0", b" ").decode("utf-8", "replace")
+        except OSError:
+            return None
+    import subprocess
+    try:
+        ps = subprocess.run(["ps", "-o", "args=", "-p", str(pid)],
+                            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = ps.stdout.strip()
+    return line or None
+
 
 def _keep_pid(cmd):
     """Does this command line belong to the EMULATOR, not to a shell or a
@@ -698,30 +862,19 @@ def _keep_pid(cmd):
 def _marty_pids():
     """Every running martypc_headless, by PID, without pgrep's self-match.
 
-    TWO READERS, because /proc IS NOT PORTABLE AND DARWIN HAS NONE. This
-    harness ran on Linux only until a macOS box tried it and every marty row
-    died in launch() with FileNotFoundError('/proc') before starting anything
-    - which reads as the emulator being broken rather than as the process
-    lister being Linux-only, and macOS is a supported dev platform here
-    (tools/setup-macos.sh). The Darwin branch reads the same two fields from
-    `ps` and applies the same _keep_pid rule, so BOTH still kill by PID rather
-    than by pattern - which is the discipline the banner above insists on and
-    the whole reason this function exists instead of a pkill.
+    TWO READERS, for _pid_cmdline's reason. Both apply the same `_keep_pid`
+    rule, so BOTH kill by PID rather than by pattern - which is the discipline
+    the banner above insists on and the whole reason this exists instead of a
+    pkill.
     """
-    import os
     import subprocess
     out = []
     if os.path.isdir("/proc"):
         for ent in os.listdir("/proc"):
             if not ent.isdigit():
                 continue
-            try:
-                with open("/proc/%s/cmdline" % ent, "rb") as f:
-                    cmd = f.read().replace(b"\0", b" ").decode("utf-8",
-                                                               "replace")
-            except OSError:
-                continue
-            if _keep_pid(cmd):
+            cmd = _pid_cmdline(int(ent))
+            if cmd is not None and _keep_pid(cmd):
                 out.append(int(ent))
         return out
 
@@ -746,9 +899,84 @@ def _marty_pids():
     return out
 
 
+def _proc_start(pid):
+    """When this PID started, as an opaque comparable token, or None.
+
+    PIDS ARE REUSED, AND FAST. `pid_max` was 32768 on the container this bug
+    was found in, so a session that launches emulators steadily wraps the
+    counter in minutes - and it did: a finished row's record and a live
+    instance both named pid 1666. `reap()` read the stale record, asked "is
+    1666 a live martypc_headless" - it was, it was somebody ELSE's - decided
+    it was an orphan and killed it. Silently: no log line, no panic, nothing
+    but a socket that closed. That is precisely the failure this whole layer
+    exists to remove, reintroduced one level down, and a PID alone cannot
+    tell the two apart.
+
+    (pid, start time) can. On Linux it is field 22 of /proc/<pid>/stat, in
+    ticks since boot - parsed after the LAST ')' because field 2 is the comm
+    and may contain both spaces and parentheses. On Darwin, `ps -o lstart=`
+    is a second-resolution date, which is coarse but is a second the reused
+    PID would have to land in exactly.
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    if os.path.isdir("/proc"):
+        try:
+            with open("/proc/%d/stat" % pid) as f:
+                text = f.read()
+            rest = text[text.rindex(")") + 2:].split()
+            return rest[19]                 # field 22, counting from field 3
+        except (OSError, ValueError, IndexError):
+            return None
+    import subprocess
+    try:
+        ps = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
+                            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return ps.stdout.strip() or None
+
+
+def _pid_alive(pid):
+    """Is this PID a live process? Signal 0, which asks and does nothing."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True                     # somebody else's, and alive
+    except OSError:
+        return False
+    return True
+
+
+def _is_marty(pid, start=None):
+    """Is this PID a live EMULATOR - and, if `start` is given, THE SAME ONE?
+
+    Two questions, and the second is the one that matters before a signal.
+    Without `start` this answers "some martypc_headless has this PID", which
+    is enough to say a machine is running and NOT enough to kill it: the
+    emulator holding a recycled PID is somebody else's, and it is still an
+    emulator, so the cheap test passes and the kill lands on live work. See
+    `_proc_start`.
+    """
+    if not _pid_alive(pid):
+        return False
+    cmd = _pid_cmdline(pid)
+    if cmd is None or not _keep_pid(cmd):
+        return False
+    return start is None or _proc_start(pid) == start
+
+
 def _port_free(host, port, tries=60, gap=0.5):
-    """True once nothing answers on the port. A survivor holding it is the
-    single commonest reason a scripted session drives the wrong machine."""
+    """True once nothing answers on the port.
+
+    Only the EXPLICIT-address path uses this. The default path asks the OS for
+    a port under the bind, which cannot race; a probe like this one can, and
+    the comment in the banner says how.
+    """
     import time
     for _ in range(tries):
         s = socket.socket()
@@ -761,6 +989,440 @@ def _port_free(host, port, tries=60, gap=0.5):
             s.close()
             return True
     return False
+
+
+# --- where the instances live ------------------------------------------------
+
+def marty_root():
+    """build/martypc - the staged tree, the instances and the logs."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(os.path.dirname(here), "build", "martypc")
+
+
+def base_run_dir():
+    """The tree `tools/martypc/build.sh` stages: binary, configs, ROMs.
+
+    READ IT, NEVER RUN IN IT. An instance runs in a private directory that
+    symlinks these; running in the shared one is what made two sessions
+    overwrite each other's floppy.
+    """
+    return os.path.join(marty_root(), "run")
+
+
+def _inst_root():
+    return os.path.join(marty_root(), "inst")
+
+
+_seq = [0]                      # a process-local counter for _tag()
+
+
+def _tag(label):
+    """A directory name unique across processes AND within one.
+
+    The pid separates processes and the counter separates launches inside one:
+    a timestamp alone does not, because two launches in the same millisecond
+    would share a directory, and `makedirs(exist_ok=True)` would let them -
+    silently, which is the exact class of failure this whole layer removes.
+    """
+    _seq[0] += 1
+    return "%d-%s-%d" % (os.getpid(),
+                         re.sub(r"[^A-Za-z0-9_.-]", "_", label)[:24], _seq[0])
+
+
+# How long an ENDED instance's directory is kept, in minutes. It is a few KB
+# and a log, and the log is the only account of a run that has already
+# finished - so it outlives the run by default and is pruned by the next
+# `reap()` after this. 0 deletes on close.
+KEEP_MINUTES = float(os.environ.get("OS88_MARTY_KEEP_MIN", "60"))
+
+
+def instances(include_ended=False):
+    """Every emulator this harness has started, with who owns it.
+
+    One dict per instance: `port`, `pid`, `machine`, `image`, `apps`, `dir`,
+    `log`, `label`, `owner_pid`, `started`, and the two questions worth asking
+    of a record on disk - `alive` (the EMULATOR is a live martypc_headless,
+    checked against its command line so a recycled PID cannot pass) and
+    `owner_alive` (the script that started it still exists).
+
+    An instance that is alive with a dead owner is an ORPHAN: nobody is going
+    to close it, and it is what `reap()` clears.
+    """
+    out = []
+    root = _inst_root()
+    if not os.path.isdir(root):
+        return out
+    for name in sorted(os.listdir(root)):
+        rec = os.path.join(root, name, "instance.json")
+        try:
+            with open(rec) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            continue
+        d["dir"] = os.path.join(root, name)
+        # `pid_start` pins the record to one PROCESS rather than one number.
+        # A record without it was written by an older build; it is reported
+        # live on the PID alone and, deliberately, can never be killed - see
+        # `_killable`.
+        d["alive"] = _is_marty(d.get("pid", -1), d.get("pid_start"))
+        d["owner_alive"] = _pid_alive(d.get("owner_pid", -1))
+        if d.get("ended") and not include_ended and not d["alive"]:
+            continue
+        out.append(d)
+    return out
+
+
+def _killable(d):
+    """May this record's process be SIGNALLED? Three things must hold.
+
+    It is one function rather than a condition at each call site because
+    every one of them is a chance to kill somebody else's work, and the
+    consequence is silent - the victim sees a socket close, and nothing
+    anywhere says why.
+
+      * the record must carry `pid_start`, so the process can be identified
+        rather than merely numbered. Without it, no;
+      * that PID must currently be a martypc_headless STARTED AT THAT TIME;
+      * and the record must not already be retired. An `ended` record has
+        had its say; if its PID is live now it belongs to somebody else.
+    """
+    return (not d.get("ended")
+            and bool(d.get("pid_start"))
+            and _is_marty(d.get("pid", -1), d.get("pid_start")))
+
+
+def _write_record(d):
+    path = os.path.join(d["dir"], "instance.json")
+    tmp = path + ".tmp"
+    body = dict(d)
+    body.pop("dir", None)
+    body.pop("alive", None)
+    body.pop("owner_alive", None)
+    with open(tmp, "w") as f:
+        json.dump(body, f, indent=1, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _drop_instance(d, heavy_only=False):
+    """Remove an instance's tree, or just the bytes that are big.
+
+    `heavy_only` is what `close()` does: the media is private and can be
+    hundreds of megabytes, and the log is three kilobytes and is the only
+    account of a run that has already finished. So the disks go at once and
+    the record and the log stay until `reap()` prunes them.
+    """
+    import shutil
+    # PRIVATE ONLY. A caller that staged its own run tree keeps it - the
+    # record is ours to retire and the directory is not, and a registry that
+    # deleted somebody's staging tree would be a worse bug than the one this
+    # replaced.
+    if d.get("private", True):
+        media = os.path.join(d.get("run_dir") or d["dir"], "media")
+        for sub in ("floppies", "hdds"):
+            p = os.path.join(media, sub)
+            if os.path.isdir(p) and not os.path.islink(p):
+                shutil.rmtree(p, ignore_errors=True)
+    if not heavy_only:
+        shutil.rmtree(d["dir"], ignore_errors=True)
+
+
+def reap(kill_orphans=True, verbose=False):
+    """Clean up after sessions that DIED - and after nothing else.
+
+    Four cases, and only one of them signals anything:
+
+      * ENDED, and older than KEEP_MINUTES -> the tree goes. The log has
+        outlived its run by an hour, which is the window in which anyone was
+        going to read it.
+      * the emulator is GONE but the record says it was running -> the owning
+        script died between starting it and closing it. The record goes; the
+        log stays for KEEP_MINUTES, because that is the case somebody wants to
+        read.
+      * the emulator is ALIVE and its owner is ALIVE -> LEFT ALONE. This is
+        the case the old sweep got wrong, and getting it wrong is what
+        destroyed other people's runs.
+      * the emulator is ALIVE and its OWNER IS GONE -> an ORPHAN. Nobody is
+        going to close it, so it is killed - by PID, never by pattern, and
+        only through `_killable`, which asks WHICH PROCESS that PID is. A
+        record that cannot answer is left entirely alone, record and process
+        both: retiring one whose process may still be running is how a live
+        instance becomes invisible, and `kill-all --yes` is the way out.
+
+    A DETACHED instance (`launch(detach=True)`, `os88marty.py launch`) has no
+    owner ON PURPOSE and is never killed here - it is a bench somebody left
+    running, and the difference between that and an orphan is the whole reason
+    the flag exists. `os88marty.py kill <port>` ends one.
+
+    Returns (killed, removed).
+    """
+    import time
+    killed = removed = 0
+    now = time.time()
+    for d in instances(include_ended=True):
+        age_min = (now - d.get("started", now)) / 60.0
+        if d["alive"] and (d["owner_alive"] or d.get("detached")):
+            continue
+        if d["alive"] and not d["owner_alive"]:
+            if not kill_orphans:
+                continue
+            if not _killable(d):
+                # Cannot prove which process this PID is - a record from
+                # before `pid_start`, or one already retired whose number has
+                # been handed to somebody else. Say so and change NOTHING.
+                if verbose:
+                    print("reap: left pid %s on port %s alone - the record "
+                          "cannot identify the process, and a PID is not an "
+                          "identity (`kill-all --yes` is the hammer)"
+                          % (d.get("pid"), d.get("port")))
+                continue
+            try:
+                os.kill(d["pid"], 9)
+                killed += 1
+                if verbose:
+                    print("reap: killed orphan pid %d on port %s (owner %s "
+                          "is gone)" % (d["pid"], d.get("port"),
+                                        d.get("owner_pid")))
+            except OSError:
+                pass
+            d["ended"] = True
+            d["ended_reason"] = "reaped: the owning script was gone"
+            _write_record(d)
+            _drop_instance(d, heavy_only=True)
+            continue
+        # Not alive. Keep the log for a while, then take the tree.
+        if age_min >= KEEP_MINUTES:
+            _drop_instance(d)
+            removed += 1
+            if verbose:
+                print("reap: removed %s (ended %.0f min ago)"
+                      % (os.path.basename(d["dir"]), age_min))
+        elif not d.get("ended"):
+            d["ended"] = True
+            d["ended_reason"] = "the owning script died before close()"
+            _write_record(d)
+            _drop_instance(d, heavy_only=True)
+    return killed, removed
+
+
+def kill_one(which):
+    """End ONE instance, named by its port or its label. The safe hammer.
+
+    `kill_all()` is the unsafe one and always was; this is what a person with
+    a bench they have finished with actually wants, and what makes `detach`
+    usable - a detached instance has no owner, so nothing else will ever end
+    it.
+    """
+    rows = [d for d in instances() if d["alive"] and (
+        str(d.get("port")) == str(which) or d.get("label") == which)]
+    if not rows:
+        raise MartyError(
+            "no running instance on port or label %r. `os88marty.py "
+            "instances` lists them." % (which,))
+    n = 0
+    for d in rows:
+        if _killable(d):                 # never a recycled PID: _proc_start
+            try:
+                os.kill(d["pid"], 9)
+                n += 1
+            except OSError:
+                pass
+        d["ended"] = True
+        d["ended_reason"] = "killed by hand"
+        _write_record(d)
+        _drop_instance(d, heavy_only=KEEP_MINUTES > 0)
+    return n
+
+
+def kill_all(verbose=True):
+    """Kill EVERY martypc_headless on this box. Never automatic.
+
+    This is the old `launch()` sweep, kept as a deliberate act and nothing
+    else: it is right for "clear this machine before I start" and it destroys
+    every other session's run, which is exactly the damage the instance layer
+    exists to stop. `reap()` is what you want nine times in ten.
+    """
+    n = 0
+    for pid in _marty_pids():
+        try:
+            os.kill(pid, 9)
+            n += 1
+            if verbose:
+                print("killed martypc_headless pid %d" % pid)
+        except OSError:
+            pass
+    for d in instances(include_ended=True):
+        _drop_instance(d)
+    return n
+
+
+def _cpu_count():
+    """How many cores this process may actually keep busy.
+
+    THREE ANSWERS, narrowest wins, because each of the wider ones is wrong on
+    a machine somebody actually runs this on. `os.cpu_count()` is the hardware;
+    `sched_getaffinity` is what this process is pinned to; and a container with
+    a CFS QUOTA has neither - it may see and be pinned to every core and still
+    be throttled to two cores' worth of time, which is the normal shape of a
+    CI runner and of the container an agent works in. A quota read as four
+    cores when it is two puts the warning below in the wrong place, which is
+    the same as not having it.
+    """
+    n = os.cpu_count() or 1
+    try:
+        n = min(n, len(os.sched_getaffinity(0)))
+    except AttributeError:
+        pass                                    # not Linux; affinity is moot
+    for path, period in (("/sys/fs/cgroup/cpu.max", None),
+                         ("/sys/fs/cgroup/cpu/cpu.cfs_quota_us",
+                          "/sys/fs/cgroup/cpu/cpu.cfs_period_us")):
+        try:
+            with open(path) as f:
+                text = f.read().split()
+            if period is None:                  # cgroup v2: "<quota> <period>"
+                quota, per = text[0], text[1]
+            else:                               # v1: two files
+                quota = text[0]
+                with open(period) as f:
+                    per = f.read().strip()
+            if quota in ("max", "-1"):
+                continue                        # no quota on this rung
+            q = max(1, int(round(float(quota) / float(per))))
+            return min(n, q)
+        except (OSError, ValueError, IndexError):
+            continue
+    return n
+
+
+def _warn_oversubscribed(about_to_start):
+    """One line when the box is about to run more emulators than it has cores.
+
+    NOT an error, and there is no hard cap anywhere in this file. Refusing
+    here would be a new way to lose work, which is the thing this whole layer
+    is for - and the honest statement is narrower than "too many": MartyPC
+    COUNTS guest cycles rather than timing them, so every cycle figure, every
+    `disk()` count and every pixel comparison is unchanged by contention. What
+    changes is anything measured in HOST seconds - a `settle` that gives up,
+    an `until` limit, a suite row's timeout - and a run that would have passed
+    can fail on the clock alone.
+
+    THE CORE COUNT IS THE CEILING, AND IT IS MEASURED. On a four-core box,
+    aggregate guest speed against a real 4.77 MHz 8088: 3.4x at one instance,
+    13.1x at four, 13.9x at six, 13.4x at eight. It is FLAT past the core
+    count - the ninth instance does not make the machine do more work, it
+    makes every other instance slower - so the warning is not caution, it is
+    "you are paying and not being paid". Nothing else binds first: an instance
+    is ~50-100 MB of RSS and ~1 MB of disk (the VHD is reflinked), so a box
+    runs out of cores long before either.
+
+    What it does NOT mean is that a run past the ceiling is broken. At eight
+    on four cores each guest still runs at 1.66x real time - faster than the
+    hardware it emulates - so what is lost is wall-clock and the slack in
+    whatever is counting it.
+    """
+    cap = int(os.environ.get("OS88_MARTY_MAX", "0")) or _cpu_count()
+    live = len([d for d in instances() if d["alive"]])
+    if live + about_to_start > cap:
+        sys.stderr.write(
+            "os88marty: starting emulator %d on a %d-core box. Aggregate "
+            "guest speed is FLAT past the core count (measured), so this one "
+            "does not add throughput - it slows the other %d. Guest CYCLE "
+            "counts stay exact either way, being counted rather than timed; "
+            "host wall-clock does not, so `settle`, `until` and row timeouts "
+            "have less slack. OS88_MARTY_MAX overrides this note.\n"
+            % (live + about_to_start, cap, live))
+
+
+# --- a private run tree ------------------------------------------------------
+
+def _clone(src, dst):
+    """Copy a file, cheaply where the filesystem can.
+
+    A machine with a hard disk mounts a 32MB VHD and WRITES THROUGH TO IT, so
+    every instance needs its own or two of them corrupt one disk between them.
+    Measured here: 113 ms as a plain copy, 3 ms as a reflink on a filesystem
+    that has them. The fallback is the plain copy, so nothing depends on the
+    filesystem being clever.
+    """
+    import shutil
+    import subprocess
+    if sys.platform.startswith("linux"):
+        flag = "--reflink=auto"
+    elif sys.platform == "darwin":
+        flag = "-c"
+    else:
+        flag = None
+    if flag:
+        try:
+            if subprocess.call(["cp", flag, src, dst],
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL) == 0:
+                return
+        except OSError:
+            pass
+    shutil.copyfile(src, dst)
+
+
+def stage_run_dir(tag):
+    """A run tree the CALLER owns, for two instances that must share a DISK.
+
+    `launch(run_dir=...)` keeps a caller-staged tree - `_drop_instance` deletes
+    `media/` only for the private ones - so a tree made here survives an
+    instance being closed, and the next `launch` on it mounts the same VHD.
+
+    THAT IS THE ONE WORKFLOW PER-INSTANCE ISOLATION BROKE, and it broke it
+    without anybody noticing (docs/HANDOFF-SOAK-FINDINGS.md B1).
+    tests/hdboot.py and tests/knobhd.py INSTALL to a hard disk in one machine
+    and then BOOT it in another; before the isolation work both used the shared
+    master VHD, and after it the install landed in a private clone that
+    `close()` deleted while the boot opened a fresh clone of the pristine
+    master. The boot found an empty disk and said "no desktop from drive C:",
+    which reads as a broken boot loader and cost a bisect to place.
+
+    `launch` still re-clones the FLOPPIES into the tree on every call, so the
+    same directory can be booted with a different disk in fd:0 - which is what
+    those two rows need, the install running off the system floppy and the boot
+    off a blank one so the BIOS offers the hard disk.
+
+    The caller owns it: nothing here removes it, and `reap` does not either.
+    """
+    return _private_run_dir(base_run_dir(), tag)
+
+
+def _private_run_dir(base, tag):
+    """One instance's working directory: shared what is read, private what is
+    written.
+
+    MartyPC resolves every path against its working directory, so this IS the
+    isolation - there is no per-instance option to pass it. Symlinked: the
+    binary, `configs/`, `media/roms/`, and the loose files at the top. Real
+    and private: `media/floppies` (the images the guest writes to), and
+    `media/hdds` (a VHD is written through).
+    """
+    inst = os.path.join(_inst_root(), tag)
+    os.makedirs(inst, exist_ok=True)
+    for name in sorted(os.listdir(base)):
+        if name == "media":
+            continue
+        dst = os.path.join(inst, name)
+        if os.path.lexists(dst):
+            continue
+        os.symlink(os.path.join(base, name), dst)
+    media = os.path.join(inst, "media")
+    os.makedirs(media, exist_ok=True)
+    bmedia = os.path.join(base, "media")
+    for name in sorted(os.listdir(bmedia)) if os.path.isdir(bmedia) else []:
+        src, dst = os.path.join(bmedia, name), os.path.join(media, name)
+        if os.path.lexists(dst):
+            continue
+        if name in ("floppies", "hdds"):
+            os.makedirs(dst, exist_ok=True)
+            if name == "hdds" and os.path.isdir(src):
+                for f in sorted(os.listdir(src)):
+                    if f.lower().endswith(".vhd"):
+                        _clone(os.path.join(src, f), os.path.join(dst, f))
+        else:
+            os.symlink(src, dst)
+    return inst
 
 
 MBAR_H = 20                     # SPEC.md 12: the same on every adapter
@@ -1039,6 +1701,65 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None):
         "pass boot=<seconds> instead)." % limit)
 
 
+# HOW MANY TIMES DID ONE GESTURE REACH A ROUTINE? Two tests wrote this loop by
+# hand and BOTH of them counted stops that never happened. It is here now, so
+# the next one inherits the two fixes rather than the bug.
+def bp_count(m, target, act, arm=0.6, quiet=3.0, first=14.0, limit=120.0):
+    """Run `act()` and count the DISTINCT breakpoint stops at `target`.
+
+        n = os88marty.bp_count(m, "wm_anim", lambda: (mo.click(x, y),
+                                                      m.advance(frames=400),
+                                                      m.run()))
+
+    `target` is anything `bp_exec` takes - a kernel symbol or a flat address.
+    The breakpoint stops the guest, so `act` cannot be the thing pumping it:
+    it runs on a daemon thread `arm` seconds in, and this loop resumes the
+    guest and counts until the gesture is done AND nothing has stopped for
+    `quiet` seconds (`first` seconds if nothing ever stopped). The breakpoints
+    are cleared and the guest is left RUNNING. `cmd()` is atomic, so the two
+    threads on one socket cannot cross replies (see its docstring).
+
+    **IT COUNTS `breakpoint` AND NOT "anything but running".** The driving
+    thread's own `advance(frames=)` PAUSES the guest, and a poll landing in
+    that window reads a state that is not "running": counted, it is an entry
+    that never happened, and resumed, it is the gesture's own `advance` cut
+    short from another thread. `stopped()` above deliberately covers both
+    states and is the wrong test here for exactly that reason - a wait wants
+    either, a COUNT wants one.
+
+    **AND IT DEDUPES ON `instructions`.** `run()` and the `status()` after it
+    are two round trips and the resume has not always landed by the second, so
+    one stop is reported twice. A stop's instruction count is the guest's own
+    clock and cannot repeat, so it tells a repeat report from a second entry
+    and hides nothing real, because a real second entry has advanced it.
+
+    Both defects put their spare stop in whichever gesture was running, which
+    in an A/B is a false failure of whichever half is meant to answer zero.
+    tests/alertanim.py is where they were found and measured; tests/alertbtn.py
+    had carried both since it was written, asserting an EXACT count of 1.
+    """
+    seen, done = set(), []
+    m.bp_exec(target)
+    threading.Thread(target=lambda: (time.sleep(arm), act(), done.append(1)),
+                     daemon=True).start()
+    t0, last = time.time(), None
+    while time.time() - t0 < limit:
+        st = m.status()                 # ONE call: the guest is stopped, so a
+        if st.get("state", "running") == "breakpoint":   # second would be a
+            seen.add(st.get("instructions"))             # round trip for the
+            last = time.time()                           # same answer
+            m.run()
+            continue
+        if done and last is not None and time.time() - last > quiet:
+            break
+        if done and last is None and time.time() - t0 > first:
+            break
+        time.sleep(0.05)
+    m.breakpoints([])
+    m.run()
+    return len(seen)
+
+
 # Wait for a machine that is BUSY WITHOUT DRAWING: anything holding the gfx
 # lock for its whole run. `settle` cannot see that work at all - it watches
 # pixels, and there are none - so ask about the thing being waited for.
@@ -1118,22 +1839,36 @@ def scratch_disk(path, *files, **kw):
     here = os.path.dirname(os.path.abspath(__file__))
     disk = os.path.join(here, "os88disk.py")
     srcs = [f.split(":")[-1] for f in files]
+    # THE ARGUMENT LIST IS PART OF THE FRESHNESS TEST, and the mtimes alone
+    # are not. A row that starts passing a DIFFERENT file - the same folder,
+    # the same size, another name - moves no input's mtime, so an mtime-only
+    # test keeps the cached image and the row runs against a picture it did
+    # not ask for. It cost a run: three paint rows were pointed at a colour
+    # derivation of OS8088.GIF and read `'OS88COL.GIF' is not in this folder`
+    # out of a disk still holding the old one. The sidecar is the same
+    # self-maintaining shape as the mtime test - nothing enumerates what
+    # matters, the whole invocation is compared.
+    want = "\n".join([str(kw.get("size", 360))] + list(files))
+    side = path + ".args"
     try:
         have = os.path.getmtime(path)
         fresh = all(os.path.getmtime(s) <= have for s in srcs)
+        fresh = fresh and open(side).read() == want
     except OSError:
-        fresh = False                       # missing image, or a missing
-                                            # input: let os88disk say which
+        fresh = False                       # missing image, missing sidecar,
+                                            # or a missing input: rebuild and
+                                            # let os88disk say which
     if not fresh:
         subprocess.check_call(
             [sys.executable, disk, "-o", path,
              "--size", str(kw.get("size", 360))] + list(files))
+        open(side, "w").write(want)
     return path
 
 
-def launch(image, apps=None, machine="os8088_5150_cga", addr="127.0.0.1:9001",
+def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
            run_dir=None, boot=True, timeout=DEFAULT_TIMEOUT, extra=(),
-           card=None):
+           card=None, label=None, detach=False):
     """Start a FRESH martypc_headless on `image` and return a booted Marty.
 
     `image` and `apps` are paths to floppy images (fd:0 and fd:1). `boot` is
@@ -1147,40 +1882,129 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr="127.0.0.1:9001",
                               apps="build/apps360.img") as m:
             m.vram("cga")
 
+    CONCURRENT INSTANCES ARE THE DEFAULT AND NEED NO ARGUMENT. `addr=None`
+    asks the OS for a free port under the emulator's own bind and reads back
+    what it picked, and the machine runs in a private directory under
+    `build/martypc/inst/`. Two of these in one checkout - two terminals, two
+    agents, two rows of the suite - do not see each other at all. The address
+    is on the object afterwards (`m.addr`, `m.port`), which is what to hand to
+    `tools/os88mouse.py` or anything else that takes one.
+
+        with os88marty.launch(IMG) as a, os88marty.launch(IMG) as b:
+            ...                                 # two machines, no arrangement
+
+    Pass `addr` only to pin a port on purpose - a REPL you want to reattach to
+    by hand, say. It is then yours to keep free, and a port already held is an
+    error naming what holds it rather than a silent attach to the wrong
+    machine.
+
     `card` is which video card the BOOT GATE watches, and it is needed only
     where os8088 is not driving MartyPC's primary - a two-card machine plus a
     `VIDEO=` kernel. Otherwise leave it: the primary is what os8088 picked.
 
+    `label` is a word for `os88marty.py instances` to show, so a person
+    looking at four running machines can tell which is whose. It defaults to
+    the name of the script that called.
+
+    `detach` leaves the machine RUNNING when this process ends - a lab bench
+    rather than a session. `close()` then drops the connection and not the
+    emulator, and `reap()` will never take it: an instance with no owner is
+    normally an orphan, and one that says so on purpose is not. It is what
+    `os88marty.py launch` uses, and what a workflow that boots once and then
+    pokes at the machine from several commands wants; ending it is
+    `os88marty.py kill <port>`.
+
     Raises rather than limping: a port that will not go quiet, an emulator
-    that never answers, and a machine that is already part-way through its
-    boot are all errors with a sentence each.
+    that never answers, one that answered from a DIFFERENT process than the
+    one just started, and a machine already part-way through its boot are all
+    errors with a sentence each.
     """
-    import os
-    import shutil
     import subprocess
     import time
 
-    host, _, port = addr.rpartition(":")         # NOT parse_addr, which is for
-    if not host:                                 # seg:off memory addresses
-        host, port = "127.0.0.1", addr
-    port = int(port)
-    if run_dir is None:
-        here = os.path.dirname(os.path.abspath(__file__))
-        run_dir = os.path.join(os.path.dirname(here), "build", "martypc", "run")
-    if not os.path.isdir(run_dir):
+    base = base_run_dir()
+    if not os.path.isdir(base):
         raise MartyError("no MartyPC run directory at %s - `make marty` first"
-                         % run_dir)
+                         % base)
 
-    for pid in _marty_pids():                   # ...by PID, never by pattern
-        try:
-            os.kill(pid, 9)
-        except OSError:
-            pass
-    if not _port_free(host, port):
-        raise MartyError(
-            "%s never went quiet: something is still holding the port, so a "
-            "new emulator cannot bind it and this would silently drive the "
-            "OLD one." % addr)
+    # Clear up after sessions that DIED. This kills an orphan - an emulator
+    # whose owning script is gone - and never a live, owned instance: the
+    # blanket sweep that used to be here is `kill_all()` now, and is never
+    # automatic. See the banner above.
+    reap()
+    _warn_oversubscribed(1)
+
+    if label is None:
+        label = os.path.basename(getattr(sys.modules.get("__main__"),
+                                         "__file__", "") or "os88marty")
+    # A FRESH home, and not merely a unique tag. The tag is pid-label-seq, and
+    # a PID wraps in minutes on a busy box (pid_max 32,768), so a launcher can
+    # land on the number a DETACHED bench's launcher had - the bench outlives
+    # its launcher by design - and inherit its directory: makedirs(exist_ok)
+    # let it, and _clone then overwrote the floppy the live bench had
+    # mounted. Any existing directory is refused, live or ended, and _seq is
+    # bumped until the name is one nobody has used.
+    while True:
+        tag = _tag(label)
+        home = os.path.join(_inst_root(), tag)  # where the RECORD lives
+        if not os.path.lexists(home):
+            break
+    if run_dir is None:
+        run_dir = _private_run_dir(base, tag)   # ...which is also the run tree
+        private = True
+    else:
+        # A caller staging its own tree keeps its own isolation. Nothing here
+        # can give it any: two runs in one directory share one media/floppies.
+        # It is still REGISTERED, because `instances` and `reap` are about
+        # processes rather than directories, and an emulator nobody can see is
+        # the survivor this layer exists to make visible.
+        if not os.path.isdir(run_dir):
+            raise MartyError("no MartyPC run directory at %s" % run_dir)
+        os.makedirs(home, exist_ok=True)
+        private = False
+
+    logpath = os.path.join(run_dir, "martypc.log")
+    portfile = os.path.join(run_dir, "debug.port")
+    # ALWAYS, not only on the auto path. A private tree is fresh and has none,
+    # but a caller-staged one can carry the last run's, and reading a stale
+    # port file is the stale-machine failure with a new cause: the number
+    # parses, the connection succeeds, and it is somebody else's emulator.
+    try:
+        os.remove(portfile)
+    except OSError:
+        pass
+
+    host = "127.0.0.1"
+    if addr is None:
+        # PORT 0: the kernel picks one under the emulator's bind, which is the
+        # only allocation that cannot race. Probing for a quiet port from here
+        # and then launching does race - the probe has let the port go by the
+        # time the emulator asks for it.
+        want = "%s:0" % host
+    else:
+        host, _, port = addr.rpartition(":")      # NOT parse_addr, which is
+        if not host:                              # for seg:off memory addresses
+            host, port = "127.0.0.1", addr
+        port = int(port)
+        held = [d for d in instances()
+                if d["alive"] and d.get("port") == port]
+        if held:
+            d = held[0]
+            raise MartyError(
+                "port %d is already held by a running instance: pid %s, "
+                "machine %s, started by pid %s%s. Launching there would "
+                "either fail to bind or silently drive THAT machine. Leave "
+                "`addr` unset and one will be allocated, or `os88marty.py "
+                "reap` if its owner is gone."
+                % (port, d.get("pid"), d.get("machine"), d.get("owner_pid"),
+                   " [%s]" % d.get("label") if d.get("label") else ""))
+        if not _port_free(host, port):
+            raise MartyError(
+                "%s:%d never went quiet: something is still holding the port, "
+                "so a new emulator cannot bind it and this would silently "
+                "drive the OLD one. `os88marty.py instances` says whether it "
+                "is one of ours." % (host, port))
+        want = "%s:%d" % (host, port)
 
     media = os.path.join(run_dir, "media", "floppies")
     os.makedirs(media, exist_ok=True)
@@ -1188,39 +2012,107 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr="127.0.0.1:9001",
     for i, src in enumerate((image, apps)):
         if src is None:
             continue
-        dst = os.path.join(media, "run%d.img" % i)   # a copy per DRIVE, so two
-        shutil.copyfile(src, dst)                    # sessions cannot collide
+        dst = os.path.join(media, "run%d.img" % i)   # a copy per DRIVE, inside
+        _clone(src, dst)                             # a directory per INSTANCE
         mounts += ["--mount", "fd:%d:media/floppies/run%d.img" % (i, i)]
 
     cmd = ["./martypc_headless", "--machine-config-name", machine] + mounts \
         + list(extra)
-    env = dict(os.environ, MARTYPC_DEBUG_ADDR=addr)
-    log = open(os.path.join(run_dir, "martypc.log"), "wb")
+    env = dict(os.environ, MARTYPC_DEBUG_ADDR=want,
+               MARTYPC_DEBUG_PORTFILE=portfile)
+    log = open(logpath, "wb")
     proc = subprocess.Popen(cmd, cwd=run_dir, env=env, stdout=log, stderr=log)
+
+    rec = {"pid": proc.pid, "pid_start": _proc_start(proc.pid),
+           "port": None, "machine": machine,
+           "image": os.path.abspath(image) if image else None,
+           "apps": os.path.abspath(apps) if apps else None,
+           "run_dir": run_dir, "log": logpath, "label": label,
+           "owner_pid": None if detach else os.getpid(),
+           "detached": bool(detach), "started": time.time(),
+           "private": private, "ended": False, "dir": home}
+    _write_record(rec)
+
+    def _die(msg):
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        rec["ended"] = True
+        rec["ended_reason"] = msg[:200]
+        _write_record(rec)
+        _drop_instance(rec, heavy_only=True)   # the log stays: it is the
+        raise MartyError("%s\n  log: %s" % (msg, logpath))   # whole answer
+
+    # The emulator publishes the port it actually bound. Waiting for the FILE
+    # rather than for a connection is what makes this exact: a port we merely
+    # guessed could be answered by somebody else's emulator, and that is the
+    # stale-machine failure in a new hat.
+    port = None
+    for _ in range(240):
+        if proc.poll() is not None:
+            _die("martypc_headless exited at once (rc=%s). The last lines of "
+                 "the log say why - a missing ROM set and a port already held "
+                 "are the two usual answers." % proc.returncode)
+        try:
+            with open(portfile) as f:
+                text = f.read().split()
+            if text:
+                port = int(text[0])
+                break
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.25)
+    if port is None:
+        _die("martypc_headless never published a debug port (%s). It is "
+             "either still starting - a cold ROM load on a loaded box - or it "
+             "failed before binding." % portfile)
+    rec["port"] = port
+    _write_record(rec)
+    addr = "%s:%d" % (host, port)
 
     m = None
     for _ in range(80):                          # wait for it to ANSWER
         if proc.poll() is not None:
-            raise MartyError("martypc_headless exited at once (rc=%s); see %s"
-                             % (proc.returncode,
-                                os.path.join(run_dir, "martypc.log")))
+            _die("martypc_headless exited while starting (rc=%s)"
+                 % proc.returncode)
         try:
             m = Marty(addr, timeout=timeout)
             break
         except MartyError:
             time.sleep(0.5)
     if m is None:
-        proc.kill()
-        raise MartyError("martypc_headless never answered on %s; see %s"
-                         % (addr, os.path.join(run_dir, "martypc.log")))
+        _die("martypc_headless never answered on %s" % addr)
 
+    # IDENTITY, not a heuristic. `cycles == 0` says the machine has not run
+    # yet, which a stale emulator paused at the start of its own boot also
+    # says; the pid says it is THE PROCESS THIS FUNCTION STARTED and nothing
+    # else can.
+    who = m.cmd(cmd="ping")
+    if who.get("pid") not in (None, proc.pid):
+        m.close()
+        _die("the debug server on %s answers as pid %s, and the emulator just "
+             "started here is pid %d. That is somebody else's machine - "
+             "nothing below would mean what it says."
+             % (addr, who.get("pid"), proc.pid))
     if m.status()["cycles"] != 0:
         m.close()
-        raise MartyError(
-            "attached to a machine that is already running: this is a STALE "
-            "emulator, not the one just started. Nothing below would mean "
-            "what it says.")
-    m._proc = proc                               # so close() can end it
+        _die("attached to a machine that is already running: this is a STALE "
+             "emulator, not the one just started. Nothing below would mean "
+             "what it says.")
+
+    # A DETACHED instance is not owned by this process, so close() must not
+    # end it and must not retire its record: the whole point is that it
+    # outlives the command that started it.
+    m._proc = None if detach else proc            # so close() can end it
+    m._rec = None if detach else rec
+    m._detached = bool(detach)
+    m.pid = proc.pid
+    m.addr = addr
+    m.port = port
+    m.run_dir = run_dir
+    m.pid = proc.pid
     if boot:
         try:
             m.run()
@@ -1440,9 +2332,124 @@ def cmd_verify(m, args):
     return 0
 
 
+# The verbs that are about the INSTANCES rather than about one machine, and so
+# take no address. They are pre-dispatched below, before argparse sees a
+# positional it would read as a host:port.
+NOADDR_OPS = ("instances", "ps", "reap", "kill", "kill-all", "launch")
+
+
+def _fmt_age(secs):
+    if secs < 90:
+        return "%ds" % int(secs)
+    if secs < 5400:
+        return "%dm" % int(secs / 60)
+    return "%.1fh" % (secs / 3600.0)
+
+
+def main_instances(argv):
+    """`instances` / `reap` / `kill-all` - the answer to "what is running?".
+
+    THIS IS THE FIRST THING TO TYPE when a session is behaving as though
+    something else is driving the machine. Before the instance layer there was
+    no such question: one port, one emulator, and a `ps` that looked identical
+    whether or not you were about to destroy somebody's run.
+    """
+    op = argv[0]
+    args = argv[1:]
+    if op in ("instances", "ps"):
+        rows = instances(include_ended="--all" in args)
+        if not rows:
+            print("no MartyPC instances (none started through "
+                  "os88marty.launch, at least)")
+            return 0
+        print("%-6s %-7s %-22s %-10s %-7s %s"
+              % ("PORT", "PID", "MACHINE", "OWNER", "AGE", "LABEL"))
+        for d in rows:
+            state = ("detached" if d["alive"] and d.get("detached") else
+                     "running" if d["alive"] and d["owner_alive"] else
+                     "ORPHAN" if d["alive"] else
+                     "ended" if d.get("ended") else "gone")
+            print("%-6s %-7s %-22s %-10s %-7s %s"
+                  % (d.get("port") or "-", d.get("pid") or "-",
+                     (d.get("machine") or "-")[:22],
+                     "%s %s" % (d.get("owner_pid") or "-", state),
+                     _fmt_age(time.time() - d.get("started", time.time())),
+                     d.get("label") or ""))
+        det = [d for d in rows if d["alive"] and d.get("detached")]
+        if det:
+            print("\n%d DETACHED: started to outlive their command and owned "
+                  "by nobody, so `reap` will not touch them. End one with "
+                  "`os88marty.py kill <port>`." % len(det))
+        orph = [d for d in rows if d["alive"] and not d["owner_alive"]
+                and not d.get("detached")]
+        if orph:
+            print("\n%d ORPHAN(s): alive, but the script that started them is "
+                  "gone and nothing will close them. `os88marty.py reap` "
+                  "clears those and touches nothing else." % len(orph))
+        return 0
+    if op == "launch":
+        import argparse as _ap
+        q = _ap.ArgumentParser(prog="os88marty.py launch",
+                               description="Boot a machine and LEAVE IT "
+                                           "RUNNING. Prints its address.")
+        q.add_argument("image", help="the system floppy (fd:0)")
+        q.add_argument("--apps", help="a second floppy (fd:1)")
+        q.add_argument("--machine", default="os8088_5150_cga")
+        q.add_argument("--label", default="bench")
+        q.add_argument("--no-boot", action="store_true",
+                       help="return the machine PAUSED at cycle 0")
+        q.add_argument("--card", type=int, default=None,
+                       help="which video card the boot gate watches, on a "
+                            "two-card machine")
+        b = q.parse_args(args)
+        m = launch(b.image, apps=b.apps, machine=b.machine, label=b.label,
+                   boot=(not b.no_boot), card=b.card, detach=True)
+        print(m.addr)
+        print("  pid %d, %s, log %s"
+              % (m.pid, b.machine, os.path.join(m.run_dir, "martypc.log")),
+              file=sys.stderr)
+        print("  it OUTLIVES this command. `os88marty.py instances` lists it, "
+              "`os88marty.py kill %d` ends it." % m.port, file=sys.stderr)
+        m.close()                       # the connection, not the machine
+        return 0
+    if op == "kill":
+        if not args:
+            print("kill needs a port or a label - `os88marty.py instances`",
+                  file=sys.stderr)
+            return 2
+        try:
+            n = kill_one(args[0])
+        except MartyError as e:
+            print(e, file=sys.stderr)
+            return 1
+        print("killed %d instance(s)" % n)
+        return 0
+    if op == "reap":
+        killed, removed = reap(verbose=True)
+        print("reap: %d orphan(s) killed, %d finished instance(s) removed. "
+              "Live instances with live owners were left alone."
+              % (killed, removed))
+        return 0
+    if op == "kill-all":
+        if "--yes" not in args:
+            print("kill-all ends EVERY martypc_headless on this box, "
+                  "including other sessions' - which is the damage the "
+                  "instance layer exists to prevent. `reap` is almost always "
+                  "what you want. Add --yes if you mean it.")
+            return 2
+        print("kill-all: %d process(es) ended" % kill_all())
+        return 0
+    return 2
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Drive a headless MartyPC debug server.")
-    ap.add_argument("addr", help="host:port of the debug server (e.g. 127.0.0.1:9001)")
+    if len(sys.argv) > 1 and sys.argv[1] in NOADDR_OPS:
+        return main_instances(sys.argv[1:])
+    ap = argparse.ArgumentParser(
+        description="Drive a headless MartyPC debug server.",
+        epilog="Instance verbs take no address: instances | reap | kill-all")
+    ap.add_argument("addr", help="host:port of the debug server. "
+                                 "`os88marty.py instances` lists what is running.")
     ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     sub = ap.add_subparsers(dest="op")
 

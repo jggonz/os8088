@@ -183,12 +183,21 @@ unsigned char c64_bgfill;           /* the uniform level of a mode wave 1 does
 #define C64_SCR_MAPE  0x38
 #define C64_SCR_END   0x3A                  /* $FFC0 + 0x3A - 1 = $FFF9 */
 
-/* --- C64.ROM's fixed layout (1.4) ---------------------------------------- */
-#define C64_ROM_NAME    "C64.ROM"
+/* --- the ROM PART's fixed layout (1.4) ------------------------------------
+ * It was a SIDECAR - C64.ROM, 20,480 bytes beside the package on the disk -
+ * and it is part 0 of C64.O88 now (SPEC.md 20.12). The layout is unchanged
+ * and so is tools/c64rom.py, which still concatenates the three committed
+ * Commodore images and checks their SHA-256; what changed is that os88pkg.py
+ * appends the result to the package instead of os88disk.py putting it on the
+ * floppy. A file copy can no longer separate the program from the ROM it is
+ * useless without, and the whole halted-machine state that existed to say so
+ * when it went missing is gone with it. */
+#define C64_ROM_PART    0
 #define C64_ROM_KERNAL  0x0000
 #define C64_ROM_BASIC   0x2000
 #define C64_ROM_CHARGEN 0x4000
-#define C64_ROM_SIZE    20480
+#define C64_ROM_SIZE    20480               /* what os88pkg.py appends, and
+                                             * what op_size claims for it */
 
 /* --- the window (9.1) ---------------------------------------------------- */
 #define C64_SCRW   320                      /* the C64's visible pixels */
@@ -244,7 +253,14 @@ unsigned char c64_bgfill;           /* the uniform level of a mode wave 1 does
 /* --- what the machine is doing ------------------------------------------- */
 #define C64_ST_RUN  0
 #define C64_ST_JAM  1
-#define C64_ST_HALT 2                       /* no C64.ROM: nothing to run */
+#define C64_ST_HALT 2                       /* not started: the state c64_state
+                                             * holds until os88_main has the
+                                             * ROM and resets the CPU. It was
+                                             * also a machine that never
+                                             * started because C64.ROM was not
+                                             * on the disk - which cannot
+                                             * happen now the ROM is a part
+                                             * (1.4) */
 #define C64_ST_DEAD 3                       /* the close is in flight (75.2) */
 
 static int c64_state = C64_ST_HALT;
@@ -302,7 +318,6 @@ static int c64_adv;                         /* Preferences > Advance frame: a
                                              * REQUEST the slice driver
                                              * serves, not work done under the
                                              * menu's lock (§11.1) */
-static int c64_norom;                       /* C64.ROM was not on the disk */
 /* the colour RAM's own write window - the matrix's is in the core's scratch
  * (9.2). It is here rather than in c64scr.c because c64io.c, which is
  * included first, is what MAINTAINS it. */
@@ -1273,8 +1288,7 @@ static void c64_reset_service(void)
     c64_adv = 0;
     c64_sound_stop();                       /* ...and the note the old machine
                                              * was holding does not survive it */
-    if (!c64_norom)
-        c64_state = C64_ST_RUN;
+    c64_state = C64_ST_RUN;
     /* AND THE MENU IS RE-SPELLED, BECAUSE THIS IS A PATH OUT OF C64_ST_JAM.
      * c64_jam() greys Preferences > Advance frame - there is no machine left
      * to advance (SPEC.md 47) - and the FACT that greys it is the permanent
@@ -1591,7 +1605,6 @@ void *os88_main(void)
 {
     static struct os88_video vid;
     void *win;
-    unsigned got;
     int wh;
 
     c64_m.ramseg = os88_mem_claim(64);      /* the C64's RAM is its own
@@ -1600,12 +1613,14 @@ void *os88_main(void)
         c64_refuse_kb("C64: 64KB? ");
         return 0;
     }
-    c64_m.romseg = os88_mem_claim(20);      /* ...and C64.ROM's 20KB a second */
-    if (c64_m.romseg == 0) {
-        os88_mem_free(c64_m.ramseg);
-        c64_refuse_kb("C64: 20KB? ");
-        return 0;
-    }
+    /* THE ROM IS A PART AND IT IS ALREADY HERE (1.4, SPEC.md 20.12). crt0
+     * called op_load before this function, which claimed the 20KB and read
+     * the ROM into it - or refused the whole launch with a toast naming why,
+     * before a sector was spent, because the part table it sized from was
+     * already in the image the kernel had read. So there is no claim here, no
+     * read here, and no way for the ROM to be absent: os88_part_seg cannot
+     * answer 0 for a REQUIRED part after a successful op_load. */
+    c64_m.romseg = os88_part_seg(C64_ROM_PART);
     /* THE FETCH BIAS IS SEGMENT ARITHMETIC AND IT CAN UNDERFLOW. A PC in the
      * KERNAL is fetched through `ES = romseg - $0E00` (c64cpu.inc 4.3), which
      * wraps - and reads somewhere else entirely - if the ROM claim's base is
@@ -1613,31 +1628,10 @@ void *os88_main(void)
      * ~111KB footprint (docs/KERNEL-MEMORY.md). This is the guard that says
      * so out loud rather than the assumption that does not. */
     if (c64_m.romseg < 0x0E00) {
-        os88_mem_free(c64_m.romseg);
         os88_mem_free(c64_m.ramseg);
         os88_toast("C64: the ROM claim is too low in memory", 0);
         return 0;
     }
-    /* 20,480 is 512-aligned and the claim's base is KB-aligned, so the file
-     * lands straight in with no scratch buffer (SPEC.md 2.1.1's rule met by
-     * construction, 1.4). A disk without it is a refused launch naming the
-     * file - the machine is not started. */
-    got = os88_file_read_seg(C64_ROM_NAME, c64_m.romseg, C64_ROM_SIZE);
-    if (got != C64_ROM_SIZE) {
-        /* THE WINDOW STAYS UP TO SAY SO. Returning 0 here would be a refused
-         * launch, and a refused launch's toast is the KERNEL's `Load failed`
-         * - which is what the first screendump of this path showed, with the
-         * package's own "no C64.ROM" toast replaced by it. LESSONS.md 13's
-         * RUNCPM finding, exactly: the refusal is printed as a FACT WHERE THE
-         * USER IS LOOKING and not toasted into a window that is not up. The
-         * machine is not started (C64_ST_HALT), the screen says which file is
-         * missing, and every menu command that needs a machine says so too. */
-        c64_norom = 1;
-        os88_toast("C64: no C64.ROM", 0);   /* ...and the toast too: every
-                                             * refusal in this port takes both
-                                             * routes (9.8) */
-    }
-
     /* WHAT CAN THIS MACHINE'S SOUND HARDWARE DO (11.4)? Asked ONCE, here, and
      * tested rather than guessed (SPEC.md 73.11): §11.4 puts SID voice 1's
      * gate and frequency on OSAPI_SND_TONE, and a package that calls a slot
@@ -1670,12 +1664,10 @@ void *os88_main(void)
                                              * RANGE, so the write window is
                                              * taken over the matrix from the
                                              * very first poke (9.2) */
-    if (!c64_norom) {
-        c64_reset_cpu();                    /* the 6510 out of reset, PC from
+    c64_reset_cpu();                        /* the 6510 out of reset, PC from
                                              * $FFFC under the KERNAL (11.1) */
-        c64_state = C64_ST_RUN;             /* ...and the KERNAL draws its own
+    c64_state = C64_ST_RUN;                 /* ...and the KERNAL draws its own
                                              * boot screen from the first wake */
-    }
     c64_sp_tick = os88_ticks();
     c64_menu_state();                       /* the four check items' labels */
     c64_sh_inval();
@@ -1695,7 +1687,6 @@ void *os88_main(void)
         wh = OS88_TITLE_H + C64_STATH + 16;
     win = os88_wm_create(C64_W_X, C64_W_Y, C64_W_W, wh, c64_title);
     if (win == 0) {
-        os88_mem_free(c64_m.romseg);
         os88_mem_free(c64_m.ramseg);
         return 0;
     }

@@ -728,6 +728,43 @@ _os88_about_set:
     pop si
     pop bp
     ret
+
+%ifdef OS88UI_ABOUT
+; -----------------------------------------------------------------------------
+; void os88_about_card(void *win, const char **lines)
+;   - and void os88_about_card_d(void *win, const char **lines) for a PAINT.
+;
+; The standard About card (SPEC.md 20.5.1.1) drawn from a C package. The line
+; table is a C array of `const char *` terminated by a 0 entry, which in this
+; near model IS os88ui_about's own format - a word per line, 0 ending it - so
+; nothing is staged or converted.
+;
+; TWO ENTRIES, for the reason SPEC.md 20.5.1.1 gives: from os88_about() the
+; clip has to be armed (ui_dispatch calls you with none), and from
+; os88_paint() re-arming would throw that paint's damage region away.
+; -----------------------------------------------------------------------------
+_os88_about_card:
+    push bp
+    mov bp, sp
+    push si
+    mov bx, [bp+4]
+    mov si, [bp+6]
+    call os88ui_about               ; arms the clip, then draws
+    pop si
+    pop bp
+    ret
+
+_os88_about_card_d:
+    push bp
+    mov bp, sp
+    push si
+    mov bx, [bp+4]
+    mov si, [bp+6]
+    call os88ui_about_d             ; a paint's region is already armed
+    pop si
+    pop bp
+    ret
+%endif
 %endif
 
 %ifdef CC_HAS_ONMOUSEUP
@@ -1790,6 +1827,7 @@ _os88_strcpy:
 ; at most five words, which is the kind of frame the 384-byte worker stack can
 ; afford (SPEC.md 73.8).
 _os88_utoa:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push bp
     mov bp, sp
     push si
@@ -1844,6 +1882,86 @@ _os88_itoa:
     pop si
     pop bp
     ret
+
+%ifdef CC_HAS_PARTS
+; =============================================================================
+; THE PARTS STANDARD (SPEC.md 20.12), for C
+;
+; op_load has already run - cc_entry calls it before any C does, because the
+; kernel's name pointer arrives in SI and nothing later can recover it. What
+; is left is asking where the parts went, and fetching or dropping the lazy
+; ones.
+;
+; **os88_part_lin is NOT here, and that is a decision.** An OP_XMS part's base
+; is a 32-bit LINEAR address, and this C dialect has no `long` (SPEC.md 73,
+; docs/C-TOOLCHAIN.md) - so it cannot be returned, and a pair of unsigned
+; halves would hand a C author two numbers it has no arithmetic for. A C
+; package that wants extended memory takes it through os88_xmem_* and owns the
+; addressing itself; OP_XMS in a C package's table is refused by nothing, but
+; op_seg answers 0 for it and there is no way to reach it from here. Say so in
+; the shim rather than declaring one.
+; =============================================================================
+
+; unsigned os88_part_seg(int i) - part i's base segment; 0 = it is not here.
+; A lazy part answers 0 until os88_part_fetch(i), and 0 again after a drop.
+_os88_part_seg:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    call op_seg
+    pop bp
+    ret
+
+; int os88_part_fetch(int i) - claim and read a lazy part NOW. 0 = it is here
+; (including "already was"), -1 = it could not be had and a toast has said why.
+_os88_part_fetch:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov ax, [bp+4]
+    call op_fetch
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop di
+    pop si
+    pop bp
+    ret
+
+; void os88_part_drop(int i) - give a fetched lazy part back. No disk, no
+; failure path, and dropping one that is not here is a no-op.
+_os88_part_drop:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    call op_drop
+    pop bp
+    ret
+
+; int os88_part_lazyok(int i) - would part i FIT right now? 1 = yes.
+; A question, asked without claiming, for SPEC.md 47's rule that a package
+; greys a fact rather than a guess. It is true of THIS INSTANT only.
+_os88_part_lazyok:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    call op_lazyok
+    mov ax, 1
+    jnc .ok
+    dec ax                          ; ...to 0
+.ok:
+    pop bp
+    ret
+
+; int os88_part_optok(void) - were the OP_OPT scratch parts granted?
+; All or none (SPEC.md 20.12.4), so it is one answer for the whole table.
+_os88_part_optok:
+    mov al, [op_optok]
+    xor ah, ah
+    ret
+%endif  ; CC_HAS_PARTS
 
 ; the NUL cc_padcopy parks on once its source has run out (SPEC.md 20.2: an
 ; ordinary byte of the image, addressed DS-relative like everything else).

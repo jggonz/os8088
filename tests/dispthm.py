@@ -39,7 +39,13 @@ TITLE_H = 18
 CP_RX, CP_PGX = 96, 4
 CPH_ROWS = {"Bright": 22, "Dark": 38, "Color": 55}      # pane-relative y
 CP_ITHM = 5                                             # kernel/ctrl.inc
-VID_CTX_KIND = 40                                       # kernel/vidsel.inc
+
+# SPEC.md 39.14's kind byte, from the ONE place that mirrors the record. It
+# was `VID_CTX_KIND = 40` here, against a kernel that has said 42 since
+# 6.1.10's vid_tseg widened the run - so this file read `vid_tseg` and called
+# it an adapter kind, and got a framebuffer segment (0xB000/0xB800) low byte
+# rather than a 0 or 1. It passed anyway, which is why it went unseen.
+from os88geom import VID_CTX_KIND                        # noqa: E402
 
 
 def theme_page(m, mo, S, settle_):

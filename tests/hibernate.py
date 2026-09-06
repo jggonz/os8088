@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hibernate to the hard disk, and come back (SPEC.md 86).
+"""Hibernate to the hard disk, and come back (SPEC.md 87).
 
     python3 tests/hibernate.py            # the boot partition: DVK_BIOS
     python3 tests/hibernate.py --driver   # ...and through HDD.DRV: DVK_DRV
@@ -251,7 +251,7 @@ def pass_resume(driver):
         mo.menu(CHIP_X, CHIP_Y, CHIP_X, CHIP_Y)
         quiet(m)
     check(not ptr_present(), "HIBERNAT.PTR is gone after a resume")
-    check(not img_present(), "...and so is HIBERNAT.IMG (SPEC.md 86.6 step 5)")
+    check(not img_present(), "...and so is HIBERNAT.IMG (SPEC.md 87.6 step 5)")
 
 
 def pass_discard(driver):

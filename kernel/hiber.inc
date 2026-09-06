@@ -2,7 +2,7 @@
 ; os8088 - hiber.inc
 ;
 ; Hibernate the machine to a file on the hard disk, and resume it at the next
-; boot (SPEC.md 86). Prefix `hb_` for the resident half, `hbf_` for its .cold
+; boot (SPEC.md 87). Prefix `hb_` for the resident half, `hbf_` for its .cold
 ; thunks, `hbk_` for the far entries the module reaches cold code through,
 ; `hbm_` for the on-demand module and `hbs_` for the resume stub.
 ;
@@ -54,7 +54,7 @@ HB_API_FONTX  equ 0x0068        ; CX=x, DX=y, the string at the CALLER's DS:SI
 HB_API_COLOR  equ 0x00C0        ; AL -> [gfx_color]
 HB_API_XCAPS  equ 0x0190        ; out BL = free block-table entries (SPEC.md 41)
 
-; --- the pointer file, HIBERNAT.PTR (SPEC.md 86.3) ---------------------------
+; --- the pointer file, HIBERNAT.PTR (SPEC.md 87.3) ---------------------------
 HBP_MAGIC   equ 0               ; 'HIB1'
 HBP_BUILD   equ 4               ; dw BUILD_NUM
 HBP_STAMP   equ 6               ; dw MOD_STAMP
@@ -68,7 +68,7 @@ HBP_PATH    equ 32              ; db[32] the folder from the root (PTH_BUF)
 HBP_NAME    equ 64              ; db[13] the image's name
 HBP_SIZE    equ 80
 
-; --- the staging area in the text framebuffer (SPEC.md 86.5) -----------------
+; --- the staging area in the text framebuffer (SPEC.md 87.5) -----------------
 ; B800:0000 (or B000:0000 on a Hercules primary), which vid_reboot has just
 ; made a linear 16KB+ of RAM that no rung of the ladder owns. The stub's CS,
 ; DS and SS are all this segment, and every datum it reads is at one of
@@ -131,10 +131,10 @@ hb_vol:     resb 1              ; the volume the image is (or will be) on
 hb_down:    resb 1              ; the button the press armed, 1/2, 0 = none
 hb_pad:     resb 1
 hb_drvmask: resw 1              ; drv_tab rows detached before the image
-hb_sp:      resw 1              ; hbm_perform's entry SP (SPEC.md 86.4)
+hb_sp:      resw 1              ; hbm_perform's entry SP (SPEC.md 87.4)
 hb_wakep:   resw 2              ; hbm_wake as off:seg, in the image's module
 hb_resumes: resw 1              ; how many times this machine has woken
-hb_unit:    resw 1              ; the transport facts (SPEC.md 86.5 step 1)
+hb_unit:    resw 1              ; the transport facts (SPEC.md 87.5 step 1)
 hb_spt:     resw 1
 hb_heads:   resw 1
 hb_base:    resd 1
@@ -150,7 +150,7 @@ section .cold
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; hb_probe - is there a hibernation to offer? (SPEC.md 86.5; kmain, after
+; hb_probe - is there a hibernation to offer? (SPEC.md 87.5; kmain, after
 ;            drv_boot and before the first paint)
 ; in:  nothing
 ; out: nothing (all registers preserved). A hit records the volume in [hb_vol]
@@ -192,7 +192,7 @@ hb_probe_x:
     retf
 
 ; -----------------------------------------------------------------------------
-; hb_pick - the disk a hibernation goes to, or is looked for on (SPEC.md 86.2):
+; hb_pick - the disk a hibernation goes to, or is looked for on (SPEC.md 87.2):
 ;           the one the machine BOOTED from when that is a fixed disk, else
 ;           the first fixed volume there is - and never a DVK_FILE row, which
 ;           dsk_vol_fixed calls fixed and which has no sectors the stub could
@@ -238,7 +238,7 @@ hb_pick1:                       ; is volume CL one? out: CF = 0 and AL = CL
     ret
 
 ; -----------------------------------------------------------------------------
-; hb_ok - may the machine hibernate? (SPEC.md 86.2, 47 rule 5)
+; hb_ok - may the machine hibernate? (SPEC.md 87.2, 47 rule 5)
 ; in:  nothing
 ; out: CF = 0 yes; CF = 1 and AL = 1 no fixed volume / 2 extended memory held
 ; clobbers: AL (the output), flags
@@ -369,7 +369,7 @@ hbf_nodisk:
     ret
 
 ; hbf_perform - a posted UI_RBQ_HIBER / UI_RBQ_RESUME / UI_RBQ_ASK, spent by
-;               ui_task with nothing held (SPEC.md 86.4, 86.5)
+;               ui_task with nothing held (SPEC.md 87.4, 87.5)
 ; in:  AL = which
 ; out: nothing. Returns only on a refusal or a discard: a hibernate ends in
 ;      int 19h and a resume ends in the stub.
@@ -390,7 +390,7 @@ hbf_perform:
     retf
 
 ; hbf_dropck - the window closed inside the call that just returned, so the
-;              image goes back now, from OUTSIDE it (SPEC.md 86.1)
+;              image goes back now, from OUTSIDE it (SPEC.md 87.1)
 hbf_dropck:
     cmp byte [hb_mode], HB_M_GONE
     jne .out
@@ -401,7 +401,7 @@ hbf_dropck:
 .out:
     ret
 
-; hbf_closed - app_close_win's KIND_HIBER hook (SPEC.md 86.1): the window went
+; hbf_closed - app_close_win's KIND_HIBER hook (SPEC.md 87.1): the window went
 ;              by a route the module did not take - the close box, Close
 ;              Window, the Task Manager, the restart sweep - so nothing of the
 ;              module is on the stack and the image can go now. The module's
@@ -420,7 +420,7 @@ hbf_closed:
     retf
 
 ; =============================================================================
-; THE MODULE - HIBER.DRV (SPEC.md 2.8, 86)
+; THE MODULE - HIBER.DRV (SPEC.md 2.8, 87)
 ;
 ; CS = the image's own claim, DS = KERNEL_SEG. Kernel data by name through
 ; DS; this file's own strings through CS; kernel code through KERNEL_SEG:cw_*
@@ -459,7 +459,7 @@ modh_e_perform: call hbm_perform
 modh_e_open:    call hbm_open
                 retf
 
-; --- geometry of the window's content (SPEC.md 86.1) -------------------------
+; --- geometry of the window's content (SPEC.md 87.1) -------------------------
 HBW_LX      equ 8               ; text left, content-relative
 HBW_LY      equ 6               ; first line's top
 HBW_LH      equ 12              ; line pitch
@@ -682,7 +682,7 @@ hbm_hitone:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_paint - W_PAINT (SPEC.md 86.1)
+; hbm_paint - W_PAINT (SPEC.md 87.1)
 ; in:  SI = window ptr; content already white; the gfx lock is held
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
@@ -851,7 +851,7 @@ hbm_onkey:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_act - one of the two buttons, in this mode (SPEC.md 86.1)
+; hbm_act - one of the two buttons, in this mode (SPEC.md 87.1)
 ; in:  AL = 1 or 2, SI = window ptr; the gfx lock is held, UI task
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
@@ -885,7 +885,7 @@ hbm_act:
 .close:
     mov byte [hb_mode], HB_M_GONE       ; BEFORE the close: app_close_win's
     mov bx, si                          ; KIND_HIBER hook drops the image on
-    call KERNEL_SEG:cw_app_close_win    ; every OTHER route (SPEC.md 86.1), and
+    call KERNEL_SEG:cw_app_close_win    ; every OTHER route (SPEC.md 87.1), and
                                         ; GONE is how it knows this is not one.
                                         ; Synchronous: task-less kind; the
                                         ; thunk drops the image on the way back
@@ -899,8 +899,8 @@ hbm_act:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_forget - delete the pointer and the image (SPEC.md 86.6 step 5, and
-;              86.4 step 3, before a new pair is written)
+; hbm_forget - delete the pointer and the image (SPEC.md 87.6 step 5, and
+;              87.4 step 3, before a new pair is written)
 ; in:  [hb_vol] = the volume; both files are in its root
 ; out: nothing (all registers preserved); failures are ignored - there is
 ;      nothing further to do about a file that is already gone. The volume is
@@ -912,12 +912,12 @@ hbm_forget:
     push dx
     push si
     mov dl, [hb_vol]
-    xor ax, ax                  ; both live in the root (SPEC.md 86.3)
+    xor ax, ax                  ; both live in the root (SPEC.md 87.3)
     call COLD_SEG:hbk_dsk_chdir
     jc .out
     mov si, hb_s_ptr            ; the pointer FIRST: with it gone there is
     call COLD_SEG:dwf_dskw_delete   ; nothing to resume whatever becomes of
-    mov si, hb_s_img            ; the image (SPEC.md 86.3)
+    mov si, hb_s_img            ; the image (SPEC.md 87.3)
     call COLD_SEG:dwf_dskw_delete
 .out:
     pop si
@@ -941,7 +941,7 @@ hbm_kinit:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_open - the System menu's Hibernate... (SPEC.md 86.1): open the window
+; hbm_open - the System menu's Hibernate... (SPEC.md 87.1): open the window
 ; in:  nothing; UI task, no lock
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
@@ -950,7 +950,7 @@ hbm_open:
     push si
     call hbm_win                ; already up, in whatever mode: app_launch
     jnc .launch                 ; fronts it and the mode stays what it is
-    call COLD_SEG:hb_pick_x     ; the disk (SPEC.md 86.2): the item was
+    call COLD_SEG:hb_pick_x     ; the disk (SPEC.md 87.2): the item was
     jc .out                     ; live, so there is one
     mov [hb_vol], al            ; ...and the window names it
     mov byte [hb_mode], HB_M_ASK
@@ -966,7 +966,7 @@ hbm_open:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_geom - the transport facts for a volume (SPEC.md 86.5 step 1)
+; hbm_geom - the transport facts for a volume (SPEC.md 87.5 step 1)
 ; in:  AL = the volume index
 ; out: CF = 0 and [hb_unit], [hb_spt], [hb_heads], [hb_base] filled;
 ;      CF = 1: not a fixed disk the ROM's int 13h reaches
@@ -1044,7 +1044,7 @@ hbm_geom:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_arm - the Hibernate button (SPEC.md 86.2, 86.4): the disk in [hb_vol]
+; hbm_arm - the Hibernate button (SPEC.md 87.2, 87.4): the disk in [hb_vol]
 ;           has to be one the ROM reaches and have the room, and then the
 ;           write is POSTED for the top of the pass
 ; in:  SI = the window; the gfx lock is held
@@ -1127,7 +1127,7 @@ hbm_arm:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_perform - a posted request, spent with nothing held (SPEC.md 86.4/86.5)
+; hbm_perform - a posted request, spent with nothing held (SPEC.md 87.4/87.5)
 ; in:  AL = UI_RBQ_HIBER / UI_RBQ_RESUME / UI_RBQ_ASK; UI task, no lock
 ; out: nothing; returns only from a refusal, a discard, or the question
 ;
@@ -1136,6 +1136,9 @@ hbm_arm:
 ; resume, and the one every exit below returns through.
 ; -----------------------------------------------------------------------------
 hbm_perform:
+    ; STKBALANCE-OK: enters the resume stub by pushing HS_CODE:0 and `retf`
+    ; into it (SPEC.md 87.5) - a far jump spelled as a return, on purpose, so
+    ; the static walk sees a ret two words deep. Nothing returns here.
     mov [hb_sp], sp
     cld
     cmp al, UI_RBQ_HIBER
@@ -1144,7 +1147,7 @@ hbm_perform:
     je hbm_res
     jmp hbm_ask
 
-; --- hbm_hib: write the image and stop (SPEC.md 86.4) ------------------------
+; --- hbm_hib: write the image and stop (SPEC.md 87.4) ------------------------
 hbm_hib:
     call COLD_SEG:drvf_drv_vol_bank ; where the user stands, for a refusal
     call hbm_detach             ; 1. the hardware drivers go, and are noted
@@ -1158,7 +1161,7 @@ hbm_hib:
                                 ;    before a byte is written: a pointer that
                                 ;    outlived its question would otherwise
                                 ;    name the NEW image with the old session's
-                                ;    wake address (SPEC.md 86.3)
+                                ;    wake address (SPEC.md 87.3)
     mov word [hb_wakep], hbm_wake   ; 4. where the restored kernel enters
     mov [hb_wakep + 2], cs
     mov si, hb_s_img            ; 5. the image: all of memory, one write
@@ -1212,7 +1215,7 @@ hbm_winback:
     pop si
     ret
 
-; hbm_kbdrain - empty the ROM's keyboard buffer (SPEC.md 86.4 step 7, 86.5)
+; hbm_kbdrain - empty the ROM's keyboard buffer (SPEC.md 87.4 step 7, 87.5)
 ; in:  nothing; out: nothing (all registers preserved)
 hbm_kbdrain:
     push ax
@@ -1249,7 +1252,7 @@ hbm_tty:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_detach / hbm_reload - the drivers that own hardware (SPEC.md 86.4 step 2)
+; hbm_detach / hbm_reload - the drivers that own hardware (SPEC.md 87.4 step 2)
 ; in:  nothing; UI task, NO lock held (an unload waits on its worker)
 ; out: nothing (all registers preserved); [hb_drvmask] says which rows
 ; -----------------------------------------------------------------------------
@@ -1304,7 +1307,7 @@ hbm_reload:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_ptr_build - compose the pointer file in this image's buffer (86.3)
+; hbm_ptr_build - compose the pointer file in this image's buffer (87.3)
 ; -----------------------------------------------------------------------------
 hbm_ptr_build:
     push ax
@@ -1337,7 +1340,7 @@ hbm_ptr_build:
     mov [es:di+HBP_WAKE + 2], ax
     mov ax, [hb_drvmask]
     mov [es:di+HBP_DRVS], ax
-    mov si, hb_s_img            ; HBP_PATH stays zero: the root (SPEC.md 86.3)
+    mov si, hb_s_img            ; HBP_PATH stays zero: the root (SPEC.md 87.3)
     mov di, hbm_ptrbuf + HBP_NAME
     mov cx, 13
     rep movsb
@@ -1349,7 +1352,7 @@ hbm_ptr_build:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_ask - the boot-time question (SPEC.md 86.5): validate the pointer,
+; hbm_ask - the boot-time question (SPEC.md 87.5): validate the pointer,
 ;           find the image, and open the window in HB_M_RESUME
 ; in:  [hb_vol] = the volume the probe found the pointer on; no lock
 ; -----------------------------------------------------------------------------
@@ -1439,7 +1442,7 @@ hbm_imgsize:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_res - put the image back (SPEC.md 86.5): the extents, then the stub
+; hbm_res - put the image back (SPEC.md 87.5): the extents, then the stub
 ; in:  the question was answered Resume; no lock held
 ; -----------------------------------------------------------------------------
 hbm_res:
@@ -1495,7 +1498,7 @@ hbm_res:
     mov [es:HS_WAKE], ax
     mov ax, [cs:bx+HBP_WAKE+2]
     mov [es:HS_WAKE+2], ax
-    mov si, clk_sec             ; the fresh boot's clock (SPEC.md 86.6): ten
+    mov si, clk_sec             ; the fresh boot's clock (SPEC.md 87.6): ten
     mov di, HS_CLK              ; bytes, clk_sec..clk_year, and NOT the two
     mov cx, 5                   ; display toggles after them, which are the
     rep movsw                   ; image's to keep
@@ -1562,7 +1565,7 @@ hbm_stageseg:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_extents - the image's chain as absolute sector runs (SPEC.md 86.5 step 2)
+; hbm_extents - the image's chain as absolute sector runs (SPEC.md 87.5 step 2)
 ; in:  AX = the first cluster; [hb_xseg] = where to build; the volume mounted
 ; out: CF = 0 and [hb_nx] runs of {dd lba, dw count, dw 0} at [hb_xseg]:0;
 ;      CF = 1 the chain is broken or too fragmented
@@ -1645,7 +1648,7 @@ hbm_nextlo: dw 0                ; the LBA the run in hand ends at
 hbm_nexthi: dw 0
 
 ; -----------------------------------------------------------------------------
-; hbm_wake - the restored kernel wakes up here (SPEC.md 86.6)
+; hbm_wake - the restored kernel wakes up here (SPEC.md 87.6)
 ; in:  CS = this image's segment IN THE RESTORED MEMORY, DS = KERNEL_SEG,
 ;      SS:SP = hbm_perform's entry frame, IF = 0, the gfx lock held and
 ;      [sch_lock] up - all of it as the write left it
@@ -1668,7 +1671,7 @@ hbm_wake:
     mov [clk_last], ax
     mov word [clk_acc], 0
     mov byte [clk_barq], 1
-    ; 3. the disk caches are the write's, not the disk's (SPEC.md 86.4) -----
+    ; 3. the disk caches are the write's, not the disk's (SPEC.md 87.4) -----
     xor al, al
 .drop:
     push ax
@@ -1693,7 +1696,7 @@ hbm_wake:
     call KERNEL_SEG:cw_vid_setmode
     mov byte [hb_mode], HB_M_GONE   ; before the close: app_close_win's hook
     call hbm_win                ; leaves a GONE window's image to the thunk
-    jc .nowin                   ; (SPEC.md 86.1), and this code IS the image
+    jc .nowin                   ; (SPEC.md 87.1), and this code IS the image
     mov bx, si
     call KERNEL_SEG:cw_app_close_win
 .nowin:
@@ -1715,7 +1718,7 @@ hbm_wake:
     ret
 
 ; =============================================================================
-; THE STUB (SPEC.md 86.5). Copied to HS_CODE in the text framebuffer and
+; THE STUB (SPEC.md 87.5). Copied to HS_CODE in the text framebuffer and
 ; entered by a far jump with IF = 0. Position-independent: every jump is
 ; relative and every datum is at a numeric HS_* offset in its own segment.
 ; =============================================================================

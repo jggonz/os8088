@@ -90,15 +90,25 @@ def panel(m):
 
 
 def clock(m):
-    """The live fields, in one read - they are laid out adjacent (SPEC.md 37)."""
-    b = m.read(m.sym("clk_sec"), 10)
+    """The live fields, in one read - they are laid out adjacent (SPEC.md 37).
+
+    THE YEAR'S OFFSET IS A MIRROR OF clock.inc's .bss ORDER and nothing checks
+    it: sec, min, hour, day, mon, rtc, dirty, year(word).  It was 8 while an
+    alignment pad sat between [clk_dirty] and [clk_year]; the pad bought
+    nothing on an 8088 (8-bit bus, so a word costs two cycles at any address)
+    and went in kernel size pass 3, which moved the year down one.  A wrong
+    offset here reads [clk_dirty] in the year's low byte and passes or fails
+    for the wrong reason - so if this row starts reporting a year in the
+    hundreds, read the declarations before suspecting the panel.
+    """
+    b = m.read(m.sym("clk_sec"), 9)
     return dict(sec=b[0], min=b[1], hour=b[2], day=b[3], mon=b[4],
-                year=b[8] | (b[9] << 8))
+                year=b[7] | (b[8] << 8))
 
 
 def fbuf(m):
     """[clk_fbuf] - the LAST field clk_fld_str rendered, NUL-terminated."""
-    return bytes(m.read(m.sym("clk_fbuf"), 6)).split(b"\0")[0].decode("latin-1")
+    return bytes(m.read(m.sym("clk_fbuf"), 5)).split(b"\0")[0].decode("latin-1")
 
 
 with M.launch("build/os8088-360.img", apps="build/apps360.img",

@@ -104,16 +104,30 @@ def _inked(m, seg):
     the oracle is the picture and not the bookkeeping under test.
     """
     w, h = _bss(m, seg, "pt_cw"), _bss(m, seg, "pt_ch")
-    stride = _bss(m, seg, "pt_stride")
     if _bss(m, seg, "pt_planar", 1):
         return None                                 # packed only, like 42.17
+    one = _bss(m, seg, "pt_1bpp", 1)                # ...or ONE BIT (42.23)
     rx, ry = -1, -1
-    base = _bss(m, seg, "pt_rowoff")                # row 0's offset...
     for row in range(h):
         off = int.from_bytes(m.read(_boff(seg, "pt_rowoff") + row * 2, 2),
                              "little")
         seg2 = int.from_bytes(m.read(_boff(seg, "pt_rowseg") + row * 2, 2),
                               "little")
+        if one:
+            # 42.23.1: eight pixels a byte, bit 7 leftmost, and 1 IS white -
+            # so a blank row is 0xFF here exactly as it is at 4bpp
+            data = m.read((seg2 << 4) + off, (w + 7) // 8)
+            for i, byte in enumerate(data):
+                if byte == 0xFF:
+                    continue
+                for b in range(8):
+                    c = i * 8 + b
+                    if c >= w:
+                        break
+                    if not (byte >> (7 - b)) & 1:
+                        rx = max(rx, c)
+                        ry = max(ry, row)
+            continue
         data = m.read((seg2 << 4) + off, (w + 1) // 2)
         for i, byte in enumerate(data):
             if byte == 0xFF:

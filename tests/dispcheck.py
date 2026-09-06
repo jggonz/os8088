@@ -70,6 +70,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
+                      VID_CTX_W, VID_CTX_CW, VID_CTX_CH)
 import os88geom                                             # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dispcp                                             # noqa: E402
@@ -210,18 +212,50 @@ def main(argv):
                         % cur)
 
         # VID_CTX_SZ: the per-display run, then VX, VY and the kind byte.
-        # DERIVED, not written down. This was `CTXSZ = 42` with the origin at
-        # word 18, and it had already moved once (SPEC.md 39.18 added the
-        # adapter kind) before SPEC.md 6.1.10 added `vid_tseg` and moved it
-        # again - at which point this script read display 1's record two bytes
-        # early, believed a garbage origin and asked the pointer to walk to
-        # x = 16769. That reads as a POINTER defect on a two-card machine,
-        # which is the most expensive possible way to be told a constant is
-        # stale. viddet.inc pins vid_seg..vid_tseg as the run and vidsel.inc
-        # asserts it, so both ends are symbols and neither can drift.
-        NWORD = (S("vid_tseg") - S("vid_seg")) // 2 + 1      # VID_CTX_W
-        VX = NWORD                                           # ...then VX, VY
-        CTXSZ = NWORD * 2 + 6                                # and the kind
+        #
+        # **FROM os88geom, WHICH IS THE ONE COPY.** This was `CTXSZ = 42` with
+        # the origin at word 18; SPEC.md 39.18's adapter kind moved it once and
+        # 6.1.10's `vid_tseg` moved it again, and each time this script read
+        # display 1's record at the wrong offset, believed a garbage origin and
+        # asked the pointer to walk to an x off the end of the desktop - 16769
+        # the first time, 16899 the last. `mo.to` cannot converge on that, so
+        # the row HANGS to its timeout with every one of its own checks already
+        # passed. That reads as a POINTER defect on a two-card machine, which
+        # is the most expensive possible way to be told a constant is stale.
+        #
+        # It was then rewritten to DERIVE the figure - `NWORD * 2 + 6`, with
+        # NWORD off `vid_tseg - vid_seg` - and that is why it drifted a THIRD
+        # time: the run's ends are symbols and cannot drift, but the `+ 6` is
+        # a literal, and vidsel.inc says `VID_CTX_W*2+5`. One byte, and
+        # `tools/os88geom.py`'s checker could not see it either, because it
+        # compares written-down copies and this was an expression. So it comes
+        # from the mirror now, like the other 267 copies the checker does
+        # watch (docs/HANDOFF-SOAK-FINDINGS.md A2).
+        NWORD, VX, CTXSZ = VID_CTX_W, VID_CTX_VX // 2, VID_CTX_SZ
+        run = (S("vid_tseg") - S("vid_seg")) // 2 + 1
+        if run != NWORD:
+            fail.append("vid_seg..vid_tseg is %d words and VID_CTX_W is %d - "
+                        "the record's own run and its mirrored width disagree"
+                        % (run, NWORD))
+        # ...and the same hazard one level IN, which the check above cannot
+        # see. `vid_cw` was word 7 and `vid_rseg` word 11, written here as
+        # literals. The size pass then took [vid_strm1], [vid_rpara] and
+        # [vid_rend] out of the run - VID_CTX_W 19 -> 16 - so NWORD, VX and
+        # CTXSZ each followed the mirror correctly, the run cross-check above
+        # passed, and word 11 quietly became `vid_cwm1`: this then asserted
+        # that the two displays "render into" 027F and 02CF, which are 640-1
+        # and 720-1. Reads as the RENDERER being wrong on a two-card machine.
+        # A word's place in the run is derived now, the way its length is:
+        # cw/ch off the mirrored offsets vidsel.inc asserts against viddet's
+        # column order, rseg off its own symbol - which is how
+        # tests/dispcold.py has always read it.
+        CW, CH = VID_CTX_CW // 2, VID_CTX_CH // 2
+        RSEG = (S("vid_rseg") - S("vid_seg")) // 2
+        for nm, i in (("vid_cw", CW), ("vid_ch", CH), ("vid_rseg", RSEG)):
+            if not 0 <= i < NWORD:
+                fail.append("%s is word %d, outside the %d-word run - it has "
+                            "left the per-display record (SPEC.md 39.2)"
+                            % (nm, i, NWORD))
         raw = m.read(S("vid_ctx"), 2 * CTXSZ)
         ctx = [[u16(raw, d * CTXSZ + i * 2) for i in range(NWORD + 2)]
                for d in (0, 1)]
@@ -229,35 +263,36 @@ def main(argv):
             w = ctx[d]
             say("ctx[%d] seg=%04X stride=%2d cw=%3d ch=%3d rseg=%04X "
                 "origin=(%d,%d)"
-                % (d, w[0], w[1], w[7], w[8], w[11], w[VX], w[VX + 1]))
+                % (d, w[0], w[1], w[CW], w[CH], w[RSEG], w[VX], w[VX + 1]))
         other = 1 if kind == 2 else 2
         for d, k in ((0, kind), (1, other)):
             _, seg, stride, _, cw, ch = KIND[k]
-            got = (ctx[d][0], ctx[d][1], ctx[d][7], ctx[d][8])
+            got = (ctx[d][0], ctx[d][1], ctx[d][CW], ctx[d][CH])
             if got != (seg, stride, cw, ch):
                 fail.append("ctx[%d] is %s, wanted %s"
                             % (d, got, (seg, stride, cw, ch)))
-            if ctx[d][11] != seg:
+            if ctx[d][RSEG] != seg:
                 fail.append("ctx[%d] renders into %04X, not its own "
-                            "framebuffer" % (d, ctx[d][11]))
+                            "framebuffer" % (d, ctx[d][RSEG]))
         if (ctx[0][VX], ctx[0][VX + 1]) != (0, 0):
             fail.append("display 0 is not at the virtual origin")
         # ...and its top row is the DESKTOP's, not the screen's (SPEC.md
         # 39.19.3). This wanted 0, which was right until that landed and has
         # failed ever since - the same staleness dispsave.py's own comment
         # records fixing on its side ("y used to be taken raw").
-        if (ctx[1][VX], ctx[1][VX + 1]) != (ctx[0][7], os88geom.MBAR_H):
+        if (ctx[1][VX], ctx[1][VX + 1]) != (ctx[0][CW], os88geom.MBAR_H):
             fail.append("display 1 is not immediately right of display 0, at "
                         "the desktop band's top row (SPEC.md 39.19.3): it is "
                         "at (%d,%d) and display 0 is %d wide"
-                        % (ctx[1][VX], ctx[1][VX + 1], ctx[0][7]))
-        live = [u16(m.read(S("vid_seg"), 36), i * 2) for i in range(18)]
-        if live != ctx[0][:18]:
+                        % (ctx[1][VX], ctx[1][VX + 1], ctx[0][CW]))
+        blk = m.read(S("vid_seg"), NWORD * 2)
+        live = [u16(blk, i * 2) for i in range(NWORD)]
+        if live != ctx[0][:NWORD]:
             fail.append("the live block is not display 0's record")
         dw, dh = u16(m.read(S("vid_w"), 2)), u16(m.read(S("vid_h"), 2))
         say("desktop %dx%d" % (dw, dh))
-        uw = max(c[VX] + c[7] for c in ctx)
-        uh = max(c[VX + 1] + c[8] for c in ctx)
+        uw = max(c[VX] + c[CW] for c in ctx)
+        uh = max(c[VX + 1] + c[CH] for c in ctx)
         if (dw, dh) != (uw, uh):
             fail.append("the desktop is %dx%d, not the union %dx%d "
                         "(SPEC.md 39.16)" % (dw, dh, uw, uh))
@@ -265,9 +300,9 @@ def main(argv):
         ph = u16(m.read(S("vid_ph"), 2))
         say("chrome %dx%d (the primary's), desktop %dx%d (the union)"
             % (pw, ph, dw, dh))
-        if (pw, ph) != (ctx[0][7], ctx[0][8]):
+        if (pw, ph) != (ctx[0][CW], ctx[0][CH]):
             fail.append("the chrome's extent is %dx%d, not the primary's %dx%d"
-                        % (pw, ph, ctx[0][7], ctx[0][8]))
+                        % (pw, ph, ctx[0][CW], ctx[0][CH]))
 
         # --- the picture on each -------------------------------------------
         pri = [c for c in cards if c["type"] == KIND[kind][0]][0]
@@ -360,7 +395,7 @@ def main(argv):
         # move is written the way it is, and the reason 39.15.3 makes the
         # crossing a jump rather than a straddle.
         mo = os88mouse.Mouse(marty=m)
-        home = (ctx[0][7] // 4, ctx[0][8] // 2)     # NOT the boot position,
+        home = (ctx[0][CW] // 4, ctx[0][CH] // 2)     # NOT the boot position,
                                                     # or `to` is a no-op and
                                                     # proves nothing
         mo.to(*home)
@@ -370,7 +405,7 @@ def main(argv):
         sec_before = m.fbuf(card=sec["idx"])[2]
         cd0 = m.read(S("cur_disp"), 1)[0]
 
-        away = (ctx[1][VX] + ctx[1][7] // 2, ctx[1][8] // 2)
+        away = (ctx[1][VX] + ctx[1][CW] // 2, ctx[1][CH] // 2)
         mo.to(*away)
         m.advance(frames=4, card=sec["idx"])
         m.run()                     # advance() leaves it PAUSED
@@ -428,11 +463,11 @@ def main(argv):
         # one does not, so which display to stand on and which way to push
         # depends on which is taller - it is the Hercules either way, and it
         # is the primary or the secondary depending on the machine.
-        tall, short = (1, 0) if ctx[1][8] > ctx[0][8] else (0, 1)
-        y = ctx[short][8] + 40                  # inside `tall`, outside `short`
-        mo.to(ctx[tall][VX] + 40 if tall else ctx[0][7] - 40, y)
+        tall, short = (1, 0) if ctx[1][CH] > ctx[0][CH] else (0, 1)
+        y = ctx[short][CH] + 40                  # inside `tall`, outside `short`
+        mo.to(ctx[tall][VX] + 40 if tall else ctx[0][CW] - 40, y)
         dx, edge = ((-100, ctx[1][VX]) if tall == 1
-                    else (100, ctx[0][7] - 1))
+                    else (100, ctx[0][CW] - 1))
         got = push(dx, 0)
         say("pushed %s along the row only display %d has: stopped at %s"
             % ("LEFT" if dx < 0 else "RIGHT", tall, got))
@@ -440,7 +475,7 @@ def main(argv):
             fail.append("pushed at the dead zone the pointer reached x=%d, "
                         "wanted %d - it walked into the gap"
                         % (got[0], edge))
-        far = (ctx[1][VX] + ctx[1][7] - 1, ctx[1][VX + 1] + ctx[1][8] - 1)
+        far = (ctx[1][VX] + ctx[1][CW] - 1, ctx[1][VX + 1] + ctx[1][CH] - 1)
         mo.to(ctx[1][VX] + 40, ctx[1][VX + 1] + 40)     # ...on display 1, then out
         got = push(100, 100)
         say("pushed to the OUTER corner: stopped at %s, display ends %s"
@@ -453,10 +488,14 @@ def main(argv):
         # Move the drive column into the second display's half of the virtual
         # desktop and post [cp_dirty]; ui_task's step 3 is a wm_paint_all, and
         # desk_paint then draws every volume's icon and label at the new x.
-        zx = ctx[0][7] + ctx[1][7] // 2         # display 1, half way across
+        zx = ctx[0][CW] + ctx[1][CW] // 2         # display 1, half way across
         m.write(S("vid_desk_zx"), bytes([zx & 255, zx >> 8]))
-        m.write(S("vid_desk_zl"), bytes([(zx - 2) & 255, (zx - 2) >> 8]))
-        m.write(S("vid_desk_zr"), bytes([(zx + 50) & 255, (zx + 50) >> 8]))
+        # ...and that is the WHOLE column: desk_zone_rect derives the drawn
+        # rect from it and DESK_ZW/DESK_ZOVER (SPEC.md 26.4). Two further
+        # pokes stood here, setting [vid_desk_zl]/[vid_desk_zr] - cells no
+        # instruction in the kernel ever read. A write whose answer nothing
+        # reads, inside the gate that was supposed to be checking; they went
+        # with the cells.
         m.write(S("cp_dirty"), bytes([1]))
         m.advance(frames=90, card=pri["idx"])
         m.run()                     # advance() leaves it PAUSED
@@ -498,7 +537,7 @@ def main(argv):
             say("About is window %d at (%d,%d) %dx%d"
                 % (found, wx, wy, ww, u16(wins, found * WIN + 8)))
             grab = (wx + ww // 2, wy + 8)       # the title bar's middle
-            dest = (ctx[1][VX] + ctx[1][7] // 2, ctx[1][VX + 1] + 60)
+            dest = (ctx[1][VX] + ctx[1][CW] // 2, ctx[1][VX + 1] + 60)
             mo.to(*grab)
             mo.m.mouse(0, 0, l=True)
             time.sleep(0.3)
@@ -519,7 +558,7 @@ def main(argv):
             say("dragged to (%d,%d)" % (nx, ny))
             d = 0
             for c in ctx:
-                if c[VX] <= nx < c[VX] + c[7] and c[VX + 1] <= ny < c[VX + 1] + c[8]:
+                if c[VX] <= nx < c[VX] + c[CW] and c[VX + 1] <= ny < c[VX + 1] + c[CH]:
                     d = 1 if c is ctx[1] else 0
                     break
             else:

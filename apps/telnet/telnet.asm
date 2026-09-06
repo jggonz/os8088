@@ -47,7 +47,15 @@
                                     ; drivers/net/net.asm includes, so the two
                                     ; ends cannot drift (SPEC.md 20.11)
 
-    OS88_HEADER 'TELNET', te_entry, 1
+    OS88_HEADER 'TELNET', te_entry, 1, OS88_STACK_256
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 66, plus ETHER.DRV's
+                                ; socket verbs - ~126 bytes
+                                ; on OUR stack, the driver
+                                ; owning no task of its own
+                                ; over the 64-byte interrupt floor
+                                ; that is 194, and 256 gives 1.32x
     OS88_ICON16
     ; 16 mask rows (the white underlay), then 16 of ink: a terminal
     ; screen with a `<` prompt on it and a stand under the case.

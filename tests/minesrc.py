@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dispapps                                             # noqa: E402
 import dispcp                                               # noqa: E402
 from ethernet import Qemu, S, SOCK, settle                  # noqa: E402
+import os88qemu                                              # noqa: E402
 
 TITLE_H = 18
 MN_STRIP_H, MN_CELLPX, MN_COLS = 20, 16, 9      # apps/mines' own constants
@@ -111,6 +112,9 @@ def boot():
     for f in ("build/qmp.sock", "build/qemu.pid"):
         if os.path.exists(f):
             os.remove(f)
+    # `make test` DAEMONISES the emulator, so it outlives this script
+    # unless somebody kills it - and the somebody is us (os88qemu).
+    os88qemu.own()
     r = subprocess.run(["make", "test"], capture_output=True, text=True)
     if r.returncode:
         sys.exit("minesrc: make test failed:\n" + r.stdout + r.stderr)

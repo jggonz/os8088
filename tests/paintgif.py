@@ -30,6 +30,13 @@ import time
 
 sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
+
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
+                      VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
+# SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
+# written down here. This file spelled it `42 + 36`, which is the
+# VID_CTX_W = 18 layout - two bytes early, and what sits there is
+# display 1's vid_chm8, so the seam read 192 instead of 720.
 import os88marty, os88mouse, os88sym, dispcp                # noqa: E402
 
 S = os88sym.linear
@@ -117,7 +124,8 @@ def main():
             # THE NEW PATH: a blit wholly on the SECOND display, which is the
             # case the gate translates. Straddling is tests/dispblit.py's and
             # one display is every machine that was already correct.
-            seam = u16(m.read(S("vid_ctx"), 84), 42 + 36)
+            seam = u16(m.read(S("vid_ctx"), 2 * VID_CTX_SZ),
+                       VID_CTX_SZ + VID_CTX_VX)
             px, py, pw2, ph = dispcp.win_rect(m, S, pw[-1])
             mo.drag(px + pw2 // 2, py + TITLE_H // 2,
                     seam + 340, py + TITLE_H // 2)

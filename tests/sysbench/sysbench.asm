@@ -1524,18 +1524,29 @@ sb_mbx:
 ; SPEC.md 39.12's context record, mirrored from kernel/vidsel.inc. Rule 3 of
 ; SPEC.md 57.3 as written: a block may change shape whenever its owner does,
 ; as long as the READERS change with it, and there are none outside this tree.
-; The first three are inside the eighteen-word run - which is the live block's
+; The first five are inside the VCTX_W-word run - which is the live block's
 ; own order, so they are viddet.inc's layout twice removed - and the last
 ; three are the fields hung off the end of it.
+;
+; THOSE THREE ARE DERIVED, not written down: vidsel.inc spells them
+; `VID_CTX_W*2`, `+2` and `+4`, so a word added to or taken out of the run
+; moves all three at once. They were typed as 36/38/40 against a run that had
+; been 19 words since SPEC.md 6.1.10 added vid_tseg, which read each field one
+; word early. Nothing catches it - t_mirror walks kernel/, boot/ and apps/,
+; os88geom.scan walks .py, and an .asm under tests/ is outside both. The run
+; has since SHRUNK to 16 ([vid_strm1], [vid_rpara] and [vid_rend] left it
+; with no reader between them), and VCTX_W here and in tests/gfxbench are the
+; two lines that move with it.
+VCTX_W      equ 16              ; == kernel/vidsel.inc's VID_CTX_W
 VCTX_SEG    equ 0               ; vid_seg:    the framebuffer
 VCTX_STRIDE equ 2               ; vid_stride: bytes from a row to the row one
                                 ;             bank down
 VCTX_BMASK  equ 4               ; vid_bmask:  y & this = the bank, so banks-1
 VCTX_CW     equ 14              ; vid_cw / vid_ch: THIS DISPLAY's extent, not
 VCTX_CH     equ 16              ; the desktop's (SPEC.md 39.2.1)
-VCTX_VX     equ 36              ; ...and its origin in the virtual desktop
-VCTX_VY     equ 38
-VCTX_KIND   equ 40              ; ...and which adapter it is
+VCTX_VX     equ VCTX_W*2        ; ...and its origin in the virtual desktop
+VCTX_VY     equ VCTX_W*2+2
+VCTX_KIND   equ VCTX_W*2+4      ; ...and which adapter it is
 
 ; -----------------------------------------------------------------------------
 ; sb_video - what SPEC.md 39 arranged, and on which cards (39.19, 57.4's 'VD')
@@ -2702,10 +2713,15 @@ sb_b_ovr:
     ret
 
 ; A TABLE LOOKUP, which is what the shift rows above get traded for. The
-; kernel does this in four places now - gfx_inktab, the two edge-mask tables
-; and vid_banktab (SPEC.md 5.7) - and each of those trades was made against a
+; kernel does this in three places now - gfx_inktab and the two edge-mask
+; tables (SPEC.md 5.7) - and each of those trades was made against a
 ; written-down EA cost, never a measured one. [bx+disp16] is the addressing
-; mode all four use.
+; mode all three use. There was a FOURTH, vid_banktab, and it is the reason
+; this row is worth keeping: `bank * 0x2000` went to a table because a
+; variable shift is 60 clocks, and nobody costed the ROTATE - `ror bx, 3` is
+; the same answer for a 3-bit value in 20 clocks over 4 bytes against the
+; lookup's 25 over 7, so the table was both bigger and slower than the thing
+; it was standing in for.
 sb_b_idx:
     xor bx, bx
 %rep SB_UNROLL
@@ -2966,7 +2982,7 @@ sb_b_rdbig:
 ; **IT HARD FROZE THE 5150 ONCE, on the first run of a cold boot, and ran
 ; normally after a reboot** (docs/FIELD-NOTES.md 10). The hazard is real and
 ; unfixable from inside a package: the BIOS runs its disk handler and its
-; IRQ6 nesting on whichever 256-byte task stack is current (SPEC.md 8), on
+; IRQ6 nesting on whichever 384-byte task stack is current (SPEC.md 8), on
 ; top of this routine's frame and bl_run's and benchlib's, and the kernel's
 ; own dsk_xfer additionally holds sch_lock across every int 13h so nothing
 ; can switch underneath one. A package can do neither, and whether it dies

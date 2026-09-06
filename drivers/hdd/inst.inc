@@ -1515,13 +1515,12 @@ hd_iw_click:
     call hd_irows_draw          ; the bar moved, the message changed, and the
     call hd_ibtns_draw          ; disarm may have re-greyed Install. The header
     call hd_imsg_draw           ; did not change and is not redrawn
-    jmp short .done
-.refused:
-    ; A greyed control explains itself (SPEC.md 47 rule 5), so this says
-    ; nothing new - it makes sure the reason is on screen.
-    mov word [hd_imsg], hd_s_ibad
-    call hd_imsg_draw           ; ONE line: nothing else about the window has
-.done:                          ; changed, and a full repaint here flashed
+    ; ...and NO `.refused` arm. It set hd_s_ibad for a click on a greyed
+    ; control, and hd_ibhit answers 0 for one - so nothing ever reached it,
+    ; which its own comment half conceded: "a greyed control explains itself
+    ; (SPEC.md 47 rule 5), so this says nothing new". Rule 5 is still the
+    ; answer; the arm was a second copy of it that could not run.
+.done:
     pop bp
     pop di
     pop si
@@ -1790,10 +1789,12 @@ hd_inst_apps:
     call hd_ibuf_put
     stc
     jmp short .out
-.nboot:                         ; the FILES are all there and the disk simply
-    mov word [hd_imsg], hd_s_inboot ; will not boot - a different sentence to
-    call hd_ibuf_put            ; the user and a different half to debug
-    stc
+    ; ...and NO `.nboot` arm here. It said "the files are all there and the
+    ; disk simply will not boot", which is a real distinction and no longer
+    ; this phase's to make: SPEC.md 52.10.10 moved the boot commit into the
+    ; SYSTEM phase, and the branch went with it - that phase has its own
+    ; `.nboot` with two live `jc`s into it. This copy stayed behind with
+    ; nothing able to reach it.
 .out:
     pop di
     pop si

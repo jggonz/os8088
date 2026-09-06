@@ -258,10 +258,13 @@ def report(path, at=None):
     else:
         print("   beat - chain = %d, which is neither 0 nor 1 - the strip was "
               "caught mid-paint" % d)
-    print("   SP %02X%02X   (subtract it from the slice TOP for the depth; "
-          "the slice" % (vals[7], vals[8]))
-    print("        size is SCH_STACK - `python3 tools/stkwater.py` reads it "
-          "off the kernel)")
+    print("   SP %02X%02X   (subtract it from the slice TOP for the depth - "
+          "and the TOP is" % (vals[7], vals[8]))
+    print("        per slot since SPEC.md 8.7: sch_stkbase[n] + "
+          "sch_stksize[n], which")
+    print("        `python3 tools/stkwater.py` decodes off the kernel. A "
+          "single SCH_STACK")
+    print("        is the LARGEST class now and is wrong on most slots)")
     print("   PIC mask %02X in-service %02X   (IRQ0 is bit 0 of each)"
           % (vals[13], vals[14]))
     return 0

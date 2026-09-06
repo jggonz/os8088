@@ -35,6 +35,13 @@ import time
 
 sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
+
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
+                      VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
+# SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
+# written down here. This file spelled it `42 + 36`, which is the
+# VID_CTX_W = 18 layout - two bytes early, and what sits there is
+# display 1's vid_chm8, so the seam read 192 instead of 720.
 import os88marty, os88mouse, os88sym, dispcp                # noqa: E402
 
 S = os88sym.linear
@@ -57,10 +64,13 @@ def report(m, label, cards):
              m.read(S("vid_ndisp"), 1)[0], m.read(S("vid_cur"), 1)[0],
              m.read(S("vid_mono"), 1)[0], m.read(S("vid_planes"), 1)[0],
              u16(m.read(S("vid_w"), 2)), u16(m.read(S("vid_h"), 2))))
-    ctx = m.read(S("vid_ctx"), 84)
+    ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
     print("    ctx0 kind=%s v=(%d,%d)   ctx1 kind=%s v=(%d,%d)"
-          % (KINDS.get(ctx[40], "?"), u16(ctx, 36), u16(ctx, 38),
-             KINDS.get(ctx[82], "?"), u16(ctx, 42 + 36), u16(ctx, 42 + 38)))
+          % (KINDS.get(ctx[VID_CTX_KIND], "?"), u16(ctx, VID_CTX_VX),
+             u16(ctx, VID_CTX_VY),
+             KINDS.get(ctx[VID_CTX_SZ + VID_CTX_KIND], "?"),
+             u16(ctx, VID_CTX_SZ + VID_CTX_VX),
+             u16(ctx, VID_CTX_SZ + VID_CTX_VY)))
     for c in cards:
         print("    card %d (%s): %d lit" % (c, cards[c]["type"], lit(m, c)))
 

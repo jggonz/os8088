@@ -79,10 +79,17 @@ def run_pushes(m, sym, at, rec, evtype, first_a, n):
 
 
 def ring(m, sym):
-    """The queue's records, oldest first: [(type, a), ...]."""
-    def w(name):
-        return int.from_bytes(m.read(os88sym.linear(name), 2), "little")
-    head, n = w("evq_head"), w("evq_count")
+    """The queue's records, oldest first: [(type, a), ...].
+
+    evq_head/evq_tail/evq_count are BYTES since kernel size pass 3 - the ring
+    is 128 bytes and the count is 0..EVQ_CAP, so every value fits seven bits
+    and the kernel widens each with `cbw`. Reading them as words here picked
+    up the neighbour and walked the wrong records while still printing
+    plausible output.
+    """
+    def b(name):
+        return m.read(os88sym.linear(name), 1)[0]
+    head, n = b("evq_head"), b("evq_count")
     buf = m.read(os88sym.linear("evq_buf"), EVQ_CAP * EVQ_RECSIZE)
     out = []
     for i in range(n):
@@ -92,18 +99,17 @@ def ring(m, sym):
     return out
 
 
-def reset(m, sym, at):
-    rel = (sym["evq_init"] - (at + 3)) & 0xFFFF
-    m.write((KERNEL_SEG << 4) + at,
-            bytes([0xE8]) + rel.to_bytes(2, "little") + bytes([0xEB, 0xFE]))
-    r = m.regs()
-    m.cmd(cmd="park", cs=KERNEL_SEG, ip=at)
-    for reg, val in (("ds", KERNEL_SEG), ("ss", r["ss"]), ("sp", r["sp"])):
-        m.setreg(reg, val)
-    m.bp_exec((KERNEL_SEG << 4) + at + 3)
-    m.run()
-    m.wait_stop(120)
-    m.breakpoints([])
+def reset(m):
+    """Empty the ring from the HOST.
+
+    This poked a near `call evq_init` into the stub and ran it, until size
+    pass 3 deleted `evq_init` - the three indices are `.bss` and `.bss`
+    arrives zeroed, so the boot image does the only clearing the kernel needs
+    (SPEC.md 10). Three byte writes with the guest PAUSED are simpler than the
+    poke-and-run and are atomic from the guest's side, which the poke was not.
+    """
+    for name in ("evq_head", "evq_tail", "evq_count"):
+        m.write(os88sym.linear(name), b"\x00")
 
 
 def main(argv):
@@ -115,7 +121,11 @@ def main(argv):
     sym = os88sym.syms()
     at = sym["snd_xlat"]                # 256 idle .bss bytes inside KERNEL_SEG,
                                         # rebuilt per clip and so idle on a
-                                        # desktop nothing is playing on. NOT
+                                        # desktop nothing is playing on. Bytes
+                                        # 0..7 are ALSO snd_evtmp (SPEC.md
+                                        # 34.4), the click-abort drain's
+                                        # scratch - idle for the same reason,
+                                        # and this test plays no clip. NOT
                                         # gfx_pairtab0 any more: that pair went
                                         # to .lowbss (SPEC.md 5.4.1.1), and an
                                         # offset in LOW_SEG poked at KERNEL_SEG
@@ -128,7 +138,7 @@ def main(argv):
         m.pause()
 
         # --- 1. twenty input records, sixteen slots -------------------------
-        reset(m, sym, at)
+        reset(m)
         run_pushes(m, sym, at, rec, EVT_MDOWN, 0, 20)
         got = ring(m, sym)
         want = [(EVT_MDOWN, i) for i in range(20 - EVQ_CAP, 20)]
@@ -143,7 +153,7 @@ def main(argv):
                   % EVQ_CAP)
 
         # --- 2. ...unless the oldest is a WAKE ------------------------------
-        reset(m, sym, at)
+        reset(m)
         run_pushes(m, sym, at, rec, EVT_WAKE, 0x1234, 1)
         run_pushes(m, sym, at, rec, EVT_MDOWN, 0, 20)
         got = ring(m, sym)

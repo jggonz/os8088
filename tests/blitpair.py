@@ -42,6 +42,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
+import dispapps                                              # noqa: E402
 
 if os.environ.get("NOPLANE"):
     os88sym.default_defines("NOPLANE")      # the knob kernel is a DIFFERENT
@@ -109,8 +110,22 @@ def main():
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="/tmp/blitpair.img")
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
-    ap.add_argument("--gif", default="build/OS8088.GIF")
+    ap.add_argument("--gif", default=None,
+                    help="the picture to open (default: SPEC.md 42.23.6's "
+                         "colour derivation of build/OS8088.GIF)")
     a = ap.parse_args()
+
+    # SPEC.md 42.23.6's colour derivation, and THE ROW IS LOOKED UP BY THE
+    # NAME IT WAS GIVEN rather than by a constant. tests/paintpack.py builds
+    # the disk itself and runs this file as a subprocess, so a name hardcoded
+    # here disagrees with whatever the caller put on it - which is what
+    # happened: `'OS8088.GIF' is not in this folder - it lists
+    # ['..', 'OS88COL.GIF']`, out of a disk paintpack had just built
+    # correctly. The pixels are identical either way (two unused colour-table
+    # entries), so this file's own claim - that the logo is two colours, so
+    # 39.4 sends every pixel to a solid class - is untouched.
+    if a.gif is None:
+        a.gif = dispapps.colour_gif()
 
     if a.apps == "/tmp/blitpair.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
@@ -148,7 +163,8 @@ def main():
                                dispcp.scroll_to(m, mo, S, os88marty.settle,
                                                 bx, by,
                                                 dispcp.row_of(m, S,
-                                                              "OS8088.GIF")))
+                                                              os.path.basename(
+                                                                  a.gif))))
         mo.to(rx, ry)
         os88marty.settle(m)
 

@@ -143,6 +143,15 @@ C64_RUN_JAM   equ 1                 ; a KIL/JAM opcode; the machine stops
 ; each: a read of $FFC0-$FFF9 in an all-RAM map reads the scratch, and a write
 ; there is dropped.
 C64_SCR_BASE  equ 0xFFC0
+; ...and the SAME address as a SIGNED displacement, for the one access that
+; reaches it through a base register. NASM 2.16 tightened `number-overflow`:
+; `[bx + 0xFFC0]` is a 16-bit displacement and 65,472 is outside the signed
+; range it now insists on, so `-w+error` refuses the line - `byte data exceeds
+; bounds`, at a line with no `db` on it. The encoding is identical either way;
+; only the spelling moves. Without this, `make c64` does not assemble on a
+; 2.16 toolchain, and nothing in `all` builds C64 - so the tree went on
+; passing every gate it has while its largest C package could not be built.
+C64_SCR_DISP  equ C64_SCR_BASE - 0x10000
 C64_SCR_DIRTY equ 0x00              ; 32 bytes: the 256-page dirty bitmap (9.2)
 C64_SCR_BLO   equ 0x20              ; the LOW edge of the region ES is biased
                                     ;   for (4.3). The guard is a RANGE and
@@ -539,7 +548,7 @@ c64_wr_bx:
     shr bl, 1
     shr bl, 1
     shr bl, 1
-    or  [bx + C64_SCR_BASE + C64_SCR_DIRTY], dh
+    or  [bx + C64_SCR_DISP + C64_SCR_DIRTY], dh
     pop dx
     pop bx
     mov byte [C64_SCR_BASE + C64_SCR_ANY], 1

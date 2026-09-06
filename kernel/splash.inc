@@ -77,19 +77,19 @@ SPL_RESIDENT equ 9              ; sectors the boot sector waits for before
                                 ; second - was a sector at the pre-18.91 238 ms
 SPL_GC      equ 0x3CE           ; VGA Graphics Controller index port
 
-; gfx_nextrow, INLINED (SPEC.md 2.9.4). Two reasons and the second is the one
-; that bites: it is four instructions, and a call and ret across a segment is
-; 46.7 us against 11 - paid per ROW, in spl_fill, spl_vline and spl_bar, which
-; on VGA is ~100 rows a paint and ~50 paints a boot. AND ITS OWN BODY READS
-; `[cs:vid_rowadd]`, which is right in `.text` and wrong here: CS is stage 2's
-; segment now, so the same three words have to come through DS.
-%macro SPL_NEXTROW 0
-    add di, [vid_rowadd]
-    test di, [vid_wrapbit]
-    jz %%r
-    add di, [vid_wrapfix]
-%%r:
-%endmacro
+; gfx_nextrow, brought INTO this module (SPEC.md 2.9.4) - and now a NEAR call
+; to spl_nextrow at the foot of the file rather than an inlined macro.
+;
+; The reason it is not gfx_nextrow is unchanged and is the second of these two:
+; a call and ret ACROSS A SEGMENT is 46.7 us against 11, paid per ROW; and its
+; own body reads `[cs:vid_rowadd]`, which is right in `.text` and wrong here,
+; CS being stage 2's segment, so the same three words have to come through DS.
+;
+; WHAT CHANGED IS ONLY THE MACRO, and the 46.7 does not apply to it: a near
+; call inside `.boot2` is 11 us, three sites at ~1,300 rows a boot is ~14 ms of
+; a ~10 s boot, and the fourteen bytes an expansion costs are blob budget the
+; SPLSTARS arm has none of.  SPL_NEXTROW_CS below stays a macro: it has ONE
+; user, so a call would cost three bytes rather than save eighteen.
 
 ; ...and the same three words read through CS, for SPEC.md 15.3.4's row loop -
 ; the one place in this module that points DS at CS so the copy out of a
@@ -172,13 +172,17 @@ SPL_PCTC    equ 4
 ; `ret` and changed in no other way.
 ; -----------------------------------------------------------------------------
 splf_step:      call spl_step
-                retf
-splf_stepq:     call spl_stepq
-                retf
-splf_finish:    call spl_finish
-                retf
-splf_reset:     call spl_reset
-                retf
+                retf            ; ...and spl_step KEEPS its shim, because
+                                ; spl_stepq near-calls the body two screens
+                                ; down: a `retf` on it would return into
+                                ; nowhere from there
+;
+; THE OTHER THREE HAVE NO SHIM ANY MORE (SPEC.md 2.6.1, 15.3.9). spl_stepq,
+; spl_finish and spl_reset have exactly one `ret` apiece and NO near caller
+; anywhere in this section, so each body owns its own far return and the four
+; bytes in the middle are deleted. Twelve bytes of `.boot2`, which is the same
+; pool the boot overlay draws from (SPEC.md 2.9.12) - `OVL_AT` moves for
+; nothing, so what the loader gives back the overlay can have.
 splf_anim:      call spl_anim
                 retf            ; ...and SPEC.md 15.3.8.2's: sch_isr owns int
                                 ; 08h for the second half of the loading
@@ -337,7 +341,7 @@ spl_stepq:
     mov byte [spl_quiet], 1
     call spl_step
     mov byte [spl_quiet], 0
-    ret
+    retf                        ; FAR: SPEC.md 15.3.9 deleted the splf_ shim
 
 spl_step:
     pushf
@@ -443,7 +447,7 @@ spl_finish:
     pop ax
 .out:
     popf
-    ret
+    retf                        ; FAR: SPEC.md 15.3.9 deleted the splf_ shim
 
 ; -----------------------------------------------------------------------------
 ; spl_reset - put the loading screen back after a mode switch (SPEC.md 39.11.3)
@@ -508,7 +512,7 @@ spl_reset:
     pop bx
     pop ax
 .out:
-    ret
+    retf                        ; FAR: SPEC.md 15.3.9 deleted the splf_ shim
 
 ; -----------------------------------------------------------------------------
 ; spl_chrome - first tick only: mode 12h, the double-framed welcome dialog,
@@ -547,51 +551,42 @@ spl_rechrome:
     shr ax, cl
     mov [cs:spl_l_spx], ax
 
-    mov ax, [vid_ch]            ; the bar's origin. On VGA the dialog's trough
-    shr ax, 1                   ; is at 264 and the bar sits in it, so VGA
-    cmp byte [vid_mono], 0      ; keeps its constant; mono places the bar so
-    je .barv                    ; that the BLOCK is centred, which is +10 and
-    add ax, 10                  ; not the -8 it was when the bar was the only
-    jmp short .bary             ; thing on the screen (SPEC.md 15.3.5.1): the
-                                ; block runs bar-81 to bar+59, so centring it
-                                ; in vid_ch puts the bar at vid_ch/2 + 10
-.barv:
-    mov ax, SPL_BAR_Y
-.bary:
-    mov [cs:spl_l_bar], ax
-    push ax
-    cmp byte [vid_mono], 0      ; ...and the rows around it: VGA by its own
-    je .lvga                    ; five constants, mono PACKED, because a
-    mov bx, ax                  ; 200-row screen cannot take VGA's padding
-    sub ax, 20
-    mov [cs:spl_l_ttl], ax
-    mov ax, bx
-    add ax, 40
-    mov [cs:spl_l_pct], ax
-    mov ax, bx
-    sub ax, 32
-    mov [cs:spl_l_dt], ax
-    mov ax, bx
-    add ax, 59
-    mov [cs:spl_l_db], ax
-    mov ax, bx
-    sub ax, 81
-    mov [cs:spl_l_spn], ax
-    jmp short .lok
-.lvga:
-    mov word [cs:spl_l_ttl], SPL_TTL_Y
-    mov word [cs:spl_l_pct], SPL_PCT_Y
-    mov word [cs:spl_l_dt], SPL_DLG_T
-    mov word [cs:spl_l_db], SPL_DLG_B
-    mov word [cs:spl_l_spn], SPL_TOP
-.lok:
-    mov ax, [cs:spl_l_bar]      ; ...and 15.6's line, which is bar + 24 on
+    mov ax, SPL_BAR_Y           ; the bar's origin. On VGA the dialog's trough
+    cmp byte [vid_mono], 0      ; is at 264 and the bar sits in it, so VGA
+    je .bary                    ; keeps its CONSTANT and never reads [vid_ch];
+    mov ax, [vid_ch]            ; mono places the bar so that the BLOCK is
+    shr ax, 1                   ; centred, which is +10 and not the -8 it was
+    add ax, 10                  ; when the bar was the only thing on the screen
+.bary:                          ; (SPEC.md 15.3.5.1): the block runs bar-81 to
+    mov [cs:spl_l_bar], ax      ; bar+59, so centring it in vid_ch puts the bar
+                                ; at vid_ch/2 + 10
+    mov bx, ax                  ; ...and 15.6's line, which is bar + 24 on
     add ax, 24                  ; EVERY adapter: 264 + 24 is SPL_MSG_Y. It was
     mov [cs:spl_l_msg], ax      ; computed three times from two formulas -
                                 ; here, spl_kern_on and vidsel.inc's spl_mgeom
                                 ; - and banking it is what makes moving the
-                                ; mono layout one edit instead of three
-    pop ax
+                                ; mono layout one edit instead of three.
+                                ; Computed HERE, while AX is still the bar,
+                                ; because the walk below spends AX
+
+    mov si, spl_lay_tab         ; ...and the five rows AROUND the bar, from a
+    mov di, spl_l_ttl           ; TABLE rather than two spelled-out arms: VGA
+    mov cx, 5                   ; by its own constant, mono by a signed delta
+.lrow:                          ; from the bar, because a 200-row screen cannot
+    mov ax, [cs:si]             ; take VGA's padding. Five consecutive words,
+    cmp byte [vid_mono], 0      ; which the guard beside spl_lay_tab is what
+    je .lst                     ; keeps true
+    mov al, [cs:si+2]
+    cbw
+    add ax, bx
+.lst:
+    mov [cs:di], ax
+    add si, 3
+    inc di
+    inc di
+    loop .lrow
+
+    mov ax, bx                  ; AX = the bar row again, for the row base
     call KERNEL_SEG:spw_gfx_rowbase
     mov bx, [vid_cw]            ; x = (width - bar) / 2, in whole bytes: 22 at
     sub bx, SPL_BAR_PX          ; 640 (which is what SPL_BAR_ADR always was),
@@ -600,8 +595,7 @@ spl_rechrome:
     add ax, bx
     mov [cs:spl_bar_adr], ax
 
-    mov ax, [vid_seg]
-    mov es, ax
+    mov es, [vid_seg]
                                 ; ...and ALL THREE ADAPTERS draw it now
                                 ; (SPEC.md 15.3.5). It was VGA-only because
                                 ; the chrome was BIOS text and int 10h
@@ -611,30 +605,22 @@ spl_rechrome:
                                 ; out; what was left was the pixel literals.
     mov bx, [cs:spl_l_dt]       ; dialog: two nested 1px frames, the mode 3
     mov dx, [cs:spl_l_db]       ; splash's double-line box reborn in pixels
-    mov cx, [cs:spl_l_cx]
-    mov si, cx
-    sub cx, 168
-    add si, 167
-    call spl_rect
-    mov bx, [cs:spl_l_dt]
+    mov ax, 168                 ; ...each one a HALF-WIDTH about the banked x
+    call spl_rectc              ; centre - the three sites differed in nothing
+    mov bx, [cs:spl_l_dt]       ; else
     add bx, 4
     mov dx, [cs:spl_l_db]
     sub dx, 4
-    mov cx, [cs:spl_l_cx]
-    mov si, cx
-    sub cx, 164
-    add si, 163
-    call spl_rect
+    mov ax, 164
+    call spl_rectc
 
     mov bx, [cs:spl_l_bar]      ; bar trough, 1px inset from the fill
     mov dx, bx
-    sub bx, 2
+    dec bx
+    dec bx
     add dx, SPL_BAR_H + 1
-    mov cx, [cs:spl_l_cx]
-    mov si, cx
-    sub cx, 146
-    add si, 145
-    call spl_rect
+    mov ax, 146
+    call spl_rectc
 
     mov ax, [cs:spl_l_ttl]      ; the caption, BLITTED (SPEC.md 15.3.2) - it
     mov bx, SPL_TTLC            ; was 18 BIOS teletype characters and they
@@ -657,9 +643,9 @@ spl_cell:
     shr ax, cl                  ; ...and the byte it starts in
     pop bx
     add ax, bx
-    mov di, ax
-    mov ax, [vid_seg]
-    mov es, ax
+spl_setdi:                      ; ...and the tail spl_spinadr shares: AX is a
+    mov di, ax                  ; framebuffer offset, so hand it back as ES:DI
+    mov es, [vid_seg]
     ret
 
 ; -----------------------------------------------------------------------------
@@ -669,9 +655,17 @@ spl_spinadr:
     mov ax, [cs:spl_l_spn]
     call KERNEL_SEG:spw_gfx_rowbase
     add ax, [cs:spl_l_spx]
-    mov di, ax
-    mov ax, [vid_seg]
-    mov es, ax
+    jmp short spl_setdi
+
+; -----------------------------------------------------------------------------
+; spl_frac - AX = done * CX / total.  clobbers: ax, dx
+;
+; [spl_total] is never 0: spl_tick seeds it and spl_step seeds SPL_POST.
+; -----------------------------------------------------------------------------
+spl_frac:
+    mov ax, [cs:spl_done]
+    mul cx
+    div word [cs:spl_total]
     ret
 
 ; -----------------------------------------------------------------------------
@@ -680,13 +674,10 @@ spl_spinadr:
 ; clobbers: ax, bx, cx, dx, si, di, es
 ; -----------------------------------------------------------------------------
 spl_bar:
-    mov ax, [vid_seg]
-    mov es, ax
+    mov es, [vid_seg]
 
-    mov ax, [cs:spl_done]
     mov cx, SPL_BAR_PX
-    mul cx
-    div word [cs:spl_total]        ; AX = filled pixels, 0..SPL_BAR_PX
+    call spl_frac               ; AX = filled pixels, 0..SPL_BAR_PX
     mov si, ax
     mov cl, 3
     shr ax, cl                  ; AX = whole bytes of fill
@@ -708,14 +699,8 @@ spl_bar:
     shl al, cl                  ; leading SI bits set
     call spl_bitmask
     mov bx, SPL_BAR_H
-.prow:
-    call spl_wrbyte             ; merge white through the armed mask
-    SPL_NEXTROW
-    dec bx
-    jnz .prow
-    mov al, 0xFF
-    call spl_bitmask            ; leave the GC at its default
-.done:
+    call spl_mcol               ; the armed mask down BX rows, then the GC
+.done:                          ; back to its default
     ret
 
 ; -----------------------------------------------------------------------------
@@ -723,10 +708,8 @@ spl_bar:
 ; clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
 spl_pct:
-    mov ax, [cs:spl_done]
     mov cx, 100
-    mul cx
-    div word [cs:spl_total]        ; AX = percent, 0..100
+    call spl_frac               ; AX = percent, 0..100
 
     mov word [cs:spl_pctbuf], '  '     ; digits grow leftward over the blanks
     mov bx, spl_pctbuf + 2
@@ -751,7 +734,13 @@ spl_pct:
 ; -----------------------------------------------------------------------------
 ; spl_kern_on - 'Loading Kernel', for the stretch that IS a floppy boot
 ;               (SPEC.md 15.6.5)
-; in:  nothing.  out: nothing (every register and the flags preserved)
+; in:  nothing.  out: nothing.  clobbers: ax, bx, cx, si, di, bp, es
+;
+; IT PRESERVED EVERY REGISTER AND NOTHING WANTED THAT.  Its one caller is
+; spl_tick, which banks all nine at its own entry and holds nothing across
+; this - and the call two lines above it (spl_chrome) already clobbers the
+; same set.  Eight pushes and eight pops of the blob's budget bought a
+; contract with no reader.
 ;
 ; Nine of a floppy boot's twelve seconds are this read and 15.6's line cannot
 ; say so: that line is font_run into the framebuffer and font_run is `.text` -
@@ -786,15 +775,6 @@ SPL_KY      equ 288             ; SPL_MSG_CELLS and SPL_MSG_Y, which live in
                                 ; build check is for
 
 spl_kern_on:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push es
-
     ; --- 15.6's field, at the row spl_rechrome banked ----------------------
     ; The typeface is spl_text's own question now (spl_kfont), asked at the
     ; first glyph of the boot whichever caller gets there first.
@@ -802,17 +782,7 @@ spl_kern_on:
     mov bx, SPL_KCELLS
     call spl_cell
     mov si, spl_s_kern
-    call spl_text
-
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp spl_text                ; tail call, spl_pct's and spl_rechrome's shape
 
 ; -----------------------------------------------------------------------------
 ; spl_kfont - the ROM 8x8 set into [cs:spl_kf*], once a boot
@@ -891,7 +861,7 @@ spl_text:
     mov al, [cs:si]
     inc si
     mov [es:di], al             ; opaque, one pass - see the header
-    SPL_NEXTROW
+    call spl_nextrow
     dec bx
     jnz .row
     mov di, bp                  ; back to the cell, and on to the next BYTE
@@ -925,12 +895,11 @@ spl_kglyph:
     mov ds, [cs:spl_kfseg]
     mov di, spl_krow
     mov cx, 8
-.b:
-    mov al, [si]
-    mov [cs:di], al
-    inc si
-    inc di
-    loop .b
+.b:                             ; lodsb, not mov+inc: DS:SI is the ROM font's
+    lodsb                       ; and is what this loop already read through,
+    mov [cs:di], al             ; and DF=0 is stage 2's entry `cld` - the same
+    inc di                      ; one spl_fill's `rep stosb` rests on.  The
+    loop .b                     ; destination stays [cs:di], so ES is untouched
     pop ds
     ret
 
@@ -994,8 +963,8 @@ spl_spin:
     shr ax, cl
     and ax, 15
     mov bx, ax
-    shl bx, 1
-    mov ax, [cs:spl_cos_tab + bx]
+    mov al, [cs:spl_cos_tab + bx]  ; the table is signed BYTES; [spl_cos] stays
+    cbw                            ; a word, which spl_xform's imul needs
     mov [cs:spl_cos], ax
 %endif
 
@@ -1131,15 +1100,14 @@ spl_span:
     mov si, ax
     mov ax, 0x00FF
     shr al, cl                  ; AL = the first byte's mask
-    mov cl, 3
-    shr si, cl                  ; SI = the first byte
     mov cx, dx
     and cl, 7
     xor cl, 7
     mov ah, 0xFF
     shl ah, cl                  ; AH = the last byte's mask
-    mov cl, 3
-    shr dx, cl                  ; DX = the last byte
+    mov cl, 3                   ; ...and ONE shift count for both byte indices:
+    shr si, cl                  ; SI = the first byte, still unshifted here
+    shr dx, cl                  ; DX = the last
     cmp si, dx
     jne .multi
     and al, ah                  ; one byte carries both edges
@@ -1294,8 +1262,7 @@ spl_staradr:
     add ax, [cs:spl_l_spx]
     add ax, bx
     mov di, ax
-    mov ax, [vid_seg]
-    mov es, ax
+    mov es, [vid_seg]
     ret
 
 ; --- 15.3.7's data -----------------------------------------------------------
@@ -1470,9 +1437,25 @@ spl_isr:
 ; while spl_finish gives the whole blob back to the heap (SPEC.md 2.9.5) - so
 ; the chain would end in a far call into freed memory.
 ; -----------------------------------------------------------------------------
+; HOOKING AND UNHOOKING ARE THE SAME OPERATION IN OPPOSITE DIRECTIONS - an
+; EXCHANGE of the vector with [cs:spl_old08] - so there is one body and the two
+; entries only decide what is in spl_old08 when it runs.  It also puts both
+; halves of the vector inside ONE critical section rather than two, which is
+; strictly safer than what it replaces.
 spl_hook:
     cmp byte [cs:spl_hooked], 0
     jne spl_hk_out              ; twice would chain us to ourselves
+    mov word [cs:spl_old08], spl_isr   ; ...the vector we are about to install,
+    mov [cs:spl_old08+2], cs           ; which the swap then trades for the
+    mov byte [cs:spl_hooked], 1        ; BIOS's
+    jmp short spl_swap
+
+spl_unhook:
+    cmp byte [cs:spl_hooked], 0
+    je spl_hk_out
+    mov byte [cs:spl_hooked], 0        ; ...and here spl_old08 already holds
+                                       ; the BIOS's, so the same swap undoes it
+spl_swap:
     push ax
     push es
     xor ax, ax
@@ -1480,31 +1463,12 @@ spl_hook:
     pushf
     cli                         ; no half-written vector, ever
     mov ax, [es:0x20]
-    mov [cs:spl_old08], ax
-    mov ax, [es:0x22]
-    mov [cs:spl_old08+2], ax
-    mov word [es:0x20], spl_isr
-    mov [es:0x22], cs
-    popf
-    mov byte [cs:spl_hooked], 1
-    jmp short spl_hk_pop
-
-spl_unhook:
-    cmp byte [cs:spl_hooked], 0
-    je spl_hk_out
-    push ax
-    push es
-    xor ax, ax
-    mov es, ax
-    pushf
-    cli
-    mov ax, [cs:spl_old08]
+    xchg ax, [cs:spl_old08]
     mov [es:0x20], ax
-    mov ax, [cs:spl_old08+2]
+    mov ax, [es:0x22]
+    xchg ax, [cs:spl_old08+2]
     mov [es:0x22], ax
     popf
-    mov byte [cs:spl_hooked], 0
-spl_hk_pop:
     pop es
     pop ax
 spl_hk_out:
@@ -1519,16 +1483,17 @@ spl_anlast  db 0xFF             ; the phase spl_anim last DREW. 0xFF is no
 
 ; -----------------------------------------------------------------------------
 ; spl_hline - white pixel-granular horizontal line, CX = x1, DX = x2
-;             (x1 <= x2), BX = y. ES = VGA_SEG. preserves all registers
+;             (x1 <= x2), BX = y. ES = VGA_SEG.
+;             preserves CX and SI; clobbers ax, bx, dx, di, bp
+;
+; IT SAVED SEVEN AND ITS ONE CALLER READS BACK TWO.  spl_rect (below) is the
+; whole census, and it banks y1/y2 on the STACK and reloads x2 from SI - so
+; the only values that must live in a REGISTER across this call are x1 (CX)
+; and x2 (SI).  Five pairs of push/pop bought nothing.
 ; -----------------------------------------------------------------------------
 spl_hline:
-    push ax
-    push bx
     push cx
-    push dx
     push si
-    push di
-    push bp
 
     mov si, dx                  ; SI = x2 (gfx_rowbase eats CX and DX)
     mov ax, bx                  ; AX = y
@@ -1578,25 +1543,22 @@ spl_hline:
     mov al, 0xFF
     call spl_bitmask
 
-    pop bp
-    pop di
     pop si
-    pop dx
     pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; spl_vline - white 1px vertical line, CX = x, BX = y1, DX = y2 (y1 <= y2).
-;             ES = VGA_SEG. preserves all registers
+;             ES = VGA_SEG.  preserves BX and DX; clobbers ax, cx, di
+;
+; The same census as spl_hline's, one routine along: spl_rect calls this twice
+; and needs y1 and y2 to survive between them (BX, and DX which
+; spw_gfx_rowbase eats).  x it reloads from SI, and SI this routine never
+; touches.
 ; -----------------------------------------------------------------------------
 spl_vline:
-    push ax
     push bx
-    push cx
     push dx
-    push di
 
     mov di, dx
     sub di, bx                  ; DI = row count - 1
@@ -1618,24 +1580,28 @@ spl_vline:
     mov al, 0x80
     shr al, cl                  ; single-pixel mask
     call spl_bitmask
-.row:
-    call spl_wrbyte             ; latch, then merge the masked bit
-    SPL_NEXTROW
-    dec bx
-    jnz .row
-    mov al, 0xFF
-    call spl_bitmask
-
-    pop di
+    call spl_mcol               ; the masked bit down BX rows, then the GC
+                                ; back to its default
     pop dx
-    pop cx
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
+; spl_rectc - spl_rect about the banked x centre: AX = the half width, BX = y1,
+;             DX = y2.  FALLS THROUGH, so it must stay directly above spl_rect.
+;             clobbers cx and si, which is what it is there to set
+; -----------------------------------------------------------------------------
+spl_rectc:
+    mov cx, [cs:spl_l_cx]
+    mov si, cx
+    sub cx, ax
+    add si, ax
+    dec si
+; -----------------------------------------------------------------------------
 ; spl_rect - 1px white outline: CX = x1, SI = x2, BX = y1, DX = y2.
-;            preserves all registers
+;            preserves BX, CX, DX and SI; clobbers ax, di, bp - which is
+;            spl_hline's and spl_vline's contract arriving here.  Every path
+;            into spl_rechrome has banked all three at its own entry
 ; -----------------------------------------------------------------------------
 spl_rect:
     push bx
@@ -1669,7 +1635,7 @@ spl_fill:
     rep stosb
     pop di
     pop cx
-    SPL_NEXTROW
+    call spl_nextrow
     dec bx
     jnz .row
     pop di
@@ -1678,24 +1644,54 @@ spl_fill:
     ret
 
 ; -----------------------------------------------------------------------------
-; spl_bitmask - program the GC bit mask register from AL. preserves all
+; spl_nextrow - DI on to the same column of the next row, through DS.  The
+;               three words are the KERNEL's, so DS must be KERNEL_SEG.
+;               clobbers: flags (every caller follows with dec/jnz)
+; -----------------------------------------------------------------------------
+spl_nextrow:
+    add di, [vid_rowadd]
+    test di, [vid_wrapbit]
+    jz .r
+    add di, [vid_wrapfix]
+.r: ret
+
+; -----------------------------------------------------------------------------
+; spl_mcol - BX rows of the ALREADY-ARMED mask at ES:DI, then the mask back to
+;            0FFh, which is what the rest of this module assumes on entry.
+;            in: ES:DI = the top byte, BX = rows.  clobbers: al, bx, di
+;
+; The masked COLUMN, written once: spl_bar's partial byte and spl_vline's line
+; are the same six instructions, and were spelled out twice.  DS must be
+; KERNEL_SEG for spl_nextrow's three reads - true at both callers.
+; -----------------------------------------------------------------------------
+spl_mcol:
+.row:
+    call spl_wrbyte
+    call spl_nextrow
+    dec bx
+    jnz .row
+    mov al, 0xFF
+    call spl_bitmask
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_bitmask - program the GC bit mask register from AL.  preserves every
+;               register but AX, which the VGA arm spends on the OUT - every
+;               caller sets AL immediately before and none reads AX back
 ; -----------------------------------------------------------------------------
 spl_bitmask:
-    push ax
     push dx
     cmp byte [vid_mono], 0
-    jne .mono
+    je .vga
+    mov [cs:spl_mask], al       ; no GC to arm: spl_wrbyte applies it in
+    jmp short .out              ; software
+.vga:
     mov ah, al
     mov al, 8                   ; GC index 8 = bit mask
     mov dx, SPL_GC
     out dx, ax
+.out:
     pop dx
-    pop ax
-    ret
-.mono:
-    mov [cs:spl_mask], al          ; no GC to arm: spl_wrbyte applies it in
-    pop dx                      ; software
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1735,9 +1731,13 @@ spl_wrbyte:
 ; DATA, so no unreachable-code check could see it. 15.3.8 is what found it,
 ; by needing the space.
 
-spl_cos_tab:                    ; cos(k/16 rev) * 64, k = 0..15
-    dw 64, 59, 45, 24, 0, -24, -45, -59
-    dw -64, -59, -45, -24, 0, 24, 45, 59
+%ifndef SPLSTARS                ; the ONE reference is in spl_spin's %else, so
+                                ; under the knob this is 16 bytes of a blob
+                                ; that is already the one over its rung
+spl_cos_tab:                    ; cos(k/16 rev) * 64, k = 0..15, as SIGNED
+    db 64, 59, 45, 24, 0, -24, -45, -59      ; BYTES - every value is inside
+    db -64, -59, -45, -24, 0, 24, 45, 59     ; -128..127 and spl_spin cbw's it
+%endif
 
 spl_bar_adr dw 0            ; the bar's top-left byte, set by spl_chrome
 spl_mask    db 0xFF          ; mono: what the GC's Bit Mask holds on VGA
@@ -1754,6 +1754,27 @@ spl_l_db    dw 0
 spl_l_spn   dw 0
 spl_l_spx   dw 0             ; the spinner box's left byte, and the same in
 spl_l_spp   dw 0             ; PIXELS, which is what spl_span subtracts
+
+; spl_rechrome's layout table (SPEC.md 15.3.5): VGA's own row as a word, then
+; mono's SIGNED delta from the bar as a byte - five rows of three, walked into
+; the five consecutive words above.  THE ADJACENCY IS LOAD-BEARING and this is
+; what keeps it true: the walk steps DI by two and would otherwise write
+; spl_l_pct's row into whatever a re-ordering put there, silently and only on
+; one adapter.
+%if (spl_l_pct-spl_l_ttl)!=2 || (spl_l_dt-spl_l_pct)!=2 || \
+    (spl_l_db-spl_l_dt)!=2 || (spl_l_spn-spl_l_db)!=2
+%error "spl_rechrome's layout walk needs spl_l_ttl..spl_l_spn consecutive"
+%endif
+spl_lay_tab dw SPL_TTL_Y
+            db -20
+            dw SPL_PCT_Y
+            db 40
+            dw SPL_DLG_T
+            db -32
+            dw SPL_DLG_B
+            db 59
+            dw SPL_TOP
+            db -81
 spl_l_msg   dw SPL_KY        ; 15.6's line, read by spl_kern_on AND by
                              ; vidsel.inc's spl_mgeom one section along. The
                              ; initialiser is VGA's, for a caller that somehow

@@ -362,6 +362,39 @@ current.
      **byte-identical**, md5 and `cmp` both, so the removal is provably free
      to the shipped product.
 
+5. **What comes out of the APPS, and how.** ~~Nothing; the split is a kernel
+   question.~~ **Answered, and it turned out not to be a kernel question at
+   all**: SPEC.md §27.16's `APP_SMALL`, with Note Pad as the first consumer.
+
+   The shape is the thing to carry forward. A package is **built twice off
+   one source** and the small arm goes on a floppy of its own
+   (`make smallapps` → `build/smallapps*.img`), so **nothing about the ABI
+   moves**: a small-built `NOTEPAD.O88` calls the same table at the same
+   offsets and runs on `kern_big` unchanged. What pairs it with `kern_small`
+   is *which disk it is written to*, which is why §4's "one package, both
+   kernels" survives intact — this is one package built twice, not two
+   packages, and the day it becomes two is the day this acquired the ABI the
+   whole design avoids.
+
+   Three things it established for whoever gates the next package:
+
+   - **§2's leak table applies unchanged, one level down.** The dangerous
+     shape is still the third row — a routine made parameterised "while we
+     are here" — and the gate is still byte-identity of the arm that ships.
+     `tests/unit/t_appsmall.py` is that gate, and it holds: the full Note Pad
+     is byte-for-byte what it was.
+   - **The seam is drawn by what code is FOR, again.** The find panel, its
+     regex engine and the About card came out whole because nothing outside
+     them calls in; undo did *not*, because `np_uclose` is called by every
+     path that is not typing — so undo's nine entry points became **one shared
+     `ret`** rather than ~15 `%ifdef`s through the editing core. Gating a
+     feature that threads through the core is a stub, not a bracket.
+   - **The largest saving was not in the image.** Undo's arena is a heap claim
+     that grows to 16KB (SPEC.md §27.9) and is simply never taken, against
+     ~21.5KB of heap on the floor machine — larger than the 6,859 bytes of
+     image and bss the report prints. `tools/os88pkgsize.py` says so on every
+     build, and says explicitly that its figure is a floor.
+
 ---
 
 ## 7. Staging

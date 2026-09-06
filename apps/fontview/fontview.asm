@@ -2,7 +2,7 @@
 ; os8088 - apps/fontview/fontview.asm
 ;
 ; FONT VIEWER lists the .F88 families in the system disk's FONTS/ folder and
-; renders an editable specimen in the selected face (SPEC.md 87).  It is a
+; renders an editable specimen in the selected face (SPEC.md 90).  It is a
 ; normal package, carried in APPS/ on the system disk; the F88 declaration in
 ; its header is all the file manager needs to launch it from a face file.
 ; =============================================================================
@@ -24,7 +24,7 @@
     OS88_ICON16_END
 
 ; The declaration is harvested while the disk is mounted.  No run-time
-; registration and no kernel special case are involved (SPEC.md 54.6, 87).
+; registration and no kernel special case are involved (SPEC.md 54.6, 90).
     OS88_ASSOC16
     db 1
     OS88_ASSOC_EXT 'F88'
@@ -151,7 +151,7 @@ fv_pick_arg:
 
 ; -----------------------------------------------------------------------------
 ; fv_onwake - the only path that turns the floppy for a face change.
-; W_ONKEY/W_ONCLICK merely choose and post this callback (SPEC.md 87.1).
+; W_ONKEY/W_ONCLICK merely choose and post this callback (SPEC.md 90.1).
 ; -----------------------------------------------------------------------------
 fv_onwake:
     cmp byte [fv_pending], 0

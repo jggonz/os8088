@@ -37,6 +37,8 @@ sys.path.insert(0, "/home/user/os8088")
 import dispcp                                          # noqa: E402
 from ethernet import (Qemu, u16, S, Mouse, type_url,   # noqa: E402
                       settle, SOCK)
+from os88geom import MB_ENTSZ                         # noqa: E402
+import os88qemu                                              # noqa: E402
 
 PORT = 8091
 SLOW_SECS = 12          # how long /slow.htm is held open (SPEC.md 71.8)
@@ -183,6 +185,9 @@ def main():
     for f in ("build/qmp.sock", "build/qemu.pid"):
         if os.path.exists(f):
             os.remove(f)
+    # `make test` DAEMONISES the emulator, so it outlives this script
+    # unless somebody kills it - and the somebody is us (os88qemu).
+    os88qemu.own()
     r = subprocess.run(["make", "test", "ETHER=1",
                         "TESTIMG=build/ether360.img",
                         "TESTAPPS=build/brtest360.img"],
@@ -383,7 +388,7 @@ def main():
     # The count and the labels first, because they are what a wrong answer
     # here looks like: a menu with the right number of items naming the wrong
     # pages is indistinguishable from a working one until it is clicked.
-    MB_XL, MB_XR, MB_ENTSZ, BR_TITMAX = 6, 8, 14, 32
+    MB_XL, MB_XR, BR_TITMAX = 6, 8, 32
     nit = (u16(m.readseg(pseg, sy["BR_HNITEM"], 2))
            if "BR_HNITEM" in sy else None)
     if nit is not None and nit != 2:

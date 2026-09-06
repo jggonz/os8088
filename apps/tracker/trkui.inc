@@ -3153,26 +3153,32 @@ tui_about_panel:
     push si
     push di
     mov ax, [tui_cw]
-    sub ax, 240
-    shr ax, 1
-    mov [tui_t1], ax                ; panel left
+    sub ax, TUI_ABW
+    jns .wok                        ; a content narrower or shorter than the
+    xor ax, ax                      ; card would otherwise centre it off the
+.wok:                               ; top-left: shr on a negative is a very
+    shr ax, 1                       ; large positive, and the card lands off
+    mov [tui_t1], ax                ; the screen entirely. panel left
     mov ax, [tui_ch]
-    sub ax, 84
+    sub ax, TUI_ABH
+    jns .hok
+    xor ax, ax
+.hok:
     shr ax, 1
     mov [tui_t2], ax                ; panel top
     mov ax, [tui_t1]
     mov bx, [tui_t2]
     mov cx, ax
-    add cx, 239
+    add cx, TUI_ABW - 1
     mov dx, bx
-    add dx, 83
+    add dx, TUI_ABH - 1
     TSETC TC_WBG
     call tui_fillc
     TSETC TC_WTX
     call tui_framec
     mov di, tui_ablines
     mov dx, [tui_t2]
-    add dx, 10
+    add dx, TUI_ABTOP
 .line:
     mov si, [di]
     or si, si
@@ -3180,7 +3186,7 @@ tui_about_panel:
     push dx
     push di
     call OSAPI_FONT_WIDTH           ; AX = width
-    mov cx, 240
+    mov cx, TUI_ABW
     sub cx, ax
     shr cx, 1
     add cx, [tui_t1]
@@ -3188,7 +3194,7 @@ tui_about_panel:
     pop dx
     call tui_textc
     add di, 2
-    add dx, 12
+    add dx, TUI_ABLH
     jmp .line
 .out:
     pop di
@@ -3316,14 +3322,27 @@ tui_s_hint:    db 'ENTER play  SPACE stop  HOME top  L load', 0
 tui_s_hintf:   db 'ENTER play  SPACE stop  F/ESC', 0
 
 
-; the About panel
+; the About panel. TUI_ABH is DERIVED from the line count rather than pinned:
+; the card was 84 tall with five lines in it and the credit added two, which
+; is exactly the drift a literal invites (SPEC.md 20.5.1).
+TUI_ABLINES equ 7                   ; ...and this is asserted against the table
+TUI_ABLH    equ 12                  ; below, so the two cannot disagree
+TUI_ABTOP   equ 10                  ; the first line's pen, from the card top
+TUI_ABW     equ 240
+TUI_ABH     equ TUI_ABTOP + TUI_ABLINES * TUI_ABLH + 4
+
 tui_ablines:
-    dw tui_ab1, tui_ab2, tui_ab3, tui_ab4, tui_ab5, 0
+    dw tui_ab1, tui_ab2, tui_ab3, tui_ab4, tui_ab5, tui_ab6, tui_ab7, 0
 tui_ab1:     db 'Tracker for os8088', 0
 tui_ab2:     db 'A FastTracker II homage', 0
 tui_ab3:     db 'MOD replay in the style of', 0
 tui_ab4:     db '8bitbubsy/ft2-clone', 0
-tui_ab5:     db 'Any key closes', 0
+tui_ab5:     db 'Ported by Jorge Gonzalez', 0
+tui_ab6:     db 'Optimized by Elendilon', 0
+tui_ab7:     db 'Any key closes', 0
+%if (tui_ab1 - tui_ablines) / 2 - 1 != TUI_ABLINES
+  %error "tui_ablines no longer holds TUI_ABLINES lines - the card is mis-sized"
+%endif
 
 ; =============================================================================
 ; trkui bss (through tracker.asm's TRKB/TRKW/TRKBUF accumulator)

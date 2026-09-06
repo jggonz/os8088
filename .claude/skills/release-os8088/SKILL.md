@@ -152,11 +152,14 @@ to a fresh branch off `main` and would otherwise sweep unrelated work into it.
 ```bash
 cd "$OS_REPO"
 make clean && make
-ls -l build/os8088.img build/os8088-720.img build/os8088-360.img \
-      build/apps.img build/apps720.img build/apps360.img build/media360.img
+ls -l build/os8088.img build/os8088-120.img build/os8088-720.img \
+      build/os8088-360.img \
+      build/apps.img build/apps120.img build/apps720.img build/apps360.img \
+      build/media360.img
 ```
 
-All seven must exist -- step 3a refuses to pack without them. The build
+All nine must exist -- step 3a refuses to pack without them. (Four geometries
+of each pair since SPEC.md 19's 1.2MB disk, plus the 360KB-only media disk.) The build
 enforces its own invariants -- a 512-byte boot sector and a kernel that fits
 under offset 0xA000 -- so a build failure here is a real problem, not
 something to work around. Report the kernel size; if it has
@@ -172,6 +175,9 @@ make allapps                          # apps-all.img -- every program, one disk
 make worddisk cworddisk               # word*.img, cword*.img
 make c64disk                          # c64*.img
 make weavedisk                        # weave*.img -- the Weave family's disk
+make loomdisk                         # loom*.img -- the same family's IDE disk,
+                                      # with the demo SOURCES instead of the
+                                      # compiled bundles
 make runcpm-src && make runcpmdisk    # runcpm*.img
 make live                             # os8088-usb.img + os8088.iso -- the live
                                       # USB image and the live CD (SPEC.md 80).
@@ -180,7 +186,7 @@ make live                             # os8088-usb.img + os8088.iso -- the live
 ```
 
 Offer these, do not assume them. If `tools/setup-cc.sh` cannot run -- no
-network, no host toolchain -- **release the seven and say which on-demand disks
+network, no host toolchain -- **release the nine and say which on-demand disks
 were skipped**; they are a convenience, and a release that waits on one is a
 release that does not happen. `mkzip.py` prints the ones it did not find, so
 that list is generated rather than remembered. Boot any that were built in step
@@ -542,6 +548,54 @@ step 4a makes you look at the releases page. Three things that will fool you:
   band that renders as plain text on the dither is that, not a broken rule.
 - **The video poster is a broken image locally** and correct in production; see
   step 3.
+
+#### 4c. The Wire's library, every time
+
+**The site is now where the machine gets its software from** (SPEC.md 88), so
+a release ships a *catalog* as well as four floppy images, and nothing on the
+OS side can tell you it went wrong: a stale `catalog.bin` is a Wire that lists
+last release's programs at last release's sizes and hands out last release's
+bytes, and the window looks perfectly healthy while it does it.
+
+Three things, in this order:
+
+**1. `tools/release.py` fills `public/wire/pkg/`.** It copies every file
+`data/wire.json` names out of `<os-repo>/build/` — the `.o88`s and their
+sidecars — the way it already copies floppy images into `public/disk/`. A name
+it cannot find is a refusal, not a warning. **If a package was added, renamed
+or split this release, `data/wire.json` needs the edit before this runs**, and
+the tier and the description are a judgement somebody makes rather than a
+field to fill: check the entry against that program's own SPEC section or its
+Spotlight page, and flag every tier you touched as reviewable in the PR.
+
+**2. The site build packs the catalog.** `tools/wire.py`, called by
+`build.py`, writes `public/wire/catalog.bin` and `public/wire/pic/<STEM>.PIC`
+from `data/wire.json` and `public/wire/pkg/`. It is a build product committed
+under `public/` like every other one, so the deploy job's
+`git status --porcelain public/` check is what catches a build that was not
+re-run.
+
+**3. Check it changed, and verify it FROM THE OS REPO.** A package changed and
+a catalog that did not is the failure this step exists for:
+
+```bash
+git -C "$WEB_REPO" status --porcelain public/wire/
+python3 tools/os88wire.py --verify "$WEB_REPO/public/wire/catalog.bin" \
+                          --pkgdir "$WEB_REPO/public/wire/pkg"
+python3 tools/os88wire.py --dump   "$WEB_REPO/public/wire/catalog.bin"
+```
+
+Run from the **OS** repo on purpose. `tools/os88wire.py` and the website's
+`tools/wire.py` are two independent writers of one format (SPEC.md 88.2), and
+this is the one moment they meet: the OS repo's reader checking the website's
+bytes, with `--pkgdir` cross-checking every declared size and every embedded
+icon against the files actually published. Read the `--dump` output against
+what you know shipped — a missing program, a stale size or a `NEW` mark left
+on last release's entry are all things only a person notices.
+
+Nothing may redirect `http://` to `https://` for `/wire/*`. The machine
+cannot follow one, and a redirect there is a Wire that says
+`The Wire did not answer (301)` on every fetch.
 
 ### 5. Commit and open the pull request
 

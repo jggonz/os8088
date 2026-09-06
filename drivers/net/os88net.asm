@@ -427,6 +427,7 @@ put_ip:
 
 ; --- put_dec - AX as decimal, no padding -------------------------------------
 put_dec:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -3809,6 +3810,12 @@ hd_slot:
 ; limit is about the same.
 ; -----------------------------------------------------------------------------
 hd_path:
+    ; STKBALANCE-OK: the path walk pushes one handle per level - as many as
+    ; HD_DEPTH allows, counted in CX - and BOTH unwinds give back exactly that
+    ; many with `loop`: `.step` on the way out and `.badpop` on a refusal. The
+    ; count lives in a register, so no static walk can pair them, and the two
+    ; unwinds meet at `.done`/`.baddone` on a FORWARD edge, which is why the
+    ; walker's back-edge suppression does not cover this one.
     push ax
     push bx
     push cx
@@ -4221,6 +4228,7 @@ puthex16:
     ret
 
 putdec16:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx

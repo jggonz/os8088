@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FONT VIEWER's association, catalogue, specimen and selection (SPEC.md 87).
+"""FONT VIEWER's association, catalogue, specimen and selection (SPEC.md 90).
 
 Run after `make`: python3 tests/fontview.py [machine]
 """

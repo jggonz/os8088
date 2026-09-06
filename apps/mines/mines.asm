@@ -6,7 +6,7 @@
 ; the os8088 API jump table (os88api.inc). 9x9 board, 10 mines, 16px cells,
 ; a 20px status strip above the board. Mines are placed lazily on the first
 ; reveal (never under it); zero-count reveals flood-fill through an explicit
-; queue (no recursion - the UI task's stack is 1536 bytes). RIGHT-CLICKING a
+; queue (no recursion - the UI task's stack is 512 bytes). RIGHT-CLICKING a
 ; cell flags it (SPEC.md 13.11); 'F' toggles flag mode for the left button on
 ; a one-button mouse, and 'N' starts a new game.
 ;
@@ -109,7 +109,7 @@ MN_S_COVER   equ 0
 MN_S_FLAG    equ 1
 MN_S_OPEN    equ 2
 
-MN_BSS_TOTAL equ 426                ; see the bss layout after OS88_IMAGE_END
+MN_BSS_TOTAL equ 427                ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; mn_entry - package entry point (SPEC.md 20.2)
@@ -132,6 +132,10 @@ mn_entry:
     jc .full
     mov si, mn_menus
     call OSAPI_MENU_SET              ; BX = the window, SI = our set
+    mov si, mn_about                 ; ...and 'About Mines' above the Close the
+    call OSAPI_ABOUT_SET             ; kernel already puts in our pull-down
+                                     ; (SPEC.md 12.2). Flags preserved, like
+                                     ; menu_win_set above
     mov ax, mn_onrclick              ; ...and it takes the RIGHT button in its
     call OSAPI_WM_ONRCLICK           ; content (SPEC.md 13.11): a side table,
                                      ; not a template word, so it is installed
@@ -177,6 +181,13 @@ mn_paint:
     mov [mn_oy], dx
     call mn_draw_status
     call mn_draw_board
+    cmp byte [mn_abon], 0            ; ...and the About card LAST, over the
+    je .out                          ; board it is opaque about (SPEC.md 20.5.1)
+    push si
+    mov si, mn_ablines
+    call os88ui_about_d              ; _d: the kernel armed a region for this
+    pop si                           ; paint and re-arming would throw it away
+.out:
     pop dx
     pop bx
     pop ax
@@ -194,6 +205,8 @@ mn_onkey:
     push dx
     push si
     mov cl, al                      ; keep the key; wm_content returns AX/DX
+    call mn_abdismiss               ; any key takes the credits down, and is
+    jc .out                         ; spent doing it
     mov bx, si
     call OSAPI_WM_CONTENT
     mov [mn_ox], ax
@@ -275,6 +288,8 @@ mn_cmd_new:
 ; -----------------------------------------------------------------------------
 mn_oncmd:
     mov cl, al                      ; keep the item; wm_content returns AX/DX
+    call mn_abdismiss               ; a menu pick takes the credits down first,
+                                    ; and then does what it says
     mov bx, si
     call OSAPI_WM_CONTENT
     mov [mn_ox], ax
@@ -297,6 +312,8 @@ mn_onclick:
     push dx
     push si
     push di
+    call mn_abdismiss               ; the credits are up: this click is spent
+    jc .out                         ; taking them down
     call mn_hitcell                 ; BX = the cell under the point, CF = none
     jc .out
     cmp byte [mn_flagmode], 0
@@ -364,6 +381,8 @@ mn_onrclick:
     push dx
     push si
     push di
+    call mn_abdismiss               ; ...and so is a right-click
+    jc .out
     call mn_hitcell                 ; BX = the cell under the point, CF = none
     jc .out
     call mn_flag_toggle
@@ -930,6 +949,72 @@ mn_draw_status:
     ret
 
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
+; =============================================================================
+; 'About Mines' - the credit card (SPEC.md 12.2, 20.5.1)
+; =============================================================================
+; The card is os88ui.inc's, so what is here is only what a widget cannot own:
+; the flag, the painter drawing it last, and the four handlers taking it down.
+;
+; It is STATE and not a modal loop - [mn_abon] goes up and the next click, key
+; or menu pick takes it down - because a loop would hold the gfx lock against
+; every background task for as long as the reader left the credits up.
+
+; -----------------------------------------------------------------------------
+; mn_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; in:  SI = our window ptr; the UI task, gfx lock HELD
+; out: nothing; preserves all registers
+;
+; Only the CARD is drawn: nothing underneath it has changed and the card is
+; opaque over its own rect, so repainting the board first would be
+; PERFORMANCE.md rule 2's double-draw with the credits as the second layer.
+; -----------------------------------------------------------------------------
+mn_about:
+    push bx
+    push si
+    mov byte [mn_abon], 1
+    mov bx, si
+    mov si, mn_ablines
+    call os88ui_about               ; arms the clip itself: nothing has armed
+    pop si                          ; one for a menu dispatch (SPEC.md 11.3),
+    pop bx                          ; and a refusal leaves the flag set so the
+    ret                             ; next paint puts the card up
+
+; -----------------------------------------------------------------------------
+; mn_abdismiss - take the card down if it is up
+; in:  SI = our window ptr; gfx lock held
+; out: CF = 1 the click or key was spent doing it, CF = 0 there was no card;
+;      preserves every register
+;
+; The way back is the whole content and not the card's own rect: the card
+; covered the strip and the board, and mn_tpl's 144 x 164 is exactly those
+; two, which is what mn_paint draws.
+; -----------------------------------------------------------------------------
+mn_abdismiss:
+    cmp byte [mn_abon], 0
+    je .none
+    push ax
+    push bx
+    push dx
+    mov byte [mn_abon], 0
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; the window may have been dragged since
+    mov [mn_ox], ax                 ; the card went up
+    mov [mn_oy], dx
+    mov bx, si
+    call OSAPI_WM_CLIP_SET          ; ...and nothing has armed a region for a
+    jc .gone                        ; click or a key either (SPEC.md 11.3)
+    call mn_draw_status
+    call mn_draw_board
+.gone:
+    pop dx
+    pop bx
+    pop ax
+    stc
+    ret
+.none:
+    clc
+    ret
+
 mn_tpl:
     dw 240, 120, 146, 183           ; x, y, w, h -> content 144 x 164
     dw mn_ttl, mn_paint, mn_onkey, mn_onclick
@@ -950,6 +1035,18 @@ mn_mi_new:  db 'New Game', 0
 mn_mi_flag: db 'Flag Mode', 0
 
 mn_ttl:     db 'Minesweeper', 0
+
+; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
+; SHORT, because the card is clamped to the content box and this window's is
+; 144px - eighteen cells, of which the card's own margins take three. The
+; credit is two lines for that reason and not for a typographic one.
+mn_ablines:
+    dw mn_ab1, mn_ab2, mn_ab3, mn_ab4, mn_ab5, 0
+mn_ab1:     db 'Minesweeper', 0
+mn_ab2:     db 'for os8088', 0
+mn_ab3:     db 0
+mn_ab4:     db 'Contributed by', 0
+mn_ab5:     db 'Jorge Gonzalez', 0
 mn_s_flag:  db 'F=FLAG', 0
 mn_s_boom:  db 'BOOM! N=NEW', 0
 mn_s_win:   db 'YOU WIN!', 0
@@ -1004,6 +1101,12 @@ mn_sh_mine:                         ; black disc with spokes
     db CBLACK, 11, 11, 12, 12
     db 0xFF
 
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%define OS88UI_ABOUT            ; the standard About card, and NOTHING else:
+%define OS88UI_NOBTN            ; Minesweeper's cell is its own game's chrome
+%include "os88ui.inc"           ; (os88ui.inc's own header says so) and it
+                                ; draws no standard button anywhere
+
     OS88_BSS MN_BSS_TOTAL
     OS88_IMAGE_END
 
@@ -1025,4 +1128,5 @@ mn_flagmode equ os88_image_end + 415 ; byte: 1 = clicks flag instead of reveal
 mn_revealed equ os88_image_end + 416 ; byte: open safe cells (win at 71)
 mn_boom     equ os88_image_end + 417 ; byte: the mine cell that was clicked
 mn_nbuf     equ os88_image_end + 418 ; 8 bytes: mn_nlist output
-                                    ; total 426 = MN_BSS_TOTAL
+mn_abon     equ os88_image_end + 426 ; byte: the About card is up
+                                    ; total 427 = MN_BSS_TOTAL

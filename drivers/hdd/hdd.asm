@@ -678,7 +678,7 @@ hd_bn_hit:
 %endif
 
 ; -----------------------------------------------------------------------------
-; hd_geom - DSV_GEOM (SPEC.md 51.8, 86.5)
+; hd_geom - DSV_GEOM (SPEC.md 51.8, 87.5)
 ; in:  AH = our volume handle
 ; out: CF = 0 and DL = the int 13h drive, CX:BX = the partition's first LBA,
 ;      SI = sectors per track, DI = heads; CF = 1 no such volume, or a device
@@ -1344,7 +1344,7 @@ hd_services:
                                 ;               between the edges (13.8.4)
     dw 0                        ; DSV_PKGCALL - no package reaches a raw sector
     dw hd_geom                  ; DSV_GEOM    - the transport facts (SPEC.md
-                                ;               86.5), for the resume stub
+                                ;               87.5), for the resume stub
     times DSV_SIZE - ($ - hd_services) db 0
                                 ; drv_publish copies DSV_SIZE bytes
                                 ; whatever this table's length is, so

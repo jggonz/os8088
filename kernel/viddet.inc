@@ -46,6 +46,25 @@
 %define VID_FORCE 0
 %endif
 
+; ...AND `VIDEO=vga` IS A BUILD ERROR ON kern_small, not a runtime surprise.
+; That build carries no VGA renderer at all (docs/MONO-RECLAIM-PLAN.md 2), so
+; forcing VID_VGA would set [vid_kind] to a kind vid_setmode no longer has an
+; arm for: the card would be programmed to BIOS mode 6 by the CGA arm below
+; while vid_apply loaded the VGA row's geometry over it - 640x480 at A000 on a
+; card showing 640x200 at B800. Every pixel would land somewhere else, and
+; nothing would say so. The AUTO-detected case is fine and is the whole design
+; (2.4): a VGA machine falls through the gated probes to the equipment word
+; and comes up as a CGA, geometry and all. It is only the FORCE that lies.
+; ...and VIDEO=ega is the same lie one kind along: the EGA is the other
+; 4-plane kind (SPEC.md 39.24), driven by the same renderer, and forcing it
+; here set mode 10h, loaded the A000 row and then took every primitive's
+; no-VGA arm through a planar [vid_rseg] of 0 - the IVT.
+%if VID_FORCE == 1 || VID_FORCE == 4
+ %ifndef GFX_VGA
+%error "VIDEO=vga/ega needs a build with a VGA renderer in it - kern_small has none (docs/MONO-RECLAIM-PLAN.md 2). Auto-detect drives a VGA or EGA card as a CGA there; VIDEO=cga forces the same thing."
+ %endif
+%endif
+
 ; Where the Hercules framebuffer lives. Overridable ONLY so the Hercules
 ; renderer can be verified without a Hercules card: no emulator this project
 ; uses outside 86Box has one, and B0000 is simply unmapped under QEMU, so
@@ -73,6 +92,28 @@ EGA_H       equ 350            ; mode 10h's active rows. Only vid_setmode's own
                                ; SPL_RESIDENT, so it stays on a constant like
                                ; the VGA arm's SCREEN_H (SPEC.md 39.23).
 
+VID_H_MIN   equ 200            ; ...and the SHORTEST row of vid_tab, which is
+                               ; the CGA's. EGA_H names the tallest and this
+                               ; names the other end, because two build-time
+                               ; guards ask "does everything still fit the
+                               ; smallest screen?" and both used to ask it of
+                               ; a LITERAL 200 sitting next to the table
+                               ; rather than of the table: a fifth row shorter
+                               ; than this one would leave them silent. The
+                               ; guards are the intra-bank assertion at the
+                               ; foot of this file and the MENU_POPMAX one in
+                               ; menu.inc, and vid_tab's CGA row below is
+                               ; written from it.
+
+VID_KIND_MAX equ VID_EGA        ; the highest kind there is - vid_avail_test's
+                                ; whole range check is one compare against it,
+                                ; and a fourth adapter is what raises it.
+                                ; **EGA IS THAT FOURTH ADAPTER**, so this line
+                                ; moved from VID_CGA when 39.24 landed: left
+                                ; at 2 the range check refuses kind 3 and an
+                                ; EGA is unselectable, with nothing failing to
+                                ; assemble to say so.
+
 VID_REC     equ 18              ; bytes per vid_tab record
 VID_LIVE_W  equ 9               ; words in the live block below
 
@@ -94,7 +135,7 @@ vid_tab:
     ;    seg     stride bmask bshift rowadd  wrapbit wrapfix    cw   ch
     dw VGA_SEG,      80,    0,     0,     80,       0,      0, 640, 480
     dw VID_HERC_SEG, 90,    3,     2, 0x2000,  0x8000, 0x805A, 720, 348
-    dw  0xB800,      80,    1,     1, 0x2000,  0x4000, 0xC050, 640, 200
+    dw  0xB800,      80,    1,     1, 0x2000,  0x4000, 0xC050, 640, VID_H_MIN
     dw VGA_SEG,      80,    0,     0,     80,       0,      0, 640, EGA_H
     ; ^ VID_EGA: byte-for-byte the VGA row but 350 tall. bmask/bshift/wrapbit
     ;   all 0, so gfx_rowbase is y*80 and gfx_nextrow is `add di,80` with no
@@ -110,8 +151,8 @@ vid_tab:
 ;
 ; IT IS THE FIRST HALF OF A LONGER CONTIGUOUS RUN, and that is now load-bearing
 ; rather than incidental. `vid_seg` through `vid_tseg` - the nine live words,
-; the nine derived ones below them and font_run's composed-row target - are the
-; NINETEEN words A DISPLAY OWNS, and SPEC.md 39.12's per-display context copies
+; the six derived ones below them and font_run's composed-row target - are the
+; SIXTEEN words A DISPLAY OWNS, and SPEC.md 39.12's per-display context copies
 ; exactly that span with one `rep movsw`. Everything from `vid_dock_y0` down is
 ; the DESKTOP's and must stay out of it. `vid_tab` used to sit between the two
 ; halves, which is why it has moved up here: it is a static table and it was
@@ -135,16 +176,10 @@ vid_ch      dw SCREEN_H         ; PRIMITIVE clips to (SPEC.md 39.2.1). Not the
 ; Precomputed because the sites that want them are inner loops or single
 ; instructions that have no register to spare for the arithmetic.
 vid_bankmask dw 0              ; gfx_prevrow: DI's bank bits, (nbanks-1)<<13
-vid_strm1   dw ROW_BYTES-1
 vid_rseg    dw 0                ; the software renderer's target segment:
                                 ; 0 on VGA, where nothing routes through the
                                 ; software renderer; the FRAMEBUFFER itself
                                 ; on mono
-vid_rpara   dw SW_PLANE_PARA    ; paragraphs from one plane to the next.
-                                ; MUST be nonzero even at one plane -
-                                ; sw_xfer's loop terminates on a segment
-                                ; compare, and a step of 0 never terminates.
-vid_rend    dw 0                ; that loop's exclusive end
 vid_cwm1    dw SCREEN_W-1       ; the display's last legal x and y, and the
 vid_chm1    dw SCREEN_H-1       ; whole-cell limits font_char and ico_core
 vid_cwm8    dw SCREEN_W-8       ; clip against. THE LAST WORD OF THE RUN a
@@ -163,7 +198,7 @@ vid_tseg    dw VGA_SEG          ; THE SEGMENT A COMPOSED ROW IS WRITTEN TO
                                 ; and it EXTENDED that run rather than joining
                                 ; it in the middle: vidsel.inc's VID_CTX_W and
                                 ; its %error are the second opinion, so a
-                                ; nineteenth word put anywhere above this
+                                ; seventeenth word put anywhere above this
                                 ; fails the build rather than being silently
                                 ; left out of the run that gets copied.
 
@@ -171,15 +206,31 @@ vid_tseg    dw VGA_SEG          ; THE SEGMENT A COMPOSED ROW IS WRITTEN TO
 ; What the WINDOW SYSTEM lays out in, and on a one-display machine identical to
 ; the four words above it. The distinction only becomes visible when a desktop
 ; spans two cards, and it is drawn HERE - outside the per-display run - because
-; the alternative was renaming these six at sixty-odd call sites across wm.inc,
+; the alternative was renaming these five at sixty-odd call sites across wm.inc,
 ; ui.inc, menu.inc, desk.inc and dock.inc. The renderer's side of the same
 ; question is twenty-two sites and enumerable, so the renderer is what moved.
 vid_w       dw SCREEN_W         ; desktop width, px
 vid_h       dw SCREEN_H         ; desktop height, px
 vid_wm1     dw SCREEN_W-1       ; last legal x
 vid_hm1     dw SCREEN_H-1       ; last legal y
-vid_wm8     dw SCREEN_W-8       ; the menu bar's right margin
-vid_hm8     dw SCREEN_H-8
+vid_wm8     dw SCREEN_W-8       ; the menu bar's right margin. Its twin
+                                ; vid_hm8 had no reader in the tree and
+                                ; has gone; nothing measures a whole cell
+                                ; against the DESKTOP's height
+
+; vid_apply COPIES the display's three derived words onto the desktop's three
+; with one `rep movsw`, so the two runs' ORDER is load-bearing and nothing
+; else in the tree asserts it. A swapped `wm1`/`hm1` would show on the glass
+; at once (w != h on all four adapters); a swapped -8 pair would not - one is
+; the menu bar's right margin and the other has no reader at all - so these
+; two lines are the only possible gate. font.inc's font_zero run is the
+; precedent.
+%if vid_chm1-vid_cwm1 != 2 || vid_cwm8-vid_cwm1 != 4 || vid_chm8-vid_cwm1 != 6
+  %error "the display's m1/m8 run has moved - vid_apply copies it wholesale"
+%endif
+%if vid_hm1-vid_wm1 != 2 || vid_wm8-vid_wm1 != 4
+  %error "the desktop's m1/m8 run has moved - see the copy in vid_apply. It is THREE words: a fourth writes ch-8 into vid_pw on every vid_apply"
+%endif
 ; --- THE CHROME's extent (SPEC.md 39.16) -------------------------------------
 ; The menu bar, the dock and the drive column are full-width strips on the
 ; PRIMARY display, not across the desktop - spanning them over a union would
@@ -193,28 +244,39 @@ vid_phm1    dw SCREEN_H-1
 
 vid_dock_y0 dw SCREEN_H-24      ; dock strip top row (DOCK_H, dock.inc)
 vid_dock_ty0 dw SCREEN_H-24+3   ; dock tile top row
-vid_clk_hx  dw (SCREEN_W-206) & 0FFF8h  ; menu bar clock cell: hit band left
+vid_clk_hx  dw (SCREEN_W-(MENU_CLK_W+14)) & 0FFF8h
+                                ; menu bar clock cell: the hit band's left
                                 ; edge, and the left edge of the clock's own
                                 ; SEGMENT (SPEC.md 12.1) - on a GLYPH CELL
                                 ; boundary, which is what lets the bar's three
                                 ; segments be whole numbers of 8px cells and
                                 ; font_run's single-pass path reach them
 vid_ymax    dw SCREEN_H-18      ; lowest y a title bar may be dragged to
-vid_popmax  dw 16               ; pull-down items that fit under the bar
-vid_desk_zx dw SCREEN_W-56      ; desktop drive column: hit zone left, and
-vid_desk_zl dw SCREEN_W-58      ; the redraw rect's left (zx - 2) and
-vid_desk_zr dw SCREEN_W-6       ; and its EXCLUSIVE right, zx + 50: the
-                                ; 48px zone, the label's 2px overhang and a
-                                ; window's 1px drop shadow. The fills use
-                                ; zr - 1 as their inclusive right (633 at
-                                ; 640 wide, which is what they open-coded).
+vid_popmax  dw MENU_POPMAX      ; pull-down items that fit under the bar, and
+                                ; a CONSTANT: vid_apply used to compute
+                                ; min((h-22)>>4, MENU_POPMAX) and every
+                                ; adapter in vid_tab clamped. It was 16 here
+                                ; and 16 is a value the machine cannot
+                                ; survive - menu.inc's own save-under guard
+                                ; proves 16 items need 28,896 bytes of a
+                                ; 20,480-byte claim - which only never fired
+                                ; because vid_apply overwrote it on the
+                                ; splash's first tick, long before a menu.
+                                ; The %error beside MENU_POPMAX is the guard
+vid_desk_zx dw SCREEN_W-56      ; desktop drive column: the hit zone's left
+                                ; edge, and the ONLY word of it that is
+                                ; published. The drawn rect either side of it
+                                ; is desk_zone_rect's arithmetic over
+                                ; DESK_ZW/DESK_ZOVER (SPEC.md 26.4) - two
+                                ; further cells carrying zx-2 and zx+50 were
+                                ; written here every vid_apply and read by
+                                ; nothing at all.
 
 vid_kind    db VID_VGA          ; VID_VGA / VID_HERC / VID_CGA / VID_EGA
 vid_mono    db 0                ; 1bpp adapter? This is what routes every
                                 ; draw through the software renderer (32/39.5)
 vid_planes  db 4                ; 4 or 1
 vid_planes_w dw 4               ; the same, where a word is wanted
-vid_force   db VID_FORCE        ; 0 = probe; 1/2/3 = VGA/Herc/CGA
 
 ; Hercules has no BIOS mode, so vid_setmode programs the 6845 itself.
 ; R0..R11 for 720x348: 45 char clocks of 16 px across, 87 rows of 4 scan
@@ -242,14 +304,6 @@ vid_6845t   db 0x61, 0x50, 0x52, 0x0F, 0x19, 0x06
 gfx_inktab:
     db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01
     db 0x01, 0x01, 0x01, 0x01, 0xFF, 0x01, 0xFF, 0xFF
-
-; The bank number's byte offset, indexed by the bank itself. `shl bx, 13` is
-; 8 clocks plus 4 per bit on an 8088 - 60 for a shift of a value that has
-; four possible answers, and gfx_rowbase is on the fixed cost of EVERY
-; drawing call (PERFORMANCE.md Part 2). Four banks is the maximum the 0x2000
-; window assertion at the bottom of this file allows.
-vid_banktab:
-    dw 0x0000, 0x2000, 0x4000, 0x6000
 
 ; SPEC.md 39.3.1 - gfx_rowbase's table. 348 rows, WHICH IS EVERY ROW OF A
 ; HERCULES and therefore every row of both 1bpp adapters: a CGA is 200 and a
@@ -281,6 +335,14 @@ vid_banktab:
 ; rescue the small build, and kern_small's is the figure that has to be
 ; DEFENDED (it is the 128KB machine's). It keeps the 128-row table and its
 ; budget; the feature is the fast path being wider, not the fast path existing.
+;
+; SPEC.md 39.27's RECLAIM DOES NOT CHANGE THIS, and the temptation is worth
+; naming because it is obvious and wrong: taking the VGA renderer out of
+; kern_small returned four 512-byte rungs, so widening this table there looks
+; free. It is not. Those bytes are not slack to spend - they are the first
+; instalment of a much larger cut that build is under (SPEC.md 39.27.4), and a
+; reclaim spent the moment it lands is a reclaim that never happened. This was
+; built, measured at exactly the predicted +512, and REVERTED.
 %ifdef KERN_BIG
 VID_ROWTAB  equ 348
 %else
@@ -292,7 +354,7 @@ VID_ROWTAB  equ 128
 ; row in it" are the same compare.
 ;
 ; IT IS ALSO THE SWITCH THAT TURNS THE TABLE OFF ON THE SECOND DISPLAY. Neither
-; this word nor the table below is inside SPEC.md 39.12's nineteen-word run -
+; this word nor the table below is inside SPEC.md 39.12's sixteen-word run -
 ; one is .text and the other .lowbss - while the stride, the bank mask and the
 ; bank shift it was built from all are. So vid_ctx_act zeroes this when it makes
 ; current a display whose adapter is not [vid_kind]'s and puts VID_ROWTAB back
@@ -358,12 +420,12 @@ vid_detect:
     push di
     push bp
     push es
-    mov al, [vid_force]
-    or al, al
-    jz .probe
-    dec al                      ; 1/2/3/4 -> VID_VGA/VID_HERC/VID_CGA/VID_EGA
-    jmp short .set
-.probe:
+%if VID_FORCE != 0              ; SPEC.md 39.1: the override is applied at
+    mov al, VID_FORCE - 1       ; ASSEMBLY time, so a shipped kernel carries
+    jmp short .set              ; neither the test nor a byte to test. The
+%endif                          ; 1/2/3/4 the Makefile passes are
+.probe:                         ; VID_VGA/VID_HERC/VID_CGA/VID_EGA
+%ifdef GFX_VGA
     mov ax, 0x1A00              ; VGA/MCGA: read Display Combination Code.
     int 0x10                    ; A pre-VGA BIOS ignores AH=1Ah and leaves
     cmp al, 0x1A                ; AL as we set it, which is 00h.
@@ -373,15 +435,31 @@ vid_detect:
     int 0x10                    ; Step 1 already claimed every VGA, so a card
     cmp bl, 0x10                ; that answers HERE is an EGA - and an EGA has
     je .equip                   ; no mode 12h, only mode 10h (SPEC.md 39.24).
-    or bh, bh                   ; ...BUT THE SAME CALL SAYS WHICH DISPLAY IT
-    jz .ega                     ; DRIVES, and it is free: BH = 0 colour (3Dx),
-                                ; 1 monochrome (3Bx). An EGA on a 5151 has
+    mov al, VID_EGA             ; ...BUT THE SAME CALL SAYS WHICH DISPLAY IT
+    or bh, bh                   ; DRIVES, and it is free: BH = 0 colour (3Dx),
+    jz .set                     ; 1 monochrome (3Bx). AL is set BEFORE the
+                                ; test - `or bh,bh` does not touch it - which
+                                ; deletes the two-instruction .ega island the
+                                ; taken branch used to land on; on the
+                                ; fall-through .equip's own `int 0x11`
+                                ; overwrites AL, which is what the code below
+                                ; already relies on. An EGA on a 5151 has
                                 ; modes 7 and 0Fh and NOT 10h, so claiming it
                                 ; would set a mode the card does not have and
                                 ; then paint A000 - a BLANK TUBE, not a
                                 ; degraded one. It falls through to the
                                 ; equipment word instead (SPEC.md 39.1's
                                 ; third scope cut).
+%endif                          ; WITHOUT A VGA IN THE BUILD there is nothing
+                                ; to ask - and that now covers the EGA probe
+                                ; too, EGA being the same planar path: a card
+                                ; this kernel cannot drive is not a card it
+                                ; wants to find. The walk goes straight to the
+                                ; equipment word, which a VGA or an EGA in
+                                ; colour mode answers 10b - so the machine
+                                ; comes up as a CGA and runs the card in BIOS
+                                ; mode 6, which every VGA and EGA BIOS serves
+                                ; (docs/MONO-RECLAIM-PLAN.md 2.4)
 .equip:
     int 0x11                    ; equipment word, bits 5:4
     and al, 0x30
@@ -389,23 +467,15 @@ vid_detect:
     mov al, VID_CGA
     jne .set
     mov al, VID_HERC
-    jmp short .set
-.ega:
-    mov al, VID_EGA
+%ifdef GFX_VGA
     jmp short .set
 .vga:
     mov al, VID_VGA
+%endif
 .set:
     mov [vid_kind], al
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp vid_pop8                ; the shared epilogue - and so this routine's
+                                ; push list is vid_setmode's. See vid_pop8.
 
 ; -----------------------------------------------------------------------------
 ; vid_apply - publish [vid_kind]'s geometry into the live and derived blocks
@@ -430,7 +500,7 @@ vid_detect:
 ;
 ; THESE THREE ARE NOT IN THE PER-DISPLAY RUN AND HAVE TO FOLLOW A SWAP ANYWAY,
 ; which is the whole reason this is a routine rather than eleven lines inside
-; vid_apply. SPEC.md 39.12's context is the nineteen contiguous words from
+; vid_apply. SPEC.md 39.12's context is the sixteen contiguous words from
 ; vid_seg to vid_tseg; [vid_mono] and the two plane counts sit above that run,
 ; are DERIVED from the kind rather than being vid_tab columns, and are what
 ; every primitive dispatches on. So vid_ctx_act has to publish them as well,
@@ -448,19 +518,52 @@ vid_detect:
 ; first primary swap of a VGA+Hercules machine, with [vid_ndisp] among the
 ; casualties.
 ; -----------------------------------------------------------------------------
+; THE THREE ARE ONE FACT AND ARE KEPT IN ONE PLACE. vid_depth_set is their
+; only writer (tests/unit/t_invariants.py checks that from the host) and sets
+; all three on both arms, because SPEC.md 39.26 flattened sw_rect_pl,
+; sw_fill_pat, ico_pass_bb and font_char_bb on mono and planes AGREEING. Their
+; layout is pinned as well as their writer: menu_save_kb's header already
+; records what a word read of [vid_planes] picks up when [vid_planes_w] is the
+; byte after it - 0x0404, a thousand planes, and a save-under claim bigger
+; than the fixed one it replaced.
+%if (vid_planes - vid_mono) != 1
+  %error "[vid_mono] and [vid_planes] must stay adjacent, mono first: they are set together by vid_depth_set and read as one fact by the four bodies SPEC.md 39.26 flattened"
+%endif
+%if (vid_planes_w - vid_planes) != 1
+  %error "[vid_planes_w] must follow [vid_planes]: menu_save_kb documents the 0x0404 a word read of the byte picks up, and that sentence is only true while the _w twin is the byte after it"
+%endif
 vid_depth_set:
+    push ax                     ; the header says "clobbers: flags", and AL is
+                                ; the argument two callers read back after the
+                                ; call (vid_ctx_act's `cmp al, [vid_kind]` is
+                                ; the tight one). Two bytes could be had by
+                                ; dropping this pair; they are a contract
+                                ; change and are not taken.
     cmp al, VID_VGA
-    je .colour
-    cmp al, VID_EGA            ; EGA is the same four-plane 16-colour depth as
-    je .colour                ; VGA - mode 10h, just shorter (SPEC.md 39.24)
-    mov byte [vid_mono], 1      ; 1bpp: the software renderer IS the direct
-    mov byte [vid_planes], 1    ; path (SPEC.md 39.5)
-    mov word [vid_planes_w], 1
-    ret
-.colour:
-    mov byte [vid_mono], 0
-    mov byte [vid_planes], 4
-    mov word [vid_planes_w], 4
+    je .colour                  ; **ZF IS THE ANSWER AND IT SURVIVES TO THE
+%ifdef GFX_VGA                  ; `jne` BELOW**, and without a VGA renderer
+    cmp al, VID_EGA             ; the first compare is the whole answer.
+%endif                          ; EGA is the same four-plane
+.colour:                        ; 16-colour depth as VGA - mode 10h, just
+                                ; shorter (SPEC.md 39.24) - so `colour` is
+                                ; `al == VID_VGA || al == VID_EGA`, and the
+                                ; two `mov`s between here and the test set no
+                                ; flags. Do not put a flag-setting instruction
+                                ; in this gap.
+    mov ax, 0x0101              ; 1bpp: AL -> [vid_mono], AH -> [vid_planes].
+    jne .st                     ; The software renderer IS the direct path
+    mov ax, 0x0400              ; there (SPEC.md 39.5); a VGA is 0 and 4.
+.st:
+    mov [vid_mono], ax          ; ONE word store for the pair the %if above
+                                ; pins side by side - so an ISR can no longer
+                                ; observe mono=1 with planes=4 between two
+                                ; byte writes, which the three stores it
+                                ; replaces could show it
+    mov al, ah
+    cbw                         ; 1 or 4, so the sign bit is clear and AH
+                                ; becomes 0. `cbw` is 8086.
+    mov [vid_planes_w], ax
+    pop ax
     ret
 
 vid_apply:
@@ -472,16 +575,16 @@ vid_apply:
     push di
     push es
 
-    mov ax, KERNEL_SEG          ; rep movsw writes through ES, and we may be
-    mov es, ax                  ; called from the splash, where ES is the
+    push cs                     ; rep movsw writes through ES, and we may be
+    pop es                      ; called from the splash, where ES is the
                                 ; boot sector's
 
-    mov al, [vid_kind]          ; AL * 18 -> the record
-    mov bl, VID_REC
-    mul bl
-    mov si, vid_tab
-    add si, ax
-    mov di, vid_seg
+    mov al, [vid_kind]          ; AL * 18 -> the record. AH is 0 after the
+    mov bl, VID_REC             ; mul (3 * 18 = 54 at worst), so the two
+    mul bl                      ; accumulator forms below are the whole
+    add ax, vid_tab             ; index: `add ax, imm16` is 3 bytes where
+    xchg ax, si                 ; `add si, ax` is 2 but needs `mov si, imm16`
+    mov di, vid_seg             ; in front of it, and `xchg ax, r16` is 1
     mov cx, VID_LIVE_W
     cld
     rep movsw
@@ -504,24 +607,64 @@ vid_apply:
     sub ax, 7
     mov [vid_chm8], ax
 
-    mov ax, [vid_w]             ; --- the CHROME's extent (SPEC.md 39.16): the
-    mov [vid_pw], ax            ; display this call is publishing, which for
-    dec ax                      ; the primary is what every strip measures
-    mov [vid_pwm1], ax          ; itself against. vid_disp_init applies the
-    mov ax, [vid_h]             ; PRIMARY last, so these end up its numbers,
-    mov [vid_ph], ax            ; and vid_desk_union then grows vid_w/vid_h
-    dec ax                      ; past them without touching these
-    mov [vid_phm1], ax
+    ; --- the DESKTOP's derived words, and they are the DISPLAY's own. This
+    ; is a COPY for the same reason the chrome block below is: the display
+    ; block immediately above stored [vid_w] from [vid_cw] and [vid_h] from
+    ; [vid_ch], so `w-1` IS `cw-1` and `w-8` IS `cw-8` - identically, on every
+    ; adapter, not approximately. `vid_cwm1, vid_chm1, vid_cwm8` (declared
+    ; together above) is exactly what `vid_wm1, vid_hm1, vid_wm8` is about to
+    ; become, and the %if beside the declarations is what pins that: a
+    ; reordered pair would be invisible otherwise. THREE and not four -
+    ; vid_hm8 had no reader and is gone, and a fourth word here would write
+    ; ch-8 into vid_pw, the chrome width, on every call. ES = DS from the
+    ; prologue, DF is clear (the vid_tab copy's own `cld`), and SI, DI and CX
+    ; are all dead here.
+    mov si, vid_cwm1
+    mov di, vid_wm1
+    mov cx, 3
+    rep movsw
 
-    mov ax, [vid_w]             ; --- widths
-    dec ax
-    mov [vid_wm1], ax           ; these two are the DESKTOP's, and right to be:
-    sub ax, 7                   ; the pointer clamps across the whole of it
-    mov [vid_wm8], ax
+    xor ax, ax                  ; SPEC.md 39.3.1: from here to the table build
+    mov [vid_rowmax], ax        ; at the bottom of this routine the geometry
+                                ; and the table disagree, so nothing may read
+                                ; it - gfx_rowbase computes instead. AX is
+                                ; dead across the copy above and reloaded
+                                ; immediately below, so the accumulator pair
+                                ; is a byte cheaper than `mov word [m], 0`
+
+    mov ax, [vid_h]             ; --- the heights that are NOT the display's
+    sub ax, TITLE_H
+    mov [vid_ymax], ax
+    sub ax, DOCK_H - TITLE_H
+    mov [vid_dock_y0], ax
+    add ax, 3
+    mov [vid_dock_ty0], ax
+
+    ; --- the CHROME's extent (SPEC.md 39.16): the display this call is
+    ; publishing, which for the primary is what every strip measures itself
+    ; against. vid_disp_init applies the PRIMARY last, so these end up its
+    ; numbers, and vid_desk_union then grows vid_w/vid_h past them without
+    ; touching these.
+    ;
+    ; It is a COPY and not eight instructions because by this point the two
+    ; runs are the same four numbers in the same order: `vid_w, vid_h,
+    ; vid_wm1, vid_hm1` (declared together above) is exactly what `vid_pw,
+    ; vid_ph, vid_pwm1, vid_phm1` is about to become.  That is why the block
+    ; sits HERE and not where it used to, three screens up: vid_wm1 and
+    ; vid_hm1 are the DESKTOP copy's above, so that copy has to have run.
+    ; Nothing between the old position and this one reads any of the
+    ; four - the only reader in the routine is the [vid_clk_hx] computation
+    ; below, which moved down with it.  ES = DS from the prologue, DF is
+    ; clear (the vid_tab copy's own `cld`, and nothing sets it after), and
+    ; SI, DI and CX are all dead here.
+    mov si, vid_w
+    mov di, vid_pw
+    mov cx, 4
+    rep movsw
+
     mov ax, [vid_pw]            ; ...AND THE CLOCK IS THE PRIMARY'S, because the
-    dec ax                      ; MENU BAR is (SPEC.md 39.2.1.2). This was taken
-    sub ax, 7                   ; from [vid_w] like the two above it, which is
-    sub ax, 198                 ; w - 8 - MENU_CLK_W - 6, floored to a glyph
+    sub ax, MENU_CLK_W + 14     ; MENU BAR is (SPEC.md 39.2.1.2). One subtract:
+                                ; w - 8 - MENU_CLK_W - 6, floored to a glyph
     and ax, 0FFF8h              ; cell: the bar's segments are cell ranges
     mov [vid_clk_hx], ax        ; the union once a second display is extended -
                                 ; 1152 on a 1360px desktop, which is CELL 144
@@ -532,79 +675,55 @@ vid_apply:
                                 ; primary's 640 gives cell 54, inside the
                                 ; buffer, which is the number this always meant
 
-    mov word [vid_rowmax], 0    ; SPEC.md 39.3.1: from here to the table build
-                                ; at the bottom of this routine the geometry
-                                ; and the table disagree, so nothing may read
-                                ; it - gfx_rowbase computes instead
-
-    mov ax, [vid_h]             ; --- heights
-    dec ax
-    mov [vid_hm1], ax
-    sub ax, 7
-    mov [vid_hm8], ax
-    mov ax, [vid_h]
-    sub ax, TITLE_H
-    mov [vid_ymax], ax
-    sub ax, DOCK_H - TITLE_H
-    mov [vid_dock_y0], ax
-    add ax, 3
-    mov [vid_dock_ty0], ax
-
-    mov ax, [vid_stride]
-    dec ax
-    mov [vid_strm1], ax
-
     mov ax, [vid_bmask]         ; gfx_prevrow's test: the bank number lives in
     mov cl, 13                  ; DI's bits 13..14, so the address mask is the
     shl ax, cl                  ; y mask shifted up to meet it. 0 on VGA,
     mov [vid_bankmask], ax      ; which is what makes prevrow a bare subtract
 
-    mov ax, [vid_w]             ; --- the desktop's drive column, right-hung
-    sub ax, 56
-    mov [vid_desk_zx], ax
-    sub ax, 2
-    mov [vid_desk_zl], ax
-    add ax, 52                  ; zl + 52 = zx + 50
-    mov [vid_desk_zr], ax
+    mov ax, [vid_w]             ; --- the desktop's drive column, right-hung.
+    sub ax, 56                  ; ONE word: desk_zone_rect derives the drawn
+    mov [vid_desk_zx], ax       ; rect from it (SPEC.md 26.4)
 
-    mov ax, [vid_h]             ; --- pull-down items that fit under the bar
-    sub ax, MBAR_H + 2
-    mov cl, 4
-    shr ax, cl
-    cmp ax, MENU_POPMAX
-    jbe .pop
-    mov ax, MENU_POPMAX
-.pop:
-    mov [vid_popmax], ax
+    ; --- ...AND [vid_popmax] IS NOT COMPUTED HERE ANY MORE. Nine instructions
+    ; worked out min((h - MBAR_H - 2) >> 4, MENU_POPMAX) from a [vid_h] that
+    ; is always a vid_tab height - the display block above has just stored it
+    ; from [vid_ch], and vid_desk_union runs AFTER this routine, never inside
+    ; it - and vid_tab's four heights are 480, 348, VID_H_MIN and EGA_H, so
+    ; the answers were 28, 20, 11 and 20 against a clamp of 11. The clamp
+    ; fired on every adapter there is and the CGA landed exactly on it, so
+    ; those nine instructions always computed the initialiser. It is the
+    ; DECLARATION's resting value now, and the %error beside MENU_POPMAX in
+    ; menu.inc watches the three facts that could stop that being true.
 
     mov al, [vid_kind]          ; --- the renderer's DEPTH, in one place
     call vid_depth_set          ; (see there: a display swap needs it too)
     xor ax, ax                  ; PLANAR (VGA or EGA): the software renderer
-    mov bx, SW_PLANE_PARA       ; has no target - [vid_rseg] is 0, nothing
-    xor dx, dx                  ; routes through it (SPEC.md 39.5/39.24)
-    cmp byte [vid_mono], 0      ; keyed on the DEPTH vid_depth_set just set,
-    je .rend                    ; not the kind - EGA is planar and 0 here too
-    mov ax, [vid_seg]           ; MONO: the software renderer draws straight
-    mov bx, 1                   ; into the framebuffer - one "plane", and a
-    mov dx, ax                  ; step of 1 paragraph purely so sw_xfer's
-    inc dx                      ; segment compare can terminate
-.rend:
-    mov [vid_rseg], ax
-    mov [vid_rpara], bx
-    mov [vid_rend], dx
+    cmp byte [vid_mono], 0      ; has no target - 0, because nothing routes
+    je .rend                    ; through it (SPEC.md 39.5/39.24). Keyed on
+    mov ax, [vid_seg]           ; the DEPTH vid_depth_set has just set and not
+.rend:                          ; on the kind - EGA is planar and 0 here too.
+    mov [vid_rseg], ax          ; MONO: the renderer draws straight into the
+                                ; framebuffer, so its target IS the screen.
+                                ; This set a plane STEP and an exclusive END
+                                ; beside it until both were found to have no
+                                ; reader anywhere (SPEC.md 39.26)
 
     ; --- font_run's target (SPEC.md 6.1.10), and it belongs HERE and not one
-    ; line above the block it reads. [vid_rseg] is what this routine has just
-    ; decided; a copy taken earlier in vid_apply is the PREVIOUS display's,
-    ; which on a one-card machine is the same number every time and on a
-    ; two-card machine is the other monitor's framebuffer. That is not a
-    ; theoretical ordering: it shipped for the length of one test run and
-    ; tests/dispcheck.py caught it as a 249-pixel solid run on a secondary
-    ; that should have been nothing but 50% dither.
-    or ax, ax                   ; VGA: nothing routes through the software
-    jnz .tseg                   ; renderer, so vid_rseg is 0 there and the
-    mov ax, [vid_seg]           ; planar aperture is where a composed row goes
-.tseg:
+    ; line above the block it reads. It IS [vid_seg] on every adapter there
+    ; is - [vid_rseg] three lines up is `mono ? [vid_seg] : 0`, so the
+    ; conditional this used to be read `mono ? [vid_seg] : [vid_seg]` - and
+    ; the ordering trap the block below records is why it still reads the
+    ; LIVE word rather than a copy taken earlier. A copy taken earlier in
+    ; vid_apply is the PREVIOUS display's, which on a one-card machine is the
+    ; same number every time and on a two-card machine is the other monitor's
+    ; framebuffer. That is not a theoretical ordering: it shipped for the
+    ; length of one test run and tests/dispcheck.py caught it as a 249-pixel
+    ; solid run on a secondary that should have been nothing but 50% dither.
+    ; (It was NOT always [vid_seg]: SPEC.md 32's renderer had an off-screen
+    ; target and vidsel.inc's sw_set wrote [vid_rseg] from inside the run.
+    ; That renderer is gone, and the cell stays published because font.inc
+    ; reads it once per composed row.)
+    mov ax, [vid_seg]
     mov [vid_tseg], ax
 
     ; --- gfx_rowbase's answer, laid down instead of computed (SPEC.md 39.3.1)
@@ -617,11 +736,40 @@ vid_apply:
     ; 72.5% of a VGA's 480. A row past it takes the arithmetic path exactly as
     ; before, so this is a fast path and not a new contract.
     ;
-    ; The loop is ~324 cycles a row, so this is 113,000 cycles - 23.6 ms - of
-    ; every vid_apply, against 8.7 ms when the table was 128. It runs at boot
-    ; and on a display change, which is the only place it could ever be seen,
-    ; and a 9.2 s boot does not notice 15 ms. Written down because it is the
-    ; kind of cost that is only cheap while somebody has checked.
+    ; IT IS BUILT BY ITERATING THE ANSWER, not by computing each one.
+    ; gfx_nextrow IS the step form of gfx_rowbase_calc - SPEC.md 39.3 requires
+    ; the two to agree, one being the other's increment - so the table can be
+    ; walked with three instructions a row instead of a bank AND, a table
+    ; index, a shift and a `mul`. It used to be ~324 cycles a row, 113,000
+    ; cycles and 23.6 ms of every vid_apply; the step form is roughly a fifth
+    ; of that. Checked against the table's own numbers on all four adapters
+    ; rather than assumed: Hercules (rowadd 0x2000, wrapbit 0x8000, wrapfix
+    ; 0x805A) gives 0, 0x2000, 0x4000, 0x6000, then 0x8000 trips the wrap bit
+    ; and +0x805A truncates to 0x005A = 90 = bank 0 row 1; CGA (0x2000 /
+    ; 0x4000 / 0xC050) gives 0, 0x2000, then 0x0050 = 80; VGA and EGA have
+    ; wrapbit 0, so `test di,0` sets ZF and it is `add di,80`, with 347*80 =
+    ; 27,760 nowhere near a wrap. Row 0 is 0 on all four, which is what lets
+    ; the walk start from a bare `xor`.
+    ;
+    ; ...AND ON CGA THE TWO FORMS PART COMPANY AT ROW 207, which is measured
+    ; and not a risk: the whole 348-entry table was read out of a booted guest
+    ; on both builders and diffed. Hercules, VGA and EGA are byte-identical
+    ; over all 348; CGA differs on 71 entries, every one of them row 207 or
+    ; above. The reason is the assertion at the foot of this file - it bounds
+    ; the intra-bank extent for VID_H_MIN rows, `(200/2)*80 = 8,000` inside
+    ; 0x2000, and row 207 is `(207>>1)*80 = 8,240`, past it. So above row 206
+    ; a CGA table entry has been meaningless in EVERY build this OS has ever
+    ; had; the two builders merely disagree about which meaningless number to
+    ; store, and where they do, `gfx_rowbase_calc`'s 16,432 is 48 bytes past
+    ; the end of the card's 16KB aperture while `gfx_nextrow`'s 128 is inside
+    ; it.
+    ;
+    ; NOTHING CAN INDEX THEM. Every primitive clips y to [vid_ch] (SPEC.md
+    ; 39.2.1), which is 200 on a CGA; and when a CGA is the SECONDARY of a
+    ; two-card desktop, vid_ctx_act clears [vid_rowmax] outright rather than
+    ; letting the other adapter's table be read (SPEC.md 39.3.1). The desktop
+    ; union grows [vid_h] and never [vid_ch], which is exactly the distinction
+    ; 39.2.1 exists for.
     ;
     ; AND ONLY WHEN SS IS LOW_SEG. The SPLASH calls this routine, and it calls
     ; it on the boot sector's stack - boot/boot.asm's `.moved` points SS at its
@@ -632,44 +780,38 @@ vid_apply:
     ; LOW_SEG never had. The miss path is exactly what the machine did before
     ; the table existed: [vid_rowmax] is 0 from the top of this routine, so
     ; gfx_rowbase computes, and vid_init's own vid_apply builds it for real.
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov ax, ss
-    cmp ax, LOW_SEG
+    mov ax, ss                  ; AX, BX, CX, DX and DI are all dead from
+    cmp ax, LOW_SEG             ; here to vid_apply's own epilogue, which is
+                                ; what banks them for the caller - so this
+                                ; block used to open and close on five
+                                ; push/pop pairs that protected nothing
     jne .norowtab
-    mov di, vid_rowtab
-    xor bx, bx                  ; BX = the row
-.rowtab:
-    mov ax, bx
-    call gfx_rowbase_calc       ; the body this table replaces, bank and all
-    mov [ss:di], ax             ; LOW_SEG, like every other reach for it
-    inc di
-    inc di
-    inc bx
-    cmp bx, VID_ROWTAB
-    jb .rowtab
+    mov si, vid_rowtab
+    xor di, di                  ; DI = rowbase(0), which is 0 on every adapter
+    mov cx, VID_ROWTAB          ; ...and CX may be the counter now: it is
+.rowtab:                        ; gfx_rowbase_calc that clobbers CL, and this
+    mov [ss:si], di             ; loop no longer calls it. LOW_SEG, like every
+    inc si                      ; other reach for the table
+    inc si
+    call gfx_nextrow            ; the INCREMENTAL form - see the wrap
+    loop .rowtab                ; arithmetic above. DI and flags, nothing else
     mov word [vid_rowmax], VID_ROWTAB   ; ...and only now may anything read it
 .norowtab:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-
-    mov ax, [vid_w]             ; --- home the cursor; see the header
-    shr ax, 1
-    mov [mouse_x], ax
-    mov ax, [vid_h]
-    shr ax, 1
-    mov [mouse_y], ax
-    mov byte [cur_shchk], 1     ; ...and the pointer MOVED (SPEC.md 7.2.1.1) -
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
-                                ; the geometry under it certainly did
+    mov di, mouse_x             ; --- home the cursor; see the header.
+    mov ax, [vid_w]             ; mouse_x and mouse_y are an adjacent pair
+    shr ax, 1                   ; (mouse.inc pins it with an %if), so the two
+    stosw                       ; stores are one walk - ES = DS and DF = 0
+    mov ax, [vid_h]             ; from this routine's own prologue, and DI is
+    shr ax, 1                   ; dead on both arms above
+    stosw
+    mov al, 1                   ; ...and the pointer MOVED (SPEC.md 7.2.1.1) -
+    mov [cur_shchk], al         ; the geometry under it certainly did - and
+    mov [ui_post], al           ; SAY SO once (SPEC.md 13.13). The accumulator
+                                ; store is 3 bytes where `mov byte [m],imm8`
+                                ; is 5
 %ifdef KERN_BIG
-    mov byte [cur_disp], 0      ; ...onto display 0, which is where the middle
+    dec al
+    mov [cur_disp], al          ; ...onto display 0, which is where the middle
                                 ; of the desktop is. Saying so matters: a stale
                                 ; [cur_disp] sends cur_move's jump path to
                                 ; ERASE a cell on a display the arrow was never
@@ -682,14 +824,9 @@ vid_apply:
                                 ; above says about cur_unlazy
 %endif
 
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    pop es                      ; ...and the other seven are vid_pop8's own run
+    jmp vid_pop7                ; one label in - this routine has no BP in its
+                                ; frame. See vid_pop8's header
 
 ; -----------------------------------------------------------------------------
 ; vid_6845_prog - write R0..R11 of the mono card's CRTC from a 12-byte table
@@ -772,16 +909,22 @@ vid_setmode:
                                 ; at an address that is not the framebuffer.
                                 ; It is a COUNTER because this nests - spl_tick
                                 ; reaches here through spl_chrome
-    cmp byte [vid_kind], VID_HERC
-    je .herc
-    cmp byte [vid_kind], VID_EGA
-    jne .colorbios
-    mov ax, 0x0010             ; EGA: mode 10h, 640x350x16 planar. NO
-    jmp short .bios            ; vid_cga_equip - that call is the XT ROM's
+    mov al, [vid_kind]          ; ONE load answers all three questions below:
+    cmp al, VID_HERC            ; AL is idle until `mov ax, 0x0010`, and
+    je .herc                    ; `cmp reg,imm8` is 2 bytes where
+%ifdef GFX_VGA                  ; `cmp byte [mem],imm8` is 5
+    cmp al, VID_EGA             ; A build with no VGA renderer never detects
+    jne .colorbios              ; an EGA either (2.4: the gated probes fall
+    mov ax, 0x0010             ; through to the equipment word), so the arm
+    jmp short .bios            ; is dead there and the VIDEO= guard above
+                              ; refuses the one way of reaching it.
+                              ; EGA: mode 10h, 640x350x16 planar. NO
+                              ; vid_cga_equip - that call is the XT ROM's
                               ; CGA-equipment quirk (see below), and an EGA
                               ; BIOS is not equipment-driven that way; it
                               ; sets mode 10h whatever 40:10 says.
 .colorbios:
+%endif
     call vid_cga_equip          ; EITHER COLOUR CARD, NOT JUST THE CGA (SPEC.md
                                 ; 39.19.4). The XT ROM's mode set is
                                 ; EQUIPMENT-driven: with 40:10 saying mono it
@@ -795,9 +938,13 @@ vid_setmode:
                                 ; it is a no-op unless the flag says mono, which
                                 ; is why every colour-primary machine is
                                 ; unaffected by moving it up
-    mov ax, 0x0012              ; VGA: 640x480x16 planar
-    cmp byte [vid_kind], VID_CGA
-    jne .bios
+%ifdef GFX_VGA
+    cmp al, VID_CGA             ; BEFORE the mov - `mov` sets no flags, and the
+    mov ax, 0x0012              ; mov is what destroys AL. AL survives
+    jne .bios                   ; vid_cga_equip above: that routine opens on
+%endif                          ; `push ax` and closes on `pop ax`, which is
+                                ; also why those two are not a saving of their
+                                ; own. VGA: 640x480x16 planar
 
     ; --- ZERO B800 WHILE THE CARD IS STILL IN TEXT MODE ---------------------
     ; The Hercules path below blanks the tube for its whole mode change and
@@ -816,21 +963,35 @@ vid_setmode:
     ; all. NO EMULATOR HERE CAN SHOW IT - they clear instantly - and on a
     ; 4.77MHz machine the ROM's own 16KB clear is tens of milliseconds.
     mov ax, 0xB800
-    mov es, ax
-    xor di, di
-    xor ax, ax
     mov cx, 8192
-    cld
-    rep stosw
+    call vid_wipe
 
     mov ax, 0x0006              ; CGA: 640x200 monochrome
 .bios:
     int 0x10
-    cmp byte [vid_kind], VID_VGA    ; the two PLANAR arms clear A0000
-    je .wipe                        ; themselves (SPEC.md 39.23) - the ROM's
-    cmp byte [vid_kind], VID_EGA    ; clear is not to be trusted on either.
-    jne .nowipe                     ; CGA and Hercules do their own above.
-.wipe:
+%ifdef GFX_VGA
+    ; THE TWO PLANAR ARMS CLEAR A0000 THEMSELVES (SPEC.md 39.23) - the ROM's
+    ; clear is not to be trusted on either; CGA and Hercules did their own
+    ; above.  ONE compare answers both of the questions this arm asks, "is it
+    ; planar?" and "is it the SHORT planar one?", because `dec al` maps
+    ; VGA -> FF, HERC -> 0, CGA -> 1, EGA -> 2: planar is `al >= 2` unsigned
+    ; and EGA is `al == 2`, and the same `cmp` sets the flags for both.  The
+    ; row count is therefore decided ONCE, above the VGA_DIRTY arm, which is
+    ; what makes it structurally impossible for the dirty arm and the clean
+    ; arm to disagree about how many rows they cover - the one thing the
+    ; comment on that arm says it must not do.
+    mov al, [vid_kind]
+    dec al
+    cmp al, 2
+    jb .nowipe
+    mov cx, SCREEN_H * ROW_BYTES / 2
+    jne .wipego                     ; ZF is still the cmp's - `mov cx, imm16`
+    mov cx, EGA_H * ROW_BYTES / 2   ; sets no flags.  EGA: 350 rows, not 480.
+.wipego:                            ; Mode 10h on a 128KB card is 32KB per
+                                    ; plane and 480*80 would run 5,632 bytes
+                                    ; off it (SPEC.md 39.23/39.24). Stays a
+                                    ; constant like SCREEN_H - this runs from
+                                    ; the splash.
 
 %ifdef VGA_DIRTY
     ; --- make VGADIRTY=1: BE the BIOS that did not clear (SPEC.md 39.23) ----
@@ -849,14 +1010,13 @@ vid_setmode:
     mov es, ax
     xor di, di
     mov ax, 0xDBDB
-    mov cx, SCREEN_H * ROW_BYTES / 2
-    cmp byte [vid_kind], VID_EGA    ; ...and the SAME 350 rows the clear below
-    jne .dirtygo                    ; uses, for the same reason: this arm must
-    mov cx, EGA_H * ROW_BYTES / 2   ; dirty exactly what that one is asked to
-.dirtygo:                           ; clean, and neither may run off a 128KB
-    cld                             ; EGA's 32KB plane (SPEC.md 39.23/39.24)
-    rep stosw
-%endif
+    push cx                         ; ...and THE SAME row count the clear below
+    cld                             ; uses, because it is now the same CX: the
+    rep stosw                       ; decision was taken once, above .wipego.
+    pop cx                          ; This arm must dirty exactly what that one
+%endif                              ; is asked to clean, and neither may run
+                                    ; off a 128KB EGA's 32KB plane (SPEC.md
+                                    ; 39.23/39.24)
 
     ; --- ...AND CLEAR A0000 OURSELVES (SPEC.md 39.23) -----------------------
     ; THE OTHER TWO ARMS OF THIS ROUTINE ALREADY DO. Hercules clears its 32KB
@@ -897,19 +1057,12 @@ vid_setmode:
     out dx, ax
     mov ax, 0xFF08              ; GC8  Bit Mask: every bit ours
     out dx, ax
-    mov ax, VGA_SEG
-    mov es, ax
-    xor di, di
-    xor ax, ax
-    mov cx, SCREEN_H * ROW_BYTES / 2
-    cmp byte [vid_kind], VID_EGA    ; EGA: 350 rows, not 480. Mode 10h on a
-    jne .wipego                     ; 128KB card is 32KB per plane and 480*80
-    mov cx, EGA_H * ROW_BYTES / 2   ; would run 5,632 bytes off it (SPEC.md
-.wipego:                            ; 39.23). Stays a constant like SCREEN_H
-    cld                             ; - this runs from the splash.
-    rep stosw                   ; ~110 ms on a 4.77MHz 8088, ONCE: vid_init
+    mov ax, VGA_SEG             ; ...and CX is the count .wipego settled
+    call vid_wipe
+                                ; ~110 ms on a 4.77MHz 8088, ONCE: vid_init
                                 ; skips the mode set while [spl_live] is up,
                                 ; and every later caller owes a full repaint
+%endif                          ; ...end of the mode 12h arm and its clear
 .nowipe:
     jmp short .done
 .herc:
@@ -927,25 +1080,74 @@ vid_setmode:
     mov si, vid_6845
     call vid_6845_prog
     mov ax, [vid_seg]           ; 32KB clear - nobody else will do it, and it
-    mov es, ax                  ; happens BEHIND the blank, so the powered-up
-    xor di, di                  ; contents of the card's DRAM are never shown
-    xor ax, ax
-    mov cx, 0x4000
-    cld
-    rep stosw
+    mov cx, 0x4000              ; happens BEHIND the blank, so the powered-up
+    call vid_wipe               ; contents of the card's DRAM are never shown
     mov dx, 0x3B8               ; graphics, page 0, video ON - last, onto a
     mov al, 0x0A                ; framebuffer that is already black
     out dx, al
 .done:
     dec byte [spl_busy]         ; ...and the card describes itself again
+
+; vid_pop8 - the eight-register epilogue THREE routines in this file share,
+; and vid_pop7 one label in is a FOURTH with a shorter frame.
+; vid_detect and vid_text jump here rather than
+; carrying their own copy, so **their prologues are now part of THIS routine's
+; contract**: all three push `ax bx cx dx si di bp es` in that order, and a
+; `push` added to any one of them without the other two returns the machine to
+; a wrong address at boot.  vid_apply pushes the same run WITHOUT `bp`, pops
+; its own `es`, and enters at `vid_pop7` - so it is bound by the SEVEN and not
+; by the eight, and a `push` added to the other three must not be added to it.
+; Nothing in the tree checks either; these comments and the ones at the three
+; jump sites are the whole of the guard.  The label is BELOW
+; `dec byte [spl_busy]`, so the splash counter is decremented once.
+;
+; IT KEEPS ITS OWN POP RUN, and SPEC.md 15.1.2's ladder may never have it.
+; `jmp kret_es` here BOOTS NOTHING: vid_setmode, vid_detect and vid_text all
+; run from the splash, whose first tick is gated on SPL_RESIDENT sectors
+; (splash.inc, 9 = 4,608 bytes), and the ladder is at the far end of `.text` -
+; ~50,700 bytes in, eleven times past the window the boot sector has read.
+; The jump lands in RAM the disk has not filled yet, the machine executes it,
+; and every adapter comes up dead with no message.  It is the same rule
+; vid_wipe's header states two routines down - "a helper further down the
+; image is not resident yet" - and the ladder is exactly such a helper.
+; tests/unit/t_asmrules.py's resident-window check is the mechanical guard.
+vid_pop8:
     pop es
     pop bp
-    pop di
+vid_pop7:                       ; ...AND A FOURTH ENTRY, ONE LABEL IN, WITH A
+    pop di                      ; DIFFERENT FRAME. vid_apply pushes the same
+                                ; run WITHOUT bp and pops its own `es`, so it
+                                ; joins here; it is the one arrival that is
+                                ; not bound by the eight-push contract above,
+                                ; and it is bound by the seven instead
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_wipe - zero CX words at AX:0000, the three framebuffer clears above
+; in:       AX = segment, CX = words
+; out:      that block is zero
+; clobbers: AX, CX, DI, ES, flags - all four are pushed by vid_setmode
+;
+; It lives HERE rather than beside a general filler because it has to stay
+; inside viddet.inc: vid_setmode runs from the splash, whose first tick is
+; gated on SPL_RESIDENT sectors, and a helper further down the image is not
+; resident yet.  `cld` is inside it, which is what keeps vid_setmode's own
+; "we run on the boot sector's flags" requirement satisfied.
+;
+; NOT for the `VGADIRTY=1` arm: that one fills 0xDBDB, and zero is the whole
+; of this routine's economy (`xor ax,ax` is free where a fill value is not).
+; -----------------------------------------------------------------------------
+vid_wipe:
+    mov es, ax
+    xor di, di
+    xor ax, ax
+    cld
+    rep stosw
     ret
 
 ; -----------------------------------------------------------------------------
@@ -988,8 +1190,13 @@ vid_cga_equip:
     and al, 0x30
     cmp al, 0x30                ; 11b = monochrome at B000
     jne .out
-    and byte [0x0010], 0xCF
-    or byte [0x0010], 0x20      ; 10b = 80x25 colour
+    and byte [0x0010], 0xEF     ; 11b -> 10b is "clear bit 4, leave bit 5", and
+                                ; ONE and does it. Correct only because the
+                                ; `cmp al, 0x30 / jne .out` above has already
+                                ; proved the pair IS 11b - relax that guard and
+                                ; this line stops being equivalent to the
+                                ; clear-then-set it replaced. Every other bit
+                                ; of 40:10 is untouched, as before.
 .out:
     pop ds
     pop ax
@@ -1075,15 +1282,8 @@ vid_text:
 .go:
     int 0x10
 .out:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp vid_pop8                ; the shared epilogue - and so this routine's
+                                ; push list is vid_setmode's. See vid_pop8.
 
 ; -----------------------------------------------------------------------------
 ; gfx_rowbase - byte offset of the first byte of a scan line (SPEC.md 39.3)
@@ -1095,14 +1295,26 @@ vid_text:
 ; On VGA bmask and bshift are 0 and this reduces to exactly y * 80, which is
 ; what every planar path computed inline before.
 ;
+; MEASURED, entry to the caller's return address on MartyPC's cycle counter,
+; AX = 100 so the TABLE path is taken, fifteen samples a kernel: the `xchg`
+; below took it from 136 to 127 cycles on CGA, 132 to 130 on Hercules and 132
+; to 128 on VGA - one byte, and the two sample sets are disjoint on every
+; adapter. This routine is on the fixed cost of every drawing call in the
+; machine, so a byte here is worth measuring.
+;
 ; Every geometry word is read through CS, not DS - see gfx_nextrow.
 ; -----------------------------------------------------------------------------
 gfx_rowbase:
     cmp ax, [cs:vid_rowmax]     ; ONE guard, not two: [vid_rowmax] is 0 until
     jae gfx_rowbase_calc        ; vid_apply has filled the table, so "there is
     push bx                     ; no table yet" and "this row is past its end"
-    mov bx, ax                  ; are the same compare (SPEC.md 39.3.1)
-    shl bx, 1
+    xchg ax, bx                 ; are the same compare (SPEC.md 39.3.1). The
+    shl bx, 1                   ; xchg is `mov bx, ax` in one byte instead of
+                                ; two - AX is overwritten two instructions
+                                ; down, so receiving the old BX is harmless,
+                                ; and 3 clocks over 1 byte beats 2 over 2 on
+                                ; the fetch floor. THIS IS THE FIXED COST OF
+                                ; EVERY DRAWING CALL IN THE MACHINE
     mov ax, [ss:bx + vid_rowtab]    ; LOW_SEG - see the table's own note
     pop bx
     ret
@@ -1113,12 +1325,27 @@ gfx_rowbase_calc:
     push bx
     mov bx, ax
     and bx, [cs:vid_bmask]      ; BX = bank number
-    shl bx, 1
-    mov bx, [cs:bx + vid_banktab]   ; BX = bank * 0x2000, without the 13-bit
-    mov cl, [cs:vid_bshift]         ; shift an 8088 charges 60 clocks for
+    mov cl, [cs:vid_bshift]
     shr ax, cl                  ; AX = row within the bank
     mul word [cs:vid_stride]    ; DX:AX; DX is always 0 (86*90 at worst)
-    add ax, bx
+    mov cl, 3                   ; ...and BX = bank * 0x2000. `ror` BY 3 IS
+    ror bx, cl                  ; `shl` BY 13 for any value that fits in three
+    add ax, bx                  ; bits, which the bank does - [vid_bmask] is
+                                ; 0, 1 or 3, four banks being the maximum the
+                                ; 0x2000 window assertion at the foot of this
+                                ; file allows: 3 -> 0x6000, 2 -> 0x4000,
+                                ; 1 -> 0x2000, 0 -> 0. This was a four-entry
+                                ; TABLE because `shl bx, 13` is 8 clocks plus
+                                ; 4 a bit on an 8088 - 60 - and gfx_rowbase is
+                                ; on the fixed cost of every drawing call
+                                ; (PERFORMANCE.md Part 2). What the table
+                                ; refused was the SHIFT, and it never
+                                ; considered the ROTATE: 8 + 4*3 = 20 clocks
+                                ; over 4 bytes against the lookup's 25 over 7,
+                                ; so this is smaller AND faster, under the
+                                ; 8088's max(clocks, 4.34 x bytes) fetch floor
+                                ; either way. The two CL uses are sequenced,
+                                ; not nested
     pop bx
     ret
 
@@ -1180,7 +1407,7 @@ gfx_prevrow:
 ; into the next bank's 0x2000 window. Hercules uses 87*90 = 7830 of 8192 and
 ; CGA 100*80 = 8000, so both hold - but not by much, and a change of stride
 ; or height would break it silently.
-%if (348/4)*90 > 0x2000 || (200/2)*80 > 0x2000
+%if (348/4)*90 > 0x2000 || (VID_H_MIN/2)*80 > 0x2000
 %error "viddet: intra-bank extent exceeds 0x2000 - gfx_nextrow needs a row counter"
 %endif
 
@@ -1188,13 +1415,36 @@ gfx_prevrow:
 ; gfx_ink - reduce a 16-colour index to a 1bpp ink (SPEC.md 39.4)
 ; in:       AL = colour 0..15
 ; out:      AL = 0x00 black, 0xFF white, 0x01 the 50% dither class
-; clobbers: AL, flags
+; clobbers: AX, flags       <- AH, because `cbw` writes it. It was "AL"; every
+;           one of the six call sites was checked and reads only AL after the
+;           call (vga12.inc:1140, :1719, :1939, :2137, icons.inc:460,
+;           font.inc:884), so this widening documents the code rather than
+;           changing what any caller may do. BX is still preserved -
+;           vga12.inc:2137 depends on that and says so.
+;
+; PER GLYPH CELL on the 1bpp adapters (font_ink's caller is font_char_bb), so
+; the accumulator form is worth its two bytes twice over: 7 bytes and 9 clocks
+; become 5 and 8, both fetch-bound on the 8088's max(clocks, 4.34 x bytes)
+; floor - 30.4 -> 21.7 clocks, ~143 us off a 78-cell row at 4.77 MHz.
+;
+; ...and `xchg ax, bx` for `mov bx, ax` took a further byte off the same
+; argument. MEASURED end to end on MartyPC's own cycle counter, entry to the
+; caller's return address, AL = 12, twenty samples: 91 -> 87 cycles on CGA
+; (os8088_5150_cga_gla) and 91 -> 87 on Hercules (os8088_5150_herc_gla), the
+; two distributions disjoint. `xchg` is a clock DEARER than `mov` and a byte
+; shorter, so the four cycles are the prefetch queue and nothing else - which
+; is the whole of why the fetch floor is worth designing to.
 ; -----------------------------------------------------------------------------
 gfx_ink:
     push bx
-    mov bl, al
-    and bl, 15
-    xor bh, bh
+    and al, 15                  ; accumulator form: 2 bytes, not 3
+    cbw                         ; 0..15, so the sign bit is clear and AH
+    xchg ax, bx                 ; becomes 0 in one byte - and the xchg is
+                                ; `mov bx, ax` in one byte rather than two.
+                                ; AH ends holding the caller's old BH instead
+                                ; of 0, which is inside the "clobbers: AX" the
+                                ; header above widened to and re-checked all
+                                ; six call sites for
     mov al, [bx + gfx_inktab]
     pop bx
     ret

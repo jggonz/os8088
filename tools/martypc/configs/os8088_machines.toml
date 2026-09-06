@@ -123,6 +123,48 @@ overlays = [
     type = "CGA"
     clock_mode = "Dynamic"
 
+# THE 128KB FLOOR MACHINE - kern_small's own, and the only one here with less
+# than 640KB of RAM.
+#
+# Every other profile in this file is `conventional.size = 0xA0000`, so
+# `MIN_RAM_KB` has been an ARITHMETIC claim for as long as it has existed:
+# kernel.asm's guard 5 checks a constant against a constant at assembly time,
+# and no machine in this tree has ever been asked to run the result. That
+# matters more than it sounds, because the two questions are different
+# (CLAUDE.md's memory rules): a kernel whose ladder FITS in 128KB can still
+# fail to reach a desktop there, because a purgeable claim that sizes itself
+# off available heap - the directory read-ahead is 64KB on a 640KB machine -
+# has a floor of its own, and nothing has ever squeezed one.
+#
+# It is also the only way to audit the PINNED boot claims honestly
+# (docs/KERN-SMALL-CUT-PLAN.md 8.2): a claim standing on a bare desktop is
+# heap the machine never gets back, no assembler can see it, and its cost is
+# only real against the heap a 128KB machine actually has.
+#
+# 0x20000 is 128KB exactly. `Ibm5150v64K` is the machine type whose planar RAM
+# is 64KB - the 5150's own second revision - and the rest is expansion, which
+# is what a real 128KB XT was.
+[[machine]]
+name = "os8088_5150_cga_128k"
+type = "Ibm5150v64K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0x20000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
 # ...and the SOUND machine: the CGA 5150 with an AdLib and a Sound Blaster.
 #
 # Both cards, because they are two halves of one real one - a Sound Blaster's

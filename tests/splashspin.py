@@ -65,12 +65,18 @@ RATE_TOL = 0.35                 # positions/tick, between the two stretches
 
 
 def cos_table(blob_bytes):
-    """spl_cos_tab, read out of the kernel image rather than repeated here."""
+    """spl_cos_tab, read out of the kernel image rather than repeated here.
+
+    SIGNED BYTES since the splash's blob budget was cut for SPEC.md 15.3.8.5 -
+    it was sixteen `dw` and the stride here was a literal 2.  [spl_cos] is
+    still a WORD (spl_xform's `imul word` needs it) and this is the table, not
+    the variable, so the two do not have the same width and never did.
+    """
     off = os88sym.syms()["spl_cos_tab"]
     tab = []
     for k in range(16):
-        v = int.from_bytes(blob_bytes[off + k * 2:off + k * 2 + 2], "little")
-        tab.append(v - 65536 if v >= 32768 else v)
+        v = blob_bytes[off + k]
+        tab.append(v - 256 if v >= 128 else v)
     return tab
 
 

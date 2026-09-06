@@ -49,6 +49,15 @@ hl_entry:
     jc .out
     mov si, hl_menus
     call OSAPI_MENU_SET              ; BX = the window we just created
+    mov si, hl_about                 ; ...and the STANDARD About (SPEC.md 12.2,
+    call OSAPI_ABOUT_SET             ; 20.5.1), which is the item the kernel
+                                     ; puts above Close in our own pull-down.
+                                     ; The File > About item below stays: it is
+                                     ; what makes this the worked example for a
+                                     ; command handler, and the two are not
+                                     ; rivals - the kernel's is where a user
+                                     ; looks for an About on EVERY app, and
+                                     ; this one's page is the demo
                                      ; NO WF_SAVEU: the promise holds, and the
                                      ; repaint is one fixed string - a raise
                                      ; that draws it costs nothing worth
@@ -99,6 +108,14 @@ hl_paint:
     mov si, [si+2]                  ; second line of the page
     call hl_line
     pop si
+    cmp byte [hl_abon], 0           ; ...and the About card LAST, over the page
+    je .out                         ; it is opaque about (SPEC.md 20.5.1)
+    push si
+    mov bx, si
+    mov si, hl_ablines
+    call os88ui_about_d             ; _d: this paint's region is already armed
+    pop si
+.out:
     pop dx
     pop cx
     pop bx
@@ -137,8 +154,65 @@ hl_line:
 ; command returns, so the redraw is ours.
 ; -----------------------------------------------------------------------------
 hl_oncmd:
-    mov [hl_page], al
+    call hl_abdismiss               ; a menu pick takes the credits down first,
+    mov [hl_page], al               ; and then does what it says
     call hl_repaint
+    ret
+
+; =============================================================================
+; 'About Hello' - the standard card (SPEC.md 12.2, 20.5.1)
+; =============================================================================
+; The card itself is os88ui.inc's. What is here is the smallest complete
+; example of the three things a widget cannot own: a flag, a painter that
+; draws the card last, and a handler that takes it down.
+
+; -----------------------------------------------------------------------------
+; hl_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; in:  SI = our window ptr; the UI task, gfx lock HELD
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+hl_about:
+    push bx
+    push si
+    mov byte [hl_abon], 1
+    mov bx, si
+    mov si, hl_ablines
+    call os88ui_about               ; arms the clip itself: a menu dispatch
+    pop si                          ; arrives without one (SPEC.md 11.3)
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; hl_abdismiss - take the card down if it is up
+; in:  SI = our window ptr; gfx lock held
+; out: CF = 1 the click or menu pick was spent doing it; every register kept
+; -----------------------------------------------------------------------------
+hl_abdismiss:
+    cmp byte [hl_abon], 0
+    je .none
+    push bx
+    mov byte [hl_abon], 0
+    mov bx, si
+    call OSAPI_WM_CLIP_SET          ; nothing has armed a region for a click
+    jc .gone                        ; or a menu pick (SPEC.md 11.3)
+    call hl_repaint                 ; ...which fills white and draws the page
+.gone:
+    pop bx
+    stc
+    ret
+.none:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; hl_onclick - W_ONCLICK, and it exists for ONE reason: a card the user cannot
+;              click away is not a card. This app has no other use for the
+;              mouse, so the handler is the dismissal and nothing else.
+; in:  CX = x, DX = y, SI = window ptr; gfx lock held
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+hl_onclick:
+    call hl_abdismiss
     ret
 
 ; -----------------------------------------------------------------------------
@@ -176,7 +250,8 @@ hl_repaint:
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
 hl_tpl:
     dw 200, 150, 240, 90            ; x, y, w, h -> content 238 x 71
-    dw hl_ttl, hl_paint, 0, 0       ; no onkey, no onclick
+    dw hl_ttl, hl_paint, 0, hl_onclick  ; no onkey; the click is the About
+                                        ; card's dismissal and nothing else
 
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
     OS88_MENUSET hl_menus, hl_name, hl_oncmd
@@ -200,9 +275,27 @@ hl_s_line2: db '.o88 package!', 0
 hl_s_abt1:  db 'HELLO - the smallest', 0
 hl_s_abt2:  db 'os8088 package.', 0
 
-    OS88_BSS 1
+; --- the standard About card's lines (SPEC.md 20.5.1) -------------------------
+; FOUR lines is this window's ceiling: the card is 2*7 + lines*12 tall and
+; clamps to a 71px content, so a fifth would be cut off rather than refused.
+; The credit is two lines for the width, not for the look - 238px of content
+; less the card's margins is 26 cells.
+hl_ablines:
+    dw hl_ab1, hl_ab2, hl_ab3, hl_ab4, 0
+hl_ab1:     db 'Hello for os8088', 0
+hl_ab2:     db 0
+hl_ab3:     db 'Contributed by', 0
+hl_ab4:     db 'Jorge Gonzalez', 0
+
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%define OS88UI_ABOUT            ; the standard About card, and NOTHING else -
+%define OS88UI_NOBTN            ; this package draws no button at all
+%include "os88ui.inc"
+
+    OS88_BSS 2
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -------------------------------------
 ; Zero = the Greeting page, which is what a freshly opened window shows.
 hl_page     equ os88_image_end + 0   ; byte: page index into hl_pages
+hl_abon     equ os88_image_end + 1   ; byte: the About card is up (20.5.1)

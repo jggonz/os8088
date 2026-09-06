@@ -42,7 +42,12 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'WIRE', wr_entry
+    OS88_HEADER 'WIRE', wr_entry, 0, OS88_STACK_192
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 40 for wr_worker
+                                ; over the 64-byte interrupt floor
+                                ; that is 104, and 192 gives 1.85x
 
 WR_W        equ 162                 ; window, outer - near enough square,
 WR_H        equ 150                 ; because the figure is sized off the

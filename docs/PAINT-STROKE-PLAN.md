@@ -362,6 +362,23 @@ not lost, and it will move to its own plan when the first of it is measured.
 
    Revisit it if the save-under stops covering the common case, or if a
    measurement makes the maximize redraw the thing that hurts.
+
+   **REOPENED, on a reason this entry does not contain — see
+   docs/PAINT-1BPP-PLAN.md.** All four bullets above are about SPEED, and the
+   thing that reopened it is MEMORY: a 1bpp canvas is a quarter the claim, and
+   the 128KB floor machine's 13.5 KB of free heap funds 61 rows of a 448-wide
+   canvas at 4bpp against **245** at 1bpp. That is the difference between the
+   letterbox SPEC.md §42.6.5 cuts and the full Hercules default.
+
+   **The third bullet is also WRONG and is corrected there.** A straddling
+   window is one of `gfx_blitp`'s refusals; it is *not* one of `gfx_blit1`'s —
+   that routine detects the seam and falls to `.percol`, drawing per band
+   column with each column resolving its own display (SPEC.md §39.14.6). So an
+   extended desktop is the one place a 1bpp canvas has a fast path and a planar
+   one can never have one. The other three stand, and the new plan's §5 agrees
+   with this entry's conclusion about speed on this entry's own numbers: the
+   maximize is a predicted 1.107 → ~0.66 s, and `pt_draw_pal`'s 0.251 s is
+   untouched by any of it.
 2. **~~Then store a grey as its actual dither~~ — the same answer**, since it
    follows from 1 and is probably part of it. §39.4 reduces a grey to a dither
    at draw time anyway, so storing it that way would make the canvas truthful

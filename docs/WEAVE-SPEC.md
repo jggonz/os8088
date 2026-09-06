@@ -4284,7 +4284,7 @@ the demos in `all`.
 package in this tree to declare a file association (which took a `CC_ASSOC`
 path in `apps/cc/crt0.asm`, since no C package had ever needed one), the
 accept idiom, the §10 refusals, the flow walk and the static components —
-plus `make weavedisk` in three geometries and `tests/weavesmoke.py`. A
+plus `make weavedisk` in four geometries and `tests/weavesmoke.py`. A
 wave-1 fix pass preceded it: 21 defects in this document and in `weavesim`,
 of which the load-bearing one was §7.1.1's Hercules grid, wrong at 89×36
 because it had been inherited from the browser's viewport rather than
@@ -4330,7 +4330,7 @@ displaying) and §4.5.1 (every indexed operand is bounds-checked, because a
 its own, `apps/weave/wfx.inc` (section 5's RPN machine and its 16.16
 arithmetic in assembly, because this toolchain has no `long` at all),
 `apps/weave/wband.inc` (§6.9.1's band composer, rcband's shape and Set 68's
-constants, now re-measured as PERFORMANCE.md Set 113), §5.5's sliced two-pass
+constants, now re-measured as PERFORMANCE.md Set 114), §5.5's sliced two-pass
 recalculation with §5.5.1's per-row damage, the formula bar over `os88line`,
 and `apps/weave/wfxc.c` — §9.4's one carve-out, the whole of §5.1's grammar
 compiled where it is typed.
@@ -4468,8 +4468,10 @@ wave 5 closed at. `loom.o88` is **54,966 + 6,212 = 61,178, 262 under**, with
 
 **The distribution row is `make weavedisk` carrying the whole family** — the
 runtime, its two modules, the three bundles, LOOM and its three, the demo
-sources and a per-geometry `CATALOG.TXT` — in all three geometries, 206 of 354
-clusters at 360KB. Wave 7 shipped it as ONE FLAT FOLDER, and §11.2 records
+sources and a per-geometry `CATALOG.TXT` — in all four geometries (SPEC.md
+§19 added 1.2MB 5.25" HD to the family's three), 206 of 354 clusters at 360KB
+and 567 of 2,371 at 1.2MB, the same payload on each: the family is ~285KB, so
+the smallest geometry is the only one that ever had to be argued. Wave 7 shipped it as ONE FLAT FOLDER, and §11.2 records
 why: the wave built `PROJECTS/` a folder per project first, opened it on the
 machine, and found that SPEC.md §73.14's overlay fence makes a project in a
 subfolder unopenable by both routes. **It ships as TWO folders now** —
@@ -4500,7 +4502,7 @@ The rest, each gated before the next begins:
 | 5 | ~~`<canvas>`/`<sprite>`~~ **SHIPPED**, above — and in `WEAVE.WSM`, a second RESIDENT segment (§1.2.2), which is the decision the wave turns on | `weavecanvas` FIRST (§12.1.3), then `weavegame`; the field run is COMMISSIONED and pending (WEAVE-PLAN §4.2) |
 | 6 | ~~Loom~~ **SHIPPED**, above — except Preview's PICTURE (§1.7.1), which needs the shared paint stack in a segment LOOM has not got | `weavepack` byte-identity on all templates and demos, in the OS |
 | 7 | ~~Preview's picture~~ **SHIPPED**, above — `LOOM.WPV` (§1.2.4), a second RESIDENT segment carrying `wflow.c` and `wpaint.c` themselves, which is the decision the wave turns on | `weaveprev`: the pane against `weavesim --render --preview`, three demo projects, both 1bpp adapters |
-| 7 | ~~distribution~~ **SHIPPED**, above — the family's disk in three geometries with `WEAVE/` and `LOOM/` (§11.2 — first shipped flat, and as two folders since #132), `CATALOG.TXT` and `BUNDLES=`; SPEC.md §19.10's `WEAVE/` and `LOOM/` folders on the everything disk and the live media; the Weave disks in the release zip; and §1.4's 256KB arithmetic corrected against the machine | the release checklist, and `weaveone` |
+| 7 | ~~distribution~~ **SHIPPED**, above — the family's disk in four geometries (1.2MB added with SPEC.md §19's) with `WEAVE/` and `LOOM/` (§11.2 — first shipped flat, and as two folders since #132), `CATALOG.TXT` and `BUNDLES=`; SPEC.md §19.10's `WEAVE/` and `LOOM/` folders on the everything disk and the live media; the Weave disks in the release zip; and §1.4's 256KB arithmetic corrected against the machine | the release checklist, and `weaveone` |
 | 8 | ~~the canvas PALETTE~~ **SHIPPED** — §6.10.7's `paper`/`ink`/`color`, §9.2.1's amendment to the exclusion, PONG in four colours | `weavecanvas` FIRST again (six new cases and a third negative control), then the two packers on the coloured `PONG.WAB` |
 
 Wave order within a wave follows the size line: `os88pkg.py`'s resident
@@ -4613,12 +4615,12 @@ after any change to §6 or to the model. Field figures land on the 5150
 and supersede modelled ones row by row (§12.4).
 
 **The band composer's two constants were Set 68's and are now measured for
-`wband.inc` itself**: PERFORMANCE.md **Set 113** ran the shipping file on Set
+`wband.inc` itself**: PERFORMANCE.md **Set 114** ran the shipping file on Set
 68's own harness and solved 915 µs a call and 162 µs a cell against 860 and
 173 — six per cent apart in opposite directions, on a harness whose quantum is
 one count of 0.359 ms. A 79-cell row measured **13.7 ms** against the model's
-14.5 for those cells (the rows were 79 cells when Set 113 was taken; SPEC.md
-§11.95.3 has since made a full CGA row 80, which the table below prices). Set 113 also settles the one claim §6.9.1 was making without
+14.5 for those cells (the rows were 79 cells when Set 114 was taken; SPEC.md
+§11.95.3 has since made a full CGA row 80, which the table below prices). Set 114 also settles the one claim §6.9.1 was making without
 evidence: inverting the header band and the selected cell costs **0.4%**, one
 count over eight iterations of 79 cells, where a second `gfx` call would have
 been ~756 µs.

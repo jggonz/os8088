@@ -54,6 +54,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
+import dispapps                                              # noqa: E402
+
+
+def _diskname(path):
+    """What os88disk called it: colour_gif already answers in 8.3 upper case."""
+    return os.path.basename(path)
 from os88geom import (VID_CTX_SZ, VID_CTX_VX, VID_CTX_VY,    # noqa: E402
                       VID_CTX_CW, VID_CTX_CH, W_SEG, W_TITLE,
                       WIN_SIZE)
@@ -143,7 +149,7 @@ def run(a, case, iw, ih, px, sym):
         rx, ry = dispcp.row_xy(bx, by,
                                dispcp.scroll_to(m, mo, S, settle, bx, by,
                                                 dispcp.row_of(m, S,
-                                                              "OS8088.GIF"),
+                                                              _diskname(a.gif)),
                                                 card=pcard))
         mo.to(rx, ry)
         settle(m, card=pcard)
@@ -277,9 +283,20 @@ def main():
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="/tmp/paintback.img")
     ap.add_argument("--machine", default="os8088_xt_vga_mda")
-    ap.add_argument("--gif", default="build/OS8088.GIF")
+    ap.add_argument("--gif", default=None,
+                    help="the picture to open (default: a COLOUR derivation "
+                         "of build/OS8088.GIF - see below)")
     ap.add_argument("--case", choices=("vga", "herc"), default=None)
     a = ap.parse_args()
+
+    # A COLOUR PICTURE. This row's subject is [pt_planar] coming HOME as four
+    # planes, and SPEC.md 42.23.6 opens a two-entry GIF one bit deep on any
+    # adapter - build/OS8088.GIF being exactly two entries. So the fixture had
+    # to become a colour one or the leg could never be set up; the failure
+    # read "Paint was born on display 0 and holds planar=0", which is true and
+    # is not this row's subject. dispapps.colour_gif changes no pixel.
+    if a.gif is None:
+        a.gif = dispapps.colour_gif()
 
     if a.apps == "/tmp/paintback.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",

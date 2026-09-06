@@ -52,17 +52,26 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'StackProbe', spb_entry
+    OS88_HEADER 'StackProbe', spb_entry, 0, OS88_STACK_384
+                                ; DECLARED, not mirrored (SPEC.md 8.7). The
+                                ; slices differ now, so "SPB_SLICE equ 384" was
+                                ; a guess about which one we would be given -
+                                ; and asking for the largest makes it a
+                                ; guarantee the kernel honours. The canary test
+                                ; below still checks it, because a probe that
+                                ; trusts its own arithmetic is not a probe
 
 SPB_MAGIC   equ 0x5A57          ; SPEC.md 8's SCH_MAGIC, mirrored: the word
                                 ; at the bottom of every slice
-SPB_SLICE   equ 384             ; SCH_STACK, mirrored (SPEC.md 8) - and it has
-                                ; to move WITH it: the SDK publishes MAX_TASKS
-                                ; and not the slice size, so this is the one
-                                ; number in here a kernel change can falsify.
-                                ; The canary test is what notices - a wrong
-                                ; SPB_SLICE puts the base somewhere with no
-                                ; SCH_MAGIC in it and the window says SLICE?
+SPB_SLICE   equ 384             ; OUR slice, which the header above ASKS for
+                                ; (OS88_STACK_384) rather than assuming. Before
+                                ; SPEC.md 8.7 this was a mirror of SCH_STACK
+                                ; and the one number in here a kernel change
+                                ; could falsify; now it is a request the kernel
+                                ; either honours or refuses the spawn over. The
+                                ; canary test still notices either way - a
+                                ; wrong SPB_SLICE puts the base somewhere with
+                                ; no SCH_MAGIC in it and the window says SLICE?
 SPB_FILL    equ 0xCC            ; the fill byte, the kernel probe's own
 SPB_WINF    equ 200             ; fallback watch window when the canary is
                                 ; not where the aligned math says (bytes
@@ -357,8 +366,8 @@ spb_worker:
     mov [spb_free], ax
     inc word [spb_scans]
 
-    call spb_scan_all           ; every OTHER slice, which is the whole reason
-                                ; this probe is worth running while something
+    call spb_scan_all           ; every OTHER slice - WITHDRAWN, see the
+                                ; routine. It used to be the whole reason
                                 ; else is busy (SPEC.md 8.3). BEFORE the canary
                                 ; block below and not after it: both of that
                                 ; block's exits are `je .draw`, so a call
@@ -403,49 +412,26 @@ spb_worker:
 ; out: [spb_any] = the deepest, [spb_anyt] = whose. Preserves nothing.
 ; -----------------------------------------------------------------------------
 spb_scan_all:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    ; WITHDRAWN AT SPEC.md 8.7, and deliberately not replaced with a guess.
+    ;
+    ; It walked DOWN from our base one SPB_SLICE at a time, which was exact
+    ; while every slice was 384 and is wrong on eleven of thirteen now: the
+    ; partition is 3x128, 6x192, 2x256, 2x384 and a package has no way to learn
+    ; that. Probing all four sizes for the next canary would work most of the
+    ; time, and "most of the time" on a reader that NUMBERS SLOTS is how this
+    ; file's own history reads - the comment above records two earlier versions
+    ; that numbered every slot one high by deriving a base the wrong way.
+    ;
+    ; Two readers do it correctly instead, both off the kernel's own
+    ; sch_stksize (SPEC.md 8.6/8.7): tools/stkwater.py under QEMU, and
+    ; STKDIAG=1's panel on ANY machine including the field's - which is the one
+    ; that matters, because reaching real iron was this walk's whole reason for
+    ; existing. What is lost is a reading on a SHIPPING kernel on real
+    ; hardware; giving it back means publishing the partition through
+    ; OSAPI_SYS_SNAPSHOT, which is MAX_TASKS words and a second ABI move, and
+    ; is a decision to take on its own rather than as a side effect of this one.
     mov word [spb_any], 0
-    mov byte [spb_anyt], 0
-    mov bx, [spb_first]
-    mov dl, 1                   ; DL = the slot BX is the base of
-.slice:
-    cmp dl, [spb_slot]
-    je  .next                   ; ours: the High water line already has it
-    cmp word [ss:bx], SPB_MAGIC
-    jne .next                   ; never spawned - no canary, no fill
-    mov si, bx
-    inc si
-    inc si                      ; ...and never read the canary word itself
-.byte:
-    cmp byte [ss:si], SPB_FILL
-    jne .depth
-    inc si
-    mov ax, si
-    sub ax, bx
-    cmp ax, SPB_SLICE
-    jb  .byte
-.depth:
-    mov ax, bx                  ; depth = top - the first byte anything touched
-    add ax, SPB_SLICE
-    sub ax, si
-    cmp ax, [spb_any]
-    jbe .next
-    mov [spb_any], ax
-    mov [spb_anyt], dl
-.next:
-    add bx, SPB_SLICE
-    inc dl
-    cmp dl, MAX_TASKS
-    jb  .slice
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    mov byte [spb_anyt], 0xFF
     ret
 
 ; -----------------------------------------------------------------------------
@@ -492,7 +478,7 @@ spb_s_cok:  db 'Canary OK   ', 0
 spb_s_cbad: db 'SLICE?      ', 0
 spb_s_scan: db 'x'
 spb_n_scan: db '  0', 0
-spb_s_any:   db 'Other tasks: '
+spb_s_any:   db 'Others: see STKDIAG '
 spb_n_any:   db '  0 slot '
 spb_n_anyt:  db '  0', 0
 spb_s_hint1: db 'Type, mouse, transfer - then', 0

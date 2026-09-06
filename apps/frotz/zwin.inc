@@ -1868,6 +1868,7 @@ zw_puts_di:
 
 ; zw_dec - in AX = unsigned value, DI = destination; out DI advanced
 zw_dec:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx

@@ -283,7 +283,7 @@ DSV_PKGCALL  equ 34             ; dw: near proc reached by OSAPI_DRV_CALL -
                                 ; yours is callable from a package's worker
                                 ; only if what it does is. Say so per verb.
 DSV_GEOM     equ 36             ; dw: near proc, DRVC_DISK only (SPEC.md 51.8,
-                                ; 86.5): the TRANSPORT FACTS of one volume,
+                                ; 87.5): the TRANSPORT FACTS of one volume,
                                 ; for a caller that has to reach its sectors
                                 ; without you - the resume stub, which runs
                                 ; after every driver has been detached.
@@ -507,10 +507,15 @@ FSV_SIZE     equ 30
 ; The five slots themselves are published by os88api.inc, which this file
 ; includes: a slot number belongs in one place (SPEC.md 20.8).
 
-; The listing claim a mounted volume wants (SPEC.md 22.6): DSK_VENT entries of
-; 32 bytes followed by the same number of 64-byte icon slots. Claim it before
+; The listing claim a mounted volume wants (SPEC.md 22.6): DSK_VENT entries
+; followed by the same number of 64-byte icon slots. Claim it before
 ; OSAPI_VOL_ADD and hand over the segment; pass 0 instead and the volume lists
 ; into the kernel's own 32-entry buffers, which works and shows fewer files.
+; **Claim 6KB whatever the kernel's own stride is.** The entry a driver hands
+; over through OSAPI_FS_ENT is DSK_DE_SIZE (32) bytes wide and always will be;
+; what the kernel STORES in the claim is narrower (SPEC.md 19.1), so this
+; number is a ceiling the kernel writes under rather than a layout to mirror -
+; which is what keeps it off a driver's rebuild list.
 HDD_LISTKB   equ 6
 
 ; --- memory a bus-master can reach (SPEC.md 50.3/51.6) -----------------------

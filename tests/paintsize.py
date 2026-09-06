@@ -26,6 +26,31 @@ The budget is deliberately loose. What it is guarding against is a run away by
 two orders of magnitude, not a regression of ten percent - and the honest cost
 of a resize at these sizes is real work: 86,688 bytes staged, a wipe, a
 copy-back and a full repaint.
+
+WHAT THE CLOCK ACTUALLY COVERS, and it is not mostly `pt_ucopy`. The bracket
+starts before the double-click on purpose - the window manager acts on the
+second click's RELEASE, so a regression inside the click handler is work this
+row has to be able to see - and `os88mouse` spends guest time waiting on the
+guest's own published `mouse_btn` for every packet it sends. Measured on the
+Hercules machine: **10,217 ms of gesture and 125 ms of resize.** So the
+budget's headroom is against a 97-second `pt_ucopy`, which trips it nine times
+over, and NOT against a doubling of the copy, which it cannot see and was
+never claimed to.
+
+THE DETECTOR USED TO BE UNREACHABLE, and the number it printed was its own
+timeout. It waited for the guest's IP to equal `sch_idle_body.spin` EXACTLY
+while sampling a RUNNING guest - and since SPEC.md 8.1.2 the idle task spends
+96.9% of its time in the `hlt` six bytes earlier, so the sample never landed
+on that one byte: measured 0 hits in 240 samples, with `pt_cw` already back at
+its opened value on the FIRST of them. The loop therefore ran to exhaustion
+every time and reported 158 seconds, which is 240 advances of 30 frames plus
+the free-running `run()` between them, for a restore that had finished before
+the second sample. `[sch_cur] == [sch_idleslot]` is the same question asked of
+the SCHEDULER instead of the program counter: it is a whole task's worth of
+state rather than one instruction, so a sample cannot fall between it.
+
+A run that never sees the machine go quiet now SAYS SO instead of printing its
+own timeout as a measurement.
 """
 import argparse
 import collections
@@ -44,7 +69,11 @@ import dispapps                                             # noqa: E402
 ROOT = os.path.dirname(HERE)
 S = os88sym.linear
 HZ = 4772727.0
-BUDGET_MS = 20000.0             # 20 s: the defect took 97 and the fix ~1
+BUDGET_MS = 20000.0             # 20 s. UNCHANGED: the defect took 97 s and
+                                # the bracket now measures 10.3 - see the
+                                # docstring for what is gesture and what
+                                # is resize. Nine times the headroom the
+                                # 97-second walk needs to trip it
 
 
 def _boff(seg, name):
@@ -128,13 +157,28 @@ def main(argv):
         os88marty.settle(m)
         t0 = m.status()["cycles"]
         mo.dblclick(big[0] + 60, big[1] + 9)
-        idle = S("sch_idle_body.spin")
-        for _ in range(240):                    # up to ~2 minutes of guest time
-            m.advance(frames=30)
-            m.run()
-            r = m.regs()
-            if (r["cs"] << 4) + r["ip"] == idle and _bss(m, seg, "pt_cw") != cw:
-                break
+        # QUIET, not an address: the restore is over when the canvas has come
+        # back AND the scheduler has gone back to the idle task. Three
+        # consecutive samples, because a single one taken between two chunks
+        # of the repaint would answer "idle" in the middle of the work; the
+        # guest is stopped between samples, so nothing accrues to the clock
+        # that this loop did not advance.
+        cur, islot = S("sch_cur"), S("sch_idleslot")
+        quiet = 0
+        for _ in range(600):                    # ~24 s of guest time
+            m.advance(frames=2)
+            if (_bss(m, seg, "pt_cw") != cw
+                    and m.read(cur, 1)[0] == m.read(islot, 1)[0]):
+                quiet += 1
+                if quiet == 3:
+                    break
+            else:
+                quiet = 0
+        else:
+            fails.append("the machine never came back to the idle task with "
+                         "the canvas restored - this run has NOT measured the "
+                         "restore, and the time below is this loop's own "
+                         "timeout")
         ms = (m.status()["cycles"] - t0) / HZ * 1000.0
         os88marty.settle(m)
         bad, n, cw2, ch2, st2, top = _canvas(m, seg)

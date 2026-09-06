@@ -126,7 +126,7 @@ PF_CLR      equ PF_N * 14 + 13  ; what prof_start zeroes: the four per-stage
 ; though it saves that too - it is the STACK. `prof_end` sits at the bottom of
 ; the wire path and calls `pit_now` under it, and each wrapper is a call level
 ; of its own, so the ten stages cost TWELVE BYTES on the deepest chain in a
-; 256-byte task slice (docs/KERNEL-MEMORY.md, "Task stacks").
+; 384-byte task slice (docs/KERNEL-MEMORY.md, "Task stacks").
 ;
 ; ALL NINE aliases here, unlike the DOS partner above: this build has ne2000.inc
 ; in it, so the two card stages need one and would otherwise be undefined.

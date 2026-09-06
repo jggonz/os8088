@@ -56,10 +56,30 @@ though the WINDOW SYSTEM were broken, which cost a bisect across 27 commits to
 disbelieve.
 
 What let it hide is worth stating on its own: **the constant that moved was a
-DERIVED one** (`VID_CTX_SZ` is `VID_CTX_W*2+6` in vidsel.inc, an expression
+DERIVED one** (`VID_CTX_SZ` is `VID_CTX_W*2+5` in vidsel.inc, an expression
 `_equs` deliberately refuses to evaluate), and `scan` was comparing local
 copies against `_MIRROR` alone. So the guard was watching the inputs and not
 the answer. It compares against `_KNOWN` now - mirrored AND derived.
+
+AND A FOURTH TIME, one level down from any of them: **the tree builds TWO
+kernels off one source**, and this module mirrored ONE of them without saying
+so. `WIN_SIZE` is 34 on kern_big and 28 on kern_small (SPEC.md 13.7's
+W_ONMOUSEUP pair and 13.9's timers are kern_big's), the parser below took the
+FIRST `equ` it saw, and `verify` compared it against that same first `equ` -
+so the guard agreed with itself and every script pointed at kern_small
+decoded the window table at the wrong stride. It returns NUMBERS, which is
+the founding failure exactly: a Disk window at (103, 20, 322, 155) followed
+by a second "window" at (60, 552, 93, 0), read as a package that failed to
+launch. It cost a session of looking at the on-demand module that had just
+been built, which was fine.
+
+So this module now knows WHICH KERNEL, off `$OS88_DEFINES` - os88sym.py's own
+knob, and the one every script pointed at kern_small already sets. A mirrored
+constant may carry a value per arm, and one that exists on only one arm
+(vidsel.inc's extended-desktop record is kern_big's whole) is REFUSED on the
+other rather than answered with the big number: a script reading `VID_CTX_SZ`
+on kern_small has no such record to read, and a plausible integer is how the
+last three of these hid.
 
 The lesson is the tree's own (SPEC.md 22's `fm_hit` discipline): the drawn
 thing and the tested thing must come from ONE place. So this module is that
@@ -90,6 +110,19 @@ class GeomError(Exception):
     pass
 
 
+# --- WHICH KERNEL -----------------------------------------------------------
+#
+# `make` sends -DKERN_BIG and `make small` sends -DKERN_SMALL, and the two
+# disagree about the window record's stride - so a harness that does not know
+# which one it is driving cannot decode wm_wins at all. $OS88_DEFINES is
+# os88sym.py's knob for exactly this and every script pointed at kern_small
+# already sets it (with $OS88_BUILD, for the map), so nothing new has to be
+# threaded through and a plain run is unchanged.
+_DEFINES = tuple(d for d in os.environ.get("OS88_DEFINES", "")
+                 .replace(",", " ").split() if d)
+ARM = "small" if "KERN_SMALL" in _DEFINES else "big"
+
+
 # --- the mirrored constants -------------------------------------------------
 #
 # name -> (kernel file, value). The value is what this module uses; the file
@@ -98,7 +131,14 @@ class GeomError(Exception):
 
 _MIRROR = {
     # kernel/wm.inc - the window record (SPEC.md 11)
-    "WIN_SIZE": ("kernel/wm.inc", 34),
+    #
+    # PER ARM, and the first constant here that is: kern_small stops the
+    # record where SPEC.md 13.7 starts, so it is 28 there and 34 on kern_big.
+    # A dict value means "this is not one number", and `verify` then reads the
+    # kernel with the OTHER arm's %ifdef folded out rather than taking the
+    # first `equ` in the file - which is what it did, and which made the guard
+    # agree with itself while every kern_small script decoded garbage.
+    "WIN_SIZE": ("kernel/wm.inc", {"big": 34, "small": 28}),
     "MAX_WIN": ("kernel/wm.inc", 12),
     "W_FLAGS": ("kernel/wm.inc", 0),
     "W_X": ("kernel/wm.inc", 2),
@@ -124,6 +164,11 @@ _MIRROR = {
     "WF_OWNBG": ("kernel/wm.inc", 64),
     "WF_KEEPH": ("kernel/wm.inc", 128),
     "WF_1BPP": ("kernel/wm.inc", 0x2000),
+    "WF_USRSZ": ("kernel/wm.inc", 0x0200),
+    # ...and the other two bits sharing the shape byte, mirrored for
+    # WF_HIBITS' sake - see the derivation below.
+    "WF_NOANIM": ("kernel/wm.inc", 0x4000),
+    "WF_STALE": ("kernel/wm.inc", 0x8000),
     # kernel/instance.inc - the instance record (SPEC.md 29)
     "I_STATE": ("kernel/instance.inc", 0),
     "I_FLAGS": ("kernel/instance.inc", 1),
@@ -149,7 +194,10 @@ _MIRROR = {
     "DESK_COLW": ("kernel/desk.inc", 44),
     "DESK_ZOVER": ("kernel/desk.inc", 2),
     # kernel/disk.inc - the volume table (SPEC.md 18.7)
-    "DVOL_MAX": ("kernel/disk.inc", 8),
+    # PER ARM (SPEC.md 51.0): kern_small can load no driver, so it can have no
+    # DVK_DRV volume, so every volume it will ever have is one of the four
+    # BIOS floppies SPEC.md 18.98 allows.
+    "DVOL_MAX": ("kernel/disk.inc", {"big": 8, "small": 4}),
     "DV_KIND": ("kernel/disk.inc", 0),
     "DV_FLAGS": ("kernel/disk.inc", 2),
     "DV_SIZE": ("kernel/disk.inc", 16),
@@ -170,6 +218,11 @@ _MIRROR = {
     "MBAR_H": ("kernel/kernel.asm", 20),
     "TITLE_H": ("kernel/kernel.asm", 18),
     "MENU_ITEM_H": ("kernel/menu.inc", 16),
+    # ...and the bar cell's STRIDE, which four harness scripts wrote down by
+    # hand and which moved 14 -> 12 the day MB_TX was dropped (SPEC.md 12.2).
+    # Two of the four are registered rows and two are not, so without this the
+    # unregistered pair would have gone on reading cell 2 as cell 1's tail.
+    "MB_ENTSZ": ("kernel/menu.inc", 12),
     # kernel/mouse.inc - the pointer's CELL and the worst hot spot in it
     # (SPEC.md 7.1/7.2.2). A shape's cell starts at (pointer - hot), so a
     # harness masking the arrow's 8x12 at the published position misses the
@@ -178,9 +231,33 @@ _MIRROR = {
     "CUR_GH": ("kernel/mouse.inc", 12),
     "CUR_XHX": ("kernel/mouse.inc", 3),
     "CUR_XHY": ("kernel/mouse.inc", 5),
+    # kernel/fdlg.inc - the Standard File dialog's chrome, content-relative
+    # (SPEC.md 38.4). Two test scripts click these, and a third copy is one
+    # `equ` change away from a row that clicks empty background and reports a
+    # feature broken.
+    "FD_BX1": ("kernel/fdlg.inc", 224),
+    "FD_BX2": ("kernel/fdlg.inc", 286),
+    "FD_BY0": ("kernel/fdlg.inc", 20),
+    "FD_BY1": ("kernel/fdlg.inc", 40),
+    "FD_BY2": ("kernel/fdlg.inc", 60),
+    "FD_BH": ("kernel/fdlg.inc", 13),
+    "FD_LX1": ("kernel/fdlg.inc", 6),
+    "FD_LX2": ("kernel/fdlg.inc", 213),
+    "FD_ROW0": ("kernel/fdlg.inc", 22),
+    "FD_ROWH": ("kernel/fdlg.inc", 16),
+    # FD_TEXTX is deliberately NOT here. apps/ftpd/ftpd.asm defines its own
+    # (8, the Setup page's text pen) and tests/ftpdflick.py carries a THIRD
+    # value, 6 - so registering the kernel's 28 makes the gate compare two
+    # constants that were never the same one. A row that wants to click a
+    # listing entry should take FD_LX1..FD_LX2 and aim at the middle of the
+    # row, which is what the whole row is: less coupled, and it does not need
+    # this name at all.
     "KERNEL_SEG": ("kernel/kernel.asm", 0x0060),
     # kernel/memory.inc - the claim table (SPEC.md 50)
-    "MEM_MAX": ("kernel/memory.inc", 32),
+    # PER ARM (docs/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small holds TWENTY claim records. The SDK
+    # keeps the LARGER value, so a package over-allocates rather than
+    # the kernel overflowing what it was handed (SPEC.md 51.0.0).
+    "MEM_MAX": ("kernel/memory.inc", {"big": 32, "small": 20}),
     "MC_SEG": ("kernel/memory.inc", 0),
     "MC_PARA": ("kernel/memory.inc", 2),
     "MC_OWN": ("kernel/memory.inc", 4),
@@ -198,30 +275,137 @@ _MIRROR = {
     # all failed as though the WINDOW SYSTEM were broken. That is this
     # module's own founding story happening a second time, so the record joins
     # it rather than being fixed nine times.
-    "VID_CTX_W": ("kernel/vidsel.inc", 19),
-    "VID_CTX_CW": ("kernel/vidsel.inc", 14),
-    "VID_CTX_CH": ("kernel/vidsel.inc", 16),
-    "VID_NDISP_MAX": ("kernel/vidsel.inc", 2),
+    #
+    # It has since SHRUNK, 19 -> 16, which is the same hazard the other way
+    # up: [vid_strm1], [vid_rpara] and [vid_rend] were written every
+    # vid_apply and read by nothing, so they left the run and took six bytes
+    # of every record with them. VID_CTX_VX/VY/KIND/SZ are derived from this
+    # number below, so the thirty scripts that import them followed with no
+    # edit at all - which is what this module is for.
+    #
+    # ...and the whole record is KERN_BIG's: the extended desktop (SPEC.md
+    # 39.12) is gated out of kern_small, so there is no vid_ctx there and no
+    # `equ` to check against. A dict with one arm in it says so, and reading
+    # one of these on the other arm RAISES - a script that wants a display
+    # record on kern_small is asking about a thing that does not exist, and
+    # answering it with 16 is how the three incidents above stayed hidden.
+    "VID_CTX_W": ("kernel/vidsel.inc", {"big": 16}),
+    "VID_CTX_CW": ("kernel/vidsel.inc", {"big": 14}),
+    "VID_CTX_CH": ("kernel/vidsel.inc", {"big": 16}),
+    "VID_NDISP_MAX": ("kernel/vidsel.inc", {"big": 2}),
+
+    # --- found by the unmirrored() audit, not by anyone noticing -------------
+    #
+    # This record only ever held what somebody THOUGHT to add to it, and
+    # `scan` only guards a name once it is here - so a constant with seven
+    # local copies and no entry was invisible to both. These seven were
+    # exactly that: 23 copies across 15 scripts, all agreeing, none guarded.
+    #
+    # `CP_RX` is the one that says why they are here now. Seven copies is the
+    # shape of the VID_CTX_SZ incident above, which was nine - and that record
+    # did not drift until the kernel grew a field, which is not a thing a
+    # reviewer of the kernel change would think to look for.
+    #
+    # `APP_MAX_SIZE` is the one with teeth. It lives in `tools/os88pkg.py`,
+    # which is one of the five host tools that WRITE SHIPPED BYTES, so a drift
+    # there does not fail a test - it stamps a package against the wrong
+    # ceiling.
+    "APP_MAX_SIZE": ("kernel/kernel.asm", 61440),
+    "WCR_SZ": ("kernel/kernel.asm", 8),
+    "CP_RX": ("kernel/ctrl.inc", 96),
+    "CP_IDRV": ("kernel/ctrl.inc", {"big": 2}),   # no Drivers page on small
+    # ...and CP_ITHM is BIG-ONLY, one level further out than it looks: the
+    # Theme (SPEC.md 76) is `%ifdef OS88_THEME`, which kernel.asm defines
+    # under KERN_BIG - so the row does not exist on kern_small at all, and
+    # ctrl.inc's `equ 4` in the no-drivers arm is the value it WOULD take.
+    "CP_ITHM": ("kernel/ctrl.inc", {"big": 5}),
+    "CP_ITIME": ("kernel/ctrl.inc", 1),
+    "DSK_DE_SIZE": ("kernel/dskwin.inc", 32),
+    # ...and the STAGED LISTING's stride, which is a different constant with a
+    # different value (SPEC.md 19.1). A harness that walks `disk_dir` or a
+    # window's view cache wants THIS one; DSK_DE_SIZE is the on-disk FAT
+    # stride and the width of the record a DRVC_FILE driver hands over. Two
+    # scripts were reading the listing at 32 and would have decoded garbage
+    # from entry 1 onward the moment they diverged.
+    "DSK_DE_STRIDE": ("kernel/dskwin.inc", 24),
+    # kernel/sched.inc - the scheduler's slot count (SPEC.md 8). It went 8 ->
+    # 14 with docs/STACK-SLOTS-PLAN.md and tests/saverate.py's copy did not,
+    # so sch_cycles was read six slots short; the test reads os88sym now and
+    # this entry is what makes the next copy a t_mirror failure.
+    # PER ARM (docs/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small has SIX worker slices and the UI task. The SDK
+    # keeps the LARGER value, so a package over-allocates rather than
+    # the kernel overflowing what it was handed (SPEC.md 51.0.0).
+    "MAX_TASKS": ("kernel/sched.inc", {"big": 14, "small": 7}),
 }
 
-globals().update({k: v for k, (_, v) in _MIRROR.items()})
+def _armval(name):
+    """This arm's value for a mirrored constant, or None if it has none."""
+    v = _MIRROR[name][1]
+    return v.get(ARM) if isinstance(v, dict) else v
+
+
+# Only the names this arm HAS. The rest are left undefined on purpose, so that
+# `__getattr__` below can refuse them by name instead of handing back the other
+# kernel's number.
+globals().update({k: v for k in _MIRROR for v in (_armval(k),)
+                  if v is not None})
+
+
+def __getattr__(name):
+    """A constant the OTHER arm has is a refusal, not an answer (PEP 562)."""
+    if name in _MIRROR or name in _BIGONLY_DERIVED:
+        raise GeomError(
+            "os88geom: %s is not a constant of kern_%s - it is defined only "
+            "under %s. This module is mirroring kern_%s because $OS88_DEFINES "
+            "is %r; if that is wrong, set it (os88sym.py's knob). If it is "
+            "right, the script asking for %s wants a kernel feature this one "
+            "does not have."
+            % (name, ARM,
+               " and ".join("KERN_" + a.upper()
+                            for a in sorted(_MIRROR.get(name, (None, {}))[1]))
+               if name in _MIRROR else "KERN_BIG",
+               ARM, ",".join(_DEFINES), name))
+    raise AttributeError(name)
 
 # Derived, and not mirrored: W_FLAGS bits 0 and 1 have no names in wm.inc.
 WF_USED, WF_VIS = 1, 2
-WF_HIBITS = (0x8000 | 0x4000 | 0x2000) >> 8   # WF_STALE|WF_NOANIM|WF_1BPP: the
-                                              # kernel's bits in the shape byte
-                                              # (SPEC.md 11.96.17). WF_1BPP is
-                                              # in the mirror table above, so a
-                                              # drift there fails t_mirror
+# WF_STALE|WF_NOANIM|WF_1BPP: the kernel's bits in the shape byte (SPEC.md
+# 11.96.17), and `WF_HIBITS equ (WF_STALE | WF_NOANIM | WF_1BPP) >> 8` in
+# wm.inc is an EXPRESSION, which _equs deliberately refuses to evaluate. So it
+# is derived here from three values that ARE checked, rather than written down
+# as a literal - which is what it was, with only WF_1BPP of the three mirrored,
+# so two of its three inputs could move without a word from the guard. That is
+# VID_CTX_SZ's failure exactly: watching some of the inputs and none of the
+# answer. Getting this wrong reads a kernel bit as a cursor shape, which is the
+# defect WF_STALE's own banner records having shipped once.
+WF_HIBITS = (WF_STALE | WF_NOANIM | WF_1BPP) >> 8
 
-# ...and the three the kernel derives from VID_CTX_W the same way. They are
-# EXPRESSIONS in vidsel.inc (`VID_CTX_W*2`, `VID_CTX_W*2+6`), which _equs
+# ...and the FOUR the kernel derives from VID_CTX_W the same way. They are
+# EXPRESSIONS in vidsel.inc (`VID_CTX_W*2`, `VID_CTX_W*2+5`), which _equs
 # deliberately refuses to evaluate - so they are computed here from the word
-# count above, which IS checked. A change to the record moves all three on the
+# count above, which IS checked. A change to the record moves all four on the
 # next run of any script, which is the whole point.
-VID_CTX_VX = VID_CTX_W * 2          # the display's origin in the virtual desktop
-VID_CTX_VY = VID_CTX_W * 2 + 2
-VID_CTX_SZ = VID_CTX_W * 2 + 6      # ...the run, both origin words, and the kind
+# They follow VID_CTX_W onto kern_big alone, for its reason - there is no
+# vid_ctx on kern_small to have a stride.
+if ARM == "big":
+    VID_CTX_VX = VID_CTX_W * 2      # the display's origin in the virtual desktop
+    VID_CTX_VY = VID_CTX_W * 2 + 2
+    VID_CTX_KIND = VID_CTX_W * 2 + 4  # ...WHICH ADAPTER, and not a segment
+    VID_CTX_SZ = VID_CTX_W * 2 + 5  # ...the run, both origin words, and the kind
+                                    # byte, which is the record's true END: the
+                                    # +6 form left byte W*2+5 unused in every
+                                    # row, and nothing indexes past the kind
+
+# VID_CTX_KIND WAS THE ONE LEFT OUT, and leaving it out is what let the record
+# go stale a THIRD time. `scan` compares a local copy against `_KNOWN`, so a
+# name absent from `_KNOWN` is a copy the scanner walks straight past:
+# tests/dispthm.py:42 said `VID_CTX_KIND = 40` in as many words, against a
+# kernel that has said 42 since 6.1.10, and every run of the guard reported
+# "0 stale" while looking directly at it. The kind byte is the worst field to
+# read two bytes early, too, because what sits there is `vid_tseg` - so the
+# reader gets 0xB000 or 0xB800, a FRAMEBUFFER SEGMENT, which is a plausible
+# number rather than an obvious one and printed as an adapter kind or an
+# x-coordinate for a cycle (tests/dispmode.py's "put display 1 at (45056,640)").
 
 # Everything `scan` compares a local copy against: the mirrored constants AND
 # the derived ones. It used to be _MIRROR alone, and that is exactly how nine
@@ -232,9 +416,13 @@ VID_CTX_SZ = VID_CTX_W * 2 + 6      # ...the run, both origin words, and the kin
 RANK = {0xFB: "trivial", 0xFC: "low", 0xFD: "medium", 0xFE: "high"}
 
 
-_KNOWN = dict({k: v for k, (_, v) in _MIRROR.items()},
-              VID_CTX_VX=VID_CTX_VX, VID_CTX_VY=VID_CTX_VY,
-              VID_CTX_SZ=VID_CTX_SZ, WF_USED=WF_USED, WF_VIS=WF_VIS)
+_BIGONLY_DERIVED = ("VID_CTX_VX", "VID_CTX_VY", "VID_CTX_KIND", "VID_CTX_SZ")
+
+_KNOWN = dict({k: v for k in _MIRROR for v in (_armval(k),) if v is not None},
+              WF_USED=WF_USED, WF_VIS=WF_VIS, WF_HIBITS=WF_HIBITS)
+if ARM == "big":
+    _KNOWN.update(VID_CTX_VX=VID_CTX_VX, VID_CTX_VY=VID_CTX_VY,
+                  VID_CTX_KIND=VID_CTX_KIND, VID_CTX_SZ=VID_CTX_SZ)
 
 
 # --- the guard --------------------------------------------------------------
@@ -243,17 +431,97 @@ _EQU = re.compile(r"^\s*([A-Z_][A-Z0-9_]*)\s+equ\s+"
                   r"(0[xX][0-9a-fA-F]+|[0-9]+)\s*(?:;.*)?$")
 
 
-def _equs(path):
+_COND = re.compile(r"^\s*%(\w+)\s*(\S*)")
+
+
+def _karm(root=None):
+    """{symbol: arm} for every conditional this parser can resolve.
+
+    The two kernels are chosen by `KERN_BIG` / `KERN_SMALL`, but no kernel
+    source tests those directly for a FEATURE - kernel.asm turns each one into
+    a named symbol first (`OS88_DRIVERS`, `OS88_ASSOC`, `FCP_MOD`, ...) so that
+    a call site cannot disagree with the body it guards. A constant gated on
+    one of those names is per-arm just as surely as one gated on the arm
+    itself, and `DVOL_MAX` is the first: it is 4 under `KERN_SMALL` and 8
+    otherwise, and mirroring the wrong one puts a harness back to reading a
+    table at the wrong stride.
+
+    So the map is READ OUT OF kernel.asm rather than written down - every
+    `%define NAME` that sits inside a bare `%ifdef KERN_BIG` or
+    `%ifdef KERN_SMALL`. A feature symbol added tomorrow is covered on the
+    next run of any script, which is the property this whole module exists
+    to have.
+    """
+    out = {"KERN_BIG": "big", "KERN_SMALL": "small"}
+    path = os.path.join(root or ROOT, "kernel", "kernel.asm")
+    if not os.path.exists(path):
+        return out
+    arm, depth = None, 0
+    with open(path, "r", errors="replace") as fh:
+        for line in fh:
+            mo = _COND.match(line)
+            if mo:
+                d, a = mo.group(1).lower(), mo.group(2)
+                if d == "ifdef" and a in ("KERN_BIG", "KERN_SMALL") and not depth:
+                    arm, depth = out[a], 1
+                elif d.startswith("if"):
+                    depth += 1 if depth else 0
+                elif d == "endif" and depth:
+                    depth -= 1
+                    if not depth:
+                        arm = None
+                elif d in ("else", "elif") and depth == 1:
+                    arm = None      # the other side of an arm test: unresolved
+                elif d == "define" and arm and depth == 1 and a:
+                    # HERE and not below: `%define` matches _COND too (it is a
+                    # directive), so a second pass over the same line never ran
+                    # and this map came back with only the two arms in it.
+                    out[a] = arm
+                continue
+    return out
+
+
+_KARM = _karm()
+
+
+def _equs(path, arm=None):
     """{NAME: int} for every `NAME equ <plain integer>` in a kernel source.
 
     Deliberately only PLAIN integers: several constants here are expressions
     over others (desk_zh1 is 32 + DESK_ZGAP + DESK_LBLH - 1), and a half
     evaluator that silently got one wrong would be worse than not checking it
     - so an expression is reported as unverifiable rather than guessed at.
+
+    And deliberately only TWO conditionals: `%ifdef KERN_BIG` and
+    `%ifdef KERN_SMALL`, whose inactive arm is folded out when `arm` is given.
+    Every other `%if` is OPAQUE and both of its arms are scanned, which is
+    what this did to all of them - so a knob is still first-wins and only the
+    kernel this module claims to describe is resolved. Half an evaluator is
+    exactly what the docstring above refuses; this is not one, because it
+    evaluates only the two symbols it is told the answer to.
     """
     out = {}
+    stack = []                  # one [kind, live] per open %if, kind 'k'|'?'
     with open(path, "r", errors="replace") as fh:
         for line in fh:
+            mo = _COND.match(line)
+            if mo:
+                d, arg = mo.group(1).lower(), mo.group(2)
+                if d in ("ifdef", "ifndef") and arm and arg in _KARM:
+                    live = (_KARM[arg] == arm) == (d == "ifdef")
+                    stack.append(["k", live])
+                elif d.startswith("if"):
+                    stack.append(["?", True])
+                elif d.startswith("eli") and stack:
+                    stack[-1] = ["?", True]     # not understood -> scan it
+                elif d == "else" and stack:
+                    if stack[-1][0] == "k":
+                        stack[-1][1] = not stack[-1][1]
+                elif d == "endif" and stack:
+                    stack.pop()
+                continue
+            if not all(e[1] for e in stack):
+                continue
             mo = _EQU.match(line)
             if mo:
                 out.setdefault(mo.group(1), int(mo.group(2), 0))
@@ -265,25 +533,29 @@ def verify(root=None):
     empty when they all still agree."""
     root = root or ROOT
     problems, cache = [], {}
-    for name, (rel, mine) in sorted(_MIRROR.items()):
+    for name, (rel, _) in sorted(_MIRROR.items()):
+        mine = _armval(name)
+        if mine is None:
+            continue            # the other arm's constant - nothing to check
         path = os.path.join(root, rel)
         if rel not in cache:
             if not os.path.exists(path):
                 problems.append("%s: %s is missing" % (name, rel))
                 cache[rel] = {}
                 continue
-            cache[rel] = _equs(path)
+            cache[rel] = _equs(path, ARM)
         theirs = cache[rel].get(name)
         if theirs is None:
             problems.append(
-                "%s: no plain `%s equ <int>` in %s - it was renamed, removed, "
-                "or turned into an expression. Check it by hand and update "
-                "tools/os88geom.py." % (name, name, rel))
+                "%s: no plain `%s equ <int>` in %s under kern_%s - it was "
+                "renamed, removed, turned into an expression, or gated onto "
+                "the other kernel. Check it by hand and update "
+                "tools/os88geom.py." % (name, name, rel, ARM))
         elif theirs != mine:
             problems.append(
-                "%s: this module says %d and %s says %d - the kernel moved. "
-                "Fix the value here; every script reads it from this one "
-                "place." % (name, mine, rel, theirs))
+                "%s: this module says %d for kern_%s and %s says %d - the "
+                "kernel moved. Fix the value here; every script reads it from "
+                "this one place." % (name, mine, ARM, rel, theirs))
     return problems
 
 
@@ -295,7 +567,7 @@ def _check_at_import():
     problems = verify()
     if problems:
         raise GeomError(
-            "tools/os88geom.py has gone stale against the kernel:\n  "
+            "tools/os88geom.py has gone stale against kern_%s:\n  " % ARM
             + "\n  ".join(problems)
             + "\n\nEvery scripted coordinate in the harness comes from here, "
               "so this is stopping now rather than aiming clicks at the wrong "
@@ -562,6 +834,92 @@ def row_xy(win, row=0, x=60):
 
 # --- and the same question asked of the harness itself ----------------------
 
+# A name a host script defines that the kernel also defines, where the two
+# mean DIFFERENT things. `unmirrored` would otherwise nominate them for ever.
+#
+# BAND_KB is the worked example and the reason this list is by NAME and not by
+# value: kernel/band.inc's is the 1bpp title-bar composer's buffer (2 KB, and
+# no shipped build even compiles that file), while tests/paintsu.py's is a
+# threshold about PAINT's band cache - "the band cache measures 3 KB, the whole
+# content 9". Same name, unrelated things, and the values differ, so a check
+# that trusted the match would report a drift that is not one.
+_COLLISIONS = {
+    "BAND_KB": "kernel/band.inc's title-bar composer buffer vs Paint's own "
+               "band-cache threshold in tests/paintsu.py - unrelated",
+}
+
+
+def unmirrored(root=None, least=2):
+    """Kernel constants host scripts hard-code that this record does NOT hold.
+
+    `scan` is the wrong way round to catch the next VID_CTX_SZ: it only looks
+    at names ALREADY in `_MIRROR`, so a constant with seven local copies and no
+    entry is invisible to it, and the record only ever held what somebody
+    thought to add. This is the other direction - every `NAME equ <int>` the
+    kernel defines, against every `NAME = <int>` a host script defines.
+
+    Returns [(name, kernel_file, kernel_value, [(script, line, value), ...])]
+    for names with at least `least` copies, worst first. `least` defaults to 2
+    because ONE copy is a script naming a thing, and two is the beginning of
+    the drift that took nine scripts down.
+    """
+    import ast
+
+    root = root or ROOT
+    kern = {}
+    equ = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s+equ\s+(.+?)\s*$", re.I)
+    kdir = os.path.join(root, "kernel")
+    if os.path.isdir(kdir):
+        for fn in sorted(os.listdir(kdir)):
+            if not (fn.endswith(".inc") or fn.endswith(".asm")):
+                continue
+            rel = os.path.join("kernel", fn)
+            for line in open(os.path.join(kdir, fn), "r", errors="replace"):
+                m = equ.match(line.split(";")[0])
+                if not m:
+                    continue
+                try:
+                    kern.setdefault(m.group(1), (rel, int(m.group(2).strip(), 0)))
+                except ValueError:
+                    pass
+
+    hits = {}
+    for sub in ("tools", "tests", os.path.join("tests", "unit")):
+        d = os.path.join(root, sub)
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".py") or fn == "os88geom.py":
+                continue
+            try:
+                tree = ast.parse(open(os.path.join(d, fn), "r",
+                                      errors="replace").read())
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Assign):
+                    continue
+                for tgt in node.targets:
+                    if (isinstance(tgt, ast.Name)
+                            and isinstance(node.value, ast.Constant)
+                            and isinstance(node.value.value, int)):
+                        hits.setdefault(tgt.id, []).append(
+                            (os.path.join(sub, fn), node.lineno,
+                             node.value.value))
+
+    out = []
+    for name, places in hits.items():
+        if name in _MIRROR or name in _COLLISIONS or name not in kern:
+            continue
+        # A short or mixed-case name matching a kernel equ is a coincidence far
+        # more often than it is a copy.
+        if len(name) < 4 or not name.isupper() or len(places) < least:
+            continue
+        rel, val = kern[name]
+        out.append((name, rel, val, sorted(places)))
+    return sorted(out, key=lambda r: (-len(r[3]), r[0]))
+
+
 def scan(root=None):
     """Every LOCAL copy of a mirrored constant in tools/ and tests/.
 
@@ -624,8 +982,11 @@ def _main():
               % (name, path, line, mine,
                  "" if mine == theirs else "  ** STALE, kernel says %d **"
                  % theirs))
-    print("os88geom: %d constants, %d problem(s); %d local copies, %d stale"
-          % (len(_MIRROR), len(problems), len(copies), len(stale)))
+    print("os88geom: kern_%s: %d constants (%d on this arm), %d problem(s); "
+          "%d local copies, %d stale"
+          % (ARM, len(_MIRROR),
+             sum(1 for k in _MIRROR if _armval(k) is not None),
+             len(problems), len(copies), len(stale)))
     return 1 if problems or stale else 0
 
 

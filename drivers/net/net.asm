@@ -54,6 +54,24 @@
 
     OS88_DRIVER 'os88net', DRVC_FILE, net_entry
 
+%define WZ_CLASS DRVC_FILE      ; the Wire's desktop icon (SPEC.md 26.7), and
+%include "wirezone.inc"         ; every byte of it is the DRIVER's: the
+                                ; kernel's zone is generic and carries no
+                                ; glyph, so a machine with neither driver pays
+                                ; for none of it. Shared with ETHER.DRV as
+                                ; SOURCE and never as a copy - whichever
+                                ; attaches first has the zone, and both reach
+                                ; the same Wire.
+                                ;
+                                ; UP HERE, above every call site, so wz_paint
+                                ; and wz_register are BACKWARD references:
+                                ; with the include at the foot of the file
+                                ; nasm sized `je nsk_wzpaint` on pass 1 and
+                                ; resized it on pass 2, which is
+                                ; `label changed during code generation`
+                                ; on three labels and no build
+
+
 ; --- the wire protocol, master side ------------------------------------------
 ; os8088 is always the master and never receives unsolicited data (NET-PLAN
 ; 1.3), so every exchange below is request-then-response and the multiplexer
@@ -262,6 +280,13 @@ net_attach:
 ; yet is an ordinary state, not an error, and the user has a Connect button.
 ; -----------------------------------------------------------------------------
 net_ready:
+    call wz_register            ; the Wire's desktop icon (SPEC.md 26.7), and
+                                ; ABOVE the cable test: a driver whose far end
+                                ; is not switched on yet is an ordinary state
+                                ; and the Wire's own window is what says so.
+                                ; A refusal here means ETHER.DRV already has
+                                ; the zone, which is fine - there is one, and
+                                ; both drivers reach the same Wire
     cmp byte [net_state], NS_PORT
     jne .out
     call net_connect            ; CF=1 = nobody answered; the page says so
@@ -278,6 +303,10 @@ net_ready:
 ; command that will never come, and puts the port back exactly as found.
 ; -----------------------------------------------------------------------------
 net_detach:
+    call wz_withdraw            ; **THE DESKTOP ICON FIRST** (SPEC.md 26.7):
+                                ; its paint verb lives in the image the kernel
+                                ; is about to free. A withdraw of a zone we do
+                                ; not hold is refused and costs nothing
     cmp byte [net_state], NS_LINKED
     jne .port
     mov byte [lp_turnw], TURN_RX    ; ...AND SHORT AGAIN FOR THE GOODBYE.

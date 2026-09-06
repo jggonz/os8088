@@ -48,6 +48,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88rate                                              # noqa: E402
+import os88qemu                                              # noqa: E402
 
 # Where things are on a 640x480 desktop with build/trkscrl.img in drive B:
 # the B: drive zone, and BEVERLY.MOD's row in the window it opens (it sorts
@@ -66,7 +67,7 @@ STEP, PACE = 60, 0.06               # tools/mouse.py's, for the same reasons
 
 # key, rows it moves the stopped view by. tests/trkscrl.inc owns the mapping;
 # Up and Down are here too so n = 1 is covered by the same comparison.
-JUMPS = [("down", 1), ("up", -1), ("j", 2), ("v", -2),
+JUMPS = [("down", 1), ("up", -1), ("j", 2), ("u", -2),
          ("k", 3), ("b", -3), ("n", 4), ("c", -4)]
 
 
@@ -182,6 +183,9 @@ def boot():
     for f in ("build/qmp.sock", "build/qemu.pid"):
         if os.path.exists(f):
             os.remove(f)
+    # `make test` DAEMONISES the emulator, so it outlives this script
+    # unless somebody kills it - and the somebody is us (os88qemu).
+    os88qemu.own()
     r = subprocess.run(["make", "test", "TESTAPPS=build/trkscrl.img"],
                        capture_output=True, text=True)
     if r.returncode:

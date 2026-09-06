@@ -93,7 +93,13 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'FRACTAL', fr_entry, 1
+    OS88_HEADER 'FRACTAL', fr_entry, 1, OS88_STACK_192
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; measured +60, static 48;
+                                ; the larger of the two wins
+                                ; over the 64-byte interrupt floor
+                                ; that is 124, and 192 gives 1.55x
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; The Mandelbrot silhouette: the cardioid body on the right, the period-2
@@ -243,7 +249,7 @@ FR_CRUN        equ 2                ; bytes per cached run
 FR_CACHE_KB0   equ 4                ; the first claim
 FR_CACHE_MAXKB equ 32               ; ...and where doubling stops
 
-FR_BSS_TOTAL equ 414                ; see the bss layout after OS88_IMAGE_END
+FR_BSS_TOTAL equ 415                ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; fr_entry - package entry point (SPEC.md 20.2)
@@ -277,6 +283,10 @@ fr_entry:
     mov [fr_win], bx
     mov si, fr_menus
     call OSAPI_MENU_SET             ; BX = the window, SI = our set
+    mov si, fr_about                ; ...and 'About Fractal' above the Close
+    call OSAPI_ABOUT_SET            ; the kernel already puts in our pull-down
+                                    ; (SPEC.md 12.2). Flags preserved, like
+                                    ; menu_win_set above
 .out:
     pop si                          ; POP leaves the flags alone
     ret
@@ -308,6 +318,14 @@ fr_paint:
     mov [fr_ox], ax
     mov [fr_oy], dx
     call fr_redraw
+    cmp byte [fr_abon], 0           ; ...and the About card LAST, over the
+    je .out                         ; canvas it is opaque about (SPEC.md 20.5.1)
+    push si
+    mov bx, [fr_win]                ; fr_redraw clobbers BX (its header says so)
+    mov si, fr_ablines
+    call os88ui_about_d             ; _d: this paint's region is already armed
+    pop si
+.out:
     pop bp
     pop di
     pop si
@@ -348,6 +366,8 @@ fr_onclick:
     push di
     push bp
     mov [fr_win], si
+    call fr_abdismiss               ; the credits are up: this click is spent
+    jc .out                         ; taking them down
     mov bx, si
     push cx
     push dx
@@ -412,7 +432,8 @@ fr_onclick:
 ; -----------------------------------------------------------------------------
 fr_oncmd:
     mov [fr_win], si
-    push ax
+    call fr_abdismiss               ; a menu pick takes the credits down first,
+    push ax                         ; and then does what it says
     mov bx, si
     call OSAPI_WM_CONTENT
     mov [fr_ox], ax
@@ -1689,6 +1710,12 @@ fr_emit_body:
                                     ; fr_prog counts COMPUTED rows only, which
                                     ; is what makes a repaint free of it
 .vis:
+    cmp byte [fr_abon], 0           ; the credits are up: the UI task owns the
+    jne .step                       ; content until a click or a menu pick
+                                    ; takes them down. The row was CACHED above
+                                    ; whatever happens here, so fr_redraw puts
+                                    ; back every band this skipped - which is
+                                    ; what fr_abdismiss calls
     mov bx, [fr_win]
     or bx, bx
     jz .step
@@ -2023,6 +2050,7 @@ fr_clear:
 ; out: DI advanced to the NUL it wrote; all other registers preserved
 ; -----------------------------------------------------------------------------
 fr_u2s:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -2052,6 +2080,75 @@ fr_u2s:
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
 ; 322 x 199 -> content 320 x 180 -> canvas 320 x 170. No W_ONKEY: everything
 ; this app does is a menu command or a click.
+; =============================================================================
+; 'About Fractal' - the credit card (SPEC.md 12.2, 20.5.1)
+; =============================================================================
+; The card is os88ui.inc's. What is here is the flag, the painter drawing it
+; last, the two handlers taking it down - and the one thing this app has that
+; Mines and Piano do not: a WORKER painting bands into the same content
+; eighteen times a second. fr_emit_body checks [fr_abon] under the lock right
+; after it has cached the row, so the picture is complete in the cache even
+; though those bands never reached the glass, and fr_redraw below puts every
+; one of them back.
+
+; -----------------------------------------------------------------------------
+; fr_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; in:  SI = our window ptr; the UI task, gfx lock HELD
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+fr_about:
+    push bx
+    push si
+    mov [fr_win], si
+    mov byte [fr_abon], 1
+    mov bx, si
+    mov si, fr_ablines
+    call os88ui_about               ; arms the clip itself: a menu dispatch
+    pop si                          ; arrives without one (SPEC.md 11.3)
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_abdismiss - take the card down if it is up
+; in:  SI = our window ptr; gfx lock held
+; out: CF = 1 the click was spent doing it; preserves every register
+;
+; fr_redraw and not the card's own rect: it replays the pass-0 cache, which
+; is both what was under the card AND every band the worker skipped while it
+; was up - one repaint settles both debts.
+; -----------------------------------------------------------------------------
+fr_abdismiss:
+    cmp byte [fr_abon], 0
+    je .none
+    push ax
+    push bx
+    push dx
+    mov byte [fr_abon], 0
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; the window may have been dragged since
+    mov [fr_ox], ax                 ; the card went up
+    mov [fr_oy], dx
+    mov bx, si
+    call OSAPI_WM_CLIP_SET          ; ...and nothing armed a region for a
+    jc .gone                        ; click either (SPEC.md 11.3)
+    call fr_redraw
+.gone:
+    pop dx
+    pop bx
+    pop ax
+    stc
+    ret
+.none:
+    clc
+    ret
+
+; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
+fr_ablines:
+    dw fr_ab1, fr_ab2, fr_ab3, 0
+fr_ab1:     db 'Fractal for os8088', 0
+fr_ab2:     db 0
+fr_ab3:     db 'Contributed by Jorge Gonzalez', 0
+
 fr_tpl:
     dw 150, 60, 322, 199
     dw fr_ttl, fr_paint, 0, fr_onclick
@@ -2159,6 +2256,11 @@ fr_pal_contour:
     db 15,15,14,14,13,13, 9, 9,12,12,15,15
     db  7, 7,11,11,14,14,12,12, 9, 9,13,13
 
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%define OS88UI_ABOUT            ; the standard About card, and NOTHING else:
+%define OS88UI_NOBTN            ; this window's controls are all menu items
+%include "os88ui.inc"
+
     OS88_BSS FR_BSS_TOTAL
     OS88_IMAGE_END
 
@@ -2222,6 +2324,7 @@ fr_c0row   equ os88_image_end + 398  ; word: the next pass-0 row not cached
                                      ; (>= ch once pass 0 is all in there)
 fr_cpos    equ os88_image_end + 400  ; word: the worker's replay cursor
 fr_ctlen   equ os88_image_end + 402  ; word: bytes of the row fr_take decoded
+fr_abon    equ os88_image_end + 414  ; byte: the About card is up
 fr_ccw     equ os88_image_end + 404  ; word: the canvas the cache was built for
 fr_cch     equ os88_image_end + 406  ; word:  - a mismatch invalidates it
 fr_crrow   equ os88_image_end + 408  ; word: fr_replay scratch - the row being

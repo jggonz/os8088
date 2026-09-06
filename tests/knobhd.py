@@ -42,9 +42,11 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+sys.path.insert(0, HERE)
 
 import os88marty                                           # noqa: E402
 import os88sym                                             # noqa: E402
+import instdeep                                            # noqa: E402
 
 KNOBS = ["BOOTPROF=1", "MOUDIAG=1"]
 DEFINES = ("BOOT_PROFILE", "MOU_DIAG")
@@ -61,12 +63,16 @@ def menu_bar_lit(px, w, h):
                if px[(y * w + x) * 3] < 128)
 
 
-def boot(machine, heap):
+def boot(machine, heap, run_dir):
     print("  %s ..." % machine)
     lin_live = os88sym.linear("spl_live", DEFINES)
     lin_fseg = os88sym.linear("spl_fseg", DEFINES)
     seen, fseg_seen, desktop = False, set(), False
-    with os88marty.launch(BLANK, machine=machine, boot=0) as m:
+    # `run_dir` is the tree the INSTALL wrote to - see main(). Both machines
+    # boot the same VHD, which is what they did before per-instance isolation
+    # and is what the row is about: one install, two adapters.
+    with os88marty.launch(BLANK, machine=machine, boot=0,
+                          run_dir=run_dir) as m:
         lin_entry = os88sym.linear("cold_entry", DEFINES)
         for i in range(500):
             m.advance(frames=6)
@@ -121,19 +127,38 @@ def main():
         heap = os88sym.equates(DEFINES)["HEAP_SEG"]
         print("  the knob kernel's HEAP_SEG is %04X" % heap)
 
-        env = dict(os.environ, OS88_DEFINES=" ".join(DEFINES))
-        print("  installing (tests/instdeep.py drives the installer)...")
-        r = subprocess.run([sys.executable, os.path.join(HERE, "instdeep.py")],
-                           cwd=ROOT, capture_output=True, text=True, env=env,
-                           timeout=1800)
-        if r.returncode != 0:
-            raise SystemExit("knobhd: the install failed:\n" + r.stdout[-2000:])
+        # ONE RUN TREE FOR THE INSTALL AND BOTH BOOTS. The install and the
+        # boots are different machines - the install needs the system floppy
+        # in fd:0 and a boot needs a blank one so GLaBIOS offers its menu -
+        # but they have to be those machines over ONE VHD. It used to work
+        # because every instance mounted the shared master disk; per-instance
+        # isolation gave each its own clone and `close()` deletes a private
+        # one, so the install went into a directory that vanished and each
+        # boot opened a fresh clone of the pristine master. Both adapters then
+        # reported "the loading screen never came up", which reads as a knob
+        # kernel that will not boot (docs/HANDOFF-SOAK-FINDINGS.md B1).
+        #
+        # In-process rather than a subprocess, so the knob DEFINES set above
+        # are the ones the installer resolves symbols with - that is what the
+        # OS88_DEFINES environment variable was carrying.
+        run_dir = os88marty.stage_run_dir("knobhd")
+        print("  installing (tests/instdeep.py's own installer, on this tree)...")
+        with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
+                              machine=instdeep.MACHINE,
+                              run_dir=run_dir) as m:
+            os88marty.settle(m)
+            instdeep.install(m)
+            v = instdeep.partition(instdeep.vhd(m))
+        missing = [q for q in instdeep.WANT_FILES if q not in v.tree()]
+        if missing:
+            raise SystemExit("knobhd: the install failed (%s missing)"
+                             % ", ".join(missing))
 
         if not os.path.exists(BLANK):
             with open(BLANK, "wb") as f:    # no boot signature, so GLaBIOS
                 f.write(bytes(368640))      # offers its menu and C: is the disk
         for machine in MACHINES:
-            boot(machine, heap)
+            boot(machine, heap, run_dir)
     finally:
         subprocess.check_call(["make"], cwd=ROOT, stdout=subprocess.DEVNULL)
 

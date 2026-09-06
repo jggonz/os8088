@@ -62,9 +62,30 @@
                                     ; are in
 %define CC_ICON "c64/icon.inc"      ; the 16x16 breadbin, drawn for this port
 
+%define CC_HAS_PARTS                ; THE ROM IS IN THE PACKAGE (C64-SPEC 1.4,
+                                    ; SPEC.md 20.12). It was C64.ROM, a
+                                    ; 20,480-byte sidecar that a file copy
+                                    ; could separate from the program it is
+                                    ; useless without - and the port carried a
+                                    ; whole halted-machine state, a permanent
+                                    ; status row and three greyed menu items
+                                    ; to say so when it went missing. A part
+                                    ; cannot go missing
+
 %include "cc/crt0.asm"              ; the sections, the 32-byte header, the
                                     ; entry and callback trampolines, and the
                                     ; whole API bridge
+
+; --- the parts table (SPEC.md 20.12.3) ---------------------------------------
+; ONE part: the KERNAL, BASIC and character generator, in C64-SPEC 1.4's fixed
+; layout, exactly as the sidecar carried them. It is an ASSET rather than a
+; SEGMENT because nothing in it is far-called - the 6510 core reaches it
+; through segment arithmetic off its base (c64cpu.inc 4.3), which is what an
+; ASSET is for - and it is REQUIRED, so a machine that cannot spare its 20KB
+; refuses the launch instead of starting a C64 with no ROM in it.
+    CC_PARTS_BEGIN 1
+      OS88_PART OP_ASSET
+    CC_PARTS_END
 
 %include "c64.gen.asm"              ; the compiled C, found through -I build/
 

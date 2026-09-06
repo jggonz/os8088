@@ -1,35 +1,18 @@
 build/
 .DS_Store
 
-# 86Box writes NVRAM and dumped BIOS ROMs next to the VM config
-vm/xt/nvr/
-vm/xt640/nvr/
-vm/xt-cga/nvr/
-vm/xt-hercules/nvr/
-vm/xt-ega/nvr/
-vm/xt-multimon/nvr/
-vm/286/nvr/
-vm/386sx/nvr/
-vm/386dx/nvr/
-vm/386-ps2/nvr/
+# 86Box writes NVRAM and dumped BIOS ROMs next to the VM config.
+# ONE WILDCARD, because the per-machine list drifted: it was 26 lines naming
+# 26 of the 32 vm/ directories, and the six it had fallen behind on - 286-525,
+# 286-runcpm, 386-xms, xt-runcpm, xt-sound-1.44, xt-weave-256 - would each have
+# committed a BIOS ROM dump the first time anybody booted them. CLAUDE.md says
+# every nvr/ is gitignored; this is what makes that true, and true for the next
+# machine as well. vm/*/screenshots/ below has always been this shape.
+vm/*/nvr/
+# ...and 86Box's own screenshot directory. The collapse above dropped it by
+# accident - the comment has named it as present ever since, and main still
+# carried it, so the merge is where it comes back.
 vm/*/screenshots/
-vm/xt-sound/nvr/
-vm/286-sound/nvr/
-vm/386-sound/nvr/
-vm/486/nvr/
-vm/pentium/nvr/
-vm/xt-z/nvr/
-vm/386-z/nvr/
-vm/xt-word/nvr/
-vm/386-word/nvr/
-vm/386-c-word/nvr/
-vm/386-runcpm/nvr/
-vm/386-c64/nvr/
-vm/xt-c64/nvr/
-vm/286-c64/nvr/
-vm/xt-weave/nvr/
-vm/386-weave/nvr/
-vm/xt-mfm/nvr/
 
 # Page snapshots the Playwright MCP server drops in the working directory
 .playwright-mcp/

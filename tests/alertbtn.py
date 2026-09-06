@@ -28,8 +28,6 @@ right by luck still fails here.
 import argparse
 import os
 import sys
-import threading
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -114,31 +112,22 @@ def main(argv):
         BTN = base + pm["os88ui_btn"]
 
         def counted(label, act):
-            """os88ui_btn calls over one gesture, and the state it left."""
-            n, done = [0], []
-            m.bp_exec(BTN)
-            threading.Thread(target=lambda: (time.sleep(0.6), act(),
-                                             done.append(1)),
-                             daemon=True).start()
-            t0, quiet = time.time(), None
-            while time.time() - t0 < 120.0:
-                st = m.status()
-                if st.get("state", "running") != "running":
-                    n[0] += 1
-                    quiet = time.time()
-                    m.run()
-                    continue
-                if done and quiet and time.time() - quiet > 3.0:
-                    break
-                if done and quiet is None and time.time() - t0 > 12.0:
-                    break
-                time.sleep(0.05)
-            m.breakpoints([])
-            m.run()
+            """os88ui_btn calls over one gesture, and the state it left.
+
+            THE COUNTER IS os88marty.bp_count NOW, and it used to be this loop
+            written out here - counting any state that was not "running" and
+            counting each report rather than each stop. Both are wrong and
+            both inflate: the driving thread's own advance(frames=) pauses the
+            guest, and a resume has not always landed by the next status().
+            This row asserts an EXACT count of 1, so either was a spurious
+            failure of a control that was behaving. Its docstring is the
+            account; tests/alertanim.py is where they were measured.
+            """
+            n = os88marty.bp_count(m, BTN, act)
             d = m.read(DOWN, 1)[0]
             print("   %-24s %d os88ui_btn call(s), [os88ui_adown] = %d"
-                  % (label, n[0], d))
-            return n[0], d
+                  % (label, n, d))
+            return n, d
 
         n, d = counted("press on Discard",
                        lambda: (mo.to(disc, by), mo._edge(True)))

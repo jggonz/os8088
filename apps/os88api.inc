@@ -394,6 +394,24 @@ SND_OPENF_RING   equ 1           ; ring mode (SPEC.md 34.5): SI = ring base,
                                  ; after OSAPI_WM_CREATE. A resizable
                                  ; window's paint/click procs MUST lay out
                                  ; from the live W_W/W_H every call.
+%define OSAPI_WM_NOANIM     KERNEL_SEG:0x04F0   ; BX = win ptr; NO other argument and
+                                 ; no answer: this window does not zoom
+                                 ; open (SPEC.md 11.99.2.1). Call it
+                                 ; between OSAPI_WM_CREATE and
+                                 ; OSAPI_WM_SHOW. For a DIALOG - something
+                                 ; the user opens and dismisses over and
+                                 ; over, or that arrives in answer to a
+                                 ; click they meant as something else - a
+                                 ; third of a second of outline in front
+                                 ; of it reads as the machine getting in
+                                 ; the way; the Standard File dialog, the
+                                 ; notice window and os88ui.inc's alert
+                                 ; all decline. Not for your MAIN window:
+                                 ; whether the system animates at all is
+                                 ; the user's choice (Control Panel ->
+                                 ; Theme), not an application's. There is
+                                 ; no clear, and no AL is read - see
+                                 ; 11.99.2.1 for why.
 %define OSAPI_FULLSCREEN    KERNEL_SEG:0x0110   ; AL = 1 enter (BX=win ptr) / 0 exit;
                                  ; caller holds the gfx lock (window
                                  ; callbacks do); out CF=1 enter refused
@@ -583,6 +601,93 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
                                  ; window, frees your instance and
                                  ; releases your region, and your task
                                  ; ends inside this call.
+
+; --- running a package you are HOLDING (SPEC.md 21.5) -------------------------
+; The loader's back half with the disk read replaced by a copy. It exists for
+; the Wire (SPEC.md 26.7), which fetches a .O88 over the network into a claim
+; and has nowhere to put it: everything else in this system launches a package
+; by naming a FILE, and there is no file here.
+%define OSAPI_PKG_RUN       KERNEL_SEG:0x04F8   ; ES:SI = a package image, byte for byte
+                                 ; what the .O88 file holds, in a claim of
+                                 ; YOURS. ANY segment - it is COPIED into a
+                                 ; region of the kernel's own, never
+                                 ; adopted, so you may free your claim the
+                                 ; moment this returns. DX:CX = its length
+                                 ; in bytes, DX the high word. DI = a
+                                 ; NUL-terminated 8.3 name, at most 12
+                                 ; characters, in YOUR OWN segment (not
+                                 ; ES): what the new instance is told it
+                                 ; was launched from, which is its entry
+                                 ; proc's SI (SPEC.md 20.2).
+                                 ;
+                                 ; Out CF=0 with AX = 0: it is registered,
+                                 ; published and its window shown, exactly
+                                 ; as a Disk-window double-click leaves
+                                 ; one. CF=1 with AL = an LD_* code
+                                 ; (SPEC.md 21.4): 2 the header is not a
+                                 ; package's, or it carries PARTS (header
+                                 ; flags bit 2 - parts are read from the
+                                 ; package's own FILE and there is none
+                                 ; here); 3 too large; 4 its entry proc
+                                 ; declined; 5 no region or no instance
+                                 ; record.
+                                 ;
+                                 ; UI TASK ONLY - a window callback or an
+                                 ; OSAPI_WM_ONWAKE handler - with the gfx
+                                 ; lock NOT held. It takes the lock itself
+                                 ; around the new window's first paint, and
+                                 ; the entry proc it calls runs with the
+                                 ; lock free like every other package's.
+                                 ;
+                                 ; The new instance's CURRENT DIRECTORY is
+                                 ; YOURS at the time of the call (SPEC.md
+                                 ; 19.2.1), so a package with an overlay or
+                                 ; sidecars run this way looks for them
+                                 ; where you are standing. Run one that has
+                                 ; them from a disk instead.
+
+; --- the desktop SERVICE zone, DRIVERS ONLY (SPEC.md 26.7) --------------------
+; A driver puts an icon on the desktop. It is here rather than in
+; drivers/os88drv.inc for OSAPI_FILE_WRITE_SYS's reason: a driver assembles
+; against this same file, and an application author reading the list is owed
+; the refusal's reason rather than a silent CF=1.
+;
+; The kernel keeps no glyph and no name: it holds the record, draws the
+; caption, hit-tests the zone and launches the file, and calls the DRIVER back
+; to paint the picture. That is the whole design - most XTs have no network
+; card, and a desktop icon whose art sat in every kernel would be carried by
+; every machine that cannot use it.
+%define OSAPI_DESK_SVC      KERNEL_SEG:0x0500   ; AL = 1 add / 0 withdraw;
+                                 ; ES:SI = a 65-byte record in YOUR segment
+                                 ; (add only):
+                                 ;   +0  12  the caption, NUL (<= 11 chars)
+                                 ;   +12 13  the 8.3 file the zone launches,
+                                 ;           from the BOOT volume's SYSTEM/
+                                 ;   +25  1  your DRVC_* class
+                                 ;   +26  1  the verb the kernel calls to
+                                 ;           PAINT the icon: CX,DX = its
+                                 ;           top-left, the gfx lock HELD, and
+                                 ;           it MUST NOT touch your hardware -
+                                 ;           a desktop repaint can land while
+                                 ;           another task is inside one of
+                                 ;           your other verbs
+                                 ;   +27 12  the package's HEADER name, NUL -
+                                 ;           what makes the zone a singleton
+                                 ;   +39 26  the failure notice's lead line,
+                                 ;           NUL ('Cannot open Wire:')
+                                 ; out CF=1 refused: not a published driver
+                                 ; (OSAPI_VOL_ADD's own fence), a second
+                                 ; registration - there is ONE zone and
+                                 ; whoever attaches first has it - or a
+                                 ; withdraw of somebody else's.
+                                 ;
+                                 ; The record is COPIED, so it may be
+                                 ; anything of yours; the kernel terminates
+                                 ; the caption itself and trusts the other
+                                 ; three the way it trusts your DSV table.
+                                 ; WITHDRAW AT DETACH: the kernel is about to
+                                 ; free the image your paint verb lives in.
+                                 ; drivers/wirezone.inc is the worked example.
 
 ; --- the clip region (SPEC.md 11.3) -------------------------------------------
 ; What replaced the wm_obscured veto for background painters. Arm it under
@@ -1036,9 +1141,12 @@ CPU_F_X87           equ 0x08     ; an 8087/287/387 IS IN THE SOCKET, probed
 ; The first three answer questions about the SYSTEM rather than about you: the
 ; scheduler and the instance table, the claim map, and how big the kernel is.
 ; Every one of them fills a buffer YOU own, through ES:DI, and returns a count
-; so a package built against an older SDK finds out that a table has grown
-; rather than walking off the end of its own buffer. Any context - they take
-; no lock and touch no VRAM.
+; so a package built against an older SDK finds out that a table has grown.
+; THE COUNT DOES NOT SHORTEN THE WRITE: the kernel fills the whole layout, so
+; what keeps an old buffer from being overrun is that the layout is pinned at
+; a ceiling (SS_TMAX below) rather than at the live MAX_TASKS - it moved once,
+; 8 -> 14, and a stale TASKMGR was written 30 bytes past its buffer. Any
+; context - they take no lock and touch no VRAM.
 ;
 ; These exist because a task monitor cannot be written without them, and one
 ; had to be liftable out of the kernel. Nothing stops another app using them,
@@ -1092,8 +1200,13 @@ SS_TSTATE  equ 6                ; MAX_TASKS bytes, the kernel's T_STATE - with
                                 ; (SPEC.md 8). There is no "running" state -
                                 ; the running task is SS_CUR, and its T_STATE
                                 ; is 1 like any other ready task
-SS_TCYC    equ SS_TSTATE + MAX_TASKS       ; MAX_TASKS dwords: cycles per task
-SS_INST    equ SS_TCYC + MAX_TASKS * 4     ; ...then the instance records
+SS_TMAX    equ 16               ; the LAYOUT's ceiling on MAX_TASKS, so the
+                                ; offsets below stop moving with the count:
+                                ; 8 -> 14 moved SS_INST by 30 bytes, and a
+                                ; TASKMGR built against the old SDK was
+                                ; written past its own buffer by exactly that
+SS_TCYC    equ SS_TSTATE + SS_TMAX         ; SS_TMAX dwords: MAX_TASKS dwords: cycles per task
+SS_INST    equ SS_TCYC + SS_TMAX * 4       ; ...then the instance records
 SSI_STATE  equ 0                ; byte: 0 free, 1 live, 2 dying
 SSI_TASK   equ 1                ; byte: its task slot, 0xFF = task-less
 SSI_KIND   equ 2                ; byte: bit 7 (KIND_PKG) = a loaded package
@@ -1142,7 +1255,7 @@ MEM_K_BAND  equ 0xFF0A          ; the 1bpp band composer's buffer (SPEC.md 5.9.2
 ; now (SPEC.md 2.9.6) and is not a claim at all, so the tag is retired and
 ; LEFT UNUSED - a value that meant one thing in a shipped kernel and another
 ; in the next is a collision a debug read cannot see.
-MEM_K_HIB   equ 0xFF0C          ; the resume's extent list (SPEC.md 86.5)
+MEM_K_HIB   equ 0xFF0C          ; the resume's extent list (SPEC.md 87.5)
 
 MEM_PG_TRIV equ 0xFB            ; the purge tiers (SPEC.md 50.6.4), low to
 MEM_PG_LOW  equ 0xFC            ; high: what LOSING the block costs, which is
@@ -1162,11 +1275,14 @@ MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window (18.95
 
 ; --- OSAPI_SYS_KB's buffer, all in KB ----------------------------------------
 SK_KERN    equ 0                ; word: the whole kernel span
-SK_IMG     equ 2                ; word: image + scratch + cold code
+SK_IMG     equ 2                ; word: image + scratch + cold code + the
+                                ; kernel's own tables, which are .bss in every
+                                ; sense but the segment that holds them
 SK_FAT     equ 4                ; word: the mount-time FAT window
 SK_STK     equ 6                ; word: the background task stacks
 SK_STK0    equ 8                ; word: task 0's - the UI task's
-SK_DSK     equ 10               ; word: the disk buffers
+SK_DSK     equ 10               ; word: the three disk buffers, and no longer
+                                ; whatever else shared their segment
 SK_BUF     equ 12               ; word: FAT + stacks + disk buffers together
 SK_HEAP    equ 14               ; word: the claim heap's size
 SK_CLAIM   equ 16               ; word: claimed out of it, every owner - and
@@ -1178,13 +1294,29 @@ SK_KCLAIM  equ 18               ; word: ...of which the kernel's own
 SK_XMS     equ 20               ; word: the pool above 1MB, 0 with no store
 SYSKB_SIZE equ 22
 
-MAX_TASKS  equ 8                ; the scheduler's slots (SPEC.md 8) - a bound
+SCH_STACK  equ 384              ; THE LARGEST SLOT CLASS (SPEC.md 8.7), which
+                                ; is the only slice size a package may assume
+                                ; anything about. Your worker gets the smallest
+                                ; free slice that is at least what you asked
+                                ; for - so it can be BIGGER than your class,
+                                ; and anything sizing a window against "my
+                                ; stack" has to use this maximum or the window
+                                ; comes out short. apps/cc/crt0.asm's cc_iswk
+                                ; is the one thing in the tree that does.
+                                ; Mirrored from kernel/sched.inc and checked by
+                                ; tests/unit/t_mirror.py
+MAX_TASKS  equ 14               ; the scheduler's slots (SPEC.md 8) - a bound
 INST_MAX   equ 12               ; running instances (SPEC.md 29.1)   on the
 MEM_MAX    equ 32               ; claim records (SPEC.md 50)         buffers
                                 ; above, and each call answers the live figure
-                                ; so a stale SDK is a caught mismatch and not
+                                ; so a stale SDK can SEE the mismatch - the
+                                ; snapshot's layout is pinned at SS_TMAX so it
+                                ; is not also an overrun; the other two are
                                 ; an overrun
 KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
+%if MAX_TASKS > SS_TMAX
+  %error "MAX_TASKS has outgrown the snapshot's layout: raise SS_TMAX in BOTH kernel/instance.inc and apps/os88api.inc, and every package built against the old SDK overruns its buffer"
+%endif
 
 %define OSAPI_CPU_INFO      KERNEL_SEG:0x0188   ; no inputs; out AL = CPU_8086 /
                                  ; CPU_286 / CPU_386, AH = feature bits: bit 0
@@ -1748,6 +1880,17 @@ FERR_PROT    equ 8               ; read-only/hidden/system/label/directory
 FERR_WPROT   equ 9               ; the media is write-protected
 FERR_BIG     equ 10              ; larger than the buffer (or than 64KB)
 
+WF_NOANIM  equ 0x4000            ; W_FLAGS bit14: this window does NOT zoom
+                                 ; open (SPEC.md 11.99.2). Set it with
+                                 ; OSAPI_WM_NOANIM, never by hand. Named here
+                                 ; because the W_FLAGS comment below stops at
+                                 ; bit 3 and the HIGH BYTE is not free: it is
+                                 ; SPEC.md 7.2.1's cursor shape with this bit
+                                 ; and two more kernel ones living in it, so
+                                 ; a package reading the whole word gets a
+                                 ; number it did not expect. The kernel masks
+                                 ; them off both ways round, which is why
+                                 ; OSAPI_WM_CURSOR does not clear this one
 WF_SIZABLE equ 4                 ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                 ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
 WF_NOSNAP  equ 16                ; W_FLAGS bit4: this window has OPTED OUT of
@@ -1787,8 +1930,18 @@ MENU_APPMAX equ 5           ; menus the bar can host per app; extras are
                             ; title that would reach the clock's band, so
                             ; five SHORT titles fit where four long ones may
                             ; not (SPEC.md 12.2)
-MENU_MAXCH  equ 24          ; glyphs of item text a pull-down shows; longer
-                            ; items are TRUNCATED, not wrapped
+MENU_MAXW   equ 208         ; widest pull-down, px (frame + 8px padding).
+                            ; Mirrored from kernel/menu.inc, and it is here
+                            ; only so that MENU_MAXCH below can be DERIVED the
+                            ; way the kernel derives it: the two were `24` and
+                            ; `(MENU_MAXW - 16) / 8`, agreeing by arithmetic
+                            ; accident, and the day the kernel's width moves
+                            ; off 208 the kernel's glyph count follows and a
+                            ; literal here does not. tests/unit/t_mirror.py
+                            ; now compares this number, which is the half a
+                            ; name-matching gate can actually check
+MENU_MAXCH  equ (MENU_MAXW - 16) / 8    ; glyphs of item text a pull-down
+                            ; shows; longer items are TRUNCATED, not wrapped
 MENU_DIS    equ 1           ; an item string that BEGINS with this byte is
                             ; DISABLED: the kernel draws the rest of it grey
                             ; and never highlights or selects it. Point the
@@ -1894,7 +2047,38 @@ WT_SIZE    equ 16
 ; declares an embedded icon, which must follow immediately as a
 ; OS88_ICON16 .. OS88_ICON16_END block.
 ; -----------------------------------------------------------------------------
-%macro OS88_HEADER 2-3
+; The header FLAGS byte, by name (SPEC.md 20.2). OS88_F_PARTS is emitted by a
+; package that carries parts and is the ONE thing the kernel learns about them
+; (SPEC.md 20.12) - apps/os88parts.inc is the rest, and it is package code.
+OS88_F_ICON   equ 1             ; an embedded 16x16 icon follows the header
+OS88_F_ASSOC  equ 2             ; ...and an association block follows that (54.6)
+OS88_F_PARTS  equ 4             ; the FILE is longer than the image, on purpose
+
+; --- OS88_STACK_* : what to pass as OS88_HEADER's 4th argument (SPEC.md 8.7)
+; Your worker's stack class. The kernel owns the sizes; you name the one you
+; need and it gives you the smallest free slice that is at least that big, or
+; refuses with CF=1 - which SPEC.md 20.6 already requires you to degrade on.
+;
+; SAY NOTHING AND YOU GET THE LARGEST, which is what every package built before
+; this field got and still gets. Declaring is how a program that does not need
+; 384 bytes stops holding one, so that the machine can run more programs at
+; once - it buys you nothing on its own and it is not a micro-optimisation to
+; skip: six slices was the whole supply.
+;
+; tools/stkdepth.py prints your worker's deepest static chain; add the kernel's
+; interrupt floor, which docs/STACK-SLOTS-PLAN.md 7.1 puts at 64 on the worst
+; real machine measured, and pick the class above the sum with margin.
+OS88_STACK_DEFAULT equ 0        ; the largest. What you get by saying nothing
+OS88_STACK_128     equ 1        ; a worker that sleeps and wakes: a close
+                                ; watcher, a caret blink, a transport poll
+OS88_STACK_192     equ 2        ; most workers. The modal class
+OS88_STACK_256     equ 3        ; a worker that draws through a deep chain
+OS88_STACK_384     equ 4        ; the largest, asked for on purpose: a deep
+                                ; interpreter, or anything that talks to
+                                ; ETHER.DRV, whose socket verbs cost ~126
+                                ; bytes on YOUR stack (SPEC.md 72)
+
+%macro OS88_HEADER 2-4
     cpu 8086
     bits 16
     org 0                   ; v3: you own a segment, so you link at zero and
@@ -1914,10 +2098,17 @@ WT_SIZE    equ 16
     dw OS88_BSS_SIZE         ; +10 bytes the loader zeroes after the image
     db 0FFh, 0D5h           ; +12 THE DISPATCHER: `call bp`...
     db 0CBh                 ; +14 ...`retf`. The kernel far-calls this fixed
-    db 0                    ; +15 offset with BP = the callback it wants,
+                            ;     offset with BP = the callback it wants,
                             ;     which is why your paint/key/click procs are
                             ;     ordinary near procs ending in `ret` and you
                             ;     never write `retf` (SPEC.md 20.1/20.2)
+    %if %0 >= 4
+    db %4                   ; +15 the worker's stack class (SPEC.md 8.7) - an
+    %else                   ;     OS88_STACK_* above. This byte padded the
+    db 0                    ;     dispatcher to a word for three format
+    %endif                  ;     versions and was always 0, which is why it
+                            ;     could be given a meaning without moving the
+                            ;     header version: 0 IS the old behaviour
     %strlen %%len %1
     %if %%len > 15
         %error "OS88_HEADER: program name must be at most 15 characters (the 16-byte field is NUL-padded)"
@@ -2819,6 +3010,28 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; so it is NOT the one to call before showing a
                                  ; folder, and it does not move your app's own
                                  ; current folder the way GOTO does.
+                                 ;
+                                 ; **ON A REDIRECTED VOLUME IT NOW TELLS THE
+                                 ; DRIVER**, which it did not and should have
+                                 ; (SPEC.md 62.9.1). A DRVC_FILE driver keeps
+                                 ; its own idea of where it stands - FSV_STAT
+                                 ; resolves a name in the CURRENT folder - so
+                                 ; writing the kernel's word behind its back
+                                 ; left the two disagreeing and every name you
+                                 ; then asked about was looked up in the folder
+                                 ; you came FROM, presented as FERR_NOENT for a
+                                 ; file that is plainly listed.
+                                 ;
+                                 ; THE PRICE IS THE CLOBBER SET, and it is only
+                                 ; a price on a redirected volume: the call can
+                                 ; now reach FSV_CHDIR, and a driver's verb owns
+                                 ; every register the FSV ABI does not reserve.
+                                 ; BX and DX are still preserved by the kernel
+                                 ; and AX is still the answer; **CX, SI and DI
+                                 ; are the driver's** on a DVK_FILE volume and
+                                 ; unchanged on every other. Bank them if you
+                                 ; hold anything across this call - the same
+                                 ; rule the file cells have always had.
 
 %define OSAPI_FILE_GOTO_QM  KERNEL_SEG:0x0460   ; DX = a folder's first cluster
                                  ; (0 = the root), BL = the volume. out exactly

@@ -955,10 +955,12 @@ static void c64_status(int ox, int y, int w)
      * The message still goes up first: it is how the jam ARRIVES. */
     msg = (c64_msg[0] != 0) ? 1
         : (c64_state == C64_ST_JAM) ? 3
-        : (c64_norom ? 2 : 0);
-    t = (msg == 1) ? c64_msg
-      : (msg == 2) ? "C64.ROM missing - see README.TXT"
-      : c64_jamline;
+        : 0;                                /* ...and `C64.ROM missing - see
+                                             * README.TXT` was msg == 2, until
+                                             * the ROM became a PART and
+                                             * stopped being a thing that can
+                                             * go missing (1.4) */
+    t = (msg == 1) ? c64_msg : c64_jamline;
     mshort = (msg != 0 && c64_slen(t, C64_MSGSHORT) <= C64_MSGSHORT) ? 1 : 0;
     joy1 = c64_joyswap ? c64_joy2 : c64_joy1;
     joy2 = c64_joyswap ? c64_joy1 : c64_joy2;
@@ -1436,15 +1438,14 @@ static void c64_flush(void *win)
     c64_sig_ok = 0;
 
     /* --- THE MESSAGE DEADLINE, AT THE TOP, BEFORE ANY BRANCH CAN RETURN ---
-     * It used to live down beside the status row, AFTER the ROM-less branch
-     * below returns - so on a disk with no C64.ROM nothing ever cleared
-     * c64_msg and the first menu command a user picked owned the row for the
-     * rest of the session, hiding §1.4's permanent `C64.ROM missing - see
-     * README.TXT` behind `Warp mode on.` for ever (c64_status picks msg == 1
-     * over msg == 2). The JAM half of the same rule worked only because a
-     * jammed machine is not c64_norom and its flush reached the far end.
-     * There is exactly one writer of c64_msg (c64_say) and this is its one
-     * reader of the clock: it belongs where EVERY flush passes through it.
+     * It used to live down beside the status row, AFTER a branch that
+     * returned early - the ROM-less machine's four-line notice, which is gone
+     * now the ROM is a part (1.4) - so nothing ever cleared c64_msg on that
+     * path and the first menu command a user picked owned the row for the
+     * rest of the session. It stays at the top: there is exactly one writer
+     * of c64_msg (c64_say) and this is its one reader of the clock, so it
+     * belongs where EVERY flush passes through it, whatever branches get
+     * added below it later.
      *
      * os88_ticks() is a 16-bit 18.2 Hz counter that wraps about once an hour
      * (os88.h:612), so `ticks > until` takes a message down AT ONCE when it
@@ -1456,41 +1457,16 @@ static void c64_flush(void *win)
                                              * c64_status is what redraws the
                                              * widgets under it */
 
-    /* the machine that was never started: the fact, on the glass, in the
-     * kernel's own face because the C64's is in the file that is missing */
-    if (c64_norom) {
-        /* AND IT IS DRAWN ONCE, NOT ON EVERY FLUSH. c64_sh_ok already means
-         * exactly "the glass is ours and we know what is on it", so it is the
-         * gate: an expose clears it (c64_sh_inval / c64_blank_rect) and the
-         * banner comes back, and a wake driven only by a live message costs
-         * the status row alone. Unconditional, this was 1 fill + 4 font_run
-         * over 124 glyph cells - ~115 ms - EVERY flush, and a message puts
-         * the flush on a loop: c64_say raises c64_dirty_any, os88_onwake
-         * flushes while a message is up and re-posts the wake while one is
-         * up, and the message lives ~5 seconds. Every menu command on a
-         * ROM-less machine answers through c64_say, so every one of them
-         * bought ~45 repaints of an unchanging four-line notice - five
-         * seconds of solid drawing at a ~100% duty cycle. */
-        if (!c64_sh_ok) {
-            os88_set_color(OS88_BLACK);
-            os88_gfx_fill(ox, oy, ox + w - 1, sty - 1);
-            os88_font_run(sx, sy + 40, "C64.ROM is not on this disk.",
-                          OS88_WHITE, OS88_BLACK);
-            os88_font_run(sx, sy + 56, "The machine cannot start without",
-                          OS88_WHITE, OS88_BLACK);
-            os88_font_run(sx, sy + 66, "its KERNAL, BASIC and character",
-                          OS88_WHITE, OS88_BLACK);
-            os88_font_run(sx, sy + 76, "ROMs. Put C64.ROM in this folder.",
-                          OS88_WHITE, OS88_BLACK);
-#ifdef C64_HOST
-            c64_n_fill++;
-#endif
-        }
-        c64_dirty_any = 0;
-        c64_sh_ok = 1;
-        c64_status(ox, sty, w);
-        return;
-    }
+    /* THE ROM-LESS BANNER WAS HERE, and it is deleted rather than disabled.
+     * `C64.ROM is not on this disk.` over four lines, drawn once and repaired
+     * on an expose, was what a machine that could not start showed - and with
+     * the ROM a PART of C64.O88 (1.4, SPEC.md 20.12) there is no such
+     * machine: op_load has the 20KB and the bytes before os88_main runs, or
+     * the launch was refused before a sector was spent. A branch kept alive
+     * for a state that cannot arise is a claim the code makes and the machine
+     * cannot honour, which is SPEC.md 47's rule about a greying said one
+     * level up. */
+
 
     c64_frame_regs();
     c64_dirty_scan();
@@ -1805,25 +1781,9 @@ static void c64_blank_rect(void *win, int x1, int y1, int x2, int y2)
     sy = c64_gsy;
     sty = c64_gsty;
 
-    if (c64_norom) {
-        /* THE ROM-LESS SURFACE HAS NO SHADOW AND NO PER-ROW FORCE RECORDS -
-         * it is four lines of the KERNEL's face on a fill, drawn by the
-         * branch at the top of c64_flush - so a partial expose of it cannot
-         * be repaired by the machinery below, and gating that branch on
-         * c64_sh_ok (which is what stops it repainting ~45 times per message)
-         * left an exposed strip of it blank for ever. c64_sh_ok is what the
-         * branch reads, so clearing it here IS the repair. It costs 1 fill +
-         * 4 font_run over 124 glyph cells, ~115 ms, against the ~303 ms an
-         * ordinary full expose of the machine costs (9.7) - and it happens
-         * only on an expose, which is the one event that has to pay for a
-         * repaint. Intersecting the damage with four fixed text lines would
-         * save some of that and is more mechanism than a four-line notice is
-         * worth. */
-        c64_sh_ok = 0;
-        c64_st_ok = 0;
-        c64_dirty_any = 1;
-        return;
-    }
+    /* THE ROM-LESS SURFACE'S EXPOSE REPAIR WAS HERE, and it went with the
+     * banner it repaired (1.4): a machine with no ROM cannot exist now the
+     * ROM is a part of the package. */
     if (y1 < sy || x1 < sx || x2 >= sx + C64_COLS * c64_scw
         || y2 >= sty - C64_BORDER)
         c64_border_dirty = 1;               /* the rect reaches the border */

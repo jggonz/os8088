@@ -331,13 +331,12 @@ the invariant is auditable, and it is pinned in SPEC §34, not left as folklore.
         cmp  ax, bp               ; late by more than one period?
         jbe  .emit
         mov  di, dx               ; RESYNC: drop samples, never burst catch-up writes
-        inc  word [snd_pcm_resync]; debug counter, the Phase 2 floor gate reads it
 .emit:  out  42h, al              ; 14 - the pulse (sample restored to AL first)
         add  di, bp               ; next deadline
         ; abort checks, on the emit path only (~45 cycles):
         ;   mov al,[mouse_btn] / and [snd_btn0],al   <- FOLD RELEASES INTO THE BASELINE
         ;   then a bit set in AL but not in snd_btn0 -> exit CF=1 (click-to-skip)
-        ;   [snd_abort] set (snd_stop / release path) -> exit CF=1
+        ;   [snd_abort] set (snd_release_inst, its only writer) -> exit CF=1
         loop .next
 ```
 
@@ -365,7 +364,7 @@ now but clear in the baseline. The fold is what makes the canonical case work: c
 start from W_ONCLICK handlers — dispatched on EVT_MDOWN with the button *still held* —
 so the baseline starts with bit 0 set; the release retires it, and the next press
 differs from the baseline and aborts. (Without the fold, no left click could ever
-abort a click-launched clip.) `snd_abort` (set by `snd_stop` and `snd_release_inst`)
+abort a click-launched clip.) `snd_abort` (set by `snd_release_inst`, its only writer)
 is checked in the same window. On click-abort the kernel **drains the aborting
 EVT_MDOWN (and its EVT_MUP) from the event queue** before returning err 5, so the
 skip gesture cannot fire a menu, close box, or icon under the cursor. No code is added
@@ -731,7 +730,9 @@ kernel image changes even when nothing sound-side ships on disk).
 - **Phase 2 — speaker PCM + Control Panel page.** `spk_pcm_run` (ch0-latch pacer,
   sch_lock window, resync rule, release-folding click-abort + event drain), far xlat
   builder, slot 0x0080 live, CP Sound page (route radio, excl checkbox, Test button),
-  `snd_excl_ok` policy, `snd_pcm_emitted`/`snd_pcm_resync` debug counters.
+  `snd_excl_ok` policy.  (It shipped with `snd_pcm_emitted`/`snd_pcm_resync`
+  debug counters too; nothing could ever read either — SPEC.md §34.4 said a
+  gate did and the page it named was retired — and they are gone.)
   *Test*: the CP Test button synthesises a 1.5 s 1 kHz sine into SND_SEG and plays
   it at 8,000 Hz (N = 149) through slot 0x0080. **Measured QEMU reality (11.0.2,
   worse than "imperfectly")**: the pcspk backend emits *zero* frames while ch2 is
@@ -855,4 +856,4 @@ kernel image changes even when nothing sound-side ships on disk).
   work.
 - **A resident sound task.** Tone expiry is a `snd_tick` leaf; stream refills are
   *transient* per-stream spawns from the existing pool that exit with their stream. A
-  permanent task would cost a 1,536-byte `.lowbss` stack for mostly-idle work.
+  permanent task would cost a `SCH_STACK`-sized `.lowbss` stack for mostly-idle work.

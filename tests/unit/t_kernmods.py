@@ -50,7 +50,7 @@ import kernsize                                           # noqa: E402
 # a default build measures them at zero and that is the correct answer.  A
 # module joining this list is a decision: it is saying "this ships in no
 # kernel any disk carries", which is exactly what a knob is.
-KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc")
+KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc", "stkdiag.inc")
 
 
 def main():

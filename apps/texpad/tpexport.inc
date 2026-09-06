@@ -131,6 +131,7 @@ tp_xw_str:
     ret
 
 tp_xw_num:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     ; AX unsigned
     push ax
     push bx
@@ -429,6 +430,7 @@ tp_pdf_patch5:
     ret
 
 tp_pdf_off10:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     ; write AX as 10-digit
     push ax
     push bx

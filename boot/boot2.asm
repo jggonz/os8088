@@ -15,10 +15,10 @@
 ; had them as immediates and could shift instead of divide.
 ;
 ; ENTRY, at offset 0 of `.boot2`:
-;   CS = wherever stage 1 put us, IP = 0, SS:SP = stage 1's stack. The first
-;   thing it does is COPY ITSELF TO HEAP_SEG and jump there (SPEC.md 2.9.5),
-;   so everything below runs at the bottom of the claim heap and the top of
-;   conventional RAM is free from the first claim onward.
+;   CS = HEAP_SEG, IP = 0, SS:SP = stage 1's stack. We are read STRAIGHT to
+;   the heap's floor (SPEC.md 2.9.5), so everything below runs at the bottom
+;   of the claim heap and the top of conventional RAM is free from the first
+;   claim onward.
 ;   DL = boot drive     DH = heads          CX = sectors per track
 ;   SI = the data area's LBA (KERNEL.SYS's first sector)
 ;   BP = the BIOS tick stage 1 read before it loaded anything (SPEC.md 15.4)
@@ -51,67 +51,83 @@ DPT_AT      equ 0x0580          ; 0000:0580 - our copy of the diskette
                                 ; KERNEL_SEG, so nothing the kernel or its heap
                                 ; can claim reaches it and it needs no restore
 B2_STACK    equ 0x7C00          ; stage 1's STACK_TOP, which is still ours
-KSIG_OFF    equ 11776           ; SPEC.md 18.93.1's probe, as a MEMORY offset
+KSIG_OFF    equ 6656            ; SPEC.md 18.93.1's probe, as a MEMORY offset
                                 ; from KERNEL_SEG - the Makefile reads the same
                                 ; bytes out of the file at KSIG_OFF + BOOT2_PAD,
-                                ; which is FILE SECTOR 36 and has to be: the
+                                ; which is FILE SECTOR 21 and has to be: the
                                 ; probe must land in a run's SECOND half, and
                                 ; tests/unit/t_canary.py re-derives that from
                                 ; every shipped image's BPB. This equ and the
                                 ; Makefile's KSIG_OFF are one number typed
-                                ; twice; that row checks they agree
+                                ; twice; that row checks they agree.
+                                ;
+                                ; IT MOVES WITH BOOT2_SECS, and has had three
+                                ; values for that reason: 11776 while the
+                                ; blob was 13 sectors, 8704 when SPEC.md 2.9.12
+                                ; grew it to 19, and 14336 when 2.5.3's split
+                                ; took it back to 8. The number that has to
+                                ; stay put is the FILE sector, because that is
+                                ; what decides which half of a run the probe
+                                ; lands in - and a probe in a run's FIRST half
+                                ; is loaded CORRECTLY on exactly the machine
+                                ; this exists to catch. tests/unit/t_canary.py
+                                ; re-derives it per geometry and refused 8704
+                                ; the moment BOOT2_SECS changed
+                                ;
+                                ; ...AND IT MOVES WITH THE SET OF GEOMETRIES,
+                                ; which is what took it from 14336 to 50176.
+                                ; The band is the INTERSECTION over every
+                                ; shipped disk, and 19's 1.2MB 5.25" geometry
+                                ; shares none of the old one: data at LBA 29 in
+                                ; runs of 30, so file sector 36 is 5 into a
+                                ; FIRST half there.
+                                ;
+                                ; ...AND IT MOVED LAST BECAUSE `.text` SHRANK
+                                ; UNDER IT. 50176 named file sector 106, at the
+                                ; top of `.text` with 429 bytes above it, and
+                                ; below the end of `.text` the word is in the
+                                ; `.bss` zero padding where every word equals
+                                ; its neighbour a sector away - so the canary
+                                ; PASSES on the one fault it exists to catch.
+                                ; It sat that high because the offset had to be
+                                ; legal for TWO blob lengths, SPLSTARS' being
+                                ; a sector longer, and that intersection is
+                                ; only 106..109. One blob length (SPEC.md
+                                ; 15.3.8.5) widens the band to file sectors
+                                ; 21, 57 and 106..110, and 21 is the bottom of
+                                ; it. The Makefile's KSIG_OFF block carries the
+                                ; whole derivation
 B2_KSECS    equ ((MODC_START + 511) / 512) - BOOT2_SECS  ; what is left to read
 
 boot2_entry:
-    ; --- DOWN TO THE HEAP'S FLOOR, FIRST (SPEC.md 2.9.5) --------------------
-    ; Stage 1 put us at the TOP of conventional RAM, below its own stack,
-    ; because that is the only address it can compute: HEAP_SEG falls out of
-    ; the kernel's section sizes and the sector has none of them. We are
-    ; assembled INTO the kernel, so we do - and the top of RAM is the one
-    ; place this blob must not still be sitting when the heap fills up.
+    ; --- WE ARE ALREADY AT THE HEAP'S FLOOR (SPEC.md 2.9.5) -----------------
+    ; Stage 1 reads us straight here. It used to read us to the TOP of
+    ; conventional RAM, below its own stack, and this routine began by
+    ; `rep movsw`-ing itself down - because the top was the only address the
+    ; sector could compute, HEAP_SEG falling out of the kernel's section sizes
+    ; and the sector having none of them. It is TOLD HEAP_SEG now (SPEC.md
+    ; 2.7.1), so the copy is gone and with it the second BOOT2_PAD its own
+    ; survival cost the .nomem bound.
     ;
-    ; A transient at either END of the heap strands what it leaves behind:
+    ; WHY THE FLOOR AND NOT THE TOP, which is the part that has not changed:
+    ; a transient at either END of the heap strands what it leaves behind, and
     ; every claim above the blob's eventual hole is one mem_compact cannot
     ; pack past, so the freed bytes never rejoin the long run and the machine
     ; ends the boot already fragmented. At the FLOOR they do rejoin it -
     ; mem_init raises [mem_base] over us for the duration, kmain lowers it
     ; again after spl_finish and compacts, and the arena closes up (SPEC.md
-    ; 50.6.3). That is the whole reason for this copy.
+    ; 50.6.3).
     ;
     ; HEAP_SEG IS ABOVE THE LOAD, ALWAYS: the image stops at MODC_START and
     ; `.lowbss` + `.vgabuf` are nobits, so there are LOW_PARA + VGABUF_PARA
     ; paragraphs of nothing between the last sector to land and us. And it is
-    ; below the top of RAM by stage 1's own .nomem refusal, which is stricter
-    ; than we need by 21KB - guard 5c at the foot of kernel.asm is that
-    ; argument as an assertion, so a kernel that grew past it fails to build
-    ; rather than overwriting itself on a small machine.
+    ; below the top of RAM by stage 1's own .nomem refusal (SPEC.md 2.7.1).
     ;
-    ; CX, SI and DI are stage 1's handover and `rep movsw` wants all three,
-    ; so they go on stage 1's stack - which is where SS:SP still points and
-    ; is nowhere near either copy.
-    push cx
-    push si
-    push di
-    mov ax, cs
-    mov ds, ax
-    mov ax, HEAP_SEG
-    mov es, ax
-    xor si, si
-    xor di, di
-    mov cx, BOOT2_PAD / 2
-    cld
-    rep movsw
-    push es                     ; a computed far jump, stage 1's exactly: the
-    mov ax, .moved              ; 8086 has no `jmp reg:off` and HEAP_SEG is a
-    push ax                     ; constant only to the ASSEMBLER, not to a
-    retf                        ; `jmp imm16:imm16` this section could encode
-.moved:
-    pop di
-    pop si
-    pop cx
-
-    mov ax, cs                  ; our data is our own; the stack stays stage 1's
-    mov ds, ax
+    ; CX, SI and DI are stage 1's handover and the first thing below wants
+    ; CX, so the six of them are written down before anything can clobber one.
+    push cs
+    pop ds                      ; DS = us; the stack stays stage 1's
+    cld                         ; ...and DF=0 for every string op below
     mov [b2_drive], dl
     mov [b2_heads], dh
     mov [b2_spt], cx
@@ -164,15 +180,7 @@ boot2_entry:
     ; emulator errors it and 18.93's shorten-and-reload quietly rescues the
     ; boot, which is why it took a field report to find. The stash above is
     ; three words away; use it.
-%ifdef TRACK_RUN
-    mov ax, [b2_spt]
-%else
-    mov al, [b2_heads]
-    xor ah, ah
-    mul word [b2_spt]
-%endif
-    mov [b2_run], ax
-    mov ax, [b2_spt]            ; ...and the LIVE bound starts at the TRACK,
+    mov ax, [b2_spt]            ; the LIVE bound starts at the TRACK,
     mov [b2_runmax], ax         ; which the gate below widens on an 8088. That
                                 ; direction is not arbitrary and reversing it
                                 ; is silent: a 286 left on the cylinder bound
@@ -202,23 +210,23 @@ boot2_entry:
     push es
     xor ax, ax
     mov es, ax
+    mov bl, [b2_spt]            ; EOT, banked WHILE DS IS STILL OURS - the
+                                ; `lds si` below is what used to make this a
+                                ; second ES=0 window of its own. BX is free:
+                                ; stage 1 hands over DL, DH, CX, SI, DI and BP
     mov di, DPT_AT
     lds si, [es:0x0078]         ; DS:SI = the BIOS's table
     mov cx, 11
     cld
     rep movsb                   ; ...ES:DI = ours
+    mov [es:DPT_AT + 4], bl     ; EOT = this disk's sectors per track
+    mov di, 0x0078              ; ...and the VECTOR through ES, which is
+    mov ax, DPT_AT              ; already 0, rather than setting DS to 0 to
+    stosw                       ; reach it. cld is set above
     xor ax, ax
-    mov ds, ax
-    mov word [0x0078], DPT_AT
-    mov [0x007A], ax
+    stosw
     pop es
     pop ds
-    push es
-    xor ax, ax
-    mov es, ax
-    mov al, [b2_spt]
-    mov [es:DPT_AT + 4], al     ; EOT = this disk's sectors per track
-    pop es
 
 %ifndef TRACK_RUN
     ; --- may this machine's FDC cross a head? (SPEC.md 18.93.2) -------------
@@ -234,10 +242,12 @@ boot2_entry:
     pop ax
     cmp ax, sp
     je .trkbound                ; 286 and up: leave it at the TRACK
-    mov ax, [b2_run]            ; 8086/8088: the CYLINDER, which is what the
-    mov [b2_runmax], ax         ; canary below then has something to verify
-.trkbound:
-%endif
+    mov al, [b2_heads]          ; 8086/8088: the CYLINDER, which is what the
+    xor ah, ah                  ; canary below then has something to verify.
+    mul word [b2_spt]           ; COMPUTED HERE and not above, because this is
+    mov [b2_runmax], ax         ; the only branch that wants it - b2_run was a
+.trkbound:                      ; word that carried it ten instructions, and
+%endif                          ; under TRACKRUN=1 was written and never read
 
 ; -----------------------------------------------------------------------------
 ; The load. Both ways in - here, and the canary's shorten-and-reload below -
@@ -526,7 +536,6 @@ b2_msg_err:  db 'Disk error', 0
 b2_drive:    db 0
 b2_heads:    db 0
 b2_spt:      dw 0
-b2_run:      dw 0
 b2_runmax:   dw 0
 b2_runsz:    dw 0
 b2_lba0:     dw 0

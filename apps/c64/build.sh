@@ -22,9 +22,6 @@
 #                                  the glass must show what the 8,000-byte
 #                                  shadow says it shows, and the cost table is
 #                                  printed in MILLISECONDS (9.7)
-#   hosttest/c64uitest --no-rom    ...and again, as a second process, for the
-#                                  machine with no C64.ROM: os88_main decides
-#                                  that surface once per launch (1.4)
 #   tools/c64ref.py --check        ...and the composed frame against an
 #                                  INDEPENDENT compositor, bit for bit - twice,
 #                                  once with the CHARGEN ROM and once with a
@@ -73,10 +70,6 @@ python3 tools/c64rom.py --check
 $HOSTCC -O1 -w -DC64_HOST -I apps/c64/hosttest -I apps/c64 \
     -o $BUILD/c64uitest apps/c64/hosttest/c64uitest.c
 $BUILD/c64uitest
-# ...and the ROM-LESS machine, which is a SECOND PROCESS because os88_main
-# decides that surface once per launch (1.4). It is the screen a user of a
-# mis-copied disk sees, and until this run existed nothing drew it.
-$BUILD/c64uitest --no-rom
 
 # ...and the frame it composed, against the independent compositor. The state
 # c64uitest dumps last is the RAM-character-set one, which is the case a

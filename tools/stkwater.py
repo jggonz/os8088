@@ -34,6 +34,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88sym                                              # noqa: E402
+import os88layout                                           # noqa: E402
 
 FILL = 0xCC
 MAGIC = b"\x57\x5A"           # SCH_MAGIC = 0x5A57, at the slice BOTTOM
@@ -41,14 +42,41 @@ DEF = ("KFZTRACE",)
 
 
 def slice_len(defines=DEF):
-    """SCH_STACK, out of the kernel that was actually built.
+    """The LARGEST class, out of the kernel that was actually built.
 
     NOT a mirrored 256. `syms()` answers labels only, so the first version of
     this asked it for SCH_STACK, got nothing, fell back to its own default and
     reported a 256-byte slice whatever the kernel had - which is the exact
     failure a probe exists to prevent.
+
+    Since SPEC.md 8.7 the slices are NOT all this size and this is only their
+    bound - `slice_sizes()` is what a reader wants.
     """
     return int(os88sym.equates(defines).get("SCH_STACK", 256)) or 256
+
+
+def slice_sizes(defines=DEF):
+    """[bytes per slot], slot 1 up - decoded from the kernel's own table.
+
+    SPEC.md 8.7 made the slices differ, and every reader that kept writing
+    `SCH_STACK` became wrong on eleven slots of thirteen. `sch_stksize` is in
+    `.text` with real initialisers precisely so a host-side reader can decode
+    it instead of recomputing a layout - which is the same argument that put
+    it there for the kernel's own four readers (SPEC.md 8.6).
+
+    Falls back to a uniform list if the symbol is not there, so this still
+    works against a kernel built before 8.7.
+    """
+    n = int(os88sym.equates(defines).get("MAX_TASKS", 12))
+    try:
+        off = os88sym.syms(defines)["sch_stksize"]
+        img = os88layout.kernel_text()
+        tab = [img[off + 2 * i] | (img[off + 2 * i + 1] << 8) for i in range(n)]
+    except Exception:
+        return [slice_len(defines)] * (n - 1)
+    if not all(0 < v <= 0x4000 for v in tab):
+        return [slice_len(defines)] * (n - 1)
+    return tab[1:]                           # slot 0 is the UI task's own
 
 
 def slots(defines=DEF):
@@ -59,6 +87,12 @@ def slots(defines=DEF):
 def water(mem, nslots, n):
     """[(slot, used, untouched)] - `mem` is the slices, back to back.
 
+    `n` is either ONE size (every slice the same, as it was before SPEC.md
+    8.7) or the LIST `slice_sizes()` returns. A single number against a
+    partitioned kernel walks off the end of every small slice into the next
+    task's fill and reports both wrong, which is why the list is the form to
+    pass and the scalar is kept only for a kernel that predates the classes.
+
     **THE CANARY IS AT THE BOTTOM OF EVERY SLICE**, and the first version of
     this walked straight into it: `SCH_MAGIC` is not the fill byte, so every
     slot read 256 of 256 and the report said the machine was dead eleven times
@@ -67,42 +101,58 @@ def water(mem, nslots, n):
     spawned (or has already gone through the floor, which `sch_switch` halts
     on) and is reported as such rather than measured.
     """
-    out = []
+    sizes = list(n) if isinstance(n, (list, tuple)) else [n] * nslots
+    out, at = [], 0
     for i in range(nslots):
-        blk = mem[i * n:(i + 1) * n]
-        if len(blk) < n:
+        sz = sizes[i] if i < len(sizes) else sizes[-1]
+        blk = mem[at:at + sz]
+        at += sz
+        if len(blk) < sz:
             break
         if blk[0:2] != MAGIC:
             out.append((i + 1, None, None))  # never spawned - no fill either
             continue
         j = 2
-        while j < n and blk[j] == FILL:      # the slice grows DOWN, so the
+        while j < sz and blk[j] == FILL:     # the slice grows DOWN, so the
             j += 1                           # first non-fill ABOVE the canary
-        out.append((i + 1, n - j, j))        # is how far anything ever reached
+        out.append((i + 1, sz - j, j))       # is how far anything ever reached
     return out
 
 
 def report(mem, nslots, n, note="", base=None):
     print("== task stack high water %s ==" % note)
+    sizes = list(n) if isinstance(n, (list, tuple)) else [n] * nslots
     if base is not None:
-        print("   slice %d bytes, sch_stacks at linear 0x%05X" % (n, base))
-    worst, worst_slot = 0, 0
+        print("   %s, sch_stacks at linear 0x%05X"
+              % ("slices " + "/".join(str(v) for v in sizes)
+                 if len(set(sizes)) > 1 else "slice %d bytes" % sizes[0], base))
+    worst, worst_pc, worst_slot = 0, 0.0, 0
     for slot, used, free in water(mem, nslots, n):
+        sz = sizes[slot - 1] if slot - 1 < len(sizes) else sizes[-1]
         if used is None:
-            print("   slot %-2d  -   never spawned (no canary)" % slot)
+            print("   slot %-2d  (%3d)  -   never spawned (no canary)"
+                  % (slot, sz))
             continue
-        bar = "#" * (used * 40 // n)
-        print("   slot %-2d  %3d used  %3d free  %s" % (slot, used, free, bar))
-        if used > worst:
-            worst, worst_slot = used, slot
+        bar = "#" * (used * 40 // sz)
+        print("   slot %-2d  (%3d)  %3d used  %3d free  %s"
+              % (slot, sz, used, free, bar))
+        # THE FULLEST SLICE, not the deepest one. With classes those are
+        # different questions and only the first one is about a margin: 200 of
+        # 384 is comfortable and 120 of 128 is nearly dead, and a report that
+        # ranks by bytes puts them the wrong way round.
+        if used * 1.0 / sz > worst_pc:
+            worst, worst_pc, worst_slot = used, used * 1.0 / sz, slot
     print("   ---")
     if not worst:
-        print("   NO SLICE WAS EVER FILLED. Is this a `make KFZ=1` kernel? "
-              "Nothing else fills them.")
+        print("   NO SLICE WAS EVER FILLED. Every slice is filled with 0xCC "
+              "at spawn on every kernel (SPEC.md 8.3), so either no task "
+              "has spawned in this snapshot or this is not the task-stack "
+              "region at all - check the segment and the slot table.")
         return 0
-    print("   deepest %d of %d (%.0f%%) on slot %d"
-          % (worst, n, 100.0 * worst / n, worst_slot))
-    if worst >= n - 2:
+    wsz = sizes[worst_slot - 1] if worst_slot - 1 < len(sizes) else sizes[-1]
+    print("   fullest %d of %d (%.0f%%) on slot %d"
+          % (worst, wsz, 100.0 * worst_pc, worst_slot))
+    if worst >= wsz - 2:
         print("   *** AT OR THROUGH THE CANARY: sch_switch halts the machine")
     return worst
 

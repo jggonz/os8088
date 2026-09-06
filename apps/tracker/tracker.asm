@@ -30,7 +30,13 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'TRACKER', trk_entry, 3
+    OS88_HEADER 'TRACKER', trk_entry, 3, OS88_STACK_192
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 80, measured +60;
+                                ; the larger of the two wins
+                                ; over the 64-byte interrupt floor
+                                ; that is 144, and 192 gives 1.33x
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; Two beamed eighth notes over a square wave - the app in two glyphs. The mask
@@ -1557,8 +1563,12 @@ trk_fsx_key:
 %ifdef TRKDBG
     cmp al, 'g'                     ; bench-only (tests/trkscrl.inc): G
     je .grid                        ; repaints the grid with the view held
-    cmp al, 'G'                     ; still, and j/k/n/v/b/c move the stopped
-    je .grid                        ; view by more than one row in one frame
+    cmp al, 'G'                     ; still, and j/k/n/u/b/c move the stopped
+    je .grid                        ; view by more than one row in one frame.
+                                    ; NOT `v`: the SURFACE binding above answers
+                                    ; it first, so a jump key bound to `v` here
+                                    ; is dead (tests/trkscrl.inc says how that
+                                    ; read for a week as a scroll defect)
     call trk_dbg_key
     jnc .out
 %endif
@@ -1967,7 +1977,7 @@ trk_play:
     call mp_stop
     mov si, trk_s_snderr
     cmp ax, 2                       ; err 2 = rate refused: the 44 kHz pick
-    jne .ofmsg                      ; on a pre-4.x DSP (SPEC.md 45.10)
+    jne .ofmsg                      ; on a pre-3.x DSP (SPEC.md 45.10)
     mov si, trk_s_norate
 .ofmsg:
     call tui_msg
@@ -2937,7 +2947,7 @@ trk_s_ioerr:  db 'Disk error', 0
 trk_s_snderr: db 'Sound open failed', 0
 trk_s_xtmon:  db 'XT mode on - Enter plays', 0
 trk_s_xtmoff: db 'XT mode off - Enter plays', 0
-trk_s_norate: db '44 kHz needs a DSP 4.x card', 0
+trk_s_norate: db '44 kHz needs an SB Pro or SB16', 0
 trk_s_buffer: db 'Buffering...', 0
 trk_s_txxt:   db 'Windowed only: Esc first', 0
                                         ; THREE keys share this and sharing it

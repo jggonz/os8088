@@ -1214,6 +1214,11 @@ wvm_err2:                       ; ...and this entry for a code the runtime set
     ; fall through
 
 wvm_exit:
+    ; STKBALANCE-OK: the unwind. Every refusal in the VM funnels here and
+    ; leaves through _wvm_slice.out, which gives back the registers the SLICE
+    ; banked - not the ones the opcode handler or the helper that refused did.
+    ; So a depth measured against whatever was walking when it escaped is
+    ; meaningless; the slice's own balance is checked by walking _wvm_slice.
     mov [cs:wvm_pc], si
     mov [cs:wvm_sp], di
     jmp _wvm_slice.out

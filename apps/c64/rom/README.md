@@ -29,10 +29,26 @@ Two things follow, and both are the point:
 
 - **The build needs no VICE checkout and no network.** `tools/c64rom.py`
   concatenates these three into `build/c64-rom/C64.ROM` on any clone.
-- **They are not embedded in the package.** `C64.ROM` is a 20,480-byte
-  sidecar file that ships beside `C64.O88` and `C64.OVL` and is read into a
-  heap claim of its own at launch (`docs/C64-SPEC.md` §1.4). Embedded, the
-  package would have been about 73,000 bytes against SPEC.md §73's 61,440
-  cap — refused on paper, which is what made the sidecar the design.
+- **They are still LOADED AT RUNTIME, and they are no longer a separate
+  file.** They are a PART of `C64.O88` (SPEC.md §20.12, `docs/C64-SPEC.md`
+  section 1.4): 20,480 bytes appended past the program's image, claimed and read into
+  a heap claim of their own at launch, by package code, before the C runs.
+  Nothing is linked into the image and nothing is resident that was not
+  resident before — what changed is that the bytes travel in the same file
+  instead of beside it.
 
-A disk without `C64.ROM` is a program that refuses at launch naming the file.
+**THE SIDECAR WAS A USER DECISION AND ITS REASON WAS A WRONG NUMBER.** The
+quote above asked for a runtime-loaded ROM *"instead of embedding it in the
+package"*, and this section used to record why the alternative never got a
+hearing: embedded, "the package would have been about 73,000 bytes against
+SPEC.md §73's 61,440 cap — refused on paper". `APP_MAX_SIZE` bounds the
+primary SEGMENT's image plus bss, not the FILE. Measured after the conversion:
+image **40,854**, bss **13,176**, sum **54,030** against that same 61,440 cap,
+in a file of **61,440** bytes. The cap was never the obstacle — until
+`docs/O88-MULTISEG-PLAN.md` there was simply nowhere in the format to put
+bytes that are not the image.
+
+The runtime-loading half of the decision stands and is what the parts standard
+does. The separate-file half is what this conversion reverses, and it is one
+`%define` in `apps/c64/c64.asm` plus one Makefile argument if it should ever
+go back.

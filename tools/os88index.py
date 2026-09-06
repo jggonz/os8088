@@ -70,11 +70,17 @@ GROUPS = [
 # one thing here not extracted, because "what is this FOR" is not in the source
 # in a form worth parsing, and a wrong blurb is visible where a wrong slot is
 # not.
+#
+# The NAMES are checked against the tree by check_includes() below, because a
+# hand-written list is exactly what goes quietly stale: a new shared include was
+# added and this list was not, so the index that exists to answer "does this
+# already exist?" answered no about a file that did.
 INCLUDES = [
     ("os88ui.inc", "13, 75",
      "Buttons, check boxes, radio dots, scroll bars, group boxes and the "
-     "standard alert. Opt into the alert with `%define OS88UI_ALERT` and the "
-     "scroll bar with `%define OS88UI_SCROLL`."),
+     "standard alert. Opt into the alert with `%define OS88UI_ALERT`, the "
+     "scroll bar with `%define OS88UI_SCROLL` and its thumb-drag half with "
+     "`%define OS88UI_SBDRAG`."),
     ("os88line.inc", "83",
      "A one-line text field: caret, horizontal scroll, focus, click-to-position "
      "and the editing keys. The caller owns a 20-byte block."),
@@ -82,8 +88,9 @@ INCLUDES = [
      "The multi-line sibling of os88line.inc. Enter inserts a newline; no wrap, "
      "no selection, no undo."),
     ("os88chart.inc", "82",
-     "A 4bpp offscreen canvas and five chart types - column, bar, line, area, "
-     "pie - plus a BMP writer. Shared by CHART.O88 and Sheet's chart window."),
+     "A 4bpp offscreen canvas and all seven chart types - area, bar, column, "
+     "line, pie, scatter, combination - plus a BMP writer. Shared by CHART.O88 "
+     "and Sheet's chart window."),
     ("os88fp.inc", "84",
      "IEEE-754 double arithmetic in software, with an 8087 path chosen at run "
      "time. Parse, format, add, subtract, multiply, divide, compare, sqrt, "
@@ -94,7 +101,34 @@ INCLUDES = [
      "Sub-tick timing off the 8253."),
     ("os88type.inc", "54",
      "File-type recognition by name and by content."),
+    ("os88parts.inc", "20.12",
+     "Package parts: named, sized parts inside one `.O88` - claimed, loaded on "
+     "demand, optionally into XMS, and refused with an arithmetic the package "
+     "states itself. A package over 64KB is still a package."),
 ]
+
+
+def check_includes():
+    """Every apps/os88*.inc a package opts into must have a row here.
+
+    os88api.inc is excluded: it is not opted into, it is the API itself and
+    every package includes it. Anything else that appears in apps/ and not in
+    INCLUDES - or the reverse - is a stale index, and this says so by name
+    rather than leaving it to be noticed.
+    """
+    on_disk = {f for f in os.listdir(os.path.join(ROOT, "apps"))
+               if f.startswith("os88") and f.endswith(".inc")
+               and f != "os88api.inc"}
+    listed = {name for name, _, _ in INCLUDES}
+    missing = sorted(on_disk - listed)
+    ghost = sorted(listed - on_disk)
+    if missing or ghost:
+        for f in missing:
+            print("os88index: apps/%s is in the tree and not in INCLUDES" % f)
+        for f in ghost:
+            print("os88index: INCLUDES lists %s, which is not in apps/" % f)
+        return False
+    return True
 
 
 def anchor(num, title):
@@ -369,6 +403,8 @@ def build():
 
 
 def main():
+    if not check_includes():          # a stale list is a stale index, and this
+        return 1                      # one is hand-written, so it is checked
     text = build()
     if "--check" in sys.argv:
         try:
@@ -381,7 +417,9 @@ def main():
             return 1
         print("os88index: docs/INDEX.md is current")
         return 0
-    with open(OUT, "w", encoding="utf-8") as f:
+    # newline="\n": the file is LF in the tree, and Windows would otherwise
+    # rewrite it CRLF and show every line as changed.
+    with open(OUT, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
     print("os88index: wrote docs/INDEX.md (%d slots, %d packages)"
           % (len(api_slots()), len(packages())))

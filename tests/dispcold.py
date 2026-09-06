@@ -46,9 +46,12 @@ FILE.
     against a 40,960-byte rung, so the old length also ran 305 bytes past the
     end of the file.
 
-Both are gone below, and the second is why the length now comes from what the
-file actually holds: `.cold` is the last thing in `kernel.bin` and ends at EOF,
-so `len(kernel.bin) - COLD_OFF` IS the section, asserted against the rung.
+Both are gone below, and the second is why the length is derived rather than
+written down: the span runs from `.cold`'s file offset to `OVLW_START`, which
+is where `.ovlw` begins. **It used to run to EOF**, on the belief that `.cold`
+was the last thing in `kernel.bin` - true when that was written, false since
+`.ovlw` landed after it, and this row then failed on every build with 37,376
+of rung plus 5,215 of `.ovlw` measured as one 42,591-byte section.
 
 The lesson is one line and it has now cost three rows - this one,
 tests/linefast.py and tests/wirefps.py: **a segment delta is not a file
@@ -70,6 +73,13 @@ import os, sys, time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
+
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
+                      VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
+# SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
+# written down here. This file spelled it `42 + 36`, which is the
+# VID_CTX_W = 18 layout - two bytes early, and what sits there is
+# display 1's vid_chm8, so the seam read 192 instead of 720.
 import os88marty, os88mouse, os88sym, dispcp, os88layout
 S = os88sym.linear
 SY = os88sym.syms()
@@ -183,7 +193,8 @@ def main():
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")
         dispcp.close_panel(m, mo, S, os88marty.settle)
-        ctx = m.read(S("vid_ctx"), 84); seam = u16(ctx, 42 + 36)
+        ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
+        seam = u16(ctx, VID_CTX_SZ + VID_CTX_VX)
         print("seam at x=%d" % seam)
         print("video (desktop): %s" % video(m))
 

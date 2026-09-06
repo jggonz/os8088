@@ -6,7 +6,7 @@
     python3 tools/getruncpm.py -o build/runcpm-disk --list     # what is shipped
     python3 tools/getruncpm.py -o build/runcpm-disk --select 360 \
                              --reserve build/runcpm.o88 ...   # the A/0 files
-                             # a 360KB / 720KB / 1440KB disk carries beside
+                             # a 360/720/1200/1440KB disk carries beside
                              # the root files named (--folders N: how many
                              # other folders the disk has; apps-all's ten)
     python3 tools/getruncpm.py -o build/runcpm-disk --from DIR # take the files
@@ -73,9 +73,11 @@ a cluster each; the folder A by default), A/0's own directory (32 bytes an
 entry, counted as files are chosen) and ASSOC.DAT, which is priced by
 os88disk.py's own build_assoc on the packages --reserve names (one cluster
 here, four on apps-all's 22 packages). Measured at the pin: a
-720KB disk and a 1.44MB disk carry all of it; the 360KB one carries every
-.COM, .SUB, .TXT and .ME and nothing else (52 files, 350/354 clusters;
-SPEC.md 74.5).
+720KB and 1.44MB disk carry all of it when nothing else is on them; the 360KB
+one carries every .COM, .SUB, .TXT and .ME and nothing else (52 files, 350/354
+clusters; SPEC.md 74.5). The 1.2MB disk is never in that case - getcpmsw.py's
+POLICY puts four software areas beside it (SPEC.md 74.6), so this fill runs
+against a 1,473-cluster reserve and takes 63 of the 77.
 """
 import argparse
 import hashlib
@@ -108,8 +110,8 @@ MAX_FILE = 65535          # a whole file must fit a 16-bit count (SPEC.md 74.3)
 # alphabetical .COM fill did to the 360KB disk once.
 CATEGORY = [".TXT", ".ME", ".SUB", ".COM", ".DOC", ".LIB", ".Z80", ".ASM"]
 # ...and the 360KB disk stops after the programs (SPEC.md 74.5): the sources,
-# libraries and documentation stay on the 720KB/1.44MB disks, so the XT disk
-# ships with room to save into instead of full to the last cluster (which is
+# libraries and documentation stay on the 720KB/1.2MB/1.44MB disks, so the XT
+# disk ships with room to save into instead of full to the last cluster (which is
 # how the wave-4 build shipped - and no session could save on it)
 # The 1.44MB disk needs no rule of its own once it carries games (SPEC.md
 # 71.6): the games are priced first (--reserve-clusters) and this RANKED fill
@@ -120,19 +122,23 @@ CATEGORY = [".TXT", ".ME", ".SUB", ".COM", ".DOC", ".LIB", ".Z80", ".ASM"]
 # whose RUNCPM folder carries no games and has room for all 77.
 CURATED = {360: CATEGORY[:4]}
 # a geometry's cluster size and its DATA clusters (tools/os88disk.py's
-# layouts: 354 / 713 / 2,847). What A/0 may take is that minus the root files
+# layouts: 354 / 713 / 2,371 / 2,847 - and note that the 1.2MB disk's clusters
+# are 512 bytes like the 1.44MB one's, not 1,024 like the two DD disks', so it
+# holds 1,185KB of the 1,423KB the 1.44MB disk does rather than the 83% of its
+# raw size). What A/0 may take is that minus the root files
 # --reserve names, priced in these clusters, minus the directory arithmetic
 # os88disk.py does (below) - derived from the files, so a bigger package or
 # an .OVL beside it re-selects the disk instead of overflowing it. Checked
 # against the built images: the arithmetic below reproduces --verify's
 # 'in use' exactly (353 / 672 / 1,294 with the 24,848-byte package)
-GEOMETRY = {360: (1024, 354), 720: (1024, 713), 1440: (512, 2847)}
+GEOMETRY = {360: (1024, 354), 720: (1024, 713), 1200: (512, 2371),
+            1440: (512, 2847)}
 DIR_ENTRY = 32            # a FAT directory entry
 # ROOM TO SAVE IN KB, held back from A/0's fill (SPEC.md 71.5): a disk full to its
 # last cluster cannot take a $$$.SUB, an MBASIC program or TE's file, which is
 # how wave 4's 360KB disk shipped. The 360KB disk's own CURATION is its guard
 # - it stops after the programs and never reaches the budget - so it needs no
-# reserve; the 720KB and 1.44MB disks fill until the budget stops them, and
+# reserve; the 720KB, 1.2MB and 1.44MB disks fill until the budget stops them, and
 # once the games are priced beside them (SPEC.md 71.6) that is exactly what
 # the 720KB one did: 713 of 713 clusters, no room for a single save. The fill
 # is RANKED, so what this holds back is the last thing chosen - a source or a
@@ -141,8 +147,10 @@ DIR_ENTRY = 32            # a FAT directory entry
 # 8KB on the 1.44MB one, whose clusters are 512 bytes - the geometry with the
 # most room got the least. The 1.44MB disk holds back 64KB because it is the
 # one a session actually works on (SPEC.md 71.6: WordStar and Turbo Pascal
-# are on it, and both write files).
-SAVE_ROOM_KB = {360: 0, 720: 16, 1440: 64}
+# are on it, and both write files) - and the 1.2MB disk holds back the same
+# 64KB for the same reason: it carries the same software area, on the AT-class
+# machine 74.6's timing note is least worried about.
+SAVE_ROOM_KB = {360: 0, 720: 16, 1200: 64, 1440: 64}
 # ASSOC.DAT, the icon/association cache os88disk.py writes in the root beside
 # the packages (SPEC.md 54.7), is priced by asking os88disk.py itself
 # (assoc_clusters below): one cluster on the RUNCPM disks, whose only package
@@ -302,7 +310,7 @@ def left_off_text(out, kept, left, geometry=None, by_policy=(), no_room=()):
         text += (f"\r\nThis is the {geometry}KB disk: it carries the programs and\r\n"
                  "the texts and leaves room to save. The rest of the master\r\n"
                  "disk - sources, libraries, documentation and the ABDOS\r\n"
-                 "images - is on the 720KB and 1.44MB disks:\r\n")
+                 "images - is on the 720KB, 1.2MB and 1.44MB disks:\r\n")
         for base, size in by_policy:
             text += f"  {base:<12} {size:>7} bytes\r\n"
     if no_room:
@@ -364,7 +372,9 @@ def select(out, geometry, reserve, slots=0, folders=1, reserve_clusters=0):
     OWN - written to <out>/left-off/<KB>/LEFT-OFF.TXT, naming what this
     disk leaves off - and is priced at its real size."""
     if geometry not in GEOMETRY:
-        fail(f"--select wants 360, 720 or 1440, not {geometry}")
+        fail("--select wants one of "
+             + ", ".join(str(g) for g in sorted(GEOMETRY))
+             + f", not {geometry}")
     cbytes, total = GEOMETRY[geometry]
     rows = read_list(out)
     kept = [(b, s) for b, s in rows if b != "LEFT-OFF.TXT"]
@@ -435,7 +445,8 @@ def main():
                     help="verify what is cached; never download")
     ap.add_argument("--list", action="store_true", help="print what is shipped and exit")
     ap.add_argument("--select", type=int, metavar="KB",
-                    help="print the A/0 files a 360/720/1440 disk carries, one path per line")
+                    help="print the A/0 files a 360/720/1200/1440 disk carries, "
+                         "one path per line")
     ap.add_argument("--reserve", nargs="*", default=[], metavar="FILE",
                     help="with --select: the root files that ride beside A/0, priced first")
     ap.add_argument("--dir-slots", type=int, default=0, metavar="N",

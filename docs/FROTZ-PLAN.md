@@ -155,8 +155,9 @@ That buys responsiveness and imposes the worker's rules, of which two shape the
 whole program:
 
 1. **A worker may not touch a file slot, `OSAPI_FILE_DLG`, or `OSAPI_MEM_*`.**
-2. **The worker's stack is 256 bytes** (`SCH_STACK`; the SDK says 512 in one
-   place and it is wrong), shared with the tick, mouse and sound IRQs.
+2. **The worker's stack is `SCH_STACK` bytes** — 256 when this plan was
+   written, **384** now — shared with the tick, mouse and sound IRQs. (The SDK
+   said 512 in one place and was wrong; it says 384 in both places today.)
 
 Rule 2 means the VM keeps *its own* stack in a claim and the native call depth
 stays shallow — no recursive descent anywhere, and Z-string decoding unrolls

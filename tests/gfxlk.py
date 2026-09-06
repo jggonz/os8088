@@ -15,7 +15,7 @@ which IRQ4 draws. The file-operation progress widget is the one painter in
 the machine that draws there (fprog.inc, on every file operation the UI task
 runs outside a window callback - a package load, a folder open, a mount), and
 for as long as it has existed a fill and the cursor have been racing over
-vga_rect_setup's module scratch, over the Graphics Controller's registers
+gfx_rect_setup's module scratch, over the Graphics Controller's registers
 (cur_draw's precondition is "default GC state on entry") and over the glass.
 What it leaves behind is written into WINDOW CONTENT that nothing repaints and
 the raise cache then keeps for the session: docs/FIELD-NOTES.md 34, reported

@@ -39,6 +39,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
+import dispapps                                              # noqa: E402
 from blitpair import gif_pixels                              # noqa: E402
 
 S = os88sym.linear
@@ -63,8 +64,20 @@ def main():
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="/tmp/paintdraw.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
-    ap.add_argument("--gif", default="build/OS8088.GIF")
+    ap.add_argument("--gif", default=None,
+                    help="the picture to open (default: a COLOUR "
+                         "derivation of build/OS8088.GIF - see below)")
     a = ap.parse_args()
+
+
+    # A COLOUR PICTURE. SPEC.md 42.23.6 opens a GIF whose colour table has two
+    # entries ONE BIT DEEP on any adapter, and build/OS8088.GIF has exactly
+    # two - so the fixture every other paint row uses stopped being able to
+    # give this one a four-plane canvas. dispapps.colour_gif appends two
+    # unused table entries and changes not one pixel, so the oracle below is
+    # unchanged.
+    if a.gif is None:
+        a.gif = dispapps.colour_gif()
 
     if a.apps == "/tmp/paintdraw.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
@@ -88,7 +101,8 @@ def main():
                                dispcp.scroll_to(m, mo, S, os88marty.settle,
                                                 bx, by,
                                                 dispcp.row_of(m, S,
-                                                              "OS8088.GIF")))
+                                                              os.path.basename(
+                                                                  a.gif))))
         mo.to(rx, ry)
         os88marty.settle(m)
 

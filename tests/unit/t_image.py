@@ -61,12 +61,15 @@ A_RDONLY, A_HIDDEN, A_SYSTEM, A_VOLID, A_DIR = 0x01, 0x02, 0x04, 0x08, 0x10
 # (bytes/sec, sec/clus, reserved, FATs, root entries, media, FAT sectors, spt, heads)
 STANDARD = {
     2880: (512, 1, 1, 2, 224, 0xF0, 9, 18, 2),   # 1.44MB
+    2400: (512, 1, 1, 2, 224, 0xF9, 7, 15, 2),   # 1.2MB 5.25" HD
     1440: (512, 2, 1, 2, 112, 0xF9, 3, 9, 2),    # 720KB
     720:  (512, 2, 1, 2, 112, 0xFD, 2, 9, 2),    # 360KB
 }
 
-SYSTEM_IMAGES = ["os8088.img", "os8088-720.img", "os8088-360.img"]
-DATA_IMAGES = ["apps.img", "apps720.img", "apps360.img", "media360.img"]
+SYSTEM_IMAGES = ["os8088.img", "os8088-120.img", "os8088-720.img",
+                 "os8088-360.img"]
+DATA_IMAGES = ["apps.img", "apps120.img", "apps720.img", "apps360.img",
+               "media360.img"]
 
 
 class Vol:

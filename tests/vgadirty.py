@@ -45,6 +45,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
 import os88sym                                              # noqa: E402
 import shot                                                 # noqa: E402
+import os88qemu                                              # noqa: E402
 
 PIDFILE = os.path.join(ROOT, "build", "qemu.pid")
 SOCK = os.path.join(ROOT, "build", "qmp.sock")
@@ -95,11 +96,15 @@ def build(knob):
 def launch():
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
     subprocess.run(
-        em + " -S -drive file=build/os8088.img,format=raw,if=floppy -boot a"
-        " -drive file=build/apps.img,format=raw,if=floppy,index=1"
+        em + " -S -machine pc,vmport=off"   # the msserial mouse drives this
+        " -drive file=build/os8088.img,format=raw,if=floppy -boot a"  # (SPEC.md
+        " -drive file=build/apps.img,format=raw,if=floppy,index=1"    # 9.11)
         " -chardev msmouse,id=m0 -serial chardev:m0"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
         % (SOCK, PIDFILE), cwd=ROOT, shell=True, check=True)
+    # ...and it is DAEMONISED, so it outlives this script unless
+    # somebody kills it - and the somebody is us (os88qemu).
+    os88qemu.own(PIDFILE, SOCK)
 
 
 def screen(q):

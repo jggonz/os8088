@@ -50,7 +50,12 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'MODPLUG', mpp_entry, 1
+    OS88_HEADER 'MODPLUG', mpp_entry, 1, OS88_STACK_256
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 98 for mpp_worker
+                                ; over the 64-byte interrupt floor
+                                ; that is 162, and 256 gives 1.58x
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; The player's face: a bevelled box with an LCD band across the top and a
@@ -120,9 +125,9 @@ MPP_HALF    equ 2048                ; the fill unit, pinned: fills are whole
                                     ; so a half never crosses the ring seam
 MPP_RATE    equ 11000               ; Setup > Audio > Frequency, the default
 MPP_RATE22  equ 22050
-MPP_RATE44  equ 44100               ; the SPEC.md 34.5 wide-rate regime: a
-                                    ; DSP 4.x card, and an honest refusal on
-                                    ; anything older
+MPP_RATE44  equ 44100               ; SPEC.md 34.5's wide regime (DSP 4.x) or
+                                    ; high-speed regime (SB Pro), and an honest
+                                    ; refusal on anything older
 MPP_RATE_XT equ 5500                ; XT mode's own rate (SPEC.md 56.7)
 MPP_MAXFEED equ 6                   ; halves per worker wake: bounds the
                                     ; lock-free burst at ~1.1 s of mixing
@@ -1359,7 +1364,7 @@ mpp_play:
     call mpm_stop
     mov si, mpp_s_snderr
     cmp ax, 2                       ; err 2 = rate refused: the 44 kHz pick on
-    jne .ofmsg                      ; a pre-4.x DSP (SPEC.md 56.5)
+    jne .ofmsg                      ; a pre-3.x DSP (SPEC.md 34.5, 56.5)
     mov si, mpp_s_norate
 .ofmsg:
     call mppu_msg
@@ -2187,7 +2192,7 @@ mpp_s_toobig:  db 'File too big', 0
 mpp_s_noent:   db 'File not found', 0
 mpp_s_ioerr:   db 'Disk error', 0
 mpp_s_snderr:  db 'Sound open failed', 0
-mpp_s_norate:  db '44 kHz needs a DSP 4.x card', 0
+mpp_s_norate:  db '44 kHz needs an SB Pro or SB16', 0
 mpp_s_xtmon:   db 'XT mode on - the DSP tail is off', 0
 mpp_s_xtmoff:  db 'XT mode off', 0
 mpp_s_hint:    db 'Z X C V B transport  L load  E setup  P list', 0
@@ -2215,7 +2220,8 @@ mpp_s_bpm:      db '  BPM ', 0
 ; come with it - a user who reads this should not be left thinking libopenmpt
 ; is in here somewhere.
 mpp_about_lines:
-    dw mpp_ab1, mpp_ab2, mpp_ab3, mpp_ab4, mpp_ab5, mpp_ab6, mpp_ab7, 0
+    dw mpp_ab1, mpp_ab2, mpp_ab3, mpp_ab4, mpp_ab5, mpp_ab6, mpp_ab7
+    dw mpp_ab8, mpp_ab9, 0
 mpp_ab1: db 'ModPlug Player for os8088', 0
 mpp_ab2: db 0
 mpp_ab3: db 'Interface ported from ModPlug Player V2', 0
@@ -2223,6 +2229,8 @@ mpp_ab4: db 'by Volkan Orhan - modplugplayer.org, GPLv3', 0
 mpp_ab5: db 0
 mpp_ab6: db 'Replayer: 4-channel ProTracker, 8-bit mono.', 0
 mpp_ab7: db 'Not libopenmpt - see SPEC.md 56.1.', 0
+mpp_ab8: db 0
+mpp_ab9: db 'Ported by Jorge Gonzalez', 0
 
 ; =============================================================================
 ; The other three quarters of the package

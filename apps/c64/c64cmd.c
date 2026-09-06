@@ -222,7 +222,8 @@ static int ovl_conv_init(void)
  *
  * COPY IS NOT REACHABLE WITH NO MACHINE and PASTE is greyed with no machine,
  * on a JAM and while PAUSED. c64menu.c's c64_menu_state carries each fact:
- * with c64_norom the matrix holds nothing but c64_ram_pattern's factory fill
+ * on a machine that never started the matrix holds nothing but
+ * c64_ram_pattern's factory fill
  * and the clipboard is KERNEL-OWNED and outlives this app (SPEC.md 55.3), so
  * a Copy there would destroy what the user copied elsewhere in exchange for a
  * screen they cannot see. Copy stays LIVE on a JAM - the frozen screen is

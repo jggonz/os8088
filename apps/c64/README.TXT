@@ -5,19 +5,23 @@ C64.O88 is a windowed Commodore 64: a 6510 in a 64KB heap claim, a VIC-II and
 two CIAs, and the 320x200 screen composed into 1bpp bands. It is a
 reimplementation of VICE 3.10's `x64` machine for os8088.
 
-FOUR FILES, ONE FOLDER
-----------------------
-C64.O88   the package
+THREE FILES, ONE FOLDER
+-----------------------
+C64.O88   the package - and the KERNAL, BASIC and character ROMs are INSIDE
+          it, 20,480 bytes appended past the program and claimed and read at
+          launch before anything else runs
 C64.OVL   its second segment - the menu commands, the loader, the About panel
-C64.ROM   the KERNAL, BASIC and character ROMs, read at launch
 COPYING   the GNU General Public License, version 2 - the licence this
           package is under. It is not read by the program; it is here
           because the licence has to travel with the binary.
 
-The first three must be in the SAME folder: the .OVL is resolved in the launching
-instance's current directory, and C64.ROM is read from there too. A disk with
-the package and no C64.ROM is a program that refuses at launch and says so; a
-disk with no C64.OVL is a program whose every menu command refuses, politely.
+The first two must be in the SAME folder: the .OVL is resolved in the
+launching instance's current directory. A disk with no C64.OVL is a program
+whose every menu command refuses, politely.
+
+C64.ROM used to be a fourth file, read at launch from beside the package - and
+a copy that took the program and left it behind was a machine that could not
+start. It cannot be left behind now.
 
 LICENCE
 -------
@@ -28,7 +32,7 @@ disk beside the package, and apps/c64/COPYING in the os8088 source tree.
 
 THE ROMS ARE NOT GPL AND ARE NOT OURS
 -------------------------------------
-The KERNAL, BASIC and character generator images inside C64.ROM are
+The KERNAL, BASIC and character generator images inside C64.O88 are
 Copyright (C) Commodore Business Machines. They are included exactly as VICE
 distributes them.
 

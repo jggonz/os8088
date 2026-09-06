@@ -281,7 +281,7 @@ costs `KERN_BUDGET` and not `KERN_CODE_MAX`. The ISR body has to be in
 not survive one — but the command interpreter, the hex formatter and the
 tables belong cold. Budget is not tight for a knob build, but the stub must
 not change what a benchmark measures: no allocation, no heap claim, no
-`.lowbss` growth (task stacks are 256 bytes with a canary, SPEC.md §8, and the
+`.lowbss` growth (task stacks are 384 bytes with a canary, SPEC.md §8, and the
 ISR lands on whichever one is current).
 
 ---
@@ -338,7 +338,7 @@ file.** Three reasons:
   `dsk_dbg_raw` (SPEC.md §18.94) is a far entry that issues a raw `int 13h`
   **holding `sch_lock`**, and it exists because `tests/sysbench` calling
   `int 13h` itself **hard froze the 5150**: a BIOS runs its disk handler and
-  its IRQ nesting on whichever 256-byte task stack is current (SPEC.md §8),
+  its IRQ nesting on whichever 384-byte task stack is current (SPEC.md §8),
   on top of the caller's own frames. The debug writer inherits that rule
   verbatim.
 
@@ -594,7 +594,7 @@ Everything above is stock 86Box and stock config keys.
    interrupt while any task holds any lock. It reads memory and ports; that
    is all `m`, `i` and `b` need. `c` (far-call) is the one command that can
    hang the machine, and it should be the last one implemented.
-7. **The data plane's `int 13h` runs on a 256-byte task stack.** This is not
+7. **The data plane's `int 13h` runs on a 384-byte task stack.** This is not
    a theoretical risk — it is docs/FIELD-NOTES.md 10, where `tests/sysbench`
    calling `int 13h` itself hard froze the 5150. `sch_lock` held across the
    call, and the buffer 512-byte aligned so no transfer straddles a 64 KB DMA

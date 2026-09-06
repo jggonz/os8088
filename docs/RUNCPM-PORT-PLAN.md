@@ -116,7 +116,7 @@ cword all-in ratio: build/cword.bin 54,450 (35,886 resident + 18,564 .ovl) for ~
 
 ## API gaps
 
-- **need:** a way for a package to be called back on the UI task without a user event - the emulator's slice loop, console flush and every disk-touching BDOS call run there (file slots are UI-task only; a worker's stack is 256 bytes)
+- **need:** a way for a package to be called back on the UI task without a user event - the emulator's slice loop, console flush and every disk-touching BDOS call run there (file slots are UI-task only; a worker's stack is 384 bytes)
   - **slot:** none exists (evq has only mouse events; no timer/tick callback; W_PAINT/W_ONKEY only on user action - and W_ONKEY is dispatched UNDER the gfx lock at kernel/ui.inc:107, so it cannot carry the wake)
   - **action:** add to the kernel: EVT_WAKE record {type, a = win ptr}; OSAPI_WM_WAKE (BX = win; evq_push, ISR/worker-safe, CF=1 if the queue was full) and OSAPI_WM_ONWAKE (install a near proc, like WM_ONMOUSEUP; one word in the window record or the instance record); the UI task's event loop dispatches it through the package dispatcher WITHOUT the gfx lock. crt0.asm CC_HAS_ONWAKE trampoline; os88.h/os88thunk.asm: void os88_wm_onwake(void *win); int os88_wm_wake(void *win). ~100-150 kernel bytes against a measured 429 left in the image rung and 1,024 footprint spare - fits without a rung crossing if it lands in .text. This is Decision 1
 - **need:** switch between drive/user folders on every BDOS call without a remount, listing, sort or icon harvest - AND have the next file call resolve there

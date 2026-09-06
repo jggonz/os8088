@@ -414,7 +414,7 @@ machine) but a halt is still the machine stopping in front of the user.
 
 ```
 build/myapp.raw.asm:88: error: frame of `_render` is 120 bytes; --max-frame
-is 96. A worker task's whole stack is 256 bytes ... Move the big automatic to
+is 96. A worker task's whole stack is 384 bytes ... Move the big automatic to
 static storage.
 ```
 

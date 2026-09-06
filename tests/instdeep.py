@@ -17,12 +17,15 @@ both the broken and the fixed case, and the difference is a directory entry.
 
     python3 tests/instdeep.py
 
-REQUIRES A DISK: os8088_xt_hdd, and a pristine VHD - the emulator writes
-through to media/hdds/default_xtide.vhd and nothing copies it per run, so the
-backup beside it is taken once and restored before each install.
+REQUIRES A DISK: os8088_xt_hdd. The emulator writes THROUGH to its VHD, so
+this used to keep a `.pristine` backup beside the shared one and restore it
+before each install. It no longer needs to: `os88marty.launch` gives every
+instance its own `media/hdds`, cloned from the staged tree's copy, which is
+therefore never written and is the pristine master by construction. That is
+also what lets two of these run at once - a shared VHD is one disk being
+installed onto twice.
 """
 import os
-import shutil
 import struct
 import sys
 import time
@@ -32,9 +35,17 @@ import os88marty as M                                      # noqa: E402
 from os88mouse import Mouse                                # noqa: E402
 
 MACHINE = "os8088_xt_hdd"
-RUN = "build/martypc/run"
-VHD = os.path.join(RUN, "media/hdds/default_xtide.vhd")
-PRISTINE = VHD + ".pristine"
+VHD_REL = "media/hdds/default_xtide.vhd"
+# The staged tree's copy: read, never run in, never written. `launch()` clones
+# it into each instance, so this is the "before" a diff is against.
+BASE_VHD = os.path.join(M.base_run_dir(), VHD_REL)
+
+
+def vhd(m):
+    """THIS run's disk. One per instance, so two runs cannot share one."""
+    return os.path.join(m.run_dir, VHD_REL)
+
+
 SECTOR = 512
 FOOTER = 512                        # the VHD footer, past the data area
 
@@ -210,14 +221,27 @@ def run_install(m, mo, ix, iy):
     # MBR is the commit (SPEC.md 52.10.4), and the apps phase runs on past it,
     # so the wait is "our boot code is in sector 0" and then "the drive went
     # quiet".
-    base = open(PRISTINE, "rb").read(446)
-    took = M.until(m, lambda _: open(VHD, "rb").read(446) != base,
+    disk = vhd(m)
+    # THIS INSTANCE'S OWN DISK, before the install - not BASE_VHD's.
+    #
+    # It used to read the shared master, on the docstring's reasoning that the
+    # master "is never written and is the pristine master by construction". It
+    # is written: any run of a commit that PREDATES per-instance isolation
+    # installs straight onto it, which a bisect or a base-side classification
+    # run does routinely. The master then carries an installed MBR, every
+    # cloned disk starts with those same bytes, and the installer writes them
+    # again - so `!= base` never becomes true and the row waits out the whole
+    # 600 seconds. Measured, and the message it ends with is right about
+    # itself: "either it is slower than the limit or the condition is asking
+    # about the wrong thing".
+    base = open(disk, "rb").read(446)
+    took = M.until(m, lambda _: open(disk, "rb").read(446) != base,
                    "the installer to commit its MBR", limit=600.0)
     print("  MBR committed after %.0fs" % took)
     quiet, last = 0, None
     for _ in range(120):
         time.sleep(2.0)
-        now = open(VHD, "rb").read(8 << 20)
+        now = open(disk, "rb").read(8 << 20)
         quiet = quiet + 1 if now == last else 0
         last = now
         if quiet >= 8:                          # 16s: the apps phase pauses
@@ -231,6 +255,31 @@ def run_install(m, mo, ix, iy):
 
 
 def install(m):
+    """Drive the installer on `m`, and REFUSE a disk that is already installed.
+
+    The pre-flight is here because the alternative is a 600-second timeout
+    saying nothing useful: an already-installed disk gets the same MBR written
+    to it again, so the commit is invisible and the wait never ends. Naming it
+    up front turns ten minutes of nothing into one sentence with the cure in
+    it.
+    """
+    disk = vhd(m)
+    try:
+        already = "SYSTEM" in {q.split("/")[0] for q in partition(disk).tree()}
+    except SystemExit:
+        already = False                 # no MBR at all is a pristine disk
+    if already:
+        sys.exit(
+            "instdeep: the disk this instance was cloned from is ALREADY "
+            "installed, so the install below would write the same bytes and "
+            "the commit would be invisible.\n"
+            "  The shared master is %s and it is meant to be pristine "
+            "(nothing writes to it once every instance clones its own).\n"
+            "  Something wrote through to it - running a commit that predates "
+            "per-instance isolation does exactly that, which a bisect or a "
+            "base-side classification run does routinely.\n"
+            "  Restore it from its .pristine copy beside it, or delete it and "
+            "re-run `make marty`." % BASE_VHD)
     mo, ix, iy = open_installer(m)
     run_install(m, mo, ix, iy)
 
@@ -241,11 +290,6 @@ def main():
     for img in ("build/os8088-360.img", "build/apps360.img"):
         if not os.path.exists(img):
             sys.exit("no %s - `make` first" % img)
-    if not os.path.exists(PRISTINE):
-        shutil.copy2(VHD, PRISTINE)
-        print("  took a pristine copy of the VHD")
-    shutil.copy2(PRISTINE, VHD)
-
     with M.launch("build/os8088-360.img", apps="build/apps360.img",
                   machine=MACHINE) as m:
         M.settle(m)
@@ -254,10 +298,13 @@ def main():
         # window says `Done` in both the broken and the fixed case, so the
         # answer is not on the screen at all. It is a directory entry, and the
         # host reads it below. (A `tools/os88marty.py shot` here would also be
-        # a SECOND client on :9001, which hangs rather than erroring -
-        # docs/MARTYPC-DEBUG.md.)
-
-    v = partition(VHD)
+        # a SECOND client on this instance, which is refused rather than
+        # served - docs/MARTYPC-DEBUG.md. Share `m`, or launch a second
+        # emulator.)
+        #
+        # READ THE DISK INSIDE THE `with`. It is this instance's own copy now,
+        # and leaving the block takes the instance's media with it.
+        v = partition(vhd(m))
     tree = v.tree()
     print("  FAT%d volume, %d paths" % (v.bits, len(tree)))
     for p in sorted(tree):

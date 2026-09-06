@@ -1025,7 +1025,7 @@ The third piece, and the one that is not about the mouse at all. §16 gave a
 package the middle of a *mouse* gesture; a control pressed from the
 **keyboard** has no middle and no release edge, so nothing could ever put it
 back up. A callback cannot sleep — it holds the gfx lock — so before this the
-only answer was a worker task: a slot of twelve, a 256-byte stack, and the
+only answer was a worker task: a slot of eight, a 384-byte stack, and the
 task-owned close path, for a 165 ms flash.
 
 `OSAPI_WM_TIMER` (BX = window, AX = ticks, 0 cancels) and `OSAPI_WM_ONTIMER`

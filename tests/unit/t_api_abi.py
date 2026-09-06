@@ -28,6 +28,13 @@ can simply be decoded:
     OSAPI_SLOT   1E 0E 1F  E8 lo hi  1F CB     push ds/push cs/pop ds/
                                                call near/pop ds/retf
     OSAPI_JSLOT  E9 lo hi  00 00 00 00 00      jmp near <stub>
+    OSAPI_X/NCELL 55 BD lo hi  E9 lo hi  00    push bp/mov bp,<target>/
+                                               jmp near api_x|api_n
+
+THE THIRD SHAPE'S TARGET IS THE `BD` IMMEDIATE, NOT THE `E9` DISPLACEMENT.
+The jump goes to the family's ONE shared body, which is the same address for
+all forty cells; decoding it instead would make check 6 fail on every one of
+them and check 4 pass for the wrong reason.
 
 The `call`'s displacement is resolved against `tools/os88sym.py`'s map, which
 asserts byte-identity with the kernel this tree just built - so a symbol here
@@ -48,10 +55,18 @@ SIX THINGS ARE CHECKED, and the last is the one worth the file.
      published to DRIVERS (`drivers/os88drv.inc` owns 0x0248), or on the
      COMPAT list below.
   6. THE NAME AGREES WITH THE ROUTINE.  `OSAPI_GFX_LOCK` must reach
-     `gfx_lock`.  112 of the 135 match by the naming convention (`x`,
-     `osapi_x`, `api_x` for a stub); the other 23 are in ALIAS, which makes
-     that list an ABI ledger - moving one of those slots onto a different
-     routine now costs a deliberate edit here, where a reviewer sees it.
+     `gfx_lock`.  Most match by the naming convention (`x`, `osapi_x`,
+     `api_x` for a stub); the rest are in ALIAS, which makes that list an
+     ABI ledger - moving one of those slots onto a different routine now
+     costs a deliberate edit here, where a reviewer sees it.
+
+     THE X/N REWORK MADE THIS CHECK WEAKER, and that is worth saying rather
+     than pretending otherwise.  Fifteen slots used to be verified by the
+     `api_<stem>` convention - a rule nobody can forget - and now name their
+     real routine, so they need a ledger row a reviewer has to maintain.
+     What was bought is that check 4 lands on the BODY rather than on a stub
+     that trivially exists.  A real gain, and a small one against thirteen
+     new exemptions.
 """
 import os
 import re
@@ -92,13 +107,31 @@ ALIAS = {
     # not move - 0x0060 and 0x0068 are what they always were - so this is a
     # rename of a %define and its call sites and nothing about the ABI changed.
     "OSAPI_FONT_CHAR_XPARENT": "font_char",
-    "OSAPI_FONT_STR_XPARENT":  "api_font_str",
+    "OSAPI_FONT_STR_XPARENT":  "font_str_x",
     "OSAPI_KEY_DOWN":     "kbd_down",
     "OSAPI_FULLSCREEN":   "wm_fullscreen",
     "OSAPI_WM_GROW":      "wm_grow_paint",
     "OSAPI_MENU_SET":     "menu_win_set",
-    "OSAPI_FILE_DLG":     "api_fdlg_open",
-    "OSAPI_TASK_SPAWN":   "api_pkg_spawn",
+    "OSAPI_FILE_DLG":     "api_fdlg_open",   # still a hand-written JSLOT stub
+    # SPEC.md 20.3's X and N cells name their target directly since the two
+    # families became one body each, so a slot whose SDK spelling differs from
+    # its routine's needs a row here. Fifteen of them do; these thirteen are
+    # the ones the convention used to cover through an `api_<stem>` stub.
+    "OSAPI_ICON_DRAW":    "icon_draw_x",
+    "OSAPI_FONT_RUN":     "font_run_x",
+    "OSAPI_FONT_WIDTH":   "font_width_x",
+    "OSAPI_MEM_PARKSAFE": "inst_parksafe_set",
+    "OSAPI_SND_FM":       "osapi_snd_fm_x",
+    "OSAPI_DRV_CALL":     "drv_pkg_call_x",   # beside DRV_CALL_AT above: two
+                                              # cells, one routine, on purpose
+    "OSAPI_FILE_WRITE":   "dskw_write",
+    "OSAPI_FILE_READ":    "dskw_read",
+    "OSAPI_FILE_DELETE":  "dskw_delete",
+    "OSAPI_FILE_APPEND":  "dskw_append",
+    "OSAPI_FILE_READ_AT": "dskw_read_at",
+    "OSAPI_FILE_MKDIR":   "dskw_mkdir",
+    "OSAPI_FILE_RMDIR":   "dskw_rmany",
+    "OSAPI_TASK_SPAWN":   "inst_pkg_spawn",
     "OSAPI_TASK_ALIVE":   "inst_pkg_alive",
     "OSAPI_ABOUT_SET":    "wm_about_set",
     "OSAPI_FS_PROG":      "fpg_stepb",
@@ -145,7 +178,12 @@ def decode(blob, addr):
         return None, None
     if c[0:3] == b"\x1e\x0e\x1f" and c[3] == 0xE8 and c[6:8] == b"\x1f\xcb":
         return "SLOT", (addr + 6 + struct.unpack_from("<h", c, 4)[0]) & 0xFFFF
+    if c[0] == 0x55 and c[1] == 0xBD and c[4] == 0xE9 and c[7] == 0x00:
+        # X/N cell: the target rides in BP, so it is the immediate at 2..3.
+        return "XCELL", struct.unpack_from("<H", c, 2)[0]
     if c[0] == 0xE9 and c[3:8] == b"\x00" * 5:
+        # ...and the JSLOT shape stays: five cells still reach a hand-written
+        # stub (rename, the file dialog, the two fenced SYS writes, file_find).
         return "JSLOT", (addr + 3 + struct.unpack_from("<h", c, 1)[0]) & 0xFFFF
     return None, c.hex()
 
@@ -197,7 +235,8 @@ def main():
                      "%s (0x%04X) is not a slot cell" % (name, addr),
                      "the cell is neither the SLOT nor the JSLOT shape - the "
                      "table has been overwritten or the address is past its end",
-                     got=tgt, want="1E0E1F E8.. 1FCB  or  E9.. 0000000000"):
+                     got=tgt,
+                     want="1E0E1F E8.. 1FCB | E9.. 0000000000 | 55BD.. E9.. 00"):
             continue
         names = text_at.get(tgt, [])
         if not check(bool(names),

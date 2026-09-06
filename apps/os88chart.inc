@@ -1541,6 +1541,98 @@ ch_draw:
     ret
 
 ; =============================================================================
+; THE INTERIOR THE PICTURE DOES NOT COVER (SPEC.md 82.1.1, issue #142)
+;
+; Both callers open a window a little larger than the canvas - SHEET's
+; SH_CHARTWIN_W x SH_CHARTWIN_H and CHART's CT_WIN_W x CT_WIN_H are the same
+; 260x200 around the same CH_W x CH_H - so a band down the right and another
+; along the bottom belongs to the window and is not the picture's. Neither
+; W_PAINT wrote it, and a move left whatever had been on the glass in between.
+; It is here rather than in either package because the two are one drawing and
+; the whole point of this file is that they cannot drift into two.
+;
+; TWO BANDS, NOT THE WHOLE CONTENT. Filling the content and blitting over it
+; would write every pixel of the picture twice, which is PERFORMANCE.md Part
+; 1's double-draw flash - the picture goes white and wipes back on every
+; repaint, and on SHEET that includes the sh_chartdirty resync a cell edit
+; fires. It is also DEARER: the measured model (177us a scan line + 0.28us a
+; pixel, the one that reproduces PERFORMANCE.md's own GFX_FILL 256x128 =
+; 31.7ms) prices the whole 258x181 content at 45.1ms and these two bands at
+; 38.0ms. The "756us whatever it covers" figure does not decide this - Part 2
+; says in terms not to quote it as a floor a design has to beat.
+;
+; The bottom band stops at the picture's right edge, so the corner the right
+; band already covered is not written a second time either.
+;
+; OSAPI_WM_GEOM, not W_W/W_H: those are the OUTER frame, and filling to them
+; paints over the window's own border. WM_GEOM answers the size of the box
+; WM_CONTENT gives the origin of, which is the rectangle wanted.
+;
+; in:  BX = window ptr, AX = content x, DX = content y (WM_CONTENT's own
+;      outputs, so the call site is `call OSAPI_WM_CONTENT` / `call ch_margin`)
+; out: nothing; preserves every register
+; -----------------------------------------------------------------------------
+ch_margin:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, ax                        ; SI/DI = the content ORIGIN, held in
+    mov di, dx                        ; plain registers because both bands want
+                                       ; it and a rect spends the other four.
+                                       ; No caller bss word: every OSAPI slot
+                                       ; below preserves what it does not
+                                       ; document (SPEC.md 1), gfx_fill's own
+                                       ; header saying "clobbers: flags"
+    call OSAPI_WM_GEOM                ; CX = content width, DX = content height
+    jc .out                           ; not visible: nothing to paint
+    push cx
+    push dx
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop dx
+    pop cx
+    cmp cx, CH_W                      ; a window narrower than the picture has
+    jbe .below                        ; no right band at all
+    push cx
+    push dx
+    mov ax, si
+    mov bx, di
+    add cx, ax
+    dec cx                            ; x2 = the content's right edge
+    add ax, CH_W                      ; x1 = the first column the picture misses
+    add dx, bx
+    dec dx                            ; y2 = the content's bottom edge
+    call OSAPI_GFX_FILL
+    pop dx
+    pop cx
+.below:
+    cmp dx, CH_H                      ; ...and nothing below it on a short one
+    jbe .out
+    cmp cx, CH_W                      ; the band is the picture's width, or the
+    jbe .bw                           ; content's where that is narrower
+    mov cx, CH_W
+.bw:
+    mov ax, si
+    mov bx, di
+    add cx, ax
+    dec cx                            ; x2 = the picture's right edge
+    add dx, bx
+    dec dx                            ; y2 = the content's bottom edge
+    add bx, CH_H                      ; y1 = the first row the picture misses
+    call OSAPI_GFX_FILL
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
 ; TEXT INTO THE CANVAS - the prerequisite for every label.
 ;
 ; THE GLYPHS COME FROM THE KERNEL, via OSAPI_FONT_GLYPHS (slot 0x0218), and
@@ -1699,6 +1791,7 @@ ch_glyph:
 ; this file had no formatter of its own; Sheet's lives in Sheet.
 ; -----------------------------------------------------------------------------
 ch_itoa_t:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx

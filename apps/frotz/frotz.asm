@@ -32,7 +32,7 @@
 ;    game loop. A turn is tens of thousands of instructions - seconds on a
 ;    4.77MHz 8088 - and running it in a key callback would hold the gfx lock
 ;    for those seconds and freeze the clock, the mouse and every other window.
-;    Two worker rules then shape the whole program: the 256-byte stack (so the
+;    Two worker rules then shape the whole program: the 384-byte stack (so the
 ;    VM keeps its own stack in a claim and nothing recurses), and no file slot,
 ;    no OSAPI_FILE_DLG and no OSAPI_MEM_* from a worker - which is what the
 ;    request handshake in zio.inc exists to answer.
@@ -62,7 +62,15 @@
 ZF_SBRATE   equ SB_RATE
 %endif
 
-    OS88_HEADER 'FROTZ', zf_entry, 3    ; bit0 = icon, bit1 = association block
+    OS88_HEADER 'FROTZ', zf_entry, 3, OS88_STACK_384    ; bit0 = icon, bit1 = association block
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 240: 22 levels down to
+                                ; OSAPI_GFX_LOCK, the deepest
+                                ; chain in the tree. 42 of them
+                                ; are registers it never uses
+                                ; over the 64-byte interrupt floor
+                                ; that is 304, and 384 gives 1.26x
 
 ; --- the 16x16 icon: a lamp, which is what you are carrying ------------------
     OS88_ICON16
@@ -782,13 +790,15 @@ zf_it_script: db 'Transcript', 0
 zf_about:    db 'Frotz', 0
 
 zf_abt_lines:
-    dw zf_a1, zf_a2, zf_a3, zf_a4, zf_a5, zf_a6, 0
+    dw zf_a1, zf_a2, zf_a3, zf_a4, zf_a5, zf_a6, zf_a7, zf_a8, 0
 zf_a1: db 'Frotz - a Z-machine for os8088', 0
 zf_a2: db 'Plays Infocom and Inform stories, v1-v8.', 0
 zf_a3: db 0
 zf_a4: db 'An independent implementation of the', 0
 zf_a5: db 'Z-Machine Standard 1.1 in 8086 assembly.', 0
 zf_a6: db "Not a port of David Griffith's Frotz.", 0
+zf_a7: db 0
+zf_a8: db 'Contributed by Jorge Gonzalez', 0
 
 zf_splash_lines:
     dw zf_p1, zf_p2, zf_p3, 0

@@ -340,6 +340,10 @@ pub struct DebugServer {
     wavs:     Vec<WavSink>,
     listener: Option<TcpListener>,
     client:   Option<BufReader<TcpStream>>,
+    /// Who the one client is, kept only so a SECOND one can be told. See
+    /// `poll_socket`: the refusal names the holder, because "busy" without a
+    /// name sends the reader looking for a process rather than for a session.
+    client_peer: Option<String>,
     pending:  VecDeque<String>,
     quit:     bool,
     #[cfg(unix)]
@@ -351,14 +355,72 @@ pub struct DebugServer {
 }
 
 impl DebugServer {
+    /// Bind the debug server, and PUBLISH where it landed.
+    ///
+    /// TWO THINGS HERE EXIST FOR CONCURRENT INSTANCES, and both are about
+    /// removing a race rather than reporting one.
+    ///
+    /// PORT 0. `MARTYPC_DEBUG_ADDR=127.0.0.1:0` asks the OS for a free port,
+    /// which is the only allocation that cannot race: a client that picks a
+    /// port by probing for a quiet one has already let go of it by the time
+    /// the emulator tries to bind, so two launchers a millisecond apart pick
+    /// the SAME free port and the second one dies. The kernel picking it
+    /// under the bind is atomic by construction.
+    ///
+    /// THE PORT FILE is how the launcher learns the answer.
+    /// `MARTYPC_DEBUG_PORTFILE=<path>` gets the real port written to it, via
+    /// a temp file and a rename so a reader never sees half a number. Failing
+    /// to write it is FATAL: a debug server nobody can find is precisely the
+    /// unreachable survivor described below, and running on would leave one.
+    ///
+    /// A BIND FAILURE IS FATAL AND SAYS SO ON STDERR, not only through
+    /// `log::`, whose level is a config away from being off. An emulator that
+    /// cannot be talked to must not keep running: it holds the port against
+    /// the next run, and the next launcher then attaches to a machine that is
+    /// not the one it started.
     pub fn bind(addr: &str) -> std::io::Result<Self> {
-        let listener = TcpListener::bind(addr)?;
+        let listener = match TcpListener::bind(addr) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("martypc: could not bind the debug server to {}: {}", addr, e);
+                if e.kind() == ErrorKind::AddrInUse {
+                    eprintln!(
+                        "martypc: that port is already held - by another martypc_headless, \
+                         or by a survivor of a previous run. Exiting rather than running on \
+                         unreachable. Ask for port 0 (MARTYPC_DEBUG_ADDR=127.0.0.1:0 with \
+                         MARTYPC_DEBUG_PORTFILE=<path>) and the OS picks a free one."
+                    );
+                }
+                return Err(e);
+            }
+        };
         listener.set_nonblocking(true)?;
-        log::info!("Debug server listening on {}", addr);
+        let local = listener.local_addr()?;
+        if let Ok(pf) = std::env::var("MARTYPC_DEBUG_PORTFILE") {
+            if !pf.is_empty() {
+                let tmp = format!("{}.{}.tmp", pf, std::process::id());
+                let body = format!("{} {}\n", local.port(), std::process::id());
+                if let Err(e) =
+                    std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, &pf))
+                {
+                    let _ = std::fs::remove_file(&tmp);
+                    eprintln!(
+                        "martypc: bound {} but could not write the port file {}: {}. \
+                         Exiting: a debug server whose port nobody can learn is an \
+                         unreachable survivor.",
+                        local, pf, e
+                    );
+                    return Err(e);
+                }
+            }
+        }
+        log::info!("Debug server listening on {} (pid {})", local, std::process::id());
+        eprintln!("martypc: debug server on {} (pid {})", local, std::process::id());
         Ok(Self {
             wavs: Vec::new(),
             listener: Some(listener),
             client: None,
+            client_peer: None,
             pending: VecDeque::new(),
             quit: false,
             #[cfg(unix)]
@@ -431,6 +493,7 @@ impl DebugServer {
     fn detach_for_holder(&mut self) {
         self.listener = None;
         self.client = None;
+        self.client_peer = None;
         self.pending.clear();
         for w in self.wavs.iter_mut() {
             w.disable();
@@ -447,12 +510,70 @@ impl DebugServer {
                 Ok((stream, peer)) => {
                     log::info!("Debug client connected from {}", peer);
                     let _ = stream.set_nonblocking(true);
+                    self.client_peer = Some(peer.to_string());
                     self.client = Some(BufReader::new(stream));
                 }
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => return,
                 Err(e) => {
                     log::error!("Debug server accept failed: {}", e);
                     return;
+                }
+            }
+        }
+        else {
+            // A SECOND CLIENT, REFUSED IN WORDS. This used to be the absence
+            // of an else: the connection stayed in the listen backlog, so the
+            // caller's `connect()` SUCCEEDED and its first read then blocked
+            // until the timeout - sixty seconds of nothing, reported as a
+            // hung emulator or a hung guest, and it is neither. A refusal
+            // that names the holder turns the commonest way of losing an
+            // afternoon into one line.
+            //
+            // The refusal is a normal reply envelope (`ok: false`) so an
+            // existing client parses it without learning anything new, plus
+            // a `busy` flag for one that wants to tell this apart from a
+            // rejected command.
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, peer)) => {
+                        let held = self.client_peer.clone().unwrap_or_else(|| "?".into());
+                        log::warn!("Refused a second debug client from {} ({} holds it)", peer, held);
+                        let msg = json!({
+                            "ok": false,
+                            "busy": true,
+                            "holder": held,
+                            "pid": std::process::id(),
+                            "err": format!(
+                                "this debug server already has a client ({}); it takes one at \
+                                 a time. Share that connection, or launch a second emulator \
+                                 of your own - os88marty.launch() gives every instance its \
+                                 own port (docs/MARTYPC-DEBUG.md).", held),
+                        });
+                        // BLOCKING for this one write: the socket has just
+                        // been accepted, the message is a few hundred bytes,
+                        // and a nonblocking WouldBlock here would drop the
+                        // refusal and reinstate the silent hang.
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.write_all((msg.to_string() + "\n").as_bytes());
+                        let _ = stream.flush();
+                        // DRAIN BEFORE CLOSING. A client that sent its first
+                        // command before we got round to accepting has left
+                        // bytes in this socket's receive queue, and closing a
+                        // socket with unread data is the one case that sends
+                        // RST instead of FIN - which can discard the refusal
+                        // we just wrote and put the caller back on a bare
+                        // "connection reset" with nothing in it.
+                        let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
+                        let mut junk = [0u8; 1024];
+                        for _ in 0..8 {
+                            match std::io::Read::read(&mut stream, &mut junk) {
+                                Ok(n) if n > 0 => continue,
+                                _ => break,
+                            }
+                        }
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                    }
+                    _ => break,
                 }
             }
         }
@@ -488,6 +609,7 @@ impl DebugServer {
         }
         if drop_client {
             self.client = None;
+            self.client_peer = None;
         }
     }
 
@@ -515,6 +637,7 @@ impl DebugServer {
                 match stream.write(&bytes[off..]) {
                     Ok(0) => {
                         self.client = None;
+                        self.client_peer = None;
                         return;
                     }
                     Ok(n) => off += n,
@@ -524,6 +647,7 @@ impl DebugServer {
                     Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
                     Err(_) => {
                         self.client = None;
+                        self.client_peer = None;
                         return;
                     }
                 }
@@ -544,7 +668,20 @@ impl DebugServer {
         };
 
         match cmd.as_str() {
-            "ping" => json!({"ok": true, "pong": true}),
+            // `ping` IDENTIFIES the process, and that is what makes it more
+            // than a liveness check. A launcher that can compare this pid
+            // against the one it spawned has a DIRECT answer to "am I talking
+            // to the emulator I just started", where `cycles == 0` is only a
+            // strong hint - a stale machine that happens to be paused at the
+            // start of its boot passes that and fails this.
+            "ping" => json!({
+                "ok": true,
+                "pong": true,
+                "pid": std::process::id(),
+                "port": self.listener.as_ref()
+                            .and_then(|l| l.local_addr().ok())
+                            .map(|a| a.port()),
+            }),
             "status" => status(machine, exec),
             "disk" => disk_stats(machine, &req),
             "regs" => regs(machine),

@@ -41,6 +41,18 @@
                                     ; %define has to be here anyway, because
                                     ; os88_menu_set() patches the trampoline in
 %define CC_HAS_WORKER               ; void os88_worker(void *) - hired only
+
+%define CC_STACK_CLASS OS88_STACK_256 ; ...AND HOW MUCH STACK IT WANTS
+                                    ; (SPEC.md 8.7). Declared rather
+                                    ; than defaulted:
+                                    ; the same shape as CWORD's: os88_worker() sleeps four ticks a pass
+                                    ; and destroys the window on the close path. ~10 over the floor's 64
+                                    ; is 74, and 128 gives 1.73x
+                                    ; It is NOT the same number as
+                                    ; crt0.asm's CC_STACK, which is
+                                    ; the LARGEST class: this is what
+                                    ; we ask for and that is the
+                                    ; widest slice we could be given
                                     ; on main.c's exit (BIOS BOOT / EXIT.COM /
                                     ; HALT) to close the window: there is no
                                     ; self-close slot (SPEC.md 74, cword's

@@ -618,7 +618,6 @@ static unsigned char rom[20480];
 static unsigned char scratch[CLAIM_MAX][65536];
 static struct { unsigned seg; long cap; int live; } claim[CLAIM_MAX];
 static int ram_live, rom_live, claims_live;
-static int rom_present = 1;
 
 static unsigned char *segbase(unsigned seg)
 {
@@ -710,22 +709,48 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
         memcpy(segbase(seg), fx_data, n);
         return n;
     }
-    if (strcmp(name, "C64.ROM") != 0)   /* c64.c's C64_ROM_NAME, which
-                                         * is not declared until it is
-                                         * #included below */
-        return 0;                       /* no such file: a normal refusal */
-    if (!rom_present)
-        return 0;
-    f = fopen("build/c64-rom/C64.ROM", "rb");
-    if (!f) {
-        printf("c64uitest: build/c64-rom/C64.ROM is missing - "
-               "run `python3 tools/c64rom.py` first\n");
-        exit(2);
-    }
-    n = (unsigned)fread(segbase(seg), 1, cap, f);
-    fclose(f);
-    return n;
+    return 0;                           /* no such file: a normal refusal.
+                                         * C64.ROM used to be served here and
+                                         * is a PART now (1.4) - see
+                                         * os88_part_seg below */
 }
+
+/* --- THE PARTS STANDARD, on the host (SPEC.md 20.12) ----------------------
+ * On the guest, crt0 calls op_load before os88_main: the 20KB is claimed and
+ * the ROM is read into it, or the launch is refused before a sector is spent.
+ * Here that is one segment holding the same bytes, loaded on the first ask,
+ * out of the same build/c64-rom/C64.ROM the packer appends to the package.
+ *
+ * There is no `the part is missing` case to model, and that IS the change
+ * wave 6 made: a required part is here when os88_main runs or the launch
+ * never got that far. `--no-rom`, a whole second process that existed to draw
+ * the notice a mis-copied disk showed, went with it. */
+unsigned os88_part_seg(int i)
+{
+    FILE *f;
+    if (i != 0)
+        return 0;
+    if (!rom_live) {
+        f = fopen("build/c64-rom/C64.ROM", "rb");
+        if (!f) {
+            printf("c64uitest: build/c64-rom/C64.ROM is missing - "
+                   "run `python3 tools/c64rom.py` first\n");
+            exit(2);
+        }
+        if (fread(rom, 1, sizeof(rom), f) != sizeof(rom)) {
+            printf("c64uitest: build/c64-rom/C64.ROM is short\n");
+            exit(2);
+        }
+        fclose(f);
+        rom_live = 1;
+    }
+    return SEG_ROM;
+}
+
+int os88_part_fetch(int i) { (void)i; return 0; }
+void os88_part_drop(int i) { (void)i; }
+int os88_part_lazyok(int i) { (void)i; return 1; }
+int os88_part_optok(void) { return 1; }
 
 /* --- the runtime helpers ------------------------------------------------- */
 void os88_memset(void *p, int c, unsigned n) { memset(p, c, n); }
@@ -1682,175 +1707,23 @@ static void h_noise(void)
     }
 }
 
-/* ==========================================================================
- * THE ROM-LESS MACHINE, AS ITS OWN PROCESS (1.4, 9.5)
- *
- * `build/c64uitest --no-rom` is a SECOND RUN, because os88_main runs once per
- * process and the refusal surface is decided there. Without it nothing in
- * this file ever cleared rom_present, so the one screen a user of a
- * mis-copied disk actually sees - the permanent notice naming the file - was
- * never drawn by any check. It is four os88_font_run of the KERNEL's face on
- * a fill, and it has to survive an expose like anything else.
- * ========================================================================*/
-static int no_rom_main(void)
-{
-    void *win;
-    int x, y, lit, left;
-
-    rom_present = 0;
-    memset(glass, 0x55, sizeof(glass));
-    win = os88_main();
-    if (win == 0) {
-        fail("os88_main refused the launch when C64.ROM is missing - 1.4: "
-             "the window STAYS UP to say which file is not there");
-        return 1;
-    }
-    if (!c64_norom)
-        fail("a missing C64.ROM did not raise the refusal surface");
-    if (strncmp(last_toast, "C64: no C64.ROM", 15) != 0)
-        fail("a missing C64.ROM was not toasted as well (9.8: both routes)");
-    dmg_whole = 1;
-    do_paint(win);
-    lit = 0;
-    for (y = 0; y < 60; y++)
-        for (x = 0; x < 320; x++)
-            if (glass[c64_gsy + 30 + y][c64_gsx + x] == 1)
-                lit++;
-    if (lit < 200)
-        fail("the `C64.ROM is not on this disk` notice is not on the glass");
-
-    /* IT IS DRAWN ONCE. Every menu command on this machine answers through
-     * c64_say, and os88_onwake flushes and re-posts for the message's whole
-     * ~5 seconds - so an ungated banner is ~45 repaints of 1 fill + 124 glyph
-     * cells, ~115 ms each, at a ~100% duty cycle, on a static screen. */
-    cost_begin();
-    c64_say("Warp mode on.");
-    flush_now();
-    flush_now();
-    if (n_fill - b_fill > 1 || (n_run_cells - b_run_cells) > 40)
-        fail("the ROM-less notice was repainted by a message going up");
-
-    /* ...AND THE MESSAGE COMES DOWN BY ITSELF, WHICH ON THIS DISK IT NEVER
-     * DID. The deadline used to be examined at the FAR END of c64_flush, past
-     * the `if (c64_norom) ... return` above - so on a disk with no C64.ROM
-     * nothing ever cleared c64_msg, the first menu command a user picked
-     * owned the row for the rest of the session (c64_status picks msg == 1
-     * over §1.4's permanent msg == 2), and `c64_wants_wake` re-posted for
-     * ever with nothing to do. This row used to CLEAR c64_msg BY HAND here
-     * and then advance the clock, which is why nothing saw it. */
-    if (c64_msg[0] == 0)
-        fail("the fixture lost its message before the deadline row could "
-             "test it");
-    /* THE NEGATIVE CONTROL, FIRST: the branch the deadline used to sit past
-     * is still there and still returns before the band machinery, so the row
-     * below is measuring the fix and not a branch that stopped existing. */
-    cost_begin();
-    flush_now();
-    if (n_band_calls - b_bandc != 0 || n_span_calls - b_span != 0)
-        fail("the ROM-less flush reached the band machinery - the early "
-             "return the deadline used to sit past is gone, so this row's "
-             "control is not modelling anything");
-    /* ...and the second half of the same defect: a message is NOT a reason to
-     * ask for another wake. Wave 2's shipped condition asked in this exact
-     * state, at ~1,400 round trips a second of the shared UI task. */
-    if (!(c64_dirty_any || c64_msg[0] != 0))
-        fail("the negative control did not re-post: the shipped condition is "
-             "no longer being modelled here");
-    if (c64_wants_wake())
-        fail("a ROM-less machine asked for another wake with nothing up but "
-             "a message - one round trip is a task switch (693 us) and there "
-             "is nothing inside the wake but a re-read of the clock "
-             "(SPEC.md 74.1)");
-    the_ticks += 200;
-    flush_now();
-    if (c64_msg[0] != 0)
-        fail("a message never expired on a ROM-less machine - the deadline "
-             "is past the early return, so §1.4's permanent "
-             "`C64.ROM missing - see README.TXT` never comes back");
-    if (c64_kick)
-        fail("the ROM-less machine went on posting wakes after its message "
-             "had come down");
-
-    /* ...AND Preferences > Advance frame IS GREYED HERE. There is no machine
-     * to advance, c64_advance_frame answers that state by doing nothing at
-     * all, and SPEC.md 47 forbids a live item that is a silent no-op. */
-    if (c64_pref_items[C64_I_ADVANCE][0] != OS88_MENU_DIS)
-        fail("Advance frame is LIVE on a disk with no C64.ROM - the user "
-             "picks a black item and nothing happens and nothing is said "
-             "(SPEC.md 47)");
-
-    /* ...AND SO ARE BOTH EDIT ITEMS, for two different reasons and the same
-     * rule. PASTE would queue bytes nothing will ever type. COPY would hand
-     * the SYSTEM clipboard 1,025 characters made out of c64_ram_pattern's
-     * factory fill - and the clipboard is kernel-owned and outlives this app
-     * (SPEC.md 55.3), so a user who mis-copied a disk would lose whatever
-     * they had copied somewhere else in exchange for a screen they cannot
-     * see. VICE's Copy always copies what is displayed; here there is
-     * nothing displayed. */
-    if (c64_edit_items[C64_I_COPY][0] != OS88_MENU_DIS)
-        fail("Edit > Copy is LIVE on a disk with no C64.ROM - it would "
-             "replace the system clipboard with the factory RAM pattern");
-    if (c64_edit_items[C64_I_PASTE][0] != OS88_MENU_DIS)
-        fail("Edit > Paste is LIVE on a disk with no C64.ROM - nothing ever "
-             "drains the queue in this state (SPEC.md 47)");
-    /* THE NEGATIVE CONTROL, and it is the one that matters: drive the CHORDS
-     * that os88_onkey dispatches itself and show that neither reaches the
-     * command. Without the guard Alt+Delete destroys the clipboard on a disk
-     * whose machine never started. */
-    {
-        int put0 = n_clip_put;
-        h_clip_n = 4;
-        memcpy(h_clip, "keep", 4);
-        c64_paste_n = 0;
-        os88_gfx_lock(); os88_onkey(0, 0xA3, win); os88_gfx_unlock();
-        os88_gfx_lock(); os88_onkey(0, 0xA2, win); os88_gfx_unlock();
-        if (n_clip_put != put0)
-            fail("Alt+Delete wrote the system clipboard on a ROM-less "
-                 "machine - the chord walked round the greying");
-        if (c64_paste_n != 0)
-            fail("Alt+Insert queued a paste on a ROM-less machine");
-        if (h_clip_n != 4 || memcmp(h_clip, "keep", 4) != 0)
-            fail("the system clipboard did not survive a ROM-less C64");
-        h_clip_n = -1;
-    }
-
-    /* ...AND A PARTIAL EXPOSE OF IT IS REPAIRED. The notice has no shadow and
-     * no per-row force records - the branch that draws it returns before the
-     * band machinery - so the gate above has to be answered by the expose
-     * path, or an exposed strip of it stays blank for ever. */
-    flush_now();
-    for (y = 0; y < 40; y++)
-        for (x = 0; x < 160; x++)
-            glass[c64_gsy + 40 + y][c64_gsx + x] = 0x55;   /* something covered
-                                                            * it and went away */
-    dmg_whole = 0;
-    dmg.x1 = c64_gsx; dmg.y1 = c64_gsy + 40;
-    dmg.x2 = c64_gsx + 159; dmg.y2 = c64_gsy + 79;
-    do_paint(win);
-    left = 0;
-    for (y = 0; y < 40; y++)
-        for (x = 0; x < 160; x++)
-            if (glass[c64_gsy + 40 + y][c64_gsx + x] == 0x55)
-                left++;
-    if (left)
-        fail("a partial expose of the ROM-less notice was never repaired - "
-             "the surface has no shadow, so the expose path has to say so");
-
-    if (fails) {
-        printf("c64uitest --no-rom: %d FAILURE(S)\n", fails);
-        return 1;
-    }
-    printf("c64uitest --no-rom: PASS\n");
-    return 0;
-}
+/* THE ROM-LESS MACHINE HAD A WHOLE SECOND PROCESS HERE (`--no-rom`, 1.4) and
+ * it is deleted rather than skipped. os88_main runs once per process and the
+ * refusal surface was decided there, so the one screen a user of a mis-copied
+ * disk actually saw - four lines naming the file - needed its own run to be
+ * drawn by any check at all. With the ROM a PART of the package (SPEC.md
+ * 20.12) there is no mis-copied disk: op_load has the 20KB and the bytes
+ * before os88_main runs, or the launch was refused before a sector was spent.
+ * What went with it: the notice and its once-only gate, its expose repair,
+ * the message deadline's negative control on a branch that no longer exists,
+ * and the greying of Advance frame, Copy and Paste on a machine that could
+ * not start. The JAM half of every one of those rules is still here and still
+ * checked - that state is real. */
 
 int main(int argc, char **argv)
 {
     void *win;
     int i, k;
-
-    if (argc > 1 && strcmp(argv[1], "--no-rom") == 0)
-        return no_rom_main();
 
     memset(glass, 0x55, sizeof(glass));     /* nothing is drawn yet, and 0x55
                                              * is neither lit nor dark */
@@ -2960,30 +2833,6 @@ int main(int argc, char **argv)
         os88_gfx_unlock();
     }
     audit("after coming back from the Alt+D panel step");
-
-    /* --- THE ROM-LESS BANNER IS DRAWN ONCE, NOT ON EVERY FLUSH -----------
-     * c64_flush's norom branch is 1 fill + 4 font_run over 124 glyph cells,
-     * ~115 ms, and every menu command on a ROM-less machine answers through
-     * c64_say - which keeps os88_onwake flushing and re-posting for the
-     * message's whole ~5 seconds. Unconditional, that is ~45 repaints of a
-     * notice that never changes. c64_sh_ok already means "we know what is on
-     * the glass"; it is the gate. */
-    c64_norom = 1;
-    c64_sh_inval();
-    c64_dirty_any = 1;
-    flush_now();                            /* the banner goes up */
-    cost_begin();
-    c64_dirty_any = 1;
-    flush_now();
-    if (n_fill - b_fill != 0 || (n_run_cells - b_run_cells) != 0)
-        fail("the ROM-less banner was repainted on a flush that changed "
-             "nothing");
-    c64_norom = 0;
-    c64_st_ok = 0;
-    c64_sh_inval();
-    dmg_whole = 1;
-    do_paint(win);
-    audit("after the ROM-less banner came down");
 
     /* ======================================================================
      * WAVE 2: THE CLOCK, THE ALARM MODEL, THE WALL SLICE AND THE KEYBOARD

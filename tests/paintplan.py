@@ -6,8 +6,16 @@
 On a colour adapter Paint stores its canvas as FOUR PLANES - the layout the
 card wants - so a repaint is a copy rather than a transpose (SPEC.md 5.4.3).
 That changes every routine that reads or writes a pixel, and the way to know
-they all agree is to make the picture come back out: open OS8088.GIF, which
-is two colours, and compare the screen against THE FILE.
+they all agree is to make the picture come back out: open a two-colour
+picture and compare the screen against THE FILE.
+
+**THE FIXTURE IS A COLOUR DERIVATION and that is load-bearing since SPEC.md
+42.23.6**, which opens a GIF whose colour table has two entries ONE BIT DEEP
+on any adapter - and `build/OS8088.GIF` has exactly two. Opened as itself it
+gives this row a one-bit canvas and `gfx_blitp` never fires, which would take
+the breakpoint below with it. `dispapps.colour_gif` appends two unused table
+entries and changes not one pixel, so the oracle is unchanged and the canvas
+is four planes again.
 
 It is an end-to-end test on purpose. Between the file and the screen sit the
 GIF decoder, pt_line_put packing colour indices into four planes, pt_wipe,
@@ -36,6 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
+import dispapps                                              # noqa: E402
 from blitpair import gif_pixels                              # noqa: E402
 
 S = os88sym.linear
@@ -51,8 +60,13 @@ def main():
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="/tmp/paintplan.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
-    ap.add_argument("--gif", default="build/OS8088.GIF")
+    ap.add_argument("--gif", default=None,
+                    help="the picture to open (default: a COLOUR derivation "
+                         "of build/OS8088.GIF - see above)")
     a = ap.parse_args()
+
+    if a.gif is None:
+        a.gif = dispapps.colour_gif()
 
     if a.apps == "/tmp/paintplan.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
@@ -77,7 +91,8 @@ def main():
                                dispcp.scroll_to(m, mo, S, os88marty.settle,
                                                 bx, by,
                                                 dispcp.row_of(m, S,
-                                                              "OS8088.GIF")))
+                                                              os.path.basename(
+                                                                  a.gif))))
         mo.to(rx, ry)
         os88marty.settle(m)
 

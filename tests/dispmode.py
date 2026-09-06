@@ -54,6 +54,15 @@ import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
 
+# SPEC.md 39.14's per-display record, from the ONE place that mirrors it.
+# This file indexed it with bare literals on the VID_CTX_W = 18 layout the
+# kernel left behind at 6.1.10 - kind at 40, vx/vy at 36/38 - and two bytes
+# early is `vid_tseg`, a FRAMEBUFFER SEGMENT, so the row reported display 1
+# "at (45056,640)": 45056 is 0xB000, the MDA's base, printed where an
+# x-coordinate belongs.
+from os88geom import (VID_CTX_SZ, VID_CTX_VX, VID_CTX_VY,   # noqa: E402
+                      VID_CTX_KIND, VID_CTX_CW, VID_CTX_CH)
+
 KERNEL_SEG = 0x0060
 DBG_TAG_VIDEO = 0x4456
 MBAR_H = 20
@@ -97,12 +106,23 @@ class VD(object):
         self.desk = (u16(d), u16(d, 2))
         c = m.read(base + p[8], 4)
         self.chrome = (u16(c), u16(c, 2))
+        # ...and the block PUBLISHES the stride at +12, so the guest gets a
+        # vote on the host's mirror. They can only disagree if os88geom has
+        # gone stale against a kernel this row is actually talking to, which
+        # is the failure this whole file is being repaired from - so it is
+        # asserted here rather than trusted, exactly as vidsel.inc asserts
+        # VID_CTX_CW/CH against viddet.inc's column order.
+        if p[6] != VID_CTX_SZ:
+            raise RuntimeError(
+                "the kernel publishes VID_CTX_SZ = %d and tools/os88geom.py "
+                "mirrors %d - the record moved and the harness did not follow"
+                % (p[6], VID_CTX_SZ))
         self.disp = []
         for i in range(self.ndisp):
-            r = m.read(base + p[5] + i * p[6], 42)
-            self.disp.append({"kind": r[40], "vx": u16(r, 36),
-                              "vy": u16(r, 38), "cw": u16(r, 14),
-                              "ch": u16(r, 16), "seg": u16(r, 0)})
+            r = m.read(base + p[5] + i * p[6], p[6])
+            self.disp.append({"kind": r[VID_CTX_KIND], "vx": u16(r, VID_CTX_VX),
+                              "vy": u16(r, VID_CTX_VY), "cw": u16(r, VID_CTX_CW),
+                              "ch": u16(r, VID_CTX_CH), "seg": u16(r, 0)})
 
     def __str__(self):
         s = ("kind %d avail %#x ndisp %d dmode %d dlay %d ptr %d desk %dx%d "

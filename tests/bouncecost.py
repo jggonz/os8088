@@ -46,10 +46,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88marty
 from os88mouse import Mouse
 import os88sym
+from os88geom import MB_ENTSZ      # the bar cell stride, SPEC.md 12.2
 
 S = os88sym.linear
 KERNEL_SEG = 0x0060
-MBAR_H, MENU_ITEM_H, MB_ENTSZ, MB_XL = 20, 16, 14, 6
+MBAR_H, MENU_ITEM_H, MB_XL, MB_SEG = 20, 16, 6, 10
 CELL_BUILTIN, ITEM_BOUNCE = 2, 1
 SAMPLES = 40
 
@@ -60,7 +61,7 @@ def u16(b, o=0):
 
 def menu_title(m, cell):
     t = m.read(S("menu_bar") + cell * MB_ENTSZ, MB_ENTSZ)
-    p, sg = u16(t, 0), u16(t, 12)
+    p, sg = u16(t, 0), u16(t, MB_SEG)
     if not p:
         return "<logo>"
     return m.read((sg or KERNEL_SEG) * 16 + p,

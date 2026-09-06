@@ -101,6 +101,12 @@ eth_bases:  dw 0x300, 0x320, 0x340, 0x280, 0x2C0, 0x240, 0x360, 0
 eth_fixed:  dw ETH_BASE
 %endif
 
+%define WZ_CLASS DRVC_NET       ; ...and the desktop icon the Wire is reached
+%include "wirezone.inc"         ; by (SPEC.md 26.7). EVERY BYTE OF IT IS OURS:
+                                ; the kernel's zone is generic and carries no
+                                ; glyph, so a machine with no card pays for
+                                ; none of this
+
 %include "ethprof.inc"          ; the stage timers (SPEC.md 72.15), and HERE
                                 ; rather than beside the other includes below:
                                 ; it defines the PROF_ macros, and eth_pkg uses
@@ -197,6 +203,12 @@ eth_attach:
 eth_ready:
     push ax
     push cx
+    call wz_register            ; the desktop icon, NOW: our services are
+                                ; published, so the API will take the call -
+                                ; and above the [eth_up] test, because a card
+                                ; that found no address is still a card and
+                                ; the Wire's own window is what says so
+                                ; (SPEC.md 26.7, docs/WIRE-PLAN.md §7)
     cmp byte [eth_up], 0
     je  .out
     call eth_cfg_load           ; a MANUAL address the user set and the panel
@@ -274,6 +286,10 @@ eth_detach:
     push dx
     push si
     push di
+    call wz_withdraw            ; **THE DESKTOP ICON FIRST** (SPEC.md 26.7):
+                                ; its paint verb lives in the image the kernel
+                                ; is about to free, and the zone is redrawn
+                                ; out of ui_task's next pass
     mov byte [eth_busy], 1      ; **TAKEN AND NOT ASKED FOR** (SPEC.md 72.2.2):
                                 ; a detach cannot fail and cannot wait, so it
                                 ; takes the card outright and every package
@@ -359,6 +375,15 @@ eth_pkg:
                                 ; driver answered wrongly" from "nobody is
                                 ; calling it", which from inside the guest
                                 ; look identical
+    cmp bl, WZV_PAINT
+    je  .wzpaint                ; ...AND SO IS THE DESKTOP ICON (SPEC.md 26.7),
+                                ; above the claim and for the same reason: the
+                                ; kernel calls it from a desktop repaint under
+                                ; the gfx lock, which can land while another
+                                ; task is inside a socket verb, and an icon
+                                ; that answered NETE_BUSY would simply not be
+                                ; drawn. It touches neither the card nor
+                                ; [eth_useg]
     cmp bl, NETV_IDENT
     je  .ident                  ; ...ANSWERED FIRST AND WITH NO CLAIM: it is a
                                 ; question about which DRIVER this is and it
@@ -417,6 +442,10 @@ eth_pkg:
     ret
 .ident:
     call eth_v_ident
+    jmp short .pop
+.wzpaint:
+    call wz_paint               ; ...and it cannot fail: CF=0, and `pop` writes
+    clc                         ; no flags
     jmp short .pop
 .busy:
     mov ax, NETE_BUSY           ; NOT A FAILURE (netpkg.inc): the other task is

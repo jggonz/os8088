@@ -5,13 +5,20 @@
 
 SPEC.md 74.1.1.  `wm_wake` coalesces one queued wake per window slot, and
 `wm_wkq[slot]` is the flag that says a record for that window is in the ring.
-The flag and the record are ONE FACT.  Four loops in this kernel pop records
-they are not interested in and throw them away - `ui_drag` and `ui_grow` drain
-everything that is not an `EVT_MUP`, `fsx` and `snd` empty the ring outright -
-and a wake eaten by one of those used to leave the flag set with no record
-behind it.  The window is then DEAF FOR THE REST OF ITS LIFE: every `wm_wake`
-after it reads "one is already queued" and answers CF=0, a promise nothing
-will ever keep.
+The flag and the record are ONE FACT.  Six loops in this kernel pop records
+they are not interested in and throw them away - `ui_drag`, `ui_grow` and both
+of `fm_drag`'s drain everything that is not an `EVT_MUP`, and `fsx`, `snd` and
+`blk_pass` empty the ring outright - and a wake eaten by one of those used to
+leave the flag set with no record behind it.  The window is then DEAF FOR THE
+REST OF ITS LIFE: every `wm_wake` after it reads "one is already queued" and
+answers CF=0, a promise nothing will ever keep.
+
+**Since kernel size pass 3 the discipline lives in TWO SHARED HELPERS** and
+not in six copies of it: `evq_drain` and `evq_mup` (SPEC.md 10.3), the second
+being the "pop until an EVT_MUP" form the four tracking loops all call now.
+So `seen` is 2 rather than 6, and that is the healthy number - the blindness
+guard below is what keeps it from being 0.  A new drain that writes the loop
+out again instead of calling a helper is still caught, which is the point.
 
 The field found it as *"dragging the window during the write kills the FTP
 transfer, and the client cannot reconnect"* - a kernel bug that presents as a
@@ -37,8 +44,7 @@ def main() -> int:
     seen = 0
     # kernel.asm is in scope too, and not only the modules it includes: a
     # drain written in kmain or in one of the far shims would otherwise land
-    # exactly as silently as the four this exists for. The exemption below
-    # names it, so leaving it out made that branch unreachable.
+    # exactly as silently as the ones this exists for.
     srcs = (sorted((ROOT / "kernel").glob("*.inc"))
             + [ROOT / "kernel" / "kernel.asm"])
     for src in srcs:
@@ -47,14 +53,14 @@ def main() -> int:
             # The far form too: a .cold drain pops through the KERNEL_SEG
             # shim, and the two fm_drag loops this pattern missed were
             # exactly that - live wake-eaters passing the gate built for
-            # them. An `evq_init` outside kmain is a whole-ring drain and
-            # owes the same bookkeeping (blank.inc's was the third).
+            # them. `evq_init` used to be matched here as well, a whole-ring
+            # reset being a drain that owes the same bookkeeping; it was
+            # deleted in size pass 3 (SPEC.md 10) and the exemption its one
+            # legitimate caller needed went with it.
             if not re.match(
-                    r"\s*call\s+(KERNEL_SEG:)?(cw_)?evq_(pop|init)\s*(;.*)?$",
+                    r"\s*call\s+(KERNEL_SEG:)?(cw_)?evq_pop\s*(;.*)?$",
                     line):
                 continue
-            if "evq_init" in line and src.name == "kernel.asm":
-                continue        # kmain's init, before anything can be owed
             seen += 1
             after = "\n".join(lines[i:i + WINDOW])
             if "wm_wake_eaten" in after or "EVT_WAKE" in after:

@@ -1297,6 +1297,7 @@ wd_rnemit:
 
 ; wd_rnval - write value AX in kind DL. CF=1 = full. Preserves all.
 wd_rnval:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx

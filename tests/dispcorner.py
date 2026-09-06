@@ -58,6 +58,13 @@ import time
 
 sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
+
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
+                      VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
+# SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
+# written down here. This file spelled it `42 + 36`, which is the
+# VID_CTX_W = 18 layout - two bytes early, and what sits there is
+# display 1's vid_chm8, so the seam read 192 instead of 720.
 import os88geom                                             # noqa: E402
 import os88marty, os88mouse, os88sym, dispcp                # noqa: E402
 
@@ -808,10 +815,11 @@ def main():
             os88marty.settle(m, card=pri)
             if m.read(S("vid_ndisp"), 1)[0] != 2:
                 sys.exit("D: the Control Panel did not turn Extend on")
-            ctx = m.read(S("vid_ctx"), 84)
-            seam, vy1 = u16(ctx, 42 + 36), u16(ctx, 42 + 38)
+            ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
+            seam, vy1 = (u16(ctx, VID_CTX_SZ + VID_CTX_VX),
+                         u16(ctx, VID_CTX_SZ + VID_CTX_VY))
             bot1 = vy1 + u16(ctx, 42 + 16)
-            bot0 = u16(ctx, 38) + u16(ctx, 16)
+            bot0 = u16(ctx, VID_CTX_VY) + u16(ctx, VID_CTX_CH)
             print("D: the second display is at (%d,%d), its last row %d "
                   "against display 0's %d" % (seam, vy1, bot1 - 1, bot0 - 1))
             if bot1 >= bot0:
@@ -909,8 +917,9 @@ def main():
                     dispcp.open_panel(m, mo, S, os88marty.settle, card=pri)
                 dispcp.set_mode(m, mo, S, os88marty.settle, a.mode, card=pri)
                 dispcp.close_panel(m, mo, S, os88marty.settle, card=pri)
-                ctx = m.read(S("vid_ctx"), 84)
-                seam = (u16(ctx, 42 + 36), u16(ctx, 42 + 38))
+                ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
+                seam = (u16(ctx, VID_CTX_SZ + VID_CTX_VX),
+                        u16(ctx, VID_CTX_SZ + VID_CTX_VY))
                 print("extended; the second display is at %r" % (seam,))
             if a.under == "hello" and a.only == "b":
                 launch_hello(m, mo, pri)

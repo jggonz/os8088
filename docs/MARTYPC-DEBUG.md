@@ -343,8 +343,10 @@ python3 tools/os88flush.py 127.0.0.1:9001 verify 0
 ```
 
 …and, in a scripted session, sharing the one connection the debug server
-allows (`Mouse(marty=m)`'s idiom, for `Mouse(marty=m)`'s reason — a second
-client does not error, it **hangs**):
+allows (`Mouse(marty=m)`'s idiom, for `Mouse(marty=m)`'s reason — one instance
+takes one client, and a second is **refused**, with a sentence naming the one
+that holds it). Sharing the `Marty` shares the run directory too, which is
+what lets `Flush` resolve a mount path that is relative to *that instance*:
 
 ```python
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img") as m:
@@ -426,6 +428,30 @@ apt-get update                       # the shipped index is stale; this is slow
 apt-get install -y --no-install-recommends libudev-dev pkg-config
 ```
 
+**...and if `apt-get update` refuses to update anything**, saying
+
+```
+E: gpgv, gpgv2 or gpgv1 required for verification, but neither seems installed
+```
+
+while `/usr/bin/gpgv --version` answers perfectly well, the missing thing is
+not gpgv: apt drops to the unprivileged `_apt` user to fetch and verify, and in
+a container whose filesystem that user cannot traverse the check fails with
+that sentence. **Run the update and the install with the sandbox off**:
+
+```sh
+apt-get -o APT::Sandbox::User=root update
+apt-get -o APT::Sandbox::User=root install -y --no-install-recommends \
+        libudev-dev pkg-config
+```
+
+The failure is worth recognising by shape rather than by text, because it does
+not look like a permissions problem from either end: the index silently stays
+stale, so the install then 404s on `…8.14` exactly as it does with no refresh
+at all, and the cure above reads as unrelated to the error it fixes. A plain
+`apt-get update` that ends in `W: Some index files failed to download` having
+touched nothing is the tell.
+
 **Do not pin a version here.** Skipping the deps entirely does not fail at apt
 at all: it fails minutes later inside cargo, on `serialport`.
 
@@ -494,22 +520,52 @@ with os88marty.launch("build/os8088-360.img",
     m.vram("cga")
 ```
 
-- **It kills survivors by PID, out of `/proc`, and waits for the port.** A
-  leftover emulator keeps 9001, the new one cannot bind and says so only in
-  its log, and the client then drives the *stale* machine — a different image
-  at a different point in its boot. It reads as a hang, or as a change that
-  did nothing.
+- **Every instance is isolated, and it takes no argument.** `addr=None` — the
+  default — has the emulator ask the OS for a free port under its own bind
+  and publish what it got, and the machine runs in a private directory under
+  `build/martypc/inst/`. Two of these in one checkout do not see each other:
+  two terminals, two agents, two rows of the suite. The address is on the
+  object afterwards (`m.addr`, `m.port`), which is what to hand to
+  `tools/os88mouse.py`.
+- **It reaps orphans and nothing else.** An emulator whose owning script died
+  is a survivor nobody will close, so it is killed by PID; a live instance
+  with a live owner is left alone. That second half is the whole point:
+  `launch()` used to sweep **every** `martypc_headless` on the box before
+  starting its own, so two harnesses in one tree took turns killing each
+  other's machines and the loser saw `BrokenPipeError` from a socket to a
+  process that no longer existed — every symptom pointing at the emulator or
+  the guest while the cause was somewhere else. `kill_all()` is that sweep,
+  kept as a deliberate act (`os88marty.py kill-all --yes`) and never automatic.
 - **Never `pkill -f martypc_headless` and never `pgrep -f`.** The pattern
   matches the calling shell's own command line, so `pkill` can kill the
   caller and `until ! pgrep -f …` never finishes. The `[m]artypc` bracket
-  dodge fixes only the first of those.
+  dodge fixes only the first of those — and it would now also kill everybody
+  else's instance, which is the damage this layer exists to prevent.
 - **It owns the process.** `close()` — or leaving the `with` — kills it, on
   the failure paths too, so one session cannot leak a survivor onto the next.
-- **It asserts `cycles == 0`** before returning, which is the direct test for
-  "am I attached to the machine I just started".
-- **Each floppy is copied into the run directory first.** The guest WRITES to
-  a mounted image (`SYSTEM.CFG`, saved files), so a run would otherwise dirty
-  `build/`.
+  It also takes the instance's media with it, so read a disk *inside* the
+  `with`, not after it.
+- **It checks the PROCESS, not just the cycle count.** `ping` reports the
+  emulator's pid and `launch` compares it against the one it spawned:
+  `cycles == 0` says the machine has not run yet, which a stale emulator
+  paused at the start of its own boot also says.
+- **Each floppy is copied into the instance's own run directory.** The guest
+  WRITES to a mounted image (`SYSTEM.CFG`, saved files), so a run would
+  otherwise dirty `build/` — and a *shared* run directory meant one
+  `media/floppies/run0.img` for everybody, which is a second session booting
+  the first's disk. A machine with a hard disk gets its own clone of the VHD
+  for the same reason.
+- **`os88marty.py instances` is the first thing to type** when a session
+  behaves as though something else is driving the machine. It lists what is
+  running, whose it is, and whether the owner still exists; `reap` clears the
+  orphans; `kill-all --yes` is the hammer.
+
+```
+$ python3 tools/os88marty.py instances
+PORT   PID     MACHINE                OWNER      AGE     LABEL
+38193  13983   os8088_5150_cga_gla    13979 running  12s   dispdrag.py
+43121  13987   os8088_5150_cga_gla    13979 running  11s   dispdrag.py
+```
 
 `settle(m)` is the wait, and it replaces every `time.sleep(4)`: it returns
 once two rendered frames a second apart are identical, which an os8088 screen
@@ -590,6 +646,201 @@ not rasterise graphics mode at all — and that is not true at the pinned build:
 a real os8088 Hercules desktop measures **136,617 lit of 252,000 (54.2%)**
 through `fbuf` against **55.7%** through `vram`, the two agreeing to within the
 aperture crop. See the correction under `flicker` below.
+
+### Several at once
+
+**Two agents, two terminals or two rows of the suite can drive MartyPC in one
+checkout, and nothing has to be arranged between them.** That is new. It used
+to be one emulator per box — not by oversight but by a fix that overshot:
+
+> A survivor from a previous run kept port 9001. The new emulator could not
+> bind, said so only in its log, and the client then drove the **stale**
+> machine — a different image at a different point in its boot, which reads as
+> a hang or as a change that did nothing. So `launch()` killed **every**
+> `martypc_headless` before starting its own. That is right for a survivor and
+> fatal for two sessions: each new launch killed the other's running machine,
+> and the victim saw `BrokenPipeError` from a socket to a process that no
+> longer existed. Two things made it hard to see. The sweep killed *before* it
+> started, so the two emulators never coexisted and a `ps` showing one process
+> looked like proof that nothing was competing. And a MartyPC that lost the
+> race did not exit — it ran on headless and unreachable for ever, which is
+> where the next run's survivor came from.
+
+Three things were shared and are not:
+
+| | was | is |
+|---|---|---|
+| the port | fixed 9001, probed for | **the OS picks it under the emulator's own bind** (`MARTYPC_DEBUG_ADDR=…:0`) and the emulator writes it to `MARTYPC_DEBUG_PORTFILE` |
+| the run tree | one `build/martypc/run`, one `media/floppies/run0.img` per **drive** | one directory per **instance** under `build/martypc/inst/`, read-only parts symlinked, floppies, VHDs and the log real and private |
+| the process table | swept by pattern | a registry per instance, and `reap()` kills only what nobody owns |
+
+**Asking the OS for the port is the part that has to be in the emulator**, and
+it is why this needed a patch rather than a wrapper. Picking a quiet port from
+the client and then launching is a race — the probe has let the port go by the
+time the emulator asks for it, so two launchers a millisecond apart pick the
+same free port and the second one dies. `debug_server.rs` binds port 0 and
+publishes what the kernel gave it; nothing probes.
+
+```python
+with os88marty.launch(IMG, label="herc") as a, \
+     os88marty.launch(IMG, machine="os8088_5150_herc_gla", label="cga") as b:
+    ...                             # two machines, no arrangement
+```
+
+Three failures are gated rather than left to be discovered:
+
+- **A second client on one instance is refused in words.** It used to sit in
+  the accept backlog: `connect()` succeeded and the first read blocked until
+  the timeout — sixty seconds of nothing, reported as a hung guest. The server
+  now accepts and answers `{"ok": false, "busy": true, …}` naming the client
+  that holds it, and `Marty` turns that into one sentence. Sharing is still
+  the answer within a session: `Mouse(marty=m)`, `Flush(marty=m)`.
+- **A bind that fails is fatal and says so on stderr**, not only through
+  `log::`, whose level is a config away from being off. An emulator nothing
+  can talk to must not keep running: it holds the port against the next run.
+- **A port somebody else holds is an error that names them.** `launch(addr=…)`
+  checks the registry first, so pinning a port on purpose cannot silently
+  attach to the wrong machine.
+
+#### How many, and what stops you
+
+**There is no hard cap.** Nothing in `os88marty.py` refuses a launch — a
+refusal there would be a new way to lose work, which is the thing this layer
+exists to remove. What there is is one line on stderr when the count goes past
+the box's core count, and the ceiling is that count, measured rather than
+assumed. Aggregate guest speed against a real 4.77 MHz 8088, on a four-core
+container:
+
+| instances | per instance | aggregate |
+|---|---|---|
+| 1 | 3.42x | 3.4x |
+| 2 | 3.37–3.48x | 6.9x |
+| 4 | 2.96–3.43x | **13.1x** |
+| 6 | 1.96–2.88x | 13.9x |
+| 8 | 1.64–1.71x | 13.4x |
+
+It is **flat past the core count**. The ninth instance does not make the box
+do more work; it makes the other eight slower. That is the whole of the
+answer to "how many" — one per core, and the warning fires exactly there.
+
+Nothing else binds first. An instance is **~50–100 MB of RSS** and **~1 MB of
+disk** — the run tree symlinks everything read-only, and the 32 MB VHD is
+reflinked where the filesystem can (`cp --reflink=auto`, 3 ms against 113 for
+a real copy), so it costs nothing until something writes to it. Ports come
+from the ephemeral range, thousands of them.
+
+**Going past the ceiling is not broken, only slower.** At eight on four cores
+each guest still runs at **1.66x real time** — faster than the hardware it
+emulates — so what is lost is wall-clock and the slack in whatever is counting
+it: `settle`'s patience, an `until` limit, a suite row's timeout. Guest
+**cycle** counts, `disk()` counts and pixel comparisons are unchanged at any
+oversubscription, being counted rather than timed. `OS88_MARTY_MAX` moves the
+warning if you have decided otherwise.
+
+The core count is read as the narrowest of the hardware, this process's
+affinity **and any CFS quota** — a container can see four cores, be pinned to
+four, and be throttled to two cores' worth of time, which is the normal shape
+of a CI runner and of the container an agent works in.
+
+Measured end to end, four emulator rows through `os88test.py`: **175.6 s at
+`--marty-jobs 1`, 85.9 s at 3**, with each row 6–10% slower and none of them
+failing. A second sample, four soak rows drawn at random from the 79 eligible
+(soak, emulator, no `make`) and run at the core count itself:
+
+| row | solo | four at once |
+|---|---|---|
+| `sizesnap` | 25.0 s | 29.0 s (+16%) |
+| `fmthumb` | 30.1 s | 36.9 s (+23%) |
+| `drvcall` | 56.3 s | 62.7 s (+11%) |
+| `fmcommit` | 75.3 s | 83.9 s (+11%) |
+| **wall** | **186.8 s** | **83.9 s** |
+
+All four pass either way. **The cost lands on the clock and nowhere else** —
+which is the property that makes N agents on one box safe: an agent that takes
+a core off another agent lengthens their run and cannot invalidate it.
+
+**What that puts at risk is a HOST-CLOCK ASSUMPTION**, and there are three of
+them thin enough to name: `tests/bouncecost.py` (`wait_stop(limit=8.0)`),
+`tests/modstr.py` (`watch_toast(limit=8.0)`) and `tests/paintcull.py`
+(`wait_stop(limit=10.0)`) each give guest work a single-figure window of host
+seconds. All three were then run at **eight instances on four cores** — five
+detached load machines plus the three rows together — and all three passed:
+
+| row | idle box | 8 on 4 |
+|---|---|---|
+| `bouncecost` | 13.0 s | 22.2 s |
+| `modstr` | 53.3 s | 65.3 s |
+| `paintcull` | 67.9 s | 76.3 s |
+| **wall** | **134.2 s** | **76.3 s** |
+
+They survive because two of the three **retry** rather than assert on the
+window — `bouncecost` presses the menu up to six times, `paintcull` loops
+`wait_stop` — so a missed window costs a retry. `modstr` does not retry, and
+its risk runs the *other* way: a slower guest holds a toast up for longer in
+host seconds, which makes it easier to catch, not harder. Everything else has
+room by a wide margin: `settle` allows 120 s for a 7.6 s boot, and a suite
+row's timeout is `4x` its declared seconds.
+
+**Note what an IDLE guest costs**, because it changes the arithmetic above: at
+eight instances the load machines ran at **2.85x** real time, not the 1.66x
+the saturation table predicts. An idle os8088 desktop is 96.9% halted
+(SPEC.md §8.1.2), and halted cycles are cheap to emulate — so "eight agents"
+is only the worst case when all eight are actively driving their machine.
+
+#### The bug that eight-at-once found
+
+Running eight killed a load instance dead, silently: no log line, no panic,
+nothing but a socket that closed. It was **not** contention. `pid_max` on that
+container is 32,768, so a session launching emulators steadily **wraps the PID
+counter in minutes** — and it had: a finished row's registry record and a live
+instance both named pid 1666. `reap()` read the stale record, asked *"is 1666
+a live martypc_headless?"*, got **yes — somebody else's**, called it an orphan
+and killed it. That is exactly the failure this whole layer exists to remove,
+reintroduced one level down, and a PID alone cannot tell the two apart.
+
+A record is pinned to a **process** now, not a number: `(pid, start time)`,
+read from field 22 of `/proc/<pid>/stat` (after the last `)`, because the comm
+field can contain both spaces and parentheses) or from `ps -o lstart=` on
+Darwin. One predicate, `_killable`, gates every signal — the record must carry
+a start time, that PID must be a `martypc_headless` **started at that time**,
+and the record must not already be retired. A record that cannot identify its
+process is left entirely alone, record and process both: retiring one whose
+process may still be running is how a live instance becomes invisible.
+`tests/martyconc.py` fabricates both shapes (a wrong start time, and a record
+with none) against a live instance and asserts it survives — fabricated
+because reproducing a real wrap takes 32,768 processes, and the failure it
+produces is indistinguishable from the emulator having crashed.
+
+#### A bench that outlives the command
+
+A session that boots once and then pokes at the machine from several separate
+commands — which is what an agent at a terminal is doing, and what
+`tools/notepad/` is built around — wants an emulator that is nobody's to
+close. `launch(detach=True)` is that, and the CLI wraps it:
+
+```
+$ python3 tools/os88marty.py launch build/os8088-360.img --apps build/apps360.img
+127.0.0.1:34447
+  pid 18146, os8088_5150_cga, log build/martypc/inst/18142-bench-1/martypc.log
+  it OUTLIVES this command. `os88marty.py instances` lists it,
+  `os88marty.py kill 34447` ends it.
+
+$ python3 tools/os88mouse.py 127.0.0.1:34447 dblclick 608 105
+$ python3 tools/os88marty.py 127.0.0.1:34447 shot /tmp/desk.png --rendered
+$ python3 tools/os88marty.py kill 34447
+```
+
+A detached instance has **no owner on purpose**, which is the one thing that
+distinguishes it from an orphan — so `reap()` leaves it alone for ever and
+`kill` is how it ends. That is the trade: a bench you forget about is a core
+you have lost until you `instances` and notice it.
+
+`tests/martyconc.py` is the gate: separate ports, directories, disks and
+memories; a refusal that arrives in under a second and names the holder; and
+`reap()` taking an orphan while leaving a live, owned instance alone. Every
+one of those failures is silent — two instances sharing a floppy do not error,
+one of them boots the other's disk — which is why it is a `full`-tier row
+rather than a soak one.
 
 ### `until(m, cond, what)` — the wait for work that draws nothing
 

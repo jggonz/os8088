@@ -49,7 +49,7 @@
  * 73.5 caps a frame at 96 and cc8086.py fails the build over it), and the
  * recursion is bounded by 5.3's stack cap of 16 tested at every push - a
  * formula that would nest deeper than that is refused before the descent gets
- * there. The UI task's stack is 1,024 bytes (SPEC.md 20.6), so 16 frames of a
+ * there. The UI task's stack is 512 bytes (SPEC.md 20.6), so 16 frames of a
  * dozen bytes is under 2% of it.
  * ==========================================================================*/
 

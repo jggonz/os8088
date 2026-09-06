@@ -16,7 +16,11 @@
 ; noticed for a year: xm_release_rec had three call sites in instance.inc
 ; until the #51 integration merge dropped all three, and the comment
 ; describing them outlived the code (docs/UPSTREAM.md's own hazard - a call
-; that is simply absent breaks no build). It cost nothing only because the
+; that is simply absent breaks no build). Those three sites call inst_rel_rec
+; now - one helper that does the record -> slot conversion once for the sound
+; release and this one and tail-jumps into xm_release_rec - so the grep to run
+; is `inst_rel_rec`, and the point of this test is unchanged: it asserts the
+; blocks were freed at RUN TIME, which no source grep can do. It cost nothing only because the
 ; single consumer that ever existed, SPEC.md 53.6.1's fullscreen desktop
 ; stash, was removed. This gate is what makes the next such loss loud.
 ;

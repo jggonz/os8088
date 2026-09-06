@@ -47,6 +47,16 @@
 ; all, and refusing it for want of one would make it useless.
 ; -----------------------------------------------------------------------------
 net_pkg:
+    cmp bl, WZV_PAINT           ; the Wire's desktop icon (SPEC.md 26.7):
+    jne .notwz                  ; answered above the link test and above
+    call wz_paint               ; nsk_claim, because the kernel calls it from
+    clc                         ; a desktop repaint under the gfx lock and it
+    ret                         ; touches neither the cable nor the state.
+.notwz:                         ; INLINE and not a branch to the tail: a
+                                ; forward `je` past this routine sized
+                                ; differently on nasm's two passes and the
+                                ; build failed with `label changed during
+                                ; code generation` three labels later
     cmp bl, NETV_IDENT
     je  nsk_ident               ; ...ANSWERED FIRST AND WITH NO CONDITIONS. It
                                 ; is a question about which DRIVER this is, so

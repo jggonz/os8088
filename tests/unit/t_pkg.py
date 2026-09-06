@@ -73,7 +73,10 @@ MOD_NENT = _mod_nent()
 
 def app(blob, nm, flags, entry, image, bss):
     """SPEC.md 20.2 - a v3 application package."""
-    check(not (flags & 0xFC), "%s: no reserved flag bits" % nm, got=hex(flags))
+    check(not (flags & 0xF8), "%s: no reserved flag bits" % nm, got=hex(flags),
+          why="bit 0 is an embedded icon, bit 1 an association block (SPEC.md "
+              "54.6) and bit 2 says the FILE is longer than the image on "
+              "purpose (SPEC.md 20.12). Bits 3-7 are nobody's yet")
     lo = ICON_END if flags & 1 else HEADER
     check(lo <= entry < image, "%s: entry +0x%04X is inside the image" % (nm, entry),
           got=hex(entry), want="0x%04X..0x%04X" % (lo, image))
@@ -136,7 +139,20 @@ def header(blob, nm):
     eq(blob[12:15], DISPATCH, "%s: carries the dispatcher at +12" % nm,
        "the kernel far-calls +12 to reach every callback (SPEC.md 20.2); a "
        "package without it sends the kernel into its own data on the first paint")
-    eq(image, len(blob), "%s: image size field matches the file" % nm)
+    if ver == V_APP and b3 & 4:
+        # FLAGS BIT 2: the file is longer than the image ON PURPOSE, and the
+        # tail is the package's own to read (SPEC.md 20.12). The truncation
+        # guard becomes image <= file, which is still exact about the half
+        # the kernel loads - and it is the ONLY thing the kernel learns about
+        # parts, so this is where that has to be said.
+        check(32 <= image <= len(blob),
+              "%s: image %d is inside its %d-byte file" % (nm, image, len(blob)),
+              got=image, want="32..%d" % len(blob),
+              why="flags bit 2 lifts `image == file size`, not the bound - a "
+                  "package whose image runs past its own file is a truncated "
+                  "copy however the flag reads")
+    else:
+        eq(image, len(blob), "%s: image size field matches the file" % nm)
     if ver == V_APP:
         app(blob, nm, b3, entry, image, b6)
     else:

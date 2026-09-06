@@ -18,7 +18,7 @@ means.
 
 `Cells` is a breakpoint pump: it services `font_run_x` and `gfx_fill`,
 attributes each to the package or the kernel by its RETURN ADDRESS (slot
-0x0258 is an X stub and slot 0x0038 a plain one, so the kernel's own drawing
+0x0258 is an X cell and slot 0x0038 a plain one, so the kernel's own drawing
 is told apart from an app's), and counts the cells the region would let
 through. Drive the mouse with its own `to`/`edge`/`click`/`drag`, not
 os88mouse's: those wait on the guest's published `mouse_btn`, and a guest
@@ -167,7 +167,12 @@ class Cells(Pump):
         self.land = land                # an optional rect to attribute against
         self.fr = m.sym("font_run_x")
         self.fi = m.sym("gfx_fill")
-        self.stub = m.sym("api_font_run") - (KSEG << 4)
+        # SPEC.md 20.3: every X cell jumps to ONE body, `api_x`, whose
+        # `call bp` is the whole of how a package reaches a kernel routine.
+        # The window is that body's 12 bytes. It stays exact even though the
+        # body is shared, because the breakpoint is on font_run_x and no
+        # other cell targets it.
+        self.stub = m.sym("api_x") - (KSEG << 4)
         try:
             m.sym(cull_sym)
             self.cull_sym = cull_sym    # a kernel without 11.3.3 has no flag,
@@ -226,7 +231,7 @@ class Cells(Pump):
         b = m.read(((r["ss"] & 0xFFFF) << 4) + (r["sp"] & 0xFFFF), 2)
         ret = b[0] | (b[1] << 8)
         if sym == "font_run_x":
-            if self.stub <= ret < self.stub + 16:
+            if self.stub <= ret < self.stub + 12:
                 self.hits(r)
         elif ret == FILL_SLOT:
             self.fills += 1

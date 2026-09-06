@@ -25,6 +25,13 @@ import time
 
 sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
+
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
+                      VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
+# SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
+# written down here. This file spelled it `42 + 36`, which is the
+# VID_CTX_W = 18 layout - two bytes early, and what sits there is
+# display 1's vid_chm8, so the seam read 192 instead of 720.
 import os88marty, os88mouse, os88sym, dispcp                # noqa: E402
 
 S = os88sym.linear
@@ -67,9 +74,10 @@ def state(m, mo, label, win, cards):
                             v["vid_ox"], r[0], r[0] + r[2] - 1))
     print("   %-22s oy=%d  ctx0 v=(%d,%d) ctx1 v=(%d,%d)"
           % ("", v["vid_oy"],
-             u16(m.read(S("vid_ctx"), 84), 36), u16(m.read(S("vid_ctx"), 84), 38),
-             u16(m.read(S("vid_ctx"), 84), 42 + 36),
-             u16(m.read(S("vid_ctx"), 84), 42 + 38)))
+             u16(m.read(S("vid_ctx"), 2 * VID_CTX_SZ), VID_CTX_VX),
+             u16(m.read(S("vid_ctx"), 2 * VID_CTX_SZ), VID_CTX_VY),
+             u16(m.read(S("vid_ctx"), 2 * VID_CTX_SZ), VID_CTX_SZ + VID_CTX_VX),
+             u16(m.read(S("vid_ctx"), 2 * VID_CTX_SZ), VID_CTX_SZ + VID_CTX_VY)))
     print("   %-22s lit: %s  win y %d..%d"
           % ("", {c: lit(m, c) for c in cards}, r[1], r[1] + r[3] - 1))
     out = {"x": x, "y": y, "nd": nd, "ox": v["vid_ox"], "rect": r,
@@ -91,9 +99,10 @@ def main():
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")
         dispcp.close_panel(m, mo, S, os88marty.settle)
-        ctx = m.read(S("vid_ctx"), 84)
-        seam = u16(ctx, 42 + 36)
-        org = (u16(ctx, 42 + 36), u16(ctx, 42 + 38))
+        ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
+        seam = u16(ctx, VID_CTX_SZ + VID_CTX_VX)
+        org = (u16(ctx, VID_CTX_SZ + VID_CTX_VX),
+               u16(ctx, VID_CTX_SZ + VID_CTX_VY))
         print("seam at x=%d; the Hercules sits at virtual %r" % (seam, org))
 
         dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)

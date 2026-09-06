@@ -29,6 +29,15 @@ sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
 import os88marty, os88mouse, os88sym, dispcp, dispapps      # noqa: E402
 
+# SPEC.md 39.14's per-display record, from the ONE place that mirrors it.
+# This file indexed it with bare literals - `42 + 36` for the seam and
+# ctx[40]/ctx[82] for the two kind bytes - on the VID_CTX_W = 18 layout the
+# kernel left behind at 6.1.10. Two bytes early puts `vid_tseg` where the kind
+# is, so the row printed a FRAMEBUFFER SEGMENT as an adapter kind and read the
+# seam out of the middle of the copied run.
+from os88geom import (VID_CTX_SZ, VID_CTX_VX,               # noqa: E402
+                      VID_CTX_KIND)
+
 S = os88sym.linear
 TITLE_H = 18
 FSXM_MODEX = 8
@@ -124,10 +133,10 @@ def main():
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")
         dispcp.close_panel(m, mo, S, os88marty.settle)
-        ctx = m.read(S("vid_ctx"), 84)
-        seam = u16(ctx, 42 + 36)
+        ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
+        seam = u16(ctx, VID_CTX_SZ + VID_CTX_VX)
         print("seam at x=%d; display 0 kind=%d (VGA), display 1 kind=%d (HERC)"
-              % (seam, ctx[40], ctx[82]))
+              % (seam, ctx[VID_CTX_KIND], ctx[VID_CTX_SZ + VID_CTX_KIND]))
 
         dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
         disk = dispcp.win_list(m, S)[-1]

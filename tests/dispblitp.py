@@ -36,6 +36,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
+import dispapps                                              # noqa: E402
+
+
+# SPEC.md 42.23.6's COLOUR fixture, at module scope because the helpers below
+# read it and they are not nested inside main(). dispapps.colour_gif is itself
+# cached on mtime, so naming it here costs one stat and not a rebuild.
+def gifpath():
+    return dispapps.colour_gif()
+
+
+def gifname():
+    return os.path.basename(gifpath())
 from os88geom import (VID_CTX_SZ, VID_CTX_VX, VID_CTX_VY,    # noqa: E402
                       VID_CTX_CW, VID_CTX_CH)
 from blitpair import gif_pixels                              # noqa: E402
@@ -84,7 +96,7 @@ def run(a, case, iw, ih, px, sym):
         rx, ry = dispcp.row_xy(bx, by,
                                dispcp.scroll_to(m, mo, S, settle, bx, by,
                                                 dispcp.row_of(m, S,
-                                                              "OS8088.GIF"),
+                                                              gifname()),
                                                 card=0))
         mo.to(rx, ry)
         settle(m, card=0)
@@ -190,15 +202,23 @@ def main():
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="/tmp/dispblitp.img")
     ap.add_argument("--machine", default="os8088_xt_vga_mda")
-    ap.add_argument("--gif", default="build/OS8088.GIF")
+    ap.add_argument("--gif", default=None)
     ap.add_argument("--case", choices=("straddle", "direct"), default=None)
     a = ap.parse_args()
 
+    # A COLOUR PICTURE, and it has to be said now: SPEC.md 42.23.6 opens a GIF
+    # whose colour table has two entries ONE BIT DEEP on any adapter, and
+    # build/OS8088.GIF has exactly two - so the fixture every picture row here
+    # uses stopped being able to give this one a four-plane canvas.
+    # dispapps.colour_gif appends two unused entries and changes not one
+    # pixel, so every oracle below is the one it always was.
+    gif = gifpath()
+
     if a.apps == "/tmp/dispblitp.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
-                               "MEDIA:" + a.gif)
+                               "MEDIA:" + gif)
 
-    iw, ih, px = gif_pixels(a.gif)
+    iw, ih, px = gif_pixels(gif)
     sym = pkg_syms("apps/paint/paint.asm")
     # TWO BOOTS, because pt_planar is one-way: once a straddle has converted
     # the canvas there is no second refusal to watch, so the direct move needs

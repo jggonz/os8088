@@ -28,8 +28,8 @@ half-fixed version:
     screen still never appear, because `spl_step` used to be a no-op until
     somebody else had started it and stage 2 was the only somebody there was;
  3. ...and the CLOCK IS DRAWN IN FULL. That is the boot overlay's own signature:
-    `ovl_clk_init` is an OVLGATE, so a kernel that did not get the blob skips it
-    along with ovl_cpu_detect, ovl_font_init, ovl_desk_init and ovl_cfg_load -
+    `clk_init` is an OVLGATE, so a kernel that did not get the blob skips it
+    along with cpu_detect, font_init, desk_init and the settings parse -
     and comes up looking almost right, with two glyphs where the date goes and
     no drivers configured. A boot that merely REACHES the desktop proves
     nothing here; the date string is what says the overlay ran.
@@ -38,7 +38,6 @@ It installs first, because a gate that depends on some other row having run is
 not a gate. That costs a full install per run, which is why it is a soak row.
 """
 import os
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -47,6 +46,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
 import os88marty as M                                       # noqa: E402
 import os88sym                                              # noqa: E402
+import instdeep                                             # noqa: E402
 
 MACHINE = "os8088_xt_hdd"
 BLANK = os.path.join(ROOT, "build", "hdboot-blank.img")
@@ -88,12 +88,38 @@ def drive_rows(px, w, h):
 
 
 def main():
-    print("  installing (tests/instdeep.py drives the installer)...")
-    r = subprocess.run([sys.executable, os.path.join(HERE, "instdeep.py")],
-                       cwd=ROOT, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise SystemExit("hdboot: the install itself failed, so nothing below "
-                         "would mean what it says:\n" + r.stdout[-2000:])
+    # ONE RUN TREE FOR BOTH HALVES, and it is the whole point of this row.
+    #
+    # The install and the boot are two MACHINES - the install needs the system
+    # floppy in fd:0 and the boot needs a blank one, so that GLaBIOS offers its
+    # menu and C is the hard disk - but they have to be two machines over ONE
+    # VHD. This used to work by accident: every instance mounted the shared
+    # master disk. Per-instance isolation (docs/MARTYPC-DEBUG.md) then gave
+    # each its own clone and `close()` deletes a private one, so the install
+    # landed in a directory that went away and the boot opened a fresh clone of
+    # the pristine master. It found an empty disk and reported "no desktop from
+    # drive C:" - which reads as a broken volume boot record, and cost a bisect
+    # to place on a host-side commit that touched no kernel code at all
+    # (docs/HANDOFF-SOAK-FINDINGS.md B1).
+    #
+    # `M.stage_run_dir` is a tree the CALLER owns: `launch(run_dir=...)` leaves
+    # its media alone, so the VHD survives the first instance closing, and
+    # `launch` re-clones the FLOPPY on every call, so the second machine gets
+    # its blank one in the same directory.
+    run_dir = M.stage_run_dir("hdboot")
+    print("  installing (tests/instdeep.py's own installer, on this tree)...")
+    with M.launch("build/os8088-360.img", apps="build/apps360.img",
+                  machine=instdeep.MACHINE, run_dir=run_dir) as m:
+        M.settle(m)
+        instdeep.install(m)
+        v = instdeep.partition(instdeep.vhd(m))
+    tree = v.tree()
+    missing = [p for p in instdeep.WANT_FILES if p not in tree]
+    if missing:
+        raise SystemExit("hdboot: the install itself failed (%s missing), so "
+                         "nothing below would mean what it says"
+                         % ", ".join(missing))
+    print("  installed: FAT%d, %d paths" % (v.bits, len(tree)))
 
     # A floppy with no boot signature, so GLaBIOS offers its menu and C is the
     # hard disk. `launch` wants an image in fd:0 either way.
@@ -103,7 +129,7 @@ def main():
 
     lin_live = os88sym.linear("spl_live")
     splashed = False
-    with M.launch(BLANK, machine=MACHINE, boot=0) as m:
+    with M.launch(BLANK, machine=MACHINE, boot=0, run_dir=run_dir) as m:
         m.advance(frames=300)
         m.key("KeyC")                       # GLaBIOS: boot the hard disk
         for _ in range(160):
@@ -137,8 +163,8 @@ def main():
     if len(clock) < MIN_CLOCK_GROUPS:
         raise SystemExit(
             "hdboot: FAIL - the desktop is up and the CLOCK is %d ink groups "
-            "wide. The boot overlay did not run: ovl_clk_init, ovl_font_init, "
-            "ovl_desk_init and ovl_cfg_load are all OVLGATEs, so a kernel that "
+            "wide. The boot overlay did not run: clk_init, font_init, "
+            "desk_init and the settings parse are all OVLGATEs, so a kernel that "
             "did not get stage 2's blob skips every one of them and boots to a "
             "desktop that looks almost right with no clock and no configured "
             "drivers (SPEC.md 2.9.5.3)." % len(clock))

@@ -11,7 +11,9 @@ server reports `cycles` and `instructions` and its `park` command points the
 CPU at an address with the prefetch queue flushed (docs/MARTYPC-DEBUG.md), so
 this boots a desktop, writes a stub into `snd_xlat` - 256 idle .bss bytes
 inside KERNEL_SEG, the PWM rescale table, which is rebuilt per clip and so
-holds nothing while nothing is playing - parks on it and reads the counter
+holds nothing while nothing is playing, and whose first 8 bytes are also
+`snd_evtmp`, the click-abort drain's scratch (SPEC.md 34.4), idle for the
+same reason - parks on it and reads the counter
 either side.  It was `gfx_pairtab0` until that pair moved to `.lowbss`
 (SPEC.md 5.4.1.1): a LOW_SEG offset written at KERNEL_SEG is a plausible
 address in the middle of the kernel, which is os88sym.py's own warning.  `park`

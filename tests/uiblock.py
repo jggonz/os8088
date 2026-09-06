@@ -33,6 +33,12 @@ finishing a packet to the next ui_task pass (the 1200-baud serial line's own
 The blocking kernel is better on every statistic, which is why the bound below
 is generous rather than tight: what it has to separate is 6 ms from 55.
 
+THERE IS A THIRD, and it is not in this file because it needs a saver session
+rather than a cycle count: a consumer polled once a pass has its DEADLINE
+quantised to the tick, so work that runs a millisecond past one sleeps through
+the whole of the next (SPEC.md 8.1.2.4). tests/saverate.py is that row, and
+the sea-life screen saver is what it cost.
+
 ON A 5150 UNDER MARTYPC, because every number here is a cycle count at
 4.77 MHz and QEMU cannot time anything (docs/TESTING.md).
 """

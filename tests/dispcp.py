@@ -333,14 +333,21 @@ def open_row(m, mo, S, settle, wx, wy, row=0, card=None, expect=None):
 #
 # So: ask. disk_dir is the global mount snapshot and a navigation is a full
 # mount, so it names the folder just entered.
-DSK_DE_SIZE = 32                # SPEC.md 19.1: name @0 NUL-padded, type @16,
-DSK_DE_TYPE = 16                # first cluster @18, size @20
+DSK_DE_STRIDE = 24              # SPEC.md 19.1: name @0 NUL-padded, type @16,
+DSK_DE_TYPE = 16                # first cluster @18, size @20 - and the STAGED
+                                # LISTING's stride is 24, not DSK_DE_SIZE's 32.
+                                # The record IS 32 bytes wide where a driver
+                                # hands one over (OSAPI_FS_ENT); 24..31 are
+                                # declared zero and `disk_dir` does not store
+                                # them. Decoding the listing at 32 reads entry
+                                # 1 onward from the wrong place, and every name
+                                # comes back as the tail of the one before it
 
 
 def _decode(raw, n):
     out = []
     for i in range(n):
-        e = raw[i * DSK_DE_SIZE:(i + 1) * DSK_DE_SIZE]
+        e = raw[i * DSK_DE_STRIDE:(i + 1) * DSK_DE_STRIDE]
         out.append((e[:16].split(b"\0")[0].decode("latin-1"),
                     _u16(e, DSK_DE_TYPE)))
     return out
@@ -373,13 +380,13 @@ def listing(m, S):
         n = _u16(m.read(base + FS_N, 2))
         vseg = _u16(m.read(base + FS_VSEG, 2))
         if n and vseg:
-            return _decode(m.read(vseg << 4, n * DSK_DE_SIZE), n)
+            return _decode(m.read(vseg << 4, n * DSK_DE_STRIDE), n)
     n = _u16(m.read(S("disk_nfiles"), 2))
     if not n:
         return []
     seg = _u16(m.read(S("dsk_dseg"), 2))
     off = _u16(m.read(S("dsk_doff"), 2))
-    return _decode(m.read((seg << 4) + off, n * DSK_DE_SIZE), n)
+    return _decode(m.read((seg << 4) + off, n * DSK_DE_STRIDE), n)
 
 
 def row_of(m, S, name):

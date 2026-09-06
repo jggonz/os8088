@@ -41,6 +41,21 @@ git diff > ../../../tools/martypc/patches/NN-yours.patch
 Then throw the temp commit away and run `make marty` — a clean build from the
 pin is the only thing that proves the patch applies.
 
+**Several instances run side by side, and that is why `debug_server.rs`
+changed rather than only the Python.** `MARTYPC_DEBUG_ADDR=127.0.0.1:0` asks
+the OS for a free port under the bind and `MARTYPC_DEBUG_PORTFILE=<path>` gets
+the one it picked — the only allocation that cannot race, because a client
+probing for a quiet port has let go of it before the emulator binds. A bind
+that fails now prints to **stderr** and exits, instead of logging at a level
+that may be off and running on unreachable for ever; a **second client** is
+accepted and refused with a sentence naming the one that holds it, instead of
+being left in the accept backlog to hang; and `ping` reports the process's own
+pid, so a launcher can prove it is talking to the emulator it started rather
+than infer it from a cycle count. `os88marty.launch` does the rest — a
+directory per instance, a registry, orphan reaping — and
+[docs/MARTYPC-DEBUG.md](../../docs/MARTYPC-DEBUG.md)'s *Several at once* is the
+account.
+
 **Reach for this first** when what you are testing runs on an 8088 — all
 three of SPEC.md §39's adapters, VGA mode 12h included — screenshots included (`os88marty.py shot out.png` reads the
 framebuffer out of VRAM, so there is no reason to start QEMU to look at a

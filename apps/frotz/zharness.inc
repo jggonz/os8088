@@ -280,6 +280,7 @@ zh_getkey:
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
 zh_num:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx

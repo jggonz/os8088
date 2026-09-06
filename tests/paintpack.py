@@ -34,6 +34,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88marty                                             # noqa: E402
+import dispapps                                              # noqa: E402
 
 
 def main():
@@ -42,6 +43,14 @@ def main():
     ap.add_argument("--machine", default="os8088_xt_vga")
     a = ap.parse_args()
 
+    # A COLOUR PICTURE, and it has to be said now: SPEC.md 42.23.6 opens a GIF
+    # whose colour table has two entries ONE BIT DEEP on any adapter, and
+    # build/OS8088.GIF has exactly two - so the fixture every picture row here
+    # uses stopped being able to give this one a four-plane canvas.
+    # dispapps.colour_gif appends two unused entries and changes not one
+    # pixel, so every oracle below is the one it always was.
+    gif = dispapps.colour_gif()
+
     # The tree is REBUILT, the way tests/blitplane.py rebuilds it, and the
     # `finally` is not decoration: `make NOPLANE=1` writes build/kernel.bin,
     # and a run that dies in the middle would leave every emulator row after
@@ -49,7 +58,7 @@ def main():
     # symbol map, so nothing would complain.
     apps = "/tmp/paintpack.img"
     os88marty.scratch_disk(apps, "APPS:build/paint.o88",
-                           "MEDIA:build/OS8088.GIF")
+                           "MEDIA:" + gif)
 
     print("   NOPLANE=1 kernel: building")
     try:

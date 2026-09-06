@@ -1630,13 +1630,15 @@ static void run_all(int cols_geom, int rows_geom, int table)
         lock_depth = 1; os88_about(win); lock_depth = 0;
         if (!rc_abt) { printf("FAIL: About did not open\n"); fails++; }
         calls_open = calls();
-        if (n_fill != 2 || n_frame != 4 || n_blit != 8 || n_run != 0) { printf("FAIL: the About panel cost %d fills / %d frames / %d bands / %d runs, wanted 2 / 4 / 8 / 0\n", n_fill, n_frame, n_blit, n_run); fails++; }
+        /* NINE bands, not eight: the porter's credit is a label like every
+         * other row, so it costs one composed band (SPEC.md 74.4). */
+        if (n_fill != 2 || n_frame != 4 || n_blit != 9 || n_run != 0) { printf("FAIL: the About panel cost %d fills / %d frames / %d bands / %d runs, wanted 2 / 4 / 9 / 0\n", n_fill, n_frame, n_blit, n_run); fails++; }
         /* twelve rows: the OK button's bottom (its box is y-3..y+10) inside
          * the panel, and the panel inside the content box - on every
          * geometry, the 17-row CGA one included (LESSONS.md 8) */
         if (rc_ab_by + 10 > rc_ab_y + rc_ab_h - 2 || rc_ab_y + rc_ab_h > cont_y + cont_h - 1 || rc_ab_x + rc_ab_w > cont_x + cont_w - 1 || rc_ab_x < cont_x || rc_ab_y < cont_y) { printf("FAIL: About: OK at y %d..%d, panel %d..%d, content %d..%d - a control off the panel\n", rc_ab_by - 3, rc_ab_by + 10, rc_ab_y, rc_ab_y + rc_ab_h, cont_y, cont_y + cont_h - 1); fails++; }
         if (rc_ab_x & 7) { printf("FAIL: About: the panel's x %d is not on a byte boundary\n", rc_ab_x); fails++; }
-        if (table) cost("About: the panel (fill, frames, 8 bands, OK)");
+        if (table) cost("About: the panel (fill, frames, 9 bands, OK)");
         /* paused: a wake runs nothing, posts nothing, flushes nothing; a
          * byte fed meanwhile waits in the model */
         w0 = wakes_posted; callreset();

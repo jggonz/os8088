@@ -475,6 +475,7 @@ hd_utoa4:
     push cx
     mov cx, 4
 hd_utoa_body:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push dx

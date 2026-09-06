@@ -323,20 +323,20 @@ def smoke(machine, card, want_w, want_h, png_dir=None):
         # a traceback in a permanent gate tells its reader nothing about which
         # of the two causes it was.
         #
-        # THE SECOND CAUSE IS THE ONE NOBODY GUESSES: `os88marty.launch` kills
-        # every running martypc_headless by PID before it starts its own, on
-        # purpose - a survivor holding 127.0.0.1:9001 means the client
-        # silently drives the STALE machine. So two harnesses running in one
-        # tree kill each other's emulators, and the one that loses sees
-        # exactly this. It is why every emulator row here is serial=True, and
-        # the suite can only enforce that WITHIN one runner: a second person
-        # or agent driving MartyPC in the same checkout is outside its reach.
+        # THE SECOND CAUSE USED TO BE THE ONE NOBODY GUESSES and is now
+        # impossible: `os88marty.launch` swept every running martypc_headless
+        # by PID before starting its own, so two harnesses in one tree took
+        # turns killing each other's emulators and the loser saw exactly this.
+        # Instances are isolated now - own port, own directory, own disks -
+        # and `launch()` reaps only orphans, so the honest list is short: it
+        # crashed, or the host killed it. `os88marty.py instances` says what
+        # is still running and whose it is.
         check(False, "%s: the emulator went away mid-session" % machine,
-              "either martypc_headless died, or a SECOND one was started "
-              "against this tree and killed this one - launch() sweeps "
-              "survivors by PID, so two harnesses in one checkout take turns "
-              "killing each other. `ps -Ao pid=,args= | grep martypc` says "
-              "which", got=type(e).__name__ + ": " + str(e)[:120],
+              "martypc_headless died under us. Its log is in the instance's "
+              "own run directory (the MartyError names the path), and "
+              "`python3 tools/os88marty.py instances` lists what else is "
+              "running on this box",
+              got=type(e).__name__ + ": " + str(e)[:120],
               want="a live emulator")
     except RuntimeError as e:
         # dispcp raises this for "that file is not in this folder" and "the

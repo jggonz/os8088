@@ -20,7 +20,12 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'ArtfulType', at_entry, 1
+    OS88_HEADER 'ArtfulType', at_entry, 1, OS88_STACK_192
+                                ; THE WORKER'S STACK, declared
+                                ; rather than defaulted (SPEC.md 8.7):
+                                ; static 50 for at_worker
+                                ; over the 64-byte interrupt floor
+                                ; that is 114, and 192 gives 1.68x
 
     OS88_ICON16
     ; a fountain-pen nib on a page - drawn for this port (the original's
@@ -118,7 +123,15 @@ at_entry:
     push si
     mov si, at_kmenus
     call OSAPI_MENU_SET             ; the WINDOWED bar (flags preserved)
-    pop si
+    mov si, at_about                ; ...and 'About ArtfulType' above the Close
+    call OSAPI_ABOUT_SET            ; the kernel already puts in that bar's
+    pop si                          ; pull-down (SPEC.md 12.2). The FULLSCREEN
+                                    ; bar keeps its own 'About The Artful
+                                    ; Type...' item: in there the kernel's bar
+                                    ; is unreachable by design (SPEC.md 11.2),
+                                    ; so the two are not duplicates - they are
+                                    ; the same credit reached from the two
+                                    ; states this app has
     call at_geom_init               ; live screen numbers (any context)
     call at_menu_init               ; the fullscreen bar's cell widths
     call at_font_init               ; the KERNEL's 8x8 glyphs, copied in
@@ -289,6 +302,13 @@ at_paint:
     jmp short .done
 .win:
     call at_splash
+    cmp byte [at_abon], 0           ; ...and the About card LAST, over the
+    je .done                        ; splash it is opaque about (SPEC.md 20.5.1)
+    push si
+    mov bx, [at_win]
+    mov si, at_ablines
+    call os88ui_about_d             ; _d: this paint's region is already armed
+    pop si
 .done:
     pop es
     pop bp
@@ -365,6 +385,8 @@ at_onkey:
     call at_ed_key
     jmp short .done
 .win:
+    call at_abdismiss               ; any key takes the credits down, and is
+    jc .done                        ; spent doing it
     ; the splash listens for its two verbs
     cmp al, 13
     je .new
@@ -439,6 +461,8 @@ at_onclick:
     call at_modal_click
     jmp short .done
 .win:
+    call at_abdismiss               ; the credits are up: this click is spent
+    jc .done                        ; taking them down
     call at_splash_click
 .done:
     pop es
@@ -608,6 +632,62 @@ at_worker:
 %include "atimg.inc"
 
 ; --- the window template (SPEC.md 11) ------------------------------------------
+; =============================================================================
+; 'About ArtfulType' - the kernel bar's card (SPEC.md 12.2, 20.5.1)
+; =============================================================================
+; This package is an external port and it had an About before this one - the
+; branding card, on the FULLSCREEN bar's own 'About The Artful Type...' item.
+; What it did not have was the kernel's, and in the windowed state that is the
+; only bar there is. Both stay: the fullscreen item is unchanged and the
+; branding card carries the porter's line now, and the kernel's item gets the
+; standard card here.
+
+; -----------------------------------------------------------------------------
+; at_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; in:  SI = our window ptr; the UI task, gfx lock HELD
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+at_about:
+    push bx
+    push si
+    mov byte [at_abon], 1
+    mov bx, si
+    mov si, at_ablines
+    call os88ui_about               ; arms the clip itself: a menu dispatch
+    pop si                          ; arrives without one (SPEC.md 11.3)
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; at_abdismiss - take the card down if it is up
+; in:  gfx lock held ([at_win] names the window)
+; out: CF = 1 the click or key was spent doing it; preserves every register
+; -----------------------------------------------------------------------------
+at_abdismiss:
+    cmp byte [at_abon], 0
+    je .none
+    push bx
+    mov byte [at_abon], 0
+    mov bx, [at_win]
+    call OSAPI_WM_CLIP_SET          ; nothing has armed a region for a click
+    jc .gone                        ; or a key (SPEC.md 11.3)
+    call at_splash                  ; the whole windowed content, which is what
+.gone:                              ; the card covered
+    pop bx
+    stc
+    ret
+.none:
+    clc
+    ret
+
+; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
+at_ablines:
+    dw at_ab1, at_ab2, at_ab3, at_ab4, 0
+at_ab1:     db 'The Artful Type', 0
+at_ab2:     db 'A Distraction-Free Writing Environment', 0
+at_ab3:     db 0
+at_ab4:     db 'Ported by Jorge Gonzalez', 0
+
 at_tpl:
     dw 140, 60, 360, 300
     dw at_ttl, at_paint, at_onkey, at_onclick
@@ -773,6 +853,7 @@ at_s_title:    db 'The Artful Type', 0
 at_s_sub:      db 'A Distraction-Free Writing Environment', 0
 at_s_ver:      db 'v0.1 - the os8088 port', 0
 at_s_url:      db 'github.com/ActionRetro', 0
+at_s_credit:   db 'Ported by Jorge Gonzalez', 0
 at_s_defname:  db 'UNTITLED.MD', 0
 at_s_toobig:   db 'The selection is too large to copy.', 0
 at_s_nofit:    db 'Not enough room in the document.', 0
@@ -855,7 +936,8 @@ at_x4g: AT_X4TAB 7
 AT_BSS_TOTAL equ (at_bss_end - at_bss_base)
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
-%include "os88ui.inc"
+%define OS88UI_ABOUT            ; ...and the standard About card beside the
+%include "os88ui.inc"           ; buttons this already drew
 
     OS88_BSS AT_BSS_TOTAL
     OS88_IMAGE_END
@@ -1037,4 +1119,5 @@ at_snoffs   equ at_snbase + 2                ; word
 at_clipbss  equ at_snoffs + 2                ; AT_CLIPBSS bytes
 at_fontbuf  equ at_clipbss + AT_CLIPBSS      ; the kernel's glyph table,
                                              ; copied in at launch
-at_bss_end  equ at_fontbuf + AT_FONTBYTES
+at_abon     equ at_fontbuf + AT_FONTBYTES     ; byte: the About card is up
+at_bss_end  equ at_abon + 1
