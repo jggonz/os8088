@@ -1242,8 +1242,8 @@
  "raw_sha256": "d885a2d0ab2fedd2d2199046d0f90c8cf510ae45488e64c92c824d98de01d0ba",
  "rows": 25,
  "scrolls": 7,
- "stream_bytes": 8336,
- "stream_sha256": "ada22a36dc61cbd2790c9ddfa1ca7b475e308361e9f843f3041aa8d2cb67e010",
+ "stream_bytes": 8339,
+ "stream_sha256": "6dcd39e7b785d521c49991c274c2533db97ef2dc8183278bedc1bf362373bb46",
  "what": "Every family at once, in one stream, with sequences deliberately adjacent so that a state machine that leaks one byte of state between them shows it. This is the fixture the ragged-fragment server sends.",
  "zmodem_at": null
 }

@@ -331,7 +331,7 @@ def f_art():
     for c in (41, 43, 42, 46, 44, 45):
         s += sgr(0, c) + b"  "
     s += sgr(0, 37, 44)
-    s += at(15, 14) + sgr(0, 1, 30) + b"dark grey on blue is the INVERSE case"
+    s += at(15, 14) + sgr(0, 1, 30, 44) + b"dark grey on blue is the INVERSE case"
     s += at(2 + H, 10) + sgr(0) + b"Command: "
     return s
 

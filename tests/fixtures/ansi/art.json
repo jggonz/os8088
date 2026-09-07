@@ -236,7 +236,7 @@
   ],
   [
    37,
-   8
+   72
   ],
   [
    19,
@@ -1199,11 +1199,11 @@
  "end_state": "GROUND",
  "glyphs": 1161,
  "name": "art",
- "raw_sha256": "242fb25d9f6d62f0b2e373901a017a1e62df001f388dfc0005d7e3b30f0ceecd",
+ "raw_sha256": "9236ca87c137bc3da4afe9c8703695b89669e58e1006e2267987d671aa5d8ca8",
  "rows": 25,
  "scrolls": 0,
- "stream_bytes": 1613,
- "stream_sha256": "0dc84ccb45f0e434a59ed8d4ec35ff00a01fc2318500096dd632d30a9cea054b",
+ "stream_bytes": 1616,
+ "stream_sha256": "f554673f8f11e7ba523fa50572d13edfd2e04a1890bc99c159c21e68bd942409",
  "what": "A small ANSI-art scene, drawn geometrically by this tool: a double box-drawing frame, a title on a reverse bar, a shaded gradient, and a four-colour block strip. It is the only fixture that looks like a BBS screen, and it exists so that the byte-for-byte comparison has one case where a human can SEE that the answer is right.",
  "zmodem_at": null
 }

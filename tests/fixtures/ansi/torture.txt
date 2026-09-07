@@ -3,7 +3,7 @@ fixture: torture
   adjacent so that a state machine that leaks one byte of state between
   them shows it. This is the fixture the ragged-fragment server sends.
 
-stream:  8336 bytes
+stream:  8339 bytes
 cursor:  row 23 col 39 (0-based)   attribute 07   5222 glyph(s)
 state:   GROUND   bells 0   scrolls 7
 cursor visible: False

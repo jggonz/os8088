@@ -5,7 +5,7 @@ fixture: art
   screen, and it exists so that the byte-for-byte comparison has one case
   where a human can SEE that the answer is right.
 
-stream:  1613 bytes
+stream:  1616 bytes
 cursor:  row 17 col 18 (0-based)   attribute 07   1161 glyph(s)
 state:   GROUND   bells 0   scrolls 0
 cursor visible: True
@@ -53,7 +53,7 @@ attributes, run-length encoded, one row per line:
  11 9*07 4*47 33*03 23*47 11*07
  12 9*07 4*47 9*07 2*17 2*37 2*27 2*67 2*47 2*57 35*47 11*07
  13 9*07 60*47 11*07
- 14 9*07 4*47 37*08 19*47 11*07
+ 14 9*07 4*47 37*48 19*47 11*07
  15 9*07 60*47 11*07
  16 9*07 60*47 11*07
  17 80*07
