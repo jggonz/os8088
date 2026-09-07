@@ -304,6 +304,7 @@ tz_end:
 ; -----------------------------------------------------------------------------
 tz_fail:
     push ax
+    push bx
     push cx
     push si
     mov [tz_why], si
@@ -322,6 +323,7 @@ tz_fail:
     call te_mark
     call tz_touchq
     mov byte [te_dirty], 1
+    pop bx
     pop ax
     ret
 
@@ -572,6 +574,11 @@ tz_poll:
     mov word [tz_fill], 0
     mov byte [tz_half], 0
     mov byte [tz_made], 0
+    mov word [tz_sub0], 0           ; **PER FILE.** tz_begin clears it once a
+    mov word [tz_sub0+2], 0         ; SESSION, and `.repos` is reachable before
+    mov word [tz_skip], 0           ; the first ZDATA of the second file records
+                                    ; it - so without this the ZRPOS would name
+                                    ; the PREVIOUS file's subpacket offset
     mov word [tz_why], 0            ; ...and the last file's refusal, which has
                                     ; been on the status line since it happened
     mov byte [tz_st], ZR_DATA
@@ -585,7 +592,14 @@ tz_poll:
     ; "refused: ZSKIP", and calling tz_fail here ended the whole batch for one
     ; unsuitable destination. The cluster is a per-FILE fact and the next file
     ; may be saved somewhere else.
-    call tz_bigmsg
+    ;
+    ; **AND THE SENTENCE IS COMPOSED ON THE UI TASK, not here.** tz_bigmsg
+    ; calls tz_num, which writes tz_dig - and tz_text calls it too, from
+    ; te_status under the gfx lock. Composing here would have put a second TASK
+    ; on that scratch for the first time. tz_chunk_set already knows the cluster
+    ; is too big and already runs on the UI task, so it composes the sentence
+    ; there and this arm only points at it.
+    mov si, tz_bmsg
     mov [tz_why], si
     mov byte [tz_st], ZR_SKIP
     mov al, ZF_SKIP
@@ -658,28 +672,43 @@ tz_poll:
     call tz_touch
     jmp short .noowe
 .owepos:
-    ; **THE SUBPACKET'S START, NOT THE COMMITTED OFFSET** (SPEC.md 70.11.2).
-    ; [tz_pos] is the honest count of bytes on the disk, and a subpacket that
-    ; straddled a chunk boundary has part of ITSELF among them - so a ZRPOS
-    ; naming [tz_pos] resumes PAST the start of the bad subpacket and leaves its
-    ; corrupt prefix in the file for ever, with the length right so nothing
-    ; notices. The ZRPOS names [tz_sub0] instead and [tz_skip] drops the bytes
-    ; the sender re-sends over what is already written: the file's SIZE never
-    ; moves, which is what keeps OSAPI_FILE_APPEND's cluster-multiple
-    ; precondition true through a retry, and there is no truncate verb that
-    ; would let the other answer work.
+    ; **THE RESUME IS `min([tz_pos], [tz_sub0])`, AND THE FIRST VERSION HAD THE
+    ; INEQUALITY BACKWARDS.** [tz_pos] is the honest count of bytes on the disk
+    ; and [tz_sub0] is where the subpacket now filling began; a straddling
+    ; subpacket has part of ITSELF committed, so THAT case wants the ZRPOS at
+    ; [tz_sub0] with the overlap skipped. But `sub0 > pos` is the NORMAL case,
+    ; not the exception - with 1,024-byte subpackets and a 4,096-byte chunk,
+    ; three subpacket starts in every four sit ABOVE the committed offset - and
+    ; `sub 4096-6144` is 0xF800, so the old code named an offset PAST THE END OF
+    ; THE FILE and then silently dropped 63,488 bytes while advancing [tz_rcv]
+    ; past the hole. The ZEOF check still matched. Strictly worse than the
+    ; defect it was fixing, and the same shape of unchecked premise as the
+    ; divide in tz_frac.
+    ;
+    ; So: resume at whichever is LOWER, and skip only what is provably already
+    ; written. The file's SIZE never moves either way, which is what keeps
+    ; OSAPI_FILE_APPEND's cluster-multiple precondition true through a retry.
     push si
     push di
     mov word [tz_fill], 0           ; whatever was still filling is DISCARDED
-    mov ax, [tz_pos]
-    sub ax, [tz_sub0]               ; at most one subpacket, so the high words
-    mov [tz_skip], ax               ; cannot differ and the borrow cannot happen
     mov si, tz_sub0
+    mov di, tz_pos
+    call tz_cmp32
+    jb .straddle                    ; sub0 < pos: part of this subpacket is on
+    mov word [tz_skip], 0           ; the disk already
+    mov si, tz_pos                  ; sub0 >= pos: [tz_pos] IS the honest resume
+    jmp short .rp                   ; and nothing is skipped
+.straddle:
+    mov ax, [tz_pos]
+    sub ax, [tz_sub0]               ; < one subpacket, so one word is enough
+    mov [tz_skip], ax
+    mov si, tz_sub0
+.rp:
     mov di, tz_rcv
     call tz_cp32
+    mov bx, si
     pop di
     pop si
-    mov bx, tz_sub0
     mov al, ZF_RPOS
     call tz_saypos
     call tz_touch
@@ -1386,6 +1415,20 @@ tz_add32:
     adc word [bx+2], 0
     ret
 
+; --- tz_cmp32 - the dword at SI against the dword at DI, UNSIGNED -----------
+; out: CF=1 if [SI] < [DI]. `pop` does not touch the flags, so the answer rides
+; out of the epilogue.
+tz_cmp32:
+    push ax
+    mov ax, [si+2]
+    cmp ax, [di+2]
+    jne .out
+    mov ax, [si]
+    cmp ax, [di]
+.out:
+    pop ax
+    ret
+
 ; --- tz_eq32 - the dwords at SI and DI; ZF=1 if they are equal ---------------
 tz_eq32:
     push ax
@@ -2005,13 +2048,23 @@ tz_wake:
     ; be the latter - fdlg_commit's destroy and its callback are ONE UI-task
     ; call chain and this handler is a separate dispatch, so a suspicion that
     ; survives to the next kick is a cancel.
-    cmp byte [tz_pcan], 0
-    je .noslotck
+    ; **THE SLOT IS ASKED FIRST, AND IT IS AUTHORITATIVE.** OSAPI_WM_OWNSEG
+    ; tests the record's USED bit, which wm_destroy clears and wm_hide does not
+    ; - so while the dialog is on screen it answers "still there" and a paint
+    ; that says otherwise is provably wrong. Trusting the paint FIRST left the
+    ; other direction open: any wm_paint_all reaching us between TZ_DLGARM and
+    ; the backstop - the screensaver's relight is the concrete one - cancelled a
+    ; file whose dialog the user was still reading, and every later file was
+    ; then refused for a dialog this end had already written off.
+    cmp byte [tz_dslot], 0xFF
+    je .paintonly                   ; tz_wmap's XOR came back empty and we never
+    call tz_dgone                   ; worked out which slot it took
+    jnc .tmo
     call tz_dcancel
     jmp short .glass
-.noslotck:
-    call tz_dgone                   ; ...and the dialog's own slot being free
-    jnc .tmo                        ; again says the same thing without a paint
+.paintonly:
+    cmp byte [tz_pcan], 0
+    je .tmo
     call tz_dcancel
     jmp short .glass
 .tmo:
@@ -2195,8 +2248,16 @@ tz_dlgopen:
     inc byte [tz_dtry]
     cmp byte [tz_dtry], TZ_DTRY
     jb .out                         ; ...bounded, so a dialog somebody else
-    mov byte [tz_rst], TZR_CANCEL   ; leaves up for ever cannot hang the
-    mov byte [tz_req], TZ_NONE      ; transfer either
+    mov byte [tz_dtry], 0           ; leaves up for ever cannot hang the
+                                    ; transfer either - **AND THE COUNTER GOES
+                                    ; BACK HERE.** It used to be cleared only by
+                                    ; a SUCCESSFUL open, so one exhausted retry
+                                    ; made every later file give up on its first
+                                    ; refused poll: one stuck dialog turned a
+                                    ; twelve-file batch into one slow skip and
+                                    ; ten instant ones
+    mov byte [tz_rst], TZR_CANCEL
+    mov byte [tz_req], TZ_NONE
     jmp short .out
 .up:
     or byte [tz_diag], 16
@@ -2270,7 +2331,9 @@ tz_dlgdone:
     call tz_chunk_set               ; **THE DESTINATION's cluster, and the
     jnc .sized                      ; question is asked HERE because the Drive
     mov byte [tz_rst], TZR_BIG      ; button may have moved it (the w4 review's
-.sized:                             ; MAJOR 2)
+    call tz_bigmsg                  ; MAJOR 2) - and the refusal's sentence is
+.sized:                             ; composed here too, so tz_dig keeps its
+                                    ; one-task property
     mov byte [tz_req], TZ_NONE      ; ...LAST, and BEFORE the paint below, which
                                     ; is the whole of the cancel inference: on a
                                     ; COMMIT this runs before the UI loop

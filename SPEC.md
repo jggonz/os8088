@@ -35077,7 +35077,7 @@ that is budgeted out of. A disk that is exactly full is a disk the next byte
 breaks, and the breakage lands on whoever is holding it.
 
 **IT WAS FOUR CLUSTERS AND NOT TWO, so one more typeface came off.** §70.11's
-receiver takes `TELNET.O88` from **10,235 to 15,005** — 10 clusters to 15 —
+receiver takes `TELNET.O88` from **10,235 to 15,079** — 10 clusters to 15 —
 which is exactly the four the system disk had, leaving it at **354 of 354**:
 full, not tight, which is the state the paragraph above says is the dangerous
 one. So `COURIER.F88` goes with `JETBRAIN.F88`, on the same test and with the
@@ -78379,7 +78379,7 @@ carries it and no `kern_small` machine can launch it. The two true reasons:
 
 **AND THAT ONE WAY IS NOW ARITHMETIC AGAINST A NUMBER THAT DOES NOT FIT.**
 After §70.11's Zmodem receiver the package is its final size — `os88pkg.py`
-reads **image 15,005, bss 16,299**, so the loader's claim is **31,304 bytes**
+reads **image 15,079, bss 16,299**, so the loader's claim is **31,378 bytes**
 — and a `kern_small` machine is a 256KB one whose heap is about 28 KB
 (docs/KERN-SPLIT-PLAN.md). **A hand-copied `TELNET.O88` is therefore most
 likely REFUSED AT THE CLAIM and never reaches the renderer at all**, which
@@ -79842,44 +79842,78 @@ only *marks* a cancel, so the real dialog stayed on screen and the next file's
 request was then refused for a dialog that was already up. §70.12.2 has the
 run.
 
-**THE PAINT IS STILL THE SIGNAL — IT IS ARMED, AND THAT IS THE WHOLE FIX.**
-`[tz_dlgt]` is the tick the dialog went up, and a `W_PAINT` counts as a cancel
-only once `TZ_DLGARM` = **18 ticks (one second)** have passed:
+**THE SLOT DECIDES, AND THE PAINT IS ITS FALLBACK.** Three things can say a
+dialog is gone, and they are ordered by how much they know.
 
-> a `W_PAINT` arriving more than a second after `OSAPI_FILE_DLG` returned, with
-> `[tz_dlg]` still set → the dialog is gone and nobody called back → **CANCEL**.
+1. **The dialog's own window SLOT.** `OSAPI_WM_OWNSEG` (0x04E0) answers CF=1
+   for a free slot and CF=0 with the owning segment for a live one. `tz_wmap`
+   builds a BITMAP of the twelve slots immediately before `OSAPI_FILE_DLG` and
+   another immediately after a successful open; the bit that appeared names the
+   slot, and `[tz_dslot]` holds it. That test is **authoritative**, because the
+   used bit it reads is what `wm_destroy` clears and what `wm_hide` does not —
+   so while the dialog is on screen it answers *still there*, and any other
+   signal that disagrees is provably wrong.
 
-The arrival repaint lands within milliseconds of the open and the departure
-repaint cannot, so one second separates them by a wide margin — and **nothing
-else repaints a desktop with a modal dialog on it**, because no other window
-can be dragged, raised, closed or launched while one is up. That is the
-property the grace period rests on, and it is a property of modality rather
-than of event ordering. Measured, on `tests/telzm.py`'s cancel run: **`[tz_dlg]`
-cleared 0.9 seconds after the Escape**, against a 60-second backstop.
+   A TALLY would not have done: it is a fact about the DESKTOP, and anything
+   else creating or destroying a window moves it. Modality fences *input* and
+   not `wm_create`/`wm_destroy` from a running package's own task.
 
-**A SECOND SIGNAL WAS BUILT AND THEN TAKEN OUT AGAIN, and it is worth a
-paragraph because it is the obvious idea.** The dialog is a WINDOW, so count
-the windows: `OSAPI_WM_OWNSEG` (0x04E0) answers CF=1 for a free slot and CF=0
-with the owning segment for a live one, and twelve calls tally the desktop —
-so a tally taken before `OSAPI_FILE_DLG` and compared after it looks like a
-FACT about the dialog rather than an inference about paints.
+2. **A `W_PAINT`, ARMED — and it may not decide.** `[tz_dlgt]` is the tick the
+   dialog went up and `tz_cancelck` ignores anything inside `TZ_DLGARM` = 18
+   ticks, because `fdlg_open`'s own `cw_wm_show` repaints the desktop when the
+   dialog ARRIVES. Past that it sets `[tz_pcan]` **and returns**: `tz_wake`'s
+   next pass is what acts, and only when `[tz_dslot]` is 0xFF — the case where
+   `tz_wmap`'s XOR came back empty and the slot was never worked out.
 
-**It never fires.** A dialog dismissed with Escape leaves its slot occupied
-until `fdlg_reap` collects it (§38.1.1), so the count does not come back and
-the cancel fell through to the sixty-second backstop when this was the only
-rule. A signal that does not fire is not defence in depth, it is fifty bytes
-of a package whose 360KB floppy has two clusters left (§24.3.1) — so it is
-gone, and what is written down instead is that **`fdlg_reap`'s timing is why**,
-for whoever wants to try it again on a kernel that reaps at the close.
+   Trusting the paint FIRST left the other direction wide open: any
+   `wm_paint_all` reaching us between the arming and the backstop cancelled a
+   file whose dialog the user was still reading, and the screensaver's relight
+   is the concrete one.
 
-**A COMMIT CANNOT BE MISREAD AS ONE, AND THE ARGUMENT IS THE TASK RATHER THAN
-THE TIMING.** `fdlg_commit` destroys the dialog and calls the completion proc
-in ONE UI-task call chain, and both `OSAPI_WM_ONWAKE`'s handler and `W_PAINT`
-are other UI-task callbacks — so neither can be dispatched between the destroy
-and `tz_dlgdone`'s `mov byte [tz_dlg], 0`. The UI task being a single task is
-the whole proof, and it does not depend on which of two events the window
-manager happens to deliver first. `tests/telzm.py` drives fourteen commits and
-one cancel over one boot and no commit is ever read as a cancel.
+3. **Sixty seconds**, for the window that never goes away. Not the mechanism.
+
+**AND THE PAINT MAY NOT ACT ALONE FOR A SECOND REASON, which is an ordering
+this section got wrong the first time.** The first draft argued that a commit is
+safe because *"`fdlg_commit` destroys the dialog and calls the completion proc
+in one UI-task call chain, and `W_PAINT` is another UI-task callback, so it
+cannot be dispatched in between"*. **`W_PAINT` is not dispatched — it is called
+INLINE, by the destroy.** `fdlg_commit` calls `fdlg_close` first, `wm_destroy`
+ends in `wm_paint_dmg` over the rect the dialog vacated, that marks every window
+overlapping it — ours does — and `wm_draw_win` calls our `W_PAINT` **unless
+`wm_su_try` hits**. So the real order is:
+
+    destroy → repaint → te_paint → (the inference) → completion proc → tz_dlgdone
+
+and the only thing that stood between a Save and a `ZSKIP` was the RAISE CACHE
+hitting. §11.96 is explicit that the cache is a **purgeable** claim (§50.6),
+*"given back the instant anything else needs the room"* — so on a 256KB XT, or
+a desktop with a few packages up, **every Save was read as a cancel and every
+download skipped**. A gate on an idle desktop cannot see it, which is why
+fourteen commits passed.
+
+Measured, on `tests/telzm.py`'s cancel run: **`[tz_dlg]` cleared half a second
+after the Escape**, against the 60-second backstop.
+
+**AND A REFUSED OPEN IS RETRIED, WITH THE COUNTER RESET WHEN IT GIVES UP.**
+`OSAPI_FILE_DLG` answers CF=1 while another dialog is up, so `[tz_req]` stays
+`TZ_NAME` and the worker's kick asks again, bounded at `TZ_DTRY` = 20 kicks.
+`[tz_dtry]` goes back to zero on the give-up path as well as on a successful
+open: cleared only by success, one exhausted retry made every LATER file give up
+on its first refused poll, turning one stuck dialog into a batch of instant
+skips.
+
+**Which also settles what a second cancelled dialog was doing.** Escape destroys
+the dialog and drops `[fdlg_win]` in the same keystroke (`fdlg_close`), and
+`fdlg_reap` runs once per UI pass — so a *repeated* refusal could only mean a
+dialog really was up while `[tz_dlg]` said it was not, which is exactly what the
+paint-first rule produced. With the slot deciding, the mismatch cannot arise;
+`tests/telzm.py`'s batch cancels two dialogs in a row and asserts the third.
+
+**A COMMIT CANNOT BE MISREAD AS ONE**, because `tz_dlgdone` clears `[tz_dlg]`
+and `[tz_pcan]` together and runs before any wake can be dispatched: the paint
+that preceded it banked a suspicion nothing will now read, and the slot is free
+by then anyway. `tests/telzm.py` drives ten commits and five cancels over one
+boot — two of the cancels adjacent — and no commit is ever read as a cancel.
 
 **AND A REFUSED OPEN IS RETRIED RATHER THAN READ AS A CANCEL.**
 `OSAPI_FILE_DLG` answers CF=1 while ANOTHER dialog is up, and the one this
@@ -80012,7 +80046,7 @@ already under way when `^]` was pressed carries on, with its progress on row
 
 #### 70.11.6 What the receiver cost, and what it does not answer yet
 
-`apps/telnet/tezm.inc`. **`TELNET.O88` is image 15,005, bss 16,299 — 31,304 of
+`apps/telnet/tezm.inc`. **`TELNET.O88` is image 15,079, bss 16,299 — 31,378 of
 `APP_MAX_SIZE`'s 61,440, which is 51%** — and the validator was never the
 constraint here either (§70.8.11). The floppy was, twice, and §24.3.1 carries
 the arithmetic: the receiver takes the package from 10 clusters to 14 on a
@@ -80259,6 +80293,19 @@ purge behind the cancel rule needs a machine short of memory where this
 desktop is idle. `ZCRCE`, `ZCRCQ`, `ZRUB0` and `ZRUB1` are not exercised
 either, because `tools/os88bbs.py`'s sender uses `ZCRCG` and `ZCRCW` and its
 escaper has no arm for 0x7F or 0xFF.
+
+**AND TWO CANCELLED DIALOGS IN A ROW ARE NOW A GATE CASE.** It was an open
+question at the end of the first fix pass — a twelve-file batch answered with
+alternating Escape and Return produced four dialogs and ten skips — and it was
+this package's, in two places. `tz_wake` trusted a paint before it asked the
+dialog's own slot, so a stray `wm_paint_all` wrote a file off while its dialog
+was still on screen; every later `OSAPI_FILE_DLG` was then refused for a dialog
+this end had already forgotten, and `[tz_dtry]` was cleared only by a SUCCESSFUL
+open, so one exhausted retry made every file after it give up on its first poll.
+The kernel was never involved: `fdlg_close` destroys the dialog and drops
+`[fdlg_win]` in one keystroke, and `fdlg_reap` runs once per UI pass. The batch
+now cancels rows three and four — adjacent — and asserts that row five's dialog
+appears.
 
 **AND THE GATE FILLED A FOLDER, which is worth writing down because it read as
 a receiver defect for three runs.** A subdirectory on a 1.44MB floppy is ONE

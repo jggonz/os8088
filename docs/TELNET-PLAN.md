@@ -381,7 +381,7 @@ line, the two waves that have landed:
 | after §70.8 (the screen, both renderers, the glyphs) | 7,052 | 7,554 | 14,606 |
 | **after §70.9/§70.10 (the parser, the keys, the queue)** | **10,235** | **7,821** | **18,056** |
 | after §70.11 (the Zmodem receiver) | 14,337 | 16,254 | 30,591 |
-| **...and the w4 review's fix pass — FINAL** | **15,005** | **16,299** | **31,304** |
+| **...and the w4 review's fix pass — FINAL** | **15,079** | **16,299** | **31,378** |
 
 The estimate was **good to about four per cent on bss and nine on image**,
 which is worth saying because the estimate is what the whole plan was sized
@@ -397,7 +397,7 @@ estimate could have caught it, because this table measures the package and the
 constraint is the disk it rides on with sixteen other packages, ten typefaces
 and the whole driver set.
 
-**31,304 of 61,440 — 51%, and that is the FINAL figure.** The estimate said
+**31,378 of 61,440 — 51%, and that is the FINAL figure.** The estimate said
 ~25,200 and the receiver came in 6,000 over it, all of it in `tezm.inc`: ~1,800
 was guessed and the file is about 4,000 bytes of code, because the estimate had
 no row for the 8.3 mangle, the 32-bit decimal formatting the progress line
@@ -412,7 +412,7 @@ measured; the launch on `vm/xt` with 256 KB is where it becomes a fact.
 **AND THE `kern_small` SENTENCE IS NOW ARITHMETIC THAT DOES NOT FIT.** §70.8.3
 kept the blit-refusal degrade for one reachable case — a user hand-copying
 `TELNET.O88` onto a `kern_small` system disk, where `OSAPI_GFX_BLIT1` is a
-`stc`/`ret` stub. **31,304 against a heap of about 28 KB means that copy is
+`stc`/`ret` stub. **31,378 against a heap of about 28 KB means that copy is
 most likely refused at the claim and never reaches the renderer at all.** It
 is a SUBTRACTION and not a run — nothing in this tree boots a `kern_small`
 kernel with this package beside it, and the Makefile's `SMALLOMIT` is what
@@ -435,7 +435,7 @@ The 8 KB staging is the single largest item and it is the one with an argument
 behind it: §77.21 found that **the staging size is the seek count**, and a
 smaller buffer means more `OSAPI_FILE_APPEND` commits, each of which is two FAT
 flushes and a directory write. Halving it to 4 KB would double the seeks on a
-download for 4,096 bytes of a budget that has 30,136 spare — and **the halves
+download for 4,096 bytes of a budget that has 30,062 spare — and **the halves
 are what the double-buffering is**, so halving the area would also mean the
 worker waits for every commit instead of filling the other half through it
 (§70.11.3). It is one argument doing two jobs.

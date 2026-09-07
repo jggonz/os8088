@@ -733,9 +733,20 @@ def main():
                     # So four NON-ADJACENT rows are cancelled, which leaves
                     # seven distinct names on the disk, two spare slots, and no
                     # cancel next to another.
-                    keep = len(seen) <= 9       # ...the first nine commit and
-                                                # the last three cancel, which
-                                                # is the folder's arithmetic
+                    # **TWO CANCELS IN A ROW, THEN A THIRD DIALOG** (rows 3 and
+                    # 4, with row 5 following), which is what the w4 re-review
+                    # traced to MAJOR 4's remaining hole rather than to the
+                    # kernel: Escape destroys the dialog and drops `[fdlg_win]`
+                    # in one keystroke, so a repeated refusal meant a dialog was
+                    # really up while `[tz_dlg]` said otherwise. With the slot
+                    # asked before the paint, and `[tz_dtry]` reset on the
+                    # give-up path, the third dialog must appear.
+                    #
+                    # The other cancels are the last three, where no dialog
+                    # follows and the folder's sixteen entries are what decides:
+                    # nine rows commit and MEDIA/ keeps two slots spare.
+                    n = len(seen)
+                    keep = n not in (3, 4) and n <= 9
                     telansi.qmp("sendkey ret" if keep else "sendkey esc")
                     if not wait_nodlg(25.0):
                         fails.append("the dialog for %r was %s and [tz_dlg] is "
@@ -773,11 +784,12 @@ def main():
                     fails.append("%d of %d dialogs appeared - a batch is ZFILE "
                                  "again after ZEOF and each file gets its own "
                                  "(SPEC.md 70.11.2)" % (len(seen), len(batch)))
-                if len(sent) != 9 or len(skip) != 3:
-                    fails.append("the batch answered nine dialogs with Return "
-                                 "and three with Escape, and the server saw %d "
-                                 "sent and %d skipped: %r"
-                                 % (len(sent), len(skip), zf))
+                if len(sent) != 7 or len(skip) != 5:
+                    fails.append("the batch answered seven dialogs with Return "
+                                 "and five with Escape - two of them ADJACENT, "
+                                 "which is the case the w4 re-review traced to "
+                                 "MAJOR 4 - and the server saw %d sent and %d "
+                                 "skipped: %r" % (len(sent), len(skip), zf))
             press_connect()                     # Close: ASKED, and the worker
             for _ in range(40):                 # is what carries it out
                 if rb("te_state") != telansi.TS_UP:
@@ -868,8 +880,10 @@ def main():
     # [tz_name] is what the receiver computed and this is what the file system
     # kept, which is the same rule read twice (SPEC.md 70.11.4). The three the
     # batch cancels are asserted at their dialogs and write nothing.
-    landed = [w for _, w in os88bbs.MANGLE83_CASES
-              if _ not in UNSENDABLE][:9]
+    sendable = [w for src, w in os88bbs.MANGLE83_CASES
+                if src not in UNSENDABLE]
+    landed = [w for i, w in enumerate(sendable, 1)
+              if i not in (3, 4) and i <= 9]
     missing = [w for w in landed
                if extract(img, name11(w), path=("MEDIA      ",)) is None]
     if missing:

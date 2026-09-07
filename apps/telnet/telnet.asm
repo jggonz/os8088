@@ -3188,7 +3188,11 @@ tz_msg      equ tz_name + 14          ; 48: the progress line
 tz_bmsg     equ tz_msg + 48           ; 32: ...and a REFUSAL, which needs a
                                       ; buffer of its own because te_status
                                       ; rewrites the progress line on every draw
-tz_dig      equ tz_bmsg + 32          ; 12: tz_num's digits, written backwards
+tz_dig      equ tz_bmsg + 32          ; 12: tz_num's digits, written backwards.
+                                      ; **ONE TASK**: te_status calls tz_text
+                                      ; and tz_dlgdone calls tz_bigmsg, and both
+                                      ; are the UI task's. A worker-side caller
+                                      ; would be the first thing to break that
 tz_ob       equ tz_dig + 12           ; 24: one composed header, on its way out
 tz_ohdr     equ tz_ob + 24            ; 4: ...and its four header bytes
 tz_info     equ tz_ohdr + 4           ; TZ_INFOSZ: the ZFILE info block
@@ -3237,7 +3241,13 @@ TZ_NAMEMAX  equ 13                  ; tz_dlgdone copies 12 and terminates
 TZ_MSGMAX   equ 44                  ; tz_text: 12 of name, 2, 13, 3, 13, NUL
 TZ_BMSGMAX  equ 30                  ; tz_bigmsg: 8 + up to 13 + 8 + NUL, and
                                     ; [tz_clus] is a WORD so it is really 6
-TZ_DIGMAX   equ 11                  ; tz_num: ten digits and a NUL
+TZ_DIGMAX   equ 12                  ; tz_num: ten digits and a NUL, and the
+                                    ; NUL goes at tz_dig + 11 - so the SPAN it
+                                    ; needs is twelve, not eleven. Guarded at
+                                    ; eleven, a future editor who shrank the
+                                    ; buffer to eleven would pass and write the
+                                    ; NUL into tz_ob, which is the exact failure
+                                    ; the guard exists for
 TZ_OBMAX    equ 21                  ; tz_hex: 4 + 2 + 8 + 4 + 2 + XON
 %if tz_msg - tz_name < TZ_NAMEMAX
   %error "tz_name is smaller than the 8.3 name tz_dlgdone copies into it"
