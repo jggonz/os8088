@@ -80,6 +80,20 @@ section .text
 PB_COLS     equ 28                ; the arcade field: 28 tiles, 224 px
 PB_N        equ 8                 ; iterations a row (bandbench's)
 
+; THE THREE TILE ROWS RUN AT THEIR OWN, LARGER N, and that is a correctness
+; requirement rather than a nicety. One tile is ~2 PIT counts, so at PB_N = 8
+; the whole row is 16 counts and a per-operation figure lands on a 0.125-count
+; grid - which is the size of the difference the CGA row MERGE makes to a
+; tile. The first version of this bench published that difference as
+; 1.250 - 1.125 = 0.125 counts, ONE PIT count spread over eight iterations,
+; against a `BAND cga` A/B of 10.5 counts over the same 28 tiles: the two
+; disagreed by 3x because the tile pair was at the instrument's floor. The
+; band row is 28 x the tile row plus terms that CANCEL between its two arms,
+; so `28 x delta tile` MUST equal `delta band` and the bench prints both -
+; see pb_recon below. At 256 iterations a tile row is ~512 counts and the
+; grid is 0.004 of one.
+PB_N_TILE   equ 256               ; iterations for the three TILE rows
+
 ; -----------------------------------------------------------------------------
 ; pb_entry - package entry (SPEC.md 20.2)
 ; -----------------------------------------------------------------------------
@@ -209,6 +223,27 @@ pb_setup:
     cmp bx, 256
     jb .rv
 
+    xor bx, bx                      ; pb_zmask[b] = 0b11 in every ZERO field
+.zm:                                ; (the CGA row merge's table, SPEC.md 91)
+    mov al, bl
+    xor dl, dl
+    mov cl, 4
+.zf:
+    shl dl, 1
+    shl dl, 1
+    test al, 0xC0                   ; the field this pass is looking at
+    jnz .znz
+    or  dl, 3
+.znz:
+    shl al, 1
+    shl al, 1
+    dec cl
+    jnz .zf
+    mov [pb_zmask + bx], dl
+    inc bx
+    cmp bx, 256
+    jb .zm
+
     mov di, pb_band                 ; the packed band the packers read
     mov cx, 8 * PMC_BAND_ROW
     mov al, 0x39
@@ -332,8 +367,12 @@ pb_repaint:
 ; - the last content rows, so nothing scribbles over a result line.
 ; =============================================================================
 
-; --- _pmc_tile(src, pairs, dst, rowstep) ------------------------------------
+; --- _pmc_tile(src, pairs, dst, rowstep, zmask) -----------------------------
+; [pb_zm] is 0 for the plain alternate-row SAMPLE and pb_zmask for the CGA row
+; MERGE (SPEC.md 91) - the same routine, the same arguments, one pointer apart,
+; which is what makes the two rows below an A/B rather than two benches.
 pb_b_tile:
+    push word [pb_zm]
     push word [pb_step]
     mov ax, pb_band
     push ax
@@ -342,7 +381,7 @@ pb_b_tile:
     mov ax, pb_tile
     push ax
     call _pmc_tile
-    add sp, 8
+    add sp, 10
     ret
 
 ; --- _pmc_pack_pl(band, planes, rows, planar, cols) -------------------------
@@ -379,20 +418,28 @@ pb_b_pack1:
     add sp, 12
     ret
 
-; --- _pmc_sprite(src, pal4, dst, sinc, rows, flags, brev) -------------------
-; TWO ROWS, BECAUSE THE TWO CASES ARE DIFFERENT LOOPS' WORTH OF WORK. An even
+; --- _pmc_sprite(src, pal4, dst, sinc, rows, flags, brev, zmask) ------------
+; TWO CASES, BECAUSE THEY ARE DIFFERENT LOOPS' WORTH OF WORK. An even
 ; destination nibble is the cheap one; an odd one plus flipx adds a table pass
 ; per source byte and is what Pac-Man running left at an odd pixel costs, which
 ; is half of every frame.
+;
+; ...AND EACH IS RUN TWICE, [pb_zms] apart, which is the sprite layer's own
+; A/B for the CGA row merge (SPEC.md 91). [pb_sinc] moves with it: the merged
+; arm is the CGA layout, where a drawn row is two source rows on, so the
+; dropped row is the four bytes between them. `sinc` itself is one `add` a row
+; and costs the same either way - what the pair of rows measures is the merge.
+; EIGHT rows on both arms, so the two are per-row comparable; the shipping CGA
+; band draws four of them.
 pb_b_sprite:
+    push word [pb_zms]
     mov ax, pb_brev
     push ax
     xor ax, ax
     push ax                         ; flags: high nibble first, no flipx
     mov ax, 8
     push ax                         ; rows
-    mov ax, 4
-    push ax                         ; sinc: every source row
+    push word [pb_sinc]             ; 4 = every source row, 8 = the CGA layout
     mov ax, pb_band + 8
     push ax
     mov ax, pb_pal4
@@ -400,18 +447,18 @@ pb_b_sprite:
     mov ax, pb_spr
     push ax
     call _pmc_sprite
-    add sp, 14
+    add sp, 16
     ret
 
 pb_b_sprite2:
+    push word [pb_zms]
     mov ax, pb_brev
     push ax
     mov ax, 3
     push ax                         ; flags: LOW nibble first, and flipx
     mov ax, 8
     push ax
-    mov ax, 4
-    push ax
+    push word [pb_sinc]
     mov ax, pb_band + 9
     push ax
     mov ax, pb_pal4
@@ -419,7 +466,7 @@ pb_b_sprite2:
     mov ax, pb_spr
     push ax
     call _pmc_sprite
-    add sp, 14
+    add sp, 16
     ret
 
 ; --- the three emits --------------------------------------------------------
@@ -486,6 +533,7 @@ pb_b_bandc:                         ; 28 tiles + the repack + BLITP
 .t:
     push cx
     push di
+    push word [pb_zm]
     mov ax, 1
     push ax
     push di
@@ -494,7 +542,7 @@ pb_b_bandc:                         ; 28 tiles + the repack + BLITP
     mov ax, pb_tile
     push ax
     call _pmc_tile
-    add sp, 8
+    add sp, 10
     pop di
     pop cx
     add di, 4
@@ -513,6 +561,7 @@ pb_b_bandm:                         ; 28 tiles + the mono pack + BLIT1
 .t:
     push cx
     push di
+    push word [pb_zm]
     mov ax, 1
     push ax
     push di
@@ -521,7 +570,7 @@ pb_b_bandm:                         ; 28 tiles + the mono pack + BLIT1
     mov ax, pb_tile
     push ax
     call _pmc_tile
-    add sp, 8
+    add sp, 10
     pop di
     pop cx
     add di, 4
@@ -530,6 +579,75 @@ pb_b_bandm:                         ; 28 tiles + the mono pack + BLIT1
     pop cx
     call pb_b_pack1
     call pb_b_blit1
+    ret
+
+; --- ...and the CGA one, which is the band the row MERGE is paid for on ------
+; 28 tiles at rowstep 2 + the mono pack over FOUR rows + a 4-row BLIT1. Run
+; twice, [pb_zm] apart: the pair of numbers is the whole decision in SPEC.md
+; 91 about whether the arcade font's middle strokes are worth their cost on a
+; 200-line screen.
+pb_b_bandcga:
+    push cx
+    push di
+    mov cx, PB_COLS
+    mov di, pb_band
+.t:
+    push cx
+    push di
+    push word [pb_zm]
+    mov ax, 2
+    push ax
+    push di
+    mov ax, pb_pairs
+    push ax
+    mov ax, pb_tile
+    push ax
+    call _pmc_tile
+    add sp, 10
+    pop di
+    pop cx
+    add di, 4
+    loop .t
+    pop di
+    pop cx
+    call pb_b_pack1c
+    call pb_b_blit1c
+    ret
+
+; the two 4-row emits the CGA band uses, written out rather than made a
+; parameter of the 8-row pair above: those two are the rows SPEC.md 91 already
+; quotes and a knob in them would re-date numbers this change does not touch.
+pb_b_pack1c:
+    mov ax, PB_COLS
+    push ax
+    xor ax, ax
+    push ax                         ; y0
+    mov ax, pb_mono2
+    push ax
+    mov ax, 4                       ; the CGA band's four rows
+    push ax
+    mov ax, pb_bits
+    push ax
+    mov ax, pb_band
+    push ax
+    call _pmc_pack_1
+    add sp, 12
+    ret
+
+pb_b_blit1c:
+    push es
+    push bp
+    mov si, pb_bits
+    mov bp, PMC_PL_STRIDE
+    mov ax, [pb_bx]
+    mov bx, [pb_by]
+    mov cx, PMC_BAND_W
+    mov dx, 4
+    push ds
+    pop es
+    call OSAPI_GFX_BLIT1
+    pop bp
+    pop es
     ret
 
 ; -----------------------------------------------------------------------------
@@ -556,6 +674,91 @@ pb_reclip:
     mov bx, [pb_win]
     call OSAPI_WM_CLIP_SET
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pb_bank - bank the row just run: [bl_lastus] (32 bits, hundredths of a
+;           microsecond an iteration) -> the dword at DI
+; Preserves every register.
+; -----------------------------------------------------------------------------
+pb_bank:
+    push ax
+    mov ax, [bl_lastus]
+    mov [di], ax
+    mov ax, [bl_lastus+2]
+    mov [di+2], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pb_uline - SI = label, DX:AX = hundredths of a microsecond -> one report line
+;            in the same column as every measured row's us/op
+; Preserves every register.
+; -----------------------------------------------------------------------------
+pb_uline:
+    push ax
+    push dx
+    push di
+    call bl_lclr
+    xor di, di
+    call bl_lput
+    mov di, BL_C_US
+    call bl_usfield
+    push si
+    mov si, bl_s_us
+    mov di, BL_C_UNIT
+    call bl_lput
+    pop si
+    call bl_lcommit
+    pop di
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pb_recon - THE BENCH CHECKING ITSELF (SPEC.md 91). `BAND cga` is 28 x the
+;            step-2 TILE plus a 4-row pack and a 4-row blit, and those two
+;            terms are IDENTICAL in its sampled and merged arms - so the row
+;            merge's cost per band MUST be 28 times its cost per tile, and the
+;            two rows below are the same quantity measured twice.
+;
+; It is here because they once disagreed by 3x and both were published: the
+; tile A/B was one PIT count spread over PB_N = 8 iterations, at the
+; instrument's floor, while the band A/B was 84 counts. PB_N_TILE is the fix
+; and this is what says the fix worked. Read the two lines: if they are not
+; within a few percent of each other, NEITHER is a number to quote.
+; Preserves every register.
+; -----------------------------------------------------------------------------
+pb_recon:
+    push ax
+    push cx
+    push dx
+    push si
+
+    mov si, pb_s_recon
+    call bl_sline
+
+    mov ax, [pb_us_t2m]             ; 28 x (merged tile - sampled tile)
+    mov dx, [pb_us_t2m+2]
+    sub ax, [pb_us_t2]
+    sbb dx, [pb_us_t2+2]
+    mov cx, PB_COLS
+    call bl_mul48
+    call bl_get32
+    mov si, pb_r_rec1
+    call pb_uline
+
+    mov ax, [pb_us_bgm]             ; ...against the band A/B itself
+    mov dx, [pb_us_bgm+2]
+    sub ax, [pb_us_bg]
+    sbb dx, [pb_us_bg+2]
+    mov si, pb_r_rec2
+    call pb_uline
+
+    pop si
+    pop dx
+    pop cx
     pop ax
     ret
 
@@ -644,9 +847,10 @@ pb_run:
 
     mov si, pb_s_hdr
     call bl_sline
-    mov word [bl_n], PB_N
+    mov word [bl_n], PB_N_TILE      ; the tile rows only - see PB_N_TILE
 
-    mov word [pb_step], 1
+    mov word [pb_zm], 0             ; the sampled arm, for every row but the
+    mov word [pb_step], 1           ; two that name the merge
     mov word [bl_body], pb_b_tile
     mov si, pb_r_tile1
     xor al, al
@@ -657,8 +861,20 @@ pb_run:
     mov si, pb_r_tile2
     xor al, al
     call bl_run
+    mov di, pb_us_t2                ; bank it for pb_recon (hundredths of a us)
+    call pb_bank
+
+    mov word [pb_zm], pb_zmask
+    mov word [bl_body], pb_b_tile
+    mov si, pb_r_tile2m
+    xor al, al
+    call bl_run
+    mov di, pb_us_t2m
+    call pb_bank
+    mov word [pb_zm], 0
     mov word [pb_step], 1
 
+    mov word [bl_n], PB_N           ; ...and every row below is bandbench's N
     mov word [bl_body], pb_b_packpl
     mov si, pb_r_packpl
     xor al, al
@@ -678,6 +894,21 @@ pb_run:
     mov si, pb_r_spr2
     xor al, al
     call bl_run
+
+    ; ...and the same two MERGED, which is what the CGA layout ships
+    mov word [pb_zms], pb_zmask
+    mov word [pb_sinc], 8
+    mov word [bl_body], pb_b_sprite
+    mov si, pb_r_sprm
+    xor al, al
+    call bl_run
+
+    mov word [bl_body], pb_b_sprite2
+    mov si, pb_r_spr2m
+    xor al, al
+    call bl_run
+    mov word [pb_zms], 0
+    mov word [pb_sinc], 4
 
     call bl_blank
     mov si, pb_s_hdr2
@@ -713,6 +944,27 @@ pb_run:
     mov al, [pb_1ok]
     call pb_rowb
 
+    mov word [bl_body], pb_b_bandcga
+    mov si, pb_r_bandg
+    mov al, [pb_1ok]
+    call pb_rowb
+    mov di, pb_us_bg
+    call pb_bank
+
+    mov word [pb_zm], pb_zmask
+    mov word [bl_body], pb_b_bandcga
+    mov si, pb_r_bandgm
+    mov al, [pb_1ok]
+    call pb_rowb
+    mov di, pb_us_bgm
+    call pb_bank
+    mov word [pb_zm], 0
+
+    cmp byte [pb_1ok], 0
+    je .norecon
+    call pb_recon
+.norecon:
+
     pop di
     pop si
     pop dx
@@ -745,16 +997,33 @@ pb_s_refused: db 'REFUSED (CF=1)', 0
 
 pb_r_tile1:  db 'TILE step 1 (8 rows)', 0
 pb_r_tile2:  db 'TILE step 2 (4 rows)', 0
+pb_r_tile2m: db 'TILE step 2 MERGED', 0
 pb_r_packpl: db 'PACK_PL 8 rows x 28', 0
 pb_r_pack1:  db 'PACK_1  8 rows x 28', 0
 pb_r_spr:    db 'SPRITE 16x8 even', 0
 pb_r_spr2:   db 'SPRITE 16x8 odd+flipx', 0
+pb_r_sprm:   db 'SPRITE 16x8 even MERGED', 0
+pb_r_spr2m:  db 'SPRITE odd+flipx MERGED', 0
 pb_r_blitp:  db 'BLITP 224x8 4 planes', 0
 pb_r_blit4:  db 'BLIT4 224x8 packed', 0
 pb_r_blit1:  db 'BLIT1 224x8 1bpp', 0
 pb_r_bandc:  db 'BAND colour 28 tiles', 0
 pb_r_bandm:  db 'BAND mono 28 tiles', 0
+pb_r_bandg:  db 'BAND cga 4 rows sampled', 0
+pb_r_bandgm: db 'BAND cga 4 rows MERGED', 0
 
+pb_s_recon:  db '-- the merge, measured twice: these two must agree --', 0
+pb_r_rec1:   db '28 x (MERGED - sampled)', 0
+pb_r_rec2:   db 'BAND MERGED - sampled', 0
+
+pb_us_t2:    dd 0                   ; hundredths of a us an iteration, banked
+pb_us_t2m:   dd 0                   ; by pb_bank for pb_recon
+pb_us_bg:    dd 0
+pb_us_bgm:   dd 0
+
+pb_zm:      dw 0                    ; 0 = sample, pb_zmask = the CGA row merge
+pb_zms:     dw 0                    ; ...the same, for the two SPRITE rows
+pb_sinc:    dw 4                    ; 4 = every source row, 8 = the CGA layout
 pb_win:     dw 0
 pb_cx:      dw 0
 pb_cy:      dw 0
@@ -767,11 +1036,13 @@ pb_pok:     db 1                ; the preflight's two answers (see pb_run)
 pb_1ok:     db 1
 
 ; pb_band 896 + pb_planes 896 + pb_bits 224 + pb_planar 512 + pb_mono2 512
-; + pb_pairs 16 + pb_tile 16, and eight bytes of slack that make the
-; arithmetic legible. pb_entry checks the sum and REFUSES THE LAUNCH if it is
-; short - which is what the first build of the C64's bench did, by 24 bytes.
+; + pb_pairs 16 + pb_tile 16 + pb_spr 64 + pb_pal4 4 + pb_brev 256
+; + pb_zmask 256, and eight bytes of slack that make the arithmetic legible -
+; eleven objects, in the order the equation adds them. pb_entry checks the sum
+; and REFUSES THE LAUNCH if it is short - which is what the first build of the
+; C64's bench did, by 24 bytes.
 PB_BSS_OWN  equ 8 * PMC_BAND_ROW + 4 * PMC_PL_STEP + 8 * PMC_PL_STRIDE \
-                + 512 + 512 + 16 + 16 + 64 + 4 + 256 + 8
+                + 512 + 512 + 16 + 16 + 64 + 4 + 256 + 256 + 8
 PB_BSS_TOTAL equ PB_BSS_OWN + BL_BSS_SIZE
     OS88_BSS PB_BSS_TOTAL
     OS88_IMAGE_END
@@ -787,6 +1058,7 @@ pb_tile:    resb 16
 pb_spr:     resb 64                 ; one 16x16 sprite: 4 bytes a row
 pb_pal4:    resb 4                  ; its colour block, index 0 transparent
 pb_brev:    resb 256                ; _pmc_sprite's flipx lowering
+pb_zmask:   resb 256                ; _pmc_tile's CGA row merge (SPEC.md 91)
 pb_bl:      resb BL_BSS_SIZE
 pb_bss_end:
 section .text

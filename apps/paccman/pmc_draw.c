@@ -110,10 +110,31 @@ static int pmc_cx, pmc_cy;      /* ...and its origin                         */
  * (SPEC.md 91), and PMC_HOST is defined only by that harness's compile. */
 #ifdef PMC_HOST
 static unsigned pmc_n_calls, pmc_n_tiles, pmc_n_bands, pmc_n_rows;
+static unsigned pmc_n_tiles2;   /* ...of which composed at rowstep 2, the CGA
+                                 * layout. A step-2 tile is a MEASURABLY
+                                 * different price from a step-1 one - the
+                                 * bench reads 0.72 ms against 0.45 with the
+                                 * row merge on (SPEC.md 91) - and pricing
+                                 * every tile at the step-1 term made the
+                                 * whole CGA column of the harness's table
+                                 * ~60% high on tiles and blind to the merge */
 static unsigned pmc_n_rc;       /* sum of rows x columns over the bands -
                                  * the packers and the blits are both
                                  * priced per row AT A WIDTH, so a
                                  * partial span costs its share */
+static unsigned pmc_n_rc_p, pmc_n_rc_1, pmc_n_rc_4;
+                                /* ...split by WHICH BLIT actually took them,
+                                 * because a frame can use more than one. A
+                                 * BLITP band that is refused after its probe
+                                 * (a window moved) and a BLIT1 band on a
+                                 * kern_small kernel both fall through to
+                                 * BLIT4, so a mixed frame is reachable - and
+                                 * it is the interesting one, being the
+                                 * fallback the counters exist to price.
+                                 * Charged one shared total, such a frame paid
+                                 * its whole row count at 826 us AND again at
+                                 * 5,947, a ~7x overcharge on exactly that
+                                 * path (SPEC.md 91) */
 static unsigned pmc_n_fillpx;   /* PIXELS filled, and rows of them. A fill
                                  * priced at the call floor alone reports
                                  * 64,512 overdrawn pixels as 0.8 ms and
@@ -128,6 +149,12 @@ static unsigned pmc_n_spr;      /* sprite-bands composed, and their rows -
                                  * repack, and the one the plan could not
                                  * price before wave 2 measured it */
 static unsigned pmc_n_sprow;
+static unsigned pmc_n_sprowm;   /* ...of which MERGED (the CGA layout). A
+                                 * merged sprite row reads the dropped row as
+                                 * well, so it is its own term for tiles'
+                                 * reason: priced at the plain one, the CGA
+                                 * column would be blind to the layer the
+                                 * player actually watches (SPEC.md 91) */
 static unsigned pmc_n_gtick;    /* game_tick()s run for this frame - the C
                                  * logic is the fourth of SPEC.md 91's four
                                  * costs and the only one that is not drawing */
@@ -291,7 +318,18 @@ static int pmc_spr_band(int sy, int ty)
  * from it, never neither. */
 static void pmc_band_sprites(int ty, int c0, int c1)
 {
-    int i, sx, sy, d, k0, k1, srow, sinc, bx0, bp2, flags, base, sc0, sc1;
+    int i, sx, sy, d, k0, k1, srow, sinc, bp2, flags, base, sc0, sc1, n;
+    const unsigned char *ssrc, *zm;
+    unsigned char *sdst;
+    /* EVERY LOCAL HERE IS A BYTE OF THE WORKER'S TASK STACK, and this routine
+     * is on its deepest chain (worker -> pmc_frame -> pmc_flush ->
+     * pmc_flush_laid -> pmc_draw_band -> here -> pmc_sprite). SmallerC gives
+     * every declared local its own slot and reuses none, so the split test
+     * below is written without a `last` or a row-step variable of its own -
+     * the merge arm is the CGA layout and nothing else, where a drawn row is
+     * two source rows on, so `(n - 1) << 1` IS the distance in rows and its
+     * sign is `sinc`'s. Measured: the worker's water mark against
+     * OS88_STACK_256 (SPEC.md 91, tests/paccman.py). */
 
     base = ty << 3;                     /* the band's first SOURCE row */
     for (i = 0; i < PMC_NSPR; i++) {
@@ -309,10 +347,11 @@ static void pmc_band_sprites(int ty, int c0, int c1)
         if (sc1 < c0 || sc0 > c1)
             continue;
 
-        /* Which band ROWS this sprite lands on. Band row k samples source row
-         * base + (k << pmc_ssh), so on CGA half the sprite's rows are not
-         * sampled at all - the alternate-row layout doing to a sprite exactly
-         * what it does to a tile. pmc_spr_band above is this same arithmetic
+        /* Which band ROWS this sprite lands on. Band row k reads source row
+         * base + (k << pmc_ssh), so on CGA half the sprite's rows would not be
+         * read at all - and the row MERGE below is what puts them back, the
+         * alternate-row layout being answered on the sprite layer exactly as it
+         * is on the tile layer. pmc_spr_band above is this same arithmetic
          * reduced to a yes/no, and the markers ask it. */
         d = sy - base;
         k0 = d > 0 ? ((d + pmc_step - 1) >> pmc_ssh) : 0;
@@ -329,19 +368,60 @@ static void pmc_band_sprites(int ty, int c0, int c1)
             sinc = -sinc;
         }
 
-        /* The destination byte and its nibble. bx0 is the sprite's left edge
-         * in BAND pixels and can be as low as -8; + 8 makes both shifts
-         * unsigned, and PMC_BAND_PAD is exactly those 8 pixels' 4 bytes. */
-        bx0 = sx - (c0 << 3);
-        bp2 = bx0 + 8;
+        /* The destination byte and its nibble. The sprite's left edge in BAND
+         * pixels can be as low as -8; + 8 makes both shifts unsigned, and
+         * PMC_BAND_PAD is exactly those 8 pixels' 4 bytes. */
+        bp2 = (sx - (c0 << 3)) + 8;
         flags = (bp2 & 1) | (pmc_sp_flip[i] & 1 ? 2 : 0);
 
+        n    = k1 - k0 + 1;
+        ssrc = pmc_sprites + (pmc_sp_tile[i] << 6) + (srow << 2);
+        sdst = pmc_band + (bp2 >> 1) + pmc_rowoff[k0];
         PMC_COUNT(pmc_n_spr, 1);
-        PMC_COUNT(pmc_n_sprow, (unsigned) (k1 - k0 + 1));
-        pmc_sprite(pmc_sprites + (pmc_sp_tile[i] << 6) + (srow << 2),
-                   pmc_pal + ((pmc_sp_col[i] & 31) << 2),
-                   pmc_band + (bp2 >> 1) + pmc_rowoff[k0],
-                   sinc, k1 - k0 + 1, flags, pmc_brev);
+        PMC_COUNT(pmc_n_sprow, (unsigned) n);
+
+        /* THE CGA ROW MERGE, ON THE SPRITE LAYER (SPEC.md 91). At rowstep 2
+         * every drawn row takes the row below it wherever it is transparent,
+         * which is what keeps Pac-Man's top and bottom caps and the ghosts'
+         * fringes on a 200-line screen; pmcband.inc says what it costs.
+         *
+         * AND THE LAST ROW MAY HAVE NO PARTNER. The pair is always (u, u + 1)
+         * in the sprite's OWN rows - flipy walks them backwards, so its pair
+         * is (r, r - 1) and that is the same pair - so the one row that cannot
+         * merge is source row 15, and it can only ever be the LAST row drawn.
+         * It is split off and asked for with zmask = 0 rather than left to the
+         * routine, which does not test the bound: merging it would read four
+         * bytes past this sprite's 64 - the next sprite's first row, or, at
+         * tile 63, past the table. One extra call in the one band a sprite's
+         * bottom edge falls on. */
+        zm = 0;
+        if (pmc_ssh) {
+            zm = pmc_zmask;
+            if (sinc > 0 ? (srow + ((n - 1) << 1)) == 15
+                         : (srow - ((n - 1) << 1)) == 0) {
+                if (n > 1) {
+#ifdef PMC_HOST
+                    pmc_n_sprowm += (unsigned) (n - 1);
+#endif
+                    pmc_sprite(ssrc, pmc_pal + ((pmc_sp_col[i] & 31) << 2),
+                               sdst, sinc, n - 1, flags, pmc_brev, zm);
+                }
+                ssrc += (n - 1) * sinc;
+                sdst += (n - 1) * PMC_BAND_ROW;
+                n     = 1;
+                zm    = 0;
+            }
+        }
+#ifdef PMC_HOST
+        /* ...of which MERGED, so the harness prices a CGA sprite row at the
+         * CGA term. Guarded rather than left to PMC_COUNT's own `((void) 0)`,
+         * which SmallerC emits a `mov ax, 0` for: pmc_n_tiles2's reason, one
+         * layer along. */
+        if (zm != 0)
+            pmc_n_sprowm += (unsigned) n;
+#endif
+        pmc_sprite(ssrc, pmc_pal + ((pmc_sp_col[i] & 31) << 2),
+                   sdst, sinc, n, flags, pmc_brev, zm);
     }
 }
 
@@ -506,9 +586,16 @@ static void pmc_draw_band(int ty, int c0, int c1)
         i = (ty << PMC_VSHIFT) + c;
         pmc_tile(pmc_tiles + (pmc_vram[i] << 4),
                  pmc_pairs + ((pmc_cram[i] & 31) << 4),
-                 pmc_face + ((c - c0) << 2), pmc_step);
+                 pmc_face + ((c - c0) << 2), pmc_step, pmc_zmask);
     }
     PMC_COUNT(pmc_n_tiles, cols);
+#ifdef PMC_HOST
+    /* ...of which at rowstep 2, so the harness can price a CGA tile at the
+     * CGA term. Guarded rather than left to PMC_COUNT's own `((void) 0)`,
+     * which SmallerC emits a `mov ax, 0` for: this counter is worth nothing
+     * to the shipping package and four bytes is four bytes. */
+    pmc_n_tiles2 += (pmc_step == 2 ? cols : 0);
+#endif
     pmc_band_sprites(ty, c0, c1);
     PMC_COUNT(pmc_n_bands, 1);
     PMC_COUNT(pmc_n_rows, pmc_rows);
@@ -523,8 +610,12 @@ static void pmc_draw_band(int ty, int c0, int c1)
         PMC_COUNT(pmc_n_pkpl, (unsigned) (pmc_rows * cols));
         PMC_COUNT(pmc_n_calls, 1);
         if (os88_gfx_blitp(pmc_planes, PMC_PL_STEP, PMC_PL_STRIDE,
-                           x, y, px, pmc_rows) == 0)
+                           x, y, px, pmc_rows) == 0) {
+#ifdef PMC_HOST
+            pmc_n_rc_p += (unsigned) (pmc_rows * cols);
+#endif
             return;
+        }
         /* Refused after the probe said yes - a window moved between the two.
          * Fall through: the packed band is still exactly what blit4 wants. */
         pmc_path = PMC_P_BLIT4;
@@ -533,8 +624,12 @@ static void pmc_draw_band(int ty, int c0, int c1)
                    ty << pmc_rsh, cols);
         PMC_COUNT(pmc_n_pk1, (unsigned) (pmc_rows * cols));
         PMC_COUNT(pmc_n_calls, 1);
-        if (os88_gfx_blit1(pmc_bits, PMC_PL_STRIDE, x, y, px, pmc_rows) == 0)
+        if (os88_gfx_blit1(pmc_bits, PMC_PL_STRIDE, x, y, px, pmc_rows) == 0) {
+#ifdef PMC_HOST
+            pmc_n_rc_1 += (unsigned) (pmc_rows * cols);
+#endif
             return;
+        }
         /* A kern_small kernel carries the slot without the body (SPEC.md
          * 5.4.2). The packed band is still there, so blit4 draws the same
          * picture - in 4bpp pixels the 1bpp decoder will threshold.
@@ -548,6 +643,9 @@ static void pmc_draw_band(int ty, int c0, int c1)
         pmc_path = PMC_P_BLIT4;
     }
     PMC_COUNT(pmc_n_calls, 1);
+#ifdef PMC_HOST
+    pmc_n_rc_4 += (unsigned) (pmc_rows * cols);
+#endif
     os88_gfx_blit4(pmc_face, PMC_BAND_ROW, x, y, px, pmc_rows);
 }
 
@@ -865,6 +963,31 @@ static void pmc_letterbox(int cx1, int cy1, int cx2, int cy2)
     pmc_fill_clip(fr + 1, pmc_fy, r, fb, cx1, cy1, cx2, cy2);     /* right */
 }
 
+/* pmc_dirty_not_card - every band, MINUS the rectangle the About card covers.
+ * pmc_ab_box has answered and its four words are current.
+ *
+ * A band the card crosses keeps only the columns hanging out either side, and
+ * those are the two spans the row already carries - so it costs two blits a
+ * band instead of one and spares 26 of the 28 tiles on each. A band the card
+ * does not reach is marked whole. On CGA the card is 216 px of a 224 field and
+ * 144 of 144 rows, so this is 4 full bands and 32 two-tile ones - 176 tiles
+ * against 1,008. */
+static void pmc_dirty_not_card(void)
+{
+    int ty;
+
+    for (ty = 0; ty < PMC_TILES_Y; ty++) {
+        if (ty < pmc_ab_ty0 || ty > pmc_ab_ty1) {
+            pmc_mark_span(0, PMC_TILES_X - 1, ty);
+            continue;
+        }
+        if (pmc_ab_c0 > 0)
+            pmc_mark_span(0, pmc_ab_c0 - 1, ty);
+        if (pmc_ab_c1 < PMC_TILES_X - 1)
+            pmc_mark_span(pmc_ab_c1 + 1, PMC_TILES_X - 1, ty);
+    }
+}
+
 /* pmc_repaint - os88_paint's body, and it ASKS WHAT IT OWES.
  *
  * os88_wm_ownbg(win, 1) is the whole precondition SPEC.md 11.90.2 puts on a
@@ -903,8 +1026,30 @@ static int pmc_repaint(void *win)
         d.y1 = pmc_cy;
         d.x2 = pmc_cx + pmc_cw - 1;
         d.y2 = pmc_cy + pmc_ch - 1;
-        if (!pmc_black)
-            pmc_dirty_all();
+        if (!pmc_black) {
+            /* ...AND WHAT THE ABOUT CARD COVERS IS NOT OWED. os88_paint draws
+             * the card over the middle of this rect the moment we return, so
+             * composing the bands under it is PERFORMANCE.md rule 2 at the top
+             * of its scale: 1,008 tiles for a card that hides 20 of the 36
+             * bands on VGA and 34 of them on CGA - about 1.4 s of XT there and
+             * 0.9 s here, drawn and immediately covered. The COMPLEMENT is
+             * what is owed, and it is two spans a band, which is exactly what
+             * the damage model already holds (pmc_vid.c).
+             *
+             * The dismissal path was narrowed first (pmc_ab_mark) and this one
+             * was not, which is the asymmetry that gave it away: pmc_flush's
+             * own pmc_about_up guard is one call up the chain and this entry -
+             * pmc_flush_laid - never had it.
+             *
+             * pmc_ab_box answers with what the card CERTAINLY covers, so a
+             * mis-mirrored constant leaves a band drawn twice and never a band
+             * not drawn at all; when it cannot say, this is pmc_dirty_all as
+             * before. */
+            if (pmc_about_up && pmc_ab_box())
+                pmc_dirty_not_card();
+            else
+                pmc_dirty_all();
+        }
     }
 
     /* MID-FADE, WHAT WE OWE IS BLACK AND NOT THE FIELD. Recomposing the bands

@@ -121,7 +121,7 @@ static const char *pmc_about_lines[] = {
     "PaccMan for os8088",
     "A C port of pacman.c,",
     "commit 0f5ec5a",
-    "(c) 2020 A. Weissflog,",
+    "(c) 2020 Andre Weissflog",
     "MIT. floooh/pacman.c",
     "Tiles/sprites: Pac-Man",
     "arcade ROMs (Namco)",
@@ -264,30 +264,102 @@ static void pmc_input_dis(void)
  * centres it, so ten lines is 134 rows; this routine turns that y-range into a
  * band range with a band of slack each side.
  *
- * THE SAVING IS THE ADAPTER'S AND IT IS ZERO ON TWO OF THE THREE. On VGA and
- * EGA the field is 288 rows of 8-row bands, so 134 rows is bands 8..27 - 20 of
- * 36, and the sixteen the card never touched are ~1.1 s of XT not spent. On
- * CGA and Hercules the content box is 144 rows and a band is 4, so the same
- * 134-row card is d0 = 5, d1 = 139, ty0 = (5 >> 2) - 1 = 0 and ty1 = 35: THE
- * WHOLE FIELD, because a card 134 rows tall in a 144-row box leaves five rows
- * above and five below. The narrowing buys nothing there and is not claimed
- * to - a 1bpp band is 4 screen rows rather than 8, so the wall clock is not
+ * THE SAVING IS THE ADAPTER'S AND ON THIS PATH IT IS ZERO ON TWO OF THE THREE.
+ * On VGA and EGA the field is 288 rows of 8-row bands, so 134 rows is bands
+ * 8..27 - 20 of 36, and the sixteen the card never touched are ~1.1 s of XT
+ * not spent. On CGA and Hercules the content box is 144 rows and a band is 4,
+ * so the same 134-row card is d0 = 5, d1 = 139 and the band range is the WHOLE
+ * FIELD, because a card 134 rows tall in a 144-row box leaves five rows above
+ * and five below. The narrowing buys nothing there and is not claimed to - a
+ * 1bpp band is 4 screen rows rather than 8, so the wall clock is not
  * 36 x 69.78 ms, but it is a whole-field compose and that is why NOTHING
- * inside a kernel callback flushes it (paccman.c's pmc_frame).
+ * inside a kernel callback flushes it (paccman.c's pmc_frame). What the CGA
+ * case IS narrowed by is the other caller's COLUMNS - pmc_ab_box answers those
+ * too, and pmc_repaint marks the complement of the card rather than all 36
+ * bands when a whole repaint arrives with it up.
  *
- * PMC_AB_LH AND PMC_AB_PADY MIRROR apps/os88ui.inc, which is two copies of one
- * fact - so the range is deliberately an OVER-APPROXIMATION with a band of
- * slack each side, and its only failure mode is drawing a band more than it
- * had to. It cannot leave a hole in the other direction unless the widget's
- * pitch grows by a whole band (8 rows on a 12-row pitch), and a layout that
- * has not run yet or a window that has gone answers pmc_dirty_all as before. */
+ * PMC_AB_LH, PMC_AB_PADY AND PMC_AB_PADX MIRROR apps/os88ui.inc, which is two
+ * copies of one fact - so THIS range is deliberately an OVER-APPROXIMATION
+ * with two bands of slack each side, and its only failure mode is drawing a
+ * band more than it had to. It cannot leave a hole in the other direction
+ * unless the widget's pitch grows by two whole bands, and a layout that has
+ * not run yet or a window that has gone answers pmc_dirty_all as before. The
+ * arithmetic itself is pmc_ab_box's, one routine below, because the other
+ * caller needs the same rectangle with its slack the other way. */
 #define PMC_AB_LH    12         /* = OS88UI_ABLH: the card's line pitch      */
 #define PMC_AB_PADY   7         /* = OS88UI_ABPADY: its air above and below  */
+#define PMC_AB_PADX  12         /* = OS88UI_ABPADX: ...and either side of it,
+                                 * which pmc_ab_box needs and pmc_ab_mark
+                                 * never did: a COMPLEMENT has columns in it */
+
+/* pmc_ab_box - WHERE THE CARD IS, in FIELD tiles, and it answers 0 when it
+ * cannot say. The LAYOUT IS THE CALLER'S - pmc_layout has already run - so
+ * this is arithmetic and no thunk.
+ *
+ * It mirrors apps/os88ui.inc's own `os88ui_about_d`: the card is the widest
+ * line plus PMC_AB_PADX either side and n lines of PMC_AB_LH plus PMC_AB_PADY
+ * above and below, each CLAMPED to the content box and then centred in it.
+ * Three copies of one fact would be two too many, so tests/unit/t_paccman.py
+ * reads the two constants out of both files in the fast tier - but the LAYOUT
+ * is still somebody else's, which is why both callers keep a margin and why
+ * they keep it in OPPOSITE directions:
+ *
+ *   pmc_ab_mark wants a SUPERSET of what the card covered and adds a band of
+ *   slack each side, its only failure mode being a band drawn that need not
+ *   have been;
+ *   pmc_repaint wants a SUBSET - what the card certainly covers, so that
+ *   everything else is drawn - and this routine's answer is that one: the
+ *   range is pulled IN by a band and a column at each edge, and an edge that
+ *   is already off the field is not pulled in at all because there is nothing
+ *   beyond it to leave stale.
+ *
+ * A card that covers no whole band or no whole column answers 0, and its
+ * caller falls back to the whole field. */
+static int pmc_ab_box(void)
+{
+    const char **l;
+    const char *p;
+    int n, w, mw, h, d0, d1, x0, x1;
+
+    if (pmc_ch <= 0 || pmc_cw <= 0)
+        return 0;
+    n = 0;
+    mw = 0;
+    for (l = pmc_about_lines; *l; l++) {
+        n++;
+        w = 0;
+        for (p = *l; *p; p++)            /* OSAPI_FONT_WIDTH is 8 px a cell */
+            w += 8;
+        if (w > mw)
+            mw = w;
+    }
+    h = (n << 3) + (n << 2) + 2 * PMC_AB_PADY;      /* n * PMC_AB_LH */
+    if (h > pmc_ch)
+        h = pmc_ch;
+    w = mw + 2 * PMC_AB_PADX;
+    if (w > pmc_cw)
+        w = pmc_cw;
+
+    d0 = pmc_cy + ((pmc_ch - h) >> 1) - pmc_fy;     /* card top, in FIELD  */
+    d1 = d0 + h - 1;                                /* rows and columns    */
+    x0 = pmc_cx + ((pmc_cw - w) >> 1) - pmc_fx;
+    x1 = x0 + w - 1;
+    if (d1 < 0 || d0 > pmc_fh - 1 || x1 < 0 || x0 > PMC_FIELD_W - 1)
+        return 0;                       /* not over the field at all       */
+
+    pmc_ab_ty0 = (d0 <= 0) ? 0 : ((d0 >> pmc_rsh) + 1);
+    pmc_ab_ty1 = (d1 >= pmc_fh - 1) ? PMC_TILES_Y - 1
+                                    : ((d1 >> pmc_rsh) - 1);
+    pmc_ab_c0  = (x0 <= 0) ? 0 : ((x0 >> 3) + 1);
+    pmc_ab_c1  = (x1 >= PMC_FIELD_W - 1) ? PMC_TILES_X - 1 : ((x1 >> 3) - 1);
+    if (pmc_ab_ty0 > pmc_ab_ty1 || pmc_ab_c0 > pmc_ab_c1)
+        return 0;
+    return 1;
+}
 
 static void pmc_ab_mark(void *win)
 {
-    const char **l;
-    int n, h, d0, d1, ty0, ty1;
+    int ty0, ty1;
 
     /* ...AND WHAT IT COVERED MAY BE THE FADE'S BLACK rather than the field.
      * pmc_shblack says the black fill is already on the glass, and the card
@@ -309,39 +381,18 @@ static void pmc_ab_mark(void *win)
     if (pmc_black)
         pmc_shblack = 0;
 
-    if (!pmc_layout(win) || pmc_ch <= 0) {
+    if (!pmc_layout(win) || !pmc_ab_box()) {
         pmc_dirty_all();
         return;
     }
-    n = 0;
-    for (l = pmc_about_lines; *l; l++)
-        n++;
-    h = (n << 3) + (n << 2) + 2 * PMC_AB_PADY;  /* n * 12: tools/cc8086.py
-                                         * refuses `imul ax, ax, 12` when it
-                                         * cannot prove a scratch register
-                                         * dead, and 12 is 8 + 4 (LESSONS.md
-                                         * 3). PMC_AB_LH is the FACT and this
-                                         * is the encoding of it;
-                                         * tests/unit/t_paccman.py checks the
-                                         * two against each other and both
-                                         * against apps/os88ui.inc's own equs
-                                         * in the fast tier */
-    if (h > pmc_ch)                     /* the widget clamps, so this does  */
-        h = pmc_ch;
-    d0 = pmc_cy + ((pmc_ch - h) >> 1) - pmc_fy;         /* card top, in FIELD */
-    d1 = d0 + h - 1;                                    /* rows              */
-    if (d1 < 0) {
-        pmc_dirty_all();                /* wholly above the field: cannot
-                                         * happen with a centred card, and if
-                                         * it ever does, draw everything */
-        return;
-    }
-    if (d0 < 0)
-        d0 = 0;
-    ty0 = (d0 >> pmc_rsh) - 1;          /* a band of slack each side, because
-                                         * the two constants above are a
-                                         * mirror of somebody else's file    */
-    ty1 = (d1 >> pmc_rsh) + 1;
+
+    /* pmc_ab_box pulled the range IN by a band at each edge, because its other
+     * caller needs a SUBSET; this one needs a SUPERSET, so the same band comes
+     * back off and one more goes with it. Two bands of slack on a range whose
+     * constants are a mirror of somebody else's file, and its only failure
+     * mode is a band drawn that need not have been. */
+    ty0 = pmc_ab_ty0 - 2;
+    ty1 = pmc_ab_ty1 + 2;
     if (ty0 < 0)
         ty0 = 0;
     if (ty1 > PMC_TILES_Y - 1)

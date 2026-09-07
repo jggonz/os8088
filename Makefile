@@ -183,6 +183,18 @@ VM386WORD := $(CURDIR)/vm/386-word
 # checked the clock of.
 VM386CWORD := $(CURDIR)/vm/386-c-word
 
+# The PACCMAN machine (SPEC.md 91): the period machine the C Pac-Man is LOOKED
+# at on, and here the XT is the point rather than the postponement - the port's
+# whole premise is "maybe more performant on XTs", so a 4.77MHz 8088 is the
+# machine that has to be watched playing. What it CANNOT do is assert
+# (docs/TESTING.md); tests/paccman.py on MartyPC is what measures, and this is
+# where the reveal is stopwatched and the PMC_CATCHUP_MAX = 2 feel is judged.
+# It is a copy of vm/xt-word with fdd_02_fn (B: = build/paccman720.img, the
+# 35_2dd drive that machine already has) and the uuid changed and NOTHING
+# else, for the standing reason: 86Box does not reject an unrecognised key, it
+# substitutes a default and rewrites the config on the way out.
+VMXTPACCMAN := $(CURDIR)/vm/xt-paccman
+
 # The RUNCPM machines (SPEC.md 74.5, 74.6): one per FLOPPY GEOMETRY, because
 # the three RUNCPM disks do not carry the same software and the machines that
 # take them do not run at the same speed - and a CP/M game is timing-sensitive
@@ -1618,7 +1630,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
-        paccman paccmandisk pmcbandbench \
+        paccman paccmandisk pmcbandbench xt-paccman \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
@@ -4285,8 +4297,9 @@ cc-note:
 	  echo "";                                                              \
 	  echo "note: the C toolchain (SPEC.md 73) is not built, so the C";     \
 	  echo "      targets - cc-smoke, chello, cword, cworddisk,";           \
-	  echo "      paccman, paccmandisk, pmcbandbench and 386-c-word - are";  \
-	  echo "      unavailable. Everything else, which is";                   \
+	  echo "      paccman, paccmandisk, pmcbandbench, xt-paccman";         \
+	  echo "      and 386-c-word - are unavailable. Everything else,";      \
+	  echo "      which is";                                                \
 	  echo "      every floppy this project ships, is built above.";        \
 	  echo "";                                                              \
 	  echo "      To get it:  tools/setup-cc.sh";                           \
@@ -4613,7 +4626,8 @@ PACCMANSRC := apps/paccman/pmc_rom.c apps/paccman/pmc_time.c \
 PACCMANHOST := apps/paccman/build.sh apps/paccman/hosttest/os88.h \
                apps/paccman/hosttest/pmcuitest.c \
                apps/paccman/hosttest/pmcbandtest.asm \
-               apps/paccman/hosttest/pmcbandtest.sh
+               apps/paccman/hosttest/pmcbandtest.sh \
+               tools/paccman_assets.py
 $(BUILD)/paccman.raw.asm: $(PACCMANSRC) $(BUILD)/.paccman-hostchecks
 $(BUILD)/paccman.bin: apps/paccman/pmcband.inc apps/paccman/icon.inc \
                       apps/paccman/LICENSE apps/os88ui.inc
@@ -4623,12 +4637,18 @@ $(BUILD)/paccman.bin: apps/paccman/pmcband.inc apps/paccman/icon.inc \
 # screendump cannot (LESSONS.md 7). apps/paccman/pmcband.inc is in the
 # prerequisites because pmcbandtest.asm %includes the SHIPPING file: an edit
 # to a composer must re-run the gate, and make cannot see through a %include.
+# tools/paccman_assets.py is in PACCMANHOST for the SAME reason one level
+# along: build.sh runs it as `--check` against the COMMITTED pmc_rom.c, and
+# make can no more see through a shell script than through a %include - so an
+# extractor edited alone would leave this stamp newer than every prerequisite,
+# the reproduction check unrun, and an extractor that no longer reproduces the
+# committed tables shipping silently, which is the one thing that gate is for.
 $(BUILD)/.paccman-hostchecks: apps/paccman/paccman.c $(PACCMANSRC) \
                               $(PACCMANHOST) apps/paccman/pmcband.inc | $(BUILD)
 	apps/paccman/build.sh
 	@touch $@
 
-.PHONY: paccman paccmandisk pmcbandbench
+.PHONY: paccman paccmandisk pmcbandbench xt-paccman
 paccman: $(BUILD)/paccman.o88
 
 # ALL FOUR geometries (CLAUDE.md): 1.44MB and 720KB for QEMU, 360KB for an
@@ -7698,8 +7718,9 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) tools/os88disk.py
 # the tree above has besides RUNCPM\A\0, one cluster each at 1.44MB's 16
 # entries a cluster - DERIVED from ALLAPPSARGS below (ALLAPPSDIRS: every
 # DIR: prefix, each one's parent, --folder DOCS, and RUNCPM\A, the
-# selection's own parent; thirteen today: APPS, GAMES, MEDIA, WORD,
-# CWORD, RUNCPM, RUNCPM\A, C64, WEAVE, LOOM, SYSTEM, SYSTEM\DOS, DOCS), so
+# selection's own parent; fourteen today: APPS, GAMES, MEDIA, WORD,
+# CWORD, PACCMAN, RUNCPM, RUNCPM\A, C64, WEAVE, LOOM, SYSTEM, SYSTEM\DOS,
+# DOCS), so
 # the budget is derived
 # here as it is for build/runcpm.img, and a folder added to the tree above
 # is priced without anyone remembering a constant. One parent level is
@@ -7711,6 +7732,7 @@ ALLAPPSIMG120 := $(BUILD)/apps-all-120.img
 ALLAPPSFILES := $(APPS) $(BUILD)/frotz.o88 \
                 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
+                $(PACCMANDISK) \
                 $(BUILD)/c64.o88 $(BUILD)/C64.OVL \
                 apps/c64/README.TXT apps/c64/COPYING \
                 $(WEAVEDISK) $(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS) \
@@ -7740,6 +7762,7 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BUILD)/frotz.o88) \
                                  $(BUILD)/WELCOME.DOC) \
                $(addprefix CWORD:,$(BUILD)/cword.o88 $(BUILD)/CWORD.OVL \
                                   $(BUILD)/WELCOME.RTF) \
+               $(addprefix PACCMAN:,$(PACCMANDISK)) \
                $(addprefix RUNCPM:,$(RUNCPMDISK)) \
                $(addprefix C64:,$(BUILD)/c64.o88 $(BUILD)/C64.OVL \
                                 apps/c64/README.TXT apps/c64/COPYING) \
@@ -8704,6 +8727,23 @@ xt-word: $(IMG360) $(BUILD)/word720.img
 386-c-word: $(IMG) $(BUILD)/cword.img
 	@$(UNPROTECT) $(VM386CWORD)/86box.cfg
 	$(BOX) -P $(VM386CWORD) -N
+
+# The PACCMAN machine (SPEC.md 91): an IBM XT at 4.77MHz with 640KB and the
+# OTI-067 VGA, booting the 360KB system floppy with build/paccman720.img in B:
+# - vm/xt-word's machine with one line different.
+#
+# THE XT IS THE POINT HERE, which is the opposite of 386-c-word's reasoning one
+# rule up: the user's ask was "maybe this port is more performant on XTs", so
+# the machine the claim is about is the machine that ships with it. It cannot
+# ASSERT anything (docs/TESTING.md) - tests/paccman.py on MartyPC does that -
+# but it is where a human watches the attract reveal, stopwatches its 630 game
+# ticks for the effective game speed, and judges whether PMC_CATCHUP_MAX = 2
+# feels like Pac-Man. $(UNPROTECT) for the standing reason, even though this
+# package never writes: 86Box re-adds wp:// on the way out and a write-protected
+# B: would refuse the launch's own read on some paths.
+xt-paccman: $(IMG360) $(BUILD)/paccman720.img
+	@$(UNPROTECT) $(VMXTPACCMAN)/86box.cfg
+	$(BOX) -P $(VMXTPACCMAN) -N
 
 # The RUNCPM machine (SPEC.md 74.5): vm/386-c-word with B: = build/runcpm.img
 # and the uuid changed and NOTHING else, for the same reason that one is a

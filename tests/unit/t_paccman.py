@@ -86,11 +86,30 @@ def main():
     for name, want in (("pmc_tiles", 256 * 16), ("pmc_sprites", 64 * 64),
                        ("pmc_pal", 32 * 4), ("pmc_pairs", 32 * 16),
                        ("pmc_mono", 16), ("pmc_mono2", 2 * 256),
-                       ("pmc_planar", 256), ("pmc_maze", ROWS * COLS),
+                       ("pmc_planar", 256), ("pmc_zmask", 256),
+                       ("pmc_maze", ROWS * COLS),
                        ("pmc_lvl_fruit", 21), ("pmc_lvl_bonus", 21),
                        ("pmc_lvl_fright", 21)):
         eq(len(a.get(name, [])), want, "%s is %d entries" % (name, want),
            why="a half-written table draws a garbled tile, three waves later")
+
+    # --- the CGA row merge's table (SPEC.md 91) ----------------------------
+    # pmc_zmask[b] must be 0b11 in every 2-bit field of b that is ZERO and 0
+    # in every field that is not, because _pmc_tile's CGA arm composes
+    # `merged = even | (odd & zmask[even])`. A table that answered 0b11 for a
+    # NON-zero field would let the odd row overwrite the even one and the
+    # merge would silently become "take the lower row", which draws a
+    # plausible picture; one that answered 0 everywhere would silently be the
+    # plain sample the merge replaced.
+    zm = a.get("pmc_zmask", [])
+    if check(len(zm) == 256, "pmc_zmask is 256 entries"):
+        bad = [b for b in range(256)
+               if zm[b] != sum(3 << (2 * f) for f in range(4)
+                               if ((b >> (2 * f)) & 3) == 0)]
+        eq(bad[:4], [], "pmc_zmask is 0b11 in exactly the zero pixel fields",
+           why="the CGA row merge is `even | (odd & zmask[even])`; a wrong "
+               "entry there either overwrites the even row or turns the "
+               "merge back into the sample, and both draw a picture")
 
     # --- the maze ----------------------------------------------------------
     maze = a.get("pmc_maze", [])
@@ -186,11 +205,17 @@ def main():
     # else would notice if they moved - the card would simply be measured
     # wrongly by a package, and the residue would be a strip of card left on
     # the field, on one adapter, after a keystroke. So they are pinned here.
-    # The line pitch also appears in pmc_ab_mark as `(n << 3) + (n << 2)`,
+    # The line pitch also appears in pmc_ab_box as `(n << 3) + (n << 2)`,
     # because tools/cc8086.py refuses `imul ax, ax, 12`.
+    #
+    # PMC_AB_PADX joined them when pmc_repaint began marking the COMPLEMENT of
+    # the card on a whole repaint (SPEC.md 91): a complement has COLUMNS in it,
+    # so the card's width is measured too, and a wrong PADX there leaves a
+    # stale strip of field beside the card rather than a strip of card on the
+    # field - the same defect with its sign the other way.
     ui = open(os.path.join(ROOT, "apps/os88ui.inc")).read()
     menu_c = open(os.path.join(ROOT, "apps/paccman/pmc_menu.c")).read()
-    for key, name in (("ABLH", "LH"), ("ABPADY", "PADY")):
+    for key, name in (("ABLH", "LH"), ("ABPADY", "PADY"), ("ABPADX", "PADX")):
         m = re.search(r'^OS88UI_%s\s+equ\s+(\d+)' % key, ui, re.M)
         if not check(m, "apps/os88ui.inc defines OS88UI_%s" % key):
             continue
@@ -203,7 +228,7 @@ def main():
                "apps/os88ui.inc is right and pmc_ab_mark leaves card residue")
     lh = re.search(r'#define\s+PMC_AB_LH\s+(\d+)', menu_c)
     sh = re.search(r'h\s*=\s*\(n\s*<<\s*(\d+)\)\s*\+\s*\(n\s*<<\s*(\d+)\)', menu_c)
-    if check(lh and sh, "pmc_ab_mark multiplies the line count by a shift pair"):
+    if check(lh and sh, "pmc_ab_box multiplies the line count by a shift pair"):
         eq((1 << int(sh.group(1))) + (1 << int(sh.group(2))), int(lh.group(1)),
            "the shift pair is PMC_AB_LH (%s)" % lh.group(1),
            why="the constant says the fact and the shifts do the arithmetic, "

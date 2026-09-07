@@ -170,7 +170,7 @@ static void pmc_intro_tick(void)
      * reference's own first frame of the prompt is the blank one, and writing
      * colour 3 over 23 already-blank cells marked a band that composed
      * pixel-identical output - one wasted band a cycle, which on CGA is a
-     * 718 us compose plus its pack and blit for nothing. */
+     * 551 us compose plus its pack and blit for nothing. */
     delay += 60;
     if (pmc_after(PMC_T_INTRO, delay)) {
         int on = (pmc_since_lo(PMC_T_INTRO) & 0x20) == 0;

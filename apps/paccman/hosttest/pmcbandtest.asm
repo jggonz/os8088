@@ -28,9 +28,15 @@
 ; WHAT EACH CASE CHECKS
 ;   1. _pmc_tile, rowstep 1: one 8x8 tile through its colour block into the
 ;      packed band, eight rows at PMC_BAND_ROW apart, against pv_t1_exp;
-;   2. _pmc_tile, rowstep 2: the CGA layout - alternate source rows, four
-;      output rows - against pv_t2_exp. Sampling the wrong rows is a defect
-;      that draws a plausible picture, so it has a vector of its own;
+;   2. _pmc_tile, rowstep 2 with no table: the plain alternate-row SAMPLE,
+;      four output rows, against pv_t2_exp. Sampling the wrong rows is a
+;      defect that draws a plausible picture, so it has a vector of its own;
+;  2b. _pmc_tile, rowstep 2 THROUGH pv_zmask: the shipping CGA arm's per-pixel
+;      row MERGE (SPEC.md 91), against pv_t3_exp. A merge that reached for the
+;      wrong row, or that OR-ed the two colour indices instead of taking the
+;      odd row's pixel only where the even row's is 0, draws a plausible
+;      picture too - and the twin that wrote pv_t3_exp asks the question as a
+;      SENTENCE where these loops ask it as a table;
 ;   3. _pmc_pack_pl: a whole 8-row band into four bitplanes, against
 ;      pv_pl_exp. All four planes, because a plane-3 fault is invisible in
 ;      the low eight colours;
@@ -39,6 +45,12 @@
 ;   5. a SPAN: pack_pl and pack_1 over cols = 7 must write exactly the first 7
 ;      bytes of each row and NOT the eighth - the damage span is what makes a
 ;      frame cheap, and a packer that ignored `cols` would still look right;
+;  5b. _pmc_sprite over a band that already holds filler: colour index 0 has
+;      to leave the band's own nibble alone. Four vectors - even nibble
+;      forwards, and the awkward one (odd nibble + flipx + a negative row
+;      step) - each SAMPLED and MERGED, because the CGA row merge reaches the
+;      sprite layer too (SPEC.md 91) and its +-4 to the dropped row changes
+;      SIGN with flipy;
 ;   6. after every call ES, DS, SS, BP and SP are what they were and DF IS
 ;      CLEAR;
 ;   7. NEGATIVE CONTROLS, because a harness that cannot fail has proved
@@ -137,7 +149,8 @@ body:
     mov di, pt_band
     mov cx, 8 * PMC_BAND_ROW
     call fill
-    mov word [pushes], 4
+    mov word [pushes], 5
+    PUSHI pv_zmask
     PUSHI 1
     PUSHI pt_band
     PUSHI pv_pairs
@@ -154,8 +167,9 @@ body:
     mov di, pt_band
     mov cx, 8 * PMC_BAND_ROW
     call fill
-    mov word [pushes], 4
-    PUSHI 2
+    mov word [pushes], 5
+    PUSHI 0                         ; no table: the plain SAMPLE, the arm the
+    PUSHI 2                         ; merge below replaced
     PUSHI pt_band
     PUSHI pv_pairs
     PUSHI pv_tile_src
@@ -163,6 +177,29 @@ body:
     dw _pmc_tile
     mov si, pt_band
     mov di, pv_t2_exp
+    mov cx, 4 * PMC_BAND_ROW
+    call expect
+
+    ; --- (2b) _pmc_tile, alternate rows MERGED (SPEC.md 91) ------------------
+    ; The shipping CGA arm: `merged = even | (odd & pmc_zmask[even])`, which is
+    ; what keeps the arcade font's middle strokes on a 200-line screen. It is a
+    ; vector of its own rather than a replacement for (2), because the sampled
+    ; arm is still reachable (zmask = 0) and is what the band bench measures the
+    ; merge's cost against.
+    mov al, 0xAA
+    mov di, pt_band
+    mov cx, 8 * PMC_BAND_ROW
+    call fill
+    mov word [pushes], 5
+    PUSHI pv_zmask
+    PUSHI 2
+    PUSHI pt_band
+    PUSHI pv_pairs
+    PUSHI pv_tile_src
+    call disc_call
+    dw _pmc_tile
+    mov si, pt_band
+    mov di, pv_t3_exp
     mov cx, 4 * PMC_BAND_ROW
     call expect
 
@@ -290,7 +327,8 @@ body:
     mov di, pt_band
     mov cx, 8 * PMC_BAND_ROW
     call copyn
-    mov word [pushes], 7
+    mov word [pushes], 8
+    PUSHI 0                         ; zmask: the plain alternate-row sample
     PUSHI pv_brev
     PUSHI 0                         ; flags: high nibble first, no flipx
     PUSHI 8                         ; rows
@@ -314,7 +352,8 @@ body:
     mov di, pt_band
     mov cx, 8 * PMC_BAND_ROW
     call copyn
-    mov word [pushes], 7
+    mov word [pushes], 8
+    PUSHI 0                         ; zmask: the plain alternate-row sample
     PUSHI pv_brev
     PUSHI 3                         ; flags: LOW nibble first, and flipx
     PUSHI 4                         ; rows
@@ -326,6 +365,53 @@ body:
     dw _pmc_sprite
     mov si, pt_band
     mov di, pv_s2_exp
+    mov cx, 8 * PMC_BAND_ROW
+    call expect
+
+    ; --- (8b) ...AND BOTH OF THOSE WITH THE CGA ROW MERGE ON -----------------
+    ; The shipping CGA sprite layer (SPEC.md 91): a drawn row takes the DROPPED
+    ; row's pixel wherever its own is index 0, which is `_pmc_tile`'s sentence
+    ; one layer up and keeps Pac-Man's caps and the ghosts' fringes on a
+    ; 200-line screen. Two vectors because the merge's +-4 to the partner row
+    ; is `sinc >> 1` and flipy makes it NEGATIVE - the sign is the case a
+    ; forwards-only vector would not reach.
+    mov si, pv_spr_band
+    mov di, pt_band
+    mov cx, 8 * PMC_BAND_ROW
+    call copyn
+    mov word [pushes], 8
+    PUSHI pv_zmask                  ; ...the merge, and this is the arm that
+    PUSHI pv_brev                   ;    ships on CGA
+    PUSHI 0                         ; flags: high nibble first, no flipx
+    PUSHI 4                         ; rows
+    PUSHI 8                         ; sinc: the CGA layout's alternate rows
+    PUSHI pt_band + 8
+    PUSHI pv_spr_pal
+    PUSHI pv_spr_src
+    call disc_call
+    dw _pmc_sprite
+    mov si, pt_band
+    mov di, pv_s3_exp
+    mov cx, 8 * PMC_BAND_ROW
+    call expect
+
+    mov si, pv_spr_band
+    mov di, pt_band
+    mov cx, 8 * PMC_BAND_ROW
+    call copyn
+    mov word [pushes], 8
+    PUSHI pv_zmask
+    PUSHI pv_brev
+    PUSHI 3                         ; flags: LOW nibble first, and flipx
+    PUSHI 4                         ; rows
+    PUSHI -8                        ; ...and flipy: the partner is BEHIND
+    PUSHI pt_band + 9
+    PUSHI pv_spr_pal
+    PUSHI pv_spr_src + 15 * 4
+    call disc_call
+    dw _pmc_sprite
+    mov si, pt_band
+    mov di, pv_s4_exp
     mov cx, 8 * PMC_BAND_ROW
     call expect
 

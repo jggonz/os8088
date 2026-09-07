@@ -21,12 +21,19 @@ WHAT IT CHECKS, in the order the chain runs:
      `cc` on the strength of build/cc/SmallerC/smlrcc, so a row that then
      cannot find it is reporting a broken probe, not a broken toolchain.
 
-  2. The four targets BUILD, from a forced-clean start.  ccsmoke is the SDK's
+  2. The five targets BUILD, from a forced-clean start.  ccsmoke is the SDK's
      worked example, chello and covl are the two capability gates, and cword
-     is the application - and cword is in here rather than left to `soak`
-     because it is where the VOLUME is: 1,327 lowered sites against chello's
-     58, 76 overlay functions, 60 external references.  A lowering that is
-     wrong once in a thousand sites shows up there and nowhere else.
+     and paccman are the applications - and cword is in here rather than left
+     to `soak` because it is where the VOLUME is: 1,327 lowered sites against
+     chello's 58, 76 overlay functions, 60 external references.  A lowering
+     that is wrong once in a thousand sites shows up there and nowhere else.
+     paccman (SPEC.md 91) is the SECOND application and it is here for a
+     different reason: it is the only one whose build runs HOST CHECKS first
+     (apps/paccman/build.sh compiles the whole translation unit under clang,
+     audits every pixel of every frame against an independent recomposition,
+     and runs the composer on a real x86 in QEMU), so this row is also what
+     keeps those three gates from being a thing only a human typing `make
+     paccman` ever runs.
 
   3. The generated assembly carries no bare `extern`.  That is the invariant
      itself rather than a consequence of it, so it fails on the change rather
@@ -34,7 +41,7 @@ WHAT IT CHECKS, in the order the chain runs:
 
   4. A CALL TO A THUNK NOBODY WROTE STILL STOPS THE BUILD, NAMING IT.  This
      is the check that is not "does it build", and it is here because 1-3
-     cannot see the case at all: every external reference in the four real
+     cannot see the case at all: every external reference in the five real
      packages RESOLVES, so nothing above says what happens to one that does
      not.  What must happen is `symbol `_os88_foo' not defined` with the name
      in it, because the alternative - giving an unresolved reference an
@@ -55,7 +62,7 @@ WHAT IT CHECKS, in the order the chain runs:
 WHAT IS DELIBERATELY NOT HERE.  RunCPM, which is also C: `make runcpm` gates
 itself on three host tests of its own and one of them boots QEMU, so it needs
 a second capability and a minute of budget to re-cover the compile path these
-four already cover.  It belongs beside its own gates, not here.  And nothing
+five already cover.  It belongs beside its own gates, not here.  And nothing
 in this file RUNS a package - tests/chello and tests/covl exist to be run and
 are `soak` rows of their own; this one is about the chain that produces them.
 """
@@ -81,6 +88,16 @@ TARGETS = [
     ("chello",   ["build/chello.o88"],                   ["build/chello.gen.asm"]),
     ("covl",     ["build/covl.o88", "build/COVL.OVL"],   ["build/covl.gen.asm"]),
     ("cword",    ["build/cword.o88", "build/CWORD.OVL"], ["build/cword.gen.asm"]),
+    # paccman's STAMP is in the artifact list on purpose, and it is the only
+    # entry here that is not a package. `make paccman` runs three host gates
+    # first - the extractor check, pmcuitest's pixel audit and pmcbandtest on
+    # a real x86 - through $(BUILD)/.paccman-hostchecks, and make will not
+    # re-run them for a stamp that is already newer than its sources. Deleting
+    # it below (this row deletes every artifact it names before building) is
+    # what makes the full tier actually RUN those three rather than only
+    # re-link the package they guard; it costs about 2.5 s.
+    ("paccman",  ["build/paccman.o88", "build/.paccman-hostchecks"],
+                                                         ["build/paccman.gen.asm"]),
 ]
 
 

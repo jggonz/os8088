@@ -10928,3 +10928,125 @@ harness checking itself. The menu click that starts the run is at x=150 on a
 640-wide bar, not the 110 docs/TESTING.md quotes for `sysbench` — that lands
 on the app-name menu for a package whose title is nine characters, and the
 run silently never starts.
+
+### Set 116 — PACCMAN's band composer, and the CGA row merge (SPEC.md §91)
+
+`tests/pmcband/pmcbandbench.asm` `%include`s the **shipping**
+`apps/paccman/pmcband.inc` and brackets each of its four entry points, the
+three emits a band can go down through, and four whole bands. It is
+`tests/rcbandbench.asm`'s shape and Set 65's lesson — *measure a band before
+believing a per-cell guess* — and it is the only source of any microsecond in
+SPEC.md §91 or `apps/paccman/README.md`.
+
+**Harness**: `make pmcbandbench`, then
+`make test TESTAPPS=build/pmcband.img QEMU="qemu-system-i386 -icount shift=3,sleep=off"`,
+double-click Disk B and `PMCBBAND.O88`, press `R`. Counts are PIT ticks and
+are converted at Part 4's **one count = 0.359 ms of real XT**; N = 8 per row,
+except the three `TILE` rows, which run at `PB_N_TILE` = **256** — see below.
+Two things a repeat of this needs to know. **The screen saver arms**: the
+guest's clock runs ~22× real time under `-icount`, so five minutes of guest
+idle is ~14 s of yours, and the saver then eats the first click of every
+double-click. QEMU's monitor cannot write memory — add `-s` and poke
+`[ss_idle]` and `[ss_mins]` to zero over the gdb stub, and **detach** (`D`),
+because QEMU stops the machine the moment a gdb client attaches and a client
+that walks away leaves every later screendump showing one frozen picture.
+**And read the SECOND run**: the first run of a session prices `BLIT4` about
+10% high and every other row within a count and a half. Runs 2 and 3 below
+agree to the COUNT on all sixteen rows. The report is longer than the window
+and does not auto-scroll: press `End`, or the four `BAND` rows and the two
+`pb_recon` lines look like a bench that hung.
+
+ONE RUN, the second of a session (see the warm-up note below), so a reader who
+subtracts two of these rows gets the quantity the reconciliation row states:
+
+| row | N | counts/op | real XT |
+|---|---|---|---|
+| `TILE` step 1 — one 8×8 tile into the packed band, 8 rows | 256 | 1.949 | 0.70 ms |
+| `TILE` step 2 — the CGA layout SAMPLED, 4 rows | 256 | 1.164 | 0.42 ms |
+| `TILE` step 2 MERGED — the shipping CGA arm | 256 | 1.520 | 0.55 ms |
+| `PACK_PL` — one 8-row band → four bitplanes, 28 columns | 8 | 116.250 | **41.73 ms** |
+| `PACK_1` — one 8-row band → 1bpp | 8 | 50.375 | 18.08 ms |
+| `SPRITE` 16×8, even destination nibble, SAMPLED | 8 | 19.375 | 6.96 ms |
+| `SPRITE` 16×8, odd nibble + flipx, SAMPLED | 8 | 20.375 | 7.31 ms |
+| `SPRITE` 16×8, even nibble, MERGED | 8 | 23.125 | **8.30 ms** |
+| `SPRITE` 16×8, odd nibble + flipx, MERGED | 8 | 24.375 | **8.75 ms** |
+| `BLITP` 224×8, four planes | 8 | 20.500 | **7.36 ms** |
+| `BLIT4` 224×8, packed | 8 | 134.625 | **48.33 ms** |
+| `BLIT1` 224×8, 1bpp | 8 | 3.375 | 1.21 ms |
+| `BAND colour` — 28 tiles + `PACK_PL` + `BLITP` | 8 | 193.875 | 69.60 ms |
+| `BAND mono` — 28 tiles + `PACK_1` + `BLIT1` | 8 | 110.750 | 39.76 ms |
+| `BAND cga` — 28 tiles step 2 + 4-row pack + 4-row `BLIT1`, SAMPLED | 8 | 62.375 | 22.39 ms |
+| `BAND cga` — the same band MERGED | 8 | 72.875 | **26.16 ms** |
+
+**The two 8-row `BAND` rows equal the sum of their parts to within 1.5%** —
+28 × 1.949 + 116.250 + 20.500 = 191.3 against 193.875 measured, and
+28 × 1.949 + 50.375 + 3.375 = 108.3 against 110.750 — which is what says the
+rows above them measure what their labels claim. **The two CGA rows have
+no measured parts**: their pack and their blit are 4-row emits and only the
+8-row ones are rows of this table, so halving those is arithmetic and not
+measurement, and it lands 5% low on each. What those two rows ARE checked
+against is each other, by `pb_recon`: the merge's cost per band must be 28× its
+cost per tile, and the bench prints both — 28 × 0.356 = **9.97 counts** against
+a band A/B of **10.50** on the same run, **4.7% apart**.
+
+**AND THAT CHECK EXISTS BECAUSE THE TWO ONCE DISAGREED BY 3×.** With the tile
+rows at `PB_N` = 8 the merge measured 1.250 − 1.125 = 0.125 counts a tile —
+**one PIT count spread over eight iterations, the instrument's floor** — while
+the band A/B over the same 28 tiles measured 10.5. The band row was the
+credible one; `PB_N_TILE` = 256 is the fix, and the tile figures above are the
+re-take. The shipping merged tile is 1.520 counts, not 1.250: **+31% on a
+tile**, not +11%.
+
+**THE LEVER WORKS AND THE REPACK EATS IT.** `OSAPI_GFX_BLITP` puts a 224×8
+band down in **7.36 ms** where `GFX_BLIT4` takes **48.33** — 6.6×, and at 224
+pixels wide `BLIT4` always takes `kernel/vga12.inc`'s planar decoder, so that
+ratio is the whole of the port's performance premise. But turning the packed
+band into four planes costs **41.73 ms**, so a whole colour band is 69.60 ms
+against the ~68.5 ms the same band costs composed and sent straight through
+`BLIT4`: **a wash, and the win is spent before it is banked.** Composing
+straight into planar on the colour path is the change that would bank it, and
+it is a recorded follow-up rather than a wave-4 edit. The model the plan
+started from was four times wrong in the other direction: `BLITP` priced from
+Paint's 64×64 and 256×16 shapes (Set 107's neighbourhood, 756 µs a call +
+114 µs a row-plane) predicts 4.4 ms for this band against the measured 7.36.
+
+**The CGA row merge costs +16.8% of a band** — 22.39 ms to 26.16 — and that is
+the number the look decision in SPEC.md §91 was taken on. It buys the arcade
+font's horizontal middle strokes back on a 200-line screen, which the fixed
+alternate-row sample drops with source row 3: `HIGH SCORE` read `IIIGII SCORC`
+before it. Per tile it is **1.164 counts against 1.520**.
+
+**And it reaches the SPRITE layer too, where sampling was taking the top and
+bottom caps off Pac-Man's circle.** A `SPRITE 16×8` row goes from **2.422
+counts to 2.891** even-nibble and **2.547 to 3.047** odd-nibble-plus-flipx —
+**+20% on a row** — and the arm that does NOT merge pays **one test a source
+byte**, +3.9% on the two sampled rows (18.5625/19.625 before it, 19.375/20.375
+after), because one byte loop is cheaper in image than two are in time.
+`PMC_T_SPRROW` is the mean of the two SAMPLED rows over their eight, **892 µs**,
+and `PMC_T_SPRROWM` the mean of the two merged ones, **1,066 µs**; the two
+cases differ by 5% and Pac-Man spends about half his frames at each.
+
+On a whole CGA FRAME, which is what the look decision is written about,
+`pmcuitest`'s `drive_cga_arms` prices both merges together at **+16.4% of a
+full repaint and +7.5% of a play frame**. The repaint has no sprites in it — it
+is the tile merge alone, 1,008 tiles — and a play frame is 46 tiles and 80
+sprite rows, so most of its 8% is the sprite half.
+
+**And one term here is NOT the bench's.** `game_tick()` is a C function and
+this bench is a standalone assembly package that cannot call one, so
+`tests/paccman.py` brackets it on MartyPC between `pmc_game_tick`'s entry and
+the return address read off the stack there, taking the minimum of eleven
+samples. Six runs across three profiles read 85,374 / 86,742 / 89,990 /
+90,496 / 91,432 / 91,576 cycles — **17.9 to 19.2 ms of 4.77 MHz 8088**, and
+18.6 ms is the term. A play frame carries three of them, which is why the
+harness's play-frame row went from 131.2 ms with the sprite and logic terms
+zeroed to **257.5 ms** with them in.
+
+**What the whole thing adds up to, measured on the machine rather than
+modelled**: `tests/paccman.py`'s one `bracket()` over both Pac-Men on the same
+profile reads **PACCMAN.O88 at 2.18 fps against PACMAN.O88's 4.14** on
+`os8088_xt_vga`, 2.94 against 18.21 on `os8088_5150_cga_gla`, and 2.62 against
+16.71 on `os8088_5150_herc_gla`. The two draw different pictures — the arcade's
+28×36 field against Roklan's 40×22 — so that is not a race between C and
+assembly; it is the answer to "maybe this port is more performant on XTs",
+which is **no**.

@@ -115,17 +115,19 @@
  * 73.11). Every table and buffer it touches arrives as a POINTER, so it names
  * no global and the harness can define byte-identical C twins. */
 void pmc_tile(const unsigned char *src, const unsigned char *pairs,
-              unsigned char *dst, int rowstep);
+              unsigned char *dst, int rowstep,
+              const unsigned char *zmask);
 void pmc_pack_pl(const unsigned char *band, unsigned char *planes, int rows,
                  const unsigned int *planar, int cols);
 void pmc_pack_1(const unsigned char *band, unsigned char *bits, int rows,
                 const unsigned char *mono2, int y0, int cols);
 void pmc_sprite(const unsigned char *src, const unsigned char *pal4,
                 unsigned char *dst, int sinc, int rows, int flags,
-                const unsigned char *brev);
+                const unsigned char *brev, const unsigned char *zmask);
 
 static void pmc_clean(void);
 static void pmc_dirty_all(void);
+static int  pmc_ab_box(void);
 static void pmc_mark(int x, int y);
 static int  pmc_ok(int x, int y);
 static void pmc_vid_tile(int x, int y, int tile);
@@ -200,6 +202,18 @@ static int  pmc_repaint(void *win);
  * state lives, because pmc_draw.c reads it and is #included first - and a
  * static has no forward declaration in C. */
 static int pmc_about_up;
+
+/* WHERE THE CARD IS, in FIELD tiles - pmc_ab_box's answer, and the four words
+ * both of its callers read. It lives HERE for pmc_about_up's reason: the
+ * routine is pmc_menu.c's (that is where the card's own lines and the two
+ * mirrored constants are) and pmc_draw.c reads its answer to mark the
+ * COMPLEMENT of the card on a whole repaint, and pmc_draw.c is #included
+ * first. The range is INCLUSIVE and it is an UNDER-approximation - the bands
+ * and columns the card certainly covers - which is the opposite direction from
+ * pmc_ab_mark's own slack, and pmc_ab_box says why each caller needs its
+ * own. */
+static int pmc_ab_ty0, pmc_ab_ty1;      /* the band rows the card covers  */
+static int pmc_ab_c0, pmc_ab_c1;        /* ...and the tile columns        */
 
 /* Whether the game is stopped. It lives HERE and not with the rest of the
  * chrome's state in pmc_menu.c for pmc_about_up's reason: pmc_new_game reads

@@ -92809,6 +92809,18 @@ count = 0.359 ms of real XT:
 The last two rows equal the sum of their parts to within 1%, which is what
 says the eight above them are measuring what their labels claim.
 
+**That table is wave 1's run and it is no longer the whole of the composer.**
+Wave 4 re-took it on the shipping code with the sprite row and the CGA row
+merge added — "The band bench, re-taken" below is the SHIPPING table and the
+one every microsecond in this section and in `apps/paccman/README.md` is priced
+from. It reproduces every row above to within a quarter of a count, and the two
+TILE rows are not comparable with it at all: wave 4 re-took them at
+`PB_N_TILE` = 256, where wave 1's — like every row here — were at `PB_N` = 8,
+which for a ~2-count operation is a 0.125-count grid. `TILE step 2` reads
+**1.164** counts at the finer N against wave 1's 1.250, a sixth of that grid,
+and no mechanism is claimed for the move: at eight iterations it is one PIT
+count. The shipping CGA arm is not that row any more in any case.
+
 **THE LEVER WORKS AND THE REPACK EATS IT.** `GFX_BLITP` puts a 224×8 band down
 in 7.36 ms where `GFX_BLIT4` takes 48.33 — **6.6×**, and that ratio is the
 whole of the performance premise. But turning the packed band into four planes
@@ -93054,8 +93066,9 @@ and justified it with "on the `GFX_BLITP` path width is nearly free" — and
 `BLITP` is unreachable on the two adapters an XT actually boots, because
 `pmc_pick_path` answers `PMC_P_BLIT1` on `bpp == 1` before the probe is asked.
 Priced off the harness's own measured terms, one WASTED column of a band is
-~1,050 µs on CGA and Hercules (718 µs composed, plus that column's share of a
-2,266 µs `pack_1` row and its blit) against **814 µs** for the extra `gfx`
+~875 µs on CGA (546 µs composed — a rowstep-2 tile has its own term — plus
+that column's share of a 2,261 µs `pack_1` row and its blit) and ~1,355 µs on
+Hercules, against **814 µs** for the extra `gfx`
 call a second span costs — so a gap of two clean columns already pays for the
 split on both paths. The energizer blink is the case that made it matter:
 it writes columns 1 and 26 of rows 6 and 26, which one span turns into two
@@ -93124,8 +93137,28 @@ SECONDS** of one uninterruptible hold; eleven of them is ~24 s of drawing for
 a four-second animation, with nothing else on the machine able to draw
 throughout. So the worker's flush unlocks, yields and re-locks every
 `PMC_HOLD_BANDS` = 4 bands: one task switch (693 µs) a chunk buys a machine
-whose menus, dock and other windows still answer during the flash. **Only the
-worker.** A key, a menu command and `os88_paint` all arrive INSIDE a kernel
+whose menus, dock and other windows still answer during the flash.
+
+**AND A CHUNK IS THE GAME LOGIC PLUS FOUR BANDS, NOT FOUR BANDS.** `os88_worker`
+brackets the WHOLE of `pmc_frame` in one `os88_gfx_lock`/`unlock` — the input
+poll, up to `PMC_CATCHUP_MAX` = 2 OS ticks of game (`PMC_ACC_PER_OS` 600 /
+`PMC_ACC_PER_GAME` 182 = 3.3 game ticks an OS tick, so as many as seven
+`pmc_step_tick`s), the sound frame, and only then `pmc_flush` — and
+`pmc_flush_laid`'s break test is `n >= PMC_HOLD_BANDS` with `n` starting at 0,
+so the FIRST chunk carries all of that. `apps/cc/os88.h`'s rule 3 ("a worker that computes
+under the lock wedges the machine") is quoted above about the drawing, and this
+is the half of it that is not drawing: at `PMC_T_LOGIC` = 18.6 ms a
+`game_tick`, six ticks and four full-width VGA bands is a measured **387.4 ms**
+of one uninterruptible hold, against the ~279 ms four bands alone would be.
+`pmcuitest`'s `worst hold, one chunk` row is that number — the cost model's own
+clock, bracketed by the `os88_gfx_lock`/`unlock` stubs, driven on a late frame
+so the catch-up is in it — and it FAILS the build over `PMC_HOLD_MS` = 460 ms,
+which is where seven ticks and four bands would land. So the bound is gated
+rather than argued, and the arithmetic above is the whole hold and not the
+drawing half of it. **The bracket is not only the chunking's**: it is also what
+serialises a tick against `os88_paint`, both of which write the video model, so
+shortening it to the flush alone is not the free win it looks like and is not
+taken here. **Only the worker.** A key, a menu command and `os88_paint` all arrive INSIDE a kernel
 callback that holds the lock on our behalf, so those callers pass `brk = 0`
 and take the whole loop in one hold. **After a re-lock nothing is assumed**:
 the clip region died at the unlock (§11.3) and the window may have moved,
@@ -93546,18 +93579,18 @@ reads `PLAYCR ONC` and `HIGH SCORE` reads `IIIGII SCORC` — photographed on
 NOT automatically survive the halving**, which is what the sentence deleted here
 claimed.
 
-It is STATED rather than repaired, and the repair is not the one line it looks
-like. A tile pixel is a **2-bit colour INDEX**, not a bit: OR-ing source row *r*
-with row *r+1* — the obvious way to keep a stroke — is exact for the 167 tiles
-whose pixels are only 0 and 3, and **invents a colour** in the 89 that use index
-1 or 2 (the fruit and the prize row: `1 | 2` is 3, an ink the tile does not
-have). The sound form is per-pixel — take the odd row's pixel only where the
-even row's is 0 — and that is ~8 extra instructions a source byte inside
-`_pmc_tile`'s inner loop, on the slowest adapter this port runs on; it also
-thickens every one-row maze stroke to two and re-dates both `pmcbandtest`'s
-fixtures and the band bench §91 quotes. That is a decision with arithmetic
-attached, taken with whoever wants the picture changed, and not a review-round
-edit.
+It was STATED rather than repaired at wave 3, and the repair is not the one
+line it looks like. A tile pixel is a **2-bit colour INDEX**, not a bit: OR-ing
+source row *r* with row *r+1* — the obvious way to keep a stroke — is exact for
+the 167 tiles whose pixels are only 0 and 3, and **invents a colour** in the 89
+that use index 1 or 2 (the fruit and the prize row: `1 | 2` is 3, an ink the
+tile does not have). The sound form is per-pixel — take the odd row's pixel
+only where the even row's is 0 — and that is extra instructions a source byte
+inside `_pmc_tile`'s inner loop, on the slowest adapter this port runs on; it
+also thickens every one-row maze stroke to two and re-dates both
+`pmcbandtest`'s fixtures and the band bench §91 quotes. That is a decision with
+arithmetic attached rather than a review-round edit, and **wave 4 took it with
+the arithmetic measured** — see "The CGA row merge" below.
 
 **After wave 3**: `os88pkg: 'PACCMAN' entry=+0x0060 image=40848 bss=5222
 icon=yes assoc=0`. That is 46,070 bytes of the 61,440 `APP_MAX_SIZE` allows, and
@@ -93570,13 +93603,27 @@ bold; it overstated the headroom by about five thousand bytes.) `stkdepth` now g
 `_pmc_frame`'s own frame **8** and `_pmc_step_tick`'s chain **138** (the extra
 call level, then `pmc_game_tick` → `pmc_update_tiles` → `pmc_vid_score` →
 `pmc_vid_color_char` → `pmc_vid_color_tile` → `pmc_vid_color` → `pmc_mark`) —
-**160 bytes** composed against the plan's 190 ceiling. `--from _pmc_frame` now
+**160 bytes** composed against the plan's 190 ceiling — unchanged by the
+review's sprite work, which the tool prices inside `_pmc_band_sprites`' own 36
+and not on the tick path. `--from _pmc_frame` now
 answers **64**, not 8, because the flush moved out of the pause test and the
 tool's linear walk reaches it: that is `_pmc_frame` → `pmc_flush` →
 `pmc_flush_laid` → `pmc_pick_path` → `os88_gfx_blitp`, and **14 + 64 = 78** is
 comfortably under the tick path's 160, which stays the worst case. The MEASURED water mark
-is what sizes the class, and `tests/paccman.py` reads **178 of 256 on both
-`os8088_xt_vga` and `os8088_5150_cga_gla`** against its 208 bar.
+is what sizes the class, and `tests/paccman.py` reads **188, 190 and 188 of 256
+on `os8088_xt_vga`, `os8088_5150_cga_gla` and `os8088_5150_herc_gla`** against
+its 208 bar. **It moved 178 → 188 in wave 4's review** and the reason is the
+sprite merge: `pmc_band_sprites` is on the worker's deepest chain and SmallerC
+gives every declared local its own slot, so six new ones would have been twelve
+bytes of task stack. Four of them were written out again — the split test needs
+no `last` and no row-step variable, because the merge arm IS the CGA layout and
+`(n - 1) << 1` is the distance in rows with `sinc`'s sign — which took the
+measured mark from **196 back to 190** and `cc8086`'s worst frame from 40 bytes
+to 34. What is left is 10 bytes of `_pmc_sprite`'s own frame and the two
+pointers the split needs. **The bar leaves 18 bytes over the worst of the three
+where wave 4 left 30**, and the next thing to go on this chain is a stated move
+to `OS88_STACK_384` rather than a quiet one — which is what the 208 is FOR: it
+is not the ceiling, it is the line at which somebody has to decide.
 
 **What the machine says, and what only the machine can.** `tests/paccman.py`
 gained three rows that the host harness cannot have: the program comes up in
@@ -93595,6 +93642,499 @@ row here is polled to avoid being. The reveal and the key are POLLED rather
 than timed, because how many drawn frames 150 game ticks is depends on the
 adapter and a fixed wait would make either row a speed measurement by accident.
 What the tune IS is asserted on the host, by name.
+
+### Wave 4 — the CGA row merge, the disks, and the answer to the hypothesis
+
+**THE CGA ROW MERGE SHIPPED, AND HERE IS THE ARITHMETIC WAVE 3 SAID IT WOULD
+COST.** `_pmc_tile`'s rowstep-2 arm now composes
+
+    merged = even | (odd & pmc_zmask[even])
+
+— take the odd source row's pixel only where the even row's is 0 — and never
+an `OR`, for the reason wave 3 gives: a tile pixel is a 2-bit colour index and
+`1 | 2` is an ink 89 of the 256 tiles do not have. `pmc_zmask[256]` is 0b11 in
+every 2-bit field of a source byte that is zero, generated by
+`tools/paccman_assets.py` beside `pmc_planar` as a property of the FORMAT
+rather than of the reference. The two tables cannot both live in `BX` —
+`xlat`'s only base — so `DX` carries the other and `xchg bx, dx` swaps them,
+two bytes and four clocks (the one-byte three-clock `xchg` is the
+accumulator's, and `AL` is carrying the pixel), which is what makes the merge a
+single pass instead of a second one over a scratch. **The rowstep-1 LOOP is
+unchanged and its prologue is not**: the row skip is now a branch rather than
+arithmetic, because `DX` carries a table on the merge arm, and that prologue is
+shared by both arms.
+
+**What it costs, measured, is the whole of the decision:** a CGA band — 28
+tiles at rowstep 2, the mono pack over four rows and a four-row `GFX_BLIT1` —
+goes from **22.39 ms to 26.16 ms**, **+16.8%**, against the 25% the change was
+allowed. Per tile it is **1.164 counts against 1.520, 0.42 ms against 0.55** —
+**+32% on a tile** for +16% on the band it sits in, the packer and the blit
+being the same on both arms.
+
+**Those two per-tile figures are a RE-TAKE, and the first pair published here
+was at the instrument's floor.** The bench ran its tile rows at the same
+`PB_N` = 8 as everything else, so one tile — about two PIT counts — was
+measured to a 0.125-count grid, which is the size of the whole difference the
+merge makes. Read that way the merge cost 1.250 − 1.125 = **0.125 counts a
+tile**, while the `BAND cga` A/B over the same 28 tiles said **10.5 counts** —
+three times as much, from two rows that differ in exactly one thing
+(`[pb_zm]`) and whose packer and blit therefore cancel. `PB_N_TILE` = 256 is
+the fix; at that N the two agree — 0.356 × 28 = **9.97 counts** against a band
+A/B of 10.5 on the same run — and **`pb_recon` prints the
+reconciliation itself**, two lines at the foot of the report, so a future
+re-take cannot publish a pair that disagrees without saying so on the glass.
+The eleven rows that are NOT tile rows were not re-measured at a new N and are
+as first published; the re-run reproduced them within the bench's own spread
+(`BLIT4` 134.625–134.875 against 134.750, `BAND cga` MERGED 72.25–72.75
+against 72.875), which is why the +16.8% the keep decision was taken on still
+stands — the band figure did not move, only the tile figure under it.
+
+**What it buys is the middle strokes.** Decoding the shipped `pmc_rom.c` row
+by row, the merge changes the CGA picture of **32 of the 36 alphanumerics**,
+and the ones that matter are the ones wave 3 named: `E` goes from four rows
+with no middle bar — which is a `C` — to an `E`; `S` from 13 lit pixels to 21;
+`H` from two bars to an `H`; `B F G 3 6 9` likewise.
+
+**What the photograph shows is that gain and a NEW confusion, and the sentence
+that stood here first claimed only the gain.** On `VIDEO=cga` at zoom
+(`build/port-shots/wave4k-cga-text-zoom.png`) `HIGH` reads as `HIGH` where wave
+3 photographed `IIIGII` — and `SCORE` reads `8GORE`, `CHARACTER / NICKNAME`
+reads `GHARAGTER / NIGKNAME`. Both halves of that are the merge: the `H` has
+its bar back, and the `C`s and the `S` have gained ink they did not want,
+because the merge only ever ADDS it. A `C` gains on
+its third row the `##` spur that makes a `G` a `G`: merged `C` is
+`..######/.##...../.###..##/...####.` and merged `G` is
+`..######/.##..###/.###..##/...#####`, **identical on their first and third
+rows**, differing only on the second and the last. It is four lit pixels either
+way — the sampled arm's `C` and `G` differ by four as well — but the four that
+survive the merge are not the ones a reader uses.
+
+**And the merge COSTS SEPARATION, worst of all between DIGITS.** Decoding the
+shipped `pmc_rom.c` through `pmc_zmask` with `_pmc_tile`'s own formula and
+counting differing lit pixels over the 36 alphanumerics:
+
+| | closest pair, all 36 | closest DIGIT pair |
+|---|---|---|
+| the reference's own 8-row font | 4 px (`I`/`T`, `M`/`N`, `N`/`W`) | 13 px (`6`/`8`) |
+| CGA SAMPLED | 2 px (`B`/`D`, `B`/`O`, `M`/`N`, `N`/`W`) | **5 px** (`0`/`6`, `0`/`9`) |
+| CGA **MERGED — what ships** | **1 px** (`5`/`S`, `6`/`S`) | **2 px** (`5`/`6`) |
+
+Merged `S` is **1 pixel from `5` and 1 from `6`**, where the sampled `S` was 6
+and 4; merged `5` is **2 pixels from `6`** where the sampled pair was 8 apart,
+then `3`/`6` at 3, `5`/`8` at 4 and `6`/`8` at 4. So on the half of the picture
+that CHANGES — the score — the merge is strictly and substantially worse than
+the arm it replaced, and the photograph shows it: on
+`build/port-shots/wave4k-cga-legend-zoom.png` the attract screen's `50 PTS`
+legend reads **`60 PTS`**, and on `wave4k-cga-intro.png` beside it `PRESS`
+reads `PRE88` and `CLYDE` reads `GLYDE` — the `C`/`G` spur again. Two pixels of
+an 8×4 glyph is what stands between a five and a six on that screen. Every one-row maze
+stroke is likewise two rows thick.
+
+**Both outcomes are recorded, which is what decision 9 asked for — and neither
+arm satisfies the half of it that says "the text reads".** The sampled arm
+loses every middle stroke, so `HIGH SCORE` reads `IIIGII SCORC` and the four
+ghost nicknames are unreadable as words; the merged arm reads as words and
+then confuses `C` with `G`, `S` with `5` and `6`, and `5` with `6`. The merge
+is KEPT on that balance and not on a clean pass: it is the lesser defect on
+LETTERS, which is nearly all of the text this game draws — the two headings,
+`CHARACTER / NICKNAME`, four nicknames, `PRESS ANY KEY TO START!`, `READY!`,
+`GAME OVER`, `CREDIT` — and the greater defect on DIGITS, which is the score
+and the `10`/`50 PTS` legend. Four pictures are on disk —
+`wave3-verify-cga-intro-zoom.png` is the sampled arm,
+`wave4k-cga-text-zoom.png` the merged headings (`HIGH 8CORE`, `2UP` as `ZUP`),
+`wave4k-cga-legend-zoom.png` the merged legend and `wave4k-cga-intro.png` the
+whole screen — so the look question can be re-opened by looking, and the digit
+table above is what to look at it with.
+Reverting is one argument at `pmc_draw_band`'s `pmc_tile` call and the sampled
+arm is still under test on both gates.
+
+**AND THE MERGE REACHES THE SPRITE LAYER, which the first version of it did
+not and nothing said so.** `pmc_band_sprites` walked band rows by `k << pmc_ssh`
+and stepped the source by `sinc = 4 << pmc_ssh`, so on CGA exactly 8 of a
+sprite's 16 rows were read — the same alternate-row drop the merge was
+introduced to fix, on the layer the player actually watches. What it costs the
+picture is a different thing from what it costs a glyph and it is worth as
+much: sampling takes the TOP AND BOTTOM CAPS off Pac-Man's circle (his widest
+sprite goes from a disc to a flat-topped blob) and thins every ghost's fringe,
+where the merge is the union of the pair — so the cap survives, and the MOUTH,
+which is a wedge of transparency several rows deep, still reads as open.
+`_pmc_sprite` takes the same `zmask` argument, 0 asks for the plain sample, and
+the formula is the identical `even | (odd & zmask[even])`: for a sprite that is
+"index 0 is transparent" one level up, a pixel showing the band keeps showing
+it only where the dropped row is transparent too.
+
+**The partner row is always the next one DOWN THE SPRITE**, whichever way the
+rows are walked — `sinc` is negative for flipy, so `zoff = sinc >> 1` is the ±4
+bytes to it and the flip needs no test — and **the one row that has no partner
+is source row 15**, which can only ever be the LAST row drawn. `_pmc_sprite`
+does not bound it (bounding it would cost the inner loop a test a row for a
+case the caller can see), so `pmc_band_sprites` SPLITS that row off and asks
+for it with `zmask` = 0: one extra call in the one band a sprite's bottom edge
+falls on, against a read four bytes past the sprite's 64 — the next sprite's
+first row, or, at tile 63, past the table.
+
+**What it costs, measured on the same bench in the same run:** a `SPRITE 16×8`
+row goes from **2.422 counts to 2.891** even-nibble and from **2.547 to 3.047**
+odd-nibble-plus-flipx — **870 → 1,038 µs and 914 → 1,094 µs** of real XT, so
+`PMC_T_SPRROW` is 892 µs and `PMC_T_SPRROWM` **1,066 µs, +20% on a row**. And
+it costs the arm that does NOT merge **one test a source byte**: there is one
+byte loop here and not two, because the loop body is four `PMCPX` expansions
+and a second copy would cost more image than the test costs time. That test is
+visible on the bench — the two SAMPLED sprite rows read 19.375 and 20.375
+counts where wave 4 published 18.5625 and 19.625, **+3.9%** (a second session
+read 18.875 and 20.250, so a third of that is the bench's own spread), which is
+~2.3 ms of a 257.5 ms VGA play frame — **0.9%** — and is the price VGA pays for
+CGA's picture. It is stated rather than hidden because the alternative — a second
+loop — is a size decision somebody could take later with this number in front
+of them.
+
+On the glass, `build/port-shots/wave4k-cga-play-zoom.png` is the ghost house on
+a `VIDEO=cga` kernel with the merge shipping: four ghosts with rounded tops and
+their bottom fringes intact. The sampled arm's picture is not photographed here
+— it is decoded from the shipped `pmc_sprites` instead, row by row, and that
+decode is where "the caps go" comes from: sampling rows 0, 2, … of Pac-Man's
+widest frame drops both the row that rounds his top and the row that rounds his
+bottom, and the union puts them back.
+
+**On a whole CGA FRAME the two merges together are +7.5%**, which is what
+`drive_cga_arms` now reads (160.6 ms sampled against 172.6 merged on the worst
+play frame) where the tile merge alone was +3.9%: a play frame is 46 tiles and
+80 sprite rows, so the sprite layer is the larger half of it. The full repaint,
+which has no sprites in it at all, is +16.4% — the tile merge alone. Both are inside
+decision 9's 25%, and `pmcuitest` fails the build if either leaves it.
+
+**The sampled arm is still reachable, still under test, and now priced on a
+FRAME.** `pmc_tile`'s and `_pmc_sprite`'s `zmask` arguments are pointers and 0
+asks each for the plain sample; `pmcbandtest` carries a vector for each arm of
+each — six now, the two sprite vectors doubled, because the merge's ±4 to the
+dropped row changes SIGN with flipy and a forwards-only vector would not reach
+that; the band bench runs both arms of the tile row and of both sprite rows;
+and
+`pmcuitest`'s `drive_cga_arms` drives the **same CGA round twice**, `pv_merge`
+apart, auditing every frame on both arms — `truth_px` follows the arm, so the
+sample is checked to be its own correct picture and not merely to be cheap.
+That row is what the keep/revert bound is actually checked against now, because
+the bound is written about a frame and the only arithmetic behind it before was
+one bench band with no packer, blit, sprite layer or damage model around it:
+
+| CGA, the same round | full repaint | worst play frame |
+|---|---|---|
+| sampled | 784.4 ms | 160.6 ms |
+| **MERGED — what ships** | **913.5 ms** | **172.6 ms** |
+| the merge costs | **+16.4%** | **+7.5%** |
+
+A full repaint recomposes 1,008 tiles and NO sprites, so it is the tile merge
+alone; a play frame is 46 tiles and 80 sprite rows, so most of its +8.0% is the
+SPRITE merge. **Both are inside the 25%**, and `pmcuitest` fails the build if
+either leaves it.
+
+**The band bench, re-taken.** This is the SHIPPING table; every microsecond in
+this section and in `apps/paccman/README.md` is priced from it. Same
+instrument, same conversion — `qemu-system-i386 -icount shift=3,sleep=off`,
+one count = 0.359 ms of real XT:
+
+**Every row below is ONE RUN** — the second of a session, on the shipping
+build — which is what the previous printing of this table was not, and is why
+its two `BAND cga` rows and its `pb_recon` rows could be read against each
+other and disagree:
+
+| row | N | counts/op | real XT |
+|---|---|---|---|
+| `TILE` step 1 — one 8×8 tile, 8 rows | 256 | 1.949 | **0.70 ms** |
+| `TILE` step 2 — the CGA layout SAMPLED, 4 rows | 256 | 1.164 | 0.42 ms |
+| `TILE` step 2 **MERGED** — the shipping CGA arm | 256 | 1.520 | **0.55 ms** |
+| `PACK_PL` — one 8-row band → four bitplanes | 8 | 116.250 | **41.73 ms** |
+| `PACK_1` — one 8-row band → 1bpp | 8 | 50.375 | 18.08 ms |
+| `SPRITE` 16×8, even nibble, SAMPLED | 8 | 19.375 | 6.96 ms |
+| `SPRITE` 16×8, odd nibble + flipx, SAMPLED | 8 | 20.375 | 7.31 ms |
+| `SPRITE` 16×8, even nibble, **MERGED** | 8 | 23.125 | **8.30 ms** |
+| `SPRITE` 16×8, odd + flipx, **MERGED** | 8 | 24.375 | **8.75 ms** |
+| `BLITP` 224×8, four planes | 8 | 20.500 | **7.36 ms** |
+| `BLIT4` 224×8, packed | 8 | 134.625 | **48.33 ms** |
+| `BLIT1` 224×8, 1bpp | 8 | 3.375 | 1.21 ms |
+| `BAND colour` — 28 tiles + pack + `BLITP` | 8 | 193.875 | 69.60 ms |
+| `BAND mono` — 28 tiles + pack + `BLIT1` | 8 | 110.750 | 39.76 ms |
+| `BAND cga` 4 rows, SAMPLED | 8 | 62.375 | 22.39 ms |
+| `BAND cga` 4 rows, **MERGED** | 8 | 72.875 | **26.16 ms** |
+| `28 × (MERGED − sampled)` — `pb_recon`'s own check | — | 9.97 | 3.58 ms |
+| `BAND cga MERGED − sampled` — the same quantity | — | 10.50 | 3.77 ms |
+
+The last two rows are the same quantity measured on the TILE row and on the
+BAND row and they agree to **4.7%**, which is what `pb_recon` exists to say;
+subtract the table's own two `BAND cga` rows and you get the second of them,
+because both now come off one run. (The previous printing gave 62.375 → 72.875
+from a wave-3 run beside a `pb_recon` range from the wave-4 re-run, so a reader
+who did that subtraction landed outside the range the table then stated.)
+
+**READ THE SECOND RUN.** The first run of a session prices `BLIT4` about 10%
+high — 148.0 counts against 134.625 — and every other row within a count and a
+half; runs 2 and 3 of this take agree **to the count on every row**, and
+134.75 is also what wave 1 read. That is the bench's own warm-up and it is
+named here so nobody re-takes the table once and quotes a cold `BLIT4`. The
+`SPRITE` rows carry a spread of their own between sessions — a second take
+read 18.875 and 20.250 for the two sampled rows against this one's 19.375 and
+20.375, ~2.6% — so the terms below are this run's and the spread is stated.
+
+**THE THREE TILE ROWS RUN AT `PB_N_TILE` = 256 AND EVERY OTHER ROW AT
+`PB_N` = 8**, which is the one place this bench is not uniform and is uniform
+for the wrong reason if it is. A tile is ~2 counts and a band ~70, so eight
+iterations resolve a band to 0.2% and a tile to 6% — and the merge is a 32%
+change to a tile, which is 0.4 of a count. `pb_recon`'s two lines are the guard:
+they are the same quantity measured on the tile row and on the band row, and a
+re-take whose two lines disagree by more than a few percent has published
+nothing, whatever the rows above them say.
+
+**`PMC_T_SPRROW` is the MEAN of the two SAMPLED sprite rows over their eight
+rows — 892 µs — and `PMC_T_SPRROWM` the same mean over the two MERGED ones,
+1,066 µs.** The even-nibble case and the odd-nibble-plus-flipx one differ by 5%
+and Pac-Man spends about half his frames at each, so a frame priced from either
+alone would be wrong by half that in a stated direction; and a merged row is a
+different price from a sampled one for the tile's reason, so `pmc_draw_band`
+counts which rows were which into `pmc_n_sprowm`.
+
+**`PMC_T_LOGIC` is not the bench's, and it could not be**: `game_tick` is a C
+function and the bench is a standalone assembly package that cannot call one.
+`tests/paccman.py` brackets it on MartyPC between `pmc_game_tick`'s entry and
+its own return address — read off the stack at entry, so the bracket is the
+CALL and not the frame — and takes the **minimum of eleven samples**, the
+larger ones carrying whatever interrupt landed inside and IRQ0 being charged to
+the machine rather than to the function. Six runs across the three profiles
+read 85,374 / 86,742 / 89,990 / 90,496 / 91,432 / 91,576 cycles — **17.9 to
+19.2 ms of 4.77 MHz 8088** — and **18.6 ms** is the term.
+
+**A frame, with all five terms in it at last.** `pmcuitest`'s table on VGA at
+the shipped size, against a whole repaint of 36 bands, 1,008 tiles and
+**2,476.1 ms**:
+
+| | calls | bands | tiles | sprite rows | game ticks | ms |
+|---|---|---|---|---|---|---|
+| a play frame | 23 | 18 | 46 | 80 | 3 | **257.5** |
+| the frame a dot goes in | 23 | 18 | 57 | 80 | 3 | 284.2 |
+| worst of 24 consecutive | — | — | — | — | — | **294.7** |
+| a whole repaint, About card up | 53 | 52 | 592 | 0 | 0 | **1,479.7** |
+| the About card dismissed | 25 | 20 | 560 | 0 | 0 | 1,379.2 |
+| a full repaint, letterboxed | 41 | 36 | 1,008 | 0 | 0 | 2,594.7 |
+| one tile changed | 2 | 1 | 1 | 0 | 0 | 4.1 |
+| nothing written at all | 0 | 0 | 0 | 0 | 0 | **0.0** |
+
+**THE THIRD ROW OF THAT TABLE IS NEW AND IT IS A FIX.** A whole `W_PAINT`
+taken while the About card is up used to call `pmc_dirty_all` and compose all
+36 bands — 1,008 tiles, **2,476.1 ms** of VGA XT at the shipped size — and then
+`os88_paint` drew the card over the middle of them. The card is 24 cells plus
+2 × `OS88UI_ABPADX` = **216 px of a 224-px field** and 134 of 288 rows, so on
+VGA 20 of the 36 bands were overdrawn but for four pixels at each edge and on
+CGA 34 of 36 were: about **1.4 s of VGA XT and 0.9 s of CGA XT drawn and
+immediately covered**, which is PERFORMANCE.md rule 2 at the top of its scale.
+The DISMISSAL path had been narrowed to the card's own bands from the start
+(`pmc_ab_mark`) and this one had not, which is what gave it away —
+`pmc_flush`'s `pmc_about_up` guard is one call up the chain and `pmc_repaint`
+reaches `pmc_flush_laid`, which never had it. **`pmc_repaint` now marks the
+COMPLEMENT of the card**: full width outside the card's band range, and inside
+it the two column spans the card leaves showing, which is exactly what the
+two-span damage model already holds — two blits a band instead of one, and 26
+of the 28 tiles spared on each. 592 tiles against 1,008 on VGA, **176 against
+1,008 on CGA** (4 full bands and 32 two-tile ones).
+
+`pmc_ab_box` is the one routine that measures the card now, and it answers
+BOTH callers because they want the same rectangle with the slack the opposite
+way round: `pmc_ab_mark` wants a SUPERSET of what the card covered (a band
+drawn twice costs a band), `pmc_repaint` wants a SUBSET of what it certainly
+covers (a band NOT drawn is a stale strip of field). It answers the subset and
+`pmc_ab_mark` takes two bands back off it. `PMC_AB_PADX` joined `PMC_AB_LH` and
+`PMC_AB_PADY` as a mirror of `apps/os88ui.inc` — a complement has columns in it
+— and `tests/unit/t_paccman.py` pins all three against that file in the fast
+tier. The harness row is `whole repaint, card up`, and it recomputes the
+expected tile count from `pmc_ab_box`'s own four words rather than accepting
+any number below 1,008; the row after it dismisses the card, flushes and
+AUDITS, which is the only check that the complement and `pmc_ab_mark`'s
+rectangle meet — a subset that was really a superset leaves a hole there. The
+row was missing before, and that is why the defect lived: the only card-up
+paint the harness drove set `hg_dmg_whole` = 0 first, so a whole rect under a
+raised card was never costed.
+
+**A TILE HAS THREE PRICES AND THE MODEL NOW USES THE RIGHT ONE.** `T_TILE` is
+the rowstep-1 term, and pricing every tile with it made the CGA column of this
+table ~60% high — 1,008 tiles at 700 µs where a merged CGA tile is 546 — and,
+worse, made the row merge INVISIBLE to the one model that is meant to catch a
+composer regression: sampled and merged priced identically. `pmc_draw_band`
+counts step-2 tiles into `pmc_n_tiles2`, `build.sh` exports `PMC_T_TILE2` and
+`PMC_T_TILE2M` beside `PMC_T_TILE`, and `cost_row` prices each tile at the term
+for the layout it was composed in. The counter is `#ifdef PMC_HOST` and not a
+`PMC_COUNT`, because SmallerC emits a `mov ax, 0` for that macro's
+`((void) 0)`: the shipping image is **byte for byte what it was**.
+
+Wave 3's own table read 131.2 ms for that play frame with the sprite and logic
+terms still zero and said so on its closing line; the two terms it was missing
+are 125 ms of it, which is why that line was there.
+
+**AND THE BLIT ROWS ARE COUNTED PER BLIT KIND NOW, not per kind that appeared.**
+`cost_row` used to charge the frame's WHOLE row count to every blit it saw —
+`(hc_blitp ? rows28 × T_BLITP_R : 0)` and the same again for `BLIT1` and
+`BLIT4` — and a mixed frame is both reachable and the interesting one:
+`pmc_draw_band` falls through from `BLITP` to `BLIT4` when a window moves
+between the probe and the blit, and LATCHES from `BLIT1` to `BLIT4` on a
+`kern_small` kernel after the first band. The stubs only count a call that
+SUCCEEDED, so both counters end non-zero and such a frame was charged its full
+row count at 826 µs a row AND again at 5,947 — a **~7× overcharge on exactly
+the fallback these counters exist to price**, which is conservative for a
+regression hunt and wrong for the budget assertions the model now gates
+(`drive_cga_arms`' 25% bound, `worst of 24 … of a 612.6 ms budget`): it can
+FAIL a frame that is fine. `pmc_n_rc_p`, `pmc_n_rc_1` and `pmc_n_rc_4` are
+counted where each blit is issued and priced with its own term.
+
+**THE MEASUREMENT, AND THE ANSWER TO THE USER'S HYPOTHESIS.**
+`tests/paccman.py` runs ONE `bracket()` — the same code, the same clock, the
+same four kernel API slots counted by exec breakpoint on the table entries
+themselves — over `PACCMAN.O88`'s `pmc_frame` and `PACMAN.O88`'s `pm_step`, and
+reads each port's effective game speed **over the very frames it timed**
+(PACCMAN's 60 Hz accumulator, PACMAN's one step per 18.2 Hz deadline). Measured
+over a separate later window that speed came out at 71% against a frame rate
+that cannot produce more than 33%, because the window had drifted into a
+freeze, where game time runs on and nothing is drawn: one window, both numbers.
+
+**AND THE BRACKET IS A DRAWN FRAME ON BOTH SIDES, which the first version of
+this table was not.** `pmc_frame` has ONE exit and every entry of it reaches
+`pmc_flush`, so on the C port a frame proc entered is a frame drawn; `pm_frame`
+(§89) returns without drawing on five guards — not the top window, paused, the
+About card up, game over, and the hold countdown — and its worker sleeps to an
+18.2 Hz deadline, so counting ITS entries counts the SCHEDULER's cadence on
+every frame it declines to draw. Bracketed there it printed 18.21 "fps" on
+`os8088_5150_cga_gla` beside a speed column, derived from `pm_frames`, that
+said a quarter of that: two numbers about two different events. `pm_step` is
+called from exactly one place — `pm_frame`'s `.move` path, immediately before
+`pm_redraw` — and it is what increments `pm_frames`, so one hit is one drawn
+frame on both ports. The row now also **waits for `PM_PLAY` before it
+brackets**, because PACMAN opens on a READY hold and PaccMan's round was
+started by a real key: a bracket that straddled a hold was exactly what that
+disagreement looked like.
+
+| profile | | fps | ms/frame | gfx calls | speed |
+|---|---|---|---|---|---|
+| `os8088_xt_vga` | PaccMan (C) | 2.18 | 459.8 | 16.7 | 24% |
+| | PACMAN (asm) | **4.14** | 241.6 | 9.0 | 23% |
+| `os8088_5150_cga_gla` | PaccMan (C) | 2.94 | 340.0 | 13.3 | 32% |
+| | PACMAN (asm) | **18.21** | 54.9 | 7.0 | 100% |
+| `os8088_5150_herc_gla` | PaccMan (C) | 2.62 | 381.9 | 14.3 | 29% |
+| | PACMAN (asm) | **16.71** | 59.9 | 8.0 | 92% |
+
+**AND THE CALL COLUMN COUNTS WHOLE FRAMES NOW.** The timing pass leaves the
+guest stopped AT the frame proc; `bp_exec` REPLACES the whole breakpoint set
+(`tools/os88marty.py`), so the first run after re-arming stopped on the frame's
+FIRST gfx call — and that stop was discarded without being classified, so the
+counting loop saw (C − 1) + C + C over three windows and both columns were
+deterministically a third of a call low. The row now runs on to a frame ENTRY
+before it starts counting.
+
+**The fps column reproduces to about ±2% between runs** and the gfx-call column
+to about ±1.4 calls (16.7 and 15.3 on two takes of the VGA row), because which
+sixteen frames of which round the bracket lands on is not fixed — the launch
+goes through the real mouse and the real file dialog. Nothing about the verdict
+is inside that band: the two ports are a factor of two apart on VGA and six on
+the 1bpp adapters.
+
+**The four slot offsets the counting breakpoints sit on are PARSED out of
+`apps/os88api.inc`** rather than copied into the test. Nothing checked that
+mirror — `tests/unit/t_apitable.py` compares `kernel.bin` against the SDK and
+never against this file — so a renumbered slot would have put the breakpoints
+on some other table entry or on none, and the row would have gone on printing a
+plausible calls-per-frame, most likely a SMALLER one, which reads as "the port
+got faster" rather than as a broken instrument.
+
+**PACMAN's two columns are now the same statement twice, and that is the
+point.** Its game advances once per frame DRAWN, so its speed is its fps over
+18.2 by construction — and on both 1bpp adapters it is AT its worker's 18.2 Hz
+deadline, which is what 100% and 92% mean: the assembly port is not merely
+faster there, it is finished early and asleep. PaccMan's speed column is not
+its fps over 60, because `PMC_CATCHUP_MAX` = 2 lets a slow frame carry two OS
+ticks of game.
+
+**The verdict is NO: "maybe this port is more performant on XTs" does not
+hold, on any of the three profiles**, and `tests/paccman.py` prints that
+sentence either way rather than gating on it. `GFX_BLITP` really is the 6.6×
+lever wave 1 measured and it is not enough, for the three reasons wave 1's own
+arithmetic named: the repack that feeds it costs 41.78 ms a band where the blit
+costs 7.36; the C game logic is 18.6 ms a `game_tick` and a frame carries three;
+and this port draws the ARCADE field — 28×36 tiles of 224×288 — where §89's
+draws Roklan's 40×22. The two are not the same picture and the fps column is
+not a like-for-like comparison of two implementations of one thing; what it IS
+is the answer to the question that was asked, on the machine it was asked
+about. **The one column the C port holds at all is `speed`, and only on VGA** —
+24% against 23%, at a ninth of §89's frame rate — which is
+`PMC_CATCHUP_MAX` = 2 doing exactly what it was put in for: a slow frame
+carries two OS ticks of game rather than one, so what the player loses is
+smoothness rather than the game's own clock. On the two 1bpp profiles even that
+column goes to §89, because there §89 is AT its worker's 18.2 Hz deadline and
+asleep — 100% and 92% — and no catch-up scheme can beat a port that is already
+finished early.
+
+**What the port is FOR, given that.** It is a second Pac-Man, arcade-faithful
+where §89's is Roklan's, and it is the C toolchain's fourth application and its
+largest measurement: 2,050 lines of ported C99 in 42,050 bytes of image, an
+assembly composer under it, and a number for every claim. A 386 runs it at a
+speed nobody has to apologise for; a 4.77 MHz XT runs it at a fifth of arcade
+speed and `vm/xt-paccman` is where to watch that.
+
+**The disks, the machine and the gates.** `make paccmandisk` builds
+`build/paccman.img`, `paccman720.img`, `paccman120.img` and `paccman360.img` —
+the package and `README.md` at the root of each, no folder needed because there
+is no `.OVL` — and every one is `os88disk.py --verify`ed in its own recipe. The
+360KB disk uses 77 of 354 clusters. `make allapps` places a `PACCMAN/` folder
+beside `GAMES/PACMAN.O88` on `build/apps-all.img` (2,720 of 2,847 clusters) and
+on `apps-all-120.img`, and `make live` carries it by derivation.
+`vm/xt-paccman` is `vm/xt-word`'s machine — an `ibmxt86` 8088 at 4.77 MHz with
+640KB and an OTI-067 — with `fdd_02_fn` pointed at `build/paccman720.img` and
+the uuid changed and nothing else; `make xt-paccman` boots it, and a
+screencapture of that boot reaching the desktop with both drives mounted is
+`build/port-shots/wave4-xt-paccman-86box.png`. **The reveal on that machine is
+a HUMAN's screencapture and not a scripted one**, and the reason is the profile
+rather than the port: its mouse is `msserial`, so 86Box must CAPTURE the host
+pointer before a click reaches the guest at all, and there is no scripted-input
+path to an 86Box on this host — which is docs/TESTING.md's "86Box cannot
+assert" in its most literal form. Every asserted number above is MartyPC's and
+every screendump above is QEMU's. `tests/unit/
+t_ctoolchain.py`'s TARGETS gained `paccman`, so the whole chain — the extractor
+check, `pmcuitest`'s pixel audit, `pmcbandtest`'s real-x86 run and the package
+itself — is built by the full tier and not only by a human typing `make
+paccman`. **Its stamp is in the artifact list beside the `.o88`**, which is the
+only entry there that is not a package and is what makes that sentence true:
+`make` will not re-run three host gates for a `$(BUILD)/.paccman-hostchecks`
+that is already newer than its sources, so the row deletes the stamp along with
+everything else it names. **And the tier still fits**: `make test-full` was
+597.4 s of its 600 s budget before this port; with `paccman` in `t_ctoolchain`
+it measured **500.8 s, 510.7 s, 502.8 s and — after the review's sprite merge,
+card complement and two new harness rows — 500.0 s on a quiet host** (loads
+1.6, 2.4, 1.5 and 1.5), the `ctoolchain` row going 7.7 s → **10.0 s** when the
+stamp was added and **10.2 s** with everything the review put in it. The plan's fallback — take paccman
+back out and register a soak row that builds it from clean — was therefore not
+taken, and both wall clocks are recorded here so that whoever next puts a row
+in the full tier knows what the headroom actually is.
+
+**`tests/paccman.py` writes into the guest now, and only into bss.** Two
+fixtures the host harness cannot have: a **frightened ghost** put on Pac-Man's
+own tile by writing `pmc_ax`/`pmc_ay`/`pmc_gstate` at the worker's frame
+boundary must score exactly **200** and become `EYES`; the **bonus fruit** with
+Pac-Man placed at `(ax + 4) >> 3 == 14, ay >> 3 == 20` must score exactly
+**100**, round 1's cherry. Every byte written is bss — the actor arrays, the
+ghost states, the bonus — so the image check beside them still covers every
+byte of code and every arcade table, which is what makes the two safe to add
+to a row whose other assertion is that nothing was modified.
+
+**After wave 4**: `os88pkg: 'PACCMAN' entry=+0x0060 image=42050 bss=5230
+icon=yes assoc=0` — **47,280 of 61,440**, and **§73.14's split trigger is
+55,000 resident bytes, image plus bss, so this line is 7,720 away from it**.
+Wave 4 cost **1,210 bytes** over wave 3's 46,070: the CGA row merge (256 of
+`pmc_zmask`, the merged loops in `_pmc_tile` and `_pmc_sprite` with the
+latter's split call), `pmc_ab_box` and `pmc_dirty_not_card`. `cc8086` reports
+114 functions and a largest frame of **34 bytes** against the 96 cap. The
+measured worker water mark is **188 of 256** on `os8088_xt_vga` (178 before
+the review; the wave-3 paragraph above records the move).
+
+**The About card, on the glass.** Ten lines, all whole at the 224-pixel content
+box's width, none of them about how the build renders:
+`PaccMan for os8088` / `A C port of pacman.c,` / `commit 0f5ec5a` /
+`(c) 2020 Andre Weissflog` / `MIT. floooh/pacman.c` / `Tiles/sprites: Pac-Man` /
+`arcade ROMs (Namco)` / `Rules: Pac-Man Dossier` / `Arrows/WASD move. N new.` /
+`F full. P/Space pause.`
 
 **Provenance.** The code is Andre Weissflog's under MIT; the tile, sprite and
 colour tables are Pac-Man arcade ROM data (Namco) and the two register dumps

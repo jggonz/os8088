@@ -253,3 +253,129 @@ paccman`, take the line it prints, and put that string in both places.
 - Sound is sampled once per OS tick: an effect shorter than ~3 game ticks can vanish entirely between samples (the reference's eat-dot alternation is 5 ticks); the per-voice register trace in the harness shows what was sent, and the reduction is stated rather than tuned. The prelude's melody is voice 1 of the dump and its bass voice 0 - the harness asserts the melody's Hz by name so the voices cannot be swapped again
 - The budget is ~39.5 KB by cword's measured ~9.4 bytes per code line, and the 50,000 overlay trigger is ~10 KB of growth away rather than ~20; the first build's os88pkg line replaces the estimate and is tracked in the PR from the first commit
 - tests/paccman.py's fixtures depend on wave-2 test-tree work that no existing row has done (dispapps._map with -I build/, `_pmc_*` names) and the stack assertion on t_stkclass following a C shim; both are named files with an owner in wave 2, not assumptions
+
+## What shipped
+
+One paragraph per wave, written when that wave landed and re-measured at the
+end of wave 4 against the build that shipped. SPEC.md §91 is the contract and
+carries the same numbers; this is the record of how they were arrived at.
+
+**Wave 1 — assets, window, video RAM, the band renderer, its two gates.**
+`tools/paccman_assets.py` decodes the reference's five ROM tables and two
+register dumps at commit `0f5ec5a` into the COMMITTED `apps/paccman/pmc_rom.c`
+(`--check` reproduces it byte for byte and the extractor refuses an unpinned
+checkout); the shim, icon, LICENSE and Game menu; `video_ram`/`color_ram` with
+per-band dirty spans; `pmcband.inc`'s composer; one blit per band through the
+new `os88_gfx_blitp` thunk with its probe on a colour display, `blit1` on
+monochrome, `blit4` when either refuses; `os88_wm_display` as the second new
+thunk; `WF_KEEPH` frames of 307 rows (163 on CGA). `os88pkg image=21844
+bss=4498` — 26,342 of 61,440. The band bench landed here and its first reading
+was the wave's finding: `GFX_BLITP` is **6.6×** `GFX_BLIT4` on a 224×8 band and
+the packed-to-planar repack costs six times what the blit saves, so the colour
+path is a wash and the plane arm was chosen anyway *so that the wave which
+removes the repack has something to remove it from*. The plan's own model was
+4× wrong in the other direction, which is LESSONS.md 13 exactly.
+
+**Wave 2 — the tick path, the ghosts, the sprite layer, the stack.** The
+two-word tick and the trigger table, the accumulator at `PMC_CATCHUP_MAX` = 2,
+the worker's deadline loop, the press latch, `pmc_move.c` and `pmc_game.c`
+whole — the four personalities, the scatter/chase schedule, the house dot
+counters, fruit, freezes, round won, game over — the sprite shadow and the
+two-span damage model. `image=37332 bss=5188`, 42,520. The chain measured
+under its `OS88_STACK_256` and the water mark asserted; `tests/dispapps.py`
+gained `-I build/` so a C package's symbols resolve at all, and
+`t_stkclass` learned to follow a `cc/crt0.asm` shim, which stopped paccman,
+cword, runcpm and weave being silently skipped.
+
+**Wave 3 — the attract screen, the sequences, the sound.** `intro_tick` at the
+reference's own fourteen event ticks, the two `since` helpers (a blink written
+against the saturating one stops after nine minutes — the harness's
+40,000-tick attract is what catches that), the fade as a two-byte cut, three
+arcade voices sampled to one PC speaker by priority with the prelude's melody
+outranking its own bass, and the key table. `image=40848 bss=5222`, 46,070; the
+water mark moved 170 → **178** because `pmc_step_tick` put one more call level
+on the tick path. The wave's review found `-SHADOW BLINKY` and `-BASHFUL INKY`
+unreadable on CGA — Blinky's red and Inky's cyan are both the mono class
+table's 50% checkerboard — so every coloured LABEL goes white on a 1bpp
+adapter while the ghost PICTURES keep the arcade's four. It also found, and
+deliberately did NOT fix, the alternate-row sample dropping source row 3 and
+with it every horizontal middle stroke the arcade font has.
+
+**Wave 4 — the row merge, the disks, and the answer.** *(Amended after the
+wave's review: what the merge did to DIGITS, the sprite half of it, the About
+card's complement, the lock hold, and the two instrument fixes. The paragraph
+below is the shipping account.)* The CGA arm now merges
+the two source rows per pixel — `merged = even | (odd & pmc_zmask[even])`,
+never an `OR`, because a tile pixel is a 2-bit colour index — for **+16.8%** of
+a CGA band (22.39 → 26.16 ms) and 32 of the 36 alphanumerics changing picture:
+`HIGH SCORE` and `CHARACTER / NICKNAME` read on the glass where wave 3
+photographed `IIIGII SCORC` and `CIIARACTCR / NICKNAMC`. The cost in the
+picture is stated too, with its numbers — the merge only adds ink, so `HIGH`
+reads where it read `IIIGII`, `SCORE` reads `8GORE` and `CHARACTER` reads
+`GHARAGTER` (merged `C` and `G` are identical on their first and third rows),
+merged `S` is 1 pixel from `5` and 1 from `6` where the sample's was 6 and 4,
+and every one-row maze stroke is two rows thick — and the sampled arm stays
+reachable, tested, benched and now priced on a whole CGA FRAME beside the
+merged one (+17.1% of a repaint, +3.9% of a play frame, against the 25% bound).
+The band bench was re-taken with the sprite rows and both CGA band arms, and
+its three TILE rows re-taken again at `PB_N_TILE` = 256 after the tile A/B and
+the band A/B were found to disagree by 3× at the instrument's floor: the
+shipping merged tile is **1.520 counts against the sample's 1.164**, +31%, and
+the bench now prints that reconciliation itself. `PMC_T_SPRROW` (857 µs, the
+mean of the two sprite cases) and `PMC_T_LOGIC` (18.6 ms, `tests/paccman.py`'s
+cycle bracket around `pmc_game_tick`) went into the harness, which now prices a
+play frame at **257.5 ms** where wave 3's table said 131.2 and said why. Four disk
+geometries, a `PACCMAN/` folder on `apps-all.img`, `vm/xt-paccman` and
+`make xt-paccman`, `paccman` in `t_ctoolchain`'s TARGETS, and two scoring
+fixtures written into bss by symbol in `tests/paccman.py`. `image=42050
+bss=5230`, **47,280 of 61,440** — 7,720 short of §73.14's 55,000 trigger, so
+no overlay. And the measurement the whole port was for:
+
+| profile | PaccMan (C) | PACMAN (asm) |
+|---|---|---|
+| `os8088_xt_vga` | 2.18 fps, 24% speed | **4.14 fps**, 23% |
+| `os8088_5150_cga_gla` | 2.94 fps, 32% speed | **18.21 fps**, 100% |
+| `os8088_5150_herc_gla` | 2.62 fps, 29% speed | **16.71 fps**, 92% |
+
+Both ports are bracketed on a frame that was DRAWN — `pm_step` for §89, whose
+`pm_frame` returns without drawing on five guards against an 18.2 Hz deadline —
+and the row waits for `PM_PLAY` so neither is timed inside a hold.
+
+**Wave 4's review, and what it changed.** Five things, each with a number
+behind it. (1) **The row merge reached the tile layer only** — the SPRITE layer
+still sampled alternate rows, which is where Pac-Man's circle lost its top and
+bottom caps, so `_pmc_sprite` took the same `zmask` argument and the same
+formula. The one row that has no partner (source row 15, always the last drawn)
+is split off and asked for unmerged, because the routine does not bound its
+read. It costs a sprite row **+20%** and the arm that does not merge **one test
+a source byte** (+3.9% of a sprite row, 0.9% of a VGA play frame), and it took
+the CGA play-frame cost of the whole merge from +3.9% to **+7.5%** against the
+25% bound. (2) **A whole `W_PAINT` with the About card up composed all 36
+bands** and then covered 20 of them (VGA) or 34 (CGA) with the card: 1,008
+tiles, ~1.1 s of VGA XT drawn and immediately hidden. `pmc_repaint` marks the
+card's COMPLEMENT now — `pmc_ab_box` answers the rectangle for both callers,
+with the slack the opposite way round for each — and the harness gained the
+card-up row it never had, which is why the defect lived. (3) **SPEC's
+chunked-lock arithmetic left the game logic out**: `os88_worker` brackets the
+whole of `pmc_frame`, so the first chunk is up to six `game_tick`s plus four
+bands, a measured **387.4 ms** and not the ~279 four bands would be. It is a
+harness row with a 460 ms bound now rather than a sentence. (4) **The merge's
+cost to the picture was recorded for letters and not for digits** — merged `S`
+is 1 pixel from `5` and 1 from `6`, merged `5` is 2 from `6`, and the attract
+screen's `50 PTS` legend photographs as `60 PTS`. Neither arm satisfies "the
+text reads": the merge is better on letters and worse on digits and is kept on
+that balance, stated. (5) Two instruments: `tests/paccman.py`'s call-counting
+pass was a third of a call low on both ports (it discarded an unclassified
+stop), and its four API-slot offsets are parsed out of `apps/os88api.inc`
+instead of copied. The re-take is the table above; the worker's stack water
+mark moved **178 → 188** with it, which is 18 bytes under the 208 bar.
+
+**"Maybe this port is more performant on XTs" — no**, on none of the three,
+and the row prints that sentence either way rather than gating on it. The
+reasons are all measured rather than argued: the repack ahead of the fast blit
+costs 41.78 ms a band against the blit's 7.36; one `game_tick` is 18.6 ms and
+a frame carries three; and this port draws the arcade's 28×36 field where §89
+draws Roklan's 40×22, so the fps column is not a like-for-like race. The one
+column PaccMan holds is effective game SPEED, and only on VGA (24% against
+23%), which is `PMC_CATCHUP_MAX` = 2 doing what it was put in for; on both 1bpp
+adapters §89 is at its deadline and asleep.

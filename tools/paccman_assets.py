@@ -228,6 +228,33 @@ def planar_table():
     return out
 
 
+def zero_mask_table():
+    """source byte (four 2-bit tile pixels) -> 0b11 in every field that is
+    ZERO, 0 in every field that is not.
+
+    THIS IS THE CGA ROW MERGE (SPEC.md 91). A short display samples every
+    other source row, and the arcade font keeps every horizontal middle
+    stroke on the row that is dropped, so `B E F G H S 3 6 9` lose theirs and
+    `HIGH SCORE` reads as a row of bars. Merging the two rows cannot be an OR:
+    a tile pixel is a 2-bit colour INDEX, so `1 | 2` is 3 - an ink the tile
+    does not have. The merge is per pixel, `take the odd row's pixel only
+    where the even row's is 0`, and this table is what makes it two extra
+    instructions and one XLAT a source byte inside _pmc_tile:
+
+        merged = even | (odd & pmc_zmask[even])
+
+    Computed rather than read out of the reference - it is a property of the
+    2bpp format, the same way pmc_planar is a property of the packed one."""
+    out = []
+    for b in range(256):
+        m = 0
+        for f in range(4):
+            if ((b >> (2 * f)) & 3) == 0:
+                m |= 3 << (2 * f)
+        out.append(m)
+    return out
+
+
 def mono_pair_table(mono):
     """[parity][packed byte] -> two 1bpp bits (bit 1 = the left pixel). A
     dithered class lights when (x + y) is even, so the table is per row
@@ -387,6 +414,12 @@ def generate(src, ref_head):
                  ' * spaced (plane 0 in bits 1:0, plane 3 in bits 13:12). */')
     parts.append(carray('static const unsigned int pmc_planar[256]', planar_table(),
                         per_row=8, kind='unsigned int'))
+
+    parts.append('\n/* source byte -> 0b11 in every 2-bit pixel field that is\n'
+                 ' * ZERO: the CGA row merge inside _pmc_tile (SPEC.md 91),\n'
+                 ' * merged = even | (odd & pmc_zmask[even]). */')
+    parts.append(carray('static const unsigned char pmc_zmask[256]',
+                        zero_mask_table(), per_row=16))
 
     parts.append('\n/* the 31x28 playfield, rows 3..33, pre-decoded to tile\n'
                  ' * codes: neither the map string nor the char table ships. */')

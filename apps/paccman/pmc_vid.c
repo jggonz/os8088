@@ -59,10 +59,13 @@
  * PMC_P_BLIT1 on bpp 1 before the probe is asked. Priced off the measured
  * terms (apps/paccman/build.sh), ONE wasted column of a band costs
  *
- *   CGA/Hercules  718 us composed + (4/28) x 2266 pack_1 +  (4/28) x 57 blit1
- *                 = ~1,050 us
- *   VGA (BLITP)   718 us composed + (8/28) x 5222 pack_pl + (8/28) x 826
- *                 = ~2,446 us
+ *   CGA           551 us composed + (4/28) x 2255 pack_1 +  (4/28) x 57 blit1
+ *                 = ~880 us          (rowstep 2, and the tile is the MERGED
+ *                                     one - a CGA tile is its own term)
+ *   Hercules      703 us composed + (8/28) x 2255 pack_1 +  (8/28) x 57 blit1
+ *                 = ~1,360 us
+ *   VGA (BLITP)   703 us composed + (8/28) x 5222 pack_pl + (8/28) x 826
+ *                 = ~2,430 us
  *
  * against 814 us (756 + the thunk) for the extra gfx call a second span
  * costs. So a gap of two clean columns already pays for the split on BOTH

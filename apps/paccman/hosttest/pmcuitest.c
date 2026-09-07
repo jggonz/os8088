@@ -140,8 +140,27 @@ static void hg_put(int x, int y, int v)
  * survived the drop - which is exactly the bug the arm has to not have. */
 static unsigned hc_lock, hc_unlock, hc_yield;
 
-void os88_gfx_lock(void)   { hc_lock++; }
-void os88_gfx_unlock(void) { hc_unlock++; hg_clip = 0; }
+/* THE LOCK HOLD IS TIMED, NOT ONLY COUNTED (SPEC.md 91). What matters about a
+ * worker's hold is how long the machine cannot draw, and the cost model
+ * already knows how long everything between two calls took - so the lock stubs
+ * bracket it. `hc_hold_at` is the model's clock when the lock was taken and
+ * `hc_hold_worst` the largest hold since cost_reset, which for the worker's
+ * own frame is the answer to "does the chunking bound what I think it bounds":
+ * pmc_frame runs the TICK inside the same bracket as the first four bands, so
+ * the first chunk is the game logic plus four bands and not four bands. */
+static double hc_last_ms(void);
+static double hc_hold_at, hc_hold_worst;
+
+void os88_gfx_lock(void)   { hc_lock++; hc_hold_at = hc_last_ms(); }
+void os88_gfx_unlock(void)
+{
+    double d = hc_last_ms() - hc_hold_at;
+
+    hc_unlock++;
+    hg_clip = 0;
+    if (d > hc_hold_worst)
+        hc_hold_worst = d;
+}
 void os88_set_color(int c) { hg_pen = c; }
 
 void os88_gfx_fill(int x1, int y1, int x2, int y2)
@@ -433,20 +452,44 @@ static int pmc_px(const unsigned char *rowbase, int col)
     return (b >> (6 - 2 * (col & 3))) & 3;
 }
 
+/* ONE tile pixel, with the CGA row MERGE folded in where it applies. The
+ * assembly reaches this through pmc_zmask and one XLAT a source byte; the
+ * twin reaches it by asking whether the even row's pixel is 0 and taking the
+ * odd row's if it is, which is the SENTENCE the table encodes rather than the
+ * table. (SPEC.md 91: an OR would invent a colour, because a tile pixel is a
+ * 2-bit index and 1 | 2 is 3.) */
+static int pmc_px_merged(const unsigned char *row, int col, int merge)
+{
+    int v = pmc_px(row, col);
+    if (v == 0 && merge)
+        v = pmc_px(row + 2, col);
+    return v;
+}
+
+/* THE ARM THE HARNESS DRIVES. pmc_draw_band passes pmc_zmask unconditionally,
+ * so the SHIPPING CGA picture is the merged one and pv_merge is 1 for every
+ * assertion in this file. It is a variable rather than a constant so that the
+ * cost table can price the same CGA frame BOTH ways - which is what makes
+ * SPEC.md 91's "the sampled arm is still reachable, so the look question can
+ * be re-opened with numbers" a statement about a frame and not only about a
+ * bench row. Setting it to 0 is exactly what passing zmask = 0 does. */
+static int pv_merge = 1;
+
 void pmc_tile(const unsigned char *src, const unsigned char *pairs,
-              unsigned char *dst, int rowstep)
+              unsigned char *dst, int rowstep, const unsigned char *zmask)
 {
     /* `pairs` points into pmc_pairs; recover the colour block from it so the
      * twin can go through pmc_pal instead, which is the whole point. */
     int cblk = (int) (pairs - pmc_pairs) >> 4;
     int rows = 8 / rowstep;
+    int merge = (rowstep == 2 && zmask != 0 && pv_merge);
     int r, c, hi, lo;
 
     for (r = 0; r < rows; r++) {
         const unsigned char *row = src + (r * rowstep) * 2;
         for (c = 0; c < 8; c += 2) {
-            hi = pmc_pal[cblk * 4 + pmc_px(row, c)];
-            lo = pmc_pal[cblk * 4 + pmc_px(row, c + 1)];
+            hi = pmc_pal[cblk * 4 + pmc_px_merged(row, c, merge)];
+            lo = pmc_pal[cblk * 4 + pmc_px_merged(row, c + 1, merge)];
             dst[r * PMC_BAND_ROW + (c >> 1)] = (hi << 4) | lo;
         }
     }
@@ -499,9 +542,10 @@ void pmc_pack_1(const unsigned char *band, unsigned char *bits, int rows,
  * makes a sprite transparent. */
 void pmc_sprite(const unsigned char *src, const unsigned char *pal4,
                 unsigned char *dst, int sinc, int rows, int flags,
-                const unsigned char *brev)
+                const unsigned char *brev, const unsigned char *zmask)
 {
     int r, j, v, c, col, ph, lastb;
+    int merge = (zmask != 0 && pv_merge);
     const unsigned char *row;
     unsigned char *d;
 
@@ -537,6 +581,15 @@ void pmc_sprite(const unsigned char *src, const unsigned char *pal4,
         for (j = 0; j < 16; j++) {
             col = (flags & 2) ? 15 - j : j;
             v = (row[col >> 2] >> (6 - 2 * (col & 3))) & 3;
+            /* THE ROW MERGE, on the sprite layer: where this row is
+             * transparent the DROPPED row shows through instead. The twin
+             * asks the sentence; the assembly asks pmc_zmask and one XLAT a
+             * source byte (SPEC.md 91). `sinc / 2` is the +-4 bytes to the
+             * partner, flip and all, exactly as _pmc_sprite computes it. */
+            if (v == 0 && merge) {
+                const unsigned char *o = row + sinc / 2;
+                v = (o[col >> 2] >> (6 - 2 * (col & 3))) & 3;
+            }
             if (v) {
                 c = pal4[v];
                 if (ph)
@@ -565,22 +618,32 @@ static int truth_px(int sx, int sy)
     int tr = srow >> 3, ir = srow & 7;
     int i = (tr << PMC_VSHIFT) + tc;
     const unsigned char *row = pmc_tiles + (pmc_vram[i] << 4) + ir * 2;
-    int v = pmc_pal[(pmc_cram[i] & 31) * 4 + pmc_px(row, ic)];
+    int v = pmc_pal[(pmc_cram[i] & 31) * 4
+                    + pmc_px_merged(row, ic, pmc_step == 2 && pv_merge)];
     int cls, lit, k, sc, sr, pv;
 
     /* ...and then the SPRITE layer over it, in the composer's own order, so
      * the last enabled sprite that covers this pixel wins. Written from the
      * sprite state and the ROM alone: it shares no line with pmc_draw.c. */
     for (k = 0; k < PMC_NSPR; k++) {
+        int sru, sr2;
         if (!pmc_sp_on[k])
             continue;
         sc = sx - pmc_sp_x[k];
-        sr = srow - pmc_sp_y[k];
-        if (sc < 0 || sc > 15 || sr < 0 || sr > 15)
+        sru = srow - pmc_sp_y[k];               /* the sprite's OWN row      */
+        if (sc < 0 || sc > 15 || sru < 0 || sru > 15)
             continue;
         if (pmc_sp_flip[k] & 1) sc = 15 - sc;
-        if (pmc_sp_flip[k] & 2) sr = 15 - sr;
+        sr = (pmc_sp_flip[k] & 2) ? 15 - sru : sru;
         pv = pmc_px(pmc_sprites + (pmc_sp_tile[k] << 6) + sr * 4, sc);
+        /* THE ROW MERGE ON THE SPRITE LAYER (SPEC.md 91). The pair is always
+         * (u, u + 1) in the sprite's own rows - flipy walks them backwards, so
+         * its (r, r - 1) is the same pair - and row 15 has no partner, which
+         * is the one row pmc_band_sprites splits off and asks for unmerged. */
+        if (pv == 0 && pmc_step == 2 && pv_merge && sru < 15) {
+            sr2 = (pmc_sp_flip[k] & 2) ? 15 - (sru + 1) : sru + 1;
+            pv = pmc_px(pmc_sprites + (pmc_sp_tile[k] << 6) + sr2 * 4, sc);
+        }
         if (pv)
             v = pmc_pal[(pmc_sp_col[k] & 31) * 4 + pv];
     }
@@ -633,9 +696,10 @@ static int audit(const char *where)
  *
  * Every term is MEASURED, by tests/pmcband/pmcbandbench.asm under QEMU
  * -icount shift=3 (SPEC.md 91's table says so), and nothing here may be a guess (SPEC.md 91,
- * LESSONS.md 13). Until that bench has been run on a given host the five
- * composer terms below carry the bench's numbers as recorded in SPEC.md 91;
- * the blit terms are PERFORMANCE.md's.
+ * LESSONS.md 13). apps/paccman/build.sh passes each one in with a -D and the
+ * #ifndef fallbacks below are ZERO, not the bench's numbers: a term nobody
+ * measured must cost nothing and say so on the closing line, rather than
+ * stand as a plausible figure. The blit and fill terms are PERFORMANCE.md's.
  * ========================================================================*/
 /* The COMPOSER's three terms come from tests/pmcband/pmcbandbench.asm under
  * QEMU -icount shift=3 and from nowhere else. They are passed in by
@@ -652,20 +716,52 @@ static int audit(const char *where)
 #else
 #define PMC_T_BENCHED 1
 #endif
-/* THE TWO WAVE-2 TERMS, AND THEY ARE NOT TAKEN YET. `make pmcbandbench` has
- * the SPRITE rows in it and builds; what has not happened is a run of it
- * under `-icount shift=3` long enough to read them off the glass. Until then
- * a play frame is priced from its tiles, its packs and its blits alone and
- * the sprite layer costs zero, which UNDERSTATES it - so the closing line
- * says so by name rather than letting a plausible number stand. The logic
- * term is a separate matter: the bench is a standalone assembly package and
- * cannot call the C, so game_tick() is measured by tests/paccman.py's cycle
- * bracket and not here (SPEC.md 91). */
+/* A TILE HAS THREE PRICES, NOT ONE, and for a while this harness knew only
+ * the first - which made every CGA cost row it printed ~60% high on tiles and,
+ * worse, made the row MERGE invisible to the model that is supposed to catch a
+ * composer regression. The bench measures all three (SPEC.md 91):
+ *
+ *   PMC_T_TILE    rowstep 1, eight output rows - every adapter but CGA
+ *   PMC_T_TILE2   rowstep 2, four rows, the plain alternate-row SAMPLE
+ *   PMC_T_TILE2M  ...and the same four rows with the row merge, which is what
+ *                 SHIPS on CGA (pmc_draw_band passes pmc_zmask always)
+ *
+ * pmc_draw_band counts step-2 tiles into pmc_n_tiles2, so cost_row prices each
+ * tile at the term for the layout it was actually composed in. */
+#ifndef PMC_T_TILE2
+#define PMC_T_TILE2   0.0
+#define PMC_T_TILE2M  0.0
+#define PMC_T2_BENCHED 0
+#else
+#define PMC_T2_BENCHED 1
+#endif
+/* THE TWO WAVE-2 TERMS, BOTH NOW TAKEN (SPEC.md 91). PMC_T_SPRROW is the mean
+ * of the bench's two SPRITE rows over their eight rows - the even-nibble case
+ * and the odd-nibble-plus-flipx one differ by 6% and Pac-Man spends about half
+ * his frames at each. PMC_T_LOGIC is NOT the bench's: the bench is a
+ * standalone assembly package and cannot call a C function, so one game_tick()
+ * is bracketed by tests/paccman.py on MartyPC's cycle counter instead.
+ * build.sh passes both in unconditionally; the zero fallbacks below exist so
+ * that a build with them stripped prices the sprite layer at nothing and SAYS
+ * SO on the closing line, rather than letting a plausible number stand. */
 #ifndef PMC_T_SPRROW
 #define PMC_T_SPRROW  0.0       /* one sprite ROW merged into a band       */
 #define PMC_SPR_BENCHED 0
 #else
 #define PMC_SPR_BENCHED 1
+#endif
+/* ...AND A SPRITE ROW HAS TWO PRICES for the tile's reason: the CGA layout
+ * merges the dropped source row into every drawn one (SPEC.md 91), which is a
+ * second read and a second table pass a source byte. pmc_draw_band counts the
+ * merged rows into pmc_n_sprowm and cost_row prices those at this term - so
+ * the sprite half of the short-display question is as visible to the model as
+ * the tile half. Zero here means the bench's merged rows were not taken, and
+ * the closing line says so. */
+#ifndef PMC_T_SPRROWM
+#define PMC_T_SPRROWM 0.0       /* ...with the CGA row merge on            */
+#define PMC_SPRM_BENCHED 0
+#else
+#define PMC_SPRM_BENCHED 1
 #endif
 #ifndef PMC_T_LOGIC
 #define PMC_T_LOGIC   0.0       /* one game_tick() with five actors        */
@@ -674,9 +770,12 @@ static int audit(const char *where)
 #define T_CALL      756.0   /* us - any gfx_* call, whatever it draws        */
 #define T_THUNK      57.7   /* us - one OSAPI far call + the near call       */
 #define T_TILE      PMC_T_TILE       /* us - one 8x8 tile composed           */
+#define T_TILE2     PMC_T_TILE2      /* us - ...at rowstep 2, sampled        */
+#define T_TILE2M    PMC_T_TILE2M     /* us - ...at rowstep 2, row-merged     */
 #define T_PACKPL    PMC_T_PACKPL     /* us - one packed row -> four planes   */
 #define T_PACK1     PMC_T_PACK1      /* us - one packed row -> 1bpp          */
 #define T_SPRROW    PMC_T_SPRROW     /* us - one 16-pixel sprite row merged  */
+#define T_SPRROWM   PMC_T_SPRROWM    /* us - ...with the CGA row merge on    */
 #define T_LOGIC     PMC_T_LOGIC      /* us - one game_tick, five actors      */
 
 /* THE THREE BLIT TERMS ARE MEASURED TOO, and they had to be. The first draft
@@ -690,6 +789,12 @@ static int audit(const char *where)
  *   BLITP 224x8   7.36 ms   -> (7360 - 756) / 8 = 826 us a row at 28 columns
  *   BLIT4 224x8  48.33 ms   -> (48330 - 756) / 8 = 5947 us a row  ...
  *   BLIT1 224x8   1.21 ms   -> (1210 - 756) / 8 = 57 us a row     ... */
+/* THE WORKER'S WORST UNINTERRUPTIBLE LOCK HOLD, in ms of 4.77 MHz 8088 - the
+ * game logic plus PMC_HOLD_BANDS full-width VGA bands, which is what one chunk
+ * of a round-won flash frame really is (SPEC.md 91). It is a BUDGET and not a
+ * measurement: the row below prints what the model says and fails over this. */
+#define PMC_HOLD_MS   460
+
 #define T_BLITP_R   826.0   /* us - one band row, four planes, 28 columns    */
 #define T_BLIT4_R  5947.0   /* us - ...through the planar decoder, which a
                              *      band 224 px wide ALWAYS takes            */
@@ -710,7 +815,16 @@ static int audit(const char *where)
 /* Every per-row term above was measured at the band's full 28 columns, so a
  * narrower damage span is priced by its share of them: pmc_n_rc is the sum of
  * rows x columns over the frame's bands, and rc / 28 is "how many full-width
- * rows' worth of work was that". */
+ * rows' worth of work was that". cost_row asserts that the three per-kind
+ * counts below sum to it.
+ *
+ * AND IT IS SPLIT BY WHICH BLIT TOOK IT. A frame can use more than one - a
+ * BLITP band refused after its probe, or a BLIT1 band on a kern_small kernel,
+ * falls through to BLIT4 - and the stubs only count a call that SUCCEEDED, so
+ * both counters end non-zero. Charged one shared row count per blit kind that
+ * appeared, such a frame paid its whole count at 826 us AND again at 5,947:
+ * a ~7x overcharge on the one path these counters exist to price. pmc_n_rc_p,
+ * pmc_n_rc_1 and pmc_n_rc_4 are counted where the blit is issued. */
 /* The most expensive frame the whole drive produced, kept so the report ends
  * with the number that actually matters on a 4.77 MHz 8088. */
 static double hc_worst_ms;
@@ -718,19 +832,29 @@ static char   hc_worst[160];
 
 static void cost_row(const char *what)
 {
-    double ms, rows28 = pmc_n_rc / (double) PMC_PL_STRIDE;
+    double ms;
+
+    /* THE THREE PER-KIND ROW COUNTS MUST SUM TO THE TOTAL, which is what keeps
+     * pmc_n_rc load-bearing now that nothing prices from it: a band whose rows
+     * were charged to no blit kind (an early return that skipped a counter) or
+     * to two would leave the model silently cheap or dear, and this is one
+     * addition on a row that is printed anyway. */
+    if (pmc_n_rc_p + pmc_n_rc_1 + pmc_n_rc_4 != pmc_n_rc)
+        fail("a band's rows were priced by no blit kind, or by two");
 
     ms = (hc_fill + hc_blitp + hc_blit4 + hc_blit1 + hc_probe)
              * (T_CALL + T_THUNK)
        + pmc_n_fillrows * T_FILL_ROW + pmc_n_fillpx * T_FILL_PX
-       + pmc_n_tiles * T_TILE
+       + (pmc_n_tiles - pmc_n_tiles2) * T_TILE
+       + pmc_n_tiles2 * (pv_merge ? T_TILE2M : T_TILE2)
        + (pmc_n_pkpl / (double) PMC_PL_STRIDE) * T_PACKPL
        + (pmc_n_pk1  / (double) PMC_PL_STRIDE) * T_PACK1
-       + pmc_n_sprow * T_SPRROW
+       + (pmc_n_sprow - pmc_n_sprowm) * T_SPRROW
+       + pmc_n_sprowm * (pv_merge ? T_SPRROWM : T_SPRROW)
        + pmc_n_gtick * T_LOGIC
-       + (hc_blitp ? rows28 * T_BLITP_R : 0)
-       + (hc_blit1 ? rows28 * T_BLIT1_R : 0)
-       + (hc_blit4 ? rows28 * T_BLIT4_R : 0);
+       + (pmc_n_rc_p / (double) PMC_PL_STRIDE) * T_BLITP_R
+       + (pmc_n_rc_1 / (double) PMC_PL_STRIDE) * T_BLIT1_R
+       + (pmc_n_rc_4 / (double) PMC_PL_STRIDE) * T_BLIT4_R;
     ms /= 1000.0;
 
     printf("  %-26s calls %3d (fill %d blitp %d blit4 %d blit1 %d probe %d/%d)"
@@ -756,14 +880,16 @@ static double hc_last_ms(void)
     return (hc_fill + hc_blitp + hc_blit4 + hc_blit1 + hc_probe)
                * (T_CALL + T_THUNK)
          + pmc_n_fillrows * T_FILL_ROW + pmc_n_fillpx * T_FILL_PX
-         + pmc_n_tiles * T_TILE
+         + (pmc_n_tiles - pmc_n_tiles2) * T_TILE
+         + pmc_n_tiles2 * (pv_merge ? T_TILE2M : T_TILE2)
          + (pmc_n_pkpl / (double) PMC_PL_STRIDE) * T_PACKPL
          + (pmc_n_pk1  / (double) PMC_PL_STRIDE) * T_PACK1
-         + pmc_n_sprow * T_SPRROW
+         + (pmc_n_sprow - pmc_n_sprowm) * T_SPRROW
+         + pmc_n_sprowm * (pv_merge ? T_SPRROWM : T_SPRROW)
          + pmc_n_gtick * T_LOGIC
-         + (hc_blitp ? (pmc_n_rc / (double) PMC_PL_STRIDE) * T_BLITP_R : 0)
-         + (hc_blit1 ? (pmc_n_rc / (double) PMC_PL_STRIDE) * T_BLIT1_R : 0)
-         + (hc_blit4 ? (pmc_n_rc / (double) PMC_PL_STRIDE) * T_BLIT4_R : 0);
+         + (pmc_n_rc_p / (double) PMC_PL_STRIDE) * T_BLITP_R
+         + (pmc_n_rc_1 / (double) PMC_PL_STRIDE) * T_BLIT1_R
+         + (pmc_n_rc_4 / (double) PMC_PL_STRIDE) * T_BLIT4_R;
 }
 
 /* ...in MILLISECONDS, which is what cost_row prints and what every budget
@@ -776,6 +902,7 @@ static double hc_last_ms_ms(void)
 
 static void cost_reset(void)
 {
+    hc_hold_at = hc_hold_worst = 0.0;
     hc_fill = hc_blitp = hc_blit4 = hc_blit1 = hc_probe = hc_probe_no = 0;
     hc_clip = hc_clip_no = 0;
     hc_lock = hc_unlock = hc_yield = 0;
@@ -783,6 +910,9 @@ static void cost_reset(void)
                                          * next os88_gfx_unlock, and one
                                          * measured step is one lock hold */
     pmc_n_calls = pmc_n_tiles = pmc_n_bands = pmc_n_rows = pmc_n_rc = 0;
+    pmc_n_tiles2 = 0;
+    pmc_n_rc_p = pmc_n_rc_1 = pmc_n_rc_4 = 0;
+    pmc_n_sprowm = 0;
     pmc_n_fillpx = pmc_n_fillrows = 0;
     pmc_n_pkpl = pmc_n_pk1 = 0;
     pmc_n_spr = pmc_n_sprow = pmc_n_gtick = 0;
@@ -827,11 +957,14 @@ static void emitw(FILE *f, const char *name, const unsigned int *p, int n)
 static unsigned char vec_band[8 * PMC_BAND_ROW];
 static unsigned char vec_t1[8 * PMC_BAND_ROW];
 static unsigned char vec_t2[8 * PMC_BAND_ROW];
+static unsigned char vec_t3[8 * PMC_BAND_ROW];
 static unsigned char vec_pl[4 * PMC_PL_STEP];
 static unsigned char vec_m1[8 * PMC_PL_STRIDE];
 static unsigned char vec_sb0[8 * PMC_BAND_ROW];
 static unsigned char vec_s1[8 * PMC_BAND_ROW];
 static unsigned char vec_s2[8 * PMC_BAND_ROW];
+static unsigned char vec_s3[8 * PMC_BAND_ROW];
+static unsigned char vec_s4[8 * PMC_BAND_ROW];
 
 static void write_vectors(const char *path)
 {
@@ -847,10 +980,17 @@ static void write_vectors(const char *path)
 
     memset(vec_t1, 0xAA, sizeof vec_t1);
     memset(vec_t2, 0xAA, sizeof vec_t2);
+    memset(vec_t3, 0xAA, sizeof vec_t3);
     pmc_tile(pmc_tiles + (VEC_TILE << 4), pmc_pairs + (VEC_COLOR << 4),
-             vec_t1, 1);
+             vec_t1, 1, pmc_zmask);
+    /* rowstep 2 with NO table is the plain alternate-row sample, and it is
+     * kept as a vector of its own: the merge is a look decision this section
+     * records with its cost, so the arm it replaced has to stay measurable
+     * and testable rather than being deleted by the change. */
     pmc_tile(pmc_tiles + (VEC_TILE << 4), pmc_pairs + (VEC_COLOR << 4),
-             vec_t2, 2);
+             vec_t2, 2, 0);
+    pmc_tile(pmc_tiles + (VEC_TILE << 4), pmc_pairs + (VEC_COLOR << 4),
+             vec_t3, 2, pmc_zmask);
     memset(vec_pl, 0, sizeof vec_pl);
     pmc_pack_pl(vec_band, vec_pl, 8, pmc_planar, PMC_PL_STRIDE);
     memset(vec_m1, 0, sizeof vec_m1);
@@ -869,11 +1009,29 @@ static void write_vectors(const char *path)
 
     memcpy(vec_s1, vec_sb0, sizeof vec_s1);
     pmc_sprite(pmc_sprites + (VEC_SPR << 6), pmc_pal + VEC_SCOL * 4,
-               vec_s1 + 8, 4, 8, 0, pmc_brev);
+               vec_s1 + 8, 4, 8, 0, pmc_brev, 0);
 
     memcpy(vec_s2, vec_sb0, sizeof vec_s2);
     pmc_sprite(pmc_sprites + (VEC_SPR << 6) + 15 * 4, pmc_pal + VEC_SCOL * 4,
-               vec_s2 + 9, -8, 4, 3, pmc_brev);
+               vec_s2 + 9, -8, 4, 3, pmc_brev, 0);
+
+    /* ...AND THE SAME TWO WITH THE ROW MERGE ON, which is what the CGA layout
+     * ships (SPEC.md 91). They are vectors of their own and not replacements:
+     * the sampled arm stays reachable - pmc_band_sprites asks for it on the
+     * one row that has no partner, and the whole sampled picture is still one
+     * pv_merge away - so both arms have to stay testable.
+     *
+     * The second is the awkward one twice over: an odd destination nibble,
+     * flipx and a NEGATIVE row step, so the merge's +-4 to the dropped row is
+     * exercised with its sign the other way. Neither reaches source row 15's
+     * missing partner: forwards the last drawn row is 6 and backwards it is 9. */
+    memcpy(vec_s3, vec_sb0, sizeof vec_s3);
+    pmc_sprite(pmc_sprites + (VEC_SPR << 6), pmc_pal + VEC_SCOL * 4,
+               vec_s3 + 8, 8, 4, 0, pmc_brev, pmc_zmask);
+
+    memcpy(vec_s4, vec_sb0, sizeof vec_s4);
+    pmc_sprite(pmc_sprites + (VEC_SPR << 6) + 15 * 4, pmc_pal + VEC_SCOL * 4,
+               vec_s4 + 9, -8, 4, 3, pmc_brev, pmc_zmask);
 
     f = fopen(path, "w");
     if (!f) {
@@ -891,6 +1049,8 @@ static void write_vectors(const char *path)
     emit(f, "pv_pairs",    pmc_pairs + (VEC_COLOR << 4), 16);
     emit(f, "pv_t1_exp",   vec_t1, 8 * PMC_BAND_ROW);
     emit(f, "pv_t2_exp",   vec_t2, 4 * PMC_BAND_ROW);
+    emit(f, "pv_zmask",    pmc_zmask, 256);
+    emit(f, "pv_t3_exp",   vec_t3, 4 * PMC_BAND_ROW);
     emit(f, "pv_band",     vec_band, 8 * PMC_BAND_ROW);
     emitw(f, "pv_planar",  pmc_planar, 256);
     emit(f, "pv_pl_exp",   vec_pl, 4 * PMC_PL_STEP);
@@ -902,6 +1062,8 @@ static void write_vectors(const char *path)
     emit(f, "pv_spr_band", vec_sb0, 8 * PMC_BAND_ROW);
     emit(f, "pv_s1_exp",   vec_s1, 8 * PMC_BAND_ROW);
     emit(f, "pv_s2_exp",   vec_s2, 8 * PMC_BAND_ROW);
+    emit(f, "pv_s3_exp",   vec_s3, 8 * PMC_BAND_ROW);
+    emit(f, "pv_s4_exp",   vec_s4, 8 * PMC_BAND_ROW);
     fclose(f);
     printf("pmcuitest: wrote the composer vectors to %s\n", path);
 }
@@ -1436,6 +1598,54 @@ static void drive_lockbreak(void *win)
     pmc_dirty_all();
     pmc_flush(win, 0);
     audit("after the card stopped a break");
+
+    /* WHAT THE FIRST CHUNK ACTUALLY HOLDS, IN MILLISECONDS, and it is not four
+     * bands. os88_worker brackets the WHOLE of pmc_frame in one
+     * lock/unlock - poll, up to PMC_CATCHUP_MAX OS ticks of game, the sound
+     * frame, and only then the flush - and pmc_flush_laid breaks after
+     * PMC_HOLD_BANDS bands, so chunk one is the game logic PLUS four bands.
+     * At 18.6 ms a game_tick and up to 3.3 game ticks an OS tick that is ~130
+     * ms of computation on top of ~279 ms of four full-width VGA bands.
+     *
+     * apps/cc/os88.h's rule 3 - "a worker that computes under the lock wedges
+     * the machine" - is about exactly this, and the chunking answers only the
+     * drawing half of it. The number is printed and gated here rather than
+     * argued in a comment; SPEC.md 91 quotes this row. The round-won flash is
+     * the case, so the whole field is owed. */
+    {
+        double hold;
+
+        pmc_about_up = 0;
+        pmc_paused = 0;
+        pmc_dirty_all();
+        cost_reset();
+        hg_ticks_v += PMC_CATCHUP_MAX;  /* THE WORST CASE, not the ordinary
+                                         * one: a frame that is late carries
+                                         * PMC_CATCHUP_MAX OS ticks of game -
+                                         * 3.3 game ticks each - and that is
+                                         * the half of the hold this row is
+                                         * for. An on-time frame reads ~332 ms
+                                         * where this reads ~410 */
+        os88_gfx_lock();                /* os88_worker's own bracket */
+        pmc_frame(win);
+        os88_gfx_unlock();
+        hold = hc_hold_worst / 1000.0;
+        if (pmc_n_gtick == 0)
+            fail("the worker's frame ran no game tick, so the hold is not the "
+                 "one the machine sees");
+        if (hold < pmc_n_gtick * T_LOGIC / 1000.0)
+            fail("the measured lock hold is under the logic it contains - the "
+                 "bracket is not around the tick");
+        if (hold > PMC_HOLD_MS)
+            fail("the worker's worst uninterruptible lock hold is over "
+                 "SPEC.md 91's stated bound");
+        printf("  %-26s %.1f ms  (%u game tick(s) + %d band(s), bound %d ms)\n",
+               "worst hold, one chunk", hold, pmc_n_gtick, PMC_HOLD_BANDS,
+               PMC_HOLD_MS);
+        pmc_dirty_all();
+        pmc_flush(win, 0);
+        audit("after the timed worker frame");
+    }
 }
 
 /* drive_input - the one divergence, driven from both sides.
@@ -2021,6 +2231,64 @@ static void drive_sound(void)
     printf("  toggle         off silences at once, on brings the tune back\n");
 }
 
+/* drive_cga_arms - THE ROW MERGE PRICED ON A FRAME, both ways (SPEC.md 91).
+ *
+ * The keep/revert bound the merge shipped under is "the CGA play frame stays
+ * within 25% of the sampled path's cost", and until this row existed the only
+ * arithmetic behind it was tests/pmcband/pmcbandbench.asm's BAND row - one
+ * band of 28 tiles, with no packer, no blit, no sprite layer and no damage
+ * model around it. A frame is what the bound is written about, so a frame is
+ * what it is checked on: the same CGA instance, the same round, driven twice
+ * with pv_merge apart.
+ *
+ * The audit runs on BOTH arms - truth_px follows pv_merge - so this also says
+ * the sampled arm still draws its own correct picture, which is what makes
+ * "it is still reachable" a statement somebody could act on. */
+static void drive_cga_arms(void)
+{
+    void *win;
+    double full[2], worst[2], last;
+    int arm, i;
+
+    printf("\nCGA, the row merge priced on a FRAME:\n");
+    for (arm = 0; arm < 2; arm++) {
+        pv_merge = arm;                 /* 0 = the alternate-row sample     */
+        hg_screen(640, 200, 1, OS88_VID_CGA);
+        win = os88_main();
+        hg_obscured = 0;
+        hg_ticks_v = 0;
+        pmc_new_game();
+        cost_reset();
+        os88_paint(win);
+        full[arm] = hc_last_ms_ms();
+        if (pmc_step != 2)
+            fail("the CGA arms row is not on the alternate-row layout");
+
+        for (i = 0; i < 400 && pmc_freeze; i++)
+            tick_n(win, 1, "CGA, waiting for the round");
+        worst[arm] = 0.0;
+        for (i = 0; i < 24; i++) {
+            cost_reset();
+            tick_n(win, 1, "CGA play frame");
+            last = hc_last_ms_ms();
+            if (last > worst[arm])
+                worst[arm] = last;
+        }
+        printf("  %-26s full repaint %8.1f ms   worst play frame %7.1f ms\n",
+               arm ? "MERGED (what ships)" : "sampled", full[arm], worst[arm]);
+    }
+    pv_merge = 1;                       /* every row after this one is the
+                                         * shipping picture again           */
+    printf("  %-26s full repaint %+7.1f%%          play frame %+11.1f%%\n",
+           "the merge costs", 100.0 * (full[1] / full[0] - 1.0),
+           100.0 * (worst[1] / worst[0] - 1.0));
+    if (worst[1] > worst[0] * 1.25)
+        fail("the row merge costs a CGA play frame more than 25% - "
+             "SPEC.md 91's keep/revert bound");
+    if (full[1] > full[0] * 1.25)
+        fail("the row merge costs a CGA full repaint more than 25%");
+}
+
 int main(void)
 {
     void *win;
@@ -2047,6 +2315,10 @@ int main(void)
 
     /* CGA: 200 rows, so alternate source rows and a 4-row band. */
     drive_layout("CGA", 640, 200, 1, OS88_VID_CGA, 0, PMC_P_BLIT1, 2);
+    /* ...and drive_cga_arms(), at the END of main, prices these same CGA
+     * frames with the row merge and without it - it plays a round, and a
+     * round leaves a hiscore that the attract-screen rows below are entitled
+     * to find absent. */
 
     /* ...and a kern_small kernel, where os88_gfx_blit1 carries the slot
      * without the body: the packed band still draws through blit4. */
@@ -2141,6 +2413,54 @@ int main(void)
     if (hc_fill + hc_blitp + hc_blit4 + hc_blit1 + hc_probe != 0)
         fail("an empty damage rect drew something under the raised card");
     hg_dmg_whole = 1;
+
+    /* A WHOLE REPAINT UNDER THE RAISED CARD DRAWS THE CARD'S COMPLEMENT.
+     *
+     * This is the row that was missing, and its absence is why the defect
+     * lived: the only card-up paint driven here set hg_dmg_whole = 0 first, so
+     * a whole rect under a raised card was never costed. Unnarrowed it is
+     * 1,008 tiles - 2,480.6 ms of VGA XT - of which the card covers all but
+     * four pixels at each edge on VGA and all but two tile columns on CGA:
+     * drawn, and then immediately covered by os88_about_card_d.
+     *
+     * The expected tile count is recomputed HERE from the four words
+     * pmc_ab_box answered with, so this row checks pmc_dirty_not_card's loop
+     * and not merely that something was spared. */
+    {
+        int ty, want_t = 0;
+
+        cost_reset();
+        n = hc_about_d;
+        os88_paint(win);
+        if (hc_about_d != n + 1)
+            fail("a whole repaint under the raised card did not redraw it");
+        for (ty = 0; ty < PMC_TILES_Y; ty++) {
+            if (ty < pmc_ab_ty0 || ty > pmc_ab_ty1) {
+                want_t += PMC_TILES_X;
+                continue;
+            }
+            if (pmc_ab_c0 > 0)
+                want_t += pmc_ab_c0;
+            if (pmc_ab_c1 < PMC_TILES_X - 1)
+                want_t += PMC_TILES_X - 1 - pmc_ab_c1;
+        }
+        if (want_t >= PMC_TILES_X * PMC_TILES_Y)
+            fail("the About card spared no tile at all, so this row is empty");
+        if ((int) pmc_n_tiles != want_t)
+            fail("a whole repaint under the raised card did not compose "
+                 "exactly the card's complement");
+        cost_row("whole repaint, card up");
+    }
+
+    /* ...AND THE TWO HALVES COVER THE FIELD BETWEEN THEM. The complement left
+     * the card's own rect undrawn on purpose; pmc_ab_mark is what owes it back
+     * when the card comes down, and the audit is what says the two rectangles
+     * meet. It is also the only check on pmc_ab_box's slack being the RIGHT
+     * WAY ROUND: a subset that was really a superset leaves a hole here. */
+    pmc_abdismiss(win);
+    pmc_flush(win, 0);
+    audit("the card's complement plus what the card covered");
+    os88_about(win);                    /* put it back for the rows below */
 
     /* A NEW GAME UNDER THE RAISED CARD MAY NOT RUB A HOLE IN IT, which is the
      * same defect one call site along from the paint the interlock above
@@ -2589,17 +2909,26 @@ int main(void)
         printf(" %-27s %u recolour(s) of %d flash tick(s)\n",
                "round-won flash:", ran, elig);
     }
+    /* THE ROW MERGE ON A FRAME, last because it plays a round of its own. */
+    drive_cga_arms();
+
     printf("\n  worst frame: %s\n               %.1f ms of 4.77 MHz 8088\n",
            hc_worst, hc_worst_ms);
 
     write_vectors("build/pmcbandvec.inc");
 
-    printf("\npmcuitest: %s (%d failure(s))%s\n",
+    printf("\npmcuitest: %s (%d failure(s))%s%s\n",
            hg_fails ? "FAIL" : "PASS", hg_fails,
            PMC_T_BENCHED
              ? (PMC_SPR_BENCHED ? ""
                 : "   [the SPRITE and LOGIC terms are 0: every play row above "
                   "understates its frame]")
-             : "   [composer terms are 0: run `make pmcbandbench`]");
+             : "   [composer terms are 0: run `make pmcbandbench`]",
+           PMC_T2_BENCHED
+             ? (PMC_SPRM_BENCHED ? ""
+                : "   [the MERGED sprite-row term is 0: every CGA row above "
+                  "understates its sprite layer]")
+             : "   [the two rowstep-2 TILE terms are 0: every CGA row above "
+               "understates its tiles]");
     return hg_fails ? 1 : 0;
 }
