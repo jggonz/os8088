@@ -5,14 +5,14 @@ arcade-faithful C99 Pac-Man at <https://github.com/floooh/pacman.c> — for
 os8088. Package `PACCMAN`, product name **PaccMan**. `SPEC.md` §91 is the
 contract and `docs/PACCMAN-PORT-PLAN.md` the design record.
 
-> **What is in the build on this disk.** It draws the arcade field and the
-> `HIGH SCORE` / `PLAYER ONE` / `READY!` screen, in colour or on either 1bpp
-> adapter, and `New Game` and `Full Screen` work. **Play, the attract screen
-> and the sound arrive in later waves** — so the keys, the movement rules,
-> the ghosts and the three-voice reduction described below are what the port
-> *is*, not yet what this floppy *does*. `Pause` and `Sound` are greyed with
-> that fact. This paragraph is deleted by the wave that makes the rest of the
-> document true.
+> **What is in the build on this disk.** It PLAYS, in colour or on either
+> 1bpp adapter: the round, the keys, the movement rules, the four ghosts and
+> their dot counters, the score and the reserve strip, and `New Game`,
+> `Pause`/`Resume` and `Full Screen` all act. **The attract screen and the
+> sound arrive in later waves** — so the intermission-free chase described
+> below and the three-voice reduction are what the port *is*, not yet what
+> this floppy *does*, and `Sound` is greyed with that fact. This paragraph is
+> deleted by the wave that makes the rest of the document true.
 
 The reference commit is **`0f5ec5a384c1988d9889046d92e615219e1cf3b4`**
 (2 Jul 2026). That hash is pinned in `tools/paccman_assets.py`, printed in
@@ -115,19 +115,38 @@ reference.** There is no buffered turn. It changes the feel against
 
 ## The Game menu
 
-`New Game`, `Pause`, `Sound Off`/`Sound On` (the string follows the state),
+`New Game`, `Pause`/`Resume` (the string follows the state), `Sound`,
 `Full Screen`. The reference has no menu at all — `sokol_main` asks for a bare
 window — so every item is an addition, and the shape is the one `apps/pacman`
 already set on this system.
 
-**`Pause` and `Sound` are greyed while this build has no game in it** (§47
-greys a *fact*, and its rule 3 makes the label say why not): there is no tick
-loop yet, so `Pause` has nothing to pause, and the sound file is a stub, so
-`Sound` has nothing to silence. Both read `(No Game)`, because it is the same
-fact. `New Game` and `Full Screen` act and are live. The machine is never the
-reason — `osapi_snd_caps` answers a constant on every kernel this OS boots —
-so the wave that gives each a body deletes the marker byte and the reason,
-and nothing else moves.
+**`New Game`, `Pause` and `Full Screen` act. `Sound` is greyed** (§47 greys a
+*fact*, and its rule 3 makes the label say why not): `pmc_snd.c` is a wave-3
+stub, so there is no sound code in the image at all to silence, and the item
+reads `Sound (No Sound Yet)`. **The machine is never the reason** —
+`osapi_snd_caps` answers a constant on every kernel this OS boots — so the
+wave that gives it a body deletes the marker byte and the reason, and nothing
+else moves. The item **names its subject and claims no state**: `Sound Off
+(...)` is an imperative that asserts sound is currently *on*, in an image with
+no sound in it, and the kernel refuses a click on a `MENU_DIS` item before the
+package is reached, so a pair of labels could never have flipped anyway.
+
+`Pause` was greyed with a reason of its own until wave 2 gave it a tick loop
+to stop; un-greying it was the deletion of one marker byte and one reason.
+Both items shared the reason `(No Game)` in wave 1, which is what made
+re-wording necessary: with Pac-Man moving on the glass, an item asserting
+there is no game is a greyed label saying something false. A shared reason is
+a liability the moment the two items stop sharing a wave.
+
+**A paused window says so in the item label, and that is the only place it
+can.** The kernel has no check-mark marker, PaccMan has no status line — its
+content is the arcade field — and the title does not change, so a paused
+window would otherwise be pixel-identical to a hung one; `apps/pacman` puts
+`PAUSED - P OR SPACE TO RESUME` in its own footer for the same reason. The
+item reads `Pause` while the game runs and `Resume` while it is stopped, and
+**`SPACE` resumes as well as `P`**, which is `apps/pacman`'s binding rather
+than one invented here. The About card advertises `P` alone because its lines
+are bounded at 23 characters by the 224-pixel content box.
 
 **The About card is dismissed by any key and by any menu command.** The
 standard card only *draws*; the flag and the dismissal belong to the package
@@ -168,6 +187,22 @@ reference's reason and is a recorded follow-up, not a defect:
 - **The hiscore lives for the instance.** The reference has no file I/O of any
   kind — no hiscore file, no config, no save — and neither does this. A
   `SYSTEM/APPDATA` record (§19.9) is a follow-up, not a port item.
+- **Five actors render in four colours, and one of them shows no eyes.**
+  `tools/paccman_assets.py` maps each arcade colour to the nearest of the OS's
+  sixteen (§39) by Euclidean RGB distance, and three pairs land on the same
+  one: **Pinky's body and eye-whites** are both white, so the ghost is a white
+  blob with two floating blue pupils; **Clyde and Pac-Man** are both the same
+  yellow; and **Pinky and a blinking frightened ghost** are both white, so a
+  ghost about to stop being edible reads like a normal one. Blinky is red and
+  Inky cyan. The metric is not at fault — Pinky's arcade colour is
+  (255, 184, 222), which is **6,130** from white against **10,890** from light
+  magenta, and light magenta is further by every distance. (No arcade colour
+  can have blue 255: the hardware palette is 3-3-2 and blue gets two bits,
+  `0x47 + 0x97` = 222.) The only fix is an explicit per-block override, which
+  is a trade against the arcade look and is recorded in SPEC.md §91 as a
+  decision rather than taken here — and for Clyde it is a **legibility** trade
+  and not a distance one: brown `0x06` is 22,067 away where the yellow it
+  would replace is 5,237.
 
 ## Layout, per adapter
 
@@ -192,8 +227,8 @@ adapters of four.
 
 A frame's damage is the set of tiles a `vid_*` write actually changed —
 **compare-then-write: a write that changes nothing marks nothing** — coalesced
-into one column span per 8-row band. Each dirty band is composed in an
-896-byte scratch by `pmcband.inc`'s assembly loops and sent with **one** blit:
+into **two** column spans per 8-row band. Each dirty span is composed in a
+960-byte scratch by `pmcband.inc`'s assembly loops and sent with **one** blit:
 
 - `OSAPI_GFX_BLITP` (four bitplanes) on a colour display, when nothing covers
   the window and the probe says the rect would be taken;
@@ -262,18 +297,53 @@ through `BLIT4`: **a wash.**
 That is the outcome `docs/PACCMAN-PORT-PLAN.md` named as its first risk, with
 the answer already decided: *"If the bench shows the repack dominating, sprites
 compose straight into planar on the colour path and packed stays for the 1bpp
-adapters only."* Wave 2 composes into planar directly, and the arithmetic
-above is why. **No fps figure is claimed here** — wave 4 measures
-`PACCMAN.O88` beside `PACMAN.O88` on the same MartyPC profile and prints the
-verdict either way.
+adapters only."* **That is still owed** — wave 2's subject was the game, and
+the arithmetic above is the case for taking it. **No fps figure is claimed
+here** — wave 4 measures `PACCMAN.O88` beside `PACMAN.O88` on the same MartyPC
+profile and prints the verdict either way.
+
+### A frame, and the worker's stack
+
+Measured by `apps/paccman/hosttest/pmcuitest.c` on VGA at the shipped size,
+against a whole repaint of **36 bands, 1,008 tiles, 2,496 ms**:
+
+| | calls | bands | tiles | ms |
+|---|---|---|---|---|
+| a play frame | 23 | 18 | 46 | **131.2** |
+| the frame a dot goes in | 19 | 15 | 46 | 128.0 |
+| worst of 24 consecutive | — | — | — | **144.3** |
+| a menu dismissed over three tile rows | 4 | 3 | 84 | 208.7 |
+| the About card dismissed | 21 | 20 | 560 | **1,386.8** |
+| one tile changed | 2 | 1 | 1 | 4.1 |
+| nothing written at all | 0 | 0 | 0 | **0.0** |
+
+Dismissing the About card marks only the bands the card covered — 20 of 36,
+including a band of slack each side of the widget's own measurement — where
+re-marking the whole field would be the 2,496 ms of a full repaint, from an
+ordinary keystroke. `tests/unit/t_paccman.py` pins the two constants that
+measurement mirrors against `apps/os88ui.inc`'s own.
+
+**Those milliseconds understate the frame**: the sprite composer's term and
+the game logic's are still zero in the table, and the harness's closing line
+says so by name rather than letting a plausible number stand.
+
+`tests/paccman.py` measures the worker's own stack slice on MartyPC:
+**162–164 of 256 on an XT with VGA and 170 on a 5150 with CGA**, against the
+208 the row asserts and the `OS88_STACK_256` the package declares.
 
 ### Size
 
-`os88pkg: 'PACCMAN' entry=+0x0060 image=21844 bss=4498 icon=yes assoc=0` —
-26,342 of the 61,440 `APP_MAX_SIZE` allows, with the game logic, the intro and
-the sound still to come. About 17 KB of the image is the arcade tables. The
-overlay trigger is 50,000 on that line; `pmc_intro.c` is the first `ovl_*`
+`os88pkg: 'PACCMAN' entry=+0x0060 image=37332 bss=5188 icon=yes assoc=0` —
+**42,520** of the 61,440 `APP_MAX_SIZE` allows, with the intro and the sound
+still to come. About 17 KB of the image is the arcade tables, which do not
+grow. **§73.14's split trigger is 55,000 resident bytes — image *plus* bss —
+and this line is 12,480 away from it**; `pmc_intro.c` is the first `ovl_*`
 candidate, being once-per-attract code a keystroke never touches.
+
+That line is re-pasted from the build each wave and never typed — it is the
+number §73.14's overlay trigger is read off, and it appears here and in
+SPEC.md §91, which must agree word for word. Wave 1 was `image=21844
+bss=4498`, 26,342 of 61,440.
 
 ## The checks
 

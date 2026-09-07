@@ -60,6 +60,14 @@
  * own PMC_BAND_W, and tests/unit/t_paccman.py reads both files in the fast
  * tier and fails if they disagree. If they ever do, pmcband.inc is right. */
 #define PMC_BAND_STRIDE  (PMC_FIELD_W / 2)       /* 112 - packed 4bpp        */
+#define PMC_BAND_PAD     4                       /* 8 px of slack each side  */
+#define PMC_BAND_ROW     (PMC_BAND_STRIDE + 2 * PMC_BAND_PAD)  /* 120: the
+                                                  * row PITCH, which is not
+                                                  * the row WIDTH. A sprite
+                                                  * hangs 8 px off the field
+                                                  * at the tunnel mouth and
+                                                  * the slack is what lets
+                                                  * _pmc_sprite never clip */
 #define PMC_PL_STRIDE    (PMC_FIELD_W / 8)       /* 28  - one plane's row    */
 #define PMC_PL_STEP      (PMC_PL_STRIDE * 8)     /* 224 - plane to plane     */
 
@@ -108,6 +116,9 @@ void pmc_pack_pl(const unsigned char *band, unsigned char *planes, int rows,
                  const unsigned int *planar, int cols);
 void pmc_pack_1(const unsigned char *band, unsigned char *bits, int rows,
                 const unsigned char *mono2, int y0, int cols);
+void pmc_sprite(const unsigned char *src, const unsigned char *pal4,
+                unsigned char *dst, int sinc, int rows, int flags,
+                const unsigned char *brev);
 
 static void pmc_clean(void);
 static void pmc_dirty_all(void);
@@ -123,15 +134,29 @@ static void pmc_vid_color_text(int x, int y, int color, const char *s);
 static void pmc_vid_text(int x, int y, const char *s);
 static void pmc_vid_quad(int x, int y, int color, int tile);
 static void pmc_init_playfield(void);
+static void pmc_vid_color_char(int x, int y, int color, int c);
+static void pmc_vid_score(int x, int y, int color, const unsigned char *d);
+static void pmc_vid_fruit_score(int fruit);
 static void pmc_game_init(void);
-static void pmc_sound_item(void);
+static void pmc_new_game(void);
+static void pmc_game_tick(void);
+static int  pmc_input_dir(int def);
+static void pmc_poll_input(void);
+static void pmc_mark_sprites(void);
+static void pmc_mark_rect(int sx, int sy);
+static void pmc_band_sprites(int ty, int c0, int c1);
+static void pmc_widen(int ty);
+static void pmc_brev_init(void);
+static void pmc_frame(void *win);
+static void pmc_pause_item(void);
+static void pmc_ab_mark(void *win);
 static int  pmc_abdismiss(void *win);
 static int  pmc_layout(void *win);
 static void pmc_pick_path(void *win);
 static void pmc_draw_band(int ty, int c0, int c1);
 static int  pmc_dirty_any(void);
-static void pmc_flush_laid(void *win);
-static void pmc_flush(void *win);
+static void pmc_flush_laid(void *win, int brk);
+static void pmc_flush(void *win, int brk);
 static void pmc_fill_clip(int x1, int y1, int x2, int y2,
                           int cx1, int cy1, int cx2, int cy2);
 static void pmc_letterbox(int cx1, int cy1, int cx2, int cy2);
@@ -155,6 +180,23 @@ static int  pmc_repaint(void *win);
  * state lives, because pmc_draw.c reads it and is #included first - and a
  * static has no forward declaration in C. */
 static int pmc_about_up;
+
+/* Whether the game is stopped. It lives HERE and not with the rest of the
+ * chrome's state in pmc_menu.c for pmc_about_up's reason: pmc_new_game reads
+ * it and pmc_game.c is #included first.
+ *
+ * NEW GAME CLEARS IT, which is apps/pacman's own behaviour (`pm_new` clears
+ * `pm_pause` before `pm_board`) and not a choice made here. Without it,
+ * choosing Game > New Game while paused draws the fresh maze, PLAYER ONE and
+ * READY! from pmc_game_init and then nothing at all - no score, no sprites,
+ * no reserve strip - because pmc_frame's guard skips the whole tick path.
+ * Seen on the glass as a window that looks broken; Pause is a state the user
+ * set on the game they just discarded. */
+static int pmc_paused;
+
+/* Whether os88_worker() is running yet. os88_paint hires it; see the comment
+ * there for why it cannot be os88_main. */
+static int pmc_hired;
 
 /* --- the translation unit, in dependency order ---------------------------
  * `nasm -f bin` has no notion of an external symbol, so a C package is ONE
@@ -208,14 +250,103 @@ void *os88_main(void)
                                    * fill the arcade field would cover      */
     os88_wm_minsize(win, PMC_WIN_W, h);
 
-    pmc_sound_item();
+    pmc_pause_item();
     os88_menu_set(win, &pmc_mset);
     os88_about_set(win);
 
     os88_key_down(0);             /* arm the map; the answer means nothing  */
 
-    pmc_game_init();
+    pmc_brev_init();
+    pmc_new_game();
     return win;
+}
+
+/* ==========================================================================
+ * THE WORKER, AND THE TWO CLOCKS IT STANDS BETWEEN
+ *
+ * The arcade runs at 60 Hz and this machine's tick is 18.2 (SPEC.md 8), so a
+ * frame here is 3.3 game ticks at best and eleven on a 4.77 MHz XT drawing a
+ * wide band. The loop below is apps/pacman's pm_worker (SPEC.md 89.2) - sleep
+ * to a DEADLINE, re-anchor when late rather than burst - with the accumulator
+ * of pmc_time.c on top of it: PMC_CATCHUP_MAX caps a single frame's game time
+ * at two OS ticks, so a slow adapter runs the game SLOWLY instead of in jumps
+ * and every sprite stays within a tile of where it was last drawn.
+ *
+ * THE CHAIN IS FLAT ON PURPOSE. os88_worker -> pmc_frame -> pmc_game_tick ->
+ * pmc_update_actors -> a ghost step -> pmc_can_move is the deepest it goes,
+ * and the DRAW hangs off pmc_frame beside pmc_game_tick rather than under it,
+ * so the two never add up. The package declares OS88_STACK_256 and that is
+ * what pays for it (SPEC.md 91).
+ * ========================================================================*/
+
+static unsigned pmc_last;       /* the OS tick the last frame was taken at */
+
+/* pmc_frame - one drawn frame. The gfx lock is HELD by the worker around it.
+ *
+ * The focus test is apps/pacman's: a game that keeps running under another
+ * window is a game the user cannot see losing lives (SPEC.md 89.2). Time is
+ * re-anchored FIRST, so coming back into focus resumes rather than lurches.  */
+static void pmc_frame(void *win)
+{
+    unsigned now, el;
+
+    now = os88_ticks();
+    el = now - pmc_last;
+    pmc_last = now;
+
+    /* ONE EXIT, AND IT IS AN INSTRUMENT'S REQUIREMENT AS MUCH AS A STYLE.
+     * tools/stkdepth.py walks a routine linearly and stops at the first `ret`
+     * (its own docstring says so), so an early return above the deep calls
+     * hides the whole tick path from it: this same body written with three
+     * `return`s priced the worker's chain at 14 bytes instead of 118. The
+     * measurement that sizes OS88_STACK_256 has to be able to see the chain
+     * it is sizing. */
+    if (os88_wm_top() == win && !pmc_paused && !pmc_about_up) {
+        if (el > PMC_CATCHUP_MAX)
+            el = PMC_CATCHUP_MAX;
+        while (el-- > 0)
+            pmc_acc += PMC_ACC_PER_OS;
+
+        if (pmc_acc >= PMC_ACC_PER_GAME) {
+            pmc_poll_input();
+            while (pmc_acc >= PMC_ACC_PER_GAME) {
+                pmc_acc -= PMC_ACC_PER_GAME;
+                pmc_tick_inc();
+                PMC_COUNT(pmc_n_gtick, 1);
+                if (pmc_mode == PMC_MODE_GAME)
+                    pmc_game_tick();
+            }
+            pmc_mark_sprites();
+        }
+        pmc_flush(win, 1);      /* THE WORKER's flush: it may break its own
+                                 * lock hold between chunks of bands. Every
+                                 * other caller here is inside a kernel
+                                 * callback and passes 0. */
+    }
+}
+
+void os88_worker(void *win)
+{
+    unsigned due;
+
+    pmc_last = os88_ticks();
+    due = pmc_last;
+    for (;;) {
+        os88_task_alive(win);           /* never under the lock */
+        due++;
+        {
+            unsigned t = os88_ticks();
+            int d = (int) (due - t);
+            if (d > 0)
+                os88_task_sleep(d);
+            else
+                due = t;                /* late: re-anchor, never burst */
+        }
+        os88_gfx_lock();
+        pmc_frame(win);
+        os88_gfx_unlock();
+        os88_task_yield();              /* let a waiting UI handler in */
+    }
 }
 
 /* os88_paint - the gfx lock is held. Everything the window shows is the two
@@ -232,6 +363,14 @@ void *os88_main(void)
  * paint's own damage region armed and os88_about_card would throw it away. */
 void os88_paint(void *win)
 {
+    /* THE WORKER IS HIRED HERE and not in os88_main: os88_task_spawn wants a
+     * callback with the gfx lock held, and os88_main has neither (apps/cc/
+     * os88.h). A refusal is normal and transient - the twelve-slot task table
+     * can be full - so the flag is only set once the spawn took, and the next
+     * paint asks again. */
+    if (!pmc_hired && os88_task_spawn(win) == 0)
+        pmc_hired = 1;
+
     if (pmc_repaint(win) && pmc_about_up)
         os88_about_card_d(win, pmc_about_lines);
 }
@@ -281,15 +420,48 @@ void os88_onkey(int ascii, int scan, void *win)
         os88_fullscreen(win, 0);
         return;
     }
-    if (scan == PMC_SC_P) {
+    /* SPACE RESUMES TOO, which is the precedent's binding and not one made
+     * here: apps/pacman/pacman.asm advertises 'PAUSED - P OR SPACE TO RESUME'
+     * and accepts both. The About card cannot say so - its lines are bounded
+     * at 23 characters by the 224-pixel content box (pmc_menu.c) - so the
+     * label swap is where the state is read, and SPACE is the second key a
+     * player arriving from PAC-MAN will reach for. The reference binds
+     * neither: pacman.c has no pause at all. */
+    if (scan == PMC_SC_P || scan == PMC_SC_SPACE) {
         pmc_paused = !pmc_paused;
+        pmc_pause_item();       /* the ONLY place a paused window says so */
         return;
     }
     if (scan == PMC_SC_N) {
-        pmc_game_init();
-        pmc_flush(win);
-        return;
+        pmc_new_game();
+        return;                 /* the WORKER draws it: see os88_oncmd's
+                                 * PMC_CMD_NEW for why this is not flushed
+                                 * from inside the callback */
     }
+
+    /* THE STEERING IS A LEVEL AND THIS IS ITS ONE DIVERGENCE. input_dir reads
+     * the four keys' held state on EVERY game tick (pacman.c 926-946) and a
+     * frame here is 3 to 11 game ticks long, so a tap shorter than a frame
+     * would never be seen by os88_key_down at all. A press therefore LATCHES
+     * until the next frame's poll and is then folded into that frame's held
+     * state - a tap becomes exactly one frame of 'held', nothing more, and a
+     * hold released before a junction is still forgotten as in the reference
+     * (SPEC.md 91). There is no buffered turn.
+     *
+     * ONE BYTE, WRITTEN BY THE UI TASK AND CLEARED BY THE WORKER, which is
+     * the only shared state the two have and is why it is a single byte with
+     * single-byte writes on both sides. The window between the worker's read
+     * and its clear can drop a press that arrives inside it; the cost of that
+     * is one lost tap on one frame, and the price of closing it is a lock the
+     * worker is not allowed to take. */
+    if (scan == PMC_SC_UP || scan == PMC_SC_W)
+        pmc_latch |= PMC_IN_UP;
+    else if (scan == PMC_SC_DOWN || scan == PMC_SC_S)
+        pmc_latch |= PMC_IN_DOWN;
+    else if (scan == PMC_SC_LEFT || scan == PMC_SC_A)
+        pmc_latch |= PMC_IN_LEFT;
+    else if (scan == PMC_SC_RIGHT || scan == PMC_SC_D)
+        pmc_latch |= PMC_IN_RIGHT;
 }
 
 /* os88_oncmd - the Game menu. The gfx lock is held.
@@ -302,27 +474,53 @@ void os88_onkey(int ascii, int scan, void *win)
  * would then compose them a second time. `down` carries the case where no
  * command drew: the card is gone and something has to put the field back.
  *
- * Pause and Sound are greyed (pmc_menu.c) and kernel/menu.inc refuses a click
- * on a MENU_DIS item before this is reached; the early return says it twice. */
+ * Sound alone is greyed (pmc_menu.c) and kernel/menu.inc refuses a click on a
+ * MENU_DIS item before this is reached; the early return says it twice. */
 void os88_oncmd(int item, int menu, void *win)
 {
     int down;
 
     (void) menu;
 
-    if (item == PMC_CMD_PAUSE || item == PMC_CMD_SOUND)
+    if (item == PMC_CMD_SOUND)          /* still greyed: wave 3 gives it a
+                                         * body, and kernel/menu.inc has
+                                         * already refused the click */
         return;
 
     down = pmc_about_up;
     if (down) {
         pmc_about_up = 0;
-        pmc_dirty_all();
+        pmc_ab_mark(win);       /* what the card COVERED, not the whole field
+                                 * - pmc_menu.c has the arithmetic */
     }
 
-    if (item == PMC_CMD_NEW) {
-        pmc_game_init();
-        pmc_flush(win);
+    if (item == PMC_CMD_PAUSE) {
+        pmc_paused = !pmc_paused;
+        pmc_pause_item();       /* the ONLY place a paused window says so */
+        if (down)
+            pmc_flush(win, 0);  /* nothing else is coming: a paused window
+                                 * runs no frames, so the card's rect would
+                                 * stay on the glass */
         return;
+    }
+    if (item == PMC_CMD_NEW) {
+        pmc_new_game();
+        return;                 /* THE WORKER DRAWS IT, AND THAT IS THE WHOLE
+                                 * POINT OF pmc_flush's `brk`. Flushing here
+                                 * would compose all 36 bands under ONE
+                                 * uninterruptible hold of the kernel's gfx
+                                 * lock - ~2.5 s of XT in which nothing else
+                                 * on the machine can draw - and a callback's
+                                 * lock is not ours to drop (pmc_draw.c), so
+                                 * the chunked path is unavailable in here.
+                                 * pmc_new_game has marked the field and
+                                 * cleared pmc_paused, `down` has cleared
+                                 * pmc_about_up, and a menu command implies we
+                                 * are top, so pmc_frame's guard passes and
+                                 * the next frame - at most one OS tick, 55 ms
+                                 * - draws it chunked and interruptible. The
+                                 * two `if (down)` flushes below are the cases
+                                 * where NO frame is coming. */
     }
     if (item == PMC_CMD_FULL) {
         pmc_full = !pmc_full;
@@ -330,12 +528,12 @@ void os88_oncmd(int item, int menu, void *win)
             pmc_full = 0;
             os88_toast("Another window is full screen.", 36);
             if (down)
-                pmc_flush(win);   /* refused, so no repaint is coming and the
+                pmc_flush(win, 0);   /* refused, so no repaint is coming and the
                                    * card's rect is still on the glass */
         }
         return;                   /* it was taken: the kernel repaints us */
     }
     if (down)
-        pmc_flush(win);           /* a command that drew nothing, with the
+        pmc_flush(win, 0);           /* a command that drew nothing, with the
                                    * card just taken down */
 }

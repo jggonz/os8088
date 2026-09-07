@@ -684,6 +684,20 @@ SOAK = [
     Row("pacman", "soak", py("tests/pacman.py"), 100.0,
         "native 8088 Pac-Man movement, score, pellets, fruit, level transitions, "
         "pause, full-screen repaint and worker teardown", needs=("marty",)),
+    Row("paccman", "soak", py("tests/paccman.py"), 100.0,
+        "PACCMAN's tick path on a cycle-accurate 8088 (SPEC.md 91): the "
+        "worker hired by the first paint, the game advancing with nobody "
+        "touching it, dots eaten, the reserve strip down a life, and the row "
+        "step this ADAPTER needs (2 on CGA, 1 everywhere else). Two of those "
+        "are things the host harness structurally cannot answer - it drives "
+        "pmc_frame() itself and models the glass, so it never runs a real "
+        "worker on a real scheduler - and the third is the measurement that "
+        "sizes OS88_STACK_256: tools/stkdepth.py composes a 142-byte static "
+        "chain, and the water mark in the worker's own slice is the only "
+        "thing that says the interrupt floor on top of it fits. SOAK and not "
+        "full, deliberately: `make test-full` measured 597.4 s of its 600 s "
+        "budget before this wave, so a hundred-second row belongs where "
+        "there is no wall clock to overrun", needs=("marty", "cc")),
     Row("weavevm", "soak", py("tests/weavevm.py"), 20.0,
         "WEAVE-SPEC 12.3: the SHIPPING apps/weave/wvm.inc run in a raw-QEMU "
         "BOOT SECTOR with SS != DS and no OS under it at all, diffed case by "

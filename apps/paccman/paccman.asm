@@ -52,7 +52,10 @@
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *)
 %define CC_HAS_MENUS                ; void os88_oncmd(int, int, void *)
 %define CC_HAS_ABOUT                ; void os88_about(void *)
-%define CC_STACK_CLASS OS88_STACK_256 ; the worker (wave 2) asks for 256: a 384
+%define CC_HAS_WORKER               ; void os88_worker(void *) - the game loop,
+                                    ; hired by os88_paint (the gfx lock has to
+                                    ; be held, so os88_main cannot do it)
+%define CC_STACK_CLASS OS88_STACK_256 ; the worker asks for 256: a 384
                                     ; request can be REFUSED when both 384
                                     ; slices are held (docs/PACCMAN-PORT-PLAN.md)
                                     ; and NOT: CC_HAS_ONCLICK,

@@ -153,13 +153,22 @@ def main():
     # --- ONE FACT, TWO FILES ------------------------------------------------
     band = open(BAND).read()
     main_c = open(MAIN).read()
-    want = {"BAND_STRIDE": 112, "PL_STRIDE": 28, "PL_STEP": 224}
+    # BAND_ROW is the row PITCH and BAND_STRIDE the row WIDTH, and the two
+    # differ by PMC_BAND_PAD at each end - eight pixels of slack a sprite at
+    # the tunnel mouth hangs into, which is what lets _pmc_sprite never clip
+    # (SPEC.md 91). Getting those two the wrong way round in one of the two
+    # files would compose every band at the wrong pitch, which is the kind of
+    # thing that draws a plausible picture and is wrong everywhere.
+    want = {"BAND_STRIDE": 112, "BAND_PAD": 4, "BAND_ROW": 120,
+            "PL_STRIDE": 28, "PL_STEP": 224}
     for key, n in want.items():
         m = re.search(r'^PMC_%s\s+equ\s+(.+?)\s*(?:;|$)' % key, band, re.M)
         if not check(m, "pmcband.inc defines PMC_%s" % key):
             continue
         # `(PMC_BAND_W / 2)` and friends: evaluate with PMC_BAND_W = 224
         expr = m.group(1).replace("PMC_BAND_W", "224") \
+                         .replace("PMC_BAND_STRIDE", "112") \
+                         .replace("PMC_BAND_PAD", "4") \
                          .replace("PMC_PL_STRIDE", "28")
         eq(eval(expr, {"__builtins__": {}}), n,
            "pmcband.inc's PMC_%s is %d" % (key, n))
@@ -167,6 +176,39 @@ def main():
         eq(bool(re.search(r'#define\s+PMC_%s\b' % key, main_c)), True,
            "paccman.c mirrors PMC_%s" % key,
            why="two copies of one fact; if they differ, pmcband.inc is right")
+
+    # --- AND THE ABOUT CARD'S TWO NUMBERS, WHICH ARE SOMEBODY ELSE'S --------
+    # pmc_menu.c's pmc_ab_mark re-marks only the bands the About card covered
+    # rather than all 36 (~2.5 s of XT from an ordinary keystroke), and it can
+    # only do that by mirroring the widget's own measurement: apps/os88ui.inc
+    # sizes the card at `lines * OS88UI_ABLH + 2 * OS88UI_ABPADY`, clamped to
+    # the content box. Those two equs are not PACCMAN's to change and nothing
+    # else would notice if they moved - the card would simply be measured
+    # wrongly by a package, and the residue would be a strip of card left on
+    # the field, on one adapter, after a keystroke. So they are pinned here.
+    # The line pitch also appears in pmc_ab_mark as `(n << 3) + (n << 2)`,
+    # because tools/cc8086.py refuses `imul ax, ax, 12`.
+    ui = open(os.path.join(ROOT, "apps/os88ui.inc")).read()
+    menu_c = open(os.path.join(ROOT, "apps/paccman/pmc_menu.c")).read()
+    for key, name in (("ABLH", "LH"), ("ABPADY", "PADY")):
+        m = re.search(r'^OS88UI_%s\s+equ\s+(\d+)' % key, ui, re.M)
+        if not check(m, "apps/os88ui.inc defines OS88UI_%s" % key):
+            continue
+        m2 = re.search(r'^#define\s+PMC_AB_%s\s+(\d+)' % name, menu_c, re.M)
+        if not check(m2, "pmc_menu.c mirrors it as PMC_AB_%s" % name):
+            continue
+        eq(int(m2.group(1)), int(m.group(1)),
+           "PMC_AB_%s mirrors OS88UI_%s (%s)" % (name, key, m.group(1)),
+           why="the About card's own measurement; if they differ, "
+               "apps/os88ui.inc is right and pmc_ab_mark leaves card residue")
+    lh = re.search(r'#define\s+PMC_AB_LH\s+(\d+)', menu_c)
+    sh = re.search(r'h\s*=\s*\(n\s*<<\s*(\d+)\)\s*\+\s*\(n\s*<<\s*(\d+)\)', menu_c)
+    if check(lh and sh, "pmc_ab_mark multiplies the line count by a shift pair"):
+        eq((1 << int(sh.group(1))) + (1 << int(sh.group(2))), int(lh.group(1)),
+           "the shift pair is PMC_AB_LH (%s)" % lh.group(1),
+           why="the constant says the fact and the shifts do the arithmetic, "
+               "because tools/cc8086.py refuses `imul ax, ax, 12`; if they "
+               "drift the card is measured at the wrong pitch")
 
     # --- and the whole file against the extractor, when that is possible ----
     ref = os.environ.get("PACMANC_SRC")

@@ -21,7 +21,7 @@
  *
  * What is NOT carried from it is its 28,160-byte persistent canvas. The damage
  * span of a band is exactly the set of tiles that would have to be recomposed
- * into a canvas anyway, so an 896-byte band scratch does the same work in 3%
+ * into a canvas anyway, so a 960-byte band scratch does the same work in 3%
  * of the memory (SPEC.md 91).
  *
  * ---------------------------------------------------------------------------
@@ -53,21 +53,53 @@
  * so asking again next frame is the intended use.
  * ==========================================================================*/
 
-/* --- the scratch (SPEC.md 91: 896 + 896 + 224 bytes, all bss) ------------- */
-static unsigned char pmc_band[8 * PMC_BAND_STRIDE];     /* packed 4bpp       */
+/* --- the scratch (SPEC.md 91: 960 + 896 + 224 bytes, all bss) -------------
+ * pmc_band's rows are PMC_BAND_ROW apart and the FIELD starts at
+ * + PMC_BAND_PAD: a sprite at the tunnel mouth hangs eight pixels off each
+ * end of the field and the slack is what lets _pmc_sprite write its sixteen
+ * pixels without testing a bound (pmcband.inc). Nothing outside this file
+ * sees it - pmc_face is what the composer, the packers and the blits are all
+ * given. */
+static unsigned char pmc_band[8 * PMC_BAND_ROW];        /* packed 4bpp       */
 static unsigned char pmc_planes[4 * PMC_PL_STEP];       /* four bitplanes    */
 static unsigned char pmc_bits[8 * PMC_PL_STRIDE];       /* 1bpp              */
 
+#define pmc_face  (pmc_band + PMC_BAND_PAD)             /* the field's own   */
+
+/* pmc_brev - one source byte with its four 2-bit pixel fields reversed, which
+ * is the whole of _pmc_sprite's flipx (pmcband.inc). Built once rather than
+ * generated: it is a lowering of THIS composer and not anything the reference
+ * has, so it does not belong in the generated pmc_rom.c. */
+static unsigned char pmc_brev[256];
+
+static void pmc_brev_init(void)
+{
+    int b;
+
+    for (b = 0; b < 256; b++)
+        pmc_brev[b] = (unsigned char) (((b & 3) << 6) | ((b & 0x0C) << 2)
+                                       | ((b >> 2) & 0x0C) | ((b >> 6) & 3));
+}
+
 /* --- the layout, re-derived every frame ---------------------------------- */
 static int pmc_fx, pmc_fy;      /* the field's top-left, absolute screen px  */
-static int pmc_step;            /* source rows a screen row: 1, or 2 on CGA  */
-static int pmc_rows;            /* a band's SCREEN rows: 8, or 4 on CGA      */
-static int pmc_rsh;             /* ...as a SHIFT, 3 or 2. `ty * pmc_rows` is
+/* THE THREE BAND-GEOMETRY WORDS ARE INITIALISED, and to the TALL layout.
+ * pmc_spr_band - which the sprite markers ask before a frame is composed -
+ * reads them, and pmc_rows = 0 (which is what bss would give) answers "this
+ * sprite is on no band at all" for every sprite. The tall values make an
+ * unlaid-out marker a SUPERSET, which is the direction a marker is allowed to
+ * be wrong in. Eight bytes of .data against a silent no-op. */
+static int pmc_step = 1;        /* source rows a screen row: 1, or 2 on CGA  */
+static int pmc_rows = 8;        /* a band's SCREEN rows: 8, or 4 on CGA      */
+static int pmc_rsh = 3;         /* ...as a SHIFT, 3 or 2. `ty * pmc_rows` is
                                  * a variable multiply, which on an 8086 is a
                                  * helper call the compiler would have to
                                  * bring in; the band pitch is a power of two
                                  * by construction, so it is a shift */
 static int pmc_fh;              /* the field's SCREEN height, 288 or 144     */
+static int pmc_ssh;             /* pmc_step as a SHIFT, 0 or 1 - a sprite's
+                                 * first band row is a divide by the step and
+                                 * a variable divide is a `div` (SPEC.md 91) */
 static int pmc_bpp;             /* of the display THIS WINDOW is on          */
 static int pmc_path;            /* PMC_P_*                                   */
 static int pmc_cw, pmc_ch;      /* the live content box                      */
@@ -91,6 +123,14 @@ static unsigned pmc_n_fillpx;   /* PIXELS filled, and rows of them. A fill
                                  * rates instead */
 static unsigned pmc_n_fillrows;
 static unsigned pmc_n_pkpl;     /* rows x columns sent through pmc_pack_pl  */
+static unsigned pmc_n_spr;      /* sprite-bands composed, and their rows -
+                                 * the frame's second-largest term after the
+                                 * repack, and the one the plan could not
+                                 * price before wave 2 measured it */
+static unsigned pmc_n_sprow;
+static unsigned pmc_n_gtick;    /* game_tick()s run for this frame - the C
+                                 * logic is the fourth of SPEC.md 91's four
+                                 * costs and the only one that is not drawing */
 static unsigned pmc_n_pk1;      /* ...and through pmc_pack_1. PRICED FROM
                                  * HERE and not from whether the blit that
                                  * followed succeeded, because packing whose
@@ -139,11 +179,13 @@ static int pmc_layout(void *win)
         pmc_step = 1;
         pmc_rows = 8;
         pmc_rsh  = 3;
+        pmc_ssh  = 0;
         pmc_fh   = PMC_FIELD_H;
     } else {
         pmc_step = 2;
         pmc_rows = 4;
         pmc_rsh  = 2;
+        pmc_ssh  = 1;
         pmc_fh   = PMC_FIELD_H / 2;
     }
 
@@ -189,6 +231,265 @@ static void pmc_pick_path(void *win)
         pmc_path = PMC_P_BLITP;
 }
 
+/* ==========================================================================
+ * THE SPRITE LAYER
+ *
+ * The arcade board composites a tile layer and then a sprite layer over it,
+ * and pacman.c's renderer does the same; so does this, band by band. Colour
+ * index 0 is the transparent one, which is why a sprite is merged into the
+ * band rather than written over it (pmcband.inc's _pmc_sprite).
+ * ========================================================================*/
+
+/* k * PMC_BAND_ROW without a multiply: 120 is not a power of two, and an
+ * `imul` by a constant is a shift/add chain tools/cc8086.py refuses whenever
+ * it cannot prove a scratch register dead (docs/C-TOOLCHAIN.md). */
+static const unsigned int pmc_rowoff[8] = {
+    0, PMC_BAND_ROW, 2 * PMC_BAND_ROW, 3 * PMC_BAND_ROW,
+    4 * PMC_BAND_ROW, 5 * PMC_BAND_ROW, 6 * PMC_BAND_ROW, 7 * PMC_BAND_ROW
+};
+
+/* pmc_spr_band - does a sprite whose top source row is `sy` put a single
+ * PIXEL on band `ty`, given the layout pmc_layout has chosen?
+ *
+ * IT IS THE RENDERER'S OWN TEST AND EVERY MARKER USES IT. On the short (CGA)
+ * layout a band SAMPLES source rows base, base+2, base+4, base+6, so a sprite
+ * whose top row is base+7 lands on no sampled row at all and draws nothing -
+ * while a plain source-row overlap test (`sy <= base + 7`) says it does. That
+ * disagreement cost one whole band composed and blitted for zero visible
+ * change, on one sprite vertical phase in eight.
+ *
+ * The markers must stay a SUPERSET of what pmc_band_sprites draws, which is
+ * why this is the identical arithmetic and not an approximation of it. */
+static int pmc_spr_band(int sy, int ty)
+{
+    int d, k0, k1;
+
+    d = sy - (ty << 3);
+    if (d > 7 || d < -15)               /* wholly below / wholly above */
+        return 0;
+    k0 = d > 0 ? ((d + pmc_step - 1) >> pmc_ssh) : 0;
+    k1 = (d + 15) >> pmc_ssh;           /* d + 15 >= 0 here, so the shift is
+                                         * never a negative one */
+    if (k1 > pmc_rows - 1)
+        k1 = pmc_rows - 1;
+    return k0 <= k1;
+}
+
+/* pmc_band_sprites - every enabled sprite that lands on band `ty` AND on the
+ * span being composed, merged over the tiles already in the scratch. `c0` is
+ * the span's first column, so band pixel 0 is field pixel c0 * 8 - 8.
+ *
+ * IT NEVER CLIPS SIDEWAYS and it does not have to: pmc_widen has already
+ * grown this span to contain every sprite that overlaps it, and the band
+ * scratch carries PMC_BAND_PAD bytes of slack at each end for the eight
+ * pixels a sprite hangs off the field at the tunnel mouth.
+ *
+ * THE OVERLAP TEST IS NOT AN OPTIMISATION. A row can carry two spans now, and
+ * a sprite that overlaps the other one is NOT contained in this one - writing
+ * it would run off the end of the scratch. The predicate here and pmc_widen's
+ * are the same one, so a sprite is either widened into this span or skipped
+ * from it, never neither. */
+static void pmc_band_sprites(int ty, int c0, int c1)
+{
+    int i, sx, sy, d, k0, k1, srow, sinc, bx0, bp2, flags, base, sc0, sc1;
+
+    base = ty << 3;                     /* the band's first SOURCE row */
+    for (i = 0; i < PMC_NSPR; i++) {
+        if (!pmc_sp_on[i])
+            continue;
+        sx = pmc_sp_x[i];
+        sy = pmc_sp_y[i];
+
+        sc0 = sx >> 3;
+        if (sc0 < 0)
+            sc0 = 0;
+        sc1 = (sx + 15) >> 3;
+        if (sc1 > PMC_TILES_X - 1)
+            sc1 = PMC_TILES_X - 1;
+        if (sc1 < c0 || sc0 > c1)
+            continue;
+
+        /* Which band ROWS this sprite lands on. Band row k samples source row
+         * base + (k << pmc_ssh), so on CGA half the sprite's rows are not
+         * sampled at all - the alternate-row layout doing to a sprite exactly
+         * what it does to a tile. pmc_spr_band above is this same arithmetic
+         * reduced to a yes/no, and the markers ask it. */
+        d = sy - base;
+        k0 = d > 0 ? ((d + pmc_step - 1) >> pmc_ssh) : 0;
+        k1 = (sy + 15 - base) >> pmc_ssh;
+        if (k1 > pmc_rows - 1)
+            k1 = pmc_rows - 1;
+        if (k0 > k1)
+            continue;
+
+        srow = (base + (k0 << pmc_ssh)) - sy;        /* 0..15 */
+        sinc = 4 << pmc_ssh;
+        if (pmc_sp_flip[i] & 2) {                    /* flipy: walk back up */
+            srow = 15 - srow;
+            sinc = -sinc;
+        }
+
+        /* The destination byte and its nibble. bx0 is the sprite's left edge
+         * in BAND pixels and can be as low as -8; + 8 makes both shifts
+         * unsigned, and PMC_BAND_PAD is exactly those 8 pixels' 4 bytes. */
+        bx0 = sx - (c0 << 3);
+        bp2 = bx0 + 8;
+        flags = (bp2 & 1) | (pmc_sp_flip[i] & 1 ? 2 : 0);
+
+        PMC_COUNT(pmc_n_spr, 1);
+        PMC_COUNT(pmc_n_sprow, (unsigned) (k1 - k0 + 1));
+        pmc_sprite(pmc_sprites + (pmc_sp_tile[i] << 6) + (srow << 2),
+                   pmc_pal + ((pmc_sp_col[i] & 31) << 2),
+                   pmc_band + (bp2 >> 1) + pmc_rowoff[k0],
+                   sinc, k1 - k0 + 1, flags, pmc_brev);
+    }
+}
+
+/* --- the sprite shadow ----------------------------------------------------
+ * What each sprite looked like the last time a frame was composed. A sprite
+ * whose position, tile, colour, flip or enablement differs from its shadow
+ * marks BOTH rectangles - where it was and where it is - because the tiles
+ * under the old one have to be put back.
+ *
+ * This is the whole reason a play frame is ten bands and not thirty-six. */
+static unsigned char pmc_shon[PMC_NSPR];
+static int           pmc_shx[PMC_NSPR];
+static int           pmc_shy[PMC_NSPR];
+static unsigned char pmc_shtile[PMC_NSPR];
+static unsigned char pmc_shcol[PMC_NSPR];
+static unsigned char pmc_shflip[PMC_NSPR];
+
+/* pmc_mark_rect - the bands a 16x16 sprite at (sx, sy) is DRAWN on.
+ *
+ * A RANGE, not two point marks: a row carries two spans now and columns c0
+ * and c1 of an odd-aligned sprite are two apart, so marking the ends alone
+ * would open two spans and leave the column between them undrawn.
+ *
+ * pmc_spr_band and not a source-row overlap, for the reason written above it:
+ * on the short layout the marker would otherwise claim a band the renderer
+ * skips, and one band composed and blitted for nothing is ~17 ms of XT. */
+static void pmc_mark_rect(int sx, int sy)
+{
+    int c0, c1, t0, t1, ty;
+
+    c0 = sx >> 3;
+    if (c0 < 0)
+        c0 = 0;
+    c1 = (sx + 15) >> 3;
+    if (c1 > PMC_TILES_X - 1)
+        c1 = PMC_TILES_X - 1;
+    if (c0 > c1)
+        return;
+    t0 = sy >> 3;
+    if (t0 < 0)
+        t0 = 0;
+    t1 = (sy + 15) >> 3;
+    if (t1 > PMC_TILES_Y - 1)
+        t1 = PMC_TILES_Y - 1;
+    for (ty = t0; ty <= t1; ty++)
+        if (pmc_spr_band(sy, ty))
+            pmc_mark_span(c0, c1, ty);
+}
+
+static void pmc_mark_sprites(void)
+{
+    int i, ch;
+
+    for (i = 0; i < PMC_NSPR; i++) {
+        ch = pmc_sp_on[i] != pmc_shon[i];
+        if (!ch && pmc_sp_on[i])
+            ch = pmc_sp_x[i] != pmc_shx[i]
+              || pmc_sp_y[i] != pmc_shy[i]
+              || pmc_sp_tile[i] != pmc_shtile[i]
+              || pmc_sp_col[i] != pmc_shcol[i]
+              || pmc_sp_flip[i] != pmc_shflip[i];
+        if (!ch)
+            continue;
+        if (pmc_shon[i])
+            pmc_mark_rect(pmc_shx[i], pmc_shy[i]);
+        if (pmc_sp_on[i])
+            pmc_mark_rect(pmc_sp_x[i], pmc_sp_y[i]);
+        pmc_shon[i]   = pmc_sp_on[i];
+        pmc_shx[i]    = pmc_sp_x[i];
+        pmc_shy[i]    = pmc_sp_y[i];
+        pmc_shtile[i] = pmc_sp_tile[i];
+        pmc_shcol[i]  = pmc_sp_col[i];
+        pmc_shflip[i] = pmc_sp_flip[i];
+    }
+}
+
+/* pmc_widen - a dirty span must CONTAIN every sprite that OVERLAPS it.
+ *
+ * A band can be dirty for a reason that has nothing to do with a sprite - the
+ * score strip, a pill blinking, a menu's damage rect - and a sprite standing
+ * over the part being recomposed still has to be composed back into it, or it
+ * vanishes from that band for a frame. So the span grows to the sprite's
+ * columns before anything is composed, which also relieves _pmc_sprite of
+ * every sideways bound test it would otherwise make ~2,000 times a frame.
+ *
+ * OVERLAPS, not "lands on the band". With two spans a row, a sprite sitting
+ * over span 2 has nothing to do with span 1 and widening span 1 to reach it
+ * would swallow the whole gap the second span exists to avoid. The predicate
+ * is exactly pmc_band_sprites' - overlap, and pmc_spr_band vertically - so a
+ * sprite is either grown into a span or skipped from it, never neither.
+ *
+ * IT ITERATES. Growing span 1 can bring it under a sprite it did not overlap
+ * before, and that sprite must then be contained too. The loop is bounded by
+ * PMC_NSPR passes because each pass that changes nothing ends it and a span
+ * can only grow. */
+static int pmc_widen_span(unsigned char *lo, unsigned char *hi, int c0, int c1)
+{
+    int chg = 0;
+
+    if (*lo > *hi)
+        return 0;                       /* clean: nothing to contain */
+    if (c1 < (int) *lo || c0 > (int) *hi)
+        return 0;                       /* no overlap: not this span's sprite */
+    if (c0 < (int) *lo) {
+        *lo = (unsigned char) c0;
+        chg = 1;
+    }
+    if (c1 > (int) *hi) {
+        *hi = (unsigned char) c1;
+        chg = 1;
+    }
+    return chg;
+}
+
+static void pmc_widen(int ty)
+{
+    int i, pass, chg, c0, c1;
+
+    for (pass = 0; pass < PMC_NSPR; pass++) {
+        chg = 0;
+        for (i = 0; i < PMC_NSPR; i++) {
+            if (!pmc_sp_on[i])
+                continue;
+            if (!pmc_spr_band(pmc_sp_y[i], ty))
+                continue;
+            c0 = pmc_sp_x[i] >> 3;
+            if (c0 < 0)
+                c0 = 0;
+            c1 = (pmc_sp_x[i] + 15) >> 3;
+            if (c1 > PMC_TILES_X - 1)
+                c1 = PMC_TILES_X - 1;
+            chg |= pmc_widen_span(&pmc_dmin[ty], &pmc_dmax[ty], c0, c1);
+            chg |= pmc_widen_span(&pmc_dmin2[ty], &pmc_dmax2[ty], c0, c1);
+        }
+        if (!chg)
+            break;
+    }
+
+    /* the two may have met: one band is one gfx call fewer than two */
+    if (pmc_dmin2[ty] <= pmc_dmax2[ty]
+        && (int) pmc_dmin2[ty] <= (int) pmc_dmax[ty] + 1 + PMC_DGAP) {
+        if (pmc_dmax2[ty] > pmc_dmax[ty])
+            pmc_dmax[ty] = pmc_dmax2[ty];
+        pmc_dmin2[ty] = PMC_TILES_X;
+        pmc_dmax2[ty] = 0;
+    }
+}
+
 /* pmc_draw_band - compose tile row `ty`'s columns c0..c1 and send them with
  * ONE blit. The tiles are composed at (c - c0) so that the span starts at the
  * scratch's own first byte and neither packer needs an offset.
@@ -205,9 +506,10 @@ static void pmc_draw_band(int ty, int c0, int c1)
         i = (ty << PMC_VSHIFT) + c;
         pmc_tile(pmc_tiles + (pmc_vram[i] << 4),
                  pmc_pairs + ((pmc_cram[i] & 31) << 4),
-                 pmc_band + ((c - c0) << 2), pmc_step);
+                 pmc_face + ((c - c0) << 2), pmc_step);
     }
     PMC_COUNT(pmc_n_tiles, cols);
+    pmc_band_sprites(ty, c0, c1);
     PMC_COUNT(pmc_n_bands, 1);
     PMC_COUNT(pmc_n_rows, pmc_rows);
     PMC_COUNT(pmc_n_rc, pmc_rows * cols);
@@ -217,7 +519,7 @@ static void pmc_draw_band(int ty, int c0, int c1)
     y = pmc_fy + (ty << pmc_rsh);
 
     if (pmc_path == PMC_P_BLITP) {
-        pmc_pack_pl(pmc_band, pmc_planes, pmc_rows, pmc_planar, cols);
+        pmc_pack_pl(pmc_face, pmc_planes, pmc_rows, pmc_planar, cols);
         PMC_COUNT(pmc_n_pkpl, (unsigned) (pmc_rows * cols));
         PMC_COUNT(pmc_n_calls, 1);
         if (os88_gfx_blitp(pmc_planes, PMC_PL_STEP, PMC_PL_STRIDE,
@@ -227,7 +529,7 @@ static void pmc_draw_band(int ty, int c0, int c1)
          * Fall through: the packed band is still exactly what blit4 wants. */
         pmc_path = PMC_P_BLIT4;
     } else if (pmc_path == PMC_P_BLIT1) {
-        pmc_pack_1(pmc_band, pmc_bits, pmc_rows, pmc_mono2,
+        pmc_pack_1(pmc_face, pmc_bits, pmc_rows, pmc_mono2,
                    ty << pmc_rsh, cols);
         PMC_COUNT(pmc_n_pk1, (unsigned) (pmc_rows * cols));
         PMC_COUNT(pmc_n_calls, 1);
@@ -246,7 +548,7 @@ static void pmc_draw_band(int ty, int c0, int c1)
         pmc_path = PMC_P_BLIT4;
     }
     PMC_COUNT(pmc_n_calls, 1);
-    os88_gfx_blit4(pmc_band, PMC_BAND_STRIDE, x, y, px, pmc_rows);
+    os88_gfx_blit4(pmc_face, PMC_BAND_ROW, x, y, px, pmc_rows);
 }
 
 /* pmc_dirty_any - is there a single dirty band? SCAN FIRST, ASK THE KERNEL
@@ -271,18 +573,90 @@ static int pmc_dirty_any(void)
  * spend os88_wm_geom + os88_wm_content + os88_wm_display a second time for an
  * answer that cannot have changed under one lock hold.
  *
- * The caller holds the gfx lock. */
-static void pmc_flush_laid(void *win)
+ * The caller holds the gfx lock.
+ *
+ * ---------------------------------------------------------------------------
+ * `brk` - MAY THIS DROP THE LOCK PART WAY THROUGH?
+ * ---------------------------------------------------------------------------
+ * A worker takes the gfx lock "for a SHORT BURST" and a worker that computes
+ * under it wedges the machine with no watchdog able to break it (apps/cc/
+ * os88.h, SPEC.md 20.6 rule 3). An ordinary play frame is ten bands, ~70 ms
+ * each on a 4.77 MHz 8088, and that is a burst.
+ *
+ * THE ROUND-WON FLASH IS NOT. game_update_tiles recolours the whole playfield
+ * every time `since(WON) & 0x10` flips, which marks all 31 playfield bands at
+ * their full width; the flag flips about eleven times over the four seconds
+ * between after(WON, 60) and the READY! re-arm, and one flip is 31 x ~70 ms =
+ * ~2.2 SECONDS of one uninterruptible lock hold. Nothing else on the machine
+ * can draw for that long, eleven times over.
+ *
+ * So the WORKER's flush breaks its hold every PMC_HOLD_BANDS bands: unlock,
+ * yield, lock again. What that costs is one task switch (693 us) per chunk;
+ * what it buys is a machine whose menus, dock and other windows still answer
+ * during the flash.
+ *
+ * ONLY THE WORKER. A key, a menu command and os88_paint all arrive INSIDE a
+ * kernel callback that holds the lock on our behalf - dropping it there would
+ * hand the glass away in the middle of the kernel's own paint pass - so those
+ * callers pass brk = 0 and take the whole loop in one hold, exactly as they
+ * did before.
+ *
+ * AFTER A RE-LOCK NOTHING IS ASSUMED. The clip region died at the unlock
+ * (SPEC.md 11.3), the window may have been moved, resized, covered or sent
+ * behind, so the layout, the region and the blit path are all taken again -
+ * and a refusal RETURNS with the remaining spans still dirty, which is the
+ * same contract pmc_flush's own refusal has. A band that has been drawn is
+ * cleaned as it is drawn rather than in one pass at the end, so an early
+ * return leaves exactly what is still owed.
+ *
+ * AND pmc_about_up IS RE-TESTED FIRST, ahead of the layout. It is the ONLY
+ * thing keeping the field off the About card, pmc_flush's entry guard is its
+ * one other reader, and the card is drawn by os88_about - a UI callback that
+ * runs in precisely the window this break opens. Worker breaks at band 4; the
+ * UI task takes the lock to drop the menu; the user picks About PaccMan; the
+ * flag goes up, the card is painted, the callback returns and the lock is
+ * released; the worker re-locks. Without this test it blits bands 5..35
+ * straight through the card and nothing repaints it, because the kernel sends
+ * no W_PAINT for a package's own overdraw - a card sitting holed until it is
+ * dismissed. The exposure is not rare: the flush that breaks at all is the
+ * LONG one (round-won flash, New Game, first paint), which is exactly the
+ * multi-second window a menu click lands in. Returning costs nothing:
+ * pmc_abdismiss re-marks what the card covered. */
+#define PMC_HOLD_BANDS  4
+
+static void pmc_flush_laid(void *win, int brk)
 {
-    int ty;
+    int ty, n;
 
     pmc_pick_path(win);
+    n = 0;
     for (ty = 0; ty < PMC_TILES_Y; ty++) {
         if (pmc_dmin[ty] > pmc_dmax[ty])
             continue;
+
+        if (brk && n >= PMC_HOLD_BANDS) {
+            n = 0;
+            os88_gfx_unlock();
+            os88_task_yield();
+            os88_gfx_lock();
+            if (pmc_about_up)
+                return;
+            if (!pmc_layout(win))
+                return;
+            if (os88_wm_obscured(win) && os88_wm_clip_set(win) != 0)
+                return;
+            pmc_pick_path(win);
+        }
+
+        pmc_widen(ty);
         pmc_draw_band(ty, pmc_dmin[ty], pmc_dmax[ty]);
+        n++;
+        if (pmc_dmin2[ty] <= pmc_dmax2[ty]) {
+            pmc_draw_band(ty, pmc_dmin2[ty], pmc_dmax2[ty]);
+            n++;
+        }
+        pmc_clean_row(ty);
     }
-    pmc_clean();
 }
 
 /* pmc_flush - the ordinary frame path, and the one that must ARM THE CLIP
@@ -333,7 +707,7 @@ static void pmc_flush_laid(void *win)
  * lost by refusing: the spans stay marked and pmc_abdismiss re-marks the whole
  * field anyway, so the picture the user asked for is drawn whole the moment
  * the card comes down. */
-static void pmc_flush(void *win)
+static void pmc_flush(void *win, int brk)
 {
     if (pmc_about_up)
         return;
@@ -343,7 +717,7 @@ static void pmc_flush(void *win)
         return;
     if (os88_wm_obscured(win) && os88_wm_clip_set(win) != 0)
         return;
-    pmc_flush_laid(win);
+    pmc_flush_laid(win, brk);
 }
 
 /* pmc_fill_clip - one black strip, cut to the rect we actually owe. An empty
@@ -454,15 +828,20 @@ static int pmc_repaint(void *win)
             c1  = x2 >> 3;
             ty0 = y1 >> pmc_rsh;
             ty1 = y2 >> pmc_rsh;
-            for (ty = ty0; ty <= ty1; ty++) {
-                pmc_mark(c0, ty);
-                pmc_mark(c1, ty);
-            }
+            /* A RANGE, not two point marks. A row carries two spans now
+             * (pmc_vid.c), so marking the two ENDS of a damage rect would
+             * open one span at each end and leave every column between them
+             * undrawn - which is a menu dismissed over the top three rows
+             * leaving a 26-column hole in each of them. */
+            for (ty = ty0; ty <= ty1; ty++)
+                pmc_mark_span(c0, c1, ty);
         }
     }
 
     pmc_letterbox(d.x1, d.y1, d.x2, d.y2);
     if (pmc_dirty_any())
-        pmc_flush_laid(win);
+        pmc_flush_laid(win, 0);     /* inside the kernel's own paint pass, with
+                                     * its region armed: the lock is not ours
+                                     * to drop */
     return 1;
 }

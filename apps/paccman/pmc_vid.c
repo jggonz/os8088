@@ -45,41 +45,151 @@
  * ==========================================================================*/
 
 /* --- the damage model -----------------------------------------------------
- * One column span per tile ROW, which is exactly one 8-pixel BAND of the
- * field. Clean is dmin > dmax, and the sentinels are chosen so that any marked
- * column lands inside: a clean row is (28, 0) and 28 > 0.
+ * TWO column spans per tile ROW, each of which becomes one blit of one
+ * 8-pixel BAND of the field. Clean is dmin > dmax, and the sentinels are
+ * chosen so that any marked column lands inside: a clean row is (28, 0) and
+ * 28 > 0. The two are kept SORTED and DISJOINT - span 1 is left of span 2 -
+ * and span 2 is dirty only when span 1 is, so one test still answers "is this
+ * band owed anything".
  *
- * A span rather than a per-tile mask, deliberately (SPEC.md 91): the pill
- * blink alone touches columns 1 and 26 of two rows, so a mask would save
- * composition and nothing else - and on the OSAPI_GFX_BLITP path width is
- * nearly free, being bytes at ~4 us each against a 756 us call floor. */
+ * WHY TWO AND NOT ONE, WHICH IS A NUMBER OFF THE 1bpp ADAPTERS AND NOT OFF
+ * VGA. The first draft carried one span and justified it with "on the
+ * OSAPI_GFX_BLITP path width is nearly free" - and BLITP is unreachable on
+ * the two adapters an XT actually boots, because pmc_pick_path answers
+ * PMC_P_BLIT1 on bpp 1 before the probe is asked. Priced off the measured
+ * terms (apps/paccman/build.sh), ONE wasted column of a band costs
+ *
+ *   CGA/Hercules  718 us composed + (4/28) x 2266 pack_1 +  (4/28) x 57 blit1
+ *                 = ~1,050 us
+ *   VGA (BLITP)   718 us composed + (8/28) x 5222 pack_pl + (8/28) x 826
+ *                 = ~2,446 us
+ *
+ * against 814 us (756 + the thunk) for the extra gfx call a second span
+ * costs. So a gap of two clean columns already pays for the split on BOTH
+ * paths and a gap of twenty-four - which is what the energizer blink makes of
+ * rows 6 and 26, columns 1 and 26 - was ~33 ms of a ~110 ms 1bpp play frame,
+ * spent recomposing maze tiles that had not changed.
+ *
+ * PMC_DGAP is where the two arms cross: a ONE-column gap is 1,050 us against
+ * 814 on the 1bpp path, near enough a wash, so it is swallowed and the band
+ * stays single; two or more opens the second span. Marking a RANGE is
+ * pmc_mark_span and marking a tile is pmc_mark - a caller that means a
+ * rectangle MUST use the range form, because two point marks two columns
+ * apart now leave the column between them undrawn. */
+#define PMC_DGAP  1
+
 static unsigned char pmc_dmin[PMC_TILES_Y];
 static unsigned char pmc_dmax[PMC_TILES_Y];
+static unsigned char pmc_dmin2[PMC_TILES_Y];
+static unsigned char pmc_dmax2[PMC_TILES_Y];
+
+static void pmc_clean_row(int y)
+{
+    pmc_dmin[y]  = PMC_TILES_X;
+    pmc_dmax[y]  = 0;
+    pmc_dmin2[y] = PMC_TILES_X;
+    pmc_dmax2[y] = 0;
+}
 
 static void pmc_clean(void)
 {
     int y;
-    for (y = 0; y < PMC_TILES_Y; y++) {
-        pmc_dmin[y] = PMC_TILES_X;
-        pmc_dmax[y] = 0;
-    }
+    for (y = 0; y < PMC_TILES_Y; y++)
+        pmc_clean_row(y);
 }
 
 static void pmc_dirty_all(void)
 {
     int y;
     for (y = 0; y < PMC_TILES_Y; y++) {
-        pmc_dmin[y] = 0;
-        pmc_dmax[y] = PMC_TILES_X - 1;
+        pmc_dmin[y]  = 0;
+        pmc_dmax[y]  = PMC_TILES_X - 1;
+        pmc_dmin2[y] = PMC_TILES_X;
+        pmc_dmax2[y] = 0;
     }
+}
+
+/* pmc_mark_span - columns c0..c1 of row y are owed.
+ *
+ * Three regions cannot be held in two spans, so one pair is joined, and the
+ * pair joined is the one with the SMALLER clean gap between it: swallowing
+ * g columns costs g x (a tile + its share of the pack and the blit) and the
+ * alternative costs one gfx call, so the cheaper join is the narrower gap
+ * every time. */
+static void pmc_mark_span(int c0, int c1, int y)
+{
+    int a0, a1, b0, b1, gl, gr;
+
+    if (c0 < 0)
+        c0 = 0;
+    if (c1 > PMC_TILES_X - 1)
+        c1 = PMC_TILES_X - 1;
+    if (c0 > c1)
+        return;
+
+    a0 = pmc_dmin[y];
+    a1 = pmc_dmax[y];
+    b0 = pmc_dmin2[y];
+    b1 = pmc_dmax2[y];
+
+    if (a0 > a1) {                              /* nothing owed yet */
+        a0 = c0;
+        a1 = c1;
+    } else if (c0 <= a1 + 1 + PMC_DGAP && c1 + 1 + PMC_DGAP >= a0) {
+        if (c0 < a0) a0 = c0;                   /* joins span 1 */
+        if (c1 > a1) a1 = c1;
+    } else if (b0 > b1) {                       /* one span: open the second */
+        if (c1 < a0) {                          /* ...to the LEFT of it */
+            b0 = a0; b1 = a1;
+            a0 = c0; a1 = c1;
+        } else {
+            b0 = c0; b1 = c1;
+        }
+    } else if (c0 <= b1 + 1 + PMC_DGAP && c1 + 1 + PMC_DGAP >= b0) {
+        if (c0 < b0) b0 = c0;                   /* joins span 2 */
+        if (c1 > b1) b1 = c1;
+    } else if (c1 < a0) {                       /* a third region, LEFT of both */
+        if (a0 - c1 <= b0 - a1) {               /* cheaper to join span 1 */
+            a0 = c0;
+        } else {
+            b0 = a0;                            /* ...than to join the pair */
+            a0 = c0;
+            a1 = c1;
+        }
+    } else if (c0 > b1) {                       /* ...RIGHT of both */
+        if (c0 - b1 <= b0 - a1) {
+            b1 = c1;
+        } else {
+            a1 = b1;
+            b0 = c0;
+            b1 = c1;
+        }
+    } else {                                    /* ...in the gap BETWEEN them */
+        gl = c0 - a1;
+        gr = b0 - c1;
+        if (gl <= gr)
+            a1 = c1;
+        else
+            b0 = c0;
+    }
+
+    if (b0 <= b1 && b0 <= a1 + 1 + PMC_DGAP) {  /* they met: one band is one
+                                                 * call fewer than two */
+        if (b1 > a1)
+            a1 = b1;
+        b0 = PMC_TILES_X;
+        b1 = 0;
+    }
+
+    pmc_dmin[y]  = (unsigned char) a0;
+    pmc_dmax[y]  = (unsigned char) a1;
+    pmc_dmin2[y] = (unsigned char) b0;
+    pmc_dmax2[y] = (unsigned char) b1;
 }
 
 static void pmc_mark(int x, int y)
 {
-    if (x < (int) pmc_dmin[y])
-        pmc_dmin[y] = x;
-    if (x > (int) pmc_dmax[y])
-        pmc_dmax[y] = x;
+    pmc_mark_span(x, x, y);
 }
 
 /* --- the two RAMs ---------------------------------------------------------
@@ -186,6 +296,49 @@ static void pmc_vid_text(int x, int y, const char *s)
         s++;
         x++;
     }
+}
+
+/* vid_color_char, pacman.c 1046-1054. */
+static void pmc_vid_color_char(int x, int y, int color, int c)
+{
+    pmc_vid_color_tile(x, y, color, pmc_conv(c));
+}
+
+/* vid_color_score, pacman.c 1092-1108: the digits right to left with a
+ * trailing zero, so the score really is the arcade's own "score / 10 then a
+ * 0". A zero score prints "00", which is what the machine does.
+ *
+ * The reference walks a uint32 down by tens and stops when it reaches zero;
+ * here the number is already a digit array (pmc_time.c), so the same stopping
+ * rule is "print up to the highest non-zero digit, and always digit 0". */
+static void pmc_vid_score(int x, int y, int color, const unsigned char *d)
+{
+    int i, top;
+
+    pmc_vid_color_char(x, y, color, '0');
+    x--;
+    top = 0;
+    for (i = PMC_SCORE_DIGITS - 1; i > 0; i--)
+        if (d[i]) {
+            top = i;
+            break;
+        }
+    for (i = 0; i <= top && x >= 0; i++) {
+        pmc_vid_color_char(x, y, color, '0' + d[i]);
+        x--;
+    }
+}
+
+/* vid_fruit_score, pacman.c 1122-1131: the four tiles of a bonus number,
+ * drawn where READY! and GAME OVER also live. */
+static void pmc_vid_fruit_score(int fruit)
+{
+    int i, color;
+
+    color = fruit == 0 ? PMC_COLOR_DOT : 0x03;      /* COLOR_FRUIT_SCORE */
+    for (i = 0; i < 4; i++)
+        pmc_vid_color_tile(12 + i, 20, color,
+                           pmc_fruit_score_tiles[fruit * 4 + i]);
 }
 
 /* vid_draw_tile_quad, pacman.c 1111-1120: the 2x2 arrangement

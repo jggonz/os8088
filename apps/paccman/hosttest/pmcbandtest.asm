@@ -27,7 +27,7 @@
 ;
 ; WHAT EACH CASE CHECKS
 ;   1. _pmc_tile, rowstep 1: one 8x8 tile through its colour block into the
-;      packed band, eight rows at PMC_BAND_STRIDE apart, against pv_t1_exp;
+;      packed band, eight rows at PMC_BAND_ROW apart, against pv_t1_exp;
 ;   2. _pmc_tile, rowstep 2: the CGA layout - alternate source rows, four
 ;      output rows - against pv_t2_exp. Sampling the wrong rows is a defect
 ;      that draws a plausible picture, so it has a vector of its own;
@@ -135,7 +135,7 @@ body:
     ; --- (1) _pmc_tile, every source row -------------------------------------
     mov al, 0xAA
     mov di, pt_band
-    mov cx, 8 * PMC_BAND_STRIDE
+    mov cx, 8 * PMC_BAND_ROW
     call fill
     mov word [pushes], 4
     PUSHI 1
@@ -146,13 +146,13 @@ body:
     dw _pmc_tile
     mov si, pt_band
     mov di, pv_t1_exp
-    mov cx, 8 * PMC_BAND_STRIDE
+    mov cx, 8 * PMC_BAND_ROW
     call expect
 
     ; --- (2) _pmc_tile, alternate source rows (the CGA layout) ---------------
     mov al, 0xAA
     mov di, pt_band
-    mov cx, 8 * PMC_BAND_STRIDE
+    mov cx, 8 * PMC_BAND_ROW
     call fill
     mov word [pushes], 4
     PUSHI 2
@@ -163,7 +163,7 @@ body:
     dw _pmc_tile
     mov si, pt_band
     mov di, pv_t2_exp
-    mov cx, 4 * PMC_BAND_STRIDE
+    mov cx, 4 * PMC_BAND_ROW
     call expect
 
     ; --- (3) _pmc_pack_pl, the whole band into four planes -------------------
@@ -274,13 +274,62 @@ body:
     jnz .f5b
     mov al, '.'
     call putc
-    jmp .negc
+    jmp .spr
 .f5b:
     mov al, '6'
     call putc
     inc bp
 
-    ; --- (7) THE NEGATIVE CONTROLS -------------------------------------------
+.spr:
+    ; --- (7) _pmc_sprite, MERGED OVER a band that already holds something ----
+    ; A sprite is composed over the tiles, not instead of them: colour index 0
+    ; has to leave the band's own nibble alone. A vector taken over an EMPTY
+    ; band would pass whether that were true or not, so pv_spr_band is filler
+    ; and the answer is the merge of the two.
+    mov si, pv_spr_band
+    mov di, pt_band
+    mov cx, 8 * PMC_BAND_ROW
+    call copyn
+    mov word [pushes], 7
+    PUSHI pv_brev
+    PUSHI 0                         ; flags: high nibble first, no flipx
+    PUSHI 8                         ; rows
+    PUSHI 4                         ; sinc: every source row, forwards
+    PUSHI pt_band + 8
+    PUSHI pv_spr_pal
+    PUSHI pv_spr_src
+    call disc_call
+    dw _pmc_sprite
+    mov si, pt_band
+    mov di, pv_s1_exp
+    mov cx, 8 * PMC_BAND_ROW
+    call expect
+
+    ; --- (8) ...ODD NIBBLE, FLIPX AND A NEGATIVE ROW STEP, ALL AT ONCE -------
+    ; The three awkward cases are one case, because they co-occur: Pac-Man
+    ; running left on the CGA layout at an odd pixel is all three. flipy is a
+    ; NEGATIVE sinc and nothing else, which is why the routine has no test for
+    ; it (pmcband.inc).
+    mov si, pv_spr_band
+    mov di, pt_band
+    mov cx, 8 * PMC_BAND_ROW
+    call copyn
+    mov word [pushes], 7
+    PUSHI pv_brev
+    PUSHI 3                         ; flags: LOW nibble first, and flipx
+    PUSHI 4                         ; rows
+    PUSHI -8                        ; sinc: back two source rows a band row
+    PUSHI pt_band + 9
+    PUSHI pv_spr_pal
+    PUSHI pv_spr_src + 15 * 4       ; ...starting at the sprite's LAST row
+    call disc_call
+    dw _pmc_sprite
+    mov si, pt_band
+    mov di, pv_s2_exp
+    mov cx, 8 * PMC_BAND_ROW
+    call expect
+
+    ; --- (9) THE NEGATIVE CONTROLS -------------------------------------------
 .negc:
     mov word [disc_expect_bad], 1
     mov word [pushes], 0
@@ -484,6 +533,28 @@ fill:
     pop di
     ret
 
+; copyn - CX bytes from DS:SI to DS:DI. `movsb` would write ES:DI, and ES is
+; the kernel sentinel this program exists to prove nothing touches.
+copyn:
+    push si
+    push di
+    push cx
+    push ax
+.l:
+    jcxz .out
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp .l
+.out:
+    pop ax
+    pop cx
+    pop di
+    pop si
+    ret
+
 ; -----------------------------------------------------------------------------
 ; the serial port, which is where the answer comes out
 ; -----------------------------------------------------------------------------
@@ -559,7 +630,7 @@ section .data
 %include "pmcbandvec.inc"
 
 section .bss
-pt_band:   resb 8 * PMC_BAND_STRIDE
+pt_band:   resb 8 * PMC_BAND_ROW
 pt_planes: resb 4 * PMC_PL_STEP
 pt_bits:   resb 8 * PMC_PL_STRIDE
 

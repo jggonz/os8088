@@ -23,7 +23,7 @@
 ;   _pmc_pack_pl   the packed band -> four bitplanes for OSAPI_GFX_BLITP
 ;   _pmc_pack_1    the packed band -> 1bpp for OSAPI_GFX_BLIT1, through the
 ;                  monochrome class table and the row-alternating checkerboard
-;   _pmc_sprite    (wave 2) one 16x16 sprite over the band, index 0 transparent
+;   _pmc_sprite    one 16x16 sprite OVER the band, colour index 0 transparent
 ;
 ; NO GLOBAL IS NAMED FROM HERE. Every table and every buffer arrives as a
 ; POINTER argument, computed by the C. That is what lets the host harness
@@ -43,6 +43,39 @@
 
 PMC_BAND_W      equ 224                 ; the arcade field, in pixels
 PMC_BAND_STRIDE equ (PMC_BAND_W / 2)    ; 112 - packed 4bpp, two pixels a byte
+
+; --- AND THE ROW PITCH IS NOT THE ROW WIDTH (wave 2) --------------------------
+; A sprite is 16 pixels wide and its position is its actor's centre less 8, so
+; at the tunnel mouth it hangs EIGHT PIXELS off each end of the field: Pac-Man
+; at x = 0 puts a sprite at -8, and at x = 223 one at 215 whose last pixel is
+; 231 of a 224-pixel field. The reference draws both halves and lets the window
+; clip - it wraps the ACTOR and never the sprite (pacman.c 1329-1355).
+;
+; So every band row carries PMC_BAND_PAD bytes of slack at EACH end and the
+; field starts at + PMC_BAND_PAD. _pmc_sprite then never clips and never tests
+; a bound: it writes its 16 pixels a row, some of them into slack that is never
+; packed and never blitted, which is what keeps its inner loop to the ten
+; instructions a pixel a 4.77 MHz 8088 can afford. The C hands
+; `pmc_band + PMC_BAND_PAD` to the tile composer, to both packers and to the
+; BLIT4 fallback, so nothing outside this file ever sees the slack.
+; AND FOUR IS EXACT, NOT GENEROUS. The worst LEGAL case is Pac-Man at the left
+; tunnel mouth: pmc_move.c wraps the actor at x = 223, so sp_x = 215, bp2 =
+; 223, the destination byte is + 111 at an ODD nibble, and sixteen pixels touch
+; bytes 111..119 - the row's LAST byte. On band row 7 that is offset 959 of a
+; 960-byte scratch, so there is ZERO slack left over: one more pixel of sprite
+; x writes into pmc_planes, and nothing in the C or in this file would catch
+; it. The invariant that makes the whole no-clip design safe is therefore
+;
+;     an enabled sprite's x is in [-8, PMC_BAND_W - 9],
+;
+; which holds because every sprite position in the port is a WRAPPED actor
+; centre less 8. A caller that positions a sprite by anything else - the
+; wave-3 intro screen is exactly that code - must clamp it or this pad must
+; grow. apps/paccman/hosttest/pmcuitest.c asserts both halves: its twin checks
+; the destination against the scratch's end, and its per-frame audit checks
+; every enabled sprite's x against that range.
+PMC_BAND_PAD    equ 4                   ; 8 pixels each side
+PMC_BAND_ROW    equ (PMC_BAND_STRIDE + 2 * PMC_BAND_PAD)   ; 120 - the PITCH
 PMC_PL_STRIDE   equ (PMC_BAND_W / 8)    ; 28 - one plane's bytes per row
 PMC_PL_STEP     equ (PMC_PL_STRIDE * 8) ; 224 - and the step to the next plane.
                                         ; It is 8 rows' worth WHATEVER the band
@@ -68,7 +101,7 @@ section .text
 ;      [bp+8]  dst     the tile's top-left byte inside the packed band
 ;      [bp+10] rowstep 1 = every source row (8 output rows), 2 = alternate
 ;                      rows (4 output rows - the CGA layout, SPEC.md 91)
-; out: 8 (or 4) rows of 4 bytes written at PMC_BAND_STRIDE apart
+; out: 8 (or 4) rows of 4 bytes written at PMC_BAND_ROW apart
 ;
 ; Two XLATs a source byte and nothing else: the colour indirection, the
 ; nibble split and the pack are ONE table lookup each, because the pair table
@@ -124,7 +157,7 @@ _pmc_tile:
     mov  [di+3], al
 
     add  si, dx                     ; skip the row we are not sampling
-    add  di, PMC_BAND_STRIDE
+    add  di, PMC_BAND_ROW
     dec  ch
     jnz  .row
 
@@ -143,7 +176,7 @@ _pmc_tile:
 ; 5.4.3, apps/os88api.inc's OSAPI_GFX_BLITP): plane p at planes + p*PMC_PL_STEP,
 ; row r at + r*PMC_PL_STRIDE, bit 7 leftmost.
 ;
-; in:  [bp+4]  band    the SPAN's first packed byte; rows of PMC_BAND_STRIDE
+; in:  [bp+4]  band    the SPAN's first packed byte; rows of PMC_BAND_ROW
 ;      [bp+6]  planes  4 * PMC_PL_STEP bytes of scratch
 ;      [bp+8]  rows    8 or 4 (decremented in place - it is the caller's slot)
 ;      [bp+10] planar  pmc_planar[256]: a packed byte's four planes as 2-bit
@@ -152,7 +185,7 @@ _pmc_tile:
 ;      [bp+12] cols    output bytes a row, 1..PMC_PL_STRIDE - the damage span,
 ;                      which is a whole number of 8-pixel TILES by construction
 ;                      (SPEC.md 91's per-band column span). The row strides
-;                      stay PMC_BAND_STRIDE and PMC_PL_STRIDE whatever it is,
+;                      stay PMC_BAND_ROW and PMC_PL_STRIDE whatever it is,
 ;                      so BLITP is always told the same two numbers and the
 ;                      bytes past the span are simply not written
 ;
@@ -181,7 +214,7 @@ _pmc_pack_pl:
     mov  dx, ax
     add  ax, ax
     add  ax, ax                     ; cols * 4 packed bytes are consumed a row
-    mov  bx, PMC_BAND_STRIDE
+    mov  bx, PMC_BAND_ROW
     sub  bx, ax
     mov  [bp-2], bx
     mov  bx, PMC_PL_STRIDE
@@ -284,7 +317,7 @@ _pmc_pack_pl:
 ; The packed 4bpp band -> the 1bpp band OSAPI_GFX_BLIT1 takes: bit 7 leftmost,
 ; 1 = lit, PMC_PL_STRIDE bytes a row, in final screen polarity.
 ;
-; in:  [bp+4]  band   rows * PMC_BAND_STRIDE packed bytes
+; in:  [bp+4]  band   rows of PMC_BAND_ROW packed bytes
 ;      [bp+6]  bits   rows * PMC_PL_STRIDE bytes of scratch
 ;      [bp+8]  rows   (decremented in place)
 ;      [bp+10] mono2  pmc_mono2[2][256]: [parity][packed byte] -> two 1bpp
@@ -319,7 +352,7 @@ _pmc_pack_1:
     mov  dx, ax
     add  ax, ax
     add  ax, ax
-    mov  bx, PMC_BAND_STRIDE
+    mov  bx, PMC_BAND_ROW
     sub  bx, ax
     mov  [bp-2], bx
     mov  bx, PMC_PL_STRIDE
@@ -377,6 +410,138 @@ _pmc_pack_1:
                                     ; walks add/sub and cannot follow a load,
                                     ; so the tidier spelling reads to it as a
                                     ; `ret` at depth +2
+    pop  bp
+    ret
+
+; -----------------------------------------------------------------------------
+; _pmc_sprite - void pmc_sprite(const unsigned char *src,
+;                               const unsigned char *pal4,
+;                               unsigned char *dst, int sinc, int rows,
+;                               int flags, const unsigned char *brev)
+;
+; One 16x16 sprite merged OVER a band that already holds its tiles, which is
+; the order the arcade board composites in (pacman.c's renderer draws the tile
+; layer then the sprite layer) and the only order that lets colour index 0 mean
+; "leave what is underneath alone".
+;
+; in:  [bp+4]  src    the sprite's first SOURCE ROW - four bytes, four 2-bit
+;                     pixels a byte, the leftmost pixel in the HIGH bits
+;      [bp+6]  pal4   this sprite's colour block: four nibbles, index 0 being
+;                     the transparent one, which is never looked up
+;      [bp+8]  dst    the band byte holding the sprite's leftmost pixel
+;      [bp+10] sinc   SIGNED bytes from one drawn row's source to the next:
+;                     +-4 for every row, +-8 for the CGA layout's alternate
+;                     rows, and NEGATIVE for flipy - so the vertical flip costs
+;                     no test at all
+;      [bp+12] rows   band rows to write (decremented in the caller's slot)
+;      [bp+14] flags  bit 0: that first pixel lands on the LOW nibble
+;                     bit 1: flipx
+;      [bp+16] brev   pmc_brev[256]: a source byte with its four 2-bit pixel
+;                     fields reversed. flipx is the four bytes walked BACKWARDS
+;                     and each one passed through this table, which is why
+;                     there is one pixel loop below and not two
+; out: 16 pixels a row merged into the band, and DS/ES/DF untouched
+;
+; -----------------------------------------------------------------------------
+; IT NEVER CLIPS, AND THAT IS PMC_BAND_PAD'S WHOLE PURPOSE. A test of two
+; bounds per pixel is four instructions on the hottest loop in the package -
+; ~2,000 of them a frame - to catch a case the band's own slack absorbs for
+; free (see PMC_BAND_ROW above). The caller's only duty is that the span it is
+; composing into really is the widened one pmc_flush_laid guarantees.
+; -----------------------------------------------------------------------------
+
+; One pixel: rotate the working byte's top two bits down, look the colour up,
+; and merge it into the current nibble. A transparent pixel still advances the
+; nibble - it is a HOLE in the sprite, not the end of it.
+%macro PMCPX 0
+    rol  dh, 1
+    rol  dh, 1
+    mov  al, dh
+    and  al, 3
+    jz   %%adv                  ; index 0: the band keeps what it had
+    xlatb                       ; bx = pal4, so al = the VGA colour nibble
+    test dl, dl
+    jnz  %%lo
+    mov  ah, [di]
+    and  ah, 0x0F
+    shl  al, cl                 ; cl = 4 throughout
+    or   al, ah
+    mov  [di], al
+    jmp  short %%adv
+%%lo:
+    mov  ah, [di]
+    and  ah, 0xF0
+    or   al, ah
+    mov  [di], al
+%%adv:
+    xor  dl, 1
+    jnz  %%same                 ; it was the high nibble: same byte
+    inc  di
+%%same:
+%endmacro
+
+_pmc_sprite:
+    push bp
+    mov  bp, sp
+    sub  sp, 6                  ; [bp-2] src row, [bp-4] dst row, [bp-6] step
+    push si
+    push di
+    push bx
+    cld
+
+    cmp  word [bp+12], 0
+    jle  .done
+
+    mov  ax, [bp+4]
+    mov  bx, 1                  ; the source BYTE step, forwards
+    test byte [bp+14], 2
+    jz   .fwd
+    add  ax, 3                  ; flipx starts at the row's last byte...
+    mov  bx, -1                 ; ...and walks back
+.fwd:
+    mov  [bp-2], ax
+    mov  [bp-6], bx
+    mov  ax, [bp+8]
+    mov  [bp-4], ax
+
+.row:
+    mov  si, [bp-2]
+    mov  di, [bp-4]
+    mov  bx, [bp+6]             ; pal4, held in BX for xlatb
+    mov  dl, [bp+14]
+    and  dl, 1                  ; the starting nibble phase
+    mov  cx, 0x0404             ; ch = four source bytes, cl = the shift
+.byte:
+    mov  al, [si]
+    test byte [bp+14], 2
+    jz   .noflip
+    push bx
+    mov  bx, [bp+16]            ; pmc_brev - the four pixels reversed
+    xlatb
+    pop  bx
+.noflip:
+    add  si, [bp-6]
+    mov  dh, al                 ; the working byte
+    PMCPX
+    PMCPX
+    PMCPX
+    PMCPX
+    dec  ch
+    jnz  .byte
+
+    mov  ax, [bp-2]
+    add  ax, [bp+10]            ; sinc is signed: flipy walks the rows back
+    mov  [bp-2], ax
+    add  word [bp-4], PMC_BAND_ROW
+    dec  word [bp+12]
+    jnz  .row
+.done:
+    pop  bx
+    pop  di
+    pop  si
+    add  sp, 6                  ; the ARITHMETIC inverse of the `sub sp, 6`,
+                                ; never `mov sp, bp` - tools/stkbalance.py
+                                ; walks add/sub and cannot follow a load
     pop  bp
     ret
 

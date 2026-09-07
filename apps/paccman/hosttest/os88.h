@@ -82,6 +82,13 @@ void  os88_video(struct os88_video *v);
 int   os88_toast(const char *text, int ticks);
 int   os88_snd_tone(int hz, int ticks, int prio);
 
+void *os88_wm_top(void);
+int   os88_task_spawn(void *win);
+void  os88_task_alive(void *win);
+void  os88_task_sleep(int ticks);
+void  os88_task_yield(void);
+unsigned os88_ticks(void);
+
 /* The callbacks the package DEFINES. Declared so the harness can call them
  * the way the kernel does. */
 void *os88_main(void);
@@ -89,5 +96,6 @@ void  os88_paint(void *win);
 void  os88_about(void *win);
 void  os88_onkey(int ascii, int scan, void *win);
 void  os88_oncmd(int item, int menu, void *win);
+void  os88_worker(void *win);
 
 #endif

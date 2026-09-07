@@ -154,8 +154,63 @@ pb_setup:
     inc di
     loop .t
 
+    ; THE SPRITE'S SOURCE IS DELIBERATELY HALF TRANSPARENT. _pmc_sprite skips
+    ; colour index 0, so a source with no zero pixels measures the SLOW path
+    ; on every pixel and a source of all zeros measures the fast one; either
+    ; would be a number no real sprite ever costs. 0x1B repeated with a stride
+    ; of 0x27 gives a mix, and the explicit zero every fourth byte puts four
+    ; transparent pixels in every row - about the coverage a ghost has.
+    mov di, pb_spr
+    mov cx, 64
+    mov al, 0x1B
+.s:
+    mov [di], al
+    add al, 0x27
+    inc di
+    dec cx
+    jz .sd
+    test cl, 3
+    jnz .s
+    mov byte [di], 0                ; one wholly transparent source byte
+    inc di
+    dec cx
+    jnz .s
+.sd:
+    mov di, pb_pal4                 ; index 0 is the transparent one
+    mov byte [di], 0
+    mov byte [di+1], 0x0F
+    mov byte [di+2], 0x09
+    mov byte [di+3], 0x01
+
+    xor bx, bx                      ; pb_brev[b] = b's four pixels reversed
+.rv:
+    mov al, bl
+    mov ah, al
+    and ah, 3
+    mov cl, 6
+    shl ah, cl
+    mov dl, ah
+    mov ah, al
+    and ah, 0x0C
+    shl ah, 1
+    shl ah, 1
+    or  dl, ah
+    mov ah, al
+    shr ah, 1
+    shr ah, 1
+    and ah, 0x0C
+    or  dl, ah
+    mov ah, al
+    mov cl, 6
+    shr ah, cl
+    or  dl, ah
+    mov [pb_brev + bx], dl
+    inc bx
+    cmp bx, 256
+    jb .rv
+
     mov di, pb_band                 ; the packed band the packers read
-    mov cx, 8 * PMC_BAND_STRIDE
+    mov cx, 8 * PMC_BAND_ROW
     mov al, 0x39
 .b:
     mov [di], al
@@ -324,6 +379,49 @@ pb_b_pack1:
     add sp, 12
     ret
 
+; --- _pmc_sprite(src, pal4, dst, sinc, rows, flags, brev) -------------------
+; TWO ROWS, BECAUSE THE TWO CASES ARE DIFFERENT LOOPS' WORTH OF WORK. An even
+; destination nibble is the cheap one; an odd one plus flipx adds a table pass
+; per source byte and is what Pac-Man running left at an odd pixel costs, which
+; is half of every frame.
+pb_b_sprite:
+    mov ax, pb_brev
+    push ax
+    xor ax, ax
+    push ax                         ; flags: high nibble first, no flipx
+    mov ax, 8
+    push ax                         ; rows
+    mov ax, 4
+    push ax                         ; sinc: every source row
+    mov ax, pb_band + 8
+    push ax
+    mov ax, pb_pal4
+    push ax
+    mov ax, pb_spr
+    push ax
+    call _pmc_sprite
+    add sp, 14
+    ret
+
+pb_b_sprite2:
+    mov ax, pb_brev
+    push ax
+    mov ax, 3
+    push ax                         ; flags: LOW nibble first, and flipx
+    mov ax, 8
+    push ax
+    mov ax, 4
+    push ax
+    mov ax, pb_band + 9
+    push ax
+    mov ax, pb_pal4
+    push ax
+    mov ax, pb_spr
+    push ax
+    call _pmc_sprite
+    add sp, 14
+    ret
+
 ; --- the three emits --------------------------------------------------------
 ; ES IS SAVED AND PUT BACK at every one of them. This runs inside a window
 ; callback, which the kernel enters with ES = KERNEL_SEG (SPEC.md 20.1)
@@ -351,7 +449,7 @@ pb_b_blit4:
     push es
     push bp
     mov si, pb_band
-    mov bp, PMC_BAND_STRIDE
+    mov bp, PMC_BAND_ROW
     mov ax, [pb_bx]
     mov bx, [pb_by]
     mov cx, PMC_BAND_W
@@ -571,6 +669,16 @@ pb_run:
     xor al, al
     call bl_run
 
+    mov word [bl_body], pb_b_sprite
+    mov si, pb_r_spr
+    xor al, al
+    call bl_run
+
+    mov word [bl_body], pb_b_sprite2
+    mov si, pb_r_spr2
+    xor al, al
+    call bl_run
+
     call bl_blank
     mov si, pb_s_hdr2
     call bl_sline
@@ -639,6 +747,8 @@ pb_r_tile1:  db 'TILE step 1 (8 rows)', 0
 pb_r_tile2:  db 'TILE step 2 (4 rows)', 0
 pb_r_packpl: db 'PACK_PL 8 rows x 28', 0
 pb_r_pack1:  db 'PACK_1  8 rows x 28', 0
+pb_r_spr:    db 'SPRITE 16x8 even', 0
+pb_r_spr2:   db 'SPRITE 16x8 odd+flipx', 0
 pb_r_blitp:  db 'BLITP 224x8 4 planes', 0
 pb_r_blit4:  db 'BLIT4 224x8 packed', 0
 pb_r_blit1:  db 'BLIT1 224x8 1bpp', 0
@@ -660,20 +770,23 @@ pb_1ok:     db 1
 ; + pb_pairs 16 + pb_tile 16, and eight bytes of slack that make the
 ; arithmetic legible. pb_entry checks the sum and REFUSES THE LAUNCH if it is
 ; short - which is what the first build of the C64's bench did, by 24 bytes.
-PB_BSS_OWN  equ 8 * PMC_BAND_STRIDE + 4 * PMC_PL_STEP + 8 * PMC_PL_STRIDE \
-                + 512 + 512 + 16 + 16 + 8
+PB_BSS_OWN  equ 8 * PMC_BAND_ROW + 4 * PMC_PL_STEP + 8 * PMC_PL_STRIDE \
+                + 512 + 512 + 16 + 16 + 64 + 4 + 256 + 8
 PB_BSS_TOTAL equ PB_BSS_OWN + BL_BSS_SIZE
     OS88_BSS PB_BSS_TOTAL
     OS88_IMAGE_END
 
 section .bss
-pb_band:    resb 8 * PMC_BAND_STRIDE
+pb_band:    resb 8 * PMC_BAND_ROW
 pb_planes:  resb 4 * PMC_PL_STEP
 pb_bits:    resb 8 * PMC_PL_STRIDE
 pb_planar:  resb 512
 pb_mono2:   resb 512
 pb_pairs:   resb 16
 pb_tile:    resb 16
+pb_spr:     resb 64                 ; one 16x16 sprite: 4 bytes a row
+pb_pal4:    resb 4                  ; its colour block, index 0 transparent
+pb_brev:    resb 256                ; _pmc_sprite's flipx lowering
 pb_bl:      resb BL_BSS_SIZE
 pb_bss_end:
 section .text
