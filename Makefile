@@ -2553,6 +2553,34 @@ $(FACELIC): faces/LICENSES.txt | $(BUILD)
 #                   a system disk at all. This geometry still carries
 #                   INCONSOL.F88 and ROBOMONO.F88, so it does not lose the
 #                   monospace SHAPE, only one family of it.
+#   COURIER.F88     **AND THE SAME ARGUMENT AGAIN SINCE SPEC.md 70.11**, which
+#                   is why it reads the same: the Zmodem receiver takes
+#                   TELNET.O88 from 10 clusters to 14 and this geometry had
+#                   four. Courier is the OTHER 1,688-byte face, it is the THIRD
+#                   monospace on a disk that keeps INCONSOL.F88 and
+#                   ROBOMONO.F88, and nothing on this disk names it - the two
+#                   places in the tree that write "Courier" are
+#                   apps/texpad/tpexport.inc and apps/word/wdrtf.inc, and both
+#                   mean a POSTSCRIPT or RTF font name in a file they are
+#                   exporting, not a typeface they load. It is untouched on the
+#                   720KB, 1.44MB and 1.2MB system disks and on every apps disk.
+#   TALLX.F88       **AND A THIRD TIME, AND IT IS THE LAST.** The receiver
+#                   landed at 14,337 bytes, which is ONE byte over fourteen
+#                   clusters, and shaving a package to fit a cluster boundary
+#                   leaves the next editor nine bytes of headroom and no
+#                   warning. So the cluster comes off the disk instead. TALLX
+#                   is a DISPLAY face and the smallest of the ten (1,118
+#                   bytes); nothing names it either, and this geometry keeps
+#                   ARCHIVO, CHARTER, HELV, INCONSOL, NOTO, ROBOMONO and TIMES
+#                   - seven of ten, both monospaces, and the two the shipped
+#                   packages ask for by name.
+#
+# **THIS GEOMETRY IS AT 351 OF 354, THREE FREE, AND THE ARGUMENT ABOVE IS NOW
+# SPENT.** It has been used three times in two waves and there is no fourth
+# face on this disk that nothing names: what is left is the seven a Font menu
+# needs to be worth opening. The next feature that grows anything here gives up
+# something ELSE - a core package, the manual, the logo - and that is a
+# decision for whoever asks for the feature, not another line in this list.
 #
 # **A FILTER-OUT AND NOT A SECOND LIST**, which is the opposite of $(SMALLOMIT)
 # and is right for the opposite reason: kern_small's list says what CANNOT run
@@ -2560,7 +2588,8 @@ $(FACELIC): faces/LICENSES.txt | $(BUILD)
 # machine is doing without for want of two kilobytes. A package added to
 # $(COREAPPS) tomorrow SHOULD appear here and be refused by os88disk if it does
 # not fit, which is the failure everybody wants.
-SYS360OMIT := $(BUILD)/mines.o88 $(BUILD)/jetbrain.f88
+SYS360OMIT := $(BUILD)/mines.o88 $(BUILD)/jetbrain.f88 $(BUILD)/courier.f88 \
+               $(BUILD)/tallx.f88
 CORE_TOOLS360 := $(filter-out $(SYS360OMIT),$(CORE_TOOLS))
 CORE_GAMES360 := $(filter-out $(SYS360OMIT),$(CORE_GAMES))
 COREAPPS360 := $(CORE_TOOLS360) $(CORE_GAMES360)
@@ -3668,6 +3697,8 @@ $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
 # netpkg.inc, which is the DRIVER's ABI header and is included by both ends so
 # the two cannot drift (SPEC.md 20.11) - the same reason tests/socktest has it.
 $(BUILD)/telnet.bin: apps/telnet/telnet.asm apps/telnet/tetxt.inc \
+                     apps/telnet/teansi.inc apps/telnet/tecp437.inc \
+                     apps/telnet/tezm.inc \
                      apps/os88api.inc \
                      apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                      drivers/net/netpkg.inc | $(BUILD)

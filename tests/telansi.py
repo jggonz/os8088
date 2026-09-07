@@ -321,7 +321,8 @@ def main():
     sy = te_syms()
     for n in ("te_scr", "te_state", "te_soff", "te_zon", "te_zat", "te_obin",
               "te_rxi", "te_rxn", "te_btn", "te_line", "te_pndn", "te_cvis",
-              "te_hbuf", "te_thint", "te_txm", "te_zn"):
+              "te_hbuf", "te_thint", "te_txm", "te_zn", "te_tseg",
+              "te_cx", "te_cy", "te_sx", "te_sy"):
         if n not in sy:
             sys.exit("telansi: %s is not in the package map" % n)
 
@@ -457,6 +458,33 @@ def main():
             scr = m.readseg(pseg, sy["te_scr"], TE_SCRSZ)
             ref = ansisim.render(data)
             want = ref.raw()
+            # **DID THE STREAM FINISH?** `quiet()` returns when [te_soff] has
+            # stood still for two seconds with the queue drained - and its own
+            # docstring says "the buffer is empty" is true BETWEEN TWO
+            # FRAGMENTS, which is the condition it then tests. The server is a
+            # Python thread on a host several agents share, so a two-second gap
+            # between two of its fragments is a scheduling accident rather than
+            # an extreme; when it happens the assertion that fires is
+            # diff_report's, which reads as a parser bug and is host load. The
+            # number is already here: [te_soff] counts APPLICATION bytes after
+            # the option layer and os88bbs's telnet_escape doubles 0xFF on the
+            # way out, so a literal 0xFF costs one offset at each end and the
+            # equality holds exactly.
+            expect = ref.zmodem_at if ref.zmodem_at is not None else len(data)
+            if got_off != expect:
+                say("%-8s %5d bytes, %d fed  STALLED" % (name, len(data),
+                                                         got_off))
+                fails.append("%s: the guest consumed %d application bytes of "
+                             "%d - the stream did not finish, so the cell "
+                             "comparison is meaningless. Under host load "
+                             "quiet() can return between two of the server's "
+                             "fragments" % (name, got_off, expect))
+                press_connect()
+                time.sleep(1.2)
+                srv.stop()
+                logs[name] = srv.log_dict()
+                time.sleep(0.6)
+                continue
             bad = diff_report(scr, want)
             say("%-8s %5d bytes, %d fed  %s"
                 % (name, len(data), got_off, "ok" if not bad else "MISMATCH"))
@@ -703,7 +731,17 @@ def check_fullscreen(m, pseg, sy, shot, fails, press_connect, connected, quiet,
                      "([te_txm] is 0) - nothing below this was tested")
         return
     scr = m.readseg(pseg, sy["te_scr"], TE_SCRSZ)
-    vram = m.read(0xB8000, TE_SCRSZ)
+    # **THE SEGMENT IS ASKED, NOT ASSUMED.** It was a hardcoded 0xB8000, which
+    # is right on VGA and CGA and wrong on Hercules - and the same gate pointed
+    # at a Hercules run then reports "4,000 of 4,000 bytes differ" instead of
+    # "the wrong framebuffer". [te_tseg] is the answer OSAPI_FSX_MODE gave the
+    # package (tetxt.inc), so this reads the machine's own.
+    tseg = u16(m.readseg(pseg, sy["te_tseg"], 2))
+    say("fsx seg   %04X" % tseg)
+    if tseg not in (0xB800, 0xB000):
+        fails.append("[te_tseg] is %04X, which is neither text framebuffer - "
+                     "the memcmp below would compare the wrong memory" % tseg)
+    vram = m.read(tseg << 4, TE_SCRSZ)
     if shot:
         subprocess.run([sys.executable, os.path.join(ROOT, "tools", "shot.py"),
                         SOCK, shot], check=False, capture_output=True, cwd=ROOT)
@@ -738,6 +776,35 @@ def check_fullscreen(m, pseg, sy, shot, fails, press_connect, connected, quiet,
                         (bad[0] // 2) % TE_COLS))
     else:
         say("fullscreen 4,000 bytes identical, the hint's twelve cells apart")
+    # --- THE SAVED CURSOR, AND IT IS ASKED INSIDE THE BRACKET --------------
+    # This is the one place the w3 review's BLOCKER 1 could be reached: te_fsi
+    # aliased [te_sx]/[te_sy], so OSAPI_FSX_MODE's sixteen bytes landed on the
+    # saved cursor and the board's next `CSI u` sent te_putc 34,696 bytes past
+    # the package's claim. The `save` fixture is driven WINDOWED with all the
+    # others and `art` has no CSI s/CSI u in it, so nothing in wave 3 asked the
+    # question after a mode set. A restore with no prior save is legal and is
+    # what a board that keeps a status line sends.
+    # It is asserted on the SLOT rather than by sending a restore, because the
+    # slot is where the damage is: with the aliasing in place [te_sx] reads
+    # 0xB800 the instant OSAPI_FSX_MODE returns, whether or not a board ever
+    # sends the sequence that would spend it. The restore's own clamp
+    # (te_restcur) is defence in depth and would MASK a send-based test.
+    sx = u16(m.readseg(pseg, sy["te_sx"], 2))
+    sy_ = u16(m.readseg(pseg, sy["te_sy"], 2))
+    cx0 = u16(m.readseg(pseg, sy["te_cx"], 2))
+    cy0 = u16(m.readseg(pseg, sy["te_cy"], 2))
+    if sx >= TE_COLS or sy_ >= TE_ROWS:
+        fails.append("inside the bracket the SAVED cursor is (%d,%d) and the "
+                     "screen is 80x25 - OSAPI_FSX_MODE has written over it, "
+                     "which is te_fsi aliasing te_sx (the w3 review's BLOCKER "
+                     "1). te_celloff has no range check and te_putc is the one "
+                     "unguarded write in the package" % (sx, sy_))
+    elif cx0 >= TE_COLS or cy0 >= TE_ROWS:
+        fails.append("inside the bracket the cursor is (%d,%d) and the screen "
+                     "is 80x25" % (cx0, cy0))
+    else:
+        say("fsx cur   saved (%d,%d), live (%d,%d) - both in range after "
+            "OSAPI_FSX_MODE" % (sx, sy_, cx0, cy0))
     qmp("sendkey ctrl-bracket_right")
     time.sleep(3.0)
     press_connect()                     # ...and the session closes with it

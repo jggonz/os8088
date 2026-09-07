@@ -26,8 +26,8 @@
 ; WHAT IS NOT HERE. The renderers (SPEC.md 70.8), which consume the same dirty
 ; bitmap this marks; the Telnet option layer (te_byte, SPEC.md 70.10.1), which
 ; is above this and hands it application bytes; and the Zmodem receiver
-; (SPEC.md 70.11), which te_zdetect hands the stream to and which is a later
-; wave - tz_start at the foot of this file is the stub it replaces.
+; (SPEC.md 70.11), which is a file of its own (apps/telnet/tezm.inc) and which
+; te_zdetect hands the stream to at tz_start.
 ; =============================================================================
 
 ; --- the states (SPEC.md 70.9.1) ---------------------------------------------
@@ -359,12 +359,26 @@ te_savecur:
     pop ax
     ret
 
+; **AND IT CLAMPS**, which is defence in depth rather than a rule of the
+; protocol: the slot is written by one routine and read by another, and the w3
+; review's BLOCKER 1 was a THIRD writer - OSAPI_FSX_MODE, through a te_fsi that
+; aliased these two words - putting 47,104 in [te_sx]. te_celloff has no range
+; check and te_putc is the one unguarded write in the package, so a cursor that
+; cannot be out of range by construction is worth two compares.
 te_restcur:
     push ax
     call te_markcur
     mov ax, [te_sx]
+    cmp ax, TE_COLS
+    jb .cxok
+    mov ax, TE_COLS - 1
+.cxok:
     mov [te_cx], ax
     mov ax, [te_sy]
+    cmp ax, TE_ROWS
+    jb .cyok
+    mov ax, TE_ROWS - 1
+.cyok:
     mov [te_cy], ax
     mov byte [te_pwrap], 0
     call te_markcur
@@ -1376,6 +1390,26 @@ te_cmove:
 ; own rule, and the debt is spent as ONE OSAPI_GFX_SCROLL windowed or ONE
 ; `rep movsw` in text mode.
 ; -----------------------------------------------------------------------------
+; **THE BUFFER, THE MARKS AND THE DEBT ARE ONE TRANSACTION** (the w3 review's
+; MAJOR 1). This runs on the WORKER and both renderers run on the UI task at the
+; same time - that is what FSXF_KEEPWORKER means (SPEC.md 53.5.1) and why
+; SPEC.md 70.8.8 made the debt a shared word at all. The three steps used to be
+; visible separately: te_cmove moved 2,000 cells, te_markup moved the bitmap,
+; te_fillcells marked the vacated rows, and only THEN did `add [te_scrl], ax`
+; make the debt visible.
+;
+; A renderer that preempted between the move and the add drew a row from a mark
+; set BEFORE the scroll, so it put post-scroll content at a post-scroll position
+; - correct - and the next pass then spent the debt as one `rep movsw` and moved
+; it a row too far. **Only the rows the scroll VACATED are marked**, so nothing
+; repaired the rows above them and a board that scrolls and then sits at a menu
+; left them wrong for the rest of the session. te_takescroll made the COUNTER
+; atomic; this makes the SCROLL atomic, which is the same defect one step out.
+;
+; [te_scrbusy] is that transaction, and the renderers' two takers answer "there
+; is nothing owed" while it is set: one skipped frame against a screen that
+; cannot be repaired. It is one byte in the parser's own bss run, so te_reset
+; covers it for free.
 te_scrollup:
     push ax
     push bx
@@ -1383,6 +1417,7 @@ te_scrollup:
     push dx
     or ax, ax
     jz .out
+    mov byte [te_scrbusy], 1
     cmp ax, TE_ROWS
     jae .all
     push ax                         ; N, for the marks and the debt
@@ -1413,15 +1448,22 @@ te_scrollup:
     call te_fillcells               ; ...which marks every row it filled
     pop ax
 .debt:
-    add [te_scrl], ax
-    cmp word [te_scrl], TE_ROWS
-    jbe .out
-    mov word [te_scrl], TE_ROWS     ; SATURATED, so a board that scrolls a
-                                    ; thousand rows while the window is covered
+    pushf                           ; **THE ADD AND ITS SATURATION ARE ONE
+    cli                             ; OPERATION** (the w3 review's MINOR 5): the
+    add [te_scrl], ax               ; `cmp`/`mov` used to sit outside the atomic
+    cmp word [te_scrl], TE_ROWS     ; add, so te_takescroll zeroing the counter
+    jbe .sat                        ; between them wrote 25 back - a phantom
+    mov word [te_scrl], TE_ROWS     ; full-screen scroll that never happened.
+.sat:                               ; SATURATED, so a board that scrolls a
+    popf                            ; thousand rows while the window is covered
                                     ; cannot wrap the word; both renderers read
                                     ; anything at or past TE_ROWS as "repaint
                                     ; the lot"
+    mov byte [te_scrbusy], 0        ; ...and the transaction closes HERE, with
+                                    ; the buffer, the bitmap and the debt all
+                                    ; agreeing with each other again
 .out:
+    mov byte [te_scrbusy], 0
     pop dx
     pop cx
     pop bx
@@ -1632,24 +1674,19 @@ te_delchar:
     ret
 
 ; =============================================================================
-; THE ZMODEM HANDOVER - A STUB UNTIL SPEC.md 70.11 LANDS
+; THE ZMODEM HANDOVER (SPEC.md 70.9.6 -> SPEC.md 70.11)
 ;
-; SPEC.md 70.9.6: the handover offset is just past the final `0`, and **the
-; parser is fed nothing more until the transfer ends**. That is what makes the
-; byte-for-byte contract of 70.12 hold for a fixture with the trigger in it:
-; ansisim's `feed()` returns short at the same offset and consumes nothing more,
-; so both readers stop with the same 4,000 bytes.
+; The receiver is `tz_start` in tezm.inc and this file's only business with it
+; is the six-byte trigger above. SPEC.md 70.9.6's contract is what the two
+; share: the handover offset is just past the final `0`, and **the parser is
+; fed nothing more until the transfer ends** - te_byte sends every later
+; application byte to tz_byte instead, so ansisim's `feed()` returning short at
+; the same offset leaves both readers stopped with the same 4,000 bytes
+; (SPEC.md 70.12).
 ;
-; With no receiver yet, "fed nothing more" is the whole behaviour: te_feed
-; stops, and te_step's UP arm issues no new NETV_RECV while [te_zon] is set - so
-; TCP's own window holds the sender and nothing is dropped anywhere. The
-; receiver replaces this proc and clears [te_zon] when the transfer ends.
+; A STUB LIVED HERE THROUGH WAVE 3 and its whole behaviour was "fed nothing
+; more": te_feed stopped and te_step issued no new NETV_RECV while [te_zon] was
+; set. The receiver kept the second half of that - it is still the RECEIVER
+; that decides whether another byte may be taken (tz_canrx), and TCP's own
+; window is still what holds the sender.
 ; =============================================================================
-tz_start:
-    push ax
-    mov byte [te_zon], 1
-    mov ax, [te_soff]
-    mov [te_zat], ax                ; the stream offset the receiver takes over
-    inc byte [te_zn]                ; ...and how many times it has fired, which
-    pop ax                          ; is what a gate reads to tell "fired once"
-    ret                             ; from "fired on every star of some art"

@@ -380,6 +380,7 @@ line, the two waves that have landed:
 | the estimate above, waves 2 and 3's share | ~7,500 | ~7,700 | ~15,200 |
 | after §70.8 (the screen, both renderers, the glyphs) | 7,052 | 7,554 | 14,606 |
 | **after §70.9/§70.10 (the parser, the keys, the queue)** | **10,235** | **7,821** | **18,056** |
+| **after §70.11 (the Zmodem receiver) — FINAL** | **14,337** | **16,254** | **30,591** |
 
 The estimate was **good to about four per cent on bss and nine on image**,
 which is worth saying because the estimate is what the whole plan was sized
@@ -395,12 +396,29 @@ estimate could have caught it, because this table measures the package and the
 constraint is the disk it rides on with sixteen other packages, ten typefaces
 and the whole driver set.
 
-**~25,200 of 61,440 — about 41%.** Comfortable against the validator, and the
-thing to watch is not the validator: the package region is a **heap claim**, so
-the real limit is whatever the heap has contiguous, and a 25 KB claim on a
-256 KB machine is a different question from a 6.6 KB one. `os88pkg`'s own
-comment says so. Not measured; the launch on `vm/xt` with 256 KB is where it
-becomes a fact.
+**30,591 of 61,440 — 50%, and that is the FINAL figure.** The estimate said
+~25,200 and the receiver came in 5,400 over it, all of it in `tezm.inc`: ~1,800
+was guessed and the file is about 4,000 bytes of code, because the estimate had
+no row for the 8.3 mangle, the 32-bit decimal formatting the progress line
+needs, the progress panel itself or the diagnostic counters §70.11.6 kept.
+
+Comfortable against the validator, and **the thing to watch is still not the
+validator**: the package region is a **heap claim**, so the real limit is
+whatever the heap has contiguous, and a 30 KB claim on a 256 KB machine is a
+different question from a 6.6 KB one. `os88pkg`'s own comment says so. Not
+measured; the launch on `vm/xt` with 256 KB is where it becomes a fact.
+
+**AND THE `kern_small` SENTENCE IS NOW ARITHMETIC THAT DOES NOT FIT.** §70.8.3
+kept the blit-refusal degrade for one reachable case — a user hand-copying
+`TELNET.O88` onto a `kern_small` system disk, where `OSAPI_GFX_BLIT1` is a
+`stc`/`ret` stub. **30,591 against a heap of about 28 KB means that copy is
+most likely refused at the claim and never reaches the renderer at all.** It
+is a SUBTRACTION and not a run — nothing in this tree boots a `kern_small`
+kernel with this package beside it, and the Makefile's `SMALLOMIT` is what
+stops it — so the honest statement is that the degrade is compile-tested only
+with no reachable case left in it. It stays anyway: the heap figure is a
+configuration a fork can change, and forty bytes is a worse thing to save than
+a documented refusal.
 
 **And there is a second budget, which is the kernel's and is nothing to do with
 this one.** §5.4.2.2.1's Map Mask split lives in `kernel/vga12.inc` and spends
@@ -416,7 +434,10 @@ The 8 KB staging is the single largest item and it is the one with an argument
 behind it: §77.21 found that **the staging size is the seek count**, and a
 smaller buffer means more `OSAPI_FILE_APPEND` commits, each of which is two FAT
 flushes and a directory write. Halving it to 4 KB would double the seeks on a
-download for 4,096 bytes of a budget that has 36,000 spare.
+download for 4,096 bytes of a budget that has 30,849 spare — and **the halves
+are what the double-buffering is**, so halving the area would also mean the
+worker waits for every commit instead of filling the other half through it
+(§70.11.3). It is one argument doing two jobs.
 
 ## 7. What an implementer will hit
 

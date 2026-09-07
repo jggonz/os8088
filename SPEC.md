@@ -30435,8 +30435,22 @@ Two teardown corollaries, both about not trading a crash for a leak:
    `osapi_set_color`, `font_*`, `wm_content`, `wm_obscured`,
    `wm_clip_set`/`wm_clip_clear`, `osapi_video`,
    `osapi_get_ticks`, `osapi_mouse`, `osapi_srand`/`osapi_rand`,
-   `task_sleep`, `task_yield`, `OSAPI_WM_WAKE`, `OSAPI_TASK_ALIVE` and
+   `task_sleep`, `task_yield`, `OSAPI_WM_WAKE`, `OSAPI_TASK_ALIVE`,
+   `osapi_snd_tone`/`osapi_snd_caps` and
    `wm_saveu`.
+   **`osapi_snd_tone` was missing from this list too, and is missing for the
+   same reason `OSAPI_WM_WAKE` was.** `apps/os88api.inc` already names it
+   among what a worker may call and spends five lines saying it is
+   *"worker-safe by construction, not by luck"*; `snd_tone_req` is one
+   `pushf`/`cli` … `popf` and takes neither `sch_lock` nor the gfx lock, and
+   `snd_req_inst` bills the tone to the calling task's own instance. Telnet's
+   parser is what found it: §70.9.2's BEL runs on the worker, through
+   `te_step` → `te_feed` → `te_byte` → `te_pbyte` → `te_ground` → `te_control`
+   → `te_bell`, and a board sends BEL. §53 is clear that the call is legal
+   inside an exclusive bracket as well — §53.1's last bullet contemplates
+   sound grants taken there and §53.2 keeps `snd_tick` running — which is
+   what makes it right for Telnet's full-screen renderer too. It is
+   `osapi_snd_play` that is out, and the paragraph below already says why.
    **`OSAPI_WM_WAKE` was missing from this list and is not new** — its
    own cell has said "any context — ISR-safe and worker-safe, no lock
    needed" since it was written (§74.1), and it is the carrier of the
@@ -35061,6 +35075,41 @@ been at zero free twice now, and §70.11's Zmodem receiver grows `TELNET.O88`
 again by about two clusters on both disks; the four and sixteen above are what
 that is budgeted out of. A disk that is exactly full is a disk the next byte
 breaks, and the breakage lands on whoever is holding it.
+
+**IT WAS FOUR CLUSTERS AND NOT TWO, so one more typeface came off.** §70.11's
+receiver takes `TELNET.O88` from **10,235 to 14,337** — 10 clusters to 14 —
+which is exactly the four the system disk had, leaving it at **354 of 354**:
+full, not tight, which is the state the paragraph above says is the dangerous
+one. So `COURIER.F88` goes with `JETBRAIN.F88`, on the same test and with the
+same words: it is the OTHER 1,688-byte face, it is the THIRD monospace on a
+disk that keeps `INCONSOL.F88` and `ROBOMONO.F88`, and nothing on this disk
+names it. The two places in the tree that write "Courier" are
+`apps/texpad/tpexport.inc` and `apps/word/wdrtf.inc`, and both mean a
+PostScript or RTF font name in a file they are exporting rather than a typeface
+they load — and neither package is on a system disk.
+
+**AND `TALLX.F88` WITH IT, WHICH IS THE THIRD USE AND THE LAST.** The receiver
+landed at **14,337 bytes — one byte over fourteen clusters** — and shaving a
+package to fit a cluster boundary is not a saving, it is nine bytes of headroom
+handed to the next editor with no warning. So the cluster comes off the disk.
+TallX is a DISPLAY face and the smallest of the ten (1,118 bytes), nothing
+names it either, and this geometry keeps `ARCHIVO`, `CHARTER`, `HELV`,
+`INCONSOL`, `NOTO`, `ROBOMONO` and `TIMES` — seven of ten, both monospaces, and
+the two the shipped packages ask for by name.
+
+| | what comes off | clusters | after |
+|---|---|---|---|
+| system, after §70.11 | `COURIER.F88` and `TALLX.F88` | 2 + 2 | **351 of 354, 3 free** |
+| apps, after §70.11 | (nothing more) | — | **343 of 354, 11 free** |
+
+**THE ARGUMENT IS NOW SPENT.** It has been used three times in two waves and
+there is no fourth face on this disk that nothing names: what is left is the
+seven a Font menu needs to be worth opening. The sixteen clusters `MODPLUG.O88`
+bought have absorbed the whole of Telnet's growth on the apps disk, and the
+system disk has given up a game and three typefaces. **The next feature that
+grows anything on the 360KB system disk gives up something ELSE** — a core
+package, the manual, the logo — and that is a decision for whoever asks for the
+feature rather than another row in this list.
 
 **A `filter-out` and not a second list**, which is the opposite of
 `SMALLOMIT`'s shape and right for the opposite reason: `kern_small`'s list says
@@ -78326,6 +78375,23 @@ carries it and no `kern_small` machine can launch it. The two true reasons:
   and a terminal that answered it with a blank window rather than with grey
   letters would be a program that had a reason and did not use it.
 
+**AND THAT ONE WAY IS NOW ARITHMETIC AGAINST A NUMBER THAT DOES NOT FIT.**
+After §70.11's Zmodem receiver the package is its final size — `os88pkg.py`
+reads **image 14,337, bss 16,254**, so the loader's claim is **30,591 bytes**
+— and a `kern_small` machine is a 256KB one whose heap is about 28 KB
+(docs/KERN-SPLIT-PLAN.md). **A hand-copied `TELNET.O88` is therefore most
+likely REFUSED AT THE CLAIM and never reaches the renderer at all**, which
+makes the degrade below unreachable on that machine too, for a second and
+larger reason than the one above.
+
+**This is arithmetic and not a run.** Nothing in this tree boots a
+`kern_small` kernel with `TELNET.O88` beside it — the Makefile's `SMALLOMIT`
+is what stops it — so the claim is a subtraction, and the honest statement is
+that the degrade path is now compile-tested only with no reachable case left
+in it at all. It stays because deleting a documented refusal on the strength
+of a subtraction is a worse trade than 40 bytes: the heap figure is a
+configuration a fork can change, and the code is what makes the change safe.
+
 What it does on a refusal is §70.8.2's degrade — one `OSAPI_FONT_RUN` for the
 whole row, with `[te_nob]` latched so no later row asks the kernel again — and
 not the BLIT4 path below, which was the answer to "the split does not fit" and
@@ -79514,6 +79580,14 @@ every subpacket while looking correct.
 | `ZCRCW` | `ZACK` with the position | **over**, and the sender then emits an **XON** the `ZPAD` scan must skip |
 | `ZCRCE` | nothing | over |
 
+**AND THAT TABLE IS ABOUT A *DATA* SUBPACKET.** The `ZFILE` info block is
+`ZCRCW`-terminated too and is **not** answered with a `ZACK`: what the sender
+reads after it is the `ZRPOS` or the `ZSKIP` the Save dialog decides (§70.11.2),
+and an `ZACK` in front of that is a straggler it has to skip. `lrzsz`'s
+receiver does not send one either. The distinction is per SINK — the info block
+or the staging halves — and not per terminator, which is why `tz_subok`
+branches on `[tz_sk]` before it looks at `[tz_fend]` at all.
+
 **`ZEOF` carries the file LENGTH as its position**, and it is answered with a
 fresh `ZRINIT` — which is what lets the next `ZFILE`, or the `ZFIN`, follow.
 
@@ -79575,6 +79649,28 @@ every Zmodem timeout in the protocol is measured in seconds.
 
 **A batch is `ZFILE` again after `ZEOF`**, which the states above already say,
 and each file gets its own dialog.
+
+**A HEADER CAN BE OWED AND NOT YET SENDABLE, so `[tz_owe]` is a byte and not a
+state.** Two of them wait on the same thing — the UI task's commit — because
+`[tz_pos]` is not final until it lands:
+
+| `[tz_owe]` | what is owed | why it waits |
+|---|---|---|
+| 1 | the `ZRINIT` that answers a `ZEOF` | the file's last partial chunk was raised with it, and a sender told the file is closed is free to start the next one |
+| 2 | a `ZRPOS` after a CRC error, or a `ZDATA` that resumed somewhere we are not | it names the bytes COMMITTED, and the half in flight may or may not have reached the disk |
+
+`tz_poll` sends whichever is owed on the first pass where `[tz_req]` is
+`TZ_NONE`, which is at most one commit's wait. Making them states instead would
+have doubled the table for a condition that is not about the protocol at all.
+
+**AND THE SUBPACKET NEEDS TWO COUNTERS, NOT ONE.** `[tz_n]` counts a header's
+bytes or nibbles *and* a subpacket's two CRC bytes, and the frame-end byte
+resets it for the second job — so a reader of it after the CRC sees **2**. The
+file name's length is wanted exactly there, at `tz_infodone`. With one counter
+the info block was NUL-terminated at its third character, the Save dialog was
+pre-filled with a two-letter name, and everything after it was parsed as the
+decimal size. `[tz_dn]` is the data counter and the two never overlap in time
+by construction: one belongs to the frame, the other to the payload.
 
 #### 70.11.3 The worker stages, the UI task commits
 
@@ -79659,22 +79755,89 @@ contract, which shapes everything around it:
   on this system.
 
 **A cancelled dialog calls nothing back at all** (§38.6): `fdlg_close` runs and
-the requester never hears. So the cancel has to be inferred, and the inference
-is stated here rather than left to the implementer:
+the requester never hears. So the cancel has to be inferred.
 
-**A `W_PAINT` arriving while `[tz_dlg]` is still set is the cancel.** The
-dialog is modal and covers this window, so no paint reaches it while the dialog
-is up; destroying the dialog — by either exit — exposes what was under it and
-owes this window a repaint. On a COMMIT the completion proc runs *before* the
-UI loop dispatches that paint, and it clears `[tz_dlg]`; on a CANCEL nothing
-clears it, and the paint finds it set. That ordering is `fdlg_commit`'s own —
-it destroys the dialog before it calls back — and §38.6 states it.
+**THE FIRST DESIGN INFERRED IT FROM A `W_PAINT` ARRIVING WHILE `[tz_dlg]` WAS
+STILL SET, AND THAT IS WRONG.** The argument for it was that the dialog is
+modal and covers this window, so no paint reaches us while it is up. **It does
+not cover this window.** §38.3 fixes the dialog at 300×170 on (90, 60) and
+§70.8 opens the terminal at 656×254 on (40, 40), so most of the terminal is
+still on the glass — and `fdlg_open`'s own `cw_wm_show` raises and repaints the
+desktop the *instant the dialog goes up*. That paint arrives first, so every
+transfer was skipped before the user could touch anything; worse, `tz_cancelck`
+only *marks* a cancel, so the real dialog stayed on screen and the next file's
+request was then refused for a dialog that was already up. §70.12.2 has the
+run.
+
+**THE PAINT IS STILL THE SIGNAL — IT IS ARMED, AND THAT IS THE WHOLE FIX.**
+`[tz_dlgt]` is the tick the dialog went up, and a `W_PAINT` counts as a cancel
+only once `TZ_DLGARM` = **18 ticks (one second)** have passed:
+
+> a `W_PAINT` arriving more than a second after `OSAPI_FILE_DLG` returned, with
+> `[tz_dlg]` still set → the dialog is gone and nobody called back → **CANCEL**.
+
+The arrival repaint lands within milliseconds of the open and the departure
+repaint cannot, so one second separates them by a wide margin — and **nothing
+else repaints a desktop with a modal dialog on it**, because no other window
+can be dragged, raised, closed or launched while one is up. That is the
+property the grace period rests on, and it is a property of modality rather
+than of event ordering. Measured, on `tests/telzm.py`'s cancel run: **`[tz_dlg]`
+cleared 0.9 seconds after the Escape**, against a 60-second backstop.
+
+**A SECOND SIGNAL WAS BUILT AND THEN TAKEN OUT AGAIN, and it is worth a
+paragraph because it is the obvious idea.** The dialog is a WINDOW, so count
+the windows: `OSAPI_WM_OWNSEG` (0x04E0) answers CF=1 for a free slot and CF=0
+with the owning segment for a live one, and twelve calls tally the desktop —
+so a tally taken before `OSAPI_FILE_DLG` and compared after it looks like a
+FACT about the dialog rather than an inference about paints.
+
+**It never fires.** A dialog dismissed with Escape leaves its slot occupied
+until `fdlg_reap` collects it (§38.1.1), so the count does not come back and
+the cancel fell through to the sixty-second backstop when this was the only
+rule. A signal that does not fire is not defence in depth, it is fifty bytes
+of a package whose 360KB floppy has two clusters left (§24.3.1) — so it is
+gone, and what is written down instead is that **`fdlg_reap`'s timing is why**,
+for whoever wants to try it again on a kernel that reaps at the close.
+
+**A COMMIT CANNOT BE MISREAD AS ONE, AND THE ARGUMENT IS THE TASK RATHER THAN
+THE TIMING.** `fdlg_commit` destroys the dialog and calls the completion proc
+in ONE UI-task call chain, and both `OSAPI_WM_ONWAKE`'s handler and `W_PAINT`
+are other UI-task callbacks — so neither can be dispatched between the destroy
+and `tz_dlgdone`'s `mov byte [tz_dlg], 0`. The UI task being a single task is
+the whole proof, and it does not depend on which of two events the window
+manager happens to deliver first. `tests/telzm.py` drives fourteen commits and
+one cancel over one boot and no commit is ever read as a cancel.
+
+**AND A REFUSED OPEN IS RETRIED RATHER THAN READ AS A CANCEL.**
+`OSAPI_FILE_DLG` answers CF=1 while ANOTHER dialog is up, and the one this
+instance just had is only reaped on a later UI pass (§38.1.1) — so a batch
+whose files arrive faster than the reap gets its second request refused, its
+third, and all the rest. `tz_dlgopen` also **returns at once if `[tz_dlg]` is
+already set**, because a request cannot be served while our own dialog is up. `[tz_req]` stays `TZ_NAME` and the worker's kick asks
+again, bounded at `TZ_DTRY` = 20 kicks — about ten seconds — so a dialog
+somebody else leaves up cannot hang the transfer either. Without the retry a
+twelve-file batch showed **one dialog and eleven silent `ZSKIP`s**.
 
 **A 60-second timeout backs it up and is not the mechanism.** If `[tz_dlg]`
 survives 1,092 ticks the receiver sends `ZSKIP` anyway. That is there for the
-paint that never comes rather than for the user who is thinking, and it is
+window that never goes away rather than for the user who is thinking, and it is
 long because a sender re-sends its `ZFILE` while it waits and a short timeout
 would race a slow reader.
+
+**AND THE SLOT IS CALLED UNDER THE GFX LOCK.** `fdlg_open`'s own contract is
+*"THE CALLER HOLDS THE GFX LOCK — every legal caller is a window callback or an
+`AM_ONCMD` handler, which is what lets this create and show the window inline
+instead of posting a launch"*, and `OSAPI_WM_ONWAKE` is the one callback that
+runs **without** it (§74.1). So `tz_wake` takes it for that call and releases it
+again, which is the same thing the SDK tells a wake handler to do before it
+draws.
+
+**AND NOT UNDER A FOREIGN TEXT MODE.** The Save dialog is a window and every
+kernel drawing slot is off-limits inside §53's bracket, so `tz_wake` refuses to
+open one while `[te_txm]` is set and `te_fsx_main`'s loop LEAVES the bracket
+when it sees `[tz_req]` = `TZ_NAME`. A transfer that reaches its `ZFILE` in full
+screen drops back to the window to ask where the file goes, and the dialog then
+opens on the desktop the user came from (§70.11.5).
 
 **The mangling follows §77.20's rule and not a second opinion.** A file this
 machine downloads by Zmodem and the same file uploaded to it by FTP must land
@@ -79715,7 +79878,71 @@ anything new.
 
 **When the transfer ends the terminal is back and the host's text resumes** —
 the buffer was never touched, so putting it back is the repaint the takeover
-already owed.
+already owed. `tz_end` marks row 24 for the full-screen renderer and every row
+for the windowed one, and `TZ_DONE` is what asks the UI task to spend them: the
+panel is the UI's to remove, and the worker may not.
+
+**AND THE BRACKET HAS TO PUMP THE HANDSHAKE ITSELF.** `FSXF_KEEPWORKER` keeps
+the *worker* (§53.5.1) and **the UI task is `te_fsx_main`'s loop**: it
+dispatches no events, so `OSAPI_WM_WAKE` delivers nothing and a commit posted
+from inside full screen would never happen — the staging area would fill, the
+receiver would stop calling `NETV_RECV`, and the transfer would hang until
+`^]`. So the loop calls `tz_wake` directly on every frame. That is legal
+because the handler is documented as indifferent to being called with nothing
+to do, and it is safe because it skips its own drawing half while `[te_txm]` is
+set: the lock and the glass are both the bracket's (§70.8.8), and a
+`OSAPI_GFX_LOCK` in there would park the UI task on a byte that cannot change
+until the bracket exits.
+
+**And it LEAVES the bracket for a Save dialog.** The dialog is a window and
+every kernel drawing slot is off-limits in a foreign text mode (§53.1), so the
+loop exits when it sees `[tz_req]` = `TZ_NAME` and the dialog opens on the
+desktop the user came from. A transfer that reaches its `ZFILE` in full screen
+therefore drops back to the window to ask where the file goes; one that was
+already under way when `^]` was pressed carries on, with its progress on row
+25 and its commits pumped by the loop.
+
+#### 70.11.6 What the receiver cost, and what it does not answer yet
+
+`apps/telnet/tezm.inc`. **`TELNET.O88` is image 14,337, bss 16,254 — 30,591 of
+`APP_MAX_SIZE`'s 61,440, which is 50%** — and the validator was never the
+constraint here either (§70.8.11). The floppy was, twice, and §24.3.1 carries
+the arithmetic: the receiver takes the package from 10 clusters to 14 on a
+360KB disk, which had four.
+
+Of the bss, **8,192 bytes are the staging area and 64 the `ZFILE` info block**;
+the receiver's whole control state — two state machines, three 32-bit
+positions, the CRC, the counters, the handshake and the mangled name — is
+about ninety bytes. The staging area dominates by two orders of magnitude and
+is the one figure a reader should hold on to: everything else in this section
+is arithmetic about how to keep it full.
+
+**What is measured and what is not.** The gate runs under QEMU, so the
+throughput it observes is the host's and no figure from it belongs in this
+document (§70.12). What IS this machine's is the call count: a 40 KB download
+is **ten `OSAPI_FILE_APPEND` calls and one `OSAPI_FILE_WRITE`**, one
+`OSAPI_FILE_DFREE`, and one `int 13h`-bearing commit per 4,096 bytes rather
+than per 1,024-byte subpacket — which is PERFORMANCE.md's "cost disk work in
+CALLS" applied to the one place in this package that does any.
+
+**Not measured on hardware**, and neither is §70.8.2's figure; both are read
+off the source.
+
+**ONE diagnostic byte is published in bss and is not debug code.** A cancelled
+dialog calls nothing back at all, so nothing outside this package can see what
+became of one — `[tz_diag]` is a bit per step of its life (asked, the slot
+refused, a paint inferred a cancel, the completion proc ran, it went up, the
+receiver asked for one) and it is how `tests/telzm.py` says *what* failed
+instead of *that* it failed. It sits OUTSIDE both `rep stosb` runs, because a
+byte a reconnect zeroes cannot answer "did a reconnect happen" — which is one
+of the questions it was asked.
+
+**Six counters sat beside it during the work and are gone.** Frames in and out,
+subpackets good and bad, wakes, resets: they found the defects §70.12.2
+records, and then they were seventy-seven bytes of a package whose 360KB
+floppy has two clusters left (§24.3.1). Scaffolding earns its keep while the
+scaffold is up; what survives is the byte no other observer can replace and
+the account of what the counters said.
 
 ### 70.12 The gates
 
@@ -79803,6 +80030,86 @@ that `ZSKIP` reached the server and that the terminal came back.
 whole session, which is minutes rather than seconds, and neither is a
 pre-merge gate for the same reason `tests/ethernet.py` is not: the machine
 under them is not an 8088 and the timings are the host's.
+
+#### 70.12.2 What building `tests/telzm.py` found
+
+**FIVE THINGS, AND FOUR OF THEM WERE IN THE GATE.** That ratio is the useful
+part: a wire protocol has no screen, so a gate that reads the wrong state at
+the wrong moment reports a receiver that is working perfectly as one that never
+ran, and the way out is to make the guest say what it did rather than to reason
+about what it must have done.
+
+1. **THE GATE READ EVERY COUNTER BEFORE THE TRANSFER BEGAN, and it cost four
+   emulator runs.** `wait_dlg` bailed out early on `[te_zon]` being clear —
+   *"the transfer ended without asking"* — and the server waits half a second
+   after the connection before it starts Zmodem, so `[te_zon]` is 0 for a
+   while AFTER the session comes up and the early exit fired on the first poll.
+   Everything the gate then printed — every counter, `[tz_st]`, `[tz_diag]` —
+   was sampled before anything had happened, so a receiver doing exactly the
+   right thing reported as one that had not run at all, while the server's log
+   showed headers it could not possibly have sent. **A poll whose exit
+   condition is also its start condition tests nothing**, and the fix is one
+   more wait: `wait_start` first, for the receiver to take the stream.
+
+2. **A PACKAGE NEEDS `os88sym`'s CHECK TOO, AND THERE WAS NOWHERE TO GET IT.**
+   `te_syms()` proves the MAP describes `build/telnet.bin`; it says nothing
+   about what the GUEST loaded, and CLAUDE.md's stale-emulator trap has an
+   exact analogue one level down — every offset resolves, every read succeeds,
+   and the numbers are another build's. The package is loaded at `pseg:0` with
+   no relocation of any kind (§20), so its first bytes ARE the file's:
+   `tests/telzm.py` compares 512 of them before it reads a single symbol, and
+   says so on the way past. Chasing the possibility that a stale guest was
+   answering cost most of a run; the check that rules it out is four lines.
+
+3. **THE CANCEL INFERENCE DID NOT HOLD**, which is §70.11.4's subject and is
+   recorded there in full rather than here. The gate is what found it, and it
+   found it as `[tz_diag]` bit 2 *and* bit 4 both set on a transfer nobody had
+   touched: the dialog had been read as cancelled and then refused for being
+   already up.
+
+   **AND THE BATCH IS WHAT FOUND THE REST OF IT.** Twelve files in one session
+   is not a stress test somebody thought would be interesting — it is what the
+   mangle table costs — and it turned up two more: `OSAPI_FILE_DLG` refuses
+   while the previous file's dialog is waiting to be reaped, which without a
+   RETRY became one dialog and eleven silent `ZSKIP`s; and `tz_dlgopen` stored
+   its window-count baseline on *every attempt*, so a refused open re-baselined
+   the count against a desktop that already held the dialog and the very next
+   comparison cancelled it. Neither is reachable with one file, and both are
+   ordinary use — a board's download queue is a batch.
+
+4. **`OSAPI_FILE_DLG` HANDS BACK A NAME AND THE FILE LANDS IN `MEDIA/`.** The
+   gate looked in `APPS/`, where `TELNET.O88` was launched from, and reported a
+   transfer that had worked perfectly — both files byte-identical, both
+   SHA-256s matching the server's own — as one that never landed. §38.10 is
+   explicit that the default is `MEDIA` and that the location is per
+   APPLICATION after that; the download goes where the dialog opened, and this
+   application had chosen nowhere.
+
+5. **AND THE `[tz_fsz]` READ HAD TO MOVE TO THE DIALOG.** It is the size the
+   sender declared for the file being ASKED about, and the next `ZFILE`
+   overwrites it, so a read taken after the answer is a read of whichever file
+   came next — which is why both files first reported the same number.
+
+6. **A GATE THAT CANCELS MUST ANSWER THE NEXT DIALOG TOO.** The cancel session
+   pressed Escape and then asserted that the file AFTER the cancelled one
+   arrived — without ever answering *its* dialog, so it sat until the
+   60-second backstop cancelled it as well and the gate reported the
+   receiver's correct behaviour as a defect. **A `ZSKIP` ends one file and not
+   the batch** (§70.11.2) is a claim about two files, so it takes two answers:
+   Escape, then Return, then `CANCEL.BIN` must be absent from the disk and
+   `AFTER.BIN` must be on it whole.
+
+**FOUR OF `MANGLE83_CASES`'s SIXTEEN ROWS CANNOT BE PUT ON A WIRE**, and the
+gate names them in its output rather than skipping them quietly: the two
+pathname rows, because `tools/os88bbs.py`'s sender takes `os.path.basename`
+before the name ever leaves the host; `...`, which no host filesystem will
+make; and the empty one. The other twelve are sent as one batch of tiny files,
+each Save dialog CANCELLED, and `[tz_name]` is read out of guest memory at each
+— which is also twelve consecutive exercises of the cancel path. Each of the
+twelve lives in a directory of its own, because `README.TXT` and `readme.txt`
+are two rows of the table and ONE file on a case-insensitive host, and a gate
+that silently tested eleven where it printed twelve would be worse than one
+that tested none.
 
 #### 70.12.1 What building `tests/telansi.py` found
 

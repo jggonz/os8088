@@ -123,6 +123,21 @@ te_fsx_main:
 .loop:                              ; to overwrite it (SPEC.md 70.8.7)
     call te_tx_keys
     jc .done
+    ; --- **THE UI TASK IS IN HERE, SO THE HANDSHAKE HAS TO BE TOO** ---------
+    ; FSXF_KEEPWORKER keeps the WORKER (SPEC.md 53.5.1) and the UI task is this
+    ; loop: it dispatches no events, so OSAPI_WM_WAKE delivers nothing and a
+    ; Zmodem commit would never happen. tz_wake is indifferent to being called
+    ; with nothing to do - that is OSAPI_WM_ONWAKE's own contract - and it
+    ; skips its drawing half while [te_txm] is set, because the lock and the
+    ; glass are both this bracket's (SPEC.md 70.8.8).
+    call tz_wake
+    cmp byte [tz_req], TZ_NAME
+    je .done                        ; ...and the SAVE DIALOG needs the desktop:
+                                    ; it is a window, and every kernel drawing
+                                    ; slot is off-limits in a foreign text mode
+                                    ; (SPEC.md 53.1). So a transfer that reaches
+                                    ; its ZFILE in here drops back to the window
+                                    ; to ask where the file goes
     call te_tx_owed                 ; ...only the rows the worker changed
     mov al, FSXW_FRAME              ; YIELDS while it waits, which is what the
     call OSAPI_FSX_WAIT             ; kept worker needs (SPEC.md 53.5.1)
@@ -202,6 +217,14 @@ te_tx_owed:
     inc bx
     cmp bx, TE_ROWS
     jb .row
+    cmp byte [tz_pan], 0
+    je .nop
+    call te_tx_prog                 ; **ROW 25, OVERWRITTEN** (SPEC.md 70.11.5),
+                                    ; which costs one row of the board's screen
+                                    ; for the duration and nothing after it:
+                                    ; tz_end marks it and the loop above
+                                    ; re-emits it from the buffer
+.nop:
     call te_tx_cursor
     pop es
     pop di

@@ -2334,6 +2334,27 @@ SOAK = [
         "name for tests/ethernet.py's reason: MartyPC has no NIC, so this "
         "package's receive path cannot be reached on it at all",
         needs=("qemu",), serial=True, builds=True),
+    Row("telzm", "soak", py("tests/telzm.py"), 300.0,
+        "SPEC.md 70.11/70.12: ZMODEM RECEIVE end to end, with the bytes read "
+        "back OFF THE DISK. tools/os88bbs.py's pure-Python sender sends two "
+        "batches over one boot: first the rows of its own MANGLE83_CASES as "
+        "tiny files, each Save dialog CANCELLED with Escape and [tz_name] read "
+        "out of guest memory - which is what stops the 8086's copy of SPEC.md "
+        "77.20's 8.3 rule drifting from the host's, since the two share no "
+        "code - and each cancel timed, because a cancelled dialog calls "
+        "nothing back at all (SPEC.md 38.6) and the cancel is INFERRED from a "
+        "W_PAINT arriving while [tz_dlg] is set, with a sixty-second backstop "
+        "underneath that must not be what answers. Then one file under 4KB "
+        "(one chunk) and one of about 40KB (many, spanning both staging halves "
+        "and ten commits), saved with Return and read back off "
+        "build/telnetsys.img by an independent FAT12 reader and compared BYTE "
+        "FOR BYTE. Finally the headers out of the server's JSON log: the "
+        "ZRINIT this end advertises (CANFDX|CANOVIO, buffer size 0, and NOT "
+        "CANFC32), the ZRPOS, the ZACKs, and the ZNAK that refuses the one "
+        "deliberate ZBIN32 header --bin32 sends. QEMU by name for "
+        "tests/ethernet.py's reason: MartyPC has no NIC. Measured 89s over three "
+        "sessions of one boot",
+        needs=("qemu",), serial=True, builds=True),
     Row("netpromise", "soak", py("tests/netpromise.py"), 240.0,
         "SPEC.md 70.7/77.47: Telnet and the FTP server promise per DEBT, not"
         "per session.",
