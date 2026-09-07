@@ -54,14 +54,21 @@ hda_entry:
     clc
     ret
 .tier:
-    cmp ah, SND_RT_SB
+    cmp ah, SND_RT_PCM
     jb .off
+    mov word [hda_services+DSV_CAPS], SND_CAP_PCM_BG
+    mov word [hda_services+DSV_STREAM], hda_stream
     mov si, hda_services
     clc
     ret
-.off:                          ; this single-tier driver cannot shed its ring
-    mov al, DRVE_HW
-    stc
+.off:                          ; speaker route: keep hardware attached but
+    call hda_stream_stop        ; withdraw digital playback from applications
+    xor ax, ax
+    call hda_tone
+    mov word [hda_services+DSV_CAPS], 0
+    mov word [hda_services+DSV_STREAM], 0
+    mov si, hda_services
+    clc
     ret
 
 ; Probe 00:1b.0, take a pinned conventional-memory ring, reset the controller,
@@ -109,6 +116,8 @@ hda_detach:
     push dx
     mov byte [hda_up], 0
     call hda_stream_stop
+    call hda_hw_stop
+    mov byte [hda_tone_on], 0
     mov cx, 40
 .wait:
     cmp byte [hda_wtask], 0
@@ -164,7 +173,10 @@ hda_busy:
     mov [hda_clip], dl
     xor ax, ax
     cmp byte [hda_active], 0
+    jne .yes
+    cmp byte [hda_tone_on], 0
     je .out
+.yes:
     inc ax
 .out:
     clc
@@ -178,6 +190,8 @@ hda_open:
     cmp byte [hda_active], 0
     jne .busy
     cmp byte [hda_clip], 0
+    jne .busy
+    cmp byte [hda_tone_on], 0
     jne .busy
     cmp bx, 4000
     jb .rate
@@ -580,6 +594,77 @@ hda_stream_stop:
 
 ; --- controller and codec ---------------------------------------------------
 cpu 386                         ; entire section is behind DRVR_MINCPU
+
+; Tone sink for the native router and the Sound panel's Test button. HDA has
+; no oscillator, so build one loop of signed 16-bit stereo square wave in the
+; existing DMA ring. The target is an Atom-class 386+ machine; 8,192 bounded
+; stores complete well inside a timer tick even though the router calls us in
+; its atomic ownership window. Tone-off is only one MMIO write.
+hda_tone:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    or ax, ax
+    jz .off
+    or dl, dl
+    jnz .bad
+    cmp byte [hda_active], 0
+    jne .bad
+    cmp ax, 19
+    jb .bad
+    cmp ax, 20000
+    ja .bad
+    mov bx, ax
+    call hda_hw_stop
+    mov ax, HDA_RATE / 2
+    xor dx, dx
+    div bx                      ; frames per half wave, at least one
+    or ax, ax
+    jnz .period
+    inc ax
+.period:
+    mov bx, ax
+    mov dx, ax
+    mov es, [hda_dmaseg]
+    mov di, HDA_RING_OFF
+    mov ecx, HDA_RING_BYTES / 4
+    mov eax, 0x40004000
+.sample:
+    mov [es:di], eax
+    add di, 4
+    dec dx
+    jnz .next
+    mov dx, bx
+    xor eax, 0x80008000
+.next:
+    dec ecx
+    jnz .sample
+    call hda_hw_start
+    mov byte [hda_tone_on], 1
+    clc
+    jmp .out
+.off:
+    cmp byte [hda_tone_on], 0
+    je .ok
+    call hda_hw_stop
+    mov byte [hda_tone_on], 0
+.ok:
+    clc
+    jmp .out
+.bad:
+    stc
+.out:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 hda_pci_probe:
     mov eax, 0x8000d800         ; bus 0, device 1b, function 0, register 0
     call hda_pci_read
@@ -956,8 +1041,8 @@ hda_codec_verbs:
     dd 0
 
 hda_services:
-    dw SND_CAP_PCM_BG, 0, hda_stream, 0, hda_release_inst, hda_name, 0
-    dw 1 << SND_RT_SB
+    dw SND_CAP_PCM_BG, 0, hda_stream, 0, hda_release_inst, hda_name, hda_tone
+    dw 1 << SND_RT_PCM
     times DSV_SIZE - ($ - hda_services) db 0
 hda_name: db 'ALC269 HDA', 0
 
@@ -982,6 +1067,7 @@ hda_ring:      db 0
 hda_eof:       db 0
 hda_tail:      db 0
 hda_lastper:   db 0
+hda_tone_on:   db 0
 hda_gr_live:   db 0
 hda_gr_owner:  db 0
 hda_dmaseg:    dw 0

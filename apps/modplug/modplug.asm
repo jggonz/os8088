@@ -2186,7 +2186,7 @@ mpp_s_stopped: db 'Stopped   X play  L load  E setup', 0
 mpp_s_playing: db 'Playing   C pause  V stop  B next', 0
 mpp_s_paused:  db 'Paused    X resume  V stop', 0
 mpp_s_noload:  db 'No module loaded - L loads one', 0
-mpp_s_nosb:    db 'No Sound Blaster: the interface only', 0
+mpp_s_nosb:    db 'No digital audio: the interface only', 0
 mpp_s_nomem:   db 'Out of memory', 0
 mpp_s_toobig:  db 'File too big', 0
 mpp_s_noent:   db 'File not found', 0

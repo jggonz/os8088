@@ -42478,7 +42478,7 @@ machine's first beep and `SYSTEM.CFG` may not exist at all:
 SND_RT_AUTO (0)  unset: the best tier that actually answered at boot
 SND_RT_SPK  (1)  the PC speaker, whatever else is loaded
 SND_RT_FM   (2)  AdLib: FM only - no streams, no 12KB
-SND_RT_SB   (3)  Digital audio stream (Sound Blaster or Intel HDA)
+SND_RT_PCM  (3)  Digital audio stream (Sound Blaster or Intel HDA)
 ```
 
 **Three tiers, not two, and the middle one is the point.** An AdLib is an OPL2
@@ -42490,7 +42490,9 @@ the stream tier needs. On a 128KB machine that is 12KB of a 55KB heap back for
 a tier they were not using, which is the whole reason the rung exists. It is a
 **choice, not a probe result**, which is why it persists in `SYSTEM.CFG`.
 
-`SND_RT_CARD` remains as an alias for `SND_RT_FM`, so a `SYSTEM.CFG` written
+`SND_RT_SB` remains as an alias for `SND_RT_PCM`, preserving the shipped value
+and source compatibility. `SND_RT_CARD` remains as an alias for `SND_RT_FM`,
+so a `SYSTEM.CFG` written
 before the split still reads as "a card" — and reads as the *cheap* card, which
 is the safe way to be wrong.
 
@@ -43167,6 +43169,14 @@ periods. A one-tick driver worker polls LPIB and refills periods already played;
 the 32-KB ring is about 186 ms deep, so one scheduler tick cannot expose an
 ordinary refill delay. Output publishes `SND_CAP_PCM_BG`; input and FM are not
 claimed, so Recorder cannot record through this first hardware target.
+
+The HDA backend also publishes the native tone sink. Since HDA has no hardware
+square-wave oscillator, it synthesizes one loop into the same signed-stereo DMA
+ring and repeats it until the router's duration expires. This is what makes the
+Sound page's Test button, system beeps and tone-based native applications test
+the selected HDA path instead of silently falling back to the PC speaker. A
+tone and a background stream are mutually exclusive because they share the one
+output stream descriptor.
 
 The driver is deliberately codec-specific at attach: vendor/device parameter
 `10ec:0269` must answer, and the configured path is ALC269 DAC node 02 through

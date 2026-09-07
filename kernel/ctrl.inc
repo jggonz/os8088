@@ -4184,8 +4184,8 @@ section .text
 ; index rather than a ladder of compares - and the same rows as DSV_TIERS
 ; bits, which is a table rather than a shift because cp_snd_rowok promises to
 ; clobber nothing and a variable shift count costs CL.
-cp_snd_tiers: db SND_RT_SPK, SND_RT_FM, SND_RT_SB
-cp_snd_tbit:  db 0, 1 << SND_RT_FM, 1 << SND_RT_SB
+cp_snd_tiers: db SND_RT_SPK, SND_RT_FM, SND_RT_PCM
+cp_snd_tbit:  db 0, 1 << SND_RT_FM, 1 << SND_RT_PCM
 
 ; The last click's refusal, as a DRVE_* (0 = the last click was fine, and the
 ; notice line is blank). .text and not .bss for the reason everything else
@@ -5700,7 +5700,7 @@ cp_vmodnam: dw cp_s_vsing, cp_s_vrgt, cp_s_vblw
 
 CPS cp_s_sspk,  'PC Speaker'
 CPS cp_s_sfm,   'AdLib'
-CPS cp_s_ssb,   'Sound Blaster'
+CPS cp_s_ssb,   'Digital Audio'
 CPS cp_s_stest, 'Test'
 
 ; The Date/Time page names the RTC ladder tier that answered (SPEC.md 37.90),
