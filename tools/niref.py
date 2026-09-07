@@ -108,6 +108,13 @@ def render(st):
     (coarse Y & 2) and (coarse X & 2).
     """
     out = bytearray(W * H)
+    # WHETHER THE BACKGROUND PIXEL WAS TRANSPARENT, kept beside the picture.
+    # The port carries it as a TAG BIT in the pixel byte (SPEC.md 91.5.2) and
+    # this file does not, deliberately: two implementations of one
+    # specification agreeing is the point, and copying the port's
+    # representation would make the sprite merge here a transcription of the
+    # merge there.
+    bg_clear = bytearray(W * H)
     base = 0x1000 if (st.ctrl & 0x10) else 0x0000
     backdrop = st.pal[0] & 0x3F
 
@@ -115,6 +122,7 @@ def render(st):
         if not (st.mask & 0x08):
             for x in range(W):
                 out[y * W + x] = backdrop
+                bg_clear[y * W + x] = 1
             continue
         v = st.v[y]
         cx0 = v & 0x1F
@@ -122,6 +130,7 @@ def render(st):
         nt0 = (v >> 10) & 3
         fy = (v >> 12) & 7
         line = bytearray(33 * 8)
+        clear = bytearray(33 * 8)
         for col in range(33):
             cx = cx0 + col
             nt = nt0 ^ (0x01 if cx >= 32 else 0)    # the HORIZONTAL wrap
@@ -137,21 +146,70 @@ def render(st):
                 val = ((lo >> (7 - b)) & 1) | (((hi >> (7 - b)) & 1) << 1)
                 if val == 0:
                     line[col * 8 + b] = backdrop
+                    clear[col * 8 + b] = 1
                 else:
                     line[col * 8 + b] = st.pal[pal4 * 4 + val] & 0x3F
         for x in range(W):
             out[y * W + x] = line[st.fine_x + x]
+            bg_clear[y * W + x] = clear[st.fine_x + x]
         if not (st.mask & 0x02):        # the left-column mask
             for x in range(8):
                 out[y * W + x] = backdrop
+                bg_clear[y * W + x] = 1
 
-    # THE SPRITE PASS IS WAVE 2's, and its rules are SPEC.md 91.5.2 and the
-    # port plan's R7: up to eight sprites a line painted into a scratch in
-    # ASCENDING OAM order with FIRST-WRITER-WINS, carrying the behind-
-    # background bit and the sprite-0 bit as tags; then ONE merge with the
-    # untouched background line resolves priority per pixel. Sprite-0 hit is
-    # the first pixel where sprite 0 is opaque AND the background is opaque,
-    # with the left masks respected and x = 255 excluded.
+    # --- THE SPRITE PASS (SPEC.md 91.5.2, the port plan's R7) -------------
+    # Up to eight sprites a line, painted into a scratch in ASCENDING OAM
+    # order with FIRST WRITER WINS - so the lowest index owns a pixel, which
+    # is what the hardware's priority says - then ONE merge with the
+    # UNTOUCHED background resolves front/behind per pixel. Painting back to
+    # front instead would give the same picture for opaque sprites and the
+    # wrong one under a behind-tagged sprite, and could not find the sprite-0
+    # strike at all, because by then the background it must be compared
+    # against has been written over.
+    if st.mask & 0x10:
+        sbase = 0x1000 if (st.ctrl & 0x08) else 0x0000
+        h = 16 if (st.ctrl & 0x20) else 8
+        for y in range(H):
+            chosen = []
+            for i in range(64):
+                row = y - st.oam[i * 4] - 1
+                if row < 0 or row >= h:
+                    continue
+                if len(chosen) == 8:
+                    break               # the eighth wins the cap
+                chosen.append((i, row))
+            scratch = [0] * 256
+            for i, row in chosen:
+                attr = st.oam[i * 4 + 2]
+                if attr & 0x80:
+                    row = h - 1 - row               # flipped vertically
+                if h == 8:
+                    addr = sbase + st.oam[i * 4 + 1] * 16 + row
+                else:
+                    t = st.oam[i * 4 + 1]
+                    base = 0x1000 if (t & 1) else 0x0000
+                    addr = base + (t & 0xFE) * 16 + (row >> 3) * 16 + (row & 7)
+                lo = st.chr[addr & 0x1FFF]
+                hi = st.chr[(addr + 8) & 0x1FFF]
+                x0 = st.oam[i * 4 + 3]
+                for b in range(8):
+                    bit = (7 - b) if not (attr & 0x40) else b
+                    val = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1)
+                    x = x0 + b
+                    if val == 0 or x > 255 or scratch[x]:
+                        continue
+                    scratch[x] = ((attr & 3) * 4 + val) \
+                        | (0x20 if (attr & 0x20) else 0) | (0x10 if i == 0 else 0)
+            for x in range(256):
+                s = scratch[x]
+                if not s:
+                    continue
+                if x < 8 and not (st.mask & 0x04):
+                    continue            # the sprite left-column mask
+                bgclear = bg_clear[y * W + x]
+                if (s & 0x20) and not bgclear:
+                    continue            # behind, over an opaque background
+                out[y * W + x] = st.pal[0x10 + (s & 0x0F)] & 0x3F
     return bytes(out)
 
 
@@ -174,14 +232,27 @@ def compare(mine, theirs):
 
 
 def synth():
-    """A state with something in every mechanism this file implements: a
-    non-zero fine X, a scroll that MOVES between lines (which is what a
-    scanline model is FOR), two attribute quadrants, and a tile whose four
-    pattern values are all used."""
+    """THE FIXTURE, and it is written THREE TIMES on purpose.
+
+    This function, `nifix_build` in apps/infones/hosttest/nimemtest.asm and
+    `fixture()` in apps/infones/hosttest/niuitest.c are three independent
+    spellings of one formula, and build.sh compares all three: the C model's
+    own state blob against this one byte for byte, and the assembly's frame
+    against this file's render of it. A fixture written once and shared would
+    make the two frames agree about a state neither of them checked.
+
+    It has something in every mechanism the composer implements: a non-zero
+    fine X, a scroll that MOVES between lines (which is what a scanline model
+    is FOR), two attribute quadrants, a tile whose four pattern values are all
+    used, 8x16 sprites with both flips and both priorities, lines with more
+    than eight sprites on them, and the sprite left-column mask ON with the
+    background one OFF."""
     b = bytearray(BLOB)
     b[0:6] = b"NIREF1"
-    b[6] = 0x00                     # the background pattern table at $0000
-    b[7] = 0x0A                     # show the background, left column and all
+    b[6] = 0x20                     # bg pattern table at $0000, 8x16 SPRITES
+    b[7] = 0x1A                     # bg on + bg left column on, sprites on,
+                                    #   sprite LEFT COLUMN OFF - so one mask
+                                    #   is exercised each way
     b[8] = 3                        # fine X
     b[9] = 1                        # vertical mirroring
     for y in range(H):
@@ -201,6 +272,12 @@ def synth():
         b[OFF_NT + i] = (i * 7) & 0xFF
     for i in range(8192):
         b[OFF_CHR + i] = (i * 13 + (i >> 4)) & 0xFF
+    for i in range(64):
+        b[OFF_OAM + i * 4 + 0] = (i * 17) & 0xFF        # Y (top - 1)
+        b[OFF_OAM + i * 4 + 1] = (i * 5) & 0xFF         # tile
+        b[OFF_OAM + i * 4 + 2] = i & 0xE3               # palette, flips,
+                                                        #   behind
+        b[OFF_OAM + i * 4 + 3] = (i * 13) & 0xFF        # X
     return bytes(b)
 
 
@@ -209,6 +286,9 @@ def main():
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--check", nargs=2, metavar=("STATE", "FRAME"))
     ap.add_argument("--render", nargs=2, metavar=("STATE", "OUT"))
+    ap.add_argument("--synth", metavar="OUT",
+                    help="write the fixture state blob the two harnesses "
+                         "build independently")
     a = ap.parse_args()
 
     if a.selftest:
@@ -245,6 +325,10 @@ def main():
             return 1
         print("niref: --selftest PASS - a one-bit defect fails the compare, "
               "a tag bit does not")
+        return 0
+
+    if a.synth:
+        open(a.synth, "wb").write(synth())
         return 0
 
     if a.check:

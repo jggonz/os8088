@@ -94,7 +94,9 @@ void ni_bwrite(unsigned a, int v);  /* ...and one bus write */
 void ni_boot(void);                 /* the RESET sequence: S -= 3, I set, PC
                                      * from $FFFC (SPEC.md 91.4.3) */
 
-/* --- nimem.inc: the movers, and THE ONLY PLACE ES IS LOADED --------------- */
+/* --- nimem.inc: the movers. ES IS LOADED IN FOUR FILES - here, niband.inc,
+ * nicpu.inc and nifsx.inc - and in no compiled C (SPEC.md 73.5, and 91.13.1's
+ * table says which points at what). ------------------------------------- */
 void ni_move(unsigned dseg, unsigned doff,
              unsigned sseg, unsigned soff, unsigned n);
 void ni_fill(unsigned dseg, unsigned doff, int val, unsigned n);
@@ -104,10 +106,57 @@ void ni_oam_move(unsigned ramoff);  /* $4014's fast path: 256 bytes out of the
                                      * CPU RAM claim into OAM, one call rather
                                      * than 256 bus reads (SPEC.md 91.4.3) */
 
+void ni_oam_grab(void);             /* ...and OAM into the PACKAGE's own bss,
+                                     * once a frame, because the sprite
+                                     * evaluation walks all 64 entries on
+                                     * every one of 240 lines */
+
 /* --- niband.inc: the tile-cache decoder and the composer (SPEC.md 91.5) --- */
 void ni_chr_decode(unsigned dseg, unsigned doff,
                    unsigned sseg, unsigned soff);   /* one 1KB CHR bank -> 4KB
                                                      * of one byte a pixel */
+
+/* THE COMPOSER'S ARGUMENT LIST IS A STRUCT, and for `ni_m`'s reason: these are
+ * called 240 times a frame and pushing seven arguments each would be seven
+ * `push`es and an `add sp` a line for values that change one at a time. THE
+ * FIELD ORDER IS niband.inc's NIC_* TABLE and the two cannot drift without the
+ * composer reading the wrong word.
+ *
+ * EVERY FIELD IS A WORD deliberately: a struct of words has no packing
+ * question in either language, and the assembly reads a byte field with
+ * `mov al, [_ni_cs + NIC_FX]` at no cost at all. */
+struct ni_comp {
+    unsigned cacheseg;              /* the 32KB tile cache claim */
+    unsigned machseg;               /* the machine claim */
+    unsigned v;                     /* the loopy address THIS LINE starts with */
+    unsigned bgtile;                /* the background pattern table, in TILES */
+    unsigned sptile;                /* ...and the sprite one (8x8 only) */
+    unsigned line;                  /* the visible scanline, 0..239 */
+    int      hit;                   /* -1, or the sprite-0 strike's x */
+    unsigned fx;                    /* fine X, 0..7 */
+    unsigned mask;                  /* $2001 as it stands */
+    unsigned mirror;
+    unsigned sph;                   /* sprite height, 8 or 16 */
+    unsigned ovf;                   /* a NINTH sprite was on this line */
+    unsigned nspr;                  /* how many were painted */
+};
+extern struct ni_comp ni_cs;
+
+/* The two palette lookups the composer indexes, `palette * 4 + value`. Entry
+ * p*4+0 of the background one is the BACKDROP with the tag bit already on
+ * (SPEC.md 91.5.2), which is what makes a transparent background pixel cost
+ * the inner loop no branch at all. */
+extern unsigned char ni_bgpal[16];
+extern unsigned char ni_sppal[16];
+
+void ni_bg_line(void);              /* the background of one line, out of
+                                     * ni_cs, into the 272-byte line buffer */
+int  ni_spr_line(void);             /* ...then the sprites: evaluate, paint
+                                     * into the scratch, merge. -> the
+                                     * sprite-0 strike's x, or -1 */
+void ni_present13(int row);         /* ...and one composed line into mode 13h,
+                                     * at the DESTINATION row the drop table
+                                     * chose (SPEC.md 91.6.2) */
 
 /* --- nifsx.inc: SPEC.md 53's bracket, which is not wrapped for C ---------- */
 int  ni_fsx_caps(void *win);        /* the mode mask for THIS WINDOW'S display,
@@ -115,6 +164,22 @@ int  ni_fsx_caps(void *win);        /* the mode mask for THIS WINDOW'S display,
                                      * os88api.inc:2438-2449 says a banked
                                      * answer describes the window you were
                                      * LAUNCHED FROM */
+int  ni_fsx_go(void *win);          /* OSAPI_FSX_RUN with FSXF_FASTTICK, and it
+                                     * DOES NOT RETURN until the user leaves */
+void ni_fsx_wait(int clock);        /* OSAPI_FSX_WAIT - FSXW_FRAME, never
+                                     * FSXW_VSYNC (SPEC.md 91.6.3) */
+int  ni_getkey(void);               /* ONE typed key through int 16h, or -1 */
+#ifdef NITEST
+extern unsigned ni_stk_lo;          /* what the stack sentinel read, in bytes
+                                     * below the bracket's own SP
+                                     * (SPEC.md 91.4.4). GATE-ONLY, and the
+                                     * `%ifdef NI_STKPROBE` in nifsx.inc is
+                                     * the other half: the sentinel WRITES
+                                     * below SP, and "below SP is free" holds
+                                     * only down to the stack's own base,
+                                     * which this package cannot see. Only
+                                     * `make nisystest` builds either half */
+#endif
 
 /* ==========================================================================
  * THE MACHINE'S STATE
@@ -291,7 +356,10 @@ static void ni_repaint(void *win);
 static void ni_shadow_drop(void);
 static void ni_shadow_paper(void);
 static void ni_shadow_paper_rect(int x1, int y1, int x2, int y2);
-static void ni_fact_rotate(int nofsx);
+static void ni_fact_rotate(int nofsx, int norom);
+static void ni_panel_settle(void);
+static void ni_menu_labels(void);
+static void ni_menu_rotate(void);
 static void ni_menu_state(void);
 static void ni_rom_free(void);
 static int  ni_geom(void *win);
@@ -314,6 +382,17 @@ static void ni_oam_dma(int page);
 static void ni_reset_machine(int hard);
 static int  ni_io_rd(unsigned a);
 static int  ni_io_wr(unsigned a, int v);
+static void ni_pal_build(void);
+static void ni_cache_sync(void);
+static void ni_frame(int draw);
+static void ni_go_full(void *win);
+#ifdef NITEST
+static void ni_test_run(void *win);
+#endif
+void        ni_bracket(void);       /* nirun.c, and NOT static: nifsx.inc's
+                                     * ni_fsx_main calls it by name, which is
+                                     * the one place assembly reaches into the
+                                     * compiled C rather than the other way */
 
 static int  ni_ovl_ready(void *win);
 
@@ -519,6 +598,16 @@ void os88_onkey(int ascii, int scan, void *win)
         ni_fact = NI_FACT_MUTE;
         ni_panel_fact();
         ni_repaint(win);
+    } else if (ascii == 'c' || ascii == 'C') {
+        /* AND `C` IS THE SAME KIND OF KEY AS `M` - an InfoNES add_key key
+         * (SDL:524) whose Options item is greyed forever with a fact behind
+         * it - so it answers in the same two places. It was wired inside the
+         * bracket alone for a cycle, which meant pressing it on the panel,
+         * with `Clip top and bottom` dithered a few pixels away, did nothing
+         * at all. */
+        ni_fact = NI_FACT_CLIP;
+        ni_panel_fact();
+        ni_repaint(win);
     }
     (void)scan;
 }
@@ -535,6 +624,84 @@ void os88_onclick(int x, int y, void *win)
      * os88_onclick, and it costs nothing when there is nothing to do). */
     if (ni_req_load)
         os88_wm_wake(win);
+}
+
+/* ni_go_full - Options > `Full screen`: take the machine (SPEC.md 53.1).
+ *
+ * RESIDENT, and everything it reaches is resident too. It does not return
+ * until the user presses F or Esc, and on the way out the kernel repaints the
+ * whole desktop (SPEC.md 53.6) - which is OUR OWN W_PAINT, so the panel is
+ * already back on the glass, off our own paper, before ni_fsx_go returns.
+ *
+ * WHICH IS WHY THE SHADOW IS NOT DROPPED HERE. It describes what that repaint
+ * drew, and it is right; dropping it would send the four fields below down
+ * the padded 40-cell branch for thirteen rows - about 470 ms of a 4.77 MHz
+ * 8088 - to change a state line and a rate line. The delta draw is the whole
+ * point of the shadow existing (nipanel.c, PERFORMANCE.md rule 1). */
+static void ni_go_full(void *win)
+{
+    if (!ni_have_rom())
+        return;                     /* the same predicate the item greyed on,
+                                     * and the kernel never lets a MENU_DIS
+                                     * item be selected anyway - this is the
+                                     * keyboard path's guard */
+    ni_state = NI_ST_RUN;
+    ni_panel_state();
+    ni_menu_state();                /* THE LABELS AND THE ROTATION, BEFORE
+                                     * ENTRY. No greying predicate can change
+                                     * while the bracket owns the machine -
+                                     * there is no ROM to load and no window
+                                     * to drag - so there is nothing for a
+                                     * second call on the way out to discover,
+                                     * and doing it here means the kernel's own
+                                     * wm_paint_all letters the final strings
+                                     * ONCE (SPEC.md 53.6, ni_panel_settle) */
+    /* AND NOTHING IS LETTERED HERE. A draft painted `Running` before the mode
+     * set "so a refused mode leaves a panel that says what it tried", and it
+     * bought nothing on either path. On the way IN, OSAPI_FSX_RUN sets mode
+     * 13h microseconds later and destroys every pixel of it - a state delta
+     * plus a whole fact row, two font_run calls and about 42 cells, ~40 ms of
+     * a 4.77 MHz 8088 thrown away, with the shadow it updated then dropped by
+     * the kernel's own restore repaint. On the REFUSAL path the sentence below
+     * replaces `Running` before a human eye could reach it, so the row is
+     * lettered twice back to back for one user action.
+     *
+     * So the success path letters state and fact exactly ONCE, in the kernel's
+     * restore (SPEC.md 53.6, ni_panel_settle), and the refusal path exactly
+     * once, at the paint below. */
+    if (ni_fsx_go(win) == 0) {
+        ni_state = NI_ST_READY;
+        /* NAMING THE MODE AND NOT THE DISPLAY. CGA and EGA have a real
+         * 320x200 fullscreen mode (FSXM_CGA320, 4 colours), so `no 320x200
+         * mode` was untrue on exactly the adapters this refusal is for; what
+         * is missing is 320x200x256, which is this build's present. */
+        ni_say("No 320x200x256 mode on this display.",
+               "No 320x200x256 mode");
+        ni_menu_labels();           /* LABELS AND NOT ni_menu_state, for the
+                                     * exit's own reason: no greying predicate
+                                     * moved (the ROM is still loaded and the
+                                     * display still answers the same caps
+                                     * mask), so the only thing a rotation
+                                     * would do is advance the fact row a
+                                     * SECOND time for one user action and
+                                     * letter it again with a different
+                                     * sentence */
+        ni_panel_paint(win, 0);
+        return;
+    }
+    /* ni_bracket settled the state line, both rates and the fact row BEFORE
+     * it returned, and SPEC.md 53.6's wm_paint_all - which is our own W_PAINT
+     * - has already lettered them under the still-held lock.
+     *
+     * WHAT IS LEFT IS THE LABELS AND NOT THE PANEL: PgUp/PgDn inside the
+     * bracket change ni_skip, so the Options menu's own `Frame skip: n` label
+     * is stale until this runs. ni_menu_LABELS and not ni_menu_state, because
+     * the rotation would advance the fact row a second time and letter it
+     * again with a different sentence - the fact the bracket owes was already
+     * chosen inside it. This writes no panel text, so the paint below finds
+     * shadow == text on every row and draws nothing. */
+    ni_menu_labels();
+    ni_panel_paint(win, 0);
 }
 
 /* os88_oncmd - the three menus (SPEC.md 91.8). The gfx lock is HELD.
@@ -556,12 +723,16 @@ void os88_oncmd(int item, int menu, void *win)
         os88_wm_close(win);
         return;
     }
-    /* WAVE 2 PUTS `Full screen` HERE, in the resident half, and SPEC.md
+    /* `Full screen` IS ANSWERED HERE, IN THE RESIDENT HALF, and SPEC.md
      * 91.6.5 says why: it is the one command that must work on a disk whose
      * .OVL is missing, and no ovl_* may be called from inside the bracket at
-     * all. There is no branch for it in this build because the item is
-     * GREYED - the kernel never lets a MENU_DIS item be selected, so a branch
-     * for it would be code nothing can reach. */
+     * all - the call would be legal by 73.14's rules and by the SP gate, and
+     * it would read a floppy while the machine is in a foreign video mode,
+     * with any refusal toasted onto a bar the user cannot see. */
+    if (menu == NI_M_OPT && item == NI_I_FULL) {
+        ni_go_full(win);
+        return;
+    }
     if (!ni_ovl_ready(win)) {       /* SPEC.md 91.13.1: a LOCKED callback may
                                      * not be the thing that fetches the .OVL
                                      * off a floppy. ni_ovl_ready has already
@@ -643,6 +814,79 @@ void os88_onfile(int mode, const char *name,
     os88_wm_wake(win);
 }
 
+#ifdef NITEST
+/* ni_test_run - NITEST's whole user interface (SPEC.md 91.14.4).
+ *
+ * Enter the bracket, which in this build runs frames back to back and polls
+ * blargg's $6000 channel, then write what came out into a file the host reads
+ * back off the floppy image. A screendump would need the host to read glyphs;
+ * a file is bytes, and the disk is already writable (SPEC.md 19.3).
+ *
+ * THE STACK HIGH-WATER GOES IN THE SAME FILE, and this is the run SPEC.md
+ * 91.4.4's table wanted: a mapper write, a PPU read, an OAM DMA, a reset, a
+ * key poll and a present have all happened by the time it is read, on task
+ * 0's real 512-byte stack, under the kernel's real frames, with interrupts
+ * landing on top. */
+static char ni_test_buf[224];
+
+static void ni_test_run(void *win)
+{
+    int i, n, c;
+
+    ni_state = NI_ST_RUN;
+    ni_fsx_go(win);                 /* it returns when the ROM answers, or at
+                                     * the frame cap */
+    ni_state = NI_ST_READY;
+
+    n = 0;
+    os88_strcpy(ni_test_buf, "NITEST ", sizeof(ni_test_buf));
+    n = (int)os88_strlen(ni_test_buf);
+    if (ni_test_state == NI_T_DONE) {
+        os88_strcpy(ni_test_buf + n, ni_test_res ? "FAIL " : "PASS ",
+                    sizeof(ni_test_buf) - n);
+    } else if (ni_test_state == NI_T_TIMEOUT) {
+        os88_strcpy(ni_test_buf + n, "TIMEOUT ", sizeof(ni_test_buf) - n);
+    } else {
+        os88_strcpy(ni_test_buf + n, "NOCHANNEL ", sizeof(ni_test_buf) - n);
+    }
+    n = (int)os88_strlen(ni_test_buf);
+    os88_utoa((unsigned)ni_test_res, ni_num);
+    os88_strcpy(ni_test_buf + n, ni_num, sizeof(ni_test_buf) - n);
+    n = (int)os88_strlen(ni_test_buf);
+    ni_test_buf[n++] = ' ';
+    os88_strcpy(ni_test_buf + n, "STK", sizeof(ni_test_buf) - n);
+    n = (int)os88_strlen(ni_test_buf);
+    os88_utoa(ni_stk_lo, ni_num);
+    os88_strcpy(ni_test_buf + n, ni_num, sizeof(ni_test_buf) - n);
+    n = (int)os88_strlen(ni_test_buf);
+    /* ...and the frames the pacer DROPPED, so the counter is readable by the
+     * host as well as on the panel's rate row. It is zero in this build by
+     * construction - NITEST runs frames back to back with no accumulator at
+     * all - and a non-zero one would mean the headless arm had started
+     * pacing, which is worth failing over. */
+    ni_test_buf[n++] = ' ';
+    os88_strcpy(ni_test_buf + n, "OVR", sizeof(ni_test_buf) - n);
+    n = (int)os88_strlen(ni_test_buf);
+    os88_utoa(ni_overload, ni_num);
+    os88_strcpy(ni_test_buf + n, ni_num, sizeof(ni_test_buf) - n);
+    n = (int)os88_strlen(ni_test_buf);
+    ni_test_buf[n++] = '\n';
+
+    /* ...and blargg's own report, out of $6004 */
+    for (i = 0; i < 160 && n < (int)sizeof(ni_test_buf) - 2; i++) {
+        c = ni_bread(0x6004 + (unsigned)i);
+        if (c == 0)
+            break;
+        if (c == 10 || (c >= 32 && c < 127))
+            ni_test_buf[n++] = (char)c;
+    }
+    ni_test_buf[n++] = '\n';
+    os88_file_write("NIRES.TXT", ni_test_buf, (unsigned)n);
+    ni_setfield(NI_F_STATE, ni_test_buf);
+    ni_panel_paint(win, 0);
+}
+#endif
+
 /* os88_onwake - W_ONWAKE (SPEC.md 74.1): the UI task, the gfx lock NOT held.
  * The one callback that may call the file slots and take the lock itself, and
  * therefore the one place a ROM is read. */
@@ -716,6 +960,12 @@ void os88_onwake(void *win)
     }
     ni_menu_state();
     ni_panel_paint(win, 0);
+#ifdef NITEST
+    if (ok)
+        ni_test_run(win);           /* the bracket, headless, and the result
+                                     * file - with the gfx lock HELD, which is
+                                     * OSAPI_FSX_RUN's own contract */
+#endif
     os88_gfx_unlock();
 }
 
@@ -796,6 +1046,18 @@ void *os88_main(void)
 
     ni_state = NI_ST_NOROM;
     ni_panel_init();
+
+#ifdef NITEST
+    /* NITEST: the ROM is named, not chosen. `make nisystest` puts exactly one
+     * on the disk beside the package, under one name, and this build loads it
+     * on the first wake and runs it through blargg's $6000 protocol with no
+     * click anywhere (SPEC.md 91.14.4). */
+    os88_strcpy(ni_req_name, "TEST.NES", sizeof(ni_req_name));
+    ni_req_lo = 0;
+    ni_req_hi = 0;
+    ni_req_load = 1;
+    ni_setfield(NI_F_STATE, "Reading ROM...");
+#endif
 
     /* ...and the ROM that double-click named. BANKED, not read (SPEC.md
      * 54.10): the kernel calls os88_onwake once this window is on the glass,

@@ -92931,6 +92931,8 @@ core caches segment bases in the window table and in `ES`, and a compaction
 would invalidate both silently — which is exactly the failure §66 warns about,
 one segment further from the poke that would fix it.
 
+### 91.4 The 2A03 core
+
 The core is **hand-written 8086** in `apps/infones/nicpu.inc`, in
 `apps/c64/c64cpu.inc`'s shape, because §73.11's posture is that nothing on a
 hot path is written in C and a 6502 interpreter is nothing but hot path. It
@@ -93152,22 +93154,61 @@ entered. The larger of the two is what the row carries.
 `ni_panel_paint` at 20 bytes of locals, reached from `os88_paint` under the
 kernel's own `W_PAINT` dispatch, which is a shallower chain than this one.
 
-**And the rows wave 2 adds**, which is where the budget gets interesting: the
-bracket's own entry, `OSAPI_FSX_RUN` and the kernel's mode set, the frame loop,
-and `ni_run`'s entry shell (14 bytes: four pushes, the argument and the call)
-under all of it. Those are **PLANNED** until they exist.
+**And the rows the BRACKET adds**, which is where the budget gets
+interesting. The chain from a menu pick is `os88_oncmd` (0 locals) →
+`ni_go_full` (0) → `ni_fsx_go` (a 5-push shell) → `OSAPI_FSX_RUN`, the
+kernel's own frames, and its near call to → `ni_fsx_main` (2 pushes) →
+`ni_bracket` (6) → `ni_one` (2) → `ni_frame` (10) → `ni_slice` (2) →
+`ni_run`'s entry shell (four pushes, the argument and the call) → the core →
+`ni_io_rd_bx`'s 18 → the bus chain above.
 
-**If it does not fit, the fix is named in advance and it is not a bigger
+**AND IT IS MEASURED, NOT ADDED UP** (the plan's R1). `nifsx.inc` lays a
+`0x5A5A` pattern over the **128** bytes below `SP` at the top of `ni_fsx_main`
+and reads the deepest scrub back after `ni_bracket` returns, so what the number
+covers is everything the package puts on the stack from that point down **plus
+every interrupt frame that landed on top of it** — the tick chain, the mouse,
+the keyboard. `NITEST`'s run is what it is read after, and that run has
+exercised a mapper write, a PPU read, an OAM DMA, a reset, a key poll and a
+present:
+
+| | measured |
+|---|---|
+| the deepest scrub below `ni_fsx_main`'s own `SP`, over a whole `01-basics` run | **98 of the 128 probed** |
+| ...printed by | `make nisystest`, as `STK98` in `NIRES.TXT` |
+
+**THE PROBE IS A GATE INSTRUMENT AND IS IN NO SHIPPING BUILD**, behind
+`-dNI_STKPROBE`, which only `$(BUILD)/nitest.bin`'s `nasm` line passes. The
+reason is that the instrument's own safety cannot be argued from inside the
+package: *"below `SP` is free"* is true only down as far as the **stack's own
+base**, and a package cannot see where that is. `STK0_SIZE` is 512 bytes whole
+(`kernel/kernel.asm`) and the kernel's measured task-0 high-water is **238** of
+it (`tests/stk0water.py`, against §15.1's 246), so an ordinary deep UI chain
+leaves about 266 bytes under `SP` — and the chain that reaches this fill is one
+of the deepest the package has. Below the base is `.lowbss`, which holds the
+mouse ISR's and the tick chain's private stacks (§9.10, §8.5). A 256-byte fill
+had **no bound the package could compute**, and the water reading cannot detect
+its own overrun: it reads the same number either way. So the probe is 128 —
+which covers the measured 98 with margin — and a reading **of 128 is a FLOOR,
+not a measurement**, which is what `nisystest` prints when it happens.
+
+**And the 98 is counted DOWNWARD from `wm_pkgcall`.** It does not include the
+UI-task frames *above* that point, which is the half that decides whether any
+given probe depth fits; that half is the table above, and the two are read
+together.
+
+98 bytes, with `wm_pkgcall`'s 24, the trampoline's 16 and the kernel's
+`fsx_run` frames above it, is comfortably inside `STK0_SIZE`'s 512 — and the
+256-byte probe is itself bounded on purpose: task 0's stack grows down onto
+`.lowbss`, where the mouse ISR's and the tick chain's own private stacks live
+(§9.10, §8.5), so a probe that reached further would write into them. A
+reading OF 256 would mean the probe was exhausted and the number is a floor;
+`nisystest` prints it either way.
+
+**If it ever stops fitting, the fix is named in advance and it is not a bigger
 stack**: the PPU and mapper register handlers move out of C and into
 `nicpu.inc` / `nippu`'s assembly, and every remaining scratch goes static.
 `CC_MAXFRAME` is lowered for this package rather than raised — §73.8's rule —
 and the plan's *every buffer is static* discipline already points that way.
-
-**Wave 2 adds a high-water sentinel and the number goes in this table.** The
-shim fills the free stack with a pattern before entering the bracket, and
-`nisystest` reports the deepest scrub after a run that has exercised a mapper
-write, a PPU read, an OAM DMA, a reset, a key poll and a present. A budget
-nobody measured is an estimate wearing a table's clothes.
 
 ### 91.5 The PPU — a per-scanline composer over a tile cache
 
@@ -93184,6 +93225,35 @@ the loopy `v`/`t` pair with its per-line latch and increments, the dot-257
 horizontal copy and the dots-280..304 vertical copy; `$4014` OAM DMA with a
 fast path for a source wholly inside the 2KB RAM claim; and sprite evaluation
 with the 8-per-line cap and the overflow flag.
+
+**THIS PPU IS A SCANLINE STATE MACHINE, IN InfoNES'S OWN CLASS, AND THAT IS
+THE PROMISE.** It is stated here in one place rather than left to be inferred
+from the code, because the reason this port exists is speed on an 8088 and it
+does not become a dot-clock PPU to pass a gate. Exactly what it does:
+
+- at the **start of every visible line**, the horizontal bits of `t` are
+  copied into `v` — the hardware's dot 257 of the line before, at line
+  granularity;
+- `v` is **incremented vertically** at the end of every visible line and of
+  the pre-render line — the hardware's dot 256;
+- at the **pre-render line**, the vertical bits of `t` are copied into `v`,
+  and that line ALONE is split at **dot 280** (cycle 93 of its 113 or 114)
+  rather than taken whole. That split is not a detail: a game's vblank routine
+  points `$2006` at the nametable, writes tiles through `$2007` — which leaves
+  `v` holding a nametable ADDRESS and not a scroll — and sets the scroll back
+  with `$2005`/`$2006` on its way out, which is usually still inside the
+  pre-render line. Copy at the start of the line and that restore lands
+  *after* the copy, so `v` enters the visible frame holding wherever the last
+  `$2007` write left it. It was on the glass: `CROOM.NES`'s lower half
+  composed from a scroll about forty rows out, with `Vs. CPU` sitting on the
+  copyright line;
+- a `$2005` or `$2006` write **mid-line takes effect from the NEXT line**;
+- **vblank sets at line 241** and clears at the pre-render line, and the
+  **odd-frame dot skip is NOT modelled** — a frame is 29,780 or 29,781 cycles
+  by the 113/114/114 triple's phase.
+
+Each of those is an approximation with a name, and §91.14.4's `ppu_vbl_nmi`
+gate is scoped to the subset a model of this shape can pass.
 
 #### 91.5.1 The tile cache and its invalidation
 
@@ -93211,20 +93281,52 @@ phase means a run's two partial end blocks straddle both edges. Bounding the
 buffer at 256 would be a silent write past a bss array on every line with a
 non-zero fine X.
 
-Each byte in the line buffer is a **NES palette index in bits 0-5 with two tag
-bits above it**: the backdrop tag (`| 0x80`, InfoNES's own) and the
-priority/strike tag. That makes the sprite pass's priority test **one byte
-compare** rather than a mask, a shift and a branch — and it makes the tags free
-at present time only because of §91.5.3.
+**TWO BUFFERS AND TWO FORMATS, and they are not the same byte.**
+
+`ni_line[]` is the composed picture: **a NES palette index in bits 0-5 with
+the BACKDROP TAG in bit 7** (`| 0x80`, InfoNES's own), set when the background
+pattern value was 0. The tag rides all the way to the framebuffer and costs
+the present nothing, because of §91.5.3.
+
+`ni_spr[]` is the sprite scratch, and **0 means nothing is here**: bits 0-3
+are `palette * 4 + value`, which is never 0 because a sprite pattern value of
+0 is transparent and is not written at all; **bit 4 is the sprite-0 tag and
+bit 5 the behind-background tag**. That makes the merge's priority test one
+byte compare rather than a mask, a shift and a branch, and the colour comes
+back through `ni_sppal[b & 15]`.
 
 The order is: background over the cache, with the loopy scroll, the attribute
 quadrants, the left-column masks, the fine-X partial blocks and the nametable
-flip at the wrap; then sprites **back to front** into the same buffer, with the
-transparency test, both flips, 8x8 and 8x16, and front/behind priority.
-**Sprite-0 hit is resolved by splitting the scanline's CPU budget at
-`SPRRAM[SPR_X]`** — run the cycles up to the sprite's X, set the flag, run the
-rest — which is InfoNES's own arrangement and the reason a status-bar split
-holds still.
+flip at the wrap; then the up-to-eight sprites into the **sprite scratch, in
+ASCENDING OAM ORDER WITH FIRST WRITER WINS** — so the lowest index owns a
+pixel, exactly as the hardware's priority says — with the transparency test,
+both flips and 8x8 and 8x16; then **ONE merge pass against the untouched
+background** resolves front/behind per pixel, over the span the sprites
+actually touched and no wider.
+
+**It is not InfoNES's back-to-front paint, and the difference is not
+cosmetic.** Painting back to front gives the same picture for opaque sprites
+and the wrong one the moment a behind-tagged sprite is under a front one — and
+it cannot find the sprite-0 strike at all, because by then the background it
+must be compared against has been written over.
+
+**Sprite-0 hit is found IN THE MERGE**: the first pixel where sprite 0 is
+opaque AND the background is opaque, with both left masks respected and
+x = 255 excluded. What is done with the x is the frame loop's:
+**the scanline's CPU budget is split at it** — run the cycles up to the
+sprite's X, set the flag, run the rest — which is InfoNES's own arrangement
+(`InfoNES_GetSprHitY`) and the reason a status-bar split holds still.
+
+**Which frame's x, and which frame raises the flag, are two questions.** The
+**x** is the CARRIED one — the merge's answer on this same line one frame ago
+— because that is what still exists on a SKIPPED frame, where no merge ran;
+the SPEC records the one-frame latency as the approximation it is. The
+**flag** is raised on the frame whose merge found the strike, and that half is
+not an optimisation: a game that spins on `$2002` bit 6 gets nothing at all on
+the first frame if the flag can only come from a previous one, and what it
+does with the wait is overrun its vblank and write half a nametable. That was
+on the glass too — Concentration Room's menu appearing and disappearing frame
+by frame.
 
 #### 91.5.3 The DAC mirror, and the 256-entry reduction tables
 
@@ -93277,7 +93379,26 @@ plane selects and stride-4 gather cost more per line than 13h's single
 `rep movsw`, and its value is the 240 rows and the page flip
 (`OSAPI_FSX_PAGE`, slot 0x04E8, §53.10) — worth choosing, never worth
 imposing. The picture is centred: 256 columns in 320 leaves 32 columns of
-border each side.
+border each side, **filled with palette index `0x0F`, not 0**. The DAC carries
+the 64 NES colours mirrored four times (§91.5.3) and NES `$00` — index 0 — is
+InfoNES's own `NesPaletteRGB[0]`, **112,112,112**, so a zero fill puts a
+light-grey frame around the picture that reads as part of the emulated screen
+rather than as the machine's border. `$0F` is the NES's canonical black and
+`ni_dactab`'s `$0F` row is `0,0,0`. No InfoNES front end paints a grey
+surround.
+
+**And the ORDER of the entry is part of that**, because the wrong order is a
+full-screen grey flash and a 150 ms wipe that no emulator can show.
+`OSAPI_FSX_MODE` leaves the screen cleared to index 0 with the BIOS palette,
+where index 0 is black; loading the NES DAC first makes index 0 light grey —
+the whole 320x200 at once — and only then does the border fill wipe it back to
+black, top to bottom, at ~150 ms on a 4.77 MHz 8088 and under a millisecond
+here. So `ni_fsx_main` blacks the four DAC mirrors of `$0F` (white in the BIOS
+palette), fills the 64,000 bytes with `$0F`, and *then* loads the 256-entry
+NES DAC: every pixel on the screen already carries the index that stays black
+through the change. The fill lives in `nifsx.inc` beside the mode set for the
+same reason — only the routine that owns the sequence knows where in it the
+fill has to happen — and not in `ni_bracket`, which is where it was.
 
 Four present routines, one per mode, all in `nifsx.inc`: 13h's `rep movsw`;
 Mode X's four plane selects with the stride-4 gather per line and the page
@@ -93297,12 +93418,57 @@ every 7 lines of a 224-row window — 224 x 5/7 = 160, the GBA's screen height.
 That defines a 224→160 reduction and not a 224→200 one, and a plan that cited
 it as though it did would be wrong by 40 rows.
 
+**It is COMPUTED, not listed, and the expression is `(i * 25) / 28`.** The
+"first source row with this destination" rule over `i = 0..223` keeps exactly
+200 of the 224; a 240-byte literal table would be 240 chances to mistype it.
+
+**This is not InfoNES's own clip, and the difference is one row and one verb.**
+`PPU_UpDown_Clip` (`InfoNES/src/InfoNES.cpp:930-937`, with
+`SCAN_ON_SCREEN_START` = 8 and `SCAN_BOTTOM_OFF_SCREEN_START` = 232) **blanks**
+scanlines 0-7 and 233-239 — eight rows at the top and **seven** at the bottom —
+and leaves them on the screen. This port **removes** 8 and 8, because 224 is
+what the 25/28 table needs. The 8/8 crop is the arithmetic and stays; the
+delta against the named authority belongs beside it rather than left for a
+reader to diff.
+
+**AND FORTY LINES ARE COMPOSED THAT ARE NEVER SHOWN**, which is a cost the
+picture path has to be priced with. `ni_frame` runs `ni_bg_line` and
+`ni_spr_line` on all 240 lines and presents 200 of them: at §91.12's own
+arithmetic — ~11,300 cycles a line once the ~3,300-cycle present is taken out
+— the 40 dropped lines are ~452,000 cycles, about **95 ms of a ~1,030 ms
+painted frame** on a 4.77 MHz 8088, ~9% of a picture. It is not a mechanical
+cut: a dropped line's sprite pass still supplies the ninth-sprite overflow bit
+and the sprite-0 strike, and the strike test reads the background line for
+opacity. The safe subset — skip the background pass on a dropped line only
+when sprites are disabled or OAM entry 0 does not fall on it — is a wave-3
+measurement, not a wave-2 claim.
+The fraction is written **25/28 and not the identical 200/224**, and that is
+the whole of a defect this package shipped: `int` is SIXTEEN BITS here
+(§73.7), `i * 200` passes 32,767 at `i = 164`, and every row from there down
+got a negative quotient — the table's last sixty entries were garbage,
+**thirty-six destination rows were never presented at all**, and what a user
+saw was a picture with its bottom fifth missing and the mode's own border
+showing through. `i * 25` tops out at 5,575.
+
+**It is the SECOND 16-bit overflow this package has shipped** — §91.13.2's
+length check was the first — and the lesson is the same one written twice:
+**a 16-bit overflow is invisible to `niuitest` by construction**, because the
+host's `int` is thirty-two bits and the product does not wrap there. The
+answer is arithmetic that cannot overflow rather than a test that cannot see,
+and `build.sh`'s **`nirow`** row now READS `ni_rowtab` out of `nirun.c`,
+refuses a multiply whose largest product passes 32,767, checks the fraction is
+still 200/224, and checks the table it builds keeps 200 rows, numbers them
+0..199 strictly increasing, and puts every store inside the 64,000-byte
+screen. It refuses the EXPRESSION rather than the value, which is what makes
+it survive a rewrite; `niuitest` checks the same three shape properties on
+whatever table the package built.
+
 **The Clip item is greyed in every 200-row mode with the fact**, because the
 clip is *forced* there. Shipping it as a live toggle that is structurally inert
 on two modes of four — present, not greyed, not checked and silently ignored —
 is exactly the shape this project has shipped before and been caught by.
 
-#### 91.6.3 The wall clock — `FSXW_FRAME` + `FSXF_FASTTICK`, and a 110/100 accumulator
+#### 91.6.3 The wall clock — `FSXW_FRAME` + `FSXF_FASTTICK`, and an elapsed-tick accumulator
 
 **Nothing this OS offers is 60.0988 Hz, and nothing can be.**
 `OSAPI_FSX_WAIT` (slot 0x02D8, §53.5) offers exactly three clocks:
@@ -93318,18 +93484,58 @@ that is 70 Hz, so the game runs **16.5% fast** and the panel reports 116%; on
 Hercules it runs 17% slow. It is invisible on the target only because the
 target never reaches the clock at all.
 
-**This port paces on an accumulator.** `FSXW_FRAME` with `FSXF_FASTTICK`
-armed gives 54.6195 Hz, and 60.0988 / 54.6195 = 1.1002, so:
+**This port paces on an accumulator, and the accumulator counts ELAPSED
+TICKS** (the plan's R6) — not wait calls, because on the target a wake is never
+one sub-tick long and a machine that counted its own wakes would run the game
+at whatever speed it happened to manage. `os88_ticks()` is 18.2065 Hz and one
+NES frame is 60.0988 Hz, so a tick is 3.3009 frames and the accumulator's unit
+is a hundredth of a frame:
 
 ```
-acc += 110;
-while (acc >= 100) { one_frame(); acc -= 100; }
+dt   = os88_ticks() - last;  last += dt;   /* the wrap at 65,535 falls out
+                                            * of unsigned subtraction */
+if (dt > 60) dt = 60;                      /* dt * 330 must fit 16 bits */
+acc += dt * 330;                           /* NI_ACC_PER_TICK */
+
+n = 0;
+while (acc >= 100 && n < 4 && !quit) {     /* NI_ACC_FRAME, NI_CATCHUP_MAX */
+    acc -= 100;  n++;
+    one_frame(/* draw = */ acc < 100 || n == 4);
+}
+if (acc >= 100) { acc = 0; overload++; }   /* THE DEBT IS DROPPED */
+
+if (acc < 100) fsx_wait(FSXW_FRAME);       /* which YIELDS */
 ```
 
-One word, no `long`, **0.02% residual error**, and `FSXW_FRAME` waits by
-yielding rather than spinning. `FSXW_VSYNC` is used **only** to place the
-present inside the retrace on a machine that is ahead of the accumulator, and
-never as the frame budget.
+One word, no `long`, **0.03% residual error** (330/100 against 3.30089), and
+`FSXW_FRAME` with `FSXF_FASTTICK` waits by yielding at 54.6195 Hz rather than
+spinning. `FSXW_VSYNC` is never the frame budget.
+
+**THE CATCH-UP IS BOUNDED AND THE DEBT IS DROPPED**, and that is the branch the
+XT lives in permanently — decision 4's "demonstration" in one line of code. At
+most `NI_CATCHUP_MAX` = 4 emulated frames run per wake; past that the
+accumulator is **zeroed** rather than banked, because a machine three seconds
+behind that then tried to catch up would never draw again, and `ni_overload` is
+bumped so the shortfall is counted rather than silent — **and it is READ**:
+the panel's rate row appends `  drop N` when `ni_overload` is non-zero (and
+only when the composed row still fits its 40 cells), and `NITEST`'s result
+line carries `OVR<n>` beside `STK<n>`. A counter nobody can read is two bytes
+of bss answering no question, and the question here is the one §91.12's whole
+table is about — *is this machine keeping up?* — asked on the machine it is
+about. Only the **last** frame
+of a catch-up burst is drawn (`Frame skip: Auto`), which is what makes the
+skipped frames cost the composer nothing.
+
+**And the composer's two per-frame inputs are skipped WITH the composer**: the
+palette LUT build and the tile-cache decode both feed `niband.inc` and nothing
+else, so on a skipped frame everything they produce is thrown away. They are
+inside the `draw` gate, which is behaviour-preserving because the CHR dirty
+mask only ORs and the palette dirty flag only sets — both are cleared by the
+work itself, so a bank dirtied during three skipped frames is decoded exactly
+once, on the frame that composes it. On a CHR-RAM title that writes tiles from
+its vblank routine every frame, running them anyway cost about **69 ms a
+skipped frame** on the target — ~200 ms of discarded work per painted frame at
+Auto skip on an 8088.
 
 #### 91.6.4 Input inside the bracket
 
@@ -93346,8 +93552,16 @@ frame is **340 ms or more** of wall time on the target and a human press is
 80-150 ms, so a once-a-frame poll is a ~3 Hz sample: it misses most presses
 outright and stretches the ones it catches across twenty emulated frames. Each
 sweep ORs into a **sticky pad latch that the emulated `$4016` strobe clears**,
-so a press that happened anywhere in the frame is delivered exactly once. The
-cost is about 30 extra reads a frame — **1.4 ms of a 340 ms frame, 0.4%**.
+so a press that happened anywhere in the frame is delivered exactly once.
+
+**What that costs, counted rather than estimated**: the gate is `(y & 15) == 0`
+over `y` = 0..239, so it fires **fifteen** times, and each sweep makes **nine**
+`os88_key_down` calls — 135 `OSAPI_*` far calls a frame at 46.7 µs each,
+**about 6.3 ms of a ~340 ms frame, under 2%** — plus fifteen `int 16h` status
+polls. (A first draft of this paragraph said "30 extra reads — 1.4 ms", which
+is a fifth of the truth in the section that owns the frame budget.) If that 2%
+is ever wanted back, the cheap half is a single call reading all nine
+scancodes through a mask slot the SDK does not have.
 
 The keys, and where each comes from:
 
@@ -93357,11 +93571,12 @@ The keys, and where each comes from:
 | `X` | A | SDL front end, by bit number |
 | `Z` | B | SDL front end, by bit number |
 | Enter | Start | agnes, cross-read with nofrendo |
-| RShift, or Space | Select | agnes, cross-read with nofrendo |
-| `C` | toggle top/bottom clip | InfoNES `add_key` |
-| `R` | reset | InfoNES `add_key` `:262-266`. **It answers in the PANEL WINDOW as well as inside the bracket** — the same command File > `Reset` is, on the same authority — and the panel's own second legend row already advertises it (`Select RShift   R reset   F/Esc leave`), so it is a key a user can find |
-| Page Up / Page Down | frame skip up / down | InfoNES `add_key` `:290-301` |
+| RShift | Select | agnes `examples/simple_sdl2.c:116` |
+| `C` | toggle top/bottom clip — **refused, printing the fact**, because the clip is forced in a 200-row mode (§91.6.2) | InfoNES `add_key` |
+| `R` | reset | InfoNES `add_key` `:262-266`. **It answers in the PANEL WINDOW as well as inside the bracket** — the same command File > `Reset` is, on the same authority — and the panel's own first legend row already advertises it (`Pad arrows A X B Z Start Enter R reset`), so it is a key a user can find |
+| Page Up / Page Down | frame skip up / down. **On the second legend row**, because the Options menu is not reachable inside the bracket and these are the only frame-skip control that is — a live key named on no surface is the defect §91.7.2 argues about `M` | InfoNES `add_key` `:290-301` |
 | `M` | mute — **refused, printing the fact** | InfoNES `add_key` `:304` |
+| — | **and there is no glass inside the bracket to print either fact on.** A toast would land on a bar the user cannot see and the panel is not on the screen, so `C` and `M` set a byte the panel reads on the way out: the fact line carries the sentence the moment the bracket ends. §91.6.5's own argument, one key along |
 | `F`, Esc | leave the bracket | §11.2.1, not InfoNES's Q/ESC |
 
 **InfoNES's own `S` = Start and `A` = Select are deliberately not used**: A and
@@ -93376,9 +93591,17 @@ dialog is a menu command here and the ROM info is permanently on the panel.
 package had one. It is in no reference — InfoNES's load key is `L`, which the
 paragraph above drops on purpose — in no menu caption, in no legend row and in
 no table here, so no user could find it; an invented convenience is exactly
-what a port's fidelity rule forbids. `R` above is the panel window's only key
-beyond the About panel's dismissal, and it is written into the table rather
-than left to the code.
+what a port's fidelity rule forbids. **A draft of the bracket carried Space as
+a second Select for the same reason and with a citation that did not hold** —
+agnes binds Select to RSHIFT alone, InfoNES binds it to `A` in every front end,
+the nofrendo tree here has no key-to-event layer at all, and Space appeared on
+no legend row and in no menu. It is gone.
+
+`R`, `M` and `C` are the panel window's keys beyond the About panel's
+dismissal, and they are written into the table rather than left to the code:
+`R` is the command File > `Reset` is, and `M` and `C` are the two keys whose
+Options items are greyed forever, so pressing one prints its fact where the
+user's eyes already are (§91.7.2). All three answer inside the bracket too.
 
 #### 91.6.5 What the bracket may not call
 
@@ -93391,6 +93614,30 @@ bar the user cannot see. The fsx entry path is **resident code only**, and
 `Full screen` is answered in the resident half for the same reason
 `apps/c64`'s is: it is the one command that must work on a disk whose `.OVL`
 is missing.
+
+**AND THE PANEL'S TEXT IS SETTLED BEFORE THE FSX PROC RETURNS, not after
+`OSAPI_FSX_RUN` does.** §53.6 step 4 runs `wm_paint_all` **under the still-held
+lock, before the call returns**, and on this package that repaint is our own
+`W_PAINT`: it letters all thirteen fields from `ni_txt` as it stands at that
+instant. Set the post-session text afterwards and three rows are lettered
+**twice** — state, rate and fact — and one of them is lettered **wrong** the
+first time: for the whole of the kernel's thirteen-row restore (~220 ms on the
+target) the panel says `Running` for a session that has already ended, then
+flips to `Ready`. That is the double-draw flash CLAUDE.md names as invisible in
+an emulator, and it was measured on the glass and read as noise ("789 pixels in
+three bands"). So `ni_bracket` ends by calling `ni_panel_settle` — state, both
+rates, and the `C`/`M` fact the bracket owes — and `ni_go_full`'s trailing
+`ni_panel_paint` then finds shadow == text on every row and draws nothing.
+`ni_menu_state`'s label refresh moves **before** the entry for the same reason:
+no greying predicate can change while the bracket owns the machine.
+
+**`ni_fsx_go` answers "a mode was set", not `OSAPI_FSX_RUN`'s own CF.** A
+refused `OSAPI_FSX_MODE` returns from `ni_fsx_main` **normally**, so CF is
+clear for a session that never set a mode and never drew a pixel, and the
+package's refusal sentence was unreachable — a menu pick that blinks the
+desktop and says nothing, which is LESSONS.md 1's own shape. `nifsx.inc` keeps
+one word, `ni_entered`, raised immediately after a successful mode set, and the
+helper answers `entered && !CF`.
 
 ### 91.7 The front panel
 
@@ -93440,14 +93687,27 @@ both against `os88_ticks`:
 
 - **emulated** — a plain unsigned percentage of a real NES, from the emulated
   frame counter, e.g. `NES 3%`;
-- **rendered** — tenths of a second per painted frame, from the rendered frame
-  counter, e.g. `2.2 s/frame`.
+- **rendered** — HUNDREDTHS of a second per painted frame, from the rendered
+  frame counter, e.g. `2.20 s/frame`.
 
 Both are composed by `os88_utoa` from integers. **There is no formatter and no
 float**: `apps/cc/os88.h` `#define`s `float` and `double` to error tokens and
-there is no `printf` family, so a rate is held in **tenths as a scaled int**
-and written as `os88_utoa(t / 10)`, `'.'`, `'0' + (t % 10)`. No wave writes
-`%4.1f` or `%3d%%` against a runtime that has no formatter.
+there is no `printf` family, so a rate is held in **hundredths as a scaled
+int** and written as `os88_utoa(t / 100)`, `'.'`, two digits. No wave writes
+`%4.2f` or `%3d%%` against a runtime that has no formatter.
+
+**Hundredths and not tenths, and that is a measurement rather than a
+preference**: a machine painting sixty frames a second is 0.017 s a frame,
+which in tenths is `0.0` — a field that has stopped saying anything at exactly
+the end of the range where the number is good news. The 8088's ~2.2 s a frame
+reads `2.20` and a 486's `0.02`, and both fit the 40-cell row.
+
+**AND THE WINDOW IS ROLLING, NOT THE SESSION.** Both figures are recomputed
+every ~36 ticks (about two seconds) and the counters reset with them. The
+first version measured over the whole bracket and clamped both figures to keep
+the multiplies inside sixteen bits, so a minute at full speed came out as
+`NES 10%  0.0 s/frame` — which is `200 * 303 / (600 * 10)` exactly, the two
+clamps dividing by each other, and no measurement at all.
 
 **Both are printed because frame skip trades one for the other.** Skip buys
 emulated speed by spending rendered frames, and a panel that showed only the
@@ -93471,15 +93731,27 @@ inside the bracket prints the fact where the user's eyes are.
 
 **THE FACT LINE IS ONE ROW AND MORE THAN ONE FACT IS TRUE, SO THE ROW IS A
 ROTATION.** Thirteen rows is what a 200-line adapter's desktop holds (§91.7),
-so there is exactly one fact row, and this build has three true facts at once:
-no picture yet, no APU, and on some displays no fullscreen mode. A fixed pick
+so there is exactly one fact row, and more than one fact is true at once: the
+**forced clip** and the **silent APU** always, **no 320x200x256 mode** on some
+displays, and **no ROM loaded** until one is opened. A fixed pick
 showed one and hid the others **forever** — the greyed `Mute (no APU)` item's
 sentence was reachable only by pressing `M`, which appears in no menu, in
 neither legend row and in no dialog, so nothing on the machine told a user it
 existed. The row therefore advances to the next TRUE fact on every
-`ni_menu_state()`, which runs after a launch, a load, a reset, a stop and a
-refusal — **and never from a repaint**, so a window dragged across the screen
-does not make the row flicker. `M` still jumps straight to the Mute sentence.
+`ni_menu_state()`, which runs after a launch, a load, a reset, a stop, a
+refusal and a `Full screen` pick — **and never from a repaint**, so a window
+dragged across the screen does not make the row flicker. `M` still jumps
+straight to the Mute sentence.
+
+**The `Full screen` pick rotates BEFORE the bracket and not after it**, and
+`ni_menu_state` splits in two for that reason: `ni_menu_labels` is the label
+and greying half and `ni_menu_rotate` the fact half. The exit path needs the
+labels — `PgUp`/`PgDn` inside the bracket change `ni_skip`, so the Options
+menu's own `Frame skip: n` caption is stale until they run — and must **not**
+re-rotate, because the fact row was already settled inside the bracket
+(§91.6.5) and a second rotation would letter that row again with a different
+sentence, over the kernel's own restore. The rotation therefore happens once
+per pick either way, and the row does not flicker on the way out.
 
 **Every sentence is the SAME CHARACTERS here and on the glass, and fits
 `NI_FCELLS` = 40.** §91.10's table and `apps/infones/nipanel.c`'s `ni_facts[]`
@@ -93563,7 +93835,8 @@ collision silently.** That is why this rule is in the SPEC and not only in
 - **Three flat menus**, as above.
 - **Fullscreen play** through §53's bracket: 13h by default on every tier,
   Mode X as a menu choice above the CPU_8086 tier, CGA/EGA 320x200x4,
-  Hercules 720x348, paced on the 110/100 accumulator.
+  Hercules 720x348, paced on the elapsed-tick accumulator with a bounded
+  catch-up (§91.6.3).
 - The **2A03 core**: 151 official opcodes with real cycle costs, page-cross
   and taken-branch penalties, the `JMP ()` page wrap, the zero-page wrap,
   BRK/NMI/IRQ sequencing, and the unofficial opcodes `nestest` exercises. No
@@ -93625,8 +93898,9 @@ characters.
 | item | the fact |
 |---|---|
 | Options > `\x01Mute (no APU)` | *No APU: five voices, one speaker.* |
-| Options > `Clip top and bottom`, in any 200-row mode | *Clip is forced at 320x200: 240 rows.* The predicate is the **live** `FSI_H` of the mode this package would enter on **this window's display**, so it is armed by the wave that has one; until then the item is greyed by `NI_FACT_PIC`'s sentence with the rest of Options |
-| Options > `Full screen`, where the adapter offers no mode | The predicate is `OSAPI_FSX_CAPS`'s mask for **this window's display**, re-asked at use and never banked — never `OSAPI_VIDEO`, which answers about the primary. On a two-card desktop the item greys per monitor and the refusal names the adapter |
+| Options > `Clip top and bottom`, in any 200-row mode | *Clip is forced at 320x200: 240 rows.* Mode 13h is the only mode this build's bracket enters (§91.6.1), and it is 200 rows, so the clip is forced and there is nothing for a toggle to toggle. The wave that adds Mode X arms the predicate against the **live** `FSI_H` of the mode this package would enter on **this window's display** |
+| Options > `Full screen`, with no ROM, or where the display has no 13h | *No 320x200x256 mode on this display.* — and with no ROM, *No ROM loaded: open one to run it.* **The sentence names the MODE and not the display's whole capability**, because the predicate does: `kernel/fsx.inc`'s `fsx_capstab` gives CGA and EGA `FSXM_CGA320` (a real 320x200x4 fullscreen mode) and Hercules `FSXM_HERC` (720x348), so those displays *do* offer a fullscreen mode and one that says otherwise is a guess wearing a fact's clothes (§47). What they do not offer is 320x200x256, which is a fact about this build's present. Two predicates and both are live: there must be a machine to run, and `OSAPI_FSX_CAPS`'s mask for **this window's display** must carry `FSXM_VGA13` **by name** — not "any mode at all", because 13h is the only mode this build's bracket enters (§91.6.1) and a Hercules machine's mask is non-zero without it. Re-asked at use and never banked, never `OSAPI_VIDEO` (which answers about the primary), so on a two-card desktop the item greys per monitor |
+| Options > `Frame skip: …`, `Frame skip faster`, `Frame skip slower`, with no ROM **or** where the display has no 13h | *No ROM loaded: open one to run it.* — there are no frames to skip — and where there is a ROM but no mode, *No 320x200x256 mode on this display.* **The trio greys on `Full screen`'s OWN predicate and both halves of it**, because `Full screen` is the only route into the bracket (a windowed picture is dropped, §91.11, and there is no Full-screen shortcut key): on CGA, EGA and Hercules a live `Frame skip faster` would change a number nothing on that machine can ever spend — present, not greyed, not checked and silently ignored, which is §47's own definition of the defect. **This sentence is `NI_FACT_NOROM` and it exists because wave 2 deleted the one that used to cover this state**: wave 1 greyed every Options item with `No picture yet: this build reads ROMs.` (a fact about that BUILD), wave 2 made it false and rightly deleted it, and for a cycle four dithered items stood over a fact line talking about the clip. A greying names a fact and the fact has to be readable. The check state is in the LABEL (`Frame skip: Auto`, `Frame skip: 3`) and never a `MENU_DIS` dither, because in this package that byte means UNAVAILABLE and nothing else (§91.8) |
 | File > `Open ROM` with an unsupported mapper | **Refused at load, not greyed** — the mapper number is not knowable before the header is read, so this is §47's attempted-and-reported half and it *can* toast. The state line is InfoNES's own sentence with the number in it, *Mapper #%d is unsupported.*, and the strip's 24 characters take *Mapper #%d unsupported* |
 | File > `Open ROM` with a ROM larger than the heap can hold | `ni_refuse_kb`'s two forms: the state line reads *INFONES wanted %uKB, largest is %uKB* and the strip *Wanted %uKB, have %uKB* — `RUNCPM`'s refusal shape, quoting what it asked and what `os88_mem_largest_kb()` answered. **`os88_main`'s claim failure calls the same helper**, so the launch refusal and the load refusal are one wording; that site composed a 37-character sentence of its own until the strip was measured against it, and what reached the glass was `INFONES wanted 13 KB, la` |
 | File > `Open ROM` with a header that claims more than the file holds | *Header claims %uKB, file is %uKB* on the state line, *Header claims %uKB* in the strip — this port's own check, which none of the three references has (`nirom.c`) |
@@ -93737,16 +94011,26 @@ a 386 and a 486 worth having.
 | `INFONES.OVL` | **4,500** | 1,030 overlay C lines at 4.3, plus the strings and the dialog table |
 | **resident total** | **~42,000** of 61,440 | about 19,400 spare, and **13,000 under §73.9's 55,000 trigger** |
 
-**MEASURED, at the end of wave 1** — the package, the three flat menus, the
-front panel, the iNES loader, the About panel and the whole 2A03 core:
+**MEASURED, at the end of wave 2** — everything wave 1 had, plus the scanline
+composer, the sprite pass, the tile-cache sync, the frame loop, the pacer, the
+fullscreen bracket, the mode-13h present and the DAC:
 
 | | measured | of the plan |
 |---|---|---|
-| resident image | **21,858** | the 2A03 core alone is **6,659** of it, its dispatch and cycle tables included |
-| resident bss | **3,577** | |
-| `INFONES.OVL` | **2,840** | `nirom.c`, `nicmd.c` and `niabout.c` |
-| **resident total** | **25,435** of 61,440 | **36,005 spare**, and 29,565 under the 55,000 trigger |
-| largest frame | **20 bytes** | `ni_panel_paint`'s, against `CC_MAXFRAME`'s 96 — and §91.4.4 records that it is **not** on the deepest chain; the deepest chain's own largest is `ovl_rom_load`'s 18 |
+| resident image | **27,232** | wave 1's 21,858 + 5,374. The 2A03 core is **6,659** of it and `niband.inc`'s decoder and composer another **1,166** — the rest is the frame loop, the pacer, the bracket and the C the two of them added. (The wave-2 review's fixes are +338 net over the first build of this wave: the stack probe came OUT of the shipping build, and `ni_entered`, `ni_panel_settle`, the `ni_menu_labels`/`ni_menu_rotate` split, `ni_dacblack`, the `Frame skip` predicate, the PAPER-branch clamp, the rate row's drop count and `C` on the panel went in.) |
+| resident bss | **4,931** | wave 1's 3,577 + 1,354: the 272-byte line buffer, the 272-byte sprite scratch, the 256-byte OAM copy, the 240-byte row table, the two 16-byte palette LUTs, the 132-byte column table (33 pairs of words) and the composer's own struct |
+| `INFONES.OVL` | **2,940** | `nirom.c`, `nicmd.c` and `niabout.c` |
+| **resident total** | **32,163** of 61,440 | **29,277 spare**, and 22,837 under §73.9's 55,000 trigger |
+| largest frame | **20 bytes** | still `ni_panel_paint`'s, against `CC_MAXFRAME`'s 96; the bracket chain's own largest is `ni_frame`'s 10 |
+
+**And what wave 1 measured**, kept because the deltas are the useful part:
+
+| | wave 1 |
+|---|---|
+| resident image | 21,858 |
+| resident bss | 3,577 |
+| `INFONES.OVL` | 2,840 |
+| resident total | 25,435 |
 
 **Every figure above is decoded from the artifacts, not copied from a report.**
 The first version of this table carried a build that was superseded before it
@@ -93761,11 +94045,14 @@ to prevent. The image, bss and `.OVL` are `os88pkg`'s and `os88ovl`'s own
 output lines; the core's 6,659 is the bytes `nasm -l` emits between
 `%include "infones/nicpu.inc"` and the include after it.
 
-The PPU, the composer, the four presents, the bracket and four mappers are
-still to come, and the plan's ~42,000 is what they are budgeted against;
-what wave 1 establishes is that the CORE — the piece with no way to move to an
-overlay, because a frame loop calls it — costs 6,659 bytes rather than the
-4,600 the line estimate predicted, and that there is room for it.
+The three OTHER presents (Mode X, CGA, Hercules), the tier table's bench and
+four mappers are still to come, and the plan's ~42,000 is what they are
+budgeted against. What wave 1 established is that the CORE — the piece with no
+way to move to an overlay, because a frame loop calls it — costs 6,659 bytes
+rather than the 4,600 the line estimate predicted; what wave 2 adds to that is
+that the whole PICTURE — composer, sprites, frame loop, pacer, bracket, one
+present and the DAC — cost **5,036 more**, so the remaining three presents and
+four mappers have 29,277 bytes of room and the split trigger is not close.
 
 **The basis is `apps/c64` measured, not guessed.** C64-SPEC §13.0.1's
 shipped line is 39,384 image + 13,106 bss + 2,149 overlay = 52,490 resident,
@@ -93819,9 +94106,26 @@ here — which also means every buffer in this package is owned by exactly one
 path at a time (§73.5.1: a static is per package *instance*, and the bracket
 owns its buffers exclusively).
 
-**`nimem.inc` is the only place `ES` is loaded**, line by line marked
-`; cc8086:allow` with its reason, and gated on a real x86 under SS ≠ DS by
-`nimemtest`.
+**`ES` IS LOADED IN FOUR FILES, EVERY LINE MARKED `; cc8086:allow` WITH ITS
+REASON, AND NOWHERE ELSE.** §73.5 says compiled code never touches it, so the
+whole discipline is that every load lives in hand-written assembly, is
+restored before the routine returns, and says on the line what it is pointing
+at. Wave 1's sentence said `nimem.inc` was the only such file; wave 2 gave the
+composer, the core and the bracket loads of their own, and the sentence is
+replaced rather than left to describe a tree that no longer exists.
+
+| file | what `ES` is pointed at | gated by |
+|---|---|---|
+| `nimem.inc` | the destination claim of every mover, the machine claim for the OAM block move, and the PACKAGE for the read back into its own bss | `nimemtest`, on a real x86 under SS ≠ DS |
+| `niband.inc` | the tile-cache claim (the decoder), the PACKAGE (the composer's own tables), and the framebuffer (`ni_present13`) | `nimemtest`, same run |
+| `nicpu.inc` | the PRG fetch bias and the RAM window — `ES` is the core's *bus* register and is reloaded per fetch region | `nicputest`, against `nestest.log`'s 8,991 lines |
+| `nifsx.inc` | the package, for `OSAPI_FSX_MODE`'s `FSI_*` out-buffer, and the framebuffer, for the border fill | **not gated**, and it does not need to be: both are `push ds`/`pop es` or a load of `[_ni_fbseg]`, with no string op crossing a claim boundary |
+
+**And `SS` is not in that table any more.** The stack sentinel (§91.4.4) put
+`ES` — and `DS` — on the STACK segment, which is the one segment §73.5 says
+compiled code never touches, and `nimemtest` did not cover it. It is now
+behind `-dNI_STKPROBE` and is in **no shipping build**, so the shipping package
+never points a segment register at `SS` at all.
 
 **`ovl_rom_load` is called from the WAKE and never from `os88_main`** — the
 first callback is where an overlay may first be reached (§74.1) — announced
@@ -93955,10 +94259,13 @@ an XT target ahead of a measurement is a claim rather than a machine.
 |---|---|---|
 | `hosttest/niuitest.c` | the whole C compiled with clang against a **second copy** of `os88.h` placed ahead of `apps/cc` on the include path, so drift is a compile failure. A pixel model of the glass for the panel; drives the program like a user; asserts field for field that the glass shows what the shadow says; **prices the redraw** — a whole repaint must not pad its runs, a one-field update must be one call and its differing span, a two-row `WF_OWNBG` expose must re-letter two fields and an empty damage rect must cost nothing — and prints the cost table **measured, not asserted**; replays the frame-hash recordings | `build.sh` |
 | `hosttest/nicputest.asm` | **the CPU gate**: `nicpu.inc` assembled standalone against a stub bus whose contract is written down beside it, running `nestest.nes` from `$C000` and diffing PC, opcode bytes, A/X/Y/P/SP and CYC against `nestest.log` line by line — the first differing line names the wrong instruction — then blargg's `instr_test-v5` `rom_singles` 01-16 through the `$6000` protocol | **`make nicputest` ALONE.** It takes minutes and needs a fetched fixture, and `apps/c64/build.sh`'s header says in capitals why that does not belong in a build |
-| `hosttest/nisystest.asm` | **the whole-emulator ROM gate**, and a new artifact this port adds: a `NITEST=1` headless debug build of the **package** that loads a named ROM on the wake, runs it with no bracket and no present, polls `$6000` and prints the `$6004` string, read back over QMP. `ppu_vbl_nmi` 01-10, `cpu_dummy_reads`, `palette_ram`, `instr_timing` | `make nisystest` |
-| `hosttest/nimemtest.asm` | `niband.inc`'s and `nimem.inc`'s entry points on a real x86 under **SS ≠ DS** with an `ES` sentinel and four discipline negative controls (ES, DF, BP, DS); and it writes the composed 256x240 frame out over the serial port, which is the **only** path by which the shipping assembly's output reaches `tools/niref.py` | `build.sh` — it is seconds |
+| `hosttest/nisystest.sh` + `nisysdrive.py` | **the whole-emulator ROM gate**, and a new artifact this port adds: `build/nitest.o88` is `apps/infones/infones.c` compiled a SECOND time with `-DNITEST`, through the same shim and the same four `.inc` files, so what runs is the shipping loader, core, PPU, composer and bracket. It loads `TEST.NES` on its first wake, runs frames back to back inside the bracket, polls blargg's `$6000` channel — signature `$DE $B0 $61` at `$6001-$6003`, `$80` running, `$81` reset-and-continue, below `$80` the result, the report at `$6004` — and writes `NIRES.TXT` beside itself, which `tools/nifatcat.py` reads back **out of the floppy image** (never by grepping it: LESSONS.md 10's first grep found the package's own literals). It carries §91.4.4's **stack high-water** in the same line. Wave 4 adds `ppu_vbl_nmi` 01-10, `cpu_dummy_reads` and `instr_timing` to the list of singles it is run over | `make nisystest [NIROM=…]` |
+| `hosttest/nimemtest.asm` | `niband.inc`'s and `nimem.inc`'s entry points on a real x86 under **SS ≠ DS** with an `ES` sentinel and two discipline negative controls; ELEVEN cases, of which the composer's are `ni_bg_line` against hand-computed pixels (a tile whose four pattern values are all used, a transparent neighbour, and a guard on the eight bytes a zero fine X must not touch), `ni_spr_line` against hand-computed pixels (first-writer-wins between two sprites at the same x with different palettes, a behind-tagged sprite losing to an opaque background, and the sprite-0 strike's x), and `ni_present13`'s bound at BOTH ends of the drop table's range with guards either side of each run and eight bytes past the framebuffer; and it writes the composed 256x240 frame out over **COM2** — the case reports go out COM1, because a picture contains every byte value there is — which is the **only** path by which the shipping assembly's output reaches `tools/niref.py` | `build.sh` — it is seconds |
 | `build.sh`'s `nifact` row | one fact-line sentence per `NI_FACT_*` constant, every sentence inside `NI_FCELLS`, every constant either **stored** somewhere in the package or named on a `PLANNED` line saying which wave arms it, and every live constant present in the rotation (§91.7.2). It is the only thing tying a greyed item to its reason | `build.sh` |
-| `tools/niref.py` | `tools/c64ref.py`'s role: an **independent** Python compositor written from NESdev documentation, compared bit for bit against **both** dumps — `niuitest`'s C model and `nimemtest`'s shipping assembly. `--selftest` injects a one-bit defect and requires the compare to fail | `build.sh` |
+| `tools/niref.py` | `tools/c64ref.py`'s role: an **independent** Python compositor written from NESdev documentation, background AND sprites, compared bit for bit against **both** dumps — `niuitest`'s C model and `nimemtest`'s shipping assembly. `--selftest` injects a one-bit defect and requires the compare to fail, and requires a TAG bit not to. **The fixture is written three times on purpose** — `niref.py`'s `synth()`, `niuitest.c`'s `fixture()` and `nimemtest.asm`'s `nifix_build` — and `build.sh` diffs the C model's own state blob against `niref.py`'s before comparing any frame, because two frames agreeing about a state neither of them checked would prove nothing. The fixture carries a non-zero fine X, a scroll that MOVES between lines, two attribute quadrants, 8x16 sprites with both flips and both priorities, lines with more than eight sprites on them, and one left-column mask each way | `build.sh` |
+| `build.sh`'s `nistruct` row | **THE CROSS-LANGUAGE TABLES, IN BOTH DIRECTIONS.** `struct ni_comp` (13 words, written field by field by C on every one of 240 scanlines) against `niband.inc`'s `NIC_*` byte offsets and its `_ni_cs: resw N`; `struct ni_mach` against `nicpu.inc`'s `NIM_*` and `_ni_m`'s reservation; `ni_bgpal`/`ni_sppal`'s 16 bytes each against the composer's `resb 16`; and `FSXM_VGA13`'s value in `apps/os88api.inc` against `NI_FSXM_VGA13` in `nimenu.c` (with a literal `1 << n` in the greying refused outright). It is the `niscr` row's sentence one structure along: *nothing in either language can see across the two files, and there is no build error for it* — insert or reorder a field and it is a wrong operand on every line of every frame, not a diagnostic. Both negative controls fire: a swapped pair of `NIC_*` offsets, and a wrong `NI_FSXM_VGA13` | `build.sh` |
+| `build.sh`'s `nirow` row | the 240→200 table's arithmetic, READ OUT OF `nirun.c`: the largest product must fit a sixteen-bit `int`, the fraction must still be 200/224, and the table must keep 200 rows numbered 0..199 strictly increasing with every store inside the 64,000-byte screen. It exists because **a 16-bit overflow is invisible to `niuitest` by construction** — the host's `int` is thirty-two bits — and §91.6.2 is the defect it was written for | `build.sh` |
+| `apps/infones/hosttest/niagnes.c` + `tools/nigetagnes.py` | **the whole-ROM ORACLE** (the plan's R4). `agnes` — a small, complete, MIT NES emulator that runs on the HOST — plays a real ROM; this recorder `#include`s its `.c` to reach the PPU's internals, samples the loopy `v` at **dot 0 of every visible line** (its public API does not offer that, and a SCANLINE model cannot be checked without it), and writes a `NIREF1` state blob beside **agnes's own 256x240 screen of NES palette indices**. Then both independent compositors are held to it: `tools/niref.py` renders the state, and `niuitest --replay` drives THIS PORT's C model with it, each with a per-frame negative control. **Five ROMs, three sampled frames each, all three implementations identical pixel for pixel.** It exercises what a real game USES, in the combinations it uses it in, on states nobody chose — a different claim from the synthetic fixture, and both are wanted | `make niagnes` — **NOT `build.sh`**, for `nicputest`'s reason: it fetches agnes off a network at a pinned commit and checks it by SHA-256, and a fresh clone's `make infones` must neither stall on a network nor fail without one. **Nothing is vendored**: `build/agnes` is gitignored like `build/nesroms`, and the MIT notice is reproduced verbatim in `niagnes.c` |
 | `tests/niband/` | the icount bench: the composer per pixel and per line, the decoder per 1KB bank, each present per line, the core per 6502 cycle and per core entry. **This is what writes §91.12's table.** Registered in `tests/suite.py` | `make nibandbench` |
 
 **`make nicputest` cannot test the PPU and that is why `nisystest` exists.** The
@@ -93968,6 +94275,11 @@ excludes — would have nowhere to run. `cpu_timing_test6` and the
 `branch_timing_tests` family have **no `$6000` status byte at all**: they
 predate the protocol and report only on a rendered screen, so they are
 screendumped and read by eye and **no gate rests on them**.
+
+**What `nisystest` reads today**, on `instr_test-v5`'s `01-basics` end to end
+through the shipping package: `NITEST PASS 0 STK98`, then blargg's own report
+`01-basics` / `Passed`. The `STK98` is §91.4.4's measurement and the `PASS 0`
+is the ROM's.
 
 **The assembly gets its own gate because the harness models it.**
 C64-SPEC §9.8's all-black 2x screendump is the cautionary case: the C
@@ -93997,12 +94309,12 @@ No slot is added, no thunk is added, `apps/cc/crt0.asm` is unchanged and
 | the gap | the answer |
 |---|---|
 | §53 is not wrapped for C | the whole bracket is `nifsx.inc`, plus one cdecl helper for the greying predicates |
-| no 60.0988 Hz clock exists, and none can | the 110/100 accumulator over `FSXW_FRAME` + `FSXF_FASTTICK` |
+| no 60.0988 Hz clock exists, and none can | the elapsed-tick accumulator (`acc += dt * 330`, one frame per 100) over `FSXW_FRAME` + `FSXF_FASTTICK` |
 | nothing wraps `int 16h` | a ten-line shim in `nifsx.inc`; the queue is drained |
 | no DAC call exists | the app owns the DAC inside a foreign mode (§53.7) |
 | `os88_file_read_at`'s cluster rule vs. the 16-byte header | the staging-claim read, and the shift path for large ROMs (§91.13.2) |
 | no 32-bit type | two words with an explicit fold per slice |
-| no formatter, no float | rates held in tenths and composed by `os88_utoa` |
+| no formatter, no float | rates held in **hundredths** and composed by `os88_utoa` (§91.7.1) |
 | no submenu, no separator, one item mark | flattened in the package; check state in the label |
 | a `MENU_DIS` item has no click to answer | the short form in the label and the sentence on the fact line |
 | `OSAPI_MEM_MOVABLE` has no C thunk | every claim is pinned by design (§91.3.2) |

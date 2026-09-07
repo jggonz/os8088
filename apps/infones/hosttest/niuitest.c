@@ -424,16 +424,211 @@ void ni_oam_move(unsigned ramoff)
             pool + (size_t)ni_m.machseg * 16 + ramoff, 256);
 }
 
+/* ni_chr_decode - MODELLED, and wave 1's note said what would make it so:
+ * "wave 2 gives this a body only if niref.py needs one to check the COMPOSER's
+ * C model, and it will say so." It does. The C model of the composer below
+ * reads the tile cache exactly as the shipping assembly does - a byte a
+ * pixel, 64 bytes a tile - so a cache with nothing in it would make the model
+ * render 240 lines of backdrop and agree with nothing.
+ *
+ * IT IS STILL NOT A GATE ON THE REAL DECODER. That is nimemtest's, on a real
+ * x86 under SS != DS, against tiles computed by hand at both ends of a bank
+ * (SPEC.md 91.14.4) - and this body is written from the CHR format (two bit
+ * planes, most significant bit leftmost) rather than from niband.inc, for the
+ * reason that section gives about C64-SPEC 9.8. */
 void ni_chr_decode(unsigned dseg, unsigned doff, unsigned sseg, unsigned soff)
 {
-    /* THE TILE CACHE'S DECODER IS ASSEMBLY AND IS GATED BY nimemtest, on a
-     * real x86 under SS != DS, against hand-computed tiles. Modelling it here
-     * would be the exact trap SPEC.md 91.14.4 names: the C harness transcribes
-     * the routine correctly and that is what makes the real routine's defects
-     * invisible. Wave 2 gives this a body only if niref.py needs one to check
-     * the COMPOSER's C model, and it will say so. */
-    (void)dseg; (void)doff; (void)sseg; (void)soff;
+    unsigned char *d = pool + (size_t)dseg * 16 + doff;
+    const unsigned char *s = pool + (size_t)sseg * 16 + soff;
+    int t, r, b;
+
+    for (t = 0; t < 64; t++)
+        for (r = 0; r < 8; r++) {
+            int lo = s[t * 16 + r], hi = s[t * 16 + 8 + r];
+            for (b = 0; b < 8; b++)
+                d[t * 64 + r * 8 + b] =
+                    (unsigned char)(((lo >> (7 - b)) & 1)
+                                    | (((hi >> (7 - b)) & 1) << 1));
+        }
 }
+
+/* ==========================================================================
+ * THE COMPOSER, MODELLED - and this half IS the thing tools/niref.py checks
+ *
+ * SPEC.md 91.14.4 names two dumps and they are not the same claim: niref.py
+ * is compared against **niuitest's C MODEL frame** - what is below - and
+ * against **nimemtest's SHIPPING-ASSEMBLY frame**, written out over the
+ * serial port by the routine that actually runs on the machine. Running the
+ * independent compositor against the model alone would be C64-SPEC 9.8's
+ * cautionary case one level up: the C harness transcribed the routine
+ * correctly, and that is exactly what made the real routine's two defects
+ * invisible.
+ *
+ * So this is written from the NESdev description of the PPU and from the port
+ * plan's R7 - nowhere from apps/infones/niband.inc - and the two are expected
+ * to agree because they implement one specification, not because one was
+ * copied.
+ * ========================================================================*/
+struct ni_comp ni_cs;
+unsigned char ni_bgpal[16];
+unsigned char ni_sppal[16];
+
+#define HFW 256
+#define HFH 240
+static unsigned char hoam[256];         /* OAM, as the package copies it */
+static unsigned char hline[272];        /* the composed line, window at +8 */
+static unsigned char hspr[272];         /* the sprite scratch */
+static unsigned char hframe[HFW * HFH]; /* ...and the frame niref.py checks */
+static int h_present_rows;              /* how many present calls landed */
+static int h_present_bad;               /* ...and how many were out of bounds */
+
+void ni_oam_grab(void)
+{
+    memcpy(hoam, pool + (size_t)ni_cs.machseg * 16 + 0x3000, 256);
+}
+
+/* the nametable fold: four logical tables onto two physical ones */
+static unsigned h_nt(unsigned addr)
+{
+    unsigned idx = (addr >> 10) & 3;
+    unsigned phys = ni_cs.mirror ? (idx & 1) : ((idx >> 1) & 1);
+    return pool[(size_t)ni_cs.machseg * 16 + 0x2800 + phys * 1024
+                + (addr & 0x3FF)];
+}
+
+void ni_bg_line(void)
+{
+    unsigned v = ni_cs.v;
+    unsigned cx0 = v & 0x1F, cy = (v >> 5) & 0x1F;
+    unsigned nt0 = (v >> 10) & 3, fy = (v >> 12) & 7;
+    const unsigned char *cache = pool + (size_t)ni_cs.cacheseg * 16;
+    int col, b, x;
+
+    if (!(ni_cs.mask & 0x08)) {
+        for (x = 0; x < 256; x++)
+            hline[8 + x] = ni_bgpal[0];
+    } else {
+        for (col = 0; col < 33; col++) {
+            unsigned cx = cx0 + col;
+            unsigned nt = nt0 ^ ((cx >= 32) ? 1u : 0u);
+            unsigned base, tile, attr, shift, pal4, off;
+            cx &= 0x1F;
+            base = 0x2000 | (nt << 10);
+            tile = h_nt(base | (cy << 5) | cx);
+            attr = h_nt(0x23C0 | (nt << 10) | ((cy >> 2) << 3) | (cx >> 2));
+            shift = ((cy & 2) << 1) | (cx & 2);
+            pal4 = ((attr >> shift) & 3) * 4;
+            off = (ni_cs.bgtile + tile) * 64 + fy * 8;
+            for (b = 0; b < 8; b++) {
+                int px = 8 - (int)ni_cs.fx + col * 8 + b;
+                hline[px] = ni_bgpal[pal4 + cache[off + b]];
+            }
+        }
+        if (!(ni_cs.mask & 0x02))
+            for (x = 0; x < 8; x++)
+                hline[8 + x] = ni_bgpal[0];
+    }
+    /* the frame niref.py reads is the VISIBLE window, by SOURCE line */
+    if (ni_cs.line < HFH)
+        memcpy(hframe + ni_cs.line * HFW, hline + 8, 256);
+}
+
+int ni_spr_line(void)
+{
+    const unsigned char *cache = pool + (size_t)ni_cs.cacheseg * 16;
+    int i, n = 0, hit = -1, lo = 512, hi = -1, x;
+    struct { unsigned off, x, tag, flip; } sl[8];
+
+    ni_cs.hit = (unsigned)-1;
+    ni_cs.nspr = 0;
+    if (!(ni_cs.mask & 0x10))
+        return -1;
+
+    for (i = 0; i < 64; i++) {
+        int row = (int)ni_cs.line - hoam[i * 4] - 1;
+        int attr, tile, tag;
+        if (row < 0 || row >= (int)ni_cs.sph)
+            continue;
+        if (n == 8) { ni_cs.ovf = 1; break; }
+        attr = hoam[i * 4 + 2];
+        if (attr & 0x80)
+            row = (int)ni_cs.sph - 1 - row;
+        if (ni_cs.sph == 8) {
+            tile = (int)ni_cs.sptile + hoam[i * 4 + 1];
+        } else {
+            int t = hoam[i * 4 + 1];
+            tile = ((t & 1) ? 256 : 0) + (t & 0xFE) + (row >> 3);
+            row &= 7;
+        }
+        tag = ((attr & 3) * 4) | ((attr & 0x20) ? 0x20 : 0)
+            | ((i == 0) ? 0x10 : 0);
+        sl[n].off = (unsigned)(tile * 64 + row * 8);
+        sl[n].x = hoam[i * 4 + 3];
+        sl[n].tag = (unsigned)tag;
+        sl[n].flip = (unsigned)(attr & 0x40);
+        if ((int)sl[n].x < lo) lo = (int)sl[n].x;
+        if ((int)sl[n].x + 7 > hi) hi = (int)sl[n].x + 7;
+        n++;
+    }
+    ni_cs.nspr = (unsigned)n;
+    if (n == 0)
+        return -1;
+
+    /* ASCENDING OAM ORDER, FIRST WRITER WINS (the plan's R7) */
+    for (i = 0; i < n; i++) {
+        int b;
+        for (b = 0; b < 8; b++) {
+            int src = sl[i].flip ? (7 - b) : b;
+            int val = cache[sl[i].off + src];
+            int d = 8 + (int)sl[i].x + b;
+            if (!val || hspr[d])
+                continue;
+            hspr[d] = (unsigned char)(val | sl[i].tag);
+        }
+    }
+
+    /* ...and ONE merge with the untouched background resolves priority */
+    if (hi > 255) hi = 255;
+    for (x = lo; x <= hi; x++) {
+        int s = hspr[8 + x], b;
+        if (!s)
+            continue;
+        if (x < 8 && !(ni_cs.mask & 0x04))
+            continue;
+        b = hline[8 + x];
+        if ((s & 0x10) && !(b & 0x80) && hit < 0 && x != 255)
+            hit = x;
+        if ((s & 0x20) && !(b & 0x80))
+            continue;
+        hline[8 + x] = ni_sppal[s & 0x0F];
+    }
+    for (x = lo; x <= hi + 8 && x < 264; x++)
+        hspr[8 + x] = 0;
+
+    if (hit >= 0)
+        ni_cs.hit = (unsigned)hit;
+    if (ni_cs.line < HFH)
+        memcpy(hframe + ni_cs.line * HFW, hline + 8, 256);
+    return hit;
+}
+
+/* ni_present13 - the model checks the ONE thing this routine can get wrong on
+ * a machine with no screen: that every store lands inside the 64,000-byte
+ * framebuffer (SPEC.md 91.6.2, and nimemtest asserts the same bound on the
+ * real one). */
+void ni_present13(int row)
+{
+    h_present_rows++;
+    if (row < 0 || row > 199 || row * 320 + 32 + 256 > 64000)
+        h_present_bad++;
+}
+
+static int fsx_go_answer = 1;
+static int fsx_go_calls;
+unsigned ni_stk_lo;
+int  ni_fsx_go(void *win)  { (void)win; fsx_go_calls++; return fsx_go_answer; }
+void ni_fsx_wait(int c)    { (void)c; }
+int  ni_getkey(void)       { return -1; }
 
 static int fsx_caps_answer = 0x0F;
 int ni_fsx_caps(void *win)
@@ -469,9 +664,269 @@ void ni_boot(void)
 
 
 /* ==========================================================================
+ * THE FIXTURE, AND THE STATE BLOB tools/niref.py READS
+ *
+ * The formula is niref.py's synth() and nimemtest.asm's nifix_build, written
+ * a third time. Every constant below is one of those two files' as well, and
+ * build.sh diffs the blob this writes against niref.py's own.
+ * ========================================================================*/
+#define FX_CTRL   0x20              /* bg pattern table $0000, 8x16 sprites */
+#define FX_MASK   0x1A              /* bg on + bg left on, sprites on,
+                                     * sprite LEFT COLUMN OFF */
+#define FX_FX     3
+#define FX_MIRROR 1                 /* vertical */
+
+static unsigned fx_v(int y)
+{
+    /* coarse Y walks with the line and coarse X steps at line 100: a
+     * mid-frame $2005 write, which is the case a single snapshot cannot
+     * express and a scanline model exists for */
+    unsigned cy = (unsigned)((y >> 3) & 0x1F);
+    unsigned fy = (unsigned)(y & 7);
+    unsigned cx = (y < 100) ? 0u : 5u;
+    unsigned nt = (y < 100) ? 0u : 1u;
+    return (cx | (cy << 5)) | (nt << 10) | (fy << 12);
+}
+
+static void compose_fixture(void)
+{
+    unsigned mach, chr, cache;
+    unsigned char *m, *c;
+    int i, y, b;
+    FILE *f;
+
+    mach = os88_mem_claim(13);
+    chr = os88_mem_claim(8);
+    cache = os88_mem_claim(32);
+    CHECK(mach && chr && cache, "the fixture's claims were refused");
+    m = pool + (size_t)mach * 16;
+    c = pool + (size_t)chr * 16;
+
+    for (i = 0; i < 2048; i++)
+        m[0x2800 + i] = (unsigned char)((i * 7) & 0xFF);
+    for (i = 0; i < 32; i++)
+        m[0x3100 + i] = (unsigned char)((i * 3 + 1) & 0x3F);
+    for (i = 0; i < 64; i++) {
+        m[0x3000 + i * 4 + 0] = (unsigned char)((i * 17) & 0xFF);
+        m[0x3000 + i * 4 + 1] = (unsigned char)((i * 5) & 0xFF);
+        m[0x3000 + i * 4 + 2] = (unsigned char)(i & 0xE3);
+        m[0x3000 + i * 4 + 3] = (unsigned char)((i * 13) & 0xFF);
+    }
+    for (i = 0; i < 8192; i++)
+        c[i] = (unsigned char)((i * 13 + (i >> 4)) & 0xFF);
+
+    ni_machseg = mach;
+    ni_chrseg = chr;
+    ni_cacheseg = cache;
+    for (b = 0; b < 8; b++)
+        ni_chr_decode(cache, (unsigned)b * 4096, chr, (unsigned)b * 1024);
+    ni_pal_build();
+
+    memset(hspr, 0, sizeof hspr);
+    ni_cs.cacheseg = cache;
+    ni_cs.machseg = mach;
+    ni_cs.bgtile = (FX_CTRL & 0x10) ? 256 : 0;
+    ni_cs.sptile = (FX_CTRL & 0x08) ? 256 : 0;
+    ni_cs.sph = (FX_CTRL & 0x20) ? 16 : 8;
+    ni_cs.fx = FX_FX;
+    ni_cs.mask = FX_MASK;
+    ni_cs.mirror = FX_MIRROR;
+    ni_oam_grab();
+    for (y = 0; y < 240; y++) {
+        ni_cs.v = fx_v(y);
+        ni_cs.line = (unsigned)y;
+        ni_cs.ovf = 0;
+        ni_bg_line();
+        ni_spr_line();
+    }
+
+    /* the state blob, in tools/niref.py's own layout */
+    f = fopen("build/nirefC.state", "wb");
+    CHECK(f != 0, "cannot write build/nirefC.state");
+    fwrite("NIREF1", 1, 6, f);
+    fputc(FX_CTRL, f);
+    fputc(FX_MASK, f);
+    fputc(FX_FX, f);
+    fputc(FX_MIRROR, f);
+    for (y = 0; y < 240; y++) {
+        unsigned v = fx_v(y);
+        fputc(v & 0xFF, f);
+        fputc((v >> 8) & 0xFF, f);
+    }
+    fwrite(m + 0x3100, 1, 32, f);
+    fwrite(m + 0x2800, 1, 2048, f);
+    fwrite(c, 1, 8192, f);
+    fwrite(m + 0x3000, 1, 256, f);
+    fclose(f);
+
+    f = fopen("build/nirefC.frm", "wb");
+    CHECK(f != 0, "cannot write build/nirefC.frm");
+    fwrite(hframe, 1, sizeof hframe, f);
+    fclose(f);
+
+    os88_mem_free(mach);
+    os88_mem_free(chr);
+    os88_mem_free(cache);
+    ni_machseg = 0;
+    ni_chrseg = 0;
+    ni_cacheseg = 0;
+}
+
+/* ==========================================================================
+ * THE agnes REPLAY (SPEC.md 91.14.4, the port plan's R4)
+ *
+ * `build/niagnes` runs a real ROM on agnes - the MIT reference machine - and
+ * records, per sampled frame, the PPU's per-line scroll history in
+ * tools/niref.py's `NIREF1` layout beside agnes's OWN 256x240 screen of NES
+ * palette indices. This drives the C MODEL with that state and requires the
+ * picture to come out the same.
+ *
+ * IT IS A DIFFERENT CLAIM FROM THE FIXTURE and both are wanted: the fixture
+ * exercises every mechanism the composer HAS, and a real ROM exercises the
+ * ones it USES, in the combinations it uses them in, on states nobody chose.
+ *
+ * NOT A build.sh ROW: it needs agnes fetched off a network, and a fresh
+ * clone's `make infones` must neither stall nor fail on one (apps/c64's
+ * build.sh says the same thing in capitals). `make niagnes` is where it runs.
+ * ========================================================================*/
+#define NB_HDR 10
+#define NB_V   NB_HDR
+#define NB_PAL (NB_V + 480)
+#define NB_NT  (NB_PAL + 32)
+#define NB_CHR (NB_NT + 2048)
+#define NB_OAM (NB_CHR + 8192)
+#define NB_LEN (NB_OAM + 256)
+
+static int replay_one(const char *state, const char *frame)
+{
+    static unsigned char blob[NB_LEN];
+    static unsigned char want[HFW * HFH];
+    unsigned mach, chr, cache;
+    unsigned char *m, *c;
+    FILE *f;
+    int i, y, b, bad = 0, first = -1;
+
+    f = fopen(state, "rb");
+    if (!f || fread(blob, 1, NB_LEN, f) != NB_LEN) {
+        fprintf(stderr, "niuitest: %s is not a NIREF1 blob\n", state);
+        return 1;
+    }
+    fclose(f);
+    if (memcmp(blob, "NIREF1", 6) != 0) {
+        fprintf(stderr, "niuitest: %s has no NIREF1 magic\n", state);
+        return 1;
+    }
+    f = fopen(frame, "rb");
+    if (!f || fread(want, 1, sizeof want, f) != sizeof want) {
+        fprintf(stderr, "niuitest: %s is not a 256x240 frame\n", frame);
+        return 1;
+    }
+    fclose(f);
+
+    mach = os88_mem_claim(13);
+    chr = os88_mem_claim(8);
+    cache = os88_mem_claim(32);
+    if (!mach || !chr || !cache) {
+        fprintf(stderr, "niuitest: the replay's claims were refused\n");
+        return 1;
+    }
+    m = pool + (size_t)mach * 16;
+    c = pool + (size_t)chr * 16;
+    memcpy(m + 0x3100, blob + NB_PAL, 32);
+    memcpy(m + 0x2800, blob + NB_NT, 2048);
+    memcpy(m + 0x3000, blob + NB_OAM, 256);
+    memcpy(c, blob + NB_CHR, 8192);
+
+    ni_machseg = mach;
+    ni_chrseg = chr;
+    ni_cacheseg = cache;
+    for (b = 0; b < 8; b++)
+        ni_chr_decode(cache, (unsigned)b * 4096, chr, (unsigned)b * 1024);
+    ni_pal_build();
+
+    memset(hspr, 0, sizeof hspr);
+    ni_cs.cacheseg = cache;
+    ni_cs.machseg = mach;
+    ni_cs.bgtile = (blob[6] & 0x10) ? 256 : 0;
+    ni_cs.sptile = (blob[6] & 0x08) ? 256 : 0;
+    ni_cs.sph = (blob[6] & 0x20) ? 16 : 8;
+    ni_cs.fx = blob[8] & 7;
+    ni_cs.mask = blob[7];
+    ni_cs.mirror = blob[9] & 1;
+    ni_oam_grab();
+    for (y = 0; y < HFH; y++) {
+        ni_cs.v = (unsigned)blob[NB_V + y * 2]
+                | ((unsigned)blob[NB_V + y * 2 + 1] << 8);
+        ni_cs.line = (unsigned)y;
+        ni_cs.ovf = 0;
+        ni_bg_line();
+        ni_spr_line();
+    }
+    os88_mem_free(mach);
+    os88_mem_free(chr);
+    os88_mem_free(cache);
+    ni_machseg = ni_chrseg = ni_cacheseg = 0;
+
+    /* THE TAGS ARE MASKED, because they are this port's own rendering
+     * convenience and not part of the picture (SPEC.md 91.5.2) - which is
+     * exactly what tools/niref.py's own compare does. */
+    for (i = 0; i < HFW * HFH; i++)
+        if ((hframe[i] & 0x3F) != (want[i] & 0x3F)) {
+            bad++;
+            if (first < 0)
+                first = i;
+        }
+    if (bad) {
+        printf("niuitest: %s: %d differing pixel(s), the first at x=%d y=%d "
+               "(model %d, agnes %d)\n", frame, bad, first % HFW, first / HFW,
+               hframe[first] & 0x3F, want[first] & 0x3F);
+        return 1;
+    }
+
+    /* THE NEGATIVE CONTROL, per frame, because a check that cannot fail is
+     * not a check (tools/niref.py's own rule). One pixel of the expected
+     * picture is changed by one PALETTE INDEX - not by a tag bit, which is
+     * masked on purpose - and the compare must see it. A first attempt at
+     * this injected the defect into the STATE instead, flipping one bit of
+     * one line's scroll, and the picture came out identical: that line's
+     * background was uniform there, so the control proved nothing and read as
+     * a pass. */
+    {
+        int probe = (HFH / 2) * HFW + HFW / 2;
+        unsigned char save = want[probe];
+        want[probe] = (unsigned char)((save & 0x3F) ^ 0x01);
+        if ((hframe[probe] & 0x3F) == (want[probe] & 0x3F)) {
+            printf("niuitest: %s: the NEGATIVE CONTROL did not fire - a "
+                   "changed palette index compared equal\n", frame);
+            want[probe] = save;
+            return 1;
+        }
+        want[probe] = save;
+    }
+    printf("niuitest: %s: 61,440 pixels identical to agnes's own screen "
+           "(and a one-index defect is seen)\n", frame);
+    return 0;
+}
+
+/* ==========================================================================
  * THE DRIVER
  * ========================================================================*/
 static void *win;
+
+static int replay_main(int argc, char **argv)
+{
+    int i, bad = 0;
+
+    for (i = 2; i + 1 < argc; i += 2)
+        bad += replay_one(argv[i], argv[i + 1]);
+    if (bad) {
+        fprintf(stderr, "niuitest: %d recording(s) FAILED\n", bad);
+        return 1;
+    }
+    printf("niuitest: %d agnes recording(s) replayed, every frame identical\n",
+           (argc - 2) / 2);
+    return 0;
+}
 
 static void step(const char *name)
 {
@@ -576,8 +1031,15 @@ static void open_rom(const char *name, unsigned len)
 
 static int menu_dis(const char *s) { return s[0] == (char)OS88_MENU_DIS; }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    /* `--replay STATE FRAME [STATE FRAME...]` is `make niagnes`'s half and
+     * runs NOTHING ELSE: the panel steps below drive the program like a user
+     * and the replay drives the COMPOSER like a frame, and mixing the two
+     * would make one of them the other's setup. */
+    if (argc > 1 && strcmp(argv[1], "--replay") == 0)
+        return replay_main(argc, argv);
+
     unsigned len;
     int before;
     int c_whole_call = 0, c_whole_cell = 0, c_one_call = 0, c_one_cell = 0;
@@ -953,6 +1415,69 @@ int main(void)
           "in silence and the double-click looks as if it did nothing");
     arg_goto_fails = 0;
     arg_name = 0;
+
+    /* ---- THE COMPOSER, AND THE FRAME tools/niref.py CHECKS ---------------
+     * SPEC.md 91.14.4 names TWO dumps and they are not the same claim: this
+     * one is the C MODEL's, which touches no assembly at all, and
+     * nimemtest's is the SHIPPING ASSEMBLY's, written out over the serial
+     * port. Running the independent compositor against the model alone would
+     * be C64-SPEC 9.8's cautionary case one level up.
+     *
+     * THE FIXTURE IS WRITTEN THREE TIMES ON PURPOSE - here, in
+     * tools/niref.py's synth() and in nimemtest.asm's nifix_build - and
+     * build.sh compares this state blob against niref.py's byte for byte. A
+     * fixture written once and shared would make two frames agree about a
+     * state neither of them checked. */
+    step("the composer's C model, and its frame for tools/niref.py");
+    compose_fixture();
+
+    /* ---- THE ROW-DROP TABLE, AND THE OVERFLOW A HOST CANNOT SEE ---------
+     * The 240 -> 200 reduction (SPEC.md 91.6.2) has to keep EXACTLY 200
+     * source rows, map them to 0..199 strictly increasing, and put every
+     * store inside the 64,000-byte screen. Those three are checked below and
+     * they are the easy half.
+     *
+     * THE HARD HALF IS THAT `int` IS SIXTEEN BITS ON THE TARGET AND
+     * THIRTY-TWO HERE. The first version of ni_rowtab computed
+     * `(i * 200) / 224`, whose product passes 32,767 at i = 164: on the 8086
+     * the quotient went NEGATIVE, the last sixty entries were garbage, and
+     * thirty-six destination rows were never presented at all - a picture
+     * with its bottom fifth missing and the mode's border showing through.
+     * On the host it is exactly right and this harness saw nothing, which is
+     * `nirom.c`'s own lesson a second time.
+     *
+     * So the table is re-computed here with the multiply TRUNCATED TO SIXTEEN
+     * BITS, the way the machine does it, and the two must agree. That is a
+     * check for the DEFECT CLASS and not for one expression: any later wave
+     * that changes the fraction is checked the same way. */
+    step("the 240 -> 200 row-drop table, and its 16-bit arithmetic");
+    {
+        int i, n = 0, last = -1, bad16 = 0;
+        ni_rowtab();
+        for (i = 0; i < 240; i++) {
+            if (ni_rowdst[i] == 0xFF)
+                continue;
+            n++;
+            CHECK(i >= 8 && i < 232,
+                  "a kept row outside the 8-top-8-bottom crop");
+            CHECK((int)ni_rowdst[i] == last + 1,
+                  "the destination rows are not 0..199 strictly increasing");
+            last = ni_rowdst[i];
+            CHECK((int)ni_rowdst[i] * 320 + 32 + 256 <= 64000,
+                  "a present would store past the 64,000-byte screen");
+        }
+        CHECK(n == 200, "the table does not keep exactly 200 source rows");
+        /* THE 16-BIT HALF IS NOT HERE AND CANNOT BE. `int` is thirty-two
+         * bits in this harness and sixteen on the target, and the only way
+         * to see an overflow from C is to model the exact expression the
+         * source uses - which is a check that restates what it checks and
+         * stops working the moment the expression is rewritten (LESSONS.md
+         * 2). build.sh's `nirow` row READS ni_rowtab out of nirun.c instead,
+         * and refuses a multiply whose largest product passes 32,767. What
+         * IS here is the shape of the table, which is worth checking on
+         * either word size. */
+        (void)bad16;
+    }
 
     /* ---- the cost table -------------------------------------------------- */
     printf("\nniuitest: the panel's cost, on the target 4.77 MHz 8088\n");

@@ -1,4 +1,12 @@
 build/
+# ...and the KNOB builds, which go in a directory of their own so that a
+# `make BUILD=build-cga VIDEO=cga` does not restamp the kernel another agent
+# is booting out of build/ (LESSONS.md 10). They are build directories with
+# build directories' contents - kernels, floppy images, .o88 packages - and
+# CLAUDE.md's rule is that nothing in one is ever tracked. `build-cga/` was
+# sitting untracked and unignored, one `git add -A` away from a committed
+# binary.
+build-*/
 .DS_Store
 
 # 86Box writes NVRAM and dumped BIOS ROMs next to the VM config.

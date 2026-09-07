@@ -102,9 +102,9 @@ static int ni_abt_x, ni_abt_y, ni_abt_w, ni_abt_h;
  * asking about. */
 #define NI_FACT_NONE  0
 #define NI_FACT_MUTE  1
-#define NI_FACT_PIC   2
-#define NI_FACT_CLIP  3
-#define NI_FACT_FSX   4
+#define NI_FACT_CLIP  2
+#define NI_FACT_FSX   3
+#define NI_FACT_NOROM 4
 #define NI_FACT_N     5
 
 /* EVERY SENTENCE IS <= NI_FCELLS AND IS THE SPEC's OWN CHARACTERS. SPEC.md
@@ -113,34 +113,53 @@ static int ni_abt_x, ni_abt_y, ni_abt_w, ni_abt_h;
  * quoted an 82-character sentence at a field 40 cells wide, which is a
  * contract stating something the glass cannot hold.
  *
- * PLANNED NI_FACT_CLIP - wave 2, and it is named on this one line because
- * build.sh's nifact gate reads it: the gate refuses a sentence that nothing
- * in the package can ever select, and this is how a wave declares one that is
- * written early on purpose. Its predicate is the live FSI_H of the mode this
- * package would enter, which needs OSAPI_FSX_MODE and does not exist in wave
- * 1 - nifsx.inc answers the caps MASK and nothing else. Until then `Clip top
- * and bottom` is greyed by NI_FACT_PIC with the rest of Options. */
+ * NI_FACT_PIC IS GONE, AND ITS DELETION IS THE POINT. Wave 1 greyed every
+ * Options item with `No picture yet: this build reads ROMs.` - a fact about
+ * that BUILD - and wave 2 made it false by writing the composer and the
+ * bracket. A greying may not outlive its reason (SPEC.md 47), so the item,
+ * the constant and the sentence go together in one edit rather than the
+ * sentence being left behind to describe a program that no longer exists.
+ *
+ * ...AND ITS DELETION LEFT A HOLE, WHICH NI_FACT_NOROM FILLS. Four Options
+ * items - the frame-skip trio and Full screen - grey on `there is no ROM`,
+ * and after NI_FACT_PIC went there was no sentence anywhere for that state:
+ * a user with nothing loaded saw four dithered items and a fact line talking
+ * about the clip. A greying names a fact and the fact has to be READABLE. */
 static const char *ni_facts[NI_FACT_N] = {
     "",
     /* Options > Mute. The 2A03 mixes five voices and the PC speaker plays
      * one square wave (SPEC.md 91.10). The pulse-1 arithmetic that WOULD be
      * the follow-up is recorded in the SPEC, not here. */
     "No APU: five voices, one speaker.",
-    /* Wave 1's fact, and it is a fact about this build rather than about the
-     * machine (LESSONS.md 8): the composer and the bracket land in wave 2, so
-     * everything that shows a picture is greyed and says so. A greying may
-     * not outlive its reason (SPEC.md 47) - wave 2 deletes this row. */
-    "No picture yet: this build reads ROMs.",
+    /* Options > Clip. The bracket's mode is 13h on every tier (SPEC.md
+     * 91.6.1), which is 200 rows, so 240 NES rows are ALWAYS reduced and
+     * there is nothing for a toggle to toggle. Shipping it as a live item
+     * that is structurally inert is the exact shape LESSONS.md 1 names. */
     "Clip is forced at 320x200: 240 rows.",
-    "This display offers no fullscreen mode."
+    /* Options > Full screen, on a display whose OSAPI_FSX_CAPS mask does not
+     * carry FSXM_VGA13. IT NAMES THE MODE AND NOT THE DISPLAY'S WHOLE
+     * CAPABILITY, because wave 1's `This display offers no fullscreen mode.`
+     * became FALSE the moment the predicate narrowed to 13h by name:
+     * kernel/fsx.inc's fsx_capstab gives CGA and EGA FSXM_CGA320 (a real
+     * 320x200x4 fullscreen mode) and Hercules FSXM_HERC (720x348), so those
+     * displays DO offer one - what they do not offer is 320x200x256, which is
+     * a fact about THIS BUILD's present and not about the glass. SPEC.md 47
+     * is grey a FACT, and a sentence the code itself knows to be untrue is
+     * not one. */
+    "No 320x200x256 mode on this display.",
+    /* The four Options items that need a machine: the frame-skip trio and
+     * Full screen. It is the predicate they already grey on (ni_have_rom), so
+     * this sentence is that predicate said out loud. */
+    "No ROM loaded: open one to run it."
 };
 static int ni_fact;
 
 /* --- THE FACT LINE IS ONE ROW AND MORE THAN ONE FACT IS TRUE -------------
  * There is exactly one fact row (thirteen is what a 200-line adapter's
  * desktop holds - see NI_PANEL_H, and the CGA window ends on the last one),
- * and this build has three true facts at once: no picture yet, no APU, and on
- * some displays no fullscreen mode. A fixed pick showed one of them and hid
+ * and more than one fact is true at once: the forced clip and the silent APU
+ * always, no 320x200x256 mode on some displays, and no ROM until one is
+ * opened. A fixed pick showed one of them and hid
  * the others forever - the greyed `Mute (no APU)` item's SENTENCE was
  * reachable only by pressing M, which appears in no menu, no legend and no
  * dialog.
@@ -157,12 +176,11 @@ static int ni_fact_started;         /* ...and whether the first pick was made,
                                      * so that the launch shows the FIRST fact
                                      * rather than the second */
 
-/* --- the two rates, and the state line ----------------------------------- */
-static unsigned ni_rate_nes;        /* percent of a real NES, a plain unsigned
-                                     * (SPEC.md 91.7.1: there is no float and
-                                     * no formatter here) */
-static unsigned ni_rate_spf;        /* TENTHS of a second per painted frame */
-static int ni_rate_known;
+/* --- the two rates, and the state line -----------------------------------
+ * The three words themselves are nirun.c's, beside ni_rate_calc, which is the
+ * only thing that ever writes them: a measurement declared in the file that
+ * DRAWS it and written by the file that TAKES it is a number with two owners.
+ * This file only formats them (ni_panel_rate below). */
 
 /* ni_streq - there is no strcmp in the SDK (SPEC.md 73.9). */
 static int ni_streq(const char *a, const char *b)
@@ -194,7 +212,15 @@ static int ni_geom(void *win)
  * in one command cost one repaint rather than twelve. */
 static void ni_setfield(int f, const char *s)
 {
-    os88_strcpy(ni_txt[f], s, NI_FMAX);
+    /* NI_FCELLS + 1 AND NOT NI_FMAX, so that no field text can ever be wider
+     * than the widest field the layout admits. The PAPER branch below draws
+     * ni_txt UNPADDED and unclipped - that is the whole of what makes a
+     * thirteen-row repaint affordable - and with a 41-character string in a
+     * 40-cell field it would letter the last cell onto the border and the
+     * desktop, outside any clip region (this package arms none). Clamping at
+     * the one place text ENTERS the panel closes it for all four repaint
+     * branches instead of once per branch. */
+    os88_strcpy(ni_txt[f], s, NI_FCELLS + 1);
 }
 
 /* --- THE THREE WAYS A SHADOW STOPS BEING TRUE, AND THEY ARE NOT THE SAME ---
@@ -279,9 +305,12 @@ static void ni_shadow_paper_rect(int x1, int y1, int x2, int y2)
     }
 }
 
-/* ni_fact_rotate - advance the fact row to the next TRUE fact. `nofsx` is the
- * one predicate that is not a constant in this build. */
-static void ni_fact_rotate(int nofsx)
+/* ni_fact_rotate - advance the fact row to the next TRUE fact. `nofsx` and
+ * `norom` are the two predicates that are not constants in this build, and
+ * each is passed in rather than asked here: they live in nimenu.c, which is
+ * compiled after this part, and two spellings of a predicate are two answers
+ * waiting to disagree. */
+static void ni_fact_rotate(int nofsx, int norom)
 {
     static unsigned char t[NI_FACT_N];  /* rule 1 again: an indexed array is
                                          * an ADDRESSED object and may not be
@@ -289,9 +318,14 @@ static void ni_fact_rotate(int nofsx)
     int n;
 
     n = 0;
-    t[n++] = NI_FACT_PIC;           /* wave 1's build fact, which greys five
-                                     * of the six Options items and is the one
-                                     * a user meets first */
+    if (norom)
+        t[n++] = NI_FACT_NOROM;     /* FIRST, because it is the most specific:
+                                     * it is the state four of the six Options
+                                     * items are dithered by, and the one a
+                                     * user with an empty panel is asking
+                                     * about */
+    t[n++] = NI_FACT_CLIP;          /* true in every mode this build enters,
+                                     * and the one a user meets first */
     if (nofsx)
         t[n++] = NI_FACT_FSX;
     t[n++] = NI_FACT_MUTE;          /* ...and the PERMANENT one, whose item
@@ -381,7 +415,21 @@ static void ni_panel_paint(void *win, int whole)
              * of a 4.77 MHz 8088 per row, 243 wasted cells on a whole
              * repaint, which is more than half of it (cwchrome.c:600-607 is
              * the same arithmetic on Word's status line). */
-            os88_font_run(ni_gox + NI_MARGIN_X, ni_goy + y, ni_txt[f],
+            n = 0;
+            while (ni_txt[f][n] && n < cells) {     /* CLAMPED TO THE LIVE
+                                                     * CELL COUNT, which the
+                                                     * other three branches
+                                                     * already are: ni_setfield
+                                                     * bounds the text at
+                                                     * NI_FCELLS, and this
+                                                     * bounds it at what THIS
+                                                     * window's content box
+                                                     * actually holds */
+                ni_padbuf[n] = ni_txt[f][n];
+                n++;
+            }
+            ni_padbuf[n] = 0;
+            os88_font_run(ni_gox + NI_MARGIN_X, ni_goy + y, ni_padbuf,
                           OS88_BLACK, OS88_WHITE);
             os88_strcpy(ni_sh[f], ni_txt[f], NI_FMAX);
             continue;
@@ -454,9 +502,15 @@ static void ni_repaint(void *win)
 }
 
 /* ni_panel_rate - both figures, composed from integers by os88_utoa (SPEC.md
- * 91.7.1). The rendered one is held in TENTHS and written as
- * utoa(t/10), '.', '0' + t%10, because there is no formatter and `float` is
- * poisoned - `%4.1f` cannot be written here at all. */
+ * 91.7.1). The rendered one is held in HUNDREDTHS and written as
+ * utoa(t/100), '.', two digits, because there is no formatter and `float` is
+ * poisoned - `%4.2f` cannot be written here at all.
+ *
+ * HUNDREDTHS AND NOT TENTHS, and the change is a measurement rather than a
+ * preference: a machine that paints sixty frames a second is 0.017 s a frame,
+ * which in tenths is `0.0` - a field that has stopped saying anything at
+ * exactly the end of the range where the number is good news. The 8088's
+ * ~2.2 s a frame reads `2.20` and a 486's `0.02`, and both fit. */
 static void ni_panel_rate(void)
 {
     unsigned t;
@@ -469,12 +523,41 @@ static void ni_panel_rate(void)
     ni_appnum(ni_msg, ni_rate_nes);
     ni_app(ni_msg, "%    ");
     t = ni_rate_spf;
-    ni_appnum(ni_msg, t / 10);
+    ni_appnum(ni_msg, t / 100);
     ni_app(ni_msg, ".");
-    ni_num[0] = (char)('0' + (int)(t % 10));
-    ni_num[1] = 0;
+    ni_num[0] = (char)('0' + (int)((t / 10) % 10));
+    ni_num[1] = (char)('0' + (int)(t % 10));
+    ni_num[2] = 0;
     ni_app(ni_msg, ni_num);
     ni_app(ni_msg, "  s/frame");
+
+    /* ...AND THE FRAMES THE MACHINE COULD NOT KEEP, when there are any
+     * (nirun.c's ni_overload, the plan's R6). The pacer drops the debt past
+     * four catch-up frames a wake and counts the drop, and until this row
+     * carried it the counter was write-only: the one claim a reader would
+     * want it for - "the 8088 lives in that branch permanently", which is
+     * SPEC.md 91.12's whole demonstration - was unobservable on the machine
+     * it is about. Nothing is said when the count is zero, so a machine that
+     * keeps up shows the two rates and no third number.
+     *
+     * APPENDED ONLY IF IT FITS. The row is 40 cells (NI_FCELLS) and a fast
+     * machine's own figures are wider than an 8088's; ni_setfield would
+     * truncate the SUFFIX onto the rates, which is a field that has stopped
+     * saying the thing it exists to say. */
+    if (ni_overload) {
+        unsigned d;
+        int len;
+
+        d = ni_overload;
+        if (d > 9999)
+            d = 9999;
+        os88_utoa(d, ni_num);
+        len = (int)os88_strlen(ni_msg) + 7 + (int)os88_strlen(ni_num);
+        if (len <= NI_FCELLS) {
+            ni_app(ni_msg, "  drop ");
+            ni_app(ni_msg, ni_num);
+        }
+    }
     ni_setfield(NI_F_RATE, ni_msg);
 }
 
@@ -559,6 +642,43 @@ static void ni_panel_fact(void)
     ni_setfield(NI_F_FACT, ni_msg);
 }
 
+/* ni_panel_settle - THE PANEL'S TEXT AS IT MUST STAND WHEN THE BRACKET ENDS,
+ * settled INSIDE the bracket, before the FSX proc returns.
+ *
+ * SPEC.md 53.6 step 4 runs wm_paint_all UNDER THE STILL-HELD LOCK BEFORE
+ * OSAPI_FSX_RUN returns, and that repaint is our own os88_paint: it letters
+ * every field from ni_txt as it stands at that moment. Set the post-session
+ * text AFTER ni_fsx_go returns and three rows are lettered twice - state,
+ * rate and fact - and one of them is lettered WRONG the first time: for the
+ * whole of the kernel's thirteen-row restore (~220 ms on the target) the
+ * panel says `Running` for a session that has already ended, then flips to
+ * `Ready`. That is the double-draw flash CLAUDE.md names as invisible in an
+ * emulator, and it was measured and read as noise: "789 pixels in three
+ * bands - the rate field and the fact line".
+ *
+ * So the text is settled here, the kernel's own repaint letters the FINAL
+ * strings ONCE, and ni_go_full's trailing ni_panel_paint finds shadow == text
+ * and draws nothing. Everything this touches is RESIDENT and none of it is an
+ * ovl_*, so SPEC.md 91.6.5 holds: no overlay is reached from inside the
+ * bracket. It draws nothing itself - ni_panel_state/rate/fact only write
+ * ni_txt - so it takes no lock and needs none. */
+static void ni_panel_settle(void)
+{
+    ni_state = NI_ST_READY;
+    ni_panel_state();
+    ni_panel_rate();                /* both figures, measured (SPEC.md 91.7.1) */
+    if (ni_brkfact == 1)
+        ni_fact = NI_FACT_MUTE;     /* `M` inside the bracket has no glass to
+                                     * print on - a toast would land on a bar
+                                     * the user cannot see - so the fact it
+                                     * asked for is read HERE (SPEC.md 91.6.4)
+                                     */
+    else if (ni_brkfact == 2)
+        ni_fact = NI_FACT_CLIP;
+    ni_brkfact = 0;
+    ni_panel_fact();
+}
+
 /* ni_panel_init - every field's first text, from os88_main. It draws nothing:
  * the kernel shows the window and W_PAINT follows. */
 static void ni_panel_init(void)
@@ -569,9 +689,24 @@ static void ni_panel_init(void)
     /* The legend, two rows. Its keys are SPEC.md 91.6.4's table and their
      * authorities are named there - the D-pad and the A/B bit numbers from
      * InfoNES's SDL front end, Start and Select from agnes cross-read with
-     * nofrendo, and F/Esc from SPEC.md 11.2.1 rather than InfoNES's Q. */
-    ni_setfield(NI_F_KEYS1, "Pad arrows   A X   B Z   Start Enter");
-    ni_setfield(NI_F_KEYS2, "Select RShift   R reset   F/Esc leave");
+     * nofrendo, R reset and Page Up/Page Down frame skip from InfoNES's own
+     * add_key (:262-266, :290-301), and F/Esc from SPEC.md 11.2.1 rather than
+     * InfoNES's Q.
+     *
+     * PgUp/PgDn IS ON THE LEGEND BECAUSE IT IS THE ONLY FRAME-SKIP CONTROL
+     * THAT EXISTS INSIDE THE BRACKET - the Options menu is not reachable
+     * there - and wave 2 made it live while naming it on no surface at all,
+     * which is the defect SPEC.md 91.7.2 argues in its own words about `M`.
+     *
+     * EVERY KEY HERE SAYS WHAT IT DOES, and the separator is what pays for
+     * it. A draft cut the verb from `F/Esc` to make room, which left the one
+     * key that ENDS a session in which the machine has taken the whole screen
+     * as the only entry on either row naming a key and not a function - read
+     * on the panel, BEFORE the user is inside. The eight items are 72
+     * characters; at one space between them the rows are 38 and 40 cells of
+     * the 40 (NI_FCELLS) each, so nothing is cut at all. */
+    ni_setfield(NI_F_KEYS1, "Pad arrows A X B Z Start Enter R reset");
+    ni_setfield(NI_F_KEYS2, "Select RShift F/Esc leave PgUp/PgDn skip");
     ni_panel_state();
     ni_panel_fact();                /* THE FACT ROW IS ni_menu_state's, which
                                      * os88_main has already called: it picks

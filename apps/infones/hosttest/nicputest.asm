@@ -681,3 +681,13 @@ section .text
 ; =============================================================================
 %include "nicpu.inc"
 %include "nimem.inc"
+%include "niband.inc"               ; ...and the composer, for its .bss ALONE:
+                                    ; nimem.inc's ni_oam_grab moves OAM into
+                                    ; `_ni_oamc`, which lives here. Nothing in
+                                    ; this gate reaches a composer routine -
+                                    ; the CPU is what it tests - but a
+                                    ; harness that %includes half of a file's
+                                    ; dependencies is one that stops
+                                    ; assembling the next time they change,
+                                    ; which is how this line came to be
+                                    ; written

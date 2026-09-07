@@ -46,6 +46,9 @@ static unsigned char ni_fx;         /* fine X, the low 3 bits of the first
 static unsigned char ni_wlatch;     /* the write toggle SHARED by $2005 and
                                      * $2006, cleared by a $2002 read */
 static unsigned char ni_rdbuf;      /* $2007's buffered read */
+static int ni_pal_dirty;            /* a palette entry moved: ni_bgpal and
+                                     * ni_sppal are stale (nirun.c rebuilds
+                                     * them once, at the next frame) */
 
 #define NI_CTRL_NMI   0x80
 #define NI_CTRL_INC32 0x04
@@ -68,6 +71,15 @@ static unsigned char ni_rdbuf;      /* $2007's buffered read */
 
 static unsigned char ni_pad;        /* the STICKY latch the $4016 strobe
                                      * clears (SPEC.md 91.6.4) */
+static unsigned char ni_pad_live;   /* ...AND THE HELD LEVEL, which is a
+                                     * different fact and is not cleared by
+                                     * anything. A latch alone delivers a held
+                                     * direction ONCE and the character stops;
+                                     * a level alone misses every press that
+                                     * began and ended inside one 340 ms
+                                     * emulated frame. $4016 hands out the OR
+                                     * of the two, which is the port plan's R6
+                                     * in one line */
 static unsigned char ni_pad_shift;  /* what $4016 is handing out */
 static unsigned char ni_pad_strobe;
 
@@ -154,6 +166,10 @@ static void ni_ppu_wr(unsigned a, int v)
         return;
     }
     os88_poke(ni_machseg, ni_pal_off(a), v & 0x3F);
+    ni_pal_dirty = 1;               /* the composer's two LUTs are rebuilt at
+                                     * the next frame, not here: a game that
+                                     * writes all 32 entries in one vblank
+                                     * would otherwise rebuild them 32 times */
 }
 
 /* ==========================================================================
@@ -295,12 +311,12 @@ static void ni_apu_wr(unsigned a, int v)
          * delivered exactly once, and the sweep that ORed it in is free to
          * run at whatever rate the bracket sweeps at. */
         if ((v & 1) == 0 && ni_pad_strobe) {
-            ni_pad_shift = ni_pad;
-            ni_pad = 0;
+            ni_pad_shift = (unsigned char)(ni_pad | ni_pad_live);
+            ni_pad = 0;             /* the latch is spent; the LEVEL is not */
         }
         ni_pad_strobe = (unsigned char)(v & 1);
         if (ni_pad_strobe)
-            ni_pad_shift = ni_pad;
+            ni_pad_shift = (unsigned char)(ni_pad | ni_pad_live);
         return;
     }
     if (a == 0x4017) {
@@ -378,4 +394,85 @@ int ni_io_wr(unsigned a, int v)
                                      * $6000-$7FFF never reaches here - the
                                      * core writes the SRAM window itself */
     return ni_map_wr(a, v);
+}
+
+/* ==========================================================================
+ * WAVE 2 - THE PER-LINE HALF: THE SCROLL, THE PALETTE LUTS, AND `v`
+ *
+ * The PPU here is a SCANLINE state machine, in InfoNES's own class, and
+ * SPEC.md 91.5 says so in a sentence rather than promising a dot granularity
+ * this port does not have. What that means, exactly:
+ *
+ *   - at the START of every visible line the HORIZONTAL bits of `t` are
+ *     copied into `v` (the hardware does it at dot 257 of the line before);
+ *   - at the PRE-RENDER line the VERTICAL bits are copied (dots 280-304);
+ *   - `v` is incremented VERTICALLY at the end of every visible line and of
+ *     the pre-render line (dot 256);
+ *   - a $2005 or $2006 write MID-LINE therefore takes effect from the NEXT
+ *     line, which is the one approximation a raster effect can see;
+ *   - vblank sets at line 241 and clears at the pre-render line, and the
+ *     ODD-FRAME DOT SKIP IS NOT MODELLED - a frame is 29,780 or 29,781
+ *     cycles by the 113/114/114 triple's phase.
+ * ========================================================================*/
+
+/* ni_v_incy - the vertical increment, NESdev's own (agnes.c:1100-1140 is the
+ * cross-read). Fine Y carries into coarse Y, and coarse Y wraps at 29 by
+ * FLIPPING THE VERTICAL NAMETABLE BIT - 30 and 31 are the attribute table,
+ * which a game may point at on purpose, and those wrap to 0 without the
+ * flip. */
+static void ni_v_incy(void)
+{
+    unsigned v, y;
+
+    v = ni_v;
+    if ((v & 0x7000) != 0x7000) {
+        ni_v = v + 0x1000;
+        return;
+    }
+    v = v & 0x8FFF;
+    y = (v & 0x03E0) >> 5;
+    if (y == 29) {
+        y = 0;
+        v = v ^ 0x0800;
+    } else if (y == 31) {
+        y = 0;
+    } else {
+        y++;
+    }
+    ni_v = (v & 0xFC1F) | (y << 5);
+}
+
+/* ni_rendering - is either half of the picture switched on? Every latch and
+ * increment above is gated on this: with rendering off `v` is the game's own
+ * $2006 address and the PPU must not move it. */
+static int ni_rendering(void)
+{
+    return (ni_pmask & 0x18) != 0;
+}
+
+/* ni_pal_build - the composer's two lookups, out of palette RAM.
+ *
+ * ni_bgpal[p*4+0] IS THE BACKDROP WITH BIT 7 SET, and that one entry is what
+ * makes the background's inner loop branchless: a pattern value of 0 indexes
+ * it like any other value, and the tag it carries is what the sprite merge
+ * later reads as "the background is transparent here" (SPEC.md 91.5.2).
+ *
+ * ni_sppal[p*4+0] is never indexed - a sprite pattern value of 0 is not
+ * written into the scratch at all - and is left 0. */
+static void ni_pal_build(void)
+{
+    int p, v, backdrop;
+
+    backdrop = os88_peek(ni_machseg, NI_O_PAL) & 0x3F;
+    for (p = 0; p < 4; p++) {
+        ni_bgpal[p * 4] = (unsigned char)(backdrop | 0x80);
+        ni_sppal[p * 4] = 0;
+        for (v = 1; v < 4; v++) {
+            ni_bgpal[p * 4 + v] = (unsigned char)
+                (os88_peek(ni_machseg, NI_O_PAL + p * 4 + v) & 0x3F);
+            ni_sppal[p * 4 + v] = (unsigned char)
+                (os88_peek(ni_machseg, NI_O_PAL + 0x10 + p * 4 + v) & 0x3F);
+        }
+    }
+    ni_pal_dirty = 0;
 }

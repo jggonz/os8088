@@ -569,7 +569,7 @@ wave 5; `vm/xt-infones` SHIPS (decision 4); `nifsx.inc` is resident.
 | `apps/infones/nicpu.inc` | The 2A03 core, hand-written 8086 in apps/c64/c64cpu.inc's shape (C64-SPEC §4.1's register plan, minus decimal): A in AL, NZC in AH by the lahf layout, V/I/B in CH, X in CL, Y in DL with DH the memory-data byte, PC in SI, S in DI as the full $0100+S address, BX the dispatch scratch, DS the RAM claim, ES biased so [es:si] is PC's byte with the two-compare boundary guard. A 256-entry `jmp [cs:bx+tab]`, a 256-byte cycle table, P packed and unpacked once per call. | yes |
 | `apps/infones/niband.inc` | The scanline composer and the tile-cache decoder: the eight-way-unrolled background run over the cache with its two partial end blocks for the fine-X phase and the nametable flip at the wrap; the sprite pass back-to-front into the same 272-byte line with the transparency test, both flips and the priority/strike tag bits; and the 1KB-bank decoder (two plane bytes to eight one-byte-per-pixel outputs). The line buffer is 272 bytes with the visible window at +8 — nofrendo's overdraw fact, and its live bug: the composer writes up to 7 pixels before the line and 8 after it. Also the serial dump entry the assembly-side reference check reads. | yes |
 | `apps/infones/nifsx.inc` | THE BRACKET, in assembly because SPEC.md §53 is deliberately unwrapped for C: ni_fsx_caps (a cdecl helper so nimenu.c can grey the mode and clip items off the LIVE per-window mask, re-asked at use), the OSAPI_FSX_RUN call with FSXF_FASTTICK and the near entry it names, OSAPI_FSX_MODE per adapter, OSAPI_FSX_SURF, OSAPI_FSX_WAIT on FSXW_FRAME as the frame budget (never FSXW_VSYNC, which is the adapter's rate and not the NES's), OSAPI_FSX_PAGE for Mode X's flip, the DAC programming (64 colours mirrored four times), the four PRESENT routines (13h rep movsw, Mode X's four plane selects and stride-4 gather, CGA's 2-bit pack over interleaved banks, Hercules's 1bpp dither over four banks), the int 16h typed-key poll and the os88_key_down sweep, and the frame loop itself. NO ovl_* is called from inside a bracket, ever. | yes |
-| `apps/infones/nimem.inc` | The cross-segment movers: claim-to-claim copies, the 16-byte shift the iNES header forces on a cluster-window read, the OAM DMA block move, and the tile-cache stores. The only place ES is loaded, marked `; cc8086:allow` per line with its reason, and gated on a real x86 under SS != DS by hosttest/nimemtest.asm. | yes |
+| `apps/infones/nimem.inc` | The cross-segment movers: claim-to-claim copies, the 16-byte shift the iNES header forces on a cluster-window read, the OAM DMA block move, and the tile-cache stores. ES is loaded here, in niband.inc, in nicpu.inc and in nifsx.inc and nowhere else - marked `; cc8086:allow` per line with its reason; SPEC.md 91.13.1's table says which file points it at what and which of them hosttest/nimemtest.asm gates on a real x86 under SS != DS (this file and niband.inc). | yes |
 | `apps/infones/infones.asm` | The shim: %define CC_PKG_NAME 'INFONES', CC_HAS_ONKEY / ONCLICK / MENUS / ABOUT / FDLG / ONWAKE / OVL (no WORKER — the machine runs only inside the bracket and File > Exit is os88_wm_close), CC_ICON "infones/icon.inc", CC_ASSOC "infones/niassoc.inc", CC_STACK_CLASS, %include cc/crt0.asm, %include infones.gen.asm, then the four .inc files, CC_IMAGE_END. | yes |
 | `apps/infones/icon.inc` | A 16x16 1-bit controller drawn for this port (16 mask words then 16 data words, bit 15 leftmost). InfoNES's own InfoNES.ico is the reference LOOK only, never copied. | yes |
 | `apps/infones/niassoc.inc` | The build-time association block: a count byte and one OS88_ASSOC_EXT line for `NES`, so a ROM beside the program opens on the FIRST double-click with no prior run. (LESSONS.md §9's line saying the C SDK has no build-time association block is STALE — apps/cc/crt0.asm:292-321 implements CC_ASSOC; this plan uses it AND os88_assoc_set, which are not alternatives.) | yes |
@@ -993,6 +993,55 @@ numbers, so an unscoped whole-screen comparison must fail the moment the panel
 does its job, and weakening it later would throw away §53.9's one strong
 check. nimemtest passes the composer, the decoder and the 13h present against
 hand-computed bytes under SS != DS.
+
+**Wave 2, measured.** The composer, the sprite pass, the tile-cache sync, the
+frame loop, the pacer, the mode-13h bracket and the DAC cost **5,374 bytes of
+image and 1,354 of bss** on top of wave 1, for 27,232 + 4,931 = **32,163
+resident of 61,440** — 22,837 under SPEC.md 73.9's 55,000 split trigger, with
+`niband.inc`'s decoder and composer 1,166 of the image and the largest C frame
+still `ni_panel_paint`'s 20 of `CC_MAXFRAME`'s 96. On the glass: Concentration
+Room's title screen and its play field, robotfindskitten's CHR-RAM text, and a
+scripted arrow/Enter run that moves the menu cursor and starts a game.
+`tools/niref.py` matches BOTH dumps bit for bit — niuitest's C model and
+nimemtest's shipping assembly, over a fixture written three times. `make
+nisystest` runs blargg's `01-basics` end to end through the shipping package
+and reads `NITEST PASS 0 STK98` back off the floppy, which is also SPEC.md
+91.4.4's stack measurement: **98 of the 128 bytes probed below the bracket's
+own SP**, interrupt frames included. **The probe is a GATE INSTRUMENT and is in
+no shipping build** (`-dNI_STKPROBE`, passed only by the `nitest.bin` nasm
+line): it WRITES below `SP`, and "below `SP` is free" holds only down to the
+stack's own base, which a package cannot see — task 0's stack is 512 bytes
+whole and the kernel's UI frames stand on it. 128 covers the measured 98 with
+margin, and a reading OF 128 is a floor rather than a measurement.
+
+**One departure from the plan's own file list.** `hosttest/nisystest.asm` is
+DELETED rather than filled in. The plan gave the whole-emulator gate its own
+`.asm` beside `nicputest.asm`, and there is nothing for that file to contain:
+the gate is a second COMPILE of `apps/infones/infones.c` with `-DNITEST`,
+through the same `infones.asm` shim (two `%ifndef` guards are the whole of the
+difference) and the same four `.inc` files, so what it runs is the shipping
+loader, core, PPU, composer and bracket. A separate `.asm` would have been a
+second program, and a gate that tests a second program tests nothing. Its two
+halves are `hosttest/nisystest.sh` and `hosttest/nisysdrive.py`, plus
+`tools/nifatcat.py`, which reads the result back out of the floppy image
+rather than grepping it. SPEC.md 91.14.4 records the shape.
+
+**Four defects the wave found, three of them only on the glass.** (1) A
+`cs:`-less read of `ni_cs.cacheseg` in the composer's second pass, where the
+first pass had left `DS` on the machine claim: the picture was the right SHAPE
+and every pixel in it was noise. (2) The sprite-0 flag raised only from the
+PREVIOUS frame's hit, so a game spinning on `$2002` bit 6 got nothing on the
+first frame, overran its vblank and wrote half a nametable — Concentration
+Room's menu appeared and disappeared frame by frame. (3) The pre-render line's
+vertical `t`→`v` copy taken at the START of the line instead of at dot 280, so
+a game's end-of-vblank scroll restore landed after it and the lower half of
+the picture composed from a nametable ADDRESS: `Vs. CPU` sat on the copyright
+line. (4) `(i * 200) / 224` in the row-drop table, which passes 32,767 at
+i = 164 in a SIXTEEN-BIT `int`: thirty-six destination rows were never
+presented and the picture lost its bottom fifth. The fourth is nirom.c's
+16-bit overflow a second time and `build.sh` gained a `nirow` row that reads
+the expression out of the source, because a host harness whose `int` is
+thirty-two bits cannot see that class at all.
 
 ---
 

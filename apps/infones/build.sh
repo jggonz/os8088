@@ -103,8 +103,24 @@ $HOSTCC -O1 -w -I apps/infones/hosttest -I apps/infones \
     -o $BUILD/niuitest apps/infones/hosttest/niuitest.c
 $BUILD/niuitest
 
-# The independent compositor's own gate.
+# The independent compositor's own gate: it injects a one-bit defect and
+# REQUIRES the compare to fail, because a check that cannot fail is not a
+# check.
 python3 tools/niref.py --selftest
+
+# ...and the C MODEL's frame against it (SPEC.md 91.14.4). niuitest built the
+# fixture from the formula tools/niref.py's synth() and nimemtest.asm's
+# nifix_build also build - three independent spellings - and wrote both the
+# state blob and the 256x240 frame its C compositor produced. The blob is
+# diffed against niref.py's own first, because two frames agreeing about a
+# state neither of them checked would prove nothing.
+python3 tools/niref.py --synth $BUILD/nifix.state
+cmp $BUILD/nirefC.state $BUILD/nifix.state || {
+    echo "niref: niuitest's fixture is not tools/niref.py's synth() - the two"
+    echo "       harnesses are composing different pictures"
+    exit 1
+}
+python3 tools/niref.py --check $BUILD/nirefC.state $BUILD/nirefC.frm
 
 # The movers and the tile-cache decoder, on a real x86 with SS != DS.
 apps/infones/hosttest/nimemtest.sh
@@ -299,6 +315,150 @@ print('niscr: %d scratch offset(s), identical in nicpu.inc and infones.c'
       % len(a))
 PY
 
+# THE STRUCTS ARE ONE TABLE IN TWO LANGUAGES TOO, AND NOTHING CHECKED THEM
+# (SPEC.md 91.3.1, 91.5). The `niscr` row above exists because "nothing in
+# either language can see across the two files, and there is no build error for
+# it" - and that sentence is true VERBATIM of four more pairs that shipped with
+# only a comment holding each together:
+#
+#   struct ni_comp / NIC_*      thirteen words written field by field by C on
+#                               every one of 240 scanlines and read as byte
+#                               offsets by niband.inc. Insert or reorder a
+#                               field and it is not a build error in either
+#                               language: it is a wrong operand on every line
+#                               of every frame.
+#   struct ni_mach / NIM_*      the same shape for the core's register file,
+#                               and this hole PREDATES wave 2.
+#   ni_bgpal / ni_sppal         16 bytes each in C against `resb 16` in the
+#                               composer's .bss.
+#   FSXM_VGA13                  a mode id the SDK spells by NAME and the menu
+#                               greys on by BIT INDEX.
+#
+# So this reads both spellings of each and refuses a disagreement in either
+# direction: the ordered field NAMES, their WORD offsets, and the reservation's
+# own length.
+python3 - <<'NISTRUCT'
+import re, sys
+
+band = open('apps/infones/niband.inc').read()
+cpu  = open('apps/infones/nicpu.inc').read()
+c    = open('apps/infones/infones.c').read()
+menu = open('apps/infones/nimenu.c').read()
+api  = open('apps/os88api.inc').read()
+bad = 0
+
+def cfields(name):
+    """the ordered field names of `struct <name>` in infones.c"""
+    m = re.search(r'struct\s+%s\s*\{(.*?)\n\};' % name, c, re.S)
+    if not m:
+        print('nistruct: infones.c has no `struct %s`' % name)
+        sys.exit(1)
+    body = re.sub(r'/\*.*?\*/', ' ', m.group(1), flags=re.S)
+    out = []
+    for decl in body.split(';'):
+        decl = decl.strip()
+        if not decl:
+            continue
+        parts = decl.split()
+        if len(parts) < 2:
+            print('nistruct: cannot read the declaration [%s]' % decl)
+            sys.exit(1)
+        if parts[0] in ('unsigned', 'int', 'char', 'signed', 'const'):
+            names = ' '.join(parts[1:])
+        else:
+            print('nistruct: struct %s declares [%s] - EVERY FIELD IS A WORD '
+                  'here (SPEC.md 91.5)' % (name, decl))
+            sys.exit(1)
+        for n in names.split(','):
+            n = n.strip()
+            if not re.match(r'^[A-Za-z_]\w*$', n):
+                print('nistruct: struct %s declares [%s], which is not a '
+                      'plain word field' % (name, n))
+                sys.exit(1)
+            out.append(n)
+    return out
+
+def asmequs(src, prefix):
+    return [(m.group(1)[len(prefix):].lower(), int(m.group(2), 0))
+            for m in re.finditer(r'(?m)^(%s\w+)\s+equ\s+(0x[0-9A-Fa-f]+|\d+)'
+                                 % prefix, src)]
+
+def check(cname, src, prefix, where):
+    global bad
+    cf = cfields(cname)
+    af = asmequs(src, prefix)
+    if [n for n, _ in af] != cf:
+        print('nistruct: struct %s is %s' % (cname, ', '.join(cf)))
+        print('          %s* in %s is %s'
+              % (prefix, where, ', '.join(n for n, _ in af)))
+        print('          the two are ONE table, and the composer or the core '
+              'reads the WRONG WORD when they differ')
+        bad = 1
+        return None
+    for i, (n, off) in enumerate(af):
+        if off != i * 2:
+            print('nistruct: %s%s is %d and field %d of struct %s is at %d '
+                  '(every field is a word)'
+                  % (prefix, n.upper(), off, i, cname, i * 2))
+            bad = 1
+    return cf
+
+comp = check('ni_comp', band, 'NIC_', 'niband.inc')
+mach = check('ni_mach', cpu,  'NIM_', 'nicpu.inc')
+
+# ...and the RESERVATIONS, because a struct that agrees with a table of offsets
+# still overruns a .bss that is short of it.
+m = re.search(r'(?m)^_ni_cs:\s+resw\s+(\d+)', band)
+if not m:
+    print('nistruct: niband.inc has no `_ni_cs: resw N`')
+    bad = 1
+elif comp is not None and int(m.group(1)) != len(comp):
+    print('nistruct: _ni_cs reserves %s word(s) and struct ni_comp has %d '
+          'field(s)' % (m.group(1), len(comp)))
+    bad = 1
+
+seg = cpu[cpu.index('_ni_m:'):cpu.index('NIM_MACHSEG equ')]
+n = len(re.findall(r'(?m)^\s*resw 1\s+;\s*NIM_\w+', seg))
+if mach is not None and n != len(mach):
+    print('nistruct: _ni_m reserves %d word(s) and struct ni_mach has %d '
+          'field(s)' % (n, len(mach)))
+    bad = 1
+
+# the two palette LUTs, 16 bytes each in both languages
+for cn, an in (('ni_bgpal', '_ni_bgpal'), ('ni_sppal', '_ni_sppal')):
+    mc = re.search(r'unsigned char\s+%s\s*\[\s*(\d+)\s*\]' % cn, c)
+    ma = re.search(r'(?m)^%s:\s+resb\s+(\d+)' % an, band)
+    if not mc or not ma:
+        print('nistruct: %s is declared in only one of the two languages' % cn)
+        bad = 1
+    elif int(mc.group(1)) != int(ma.group(1)):
+        print('nistruct: %s is %s bytes in infones.c and %s in niband.inc'
+              % (cn, mc.group(1), ma.group(1)))
+        bad = 1
+
+# the mode id: a NAME in the SDK, a BIT INDEX in the menu
+ma = re.search(r'(?m)^FSXM_VGA13\s+equ\s+(\d+)', api)
+mc = re.search(r'(?m)^#define\s+NI_FSXM_VGA13\s+(\d+)', menu)
+if not ma or not mc:
+    print('nistruct: FSXM_VGA13 is missing from apps/os88api.inc or nimenu.c')
+    sys.exit(1)
+if ma.group(1) != mc.group(1):
+    print('nistruct: FSXM_VGA13 is %s in apps/os88api.inc and NI_FSXM_VGA13 is '
+          '%s in nimenu.c - the greying would test the wrong bit'
+          % (ma.group(1), mc.group(1)))
+    bad = 1
+if re.search(r'ni_fsx_caps\s*\([^)]*\)\s*&\s*\(\s*1\s*<<\s*\d', menu):
+    print('nistruct: nimenu.c shifts by a LITERAL bit index - use '
+          'NI_FSXM_VGA13, which this row checks against the SDK')
+    bad = 1
+
+if bad:
+    sys.exit(1)
+print('nistruct: struct ni_comp = %d NIC_* word(s), struct ni_mach = %d NIM_* '
+      'word(s), two 16-byte palette LUTs, FSXM_VGA13 = %s in both languages'
+      % (len(comp), len(mach), ma.group(1)))
+NISTRUCT
+
 # THE TOAST STRIP IS 24 CHARACTERS AND TRUNCATES IN SILENCE (kernel/toast.inc's
 # TOAST_MAX = 24; toast_stage copies CX = TOAST_MAX with no ellipsis and no
 # error). This package shipped a 37-character launch refusal that reached the
@@ -399,4 +559,75 @@ if bad:
     sys.exit(1)
 print('nispec: %d sentence(s) quoted by SPEC.md 91.10, every fragment of each '
       'found in the package\'s own literals' % len(quoted))
+PY
+
+# THE ROW-DROP TABLE'S ARITHMETIC MUST FIT SIXTEEN BITS (SPEC.md 91.6.2).
+#
+# `int` is sixteen bits on the target and thirty-two in hosttest/niuitest.c,
+# so an expression that overflows on the 8086 is EXACTLY RIGHT on the host and
+# no C harness can see it: `(i * 200) / 224` passes 32,767 at i = 164, the
+# quotient went negative, the last sixty entries of the table were garbage,
+# and thirty-six destination rows were never presented at all - a picture
+# missing its bottom fifth with the mode's own border showing through. It was
+# found on the glass. nirom.c's length check was the same defect one file
+# along, and its comment says the answer in the same words: arithmetic that
+# cannot overflow rather than a test that cannot see.
+#
+# So this reads ni_rowtab's body out of nirun.c, takes the multiply and the
+# divide out of it, and checks BOTH that the largest product fits AND that the
+# fraction is still 200/224. It refuses the expression rather than the value,
+# which is what makes it survive a rewrite.
+python3 - <<'PY'
+import re, sys
+src = open('apps/infones/nirun.c').read()
+i = src.index('static void ni_rowtab(void)')
+body = src[i:src.index('\n}', i)]
+bad = 0
+
+m = re.search(r'for\s*\(\s*i\s*=\s*0\s*;\s*i\s*<\s*(\d+)\s*;', body[body.index('0xFF;'):])
+if not m:
+    print('nirow: ni_rowtab has no second bound loop - has it been rewritten?')
+    sys.exit(1)
+n = int(m.group(1))
+
+m = re.search(r'd\s*=\s*\(\s*i\s*\*\s*(\d+)\s*\)\s*/\s*(\d+)\s*;', body)
+if not m:
+    print('nirow: ni_rowtab no longer computes `d = (i * N) / M;` - the '
+          '16-bit check cannot read it, and an unreadable check is not one')
+    sys.exit(1)
+num, den = int(m.group(1)), int(m.group(2))
+
+top = (n - 1) * num
+if top > 32767:
+    print('nirow: (i * %d) reaches %d at i = %d, and `int` is SIXTEEN BITS on '
+          'the target (SPEC.md 73.7): the quotient goes negative and the '
+          'table\'s tail is garbage' % (num, top, n - 1))
+    bad = 1
+if num * 224 != 200 * den:
+    print('nirow: the fraction is %d/%d and SPEC.md 91.6.2 says 200/224'
+          % (num, den))
+    bad = 1
+
+# ...and the table itself, built here the way the target builds it
+tab = [0xFF] * 240
+last = -1
+for i in range(n):
+    d = (i * num) // den
+    if d != last:
+        tab[8 + i] = d
+        last = d
+kept = [d for d in tab if d != 0xFF]
+if kept != list(range(200)):
+    print('nirow: the table keeps %d row(s) and they are not 0..199 strictly '
+          'increasing' % len(kept))
+    bad = 1
+for d in kept:
+    if d * 320 + 32 + 256 > 64000:
+        print('nirow: destination row %d would store past the 64,000-byte '
+              'screen' % d)
+        bad = 1
+if bad:
+    sys.exit(1)
+print('nirow: (i * %d) / %d, largest product %d of 32,767; 200 rows, 0..199, '
+      'every store inside 64,000 bytes' % (num, den, top))
 PY

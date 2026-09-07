@@ -1619,7 +1619,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
-        infones infonesdisk nesroms nicputest nimemtest nisystest \
+        infones infonesdisk nesroms nicputest nimemtest nisystest niagnes \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
@@ -4969,20 +4969,25 @@ INFHOST := apps/infones/build.sh apps/infones/hosttest/os88.h \
            apps/infones/hosttest/niuitest.c \
            apps/infones/hosttest/nimemtest.asm \
            apps/infones/hosttest/nimemtest.sh tools/niref.py $(INFINC) \
-           apps/cc/os88.h SPEC.md
+           apps/cc/os88.h apps/os88api.inc SPEC.md
 # (nimemtest.asm %includes nicpu.inc, nimem.inc AND niband.inc, so an edit to
 # a mover, a composer or the core must re-run the SS != DS gate - and make
 # cannot see through a %include, which is what $(INFINC) above is doing here.)
 #
-# apps/cc/os88.h AND SPEC.md ARE PREREQUISITES BECAUSE build.sh READS THEM, and
-# make can see into a shell script no further than into a %include. The stub
-# drift check compares hosttest/os88.h against the SDK's, and the SDK header
-# reached this rule only through CC_PACKAGE's own dependency on $(CC_RUNTIME) -
-# which rebuilds the COMPILE and skips the gate, so an SDK edit left the
-# harness testing a header the machine no longer has, which is build.sh's own
-# "a test that passes and means nothing". The `nispec` row reads SPEC.md 91.10
-# for the same reason. (apps/c64's INFHOST equivalent has the same hole for
-# os88.h and is not this wave's to fix.)
+# apps/cc/os88.h, apps/os88api.inc AND SPEC.md ARE PREREQUISITES BECAUSE
+# build.sh READS THEM, and make can see into a shell script no further than
+# into a %include. The stub drift check compares hosttest/os88.h against the
+# SDK's, and the SDK header reached this rule only through CC_PACKAGE's own
+# dependency on $(CC_RUNTIME) - which rebuilds the COMPILE and skips the gate,
+# so an SDK edit left the harness testing a header the machine no longer has,
+# which is build.sh's own "a test that passes and means nothing". The `nispec`
+# row reads SPEC.md 91.10 for the same reason, and the `nistruct` row reads
+# apps/os88api.inc for exactly the first one: it checks the SDK's FSXM_VGA13
+# against the menu's own NI_FSXM_VGA13, and os88api.inc is inside
+# $(CC_RUNTIME) too - so without this name an SDK edit RECOMPILED the package
+# and left the gate written to catch that stamped and unrun.
+# (apps/c64's INFHOST equivalent has the same hole for os88.h and is not this
+# wave's to fix.)
 # ...and the core's own gate, which is NOT in build.sh (it takes minutes) and
 # is a prerequisite of nothing: `make nicputest` runs it on demand, the way
 # `make c64cputest` and `make rcz80test` do. Its files are
@@ -5116,9 +5121,93 @@ nicputest: apps/infones/hosttest/nicputest.asm \
 # nimap.c - and therefore ppu_vbl_nmi, which tests exactly them - cannot be in
 # it (SPEC.md 91.14.4). It is wave 2's and its files say so rather than
 # passing vacuously.
-nisystest: apps/infones/hosttest/nisystest.asm \
-           apps/infones/hosttest/nisystest.sh $(INFSRC)
-	apps/infones/hosttest/nisystest.sh
+# THE NITEST BUILD, open-coded because CC_PACKAGE's compile line takes no
+# extra define. It is the SAME apps/infones/infones.c and the SAME
+# apps/infones/infones.asm - the shim's two %ifndef guards are the whole of
+# the difference - so what this gate runs is the shipping loader, the shipping
+# core, the shipping PPU and the shipping composer inside the shipping
+# bracket. A second shim would be a second program, and a gate that tests a
+# second program tests nothing.
+#
+# -dNI_STKPROBE IS THE ONE THING THIS BUILD HAS THAT THE SHIPPING ONE DOES NOT
+# (SPEC.md 91.4.4). nifsx.inc's stack sentinel fills the bytes BELOW SP, and
+# "below SP is free" is true only down to the stack's own BASE, which the
+# package cannot see: task 0's stack is 512 bytes whole (STK0_SIZE) and the
+# kernel's own UI frames stand on it before the bracket is entered. So the
+# fill is a GATE INSTRUMENT armed here and nowhere else, and the shipping
+# package never writes a byte under SP.
+$(BUILD)/nitest.raw.asm: apps/infones/infones.c $(INFSRC) $(CC_RUNTIME) \
+                         $(BUILD)/.infones-hostchecks | $(BUILD) cc-toolchain
+	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S -DNITEST \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
+		apps/infones/infones.c -o $@
+
+$(BUILD)/nitest.gen.asm: $(BUILD)/nitest.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/nitest.bin: apps/infones/infones.asm $(BUILD)/nitest.gen.asm \
+                     $(INFINC) apps/infones/icon.inc apps/infones/niassoc.inc \
+                     $(CC_RUNTIME) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ \
+		-dCC_PKG_NAME="'NITEST'" -dCC_GEN='"nitest.gen.asm"' \
+		-dNI_STKPROBE \
+		-o $@ apps/infones/infones.asm
+	@echo "nitest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/nitest.o88: $(BUILD)/nitest.bin tools/os88pkg.py tools/os88ovl.py
+	python3 tools/os88ovl.py $< -o $(BUILD)/NITEST.OVL --trim $(BUILD)/nitest.trim.bin
+	python3 tools/os88pkg.py $(BUILD)/nitest.trim.bin -o $@
+
+# NIROM names the single to run; the default is blargg's instr_test-v5 01.
+# `make nisystest NIROM=build/nesroms/tests/10-branches.nes` runs another.
+NIROM ?=
+
+# THE WHOLE-ROM ORACLE (SPEC.md 91.14.4, the port plan's R4). agnes is a
+# small, complete, MIT NES emulator that runs on the HOST: `build/niagnes`
+# runs a real ROM on it, records the PPU's per-line scroll history in
+# tools/niref.py's `NIREF1` layout beside agnes's OWN 256x240 screen, and then
+# BOTH independent compositors are held to it - tools/niref.py's render of the
+# state, and this port's C model driven by the same state.
+#
+# ON DEMAND, AND NOT IN apps/infones/build.sh, for `nicputest`'s reason: it
+# fetches agnes off a network at a pinned commit, and a fresh clone's `make
+# infones` must neither stall on one nor fail without one. NOTHING IS
+# VENDORED - build/agnes is gitignored like build/nesroms.
+NIAGNES_ROMS := CROOM RFK THWAITE MEGAMTN RHDE
+
+$(BUILD)/agnes/agnes.c: tools/nigetagnes.py | $(BUILD)
+	python3 tools/nigetagnes.py -o $(BUILD)/agnes
+
+# The same HOSTCC apps/infones/build.sh uses, and `-w` for its reason: agnes
+# is upstream's code and its warnings are not this tree's to fix.
+NIHOSTCC ?= cc
+
+$(BUILD)/niagnes: apps/infones/hosttest/niagnes.c $(BUILD)/agnes/agnes.c
+	$(NIHOSTCC) -O1 -w -I $(BUILD)/agnes -o $@ apps/infones/hosttest/niagnes.c
+
+niagnes: $(BUILD)/niagnes $(BUILD)/nesroms.stamp tools/niref.py \
+         apps/infones/hosttest/niuitest.c $(BUILD)/.infones-hostchecks
+	@rm -rf $(BUILD)/niarec && mkdir -p $(BUILD)/niarec
+	@set -e; for r in $(NIAGNES_ROMS); do \
+	    $(BUILD)/niagnes $(BUILD)/nesroms/$$r.NES $(BUILD)/niarec 240 40 \
+	        >/dev/null; \
+	    for f in $(BUILD)/niarec/f*.state; do \
+	        python3 tools/niref.py --check $$f $${f%.state}.frm \
+	            | sed "s|^|$$r |"; \
+	    done; \
+	    $(BUILD)/niuitest --replay \
+	        $$(for f in $(BUILD)/niarec/f*.state; do \
+	               printf '%s %s ' $$f $${f%.state}.frm; done) \
+	        | sed "s|^|$$r |"; \
+	    rm -f $(BUILD)/niarec/f*; \
+	done
+	@echo "niagnes: $(words $(NIAGNES_ROMS)) ROM(s), 3 sampled frames each,"
+	@echo "         agnes's own screen == tools/niref.py == this port's C model"
+
+nisystest: $(BUILD)/nitest.o88 apps/infones/hosttest/nisystest.sh \
+           apps/infones/hosttest/nisysdrive.py tools/nifatcat.py \
+           tools/os88disk.py $(BUILD)/nesroms.stamp $(IMG)
+	apps/infones/hosttest/nisystest.sh $(NIROM)
 
 # --- WEAVE, the .WAB runtime (WEAVE-SPEC 1.2) --------------------------------
 # The C toolchain's fourth application: a web-style app runtime whose bundle

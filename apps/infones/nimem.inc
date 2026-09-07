@@ -22,7 +22,9 @@
 ; offset and nothing else, so "a pointer to a PRG bank" is a defect that
 ; assembles cleanly and reads the package's own image.
 ;
-; THIS IS THE ONLY PLACE ES IS LOADED (SPEC.md 91.13.1). Every `movs`/`stos`
+; ES IS LOADED IN THIS FILE, niband.inc, nicpu.inc AND nifsx.inc, AND NOWHERE
+; ELSE - SPEC.md 91.13.1's table says which is pointed at what, and which of
+; them nimemtest gates. This file is the movers'. Every `movs`/`stos`
 ; below loads DS and ES on purpose, restores both, leaves DF CLEAR, and
 ; carries the `cc8086:allow` marker with its reason - the convention the gate
 ; would ask for if it read this file (it reads the compiled C only, 73.6).
@@ -150,4 +152,40 @@ _ni_oam_move:
     pop di
     pop si
     pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void ni_oam_grab(void) - OAM out of the machine claim and into the PACKAGE.
+;
+; The composer's sprite evaluation walks all 64 entries on every one of 240
+; lines. Reaching them through os88_peek would be 15,360 near calls a frame -
+; about 170 ms of a 4.77 MHz 8088 for 256 bytes that change once, in vblank -
+; so the C copies them here ONCE A FRAME and niband.inc's evaluation reads
+; them with a plain `mov`.
+;
+; It is the one mover whose DESTINATION is the package's own bss, which is why
+; it takes no destination at all: a C pointer is a package-DS offset and
+; nothing else, and hard-wiring the one destination there is means no caller
+; can pass the wrong kind of address (nimem.inc's own rule, above).
+; -----------------------------------------------------------------------------
+_ni_oam_grab:
+    push si
+    push di
+    push ds
+    push es
+    cld
+    push ds
+    pop es                          ; cc8086:allow ES is the PACKAGE - the
+                                    ;   destination is our own bss - and it is
+                                    ;   restored below
+    mov ax, [_ni_m + NIM_MACHSEG]
+    mov ds, ax                      ; ...and DS the machine claim
+    mov si, NI_O_OAM
+    mov di, _ni_oamc
+    mov cx, 128
+    rep movsw                       ; cc8086:allow both segments are ours
+    pop es
+    pop ds
+    pop di
+    pop si
     ret

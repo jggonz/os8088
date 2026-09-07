@@ -101,5 +101,32 @@ static int ovl_cmd(int item, int menu, void *win)
             return 1;
         }
     }
+    if (menu == NI_M_OPT) {
+        /* THE FRAME-SKIP ITEMS, and they are here rather than resident for
+         * SPEC.md 73.14's frequency test: a menu pick runs once. `Full
+         * screen` is the counterpart and is answered in infones.c, because it
+         * is the one command that must work on a disk whose .OVL is missing
+         * (SPEC.md 91.6.5).
+         *
+         * 減らす is DECREASE and 増やす is INCREASE - of the SKIP COUNT - so
+         * `increase` is the FASTER direction, which is why the English labels
+         * say faster and slower (nimenu.c records the adaptation). */
+        if (item == NI_I_SKIP) {
+            ni_skip++;              /* the live item cycles Auto, 1, 2, 3, 4 */
+            if (ni_skip > NI_SKIP_MAX)
+                ni_skip = NI_SKIP_AUTO;
+            return 1;
+        }
+        if (item == NI_I_FASTER) {
+            if (ni_skip < NI_SKIP_MAX)
+                ni_skip++;
+            return 1;
+        }
+        if (item == NI_I_SLOWER) {
+            if (ni_skip > NI_SKIP_AUTO)
+                ni_skip--;
+            return 1;
+        }
+    }
     return 0;
 }

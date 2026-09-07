@@ -30,10 +30,19 @@
 ; with no %define is code the kernel never calls.
 ; =============================================================================
 
+; THE TWO KNOBS `make nisystest` TURNS, and nothing else in this file moves.
+; That target compiles the SAME apps/infones/infones.c a second time with
+; -DNITEST and assembles it through THIS shim, so what the whole-emulator gate
+; runs is the shipping loader, the shipping core, the shipping PPU and the
+; shipping composer inside the shipping bracket (SPEC.md 91.14.4). A second
+; shim would be a second program, and a gate that tests a second program tests
+; nothing.
+%ifndef CC_PKG_NAME
 %define CC_PKG_NAME 'INFONES'       ; <= 15 chars, and the stem of INFONES.OVL:
                                     ; crt0.asm builds the module's file name
                                     ; out of this and '.OVL', so the disk and
                                     ; the loader cannot disagree about it
+%endif
 
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *) - the
                                     ; panel's keys; the GAME's keys are read
@@ -84,14 +93,27 @@
                                     ; entry and callback trampolines, the
                                     ; overlay runtime and the whole API bridge
 
-%include "infones.gen.asm"          ; the compiled C, found through -I build/
+%ifdef CC_GEN                       ; the compiled C, found through -I build/
+%include CC_GEN                     ; ...which `make nisystest` renames, and
+%else                               ; which is otherwise spelled OUT rather
+%include "infones.gen.asm"          ; than through the %define: tests/unit/
+%endif                              ; t_asmrules.py's `cpu 8086` gate finds a
+                                    ; C package's root by the LITERAL
+                                    ; `%include "<name>.gen.asm"` - that being
+                                    ; how it knows tools/cc8086.py is the 8086
+                                    ; constraint here rather than a `cpu`
+                                    ; directive - and a root it cannot detect
+                                    ; is a root it does not check, which is
+                                    ; the one failure a gate may not have
 
 ; The hand-written half (SPEC.md 73.11's rule that the inner loop is
 ; assembly). Each is %included AFTER the compiled C, because each defines
 ; labels the C calls and nasm resolves them in one pass over the whole file.
 %include "infones/nicpu.inc"        ; the 2A03 core (SPEC.md 91.4)
-%include "infones/nimem.inc"        ; the cross-segment movers - THE ONLY
-                                    ; PLACE ES IS LOADED (SPEC.md 91.13.1)
+%include "infones/nimem.inc"        ; the cross-segment movers. ES IS LOADED IN
+                                    ; THESE FOUR FILES AND NOWHERE ELSE, never
+                                    ; in compiled C (SPEC.md 73.5); 91.13.1's
+                                    ; table says which points it at what
 %include "infones/niband.inc"       ; the scanline composer and the tile-cache
                                     ; decoder (SPEC.md 91.5)
 %include "infones/nifsx.inc"        ; SPEC.md 53's exclusive bracket, which is

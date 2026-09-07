@@ -123,3 +123,27 @@ static void ni_chr_dirty(unsigned a)
 {
     ni_chr_dirty_mask |= (unsigned)1 << ((a >> 10) & 7);
 }
+
+/* ni_cache_sync - decode every DIRTY 1KB CHR bank into the tile cache, once a
+ * frame and never per write (SPEC.md 91.5.1).
+ *
+ * InfoNES's own invalidation is a bit per 1KB bank set on a CHR-RAM write
+ * (`ChrBufUpdate |= 1 << (addr >> 10)`, K6502_rw.h:325), and the decode it
+ * gates is 4,096 stores - about 41,000 8088 cycles a bank. A game that writes
+ * its whole pattern table through $2007 in one vblank touches all eight banks
+ * and dirties eight bits; decoding at the write would decode each bank up to
+ * 1,024 times.
+ *
+ * A power-on sets every bit, so a CHR-ROM title decodes its eight banks on
+ * the first frame and never again. */
+static void ni_cache_sync(void)
+{
+    unsigned b;
+
+    if (ni_chr_dirty_mask == 0 || ni_cacheseg == 0 || ni_chrseg == 0)
+        return;
+    for (b = 0; b < 8; b++)
+        if (ni_chr_dirty_mask & ((unsigned)1 << b))
+            ni_chr_decode(ni_cacheseg, b * 4096U, ni_chrseg, b * 1024U);
+    ni_chr_dirty_mask = 0;
+}

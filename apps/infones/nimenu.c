@@ -72,9 +72,10 @@
  * and it is the only way a numeric state fits in 24 glyphs without ten
  * literals. `\001Frame skip: Auto` is 17 of the 24 that are left after the
  * MENU_DIS byte. */
-#define NI_SKIP_AUTO 0
-#define NI_SKIP_MAX  4
-static int ni_skip = NI_SKIP_AUTO;
+/* NI_SKIP_AUTO, NI_SKIP_MAX and `ni_skip` itself are nirun.c's, beside the
+ * pacer that spends them - nirun.c is #included first, and a frame-skip count
+ * declared in the menu file and read by the frame loop is a state word owned
+ * by whichever file happens to draw it. */
 static char ni_skiplab[26];
 
 /* --- File (the .rc's ﾌｧｲﾙ(&F) popup, :63-70) ------------------------------
@@ -185,55 +186,110 @@ static int ni_have_rom(void)
     return (ni_state == NI_ST_READY || ni_state == NI_ST_RUN);
 }
 
-/* ni_have_fsx - does THIS WINDOW'S DISPLAY offer a fullscreen mode at all?
+/* apps/os88api.inc's `FSXM_VGA13 equ 6`, spelled once here rather than as a
+ * bare 6 inside the shift below - and build.sh's `nistruct` row reads BOTH and
+ * refuses a build where they disagree. A magic index tied to a symbol by a
+ * comment is the same cross-language hole as the composer's field table. */
+#define NI_FSXM_VGA13 6
+
+/* ni_have_fsx - does THIS WINDOW'S DISPLAY offer 320x200x256 (mode 13h)?
  * Re-asked at use and NEVER banked: os88api.inc:2438-2449 says an answer
  * banked in an entry proc describes the window you were LAUNCHED FROM,
  * because yours does not exist yet - and on a two-card desktop the answer
  * changes when the window is dragged to the other monitor. */
 static int ni_have_fsx(void *win)
 {
-    return (win != 0 && ni_fsx_caps(win) != 0);
+    /* FSXM_VGA13 (id 6) BY NAME, and not "any mode at all". Mode 13h is the
+     * only mode this build's bracket enters (SPEC.md 91.6.1) - the CGA, Mode
+     * X and Hercules presents are wave 3's - so a Hercules machine, whose
+     * caps mask is non-zero and does not contain bit 6, must grey the item
+     * rather than enter a bracket whose present cannot draw. */
+    return (win != 0 && (ni_fsx_caps(win) & (1 << NI_FSXM_VGA13)) != 0);
 }
 
-/* ni_menu_state - every label and every greying, in one place, called from
- * os88_main and after anything that can change a predicate. Ten stores and no
- * kernel call: the kernel reads the strings through `items`. */
-static void ni_menu_state(void)
+/* ni_menu_labels - every label and every greying, in one place, called from
+ * os88_main and after anything that can change a predicate. Ten stores and one
+ * kernel call (the caps read): the kernel reads the strings through `items`.
+ *
+ * IT IS SPLIT FROM THE FACT ROTATION so that a caller can refresh a LABEL
+ * without advancing the fact line - which the bracket's exit needs: PgUp/PgDn
+ * inside the bracket change `ni_skip`, so the Options menu's own label is
+ * stale until this runs, but the fact row was already settled inside the
+ * bracket (ni_panel_settle) and re-rotating it there would letter that row a
+ * second time with a different sentence (SPEC.md 91.6.5). */
+static void ni_menu_labels(void)
 {
-    int rom;
+    int rom, runnable;
 
     rom = ni_have_rom();
+
+    /* THE FRAME-SKIP TRIO IS GREYED ON `Full screen`'S OWN PREDICATE, and not
+     * on `rom` alone (SPEC.md 91.10). `Full screen` is the only route into the
+     * bracket - a windowed picture is dropped (SPEC.md 91.11) and there is no
+     * Full-screen shortcut key - so on CGA, EGA and Hercules, where
+     * ni_have_fsx already dithers it, a live `Frame skip faster` changes a
+     * number nothing on that machine can ever spend: present, not greyed, not
+     * checked and silently ignored, which is exactly what SPEC.md 47 forbids.
+     * There must be a MACHINE to run AND a DISPLAY that can run it, and the
+     * rotation's NI_FACT_FSX sentence names the second half. */
+    runnable = rom && ni_have_fsx(ni_win);
 
     ni_file_items[NI_I_RESET] = rom ? "Reset" : D "Reset";
     ni_file_items[NI_I_STOP]  = rom ? "Stop"  : D "Stop";
 
-    /* The frame-skip label, and the whole of its state. It is greyed in this
-     * build for the SAME fact as the rest of Options - there is nothing to
-     * skip until the composer lands - and a live item that only changed a
-     * label nothing reads is exactly the shape LESSONS.md 1 names: present,
-     * not greyed, not checked and silently ignored. */
-    os88_strcpy(ni_skiplab, D "Frame skip: ", sizeof(ni_skiplab));
+    /* The frame-skip label, and the whole of its state. THE CHECK STATE IS IN
+     * THE LABEL and never a MENU_DIS dither, because in this package that
+     * byte means UNAVAILABLE and nothing else (the file header's rule).
+     * `\001Frame skip: Auto` is 17 of the 24 that are left after the byte. */
+    os88_strcpy(ni_skiplab, runnable ? "Frame skip: " : D "Frame skip: ",
+                sizeof(ni_skiplab));
     if (ni_skip == NI_SKIP_AUTO)
         ni_app(ni_skiplab, "Auto");
     else
         ni_appnum(ni_skiplab, (unsigned)ni_skip);
 
-    /* Wave 2 replaces these four constants with the live predicates that
-     * SPEC.md 91.10 names - the caps mask for this window's display, and the
-     * live FSI_H of the mode this package would enter. The PREDICATE is
-     * written now so that the wave which makes it true has one place to
-     * change, and the fact line is chosen by the same order. */
-    ni_opt_items[NI_I_FASTER] = D "Frame skip faster";
-    ni_opt_items[NI_I_SLOWER] = D "Frame skip slower";
-    ni_opt_items[NI_I_FULL]   = D "Full screen";
+    /* THE FOUR LIVE PREDICATES (SPEC.md 91.10), and wave 1's single constant
+     * fact is gone with them. Frame skip and Full screen share ONE predicate
+     * - a ROM **and** a display that offers mode 13h at all, which is
+     * `ni_have_fsx`'s question and is asked of THIS WINDOW'S display every
+     * time; Clip is greyed FOREVER in a 200-row mode, which is every
+     * mode this build enters (SPEC.md 91.6.1), and Mute is greyed forever
+     * full stop. */
+    ni_opt_items[NI_I_FASTER] = runnable ? "Frame skip faster"
+                                         : D "Frame skip faster";
+    ni_opt_items[NI_I_SLOWER] = runnable ? "Frame skip slower"
+                                         : D "Frame skip slower";
+    ni_opt_items[NI_I_FULL]   = runnable ? "Full screen" : D "Full screen";
     ni_opt_items[NI_I_CLIP]   = D "Clip top and bottom";
     ni_opt_items[NI_I_MUTE]   = D "Mute (no APU)";
 
-    /* THE ONE FACT ROW, ADVANCED (SPEC.md 91.7.2). Three facts are true at
-     * once in this build and there is one row for them, so the row rotates
+}
+
+/* ni_menu_rotate - the one fact row, advanced. */
+static void ni_menu_rotate(void)
+{
+    int rom;
+
+    rom = ni_have_rom();
+
+    /* THE ONE FACT ROW, ADVANCED (SPEC.md 91.7.2). More than one fact is true
+     * at once in this build and there is one row for them, so the row rotates
      * on a user action rather than standing on one sentence and hiding the
-     * other two - which is how `Mute (no APU)`'s own sentence was reachable
-     * only by pressing a key named nowhere on the machine. */
-    ni_fact_rotate(!ni_have_fsx(ni_win));
+     * rest - which is how `Mute (no APU)`'s own sentence was reachable only by
+     * pressing a key named nowhere on the machine.
+     *
+     * BOTH PREDICATES ARE THE ITEMS' OWN. `!rom` is what the frame-skip trio
+     * and Full screen are dithered by, and until NI_FACT_NOROM existed those
+     * four greyings had no sentence anywhere: an empty panel showed four
+     * dithered items over a fact line about the clip. */
+    ni_fact_rotate(!ni_have_fsx(ni_win), !rom);
     ni_panel_fact();
+}
+
+/* ni_menu_state - the labels AND the rotation, which is what every caller but
+ * the bracket's exit wants. */
+static void ni_menu_state(void)
+{
+    ni_menu_labels();
+    ni_menu_rotate();
 }
