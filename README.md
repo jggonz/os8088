@@ -129,6 +129,8 @@ make live     # the live media (docs/LIVE-MEDIA.md): os8088-usb.img, a
               # bootable hard-disk image for a USB stick, and os8088.iso,
               # the same image as a live CD - the whole OS and every app
               # on one C: drive (make usb / make iso build them singly)
+make imager   # macOS: os8088 imager discovers floppy/USB/CD devices and
+              # offers compatible built images (docs/IMAGER.md)
 make burn     # macOS: interactively write the stick / burn the CD, with a
               # typed confirmation and a read-back verify
 make test     # boot headless with a QMP socket for scripted testing
@@ -142,9 +144,9 @@ make clean
 
 `make` builds the six shipping floppies and needs nothing but `nasm` and
 `python3`. The disks that carry the C applications — `cworddisk`,
-`runcpmdisk`, `allapps` and the live media (`make live`) — want the compiler
-first: `tools/setup-cc.sh`
-fetches and builds it into `build/cc`, and nothing else in the tree depends on
+`runcpmdisk`, `allapps` and the live media (`make live`) — automatically run
+`tools/setup-cc.sh` when the compiler is missing. It fetches and builds it
+into `build/cc`, and nothing else in the tree depends on
 it. `runcpmdisk`, `allapps` and `live` also fetch RunCPM's command processor
 and master disk (`make runcpm-src`), and `runcpmdisk` the CP/M software that
 rides beside it (`make cpmsw`); none of it is committed here.

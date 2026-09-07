@@ -209,6 +209,12 @@ FAST = [
         "the Drivers page's memory column (SPEC.md 31.6.2) re-derived: every "
         "image term against the .drv this build made, every claim term against "
         "the constant in the driver that takes it"),
+    Row("ccmake", "fast", py("tests/unit/t_ccmake.py"), 2.1,
+        "automatic compiler setup: missing/partial install, parallel dependents, "
+        "warm reuse, setup failure propagation and fresh live-media dependencies"),
+    Row("imager", "fast", py("tests/unit/t_imager.py"), 0.1,
+        "host media detection, image compatibility, confirmation and read-back "
+        "verification without writing physical devices"),
     Row("image", "fast", py("tests/unit/t_image.py"), 0.1,
         "the shipped floppies read by an independent FAT12 walker: contiguity, "
         "the standard BPB, SPEC.md 19.6's attributes"),
