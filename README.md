@@ -98,6 +98,7 @@ make paccmandisk # build the PaccMan floppy - a second Pac-Man, in C: the
               # four geometries (paccman.img, paccman720/120/360.img)
 make xt-paccman # 86Box: the 4.77MHz XT with the 720KB PaccMan disk in B: -
               # the machine the "more performant on XTs" question was about
+make 386-paccman # 86Box: the 386DX/25 with the 1.44MB disk in B: - full speed
 make pmcbandbench # its band composer's benchmark, under QEMU -icount shift=3
 make c64disk  # build the C64 floppy - a Commodore 64: the package, its
               # overlay; the KERNAL/BASIC/CHARGEN ROM rides INSIDE the

@@ -70,6 +70,7 @@ make paccman        the host checks, then build/paccman.o88
 make paccmandisk    ...and the floppy in all four geometries
 make pmcbandbench   the band composer's benchmark (below)
 make xt-paccman     an 86Box IBM XT at 4.77MHz with that floppy in B:
+make 386-paccman    an 86Box 386DX/25 with the 1.44MB floppy in B: (full speed)
 make test TESTAPPS=build/paccman.img
 ```
 
@@ -545,7 +546,9 @@ USB image and CD by derivation.
 
 `make xt-paccman` boots **`vm/xt-paccman`** — an 86Box `ibmxt86`, an 8088 at
 4.77 MHz with 640KB and an OTI-067 VGA, the 360KB system floppy in A: and
-`build/paccman720.img` in B:. It is `vm/xt-word`'s machine with `fdd_02_fn`
+`build/paccman720.img` in B:. `make 386-paccman` boots **`vm/386-paccman`**,
+`vm/386-c-word`'s 386DX/25 with `build/paccman.img` in B: — the machine to
+play it on at the arcade's own speed; the XT is the one to measure on. It is `vm/xt-word`'s machine with `fdd_02_fn`
 and the uuid changed and nothing else, which is deliberate: 86Box does not
 reject an unrecognised key, it substitutes a default and rewrites the config
 on the way out. It cannot **assert** anything — `tests/paccman.py` on MartyPC

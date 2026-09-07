@@ -94083,7 +94083,9 @@ beside `GAMES/PACMAN.O88` on `build/apps-all.img` (2,720 of 2,847 clusters) and
 on `apps-all-120.img`, and `make live` carries it by derivation.
 `vm/xt-paccman` is `vm/xt-word`'s machine — an `ibmxt86` 8088 at 4.77 MHz with
 640KB and an OTI-067 — with `fdd_02_fn` pointed at `build/paccman720.img` and
-the uuid changed and nothing else; `make xt-paccman` boots it, and a
+the uuid changed and nothing else; `make xt-paccman` boots it (and
+`make 386-paccman` boots `vm/386-paccman`, `vm/386-c-word`'s 386DX/25 with
+`build/paccman.img` in B:, the machine that plays it at full speed), and a
 screencapture of that boot reaching the desktop with both drives mounted is
 `build/port-shots/wave4-xt-paccman-86box.png`. **The reveal on that machine is
 a HUMAN's screencapture and not a scripted one**, and the reason is the profile

@@ -114,13 +114,14 @@ make covl       #   covl is the OVERLAY gate (§73.14); cword is the
 make paccman      # PACCMAN (§91), the C toolchain's FOURTH application:
 make paccmandisk  #   Andre Weissflog's arcade-faithful pacman.c (MIT, pinned
 make xt-paccman   #   at 0f5ec5a) as a second Pac-Man beside §89's assembly
-make pmcbandbench #   one - the Namco 28x36 field, the arcade ROM tables in
-                  #   the COMMITTED pmc_rom.c, the four ghosts, the attract
+make 386-paccman  #   one - the Namco 28x36 field, the arcade ROM tables in
+make pmcbandbench #   the COMMITTED pmc_rom.c, the four ghosts, the attract
                   #   reveal, three voices reduced to the speaker. Shares
                   #   NOTHING with apps/pacman by §73.12's rule, and `make
                   #   paccman` and build/pacman.o88 are one letter apart.
                   #   `paccmandisk` is the floppy in all four geometries;
-                  #   `xt-paccman` the 4.77MHz 86Box XT the user's "maybe
+                  #   `386-paccman` the 386DX/25 that plays it at full
+                  #   speed; `xt-paccman` the 4.77MHz 86Box XT the user's "maybe
                   #   more performant on XTs" was about — which it is NOT,
                   #   and tests/paccman.py prints the two ports side by side
                   #   with that verdict either way. `pmcbandbench` is the
@@ -296,7 +297,7 @@ and hibernate on; `build/mfm20.img` is created blank and kept),
 tree that read that geometry at all: a 1.2MB drive wants the AT's 500 kbps
 controller, so no XT profile can host one),
 `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
-`386-word`, `386-c-word`, `xt-paccman`, `xt-runcpm`, `286-runcpm`,
+`386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
 `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-weave`, `386-weave`, `xt-weave-256`;
 plus `marty` (MartyPC). `xt-multimon` is the

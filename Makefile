@@ -194,6 +194,7 @@ VM386CWORD := $(CURDIR)/vm/386-c-word
 # else, for the standing reason: 86Box does not reject an unrecognised key, it
 # substitutes a default and rewrites the config on the way out.
 VMXTPACCMAN := $(CURDIR)/vm/xt-paccman
+VM386PACCMAN := $(CURDIR)/vm/386-paccman
 
 # The RUNCPM machines (SPEC.md 74.5, 74.6): one per FLOPPY GEOMETRY, because
 # the three RUNCPM disks do not carry the same software and the machines that
@@ -1627,6 +1628,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         stories zdisk ztest zh zhboot zcheck zgfx zpic zgfxpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
         cc-note chello covl pkgrun pkgbig cword cworddisk 386-c-word runcpm runcpmdisk \
+        paccman paccmandisk pmcbandbench xt-paccman 386-paccman \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
@@ -8759,6 +8761,15 @@ xt-word: $(IMG360) $(BUILD)/word720.img
 xt-paccman: $(IMG360) $(BUILD)/paccman720.img
 	@$(UNPROTECT) $(VMXTPACCMAN)/86box.cfg
 	$(BOX) -P $(VMXTPACCMAN) -N
+
+# ...and the fast one: vm/386-c-word's 386DX/25 with two 1.44MB drives and
+# build/paccman.img in B: - the machine to PLAY it on, where the game runs at
+# the arcade's own speed (the XT above is where to watch it not). A copy of
+# that cfg with fdd_02_fn and the uuid changed and nothing else, for the
+# standing reason.
+386-paccman: $(IMG) $(BUILD)/paccman.img
+	@$(UNPROTECT) $(VM386PACCMAN)/86box.cfg
+	$(BOX) -P $(VM386PACCMAN) -N
 
 # The RUNCPM machine (SPEC.md 74.5): vm/386-c-word with B: = build/runcpm.img
 # and the uuid changed and NOTHING else, for the same reason that one is a
