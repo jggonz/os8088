@@ -296,17 +296,25 @@ static struct os88_menuset a2_menus = {
  * takes effect the moment there is a machine to be stopped. */
 static void a2_menu_state(void)
 {
-    a2_file_items[A2_I_LOAD] = a2_have_cpu ? "Load Program..."
+    a2_file_items[A2_I_LOAD] = a2_have_cmd ? "Load Program..."
                                            : D "Load Program...";
-    a2_file_items[A2_I_SAVE] = a2_have_cpu ? "Save Program..."
+    a2_file_items[A2_I_SAVE] = a2_have_cmd ? "Save Program..."
                                            : D "Save Program...";
-    a2_edit_items[A2_I_COPY] = a2_have_cpu ? "Copy"  : D "Copy";
-    a2_edit_items[A2_I_PASTE] = a2_have_cpu ? "Paste" : D "Paste";
+    a2_edit_items[A2_I_COPY] = a2_have_cmd ? "Copy"  : D "Copy";
+    a2_edit_items[A2_I_PASTE] = a2_have_cmd ? "Paste" : D "Paste";
+    /* THE TWO RESET CHORDS ARE THE ROWS WAVE 2 REVIVES, and they are the only
+     * ones: their bodies are section 4.5's reset line, which is this wave's
+     * own subject, and neither touches RAM. Power On is the third of the trio
+     * and stays on a2_have_cmd because section 10.2 gives it a TWO-ROW
+     * CONFIRMATION - `Are you sure you want to reboot?` / `(All data will be
+     * lost!)`, AppleWin WinFrame.cpp:2002-2012 - which arrives with the rest
+     * of the commands in wave 4. A data-loss row shipped without the
+     * confirmation the contract gives it is not the item the SPEC describes. */
     a2_mach_items[A2_I_OARESET] = a2_have_cpu ? "Open-Apple-Control-Reset"
                                               : D "Open-Apple-Control-Reset";
     a2_mach_items[A2_I_RESET] = a2_have_cpu ? "Control-Reset"
                                             : D "Control-Reset";
-    a2_mach_items[A2_I_POWER] = a2_have_cpu ? "Power On" : D "Power On";
+    a2_mach_items[A2_I_POWER] = a2_have_cmd ? "Power On" : D "Power On";
     a2_mach_items[A2_I_FLASH] = a2_fl_ok ? ON "Flashing text"
                                          : OFF "Flashing text";
     /* THE THREE THAT USED TO BE GREYED FOR EVER. `D` baked into a literal
@@ -322,14 +330,14 @@ static void a2_menu_state(void)
      * What they DID need is the two-glyph column, which rule 5 above has, and
      * they carry it in the literal. Mute is the opposite case and is
      * rewritten below, because a2_have_snd is exactly such a flag. */
-    a2_cpu_items[A2_I_NORMAL] = a2_have_cpu ? ON "Normal: 1MHz"
+    a2_cpu_items[A2_I_NORMAL] = a2_have_cmd ? ON "Normal: 1MHz"
                                             : D ON "Normal: 1MHz";
-    a2_cpu_items[A2_I_WARP] = a2_have_cpu ? OFF "Warp" : D OFF "Warp";
+    a2_cpu_items[A2_I_WARP] = a2_have_cmd ? OFF "Warp" : D OFF "Warp";
     a2_mach_items[A2_I_MUTE] = a2_have_snd ? OFF "Mute" : D OFF "Mute";
-    a2_cpu_items[A2_I_STOP] = a2_have_cpu
+    a2_cpu_items[A2_I_STOP] = a2_have_cmd
         ? ((a2_state == A2_ST_RUN) ? "Stop" : ON "Stopped")
         : D "Stop";
-    a2_cpu_items[A2_I_RUN] = a2_have_cpu
+    a2_cpu_items[A2_I_RUN] = a2_have_cmd
         ? ((a2_state == A2_ST_RUN) ? ON "Running" : "Continue")
         : D "Running";
 }

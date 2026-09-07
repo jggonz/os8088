@@ -354,8 +354,9 @@ _a2_chargen:
 
 ; -----------------------------------------------------------------------------
 ; void a2_zfill(unsigned a, int v, unsigned n) - n bytes of v into the Apple's
-; RAM at a. The power-on pattern's mover, and the one the harness fills a
-; display page with.
+; RAM at a. The POWER-ON PATTERN is a2_zpower's above, not this one; this is
+; the flat fill the harness lays a display page down with and the one Load
+; Program clears a program's tail with (APPLE2-SPEC section 12).
 ;
 ; It does NOT touch the dirty bitmap: a fill is followed by the C marking what
 ; it filled, in one call rather than in n.
@@ -373,6 +374,51 @@ _a2_zfill:
     jcxz .out
     rep stosb                       ; cc8086:allow ES is the RAM claim, loaded
                                     ; here on purpose and restored below
+.out:
+    pop es
+    pop di
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void a2_zpower(unsigned a, unsigned n) - AppleWin's `FF FF 00 00` POWER-ON
+; PATTERN over n bytes of the Apple's RAM at a (APPLE2-SPEC section 4.5).
+;
+; IT IS A MOVER AND NOT A LOOP IN C. The pattern's period is four bytes over
+; 49,152 of them, so the C form is 12,288 iterations of two near calls -
+; ~270 ms on the target, spent inside os88_main before the window is up. Two
+; string instructions do it in one call.
+;
+; It does NOT touch the dirty bitmap, for a2_zfill's reason: a fill is
+; followed by the C marking what it filled, in one call rather than in n.
+; The pattern is written in two passes because `rep stosw` cannot alternate:
+; everything to zero, then $FFFF into every fourth byte pair.
+; -----------------------------------------------------------------------------
+_a2_zpower:
+    push bp
+    mov bp, sp
+    push di
+    push es
+    cld
+    mov es, [_a2_m+AM_RAMSEG]
+    mov di, [bp+4]
+    mov cx, [bp+6]
+    shr cx, 1                       ; n/2 words
+    jcxz .out
+    xor ax, ax
+    rep stosw                       ; cc8086:allow ES is the RAM claim, loaded
+                                    ; here on purpose and restored below
+    mov di, [bp+4]
+    mov cx, [bp+6]
+    shr cx, 1
+    shr cx, 1                       ; n/4 groups of four
+    jcxz .out
+    mov ax, 0xFFFF
+.g:
+    stosw                           ; cc8086:allow ...and the same ES
+    inc di                          ; ...over the two zero bytes of the group
+    inc di
+    loop .g
 .out:
     pop es
     pop di

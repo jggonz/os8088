@@ -159,6 +159,8 @@ static char a2_st_tmp[A2_STCELLS + 1];
 static int  a2_st_ok;                       /* the row on the glass is ours */
 static int  a2_st_dirty;                    /* ...and it wants redrawing */
 static char a2_msg[A2_STCELLS + 1];
+static char a2_pctbuf[8];                   /* the speed field's digits and
+                                             * its `%` (section 9) */
 static unsigned a2_msg_until;
 static int  a2_blit_said;                   /* the blit1 refusal was named once */
 
@@ -645,12 +647,29 @@ static void a2_status(void)
                                              * takes 0-4 and MIXED 6-10, which
                                              * leaves 12-15 - four cells, and
                                              * PAGE2 is five */
-    /* THE SPEED FIELD IS EMPTY IN WAVE 1 and that is deliberate: it carries
-     * the MEASURED percentage of a 1.02 MHz Apple II (section 9), there is no
-     * 6502 to measure yet, and a `0%` would be a number about a machine that
-     * does not exist. Wave 2 fills it. */
-    if (a2_msg[0])
+    /* THE SPEED FIELD (section 9), MEASURED AND NOT A GUESS - the honest-speed
+     * posture this port was given at intake. It is the percentage of a
+     * 1.02 MHz Apple II that the last one-second window actually ran, folded
+     * in a2_speed_fold.
+     *
+     * IT SITS AT THE RIGHT-HAND END AND YIELDS TO A MESSAGE. The row is 42
+     * cells; the mode fields hold 0-15 and the message area starts at 16
+     * because `Unable to load APPLE2.OVL.` is 26 glyphs and 16 + 26 = 42
+     * exactly. So there is no column a message and a widget can both have,
+     * and the choice is which one loses: a message is transient and a speed
+     * figure is not news, so the figure is drawn only when the message area
+     * is clear. That also keeps the message-length gate's cap at 26 rather
+     * than narrowing it to 19 and making the OVL refusal - the one message a
+     * user most needs to read whole - the one that would be truncated. */
+    if (a2_msg[0]) {
         a2_st_put(16, a2_msg);
+    } else if (a2_state != A2_ST_HALT) {
+        os88_utoa((unsigned)a2_pct, a2_pctbuf);
+        l = os88_strlen(a2_pctbuf);
+        a2_pctbuf[l] = '%';
+        a2_pctbuf[l + 1] = 0;
+        a2_st_put(A2_STCELLS - (l + 1), a2_pctbuf);
+    }
 
     if (a2_st_ok) {
         f = -1;

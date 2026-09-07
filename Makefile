@@ -1627,7 +1627,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
-        apple2 apple2disk apple2rom a2bandbench a2memtest 386-apple2 \
+        apple2 apple2disk apple2rom a2bandbench a2memtest a2cputest 386-apple2 \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
@@ -5090,13 +5090,20 @@ $(BUILD)/a2band.img: $(BUILD)/a2bband.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/a2bband.o88
 	@python3 tools/os88disk.py --verify $@
 
-# THE BOOT-SECTOR GATE (APPLE2-SPEC section 3.4). a2memtest runs the SHIPPING
-# a2mem.inc and a2band.inc on a real x86 with SS != DS and an ES sentinel,
-# with FOUR negative controls, and IS in build.sh because it takes seconds.
-# The core's twelve rows are a2cputest and are NOT, because they take minutes -
-# the rcz80test precedent - and they arrive with the core they gate.
+# THE TWO BOOT-SECTOR GATES (APPLE2-SPEC sections 3.4, 4.4). a2memtest runs
+# the SHIPPING a2mem.inc and a2band.inc on a real x86 with SS != DS and an ES
+# sentinel, with FOUR negative controls, and IS in build.sh because it takes
+# seconds. a2cputest is the core's TWELVE rows - Klaus Dormann's functional
+# test at a pinned SHA-256, tools/c64dec.py's 262,144 decimal cases and the
+# Apple II memory model's own boundaries - and is NOT, because it takes
+# minutes: the rcz80test and c64cputest precedent. It arrives with the core it
+# gates (docs/APPLE2-PORT-PLAN.md wave 2).
 a2memtest:
 	apps/apple2/hosttest/a2memtest.sh
+
+a2cputest: apps/apple2/hosttest/a2cputest.asm apps/apple2/hosttest/a2cputest.sh \
+           tools/c64dec.py apps/apple2/a2cpu.inc
+	apps/apple2/hosttest/a2cputest.sh
 
 # THE 386 APPLE2 MACHINE (APPLE2-SPEC section 16.4): vm/386-c64 with B: =
 # build/apple2.img and the uuid changed and NOTHING else, for the reason

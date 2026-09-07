@@ -56,14 +56,18 @@
  * damage model including the flash phase, the 7-pixel text composer, the four
  * menus, the status row, and the whole harness kit.
  *
- * THE 6502 ARRIVES IN WAVE 2. Until it does there is nothing writing the
- * display page, so a2_selftext() below lays one down at launch - scaffolding
- * that is named as such, that wave 2 deletes, and that exists because the
- * only way to look at a composer is to look at what it composed.
+ * ----------------------------------------------------------------------------
+ * WHAT WAVE 2 ADDED (docs/APPLE2-PORT-PLAN.md)
+ * ----------------------------------------------------------------------------
+ * The 6502, the Apple II memory model, the soft switches in both directions,
+ * the II+ keyboard byte map and the reset line, both kinds. Wave 1's
+ * a2_selftext() scaffolding is GONE: the Autostart Monitor writes the display
+ * page itself now, which is what a screendump of this port is supposed to be a
+ * photograph of.
  *
- * NO SIZE LINE IS QUOTED THIS WAVE and APPLE2-SPEC section 15 says why: a
- * core with no opcodes in it is not an honest measurement of a core, and
- * quoting one would set a budget against a number nobody can reproduce.
+ * THE FIRST HONEST SIZE LINE IS QUOTED IN APPLE2-SPEC section 15.0 and in the
+ * plan's wave-2 paragraph: image 26,706 + bss 10,394 = 37,100 resident of
+ * 61,440, APPLE2.OVL 883, 8 resident shims, largest C frame 42 of 96.
  * ==========================================================================*/
 
 #include "os88.h"
@@ -122,14 +126,31 @@ void a2_chargen(void *dst, unsigned seg, unsigned off, unsigned n);
 void a2_zfill(unsigned a, int v, unsigned n);
 void a2_zcopy_in(unsigned a, const void *src, unsigned n);
 void a2_zcopy_out(void *dst, unsigned a, unsigned n);
+void a2_zpower(unsigned a, unsigned n);     /* AppleWin's FF FF 00 00 power-on
+                                             * pattern, as a MOVER: the C form
+                                             * is 12,288 iterations of two near
+                                             * calls, ~270 ms on the target
+                                             * (section 4.5) */
 
 /* --- a2cpu.inc: the core (section 4) -------------------------------------- */
 int  a2_run(unsigned cycles);           /* -> A2_RUN_*, and a2_m.cnt is what
                                          * was NOT spent, so the caller's
                                          * `ran = asked - cnt` is exact */
 void a2_cut(void);                      /* end the run in progress, exactly */
-void a2_rebias(void);                   /* the map moved: no instruction is
-                                         * fetched under a stale bias */
+void a2_rebias(void);                   /* PC moved under the core's feet: no
+                                         * instruction is fetched under a
+                                         * stale bias */
+int  a2_bread(unsigned a);              /* one byte through the Apple II
+                                         * LADDER - the reset vector is in the
+                                         * ROM, so a2_rd (RAM by construction)
+                                         * cannot read it */
+void a2_clk_set(unsigned v);            /* the emulated clock's base for the
+                                         * run about to start: `clock +
+                                         * budget` (section 5.1) */
+int  a2_now(void);                      /* ...and the clock itself, EXACT
+                                         * INSIDE A RUN, which is where the
+                                         * paddle one-shots are armed and
+                                         * read */
 
 /* --- a2band.inc: the composers (section 7.3) ------------------------------ */
 void a2_band_text(unsigned char *dst, int g0, int g1,
@@ -248,6 +269,22 @@ static void *a2_win;
 static int a2_kick;                         /* a wake is wanted */
 static int a2_exit_req;                     /* File > Quit asked; spent at the
                                              * top of the next wake (75.2) */
+/* THE RESET LATCH (APPLE2-SPEC section 4.5). os88_oncmd and os88_onkey are
+ * both dispatched under the DESKTOP's gfx lock, and a power-on is a 48KB fill
+ * - so the command LATCHES and the WAKE, which holds no lock, spends it. The
+ * C64's wave-3 lesson, one machine along. */
+#define A2_RST_CTRL   1                     /* Ctrl-Reset: I set, the jam
+                                             * cleared, SP down 3 in page one,
+                                             * PC from $FFFC. RAM UNTOUCHED */
+#define A2_RST_OACTRL 2                     /* ...and its Open-Apple form: the
+                                             * same, with the Autostart
+                                             * Monitor's PWREDUP check forced
+                                             * to MISMATCH so the ROM takes the
+                                             * COLD path. Still no RAM fill -
+                                             * that is Power On's */
+#define A2_RST_POWER  3                     /* the cold machine: the FF FF 00
+                                             * 00 pattern and the three pokes */
+static int a2_reset_req;
 static int a2_ovl_asked;                    /* the first-wake probe ran... */
 static int a2_ovl_res;                      /* ...AND IT ANSWERED YES, WHICH IS
                                              * A DIFFERENT FACT and the one
@@ -267,12 +304,34 @@ static int a2_ovl_res;                      /* ...AND IT ANSWERED YES, WHICH IS
                                              * there; the WAKE, which holds no
                                              * lock, is what retries the load
                                              * (APPLE2-SPEC section 15.5) */
-static int a2_have_cpu;                     /* WAVE 2 SETS THIS. Until then
-                                             * every command that needs a 6502
-                                             * is greyed rather than live and
-                                             * useless - SPEC.md 47's rule
-                                             * that nothing is live that only
-                                             * toasts a refusal */
+static int a2_have_cpu = 1;                 /* **WAVE 2 SET IT.** The two
+                                             * reset chords have bodies now,
+                                             * so a2_menu_state revives them.
+                                             * SPEC.md 47's rule is that
+                                             * nothing is live that can only
+                                             * refuse, and a "not in this
+                                             * build yet" toast is exactly
+                                             * that */
+static int a2_have_cmd;                     /* ...and WAVE 4 SETS THIS, which
+                                             * is the OTHER half of the same
+                                             * rule and the reason it is two
+                                             * flags rather than one. Load and
+                                             * Save Program, Copy, Paste,
+                                             * Stop/Continue, Warp and Power
+                                             * On have no BODIES until wave 4
+                                             * (docs/APPLE2-PORT-PLAN.md), and
+                                             * Power On additionally owes
+                                             * section 10.2's TWO-ROW
+                                             * confirmation before it may be
+                                             * live at all: a data-loss row
+                                             * with no confirmation is not the
+                                             * item the SPEC describes. Both
+                                             * greyings are TEMPORARY AND SAY
+                                             * SO IN THE SOURCE, which is
+                                             * section 10.3's own paragraph -
+                                             * they have no user-visible fact
+                                             * because there is no user of a
+                                             * wave, what ships is the PR */
 static int a2_have_snd;                     /* ...and WAVE 5 SETS THIS, which
                                              * is Machine > Mute's own gate.
                                              * Two flags and not one, because
@@ -286,6 +345,16 @@ static int a2_have_snd;                     /* ...and WAVE 5 SETS THIS, which
  * that each part has one definition to read and none of them can quietly
  * declare a second copy of a flag the others set. */
 static int a2_dirty_any;                    /* something wants composing */
+static int a2_pct;                          /* THE SPEED FIGURE (section 9):
+                                             * per cent of a 1.02 MHz Apple
+                                             * II, folded once a second by
+                                             * a2_speed_fold below and drawn by
+                                             * a2scr.c's status row. It is
+                                             * declared HERE for this block's
+                                             * whole reason - one definition,
+                                             * above every #include, so the
+                                             * writer and the reader cannot
+                                             * drift into two copies */
 static int a2_sh_ok;                        /* the shadow describes the glass */
 static int a2_border_dirty;                 /* the border wants filling */
 static int a2_full;                         /* the fullscreen latch is ours */
@@ -359,13 +428,18 @@ static int  a2_geom(void *win);
 static void a2_tier_init(void);
 static void a2_watch_page(void);
 static void a2_menu_state(void);
-static void a2_selftext(void);
 static int  a2_mode_page(void);
 static void a2_fullscreen_toggle(void *win);
 static void a2_flash_force(void);
 static void a2_line_force(int line);
 static void a2_key(int ascii, int scan, void *win);
 static void a2_io_init(void);
+static void a2_reset_cpu(void);
+static void a2_power_on(void);
+static void a2_kb_put(int b);
+static void a2_reset_service(void);
+static void a2_speed_fold(void);
+static void a2_jam(void);
 static void a2_about_close(void *win);
 static int  ovl_about_paint(void *win);
 /* AN `ovl_` ANSWERS A STATUS AND 0 MEANS IT DID NOT HAPPEN (SPEC.md 73.14,
@@ -419,76 +493,195 @@ static int a2_ovl_ready(void *win)
 }
 
 /* ==========================================================================
- * WAVE 1'S TEXT PAGE - SCAFFOLDING, AND NAMED AS SUCH
+ * THE WALL SLICE (APPLE2-SPEC section 4.3)
  * ========================================================================*/
-/* a2_selftext - lay a text page down at launch.
+/* THERE IS NO ALARM SCHEDULER AT ALL, and that is a real simplification this
+ * port states rather than an omission (section 4.2). A bare II+ has no timers
+ * and no interrupt source, so where the C64's slice loop is "run to the next
+ * device event, service it, compute the next one", this one is
+ * `r = a2_run(budget)` with no min() and no advance. The whole of the C64's
+ * c64_alarm_next, c64_advance and the retained device phases are absent.
  *
- * WAVE 2 DELETES THIS FUNCTION. The 6502 arrives then and the Autostart
- * Monitor writes the display page itself, which is what a screendump of this
- * port is supposed to be a photograph of.
- *
- * It exists because wave 1's whole deliverable is the redraw path and there
- * is no way to look at a composer except by looking at what it composed. What
- * it lays down is chosen to exercise the three things the composer decides
- * per cell and nothing else:
- *
- *   - NORMAL text        ($80-$FF), which is the glyph as the ROM has it;
- *   - an INVERSE run     ($00-$3F), the per-cell XOR mask at 0x7F;
- *   - a FLASHING run     ($40-$7F), the same mask driven by the phase - the
- *     one thing on the glass the damage model cannot see (section 7.6);
- *   - a full 40-column ruler, so that all FIVE eight-cell groups are composed
- *     and a group boundary that packed wrong is visible rather than plausible.
- *
- * The Apple's screen encoding, which is what makes this three lines and not a
- * table: normal is `ascii | 0x80`, inverse is `ascii & 0x3F`, flashing is
- * `(ascii & 0x3F) | 0x40`, and the glyph index is `byte & 0x3F` in all three.
- */
-static void a2_puts(unsigned base, int col, const char *s, int form)
-{
-    int c;
-    unsigned a;
+ * The budget is a RAW CYCLE COUNT seeded from os88_cpu() and adapted only on
+ * GENUINELY EXHAUSTED slices - a slice that ended early (jammed, stopped)
+ * leaves the estimate alone, which is RUNCPM's lesson: without that rule
+ * ordinary idling walks the budget to its cap and the next busy slice is a
+ * second of stalled UI task. */
+#define A2_SLICE_MIN 256                    /* ~250 us of emulated time */
+#define A2_SLICE_MAX 16384                  /* ...and the cap. It is BELOW
+                                             * 32,767 on purpose: the core's
+                                             * countdown is a SIGNED word
+                                             * (section 4.2), so a budget past
+                                             * that arrives negative and the
+                                             * core expires before its first
+                                             * fetch - a machine stopped dead */
+static int a2_budget = A2_SLICE_MIN;
+static int a2_fastn;                        /* consecutive slices that cost no
+                                             * host tick at all */
+static unsigned a2_clk;                     /* the emulated clock, a 16-bit
+                                             * wrapping cycle count. It is the
+                                             * paddles' clock and nothing
+                                             * else's, and a2_now() is what
+                                             * reads it from inside a run */
 
-    a = base + (unsigned)col;
-    while (*s) {
-        c = *s & 0x7F;
-        if (form == 0)
-            c |= 0x80;                      /* normal */
-        else if (form == 1)
-            c &= 0x3F;                      /* inverse */
-        else
-            c = (c & 0x3F) | 0x40;          /* flashing */
-        a2_wr(a, c);
-        a++;
-        s++;
+/* THE SPEED FIGURE (section 9) IS MEASURED AND NOT A GUESS - the honest-speed
+ * posture this port was given at intake. 100 % is a 1.02 MHz Apple II, which
+ * is 1,020,484 cycles a second, or 56,070 a host tick at 18.2 Hz.
+ *
+ * IT IS COUNTED IN 64-CYCLE UNITS WITH THE REMAINDER KEPT, because a second of
+ * a real Apple II does not fit in the 16-bit int this C has: 1,020,484 / 64 is
+ * 15,945, which does. The remainder is carried rather than dropped, so the
+ * count is EXACT and not a truncation that loses up to 63 cycles a slice - on
+ * a machine taking sixty slices a second that would be 0.4 % of the figure
+ * being reported, drifting the wrong way. */
+#define A2_CYC_TICK  876                    /* 56,070 / 64, per host tick */
+static unsigned a2_c64u;                    /* 64-cycle units this window */
+static unsigned a2_crem;                    /* ...and the cycles left over */
+static unsigned a2_sp_tick;                 /* the window's start */
+
+static void a2_cyc_add(int ran)
+{
+    a2_crem += (unsigned)ran;
+    if (a2_c64u < 60000u)                   /* the clamp is BEFORE the add and
+                                             * not after a cast: under QEMU
+                                             * this core runs at some
+                                             * thousands of per cent, and a
+                                             * count that wrapped would report
+                                             * a small plausible number */
+        a2_c64u += a2_crem >> 6;
+    a2_crem &= 63u;
+}
+
+/* a2_speed_fold - the window, folded once a second. */
+static void a2_speed_fold(void)
+{
+    unsigned t, el, den;
+    int pct;
+
+    t = os88_ticks();
+    el = t - a2_sp_tick;
+    if (el < 18)                            /* ~1 s at 18.2 Hz */
+        return;
+    if (el > 36) {                          /* the wakes stopped: this window
+                                             * measures nothing, so it is
+                                             * restarted and the figure stands */
+        a2_sp_tick = t;
+        a2_c64u = 0;
+        a2_crem = 0;
+        return;
+    }
+    den = (A2_CYC_TICK * el) / 100u;        /* one per cent of the window, in
+                                             * 64-cycle units. `876 * el` is
+                                             * at most 31,536 and fits */
+    if (den < 1u)
+        den = 1u;
+    pct = (int)(a2_c64u / den);
+    if (pct > 9999)
+        pct = 9999;
+    a2_sp_tick = t;
+    a2_c64u = 0;
+    a2_crem = 0;
+    if (pct != a2_pct) {
+        a2_pct = pct;
+        a2_st_dirty = 1;
     }
 }
 
-static void a2_selftext(void)
+/* a2_hex4 - four hex digits, because every address this program has to name is
+ * one and os88_utoa is decimal. */
+static void a2_hex4(char *d, unsigned v)
 {
-    static const char *ruler =
-        "0123456789012345678901234567890123456789";
-    unsigned base = A2_TXT1;
-    int i;
+    int i, n;
 
-    for (i = 0; i < A2_PGLEN; i++)
-        a2_wr(base + (unsigned)i, 0xA0);    /* a normal space */
+    for (i = 0; i < 4; i++) {
+        n = (int)((v >> 12) & 0x0F);
+        d[i] = (char)((n < 10) ? ('0' + n) : ('A' + n - 10));
+        v = v << 4;
+    }
+}
 
-    a2_puts(base + a2_tbase[1] - A2_TXT1, 4, "APPLE ][ PLUS   OS8088 APPLE2", 0);
-    a2_puts(base + a2_tbase[3] - A2_TXT1, 4, "NORMAL  ABCDEFGHIJKLMNOPQRSTUVW", 0);
-    a2_puts(base + a2_tbase[5] - A2_TXT1, 4, "INVERSE ABCDEFGHIJKLMNOPQRSTUVW", 1);
-    a2_puts(base + a2_tbase[7] - A2_TXT1, 4, "FLASH   ABCDEFGHIJKLMNOPQRSTUVW", 2);
-    a2_puts(base + a2_tbase[9] - A2_TXT1, 0, ruler, 0);
-    /* NO `]` PROMPT AND NO FLASHING CURSOR. In all three references that pair
-     * is the ONE signal that the machine is at the Applesoft prompt and will
-     * accept typing - and a2_key() drops every keystroke this wave, so the
-     * page would be making a promise the keyboard breaks (a2kbd.c's own
-     * header argues the same thing about a stub that stored a byte in the
-     * latch). The page states the fact instead. The flash phase loses nothing
-     * by it: the FLASH row two lines up is what exercises it, and the
-     * INVERSE row the other half of the mask. */
-    a2_puts(base + a2_tbase[11] - A2_TXT1, 0,
-            "NO 6502 IN THIS BUILD - WAVE 2", 0);
-    a2_dirty_all();
+/* a2_jam - a JAM opcode. The machine stops and says where.
+ *
+ * On a real Apple II+ the recovery is Ctrl-Reset, which is exactly what this
+ * port offers: a2_reset_cpu CLEARS THE JAMMED STATE (section 4.5), and the
+ * menu item is the guaranteed route to it. */
+static void a2_jam(void)
+{
+    static char line[24];
+
+    a2_state = A2_ST_JAM;
+    os88_strcpy(line, "6502: JAM at $", 15);
+    a2_hex4(line + 14, a2_m.pc);
+    line[18] = 0;
+    a2_say(line);
+    os88_toast(line, 0);                    /* SPEC.md 59's second route: the
+                                             * status row is UNDER a WF_FULL
+                                             * window and this machine spends
+                                             * time there */
+    a2_menu_state();                        /* Stop/Continue re-spelled: there
+                                             * is no machine left to stop */
+}
+
+/* a2_slice - one run of the core for the wall budget.
+ *
+ * `a2_m.cnt` is what was NOT spent and is negative by up to one instruction's
+ * cost, so `ran = asked - cnt` is exact (section 4.2). */
+static void a2_slice(void)
+{
+    int r, ran;
+
+    a2_clk_set(a2_clk + (unsigned)a2_budget);
+    r = a2_run((unsigned)a2_budget);
+    ran = a2_budget - (int)a2_m.cnt;
+    if (ran < 1)
+        ran = 1;
+    a2_clk = (unsigned)a2_now();
+    a2_cyc_add(ran);
+    if (r == A2_RUN_JAM)
+        a2_jam();
+}
+
+/* a2_reset_service - the reset latches, RUN FROM THE WAKE.
+ *
+ * The difference between the three is what happens to RAM and to the Autostart
+ * Monitor's PWREDUP check, and this port keeps it: Ctrl-Reset touches neither,
+ * its Open-Apple form forces the check to MISMATCH so the ROM takes the cold
+ * path, and Power On lays the whole power-on pattern first.
+ *
+ * IT IS HERE AND NOT IN THE COMMAND because the fill is 48KB and os88_oncmd
+ * holds the desktop's gfx lock. Nothing about the result changes: the 6502
+ * advances only inside a wake and this runs at the top of one, so the machine
+ * being reset is the machine the user was looking at. */
+static void a2_reset_service(void)
+{
+    int kind = a2_reset_req;
+
+    a2_reset_req = 0;
+    if (kind == A2_RST_POWER) {
+        a2_power_on();
+    } else {
+        if (kind == A2_RST_OACTRL) {
+            /* The //e's Open-Apple-Ctrl-Reset forces a COLD start, and on a
+             * II+ the Autostart Monitor decides that from $03F4 != $03F3 XOR
+             * $A5 (section 4.5). So the honest II+ body of MII's row is to
+             * break that equality and take the ordinary reset - RAM intact,
+             * which is what makes it a different row from Power On. */
+            a2_wr(0x03F4, (a2_rd(0x03F3) ^ 0xA5 ^ 0xFF) & 0xFF);
+        }
+        a2_reset_cpu();
+    }
+    a2_watch_page();
+    a2_menu_state();                        /* a route out of A2_ST_JAM: the
+                                             * greying may not outlive the fact
+                                             * (SPEC.md 47) */
+    a2_dirty_all();                         /* ...and NOT a2_sh_inval(). Nothing
+                                             * covered the glass across a
+                                             * reset, so the shadow is still
+                                             * true and this is the RECOMPOSE;
+                                             * forcing would switch off the
+                                             * frame compare that answers "the
+                                             * picture did not change" */
+    a2_dirty_any = 1;
 }
 
 /* ==========================================================================
@@ -688,15 +881,16 @@ void os88_onfile(int mode, const char *name,
 /* ==========================================================================
  * THE WAKE - the one callback dispatched WITHOUT the gfx lock (SPEC.md 74.1)
  * ========================================================================*/
-/* WAVE 1 HAS NO SLICE IN IT, because it has no core to run. What it does have
- * is everything that surrounds one, and every piece of it is what wave 2 will
- * drive: the latches spent at the top with no lock held, the overlay probe on
+/* WAVE 2 PUT THE SLICE IN, and nothing above or below it moved: the latches
+ * are still spent at the top with no lock held, the overlay probe is still on
  * the FIRST wake (the .OVL cannot be resolved from os88_main - there is no
- * instance yet to resolve a module for, LESSONS.md 13), the flash phase, and
- * the flush under the lock and only around itself.
+ * instance yet to resolve a module for, LESSONS.md 13), the flash phase is
+ * still the timer's, and the flush is still under the lock and only around
+ * itself, at most once per host tick.
  *
- * `r = a2_run(budget)` goes in between the probe and the flush in wave 2, and
- * nothing above or below it moves. */
+ * THE SLICE IS BETWEEN THE PROBE AND THE FLUSH, which is the order that
+ * matters: what the 6502 wrote in this wake is what the flush composes in the
+ * same one, so a keystroke's echo is one wake and not two. */
 
 /* a2_wants_wake - SPEC.md 74.1's rule in ONE place: "a handler re-posts
  * itself only while it has work". A wake round trip is at least one task
@@ -821,6 +1015,9 @@ void os88_onwake(void *win)
         return;
     }
 
+    if (a2_reset_req)
+        a2_reset_service();
+
     /* --- the overlay probe, on the FIRST wake ----------------------------- */
     if (!a2_ovl_asked) {
         a2_ovl_asked = 1;
@@ -842,6 +1039,48 @@ void os88_onwake(void *win)
     t = os88_ticks();
     if (!a2_tmr_ok)
         a2_flash_step(t);
+
+    /* --- THE SLICE (APPLE2-SPEC section 4.3) ------------------------------
+     * No lock is held here and none may be: this is the one callback the
+     * kernel dispatches without the desktop's gfx lock (SPEC.md 74.1), and a
+     * slice is an unbounded amount of emulated work.
+     *
+     * ...AND ONLY A GENUINELY EXHAUSTED SLICE ADAPTS THE BUDGET. A slice that
+     * ended early - jammed - leaves the estimate alone (LESSONS.md 13). */
+    if (a2_state == A2_ST_RUN) {
+        unsigned t0 = os88_ticks();
+
+        a2_slice();
+        if (a2_state == A2_ST_RUN) {
+            if (os88_ticks() == t0) {
+                a2_fastn++;
+                if (a2_fastn >= 4) {
+                    a2_fastn = 0;
+                    if (a2_budget < A2_SLICE_MAX) {
+                        a2_budget += a2_budget;
+                        /* THE DOUBLING IS CLAMPED AND THE TEST IS `<= 0` AS
+                         * WELL AS `>`: `int` is SIXTEEN BITS here, so a
+                         * doubling that landed past 32,767 would arrive at the
+                         * core NEGATIVE and expire before the first fetch -
+                         * a machine stopped dead by its own speed. */
+                        if (a2_budget > A2_SLICE_MAX || a2_budget <= 0)
+                            a2_budget = A2_SLICE_MAX;
+                    }
+                }
+            } else {
+                a2_fastn = 0;
+                if (a2_budget > A2_SLICE_MIN)
+                    a2_budget = a2_budget / 2;
+            }
+        }
+    }
+    a2_speed_fold();
+    /* THE TICK IS RE-READ AFTER THE SLICE, and that is not tidiness: the flush
+     * is paced at most once per HOST tick and a slice can cross one, so a `t`
+     * taken before the slice prices the flush against the tick the wake
+     * STARTED in - two flushes inside one tick when the slice is short, and a
+     * skipped one when it is long. */
+    t = os88_ticks();
 
     /* --- has the machine written anything? ONE byte, ONE read -------------
      * The C's own a2_dirty_any is set by a2_dirty_scan, which runs INSIDE the
@@ -964,11 +1203,6 @@ void *os88_main(void)
                                              * MIXED/PAGE2/HIRES off, which is
                                              * what a II+ powers up in */
     a2_scratch_clear();
-    a2_zfill(0, 0, A2_SCR_BASE);            /* WAVE 1 ZEROES THE RAM. AppleWin's
-                                             * `FF FF 00 00` power-on pattern
-                                             * and its three pokes are wave 2's
-                                             * (section 4.5), with the reset
-                                             * that needs them */
     /* THE KEY-STATE MAP IS ARMED HERE AND NOWHERE ELSE (section 6.4).
      * OSAPI_KEY_DOWN's FIRST call clears and arms the map and always answers
      * "up", so arming it from the first slice would erase the make os88_onkey
@@ -979,7 +1213,18 @@ void *os88_main(void)
                                              * RANGE, so the write window is
                                              * taken over the display page
                                              * from the very first poke */
-    a2_selftext();                          /* WAVE 1 SCAFFOLDING - see above */
+    /* THE MACHINE IS POWERED ON HERE, and this is where wave 1's a2_selftext()
+     * scaffolding used to be: the Autostart Monitor writes the display page
+     * itself from now on, which is what a screendump of this port is supposed
+     * to be a photograph of.
+     *
+     * a2_power_on lays AppleWin's FF FF 00 00 pattern with its three
+     * compatibility pokes, ASSERTS the PWREDUP mismatch so the ROM takes the
+     * cold path, sets A = X = Y = $FF and SP = $01FF and then takes the
+     * Ctrl-Reset path - which is what leaves SP at $01FC, the value AppleWin
+     * actually starts the ROM on (section 4.5). */
+    a2_power_on();
+    a2_sp_tick = os88_ticks();
     a2_menu_state();
     a2_sh_inval();
 
@@ -1014,8 +1259,10 @@ void *os88_main(void)
      * (a2_wants_wake). One-shot, re-armed inside os88_ontimer. */
     os88_wm_ontimer(win);
     a2_tmr_ok = os88_wm_timer(win, A2_FLASH_TICKS) == 0;
-    a2_state = A2_ST_HALT;                  /* WAVE 2 puts the 6502 out of
-                                             * reset here and sets A2_ST_RUN */
+    /* ...AND THE 6502 IS ALREADY OUT OF RESET (a2_power_on above), so the
+     * state is set here rather than at the poke: a2_menu_state has already run
+     * against it and the first wake is what starts the machine moving. */
+    a2_state = A2_ST_RUN;
     a2_kick = 1;
     return win;                             /* the first paint kicks */
 }

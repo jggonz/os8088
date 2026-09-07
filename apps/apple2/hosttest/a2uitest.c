@@ -669,9 +669,54 @@ void a2_zcopy_out(void *dst, unsigned a, unsigned n)
 
 int a2_wrote(void) { return h_scr[A2_SCR_ANY]; }
 
-int a2_run(unsigned cycles) { (void)cycles; return A2_RUN_JAM; }
+void a2_zpower(unsigned a, unsigned n)
+{
+    unsigned i;
+
+    for (i = 0; i < n; i++)
+        h_ram[(a + i) & 0xFFFF] = (unsigned char)(((i & 3) < 2) ? 0xFF : 0x00);
+}
+
+/* a2_bread - the Apple II READ LADDER (APPLE2-SPEC section 3.2), which is what
+ * os88_main reads the reset vector through: RAM below $C000, the soft switches
+ * at $C000-$C0FF, $FF for the empty slot space, and the ROM part above
+ * $CFFF. The C's own a2_rd is RAM by construction and cannot reach $FFFC. */
+int a2_bread(unsigned a)
+{
+    a &= 0xFFFF;
+    if (a < 0xC000)
+        return h_ram[a];
+    if (a < 0xC100)
+        return a2_io_rd(a);
+    if (a < 0xD000)
+        return 0xFF;
+    return h_rom[(a - 0xD000) + A2_ROM_MAIN];
+}
+
+/* THE CORE ITSELF CANNOT RUN HERE - a2cpu.inc is 8086 assembly and
+ * `make a2cputest` is its gate, twelve rows with a negative control each. What
+ * the harness models is the SHAPE the wake depends on: a slice spends its
+ * whole budget and answers A2_RUN_SLICE, so a2_m.cnt is 0 and `ran = asked -
+ * cnt` is the budget. Nothing writes the Apple's memory, which is why every
+ * fixture below pokes the text page itself. */
+int a2_run(unsigned cycles)
+{
+    (void)cycles;
+    a2_m.cnt = 0;
+    return A2_RUN_SLICE;
+}
 void a2_cut(void) { }
 void a2_rebias(void) { }
+
+/* THE EMULATED CLOCK (APPLE2-SPEC section 5.1). On the machine it is
+ * A2_SCR_CLKB - A2_SCR_DEAD, which is exact inside a run as well as outside
+ * one; here the run is instantaneous, so the base IS the clock. It is masked
+ * to sixteen bits because that is what it is on the target, and the paddle
+ * deadlines are compared as wrapping differences. */
+static unsigned h_clkb;
+
+void a2_clk_set(unsigned v) { h_clkb = v & 0xFFFFu; }
+int  a2_now(void) { return (int)(short)(unsigned short)h_clkb; }
 
 /* --- the composer, transcribed (a2band.inc) ------------------------------ */
 static int n_band, n_group;
@@ -1015,6 +1060,18 @@ static void do_cmd(int menu, int item)
     os88_gfx_unlock();
 }
 
+/* h_halt / h_go - stop and start the emulated machine.
+ *
+ * FROM WAVE 2 A RUNNING MACHINE HAS WORK BY DEFINITION, so every "the handler
+ * must stop re-posting" assertion below is about a machine that has NONE.
+ * a2_wants_wake answers 1 for A2_ST_RUN and that is the design - the slice
+ * driver is what advances the 6502 - so the fixture stops the machine the way
+ * the machine itself stops, and puts it back afterwards. Using A2_ST_JAM
+ * rather than a pause flag is deliberate: Stop/Continue is wave 4's, and the
+ * JAM is the one halt this build can actually reach. */
+static void h_halt(void) { a2_state = A2_ST_JAM; }
+static void h_go(void) { a2_state = A2_ST_RUN; }
+
 static void do_key(int ascii, int scan)
 {
     os88_gfx_lock();                    /* W_ONKEY is dispatched under the
@@ -1211,6 +1268,8 @@ int main(void)
      * zero - and a handler that always re-posts spins the SHARED UI task at
      * ~1,400 round trips a second (693 us each), behind which every other
      * window's menu tracking and drags queue. */
+    h_halt();                           /* ...on a machine with NO WORK: see
+                                         * h_halt's own comment */
     wake0 = h_wake_posted;
     fire0 = h_tmr_fires;
     do_wake();
@@ -1220,6 +1279,7 @@ int main(void)
     if (h_wake_posted != wake0 && h_tmr_fires == fire0)
         fail("an idle wake re-posted itself - the wake handler is spinning "
              "the shared UI task");
+    h_go();
 
     /* --- one cell ------------------------------------------------------- */
     h_puts(3, 10, "X", 0);
@@ -1655,6 +1715,7 @@ int main(void)
      * to look at us. W_ONTIMER fires while minimized too (os88.h), which is
      * what keeps the clock arriving to be re-posted on. */
     h_minimized = 1;
+    h_halt();
     a2_sh_inval();
     cost_mark();
     do_wake();
@@ -1669,6 +1730,7 @@ int main(void)
                  "nothing with");
     }
     h_minimized = 0;
+    h_go();
     do_paint();
     do_wake();
     audit("after the window was restored from minimized");
@@ -1702,6 +1764,7 @@ int main(void)
      * times a second: the work is still OWED, and W_PAINT is what comes and
      * asks for it. */
     h_clip_refuse = 1;
+    h_halt();
     a2_sh_inval();
     cost_mark();
     do_wake();
@@ -1717,6 +1780,7 @@ int main(void)
                  "nothing with");
     }
     h_clip_refuse = 0;
+    h_go();
     do_paint();                         /* ...and the exposure is what pays */
     audit("after the window came back out from under");
 
@@ -1881,7 +1945,8 @@ int main(void)
             "Unable to load APPLE2.OVL.",
             "No bands here - text only.",
             "Another window has it.",
-            "No 6502 in this build.",
+            "No loader in this build.",
+            "6502: JAM at $",
             "Too large for a 48K Apple.",
             0
         };

@@ -46,6 +46,6 @@ static int ovl_a2_prog(int mode, const char *name, unsigned size_lo)
     (void)mode;
     (void)name;
     (void)size_lo;
-    a2_say("No 6502 in this build.");
+    a2_say("No loader in this build.");
     return 0;
 }

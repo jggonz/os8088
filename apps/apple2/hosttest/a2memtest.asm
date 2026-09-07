@@ -940,6 +940,19 @@ section .data
 _a2_chr: times 512 db 0
 section .text
 
+; ...and a2cpu.inc calls OUT to the compiled C for every $C000-$C0FF access in
+; BOTH DIRECTIONS (APPLE2-SPEC section 3.2). This harness tests the MOVERS,
+; not the core, so the two are stubs - but they have to EXIST, because a `call`
+; to an undefined symbol assembles at a different size on the second pass and
+; nasm then refuses the whole file with a page of `label changed during code
+; generation`. The core's own gate is hosttest/a2cputest.asm, where these two
+; answer values the test checks.
+_a2_io_rd:
+    mov ax, 0x00FF
+    ret
+_a2_io_wr:
+    ret
+
 putc:
     push ax
     push dx

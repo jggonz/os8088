@@ -52,22 +52,37 @@ static int ovl_a2_init(void)
 
 /* ovl_a2_cmd - the menu command shells.
  *
- * WAVE 1 REACHES NONE OF THEM, and that is a property of the menu rather than
- * of this function: every command whose body needs a 6502 is GREYED until
- * wave 2 (a2menu.c's rule 4), and the three that are live in wave 1 - Quit,
- * Toggle Fullscreen and Flashing text - are all answered in the RESIDENT half
- * for reasons a2menu.c states beside each. So this is the shell the later
- * waves fill:
+ * WAVE 2 REACHES TWO OF THEM - Machine > Control-Reset and Machine >
+ * Open-Apple-Control-Reset, whose bodies are section 4.5's reset line. Every
+ * other command whose body needs a 6502 is still GREYED (a2menu.c's rule 4,
+ * and section 10.3's "temporary and says so in the source"), and the three
+ * live in the RESIDENT half - Quit, Toggle Fullscreen and Flashing text - are
+ * answered there for reasons a2menu.c states beside each. So this is still
+ * the shell the later waves fill:
  *
- *   wave 4  Load/Save Program (a2prog.c), Copy and Paste, the three resets
- *           with AppleWin's two-row confirmation, Stop/Continue and Warp
+ *   wave 4  Load/Save Program (a2prog.c), Copy and Paste, Power On WITH
+ *           AppleWin's two-row confirmation, Stop/Continue and Warp
  *   the Disk II follow-up  Configure Slots... (a2disk.c)
+ *
+ * NEITHER RESET RUNS A BODY HERE. os88_oncmd is dispatched under the DESKTOP's
+ * gfx lock and a reset re-reads the vector, re-marks the frame and (for Power
+ * On) fills 48KB - so this LATCHES and the WAKE, which holds no lock, spends
+ * it (apple2.c's a2_reset_service). What is in the overlay is the two compares
+ * that decide which latch, which is once per command by definition.
  *
  * It answers 1 when it handled the command. */
 static int ovl_a2_cmd(int menu, int item, void *win)
 {
-    (void)menu;
-    (void)item;
     (void)win;
+    if (menu == A2_M_MACHINE) {
+        if (item == A2_I_RESET) {
+            a2_reset_req = A2_RST_CTRL;
+            return 1;
+        }
+        if (item == A2_I_OARESET) {
+            a2_reset_req = A2_RST_OACTRL;
+            return 1;
+        }
+    }
     return 0;
 }

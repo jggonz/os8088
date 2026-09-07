@@ -1097,6 +1097,63 @@ fits, and says nothing about a core that has no opcodes in it.
 
 ### Wave 2
 
+**The machine boots to `]`, you can type at it, and `PRINT 2+2` says 4.**
+`a2cpu.inc` is the derived copy whole - 256 opcodes with every illegal family,
+decimal ADC and SBC, the interrupt machinery, the `cs:` cycle table with the
+page-cross, taken-branch and branch-page-cross penalties, the signed-word
+countdown and the stack wrap as two instructions - with the Apple II model in
+place of the C64's seven per cent: a read fast path of two instructions and one
+compare, a write fence at `$C000` that drops everything above `$C0FF`, four
+rebias boundaries with the BLO/BOUND pair kept, one ROM bias, and a fetch in
+`$C000-$CFFF` that takes the DATA ladder rather than a RAM bias - which is what
+keeps the core's own scratch page unreachable with zero stated deviations.
+`a2io.c` answers the whole of `$C000-$C0FF` in both directions on AppleWin's
+nibble-decoded ranges, `a2kbd.c` is AppleWin's `asciicode` row 0 with its
+rejections and its unconditional uppercase fold, and `a2_power_on` /
+`a2_reset_cpu` are `CPU.cpp:769-812`'s reset line with I set, the jam cleared,
+D untouched and SP pulled down three within page one.
+
+**THE FIRST HONEST SIZE LINE (APPLE2-SPEC section 15.0):**
+
+| resident image | bss | resident total | `APPLE2.OVL` | resident shims | largest C frame |
+|---|---|---|---|---|---|
+| **26,706** | **10,394** | **37,100** of 61,440 | **883** | **8** | **42** of 96 |
+
+**24,340 spare; 17,900 under SPEC.md 73.9's 55,000 split trigger and 16,900
+under the 54,000 end-of-wave-5 ceiling.** `a2cpu.inc` alone assembles to 6,510
+bytes, within 8 of the C64 core's measured 6,518, which is this plan's `-120`
+term landing where it was estimated. **The contested budget of Decision 13 is
+settled in this plan's favour** - the fit review's 60,500-63,500 reading does
+not survive a measurement with the whole 6502 in it - so Disk II's deferral
+now rests only on the two reasons that remain: the ~280KB of heap it wants for
+two drive images, and the P5 ROM's authentic no-disk hang.
+
+**`make a2cputest` passes all twelve rows with every negative control
+failing.** Klaus Dormann's functional test settles at its success trap `$3469`
+(the control, `ADC #` dispatched to `ORA #`, settles at `$056D`);
+`tools/c64dec.py`'s 262,144 decimal cases match all four checksums; and the ten
+Apple II rows cover reads and writes across every mapping boundary, the drop
+above `$C0FF`, fetches across every boundary with an immediate straddling
+`$FFFF/$0000` and a backward `JMP` out of ROM, ES and DS restoration, the
+scratch page's inaccessibility in all three of read, write and EXECUTE, the
+soft-switch stub's returns for reads as well as writes, the illegal opcodes,
+table-driven cycle totals, the four unstable stores, and the interrupt stack
+with RTI.
+
+**On the glass** (`build/port-shots/wave2-*.png`, QEMU over QMP): the Apple
+II+ banner and the `]` prompt at launch; the cursor photographed on BOTH flash
+phases; `PRINT 2+2` showing `4`; Machine > Control-Reset abandoning a
+half-typed line and printing a fresh prompt, with `PRINT 3*7` = `21` after it
+to show the machine still runs. The status row reads **383 %** of a 1.02 MHz
+Apple under QEMU, which is the honest-speed posture doing its job: the figure
+is measured, not claimed.
+
+**Wave 1's `a2_selftext()` placeholder page is deleted**, as this plan said it
+would be. `a2_have_cpu` revives Control-Reset and Open-Apple-Control-Reset -
+the two rows whose bodies this wave wrote - and a second flag `a2_have_cmd`
+carries the rows whose bodies wave 4 writes, `Power On` among them because
+section 10.2 gives it a two-row confirmation that arrives with them.
+
 ### Wave 3
 
 ### Wave 4

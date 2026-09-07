@@ -16,14 +16,23 @@
  * is not optional.
  *
  * ----------------------------------------------------------------------------
- * WHAT IS HERE IN WAVE 1
+ * WHAT IS HERE
  * ----------------------------------------------------------------------------
- * The VIDEO STATE and nothing else: the four II+ display switches as flags,
- * the mode dispatch's view of them, and the page they select. The switches
- * are what the flush reads, so they exist from the wave that builds the
- * flush; the CALL-OUTS that let the emulated machine touch them arrive in
- * wave 2 with the core that would do the touching, and the keyboard latch,
- * the speaker toggle and the paddles arrive with theirs.
+ * The whole of $C000-$C0FF in BOTH DIRECTIONS - a2_io_rd and a2_io_wr, which
+ * the core's read and write ladders call out to (a2cpu.inc) - plus the reset
+ * line, both kinds (section 4.5), which is here for the reason c64io.c's
+ * c64_reset_cpu is: a reset is what the register file and the switch state
+ * are FOR.
+ *
+ * **MOST OF THESE ADDRESSES ARE RANGES AND NOT SINGLE BYTES** (section 5.1).
+ * A II+ decodes only the low four bits of the page, so $C000-$C00F ALL read
+ * the keyboard, $C010-$C01F ALL clear the strobe and $C030-$C03F ALL toggle
+ * the speaker (AppleWin Memory.cpp:564-566, :579-584, :636-650). Code in the
+ * wild uses the aliases - `LDA $C030` and `LDA $C03F` are the same click - so
+ * the dispatch is on the address's low NIBBLE within each block and never on
+ * an equality. $C060-$C06F is the one block that decodes three bits rather
+ * than four: `addr & 0x7`, "address bit 4 is ignored (UTAIIe:7-5)"
+ * (Memory.cpp:726-741), so $C068-$C06F mirror $C060-$C067.
  *
  * THE II+ SUBSET, AND THE FENCE (section 5.1). $C050/$C051 TEXT,
  * $C052/$C053 MIXED, $C054/$C055 PAGE2, $C056/$C057 HIRES - and the //e
@@ -40,6 +49,15 @@
  * source-changed and glass-unknown flags on a register write that changed
  * nothing.
  * ==========================================================================*/
+
+/* THE FLOATING BUS IS REFUSED, WITH THE ARITHMETIC (section 5.2). An unmapped
+ * read answers $FF, which is apple2emu's own posture. AppleWin's true floating
+ * bus needs a cycle-exact video scanner - 262 x 65 = 17,030 cycles a frame and
+ * eighteen bit extractions on every unmapped read - to compute a byte almost
+ * nothing reads, and it is the one place a bug is invisible. Every "answer the
+ * floating bus" below is this constant, and the reads that carry a bit 7 of
+ * their own (the buttons, the paddle timers) mask it off that. */
+#define A2_FLOAT 0xFF
 
 /* --- the II+ display switches, as AppleWin's Video.h:52-71 names them ----- */
 static int a2_v_text;                       /* $C050 off / $C051 on */
@@ -118,4 +136,292 @@ static int a2_video_set(int which, int on)
                                              * frame; one that does not marks
                                              * nothing */
     return 1;
+}
+
+/* ==========================================================================
+ * THE KEYBOARD LATCH AND THE STROBE (section 6.2)
+ * ========================================================================*/
+/* $C000-$C00F read the keycode with bit 7 set while a key is WAITING;
+ * $C010-$C01F clear the waiting flag and answer the floating bus. Nothing
+ * else - the //e's status reads at $C011-$C01F are not on this machine
+ * (section 10.4), and apple2emu registers them over that whole range
+ * unconditionally and is WRONG for a II+.
+ *
+ * THE READ AT $C000 REPORTS AND DOES NOT CONSUME (section 5.3). This document
+ * used to say every read in the page was side-effecting, which is false and
+ * is the sharper half of the rule: what is true is that a READ MAY BE A
+ * WRITE, at $C010-$C01F, $C030-$C03F, $C050-$C05F and $C070-$C07F. */
+static int a2_kb_code;                      /* the Apple byte, bit 7 clear */
+static int a2_kb_ready;                     /* ...and the strobe */
+
+static void a2_kb_put(int b)
+{
+    a2_kb_code = b & 0x7F;
+    a2_kb_ready = 1;
+}
+
+/* ==========================================================================
+ * THE SPEAKER - COUNTED AND SILENT THIS WAVE (section 8)
+ * ========================================================================*/
+/* $C030-$C03F toggles the one-bit speaker on a read OR a write. The toggle
+ * interval estimator that turns those toggles into a tone is WAVE 5's, and it
+ * exists in no reference - all three synthesize - so it is this port's own
+ * design and is labelled as such. What is here is the count, because the
+ * toggle is a real side effect of a read and the ladder has to take it. */
+static unsigned a2_spk_n;
+
+/* ==========================================================================
+ * THE GAME CONNECTOR (section 5.1)
+ * ========================================================================*/
+/* AN0-AN3, the four ANNUNCIATOR outputs at $C058-$C05F, even address off and
+ * odd on. **They are a II+'s own** - only the DHIRES reading of $C05E/$C05F is
+ * //e (AppleWin Memory.cpp:667-682, :876-886) - and they are STATE-ONLY here:
+ * this machine has nothing on the game connector, so what the port owes is
+ * that the four bits move and that a program writing them is not answered by
+ * the unmapped $FF path. */
+static int a2_an[4];
+
+/* THREE digital inputs at $C061-$C063, not two (Memory.cpp:726-728). PB0 and
+ * PB1 are the two a game reads and WAVE 3 puts F1 and F2 on them; PB2 has no
+ * host key at all. They REPORT a level and change nothing - reading $C061 no
+ * more presses a button than reading $C000 consumes a key (section 5.3). */
+static int a2_btn[3];
+
+/* THE PADDLE ONE-SHOTS. A read or a write anywhere in $C070-$C07F arms all
+ * four (Memory.cpp:753-756, :783-786) - and AppleWin leaves each timer that is
+ * STILL RUNNING exactly as it is (Joystick.cpp:725-729), so a program that
+ * strobes the trigger inside its own count loop, which is what every PDL()
+ * read does, is not handed a timer that never expires. $C064-$C067 then answer
+ * bit 7 set until the deadline passes, and READING ONE DOES NOT RESTART IT.
+ *
+ * THE SCALE IS 2816/255 = ~11.04 EMULATED CYCLES PER UNIT (Joystick.cpp:677,
+ * :703-705), not exactly 11: MII's `value * 11` (mii_analog.c:69-77) is an
+ * approximation and is named as one here rather than copied as a fact. This
+ * port's paddles answer CENTRE (section 10.3), so the deadline is a constant:
+ * 127 * 2816 / 255 = 1,402 cycles, computed once here rather than every arm.
+ *
+ * THE CLOCK IS a2_now(), WHICH IS EXACT INSIDE A RUN, and that is the whole
+ * reason it exists: the arm at $C070 and the read at $C064 are both reached
+ * from INSIDE a2_run, where the C's own per-slice counter has not moved yet.
+ * a2cpu.inc computes it as A2_SCR_CLKB - A2_SCR_DEAD. */
+#define A2_PDL_CENTRE  127
+#define A2_PDL_CYCLES  1402                 /* 127 * 2816 / 255 */
+static int a2_pdl_on[4];
+static int a2_pdl_end[4];
+
+static void a2_pdl_trigger(void)
+{
+    int i, now;
+
+    now = a2_now();
+    for (i = 0; i < 4; i++) {
+        if (a2_pdl_on[i] && (int)(a2_pdl_end[i] - now) > 0)
+            continue;                       /* still running: the strobe has
+                                             * NO EFFECT (GH#985) */
+        a2_pdl_on[i] = 1;
+        a2_pdl_end[i] = now + A2_PDL_CYCLES;
+    }
+}
+
+static int a2_pdl_rd(int i)
+{
+    int now;
+
+    now = a2_now();
+    if (a2_pdl_on[i]) {
+        if ((int)(a2_pdl_end[i] - now) > 0)
+            return A2_FLOAT;                /* bit 7 SET: still counting */
+        a2_pdl_on[i] = 0;
+    }
+    return A2_FLOAT & 0x7F;
+}
+
+/* ==========================================================================
+ * $C050-$C05F - the four video switches, and the four annunciators
+ * ========================================================================*/
+/* THE VIDEO SWITCHES ARE GUARDED BY VALUE (section 5.4) and a2_video_set above
+ * is where that guard lives: a write that sets a flag to the value it already
+ * held marks nothing. The C64 measured the alternative at 25 forced full-width
+ * blits, ~234 ms, for a register write that changed nothing. */
+static void a2_c05x(int lo)
+{
+    int n;
+
+    n = lo & 0x0F;
+    if (n < 8)
+        a2_video_set(n >> 1, n & 1);        /* $C050..$C057, pair by pair */
+    else
+        a2_an[(n - 8) >> 1] = n & 1;        /* $C058..$C05F, AN0-AN3 */
+}
+
+/* $C060-$C06F, on `addr & 7` because bit 4 is ignored (UTAIIe:7-5) */
+static int a2_c06x(int lo)
+{
+    int n;
+
+    n = lo & 7;
+    if (n == 0)
+        return A2_FLOAT;                    /* $C060 TAPEIN - no cassette */
+    if (n < 4)
+        return a2_btn[n - 1] ? A2_FLOAT : (A2_FLOAT & 0x7F);
+    return a2_pdl_rd(n - 4);
+}
+
+/* ==========================================================================
+ * THE TWO CALL-OUTS (section 5.1) - the core's ladders reach these
+ * ========================================================================*/
+/* A C SIDE THAT TREATS A READ AS PURE GIVES A MACHINE THAT BOOTS TO `]` AND
+ * THEN NEVER CHANGES VIDEO MODE. That is `make a2cputest` row 8 and it is not
+ * optional: the ROM sets TEXT with `LDA $C051`, and a read that did not take
+ * the switch would leave a booted machine that never leaves the mode it
+ * started in. */
+static int a2_io_rd(unsigned a)
+{
+    int lo;
+
+    lo = (int)(a & 0x00FF);
+    switch (lo >> 4) {
+    case 0x0:                               /* $C000-$C00F, the latch */
+        return a2_kb_code | (a2_kb_ready ? 0x80 : 0);
+    case 0x1:                               /* $C010-$C01F, the strobe */
+        a2_kb_ready = 0;
+        return A2_FLOAT;
+    case 0x3:                               /* $C030-$C03F, the speaker */
+        a2_spk_n++;
+        return A2_FLOAT;
+    case 0x5:
+        a2_c05x(lo);
+        return A2_FLOAT;
+    case 0x6:
+        return a2_c06x(lo);
+    case 0x7:                               /* $C070-$C07F, the trigger */
+        a2_pdl_trigger();
+        return A2_FLOAT;
+    default:
+        /* $C020 the cassette output, $C040 the utility strobe, $C080 the
+         * Language Card and $C0E0 the Disk II controller (the follow-up PR,
+         * section 14). None is on this machine, and an unmapped read answers
+         * the floating bus. */
+        return A2_FLOAT;
+    }
+}
+
+static void a2_io_wr(unsigned a, int v)
+{
+    int lo;
+
+    (void)v;                                /* NOTHING IN THIS PAGE TAKES A
+                                             * VALUE on a II+: every switch is
+                                             * addressed, not written */
+    lo = (int)(a & 0x00FF);
+    switch (lo >> 4) {
+    case 0x1:
+        a2_kb_ready = 0;
+        break;
+    case 0x3:
+        a2_spk_n++;
+        break;
+    case 0x5:
+        a2_c05x(lo);
+        break;
+    case 0x7:
+        a2_pdl_trigger();
+        break;
+    default:
+        /* $C000-$C00B ON WRITES are the //e's paging switches - 80STORE,
+         * RAMRD, RAMWRT, ALTZP and the rest - and $C00C-$C00F 80COL and
+         * ALTCHARSET. NONE OF THEM IS ON THIS MACHINE and none is greyed
+         * either (section 10.4): greying a //e card on an Apple II+ hands the
+         * reader a //e checklist. AppleWin's IS_APPLE2 gates are the
+         * checklist of exactly where that fence is. */
+        break;
+    }
+}
+
+/* ==========================================================================
+ * RESET, BOTH KINDS (section 4.5)
+ * ========================================================================*/
+/* THE RESET LINE IS THE NMOS 6502'S AND NOT A CONVENIENCE
+ * (AppleWin source/CPU.cpp:798-812):
+ *
+ *   - **I is SET.** A reset that leaves interrupts enabled runs the ROM's
+ *     initialisation with IRQ live.
+ *   - **The JAM is cleared.** A jammed core that is never un-jammed makes
+ *     Ctrl-Reset - the one recovery a user has - do nothing at all, which
+ *     reads as the port having frozen.
+ *   - **D is NOT cleared by an NMOS reset**, and it is tempting to clear it.
+ *     AppleWin clears it only for a 65C02 (`if (GetMainCpu() == CPU_65C02)`),
+ *     and this machine is a 6502.
+ *   - **SP wraps WITHIN PAGE ONE.** `SP - 3` is a byte subtraction; the stack
+ *     pointer is a page-one offset and cannot leave that page.
+ */
+static void a2_reset_cpu(void)
+{
+    a2_m.p = (a2_m.p | 0x24) & 0xFF;        /* I set; bit 5 always reads 1.
+                                             * D IS NOT TOUCHED */
+    a2_m.s = (a2_m.s - 3) & 0xFF;           /* ...within page one */
+    a2_m.cnt = 0;
+    a2_m.reason = 0;
+    a2_m.pc = (unsigned)a2_bread(0xFFFC)
+            | (((unsigned)a2_bread(0xFFFD)) << 8);
+    a2_rebias();                            /* PC moved under the core's feet */
+    if (a2_state != A2_ST_DEAD)
+        a2_state = A2_ST_RUN;               /* THE JAM IS CLEARED */
+}
+
+/* a2_power_on - the cold machine (section 4.5).
+ *
+ * AppleWin initialises A = X = Y = $FF and SP = $01FF and THEN calls its
+ * reset, so what the ROM actually starts on is **$01FC** (CPU.cpp:769-774).
+ * That is the value reproduced here, and it is the power-on row taking the
+ * Ctrl-Reset path rather than a second constant.
+ *
+ * THE `FF FF 00 00` FILL IS A CHOSEN DETERMINISTIC APPROXIMATION and is named
+ * as one. AppleWin's corresponding pattern additionally RANDOMISES offsets
+ * $28/$29/$68/$69 in every 512-byte block (Memory.cpp:2340-2358); the three
+ * compatibility pokes below are exact at :2416-2436. This port takes the
+ * repeating fill WITHOUT the randomisation on purpose - a deterministic
+ * power-on is what makes a2cputest and the screendumps reproducible, and a
+ * program that depends on uninitialised RAM is depending on a machine nobody
+ * can reproduce either.
+ *
+ * `$03F2`/`$03F3` = `$55 $55` IS AN EMULATOR TRICK AND THE REQUIRED CONDITION
+ * IS A MISMATCH. $03F2/$03F3 is SOFTEV, the Monitor's warm-start vector, and
+ * **$03F4 is PWREDUP** (AppleWin bin/APPLE2E.SYM:65-66). The II+ ROM at
+ * $FA85-$FA8E runs `LDA $03F3; EOR #$A5; CMP $03F4; BNE ...`, so the POWER-UP
+ * path is taken when $03F4 != $03F3 XOR $A5. The $55 $55 poke works only
+ * because a freshly filled page leaves $03F4 = $FF while $55 XOR $A5 is $F0 -
+ * and it is that INEQUALITY the port has to guarantee, not the two $55s.
+ * Writing the pattern and then ASSERTING the mismatch is one line and makes
+ * the fill's choice irrelevant; assuming the $55s are the signature is a
+ * machine that cold-boots or does not depending on what happened to be in one
+ * byte. */
+static void a2_power_on(void)
+{
+    a2_zpower(0, 0xC000);                   /* FF FF 00 00 over $0000-$BFFF */
+    /* RNDL/RNDH forced NON-ZERO, because "Pooyan" reads them on a cold boot
+     * (Memory.cpp:2416-2421). The two statements are laid out plainly rather
+     * than beside a comment that opens on the first of them: c64.c's
+     * c64_reset_service carries the scar of exactly that, where a `c64_paste_
+     * req = 0;` sat INSIDE the block comment the line above it opened and
+     * compiled. */
+    a2_wr(0x004E, 0x20);
+    a2_wr(0x004F, 0x20);
+    a2_wr(0x620B, 0x00);                    /* ...:2426-2430 */
+    a2_wr(0xBFFD, 0x00);                    /* ...:2434-2436 */
+    a2_wr(0xBFFE, 0x00);
+    a2_wr(0xBFFF, 0x00);
+    if (a2_rd(0x03F4) == ((a2_rd(0x03F3) ^ 0xA5) & 0xFF))
+        a2_wr(0x03F4, a2_rd(0x03F4) ^ 0xFF);        /* THE MISMATCH, asserted
+                                                     * rather than assumed */
+    a2_m.a = 0xFF;                          /* CpuInitialize, CPU.cpp:771 */
+    a2_m.x = 0xFF;
+    a2_m.y = 0xFF;
+    a2_m.s = 0xFF;                          /* $01FF - and the reset below
+                                             * pulls it to $01FC */
+    a2_m.p = 0x20;
+    a2_io_init();                           /* the switches back to TEXT */
+    a2_kb_ready = 0;
+    a2_spk_n = 0;
+    a2_reset_cpu();
 }

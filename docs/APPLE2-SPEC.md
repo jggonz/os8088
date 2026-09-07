@@ -255,6 +255,17 @@ ever RAM to the emulated machine**, so no program can read the scratch and no
 write can reach it. The C64's two deviation paragraphs and both of their
 harness cases are deleted rather than transcribed.
 
+**AND THE FETCH TAKES THE SAME LADDER, WHICH IS THE HALF A READER WOULD MISS.**
+`a2_rebias_go` never biases `$C000-$CFFF` to RAM: PC in that range leaves the
+region marked "always re-bias" and every byte comes back through `a2_rd_bx`, so
+a fetch at `$C030` clicks the speaker exactly as a read there does, a fetch at
+`$C100` gets `$FF`, and **`JMP $CF00` finds `$FF` and not the countdown**. A
+core that biased the region to RAM for the fetch alone would make the whole
+page executable, and that is `a2cputest` row 7 with its negative control -
+which is the shipping text's own `$C000` compare moved to `$D000` at runtime
+(`a2_rebias_go.iofence`), because `_a2_run` empties `BOUND` on entry and a
+poke at the scratch would not survive to the first fetch.
+
 **The condition that makes this safe is stated here because it is the thing
 that can stop being true.** It holds only while nothing models a **Language
 Card** and no card claims `$C800-$CFFF` expansion ROM. Both are refused by
@@ -279,6 +290,17 @@ stale),
 `a2_copy_row` (the eleven-instruction assembly Copy loop) and, from wave 6,
 the segment arithmetic that reaches a track inside a disk-image claim larger
 than 64KB.
+
+**Wave 2 adds four**, and each is a mover or a clock rather than a
+convenience: **`a2_zpower`**, AppleWin's `FF FF 00 00` power-on pattern over
+49,152 bytes - the C form is 12,288 iterations of two near calls, about 270 ms
+on the target, spent inside `os88_main` before the window is up;
+**`a2_bread`**, one byte through the CORE's ladder, because the reset vector is
+in the ROM and `a2_rd` is RAM by construction; and **`a2_clk_set` /
+`a2_now`**, the emulated clock the paddle one-shots are armed and read against
+(section 5.1). `a2_now` answers `A2_SCR_CLKB - A2_SCR_DEAD`, which is exact
+INSIDE a run - which is where `$C070` and `$C064` are reached from - as well
+as outside one, because `a2_expire` leaves what was not spent in `DEAD`.
 
 Every `movs`/`cmps` loop loads DS and ES on purpose, restores both, leaves DF
 clear, and carries `cc8086:allow` with its reason. `hosttest/a2memtest.asm`
@@ -365,7 +387,28 @@ control the harness requires to FAIL.** Minutes, therefore **not** in
 | 12 | interrupt push and RTI |
 
 Every perturbation reaches the environment or the tables **at runtime**, never
-the source.
+the source, and each row names its own:
+
+| row | the negative control |
+|---|---|
+| 1 | `ADC #` dispatched to `ORA #` |
+| 2 | `SED` dispatched to `CLD`: the decimal path is never entered |
+| 3, 8 | the soft-switch stub answers a constant |
+| 4 | `STA abs` dispatched to `STA zp`, whose one-byte operand lands the store somewhere else entirely |
+| 5, 7 | **`a2_rebias_go.iofence`'s `$C000` compare moved to `$D000` in the shipping text**, which biases `$C000-$CFFF` to RAM: precisely the core that fetches the claim's own bytes where a soft switch, a slot's `$FF` or the scratch page belongs. It cannot be done by poking the scratch, because `_a2_run` empties `BOUND` on entry |
+| 6 | the `mov es, [FES]` after the call out NOPped out |
+| 9 | `LAX abs` dispatched to `NOP`, and `ARR #` to `AND #` |
+| 10 | one opcode's table cost made wrong |
+| 11 | `SHA abs,Y` dispatched to `STA abs,Y` |
+| 12 | `BRK` dispatched to `NOP` |
+
+**Two things this harness does that the C64's could not.** The Dormann fixture
+is a whole 64KB image, and on a 48K II+ its top 12KB is not RAM - so the
+harness copies `$D000-$FFFF` of it into the **ROM PART** as well, where those
+addresses are actually answered, and clears the core's scratch after the load
+because the image lands on top of `$CF00`. And **row 12's vectors are written
+through the ROM part**, not into RAM: `$FFFA-$FFFF` belong to the Autostart
+Monitor on this machine and a write there is dropped.
 
 ### 4.5 Reset, both kinds
 
@@ -494,8 +537,12 @@ the scale is **`2816/255` ~= 11.04 emulated cycles per unit**
 (`Joystick.cpp:677`, `:703-705`), not exactly 11; MII's `value * 11`
 (`mii_emu/src/mii_analog.c:69-77`) is an approximation and is named as one
 here rather than copied as a fact. This port's paddles answer centre (section
-10.3), so the deadline arithmetic is what wave 3 writes and this is the
-number it writes.
+10.3), so the deadline is a CONSTANT and **wave 2 writes it: 127 x 2816 / 255
+= 1,402 emulated cycles**, computed once rather than on every arm. The clock it
+is measured against is `a2_now()` (section 3.4), and that routine exists for
+this and for nothing else: the arm at `$C070` and the read at `$C064` are both
+reached from INSIDE `a2_run`, where a per-slice counter kept in the C has not
+moved yet.
 
 ### 5.2 The floating bus is refused, with the arithmetic
 
@@ -562,7 +609,7 @@ clears the waiting flag and answers the floating bus. Nothing else.
 | chord | what it does | why this chord |
 |---|---|---|
 | **Ctrl+F2** | Ctrl-Reset | AppleWin's own, scan `0x5F`, in the classic non-enhanced set an 83-key XT BIOS delivers |
-| **Ctrl+F3** | Open-Apple-Ctrl-Reset | scan `0x60`, same set |
+| **Ctrl+F3** | Open-Apple-Ctrl-Reset | scan `0x60`, same set. **On a II+ its body is not a //e chord carried over**: what Open-Apple-Ctrl-Reset does on a //e is force a COLD start, and on a II+ the Autostart Monitor decides that from `$03F4` != `$03F3` XOR `$A5` (section 4.5) - so the honest body is to break that equality and take the ordinary reset, RAM intact, which is what makes it a different row from `Power On` |
 | **Alt+Enter** | full screen, both directions | **AppleWin's own chord**, out of `help/keyboard.html`. An Apple II+ has no Alt key, so it collides with nothing |
 | **Ctrl+F** | full screen | SPEC.md 11.2.1's unconditional door, kept |
 | **F1** / **F2** | the II+'s **game buttons PB0 and PB1** (`$C061`/`$C062`), read as LEVEL through `os88_key_down` | a departure from AppleWin's Left-Alt / Right-Alt, recorded with its reason: Alt+Enter is this port's fullscreen chord. **They are HOST CONVENIENCES and not keys of the machine**: "Open-Apple" and "Solid-Apple" are //e KEYBOARD keys (`AppleWin/help/keyboard.html:29-44`) and a II+ has none - what it has is three digital inputs at `$C061-$C063` (`Memory.cpp:726-728`), of which PB0 and PB1 are the two a game reads |
@@ -1158,7 +1205,7 @@ few per cent of real speed on the target.
 | field | carries |
 |---|---|
 | message area | refusals, the overlay's `Unable to load APPLE2.OVL.`, the speaker's stated fact, and - from the Disk II wave - the sentence that says the drive is spinning and names Ctrl-Reset as the way to `]` |
-| speed | the **measured** percentage of a 1.02 MHz Apple II. The units are written from the XT reading taken in wave 7 |
+| speed | the **measured** percentage of a 1.02 MHz Apple II, right-aligned at the row's last cells and **drawn only while the message area is clear**. There is no column a message and a widget can both have - the mode fields hold 0-15 and `Unable to load APPLE2.OVL.` is 26 glyphs, which reaches cell 41 exactly - so the choice is which one loses, and a message is transient where a speed figure is not news; narrowing the message cap to 19 instead would truncate the one message a user most needs to read whole. It is counted in **64-cycle units with the remainder carried**, because 1,020,484 cycles a second does not fit the 16-bit `int` this C has and a truncation that dropped up to 63 cycles a slice would misreport by ~0.4 % on a machine taking sixty slices a second. The units are written from the XT reading taken in wave 7 |
 | video mode | the live mode: `TEXT` / `LORES` / `HIRES` at cells 0-4, plus `MIXED` at 6-10 and **`PG2`** at 12-14. `PG2` and not `PAGE2`, and it is arithmetic rather than taste: the message area starts at cell **16** because `Unable to load APPLE2.OVL.` is 26 glyphs and the row is 42, so the mode fields hold cells 0-15 and the third field has **four**. `PAGE2` is five |
 | drive | the motor lamp and `%02d/%02d` of current track and current byte over 256 - **the Disk II follow-up PR** |
 
@@ -1327,12 +1374,24 @@ Are you sure you want to reboot?
 **The speaker's synthesis fact** is stated on the status row and in section 8,
 which is its only home now that a Mockingboard row is off the bar entirely.
 
-**AND TWO GREYINGS ARE TEMPORARY AND SAY SO IN THE SOURCE**: in wave 1 every
+**AND THREE GREYINGS ARE TEMPORARY AND SAY SO IN THE SOURCE**: in wave 1 every
 command whose body needs a 6502 wears `OS88_MENU_DIS` off `a2_have_cpu`, which
-wave 2 sets, and `Mute` wears it off `a2_have_snd`, which wave 5 sets. They
+**wave 2 set**; the commands whose BODIES wave 4 writes wear it off
+`a2_have_cmd`; and `Mute` wears it off `a2_have_snd`, which wave 5 sets. They
 have no user-visible fact because there is no user of a wave - what ships is
 the PR - and rule 47's alternative, an item that is live and can only answer
 "not yet", is the thing 47 exists to stop.
+
+**IT IS TWO FLAGS AND NOT ONE, AND THE SPLIT IS WHERE THE BODIES ARE.** Wave 2
+gave `Control-Reset` and `Open-Apple-Control-Reset` real bodies - section 4.5's
+reset line is that wave's own subject and neither touches RAM - so
+`a2_have_cpu` revives exactly those two. Everything else that needs a 6502
+still has no body: Load Program..., Save Program..., Copy, Paste, Stop /
+Continue and Warp are wave 4's. **`Power On` is on `a2_have_cmd` too and for a
+reason of its own**: section 10.2 gives it a TWO-ROW CONFIRMATION, and a
+data-loss row shipped without the confirmation its contract names is not the
+item this document describes, so it comes alive in the wave that writes the
+confirmation and not before.
 
 **A `D` BAKED INTO THE LITERAL IS THE DEFECT THIS PARAGRAPH GUARDS AGAINST.**
 `a2_menu_state()` rewrites EVERY row that a later wave revives - including
@@ -1689,7 +1748,7 @@ re-design:
 
 ---
 
-## 15. The budget - PLANNED
+## 15. The budget - PLANNED, and the first MEASURED line
 
 SPEC.md 73's cap is **61,440** for resident image + bss, and SPEC.md 73.9's
 split trigger is **55,000 resident**.
@@ -1703,6 +1762,42 @@ prints (`image 19,300 + bss 10,312`, `APPLE2.OVL` 843) is recorded in
 `docs/APPLE2-PORT-PLAN.md`'s wave-1 paragraph as evidence that the package
 BUILDS and packs, and it is **not** a budget figure and not to be compared
 with the headline below: there is no 6502 in it.
+
+### 15.0 THE FIRST HONEST SIZE LINE - END OF WAVE 2, MEASURED
+
+| | measured | against |
+|---|---|---|
+| resident image | **26,706** | 43,500 planned |
+| bss | **10,394** | 13,000 planned |
+| **resident total** | **37,100** of 61,440 | **24,340 spare** |
+| `APPLE2.OVL` | **883** | 6,000 planned |
+| resident shims | **8** | - |
+| largest C frame | **42** bytes | the 96-byte cap |
+| the FILE on disk | **41,984** (image + `APPLE2.ROM`'s 14,848 and the header) | `WIRE_FILEMAX` 64,512 |
+
+**It is 17,900 UNDER the 55,000 split trigger and 16,900 under the
+end-of-wave-5 ceiling of 54,000, with the whole 6502 in it** - the core, the
+Apple II memory model, the soft switches in both directions, the II+ keyboard
+map and the reset line. `a2cpu.inc` assembles to **6,510 bytes**, which is
+within 8 bytes of the C64 core's measured 6,518 and is the plan's `-120` term
+landing where it was estimated.
+
+**What that settles.** The plan recorded a contested budget - this document
+read ~43,500 image and the adversarial fit review read 60,500-63,500 - and
+said the disagreement was not settled until this line. **It is settled in the
+plan's favour, and by a wide margin**, so Disk II's deferral (Decision 13) is
+no longer a budget decision at all: the follow-up PR's ~1,200 resident bytes
+fit with room to spare and the wave was lifted out for the two reasons that
+remain, the heap it wants for two drive images and the P5 ROM's authentic
+no-disk hang.
+
+**What is still to come**, on this document's own per-file terms: the three
+composers' other two (`a2_band_lores`, `a2_band_hires`, ~+1,400 with the shared
+accumulator), MIXED and PAGE2 and the tier table, the rest of the keyboard, the
+clipboard pair, Load and Save Program, the speaker's estimator and
+`a2fsx.inc`'s three raster writers (~+2,000). The planned total below still
+stands as the number to watch; what wave 2 removes is the risk that the port
+would hit the ceiling mid-feature, which is how CWORD lost time twice.
 
 ### 15.1 The headline - PLANNED
 
