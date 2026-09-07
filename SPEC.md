@@ -42420,8 +42420,8 @@ square-wave tone tier and a CPU-paced PCM clip tier, and a router that says
 who owns them — that is what every machine this OS boots on actually has, so
 that is what the kernel carries.
 
-Everything beyond it is a **loadable driver** (§51). `SOUND.DRV` on the
-system disk fills the two API slots the kernel holds empty without it —
+Everything beyond it is a **loadable driver** (§51). `SOUND.DRV`, or the
+386-only `HDA.DRV`, fills the API slots the kernel holds empty without one —
 `OSAPI_SND_FM` (0x00F8) and `OSAPI_SND_STREAM` (0x0100) — and may take the
 tone tier with it. A machine with an AdLib in it and the driver loaded has
 FM; a 128KB machine with neither card pays nothing for the code that would
@@ -42478,7 +42478,7 @@ machine's first beep and `SYSTEM.CFG` may not exist at all:
 SND_RT_AUTO (0)  unset: the best tier that actually answered at boot
 SND_RT_SPK  (1)  the PC speaker, whatever else is loaded
 SND_RT_FM   (2)  AdLib: FM only - no streams, no 12KB
-SND_RT_SB   (3)  Sound Blaster: FM and streams both
+SND_RT_SB   (3)  Digital audio stream (Sound Blaster or Intel HDA)
 ```
 
 **Three tiers, not two, and the middle one is the point.** An AdLib is an OPL2
@@ -43142,6 +43142,50 @@ whether `sbl_attach`'s F2h IRQ discovery agrees with the line the firmware
 took, are all the field machine's questions. The firmware reports DSP 2.1
 (`SBT_2`), which is the version gate `sb.inc` takes the auto-init `0x48`+`0x1C`
 path on, so that much is at least the path MartyPC's own DSP 2.01 exercises.
+
+### 34.11 Intel HDA on the ASUS Eee PC 1015PN
+
+`HDA.DRV` is the second `DRVC_SOUND` implementation. It targets the analogue
+audio path fitted to the 1015PN: Intel's NM10/ICH High Definition Audio
+controller at PCI 00:1b.0 and Realtek's ALC269 codec. It is an alternative to
+`SOUND.DRV`, not an extension of it: §51.2.1's one-driver-per-class rule keeps
+the two from publishing the stream slot simultaneously. The user unticks
+Sound, ticks Intel HDA, and keeps the same `OSAPI_SND_STREAM` applications.
+
+The hardware facts and programming model come from the vendor sources, not
+copied driver code: ASUS's 1015PN support inventory identifies ALC269, and the
+controller/register/verb implementation follows Intel's High Definition Audio
+Specification. Linux, SBEMU and VSBHDA were useful compatibility references,
+but their licensed source is not vendored or transcribed; the tree remains
+MIT and §1's no-vendored-dependencies rule holds.
+
+The native boundary does not change. Applications stage unsigned 8-bit mono
+at any accepted 4,000..44,100 Hz rate. The driver uses a Bresenham phase
+accumulator to resample that stream to HDA's standard 44.1-kHz rate, converts
+each sample to signed 16-bit stereo, and feeds four 8,192-byte bus-master
+periods. A one-tick driver worker polls LPIB and refills periods already played;
+the 32-KB ring is about 186 ms deep, so one scheduler tick cannot expose an
+ordinary refill delay. Output publishes `SND_CAP_PCM_BG`; input and FM are not
+claimed, so Recorder cannot record through this first hardware target.
+
+The driver is deliberately codec-specific at attach: vendor/device parameter
+`10ec:0269` must answer, and the configured path is ALC269 DAC node 02 through
+mixer 0c to speaker/headphone pins 14/15. Refusing an unknown codec is safer
+than sending amplifier and pin verbs to guessed nodes. Supporting another HDA
+codec means adding its discovered topology as a separate codec profile.
+
+HDA's MMIO BAR is normally above real-mode address space, so the driver uses
+short 386 unreal-mode FS access islands. Row byte `DRVR_MINCPU` is therefore a
+hard loader fence: the kernel compares it with `[cpu_tier]` before looking up
+or reading `HDA.DRV`. The file never enters an 8088/286 machine, while
+`SOUND.DRV` and the resident speaker remain wholly 8086 code. Bus-master state
+cost is a pinned 36-KB claim (BDL plus ring); the staging grant is allocated on
+demand up to 32 KB and released with its owner.
+
+This is specification- and build-verified support. The success path still
+requires a field check on a physical 1015PN: ordinary QEMU HDA codecs expose a
+different codec ID and correctly take the refusal path rather than pretending
+to validate the ALC269 routing.
 
 ## 35. Recorder — the sound layer's recording client
 

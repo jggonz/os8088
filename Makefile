@@ -2285,7 +2285,7 @@ $(BUILD)/bootdiagx144.img: $(BUILD)/bdxboot144.bin $(BUILD)/bootdiag.bin \
 # per BUILD DIRECTORY (SPEC.md 2.8.2) and a rule that builds a kernel outside
 # $(BUILD) overrides KMODDIR for itself - which a simply-expanded DRIVERS
 # would have baked in at parse time.
-DRIVERS = $(BUILD)/sound.drv $(BUILD)/hdd.drv $(BUILD)/net.drv
+DRIVERS = $(BUILD)/sound.drv $(BUILD)/hda.drv $(BUILD)/hdd.drv $(BUILD)/net.drv
 DRIVERS += $(BUILD)/ramdisk.drv $(BUILD)/ether.drv
 # ...and the RAM disk's on-demand half, which rides every disk the drivers do
 # but is NOT one of them: nothing puts it in drv_tab, the Drivers page never
@@ -2566,6 +2566,16 @@ $(SNDSTAMP): | $(BUILD)
 
 $(BUILD)/sound.drv: $(BUILD)/sound.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/sound.bin -o $@
+
+# Intel High Definition Audio output for 386+ machines.  This is a separate
+# sound-class alternative: old machines retain SOUND.DRV and the loader's
+# one-driver-per-class rule prevents both backends from owning sound at once.
+$(BUILD)/hda.bin: drivers/hda/hda.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ $<
+	@echo "hda:    $(call FILESIZE,$@) bytes"
+
+$(BUILD)/hda.drv: $(BUILD)/hda.bin tools/os88drv.py
+	python3 tools/os88drv.py $(BUILD)/hda.bin -o $@
 
 # The store above 1MB (SPEC.md 41.12). An OVERLAY, not a driver: os88drv.py
 # stamps it and names it 'overlay' because its class byte is DRVC_OVL, which

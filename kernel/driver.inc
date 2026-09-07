@@ -42,7 +42,8 @@
 ; =============================================================================
 
 %ifdef KERN_BIG
-DRV_MAX     equ 6               ; rows in drv_tab. The FIFTH is SPEC.md 72's
+DRV_MAX     equ 7               ; rows in drv_tab. The SEVENTH is the 386-only
+                                ; Intel HDA sound driver (SPEC.md 34.11).
                                 ; Ethernet card and the SIXTH is SPEC.md
                                 ; 9.11's absolute mouse - the one DRVC_OVL row
                                 ; in the table, which takes no publication
@@ -136,7 +137,7 @@ DRVR_ENT    equ 10              ; dw: its entry offset, banked at load
 DRVR_CLASS  equ 12              ; db: the DRVC_* this row expects
 DRVR_WANT   equ 13              ; db: 1 = the user wants it loaded
 DRVR_ERR    equ 14              ; db: DRVE_* from the last attempt
-DRVR_PAD    equ 15
+DRVR_MINCPU equ 15              ; db: CPU_* tier required before file is read
 DRVR_SIZE   equ 16
 
 ; --- load failures (SPEC.md 51.3). Every one of them is survivable. ----------
@@ -644,7 +645,7 @@ DRV_CFG_MAPN equ 8
 ; the kernel at the image's offset.
 %1 %+ _bit:
 %ifdef KERN_BIG
-    db 0, 1, 4, 2, 3, 5         ; sound, hdd, ether, ramdisk, net, vmmouse
+    db 0, 1, 4, 2, 3, 5, 6      ; sound, hdd, ether, ramdisk, net, vmmouse, HDA
 %else
     db 0, 1, 3, 2               ; sound, hdd, ether, net
 %endif
@@ -724,6 +725,8 @@ drv_t_vmm:   db 'Absolute mouse', 0  ; alone - the row below is inside the
 drv_f_eth:   db 'ETHER.DRV', 0   ; ...and the card's, on BOTH builds: the store
 drv_t_eth:   db 'Ethernet', 0    ; a RAM disk is made of is what kern_small has
                                 ; none of, and a network card is not
+drv_f_hda:   db 'HDA.DRV', 0
+drv_t_hda:   db 'Intel HDA', 0
 
 ; The published drivers' dispatchers, as FAR POINTERS - ONE PAIR PER CLASS.
 ; Adjacent and in this order because together they ARE the dword
@@ -788,7 +791,7 @@ drv_tab:
                                 ; the tick in the Drivers page is both the
                                 ; request and the record of it
     db DRVE_OK
-    db 0
+    db CPU_8086
 
     dw PKG_DISP, 0              ; row 1: the hard-disk driver (SPEC.md 51.8)
     dw drv_f_hdd, drv_t_hdd
@@ -801,7 +804,7 @@ drv_tab:
                                 ; boot to be told so. The Drivers page turns
                                 ; it on and SYSTEM.CFG remembers
     db DRVE_OK
-    db 0
+    db CPU_8086
 
     dw PKG_DISP, 0              ; row 2: the Ethernet card (SPEC.md 72).
     dw drv_f_eth, drv_t_eth     ; BROUGHT FORWARD from the end of the table
@@ -823,7 +826,7 @@ drv_tab:
     db 0                        ; NOT wanted by default (SPEC.md 51.3): the
                                 ; probe writes to an unknown card's registers
     db DRVE_OK
-    db 0
+    db CPU_8086
 
 %ifdef KERN_BIG                 ; ROW 3 IS kern_big's ALONE (SPEC.md 62.9.15).
                                 ; On kern_small the parallel link below takes
@@ -874,7 +877,7 @@ drv_tab:
                                 ; than the parallel link being shuffled down
                                 ; into it
     db DRVE_OK
-    db 0
+    db CPU_8086
 %endif
 
     dw PKG_DISP, 0              ; row 4: the parallel link (docs/NET-PLAN.md).
@@ -893,7 +896,7 @@ drv_tab:
                                 ; ports to find its cable, and a port with a
                                 ; printer on it is a real machine
     db DRVE_OK
-    db 0
+    db CPU_8086
 
 %ifdef KERN_BIG
 vmm_row:                        ; row 5: the VMware absolute pointer (SPEC.md
@@ -930,7 +933,17 @@ vmm_row:                        ; row 5: the VMware absolute pointer (SPEC.md
                                 ; sector of this driver, which is exactly what
                                 ; the XT should pay
     db DRVE_OK
-    db 0
+    db CPU_386
+%endif
+
+%ifdef KERN_BIG
+    dw PKG_DISP, 0              ; row 6: Intel NM10/ICH HDA + Realtek ALC269
+    dw drv_f_hda, drv_t_hda     ; (ASUS Eee PC 1015PN, SPEC.md 34.11)
+    dw 0, 0
+    db DRVC_SOUND               ; alternative to SOUND.DRV, never concurrent
+    db 0                        ; explicitly selected in the Drivers page
+    db DRVE_OK
+    db CPU_386                  ; loader gate: do not even read it on an XT
 %endif
 
 
@@ -975,6 +988,7 @@ DRVM_IMG_NET equ 7              ; ceil(build/net.drv     / 1024) - SEVEN
                                 ; icon in drivers/wirezone.inc, which both
                                 ; network drivers include
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 1024)
+DRVM_IMG_HDA equ 3              ; ceil(build/hda.drv     / 1024)
 
 DRVM_SND     equ DRVM_IMG_SND + 8 + 20    ; SBL_DMASZ (the DMA-visible double
                                 ; buffer and record ring) + SBL_POOLKB (the
@@ -1002,6 +1016,7 @@ DRVM_VMM     equ DRVM_IMG_VMM   ; the absolute mouse claims nothing either: it
 DRVM_NET     equ DRVM_IMG_NET   ; the parallel link claims NOTHING: its packet
                                 ; buffers are bss, and a driver's bss ships
                                 ; INSIDE its image (DRV_H_IMG)
+DRVM_HDA     equ DRVM_IMG_HDA + 36 + 32 ; pinned BDL/ring + largest staging grant
 
 drv_memk:                       ; one word per drv_tab row, in the same order
     dw DRVM_SND                 ; row 0: sound
@@ -1013,6 +1028,7 @@ drv_memk:                       ; one word per drv_tab row, in the same order
     dw DRVM_NET                 ; the parallel link, last on both builds
 %ifdef KERN_BIG
     dw DRVM_VMM                 ; row 5: the absolute mouse (kern_big alone)
+    dw DRVM_HDA                 ; row 6: Intel HDA (kern_big, 386+ alone)
 %endif
 %if ($ - drv_memk) / 2 != DRV_MAX
   %error "drv_memk has drifted from drv_tab: one word per row, same order"
@@ -2324,7 +2340,13 @@ drv_load_x:
                                 ; user may have been anywhere (SPEC.md 51.5.2)
     call drv_row_x              ; BX = the row for the whole routine
 %ifdef KERN_BIG                 ; ...and everything below is shared with
+    mov al, [cpu_tier]          ; A 386-only row is rejected BEFORE drv_find:
+    cmp al, [bx+DRVR_MINCPU]    ; its opcode bytes never enter an XT's memory.
+    jb .cpu
     jmp short drv_load_row      ; drv_load_at, which is kern_big's alone
+.cpu:
+    mov al, DRVE_HW
+    jmp drv_load_row.fail
 
 ; -----------------------------------------------------------------------------
 ; drv_load_at - load into a row-shaped record that is NOT in drv_tab
