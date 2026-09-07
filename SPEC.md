@@ -92674,12 +92674,24 @@ text ships as `LICENSE.TXT` on every floppy that carries the binary**, the way
 attribution is in the About panel (§91.7.3), which is the part of the program
 a user can see.
 
-Two further references are read and cited and **neither ships**:
+Two further references are read and cited and **neither is vendored**:
 
 | reference | licence | how it is used |
 |---|---|---|
 | `agnes` | MIT | the **specification** for the loopy `v`/`t` scroll, palette-address mirroring, sprite evaluation and the sprite-0 exclusion; and the host-side behaviour oracle that generates the frame-hash goldens |
 | `nofrendo` | LGPL-2 | read for **intent only** and cited file and line in comments. Nothing is transcribed |
+
+**agnes is a SHIPPED-CODE reference, not only the harness's oracle, and its
+notice ships with the binary.** `nippu.c`'s loopy `v`/`t` pair, its `$2007`
+read buffer and its palette mirror follow agnes's expressions — deliberately,
+for the nofrendo rule below — and the About panel credits it in those words
+(`Scroll model from agnes (MIT)`, §91.7.3). MIT asks for its notice in all
+copies or substantial portions, so `README.TXT` on every INFONES floppy
+reproduces the MIT text and the `Copyright (c) 2019 Krzysztof Gabis` line
+verbatim, beside the InfoNES paragraph (`tools/nigetroms.py --readme`).
+Resolution **R9** put that notice in the harness files alone, on the
+assumption that agnes would stay an oracle; wave 1 took the model into shipped
+code, and the notice travels with the code rather than with the test.
 
 **The nofrendo line is a rule and not a preference.** Its `ppu_renderbg()` is
 the correct model, and its file legend requires any partial reproduction to
@@ -92757,7 +92769,8 @@ around line 1917; `apps/cc/os88.h` mirrors it in six bytes with a build-time
                 画面(&V) { ｻｲｽﾞ(&S) { 1倍(&1) CHECKED, 2倍(&2), 3倍(&3) },
                            ｸﾘｯﾌﾟ(&C) { 上端・下端(&V) } },
                 ｻｳﾝﾄﾞ(&S) { ﾐｭｰﾄ(&M) } }
-ﾍﾙﾌﾟ(&H)      { ROM情報(&I), ﾊﾞｰｼﾞｮﾝ情報(&A) }
+ﾍﾙﾌﾟ(&H)      { ROM情報(&I), ﾊﾞｰｼｮﾝ情報(&A) }   ← the .rc's own spelling,
+                                              without the dakuten on the ｼ
 ```
 
 **There is no English original anywhere in the reference tree**, so every
@@ -92772,8 +92785,14 @@ What the flattening did, each recorded as an adaptation rather than presented
 as a traced string:
 
 - **Frame skip's three-item submenu becomes three items in the flat Options
-  list**, with the check state carried in the label (§91.9).
-- **Screen > Size 1x/2x/3x is DROPPED**, not greyed — §91.12 has the reason
+  list**, with the check state carried in the label (§91.9) — **and the two
+  directions are in the REVERSE of the original's order.** The `.rc` is ｵｰﾄ
+  (`:75`), 減らす (`:77`, *decrease*), 増やす (`:78`, *increase*); the package is
+  `Frame skip: Auto`, `Frame skip faster` (= 増やす), `Frame skip slower`
+  (= 減らす), so the **speed** direction reads top to bottom, which is the only
+  thing the English labels are about. It is an adaptation and is recorded here
+  rather than left for a reader to find by diffing.
+- **Screen > Size 1x/2x/3x is DROPPED**, not greyed — §91.11 has the reason
   and the arithmetic.
 - **Screen > Clip becomes one item in the flat list**, live or greyed by mode.
 - **`MENUITEM SEPARATOR` in the File menu is DROPPED**: the kernel's item
@@ -92787,7 +92806,13 @@ as a traced string:
   inside the bracket — so Stop unloads the ROM and returns the panel to its
   *No ROM* state.
 - **Help > ROM information and Help > Version information collapse into one
-  About item** (§91.12).
+  About item** (§91.11).
+
+**Every `.rc :N` citation in `apps/infones/nimenu.c` is a real line of
+`src/win32/InfoNES_Resource_Win.rc`**, and the line numbers are the same before
+and after `iconv -f CP932`. The first draft was off by one on all eight and
+pointed three of them at a `MENUITEM SEPARATOR` or an `END`; a citation nobody
+can grep for is not a citation, which is why this sentence is in the contract.
 
 #### 91.2.2 The About line — four pairings in the tree, one quoted
 
@@ -92821,41 +92846,90 @@ arithmetic if the heap cannot answer (§47, `RUNCPM`'s refusal shape). The
 package image carries code, the panel's shadow, the small tables and the
 reduction tables, and nothing that scales with the ROM.
 
-#### 91.3.1 The claim table
+#### 91.3.1 The claim table — offsets, ownership and lifetime
 
-| claim | size | holds |
-|---|---|---|
-| the tile cache | 32,768 | one byte per pixel of decoded CHR: 64 bytes a tile, 512 tiles |
-| CHR / VRAM | 8,192 + 2,048 + 256 | the CHR bank window, the two nametables, and OAM |
-| CPU RAM | 2,048 | `$0000-$07FF`, the segment `DS` points at for the whole of the core |
-| SRAM | 8,192 | `$6000-$7FFF`, present whether or not the header claims it |
-| PRG banks | up to 262,144 | the program, addressed through the bank table |
-| CHR banks | up to 131,072 | the character data the cache decodes from |
-| the staging claim | up to 65,536 | transient, for a whole-file read; released as soon as the load is done |
+**Five claims, and the first of them is one segment with a fixed layout.** The
+core runs with `DS` pointing at the machine claim for the whole of a run, so
+everything the core reaches without a call out — the CPU RAM, the SRAM window
+and its own scratch — is a displacement inside that one claim, and the PPU's
+own memory rides in the same segment because the two are never live at once.
 
-An NROM title needs about **88KB** of claim. The hard cap is **256KB PRG +
-128KB CHR**, which is the bank table's own size, and it is stated on the panel
-so the refusal is never a surprise.
+**Claim 1 — the machine claim, 13KB, `DS` for the whole of the core.**
+
+| offset | size | holds | written by |
+|---|---|---|---|
+| `0x0000` | 2,048 | CPU RAM, `$0000-$07FF`. `$0800-$1FFF` mirrors it, and the mirror is one `and bh,0x07` on the core's fast path | the core |
+| `0x0800` | 8,192 | the SRAM window, `$6000-$7FFF` | the core |
+| `0x2800` | 2,048 | the two nametables | `nippu.c`, `niband.inc` |
+| `0x3000` | 256 | OAM | `nippu.c` (`$4014` and `$2004`) |
+| `0x3100` | 32 | palette RAM, after the every-four mirror rule | `nippu.c` |
+| `0x3120` | 256 | **the core's scratch** — the cycle countdown, the fetch bias's low edge and bound, the cached fetch `ES`, the interrupt byte, the open-bus byte, the halt byte, three word temporaries, the saved carry and page-carry bytes, and — **at `+0x80`, at a stride of 32** — the four PRG window segments, which therefore occupy `0x31A0`, `0x31C0`, `0x31E0` and `0x3200` | the core, `nimap.c` |
+| `0x3220` | 480 | reserved, so a later wave adds a scratch word without moving four offsets | — |
+
+**The scratch is 256 bytes and not 96, and the size is load-bearing rather than
+generous**: `NI_S_PRG` is `0x80` at a stride of `NI_S_PRGSTR` = 32 (see below),
+so the fourth window segment sits at `0x3120 + 0xE0`. A draft of this table said
+96 and marked `0x3180` upward *reserved*, which handed a later wave four
+segment bases the core dereferences through `ES` on **every fetch** as free
+space. `apps/infones/nicpu.inc`'s `NI_SCR`/`NI_S_*` block and
+`apps/infones/infones.c`'s `NI_O_*`/`NI_S_*` block are the same table as this
+one, and all three say so; there is no build-time check that can see across the
+two languages.
+
+The **OAM DMA's odd/even parity** is *not* in this scratch — it is
+`nippu.c`'s `ni_dma_odd`, a byte of the package's own bss, because only the C
+ever reads or writes it.
+
+**The countdown and the interrupt byte live HERE and not in the package's
+bss**, and that is a measured decision rather than tidiness: a hot counter in
+the package's own bss is a TCG slow path under QEMU when that page also holds
+translated code — it cost `RUNCPM` 5x on the whole Z80 core (`.claude/skills/`
+`port-to-os8088/LESSONS.md` §13) — and the 8088 is happier reading a claim
+too, because the claim is already the segment `DS` holds.
+
+**The four PRG window segments are a 4-entry table, one per 8KB of
+`$8000-$FFFF`**, so MMC3's 8KB granularity and MMC1's 16KB and 32KB modes both
+fall out of the same table with no second mechanism. (An earlier draft of this
+section said sixteen words at 4KB; nothing needs 4KB granularity and the
+narrower table costs a shift the core does not have a spare register for.) The
+entries are **segment bases**, not offsets: a read at `$A000` is
+`ES = window[1]`, offset `addr & 0x1FFF`, and a fetch is the same segment
+biased so `[es:si]` is `PC`'s byte.
+
+**Claims 2 to 5.**
+
+| claim | size | lifetime | holds |
+|---|---|---|---|
+| PRG | up to 262,144, in up to four 64KB claims | the loaded ROM's | the program. A ROM of 16KB or 32KB is one claim of exactly its size |
+| CHR | up to 131,072 in two 64KB claims, **or 8,192 of CHR-RAM** | the loaded ROM's | the character data the cache decodes from |
+| the tile cache | 32,768 | the loaded ROM's | one byte per pixel of decoded CHR: 64 bytes a tile, 512 tiles |
+| staging | the ROM's own size, up to 65,536 | **TRANSIENT** — taken at the top of a load and freed before the load returns | one whole-file `os88_file_read_seg`, out of which the header skew is copied |
+
+**A reload frees the old ROM's claims BEFORE it takes the new load's**, so the
+peak is one ROM plus the staging claim and never two ROMs. The machine claim
+and the tile cache are not re-taken.
+
+An NROM title is **13 + 16 + 8 + 32 = 69KB** of standing claim, with a
+transient peak of about **94KB** while the staging claim is up. The hard cap is
+**256KB PRG + 128KB CHR**, and it is stated on the panel so the refusal is
+never a surprise.
 
 **Every claim base is 512-byte ALIGNED**, without exception. `int 13h` answers
 a transfer straddling a 64KB physical boundary with error 09h, and only a
 512-aligned start prevents it (CLAUDE.md's hard rules; `RUNCPM` saw it on
 about 13% of ZEXDOC launches on real hardware). QEMU never shows this failure.
-
-**The PRG bank table is a table of SEGMENT BASES**, sixteen words, one per 4KB
-of the `$8000-$FFFF` window, built by the loader and read by the core and by
-every mapper. It is resident bss and not a claim: only the *data* moves.
+A claim's own base is 512-aligned by construction (§50.3), and so is any
+offset into it that is a multiple of `0x200` — but `seg + 0x10` is not, which
+is exactly the trap §91.13.2's staging read exists to walk around.
 
 #### 91.3.2 Every claim is PINNED, and that is a decision
 
 `OSAPI_MEM_MOVABLE` (slot 0x0400) exists and has no C thunk, because it takes
 a relocation **proc** and a C package cannot name one (§66). That is not a gap
 left open here: **every claim in this package stays pinned by design.** The
-core caches segment bases in the bank table and in `ES`, and a compaction
+core caches segment bases in the window table and in `ES`, and a compaction
 would invalidate both silently — which is exactly the failure §66 warns about,
 one segment further from the poke that would fix it.
-
-### 91.4 The 2A03 core
 
 The core is **hand-written 8086** in `apps/infones/nicpu.inc`, in
 `apps/c64/c64cpu.inc`'s shape, because §73.11's posture is that nothing on a
@@ -92895,6 +92969,17 @@ the C and the harnesses read the register the emulated machine has rather than
 this table's layout; PHP, PLP, BRK, RTI and interrupt entry all go through the
 same two helpers.
 
+**A ROTATE SETS NEITHER N NOR Z.** `rcl` and `rcr` touch `CF` and `OF` and
+nothing else on an 8086, where `shl` and `shr` set `SF`, `ZF` and `CF`
+together — so ROL, ROR, ARR and the read-modify-write rotates cannot take
+their N and Z from a `lahf` after the rotate, and take them from an `or` of
+the result with the rotate's own carry saved across it. `nestest` caught this
+at **line 1,020 of 8,991** (`ROR A` with A = $01 and C = 1 must leave $80 with
+N set; the first version reported the flags of the instruction *before* it),
+and blargg's `03-immediate` caught the same shape in ARR. Every one of the
+1,019 lines above it matched, which is the argument for that log being the
+gate a 6502 is built against.
+
 **The stack wrap is `and di,0x00FF / or di,0x0100`**, not `and di,0x01FF`. The
 one-line form is wrong and silently so — `0x0200 & 0x01FF` is `0x0000` — and
 C64-SPEC §4.1 records the same defect passing an entire BASIC boot
@@ -92922,6 +93007,167 @@ not used here.
 three scanlines and needs no fractional accumulator: 113 2/3 CPU cycles a line
 and 29,780.5 a frame are the canonical NTSC figures, and InfoNES's own 113 /
 29,828 / vblank-at-243 roundings are deliberately not taken.
+
+#### 91.4.3 The bus and the interrupt contract
+
+Written **before** a register handler was translated, because every clause
+below is a thing an emulator can be silently wrong about — the program runs,
+the picture appears, and one game in ten hangs.
+
+**The address decode.** Three compares on the core's fast path and everything
+else is a call out:
+
+| range | path |
+|---|---|
+| `$0000-$1FFF` | the 2KB CPU RAM, mirrored by `and bh,0x07` — **in the core** |
+| `$2000-$5FFF` | the slow path: the PPU register file, the APU/IO registers, and the unmapped hole |
+| `$6000-$7FFF` | the SRAM window — **in the core** |
+| `$8000-$FFFF` | PRG, through the four-entry window table — **in the core** for a read; a WRITE is the mapper and goes out |
+
+**SRAM is always present**, whether or not the header's flag claims it. That
+is a stated deviation with two reasons: every blargg single writes its result
+protocol into `$6000` and would have nowhere to put it, and 8KB is the
+cheapest possible answer to "what does an unmapped `$6000` read give". The
+consequence is that the open-bus case for `$6000-$7FFF` never arises here.
+
+**The D flag is STATE, not arithmetic.** A 2A03 has no decimal ADC or SBC —
+the silicon does not carry the adjust — so `ADC` and `SBC` never look at D.
+But `SED`, `CLD`, `PLP`, `RTI` and `PHP` all carry the bit, because
+`nestest`'s `P` column reads it, and it is held in `CH` beside V and I. (The
+plan's "drop D" meant the arithmetic and was read once as meaning the bit.)
+
+**B is not a register bit and this port does not store one.** The `P` byte
+always reads with bit 5 set and bit 4 clear, and the two push sites supply it:
+`PHP` and `BRK` push `P | 0x30`, an IRQ or NMI entry pushes `P | 0x20`, and
+`PLP` and `RTI` ignore both bits on the way in. That is what `nestest.log`'s
+`P` column requires, line for line.
+
+**Dummy reads.** On the indexed page-cross penalty path and on **every**
+read-modify-write, if the effective address falls in `$2000-$3FFF` or
+`$4000-$401F` the core performs the extra read or write through the slow
+path — one compare on a path that is already priced as the penalty. RAM and
+ROM addresses skip it, so the ordinary case costs nothing. That is what
+blargg's `cpu_dummy_reads` tests, and it is the difference between a game that
+reads `$2007` through `LDA $2007,X` and one that hangs.
+
+**Every mapper write re-evaluates the fetch bias.** The mapper handler answers
+a flag; when it is set the core clears the fetch bias's low edge and bound, so
+the next fetch re-biases `ES` **even when `PC` never left the cached region**.
+A UxROM game that switches the bank it is executing from is the ordinary case,
+not the exotic one.
+
+**OAM DMA (`$4014`) costs 513 cycles**, 514 when it starts on an odd cycle —
+one parity bit in the scratch. The debt is **subtracted from the scanline
+budget and carried into the following lines without executing instructions**,
+so the frame loop's rule reads *overrun by one instruction **or one DMA***
+rather than *by one instruction*.
+
+**Open bus.** One scratch byte holds the last value the **slow path** put on
+the data bus. Unmapped reads answer it: `$4000-$401F` except `$4015`, `$4016`
+and `$4017`, and `$4020-$5FFF`. `$2002` and `$2007` reads mix in their
+documented open-bus bits. **The approximation is stated**: a RAM or PRG read
+does not update the byte, because doing so costs a store on the core's hottest
+path and nothing that can observe open bus can observe those reads either.
+
+**NMI is an EDGE.** It is latched when vblank sets while NMI is enabled,
+**and** when a `$2000` write enables NMI while vblank is already set. The
+`$2002` read clears the vblank **flag** and not a latched edge. **IRQ is a
+LEVEL** of exactly three sources — the mapper, the APU frame counter, and
+nothing else — OR'd into one scratch byte and honoured between instructions
+whenever `I` is clear.
+
+**The APU is silent and is not absent.** Three of its registers have
+behaviour, and it is behaviour games depend on:
+
+- `$4015` reads answer the frame-IRQ flag in bit 6 and zero elsewhere;
+- `$4017` writes are honoured for the frame-counter mode bit and the
+  IRQ-inhibit bit;
+- **the 4-step frame IRQ is raised every 29,830 cycles when it is not
+  inhibited** — a counter in the scratch, decremented once a scanline —
+  because a game that waits on it hangs forever otherwise.
+
+Every other APU register is a write-only sink. This is a **fact about the
+port**, recorded here so that "no sound" is never read as "no APU registers".
+
+`nicputest` carries a focused row for each of these beside `nestest`: the
+dummy read, the fetch re-bias after a mapper write, the DMA debt, the NMI edge
+on a late enable, and the frame IRQ — **each with a negative control**, because
+a check that cannot fail is not a check.
+
+#### 91.4.4 The stack budget — 512 bytes, and what is on them
+
+**Task 0's stack is `STK0_SIZE` = 512 bytes** (`kernel/kernel.asm`), and this
+package puts more on it than any C package before it: the fullscreen bracket,
+the frame loop, the core, and any register handler the core calls from **inside
+an instruction** all run on that one stack, underneath the kernel's own
+`fsx_run` and `wm_pkgcall` frames, with an interrupt landing on top of
+whichever is deepest.
+
+So the budget is a table rather than a hope. Every frame on the chain from the
+menu callback to the deepest C handler is counted — from the frame sizes
+`tools/cc8086.py` prints on every build and from the `push`es in the shim —
+plus **64 bytes of interrupt headroom**, and the sum must fit under 512 with
+the kernel's own frames included.
+
+**The deepest chain this build has**, measured: the ROM load, which reaches
+from the kernel's dispatch through the overlay and the C into the core, out of
+it again to a bus handler, and **down through the PPU register file to its
+leaf** — which is where a first draft of this table stopped three frames
+short, and short in the direction that tells wave 2 it has more room than it
+has.
+
+**The convention, stated because a table of frame sizes with an unstated one
+is not checkable**: a row is everything that frame puts on the stack while it
+is live — **the arguments the caller pushed, the return address the call
+pushed, the saved `BP`, and the locals**. The C rows' locals are
+`tools/cc8086.py`'s own frame report from the build the numbers were taken
+off; the assembly rows are the `push` lists in `nicpu.inc`.
+
+| frame | bytes | measured from |
+|---|---|---|
+| the kernel's dispatch to a package callback (`wm_pkgcall`) | 24 | §20.4 |
+| `crt0.asm`'s `cc_onwake` trampoline — six pushes, the argument, the near call | 16 | the shim's `push` list |
+| `os88_onwake` — saved `BP` and 2 locals | 4 | `cc8086.py` |
+| the far call into the module — three arguments and a **far** return | 10 | §73.14 |
+| `ovl_rom_load` — saved `BP` and 18 locals | 20 | `cc8086.py` |
+| `ni_reset_machine` — one argument, a near return, `BP`, no locals | 6 | `cc8086.py` |
+| `ni_boot` | 10 | `nicpu.inc`'s `push` list |
+| `ni_rd_bx` | 2 | `nicpu.inc` |
+| the core's call out to a bus handler (`ni_io_rd_bx`) | 18 | `nicpu.inc`'s `push` list |
+| `ni_io_rd` — one argument, a near return, `BP`, no locals | 6 | `cc8086.py` |
+| `ni_reg_rd` — ...and 2 locals | 8 | `cc8086.py` |
+| `ni_ppu_rd` — the buffered `$2007` read's own call | 6 | `cc8086.py` |
+| `ni_nt_off` — ...and 2 locals. **The leaf** | 8 | `cc8086.py` |
+| **interrupt headroom** | **64** | §8.5, §9.10 |
+| **the total** | **202 of 512** | |
+
+The **write** side is the same depth one frame shorter: `ni_io_wr` →
+`ni_map_wr` → `ni_chr_dirty`, all 0-local. And `ni_nt_off` shares the leaf with
+the `os88_peek` thunk (two arguments, a near return and `BP` — also 8): they
+are **peers, not a deeper chain**, because cdecl evaluates and pushes the
+second argument first, so `ni_nt_off` has returned before `os88_peek` is
+entered. The larger of the two is what the row carries.
+
+**The largest C frame in the package is not on this chain.** It is
+`ni_panel_paint` at 20 bytes of locals, reached from `os88_paint` under the
+kernel's own `W_PAINT` dispatch, which is a shallower chain than this one.
+
+**And the rows wave 2 adds**, which is where the budget gets interesting: the
+bracket's own entry, `OSAPI_FSX_RUN` and the kernel's mode set, the frame loop,
+and `ni_run`'s entry shell (14 bytes: four pushes, the argument and the call)
+under all of it. Those are **PLANNED** until they exist.
+
+**If it does not fit, the fix is named in advance and it is not a bigger
+stack**: the PPU and mapper register handlers move out of C and into
+`nicpu.inc` / `nippu`'s assembly, and every remaining scratch goes static.
+`CC_MAXFRAME` is lowered for this package rather than raised — §73.8's rule —
+and the plan's *every buffer is static* discipline already points that way.
+
+**Wave 2 adds a high-water sentinel and the number goes in this table.** The
+shim fills the free stack with a pattern before entering the bracket, and
+`nisystest` reports the deepest scrub after a run that has exercised a mapper
+write, a PPU read, an OAM DMA, a reset, a key poll and a present. A budget
+nobody measured is an estimate wearing a table's clothes.
 
 ### 91.5 The PPU — a per-scanline composer over a tile cache
 
@@ -93113,7 +93359,7 @@ The keys, and where each comes from:
 | Enter | Start | agnes, cross-read with nofrendo |
 | RShift, or Space | Select | agnes, cross-read with nofrendo |
 | `C` | toggle top/bottom clip | InfoNES `add_key` |
-| `R` | reset | InfoNES `add_key` `:262-266` |
+| `R` | reset | InfoNES `add_key` `:262-266`. **It answers in the PANEL WINDOW as well as inside the bracket** — the same command File > `Reset` is, on the same authority — and the panel's own second legend row already advertises it (`Select RShift   R reset   F/Esc leave`), so it is a key a user can find |
 | Page Up / Page Down | frame skip up / down | InfoNES `add_key` `:290-301` |
 | `M` | mute — **refused, printing the fact** | InfoNES `add_key` `:304` |
 | `F`, Esc | leave the bracket | §11.2.1, not InfoNES's Q/ESC |
@@ -93125,6 +93371,14 @@ not a key of InfoNES's** — there is no `'p'` or `'P'` case in any front end an
 its `README.md` lists four system keys — and a draft that carried it had it
 from memory. InfoNES's `L` (load) and `I` (ROM info) are not carried: the file
 dialog is a menu command here and the ROM info is permanently on the panel.
+
+**And the panel window has no `O` = Open ROM either**, though a draft of this
+package had one. It is in no reference — InfoNES's load key is `L`, which the
+paragraph above drops on purpose — in no menu caption, in no legend row and in
+no table here, so no user could find it; an invented convenience is exactly
+what a port's fidelity rule forbids. `R` above is the panel window's only key
+beyond the About panel's dismissal, and it is written into the table rather
+than left to the code.
 
 #### 91.6.5 What the bracket may not call
 
@@ -93152,13 +93406,32 @@ The window is a **front panel**, not a picture. It carries, in this order:
 5. the state line — `No ROM` / `Ready` / `Running`, or a refusal;
 6. **the FACT LINE** (§91.7.2).
 
-**It is shadowed and delta-drawn.** Each field's current text on the glass is
-held in a shadow, and only a field whose text changed is re-lettered, one
-`os88_font_run` each — never erase-then-letter, which is a double-draw flash
-(§6.1, and CLAUDE.md's second performance rule). The layout is read off the
-**live screen size**, never off 640x480 (§39). The shadow is invalidated after
-anything else owns the glass: a dialog, the About card, the file dialog, or the
-bracket's exit repaint.
+**It is shadowed and delta-drawn, and the delta is per CELL and not per
+field.** Each field's current text on the glass is held in a shadow, and only a
+field whose text changed is re-lettered, one `os88_font_run` each — never
+erase-then-letter, which is a double-draw flash (§6.1, and CLAUDE.md's second
+performance rule). Within that field only the **differing span** is lettered,
+and padding is added only as far as the longer of the two strings: `Ready` →
+`Running` is **1 call and 7 cells** and not 1 call and 40. The layout is read
+off the **live screen size**, never off 640x480 (§39). The shadow is
+invalidated after anything else owns the glass: a dialog, the About card, the
+file dialog, or the bracket's exit repaint.
+
+**Measured by `niuitest` on the model, priced at PERFORMANCE.md's 756 µs a
+`gfx_*` call and 900 µs a glyph cell:**
+
+| | calls | cells | on a 4.77 MHz 8088 |
+|---|---|---|---|
+| a WHOLE panel repaint | 15 | 228 | **216 ms** |
+| one field update (`Ready` → `Running`) | 1 | 7 | **7 ms** |
+| ...the same update padded to the field, which is what it used to cost | 1 | 40 | 36 ms |
+
+The first draft padded every run to 40 cells and dropped the whole shadow on
+every `W_PAINT`, which made a repaint **13 calls and 468 cells — 431 ms** to
+put 225 characters on the glass. 243 of those cells were spaces painted over
+paper the kernel had whitened a moment earlier. `apps/cword`'s status line
+solved the identical problem and `cwchrome.c:599-607` is the comment that
+explains it.
 
 #### 91.7.1 The two rates, composed from integers
 
@@ -93196,9 +93469,32 @@ places, **neither of them a toast**:
 A keyboard shortcut still answers (`os88api.inc:1957-1959`), so pressing `M`
 inside the bracket prints the fact where the user's eyes are.
 
+**THE FACT LINE IS ONE ROW AND MORE THAN ONE FACT IS TRUE, SO THE ROW IS A
+ROTATION.** Thirteen rows is what a 200-line adapter's desktop holds (§91.7),
+so there is exactly one fact row, and this build has three true facts at once:
+no picture yet, no APU, and on some displays no fullscreen mode. A fixed pick
+showed one and hid the others **forever** — the greyed `Mute (no APU)` item's
+sentence was reachable only by pressing `M`, which appears in no menu, in
+neither legend row and in no dialog, so nothing on the machine told a user it
+existed. The row therefore advances to the next TRUE fact on every
+`ni_menu_state()`, which runs after a launch, a load, a reset, a stop and a
+refusal — **and never from a repaint**, so a window dragged across the screen
+does not make the row flicker. `M` still jumps straight to the Mute sentence.
+
+**Every sentence is the SAME CHARACTERS here and on the glass, and fits
+`NI_FCELLS` = 40.** §91.10's table and `apps/infones/nipanel.c`'s `ni_facts[]`
+are one table; a draft of §91.10 quoted an 82-character sentence at a field 40
+cells wide, which is a contract stating something the glass cannot hold.
+
 **A later wave adding a greyed item and forgetting its fact-line entry is a
-defect no build step can catch.** That is why the rule is in this document and
-not only in a comment.
+defect no build step can catch** — so `apps/infones/build.sh`'s `nifact` row
+catches it instead, and what it checks is the list in §91.14.4: one sentence
+per `NI_FACT_*` constant, every sentence inside `NI_FCELLS`, every constant
+either **stored** somewhere in the package or named on a `PLANNED` line saying
+which wave arms it, and every live constant present in the rotation. (Its
+first version claimed all of that in a comment and only tested that the greyed
+count was non-zero, which is how sixteen greyed spellings passed against two
+sentences.)
 
 #### 91.7.3 The About panel — NINE rows
 
@@ -93211,13 +93507,21 @@ The rows:
 About InfoNES
 A fast and portable NES emulator
 InfoNES v0.96J (@fe3295c0)
-os8088 port: NTSC, no APU
+os8088 port: NTSC
 Copyright (c) 1999-2005
 Jay's Factory
 Apache-2.0 - see LICENSE.TXT
 Scroll model from agnes (MIT)
 Ported by <name>
 ```
+
+**The fourth row says `NTSC` and NOT `NTSC, no APU`.** NTSC is a fact about the
+emulated MACHINE and belongs; *no APU* is a thing the build cannot do, and
+LESSONS.md §8 puts those in the SPEC and in the greyed item that names them —
+which is exactly where it already is, twice (`\x01Mute (no APU)` and §91.10).
+`apps/c64/c64about.c:52-58` deleted `1bpp` and `no drive` from the identical
+row on the identical argument and kept `PAL`. It would also go stale the day
+the pulse-1 follow-up lands, which is what a release note in an About box does.
 
 **Nine is a compatibility constant and the source carries a comment saying
 so.** The email address, the Apache-2.0 section 4(b) modification notice and
@@ -93297,16 +93601,41 @@ collision silently.** That is why this rule is in the SPEC and not only in
 ### 91.10 What is present and greyed, and the fact that greys it
 
 §47's rule is to grey a fact, never a guess. Each fact's sentence is read on
-the panel's fact line (§91.7.2).
+the panel's fact line (§91.7.2), and **every sentence quoted in *italics*
+below is a string the package really carries** — `apps/infones/nipanel.c`'s
+`ni_facts[]` for the greyings, a C literal for the refusals — with `%u` / `%d`
+standing for a number composed by `os88_utoa`. `build.sh`'s `nispec` row reads
+this section and checks each one against the sources, and `nifact` checks that
+every fact-line sentence fits `NI_FCELLS` = 40 cells. (A draft of this section
+quoted three longer, better-worded sentences that the field could not hold,
+which is a contract stating something no user can read; a later draft quoted a
+heap refusal in words that existed in no file at all, while the package shipped
+**three** spellings of it. Both are what `nispec` exists to stop, and neither
+was catchable before it: the `nifact` row this paragraph used to cite never
+opened `SPEC.md`.)
+
+**A refusal has TWO forms and they are not the same sentence.** The state line
+is 40 cells and the toast strip is `TOAST_MAX` = 24 characters, and
+`toast_stage` truncates at 24 with no ellipsis and no error (§59.8) — so
+`ni_say()` takes both, the sentence and the strip's short form. The one refusal
+with no state line behind it is `os88_main`'s claim failure, because there is
+no window yet, and it is therefore the one that must carry the whole fact in 24
+characters.
 
 | item | the fact |
 |---|---|
-| Options > `\x01Mute (no APU)` | *No APU in this port: the PC speaker plays one square wave and the 2A03 mixes five voices.* |
-| Controller 2 (the legend's second column) | *One controller in this port.* No front end in the reference tree fills pad 2 from a keyboard either — `InfoNES_System_Win.cpp:1016` sets it to 0 — so this greys what the reference itself never had |
-| Options > `Clip top and bottom`, in any 200-row mode | *Clip is forced at 320x200 — 240 NES rows do not fit 200.* The predicate is the **live** `FSI_H` of the mode this package would enter on **this window's display** |
+| Options > `\x01Mute (no APU)` | *No APU: five voices, one speaker.* |
+| Options > `Clip top and bottom`, in any 200-row mode | *Clip is forced at 320x200: 240 rows.* The predicate is the **live** `FSI_H` of the mode this package would enter on **this window's display**, so it is armed by the wave that has one; until then the item is greyed by `NI_FACT_PIC`'s sentence with the rest of Options |
 | Options > `Full screen`, where the adapter offers no mode | The predicate is `OSAPI_FSX_CAPS`'s mask for **this window's display**, re-asked at use and never banked — never `OSAPI_VIDEO`, which answers about the primary. On a two-card desktop the item greys per monitor and the refusal names the adapter |
-| File > `Open ROM` with an unsupported mapper | **Refused at load, not greyed** — the mapper number is not knowable before the header is read, so this is §47's attempted-and-reported half and it *can* toast. The refusal is InfoNES's own sentence with the number in it: `Mapper #%d is unsupported.` |
-| File > `Open ROM` with a ROM larger than the heap can hold | *INFONES wanted %u KB and the largest free block is %u KB* — `RUNCPM`'s refusal shape, quoting what it asked and what `os88_mem_largest_kb()` answered |
+| File > `Open ROM` with an unsupported mapper | **Refused at load, not greyed** — the mapper number is not knowable before the header is read, so this is §47's attempted-and-reported half and it *can* toast. The state line is InfoNES's own sentence with the number in it, *Mapper #%d is unsupported.*, and the strip's 24 characters take *Mapper #%d unsupported* |
+| File > `Open ROM` with a ROM larger than the heap can hold | `ni_refuse_kb`'s two forms: the state line reads *INFONES wanted %uKB, largest is %uKB* and the strip *Wanted %uKB, have %uKB* — `RUNCPM`'s refusal shape, quoting what it asked and what `os88_mem_largest_kb()` answered. **`os88_main`'s claim failure calls the same helper**, so the launch refusal and the load refusal are one wording; that site composed a 37-character sentence of its own until the strip was measured against it, and what reached the glass was `INFONES wanted 13 KB, la` |
+| File > `Open ROM` with a header that claims more than the file holds | *Header claims %uKB, file is %uKB* on the state line, *Header claims %uKB* in the strip — this port's own check, which none of the three references has (`nirom.c`) |
+
+**`Controller 2` is NOT in this table**, and a draft of it that said *One
+controller in this port* against "the legend's second column" was describing a
+surface that does not exist: the legend is two plain rows of keys and there is
+no controller-2 item anywhere in the package. It is a **drop**, not a greying,
+and §91.11 carries it with its reason.
 
 **The pulse-1 arithmetic is recorded so the sound follow-up is costed rather
 than guessed**, and it is the only piece of APU written down anywhere in this
@@ -93332,6 +93661,14 @@ no `long`.
   protocols `apps/cc/os88.h` declines by name (§34).
   `InfoNES_pAPU.cpp`'s 1,068 lines have no subset that fits: every channel
   carries a 32-bit phase accumulator and the mix is per sample at 11-44 kHz.
+- **Controller 2.** There is **no surface to grey**: the panel's legend is two
+  plain rows of keys, not a two-column table, and no menu item, dialog or
+  keyboard row mentions a second pad. Nor does the reference — no front end in
+  the tree fills pad 2 from a keyboard, and `InfoNES_System_Win.cpp:1016` sets
+  it to 0 — so this drops what InfoNES itself never had. `$4017` answers `0`
+  in bit 0, which is a **connected** pad with nothing pressed rather than a
+  floating line (§91.4.3). A two-player port is a costed follow-up and its
+  first job is the surface, not the wiring.
 - **Battery-backed SRAM save and load (`.srm`).** Dropped rather than greyed
   on C64-SPEC §10.3's shape: InfoNES's menu has **no item** for it — it
   writes the file on exit — so there is no surface to grey. None of the shipped
@@ -93400,6 +93737,36 @@ a 386 and a 486 worth having.
 | `INFONES.OVL` | **4,500** | 1,030 overlay C lines at 4.3, plus the strings and the dialog table |
 | **resident total** | **~42,000** of 61,440 | about 19,400 spare, and **13,000 under §73.9's 55,000 trigger** |
 
+**MEASURED, at the end of wave 1** — the package, the three flat menus, the
+front panel, the iNES loader, the About panel and the whole 2A03 core:
+
+| | measured | of the plan |
+|---|---|---|
+| resident image | **21,858** | the 2A03 core alone is **6,659** of it, its dispatch and cycle tables included |
+| resident bss | **3,577** | |
+| `INFONES.OVL` | **2,840** | `nirom.c`, `nicmd.c` and `niabout.c` |
+| **resident total** | **25,435** of 61,440 | **36,005 spare**, and 29,565 under the 55,000 trigger |
+| largest frame | **20 bytes** | `ni_panel_paint`'s, against `CC_MAXFRAME`'s 96 — and §91.4.4 records that it is **not** on the deepest chain; the deepest chain's own largest is `ovl_rom_load`'s 18 |
+
+**Every figure above is decoded from the artifacts, not copied from a report.**
+The first version of this table carried a build that was superseded before it
+shipped — 19,394 / 3,515 / 2,439, and `ovl_rom_load` named as the largest frame
+when `tools/cc8086.py`'s own per-function table prints
+`frame _ni_panel_paint 20` against `frame _ovl_rom_load 18` (and
+`grep -A4 '_ni_panel_paint:' build/infones.gen.asm` shows the `sub sp, 20`),
+and §91.4.4 says so in its own words. §73.9's split trigger is
+a decision taken off this table and wave 2 budgets its composer against it, so
+a row that understates by 1,700 bytes is exactly the drift the trigger exists
+to prevent. The image, bss and `.OVL` are `os88pkg`'s and `os88ovl`'s own
+output lines; the core's 6,659 is the bytes `nasm -l` emits between
+`%include "infones/nicpu.inc"` and the include after it.
+
+The PPU, the composer, the four presents, the bracket and four mappers are
+still to come, and the plan's ~42,000 is what they are budgeted against;
+what wave 1 establishes is that the CORE — the piece with no way to move to an
+overlay, because a frame loop calls it — costs 6,659 bytes rather than the
+4,600 the line estimate predicted, and that there is room for it.
+
 **The basis is `apps/c64` measured, not guessed.** C64-SPEC §13.0.1's
 shipped line is 39,384 image + 13,106 bss + 2,149 overlay = 52,490 resident,
 from 6,913 lines of C and 3,318 of assembly. **The C runtime is ~6,000 and not
@@ -93460,6 +93827,45 @@ owns its buffers exclusively).
 first callback is where an overlay may first be reached (§74.1) — announced
 with a toast before the long walk, and its `.OVL`-missing refusal is printed on
 the panel's **state line**, not toasted into a window nobody is looking at.
+
+**AND NO LOCKED CALLBACK MAY BE THE THING THAT RESOLVES THE MODULE.** Reaching
+*any* `ovl_*` is what makes the runtime resolve `INFONES.OVL`, and that is an
+`OSAPI_MEM_CLAIM` plus an `OSAPI_FILE_READ` — a directory walk and a floppy
+seek, about **400 ms an `int 13h`** on the target (PERFORMANCE.md).
+`os88_oncmd`, `os88_about` and `os88_paint` are all dispatched by the kernel
+**with the desktop's gfx lock held**, so a first `Help > About InfoNES` on a
+freshly launched package would stop the whole desktop and the pointer for
+seconds. C64-SPEC §13.3 is written for exactly this defect and this package
+takes its shape:
+
+- **`ovl_probe()`** is a do-nothing function in `nicmd.c` whose only purpose is
+  to live in the module. The **first wake** calls it — unlocked, once, for
+  nothing — and banks the answer in `ni_ovl_res`. It is above every early
+  return in `os88_onwake`, so a launch that never opens a ROM still gets it.
+- **`ni_ovl_ready(win)`** is what every locked caller passes first. On *no* it
+  puts the reason on the state line (not only in a toast), clears
+  `ni_ovl_asked` so the **next** wake retries the load where the retry belongs,
+  and kicks one.
+- **`os88_paint`'s re-show of the About panel reads `ni_ovl_res` and never
+  calls the probe**: the module is resident there by construction — it is what
+  drew the panel — so the gate is one compare and can never become a disk
+  read under the paint lock.
+
+Without this the file's own header sentence — *`os88_onwake` is the ONE
+callback dispatched WITHOUT the gfx lock, and therefore the first place an
+`ovl_*` may be reached at all* — is not true of the code under it.
+
+**`os88_paint` sets `WF_OWNBG` and reads `OSAPI_WM_DAMAGE`** (§11.90.1,
+§11.90.2): it fills the damaged rect white itself and repaints only the panel
+rows that intersect it, so a two-row expose costs two runs instead of thirteen.
+The flag is a **promise** — the package then owes every pixel of its content,
+the 5-pixel margins and the 2-pixel inter-row gaps included — and the one fill
+is how it is paid. The shadow carries **two** sentinels for that reason and
+they are not the same fact: `NI_SH_UNKNOWN` (a dialog or the About panel owned
+those pixels; the repair is a run padded to the whole field width) and
+`NI_SH_PAPER` (we have just whitened them; the repair is the text and only the
+text). Collapsing them into one left `128KB, file is 40KB` on the row after a
+long refusal was replaced by `Ready`, which `niuitest` caught in a step.
 
 #### 91.13.2 The iNES header defeats `os88_file_read_at`, silently
 
@@ -93547,10 +93953,11 @@ an XT target ahead of a measurement is a claim rather than a machine.
 
 | artifact | what it proves | run by |
 |---|---|---|
-| `hosttest/niuitest.c` | the whole C compiled with clang against a **second copy** of `os88.h` placed ahead of `apps/cc` on the include path, so drift is a compile failure. A pixel model of the glass for the panel; drives the program like a user; asserts field for field that the glass shows what the shadow says; prints the cost table in calls, cells and milliseconds; replays the frame-hash recordings | `build.sh` |
+| `hosttest/niuitest.c` | the whole C compiled with clang against a **second copy** of `os88.h` placed ahead of `apps/cc` on the include path, so drift is a compile failure. A pixel model of the glass for the panel; drives the program like a user; asserts field for field that the glass shows what the shadow says; **prices the redraw** — a whole repaint must not pad its runs, a one-field update must be one call and its differing span, a two-row `WF_OWNBG` expose must re-letter two fields and an empty damage rect must cost nothing — and prints the cost table **measured, not asserted**; replays the frame-hash recordings | `build.sh` |
 | `hosttest/nicputest.asm` | **the CPU gate**: `nicpu.inc` assembled standalone against a stub bus whose contract is written down beside it, running `nestest.nes` from `$C000` and diffing PC, opcode bytes, A/X/Y/P/SP and CYC against `nestest.log` line by line — the first differing line names the wrong instruction — then blargg's `instr_test-v5` `rom_singles` 01-16 through the `$6000` protocol | **`make nicputest` ALONE.** It takes minutes and needs a fetched fixture, and `apps/c64/build.sh`'s header says in capitals why that does not belong in a build |
 | `hosttest/nisystest.asm` | **the whole-emulator ROM gate**, and a new artifact this port adds: a `NITEST=1` headless debug build of the **package** that loads a named ROM on the wake, runs it with no bracket and no present, polls `$6000` and prints the `$6004` string, read back over QMP. `ppu_vbl_nmi` 01-10, `cpu_dummy_reads`, `palette_ram`, `instr_timing` | `make nisystest` |
 | `hosttest/nimemtest.asm` | `niband.inc`'s and `nimem.inc`'s entry points on a real x86 under **SS ≠ DS** with an `ES` sentinel and four discipline negative controls (ES, DF, BP, DS); and it writes the composed 256x240 frame out over the serial port, which is the **only** path by which the shipping assembly's output reaches `tools/niref.py` | `build.sh` — it is seconds |
+| `build.sh`'s `nifact` row | one fact-line sentence per `NI_FACT_*` constant, every sentence inside `NI_FCELLS`, every constant either **stored** somewhere in the package or named on a `PLANNED` line saying which wave arms it, and every live constant present in the rotation (§91.7.2). It is the only thing tying a greyed item to its reason | `build.sh` |
 | `tools/niref.py` | `tools/c64ref.py`'s role: an **independent** Python compositor written from NESdev documentation, compared bit for bit against **both** dumps — `niuitest`'s C model and `nimemtest`'s shipping assembly. `--selftest` injects a one-bit defect and requires the compare to fail | `build.sh` |
 | `tests/niband/` | the icount bench: the composer per pixel and per line, the decoder per 1KB bank, each present per line, the core per 6502 cycle and per core entry. **This is what writes §91.12's table.** Registered in `tests/suite.py` | `make nibandbench` |
 

@@ -1619,6 +1619,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
+        infones infonesdisk nesroms nicputest nimemtest nisystest \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
@@ -4936,6 +4937,188 @@ xt-c64: $(IMG360) $(BUILD)/c64360.img
 286-c64: $(IMG) $(BUILD)/c64720.img
 	@$(UNPROTECT) $(VM286C64)/86box.cfg
 	$(BOX) -P $(VM286C64) -N
+
+# --- INFONES, a NES emulator (SPEC.md 91) -----------------------------------
+# The C toolchain's fifth application: a 2A03 in hand-written 8086, a
+# per-scanline PPU over a pre-decoded tile cache, five mappers and a front
+# panel, with the game running fullscreen through SPEC.md 53's bracket.
+# `make infones` builds the package, `make infonesdisk` the floppy in all four
+# geometries, and `make nicputest` runs the core's gate ON ITS OWN.
+#
+# NOT IN `all`, for cworddisk's and c64's reason: a C package needs SmallerC,
+# which tools/setup-cc.sh fetches and which is deliberately not in this tree
+# (SPEC.md 73.1). A clone with nasm and python3 builds every SHIPPED floppy.
+#
+# THE HOST CHECKS RUN FIRST AND STOP THE BUILD, through the stamp below: a
+# check that fails leaves no stamp, and the compile does not run.
+$(eval $(call CC_PACKAGE,infones,infones,INFONES.OVL))
+
+# THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): infones.c #includes the
+# parts and the shim %includes the four hand-written pieces, the icon and the
+# association block. EVERY ONE IS A WRITTEN PREREQUISITE, because make cannot
+# see through either kind of include - and every file SPEC.md 91.13.1's table
+# names is listed from wave 1, stubs included, so that no later wave adds a
+# file the build does not know about (LESSONS.md 9). The symptom of a missing
+# one is an edit that reads exactly like a change that did nothing.
+INFSRC := apps/infones/nippu.c apps/infones/nimap.c apps/infones/nirun.c \
+          apps/infones/nipanel.c apps/infones/nimenu.c apps/infones/nirom.c \
+          apps/infones/nicmd.c apps/infones/niabout.c
+INFINC := apps/infones/nicpu.inc apps/infones/nimem.inc \
+          apps/infones/niband.inc apps/infones/nifsx.inc
+INFHOST := apps/infones/build.sh apps/infones/hosttest/os88.h \
+           apps/infones/hosttest/niuitest.c \
+           apps/infones/hosttest/nimemtest.asm \
+           apps/infones/hosttest/nimemtest.sh tools/niref.py $(INFINC) \
+           apps/cc/os88.h SPEC.md
+# (nimemtest.asm %includes nicpu.inc, nimem.inc AND niband.inc, so an edit to
+# a mover, a composer or the core must re-run the SS != DS gate - and make
+# cannot see through a %include, which is what $(INFINC) above is doing here.)
+#
+# apps/cc/os88.h AND SPEC.md ARE PREREQUISITES BECAUSE build.sh READS THEM, and
+# make can see into a shell script no further than into a %include. The stub
+# drift check compares hosttest/os88.h against the SDK's, and the SDK header
+# reached this rule only through CC_PACKAGE's own dependency on $(CC_RUNTIME) -
+# which rebuilds the COMPILE and skips the gate, so an SDK edit left the
+# harness testing a header the machine no longer has, which is build.sh's own
+# "a test that passes and means nothing". The `nispec` row reads SPEC.md 91.10
+# for the same reason. (apps/c64's INFHOST equivalent has the same hole for
+# os88.h and is not this wave's to fix.)
+# ...and the core's own gate, which is NOT in build.sh (it takes minutes) and
+# is a prerequisite of nothing: `make nicputest` runs it on demand, the way
+# `make c64cputest` and `make rcz80test` do. Its files are
+# apps/infones/hosttest/nicputest.asm, nicputest.sh and tools/nitrace.py.
+$(BUILD)/infones.raw.asm: $(INFSRC) $(BUILD)/.infones-hostchecks
+$(BUILD)/infones.bin: $(INFINC) apps/infones/icon.inc apps/infones/niassoc.inc
+
+$(BUILD)/.infones-hostchecks: apps/infones/infones.c $(INFSRC) $(INFHOST) | $(BUILD)
+	apps/infones/build.sh
+	@touch $@
+
+infones: $(BUILD)/infones.o88
+
+# THE ROM CACHE. A stamp file rather than a directory, for getstories.py's
+# reason: make cannot depend on "five files in a directory" and a directory's
+# mtime moves for reasons that are not a fetch. nigetroms.py is idempotent and
+# re-checks every hash AND every iNES header on every run.
+#
+# NO ROM IS COMMITTED. Every one is its author's own work under its author's
+# own licence, and a git repository is not a distribution channel for it
+# (SPEC.md 91.14.2, CONTRIBUTING.md 6).
+NESROMDIR := $(BUILD)/nesroms
+$(BUILD)/nesroms.stamp: tools/nigetroms.py | $(BUILD)
+	python3 tools/nigetroms.py -o $(NESROMDIR)
+	python3 tools/nigetroms.py --fixtures $(NESROMDIR)
+	@touch $@
+
+nesroms: $(BUILD)/nesroms.stamp
+
+# Which games fit which floppy (SPEC.md 91.14.2). EVERY SHIPPED FLOPPY IS FREE
+# OF NON-COMMERCIAL AND SHARE-ALIKE CONDITIONS, which is decision 2 of the port
+# plan: the four Damian Yerrick games everywhere, Mega Mountain on the three
+# larger geometries, and the two Mojon Twins titles through The Wire only.
+NR_360  := $(NESROMDIR)/CROOM.NES $(NESROMDIR)/THWAITE.NES \
+           $(NESROMDIR)/RFK.NES $(NESROMDIR)/RHDE.NES
+NR_BIG  := $(NR_360) $(NESROMDIR)/MEGAMTN.NES
+NESROMS ?=
+
+# The catalogue and the licence file are per geometry, because each says which
+# games are on THIS disk and why the others are not - os88disk.py takes the 8.3
+# name from the basename, so two of them need two directories rather than two
+# names (the `make zdisk` arrangement).
+$(BUILD)/nicat/360/CATALOG.TXT: tools/nigetroms.py
+	@mkdir -p $(dir $@)
+	python3 tools/nigetroms.py --catalog $@ CROOM.NES THWAITE.NES RFK.NES RHDE.NES
+$(BUILD)/nicat/360/README.TXT: tools/nigetroms.py
+	@mkdir -p $(dir $@)
+	python3 tools/nigetroms.py --readme $@ CROOM.NES THWAITE.NES RFK.NES RHDE.NES
+$(BUILD)/nicat/big/CATALOG.TXT: tools/nigetroms.py
+	@mkdir -p $(dir $@)
+	python3 tools/nigetroms.py --catalog $@ CROOM.NES THWAITE.NES RFK.NES RHDE.NES MEGAMTN.NES
+$(BUILD)/nicat/big/README.TXT: tools/nigetroms.py
+	@mkdir -p $(dir $@)
+	python3 tools/nigetroms.py --readme $@ CROOM.NES THWAITE.NES RFK.NES RHDE.NES MEGAMTN.NES
+
+# THE DISK. INFONES.O88, INFONES.OVL, the games and the three text files are
+# ALL IN ONE FOLDER on every geometry (SPEC.md 19.2.1, 73.14): the .OVL is
+# resolved in the LAUNCHING instance's current directory, and a double-click on
+# a .NES leaves that directory on the ROM's - so a ROM that is not beside the
+# program is a program whose every menu refuses, politely.
+INFDISK := $(BUILD)/infones.o88 $(BUILD)/INFONES.OVL apps/infones/LICENSE.TXT \
+           $(BUILD)/nesroms.stamp tools/os88disk.py
+INFIMG = python3 tools/os88disk.py -o $(1) --size $(2) \
+	    INFONES:$(BUILD)/infones.o88 INFONES:$(BUILD)/INFONES.OVL \
+	    INFONES:apps/infones/LICENSE.TXT $(3) \
+	    $(addprefix INFONES:,$(4)) $(addprefix INFONES:,$(NESROMS))
+
+infonesdisk: $(BUILD)/infones.img $(BUILD)/infones720.img \
+             $(BUILD)/infones12.img $(BUILD)/infones360.img
+
+$(BUILD)/infones.img: $(INFDISK) $(BUILD)/nicat/big/CATALOG.TXT $(BUILD)/nicat/big/README.TXT
+	$(call INFIMG,$@,1440,INFONES:$(BUILD)/nicat/big/CATALOG.TXT INFONES:$(BUILD)/nicat/big/README.TXT,$(NR_BIG))
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/infones720.img: $(INFDISK) $(BUILD)/nicat/big/CATALOG.TXT $(BUILD)/nicat/big/README.TXT
+	$(call INFIMG,$@,720,INFONES:$(BUILD)/nicat/big/CATALOG.TXT INFONES:$(BUILD)/nicat/big/README.TXT,$(NR_BIG))
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/infones12.img: $(INFDISK) $(BUILD)/nicat/big/CATALOG.TXT $(BUILD)/nicat/big/README.TXT
+	$(call INFIMG,$@,1200,INFONES:$(BUILD)/nicat/big/CATALOG.TXT INFONES:$(BUILD)/nicat/big/README.TXT,$(NR_BIG))
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/infones360.img: $(INFDISK) $(BUILD)/nicat/360/CATALOG.TXT $(BUILD)/nicat/360/README.TXT
+	$(call INFIMG,$@,360,INFONES:$(BUILD)/nicat/360/CATALOG.TXT INFONES:$(BUILD)/nicat/360/README.TXT,$(NR_360))
+	@python3 tools/os88disk.py --verify $@
+
+# THE REFUSAL DISK, and it is a SEPARATE image on purpose. SPEC.md 91.10's two
+# load refusals - an unsupported mapper, and a header claiming more than the
+# file holds - have to be photographed on the glass, and neither fixture may be
+# a real ROM: nigetroms.py synthesises both as an iNES header over zero bytes,
+# which needs no licence from anybody and cannot be mistaken for software. They
+# ship NOWHERE, so they ride a disk of their own.
+$(BUILD)/infonesbad.img: $(BUILD)/infones.o88 $(BUILD)/INFONES.OVL \
+                         $(BUILD)/nesroms.stamp tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		INFONES:$(BUILD)/infones.o88 INFONES:$(BUILD)/INFONES.OVL \
+		INFONES:$(NESROMDIR)/CROOM.NES INFONES:$(NESROMDIR)/BADMAP.NES \
+		INFONES:$(NESROMDIR)/SHORT.NES
+	@python3 tools/os88disk.py --verify $@
+
+# THE MISSING-OVERLAY DISK: the package and its ROMs with INFONES.OVL LEFT OFF,
+# which is the only way to photograph SPEC.md 91.13.1's other half. The
+# residency guard says a LOCKED callback may never be the thing that fetches
+# the module, and what a user sees when the module is not there at all is
+# `Unable to load INFONES.OVL.` on the state line rather than a menu that does
+# nothing - LESSONS.md 5's "a disk with the package and no .OVL is a program
+# whose every menu refuses, politely". `os88disk.py` cannot be asked for that
+# by any flag, so it is a disk. It ships NOWHERE.
+$(BUILD)/infonesnoovl.img: $(BUILD)/infones.o88 $(BUILD)/nesroms.stamp \
+                           tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		INFONES:$(BUILD)/infones.o88 \
+		INFONES:$(NESROMDIR)/CROOM.NES
+	@python3 tools/os88disk.py --verify $@
+
+# THE TWO BOOT-SECTOR GATES (SPEC.md 91.14.4). nimemtest runs the SHIPPING
+# nimem.inc and niband.inc on a real x86 with SS != DS and an ES sentinel, with
+# negative controls, and IS in build.sh because it takes seconds. nicputest is
+# the 2A03's own gate and is NOT, because it takes MINUTES and fetches a
+# fixture besides - a fresh clone's `make infones` must neither stall nor fail
+# on a network (apps/c64/build.sh's header says the same thing in capitals).
+nimemtest:
+	apps/infones/hosttest/nimemtest.sh
+
+nicputest: apps/infones/hosttest/nicputest.asm \
+           apps/infones/hosttest/nicputest.sh tools/nitrace.py $(INFINC)
+	apps/infones/hosttest/nicputest.sh
+
+# ...and the WHOLE-EMULATOR gate, which is a different harness and not a row
+# of the one above: `make nicputest` is nasm-only, so nippu.c, nirun.c and
+# nimap.c - and therefore ppu_vbl_nmi, which tests exactly them - cannot be in
+# it (SPEC.md 91.14.4). It is wave 2's and its files say so rather than
+# passing vacuously.
+nisystest: apps/infones/hosttest/nisystest.asm \
+           apps/infones/hosttest/nisystest.sh $(INFSRC)
+	apps/infones/hosttest/nisystest.sh
 
 # --- WEAVE, the .WAB runtime (WEAVE-SPEC 1.2) --------------------------------
 # The C toolchain's fourth application: a web-style app runtime whose bundle
