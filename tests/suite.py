@@ -1359,6 +1359,12 @@ SOAK = [
         "menu, which is what proves the task_yield service point. QEMU by "
         "name on CLAUDE.md's closed list - MartyPC has no backdoor",
         needs=("qemu", "nasm"), serial=True, timeout=420, builds=True),
+    Row("hdarefuse", "full", py("tests/hdarefuse.py"), 15.0,
+        "An enabled Intel HDA controller with an unsupported codec must "
+        "return DRVE_HW and let snd_init reach its live publish within 12s; "
+        "this is the regression gate for an MMIO timeout that looked like a "
+        "frozen computer",
+        needs=("qemu", "nasm"), serial=True, timeout=180, builds=True),
     Row("wirezone", "soak", py("tests/wirezone.py"), 50.0,
         "Does the desktop SERVICE zone arrive with its driver and LEAVE with "
         "it? (SPEC.md 26.7) The kernel's half of the Wire is a generic zone a "

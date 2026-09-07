@@ -2285,7 +2285,7 @@ $(BUILD)/bootdiagx144.img: $(BUILD)/bdxboot144.bin $(BUILD)/bootdiag.bin \
 # per BUILD DIRECTORY (SPEC.md 2.8.2) and a rule that builds a kernel outside
 # $(BUILD) overrides KMODDIR for itself - which a simply-expanded DRIVERS
 # would have baked in at parse time.
-DRIVERS = $(BUILD)/sound.drv $(BUILD)/hdd.drv $(BUILD)/net.drv
+DRIVERS = $(BUILD)/sound.drv $(BUILD)/hda.drv $(BUILD)/hdd.drv $(BUILD)/net.drv
 DRIVERS += $(BUILD)/ramdisk.drv $(BUILD)/ether.drv
 # ...and the RAM disk's on-demand half, which rides every disk the drivers do
 # but is NOT one of them: nothing puts it in drv_tab, the Drivers page never
@@ -2566,6 +2566,16 @@ $(SNDSTAMP): | $(BUILD)
 
 $(BUILD)/sound.drv: $(BUILD)/sound.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/sound.bin -o $@
+
+# Intel High Definition Audio output for 386+ machines.  This is a separate
+# sound-class alternative: old machines retain SOUND.DRV and the loader's
+# one-driver-per-class rule prevents both backends from owning sound at once.
+$(BUILD)/hda.bin: drivers/hda/hda.asm drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ $<
+	@echo "hda:    $(call FILESIZE,$@) bytes"
+
+$(BUILD)/hda.drv: $(BUILD)/hda.bin tools/os88drv.py
+	python3 tools/os88drv.py $(BUILD)/hda.bin -o $@
 
 # The store above 1MB (SPEC.md 41.12). An OVERLAY, not a driver: os88drv.py
 # stamps it and names it 'overlay' because its class byte is DRVC_OVL, which
@@ -3089,6 +3099,25 @@ $(BUILD)/vmmouse.img: $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS
 vmmousetest: $(BUILD)/vmmouse.img
 	@echo "vmmousetest: build/vmmouse.img - VMMOUSE.DRV already wanted."
 	@echo "             Run it with: python3 tests/vmmouse.py"
+
+# HDA refusal/freeze gate. QEMU's Intel controller exercises PCI, reset and
+# immediate-command polling, while its non-ALC269 codec deliberately makes the
+# profile refuse. Reaching the desktop proves that refusal is prompt and safe.
+$(BUILD)/hdacfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/hdacfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 6).to_bytes(2,'little') + b'\0\0')" > $@
+
+$(BUILD)/hdarefuse.img: $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/hdacfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/hdacfg/system.cfg
+
+.PHONY: hda-refuse-test
+hda-refuse-test: $(BUILD)/hdarefuse.img
+	@echo "hda-refuse-test: python3 tests/hdarefuse.py"
 
 # THEWIRETEST: the Wire's gate disks (SPEC.md 88.12), ethertest's shape and
 # for ethertest's reason - the driver is asked for by a SYSTEM.CFG that is ON

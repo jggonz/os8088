@@ -485,12 +485,12 @@ ap_s_ready:   db 'Ready', 0
 ap_s_playing: db 'Playing', 0
 ap_s_paused:  db 'Paused', 0
 ap_s_stopped: db 'Stopped', 0
-ap_s_nosb:    db 'No Sound Blaster - playback off', 0
+ap_s_nosb:    db 'No digital audio - playback off', 0
 ap_s_nomem:   db 'Out of memory', 0
 ap_s_nofile:  db 'Playlist is empty', 0
 ap_s_loaderr: db 'Cannot play this file', 0
 ap_s_notask:  db 'No free task - close an app and retry', 0
-ap_s_hirate:  db 'Rate needs a Sound Blaster Pro', 0
+ap_s_hirate:  db 'Rate needs faster digital audio', 0
 ap_s_opening: db 'Opening...', 0
 ap_s_endlist: db 'End of playlist', 0
 ap_s_queued:  db 'Sent to the running Audio Player', 0

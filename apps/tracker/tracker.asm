@@ -2939,7 +2939,7 @@ trk_s_fsload: db 'Load is windowed: F or Esc first', 0
 trk_s_notmod: db 'Not a .MOD file', 0
 trk_s_nofit:  db 'Too big for free memory', 0
 trk_s_noload: db 'No module loaded - L loads one', 0
-trk_s_nosb:   db 'No Sound Blaster: viewer only', 0
+trk_s_nosb:   db 'No digital audio: viewer only', 0
 trk_s_nomem:  db 'Out of memory', 0
 trk_s_toobig: db 'File too big', 0
 trk_s_noent:  db 'File not found', 0

@@ -86,7 +86,8 @@ SND_CAP_PCM_IN   equ 10h        ; block PCM input (recording)
 SND_RT_AUTO  equ 0              ; unset: whatever answered at boot
 SND_RT_SPK   equ 1              ; the PC speaker
 SND_RT_FM    equ 2              ; AdLib - FM only
-SND_RT_SB    equ 3              ; Sound Blaster - FM and streams
+SND_RT_PCM   equ 3              ; background digital PCM stream
+SND_RT_SB    equ SND_RT_PCM     ; shipped ABI name, retained as an alias
 
 ; --- entry verbs (AL on the far call into your entry proc) -------------------
 DRVV_ATTACH  equ 0              ; out CF=0 and SI = your service table;

@@ -54,6 +54,7 @@ SOURCES = [
     "kernel/driver.inc",
     "drivers/os88drv.inc",
     "drivers/sound/sb.inc",
+    "drivers/hda/hda.asm",
     "drivers/hdd/hddabi.inc",
     "drivers/ether/tcp.inc",
     "drivers/net/netpkg.inc",
@@ -73,6 +74,7 @@ ROWS = [
     # SYSTEM.CFG bit and the Drivers page prices it, so it is in drv_memk and
     # therefore here
     ("Absolute mouse", "DRVM_VMM", "DRVM_IMG_VMM", "vmmouse.drv"),
+    ("Intel HDA",      "DRVM_HDA", "DRVM_IMG_HDA", "hda.drv"),
 ]
 
 EQU = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s+equ\s+(.+?)\s*(?:;.*)?$", re.M)
@@ -206,6 +208,7 @@ def main():
         # ...and nor does the absolute mouse: it hooks no vector, owns no port
         # and keeps no buffer, so the image IS the whole footprint
         "DRVM_VMM": s["DRVM_IMG_VMM"],
+        "DRVM_HDA": s["DRVM_IMG_HDA"] + s["HDA_DMA_KB"] + s["HDA_STAGE_KB"],
     }
     for title, total, _img, _drv in ROWS:
         eq(s.get(total), want[total],

@@ -59,7 +59,8 @@ SND_RT_AUTO equ 0               ; unset (a fresh SYSTEM.CFG): the best tier
                                 ; that actually answered at boot
 SND_RT_SPK  equ 1               ; the PC speaker, whatever else is loaded
 SND_RT_FM   equ 2               ; AdLib: FM only - no streams, no 12KB
-SND_RT_SB   equ 3               ; Sound Blaster: FM and streams both
+SND_RT_PCM  equ 3               ; background digital PCM stream
+SND_RT_SB   equ SND_RT_PCM      ; shipped ABI name, retained as an alias
 SND_RT_CARD equ SND_RT_FM       ; the old two-value name, kept so a SYSTEM.CFG
                                 ; written before the split still reads as "a
                                 ; card" - and reads as the CHEAP card, which
