@@ -35077,7 +35077,7 @@ that is budgeted out of. A disk that is exactly full is a disk the next byte
 breaks, and the breakage lands on whoever is holding it.
 
 **IT WAS FOUR CLUSTERS AND NOT TWO, so one more typeface came off.** §70.11's
-receiver takes `TELNET.O88` from **10,235 to 14,337** — 10 clusters to 14 —
+receiver takes `TELNET.O88` from **10,235 to 15,005** — 10 clusters to 15 —
 which is exactly the four the system disk had, leaving it at **354 of 354**:
 full, not tight, which is the state the paragraph above says is the dangerous
 one. So `COURIER.F88` goes with `JETBRAIN.F88`, on the same test and with the
@@ -35089,9 +35089,11 @@ PostScript or RTF font name in a file they are exporting rather than a typeface
 they load — and neither package is on a system disk.
 
 **AND `TALLX.F88` WITH IT, WHICH IS THE THIRD USE AND THE LAST.** The receiver
-landed at **14,337 bytes — one byte over fourteen clusters** — and shaving a
-package to fit a cluster boundary is not a saving, it is nine bytes of headroom
-handed to the next editor with no warning. So the cluster comes off the disk.
+crossed fourteen clusters, and shaving a package to fit a cluster boundary is
+not a saving — it is a handful of bytes of headroom handed to the next editor
+with no warning, and the w4 review's fix pass then spent 546 of them on the
+divide guard, the drain and the two staging arms. So the cluster comes off the
+disk.
 TallX is a DISPLAY face and the smallest of the ten (1,118 bytes), nothing
 names it either, and this geometry keeps `ARCHIVO`, `CHARTER`, `HELV`,
 `INCONSOL`, `NOTO`, `ROBOMONO` and `TIMES` — seven of ten, both monospaces, and
@@ -78377,7 +78379,7 @@ carries it and no `kern_small` machine can launch it. The two true reasons:
 
 **AND THAT ONE WAY IS NOW ARITHMETIC AGAINST A NUMBER THAT DOES NOT FIT.**
 After §70.11's Zmodem receiver the package is its final size — `os88pkg.py`
-reads **image 14,337, bss 16,254**, so the loader's claim is **30,591 bytes**
+reads **image 15,005, bss 16,299**, so the loader's claim is **31,304 bytes**
 — and a `kern_small` machine is a 256KB one whose heap is about 28 KB
 (docs/KERN-SPLIT-PLAN.md). **A hand-copied `TELNET.O88` is therefore most
 likely REFUSED AT THE CLAIM and never reaches the renderer at all**, which
@@ -79634,11 +79636,38 @@ download twice, or append it to itself, and the disk would say so rather than
 the wire. Equally: **a `ZRINIT` arriving where a `ZRPOS` was expected is a
 straggler to skip, never a reason to resend.**
 
-**`ZRPOS` restarts at the bytes COMMITTED, not the bytes received.** A CRC
-error discards whatever is in the staging half that is still filling and asks
-the sender to resume from the offset the UI task has actually written — which
-is the only offset this end can honestly name, because the half in flight may
-or may not have reached the disk.
+**`ZRPOS` restarts at the SUBPACKET's start, and `[tz_skip]` is why that is
+honest.** A CRC error discards whatever is in the staging half that is still
+filling — but a subpacket that straddled a chunk boundary has its first part
+**already committed**, because `tz_store` raises a half the moment it is full
+and the CRC is checked at the end. Naming the committed offset would resume the
+sender PAST the start of the bad subpacket and leave its corrupt prefix in the
+file for ever, with the length right so nothing notices: which is the exact
+defect resume-from-committed exists to prevent.
+
+There is no truncate verb, so the prefix cannot be taken back. `[tz_sub0]` is
+where the subpacket now filling started, the `ZRPOS` names *that*, and
+`[tz_skip]` = `[tz_pos] − [tz_sub0]` drops the bytes the sender re-sends over
+what is already written. **The file's SIZE never moves**, which is what keeps
+`OSAPI_FILE_APPEND`'s cluster-multiple precondition true through a retry — and
+is why this is the fix rather than raising only at subpacket boundaries, which
+would make a chunk 5,120 bytes and break §18.4.4.
+
+The `ZRPOS` still waits for `[tz_req]` to clear before it goes out, because
+`[tz_pos]` is not final until the commit in flight has landed. Reachability is
+low and worth saying plainly: the transport is TCP, so a subpacket CRC error
+means corruption above TCP's own checksum.
+
+**A `ZEOF` whose position disagrees is answered the same way and does NOT enter
+subpacket mode.** No subpacket follows a `ZEOF` — the next bytes are the
+sender's answer to our `ZRPOS` — so eating them as data leaves recovery to
+whichever byte pair happens to decode as a frame-end terminator, with the
+5 × 10 s retry count as the floor.
+
+**FIVE `ZDLE ZDLE`s IN A ROW ARE THE SENDER'S ABORT.** One is a lost place and
+resynchronises on the next `ZPAD`; five is the classic cancel a user types at
+the BBS end, and dropping them in `ZP_IDLE` left the terminal showing nothing at
+all for `TZ_TMO` × `TZ_TRIES` = fifty seconds. Any decoded byte resets the run.
 
 **Timeouts and a retry count, so a dead sender returns the terminal.**
 `OSAPI_GET_TICKS` (0x00B8) is the clock — 18.2 Hz, ~55 ms, wrapping at 65,536,
@@ -79697,6 +79726,17 @@ request's outstanding-ness is the request's argument.
 | `TZ_DATA` (2) | write `[tz_un]` bytes of half `[tz_uh]` — `OSAPI_FILE_WRITE` (0x0120) for the first chunk, `OSAPI_FILE_APPEND` (0x0350) for every later one |
 | `TZ_DONE` (3) | the file is complete; nothing to close, because neither slot holds a handle |
 
+**AND THE WORKER KICKS FOR AS LONG AS A REQUEST IS OUTSTANDING.**
+`OSAPI_WM_WAKE` answers CF=1 when the event ring was full of other events and
+nothing was posted, and its own cell says to kick again from the next callback
+— so a `TZ_DATA` whose wake was lost left the worker polling a byte the UI task
+was never told to clear. The transfer then stopped dead: the `ZRINIT` that
+answers a `ZEOF` waits for that commit, so the sender saw nothing for
+`TZ_TMO` × `TZ_TRIES` and the terminal ended in `Sender stopped` with the file
+half written. `tz_poll` kicks every `TZ_KICK` = 9 ticks while `[tz_req]` is not
+`TZ_NONE`, which IS the retry the SDK asks for; the first version kicked only
+while a dialog was up, which is the one case a human was waiting on.
+
 `OSAPI_WM_ONWAKE` (0x0458) is what makes any of it possible (§74.1): the
 handler runs on the UI task, billed to this instance, **without the gfx lock**,
 and it is expressly allowed to call the file slots. Nothing else in the SDK
@@ -79721,11 +79761,44 @@ walks the whole resident FAT snapshot — about 105 ms on a 20 MB hard disk at
 4.77 MHz. §77.40 is the precedent: FTPD called it per chunk and spent 44% of an
 upload inside it.
 
+**AND IT IS ASKED AFTER THE DIALOG ANSWERS, NOT BEFORE IT.** The Save dialog has
+a **Drive** button (§38.11) and `fdlg_home_save` records the volume the user
+landed on into the instance *before* the completion proc runs — which is exactly
+what makes `tz_commit`'s bare-name write land there (§38.10). Sized before the
+question, the chunk describes the volume the terminal was LAUNCHED from: a
+4,096-byte chunk against a partition with 8 KB clusters creates the file with
+`OSAPI_FILE_WRITE` and then meets `dskw_append`'s precondition check on the
+second chunk, which answers **`FERR_NAME`** — so the user is shown `Disk error`
+and a 4 KB stump of a 40 KB file, with an innocent disk. The over-8,192 refusal
+below was never reached through that door at all.
+
+`tz_chunk_set` therefore runs in `tz_dlgdone`, on the UI task, with the lock
+held and no disk I/O: the same 105 ms, one question later. The worker stages
+nothing until it reads `[tz_rst]`, so the chunk is still fixed before the first
+byte lands.
+
 | the destination's cluster | what this does |
 |---|---|
 | ≤ 4,096 bytes | chunk = 4,096, **double-buffered**; 4,096 is a multiple of every power-of-two cluster at or below it, and it is **exactly four 1,024-byte subpackets** (§70.11.1) |
 | 4,097..8,192 | chunk = 8,192, **single-buffered** — the worker fills the whole area, then waits |
-| > 8,192 | **refused**: `ZSKIP`, and the status line names the cluster size (§47 — grey and refuse a FACT) |
+| > 8,192 | **refused**: `ZSKIP`, and the status line names the cluster size — `Cluster 16,384 too big` — because §47's rule is that a refusal states a FACT a person can act on, and *"too large"* is a judgement where 16,384 is a number they can take to another disk |
+
+**THE REFUSAL IS PER FILE AND NOT PER BATCH.** It sends `ZSKIP`, the sender goes
+on to the next file, and the reason stays on the status line until a file IS
+accepted — a cluster is a fact about the destination the user just chose, and
+the next file may be saved somewhere else. The first version called the
+session's failure path here instead, which ended the whole batch for one
+unsuitable folder and contradicted this table's own word.
+
+**AND THE TWO STAGING ARMS ARE NOT THE SAME MECHANISM.** Double-buffered, the
+raise happens in `tz_store` the moment a half fills, because the *other* half is
+there to take the next byte. Single-buffered there is no other half, so
+`tz_canrx` refuses at a full buffer whatever `[tz_req]` says and the raise
+happens on the WORKER's next pass instead. Driving the raise from a byte's
+arrival on that arm put `tz_store`'s `xor bx, bx` on offset 0 of the chunk the
+UI task had just been handed — one silently wrong byte per 8,192 in the file,
+with the length right and the CRC that would have caught it already spent.
+Unreachable on a floppy, which is every geometry any gate drives.
 
 The last chunk is whatever is left, which is §18.4.4's own exception.
 `OSAPI_FILE_APPEND` refuses a file whose current size is not a cluster multiple
@@ -79878,7 +79951,42 @@ anything new.
 
 **When the transfer ends the terminal is back and the host's text resumes** —
 the buffer was never touched, so putting it back is the repaint the takeover
-already owed. `tz_end` marks row 24 for the full-screen renderer and every row
+already owed.
+
+**AND A REFUSAL NAMES WHICH REFUSAL.** `Disk error` is what every one of them
+looks like from the outside, and §54.4.1's rule one application along is that a
+reason a person can act on beats a state name: `Folder full` (`FERR_DIRFULL` —
+a subdirectory on a floppy is ONE 512-byte cluster, sixteen entries, and it
+does not grow), `Disk full`, `Disk is write-protected`, `That name is
+protected`, and `Disk error` for the rest. §70.12.3 records how that
+distinction was learned, which is that a gate wrote sixteen files into `MEDIA/`
+and read the seventeenth refusal as a receiver defect.
+
+**A TRANSFER THAT FAILS TELLS THE SENDER, AND THEN DRAINS.** The failure paths
+used to send nothing at all and clear `[te_zon]` at once: the sender was
+mid-file, went on transmitting `ZDATA` subpackets, and `te_byte` handed every
+one of those bytes to the ANSI parser — so the status line said `Disk error`
+while the screen filled with CP437 noise and whatever `ESC [` sequences fell
+out of binary data cleared it, moved the cursor and changed the colours until
+the sender's own timeout expired. So `tz_fail` sends the standard cancel first
+— five `CAN`s and five backspaces, which every Zmodem implementation reads as
+an abort — and the receiver stays on the stream in **`ZR_DRAIN`**, swallowing
+everything, until the wire has been quiet for `TZ_DRAINQ` = 36 ticks. The
+terminal comes back when the wire does rather than when the sender gives up,
+and the panel comes off immediately because the reason is on the status line
+and the terminal is what the user wants back.
+
+**AND THE PANEL COMES OFF EVEN WHEN NO PASS IS COMING.** `tz_end` clears
+`[te_zon]`, and `te_step` only calls `tz_poll` while it is set — so a transfer
+that ended with a commit still outstanding could post `TZ_DONE` to nobody, and
+`[tz_pan]` is cleared in exactly one place. The panel then owned the terminal's
+content for the rest of the session with the session live underneath it.
+Removing the panel is the UI task's only job in `TZ_DONE` and it is a byte
+store, so `tz_end` does it itself in that case.
+
+**And the sender's closing `OO` is TWO bytes.** Ending the transfer on the
+first left `[te_zon]` clear when the second arrived, and the ANSI parser printed
+it: every completed batch left a stray `O` on the board's screen. `tz_end` marks row 24 for the full-screen renderer and every row
 for the windowed one, and `TZ_DONE` is what asks the UI task to spend them: the
 panel is the UI's to remove, and the worker may not.
 
@@ -79904,8 +80012,8 @@ already under way when `^]` was pressed carries on, with its progress on row
 
 #### 70.11.6 What the receiver cost, and what it does not answer yet
 
-`apps/telnet/tezm.inc`. **`TELNET.O88` is image 14,337, bss 16,254 — 30,591 of
-`APP_MAX_SIZE`'s 61,440, which is 50%** — and the validator was never the
+`apps/telnet/tezm.inc`. **`TELNET.O88` is image 15,005, bss 16,299 — 31,304 of
+`APP_MAX_SIZE`'s 61,440, which is 51%** — and the validator was never the
 constraint here either (§70.8.11). The floppy was, twice, and §24.3.1 carries
 the arithmetic: the receiver takes the package from 10 clusters to 14 on a
 360KB disk, which had four.
@@ -79927,6 +80035,25 @@ CALLS" applied to the one place in this package that does any.
 
 **Not measured on hardware**, and neither is §70.8.2's figure; both are read
 off the source.
+
+**NEVER DIVIDE BY A NUMBER THE WIRE CHOSE.** The progress bar's fill is
+`pos × width / size`, and `[tz_fsz]` is a decimal field the SENDER wrote into
+the `ZFILE` info block while `[tz_pos]` is bytes this end has committed — two
+independent numbers, of which only the zero case was guarded. A `ZFILE`
+declaring a size of 1 makes the first commit's quotient 2,539,520, which does
+not fit `AX`; `div` raises **#DE**, this kernel installs no `int 0` handler, and
+IVT[0] is whatever the ROM left. **One line of a sender was an uncontrolled far
+jump**, with no cooperation from the user beyond pressing Save. It was reachable
+without hostility too: the size parse drops the carry out of its high multiply,
+so a declared size over 4 GB wraps small, and a 63-character name walked the
+parse into the staging area and read the previous download's digits as this
+file's size.
+
+`tz_frac` now treats `pos >= size` — and a position whose high word survived the
+reduction the size's did not — as a FULL bar, which is what a sender that lied
+deserves. `tests/telzm.py` drives it with a sender that declares 1 and sends
+6,144, and asserts that the session is still up afterwards: the symptom of an
+#DE is a guest that has stopped answering, not a wrong bar.
 
 **ONE diagnostic byte is published in bss and is not debug code.** A cancelled
 dialog calls nothing back at all, so nothing outside this package can see what
@@ -80110,6 +80237,48 @@ twelve lives in a directory of its own, because `README.TXT` and `readme.txt`
 are two rows of the table and ONE file on a case-insensitive host, and a gate
 that silently tested eleven where it printed twelve would be worse than one
 that tested none.
+
+#### 70.12.3 What the wave-4 review found, and what the gate still cannot see
+
+**The blocker and three of the six majors were in paths no gate could reach**,
+which is the useful summary: a sender that lies about a size, a volume with
+8 KB clusters, a desktop short enough to shed a raise cache, and a subpacket
+CRC error. `tests/telzm.py` gained one of those four — `LyingSize` declares a
+size of 1 for a file it sends in full, and the assertion is that the session is
+still **up** afterwards, because the symptom of an `#DE` is a guest that has
+stopped answering rather than a wrong progress bar.
+
+**The other three are named here rather than left to be rediscovered.** Every
+geometry the gate drives is a floppy, so `spc` is 1 and the cluster is 512:
+that leaves the **single-buffered** staging arm, the **over-8,192 refusal** and
+`OSAPI_FILE_APPEND`'s precondition at any other cluster size untested, and the
+Drive button is what reaches them. No CRC error is injected, so `tz_subbad`,
+the `[tz_skip]` overlap and the whole ZRPOS recovery are driven by nothing —
+the `ZRPOS` the gate asserts is the opening `ZRPOS 0`. And the raise-cache
+purge behind the cancel rule needs a machine short of memory where this
+desktop is idle. `ZCRCE`, `ZCRCQ`, `ZRUB0` and `ZRUB1` are not exercised
+either, because `tools/os88bbs.py`'s sender uses `ZCRCG` and `ZCRCW` and its
+escaper has no arm for 0x7F or 0xFF.
+
+**AND THE GATE FILLED A FOLDER, which is worth writing down because it read as
+a receiver defect for three runs.** A subdirectory on a 1.44MB floppy is ONE
+512-byte cluster — sixteen entries — and it does not grow. Committing all
+twelve mangle dialogs put `MEDIA/` at exactly sixteen, and the next session's
+first `OSAPI_FILE_WRITE` came back `FERR_DIRFULL`; the terminal said `Disk
+error`, sent the sender its cancel, and did everything else right. What found
+it was reading `[tz_why]` and then the `FERR_*` out of guest memory — the
+status line's own words were not enough, which is exactly the argument for
+naming the refusal that §70.11.5 now makes. So the batch cancels eleven of its
+twelve dialogs and commits one: the mangle is asserted from `[tz_name]` twelve
+times, the ROUND TRIP through the file system once, and the cancel path eleven
+times over on the way past.
+
+**Two things the gate DID gain that cost nothing.** The terminal's 2,000 cells
+are asserted blank after a completed batch — not one byte of a transfer may
+reach the ANSI parser, and the sender's closing `OO` was leaving one there —
+and one mangled name is asserted a second time as a **directory entry** in
+`MEDIA/` — `banana split.mod` → `BANANA~1.MOD` — which is the same rule read
+through the file system instead of through `[tz_name]`.
 
 #### 70.12.1 What building `tests/telansi.py` found
 

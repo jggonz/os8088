@@ -52,11 +52,25 @@ FIVE ASSERTIONS, IN TWO SESSIONS OF ONE BOOT.
    `--bin32` sends. A screenshot cannot see a header.
 
 **WHERE THE FILES LAND.** `OSAPI_FILE_DLG` gives back a NAME and no path
-(SPEC.md 38.6/19.2.1) - the dialog opened on this instance's own folder, which
-is where TELNET.O88 was launched from - so a download saved with Return lands
-in `APPS/` on the A: disk. That is `build/telnetsys.img`, which is 1.44MB and
-has room; the scratch B: is there because a download WRITES and a gate must not
-depend on which volume the user picked.
+(SPEC.md 38.6/19.2.1) and the dialog opens on **`MEDIA/`** for an application
+that has chosen nowhere (SPEC.md 38.10) - so a download saved with Return lands
+in `MEDIA/` on the A: disk, which is `build/telnetsys.img`. `build/telnetdata.img`
+is built and mounted as B: and this gate never inspects it: it is there because
+a download WRITES and because the Drive button can reach it, not because these
+files go there.
+
+**WHAT THIS GATE CANNOT REACH, said here rather than left to be discovered.**
+Every geometry it drives is a floppy, so `spc` is 1 and the cluster is 512:
+that leaves the SINGLE-buffered arm, the over-8,192 refusal and
+`OSAPI_FILE_APPEND`'s precondition at any other cluster size untested, and it
+is the Drive button that would reach them. No CRC error is injected, so
+`tz_subbad`, the `[tz_skip]` overlap and the whole ZRPOS-recovery path are
+driven by nothing here - the `("rx","ZRPOS")` assertion below is satisfied by
+the opening `ZRPOS 0`. `ZCRCE` and `ZCRCQ` never appear (the sender uses ZCRCG
+and ZCRCW), nor do `ZRUB0`/`ZRUB1` (its escaper has no arm for 0x7F/0xFF), and
+1,024 divides 4,096 so no subpacket ever straddles a chunk boundary. The
+raise-cache purge behind SPEC.md 70.11.4's cancel rule needs a machine short of
+memory and this desktop is idle.
 """
 import argparse
 import json
@@ -84,6 +98,8 @@ PORT = 8095                     # NOT 8090 (ethernet), 8092 (thewire) or 8094
                                 # and a bound port is a gate reading the OTHER
                                 # one's answers
 HOSTLINE = "10.0.2.2:%d" % PORT
+TE_SCRSZ = 80 * 25 * 2          # ...the screen this gate reads back, which is
+                                # telansi's TE_COLS x TE_ROWS x 2 (SPEC.md 70.8)
 
 # The rows of os88bbs.MANGLE83_CASES that a REAL SENDER can carry. The four
 # left out are named in the report rather than dropped in silence.
@@ -91,6 +107,47 @@ UNSENDABLE = {"/pub/files/banana split.mod": "the sender takes basename()",
               "C:\\dl\\banana split.mod": "the sender takes basename()",
               "...": "no host filesystem will make that file",
               "": "there is no such filename"}
+
+
+REAL_SENDER = os88bbs.ZmodemSender      # ...captured BEFORE the patch below
+
+
+class LyingSize(REAL_SENDER):
+    """A sender that declares a size of 1 for a file it then sends in full.
+
+    **THIS IS THE BLOCKER'S OWN CASE** (SPEC.md 70.11.6). `[tz_fsz]` is a
+    decimal field the SENDER writes into the ZFILE info block and `[tz_pos]` is
+    bytes this end has committed: two independent numbers, and `tz_frac` divided
+    one by the other to size the progress bar. A declared size of 1 makes the
+    first commit's quotient 2,539,520, which does not fit AX - and `div` raises
+    #DE, for which this kernel installs no handler. One line of a sender took
+    the machine out, with no cooperation from the user beyond pressing Save.
+
+    The hook is `send_data`: the ZFILE info block is the only `ZCRCW`-terminated
+    subpacket with a NUL in it that goes out before any `ZDATA`, so rewriting
+    its first field is one substitution and needs no copy of the sender's loop.
+    """
+
+    # **AND THE SUPER CALLS NAME `ZmodemBase`, NOT `ZmodemSender`.** The gate
+    # installs this class AS `os88bbs.ZmodemSender` for the session, because
+    # that is the name `BBSServer` looks up - so `os88bbs.ZmodemSender.<m>` from
+    # inside a method resolves to THIS class and recurses until the server
+    # thread dies of it. `send_data` and `__init__` both live on `ZmodemBase`,
+    # which the patch does not touch.
+
+    def __init__(self, *a, **kw):
+        REAL_SENDER.__init__(self, *a, **kw)
+        self.lied = 0
+
+    def send_data(self, data, frameend):
+        if frameend == os88bbs.ZCRCW and b"\0" in data and self.lied < 9:
+            name, _, rest = data.partition(b"\0")
+            f = rest.split(b" ")
+            if len(f) > 1 and f[0].isdigit():
+                f[0] = b"1"
+                data = name + b"\0" + b" ".join(f)
+                self.lied += 1
+        return REAL_SENDER.send_data(self, data, frameend)
 
 
 def say(*a):
@@ -209,7 +266,8 @@ def main():
 
     sy = telansi.te_syms()
     for n in ("te_zon", "te_state", "tz_st", "tz_dlg", "tz_name", "tz_pan",
-              "tz_req", "tz_pos", "tz_fsz", "tz_diag",
+              "tz_req", "tz_pos", "tz_rcv", "tz_fsz", "tz_diag", "te_scr",
+              "tz_why", "tz_ferr",
               "te_btn", "te_line", "te_hbuf"):
         if n not in sy:
             sys.exit("telzm: %s is not in the package map" % n)
@@ -242,6 +300,8 @@ def main():
     img = os.path.join(ROOT, "build", "telnetsys.img")
     adata = bytes(range(256)) * 5           # ...the file AFTER the cancelled
                                             # one, compared off the disk below
+    ldata = bytes(range(256)) * 24          # ...and the lying sender's, which
+                                            # must land whole despite its ZFILE
     m = telansi.Qemu()
     mo = telansi.Mouse()
     logs = {}
@@ -286,6 +346,15 @@ def main():
 
         def rstr(n, cap=16):
             return m.readseg(pseg, sy[n], cap).split(b"\0")[0].decode("latin-1")
+
+        def why():
+            """[tz_why] -> the string it points at, which is the terminal's own
+            account of why a transfer stopped (SPEC.md 47)."""
+            p = rw("tz_why")
+            if not p:
+                return ""
+            return (m.readseg(pseg, p, 32).split(b"\0")[0]
+                    .decode("latin-1"))
 
         def rect(name):
             d = m.readseg(pseg, sy[name], 8)
@@ -377,83 +446,6 @@ def main():
             return False
 
         # =====================================================================
-        # SESSION 1 - the mangle, and the cancel that carries it
-        # =====================================================================
-        if not a.skip_mangle:
-            batch = make_files(tmp)
-            srv = os88bbs.BBSServer(port=PORT, files=[p for p, _, _ in batch],
-                                    zwait=0.5, timeout=240.0, once=True)
-            srv.start()
-            time.sleep(0.3)
-            press_connect()
-            if not connected():
-                srv.stop()
-                fails.append("session 1 never reached TS_UP (te_state %d)"
-                             % rb("te_state"))
-            elif not wait_start():
-                srv.stop()
-                fails.append("session 1: the Zmodem auto-start never fired - "
-                             "[te_zon] 0, [tz_diag] 0 (SPEC.md 70.9.6)")
-            else:
-                seen = []
-                for _, src, want in batch:
-                    if not wait_dlg():
-                        fails.append("no Save dialog for %r - [tz_st] %d, "
-                                     "[te_zon] %d, [tz_diag] %d"
-                                     % (src, rb("tz_st"), rb("te_zon"),
-                                        rb("tz_diag")))
-                        break
-                    got = rstr("tz_name", 16)
-                    seen.append((src, want, got))
-                    # **COMMITTED, NOT CANCELLED.** The mangle is what this
-                    # session is for, and every dialog answered with Return
-                    # also lands the file - so the names are asserted twice,
-                    # once in [tz_name] and once as a directory entry. The
-                    # cancel gets a session of its own below, which is what
-                    # SPEC.md 70.12 asks for.
-                    telansi.qmp("sendkey ret")
-                    if not wait_nodlg(20.0):
-                        fails.append("the dialog for %r was answered and "
-                                     "[tz_dlg] is still set after 20s" % src)
-                        break
-                for src, want, got in seen:
-                    ok = "ok " if got == want else "MISMATCH"
-                    say("mangle  %-28r -> %-13r %s" % (src, got, ok))
-                    if got != want:
-                        fails.append("mangle83(%r) is %r on the machine and %r "
-                                     "in tools/os88bbs.py - the two readers of "
-                                     "SPEC.md 77.20's rule disagree"
-                                     % (src, got, want))
-                if len(seen) != len(batch):
-                    fails.append("only %d of %d dialogs appeared"
-                                 % (len(seen), len(batch)))
-                wait_off(60.0)
-                # --- 3: the terminal is back --------------------------------
-                if rb("te_zon"):
-                    fails.append("[te_zon] is still set after the batch - the "
-                                 "receiver never gave the stream back")
-                if rb("tz_pan"):
-                    fails.append("[tz_pan] is still set - the progress "
-                                 "takeover never came off (SPEC.md 70.11.5)")
-                srv.stop()
-                logs["mangle"] = srv.log_dict()
-                sent = [f for f in logs["mangle"].get("zmodem_files", [])
-                        if f.get("result") == "sent"]
-                say("batch   %d of %d files sent, %d dialogs"
-                    % (len(sent), len(batch), len(seen)))
-                if len(sent) != len(batch):
-                    fails.append("%d of %d files in the batch were sent - a "
-                                 "batch is ZFILE again after ZEOF and each "
-                                 "file gets its own dialog (SPEC.md 70.11.2)"
-                                 % (len(sent), len(batch)))
-            press_connect()                     # Close: ASKED, and the worker
-            for _ in range(40):                 # is what carries it out
-                if rb("te_state") != telansi.TS_UP:
-                    break
-                time.sleep(0.3)
-            time.sleep(1.5)
-
-        # =====================================================================
         # SESSION 2 - two files, byte for byte, and one deliberate ZBIN32
         # =====================================================================
         sizes = {}
@@ -504,6 +496,28 @@ def main():
                 fails.append("the transfer never finished - [tz_st] %d, "
                              "[tz_req] %d, %d bytes committed"
                              % (rb("tz_st"), rb("tz_req"), rw("tz_pos")))
+            # **AND THE BOARD'S SCREEN IS UNTOUCHED.** The receiver owns the
+            # stream from the handover to the sender's closing `OO`, so not one
+            # byte of it may reach the ANSI parser - and ending on the FIRST of
+            # those two `O`s left the second to be printed, so every completed
+            # batch used to leave a stray `O` on the screen.
+            scr = m.readseg(pseg, sy["te_scr"], TE_SCRSZ)
+            lit = [i // 2 for i in range(0, TE_SCRSZ, 2) if scr[i] != 0x20]
+            got = bytes(scr[2 * c] for c in lit)
+            say("screen  %d cell(s) hold a glyph after the batch: %r"
+                % (len(lit), got))
+            # **`**B0` IS THE ONLY THING THAT MAY BE THERE**, and it is SPEC.md
+            # 70.9.6's own behaviour: the auto-start's matched bytes are DRAWN
+            # on the way past, the 0x18 is consumed as CAN and the final `0` is
+            # never drawn because the detector fires on it. Anything else is a
+            # byte of the transfer that reached the ANSI parser - which is what
+            # ending on the FIRST of the sender's two closing `O`s used to
+            # leave behind.
+            if got != b"**B0" or lit != [0, 1, 2, 3]:
+                fails.append("the terminal holds %r at cells %r after a Zmodem "
+                             "batch; SPEC.md 70.9.6 leaves exactly `**B0` in "
+                             "the first four, so the rest is transfer data that "
+                             "reached the ANSI parser" % (got, lit[:8]))
         time.sleep(1.5)
         press_connect()
         for _ in range(40):
@@ -515,7 +529,67 @@ def main():
         logs["xfer"] = srv.log_dict()
 
         # =====================================================================
-        # SESSION 3 - THE CANCEL (SPEC.md 70.11.4/70.12)
+        # SESSION 3 - A SENDER THAT DECLARES THE WRONG SIZE (SPEC.md 70.11.6)
+        # =====================================================================
+        lfile = os.path.join(tmp, "LIAR.BIN")
+        open(lfile, "wb").write(ldata)
+        os88bbs.ZmodemSender = LyingSize
+        try:
+            srv = os88bbs.BBSServer(port=PORT, files=[lfile], zwait=0.5,
+                                    timeout=200.0, once=True)
+            srv.start()
+            time.sleep(0.3)
+            press_connect()
+            if not connected():
+                fails.append("session 3 never reached TS_UP (te_state %d)"
+                             % rb("te_state"))
+            elif not wait_start():
+                fails.append("session 3: the Zmodem auto-start never fired for "
+                             "the lying sender - [te_zon] 0, so its ZRQINIT "
+                             "never arrived")
+            elif not wait_dlg(60.0):
+                fails.append("session 3: no Save dialog for the lying sender - "
+                             "[tz_st] %d, [tz_diag] %d"
+                             % (rb("tz_st"), rb("tz_diag")))
+            else:
+                say("liar    declared %d bytes, sending %d"
+                    % (rw("tz_fsz"), len(ldata)))
+                telansi.qmp("sendkey ret")
+                wait_nodlg(20.0)
+                if not wait_off(180.0):
+                    fails.append("the lying sender's transfer never finished - "
+                                 "[tz_st] %d, %d bytes committed"
+                                 % (rb("tz_st"), rw("tz_pos")))
+                # **THE MACHINE IS STILL THERE**, which is the whole assertion:
+                # an #DE on a kernel with no int 0 handler is an uncontrolled
+                # far jump, and its symptom is a guest that has stopped
+                # answering rather than a wrong progress bar.
+                st = rb("te_state")
+                if st != telansi.TS_UP:
+                    fails.append("after a ZFILE declaring size 1 the session is "
+                                 "in state %d - a `div` by a number the WIRE "
+                                 "chose raises #DE and this kernel installs no "
+                                 "int 0 handler (SPEC.md 70.11.6)" % st)
+                else:
+                    say("liar    the session is still up and the terminal is "
+                        "back")
+            time.sleep(1.0)
+            press_connect()
+            for _ in range(40):
+                if rb("te_state") != telansi.TS_UP:
+                    break
+                time.sleep(0.3)
+            time.sleep(1.5)
+            srv.stop()
+            logs["liar"] = srv.log_dict()
+            if srv.error:
+                fails.append("the lying sender's server thread died: %s"
+                             % srv.error)
+        finally:
+            os88bbs.ZmodemSender = REAL_SENDER
+
+        # =====================================================================
+        # SESSION 4 - THE CANCEL (SPEC.md 70.11.4/70.12)
         # =====================================================================
         cfile = os.path.join(tmp, "CANCEL.BIN")
         afile = os.path.join(tmp, "AFTER.BIN")
@@ -527,10 +601,10 @@ def main():
         time.sleep(0.3)
         press_connect()
         if not connected():
-            fails.append("session 3 never reached TS_UP (te_state %d)"
+            fails.append("session 4 never reached TS_UP (te_state %d)"
                          % rb("te_state"))
         elif not wait_dlg(60.0):
-            fails.append("session 3: no Save dialog to cancel - [tz_st] %d, "
+            fails.append("session 4: no Save dialog to cancel - [tz_st] %d, "
                          "[tz_diag] %d" % (rb("tz_st"), rb("tz_diag")))
         else:
             t0 = time.time()
@@ -568,7 +642,16 @@ def main():
                 say("cancel  the next file asked: %r" % rstr("tz_name", 16))
                 telansi.qmp("sendkey ret")
                 wait_nodlg(20.0)
-            wait_off(120.0)
+            ok = wait_off(120.0)
+            say("cancel  [tz_st] %d [tz_req] %d [tz_diag] %d, %d committed of "
+                "%d received, reason %r"
+                % (rb("tz_st"), rb("tz_req"), rb("tz_diag"), rw("tz_pos"),
+                   rw("tz_rcv"), why()))
+            if rb("tz_ferr"):
+                say("cancel  the commit was refused with FERR %d"
+                    % rb("tz_ferr"))
+            if not ok:
+                fails.append("the cancel run's second file never finished")
             if rb("te_zon"):
                 fails.append("[te_zon] is still set after the cancel run - the "
                              "receiver never gave the stream back")
@@ -580,6 +663,128 @@ def main():
         time.sleep(1.5)
         srv.stop()
         logs["cancel"] = srv.log_dict()
+
+        # =====================================================================
+        # SESSION 5 - THE MANGLE, AND IT RUNS LAST
+        #
+        # **THE FOLDER IS WHY IT IS LAST AND WHY ITS TAIL IS CANCELLED.** A
+        # subdirectory on this volume is ONE 512-byte cluster - sixteen entries
+        # - and it does not grow: three are taken before this test runs and the
+        # four sessions above add four more, so nine slots are left for a table
+        # of twelve rows. And a CANCELLED dialog is only reaped on a later UI
+        # pass (SPEC.md 38.1.1), during which `OSAPI_FILE_DLG` refuses and the
+        # receiver's bounded retry gives up - which was reliable for one cancel
+        # and not for two, so cancels are safe only where no dialog follows.
+        #
+        # Both constraints point the same way: this session runs LAST, commits
+        # the first nine rows and cancels the last three. Every row's mangle is
+        # asserted from [tz_name] at its dialog; the committed ones are
+        # asserted again as directory entries.
+        # =====================================================================
+        if not a.skip_mangle:
+            batch = make_files(tmp)
+            srv = os88bbs.BBSServer(port=PORT, files=[p for p, _, _ in batch],
+                                    zwait=0.5, timeout=240.0, once=True)
+            srv.start()
+            time.sleep(0.3)
+            press_connect()
+            if not connected():
+                srv.stop()
+                fails.append("session 1 never reached TS_UP (te_state %d)"
+                             % rb("te_state"))
+            elif not wait_start():
+                srv.stop()
+                fails.append("session 1: the Zmodem auto-start never fired - "
+                             "[te_zon] 0, [tz_diag] 0 (SPEC.md 70.9.6)")
+            else:
+                seen = []
+                for _, src, want in batch:
+                    if not wait_dlg():
+                        fails.append("no Save dialog for %r - [tz_st] %d, "
+                                     "[te_zon] %d, [tz_diag] %d"
+                                     % (src, rb("tz_st"), rb("te_zon"),
+                                        rb("tz_diag")))
+                        break
+                    got = rstr("tz_name", 16)
+                    seen.append((src, want, got))
+                    # **CANCELLED, EXCEPT ONE, AND THE FOLDER IS WHY.** A
+                    # subdirectory on this volume is ONE 512-byte cluster - 16
+                    # entries - and it does not grow: committing all twelve
+                    # filled `MEDIA/` and the next session's first write was
+                    # refused FERR_DIRFULL, which is a fact about the gate and
+                    # not about the receiver. So the mangle is asserted from
+                    # [tz_name] and the ROUND TRIP from one committed row, and
+                    # the other eleven exercise the cancel path eleven times
+                    # over on the way past.
+                    # **WHICH ROWS ARE CANCELLED IS NOT ARBITRARY**, and the
+                    # two constraints pull opposite ways.
+                    #
+                    #  * A subdirectory on this volume is ONE 512-byte cluster -
+                    #    sixteen entries - and it does not grow, so committing
+                    #    all twelve filled `MEDIA/` and the next session's first
+                    #    write came back FERR_DIRFULL.
+                    #  * TWO CONSECUTIVE CANCELS produced no third dialog: the
+                    #    dialog a cancel leaves behind is only reaped on a later
+                    #    UI pass (SPEC.md 38.1.1), `OSAPI_FILE_DLG` refuses
+                    #    while it is up, and the receiver's bounded retry then
+                    #    gives up and ZSKIPs. Observed, not explained - see
+                    #    /tmp/bbs-reports/w4-fix.md.
+                    #
+                    # So four NON-ADJACENT rows are cancelled, which leaves
+                    # seven distinct names on the disk, two spare slots, and no
+                    # cancel next to another.
+                    keep = len(seen) <= 9       # ...the first nine commit and
+                                                # the last three cancel, which
+                                                # is the folder's arithmetic
+                    telansi.qmp("sendkey ret" if keep else "sendkey esc")
+                    if not wait_nodlg(25.0):
+                        fails.append("the dialog for %r was %s and [tz_dlg] is "
+                                     "still set after 25s"
+                                     % (src, "answered" if keep else
+                                        "cancelled"))
+                        break
+                for src, want, got in seen:
+                    ok = "ok " if got == want else "MISMATCH"
+                    say("mangle  %-28r -> %-13r %s" % (src, got, ok))
+                    if got != want:
+                        fails.append("mangle83(%r) is %r on the machine and %r "
+                                     "in tools/os88bbs.py - the two readers of "
+                                     "SPEC.md 77.20's rule disagree"
+                                     % (src, got, want))
+                if len(seen) != len(batch):
+                    fails.append("only %d of %d dialogs appeared"
+                                 % (len(seen), len(batch)))
+                wait_off(60.0)
+                # --- 3: the terminal is back --------------------------------
+                if rb("te_zon"):
+                    fails.append("[te_zon] is still set after the batch - the "
+                                 "receiver never gave the stream back")
+                if rb("tz_pan"):
+                    fails.append("[tz_pan] is still set - the progress "
+                                 "takeover never came off (SPEC.md 70.11.5)")
+                srv.stop()
+                logs["mangle"] = srv.log_dict()
+                zf = logs["mangle"].get("zmodem_files", [])
+                sent = [f for f in zf if f.get("result") == "sent"]
+                skip = [f for f in zf if f.get("result") == "skipped"]
+                say("batch   %d dialogs, %d file(s) sent and %d skipped of %d"
+                    % (len(seen), len(sent), len(skip), len(batch)))
+                if len(seen) != len(batch):
+                    fails.append("%d of %d dialogs appeared - a batch is ZFILE "
+                                 "again after ZEOF and each file gets its own "
+                                 "(SPEC.md 70.11.2)" % (len(seen), len(batch)))
+                if len(sent) != 9 or len(skip) != 3:
+                    fails.append("the batch answered nine dialogs with Return "
+                                 "and three with Escape, and the server saw %d "
+                                 "sent and %d skipped: %r"
+                                 % (len(sent), len(skip), zf))
+            press_connect()                     # Close: ASKED, and the worker
+            for _ in range(40):                 # is what carries it out
+                if rb("te_state") != telansi.TS_UP:
+                    break
+                time.sleep(0.3)
+            time.sleep(1.5)
+
         zc = logs["cancel"].get("zmodem", [])
         if not any(e.get("frame") == "ZSKIP" and e.get("dir") == "rx"
                    for e in zc):
@@ -604,7 +809,8 @@ def main():
                                         # been writing, before it is read back
 
     # --- 4: THE BYTES, off the disk, by an independent FAT12 reader ---------
-    for name, want in (("SMALL.BIN", sdata), ("BIG.BIN", bdata)):
+    for name, want in (("SMALL.BIN", sdata), ("BIG.BIN", bdata),
+                       ("LIAR.BIN", ldata)):
         got = sizes.get(name) if "sizes" in dir() else None
         if got is not None and got != (len(want) & 0xFFFF):
             fails.append("the dialog for %s declared %d bytes and the server "
@@ -652,18 +858,26 @@ def main():
         say("cancel  CANCEL.BIN wrote nothing, AFTER.BIN arrived whole "
             "(%d bytes)" % len(agot))
 
-    # --- ...and the mangled names as DIRECTORY ENTRIES ----------------------
+    # --- ...and the ROUND TRIP, as a directory entry ------------------------
     # The same rule read a second way: [tz_name] is what the receiver computed
-    # and this is what the file system kept, and a Save dialog answered with
-    # Return stores exactly the name it was pre-filled with.
-    for src, want in os88bbs.MANGLE83_CASES:
-        if src in UNSENDABLE:
-            continue
-        if extract(img, name11(want), path=("MEDIA      ",)) is None:
-            fails.append("the batch's %r was saved as %r and MEDIA/ has no "
-                         "such file" % (src, want))
-    say("names   %d mangled names are directory entries in MEDIA/"
-        % (len(os88bbs.MANGLE83_CASES) - len(UNSENDABLE)))
+    # and this is what the file system kept. One row rather than twelve, because
+    # a subdirectory here is 16 entries and does not grow - the other eleven
+    # dialogs are cancelled and write nothing, which is what leaves room for the
+    # sessions below.
+    # The nine rows the batch COMMITTED, read back as directory entries:
+    # [tz_name] is what the receiver computed and this is what the file system
+    # kept, which is the same rule read twice (SPEC.md 70.11.4). The three the
+    # batch cancels are asserted at their dialogs and write nothing.
+    landed = [w for _, w in os88bbs.MANGLE83_CASES
+              if _ not in UNSENDABLE][:9]
+    missing = [w for w in landed
+               if extract(img, name11(w), path=("MEDIA      ",)) is None]
+    if missing:
+        fails.append("the batch committed %r and MEDIA/ has no such file(s)"
+                     % missing)
+    else:
+        say("names   %d mangled names are directory entries in MEDIA/"
+            % len(set(name11(w) for w in landed)))
 
     # --- 5: the headers both ways, out of the server's own log --------------
     zl = logs.get("xfer", {}).get("zmodem", [])
@@ -703,7 +917,7 @@ def main():
         fails.append("a ZBIN32 header went out and no ZNAK came back "
                      "(SPEC.md 70.11.1)")
 
-    for k in ("mangle", "xfer"):
+    for k in sorted(logs):
         if k in logs:
             p = os.path.join(ROOT, "build", "telzm-%s.json" % k)
             json.dump(logs[k], open(p, "w"), indent=1, sort_keys=True)

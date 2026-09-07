@@ -619,17 +619,16 @@ te_status:
     push si
     push di
     call tz_label
+    mov si, [tz_why]                ; **A REASON BEATS A COUNT.** A file refused
+    or si, si                       ; for its cluster size (SPEC.md 70.11.3) is
+    jnz .have                       ; a fact the user has to read, and the batch
+                                    ; carries on underneath it - so it stays on
+                                    ; the row until the next file is accepted
     cmp byte [tz_pan], 0
-    je .conn
+    je .st
     call tz_text                    ; `NAME  12,345 / 98,765` (SPEC.md 70.11.5),
     mov si, tz_msg                  ; and the counter moves per COMMITTED CHUNK
     jmp short .have
-.conn:
-    cmp byte [tz_st], ZR_ERR
-    jne .st
-    mov si, [tz_why]                ; ...and a transfer that failed says WHY on
-    or si, si                       ; the same row, which is where the eye
-    jnz .have                       ; already is
 .st:
     mov bl, [te_state]
     xor bh, bh
@@ -3097,24 +3096,42 @@ tz_req      equ tz_made + 1           ; byte: TZ_* - **THE WHOLE HANDSHAKE**,
 tz_rst      equ tz_req + 1            ; byte: TZR_*, the UI task's answer
 tz_uh       equ tz_rst + 1            ; byte: ...which half it is to write
 tz_dlg      equ tz_uh + 1             ; byte: a Save dialog is up
-tz_nw       equ tz_dlg + 1             ; byte: how many windows the desktop had
-                                      ; just BEFORE the dialog, which is the
-                                      ; second of SPEC.md 70.11.4's two signals
-tz_base     equ tz_nw + 1             ; byte: ...that count while the open is in
-                                      ; flight - a REFUSED one must not move the
-                                      ; baseline
-tz_want     equ tz_base + 1            ; byte: the menu item asked; the WORKER
+tz_pcan     equ tz_dlg + 1            ; byte: a W_PAINT SUSPECTS a cancel, and
+                                      ; tz_wake's next pass decides - the paint
+                                      ; may not, because wm_destroy calls it
+                                      ; INLINE on the way to the completion proc
+                                      ; (SPEC.md 70.11.4)
+tz_dslot    equ tz_pcan + 1           ; byte: the window slot the dialog took,
+                                      ; 0xFF = not known. A tally of all twelve
+                                      ; is a fact about the DESKTOP; one slot is
+                                      ; a fact about the dialog
+tz_base     equ tz_dslot + 1          ; word: the live-slot BITMAP before the
+                                      ; open, so the new bit names the slot
+tz_want     equ tz_base + 2            ; byte: the menu item asked; the WORKER
                                       ; starts the transfer
 tz_pan      equ tz_want + 1           ; byte: the progress takeover has the
                                       ; terminal's area
-tz_try      equ tz_pan + 1            ; byte: timeouts in a row
+tz_cans     equ tz_pan + 1            ; byte: `ZDLE ZDLE`s in a row - five is
+                                      ; the sender's ABORT and not a lost place
+tz_oo       equ tz_cans + 1           ; byte: `O`s of the sender's closing `OO`
+tz_ferr     equ tz_oo + 1             ; byte: the FERR_* a commit was refused
+                                      ; with, because `Disk error` is what all
+                                      ; of them look like from outside
+tz_try      equ tz_ferr + 1             ; byte: timeouts in a row
 tz_dtry     equ tz_try + 1            ; byte: ...and refused dialogs in a row
 tz_un       equ tz_dtry + 1            ; word: bytes in the half handed over
 tz_fill     equ tz_un + 2             ; word: bytes in the half being filled
 tz_chunk    equ tz_fill + 2           ; word: the commit size, a whole number of
                                       ; the DESTINATION's clusters (SPEC.md
                                       ; 18.4.4)
-tz_n        equ tz_chunk + 2          ; word: HEADER bytes or nibbles, and a
+tz_clus     equ tz_chunk + 2          ; word: the DESTINATION's cluster in
+                                      ; bytes, so a refusal names the FACT
+                                      ; rather than the word "large"
+                                      ; (SPEC.md 47)
+tz_skip     equ tz_clus + 2          ; word: bytes the sender is re-sending
+                                      ; over ones already committed, dropped as
+                                      ; they arrive (SPEC.md 70.11.2)
+tz_n        equ tz_skip + 2           ; word: HEADER bytes or nibbles, and a
                                       ; subpacket's two CRC bytes
 tz_dn       equ tz_n + 2              ; word: ...and a subpacket's DATA bytes,
                                       ; which is a SECOND counter because
@@ -3133,7 +3150,13 @@ tz_pos      equ tz_why + 2            ; dword: bytes the UI task has WRITTEN -
                                       ; the only offset a ZRPOS may name
 tz_rcv      equ tz_pos + 4            ; dword: ...and bytes accepted into
                                       ; staging, which is what a ZACK names
-tz_fsz      equ tz_rcv + 4            ; dword: the size the sender declared
+tz_sub0     equ tz_rcv + 4            ; dword: where the subpacket now filling
+                                      ; STARTED, which is what a ZRPOS names
+                                      ; after a CRC error - a subpacket that
+                                      ; straddled a chunk boundary has part of
+                                      ; itself already on the disk, and there is
+                                      ; no truncate verb to take it back
+tz_fsz      equ tz_sub0 + 4            ; dword: the size the sender declared
 tz_cb       equ tz_fsz + 4            ; 2: a subpacket's two CRC bytes
 tz_hb       equ tz_cb + 2             ; 8: a header - type, four, and its CRC
 TZ_CTL      equ (tz_hb + 8) - tz_st   ; ...and tz_begin zeroes the LOT
@@ -3162,7 +3185,10 @@ tz_diag     equ te_fsi + FSI_SIZE     ; byte: WHAT HAPPENED TO THE DIALOG, one
                                       ; write them down
 tz_name     equ tz_diag + 1           ; 14: the 8.3 name, mangled then chosen
 tz_msg      equ tz_name + 14          ; 48: the progress line
-tz_dig      equ tz_msg + 48           ; 12: tz_num's digits, written backwards
+tz_bmsg     equ tz_msg + 48           ; 32: ...and a REFUSAL, which needs a
+                                      ; buffer of its own because te_status
+                                      ; rewrites the progress line on every draw
+tz_dig      equ tz_bmsg + 32          ; 12: tz_num's digits, written backwards
 tz_ob       equ tz_dig + 12           ; 24: one composed header, on its way out
 tz_ohdr     equ tz_ob + 24            ; 4: ...and its four header bytes
 tz_info     equ tz_ohdr + 4           ; TZ_INFOSZ: the ZFILE info block
@@ -3193,6 +3219,44 @@ TE_BSS      equ (tz_stg - os88_image_end) + TZ_STGSZ
 %if te_fsi < te_pst + TE_PSTATE
   %error "te_fsi must lie ABOVE te_pst..the Zmodem block: te_reset zeroes that run in one rep stosb, and OSAPI_FSX_MODE writes FSI_SIZE bytes over whatever te_fsi names"
 %endif
-%if tz_stg + TZ_STGSZ != os88_image_end + TE_BSS
-  %error "TE_BSS must reach the end of the staging area: a claim short of it is a download writing past the block"
+
+; --- ...AND THE BUFFERS, WHICH IS WHAT WAS ACTUALLY UNGUARDED ---------------
+; The two assertions above restate their own definitions: `TE_PSTATE` and
+; `te_fsi` are both derived from `tz_hb + 8`, so the first compares an
+; expression with itself and fires only if somebody moves `te_fsi`'s `equ` -
+; which is worth having, being the shape of the wave-3 blocker - and the second
+; was a tautology that could never fire at all, so it is gone.
+;
+; What nothing tied down is the seven fixed-size buffers between `te_fsi` and
+; `tz_stg`, each chained with a literal that no code references. All of them fit
+; today and all of them are one caption or one separator from not fitting, and
+; overrunning any of them writes into its neighbour with no symptom until the
+; neighbour is read. These are the sizes the CODE needs, written where the
+; sizes are declared.
+TZ_NAMEMAX  equ 13                  ; tz_dlgdone copies 12 and terminates
+TZ_MSGMAX   equ 44                  ; tz_text: 12 of name, 2, 13, 3, 13, NUL
+TZ_BMSGMAX  equ 30                  ; tz_bigmsg: 8 + up to 13 + 8 + NUL, and
+                                    ; [tz_clus] is a WORD so it is really 6
+TZ_DIGMAX   equ 11                  ; tz_num: ten digits and a NUL
+TZ_OBMAX    equ 21                  ; tz_hex: 4 + 2 + 8 + 4 + 2 + XON
+%if tz_msg - tz_name < TZ_NAMEMAX
+  %error "tz_name is smaller than the 8.3 name tz_dlgdone copies into it"
+%endif
+%if tz_bmsg - tz_msg < TZ_MSGMAX
+  %error "tz_msg is smaller than tz_text's longest progress line"
+%endif
+%if tz_dig - tz_bmsg < TZ_BMSGMAX
+  %error "tz_bmsg is smaller than tz_bigmsg's longest refusal"
+%endif
+%if tz_ob - tz_dig < TZ_DIGMAX
+  %error "tz_dig is smaller than tz_num's ten digits and its NUL"
+%endif
+%if tz_ohdr - tz_ob < TZ_OBMAX
+  %error "tz_ob is smaller than the 21-byte hex header tz_hex composes in it"
+%endif
+%if tz_stg - tz_info < TZ_INFOSZ
+  %error "tz_info is smaller than TZ_INFOSZ, which is what tz_sink bounds against"
+%endif
+%if TE_SLINE + 1 > TE_COLS + 1
+  %error "te_sline holds the status field: TE_SLINE cells plus a NUL"
 %endif
