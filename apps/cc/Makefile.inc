@@ -118,7 +118,7 @@ endef
 define CC_PACKAGE
 
 $(BUILD)/$(1).raw.asm: apps/$(2)/$(1).c $(CC_RUNTIME) | $(BUILD) cc-toolchain
-	PATH="$(CURDIR)/$(CC_SC):$$$$PATH" $(CC_SMLRCC) -tiny -S \
+	PATH="$(abspath $(CC_SC)):$$$$PATH" $(CC_SMLRCC) -tiny -S \
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
 		apps/$(2)/$(1).c -o $$@
 
@@ -137,24 +137,22 @@ $(BUILD)/$(1).bin: apps/$(2)/$(1).asm $(BUILD)/$(1).gen.asm $(CC_RUNTIME) | $(BU
 $(BUILD)/$(1).o88: $(BUILD)/$(1).bin tools/os88pkg.py $(if $(3),tools/os88ovl.py) $(4)
 	$(if $(3),python3 tools/os88ovl.py $$< -o $(BUILD)/$(3) --trim $(BUILD)/$(1).trim.bin$(CC_NL)	python3 tools/os88pkg.py $(BUILD)/$(1).trim.bin -o $$@ $(addprefix --part ,$(4)),python3 tools/os88pkg.py $$< -o $$@ $(addprefix --part ,$(4)))
 
+# The overlay is also a direct prerequisite of the all-apps/live images.
+# Declare its producer for fresh builds; recover it if only it was deleted.
+$(if $(3),$(BUILD)/$(3): $(BUILD)/$(1).o88$(CC_NL)	@test -f $$@ || python3 tools/os88ovl.py $(BUILD)/$(1).bin -o $$@ --trim $(BUILD)/$(1).trim.bin)
+
 endef
 
 # -----------------------------------------------------------------------------
-# The guard. `make cc-smoke` on a tree that has never run tools/setup-cc.sh
-# should say so in one line, not fail somewhere inside a recipe.
+# Bootstrap once per make invocation, before any C compilation (including -j).
+# The setup script is idempotent and verifies the pinned compiler with a canary.
+# Ordinary assembly-only builds never depend on this target.
 # -----------------------------------------------------------------------------
 .PHONY: cc-toolchain
 cc-toolchain:
-	@test -x $(CC_SMLRCC) || { \
-	  echo "";                                                             \
-	  echo "The C compiler is not built. It is not in this tree - build/"; \
-	  echo "is gitignored and nothing under it is ever committed. Run:";   \
-	  echo "";                                                             \
-	  echo "    tools/setup-cc.sh";                                        \
-	  echo "";                                                             \
-	  echo "It fetches SmallerC at its pinned commit, builds three";       \
-	  echo "binaries, and runs a canary C file through the whole chain.";  \
-	  echo ""; exit 1; }
+	@if ! test -x "$(CC_SC)/smlrc" || ! test -x "$(CC_SMLRCC)" || ! test -x "$(CC_SC)/smlrpp"; then \
+	  tools/setup-cc.sh --build-dir "$(BUILD)"; \
+	fi
 
 # -----------------------------------------------------------------------------
 # CCSMOKE - the C toolchain's smoke test (apps/cc/ccsmoke.c), and the worked

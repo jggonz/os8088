@@ -4279,8 +4279,8 @@ $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88dis
 #    builds every floppy this project ships; `make` there prints the one
 #    paragraph cc-note holds and exits 0. Every rule below reaches the
 #    compiler only through the `cc-toolchain` order-only guard in
-#    apps/cc/Makefile.inc, which prints the command to run rather than failing
-#    from inside a recipe with "no such file".
+#    apps/cc/Makefile.inc, which sets up missing compiler binaries before
+#    the compilation starts.
 #
 #  * CWORD DOES NOT RIDE THE SHIPPED APPS DISKS. It takes Frotz's and Word's
 #    precedent (SPEC.md 61, 65.5, and 67.12 names the disk and the machine):
@@ -4296,13 +4296,12 @@ cc-note:
 	@test -x $(CC_SMLRCC) || { \
 	  echo "";                                                              \
 	  echo "note: the C toolchain (SPEC.md 73) is not built, so the C";     \
-	  echo "      targets - cc-smoke, chello, cword, cworddisk,";           \
-	  echo "      paccman, paccmandisk, pmcbandbench, xt-paccman";         \
-	  echo "      and 386-c-word - are unavailable. Everything else,";      \
-	  echo "      which is";                                                \
-	  echo "      every floppy this project ships, is built above.";        \
+	  echo "      targets - cc-smoke, chello, cword, cworddisk, paccman,";   \
+	  echo "      paccmandisk, pmcbandbench, xt-paccman and";               \
+	  echo "      386-c-word - will set it up automatically. Everything else,"; \
+	  echo "      including every shipping floppy, is built above.";        \
 	  echo "";                                                              \
-	  echo "      To get it:  tools/setup-cc.sh";                           \
+	  echo "      To set it up explicitly: tools/setup-cc.sh";                           \
 	  echo "";                                                              \
 	  echo "      It fetches SmallerC at its pinned commit into build/cc/"; \
 	  echo "      - the compiler is not in this tree because build/ is";    \
@@ -4331,7 +4330,7 @@ cc-note:
 # up, that is the moment to lift these four rules into a directory-taking
 # CC_PACKAGE_AT and give both callers the same one.
 $(BUILD)/chello.raw.asm: tests/chello/chello.c $(CC_RUNTIME) | $(BUILD) cc-toolchain
-	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
 		tests/chello/chello.c -o $@
 
@@ -4375,7 +4374,7 @@ chello: $(BUILD)/chello.img $(BUILD)/chello360.img
 # SPACE, and read the numbers - each one is a different way for the mechanism
 # to be wrong (tests/covl/covl.c says which).
 $(BUILD)/covl.raw.asm: tests/covl/covl.c $(CC_RUNTIME) | $(BUILD) cc-toolchain
-	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
 		tests/covl/covl.c -o $@
 
@@ -4766,6 +4765,11 @@ RUNCPMDIR := $(BUILD)/runcpm-disk
 $(BUILD)/runcpm-src.stamp: tools/getruncpm.py | $(BUILD)
 	python3 tools/getruncpm.py -o $(RUNCPMDIR)
 	@touch $@
+
+# Live/all-apps images also name these files directly. Their producer must
+# be visible to make before the first fetch, including parallel builds.
+$(RUNCPMDIR)/CCP-DR.60K $(RUNCPMDIR)/LICENSE $(RUNCPMDIR)/1STREAD.ME: $(BUILD)/runcpm-src.stamp
+	@test -f $@ || python3 tools/getruncpm.py -o $(RUNCPMDIR)
 
 runcpm-src: $(BUILD)/runcpm-src.stamp
 
@@ -5478,7 +5482,7 @@ $(BUILD)/lmfoldc.h: tools/weavesim.py | $(BUILD)
 
 $(BUILD)/loom.raw.asm: apps/loom/loom.c $(CC_RUNTIME) $(BUILD)/lmfoldc.h \
                        | $(BUILD) cc-toolchain
-	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(BUILD) \
 		apps/loom/loom.c -o $@
 
@@ -5494,6 +5498,10 @@ $(BUILD)/loom.o88: $(BUILD)/loom.bin tools/os88pkg.py tools/os88ovl.py
 	python3 tools/os88ovl.py $< -o $(BUILD)/LOOM.OVL \
 		--trim $(BUILD)/loom.trim.bin
 	python3 tools/os88pkg.py $(BUILD)/loom.trim.bin -o $@
+
+# A direct prerequisite of live/all-apps media, produced with loom.o88.
+$(BUILD)/LOOM.OVL: $(BUILD)/loom.o88
+	@test -f $@ || python3 tools/os88ovl.py $(BUILD)/loom.bin -o $@ --trim $(BUILD)/loom.trim.bin
 
 # THE REST OF THE TRANSLATION UNIT, exactly as the WEAVE block above explains
 # it: `nasm -f bin` has no notion of an external symbol, so a C package is ONE
@@ -5539,7 +5547,7 @@ $(BUILD)/loom.bin:     $(LOOMINC) $(WEAVEINC) $(BUILD)/wpvsize.inc
 # frames), and apps/cc/os88thunk.asm.
 $(BUILD)/lmpvmod.raw.asm: apps/loom/lmpvmod.c $(CC_RUNTIME) $(LOOMSRC) \
                           $(WEAVESRC) | $(BUILD) cc-toolchain
-	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(BUILD) \
 		apps/loom/lmpvmod.c -o $@
 
@@ -7737,7 +7745,9 @@ ALLAPPSFILES := $(APPS) $(BUILD)/frotz.o88 \
                 apps/c64/README.TXT apps/c64/COPYING \
                 $(WEAVEDISK) $(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS) \
                 $(RUNCPMDISK)
-ALLAPPS := $(ALLAPPSFILES) $(RUNCPMDEPS)
+# These images use the RunCPM master disk, but not the separate CP/M
+# software collection used by runcpmdisk. Do not fetch that unused payload.
+ALLAPPS := $(ALLAPPSFILES) $(BUILD)/runcpm-src.stamp tools/getruncpm.py
 
 # LOOMRUN IS NAMED TWICE ON THIS DISK AND MUST BE PRICED TWICE. ALLAPPSARGS
 # below places the runtime's three files under WEAVE\ and again under LOOM\,
@@ -7877,6 +7887,11 @@ $(LIVEISO): $(USBIMG) $(SYSDOC) tools/os88iso.py
 # so and takes a path (an unpacked release zip has the same files).
 burn:
 	@python3 tools/os88burn.py
+
+# Discover built images and attached floppy/USB/CD media without building.
+.PHONY: imager
+imager:
+	@python3 tools/os88imager.py --images "$(BUILD)"
 
 # `make combo` -> build/combo.img: ONE 360KB bootable disk with the system,
 # every application AND the four benchmarks on it.

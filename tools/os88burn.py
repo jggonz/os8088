@@ -189,9 +189,9 @@ def find_image(given, default_name, checker, what):
         checker(cand)
         return cand
     print()
-    print("  build/%s is not built. `make live` builds it (it needs the" %
+    print("  build/%s is not built. `make live` builds it and sets up" %
           default_name)
-    print("  C toolchain and `make runcpm-src` first - SPEC.md 80), or")
+    print("  its missing compiler and RunCPM prerequisites, or")
     print("  point at one from an unpacked release zip.")
     while True:
         p = ask("  path to %s (or q to go back): " % what)

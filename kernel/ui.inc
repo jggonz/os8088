@@ -229,7 +229,7 @@ ui_task:
                                 ; has no Format item to point anywhere
 %endif
     call gfx_lock               ; before it can draw them (SPEC.md 47 rule 5)
-    call menu_track             ; in: CX = mousedown x; out: AX = CMD_* or 0
+    call menu_track             ; live mouse x; out: AX = CMD_* or 0
     call gfx_unlock
     call ui_dispatch
     jmp .yj1

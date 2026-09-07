@@ -26,6 +26,7 @@
 #
 # Usage:
 #   tools/setup-cc.sh                 fetch, build, verify
+#   tools/setup-cc.sh --build-dir DIR  use DIR/cc instead of build/cc
 #   tools/setup-cc.sh --check         report what is there, change nothing
 #   tools/setup-cc.sh --force         discard build/cc and start over
 #   tools/setup-cc.sh --print-path    print the compiler's bin directory
@@ -58,6 +59,7 @@ BINS=(smlrc smlrcc smlrpp)
 FORCE=0
 CHECK=0
 VERIFY=1
+PRINT_PATH=0
 
 if [ -t 1 ]; then
 	B=$'\033[1m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; Z=$'\033[0m'
@@ -78,12 +80,25 @@ while [ $# -gt 0 ]; do
 		--force)      FORCE=1 ;;
 		--check)      CHECK=1 ;;
 		--no-verify)  VERIFY=0 ;;
-		--print-path) echo "$SRC"; exit 0 ;;
+		--build-dir)
+			[ $# -ge 2 ] && [ -n "$2" ] || die "--build-dir needs a directory"
+			case "$2" in
+				/*) CC_DIR="$2/cc" ;;
+				*)  CC_DIR="$REPO/$2/cc" ;;
+			esac
+			SRC="$CC_DIR/SmallerC"
+			shift ;;
+		--print-path) PRINT_PATH=1 ;;
 		--help|-h)    usage ;;
 		*)            die "unknown option: $1 (try --help)" ;;
 	esac
 	shift
 done
+
+if [ "$PRINT_PATH" = 1 ]; then
+    echo "$SRC"
+    exit 0
+fi
 
 have_bins() {
 	local b
