@@ -129,6 +129,8 @@ make live     # the live media (docs/LIVE-MEDIA.md): os8088-usb.img, a
               # bootable hard-disk image for a USB stick, and os8088.iso,
               # the same image as a live CD - the whole OS and every app
               # on one C: drive (make usb / make iso build them singly)
+make imager   # macOS: os8088 imager discovers floppy/USB/CD devices and
+              # offers compatible built images (docs/IMAGER.md)
 make burn     # macOS: interactively write the stick / burn the CD, with a
               # typed confirmation and a read-back verify
 make test     # boot headless with a QMP socket for scripted testing

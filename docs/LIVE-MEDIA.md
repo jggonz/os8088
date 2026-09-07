@@ -38,6 +38,11 @@ make live             # build/os8088-usb.img + build/os8088.iso
 The build is deterministic: the same source produces byte-identical images,
 so a checksum comparison against a release is meaningful.
 
+For a device-first chooser covering all built floppy, USB and CD images,
+run `make imager`. See [os8088 imager](IMAGER.md) for discovery, media
+requirements and verification. The original `make burn` guide below remains
+available for the two live images.
+
 ## Writing the USB stick
 
 > ⚠️ **Writing the image erases the entire stick.** Everything on it is

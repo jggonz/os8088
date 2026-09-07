@@ -7736,6 +7736,11 @@ $(LIVEISO): $(USBIMG) $(SYSDOC) tools/os88iso.py
 burn:
 	@python3 tools/os88burn.py
 
+# Discover built images and attached floppy/USB/CD media without building.
+.PHONY: imager
+imager:
+	@python3 tools/os88imager.py --images "$(BUILD)"
+
 # `make combo` -> build/combo.img: ONE 360KB bootable disk with the system,
 # every application AND the four benchmarks on it.
 #
