@@ -1674,7 +1674,7 @@ menu_draw_clock:
 ; menu_track - run one full BAR menu interaction. Finds the title under the
 ;              mousedown, xor-highlights it, hands the drop to menu_drop, and
 ;              un-highlights the title on the way out.
-; in:  CX = mousedown x (caller holds the gfx lock)
+; in:  caller holds the gfx lock
 ; out: AX = 0xFFFF if nothing was selected, else AH = bar cell index
 ;      (0 = the System menu), AL = item index within that cell (SPEC.md 12)
 ; clobbers: nothing else
@@ -1693,6 +1693,12 @@ menu_track:
     push di
 
     ; --- which title was hit? ------------------------------------------------
+    mov cx, [mouse_x]           ; use the coordinate the pointer on the glass
+                                ; uses. The reported 86Box PS/2 failure has
+                                ; EV_A one position behind that pointer; the
+                                ; rest of this tracker already polls mouse_x/y
+                                ; directly, so mixing the two coordinate ages
+                                ; makes a shifted press land on cell 0.
     mov si, menu_bar
     mov di, [menu_nbar]
     mov byte [menu_cell], 0

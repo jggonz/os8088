@@ -39,6 +39,11 @@ actually has:
   mou_ptr     1         - so the keyboard mouse stands down (SPEC.md 9.6.6)
   mouse_x/y   EXACTLY the requested pixel
 
+and finally every visible menu-bar title is pressed in turn. `menu_cell` must
+name the cell whose live hit range contains the pointer. This is deliberately
+part of the PS/2 row: the reported 86Box failure has the queued press one
+position behind the pointer, while menu tracking itself uses live coordinates.
+
 tools/mouse.py pins against the kernel's own edge clamp and walks back by
 exact deltas, so landing on the pixel is a statement about the sign handling
 and SPEC.md 9.9.3's Y inversion - "positive is up" - which nothing else here
@@ -72,6 +77,8 @@ PIDFILE = os.path.join(ROOT, "build", "ps2.pid")
 KBHEAD = 0x41A
 
 TARGET_X, TARGET_Y = 200, 150
+MB_ENTSZ = 12
+MB_XL, MB_XR = 6, 8
 
 
 def kill_stale():
@@ -180,6 +187,28 @@ def main():
                          "inversion, not a rounding" % (gx, gy, TARGET_X,
                                                         TARGET_Y))
 
+        # --- each bar title opens from the live PS/2 pointer coordinate -----
+        nbar = word(q, "menu_nbar")
+        for cell in range(nbar):
+            ent = q.read(os88sym.linear("menu_bar") + cell * MB_ENTSZ,
+                         MB_ENTSZ)
+            xl = int.from_bytes(ent[MB_XL:MB_XL + 2], "little")
+            xr = int.from_bytes(ent[MB_XR:MB_XR + 2], "little")
+            x = (xl + xr) // 2
+            subprocess.run([sys.executable, "tools/mouse.py", SOCK, "down",
+                            str(x), "8"], cwd=ROOT, check=True,
+                           stdout=subprocess.DEVNULL, timeout=180)
+            time.sleep(0.25)
+            got = byte(q, "menu_cell")
+            dropped = byte(q, "menu_dropd")
+            if got != cell or dropped != 1:
+                fails.append("bar cell %d at x=%d opened cell %d, drop=%d"
+                             % (cell, x, got, dropped))
+            subprocess.run([sys.executable, "tools/mouse.py", SOCK, "up"],
+                           cwd=ROOT, check=True, stdout=subprocess.DEVNULL,
+                           timeout=30)
+            time.sleep(0.25)
+
         # --- ...and the keyboard, which shares the one output buffer --------
         before = q.read(KBHEAD, 4)
         tail0 = before[2] | (before[3] << 8)
@@ -202,7 +231,8 @@ def main():
             print("ps2mouse: FAIL " + f)
         return 1
     print("ps2mouse: ok - p2st 9, port 04, line FF, pointer exact on %d,%d, "
-          "keyboard intact" % (TARGET_X, TARGET_Y))
+          "%d bar cells exact, keyboard intact" % (TARGET_X, TARGET_Y,
+                                                     nbar))
     return 0
 
 
