@@ -35027,6 +35027,11 @@ bench disks are 360KB volumes whose free clusters are the *measurement*, and
 
 #### 24.3.1 The 360KB disks ran out, and TELNET is what stays
 
+**The SYSTEM-disk half of this is superseded by §24.3.1.1** — the Wire changed
+the test, and `PAINT.O88` is what leaves that geometry now, with the game and
+the three faces back on it. The history below stands as it was written,
+because the arithmetic in it is what the decision was taken against.
+
 *"The figure the next thing proposed for this disk has to argue against"* was
 79 clusters narrowing to 60, and §70.9's ANSI-BBS parser is the next thing.
 `TELNET.O88` goes from **7,052 bytes to 10,235** — 7 clusters to 10 — and both
@@ -35119,6 +35124,42 @@ what CANNOT run there and must not gain a row by accident, where these say what
 a full machine is doing without for want of two kilobytes. A package added to
 `COREAPPS` tomorrow SHOULD land on this disk and be refused by `os88disk.py` if
 it does not fit, which is the failure everybody wants.
+
+#### 24.3.1.1 The Wire changes the test, and PAINT is what leaves
+
+Everything above chose what gives way on the test *"is it named by anything
+on this disk"*. **§88 supplies a better one: can the machine get it BACK.**
+The Wire's catalog carries every core package — Paint, Notepad, Calc, Browser,
+Telnet and Mines among its 33 programs — and **no typeface at all**: a face is
+loaded off the disk that carries it or not at all. So the three faces above
+were the one thing that geometry could never recover, and the game was one
+double-click away the whole time.
+
+On that test the thing to leave is the LARGEST package the Wire can give back,
+and by a distance it is `PAINT.O88` — **27 clusters**, against 18 for
+`NOTEPAD.O88`, 15 for `BROWSER.O88` and 7 for `CALC.O88`. A network machine's
+system disk still carries the programs that use its driver (Browser, Telnet,
+The Wire itself); what it gives up is the one core package that is neither
+network software nor irreplaceable, and is the Wire's own featured program.
+
+| the 360KB system disk | clusters |
+|---|---|
+| after §24.3.1, with `MINES`, `JETBRAIN`, `COURIER`, `TALLX` off | 351 of 354, 3 free |
+| those four back on | +8 → 359 |
+| `PAINT.O88` off | −27 → **333 of 354, 21 free** (measured: the directory grows a cluster with the files) |
+
+`SYS360OMIT` is that one file now. `PAINT.O88` stays on the 720KB, 1.44MB and
+1.2MB system disks and on every apps disk, and `tests/thewire.py`'s and
+`tests/ethernet.py`'s 360KB gate disks (`ether360.img`, `thewire360.img`) take
+the same list. The apps-disk half of §24.3.1 is unchanged: `MODPLUG.O88` is
+still off the 360KB apps disk, for §24.4's reason, which the Wire does not
+alter — that disk is the one a 360KB machine swaps IN, and the module it would
+play is not on it.
+
+**The user chose this, against the recommendation the two waves had made**,
+and the reason is worth keeping: a removal list argued from *"nothing names
+it"* removes the things nobody will miss until they do, where one argued from
+*"the Wire has it"* removes the things anybody can put back.
 
 ### 24.4 The MEDIA DISK — a third shipped disk, at 360KB alone
 

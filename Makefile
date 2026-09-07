@@ -2585,11 +2585,12 @@ $(FACELIC): faces/LICENSES.txt | $(BUILD)
 # **A FILTER-OUT AND NOT A SECOND LIST**, which is the opposite of $(SMALLOMIT)
 # and is right for the opposite reason: kern_small's list says what CANNOT run
 # there and must not gain a row by accident, where this one says what a full
-# machine is doing without for want of two kilobytes. A package added to
+# machine is doing without for want of room, and SPEC.md 24.3.1.1 is why it
+# is PAINT.O88 - the largest package the Wire can give back, where a face is
+# the one thing that geometry could never recover. A package added to
 # $(COREAPPS) tomorrow SHOULD appear here and be refused by os88disk if it does
 # not fit, which is the failure everybody wants.
-SYS360OMIT := $(BUILD)/mines.o88 $(BUILD)/jetbrain.f88 $(BUILD)/courier.f88 \
-               $(BUILD)/tallx.f88
+SYS360OMIT := $(BUILD)/paint.o88
 CORE_TOOLS360 := $(filter-out $(SYS360OMIT),$(CORE_TOOLS))
 CORE_GAMES360 := $(filter-out $(SYS360OMIT),$(CORE_GAMES))
 COREAPPS360 := $(CORE_TOOLS360) $(CORE_GAMES360)
