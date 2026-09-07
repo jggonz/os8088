@@ -22,6 +22,8 @@ HDA_PERIODS   equ 4
 HDA_RING_BYTES equ HDA_PERIOD * HDA_PERIODS
 HDA_RATE       equ 44100
 HDA_FMT        equ 0x4011       ; 44.1 kHz, 16-bit, stereo
+HDA_POLL       equ 512          ; MMIO polls per bounded hardware wait
+HDA_SETTLE     equ 2048         ; legacy-port delay, safely over 521 us
 
 ; controller registers
 HDA_GCAP       equ 0x00
@@ -727,7 +729,7 @@ hda_ctl_reset:
     call hda_pause
     mov eax, 1
     call hda_wr32
-    mov cx, 0xffff
+    mov cx, HDA_POLL
 .wait:
     call hda_rd32
     test al, 1
@@ -736,6 +738,7 @@ hda_ctl_reset:
     stc
     ret
 .up:
+    call hda_pause              ; codecs need their wake interval after CRST=1
     mov si, HDA_GCAP
     call hda_rd16
     mov dx, ax
@@ -784,7 +787,7 @@ hda_verb:
     push cx
     push si
     mov ebx, eax
-    mov cx, 0xffff
+    mov cx, HDA_POLL
 .idle:
     mov si, HDA_ICIS
     call hda_rd16
@@ -803,7 +806,7 @@ hda_verb:
     mov ax, 1
     mov si, HDA_ICIS
     call hda_wr16
-    mov cx, 0xffff
+    mov cx, HDA_POLL
 .done:
     call hda_rd16
     and al, 3
@@ -855,10 +858,10 @@ hda_hw_start:
     add si, HDA_SD_CTL
     mov al, 1                   ; stream-descriptor reset, asserted then clear
     call hda_wr8
-    call hda_pause
+    call hda_quick_pause
     xor al, al
     call hda_wr8
-    call hda_pause
+    call hda_quick_pause
     mov si, [hda_sd]
     add si, HDA_SD_CBL
     mov eax, HDA_RING_BYTES
@@ -907,8 +910,20 @@ hda_hw_period:
     ret
 
 hda_pause:
+    push ax
     push cx
-    mov cx, 0xffff
+    mov cx, HDA_SETTLE
+.p:
+    out 0x80, al                ; LPC/POST delay: bounded in iterations, not
+                                ; CPU clocks, so an Atom cannot outrun it
+    loop .p
+    pop cx
+    pop ax
+    ret
+
+hda_quick_pause:               ; stream-descriptor reset has no 521-us rule
+    push cx
+    mov cx, 256
 .p:
     loop .p
     pop cx

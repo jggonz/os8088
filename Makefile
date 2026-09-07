@@ -3100,6 +3100,25 @@ vmmousetest: $(BUILD)/vmmouse.img
 	@echo "vmmousetest: build/vmmouse.img - VMMOUSE.DRV already wanted."
 	@echo "             Run it with: python3 tests/vmmouse.py"
 
+# HDA refusal/freeze gate. QEMU's Intel controller exercises PCI, reset and
+# immediate-command polling, while its non-ALC269 codec deliberately makes the
+# profile refuse. Reaching the desktop proves that refusal is prompt and safe.
+$(BUILD)/hdacfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/hdacfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 6).to_bytes(2,'little') + b'\0\0')" > $@
+
+$(BUILD)/hdarefuse.img: $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/hdacfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/hdacfg/system.cfg
+
+.PHONY: hda-refuse-test
+hda-refuse-test: $(BUILD)/hdarefuse.img
+	@echo "hda-refuse-test: python3 tests/hdarefuse.py"
+
 # THEWIRETEST: the Wire's gate disks (SPEC.md 88.12), ethertest's shape and
 # for ethertest's reason - the driver is asked for by a SYSTEM.CFG that is ON
 # THE DISK, so the card is up and DHCP has bound before the first paint and

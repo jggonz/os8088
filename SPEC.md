@@ -43184,6 +43184,13 @@ mixer 0c to speaker/headphone pins 14/15. Refusing an unknown codec is safer
 than sending amplifier and pin verbs to guessed nodes. Supporting another HDA
 codec means adding its discovered topology as a separate codec profile.
 
+Every controller and immediate-command wait is bounded to 512 MMIO polls. An
+MMIO poll includes the driver's short unreal-mode access window, so using the
+65,535-iteration ISA-style bound here made a non-answer look like a frozen
+computer. Reset hold and post-release settle time instead use 2,048 legacy
+POST-port delay cycles, which cannot be optimized into a CPU-speed-dependent
+spin and exceed HDA's 521-us codec wake requirement on the target chipset.
+
 HDA's MMIO BAR is normally above real-mode address space, so the driver uses
 short 386 unreal-mode FS access islands. Row byte `DRVR_MINCPU` is therefore a
 hard loader fence: the kernel compares it with `[cpu_tier]` before looking up
