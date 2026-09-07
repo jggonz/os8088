@@ -278,6 +278,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 
 | package | source | SPEC |
 |---|---|---|
+| APPLE2 | `apps/apple2/apple2.asm` | `docs/APPLE2-SPEC.md` |
 | ARKANOID | `apps/arkanoid/arkanoid.asm` | §44 |
 | AUDIO PLAYER | `apps/audio/audio.asm` | §86 |
 | ArtfulType | `apps/artful/artful.asm` | §46 |

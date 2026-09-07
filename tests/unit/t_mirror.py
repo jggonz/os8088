@@ -118,7 +118,16 @@ ASM = ["boot/boot.asm", "boot/boothd.asm",
        # sections): the core's scratch offsets, the composer's band stride.
        # A drifted C64_SCR_WLO reads the wrong scratch words and presents as
        # a stale screen, not as an error.
-       "apps/c64/c64cpu.inc", "apps/c64/c64band.inc"]
+       "apps/c64/c64cpu.inc", "apps/c64/c64band.inc",
+       # ...and apps/apple2, which is the same construction one machine along
+       # (docs/APPLE2-SPEC.md, its memory and screen sections): the core's
+       # scratch offsets (A2_SCR_*), the composer's band stride and group
+       # count, and the run reasons the C compares a2_m.reason against are all
+       # typed out in the .inc AND in the C. A drifted A2_SCR_WLO reads the
+       # wrong scratch word and presents as a stale screen; a drifted
+       # A2_RUN_JAM is a machine that never stops.
+       "apps/apple2/a2cpu.inc", "apps/apple2/a2band.inc",
+       "apps/apple2/a2mem.inc"]
 
 # ...and the kernel, whole. `kernel/*.inc` + `kernel.asm`: 44 files, of which
 # the hand-written list named five. The knob-only files (band.inc, moudiag.inc)
@@ -129,7 +138,8 @@ KERNEL_GLOB = os.path.join(ROOT, "kernel", "*.inc")
 
 # ...and the C side of those, which cannot `%include` an .inc any more than a
 # host tool can.  `#define NAME VALUE`, same one-value-everywhere rule.
-CDEF = ["apps/c64/c64.c", "apps/c64/c64scr.c"]
+CDEF = ["apps/c64/c64.c", "apps/c64/c64scr.c",
+        "apps/apple2/apple2.c", "apps/apple2/a2scr.c"]
 
 # Constants a host tool spells out for itself, and where the truth lives.
 PY_MIRROR = {
@@ -259,17 +269,41 @@ def main():
                   got=got, want=truth[name])
             pychecked += 1
 
-    # ...and the one mirrored LAYOUT: apps/c64's 6510 register file is a nasm
-    # `resw` block with CM_* offsets and a C struct read over the same bytes,
-    # and the field ORDER is the layout (docs/C64-SPEC.md's register plan).
-    # A field inserted on one side alone makes the C read the wrong word.
-    fields = structfields("apps/c64/c64.c", "c64_mach")
-    cpu = defs("apps/c64/c64cpu.inc", EQU)
-    if fields and cpu:
+    # ...and the mirrored LAYOUTS: a package's register file is a nasm `resw`
+    # block with NAMED OFFSETS and a C struct read over the same bytes, and
+    # the field ORDER is the layout (docs/C64-SPEC.md's register plan,
+    # docs/APPLE2-SPEC.md section 4.1). A field inserted on one side alone
+    # makes the C read the wrong word - a stale screen or a wrong PC, never an
+    # error. One row per (C file, struct, .inc, offset prefix): a second
+    # package is an ENTRY here and not a second copy of the block.
+    for cfile, sname, incfile, pfx in [
+            ("apps/c64/c64.c",       "c64_mach", "apps/c64/c64cpu.inc",     "CM_"),
+            ("apps/apple2/apple2.c", "a2_mach",  "apps/apple2/a2cpu.inc",   "AM_")]:
+        fields = structfields(cfile, sname)
+        cpu = defs(incfile, EQU)
+        # A `continue` here is a row that reports GREEN having checked
+        # nothing: a rename of `struct a2_mach`, or a reflow that puts it on
+        # one line, makes the regex miss and the whole block vanish from the
+        # count this row exists to be evidence of. So it is a CHECK.
+        check(bool(fields), "struct %s was found in %s" % (sname, cfile),
+              "the layout check reads the struct with a regex; if it stops "
+              "matching, every field below silently stops being checked")
+        check(bool(cpu), "%s defines the %s offsets" % (incfile, pfx),
+              "the layout check reads the core's `equ`s; without them there "
+              "is nothing to compare the struct against")
+        if not fields or not cpu:
+            continue
         for i, f in enumerate(fields):
-            name = "CM_" + f
+            # structfields() UPPERCASES every name it returns (its docstring
+            # says so, and its last statement is `out.append(f.upper())`), so
+            # both packages spell an offset the same way and there is one arm,
+            # not two. The `pfx == "AM_"` conditional that used to be here
+            # produced the identical string on both sides and read as though
+            # the two packages differed.
+            name = pfx + f
             check(cpu.get(name) == i * 2,
-                  "struct c64_mach.%s is %s in c64cpu.inc" % (f.lower(), name),
+                  "struct %s.%s is %s in %s"
+                  % (sname, f.lower(), name, os.path.basename(incfile)),
                   "the C struct and the core's resw block are one layout typed "
                   "out twice; a field inserted on one side reads the wrong word",
                   got=cpu.get(name, "<not defined>"), want=i * 2)

@@ -20,7 +20,7 @@ authority rule**:
 
 | tree | licence | authority on |
 |---|---|---|
-| **AppleWin** | GPL-2 | **everything II+-specific** - because MII has no II+ mode at all and apple2emu gates the //e switches unconditionally |
+| **AppleWin** | GPL-2-or-later | **everything II+-specific** - because MII has no II+ mode at all and apple2emu gates the //e switches unconditionally |
 | **MII** (`mii_emu`) | MIT | the Macintosh-shaped menu bar, the About panel, the soft-switch enumeration, the per-write dirty-line map, the flash phase, the hi-res artifact-colour index |
 | **apple2emu** | MIT | the 24-entry row-base tables, the Edit menu, the Disk II controller, the paddle one-shot, the paste handshake |
 
@@ -258,7 +258,7 @@ keeps its number.
   and the `a2_say` extractor's expected minimum,
   `tests/a2band/a2bandbench.asm`.
 - **`apps/apple2/COPYING` and `apps/apple2/README.TXT`**, and the per-file
-  GPL-2 + four-attribution headers - HERE, not in wave 7 (Decision 20).
+  GPL-2+ + four-attribution headers - HERE, not in wave 7 (Decision 20).
 - **`docs/INDEX.md` REGENERATED IN THE SAME COMMIT** as the `CC_PACKAGE` line
   and the two new `docs/*.md` (Decision 21).
 - **The Makefile**: `CC_PACKAGE` with the `.OVL` and the ROM part, `APPLE2SRC`
@@ -370,6 +370,14 @@ bss, `APPLE2.OVL`, resident shims, largest frame - and checked against the
 
 **Features**
 
+- **A GREYING SENTENCE COMES BACK HERE.** Wave 1 shortened Machine >
+  Joystick... to `The paddles answer centre and there are no buttons in this
+  build.` because the second half named a control the build did not have. This
+  is the wave that reads F1 and F2, so it restores
+  `F1 and F2 are the game buttons PB0 and PB1 - a departure from AppleWin's
+  Left-Alt / Right-Alt.` in `a2menu.c` and in APPLE2-SPEC section 10.3
+  together (they are **game buttons**, not //e Apple keys - section 6.3).
+
 - **`a2_band_lores` and `a2_band_hires`, sharing `a2_band_text`'s 7-bit shift
   accumulator and span argument** - the whole composer set is one class, which
   is the correction that makes wave 1's work reusable rather than special.
@@ -428,6 +436,13 @@ the bottom anchor puts the text window and the `]` cursor on the glass on a
 
 **Features**
 
+- **A GREYING SENTENCE COMES BACK HERE.** Wave 1 shortened Machine > Configure
+  Slots... to `No Disk II in this build.` because the second half pointed at
+  two routes a build with both greyed does not have. This is the wave that
+  makes them work, so it restores `Load Program reads an Applesoft program,
+  and Paste types a listing in.` in `a2menu.c` and in APPLE2-SPEC section 10.3
+  together.
+
 - **The four menus go live**, each item doing what its authority file says it
   does, with MII's dynamic Stop/Stopped and Running/Continue retitling and the
   check items' labels; every greyed item's refusal toast names the fact.
@@ -448,7 +463,7 @@ the bottom anchor puts the text window and the `]` cursor on the glass on a
 - **`CC_ASSOC` declares `BAS`**, so a `.BAS` beside the program opens on the
   first double-click of a cold boot with no prior run.
 - **CPU > Warp** (the wall slice's cap, and it silences the speaker), **CPU >
-  Pause**, **Machine > Ctrl-Reset**, **Machine > Power cycle** with AppleWin's
+  Pause**, **Machine > Ctrl-Reset**, **Machine > Power On** with AppleWin's
   confirmation wording on TWO rows - `Are you sure you want to reboot?` and
   `(All data will be lost!)`. **File > Quit** through `OSAPI_WM_CLOSE` and
   answered in the RESIDENT half, because it is the one command that must work
@@ -484,6 +499,14 @@ bridge-crossing count. Size line quoted.
 
 **Features**
 
+- **A GREYING SENTENCE COMES BACK HERE.** Wave 1 shortened Machine >
+  `Color NTSC` to `The window is monochrome.` because the second half named a
+  mode the build did not have. This is the wave that writes it, so it restores
+  `Colour is in the foreign video mode - Machine > Toggle Fullscreen on a
+  VGA.` in `a2menu.c` and in APPLE2-SPEC section 10.3 together - and if the
+  measurement cuts the 1bpp foreign modes, the restored sentence says VGA and
+  the row greys on the other two adapters with the measured fact.
+
 - **The `$C030` estimator**: a last-toggle emulated-cycle stamp,
   `hz = 1,020,484 / (2 x delta)` through ONE 32-bit assembly muldiv, played
   with duration 0 when the last N intervals agree within a tolerance, taken
@@ -505,8 +528,9 @@ bridge-crossing count. Size line quoted.
   path**: they are 560x192 = 13,440 bytes a frame against the windowed 7,680,
   on the slowest machine, so "an XT gets its speed back" is a claim to prove
   and not to assert. If they lose, they are cut, ~1,200 bytes come back, and
-  Machine > Video > Full screen greys on those adapters with the measured
-  fact.
+  Machine > Toggle Fullscreen greys on those adapters with the measured fact.
+  (There is no `Video` submenu: the kernel bar has no submenu mechanism, so
+  MII's Video rows are folded into Machine.)
 - **Every foreign frame driven off the SAME dirty-line set the windowed flush
   computes**, against a foreign-frame shadow in a heap claim taken at
   fullscreen-LATCH time (where a refusal is legal).
@@ -951,6 +975,125 @@ BIOS that passes enhanced codes a real AT BIOS drops. Each reading goes into
 until wave 1 lands.*
 
 ### Wave 1
+
+**The window, the chrome, the screen machinery, the 7-pixel text composer, the
+licence and the harness.** Landed, `make` green, `make apple2disk` verifying
+all four geometries.
+
+**What is on the glass** (`build/port-shots/wave1-*.png`, QEMU over QMP): the
+window at 338 x 237 with `Apple II Plus Emulator` in its title and `Apple II+`
+on the kernel bar beside File, Edit, Machine and CPU; an 8-pixel border, the
+16/24 letterbox and a status row reading the live video mode; and a text page
+composed with the ROM's OWN character generator at SEVEN PIXELS a cell,
+cropped and zoomed - a NORMAL run, an INVERSE run and a FLASHING run
+photographed on **both** phases. The Machine pull-down shows all eleven of its
+rows and the CPU pull-down all eight, with every row of a marked group on the
+same column. The About panel opens from the kernel's name pull-down with the
+four attributions and the ROM copyright line on it, and closes as DAMAGE.
+**Fullscreen goes both ways** - in from the menu with the About panel up (it
+comes down and its rows are redrawn), out with Ctrl+F and with Alt+Enter - and
+`File > Quit` leaves a clean desktop with no dock tile. **The window was
+covered by the Disk window for eighteen seconds of flash-timer wakes and not
+one pixel of the Apple band or the About panel bled through it**, which is the
+clip region on the glass; the same run on a 640x200 CGA desktop shows the
+bottom anchor putting `NO 6502 IN THIS BUILD - WAVE 2` on the first visible
+row and the greyed menu rows as the documented checkerboard.
+
+**What the harnesses assert.** `a2uitest` drives the program against a pixel
+model of the glass and asserts, after every step, that the glass shows what
+the 7,680-byte shadow says it shows - and it asserts that the character
+generator and the 7-bit reverse table are built in `os88_main`, that the
+overlay is NOT resolved there, and that **every drawing call was made with
+both the gfx lock held and a clip region armed**, the region modelled as the
+kernel scopes it (armed by `clip_set`, dead at the next `gfx_unlock`).
+`tools/a2ref.py` composes the same memory independently and the two agree BIT FOR BIT on both flash phases;
+`--selftest` injects a one-bit defect and the compare fails; `--romshape`
+asserts the pinned ROM's 128 distinct bitmaps. `a2memtest` runs the shipping
+`a2mem.inc` and `a2band.inc` on a real x86 with SS != DS: 43 cases pass and
+all FOUR negative controls are caught.
+
+**THE COMPOSER IS MEASURED AND IT IS EXPENSIVE.** `make a2bandbench` under
+`-icount shift=3`: a 40-cell row composes in **35.0 counts = 12.57 ms** of a
+real 4.77 MHz XT and one eight-cell GROUP in 7.875 = 2.83 ms, which is
+**2.434 ms a group, 304 us a CELL**, with a 0.393 ms call floor. That is eight
+times what a naive model would have said and it is the third time this tree
+has measured a row composer and found the model low. The whole-operation rows
+are in `APPLE2-SPEC` section 7.9.1: one changed cell **11.9 ms**, one changed
+row **22.0 ms**, ONE FLASH PHASE FLIP **65.6 ms**, a full 320 x 192 repaint
+**505.4 ms** against this plan's PLANNED ~200. Recorded, not smoothed.
+
+**Two defects were found on the glass and one by the harness**, and all three
+are the kind this wave exists to find:
+
+- **the About panel's close left two white strips** - band bytes 0-1 and 37-39,
+  the 16 and 24 letterbox pixels - because a FORCED redraw was still drawing
+  only the seven-byte groups the composer had been asked for. A group span is
+  right for a source change and wrong for a glass somebody else painted on;
+- **a scan line that compared EQUAL was left dirty**, so its row recomposed
+  itself on every wake for the rest of the session. The only symptom was a
+  cost row reading ten groups where the window had narrowed the work to five;
+- **the wake never flushed at all** until `a2_wrote()` existed: the C's
+  `a2_dirty_any` is set by `a2_dirty_scan`, which runs INSIDE the flush.
+
+**And two corrections to the recipe**, both recorded in the SPEC: the bench is
+driven under plain `-icount shift=3` and never `sleep=off` (under `sleep=off`
+the guest stops answering input entirely - the screen saver comes up and
+neither the mouse nor a key dismisses it), and `MENU_POPMAX` is eleven, so
+Machine's sixteen rows are FOLDED on `c64menu.c`'s rule to exactly eleven.
+
+**AND THE REVIEW ROUND FOUND SEVEN MORE, every one of them in the REDRAW path
+and every one invisible in a screendump.** Each is a `hosttest/a2uitest.c` row
+now, and each row was negative-controlled by reverting the fix in place:
+
+- **the wake's flush armed no clip region.** `W_PAINT` is the one callback the
+  kernel arms one for (SPEC.md 11.3) and the flush is a BACKGROUND painter, so
+  its 24 blits, five fills and status row went over whatever window was
+  covering us. `clip_set` also answers -1 when nothing shows, which now skips
+  the whole ~500 ms - and a window in that state stops asking for wakes;
+- **`a2_wants_wake`'s flash arm was a constant 1.** The Apple's cursor IS a
+  flashing space, so `a2_flrow[]` is never all zero: the handler re-posted at
+  ~1,400 round trips a second of the SHARED UI task to service a phase that
+  flips 3.64 times. The phase is a `W_ONTIMER` now (SPEC.md 13.9), with the
+  wake's poll kept as the tested `kern_small` path;
+- **`a2_status`'s "nothing changed" return left the row dirty**, so the same
+  message said twice spun the wake for its whole five-second life;
+- **the About panel was repainted on its latch and not on the damage rect** -
+  ~185 ms on every expose while it was up, which is MORE than the hold rows
+  save;
+- **the panel's rect was measured only AFTER the flush that reads it**, so a
+  geometry change held the old lines and drew the new ones under it; and
+  **Toggle Fullscreen was reachable with the panel up**, which is that defect
+  at its worst because `OSAPI_FULLSCREEN` repaints NESTED;
+- **a flash flip did not widen the compose span**, so a cursor blinking at one
+  end of a row while the machine printed at the other stopped blinking;
+- **the k-row scroll test was gated on all 192 lines being visible**, which a
+  640x200 desktop never is: a scrolling Applesoft session took the span path
+  for every line, ~210 ms A LINE. Dropping the gate was not enough on its own -
+  the signature compare had to start at the first row the glass has ever
+  shown, or it compares live memory against a permanent 0.
+
+**And one defect the review did not name, found by DRIVING the emulator:
+`Machine > Toggle Fullscreen` was a ONE-WAY DOOR.** The item is live from wave
+1, `kernel/wm.inc` draws no chrome for a `WF_FULL` window, and `a2_key()`
+drops every key - so a fullscreen APPLE2 ignored `f`, `F`, Esc, Ctrl+F and
+Alt+Enter and there was no menu bar to use instead. SPEC.md 11.2.1 is binding
+on it and `C64-SPEC §9.8` says the same thing one machine along. Section 6.3's
+two chords moved from wave 3 into this one, resident, at the top of
+`os88_onkey`; Ctrl+F is ASCII 6 on every BIOS and Alt+Enter is accepted on
+BOTH its scan codes, the classic `0x1C` and the enhanced `0xA6`, because
+neither is confirmed on iron until wave 7.
+
+Two fidelity findings landed with them: **every row of a marked menu group now
+owns the two-glyph column** (`Fast: 3.5MHz`, `Color NTSC` and `Mute` were two
+cells out of line beside their partners), and **the scaffolding page no longer
+draws the `]` prompt and its flashing cursor** - in all three references that
+pair means "this machine will accept typing", and `a2_key()` drops every
+keystroke this wave. It states `NO 6502 IN THIS BUILD - WAVE 2` instead.
+
+**NO SIZE LINE IS QUOTED, and section 15 says why.** For the record the build
+prints `image 19,300 + bss 10,312` (29,612 resident of 61,440), `APPLE2.OVL`
+843 bytes, largest C frame 42 of 96 - which says the package builds, packs and
+fits, and says nothing about a core that has no opcodes in it.
 
 ### Wave 2
 

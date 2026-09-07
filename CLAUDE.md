@@ -139,6 +139,20 @@ make c64disk    #   3.10's x64 as a windowed Commodore 64 — a 6510 in a 64KB
                 #   in raw QEMU), `make c64bandbench` the composer's bench, and
                 #   `make c64cputest` the 6510's — it arrives with the core.
                 #   THE CONTRACT IS docs/C64-SPEC.md, not a section of SPEC.md
+make apple2     # APPLE2 (docs/APPLE2-SPEC.md), the sixth C application:
+make apple2disk #   an Apple II Plus — a 6502 in a 48K claim, the II+'s video
+                #   soft switches and its SEVEN-pixel text cell, with
+                #   Applesoft, the monitor and the character generator read
+                #   at launch from PART 0 of the package itself, an
+                #   `OP_ASSET` built by `make apple2rom` from ROM images
+                #   `tools/getapple2rom.py` FETCHES at pinned SHA-256s and
+                #   NEVER commits (`make clean` spares build/apple2-rom/, so
+                #   a rebuilt tree needs no network). `make a2bandbench` is
+                #   the composer's icount bench and `make a2memtest` the
+                #   mover and write-fence gate (SS ≠ DS, in raw QEMU).
+                #   THE CONTRACT IS docs/APPLE2-SPEC.md, not a section of
+                #   SPEC.md — and apps/apple2/ is GPL-2-or-later by way of
+                #   VICE, which the rest of this tree is not
 make weave      # WEAVE (WEAVE-SPEC §1.2), the family's runtime: web-style
 make weavedisk  #   apps - markup, script and formulas - compiled at pack time
                 #   into one `.WAB` bundle and interpreted natively. `make
@@ -281,7 +295,7 @@ tree that read that geometry at all: a 1.2MB drive wants the AT's 500 kbps
 controller, so no XT profile can host one),
 `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-runcpm`, `286-runcpm`, `386-runcpm`, `xt-c64`,
-`286-c64`, `386-c64`, `xt-weave`, `386-weave`, `xt-weave-256`;
+`286-c64`, `386-c64`, `386-apple2`, `xt-weave`, `386-weave`, `xt-weave-256`;
 plus `marty` (MartyPC). `xt-multimon` is the
 **two-card** XT — a CGA and a Hercules, a monitor window each — and the only
 86Box machine that can show §39.12–§39.19's extended desktop; it boots Single,
@@ -297,9 +311,14 @@ machines (§68.5), `386-c-word` is the C word processor's (§73.12) and
 geometry because the three disks carry different software and the machines
 run at different speeds — which for a CP/M game IS the play speed (§74.5,
 §74.6) — `xt-c64`/`286-c64`/`386-c64` the C64 emulator's (C64-SPEC §14.3,
-one per geometry for that same reason), and
+one per geometry for that same reason), `386-apple2` the Apple II+
+emulator's (APPLE2-SPEC section 16.4 — a copy of `vm/386-c64` with **only**
+`fdd_02_fn` and the uuid changed, and the ONLY one of its family so far:
+`xt-apple2` and `286-apple2` land in the polish wave *with the measurement
+that justifies them*, because an XT target before anyone has measured the
+port there is a claim and not a machine), and
 `xt-weave`/`386-weave`/`xt-weave-256` the Weave family's
-(WEAVE-SPEC §13.1) — the fourteen that put a dedicated
+(WEAVE-SPEC §13.1) — the fifteen that put a dedicated
 floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
 disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
 family on one floppy — so it is where that geometry of it is booted at all,
@@ -317,7 +336,9 @@ runcpmdisk` the RUNCPM disks (`tools/getruncpm.py` fetches RunCPM's CCP and
 master disk at a pinned commit and `tools/getcpmsw.py` the CP/M games and
 applications that ride beside it, §74.6 — never committed, either of them;
 `make rczex` and `make rcz80test` are the Z80 core's ZEXDOC gates, in the OS
-and in raw QEMU), `make c64disk` the C64 disks, and `make weavedisk` /
+and in raw QEMU), `make c64disk` the C64 disks, `make apple2disk` the
+Apple II+ disks (`make apple2rom` fetches their ROM first, once), and
+`make weavedisk` /
 `make loomdisk` the Weave family's two. **`make wiredisk`** is the same shape for a package that
 DOES NOT SHIP: WIREFRAME is an instrument rather than an application (§78.9),
 so `all` builds `wire.o88` and no shipped floppy carries it, and the three
@@ -626,7 +647,8 @@ mounts — and every byte read off one is still treated as hostile.
 (86Box / a real XT) and 1.2MB 5.25" HD (§19, the AT-class machine with no 3.5"
 drive). Changing the boot path, the FAT driver or the disk layout means
 checking all four. This is the rule for the on-demand APPLICATION floppies too
-— `zdisk`, `worddisk`, `cworddisk`, `runcpmdisk`, `c64disk`, `weavedisk`,
+— `zdisk`, `worddisk`, `cworddisk`, `runcpmdisk`, `c64disk`, `apple2disk`,
+`weavedisk`,
 `loomdisk`, `allapps` — which were three-geometry until 1.2MB reached them.
 
 **Nine images, not seven.** The system and apps disks in four geometries each,

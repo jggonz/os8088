@@ -103,6 +103,16 @@ make xt-c64   # 86Box: the 4.77MHz XT with the 360KB C64 disk in B: - where
               # the speed figure on the status row is the one that matters
 make 286-c64  # 86Box: the 12.5MHz 286 with the 720KB one
 make 386-c64  # 86Box: the 386DX with the 1.44MB one
+make apple2disk # build the Apple II Plus floppy - a 48K II+: the package,
+              # its overlay, COPYING and README.TXT in one APPLE2/ folder;
+              # Applesoft, the Monitor and the character generator ride
+              # INSIDE the package as an embedded part (SPEC.md 20.12).
+              # The ROMs are Apple's and are FETCHED at a pin, never
+              # committed - make apple2rom does that, and a tree with no
+              # network and no build/apple2-rom/ cache cannot build it
+              # ...in all four geometries: apple2.img, apple2720.img,
+              # apple2120.img, apple2360.img
+make 386-apple2 # 86Box: the 386DX with the 1.44MB Apple II+ disk in B:
 make weavedisk # build the Weave floppy - web-style apps compiled to a .WAB
               # bundle and run natively: the runtime, its two companion
               # modules, three demo bundles, LOOM (the in-OS IDE that edits
@@ -596,6 +606,7 @@ cleanly and runs wrong when C meets this machine.
 | `build/cword*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
 | `build/runcpm*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`). What drive A carries is chosen per geometry at build time, so the 1.2MB disk fills itself and names what it left off in its own `LEFT-OFF.TXT` |
 | `build/c64*.img`       | 1.44MB / 720KB / 1.2MB / 360KB | Commodore 64, package + `C64.OVL` + the `C64.ROM` sidecar (`make c64disk`) |
+| `build/apple2*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Apple II Plus, package + `APPLE2.OVL` + `README.TXT` + `COPYING` in one `APPLE2/` folder (`make apple2disk`). The Apple II+ ROMs are inside the package as a part and are fetched at a pin, never committed |
 | `build/weave*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Weave: the runtime and its two modules, the demo bundles, LOOM, the demo sources and `CATALOG.TXT` (`make weavedisk`) |
 | `build/loom*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | the Weave IDE's own disk, with the demo sources flat (`make loomdisk`) |
 | `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the seven above included (`make allapps`) |

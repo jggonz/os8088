@@ -208,6 +208,14 @@ VM286C64 := $(CURDIR)/vm/286-c64
 VMXTC64 := $(CURDIR)/vm/xt-c64
 VM286C64 := $(CURDIR)/vm/286-c64
 
+# ...and the APPLE2 machine (docs/APPLE2-SPEC.md section 16.4), which is a
+# copy of vm/386-c64 that HAS BOOTED with fdd_02_fn and the uuid changed and
+# NOTHING else. ONE of them in wave 1 - vm/xt-apple2 and vm/286-apple2 land in
+# the polish wave, WITH THE MEASUREMENT THAT JUSTIFIES THEM, because an XT
+# target before anyone has measured the port there is a claim and not a
+# machine. It is MANUAL EVIDENCE and never a gate.
+VM386APPLE2 := $(CURDIR)/vm/386-apple2
+
 # The WEAVE machines (WEAVE-SPEC §13.1, wave 7's row landed early
 # because a runtime nobody can boot on a period machine is a runtime nobody
 # has looked at): the Word pairing again - an XT with the Weave disk in B:, a
@@ -1619,6 +1627,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
+        apple2 apple2disk apple2rom a2bandbench a2memtest 386-apple2 \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
@@ -4937,6 +4946,174 @@ xt-c64: $(IMG360) $(BUILD)/c64360.img
 	@$(UNPROTECT) $(VM286C64)/86box.cfg
 	$(BOX) -P $(VM286C64) -N
 
+# --- APPLE2, an Apple II Plus as a C package (docs/APPLE2-SPEC.md) -----------
+# The C toolchain's SIXTH application, after cword, runcpm, c64, weave and
+# loom: a windowed 48K Apple II Plus - a 6502
+# in a 64KB claim, Applesoft BASIC and the Autostart Monitor read at launch
+# from a ROM PART inside APPLE2.O88, and the 280x192 screen composed into 1bpp
+# bands SEVEN PIXELS to the cell.
+#
+# THE LICENCE. apps/apple2/a2cpu.inc is a derived copy of apps/c64/c64cpu.inc,
+# which is GPL-2-or-later by way of VICE - so apps/apple2/ is GPL-2-or-later,
+# which the rest of this tree is not, and apps/apple2/COPYING is the licence
+# text plus the MIT notices of MII and apple2emu. AppleWin (GPL-2-OR-LATER -
+# "either version 2 of the License, or (at your option) any later version" in
+# every one of its source headers, so GPL-2+ and not GPL-2) is the authority
+# on everything II+-specific. Nothing of any of them is vendored.
+#
+# `make apple2` runs the host checks (apps/apple2/build.sh - the program
+# against a model of the glass, and the composer against tools/a2ref.py's
+# independent compositor) and then builds the package; `make apple2disk` the
+# four floppies. Nothing here is on the shipped apps disks and nothing in
+# `all` reaches it: on demand like cword, runcpm and c64, through the same
+# cc-toolchain guard.
+#
+# THE HOST CHECKS RUN FIRST AND STOP THE BUILD, through the stamp below: a
+# check that fails leaves no stamp, and the compile does not run.
+$(eval $(call CC_PACKAGE,apple2,apple2,APPLE2.OVL,$(BUILD)/apple2-rom/APPLE2.ROM))
+
+# THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): apple2.c #includes the
+# parts, and the shim %includes the five hand-written pieces and the icon.
+# Every one is a WRITTEN PREREQUISITE because make cannot see through either
+# kind of include - and every file docs/APPLE2-PORT-PLAN.md names is listed
+# from wave 1, STUBS INCLUDED, so no later wave adds a file the build does not
+# know about (LESSONS.md 9).
+APPLE2SRC := apps/apple2/a2io.c apps/apple2/a2kbd.c apps/apple2/a2scr.c \
+             apps/apple2/a2menu.c apps/apple2/a2cmd.c apps/apple2/a2prog.c \
+             apps/apple2/a2disk.c apps/apple2/a2about.c
+APPLE2INC := apps/apple2/a2cpu.inc apps/apple2/a2mem.inc \
+             apps/apple2/a2band.inc apps/apple2/a2nib.inc \
+             apps/apple2/a2fsx.inc apps/apple2/a2assoc.inc
+APPLE2HOST := apps/apple2/build.sh apps/apple2/hosttest/os88.h \
+              apps/apple2/hosttest/a2uitest.c \
+              apps/apple2/hosttest/a2memtest.asm \
+              apps/apple2/hosttest/a2memtest.sh tools/a2ref.py $(APPLE2INC)
+# ...and the core's own gate, which is NOT in build.sh (it takes minutes) but
+# is a prerequisite of nothing either - `make a2cputest` will run it on
+# demand, the way `make c64cputest` does, from the wave that brings the core.
+$(BUILD)/apple2.raw.asm: $(APPLE2SRC) $(BUILD)/.apple2-hostchecks
+$(BUILD)/apple2.bin: $(APPLE2INC) apps/apple2/icon.inc
+
+# ($(APPLE2INC) is in APPLE2HOST because a2memtest.asm %includes a2mem.inc AND
+# a2band.inc AND a2cpu.inc: an edit to a mover or a composer must re-run the
+# SS != DS gate, and make cannot see through a %include.)
+# build/apple2-rom/APPLE2.ROM is a PREREQUISITE and not something build.sh
+# makes: a2uitest reads it (it is the CHARGEN the composer is checked against)
+# and the file has exactly one owner - the rule below - because it is also the
+# package's PART through CC_PACKAGE's fourth argument.
+$(BUILD)/.apple2-hostchecks: apps/apple2/apple2.c $(APPLE2SRC) $(APPLE2HOST) \
+                             $(BUILD)/apple2-rom/APPLE2.ROM | $(BUILD)
+	apps/apple2/build.sh
+	@touch $@
+
+apple2: $(BUILD)/apple2.o88
+
+# THE ROM, FETCHED AT A PIN AND NEVER COMMITTED (APPLE2-SPEC section 1.4).
+# tools/getapple2rom.py fetches the three Apple II+ ROM images AppleWin
+# carries in its resource/ directory at ONE pinned commit, checks each by
+# SHA-256, and assembles them into build/apple2-rom/APPLE2.ROM in a fixed
+# layout: ROM at 0x0000, CHARGEN at 0x3000, the Disk II P5 boot ROM at 0x3800,
+# 14,848 bytes in all.
+#
+# THE ROMS ARE APPLE COMPUTER'S COPYRIGHT and this is the STRICTER posture the
+# C64 did not take - it commits its three Commodore images. **Consequence,
+# stated:** a build with no network and no build/apple2-rom/ cache CANNOT
+# build this package, exactly as `make zdisk` and `make runcpm` cannot.
+# Nothing in `all` reaches it, and `make clean` spares the cache.
+$(BUILD)/apple2-rom/APPLE2.ROM: tools/getapple2rom.py | $(BUILD)
+	python3 tools/getapple2rom.py -o $@
+
+apple2rom: $(BUILD)/apple2-rom/APPLE2.ROM
+
+# THE DISK. APPLE2.O88 and APPLE2.OVL are TWO FILES IN ONE FOLDER on every
+# disk they share (SPEC.md 19.2.1: the .OVL is resolved in the launching
+# instance's current directory), plus a README.TXT naming the licence and
+# whose the ROMs are - AND COPYING, THE LICENCE ITSELF. The floppy is the
+# distributed form of a GPL-2-or-later binary and README.TXT on it says "the
+# full licence text is COPYING, on this disk beside the package": it has to be
+# here for that to be true. **If space ever runs out, the licence stays and
+# the other thing goes** (section 16.2).
+#
+# FOUR GEOMETRIES, each --verify'd: 1.44MB, 720KB, 1.2MB and 360KB. A 360KB
+# disk's cluster is 1,024 bytes (tools/os88disk.py GEOMETRY[360], spc = 2), so
+# COPYING's 21,533 bytes are 22 of its 354 clusters, and the whole folder -
+# apple2.o88 34,304 (the ROM part included) + APPLE2.OVL 843 + README.TXT
+# 3,655 + COPYING 21,533 = 60,335 bytes, plus the folder's own directory
+# cluster - is what os88disk.py --verify reports as 63 of 354. Even the 360KB
+# disk carries the licence with room to spare.
+APPLE2DISK := $(BUILD)/apple2.o88 $(BUILD)/APPLE2.OVL \
+              apps/apple2/COPYING apps/apple2/README.TXT tools/os88disk.py
+APPLE2IMG = python3 tools/os88disk.py -o $(1) --size $(2) \
+	    APPLE2:$(BUILD)/apple2.o88 APPLE2:$(BUILD)/APPLE2.OVL \
+	    APPLE2:apps/apple2/README.TXT APPLE2:apps/apple2/COPYING
+apple2disk: $(BUILD)/apple2.img $(BUILD)/apple2720.img \
+            $(BUILD)/apple2120.img $(BUILD)/apple2360.img
+
+$(BUILD)/apple2.img: $(APPLE2DISK)
+	$(call APPLE2IMG,$@,1440)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/apple2720.img: $(APPLE2DISK)
+	$(call APPLE2IMG,$@,720)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/apple2120.img: $(APPLE2DISK)
+	$(call APPLE2IMG,$@,1200)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/apple2360.img: $(APPLE2DISK)
+	$(call APPLE2IMG,$@,360)
+	@python3 tools/os88disk.py --verify $@
+
+# THE COMPOSER'S BENCH (APPLE2-SPEC section 16.6, 7.9). The package's own
+# apps/apple2/a2band.inc timed on tests/benchlib.inc's icount harness: per
+# CELL, per SOURCE BYTE and per CALL, in microseconds. The tier table in
+# a2scr.c and section 7.9's cost table are written FROM these numbers and not
+# from a guess (PERFORMANCE.md rule 4) - and this port needs it more than any
+# before it, because all three of its composers are SHIFT-ACCUMULATOR
+# composers and no other package in this tree has one. Its own disk, on
+# demand, because it answers one question:
+#   make a2bandbench
+#   make test TESTAPPS=build/a2band.img QEMU="qemu-system-i386 -icount shift=3"
+a2bandbench: $(BUILD)/a2band.img
+
+$(BUILD)/a2bband.bin: tests/a2band/a2bandbench.asm apps/apple2/a2band.inc \
+                      tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/a2band/a2bandbench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/a2band/a2bandbench.asm
+	@echo "a2bband: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/a2bband.o88: $(BUILD)/a2bband.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/a2bband.bin -o $@
+
+$(BUILD)/a2band.img: $(BUILD)/a2bband.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/a2bband.o88
+	@python3 tools/os88disk.py --verify $@
+
+# THE BOOT-SECTOR GATE (APPLE2-SPEC section 3.4). a2memtest runs the SHIPPING
+# a2mem.inc and a2band.inc on a real x86 with SS != DS and an ES sentinel,
+# with FOUR negative controls, and IS in build.sh because it takes seconds.
+# The core's twelve rows are a2cputest and are NOT, because they take minutes -
+# the rcz80test precedent - and they arrive with the core they gate.
+a2memtest:
+	apps/apple2/hosttest/a2memtest.sh
+
+# THE 386 APPLE2 MACHINE (APPLE2-SPEC section 16.4): vm/386-c64 with B: =
+# build/apple2.img and the uuid changed and NOTHING else, for the reason
+# vm/386-c-word records - 86Box substitutes a default for an unrecognised key
+# and rewrites the config on exit, so a hand-written profile is a machine
+# running at a clock nobody chose. `git checkout` the cfg before committing
+# and never commit the nvr/. RESET=1|cmos|flash|both clears a stale CMOS.
+#
+# IT IS MANUAL EVIDENCE AND NEVER A GATE (section 16.5): a make target that
+# launches a GUI emulator cannot assert that anything booted. vm/xt-apple2 and
+# vm/286-apple2 land in the polish wave, with the measurement that justifies
+# them.
+386-apple2: $(IMG) $(BUILD)/apple2.img
+	@$(UNPROTECT) $(VM386APPLE2)/86box.cfg
+	$(BOX) -P $(VM386APPLE2) -N
+
+
 # --- WEAVE, the .WAB runtime (WEAVE-SPEC 1.2) --------------------------------
 # The C toolchain's fourth application: a web-style app runtime whose bundle
 # reader, flow walk and refusals are C, with hand-written cores for the hot
@@ -7513,6 +7690,12 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) tools/os88disk.py
 # never appear on the shipped apps disk - FROTZ (SPEC.md 61), WORD (SPEC.md
 # 65), CWORD (SPEC.md 73.12), RUNCPM (SPEC.md 74), C64 (docs/C64-SPEC.md) and
 # the Weave family's two, WEAVE and LOOM (WEAVE-SPEC 1.2).
+#
+# SEVEN AND NOT EIGHT: APPLE2 (docs/APPLE2-SPEC.md) has a disk of its own too
+# and is DELIBERATELY NOT in $(ALLAPPSARGS) yet. It is being built a wave at a
+# time and joins this disk in WAVE 7, with the folder shape section 16.2
+# pins; adding it now would put a package with no 6502 in it on the disk a
+# release page offers as "every application".
 # It is a CONVENIENCE, offered beside the
 # shipped images on a release page for somebody who wants one disk rather
 # than four, and nothing in the tree boots it by default.
@@ -8752,9 +8935,18 @@ pentium: $(IMG) $(APPSIMG)
 # incentive for a check that is meant to be cheap to re-run. `clean-cc` is the
 # escape hatch, and re-pinning does not need it: setup-cc.sh compares HEAD
 # against PIN on every run and re-fetches when they differ.
+#
+# ...and it spares build/apple2-rom/.artifacts by the same test one more time
+# (docs/APPLE2-SPEC.md section 1.4). The three Apple II+ ROM images are
+# Apple Computer's copyright, are NEVER committed, and are a FETCH over the
+# network at a pinned commit; a `clean` that threw them away would make the
+# APPLE2 target need the network to come back. The ROM this tree DERIVES from
+# them - build/apple2-rom/APPLE2.ROM - is an output and goes, so a rebuild
+# still re-checks every SHA-256 and re-assembles the part.
 clean:
 	find $(BUILD) -mindepth 1 -maxdepth 1 ! -name martypc ! -name cc \
-		-exec rm -rf {} + 2>/dev/null || true
+		! -name apple2-rom -exec rm -rf {} + 2>/dev/null || true
+	@rm -f $(BUILD)/apple2-rom/APPLE2.ROM
 
 clean-marty:
 	rm -rf $(BUILD)/martypc
