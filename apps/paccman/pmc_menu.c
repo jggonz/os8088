@@ -17,35 +17,25 @@
  * assembly Pac-Man already set on this system (apps/pacman/pacman.asm's
  * pm_items - New Game, Pause, Full Screen), plus Sound.
  *
- * SOUND IS GREYED, AND THE FACT IS THIS BUILD (SPEC.md 47 greys a FACT, and
- * rule 3 makes a greyed label say WHY NOT). pmc_snd.c is a wave-3 stub, so
- * there is no sound code in the image at all; a control that changes its own
- * label and nothing else is worse than one that says why it cannot act, so it
- * carries MENU_DIS and the reason - and the kernel refuses a click on a
- * MENU_DIS item before os88_oncmd() is reached (kernel/menu.inc), which the
- * early return there says a second time. It is NOT the fact an earlier draft
- * named: kernel/snd.inc's osapi_snd_caps answers a constant on every kernel
- * this OS boots, so the MACHINE is never the reason; the build is.
+ * NOTHING IN THIS MENU IS GREYED, AND THE TWO THAT WERE WENT LIVE THE WAVE
+ * THAT GAVE THEM A BODY. Pause was greyed while the image had no tick loop to
+ * stop (wave 1) and Sound while it had no sound code to silence (waves 1-2);
+ * each un-greying was the deletion of ONE marker byte and its reason, which is
+ * exactly the shape SPEC.md 47 predicts. Neither fact was ever the MACHINE:
+ * kernel/snd.inc's osapi_snd_caps answers the constant SND_CAP_TONE |
+ * SND_CAP_PCM_EXCL on every kernel this OS boots, so a PaccMan that greyed
+ * Sound because "there is no speaker" would be greying a guess.
  *
- * THE ITEM READS "Sound (No Sound Yet)", AND BOTH HALVES ARE CORRECTIONS.
- * Wave 1 wrote "(No Game)" as ONE fact shared by Pause and Sound, because
- * that build drew the arcade field and ran nothing. Wave 2 gave the build a
- * game, so with Pac-Man moving on the glass an item still asserting there is
- * no game is a greyed label saying something FALSE - which is the one thing
- * SPEC.md 47 rule 3 exists to prevent. The two facts were never really one:
- * Pause had nothing to stop, and Sound has no code to silence. "(No Audio)"
- * was the other candidate and is not taken, because it reads as a claim about
- * the MACHINE and the machine is never the reason here.
- * The word in FRONT of the parenthesis was the second correction: "Sound Off"
- * is an imperative that asserts sound is currently ON, in an image with no
- * sound code at all, so the parenthesis said "not yet" while the label said
- * "it is on". The item names the subject and claims no state.
- *
- * PAUSE IS LIVE FROM WAVE 2, because wave 2 is the wave that gave it a tick
- * loop to stop - and a live Pause needs its STATE on the glass, which is what
- * pmc_pause_item() below is for. Its marker byte and its reason are gone and
- * nothing else here moved, which is exactly the shape SPEC.md 91 said the
- * un-greying would take.
+ * THE TWO LIVE ITEMS THAT CARRY STATE SAY WHICH STATE THEY ARE IN, and the
+ * label is the only surface either has: the kernel's one marker is MENU_DIS
+ * (there is no check mark), this package has no status line - its content is
+ * the 224-pixel arcade field - and the title bar does not change. So each
+ * label names the ACTION on offer, which is the wording an imperative label
+ * has to have to be true: "Pause" while running and "Resume" while stopped,
+ * "Sound Off" while sound is on and "Sound On" while it is off. That is the
+ * lesson wave 2's greyed "Sound Off (No Sound Yet)" taught from the wrong
+ * side - an imperative asserts the state it would leave, so it may not be
+ * worn by a control that cannot act.
  *
  * THE SET'S NAME IS THE WINDOW'S TITLE, the same literal in both places. The
  * package header says PACCMAN because that is what the Disk window labels the
@@ -55,28 +45,17 @@
 
 #define PMC_TITLE  "PaccMan"
 
-/* The Pause item is the one string that changes, so the items array is not
+/* Pause and Sound are the two strings that change, so the items array is not
  * const: os88_menu_set() writes the set's oncmd field anyway, and a set in
  * .rodata takes that patch silently and wrongly (see struct os88_menuset).
  *
  * "\x01" is MENU_DIS (apps/os88api.inc): an item whose string BEGINS with it
- * is drawn through the disabled pen and takes no click. New Game, Pause and
- * Full Screen all act in this build and carry no marker.
- *
- * THE SOUND ITEM CLAIMS NO STATE, and that is the correction wave 2's review
- * made. It used to read "Sound Off (...)", which is an IMPERATIVE label - it
- * says the action on offer is to turn sound OFF, i.e. that sound is currently
- * ON - in an image with no sound code in it at all. SPEC.md 47 rule 3 is
- * satisfied by the parenthesis and contradicted by the three characters in
- * front of it, which is the same defect this wave had just corrected in
- * "(No Game)" one word along. The pair of labels was also DEAD: MENU_DIS
- * makes the kernel refuse the click before os88_oncmd is reached, so nothing
- * could ever have flipped it. One static string, and wave 3 gives it a body
- * and a state together. */
+ * is drawn through the disabled pen and takes no click. All four items act in
+ * this build and NONE of them carries the marker. */
 static const char *pmc_items[] = {
     "New Game",
     "Pause",                            /* pmc_pause_item() swaps this one */
-    "\x01" "Sound (No Sound Yet)",
+    "Sound Off",                        /* ...and pmc_sound_item() this one */
     "Full Screen"
 };
 
@@ -111,13 +90,33 @@ static struct os88_menuset pmc_mset = {
  * and licence, the arcade ROM data's owner, the Dossier, and the keys. Only
  * the line breaks moved. Count the characters before adding a word.
  *
- * ALL THREE CHROME KEYS ARE ON THE LAST LINE, and that is a requirement
- * rather than a nicety. PaccMan has no status line - its content is the
- * 224-pixel arcade field - so this card is the ONLY place inside the program
- * a key can be discovered, and the precedent it takes its menu from
- * advertises the same three in its footer (apps/pacman/pacman.asm). N was
- * bound, documented in the README and reachable from nowhere in the program
- * until the line was reflowed to 23 characters to carry it. */
+ * EVERY CHROME KEY THAT IS THE ONLY WAY TO DO ITS THING IS ON THE LAST TWO
+ * LINES, and that is a requirement rather than a nicety. PaccMan has no status
+ * line - its content is the 224-pixel arcade field - so this card is the ONLY
+ * place inside the program a key can be discovered, and the precedent it takes
+ * its menu from advertises its keys in its footer (apps/pacman/pacman.asm). N
+ * was bound, documented in the README and reachable from nowhere in the program
+ * until the line was reflowed to carry it - and SPACE was in exactly the same
+ * position after it was bound as a second Pause key: bound, specified in
+ * SPEC.md 91, advertised nowhere, which is why the keys now take two lines
+ * rather than one. The precedent spells the pair out too ('PAUSED - P OR SPACE
+ * TO RESUME').
+ *
+ * Esc IS THE ONE BOUND KEY NOT ON THE CARD, and it is the exception the claim
+ * is narrowed for rather than an oversight. It leaves full screen, which F
+ * already does in both directions, so it is a convenience with a route beside
+ * it - where N, P/SPACE and F each have no other key at all (the Game menu
+ * offers New Game and Pause, and Full Screen; nothing else offers them). The
+ * bound is what makes it a choice: the widest line here is 24 cells, and
+ * 'F full/Esc out. P/Space pause.' - the shortest phrasing that carries the
+ * pair - is 30. Adding an eleventh line is not the way out either: 11 * 12 + 14
+ * is 146 rows against CGA's 144-row content box, so the widget would clamp and
+ * cut the last line off (hosttest/pmcuitest.c gates both numbers).
+ *
+ * THE 24-CELL BOUND IS pmcuitest's AND IT IS THE TIGHTER ONE. The widget's own
+ * clamp is `widest * 8 + 2 * OS88UI_ABPADX` against the live content box, which
+ * on the 224-pixel arcade field is 25 cells; the row asserts 24 so that one
+ * cell of slack survives a font or padding change in somebody else's file. */
 static const char *pmc_about_lines[] = {
     "PaccMan for os8088",
     "A C port of pacman.c,",
@@ -127,8 +126,8 @@ static const char *pmc_about_lines[] = {
     "Tiles/sprites: Pac-Man",
     "arcade ROMs (Namco)",
     "Rules: Pac-Man Dossier",
-    "Arrows/WASD move.",
-    "F full. P pause. N new.",
+    "Arrows/WASD move. N new.",
+    "F full. P/Space pause.",
     0
 };
 
@@ -178,6 +177,10 @@ static int pmc_full;
 static unsigned char pmc_latch;         /* presses since the last poll     */
 static unsigned char pmc_held;          /* ...OR'd with what is held now   */
 
+/* pmc_anykey and pmc_anyheld are the same pair one screen along, for the
+ * attract screen's "press any key"; they are defined in paccman.c because
+ * pmc_intro.c reads pmc_anyheld and is #included ahead of this file. */
+
 static int pmc_input_dir(int def)
 {
     if (pmc_held & PMC_IN_UP)    return PMC_DIR_UP;
@@ -200,6 +203,8 @@ static void pmc_poll_input(void)
     if (!pmc_input_on) {
         pmc_held = 0;
         pmc_latch = 0;
+        pmc_anykey = 0;
+        pmc_anyheld = 0;
         return;
     }
     h = 0;
@@ -209,6 +214,29 @@ static void pmc_poll_input(void)
     if (os88_key_down(PMC_SC_RIGHT) || os88_key_down(PMC_SC_D)) h |= PMC_IN_RIGHT;
     pmc_held = (unsigned char) (h | pmc_latch);
     pmc_latch = 0;
+
+    /* THE ANY KEY IS THE SAME LATCH ONE SCREEN ALONG, and it must be cleared
+     * here as well as consumed by the intro: a key pressed during a ROUND
+     * would otherwise still be sitting in the byte when GAME OVER hands
+     * control back to the attract screen, and would start the next game
+     * before the first ghost had been introduced. One frame of "held" is all
+     * a press becomes, on either screen. */
+    pmc_anyheld = pmc_anykey;
+    pmc_anykey = 0;
+}
+
+/* pmc_input_dis - input_disable(), pacman.c 917-921. The reference memsets its
+ * whole input struct, which clears `enabled` and every level with it; here
+ * that is these five bytes. It is what the attract screen's any-key and the
+ * GAME OVER sequence both reach for, and what stops the key that started a
+ * game from starting a second one thirty ticks later, inside the fade. */
+static void pmc_input_dis(void)
+{
+    pmc_input_on = 0;
+    pmc_held = 0;
+    pmc_latch = 0;
+    pmc_anykey = 0;
+    pmc_anyheld = 0;
 }
 
 /* pmc_about_up, the card's flag, is DEFINED IN paccman.c and not here, beside
@@ -221,19 +249,31 @@ static void pmc_poll_input(void)
  * from: ANY key takes it down and starts nothing, which is also the
  * reference's own "any key" posture (pacman.c 782-817).
  *
- * The card was OPAQUE over its own rect, so what it covered is re-marked;
- * pmc_flush owns the clip region (nothing has armed one for a key - SPEC.md
- * 11.3 - and it arms one when something is covering us) and REFUSES while the
- * flag is up, which is why the flag is cleared BEFORE the flush and not
- * after.
+ * The card was OPAQUE over its own rect, so what it covered is re-marked -
+ * and MARKING IS ALL EITHER PATH DOES. The flag is cleared first because
+ * pmc_flush refuses while it is up, and the worker's next frame is what
+ * composes the spans: it owns the clip region (nothing has armed one for a key
+ * - SPEC.md 11.3 - and it arms one when something is covering us) and it may
+ * break its own lock hold every PMC_HOLD_BANDS bands, which is the whole
+ * reason the drawing is left to it.
  *
- * WHAT IT COVERED, AND NOT THE WHOLE FIELD. pmc_dirty_all is 36 bands at full
- * width - 36 x 69.78 ms, about 2.5 s of XT - reached from an ordinary
- * keystroke, and the card cannot cover 36 bands: apps/os88ui.inc measures it
- * as `lines * OS88UI_ABLH + 2 * OS88UI_ABPADY`, clamps that to the content box
- * and centres it, so ten lines is 134 rows of 288 on VGA - about 17 bands.
- * Nineteen full-width bands, ~1.3 s, were being recomposed for pixels the card
- * never touched.
+ * WHAT IT COVERED, AND ON VGA THAT IS NOT THE WHOLE FIELD. pmc_dirty_all is 36
+ * bands at full width - 36 x 69.78 ms, about 2.5 s of XT - reached from an
+ * ordinary keystroke. apps/os88ui.inc measures the card as
+ * `lines * OS88UI_ABLH + 2 * OS88UI_ABPADY`, clamps that to the content box and
+ * centres it, so ten lines is 134 rows; this routine turns that y-range into a
+ * band range with a band of slack each side.
+ *
+ * THE SAVING IS THE ADAPTER'S AND IT IS ZERO ON TWO OF THE THREE. On VGA and
+ * EGA the field is 288 rows of 8-row bands, so 134 rows is bands 8..27 - 20 of
+ * 36, and the sixteen the card never touched are ~1.1 s of XT not spent. On
+ * CGA and Hercules the content box is 144 rows and a band is 4, so the same
+ * 134-row card is d0 = 5, d1 = 139, ty0 = (5 >> 2) - 1 = 0 and ty1 = 35: THE
+ * WHOLE FIELD, because a card 134 rows tall in a 144-row box leaves five rows
+ * above and five below. The narrowing buys nothing there and is not claimed
+ * to - a 1bpp band is 4 screen rows rather than 8, so the wall clock is not
+ * 36 x 69.78 ms, but it is a whole-field compose and that is why NOTHING
+ * inside a kernel callback flushes it (paccman.c's pmc_frame).
  *
  * PMC_AB_LH AND PMC_AB_PADY MIRROR apps/os88ui.inc, which is two copies of one
  * fact - so the range is deliberately an OVER-APPROXIMATION with a band of
@@ -248,6 +288,26 @@ static void pmc_ab_mark(void *win)
 {
     const char **l;
     int n, h, d0, d1, ty0, ty1;
+
+    /* ...AND WHAT IT COVERED MAY BE THE FADE'S BLACK rather than the field.
+     * pmc_shblack says the black fill is already on the glass, and the card
+     * has just been drawn over the middle of it, so the shadow is a lie until
+     * the fill is sent again. Clearing the byte is the whole fix: the worker's
+     * next pmc_flush sends the fill, and the marked spans it leaves behind are
+     * cleaned by that fill (pmc_draw.c).
+     *
+     * IT BELONGS HERE AND NOT AT A CALL SITE. This routine means "what the
+     * card covered is no longer on the glass", it is called from the two
+     * card-down paths and nowhere else, and the first version cleared the byte
+     * in pmc_abdismiss only - so os88_oncmd's own dismissal (a Sound toggle, a
+     * Pause, a refused Full Screen, all taken mid-fade) left the shadow still
+     * claiming black, pmc_fade_black returned at its first test, and the
+     * card's rectangle stayed on the glass for the rest of the fade.
+     *
+     * It is ABOVE the pmc_layout refusal deliberately: a refused layout takes
+     * the pmc_dirty_all path, and that path owes the black fill just as much. */
+    if (pmc_black)
+        pmc_shblack = 0;
 
     if (!pmc_layout(win) || pmc_ch <= 0) {
         pmc_dirty_all();
@@ -297,9 +357,21 @@ static int pmc_abdismiss(void *win)
     if (!pmc_about_up)
         return 0;
     pmc_about_up = 0;
-    pmc_ab_mark(win);
-    pmc_flush(win, 0);
-    return 1;
+    pmc_ab_mark(win);           /* which also clears pmc_shblack: what the
+                                 * card covered may be the fade's black */
+    return 1;                   /* AND IT DOES NOT DRAW. This runs on the
+                                 * ORDINARY key path, inside a kernel callback
+                                 * whose gfx lock is not ours to drop, so a
+                                 * flush here is `brk = 0` over every band the
+                                 * card covered: 20 on VGA, ALL 36 on a 1bpp
+                                 * adapter (see pmc_ab_mark's arithmetic). The
+                                 * worker's next frame composes exactly those
+                                 * spans chunked and interruptible, and it does
+                                 * so even when the window is PAUSED - which is
+                                 * the case that used to make this flush look
+                                 * unavoidable, because os88_about pauses a
+                                 * game. paccman.c's pmc_frame is where that is
+                                 * written out. */
 }
 
 /* pmc_pause_item - THE ONLY PLACE A PAUSED WINDOW SAYS SO.
@@ -324,4 +396,14 @@ static int pmc_abdismiss(void *win)
 static void pmc_pause_item(void)
 {
     pmc_items[PMC_CMD_PAUSE] = pmc_paused ? "Resume" : "Pause";
+}
+
+/* pmc_sound_item - the same swap for Sound, and for the same two reasons: the
+ * kernel has no check-mark marker to show a toggle's state with, and an
+ * imperative label asserts the state it would LEAVE. "Sound Off" means "turn
+ * it off", so it is what a program with sound ON wears. Every write of
+ * pmc_snd_on calls this; there is exactly one, in os88_oncmd. */
+static void pmc_sound_item(void)
+{
+    pmc_items[PMC_CMD_SOUND] = pmc_snd_on ? "Sound Off" : "Sound On";
 }

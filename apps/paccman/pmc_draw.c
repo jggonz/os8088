@@ -711,6 +711,11 @@ static void pmc_flush(void *win, int brk)
 {
     if (pmc_about_up)
         return;
+    if (pmc_black) {
+        pmc_fade_black(win);    /* mid-fade: the field is BLACK and the bands
+                                 * under it are drawn when it lifts */
+        return;
+    }
     if (!pmc_dirty_any())
         return;
     if (!pmc_layout(win))
@@ -718,6 +723,92 @@ static void pmc_flush(void *win, int brk)
     if (os88_wm_obscured(win) && os88_wm_clip_set(win) != 0)
         return;
     pmc_flush_laid(win, brk);
+}
+
+/* pmc_text_ink - THE COLOUR A LABEL IS WRITTEN IN, and on a 1bpp adapter it is
+ * white whatever the arcade says.
+ *
+ * The sixteen colours of a colour block reach a monochrome screen through
+ * pmc_rom.c's class table - white, a 50% checkerboard, or black - and a
+ * checkerboard is a fine GHOST and an unreadable LETTER. On the attract screen
+ * the reference colours each ghost's name and nickname with that ghost's own
+ * colour (pacman.c 2360-2368), and two of the four - BLINKY's red 1 and INKY's
+ * cyan 5 - land in the dither class: photographed on VIDEO=cga at the wave-3
+ * review, "-SHADOW BLINKY" and "-BASHFUL INKY" were smears while PINKY's and
+ * CLYDE's rows were crisp. That is SPEC.md 39.4 exactly ("grey rounds to black
+ * there, so a disabled glyph is a checkerboard"), one control along.
+ *
+ * So the PICTURE keeps the arcade colour - it is what tells the four ghosts
+ * apart, and a dithered ghost body is legible as a ghost - and the LABEL takes
+ * COLOR_DEFAULT where the display cannot carry colour at all. On VGA and EGA
+ * nothing changes and the screen is the reference's.
+ *
+ * IT IS READ AT WRITE TIME and baked into color_ram, because that is when the
+ * reveal happens. pmc_bpp is the display THIS WINDOW is on and pmc_layout has
+ * run long before the first name appears at tick 120 (the window is painted at
+ * launch).
+ *
+ * SO A WINDOW THAT CHANGES DISPLAY KEEPS THE COLOURS IT WAS WRITTEN WITH,
+ * until whatever wrote them writes them again (SPEC.md 39.12's extended
+ * desktop, the vm/xt-multimon machine, is where that is possible at all). On
+ * the ATTRACT screen that is self-healing and costs a cycle: the reveal
+ * re-writes all four names and nicknames every time round. ON THE GAME SCREEN
+ * IT IS NOT. `PLAYER ONE` is written once per pmc_game_init and `GAME  OVER`
+ * once, at PMC_T_OVER, so a window dragged from a VGA onto a 1bpp display
+ * between those writes keeps INKY's cyan 5 and BLINKY's red 1 and draws the
+ * checkerboard this routine exists to prevent, with no re-write until the next
+ * round or the next game over. It is STATED rather than repaired. The repair is
+ * small and known - pmc_layout already computes pmc_bpp every call, so it is
+ * one remembered byte and a re-write of the two labels when it changes, 16
+ * cells and one band, taken only on a display change - and it is a change to
+ * the drawing path made for a machine class with one 86Box profile
+ * (vm/xt-multimon), which is not what a review wave is for. */
+static int pmc_text_ink(int colour)
+{
+    return pmc_bpp == 1 ? PMC_COLOR_DEFAULT : colour;
+}
+
+/* pmc_fade_black - THE FADE, WHICH IS A CUT (SPEC.md 91).
+ *
+ * The reference blends a black quad over the whole display across FADE_TICKS
+ * 30, its alpha stepping with `since(fadein)/FADE_TICKS` (pacman.c 3052-3067).
+ * There is no alpha on a 4bpp planar VGA and none on either 1bpp adapter, and
+ * a dithered approximation would cost 30 full-field recomposes - about 75
+ * seconds of XT for one second of screen. So the fade is a CUT: the content
+ * goes black on the fade-out's first tick, stays black for exactly the ticks
+ * the reference's two fades and the state change between them take, and is
+ * repainted whole when the fade-in ends. Every sequence keeps its LENGTH,
+ * which is what the game's timing actually depends on.
+ *
+ * THE FILL IS SENT ONCE PER FADE and not once per frame: pmc_shblack is the
+ * shadow of what the glass holds, so ~60 ticks of black cost ONE gfx call. It
+ * is cleared rather than set by anything that overdraws the black - only the
+ * About card can - and the next frame paints it again.
+ *
+ * The spans are CLEANED because there is nothing to owe under a black field:
+ * the fade's end calls pmc_dirty_all and every band is composed then. A
+ * refusal - no layout yet, or a clip region that says not one pixel of us
+ * shows - leaves pmc_shblack clear, so the next frame tries again.
+ *
+ * THE WHOLE CONTENT, not just the field: the letterbox around a grown window
+ * is black anyway (pmc_letterbox), so one rectangle covers both and the fade
+ * needs no second call. */
+static void pmc_fade_black(void *win)
+{
+    if (pmc_shblack)
+        return;
+    if (!pmc_layout(win))
+        return;
+    if (os88_wm_obscured(win) && os88_wm_clip_set(win) != 0)
+        return;
+
+    os88_set_color(OS88_BLACK);
+    os88_gfx_fill(pmc_cx, pmc_cy, pmc_cx + pmc_cw - 1, pmc_cy + pmc_ch - 1);
+    PMC_COUNT(pmc_n_calls, 1);
+    PMC_COUNT(pmc_n_fillpx, (unsigned) (pmc_cw * pmc_ch));
+    PMC_COUNT(pmc_n_fillrows, (unsigned) pmc_ch);
+    pmc_clean();
+    pmc_shblack = 1;
 }
 
 /* pmc_fill_clip - one black strip, cut to the rect we actually owe. An empty
@@ -812,8 +903,36 @@ static int pmc_repaint(void *win)
         d.y1 = pmc_cy;
         d.x2 = pmc_cx + pmc_cw - 1;
         d.y2 = pmc_cy + pmc_ch - 1;
-        pmc_dirty_all();
-    } else {
+        if (!pmc_black)
+            pmc_dirty_all();
+    }
+
+    /* MID-FADE, WHAT WE OWE IS BLACK AND NOT THE FIELD. Recomposing the bands
+     * here would show the round the fade is hiding - a death sequence's maze
+     * reappearing behind GAME OVER for as long as a menu was down over it. One
+     * fill, cut to the rect the kernel says we owe.
+     *
+     * A WHOLE repaint SETS THE SHADOW and a partial one leaves it alone. The
+     * rect is the whole content in the first case, so the black really is back
+     * on the glass and the worker's very next pmc_frame would otherwise send a
+     * second identical whole-content fill for one event - PERFORMANCE.md rule
+     * 2's erase-then-draw, one device along, and the window is wide enough to
+     * hit (a fade is 60 game ticks, and an unhide, a drag or a Full Screen
+     * toggle inside one lands a whole-window paint here). It is exactly as
+     * safe as pmc_fade_black's own set: both run with a clip region that may
+     * cut, and what a region cuts away is what the kernel owes us a later
+     * W_PAINT for. A PARTIAL repaint has not put the whole black back, so it
+     * may not claim it. */
+    if (pmc_black) {
+        os88_set_color(OS88_BLACK);
+        pmc_fill_clip(pmc_cx, pmc_cy, pmc_cx + pmc_cw - 1,
+                      pmc_cy + pmc_ch - 1, d.x1, d.y1, d.x2, d.y2);
+        if (whole)
+            pmc_shblack = 1;
+        return 1;
+    }
+
+    if (!whole) {
         /* the owed rect, intersected with the FIELD, in field pixels */
         x1 = d.x1 - pmc_fx;
         y1 = d.y1 - pmc_fy;

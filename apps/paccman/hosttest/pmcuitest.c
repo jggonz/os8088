@@ -383,7 +383,23 @@ static void (*hg_on_yield)(void);
 void  os88_task_yield(void)    { hc_yield++;
                                  if (hg_on_yield) hg_on_yield(); }
 unsigned os88_ticks(void)      { return hg_ticks_v; }
-int  os88_snd_tone(int hz, int t, int p) { (void) hz; (void) t; (void) p; return 0; }
+/* --- the speaker ----------------------------------------------------------
+ * THE ONE VOICE THE THREE BECOME. os88_snd_tone is the whole of the sound API
+ * a package gets (SPEC.md 34): one square wave, no volume, no waveform. What
+ * the model records is what was ASKED for, so the sound rows below can say
+ * which of the three arcade voices reached the speaker on a given frame - the
+ * thing no capture of the real machine can tell you, because by then it is one
+ * tone either way. */
+static int hc_tone;
+static int hg_tone_hz = -1, hg_tone_ticks, hg_tone_prio;
+int  os88_snd_tone(int hz, int t, int p)
+{
+    hc_tone++;
+    hg_tone_hz = hz;
+    hg_tone_ticks = t;
+    hg_tone_prio = p;
+    return 0;
+}
 int  os88_toast(const char *text, int ticks)
 {
     (void) ticks;
@@ -941,6 +957,37 @@ static void drive_layout(const char *name, int w, int h, int bpp, int kind,
     }
     hg_obscured = obscured;
 
+    /* THE LAYOUT BEFORE THE FIRST WRITE, because pmc_text_ink reads pmc_bpp and
+     * pmc_bpp is pmc_layout's. On the machine the kernel's first W_PAINT always
+     * precedes any pmc_new_game (which only a key or a menu command reaches),
+     * so this models the real order rather than relaxing it: without it
+     * pmc_game_init here writes PLAYER ONE against the PREVIOUS
+     * configuration's depth and the identical-rewrite row below disagrees with
+     * it. It marks nothing and is idempotent, so no cost row moves. */
+    pmc_layout(win);
+
+    /* THE LAYOUT ROWS WANT THE MAZE and the program opens on the attract
+     * screen, so the game is started here the way `N` starts it. These rows
+     * are about the RENDERER - the busiest picture the program has, the
+     * compare-then-write rule against the score and lives strips, and the
+     * three blit paths - and the attract screen is 36 mostly-empty bands.
+     * drive_intro() below is what exercises the screen this opens on. */
+    pmc_new_game();
+
+    /* PLAYER ONE IS ONE OF THE TWO COLOURED LABELS ON THE GAME SCREEN and it
+     * takes the attract screen's rule: the reference writes it in INKY's cyan
+     * 5, which the mono class table resolves to a 50% checkerboard, so on a
+     * 1bpp display it goes out in COLOR_DEFAULT (pmc_text_ink). This row is
+     * here because the rule shipped covering ONE screen - drive_intro_mono
+     * asserted the four ghost labels and nothing asserted these two, so
+     * PLAYER ONE and GAME OVER stayed dithered on both 1bpp adapters. Checked
+     * on every configuration, so "white on 1bpp" and "the arcade's colour
+     * everywhere else" are both under test. GAME OVER is drive_intro_mono's,
+     * which is the row that can reach it. */
+    if (pmc_cram[(14 << PMC_VSHIFT) + 9] != (bpp == 1 ? PMC_COLOR_DEFAULT
+                                                      : 0x05))
+        fail("PLAYER ONE is not in pmc_text_ink's colour for this display");
+
     cost_reset();
     os88_paint(win);
 
@@ -990,7 +1037,7 @@ static void drive_layout(const char *name, int w, int h, int bpp, int kind,
 
     cost_reset();
     pmc_vid_color_text(9, 0, PMC_COLOR_DEFAULT, "HIGH SCORE");
-    pmc_vid_color_text(9, 14, 0x05, "PLAYER ONE");
+    pmc_vid_color_text(9, 14, pmc_text_ink(0x05), "PLAYER ONE");
     pmc_vid_color_text(11, 20, 0x09, "READY!");
     pmc_vid_quad(2, 34, 0x09, 0x20);
     pmc_vid_color(1, 6, PMC_COLOR_DOT);
@@ -1463,6 +1510,517 @@ static void drive_input(void *win)
     printf("  hold released before a junction -> never taken (no buffer)\n");
 }
 
+/* ==========================================================================
+ * THE ATTRACT SCREEN, TICK BY TICK
+ *
+ * intro_tick draws at FOURTEEN event ticks and never in between, so what has
+ * to be checked is not "does it look right" but "did each of the fourteen
+ * things appear on its own tick and not before". The harness steps the game
+ * clock one tick at a time through pmc_step_tick() - which is the worker's own
+ * per-tick dispatch and not a copy of it (paccman.c) - and reads the two RAMs
+ * directly.
+ *
+ * THE TILE CODES ARE WRITTEN OUT AGAIN HERE, not read from the program's own
+ * conv_char: this is meant to be an independent second reader of the reference
+ * (pacman.c 1031-1042), so a conv_char that lost a case would agree with
+ * itself and fail here.
+ * ========================================================================*/
+static int tile_at(int x, int y) { return pmc_vram[(y << PMC_VSHIFT) + x]; }
+static int col_at(int x, int y)  { return pmc_cram[(y << PMC_VSHIFT) + x]; }
+
+static int hg_conv(int c)
+{
+    if (c == ' ')  return 0x40;
+    if (c == '/')  return 58;
+    if (c == '-')  return 59;
+    if (c == '"')  return 38;
+    if (c == '!')  return 'Z' + 1;
+    return c;
+}
+
+/* text_is - does row y read `s` from column x, and (when colour >= 0) in that
+ * colour? */
+static int text_is(int x, int y, const char *s, int colour)
+{
+    while (*s) {
+        if (tile_at(x, y) != hg_conv((unsigned char) *s))
+            return 0;
+        if (colour >= 0 && col_at(x, y) != colour)
+            return 0;
+        s++;
+        x++;
+    }
+    return 1;
+}
+
+static void want_text(int x, int y, const char *s, int colour, const char *what)
+{
+    if (!text_is(x, y, s, colour)) {
+        printf("pmcuitest: FAIL - %s is not on the attract screen at (%d,%d)"
+               " (tile %02X)\n", what, x, y, tile_at(x, y));
+        hg_fails++;
+    }
+}
+
+/* one modelled frame of exactly one game tick: the poll a frame does, then the
+ * tick. Splitting them the way pmc_frame does is what makes the any-key latch
+ * and the direction latch behave here exactly as they do on the machine. */
+static void intro_step(void)
+{
+    pmc_poll_input();
+    pmc_step_tick();
+}
+
+/* run until `to` ticks have elapsed since the attract screen started.
+ *
+ * IT COUNTS TICKS AND DOES NOT ASK pmc_since(), which is the same trap this
+ * file is here to catch one level up: pmc_since saturates at 0x7FFE, so a
+ * drive that waited on `since() < 40000` would spin until its guard fired and
+ * report the wrong thing. The absolute target is the trigger plus the delay. */
+static void intro_to(unsigned to)
+{
+    unsigned target = pmc_trg_lo[PMC_T_INTRO] + to;
+    unsigned guard = 0;
+
+    while (pmc_tick_lo != target) {
+        intro_step();
+        if (++guard > 100000) {
+            fail("the attract screen never reached its event tick");
+            return;
+        }
+    }
+}
+
+static void drive_intro(void *win)
+{
+    static const char *names[4] = { "-SHADOW", "-SPEEDY", "-BASHFUL",
+                                    "-POKEY" };
+    static const char *nicks[4] = { "BLINKY", "PINKY", "INKY", "CLYDE" };
+    int i, colour, y, blank, lit;
+    unsigned d;
+
+    printf("\n the attract screen:\n");
+
+    if (pmc_mode != PMC_MODE_INTRO)
+        fail("the program did not open on the attract screen");
+
+    /* the screen the reference draws on `now(intro.started)` (pacman.c
+     * 2328-2341), before a single event tick */
+    want_text(3, 0, "1UP   HIGH SCORE   2UP", PMC_COLOR_DEFAULT, "the header");
+    want_text(7, 5, "CHARACTER / NICKNAME", PMC_COLOR_DEFAULT, "the heading");
+    want_text(3, 35, "CREDIT  0", PMC_COLOR_DEFAULT, "the credit line");
+    want_text(5, 1, "00", PMC_COLOR_DEFAULT, "the 1UP score");
+
+    /* THE HISCORE FIELD IS ABSENT ON A FRESH INSTANCE, which is the machine's
+     * own behaviour: the reference draws it only when the hiscore is above
+     * zero (pacman.c 2336-2338). Nothing but spaces from column 11 to 16. */
+    if (!text_is(11, 1, "      ", -1))
+        fail("a fresh instance drew a hiscore field on the attract screen");
+
+    /* ...and the four reveals, each on its own tick and not one tick early. */
+    d = 30;
+    for (i = 0; i < 4; i++) {
+        colour = 2 * i + 1;
+        y = 3 * i + 6;
+
+        d += 30;
+        intro_to(d - 1);
+        if (tile_at(4, y) != PMC_TILE_SPACE)
+            fail("a ghost's picture appeared a tick early");
+        intro_to(d);
+        if (tile_at(4, y) != PMC_TILE_GHOST || tile_at(5, y + 2) != 0xB5
+            || col_at(4, y) != colour)
+            fail("the 2x3 ghost block is not the reference's six tiles");
+
+        d += 60;
+        intro_to(d - 1);
+        if (text_is(7, y + 1, names[i], colour))
+            fail("a ghost's name appeared a tick early");
+        intro_to(d);
+        want_text(7, y + 1, names[i], colour, "a ghost's name");
+
+        d += 30;
+        intro_to(d);
+        want_text(17, y + 1, nicks[i], colour, "a ghost's nickname");
+        printf("  tick %3u/%3u/%3u  block, %-8s %s\n",
+               d - 90, d - 30, d, names[i], nicks[i]);
+    }
+
+    /* the scoring legend: a dot for 10 and an energizer for 50, with the
+     * arcade font's own 0x5D-0x5F "PTS" glyphs after each number. */
+    d += 60;
+    intro_to(d);
+    if (tile_at(10, 24) != PMC_TILE_DOT || col_at(10, 24) != PMC_COLOR_DOT)
+        fail("the 10 PTS dot is missing from the legend");
+    if (tile_at(10, 26) != PMC_TILE_PILL || col_at(10, 26) != PMC_COLOR_DOT)
+        fail("the 50 PTS energizer is missing from the legend");
+    if (tile_at(12, 24) != '1' || tile_at(15, 24) != 0x5D
+        || tile_at(17, 24) != 0x5F)
+        fail("the '10 PTS' line is not the reference's tiles");
+    if (tile_at(12, 26) != '5' || tile_at(15, 26) != 0x5D)
+        fail("the '50 PTS' line is not the reference's tiles");
+    printf("  tick %3u       the 10/50 PTS legend\n", d);
+
+    /* THE PROMPT BLINKS, and it blinks off `since & 0x20` - which is why the
+     * two stamps below are 630 and 662 and not 630 and 631. At 630 bit 5 of
+     * the elapsed count is SET, so the reference's own first frame of the
+     * prompt is the BLANK one; the text arrives at 640 and is still there at
+     * 662. A prompt written against the saturating pmc_since() would show
+     * whichever of the two 0x7FFE picks and then never change again. */
+    d += 60;
+    intro_to(d);
+    blank = text_is(3, 31, "                       ",
+                    PMC_COLOR_DEFAULT);
+    intro_to(662);
+    lit = text_is(3, 31, "PRESS ANY KEY TO START!", 3);
+    if (!blank || !lit)
+        fail("the PRESS ANY KEY prompt is not blinking on since & 0x20");
+    printf("  tick %3u/662   PRESS ANY KEY TO START! (blank, then lit)\n", d);
+
+    /* ...AND IT IS STILL BLINKING NINE MINUTES LATER. pmc_since() saturates at
+     * 0x7FFE so that every compare in the program is cheap, and 0x7FFE & 0x20
+     * is a constant: a prompt written against it freezes after 32,766 ticks -
+     * about nine minutes of one attract screen, which is exactly the sort of
+     * thing a machine left running in a corner does. pmc_since_lo() wraps, and
+     * this run is what says the right one was used. */
+    intro_to(40000);
+    blank = 0;
+    lit = 0;
+    for (i = 0; i < 64; i++) {
+        intro_step();
+        if (text_is(3, 31, "PRESS ANY KEY TO START!", 3))
+            lit = 1;
+        if (text_is(3, 31, "                       ", PMC_COLOR_DEFAULT))
+            blank = 1;
+    }
+    if (!lit || !blank)
+        fail("the prompt stopped blinking - since() saturated (pmc_time.c)");
+    printf("  tick 40000     still blinking after 40,000 ticks\n");
+    pmc_flush(win, 0);
+    audit("the attract screen, 40,000 ticks in");
+
+    /* F IS NEVER THE ANY KEY. The reference gives it its own switch case with
+     * no `anykey` beside it (pacman.c 806-810), so Full Screen on the attract
+     * screen makes the window bigger and does not start a round. */
+    hg_full = 0;
+    os88_onkey(0, PMC_SC_F, win);
+    if (!hg_full)
+        fail("F on the attract screen did not toggle full screen");
+    if (pmc_anykey)
+        fail("F counted as the any key - the reference gives it its own case");
+    intro_step();
+    if (pmc_mode != PMC_MODE_INTRO)
+        fail("F started a game from the attract screen");
+    os88_onkey(0, PMC_SC_F, win);       /* ...and back */
+
+    /* ...AND EVERY OTHER KEY IS. SPACE is an ordinary any-key here and not the
+     * pause it is in play, which is the one binding where this port and
+     * apps/pacman differ (SPEC.md 91). */
+    os88_onkey(0, PMC_SC_SPACE, win);
+    if (!pmc_anykey)
+        fail("SPACE on the attract screen did not latch the any key");
+    if (pmc_paused)
+        fail("SPACE paused the attract screen - it is an any-key here");
+    intro_step();
+    if (pmc_input_on)
+        fail("the any key did not disable input for the fade");
+    intro_step();
+    if (!pmc_black)
+        fail("the any key did not start the fade-out");
+
+    /* THE FADE IS A CUT and the black is ONE fill, however long it lasts. */
+    cost_reset();
+    pmc_flush(win, 0);
+    if (hc_fill != 1 || hc_blitp + hc_blit4 + hc_blit1 != 0)
+        fail("the fade drew bands instead of one black fill");
+    cost_row("the fade-out's black");
+    cost_reset();
+    pmc_flush(win, 0);
+    pmc_flush(win, 0);
+    if (hc_fill != 0)
+        fail("the black fill was sent again on a frame that was already black");
+
+    /* ...and the game starts FADE_TICKS later, still black, and the field
+     * arrives whole when the fade-in ends. */
+    for (i = 0; i < PMC_FADE_TICKS + 4 && pmc_mode == PMC_MODE_INTRO; i++)
+        intro_step();
+    if (pmc_mode != PMC_MODE_GAME)
+        fail("the any key did not start a game after the fade");
+    if (!pmc_black)
+        fail("the field was shown again before the fade-in ended");
+    cost_reset();
+    for (i = 0; i < 4 * PMC_FADE_TICKS && pmc_black; i++) {
+        intro_step();
+        pmc_flush(win, 0);
+    }
+    if (pmc_black)
+        fail("the fade-in never lifted");
+    pmc_flush(win, 0);
+    if (pmc_n_bands < PMC_TILES_Y)
+        fail("the fade-in did not repaint the whole field");
+    printf("  fade cut: %u band(s) when it lifted, %d fill(s)\n",
+           pmc_n_bands, hc_fill);
+    audit("the field after the fade-in");
+}
+
+/* drive_intro_mono - THE SAME REVEAL WHERE COLOUR CANNOT BE CARRIED.
+ *
+ * Two of the four ghost colours - BLINKY's red 1 and INKY's cyan 5 - land in
+ * the mono class table's 50% checkerboard, which is a fine ghost and an
+ * unreadable letter (SPEC.md 39.4). So on a 1bpp display the NAME and the
+ * NICKNAME are written in COLOR_DEFAULT and the ghost PICTURE keeps the
+ * arcade's colour. This row is here because the alternative is a screendump
+ * on the adapter nobody looks at (LESSONS.md 8) - which is how the defect got
+ * as far as a wave-3 photograph in the first place. */
+static void drive_intro_mono(void)
+{
+    void *win;
+    int i;
+
+    printf("\n the attract screen, 1bpp:\n");
+    hg_screen(640, 200, 1, OS88_VID_CGA);
+    win = os88_main();
+    os88_paint(win);
+    if (pmc_bpp != 1)
+        fail("the CGA layout did not report one bit a pixel");
+
+    intro_to(510);                      /* every name and nickname is up */
+    for (i = 0; i < 4; i++) {
+        int y = 3 * i + 6;
+        if (col_at(7, y + 1) != PMC_COLOR_DEFAULT
+            || col_at(17, y + 1) != PMC_COLOR_DEFAULT)
+            fail("a ghost's label is in a colour a 1bpp screen dithers");
+        if (col_at(4, y) != 2 * i + 1)
+            fail("the ghost PICTURE lost its colour - only labels change");
+    }
+    pmc_flush(win, 0);
+    audit("the attract screen on CGA");
+    printf("  labels in COLOR_DEFAULT, pictures still in the arcade's four\n");
+
+    /* ...AND THE GAME SCREEN'S TWO LABELS, which is where the rule was missing.
+     * The reference colours PLAYER ONE with INKY's cyan 5 and GAME OVER with
+     * BLINKY's red 1, and both of those resolve to the mono class table's 50%
+     * checkerboard - so on Hercules, where the window is FULL height and there
+     * is no row halving to blame, GAME OVER was a full-size smear, and it is
+     * the one message the player most needs to read. GAME OVER is reached by
+     * firing its trigger directly the way this file already pokes pmc_lives:
+     * pmc_start() arms it for the next tick and pmc_game_tick writes the row.
+     */
+    pmc_new_game();
+    intro_step();                       /* PMC_T_GAME fires on this tick, and
+                                         * pmc_game_init disables every
+                                         * sequence trigger - T_OVER included -
+                                         * so it has to be armed AFTER it */
+    if (!text_is(9, 14, "PLAYER ONE", PMC_COLOR_DEFAULT))
+        fail("PLAYER ONE is not white on a 1bpp screen (pmc_text_ink)");
+    pmc_start(PMC_T_OVER);
+    intro_step();
+    if (!text_is(9, 20, "GAME  OVER", PMC_COLOR_DEFAULT))
+        fail("GAME  OVER is not white on a 1bpp screen (pmc_text_ink)");
+    printf("  PLAYER ONE and GAME  OVER in COLOR_DEFAULT too\n");
+}
+
+/* ==========================================================================
+ * THREE ARCADE VOICES, ONE SPEAKER
+ *
+ * The register values are asserted BY NAME - the constants the reference's own
+ * effects write - and not against the committed pmc_rom.c, so a re-extraction
+ * that decoded the wrong column could not make this row agree with it. That is
+ * the trap wave 1 fell into once already: the prelude's melody is voice 1 and
+ * its bass voice 0, and a first cut played the bass.
+ * ========================================================================*/
+static void want_hz(int voice, unsigned hz, const char *what)
+{
+    if (pmc_v_hz[voice] != hz) {
+        printf("pmcuitest: FAIL - %s: voice %d is %u Hz, want %u\n",
+               what, voice, pmc_v_hz[voice], hz);
+        hg_fails++;
+    }
+}
+
+static void drive_sound(void)
+{
+    int t;
+
+    printf("\n sound:\n");
+
+    /* THE PRELUDE'S MELODY IS VOICE 1: 539 Hz for four ticks, silent for four,
+     * 1078 for four. Those numbers are the tune, and they are written here
+     * rather than read from the table. */
+    pmc_snd_clear();
+    pmc_snd_start(0, PMC_SK_PRELUDE);
+    for (t = 0; t < 12; t++) {
+        pmc_snd_tick();
+        if (t < 4)
+            want_hz(1, 539, "the prelude's first note");
+        else if (t < 8)
+            want_hz(1, 0, "the rest after the prelude's first note");
+        else
+            want_hz(1, 1078, "the prelude's second note");
+        if (t < 4 && pmc_v_hz[0] != 67)
+            fail("the prelude's BASS is not 67 Hz on voice 0");
+    }
+    printf("  prelude        voice 1: 539, rest, 1078 Hz;  voice 0: 67 Hz\n");
+
+    /* THE MELODY OUTRANKS ITS OWN BASS. Both voices are sounding on tick 0 -
+     * bass 67 Hz at volume 14, melody 539 at volume 15 - and one speaker takes
+     * the higher-numbered voice. */
+    pmc_snd_clear();
+    pmc_snd_start(0, PMC_SK_PRELUDE);
+    pmc_snd_tick();
+    pmc_snd_last = 1;                   /* force the call, so the row reads */
+    pmc_snd_frame();
+    if (hg_tone_hz != 539)
+        fail("the speaker took the prelude's bass over its melody");
+    if (hg_tone_ticks != PMC_SND_HOLD || hg_tone_prio != PMC_SND_PRIO)
+        fail("the tone was not asked for with the frame's own duration");
+
+    /* THE BASS IS HEARD WHEN THE MELODY RESTS, and that needs the VOLUME to be
+     * read as well as the frequency: the bass decays 14..0 over fifteen ticks
+     * while its frequency stands still, so a sampler that looked only at the
+     * frequency would hold it through the whole prelude. */
+    for (t = 1; t < 5; t++)
+        pmc_snd_tick();
+    pmc_snd_frame();
+    if (hg_tone_hz != 67)
+        fail("the bass was not heard through the melody's rest");
+    for (t = 5; t < 15; t++)
+        pmc_snd_tick();                 /* tick 14: the melody is resting AND
+                                         * the bass envelope has reached 0, so
+                                         * the machine is genuinely silent */
+    pmc_snd_frame();
+    if (hg_tone_hz != 0)
+        fail("a voice at volume 0 was still sounding - volume is not read");
+    printf("  priority       melody over bass, and volume 0 is silence\n");
+
+    /* AN EFFECT INTERRUPTS THE TUNE. Voice 2 is the effects' and outranks
+     * both. */
+    pmc_snd_clear();
+    pmc_snd_start(1, PMC_SK_WEEOOH);
+    pmc_snd_start(2, PMC_SK_EATFRUIT);
+    pmc_snd_tick();
+    pmc_snd_frame();
+    if (hg_tone_hz != pmc_v_hz[2] || pmc_v_hz[2] == 0)
+        fail("an effect on voice 2 did not interrupt the siren on voice 1");
+
+    /* THE SIX EFFECTS, each against the reference's own registers. */
+    pmc_snd_clear();
+    pmc_snd_start(2, PMC_SK_EATDOT1);
+    pmc_snd_tick();
+    if (pmc_v_f[2] != 0x1500)
+        fail("eatdot1 does not start at 0x1500");
+    pmc_snd_tick();
+    if (pmc_v_f[2] != 0x1200)
+        fail("eatdot1 does not fall by 0x300 a tick");
+    for (t = 2; t < 6; t++)
+        pmc_snd_tick();
+    if (pmc_sk[2] != PMC_SK_NONE || pmc_v_hz[2] != 0)
+        fail("eatdot1 did not stop and silence voice 2 after five ticks");
+
+    pmc_snd_start(2, PMC_SK_EATDOT2);
+    pmc_snd_tick();
+    if (pmc_v_f[2] != 0x0700)
+        fail("eatdot2 does not start at 0x0700");
+    pmc_snd_tick();
+    if (pmc_v_f[2] != 0x0A00)
+        fail("eatdot2 does not rise by 0x300 a tick");
+    pmc_snd_clear();
+
+    pmc_snd_start(2, PMC_SK_EATGHOST);
+    for (t = 0; t < 33; t++)
+        pmc_snd_tick();
+    if (pmc_sk[2] != PMC_SK_NONE)
+        fail("eatghost did not stop after 32 ticks");
+
+    pmc_snd_start(2, PMC_SK_EATFRUIT);
+    pmc_snd_tick();
+    if (pmc_v_f[2] != 0x1600)
+        fail("eatfruit does not start at 0x1600");
+    for (t = 1; t < 11; t++)
+        pmc_snd_tick();
+    if (pmc_v_f[2] != 0x1600 - 10 * 0x200)
+        fail("eatfruit does not fall for its first eleven ticks");
+    pmc_snd_tick();
+    if (pmc_v_f[2] != 0x1600 - 9 * 0x200)
+        fail("eatfruit does not rise again after tick 11");
+    pmc_snd_clear();
+
+    /* THE SIREN IS A TRIANGLE OF PERIOD 24 AND IT NEVER STOPS, which is why
+     * its phase cannot be `cur_tick & 31`: the slot's tick wraps at 65,536,
+     * which is not a multiple of 24. Driven past that wrap here. */
+    pmc_snd_start(1, PMC_SK_WEEOOH);
+    pmc_snd_tick();
+    if (pmc_v_f[1] != 0x1000)
+        fail("the siren does not start at 0x1000");
+    for (t = 1; t < 12; t++)
+        pmc_snd_tick();
+    if (pmc_v_f[1] != 0x1000 + 11 * 0x200)
+        fail("the siren does not rise for twelve ticks");
+    for (t = 12; t < 25; t++)
+        pmc_snd_tick();                 /* twelve up and twelve down: the
+                                         * period is 24 and it closes on the
+                                         * TWENTY-FIFTH tick, because tick 0
+                                         * only set the starting register */
+    if (pmc_v_f[1] != 0x1000)
+        fail("the siren does not come back to where it started");
+    for (t = 0; t < 70000; t++)
+        pmc_snd_tick();
+    if (pmc_sk[1] != PMC_SK_WEEOOH)
+        fail("the siren stopped - it is the one effect that never does");
+    if (pmc_v_f[1] < 0x1000 || pmc_v_f[1] > 0x1000 + 12 * 0x200)
+        fail("the siren wandered out of its range past the tick wrap");
+    printf("  siren          triangle of 24 held across a 65,536-tick wrap\n");
+
+    pmc_snd_clear();
+    pmc_snd_start(1, PMC_SK_FRIGHT);
+    pmc_snd_tick();
+    if (pmc_v_f[1] != 0x0180)
+        fail("the frightened warble does not start at 0x0180");
+    for (t = 1; t < 8; t++)
+        pmc_snd_tick();
+    if (pmc_v_f[1] != 0x0180 * 8)
+        fail("the frightened warble does not rise by 0x180 a tick");
+    pmc_snd_tick();
+    if (pmc_v_f[1] != 0x0180)
+        fail("the frightened warble does not reset every eight ticks");
+
+    /* THE DEATH TUNE IS 90 TICKS ON VOICE 2 and stops itself. */
+    pmc_snd_clear();
+    pmc_snd_start(2, PMC_SK_DEAD);
+    for (t = 0; t < 91; t++)
+        pmc_snd_tick();                 /* 90 ticks of dump, and the 91st is
+                                         * the one that finds cur_tick == 90
+                                         * and stops the slot */
+    if (pmc_sk[2] != PMC_SK_NONE || pmc_v_hz[2] != 0)
+        fail("the death tune did not stop after its 90 ticks");
+    printf("  effects        eatdot1/2, eatghost, eatfruit, fright, death\n");
+
+    /* GAME > SOUND IS A PLAIN TOGGLE, and turning it off silences the speaker
+     * NOW rather than letting the granted tone run out. */
+    pmc_snd_clear();
+    pmc_snd_start(1, PMC_SK_WEEOOH);
+    pmc_snd_tick();
+    pmc_snd_frame();
+    if (hg_tone_hz == 0)
+        fail("the siren did not reach the speaker");
+    pmc_snd_on = 0;
+    pmc_snd_frame();
+    if (hg_tone_hz != 0)
+        fail("Game > Sound off did not silence the speaker");
+    t = hc_tone;
+    pmc_snd_frame();
+    pmc_snd_frame();
+    if (hc_tone != t)
+        fail("silence is re-sent every frame - one call is enough");
+    pmc_snd_on = 1;
+    pmc_snd_frame();
+    if (hg_tone_hz == 0)
+        fail("Game > Sound on did not bring the siren back");
+    pmc_snd_clear();
+    pmc_snd_frame();
+    printf("  toggle         off silences at once, on brings the tune back\n");
+}
+
 int main(void)
 {
     void *win;
@@ -1539,6 +2097,27 @@ int main(void)
     os88_about(win);
     if (hc_about != 1 || hc_about_d != 0)
         fail("os88_about() did not draw the card through the plain entry");
+
+    /* ...AND ON THE ATTRACT SCREEN IT PAUSES NOTHING, which is the half that
+     * shipped wrong. The program OPENS on the attract screen, P and SPACE are
+     * ordinary any-keys there (this port's stated binding), so a card that
+     * paused unconditionally froze the reveal with no key able to unfreeze it -
+     * and the presses meant to unfreeze it sat in the any-key latch and started
+     * a round the moment the menu's Resume was chosen. The card is modal either
+     * way while it is up: pmc_frame's guard tests pmc_about_up as well. */
+    if (pmc_paused || strcmp(pmc_items[PMC_CMD_PAUSE], "Pause"))
+        fail("About paused the attract screen, which no key there can undo");
+    pmc_abdismiss(win);
+
+    /* READING THE CARD PAUSES THE GAME, which is apps/pacman/pacman.asm's
+     * pm_about_body to the byte (it sets `pm_pause` beside `pm_abon`) and the
+     * reason is a player's: whoever opened the About box is not watching the
+     * maze, and a game that ran on behind the card would be four ghosts closer
+     * when it came down. */
+    pmc_new_game();
+    os88_about(win);
+    if (!pmc_paused || strcmp(pmc_items[PMC_CMD_PAUSE], "Resume"))
+        fail("About did not pause the game and say so in the menu");
     hg_dmg_whole = 0;                   /* a menu over the top three rows */
     hg_dmg_x1 = pmc_fx;
     hg_dmg_y1 = pmc_fy;
@@ -1628,16 +2207,123 @@ int main(void)
     pmc_about_up = 0;
     pmc_flush(win, 0);                     /* put the tile back before the audit */
 
+    /* A CARD TAKEN DOWN MID-FADE OWES THE BLACK AGAIN, BY EITHER ROUTE.
+     * pmc_shblack says the black fill is already on the glass so that ~60
+     * ticks of fade cost ONE gfx call; the card is the only thing that
+     * overdraws it, so the shadow is a lie until the fill is sent again.
+     * pmc_ab_mark is where the byte is cleared, because it is exactly the two
+     * card-down paths and nothing else - and the first version cleared it in
+     * pmc_abdismiss alone, so a MENU command's dismissal (Sound, Pause, a
+     * refused Full Screen) reached pmc_flush with the shadow still claiming
+     * black, pmc_fade_black returned at its first test, and the card's
+     * rectangle stayed on the glass. A paused window still FLUSHES - pmc_frame
+     * puts that call outside its pause test - so the repair is the worker's
+     * and the callback's job is the byte; both halves are asserted, and by
+     * both routes. */
+    {
+        int route;
+
+        for (route = 0; route < 2; route++) {
+            pmc_black = 1;
+            pmc_shblack = 0;
+            pmc_flush(win, 0);          /* the fade's one fill */
+            if (!pmc_shblack)
+                fail("the fade's fill did not set its own shadow");
+            os88_about(win);            /* ...and the card overdraws it */
+            cost_reset();
+            if (route == 0)
+                os88_oncmd(PMC_CMD_SOUND, 0, win);
+            else
+                os88_onkey(0, PMC_SC_N, win);
+            if (pmc_about_up)
+                fail("the card did not come down mid-fade");
+            if (hc_fill + hc_blitp + hc_blit4 + hc_blit1 != 0)
+                fail("a card taken down mid-fade DREW, in a callback");
+            if (pmc_shblack)
+                fail("a card taken down mid-fade kept the black shadow set");
+            cost_reset();
+            pmc_flush(win, 1);          /* ...and the WORKER's next flush is
+                                         * what repairs it, chunked           */
+            if (hc_fill == 0)
+                fail("the worker after a mid-fade dismissal left its rect on "
+                     "the black");
+            if (route == 0)
+                os88_oncmd(PMC_CMD_SOUND, 0, win);   /* sound back on */
+        }
+        pmc_black = 0;
+        pmc_shblack = 0;
+        pmc_dirty_all();
+        pmc_flush(win, 0);
+        printf("  %-26s both routes re-sent the fade's fill\n",
+               "card down mid-fade");
+    }
+
+    /* NEITHER DIRECTION FLUSHES, AND A STOPPED WINDOW STILL DRAWS. The first
+     * version of this wave paused on os88_about and then had the PAUSE
+     * direction compose the card's rect itself, on the argument that a stopped
+     * worker draws nothing. That argument was answered by moving pmc_frame's
+     * flush OUTSIDE its pause test instead: a paused window runs no game and
+     * still draws what it owes, chunked and interruptible, one OS tick later.
+     * So the callback's whole job is the MARK - a brk = 0 compose here is 20
+     * bands on VGA (~1.3 s of XT) and the WHOLE FIELD on a short display, with
+     * no unlock and no yield, inside a callback whose gfx lock is the
+     * kernel's. Both directions are driven, and the PAUSE one is driven on to
+     * the frame that repairs it while the window is still stopped. */
+    pmc_paused = 0;
+    pmc_pause_item();
+    os88_about(win);                    /* pauses, and covers the field */
+    cost_reset();
+    os88_oncmd(PMC_CMD_PAUSE, 0, win);  /* ...Resume */
+    if (pmc_paused)
+        fail("the menu's Resume did not un-pause");
+    if (hc_blitp + hc_blit4 + hc_blit1 + hc_fill != 0)
+        fail("Resume drew the card's rect in the callback - the worker owns it");
+    if (!pmc_dirty_any())
+        fail("Resume left nothing owed - the worker would draw nothing");
+    cost_reset();
+    pmc_frame(win);                     /* ...and the worker's next frame does */
+    if (pmc_n_bands == 0)
+        fail("the frame after Resume drew none of the card's bands");
+    /* ...and the PAUSE direction, which in GAME mode the card cannot reach on
+     * its own (os88_about has already paused): it is the ATTRACT screen's
+     * route, where About pauses nothing and the menu's Pause is what stops the
+     * window. Modelled by clearing the byte the card would not have set. */
+    os88_about(win);
+    pmc_paused = 0;
+    pmc_pause_item();
+    cost_reset();
+    os88_oncmd(PMC_CMD_PAUSE, 0, win);
+    if (!pmc_paused)
+        fail("the menu's Pause did not pause");
+    if (hc_blitp + hc_blit4 + hc_blit1 + hc_fill != 0)
+        fail("Pause drew the card's rect in the callback - the worker owns it");
+    if (!pmc_dirty_any())
+        fail("Pause left nothing owed - the worker would draw nothing");
+    cost_reset();
+    pmc_frame(win);                     /* ...WHILE STILL PAUSED */
+    if (!pmc_paused)
+        fail("a frame un-paused the window");
+    if (pmc_n_bands == 0)
+        fail("a PAUSED frame drew none of the card's bands - a stopped window "
+             "still flushes");
+    printf("  %-26s neither draws; the stopped worker does (%u band(s))\n",
+           "card down by Pause/Resume", pmc_n_bands);
+    pmc_paused = 0;
+    pmc_pause_item();
+    audit("the card down by Pause and by Resume");
+
     /* ...and ANY KEY takes it down and starts nothing else, which is the
      * reference's own 'any key' posture and apps/pacman's pm_dismiss_body.
      *
-     * WHAT IS RECOMPOSED IS WHAT THE CARD COVERED, and this row is the
-     * independent second reader of pmc_ab_mark's arithmetic: the widget's own
-     * measurement (apps/os88ui.inc - lines x OS88UI_ABLH + 2 x OS88UI_ABPADY,
-     * clamped to the content box and centred) is written out again here from
-     * the live layout, and both bounds are asserted. Too few bands is a hole
-     * left in the field where the card was; all 36 is the 2.5 s full repaint
-     * from an ordinary keystroke that this replaced. */
+     * THE KEY MARKS AND THE WORKER COMPOSES, and what is composed is what the
+     * card COVERED - this row being the independent second reader of
+     * pmc_ab_mark's arithmetic: the widget's own measurement (apps/os88ui.inc -
+     * lines x OS88UI_ABLH + 2 x OS88UI_ABPADY, clamped to the content box and
+     * centred) is written out again here from the live layout, and both bounds
+     * are asserted. Too few bands is a hole left in the field where the card
+     * was; all 36 is the 2.5 s full repaint pmc_ab_mark exists to avoid. The
+     * frame that draws them runs with the window still PAUSED, because
+     * dismissing the card does not start the game again. */
     os88_paint(win);                    /* put the field back, card down */
     os88_about(win);
     if (!pmc_about_up)
@@ -1650,6 +2336,12 @@ int main(void)
         fail("a key did not take the About card down");
     if (pmc_round != 99)
         fail("the dismissing key was not swallowed - it started a new game");
+    if (hc_blitp + hc_blit4 + hc_blit1 + hc_fill != 0)
+        fail("dismissing the card DREW, in a callback");
+    if (!pmc_dirty_any())
+        fail("dismissing the card marked nothing - its rect would stay");
+    cost_reset();
+    pmc_frame(win);                     /* the worker, still paused, repairs it */
     {
         const char **l;
         int n = 0, h, d0, d1, b0, b1;
@@ -1678,6 +2370,17 @@ int main(void)
                "  ...of 36 for the field", pmc_n_bands, b1 - b0 + 1);
     }
     audit("About card dismissed");
+
+    /* ...AND DISMISSING IT LEAVES PLAY PAUSED. apps/pacman's pm_dismiss_body
+     * clears `pm_abon` and nothing else, so the pause the card put on survives
+     * it and P (or the menu) is what starts the game moving again. A game that
+     * resumed itself the instant the card came down would resume with the
+     * ghosts wherever they were when the player stopped looking. */
+    if (!pmc_paused || strcmp(pmc_items[PMC_CMD_PAUSE], "Resume"))
+        fail("dismissing the About card un-paused the game");
+    os88_onkey(0, PMC_SC_P, win);       /* the player starts it again */
+    if (pmc_paused)
+        fail("P did not resume after the About card");
 
     /* THE CLIP REGION, and only when something is covering us (SPEC.md 11.3,
      * 5.4.3.3). A key or a menu command arrives with NO region armed - the
@@ -1725,25 +2428,22 @@ int main(void)
     if (pmc_mset.oncmd == 0)
         fail("os88_menu_set() did not patch the set - is it const?");
 
-    /* SOUND ALONE IS GREYED, WITH ITS FACT (SPEC.md 47, 91): pmc_snd.c is a
-     * wave-3 stub, so there is no sound code in the image at all. Pause went
-     * live this wave and is checked below instead.
-     *
-     * THE LABEL CLAIMS NO STATE, and that is asserted rather than described.
-     * "Sound Off (No Sound Yet)" is an imperative - it says the action on
-     * offer is to turn sound OFF, i.e. that sound is currently ON - in an
-     * image with no sound in it, which is SPEC.md 47 rule 3 contradicted by
-     * the three characters in front of the parenthesis. The pair of labels was
-     * also dead: kernel/menu.inc refuses a click on a MENU_DIS item before
-     * os88_oncmd is reached, so nothing could ever have flipped it. */
-    if (strcmp(pmc_items[PMC_CMD_SOUND], "\x01" "Sound (No Sound Yet)"))
-        fail("the Sound item is not the stateless greyed 'Sound (No Sound Yet)'");
-    if (strstr(pmc_items[PMC_CMD_SOUND], "Off")
-        || strstr(pmc_items[PMC_CMD_SOUND], "On "))
-        fail("the greyed Sound item claims a state this build cannot have");
-    os88_oncmd(PMC_CMD_SOUND, 0, win);          /* refused, and it must be */
-    if (strcmp(pmc_items[PMC_CMD_SOUND], "\x01" "Sound (No Sound Yet)"))
-        fail("a greyed Sound item still acted on its command");
+    /* SOUND IS LIVE NOW, and its label is the ACTION on offer: "Sound Off"
+     * while sound is on. That wording is not decoration - an imperative label
+     * asserts the state it would leave, which is precisely why the greyed
+     * version of it was wrong for two waves, and it is the only surface the
+     * toggle has (the kernel's one marker is MENU_DIS; there is no check
+     * mark, this package has no status line, and the title does not change). */
+    if (!pmc_snd_on)
+        fail("sound does not start on");
+    if (strcmp(pmc_items[PMC_CMD_SOUND], "Sound Off"))
+        fail("a program with sound ON does not offer 'Sound Off'");
+    os88_oncmd(PMC_CMD_SOUND, 0, win);
+    if (pmc_snd_on || strcmp(pmc_items[PMC_CMD_SOUND], "Sound On"))
+        fail("Game > Sound did not turn sound off and swap the label");
+    os88_oncmd(PMC_CMD_SOUND, 0, win);
+    if (!pmc_snd_on || strcmp(pmc_items[PMC_CMD_SOUND], "Sound Off"))
+        fail("Game > Sound did not turn sound back on");
 
     /* PAUSE SAYS WHICH STATE IT IS IN, and the item label is the ONLY place
      * it can: the kernel has no check-mark marker, this package has no status
@@ -1771,9 +2471,16 @@ int main(void)
      * clamps to the live content box, which here is the 224-pixel arcade
      * field, and the plan's first six lines were each cut off mid-word on the
      * glass. 24 cells of 8 pixels is the width and OS88UI_ABLH = 12 the line
-     * pitch, so CGA's 144-row content is the height. Checked here because it
-     * is a screendump on ONE adapter otherwise, and the narrow one is the
-     * adapter nobody looks at (LESSONS.md 8). */
+     * pitch. THE HEIGHT GATE IS THE WIDGET'S OWN ARITHMETIC and not a rounded
+     * version of it: apps/os88ui.inc:2470 measures the card as
+     * `lines * OS88UI_ABLH + 2 * OS88UI_ABPADY` = n * 12 + 14, and CGA's
+     * content box is 144 rows (PMC_WIN_H_LO 163 = 144 + OS88_TITLE_H + 1), so
+     * ten lines is 134 and ELEVEN IS 146 - over, clamped, and the last line
+     * cut off. The first version of this row wrote `n * 12 > 144 - 12`, which
+     * is 132 > 132 at eleven lines and let the very card the wave had just
+     * refused straight through. Checked here because it is a screendump on
+     * ONE adapter otherwise, and the narrow one is the adapter nobody looks at
+     * (LESSONS.md 8). */
     { const char **l; int n = 0;
       for (l = pmc_about_lines; *l; l++) {
           if (**l == OS88_MENU_DIS)
@@ -1783,31 +2490,43 @@ int main(void)
                      *l), hg_fails++;
           n++;
       }
-      if (n * 12 > 144 - 12)
+      if (n * 12 + 2 * 7 > 144)
           fail("the About card is too tall for a CGA content box"); }
+    /* NOTHING IN THE GAME MENU IS GREYED ANY MORE, and that is the assertion
+     * rather than a count: all four items act, so none of them may carry
+     * MENU_DIS. Wave 1 greyed Pause with "(No Game)" and waves 1-2 Sound with
+     * "(No Sound Yet)", each because the BUILD could not act; each un-greying
+     * was the deletion of one marker byte and its reason. Should a future wave
+     * ever grey one again, SPEC.md 47 rule 3 makes the label say why not - the
+     * parenthesis check below is kept for that day. */
     { int i, dis = 0;
       for (i = 0; i < pmc_mset.menu[0].nitems; i++)
           if (pmc_mset.menu[0].items[i][0] == OS88_MENU_DIS) {
               dis++;
-              /* SPEC.md 47 rule 3: a greyed label says WHY NOT, so it is
-               * never the bare word the live item would have carried. */
               if (!strchr(pmc_mset.menu[0].items[i], '('))
                   fail("a greyed Game menu item does not say why not");
           }
-      if (dis != 1)
-          fail("the Game menu does not grey exactly Sound");
-      if (pmc_items[PMC_CMD_NEW][0] == OS88_MENU_DIS
-          || pmc_items[PMC_CMD_FULL][0] == OS88_MENU_DIS
-          || pmc_items[PMC_CMD_PAUSE][0] == OS88_MENU_DIS)
-          fail("New Game, Pause or Full Screen is greyed - all three act");
-      if (pmc_items[PMC_CMD_SOUND][0] != OS88_MENU_DIS)
-          fail("Sound is live - pmc_snd.c has no body in this build"); }
+      if (dis != 0)
+          fail("a Game menu item is greyed - all four act in this build"); }
+
+    /* --- THE ATTRACT SCREEN AND THE SOUND, on a fresh instance ----------- */
+    hg_screen(640, 480, 4, OS88_VID_VGA);
+    win = os88_main();
+    hg_obscured = 0;
+    hg_ticks_v = 0;
+    os88_paint(win);
+    drive_intro(win);
+    drive_intro_mono();
+    drive_sound();
 
     /* --- THE TICK PATH, on a fresh instance ------------------------------ */
     hg_screen(640, 480, 4, OS88_VID_VGA);
     win = os88_main();
     hg_obscured = 0;
     hg_ticks_v = 0;
+    pmc_new_game();                     /* drive_play is about a ROUND, and
+                                         * the program opens on the attract
+                                         * screen: this is the N key */
     os88_paint(win);
     if (!pmc_hired)
         fail("the first paint did not hire the worker");

@@ -5,14 +5,16 @@ arcade-faithful C99 Pac-Man at <https://github.com/floooh/pacman.c> — for
 os8088. Package `PACCMAN`, product name **PaccMan**. `SPEC.md` §91 is the
 contract and `docs/PACCMAN-PORT-PLAN.md` the design record.
 
-> **What is in the build on this disk.** It PLAYS, in colour or on either
-> 1bpp adapter: the round, the keys, the movement rules, the four ghosts and
-> their dot counters, the score and the reserve strip, and `New Game`,
-> `Pause`/`Resume` and `Full Screen` all act. **The attract screen and the
-> sound arrive in later waves** — so the intermission-free chase described
-> below and the three-voice reduction are what the port *is*, not yet what
-> this floppy *does*, and `Sound` is greyed with that fact. This paragraph is
-> deleted by the wave that makes the rest of the document true.
+> **What is in the build on this disk.** It opens on the ATTRACT SCREEN and it
+> PLAYS, in colour or on either 1bpp adapter, with sound: the reveal, the
+> round, the keys, the movement rules, the four ghosts and their dot counters,
+> the score and the reserve strip, the prelude and the siren, and all four
+> Game menu items act. What is still to come is polish — the About card's
+> final wording, the application floppy's place on `apps-all.img`, the period
+> 86Box machine and the measured side-by-side against `PACMAN.O88` — so a
+> number quoted below as *measured* is measured and the comparison table is
+> the one thing not filled in yet. This paragraph is deleted by the wave that
+> fills it.
 
 The reference commit is **`0f5ec5a384c1988d9889046d92e615219e1cf3b4`**
 (2 Jul 2026). That hash is pinned in `tools/paccman_assets.py`, printed in
@@ -94,10 +96,19 @@ where this table says otherwise.
 | arrows, **W A S D** | steer. These are **levels**, not events: the frame reads whether the key is *down* and applies it to every game tick of that frame, with priority up > down > right > left and the current direction as the default |
 | **F** | full screen on and off. It is **never** an "any key" — the reference gives it its own case with no any-key beside it, so pressing F on the attract screen toggles full screen and does *not* start the game |
 | **Esc** | leaves full screen when we hold it; otherwise an ordinary "any key" |
-| **P** | pause — an addition; the reference has no pause |
-| **N** | new game — an addition |
-| **Space** | an ordinary "any key" and nothing more. `PACMAN.O88` pauses on Space (§89.1); **this one does not**, because in the reference Space is just a key |
+| **P** | pause / resume — an addition; the reference has no pause. **In play only**: on the attract screen it is an ordinary "any key" |
+| **N** | new game — an addition, and **in play only**, for the same reason |
+| **Space** | in play, resume — `PACMAN.O88` advertises "P OR SPACE TO RESUME" and this follows it. On the attract screen it is an ordinary "any key", which is all the reference makes of it |
 | any other key | "any key": starts the game from the attract screen |
+
+The About card is dismissed by any key or menu command, and **reading it pauses
+the game and dismissing it leaves the game paused** — `apps/pacman` does exactly
+this, and whoever opened the card was not watching the maze. `P`, `Space` or the
+menu starts it again. It pauses a **game** and not the attract screen: `P` and
+`Space` are bound in play only, so a card that stopped the attract screen would
+leave the menu as the only way back — and a **stopped window takes no game input
+at all**, so keys pressed while it is stopped are dropped rather than remembered
+and spent on the first frame after `Resume`.
 
 There is no Ctrl or Alt binding, so the BIOS folds of Ctrl-H/I/M and
 Ctrl+Space cost this program nothing.
@@ -115,28 +126,27 @@ reference.** There is no buffered turn. It changes the feel against
 
 ## The Game menu
 
-`New Game`, `Pause`/`Resume` (the string follows the state), `Sound`,
-`Full Screen`. The reference has no menu at all — `sokol_main` asks for a bare
-window — so every item is an addition, and the shape is the one `apps/pacman`
-already set on this system.
+`New Game`, `Pause`/`Resume`, `Sound Off`/`Sound On`, `Full Screen`. The
+reference has no menu at all — `sokol_main` asks for a bare window — so every
+item is an addition, and the shape is the one `apps/pacman` already set on this
+system.
 
-**`New Game`, `Pause` and `Full Screen` act. `Sound` is greyed** (§47 greys a
-*fact*, and its rule 3 makes the label say why not): `pmc_snd.c` is a wave-3
-stub, so there is no sound code in the image at all to silence, and the item
-reads `Sound (No Sound Yet)`. **The machine is never the reason** —
-`osapi_snd_caps` answers a constant on every kernel this OS boots — so the
-wave that gives it a body deletes the marker byte and the reason, and nothing
-else moves. The item **names its subject and claims no state**: `Sound Off
-(...)` is an imperative that asserts sound is currently *on*, in an image with
-no sound in it, and the kernel refuses a click on a `MENU_DIS` item before the
-package is reached, so a pair of labels could never have flipped anyway.
+**All four act, and nothing is greyed.** Two of them were: `Pause` while the
+image had no tick loop to stop, `Sound` while it had no sound code to silence.
+Each un-greying was the deletion of one marker byte and one reason, which is
+what §47 predicts an un-greying costs. **The machine was never either reason** —
+`osapi_snd_caps` answers a constant on every kernel this OS boots — so a greyed
+`Sound` saying "no speaker" would have been greying a guess rather than a fact.
 
-`Pause` was greyed with a reason of its own until wave 2 gave it a tick loop
-to stop; un-greying it was the deletion of one marker byte and one reason.
-Both items shared the reason `(No Game)` in wave 1, which is what made
-re-wording necessary: with Pac-Man moving on the glass, an item asserting
-there is no game is a greyed label saying something false. A shared reason is
-a liability the moment the two items stop sharing a wave.
+**Two of the labels carry the state, because the label is all there is.** The
+kernel has one item marker and it is `MENU_DIS`; there is no check mark, PaccMan
+has no status line (its content is the 224-pixel arcade field) and the title bar
+does not change, so a paused window would otherwise be pixel-identical to a hung
+one. Each label therefore names the ACTION on offer — `Pause` while running and
+`Resume` while stopped, `Sound Off` while sound is on and `Sound On` while it is
+off. That wording is not decoration: an imperative asserts the state it would
+leave, which is why `Sound Off (No Sound Yet)` was wrong for a control that
+could not act, and why `Sound Off` is right for one that can.
 
 **A paused window says so in the item label, and that is the only place it
 can.** The kernel has no check-mark marker, PaccMan has no status line — its
@@ -145,8 +155,12 @@ window would otherwise be pixel-identical to a hung one; `apps/pacman` puts
 `PAUSED - P OR SPACE TO RESUME` in its own footer for the same reason. The
 item reads `Pause` while the game runs and `Resume` while it is stopped, and
 **`SPACE` resumes as well as `P`**, which is `apps/pacman`'s binding rather
-than one invented here. The About card advertises `P` alone because its lines
-are bounded at 23 characters by the 224-pixel content box.
+than one invented here — so the About card advertises the pair, on two key
+lines rather than one (`Arrows/WASD move. N new.` / `F full. P/Space pause.`).
+For a program with no status line that card is the only place inside it a key
+can be discovered, and `SPACE` was bound, specified and advertised nowhere
+until the lines were reflowed. The card stays at ten lines: eleven is 146 rows
+against CGA's 144-row content box, and the last one would be cut off.
 
 **The About card is dismissed by any key and by any menu command.** The
 standard card only *draws*; the flag and the dismissal belong to the package
@@ -183,7 +197,38 @@ reference's reason and is a recorded follow-up, not a defect:
   shorter than about three game ticks can fall between two samples.
 - **The alpha fade is a cut.** 4bpp has no alpha, so a fade-out is one black
   fill and a fade-in a full repaint, with the reference's tick counts kept so
-  every sequence keeps its length.
+  every sequence keeps its length. The whole fade costs ONE `gfx_fill`, not one
+  a frame: the black is remembered.
+- **On a 1bpp adapter every coloured LABEL goes white; the pictures do not.**
+  The reference colours each ghost's name and nickname with that ghost's own
+  colour, and two of the four — Blinky's red and Inky's cyan — reach a
+  monochrome screen as a 50% checkerboard, which is a fine ghost and an
+  unreadable letter. The game screen's two coloured labels are the same two
+  colours — `PLAYER ONE` in Inky's cyan and `GAME  OVER` in Blinky's red — and
+  `GAME  OVER` is the one message the player most needs to read. So on CGA and
+  Hercules all of them are drawn in the default colour, and the 2×3 ghost
+  pictures keep the arcade's four, which is what tells them apart. VGA and EGA
+  are the reference's, unchanged. The ink is chosen when the label is WRITTEN,
+  so a window carried onto a display of a different depth (§39.12's extended
+  desktop) keeps what it was written with: the attract screen re-writes its four
+  names every cycle and heals itself, while `PLAYER ONE` and `GAME  OVER` are
+  written once per game and once per game over and do not.
+- **And on a SHORT display the font loses its middle stroke.** CGA's window is
+  163 rows, so the composer samples source rows 0, 2, 4 and 6 of every 8 at a
+  fixed parity (which is what keeps the picture stable across a repaint) — and
+  **row 3 is where the arcade font keeps every horizontal middle stroke**. The
+  leading `-` of `-SHADOW`, `-SPEEDY`, `-BASHFUL` and `-POKEY` is a single run
+  on that row and goes; so do the strokes of **B, E, F, G, H, S, 3, 6 and 9**.
+  `B` then reads as `O`, `E` and `G` as `C`, `F` as a corner and `H` as two
+  bars, so on CGA `CHARACTER / NICKNAME` reads `CIIARACTCR / NICKNAMC`,
+  `-SHADOW BLINKY` reads `SIIADOW OLINKY` and `PLAYER ONE` reads `PLAYCR ONC`.
+  Every other glyph is carried whole. It is stated rather than repaired because
+  a tile pixel is a 2-bit colour *index* and not a bit: OR-ing the dropped row
+  in would invent a colour in the 89 tiles of 256 that use more than one ink,
+  and the sound per-pixel form costs the CGA tile composer about eight
+  instructions a source byte, thickens the maze's own strokes and re-dates the
+  band gate's fixtures — arithmetic for a later wave, not a doc fix. SPEC.md §91
+  has it in full.
 - **The hiscore lives for the instance.** The reference has no file I/O of any
   kind — no hiscore file, no config, no save — and neither does this. A
   `SYSTEM/APPDATA` record (§19.9) is a follow-up, not a port item.
@@ -327,23 +372,24 @@ measurement mirrors against `apps/os88ui.inc`'s own.
 the game logic's are still zero in the table, and the harness's closing line
 says so by name rather than letting a plausible number stand.
 
-`tests/paccman.py` measures the worker's own stack slice on MartyPC:
-**162–164 of 256 on an XT with VGA and 170 on a 5150 with CGA**, against the
-208 the row asserts and the `OS88_STACK_256` the package declares.
+`tests/paccman.py` measures the worker's own stack slice on MartyPC: **178 of
+256 on an XT with VGA and 178 on a 5150 with CGA**, against the 208 the row
+asserts and the `OS88_STACK_256` the package declares. (Wave 2 read 162–164 and
+170; wave 3's `pmc_step_tick` put one more call level on the tick path.)
 
 ### Size
 
-`os88pkg: 'PACCMAN' entry=+0x0060 image=37332 bss=5188 icon=yes assoc=0` —
-**42,520** of the 61,440 `APP_MAX_SIZE` allows, with the intro and the sound
-still to come. About 17 KB of the image is the arcade tables, which do not
-grow. **§73.14's split trigger is 55,000 resident bytes — image *plus* bss —
-and this line is 12,480 away from it**; `pmc_intro.c` is the first `ovl_*`
-candidate, being once-per-attract code a keystroke never touches.
+`os88pkg: 'PACCMAN' entry=+0x0060 image=40848 bss=5222 icon=yes assoc=0` —
+**46,070** of the 61,440 `APP_MAX_SIZE` allows, with the whole program in it.
+About 17 KB of the image is the arcade tables, which do not grow. **§73.14's
+split trigger is 55,000 resident bytes — image *plus* bss — and this line is
+8,930 away from it**; `pmc_intro.c` is the first `ovl_*` candidate, being
+once-per-attract code a keystroke never touches.
 
 That line is re-pasted from the build each wave and never typed — it is the
 number §73.14's overlay trigger is read off, and it appears here and in
 SPEC.md §91, which must agree word for word. Wave 1 was `image=21844
-bss=4498`, 26,342 of 61,440.
+bss=4498`, 26,342 of 61,440; wave 2 `image=37332 bss=5188`, 42,520.
 
 ## The checks
 

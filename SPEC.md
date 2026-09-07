@@ -92685,14 +92685,15 @@ tone/prelude melody, then the prelude bass — and the reduction is stated here
 and in the README, never in the About card. **The alpha fade is a cut**: one
 black fill at the fade-out's start and a full repaint at the fade-in's end,
 with the reference's tick counts kept so every sequence keeps its length.
-**`Sound` is greyed and the fact is the BUILD, not the machine**: `pmc_snd.c`
-is a stub until wave 3, so there is no sound code in the image to silence, and
-the item carries `MENU_DIS` and reads `Sound (No Sound Yet)` — §47's rule
-3, which makes a greyed label say why not. The machine is never the reason:
-`osapi_snd_caps` answers a constant on every kernel this OS boots. `Pause` was
-greyed until **wave 2 gave it a tick loop to stop**, and un-greying it was the
-deletion of one marker byte and one reason and nothing else, which is the
-shape §47 predicts. `New Game`, `Pause` and `Full Screen` all act.
+**Nothing in the Game menu is greyed, and the two that were went live in the
+wave that gave each a body.** `Pause` was greyed while the image had no tick
+loop to stop (wave 1) and `Sound` while it had no sound code to silence (waves
+1–2); each un-greying was the deletion of one marker byte and one reason and
+nothing else, which is the shape §47 predicts. The MACHINE was never either
+reason: `osapi_snd_caps` answers a constant on every kernel this OS boots, so a
+PaccMan that greyed `Sound` because "there is no speaker" would be greying a
+guess. All four items — `New Game`, `Pause`/`Resume`, `Sound Off`/`Sound On`
+and `Full Screen` — act.
 
 **A greyed label may not claim a state the build cannot have, and the word in
 FRONT of the parenthesis is part of the label.** `Sound Off (No Sound Yet)` —
@@ -92703,8 +92704,10 @@ the three characters ahead of it contradict it, which is the same defect the
 re-wording below had just corrected one word along. The pair of labels was
 also unreachable: `MENU_DIS` makes the kernel refuse the click before
 `os88_oncmd` is entered, so nothing could ever have flipped it, and the second
-literal was dead bytes in the image. The item **names its subject and claims
-no state**; wave 3 gives it a body and a state in the same edit.
+literal was dead bytes in the image. The item **named its subject and claimed
+no state** until wave 3 gave it a body, and then took the imperative back:
+`Sound Off` is exactly right for a control that can act, and exactly wrong for
+one that cannot.
 
 **A LIVE `Pause` NEEDS ITS STATE ON THE GLASS, and the item label is the only
 surface left.** The kernel has no check-mark marker (`MENU_DIS` is the only
@@ -92720,9 +92723,16 @@ footer. So `pmc_pause_item()` swaps `pmc_items[PMC_CMD_PAUSE]` between
 why the array is not `const`. Every write of `pmc_paused` calls it: the `P`
 key, the `SPACE` key and the menu command in `paccman.c`, and `pmc_new_game`'s
 clear in `pmc_game.c`. **`SPACE` resumes as well as `P`**, which is the
-precedent's binding rather than one invented here; the About card advertises
-`P` alone because its lines are bounded at 23 characters by the content box,
-and the reference binds neither key because `pacman.c` has no pause at all.
+precedent's binding rather than one invented here, and the About card
+**advertises both** on its second key line — `F full. P/Space pause.` — which
+is what the card is for in a program with no status line. The reference binds
+neither key, because `pacman.c` has no pause at all. The bound the card is
+written against is **24 cells**, which is `pmcuitest`'s figure and the tighter
+of the two: the widget's own clamp is `widest × 8 + 2 × OS88UI_ABPADX` against
+the live content box — 25 cells on the 224-pixel arcade field — and the row
+asserts 24 so a cell of slack survives a padding change in somebody else's
+file. The label swap below is still where the STATE is read, because a card
+can advertise a key and cannot show whether the window is stopped.
 
 **And the reason had to be re-worded when `Pause` went live, which is a §47
 lesson worth keeping.** Wave 1 gave both greyed items the SAME reason —
@@ -92731,10 +92741,13 @@ fact really did cover both. Wave 2 put a game in the build and deleted
 `Pause`'s marker on exactly that ground, which left a live `Pause` beside an
 item still asserting there is no game: a greyed label saying something FALSE,
 which is the one thing rule 3 exists to prevent. The two facts were never one
-— `Pause` had nothing to stop, `Sound` has no code to silence — so `Sound`
-now reads `(No Sound Yet)`. `(No Audio)` was the other candidate and is not
-taken, because it reads as a claim about the MACHINE. **A shared reason is a
-liability the moment the two items stop sharing a wave.**
+— `Pause` had nothing to stop, `Sound` had no code to silence — so `Sound`
+read `(No Sound Yet)` for wave 2. `(No Audio)` was the other candidate and was
+not taken, because it reads as a claim about the MACHINE. **A shared reason is
+a liability the moment the two items stop sharing a wave.** Wave 3 gave `Sound`
+a body and deleted the marker byte and the reason together, so nothing in the
+Game menu is greyed now and the shipped item reads `Sound Off` / `Sound On` —
+the paragraph above is the live account of it, and this one is the history.
 
 **Time is two words and the tick is an accumulator.** pacman.c counts 60 Hz
 ticks in a `uint32_t` and there is no 32-bit type here (§73.7), so the tick
@@ -92967,8 +92980,11 @@ the MEASURED water mark of the worker's own slice under **208** (162 on
 **And that row has now been RUN, which is what turns 256 from a plan into a
 measurement.** On MartyPC the worker's slice reads **162–164 of 256 on
 `os8088_xt_vga` and 170 on `os8088_5150_cga_gla`** — CGA is the deeper arm —
-so ~38 bytes are spare against the 208 bar and ~86 against the slice. Running
-it also found two things a REGISTERED-but-never-executed row cannot: the
+so ~38 bytes are spare against the 208 bar and ~86 against the slice.
+(**Wave 3 moved both numbers** — one more call level on the tick path, 160
+composed and 178 measured on both profiles; the wave-3 section below carries
+the current pair and this paragraph is the wave-2 record.) Running that row
+also found two things a REGISTERED-but-never-executed one cannot: the
 "image is unmodified" check had no allowance for the SDK's own `cc_tpl` (the
 `wm_create` template, whose first five words `os88_wm_create` writes at
 launch) nor for `pmc_step`/`pmc_rows`/`pmc_rsh` (which `pmc_layout` writes,
@@ -93143,16 +93159,33 @@ lock, with the chunked path unavailable because a callback's lock is not ours
 to drop. So both commands return without flushing: `pmc_new_game` has marked
 the field and cleared `pmc_paused`, a menu command implies the window is top,
 so `pmc_frame`'s guard passes and the next frame — at most one OS tick, 55 ms
-— draws it chunked and interruptible. The flushes that remain in `os88_oncmd`
-are exactly the cases where **no frame is coming**: the card was taken down by
-a command that drew nothing, and `Full Screen` refused.
+— draws it chunked and interruptible. **NO callback in this package flushes,
+and the case that used to need one is gone rather than special-cased.** The
+exception was "no frame is coming": a stopped window runs no frames, and
+`os88_about` pauses a game, so `About PaccMan` followed by any key or any Game
+command left the card's spans marked with nothing running to draw them. The
+answer is one line in `pmc_frame` — its `pmc_flush(win, 1)` sits OUTSIDE the
+pause test, inside the `top && !pmc_about_up` guard — so a **paused** window
+runs no game and still draws what it owes, chunked, an OS tick later. That
+deleted all five `pmc_flush(win, 0)` call sites (the Sound toggle, the `Pause`
+branch, a refused `Full Screen`, `os88_oncmd`'s fall-through and
+`pmc_abdismiss`'s key path) and **146 bytes of image** with them, and it
+removed the asymmetry where `Pause` composed and `Resume` deferred.
 
 **And what the About card covered is what is re-marked, not the whole field.**
 `pmc_dirty_all` is 36 bands at full width — 36 × 69.78 ms, ~2.5 s of XT —
-reached from an ordinary keystroke, and the card cannot cover 36 bands:
-`apps/os88ui.inc` measures it as `lines * OS88UI_ABLH + 2 * OS88UI_ABPADY`,
-clamps that to the content box and centres it, so ten lines is 134 rows of 288
-on VGA, about 17 bands. `pmc_ab_mark` turns that y-range into a band range and
+reached from an ordinary keystroke, **and on VGA the card cannot cover 36 of
+them**: `apps/os88ui.inc` measures it as
+`lines * OS88UI_ABLH + 2 * OS88UI_ABPADY`, clamps that to the content box and
+centres it, so ten lines is 134 rows of 288 there, about 17 bands. **THE SAVING
+IS THE ADAPTER'S AND IT IS ZERO ON A SHORT DISPLAY**, which is the half this
+said for one review round and did not mean: CGA's content box is 144 rows and
+its band is 4, so the same 134-row card gives `d0` = 5, `d1` = 139, `ty0` = 0
+and `ty1` = 35 — **the whole field**, because a card 134 rows tall in a 144-row
+box leaves five rows above it and five below. A 1bpp band is 4 screen rows
+rather than 8, so the wall clock is not 36 × 69.78 ms; it is still a whole-field
+compose, and it is the reason **no** callback here flushes rather than only the
+ones that would have been expensive on VGA. `pmc_ab_mark` turns that y-range into a band range and
 marks full-width spans over it, with **a band of slack each side** because
 `PMC_AB_LH`/`PMC_AB_PADY` are a mirror of somebody else's file: the
 over-approximation's only failure mode is drawing one band more than it had
@@ -93299,6 +93332,269 @@ is four times FURTHER than the colour it fixes; the one nearer candidate,
 look decision for the polish wave rather than changed in the generated tables,
 because it is the user's arcade look that is being traded — and whoever takes
 it should take it knowing that distance argues against half of it.
+
+### Wave 3 — the attract screen, the sequences and the sound
+
+**The program opens where a cabinet opens: on the attract screen.** `pacman.c`'s
+`init()` does `start(&state.intro.started)` and nothing else, and `os88_main`
+now does the same through `pmc_intro_start()` — every trigger disabled,
+`pmc_mode = PMC_MODE_INTRO`, the first picture drawn straight away (a window
+that is empty until the worker's first frame looks broken, and every `pmc_vid_*`
+write compares before it stores, so drawing it twice marks nothing), and
+`PMC_T_INTRO` started. Waves 1 and 2 opened straight into a round because there
+was no attract screen in the image; `N` and `Game > New Game` still do.
+
+**`pmc_step_tick()` is one 60 Hz tick and it is a FUNCTION.** It is `pacman.c`'s
+own `frame()` loop body (744–772) with nothing added but the fade cut: the sound
+registers first, then the two state-change tests that let the attract screen and
+the game hand control to each other, then the screen's own tick. It is lifted
+out of `pmc_frame`'s loop because the host harness drives the attract screen
+tick by tick — fourteen event ticks and a 40,000-tick run — and a second copy
+of that dispatch in the harness is a copy that drifts. It costs one call level
+on the worker's chain, which is what moved the composed figure below.
+
+**The reveal, at the reference's own event ticks.** `intro_tick` draws at
+FOURTEEN ticks and never between them, which is exactly what the damage model
+wants: an attract screen standing still costs no band at all. Per ghost *i* the
+2×3 tile block lands at 60 + 120*i*, the name at 120 + 120*i* and the nickname
+at 150 + 120*i* — **60, 120, 150 / 180, 240, 270 / 300, 360, 390 / 420, 480,
+510** — the `10 PTS`/`50 PTS` legend at **570** and `PRESS ANY KEY TO START!`
+from **630**. The hiscore field is drawn only when the hiscore is above zero, so
+a fresh instance shows two headings and one score; the 1UP score is a literal
+zero and not the score of the round that just ended.
+
+**The prompt blinks on `since & 0x20`, and that is why there are two `since`
+helpers.** `pmc_since()` saturates at `PMC_SAT` = 0x7FFE so every compare in the
+program stays cheap, and `0x7FFE & 0x20` is a CONSTANT: a prompt written against
+it stops blinking 32,766 ticks — about nine minutes — into one attract screen
+and never starts again, which is precisely what a machine left running in a
+corner does. `pmc_since_lo()` is the 16-bit wrapping form and the blink uses it.
+The harness stamps the prompt at tick **630** (bit 5 set, so the reference's own
+first frame of it is the BLANK one) and at **662** (lit), then runs the screen
+to **40,000 ticks** and asserts both states still occur. Its `intro_to()` counts
+TICKS rather than asking `pmc_since()`, for the same reason one level up.
+
+**The fade is a CUT, and it is two bytes.** 4bpp has no alpha and neither 1bpp
+adapter has anything like one, and a dithered approximation of the reference's
+blended black quad would cost 30 full-field recomposes — about 75 seconds of XT
+for one second of screen. So `pmc_black` blacks the content on the fade-out's
+first tick and `pmc_shblack` remembers that the glass already holds it, which
+makes ~60 ticks of black **one** `gfx_fill`; the fade-in's last tick clears both
+and calls `pmc_dirty_all`. The reference's tick counts are kept, so every
+sequence between the attract screen and a round keeps its LENGTH — which is what
+the game's timing actually depends on. `pmc_repaint` answers black too, cut to
+the damage rect: recomposing the bands there would show the round the fade is
+hiding, a death sequence's maze reappearing behind `GAME  OVER` for as long as a
+menu was down over it. Only a fade that really went black owes the repaint, so
+the FIRST fade-in of an instance — the one the attract screen starts on itself,
+with nothing black behind it — costs nothing.
+
+**Three arcade voices, one PC speaker, by priority.** The three voice registers
+are kept exactly as the reference keeps them — every effect writes the register
+it writes there, at the tick it writes it — and once per OS tick `pmc_snd_frame`
+picks ONE for the speaker: **voice 2 the effects, then voice 1 the tune (the
+siren, the frightened warble and the prelude's MELODY), then voice 0 the prelude
+BASS**. So an effect always interrupts the tune and the melody always outranks
+its own bass. A voice is silent when its VOLUME is zero as well as when its
+frequency is, and that is not a detail: the prelude's bass decays 14→0 over the
+fifteen ticks of every phrase while its frequency stands still, so a sampler
+reading only the frequency would hold that bass note through the whole tune.
+
+**What the one voice costs, stated and not tuned.** No waveform and no volume —
+`waveform` is read off the register and dropped. The speaker is sampled once per
+OS tick while the game runs at 60 Hz, so about 3.3 game ticks pass between two
+samples and an effect shorter than that can fall between them: the eat-dot
+crunch is 5 ticks long and lands as at most two tones. `rom_wavetable` is not
+carried. None of this is on the About card (LESSONS.md 8: they are facts about
+the BUILD), and both the README and this section carry them.
+
+**A slot holds a KIND and `pmc_snd_tick` is a switch on it.** The reference
+dispatches its six procedural effects through a `void (*func)(int slot)` in the
+sound descriptor; nothing in this package may take the address of a function
+(§73.5), so the three slots hold `PMC_SK_*` and the effects are inlined into one
+switch — which also keeps six call levels off the worker's tick path. The two
+dumps' frequencies were converted on the host at full precision and live in
+`pmc_rom.c` as Hz; the effects compute a raw 20-bit register at run time and
+`pmc_hz_of` reduces the WSG's exact `f × 375 / 4096` to `(f >> 5) × 47 >> 4`,
+which is within 0.3% over the whole range the six effects use and cannot
+overflow 16 bits below `f` = 0x5800.
+
+**The siren's phase is a counter and not a mask, and that is a wrap bug avoided.**
+`snd_func_weeooh` tests `cur_tick % 24`; a slot's tick wraps at 65,536, which is
+a multiple of 8 — so the frightened warble's `& 7` stays right for ever — and is
+NOT a multiple of 24. The siren is the one effect that never stops, so it is the
+one that reaches the wrap: `pmc_wph` counts 0..23 instead. `pmcuitest` drives it
+past 70,000 ticks and asserts it is still in range.
+
+**`Sound` is live and nothing in the Game menu is greyed any more.** It was
+greyed while the image had no sound code to silence, and the un-greying was the
+deletion of one marker byte and one reason — the shape §47 predicts. The label
+is the ACTION on offer, `Sound Off` while sound is on, for `Pause`/`Resume`'s
+reason: the kernel's one marker is `MENU_DIS`, there is no check mark, this
+package has no status line and the title bar does not change, so the label is
+the only surface a toggle has. Turning it off silences the speaker at once
+rather than letting the granted tone run out its two ticks. The MACHINE is never
+the reason: `osapi_snd_caps` answers a constant on every kernel this OS boots.
+
+**Reading the About card pauses the game and dismissing it does not un-pause
+it.** That is `apps/pacman/pacman.asm` to the byte — `pm_about_body` sets
+`pm_pause` beside `pm_abon` and `pm_dismiss_body` clears only `pm_abon` — and it
+is the right behaviour: whoever opened the About box is not watching the maze,
+and a game that resumed the instant the card came down would resume with the
+ghosts wherever they were when the player stopped looking. `P`, `SPACE` or the
+menu starts it again.
+
+**It pauses a GAME and not the attract screen**, which is what that sentence has
+to mean to be true, and the first version of it set the byte unconditionally.
+The program *opens* on the attract screen, and `P` and `SPACE` are bound in PLAY
+only (below) — so reading About there froze the reveal with no key able to
+unfreeze it, the menu was the only way back, and the presses meant to unfreeze it
+were sitting in the any-key latch waiting to start a round the moment `Resume`
+was chosen. The card is modal either way while it is up: `pmc_frame`'s guard
+tests `pmc_about_up` as well, so nothing ticks behind it. The other half of the
+same fix is that a **stopped window takes no game input at all** — every key
+below the chrome either latches for the next frame's poll or arms the any-key,
+and a paused window runs no frames, so without the test a key pressed while
+stopped is not ignored but REMEMBERED and spent on the first frame after
+`Resume`.
+
+**The key table, and which keys are the game's.** `F` is full screen and is
+NEVER an "any key" — the reference gives it its own switch case with no `anykey`
+beside it — so a player who enlarges the attract screen does not thereby start a
+round. `Esc` leaves full screen while we hold the latch and is otherwise the
+reference's ordinary any-key. `P` and `N` are platform chrome and act only in
+PLAY: on the attract screen they, and `SPACE`, are ordinary any-key presses,
+which is the one binding where this port differs from §89's (there `SPACE`
+pauses). **All four are on the About card**, which for a program with no status
+line is the only place inside it a key can be discovered: `SPACE` was bound,
+specified here and advertised nowhere until the card's key line became two
+(`Arrows/WASD move. N new.` / `F full. P/Space pause.`), which is the position
+`N` was in before wave 2 reflowed the first one. Ten lines still, because
+eleven is 146 rows of CGA's 144-row content box and the last one would be cut
+off (LESSONS.md 8). **`Esc` is the one bound key NOT on the card**, and that is
+a narrowing of the claim rather than an oversight: it leaves full screen, which
+`F` already does in both directions, so it is a convenience with a route beside
+it — where `N`, `P`/`SPACE` and `F` each have no other key at all. The bound is
+what makes it a choice and not a preference: the widest line on the card is 24
+cells and `F full/Esc out. P/Space pause.`, the shortest phrasing that carries
+the pair, is 30. Chrome sits ABOVE the `input_enable` gate the reference wraps every key
+in, deliberately — the Game menu offers Pause and New Game through the GAME OVER
+sequence and a key that does nothing while the menu item does is the drift §47
+is about — and the game's own keys sit below it, so the key that started a round
+cannot start a second one thirty ticks later inside the fade. The any-key is the
+same one-frame press LATCH the four directions use (§91's one input divergence),
+cleared by the frame's poll so a key pressed during a round is not still sitting
+in the byte when GAME OVER hands control back.
+
+**A label goes white where colour cannot be carried, and the picture does not.**
+The reference colours each ghost's name and nickname with that ghost's own
+colour, and two of the four — BLINKY's red 1 and INKY's cyan 5 — land in the
+mono class table's 50% checkerboard. Photographed on `VIDEO=cga` at this wave's
+review, `-SHADOW BLINKY` and `-BASHFUL INKY` were unreadable smears while
+PINKY's and CLYDE's rows were crisp: §39.4's "grey rounds to black there, so a
+disabled glyph is a checkerboard", one control along. So `pmc_text_ink` writes a
+LABEL in `COLOR_DEFAULT` when the display carries one bit a pixel, and the
+2×3 ghost PICTURE keeps the arcade colour on every adapter — a dithered ghost is
+still a ghost, and the colour is what tells the four apart. VGA and EGA are
+unchanged and are the reference's.
+
+**The rule is EVERY coloured label and not a ghost's name**, which is how it
+shipped and what the wave's own review caught: the two labels on the GAME screen
+are `PLAYER ONE` in INKY's cyan 5 and `GAME  OVER` in BLINKY's red 1, so both
+were the same 50% checkerboard — and on Hercules, where the window is full
+height and there is no row halving to blame, `GAME  OVER` was a full-size smear
+of the one message the player most needs to read. Both now go through
+`pmc_text_ink`.
+
+**The ink is read at WRITE time and baked into `color_ram`**, because that is
+when the reveal happens — so a window carried onto a display of a different
+depth (§39.12's extended desktop, `vm/xt-multimon`, is where that is possible at
+all) keeps the colours it was written with until whatever wrote them writes them
+again. On the ATTRACT screen that is self-healing and costs one cycle: the
+reveal re-writes all four names and nicknames every time round. **On the GAME
+screen it is not**, and that is the caveat the two labels added here bring with
+them: `PLAYER ONE` is written once per `game_init` and `GAME  OVER` once at
+`PMC_T_OVER`, so a window dragged from a VGA onto a 1bpp display between those
+writes keeps INKY's cyan and BLINKY's red and draws exactly the checkerboard
+`pmc_text_ink` exists to prevent, with no re-write until the next round or the
+next game over. It is stated rather than repaired: the repair is one remembered
+byte and a re-write of the two labels when `pmc_layout`'s observed `bpp` changes
+— 16 cells and one band, taken only on a display change — which is a change to
+the drawing path for a machine class with one 86Box profile.
+
+`pmcuitest`'s `drive_intro_mono` is the row for the attract
+screen and for those two, and `drive_layout` asserts `PLAYER ONE`'s colour on
+every one of the five configurations it drives — so "white on 1bpp" and "the
+arcade's colour everywhere else" are both under test, because the alternative is
+a screendump on the adapter nobody looks at.
+
+**And on a SHORT display SOURCE ROW 3 IS NEVER SAMPLED, which is where the
+arcade font keeps every horizontal middle stroke it has.** CGA's window is 163
+rows, so a band is 4 screen rows and `pmcband.inc` samples source rows 0, 2, 4
+and 6 of every 8 — a fixed parity, which is what makes the picture stable across
+a repaint. The leading hyphen the reference gives the four names (`-SHADOW`,
+`-SPEEDY`, `-BASHFUL`, `-POKEY`) is tile 59, a single run on row 3, so it is
+dropped there — **and it is not the only thing dropped, which is what this
+paragraph said for one review round and did not mean.** Decoding the shipped
+`pmc_rom.c` tables row by row: `B`, `E`, `F`, `G` and `H` lose their whole
+middle stroke, `S` loses five pixels across rows 1, 3 and 5, and among the
+digits `3`, `6` and `9` lose theirs. `B` then reads as `O`, `E` and `G` as `C`,
+`F` as a corner and `H` as two bars, so `CHARACTER / NICKNAME` reads
+`CIIARACTCR / NICKNAMC`, `-SHADOW BLINKY` reads `SIIADOW OLINKY`, `PLAYER ONE`
+reads `PLAYCR ONC` and `HIGH SCORE` reads `IIIGII SCORC` — photographed on
+`VIDEO=cga`, and every other glyph is carried whole. **A multi-row letter does
+NOT automatically survive the halving**, which is what the sentence deleted here
+claimed.
+
+It is STATED rather than repaired, and the repair is not the one line it looks
+like. A tile pixel is a **2-bit colour INDEX**, not a bit: OR-ing source row *r*
+with row *r+1* — the obvious way to keep a stroke — is exact for the 167 tiles
+whose pixels are only 0 and 3, and **invents a colour** in the 89 that use index
+1 or 2 (the fruit and the prize row: `1 | 2` is 3, an ink the tile does not
+have). The sound form is per-pixel — take the odd row's pixel only where the
+even row's is 0 — and that is ~8 extra instructions a source byte inside
+`_pmc_tile`'s inner loop, on the slowest adapter this port runs on; it also
+thickens every one-row maze stroke to two and re-dates both `pmcbandtest`'s
+fixtures and the band bench §91 quotes. That is a decision with arithmetic
+attached, taken with whoever wants the picture changed, and not a review-round
+edit.
+
+**After wave 3**: `os88pkg: 'PACCMAN' entry=+0x0060 image=40848 bss=5222
+icon=yes assoc=0`. That is 46,070 bytes of the 61,440 `APP_MAX_SIZE` allows, and
+**§73.14's split trigger is 55,000 resident bytes — image *plus* bss — so this
+line is 8,930 away from it**; `pmc_intro.c` is still the first thing that moves
+out when it is reached, being once-per-attract code a keystroke never touches.
+(A first draft of this paragraph read the trigger off `image=` alone against a
+50,000 figure, which is the very error the wave-1 paragraph above retracts in
+bold; it overstated the headroom by about five thousand bytes.) `stkdepth` now gives `cc_worker` → `_os88_worker` **14**,
+`_pmc_frame`'s own frame **8** and `_pmc_step_tick`'s chain **138** (the extra
+call level, then `pmc_game_tick` → `pmc_update_tiles` → `pmc_vid_score` →
+`pmc_vid_color_char` → `pmc_vid_color_tile` → `pmc_vid_color` → `pmc_mark`) —
+**160 bytes** composed against the plan's 190 ceiling. `--from _pmc_frame` now
+answers **64**, not 8, because the flush moved out of the pause test and the
+tool's linear walk reaches it: that is `_pmc_frame` → `pmc_flush` →
+`pmc_flush_laid` → `pmc_pick_path` → `os88_gfx_blitp`, and **14 + 64 = 78** is
+comfortably under the tick path's 160, which stays the worst case. The MEASURED water mark
+is what sizes the class, and `tests/paccman.py` reads **178 of 256 on both
+`os8088_xt_vga` and `os8088_5150_cga_gla`** against its 208 bar.
+
+**What the machine says, and what only the machine can.** `tests/paccman.py`
+gained three rows that the host harness cannot have: the program comes up in
+`PMC_MODE_INTRO` with `1UP   HIGH SCORE   2UP` in `video_ram` and `BLINKY`
+revealed by tick 150; a real `Space` arriving at `int 09h` reaches `os88_onkey`,
+is latched, is folded in by the worker's next poll and starts a round; and
+`_pmc_snd_last` — the Hz the frame last handed to `OSAPI_SND_TONE` — carries
+**at least two distinct tones** across the prelude, which is the row's whole
+assertion. The floor is two because two says the speaker is being driven from a
+TUNE rather than stuck on one note, and that is the fact that survives a slower
+or faster machine; **how many** distinct tones six samples catch depends on how
+many frames the adapter draws across the prelude, so the count is PRINTED and
+not gated — an earlier draft of this paragraph quoted one run's five as though
+it were the assertion, which would have made the row the speed measurement every
+row here is polled to avoid being. The reveal and the key are POLLED rather
+than timed, because how many drawn frames 150 game ticks is depends on the
+adapter and a fixed wait would make either row a speed measurement by accident.
+What the tune IS is asserted on the host, by name.
 
 **Provenance.** The code is Andre Weissflog's under MIT; the tile, sprite and
 colour tables are Pac-Man arcade ROM data (Namco) and the two register dumps

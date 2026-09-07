@@ -10,9 +10,11 @@ apps/paccman/hosttest/pmcuitest.c already drives the same C against a modelled
 glass and audits every pixel of every frame; what it cannot do is answer the
 three questions that are about the MACHINE rather than about the program:
 
-  * does the worker start at all, and does the game advance without anybody
-    touching it - the whole tick path (accumulator, triggers, movement, the
-    four ghosts) running on the real scheduler at the real 18.2 Hz;
+  * does the program come up on its ATTRACT SCREEN, does a real key press
+    reach it through the kernel's own keyboard path and start a round, and
+    does the game then advance without anybody touching it - the whole tick
+    path (accumulator, triggers, movement, the four ghosts) running on the
+    real scheduler at the real 18.2 Hz;
   * is the layout the one this ADAPTER needs (SPEC.md 39: alternate rows where
     the display is short, every row where it is not);
   * and how deep does the worker's stack actually go, against the
@@ -95,8 +97,79 @@ def main():
         boundary()
         m.bp_exec()
 
-        # --- the worker, and the game running on its own ---------------------
+        # --- the attract screen, which is what the program opens on ---------
+        # pacman.c's own init() does `start(&state.intro.started)` and nothing
+        # else; the port matches it, so a launch that lands in PMC_MODE_GAME
+        # would mean the intro was skipped rather than that the game works.
+        # The two RAMs are read by symbol: video_ram holds the arcade tile
+        # CODES, so '1UP   HIGH SCORE   2UP' at (3,0) is ASCII in the RAM and
+        # needs no pixel reading to check. Row stride is PMC_VSTRIDE = 32.
         assert read('_pmc_hired', 2) == 1, 'the first paint did not hire a worker'
+        assert read('_pmc_mode', 2) == 0, \
+            'the program did not open on the attract screen'
+        header = raw('_pmc_vram', 22, 3)
+        assert header == b'1UP   HIGH SCORE   2UP'.replace(b' ', b'\x40'), \
+            ('the attract screen header is not in video_ram', header)
+        # ...and the reveal, POLLED rather than timed: the attract screen puts
+        # BLINKY on at game tick 150, and how many drawn frames that is depends
+        # on the adapter (the accumulator caps a frame's game time at
+        # PMC_CATCHUP_MAX OS ticks, so a slow 1bpp frame carries fewer game
+        # ticks than a VGA one). Waiting a fixed number of frames would make
+        # this row a speed measurement by accident.
+        for _ in range(12):
+            if raw('_pmc_vram', 6, (7 << 5) + 17) == b'BLINKY':
+                break
+            m.advance(frames=120)
+            boundary()
+            m.bp_exec()
+        assert raw('_pmc_vram', 6, (7 << 5) + 17) == b'BLINKY', \
+            'the CHARACTER / NICKNAME reveal never ran'
+        print('  attract screen: header and the first reveal: pass', flush=True)
+
+        # --- a real key press starts the round -------------------------------
+        # THE KEY GOES THROUGH THE KERNEL, which is the whole point of doing
+        # this here: the harness pokes the package's own latch byte, and only a
+        # machine can say that a scancode arriving at int 09h reaches
+        # os88_onkey, is latched, is folded in by the worker's next poll, and
+        # is read by the attract screen as its any-key.
+        m.key('Space')
+        for _ in range(8):
+            m.advance(frames=120)
+            boundary()
+            m.bp_exec()
+            if read('_pmc_mode', 2) == 1:
+                break
+        assert read('_pmc_mode', 2) == 1, \
+            'a key press on the attract screen did not start a game'
+        assert read('_pmc_input_on', 2) == 1, \
+            'the round started with input still disabled'
+        print('  a key started the round: pass', flush=True)
+
+        # --- and the speaker was asked for something -------------------------
+        # _pmc_snd_last is the Hz the frame last handed to OSAPI_SND_TONE. The
+        # prelude runs for its first four seconds of game time, so a sample
+        # taken across it must catch a tone; what the tune IS is asserted on
+        # the host, by name, in pmcuitest.c.
+        #
+        # THE FLOOR IS TWO AND THE COUNT IS NOT THE ASSERTION. How many
+        # distinct tones six samples catch depends on how many frames the
+        # adapter draws across the prelude, which is the speed measurement
+        # every row here deliberately avoids making. Two says the speaker is
+        # being driven from a TUNE and not stuck on one note, which is the
+        # fact that survives a slower or faster machine; a run that sees more
+        # prints more and asserts nothing about it.
+        tones = set()
+        for _ in range(6):
+            m.advance(frames=60)
+            boundary()
+            m.bp_exec()
+            tones.add(read('_pmc_snd_last', 2))
+        assert len([t for t in tones if t]) >= 2, \
+            ('the speaker was not driven from a tune across the prelude',
+             sorted(tones))
+        print('  the speaker was asked for %d distinct tone(s), floor 2: pass'
+              % len([t for t in tones if t]), flush=True)
+
         t0 = read('_pmc_tick_lo', 2)
 
         # THE GHOSTS ARE THE LIVENESS SIGNAL AND PAC-MAN IS NOT.
@@ -168,6 +241,13 @@ def main():
         #                   and is what makes this row mean anything. (pmc_ssh
         #                   has no initialiser, so it is bss and not in the
         #                   image at all.)
+        #   _pmc_promptph   the attract prompt's LAST DRAWN phase, initialised
+        #                   to -1 so that the first pass writes the row
+        #                   whatever the blink phase then is. A bss byte could
+        #                   not carry it: 0 and 1 are both real phases, so
+        #                   "never drawn" needs a third value and a non-zero
+        #                   initialiser is what puts it in .data. Both arms see
+        #                   this one, because -1 is not a phase.
         #
         # Everything else - 37KB of code and arcade ROM tables - must be byte
         # for byte the file.
@@ -177,7 +257,7 @@ def main():
         for name, span in (('_pmc_items', 8), ('_pmc_mset', 64),
                            ('cc_tpl', 10),
                            ('_pmc_step', 2), ('_pmc_rows', 2),
-                           ('_pmc_rsh', 2)):
+                           ('_pmc_rsh', 2), ('_pmc_promptph', 2)):
             if name in symbols:
                 allow.append((symbols[name], symbols[name] + span))
         bad = [(i, a, b) for i, (a, b) in enumerate(zip(live, disk))

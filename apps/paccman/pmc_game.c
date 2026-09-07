@@ -287,7 +287,7 @@ static void pmc_game_init(void)
                                          * shadow is a fact rather than an
                                          * impossible value: the first flip
                                          * after a round always repaints */
-    pmc_vid_color_text(9, 14, 0x05, "PLAYER ONE");
+    pmc_vid_color_text(9, 14, pmc_text_ink(0x05), "PLAYER ONE");
     pmc_vid_color_text(11, 20, 0x09, "READY!");
 }
 
@@ -734,11 +734,22 @@ static void pmc_house_counters(void)
 static void pmc_dots_eaten_update(void)
 {
     pmc_dots_eaten++;
-    if (pmc_dots_eaten == PMC_NUM_DOTS)
+    if (pmc_dots_eaten == PMC_NUM_DOTS) {
         pmc_start(PMC_T_WON);
-    else if (pmc_dots_eaten == 70 || pmc_dots_eaten == 170)
+        pmc_snd_clear();                /* the round is over: everything stops,
+                                         * siren included (pacman.c 2094) */
+    } else if (pmc_dots_eaten == 70 || pmc_dots_eaten == 170)
         pmc_start(PMC_T_FRUIT);
-    /* wave 3: the alternating crunch on voice 2 */
+
+    /* THE CRUNCH ALTERNATES BETWEEN TWO EFFECTS, one falling and one rising,
+     * which is what gives the arcade its two-note munch (pacman.c 2100-2107).
+     * Both are five game ticks long and the speaker is sampled once per OS
+     * tick - about every 3.3 game ticks - so a crunch lands as one or two
+     * tones rather than five: stated in SPEC.md 91, not tuned. */
+    if (pmc_dots_eaten & 1)
+        pmc_snd_start(2, PMC_SK_EATDOT1);
+    else
+        pmc_snd_start(2, PMC_SK_EATDOT2);
 }
 
 /* --- game_update_actors, pacman.c 2109-2214 -------------------------------
@@ -778,6 +789,9 @@ static void pmc_update_actors(void)
             pmc_nghosts_eaten = 0;
             for (i = 0; i < 4; i++)
                 pmc_start(PMC_T_FRIGHT0 + i);
+            pmc_snd_start(1, PMC_SK_FRIGHT);    /* the warble replaces the
+                                                 * siren on voice 1 until the
+                                                 * fright timer runs out */
         }
 
         if (pmc_fruit != 0) {
@@ -787,6 +801,7 @@ static void pmc_update_actors(void)
                               (int) pmc_lvl_bonus[pmc_lvl(pmc_round)]);
                 pmc_vid_fruit_score(pmc_fruit);
                 pmc_fruit = 0;
+                pmc_snd_start(2, PMC_SK_EATFRUIT);
             }
         }
 
@@ -806,8 +821,12 @@ static void pmc_update_actors(void)
                     sc += sc;
                 pmc_score_add(pmc_score, sc);
                 pmc_freeze |= PMC_FZ_EATGHOST;
+                pmc_snd_start(2, PMC_SK_EATGHOST);
             } else if (pmc_gstate[i] == PMC_GS_CHASE
                        || pmc_gstate[i] == PMC_GS_SCATTER) {
+                pmc_snd_clear();        /* everything stops the instant he is
+                                         * caught; the death tune starts sixty
+                                         * ticks later (pacman.c 2178-2180) */
                 pmc_start(PMC_T_PMEATEN);
                 pmc_freeze |= PMC_FZ_DEAD;
                 if (pmc_lives > 0)
@@ -842,6 +861,9 @@ static void pmc_game_tick(void)
     if (pmc_now(PMC_T_GAME)) {
         pmc_start(PMC_T_FADEIN);
         pmc_start_after(PMC_T_READY, 2 * 60);
+        pmc_snd_start(0, PMC_SK_PRELUDE);   /* the two-second opening tune -
+                                             * its MELODY is voice 1 of the
+                                             * dump and its bass voice 0 */
         pmc_game_init();
     }
     if (pmc_now(PMC_T_READY)) {
@@ -851,6 +873,8 @@ static void pmc_game_tick(void)
     if (pmc_now(PMC_T_ROUND)) {
         pmc_freeze &= ~PMC_FZ_READY;
         pmc_vid_color_text(11, 20, 0x10, "      ");
+        pmc_snd_start(1, PMC_SK_WEEOOH);    /* ...and play begins with the
+                                             * siren, which never stops */
     }
 
     if (pmc_now(PMC_T_FRUIT))
@@ -858,9 +882,20 @@ static void pmc_game_tick(void)
     else if (pmc_after_once(PMC_T_FRUIT, PMC_FRUITACTIVE_TICKS))
         pmc_fruit = 0;
 
+    /* the fright timer running out puts the siren back over the warble
+     * (pacman.c 2251-2256) - the same level table the ghosts' own blink
+     * uses */
+    if (pmc_after_once(PMC_T_PILL, pmc_lvl_fright[pmc_lvl(pmc_round)]))
+        pmc_snd_start(1, PMC_SK_WEEOOH);
+
     if (pmc_freeze & PMC_FZ_EATGHOST)
         if (pmc_after_once(PMC_T_GEATEN, PMC_GHOST_EATEN_FREEZE))
             pmc_freeze &= ~PMC_FZ_EATGHOST;
+
+    /* the death tune, sixty ticks after he was caught - which is where the
+     * death ANIMATION starts too (pacman.c 2266-2268) */
+    if (pmc_after_once(PMC_T_PMEATEN, PMC_PACMAN_EATEN_TICKS))
+        pmc_snd_start(2, PMC_SK_DEAD);
 
     if (!pmc_freeze)
         pmc_update_actors();
@@ -875,8 +910,18 @@ static void pmc_game_tick(void)
         pmc_start_after(PMC_T_READY, PMC_ROUNDWON_TICKS);
     }
     if (pmc_now(PMC_T_OVER)) {
-        pmc_vid_color_text(9, 20, 0x01, "GAME  OVER");
-        pmc_input_on = 0;
+        /* THE ONE MESSAGE THE PLAYER MOST NEEDS TO READ, and the reference
+         * writes it in BLINKY's red 1 - a colour that resolves to the mono
+         * class table's 50% dither, so on either 1bpp adapter it was a
+         * full-size checkerboard smear. pmc_text_ink is the rule and this is
+         * the second of the two LABELS on the game screen it governs (the
+         * first is PLAYER ONE, in INKY's cyan 5); the ghost PICTURES keep the
+         * arcade colour everywhere. */
+        pmc_vid_color_text(9, 20, pmc_text_ink(0x01), "GAME  OVER");
+        pmc_input_dis();        /* input_disable(): the three seconds of GAME
+                                 * OVER and the fade after it belong to nobody,
+                                 * and the key that ends them is the ATTRACT
+                                 * screen's any-key, not this one's */
         pmc_start_after(PMC_T_FADEOUT, PMC_GAMEOVER_TICKS);
         pmc_start_after(PMC_T_INTRO, PMC_GAMEOVER_TICKS + PMC_FADE_TICKS);
     }
@@ -905,6 +950,15 @@ static void pmc_new_game(void)
     pmc_pause_item();                   /* ...and the item label is the only
                                          * place that state is readable, so it
                                          * follows every write of the byte */
+    pmc_snd_clear();                    /* New Game taken during the prelude,
+                                         * the death tune or the siren: the old
+                                         * game's voices are the old game's */
+    pmc_black = 0;                      /* ...and New Game taken mid-FADE must
+                                         * not leave the field black with a
+                                         * fresh maze underneath it, which is
+                                         * what a fade-out with no fade-in
+                                         * behind it would do */
+    pmc_shblack = 0;
     pmc_mode = PMC_MODE_GAME;
     pmc_game_init();
     pmc_start(PMC_T_GAME);
