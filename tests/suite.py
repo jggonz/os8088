@@ -209,6 +209,12 @@ FAST = [
         "the Drivers page's memory column (SPEC.md 31.6.2) re-derived: every "
         "image term against the .drv this build made, every claim term against "
         "the constant in the driver that takes it"),
+    Row("ccmake", "fast", py("tests/unit/t_ccmake.py"), 2.1,
+        "automatic compiler setup: missing/partial install, parallel dependents, "
+        "warm reuse, setup failure propagation and fresh live-media dependencies"),
+    Row("imager", "fast", py("tests/unit/t_imager.py"), 0.1,
+        "host media detection, image compatibility, confirmation and read-back "
+        "verification without writing physical devices"),
     Row("image", "fast", py("tests/unit/t_image.py"), 0.1,
         "the shipped floppies read by an independent FAT12 walker: contiguity, "
         "the standard BPB, SPEC.md 19.6's attributes"),
@@ -1327,8 +1333,10 @@ SOAK = [
         "the handshake? (SPEC.md 9.9) -serial none, so no UART probes present "
         "and the aux port is the only pointing device: mou_p2st 9, port 04, "
         "line FF, ptr 1, and the pointer landing on the EXACT requested pixel, "
-        "which is the statement about the sign handling and 9.9.3's Y "
-        "inversion that nothing else here makes. Then six keys must advance "
+        "then every live menu-bar title opening the cell under that PS/2 "
+        "coordinate. This is the statement about the sign handling, 9.9.3's "
+        "Y inversion and the bar hit test that nothing else here makes. Then "
+        "six keys must advance "
         "the BIOS buffer by twelve bytes, because both halves of the probe are "
         "a chance to take a byte from int 09h. QEMU by name on CLAUDE.md's "
         "closed list - MartyPC is an 8088 and has no 8042 to test",
