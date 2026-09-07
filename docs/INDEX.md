@@ -292,6 +292,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | FRACTAL | `apps/fractal/fractal.asm` | §40 |
 | FTPD | `apps/ftpd/ftpd.asm` | §77 |
 | HELLO | `apps/hello/hello.asm` | §27 |
+| LEMMINGS | `apps/lemmings/lemmings.asm` | §92 |
 | LOOM | `apps/loom/loom.asm` | `docs/WEAVE-SPEC.md` |
 | MINES | `apps/mines/mines.asm` | §23 |
 | MISSILE | `apps/missile/missile.asm` | §48 |

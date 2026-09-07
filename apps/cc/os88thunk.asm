@@ -1423,6 +1423,248 @@ _os88_file_dlg:
     ret
 %endif
 
+%ifdef CC_HAS_FSX
+; =============================================================================
+; THE EXCLUSIVE BRACKET (SPEC.md 53), for C
+;
+; EVERY ONE OF THESE IS BEHIND %ifdef CC_HAS_FSX, AND THAT IS NOT OPTIONAL.
+; crt0.asm %includes this file WHOLE - only a few dozen of its ~2,000 lines
+; are behind a gate - so an ungated thunk lands in the image of every existing
+; C package, and cword ships with 1,043 bytes spare (SPEC.md 73.14's table).
+; CC_HAS_FDLG and CC_HAS_PARTS above are the precedent for the shape.
+;
+; os88.h's own "what is not wrapped" list used to name OSAPI_FSX_* on the
+; reasoning that "the rules are the whole feature and none of them is
+; checkable from C". The rules did not change and they are still not
+; checkable; what changed is that a C package (SPEC.md 92, LEMMINGS) now needs
+; the bracket, and a package writing seven far calls by hand in its own shim
+; would rediscover the ES fence, the FSI layout and the int 16h fallback once
+; per package. They are wrapped, gated, and the header says which rules the
+; caller is still on the hook for.
+; =============================================================================
+
+; int os88_fsx_caps(void *win, unsigned char *kind) - which FSXM ids the
+; display THIS WINDOW is on can set (SPEC.md 53.8). AX comes back as the
+; bitmask, DL as the VID_* kind, which goes out through the pointer (rule 1:
+; point it at a static). Any context, lock held or not.
+;
+; PASS YOUR OWN WINDOW AND ASK AGAIN WHERE THE ANSWER IS USED. fsx_caps takes
+; the window because it used to guess one, and the guess was wrong for exactly
+; the caller that asks earliest: a package's entry proc runs BEFORE its window
+; exists, so it gets an answer about the window it was LAUNCHED from. Missile
+; Command launched off a Disk window on the Hercules read HERC's caps and
+; greyed Mode X on a machine with a VGA in it (kernel/fsx.inc's own comment).
+_os88_fsx_caps:
+    push bp
+    mov bp, sp
+    push bx
+    push dx
+    mov bx, [bp+4]                  ; the window to ask ABOUT, or 0
+    call OSAPI_FSX_CAPS
+    mov bx, [bp+6]
+    mov [bx], dl                    ; the answering display's VID_* kind
+    pop dx
+    pop bx
+    pop bp
+    ret
+
+; int os88_fsx_run(void *win, int flags) - TAKE THE MACHINE. Calls your
+; os88_fsx_main(win) and does not return until it rets (SPEC.md 53.1).
+; flags: 0, OS88_FSXF_KEEPWORKER, OS88_FSXF_FASTTICK. 0 = the bracket ran,
+; -1 = refused and nothing changed.
+;
+; Call it from a CALLBACK (the UI task, the gfx lock held - a worker's bracket
+; would freeze the UI task mid-frame and is refused), never from os88_main().
+; The entry is cc_fsxentry, this runtime's trampoline, which is inside the
+; image and therefore passes the kernel's own ownership fence; ES is the
+; caller's DS, put there by the X stub, which is what that fence reads.
+_os88_fsx_run:
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    push si
+    push di
+    mov ax, cc_fsxentry
+    mov bx, [bp+4]
+    mov cx, [bp+6]
+    call OSAPI_FSX_RUN
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop bp
+    ret
+
+; int os88_fsx_mode(int id, struct os88_fsi *fsi) - set a foreign mode and
+; describe it (SPEC.md 53.4). 0 = set and the block is filled, -1 = refused:
+; no bracket, wrong task, unknown id, or not on this adapter - the SAME BIT
+; os88_fsx_caps answered with, which is SPEC.md 47 rule 4's one predicate for
+; the greying and the refusal.
+;
+; ES = DS is set HERE rather than trusted: the slot takes ES:DI (the
+; gfx_blit4 idiom) and ES is KERNEL_SEG on entry to every callback, so an
+; fsi block in your own bss would otherwise be filled somewhere in the
+; kernel's segment. It is put back.
+;
+; IT IS LEGAL MORE THAN ONCE. A mid-bracket mode change is what a program
+; whose game raster and whose text screens are different shapes needs
+; (SPEC.md 92.4), and fsx_restore puts the desktop's mode back from whichever
+; one is current when the bracket ends.
+_os88_fsx_mode:
+    push bp
+    mov bp, sp
+    push di
+    push es
+    mov ax, [bp+4]                  ; AL = the FSXM_* id
+    mov di, [bp+6]
+    push ds
+    pop es
+    call OSAPI_FSX_MODE
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop es
+    pop di
+    pop bp
+    ret
+
+; int os88_fsx_wait(int kind) - the frame clock (SPEC.md 53.5).
+; OS88_FSXW_TICK (0) the next tick, hlt between polls; OS88_FSXW_VSYNC (1)
+; vertical retrace, which SPINS; OS88_FSXW_FRAME (2) the next IRQ0, which
+; YIELDS so a kept worker gets the time. 0 = waited, -1 = no bracket or an
+; unknown kind. A timed-out retrace wait still answers 0: timing degrades,
+; it does not fail.
+_os88_fsx_wait:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    call OSAPI_FSX_WAIT
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop bp
+    ret
+
+; int os88_fsx_page(int page) - show one of the pages FSI_PAGES advertises
+; (SPEC.md 53.10). The write is latched at the next retrace and this waits for
+; it, so you may start drawing on another page the moment it returns. 0 = it
+; is on the glass, -1 = refused (no bracket, no mode set, or this mode has one
+; page).
+_os88_fsx_page:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    call OSAPI_FSX_PAGE
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop bp
+    ret
+
+; int os88_fsx_surf(struct os88_rect *r) - THE RECT YOUR BRACKET OWNS
+; (SPEC.md 53.7.1). 0 = filled, -1 = no bracket. The slot answers x, y, w, h;
+; the rect is INCLUSIVE like every other one in this header, so the width and
+; the height are turned into x2/y2 here and there is one convention in C.
+;
+; ASK RATHER THAN ASSUMING (0,0,w,h): a SAME-MODE bracket does not collapse
+; the desktop, so on a two-display machine the coordinate system is still the
+; whole virtual desktop and an app that hard-codes the origin draws on the
+; monitor it is not on. Every one-display machine, and every bracket that has
+; called os88_fsx_mode, answers (0,0,w-1,h-1) anyway.
+_os88_fsx_surf:
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    push dx
+    push si
+    call OSAPI_FSX_SURF
+    jc .no
+    mov si, [bp+4]
+    mov [si], ax                    ; x1
+    mov [si+2], bx                  ; y1
+    add cx, ax
+    dec cx
+    mov [si+4], cx                  ; x2, inclusive
+    add dx, bx
+    dec dx
+    mov [si+6], dx                  ; y2, inclusive
+    xor ax, ax
+    jmp short .out
+.no:
+    mov ax, -1
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop bp
+    ret
+
+; int os88_fsx_key(int wait) - READ THE KEYBOARD INSIDE THE BRACKET.
+; wait == 0 peeks and answers 0 when nothing is there; wait != 0 blocks. The
+; answer is (scan << 8) | ascii, which is int 16h's own AX.
+;
+; THERE IS NO SLOT AND THERE SHOULD NOT BE ONE. No event is dispatched inside
+; a bracket and the bracket's own contract is that "the app polls the keyboard
+; directly" (SPEC.md 53.1); apps/missile does exactly this in assembly.
+; os88_key_down cannot stand in for it either - it is a LEVEL poll, "advice,
+; not an oracle", and a program that assigns a skill on a TAP of F3 needs the
+; press.
+;
+; THE FALLBACK IS THE POINT. AH=11h/10h are the enhanced-keyboard peek and
+; read; AH=01/00 are the original pair, and they FILTER the 0x85/0x86 scan
+; codes - so F11 and F12, which are the original game's pause and nuke, are
+; unreachable through them. Which pair is used is decided by the BIOS's own
+; flag at 0040:0096 bit 4 rather than by trying AH=11h and hoping, because an
+; XT ROM that has never heard of function 11h returns whatever was in AX. So
+; F11/F12 work where the keyboard has them and are ABSENT on the 83-key XT,
+; which is a fact for SPEC.md 47's greying rather than a bug.
+_os88_fsx_key:
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    push dx
+    push es
+    mov bx, 0x0100                  ; BH = the peek call, BL = the read call:
+    mov ax, 0x40                    ; the ORIGINAL pair by default
+    mov es, ax
+    test byte [es:0x96], 0x10       ; ...the enhanced pair only where the BIOS
+    jz .std                         ; says it has them (bit 4 of the second
+    mov bx, 0x1110                  ; keyboard status byte)
+.std:
+    cmp word [bp+4], 0
+    jne .block
+    mov ah, bh                      ; peek: ZF=1 means the buffer is empty
+    int 0x16
+    jnz .take
+    xor ax, ax
+    jmp short .out
+.take:
+    mov ah, bl                      ; ...and only then take it out
+    int 0x16
+    jmp short .out
+.block:
+    mov ah, bl
+    int 0x16
+.out:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop bp
+    ret
+%endif  ; CC_HAS_FSX
+
 ; int os88_arg_file(char *name13, struct os88_place *p) - SPEC.md 54.5. The
 ; document this instance was launched to open, READ-AND-CLEAR: the first
 ; caller gets it, so a second instance can never inherit a document.

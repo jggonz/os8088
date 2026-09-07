@@ -92667,7 +92667,7 @@ disagreements the converter had to settle.
 | terrain-destruction masks (bash 4+4, mine 2+2, explosion) and the 8x8 countdown digits | `MAIN.DAT` section 1; the semantics — **a SET bit means leave alone** — from `Lemmings.ts/src/game/resources/mask-provider.ts` `Mask.at()` |
 | mouse cursor: 14x14 cross and its boxed highlight form, hotspot (7,7) | GEOMETRY ONLY, from Lemmix `src/GameScreen.Player.pas`. The bitmaps are REDRAWN here: `lemmings_3ds/src/data/cursor.c` is named in that project's `LICENCE.txt` as third-party and excluded from its public-domain dedication, so it is cited and not copied |
 | **the preview and postview screens' SURFACE — 640x350**, which decides which foreign mode each adapter sets | Lemmix `src/GameScreen.Preview.pas:64` and `:114` (`target.SetSize(640, 350); // the original dos-screen size`), and `src/GameScreen.Postview.pas:55` and `:59`. 40 characters of the 16x16 purple font is exactly 640 pixels, which is WHY the original screen is 640 wide; the preview's last line sits at y = 82 + 15×16 = 322. Neither axis fits a 320x200 mode, which is why §92.4.3 exists |
-| level preview screen: the seven lines, their wording, their indent and their per-line colours | Lemmix `src/GameScreen.Preview.pas` `GetScreenLinesAndColors` (16 lines 16px apart from y=82, ten-space indent on the value rows, line 15 centred) and `src/Base.Strings.pas:411-418` for the format strings. `lemmings_3ds` has no preview screen at all |
+| level preview screen: the seven lines, their wording, their indent and their per-line colours | Lemmix `src/GameScreen.Preview.pas` `GetScreenLinesAndColors` (16 lines 16px apart from y=82, ten-space indent on the value rows, line 15 centred) and `src/Base.Strings.pas:411-418` for the format strings. `lemmings_3ds` has no preview screen at all. **Two lines of the seven are recorded departures.** (a) `To Be Saved` carries the PERCENTAGE and not the raw rescue count — `Percentage(LemmingsCount, RescueCount) + '%'` at `:275`, whose `LemmingsPercentages` is in `TMiscOptions.DEFAULT` (`src/Base.Types.pas:259`), and `lemmings_3ds/src/import/import_level.c:539` derives the same `record[5]*100 / max_lemmings`; the raw count is Lemmix's non-default arm and Fun 1 reads "10%", never "1". The `%` is put in the VALUE by `lem_arg_pct`, never in the band string, so the converter's "`%s` is the only marker" assertion stands. (b) `Style` carries the GRAPHIC SET's name — Dirt, Fire, Squasher, Pillar, Crystal, capitalised to match `LEVELS.TXT` and the neighbouring Rating value — where Lemmix's line is `Style.StyleInformation.Description`, the style PACK's name, which is "Lemmings" on all 120 rows and says nothing to a reader choosing a level |
 | postview (results) screen: layout, the nine result texts, the header and footer lines, and how the footer is positioned | Lemmix `src/GameScreen.Postview.pas` `GetScreenText` (all lines centred, first at y=16, 16px pitch) and `src/Base.Strings.pas:423-460`. **The footer is force-positioned**: `:189`'s `AddLineFeed(18 - Result.CountChar(CR))` pads to a fixed row whatever came above, so dropping the access-code lines does not move it — see §92.8 |
 | result tier selection (which of the nine texts a percentage earns) | Lemmix `src/GameScreen.Postview.pas` `GetResultText`: 100 → 8; 0 → 0; < target/2 → 1; < target−5 → 2; < target−1 → 3; = target−1 → 4; = target → 5; < target+20 → 6; else 7. Lemmix wins over `lemmings_3ds/src/ingame.c` `show_result`, whose thresholds differ, because Lemmix is the authority on the original's SCREENS |
 | Mayhem 30 congratulation | Lemmix `src/Base.Strings.pas` `SPostviewScreen_CongratulationOrig`. Its middle line is exactly 40 characters = 640 pixels of the purple font, which is the second confirmation of the 640x350 surface |
@@ -92675,14 +92675,14 @@ disagreements the converter had to settle.
 | level names and per-level header (release rate, lemming count, save count, time, eight skill counts, start x, graphic set) | the 2048-byte record at the offsets in `lemmings_3ds/doc/data/lemmings_lvl_file_format.txt`, with the bit unpacking from Lemmix `src/Level.Loader.pas` `TranslateLevel`. `ODDTABLE.DAT` overwrites the first 24 bytes and the 32-byte name at 0x07E0, indexed `file×8 + section` (`lemmings_3ds/src/import/import_level.c:429-431`) |
 | keyboard map in the play screen | Lemmix `src/GameScreen.Player.pas:519-531` (F1 slower, F2 faster, F3-F10 the eight skills, F11/Pause pause, F12 nuke), `:465` (Esc finishes the level) and `:1290-1291` (Ctrl+F1 minimum release rate, Ctrl+F2 maximum). `lemmings_3ds` has no keyboard at all. §92.10 says what this platform bends |
 | preview/postview background and the 16x16 purple font they are lettered in | `MAIN.DAT` section 3 offset 0 (320x104 2bpp brown tile, Lemmix `src/Dos.MainDat.pas` `ExtractBrownBackGround`) and section 4 offset 0x69B0 (94 glyphs, ASCII 0x21-0x7E, 16x16 3bpp, Lemmix `src/GameScreen.Base.pas` `ExtractPurpleFont`). The 94 glyphs INCLUDE lowercase, unlike the status font, which is why the preview lines keep their mixed case and the status line cannot |
-| rating signs (72x27) shown beside the rating in the launcher | `MAIN.DAT` section 4 at 0x5A80 Mayhem, 0x5E4C Taxing, 0x6218 Tricky, 0x65E4 Fun — the REVERSE of the name order, per the format document's section 7 and Lemmix `src/GameScreen.Menu.pas` `PaintCurrentSection` |
+| rating signs (72x27) shown beside the rating in the launcher | `MAIN.DAT` section 4 at 0x5A80 Mayhem, 0x5E4C Taxing, 0x6218 Tricky, 0x65E4 Fun — the REVERSE of the name order, per the format document's section 7 and Lemmix `src/GameScreen.Menu.pas` `PaintCurrentSection`. **They are carried in `LEMMAIN.LEM` on every disk and wave 1 does not DRAW them**: a 72x27 sign is a blit and the blitter is `lemblit.inc`, which arrives in wave 2. Wave 1's rating chooser is the TEXT tab strip (`lemui.c` `lem_row_tabs`), which is what a launcher window can draw with `os88_font_run` alone, and the signs go beside it in wave 2 |
 | in-level 16-colour palette (0-7 the lemmings' and the panel's, 8-15 the level's) | `Lemmings.ts/src/game/resources/lemmings/color-palette.ts` `setMainColors` for 0-7; the style half from `GROUNDxO.DAT`'s VGA custom palette (`lemmings_3ds/src/import/import_ground.c`, with entry 7 a copy of entry 8). This is what makes plane 3 mean "terrain" and planes 0-2 "sprite", which the VGA raster leans on |
 | frame clock, the opening sequence and the spawn interval | Lemmix `src/Game.pas` `IncrementIteration:3498` (17 frames to the second; iteration 15 "let's go", 34 entrance sound, 35 entrances open, 55 music) and `CheckSpawnLemming:4001` (first countdown 20, interval `(99−RR) div 2 + 4`, spawn at entrance left+24, top+14). Agrees with `lemmings_3ds/src/ingame.c` `level_step` |
 | cursor hit test, skill priority and the right-click behaviour | Lemmix `src/Game.pas` `PrioritizedHitTest:3595` — a 13x13 box hung off the animation's foot offsets, prioritised actions Blocking / Building / Shrugging / Bashing / Mining / Digging / Ohnoing, last prioritised wins unless the right button is held. Carried as the original's behaviour, not switchable |
 | interactive-object metadata: trigger effect ids, trigger rectangle at ×4 resolution, frame counts, trap sound ids | `lemmings_3ds/doc/data/lemmings_vgagrx_dat_groundxo_dat_file_format.txt` (28-byte `OBJECT_INFO`; left×4, top×4−4, w/h×4 with a stored 0 meaning 256; effect 0 none, 1 exit, 4 trap, 5 drown, 6 disintegrate, 7 one-way left, 8 one-way right, 9 steel) |
 | world size, the terrain-list terminator and the steel bit layout | `docs/LEMMINGS-PORT-PLAN.md` and its measurement over all 120 levels — see §92.3.1 |
 | sound EVENTS (let's go, oh no, explosion, door open, yippee, splat, exit, trap) | Lemmix `src/Dos.Consts.pas` `TSoundEffect` and `src/Meta.Structures.pas`'s trap ids for the event list and where each fires. **The tones themselves are this port's own** — see §92.11 |
-| About box attribution and the original credits | Lemmix `src/Base.Strings.pas` `SCredits` — eight lines. Against the twelve-row ceiling (§92.5, §73.12) that block plus product, version and a port line is already twelve, so the FULL attribution list lives in `README.TXT` beside the package and the About card names the two principals and points at it |
+| About box attribution and the original credits | Lemmix `src/Base.Strings.pas` `SCredits` — eight lines. Against the twelve-row ceiling (§92.5, §73.12) that block plus product, version and a port line is already twelve, so the FULL attribution list lives in `README.TXT` beside the package and the About card names **the two principals AND the rightsholder** — "Lemmings By DMA Design", "Programming By Russell Kay", "Copyright 1991 Psygnosis Ltd." — and points at it. Nine rows of the twelve; the copyright replaced a blank spacer, so the CGA card, which is the narrow one, did not grow. `apps/cword/cwovl.c` naming Microsoft on cword's card is the precedent and §92.2's posture is cword's. With no module resident there is no card at all, and what is toasted instead is `LEMS_CREDIT1` — a RESIDENT band string — rather than the port's own product line |
 | the kernel-side surfaces this port must not guess at | read from this tree: `kernel/fsx.inc:20-28` (the nine `FSXM_*` ids), `:117` `fsx_capstab` (VGA 0x01EF, HERC 0x0011, CGA 0x000F, EGA 0x000F, and the EGA row's own comment that mode 0Dh there is "a safe later addition, not pass 1"); `kernel/kernel.asm:38-39` (`MBAR_H` 20, `TITLE_H` 18); `kernel/dock.inc:57` (`DOCK_H` 24); `kernel/memory.inc:34/45` (`MEM_MAX` 20 on `kern_small`, 32 on `kern_big`); `tools/os88disk.py:124` (spc = 2 on BOTH 360KB and 720KB, 354 and 713 data clusters); §53.1 (the file API is legal mid-bracket, and every sound grant inside the bracket is billed to the instance); §11.2.1 (`f`/`F` as the fullscreen door) |
 
 ### 92.2 The data — 26 files, fetched and never committed
@@ -92744,8 +92744,20 @@ cluster-window read into a claim cannot be written; `os88_file_read_seg(name,
 seg, cap)` reads a whole file into a claim's segment instead, and its base must
 be 512-aligned (§2.1.1), which a claim's own base is by construction. So the
 converter pads each band to 512 and the package reads it straight in.
-`os88_file_read_at()` survives only for the manifest header, read into a
-DS-relative static at offset 0.
+
+**`os88_file_read_at()` is not used by this package at all**, and the wave-1
+build is where that was settled rather than assumed. Its offset AND its cap must
+each be a whole number of CLUSTERS, the cluster is 512 bytes on a 1.44MB or
+1.2MB disk and 1,024 on a 720KB or 360KB one (`tools/os88disk.py:124`), and it
+is neither of those on the RAM disk The Wire unpacks this package onto
+(§92.3.2) — so a fixed window into a shared index cannot be written to be
+correct on all four disks and the RAM disk at once. **The rating is therefore
+the FILE**: `LEMR0.LEM` … `LEMR3.LEM`, thirty 64-byte entries each, always
+exactly 2,048 bytes on every geometry, read WHOLE by `os88_file_read()` into a
+DS-relative static with no alignment rule of any kind — and the package carries
+one rating's 2,048 bytes of bss rather than four ratings' 8,192. `LEMMAN.LEM`
+is read the same way, whole, at 512 bytes. Four extra directory rows against
+`RD_MAXENT`'s 96 is the price and there is room.
 
 **A band file is capped at 64,512 bytes and a larger bank is written as
 numbered PARTS** — §92.3.2 has the arithmetic and the reason, which is The
@@ -92988,6 +93000,105 @@ the trigger for the next move-out** — `lemdraw.c`'s panel composition and
 `lemtab.c`'s per-adapter colour maps. If the split or the band does not land as
 planned there is no second lever of that size.
 
+**MEASURED AT WAVE 1**, which is why the line is quoted from here rather than
+from wave 6: `os88pkg: 'LEMMINGS' entry=+0x0020 image=16618 bss=14866` with
+`LEMMINGS.OVL` at 2,760 bytes on demand — **31,484 resident of 61,440, 51%, and
+29,956 spare**. `tools/cc8086.py` reports 93 functions and a **14-byte** maximum
+frame against the 96-byte cap, and the overlay cut moved **12 functions** into
+`.modc` behind 35 resident shims. That is the launcher, the band reader, the string accessor and
+the const tables; the raster, the mechanics and the eighteen action handlers are
+what the estimate above is mostly made of and they arrive in waves 2 and 3. The
+55,000 trigger is unchanged and the split is already in place to meet it.
+
+**4,096 of the 14,856 bss bytes are the string band's HEADROOM and they are
+spent deliberately.** `LEMSTR.LEM` is read whole into `LEM_STRBUF`, the
+converter pads it to 512, and the band is **4,096 bytes today** — so a
+`LEM_STRBUF` sized at the band's own next step would refuse the very next row
+of `tools/os88lem.py`'s string table, and `lem_str_load()` refusing takes
+`lem_data_load()` with it: every disk in every geometry would come up with no
+level names, no rating tabs and the sentence "The converted level data is not
+in this folder.", which names the wrong cause because the bands are all
+present. It is **8,192**, and `build_string_band()` asserts the SAME 8,192 on
+the host, so the day it is reached the CONVERTER fails by name rather than the
+shipped package failing on the glass. Wave 1 proved the point in its own
+build: the two per-adapter Mode facts §92.8 needs took the band from 3,584 to
+4,096, which is exactly the step that would have hit the wall.
+
+**THE LAUNCHER'S REDRAW BUDGET (PERFORMANCE.md Part 5's shape), measured by the
+host harness and priced at 756 us a drawing call and ~900 us a glyph cell.**
+These are the rows the next change to `lemui.c` is held against:
+
+| operation | calls | cells | on a 4.77 MHz 8088 |
+|---|---|---|---|
+| full repaint, 189px content box (20 rows, 12 list rows) | 28 | 735 | ~682 ms |
+| full repaint, 137px box — a CGA (15 rows, 7 list rows) | 23 | 560 | ~521 ms |
+| full repaint, 100px box (11 rows, 3 list rows) | 15 | 371 | ~345 ms |
+| **selection move** (an arrow key), the selection staying on the page | **3** | **78** | **~72 ms** |
+| ...and the preview pane, once the arrow STOPS | 6 | 102 | ~96 ms |
+| **selection move that SCROLLS**, 189px box — the worst keystroke there is, and paid once per 12 keys | ~12 | **420** | **~387 ms** |
+| ...the same on the 137px CGA box, once per 7 keys | ~7 | 245 | ~231 ms |
+| **rating key** (Left/Right, or a tab click) — the tab strip alone | 2 | **29** | ~28 ms |
+| ...and the rating the wake then reads, drawn on `W_ONWAKE` | 11 | 183 | ~172 ms |
+
+**Dismissing the About card costs one `os88_gfx_fill` plus a full repaint**, and
+the fill is not belt and braces. The card is opaque over its own rect
+(`os88ui_about_d`) and the shadow knows nothing about it, so a dismissal that
+still trusts the shadow issues **zero** drawing calls and the card sits on the
+glass until the next expose — but invalidating the shadow is not enough either,
+because it re-letters every CELL and a cell is 8 pixels of a 9-pixel pitch: the
+card's frame and drop shadow cross the LEADING row between every pair of text
+rows, and no `os88_font_run` of ours can reach those pixels. The first build of
+the fix left a dotted ghost of the border with every character correct around it
+(`build/port-shots/w2-dismiss-zoom.png`). So the content box is white-filled —
+the same ground `WF_OWNBG`'s interlock lays down before a `W_PAINT` — and the
+shadow is then SEEDED blank rather than invalidated, which is why the repaint
+costs a `W_PAINT`'s 28 calls and not every blank cell in the box. The host
+harness models that one fill and fails the build if it stops happening.
+
+**The split in the last two rows is the point.** A selection move changes two
+level rows AND the seven preview lines beside them, and the pane was ~140 of
+~180 cells — ~168 ms an arrow key, so a held arrow fell that far behind on
+every repeat, which is PERFORMANCE.md Part 1's INPUT OVERRUN and the one of its
+three defects no emulator here can show. The list rows now go down on the
+keystroke and the pane is armed on `W_ONTIMER` (§13.9) for three ticks and
+**re-armed by every further key**, so a held arrow draws the pane ONCE, when it
+stops. The pane is not composed as blanks in the meantime — `lem_row_keep()`
+copies the shadow's own cells into the composed row, so the flush finds them
+equal and draws nothing, which is what keeps the deferral from becoming a
+double-draw flash. `os88_wm_timer()` is REFUSABLE (§13.8.2) and the shadow may
+not describe the glass yet; either way `lem_pv_defer()` simply draws the pane
+now, which is what this program did before the timer existed.
+
+**THE PAGE SCROLLS A PAGE AT A TIME, and that is a redraw decision rather than
+a taste one.** `lem_layout()` moves `lem_top` as soon as the selection leaves
+the page, and `lem_pv_hold` defers only the preview COLUMNS — never the list
+half — so the keystroke that scrolls re-letters every list row: twelve of them
+on the 189px box, ~420 glyph cells, **~387 ms against a ~100 ms autorepeat
+interval**. Row-at-a-time that is what EVERY repeat costs once the first page is
+crossed, which is input overrun again. A page at a time pays it **once per
+`lem_nlist` keys** and leaves the ordinary keystroke at the 3 calls / 78 cells
+the table above gives. Nothing is copied from the original here — it has no
+level list at all, only a code entry and a preview screen — so the cheaper of
+two honest behaviours wins. The host harness presses Down `lem_nlist + 2` times
+and fails the build if more than one of those keystrokes costs more than two
+rows of cells, or if a keystroke that did NOT move the page costs that much.
+
+**NO KEYSTROKE AND NO CLICK TOUCHES A FILE.** `os88_onkey`, `os88_onclick` and
+`W_ONTIMER` are all delivered with the **gfx lock HELD** (`apps/cc/os88.h`),
+`W_PAINT` too, and the launcher had three paths that read or wrote a floppy
+inside one:
+
+| the path | what it was | where it is now |
+|---|---|---|
+| the FIRST `W_PAINT` forcing the module resident | `cc_ovneed`: a heap claim, a directory walk of a 39-entry folder and a 2,752-byte read, on every launch, with every other window's painter stopped behind the lock | `os88_onwake()`. The first frame composes the preview pane empty and the wake repaints in FULL, so `ovl_chrome()`'s vertical rule goes down with it |
+| **Left / Right / a tab click** — `lem_rating_load()` | `os88_file_read()` on `LEMR<n>.LEM`: a directory walk, a FAT walk and the data run, 3+ `int 13h` at ~400 ms each — on keys that AUTOREPEAT at ~100 ms | `os88_onwake()`. The keystroke moves `lem_rating` and repaints the tab strip alone (29 cells) so the press is acknowledged; the level rows are HELD exactly as the shadow has them, because blanking them would be ~260 cells and then the same rows lettered again. The flag is RE-ARMED and never stacked, so a held Left is ONE file read |
+| **Enter / Space / a Play click** — `ovl_progress_write()` | two ordinal walks (`os88_file_find` has no cursor, so every step between two of them walks directories itself) and a write that rewrites the FAT and a directory entry. `lem_prog[]` starts at −1, so the FIRST Play of every session always wrote | `os88_onwake()`. `lem_prog[]` is updated in memory at the keystroke — which is what the Save Progress row is lettered from — so nothing on the glass waits for the write and there is no ordering to preserve |
+
+`W_ONWAKE` is the one callback that runs **without** the lock (§74.1) and the
+one the file slots are legal in; `os88_wm_wake()` queues at most one per window,
+so three errands owed at once are drained by one wake. None of this is visible
+in an emulator, whose floppy answers instantly.
+
 The overlay is resolved in the LAUNCHING instance's directory (§19.2.1,
 §73.14), so the package, `LEMMINGS.OVL` and every band file are in **ONE
 folder** on every disk. A disk carrying the package without its overlay is
@@ -93093,7 +93204,7 @@ and a `README.TXT` beside the package.
 | F11 (pause), F12 (nuke) and the Pause key (the Mode row's second line) | an 83-key XT keyboard has no F11 or F12 key, and its Pause is Ctrl-NumLock, which the BIOS spins on internally and never returns. See §92.10 |
 | the preview and postview LAYOUT on CGA and EGA | the original's screens are 640x350 and `FSXM_CGA640` is 640x200, which holds the 40-character lines at their true width but 12 of the ~22 rows — so the blank-line spacing is compressed out (§92.4.3) |
 | a level row whose graphic set or special picture is not on this disk | names the missing file and the arithmetic **in clusters as well as bytes**, e.g. "LEMSPC2.LEM is not on a 720KB disk: the four special pictures are 307,200 bytes = 300 clusters of this disk's 713, with 517 already spent" |
-| Save Progress on a read-only medium | the live CD cannot be written (§80.3); the session is played and the result is shown, and nothing is recorded |
+| Save Progress on a medium the write path refuses | the live CD cannot be written (§80.3); the session is played and the result is shown, and nothing is recorded. **The predicate is whether `SYSTEM/APPDATA` answered on this instance's own volume** (§19.9's bank / GOTO / act / come-back, `apps/weave/wstate.c`'s worked example) — which is what the program can actually test, and is one case wider than the sentence the band carries. A disk with no `SYSTEM/APPDATA` greys the row with the CD's wording; broadening that string is a row in `tools/os88lem.py`'s table and belongs with wave 4's progress work |
 | sound on a machine whose speaker path refuses | `os88_snd_caps()` answered no tone capability — the same predicate `os88_snd_tone` would refuse on |
 
 **What is absent**, and why each is a fact for this document and the README
@@ -93136,10 +93247,11 @@ rather than a greyed control:
 | package | `LEMMINGS` |
 | directory | `apps/lemmings/` |
 | overlay | `LEMMINGS.OVL`, in the same folder as the package and the band files |
-| images | `build/lemmings.img` / `lemmings720.img` / `lemmings360.img` / `lemmings12.img` |
+| that folder | **`LEMMINGS/` on every disk, and not the root.** The 1.44MB set is 36 band files plus the package and the module, and `tools/os88disk.py` refuses 38 root entries against the kernel's 32-row LISTING cap. `--deep-folders` lifts that cap for a SUBFOLDER only — the Disk window then shows the first 31 rows and the file API reaches them all — and the sort puts at most 22 band names (`LEMGR*`, `LEMLV*`, `LEMMAIN`, `LEMMAN`) ahead of `LEMMINGS.O88`, so the package is the 24th row of 31 and is always on the glass |
+| images | `build/lemmings.img` / `lemmings720.img` / `lemmings120.img` / `lemmings360.img` |
 | targets | `make lemmings`, `make lemmingsdisk` — **on demand**, like `cworddisk` and `runcpmdisk`; nothing in `all` needs the compiler or the fetch |
-| machines | `vm/xt-lemmings` (4.77 MHz XT, VGA, 640KB) and `vm/386-lemmings` |
-| saved state | `SYSTEM/APPDATA/LEMMINGS.SAV` (§19.9) |
+| machines | `vm/xt-lemmings` (4.77 MHz XT, VGA, 640KB) and `vm/386-lemmings` — **neither exists yet, and neither is a make target yet**. An 86Box profile is for LOOKING at the raster on period hardware and there is no raster before wave 2, so both directories and both targets arrive in the same edit as `lemblit.inc`. Wave 1's launcher is driven under QEMU and MartyPC, which is what can be asserted (`docs/TESTING.md`). The `.PHONY` line names only `lemmings`, `lemmingsdisk` and `lemmings-data`: a phony target with no rule answers `Nothing to be done` and **exits 0**, so a machine named here before it is built would read as a target that ran |
+| saved state | `SYSTEM/APPDATA/LEMMINGS.SAV` (§19.9). **The folder is BUILT onto all four images and not created on demand**, which is the rule at the Makefile's own `APPDATAFOLDER` — every disk that carries an application carries it too. `ovl_data_enter()` dives SYSTEM then APPDATA on the LAUNCHING volume, so a disk without it refuses on every geometry, `lem_savable` stays 0 and the Save Progress row greys forever with a sentence about a live CD, in front of a reader with a writable floppy in B:. It also falsifies the greyed fact beside it, which tells the reader the original's access codes were dropped BECAUSE progress is kept in `SYSTEM/APPDATA/LEMMINGS.SAV`. One directory cluster a disk; the FTPD disk (§77.12) is where the same omission hid a feature for a whole run |
 
 **It lives on its own on-demand images and nowhere else on the shipped
 floppies**, which is the RUNCPM, C64 and Weave-family shape
@@ -93217,7 +93329,9 @@ how the build renders or what it synthesises (§73.12).
 **On the host, before anything is built for the 8086.**
 `apps/lemmings/build.sh` runs four checks in `apps/runcpm`'s pattern — every
 one stops the build, and a failure leaves no stamp so the 8086 compile never
-runs. They run against the **committed synthetic fixture**
+runs. **Two of the four are live from wave 1** (1 and 2 below); 3 and 4 arrive
+with the assembly cores and the raster they exist to check, in the same edit as
+those files. They run against the **committed synthetic fixture**
 (`apps/lemmings/hosttest/fixture/`, written by `tools/os88lem.py --fixture`,
 carrying no bytes derived from the original), which is what makes `make
 lemmings` need no network fetch:
@@ -93230,7 +93344,17 @@ lemmings` need no network fetch:
    shadow against the modelled glass, audits the 40-cell status string cell by
    cell against an independently written rebuild, asserts every status
    character maps into the 38-glyph set, and asserts **no pixel is written
-   twice**;
+   twice**. What it holds at wave 1: the band read off the fixture; the row
+   count, the page and the level on each row rebuilt independently at content
+   heights of 189, **137** (a CGA: 200 − `MBAR_H` 20 − `DOCK_H` 24 −
+   `TITLE_H` 18 − 1) and 100; no drawing past the content box; the shadow equal
+   to the modelled glass after every step; no cell written twice; every
+   character inside the kernel face 32..126; a greyed row drawn with the
+   disabled pen AND in `OS88_DGRAY` — the pen alone left it pixel-identical to a
+   live row on VGA, which is the defect this row caught — and its fact
+   substituted out of `LEMMAN.LEM`'s cost table; the About card at or under
+   twelve rows; the Mode row greying on `fsx_caps`' own bit; and the cost table
+   printed;
 3. a raw-x86 harness for `lemmask.inc`'s probes and `lemblit.inc`'s movers, run
    in QEMU with **SS ≠ DS** and with negative controls, because that is the one
    place ES is loaded;

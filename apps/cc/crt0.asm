@@ -723,6 +723,53 @@ cc_about:
     ret
 %endif
 
+%ifdef CC_HAS_FSX
+; -----------------------------------------------------------------------------
+; cc_fsxentry - THE EXCLUSIVE BRACKET'S ENTRY (SPEC.md 53.1), handed to
+; OSAPI_FSX_RUN by os88_fsx_run(). The kernel calls it through wm_pkgcall -
+; SI = the window ptr, DS = CS = this segment, ES = KERNEL_SEG - so it is an
+; ordinary near proc with a near ret, exactly a W_ONKEY's environment, and it
+; is a TRAMPOLINE rather than a raw C function pointer for the reason every
+; other callback here is one: the offset the kernel is given must be a label
+; nasm can name, and a C function that the shim never declared would be an
+; external reference naming itself. %define CC_HAS_FSX and write
+;
+;     void os88_fsx_main(void *win)
+;
+; and the two halves cannot drift - a %define with no C behind it is an nasm
+; error, and C with no %define is a function the kernel never calls.
+;
+; IT DOES NOT RETURN UNTIL THE GAME IS OVER. fsx_run is a bracket, not a
+; latch: everything the app does with the machine happens inside this call,
+; and the desktop comes back when it rets (SPEC.md 53.6).
+;
+; The gfx lock is HELD throughout - fsx_run was called from a callback that
+; holds it, and it is what keeps the mouse ISR off the screen while the mode
+; is foreign. So the rules of a callback still apply: never take the lock,
+; never call OSAPI_TASK_ALIVE, and every kernel DRAWING slot is refused until
+; this returns (53.1). What is legal is the file API, the sound grants this
+; instance already holds, and the fsx slots themselves.
+; -----------------------------------------------------------------------------
+cc_fsxentry:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cld
+    push si                         ; arg 1: void *win
+    call _os88_fsx_main
+    add sp, 2
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+%endif
+
 %ifdef CC_HAS_FDLG
 ; -----------------------------------------------------------------------------
 ; cc_onfile - the Standard File dialog's completion proc (SPEC.md 38.6),

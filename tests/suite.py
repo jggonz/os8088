@@ -337,6 +337,27 @@ FAST = [
         "because a clone with nasm and python3 builds every floppy this "
         "project ships and a red suite there would be reporting on the box",
         needs=()),
+    Row("lemdat", "fast", py("tests/unit/t_lemdat.py"), 2.4,
+        "SPEC.md 92.2's standing check, and it is a SECOND READER rather "
+        "than a repeat of the first: the 26 DOS Lemmings data files decoded "
+        "again from Lemmings.ts's semantics - its container walk, its bit "
+        "reader's RUNNING checksum, which is a stronger reading than an XOR "
+        "over the payload because the two agree only if the stream consumed "
+        "exactly the payload - against tools/os88lem.py's, which is "
+        "lemtool/lemdat.py's. 101 sections, the mask == plane 3 identity "
+        "over all 273 terrain pieces plus the tiling of VGAGR section 0 that "
+        "makes it checkable, the four special pictures at exactly 4 chunks "
+        "of 14,400, the 120-level order against BOTH reference tables, and "
+        "every converted band's header held against the bytes it claims to "
+        "carry. It has already caught two defects the converter's own "
+        "selfcheck could not see, both because it reads the ORIGINALS: four "
+        "level names are exactly 32 characters and were losing their last "
+        "letter to a terminator the field has no room for, and a geometry "
+        "that shrank was leaving a stale LEMLVn.LEM the manifest still "
+        "names. SKIPS with no build/lemdata.stamp, because the data is "
+        "fetched and never committed (CONTRIBUTING.md 6) and a red row in a "
+        "fresh clone would be reporting on the box",
+        needs=()),
     Row("textrules", "fast", py("tests/unit/t_textrules.py"), 0.7,
         "SPEC.md 6.6's ratchet: transparent text (font_char/font_str) draws every "
         "pixel twice and flashes on the target machine, so every call site is "

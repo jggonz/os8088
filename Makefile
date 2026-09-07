@@ -1614,7 +1614,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zgfxpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
-        cc-note chello covl pkgrun pkgbig cword cworddisk 386-c-word runcpm runcpmdisk \
+        cc-note chello covl cfsx pkgrun pkgbig cword cworddisk 386-c-word runcpm runcpmdisk \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
@@ -1622,6 +1622,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
+        lemmings lemmingsdisk lemmings-data \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -4391,6 +4392,66 @@ $(BUILD)/covl360.img: $(BUILD)/covl.o88 tools/os88disk.py
 #   make test TESTAPPS=build/covl.img    boots with it in B:
 covl: $(BUILD)/covl.img $(BUILD)/covl360.img
 
+# --- CFSX, the C EXCLUSIVE-BRACKET capability gate (ON DEMAND: `make cfsx`) --
+# SPEC.md 53 from C (SPEC.md 92.2): the seven OSAPI_FSX_* thunks behind
+# %ifdef CC_HAS_FSX, and the three things nothing in this tree had ever done
+# before LEMMINGS needed them - a CRTC line compare with the panel standing
+# still below it while the top scrolls by pel panning, a MODE CHANGE INSIDE a
+# bracket, and an ovl_* far-called from inside one. Every one of those
+# assembles cleanly and runs wrong, so the gate puts NUMBERS ON THE GLASS -
+# tests/covl's shape and tests/cfsx/cfsx.c says which number proves what.
+#
+# It is the third tests/ C package, so this is where CC_PACKAGE_AT was
+# considered and NOT written: it would want a directory, an extra -I, an
+# overlay name and a disk list, which is the whole of CC_PACKAGE plus four
+# arguments for three call sites that each differ in a different place.
+# Open-coded, like chello and covl above, and the comment stays here so the
+# FOURTH one is a decision somebody takes rather than a fourth copy.
+#
+# The disk carries CFSX.O88 and CFSX.OVL. Delete the second and boot again:
+# the refusal is the other half of the design, and it must NOT toast - a
+# kernel toast paints desktop geometry into a foreign mode (SPEC.md 92.5).
+$(BUILD)/cfsx.raw.asm: tests/cfsx/cfsx.c $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
+		tests/cfsx/cfsx.c -o $@
+
+$(BUILD)/cfsx.gen.asm: $(BUILD)/cfsx.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/cfsx.bin: tests/cfsx/cfsx.asm $(BUILD)/cfsx.gen.asm $(CC_RUNTIME) \
+                   $(wildcard tests/cfsx/*.inc) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -I tests/cfsx/ \
+		-o $@ tests/cfsx/cfsx.asm
+	@echo "cfsx: $(call FILESIZE,$@) bytes (image + module)"
+
+$(BUILD)/cfsx.o88: $(BUILD)/cfsx.bin tools/os88pkg.py tools/os88ovl.py
+	python3 tools/os88ovl.py $< -o $(BUILD)/CFSX.OVL \
+		--trim $(BUILD)/cfsx.trim.bin
+	python3 tools/os88pkg.py $(BUILD)/cfsx.trim.bin -o $@
+
+$(BUILD)/cfsx.img: $(BUILD)/cfsx.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/cfsx.o88 $(BUILD)/CFSX.OVL
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/cfsx360.img: $(BUILD)/cfsx.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		$(BUILD)/cfsx.o88 $(BUILD)/CFSX.OVL
+	@python3 tools/os88disk.py --verify $@
+
+# ...and the one with NO module on it, which is the refusal arm and is a
+# SEPARATE IMAGE rather than an instruction to delete a file: a test that asks
+# the operator to modify the disk under it is a test nobody runs twice.
+$(BUILD)/cfsxnoovl.img: $(BUILD)/cfsx.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/cfsx.o88
+	@python3 tools/os88disk.py --verify $@
+
+#   make cfsx                                builds all three images
+#   make test TESTAPPS=build/cfsx.img        boots with it in B:
+#   make test TESTAPPS=build/cfsxnoovl.img   ...and the refusal arm
+cfsx: $(BUILD)/cfsx.img $(BUILD)/cfsx360.img $(BUILD)/cfsxnoovl.img
+
 # --- PKGRUN, OSAPI_PKG_RUN's gate (ON DEMAND: `make pkgrun`) -----------------
 # SPEC.md 21.5: run a package image that is already in memory. The gate is a
 # test package that reads HELLO.O88 off the disk beside it into a claim and
@@ -5514,6 +5575,209 @@ $(BUILD)/loom360.img: $(LOOMDISK) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA \
 		--dir-slots LOOM=32 $(WEAVEFOLDER) $(LOOMFOLDER)
 	@python3 tools/os88disk.py --verify $@
+
+
+# =============================================================================
+# LEMMINGS (SPEC.md 92) - ON DEMAND: `make lemmings`, `make lemmingsdisk`
+# =============================================================================
+# The C toolchain's fifth application: Lemmings (DMA Design / Psygnosis, 1991,
+# the DOS release) as a windowed launcher plus - from wave 2 - a SPEC.md 53
+# exclusive bracket the game runs inside. `make lemmings` runs the host checks
+# (apps/lemmings/build.sh) and then builds the package; `make lemmingsdisk` the
+# floppy in all four geometries; `make lemmings-data` fetches and converts the
+# data set on its own.
+#
+# NOTHING IN `all` REACHES ANY OF IT, for cworddisk's reason: a C package needs
+# SmallerC, which tools/setup-cc.sh fetches and which is deliberately not in
+# this tree (SPEC.md 73.1). A clone with nasm and python3 builds every SHIPPED
+# floppy.
+#
+# NO ORIGINAL DATA IS COMMITTED (CONTRIBUTING.md 6, SPEC.md 92.2). The 26 DOS
+# files are fetched by tools/getlemmings.py at a pinned URL and SHA-256 into
+# build/lemdata/ behind a stamp, and tools/os88lem.py converts them into the
+# band files the package reads. The stamp gates the DISK target ONLY, never
+# `make lemmings`: apps/runcpm's runcpm-src.stamp is the shape, and the reason
+# it matters here is that the host harness runs against the COMMITTED SYNTHETIC
+# FIXTURE, so a tree that has never fetched anything still builds and still
+# checks itself (SPEC.md 92.12).
+#
+# ---------------------------------------------------------------------------
+# OPEN-CODED RATHER THAN CALLED THROUGH CC_PACKAGE, and the reason is ONE -I,
+# which is the reason `loom` above is open-coded too.
+# ---------------------------------------------------------------------------
+# apps/lemmings/lemmings.c carries `#include "lemstr.h"` - the LEMS_* string ids
+# GENERATED by tools/os88lem.py so that the band and the program cannot drift
+# (a renamed string is then a compile error rather than a wrong sentence on the
+# glass, docs/lemband-format.md). The generated header lands in build/, and
+# CC_PACKAGE's compile line carries -SI/-I for SmallerC's own include tree and
+# -I apps/cc and nothing else.
+#
+# LOOM's comment says the SECOND package to need a generated header is the
+# moment to lift these four rules into a CC_PACKAGE_AT that takes extra include
+# paths. This is that second package - and that lift is NOT taken here, on
+# purpose: it would retarget LOOM's rules, which belong to another package and
+# to another wave, from inside the wave that lands this one. The four rules are
+# written out below, the note is carried forward, and a THIRD such package is
+# where somebody should stop copying and write the macro.
+$(BUILD)/lemstr.h: tools/os88lem.py | $(BUILD)
+	python3 tools/os88lem.py --fixture $(BUILD)/lemfixture --header $@
+
+# The 26 DOS files, fetched and NEVER committed - and `--from <dir-or-zip>` is
+# the offline route for a machine that has the set already (tools/getlemmings.py
+# takes it as LEMDATAFROM= here). A stamp rather than a directory, as the story
+# cache is: make cannot depend on twenty-six files, and the script is idempotent
+# and re-verifies every hash for 0.2s and no network.
+LEMDATADIR := $(BUILD)/lemdata
+LEMBANDDIR := $(BUILD)/lemband
+$(BUILD)/lemdata.stamp: tools/getlemmings.py | $(BUILD)
+	python3 tools/getlemmings.py -o $(LEMDATADIR) $(if $(LEMDATAFROM),--from $(LEMDATAFROM))
+	@touch $@
+
+# ...and the conversion. One stamp for all four geometries, because the
+# converter builds them in one pass and prints the per-geometry manifest in
+# CLUSTERS as well as bytes on every run (SPEC.md 92.3): both small geometries
+# have spc = 2, so every band file rounds up to 1,024 bytes and the byte
+# arithmetic is the wrong currency.
+$(BUILD)/lemband.stamp: tools/os88lem.py $(BUILD)/lemdata.stamp | $(BUILD)
+	python3 tools/os88lem.py -s $(LEMDATADIR) -o $(LEMBANDDIR)
+	@touch $@
+
+lemmings-data: $(BUILD)/lemband.stamp
+
+# THE HOST CHECKS RUN FIRST AND STOP THE BUILD (apps/runcpm's pattern, not
+# cword's): a check that fails leaves no stamp, and the compile does not run.
+LEMSRC  := apps/lemmings/lemtab.c apps/lemmings/lemtext.c \
+           apps/lemmings/lemload.c apps/lemmings/lemui.c \
+           apps/lemmings/lemovl.c
+LEMHOST := apps/lemmings/build.sh apps/lemmings/hosttest/os88.h \
+           apps/lemmings/hosttest/lemtest.c tools/os88lem.py \
+           $(wildcard apps/lemmings/hosttest/fixture/*)
+$(BUILD)/.lemmings-hostchecks: apps/lemmings/lemmings.c $(LEMSRC) $(LEMHOST) \
+                               $(BUILD)/lemstr.h | $(BUILD)
+	apps/lemmings/build.sh
+	@touch $@
+
+# THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): lemmings.c #includes the
+# five parts above, and make cannot see through a #include - without the line
+# below an edit to the launcher leaves build/lemmings.o88 untouched and a stale
+# package reads exactly like the change having done nothing (LESSONS.md 9).
+# WAVE 2 ADDS lemgame.c, lemact.c, lemobj.c and lemdraw.c to LEMSRC and
+# lemblit.inc, lemmask.inc and lemfont.inc to LEMINC, each in the same edit as
+# the file itself.
+LEMINC := $(wildcard apps/lemmings/*.inc)
+
+$(BUILD)/lemmings.raw.asm: apps/lemmings/lemmings.c $(LEMSRC) $(CC_RUNTIME) \
+                           $(BUILD)/lemstr.h $(BUILD)/.lemmings-hostchecks \
+                           | $(BUILD) cc-toolchain
+	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(BUILD) \
+		apps/lemmings/lemmings.c -o $@
+
+$(BUILD)/lemmings.gen.asm: $(BUILD)/lemmings.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/lemmings.bin: apps/lemmings/lemmings.asm $(BUILD)/lemmings.gen.asm \
+                       $(CC_RUNTIME) $(LEMINC) apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/lemmings/lemmings.asm
+	@echo "lemmings: $(call FILESIZE,$@) bytes (image + module)"
+
+# THE OVERLAY CUT (SPEC.md 73.14, 92.6). Everything from `.modc` on becomes
+# LEMMINGS.OVL, a file beside the package: the About card, the greying facts,
+# the preview text, the chrome and the progress file. os88ovl.py finds the
+# boundary in the image size word the header already carries, and os88pkg.py
+# then refuses a package whose header and file disagree - which is what stops
+# this step being skippable.
+$(BUILD)/lemmings.o88: $(BUILD)/lemmings.bin tools/os88pkg.py tools/os88ovl.py
+	python3 tools/os88ovl.py $< -o $(BUILD)/LEMMINGS.OVL \
+		--trim $(BUILD)/lemmings.trim.bin
+	python3 tools/os88pkg.py $(BUILD)/lemmings.trim.bin -o $@
+
+lemmings: $(BUILD)/lemmings.o88
+
+# ALL FOUR geometries an APPLICATION's own floppy is built in (CLAUDE.md):
+# 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one, and 1.2MB
+# 5.25" HD (SPEC.md 19) for the AT-class machine.
+#
+# ONE FOLDER PER DISK, AND THAT IS A CORRECTNESS REQUIREMENT rather than a
+# layout choice. LEMMINGS.OVL is resolved in the LAUNCHING instance's own
+# directory (SPEC.md 19.2.1, 73.14) and so is every band file the package opens
+# by name, so the package, the module and the bands are ONE folder on every disk
+# (SPEC.md 92.6) - which is WEAVE's and LOOM's rule for the same reason.
+#
+# IT IS A SUBFOLDER AND NOT THE ROOT, and the build refused the other way round
+# before it was: the 1.44MB set is 36 band files plus the package and the module,
+# and os88disk.py stops at "38 listed root entries; the kernel lists at most 32
+# per directory". `--deep-folders` lifts that cap for a SUBFOLDER only - the
+# Disk window then shows the first 31 rows and the file API reaches them all -
+# so LEMMINGS.O88 and LEMMINGS.OVL are passed FIRST and are therefore the first
+# two rows the user sees, which is the whole of what those 31 rows have to
+# carry. The 720KB and 360KB disks are inside the cap anyway; the flag costs
+# them nothing and having one rule shape for all four is worth more than
+# omitting it on two.
+#
+# The band files are globbed IN THE RECIPE rather than by $(wildcard), because
+# wildcard is evaluated when the Makefile is READ and this directory is written
+# by the prerequisite above. The content differs per geometry on purpose: the
+# 720KB disk carries everything except the four VGASPEC pictures and the 360KB
+# one two graphic sets and the levels that use them, each stated in that disk's
+# own LEVELS.TXT and greyed in the chooser with the fact (SPEC.md 92.9).
+#
+# --verify is a standalone structural fsck of what came out and it is in the
+# recipe rather than a separate target because it costs milliseconds and catches
+# the class of defect - a bad FAT chain, a directory entry pointing at nothing -
+# that otherwise arrives as "Disk error" inside the emulator ten minutes later.
+# ...AND README.TXT, which is not decoration: SPEC.md 92.2 and the port's
+# licence posture put the FULL attribution list - the original's own seven
+# credit lines and the Psygnosis copyright - beside the package, because the
+# About card is twelve rows and names the two principals and points HERE. A
+# disk without it is a product whose stated attribution exists nowhere on it.
+# apps/c64/README.TXT + COPYING is the worked precedent.
+LEMPKG  := $(BUILD)/lemmings.o88 $(BUILD)/LEMMINGS.OVL apps/lemmings/README.TXT
+LEMHEAD := $(addprefix LEMMINGS:,$(LEMPKG))
+
+# ...AND SYSTEM/APPDATA ON EVERY ONE OF THEM (SPEC.md 19.9), which is the rule
+# stated at APPDATAFOLDER's own definition above - "every disk that carries an
+# application carries it too" - and which the FTPD disk records the cost of
+# breaking (the note above ftpapps.img: the setting worked all session and was
+# gone on the next launch, for a whole run). Here it is worse than invisible:
+# lemovl.c's ovl_data_enter() dives SYSTEM then APPDATA on the LAUNCHING volume,
+# so with no such folder it refuses on EVERY geometry, lem_savable stays 0
+# forever and the Save Progress row greys with LEMS_GREY_SAVE - a sentence about
+# a live CD, in front of a reader with a writable floppy in B: and no CD in the
+# machine. It also falsifies the SECOND greyed fact beside it: LEMS_GREY_CODE
+# says the original's access codes were dropped because progress is kept in
+# SYSTEM/APPDATA/LEMMINGS.SAV instead, which cannot work on a disk with no such
+# folder. One directory cluster a disk; --verify prints what is left.
+#
+# IT GOES LAST, and that is argparse rather than taste (the note above APPSARGS):
+# an option that takes a value in the MIDDLE of a positional list stops the list
+# being collected, and the band files are that list.
+$(BUILD)/lemmings.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 --deep-folders $(LEMHEAD) \
+		$$(for f in $(LEMBANDDIR)/1440/*; do echo "LEMMINGS:$$f"; done) \
+		$(APPDATAFOLDER)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/lemmings720.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 --deep-folders $(LEMHEAD) \
+		$$(for f in $(LEMBANDDIR)/720/*; do echo "LEMMINGS:$$f"; done) \
+		$(APPDATAFOLDER)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/lemmings120.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 --deep-folders $(LEMHEAD) \
+		$$(for f in $(LEMBANDDIR)/1200/*; do echo "LEMMINGS:$$f"; done) \
+		$(APPDATAFOLDER)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/lemmings360.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --deep-folders $(LEMHEAD) \
+		$$(for f in $(LEMBANDDIR)/360/*; do echo "LEMMINGS:$$f"; done) \
+		$(APPDATAFOLDER)
+	@python3 tools/os88disk.py --verify $@
+
+lemmingsdisk: $(BUILD)/lemmings.img $(BUILD)/lemmings720.img \
+              $(BUILD)/lemmings120.img $(BUILD)/lemmings360.img
 
 # =============================================================================
 # FROTZ and its story floppy (SPEC.md 61) - ON DEMAND: `make zdisk`

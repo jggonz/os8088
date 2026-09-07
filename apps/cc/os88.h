@@ -117,11 +117,17 @@
  *   OSAPI_XMEM_*                          every argument and answer is a
  *     32-bit linear base, and there is no 32-bit type here (rule 4). The one
  *     part of the API that C genuinely cannot hold.
- *   OSAPI_FSX_*                           the exclusive bracket (SPEC.md 53)
- *     hands control to a near proc of yours and then forbids every drawing
- *     slot until it returns. The rules are the whole feature and none of them
- *     is checkable from C. (OSAPI_FULLSCREEN, the WINDOW latch of SPEC.md
- *     11.2, is a different thing and IS wrapped: os88_fullscreen() below.)
+ *   OSAPI_FSX_*                           WRAPPED NOW, and only behind
+ *     %define CC_HAS_FSX - see "the exclusive bracket" below. This entry used
+ *     to say the bracket was not wrappable because "the rules are the whole
+ *     feature and none of them is checkable from C". The rules have not
+ *     changed and are still not checkable; what changed is that a C package
+ *     needs the bracket (SPEC.md 92), and seven far calls hand-written in
+ *     each package's own shim would rediscover the ES fence, the info-block
+ *     layout and the int 16h fallback once per package. Gated, so a package
+ *     that does not say CC_HAS_FSX does not carry a byte of it.
+ *     (OSAPI_FULLSCREEN, the WINDOW latch of SPEC.md 11.2, is a different
+ *     thing and is wrapped unconditionally: os88_fullscreen() below.)
  *   OSAPI_GFX_LINIT / LSTEP / LSTEPV      a resumable Bresenham whose state
  *     block is explicitly not yours to read (SPEC.md 5.6.7).
  *   OSAPI_SYS_SNAPSHOT / CLAIM_SNAPSHOT / SYS_KB   buffer layouts that the
@@ -727,6 +733,109 @@ int os88_wm_wake(void *win);
  * meanwhile - and 11.2.1's F/Esc is the convention; a terminal that owns both
  * keys states its own chord (74.2). NOT the exclusive bracket of SPEC.md 53. */
 int os88_fullscreen(void *win, int enter);
+
+/* --- the exclusive bracket (SPEC.md 53) -----------------------------------
+ * BEHIND %define CC_HAS_FSX. Nothing below is assembled into a package that
+ * does not ask for it, which is why the gate is not optional: crt0.asm
+ * %includes os88thunk.asm whole, so an ungated thunk costs every existing C
+ * package image bytes it has no use for.
+ *
+ * The bracket is the app BORROWING THE MACHINE. os88_fsx_run() is called from
+ * a callback (the UI task, the gfx lock held) and does not return until your
+ * os88_fsx_main(win) rets; while it runs the scheduler passes only this task
+ * and its kept worker, the video mode is yours to change, and the desktop
+ * comes back on the way out with nothing for you to undo.
+ *
+ * WHAT IS STILL YOURS TO GET RIGHT, because none of it is checkable from C:
+ *   - EVERY KERNEL DRAWING SLOT IS REFUSED INSIDE THE BRACKET. os88_gfx_*,
+ *     os88_font_*, the window slots: all of them. You draw by writing the
+ *     framebuffer segment os88_fsx_mode() hands you, from assembly of your
+ *     own (SPEC.md 73.11 - the inner loop is never C).
+ *   - so is a kernel TOAST: it paints desktop geometry into a foreign mode.
+ *     Force any overlay you need resident BEFORE you enter (SPEC.md 92.5).
+ *   - never take the gfx lock (you are holding it) and never call
+ *     os88_task_alive().
+ *   - the FILE API IS LEGAL mid-bracket, and so are the sound grants this
+ *     instance already holds (SPEC.md 53.1).
+ *   - stack a SPEC.md 11.2 fullscreen window under it if you want the whole
+ *     screen back on the way out looking like your app rather than like the
+ *     desktop; apps/missile is the worked example. */
+
+/* The block os88_fsx_mode() fills - the kernel's FSI layout, field for field,
+ * so the header checks its own size below. Text modes take FSI_W/H as columns
+ * and rows and answer bpp 0. */
+struct os88_fsi {
+    unsigned seg;                                /* framebuffer segment */
+    unsigned w, h;                               /* pixels (text: cols, rows) */
+    unsigned stride;                             /* bytes per row */
+    unsigned char flags;                         /* OS88_FSIF_* */
+    unsigned char bpp;                           /* bits per pixel (text: 0) */
+    unsigned char banks;                         /* interleaved banks, 1 =
+                                                  * linear (CGA and Hercules
+                                                  * are NOT) */
+    unsigned char pages;                         /* display pages */
+    unsigned bstep;                              /* bank step bytes, 0 linear */
+    unsigned char mode;                          /* the OS88_FSXM_* id back */
+    unsigned char rsvd;
+};
+/* The self-check is a TYPEDEF and not the `static char` the three above are,
+ * because those three predate a gated section: a static costs one byte of bss
+ * in every C package that includes this header, and the whole claim being
+ * made for CC_HAS_FSX is that a package which does not ask for the bracket
+ * pays nothing for it. A typedef is checked and occupies no storage. */
+typedef char os88__sz_fsi[sizeof(struct os88_fsi) == 16 ? 1 : -1];
+
+#define OS88_FSXM_TEXT80  0                      /* 80x25 text  VGA CGA HERC */
+#define OS88_FSXM_TEXT40  1                      /* 40x25 text  VGA CGA      */
+#define OS88_FSXM_CGA320  2                      /* 320x200x4   VGA CGA      */
+#define OS88_FSXM_CGA640  3                      /* 640x200x2   VGA CGA      */
+#define OS88_FSXM_HERC    4                      /* 720x348 mono        HERC */
+#define OS88_FSXM_VGA0D   5                      /* 320x200x16 planar VGA    */
+#define OS88_FSXM_VGA13   6                      /* 320x200x256       VGA    */
+#define OS88_FSXM_VGA12   7                      /* 640x480x16        VGA    */
+#define OS88_FSXM_MODEX   8                      /* 320x240x256       VGA    */
+
+#define OS88_FSIF_TEXT    1
+#define OS88_FSIF_PLANAR  2
+#define OS88_FSIF_BANKED  4
+
+#define OS88_FSXF_KEEPWORKER 1                   /* os88_fsx_run() flags */
+#define OS88_FSXF_FASTTICK   2                   /* IRQ0 three times a tick */
+
+#define OS88_FSXW_TICK    0                      /* os88_fsx_wait() kinds */
+#define OS88_FSXW_VSYNC   1                      /* SPINS */
+#define OS88_FSXW_FRAME   2                      /* YIELDS - use it with a
+                                                  * kept worker */
+
+/* Which OS88_FSXM_* ids the display THIS WINDOW is on can set: bit n = id n.
+ * *kind comes back as OS88_VID_*. Pass your own window - a package's entry
+ * proc has none yet and would be told about the window it was launched from.
+ * The bit that greys your mode row is the bit os88_fsx_mode() refuses on,
+ * which is SPEC.md 47 rule 4's one predicate for both. */
+int os88_fsx_caps(void *win, unsigned char *kind);
+
+/* Take the machine. Calls os88_fsx_main(win); 0 = it ran and the desktop is
+ * back, -1 = refused with nothing changed. Needs CC_HAS_FSX, which is also
+ * what declares the callback. */
+int os88_fsx_run(void *win, int flags);
+
+/* Set a foreign mode and describe it. Legal MORE THAN ONCE inside one
+ * bracket - a program whose game raster and whose text screens are different
+ * shapes changes mode between them. 0 = set, -1 = refused. */
+int os88_fsx_mode(int id, struct os88_fsi *fsi);
+
+int os88_fsx_wait(int kind);                     /* the frame clock */
+int os88_fsx_page(int page);                     /* flip, latched at retrace */
+int os88_fsx_surf(struct os88_rect *r);          /* the rect you own */
+
+/* Read the keyboard, which is the one thing inside the bracket that has no
+ * slot at all and should not have one: no event is dispatched here, and the
+ * contract is that the app polls. wait == 0 peeks and answers 0 when nothing
+ * is there. The answer is (scan << 8) | ascii. It uses the enhanced BIOS pair
+ * where the BIOS says it has one and the original pair where it does not - so
+ * F11 and F12 arrive on an AT and are ABSENT on an 83-key XT, which is a fact
+ * to grey with rather than a defect. */
+int os88_fsx_key(int wait);
 
 /* --- tasks and time (SPEC.md 8, 20.6) ------------------------------------- */
 void os88_task_yield(void);
