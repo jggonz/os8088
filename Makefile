@@ -3196,10 +3196,10 @@ $(BUILD)/wirecfg/WIRE.CFG: | $(BUILD)
 	@mkdir -p $(BUILD)/wirecfg
 	printf '10.0.2.2:8092/wire/\n' > $@
 
-$(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/wirecfg/SYSTEM.CFG $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
+$(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/wirecfg/SYSTEM.CFG $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/wirecfg/SYSTEM.CFG SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
 
 # THE DATA DISK IS SCRATCH AND CARRIES NO PACKAGE. It used to hold a second
@@ -3261,10 +3261,10 @@ ethertest: $(BUILD)/ether360.img
 	@echo "ethertest: build/ether360.img - the Ethernet driver already wanted."
 	@echo "           Run it with: python3 tests/ethernet.py"
 
-$(BUILD)/ether360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/system.cfg tools/os88disk.py
+$(BUILD)/ether360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/system.cfg
 
 # FTPDTEST: the FTP SERVER's gate disk (SPEC.md 77, docs/NET-STACK-PLAN.md
