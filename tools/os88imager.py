@@ -59,7 +59,7 @@ def boot_disks():
         raise ImagerError('Cannot resolve the APFS boot disk; refusing disk writes.')
     else:
         disks = {root.get('ParentWholeDisk') or
-                 (root.get('DeviceIdentifier') if root.get('Whole') else None)}
+                 (root.get('DeviceIdentifier') if root.get('WholeDisk') else None)}
     if not disks or None in disks:
         raise ImagerError('Cannot identify the boot disk; refusing disk writes.')
     return disks
@@ -68,7 +68,7 @@ def boot_disks():
 def disk_device(data, boot):
     dev = data.get('DeviceIdentifier', '')
     if (not re.fullmatch(r'disk\d+', dev) or dev in boot or
-            data.get('Whole') is not True or data.get('Internal') is not False or
+            data.get('WholeDisk') is not True or data.get('Internal') is not False or
             data.get('BusProtocol') != 'USB' or
             data.get('Writable') is not True):
         return None

@@ -15,7 +15,7 @@ import os88imager as imager
 
 
 def disk(**changes):
-    data = dict(DeviceIdentifier='disk4', Whole=True, Internal=False,
+    data = dict(DeviceIdentifier='disk4', WholeDisk=True, Internal=False,
                 BusProtocol='USB', Writable=True, RemovableMedia=True,
                 TotalSize=64 * 1024**2, MediaName='USB flash drive',
                 DeviceTreePath='IOService/USB/stick', MediaUUID='medium-1')
@@ -73,7 +73,7 @@ class ImagerTests(unittest.TestCase):
         self.assertTrue(errors)
 
     def test_reject_unsafe_or_unknown_disks(self):
-        for changes in ({'Internal': True}, {'Internal': None}, {'Whole': False},
+        for changes in ({'Internal': True}, {'Internal': None}, {'WholeDisk': False},
                         {'BusProtocol': 'Thunderbolt'}, {'Writable': False},
                         {'RemovableMedia': False}, {'DeviceIdentifier': 'disk4s1'},
                         {'TotalSize': 0}):
@@ -81,6 +81,32 @@ class ImagerTests(unittest.TestCase):
                 self.assertIsNone(imager.disk_device(disk(**changes), {'disk0'}))
         self.assertIsNone(imager.disk_device(disk(), {'disk4'}))
         self.assertEqual(imager.disk_device(disk(), {'disk0'})['kind'], 'usb')
+
+    def test_diskutil_usb_inventory_uses_whole_disk_key(self):
+        # Fields observed on the attached 16 GB USB stick. diskutil emits
+        # WholeDisk, not Whole; the latter silently hid every physical disk.
+        observed = {
+            'DeviceIdentifier': 'disk7', 'ParentWholeDisk': 'disk7',
+            'WholeDisk': True, 'Internal': False, 'BusProtocol': 'USB',
+            'RemovableMedia': True, 'Writable': True,
+            'TotalSize': 15728640000, 'MediaName': 'ProductCode',
+        }
+        with patch.object(imager, 'boot_disks', return_value={'disk0'}), \
+                patch.object(imager, 'plist', return_value={'WholeDisks': ['disk7']}), \
+                patch.object(imager, 'info', return_value=observed):
+            found = imager.disks()
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]['id'], 'disk7')
+        self.assertEqual(found[0]['kind'], 'usb')
+        self.assertEqual(found[0]['size'], 15728640000)
+        for value in (False, None):
+            self.assertIsNone(imager.disk_device(dict(observed, WholeDisk=value), {'disk0'}))
+        self.assertIsNone(imager.disk_device(observed, {'disk7'}))
+
+    def test_whole_boot_device_without_parent(self):
+        with patch.object(imager, 'info', return_value={
+                'DeviceIdentifier': 'disk7', 'WholeDisk': True}):
+            self.assertEqual(imager.boot_disks(), {'disk7'})
 
     def test_floppy_bridge_capacity_and_empty_drive(self):
         device = imager.disk_device(disk(MediaName='TEAC UF000x Media',
