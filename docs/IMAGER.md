@@ -18,6 +18,10 @@ existing images. Discovery is recursive and checks image headers and sizes,
 so application disks, alternate kernel builds and test images are included
 alongside the system disks. Invalid or unrelated `.img`/`.iso` files are omitted.
 The tool offers existing files; it does not build or download images.
+Run `make` for the standard floppies, or `make live` for USB and CD images.
+`make live` automatically sets up its missing C compiler and RunCPM data;
+the first build needs network access, Git and a host C compiler. These
+prerequisites are local to each worktree.
 
 | Medium | Images offered | Build examples |
 | --- | --- | --- |

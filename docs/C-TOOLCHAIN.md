@@ -94,8 +94,11 @@ to come back. `make clean-cc` removes it; `make distclean` calls that.
 
 **Nothing in `make` depends on any of this.** A checkout with no compiler
 builds every shipping floppy exactly as before and prints one note naming
-`tools/setup-cc.sh`. Asking for a C target on such a tree gets that same one
-line, not a failure inside a recipe.
+`tools/setup-cc.sh`. Asking for a C target automatically runs that setup
+script when any compiler binary is missing, then continues the build. The
+first run needs network access, Git and a host C compiler. An alternate
+`BUILD` directory gets its own compiler under `$(BUILD)/cc`; the setup script
+also accepts `--build-dir DIR` for explicit setup.
 
 ---
 

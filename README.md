@@ -144,9 +144,9 @@ make clean
 
 `make` builds the six shipping floppies and needs nothing but `nasm` and
 `python3`. The disks that carry the C applications — `cworddisk`,
-`runcpmdisk`, `allapps` and the live media (`make live`) — want the compiler
-first: `tools/setup-cc.sh`
-fetches and builds it into `build/cc`, and nothing else in the tree depends on
+`runcpmdisk`, `allapps` and the live media (`make live`) — automatically run
+`tools/setup-cc.sh` when the compiler is missing. It fetches and builds it
+into `build/cc`, and nothing else in the tree depends on
 it. `runcpmdisk`, `allapps` and `live` also fetch RunCPM's command processor
 and master disk (`make runcpm-src`), and `runcpmdisk` the CP/M software that
 rides beside it (`make cpmsw`); none of it is committed here.

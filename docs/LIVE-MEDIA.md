@@ -26,12 +26,10 @@ keeps them like a real hard disk.
 release built them. `SHA256SUMS` in the zip covers them.
 
 **From source:** the live media are an on-demand build — they carry the
-applications written in C, so they need the compiler the shipped floppies
-deliberately do not:
+applications written in C. Make automatically fetches and builds the pinned
+C compiler when missing, and downloads the RunCPM files it needs:
 
 ```
-tools/setup-cc.sh     # one-time: fetch and build the C compiler into build/cc
-make runcpm-src       # one-time: fetch the CP/M command processor and master disk
 make live             # build/os8088-usb.img + build/os8088.iso
 ```
 
