@@ -130,7 +130,7 @@ static int lem_str_load(void)
                                          * HAVE BEEN TRUNCATED, and a truncated
                                          * directory indexes strings that are
                                          * not there. It is 4,096 bytes today
-                                         * against an 8,192 buffer
+                                         * against a 5,120 buffer
                                          * (docs/lemband-format.md), so this
                                          * refuses rather than half-working the
                                          * day somebody adds 4KB of greying
@@ -407,7 +407,7 @@ static void lem_para_fmt(const char *fmt)
 
 /* lem_wrap - greedy word wrap to the live content width. Words longer than the
  * width are broken rather than dropped, because a file name in a greying fact
- * ("LEMSPC2.LEM is not on a 720KB disk...") is exactly the kind of word that is
+ * ("LEMSP2_0.LEM is not on a 720KB disk...") is exactly the kind of word that is
  * longer than a narrow pane and is the whole point of the sentence. */
 static void lem_wrap(void)
 {

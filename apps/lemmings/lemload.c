@@ -257,3 +257,317 @@ static int lem_data_load(void)
     }
     return lem_rating_load(0);
 }
+
+/* ============================================================================
+ * WAVE 2: THE CLAIMS AND THE BANK READER (SPEC.md 92.6.1)
+ *
+ * Everything above reads a small file into bss. Everything here reads a BANK -
+ * 32 KB to 96 KB - into a HEAP CLAIM through os88_file_read_seg(), which is
+ * the only call in the SDK that can move that much: os88_file_read() takes a
+ * DS-relative buffer and this package's whole image and bss cap at 60 KB
+ * (APP_MAX_SIZE), and os88_file_read_at()'s offset and cap must each be a whole
+ * number of CLUSTERS, which is 512 bytes on two geometries, 1,024 on the other
+ * two and neither of those on the RAM disk The Wire unpacks this onto
+ * (SPEC.md 92.3.2).
+ *
+ * A _seg BASE MUST BE 512-BYTE ALIGNED (SPEC.md 2.1.1, apps/cc/os88.h): a
+ * claim's own base is, and so is any offset into it that is a multiple of
+ * 0x200 - seg + 0x20, + 0x40 - but seg + 0x10 is NOT, and int 13h answers a run
+ * that then straddles a 64 KB physical page with error 09h ON REAL HARDWARE,
+ * which QEMU never shows (LESSONS.md 13 paid for this one in RunCPM). Every
+ * part is 64,512 bytes = 4,032 paragraphs, so part p lands at seg + p * 4032
+ * and the rule is met by construction rather than by arithmetic.
+ *
+ * CLAIM RECORDS ARE A BUDGET TOO and this is where they are counted:
+ * kernel/memory.inc gives MEM_MAX = 32 on kern_big and 20 on kern_small,
+ * SYSTEM-WIDE, shared with every Disk window and driver already open. This
+ * program takes THREE on a VGA and FIVE on the two 1bpp adapters, plus the
+ * package's own region and the overlay module's, and says so in its refusal.
+ * ==========================================================================*/
+
+/* The claim sizes, in KB, and every one of them is arithmetic rather than a
+ * round number:
+ *
+ *   MASK    the solid mask, 200 bytes x 160 rows = 32,000 (lemmask.inc)
+ *   BANK    the largest STYLE bank of the five - set 1 at 96,804 - which is
+ *           what it has to hold whichever level is played, and which also
+ *           holds a 76,800-byte VGASPEC picture in wave 4
+ *   MAIN    LEMMAIN.LEM, 52,224 on every geometry
+ *   WORLD   the 1bpp/2bpp world picture: CGA 400 bytes x 160 = 64,000,
+ *           Hercules 200 x 160 = 32,000. VGA has none - its world lives in
+ *           VRAM, which is the whole point of the mode 0Dh backend
+ *   SHADOW  the composed screen on those two, 80 bytes x 200 rows = 16,000
+ *   REC     transient, and freed before the level starts: one LEMLV<n>.LEM,
+ *           16,384 bytes, read whole because the record inside it is at a
+ *           2,048-byte offset that os88_file_read_at() cannot express on
+ *           every medium (see the header above) */
+#define LEM_KB_MASK    32
+#define LEM_KB_BANK    96
+#define LEM_KB_MAIN    52
+#define LEM_KB_WORLD_C 63
+#define LEM_KB_WORLD_H 32
+#define LEM_KB_SHADOW  16
+#define LEM_KB_REC     16
+
+static unsigned lem_cl_mask;
+static unsigned lem_cl_bank;
+static unsigned lem_cl_main;
+static unsigned lem_cl_world;       /* 0 on VGA */
+static unsigned lem_cl_shadow;      /* 0 on VGA */
+static int      lem_claimed;
+static int      lem_bank_have;      /* the style in lem_cl_bank, or -1 */
+static int      lem_main_have;
+
+/* lem_far - a dword offset inside a claim as a SEGMENT and a 0..15 offset.
+ *
+ * A bank is bigger than a segment, so a piece's offset genuinely needs 32 bits
+ * and this dialect has no `long` (docs/C-TOOLCHAIN.md). The two halves are read
+ * as words and the segment is base + (hi << 12) + (lo >> 4), which is
+ * base + off/16 without ever forming off. lem_far_off() is the remainder.
+ *
+ * IT ANSWERS THROUGH A STATIC because half of this API is out-parameters and
+ * every one of them is a static (rule 1, LESSONS.md 4). */
+static unsigned lem_far_seg;
+static unsigned lem_far_off;
+
+static void lem_far(unsigned base, int lo, int hi)
+{
+    lem_far_seg = base + ((unsigned)hi << 12) + ((unsigned)lo >> 4);
+    lem_far_off = (unsigned)lo & 15;
+}
+
+/* lem_pk / lem_pk16 - one byte or one little-endian word out of a claim.
+ *
+ * ~11 us of near call each (apps/cc/os88.h), so this is right for a HEADER and
+ * wrong for a copy. The whole of what it reads is the bank headers and the
+ * terrain list, which is ~600 reads once per level; the pixels are moved by
+ * the assembly rasters, which take a segment. */
+static int lem_pk(unsigned seg, unsigned off)
+{
+    return os88_peek(seg, off) & 0xFF;
+}
+
+static int lem_pk16(unsigned seg, unsigned off)
+{
+    return lem_pk(seg, off) | (lem_pk(seg, off + 1) << 8);
+}
+
+/* lem_claim_all - the three or five claims, or 0 with the arithmetic said.
+ *
+ * IT IS ALL OR NOTHING. A program that got the mask and not the bank would
+ * refuse later, further in, with the machine already in a foreign mode - so
+ * every claim is taken here, before the bracket, and a refusal frees what it
+ * got and answers 0 with a sentence the user can act on (SPEC.md 47,
+ * WEAVE-SPEC 1.4's precedent). */
+static int lem_claim_all(void)
+{
+    if (lem_claimed)
+        return 1;
+    lem_cl_mask = os88_mem_claim(LEM_KB_MASK);
+    if (lem_cl_mask == 0)
+        return 0;
+    lem_cl_bank = os88_mem_claim(LEM_KB_BANK);
+    if (lem_cl_bank == 0) {
+        lem_free_all();
+        return 0;
+    }
+    lem_cl_main = os88_mem_claim(LEM_KB_MAIN);
+    if (lem_cl_main == 0) {
+        lem_free_all();
+        return 0;
+    }
+    if (lem_kind_id() != LEM_RKIND_VGA) {
+        lem_cl_world = os88_mem_claim(lem_kind_id() == LEM_RKIND_CGA
+                                      ? LEM_KB_WORLD_C : LEM_KB_WORLD_H);
+        if (lem_cl_world == 0) {
+            lem_free_all();
+            return 0;
+        }
+        lem_cl_shadow = os88_mem_claim(LEM_KB_SHADOW);
+        if (lem_cl_shadow == 0) {
+            lem_free_all();
+            return 0;
+        }
+    }
+    lem_claimed = 1;
+    lem_bank_have = -1;
+    lem_main_have = 0;
+    return 1;
+}
+
+static void lem_free_all(void)
+{
+    if (lem_cl_shadow)
+        os88_mem_free(lem_cl_shadow);
+    if (lem_cl_world)
+        os88_mem_free(lem_cl_world);
+    if (lem_cl_main)
+        os88_mem_free(lem_cl_main);
+    if (lem_cl_bank)
+        os88_mem_free(lem_cl_bank);
+    if (lem_cl_mask)
+        os88_mem_free(lem_cl_mask);
+    lem_cl_shadow = 0;
+    lem_cl_world = 0;
+    lem_cl_main = 0;
+    lem_cl_bank = 0;
+    lem_cl_mask = 0;
+    lem_claimed = 0;
+    lem_bank_have = -1;
+    lem_main_have = 0;
+}
+
+/* lem_need_kb - what this adapter's claims add up to, for the refusal to say.
+ * The package's own region and the module's are NOT in it: the kernel already
+ * granted those or this code would not be running. */
+static int lem_need_kb(void)
+{
+    int n = LEM_KB_MASK + LEM_KB_BANK + LEM_KB_MAIN;
+
+    if (lem_kind_id() != LEM_RKIND_VGA)
+        n += LEM_KB_SHADOW + (lem_kind_id() == LEM_RKIND_CGA
+                              ? LEM_KB_WORLD_C : LEM_KB_WORLD_H);
+    return n;
+}
+
+/* lem_parts_read - a banded file, part after part, into ONE claim.
+ *
+ * `base` is the 8.3 stem without its extension ("LEMGR0", "LEMMAIN"), already
+ * in lem_f_scratch. A bank of ONE part keeps its plain name and a bank of more
+ * is numbered, which is the converter's own rule (docs/lemband-format.md) and
+ * the reason this takes the part count rather than probing for files.
+ *
+ * 0 = a part was short or missing, which means the disk is not the one the
+ * manifest describes; the caller says so and stays in the window. */
+static int lem_parts_read(int nparts, unsigned seg)
+{
+    int p, n, i;
+
+    if (nparts < 1)
+        nparts = 1;
+    for (p = 0; p < nparts; p++) {
+        i = 0;
+        while (lem_f_scratch[i] != 0)
+            i++;
+        if (nparts > 1) {
+            lem_f_scratch[i++] = '_';
+            lem_f_scratch[i++] = (char)('0' + p);
+        }
+        lem_f_scratch[i++] = '.';
+        lem_f_scratch[i++] = 'L';
+        lem_f_scratch[i++] = 'E';
+        lem_f_scratch[i++] = 'M';
+        lem_f_scratch[i] = 0;
+        /* 4,032 paragraphs a part: 64,512 bytes, which is 126 sectors, so
+         * every part's base is 512-aligned by construction (see the header). */
+        n = os88_file_read_seg(lem_f_scratch, seg + (unsigned)p * 4032,
+                              (unsigned)LEM_PARTMAX);
+        if (n == 0)
+            return 0;
+        while (i > 0 && lem_f_scratch[i] != '_')
+            i--;
+        if (nparts > 1 && lem_f_scratch[i] == '_')
+            lem_f_scratch[i] = 0;
+        else {
+            i = 0;
+            while (lem_f_scratch[i] != 0 && lem_f_scratch[i] != '.')
+                i++;
+            lem_f_scratch[i] = 0;
+        }
+    }
+    return 1;
+}
+
+/* lem_stem - "LEMGR<n>" or "LEMMAIN" into lem_f_scratch, ready for
+ * lem_parts_read to hang a part number and an extension off. */
+static void lem_stem_gr(int n)
+{
+    lem_f_scratch[0] = 'L';
+    lem_f_scratch[1] = 'E';
+    lem_f_scratch[2] = 'M';
+    lem_f_scratch[3] = 'G';
+    lem_f_scratch[4] = 'R';
+    lem_f_scratch[5] = (char)('0' + (n & 7));
+    lem_f_scratch[6] = 0;
+}
+
+static void lem_stem_main(void)
+{
+    lem_f_scratch[0] = 'L';
+    lem_f_scratch[1] = 'E';
+    lem_f_scratch[2] = 'M';
+    lem_f_scratch[3] = 'M';
+    lem_f_scratch[4] = 'A';
+    lem_f_scratch[5] = 'I';
+    lem_f_scratch[6] = 'N';
+    lem_f_scratch[7] = 0;
+}
+
+/* lem_main_read - LEMMAIN.LEM into its claim, once per session. It is the same
+ * bytes for every level, so a retry or the next level does not re-read it -
+ * which matters because it is 52 KB and ~130 int 13h calls on the target. */
+static int lem_main_read(void)
+{
+    if (lem_main_have)
+        return 1;
+    /* ONE PART, always: LEMMAIN.LEM is 52,224 bytes on every geometry and
+     * WIRE_FILEMAX is 64,512, so it keeps its plain name (the converter's own
+     * rule - a bank that fits one part is not numbered). If it ever grows past
+     * that, the converter refuses on the host before this could read half of
+     * it (tools/os88lem.py's Disk.add). */
+    lem_stem_main();
+    if (!lem_parts_read(1, lem_cl_main))
+        return 0;
+    if (lem_pk(lem_cl_main, 0) != 'L' || lem_pk(lem_cl_main, 1) != 'M' ||
+        lem_pk(lem_cl_main, 2) != 'N' || lem_pk(lem_cl_main, 3) != 'B')
+        return 0;
+    lem_main_have = 1;
+    return 1;
+}
+
+/* lem_bank_read - one STYLE bank into its claim, and only when it is not
+ * already the one in there. Five sets, one claim, and a level is much more
+ * likely to reuse the last style than not (the four ratings are grouped by
+ * difficulty, not by set, but a retry always is). */
+static int lem_bank_read(int style)
+{
+    if (lem_bank_have == style)
+        return 1;
+    lem_bank_have = -1;
+    if (style < 0 || style > 4)
+        return 0;
+    lem_stem_gr(style);
+    if (!lem_parts_read(lem_cost_parts(LEM_BANK_STYLE, style), lem_cl_bank))
+        return 0;
+    if (lem_pk(lem_cl_bank, 0) != 'L' || lem_pk(lem_cl_bank, 1) != 'G' ||
+        lem_pk(lem_cl_bank, 2) != 'R' || lem_pk(lem_cl_bank, 3) != 'B')
+        return 0;
+    if (lem_pk(lem_cl_bank, LEM_GR_STYLE) != style)
+        return 0;
+    lem_bank_have = style;
+    return 1;
+}
+
+/* lem_item - one LEMMAIN item's segment and offset, into lem_far_seg/off.
+ * 0 = this bank does not carry it, which is how a wave that has not converted
+ * its item yet finds out rather than drawing a bank header as a bitmap. */
+static int lem_item(int id)
+{
+    int i, off;
+
+    if (!lem_main_have)
+        return 0;
+    for (i = 0; i < 16; i++) {
+        off = LEM_MN_ITEMS + i * LEM_MN_ISTRIDE;
+        if (lem_pk(lem_cl_main, off + LEM_MI_ID) != id)
+            continue;
+        if (lem_pk16(lem_cl_main, off + LEM_MI_NBYTES) == 0 &&
+            lem_pk16(lem_cl_main, off + LEM_MI_NBYTES + 2) == 0)
+            return 0;
+        lem_far(lem_cl_main,
+                lem_pk16(lem_cl_main, off + LEM_MI_OFF),
+                lem_pk16(lem_cl_main, off + LEM_MI_OFF + 2));
+        return 1;
+    }
+    return 0;
+}

@@ -96,6 +96,16 @@ UNREGISTERED = {
     #     two-build session rather than a row (the knob itself is kept alive
     #     by t_buildmatrix; this is the behaviour half) ---
     "heapsame.py": "A/B gate - needs `make HEAPCOMPACT=0` as a reference build",
+
+    # --- an INSTRUMENT rather than a gate: it produces a TABLE for a person
+    #     to read, has no pass or fail, and takes minutes ---
+    "lembenchmarty.py": "runs tests/lembench on MartyPC and writes a PNG of the "
+                       "bench's own screen for a person to read (SPEC.md "
+                       "92.7.1). It needs `make lembench` AND build/martypc, "
+                       "takes ~5 minutes a machine, and has no assertion in "
+                       "it at all - what it produces is the microsecond table "
+                       "SPEC.md and PERFORMANCE.md quote. tools/os88boot.py "
+                       "is the same kind of thing one directory along",
     "swcolsame.py": "A/B gate - needs `make NOCOLFAST=1` as a reference build",
     # pkgthumb.py IS registered (four rows). Its `frotz` mode is not one of
     # them: a Z-machine interpreter needs a STORY, and the two ways to get one

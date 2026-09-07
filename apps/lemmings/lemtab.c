@@ -183,9 +183,11 @@ static const struct lem_staterow lem_state[LEM_STATE_ROWS] = {
 /* --- the five style names and the four rating names -------------------------
  * Style names come out of the LVL format document, which is the only reference
  * that names the DOS sets at all: "0x0000 is dirt, 0x0001 is fire, 0x0002 is
- * squasher, 0x0003 is pillar, 0x0004 is crystal". They are lowercase there and
- * lowercase in the band, so the preview reads "Style dirt" (tools/os88lem.py
- * carries the citation). Rating names are Lemmix Styles.Dos.pas SectionTable's.
+ * squasher, 0x0003 is pillar, 0x0004 is crystal". They are LOWERCASE PROSE
+ * there and the band CAPITALISES them, so the preview reads "Style Dirt" beside
+ * "Rating Fun" rather than disagreeing with itself one row along - a departure
+ * SPEC.md 92.1 records as deliberate, in the wording tools/os88lem.py carries.
+ * Rating names are Lemmix Styles.Dos.pas SectionTable's.
  * These are the id maps, not the strings. */
 static const unsigned char lem_style_str[5] = {
     LEMS_STYLE0, LEMS_STYLE1, LEMS_STYLE2, LEMS_STYLE3, LEMS_STYLE4
@@ -194,6 +196,95 @@ static const unsigned char lem_style_str[5] = {
 static const unsigned char lem_rating_str[LEM_RATINGS] = {
     LEMS_RATING0, LEMS_RATING1, LEMS_RATING2, LEMS_RATING3
 };
+
+/* --- the STYLE BANK, LEMGR<n>[_<part>].LEM, magic "LGRB" --------------------
+ * tools/os88lem.py's docstring pins this byte for byte and this is the reader's
+ * half of it. Two facts shape everything below:
+ *
+ *   NO STYLE BANK FITS ONE 64,512-byte file. The smallest is 78,732 and set 1
+ *   is 96,804, so every one of the five is written as NUMBERED PARTS
+ *   (SPEC.md 92.3.2's own mechanism) that the package reads in sequence into
+ *   ONE claim at successive 512-aligned offsets. Part p starts at logical
+ *   offset p * 64,512, which is 4,032 paragraphs - exact, because 64,512 is
+ *   itself 126 sectors.
+ *
+ *   A PIECE'S OFFSET IS A DWORD, and it has to be: the bank is bigger than a
+ *   segment. lem_far() turns one into a segment and a 0..15 offset, which is
+ *   what the assembly rasters take.
+ *
+ * A terrain piece is FOUR PLANES of w*h/8 bytes and PLANE 3 IS THE MASK, which
+ * is what makes the stored nibble the mode-0Dh colour directly: planes 0-2 are
+ * the style's 0-7 and plane 3 lifts it into the level's 8-15
+ * (docs/lemband-format.md). An object frame is FIVE - four colour and a mask. */
+#define LEM_GR_MAGIC      0        /* "LGRB" */
+#define LEM_GR_VERSION    4
+#define LEM_GR_STYLE      6
+#define LEM_GR_NTER       7        /* USED pieces; the table still has 64 rows */
+#define LEM_GR_NOBJ       8
+#define LEM_GR_PARTS      9
+#define LEM_GR_TOTLEN    10        /* dword: bytes before the last part's pad */
+#define LEM_GR_CUSTOM    32        /* 8 x 3, the LEVEL's colours -> 8..15 */
+#define LEM_GR_STDPAL    56        /* 8 x 3, the lemmings' and the panel's */
+#define LEM_GR_TERTAB   128        /* 64 rows of 8 */
+#define LEM_GR_OBJTAB   640        /* 16 rows of 16 */
+#define LEM_GR_TERROWS   64
+#define LEM_GR_TERSTRIDE  8
+#define LEM_GT_W          0
+#define LEM_GT_H          1
+#define LEM_GT_OFF        2        /* dword, from the START of the logical bank */
+#define LEM_GT_NBYTES     6
+
+/* --- the MAIN BANK, LEMMAIN.LEM, magic "LMNB" -------------------------------
+ * Ten items in a sixteen-row table, each a dword offset and a dword length. The
+ * two this wave draws are item 0, the 320x40 4bpp skill panel (MAIN.DAT section
+ * 6 offset 0), and item 1, the 38-glyph 8x16 3bpp green status font (section 6
+ * offset 0x1900). The other eight - the animations, the destruction masks, the
+ * rating signs, the purple font and the brown background - arrive with the
+ * waves that draw them. */
+#define LEM_MN_MAGIC      0        /* "LMNB" */
+#define LEM_MN_NITEMS     6
+#define LEM_MN_PARTS      7
+#define LEM_MN_ITEMS     32        /* 16 rows of 16 */
+#define LEM_MN_ISTRIDE   16
+#define LEM_MI_ID         0
+#define LEM_MI_BPP        1
+#define LEM_MI_W          2
+#define LEM_MI_H          4
+#define LEM_MI_FRAMES     6
+#define LEM_MI_OFF        8        /* dword */
+#define LEM_MI_NBYTES    12        /* dword */
+
+#define LEM_ITEM_PANEL     0
+#define LEM_ITEM_STATFONT  1
+#define LEM_ITEM_DIGITS    2
+#define LEM_ITEM_ANIM      3
+#define LEM_ITEM_MASKS     4
+#define LEM_ITEM_SIGNS     5
+#define LEM_ITEM_PURPLE    6
+#define LEM_ITEM_BROWN     7
+#define LEM_ITEM_ANIMTAB   8
+#define LEM_ITEM_MASKTAB   9
+
+/* --- the RAW LEVEL RECORD, LEMLV<n>.LEM ------------------------------------
+ * Eight 2,048-byte records back to back, no header, ODDTABLE already folded
+ * into the RATING entry (docs/lemband-format.md). EVERY MULTI-BYTE FIELD IN
+ * HERE IS BIG-ENDIAN - it is the original's own .LVL record, untouched - which
+ * is why lemovl.c reads it a byte at a time and never with lem_u16().
+ *
+ * The terrain list is 400 four-byte slots; a slot whose first WORD is 0xFFFF is
+ * SKIPPED and never breaks the walk (SPEC.md 92.3.1: it is Taxing 27, 'Call in
+ * the bomb squad', whose slot 68 holds 0xFFFF22A6 and whose slots 69-399 hold
+ * 327 further normal entries - breaking renders it with 68 pieces of 395). */
+#define LEM_LVL_SIZE   2048
+#define LEM_LVL_TERR  0x120        /* 400 slots of 4 */
+#define LEM_LVL_NTERR   400
+#define LEM_LVL_STEEL 0x760        /* 32 slots of 4 */
+#define LEM_LVL_GROUP     8        /* records per LEMLV<n>.LEM */
+
+/* WIRE_FILEMAX (SPEC.md 88.13, 92.3.2): no band file exceeds this, which is
+ * what makes a bank's parts land at exact 4,032-paragraph boundaries and what
+ * every os88_file_read_seg() below is capped at. */
+#define LEM_PARTMAX   64512u
 
 /* --- the seven preview lines, in the original's order -----------------------
  * Lemmix GameScreen.Preview.pas GetScreenLinesAndColors and Base.Strings.pas

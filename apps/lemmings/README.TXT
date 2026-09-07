@@ -83,6 +83,55 @@ tools/getlemmings.py, pinned by SHA-256, and are never committed to the
 os8088 source tree. tools/os88lem.py turns them into the band files listed
 above, so that the 8086 does no bit-stream decoding at any point.
 
+HOW IT LOOKS ON EACH CARD, AND HOW FAST
+---------------------------------------
+On a VGA the level is drawn in mode 0Dh - 320x200 in the level's own sixteen
+colours - with the skill panel held still below a CRTC line compare while the
+terrain scrolls past it by hardware pel panning. On a CGA and an EGA it is
+mode 4, four colours; on a Hercules it is a 640x200 box in the middle of the
+720x348 screen. Neither of those two cards has the level's palette, so
+everything on them is drawn by COLOUR CLASS - the level's colours 1 to 7 are
+the lemmings', the objects' and the panel's, 8 to 15 are the terrain's, and 0
+is black - which is what keeps a lemming visible on top of terrain when there
+is no colour to tell them apart.
+
+What each card makes of those two classes is different, because the two cards
+are different. A CGA in mode 4 has two bits a pixel and three colours, so the
+terrain is drawn in one solid colour and the lemmings, objects and panel in
+another: nothing is dithered there. A Hercules has one bit a pixel and no
+colour at all, so the lemmings, objects and panel are solid and the terrain is
+a 50% dither.
+
+The minimap at the bottom right is the one place a colour is chosen rather
+than carried. On a VGA it is the original's own build-brick colour, with the
+white view rectangle over it. Those two are the same class on the other two
+cards - the rectangle would disappear into the map - so there the map is drawn
+in the terrain class and the rectangle in the other one, which keeps it
+readable. It is the only thing telling you where you are in a level 1,584
+pixels wide.
+
+Neither of those two cards can scroll, either, so the picture is composed in
+memory and blitted. That makes the scroll step 4 pixels on a CGA and 8 on a
+Hercules, against 1 on a VGA. It is a real difference and it is deliberate: a
+pixel-exact scroll on those cards would cost about 40% of every frame to make
+a scroll that is already smooth at 17 frames a second smoother.
+
+MEASURED on a 4.77 MHz 8088 (an IBM 5160, under a cycle-accurate emulator):
+one terrain probe is 192 microseconds on either card. On the VGA a scrolled
+frame is 755 microseconds, because the card does the scrolling; on the CGA it
+is 178 milliseconds, because the CPU does.
+
+Building a level's terrain out of its 400 pieces takes about 25 seconds on the
+VGA and 5 on the CGA. The skill panel and the word LOADING go down before that
+starts, and a bar creeps across the map window while it runs, because once the
+game has the machine the system cannot put a message on the screen for it. On
+a VGA the level is composed straight into the framebuffer the card is
+displaying, so you watch it build; on a CGA and a Hercules it is composed in
+memory and the screen stays black until it is done.
+
+This is a 1991 game on a 1981 processor and it plays at what that costs; the
+design record has the whole table.
+
 WHAT IS NOT HERE
 ----------------
 Music. ADLIB.DAT is a compiled x86 sound driver plus its data rather than a

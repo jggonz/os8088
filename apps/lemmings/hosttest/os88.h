@@ -19,10 +19,12 @@
  * COMMITTED SYNTHETIC FIXTURE, so the harness needs no network fetch and no
  * original data.
  *
- * WAVE 2 ADDS one named stub per assembly entry (lem_r_setup / mode / scroll /
- * sprite / present, lem_has_pixel / clear / set, lem_apply_mask, lem_dig_row)
- * and a byte-per-pixel frame model behind them, in the same edit as the .inc
- * files themselves.
+ * WAVE 2'S RASTER MODEL IS IN hosttest/lemraster.c, one named function per
+ * assembly entry over a byte-per-pixel model of the mask, the world and the
+ * screen - and a per-pixel WRITE COUNTER, which is what makes "no pixel is
+ * written twice in a frame" an assertion rather than a hope. The claims are
+ * modelled with it, because every raster entry takes a SEGMENT and lem_far()
+ * does real paragraph arithmetic on one.
  * ==========================================================================*/
 #ifndef OS88_H
 #define OS88_H
@@ -157,8 +159,60 @@ int  os88_fsx_mode(int id, struct os88_fsi *fsi);
 int  os88_fsx_wait(int kind);
 int  os88_fsx_key(int wait);
 
+/* memory beyond the region, and the two far accessors (SPEC.md 50.3) */
+unsigned os88_mem_claim(int kb);
+int      os88_mem_free(unsigned seg);
+unsigned os88_mem_largest_kb(void);
+unsigned os88_mem_total_kb(void);
+int      os88_peek(unsigned seg, unsigned off);
+void     os88_poke(unsigned seg, unsigned off, int value);
+
+/* input, and the fullscreen latch a bracket is stacked on (SPEC.md 11.2) */
+void os88_mouse(struct os88_mouse *m);
+int  os88_fullscreen(void *win, int enter);
+int  os88_fsx_page(int page);
+int  os88_fsx_surf(struct os88_rect *r);
+
+/* THE RASTER (SPEC.md 92.4). These are the entries apps/lemmings/lemblit.inc,
+ * lemmask.inc and lemfont.inc define in assembly; the harness defines the same
+ * names over a byte-per-pixel model in hosttest/lemraster.c, so a shim added
+ * without a stub beside it is a LINK error here rather than three steps later
+ * (LESSONS.md 4). */
+void lem_m_setup(unsigned maskseg);
+void lem_m_clear(void);
+int  lem_has_pixel(int x, int y);
+void lem_set_pixel(int x, int y);
+void lem_clear_pixel(int x, int y);
+int  lem_probe4(int x, int y, const char *offs);
+void lem_m_span(int x, int y, int w, int set);
+void lem_m_apply(unsigned seg, unsigned off, int x, int y, int w, int h);
+void lem_m_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
+                 int flags);
+void lem_m_derive(unsigned dstseg, int kind);
+void lem_r_setup(int kind, unsigned fbseg, unsigned worldseg,
+                 unsigned shadowseg);
+void lem_r_prep(void);
+void lem_r_unprep(void);
+void lem_r_pal(unsigned seg, unsigned stdoff, unsigned cusoff);
+void lem_r_clearworld(void);
+void lem_r_piece(unsigned seg, unsigned off, int x, int y, int w, int h,
+                 int flags);
+void lem_r_derive(void);
+void lem_r_scroll(int x);
+void lem_r_dirty(int row, int b0, int b1);
+void lem_r_undirty(void);
+void lem_r_present(void);
+void lem_r_panel(unsigned seg, unsigned off);
+void lem_r_rect(int x, int y, int w, int h, int colour, int fill);
+void lem_r_batch(int on);
+int  lem_f_index(int ch);
+void lem_f_cell(unsigned seg, unsigned off, int col, int row, int ch);
+void lem_f_run(unsigned seg, unsigned off, int col, int row, const char *s,
+               int n);
+
 /* files */
 unsigned os88_file_read(const char *name, void *buf, unsigned cap);
+unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap);
 int os88_file_write(const char *name, const void *buf, unsigned count);
 int os88_file_find(int ordinal, struct os88_find *f);
 void os88_file_here(struct os88_place *p);

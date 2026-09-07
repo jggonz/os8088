@@ -57,6 +57,36 @@ mkdir -p $BUILD
 python3 tools/os88lem.py --fixture $BUILD/lemfixture --header $BUILD/lemstr.h
 python3 tools/os88lem.py --selfcheck
 
+# (0b) ...AND THE COMMITTED FIXTURE IS THE ONE THAT WAS JUST GENERATED. The
+#      harness reads apps/lemmings/hosttest/fixture/ and the run above wrote
+#      build/lemfixture/ from the same table, so nothing compared them: a
+#      reworded, reordered or mid-table-inserted row in tools/os88lem.py's
+#      string table regenerates build/lemstr.h and the shipped LEMSTR.LEM and
+#      leaves the committed copy alone - and LEMS_* ids are POSITIONAL, so the
+#      harness would assert the old wording against the new ids and pass.
+#      lem_str_load()'s own "lem_strn < LEMS_COUNT" catches an APPEND and
+#      nothing else. This is the one place lemtext.c's "THE TWO HALVES CANNOT
+#      DRIFT" is actually asserted.
+for f in $BUILD/lemfixture/*.LEM; do
+    b=$(basename "$f")
+    if ! cmp -s "$f" "apps/lemmings/hosttest/fixture/$b"; then
+        echo "build.sh: apps/lemmings/hosttest/fixture/$b is stale."
+        echo "  tools/os88lem.py now writes different bytes. The LEMS_* ids are"
+        echo "  positional, so the harness would assert the old wording against"
+        echo "  the new ids. Refresh it:"
+        echo "    cp $BUILD/lemfixture/*.LEM apps/lemmings/hosttest/fixture/"
+        exit 1
+    fi
+done
+for f in apps/lemmings/hosttest/fixture/*.LEM; do
+    b=$(basename "$f")
+    if [ ! -f "$BUILD/lemfixture/$b" ]; then
+        echo "build.sh: apps/lemmings/hosttest/fixture/$b is not written by"
+        echo "  tools/os88lem.py --fixture any more. Delete it or restore it."
+        exit 1
+    fi
+done
+
 # (1) The whole program against a model of the glass. apps/lemmings/hosttest is
 #     AHEAD of apps/cc on the include path so its stub os88.h is the one that
 #     resolves; -w because the stubs deliberately ignore arguments and the

@@ -10928,3 +10928,123 @@ harness checking itself. The menu click that starts the run is at x=150 on a
 640-wide bar, not the 110 docs/TESTING.md quotes for `sysbench` — that lands
 on the app-name menu for a package whose title is nine characters, and the
 run silently never starts.
+
+### Set 116 — the LEMMINGS raster, on a 4.77 MHz 8088 (SPEC.md §92.4, §92.7.1)
+
+**What it is.** `tests/lembench` times the SHIPPING raster - its shim
+`%include`s `apps/lemmings/lemmask.inc`, `lemblit.inc` and `lemfont.inc`
+rather than carrying a copy, so a change to either half cannot leave them
+measuring different things. `tests/lembenchmarty.py` runs it under MartyPC,
+which models the 8088's instruction timing, its prefetch queue and its bus
+contention, and writes a PNG of the bench's own screen
+(`build/port-shots/wave2-lembench-os8088_xt_vga.png`).
+
+**IT WAS TAKEN TWICE.** The first pass is what wave 2 shipped on; the four
+panel-side rows were re-taken after the wave's review rebuilt that side
+(SPEC.md §92.4.4), and both figures are given because the difference is the
+whole content of readings 4 and 7.
+
+**Machines**: `os8088_xt_vga` and `os8088_xt_hdd` — both an IBM 5160 at
+4.77 MHz, one with a VGA in mode 0Dh and one with a CGA in mode 4. Every 5150
+machine in `tools/martypc/configs` refuses in this tree (`ROM set
+ibm5150_82_v4 not found in ROM set map`); an XT is the same 8088 at the same
+clock. Hercules is not measured — it needs a two-card machine AND a
+`VIDEO=herc` kernel, and the shadow backend is one composer with two
+presenters, so the CGA column bounds it to within the blit. **Under QEMU every
+row reads 0 µs**, which is what that emulator is for.
+
+| primitive | VGA it/ticks | VGA | CGA it/ticks | CGA |
+|---|---|---|---|---|
+| `lem_has_pixel` — ONE terrain probe, through the SmallerC cdecl boundary | 4,000 / 14 | **192 µs** | 4,000 / 14 | **192 µs** |
+| `lem_probe4` — FOUR of them in one call | 4,000 / 41 | **563 µs = 141 a probe** | 4,000 / 41 | **563 µs** |
+| one 32×16 terrain piece → the solid mask | 100 / 16 | **8.8 ms** | 100 / 16 | **8.8 ms** |
+| ...and → the picture | 50 / 49 | **53.8 ms** (4 VGA planes, RMW per byte) | 3,200 / 8 | **137 µs** (nothing to do) |
+| the whole world derived out of the mask, 32,000 B in | — | — | 4 / 101 | **1,388 ms** |
+| a scroll step | 1,600 / 7 | **240 µs** (Start Address + pel pan) | 200 / 300 | **82 ms** (12,800-byte compose) |
+| a scroll step and the present with it | 800 / 11 | **755 µs** | 100 / 325 | **178 ms** |
+| one minimap cell — `lb_rpix`, no batch (FIRST pass: 583 / 549) | 1,600 / 21 | **721 µs** | 1,600 / 19 | **652 µs** |
+| ...104 of them inside ONE `lem_r_batch()` | 20 / 21 | **57 ms = 548 µs a cell** | 20 / 21 | **57 ms = 548 µs** |
+| the view rectangle's outline, ONE `lem_r_rect` (176 plots) | 100 / 49 | **26.9 ms = 153 µs a plot** | 100 / 51 | **28.0 ms = 159 µs** |
+| a five-cell status field — `lem_f_run` (FIRST pass: 393 / 349 ms) | 160 / 25 | **8.6 ms** | 160 / 47 | **16.1 ms** |
+
+**Seven readings, and five of them contradict the design that produced them.**
+
+1. **THE BATCHED PROBE SAVES 27%, NOT 75%.** `lem_probe4` was built on the
+   argument that a SmallerC cdecl call — the caller's pushes, the callee's
+   `push bp` / `mov bp,sp` / `leave` / `ret`, the caller's `add sp` — dominates
+   a probe's body. Measured, the call is about a quarter of it. The batch is
+   still worth having (27% of the tick that sixty lemmings' 360 probes cost is
+   18 ms), but the reason it is worth having is not the reason it was built.
+   At 141 µs a batched probe, 360 a tick is **51 ms of a 55 ms tick**, which
+   is what sizes `LEM_STEP_MAX` at about twenty lemmings a frame.
+2. **COMPOSING A LEVEL IS ~25 SECONDS.** 400 terrain pieces at 8.8 ms into the
+   mask and 53.8 ms into the four VGA planes. The plane loop is four passes of
+   read-modify-write per byte with the Read Map Select and Map Mask set once
+   per pass — no port I/O in the inner loop, which was the design — and it is
+   still 6.7× the mask's cost for the same pixels, because eight VRAM accesses
+   a byte on an 8088 is eight VRAM accesses a byte.
+3. **A STILL VGA FRAME IS FREE AND A SCROLLING ONE IS NOT**: 755 µs of a
+   55 ms tick for the scroll and the present, which is the whole argument for
+   the mode 0Dh backend — the scroll is the CRTC's work and not the CPU's, and
+   it is the one number that came out as designed. But one scroll step in four
+   moves the VIEW RECTANGLE (a minimap cell is sixteen world pixels and
+   `LEM_SCROLL_STEP` is four), and THAT frame is **8 `lem_r_rect` calls and 76
+   plots ≈ 12.7 ms** off rows 9 and 10 — a quarter of a tick, 3.2 ms averaged.
+   The first version of this reading said "free" full stop while row 8 of the
+   table above it said 583 µs a cell: the same move was then 76 unbracketed
+   cells plus a whole-outline redraw that iterated 400 times to plot 76,
+   **~123 ms, with 84 of its 86 cells written twice** — PERFORMANCE.md Part 1's
+   double-draw flash, on the rectangle's own edges, and invisible in every
+   screendump of it.
+4. **THE STATUS LINE WAS 393 ms AND IS 8.6 ms.** The first pass measured
+   `lb_rpix` at ~570 µs a pixel — VGA write mode 2 with a per-pixel Bit Mask is
+   eight `out`s plus a read-modify-write, the CGA arm a shifted
+   read-modify-write into the shadow — and `lemfont.inc` PLOTTED A GLYPH
+   THROUGH IT, 128 times a cell. A five-cell delta of the status line, which
+   the original redraws every tick, was **393 ms on VGA and 349 on CGA**: six
+   or seven ticks for the OUT count, the IN count and the clock. The cell is
+   now written as BYTES — the glyph's three planes ARE VGA planes 0..2 and a
+   cell column is `col*8`, so it is four map-mask writes and 64 stores; on the
+   shadow backends the three planes OR to one ink mask a row that `lb_dbl`
+   doubles into the two bytes both cards want. **8.6 ms and 16.1 ms, 46x and
+   22x.** The header that priced the plot at "~50 cycles" and the field at
+   "~7 ms" was wrong by 58x, and it now carries the measurement with a
+   cross-reference in both directions.
+5. **THE SHADOW BACKEND'S SCROLLING FRAME IS 178 ms — 5.6 fps BEFORE ANY
+   MECHANICS** — 82 of compose and 96 of blit, because a scroll dirties all
+   160 rows of the view and nothing else it could dirty. A STILL frame costs
+   nothing at all (`hosttest/lemtest.c` asserts exactly that: a frame that
+   changed nothing writes zero screen pixels), so this bounds SCROLLING and
+   not playing. It is also why `LEM_SCROLL_STEP` is four world pixels rather
+   than one on those cards.
+6. **A SEVEN-ARGUMENT cdecl CALL THAT DOES NOTHING IS 137 µs.** That is the
+   CGA column's `lem_r_piece`, which returns at its first compare against
+   `lb_kind`. It is the floor under every number in the table, and read beside
+   row 1's 192 µs — a TWO-argument call that does real work — it is the whole
+   explanation of why the batched probe only saved 27%: the boundary is
+   expensive, and the body is not free either.
+
+7. **THE `out`s WERE NOT THE MINIMAP'S PROBLEM; THE CALL WAS.** Taking the VGA
+   state out of every pixel — ten `out`s to two — moved a bracketed minimap
+   cell from 583 µs to **548**, six per cent. The same plot inside ONE
+   `lem_r_rect` is **153 µs**: three quarters of a per-cell minimap call is the
+   SmallerC cdecl boundary and `_lem_r_rect`'s own prologue, not the card. So
+   the panel side draws RUNS — `lem_mm_row`/`lem_mm_col` coalesce spans of one
+   colour out of the minimap's 260-byte shadow — and the view rectangle's move
+   is **8 calls** where a cell at a time is 38 (the host harness asserts the
+   count), while `lem_mm_draw` is ~0.4 s where a cell at a time was 1.0. It
+   also prices the batch honestly: an isolated single-pixel `lem_r_rect` got
+   **138 µs worse** (721 against 583 — two extra calls for one pixel) and every
+   pixel in a run got 3.8x better. Read beside reading 6, this is the same
+   sentence twice: on this compiler and this CPU the cdecl boundary is the
+   budget, and every design that beats it does so by making one call do more.
+
+**Harness**: `make lembench`, then `python3 tests/lembenchmarty.py --machine
+os8088_xt_vga`. Each row sizes itself — it runs its primitive until the BIOS
+tick has moved at least six times, growing the count eightfold up to three
+times — which is what lets one bench be readable on a 4.77 MHz 8088 and on a
+host a thousand times faster. Two arithmetic traps were paid for on the way:
+`ticks * 54945 / iters` overflows sixteen bits for any row with thousands of
+iterations (14 ticks over 4,000 printed **12 µs** for a probe that is 192 —
+every row wrong and every one plausible), and the iteration count itself
+overflows if the growth is allowed a fourth doubling.

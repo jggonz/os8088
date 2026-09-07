@@ -99,12 +99,15 @@ returns a pointer into it, so a string costs no disk and no copy.
 
 **It is 4,096 bytes today, not the ~2 KB this paragraph first estimated** — the
 verbatim greying facts are the bulk of it (`tools/os88lem.py`'s table), and
-4,089 bytes of table pad to 4,096. The package's buffer is **8,192**, which is
+4,089 bytes of table pad to 4,096. The package's buffer is **5,120**, which is
 the number `LEM_STRBUF` carries in `apps/lemmings/lemmings.c`; a band that
 grows past that is a refusal at `lem_str_load()` and not a silent truncation.
-It was 4,096, and this wave's own two per-adapter Mode facts and the Psygnosis
-copyright took the band from 3,584 to exactly that — the next 512-step is
-4,608, so the buffer is now twice the band and not one step above it.
+It was 4,096, and wave 1's own two per-adapter Mode facts and the Psygnosis
+copyright took the band from 3,584 to exactly that — the very step that would
+have refused. The next 512-step is 4,608, so 5,120 clears the band by a whole
+step, which is what `lem_str_load()`'s strict `n >= LEM_STRBUF` needs; the
+8,192 wave 1 first took was 3,072 bytes of headroom charged to a bss line that
+had none to give (`apps/lemmings/lemmings.c`, §92.6).
 
 **The ids are generated.** `tools/os88lem.py` writes `build/lemstr.h` beside
 the band — `#define LEMS_<NAME> <n>` for every string — and `apps/lemmings`

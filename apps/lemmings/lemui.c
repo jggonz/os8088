@@ -156,6 +156,142 @@ static void lem_sh_blank(void)
     lem_sh_ok = 1;
 }
 
+/* --- THE DAMAGE RANGE, and why the shadow alone was not enough --------------
+ *
+ * The shadow decides whether a cell is DRAWN. It does not decide whether a row
+ * is COMPOSED and SCANNED, and the first build of this file composed and
+ * scanned every row on every repaint with a comment saying that cost "the
+ * arithmetic of a row and nothing on the glass". Read the codegen instead:
+ * lem_flush_row()'s per-COLUMN body is ~80 emitted instructions, ~24 of them
+ * with a memory operand, so one column of one row is ~300-450 us on a 4.77 MHz
+ * 8088 - HALF A GLYPH CELL to decide not to draw. Twenty rows of 64 columns is
+ * ~1,280 columns and ~400-580 ms of pure scanning, on a keystroke the harness
+ * priced at "3 calls, 78 cells" = 70 ms. The arrow keys autorepeat at ~100 ms,
+ * so the mechanism built to prevent input overrun was causing it - which is
+ * PERFORMANCE.md rule 5 exactly: the shadow emitted the designed number of
+ * calls and paid for them by hand in the scan, and a host harness that counts
+ * only calls and cells prices that scan at zero.
+ *
+ * SO EVERY PARTIAL CALLER NAMES THE ROWS IT CHANGED. lem_rlo..lem_rhi is an
+ * inclusive range, empty when rhi < rlo, widened by lem_mark() and consumed by
+ * the next lem_repaint(). A row outside it is a row whose shadow already
+ * describes the glass, so not composing it changes no invariant and draws no
+ * cell differently - it just does not spend the scan. `full` (W_PAINT, the
+ * dismissal, a screen change, the first wake) still means every row.
+ *
+ * THE ONE THING A CALLER CANNOT KNOW is whether lem_layout() will move the
+ * page: a selection leaving the page re-letters the whole list. lem_repaint()
+ * compares lem_top across the layout and widens to the list itself when it
+ * moved, so the callers stay simple and the page-turn stays correct. */
+/* IT IS A FLAG PER ROW AND NOT A LOW/HIGH PAIR, and the first version of it was
+ * the pair. A selection move damages two level rows near the TOP and the Play
+ * control at the BOTTOM, so a contiguous span between them is fourteen rows of
+ * the twenty - the harness read exactly that ("a selection move COMPOSED AND
+ * SCANNED 14 rows") and it is most of the defect still there. Twenty bytes of
+ * bss buy the rows that were actually damaged; lem_rlo/lem_rhi survive only as
+ * the loop's own bounds, so an unmarked repaint walks nothing at all. */
+/* ...AND IT IS BOUNDED BY COLUMN AS WELL, for the same reason one level down.
+ * A selection move marks three rows and lem_flush_row() scanned the FULL
+ * lem_cols of each - 189 columns at the ~300-450 us a column measured above, so
+ * 57-85 ms of pure scanning against ~63 ms of actual drawing, on a key that
+ * autorepeats every ~100 ms. The two level rows only ever change their LIST
+ * half: lem_gutc already splits every level row at the gutter and the pane half
+ * beyond it is untouched by a selection. Forty bytes of bss carry the bound and
+ * take the keystroke's scan from 189 columns to ~78. lem_mark() itself marks
+ * the WHOLE row, so every other caller is unchanged and a narrow mark is
+ * something a caller opts into. */
+static unsigned char lem_dirty[LEM_SH_ROWS];
+static unsigned char lem_dc0[LEM_SH_ROWS];
+static unsigned char lem_dc1[LEM_SH_ROWS];
+static int lem_rlo = 0;
+static int lem_rhi = -1;
+
+static void lem_mark_cols(int row, int c0, int c1)
+{
+    if (row < 0 || row >= LEM_SH_ROWS)
+        return;
+    if (c0 < 0)
+        c0 = 0;
+    if (c1 > LEM_SH_COLS - 1)
+        c1 = LEM_SH_COLS - 1;
+    if (c1 < c0)
+        return;
+    if (lem_dirty[row]) {
+        /* a second mark on the same row WIDENS: two callers naming different
+         * halves must not leave one of them unscanned */
+        if (c0 > lem_dc0[row])
+            c0 = lem_dc0[row];
+        if (c1 < lem_dc1[row])
+            c1 = lem_dc1[row];
+    }
+    lem_dc0[row] = (unsigned char)c0;
+    lem_dc1[row] = (unsigned char)c1;
+    lem_dirty[row] = 1;
+    if (lem_rhi < lem_rlo) {
+        lem_rlo = row;
+        lem_rhi = row;
+        return;
+    }
+    if (row < lem_rlo)
+        lem_rlo = row;
+    if (row > lem_rhi)
+        lem_rhi = row;
+}
+
+static void lem_mark(int row)
+{
+    lem_mark_cols(row, 0, LEM_SH_COLS - 1);
+}
+
+static void lem_mark_range(int lo, int hi)
+{
+    int r;
+
+    for (r = lo; r <= hi; r++)
+        lem_mark(r);
+}
+
+/* lem_mark_level - a LEVEL's row on the page, if it is on the page at all.
+ * Read with the layout that is on the glass, which is the pre-layout one; when
+ * the repaint's own layout moves the page, lem_repaint() widens past this.
+ *
+ * THE LIST HALF AND NOT THE ROW: a selection changes the bar and the name, both
+ * of which stop at the gutter (lem_row_level pads to lem_listw). The preview
+ * pane beside it is the settle timer's, and that marks its rows with
+ * lem_mark_pane(). */
+static void lem_mark_level(int lvl)
+{
+    if (lvl >= lem_top && lvl < lem_top + lem_nlist)
+        lem_mark_cols(LEM_LISTTOP + (lvl - lem_top), 0, lem_listw - 1);
+}
+
+/* lem_mark_pane - a preview-pane row's PANE HALF, which is the half the settle
+ * timer changes.
+ *
+ * THE SETTLE PATH USED TO MARK THESE ROWS WHOLE and that was the same defect
+ * lem_mark_cols was built for, one size up: seven rows at lem_cols = 63 is 441
+ * columns scanned for ~140 cells that all live in the 27-column pane, so 252 of
+ * them - 76-113 ms at the ~300-450 us a column measured in SPEC.md 92.7.1 - are
+ * spent re-scanning a list half that is already right on the glass. It IS
+ * already right: lem_pv_defer() composes and flushes the level rows on the
+ * keystroke with lem_pv_hold set, and the rows it does not mark are rows whose
+ * shadow already describes the glass by the invariant above.
+ *
+ * The gutter cell at lem_listw is deliberately NOT in the range: it is
+ * ovl_chrome()'s vertical rule (lemovl.c), which no row composer writes. */
+static void lem_mark_pane(int row)
+{
+    lem_mark_cols(row, lem_pvx, LEM_SH_COLS - 1);
+}
+
+static void lem_mark_pane_rows(void)
+{
+    int r;
+
+    for (r = LEM_LISTTOP; r < LEM_LISTTOP + LEM_PV_LINES; r++)
+        lem_mark_pane(r);
+}
+
 /* lem_flush_row - the composed row against the shadow, drawing only the runs
  * that differ. A run is a maximal span of one attribute; it is drawn if ANY
  * cell in it differs, because os88_font_run() is priced per CALL (756 us) plus
@@ -188,28 +324,40 @@ static void lem_sh_blank(void)
  *     cannot reach a gap in the middle of one, so those blanks were ~900 us
  *     each, on every row, on every full repaint;
  *   - and the two halves become independently dirty, which is what makes the
- *     deferred pane below cost nothing to compose. */
-static int lem_brk(int c)
-{
-    return lem_gutc >= 0 && (c == lem_gutc || c == lem_gutc + 1);
-}
-
-static void lem_flush_row(int row)
+ *     deferred pane below cost nothing to compose.
+ *
+ * IT IS TWO LOCALS AND NOT A FUNCTION, and that is a measurement rather than a
+ * style. It used to be `static int lem_brk(int c)` called from inside the
+ * per-column condition; SmallerC does not inline, so build/lemmings.raw.asm
+ * carried a real `call _lem_brk` per column - ~61 a row, ~1,220 a full repaint,
+ * 13.4 ms at PERFORMANCE.md's 11 us for a near call+ret before the body's own
+ * three loads of lem_gutc. It was paid on every column of every row where it
+ * provably cannot fire: lem_row_compose() sets lem_gutc = -1 for row 0, the
+ * Play row, the four state rows and every row of both text screens, so on a
+ * fact or preview screen 100% of those calls returned 0 at the first compare.
+ * Two locals read once a row cost two compares a column instead. */
+static void lem_flush_row(int row, int c0, int c1)
 {
     int c, e, i, at, dirty;
+    int g0, g1;
     unsigned char *sh;
     char *shc;
 
     shc = lem_sh + (row << LEM_SH_SHIFT);
     sh = lem_sha + (row << LEM_SH_SHIFT);
 
-    c = 0;
-    while (c < lem_cols) {
+    g0 = lem_gutc;
+    g1 = (g0 >= 0) ? g0 + 1 : -1;
+
+    if (c1 > lem_cols - 1)
+        c1 = lem_cols - 1;
+    c = (c0 > 0) ? c0 : 0;
+    while (c <= c1) {
         at = lem_rowa[c];
         e = c;
         dirty = 0;
-        while (e < lem_cols && lem_rowa[e] == (unsigned char)at &&
-               (e == c || !lem_brk(e))) {
+        while (e <= c1 && lem_rowa[e] == (unsigned char)at &&
+               (e == c || (e != g0 && e != g1))) {
             if (!lem_sh_ok || shc[e] != lem_row[e] || sh[e] != (unsigned char)at)
                 dirty = 1;
             e++;
@@ -626,10 +774,12 @@ static void lem_row_compose(int row)
  * what makes "could have changed" cheap enough to be the default. */
 static void lem_repaint(void *win, int full, int arm)
 {
-    int r;
+    int r, lo, hi, oldtop, oldrows, oldcols, fc0, fc1;
 
     lem_c_calls = 0;
     lem_c_cells = 0;
+    lem_c_rows = 0;
+    lem_c_cols = 0;
 
     /* A SHADOW THAT DOES NOT DESCRIBE THE GLASS IS A FULL REPAINT BY
      * DEFINITION, and saying so here makes lem_brk()'s invariant true rather
@@ -644,7 +794,22 @@ static void lem_repaint(void *win, int full, int arm)
     if (!lem_sh_ok)
         full = 1;
 
+    oldtop = lem_top;
+    oldrows = lem_rows;
+    oldcols = lem_cols;
     lem_layout(win);
+
+    /* A RESIZE IS A FULL REPAINT WHATEVER THE CALLER MARKED: every row's
+     * columns move and the shadow is indexed by the OLD geometry. A page turn
+     * is a full LIST: lem_layout() moves lem_top when the selection leaves the
+     * page, and then every level row carries a different name (the comment in
+     * lem_layout says what a page turn costs and why it is a page and not a
+     * row). Neither is knowable at the call site, which is why both are decided
+     * here and the callers stay two lem_mark()s long. */
+    if (lem_rows != oldrows || lem_cols != oldcols)
+        full = 1;
+    else if (lem_top != oldtop)
+        lem_mark_range(LEM_LISTTOP, lem_playrow - 1);
 
     /* ARM THE CLIP REGION UNLESS THE KERNEL ALREADY DID (SPEC.md 11.3). It arms
      * one for W_PAINT and FOR NOTHING ELSE, and os88_font_run() clips to the
@@ -667,17 +832,48 @@ static void lem_repaint(void *win, int full, int arm)
      * a full repaint re-letters the gutter cell (the shadow was blanked) and
      * would rub the vertical rule out again. On a PARTIAL repaint neither is
      * needed at all: nothing composed can reach either of them. */
-    if (lem_screen != LEM_SC_LIST && full && lem_ovl == 1)
+    if (lem_screen != LEM_SC_LIST && full && lem_ovl == 1 && !lem_glass_blank)
         ovl_chrome(lem_screen);
+    lem_glass_blank = 0;
 
-    /* There is ONE loop and not two. Every row is composed on every repaint,
-     * which costs the arithmetic of a row and nothing on the glass; what
-     * decides whether a cell is DRAWN is the shadow, and that is where the
-     * saving is (LESSONS.md 6). */
-    for (r = 0; r < lem_rows; r++) {
-        lem_row_compose(r);
-        lem_flush_row(r);
+    /* There is ONE loop and not two - and it runs over the DAMAGE RANGE, not
+     * over the box (see lem_mark above for what composing every row was
+     * costing). `full` is the whole box; a partial repaint is what its caller
+     * marked, clamped to the rows that exist. */
+    if (full) {
+        lo = 0;
+        hi = lem_rows - 1;
+    } else {
+        lo = lem_rlo;
+        hi = lem_rhi;
+        if (hi > lem_rows - 1)
+            hi = lem_rows - 1;
     }
+    for (r = lo; r <= hi; r++) {
+        if (full) {
+            fc0 = 0;
+            fc1 = lem_cols - 1;
+        } else {
+            if (!lem_dirty[r])
+                continue;
+            fc0 = lem_dc0[r];
+            fc1 = lem_dc1[r];
+            if (fc1 > lem_cols - 1)
+                fc1 = lem_cols - 1;
+        }
+        lem_row_compose(r);
+        lem_flush_row(r, fc0, fc1);
+        lem_c_rows++;
+        lem_c_cols += fc1 - fc0 + 1;
+    }
+
+    /* CONSUMED, whatever was drawn - including a row marked past the bottom of
+     * a box that has since shrunk, which is why this clears the whole array
+     * rather than the range. */
+    for (r = 0; r < LEM_SH_ROWS; r++)
+        lem_dirty[r] = 0;
+    lem_rlo = 0;
+    lem_rhi = -1;
 
     if (lem_screen == LEM_SC_LIST && full && lem_ovl == 1)
         ovl_chrome(lem_screen);
@@ -707,11 +903,16 @@ static void lem_pv_defer(void *win)
     if (lem_sh_ok && os88_wm_timer(win, LEM_PV_SETTLE) == 0) {
         lem_pv_due = 1;
         lem_pv_hold = 1;
-        lem_repaint(win, 0, 1);
+        lem_repaint(win, 0, 1);     /* the caller marked the two level rows */
         lem_pv_hold = 0;
         return;
     }
     lem_pv_due = 0;
+    /* No timer and no settle, so the pane is drawn on this keystroke: its rows
+     * join the two the caller marked - the PANE HALF of them, because the list
+     * half of those rows is what the caller's own two marks already cover and
+     * what every other row on the page already has right. */
+    lem_mark_pane_rows();
     lem_repaint(win, 0, 1);
 }
 
@@ -725,7 +926,23 @@ static void lem_select(void *win, int row)
         row = LEM_PERRAT - 1;
     if (row == lem_sel)
         return;
+    /* THE ROWS THIS CHANGES, NAMED HERE (lemui.c lem_mark): the level row that
+     * loses the selection bar, the one that gains it, and the Play control,
+     * whose greying is a predicate over the selection. The preview pane's rows
+     * are marked by lem_pv_defer() only on the arm that actually draws it. A
+     * page turn is caught inside lem_repaint(), which is the one thing this
+     * call site cannot see. */
+    lem_mark_level(lem_sel);
     lem_sel = row;
+    lem_mark_level(lem_sel);
+    /* THE CONTROL AND NOT ITS ROW. lem_row_play() writes one run of lem_playw
+     * cells and lem_row_clear()'s spaces after it, which the shadow always
+     * already carries - so the 55 columns past the control are scanned at
+     * ~300-450 us each to draw nothing, and the flush's end-trim then discards
+     * them. That is 19-28 ms of a ~50 ms scan on a key that autorepeats at
+     * ~100 ms. lem_playw is written by the compose that put the control on the
+     * glass, exactly as lem_listw is when lem_mark_level() reads it. */
+    lem_mark_cols(lem_playrow, 0, lem_playw - 1);
     lem_pv_defer(win);
 }
 
@@ -758,6 +975,12 @@ static void lem_set_rating(void *win, int rating)
     lem_ratpend = 1;
     lem_pv_due = 0;                 /* nothing to settle: the pane is held */
     if (lem_sh_ok) {
+        /* THE TAB STRIP AND THE STATE ROWS, and nothing else: the level rows
+         * are HELD (lem_row_list's lem_list_hold arm) until the wake has
+         * actually read the new rating's file, and Save Progress is per rating
+         * so it moves with the tab. */
+        lem_mark(0);
+        lem_mark_range(lem_staterow, lem_staterow + LEM_STATE_ROWS - 1);
         lem_list_hold = 1;
         lem_repaint(win, 0, 1);
         lem_list_hold = 0;
@@ -797,7 +1020,46 @@ static int lem_hit(int x, int y)
     return LEM_HIT_NONE;
 }
 
-/* --- the three screens' transitions ----------------------------------------- */
+/* --- the three screens' transitions -----------------------------------------
+ *
+ * lem_blank_glass - ONE FILL, then a shadow that says the glass is blank.
+ *
+ * A SCREEN CHANGE IS THE SAME SITUATION AS A DISMISSED OPAQUE CARD and takes
+ * the same path, which this file owned one callback away (lemmings.c
+ * lem_abdismiss) and did not use here. Going list -> fact, each of the twelve
+ * level rows composes to a single lem_cols-wide TEXT run whose shadow still
+ * carries the list half AND the preview pane, so the flush's end trims reach
+ * almost nothing and every erased character is paid as a ~900 us glyph cell:
+ * ~860 cells and ~20 calls, ~790 ms of frozen glass, on a click.
+ *
+ * One os88_gfx_fill over the content box is 756 us and puts back exactly the
+ * white ground kernel/wm.inc's WF_OWNBG interlock lays down before a W_PAINT;
+ * seeding the shadow blank rather than invalidating it then lets the repaint
+ * letter the cells the NEW screen carries and skip the ones it does not. The
+ * fill and the seed are one fact stated twice and must not drift.
+ *
+ * IT ARMS THE REGION AND ITS CALLERS PASS arm = 0: the fill has to be inside
+ * the same clip region as the letters. A refusal means not one pixel of us
+ * shows, so nothing is drawn and the shadow is left INVALID for the expose that
+ * follows - which is why this answers a status and every caller tests it. */
+static int lem_blank_glass(void *win)
+{
+    if (os88_wm_clip_set(win) != 0) {
+        lem_sh_ok = 0;
+        return 0;
+    }
+    lem_layout(win);                    /* lem_org / lem_sz for the fill */
+    os88_set_color(OS88_WHITE);
+    os88_gfx_fill(lem_org.x, lem_org.y,
+                  lem_org.x + lem_sz.w - 1, lem_org.y + lem_sz.h - 1);
+    os88_set_color(OS88_BLACK);
+    lem_sh_blank();                     /* the glass IS blank now */
+    /* ...so ovl_chrome()'s ERASE arm has nothing left to erase: the fill took
+     * both rules down with everything else. It still runs on the LIST side,
+     * where it DRAWS them (lem_repaint's two call sites). */
+    lem_glass_blank = 1;
+    return 1;
+}
 
 static void lem_show_fact(void *win, int labelid, int strid, int level)
 {
@@ -807,13 +1069,17 @@ static void lem_show_fact(void *win, int labelid, int strid, int level)
         return;
     lem_wrap();
     lem_screen = LEM_SC_FACT;
-    lem_repaint(win, 1, 1);
+    if (!lem_blank_glass(win))
+        return;
+    lem_repaint(win, 1, 0);             /* 0: the region above is ours */
 }
 
 static void lem_back(void *win)
 {
     lem_screen = LEM_SC_LIST;
-    lem_repaint(win, 1, 1);
+    if (!lem_blank_glass(win))
+        return;
+    lem_repaint(win, 1, 0);
 }
 
 /* lem_play - what the Play control does in WAVE 1: the level's own preview
@@ -831,13 +1097,22 @@ static void lem_back(void *win)
  * launch refuses IN A WINDOW here, where a toast is an ordinary thing. */
 static void lem_play(void *win)
 {
-    /* IDEMPOTENT, AND IT IS THE NET UNDER A WAKE THAT NEVER CAME. It returns at
-     * its own flag on every launch that got one, which is every launch here -
-     * but a post can be REFUSED (os88.h: -1, the ring full) and without this the
-     * refusal reads as a Play control that does nothing at all, for ever and
-     * with nothing said. os88_about() carries the same call for the same
-     * reason. */
-    lem_first_wake();
+    /* THE MODULE IS NOT MADE RESIDENT HERE, AND IT USED TO BE. lem_first_wake()
+     * calls ovl_ready(), which tools/cc8086.py fronts with cc_ovneed: an
+     * OSAPI_MEM_CLAIM, then a directory walk of a 39-entry folder and a
+     * 2,760-byte read of LEMMINGS.OVL - 3+ int 13h at ~400 ms apiece on the
+     * target - and Enter, Space and a Play click all arrive with the GFX LOCK
+     * HELD, so every other window's painter stops behind it. That is exactly
+     * the defect SPEC.md 92.6's first table row records as removed from
+     * W_PAINT, put back one callback along.
+     *
+     * IT WAS ALSO REDUNDANT AS THE NET IT WAS WRITTEN TO BE: lem_kick() tests
+     * !lem_waked and re-posts the wake from os88_onclick and os88_onkey before
+     * either of this function's callers reaches it, so a REFUSED post (os88.h:
+     * -1, the ring full) is already recovered - and on that one path the guard
+     * did the freezing instead of the deferring. A first Play press with the
+     * module still owed returns silently at the lem_ovl test below and the
+     * second one works. */
     if (!lem_play_ok()) {
         if (lem_rat_ok && !lem_ent_here(lem_sel))
             lem_show_fact(win, LEMS_NONE,
@@ -856,24 +1131,25 @@ static void lem_play(void *win)
          * rule in its toast form - name a fact, never a guess. */
         return;
     }
-    /* THE PROGRESS FILE IS WRITTEN BY THE WAKE AND NOT BY THIS KEYSTROKE.
-     * ovl_progress_write() is ovl_data_enter() - two ordinal walks, one per
-     * folder, and os88_file_find() has no cursor, so "every step between two of
-     * these walks directories itself" (os88.h) - and then a write that rewrites
-     * the FAT and a directory entry. Enter, Space and a Play click all arrive
-     * with the gfx lock HELD, and lem_prog[] starts at -1, so the FIRST Play of
-     * every session always wrote. Nothing on the glass waits for it: the value
-     * beside Save Progress is lettered from lem_prog[], which is updated right
-     * here, so there is no ordering to preserve. */
-    if (lem_savable && lem_prog[lem_rating] < lem_sel) {
-        lem_prog[lem_rating] = lem_sel;
-        lem_pw_rat = lem_rating;
-        lem_pw_lvl = lem_sel;
-        lem_progwrite = 1;
-        os88_wm_wake(win);
-    }
+    /* NOTHING IS RECORDED HERE, AND SOMETHING USED TO BE. This keystroke merely
+     * OPENS the preview screen; in the original an access code is issued on
+     * COMPLETING a level, and SPEC.md 92.8's Save Progress cell says of the
+     * refusing case that "the session is played and the result is shown, and
+     * nothing is recorded" - i.e. recording belongs to the RESULT. Advancing
+     * lem_prog[] on Play credited a level that had not been played: the glass
+     * read "Save Progress  1" on Tricky after one click, in a build with no
+     * gameplay in it at all.
+     *
+     * The owner is the POSTVIEW's success path (wave 4's progress work, which
+     * SPEC.md 92.8 names). Until there is a result to record, Save Progress
+     * reads what the file said and nothing moves it. lem_pw_rat / lem_pw_lvl /
+     * lem_progwrite and os88_onwake()'s deferred ovl_progress_write() stay
+     * exactly as they are - the write is still owed to the one lock-free
+     * callback, and it is the trigger that moves, not the mechanism. */
     ovl_preview(lem_sel);
     lem_wrap();
     lem_screen = LEM_SC_PREVIEW;
-    lem_repaint(win, 1, 1);
+    if (!lem_blank_glass(win))
+        return;
+    lem_repaint(win, 1, 0);             /* 0: the region above is ours */
 }

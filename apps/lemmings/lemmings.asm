@@ -124,14 +124,25 @@
 ; forward-resolve.
 %include "os88ui.inc"
 
+; --- THE RASTER (SPEC.md 92.4), and it is hand-written for two reasons -------
+; Inside SPEC.md 53's bracket every kernel drawing slot is REFUSED, so the only
+; way to put a pixel on the glass is a write into the framebuffer segment the
+; FSI block names and a word with the card's own registers - and C can do
+; neither: there is no C for `out dx, al`, and a per-pixel loop in C costs 3-5x
+; what the same loop costs here (SPEC.md 73.11's rule that the inner loop is
+; never C). The C above calls each of these once per piece, once per sprite or
+; once per frame, and never per pixel.
+;
+; THE PATH IS RELATIVE TO nasm's -I apps/ (LESSONS.md 3): "lemmings/lemmask.inc"
+; and never "lemmask.inc". Each is a written prerequisite of
+; $(BUILD)/lemmings.bin in the Makefile, because make cannot see through a
+; %include any more than it can see through a #include (LESSONS.md 9).
+%include "lemmings/lemmask.inc"     ; the solid mask, and the probe
+%include "lemmings/lemblit.inc"     ; the three backends
+%include "lemmings/lemfont.inc"     ; text in a foreign mode (SPEC.md 85.7)
+
     CC_IMAGE_END                    ; cc_bss_end, cc_modc_end and cc_image_end -
                                     ; the three forward references the header
                                     ; made
 
-; WAVE 2 ADDS THREE %includes HERE, and each is a written prerequisite of
-; $(BUILD)/lemmings.bin in the Makefile before it exists, because make cannot
-; see through a %include either (LESSONS.md 9):
-;   %include "lemmings/lemblit.inc" ; the three rasters (SPEC.md 92.4)
-;   %include "lemmings/lemmask.inc" ; the solid-mask primitives
-;   %include "lemmings/lemfont.inc" ; text in a foreign mode (SPEC.md 85.7)
-; ...and wave 6 adds "lemmings/icon.inc" beside them.
+; ...and wave 6 adds "lemmings/icon.inc" beside the three above.

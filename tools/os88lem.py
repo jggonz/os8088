@@ -1013,6 +1013,49 @@ STRINGS = [
      "os88_snd_tone would refuse on.",
      "SPEC.md 92.8, the greyed table, sound - the whole cell"),
 
+    # --- wave 2: the two refusals a LAUNCH can make -----------------------
+    # Both are said IN A WINDOW, before SPEC.md 53's bracket is entered,
+    # because a refusal cannot be said in a foreign mode (SPEC.md 92.5) and
+    # a kernel toast in one paints desktop geometry into the game's
+    # framebuffer. NO_MEM is a TEMPLATE with two %s markers, in the order
+    # the comment gives; NO_BANK takes one.
+    ("NO_MEM",
+     "Not enough memory: this level needs %s KB and %s KB is free.",
+     "SPEC.md 92.6.1's claim arithmetic, said on the glass (WEAVE-SPEC 1.4's "
+     "precedent). The two markers are the total this adapter's claims come "
+     "to and os88_mem_largest_kb(). IT IS SHORT ON PURPOSE: this one is said "
+     "as a TOAST, which is an inverse-video strip at the right end of the "
+     "menu bar (SPEC.md 59) - the medium is a line and not a paragraph, so "
+     "the sentence carries the fact and the arithmetic and nothing else"),
+    ("NO_BANK",
+     "%s could not be read - it has to be in this folder.",
+     "SPEC.md 19.2.1 and 73.14: an overlay and its data are resolved in the "
+     "LAUNCHING instance's own directory. The one marker is the band file's "
+     "name, and it is a toast for NO_MEM's reason"),
+    # ...and the THIRD, which used to borrow the Mode row's sentence and so
+    # said the opposite of the refusal: on a Hercules that string ends "the
+    # game is drawn through the shadow backend instead", i.e. it told the
+    # reader the game DOES play, offered as the reason it had just refused to.
+    # SPEC.md 47's rule is that a refusal names the fact the ACTION refused
+    # on, and the action here is os88_fsx_mode() answering no.
+    ("NO_MODE",
+     "This display cannot be borrowed for the game. os88_fsx_mode() refused "
+     "the graphics mode this adapter would have played in - the same bit "
+     "os88_fsx_caps() answers with, and the same one that greys the mode row "
+     "on the level list. Nothing was loaded and nothing was changed.",
+     "SPEC.md 47 and 53.1: the launch's own refusal, named on the slot that "
+     "refused rather than borrowed from the greyed Mode row (which is about "
+     "COLOUR and, on a Hercules, says the game plays)"),
+    # The one word the status line carries while a level composes. It is
+    # CAPITALS because MAIN.DAT's status font has no lowercase glyph at all
+    # (lemfont.inc), and short because the field Lemmix writes it in is 14
+    # cells (Game.SkillPanel.pas:501).
+    ("LOADING",
+     "LOADING",
+     "SPEC.md 92.7.1 conclusion 2: composing a level is ~25 s on an XT and "
+     "inside the bracket nothing can be said - so it is said in the game's "
+     "own font, on the panel, before the wait starts"),
+
     # --- the three "not on this disk" templates ---------------------------
     # A level entry's `missing` byte names one of these three and nothing
     # else. They are TEMPLATES: %s is the only marker and the package
@@ -1213,7 +1256,7 @@ def build_string_band():
     # the sentence "The converted level data is not in this folder." - which
     # names the wrong cause, because the bands are all there.  Keep the number
     # equal to LEM_STRBUF in apps/lemmings/lemmings.c.
-    LEM_STRBUF = 8192
+    LEM_STRBUF = 5120
     if len(pad512(bytes(out))) >= LEM_STRBUF:
         raise Refused(
             "LEMSTR.LEM is %d bytes padded to %d, and apps/lemmings reads it "
@@ -2124,6 +2167,59 @@ def build_fixture(out_dir):
     if len(logical) > FILEMAX:
         raise Refused("the fixture style stub grew past the cap")
     files.append(("LEMGR0.LEM", pad512(logical)))
+
+    # A stub MAIN bank: the header, the item table, and the two items wave 2
+    # draws - the 320x40 4bpp skill panel and the 38-glyph 8x16 3bpp status
+    # font. Both are INVENTED, like every other pixel in this directory: the
+    # panel is a frame with a minimap well in it and the font is a set of
+    # legible-enough blocks, so the harness models the raster rather than
+    # refusing on a bank that is not there. Nothing here derives from
+    # MAIN.DAT.
+    mhead = bytearray(512)
+    mhead[0:4] = b"LMNB"
+    struct.pack_into("<H", mhead, 4, 1)
+    mhead[6] = 2
+    mhead[7] = 1
+    mdata = bytearray()
+
+    # item 0: 320x40, four planes of 1,600 bytes. Plane 3 alone is set over
+    # the whole panel and cleared inside the minimap's well, so a reader sees
+    # nibble 8 for the panel and 0 for the well - two of the three colour
+    # CLASSES the 1bpp adapters draw (SPEC.md 39.4).
+    panel = bytearray(4 * 1600)
+    for row in range(40):
+        for byte in range(40):
+            panel[3 * 1600 + row * 40 + byte] = 0xFF
+    for row in range(18, 38):                    # DosMiniMapCorners' well
+        for byte in range(26, 39):
+            panel[3 * 1600 + row * 40 + byte] = 0x00
+    struct.pack_into("<BBHHH", mhead, 32, 0, 4, 320, 40, 1)
+    struct.pack_into("<II", mhead, 32 + 8, len(mdata), len(panel))
+    mdata += panel
+
+    # item 1: 38 glyphs, 8x16, three planes of 16 bytes each. Glyph n is a
+    # box with n vertical bars in it, which is not readable as a character
+    # and is not meant to be: what the harness asserts is the INDEX MAP and
+    # the delta-draw, and a real bank replaces these bytes without changing
+    # one line of the reader.
+    font = bytearray()
+    for g in range(38):
+        for plane in range(3):
+            for row in range(16):
+                if row == 0 or row == 15:
+                    font.append(0xFF if plane == 1 else 0x00)
+                else:
+                    font.append(((g + 1) * 0x11) & 0xFF if plane == 1 else 0)
+    struct.pack_into("<BBHHH", mhead, 48, 1, 3, 8, 16, 38)
+    struct.pack_into("<II", mhead, 48 + 8, len(mdata), len(font))
+    mdata += font
+
+    mlogical = bytes(mhead) + bytes(mdata)
+    struct.pack_into("<I", mhead, 8, len(mlogical))
+    mlogical = bytes(mhead) + bytes(mdata)
+    if len(mlogical) > FILEMAX:
+        raise Refused("the fixture MAIN stub grew past the cap")
+    files.append(("LEMMAIN.LEM", pad512(mlogical)))
 
     strband, nstrings = build_string_band()
     files.append(("LEMSTR.LEM", pad512(strband)))

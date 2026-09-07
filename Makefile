@@ -1622,7 +1622,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
-        lemmings lemmingsdisk lemmings-data \
+        lemmings lemmingsdisk lemmings-data lembench \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -4392,6 +4392,57 @@ $(BUILD)/covl360.img: $(BUILD)/covl.o88 tools/os88disk.py
 #   make test TESTAPPS=build/covl.img    boots with it in B:
 covl: $(BUILD)/covl.img $(BUILD)/covl360.img
 
+# THE RASTER'S THREE %includes, DEFINED HERE because the LEMBENCH rule below
+# names them and `make` expands a prerequisite list when it reads the rule: a
+# reference to a variable assigned further down the file expands to nothing and
+# the dependency silently is not one. They are NAMED rather than wildcarded for
+# the reason spelled out at $(BUILD)/lemmings.raw.asm's own comment.
+LEMINC := apps/lemmings/lemmask.inc apps/lemmings/lemblit.inc \
+          apps/lemmings/lemfont.inc
+
+# --- LEMBENCH, the LEMMINGS raster's BENCH (ON DEMAND: `make lembench`) --------
+# SPEC.md 92.7 and PERFORMANCE.md rule 4: measure before redesigning, and a
+# counter is not a timer. It puts MICROSECONDS on the glass for every primitive
+# apps/lemmings/lemblit.inc, lemmask.inc and lemfont.inc define, on whichever
+# backend the machine it boots on uses.
+#
+# IT %includes THE SHIPPING RASTER rather than carrying a copy, which is why
+# the nasm line below has -I apps/ in it and why those three files are written
+# prerequisites here as well as of build/lemmings.bin: a change to either half
+# must not be able to leave the bench measuring something the package does not
+# do (WEAVE-SPEC 1.2's rule, for the same reason).
+#
+# NOTHING UNDER tests/ SHIPS (CLAUDE.md): no floppy `all` writes carries this.
+$(BUILD)/lembench.raw.asm: tests/lembench/lembench.c $(CC_RUNTIME) \
+                          | $(BUILD) cc-toolchain
+	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
+		tests/lembench/lembench.c -o $@
+
+$(BUILD)/lembench.gen.asm: $(BUILD)/lembench.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/lembench.bin: tests/lembench/lembench.asm $(BUILD)/lembench.gen.asm \
+                      $(CC_RUNTIME) $(LEMINC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -I tests/lembench/ \
+		-o $@ tests/lembench/lembench.asm
+	@echo "lembench: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/lembench.o88: $(BUILD)/lembench.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $< -o $@
+
+$(BUILD)/lembench.img: $(BUILD)/lembench.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/lembench.o88
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/lembench360.img: $(BUILD)/lembench.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/lembench.o88
+	@python3 tools/os88disk.py --verify $@
+
+#   make lembench                            builds both images
+#   make test TESTAPPS=build/lembench.img    boots with it in B:, SPACE runs it
+lembench: $(BUILD)/lembench.img $(BUILD)/lembench360.img
+
 # --- CFSX, the C EXCLUSIVE-BRACKET capability gate (ON DEMAND: `make cfsx`) --
 # SPEC.md 53 from C (SPEC.md 92.2): the seven OSAPI_FSX_* thunks behind
 # %ifdef CC_HAS_FSX, and the three things nothing in this tree had ever done
@@ -5648,9 +5699,14 @@ lemmings-data: $(BUILD)/lemband.stamp
 # cword's): a check that fails leaves no stamp, and the compile does not run.
 LEMSRC  := apps/lemmings/lemtab.c apps/lemmings/lemtext.c \
            apps/lemmings/lemload.c apps/lemmings/lemui.c \
-           apps/lemmings/lemovl.c
+           apps/lemmings/lemdraw.c apps/lemmings/lemovl.c
+# ...and hosttest/lemraster.c is NAMED here for the same reason LEMINC names
+# every %include below: lemtest.c #includes it, make cannot see through that,
+# and a stale build/.lemmings-hostchecks means the raster's MODEL still
+# describes the previous version while build.sh never re-runs (LESSONS.md 9).
 LEMHOST := apps/lemmings/build.sh apps/lemmings/hosttest/os88.h \
-           apps/lemmings/hosttest/lemtest.c tools/os88lem.py \
+           apps/lemmings/hosttest/lemtest.c \
+           apps/lemmings/hosttest/lemraster.c tools/os88lem.py \
            $(wildcard apps/lemmings/hosttest/fixture/*)
 $(BUILD)/.lemmings-hostchecks: apps/lemmings/lemmings.c $(LEMSRC) $(LEMHOST) \
                                $(BUILD)/lemstr.h | $(BUILD)
@@ -5661,10 +5717,19 @@ $(BUILD)/.lemmings-hostchecks: apps/lemmings/lemmings.c $(LEMSRC) $(LEMHOST) \
 # five parts above, and make cannot see through a #include - without the line
 # below an edit to the launcher leaves build/lemmings.o88 untouched and a stale
 # package reads exactly like the change having done nothing (LESSONS.md 9).
-# WAVE 2 ADDS lemgame.c, lemact.c, lemobj.c and lemdraw.c to LEMSRC and
-# lemblit.inc, lemmask.inc and lemfont.inc to LEMINC, each in the same edit as
+# ...AND THE SAME FOR EVERY %include, which make cannot see through either.
+# The wildcard would cover them, and they are NAMED anyway: a wildcard silently
+# stops covering a file the day one is renamed, and the whole point of the line
+# is that an edit to the raster cannot leave a stale build/lemmings.o88 reading
+# exactly like a change that did nothing (LESSONS.md 9).
+# WAVE 3 ADDS lemgame.c, lemact.c and lemobj.c to LEMSRC, in the same edit as
 # the file itself.
-LEMINC := $(wildcard apps/lemmings/*.inc)
+#
+# LEMINC ITSELF IS DEFINED ABOVE, BESIDE THE LEMBENCH BLOCK, and that is not
+# tidiness: `make` expands a prerequisite list when it READS the rule, so a
+# `$(LEMINC)` in the bench's own rule 1,300 lines above this line expanded to
+# NOTHING and an edit to lemblit.inc left build/lembench.bin untouched - the
+# exact defect this comment block is about, one target along (LESSONS.md 9).
 
 $(BUILD)/lemmings.raw.asm: apps/lemmings/lemmings.c $(LEMSRC) $(CC_RUNTIME) \
                            $(BUILD)/lemstr.h $(BUILD)/.lemmings-hostchecks \

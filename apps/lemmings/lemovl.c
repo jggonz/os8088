@@ -166,13 +166,26 @@ static void ovl_preview(int level)
      * last, so lem_rows - 2 is what there is. A box that holds them gets the
      * original's spacing; one that does not gets the compressed layout and the
      * greying sentence that describes it. Wave 5's 640x350 surface always
-     * holds it. */
-    spaced = (lem_rows - 2) >= (LEM_PV_LINES * 2 - 1);
+     * holds it.
+     *
+     * THE TITLE GAP IS TWO ROWS AND NOT ONE. GetScreenLinesAndColors leaves
+     * BOTH [01] and [02] empty - [02] is the Replay string, which is empty in
+     * ordinary play - and puts the first value at [03]; the enumeration three
+     * paragraphs up says so and the first version of this loop then dropped
+     * [02], which moved every value row and the footer 16 pixels up from the
+     * original's screen on the 640x350 surface. So the spaced block is
+     * FOURTEEN rows - one title, TWO blanks, six values and five blanks
+     * between them - which is LEM_PV_LINES * 2, and the threshold is that.
+     * The compressed layout keeps one blank after the title, which is what
+     * LEMS_GREY_EGA describes as compressing the spacing out. */
+    spaced = (lem_rows - 2) >= (LEM_PV_LINES * 2);
 
     lem_para_reset();
     for (i = 0; i < LEM_PV_LINES; i++) {
         if (i == 1 || (spaced && i > 1))
             lem_para_nl();
+        if (i == 1 && spaced)
+            lem_para_nl();          /* the original's aLines[02] */
         if (lem_pv[i].indent)
             lem_para_add(lem_str(LEMS_PV_INDENT));
         ovl_fmt(i, level, lem_line, sizeof(lem_line));
@@ -440,4 +453,145 @@ static int ovl_progress_write(int rating, int level)
     ok = os88_file_write(lem_f_sav, lem_savbuf, LEM_SAV_SIZE) == 0;
     ovl_data_leave();
     return ok;
+}
+
+/* ============================================================================
+ * WAVE 2: ovl_compose - THE TERRAIN LIST, ONCE PER LEVEL (SPEC.md 92.4)
+ *
+ * IT IS IN THE MODULE BECAUSE IT RUNS ONCE PER LEVEL AND NEVER DURING PLAY,
+ * which is SPEC.md 73.14's split by FREQUENCY exactly. It is also the largest
+ * single piece of decision-making in the program - 400 slots, four flag bits,
+ * a bank table lookup and a clip per piece - and none of it is on any path a
+ * keystroke or a frame reaches.
+ *
+ * IT IS CALLED FROM INSIDE THE BRACKET, and that is safe for one reason and
+ * one only: the module was forced RESIDENT before the bracket was entered
+ * (lem_play, SPEC.md 92.5). cc_ovneed toasts its own refusal, and a kernel
+ * toast paints DESKTOP geometry into a foreign mode - so the load may not
+ * happen in here, and once the module is in, cc_ovneed is a four-byte no-op
+ * that cannot reach that path.
+ *
+ * WHY IT HAS TO BE IN HERE AT ALL. On VGA the picture IS video memory, and
+ * there is none until os88_fsx_mode() has run. Composing outside the bracket
+ * would mean composing into a buffer this program has no room for: four planes
+ * of 32,000 bytes is 128 KB.
+ *
+ * EVERY MULTI-BYTE FIELD OF THE RECORD IS BIG-ENDIAN - it is the original's own
+ * .LVL, untouched by the converter (docs/lemband-format.md) - so it is read a
+ * byte at a time and never with lem_u16().
+ *
+ * ATTRIBUTION. The record layout is lemmings_3ds/doc/data/
+ * lemmings_lvl_file_format.txt's; the three rulings this walk makes where the
+ * readers disagree - skip a 0xFFFF slot rather than break, the 12-bit x mask,
+ * the y boundary at 0x100 - are SPEC.md 92.3.1's, measured over all 120 levels
+ * in lemtool/REPORT.md. Lemmings is (C) 1991 DMA Design / Psygnosis.
+ * ==========================================================================*/
+
+/* ovl_far_add - lem_far_seg/off advanced by `n` bytes, renormalised.
+ *
+ * A piece's offset inside the bank is a DWORD (the bank is bigger than a
+ * segment) and this dialect has no `long`, so the only 32-bit arithmetic in
+ * this program is lem_far()'s and this. `n` is at most 3 * 1,024 here, so the
+ * sum cannot overflow the 16-bit offset it is added to. */
+static void ovl_far_add(unsigned n)
+{
+    unsigned o = lem_far_off + n;
+
+    lem_far_seg += o >> 4;
+    lem_far_off = o & 15;
+}
+
+/* ovl_compose - 0 = nothing was drawn and the caller says so IN A WINDOW.
+ *
+ * The transient 16 KB claim is taken and freed inside this call. A whole
+ * LEMLV<n>.LEM is read rather than the 2,048 bytes wanted, because
+ * os88_file_read_at()'s offset must be a whole number of CLUSTERS and the
+ * cluster is 512 on two geometries, 1,024 on the other two and neither on the
+ * RAM disk The Wire unpacks this onto (SPEC.md 92.3.2). One extra revolution
+ * once per level against a read that is wrong on one medium in three. */
+static int ovl_compose(int level)
+{
+    unsigned rec, base, seg, off;
+    int i, slot, b0, b1, b2, b3;
+    int x, y, yv, id, flags, w, h, row, stride;
+
+    if (!lem_rat_ok || !lem_ent_here(level))
+        return 0;
+
+    rec = os88_mem_claim(LEM_KB_REC);
+    if (rec == 0)
+        return 0;
+
+    lem_f_scratch[0] = 'L';
+    lem_f_scratch[1] = 'E';
+    lem_f_scratch[2] = 'M';
+    lem_f_scratch[3] = 'L';
+    lem_f_scratch[4] = 'V';
+    lem_f_scratch[5] = (char)('0' + (lem_ent_u8(level, LEM_E_RAWFILE) % 10));
+    lem_f_scratch[6] = '.';
+    lem_f_scratch[7] = 'L';
+    lem_f_scratch[8] = 'E';
+    lem_f_scratch[9] = 'M';
+    lem_f_scratch[10] = 0;
+    if (os88_file_read_seg(lem_f_scratch, rec,
+                           (unsigned)(LEM_LVL_GROUP * LEM_LVL_SIZE)) == 0) {
+        os88_mem_free(rec);
+        return 0;
+    }
+    base = (unsigned)lem_ent_u8(level, LEM_E_RAWSECT) * LEM_LVL_SIZE;
+
+    for (i = 0; i < LEM_LVL_NTERR; i++) {
+        /* THE ONLY THING THE USER CAN SEE FOR THE NEXT TWENTY-FIVE SECONDS
+         * (SPEC.md 92.7.1 conclusion 2). One cell of the loading bar every
+         * fourth slot is one lb_rpix against 53.8 ms for the piece beside it,
+         * and it is a call from the module back into the resident image, which
+         * is an ordinary far call the toolchain makes (never the reverse: an
+         * ovl_ ADDRESS is refused by name). */
+        if ((i & 3) == 0)
+            lem_load_bar(i >> 2);
+        slot = LEM_LVL_TERR + 4 * i;
+        b0 = lem_pk(rec, base + slot);
+        b1 = lem_pk(rec, base + slot + 1);
+        /* SPEC.md 92.3.1: a slot whose first WORD is 0xFFFF is SKIPPED and
+         * never breaks the walk. Breaking renders Taxing 27 with 68 of its
+         * 395 pieces (lemtool/REPORT.md measured it). */
+        if (b0 == 0xFF && b1 == 0xFF)
+            continue;
+        b2 = lem_pk(rec, base + slot + 2);
+        b3 = lem_pk(rec, base + slot + 3);
+
+        flags = b0 >> 4;                    /* 8 no-overwrite, 4 upside-down,
+                                             * 2 erase - the format document's
+                                             * own words */
+        x = (((b0 & 0x0F) << 8) | b1) - 16; /* the 12-bit mask, and 0x0010 = 0 */
+        yv = (b2 << 1) | (b3 >> 7);         /* nine bits, bleeding into b3 */
+        y = yv - ((yv >= 0x100) ? 516 : 4);
+        id = b3 & 0x3F;
+
+        row = LEM_GR_TERTAB + id * LEM_GR_TERSTRIDE;
+        w = lem_pk(lem_cl_bank, row + LEM_GT_W);
+        h = lem_pk(lem_cl_bank, row + LEM_GT_H);
+        if (w == 0 || h == 0)
+            continue;                       /* an unused slot in this set */
+
+        lem_far(lem_cl_bank,
+                lem_pk16(lem_cl_bank, row + LEM_GT_OFF),
+                lem_pk16(lem_cl_bank, row + LEM_GT_OFF + 2));
+        seg = lem_far_seg;
+        off = lem_far_off;
+
+        /* THE PICTURE FIRST AND THE MASK SECOND, and the order is load-bearing:
+         * the no-overwrite flag means "draw only where there is no terrain
+         * yet", and the cheapest place to ask that is the solid mask, which at
+         * this instant still describes the world WITHOUT this piece
+         * (lemblit.inc's lb_pmask). */
+        lem_r_piece(seg, off, x, y, w, h, flags);
+
+        stride = (w >> 3) * h;
+        ovl_far_add((unsigned)(3 * stride));    /* plane 3 IS the mask */
+        lem_m_piece(lem_far_seg, lem_far_off, x, y, w, h, flags);
+    }
+
+    os88_mem_free(rec);
+    return 1;
 }
