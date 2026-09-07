@@ -89,6 +89,36 @@ def worker_of(path):
     return None
 
 
+CCWORKER = re.compile(r"^\s*%define\s+CC_HAS_WORKER\b")
+
+
+def c_worker(path):
+    """Does this package's shim declare a C worker (SPEC.md 73)?
+
+    A C package never writes `call OSAPI_TASK_SPAWN` itself: it calls
+    os88_task_spawn(), whose body is _os88_task_spawn in apps/cc/os88thunk.asm,
+    and its worker root is cc_worker in apps/cc/crt0.asm. So the scan above
+    finds nothing and `spawns` answers no, and paccman, cword, runcpm, weave
+    and the C64 were all skipped here WITHOUT BEING COUNTED - which is the
+    thing this file's own header calls "how a gate stops being one".
+
+    They are NAMED rather than measured, and that is deliberate. The chain
+    below a compiler-emitted root runs through the L### labels SmallerC emits
+    and tools/stkdepth.py's linear walk stops at the first `ret` it meets in
+    one, so the number it prints for cc_worker is a FLOOR and not a maximum -
+    14 bytes for a package whose composed chain is 118. A gate that passed on
+    that floor would be worse than one that skips, so what each C package's
+    worker stack is really sized by is its own MEASURED water mark
+    (tests/paccman.py reads the worker's slice after thousands of frames and
+    asserts it against OS88_STACK_256). This function exists so the summary
+    says which packages those are.
+    """
+    for ln in open(path, errors="replace"):
+        if CCWORKER.match(ln.split(";")[0]):
+            return True
+    return False
+
+
 def spawns(path):
     """Does any source of this package call OSAPI_TASK_SPAWN at all?"""
     here = os.path.dirname(path)
@@ -133,13 +163,15 @@ def depth(asm, root):
 
 
 def main():
-    rows, unfound, unbuilt = [], [], []
+    rows, unfound, unbuilt, cpkgs = [], [], [], []
     for asm in sorted(glob.glob(os.path.join(ROOT, "apps", "*", "*.asm"))):
         app = os.path.basename(os.path.dirname(asm))
         root = worker_of(asm)
         if root is None:
             if spawns(asm):
                 unfound.append(app)      # a spawner this scan could not size
+            elif c_worker(asm):
+                cpkgs.append(app)        # a C worker: named, see c_worker()
             continue                     # no worker: nothing to size
         o88 = os.path.join(BUILD, "%s.o88" % os.path.splitext(os.path.basename(asm))[0])
         if not os.path.exists(o88):
@@ -172,6 +204,10 @@ def main():
             want="none thinner than %.2fx" % BAR)
 
     worst = min(rows, key=lambda r: r[4]) if rows else None
+    if cpkgs:
+        print("t_stkclass: %d C package(s) declare a worker and are sized by "
+              "their own measured water mark, not here: %s"
+              % (len(cpkgs), ", ".join(cpkgs)))
     print("t_stkclass: %d worker%s measured%s, thinnest %s"
           % (len(rows), "" if len(rows) == 1 else "s",
              (", %d package(s) not built" % len(unbuilt)) if unbuilt else "",

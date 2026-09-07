@@ -26,17 +26,20 @@ keeps them like a real hard disk.
 release built them. `SHA256SUMS` in the zip covers them.
 
 **From source:** the live media are an on-demand build — they carry the
-applications written in C, so they need the compiler the shipped floppies
-deliberately do not:
+applications written in C. Make automatically fetches and builds the pinned
+C compiler when missing, and downloads the RunCPM files it needs:
 
 ```
-tools/setup-cc.sh     # one-time: fetch and build the C compiler into build/cc
-make runcpm-src       # one-time: fetch the CP/M command processor and master disk
 make live             # build/os8088-usb.img + build/os8088.iso
 ```
 
 The build is deterministic: the same source produces byte-identical images,
 so a checksum comparison against a release is meaningful.
+
+For a device-first chooser covering all built floppy, USB and CD images,
+run `make imager`. See [os8088 imager](IMAGER.md) for discovery, media
+requirements and verification. The original `make burn` guide below remains
+available for the two live images.
 
 ## Writing the USB stick
 

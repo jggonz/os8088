@@ -93,6 +93,13 @@ make runcpmdisk # build the RunCPM floppies - the CP/M 2.2 emulator, its
 make xt-runcpm  # 86Box: the 4.77MHz XT with the 360KB RunCPM disk in B:
 make 286-runcpm # 86Box: the 12.5MHz 286 with the 720KB one - arcade games
 make 386-runcpm # 86Box: the 386DX with the 1.44MB one - everything
+make paccmandisk # build the PaccMan floppy - a second Pac-Man, in C: the
+              # Namco arcade layout from Andre Weissflog's pacman.c, in all
+              # four geometries (paccman.img, paccman720/120/360.img)
+make xt-paccman # 86Box: the 4.77MHz XT with the 720KB PaccMan disk in B: -
+              # the machine the "more performant on XTs" question was about
+make 386-paccman # 86Box: the 386DX/25 with the 1.44MB disk in B: - full speed
+make pmcbandbench # its band composer's benchmark, under QEMU -icount shift=3
 make c64disk  # build the C64 floppy - a Commodore 64: the package, its
               # overlay; the KERNAL/BASIC/CHARGEN ROM rides INSIDE the
               # package as an embedded part (SPEC.md 20.12)
@@ -122,13 +129,15 @@ make 286-525-word #   instead of the apps floppy - one per application disk:
 make 286-525-cword#   -z -word -cword -runcpm -c64 -weave -loom -all. The
 make 286-525-all  #   ONLY machines that read a 1.2MB disk (an XT cannot)
 make allapps  # one floppy with every program on it - both word processors,
-              # Frotz, RunCPM, the Commodore 64 and the Weave family
-              # included. 1.44MB and 1.2MB; the two DD geometries cannot
+              # Frotz, RunCPM, the Commodore 64, PaccMan and the Weave
+              # family included. 1.44MB and 1.2MB; the two DD geometries cannot
               # hold the payload at all
 make live     # the live media (docs/LIVE-MEDIA.md): os8088-usb.img, a
               # bootable hard-disk image for a USB stick, and os8088.iso,
               # the same image as a live CD - the whole OS and every app
               # on one C: drive (make usb / make iso build them singly)
+make imager   # macOS: os8088 imager discovers floppy/USB/CD devices and
+              # offers compatible built images (docs/IMAGER.md)
 make burn     # macOS: interactively write the stick / burn the CD, with a
               # typed confirmation and a read-back verify
 make test     # boot headless with a QMP socket for scripted testing
@@ -142,9 +151,9 @@ make clean
 
 `make` builds the six shipping floppies and needs nothing but `nasm` and
 `python3`. The disks that carry the C applications — `cworddisk`,
-`runcpmdisk`, `allapps` and the live media (`make live`) — want the compiler
-first: `tools/setup-cc.sh`
-fetches and builds it into `build/cc`, and nothing else in the tree depends on
+`runcpmdisk`, `allapps` and the live media (`make live`) — automatically run
+`tools/setup-cc.sh` when the compiler is missing. It fetches and builds it
+into `build/cc`, and nothing else in the tree depends on
 it. `runcpmdisk`, `allapps` and `live` also fetch RunCPM's command processor
 and master disk (`make runcpm-src`), and `runcpmdisk` the CP/M software that
 rides beside it (`make cpmsw`); none of it is committed here.
@@ -180,7 +189,9 @@ a Standard File dialog for opening and saving.
   Helvetica and a Courier, two more text faces and three monospaces, each
   fitted onto an 8-pixel grid from an open outline font (SPEC.md 6.4.1). The
   kernel keeps its 8x8 cell for chrome; an app composes a row in a real face
-  and puts it down in one call.
+  and puts it down in one call. Double-click any `.F88` to open **Font
+  Viewer**, which lists every installed family; click a family or use the
+  arrow keys to switch, then type directly into its specimen.
 
 **Disks and files**
 
@@ -197,12 +208,12 @@ a Standard File dialog for opening and saving.
 
 **Software**
 
-Eighteen loadable packages ship on the software disk, all closable and most
+Loadable packages ship on the software disk, all closable and most
 multi-instance:
 
 - **Apps** — Note Pad (word wrap, DOS-readable text files), TeXPad, Paint,
-  ArtfulType, Fractal, Calculator, Piano, Recorder, Tracker and ModPlug Player
-  (both play Amiga MOD files).
+  ArtfulType, Font Viewer, Fractal, Calculator, Piano, Recorder, Tracker and
+  ModPlug Player (both play Amiga MOD files).
 - **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, [Pac-Man](apps/pacman/README.md), Cyclone 88,
   Tank Attack (a first-person wireframe tank duel that takes the whole
   machine, in 320x200 colour on CGA, Mode X on VGA and 640x200 mono in the
@@ -466,7 +477,8 @@ reads that way.
 ### A package can also be written in C
 
 The OS itself is assembly and stays that way. But a **package** can be written
-in C, and two are. The first is `apps/cword` — a second reimplementation of **Microsoft Word
+in C, and several are — the Commodore 64 and the Weave family among them, plus
+the three described here. The first is `apps/cword` — a second reimplementation of **Microsoft Word
 1.1a**, in C this time, with the same nine-menu bar, ribbon, ruler and status
 line as `apps/word` and RTF as its file format. It has both of the product's
 views — Draft, which wraps to the window, and Page, which wraps to the sheet —
@@ -526,6 +538,34 @@ speed**: nothing throttles the emulated Z80 — upstream has no limiter either
 at period speed on the three 86Box machines above. Zork, Hitchhiker and
 Colossal Cave are not there and cannot be: their data files are 76KB, 113KB
 and 68KB, and this port opens a file whole through a 16-bit count.
+
+The third is `apps/paccman` — **PaccMan**, a port of Andre Weissflog's
+[`pacman.c`](https://github.com/floooh/pacman.c) (MIT), the arcade-faithful
+C99 Pac-Man, and a *second* Pac-Man beside the hand-written assembly one in
+`GAMES/`. It is the Namco cabinet's own screen: a 28×36-tile, 224×288 vertical
+field held exactly as the arcade board holds it, the real tile, sprite and
+colour ROM tables, the four ghosts with the *Pac-Man Dossier*'s scatter/chase
+schedule and house dot counters, the CHARACTER / NICKNAME reveal on the
+attract screen, and the arcade's three-voice sound reduced to the one PC
+speaker with the reduction stated rather than hidden. It shares nothing with
+the other Pac-Man — not a file, a name, an image, a target or a vm directory —
+because the next person to touch either would otherwise silently get the
+other.
+
+It exists to answer a question, and the answer is on the glass. The ask was
+*"maybe this port is more performant on XTs"*: C plus one kernel call that
+sends a whole composed band down as four bitplanes, against assembly that
+sends packed pixels through the planar decoder. `tests/paccman.py` runs the
+same bracket over both ports on the same emulated 4.77 MHz 8088 and prints
+them side by side, each on a frame it actually DREW — **2.18 fps against the
+assembly port's 4.14 on VGA** — so no, it is not, and the row prints that
+either way. The band bench says why: the one call really is 6.6× faster than
+the fallback, and the repack that feeds it costs six times what the call
+saves. What PaccMan *does* keep, on VGA, is arcade *time* — a slow frame
+carries two OS ticks of game rather than one, so it runs at 24% of arcade
+speed where the assembly port runs at 23% while drawing twice as often. On
+CGA and Hercules it keeps nothing: the assembly port is at its 18.2 Hz
+deadline there and asleep.
 
 The compiler is [SmallerC](https://github.com/alexfru/SmallerC) (2-clause
 BSD), pinned to one commit and **fetched rather than vendored** — it is not in
@@ -593,10 +633,11 @@ cleanly and runs wrong when C meets this machine.
 | `build/word*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | Microsoft Word floppies (`make worddisk`) |
 | `build/cword*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
 | `build/runcpm*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`). What drive A carries is chosen per geometry at build time, so the 1.2MB disk fills itself and names what it left off in its own `LEFT-OFF.TXT` |
+| `build/paccman*.img`   | 1.44MB / 720KB / 1.2MB / 360KB | PaccMan, the C Pac-Man: the package and its README, no overlay (`make paccmandisk`) |
 | `build/c64*.img`       | 1.44MB / 720KB / 1.2MB / 360KB | Commodore 64, package + `C64.OVL` + the `C64.ROM` sidecar (`make c64disk`) |
 | `build/weave*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Weave: the runtime and its two modules, the demo bundles, LOOM, the demo sources and `CATALOG.TXT` (`make weavedisk`) |
 | `build/loom*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | the Weave IDE's own disk, with the demo sources flat (`make loomdisk`) |
-| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the seven above included (`make allapps`) |
+| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the eight above included (`make allapps`) |
 | `build/apps-all-120.img` | 1.2MB FAT12            | the same disk for the 5.25" HD machine. There is no 720KB or 360KB build: the payload does not fit either |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
@@ -632,9 +673,9 @@ this geometry too, and so is the everything disk.
 
 Its clusters are 512 bytes like the 1.44MB disk's rather than 1,024 like the
 two DD disks', so it has 2,371 of them — 1,185KB against 1,423KB — and that
-ratio, not the raw one, is what each disk is measured against. Four of the
-seven (Word, cword, the C64, Weave/LOOM) are small enough that every geometry
-carries the identical payload. Three are not, and each answers it in its own
+ratio, not the raw one, is what each disk is measured against. Five of the
+eight (Word, cword, PaccMan, the C64, Weave/LOOM) are small enough that every
+geometry carries the identical payload. Three are not, and each answers it in its own
 way: the **story disk** is a straight cut, because the 1.44MB story list alone
 is 2,519 clusters and two titles have to come off; the **RunCPM disk** drops
 its largest CP/M software area so that the master disk keeps its programs, and

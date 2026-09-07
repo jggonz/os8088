@@ -154,6 +154,19 @@ FAST = [
     Row("mirror", "fast", py("tests/unit/t_mirror.py"), 3.9,
         "a constant written down in two files must agree in both; there is no "
         "linker here to notice"),
+    Row("paccman", "fast", py("tests/unit/t_paccman.py"), 0.3,
+        "PACCMAN's generated arcade tables say what they claim to (SPEC.md "
+        "91). apps/paccman/pmc_rom.c is the build's TRUTH - the reference is "
+        "not vendored (CONTRIBUTING.md 6) and an ordinary build never reads "
+        "it - so nothing else checks the 240 dots, the four pills, the two "
+        "ghost-house doors, the open tunnel row, the table lengths or the "
+        "pinned commit in its header. It also asserts that the prelude's "
+        "MELODY is voice 1 at 539 then 1078 Hz and its bass voice 0 at 67, "
+        "because the two have been the wrong way round once and BOTH "
+        "orderings produce sound; and that pmcband.inc and paccman.c agree "
+        "about the band's three sizes, which is a constant written down in "
+        "two files with no linker here to notice. The byte-for-byte "
+        "reproduction row SKIPS, naming the pin, without $PACMANC_SRC"),
     Row("inktab", "fast", py("tests/unit/t_inktab.py"), 0.2,
         "SPEC.md 42.23.1: Paint's two ink-class masks ARE the kernel's "
         "gfx_inktab. A one-bit canvas stores what a 1bpp SCREEN shows, so the "
@@ -209,6 +222,12 @@ FAST = [
         "the Drivers page's memory column (SPEC.md 31.6.2) re-derived: every "
         "image term against the .drv this build made, every claim term against "
         "the constant in the driver that takes it"),
+    Row("ccmake", "fast", py("tests/unit/t_ccmake.py"), 2.1,
+        "automatic compiler setup: missing/partial install, parallel dependents, "
+        "warm reuse, setup failure propagation and fresh live-media dependencies"),
+    Row("imager", "fast", py("tests/unit/t_imager.py"), 0.1,
+        "host media detection, image compatibility, confirmation and read-back "
+        "verification without writing physical devices"),
     Row("image", "fast", py("tests/unit/t_image.py"), 0.1,
         "the shipped floppies read by an independent FAT12 walker: contiguity, "
         "the standard BPB, SPEC.md 19.6's attributes"),
@@ -671,6 +690,37 @@ SOAK = [
     Row("pacman", "soak", py("tests/pacman.py"), 100.0,
         "native 8088 Pac-Man movement, score, pellets, fruit, level transitions, "
         "pause, full-screen repaint and worker teardown", needs=("marty",)),
+    Row("paccman", "soak", py("tests/paccman.py"), 100.0,
+        "PACCMAN's attract screen and tick path on a cycle-accurate 8088 "
+        "(SPEC.md 91): the program opening on the attract screen with the "
+        "CHARACTER / NICKNAME reveal run, a real Space arriving at int 09h "
+        "starting a round, the speaker asked for the prelude's tones, the "
+        "worker hired by the first paint, the game advancing with nobody "
+        "touching it, dots eaten, the reserve strip down a life, and the row "
+        "step this ADAPTER needs (2 on CGA, 1 everywhere else). Several of "
+        "those are things the host harness structurally cannot answer - it "
+        "drives pmc_frame() itself, pokes the latch byte and models the "
+        "glass, so it never runs a real worker on a real scheduler nor a real "
+        "keystroke through the kernel - and one is the measurement that "
+        "sizes OS88_STACK_256: tools/stkdepth.py composes a 160-byte static "
+        "chain, and the water mark in the worker's own slice (188 to 190 of 256 "
+        "across the three profiles) is the only thing that says the interrupt "
+        "floor "
+        "on top of it fits. Wave 4 added the two SCORING FIXTURES - a "
+        "frightened ghost put on Pac-Man's own tile must score exactly 200 "
+        "and become eyes, the bonus fruit exactly 100 - written into bss by "
+        "symbol at the worker's frame boundary, so the image check beside "
+        "them still covers every byte of code and every arcade table; and "
+        "the MEASUREMENT, one bracket over this port's frame proc and "
+        "PACMAN.O88's on the same profile, printing fps / ms per frame / gfx "
+        "calls per frame / effective game speed side by side with the "
+        "verdict on the user\'s \'maybe more performant on XTs\' either way "
+        "(it is not: 2.18 fps against 4.14 on os8088_xt_vga). SOAK and not "
+        "full, deliberately: `make test-full` measured 597.4 s of its 600 s "
+        "budget before this port, so a row that boots two machines belongs "
+        "where there is no wall clock to overrun - what the full tier "
+        "carries instead is t_ctoolchain BUILDING paccman, which runs "
+        "build.sh\'s three host gates", needs=("marty", "cc")),
     Row("weavevm", "soak", py("tests/weavevm.py"), 20.0,
         "WEAVE-SPEC 12.3: the SHIPPING apps/weave/wvm.inc run in a raw-QEMU "
         "BOOT SECTOR with SS != DS and no OS under it at all, diffed case by "
@@ -910,6 +960,11 @@ SOAK = [
         "window. The instrument is a breakpoint on fm_repaint, and the "
         "FOLDER open beside it is the control that says the breakpoint "
         "fires at all.",
+        needs=("marty",), serial=True),
+    Row("fontview", "soak", py("tests/fontview.py"), 60.0,
+        "SPEC.md 90: an F88 association launches FONT VIEWER with that family "
+        "selected, every installed face is listed, typing edits the specimen, "
+        "and both arrow and mouse selection finish loading another face.",
         needs=("marty",), serial=True),
     Row("fmcommit", "soak", py("tests/fmcommit.py"), 62.0,
         "SPEC.md 22.13.3: a committing keystroke redraws the Disk window and "
@@ -1322,8 +1377,10 @@ SOAK = [
         "the handshake? (SPEC.md 9.9) -serial none, so no UART probes present "
         "and the aux port is the only pointing device: mou_p2st 9, port 04, "
         "line FF, ptr 1, and the pointer landing on the EXACT requested pixel, "
-        "which is the statement about the sign handling and 9.9.3's Y "
-        "inversion that nothing else here makes. Then six keys must advance "
+        "then every live menu-bar title opening the cell under that PS/2 "
+        "coordinate. This is the statement about the sign handling, 9.9.3's "
+        "Y inversion and the bar hit test that nothing else here makes. Then "
+        "six keys must advance "
         "the BIOS buffer by twelve bytes, because both halves of the probe are "
         "a chance to take a byte from int 09h. QEMU by name on CLAUDE.md's "
         "closed list - MartyPC is an 8088 and has no 8042 to test",

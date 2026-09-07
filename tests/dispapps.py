@@ -74,7 +74,7 @@ def _map(app, defines=()):
     open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
     inc = ["-I", os.path.join(ROOT, "apps") + os.sep,
            "-I", os.path.join(ROOT, "apps", app) + os.sep,
-           "-I", os.path.join(ROOT, "drivers", "net") + os.sep]
+           "-I", os.path.join(ROOT, "drivers", "net") + os.sep,
                                         # apps/telnet and apps/ftpd include
                                         # netpkg.inc from the driver that
                                         # publishes the socket surface, which
@@ -82,6 +82,28 @@ def _map(app, defines=()):
                                         # too. Harmless for every other app -
                                         # nasm only reaches a -I when an
                                         # %include misses
+           "-I", os.path.join(ROOT, "build") + os.sep]
+                                        # A C PACKAGE'S SHIM %includes THE
+                                        # COMPILED C out of build/ (SPEC.md
+                                        # 73.1: `%include "paccman.gen.asm"`),
+                                        # so without this every C package -
+                                        # paccman, cword, runcpm, weave, c64 -
+                                        # fails to map at all. tests/paccman.py
+                                        # is the row that needs it; it calls
+                                        # _map('paccman') directly, the way
+                                        # tests/alertbtn.py calls _map('paint').
+                                        # The generated file is a build
+                                        # product, so a tree that has not run
+                                        # `make <pkg>` still cannot map it and
+                                        # the caller gets nasm's own message
+                                        # saying which file is missing.
+                                        #
+                                        # LAST OF THE FOUR, deliberately: it
+                                        # is the only search path that holds
+                                        # BUILD PRODUCTS, so a generated file
+                                        # that happened to share a name with a
+                                        # source include must never be the one
+                                        # nasm finds first.
     bn = "/tmp/os88_%s_%d.bin" % (tag, os.getpid())
     r = subprocess.run(["nasm", "-f", "bin", "-w+error"] + inc + list(defines) +
                        ["-o", bn, tmp],
@@ -101,8 +123,10 @@ def _map(app, defines=()):
             os.unlink(f)
         except OSError:
             pass
-    if "os88_image_end" not in out:
+    if "os88_image_end" not in out and "cc_image_end" not in out:
         sys.exit("dispapps: %s's map has no os88_image_end" % app)
+    if "os88_image_end" not in out:     # a C package: apps/cc/crt0.asm names
+        out["os88_image_end"] = out["cc_image_end"]     # the same byte this
     # **THE MAP DESCRIBES THE SOURCE; THE GUEST IS RUNNING THE IMAGE.** If
     # build/ is behind the tree, every offset below is right for a layout the
     # machine does not have - and what comes back is not an error, it is

@@ -111,6 +111,23 @@ make covl       #   covl is the OVERLAY gate (§73.14); cword is the
                 #   application — Word 1.1a again, in C, in two segments
                 #   (§73.12). `make clean` SPARES build/cc
                 #   (clean-cc removes it) — it is a pinned upstream instrument
+make paccman      # PACCMAN (§91), the C toolchain's FOURTH application:
+make paccmandisk  #   Andre Weissflog's arcade-faithful pacman.c (MIT, pinned
+make xt-paccman   #   at 0f5ec5a) as a second Pac-Man beside §89's assembly
+make 386-paccman  #   one - the Namco 28x36 field, the arcade ROM tables in
+make pmcbandbench #   the COMMITTED pmc_rom.c, the four ghosts, the attract
+                  #   reveal, three voices reduced to the speaker. Shares
+                  #   NOTHING with apps/pacman by §73.12's rule, and `make
+                  #   paccman` and build/pacman.o88 are one letter apart.
+                  #   `paccmandisk` is the floppy in all four geometries;
+                  #   `386-paccman` the 386DX/25 that plays it at full
+                  #   speed; `xt-paccman` the 4.77MHz 86Box XT the user's "maybe
+                  #   more performant on XTs" was about — which it is NOT,
+                  #   and tests/paccman.py prints the two ports side by side
+                  #   with that verdict either way. `pmcbandbench` is the
+                  #   composer's bench, run under `qemu-system-i386 -icount
+                  #   shift=3` and READ ON THE SECOND RUN (the first prices
+                  #   BLIT4 10% high)
 make cpmsw      # the CP/M games and applications the RUNCPM floppies carry
                 #   beside RunCPM's master disk (§74.6) - LADDER, CATCHUM,
                 #   Nemesis, GAINA, WordStar, Turbo Pascal - fetched by
@@ -280,7 +297,8 @@ and hibernate on; `build/mfm20.img` is created blank and kept),
 tree that read that geometry at all: a 1.2MB drive wants the AT's 500 kbps
 controller, so no XT profile can host one),
 `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
-`386-word`, `386-c-word`, `xt-runcpm`, `286-runcpm`, `386-runcpm`, `xt-c64`,
+`386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
+`386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-weave`, `386-weave`, `xt-weave-256`;
 plus `marty` (MartyPC). `xt-multimon` is the
 **two-card** XT — a CGA and a Hercules, a monitor window each — and the only
@@ -292,14 +310,18 @@ first paint and The Wire (§88) reaches os8088.com's live catalog with nothing
 running on the host; the only 86Box profile with a NIC, and its B: is a kept
 scratch disk because Add to Disk writes. `xt-z`
 and `386-z` are the Frotz machines (§61.9), `xt-word`/`386-word` are the Word
-machines (§68.5), `386-c-word` is the C word processor's (§73.12) and
+machines (§68.5), `386-c-word` is the C word processor's (§73.12),
+**`xt-paccman` is the C Pac-Man's (§91) and the XT is the POINT there** rather
+than the postponement — the ask was "maybe more performant on XTs", so the
+machine the claim is about ships with it, and the answer (no: 2.18 fps against
+PACMAN.O88's 4.14) comes off MartyPC, not off it —
 `xt-runcpm`/`286-runcpm`/`386-runcpm` the CP/M emulator's, one per floppy
 geometry because the three disks carry different software and the machines
 run at different speeds — which for a CP/M game IS the play speed (§74.5,
 §74.6) — `xt-c64`/`286-c64`/`386-c64` the C64 emulator's (C64-SPEC §14.3,
 one per geometry for that same reason), and
 `xt-weave`/`386-weave`/`xt-weave-256` the Weave family's
-(WEAVE-SPEC §13.1) — the fourteen that put a dedicated
+(WEAVE-SPEC §13.1) — the fifteen that put a dedicated
 floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
 disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
 family on one floppy — so it is where that geometry of it is booted at all,
@@ -317,8 +339,8 @@ runcpmdisk` the RUNCPM disks (`tools/getruncpm.py` fetches RunCPM's CCP and
 master disk at a pinned commit and `tools/getcpmsw.py` the CP/M games and
 applications that ride beside it, §74.6 — never committed, either of them;
 `make rczex` and `make rcz80test` are the Z80 core's ZEXDOC gates, in the OS
-and in raw QEMU), `make c64disk` the C64 disks, and `make weavedisk` /
-`make loomdisk` the Weave family's two. **`make wiredisk`** is the same shape for a package that
+and in raw QEMU), `make c64disk` the C64 disks, `make paccmandisk` the PaccMan
+disks, and `make weavedisk` / `make loomdisk` the Weave family's two. **`make wiredisk`** is the same shape for a package that
 DOES NOT SHIP: WIREFRAME is an instrument rather than an application (§78.9),
 so `all` builds `wire.o88` and no shipped floppy carries it, and the three
 tests that drive it — `wireflick`, `wirefps`, `uilat` — default to that disk.
@@ -626,8 +648,9 @@ mounts — and every byte read off one is still treated as hostile.
 (86Box / a real XT) and 1.2MB 5.25" HD (§19, the AT-class machine with no 3.5"
 drive). Changing the boot path, the FAT driver or the disk layout means
 checking all four. This is the rule for the on-demand APPLICATION floppies too
-— `zdisk`, `worddisk`, `cworddisk`, `runcpmdisk`, `c64disk`, `weavedisk`,
-`loomdisk`, `allapps` — which were three-geometry until 1.2MB reached them.
+— `zdisk`, `worddisk`, `cworddisk`, `paccmandisk`, `runcpmdisk`, `c64disk`,
+`weavedisk`, `loomdisk`, `allapps` — which were three-geometry until 1.2MB
+reached them.
 
 **Nine images, not seven.** The system and apps disks in four geometries each,
 plus `build/media360.img` — `BEVERLY.MOD` is 114 of a 360KB disk's 354 clusters

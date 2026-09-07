@@ -183,6 +183,19 @@ VM386WORD := $(CURDIR)/vm/386-word
 # checked the clock of.
 VM386CWORD := $(CURDIR)/vm/386-c-word
 
+# The PACCMAN machine (SPEC.md 91): the period machine the C Pac-Man is LOOKED
+# at on, and here the XT is the point rather than the postponement - the port's
+# whole premise is "maybe more performant on XTs", so a 4.77MHz 8088 is the
+# machine that has to be watched playing. What it CANNOT do is assert
+# (docs/TESTING.md); tests/paccman.py on MartyPC is what measures, and this is
+# where the reveal is stopwatched and the PMC_CATCHUP_MAX = 2 feel is judged.
+# It is a copy of vm/xt-word with fdd_02_fn (B: = build/paccman720.img, the
+# 35_2dd drive that machine already has) and the uuid changed and NOTHING
+# else, for the standing reason: 86Box does not reject an unrecognised key, it
+# substitutes a default and rewrites the config on the way out.
+VMXTPACCMAN := $(CURDIR)/vm/xt-paccman
+VM386PACCMAN := $(CURDIR)/vm/386-paccman
+
 # The RUNCPM machines (SPEC.md 74.5, 74.6): one per FLOPPY GEOMETRY, because
 # the three RUNCPM disks do not carry the same software and the machines that
 # take them do not run at the same speed - and a CP/M game is timing-sensitive
@@ -1615,9 +1628,11 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         stories zdisk ztest zh zhboot zcheck zgfx zpic zgfxpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
         cc-note chello covl pkgrun pkgbig cword cworddisk 386-c-word runcpm runcpmdisk \
+        paccman paccmandisk pmcbandbench xt-paccman 386-paccman \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
+        paccman paccmandisk pmcbandbench xt-paccman \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
@@ -2385,12 +2400,12 @@ APPSYSARGS := $(addprefix SYSTEM:,$(APPSYS))
 #      from before it could open anything at all;
 #   2. os88disk.py builds ASSOC.DAT from the packages on the disk it is
 #      building (SPEC.md 54.7), so the system disk's cache gains PAINT,
-#      NOTEPAD and BROWSER rows naming the folder they live in ON THAT VOLUME
+#      NOTEPAD, BROWSER and FONT VIEWER rows naming their folder ON THAT VOLUME
 #      - and the first full mount of A: therefore seeds the
 #      .TXT/.BMP/.GIF/.HTM hints at A: instead of at a disk that is not in
 #      the drive (SPEC.md 54.7.1). That mount used to teach the machine
 #      nothing at all, TASKMGR.O88 being the only package on the disk and
-#      nothing being associated with it. Calculator, Mines and Telnet have no
+#      nothing being associated with it. Mines and Telnet have no
 #      association and are here for reason 1 alone; their rows are icon-cache
 #      rows, which is what makes APPS/ and GAMES/ on this disk open without a
 #      header read per package.
@@ -2429,8 +2444,8 @@ APPSYSARGS := $(addprefix SYSTEM:,$(APPSYS))
 # was already lying in build/, which reads exactly like a stale package rather
 # than like a missing dependency. The guard that keeps these on the apps disk
 # too is down beside APPS_TOOLS, where both lists exist.
-CORE_TOOLS := $(BUILD)/browser.o88 $(BUILD)/calc.o88 $(BUILD)/notepad.o88 \
-              $(BUILD)/paint.o88 $(BUILD)/telnet.o88
+CORE_TOOLS := $(BUILD)/browser.o88 $(BUILD)/fontview.o88 \
+              $(BUILD)/notepad.o88 $(BUILD)/paint.o88 $(BUILD)/telnet.o88
 CORE_GAMES := $(BUILD)/mines.o88
 COREAPPS := $(CORE_TOOLS) $(CORE_GAMES)
 COREAPPSARGS := $(addprefix APPS:,$(CORE_TOOLS)) \
@@ -2613,6 +2628,14 @@ $(BUILD)/taskmgr.bin: apps/taskmgr/taskmgr.asm apps/os88api.inc | $(BUILD)
 
 $(BUILD)/taskmgr.o88: $(BUILD)/taskmgr.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/taskmgr.bin -o $@
+
+$(BUILD)/fontview.bin: apps/fontview/fontview.asm apps/os88api.inc \
+                       apps/os88type.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/fontview/fontview.asm
+	@echo "fontview: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/fontview.o88: $(BUILD)/fontview.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/fontview.bin -o $@
 
 # ...AND A STAMP FILE, for exactly VIDSTAMP's and DSSTAMP's reason. PICOMEM,
 # PM_BASE and PM_SB_PORT change the command line and no source, so without
@@ -4375,8 +4398,8 @@ $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88dis
 #    builds every floppy this project ships; `make` there prints the one
 #    paragraph cc-note holds and exits 0. Every rule below reaches the
 #    compiler only through the `cc-toolchain` order-only guard in
-#    apps/cc/Makefile.inc, which prints the command to run rather than failing
-#    from inside a recipe with "no such file".
+#    apps/cc/Makefile.inc, which sets up missing compiler binaries before
+#    the compilation starts.
 #
 #  * CWORD DOES NOT RIDE THE SHIPPED APPS DISKS. It takes Frotz's and Word's
 #    precedent (SPEC.md 61, 65.5, and 67.12 names the disk and the machine):
@@ -4392,11 +4415,12 @@ cc-note:
 	@test -x $(CC_SMLRCC) || { \
 	  echo "";                                                              \
 	  echo "note: the C toolchain (SPEC.md 73) is not built, so the C";     \
-	  echo "      targets - cc-smoke, chello, cword, cworddisk and";        \
-	  echo "      386-c-word - are unavailable. Everything else, which is"; \
-	  echo "      every floppy this project ships, is built above.";        \
+	  echo "      targets - cc-smoke, chello, cword, cworddisk, paccman,";   \
+	  echo "      paccmandisk, pmcbandbench, xt-paccman and";               \
+	  echo "      386-c-word - will set it up automatically. Everything else,"; \
+	  echo "      including every shipping floppy, is built above.";        \
 	  echo "";                                                              \
-	  echo "      To get it:  tools/setup-cc.sh";                           \
+	  echo "      To set it up explicitly: tools/setup-cc.sh";                           \
 	  echo "";                                                              \
 	  echo "      It fetches SmallerC at its pinned commit into build/cc/"; \
 	  echo "      - the compiler is not in this tree because build/ is";    \
@@ -4425,7 +4449,7 @@ cc-note:
 # up, that is the moment to lift these four rules into a directory-taking
 # CC_PACKAGE_AT and give both callers the same one.
 $(BUILD)/chello.raw.asm: tests/chello/chello.c $(CC_RUNTIME) | $(BUILD) cc-toolchain
-	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
 		tests/chello/chello.c -o $@
 
@@ -4469,7 +4493,7 @@ chello: $(BUILD)/chello.img $(BUILD)/chello360.img
 # SPACE, and read the numbers - each one is a different way for the mechanism
 # to be wrong (tests/covl/covl.c says which).
 $(BUILD)/covl.raw.asm: tests/covl/covl.c $(CC_RUNTIME) | $(BUILD) cc-toolchain
-	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
 		tests/covl/covl.c -o $@
 
@@ -4686,6 +4710,130 @@ $(BUILD)/cword360.img: $(CWORDDISK) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(CWORDDISK) --folder DOCS
 	@python3 tools/os88disk.py --verify $@
 
+# --- PACCMAN, pacman.c as a C package (SPEC.md 91) ---------------------------
+# The C toolchain's fourth application: the Namco arcade Pac-Man as Andre
+# Weissflog's pacman.c has it (MIT, commit 0f5ec5a), reimplemented in the C
+# this toolchain compiles plus the band composer that is hand-written 8086.
+# `make paccman` runs the host checks (apps/paccman/build.sh) and then builds
+# the package; `make paccmandisk` the floppy in all four geometries; `make
+# pmcbandbench` brackets the composer on MartyPC's XT.
+#
+# IT IS NOT PACMAN (SPEC.md 73.12's rule). §89's apps/pacman/ is the Roklan
+# Atari disk version in hand-written assembly, package PACMAN, on the shipped
+# apps disks' GAMES/ folder. The two share no file, package name, make target,
+# disk image or VM directory - and the names differ by ONE LETTER, so a typo
+# here silently builds the other program. Nothing in this section may reach a
+# `pacman` name and nothing in §89's may reach a `paccman` one.
+#
+# On demand, like cword: nothing in `all` reaches it and it needs SmallerC.
+$(eval $(call CC_PACKAGE,paccman,paccman))
+
+# THE REST OF THE TRANSLATION UNIT. `nasm -f bin` has no notion of an external
+# symbol, so a C package is ONE compilation and one assembly (SPEC.md 73.1):
+# paccman.c #includes eight parts and the shim %includes the band composer.
+# CC_PACKAGE names apps/paccman/paccman.c and apps/paccman/paccman.asm, which
+# is right for the general case and nine files short here, and MAKE CANNOT SEE
+# THROUGH A #include OR A %include. Without these lines an edit to the
+# composer or to the generated ROM tables leaves build/paccman.o88 untouched,
+# and a stale package reads exactly like the change having done nothing.
+PACCMANSRC := apps/paccman/pmc_rom.c apps/paccman/pmc_time.c \
+              apps/paccman/pmc_vid.c apps/paccman/pmc_move.c \
+              apps/paccman/pmc_game.c apps/paccman/pmc_intro.c \
+              apps/paccman/pmc_snd.c apps/paccman/pmc_draw.c \
+              apps/paccman/pmc_menu.c
+PACCMANHOST := apps/paccman/build.sh apps/paccman/hosttest/os88.h \
+               apps/paccman/hosttest/pmcuitest.c \
+               apps/paccman/hosttest/pmcbandtest.asm \
+               apps/paccman/hosttest/pmcbandtest.sh \
+               tools/paccman_assets.py
+$(BUILD)/paccman.raw.asm: $(PACCMANSRC) $(BUILD)/.paccman-hostchecks
+$(BUILD)/paccman.bin: apps/paccman/pmcband.inc apps/paccman/icon.inc \
+                      apps/paccman/LICENSE apps/os88ui.inc
+
+# The host checks, before anything is built for the 8086 - the harness's
+# recomposition audit and the composer's SS != DS gate both catch what a
+# screendump cannot (LESSONS.md 7). apps/paccman/pmcband.inc is in the
+# prerequisites because pmcbandtest.asm %includes the SHIPPING file: an edit
+# to a composer must re-run the gate, and make cannot see through a %include.
+# tools/paccman_assets.py is in PACCMANHOST for the SAME reason one level
+# along: build.sh runs it as `--check` against the COMMITTED pmc_rom.c, and
+# make can no more see through a shell script than through a %include - so an
+# extractor edited alone would leave this stamp newer than every prerequisite,
+# the reproduction check unrun, and an extractor that no longer reproduces the
+# committed tables shipping silently, which is the one thing that gate is for.
+$(BUILD)/.paccman-hostchecks: apps/paccman/paccman.c $(PACCMANSRC) \
+                              $(PACCMANHOST) apps/paccman/pmcband.inc | $(BUILD)
+	apps/paccman/build.sh
+	@touch $@
+
+.PHONY: paccman paccmandisk pmcbandbench xt-paccman
+paccman: $(BUILD)/paccman.o88
+
+# ALL FOUR geometries (CLAUDE.md): 1.44MB and 720KB for QEMU, 360KB for an
+# 86Box XT or a real one, and 1.2MB 5.25" HD for the AT-class machine with no
+# 3.5" drive. --verify is a standalone structural fsck and is in the recipe
+# because it costs milliseconds and catches the class of defect that otherwise
+# arrives as "Disk error" inside the emulator ten minutes later.
+#
+# NO FOLDER AND NO SIDECAR: there is no .OVL (SPEC.md 91's budget says none is
+# needed) and no document type - pacman.c has no file I/O of any kind - so the
+# package sits at the root beside its README and nothing can be separated from
+# anything. The day the size line passes 50,000 and pmc_intro.c moves out,
+# this grows a folder, the way CWORD's disk carries one.
+PACCMANDISK := $(BUILD)/paccman.o88 apps/paccman/README.md
+
+$(BUILD)/paccman.img: $(PACCMANDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(PACCMANDISK)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/paccman720.img: $(PACCMANDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(PACCMANDISK)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/paccman120.img: $(PACCMANDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(PACCMANDISK)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/paccman360.img: $(PACCMANDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(PACCMANDISK)
+	@python3 tools/os88disk.py --verify $@
+
+paccmandisk: $(BUILD)/paccman.img $(BUILD)/paccman720.img \
+             $(BUILD)/paccman120.img $(BUILD)/paccman360.img
+
+# THE BAND BENCH (SPEC.md 91, PERFORMANCE.md): tests/pmcband/pmcbandbench.asm
+# %includes the SHIPPING apps/paccman/pmcband.inc and brackets each of its
+# routines, one OSAPI_GFX_BLITP of a 224x8 band and one OSAPI_GFX_BLIT4 of the
+# same. TAKEN UNDER `qemu-system-i386 -icount shift=3` and converted at
+# PERFORMANCE.md Part 4's one count = 0.359 ms of real XT, which is the house
+# practice C64-SPEC 14 and WEAVE-SPEC use; it is NOT a MartyPC run, and the
+# three documents that said so were corrected. Its numbers are the ONLY
+# source of any microsecond in SPEC.md 91, in apps/paccman/README.md or in
+# the harness's cost table - LESSONS.md 13's rule that a per-cell guess was
+# 7x wrong once and a bench settled it. Under `make bench`'s rules, not
+# `all`'s.
+# Its tables are built BY NASM, with %rep, from the same definitions
+# tools/paccman_assets.py uses - so the bench needs no generated file and
+# measures the routines rather than a copy of the data.
+#
+#   make pmcbandbench
+#   python3 tools/marty.py ... build/pmcband.img          (docs/MARTYPC-DEBUG.md)
+$(BUILD)/pmcbband.bin: tests/pmcband/pmcbandbench.asm apps/paccman/pmcband.inc \
+                       tests/benchlib.inc apps/os88api.inc tools/benchlint.py \
+                       | $(BUILD)
+	python3 tools/benchlint.py tests/pmcband/pmcbandbench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/pmcband/pmcbandbench.asm
+	@echo "pmcbband: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/pmcbband.o88: $(BUILD)/pmcbband.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/pmcbband.bin -o $@
+
+$(BUILD)/pmcband.img: $(BUILD)/pmcbband.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/pmcbband.o88
+	@python3 tools/os88disk.py --verify $@
+
+pmcbandbench: $(BUILD)/pmcband.img
+
 # --- RUNCPM, RunCPM 6.9 as a C package (SPEC.md 71) --------------------------
 # The C toolchain's second application: a CP/M 2.2 emulator - a Z80 in a 64KB
 # claim, BIOS/BDOS in C, drives as folders, an 80x25 terminal in a window - a
@@ -4736,6 +4884,11 @@ RUNCPMDIR := $(BUILD)/runcpm-disk
 $(BUILD)/runcpm-src.stamp: tools/getruncpm.py | $(BUILD)
 	python3 tools/getruncpm.py -o $(RUNCPMDIR)
 	@touch $@
+
+# Live/all-apps images also name these files directly. Their producer must
+# be visible to make before the first fetch, including parallel builds.
+$(RUNCPMDIR)/CCP-DR.60K $(RUNCPMDIR)/LICENSE $(RUNCPMDIR)/1STREAD.ME: $(BUILD)/runcpm-src.stamp
+	@test -f $@ || python3 tools/getruncpm.py -o $(RUNCPMDIR)
 
 runcpm-src: $(BUILD)/runcpm-src.stamp
 
@@ -5448,7 +5601,7 @@ $(BUILD)/lmfoldc.h: tools/weavesim.py | $(BUILD)
 
 $(BUILD)/loom.raw.asm: apps/loom/loom.c $(CC_RUNTIME) $(BUILD)/lmfoldc.h \
                        | $(BUILD) cc-toolchain
-	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(BUILD) \
 		apps/loom/loom.c -o $@
 
@@ -5464,6 +5617,10 @@ $(BUILD)/loom.o88: $(BUILD)/loom.bin tools/os88pkg.py tools/os88ovl.py
 	python3 tools/os88ovl.py $< -o $(BUILD)/LOOM.OVL \
 		--trim $(BUILD)/loom.trim.bin
 	python3 tools/os88pkg.py $(BUILD)/loom.trim.bin -o $@
+
+# A direct prerequisite of live/all-apps media, produced with loom.o88.
+$(BUILD)/LOOM.OVL: $(BUILD)/loom.o88
+	@test -f $@ || python3 tools/os88ovl.py $(BUILD)/loom.bin -o $@ --trim $(BUILD)/loom.trim.bin
 
 # THE REST OF THE TRANSLATION UNIT, exactly as the WEAVE block above explains
 # it: `nasm -f bin` has no notion of an external symbol, so a C package is ONE
@@ -5509,7 +5666,7 @@ $(BUILD)/loom.bin:     $(LOOMINC) $(WEAVEINC) $(BUILD)/wpvsize.inc
 # frames), and apps/cc/os88thunk.asm.
 $(BUILD)/lmpvmod.raw.asm: apps/loom/lmpvmod.c $(CC_RUNTIME) $(LOOMSRC) \
                           $(WEAVESRC) | $(BUILD) cc-toolchain
-	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(BUILD) \
 		apps/loom/lmpvmod.c -o $@
 
@@ -7412,7 +7569,7 @@ $(BUILD)/lptlink144.img: $(BUILD)/llboot144.bin $(BUILD)/lptlink.bin \
 # also the only answer that survives a host OS writing to the disk. What is
 # left here is which packages ship and which folder each lands in.
 APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
-              $(BUILD)/chart.o88 $(BUILD)/fractal.o88 \
+              $(BUILD)/chart.o88 $(BUILD)/fontview.o88 $(BUILD)/fractal.o88 \
               $(BUILD)/hello.o88 $(BUILD)/modplug.o88 $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 $(BUILD)/recorder.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
@@ -7543,8 +7700,12 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 # Nineteen clusters for a need of three, deliberately: this geometry has been
 # at zero free twice now, and SPEC.md 70.11's Zmodem receiver will grow TELNET
 # again. A disk that is exactly full is a disk the next byte breaks.
-APPS_TOOLS_360 := $(filter-out $(BUILD)/audio.o88 $(BUILD)/modplug.o88,\
-                               $(APPS_TOOLS))
+#
+# FONT VIEWER is already in APPS/ on the paired 360KB system disk, beside the
+# FONTS/ files it opens; copying it to the software disk as well would exceed
+# that disk by four clusters. Both packages ship on the roomier apps disks.
+APPS_TOOLS_360 := $(filter-out $(BUILD)/audio.o88 $(BUILD)/modplug.o88 \
+                               $(BUILD)/fontview.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
@@ -7701,8 +7862,9 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) tools/os88disk.py
 # the tree above has besides RUNCPM\A\0, one cluster each at 1.44MB's 16
 # entries a cluster - DERIVED from ALLAPPSARGS below (ALLAPPSDIRS: every
 # DIR: prefix, each one's parent, --folder DOCS, and RUNCPM\A, the
-# selection's own parent; thirteen today: APPS, GAMES, MEDIA, WORD,
-# CWORD, RUNCPM, RUNCPM\A, C64, WEAVE, LOOM, SYSTEM, SYSTEM\DOS, DOCS), so
+# selection's own parent; fourteen today: APPS, GAMES, MEDIA, WORD,
+# CWORD, PACCMAN, RUNCPM, RUNCPM\A, C64, WEAVE, LOOM, SYSTEM, SYSTEM\DOS,
+# DOCS), so
 # the budget is derived
 # here as it is for build/runcpm.img, and a folder added to the tree above
 # is priced without anyone remembering a constant. One parent level is
@@ -7714,11 +7876,14 @@ ALLAPPSIMG120 := $(BUILD)/apps-all-120.img
 ALLAPPSFILES := $(APPS) $(BUILD)/frotz.o88 \
                 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
+                $(PACCMANDISK) \
                 $(BUILD)/c64.o88 $(BUILD)/C64.OVL \
                 apps/c64/README.TXT apps/c64/COPYING \
                 $(WEAVEDISK) $(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS) \
                 $(RUNCPMDISK)
-ALLAPPS := $(ALLAPPSFILES) $(RUNCPMDEPS)
+# These images use the RunCPM master disk, but not the separate CP/M
+# software collection used by runcpmdisk. Do not fetch that unused payload.
+ALLAPPS := $(ALLAPPSFILES) $(BUILD)/runcpm-src.stamp tools/getruncpm.py
 
 # LOOMRUN IS NAMED TWICE ON THIS DISK AND MUST BE PRICED TWICE. ALLAPPSARGS
 # below places the runtime's three files under WEAVE\ and again under LOOM\,
@@ -7743,6 +7908,7 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BUILD)/frotz.o88) \
                                  $(BUILD)/WELCOME.DOC) \
                $(addprefix CWORD:,$(BUILD)/cword.o88 $(BUILD)/CWORD.OVL \
                                   $(BUILD)/WELCOME.RTF) \
+               $(addprefix PACCMAN:,$(PACCMANDISK)) \
                $(addprefix RUNCPM:,$(RUNCPMDISK)) \
                $(addprefix C64:,$(BUILD)/c64.o88 $(BUILD)/C64.OVL \
                                 apps/c64/README.TXT apps/c64/COPYING) \
@@ -7857,6 +8023,11 @@ $(LIVEISO): $(USBIMG) $(SYSDOC) tools/os88iso.py
 # so and takes a path (an unpacked release zip has the same files).
 burn:
 	@python3 tools/os88burn.py
+
+# Discover built images and attached floppy/USB/CD media without building.
+.PHONY: imager
+imager:
+	@python3 tools/os88imager.py --images "$(BUILD)"
 
 # `make combo` -> build/combo.img: ONE 360KB bootable disk with the system,
 # every application AND the four benchmarks on it.
@@ -8707,6 +8878,32 @@ xt-word: $(IMG360) $(BUILD)/word720.img
 386-c-word: $(IMG) $(BUILD)/cword.img
 	@$(UNPROTECT) $(VM386CWORD)/86box.cfg
 	$(BOX) -P $(VM386CWORD) -N
+
+# The PACCMAN machine (SPEC.md 91): an IBM XT at 4.77MHz with 640KB and the
+# OTI-067 VGA, booting the 360KB system floppy with build/paccman720.img in B:
+# - vm/xt-word's machine with one line different.
+#
+# THE XT IS THE POINT HERE, which is the opposite of 386-c-word's reasoning one
+# rule up: the user's ask was "maybe this port is more performant on XTs", so
+# the machine the claim is about is the machine that ships with it. It cannot
+# ASSERT anything (docs/TESTING.md) - tests/paccman.py on MartyPC does that -
+# but it is where a human watches the attract reveal, stopwatches its 630 game
+# ticks for the effective game speed, and judges whether PMC_CATCHUP_MAX = 2
+# feels like Pac-Man. $(UNPROTECT) for the standing reason, even though this
+# package never writes: 86Box re-adds wp:// on the way out and a write-protected
+# B: would refuse the launch's own read on some paths.
+xt-paccman: $(IMG360) $(BUILD)/paccman720.img
+	@$(UNPROTECT) $(VMXTPACCMAN)/86box.cfg
+	$(BOX) -P $(VMXTPACCMAN) -N
+
+# ...and the fast one: vm/386-c-word's 386DX/25 with two 1.44MB drives and
+# build/paccman.img in B: - the machine to PLAY it on, where the game runs at
+# the arcade's own speed (the XT above is where to watch it not). A copy of
+# that cfg with fdd_02_fn and the uuid changed and nothing else, for the
+# standing reason.
+386-paccman: $(IMG) $(BUILD)/paccman.img
+	@$(UNPROTECT) $(VM386PACCMAN)/86box.cfg
+	$(BOX) -P $(VM386PACCMAN) -N
 
 # The RUNCPM machine (SPEC.md 74.5): vm/386-c-word with B: = build/runcpm.img
 # and the uuid changed and NOTHING else, for the same reason that one is a
