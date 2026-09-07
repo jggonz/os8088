@@ -97,25 +97,26 @@ not on the next byte.
 
 **Read that as a bill and not as headroom**, which is the same number the
 other way up and the only way round that is true: big's image rung is
-**508/512 spent** and its cold rung **507/512**, by changes that each crossed
+**392/512 spent** and its cold rung **358/512**, by changes that each crossed
 nothing and were free for it. `kernsize`'s `accrued` line prints exactly that,
 and the section below is why it is the figure to quote.
 
-**Four bytes is not a typo.** On big the binding rung is the image, at
-65,020 of 65,024 — four bytes of `.text` or `.bss` assemble and take it to
-zero, a fifth crosses it and spends 512, and `.cold` is one byte behind it at
-five. Which of them bites depends on where the next change lands, so neither
-figure on its own is big's room.
+**Forty-two bytes is not a typo.** The binding rung is kern_small's cold, at
+470/512 — forty-two bytes of `.cold` assemble and take it to zero, and the
+forty-third crosses it and spends 512 on every 128KB machine. Big's tightest
+is its image rung at 120 and its cold at 154. Which of them bites depends on
+where the next change lands, so no one figure on its own is the tree's room.
 
 **What that means in bytes you can actually add**, read off `kernsize`'s rung
-and accrued lines rather than inferred from the spare: **big takes 4 more
-bytes of `.text`/`.bss` and 5 of `.cold` before it crosses, small 277 and
-399** — and big has two steps of budget behind that crossing where small has
-none, so on small the crossing IS the failure. Both fail on `KERN_BUDGET` and
-not on `KERN_CODE_MAX`, which still has 516 on big and 9,493 on small. The
-footprint moves in whole 512-byte rungs, so the next change that crosses one
-costs 512 whatever its own size was — and small's slack is all rung and no
-budget: the byte after it fails. `tools/kernsize.py`, below, is what says so,
+and accrued lines rather than inferred from the spare: **big takes 120 more
+bytes of `.text`/`.bss` and 154 of `.cold` before it crosses, small 365 and
+42** — and both now have budget behind that crossing, big 37 steps and small
+57, so on neither is the crossing itself the failure: it is 512 bytes of that
+machine's RAM. Both would fail on `KERN_BUDGET` long before `KERN_CODE_MAX`,
+which has 8,312 left on big and 21,357 on small. The footprint moves in whole
+512-byte rungs, so the next change that crosses one costs 512 whatever its own
+size was — and the sharp edge has moved from big to small, and from the image
+rung to the cold one. `tools/kernsize.py`, below, is what says so,
 and `make` runs it on every build — but only for the build it is building, so
 `make small` is the one that reports the second figure.
 
@@ -1103,33 +1104,33 @@ Three things about it:
   "big": {
     "boot2": 2250,
     "bootmax": 192512,
-    "bss": 6067,
+    "bss": 6141,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 37186,
-    "coldpara": 2336,
+    "cold": 37734,
+    "coldpara": 2368,
     "fatpara": 288,
-    "imgpara": 3552,
-    "kend": 6944,
+    "imgpara": 3584,
+    "kend": 7008,
     "kseg": 96,
-    "ksize": 109568,
+    "ksize": 110592,
     "lowbss": 9182,
     "lowpara": 608,
     "minramkb": 196,
-    "ovl": 1417,
+    "ovl": 1418,
     "ovlw": 5037,
     "stk0": 512,
-    "text": 50733,
+    "text": 51083,
     "vgabuf": 848,
     "vgabufpara": 64
   },
   "small": {
     "boot2": 2250,
     "bootmax": 122880,
-    "bss": 4847,
+    "bss": 4854,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 25885,
+    "cold": 26070,
     "coldpara": 1632,
     "fatpara": 64,
     "imgpara": 2784,
@@ -1142,7 +1143,7 @@ Three things about it:
     "ovl": 423,
     "ovlw": 2789,
     "stk0": 512,
-    "text": 39261,
+    "text": 39325,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -1256,16 +1257,22 @@ Everything above `KERN_END` is the claim heap, up to whatever int 12h
 reports. The arithmetic is exact and worth writing down, because every RAM
 figure in this project falls out of it:
 
-> **heap KB = what int 12h reports − 108.0** (kern_big, as this branch stands;
-> kern_small's is **91.5**)
+> **heap KB = what int 12h reports − 109.5** (kern_big, as this branch stands;
+> kern_small's is **78.0**)
 
 > **Both figures were 120.0 and 106.5 until this edition, and the stale pair
 > had been quoted onward. They then moved AGAIN inside one merge** — kernel
 > size pass 3 landed and took them to 108.0 and 94.0 before the ink was dry - and small's has moved once more since, to 91.5, when file associations were gated out of it -
+> **and both have moved again, to 109.5 and 78.0, across #148, #151, #154, #163
+> and #166 — five merges that went without a `--bless`, so the pair above was
+> stale for all five and every one of them read its own growth against #147's
+> figures. That is this paragraph happening for the fourth time, and the
+> fourth time it was the baseline rather than the prose that went unread.**
 > which is the point below made twice in a row. The sentence above says not to re-derive the
 > ladder by hand and `tools/kernsize.py` prints it — but nothing re-read it
 > either, so "a 128KB machine has 21.5KB of heap" was carried into SPEC.md
-> §27.16 and into an overlay note in §52.11. The true figure is **32.5KB**,
+> §27.16 and into an overlay note in §52.11. The true figure was **32.5KB**
+> then and is **50.0KB** now,
 > and the difference is not academic: it is the whole margin between Paint's
 > small build loading on the floor machine and not (SPEC.md §42.22, measured
 > both ways on `os8088_5150_gla_128k`). Re-read the `ladder` line after any
@@ -2031,44 +2038,44 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 30,687 | 34.9% |
-| the window system and its furniture | 24,279 | 27.6% |
-| drawing: adapters, primitives, glyphs, icons | 14,926 | 17.0% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,546 | 9.7% |
-| the kernel proper: API table, heap, scheduler, events | 7,349 | 8.4% |
-| the three built-in kinds | 1,542 | 1.8% |
+| the file system, end to end | 30,869 | 34.8% |
+| the window system and its furniture | 24,514 | 27.6% |
+| drawing: adapters, primitives, glyphs, icons | 14,993 | 16.9% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,891 | 10.0% |
+| the kernel proper: API table, heap, scheduler, events | 7,418 | 8.4% |
+| the three built-in kinds | 1,542 | 1.7% |
 | the Control Panel | 590 | 0.7% |
-| **total** | **87,919** | |
+| **total** | **88,817** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |
 |---|---:|---:|---:|---:|---:|---:|
-| `wm.inc` — the window manager (§11) | 11,671 | 94 | **11,765** | 1,074 | — | — |
+| `wm.inc` — the window manager (§11) | 11,672 | 94 | **11,766** | 1,074 | — | — |
 | `files.inc` — the Disk window (§22) | 1,049 | 8,183 | **9,232** | 465 | — | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 7,242 | 702 | **7,944** | 162 | 526 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 395 | 5,797 | **6,192** | 889 | — | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 7,242 | 769 | **8,011** | 165 | 526 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 395 | 5,842 | **6,237** | 889 | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 241 | 4,969 | **5,210** | 168 | — | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 4,496 | **4,675** | 152 | — | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 3,795 | — | **3,795** | 151 | 128 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 3,377 | — | **3,377** | 58 | — | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,790 | 177 | **2,967** | 197 | 84 | — |
+| `mouse.inc` — serial mouse and the cursor (§9) | 3,812 | — | **3,812** | 151 | 128 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 3,432 | — | **3,432** | 58 | — | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,794 | 177 | **2,971** | 197 | 84 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 541 | 1,951 | **2,492** | 356 | — | — |
 | `assoc.inc` — file type associations (§54) | 480 | 2,004 | **2,484** | 43 | — | — |
 | `memory.inc` — the claim heap (§50) | 35 | 2,420 | **2,455** | 18 | 324 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 496 | 1,951 | **2,447** | 356 | — | — |
 | `instance.inc` — instances and the built-in kinds (§29) | 2,054 | 236 | **2,290** | 700 | — | — |
 | `font.inc` — the 8×8 glyph renderer (§6) | 2,186 | — | **2,186** | 215 | 784 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,116 | **2,116** | 142 | — | — |
 | `apps.inc` — the three built-in kinds (§14) | 282 | 1,260 | **1,542** | 11 | 240 | — |
-| `sched.inc` — pre-emptive scheduling (§7–8) | 1,340 | — | **1,340** | 207 | 2,944 | — |
+| `sched.inc` — pre-emptive scheduling (§7–8) | 1,360 | — | **1,360** | 207 | 2,944 | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,292 | — | **1,292** | 20 | — | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,230 | — | **1,230** | 74 | — | — |
+| `desk.inc` — the desktop and volume zones (§14/§26.1) | 11 | 1,025 | **1,036** | 79 | — | — |
 | `snd.inc` — the sound layer (§34) | 1,024 | — | **1,024** | 287 | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 986 | — | **986** | 9 | — | — |
 | `icons.inc` — the icon renderer (§10) | 977 | — | **977** | 281 | — | — |
+| `loader.inc` — the package loader (§21) | 4 | 869 | **873** | 39 | — | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 867 | — | **867** | — | 696 | 3 |
-| `desk.inc` — the desktop and volume zones (§14/§26.1) | 11 | 850 | **861** | 12 | — | — |
-| `loader.inc` — the package loader (§21) | 4 | 732 | **736** | 35 | — | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 725 | — | **725** | — | — | — |
 | `dock.inc` — the dock strip (§30) | 696 | — | **696** | 35 | — | — |
 | `clock.inc` — the clock ladder (§37) | 606 | — | **606** | 59 | — | — |
@@ -2077,6 +2084,7 @@ generated in the first place.
 | `toast.inc` — the menu bar's transient message (§59) | 433 | — | **433** | 25 | — | — |
 | `blank.inc` — the idle screen blanker (§64) | 194 | 236 | **430** | — | — | — |
 | `mod.inc` — on-demand kernel modules (§2.8) | 56 | 309 | **365** | 112 | — | — |
+| `vmmouse.inc` — **(undescribed)** | 159 | 124 | **283** | — | — | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 232 | — | **232** | 22 | — | — |
 | `clip.inc` — the system clipboard (§55) | 179 | — | **179** | 5 | — | — |
 | `events.inc` — the event ring (§10) | 159 | — | **159** | 3 | 128 | — |
@@ -2088,8 +2096,8 @@ generated in the first place.
 | `bootprof.inc` — the boot phase table (§15.5), `BOOTPROF=1` | — | — | **0** | — | — | — |
 | `stkdiag.inc` — **(undescribed)** | — | — | **0** | — | — | — |
 | `moudiag.inc` — what the identify window saw (§9.4.6), `MOUDIAG=1` | — | — | **0** | — | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,012 | 18 | **3,030** | — | — | 421 |
-| **total** | **50,733** | **37,186** | **87,919** | **6,067** | **9,182** | **2,250** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,061 | 18 | **3,079** | — | — | 421 |
+| **total** | **51,083** | **37,734** | **88,817** | **6,141** | **9,182** | **2,250** |
 <!-- END generated table -->
 
 ### Reading it
