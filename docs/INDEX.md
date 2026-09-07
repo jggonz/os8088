@@ -291,6 +291,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | FPTEST | `apps/fptest/fptest.asm` |  |
 | FRACTAL | `apps/fractal/fractal.asm` | §40 |
 | FTPD | `apps/ftpd/ftpd.asm` | §77 |
+| HDA DIAG | `apps/hdadiag/hdadiag.asm` |  |
 | HELLO | `apps/hello/hello.asm` | §27 |
 | LOOM | `apps/loom/loom.asm` | `docs/WEAVE-SPEC.md` |
 | MINES | `apps/mines/mines.asm` | §23 |

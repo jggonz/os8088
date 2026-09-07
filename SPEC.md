@@ -43180,9 +43180,72 @@ output stream descriptor.
 
 The driver is deliberately codec-specific at attach: vendor/device parameter
 `10ec:0269` must answer, and the configured path is ALC269 DAC node 02 through
-mixer 0c to speaker/headphone pins 14/15. Refusing an unknown codec is safer
-than sending amplifier and pin verbs to guessed nodes. Supporting another HDA
-codec means adding its discovered topology as a separate codec profile.
+mixer 0c to **the output pins the codec's own configuration defaults name**.
+Refusing an unknown codec is safer than sending amplifier and pin verbs to
+guessed nodes. Supporting another HDA codec means adding its discovered
+topology as a separate codec profile.
+
+The pins are discovered, not named: the first build drove speaker 14 and
+headphone 15, which is the ALC269 reference topology and not necessarily the
+board's - an ALC269VB puts the headphone jack on 21, and a pin the board
+never wired answers every verb and drives nothing. At attach the driver walks
+the function group's widgets once and keeps every pin complex that can drive
+an output and whose configuration default says a line out, a speaker or a
+headphone is physically connected, up to eight, the headphone flagged. Each
+is powered in the same burst as the function group and the DAC; after the
+settle each gets its connection select pointed at the first entry of its
+list that reaches the DAC (mixer 0c or DAC 02), output enable - HP-enable as
+well on the jack - EAPD, and its output amplifier unmuted at 0 dB. A codec
+whose defaults name nothing gets the reference pair back rather than a
+refusal, because a refusal would leave the machine mute for a reason no
+report could show.
+
+Then Realtek's half, which the HDA specification does not describe and every
+open driver applies. The **SKU** - the low word of the codec's subsystem ID,
+or when that word is the PCI function's own or has bit 0 clear, pin 1d's
+configuration default, which the codec's firmware uses as a 16-bit SKU word
+with a popcount checksum in bits 19:16 - says in bits 5:3 how the board
+switches its external amplifier: 1, 3 and 7 name GPIO masks 1, 2 and 3, and
+anything else means EAPD alone. A board that switches its speaker amplifier
+by GPIO is mute with every pin verb right, and the first field report could
+not say which kind the 1015PN was. The **coefficient file** behind vendor
+node 20 (index by verb 500, read by C00, write by the four-bit verb 4) names
+the variant in COEF 0's bits 7:4 - 0x10 VB, 0x20 VC, 0x30 VD, else VA - and
+each variant has a bit or two the codec leaves wrong at reset: the VA's PLL
+bit (COEF 4 bit 15 off), the VB's EAPD-by-coef (COEF d bit 14 on), headphone
+(COEF 4 bit 11 on) and, by COEF 0's low byte, its revision's capless-output
+and class-D enables. Every write is gated on the exact variant and revision
+it is for, and what was decided - pins, GPIO mask, SKU word, COEF 0 - is in
+the `HDAV_INFO` block for HDADIAG to print.
+
+Every amplifier on that path is set to **0 dB, which is a number the codec
+answers rather than step 0**: the offset field of each widget's amplifier
+capabilities (the function group's when the widget does not override them)
+names the 0 dB step, and steps below it attenuate. On an ALC269 the DAC's
+step 0 is 0x57 steps of 0.75 dB under 0 dB, which is silence with the DMA
+running, and that is what the first build sent. The mixer's DAC input is
+unmuted at 0 dB and its loopback input muted; the headphone pin gets
+HP-enable as well as output-enable.
+
+The codec is programmed in three steps rather than one burst: power states,
+a settle, then routing and amplifiers - a verb sent to a widget still
+powering up is answered and not applied, and QEMU's codec has no such
+interval. The DAC's converter format and stream/channel are **sent at every
+stream start**, beside the controller's own SD FMT, and the format is read
+back and re-sent once after a settle if it did not take. Sent once at attach
+they came out of the 1015PN as loud white noise - the link carrying 16-bit
+stereo and the DAC decoding it as whatever it had been left in - while the
+same driver's output captured from QEMU's codec was the clean 660 Hz square
+wave and the module it should be.
+
+The driver's entry verbs preserve every register but their outputs, as
+`SOUND.DRV`'s do: `drv_attach` reads the driver-table row back out of BX
+after the far call, and an attach that returned with BX somewhere in its own
+verb table published nothing - the row read 'Loaded' while the Sound page
+greyed Digital Audio. A stream's open flags are banked before the grant
+arithmetic that runs through AX, so the ring flag is read from the caller and
+not from the grant size's high byte; and the grant's owner is the instance in
+DH on entry, banked before the claim whose output is DX.
 
 Every controller and immediate-command wait is bounded to 512 MMIO polls. An
 MMIO poll includes the driver's short unreal-mode access window, so using the
@@ -43190,19 +43253,207 @@ MMIO poll includes the driver's short unreal-mode access window, so using the
 computer. Reset hold and post-release settle time instead use 2,048 legacy
 POST-port delay cycles, which cannot be optimized into a CPU-speed-dependent
 spin and exceed HDA's 521-us codec wake requirement on the target chipset.
+The stream descriptor's reset is a **handshake with the same bound, not a
+pulse**: SRST is written 1 and read back 1, written 0 and read back 0, and
+only then are CBL, LVI, FMT and the BDL pointer written, because those are
+the registers the reset clears. A 256-iteration spin between the two writes
+is nanoseconds on an Atom, and the emulator latches the bit instantly, so
+QEMU cannot show a stream started with no buffers.
 
 HDA's MMIO BAR is normally above real-mode address space, so the driver uses
 short 386 unreal-mode FS access islands. Row byte `DRVR_MINCPU` is therefore a
 hard loader fence: the kernel compares it with `[cpu_tier]` before looking up
 or reading `HDA.DRV`. The file never enters an 8088/286 machine, while
 `SOUND.DRV` and the resident speaker remain wholly 8086 code. Bus-master state
-cost is a pinned 36-KB claim (BDL plus ring); the staging grant is allocated on
-demand up to 32 KB and released with its owner.
+cost is a pinned 37-KB claim - 36 of BDL plus ring, and the paragraphs it takes
+to put both on the 128-byte boundary the controller requires (BDLPL's low
+seven bits are reserved, and every buffer must start on one); the staging
+grant is allocated on demand up to 32 KB and released with its owner.
 
 This is specification- and build-verified support. The success path still
 requires a field check on a physical 1015PN: ordinary QEMU HDA codecs expose a
 different codec ID and correctly take the refusal path rather than pretending
 to validate the ALC269 routing.
+
+### 34.11.1 HDADIAG - the driver's field instrument
+
+A field machine has no debugger, and what the emulator cannot show is exactly
+what the field reports: a driver that attaches, streams and sounds wrong.
+`HDADIAG.O88` is a `SYSAPPS` package (SYSTEM/ on every system disk `HDA.DRV`
+ships on; `kern_small` leaves both off, and so does the **360KB system disk**,
+whose last cluster the driver's fourth took - the driver's 386 fence makes it
+dead weight on every machine that boots that geometry, and the 1015PN boots
+the live USB) that asks the loaded driver for what a
+debugger would be asked for and writes it to `HDADIAG.TXT` in the root of the
+disk it was launched from: the PCI function's configuration space, the
+controller's registers, the stream descriptor, the driver's state, the BDL and
+the ring as memory holds them, and a walk of every widget in the codec -
+capabilities, power state, connection list, amplifier capabilities and the
+amplifiers' current settings, pin capabilities and configuration default and
+control and EAPD, converter format and stream. It then plays a one-second
+tone through the router - the Sound page's Test button, exactly - and samples
+the stream descriptor, the counters and the ring's head twice while it
+sounds, so the file says whether the engine moved and what it was reading.
+A click in its window runs it again.
+
+The driver's half is `DSV_PKGCALL`, three verbs, UI-task only: `HDAV_INFO`
+(1, `CX` = capacity of `ES:DI`, at least `HDA_INFO_SZ` = 0x260) fills the
+fixed block `drivers/hda/hda.asm` lays out - the PCI function at 0x000, the
+controller at 0x100, the stream descriptor at 0x180, the driver's state at
+0x1A0 (ending in the pins-found count and the GPIO mask), the BDL at 0x1C0,
+the ring's head at 0x200, the pins found at 0x220 and their flags at 0x228,
+the SKU word at 0x230, COEF 0 at 0x232, at 0x234 how many of the ring's
+bytes are none a square wave can hold, at 0x236 the last start's record,
+and at 0x240 the DMA position buffer whole, eight streams by eight bytes
+(`HDA_INFO_SZ` = 0x280); `HDAV_VERB` (2, `DX:AX` = a codec verb as the
+codec takes it) answers `DX:AX` = the response, `CF` on a timeout; and
+`HDAV_PROBE` (3, `AL` = 0 digital silence, or a 1 kHz square at -6 dB with
+one thing done before the stream starts: 1 nothing, the control; 2 the
+function group taken to D3 and back to D0 with long waits and the actual
+state polled, then the DAC and every pin to D0 again; 3 a codec function
+reset and the whole codec initialisation again; 4 a link reset and the
+whole codec initialisation again, a second attach; 5 every speaker pin's
+control 0 so only the headphone jack drives; 0xFF stop, and the pins put
+back) fills the ring and runs the engine on the driver's
+own stream with no router between, refusing (`CF`, `AX` = 1) while a stream
+or the tone owns it. The block's 0x280 carries COEFs 00-1f **as the link
+reset left them**, read once at attach before the driver writes any
+(`HDA_INFO_SZ` = 0x2C0). The stream's format is a variable the
+start reads, for SD FMT and the DAC's converter alike, so a probe changes
+both together. The start's record at 0x236 is the polls SRST took to read
+back 1 and then 0 (0xFFFF = never), the control byte read after RUN with
+the probe pattern beside it, LPIB one settle after RUN, and the format
+written. The package is 8086 code; the verbs are
+the driver's 386 half.
+
+**The position buffer is on for the proof, not for pacing**: the worker
+paces on LPIB as before, but with `DPLBASE` pointing into the claim (offset
+0x80, 128-aligned, eight streams' entries) the controller *writes* into the
+driver's memory, and a device-written position that tracks LPIB is the one
+thing a report can carry that says the engine and the CPU mean the same
+physical bytes. Report 2 had every register right and noise out, and could
+not tell a wrong-memory fetch from a wrong decode. It is turned off before
+the claim is freed, at detach and on a failed attach alike.
+
+Report 3 adds the engine line to every sample - `WALCLK`, LPIB, the
+device-written position and the ring check - a pin's connection select, a
+converter's own PCM capabilities, and after the router's tone **the ear's
+experiment**: probes on the driver stream, a second each with a silent
+second between, the engine sampled during each. The Sound page's Test, one
+second of 660 Hz through the router, came off report 2's build as three
+chunks of static: the noise is gated by the stream, not the amplifier's
+floor.
+
+**Report 3 established two defects in the instrument and one fact.** The
+probe verb tested its pattern after the stop-engine helper had zeroed the
+register carrying it, so all five probes were the zero ring; and the
+device-written position was read from the wrong slot (the entries are eight
+bytes apart, not four). The fact: the router's tone ran at 44,107 Hz stereo
+16-bit by `WALCLK` against LPIB - the engine reads the ring at exactly the
+rate the format names - while every probe's sample, half a second in,
+showed RUN set and LPIB at the same value five times over; and the ear
+heard static in every one of those, whose rings were entirely zero. **The
+noise is not the sample data.** It needs RUN set (the gaps were silent).
+Report 3 was first read as a stream started from a task not running where
+the router's did; report 4 corrected that - the same value was the same
+PHASE, five samples taken the same nine ticks after five fresh starts - and
+the start runs with interrupts as the caller left them, as it always did.
+
+**Report 4** sampled each probe twice and recorded the start. Every probe's
+engine ran, at the format's exact rate by `WALCLK` - 44.1 kHz on four,
+48 kHz on the fifth - and the reset handshake answered on the first poll
+both ways. The ear: static on the zero ring, static on the square, static
+with the DAC taken off the stream (converter stream 0, read back), static at
+48 kHz, and **silence with the pin amplifiers muted**. So the noise enters
+the codec's analogue path above pin 14's amplifier, is gated by a stream
+running on the link, and depends neither on the data nor on the DAC
+decoding it. The device-written position sat at one value throughout, which
+on this chipset family is the quirk Linux answers with its LPIB fallback on
+many boards, so it settles nothing about memory - the exact fetch rate
+already does.
+
+**Report 5** bisected the codec: the zero ring, then the square with one
+thing changed each time. DAC 02 to D3 did not take - the widget has no
+power control (capabilities bit 10 clear), so that probe was a plain square.
+The rest all read back as intended and were all static: mixer 0c's DAC
+input muted, the codec's own rest format (48 kHz in 24-bit containers, what
+its converter reads at reset, and the stream ran at 48 kHz), the two
+ALC269VB coefficient enables cleared, the headphone pin disabled, and the
+path moved to DAC 03 through mixer 0d with DAC 02 off the stream. Against
+report 4's silence with the pin amplifier muted, that puts the noise
+**between the mixers' inputs and the pin's amplifier, independent of every
+digital input, whenever the output path is active** - and the loudest thing
+in that stretch is the codec's own class-D speaker amplifier, which powers
+with the path and is configured through the vendor coefficients. Build 1,
+which wrote none, was silent; the one write between silence and static no
+probe has reverted is COEF e and f, whose reset values were overwritten
+before anything read them.
+
+**Report 6** read the coefficient file as the link reset leaves it, before
+any write: COEF 4 = 9827, d = 4040, e = 8814, f = b70b. The codec already
+had every enable the driver writes - d bit 14, 4 bit 11, e = 8814 - and the
+one write that changed anything, f to 960b, was put back in two probes and
+both were static. EAPD off on every pin, read back 00: static. Mixer 0c's
+DAC input muted and DAC 02 off the stream, both read back: static. So the
+noise survives every digital mute and the external amplifier enable, and
+dies only at the pin's own amplifier, which on an ALC269 speaker pin is the
+codec's built-in class-D stage. That stage has a power-on reset and a clock
+field in COEF 17 and COEF d that the Linux path pokes only on revision 0x18;
+this codec is 0x16 with COEF 17 = 0e10, the field clear.
+
+**Report 7** went at that stage, with earphones in the jack for the run:
+COEF 17 bit 7 set (read back 00af), COEF 17 bits 8:6 = 100 (012f), COEF 4
+bit 15 clear, the speaker pin off - all static, **and static in the
+earphones too**, which drive a separate amplifier. The coefficient file
+also differed from report 6's at rest (COEF 4 1827 against 9827, COEF 17
+002f against 0e10 - the jack detection, presumably), and the noise did not
+care. That retires the class-D stage and the whole coefficient file, and
+puts the noise upstream of both output amplifiers: the DAC, the analogue
+core, or something the codec does with the link that no verb reads back.
+
+Report 8 asks the two questions no report has answered. **Does the engine
+read OUR memory** - the fetch rate is exact but says nothing about the
+address, and the position buffer never updated: the last descriptor now
+carries IOC, so an engine that reads this list sets BCIS in the stream
+status after its first wrap, and every sample shows that byte (0x24 against
+0x20); no interrupt follows, IOCE and INTCTL stay clear. And **did the
+codec's analogue side ever power up properly** - the driver writes D0 to
+the function group and waits two milliseconds, the group still answers with
+its settings-reset flag, and Linux polls the actual state for up to half a
+second. The probes: the zero ring; the control; the square after the
+function group is taken to D3 and back to D0 with 100 ms waits and PS-Act
+polled to D0, then the DAC and every pin to D0 again; after a codec
+function reset and the whole initialisation again; after a link reset and
+the whole initialisation again, a second attach; and the speaker off. The
+samples read back the power states of the function group, the DAC and the
+first pin.
+
+Report 2 established, off the same 1015PN: pins 14 (the internal speaker,
+`99130110`) and 21 (the headphone jack) found and driven - 14 output-enabled
+with EAPD on and its amplifier unmuted, fed from mixer 0c - COEF 0 = 0x0016,
+an ALC269VB revision 0x16, its coefficients holding what the VB path
+writes, the SKU word `9a2d` out of pin 1d naming EAPD alone (no GPIO), the
+engine fetching at exactly 44.1 kHz stereo 16-bit once the ring's wrap is
+counted, and the DAC reading format 0x4011 on stream 1 *while the tone
+played*. The output was white noise. That retires the format-mismatch
+account of the noise and leaves the two things above.
+
+Report 2 adds what report 1 could not say. The codec line carries the
+subsystem ID and the GPIO capabilities, data, mask and direction; a Realtek
+codec gets its first 32 coefficients; a pin its presence sense; and the
+driver's state line its pins, SKU and COEF 0. **Report 1's widget table was
+wrong from node 10 up**: the package built each verb's node field by shifting
+the NID left by four inside an 8-bit register, so every node from 10 lost its
+high nibble and the table repeated with period 16 - node 12 was node 02
+again, 14 was 04 - while the driver's own verbs, 32-bit constants, had
+reached the right nodes all along. What report 1 did establish, off a
+1015PN: the controller out of reset with codec 0 present, the DMA engine
+running (LPIB advancing through the tone), the ring holding the square wave,
+DAC 02 in D0 at 0x4011 on stream 1 with both amplifiers at the 0 dB step,
+mixer 0c's DAC input unmuted and its loopback muted - and no sound. Every
+stage the report could see was right, which is what put the fault in the
+pins and the codec's vendor half, and the walk, the SKU rule and the
+coefficient fixes above are the answer to a report that could not see them.
 
 ## 35. Recorder — the sound layer's recording client
 

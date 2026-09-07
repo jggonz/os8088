@@ -988,7 +988,7 @@ DRVM_IMG_NET equ 7              ; ceil(build/net.drv     / 1024) - SEVEN
                                 ; icon in drivers/wirezone.inc, which both
                                 ; network drivers include
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 1024)
-DRVM_IMG_HDA equ 3              ; ceil(build/hda.drv     / 1024)
+DRVM_IMG_HDA equ 5              ; ceil(build/hda.drv     / 1024)
 
 DRVM_SND     equ DRVM_IMG_SND + 8 + 20    ; SBL_DMASZ (the DMA-visible double
                                 ; buffer and record ring) + SBL_POOLKB (the
@@ -1016,7 +1016,8 @@ DRVM_VMM     equ DRVM_IMG_VMM   ; the absolute mouse claims nothing either: it
 DRVM_NET     equ DRVM_IMG_NET   ; the parallel link claims NOTHING: its packet
                                 ; buffers are bss, and a driver's bss ships
                                 ; INSIDE its image (DRV_H_IMG)
-DRVM_HDA     equ DRVM_IMG_HDA + 36 + 32 ; pinned BDL/ring + largest staging grant
+DRVM_HDA     equ DRVM_IMG_HDA + 37 + 32 ; pinned BDL/ring (36 + the 128-byte
+                                ; alignment slack) + largest staging grant
 
 drv_memk:                       ; one word per drv_tab row, in the same order
     dw DRVM_SND                 ; row 0: sound

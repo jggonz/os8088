@@ -2351,7 +2351,7 @@ DRIVERS += $(KMODS)
 # 10 clusters, and what is left is 7 - about 7KB. SPEC.md 88.11 keeps the
 # package under 12,288 bytes for exactly that margin, and os88disk.py refusing
 # the image is the enforcement rather than this comment.
-SYSAPPS := $(BUILD)/taskmgr.o88 $(BUILD)/thewire.o88
+SYSAPPS := $(BUILD)/taskmgr.o88 $(BUILD)/thewire.o88 $(BUILD)/hdadiag.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 # ...and the SUBSET an APPS disk carries: the Task Manager alone, for the
 # single-floppy machine above. THEWIRE.O88 is on NO apps disk (CLAUDE.md,
@@ -2362,6 +2362,17 @@ SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 # have afforded.
 APPSYS := $(BUILD)/taskmgr.o88
 APPSYSARGS := $(addprefix SYSTEM:,$(APPSYS))
+# ...and what the 360KB SYSTEM disk leaves off: HDA.DRV and its instrument
+# HDADIAG.O88 (SPEC.md 34.11). The driver's DRVR_MINCPU fence is a 386, so on
+# every machine in this tree that boots 360KB media - the XTs, the 286s with
+# a 1.2MB drive - the file is dead weight the loader never reads, and the
+# 1015PN it exists for boots the live USB (SPEC.md 80), which carries the
+# system disk's whole list. The pin walk and Realtek's half took the driver
+# from 3 clusters to 4, and 354 was already the last one; these seven are
+# what that costs and where they come from
+SYS360DROP := $(BUILD)/hda.drv $(BUILD)/hdadiag.o88
+SYS360ARGS := $(filter-out $(SYS360DROP),$(DRIVERS)) \
+              $(addprefix SYSTEM:,$(filter-out $(SYS360DROP),$(SYSAPPS)))
 
 # --- the CORE PACKAGES (SPEC.md 24.3) ----------------------------------------
 # Six programs that ride the SYSTEM disk as well as the apps disk, each in
@@ -2535,6 +2546,16 @@ $(BUILD)/taskmgr.bin: apps/taskmgr/taskmgr.asm apps/os88api.inc | $(BUILD)
 
 $(BUILD)/taskmgr.o88: $(BUILD)/taskmgr.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/taskmgr.bin -o $@
+
+# HDADIAG (SPEC.md 34.11.1): the Intel HDA driver's field instrument. A SYSAPPS
+# package like TASKMGR - it lives in SYSTEM/ on the system disk, because the
+# driver it reads is there too - and kern_small leaves it off with the driver
+$(BUILD)/hdadiag.bin: apps/hdadiag/hdadiag.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/hdadiag/hdadiag.asm
+	@echo "hdadiag: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/hdadiag.o88: $(BUILD)/hdadiag.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/hdadiag.bin -o $@
 
 $(BUILD)/fontview.bin: apps/fontview/fontview.asm apps/os88api.inc \
                        apps/os88type.inc | $(BUILD)
@@ -3293,7 +3314,7 @@ $(BUILD)/ftpapps.img: $(FTPDFILES) tools/os88disk.py
 $(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(SYS360ARGS) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(APPDATAFOLDER)
 
 # FMTEST: the AdLib gate package (SPEC.md 34.2/51.4). NEVER on the shipped
@@ -6685,7 +6706,7 @@ small: $(BUILD)/small360.img $(BUILD)/small.img
 # 99,749 bytes of a 360KB floppy - 27% of it - for eight programs that could
 # not have started (SPEC.md 24.5 has the same figures, re-measured together).
 SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
-             $(BUILD)/thewire.o88 \
+             $(BUILD)/thewire.o88 $(BUILD)/hdadiag.o88 \
              $(BUILD)/modplug.o88 $(BUILD)/recorder.o88 $(BUILD)/tracker.o88 \
              $(BUILD)/audio.o88
 SMALLOMIT_GAMES := $(BUILD)/tank.o88
@@ -7725,9 +7746,11 @@ $(ALLAPPSIMG120): $(ALLAPPS) tools/os88disk.py
 # these.
 #
 # THE PAYLOAD IS DERIVED, NOT LISTED: ALLAPPSARGS plus the system disk's own
-# arguments (the drivers, the readme, the logo, the fonts), so a package
-# added to either shipped list is on the live media without anyone
-# remembering it here. The RunCPM drive-A selection is allapps' own - same
+# arguments (the drivers, the SYSAPPS tools in SYSTEM/, the readme, the logo,
+# the fonts), so a package added to either shipped list is on the live media
+# without anyone remembering it here. SYSAPPSARGS was the one list this
+# forgot: TASKMGR, THEWIRE and HDADIAG are loaded by name out of SYSTEM/ on
+# the boot volume, and the live image had no SYSTEM/*.O88 at all. The RunCPM drive-A selection is allapps' own - same
 # --select, same reserve list, same folder count - so the two
 # everything-payloads cannot drift apart, LEFT-OFF.TXT and all; the live
 # volume has ~30MB free, so a selection priced for a 1.44MB floppy always
@@ -7738,14 +7761,17 @@ $(ALLAPPSIMG120): $(ALLAPPS) tools/os88disk.py
 USBIMG := $(BUILD)/os8088-usb.img
 LIVEISO := $(BUILD)/os8088.iso
 
-LIVEARGS := $(DRIVERS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) $(ALLAPPSARGS)
+# ...minus APPSYS, which ALLAPPSARGS already places in SYSTEM/: a name given
+# twice is one os88disk.py refuses, not one it merges
+LIVEARGS := $(DRIVERS) $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
+            $(SYSDOC) $(SYSLOGOARG) $(FACESARG) $(ALLAPPSARGS)
 
 usb: $(USBIMG)
 iso: $(LIVEISO)
 live: $(USBIMG) $(LIVEISO)
 
 $(USBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(BUILD)/kernel.bin \
-           $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
+           $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
            $(ALLAPPS) tools/os88disk.py
 	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select 1440 --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve-clusters $(ALLAPPSEXTRA) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
 	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select 1440 chose nothing"; exit 1; }; \
