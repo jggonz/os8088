@@ -473,7 +473,7 @@ are kept honest. Everything off the wire is checked field by field before a
 pixel of it is drawn — a catalog that does not pass leaves the window working
 and says `Catalog not understood`.
 
-SPEC.md §88 is the format and the contract; `docs/WIRE-PLAN.md` is why it
+SPEC.md §92 is the format and the contract; `docs/WIRE-PLAN.md` is why it
 reads that way.
 
 ### A package can also be written in C

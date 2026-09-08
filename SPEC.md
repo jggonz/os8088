@@ -37415,7 +37415,7 @@ it does not fit, which is the failure everybody wants.
 #### 24.3.1.1 The Wire changes the test, and PAINT is what leaves
 
 Everything above chose what gives way on the test *"is it named by anything
-on this disk"*. **§88 supplies a better one: can the machine get it BACK.**
+on this disk"*. **§92 supplies a better one: can the machine get it BACK.**
 The Wire's catalog carries every core package — Paint, Notepad, Calc, Browser,
 Telnet and Mines among its 33 programs — and **no typeface at all**: a face is
 loaded off the disk that carries it or not at all. So the three faces above
