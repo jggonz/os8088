@@ -39,6 +39,7 @@ from ethernet import (Qemu, u16, S, Mouse, type_url,   # noqa: E402
                       settle, SOCK)
 from os88geom import MB_ENTSZ                         # noqa: E402
 import os88qemu                                              # noqa: E402
+import os88build                                       # noqa: E402
 
 PORT = 8091
 SLOW_SECS = 12          # how long /slow.htm is held open (SPEC.md 71.8)
@@ -147,7 +148,7 @@ def main():
         subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
                         "-I", "apps/browser/", "-I", "drivers/net/",
                         "-o", out, src], check=True)
-        if open(out, "rb").read() != open("build/browser.bin", "rb").read():
+        if open(out, "rb").read() != open(os88build.at("build/browser.bin"), "rb").read():
             sys.exit("brnav: the mapped build is not build/browser.bin")
         r = {}
         for line in open(mp):
@@ -595,7 +596,7 @@ def main():
 
     m.quit()
     time.sleep(1.0)
-    raw = open("build/brtest360.img", "rb").read()
+    raw = open(os88build.at("build/brtest360.img"), "rb").read()
     if SAVED.encode() not in raw.replace(b".", b""):
         # the 8.3 directory entry is 'SAVED   HTM'
         if b"SAVED   HTM" not in raw:

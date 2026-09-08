@@ -1113,7 +1113,7 @@ fn breakpoints(machine: &mut Machine, req: &Value) -> Value {
 /// RAM at that address, which on a machine whose card has never written
 /// through is a screen of zeroes. It does not error; it returns a plausible
 /// blank screen, which is the worst way to be wrong. Ask the card instead.
-// --- WHICH CARD (docs/DUAL-DISPLAY-PLAN.md 9) -------------------------------
+// --- WHICH CARD (docs/plans/completed/DUAL-DISPLAY-PLAN.md 9) -------------------------------
 //
 // A machine may hold more than one video card - `[[machine.video]]` is an
 // array and the bus builder installs every entry - and until this existed
@@ -1663,7 +1663,7 @@ fn pace(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> Valu
     })
 }
 
-// --- fork() snapshots (docs/SNAPSHOT-PLAN.md B) ------------------------------
+// --- fork() snapshots (docs/plans/completed/SNAPSHOT-PLAN.md B) ------------------------------
 //
 // A SNAPSHOT IS A PROCESS, NOT A FILE, and that is the whole design. `fork`
 // gives a copy-on-write image of everything this process holds - the CPU, all
@@ -1804,7 +1804,7 @@ fn restore(_server: &mut DebugServer, _req: &Value) -> Value {
 /// multiple of real time the host can manage. Two instances given the same
 /// sleep were measured 21.7 million cycles apart - 4.5 seconds of guest time -
 /// which is enough for every later input to land somewhere else and every
-/// downstream state to differ (docs/SNAPSHOT-PLAN.md 2.1).
+/// downstream state to differ (docs/plans/completed/SNAPSHOT-PLAN.md 2.1).
 ///
 /// `cycles` stops at the first instruction boundary at or past the target, so
 /// it is deterministic but not cycle-exact; `frames` counts completed video

@@ -3,7 +3,7 @@
 ;
 ; THE VERSION 6 SCREEN MODEL: eight windows addressed in PIXELS (Standard 8.8).
 ; It is a SECOND window model, not a variant of the first, which is why it is
-; a second file (docs/FROTZ-PLAN.md 5.2) and why the opcode layer picks
+; a second file (docs/plans/completed/FROTZ-PLAN.md 5.2) and why the opcode layer picks
 ; between zwin.inc and this on [zf_ver] rather than either file branching.
 ;
 ; THE ONE DIFFERENCE THAT MATTERS. In zwin.inc a cursor is a CELL: a column

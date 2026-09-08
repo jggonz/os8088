@@ -5,7 +5,7 @@
 # stamp each stop with the guest's cycle counter. No code is added to the
 # guest, so nothing is perturbed and the numbers are the shipped binary's.
 #
-# THREE THINGS THAT EACH PRODUCED A WRONG NUMBER FIRST (docs/NOTEPAD-NOTES.md
+# THREE THINGS THAT EACH PRODUCED A WRONG NUMBER FIRST (docs/plans/completed/NOTEPAD-NOTES.md
 # 6.5). They are the whole reason this is a module rather than ten lines at a
 # call site:
 #

@@ -23,6 +23,12 @@
 
 %define CC_HAS_ONCLICK              ; void os88_onclick(int x, int y, void *win)
 %define CC_HAS_ONKEY                ; void os88_onkey(int ascii, int scan, void *win)
+%define CC_HAS_ONMOVE               ; void os88_onmove(unsigned was, unsigned now)
+                                    ; - the heap compactor moved a claim we
+                                    ; declared (SPEC.md 66.2). NOT a window
+                                    ; callback: it is dispatched from inside
+                                    ; mem_reloc_call, so the C on the other
+                                    ; side may not claim, yield or draw
                                     ; and NOT: CC_HAS_MENUS, CC_HAS_ABOUT,
                                     ; CC_HAS_ONMOUSEUP, CC_HAS_ONRESIZE,
                                     ; CC_HAS_FDLG, CC_HAS_WORKER - this program

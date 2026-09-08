@@ -13,7 +13,7 @@ worktrees, still holding `build/os8088.img`.  `ps2mouse` — which launches with
 a pidfile of its own, so it had never had a chance to kill them — failed the
 pre-merge gate with `Failed to get "write" lock`, and passed the moment they
 were killed.  **The cost of the leak is paid by an unrelated row, hours later,
-wearing a message about the wrong subject.**  docs/HANDOFF-SOAK-FINDINGS.md B9.
+wearing a message about the wrong subject.**  docs/plans/HANDOFF-SOAK-FINDINGS.md B9.
 
 THE RULE IS NARROW ON PURPOSE, because a wide one would need an exception list
 and an exception list is where this class comes back:
@@ -63,7 +63,17 @@ TESTS = os.path.dirname(HERE)
 # Makefile - and this file's row then fails a check about a thing it does not
 # do. Written out first, and t_registry caught it within the minute.
 _M, _T = '"' + "make" + '"', '"' + "test" + '"'
-LAUNCH = re.compile(_M + r",\s*" + _T)
+# TWO SPELLINGS OF THE SAME LAUNCH, and the second one is NOT WRITTEN OUT
+# HERE for the reason the docstring gives about the first: a file that spells
+# the pattern matches itself, and this one duly counted itself as a launcher
+# the moment the comment described it. The argv list is the older spelling;
+# the four rows that moved to os88fixture's restoring make wrapper call it by
+# name with the test target as the first argument. The detector's count
+# dropped 12 -> 10 the moment they did, which is what the liveness check below
+# is for, and it fired within the minute: a launcher this file cannot see is a
+# launcher nothing checks owns its instance.
+_F = "os88" + "fixture" + r"\.make\(\s*"
+LAUNCH = re.compile("(?:" + _M + r",\s*" + _T + "|" + _F + _T + r")")
 PIDFILE = re.compile(r'-pidfile')
 OWN = re.compile(r'\bos88qemu\.own\s*\(')
 

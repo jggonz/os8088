@@ -20,6 +20,33 @@ once with nothing arranged between them:
     with os88marty.launch("build/os8088-360.img") as m:
         m.vram("cga")                                    # m.addr, m.port
 
+THE MOUSE IS NOT IN THIS FILE, and looking for it here is how it keeps
+getting rebuilt. `Marty.mouse` below is the TRANSPORT - one 3-byte packet
+into the emulated UART - and there are two drivers on top of it:
+
+  * **tools/os88mouse.py - ABSOLUTE, and the one you want.** It reads the
+    kernel's published `mouse_x` (SPEC.md 9.4.3), works out the exact
+    remaining delta and PROVES arrival, so a click either lands or raises.
+    `dblclick` is a verb of its own there and cannot be composed out of two
+    clicks.
+
+        from os88mouse import Mouse
+        mo = Mouse(marty=m); mo.dblclick(150, 90)
+
+  * **tools/os88mouserel.py - RELATIVE.** Dead reckoning off a corner pin,
+    guest-FRAME pacing for a bit-exact replay (docs/plans/completed/SNAPSHOT-PLAN.md 7), and
+    proven button edges. Three cases only: the mouse itself is under test, a
+    replay must be reproducible, or the motion has no destination (a paint
+    stroke, a window drag). It names its own drift rather than hiding it.
+
+And **tools/os88ui.py** is the layer above both, and where a test should
+start: `boot`, `open_drive`, `open`, `raise_window`, `drag_window`,
+`menu_pick` - resolved by NAME out of the guest's own tables, each one
+confirming what it did by reading guest state rather than settling on the
+picture. Measured: the same three-step navigation is **0.35x** the host time
+and 0.35x the guest cycles of the settle-and-hope spelling, because the check
+REPLACES the wait rather than following it (tests/uilayer.py).
+
 This talks to the EMULATOR, and that is the whole of what makes it usable:
 it costs the guest not one cycle, needs nothing installed, answers on a
 machine that has hard-frozen, and does the things a stub running INSIDE the
@@ -52,11 +79,14 @@ build you think you are AND hands you every live variable at its listing
 offset with no instrumentation added. `verify` is that check as one command.
 """
 import argparse
+import errno
 import json
 import os
 import re
 import socket
 import sys
+
+import os88build as _build      # the $OS88_BUILD path resolver (14.2)
 import threading
 import time
 
@@ -66,6 +96,69 @@ DEFAULT_TIMEOUT = 60.0
 # is the failure this deadline exists to name rather than to sit through.
 HELLO_TIMEOUT = 5.0
 KERNEL_SEG = 0x0060
+
+# --- the GUEST clock, and why every wait in this file is now hung off it -----
+#
+# 14.31818/3 MHz is the 8088 in every machine in this tree bar `--turbo`.
+# MartyPC COUNTS these rather than timing them, so the guest clock is exact
+# and bit-reproducible no matter what else the host is doing - which is the
+# one property a wait needs and host wall-clock has not got.
+#
+# THE FAILURE THIS EXISTS TO END.  A host-clock wait spends a budget the box's
+# load decides.  `time.sleep(2)` after a click covers ~9.6 GUEST seconds on an
+# idle container here and ~2.4 with three other emulators up, so the same line
+# of the same test gives the machine four times less work to do - and the row
+# fails somewhere further on, wearing a symptom that looks like the thing under
+# test.  That is `docs/plans/HANDOFF-SOAK-FINDINGS.md` B5, and it is why fifteen
+# failures in the pass-2 soak each cost somebody a classification run.
+#
+# Two different questions come off this clock and they want different answers:
+#
+#   PROGRESS - has the guest advanced at all since the last look?  A guest that
+#     has stopped can never satisfy any condition, so a wait on one is dead and
+#     should say so AT ONCE rather than sitting out its deadline.  This is the
+#     half that makes a stuck row fail FASTER, and it is the half a longer
+#     timeout can never buy.
+#
+#   BUDGET - how much of the guest's OWN time has this wait spent?  Stated in
+#     guest seconds a deadline means the same thing on a loaded box as on an
+#     idle one, so a failure that quotes it cannot be waved away as contention.
+#     That is the point: not tolerance, EVIDENCE.
+GUEST_HZ = 4772727.0
+
+# How long the guest clock may stand still before a wait gives up on it.  Two
+# seconds is many thousands of guest instructions at any rate a running
+# emulator achieves, and a `status` round trip is milliseconds - so this fires
+# on a guest that is STOPPED (a breakpoint still armed, a triple fault, an
+# emulator wedged or gone), never on one that is merely slow.  It is not
+# tunable per call on purpose: "the machine is not executing" is not a
+# property any individual test should get to have an opinion about.
+GUEST_STALL = 2.0
+
+# The host-time backstop, as a multiple of the GUEST budget. A guest-time
+# deadline is unbounded in host seconds if the emulator runs slowly enough, and
+# a wait that cannot end is worse than one that ends early. 10x means the wait
+# gives up once the guest falls below a TENTH of real time - four cores would
+# have to be running forty emulators to reach it, so nothing legitimate is
+# anywhere near, and what it catches is a box in trouble rather than a row that
+# needs tuning.
+HOST_BACKSTOP = 10.0
+
+# The nominal host:guest ratio a wait is BUDGETED at when it cannot measure
+# one. Every `limit=` in this file is a host-second number chosen on an idle
+# container, where the guest runs several times real time; read as guest
+# seconds those numbers are enormous. Converting at a deliberately LOW ratio
+# keeps every existing limit generous in guest terms while making it mean the
+# same thing under load. Measured on this container: 4.8x idle, and ~1.2x with
+# four emulators on four cores. 3.0 is under the idle figure and above the
+# contended one, so no wait gets tighter than the machine has ever needed and
+# none gets looser because the box is busy.
+GUEST_BUDGET_RATIO = float(os.environ.get("OS88_GUEST_RATIO", "3.0"))
+
+# Where a run records what its waits actually cost, in guest seconds, when
+# OS88_WAITLOG names a file. Nothing reads it at run time: it is how the
+# numbers above get re-derived from a real soak instead of argued about.
+WAITLOG = os.environ.get("OS88_WAITLOG")
 
 
 class MartyError(Exception):
@@ -487,22 +580,32 @@ class Marty:
         """
         return self.status().get("state") != "running"
 
-    def wait_stop(self, limit=20.0, poll=0.02):
+    def wait_stop(self, limit=20.0, poll=0.02, guest=None):
         """Run until the guest stops, and answer WHY - or None on a timeout.
 
             if m.wait_stop(10): ...          # a breakpoint hit (or a pause)
 
         Returns the state string, so a caller can tell a breakpoint from a
         machine somebody else paused.
+
+        THE LIMIT IS GUEST TIME, converted at GUEST_BUDGET_RATIO.  This one
+        matters more than it looks: `tests/dskwstage.py` reports *"dskw_write_x
+        never returned - the machine is still running after 180s"*, and that
+        180 was a HOST bound on a box whose load nobody recorded
+        (docs/plans/HANDOFF-SOAK-FINDINGS.md E2).  Read as guest seconds the same
+        number says something about the machine instead, and says the same
+        thing twice running.
         """
         import time
-        t0 = time.time()
-        while time.time() - t0 < limit:
-            st = self.status().get("state")
-            if st != "running":
-                return st
+        budget = (guest if guest is not None else limit * GUEST_BUDGET_RATIO)
+        c0 = int(self.status().get("cycles", 0))
+        while True:
+            st = self.status()
+            if st.get("state") != "running":
+                return st.get("state")
+            if (int(st.get("cycles", 0)) - c0) / GUEST_HZ > budget:
+                return None
             time.sleep(poll)
-        return None
 
     # --- input, through the REAL devices -------------------------------------
     #
@@ -513,7 +616,7 @@ class Marty:
     # A debug module poking [mouse_x] would skip the UART, the packet decoder
     # and SPEC.md 9.5's port contest - the code most likely to be wrong.
 
-    # --- reproducibility: guest-time positioning (docs/SNAPSHOT-PLAN.md) -----
+    # --- reproducibility: guest-time positioning (docs/plans/completed/SNAPSHOT-PLAN.md) -----
 
     def advance(self, frames=None, cycles=None, card=None):
         """Run a bounded amount of GUEST time and stop.
@@ -560,7 +663,7 @@ class Marty:
             self.advance(frames=settle)
         return self.status()
 
-    # --- fork snapshots (docs/SNAPSHOT-PLAN.md B) ----------------------------
+    # --- fork snapshots (docs/plans/completed/SNAPSHOT-PLAN.md B) ----------------------------
 
     def snapshot(self):
         """Fork a holder process that freezes the machine exactly as it is.
@@ -678,25 +781,28 @@ class Marty:
                                                         # nobody can get back
 
     def mouse(self, dx=0, dy=0, l=False, r=False):
-        """One packet. dx/dy are RELATIVE and clamped to a signed byte."""
+        """One packet. dx/dy are RELATIVE and clamped to a signed byte.
+
+        THE TRANSPORT, NOT A DRIVER - the socket verb, the same layer as
+        `key`. Two drivers sit on top of it and this class is neither:
+
+          * tools/os88mouse.py  - ABSOLUTE. Reads the kernel's published
+            pointer and proves arrival. **What a test wants.**
+          * tools/os88mouserel.py - RELATIVE. Dead reckoning, frame pacing,
+            proven button edges. For when the MOUSE is what is under test, for
+            a bit-exact replay, and for motion with no destination.
+
+        Calling this directly is right for packet-level work and wrong for
+        "click the thing at (x, y)": a packet carries a signed byte, the
+        1200-baud UART drops one sent while the previous is in flight, and
+        the kernel clamps at the screen edge - so an aimed sequence built out
+        of bare packets misses silently and is reported as a broken feature
+        twenty steps later.
+        """
         rr = self.cmd(cmd="mouse", dx=dx, dy=dy, l=l, r=r)
         self._log.append({"cycles": rr.get("cycles", 0), "kind": "mouse",
                           "args": {"dx": dx, "dy": dy, "l": l, "r": r}})
         return rr
-
-    def mouse_move(self, dx, dy, l=False, r=False, step=100):
-        """A long move as several packets - a packet carries a signed byte."""
-        while dx or dy:
-            sx = max(-step, min(step, dx))
-            sy = max(-step, min(step, dy))
-            self.mouse(sx, sy, l, r)
-            dx -= sx
-            dy -= sy
-
-    def click(self, l=True):
-        """Press and release in place."""
-        self.mouse(0, 0, l=l)
-        self.mouse(0, 0)
 
     def history(self):
         return self.cmd(cmd="history")["history"]
@@ -1092,15 +1198,36 @@ def _killable(d):
 
 
 def _write_record(d):
+    """Publish an instance's record. **A VANISHED DIRECTORY IS NOT AN ERROR.**
+
+    Every `launch` reaps first, so on a busy box several reaps run at once
+    over ONE registry: A lists it, B drops a finished instance's tree, and A
+    then writes a record into a directory that is no longer there. Uncaught,
+    that is a FileNotFoundError out of the middle of `launch` - which reads
+    as the row you were starting being broken, and names a directory
+    belonging to some other row. Measured at a lane of three: 2 runs in 24.
+
+    Retiring the same instance twice is not a conflict - both writers are
+    saying the same thing about a machine that has stopped - so the loser
+    simply has nothing to write to, and says so by returning False. A caller
+    that is REGISTERING an instance made the directory itself a moment ago,
+    and for it this cannot fire.
+    """
     path = os.path.join(d["dir"], "instance.json")
     tmp = path + ".tmp"
     body = dict(d)
     body.pop("dir", None)
     body.pop("alive", None)
     body.pop("owner_alive", None)
-    with open(tmp, "w") as f:
-        json.dump(body, f, indent=1, sort_keys=True)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w") as f:
+            json.dump(body, f, indent=1, sort_keys=True)
+        os.replace(tmp, path)
+    except OSError as e:
+        if e.errno != errno.ENOENT:
+            raise
+        return False                    # somebody else retired it first
+    return True
 
 
 def _drop_instance(d, heavy_only=False):
@@ -1332,6 +1459,130 @@ def _warn_oversubscribed(about_to_start):
             % (live + about_to_start, cap, live))
 
 
+# --- WHICH MACHINE, and the IBM ROM question ---------------------------------
+#
+# Five machine configs in `tools/martypc/configs/os8088_machines.toml` ask for
+# `rom_set = "ibm5150_82_v4"`.  That ROM is IBM's, has never been licensed for
+# redistribution, and CANNOT be in this tree (CONTRIBUTING.md 6) - so on any
+# box without a private copy those machines DO NOT WORK AS NAMED.
+#
+# THE HAZARD WAS THAT NOTHING SAID SO: the MartyPC of the day resolved a
+# machine naming an absent IBM romset to glabios_pc without a word (the
+# pinned build now exits with `ROM set ibm5150_82_v4 not found`, so a bare
+# `launch()` of one fails loudly instead).  Nine rows name a
+# non-GLaBIOS machine, four of them registered, and not one had ever run on
+# the ROM it asked for (docs/plans/HANDOFF-SOAK-FINDINGS.md E3).  A row that quietly
+# gets a different machine than it named is worth less than a row that skips.
+#
+# THE POLICY, and it is deliberately the strict direction: NAMING THE IBM
+# MACHINE REQUIRES A REASON, and "it is the machine I was using" is not one.
+# We own the machine set - a twin differing only in `rom_set` is four lines of
+# TOML - so the default is the twin and the burden is on the exception.
+# What actually earns the calibration machine is narrow and already written
+# into the config beside `os8088_5150_cga_gla`: a DISK or BOOT number, a
+# PERFORMANCE.md figure meant to be compared against the field 5150, and
+# anything resting on the CGA mode set.  What does NOT earn it is a routine
+# called through the debugger over memory the test zeroed itself, which is
+# what most of the rows naming one actually do.
+#
+# `machine()` resolves the name and `assert_rom()` ends the silence: a row
+# that means the IBM ROM says so and FAILS if it did not get one.
+
+IBM_ROM_PATH = os.path.join("tools", "martypc", "roms",
+                            "BIOS_IBM5150_27OCT82_1501476_U33.BIN")
+
+# The IBM-romset machines that HAVE a GLaBIOS twin, and which one.  Eleven
+# machines carry `rom_set = "ibm5150_82_v4"`; these four are the ones a row
+# has ever named, and each twin differs from its IBM original in that one
+# line and nothing else.
+#
+# The other seven have no twin and none is invented here.  Writing four lines
+# of TOML is cheap, but a machine nothing boots is a machine nothing checks,
+# and this file already has eleven configs whose ROM has never been present in
+# CI.  `tests/unit/t_machines.py` is the gate instead: it fails when a row
+# names an IBM machine WITHOUT a twin, so the twin gets written the day
+# something needs it and not before.
+IBM_TWIN = {
+    "os8088_5150_cga":  "os8088_5150_cga_gla",
+    "os8088_5150_herc": "os8088_5150_herc_gla",
+    "os8088_5150_both": "os8088_5150_both_gla",
+    "os8088_5150_sb":   "os8088_5150_sb_gla",
+}
+
+
+def have_ibm_rom(root=None):
+    """Is a copy of the 27 OCT 82 IBM 5150 BIOS present in this checkout?"""
+    root = root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.exists(os.path.join(root, IBM_ROM_PATH))
+
+
+def machine(name, why_ibm=None):
+    """The machine to actually launch, given the one a row would like.
+
+        m = launch(img, machine=os88marty.machine("os8088_5150_cga"))
+
+    With no `why_ibm` an IBM-romset name resolves to its GLaBIOS twin, always
+    - not "when the ROM is missing".  That is the whole point: a row must
+    behave the same on the maintainer's box and on a contributor's, and a row
+    whose machine depends on which files happen to be lying about is a row
+    whose result cannot be compared with anybody else's.
+
+    `why_ibm` is a SENTENCE saying what about this test needs the period ROM.
+    It is required rather than a flag so that the reason lands in the source
+    next to the choice, where a reviewer sees it.  Supplying one and having no
+    ROM raises - a row that needs the IBM part and cannot have it must SKIP,
+    which is the box declining to answer, and never quietly run on the twin.
+    """
+    if name not in IBM_TWIN:
+        return name
+    if why_ibm is None:
+        return IBM_TWIN[name]
+    if not have_ibm_rom():
+        raise MartyError(
+            "%s wants the period IBM ROM because: %s\n"
+            "  ...and %s is not in this checkout, so MartyPC would SILENTLY "
+            "fall back to glabios_pc and the row would report a pass about a "
+            "machine it never ran on. Supply the ROM (8192 bytes, md5 "
+            "f453eb2df6daf21ec644d33663d85434) or declare this row's `needs` "
+            "so it skips." % (name, why_ibm, IBM_ROM_PATH))
+    return name
+
+
+def rom_banner(m):
+    """The ROM's own copyright string, READ OUT OF THE ROM.
+
+    0xFE001 is where a 5150-class BIOS puts it: the IBM part reads
+    `501476 COPR. IBM` and GLaBIOS reads `GLaBIOS [`.  Never inferred from the
+    machine name - two configs differing only in `rom_set` are one edit apart,
+    and the fallback above means the name can be right while the machine is
+    not.  `tests/assocglyph.py` has read it this way from the start; this is
+    that function, shared.
+    """
+    s = m.read(0xFE001, 16).decode("latin1")
+    return "".join(c if " " <= c <= "~" else "." for c in s)
+
+
+def assert_rom(m, ibm):
+    """Refuse to continue unless the machine's ROM is the one asked for.
+
+    THE HAZARD E3 NAMES IS THE SILENCE - "nothing fails, and nothing in the
+    output says which ROM ran" - so a row that means the IBM ROM has to check,
+    and this is the check.  Returns the banner, so a row that merely wants the
+    provenance in its output can print it.
+    """
+    b = rom_banner(m)
+    is_ibm = "IBM" in b
+    if bool(ibm) != is_ibm:
+        raise MartyError(
+            "this row asked for the %s ROM and the machine came up on %s "
+            "(banner at 0xFE001: %r). A machine naming an absent romset "
+            "once fell back to glabios_pc without a word, which is how "
+            "four registered rows spent months reporting passes about a "
+            "machine they never ran on."
+            % ("IBM 5150" if ibm else "GLaBIOS", b.strip(), b))
+    return b
+
+
 # --- a private run tree ------------------------------------------------------
 
 def _clone(src, dst):
@@ -1362,7 +1613,7 @@ def _clone(src, dst):
     shutil.copyfile(src, dst)
 
 
-def stage_run_dir(tag):
+def stage_run_dir(tag, fresh=True):
     """A run tree the CALLER owns, for two instances that must share a DISK.
 
     `launch(run_dir=...)` keeps a caller-staged tree - `_drop_instance` deletes
@@ -1370,7 +1621,7 @@ def stage_run_dir(tag):
     instance being closed, and the next `launch` on it mounts the same VHD.
 
     THAT IS THE ONE WORKFLOW PER-INSTANCE ISOLATION BROKE, and it broke it
-    without anybody noticing (docs/HANDOFF-SOAK-FINDINGS.md B1).
+    without anybody noticing (docs/plans/HANDOFF-SOAK-FINDINGS.md B1).
     tests/hdboot.py and tests/knobhd.py INSTALL to a hard disk in one machine
     and then BOOT it in another; before the isolation work both used the shared
     master VHD, and after it the install landed in a private clone that
@@ -1385,6 +1636,18 @@ def stage_run_dir(tag):
 
     The caller owns it: nothing here removes it, and `reap` does not either.
     """
+    # FRESH BY DEFAULT, and it did not used to be. The tree is keyed on the
+    # TAG, so a second run of the same row found the FIRST run's disk still in
+    # it - already installed - and `tests/instdeep.py` refused, saying the
+    # SHARED MASTER had been written through. That diagnosis is wrong and
+    # expensively so: it sends the reader to restore a file that is pristine
+    # (measured - the master's mtime was `make marty`'s and the staged clone's
+    # was the previous run's). What persists has to persist WITHIN a run, so
+    # that an install in one machine is there for a boot in another; across
+    # runs it is a stale disk wearing the name of a fresh one.
+    import shutil
+    if fresh:
+        shutil.rmtree(os.path.join(_inst_root(), tag), ignore_errors=True)
     return _private_run_dir(base_run_dir(), tag)
 
 
@@ -1464,23 +1727,53 @@ class _Screen(object):
     coordinate system - 720x350 over a 720x348 framebuffer, at dx = -16,
     dy = +2 - and a gate that counts pixels in a named band wants the band it
     named.
+
+    THE THREE BANDS ARE LAZY, and that is worth a paragraph because it is most
+    of what a `settle` used to spend outside its own sleeps. Only the boot
+    GATE reads `field`/`rule`/`dock`; a plain `settle(m)` has no gate, and it
+    was computing them anyway - on VGA that is a Python generator over
+    640x480 with index arithmetic per pixel, three times per settle, and the
+    answer thrown away every time. The comparison a settle actually makes is
+    `bytes == bytes`, which is one memcmp.
     """
+
+    __slots__ = ("bytes", "w", "h", "_rows", "_d", "_lit")
 
     def __init__(self, m, card=None):
         vt = m.video(card=card)["type"]
+        self._rows = self._d = self._lit = None
         if vt in ("cga", "mda", "hercules"):
             w, h, rows = m.vram("cga" if vt == "cga" else "herc")
-            lit = [sum(r) for r in rows]
+            self._rows = rows
             self.bytes = b"".join(bytes(r) for r in rows)
         else:
             w, h, d = m.fbuf(card=card)
-            self.bytes = d
-            lit = [sum(1 for x in range(w) if d[(y * w + x) * 3])
-                   for y in range(h)]
+            self.bytes = self._d = d
         self.w, self.h = w, h
-        self.field = sum(lit[0:MBAR_H - 1]) / float(w * (MBAR_H - 1))
-        self.rule = lit[MBAR_H - 1] / float(w)
-        self.dock = sum(lit[h - DOCK_H:]) / float(w * DOCK_H)
+
+    def _band(self):
+        if self._lit is None:
+            if self._rows is not None:
+                self._lit = [sum(r) for r in self._rows]
+            else:
+                w, h, d = self.w, self.h, self._d
+                self._lit = [sum(1 for x in range(w) if d[(y * w + x) * 3])
+                             for y in range(h)]
+        return self._lit
+
+    @property
+    def field(self):
+        lit = self._band()
+        return sum(lit[0:MBAR_H - 1]) / float(self.w * (MBAR_H - 1))
+
+    @property
+    def rule(self):
+        return self._band()[MBAR_H - 1] / float(self.w)
+
+    @property
+    def dock(self):
+        lit = self._band()
+        return sum(lit[self.h - DOCK_H:]) / float(self.w * DOCK_H)
 
     def __repr__(self):
         return ("menu field %.0f%% lit, its rule %.0f%%, dock strip %.0f%%"
@@ -1577,7 +1870,247 @@ def desktop_up(s):
 # Wait for a machine that is going to CHANGE THE SCREEN and then stop: a boot,
 # a click, a repaint. Its twin below, `until`, is for work that changes no
 # pixels while it runs - pick by whether the screen is the evidence.
-def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None):
+def _caller(skip=("os88marty.py", "os88mouse.py", "os88ui.py")):
+    """`file:line` of the first frame outside this harness - who WAITED.
+
+    A wait's cost belongs to the line that asked for it, and a log that says
+    only "dispnp.py" cannot tell one settle from the eight beside it. Under
+    OS88_WAITLOG only, so the frame walk is never on a normal path.
+    """
+    try:
+        f = sys._getframe(1)
+        while f is not None:
+            name = os.path.basename(f.f_code.co_filename)
+            if name not in skip:
+                return "%s:%d" % (name, f.f_lineno)
+            f = f.f_back
+    except Exception:
+        pass
+    return os.path.basename(sys.argv[0] or "?")
+
+
+class _Progress:
+    """The guest's own clock, watched for the two things a wait can hit.
+
+    One object per wait.  `check()` is called each round and either returns
+    quietly, or raises the RIGHT ONE of two very different failures:
+
+      * THE GUEST STOPPED.  It has not advanced a cycle for GUEST_STALL host
+        seconds.  Nothing this wait is watching for can ever happen now, so it
+        says so immediately instead of spending the rest of the deadline - the
+        difference between a two-second answer and a two-minute one, and
+        between a message naming the machine and a timeout blaming the
+        condition.
+
+      * THE BUDGET IS SPENT.  The guest has had `guest` seconds of its OWN
+        time and the thing never happened.  That sentence is true on an idle
+        box and a loaded one alike, which is what takes contention off the
+        table as an explanation.
+
+    It also carries the running total, so a wait that SUCCEEDS can report what
+    it cost.  That is what `OS88_WAITLOG` collects, and it is the only honest
+    way to set the budgets: from what the suite actually spends, not from what
+    a host-clock number happened to allow on the box it was written on.
+    """
+
+    __slots__ = ("m", "what", "guest", "c0", "last_c", "last_move", "t0")
+
+    def __init__(self, m, what, guest):
+        self.m, self.what, self.guest = m, what, guest
+        # The FIRST read is not defended. A Marty that cannot answer `status`
+        # at all is not a wait that should start: taking 0 as the baseline
+        # would make `spent()` the guest's whole uptime on the next successful
+        # read, and the wait would fail on its budget with a number that is
+        # not about this wait at all.
+        self.last_c = 0
+        self.c0 = self.last_c = int(m.status().get("cycles", 0))
+        self.last_move = self.t0 = time.time()
+
+    def _cycles(self):
+        try:
+            return int(self.m.status().get("cycles", 0))
+        except (MartyError, OSError):
+            # A status that will not answer is itself the stop this class is
+            # for; let the caller's next round see the clock standing still
+            # rather than turning a transport hiccup into a different error.
+            return self.last_c
+
+    def spent(self):
+        """Guest seconds this wait has consumed."""
+        return (self.last_c - self.c0) / GUEST_HZ
+
+    def rate(self):
+        """How fast the guest is running against its own 4.77 MHz, so far."""
+        el = time.time() - self.t0
+        return (self.spent() / el) if el > 0.01 else 0.0
+
+    def check(self):
+        now = time.time()
+        c = self._cycles()
+        if c != self.last_c:
+            self.last_c, self.last_move = c, now
+        elif now - self.last_move > GUEST_STALL:
+            st = {}
+            try:
+                st = self.m.status()
+            except (MartyError, OSError):
+                pass
+            raise MartyError(
+                "the GUEST CLOCK HAS NOT MOVED for %.1fs while waiting for %s "
+                "- it is %r at %04X:%04X. A machine that is not executing can "
+                "never make a condition true, so this is reported now rather "
+                "than at the end of the %.0f guest-second budget. A breakpoint "
+                "still armed, `run` never called, a triple fault, or the "
+                "emulator gone."
+                % (now - self.last_move, self.what, st.get("state", "?"),
+                   st.get("cs", 0), st.get("ip", 0), self.guest))
+        if self.spent() > self.guest:
+            raise MartyError(
+                "%s did not happen in %.0f GUEST seconds (%.0fs of host time "
+                "at %.2fx real). THE BUDGET IS THE GUEST'S OWN CLOCK, so a "
+                "loaded box does not shorten it and contention does not "
+                "explain this: the machine really did run that long without "
+                "it happening. Raise the wait's `guest=` only with a reason "
+                "for why the machine needs more of its own time."
+                % (self.what, self.guest, time.time() - self.t0, self.rate()))
+        # THE HOST BACKSTOP, and it is deliberately far out.  A guest budget
+        # is unbounded in host time if the emulator is running slowly enough,
+        # and a wait that cannot end is worse than one that ends early.  Under
+        # `os88test.py` the row's own timeout catches that a level up; a
+        # script run by hand has nothing, which is where this is for.  It is
+        # not a deadline anyone should meet: reaching it means the guest ran
+        # below a tenth of the 4.77 MHz it is emulating, which is a fact about
+        # the box worth being told rather than a wait to be tuned.
+        host = time.time() - self.t0
+        if host > self.guest * HOST_BACKSTOP:
+            raise MartyError(
+                "%s has waited %.0f HOST seconds for a %.0f guest-second "
+                "budget - the guest is running at %.2fx real time, under a "
+                "tenth of the 4.77 MHz it is emulating. That is the BOX, not "
+                "this wait: something is oversubscribing it far past the core "
+                "count, or the emulator is thrashing. Nothing here will be "
+                "measuring what it thinks it is."
+                % (self.what, host, self.guest, self.rate()))
+
+    def done(self, kind):
+        """Record what a SUCCESSFUL wait cost, for OS88_WAITLOG.
+
+        It names the CALL SITE, not just the script, and that is what turns
+        the log from a total into a work list: the four-row profile said
+        `settle` was 48% of a row, and the only useful next question is WHICH
+        LINES. The frame walk costs a traceback and happens only when the env
+        var is set.
+        """
+        if not WAITLOG:
+            return
+        try:
+            with open(WAITLOG, "a") as f:
+                f.write("%s\t%s\t%.2f\t%.2f\t%.3f\t%s\n"
+                        % (kind, _caller(), self.spent(),
+                           time.time() - self.t0, self.rate(),
+                           self.what.replace("\t", " ")[:60]))
+        except OSError:
+            pass
+
+
+def guest_sleep(m, secs, poll=0.02):
+    """Sleep `secs` of the GUEST's time. The standard replacement for
+    `time.sleep` in anything holding a Marty.
+
+    `time.sleep(2)` means "give the guest whatever two seconds of this box
+    buys today", which on this container is 9.6 guest seconds idle and 2.4
+    with the box full - so the same test hands the machine four times less
+    work under load and fails further on, looking like the thing under test.
+    There are 465 such calls across 99 files in `tests/`, and they are the
+    largest single reason a row that passes alone fails in a wide lane.
+
+    This spends a fixed amount of the guest's own time instead, so the work
+    the machine gets is the same on an idle box and a busy one.  It is not
+    free - it costs more HOST seconds under load, which is the honest price
+    of asking for the same thing - and it fails fast if the guest stops
+    rather than sleeping through a dead machine.
+    """
+    p = _Progress(m, "guest_sleep(%g)" % secs, secs + 30.0)
+    while p.spent() < secs:
+        p.check()
+        time.sleep(poll)
+    p.done("guest_sleep")
+    return p.spent()
+
+
+def _gaplog(m, since, quiet, run):
+    """A `settle` round in which the screen CHANGED - and how much stillness
+    that change INTERRUPTED.
+
+    Under OS88_WAITLOG only, and `run` is the number that decides `stable`.
+    `stable` consecutive identical captures `quiet` apart is the signal, so
+    the question "is stable=2 earning its keep, or is it pure floor?" is
+    exactly "does a change ever arrive after run >= 1?" - after the screen
+    has already held still for one whole `quiet`. If it never does, the
+    second round is 100% margin on every settle in the suite; if it does,
+    cutting it would end settles mid-repaint. Nothing here had ever measured
+    it; the pair was chosen.
+    """
+    try:
+        with open(WAITLOG, "a") as f:
+            f.write("gap\t%s\t%.2f\t%.2f\t%.3f\tchange after run=%d "
+                    "(quiet=%g)\n"
+                    % (_caller(), 0.0, time.time() - since, 0.0, run, quiet))
+    except OSError:
+        pass
+
+
+def quiesce(m, read, guest=0.5, stable=2, budget=30.0,
+            what="the guest state to stop changing"):
+    """`settle`, but on a FEW BYTES OF THE GUEST instead of the whole screen.
+
+        os88marty.quiesce(m, lambda: dispcalc.shown(m, seg, cal))
+
+    Same signal - `stable` identical readings a fixed interval apart - and
+    the same guarantee, applied to the thing the caller is actually about to
+    read. What changes is the price, and it changes by an order of magnitude:
+
+      * a screen settle transfers a framebuffer per sample and must prove
+        stillness over `stable * quiet` = **2.0 HOST seconds** before it can
+        return (docs/plans/SOAK-PARALLEL.md 11.2, where the gap log says that pair
+        cannot come down);
+      * this reads a handful of bytes and proves it over `stable * guest`
+        GUEST seconds - 1.0 by default, which on a box running the guest at
+        3.5x is 0.3 host seconds, and the SAME amount of the machine's own
+        work whatever else the box is doing.
+
+    It is also STRICTER about the thing that matters. A screen settle can be
+    satisfied by a screen that happens to be still and can be defeated by an
+    animation somewhere else on it; a settle on the composition buffer a test
+    is about to read cannot be either.
+
+    **Do not reach for it when the next thing is a PIXEL comparison** - there
+    it is the screen that has to be still, and `settle` is the right tool.
+    Reach for it when the next line reads guest memory, which in this suite
+    is most of them.
+
+    `read` may answer anything comparable with `==` and must not raise; a read
+    that can fail mid-navigation should catch and answer a sentinel of its
+    own, because an exception here is the caller's, not a "still changing".
+    """
+    prog = _Progress(m, what, budget)
+    last, run = object(), 0
+    while True:
+        cur = read()
+        run = run + 1 if cur == last else 0
+        if run >= stable:
+            prog.done("quiesce")
+            return cur
+        last = cur
+        c0 = prog._cycles()
+        while (prog._cycles() - c0) / GUEST_HZ < guest:
+            prog.check()
+            time.sleep(0.01)
+        prog.check()
+
+
+def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
+           guest=None):
     """Run until the SCREEN STOPS CHANGING, and answer how long that took.
 
     A fixed sleep is either waste or a lie. A 360KB CGA boot is ~25 s on this
@@ -1666,8 +2199,52 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None):
                 "MORE still while it is busy. Use `until(m, cond)`."
                 % (quiet, stable, quiet * stable * rate, rate, limit))
     t0 = time.time()
+    # THE DEADLINE IS THE GUEST'S CLOCK, not this box's. `limit` stays a host
+    # number because 194 files pass one, and it is converted here at a ratio
+    # deliberately BELOW the idle rate (see GUEST_BUDGET_RATIO) - so every
+    # existing call keeps more guest time than it has ever used, and gets the
+    # same amount of it whatever else the box is doing. The host clock is out
+    # of the loop condition entirely; what bounds a wedged machine now is
+    # `_Progress.check`, which answers in GUEST_STALL seconds rather than at
+    # the end of the deadline.
+    budget = guest if guest is not None else limit * GUEST_BUDGET_RATIO
+    prog = _Progress(m, "the screen to stop changing", budget)
     last, run, seen = None, 0, None
-    while time.time() - t0 < limit:
+    chg = t0
+    while True:
+        # A STOPPED guest is reported by `check` at once; a SPENT budget is
+        # caught here, because settle has three much better things to say
+        # about it than "it did not happen" and all three are diagnoses
+        # somebody had to make by hand first.
+        try:
+            prog.check()
+        except MartyError:
+            if prog.spent() <= budget:
+                raise                            # the guest stopped: its own
+            spent, host = prog.spent(), time.time() - t0
+            if gate is not None and seen is not None and not gate(seen):
+                raise MartyError(
+                    "the os8088 desktop never appeared in %.0f GUEST seconds "
+                    "(%.0fs of host time) - the last screen was %s, against a "
+                    "desktop's 93+/0/96. This machine never finished booting, "
+                    "so nothing below would mean what it says. The budget is "
+                    "the guest's own clock, so this is not the box being busy. "
+                    "See the MartyPC log." % (spent, host, seen))
+            if saver_running(m):
+                raise MartyError(
+                    "the screen was still changing after %.0f GUEST seconds "
+                    "because SPEC.md 79's SCREEN SAVER IS RUNNING - [blk_on] "
+                    "is set. It draws, so this can never settle, and anything "
+                    "else this gate armed is now watching the saver rather "
+                    "than the machine. Call os88marty.no_saver(m) once after "
+                    "the desktop is up." % spent)
+            raise MartyError(
+                "the screen was still changing after %.0f GUEST seconds "
+                "(%.0fs of host time at %.2fx real): the machine never "
+                "finished booting, or something on it is animating - in which "
+                "case pass boot=<seconds> instead. The budget is the guest's "
+                "own clock, so a loaded box does not shorten it."
+                % (spent, host, prog.rate()))
         try:
             cur = _Screen(m, card)
         except MartyError:
@@ -1676,29 +2253,24 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None):
             seen, last, run = cur, None, 0       # not up yet: stillness before
             time.sleep(quiet)                    # the gate means nothing
             continue
-        run = run + 1 if (cur is not None and last is not None
-                          and cur.bytes == last.bytes) else 0
+        same = (cur is not None and last is not None
+                and cur.bytes == last.bytes)
+        if WAITLOG and last is not None and not same:
+            # THE GAP BETWEEN TWO CHANGES, which is the only measurement that
+            # can size `quiet`. A settle that ends took `stable * quiet` of
+            # stillness to prove it, so its total says nothing about how long
+            # the screen was ACTUALLY quiet mid-repaint - and `quiet` has to
+            # be wider than the longest gap a live repaint leaves, or the
+            # settle ends in the middle of one. Logged only under the profile
+            # env, and it is what the numbers in docs/plans/SOAK-PARALLEL.md 11 are.
+            _gaplog(m, chg, quiet, run)
+            chg = time.time()
+        run = run + 1 if same else 0
         if run >= stable:
+            prog.done("settle")
             return time.time() - t0
         last = cur
         time.sleep(quiet)
-    if gate is not None and seen is not None and not gate(seen):
-        raise MartyError(
-            "the os8088 desktop never appeared in %.0fs - the last screen was "
-            "%s, against a desktop's 93+/0/96. This machine never finished "
-            "booting, so nothing below would mean what it says. See the "
-            "MartyPC log." % (limit, seen))
-    if saver_running(m):
-        raise MartyError(
-            "the screen was still changing after %.0fs because SPEC.md 79's "
-            "SCREEN SAVER IS RUNNING - [blk_on] is set. It draws, so this can "
-            "never settle, and anything else this gate armed is now watching "
-            "the saver rather than the machine. Call os88marty.no_saver(m) "
-            "once after the desktop is up." % limit)
-    raise MartyError(
-        "the screen was still changing after %.0fs: the machine never "
-        "finished booting (or something on it is animating, in which case "
-        "pass boot=<seconds> instead)." % limit)
 
 
 # HOW MANY TIMES DID ONE GESTURE REACH A ROUTINE? Two tests wrote this loop by
@@ -1763,7 +2335,7 @@ def bp_count(m, target, act, arm=0.6, quiet=3.0, first=14.0, limit=120.0):
 # Wait for a machine that is BUSY WITHOUT DRAWING: anything holding the gfx
 # lock for its whole run. `settle` cannot see that work at all - it watches
 # pixels, and there are none - so ask about the thing being waited for.
-def until(m, cond, what="that condition", poll=1.0, limit=600.0):
+def until(m, cond, what="that condition", poll=1.0, limit=600.0, guest=None):
     """Run until CONDITION IS TRUE, and answer how long that took.
 
     The twin of `settle`, for the case it silently gets wrong. An operation
@@ -1792,21 +2364,24 @@ def until(m, cond, what="that condition", poll=1.0, limit=600.0):
     """
     import time
     t0 = time.time()
+    # As `settle`: the deadline is the GUEST's clock, so what this wait allows
+    # is the same on a loaded box as an idle one, and a stopped guest is
+    # reported in GUEST_STALL seconds instead of at the end of it.
+    prog = _Progress(m, what, guest if guest is not None
+                     else limit * GUEST_BUDGET_RATIO)
     while True:
         if cond(m):
+            prog.done("until")
             return time.time() - t0
         st = m.status()
         if st["state"] != "running":
             raise MartyError(
-                "waited %.0fs for %s, but the guest is %r at %04X:%04X and is "
-                "not executing - a stopped machine can never make a condition "
-                "true. A breakpoint still armed, or `run` never called?"
-                % (time.time() - t0, what, st["state"], st["cs"], st["ip"]))
-        if time.time() - t0 > limit:
-            raise MartyError(
-                "waited %.0fs for %s and it never happened. The guest is still "
-                "running, so either it is slower than the limit or the "
-                "condition is asking about the wrong thing." % (limit, what))
+                "waited %.0f guest seconds for %s, but the guest is %r at "
+                "%04X:%04X and is not executing - a stopped machine can never "
+                "make a condition true. A breakpoint still armed, or `run` "
+                "never called?"
+                % (prog.spent(), what, st["state"], st["cs"], st["ip"]))
+        prog.check()
         time.sleep(poll)
 
 
@@ -1838,6 +2413,26 @@ def scratch_disk(path, *files, **kw):
 
     here = os.path.dirname(os.path.abspath(__file__))
     disk = os.path.join(here, "os88disk.py")
+    # **THE OUTPUT IS RESOLVED TOO, and the first version was not.** A row
+    # spells the same `build/x.img` twice - once here and once to `launch` -
+    # and `launch` resolves it. Resolving only the inputs therefore WROTE the
+    # disk into the shared tree and READ it out of the run's own, which is a
+    # FileNotFoundError in `_clone` with the image sitting right there: ten
+    # rows of one soak, and three more where os88disk could not open an input
+    # it had been handed from the tree while writing to a directory that did
+    # not exist. A tree is the run's own directory and its scratch disks
+    # belong in it. The resolved path is returned, so a caller that keeps the
+    # answer and one that re-spells the literal both land on one file.
+    path = _build.at(path)
+    # ...AND THE INPUTS, for the same section's reason (14.2): a scratch disk
+    # is built OUT OF build/ artefacts, so a run pointed at a frozen tree has
+    # to read them from there or it bakes the shared tree's bytes into its own
+    # image and the freeze buys nothing. `files` carries os88disk's own
+    # "PREFIX:path" spelling, so the prefix is put back after resolving.
+    files = tuple(
+        (f.split(":", 1)[0] + ":" + _build.at(f.split(":", 1)[1])
+         if ":" in f and not f.startswith("/") else _build.at(f))
+        for f in files)
     srcs = [f.split(":")[-1] for f in files]
     # THE ARGUMENT LIST IS PART OF THE FRESHNESS TEST, and the mtimes alone
     # are not. A row that starts passing a DIFFERENT file - the same folder,
@@ -2012,6 +2607,13 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     for i, src in enumerate((image, apps)):
         if src is None:
             continue
+        # **RESOLVED AGAINST $OS88_BUILD** (tools/os88build.at). This is the
+        # choke point the whole of docs/plans/SOAK-PARALLEL.md 14.2 turns on: 85
+        # call sites hand this function a literal `build/...` string, and one
+        # line here points every one of them at a frozen tree instead - so a
+        # `make` in the shared build/ cannot be copied half-written into a
+        # running instance. Unset, it is the identity function.
+        src = _build.at(src)
         dst = os.path.join(media, "run%d.img" % i)   # a copy per DRIVE, inside
         _clone(src, dst)                             # a directory per INSTANCE
         mounts += ["--mount", "fd:%d:media/floppies/run%d.img" % (i, i)]
@@ -2447,7 +3049,7 @@ def main():
         return main_instances(sys.argv[1:])
     ap = argparse.ArgumentParser(
         description="Drive a headless MartyPC debug server.",
-        epilog="Instance verbs take no address: instances | reap | kill-all")
+        epilog="Instance verbs take no address: instances | reap | kill <port> | kill-all | launch <image>")
     ap.add_argument("addr", help="host:port of the debug server. "
                                  "`os88marty.py instances` lists what is running.")
     ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
@@ -2458,7 +3060,8 @@ def main():
 
     p = sub.add_parser("key"); p.add_argument("name")
     p = sub.add_parser("type"); p.add_argument("text")
-    p = sub.add_parser("mouse")
+    p = sub.add_parser("mouse", help="RELATIVE packets - to click something "
+                                     "use tools/os88mouse.py")
     p.add_argument("dx", type=int); p.add_argument("dy", type=int)
     p.add_argument("--click", action="store_true")
 
@@ -2539,9 +3142,11 @@ def main():
             elif a.op == "type":
                 m.type_text(a.text); print("ok")
             elif a.op == "mouse":
-                m.mouse_move(a.dx, a.dy)
+                from os88mouserel import Rel      # the RELATIVE driver, and
+                r = Rel(m, pace="wall")           # this verb is relative
+                r.move(a.dx, a.dy)
                 if a.click:
-                    m.click()
+                    r.press(); r.release()
                 print("ok")
             elif a.op == "shot":
                 # VGA has no flat framebuffer to decode - mode 12h is four

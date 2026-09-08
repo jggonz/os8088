@@ -34,10 +34,15 @@ S = os88sym.linear
 # GLaBIOS twins, which MartyPC bundles, when tools/martypc/roms/ is empty:
 # this tree cannot ship somebody else's ROM (tools/martypc/README.md).
 import os                                              # noqa: E402
-_IBMROM = os.path.exists("tools/martypc/roms/"
-                         "BIOS_IBM5150_27OCT82_1501476_U33.BIN")
-MACHINE = ({"cga": "os8088_5150_cga", "herc": "os8088_5150_herc"} if _IBMROM
-           else {"cga": "os8088_5150_cga_gla", "herc": "os8088_5150_herc_gla"})
+import os88build                                       # noqa: E402
+# THE MACHINE IS THE GLaBIOS TWIN, resolved rather than chosen here.
+# This used to be a conditional on whether the IBM ROM happened to be
+# in the checkout, which made the machine a property of the box - and
+# on two of the four files that carried it, the path it tested was not
+# the ROM's filename, so the IBM arm could never be taken at all.
+# os88marty.machine() is the one place that decision lives now.
+MACHINE = {c: os88marty.machine("os8088_5150_%s" % c)
+           for c in ("cga", "herc")}
 
 
 def frame(m, adapter):
@@ -117,7 +122,7 @@ def main():
             rec = m.read(S("wm_wins") + wins2[-1] * dispcp.WIN_SIZE,
                          dispcp.WIN_SIZE)
             pseg = rec[22] | (rec[23] << 8)
-            img = os.path.getsize("build/browser.bin")
+            img = os.path.getsize(os88build.at("build/browser.bin"))
             m.key("Tab")
             os88marty.settle(m)
             m.type_text(args.form)
@@ -194,7 +199,7 @@ def main():
         # nothing else. The window is sizable (SPEC.md 11.1), so this drags
         # the grow box and checks the layout actually followed.
         if args.resize:
-            img2 = os.path.getsize("build/browser.bin")
+            img2 = os.path.getsize(os88build.at("build/browser.bin"))
             rec2 = m.read(S("wm_wins") + wins2[-1] * dispcp.WIN_SIZE,
                           dispcp.WIN_SIZE)
             pseg2 = rec2[22] | (rec2[23] << 8)

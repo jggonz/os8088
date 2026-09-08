@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dispapps                                             # noqa: E402
 import dispcp                                               # noqa: E402
 from ethernet import Qemu, S, SOCK, settle                  # noqa: E402
+import os88fixture                                       # noqa: E402
 import os88qemu                                              # noqa: E402
 
 TITLE_H = 18
@@ -115,7 +116,12 @@ def boot():
     # `make test` DAEMONISES the emulator, so it outlives this script
     # unless somebody kills it - and the somebody is us (os88qemu).
     os88qemu.own()
-    r = subprocess.run(["make", "test"], capture_output=True, text=True)
+    # THROUGH os88fixture.make: `make test` is a LAUNCHER, and the only thing
+    # it leaves under build/ is the buildnum stamp the parse rewrites - this
+    # puts that back. Its prerequisites ($(TESTIMG) $(TESTAPPS)) are declared
+    # as this row's `wants=`, so the runner has them current and nothing is
+    # built here either.
+    r = os88fixture.make("test")
     if r.returncode:
         sys.exit("minesrc: make test failed:\n" + r.stdout + r.stderr)
     q = Qemu()

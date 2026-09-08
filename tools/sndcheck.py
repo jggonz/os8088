@@ -5,7 +5,7 @@
     python3 tools/sndcheck.py <wav> --expect-silence
 
 QEMU quirks this tool absorbs (learned building the Phase 1 harness,
-docs/SOUND-PLAN.md):
+docs/history/SOUND-PLAN.md):
   - The wav backend often leaves the RIFF/data size fields ZERO (the
     daemonized QEMU exits without the fixup), so the header is parsed by
     hand and a zero data size means "to end of file".

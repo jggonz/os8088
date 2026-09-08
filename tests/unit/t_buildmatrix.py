@@ -47,12 +47,20 @@ os88ovlchk.py over source no knob can change, and re-assembled the finished
 kernel a second time for a size report this file captures and throws away.  At
 43 rows that was ~230 seconds of a 4-core box per run, none of it about a knob.
 
-  ICODIR=build     take the four packages and associco.inc from the default
+  ICODIR=<shared>  take the four packages and associco.inc from the shared
                    build.  NOT passed for a row whose knob reaches a PACKAGE
                    and not only the kernel - PKG_VARS below is that list, read
                    out of the Makefile's own $(PKGSBDEF) rather than copied
                    here, so a knob added to it stops sharing without anybody
-                   remembering to edit this file
+                   remembering to edit this file.
+                   **`<shared>` IS `os88build.at("build")`, NOT `build/`**
+                   (docs/plans/SOAK-PARALLEL.md 14.2): under a frozen run the shared
+                   directory is the RUN'S tree, and `build/` is the operator's
+                   to `make` in. This was the one row left reaching out of the
+                   run - it read four packages and associco.inc out of a
+                   directory somebody else was rebuilding, and three of its
+                   rows duly failed a soak and passed standalone. Its OUTPUT
+                   goes in the tree for the same reason
   NOOVLCHK=1       do not run the overlay gate per row.  It takes no argument
                    and expands no %ifdef, so its answer is a function of
                    kernel/ alone and 43 runs are one answer 43 times.  THE GATE
@@ -83,6 +91,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import os88build                                          # noqa: E402
 from harness import check, done                           # noqa: E402
 
 
@@ -243,7 +253,16 @@ KNOBS = [
     # out, and THIS ROW is the only thing that ever runs those assertions for
     # the knob arm - which matters MORE now, not less: the knob arm's `.boot2`
     # is what sets the floor under OVL_AT for every build in this table.
-    ("splstars",    ["SPLSTARS=1"]),
+    #
+    # **IT IS PAIRED WITH NOKZIP=1 AND THAT IS THE SAME STORY AGAIN** (SPEC.md
+    # 15.3.8.5.2). The twinkle is 318 bytes of `.boot2` over the spinner and
+    # the compressed kernel's decoder is 180 more, which is 2,748 of 2,624; a
+    # ninth blob sector would fit them and would cost every shipped image 512
+    # bytes and bring back the two blob lengths the size pass deleted. So the
+    # two knobs are exclusive, the Makefile says so in a sentence rather than
+    # leaving a %error about a constant to be decoded, and this row is the arm
+    # that keeps BOTH of the assertions above running.
+    ("splstars",    ["SPLSTARS=1", "NOKZIP=1"]),
     # NOHEDGE= is the first knob in this table that reaches a DRIVER and not
     # the kernel, so it names a target of its own - SAVER.DRV - and the row
     # costs two files instead of a tree. It is SPEC.md 79.5.10's A/B: the
@@ -254,6 +273,29 @@ KNOBS = [
     # rebuilding - so what is left for a build row is exactly what a build row
     # is for: does the other arm still assemble.
     ("nohedge",     ["NOHEDGE=1"], "saver.drv"),
+    # ...and thirteen that reach a PACKAGE, all of them ArtfulType's
+    # (SPEC.md 46.3, 46.4). Each is the A/B of one performance wave and, like
+    # NOHEDGE above, THE ONLY THING THAT ASSEMBLES THE OTHER ARM: nothing
+    # shipped compiles them, and the arms they keep alive are not dead code
+    # but the version the wave replaced, which is what a soak row rebuilds to
+    # compare pixels against. A row is half a second here because the target
+    # is one package and not a tree, so they get one each rather than being
+    # bundled: a bundle assembles every arm at once and then says only that
+    # SOME arm broke.
+    ("noatblit1",   ["NOATBLIT1=1"], "artful.o88"),
+    ("noatfast",    ["NOATFAST=1"], "artful.o88"),
+    ("noatwalk",    ["NOATWALK=1"], "artful.o88"),
+    ("noatsbar",    ["NOATSBAR=1"], "artful.o88"),
+    ("noatrow",     ["NOATROW=1"], "artful.o88"),
+    ("noatblank",   ["NOATBLANK=1"], "artful.o88"),
+    ("noatplain",   ["NOATPLAIN=1"], "artful.o88"),
+    ("noatcx",      ["NOATCX=1"], "artful.o88"),
+    ("noatrespan",  ["NOATRESPAN=1"], "artful.o88"),
+    ("noatfetch",   ["NOATFETCH=1"], "artful.o88"),
+    ("noatcell",    ["NOATCELL=1"], "artful.o88"),
+    ("noattail",    ["NOATTAIL=1"], "artful.o88"),
+    ("noatone",     ["NOATONE=1"], "artful.o88"),
+    ("noatsu",      ["NOATSU=1"], "artful.o88"),
     # MOUDIAG= is SPEC.md 9.9.6's identify-window table drawn on the finished
     # desktop, and it had NO ROW HERE AT ALL until SPEC.md 2.9.12 - which is
     # how a short jump out of range inside the moved mouse cluster went
@@ -294,6 +336,22 @@ KNOBS = [
     # NOPLANE's sentence exactly: an A/B that stopped assembling is found at
     # the moment somebody reaches for it to tell a real fix from a null run.
     ("noseamcut",   ["NOSEAMCUT=1"]),
+    # COMPRESS= picks which decompressors the kernel carries
+    # (docs/plans/O88-COMPRESSION-PLAN.md 12.7, SPEC.md 20.13.6). `both` SHIPS now,
+    # so the rows here are the two SINGLE-format arms, and neither is the same
+    # build: with one format assembled the dispatch is not there at all, and
+    # the dispatch is where the first version had its bug - it never checked
+    # AL, so a file in the other format would have been run through the wrong
+    # decoder instead of refused. lz4-only is also what shipped for one cycle
+    # and is what a size or speed A/B measures against.
+    ("compress-lz4",  ["COMPRESS=lz4"]),
+    ("compress-lzb",  ["COMPRESS=lzb"]),
+    # NOKZIP=1 UNCOMPRESSES THE KERNEL (SPEC.md 2.9.13), which ships packed -
+    # so this row is the arm nothing else builds, and its target is
+    # `boothd.bin` because that is where the unpacked arm has code of its own
+    # (2.9.13.5's %else). The PACKED arm needs no row at all: it is what every
+    # other row in this matrix, and `all`, already builds.
+    ("nokzip",        ["NOKZIP=1"], "boothd.bin"),
     # --- the thirty-five $(KNOBS) no tier assembled (see makefile_knobs) ---
     # Each value is the one its gate or its Makefile block documents; a knob
     # that takes a NUMBER is given the one the A/B uses (DLJUNK=0x61 is the
@@ -336,14 +394,21 @@ KNOBS = [
     ("noblitcut",   ["NOBLITCUT=1"]),
     ("nouiblock",   ["NOUIBLOCK=1"]),
     ("nocurdisk",   ["NOCURDISK=1"]),
+    ("nofddpark",   ["NOFDDPARK=1"]),
     ("vgadirty",    ["VGADIRTY=1"]),
     ("dljunk",      ["DLJUNK=0x61"], "boot360.bin"),
 ]
 
 
 def covered(knob):
-    """Does some row build this knob? KERN_SMALL is `make small` below."""
-    if knob == "KERN_SMALL":
+    """Does some row build this knob? The two PRODUCT builds are their own
+    targets below - `make small` and `make emu` - because each is a whole
+    second tree with a disk of its own rather than a %ifdef arm, and building
+    only their kernels would leave the Makefile machinery that assembles the
+    disk uncovered. That machinery is exactly where kern_emu broke first: its
+    build directory is named by a target-specific `:=`, which reads empty if
+    the variable is defined further down the file."""
+    if knob in ("KERN_SMALL", "KERN_EMU"):
         return True
     return any(v.split("=")[0] == knob for row in KNOBS for v in row[1])
 
@@ -358,15 +423,44 @@ def shares(variables):
     return not ({v.split("=")[0] for v in variables} & PKG_VARS)
 
 
-def build(name, variables, target="kernel.bin"):
-    out = os.path.join(ROOT, "build", "bm-" + name)
+def build(name, variables, target="kernel.bin", shared=None, extra=()):
+    """Assemble ONE knob arm, out of tree, and say whether nasm took it.
+
+    `shared` is the directory the sharing rows take their four packages and
+    associco.inc from, and the directory the `bm-<name>` build lands beside.
+    It defaults to the RUN'S TREE, which is what every row here wants; a
+    caller passes its own when the packages it must share are not that tree's
+    - `tests/unit/t_nasm3.py` builds the whole shipped set with a DIFFERENT
+    ASSEMBLER first and then has to share ITS packages, or the sharing rows
+    would take nasm 2's and the arm under test would be half-answered.
+
+    `extra` goes on the make line ahead of the knob, for a variable that is
+    not one - `NASM=` is the only caller today. It is deliberately not folded
+    into `variables`: that list is what `shares()` and the stale-knob check
+    read, and a make variable the Makefile does not stamp in $(KNOBS) would
+    fail both.
+    """
+    # INSIDE THE RUN'S TREE, both ways (see ICODIR in the header). `at` is the
+    # identity function with $OS88_TREE unset, so an interactive run is
+    # exactly as it was.
+    if shared is None:
+        shared = os.path.relpath(os88build.at("build"), ROOT)
+    out = os.path.join(ROOT, shared, "bm-" + name)
     cmd = ["make", "BUILD=" + os.path.relpath(out, ROOT)] + NOWASTE + \
-          (["ICODIR=build"] if shares(variables) else []) + variables + \
+          list(extra) + \
+          (["ICODIR=" + shared] if shares(variables) else []) + variables + \
           [os.path.relpath(os.path.join(out, target), ROOT)]
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=300)
     ok = r.returncode == 0 and os.path.exists(os.path.join(out, target))
     size = os.path.getsize(os.path.join(out, target)) if ok else 0
-    err = "" if ok else "\n".join((r.stdout + r.stderr).strip().splitlines()[-6:])
+    # THE LINES THAT SAY WHY, not the last six. A knob build ENDS with
+    # kernsize's "BUILT WITH A KNOB" banner and os88mod's five-line module
+    # table, so a tail capture returns those and the actual error has scrolled
+    # past - this row reported three failures whose whole message was advice
+    # about rebuilding. os88build._why picks make's and nasm's own error
+    # forms out; it is shared so that the next capture does not learn this
+    # again (tools/os88build.py, docs/plans/SOAK-PARALLEL.md 14.3).
+    err = "" if ok else os88build._why(r.stdout, r.stderr)
     shutil.rmtree(out, ignore_errors=True)
     return name, ok, size, err
 
@@ -376,7 +470,11 @@ def main():
     ap.add_argument("-j", type=int, default=min(4, os.cpu_count() or 2))
     a = ap.parse_args()
 
-    shipped = os.path.join(ROOT, "build", "kernel.bin")
+    # THE KERNEL THE RUN READS, which under a frozen soak is the tree's and
+    # not `build/`'s (docs/plans/SOAK-PARALLEL.md 14.2). Guarding the operator's
+    # copy would be guarding the one directory this row is no longer allowed
+    # to touch, and leaving the one it could actually clobber unwatched.
+    shipped = os88build.at("build/kernel.bin")
     before = md5(shipped) if os.path.exists(shipped) else None
 
     # The sharing above is only as good as the list it is withheld for, and
@@ -445,28 +543,73 @@ def main():
             if ok:
                 sizes[name] = size
 
-    # kern_small is a whole second tree, so it gets the real target.
-    r = subprocess.run(["make", "small"], cwd=ROOT, capture_output=True,
-                       text=True, timeout=600)
-    check(r.returncode == 0, "make small (kern_small) builds",
+    # kern_small is a whole second tree, so it gets the real target - IN A
+    # PRIVATE BUILD DIRECTORY, which is what removed the restore build that
+    # used to follow it.
+    #
+    # The paragraph here used to explain why: `make small` shares build/ with
+    # the default build - SMALLDRIVERS are the same `build/*.drv` paths - and
+    # it is a target-specific `KMODDIR` away from restamping one of them for
+    # the SMALL kernel. Measured at the time: it left `build/hddtool.drv`
+    # disagreeing with the copy already on the shipped images, and a later
+    # plain `make` did not put it back, because the file was newer than its
+    # sources. The matrix therefore ran a whole second `make -j` afterwards to
+    # put the tree back.
+    #
+    # `make BUILD=<dir> small` writes NONE of that - verified, hddtool.drv
+    # included - so there is nothing to restore, the restore build is gone,
+    # and this file no longer dirties the tree at all. That last part is what
+    # lets the row drop `builds=True` and run beside the emulator rows.
+    try:
+        small = os88build.tree(targets=("small",))
+        ok, err = True, ""
+    except RuntimeError as e:
+        ok, err = False, str(e)[-800:]
+    check(ok, "make small (kern_small) builds",
           "SPEC.md 62.9.15: the 128-256KB machine's kernel is a different binary "
           "with its own budget and whole features compiled out. `all` does not "
           "build it, so nothing catches this until a release",
-          got="\n".join((r.stdout + r.stderr).strip().splitlines()[-8:]), want="exit 0")
+          got=err, want="exit 0")
+    if ok:
+        check(os.path.exists(small.img("small360.img")),
+              "...and it produced its floppy",
+              "a `small` that exits 0 and writes no image is a target whose "
+              "prerequisites have moved",
+              got=small.dir, want="small360.img")
 
-    # `make small` shares build/ with the default build - SMALLDRIVERS are the
-    # same `build/*.drv` paths - and it is a target-specific `KMODDIR` away
-    # from restamping one of them for the SMALL kernel. Measured: it left
-    # `build/hddtool.drv` disagreeing with the copy already on the shipped
-    # images, and a later plain `make` did not put it back because the file
-    # was newer than its sources. So the matrix restores the tree itself
-    # rather than leaving that for the next thing to trip over - a test suite
-    # that dirties the build is a test suite people stop running.
-    r = subprocess.run(["make", "-j%d" % a.j], cwd=ROOT, capture_output=True,
-                       text=True, timeout=600)
-    check(r.returncode == 0, "the default build is restored afterwards",
-          "the matrix must not leave build/ in a state the next test reads as a "
-          "stale image", got="\n".join((r.stdout + r.stderr).strip().splitlines()[-6:]))
+    # ...and kern_emu is the third product (SPEC.md 9.11.7): kern_big PLUS the
+    # VMware absolute pointer, for v86 in a browser and for a desktop
+    # hypervisor. `all` does not build it either, and it is the only thing
+    # that assembles vmmouse.inc, vmmabi.inc's kernel half and every
+    # %ifdef KERN_EMU arm in driver.inc, sched.inc and kernel.asm - which is
+    # the whole resident half of a feature whose gate NOTHING ELSE COMPILES.
+    # It builds the DISK and not just the kernel, because build/emu.img is
+    # what a browser boots and because the sub-make, $(EMUDRIVERS) and the
+    # target-specific $(KMODDIR) that cuts the on-demand modules out of the
+    # emu kernel are all machinery no other target exercises.
+    #
+    # IN A PRIVATE TREE, like `small` above and for its reason: `emu:` is
+    # `$(BUILD)/emu.img`, so run in ROOT it writes the shared build/ - which
+    # is what the restore build under it used to exist for, and what this
+    # file no longer does at all. `_key` includes the targets, so this gets a
+    # directory of its own rather than sharing `small`'s.
+    try:
+        emu = os88build.tree(targets=("emu",))
+        eok, eerr = True, ""
+    except RuntimeError as e:
+        eok, eerr = False, str(e)[-800:]
+    check(eok, "make emu (kern_emu) builds",
+          "SPEC.md 9.11.7: the emulator kernel is kern_big plus SPEC.md 9.11's "
+          "absolute pointer, and it is the only build that compiles that "
+          "feature at all. `all` does not build it, so nothing catches a "
+          "rename inside %ifdef KERN_EMU until somebody boots the browser",
+          got=eerr, want="exit 0")
+    if eok:
+        check(os.path.exists(emu.img("emu.img")),
+              "...and it produced its floppy",
+              "build/emu.img is what a browser boots; a target that exits 0 "
+              "and writes no image has lost a prerequisite",
+              got=emu.dir, want="emu.img")
 
     if before:
         check(md5(shipped) == before, "the shipped kernel was not clobbered",
@@ -474,7 +617,8 @@ def main():
               "adapter on top of the shipped one, and nothing afterwards says so "
               "(CLAUDE.md's cgak note)")
 
-    print("t_buildmatrix: %d knob builds + kern_small (%d shared the default "
+    print("t_buildmatrix: %d knob builds + kern_small + kern_emu (%d shared "
+          "the default "
           "build's packages, %d built their own: %s)"
           % (len(sizes), sum(1 for k in KNOBS if shares(k[1])),
              sum(1 for k in KNOBS if not shares(k[1])),

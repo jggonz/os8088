@@ -13,12 +13,14 @@
 ; only one and open Disk A again), and launch STKPROBE.O88.
 ;
 ; WHAT IT MEASURES, AND WHY QEMU IS NOT ENOUGH. A background task owns a
-; 384-byte stack slice (SCH_STACK, SPEC.md 8), sized against the deepest
-; 0xCC-fill mark ever recorded - but that probe ran under QEMU, where
-; SeaBIOS services its interrupt entries on an internal stack of its own.
-; A real IBM BIOS runs int 09h on whichever task stack is current, and it
-; STIs early, so the tick and the mouse IRQ nest ON TOP of the keyboard
-; handler's frame. That nesting is exactly what this package exists to see:
+; slot-class slice of up to SCH_STACK = 384 bytes (SPEC.md 8.7), sized
+; against the deepest 0xCC-fill mark ever recorded - but that probe ran under
+; QEMU, where a worker's pass finishes between ticks and the fill can carry
+; no interrupt frame at all, and whose ROM chain is a different length from
+; every real one (SeaBIOS 56, the IBM ROM 36). A real BIOS runs int 09h on
+; whichever task stack is current, and it STIs early, so the tick nests ON
+; TOP of the keyboard handler's frame. That nesting is what this package
+; exists to see:
 ; the worker fills its own slice with 0xCC, then SPINS, so every interrupt
 ; the machine takes while it is running lands on the watched slice, and a
 ; twice-a-second scan reports the deepest byte anything ever touched.

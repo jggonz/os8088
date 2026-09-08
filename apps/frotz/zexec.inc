@@ -7,7 +7,7 @@
 ;
 ; THREE DECISIONS SHAPE THIS FILE.
 ;
-;  - **The PC is a live ES:SI and stays one.** docs/FROTZ-PLAN.md 3.1: a story
+;  - **The PC is a live ES:SI and stays one.** docs/plans/completed/FROTZ-PLAN.md 3.1: a story
 ;    address is 20 bits, a claim hands back a base segment, so an instruction
 ;    fetch is `mov al, [es:si] / inc si` and a branch is an `add si`. It is
 ;    spilled to [zf_pcseg]/[zf_pcoff] only where something else must own ES -
@@ -361,7 +361,7 @@ zx_load:
 ; =============================================================================
 zx_step:
     ; THE PC MUST STILL BE INSIDE THE STORY. ES is the program counter's
-    ; segment (docs/FROTZ-PLAN.md 3.1), so an opcode handler that clobbers ES
+    ; segment (docs/plans/completed/FROTZ-PLAN.md 3.1), so an opcode handler that clobbers ES
     ; and does not put it back does not crash - it silently starts executing
     ; whatever is at the same offset in some other claim, and the story dies
     ; hundreds of instructions later somewhere unrelated. One compare catches
@@ -903,7 +903,7 @@ zx_bf:
 ; the PC was in the story's first 64KB and a backwards branch reached further
 ; back than SI had walked - which is every loop whose body contains a call,
 ; because @ret comes through zm_seek and zm_seek leaves SI in 0..15. That is
-; the halt docs/FROTZ-PLAN.md 10.1 describes: the guard was right that
+; the halt docs/plans/completed/FROTZ-PLAN.md 10.1 describes: the guard was right that
 ; something had gone wrong and wrong about what, because the PC in front of it
 ; was correct and merely unnormalised.
 ; -----------------------------------------------------------------------------

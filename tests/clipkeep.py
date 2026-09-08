@@ -9,7 +9,7 @@ net, and the right thing for a window that is about to draw. It ran at the TOP
 of the routine, before the occlusion walk, so a window that is visible but
 WHOLLY COVERED destroyed its cache and was told two calls later that there was
 nothing to draw. Every app with a background painter did it on every poll,
-which docs/SAVEUNDER-LIVE-PLAN.md 3.1 measured as the single thing defeating
+which docs/plans/completed/SAVEUNDER-LIVE-PLAN.md 3.1 measured as the single thing defeating
 the whole save-under proposal - and costed as a rework of every candidate app.
 It is a reorder in one place, +6 bytes.
 

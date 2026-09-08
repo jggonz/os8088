@@ -265,7 +265,7 @@ FS_USED     equ 22              ; word: KB summed over this folder's listed
                                 ; the window's own cache, so it costs no I/O
                                 ; and follows the cache the paint reads
 
-; --- the remembered path (docs/TITLE-PLAN.md) - KERN_BIG ONLY --------------
+; --- the remembered path (docs/plans/completed/TITLE-PLAN.md) - KERN_BIG ONLY --------------
 ; The folders this window was walked DOWN through, so that going back up can
 ; name what it arrives at. A folder's name is free on the way down (the row
 ; the user clicked) and the kernel used to throw it away, so on the way up it
@@ -335,7 +335,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; .bss is not zeroed by the loader: every state variable is set here.
 ; -----------------------------------------------------------------------------
 section .ovlw                  ; THE BOOT OVERLAY (SPEC.md 2.5.2,
-                                ; docs/LAST-DROP-BYTES.md row 6): kmain runs
+                                ; docs/plans/LAST-DROP-BYTES.md row 6): kmain runs
                                 ; this once and no window exists yet to want
                                 ; it again. Zero outbound calls
 files_init_x:
@@ -1733,6 +1733,9 @@ fm_s_open     equ fdlg_s_topen   ; the Standard File dialog's title, which
 fm_s_mkdir:   db 'New Folder...', 0
 fm_s_rename:  db 'Rename...', 0
 fm_s_delete:  db 'Delete', 0
+fm_s_compress: db 'Compress', 0 ; SPEC.md 22.22 - no ellipsis: it asks nothing
+fm_s_uncomp:  db 'Uncompress', 0 ; and starts the moment it is picked, and
+                                ; SPEC.md 22.23's other half says the same
 fm_s_cut:     db 'Cut', 0
 fm_s_copy:    db 'Copy', 0
 fm_s_paste:   db 'Paste', 0
@@ -1779,13 +1782,19 @@ fm_s_newwin:  db 'New Window', 0
 
 fm_items_file:
     dw fm_s_open, fm_s_mkdir, fm_s_rename, fm_s_delete
+    dw fm_s_compress, fm_s_uncomp
     dw fm_s_fsep, fm_s_format   ; fm_bar_gate rewrites these last three words
     dw fm_s_clone, fm_s_wimg
-FM_IFMT     equ 5               ; ...at these item indices, which are also
-FM_ICLONE   equ 6               ; FMC_FORMAT/FMC_CLONE/FMC_WIMG - FMC_OPEN,
-FM_IWIMG    equ 7               ; and are written down once rather than being
+FM_ICOMP    equ 4               ; the compression pair (SPEC.md 22.22/22.23),
+FM_IUNCOMP  equ 5               ; written down because tests/lzcomp.py picks
+                                ; both by index and reads these rather than
+                                ; carrying a copy of the number
+FM_IFMT     equ 7               ; ...at these item indices, which are also
+FM_ICLONE   equ 8               ; FMC_FORMAT/FMC_CLONE/FMC_WIMG - FMC_OPEN,
+FM_IWIMG    equ 9               ; and are written down once rather than being
                                 ; counted at the store
-FM_NFILE    equ 8               ; items in the File menu (MENU_POPMAX is 11)
+FM_NFILE    equ 10              ; items in the File menu (MENU_POPMAX is 11,
+                                ; so this is the last one that fits)
 fm_items_edit:
     dw fm_s_cut, fm_s_copy, fm_s_paste
 fm_items_nav:
@@ -2125,7 +2134,7 @@ fm_ncpy:
 ;
 ; Two callers, both in .cold like this one, both staging a driver-supplied
 ; name into a kernel field: osapi_drv_dlg_x's default file name and
-; drv_cp_stage's Control Panel page name (SPEC.md 51).
+; drv_cp_name_x's Control Panel page name (SPEC.md 51).
 ; -----------------------------------------------------------------------------
 fm_ncpye:
 .c:
@@ -3574,7 +3583,7 @@ fm_reload:
 
 %ifdef KERN_BIG
 ; =============================================================================
-; The remembered path (docs/TITLE-PLAN.md) - KERN_BIG only
+; The remembered path (docs/plans/completed/TITLE-PLAN.md) - KERN_BIG only
 ;
 ; Four routines over the PTH_* block above. They are SHARED with fdlg.inc,
 ; which keeps one for the modal dialog, so they carry a prefix of their own
@@ -3761,7 +3770,7 @@ pth_pop:
 .toroot:
     mov byte [bx+PTH_BUF], 0    ; one component, so above it is the root -
     pop ax                      ; which names itself out of FS_CWD, and never
-    xor si, si                  ; out of this buffer (docs/TITLE-PLAN.md 4.2)
+    xor si, si                  ; out of this buffer (docs/plans/completed/TITLE-PLAN.md 4.2)
     ret
 %endif                          ; KERN_BIG
 
@@ -3875,28 +3884,36 @@ FMC_OPEN    equ 0               ; File
 FMC_MKDIR   equ 1
 FMC_RENAME  equ 2
 FMC_DELETE  equ 3
-FMC_FMTSEP  equ 4               ; the RULE between Delete and Format. It is a
+FMC_COMPRESS equ 4              ; SPEC.md 22.22, and the paragraph above is the
+                                ; licence for the renumber below it - a THIRD
+                                ; time. It sits with Delete rather than with
+                                ; Format because it acts on the SELECTION, and
+                                ; the rule is what separates the two groups
+FMC_UNCOMP  equ 5               ; SPEC.md 22.23 - the pair, and the licence
+                                ; above is what pays for the renumber below
+                                ; it a FOURTH time
+FMC_FMTSEP  equ 6               ; the RULE between the pair and Format. It is a
                                 ; MENU_DIS item, so menu_hover can never land
                                 ; on it and this id can never be dispatched -
                                 ; but it occupies an item index, so it needs
                                 ; an id and a fm_jmp entry all the same, and
                                 ; that entry is a bare `ret` because a body
                                 ; may not assume which surface picked it
-FMC_FORMAT  equ 5
-FMC_CLONE   equ 6               ; SPEC.md 22.21, and the paragraph above is the
-FMC_WIMG    equ 7               ; licence for the renumber below it - twice
-FMC_CUT     equ 8               ; Edit
-FMC_COPY    equ 9
-FMC_PASTE   equ 10
-FMC_NEWWIN  equ 11              ; Nav
-FMC_OPENNEW equ 12
-FMC_REFRESH equ 13
-FMC_UP      equ 14
-FMC_ROOT    equ 15
-FMC_DRVA    equ 16
-FMC_DRVB    equ 17
-FMC_LIST    equ 18              ; no menu CELL of its own since SPEC.md 22.15
-FMC_ICONS   equ 19              ; retired View: the context menu (fm_cxc_dir)
+FMC_FORMAT  equ 7
+FMC_CLONE   equ 8               ; SPEC.md 22.21, and the paragraph above is the
+FMC_WIMG    equ 9               ; licence for the renumber below it - twice
+FMC_CUT     equ 10              ; Edit
+FMC_COPY    equ 11
+FMC_PASTE   equ 12
+FMC_NEWWIN  equ 13              ; Nav
+FMC_OPENNEW equ 14
+FMC_REFRESH equ 15
+FMC_UP      equ 16
+FMC_ROOT    equ 17
+FMC_DRVA    equ 18
+FMC_DRVB    equ 19
+FMC_LIST    equ 20              ; no menu CELL of its own since SPEC.md 22.15
+FMC_ICONS   equ 21              ; retired View: the context menu (fm_cxc_dir)
                                 ; and the in-window toggle button are the two
                                 ; surfaces left, and both reach these BY NAME.
                                 ; Nothing renumbers - a base + item sum simply
@@ -3904,19 +3921,19 @@ FMC_ICONS   equ 19              ; retired View: the context menu (fm_cxc_dir)
                                 ; that produced it left fm_menu_base and every
                                 ; other base is a VALUE that did not move
                                 ; (SPEC.md 12.7's FMC_CLOSEW reasoning)
-FMC_TIMER   equ 20              ; Builtins (SPEC.md 12.3.1) - the same three
-FMC_BOUNCE  equ 21              ; commands Locator's own Builtins menu has,
-FMC_DISK    equ 22              ; in the same order. Restart is NOT among them
+FMC_TIMER   equ 22              ; Builtins (SPEC.md 12.3.1) - the same three
+FMC_BOUNCE  equ 23              ; commands Locator's own Builtins menu has,
+FMC_DISK    equ 24              ; in the same order. Restart is NOT among them
                                 ; any more: it moved to the System menu, which
                                 ; is cell 0 of every application, so a Disk
                                 ; window reaches it there like everything else
-FMC_PASTEIN equ 23              ; no menu CELL of its own: the context menu's
+FMC_PASTEIN equ 25              ; no menu CELL of its own: the context menu's
                                 ; "paste into the folder under the pointer"
                                 ; (SPEC.md 22.3), which the bar cannot offer
                                 ; because the bar has no pointer. It sits
                                 ; PAST every menu's range so no base + item
                                 ; sum can reach it by accident.
-FMC_COUNT   equ 24
+FMC_COUNT   equ 26
 
 ; --- how much of the acting window did the command change? (SPEC.md 22.13) ---
 ; fm_docmd stamps FMD_ALL before every dispatch, so a body that says nothing -
@@ -3947,6 +3964,13 @@ fm_jmp:
     dw fm_c_rename              ; inline (arms it; the disk is touched at
                                 ;         Enter, not here)
     dw fm_c_delete              ; inline (arms the CONFIRM line; likewise)
+    dw fm_c_compress            ; inline (reads, compresses and WRITES under
+                                ;         the lock - the whole operation, like
+                                ;         a clone's transfer, and it is what
+                                ;         SPEC.md 12.8's bar is drawn for)
+    dw fm_c_uncomp              ; inline (ditto, and with no module to fetch:
+                                ;         the DECODER is resident, which is
+                                ;         SPEC.md 22.23's whole asymmetry)
     dw fm_c_nop                 ; the separator - unreachable through the bar
                                 ; (MENU_DIS), and a `ret` rather than a hole
                                 ; because fm_docmd's bound is FMC_COUNT and
@@ -4468,6 +4492,71 @@ fm_clone_go:
     mov al, 7                   ;   away, so this is a tail jump
     jmp fm_edit_arm
 
+; =============================================================================
+; File > Compress / Uncompress (SPEC.md 22.22, 22.23) - both are the module
+; =============================================================================
+; ONE THUNK FOR TWO VERBS, and the module tells them apart by the command id
+; fm_docmd enters a body with: BX = FMC_* * 2, which neither fmv_sync_x nor
+; mod_need disturbs. Everything else - the selection test, the sizing, the
+; claims, the reads, the package arithmetic, both containers, every verdict -
+; is in the image (SPEC.md 20.15), and what this keeps resident is exactly
+; what the image cannot reach: fmv_sync_x, mod_need and its one refusal,
+; mod_drop, fmv_bcast, and the window's own account of what it owes (SPEC.md
+; 22.13). The image is the CLONER's (20.15.3), so `mod_need` fetches
+; CLONE.DRV.
+;
+; Uncompress used to be resident - 445 bytes of it - on the argument that
+; expanding needs no module. It needs no ENCODER; it needs a claim, a read, a
+; write and four verdicts, and those are the same bytes whichever way the file
+; is going. What a machine without its system disk loses is a verb that says
+; `No disk` instead of expanding a file, on a machine that could not have
+; launched anything off that file's disk either.
+;
+; THE THREE ANSWERS the module gives are one register pair: CF=0 the file
+; changed and the image has said the ratio or the word; CF=1 with AX = 0 it
+; refused and has said why; CF=1 with AX != 0 a FERR_*, said here off
+; fm_errtab, because the image has no copy of that table and does not want one.
+fm_c_compress:                  ; ...and fm_c_uncomp: ONE body, which fm_jmp
+fm_c_uncomp:                    ; names twice
+    mov di, [fm_vp]             ; fmv_sync_x takes the state block in DI, and
+    call fmv_sync_x             ; act in OUR folder (SPEC.md 22.1). fm_docmd
+                                ; hands a body nothing in DI: the old shape
+                                ; reached this line through fm_sel_ok, which
+                                ; loaded it, and without the load the sync
+                                ; mounted a drive read off the stack
+    mov al, MOD_CLONE           ; the compressor rides in the cloner's image
+    call mod_need               ; (SPEC.md 20.15.3)
+    jc .nomod
+    mov dx, bx                  ; FMC_COMPRESS*2 or FMC_UNCOMP*2: the module
+    call far [CMZFP]            ; reads DL - and makes the selection test
+                                ; itself, which is why there is none here
+    pushf
+    push ax
+    mov al, MOD_CLONE
+    call mod_drop               ; ...and the image goes back on EVERY path,
+    pop ax                      ; including the ones that said nothing
+    popf
+    jnc .done
+    or ax, ax
+    jz .none                    ; it has already spoken
+.say:
+    mov bx, fm_errtab
+    mov cx, FM_NERR
+    call KERNEL_SEG:toast_say
+.none:
+    mov byte [fm_cmdchg], FMD_NONE  ; nothing moved, so nothing to draw
+    ret
+.done:
+    call fmv_bcast              ; every window showing this folder re-lists
+    mov byte [fm_cmdchg], FMD_ALL
+    ret
+.nomod:
+    mov al, FERR_NODISK         ; 'No disk' - the SAME words the cloner uses
+    jmp short .say              ; when ITS image cannot be fetched, for the
+                                ; same cause: mod_need goes to [dsk_bootvol]
+                                ; and only there. Off fm_errtab, whose row 1
+                                ; is exactly that string
+
 ; -----------------------------------------------------------------------------
 ; fm_toast_hdr - say what is staged in fm_hdrbuf, as a toast (SPEC.md 59)
 ; out: nothing; AX and SI clobbered, which both sites already did
@@ -4984,7 +5073,7 @@ MC_NITEM    equ 4               ; word: item count
 ; here to add it: it is doable, and the paragraph above is not an argument
 ; against it.
 fm_ctx_file:                    ; the row under the pointer is a file
-    dw fm_cxi_file, fm_cxc_file, 5
+    dw fm_cxi_file, fm_cxc_file, 7
 fm_ctx_fold:                    ; ...or a folder, which can also be opened
     dw fm_cxi_fold, fm_cxc_fold, 7
 fm_ctx_dir:                     ; empty space: the folder's own commands
@@ -4995,10 +5084,17 @@ fm_ctx_up:                      ; ...or '..' (SPEC.md 19.5), which opens and
                                     ; the FIRST TWO of the folder's items,
                                     ; the same arrays cut short
 
+; The compression pair is on THIS descriptor and on no other (SPEC.md 22.23),
+; and that is a requirement rather than a nicety: under WF_FULL (SPEC.md 11.2)
+; a file-manager window has no menu bar at all, so a right-press is the only
+; surface either verb has there. A folder cannot be compressed and neither can
+; '..', so the other three descriptors are unchanged.
 fm_cxi_file:
     dw fm_s_open, fm_s_cut, fm_s_copy, fm_s_rename, fm_s_delete
+    dw fm_s_compress, fm_s_uncomp
 fm_cxc_file:
     db FMC_OPEN, FMC_CUT, FMC_COPY, FMC_RENAME, FMC_DELETE
+    db FMC_COMPRESS, FMC_UNCOMP
 
 ; Paste is on the FOLDER menu as well as the empty-space one, because
 ; "paste into that folder" is the thing a right-click on a folder is for -
@@ -7494,7 +7590,9 @@ fm_scrollpaint:
     mov bx, [fm_by1]
     mov cx, [fm_bx2]
     mov dx, [fm_by2]
-    call KERNEL_SEG:cw_gfx_scroll
+    mov bp, gfx_scroll          ; cw_mem_disp is `call bp / retf` and neither
+    call KERNEL_SEG:cw_mem_disp ; touches the flags, so gfx_scroll's CF is
+                                ; still its answer here (SPEC.md 2.6)
     jc .refj                    ; it refused: fm_repaint puts the selection
                                 ; back with everything else
 
@@ -8192,6 +8290,8 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
 ; do it. Six resident bytes against a second copy of real code in the image,
 ; which is the one place that trade goes the other way.
 fmf_fm_utoa:            call fm_utoa
+                    retf
+fmf_fm_stage_onam:      call fm_stage_onam  ; the compressor's selection test
                     retf
 fmf_files_open:         call files_open_x
                     retf

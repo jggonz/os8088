@@ -3,7 +3,7 @@
 ;
 ; Input, the request handshake, and saved games. This is the seam between the
 ; two tasks Frotz runs on, and the only file in the package that knows both
-; sides of it (docs/FROTZ-PLAN.md 4.1, SPEC.md 61.7).
+; sides of it (docs/plans/completed/FROTZ-PLAN.md 4.1, SPEC.md 61.7).
 ;
 ; THE TASK SPLIT IS THE WHOLE DESIGN. The VM is a worker (SPEC.md 20.6), and a
 ; worker may not call a file slot, may not call OSAPI_FILE_DLG, and may not
@@ -20,7 +20,7 @@
 ; the worker has anything to run: the story, the Z-stack, the save staging
 ; buffer and the undo snapshot. The worker allocates nothing, ever.
 ;
-; The handshake (docs/FROTZ-PLAN.md 4.1) is four steps and one shared byte:
+; The handshake (docs/plans/completed/FROTZ-PLAN.md 4.1) is four steps and one shared byte:
 ;
 ;   1. the worker stages the whole save image into [zi_savseg] itself - a
 ;      memory copy, which is allowed - sets [zf_req], prints a prompt and
@@ -41,7 +41,7 @@
 ; SAVED GAMES ARE QUETZAL (the IFF 'FORM....IFZS' standard), because a save
 ; written on an XT then opens in Frotz on a laptop and one written there opens
 ; here. Dynamic memory goes in as UMem - an uncompressed dump - and NOT as
-; CMem, and that is a memory decision taken in docs/FROTZ-PLAN.md 8 rather
+; CMem, and that is a memory decision taken in docs/plans/completed/FROTZ-PLAN.md 8 rather
 ; than a shortcut: CMem is a run-length encoding of current dynamic memory
 ; XORed against the ORIGINAL, so it needs a pristine copy resident, and
 ; FROTZ-PLAN 3 has already spent that second copy on not existing (a restart
@@ -249,7 +249,7 @@ zi_yield:
     push ax
     push bx
     push es                         ; ES IS THE PROGRAM COUNTER'S SEGMENT
-                                    ; (docs/FROTZ-PLAN.md 3.1). OSAPI_TASK_ALIVE
+                                    ; (docs/plans/completed/FROTZ-PLAN.md 3.1). OSAPI_TASK_ALIVE
                                     ; takes the gfx lock and OSAPI_TASK_YIELD
                                     ; runs the whole scheduler; neither owes us
                                     ; ES, and this is called from EVERY wait
@@ -642,7 +642,7 @@ zi_ondlg:
 ; -----------------------------------------------------------------------------
 ; zi_dlg_story - refuse from the SIZE, before any disk I/O
 ;
-; This is SPEC.md 47's refusal path and docs/FROTZ-PLAN.md 3 is why it exists.
+; This is SPEC.md 47's refusal path and docs/plans/completed/FROTZ-PLAN.md 3 is why it exists.
 ; The whole story has to be resident - there is no paging, because int 13h
 ; costs ~400ms whatever it moves and one turn touches high memory hundreds of
 ; times - so a story that does not fit cannot be played at all, and the honest
@@ -763,7 +763,7 @@ zi_dlg_restore:
 ; the point: the story first, because it is the one that can fail for size;
 ; then the Z-stack, which is small and mandatory; then the save staging
 ; buffer, whose failure costs saving but not play; then the undo snapshot,
-; which docs/FROTZ-PLAN.md 3 says outright is optional - a story that loses
+; which docs/plans/completed/FROTZ-PLAN.md 3 says outright is optional - a story that loses
 ; UNDO on a small machine is better than one that will not start.
 ; =============================================================================
 zi_load:
@@ -2103,7 +2103,7 @@ zi_rwords:
 ; =============================================================================
 ; @save_undo needs no dialog, no task hop and no disk: it is dynamic memory
 ; plus the Z-stack, copied into a claim. The claim is optional
-; (docs/FROTZ-PLAN.md 3), so both of these answer "cannot" rather than
+; (docs/plans/completed/FROTZ-PLAN.md 3), so both of these answer "cannot" rather than
 ; assuming, which is exactly what Standard 6.1.2 allows @save_undo to do.
 ;
 ; The snapshot's layout, at [zi_undoseg]:0000:
@@ -2397,7 +2397,7 @@ zi_script_open:
 ; zi_script_putc - one character into the buffer (WORKER)
 ; in:  AL = the character; out: nothing; preserves every register
 ;
-; ES is the STORY here (docs/FROTZ-PLAN.md 3.1), so it is saved and put back -
+; ES is the STORY here (docs/plans/completed/FROTZ-PLAN.md 3.1), so it is saved and put back -
 ; forgetting that is the bug the whole ES rule exists to prevent.
 ; -----------------------------------------------------------------------------
 zi_script_putc:
@@ -2440,7 +2440,7 @@ zi_script_putc:
 ;
 ; Called from the key callback, so the file on disk is never more than one
 ; keystroke behind what is on screen - which is what makes it usable as a test
-; oracle (docs/FROTZ-PLAN.md 11: the transcript is read back off the image on
+; oracle (docs/plans/completed/FROTZ-PLAN.md 11: the transcript is read back off the image on
 ; the host and diffed against dfrotz).
 ; -----------------------------------------------------------------------------
 zi_script_flush:

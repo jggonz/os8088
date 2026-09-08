@@ -93,7 +93,7 @@ vid_dbg_blk:
 
 ; =============================================================================
 ; THE ADAPTER PROBE TRIO, IN THE BOOT OVERLAY (SPEC.md 2.5.2,
-; docs/LAST-DROP-BYTES.md row 2) - 262 contiguous bytes and the cleanest body
+; docs/plans/LAST-DROP-BYTES.md row 2) - 262 contiguous bytes and the cleanest body
 ; in the tree to move: ONE inbound edge in the whole repository (kmain:4211),
 ; ZERO outbound, and no data and no `section` line anywhere in the span.
 ; vid_probe_avail calls vid_memchk three times and vid_cga_alias once and calls
@@ -628,7 +628,7 @@ SPL_MSG_Y     equ 288           ; VGA: under the bar trough (rows 262..281) and
 ; same section, and it is their only caller, so what used to be a 20-byte
 ; OVLCALL through spl_fp is three bytes of near call in one address space and
 ; the `retf` they answered it with is a `ret`. That collapse is most of why
-; docs/LAST-DROP-BYTES.md row 1 is the only row in the register that returns
+; docs/plans/LAST-DROP-BYTES.md row 1 is the only row in the register that returns
 ; more than it spends. ovl_spl_redraw below keeps its `retf` - spl_reset is in
 ; `.boot2` and reaches it through OVLCALL still.
 ; -----------------------------------------------------------------------------
@@ -939,7 +939,7 @@ section .text
 ;   * THE COLOUR ARM WROTE 3D8h UNCONDITIONALLY, a register a VGA does not
 ;     implement, so the OUT was swallowed by the bus. That was accepted while
 ;     "a VGA beside a Hercules" was believed to be a pairing nobody built - it
-;     is in fact the one the period built most (docs/DUAL-DISPLAY-VGA.md 1.3) -
+;     is in fact the one the period built most (docs/plans/completed/DUAL-DISPLAY-VGA.md 1.3) -
 ;     and on such a machine switching to the Hercules left the VGA lit with a
 ;     frozen desktop on it. vid_blank_kind has a real VGA arm (SR01 bit 5).
 ;
@@ -971,7 +971,7 @@ section .text
 ; single bit can ever encode.
 ; -----------------------------------------------------------------------------
 %if VID_KIND_MAX != VID_EGA
-  %error "vid_blank, vid_blank_kind and vid_unblank_kind decide WHICH CARD by comparing against VID_HERC (and VID_VGA/VID_EGA) BY NAME and treating everything else as the CGA (SPEC.md 39.18.1), and vid_avail_test's `cmp al, VID_KIND_MAX` is the range that rests on it. A FIFTH kind is silently a CGA to all three. Give it an arm in each of them before raising VID_KIND_MAX"
+  %error "vid_blank, vid_blank_kind and vid_unblank_kind decide WHICH CARD by comparing against VID_HERC BY NAME and then treating `kind-1 >= 2` as PLANAR and everything else as the CGA (SPEC.md 39.18.1), vga12.inc's thm_set spells the same `kind-1 >= 2` for `is the primary a colour adapter` (SPEC.md 76.12.1), and vid_avail_test's `cmp al, VID_KIND_MAX` is the range that rests on it. A FIFTH kind is silently PLANAR to the dispatch and to the theme, and silently a CGA to vid_blank. Give it an arm in each of them before raising VID_KIND_MAX"
 %endif
 vid_blank:
     push ax
@@ -1086,7 +1086,7 @@ vid_switch:
 ; =============================================================================
 ; The per-display context (SPEC.md 39.12) - kern_big only
 ;
-; STEP 1 of docs/DUAL-DISPLAY-PLAN.md 11: the state and the swap, with
+; STEP 1 of docs/plans/completed/DUAL-DISPLAY-PLAN.md 11: the state and the swap, with
 ; [vid_ndisp] = 1 and nothing on a drawing path calling any of it. So the
 ; screen is byte-identical to the build before it, on all three adapters, by
 ; construction rather than by inspection - which is the gate this step is
@@ -1198,13 +1198,15 @@ vid_bk:
     cmp al, VID_HERC
     je .mono
 %ifdef GFX_VGA                  ; no planar adapter in the build: [vid_kind]
-    cmp al, VID_EGA             ; is never VID_VGA or VID_EGA and vid_disp_set
-    je .ega                     ; is inside %ifdef KERN_BIG, so no caller can
-    cmp al, VID_VGA             ; pass either. EGA has NEITHER of the two
-    je .vga                     ; enable bits - SR01 bit 5 and the Attribute
-%endif                          ; Controller's PAS are both VGA additions -
-    mov ax, 0x0040              ; and it does not decode 3D8h either: its
-                                ; blank is its PALETTE (vid_ac_pal below)
+    dec al                      ; is never VID_VGA or VID_EGA and vid_disp_set
+    cmp al, 2                   ; is inside %ifdef KERN_BIG, so no caller can
+    jae .planar                 ; pass either. ONE compare for both planar
+%endif                          ; kinds: dec maps VGA -> FF, HERC -> 0,
+    mov ax, 0x0040              ; CGA -> 1, EGA -> 2, so planar is `al >= 2`
+                                ; unsigned. AL is dead below - the CGA arm's
+                                ; `mov ax, 0x0040` is the next thing to write
+                                ; it. Neither planar kind decodes 3D8h: both
+                                ; blank through the Attribute Controller
     mov es, ax
     mov al, [es:0x0065]         ; the BIOS's shadow of 3D8h...
     and al, ~8                  ; ...minus the video-enable bit...
@@ -1237,84 +1239,26 @@ vid_bk:
     out dx, al
     jmp short .out
 %ifdef GFX_VGA
-.ega:
-    mov al, dh                  ; EGA HAS NEITHER ENABLE BIT and its blank is
-    call vid_ac_pal             ; its palette (SPEC.md 39.24). vid_ac_pal reads
-    jmp short .out              ; its argument as ZERO / NONZERO, so this
-                                ; body's own direction byte - 0 dark, 8 lit -
-                                ; is already the argument and needs no
-                                ; translation into main's 0/1
-.vga:
-    mov al, dh                  ; SR01 bit 5 is Screen OFF, so the polarity
-    xor al, 8                   ; is inverted first: dark (DH=0) -> 8 -> 0x20,
-    shl al, 1                   ; lit (DH=8) -> 0 -> 0. shl by 1 is the
-    shl al, 1                   ; 8086-legal form
-    call vid_seq1_blank
-%endif
+.planar:
+    mov al, dh                  ; BOTH planar kinds blank the same way - the
+    call vid_ac_pal             ; Attribute Controller's Color Plane Enable,
+%endif                          ; which an EGA and a VGA both have.
+                                ; vid_ac_pal reads its argument as ZERO /
+                                ; NONZERO, so this body's own direction byte
+                                ; - 0 dark, 8 lit - is already the argument
 .out:
     pop es
     pop ax
     pop dx
     ret
 
-%ifdef GFX_VGA                  ; its only two callers are the .vga arms above,
-                                ; both gated for the same reason
-; -----------------------------------------------------------------------------
-; vid_seq1_blank - internal: write bit 5 of the VGA's Sequencer register 1
-;
-; in:       AL = 0x20 to dark the screen, 0 to light it
-; out:      -
-; clobbers: flags (AL is consumed)
-;
-; IT RUNS WITH IF=0, AND THAT IS THE ONLY INTERESTING THING ABOUT IT. SR01's
-; other bits are the dot clock and the character width; they belong to whatever
-; mode the card is in and cannot be guessed, so the register has to be READ -
-; which makes this an index write, a read and a data write, three instructions
-; with two gaps in them.
-;
-; Every other Sequencer access in the kernel is a single `out dx, ax`, index
-; and data in one instruction, which is atomic by construction and needs
-; nothing. This one cannot be, and the gap is reachable: vga12.inc's plane
-; loops leave the Sequencer INDEX at 2 (Map Mask) for the whole of a plane's
-; rep movsb, and every drawing task can be pre-empted mid-row. A switch landing
-; between the index write and the read below would read the Map Mask and then
-; write the screen-off bit INTO it - a card blanked by having one plane's write
-; mask corrupted, which is neither of the two things this routine can be asked
-; for. pushf/cli ... popf, never cli/sti (SPEC.md 1).
-;
-; Leaving the index at 1 afterwards costs nothing, for the same reason: every
-; reader re-selects with its own word OUT.
-; -----------------------------------------------------------------------------
-vid_seq1_blank:
-    push ax
-    push bx
-    push dx
-    mov bl, al                  ; the wanted state of bit 5
-    pushf
-    cli
-    mov dx, VGA_SEQ
-    mov al, 1                   ; SR01, Clocking Mode
-    out dx, al
-    inc dx
-    in al, dx
-    and al, ~0x20               ; ...with bit 5 replaced and the dot clock,
-    or al, bl                   ; the character width and the rest untouched
-    out dx, al
-    popf
-    pop dx
-    pop bx
-    pop ax
-    ret
-%endif                          ; ...end of vid_seq1_blank
 
 ; -----------------------------------------------------------------------------
-; vid_ac_pal - internal: the EGA's blank, which is its PALETTE
+; vid_ac_pal - the PLANAR blank: the Attribute Controller's Color Plane Enable
 ;
-; in:       AL = 0 to dark the screen (all sixteen Attribute Controller
-;           palette registers to black), nonzero to put mode 10h's own
-;           sixteen back
+; in:       AL = 0 to dark the screen, nonzero to light it
 ; out:      -
-; clobbers: flags (AL is consumed)
+; clobbers: flags (AX and DX are banked)
 ;
 ; AN EGA HAS NEITHER ENABLE BIT. Sequencer register 1 bit 5 (Screen Off) and
 ; the Attribute Controller index's bit 5 (Palette Address Source) are BOTH
@@ -1322,84 +1266,70 @@ vid_seq1_blank:
 ; width with bits 5-7 reserved, and the AC index is bits 4-0 with 7-5 unused.
 ; Writing either on an EGA blanks nothing: the bit lands in a reserved field
 ; and the tube stays lit. So the card's video signal cannot be gated at all,
-; and what CAN be done is to make every colour it is showing black.
+; and what CAN be done is to make every pixel it is showing black.
 ;
-; That keeps the property the whole feature rests on and that the other three
+; AC REGISTER 12h, Color Plane Enable, IS ONE REGISTER PAIR FOR THAT. Bits 3-0
+; enable the four planes; with all four disabled every pixel reads as
+; attribute 0, which maps through palette register 0 - black on both cards,
+; the kernel never programming a palette or a DAC entry at all (SPEC.md 39.4
+; works in the sixteen indices, not in the colours behind them). 0x0F puts
+; them back, and 0x0F is exactly what the BIOS mode set leaves for mode 10h
+; and for mode 12h alike, so the restore is exact rather than remembered.
+;
+; ONE ROUTINE FOR BOTH PLANAR KINDS. A VGA has AC 12h too, so this is what
+; darks a VGA as well - vid_seq1_blank and its SR01 read-modify-write are
+; gone, and with them the second mechanism for an identical result. What the
+; two do differ in is the overscan: SR01 bit 5 gates the signal outright and
+; darks the border with it, where this leaves AC 11h alone - which is 0 in
+; both mode 10h and mode 12h, so the border is already black.
+;
+; That keeps the property the whole feature rests on and that the other two
 ; arms have (see vid_blank's header): the CRTC is untouched, both syncs keep
 ; coming out, the tube never re-acquires, and what the card holds in memory is
-; not disturbed - so a background task may go on drawing into a blanked EGA
-; exactly as it may into a blanked VGA.
+; not disturbed - so a background task may go on drawing into a blanked card.
 ;
-; THE FLIP-FLOP IS RESET PER PAIR, not once in front of sixteen. 3C0h is one
-; port for both the index and the data and which one a write lands in is a
-; LATCH, not a state re-selected by each access the way the Sequencer's index
-; is; sixteen unguarded pairs are sixteen chances to be one out, and being one
-; out writes a palette entry where an index belongs. The routine also leaves
-; the latch in the INDEX phase, because the phase outlives the call and
-; fsx.inc hands a package the raw hardware between these two routines.
+; THE INDEX CARRIES BIT 5, and here that is the SAFE setting rather than a
+; trap. On the EGA bits 7-5 of the index are unused; on a VGA bit 5 is Palette
+; Address Source, and 1 means "normal operation" - video enabled and the
+; PALETTE registers not host-loadable. 12h is not a palette register, so it is
+; writable in that state, which is why this survives the same code running on
+; a VGA under `make test VIDEO=ega` (SPEC.md 39.9) where sixteen index writes
+; of a bare 0..15 would blank the tube as a side effect of addressing it.
 ;
-; EVERY INDEX WRITE CARRIES BIT 5, and leaving it out is a black screen that
-; never comes back. On the EGA bits 7-5 of the index are unused and it is a
-; don't-care - but this same code runs on a VGA under `make test VIDEO=ega`
-; (SPEC.md 39.9), and there bit 5 IS Palette Address Source: an index written
-; with it clear means "the host is loading the palette", which DISABLES video
-; output. Sixteen index writes of a bare 0..15 therefore blank the screen as a
-; side effect of addressing it, and the restoring pass blanks it again while
-; putting the colours back - the palette ends up right and the tube stays
-; dark. Found on the glass, which is the only place it shows: the blank looks
-; correct and it is the unblank that never returns.
+; THE FLIP-FLOP: 3C0h is one port for both the index and the data and which
+; one a write lands in is a LATCH, not a state re-selected by each access the
+; way the Sequencer's index is. One pair is one chance to be one out, and the
+; routine leaves the latch in the INDEX phase afterwards, because the phase
+; outlives the call and fsx.inc hands a package the raw hardware.
 ;
-; IT RUNS WITH IF=0, for vid_seq1_blank's reason one screen up: the read and
-; the write are a pair with a reachable gap, and this one is thirty-two
-; accesses of it, off ui_task's idle blanker, pre-emptible throughout.
+; IT RUNS WITH IF=0: the 3DA reset and the two 3C0 writes are one sequence
+; with reachable gaps in it, off ui_task's idle blanker, pre-emptible
+; throughout. pushf/cli ... popf, never cli/sti (SPEC.md 1).
 ; -----------------------------------------------------------------------------
+%ifdef GFX_VGA                  ; its only caller is vid_bk's planar arm, which
+                                ; is itself gated
 vid_ac_pal:
     push ax
-    push bx
-    push cx
     push dx
-    push si
-    mov bl, al                  ; 0 = black, nonzero = the defaults
-    mov si, vid_ac_dflt
-    xor cl, cl                  ; CL = the palette register, 0..15
+    neg al                      ; 0 -> 0, CF=0; nonzero -> CF=1
+    sbb ah, ah                  ; AH = 0x00 dark / 0xFF lit...
+    and ah, 0x0F                ; ...and the four planes are the low nibble
     pushf
     cli
-.n:
     mov dx, 0x3DA               ; Input Status 1: latch to INDEX...
     in al, dx
     mov dx, 0x3C0
-    mov al, cl                  ; ...the register, WITH BIT 5 SET...
-    or al, 0x20                 ; (see below)
+    mov al, 0x32                ; ...AC 12h, Color Plane Enable, WITH BIT 5
     out dx, al
-    xor al, al
-    or bl, bl
-    jz .wr
-    mov al, [si]
-.wr:
-    out dx, al                  ; ...and what it is to show
-    inc si
-    inc cl
-    cmp cl, 16
-    jb .n
+    mov al, ah
+    out dx, al                  ; 0 = every pixel reads as attribute 0
     mov dx, 0x3DA               ; leave the latch where every reader assumes
     in al, dx                   ; it, INDEX, and not mid-pair
     popf
-    pop si
     pop dx
-    pop cx
-    pop bx
     pop ax
     ret
-
-; Mode 10h's sixteen, which is what the BIOS mode set left and therefore what
-; an unblank owes: the standard EGA/VGA 16-colour default, with 6 mapped to
-; 14h so that colour 6 is BROWN rather than dark yellow, and 8..15 in the
-; second intensity group at 38h..3Fh. The kernel never programs these itself
-; (SPEC.md 39.4 works in the sixteen indices, not in the palette behind
-; them), so the BIOS default IS the live palette and restoring it is exact.
-vid_ac_dflt:
-    db 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07
-    db 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
+%endif                          ; ...end of vid_ac_pal
 
 %ifdef KERN_BIG
 
@@ -1690,7 +1620,7 @@ vid_ctx_act:
 ; vid_equip, vid_apply, vid_setmode, vid_disp_init and desk_rowcalc, and none of
 ; them is this. kmain:4203 is the only edge in the repository, which is what
 ; puts this body in the BOOT OVERLAY (SPEC.md 2.5.2,
-; docs/LAST-DROP-BYTES.md row 13) - and a stale comment naming a runtime caller
+; docs/plans/LAST-DROP-BYTES.md row 13) - and a stale comment naming a runtime caller
 ; is exactly how a later session would add the one that breaks it silently.
 ;
 ; Its two outbound calls go through cw_ shims, which is `.ovl`'s discipline
@@ -1996,7 +1926,7 @@ vid_disp_find:
 ; "how deep is the screen" but "how deep is the card these pixels are ON".
 ; Those are the same question on every machine with one display and on both
 ; displays of a Hercules+CGA pair; a VGA beside a Hercules is where they part
-; (docs/DUAL-DISPLAY-VGA.md 4.3).
+; (docs/plans/completed/DUAL-DISPLAY-VGA.md 4.3).
 ;
 ; It DERIVES rather than being told, and that is deliberate: the cache already
 ; carries the rect its pixels were taken over, in the claim's own header, so
@@ -2077,7 +2007,7 @@ vid_pt_clamp:
 ; A MONO CARD AND A COLOUR CARD, which is a sentence about cards where this
 ; used to be an equality against HERC|CGA exactly. The equality was right about
 ; every value it refused but one, and the one it got wrong is the pairing the
-; period built most of (docs/DUAL-DISPLAY-VGA.md):
+; period built most of (docs/plans/completed/DUAL-DISPLAY-VGA.md):
 ;
 ;   HERC|CGA        a Hercules and a real CGA          two - as before
 ;   VGA|HERC|CGA    a VGA and a real Hercules          two - NEW
@@ -2113,6 +2043,8 @@ vid_pt_clamp:
 ; Control Panel then OFFERS the desktop radios that SPEC.md 47 says it must
 ; grey, fsx hands out a second page that is not there, and vid_disp_init takes
 ; the extend arm into an empty socket. Restored to two exits deliberately.
+; ...AND IT PRESERVES AH, which vid_disp_init now relies on: it loads the
+; primary's kind ONCE above its own branch and both arms below read it back.
 vid_dual_ok:
     cmp byte [vid_kind], VID_EGA    ; EGA is a single-display adapter here
     je .no                          ; (SPEC.md 39.24: the per-display context
@@ -2223,8 +2155,10 @@ vid_disp_other:
 vid_disp_init:
     push ax
     push di
-    call vid_dual_ok
-    jnc .paired
+    mov ah, [vid_kind]          ; the primary, banked across the two applies -
+    call vid_dual_ok            ; ONE load above the branch, because both arms
+    jnc .paired                 ; below want it and vid_dual_ok keeps AH (it
+                                ; is three compares, a clc and an stc)
 
     ; --- REFUSED, and that used to be the end of it ------------------------
     ; [vid_ndisp] was 1 here BY CONSTRUCTION: vid_dual_ok read nothing but
@@ -2238,12 +2172,11 @@ vid_disp_init:
     ; stride. A refusal has to bring the arrangement DOWN.
     cmp byte [vid_ndisp], 1
     je .jout                    ; nothing live: unchanged, and the boot path
-    mov ah, [vid_kind]          ; ...otherwise collapse it through the arm
+                                ; ...otherwise collapse it through the arm
     call vid_disp_other         ; that already knows how. [vid_dmode] is kept:
     jmp short .single           ; the arrangement is impossible on THIS
                                 ; primary, not forgotten
 .paired:
-    mov ah, [vid_kind]          ; the primary, banked across the two applies
     call vid_disp_other         ; ...and AL = the other display's adapter, which
                                 ; is NOT simply the other of two kinds - see
                                 ; there, and see what a VGA's CGA bit means

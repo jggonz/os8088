@@ -30,8 +30,12 @@ ANSWER, which is the reason the pane exists at all.
 import os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
-import os88marty, os88mouse, os88sym, dispcp
-from os88geom import MB_ENTSZ      # the bar cell stride, SPEC.md 12.2
+import os88marty, os88mouse, os88sym, os88ui, dispcp
+# ...and the bar cell's stride and fields, from the one copy that is checked
+# against kernel/menu.inc at import (tools/os88geom.py, and t_mirror in the
+# fast tier). They were four literals here.
+from os88geom import (MB_ENTSZ, MB_SEG, MB_XL,   # noqa: F401
+                      MBAR_H, MENU_ITEM_H)
 
 S = os88sym.linear
 KERNEL_SEG = 0x0060
@@ -45,7 +49,6 @@ TITLE_H = 18
 CAL_KEY_X0, CAL_KEY_Y0 = 4, 24
 CAL_BTN_W, CAL_BTN_H = 51, 14
 CAL_KEY_PIT, CAL_BTN_HG = 16, 4
-MBAR_H, MENU_ITEM_H, MB_XL, MB_SEG = 20, 16, 6, 10
 CAL_HROW_N, CAL_CUT = 26, ord("~")
 # the keypad, row-major, exactly as cal_keytab lists it
 KEYPAD = ["C", "CE", "<-", "/",
@@ -207,10 +210,12 @@ def menu_pick(m, mo, cell, item):
     cell (SPEC.md 12.7) is APPENDED LAST in the table even though it is drawn
     leftmost, precisely so that bar index == set index + 1.
     """
-    t = m.read(S("menu_bar") + cell * MB_ENTSZ, MB_ENTSZ)
-    x = u16(t, MB_XL) + 6
-    mo.menu(x, 8, x, MBAR_H + 1 + item * MENU_ITEM_H + 8)
-    os88marty.settle(m)
+    os88ui.UI(m, mouse=mo, verbose=False).menu_pick(cell, item)
+    _quiet(m)                       # ...and then the APP, not the screen:
+                                    # menu_pick proves the item highlighted
+                                    # before it releases, so what is left to
+                                    # wait for is the command's effect - which
+                                    # is in the buffers `_quiet` watches
 
 
 def menu_title(m, seg, cell):
@@ -272,12 +277,48 @@ def press(m, ch):
         m.type_text(ch)
 
 
+# WHAT `typed` AND `ctrl` WAIT ON. Both used to end in `os88marty.settle(m)`
+# - the whole screen, 2.0 host seconds of proven stillness apiece - and the
+# next line is almost always `shown(m, seg, cal)`, thirteen bytes of the
+# package's own composition buffer. So they settle on THAT instead
+# (`os88marty.quiesce`), which is both an order of magnitude cheaper and a
+# stricter statement about the thing being read.
+#
+# It is a module global because the two functions are called forty times and
+# `seg`/`cal` are not known until the package is up; `watch_calc` is called
+# once, right after they are read. With it unset both fall back to the screen
+# settle, so the file still works if that call is ever moved.
+#
+# MEASURED: this one line was 137.9s of the ten-row profile in
+# docs/plans/SOAK-PARALLEL.md 11 - 60 settles at 2.3s - and the single most
+# expensive wait site in the suite.
+_WATCH = [None]
+
+
+def watch_calc(m, seg, cal):
+    # THE FOLD IS IN HERE TOO, and it has to be: `menu_pick` opens and closes
+    # the history pane, which does not touch the number field at all - so a
+    # watcher that only read `shown` would answer "already still" and wait for
+    # nothing. [cal_open] and [cal_nvis] are what the fold moves.
+    _WATCH[0] = lambda: (shown(m, seg, cal), context(m, seg, cal),
+                         bss(m, seg, cal["open"], 1),
+                         bss(m, seg, cal["nvis"], 2))
+
+
+def _quiet(m):
+    if _WATCH[0] is None:
+        os88marty.settle(m)
+    else:
+        os88marty.quiesce(m, _WATCH[0],
+                          what="the Calculator's display to stop changing")
+
+
 def typed(m, text, settle=True):
     for ch in text:
         press(m, ch)
         time.sleep(0.15)
     if settle:
-        os88marty.settle(m)
+        _quiet(m)
 
 
 def ctrl(m, letter, settle=True):
@@ -291,7 +332,7 @@ def ctrl(m, letter, settle=True):
     m.key("ControlLeft", down=False, up=True)
     time.sleep(0.15)
     if settle:
-        os88marty.settle(m)
+        _quiet(m)
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
@@ -326,6 +367,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
            "cbuf": img_end + 104, "nbuf": img_end + 136,
            "htext": img_end + 296}
     print("image ends at +%d; [cal_nvis] at +%d" % (img_end, cal["nvis"]))
+    watch_calc(m, seg, cal)         # ...and from here `typed`/`ctrl` settle
+                                    # on the display buffer, not the screen
 
     # The BASELINE, before a single key: whatever this reports is the window
     # manager's and not the app's, because nothing here has drawn twice yet.

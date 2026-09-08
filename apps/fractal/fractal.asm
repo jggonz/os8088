@@ -167,6 +167,34 @@ FR_CLAMP    equ 14336               ; |cx|,|cy| ceiling over the whole view (3.5
 FR_CAP      equ 48                  ; iteration cap; palette index is then the
                                     ; escape count directly (0..47)
 FR_ZMAX     equ 4                   ; deepest useful zoom in Q4.12 (measured)
+FR_CYCK     equ 8                   ; the cycle check's reference is replaced
+                                    ; every FR_CYCK iterations (SPEC.md 40.7).
+                                    ; A POWER OF TWO, because the test is
+                                    ; `test di, FR_CYCK-1` and one AND is what
+                                    ; keeps the whole scheme affordable. Eight
+                                    ; is measured: 4 wins more on the Rabbit
+                                    ; and the elephant and loses more
+                                    ; everywhere else, 16 and 32 give up more
+                                    ; than they save
+
+; fr_inset's two shapes (SPEC.md 40.5). Every bound here is a MEASURED extent
+; of the algebraic test rather than a convenient round number: the main
+; cardioid lies inside Re -0.75..0.375 and |Im| <= 3*sqrt(3)/8 = 0.6495, the
+; period-2 bulb inside Re -1.25..-0.75 and |Im| <= 0.25, and tools/frref.py
+; sweeps the plane to say so. They are what makes the test nearly free on a
+; view that holds neither shape - |cy| alone rejects both in two instructions.
+FR_QTR      equ 1024                ; 0.25, the cardioid's cusp
+FR_SYMAX    equ 2661                ; ceil(0.6495 * 4096): above BOTH shapes
+FR_CDXHI    equ 512                 ; dx = cx - 0.25 at the cardioid's Re max
+FR_CDXLO    equ -4096               ; ...and at its Re min
+FR_BULBR    equ 1024                ; the bulb's box: |cx + 1| and |cy| < 0.25
+FR_BULBR2   equ 256                 ; ...and its radius squared, 1/16
+FR_INMARG   equ 16                  ; ulps of Q4.12 held back before claiming a
+                                    ; point. NOT load-bearing - the exhaustive
+                                    ; sweep passes at zero - but it is what
+                                    ; keeps that true if qmul's rounding is
+                                    ; ever touched, and it costs 7% of the
+                                    ; claimed area, all of it boundary annulus
 
 FF_ABS      equ 01h                 ; Burning Ship: t = |t|
 FF_NEG      equ 02h                 ; Tricorn: t2 = -t2  (conj(z))
@@ -222,10 +250,12 @@ FR_PCT_CELLS equ 5                  ; the percentage field's WIDTH in cells:
 ; pack is an OR. Runs start at column 0 and each one begins where the last
 ; ended, so the start column is implied and a row ends with the run whose last
 ; column is cw-1. The ROW is implied too - not by pass 0's 0, 4, 8 ... any
-; more, but by replaying the (pass, row) state machine from (0, 0): rows are
-; appended in the order fr_advance produces them, so stepping fr_stepv once
-; per stored row names every one of them. That is why there is exactly one
-; copy of that arithmetic and why fr_stepv exists.
+; more, but by replaying the (pass, row) state machine from (0, [fr_mrc]):
+; rows are appended in the order fr_advance produces them, so stepping
+; fr_stepv once per stored row names every one of them. That is why there is
+; exactly one copy of that arithmetic and why fr_stepv exists - and why
+; [fr_mrc] is a cache validity key beside the canvas size (SPEC.md 40.6),
+; since the phase decides which row each stored one IS.
 ;
 ; It STARTS at 4KB and REGROWS, doubling whenever a row will not fit, and
 ; that is the shape rather than a fixed size because how much a view needs is
@@ -249,7 +279,7 @@ FR_CRUN        equ 2                ; bytes per cached run
 FR_CACHE_KB0   equ 4                ; the first claim
 FR_CACHE_MAXKB equ 32               ; ...and where doubling stops
 
-FR_BSS_TOTAL equ 415                ; see the bss layout after OS88_IMAGE_END
+FR_BSS_TOTAL equ 425                ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; fr_entry - package entry point (SPEC.md 20.2)
@@ -526,7 +556,8 @@ fr_worker:
     cmp ax, 2
     je .norst                       ; resume: keep the pass and row the UI set
     mov word [fr_pass], 0
-    mov word [fr_row], 0
+    mov ax, [fr_mrc]                ; pass 0 opens at d = 0, which is the axis
+    mov [fr_row], ax                ; row - and row 0 with no mirror (40.6)
     mov word [fr_prog], 0
     mov byte [fr_pct], 0
 .norst:
@@ -541,6 +572,8 @@ fr_worker:
 .work:
     call fr_take                    ; CF=0: a repaint left this row cached
     jnc .ready
+    call fr_twin                    ; CF=0: fr_line ALREADY holds this row's
+    jnc .ready                      ; mirror, so it holds this row (40.6)
     call fr_rowcalc                 ; the expensive part: NO lock held
 .ready:
     cmp word [fr_restart], 0
@@ -739,7 +772,10 @@ fr_kick:
     call fr_setup
     call fr_cache_reset
     mov word [fr_pass], 0
-    mov word [fr_row], 0
+    mov ax, [fr_mrc]                ; ...at d = 0 (SPEC.md 40.6)
+    mov [fr_row], ax
+    mov word [fr_lrow], 0FFFFh      ; fr_line is the OLD view's, so no twin
+                                    ; may be taken from it
     mov word [fr_prog], 0
     mov byte [fr_pct], 0
     mov word [fr_restart], 1
@@ -793,14 +829,19 @@ fr_redraw:
     mov ax, [fr_cch]
     cmp ax, [fr_ch]
     jne fr_kick
+    mov ax, [fr_cmrc]               ; ...and the PHASE, because the cache
+    cmp ax, [fr_mrc]                ; stores rows in emission order and
+    jne fr_kick                     ; nothing else says which row is which
 
     call fr_replay                  ; the pass-0 prefix, inline
     mov ax, [fr_c0n]                ; the worker picks the cache up where that
     mov [fr_cpos], ax               ; stopped, and replays what is past it
     xor ax, ax
-    mov bx, [fr_c0row]
-    sub bx, 4                       ; the last cached pass-0 row...
-    call fr_stepv                   ; ...and the row after it
+    mov bx, [fr_c0row]              ; the last cached pass-0 row...
+    call fr_stepv                   ; ...and the row after it. `sub bx, 4` was
+                                    ; here and was an assumption about the
+                                    ; PHASE (SPEC.md 40.6); the row itself is
+                                    ; recorded now, so this is one plain step
     mov [fr_pass], ax
     mov [fr_row], bx
     mov ax, [fr_cnrow]
@@ -955,7 +996,8 @@ fr_cache_reset:
     mov word [fr_cn], 0
     mov word [fr_cnrow], 0
     mov word [fr_cpass], 0
-    mov word [fr_crow], 0
+    mov ax, [fr_mrc]                ; the frontier opens where the render does
+    mov [fr_crow], ax
     mov word [fr_c0n], 0
     mov word [fr_c0row], 0
     mov word [fr_cpos], 0
@@ -964,6 +1006,8 @@ fr_cache_reset:
     mov [fr_ccw], ax
     mov ax, [fr_ch]
     mov [fr_cch], ax
+    mov ax, [fr_mrc]                ; the phase the rows will be stored in
+    mov [fr_cmrc], ax
     pop ax
     ret
 
@@ -984,8 +1028,10 @@ fr_cache_reset:
 ; fr_stepv - the same routine fr_advance steps the render with - so the two
 ; cannot drift, which is the whole reason that arithmetic was factored out.
 ; [fr_c0n] tracks the byte the pass-0 prefix ends at, because that is the
-; part fr_redraw replays inline, and [fr_c0row] the pass-0 row it stops at,
-; because that is where the worker resumes.
+; part fr_redraw replays inline, and [fr_c0row] the LAST pass-0 row that went
+; into it, because one fr_stepv step off that row is where the worker resumes
+; (SPEC.md 40.6 - it used to be the NEXT uncached one, and fr_redraw reached
+; the same place with `sub bx, 4`, which is an assumption about the phase).
 ;
 ; A row is committed whole or not at all: a partial row would desync every
 ; row after it, since the start column of each run is implied by the end of
@@ -1048,17 +1094,14 @@ fr_cache_row:
     cmp word [fr_cpass], 0
     jne .adv                        ; past pass 0: the inline prefix is fixed
     mov [fr_c0n], di
+    mov ax, [fr_crow]               ; ...and the row it stops AT, which is what
+    mov [fr_c0row], ax              ; fr_redraw steps off (SPEC.md 40.6)
 .adv:
     mov ax, [fr_cpass]              ; step the frontier the ONE way rows step
     mov bx, [fr_crow]
     call fr_stepv
     mov [fr_cpass], ax
     mov [fr_crow], bx
-    or ax, ax
-    jz .p0
-    mov bx, [fr_ch]                 ; out of pass 0: the prefix is complete,
-.p0:                                ; which is what fr_redraw reads c0row for
-    mov [fr_c0row], bx
     jmp short .out
 .full:
     call fr_cache_grow              ; CF=0: bigger now - lay the row again
@@ -1097,15 +1140,22 @@ fr_cache_row:
 ; fr_kick emptying the cache under this walk ends it rather than running it
 ; off the claim. The row it half-decoded is then dropped by the restart
 ; check, like any other stale row.
+;
+; The two refusals are NOT the same exit. Only a walk that gave up mid-row has
+; written into fr_line, and only that one may invalidate [fr_lrow]; the
+; ordinary "the cursor is at the frontier, compute it" refusal leaves fr_line
+; and [fr_lrow] exactly as they were, because fr_worker calls fr_twin on the
+; very next instruction and a wipe here would mean the mirror never fires at
+; all (SPEC.md 40.6).
 ; -----------------------------------------------------------------------------
 fr_take:
     mov byte [fr_cfrom], 0
     mov ax, [fr_cseg]
     or ax, ax
-    jz .none
+    jz .quiet
     mov si, [fr_cpos]
     cmp si, [fr_cn]
-    jae .none                       ; the cursor is at the frontier: compute
+    jae .quiet                      ; the cursor is at the frontier: compute
     xor di, di                      ; DI = the column this run starts at
 .run:
     mov es, ax                      ; (AX holds fr_cseg for the whole walk)
@@ -1139,11 +1189,16 @@ fr_take:
     sub si, [fr_cpos]
     mov [fr_ctlen], si              ; the whole row, and only a whole row
     mov byte [fr_cfrom], 1
-    clc
-    ret
+    mov ax, [fr_row]                ; fr_line holds THIS row now - a replayed
+    mov [fr_lrow], ax               ; row is as good a mirror source as a
+    clc                             ; computed one, and leaving this stale
+    ret                             ; would hand fr_twin the wrong row (40.6)
 .none:
-    stc
-    ret
+    mov word [fr_lrow], 0FFFFh      ; half a row may have been decoded into
+                                    ; fr_line before this gave up
+.quiet:                             ; ...where nothing was: fr_line still holds
+    stc                             ; the row [fr_lrow] names, and the twin
+    ret                             ; test is about to want it (SPEC.md 40.6)
 
 ; -----------------------------------------------------------------------------
 ; fr_replay - put the cached PASS-0 rows back onto the canvas
@@ -1168,23 +1223,12 @@ fr_replay:
     push es
     xor si, si
     mov di, [fr_c0n]
-    mov word [fr_crrow], 0
+    mov ax, [fr_mrc]                ; pass 0 opens at d = 0 (SPEC.md 40.6)
+    mov [fr_crrow], ax
 .row:
-    mov ax, [fr_crrow]              ; band bottom = row + 3, clipped to the
-    add ax, 3                       ; last canvas row
-    mov bx, [fr_ch]
-    dec bx
-    cmp ax, bx
-    jle .b2
-    mov ax, bx
-.b2:
-    add ax, [fr_oy]
-    add ax, FR_STRIP_H
-    mov [fr_by2], ax
-    mov ax, [fr_crrow]
-    add ax, [fr_oy]
-    add ax, FR_STRIP_H
-    mov [fr_by1], ax
+    xor ax, ax                      ; pass 0's band for this row
+    mov bx, [fr_crrow]
+    call fr_band
     mov word [fr_p], 0
 .run:
     or di, di
@@ -1213,11 +1257,13 @@ fr_replay:
     mov [fr_p], cx
     cmp cx, [fr_cw]
     jb .run
-    mov ax, [fr_crrow]
-    add ax, 4
-    mov [fr_crrow], ax
-    cmp ax, [fr_ch]
-    jb .row
+    xor ax, ax                      ; the NEXT pass-0 row, off the one state
+    mov bx, [fr_crrow]              ; machine rather than this routine's own
+    call fr_stepv                   ; `add 4` - which was a second opinion
+    or ax, ax                       ; about what the cache holds, and is wrong
+    jnz .out                        ; under a phase (SPEC.md 40.1, 40.6)
+    mov [fr_crrow], bx
+    jmp .row
 .out:
     pop es
     pop di
@@ -1314,6 +1360,25 @@ fr_setup:
     add ax, [fr_ceny]
     mov [fr_y0], ax
 
+    xor ax, ax                      ; --- the x-axis mirror (SPEC.md 40.6) ---
+    mov [fr_mrc], ax                ; off unless every condition below holds
+    cmp word [si+FT_SYM], 1         ; ...this type declares the x-axis (the
+    jne .nomir                      ; two Julias declare the ORIGIN, which is
+                                    ; a reversed row and not this)
+    mov ax, [fr_y0]
+    or ax, ax
+    jg .nomir                       ; the whole canvas is below the axis
+    neg ax                          ; AX = -y0, and 0 <= -y0 <= 14336
+    xor dx, dx
+    div word [fr_step]              ; ...so cy = 0 lands on row AX
+    or dx, dx
+    jnz .nomir                      ; ...but not EXACTLY on one, so there are
+                                    ; no twins: a click off the axis normally
+                                    ; lands here, and that is the honest limit
+    cmp ax, [fr_ch]
+    jae .nomir
+    mov [fr_mrc], ax
+.nomir:
     mov bx, [fr_pal]
     shl bx, 1
     mov ax, [fr_pals+bx]
@@ -1420,48 +1485,198 @@ fr_defaults:
 
 ; -----------------------------------------------------------------------------
 ; fr_stepv - the (pass, row) state machine, one row on
-; in:  AX = pass, BX = row, [fr_ch]
+; in:  AX = pass, BX = row, [fr_ch], [fr_mrc]
 ; out: AX = pass, BX = row - the next row to draw, or pass 3 = frame complete
 ; clobbers: nothing else
 ;
-; Progressive refinement, three passes over the canvas:
-;   pass 0: rows r = 0, 4, 8, ...  painted as a band of 4 rows
-;   pass 1: rows r = 2, 6, 10, ... painted as a band of 2
-;   pass 2: rows r = 1, 3, 5, ...  painted as a single row
+; Progressive refinement, three passes over the canvas, counted from the
+; MIRROR ROW rather than from row 0 (SPEC.md 40.6). With d = row - [fr_mrc]:
+;   pass 0: d = 0, +4, -4, +8, -8, ...  painted as a band of 4 rows
+;   pass 1: d = +2, -2, +6, -6, ...     painted as a band of 2
+;   pass 2: d = +1, -1, +3, -3, ...     painted as a single row
 ; ch/4 + ch/4 + ch/2 = ch: NO pixel is ever computed twice, only painted
 ; twice, so the finished image is exactly the non-progressive image - and a
 ; full (chunky) preview lands in a quarter of the time.
 ;
-; It takes its state in registers because there are THREE walkers over it and
+; THE PHASE IS THE WHOLE POINT. mirror(r) = 2*rc - r preserves parity but not
+; r mod 4, so counted from row 0 a pass-0 row's twin lands in pass 1 and is a
+; whole pass away; counted from the axis, -d is the row IMMEDIATELY after +d
+; and fr_line still holds it, so the twin costs nothing and no cache is read.
+; [fr_mrc] = 0 means no mirror, and it is then EXACTLY the order this walked
+; before the phase existed - checked at every canvas height rather than
+; argued, because that is what makes four of the five types byte-identical.
+;
+; It takes its state in registers because there are FOUR walkers over it and
 ; they must not be able to disagree: the render (fr_advance), the cache's
-; frontier (fr_cache_row), and fr_redraw working out where the worker resumes.
-; The cache stores rows in exactly the order this produces them and nothing
-; else records which row is which, so a second copy of this arithmetic would
-; be a second opinion about what the cache contains.
+; frontier (fr_cache_row), fr_replay putting the pass-0 prefix back, and
+; fr_redraw working out where the worker resumes. The cache stores rows in
+; exactly the order this produces them and nothing else records which row is
+; which, so a second copy of this arithmetic would be a second opinion about
+; what the cache contains - which fr_replay was, until SPEC.md 40.6.
 ; -----------------------------------------------------------------------------
 fr_stepv:
+    push cx
     push dx
-    mov dx, 4
-    cmp ax, 2
-    jne .step
-    mov dx, 2
+    push si
+    push di
+    mov cx, [fr_mrc]                ; CX = rc
+    mov si, [fr_ch]
+    dec si
+    sub si, cx                      ; SI = max(rc, ch-1-rc), the point past
+    cmp si, cx                      ; which neither side of the axis has a
+    jae .lim                        ; row left and the pass is exhausted
+    mov si, cx
+.lim:
+    call fr_incv                    ; DX = this pass's |d| increment
+    sub bx, cx                      ; BX = d
 .step:
+    or bx, bx
+    jg .flip
+    jl .grow
+    add bx, dx                      ; d = 0 -> the first pair's +d
+    jmp short .chk
+.flip:
+    neg bx                          ; +d -> -d, the twin, next
+    jmp short .chk
+.grow:
+    neg bx                          ; -d -> the next pair's +d
     add bx, dx
-    cmp bx, [fr_ch]
-    jb .out
-.next:
+.chk:
+    mov di, bx
+    or di, di
+    jns .pos
+    neg di
+.pos:
+    cmp di, si
+    ja .nextpass                    ; |d| past both edges: this pass is done
+    mov di, bx
+    add di, cx                      ; DI = the candidate row. A d that is off
+    cmp di, [fr_ch]                 ; ONE edge is skipped, not a terminator -
+    jae .step                       ; and a negative row fails this unsigned
+    mov bx, di
+    jmp short .out
+.nextpass:
     inc ax
     cmp ax, 3
     jae .out                        ; frame complete
-    mov bx, 2                       ; pass 1 starts at row 2, pass 2 at row 1
-    cmp ax, 1
-    je .set
-    mov bx, 1
-.set:
-    cmp bx, [fr_ch]
-    jae .next                       ; degenerate canvas: skip the empty pass
+    call fr_incv                    ; the new pass's increment...
+    mov bx, dx
+    shr bx, 1                       ; ...and its first |d|: 2 for pass 1,
+    jmp short .chk                  ; 1 for pass 2 - which is inc/2 for both
 .out:
+    pop di
+    pop si
     pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_band - the SCREEN band canvas row BX paints in pass AX
+; in:  AX = pass, BX = canvas row, [fr_ch] [fr_oy]
+; out: [fr_by1] = top, [fr_by2] = bottom; clobbers nothing
+;
+; fr_emit_body and fr_replay both need this and both had their own copy - the
+; second one hard-coding pass 0's +3 - which was survivable while the band was
+; row..row+3 and is not now. SPEC.md 40.6 phases the passes from the axis, so
+; pass 0 opens at rc mod 4 and up to three rows sit ABOVE every pass-0 band;
+; left alone they stay unpainted until pass 2, which is a white line along the
+; top of the canvas for the first quarter of a render. The topmost pass-0 band
+; reaches row 0 instead. Band geometry is derived at both ends and never
+; stored, so the rule only has to be the same in both - which is what putting
+; it in one routine buys.
+; -----------------------------------------------------------------------------
+fr_band:
+    push ax
+    push bx
+    push cx
+    push si
+    mov si, bx                      ; SI = row
+    mov cx, ax                      ; CX = pass
+    mov bx, ax
+    mov al, [fr_bhtab+bx]           ; bottom = row + extra, clipped to the
+    mov ah, 0                       ; last canvas row
+    add ax, si
+    mov bx, [fr_ch]
+    dec bx
+    cmp ax, bx
+    jle .b2
+    mov ax, bx
+.b2:
+    add ax, [fr_oy]
+    add ax, FR_STRIP_H
+    mov [fr_by2], ax
+    mov ax, si                      ; top = row, except the topmost pass-0
+    or cx, cx                       ; band, which reaches the top of the
+    jnz .top                        ; canvas - see the header
+    cmp ax, 4
+    jae .top
+    xor ax, ax
+.top:
+    add ax, [fr_oy]
+    add ax, FR_STRIP_H
+    mov [fr_by1], ax
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_twin - does fr_line ALREADY hold the row about to be drawn? (SPEC.md 40.6)
+; in:  [fr_row] [fr_mrc] [fr_lrow] [fr_ch]
+; out: CF clear = yes: fr_line is this row's colours, do not compute it
+;      CF set   = no
+; clobbers: nothing
+;
+; The mirror is bit-exact in this core because qmul truncates toward zero, so
+; qmul(-a,b) = -qmul(a,b) holds exactly and the conjugate orbit is the negated
+; orbit: x2, x2+y2 and the magnitude guard are all untouched by the sign of
+; zy. Swept at stride 3 over the whole clamped plane, 45,677,682 pairs, zero
+; disagreements - and the Burning Ship, which declares FT_SYM 0, disagrees on
+; 6.5 million of them, which is what makes that a measurement rather than a
+; sweep that was not looking.
+;
+; It compares against [fr_lrow] and NOTHING else, so the failure mode is a
+; recompute rather than a wrong row: fr_kick and a HALF-DECODED fr_take both
+; park 0FFFFh there, and a value that is merely stale cannot match a twin the
+; render has not reached yet. The range test is what makes that sentinel safe:
+; 2*rc - row is -1, which IS 0FFFFh, for row 2*rc+1 - an ordinary row of the
+; walk wherever the axis sits high enough for one - so without it the sentinel
+; would read as a match and paint that row from whatever fr_line last held.
+; -----------------------------------------------------------------------------
+fr_twin:
+    push ax
+    mov ax, [fr_mrc]
+    or ax, ax
+    jz .no                          ; no axis on this canvas: nothing mirrors
+    add ax, ax
+    sub ax, [fr_row]                ; AX = 2*rc - row, the twin
+    cmp ax, [fr_row]
+    je .no                          ; the axis row is its own twin
+    cmp ax, [fr_ch]
+    jae .no                         ; ...and a twin off the canvas is no row at
+                                    ; all - unsigned, so row -1 fails here
+    cmp ax, [fr_lrow]
+    jne .no
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_incv - the |d| increment of pass AX: 4 for passes 0 and 1, 2 for pass 2
+; in:  AX = pass
+; out: DX; clobbers nothing else
+; -----------------------------------------------------------------------------
+fr_incv:
+    mov dx, 4
+    cmp ax, 2
+    jne .out
+    mov dx, 2
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1513,12 +1728,18 @@ fr_rowcalc:
     mov [fr_cx], ax
     mov ax, [fr_pcy]
     mov [fr_cy], ax
+    cmp byte [fr_flg], 0            ; SPEC.md 40.5: the two interior components
+    jne .go0                        ; that answer without iterating at all.
+    call fr_inset                   ; THE TYPE GATE IS HERE and not inside it,
+    jc .interior                    ; so the Burning Ship and the Tricorn do
+.go0:                               ; not pay a near call a pixel to be told no
     xor bx, bx
     xor si, si
 .go:
     call frac_iter                  ; AX = escape index, or FR_CAP = interior
     cmp ax, FR_CAP
     jb .escaped
+.interior:
     xor al, al                      ; the interior is CBLACK in every palette -
     jmp short .store                ; a separate constant, not table entry 0
 .escaped:
@@ -1534,6 +1755,8 @@ fr_rowcalc:
     mov ax, [fr_px]
     cmp ax, [fr_cw]
     jb .pixel
+    mov ax, [fr_row]                ; fr_line holds this row now - the twin
+    mov [fr_lrow], ax               ; test in fr_worker compares against it
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1557,6 +1780,11 @@ fr_rowcalc:
 ; -----------------------------------------------------------------------------
 frac_iter:
     mov di, FR_CAP
+    mov [fr_hx], bx                 ; SPEC.md 40.7: the cycle reference starts
+    mov [fr_hy], si                 ; as z0 itself - a real state of the orbit
+                                    ; rather than a sentinel, which is what
+                                    ; lets a fixed point at the origin be
+                                    ; caught on the very first comparison
     jmp short .loop
 .escaped:                           ; placed BEFORE the body on purpose: every
     mov ax, FR_CAP                  ; exit branch below is a backward rel8, and
@@ -1630,11 +1858,152 @@ frac_iter:
     sub ax, bp                      ; x2 - y2
     add ax, [fr_cx]
     mov bx, ax                      ; zx'
+
+    cmp bx, [fr_hx]                 ; SPEC.md 40.7: has this orbit been here
+    je .cycy                        ; before? zx first, so the zy compare is
+.nocyc:                             ; only paid on a match
     dec di
     jz .interior
+    test di, FR_CYCK-1              ; ...and the reference is replaced every
+    jz .cycref                      ; FR_CYCK iterations. The refresh test is
     jmp .loop                       ; rel16: the body is out of rel8 range
+.cycref:
+    mov [fr_hx], bx
+    mov [fr_hy], si
+    jmp .loop
+.cycy:
+    cmp si, [fr_hy]                 ; a full match: the map is a function of
+    jne .nocyc                      ; (zx, zy) alone, so this orbit retraces
+                                    ; itself forever and can never reach the
+                                    ; escape test. It IS an FR_CAP point, and
+                                    ; saying so now is the same answer sooner
 .interior:
     mov ax, FR_CAP
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_q12 - DX:AX (a signed 32-bit product) -> DX = product >> 12, truncated
+;          TOWARD ZERO, which is bit for bit what frac_iter's inline chain
+;          does and is the whole reason this is one routine and not two
+; in:  DX:AX = the product
+; out: DX = the Q4.12 result; AX clobbered, flags clobbered
+;
+; frac_iter inlines this three times because it is the innermost loop in the
+; package and a near call+ret is ~11us on the target (PERFORMANCE.md Part 2).
+; fr_inset does not: it runs at most four multiplies for a pixel that reaches
+; the shapes at all, off the hot path, so the four calls cost less than the
+; 64 bytes four copies of the chain would.
+; -----------------------------------------------------------------------------
+fr_q12:
+    or dx, dx                       ; a negative product is biased before the
+    jns .pos                        ; shift so the truncation goes toward zero
+    add ax, FR_ONE-1                ; instead of toward -infinity
+    adc dx, 0
+.pos:
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_inset - is this c PROVABLY interior?  (SPEC.md 40.5)
+; in:  [fr_cx] [fr_cy] = c in Q4.12, and [fr_flg] ALREADY KNOWN ZERO by the
+;      caller - see the precondition below
+; out: CF set   = frac_iter would return FR_CAP for this c; do not iterate
+;      CF clear = unknown; iterate
+; clobbers: AX, BX, CX, DX, SI - the same freedom frac_iter has, and for the
+;      same reason: fr_rowcalc keeps every scrap of its loop state in memory
+;
+; An interior pixel costs FR_CAP iterations, which is 144 multiplies, and at
+; the default view they are 76.9% of the frame (SPEC.md 40.5). The main
+; cardioid and the period-2 bulb are the two largest interior components and
+; both have a closed form, so this answers them in at most four multiplies:
+;
+;     cardioid   dx = cx - 1/4,  q = dx^2 + cy^2,  q(q + dx) < cy^2/4
+;     bulb       (cx + 1)^2 + cy^2 < 1/16
+;
+; THE CLAIM IS ABOUT THIS CORE, NOT ABOUT THE MATHEMATICAL SET, and that is
+; the only claim worth making: what was checked is that every Q4.12 lattice
+; point this routine can claim is one frac_iter returns FR_CAP for. The sweep
+; is exhaustive over the region the gates admit, and it was run again at a
+; margin of ZERO, where the test claims 22,951,518 points and still disagrees
+; with the core nowhere. That one run settles every margin at once, because
+; raising the margin claims a strict subset. tests/unit/t_frinset.py is it. Widening a gate or cutting FR_INMARG without
+; re-running that is how this becomes a black speck in the outer field, which
+; is the failure SPEC.md 40 warns about for the mirror and warns about here.
+;
+; PRECONDITION: [fr_flg] IS ZERO - the Mandelbrot, which is the one type it
+; is, and the one type this shape describes. Burning Ship carries FF_ABS and
+; Tricorn FF_NEG, both of which have an interior of a different shape; both
+; Julias carry FF_JUL, where c is a constant for the whole frame and a
+; per-pixel test of c means nothing at all. fr_rowcalc tests the flag at the
+; SINGLE call site rather than here, so those four pay one compare a pixel
+; instead of a compare wrapped in a near call, and they stay byte-identical.
+; tests/unit/t_frinset.py is what keeps the precondition true: it fails if
+; the Mandelbrot ever stops being the only type with a zero flag word.
+; -----------------------------------------------------------------------------
+fr_inset:
+    mov cx, [fr_cy]                 ; CX = |cy|, which both shapes are bounded
+    or cx, cx                       ; in and which is therefore the FIRST gate:
+    jns .ay                         ; a view above them both - a click on the
+    neg cx                          ; north tip, say - is rejected in two
+.ay:                                ; instructions and pays nothing else
+    cmp cx, FR_SYMAX
+    ja .no
+
+    mov ax, cx                      ; SI = cy^2, wanted by both shapes
+    imul ax
+    call fr_q12
+    mov si, dx
+
+    mov bx, [fr_cx]                 ; --- the main cardioid ---
+    sub bx, FR_QTR                  ; BX = dx
+    cmp bx, FR_CDXHI
+    jg .bulb
+    cmp bx, FR_CDXLO
+    jl .bulb
+    mov ax, bx
+    imul bx
+    call fr_q12
+    add dx, si                      ; DX = q = dx^2 + cy^2
+    cmp dx, FR_ONE                  ; q >= 1 is outside the cardioid, and it is
+    jge .bulb                       ; also what keeps the product below in range
+    mov ax, dx
+    add ax, bx                      ; AX = q + dx
+    imul dx                         ; DX:AX = (q + dx) * q
+    call fr_q12
+    mov ax, si                      ; AX = cy^2 / 4, less the margin
+    shr ax, 1
+    shr ax, 1
+    sub ax, FR_INMARG
+    cmp dx, ax
+    jl .yes
+
+.bulb:                              ; --- the period-2 bulb ---
+    cmp cx, FR_BULBR                ; its box is disjoint from the cardioid's
+    jae .no                         ; in cx, so reaching here costs two compares
+    mov bx, [fr_cx]
+    add bx, FR_ONE                  ; BX = cx + 1
+    cmp bx, FR_BULBR
+    jge .no
+    cmp bx, -FR_BULBR
+    jle .no
+    mov ax, bx
+    imul bx
+    call fr_q12
+    add dx, si                      ; DX = (cx + 1)^2 + cy^2
+    cmp dx, FR_BULBR2-FR_INMARG
+    jl .yes
+.no:
+    clc
+    ret
+.yes:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1734,23 +2103,9 @@ fr_emit_body:
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
     mov [fr_ox], ax
     mov [fr_oy], dx
-    mov bx, [fr_pass]               ; band bottom = row + extra, clipped to the
-    mov al, [fr_bhtab+bx]           ; last canvas row
-    mov ah, 0
-    add ax, [fr_row]
-    mov bx, [fr_ch]
-    dec bx
-    cmp ax, bx
-    jle .b2
-    mov ax, bx
-.b2:
-    add ax, [fr_oy]
-    add ax, FR_STRIP_H
-    mov [fr_by2], ax
-    mov ax, [fr_row]
-    add ax, [fr_oy]
-    add ax, FR_STRIP_H
-    mov [fr_by1], ax
+    mov ax, [fr_pass]               ; the band this row paints - the same
+    mov bx, [fr_row]                ; arithmetic fr_replay uses, in one place
+    call fr_band                    ; because 40.6 gave it a top-edge rule
     mov word [fr_p], 0
 .run:
     mov bx, [fr_p]
@@ -2320,8 +2675,12 @@ fr_cpass   equ os88_image_end + 392  ; word: the frontier - the (pass, row) the
 fr_crow    equ os88_image_end + 394  ; word:  cache is waiting to be handed
 fr_c0n     equ os88_image_end + 396  ; word: BYTES of the pass-0 prefix, which
                                      ; is the part fr_redraw replays inline
-fr_c0row   equ os88_image_end + 398  ; word: the next pass-0 row not cached
-                                     ; (>= ch once pass 0 is all in there)
+fr_c0row   equ os88_image_end + 398  ; word: the LAST cached pass-0 row, which
+                                     ; is what fr_redraw takes one fr_stepv
+                                     ; step off. It was "the next one not
+                                     ; cached" and fr_redraw reached the same
+                                     ; place with `sub bx, 4` - an assumption
+                                     ; about the phase (SPEC.md 40.6)
 fr_cpos    equ os88_image_end + 400  ; word: the worker's replay cursor
 fr_ctlen   equ os88_image_end + 402  ; word: bytes of the row fr_take decoded
 fr_abon    equ os88_image_end + 414  ; byte: the About card is up
@@ -2332,7 +2691,30 @@ fr_crrow   equ os88_image_end + 408  ; word: fr_replay scratch - the row being
 fr_cfrom   equ os88_image_end + 410  ; byte: 1 = fr_line was REPLAYED, not
                                      ; computed
 fr_ckb     equ os88_image_end + 412  ; word: the claim's size in KB, which is
-                                     ; what doubles; total 414 = FR_BSS_TOTAL
+                                     ; what doubles
+; --- the x-axis mirror (SPEC.md 40.6) -----------------------------------------
+fr_mrc     equ os88_image_end + 415  ; word: the canvas row cy = 0 falls on, or
+                                     ; 0 = no mirror. It is BOTH the twin's
+                                     ; pivot and fr_stepv's PHASE, and 0 for
+                                     ; "none" costs nothing to conflate with
+                                     ; row 0: rc = 0 has no in-range twin
+                                     ; anyway, and the phase is then the order
+                                     ; this package walked before 40.6
+fr_cmrc    equ os88_image_end + 419  ; word: the phase the cache was built in,
+                                     ; beside fr_ccw/fr_cch and for the same
+                                     ; reason - a replay under a different one
+                                     ; puts every row at the wrong height
+fr_hx      equ os88_image_end + 421  ; word: the cycle check's reference state
+fr_hy      equ os88_image_end + 423  ; word:  (SPEC.md 40.7). Live only inside
+                                     ; frac_iter, which seeds it from z0 on
+                                     ; entry, so nothing outside has to know
+                                     ; it exists or reset it
+fr_lrow    equ os88_image_end + 417  ; word: the canvas row fr_line holds, or
+                                     ; 0FFFFh = nothing. The twin test compares
+                                     ; against this and nothing else, so a
+                                     ; stale fr_line can only ever cost a
+                                     ; recompute - never a wrong row
+                                     ; total 425 = FR_BSS_TOTAL
 
 ; The percentage field's padding is written into fr_numbuf, and fr_numbuf's
 ; size is the gap to the next bss symbol rather than a declaration - these are

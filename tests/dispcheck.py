@@ -200,7 +200,7 @@ def main(argv):
             cur = m.read(S("vid_cur"), 1)[0]
         except KeyError as e:
             sys.exit("dispcheck: no symbol %s - a kern_small kernel has none "
-                     "of this, by design (docs/KERN-SPLIT-PLAN.md)" % e)
+                     "of this, by design (docs/history/KERN-SPLIT-PLAN.md)" % e)
         say("vid_kind=%d vid_avail=%02X vid_ndisp=%d vid_cur=%d"
             % (kind, avail, ndisp, cur))
         if avail != 0x06:
@@ -230,7 +230,7 @@ def main(argv):
         # `tools/os88geom.py`'s checker could not see it either, because it
         # compares written-down copies and this was an expression. So it comes
         # from the mirror now, like the other 267 copies the checker does
-        # watch (docs/HANDOFF-SOAK-FINDINGS.md A2).
+        # watch (docs/plans/HANDOFF-SOAK-FINDINGS.md A2).
         NWORD, VX, CTXSZ = VID_CTX_W, VID_CTX_VX // 2, VID_CTX_SZ
         run = (S("vid_tseg") - S("vid_seg")) // 2 + 1
         if run != NWORD:

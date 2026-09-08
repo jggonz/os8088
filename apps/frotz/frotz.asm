@@ -15,9 +15,9 @@
 ;
 ; What it takes from Frotz is the SHAPE: Windows Frotz is a real windowed
 ; application with menus, a status line, styles, sound and cover art, not a
-; terminal in a box. docs/FROTZ-PLAN.md is the design record.
+; terminal in a box. docs/plans/completed/FROTZ-PLAN.md is the design record.
 ;
-; THE THREE DECISIONS THAT SHAPE EVERYTHING (docs/FROTZ-PLAN.md 3, 4, 5):
+; THE THREE DECISIONS THAT SHAPE EVERYTHING (docs/plans/completed/FROTZ-PLAN.md 3, 4, 5):
 ;
 ;  - **The whole story is resident. There is no paging.** int 13h costs ~400ms
 ;    on the target machine whatever it moves (PERFORMANCE.md), and one turn of

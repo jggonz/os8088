@@ -94,7 +94,7 @@ FCPFP       equ mod_fp + MOD_FCP*MODFP_STRIDE   ; this module's slot block
 %endif
 
 ; =============================================================================
-; TWO SHAPES, ONE SOURCE (docs/KERN-SMALL-MODULE-SPLIT.md 9.2 wave 1)
+; TWO SHAPES, ONE SOURCE (docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2 wave 1)
 ; =============================================================================
 ; kern_big keeps every body below in `.cold`, resident, near-called from
 ; files.inc's own cold code - unchanged, to the byte. kern_small emits the same

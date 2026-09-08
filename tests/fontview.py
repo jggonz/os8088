@@ -11,12 +11,23 @@ import os88marty
 import os88mouse
 import os88sym
 import dispcp
+import dispapps
 
 S = os88sym.linear
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
 FV_LISTY, FV_ROWH = 15, 11
-TY_MAXFACE, TY_BANDSZ, TY_NGLYPH, TF_SIZE = 4, 92 * 16, 95, 16
-FV_BSS_OWN = 50
+# THE BSS OFFSETS COME FROM NASM'S OWN MAP, not from arithmetic here.  They
+# used to be hand-summed - `FV_BSS_OWN + TY_BANDSZ + TY_NGLYPH + TY_MAXFACE *
+# TF_SIZE + 9 * 2 + 9` - which is a copy of apps/os88type.inc's TY_BSS layout
+# living in a second file with nothing to keep the two in step.  It went stale
+# the moment that layout moved: this branch's ty_gofonts banks four more words
+# for the SYSTEM/FONTS descent (SPEC.md 19.8), so the sum was **two bytes
+# high** and the row read `ty_nfam + 2`, which is 0.  It reported "viewer lists
+# 0 of 10 installed faces" about a viewer that was listing all ten - and the
+# same run's own evidence said so, Down moving the selection 1 -> 2 and a
+# click on row 4 selecting 4, neither of which an empty catalogue can do.
+MAP = dispapps._map("fontview")
+IMAGE_END = MAP["os88_image_end"]
 
 
 def u16(data, at=0):
@@ -30,8 +41,11 @@ def package_segment(m, slot):
 
 def fv_state(m, base):
     b = m.read(base, 13)
-    return dict(selected=b[6], loaded=b[7], face=b[8], pending=b[9],
-                error=b[10], arghave=b[11], textlen=b[12])
+    o = lambda name: MAP[name] - IMAGE_END       # noqa: E731 - map-derived
+    return dict(selected=b[o("fv_selected")], loaded=b[o("fv_loaded")],
+                face=b[o("fv_face")], pending=b[o("fv_pending")],
+                error=b[o("fv_error")], arghave=b[o("fv_arghave")],
+                textlen=b[o("fv_textlen")])
 
 
 fails = []
@@ -41,12 +55,20 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     dispcp.open_drive(m, mo, S, os88marty.settle, "A")
     slot = dispcp.win_list(m, S)[-1]
     wx, wy, _, _ = dispcp.win_rect(m, S, slot)
+    # SYSTEM/FONTS and not FONTS: SPEC.md 19.8.1 moved the folder INTO SYSTEM/
+    # for the ROOT's sake - the boot floppy's own window is what a person opens
+    # - and ty_gofonts walks to exactly one folder. tests/unit/t_fonts.py
+    # asserts BOTH halves ("the root has no FONTS folder", "SYSTEM/FONTS holds
+    # every face in faces/"), so the root is where this can never be.
+    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "SYSTEM")
+    slot = dispcp.win_list(m, S)[-1]
+    wx, wy, _, _ = dispcp.win_rect(m, S, slot)
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "FONTS")
     names = [n for n, _ in dispcp.listing(m, S)]
     installed = [n for n in names if n.endswith(".F88")]
     print("installed:", installed)
     if len(installed) != 10:
-        fails.append("FONTS contains %d F88 faces, not all 10" % len(installed))
+        fails.append("SYSTEM/FONTS contains %d F88 faces, not all 10" % len(installed))
 
     slot = dispcp.win_list(m, S)[-1]
     wx, wy, _, _ = dispcp.win_rect(m, S, slot)
@@ -69,11 +91,9 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         fails.append("CHARTER.F88 did not become the open selected face: %r"
                      % state)
 
-    # ty_nfam is after the band, advances, four face slots, ten words and
-    # eight scalar bytes in TY_BSS.  It must agree with the directory rather
-    # than merely reaching TY_MAXFAM and silently hiding a family.
-    ty_nfam = (base + FV_BSS_OWN + TY_BANDSZ + TY_NGLYPH
-               + TY_MAXFACE * TF_SIZE + 9 * 2 + 9)
+    # ty_nfam, off the map.  It must agree with the directory rather than
+    # merely reaching TY_MAXFAM and silently hiding a family.
+    ty_nfam = seg * 16 + MAP["ty_nfam"]
     found = m.read(ty_nfam, 1)[0]
     print("catalogue rows:", found)
     if found != len(installed):

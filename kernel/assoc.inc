@@ -1010,7 +1010,8 @@ assoc_run_x:
     mov si, assoc_pnbuf         ; with no way to know WHICH program a document
     mov bx, assoc_s_lead        ; wanted - which is exactly the report that
     mov di, assoc_s_ttl         ; found this (SPEC.md 54.4.1)
-    call KERNEL_SEG:cw_ui_note
+    mov bp, ui_note
+    call KERNEL_SEG:cw_mem_disp
 .refresh:                       ; ...and both routes end at the one repaint
     call files_refresh_x
 .out:
@@ -1062,7 +1063,10 @@ assoc_handover:
     mov si, [di+I_WIN]
     or si, si
     jz .out
-    call KERNEL_SEG:cw_wm_wake_call
+    mov bp, wm_wake_call        ; assoc_run's second phase (SPEC.md 54.10): the
+    call KERNEL_SEG:cw_mem_disp ; launched window is on the glass, so the
+                                ; package may now spend the document it was
+                                ; handed
 .out:
     ret
 
@@ -1384,7 +1388,7 @@ asc_use_out:
 ; ASSOC.DAT - the volume's icon and association cache (SPEC.md 54.7)
 ;
 ; The mount reads the first sector of EVERY package in a directory to harvest
-; its icon, and mechanism D of docs/DISK-PERF-PLAN.md is the measurement that
+; its icon, and mechanism D of docs/plans/completed/DISK-PERF-PLAN.md is the measurement that
 ; makes this worth having: opening APPS/ costs 20 sectors, EIGHT of which are
 ; those reads, and it is paid again on every re-entry. Sixteen rows of 80
 ; bytes is ONE file - three sectors, read once per volume per session - in

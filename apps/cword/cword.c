@@ -4,7 +4,7 @@
  * A native reimplementation of Microsoft Word for Windows 1.1a ("Opus") as an
  * os8088 package, compiled from C by the toolchain of SPEC.md 73 and split
  * across two segments by the overlay of SPEC.md 73.14. The binding contract is
- * SPEC.md 73.12; the reasoning behind the UI it reproduces is docs/WORD-PLAN.md
+ * SPEC.md 73.12; the reasoning behind the UI it reproduces is docs/plans/completed/WORD-PLAN.md
  * and SPEC.md 68, which describe the same product ported by hand into assembly.
  *
  * THE USER INTERFACE IS OPUS'S, TAKEN FROM THE SOURCE AND NOT FROM MEMORY.
@@ -50,7 +50,7 @@
  * (SPEC.md 73.12.1) wraps to a 60-cell SHEET instead of to the window, which is
  * two numbers in cw_layout() and a pair of rules drawn outside the text column.
  * And the ribbon's Font box now lists the machine's typefaces off the system
- * disk's FONTS/ folder and SETS THE DOCUMENT IN ONE (SPEC.md 19.8, 67.12.2) -
+ * disk's SYSTEM/FONTS folder and SETS THE DOCUMENT IN ONE (SPEC.md 19.8) -
  * for which the cell stays the unit of the row model and only its PIXEL
  * POSITION stops being 8k. With no face chosen, cw_prop is 0, cw_cx() is the
  * shift it replaces, and every path below is the one it always was.
@@ -77,7 +77,7 @@
  * THAT LINE MOVED WHEN THE TYPEFACES ARRIVED (SPEC.md 73.12.2), and the shape
  * of the move is worth reading before adding anything here: the resident image
  * got SMALLER while the program grew a second view and a typeface engine,
- * because everything that runs once per command went out. There are 971 bytes
+ * because everything that runs once per command went out. There are 581 bytes
  * left. The next thing to move is not code - it is CW_RTF_MAX, out of bss and
  * into a heap claim, the way SPEC.md 46.9 moved ArtfulType's document.
  *
@@ -107,14 +107,14 @@
  * ---------------------------------------------------------------------------
  * Measured by tools/os88pkg.py and tools/os88ovl.py on the shipping package:
  *
- *     resident image  35,958   the code above, its strings, the Opus tables,
+ *     resident image  36,326   the code above, its strings, the Opus tables,
  *                              and apps/os88type.inc (SPEC.md 6.3)
- *              bss    24,511   the document (4,000 + 4,000), the RTF staging
+ *              bss    24,533   the document (4,000 + 4,000), the RTF staging
  *                              buffer (6,000), the glass shadow (6,144), the
  *                              type library's band and face table (1,933)
  *              -------------
- *              total  60,469   98% of APP_MAX_SIZE; 971 bytes spare
- *     CWORD.OVL       18,564   the dialogs, RTF in and out, search, Sort,
+ *              total  60,859   99% of APP_MAX_SIZE; 581 bytes spare
+ *     CWORD.OVL       18,565   the dialogs, RTF in and out, search, Sort,
  *                              Renumber, Table of Contents, the clipboard, the
  *                              paragraph dictionary, the Font list
  *
@@ -458,7 +458,7 @@ static int cw_page;                     /* View > Page rather than Draft */
  * cw_prop IS THE ONE FLAG, and everything that used to be 8k asks cw_cx() /
  * cw_xc() instead of shifting. With it clear those two are exactly the shifts
  * they replace, so the kernel's cell costs a call and a return and NOTHING
- * ELSE changes - a build with no FONTS/ folder, a kernel that refuses the band
+ * ELSE changes - a build with no SYSTEM/FONTS, a kernel that refuses the band
  * blit (SPEC.md 6.5) and a document nobody has set all behave as they always
  * did, because bss arrives zeroed and this is 0 until a face is picked.
  * ========================================================================*/
@@ -485,8 +485,9 @@ static int cw_px[CW_COLS_MAX + 1];      /* the row's own pixel map: the pen each
 static int cw_nfam;                     /* families the scan found */
 static int cw_scanned;                  /* ...and that it has run at all: it
                                          * runs ONCE WHATEVER THE ANSWER, so a
-                                         * disk with no FONTS/ is not re-walked
-                                         * on the next press (SPEC.md 19.8) */
+                                         * disk with no SYSTEM/FONTS is not
+                                         * re-walked on the next press
+                                         * (SPEC.md 19.8) */
 static int cw_fl_open;                  /* the Font list is down */
 static int cw_fl_rows;                  /* ...and how many items a column of it
                                          * holds, which is the window's height
@@ -676,7 +677,7 @@ int  cw_ty_flush(int x, int y, int w, int rows);      /* 1 = drawn */
 int  cw_ty_fit(const char *s, int n, int px);   /* characters that fit */
 int  cw_ty_hit(const char *s, int n, int px);   /* the character under px */
 void cw_ty_pen(const char *s, int n, int *px);  /* the row's pixel map */
-int  cw_ty_scan(void);                  /* families in FONTS/, 0 = none */
+int  cw_ty_scan(void);                  /* families on the disk, 0 = none */
 void cw_ty_name(int i, char *dst);      /* family i's display name */
 int  cw_ty_open(int i);                 /* a handle, or 0 = refused */
 void cw_ty_close(int handle);
@@ -2557,8 +2558,23 @@ void os88_paint(void *win)
      * instance is published (SPEC.md 20.6). A refusal is normal and transient
      * - the task table is 12 slots - so this retries on the next paint rather
      * than treating it as fatal. */
-    if (!cw_hired && os88_task_spawn(win) == 0)
+    if (!cw_hired && os88_task_spawn(win) == 0) {
         cw_hired = 1;
+        /* ...AND THE REGION STAYS MOVABLE (SPEC.md 66.6.2). crt0 declared it
+         * at entry, and hiring a worker would pin it again for ever: the
+         * kernel wrote our segment into that worker's frame before its first
+         * instruction. This says it may throw that frame away and start
+         * os88_worker() again.
+         *
+         * IT IS TRUE HERE and it is worth being explicit about why. The
+         * kernel restarts a worker only where it PARKS, which is inside
+         * os88_task_alive(); our loop reaches that with nothing of its own on
+         * the stack and every value it reads - cw_quit - in a static that the
+         * move carries. A restart costs one four-tick poll. We do not declare
+         * os88_mem_parksafe(), so the gfx-lock park - which could stop the
+         * worker anywhere - is not in play. */
+        os88_task_restartable(1);
+    }
 }
 
 void *os88_main(void)

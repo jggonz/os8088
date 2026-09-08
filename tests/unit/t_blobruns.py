@@ -54,7 +54,7 @@ ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 # and never did - the paragraph above is the whole reason this file exists, and
 # one number for all of them was the shape of the mistake it was written to
 # catch. SPEC.md 2.9.12 took the blob from 13 sectors to 19 for the boot-only
-# bodies in docs/LAST-DROP-BYTES.md, which spends the third call on the two
+# bodies in docs/plans/LAST-DROP-BYTES.md, which spends the third call on the two
 # 9-sector geometries and none on the release one.
 #
 # **AND THEN SPEC.md 2.5.2 TOOK IT BACK TO 8**, by splitting the overlay by

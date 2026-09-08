@@ -80,6 +80,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
+import os88build
+import os88pkg
 import os88marty                                             # noqa: E402
 import os88mouse                                             # noqa: E402
 import os88sym                                               # noqa: E402
@@ -179,12 +181,21 @@ def sym(name):
 
 
 def img_size():
-    """The package's image size, which is where the loader puts its bss."""
-    d = open(os.path.join(ROOT, "build", APP + ".o88"), "rb").read()
+    """The package's image size, which is where the loader puts its bss.
+
+    **THE FILE IS NOT THE IMAGE** (SPEC.md 20.13.5): `PKGZ ?= lz4`, so every
+    shipped .o88 is a compressed container and `image` at +8 keeps meaning the
+    UNPACKED size on both. `n != len(d)` was a layout check and became the
+    ordinary shape of a shipped package - it read `image=8917 but is 7242` on
+    a perfectly good build. Unwrapped it is a layout check again, which is
+    still worth having.
+    """
+    raw = open(os88build.at("build/%s.o88" % APP), "rb").read()
+    d = os88pkg.image_unwrap(raw)
     n = int.from_bytes(d[8:10], "little")   # +8 = image size (SPEC.md 20.2)
     if n != len(d):
-        sys.exit("heapscrl: %s.o88 says image=%d but is %d - the header "
-                 "layout has moved" % (APP, n, len(d)))
+        sys.exit("heapscrl: %s.o88 says image=%d and unwraps to %d - the "
+                 "header layout has moved" % (APP, n, len(d)))
     return n
 
 

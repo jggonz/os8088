@@ -32,7 +32,7 @@ def check(m, where):
     return True
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                      machine="os8088_5150_cga") as m:
+                      machine=os88marty.machine("os8088_5150_cga")) as m:
     mo = os88mouse.Mouse(marty=m)
     m.breakpoints([{"type": "int", "addr": 0}])
     for drv in ("A", "B"):

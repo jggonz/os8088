@@ -78,7 +78,7 @@ EVQ_MASK    equ (EVQ_RECSIZE * EVQ_CAP) - 1     ; byte-offset wrap mask (0x7F)
 ; -----------------------------------------------------------------------------
 evq_push:
     call sch_wake_ui            ; an event means the UI task has work
-    push ax                     ; work (docs/SCHED-IDLE-PLAN.md 6.3)
+    push ax                     ; work (docs/plans/completed/SCHED-IDLE-PLAN.md 6.3)
     push si                     ; ...and no CX bank: with the record copy
                                 ; unrolled nothing in this body writes it. The
                                 ; CONTRACT is unchanged - CX still comes back

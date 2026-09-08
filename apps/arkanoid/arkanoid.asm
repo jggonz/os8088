@@ -168,7 +168,7 @@ ARK_CHW_SML  equ 137
 
 ; ark_entry's own arithmetic, as constants: content = bricks + both rails, and
 ; the frame is that plus the 1px border either side / the title bar and one
-; more. A GENEROUS height is the idiom (docs/WINDOW-SIZING-PLAN.md 9) - no
+; more. A GENEROUS height is the idiom (docs/plans/completed/WINDOW-SIZING-PLAN.md 9) - no
 ; package can know how tall another adapter's band is, so publish a number the
 ; kernel's clamp can bring down. On Hercules it comes back 303.
 ARK_PREF_BW  equ ARK_BW_BIG * ARK_COLS + 2 * ARK_RAIL_BIG + 2

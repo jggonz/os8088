@@ -119,7 +119,12 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
 
     # --- and the loader's verdict on each ------------------------------------
     for name, want in (("BIGPKG.O88", LD_EBIG), ("HUGE.O88", LD_EBAD)):
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, name)
+        # BOTH OF THESE ARE SUPPOSED TO BE REFUSED - that is the whole loop,
+        # and `verdict` reads which refusal. Declaring it means a launch that
+        # unexpectedly SUCCEEDS fails here, where it means something, instead
+        # of being waited out as a slow load.
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, name,
+                          expect="refusal")
         os88marty.settle(m)
         got = verdict(m)
         say("%-11s -> %-9s (want %s)" % (name, name_of(got), name_of(want)))

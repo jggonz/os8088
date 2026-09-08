@@ -281,7 +281,7 @@ MENU_CLKC   equ 26              ; menu_clkbuf: the field is 25 cells on both
 ; in:  nothing (called from kmain after wm_init, before the first paint)
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
-; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/LAST-DROP-BYTES.md row 17). One
+; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/plans/LAST-DROP-BYTES.md row 17). One
 ; caller, kmain:4299. menu_force is INLINED - it is the two stores below and a
 ; `ret`, one of which menu_init was already making itself, so a cw_ shim would
 ; have cost `.text` more than the call saved.
@@ -1674,7 +1674,7 @@ menu_draw_clock:
 ; menu_track - run one full BAR menu interaction. Finds the title under the
 ;              mousedown, xor-highlights it, hands the drop to menu_drop, and
 ;              un-highlights the title on the way out.
-; in:  CX = mousedown x (caller holds the gfx lock)
+; in:  caller holds the gfx lock
 ; out: AX = 0xFFFF if nothing was selected, else AH = bar cell index
 ;      (0 = the System menu), AL = item index within that cell (SPEC.md 12)
 ; clobbers: nothing else
@@ -1693,6 +1693,12 @@ menu_track:
     push di
 
     ; --- which title was hit? ------------------------------------------------
+    mov cx, [mouse_x]           ; use the coordinate the pointer on the glass
+                                ; uses. The reported 86Box PS/2 failure has
+                                ; EV_A one position behind that pointer; the
+                                ; rest of this tracker already polls mouse_x/y
+                                ; directly, so mixing the two coordinate ages
+                                ; makes a shifted press land on cell 0.
     mov si, menu_bar
     mov di, [menu_nbar]
     mov byte [menu_cell], 0
@@ -2690,6 +2696,9 @@ menu_seg:   resw 1              ; the segment [menu_set] and the app's own
 menu_dseg:  resw 1              ; ...and the segment of the menu being
                                 ; DROPPED, which is that cell's MB_SEG: 0
                                 ; for the System menu even under a package
+%if menu_dseg - menu_seg != 2   ; ADJACENT ON PURPOSE: memory.inc's mem_rr_tab
+    %error "menu_seg and menu_dseg must stay adjacent (mem_rr_tab names them as one row)"
+%endif                          ; names the pair as ONE row of two words
 menu_bdirty: resb 1             ; the MENUS segment's text may have moved. Set
                                 ; by menu_relayout, by menu_inval and by
                                 ; menu_force; spent by menu_bar_text, which

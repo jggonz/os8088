@@ -319,8 +319,12 @@ SH_T_BOOL    equ 3
 SH_T_ERR     equ 4
 
 ; Error codes, in SH_C_AUX. These are EXCEL'S OWN ERROR.TYPE numbers, so
-; ERROR.TYPE and ISERR become a table lookup if they are ever added, and the
-; BIFF BOOLERR record can carry them without a translation step.
+; ERROR.TYPE and ISERR become a table lookup if they are ever added. They are
+; NOT the BIFF file's error codes: BOOLERR and a FORMULA's error result use
+; 00H #NULL!, 07H #DIV/0!, 0FH #VALUE!, 17H #REF!, 1DH #NAME?, 24H #NUM!,
+; 2AH #N/A, and the BIFF writer and reader currently carry these numbers
+; untranslated (docs/BIFF-NOTES.md, "Values") - so this app's own files
+; round-trip and an Excel file's error codes do not.
 SH_ERR_NULL  equ 1                  ; #NULL!
 SH_ERR_DIV0  equ 2                  ; #DIV/0!   - the only one produced today
 SH_ERR_VALUE equ 3                  ; #VALUE!
@@ -526,6 +530,64 @@ SH_MENU_N    equ 9                   ; File,Edit,Formula,Format,Data,Options,
 SH_M_NONE    equ 0xFF
 
 ; =============================================================================
+; sh_reloc - THE HEAP COMPACTOR MOVED ONE OF OUR CLAIMS (SPEC.md 66.2)
+; in:  BX = the base segment it WAS at, DX = the base it is at NOW.
+;      DS = CS = ours, ES = KERNEL_SEG. The bytes have already moved.
+; out: nothing; every register preserved
+;
+; SHEET WAS THE LARGEST UNDECLARED HOLDER IN THE TREE - six unconditional
+; claims taken at the entry proc, ~99KB, pinned for the whole session
+; (docs/plans/HEAP-UNPIN-PLAN.md 2.1.1 item 2). SPEC.md 66.5.10.2's closing
+; line - "the arena below the top now has no barrier in it at all" - was true
+; of the configuration it was measured on and false the moment a sheet opened.
+;
+; WHY IT IS A TABLE AND NOT A LADDER OF COMPARES. It is smaller at five
+; entries and it does the one thing a ladder gets wrong: it patches EVERY word
+; that names the old base rather than the first, because ch_srcseg and its
+; siblings below are second copies of a segment this package also holds
+; directly - and SPEC.md 66.1 is the record of a design that failed on exactly
+; that, "the pair that killed the word-poke design".
+;
+; SH_STGSEG IS NOT IN THE TABLE AND IS NOT DECLARED. It is the ES:BX of every
+; one of this package's seven OSAPI_FILE_READ/WRITE calls (SPEC.md 66.9 reason
+; 4), and a file call claims, so a compaction inside one would move the buffer
+; out from under a transfer the kernel has already been given the address of.
+; SPEC.md 66.5.7.1's pin/unpin pair is what it would take; 67KB of the 99 move
+; without it.
+;
+; Everything else in this package is an OFFSET into one of these segments -
+; a cell record, a formula's text, a note - so nothing else needs fixing.
+; =============================================================================
+sh_reloc:
+    push cx
+    push si
+    push di
+    mov si, sh_segw
+    mov cx, SH_NSEGW
+.l:
+    mov di, [si]                      ; DI = the address of a word that might
+    cmp bx, [di]                      ; name the block that moved
+    jne .next
+    mov [di], dx
+.next:
+    add si, 2
+    loop .l
+    pop di
+    pop si
+    pop cx
+    ret
+
+; The words that name a movable claim. The first five are the claims
+; themselves; the last three are os88chart.inc's borrowed copies, taken inside
+; ch_bars_draw/ch_bmp_write and dead between calls - they cost two bytes each
+; and they close the one window where a chart export could be holding a stale
+; segment across the OSAPI_FILE_WRITE in the middle of it.
+sh_segw:
+    dw sh_cellseg, sh_txtseg, sh_bordseg, sh_noteseg, sh_chartseg
+    dw ch_srcseg, ch_stgseg, ch_srcseg2
+SH_NSEGW equ 8
+
+; =============================================================================
 ; sh_entry - package entry point (SPEC.md 20.2). Claims run here, and only
 ; here (SPEC.md 50.3): this is the one place a package has no window yet
 ; and is sizing itself. A claim failure aborts the launch (CF=1) rather
@@ -545,10 +607,17 @@ sh_entry:
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_cellseg], dx
+    mov ax, sh_reloc                     ; ...and MOVABLE (SPEC.md 66.2). SHEET
+                                      ; has NO WORKER, so mem_can_move
+                                      ; passes these on I_TASK = 0xFF
+                                      ; alone and no park is involved
+    call OSAPI_MEM_MOVABLE
     mov ax, SH_CLAIM_TXT_KB
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_txtseg], dx
+    mov ax, sh_reloc
+    call OSAPI_MEM_MOVABLE
     mov ax, SH_CLAIM_STG_KB
     call OSAPI_MEM_CLAIM
     jc .fail
@@ -557,16 +626,44 @@ sh_entry:
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_bordseg], dx
+    mov ax, sh_reloc
+    call OSAPI_MEM_MOVABLE
     mov word [sh_nbord], 0
     mov ax, SH_CLAIM_NOTE_KB
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_noteseg], dx
+    mov ax, sh_reloc
+    call OSAPI_MEM_MOVABLE
     mov word [sh_nnote], 0
     mov ax, SH_CLAIM_CHART_KB
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_chartseg], dx
+    mov ax, sh_reloc
+    call OSAPI_MEM_MOVABLE
+    ; ...AND THE REGION ITSELF (SPEC.md 66.6.1). A region IS a claim, so
+    ; OSAPI_MEM_MOVABLE is already the door and there is no new slot: what the
+    ; kernel needed was a fence that recognises "the claim whose base is my own
+    ; segment" as mine, since a region's owner word is the instance SLOT.
+    ;
+    ; SHEET IS THE RIGHT FIRST ADOPTER AND IT IS NOT AN ACCIDENT OF SIZE. It
+    ; hires no worker, so nothing suspended holds its CS; it stores its own
+    ; segment nowhere - the six `mov ax, ds` sites in this file all set ES for
+    ; the next instruction and none banks it; and its image is org 0 with no
+    ; relocation, so every near offset in it survives a move untouched. Every
+    ; word that names the region is the KERNEL's, and mem_region_reloc is what
+    ; puts those right; sh_reloc is named here because a proc is required and
+    ; because it is the one that would have work to do if this package ever
+    ; grew a word of its own.
+    push dx                     ; **DX IS STILL THE CHART CLAIM** and the BMP
+    mov dx, cs                  ; header copy below reads it as ES. Banked
+    mov ax, sh_reloc            ; rather than reordered because the declaration
+    call OSAPI_MEM_MOVABLE      ; belongs beside the others; without the bank
+    pop dx                      ; the 118-byte header landed at offset 0 of
+                                ; this package's OWN image, over the .o88
+                                ; header, and the window opened with an empty
+                                ; title. DS = CS for a package (SPEC.md 20.1)
     mov word [sh_chartwin], 0
     mov word [sh_chart_cnt], 0
     mov word [ch_type], CH_T_COLUMN
@@ -10825,41 +10922,35 @@ sh_doread_dif:
     ret
 
 ; =============================================================================
-; File I/O: BIFF write and read - stage 1.4's "BIFF3/4 support". Frames
-; records the real way (BOF/EOF opcodes, a real per-cell record type), but
-; the BOF payload's exact byte-level convention beyond the opcode and the
-; dt field is genuine best-effort (documented, not certified) - the same
-; honesty this project already applies to SYLK/DIF. The one point that IS
-; deliberately spec-correct, because it is load-bearing for round-tripping
-; negative numbers through a real reader: cell values are written as RK
-; records (opcode 0x027E, real BIFF3+), not the older INTEGER record
-; (0x0202) - INTEGER's 16-bit value field is UNSIGNED (0..65535 only), so
-; it cannot hold this app's negative cells at all, whereas RK's 4-byte
-; packed value has a signed-30-bit-integer subtype that fits this app's
-; signed 16-bit cells with room to spare and needs no IEEE-754 float
-; encoding. On read, only that same subtype is understood - a foreign RK
-; using the "multiplied by 100" or plain-float subtype, or a NUMBER
-; (0x0203) float record, is out of this subset's scope and is skipped,
-; leaving that cell blank, rather than guessed at.
+; File I/O: BIFF write and read. docs/BIFF-NOTES.md is the record-by-record
+; table of what goes out and what is accepted; SPEC.md 81.7, 81.10.2,
+; 81.10.5 and 81.20.1 are the design decisions. In short:
+;
+; One sheet is a BIFF3 stream (BOF 0209H); more than one is a BIFF4 workbook
+; (sh_biff_workbook). An exact in-range integer is an RK record (027EH,
+; signed-30-bit subtype - the older INTEGER record's value is UNSIGNED and
+; cannot carry a negative cell), anything else a NUMBER (0203H) carrying the
+; IEEE-754 double verbatim; a label is a LABEL (0204H), a formula a FORMULA
+; (0206H) with its RPN tokens and cached result, and an error whose formula
+; could not be tokenised a BOOLERR (0205H). On read all four RK subtypes are
+; decoded (sh_rkdec_d), NUMBER/LABEL/BOOLERR are taken, and a FORMULA's cached
+; RESULT is used with its tokens skipped - so a formula written by this app
+; comes back as a value, unlike SYLK's ;E.
 ; Like SYLK, this is sparse (one record per occupied cell, walking the
 ; sorted array directly), not dense like DIF, since a binary record already
-; carries its own row/col and needs no bounding box. Like both SYLK and
-; DIF, only the cached VALUE survives a round trip - a formula's source
-; text is not persisted.
+; carries its own row/col and needs no bounding box.
 ;
-; Stage 1.6's bold/underline/alignment/number-format DOES persist here,
-; and unlike SYLK/DIF's own invented extensions, this one uses real BIFF3/4
-; structure: 4 FONT records (opcode 0x0231) for the 4 bold/underline
-; combinations, 64 XF records (opcode 0x0443) - one per possible SH_FMT_*
-; byte value - and each cell's RK record points at its XF by index. That
+; Bold/underline/alignment/number-format persist through real BIFF3/4
+; structure: 4 FONT records (0231H) for the 4 bold/underline combinations,
+; 64 XF records (0243H, or 0443H in the workbook) - one per possible
+; SH_FMT_* byte value - and each cell record points at its XF by index. That
 ; 1:1 pairing between our format byte and the BIFF ixfe is deliberate: it
 ; means neither side needs a lookup table to go from "this cell's 6
 ; format bits" to "this cell's XF index" or back, at the cost of always
 ; writing all 64 XFs whether or not the sheet uses every combination (at
 ; most 64*16 + 4*15 bytes - a fixed, small overhead). No FORMAT records are
 ; written at all: General/Currency/Comma/Percent all land on real BIFF
-; built-in number-format ids (0/5/3/9), each already a 0-decimal-place
-; form - the only kind this app's whole-number cells ever need.
+; built-in number-format ids (0/5/3/9), the 0-decimal-place forms.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -11519,9 +11610,9 @@ sh_biff_cells:
     call sh_unpackrow                 ; -> ax=real row, bx=this record's
                                        ; sheet (stage 2.0)
     cmp bx, [sh_wsheet]
-    jne .recskip                      ; a save only ever writes the CURRENT
-                                       ; sheet - see sh_dowrite_sylk's own
-                                       ; copy of this same filter
+    jne .recskip                      ; one pass writes ONE sheet: the
+                                       ; current one for BIFF3, each used
+                                       ; one in turn for the workbook
     mov [sh_wrec_row], ax
     mov ax, [es:si+2]
     mov [sh_wrec_col], ax
@@ -12202,11 +12293,11 @@ sh_doread_biff:
     add si, dx
     jmp .rechdr
 .done:
-    mov ax, [sh_rd_home]               ; the user's own sheet, back where it
-    cmp word [sh_rd_sheet], 0          ; was - unless the file was a plain
-    jl .nowb                           ; single-sheet stream, which never
-    xor ax, ax                         ; touched sh_cursheet and whose data
-.nowb:                                 ; landed on sheet 0
+    mov ax, [sh_rd_home]               ; a plain single-sheet stream never
+    cmp word [sh_rd_sheet], 0          ; touched sh_cursheet, so its cells
+    jl .nowb                           ; landed on the user's own sheet and
+    xor ax, ax                         ; that stays current; a workbook's
+.nowb:                                 ; first sheet is 0, so end there
     mov [sh_cursheet], ax
     mov word [sh_msg], sh_m_loaded
     jmp .out
@@ -15164,7 +15255,7 @@ sh_setvald:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_seterr - in: AX=col, BX=row, DL=an Excel error code (1..7). The cell
+; sh_seterr - in: AX=col, BX=row, DL=an SH_ERR_* code (1..7). The cell
 ; becomes an ERROR VALUE with a zero underneath it, which is exactly what a
 ; file carrying one means. Used by the BIFF reader; the SYLK and DIF readers
 ; do not need it, because those formats carry the FORMULA and the error is
@@ -19364,8 +19455,7 @@ sh_s_biff_fontname: db 'Helv', 0     ; Excel's own historical default face
 ; our number-format code (General/Currency/Comma/Percent) -> the real BIFF
 ; built-in format id, per the OpenOffice BIFF reference: 0=General,
 ; 5="$"#,##0 (currency, 0dp), 3=#,##0 (comma, 0dp), 9=0% (percent, 0dp) -
-; all four are exactly the 0-decimal-place forms, matching this app's
-; values always being whole numbers
+; the 0-decimal-place forms, which is what this app's own formatter draws
 sh_biff_numfmt_tab: db 0x00, 0x05, 0x03, 0x09
 sh_s_dif_hdr1: db 'TABLE', 13, 10, '0,1', 13, 10, '""', 13, 10, 'VECTORS', 13, 10, '0,', 0
 sh_s_dif_hdr2: db 13, 10, '""', 13, 10, 'TUPLES', 13, 10, '0,', 0

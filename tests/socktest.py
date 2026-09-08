@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch a page over the cable (SPEC.md 62.11, docs/NET-STACK-PLAN.md stage B).
+"""Fetch a page over the cable (SPEC.md 62.11, docs/plans/completed/NET-STACK-PLAN.md stage B).
 
     make && make socktest && python3 tests/socktest.py [--adapter cga]
 
@@ -56,6 +56,7 @@ import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 import partner as P                                    # noqa: E402
+import os88build                                       # noqa: E402
 
 S = os88sym.linear
 
@@ -156,7 +157,7 @@ def main():
     a = ap.parse_args()
 
     fails = []
-    img = os.path.getsize("build/socktest.bin")
+    img = os.path.getsize(os88build.at("build/socktest.bin"))
     box = P.SocketBox()
     srv = Server(box)
     srv.start()

@@ -41,9 +41,11 @@ so a rung that moves cannot desync them.
 """
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KERNEL_SEG = 0x0060                      # SPEC.md 2 - one place, one meaning
@@ -233,7 +235,83 @@ def _modcut(blob):
     return int.from_bytes(blob[off + 6:off + 10], "little")
 
 
-_SHIPPED_DEFS = ("KERN_BIG", "KERN_SMALL", "KERNSIZE", "KERN_KNOB")
+# The defines that name a SHIPPED PRODUCT rather than a diagnostic. A knob
+# kernel skips guard 1 and says so with -DKERN_KNOB (below); these four must
+# not, because each is a configuration somebody boots and each stays inside a
+# budget of its own. KERN_EMU is the third product (SPEC.md 9.11.7) and is
+# here for KERN_SMALL's exact reason - it is kern_big plus the absolute
+# pointer, measured against kern_big's budget, so adding KERN_KNOB for it
+# would assemble a map of a kernel `make emu` never built and the
+# byte-identity check below would refuse it.
+_SHIPPED_DEFS = ("KERN_BIG", "KERN_SMALL", "KERN_EMU", "KERNSIZE", "KERN_KNOB")
+
+
+# The About box's first line (SPEC.md 14.2), and the only place the build
+# number is VISIBLE in the image - `dw BUILD_NUM` appears five more times in
+# module headers, but those are fixed-width values at offsets that move with
+# the code, while this is a unique byte string with the digits right after it.
+_ABOUT = b"os8088 1.0  Build "
+
+
+def image_build_num(path):
+    """The build number `path` was BUILT with, read out of the image itself.
+
+    Returns None when it cannot be had - a shallow clone builds with
+    BUILD_NUM 0 and then the About line has no number in it at all, which is
+    `%if BUILD_NUM` working as designed.
+    """
+    try:
+        with open(path, "rb") as f:
+            b = f.read()
+    except OSError:
+        return None
+    if b.count(_ABOUT) != 1:            # not exactly one: do not guess
+        return None
+    i = b.find(_ABOUT) + len(_ABOUT)
+    m = re.match(rb"(\d{1,9})\x00", b[i:i + 12])
+    return int(m.group(1)) if m else None
+
+
+def _in_tree(bdir):
+    """`$OS88_BUILD`, resolved inside the run's own tree when there is one.
+
+    **THE TWO VARIABLES MEAN DIFFERENT THINGS** (tools/os88build.py's
+    `tree_root`): `$OS88_BUILD` says which kernel this map describes and has
+    named a SUB-directory since long before the soak froze anything -
+    `build/smallk` in three registry rows, `build/emuk` in tests/vmmouse.py -
+    while `$OS88_TREE` says where the run's artefacts live. Under a frozen run
+    `build/smallk` has to become `<tree>/smallk`, or the row drives the tree's
+    kern_small disks with a map of the SHARED tree's kern_small kernel. Both
+    build fine, and after a commit they differ.
+
+    An absolute `$OS88_BUILD` is left alone: it is somebody naming a directory
+    outright, which is not a claim about this run's tree.
+    """
+    if not bdir:
+        return ""
+    import os88build
+    return os88build.at(bdir) if not os.path.isabs(bdir) else bdir
+
+
+def kz_defines(bdir, defines=()):
+    """The defines a PACKED kernel assembled with, added to `defines` unless
+    the caller already named KZIP (SPEC.md 2.9.13.4). tools/os88kz.py writes
+    the four numbers beside the kernel it packed, as kernel.kz.json, because
+    they are properties of a file that did not exist when the kernel was
+    assembled; pass 2 of the build assembles with them, so anything that
+    re-assembles kernel.asm to compare against build/kernel-full.bin -
+    this reader, tools/os88boot.py's listing - has to say the same four or
+    it describes pass 1's placeholders and refuses a kernel that is fine.
+    """
+    kz = os.path.join(bdir, "kernel.kz.json")
+    if os.path.exists(kz) and not any(d.split("=")[0] == "KZIP"
+                                      for d in defines):
+        import json
+        n = json.load(open(kz))
+        defines = tuple(defines) + (
+            "KZIP", "KZ_SECS=%d" % n["ksecs"], "KZ_RPARA=%d" % n["rpara"],
+            "KZ_HEADSEC=%d" % n["headsecs"], "KZ_NBLK=%d" % n["nblk"])
+    return tuple(defines)
 
 
 def _load(defines=(), check=True):
@@ -257,7 +335,8 @@ def _load(defines=(), check=True):
     # hardcoding build/ here meant the check compared a knob's map against the
     # PLAIN kernel and refused. That refusal is right and the map was right;
     # what was missing was a way to say which pair to use.
-    bdir = os.environ.get("OS88_BUILD", "") or os.path.join(ROOT, "build")
+    bdir = _in_tree(os.environ.get("OS88_BUILD", "")) \
+        or os.path.join(ROOT, "build")
     # ...and $OS88_ICODIR the same idea one file along: since the Makefile's
     # ICODIR, associco.inc need not be in $(BUILD) at all - a build that wants
     # only a knob KERNEL takes it from the default build rather than rebuilding
@@ -272,12 +351,22 @@ def _load(defines=(), check=True):
     # directory that does not exist, and nasm would report a missing file.
     if idir and not os.path.isabs(idir):
         idir = os.path.join(ROOT, idir)
+    # ...AND A COMPRESSED KERNEL DESCRIBES ITSELF (SPEC.md 2.9.13.4). KZIP is
+    # not a knob a caller can be expected to name: it is a two-pass build, so
+    # the kernel in $bdir was assembled with FOUR defines that are properties
+    # of a file that did not exist when it was assembled. Nobody could pass
+    # those by hand and no test should have to - and with KZIP the default,
+    # every caller that did not would meet the byte-identity refusal below,
+    # about a kernel that is perfectly fine. os88kz.py writes them beside the
+    # kernel it packed, so they are read from there and never guessed: the
+    # json IS the build, and if it is absent this kernel is not packed.
+    defines = kz_defines(bdir, defines)
     # A KNOB KERNEL IS NOT BOUND BY KERN_BUDGET (kernel.asm guard 1), and the
     # Makefile says so with -DKERN_KNOB. A tool re-assembling one for its
     # symbol map has to say the same thing or nasm refuses a kernel that
     # `make` built happily - which reads as "the map is broken" rather than as
-    # a missing define. KERN_SMALL is not a knob for this purpose: it is a
-    # shipped configuration with a budget of its own.
+    # a missing define. KERN_SMALL and KERN_EMU are not knobs for this
+    # purpose: each is a shipped configuration with a budget of its own.
     if any(d.split("=")[0] not in _SHIPPED_DEFS for d in defines):
         defines = tuple(defines) + ("KERN_KNOB",)
     key = (bdir,) + tuple(defines)   # ...and the DIRECTORY, or two builds
@@ -297,7 +386,42 @@ def _load(defines=(), check=True):
         f.write("[map all %s]\n" % mapf)         # is what `check` proves
         f.write(body)
 
-    cmd = ["nasm", "-f", "bin", "-w+error",
+    # **A COMMIT MUST NOT INVALIDATE THIS MAP, and it used to.** BUILD_NUM is
+    # the commit count and it reaches the kernel through a GENERATED include
+    # (tools/buildnum.py -> $(BUILD)/buildnum.inc), which every `make` rewrites
+    # at PARSE time - so between a commit and the next relink, this
+    # re-assembly used a number the image was not built with and the byte
+    # comparison below refused a kernel that was perfectly current. Every
+    # emulator row in the tree then died on its first symbol lookup, several
+    # frames from the cause, and the standing advice was "run `make` after
+    # committing" - which every agent forgets, and which does not help at all
+    # while a suite is running (docs/plans/SOAK-PARALLEL.md 12: nine rows lost to a
+    # 4m54s window).
+    #
+    # So the number is READ OUT OF THE IMAGE being checked, and a shadow
+    # buildnum.inc carrying it goes FIRST on the include path. The comparison
+    # stays EXACT - a genuinely stale kernel still differs in the bytes that
+    # matter - and it simply stops failing on the one difference that is never
+    # a real one. Measured: forcing the image's own number reproduces the
+    # plain assembly byte for byte, and a different number changes the bytes.
+    #
+    # It needs no kernel change, which is the reason for doing it this way
+    # rather than pinning a field: nasm's `%define` in an included file beats
+    # a command-line `-D`, and shadowing the file beats both.
+    shadow = []
+    built0 = os.path.join(bdir, "kernel.bin")
+    bn = image_build_num(built0)
+    if bn is not None:
+        sdir = os.path.join(tmp, "bn")
+        os.makedirs(sdir, exist_ok=True)
+        with open(os.path.join(sdir, "buildnum.inc"), "w") as f:
+            f.write("; SHADOW, written by tools/os88sym.py: the number the\n"
+                    "; image under test was built with (see _load).\n"
+                    "%%define BUILD_NUM %d\n%%define BUILD_STR '%d'\n"
+                    % (bn, bn))
+        shadow = ["-I", sdir + os.sep]
+
+    cmd = ["nasm", "-f", "bin", "-w+error"] + shadow + [
            "-I", os.path.join(ROOT, "kernel") + os.sep,
            "-I", os.path.join(ROOT, "apps") + os.sep,
            "-I", bdir + os.sep] + \
@@ -319,12 +443,41 @@ def _load(defines=(), check=True):
         # growing a second opinion about the layout.
         mine = open(binf, "rb").read()
         mine = mine[:_modcut(mine)]
-        if mine != open(built, "rb").read():
+        theirs = open(built, "rb").read()
+        if mine != theirs:
+            # **SAY WHAT DIFFERS, AND HOW OLD THE FILE IS.** This message used
+            # to end at "a DIFFERENT kernel", and its advice - run `make` - is
+            # the right answer for the case it was written for and useless for
+            # the one that actually keeps happening: three soak rows in two
+            # runs (msegnomem twice, paintpack once) have died here against a
+            # PRIVATE TREE that os88build had just built, every one of them
+            # passing when run alone. A tree rebuilt underneath a reader and a
+            # tree that is genuinely stale are the same sentence today, and
+            # they are not the same bug.
+            #
+            # The three readings that tell them apart cost nothing: the two
+            # lengths (a truncated file is a build that was interrupted), the
+            # first differing offset (near the front is a define or an
+            # include; deep in .cold is a different source), and the age of
+            # the file (seconds means somebody rewrote it while this ran,
+            # which no amount of `make` will fix).
+            n = min(len(mine), len(theirs))
+            at = next((i for i in range(n) if mine[i] != theirs[i]), n)
+            try:
+                age = time.time() - os.path.getmtime(built)
+            except OSError:
+                age = float("nan")
             raise RuntimeError(
-                "the map describes a DIFFERENT kernel from %s: run `make` "
-                "(or pass the knob's --define, or $OS88_DEFINES, and "
-                "$OS88_BUILD for a sub-make's own directory) before trusting "
-                "any address from it." % os.path.relpath(built, ROOT))
+                "the map describes a DIFFERENT kernel from %s: the map is %d "
+                "bytes and the file is %d, first difference at %#x, and the "
+                "file was written %.1f s ago. A file only SECONDS old was "
+                "rewritten while this was reading it - another row building "
+                "the same private tree - and `make` is not the fix for that; "
+                "otherwise run `make` (or pass the knob's --define, or "
+                "$OS88_DEFINES, and $OS88_BUILD for a sub-make's own "
+                "directory) before trusting any address from it."
+                % (os.path.relpath(built, ROOT), len(mine), len(theirs), at,
+                   age))
 
     out, sect, equ = _parse_map(mapf)
     if not out:

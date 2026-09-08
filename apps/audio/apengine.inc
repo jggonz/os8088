@@ -610,6 +610,14 @@ ap_open_track:
     call OSAPI_TASK_SPAWN         ; CF = 1 refused (transient, SPEC.md 20.6)
     jc .notask                    ; no worker slot: say so and stop, rather than
     mov byte [ap_have_worker], 1  ; "Playing" over a ring nothing will feed
+    ; ...AND THE WORKER MAY BE RESTARTED (SPEC.md 66.6.2). Hiring one
+    ; would otherwise pin the region for ever - task_spawn wrote our
+    ; segment into that worker's frame before its first instruction:
+    ; the feed's whole state is in statics and the restart lands above ap_feed.
+    ; The kernel restarts a worker only where it PARKS, which for us is
+    ; inside OSAPI_TASK_ALIVE at the top of the loop; we do not declare
+    ; OSAPI_MEM_PARKSAFE, so the gfx-lock park is not in play.
+    OS88_WORKER_RESTARTABLE ap_worker
 .running:
     mov byte [ap_state], AP_ST_PLAY
     mov word [ap_msg], ap_s_playing
@@ -1073,7 +1081,8 @@ ap_find_sibling:
 ; resolution dir and OSAPI_FILE_WRITE / _READ by NAME still land in the
 ; instance's own launched-from folder (measured - APDIAG.TXT and the queue file
 ; both missed the root). The real GOTO moves the instance, so every caller
-; banks OSAPI_FILE_HERE first and GOTOs back (the FONTS/ pattern, os88type.inc).
+; banks OSAPI_FILE_HERE first and GOTOs back (the SYSTEM/FONTS pattern, in
+; os88type.inc).
 ; =============================================================================
 ap_que_root:
     call OSAPI_VOL_SYS             ; BL = the volume this machine booted from

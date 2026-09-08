@@ -35,6 +35,7 @@ import time
 
 sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
+import os88build as _B
 import os88marty as M
 from os88mouse import Mouse
 from os88geom import WIN_SIZE, MAX_WIN
@@ -145,7 +146,11 @@ def band(px, r):
 # One long document per app, in the format its association claims: each is
 # opened by DOUBLE-CLICKING it, so the app comes up with something to scroll
 # rather than empty (SPEC.md 54).
-os.makedirs("build/pkgthumbsrc", exist_ok=True)
+# WRITTEN WHERE IT IS READ (docs/plans/SOAK-PARALLEL.md 14.2): scratch_disk
+# resolves the paths it is handed, so a source file created at the literal
+# `build/pkgthumbsrc/` is one os88disk then looks for in the run's own tree.
+SRCDIR = _B.at("build/pkgthumbsrc")
+os.makedirs(SRCDIR, exist_ok=True)
 DOC = {"notepad": ("LONG.TXT",
                    "".join("line %03d of a long document\r\n" % i
                            for i in range(220))),
@@ -159,7 +164,7 @@ DOC = {"notepad": ("LONG.TXT",
        "texpad":  ("LONG.TEX",
                    "".join("line %03d of a long source file\r\n" % i
                            for i in range(220)))}[APP]
-LONG = "build/pkgthumbsrc/" + DOC[0]
+LONG = os.path.join(SRCDIR, DOC[0])
 open(LONG, "w").write(DOC[1])
 PKG = {"notepad": "build/notepad.o88", "browser": "build/browser.o88",
        "texpad": "build/texpad.o88", "word": "build/word.o88",

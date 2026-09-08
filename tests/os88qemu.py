@@ -18,7 +18,7 @@ them:
 
 `ps2mouse` passed the moment they were killed.  **The cost of the leak is paid
 by an unrelated row, hours later, wearing a message about the wrong subject** —
-which is the expensive kind of failure, and docs/HANDOFF-SOAK-FINDINGS.md B9 is
+which is the expensive kind of failure, and docs/plans/HANDOFF-SOAK-FINDINGS.md B9 is
 the account of it.  CLAUDE.md documents the same leak from the other end: a
 previous session's instance still answering on `build/qmp.sock` and serving the
 OLD kernel, which reads exactly like a change that did nothing.

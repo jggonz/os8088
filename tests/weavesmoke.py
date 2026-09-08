@@ -121,6 +121,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "unit"))
 import os88geom                                             # noqa: E402
+import os88build
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
@@ -141,6 +142,7 @@ MACHINES = [
 # The 360KB geometry, because the 5150 machines above have 360KB drives. It is
 # also the tightest of the three, which is the one worth booting.
 DISK = "build/weave360.img"
+SYSIMG = "build/os8088-360.img"
 FOLDER = "WEAVE"                # the folder this opens first in the B: window
                                 # (WEAVE-SPEC 11.2's layout; weaveprev sets
                                 # it to LOOM). None: the file is in the root
@@ -359,7 +361,7 @@ def _smoke(machine, card, want_w, want_h, S, t0, png_dir=None):
     # The launch is OUTSIDE the try below on purpose: a MartyError from here is
     # the boot gate and smoke() names it as such, while one from anywhere after
     # it is the session breaking off on a healthy machine (see smoke()).
-    with os88marty.launch("build/os8088-360.img", apps=DISK,
+    with os88marty.launch(SYSIMG, apps=DISK,
                           machine=machine) as m:
         try:
             _drive(machine, card, want_w, want_h, S, t0, png_dir, m)
@@ -711,6 +713,7 @@ def _drive(machine, card, want_w, want_h, S, t0, png_dir, m):
 
 
 def main():
+    global DISK, SYSIMG
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", help="just this one")
     ap.add_argument("--no-make", action="store_true",
@@ -747,21 +750,31 @@ def main():
     # build carries an earlier WEAVE, and every assertion here would then
     # report on that one. make is what knows whether anything is stale, and it
     # is a no-op when nothing is.
+    #
+    # IN A PRIVATE TREE (tools/os88build.py), which is what lets this row share
+    # the box: it is 96 seconds of the pre-merge gate, and it used to hold the
+    # whole tree for all of them because a `make` into build/ cannot run beside
+    # anything reading it. The system floppy comes along because this boots the
+    # ordinary kernel with the Weave disk in B:.
     if not a.no_make:
-        r = subprocess.run(["make", DISK], cwd=ROOT,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           text=True)
-        if r.returncode:
-            print(r.stdout[-2000:], file=sys.stderr)
+        try:
+            t = os88build.tree(targets=("weave360.img", "os8088-360.img"))
+            DISK, SYSIMG = t.img("weave360.img"), t.img("os8088-360.img")
+            r = None
+        except RuntimeError as e:
+            r = e
+        if r is not None:
+            print(str(r)[-2000:], file=sys.stderr)
             check(False, "make %s" % DISK,
                   "make's own last lines are above and say which it was - the "
                   "package would not build, or SmallerC is not there. The "
                   "second is why the registry declares needs=('cc',) beyond "
                   "WEAVE-SPEC 12.3's marty: a tree without tools/setup-cc.sh's "
                   "compiler should SKIP this row rather than fail it",
-                  got="exit %d" % r.returncode, want="the disk")
+                  got=str(r)[-200:], want="the disk")
             return done("weavesmoke")
-    if not os.path.exists(os.path.join(ROOT, DISK)):
+    if not os.path.exists(DISK if os.path.isabs(DISK)
+                          else os.path.join(ROOT, DISK)):
         check(False, "%s exists" % DISK,
               "nothing to boot - `make weavedisk` builds all three geometries",
               got="missing", want="a floppy image")

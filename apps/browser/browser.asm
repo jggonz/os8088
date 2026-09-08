@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/browser/browser.asm
 ;
-; BROWSER, the text-and-table HTTP viewer (docs/BROWSER-PLAN.md). This is
+; BROWSER, the text-and-table HTTP viewer (docs/plans/completed/BROWSER-PLAN.md). This is
 ; step 1 of that document's 10: the RENDERER, with no network in the machine
 ; at all - it opens a .HTM off a floppy through the Standard File dialog and
 ; draws it. tools/htmsim.py is the reference implementation and the cost
@@ -262,6 +262,12 @@ br_entry:
     mov si, br_menus
     call OSAPI_MENU_SET
     mov [br_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, and not beside the
+    ; worker's declaration: a package with NO worker is the case that
+    ; moves most easily, and putting this at the spawn left exactly
+    ; those runs declaring nothing - measured, by the row that reads
+    ; MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
 %ifdef OS88UI_SBDRAG
     pushf                           ; the entry still owes the loader
     push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
@@ -3787,12 +3793,31 @@ br_foldwide:
 ; --- br_entity - &...; -> folded text ----------------------------------------
 ; A malformed entity is LITERAL TEXT, never an error and never a swallowed
 ; line (tests/htm/torture.htm section 6).
+;
+; AN ENTITY IS INK, so the pending space is owed to it exactly as it is owed
+; to an ordinary byte - br_char's `.ink` path is `br_wflush` then `br_fold`
+; and this is that pair one level up. Without the flush, `word &mdash; word`
+; drew as `word- word`: the space BEFORE the entity was collapsed into
+; [br_wsp] and then never spent, because every path out of here reaches
+; br_fold without passing br_char at all. It is silent in two directions -
+; the space after the dash survives (that one is br_char's), so the line
+; reads as a typographical choice rather than a dropped character, and
+; tools/htmsim.py cannot see it AT ALL, because the model unescapes entities
+; into the text stream before it collapses whitespace and therefore has no
+; entity left to lose a space in front of (SPEC.md 71.13).
+;
+; Flushing at ENTRY rather than beside each br_fold is safe because every
+; path out of here emits exactly once - `.have`, `.num` and `.literal` alike
+; - and it is right even when br_fold DROPS the character (a fold to 0, the
+; soft hyphen): the space is the source's, not the entity's, and br_char
+; spends it the same way in the same case.
 br_entity:
     push ax
     push bx
     push cx
     push dx
     push di
+    call br_wflush                  ; the pending space, if one is owed
     mov di, si                      ; remember where the body starts
     xor cx, cx
     mov bx, br_ebuf

@@ -12,6 +12,20 @@ and runs wm_refit, so the panel may have MOVED by the time the next click is
 aimed - and a click aimed at where it used to be lands on the desktop, which
 switches the menu bar to Locator and looks exactly like a control that does
 not work.
+
+**THE GENERAL VERBS HAVE MOVED TO tools/os88ui.py.** `open_drive`,
+`open_named` and `scroll_to` below are now thin wrappers over it and keep
+their signatures, so the hundred-odd scripts importing this file did not have
+to change - but a NEW script should use os88ui directly, where the same three
+calls are `ui.open_drive("B")` and `ui.open("APPS")` and take no `S` or
+`settle`. What the wrappers gain by delegating is the confirmation: each verb
+now reads guest state to prove it did what it was asked, so a miss raises here
+instead of surfacing twenty steps later as the feature under test.
+
+What stays HERE is the Control Panel - `open_panel`, `set_mode`,
+`set_primary`, `adapter_row` and the coordinates above them. That is a
+specific window's layout, not a general verb, and os88ui deliberately knows
+nothing about it.
 """
 import os
 import sys
@@ -20,6 +34,8 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 import os88geom                                              # noqa: E402
+import os88marty                                             # noqa: E402
+import os88ui                                                # noqa: E402
 # menu.inc: the System cell is x 0..29 and a pull-down hangs from MBAR_H + 1
 # with MENU_ITEM_H per item. Item 1 is CMD_CTRL (About, Control Panel, Task
 # Manager, ...).
@@ -36,7 +52,7 @@ SYS_X, SYS_Y = 12, 8
 # in each test because there are three of them now and a VGA machine is the
 # case they all used to get wrong: `"mda" if kind == 1 else "cga"` looks for a
 # CGA card that a VGA+Hercules machine does not have, and raises IndexError
-# several frames away from the reason (docs/DUAL-DISPLAY-VGA.md).
+# several frames away from the reason (docs/plans/completed/DUAL-DISPLAY-VGA.md).
 KIND_CARD = {0: "vga", 1: "mda", 2: "cga"}
 PRIMARY_CARD = {"herc": "mda", "cga": "cga", "vga": "vga"}
 
@@ -98,6 +114,33 @@ CP_IVID = 4                     # kernel/ctrl.inc: the Display page's RECORD
 CP_ITHM = 5                     # ...and SPEC.md 76.4's Theme page
 
 
+# --- the Control Panel's own verbs, CONFIRMED --------------------------------
+#
+# Each of these used to end in `settle(m)` - two host seconds of proven
+# stillness before the next click could read the panel's rect. Every one of
+# them has a word in the guest that says whether the click took, so each waits
+# for THAT instead: it answers as soon as the kernel has acted, and it says
+# WHICH click was lost when one is. The measurement behind the change is in
+# the block above open_drive.
+#
+# `card` is passed through untouched, and a caller that is about to compare
+# PIXELS still wants `settle` - which is what the module docstring says and
+# what `paint=True` is for on the three verbs below.
+CP_GUEST = 20.0                 # guest seconds a Control Panel click may take
+
+
+def _cpwait(m, cond, what, guest=CP_GUEST):
+    """Wait for a guest word, or raise naming the click that was lost."""
+    try:
+        os88marty.until(m, lambda _: cond(), what, poll=0.05, guest=guest)
+    except Exception as e:
+        raise RuntimeError("%s" % e)
+
+
+def _b(m, S, name):
+    return m.read(S(name), 1)[0]
+
+
 def open_panel(m, mo, S, settle, card=None, page=CP_IVID):
     """Chip menu -> Control Panel, and leave it on `page`.
 
@@ -109,9 +152,11 @@ def open_panel(m, mo, S, settle, card=None, page=CP_IVID):
     HIDDEN DISPLAY page, which is true and is not what the caller asked for.
     """
     if _cp_win(m, S) is None:
-        mo.menu(SYS_X, SYS_Y, SYS_X, MBAR_H + 1 + MENU_ITEM_H + 8)
-        settle(m, card=card)
-        if _cp_win(m, S) is None:
+        mo.menu(SYS_X, SYS_Y, SYS_X, MBAR_H + 1 + MENU_ITEM_H + 8, settle=0)
+        try:
+            _cpwait(m, lambda: _cp_win(m, S) is not None,
+                    "the Control Panel window to open")
+        except RuntimeError:
             raise RuntimeError("the Control Panel did not open - the chip "
                                "menu's item 1 was not where this thought")
     # WHICH ROW THE DISPLAY PAGE IS DRAWN AT IS NOT "the last one" ANY MORE.
@@ -135,8 +180,13 @@ def open_panel(m, mo, S, settle, card=None, page=CP_IVID):
     row = sum(1 for r in range(page) if not (hide & (1 << r)))
     wx, wy = _cp_win(m, S)
     mo.click(wx + 1 + CP_IX + 30,
-             wy + TITLE_H + 1 + CP_I0Y + row * CP_IROWH + CP_IROWH // 2)
-    settle(m, card=card)
+             wy + TITLE_H + 1 + CP_I0Y + row * CP_IROWH + CP_IROWH // 2,
+             settle=0)
+    # [cp_sel] IS THE PAGE, and cp_onclick stores the RECORD index into it -
+    # not the drawn row - so this is the same number the caller asked for.
+    _cpwait(m, lambda: _b(m, S, "cp_sel") == page,
+            "Control Panel page %d to be selected ([cp_sel] is %d)"
+            % (page, _b(m, S, "cp_sel")))
 
 
 def set_mode(m, mo, S, settle, which, card=None):
@@ -147,8 +197,20 @@ def set_mode(m, mo, S, settle, which, card=None):
                                         # moved this window (see the module
                                         # docstring)
     mo.click(wx + 1 + CP_RX + CP_PGX + i * CPV_MSTEP + 20,
-             wy + TITLE_H + 1 + CPV_MY + 6)
-    settle(m, card=card)
+             wy + TITLE_H + 1 + CPV_MY + 6, settle=0)
+    # [vid_dmode] is 0 Single / 1 Extend and [vid_dlay] 0 Right / 1 Below
+    # (kernel/vidsel.inc), so the pair IS the mode this was asked for. A
+    # missed click leaves them alone and says so here rather than at whatever
+    # the caller measures three steps later.
+    want = (0, None) if i == 0 else (1, i - 1)
+    _cpwait(m, lambda: (_b(m, S, "vid_dmode") == want[0]
+                        and (want[1] is None
+                             or _b(m, S, "vid_dlay") == want[1])),
+            "the desktop mode to become %r ([vid_dmode] %d, [vid_dlay] %d)"
+            % (which, _b(m, S, "vid_dmode"), _b(m, S, "vid_dlay")))
+    settle(m, card=card)                # ...and THEN the picture: a mode
+                                        # change reshapes the whole screen and
+                                        # every caller reads geometry next
 
 
 def close_panel(m, mo, S, settle, card=None):
@@ -160,10 +222,19 @@ def close_panel(m, mo, S, settle, card=None):
     if w is None:
         return
     wx, wy = w
-    mo.click(wx + 10, wy + TITLE_H // 2)
-    settle(m, card=card)
-    time.sleep(1.0)                     # the floppy write is seconds of motor
-                                        # on the machine this is modelled on
+    owed = _b(m, S, "cp_wdirty")        # ...is a SYSTEM.CFG write owed?
+    mo.click(wx + 10, wy + TITLE_H // 2, settle=0)
+    _cpwait(m, lambda: _cp_win(m, S) is None,
+            "the Control Panel window to close")
+    if owed:
+        # THE WRITE IS THE POINT OF CLOSING (SPEC.md 31.8) and [cp_wdirty] is
+        # the kernel's own record of owing one, cleared when it lands. This
+        # was `time.sleep(1.0)` with "the floppy write is seconds of motor" -
+        # a host second against an operation measured in GUEST time, so on a
+        # busy box it returned mid-write and a persistence test then read a
+        # SYSTEM.CFG that was not there yet.
+        _cpwait(m, lambda: not _b(m, S, "cp_wdirty"),
+                "SYSTEM.CFG to be written ([cp_wdirty] still set)", 30.0)
 
 
 def adapter_row(avail, kind):
@@ -179,6 +250,29 @@ def adapter_row(avail, kind):
     return bin(avail & ((1 << kind) - 1)).count("1")
 
 
+def adapter_kind(avail, slot):
+    """...and the INVERSE: which VID_* kind is drawn in row `slot`?
+
+    `cp_vid_slot` walks the kinds in order and counts the ones `[vid_avail]`
+    has, so a row is the `slot`-th set bit - and `cp_vid_rowok` is exactly
+    `vid_avail_test`, a plain bit test, which is what makes this a faithful
+    mirror rather than an approximation.
+
+    It exists because **[cp_vsel] HOLDS THE KIND, NOT THE ROW**, and a
+    confirmation that compared the two passed a slot-0 click that had
+    correctly selected VID_HERC and called it a miss. `set_primary` takes a
+    row, like the user's eye does; the guest word is in the other space.
+    """
+    n = 0
+    for kind in range(4):               # VGA / HERC / CGA / EGA
+        if avail & (1 << kind):
+            if n == slot:
+                return kind
+            n += 1
+    raise RuntimeError("this machine has no adapter row %d (vid_avail=%#x)"
+                       % (slot, avail))
+
+
 def set_primary(m, mo, S, settle, slot, card=None):
     """Click adapter row `slot` and press Set Primary - which is how the OTHER
     two of SPEC.md 39.19.2's four arrangements are reached: the primary is
@@ -191,11 +285,26 @@ def set_primary(m, mo, S, settle, slot, card=None):
     """
     wx, wy = _cp_win(m, S)
     mo.click(wx + 1 + CP_RX + CP_PGX + 6,
-             wy + TITLE_H + 1 + CPV_R0Y + slot * CPV_ROWH + 6)
-    settle(m, card=card)
+             wy + TITLE_H + 1 + CPV_R0Y + slot * CPV_ROWH + 6, settle=0)
+    # THE ROW ONLY SELECTS; the button commits. [cp_vsel] is that pending
+    # choice, so a row click that missed is caught here - where it used to
+    # surface as "Set Primary did nothing", which is the wrong half.
+    kind = adapter_kind(_b(m, S, "vid_avail"), slot)
+    _cpwait(m, lambda: _b(m, S, "cp_vsel") == kind,
+            "adapter row %d (VID_* kind %d) to be selected ([cp_vsel] is %d)"
+            % (slot, kind, _b(m, S, "cp_vsel")))
     wx, wy = _cp_win(m, S)              # RE-READ: see the module docstring
-    mo.click(wx + 1 + CP_RX + CPV_BTNX + 40, wy + TITLE_H + 1 + CPV_BTNY + 9)
-    settle(m, card=card)
+    mo.click(wx + 1 + CP_RX + CPV_BTNX + 40, wy + TITLE_H + 1 + CPV_BTNY + 9,
+             settle=0)
+    # THE BUTTON PRESS IS NOT CONFIRMED, deliberately: `cpf_vidok` greys it
+    # when the dot is already on the running adapter, so a legitimate NO-OP
+    # and a missed click look identical from out here - and a confirmation
+    # that cannot tell them apart fails the no-op, which is what a first
+    # version of this did to dispthm. The ROW click above is the half that
+    # can be checked, and it is the half that was silently going missing.
+    settle(m, card=card)                # ...and the picture, for the reason
+                                        # set_mode settles: the screen is a
+                                        # new shape and callers read geometry
 
 
 # --- the desktop's drive column (SPEC.md 26.1) -------------------------------
@@ -253,8 +362,66 @@ def drive_xy(m, S, ordinal):
             DESK_ZY0 + row * step + zh1 // 2)
 
 
-def open_drive(m, mo, S, settle, letter="B", card=None):
-    """Double-click drive `letter`'s desktop zone and settle."""
+# --- the general verbs, over tools/os88ui.py ---------------------------------
+#
+# These keep their old signatures so that the hundred-odd scripts importing
+# this file did not have to change in one commit, and they take `S` and
+# `settle` and use neither by default: os88ui resolves symbols off the Marty
+# and CONFIRMS instead of settling.
+#
+# **THE TRAILING SETTLE IS GONE, AND `paint=True` PUTS IT BACK.** It was kept
+# for one commit on the grounds that a caller might be about to compare
+# pixels and this layer cannot know. It can be counted, though, and the count
+# settles it: of the **401 call sites** of these three verbs in tests/, **2**
+# read the framebuffer within six lines - both in tmrepair.py, and both
+# already behind a `raise_win` that settles anyway. So 399 sites were paying
+# for a picture nobody looked at.
+#
+# What that costs is not small. A settle is `stable * quiet` = 2.0 host
+# seconds of PROVEN stillness before it can return, plus its captures, and it
+# measured 2.9s average over four rows - so the trailing settle alone was
+# about **twenty minutes of the soak**. And it is irreducible by tuning: the
+# gap log (docs/plans/SOAK-PARALLEL.md 11) says a change arrives after one whole
+# quiet round 1 time in 19, so `stable` cannot come down. The only way to
+# spend less is not to settle, which is what confirming is for.
+#
+# `paint=True` is the escape hatch, and the right one to reach for the moment
+# the next thing a script does is read pixels.
+
+def _ui(m, mo, card, S=None):
+    """One UI per Marty, cached on it - the mouse is already open.
+
+    **None FOR A DRIVER THAT IS NOT A MARTY**, and every verb below falls back
+    to its own blind path when it gets one. os88ui reads guest state through
+    `m.sym`, `m.readseg` and `m.status` - a MartyPC debug-server surface that a
+    QEMU `Qemu` object does not have and cannot grow: QEMU has no cycle counter
+    to anchor a budget to and no symbol reader on the object at all.
+
+    SIX ROWS IN THIS TREE DRIVE QEMU THROUGH THIS FILE - brnav, ethcfg,
+    ethernet, ftpd, ftpdpix, minesrc - because five of docs/TESTING.md's closed
+    list are theirs (the Ethernet card most of all: MartyPC has no NIC of any
+    kind). `minesrc` is how this was found: the first delegation ended in
+    `os88geom.drive_pt(m, ...)`, which reaches for `m.sym`, and the row died
+    with `'Qemu' object has no attribute 'sym'` several frames from the cause.
+    """
+    if not hasattr(m, "sym"):
+        return None
+    u = getattr(m, "_os88ui", None)
+    if u is None or u.mo is not mo or (S is not None and u.sym is not S):
+        u = os88ui.UI(m, card=card, mouse=mo, sym=S)
+        m._os88ui = u
+    u.card = card
+    return u
+
+
+def open_drive(m, mo, S, settle, letter="B", card=None, paint=False):
+    """Double-click drive `letter`'s desktop zone; answer the click point.
+
+    Confirmed now: a window has to appear, or this raises naming what is
+    open. Before, a zone that had moved - which is what SPEC.md 18.97's
+    floppy probe does to B: - clicked bare desktop and the caller went on to
+    aim at a Disk window that was never there.
+    """
     if isinstance(letter, int):          # an ORDINAL was passed: no longer
         ordinal = letter                 # supported, because it is not stable
         raise TypeError("open_drive takes a DRIVE LETTER, not the ordinal %d "
@@ -264,8 +431,17 @@ def open_drive(m, mo, S, settle, letter="B", card=None):
         raise RuntimeError("drive %s: has no desktop zone on this machine "
                            "(dsk_vtab says it is free or hidden)" % letter)
     x, y = drive_xy(m, S, ordinal)
-    mo.dblclick(x, y)
-    settle(m, card=card)
+    ui = _ui(m, mo, card, S)
+    if ui is None:                      # QEMU: the blind path, as before
+        mo.dblclick(x, y)
+        settle(m, card=card)
+        return x, y
+    try:
+        ui.open_drive(letter)
+    except os88ui.UIError as e:
+        raise RuntimeError(str(e))
+    if paint:
+        settle(m, card=card)
     return x, y
 
 
@@ -416,35 +592,23 @@ def scroll(m, S):
     return _u16(m.read((KERNEL_SEG << 4) + vp + FS_SCRL, 2))
 
 
-def scroll_to(m, mo, S, settle, wx, wy, entry, card=None):
-    """Bring directory entry `entry` on screen; answer its VISIBLE row.
+def _scroll_to_blind(m, mo, S, settle, entry, card):
+    """scroll_to for a driver os88ui cannot read - the pre-delegation code.
 
-    THE POINT OF THIS IS THAT IT NEEDS NO `fit`. How many rows a Disk window
-    shows depends on its height, the adapter and the view mode, and every one
-    of those is a number a harness would have to keep in step. Instead: ask
-    the window to scroll to `entry`, then read [FS_SCRL] BACK. At the top of
-    the list it lands exactly there and the answer is visible row 0; near the
-    end it CLAMPS, and `entry - FS_SCRL` is then the row it really is on.
-    Either way the arithmetic is done by the kernel, which is the only thing
-    that knows.
-
-    It scrolls with the KEYBOARD (Up/Down, SPEC.md 22.11's eight ways) rather
-    than the bar, because the bar's cells are five nested layouts deep while a
-    key is a key. A bounded number of steps: the list caps at 32 entries
-    (FS_N), so 40 is past any list that can exist.
+    Same algorithm: walk with the arrow keys (SPEC.md 22.11) and read
+    [FS_SCRL] BACK, so the clamp at the end of a list is computed by the only
+    thing that knows how many rows this window shows. What it cannot do is
+    bound the per-key wait in GUEST time, because a QEMU object has no cycle
+    counter - so this one keeps the host-clock loop, and that is a real
+    difference: on a loaded box a step can be judged an END STOP when the
+    guest simply had not got there (docs/plans/HANDOFF-SOAK-FINDINGS.md B5). Six
+    rows take this path and every one of them is on docs/TESTING.md's closed
+    list, so there is nowhere better for them to go.
     """
     if entry < 0:
         raise RuntimeError("entry %d is not a row" % entry)
 
     def step(key):
-        """One arrow, then wait for [FS_SCRL] to move. Answers whether it did.
-
-        POLLING THE WORD rather than settling on the picture: a settle is two
-        identical frames a second apart and there are up to a dozen of these,
-        which turned one navigation into half a minute. The word is the thing
-        the answer is computed from anyway, so waiting on anything else is
-        waiting on a proxy.
-        """
         was = scroll(m, S)
         m.key(key)
         for _ in range(30):
@@ -453,23 +617,21 @@ def scroll_to(m, mo, S, settle, wx, wy, entry, card=None):
                 return True
         return False
 
-    for _ in range(40):                         # to the top first, so the
-        if scroll(m, S) == 0:                   # walk below is one-directional
-            break                               # and cannot oscillate
+    for _ in range(40):
+        if scroll(m, S) == 0:
+            break
         if not step("ArrowUp"):
-            break                               # already at the top stop
+            break
     else:
         raise RuntimeError("the list would not scroll to the top")
     for _ in range(40):
         if scroll(m, S) >= entry:
             break
-        if not step("ArrowDown"):               # the END STOP: it clamped, so
-            break                               # `entry` is as visible as it
-    else:                                       # is ever going to get
+        if not step("ArrowDown"):
+            break
+    else:
         raise RuntimeError("entry %d never came on screen" % entry)
-    settle(m, card=card)                        # ...and ONE settle at the end,
-                                                # because the click that
-                                                # follows is aimed at pixels
+    settle(m, card=card)
     row = entry - scroll(m, S)
     if row < 0:
         raise RuntimeError("scrolled PAST entry %d - the list moved under us"
@@ -477,29 +639,63 @@ def scroll_to(m, mo, S, settle, wx, wy, entry, card=None):
     return row
 
 
-def open_named(m, mo, S, settle, wx, wy, name, card=None):
-    """Double-click the row called `name` in the Disk window at (wx, wy).
+def scroll_to(m, mo, S, settle, wx, wy, entry, card=None, paint=False):
+    """Bring directory entry `entry` on screen; answer its VISIBLE row.
 
-    **THE ONLY WAY A TEST SHOULD NAME A FILE.** row_of answers which DIRECTORY
-    ENTRY it is (SPEC.md 19.4 sorts by name, so the Makefile's order never
-    reaches the screen), and scroll_to turns that into a row on the GLASS - so
-    a folder that gains a file shifts nothing and a folder that outgrows the
-    window scrolls itself. Both of those have broken tests in this tree, and
-    the second is why open_row(literal) could not simply be replaced by
-    open_row(row_of(...)): CYCLONE took GAMES past what a CGA Disk window
-    shows, and an entry index below the fold clicks on whatever is drawn at
-    that y - or on nothing at all.
+    os88ui.scroll_to, which is the same algorithm one layer down: scroll with
+    the KEYBOARD and read [FS_SCRL] BACK, so the clamp at the end of a list is
+    computed by the only thing that knows how many rows this window shows -
+    which depends on its height, the adapter and the view mode, and is
+    therefore three numbers a harness would otherwise have to keep in step.
     """
-    entry = row_of(m, S, name)
-    row = scroll_to(m, mo, S, settle, wx, wy, entry, card=card)
-    return open_row(m, mo, S, settle, wx, wy, row, card=card, expect=name)
-                                            # ...and CHECKED before it clicks,
-                                            # which closes the one hole left in
-                                            # the scroll: the arrows only reach
-                                            # this window while it is frontmost,
-                                            # and a caller that forgot to raise
-                                            # it would otherwise scroll nothing
-                                            # and double-click the wrong row
+    ui = _ui(m, mo, card, S)
+    if ui is None:
+        return _scroll_to_blind(m, mo, S, settle, entry, card)
+    try:
+        row = ui.scroll_to(entry)
+    except os88ui.UIError as e:
+        raise RuntimeError(str(e))
+    if paint:
+        settle(m, card=card)
+    return row
+
+
+def open_named(m, mo, S, settle, wx, wy, name, card=None, expect="auto",
+               paint=False):
+    """Double-click the row called `name` in the front Disk window.
+
+    **THE ONLY WAY A TEST SHOULD NAME A FILE.** os88ui.open, which looks the
+    name up in the staged listing (SPEC.md 19.4 sorts by name, so the
+    Makefile's order never reaches the screen), scrolls to it and CHECKS the
+    row before it clicks - then waits for the thing the entry's TYPE says will
+    happen: a window for a package, a changed listing for a folder.
+
+    `expect` is passed straight through, and `expect="refusal"` is the one
+    worth knowing about: a row testing a package that refuses ITSELF wants it,
+    and it is a stronger assertion than the blind settle this replaces, which
+    cannot tell a refusal from a launch that was merely slow.
+
+    `wx`/`wy` NAME WHICH Disk window, and are honoured when they match one:
+    os88ui raises it first, which is what makes it the acting window (the
+    arrow keys only reach the frontmost one anyway). A row with TWO Disk
+    windows open needs that - hdmove has B: and C: up and means B: - and a
+    row with one is unaffected either way. When they match nothing, the
+    acting window is used and that is the old behaviour.
+    """
+    ui = _ui(m, mo, card, S)
+    if ui is None:                      # QEMU: find the row, click it, settle
+        row = _scroll_to_blind(m, mo, S, settle,
+                               row_of(m, S, name), card)
+        return open_row(m, mo, S, settle, wx, wy, row, card=card, expect=name)
+    named = next((w for w in os88geom.windows(m, S)
+                  if (w.x, w.y) == (wx, wy) and w.visible), None)
+    try:
+        out = ui.open(name, expect=expect, win=named)
+    except os88ui.UIError as e:
+        raise RuntimeError(str(e))
+    if paint:
+        settle(m, card=card)
+    return out
 
 
 # --- the window record (SPEC.md 11) ------------------------------------------

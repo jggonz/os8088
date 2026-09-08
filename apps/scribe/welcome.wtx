@@ -1,0 +1,28 @@
+; apps/word/welcome.wtx - the shipped WELCOME.DOC's source (SPEC.md 68.4).
+; One paragraph per line; leading '.'-directives set the paragraph format,
+; {b}..{/b}-style spans set character formats, a literal tab is a tab.
+; tools/os88doc.py turns this into a native .DOC deterministically.
+.c {d}WELCOME TO MICROSOFT WORD{/d}
+.c Version 1.1a for os8088
+
+This document is a native Word .DOC file: everything on this page - the {b}bold{/b}, the {i}italics{/i}, the centered heading above - was saved into it and is being rendered back by the same engine you are typing into.
+
+.open {b}What works{/b}
+Type anywhere; select with the mouse, or press F8 and extend with the arrow keys. Character formats live on the ribbon, in Format Character, and on the Ctrl keys: {b}bold{/b} (Ctrl-B), {i}italic{/i}, {b}{i}both together{/b}{/i}, {u}underline{/u} (Ctrl-U), {w}word underline{/w} (Ctrl-W), {d}double underline{/d} (Ctrl-D) and {k}small caps{/k} (Ctrl-K). Paragraph formats come from the ruler, the Ctrl keys, or Format Paragraph.
+.li 5 .fi -5 This paragraph wears a hanging indent, set with Ctrl-T; the ruler's markers show it, and dragging them moves it.
+.c This paragraph is centered (Ctrl-C).
+.r This one is flush right (Ctrl-R).
+.sp2 .open This one is double spaced (Ctrl-2) and open (Ctrl-O) - draft view renders the extra leading exactly as the shipped product's did.
+
+.open {b}A few keys{/b}
+Ctrl-F	Search
+F4 / Shift-F4	Repeat the search down / up
+F5	Go To a page
+Ins	Overtype (the status bar's OVR lamp)
+F8	Extend the selection (EXT)
+Shift-F12	Save
+F12	Save As
+Alt-BkSp	Undo
+
+.open This is Word's draft view - the mode the real product shipped for machines exactly like this one: one fixed-pitch face, character formatting synthesized. The menus, ribbon, ruler, status line and dialogs follow the Opus source release preserved by the Computer History Museum.
+Save your own documents into the DOCS folder with Save As; File Open reads plain text files too.

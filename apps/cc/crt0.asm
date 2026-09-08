@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/cc/crt0.asm
 ;
-; The prologue of a C package (SPEC.md 73.2, 67.4): the section layout, the
+; The prologue of a C package (SPEC.md 73.2, 73.4): the section layout, the
 ; 32-byte header with its dispatcher, the entry trampoline the loader calls,
 ; and one trampoline per window callback. It %includes apps/cc/os88thunk.asm,
 ; so including this file is the whole of "link against the C runtime".
@@ -165,7 +165,7 @@
 ; task 0's, which lives above .lowbss and nowhere near a slice.
 ;
 ; It was the literal 384 with nothing comparing it to the kernel's SCH_STACK -
-; docs/STACK-SLOTS-PLAN.md 12.4 found it while surveying the packages. Taking
+; docs/plans/completed/STACK-SLOTS-PLAN.md 12.4 found it while surveying the packages. Taking
 ; the SDK's copy puts it under tests/unit/t_mirror.py, which compares every
 ; name defined in more than one file and needed nobody to remember it.
 ;
@@ -358,6 +358,19 @@ cc_entry:
                                     ; OSAPI_TASK_SPAWN would simply refuse
     mov bx, ax                      ; BX = the window, which is the whole of
     mov [cc_win], ax                ; the answer. Banked too, for cc_worker
+    or ax, ax
+    jz .noreg                       ; os88_main() refused: there is nothing to
+                                    ; declare and the loader is about to unwind
+    push ax                         ; --- AND OUR REGION IS MOVABLE (SPEC.md
+    push bx                         ; 66.6.1) ---
+    push dx                         ; DX is the instance index on entry
+    mov dx, cs
+    mov ax, cc_regreloc
+    call OSAPI_MEM_MOVABLE          ; a refusal is not worth reporting: it can
+    pop dx                          ; only mean the region is not ours, which
+    pop bx                          ; cannot happen from here, and the cost is
+    pop ax                          ; a compaction that achieves less
+.noreg:
     pop es
     pop di
     pop si
@@ -660,6 +673,49 @@ cc_onwake:
     ret
 %endif
 
+%ifdef CC_HAS_ONMOVE
+; -----------------------------------------------------------------------------
+; cc_onmove - THE HEAP COMPACTOR MOVED ONE OF YOUR CLAIMS (SPEC.md 66.2),
+; installed by os88_mem_movable().
+;
+; NOT A WINDOW CALLBACK, and the difference matters: it is dispatched from
+; inside mem_reloc_call, in the middle of a compaction, on whatever task asked
+; for the memory that could not be found. So SPEC.md 66.3 rule 3 binds the C on
+; the other side of it - the handler MAY NOT claim, free, yield, draw, or touch
+; a file - and it is not a suggestion, because the walk's own map is what it
+; would be re-entering.
+;
+; It preserves AX as well, which no window callback has to: a relocation proc
+; is called between two instructions of somebody else's routine rather than
+; from a dispatch loop, and SPEC.md 66.3 says every register.
+;
+; in:  BX = the base segment it WAS at, DX = the base it is at NOW; DS = CS =
+;      ours, ES = KERNEL_SEG. The bytes have already moved.
+; out: nothing; every register preserved
+; -----------------------------------------------------------------------------
+cc_onmove:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cld
+    push dx                         ; arg 2: unsigned now
+    push bx                         ; arg 1: unsigned was
+    call _os88_onmove
+    add sp, 4
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
+
 %ifdef CC_HAS_MENUS
 ; -----------------------------------------------------------------------------
 ; cc_oncmd - AM_ONCMD, a pick from one of your menus (SPEC.md 12.2)
@@ -955,7 +1011,22 @@ cc_ovneed:
     mov cl, 10                      ; not divide a section-relative label, and
     shr ax, cl                      ; a build that fails on arithmetic is a
     mov di, ax                      ; worse trade than four instructions
-    call OSAPI_MEM_CLAIM            ; AX = KB; out DX = the segment
+    call OSAPI_MEM_CLAIM_HI         ; AX = KB; out DX = the segment. FROM THE
+                                    ; TOP (SPEC.md 50.3.2), because this
+                                    ; block's base IS A CS and that is the
+                                    ; rule's own first clause. It was the low
+                                    ; door for as long as overlays have
+                                    ; existed, which put the single largest
+                                    ; pinned block on the machine in the middle
+                                    ; of the arena for the program's whole life
+                                    ; - CWORD.OVL is 18,565 bytes, bigger than
+                                    ; every kernel module put together, and
+                                    ; SPEC.md 50.3's own words for what that
+                                    ; does are "one long-lived data claim
+                                    ; landing mid-heap permanently splits the
+                                    ; space a package can be loaded into". It
+                                    ; is 50.3.2.1's defect one layer out from
+                                    ; the two driver images that section fixed
     jc .nomem
     mov [cc_ovseg], dx
     mov es, dx
@@ -975,6 +1046,16 @@ cc_ovneed:
     cmp word [es:2], cc_image_end   ; ...and the image it was built beside
     jne .stale
     call cc_ovbind                  ; the vectors are addresses until this runs
+    mov dx, [cc_ovseg]              ; ...and NOW it may move (SPEC.md 66.2):
+    mov ax, cc_ovreloc              ; not before, because the read above is an
+    call OSAPI_MEM_MOVABLE          ; ES:BX into it and OSAPI_FILE_READ claims.
+                                    ; A refusal leaves it pinned, which is what
+                                    ; it was yesterday, so there is nothing to
+                                    ; unwind - and it is not thrown away
+                                    ; either: MC_RLOC is readable from outside
+                                    ; with tools/heapmap.py, which is how
+                                    ; SPEC.md 66.5.6.2's silent refusal was
+                                    ; caught
     pop es
     pop di
     pop si
@@ -1079,7 +1160,30 @@ cc_ovthunk:
 ;
 ; Both are generated by tools/cc8086.py, contiguous, and walked here, so
 ; adding a function to either side is no change to this file.
+;
+; cc_ovreloc is the same routine with the new base stored first, and it is the
+; RELOCATION PROC the overlay claim is declared with (SPEC.md 66.2): BX = the
+; base it was at, DX = the base it is at now, every register preserved because
+; cc_ovbind preserves them and this adds one store. Four bytes, by falling
+; through.
+;
+; WHY THE OVERLAY IS SAFE TO MOVE, which is not obvious and is not luck. The
+; general refusal in SPEC.md 66.6 is "every saved CS on every stack", and an
+; overlay has exactly one way to put its CS on one: the `call far` into
+; cc_ovthunk below. That thunk DISCARDS it (`pop dx ... discarded rather than
+; stashed`) and re-reads [cc_ovseg] after the call to build the `retf`, at
+; every level of the nest - so the return goes to wherever the module is NOW,
+; and a move that happened inside the resident routine is invisible to it. The
+; property was written for a different reason, that there is only one module;
+; it is what makes this declaration free.
+;
+; Nothing else holds the segment. A resident routine calling INTO the module
+; goes through cc_ovm_*, which this routine re-stamps; the module calling
+; another module function is a NEAR call; and a worker never enters at all
+; (cc_ovneed's first instruction).
 ; -----------------------------------------------------------------------------
+cc_ovreloc:
+    mov [cc_ovseg], dx
 cc_ovbind:
     push ax
     push bx
@@ -1112,6 +1216,31 @@ cc_ovm_gone:db CC_PKG_NAME, '.OVL is not on this disk', 0
 cc_ovm_stale: db CC_PKG_NAME, '.OVL does not match this program', 0
 section .text
 %endif  ; CC_HAS_OVL
+
+; -----------------------------------------------------------------------------
+; cc_regreloc - OUR REGION moved. BX = the base it WAS at, DX = where it is now.
+;
+; A package's own code needs no relocation - every near offset in it survives a
+; move untouched - and every word that NAMES the region is the kernel's, which
+; mem_region_reloc puts right. So for a C package with no overlay this is a
+; `ret`, and it exists because SPEC.md 66.2 requires a proc: opting in and
+; naming nothing is the one shape the kernel cannot tell from opting in and
+; forgetting.
+;
+; WITH AN OVERLAY IT IS NOT A NO-OP, and cc_ovbind was already exactly it.
+; Its `.res` loop writes the LIVE CS into cc_ovv_* - the far vectors the
+; overlay calls BACK through - and inside a relocation proc CS is the region's
+; NEW base (mem_reloc_call dispatches a region's holder at [MC_SEG], which
+; mem_cp_run has already updated). Its `.m` loop rewrites the overlay's own
+; vectors from [cc_ovseg], which a region move does not touch, so it costs a
+; few stores and is right either way.
+; -----------------------------------------------------------------------------
+%ifdef CC_HAS_OVL
+cc_regreloc equ cc_ovbind
+%else
+cc_regreloc:
+    ret
+%endif
 
 %ifdef CC_HAS_PARTS
 ; =============================================================================

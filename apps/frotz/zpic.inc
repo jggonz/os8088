@@ -8,7 +8,7 @@
 ; a single OSAPI_GFX_BLIT4 call, with no decoder anywhere near it.** That is
 ; not a performance preference, it is what the task boundary allows.
 ; @draw_picture is executed by the VM, and the VM is a worker task
-; (docs/FROTZ-PLAN.md 4), and a worker may not touch a file slot and may not
+; (docs/plans/completed/FROTZ-PLAN.md 4), and a worker may not touch a file slot and may not
 ; call OSAPI_MEM_* (SPEC.md 20.6). So everything a draw needs - the pixels,
 ; in the exact layout the blitter wants - has to be resident, claimed and
 ; validated by the UI task before the worker ever asks. zp_load does all of
@@ -24,7 +24,7 @@
 ;
 ; **It is LITTLE-ENDIAN, and it is the only file Frotz reads that is.** Every
 ; other word in this program is a big-endian Z-machine word that zmem.inc
-; alone forms (docs/FROTZ-PLAN.md 3.1). This one is ours, written by our own
+; alone forms (docs/plans/completed/FROTZ-PLAN.md 3.1). This one is ours, written by our own
 ; tool for one machine, and matching the 8086 costs the guest nothing while
 ; matching the Z-machine would cost an xchg per field.
 ;
@@ -90,7 +90,7 @@
 ;       +6  2  flags            +8  3  data offset  +11 3  colour-map offset
 ;                                                          (entry size >= 14)
 ;
-; **The pixel data is NOT RLE.** docs/FROTZ-PLAN.md 6 says "RLE over a 4-bit
+; **The pixel data is NOT RLE.** docs/plans/completed/FROTZ-PLAN.md 6 says "RLE over a 4-bit
 ; palette; the decoder is small" and both halves of that sentence are wrong -
 ; it is an LZW variant with 9-to-12-bit codes, 256 = clear table, 257 = end,
 ; and a 3840-entry value/back-reference table whose chains are emitted in

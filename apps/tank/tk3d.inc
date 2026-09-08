@@ -3,7 +3,8 @@
 ;
 ; THE GEOMETRY (SPEC.md 85.5). Fixed point throughout, 8086 only, and the two
 ; expensive instructions on this machine - imul at ~140 clocks and idiv at
-; ~170 - are what the whole shape of this file is arranged around.
+; ~170 - are what the whole shape of this file is arranged around; the
+; projection no longer divides at all (tk_project, 85.5.3).
 ;
 ; ANGLES ARE BYTES. 256 units to the turn, so a heading wraps by being a byte
 ; and the sine table is indexed with no masking at all; cos(a) is sin(a+64).
@@ -69,72 +70,133 @@ tk_camsetup:
     ret
 
 ; -----------------------------------------------------------------------------
-; tk_pdiv - AX = a projected offset: (DX:AX) / BX, clamped to +-4000
-; in:  DX:AX = a signed 32-bit product, BX = the depth (positive, >= TK_NEARZ)
-; out: AX.  clobbers CX, DX, SI
-;
-; THE CLAMP IS NOT COSMETIC. idiv raises int 0 when the quotient will not fit
-; a word, and a vertex a hand's breadth past the near plane projects to tens
-; of thousands - so the overflow case is the NORMAL one for anything close,
-; and an unguarded idiv here is a machine that reboots when a tank gets near.
-; The test is |DX| < BX/2, which is sufficient because |DX:AX| < (|DX|+1)*65536.
-; -----------------------------------------------------------------------------
-tk_pdiv:
-    mov cx, bx
-    shr cx, 1
-    mov si, dx
-    or si, si
-    jns .p
-    not si
-.p:
-    cmp si, cx
-    jb .safe
-    or dx, dx
-    js .neg
-    mov ax, 4000
-    ret
-.neg:
-    mov ax, -4000
-    ret
-.safe:
-    idiv bx
-    cmp ax, 4000
-    jle .lo
-    mov ax, 4000
-    ret
-.lo:
-    cmp ax, -4000
-    jge .done
-    mov ax, -4000
-.done:
-    ret
-
-; -----------------------------------------------------------------------------
 ; tk_project - one camera-space point onto the viewport
 ; in:  AX = cx, BX = cy, CX = cz (cz >= TK_NEARZ)
 ; out: AX = screen x, BX = screen y (viewport-relative, clamped)
 ; clobbers CX, DX, SI, DI
+;
+; A TABLE AND A MULTIPLY, NOT A DIVIDE (SPEC.md 85.5.3). This was two imul and
+; two guarded idiv a vertex - about 1,400 cycles on the 8088 after 85.3.4's
+; rule, a third of the heavy scene's non-pixel floor. Now the depth picks a
+; row of two tables built once a bracket, kx = sclx x 2048 / z and ky the
+; same for scly, and each axis is one imul and a shift. The tables are exact
+; below 1,024 units and bucketed by 4 and then 16 beyond, which keeps every
+; error under half a pixel where an object is big and under a pixel where it
+; is small (85.5.3 has the model).
+;
+; THE CLAMP IS STILL NOT COSMETIC: a vertex a hand's breadth past the near
+; plane still projects to tens of thousands, and screen-space arithmetic
+; downstream wants +-4000. The high word of the product says so before any
+; shift: 4000 << 11 is 125 in DX.
 ; -----------------------------------------------------------------------------
 tk_project:
-    push cx
-    mov di, bx                      ; keep cy
-    mov bx, [tk_sclx]
-    imul bx                         ; DX:AX = cx * sclx
-    pop bx                          ; BX = cz
-    push bx
-    call tk_pdiv
+    mov si, bx                      ; SI = cy
+    mov bx, cx                      ; the depth picks the row
+    cmp bx, 1024
+    jb .row
+    cmp bx, 4096
+    jb .mid
+    sub bx, 4096                    ; 4096.. : every 16 units, from row 1792
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    add bx, 1792
+    cmp bx, 2047
+    jbe .row
+    mov bx, 2047
+    jmp short .row
+.mid:
+    sub bx, 1024                    ; 1024..4095: every 4 units, from row 1024
+    shr bx, 1
+    shr bx, 1
+    add bx, 1024
+.row:
+    shl bx, 1
+    imul word [tk_kx + bx]          ; DX:AX = cx x kx
+    call tk_pshift
     add ax, [tk_vcx]
-    push ax
-    mov ax, di
-    mov bx, [tk_scly]
-    imul bx
-    pop di                          ; DI = screen x
-    pop bx                          ; BX = cz
-    call tk_pdiv
+    mov di, ax                      ; DI = screen x
+    mov ax, si
+    imul word [tk_ky + bx]
+    call tk_pshift
     neg ax                          ; screen y grows DOWNWARD
     add ax, [tk_vcy]
     mov bx, ax
     mov ax, di
+    ret
+
+; tk_pshift - AX = (DX:AX) >> 11, clamped to +-4000. Clobbers nothing else.
+; The shift is the high word's low byte and the low word's high byte moved
+; down a byte and then three arithmetic shifts: the clamp has already promised
+; the result fits sixteen bits.
+tk_pshift:
+    cmp dx, 125
+    jge .hi
+    cmp dx, -126
+    jl .lo
+    mov al, ah
+    mov ah, dl
+    sar ax, 1
+    sar ax, 1
+    sar ax, 1
+    ret
+.hi:
+    mov ax, 4000
+    ret
+.lo:
+    mov ax, -4000
+    ret
+
+; -----------------------------------------------------------------------------
+; tk_ktabs - the two projection tables, once a bracket (SPEC.md 85.5.3)
+;
+; Row i stands for a depth: i itself below 1,024, then 1,024 + 4(i - 1,024) + 2
+; to row 1,791, then 4,096 + 16(i - 1,792) + 8 - the bucket's centre, so the
+; error is signed both ways rather than always short. Depths under TK_NEARZ
+; never reach the table and take its value. 4,096 divides, once.
+; -----------------------------------------------------------------------------
+tk_ktabs:
+    xor si, si
+.e:
+    mov ax, si
+    shr ax, 1                       ; AX = i
+    cmp ax, 1024
+    jb .z1
+    cmp ax, 1792
+    jb .z2
+    sub ax, 1792
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, 4096 + 8
+    jmp short .zz
+.z2:
+    sub ax, 1024
+    shl ax, 1
+    shl ax, 1
+    add ax, 1024 + 2
+    jmp short .zz
+.z1:
+    cmp ax, TK_NEARZ
+    jae .zz
+    mov ax, TK_NEARZ
+.zz:
+    mov cx, ax                      ; CX = z
+    mov ax, [tk_sclx]
+    mov dx, 2048
+    mul dx                          ; DX:AX = sclx x 2048
+    div cx
+    mov [tk_kx + si], ax
+    mov ax, [tk_scly]
+    mov dx, 2048
+    mul dx
+    div cx
+    mov [tk_ky + si], ax
+    add si, 2
+    cmp si, 4096
+    jb .e
     ret
 
 ; -----------------------------------------------------------------------------
@@ -306,73 +368,53 @@ tk_emit:
     mov cl, [si+1]                  ; the edges
     xor ch, ch
     mov si, [si+4]
+    cld
 .e:
+    lodsw                           ; AL/AH = the edge's two vertex indices
     push cx
-    mov al, [si]
-    xor ah, ah
-    shl ax, 1
-    mov [tk_na], ax
-    mov al, [si+1]
-    xor ah, ah
-    shl ax, 1
-    mov [tk_nb], ax
     push si
-    mov bx, [tk_na]
+    mov bl, al
+    xor bh, bh
+    shl bx, 1                       ; BX = a x 2
+    mov dl, ah
+    xor dh, dh
+    shl dx, 1                       ; DX = b x 2
+    mov di, dx
     mov cx, [tk_fv + bx]
-    mov bx, [tk_nb]
-    add cx, [tk_fv + bx]
-    or cx, cx
-    jz .skip                        ; both behind the near plane
+    add cx, [tk_fv + di]
+    jcxz .skip                      ; both behind the near plane
     cmp cx, 2
     je .both
     ; --- one end is behind: pull it up to the near plane ------------------
-    mov bx, [tk_na]
     cmp word [tk_fv + bx], 0
-    jne .aisfront
-    mov ax, [tk_na]                 ; make tk_na the one in FRONT
-    mov bx, [tk_nb]
+    jne .afront
+    xchg bx, dx                     ; make BX the one in FRONT
+.afront:
     mov [tk_na], bx
-    mov [tk_nb], ax
-.aisfront:
+    mov [tk_nb], dx
     call tk_nclip                   ; AX/BX = the clipped end, projected
-    mov [tk_ex2], ax
-    mov [tk_ey2], bx
+    mov cx, ax
+    mov dx, bx
     mov bx, [tk_na]
     mov ax, [tk_sxv + bx]
-    mov [tk_ex1], ax
-    mov ax, [tk_syv + bx]
-    mov [tk_ey1], ax
+    mov bx, [tk_syv + bx]
     jmp short .draw
 .both:
-    mov bx, [tk_na]
     mov ax, [tk_sxv + bx]
-    mov [tk_ex1], ax
-    mov ax, [tk_syv + bx]
-    mov [tk_ey1], ax
-    mov bx, [tk_nb]
-    mov ax, [tk_sxv + bx]
-    mov [tk_ex2], ax
-    mov ax, [tk_syv + bx]
-    mov [tk_ey2], ax
+    mov bx, [tk_syv + bx]
+    mov cx, [tk_sxv + di]
+    mov dx, [tk_syv + di]
 .draw:
-    mov ax, [tk_ex1]
-    mov bx, [tk_ey1]
-    mov cx, [tk_ex2]
-    mov dx, [tk_ey2]
     cmp bx, dx
     jne .slope
     call tk_hseg                    ; SPEC.md 5.6.1's deferral, ours: a flat
     jmp short .skip                 ; edge is a run and never a walk
 .slope:
-    call tk_seg
-.skip:
+    call tk_seg                     ; ...and both keep nothing (85.3.4), which
+.skip:                              ; is why SI and CX ride on the stack
     pop si
-    add si, 2
     pop cx
-    dec cx
-    jz .done
-    jmp .e
-.done:
+    loop .e
     ret
 
 ; -----------------------------------------------------------------------------
@@ -449,10 +491,9 @@ tk_ridgesetup:
 tk_ridge:
     mov al, TKI_HORIZ               ; the line the world stands on, and the
     call tk_setink                  ; ridge behind it, are different distances
-    xor ax, ax                      ; the horizon is the viewport's whole
-    mov cx, [tk_vw]                 ; width, so it is a RUN and never a walk
-    dec cx
-    mov bx, [tk_vcy]
+    mov ax, [tk_rx0]                ; the horizon is the viewport's whole
+    mov cx, [tk_rx1]                ; width, so it is a RUN and never a walk -
+    mov bx, [tk_vcy]                ; or the part of it asked for (85.3.8)
     call tk_hseg
     mov al, TKI_RIDGE
     call tk_setink
@@ -489,6 +530,10 @@ tk_ridge:
     push bx
     mov ax, [tk_ridgex + bx]
     mov cx, [tk_ridgex + bx + 2]
+    cmp cx, [tk_rx0]                ; a segment wholly outside the range asked
+    jl .sgn                         ; for is not drawn (85.3.8: a redraw inside
+    cmp ax, [tk_rx1]                ; another item's rectangle)
+    jg .sgn
     push cx
     mov bx, [tk_rpy + bx]
     pop cx
@@ -498,6 +543,7 @@ tk_ridge:
     mov dx, [tk_rpy + bx + 2]
     mov bx, si
     call tk_seg
+.sgn:
     pop bx
     add bx, 2
     pop cx

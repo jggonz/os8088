@@ -15,7 +15,7 @@
 ;  - **The decoder is a flat loop over an explicit cursor, not a recursion.**
 ;    An abbreviation (Standard 3.3) is itself a Z-string, and the obvious
 ;    implementation calls the decoder again. The worker's stack is 384 bytes
-;    total and shared with the tick, mouse and sound IRQs (docs/FROTZ-PLAN.md
+;    total and shared with the tick, mouse and sound IRQs (docs/plans/completed/FROTZ-PLAN.md
 ;    4), so this decodes out of a cursor held in bss - the word being consumed,
 ;    which Z-character of it is next, the address of the next word, and the
 ;    two alphabet registers - and an abbreviation SAVES that cursor into one
@@ -28,7 +28,7 @@
 ;  - **Only zmem.inc forms a word out of story bytes.** Z-machine words are
 ;    big-endian and the 8086 is not; the decoder reads through zm_gw/zm_gw16
 ;    and never touches ES, which belongs to the PC while the VM runs
-;    (docs/FROTZ-PLAN.md 3.1).
+;    (docs/plans/completed/FROTZ-PLAN.md 3.1).
 ;
 ;  - **A ZSCII character the 8x8 font cannot draw is TRANSLITERATED, not
 ;    dropped.** The kernel font is glyphs 32..126 and there is no second font
@@ -194,7 +194,7 @@ zt_decloop:
 ;
 ; Standard 3.2: bit 15 is set only on the last word, and the three Z-characters
 ; are bits 14-10, 9-5 and 4-0. zm_gw does the big-endian assembly - this file
-; never forms a word out of story bytes itself (docs/FROTZ-PLAN.md 3.1).
+; never forms a word out of story bytes itself (docs/plans/completed/FROTZ-PLAN.md 3.1).
 ; -----------------------------------------------------------------------------
 zt_fetch:
     push ax
@@ -514,7 +514,7 @@ zt_putc:
     push si
     push di
     push es                     ; ES IS THE PROGRAM COUNTER'S SEGMENT
-                                ; (docs/FROTZ-PLAN.md 3.1), and this is the one
+                                ; (docs/plans/completed/FROTZ-PLAN.md 3.1), and this is the one
                                 ; funnel from the VM into the window - so every
                                 ; drawing path below reaches ES sooner or later
                                 ; and putting it back HERE is what keeps that
@@ -533,7 +533,7 @@ zt_putc:
     cmp byte [zt_s2on], 0
     je .done
     call zi_script_putc         ; the transcript is a FILE, and a worker may
-                                ; not touch one (docs/FROTZ-PLAN.md 4) - zio.inc
+                                ; not touch one (docs/plans/completed/FROTZ-PLAN.md 4) - zio.inc
                                 ; buffers it and the UI task writes it
     jmp .done
 .mem:

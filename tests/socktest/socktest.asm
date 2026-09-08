@@ -2,7 +2,7 @@
 ; os8088 - tests/socktest/socktest.asm
 ;
 ; SOCKTEST: the gate for the SOCKET verbs (SPEC.md 62.11,
-; docs/NET-STACK-PLAN.md stage B). It fetches a page over the parallel cable
+; docs/plans/completed/NET-STACK-PLAN.md stage B). It fetches a page over the parallel cable
 ; and reports what came back - which is the first time anything in this tree
 ; has reached a TCP connection at all.
 ;

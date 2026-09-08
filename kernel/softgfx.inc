@@ -60,7 +60,7 @@
 ; happened to be. It was left behind at the last split of that file; this is
 ; the correction. A shared body inside a file that is about to gate its
 ; contents on "does this machine have a VGA" is the defect that gate would
-; otherwise ship (docs/MONO-RECLAIM-PLAN.md 1.1).
+; otherwise ship (docs/plans/MONO-RECLAIM-PLAN.md 1.1).
 ;
 ; It is HOT: PERFORMANCE.md Set 102 profiles gfx_rect_setup.x2ok at 7.3% of
 ; the whole machine in the screen saver, on a CGA. Nothing here may become a
@@ -253,7 +253,7 @@ sw_rect_pl:
                                  ; was first priced at - on a gray fill the
                                  ; file's own accounting puts at 5,305 cycles:
                                  ; 0.98%, once per fill and not per row.
-                                 ; docs/LAST-DROP-BYTES.md 7.6 refused +33% on
+                                 ; docs/plans/LAST-DROP-BYTES.md 7.6 refused +33% on
                                  ; this body; this is a thirtieth of that.
                                  ; sw_parity clobbers AL and flags, and AX is
                                  ; dead here (gfx_rect_setup spent it and
@@ -583,7 +583,7 @@ sw_col:
 ; 256-byte table answers it outright and the loop is a read, an xlat and a
 ; shift per two pixels. It costs the same whatever is in the row.
 ;
-; THERE IS NO HYBRID and docs/LAST-DROP.md 3 is why. The run path is cheaper
+; THERE IS NO HYBRID and docs/plans/LAST-DROP-PERF.md 3 is why. The run path is cheaper
 ; only below 1.84 runs a row (PERFORMANCE.md Set 43's two-term fit), nothing
 ; anyone waits on draws flat art through this - Paint's canvas, Solitaire's
 ; lattice card backs, ArtfulType's line of TEXT per keystroke - and keeping
@@ -853,7 +853,7 @@ sw_blit_row:
 ; 15.6 clocks. That gap is the WHOLE prize: removing every instruction byte
 ; for nothing would buy 7.7%, and the loop is execution-bound the moment four
 ; of them go. Two levers were costed against that and both are recorded in
-; docs/MONO-RECLAIM-PLAN.md 5.3:
+; docs/plans/MONO-RECLAIM-PLAN.md 5.3:
 ;
 ;   * the six `shl dl, 1` as three `shl dl, cl` with CL = 2 (the count moving
 ;     to DH, which is free here). Four bytes smaller and 11% SLOWER: an 8088

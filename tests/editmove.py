@@ -45,9 +45,10 @@ content.
 import sys, os, time, hashlib, argparse, subprocess, tempfile
 sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
+import os88fixture                                       # noqa: E402
 import os88marty, os88mouse, os88sym, os88geom, dispcp
 
-MC_SIZE, MEM_MAX = 10, 32
+MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 
 # WHAT TO DOUBLE-CLICK, BY NAME. It was a row INDEX per app and a comment
 # saying the listing is sorted (SPEC.md 19.4) - which is true and is exactly
@@ -164,6 +165,19 @@ def pkg_seg(m, S, title):
     return None, None
 
 
+def park(mo, m):
+    """Put the POINTER somewhere neither capture is looking.
+
+    The arrow is drawn into the framebuffer, so it is part of any picture
+    compared - and the two captures below are taken after different gestures,
+    so it is somewhere different in each. tests/sheetmove.py failed on exactly
+    that and the difference was six pixels wide. Bottom-left of the desktop is
+    clear of every window these rows open.
+    """
+    mo.to(5, 195)
+    os88marty.settle(m)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--app", required=True, choices=sorted(APPS))
@@ -191,8 +205,14 @@ def main():
     # The docstring's `make build/editmove360.img`, run rather than assumed -
     # a registered row cannot depend on a human having read it.
     img = cfg.get("img", "build/editmove360.img")
-    if not os.path.exists(img):
-        subprocess.check_call(["make", img])
+    # THE SAME `make`, AND IT DOES NOTHING once the runner has built the
+    # artefact: Row(wants=...) declares it and os88test's prebuild builds
+    # it before any row starts. That is what lets this row drop
+    # builds=True and share the emulator lane.
+    os88fixture.need(img)
+    # has
+        # already built the artefact (Row(wants=...) and os88test's prebuild).
+        # That is what lets this row drop builds=True and share the lane.
     with os88marty.launch("build/os8088-360.img",
                           apps=img,
                           machine=a.machine, boot=False) as m:
@@ -350,6 +370,7 @@ def main():
         if not bank:
             print("FAIL: no declared base word held a claim")
             return 1
+        park(mo, m)
         shot0 = m.vram("cga")
 
         # --- close heapfrag: the floor under the app opens up ---------------
@@ -494,11 +515,24 @@ def main():
         if pt is not None:
             mo.click(*pt)
         os88marty.settle(m)
+        park(mo, m)
         shot1 = m.vram("cga")
 
         def band(v):
+            """The window's content rectangle, ONE BYTE PER PIXEL.
+
+            m.vram() answers a row per scanline and a BYTE per pixel - the
+            colour index, not packed bits - so the slice is x directly. It
+            said `x // 8` for a year, which against a 640-wide frame compared
+            the leftmost (cx1-cx0)/8 PIXELS of each row instead of this
+            window: a strip of desktop that is identical in both captures
+            whatever the window does. The assertion below was therefore green
+            by construction. Found while writing tests/sheetmove.py, which
+            failed on it the other way round - the strip it happened to
+            compare had a window in one capture and desktop in the other.
+            """
             _, _, rows = v
-            return b"".join(bytes(rows[y][cx0 // 8:cx1 // 8])
+            return b"".join(bytes(rows[y][cx0:cx1])
                             for y in range(cy0, min(cy1, len(rows))))
 
         if a.app == "frotz":

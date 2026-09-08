@@ -196,6 +196,33 @@ at_type:
     mov ax, [at_caret]
     call at_gapto
     pop ax                          ; the char back - at_ins stores AL
+%ifndef NOATONE
+    ; SPEC.md 46.4.11: is this an APPEND? The caret at the end of its logical
+    ; line, with a character that cannot style. Greedy wrap is prefix-
+    ; determined, so nothing above the caret's line can move - and
+    ; at_apply_edit then repaints that one line instead of the paragraph.
+    ; A newline is excluded here because it changes the line COUNT, which is
+    ; a different arm of at_apply_edit entirely.
+    mov byte [at_apnd], 0
+    cmp al, AT_NL
+    je .noap
+    AT_SPECIAL .noap
+    push ax
+    push bx
+    mov bx, [at_caret]
+    call at_dlen                    ; AX = the document's length
+    cmp bx, ax
+    jae .apyes                      ; the caret is at the document's end
+    call at_getb                    ; AL = the byte the caret stands before
+    cmp al, AT_NL
+    jne .apno
+.apyes:
+    mov byte [at_apnd], 1
+.apno:
+    pop bx
+    pop ax
+.noap:
+%endif
     call at_ins
     jc .out
     mov ax, [at_caret]
@@ -209,6 +236,12 @@ at_type:
     pop ax
     call at_apply_edit
 .out:
+%ifndef NOATONE
+    mov byte [at_apnd], 0           ; SPEC.md 46.4.11: at_apply_edit clears it
+%endif                              ; on every path it runs, but a FAILED
+                                    ; at_ins never reaches it - and a 1 left
+                                    ; here would narrow the NEXT edit, which
+                                    ; is any key at all
     pop dx
     pop cx
     pop bx
@@ -330,21 +363,42 @@ at_apply_edit:
     mov cx, [at_nlines]             ; CX = the old count
     mov byte [at_rlfull], 0
     call at_relayout
-    call at_cline_span
     cmp byte [at_rlfull], 0
     jne .full
     cmp cx, [at_nlines]
     jne .below
-    ; same line count: the changed lines are the staged window, plus the
-    ; caret's paragraph (raw/styled state follows the caret)
+    ; same line count: the changed lines are the staged window, and that is
+    ; ALL of them (SPEC.md 46.2.1). It used to be widened to the caret's
+    ; paragraph as well, because that paragraph's raw/styled state followed
+    ; the caret; nothing follows the caret now. A span change cannot reach
+    ; past the window either - span state resets at every newline (46.2), and
+    ; at_relayout converges on an equal attr, so every visual line whose
+    ; styling the edit moved is inside it by construction.
     mov bx, [at_dfrom]
     mov dx, bx
     add dx, [at_rlk]
     dec dx
-    cmp dx, [at_cll1]
-    jae .rng
-    mov dx, [at_cll1]
-.rng:
+%ifndef NOATONE
+    cmp byte [at_apnd], 0           ; SPEC.md 46.4.11
+    je .range
+    mov cx, [at_rlk]                ; ...and EVERY staged line plain (46.4.8's
+.plchk:                             ; bit 3): a paragraph with no ` * ~ [ in
+    test byte [bx+at_lattr], 8      ; it can have no span opened or closed and
+    jz .notone                      ; no link COMPLETED by the appended
+    inc bx                          ; character - which ] ( ) could otherwise
+    loop .plchk                     ; do, and none of those is in AT_SPECIAL
+    mov ax, [at_caret]
+    call at_line_of                 ; BX = the caret's own visual line, which
+    cmp bx, [at_dfrom]              ; is NOT at_dfrom+at_rlk-1: at the
+    jb .notone                      ; document's end at_rlk can count a
+    cmp bx, dx                      ; trailing empty line, and narrowing to
+    ja .notone                      ; that draws no typed character at all
+    mov dx, bx
+    jmp short .range
+.notone:
+    mov bx, [at_dfrom]
+%endif
+.range:
     call at_redraw_range
     jmp short .see
 .below:
@@ -371,6 +425,9 @@ at_apply_edit:
     call at_draw_text
     call at_sbar
 .see:
+%ifndef NOATONE
+    mov byte [at_apnd], 0           ; SPEC.md 46.4.11: a ONE-SHOT, cleared on
+%endif                              ; the path all three arms above reach
     call at_seecaret
     call at_caret_on
     pop dx
@@ -420,27 +477,31 @@ at_redraw_below:
 .from:
     call at_line_y
     jc .out                         ; below the view: nothing shows
-    mov [at_rby], ax
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, [at_tx0]
-    push bx
-    mov bx, [at_rby]
-    mov cx, ax
-    add cx, [at_tw]
-    dec cx
-    mov dx, [at_ty1]
-    dec dx
-    call OSAPI_GFX_FILL
-    pop bx
+%ifdef NOATTAIL
+    call at_filltail                ; the pre-46.4.10 erase: from this line's
+%else                               ; y to the region's bottom, every pixel of
+    mov [at_tby], ax                ; it then drawn over again below
+%endif
 .draw:
     cmp bx, [at_nlines]
-    jae .out
+    jae .tail
     call at_line_y
-    jc .out
+    jc .tail
     call at_draw_line
+%ifndef NOATTAIL
+    mov ax, [at_dly]                ; SPEC.md 46.4.10: the first row nothing
+    add ax, [at_prh]                ; has drawn on, kept as the loop goes
+    mov [at_tby], ax
+%endif
     inc bx
     jmp short .draw
+.tail:
+%ifndef NOATTAIL
+    mov ax, [at_tby]
+    cmp ax, [at_ty1]
+    jae .out                        ; the text reached the bottom by itself
+    call at_filltail
+%endif
 .out:
     pop dx
     pop cx
@@ -465,12 +526,12 @@ at_nav:
     call at_delkey
     jmp .out
 .move:
-    mov cx, [at_cll0]               ; latch the pre-move state the repaint
-    mov [at_ocll0], cx              ; decision needs
-    mov cx, [at_cll1]
-    mov [at_ocll1], cx
-    mov cx, [at_selb]
-    mov [at_oselb], cx
+    mov cx, [at_sela]               ; latch the pre-move SELECTION and the
+    mov [at_osela], cx              ; caret's own line - between them, all a
+    mov cx, [at_selb]               ; move can change on the glass now
+    mov [at_oselb], cx              ; (SPEC.md 46.2.1)
+    mov cx, [at_caret]
+    mov [at_ocaret], cx
     mov si, [at_caret]              ; SI = the moving point
     cmp ah, 0x4B
     je .left
@@ -494,7 +555,7 @@ at_nav:
     jc .have
     or si, si
     jz .have
-    dec si
+    call at_lvis                    ; one VISIBLE cell, not one byte (46.2.1)
     jmp short .have
 .right:
     call at_collapse_hi
@@ -502,7 +563,7 @@ at_nav:
     call at_dlen
     cmp si, ax
     jae .have
-    inc si
+    call at_rvis
     jmp short .have
 .home:
     mov ax, si
@@ -562,6 +623,96 @@ at_nav:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_lvis / at_rvis - one VISIBLE cell left / right of SI (SPEC.md 46.2.1)
+; in:  SI = a logical position the caller has already bounds-checked
+; out: SI = where the caret lands; preserves every other register
+;
+; Writer mode hides a span's delimiters and they carry NO WIDTH, so stepping
+; one byte over `**bold**` leaves the caret standing still twice before it
+; moves - three presses to cross one cell, and the same coming back. These
+; step one visible cell instead: skip whatever hidden run is in the way, then
+; consume one visible character. In Markdown mode nothing is hidden and both
+; are exactly SI -/+ 1, which is why the test comes first and costs a parse
+; only where it can change the answer.
+;
+; Running out of the slice STOPS at the slice end rather than stepping past
+; it: that is the end-of-line position, and a caller needs it to type after a
+; trailing span. The plain step from there crosses the newline next press.
+; -----------------------------------------------------------------------------
+at_rvis:
+    cmp byte [at_writer], 0
+    je .plain
+    push ax
+    push bx
+    push cx
+    mov ax, si
+    call at_line_of                 ; BX = SI's visual line...
+    call at_parse                   ; ...and its hidden set
+    mov ax, si
+    sub ax, [at_pstart]             ; AX = slice index
+    mov cx, [at_pcnt]
+    cmp ax, cx
+    jae .pop                        ; already at the slice end
+.sk:
+    mov bx, ax
+    cmp byte [bx+at_vis], 0
+    je .cell
+    inc ax
+    cmp ax, cx
+    jb .sk
+    jmp short .set                  ; the run ran into the slice end
+.cell:
+    inc ax
+.set:
+    add ax, [at_pstart]
+    mov si, ax
+    pop cx
+    pop bx
+    pop ax
+    ret
+.pop:
+    pop cx
+    pop bx
+    pop ax
+.plain:
+    inc si
+    ret
+
+at_lvis:
+    cmp byte [at_writer], 0
+    je .plain
+    push ax
+    push bx
+    mov ax, si
+    call at_line_of
+    call at_parse
+    mov ax, si
+    sub ax, [at_pstart]
+    jz .pop                         ; already at the slice start
+.sk:
+    mov bx, ax
+    dec bx
+    cmp byte [bx+at_vis], 0         ; the character BEFORE the caret
+    je .cell
+    dec ax
+    jnz .sk
+    jmp short .set                  ; the run ran into the slice start
+.cell:
+    dec ax
+.set:
+    add ax, [at_pstart]
+    mov si, ax
+    pop bx
+    pop ax
+    ret
+.pop:
+    pop bx
+    pop ax
+.plain:
+    dec si
     ret
 
 ; a plain (unshifted) move with a live selection collapses to its edge
@@ -723,10 +874,54 @@ at_vislines:
     ret
 
 ; -----------------------------------------------------------------------------
+; at_nav_fold - widen the line range BX..DX to cover logical CX..AX
+; in:  CX, AX = two logical positions in either order; BX..DX = the range so
+;      far, BX > DX meaning empty
+; out: BX..DX widened; AX and CX clobbered, everything else preserved
+; -----------------------------------------------------------------------------
+at_nav_fold:
+    cmp cx, ax
+    jbe .ord
+    xchg cx, ax
+.ord:
+    push ax
+    mov ax, cx
+    push bx
+    call at_line_of
+    mov cx, bx
+    pop bx
+    cmp cx, bx
+    jae .hi
+    mov bx, cx
+.hi:
+    pop ax
+    push bx
+    call at_line_of
+    mov cx, bx
+    pop bx
+    cmp cx, dx
+    jbe .out
+    mov dx, cx
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; at_nav_paint - repaint after a caret/selection move
-; Redraws only what changed: the caret's old and new paragraphs (whose
-; raw/styled state follows the caret in Writer mode) and the selection
-; delta (as line redraws, which fold the XOR back in exactly).
+;
+; THE SELECTION IS ALL A MOVE CAN CHANGE NOW (SPEC.md 46.2.1). This used to
+; union the caret's old and new paragraphs into the range, because their
+; raw/styled state followed the caret; nothing follows the caret any more, so
+; an ordinary arrow press with no selection redraws NO LINES AT ALL where it
+; used to redraw two paragraphs.
+;
+; Two cases and they are not the same range. While a selection stays live the
+; anchor does not move, so the DELTA [old moving end, new one) is the whole
+; change and a shift-arrow costs one or two lines however long the selection
+; is. When it COLLAPSES - any plain move, any plain click - the whole old
+; extent has to come back unXORed, and the delta cannot say so: a selection
+; made backwards collapses to its own low end, which leaves the delta empty
+; with the XOR still on the glass. That one was covered by the paragraph union
+; only as far as the paragraph reached.
 ; -----------------------------------------------------------------------------
 at_nav_paint:
     push ax
@@ -734,62 +929,36 @@ at_nav_paint:
     push cx
     push dx
     call at_caret_off
-    call at_cline_span
-    mov bx, [at_cll0]               ; BX..DX = the union range
-    mov dx, [at_cll1]
-    mov ax, [at_ocll0]
-    cmp ax, bx
-    jae .lo
-    mov bx, ax
-.lo:
-    mov ax, [at_ocll1]
-    cmp ax, dx
-    jbe .hi
-    mov dx, ax
-.hi:
-    ; fold in the selection delta's lines
-    mov ax, [at_oselb]
-    cmp ax, [at_selb]
-    je .nodelta
-    mov cx, ax
+    mov bx, 0FFFFh                  ; BX..DX = the line range, empty while
+    xor dx, dx                      ; BX > DX
+    mov cx, [at_oselb]
     mov ax, [at_selb]
     cmp cx, ax
-    jbe .ord
-    xchg cx, ax
-.ord:
-    mov [at_nvlo], cx
-    mov [at_nvhi], ax
-    mov ax, [at_nvlo]
-    push bx
-    call at_line_of
-    mov cx, bx
-    pop bx
-    cmp cx, bx
-    jae .dl
-    mov bx, cx
-.dl:
-    mov ax, [at_nvhi]
-    push bx
-    call at_line_of
-    mov cx, bx
-    pop bx
-    cmp cx, dx
-    jbe .nodelta
-    mov dx, cx
+    je .nodelta
+    call at_nav_fold                ; the moving end's delta
 .nodelta:
-    ; anything to redraw at all?
-    mov ax, [at_oselb]
+    mov ax, [at_sela]
     cmp ax, [at_selb]
-    jne .lines
+    jne .draw                       ; still a selection: the anchor held
+    mov cx, [at_osela]
+    mov ax, [at_oselb]
+    cmp cx, ax
+    je .draw                        ; ...and there was none to erase
+    call at_nav_fold                ; a collapse: the WHOLE old extent
+.draw:
     cmp byte [at_writer], 0
-    je .skip                        ; markdown, no selection change: caret
-    mov ax, [at_cll0]               ; writer: only if the paragraph moved
-    cmp ax, [at_ocll0]
-    jne .lines
-    mov ax, [at_cll1]
-    cmp ax, [at_ocll1]
-    je .skip
-.lines:
+    je .rng                         ; markdown renders nothing off the caret
+    mov cx, [at_ocaret]
+    cmp cx, [at_caret]
+    je .rng
+    mov ax, cx                      ; the caret's OLD line and its NEW one, one
+    call at_nav_fold                ; each and never the span between: a LINK on
+    mov cx, [at_caret]              ; either shows its syntax while the caret
+    mov ax, cx                      ; stands there (SPEC.md 46.2.1), and a line
+    call at_nav_fold                ; without one draws the same either way
+.rng:
+    cmp bx, dx
+    ja .skip
     call at_redraw_range
 .skip:
     call at_seecaret
@@ -876,6 +1045,12 @@ at_click_text:
     mov byte [at_typrun], 0
     mov byte [at_cphase], 0
     call at_shiftctl
+    mov ax, [at_sela]               ; the PRE-click selection, banked before
+    mov [at_osela], ax              ; the press collapses it - at_nav_paint is
+    mov ax, [at_selb]               ; what takes its XOR back off the glass
+    mov [at_oselb], ax
+    mov ax, [at_caret]
+    mov [at_ocaret], ax
     call at_xy2log                  ; AX = the pressed position
     cmp byte [at_shift], 0
     je .plain
@@ -887,7 +1062,7 @@ at_click_text:
     mov [at_sela], ax
     mov [at_selb], ax
 .painted:
-    call at_nav_paint_click
+    call at_nav_paint               ; against the banked pre-click selection
     mov byte [at_drag], 1
 .pass:
     call OSAPI_GFX_UNLOCK
@@ -916,15 +1091,17 @@ at_click_text:
     pop ax
     ret
 
-; the click path's repaint: at_nav_paint with "old" = the settled state
+; the drag's release: the loop XORed every delta itself as the mouse moved, so
+; "old" IS the settled state and at_nav_paint has no lines left to draw - it
+; runs for at_seecaret and the caret, which the drag turned off
 at_nav_paint_click:
     push ax
-    mov ax, [at_cll0]
-    mov [at_ocll0], ax
-    mov ax, [at_cll1]
-    mov [at_ocll1], ax
+    mov ax, [at_sela]
+    mov [at_osela], ax
     mov ax, [at_selb]
-    mov [at_oselb], ax              ; no delta: the ranges alone decide
+    mov [at_oselb], ax
+    mov ax, [at_caret]
+    mov [at_ocaret], ax
     call at_nav_paint
     pop ax
     ret
@@ -1325,7 +1502,6 @@ at_selall:
     mov [at_selb], ax
     mov [at_caret], ax
     call at_caret_off
-    call at_cline_span
     call at_draw_text
     pop ax
     ret
@@ -1671,7 +1847,6 @@ at_snap_take:
     mov byte [at_dirty], 1
     mov byte [at_typrun], 0
     call at_layout
-    call at_cline_span
     call at_maxtop
     mov bx, ax
     mov ax, [at_top]

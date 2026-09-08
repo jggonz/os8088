@@ -497,7 +497,6 @@ at_cmd_none:
     mov [at_selb], ax
     ; scattered edits: relayout whole, repaint whole - None is rare
     call at_layout
-    call at_cline_span
     mov byte [at_dirty], 1
     call at_maxtop
     mov bx, ax
@@ -591,7 +590,6 @@ at_refit:
     push ax
     push bx
     call at_layout
-    call at_cline_span
     call at_maxtop
     mov bx, ax
     mov ax, [at_top]

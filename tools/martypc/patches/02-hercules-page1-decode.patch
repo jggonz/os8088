@@ -22,7 +22,7 @@ index 3027179c..f441eaea 100644
 -                    read_only: false,
 -                    priority: 0,
 -                });
-+                // --- os8088: PAGE 1 IS NOT DECODED (docs/DUAL-DISPLAY-PLAN.md) ---
++                // --- os8088: PAGE 1 IS NOT DECODED (docs/plans/completed/DUAL-DISPLAY-PLAN.md) ---
 +                //
 +                // Upstream also maps 0xB8000 here, unconditionally, because an
 +                // HGC has 64KB in two 32KB pages and page 1 lives there. But a

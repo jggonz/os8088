@@ -39,6 +39,11 @@ actually has:
   mou_ptr     1         - so the keyboard mouse stands down (SPEC.md 9.6.6)
   mouse_x/y   EXACTLY the requested pixel
 
+and finally every visible menu-bar title is pressed in turn. `menu_cell` must
+name the cell whose live hit range contains the pointer. This is deliberately
+part of the PS/2 row: the reported 86Box failure has the queued press one
+position behind the pointer, while menu tracking itself uses live coordinates.
+
 tools/mouse.py pins against the kernel's own edge clamp and walks back by
 exact deltas, so landing on the pixel is a statement about the sign handling
 and SPEC.md 9.9.3's Y inversion - "positive is up" - which nothing else here
@@ -61,6 +66,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
+import os88fixture                                       # noqa: E402
 import os88sym                                              # noqa: E402
 import os88qemu                                              # noqa: E402
 
@@ -72,6 +78,8 @@ PIDFILE = os.path.join(ROOT, "build", "ps2.pid")
 KBHEAD = 0x41A
 
 TARGET_X, TARGET_Y = 200, 150
+MB_ENTSZ = 12
+MB_XL, MB_XR = 6, 8
 
 
 def kill_stale():
@@ -96,8 +104,12 @@ TARGETS = ["build/os8088.img", "build/apps.img"]
 
 
 def build():
-    subprocess.run(["make"] + TARGETS, cwd=ROOT, check=True,
-                   stdout=subprocess.DEVNULL)
+    # DECLARED, NOT BUILT HERE. These are the SHIPPED images, so a `make` for
+    # them in the shared tree is the one write that can reach every other row
+    # in a run. tests/suite.py declares them as this row's `wants=`, the
+    # runner builds them before anything starts, and this call then does
+    # nothing at all - which is what lets the row drop builds=True.
+    os88fixture.need(*TARGETS)
 
 
 def launch():
@@ -180,6 +192,28 @@ def main():
                          "inversion, not a rounding" % (gx, gy, TARGET_X,
                                                         TARGET_Y))
 
+        # --- each bar title opens from the live PS/2 pointer coordinate -----
+        nbar = word(q, "menu_nbar")
+        for cell in range(nbar):
+            ent = q.read(os88sym.linear("menu_bar") + cell * MB_ENTSZ,
+                         MB_ENTSZ)
+            xl = int.from_bytes(ent[MB_XL:MB_XL + 2], "little")
+            xr = int.from_bytes(ent[MB_XR:MB_XR + 2], "little")
+            x = (xl + xr) // 2
+            subprocess.run([sys.executable, "tools/mouse.py", SOCK, "down",
+                            str(x), "8"], cwd=ROOT, check=True,
+                           stdout=subprocess.DEVNULL, timeout=180)
+            time.sleep(0.25)
+            got = byte(q, "menu_cell")
+            dropped = byte(q, "menu_dropd")
+            if got != cell or dropped != 1:
+                fails.append("bar cell %d at x=%d opened cell %d, drop=%d"
+                             % (cell, x, got, dropped))
+            subprocess.run([sys.executable, "tools/mouse.py", SOCK, "up"],
+                           cwd=ROOT, check=True, stdout=subprocess.DEVNULL,
+                           timeout=30)
+            time.sleep(0.25)
+
         # --- ...and the keyboard, which shares the one output buffer --------
         before = q.read(KBHEAD, 4)
         tail0 = before[2] | (before[3] << 8)
@@ -192,6 +226,19 @@ def main():
             fails.append("BIOS keyboard tail %04X -> %04X, want +12 for six "
                          "keys: a byte was taken from int 09h by the mouse "
                          "path (SPEC.md 9.9.1)" % (tail0, tail1))
+        else:
+            # ...AND WHICH CHARACTERS (SPEC.md 9.9.7). Counting entries is not
+            # enough and the field proved it: the probe left an AT 8042 in PC
+            # MODE, which stops it TRANSLATING set 2 to set 1, so the BIOS
+            # enqueued a full six keys and every one of them was the wrong
+            # letter - `f` typed `\`. The tail moves by 12 either way.
+            buf = q.read(0x400 + 0x1E, 0x20)        # the BDA's 16-entry ring
+            got = "".join(chr(buf[((tail0 - 0x1E) + 2 * i) % 0x20])
+                          for i in range(6))
+            if got != "abcdef":
+                fails.append("the BIOS queued %r for 'abcdef': the 8042 is not "
+                             "TRANSLATING, which is command-byte bit 5 left "
+                             "set on an AT controller (SPEC.md 9.9.7)" % got)
 
         q.hmp("quit")
     finally:
@@ -202,7 +249,8 @@ def main():
             print("ps2mouse: FAIL " + f)
         return 1
     print("ps2mouse: ok - p2st 9, port 04, line FF, pointer exact on %d,%d, "
-          "keyboard intact" % (TARGET_X, TARGET_Y))
+          "%d bar cells exact, keyboard intact" % (TARGET_X, TARGET_Y,
+                                                     nbar))
     return 0
 
 

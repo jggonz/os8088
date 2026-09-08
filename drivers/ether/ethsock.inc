@@ -6,7 +6,7 @@
 ; NETV_OPEN..NETV_ACCEPT over tcp.inc, cut out of ether.asm whole so that the
 ; DOS side of the parallel cable can serve the same verbs with the same code
 ; (drivers/net/os88net.asm, SPEC.md 62.11.1). Two implementations of a socket
-; API is exactly the shape docs/NET-PLAN.md warned about at the replayer -
+; API is exactly the shape docs/plans/completed/NET-PLAN.md warned about at the replayer -
 ; a bug fixed in one is not fixed in the other - and this file is the answer.
 ;
 ; It needs, from whichever program includes it: the state in ethstate.inc,
@@ -21,7 +21,7 @@
 ; advance the stack is a package asking the driver something.
 ;
 ; A driver-side WORKER doing it instead was built, measured on the 5150 and
-; REMOVED - SPEC.md 72.19 is the record and docs/FTP-PERF.md 6.1 the numbers.
+; REMOVED - SPEC.md 72.19 is the record and docs/plans/completed/FTP-PERF.md 6.1 the numbers.
 
 ; --- NETV_OPEN ---------------------------------------------------------------
 ; in ES:SI = a NUL host, CX = the port; out AX = a handle
@@ -410,7 +410,7 @@ eth_v_abort:
 ; disagree about. An ADDRESS is not: both ends answer with the IP of the
 ; machine the stack is running on, and over the cable that machine is the DOS
 ; box - which is the true answer there, because an inbound connection arrives
-; there and is forwarded (docs/NET-STACK-PLAN.md 1.5). One body, so the two
+; there and is forwarded (docs/plans/completed/NET-STACK-PLAN.md 1.5). One body, so the two
 ; transports cannot come to differ about it.
 ;
 ; **The zero test is not a formality.** `eth_ip` is four zeroes until DHCP

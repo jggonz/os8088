@@ -159,7 +159,7 @@ THE REPORT
 ----------
 Every function's frame size, from its `sub sp, N`, because the budget is not
 generous and is not visible from the C.  A worker task gets a **384-byte**
-stack (kernel/sched.inc, SCH_STACK) and the UI task has of the order of 700
+stack (kernel/sched.inc, SCH_STACK) and the UI task has of the order of 266
 bytes of headroom, so a single 128-byte C automatic is most of a worker's
 stack and nothing says so at the call site.  `--max-frame` (default 96) fails
 the build on one; `--quiet` prints only the offenders.

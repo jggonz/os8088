@@ -3,7 +3,7 @@
 ;
 ; Serves this machine's FILES over a LapLink cable, so an os8088 machine with
 ; NET.DRV loaded browses them as an ordinary drive. Stage 2 of
-; docs/NET-PLAN.md; NET.DRV is the other end.
+; docs/plans/completed/NET-PLAN.md; NET.DRV is the other end.
 ;
 ;   OS88NET [folder] [/W] [/P:378] [/RO] [/I:image]
 ;

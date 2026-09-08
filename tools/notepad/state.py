@@ -7,7 +7,7 @@
 # map hangs off one number, and that number is the size of the binary the
 # guest is actually running.
 #
-# WHICH IS THE TRAP (docs/NOTEPAD-NOTES.md 6.3). Point this at a machine
+# WHICH IS THE TRAP (docs/plans/completed/NOTEPAD-NOTES.md 6.3). Point this at a machine
 # running a different build - the shipped NOTEPAD.O88 against npbench's, which
 # differ by a kilobyte - and every field reads plausible garbage rather than
 # erroring. `check()` is the guard and it REFUSES rather than warning: confirm
@@ -54,7 +54,7 @@ def offsets(bin_path, asm=ASM):
     # start is an EXPRESSION, `508 + NP_MAXROWS*2`. Matching only its leading
     # digits put every NPVAR-declared field 120 bytes out, which read as the
     # row index holding impossible values and sent a whole diagnosis at the
-    # code instead of at this line (docs/NOTEPAD-NOTES.md 6.3, in the probe).
+    # code instead of at this line (docs/plans/completed/NOTEPAD-NOTES.md 6.3, in the probe).
     npb = None
     for line in src.splitlines():
         m = re.match(r"^\s*%assign\s+NPB\s+([^;\n]+)", line)
@@ -110,7 +110,7 @@ class State:
                 "notepad/lab: REFUSING - np_len reads %d, expected %d. The "
                 "offsets come from %s; if that is not the binary the guest is "
                 "running, every field here is garbage "
-                "(docs/NOTEPAD-NOTES.md 6.3)." % (got, want_len, self.bin))
+                "(docs/plans/completed/NOTEPAD-NOTES.md 6.3)." % (got, want_len, self.bin))
         return got
 
     def dump(self):

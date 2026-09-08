@@ -120,6 +120,7 @@ import ethernet as eth                                 # noqa: E402
 import os88sym                                         # noqa: E402
 import os88layout                                           # noqa: E402
 import os88qemu                                              # noqa: E402
+import os88build                                       # noqa: E402
 
 S = os88sym.linear
 
@@ -142,17 +143,10 @@ def say(*a):
 # dispcp.scroll_to calls `m.key("ArrowDown")`, which is MartyPC's spelling -
 # every other caller of it is a MartyPC gate (tests/brtest.py and friends) and
 # os88marty.Marty has the method. This is the same contract over QMP, which is
-# the whole of what a QEMU-hosted gate is missing to reuse that scroller.
-QKEYS = {"ArrowDown": "down", "ArrowUp": "up", "Home": "home", "End": "end",
-         "PageDown": "pgdn", "PageUp": "pgup", "Tab": "tab", "Enter": "ret"}
-
-
-class Qemu(eth.Qemu):
-    def key(self, name):
-        if name not in QKEYS:
-            raise KeyError("no QMP sendkey name for %r" % name)
-        self.hmp("sendkey " + QKEYS[name])
-        time.sleep(0.05)
+# the whole of what a QEMU-hosted gate is missing to reuse that scroller - and
+# it is on eth.Qemu now, where ethernet.py's own dispcp.open_named call needs
+# it too. This alias is what stops the rest of this file having to change.
+Qemu = eth.Qemu
 
 
 def main():
@@ -284,7 +278,7 @@ def stack_water(m):
     say("")
     stkwater.deepest_seen(m.read, os88sym.linear("khb_deep", stkwater.DEF),
                           drv=eth.ether_syms(),
-                          dimg=open("build/ether.bin", "rb").read(),
+                          dimg=open(os88build.at("build/ether.bin"), "rb").read(),
                           pseg=eth.u16(row))
     say("")
     at = sum(sizes[:slot - 1])                     # the slice's OWN offset and
@@ -296,7 +290,7 @@ def stack_water(m):
                       # words being annotated are near return addresses off a
                       # guest stack (SPEC.md 2.9, tools/os88layout.py)
                       kimg=os88layout.kernel_text(),
-                      dimg=open("build/ether.bin", "rb").read())
+                      dimg=open(os88build.at("build/ether.bin"), "rb").read())
 
 
 def wait_dhcp(m):
@@ -380,7 +374,21 @@ def wait_win(m, secs):
 # FD_W is the identifier rather than "the newest slot": win_list answers in
 # SLOT order and a slot is reused, so the highest index is not reliably the
 # window just opened. A width is a fact about which window this is.
+#
+# **BUT THE RECORD DOES NOT HOLD THE WIDTH THE PACKAGE ASKED FOR.** SPEC.md
+# 39.16.3.4 snaps a window's CONTENT width up to a multiple of 8 and W_W is
+# the OUTER frame - content plus the two 1px borders - so ftpd's 400 is 402 in
+# `wm_wins`. Matching on 400 found nothing, `ftp_win` raised, `launch` read
+# that as four failed double-clicks and reported `the package failed to load`
+# about a package that had opened its window every time. The whole gate has
+# been unrunnable since that snap shipped; the failure names the loader, which
+# is why nobody looked at the width.
+#
+# The snap is computed here rather than hard-coding 402, so `make NOSIZESNAP=1`
+# is matched too - and so the next window this file has to find needs no second
+# discovery.
 FD_W, FD_H = 400, 176
+FD_W_SNAP = (((FD_W - 2) + 7) & ~7) + 2
 FD_PAD, FD_BTNW, FD_BTNH = 4, 72, 14
 TITLE_H = 18
 
@@ -391,13 +399,13 @@ def ftp_win(m):
         raise RuntimeError("no windows at all after launching FTPD.O88")
     for i in reversed(slots):
         x, y, w, h = dispcp.win_rect(m, S, i)
-        if w == FD_W:
+        if w in (FD_W, FD_W_SNAP):
             return x, y
     x, y, w, h = dispcp.win_rect(m, S, slots[-1])
-    raise RuntimeError("no %dpx-wide window after launching FTPD.O88 - the "
+    raise RuntimeError("no %d/%dpx-wide window after launching FTPD.O88 - the "
                        "newest is %dx%d at (%d,%d), which is the Disk window "
                        "still, so the package never opened one"
-                       % (FD_W, w, h, x, y))
+                       % (FD_W, FD_W_SNAP, w, h, x, y))
 
 
 def start_btn(fx, fy):
@@ -474,11 +482,11 @@ def read_page(m):
     """Which face the window has up, out of the package's own bss."""
     for i in reversed(dispcp.win_list(m, S)):
         x, y, w, h = dispcp.win_rect(m, S, i)
-        if w != FD_W:
-            continue
+        if w not in (FD_W, FD_W_SNAP):
+            continue                    # ...the SNAP too - see FD_W_SNAP
         r = m.read(S("wm_wins") + i * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
         seg = dispcp._u16(r, 22)
-        o88 = open("build/ftpd.o88", "rb").read()
+        o88 = open(os88build.at("build/ftpd.o88"), "rb").read()
         img = o88[8] | (o88[9] << 8)
         return PAGES.get(m.readseg(seg, img + FD_PAGE_OFF, 1)[0], "?")
     raise RuntimeError("the FTP window is gone")
@@ -503,11 +511,11 @@ def press_slide_release(mo, x0, y0, x1, y1):
 def read_state(m):
     for i in reversed(dispcp.win_list(m, S)):
         x, y, w, h = dispcp.win_rect(m, S, i)
-        if w != FD_W:
-            continue
+        if w not in (FD_W, FD_W_SNAP):
+            continue                    # ...the SNAP too, see FD_W_SNAP
         r = m.read(S("wm_wins") + i * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
         seg = dispcp._u16(r, 22)
-        o88 = open("build/ftpd.o88", "rb").read()
+        o88 = open(os88build.at("build/ftpd.o88"), "rb").read()
         img = o88[8] | (o88[9] << 8)
         v = m.readseg(seg, img + FD_ST_OFF, 1)[0]
         return STATES.get(v, "?%d" % v)
@@ -619,6 +627,37 @@ def run_gate(m, mo, fails):
                      "differing in the overlap" % (len(got), len(BINDAT), n))
     else:
         say("RETR FTPBIN.DAT: %d bytes, every byte value, exact" % len(got))
+
+    # --- 3a: a COMPRESSED file agrees with itself about its size -----------
+    # SPEC.md 20.14.3 gives a compressed file TWO sizes - what it occupies and
+    # what it expands to - and hands them to different cells: OSAPI_FILE_FIND
+    # answers the unpacked one, OSAPI_FILE_READ_AT delivers the packed bytes.
+    # LIST and SIZE are built from the first and RETR from the second, so a
+    # client was told 5,400 and handed 83.
+    #
+    # RFC 3659 settles which of the two is right rather than this file doing
+    # it: SIZE is "the size of the file in the transfer mode", i.e. what RETR
+    # will deliver. The assertion is therefore that the three AGREE, which is
+    # true under either fix and false under the split.
+    czlist = [r for r in rows if r.split() and r.split()[-1] == "FTPCZ.TXT"]
+    if not czlist:
+        fails.append("LIST does not mention FTPCZ.TXT - the fixture is not on "
+                     "the disk, so this assertion tested nothing")
+    else:
+        parts = czlist[0].split()
+        lsz = int(parts[4]) if parts[4].isdigit() else -1
+        ssz = f.size("FTPCZ.TXT")
+        got = retr(f, "FTPCZ.TXT")
+        say("FTPCZ.TXT: LIST says %d, SIZE says %d, RETR delivered %d"
+            % (lsz, ssz, len(got)))
+        if not (lsz == ssz == len(got)):
+            fails.append("FTPCZ.TXT is COMPRESSED on the disk and the server "
+                         "does not agree with itself about how big it is: "
+                         "LIST %d, SIZE %d, RETR %d bytes. A client sizes its "
+                         "progress bar and its resume from the first two and "
+                         "receives the third (SPEC.md 20.14.3, RFC 3659's "
+                         "SIZE is what the transfer will deliver)"
+                         % (lsz, ssz, len(got)))
 
     # --- 4: STOR round-trips, and the HOST reads the image ------------------
     # BIGGER THAN THE STAGE ON PURPOSE: the whole design is a stage-and-commit

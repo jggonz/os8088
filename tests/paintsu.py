@@ -51,7 +51,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
-from blitpair import gif_pixels                              # noqa: E402
+# EITHER PRIMITIVE (SPEC.md 5.4.2.5, 42.23): a canvas reaches the screen
+# through gfx_blit4 on a colour adapter and through gfx_blit1 on a one-bit
+# one, since Paint's canvas matches the screen. This row waited on the first
+# alone, and its own message asked the right question - "is this a 1bpp
+# machine?" - about a machine where the answer had become yes. Both take the
+# same arguments in the same registers, so arming both changes nothing else.
+# BLITS is blitpair's, beside gif_pixels: one definition, two rows.
+from blitpair import gif_pixels, BLITS                        # noqa: E402
 
 S = os88sym.linear
 BAND_KB = 8                 # the band cache measures 3 KB, the whole content 9
@@ -107,7 +114,7 @@ def main():
                                                               "OS8088.GIF")))
         mo.to(rx, ry)
         os88marty.settle(m)
-        m.bp_exec("gfx_blit4")
+        m.bp_exec(*BLITS)
         mo.dblclick(rx, ry)
         geom = None
         for _ in range(60):
@@ -117,11 +124,11 @@ def main():
             if r["cx"] >= iw:
                 geom = (r["ax"], r["bx"])
                 break
-            m.bp_exec("gfx_blit4")
+            m.bp_exec(*BLITS)
             m.run()
         if geom is None:
-            sys.exit("paintsu: the canvas never blitted through gfx_blit4 - "
-                     "is this a 1bpp machine?")
+            sys.exit("paintsu: the canvas never blitted through %s"
+                     % " or ".join(BLITS))
         ox, oy = geom
         m.bp_exec()
         m.run()
@@ -168,7 +175,7 @@ def main():
         time.sleep(6)
 
         # --- UNCOVER: is the canvas redrawn?
-        m.bp_exec("gfx_blit4")
+        m.bp_exec(*BLITS)
         done = []
         threading.Thread(
             target=lambda: (time.sleep(1.0),
@@ -181,7 +188,7 @@ def main():
             if r["cx"] >= iw // 2:
                 wide = (r["ax"], r["bx"], r["cx"], r["dx"])
                 break
-            m.bp_exec("gfx_blit4")
+            m.bp_exec(*BLITS)
             m.run()
         m.bp_exec()
         m.run()
@@ -194,7 +201,7 @@ def main():
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)
 
-    print("   uncover: a canvas-sized gfx_blit4 %s"
+    print("   uncover: a canvas-sized blit %s"
           % ("never ran - the cache put it back" if wide is None
              else "RAN, x=%d y=%d w=%d h=%d" % wide))
     bad = _differs(fb, fw, ox, oy, iw, ih, px)

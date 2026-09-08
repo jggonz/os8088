@@ -4,7 +4,7 @@
 ; The text window for v1-v5, v7 and v8: geometry, word wrap, the scrollback
 ; ring, the [MORE] prompt, the upper window, the v1-3 status line, styles and
 ; colour. v6 replaces the whole model with pixel-addressed windows and is
-; zwin6.inc; the two never run together (docs/FROTZ-PLAN.md 5).
+; zwin6.inc; the two never run together (docs/plans/completed/FROTZ-PLAN.md 5).
 ;
 ; THE DECISION THIS FILE IS BUILT AROUND: every cell it paints is painted by
 ; OSAPI_FONT_RUN and by nothing else. Not one gfx_fill touches a cell.
@@ -44,7 +44,7 @@
 ; worker may not hold the lock across a yield (SPEC.md 20.6) and that wait is
 ; unbounded. It is called out again at zw_morewait.
 ;
-; ES. The worker runs with ES = the story segment (docs/FROTZ-PLAN.md 3.1),
+; ES. The worker runs with ES = the story segment (docs/plans/completed/FROTZ-PLAN.md 3.1),
 ; so every routine below that touches the scrollback claim or does a string
 ; instruction saves and restores ES itself. Callers never have to think
 ; about it.

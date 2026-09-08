@@ -4,7 +4,7 @@
     python3 tools/mkmod.py OUT.mod
 
 Emits a 5,596-byte 31-instrument ProTracker module (title "OS8088 TEST",
-magic M.K.) for the Tracker package's scripted tests (docs/TRACKER-PLAN.md):
+magic M.K.) for the Tracker package's scripted tests (docs/history/TRACKER-PLAN.md):
 4 synthesized samples (square lead, triangle bass, one-shot LCG-noise hat,
 sine pad -- 416 sample bytes total, all finetune 0), 4 patterns, order
 table [0,1,2,3], restart 127 (which exercises the restart >= songLength ->

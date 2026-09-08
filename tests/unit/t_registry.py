@@ -42,8 +42,11 @@ BUILDS_WITHOUT_MAKE = {
                  "that runs `make`, and the Makefile's VIDSTAMP rule removes "
                  "build/kernel.bin whenever the knob set differs, which would "
                  "delete the very kernel the row is about to test. It builds "
-                 "build/fdthumb.img with nasm and os88pkg.py directly instead, "
-                 "which is still writing build/ under anything beside it",
+                 "fdthumb.img with nasm and os88pkg.py directly instead, "
+                 "which is still writing the tree the run is reading - "
+                 "through os88build.at, so it writes where it reads "
+                 "(docs/plans/SOAK-PARALLEL.md 14.2), but into a shared directory "
+                 "either way",
 }
 
 # Not registered, and why. Keep the reason specific and true.
@@ -51,16 +54,48 @@ UNREGISTERED = {
     # --- library and support code, not tests ---
     "dispcells.py": "the CELLS-not-calls counter two gates share (SPEC.md "
                     "11.3.3), not a test",
+    "dispcp.py": "the Control Panel's Display page driven from a script - "
+                 "the shared one, imported by 104 files in this directory and "
+                 "the most-reused thing in it. It was REGISTERED as a soak "
+                 "row until it was noticed reporting `ok` in 0.1s against 60 "
+                 "declared: 22 function definitions and no call, so the row "
+                 "booted nothing, asserted nothing and could never fail. A "
+                 "green row that tests nothing is worse than B4's three rows "
+                 "that failed where they meant to skip, because nobody "
+                 "investigates a pass",
     "os88qemu.py": "the teardown every QEMU launcher registers, written once "
                    "rather than thirteen times - library, not a test. What "
                    "checks it is `t_qemuown`, which asserts every launcher "
-                   "calls it (docs/HANDOFF-SOAK-FINDINGS.md B9)",
+                   "calls it (docs/plans/HANDOFF-SOAK-FINDINGS.md B9)",
     "benchlib.inc": "a benchmark library, not a test",
     "trklog.inc": "tracker's logging build, %included by apps/tracker",
     "trkscrl.inc": "tracker's scroll-gate build, %included by apps/tracker",
     "npbench.inc": "a benchmark body, %included",
     "harness.py": "tests/unit/'s check library - check(), eq(), done() - "
                   "imported by every t_*.py there, not a test",
+    "mkclick.py": "a GENERATOR, not a test: it writes build/click.mod - a "
+                  "metronome module for judging A/V sync by eye and ear - "
+                  "and asserts nothing. It was REGISTERED as a soak row "
+                  "declaring 10s and reported `ok` in 0.0s, which is "
+                  "dispcp.py's failure exactly (a green row that tests "
+                  "nothing, and nobody investigates a pass); it also WRITES "
+                  "build/, which a row under a frozen run may not "
+                  "(docs/plans/SOAK-PARALLEL.md 14.2). Run it by hand when a field "
+                  "sync question needs the module",
+
+    "skiesperf.py": "an INSTRUMENT, not a test: it prices CLEAR SKIES' frame "
+                    "on MartyPC to the cycle - a breakpoint on cs_render and "
+                    "each drawing stage patched out for its delta, on a scene "
+                    "pinned by poke - and asserts nothing (SPEC.md 88.12). It "
+                    "is where every number in 88.12 came from",
+    "tankperf.py": "an INSTRUMENT, not a test: it prices TANK ATTACK's frame "
+                   "on MartyPC to the cycle - a breakpoint on tk_render, and "
+                   "each drawing stage patched out for its delta - and "
+                   "asserts nothing (SPEC.md 85.3.4). It is where every "
+                   "number in 85.3.4 to 85.3.6 came from, kept because the "
+                   "two obvious measurements were both wrong: a sampled "
+                   "profile read the walk at twice its share, and counting "
+                   "frames over guest seconds is quantised to a whole frame",
 
     # --- need a build prerequisite the default build does not make ---
     "brclick.py": "needs `make browsertest` (build/brtest360.img)",
@@ -90,7 +125,6 @@ UNREGISTERED = {
     "proxytest.py": "drives tools/os88proxy.py against a live network",
     "proxyguitest.py": "drives the proxy GUI, needs a display",
     "socktest.py": "needs `make socktest` and QEMU networking",
-    "telnet.py": "needs QEMU networking",
 
     # --- A/B gates: each needs a SECOND kernel built with a knob, so it is a
     #     two-build session rather than a row (the knob itself is kept alive
@@ -140,9 +174,54 @@ def _invokes_make(path):
     # above says the same thing about its own docstring, and the pieces were
     # first joined with a NON-raw `'fixture\\b'`, where `\\b` is a BACKSPACE and
     # not a word boundary, so the pattern silently matched nothing at all.
-    return bool(re.search(r'\[\s*"make"|"make"\s*,', body)
-                or re.search(r'^\s*(?:from\s+os88fixture\s+import'
-                             r'|import\s+os88fixture\b)', body, re.M))
+    # A `make` CARRYING `BUILD=` IS NOT ONE OF THESE. It names a destination
+    # of its own, so it cannot rewrite the shared tree - which is the only
+    # thing this flag is about. `tests/unit/t_bmshare.py` has done that since
+    # it was written and was marked builds=True anyway, because the detector
+    # looked for the word `make` and not for where the output went.
+    for argv in re.findall(r'\[[^\[\]]*"make"[^\[\]]*\]', body):
+        if "BUILD=" not in argv:
+            return True
+    if re.search(r'"make"\s*,', body) and "BUILD=" not in body:
+        return True
+    return bool(re.search(r'^\s*(?:from\s+os88fixture\s+import'
+                          r'|import\s+os88fixture\b)', body, re.M))
+
+
+def _private_build(path):
+    """Does this test build into a PRIVATE tree (tools/os88build.py)?
+
+    A third spelling, and the one that means the OPPOSITE of the two above.
+    `os88build.tree()` runs `make BUILD=<a directory of its own>`, so the row
+    really does invoke make - and it does not touch `build/`, which is the
+    only thing `builds=True` is about. A row that spells `BUILD=` itself
+    counts too: `t_bmshare` and `t_buildmatrix` were both doing this before
+    os88build existed, and the first of them was marked `builds=True` for
+    years because the detector looked for the word `make` rather than for
+    where the output went. A row like that must be builds=FALSE,
+    or the flag puts it back in the one-at-a-time lane for a hazard it no
+    longer has.
+
+    Checked in both directions below, because both mistakes are silent: a
+    private builder marked `builds=True` costs the soak its parallelism for
+    nothing, and a shared-tree builder marked False is the corruption the
+    original check exists to stop.
+    """
+    try:
+        with open(path) as f:
+            body = f.read()
+    except OSError:
+        return False
+    # **`tree()` OR `BUILD=`, NEVER THE BARE IMPORT.** Importing os88build is
+    # not building anything: `os88build.at()` is a PATH RESOLVER and rows
+    # import it to spell `build/x.img` correctly under a frozen run
+    # (docs/plans/SOAK-PARALLEL.md 14.2) - eight of them do, and none of those
+    # builds a tree. Keying on the import therefore told `fdlgthumb` to drop
+    # a flag it genuinely needs: that row builds its fixture with nasm and
+    # os88disk directly and writes whichever tree the run reads.
+    return bool(re.search(r'\bos88build\.tree\s*\(', body)
+                or re.search(r'\b_B\.tree\s*\(', body)
+                or "BUILD=" in body)
 
 
 def main():
@@ -201,13 +280,48 @@ def main():
         scripts = [c for c in r.cmd
                    if c.startswith("tests/") and c.endswith(".py")]
         makes = [c for c in scripts if _invokes_make(os.path.join(ROOT, c))]
-        if makes and not r.builds:
+        priv = [c for c in scripts if _private_build(os.path.join(ROOT, c))]
+        # A ROW THAT BUILDS ONLY PRIVATELY MUST NOT BE builds=True. It runs
+        # `make` into a directory of its own, so it cannot rewrite the tree
+        # under anything - and the flag would cost it the shared lane for a
+        # hazard it has given up. This is the check that lets the flag
+        # actually go away as rows are converted, rather than being dropped by
+        # hand and drifting back.
+        #
+        # `not makes` is the important half: a row may do BOTH, and
+        # `t_buildmatrix` does - it builds 81 knob kernels out of tree and
+        # still asks the shared tree for `build/associco.inc`. That row keeps
+        # the flag, and correctly: it also runs itself at -j4, so it wants the
+        # box rather than a share of it.
+        # **A DECLARED ROW IS THE THIRD ANSWER, and it is not checked here.**
+        # `makes and wants and not builds` is the converted shape: the row
+        # still reaches `make`, and the runner has already built what it
+        # asks for, so the call is a no-op and the row can share the lane.
+        # Whether the declaration is COMPLETE cannot be settled by reading the
+        # script - `need(DISK)` and `need(a.apps)` are as common here as a
+        # literal path - so os88fixture answers it instead, exactly, at the
+        # call: under the runner an undeclared target is an error and not a
+        # build. A wrong `wants=` therefore fails the row that owns it rather
+        # than the run beside it, which is the property this flag is for.
+        if priv and not makes and r.builds:
+            check(False, "row %s builds PRIVATELY and is still builds=True"
+                  % r.name,
+                  "%s uses tools/os88build.py, which builds into a tree of "
+                  "its own and never writes build/. The flag puts it back in "
+                  "the one-at-a-time lane for a hazard it no longer has"
+                  % ", ".join(priv),
+                  got="builds=True", want="builds=False")
+        elif makes and not priv and not r.builds and not r.wants:
             check(False, "row %s shells out to make and is not builds=True" % r.name,
                   "%s invokes `make`, so this row rewrites build/ under any row "
-                  "running beside it. Mark the row builds=True and the runner "
-                  "gives it the tree to itself" % ", ".join(makes),
-                  got="builds=False", want="builds=True")
-        elif r.builds and not makes and r.name not in BUILDS_WITHOUT_MAKE:
+                  "running beside it. Declare what it builds in `wants=` - the "
+                  "runner then builds it BEFORE any row starts and "
+                  "os88fixture.need does nothing at run time - or mark the row "
+                  "builds=True and the runner gives it the tree to itself"
+                  % ", ".join(makes),
+                  got="builds=False", want="builds=True or wants=(...)")
+        elif r.builds and not makes and not priv \
+                and r.name not in BUILDS_WITHOUT_MAKE:
             check(False, "row %s is builds=True and builds nothing" % r.name,
                   "the flag costs the row its parallelism, so a stale one is a "
                   "slower suite for no reason. Drop it, or say here why the row "

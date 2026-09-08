@@ -34,7 +34,7 @@
  * is no core to run it: reset, wait for READY. in screen RAM, inject,
  * mem_set_basic_text(start, end) unconditionally (autostart-prg.c:383, on
  * EVERY load and not only at $0801), then RUN\r into $0277 with the count at
- * $C6. That is wave 4 (docs/C64-PORT-PLAN.md wave 4), and until then a load
+ * $C6. That is wave 4 (docs/plans/completed/C64-PORT-PLAN.md wave 4), and until then a load
  * says what it did and nothing claims to have run anything.
  * ==========================================================================*/
 

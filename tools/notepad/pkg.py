@@ -3,7 +3,7 @@
 #
 # The core of tools/notepad: everything else here builds on these two answers.
 #
-# WHY IT LOOKS LIKE THIS. docs/NOTEPAD-NOTES.md 6.3 is a probe that computed
+# WHY IT LOOKS LIKE THIS. docs/plans/completed/NOTEPAD-NOTES.md 6.3 is a probe that computed
 # its field addresses from the size of the wrong binary and reported plausible
 # garbage - len=59587, vrows=10546 - rather than an error. Both answers below
 # are therefore SELF-VALIDATING rather than derived:
@@ -29,7 +29,7 @@ CPU_HZ = 4772727.0          # 4.77MHz 8088 - the machine every figure is in
 def ms(cycles):
     """Guest cycles as milliseconds on the target machine.
 
-    docs/NOTEPAD-NOTES.md 6.4: MartyPC here runs the guest at whatever
+    docs/plans/completed/NOTEPAD-NOTES.md 6.4: MartyPC here runs the guest at whatever
     multiple of real time the host manages, so WALL time means nothing and
     the cycle count means everything. Convert, never measure.
     """
@@ -129,7 +129,7 @@ class Lab:
     def cycles(self):
         return self.m.status()["cycles"]
 
-    # -- the check that closes docs/NOTEPAD-NOTES.md 6.3 ---------------------
+    # -- the check that closes docs/plans/completed/NOTEPAD-NOTES.md 6.3 ---------------------
     def verify(self, bin_path):
         """Guest memory against the built image, byte for byte.
 

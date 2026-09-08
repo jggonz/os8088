@@ -265,13 +265,14 @@ for what, r in rows:
                    % (what, r["frames"], r["span"], FRAMES_MAX))
 
 import pickle                                            # noqa: E402
+import os88build                                       # noqa: E402
 path = "build/ftpdflick-%s.pkl" % TAG
 with open(path, "wb") as f:
     pickle.dump({"w": ww, "h": wh, "shots": shots}, f)
 print("\n  window pixels after each gesture -> %s" % path)
 
 if CMP:
-    other = pickle.load(open("build/ftpdflick-%s.pkl" % CMP, "rb"))
+    other = pickle.load(open(os88build.at("build/ftpdflick-%s.pkl") % CMP, "rb"))
     print("\n  against %s:" % CMP)
     diff = 0
     for (what, a), (_, b) in zip(shots, other["shots"]):

@@ -79,6 +79,10 @@ S = os88sym.linear
 HZ = 4772727.0                  # the 5150's, which is what MartyPC counts in
 PIT_PER_CPU = 4                 # 14.31818/12 against 14.31818/3, exactly
 
+# ...and the one number that must NOT be written here as a literal: how many
+# slots sch_cycles has. See `cycles` below for what a stale copy of it cost.
+MAX_TASKS = os88sym.equates()["MAX_TASKS"]
+
 # The chip menu and its Task Manager item - MENU-BAR coordinates, the same on
 # every adapter because the bar is.
 CHIP, MI_TASKS = (12, 8), (60, 60)
@@ -126,9 +130,29 @@ def report():
 
 
 def cycles(m):
-    """sch_cycles[], read with the guest stopped (the ISR writes them)."""
-    raw = m.readseg(0x60, S("sch_cycles") - 0x600, 32)
-    return [struct.unpack_from("<I", raw, i * 4)[0] for i in range(8)]
+    """sch_cycles[], read with the guest stopped (the ISR writes them).
+
+    **THE LENGTH COMES FROM THE KERNEL.** This read 32 bytes and unpacked 8
+    slots, which was right when the table had eight; docs/plans/completed/STACK-SLOTS-PLAN.md
+    took `SCH_PARTITION` to twelve slices and `MAX_TASKS` to 14, and this
+    number did not move with it. The array is 56 bytes now, and the six slots
+    past the end of the read are simply not in the sum.
+
+    It is not a small error and it does not look like one. The books balanced
+    at 99.9% on a bare desktop - nothing is in a high slot there - and at
+    **91.3% with the Task Manager open**, steadily, in every 2-second window:
+    a rate rather than an end effect, which is exactly the signature of "a
+    slice is being dropped" that the balance check is written to catch. So the
+    row reported a kernel accounting leak, repeatably, and the leak was its
+    own read.
+
+    A hardcoded copy of a kernel constant in a test is what
+    `tests/unit/t_mirror.py` exists for; this one was in a slice length rather
+    than in a named constant, so nothing compared it.
+    """
+    n = MAX_TASKS
+    raw = m.readseg(0x60, S("sch_cycles") - 0x600, n * 4)
+    return [struct.unpack_from("<I", raw, i * 4)[0] for i in range(n)]
 
 
 def hits_per_second(m, name, secs=1.0):
@@ -174,7 +198,7 @@ def books(m, secs=3.0):
     m.pause()
     b, c1 = cycles(m), m.status()["cycles"]
     m.run()
-    d = [(b[i] - a[i]) & 0xFFFFFFFF for i in range(8)]
+    d = [(b[i] - a[i]) & 0xFFFFFFFF for i in range(MAX_TASKS)]
     return d, sum(d) * float(PIT_PER_CPU) / (c1 - c0)
 
 

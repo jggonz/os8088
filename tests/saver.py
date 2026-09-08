@@ -55,13 +55,24 @@ def lit(m):
     return sum(sum(r) for r in rows), sum(sum(r) for r in rows[:MBAR_H])
 
 
-def wait(m, addr, want, limit=60.0):
-    t = time.time()
-    while time.time() - t < limit:
-        if m.read(addr, 1)[0] == want:
-            return True
-        time.sleep(0.3)
-    return False
+def wait(m, addr, want, limit=20.0):
+    """Wait for a kernel byte, ON THE GUEST'S CLOCK.
+
+    Every wait in this file used to be `time.time()` and `time.sleep`, and
+    what the saver is waiting FOR is guest time: `ss_idle` is a count of
+    TICKS, so "28 ticks after the last keypress" is 1.5 seconds of the 8088
+    and whatever the box makes of it. In a three-wide emulator lane that is a
+    different amount of host wall clock, which is
+    docs/plans/HANDOFF-SOAK-FINDINGS.md B5 exactly - and this row
+    took 110.7s there against 52.3s alone.
+    """
+    try:
+        os88marty.until(m, lambda mm: mm.read(addr, 1)[0] == want,
+                        "kernel byte %#07x to read %d" % (addr, want),
+                        poll=0.05, guest=limit)
+        return True
+    except os88marty.MartyError:
+        return False
 
 
 def main():
@@ -87,13 +98,13 @@ def main():
             m.write(m.sym("ss_secs"), b"\xc8")      # one long turn: no re-pick
             m.write(m.sym("ss_idle"), IDLE_SOON)
             m.key("Space")                          # the idle clock from HERE
-            time.sleep(0.4)
+            os88marty.guest_sleep(m, 0.4)
             if not wait(m, sv, 1):
                 print("  %-10s NEVER STARTED" % name)
                 bad += 1
                 continue
             image = int.from_bytes(m.read(seg, 2), "little")
-            time.sleep(2.5)
+            os88marty.guest_sleep(m, 2.5)
             total, bar = lit(m)
             # A MODE MAY LEGITIMATELY DRAW IN THE BAR'S ROWS - a figure is
             # placed anywhere and a fish swims at any height - so the bar
@@ -108,7 +119,7 @@ def main():
 
             m.write(m.sym("ss_idle"), IDLE_NEVER)
             m.key("Space")
-            time.sleep(2.5)
+            os88marty.guest_sleep(m, 2.5)
             back, backbar = lit(m)
             image = int.from_bytes(m.read(seg, 2), "little")
             ok = (m.read(on, 1)[0] == 0 and m.read(sv, 1)[0] == 0
@@ -123,12 +134,31 @@ def main():
                 ("no SAVER.DRV", lambda: (m.write(m.sym("ss_modes"), b"\x0f"),
                                           m.write(m.sym("ss_fname"), b"NOSUCH"))),
         ):
+            # **THE BLANKER HAS TO BE OFF BEFORE IT CAN BE SEEN TO COME ON**,
+            # and confirming that is the whole of what was wrong here. The
+            # wait below is for `blk_on == 1`, and the previous iteration
+            # leaves it 1 - so it could return on a session that was already
+            # running, and whether it did depended on how fast the box got
+            # round to the trailing keypress. Measured: in a three-wide lane
+            # "no mode ticked" failed and "no SAVER.DRV" passed; alone, the
+            # same run failed the OTHER one. Exactly one of the two, either
+            # way round, which is a race and not a saver.
+            #
+            # So: idle never, wake it, and prove it is off. Then arm.
+            m.write(m.sym("ss_idle"), IDLE_NEVER)
+            m.key("Space")
+            if not wait(m, on, 0):
+                print("  %-14s could not be woken before the test - blk_on is "
+                      "still 1, so nothing below would be measuring this "
+                      "fallback" % name)
+                bad += 1
+                continue
             setup()
             m.write(m.sym("ss_idle"), IDLE_SOON)
             m.key("Space")
-            time.sleep(0.4)
+            os88marty.guest_sleep(m, 0.4)
             started = wait(m, on, 1)
-            time.sleep(1.0)
+            os88marty.guest_sleep(m, 1.0)
             total, _ = lit(m)
             ok = started and m.read(sv, 1)[0] == 0 and abs(total - desk) < 200
             print("  %-14s blanker: blk_on=%d blk_sv=%d framebuffer lit=%d %s"
@@ -137,11 +167,11 @@ def main():
             bad += not ok
             m.write(m.sym("ss_idle"), IDLE_NEVER)
             m.key("Space")
-            time.sleep(1.5)
+            os88marty.guest_sleep(m, 1.5)
 
         m.write(m.sym("ss_idle"), b"\x00\x00")      # zero minutes = OFF
         m.key("Space")
-        time.sleep(8.0)
+        os88marty.guest_sleep(m, 8.0)
         ok = m.read(on, 1)[0] == 0 and m.read(sv, 1)[0] == 0
         print("  %-14s off: blk_on=%d blk_sv=%d after 8s of idle %s"
               % ("zero minutes", m.read(on, 1)[0], m.read(sv, 1)[0],

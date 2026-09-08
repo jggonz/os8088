@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/ftpd/ftpd.asm
 ;
-; FTPD - docs/NET-STACK-PLAN.md stage F, and the first thing in this system
+; FTPD - docs/plans/completed/NET-STACK-PLAN.md stage F, and the first thing in this system
 ; that makes the 5150 a SERVER rather than a client.
 ;
 ; Everything before it - the cable, Telnet, the browser, the card - had os8088
@@ -23,7 +23,7 @@
 ; **A WORKER MAY NOT TOUCH A FILE** (SPEC.md 20.6 rule 7): the file slots share
 ; dsk_secbuf, the FAT snapshot and sch_lock, and are UI-task context only. An
 ; FTP server is socket-to-file BY DEFINITION, so that is not a detail here, it
-; is the central design problem (docs/NET-STACK-PLAN.md 1.5.1).
+; is the central design problem (docs/plans/completed/NET-STACK-PLAN.md 1.5.1).
 ;
 ; The answer is the one Frotz proved for @save (SPEC.md 61.6) and RunCPM for
 ; its Z80 slices (SPEC.md 74.1): **THE WORKER STAGES AND THE UI TASK COMMITS.**
@@ -423,6 +423,12 @@ fd_entry:
     mov [fd_win], bx
     mov al, 1
     mov bx, [fd_win]
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, and not beside the
+    ; worker's declaration: a package with NO worker is the case that
+    ; moves most easily, and putting this at the spawn left exactly
+    ; those runs declaring nothing - measured, by the row that reads
+    ; MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     call OSAPI_WM_SNAP              ; 8-aligned content, so every log line takes
                                     ; font_run's single-store path on the two
                                     ; mono adapters (SPEC.md 11.94)
@@ -1590,6 +1596,16 @@ fd_hire:
     call OSAPI_TASK_SPAWN
     jc .no                          ; a refusal is an ORDINARY outcome (SPEC.md
     mov byte [fd_spawned], 1        ; 8), and the caller has to hear about it
+    ; ...AND THE WORKER MAY BE RESTARTED (SPEC.md 66.6.2). Hiring one
+    ; would otherwise pin the region for ever - task_spawn wrote our
+    ; segment into that worker's frame before its first instruction:
+    ; fd_step is a state machine whose state is in statics, and the restart
+    ; lands at the loop TOP - before it - so a transfer resumes at the step
+    ; it had reached.
+    ; The kernel restarts a worker only where it PARKS, which for us is
+    ; inside OSAPI_TASK_ALIVE at the top of the loop; we do not declare
+    ; OSAPI_MEM_PARKSAFE, so the gfx-lock park is not in play.
+    OS88_WORKER_RESTARTABLE fd_worker
 .out:
     pop bx
     pop ax
@@ -2712,7 +2728,7 @@ fd_c_rmd:
 ; THE DATA CONNECTION
 ;
 ; FOUR HANDLES IS THE FLOOR AND THIS IS THE THING THAT SPENDS THEM (netpkg.inc,
-; docs/NET-STACK-PLAN.md 1.2): the port-21 listener, the control connection,
+; docs/plans/completed/NET-STACK-PLAN.md 1.2): the port-21 listener, the control connection,
 ; the passive listener and the data connection itself. All four are live at
 ; once for exactly as long as it takes a client to answer a 227 - and
 ; fd_data_ready CLOSES THE PASSIVE LISTENER the moment it has accepted, both
@@ -5457,6 +5473,12 @@ fd_enter:
 ; it exists for is find -> read -> write -> find, and every middle step walks
 ; directories itself, so a shared cursor would be destroyed by the very work
 ; it was feeding.
+;
+; **THE _RAW CELL** (SPEC.md 20.14.3, 77.48): a compressed file has two sizes
+; and this server is a COPIER - RETR delivers what OSAPI_FILE_READ_AT hands
+; over, which is the packed bytes - so the number that describes a file here is
+; what it OCCUPIES. The plain cell answers what it expands to, and SIZE was
+; announcing that while RETR sent the other one.
 ; -----------------------------------------------------------------------------
 fd_find:
     push ax
@@ -5468,7 +5490,7 @@ fd_find:
     xor cx, cx
 .l:
     mov di, fd_fbuf
-    call OSAPI_FILE_FIND
+    call OSAPI_FILE_FIND_RAW        ; the size RETR will deliver (SPEC.md 77.48)
     jc .no                          ; FERR_NOENT: the end of the directory
     push cx
     push si
@@ -5593,7 +5615,10 @@ fd_do_list:
     push cx
     push di
     mov di, fd_fbuf
-    call OSAPI_FILE_FIND            ; CX = the ordinal in, the NEXT one out
+    call OSAPI_FILE_FIND_RAW        ; CX = the ordinal in, the NEXT one out -
+                                    ; and the size a LIST row prints is what
+                                    ; the file occupies, which is what RETR
+                                    ; will send (SPEC.md 77.48)
     pop di
     jc .end
     mov [fd_lord], cx

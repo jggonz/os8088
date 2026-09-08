@@ -213,7 +213,7 @@ ne_dma_read:
     ; --- EIGHT AT A TIME (SPEC.md 72.16.5) ---------------------------------
     ; `loop` is SEVENTEEN CLOCKS against `in al,dx` + `stosb`'s nineteen, so
     ; the bookkeeping was very nearly half of this loop - and this loop is
-    ; 12% of an upload (docs/FTP-PERF.md 4), the largest single line in the
+    ; 12% of an upload (docs/plans/completed/FTP-PERF.md 4), the largest single line in the
     ; driver. Eight copies leave one `loop` per eight bytes instead of one
     ; per byte. The field's card is an 8-bit NE1000, so a word read is not
     ; the answer available here; the count is a frame length and is odd as

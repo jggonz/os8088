@@ -3,7 +3,7 @@
 ;
 ; Story memory: the 20-bit address space, the big-endian word, and the header.
 ;
-; ONE DECISION SHAPES THIS FILE (docs/FROTZ-PLAN.md 3): the whole story file is
+; ONE DECISION SHAPES THIS FILE (docs/plans/completed/FROTZ-PLAN.md 3): the whole story file is
 ; resident in one heap claim, and a story address is up to 20 bits (Standard
 ; 1.1.4 caps a v6-v8 file at 512KB). A claim hands back a base SEGMENT, so the
 ; conversion is
@@ -28,7 +28,7 @@
 ;     is why zm_seek always lands SI in 0..15 rather than taking the <64K fast
 ;     path: the PC must start with the whole of a segment ahead of it.
 ;
-; Z-machine words are BIG-ENDIAN and the 8086 is not (docs/FROTZ-PLAN.md 3).
+; Z-machine words are BIG-ENDIAN and the 8086 is not (docs/plans/completed/FROTZ-PLAN.md 3).
 ; THIS FILE IS THE ONLY PLACE A WORD IS FORMED FROM STORY BYTES. Everything
 ; else calls zm_gw/zm_gw16. That is not tidiness: a byte pair assembled by hand
 ; at one call site out of two hundred is a bug that decodes as plausible text.
@@ -695,7 +695,7 @@ zm_setup:
                                     ; are all available - as reverse video,
                                     ; underline and "no change", which is what
                                     ; one 8x8 font can honestly offer
-                                    ; (docs/FROTZ-PLAN.md 5.1)
+                                    ; (docs/plans/completed/FROTZ-PLAN.md 5.1)
     cmp byte [zm_bpp], 4
     jne .f1nc
     or al, 00000001b                ; bit 0: colours, on VGA only. On a 1bpp

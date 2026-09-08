@@ -747,13 +747,14 @@ snd_unhook:
 ; -----------------------------------------------------------------------------
 ; osapi_snd_caps - what can this machine's sound hardware do?
 ;
-; out:      AX = capability bits (SND_CAP_*), BL = 0 (the speaker; the value
-;           is kept so a package written against the old ABI still reads
-;           "not FM"), DX = 1 (bit 0 = the speaker is present)
+; out:      AX = capability bits (SND_CAP_*), plus whatever a loaded sound
+;           driver adds; BL = where a tone goes right now, 0 the speaker /
+;           1 the driver's sink (snd_rt_card, SPEC.md 34.8); DX bit 0 = the
+;           speaker is present (always), bit 1 = a sound driver is loaded
 ; clobbers: nothing else (flags)
 ;
-; A constant answer since the sound-card tiers were retired: every machine
-; this OS boots on has a PC speaker and nothing else it can drive.
+; Without OS88_SNDCARD (kern_small) the answer is a constant - the speaker's
+; caps, BL = 0, DX = 1 - because that build can drive nothing else.
 ; -----------------------------------------------------------------------------
 osapi_snd_caps:
     mov ax, SND_CAP_TONE | SND_CAP_PCM_EXCL

@@ -85,11 +85,38 @@ def find_modules(m, img):
     a KB boundary. Matching the stamp, or even the whole image, therefore
     counts caches as claims.
 
-    What tells them apart is that a real one has been WRITTEN: WSMV_BIND
-    stamps the canvas claim's segment, the sprite count and the window into
-    the state block, and a cached copy still carries the file's zeros. So the
-    caller filters on that, and this returns every candidate.
+    "A REAL ONE HAS BEEN WRITTEN" IS NOT ENOUGH, and that is what this row
+    was getting wrong. The filter used to be "WSMV_BIND stamps a canvas
+    segment into the state block, and a cached copy still carries the file's
+    zeros" - so the caller kept every candidate with a non-zero WSS_CVSEG.
+    Measured on `os8088_5150_cga_gla`, TWO images answered that, and the one
+    the scan reached first was the wrong one:
+
+      seg 2b80  RUN=1 SLEEP=256 CVSEG=0202 WIN=0c01 NSPR=8 BLITS=770 FRAMES=7693 OVF=15
+      seg 3500  RUN=0 SLEEP=1   CVSEG=3640 WIN=0000 NSPR=3 BLITS=1   FRAMES=0    OVF=0
+
+    Every number in the first row is nonsense - a canvas claim below the heap,
+    770 blits against 7,693 frames, eight sprites in a bundle that declares
+    three - and every number in the second is PONG's (ball, pad, cpu; a canvas
+    claim at 3640, which is 3500 plus the module's own 5,087 bytes). The row
+    then read its six counters out of the first and reported six product
+    defects: `0 frames`, `sleep = 256`, `ovf = 15`, a paddle that never moved.
+    Its four PASSES came off the same garbage.
+
+    **WHAT SEPARATES THEM IS THE CODE, not the state.** A live module differs
+    from the file only from WSM_H_STATE onward - that is where its writable
+    data begins, and a flat image has nothing else to write. Diffed whole
+    against build/WEAVE.WSM: seg 3500 differs in 59 bytes and every one is at
+    or above 3676, while seg 2b80 differs in 707 and 589 of them are BELOW it,
+    from offset 3584 - a 512 boundary, so it is disk sectors, which is exactly
+    the cache this docstring already describes. The tail matched only because
+    the sectors past it had not been reused.
+
+    So the scan compares the whole code region and this returns only images
+    that ARE the module. The caller still filters on WSS_CVSEG, because
+    "loaded" and "bound" are different questions and it asks both.
     """
+    so = int.from_bytes(img[6:8], "little")     # WSM_H_STATE, from the FILE
     out = []
     for seg in range(0x0800, 0xA000, 0x40):     # a claim base is KB-aligned
         b = m.readseg(seg, 0, 8)
@@ -105,7 +132,11 @@ def find_modules(m, img):
             continue
         if bytes(m.readseg(seg, len(img) - 16, 16)) != img[-16:]:
             continue
-        out.append((seg, int.from_bytes(b[6:8], "little")))
+        mem = b"".join(bytes(m.readseg(seg, o, min(1024, so - o)))
+                       for o in range(0, so, 1024))
+        if mem != img[:so]:                     # ...and the code is intact
+            continue
+        out.append((seg, so))
     return out
 
 
@@ -152,8 +183,9 @@ def session(machine, png_dir=None):
         check(len(live) == 1,
               "%s: exactly one BOUND module - 1.2.2 reads it once at open "
               "and keeps it for the life of the instance" % machine,
-              "found %d bound of %d image(s); the unbound ones are the floppy "
-              "cache, see find_modules" % (len(live), len(mods)))
+              "found %d bound of %d INTACT image(s). find_modules already "
+              "drops the floppy cache's copies; more than one bound here "
+              "means a second instance, not a cache" % (len(live), len(mods)))
         if not live:
             return
         ms, so = live[0]

@@ -138,7 +138,7 @@ def fb(m):
     instead of 3, deterministically. That keeps "do these two screens differ?"
     honest, because the transform is injective, and makes every byte count,
     bounding box, glyph-cell count and per-row attribution meaningless. It is
-    what docs/NOTEPAD-NOTES.md 5.2.1's "66 stale cells" was measured with.
+    what docs/plans/completed/NOTEPAD-NOTES.md 5.2.1's "66 stale cells" was measured with.
     m.fbuf() is the one decoder in the tree and is what `shot --rendered`
     uses."""
     return m.fbuf()

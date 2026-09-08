@@ -99,9 +99,43 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
 
     c = dispcells.Cells(m, mo, land=LAND)
     HAVE_CULL = c.cull_sym is not None
-    c.drag(d.x + 60, d.y + 9, d.x + 100, d.y + 69)
-    c.pump(500, 4)
-    runs, fills, cells, inside = c.take()
+    # **THE GESTURE IS RETRIED, because a zero here means NOT SEEN.**
+    # tests/dispcells.py's `serve` says so in as many words: stops go missing
+    # in the pump, "how often it happens depends on how many breakpoints are
+    # armed and how busy the guest is", and a gate counting rare events must
+    # retry rather than fail on one observation.
+    #
+    # The DREW leg is exactly such a gate - it needs at least ONE cell painted
+    # outside the mover's rect - and it failed in a three-wide emulator lane
+    # with `0 cells outside`, then passed alone with 27 in the same build.
+    # Two readings of the same machine, so the zero was the pump and not the
+    # cull. The CULLED leg is an upper bound and cannot be hurt by a retry;
+    # the drag is idempotent, because the window is already where the first
+    # one put it and re-dragging it repaints the same region.
+    def slide(dx, dy):
+        """Drag the cover window by (dx, dy) FROM WHERE IT IS.
+
+        Read the position each time rather than computing off the first one:
+        the retry below moves it away and back, so any drag after the first
+        starts somewhere else, and a delta applied to a stale origin lands it
+        somewhere neither the LAND rect nor the SETUP check agrees with.
+        """
+        w = [x for x in os88geom.windows(m) if x.i == disk][0]
+        return c.drag(w.x + 60, w.y + 9, w.x + 60 + dx, w.y + 9 + dy)
+
+    for attempt in range(3):
+        slide(40, 60)
+        c.pump(500, 4)
+        runs, fills, cells, inside = c.take()
+        if cells - inside > 0:
+            break
+        if attempt < 2:
+            print("   (retry %d: %d runs, %d cells, none outside the rect - "
+                  "a zero from one pass is `not seen`)"
+                  % (attempt + 1, runs, cells))
+            slide(-40, -60)             # ...and exactly back, so the next
+            c.pump(200, 4)              # attempt starts where the first did
+            c.take()
     c.close()
     now = [x for x in os88geom.windows(m) if x.i == disk][0]
     print("CULLED  : %d runs, %d cells painted, %d of them inside the rect "

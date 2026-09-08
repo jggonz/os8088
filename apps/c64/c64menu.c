@@ -288,13 +288,13 @@ static const char *c64_s_swap[2] = { OFF "Swap joysticks  Alt+J",
                                      ON  "Swap joysticks  Alt+J" };
 /* ...and ONE item that is greyed by STATE rather than checked by it. Advance
  * frame is live while there is a machine to advance and greyed when there is
- * not - a disk with no C64.ROM (C64_ST_HALT) or a JAMMED CPU - because
- * c64_advance_frame answers those states by doing nothing at all, and SPEC.md
- * 47 forbids exactly that shape: a live black item that is a silent no-op is
- * worse than one that says "not yet". The FACT that greys it is already on
- * the glass and permanent: `C64.ROM missing - see README.TXT` (§1.4) or
- * `Main CPU: JAM at $xxxx` (§4.5), on the status row, which is the window's
- * bottom row and is always drawn. */
+ * not - a JAMMED CPU - because c64_advance_frame answers that state by doing
+ * nothing at all, and SPEC.md 47 forbids exactly that shape: a live black
+ * item that is a silent no-op is worse than one that says "not yet". The FACT
+ * that greys it is already on the glass and permanent: `Main CPU: JAM at
+ * $xxxx` (§4.5), on the status row, which is the window's bottom row and is
+ * always drawn. (A disk with no C64.ROM used to be the other state; the ROM
+ * is a part of the package now, §1.4.) */
 static const char *c64_s_adv[2] = { "Advance frame",
                                     D "Advance frame" };
 

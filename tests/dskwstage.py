@@ -129,10 +129,44 @@ class Caller(object):
     def __init__(self, m, trap="dskw_rmtree"):
         self.m = m
         self.trap = os88sym.linear(trap)
-        r = m.regs()
-        # 96 bytes clear of the interrupted frame. The call below goes as deep
-        # as the BIOS's own int 13h handler, on this task's stack.
-        self.ss, self.sp = r["ss"], (r["sp"] - 96) & 0xFFFF
+        self.lock = os88sym.linear("sch_lock")
+        # **ON TASK 0's STACK, NOT ON THE INTERRUPTED TASK'S**, and this is
+        # what the row was failing on - `dskw_write_x never returned`, 2 runs
+        # in 3, at both ends of the pass (docs/plans/HANDOFF-SOAK-FINDINGS.md E2,
+        # which got as far as ruling out the ROM and the box's load).
+        #
+        # It used to take the paused machine's own SS:SP and drop 96 bytes,
+        # on the reasoning that the call *"goes as deep as the BIOS's own
+        # int 13h handler, on this task's stack"*. It does - and the stack it
+        # was landing on is 128 bytes:
+        #
+        #   sch_chstack  .lowbss 0x1556  128 bytes, the ROM int 08h chain's
+        #   sch_stacks   .lowbss 0x15D6  the twelve task slices, first = 128
+        #
+        # SPEC.md 8.1.2 is why it is always that one: an idle desktop is
+        # **96.9% halted**, so a pause lands on the idle task, whose slice is
+        # the smallest class in SCH_PARTITION. Measured, the paused SP was
+        # 0x1654 - two bytes into a slice topping out at 0x1656 - and the
+        # traced call took SP down to **0x1562**, which is 116 bytes BELOW
+        # `sch_stacks`, through its canary word and into `sch_chstack`. The
+        # damage then shows up whenever something reads those bytes, which is
+        # why the row failed sometimes rather than always.
+        #
+        # `STK0_TOP` is the answer and not merely a bigger number.  Task 0 is
+        # the UI task, it owns no slice of `sch_stacks` (kernel/sched.inc's
+        # header), its stack runs from `kernel_low_end` 0x23DE to 0x25DC with
+        # nothing below it, and **it is the stack the real caller uses**: a
+        # file operation on this machine IS the UI task calling this routine.
+        # So the row now reproduces the shipping caller's stack rather than an
+        # idle task's slice, which is a better experiment as well as a
+        # survivable one.
+        #
+        # SS is still LOW_SEG, which is the requirement: `dskw_stage` reaches
+        # `dsk_secbuf` as `push ss / pop es`.  Clobbering task 0's parked frame
+        # costs nothing here - `park` clears IF, so from the first call on,
+        # nothing but this file's own calls ever executes.
+        self.ss = os88sym.equates()["LOW_SEG"]
+        self.sp = os88sym.equates()["STK0_TOP"]
 
     def call(self, name, watch=(), limit=180.0, **regs):
         """Returns (registers at the trap, {watched symbol: times hit}).
@@ -154,14 +188,73 @@ class Caller(object):
         m.setreg("sp", sp)
         m.setreg("ds", KERNEL_SEG)
         m.setreg("es", KERNEL_SEG)
+        # **INTERRUPTS ON, AND THE SCHEDULER LOCKED**, in that order of
+        # importance. `park` goes through the reset vector, so it clears FLAGS
+        # with every other register and this ran with IF = 0 for its whole
+        # life. That is not what the shipping caller does and it is why the
+        # row hung.
+        #
+        # The BIOS's floppy handler starts the MOTOR and then waits for it to
+        # come up to speed, and it times that wait on the BIOS tick at
+        # 0040:006C - a byte only IRQ0 advances. With interrupts off the tick
+        # never moves and the wait never ends: sampled at the timeout, the
+        # guest was at F000:FF23 with IF=0 and a PIC read in front of it,
+        # parked in the ROM for 540 guest seconds.
+        #
+        # THE PROOF IS THE MOTOR. `launch` settles on the first desktop, a few
+        # hundred milliseconds after the last boot read, with the motor still
+        # turning - and a handler that finds it already up skips the wait. So
+        # the row passed exactly when it won that race, which is what "2 runs
+        # in 3" was. Adding five idle guest seconds before taking over - long
+        # enough for the ROM's own motor-off timer - took it to **0 of 6**,
+        # deterministically, which is the cleanest evidence in this file.
+        #
+        # Interrupts alone are not enough, because this Caller's context is
+        # not a task the scheduler knows about: the first IRQ0 to reach
+        # `sch_switch` would park our synthetic SP into whatever `sch_cur`
+        # names. [sch_lock] is the byte `sch_isr` tests before it picks
+        # ("locked: count ticks but do not switch"), and it is exactly what
+        # `dsk_xfer` raises around every int 13h in this system. The tick
+        # still runs and still advances 0040:006C, `mou_isr` still runs on its
+        # own stack (SPEC.md 9.10), and nothing switches.
+        #
+        # It is restored to what it was after the trap, which is right
+        # whatever the routine's own inc/dec did in between: with the machine
+        # parked in our call, nothing else can have touched it.
+        was_lock = m.read(self.lock, 1)[0]
+        m.write(self.lock, bytes((was_lock + 1,)))
+        m.setreg("flags", 0x0202)
         for r, v in regs.items():
             m.setreg(r, v & 0xFFFF)
+        # **AND THE SETUP IS READ BACK.** Every line above is one debug-server
+        # round trip, and a synthetic call is exactly as good as the registers
+        # it starts with: a `setreg` that does not take leaves the value
+        # `park`'s CPU reset left - 0 for SP - and the machine then runs off
+        # with a stack pointer nobody chose. That is the residual failure this
+        # row had after the stack fix, and its signature was SS:SP = 1860:2A08
+        # with the "stack" pointing at kernel CODE. Confirming costs one round
+        # trip and turns a silent bad start into a sentence naming it, which
+        # is what the rest of this harness does for every other action.
+        want = {"ss": self.ss, "sp": sp, "cs": COLD_SEG,
+                "ip": os88sym.linear(name) - CB}
+        want.update((k, v & 0xFFFF) for k, v in regs.items())
+        got = m.regs()
+        wrong = [(k, want[k], got[k]) for k in want if got.get(k) != want[k]]
+        if wrong:
+            raise SystemExit(
+                "dskwstage: the call setup for %s did not take - %s. Every "
+                "register above is a debug-server round trip and one of them "
+                "was not applied; running anyway would report on a machine "
+                "nobody configured"
+                % (name, ", ".join("%s wanted %04X, reads %04X" % w
+                                   for w in wrong)))
+
         hits = dict((w, 0) for w in watch)
         while True:
             m.run()
             if m.wait_stop(limit) is None:
-                raise SystemExit("dskwstage: %s never returned - the machine "
-                                 "is still running after %gs" % (name, limit))
+                raise SystemExit("dskwstage: %s never returned - %s"
+                                 % (name, _where(m, limit)))
             r = m.regs()
             flat = (r["cs"] << 4) + r["ip"]
             if flat in wmap:
@@ -171,7 +264,112 @@ class Caller(object):
                 raise SystemExit("dskwstage: %s stopped at %#07x, which is "
                                  "neither the return trap %#07x nor a watched "
                                  "symbol" % (name, flat, self.trap))
+            m.write(self.lock, bytes((was_lock,)))
             return r, hits
+
+
+def _where(m, limit):
+    """WHERE the guest is, for a call that never came back.
+
+    `wait_stop`'s budget is GUEST seconds now (os88marty, and
+    docs/plans/HANDOFF-SOAK-FINDINGS.md E2 is the entry that made it so), so a
+    timeout here means the machine really did run that long inside the call -
+    it is not the box being loaded. What it does NOT say is where, and "the
+    machine is still running" was the whole of the old message: E2 spent four
+    runs and two ROM sets on it and got no further than "the hang is still
+    open".
+
+    So sample the program counter. A hang has a shape: a tight loop reads as
+    two or three addresses in one routine, a wait on a device reads as one,
+    and a machine walking off into nothing reads as addresses with no symbol
+    near them at all. Six samples a fifth of a guest second apart cost
+    nothing and turn "it hung" into "it is spinning in <symbol>+0x<n>".
+
+    The samples are taken PAUSED and the machine is left running, because the
+    caller raises straight after and the `with launch(...)` block still has to
+    tear the emulator down.
+    """
+    # **SYMBOL VALUES ARE SECTION-RELATIVE, and IP is what to compare them
+    # against.** `os88sym.syms()` answers offsets within a section and
+    # `os88sym.linear()` answers a flat address; a walker that sorts the first
+    # and searches with the second gets a name for every address and every
+    # name is wrong. It cost this diagnosis a whole pass: adjacent addresses
+    # came back `menu_drop.poll`, `fpg_begin.shr`, `wm_db_b`, `fm_saycl` -
+    # four unrelated subsystems in twenty bytes, which is the tell.
+    #
+    # This kernel is near-model (CLAUDE.md), so within a segment the offset IS
+    # the section offset: KERNEL_SEG holds `.text`/`.bss` and COLD_SEG holds
+    # `.cold` (SPEC.md 2.6). So pick the table by CS and search it with IP.
+    _sec = os88sym.sections()
+    _syms = os88sym.syms()
+    _by_seg = {
+        os88sym.KERNEL_SEG: sorted((v, k) for k, v in _syms.items()
+                                   if _sec.get(k) in (".text", ".bss")),
+        COLD_SEG: sorted((v, k) for k, v in _syms.items()
+                         if _sec.get(k) == ".cold"),
+    }
+
+    def near(cs, ip):
+        tab = _by_seg.get(cs)
+        if tab is None:
+            return "ROM" if cs >= 0xF000 else "not a kernel segment"
+        best, lo = None, 0
+        for v, k in tab:
+            if v <= ip:
+                best, lo = k, v
+            else:
+                break
+        return ("%s+0x%x" % (best, ip - lo)) if best is not None else "?"
+
+    seen, extra = [], []
+    for i in range(6):
+        m.pause()
+        r = m.regs()
+        flat = (r["cs"] << 4) + r["ip"]
+        seen.append("%04X:%04X (%s)" % (r["cs"], r["ip"],
+                                        near(r["cs"], r["ip"])))
+        if i == 0:
+            # IF is the first thing to know when the PC is in the ROM: the
+            # BIOS's int 13h hands the transfer to DMA and SPINS on IRQ6
+            # (SPEC.md 15.3.8), so a handler entered with interrupts off can
+            # never be completed by the controller it is waiting for.
+            extra.append("IF=%d" % (1 if r["flags"] & 0x200 else 0))
+            extra.append("code at CS:IP %s"
+                         % bytes(m.read(flat, 8)).hex())
+            # ...and who called in. The eight words above SP are enough to
+            # spot our own return trap and the routine under it.
+            sp = (r["ss"] << 4) + r["sp"]
+            extra.append("stack %s"
+                         % " ".join("%04X" % int.from_bytes(
+                             bytes(m.read(sp + k * 2, 2)), "little")
+                             for k in range(10)))
+            extra.append("SS:SP %04X:%04X" % (r["ss"], r["sp"]))
+            extra.append("regs " + " ".join(
+                "%s=%04X" % (k.upper(), r[k]) for k in
+                ("ax", "bx", "cx", "dx", "si", "di", "bp", "ds", "es")))
+            # **A CPU EXCEPTION LANDS HERE AND LOOKS LIKE A HANG**, so name
+            # it rather than leaving a segment nobody recognises. The one
+            # this machine actually takes is int 0: kernel/disk.inc warns
+            # about "zeroing disk_read's CHS divisor and divide-faulting with
+            # sch_lock held" in as many words, and a `div` by a zero geometry
+            # word is a jump through vector 0 to wherever that points.
+            ivt = bytes(m.read(0, 5 * 4))
+            for v in range(5):
+                o = int.from_bytes(ivt[v * 4:v * 4 + 2], "little")
+                g = int.from_bytes(ivt[v * 4 + 2:v * 4 + 4], "little")
+                if (g, o) == (r["cs"], r["ip"]):
+                    extra.append("**this IS int %02X's vector** - the machine "
+                                 "took a CPU exception, it did not hang" % v)
+        m.run()
+        os88marty.guest_sleep(m, 0.2)
+    m.pause()
+    uniq = []
+    for x in seen:
+        if x not in uniq:
+            uniq.append(x)
+    return ("the machine ran %g GUEST seconds inside it and is at %s; %s"
+            % (limit * os88marty.GUEST_BUDGET_RATIO, ", ".join(uniq),
+               "; ".join(extra)))
 
 
 def blast(m, addr, data, chunk=2048):
@@ -198,7 +396,46 @@ def run(img, apps, machine, want_bug, verbose):
     src_pat = pattern(FSIZE)
     with os88marty.launch(img, apps=apps, machine=machine,
                           label="dskwstage") as m:
-        m.pause()
+        # **TAKE THE MACHINE OVER AT A DEFINED POINT, not wherever `pause`
+        # lands.** Everything below runs kernel routines on a synthetic
+        # context, so the state they inherit is whatever the guest was in the
+        # middle of - and `pause` is a host-timed act, so that is different
+        # every run. It is the row's only remaining source of variance and it
+        # was worth a failure in three even after the stack was fixed: a pause
+        # inside a disk operation leaves `dsk_secbuf`, the FAT window and
+        # [sch_lock] mid-flight, and the staging path below shares all three.
+        #
+        # `sch_idle_body.loop` is the quiet point (SPEC.md 8.1.2): the idle
+        # task's own footprint is at most 4 bytes, nothing is in a primitive,
+        # and on a settled desktop the machine is 96.9% halted so it arrives
+        # at once. Stopping there costs one breakpoint and makes every run
+        # start from the same machine.
+        m.bp_exec(os88sym.linear("sch_idle_body.loop"))
+        m.run()
+        if m.wait_stop(30.0) is None:
+            raise SystemExit("dskwstage: the guest never reached the idle "
+                             "task's loop - it is not a settled desktop, and "
+                             "every call below would inherit whatever it is "
+                             "doing instead")
+        m.bp_exec()                 # ...and disarm it: the Caller arms its own
+        # **AND LET THE DRIVE GO QUIET FIRST.** `launch` settles on the first
+        # desktop, which is a few hundred milliseconds after the last boot
+        # read: the motor is still turning, the BIOS's own motor-off timer has
+        # not run, and IRQ6 may still be pending. Everything below then runs
+        # `int 13h` with IF clear (see the Caller), so a completion that
+        # arrives from the PREVIOUS operation is one this call will never
+        # account for. Five guest seconds is past every motor timeout in the
+        # ROMs here, and the machine spends them halted (SPEC.md 8.1.2), so it
+        # is five seconds of nothing rather than five seconds of work.
+        m.run()
+        os88marty.guest_sleep(m, 5.0)
+        m.bp_exec(os88sym.linear("sch_idle_body.loop"))
+        m.run()
+        if m.wait_stop(30.0) is None:
+            raise SystemExit("dskwstage: the guest left the idle loop and did "
+                             "not come back - something is running that was "
+                             "not there five seconds ago")
+        m.bp_exec()
         if not m.read(os88sym.linear("dsk_mntok"), 1)[0]:
             raise SystemExit("dskwstage: the boot volume is not mounted - "
                              "there is nothing to write to")
@@ -424,7 +661,11 @@ def main():
                                                   "os8088-360.img"))
     ap.add_argument("--apps", default=os.path.join(ROOT, "build",
                                                    "apps360.img"))
-    ap.add_argument("--machine", default="os8088_5150_cga")
+    # The twin: docs/plans/HANDOFF-SOAK-FINDINGS.md E2 ran this row on the IBM ROM
+    # and on GLaBIOS and got the identical hang, so the ROM is measured NOT
+    # to be the variable here.
+    ap.add_argument("--machine",
+                    default=os88marty.machine("os8088_5150_cga"))
     ap.add_argument("--bug", action="store_true",
                     help="assert the PRE-18.4.2.1 behaviour instead: the "
                          "straddling write must be refused FERR_IO and .stg "

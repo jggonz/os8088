@@ -1346,7 +1346,7 @@ sol_pipsel:
 ; sol_pop6 / sol_pop4 - the shared epilogue ladder
 ;
 ; Entered by a near JMP and never a call, which is what makes it free: the
-; frame is the caller's and nothing is added to it (docs/STACK-SLOTS-PLAN.md
+; frame is the caller's and nothing is added to it (docs/plans/completed/STACK-SLOTS-PLAN.md
 ; found the same for the kernel's own pass). `pop` does not touch the flags,
 ; so a routine returning CF returns it through here unchanged.
 ;

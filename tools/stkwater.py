@@ -11,7 +11,7 @@ each slice carries its own high water and this only has to read them out of
 
 **The slice size comes off the kernel, never from here.** `SCH_STACK` was 256
 until the field measured 220 of it in use during an FTP upload
-(docs/FIELD-NOTES.md 27.7) and is 384 now; `slice_len()` asks `os88sym` for the
+(docs/FIELD-NOTES.md 29.6) and is 384 now; `slice_len()` asks `os88sym` for the
 equate rather than mirroring a number that would go stale the day it mattered.
 
 **Read the DEPTH, not the occupancy.** A slice is written at both ends by
@@ -21,13 +21,15 @@ slot that was never scheduled still shows its 24-byte frame. A slot reading the
 whole slice has gone through the canary and `sch_switch` has already halted the
 machine.
 
-**QEMU understates a real BIOS by ~46 bytes**, measured (docs/KERNEL-MEMORY.md):
-SeaBIOS services its interrupt entries on a stack of its own, where an IBM ROM
-runs int 08h on whichever task stack is current - and under QEMU a worker's pass
-can finish between ticks and never pay the interrupt at all. Add it before
-deciding a number, and take the deciding one on the 5150 with
-`tests/stackprobe`, which reads every slice while the thing under suspicion
-runs.
+**A QEMU reading is a lower bound, never the margin** (docs/KERNEL-MEMORY.md,
+"Task stacks"): under QEMU a worker's pass can finish between ticks and never
+pay an interrupt at all, so the same gate has read 208, 202 and 178. Since
+SPEC.md 8.5 and 9.10 the ROM's int 08h chain and both mouse ISRs run on private
+stacks, so what a slice carries is the task's own chain plus the six-byte gate
+frame - and the ROM term, where it still applies, is BIOS-specific (SeaBIOS 56,
+the IBM ROM 36; docs/plans/completed/STACK-SLOTS-PLAN.md 9). Take the deciding
+number on the 5150 with `tests/stackprobe`, which reads every slice while the
+thing under suspicion runs.
 """
 import os
 import sys

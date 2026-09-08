@@ -1059,6 +1059,15 @@ tk_hire:
     call OSAPI_TASK_SPAWN
     jc .nope
     mov byte [tk_hired], 1
+    ; ...AND THE WORKER MAY BE RESTARTED (SPEC.md 66.6.2). Hiring one
+    ; would otherwise pin the region for ever - task_spawn wrote our
+    ; segment into that worker's frame before its first instruction:
+    ; a game loop: every value it reads is a static the move carries, and a
+    ; restart costs one frame.
+    ; The kernel restarts a worker only where it PARKS, which for us is
+    ; inside OSAPI_TASK_ALIVE at the top of the loop; we do not declare
+    ; OSAPI_MEM_PARKSAFE, so the gfx-lock park is not in play.
+    OS88_WORKER_RESTARTABLE tk_worker
 .nope:
     pop bx
     pop ax

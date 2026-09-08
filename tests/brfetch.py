@@ -45,6 +45,7 @@ import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 import partner as P                                    # noqa: E402
+import os88build                                       # noqa: E402
 
 S = os88sym.linear
 
@@ -109,7 +110,7 @@ def main():
     a = ap.parse_args()
 
     fails = []
-    img = os.path.getsize("build/browser.bin")
+    img = os.path.getsize(os88build.at("build/browser.bin"))
     # THE DISK IS BUILT FROM THE PACKAGE AND CAN BE OLDER THAN IT. That is not
     # hypothetical: this test's first real run drove a browser two commits
     # behind, reported `no such host` for a URL the bar was holding correctly,

@@ -57,8 +57,38 @@ ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
+import os88fixture                                       # noqa: E402
+import os88build as _B
 import os88sym                                              # noqa: E402
 import os88qemu                                             # noqa: E402
+
+# --- WHICH KERNEL'S SYMBOL MAP (SPEC.md 9.11.7) ------------------------------
+# Every read below goes through os88sym.linear, which re-assembles kernel.asm
+# and refuses a map that is not byte-identical to the kernel.bin it is checked
+# against. Since 9.11.7 the resident half of this feature is inside
+# %ifdef KERN_EMU, so the SHIPPED kernel has no vmm_on, no vmm_row and no
+# mou_apply_abs - a map taken from it would not merely have the wrong
+# addresses, it would not contain these symbols at all, and the test would die
+# at the first read with "unknown symbol" pointing at the test rather than at
+# the build.
+#
+# $OS88_BUILD names the directory (build/emuk/, where `make vmmousetest` puts
+# the emu kernel and its generated includes) and $OS88_DEFINES the define.
+# KERN_EMU is in os88sym's _SHIPPED_DEFS, so it does NOT pull in -DKERN_KNOB:
+# kern_emu is a shipped product measured against kern_big's budget, and adding
+# that define here would assemble a kernel `make emu` never built.
+#
+# setdefault rather than a plain assignment, so a session driving this by hand
+# with its own OS88_BUILD (a knob kernel, a field build) keeps it.
+#
+# ...AND THROUGH `os88build.at`, or a frozen run reads the SHARED build/emuk
+# while booting the tree's vmmouse.img (docs/plans/SOAK-PARALLEL.md 14.2). The two
+# are built from the same source and differ by the build number, which is one
+# 16-bit immediate - so os88sym refuses the map with "a DIFFERENT kernel" and
+# the row dies at its first symbol. Under the runner this becomes
+# `<tree>/emuk`, which is where the declared `build/vmmouse.img` put it.
+_B.use_build("build/emuk")
+os.environ.setdefault("OS88_DEFINES", "KERN_EMU")
 
 SOCK = os.path.join(ROOT, "build", "vmm.sock")
 PIDFILE = os.path.join(ROOT, "build", "vmm.pid")
@@ -80,19 +110,21 @@ def kill_stale():
 
 
 def build():
-    subprocess.run(["make", "build/os8088.img", "build/apps.img"],
-                   cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+    # DECLARED, NOT BUILT HERE - see tests/ps2mouse.py's note. Both images and
+    # the gate disk below are this row's `wants=` in tests/suite.py.
+    os88fixture.need("build/os8088.img", "build/apps.img")
 
 
 def launch():
     """vmport ON (the pc-machine default, spelled out) and NO serial mouse:
     the VMware backdoor is the only pointing device, like v86 in the browser.
     QEMU's vmmouse hangs off the i8042 the pc machine has anyway."""
-    # The gate disk, built here rather than assumed: the row is builds=True
-    # (tests/suite.py) precisely so it may rewrite build/, and a reader running
-    # this script by hand should not have to know the target's name.
-    subprocess.run(["make", "-s", "vmmousetest"], cwd=ROOT, check=True,
-                   stdout=subprocess.DEVNULL)
+    # The gate disk, ASKED FOR rather than assumed, so a reader running this
+    # script by hand still does not have to know the target's name - and the
+    # runner has already built it, so under the suite this does nothing.
+    # `vmmousetest:` is `$(BUILD)/vmmouse.img`, and it is the path and not the
+    # target name that `wants=` can carry.
+    os88fixture.need("build/vmmouse.img")
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
     subprocess.run(
         em + " -machine pc,vmport=on"
@@ -102,11 +134,16 @@ def launch():
         # driver's bit set, exactly as ether360.img does for the card - so the
         # pointer is up before the first paint and this reads state instead of
         # driving the Control Panel through a scripted mouse.
-        " -drive file=build/vmmouse.img,format=raw,if=floppy -boot a"
-        " -drive file=build/apps.img,format=raw,if=floppy,index=1"
+        " -drive file=%s,format=raw,if=floppy -boot a"
+        " -drive file=%s,format=raw,if=floppy,index=1"
         " -serial none"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
-        % (SOCK, PIDFILE), cwd=ROOT, shell=True, check=True)
+        % (_B.at("build/vmmouse.img"),
+           _B.at("build/apps.img"), SOCK, PIDFILE),
+        cwd=ROOT, shell=True, check=True)
+    # BOTH FLOPPIES THROUGH at(): this row builds its own command line
+    # rather than going through os88marty.launch, which is where the
+    # other rows get this for free (tests/unit/t_artpath.py).
     # -daemonize: the emulator outlives this script unless somebody kills it,
     # and the somebody is os88qemu. AT THE LAUNCH SITE and nowhere else, so a
     # script that drives an instance it did not start cannot kill it.

@@ -50,6 +50,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
+import os88fixture                                       # noqa: E402
 import os88qemu                                              # noqa: E402
 
 PIDFILE = os.path.join(ROOT, "build", "qemu.pid")
@@ -86,13 +87,14 @@ def image():
     one line that builds the image is picked out by name instead of the stdout
     being run whole.
     """
-    out = subprocess.run(["make", "-n", "--always-make", "build/os8088.img"],
-                         cwd=ROOT, capture_output=True, text=True,
-                         check=True).stdout.replace("\\\n", " ")
-    cmd = next((ln.strip() for ln in out.splitlines()
-                if "tools/os88disk.py" in ln and "-o build/os8088.img" in ln), "")
-    assert "--folder SYSTEM/APPDATA" in cmd, out
-    cmd = (cmd.replace("-o build/os8088.img", "-o " + IMG)
+    # THROUGH os88fixture.make, which puts build/buildnum.inc back. `make -n`
+    # is not a dry run of the PARSE: `BUILDNUM` is a `:=` shell assignment and
+    # regenerates that file whatever the goal and whatever -n says. Lifting a
+    # recipe out is the only thing this row wants from make, and with the
+    # stamp restored it leaves build/ exactly as it found it.
+    cmd, goal = os88fixture.recipe("build/os8088.img", "tools/os88disk.py")
+    assert "--folder SYSTEM/APPDATA" in cmd, cmd
+    cmd = (cmd.replace("-o " + goal, "-o " + IMG)
               .replace("--folder SYSTEM/APPDATA",
                        cfgfile() + " --folder SYSTEM/APPDATA"))
     subprocess.run(cmd, cwd=ROOT, shell=True, check=True,

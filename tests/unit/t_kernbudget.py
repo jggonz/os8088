@@ -124,7 +124,7 @@ def main():
         v = base.get(variant)
         if not isinstance(v, dict) or "budget" not in v:
             check(False, "the baseline carries kern_%s" % variant,
-                  "both are SHIPPED kernels (docs/KERN-SPLIT-PLAN.md), so both "
+                  "both are SHIPPED kernels (docs/history/KERN-SPLIT-PLAN.md), so both "
                   "are blessable and both should be blessed",
                   got="no `budget` for %r" % variant,
                   want="run tools/kernsize.py --bless for it")

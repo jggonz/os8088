@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WHO DRAWS INTO .cold? (docs/DUAL-DISPLAY-VGA.md 8(11))
+"""WHO DRAWS INTO .cold? (docs/plans/completed/DUAL-DISPLAY-VGA.md 8(11))
 
     make && python3 tests/dispcold.py
 
@@ -80,6 +80,7 @@ from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
 # written down here. This file spelled it `42 + 36`, which is the
 # VID_CTX_W = 18 layout - two bytes early, and what sits there is
 # display 1's vid_chm8, so the seam read 192 instead of 720.
+import os88build
 import os88marty, os88mouse, os88sym, dispcp, os88layout
 S = os88sym.linear
 SY = os88sym.syms()
@@ -132,7 +133,7 @@ def coldimage():
     that stage 2 sits in front of `.text` and that the FAT_SEG rung is not the
     section's length.
     """
-    k = open(os.path.join(ROOT, "build", "kernel.bin"), "rb").read()
+    k = open(os88build.at("build/kernel.bin"), "rb").read()
     if COLD_OFF + COLD_LEN > len(k):
         raise RuntimeError(
             ".cold at +%04X..%04X runs past kernel.bin (%d bytes) - the map "

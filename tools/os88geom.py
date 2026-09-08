@@ -211,6 +211,21 @@ _MIRROR = {
     # harness ask WHERE THE LIST IS SCROLLED TO instead of assuming row 0 is
     # entry 0. That assumption is the one dispcp.open_named exists to end.
     "FS_SCRL": ("kernel/files.inc", 2),
+    # ...and WHICH VOLUME, AT WHICH FOLDER, which is what makes "open drive B"
+    # confirmable. FS_CWD == 0 is a ROOT (files.inc says so at its only clear
+    # site), so the pair IS the post-condition of desk_click_x's double-click:
+    # "it fronts a window already showing that drive's root, OR opens one, OR
+    # at the cap moves the front one" - three outcomes, one statement.
+    "FS_CWD": ("kernel/files.inc", 8),
+    "FS_DRV": ("kernel/files.inc", 10),
+    # ...and WHETHER IT HAS LISTED, which is the half a first version left
+    # out. FS_DRV and FS_CWD are recorded by dsk_chdir before the listing
+    # exists, so a wait on those two alone returns with an EMPTY window and
+    # the next line says "'MEDIA' is not in this folder. It holds []" about a
+    # folder that has one. FS_MOK is files.inc's own "that listing came from
+    # a good mount", and it is what an EMPTY VOLUME would still set - which
+    # FS_N would not.
+    "FS_MOK": ("kernel/files.inc", 11),
     "FS_N": ("kernel/files.inc", 6),
     "FS_VIEW": ("kernel/files.inc", 12),
     "FS_VSEG": ("kernel/files.inc", 16),
@@ -223,6 +238,24 @@ _MIRROR = {
     # Two of the four are registered rows and two are not, so without this the
     # unregistered pair would have gone on reading cell 2 as cell 1's tail.
     "MB_ENTSZ": ("kernel/menu.inc", 12),
+    # ...and the cell's FIELDS, so a menu can be picked BY NAME. Reading them
+    # is what lets tools/os88ui.py aim at the title the bar is actually
+    # showing - menu_layout rebuilds this table on every raise, so a menu
+    # picked by remembered coordinate lands on the PREVIOUS window's bar, and
+    # nothing about the picture afterwards says the wrong command ran.
+    "MB_TITLE": ("kernel/menu.inc", 0),
+    "MB_ITEMS": ("kernel/menu.inc", 2),
+    "MB_NITEM": ("kernel/menu.inc", 4),
+    "MB_XL": ("kernel/menu.inc", 6),
+    "MB_XR": ("kernel/menu.inc", 8),
+    "MB_SEG": ("kernel/menu.inc", 10),
+    "MENU_DIS": ("kernel/menu.inc", 1),
+    # kernel/loader.inc - the staged directory entry (SPEC.md 19.1)
+    # The TYPE word is the only thing a consumer branches on: 1 = loadable
+    # package, 2 = subdirectory, 3 = the synthesized parent link, 0 = inert.
+    # A harness that does not read it waits out its whole budget on a type-0
+    # entry, which does nothing at all when double-clicked.
+    "LD_DE_TYPE": ("kernel/loader.inc", 16),
     # kernel/mouse.inc - the pointer's CELL and the worst hot spot in it
     # (SPEC.md 7.1/7.2.2). A shape's cell starts at (pointer - hot), so a
     # harness masking the arrow's 8x12 at the published position misses the
@@ -252,9 +285,13 @@ _MIRROR = {
     # listing entry should take FD_LX1..FD_LX2 and aim at the middle of the
     # row, which is what the whole row is: less coupled, and it does not need
     # this name at all.
+    # kernel/toast.inc - the strip's message (SPEC.md 59)
+    # TOAST_MAX is the TIGHT one by its own comment, so a local copy that is
+    # one short truncates exactly the message it was added to read.
+    "TOAST_MAX": ("kernel/toast.inc", 24),
     "KERNEL_SEG": ("kernel/kernel.asm", 0x0060),
     # kernel/memory.inc - the claim table (SPEC.md 50)
-    # PER ARM (docs/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small holds TWENTY claim records. The SDK
+    # PER ARM (docs/plans/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small holds TWENTY claim records. The SDK
     # keeps the LARGER value, so a package over-allocates rather than
     # the kernel overflowing what it was handed (SPEC.md 51.0.0).
     "MEM_MAX": ("kernel/memory.inc", {"big": 32, "small": 20}),
@@ -263,6 +300,11 @@ _MIRROR = {
     "MC_OWN": ("kernel/memory.inc", 4),
     "MC_DMA": ("kernel/memory.inc", 6),
     "MC_RLOC": ("kernel/memory.inc", 8),
+    # MC_HI was a byte of its own and is now MC_DMA's top bit: both halves of
+    # the word say WHERE a claim may land, and the head is capped at 0x1000 by
+    # mem_claim_1, so the bit is free by a check and not by hope.
+    "MC_DMA_HI": ("kernel/memory.inc", 0x8000),
+    "MC_DMA_HEAD": ("kernel/memory.inc", 0x7FFF),
     "MC_SIZE": ("kernel/memory.inc", 10),
     # kernel/vidsel.inc - the PER-DISPLAY CONTEXT record (SPEC.md 39.14)
     #
@@ -329,10 +371,10 @@ _MIRROR = {
     # from entry 1 onward the moment they diverged.
     "DSK_DE_STRIDE": ("kernel/dskwin.inc", 24),
     # kernel/sched.inc - the scheduler's slot count (SPEC.md 8). It went 8 ->
-    # 14 with docs/STACK-SLOTS-PLAN.md and tests/saverate.py's copy did not,
+    # 14 with docs/plans/completed/STACK-SLOTS-PLAN.md and tests/saverate.py's copy did not,
     # so sch_cycles was read six slots short; the test reads os88sym now and
     # this entry is what makes the next copy a t_mirror failure.
-    # PER ARM (docs/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small has SIX worker slices and the UI task. The SDK
+    # PER ARM (docs/plans/KERN-SMALL-CUT-PLAN.md D1/D7): kern_small has SIX worker slices and the UI task. The SDK
     # keeps the LARGER value, so a package over-allocates rather than
     # the kernel overflowing what it was handed (SPEC.md 51.0.0).
     "MAX_TASKS": ("kernel/sched.inc", {"big": 14, "small": 7}),
@@ -686,6 +728,36 @@ def snapw(w, flush=False, x=None, screen=None):
     return down if down > c else w
 
 
+def snapx(x, nosnap=False):
+    """Where a frame asked to sit at `x` ACTUALLY lands (SPEC.md 11.94).
+
+    `wm_snap_win` rounds a window's CONTENT origin down to a multiple of 8 -
+    content left is W_X + 1, so the frame x it hands back is
+    `((x + 1) & ~7) - 1`, and an x of 0..6 goes UP to 7 because the round-down
+    would be negative.
+
+    A HARNESS THAT DOES NOT MODEL THIS READS ITS OWN DRAG AS A FAILURE. Ask
+    for 195 and the window sits at 191, every time, deterministically - so a
+    check written as `rect == (195, 50)` fails on a window manager doing
+    exactly what SPEC.md says. Measured: Calculator dragged +20 moved +16.
+
+    It is the ORIGIN's half of the pair `snapw` above models for the width,
+    and it does NOT model the refusal: `wm_snap_ax` leaves x alone when the
+    snapped rect would run past `wm_zoom_xmax` on the window's own display, so
+    a window near the right edge can keep an unaligned x. That case is rare
+    enough that no caller here has met it and modelling it would need the
+    display table; a caller that lands somewhere else should read the record
+    rather than trust this.
+
+    `nosnap` is W_FLAGS bit 4 (WF_NOSNAP), whose sense is inverted - a window
+    that OPTS OUT is not snapped at all.
+    """
+    if nosnap:
+        return x
+    c = ((x + 1) & 0xFFF8) - 1
+    return c if c >= 0 else c + 8
+
+
 def close_xy(wx, wy):
     """The close box's centre for a window whose frame starts at (wx, wy).
 
@@ -725,6 +797,21 @@ def win_list(m, sym=None, check=True):
     raw = m.read(_sym(m, sym)("wm_wins"), MAX_WIN * WIN_SIZE)
     return [i for i in range(MAX_WIN)
             if struct.unpack_from("<H", raw, i * WIN_SIZE)[0] & want == want]
+
+
+def zorder(m, sym=None):
+    """The z-order, BOTTOM first - slot indices, as wm_zord holds them.
+
+    `top` answers only the frontmost. This is what a caller needs to ask
+    WHAT IS COVERING a window, which is the question behind every title-bar
+    click that lands on the wrong window: the record says where the bar is
+    and says nothing about whether that point is on the glass.
+    """
+    S = _sym(m, sym)
+    n = m.read(S("wm_zn"), 1)[0]
+    if not n:
+        return []
+    return list(m.read(S("wm_zord"), n))
 
 
 def top(m, sym=None):

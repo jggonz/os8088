@@ -99,6 +99,7 @@ tk_r_setup:
     mov [tk_ridgek], ax
 
     call tk_hud_layout
+    call tk_ktabs                   ; the projection tables for these scales
 
     ; --- the target: two VRAM pages, or one RAM shadow --------------------
     cmp byte [tk_back], TKB_MODEX
@@ -108,6 +109,7 @@ tk_r_setup:
     mov word [tk_page0], 0
     mov word [tk_page1], 19200      ; 240 rows x 80 bytes a plane
     mov byte [tk_npage], 2
+    mov byte [tk_tmpl], 0           ; two pages of VRAM, no shadow, no template
     call tk_modex_pal
     clc
     ret
@@ -125,11 +127,14 @@ tk_r_setup:
                                     ; not movable (nothing declares it so), so
                                     ; the segment is still good next time
     mov ax, TK_SHKB
-    call OSAPI_MEM_CLAIM            ; 16KB, and the kernel frees it with the
+    call OSAPI_MEM_CLAIM            ; 32KB, and the kernel frees it with the
     jc .noshadow                    ; instance (SPEC.md 50.3) - no teardown
     mov [tk_shseg], dx              ; hook of our own, which is what makes the
 .haveshadow:                        ; reuse above the whole of the lifetime
     mov [tk_tseg], dx
+    add dx, TK_SHSEG / 16           ; the TEMPLATE is the claim's second half
+    mov [tk_tmseg], dx              ; (SPEC.md 85.3.5)
+    mov byte [tk_tmpl], 1
     mov word [tk_page0], 0
     mov word [tk_page1], 0
     cmp byte [tk_back], TKB_CGA
@@ -224,10 +229,17 @@ tk_devrows:
     push bx
     push cx
     push dx
+    push si
     push di
     mov di, tk_devoff
     xor bx, bx                      ; BX = r
 .row:
+    mov ax, bx                      ; ...and the TARGET offset of the row, 80
+    mov cx, 80                      ; bytes a row on every backend, so the
+    mul cx                          ; walk and the run look it up rather than
+    mov si, bx                      ; multiply (SPEC.md 85.3.4)
+    shl si, 1
+    mov [tk_rowoff + si], ax
     mov ax, bx
     add ax, [tk_vy]                 ; AX = the device row
     cmp byte [tk_back], TKB_HERC
@@ -262,6 +274,7 @@ tk_devrows:
     cmp bx, [tk_vh]
     jb .row
     pop di
+    pop si
     pop dx
     pop cx
     pop bx
@@ -320,36 +333,69 @@ tk_r_begin:
 ; than the ones it saves on every row wider than about six.
 ; -----------------------------------------------------------------------------
 tk_clearspans:
-    mov es, [tk_tseg]
+    ; THE LOOP KEEPS DS (SPEC.md 85.3.7): the span pair comes in by `lodsw`,
+    ; the row's base by one lookup, and the segment the mover needs is loaded
+    ; around the `rep` alone - so an EMPTY row, which is most of them, costs
+    ; ten bytes and one memory access instead of the twenty and two it did.
     mov si, [tk_spprv]
-    mov di, [tk_tbase]
+    mov bx, tk_rowoff
     mov bp, [tk_vh]
+    mov es, [tk_tseg]
     cld
-.row:
-    mov al, [si]                    ; lo
-    mov ah, [si+1]                  ; hi
+    cmp byte [tk_tmpl], 0
+    je .zrow
+    ; --- a shadow backend: the TEMPLATE's bytes over every run, not zeros ---
+    ; (SPEC.md 85.3.5)
+.trow:
+    lodsw                           ; AL = lo, AH = hi
     cmp al, ah
-    ja .next
+    ja .tnext
     and al, 0xFE                    ; even..odd, so the run is whole words
     or ah, 1
-    mov bl, ah
-    sub bl, al
-    shr bl, 1
-    mov cl, bl
+    sub ah, al
+    shr ah, 1
+    mov cl, ah
     xor ch, ch
     inc cx                          ; CX = words
-    mov bl, al
-    xor bh, bh
-    push di
-    add di, bx
+    xor ah, ah
+    mov di, [bx]
+    add di, ax                      ; the same offset in template and shadow
+    push si
+    mov si, di
+    push ds
+    mov ds, [tk_tmseg]
+    rep movsw
+    pop ds
+    pop si
+.tnext:
+    inc bx
+    inc bx
+    dec bp
+    jnz .trow
+    ret
+    ; --- Mode X: zeros, into the page nobody is looking at -------------------
+.zrow:
+    lodsw
+    cmp al, ah
+    ja .znext
+    and al, 0xFE
+    or ah, 1
+    sub ah, al
+    shr ah, 1
+    mov cl, ah
+    xor ch, ch
+    inc cx
+    xor ah, ah
+    mov di, [bx]
+    add di, ax
+    add di, [tk_tbase]
     xor ax, ax
     rep stosw
-    pop di
-.next:
-    add si, 2
-    add di, 80
+.znext:
+    inc bx
+    inc bx
     dec bp
-    jnz .row
+    jnz .zrow
     ret
 
 ; -----------------------------------------------------------------------------
@@ -357,7 +403,7 @@ tk_clearspans:
 ; in:  AX = x1, BX = y1, CX = x2, DX = y2, viewport-relative, any magnitude
 ;      up to +-4000 (tk_project clamps to that so the clipper's own products
 ;      stay inside a 32-bit imul); [tk_ink] = the logical colour
-; out: nothing; preserves every register
+; out: nothing. CLOBBERS EVERY REGISTER (SPEC.md 85.3.4).
 ;
 ; ENDPOINT CLIPPING IS LEGAL HERE and it is worth saying why, because SPEC.md
 ; 5.6.3 refuses to do it in the kernel: clipping an endpoint moves the
@@ -365,21 +411,18 @@ tk_clearspans:
 ; scatter behind. Nothing here erases a line. The frame is erased by its
 ; recorded SPANS, which contain whatever lattice the walk actually laid, so
 ; the walk owes the next frame no promises at all.
+;
+; THE PREP IS FUSED INTO THE WALK, AND THE WALK IS ENTERED BY A JUMP (SPEC.md
+; 85.3.4). This used to be tk_seg -> tk_lprep -> [tk_lineproc], with seven
+; registers saved and restored and ten words written by the prep and read
+; back by the body - measured at about 1,300 cycles a segment on a 4.77 MHz
+; 8088 before the first pixel, against a frame of 130-190 segments. Now the
+; eight compares run on the registers the caller loaded, the walk's state is
+; built in registers and never stored, and the backend's entry is reached by
+; `jmp` and returns to tk_seg's caller itself.
 ; -----------------------------------------------------------------------------
 tk_seg:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov [tk_cx1], ax
-    mov [tk_cy1], bx
-    mov [tk_cx2], cx
-    mov [tk_cy2], dx
-    ; --- the common case is a segment wholly inside, and it was paying two
-    ;     tk_outcode CALLS to find that out. Eight compares instead.
+    ; --- the common case is a segment wholly inside: eight compares --------
     mov si, [tk_vw]
     mov di, [tk_vh]
     or ax, ax
@@ -399,6 +442,10 @@ tk_seg:
     cmp dx, di
     jl .accept
 .slow:
+    mov [tk_cx1], ax
+    mov [tk_cy1], bx
+    mov [tk_cx2], cx
+    mov [tk_cy2], dx
     mov byte [tk_ctry], 8           ; THE CAP IS LOAD-BEARING. Cohen-Sutherland
                                     ; terminates in exact arithmetic; in
                                     ; integers the interpolation TRUNCATES, so
@@ -421,7 +468,7 @@ tk_seg:
     mov ch, al                      ; CH = outcode 2
     mov al, cl
     or al, ch
-    jz .accept
+    jz .clipped
     mov al, cl
     and al, ch
     jnz .out                        ; both outside one edge: gone
@@ -456,23 +503,102 @@ tk_seg:
     dec bp
     call tk_clip_y
     jmp short .again
-
-.accept:
+.clipped:
     mov ax, [tk_cx1]
     mov bx, [tk_cy1]
     mov cx, [tk_cx2]
     mov dx, [tk_cy2]
-    call tk_lprep
-    jc .out
-    call [tk_lineproc]
+
+    ; --- the walk's parameters, in REGISTERS (SPEC.md 85.3.2) ---------------
+    ; SHALLOW LINES NORMALISE X INCREASING and steep ones normalise Y
+    ; INCREASING, which is what puts each walk's RARE step on the branchy
+    ; side: a shallow line's y moves seldom, so it can afford a memory-resident
+    ; step, and a steep line's x moves seldom, so it can afford a direction
+    ; test. The frequent step in both is a register add with no test in it.
+    ;
+    ; THE ERROR TERM IS ADD-FIRST. The walk adds e1 and tests the SIGN of the
+    ; sum, where the textbook form tests and then adds, so the test costs the
+    ; flags the add already set and no `or bx, bx`. The two agree exactly when
+    ; the initial error is the textbook's less e1: -|major|.
+.accept:
+    mov si, cx                      ; SI = |dx|
+    sub si, ax
+    jge .dxp
+    neg si
+.dxp:
+    mov di, dx                      ; DI = |dy|
+    sub di, bx
+    jge .dyp
+    neg di
+.dyp:
+    cmp si, di
+    jb .steep
+
+    ; ---- shallow: x increasing --------------------------------------------
+    cmp ax, cx
+    jbe .nsw
+    xchg ax, cx
+    xchg bx, dx
+.nsw:                               ; AX = lx, BX = ly, DX = y2
+    mov cx, 80
+    mov bp, 2
+    cmp dx, bx
+    jae .yd
+    neg cx
+    neg bp
+.yd:
+    mov [tk_ystep], cx
+    mov [tk_sistep], bp
+    mov bp, di                      ; BP = e1 = 2|dy| - the only thing added
+    shl bp, 1                       ; every pixel, so it gets the register
+    mov cx, si                      ; CX = |dx| + 1 pixels
+    inc cx
+    mov dx, si
+    shl dx, 1
+    mov [tk_e2], dx                 ; e2 = 2|dx|
+    neg si                          ; err = -|dx|
+    mov dx, si
+    mov si, bx                      ; the row: its span pair and its base
+    shl si, 1
+    mov di, [tk_rowoff + si]
+    add di, [tk_tbase]
+    add si, [tk_spcur]
+    mov bx, dx                      ; BX = err
+    jmp [tk_lsh]
+
+    ; ---- steep: y increasing ----------------------------------------------
+.steep:
+    cmp bx, dx
+    jbe .nsw2
+    xchg ax, cx
+    xchg bx, dx
+.nsw2:                              ; AX = lx, BX = ly, CX = x2
+    mov byte [tk_xdir], 0
+    cmp cx, ax
+    jae .xd
+    mov byte [tk_xdir], 1
+.xd:
+    mov bp, si                      ; BP = e1 = 2|dx|
+    shl bp, 1
+    mov cx, di                      ; CX = |dy| + 1 rows
+    inc cx
+    mov dx, di
+    shl dx, 1
+    mov [tk_e2], dx                 ; e2 = 2|dy|
+    neg di                          ; err = -|dy|
+    mov dx, di
+    mov si, bx
+    shl si, 1
+    mov di, [tk_rowoff + si]
+    add di, [tk_tbase]
+    add si, [tk_spcur]
+    mov bx, dx
+    or bp, bp                       ; A VERTICAL EDGE NEVER STEPS X, and it is
+    jz .vert                        ; the commonest steep line in the game -
+    jmp [tk_lst]                    ; every upright of every cube, slab and
+.vert:                              ; tank projects to exactly dx = 0, because
+    jmp [tk_lvt]                    ; nothing here pitches or rolls
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; tk_outcode - in AX = x, BX = y; out AL = the code. Preserves BX, CX, DX.
@@ -536,91 +662,21 @@ tk_clip_y:
     mov [tk_cy1 + si], bp
     ret
 
-; -----------------------------------------------------------------------------
-; tk_lprep - one line's walk parameters, shared by all three backends
-; in:  AX/BX = x1/y1, CX/DX = x2/y2, all inside the viewport
-; out: tk_lx/tk_ly = where the walk starts, tk_err/tk_e1/tk_e2/tk_cnt,
-;      tk_ystep (+-80), tk_sistep (+-2), tk_xdir, tk_steep. CF=0 always.
-;
-; SHALLOW LINES NORMALISE X INCREASING and steep ones normalise Y INCREASING,
-; which is what puts each walk's RARE step on the branchy side: a shallow
-; line's y moves seldom, so it can afford a memory-resident step, and a steep
-; line's x moves seldom, so it can afford a direction test. The frequent step
-; in both is a register add with no test in it at all.
-; -----------------------------------------------------------------------------
-tk_lprep:
-    mov si, cx                      ; SI = |dx|
-    sub si, ax
-    jge .dxp
-    neg si
-.dxp:
-    mov di, dx                      ; DI = |dy|
-    sub di, bx
-    jge .dyp
-    neg di
-.dyp:
-    cmp si, di
-    jb .steep
-
-    ; ---- shallow: x increasing --------------------------------------------
-    mov byte [tk_steep], 0
-    cmp ax, cx
-    jbe .noswap
-    xchg ax, cx
-    xchg bx, dx
-.noswap:
-    mov [tk_lx], ax
-    mov [tk_ly], bx
-    mov word [tk_ystep], 80
-    mov word [tk_sistep], 2
-    cmp dx, bx
-    jae .yd
-    mov word [tk_ystep], -80
-    mov word [tk_sistep], -2
-.yd:
-    mov ax, di                      ; e1 = 2|dy|
-    shl ax, 1
-    mov [tk_e1], ax
-    sub ax, si                      ; err = 2|dy| - |dx|
-    mov [tk_err], ax
-    mov ax, si
-    shl ax, 1
-    mov [tk_e2], ax                 ; e2 = 2|dx|
-    inc si
-    mov [tk_cnt], si
-    clc
-    ret
-
-    ; ---- steep: y increasing ----------------------------------------------
-.steep:
-    mov byte [tk_steep], 1
-    cmp bx, dx
-    jbe .noswap2
-    xchg ax, cx
-    xchg bx, dx
-.noswap2:
-    mov [tk_lx], ax
-    mov [tk_ly], bx
-    mov byte [tk_xdir], 0
-    cmp cx, ax
-    jae .xd
-    mov byte [tk_xdir], 1
-.xd:
-    mov ax, si                      ; e1 = 2|dx|
-    shl ax, 1
-    mov [tk_e1], ax
-    sub ax, di                      ; err = 2|dx| - |dy|
-    mov [tk_err], ax
-    mov ax, di
-    shl ax, 1
-    mov [tk_e2], ax                 ; e2 = 2|dy|
-    inc di
-    mov [tk_cnt], di
-    clc
-    ret
-
 ; =============================================================================
 ; The walk itself - one body, three plots (SPEC.md 85.3.2)
+;
+; Entered by `jmp` from tk_seg with: AX = lx, DI = the row's base in the
+; target, SI = the row's span pair, BX = err, CX = the pixel count, BP = e1,
+; [tk_e2]/[tk_ystep]/[tk_sistep]/[tk_xdir] set. Three entries a backend -
+; shallow, steep, vertical - so the body never asks which it is. Every one
+; ends in `ret`, to tk_seg's caller.
+;
+; WHAT AN 8088 CHARGES FOR, measured (SPEC.md 85.3.4): about five cycles for
+; every instruction BYTE and every memory access, and about fifteen for every
+; jump TAKEN, over and above the manual's execution counts - a 4-byte queue
+; and an 8-bit bus fetch nothing while a jump refills them. So the loops below
+; are arranged to be short in bytes, to take no jump on the common path, and
+; to touch memory only where a pixel or a span mark needs it.
 ; =============================================================================
 
 ; --- mark this row's first / last touched byte --------------------------------
@@ -648,8 +704,8 @@ tk_lprep:
 ; because an OR cannot take ink away: on a 1bpp adapter black is the ABSENCE
 ; of a bit, so a halo drawn under the GAME OVER lettering has to clear what
 ; the scene put there. The walk is otherwise identical - same recurrence, same
-; pixels - and the caller reaches it by swapping [tk_lineproc], so the drawing
-; path pays nothing for its existence.
+; pixels - and the caller reaches it by swapping the three walk pointers, so
+; the drawing path pays nothing for its existence.
 %macro TK_PLOT 2
   %if %1 == 3
     %if %2
@@ -665,41 +721,6 @@ tk_lprep:
     %else
     or [es:di], al
     %endif
-  %endif
-%endmacro
-
-; --- x + 1, the frequent step of a shallow line -------------------------------
-%macro TK_XFWD 1
-  %if %1 == 1                       ; 1bpp: 8 pixels to a byte
-    shr al, 1
-    jnz %%o
-    mov al, ah
-    inc di
-    inc dl
-%%o:
-  %elif %1 == 2                     ; 2bpp: 4 pixels, 2 bits each
-    shr al, 1
-    shr al, 1
-    jnz %%o
-    mov al, ah
-    inc di
-    inc dl
-%%o:
-  %else                             ; Mode X: the next pixel is the next PLANE
-    shl ah, 1                       ; ...and a map mask is FOUR bits, so this
-    cmp ah, 16                      ; wraps at 16 and not at 256: `rol` here
-    jne %%same                      ; selects no plane for half of every byte
-    mov ah, 1
-    inc di
-    inc dl
-%%same:
-    push dx
-    push ax
-    mov al, 2
-    mov dx, 0x3C4
-    out dx, ax
-    pop ax
-    pop dx
   %endif
 %endmacro
 
@@ -759,36 +780,22 @@ tk_lprep:
 %%done:
 %endmacro
 
-; --- the body -----------------------------------------------------------------
-%macro TK_LINEBODY 2
+; --- the entry every walk shares: the byte within the row, the pixel mask ----
+; in: AX = lx, DI = the row base; out: DI = the pixel's byte, DL = its index
+; within the row, AL/AH = the pattern and its wrap value, ES = the target.
+; Only CX is spent on it, and it is put back.
+%macro TK_LENTER 1
+    mov dx, ax
   %if %1 == 1
-    %assign %%K 3
-  %else
-    %assign %%K 2
+    shr dx, 1
   %endif
-    ; DI = tbase + 80*ly + (lx >> K); DL = that byte's index within the row
-    mov ax, [tk_ly]
-    mov cl, 4
-    shl ax, cl
-    mov di, ax
-    shl ax, 1
-    shl ax, 1
-    add di, ax
-    add di, [tk_tbase]
-    mov ax, [tk_lx]
-    mov bx, ax
-    mov cl, %%K
-    shr bx, cl
-    mov dl, bl
-    add di, bx
-    ; SI = the span pair for this row
-    mov si, [tk_ly]
-    shl si, 1
-    add si, [tk_spcur]
-    ; AL/AH = the pixel pattern and its wrap value
+    shr dx, 1
+    shr dx, 1                       ; DL = lx >> K, and DH is 0: lx < 640
+    add di, dx
+    push cx
   %if %1 == 1
-    and al, 7
     mov cl, al
+    and cl, 7
     mov al, 0x80
     shr al, cl
     mov ah, 0x80
@@ -816,34 +823,65 @@ tk_lprep:
     pop ax
     pop dx
   %endif
+    pop cx
     mov es, [tk_tseg]
-    mov bx, [tk_err]
-    mov cx, [tk_cnt]
-    mov bp, [tk_e1]                 ; the error step is the ONLY thing added
-    cld                             ; every pixel, so it is the one that gets
-    cmp byte [tk_steep], 0          ; the register
-    jne %%steep
+%endmacro
 
-    ; ---- shallow: one run a row, so its ends are its first and last pixel --
+; ---- shallow: one run a row, so its ends are its first and last pixel -------
+; The frequent step is `shr al, 1` and a `jz` that is NOT taken seven times in
+; eight; the byte crossing and the y step are both off the common path.
+%macro TK_SHALLOW 2
     TK_MLO
 %%spx:
     TK_PLOT %1, %2
-    or bx, bx
-    jle %%noy
+    add bx, bp
+    jg %%ys
+%%cont:
+  %if %1 == 3
+    shl ah, 1                       ; Mode X: the next pixel is the next PLANE
+    cmp ah, 16                      ; ...and a map mask is FOUR bits, so this
+    jne %%same                      ; wraps at 16 and not at 256
+    mov ah, 1
+    inc di
+    inc dl
+%%same:
+    push dx
+    push ax
+    mov al, 2
+    mov dx, 0x3C4
+    out dx, ax
+    pop ax
+    pop dx
+    loop %%spx
+    jmp short %%end
+  %else
+    shr al, 1
+    %if %1 == 2
+    shr al, 1
+    %endif
+    jz %%nb
+    loop %%spx
+    jmp short %%end
+%%nb:
+    mov al, ah
+    inc di
+    inc dl
+    loop %%spx
+    jmp short %%end
+  %endif
+%%ys:
     TK_MHI
     add di, [tk_ystep]
     add si, [tk_sistep]
     sub bx, [tk_e2]
     TK_MLO
-%%noy:
-    add bx, bp
-    TK_XFWD %1
-    loop %%spx
-    ; THE LAST STEP HAS ALREADY HAPPENED. TK_XFWD runs after the final plot,
-    ; so if that pixel was the last in its byte, DL now names the byte AFTER
-    ; the row - and marking it puts a span end one past the row's 80. The
-    ; clear then wipes the next row's first byte and the blit copies it to the
-    ; device, which on a CGA lands on a row about to be redrawn and is
+    jmp short %%cont
+%%end:
+    ; THE LAST STEP HAS ALREADY HAPPENED. The x step runs after the final
+    ; plot, so if that pixel was the last in its byte, DL now names the byte
+    ; AFTER the row - and marking it puts a span end one past the row's 80.
+    ; The clear then wipes the next row's first byte and the blit copies it to
+    ; the device, which on a CGA lands on a row about to be redrawn and is
     ; invisible, and on a HERCULES lands in the 10 bytes of margin either side
     ; of the 640-pixel viewport, where nothing ever erases it: reported from
     ; the field as stale ink collecting down the right-hand edge.
@@ -853,42 +891,247 @@ tk_lprep:
 %%last:
     TK_MHI
     ret
+%endmacro
 
-    ; ---- steep: a row IS a pixel, so both ends are the same byte -----------
-%%steep:
+; ---- steep: a row IS a pixel, so both ends are the same byte ----------------
+%macro TK_STEEP 2
+%%st:
     TK_PLOT %1, %2
     TK_MLO
     TK_MHI
     add di, 80
-    add si, 2
-    or bx, bx
-    jle %%nox
+    inc si
+    inc si
+    add bx, bp
+    jg %%xs
+    loop %%st
+    ret
+%%xs:
     TK_XSTEP %1
     sub bx, [tk_e2]
-%%nox:
-    add bx, bp
-    loop %%steep
+    loop %%st
     ret
 %endmacro
 
-; in: tk_lprep's output and [tk_ink8]; ES and every register clobbered
-tk_line_herc:
-    TK_LINEBODY 1, 0
-tk_line_cga:
-    TK_LINEBODY 2, 0
-tk_line_modex:
-    TK_LINEBODY 3, 0
+; ---- vertical: the steep walk with no error term at all ----------------------
+; BP is free of e1 here, so the row stride rides in it and the step is two
+; bytes where `add di, 80` is four. Every upright in the world takes this.
+%macro TK_VERT 2
+    mov bp, 80
+%%v:
+    TK_PLOT %1, %2
+    TK_MLO
+    TK_MHI
+    add di, bp
+    inc si
+    inc si
+    loop %%v
+    ret
+%endmacro
 
-; ...and the same three walks taking ink AWAY. Reached only by swapping
-; [tk_lineproc], and always after tk_setink TKI_MASK, which is the ink whose
-; device value is every bit of one pixel rather than a colour: the walk then
-; builds the right mask in AL and TK_PLOT's erase form ANDs its complement.
-tk_eline_herc:
-    TK_LINEBODY 1, 1
-tk_eline_cga:
-    TK_LINEBODY 2, 1
-tk_eline_modex:
-    TK_LINEBODY 3, 1
+; ---- run-length slice: a shallow line as one RUN a row (SPEC.md 85.3.6) -------
+; Taken when a line lays at least four pixels a row. Bresenham's 1985 run-
+; length slice: one `div` up front gives the whole step q and its remainder,
+; and each row's run is q or q+1 by an error term that moves once a ROW, so
+; the per-pixel loop above is replaced by whole-byte stores with a masked byte
+; at either end - tk_hseg's shape, once per row. The first and last runs are
+; half runs, which is what keeps the two ends on the endpoints.
+;
+; in: AX = lx, DI = the row base, SI = the span pair, CX = |dx|+1, BP = 2|dy|
+%macro TK_SLICE 2
+    mov es, [tk_tseg]
+    cld
+    mov dx, ax                      ; DX = X, the run's first pixel
+    shr bp, 1                       ; BP = |dy|
+    jz %%flat
+    mov [tk_lx], dx
+    mov ax, cx
+    dec ax                          ; AX = |dx|
+    xor dx, dx
+    div bp                          ; AX = q, DX = the remainder
+    mov [tk_q], ax
+    mov [tk_cnt], bp                ; runs after the first: |dy|
+    mov bx, bp
+    shl bx, 1
+    mov [tk_e2], bx                 ; the adjust-down: 2|dy|
+    mov cx, dx                      ; err = rem - 2|dy|, plus |dy| for an odd q
+    sub cx, bx
+    test al, 1
+    jz %%even
+    add cx, bp
+%%even:
+    mov [tk_err], cx
+    shl dx, 1
+    mov bp, dx                      ; BP = the adjust-up: 2 x rem
+    shr ax, 1
+    inc ax                          ; the half runs: q/2 + 1 ...
+    mov [tk_final], ax
+    or dx, dx                       ; ...and the first loses one when there is
+    jnz %%go                        ; nothing fractional and q is even, so the
+    test byte [tk_q], 1             ; pixel count still comes to |dx|+1
+    jnz %%go
+    dec ax
+%%go:
+    mov dx, [tk_lx]
+    jmp short %%row
+%%flat:
+    mov ax, cx                      ; dy = 0: one run of every pixel
+    mov word [tk_cnt], 0
+%%row:                              ; AX = this row's run, DX = its first x
+    mov cx, dx
+    add dx, ax                      ; DX = the next row's first x
+    mov al, cl
+  %if %1 == 1
+    and al, 7
+    mov bx, tk_hlm
+  %else
+    and al, 3
+    mov bx, tk_clm
+  %endif
+    xlat                            ; AL = the first byte's pixels
+    mov bx, dx
+    dec bx                          ; BX = the run's last x
+    mov ah, bl
+  %if %1 == 1
+    and ah, 7
+  %else
+    and ah, 3
+  %endif
+    xchg al, ah
+    push bx
+  %if %1 == 1
+    mov bx, tk_hrm
+  %else
+    mov bx, tk_crm
+  %endif
+    xlat                            ; AL = the last byte's pixels, AH the first's
+    pop bx
+  %if %1 == 1
+    shr cx, 1
+  %endif
+    shr cx, 1
+    shr cx, 1                       ; CX = the first byte
+  %if %1 == 1
+    shr bx, 1
+  %endif
+    shr bx, 1
+    shr bx, 1                       ; BX = the last byte
+    cmp [si], cl                    ; the span: lo = min(lo, first)
+    jbe %%ml
+    mov [si], cl
+%%ml:
+    cmp [si+1], bl                  ; hi = max(hi, last)
+    jae %%mh
+    mov [si+1], bl
+%%mh:
+  %if %1 == 2
+    and al, [tk_inkpat]             ; 2bpp: the ink's own bits, not all of them
+    and ah, [tk_inkpat]
+  %endif
+    cmp cx, bx
+    jne %%multi
+    and al, ah                      ; one byte carries both ends
+  %if %2
+    not al
+    and [es:di+bx], al
+  %else
+    or [es:di+bx], al
+  %endif
+    jmp short %%next
+%%multi:
+  %if %2
+    not al
+    and [es:di+bx], al              ; the last byte...
+    xchg bx, cx
+    not ah
+    and [es:di+bx], ah              ; ...and the first
+  %else
+    or [es:di+bx], al
+    xchg bx, cx
+    or [es:di+bx], ah
+  %endif
+    sub cx, bx
+    dec cx                          ; CX = whole bytes between them
+    jz %%next
+    push di
+    add di, bx
+    inc di
+  %if %2
+    xor al, al
+  %elif %1 == 1
+    mov al, 0xFF
+  %else
+    mov al, [tk_inkpat]
+  %endif
+    rep stosb
+    pop di
+%%next:
+    add di, [tk_ystep]
+    add si, [tk_sistep]
+    dec word [tk_cnt]               ; runs still to come after this one
+    js %%done                       ; none: that was the final run
+    jz %%fin                        ; the final run is next
+    mov ax, [tk_q]
+    add [tk_err], bp
+    jle %%torow
+    inc ax
+    mov bx, [tk_e2]
+    sub [tk_err], bx
+%%torow:
+    jmp %%row                       ; a near jump: the row is past short reach
+%%fin:
+    mov ax, [tk_final]
+    jmp %%row
+%%done:
+    ret
+%endmacro
+
+; --- the three entries of one backend -----------------------------------------
+%macro TK_WALKS 3
+%3_sh:
+  %if %1 != 3
+    mov dx, bp                      ; eight or more pixels a row - |dx| >= 8|dy|,
+    shl dx, 1                       ; which is CX-1 >= 4BP - takes the slice:
+    shl dx, 1                       ; a row of it costs what seven pixels do
+    cmp cx, dx
+    ja %%slice
+  %endif
+    TK_LENTER %1
+    TK_SHALLOW %1, %2
+  %if %1 != 3
+%%slice:
+    TK_SLICE %1, %2
+  %endif
+%3_st:
+    TK_LENTER %1
+    TK_STEEP %1, %2
+%3_vt:
+    TK_LENTER %1
+    TK_VERT %1, %2
+%endmacro
+
+; in: tk_seg's registers and [tk_ink8]; ES and every register clobbered
+TK_WALKS 1, 0, tk_line_herc
+TK_WALKS 2, 0, tk_line_cga
+TK_WALKS 3, 0, tk_line_modex
+
+; ...and the same walks taking ink AWAY. Reached only by swapping the three
+; walk pointers for the erase trio, and always after tk_setink TKI_MASK, which
+; is the ink whose device value is every bit of one pixel rather than a colour:
+; the walk then builds the right mask in AL and TK_PLOT's erase form ANDs its
+; complement.
+TK_WALKS 1, 1, tk_eline_herc
+TK_WALKS 2, 1, tk_eline_cga
+TK_WALKS 3, 1, tk_eline_modex
+
+; The pointer trios, per backend: shallow, steep, vertical. tk_bindraster
+; copies one into tk_lsh/tk_lst/tk_lvt and the erase one into the tk_e* trio.
+tk_lp_herc:  dw tk_line_herc_sh, tk_line_herc_st, tk_line_herc_vt
+tk_lp_cga:   dw tk_line_cga_sh, tk_line_cga_st, tk_line_cga_vt
+tk_lp_modex: dw tk_line_modex_sh, tk_line_modex_st, tk_line_modex_vt
+tk_ep_herc:  dw tk_eline_herc_sh, tk_eline_herc_st, tk_eline_herc_vt
+tk_ep_cga:   dw tk_eline_cga_sh, tk_eline_cga_st, tk_eline_cga_vt
+tk_ep_modex: dw tk_eline_modex_sh, tk_eline_modex_st, tk_eline_modex_vt
 
 ; -----------------------------------------------------------------------------
 ; tk_setink - adopt a logical ink (TKI_*) for the walks that follow
@@ -1000,58 +1243,70 @@ tk_r_end:
 ; DS (SPEC.md 20.1) and is free at that moment.
 ; -----------------------------------------------------------------------------
 tk_blit:
-    push ds
-    mov es, [tk_fsi+FSI_SEG]
+    ; THE LOOP KEEPS DS (SPEC.md 85.3.7). It used to reload both span pointers
+    ; from memory and read four bytes through CS on EVERY row, about 280
+    ; cycles a row before a byte moved, and most rows move none. Now the two
+    ; pairs come in as words, two equal EMPTY pairs are one compare, and the
+    ; shadow segment is loaded around the `rep` alone.
+    mov si, [tk_spcur]              ; this frame's set...
+    mov di, [tk_spprv]              ; ...and last frame's
+    mov bx, tk_devoff               ; the device row table
+    xor dx, dx                      ; the row's base in the shadow
     mov bp, [tk_vh]
-    xor bx, bx                      ; BX = the row's span offset
-    xor dx, dx                      ; DX = the row's base in the shadow
-    mov ax, [tk_shseg]
-    mov ds, ax
+    mov es, [tk_fsi+FSI_SEG]
     cld
 .row:
-    mov si, [cs:tk_spcur]
-    mov di, [cs:tk_spprv]
-    mov cl, [cs:si+bx]              ; CL = min(lo, lo')
-    mov al, [cs:di+bx]
-    cmp al, cl
-    jae .l1
-    mov cl, al
-.l1:
-    mov ch, [cs:si+bx+1]            ; CH = max(hi, hi')
-    mov al, [cs:di+bx+1]
-    cmp al, ch
-    jbe .h1
-    mov ch, al
-.h1:
-    cmp cl, ch
-    ja .next
-    and cl, 0xFE                    ; whole words, as the clear does
-    or ch, 1
+    lodsw                           ; AL/AH = lo/hi
+    mov cx, [di]                    ; CL/CH = lo'/hi'
+    inc di
+    inc di
+    cmp ax, cx
+    jne .work
+    cmp ax, 0x00FF                  ; both empty: the common row
+    je .next
+.work:
+    cmp al, cl                      ; AL = min(lo, lo')
+    jbe .l1
     mov al, cl
-    xor ah, ah
+.l1:
+    cmp ah, ch                      ; AH = max(hi, hi')
+    jae .h1
+    mov ah, ch
+.h1:
+    cmp al, ah
+    ja .next
+    and al, 0xFE                    ; whole words, as the clear does
+    or ah, 1
+    sub ah, al
+    shr ah, 1
+    mov cl, ah
+    xor ch, ch
+    inc cx                          ; CX = words
+    xor ah, ah                      ; AX = the first byte
+    push si
+    push di
+    mov di, [bx]
+    add di, ax                      ; ES:DI = the device row
     mov si, dx
-    add si, ax
-    mov di, [cs:tk_devoff+bx]
-    add di, ax
-    mov al, ch
-    sub al, cl
-    shr al, 1
-    xor ah, ah
-    inc ax
-    xchg ax, cx
+    add si, ax                      ; DS:SI = the shadow row
+    push ds
+    mov ds, [tk_shseg]
     rep movsw
+    pop ds
+    pop di
+    pop si
 .next:
-    add bx, 2
+    inc bx
+    inc bx
     add dx, 80
     dec bp
     jnz .row
-    pop ds
     ret
 
 ; -----------------------------------------------------------------------------
 ; tk_hseg - a HORIZONTAL run, whole bytes at a time (SPEC.md 85.3.3)
 ; in:  AX = x1, CX = x2 (x1 <= x2 not required), BX = y; viewport coords,
-;      clipped here.  [tk_ink] as usual.  preserves every register
+;      clipped here.  [tk_ink] as usual.  CLOBBERS EVERY REGISTER (85.3.4)
 ;
 ; SPEC.md 5.6.1's argument, on the other side of the fence: a walk lays one
 ; pixel per iteration and a fill lays four or eight per STORE, so an
@@ -1060,13 +1315,6 @@ tk_blit:
 ; Hercules - and as a walk it is 12,800 cycles against about 800 as a run.
 ; -----------------------------------------------------------------------------
 tk_hseg:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
     cmp ax, cx
     jbe .ord
     xchg ax, cx
@@ -1086,23 +1334,17 @@ tk_hseg:
 .r:
     cmp ax, cx
     jg .out
-
     mov bp, ax                      ; BP = x1, DX = x2 for the sub-byte masks
     mov dx, cx
-    mov cl, 3
-    cmp byte [tk_back], TKB_HERC
-    je .k
-    mov cl, 2
-.k:
+    mov cl, [tk_kshift]
     mov si, bp
     shr si, cl                      ; SI = first byte
     mov di, dx
     shr di, cl                      ; DI = last byte
-    ; --- the span for this row ------------------------------------------
-    push bx
+    ; --- the span for this row, then the row's base ---------------------
     shl bx, 1
-    add bx, [tk_spcur]
     mov ax, si
+    add bx, [tk_spcur]
     cmp [bx], al
     jbe .sl
     mov [bx], al
@@ -1112,26 +1354,12 @@ tk_hseg:
     jae .sh
     mov [bx+1], al
 .sh:
-    pop bx
-    ; --- the row's base address -----------------------------------------
-    mov ax, bx
-    mov cl, 4
-    shl ax, cl
-    mov bx, ax
-    shl ax, 1
-    shl ax, 1
-    add bx, ax
+    sub bx, [tk_spcur]
+    mov bx, [tk_rowoff + bx]
     add bx, [tk_tbase]              ; BX = the row base
     mov es, [tk_tseg]
-    call [tk_hrunproc]
+    jmp [tk_hrunproc]               ; ...which returns to our caller
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- the sub-byte masks the run's two ends need -------------------------------

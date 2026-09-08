@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """os88test - the regression suite, in two tiers with a WALL-CLOCK BUDGET.
 
-    python3 tools/os88test.py fast        # every build. Budget 30s.
-    python3 tools/os88test.py full        # before a merge. Budget 10 min.
+    python3 tools/os88test.py fast        # a commit you keep. Budget 30s.
+    python3 tools/os88test.py full        # major work reaching the integration
+                                          #   branch. Budget 3 min.
     python3 tools/os88test.py --list      # what is registered, and why
     python3 tools/os88test.py fast -k api # just the rows whose name matches
+
+WHEN EACH TIER IS RUN is docs/TESTING.md's `When to run which tier`, and it
+is the authority: none of the three is a per-commit gate.  `full` is four
+minutes and the whole soak is nearly two hours, so a change is covered by the
+ROW about the thing it touched (`soak -k '<subject>'`, minutes) far more often
+than by any tier.
 
 WHY THIS EXISTS.  This tree had ninety test scripts and no way to run them.
 Each one is a real gate - `tests/dockmark.py` and `tests/heapsame.py` are
@@ -56,10 +63,12 @@ so `--marty-jobs N` widens that lane to N.
 WHAT STILL RUNS ALONE, and it is no longer about the emulator.  TWO flags,
 and they are different claims:
 
-  * `builds=True` - the row shells out to `make`, so it rewrites `build/`
-    under any row reading it.  It cannot share the TREE, and
+  * `builds=True` - the row shells out to `make` IN THE SHARED TREE, so it
+    rewrites `build/` under any row reading it.  It cannot share the TREE, and
     `tests/unit/t_registry.py` checks this one against the script rather than
-    trusting it.
+    trusting it.  A row that builds into a tree of its own
+    (`tools/os88build.py`) is NOT one of these, and that gate refuses the flag
+    on one: the whole point is that a knob kernel no longer needs the tree.
   * `alone=True` - the row's ANSWER needs the machine to itself.  A row whose
     assertion is a RATE cannot share four cores with two other guests; nor can
     one whose clicks are paced by a host-timed settle.  It can share the tree
@@ -69,14 +78,24 @@ Both keep the row out of the shared lane whatever `--marty-jobs` says, and
 both land it in the one-at-a-time lane of the SAME run - so "the whole soak
 except the rate rows, then the rate rows" is one command now and not two.
 
-WHY THE DEFAULT IS 1.  Not caution about the isolation - `tests/martyconc.py`
-is the gate on that - but arithmetic.  Every instance runs its guest as fast
-as the host will let it, so N of them on an N-core box is the ceiling and past
-it each row takes LONGER in host seconds.  Guest cycle counts are unaffected
-(they are counted, not timed), but a row's declared `secs`, its timeout and
-`settle`'s patience are all host seconds, so raising this trades wall-clock
-for slack that some rows have not got.  Raise it deliberately, with the box in
-mind: `--marty-jobs 3` on a four-core machine.
+WHY THE DEFAULT IS CORES-1, and it USED TO BE 1.  The old reasoning was
+arithmetic rather than caution about isolation (`tests/martyconc.py` is the
+gate on that): guest cycle counts are unaffected by width, being counted
+rather than timed, but a row's declared `secs`, its timeout and `settle`'s
+patience were all HOST seconds - so widening the lane spent slack some rows
+had not got.
+
+That is the half that changed.  Those waits are denominated in GUEST time now
+(`os88marty.GUEST_HZ`), so what a row is allowed is the same on a busy box as
+an idle one, and contention can no longer explain a failure.  The measurement
+is `docs/plans/SOAK-PARALLEL.md` 1: twelve rows at width 3 with two extra CPU hogs
+passed 12/12 and ran 1.06x slower than the same rows alone.  On the pre-merge
+gate - nearly all emulator rows - the default took 402s to 227.5s.
+
+CORES-1 rather than CORES: the missing core is what a check-in, an editor or a
+small side task runs on, and a run sized to fill the box exactly is one that
+anything else on the box perturbs.  `$OS88_MARTY_JOBS` and `--marty-jobs`
+override.
 
 CAPABILITIES.  A row names what it needs (`marty`, `qemu`, `cc`, `net`) and
 is SKIPPED, loudly, when the machine has not got it - a container with no
@@ -95,21 +114,63 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import os88build                                            # noqa: E402
 
 # The tier ceilings, in seconds. These are the numbers in the request that
 # made this suite exist and they are not advisory - see the header.
 # The tier ceilings, in seconds. `soak` has none by design - it is where a
 # test goes when it is worth having and does not fit the gate.
-BUDGET = {"fast": 30, "full": 600, "soak": None}
+BUDGET = {"fast": 30, "full": 180, "soak": None}
 
 # How far a row may overrun its own declared `secs` before it is reported.
 # Generous on purpose: this is here to catch a row that got 3x slower, not
 # to police a loaded machine.
 SLIP = 2.0
 
+# ...and how far UNDER it may come in before that is reported instead. A row
+# is declared at what it costs; one that returns in a twentieth of that did
+# not do the work, whatever its exit code says. Deliberately far from 1.0 -
+# this is for the row that ran nothing at all (0.1s against 60), not for one
+# that got quicker.
+UNDER = 0.05
+
 GREEN, RED, YELLOW, DIM, OFF = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
     GREEN = RED = YELLOW = DIM = OFF = ""
+
+
+def _default_mj():
+    """How many emulator rows run at once, unless told otherwise.
+
+    IT USED TO BE 1, and the header above still carries the reasoning: guest
+    cycle counts are exact at any width, but `settle`, `until` and a row's
+    timeout were HOST seconds, so widening the lane spent slack some rows had
+    not got. That is the half that changed. Those waits are denominated in
+    GUEST time now (os88marty.GUEST_HZ), so what a row is allowed is the same
+    on a busy box as an idle one, and the measurement behind it is
+    docs/plans/SOAK-PARALLEL.md 1: twelve rows at width 3 with two extra CPU hogs
+    passed 12/12 and ran 1.06x slower than the same rows alone.
+
+    CORES-1, for the reason os88soak.py's `widths()` gives at length: the
+    missing core is what a check-in, an editor or a small side task runs on,
+    and a run sized to fill the box exactly is one that anything else on the
+    box perturbs. Measured on the `full` tier, which is the one that
+    benefits most because it is nearly all emulator rows: 402s -> 227.5s.
+
+    $OS88_MARTY_JOBS still overrides, and so does `--marty-jobs`.
+    """
+    env = os.environ.get("OS88_MARTY_JOBS")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    try:
+        n = len(os.sched_getaffinity(0))
+    except AttributeError:
+        n = os.cpu_count() or 2
+    return max(1, n - 1)
 
 
 def capabilities():
@@ -123,6 +184,14 @@ def capabilities():
     caps = set()
     if shutil.which("nasm"):
         caps.add("nasm")
+    # THE OTHER ASSEMBLER, and not the same capability. `nasm` above is "this
+    # box can assemble at all"; this is "this box can answer whether the tree
+    # still assembles under nasm 3", which CONTRIBUTING.md's 2.16 floor makes
+    # a separate question rather than a stricter one. os88build.nasm3() reads
+    # `-v` rather than trusting a name, so a `nasm3` that is a symlink to 2.16
+    # is absence and the row SKIPS.
+    if os88build.nasm3():
+        caps.add("nasm3")
     if os.path.exists(os.path.join(ROOT, "build/martypc/run/martypc_headless")):
         caps.add("marty")
     if shutil.which("qemu-system-i386") or shutil.which("qemu-system-x86_64"):
@@ -141,8 +210,22 @@ def capabilities():
     # simply has not built it, and a failure meaning "this box has no disk"
     # buries the failures that mean something. Named for the artifact, per the
     # note above.
-    if os.path.exists(os.path.join(ROOT, "build/wire360.img")):
+    # THROUGH `at`, because a frozen run reads the tree and not `build/`
+    # (docs/plans/SOAK-PARALLEL.md 14.2). Probing the shared directory granted the
+    # capability off a disk the rows could not open: `uilat`, `wirefps` and
+    # `wireflick` ran and died on FileNotFoundError instead of skipping - the
+    # one outcome a probed capability exists to prevent.
+    if os.path.exists(os88build.at("build/wire360.img")):
         caps.add("wiredisk")
+    # `skiesdiag` WANTED ONE OF THESE and got `wants=` instead, which is the
+    # note worth leaving. It opens a PRIVATE TREE (a -DCSDIAG build of a
+    # package that ships without it), nothing in the suite built one, and the
+    # row printed "SKIP" and returned 0 - so a soak scored it `ok` in 0.1s
+    # against 20s declared and the watchdog went untested for its whole life.
+    # A capability probed on that tree fixes the false green and NOT the
+    # staleness: existence is not freshness (docs/WRITING-TESTS.md 13 row 33),
+    # and an apps/skies edit then leaves a tree that exists and lies. `wants=`
+    # runs make on it every time, which is both.
     return caps
 
 
@@ -154,10 +237,22 @@ class Result:
         self.secs, self.output, self.reason = secs, output, reason
 
 
-def run_row(row, caps, strict, verbose):
+def run_row(row, caps, strict, verbose, unbuilt=()):
     missing = set(row.needs) - caps
     if missing and not strict:
         return Result(row, True, True, 0.0, "", "needs " + ",".join(sorted(missing)))
+    # **AN ARTEFACT THAT WOULD NOT BUILD IS A CAPABILITY GAP, and it costs the
+    # rows that named it and nothing else.** `prebuild` used to abort the whole
+    # run on the first failure, which is how one missing host tool cancelled a
+    # five-hour soak before a single row had reported: `build/zmove360.img`
+    # needs the Inform compiler, `editmove` is the only row that wants it, and
+    # 266 rows that needed nothing of the sort were not run. A row whose input
+    # does not exist cannot answer, and a skip is the box declining to answer -
+    # which is exactly what this is.
+    want = [f for f in getattr(row, "wants", ()) if f in unbuilt]
+    if want and not strict:
+        return Result(row, True, True, 0.0, "",
+                      "needs " + ",".join(want) + ", which would not build")
 
     t0 = time.time()
     try:
@@ -210,6 +305,133 @@ def _sweep_qemu():
         swept.append(os.path.basename(pf))
     return ("\nos88test: swept %s after the timeout\n" % ", ".join(swept)
             if swept else "")
+
+
+def prebuild(rows):
+    """Build every artefact the selected rows DECLARE, before any of them run.
+
+    `Row(wants=...)` names build artefacts a row opens that `make all` does not
+    produce, as paths - and every one of them is a `$(BUILD)/x` rule, so
+    `make <path>` builds it.
+
+    **THE POINT IS THE MOMENT, not the convenience.** A row that builds its own
+    artefact does it while the other rows are running, and a `make` rewrites
+    build/ under everything reading it: the first full soak of this work lost
+    nine rows to a four-minute window opened by one row's `make`
+    (docs/plans/SOAK-PARALLEL.md 12). Doing it here does it when nothing else is
+    running.
+
+    And it ends the other failure, which reads as a broken feature rather than
+    a missing file: eleven images under tests/ have a Makefile rule and no
+    builder, so a row that names one dies on `FileNotFoundError` several
+    frames from the cause. `mseg360`, `pkgbig` and `pkgfence` did exactly that.
+
+    Serially and never under `-j`: parallel makes race on shared intermediates
+    (os88soak's prewarm carries the same note and the same reason).
+    """
+    import subprocess
+    # **EVERY DECLARED ARTEFACT, NOT JUST THE ABSENT ONES.** This used to skip
+    # anything that already existed, which was safe only while each row still
+    # ran `make <art>` for itself: make is the dependency graph and an
+    # existing file says nothing about whether it is CURRENT. The moment the
+    # rows stopped building their own, a stale artefact stopped being
+    # refreshed by anything at all - measured, `build/c64.bin` from an earlier
+    # tree survived a cherry-pick and `c64part` failed with "the re-assembly
+    # of apps/c64/c64.asm is not byte-identical", which reads as a broken
+    # package and is a file nobody rebuilt.
+    #
+    # An up-to-date target costs a parse, and the parse is why they go in ONE
+    # make below rather than one each.
+    want = []
+    for r in rows:
+        for art in getattr(r, "wants", ()):
+            if art not in want:
+                want.append(art)
+    if not want:
+        return []
+    # **A PLAIN `make` FIRST, and then the declared ones.** A targeted
+    # `make build/x.img` builds x.img and whatever it depends on - which can
+    # restamp a driver or a package shared with the SHIPPED images, leaving
+    # build/*.img holding an artefact this tree no longer builds. The `image`
+    # and `pkg` gates catch that, correctly, and it reads as a stale image.
+    # Bringing the whole tree current first costs about two seconds when it
+    # already is, and it is the same reason os88soak's prewarm opens with one.
+    # **A FROZEN RUN BUILDS NOTHING HERE.** With $OS88_TREE set the tree was
+    # made before any of this started (os88soak's start, 14.2) and already
+    # contains every declared artefact - it is built from the same union. So
+    # the job is to CONFIRM, not to build: a `make` in the shared build/ would
+    # be the one thing the freeze exists to make unnecessary, and under an
+    # agent working in that directory it would also fail for reasons that have
+    # nothing to do with this run. Measured: with a knob build looping in
+    # build/, this printed "`make` failed before the declared artefacts"
+    # while every row went on to pass against the tree.
+    if os88build.tree_root():
+        gone = [a for a in want if not os.path.exists(os88build.at(a))]
+        if gone:
+            print("%s  %d declared artefact(s) are not in the run's tree: %s%s"
+                  % (YELLOW, len(gone), " ".join(gone), OFF))
+        return gone
+
+    # **AND NOTHING BUILDS ANYTHING WHEN WE ARE ALREADY INSIDE A `make`.**
+    # The FAST tier runs as part of `make all`, so a fast row that declares
+    # `wants=` puts this routine inside make - and the plain `make` below then
+    # re-enters `all`, which runs the fast tier, which reaches here again.
+    # That is not a slow build, it is a fork bomb: measured, one `wants=` on a
+    # fast row took a container to hundreds of nested makes in about a minute.
+    # MAKELEVEL is make's own answer to "am I a sub-make", and a tree make is
+    # already bringing current is by definition current.
+    if os.environ.get("MAKELEVEL"):
+        gone = [a for a in want if not os.path.exists(os.path.join(ROOT, a))]
+        if gone:
+            print("%s  %d declared artefact(s) are missing inside a make: %s%s"
+                  % (YELLOW, len(gone), " ".join(gone), OFF))
+        return gone
+
+    print("os88test: building %d declared artefact(s): %s"
+          % (len(want), " ".join(want)))
+    r = subprocess.run(["make", "-s"], cwd=ROOT, capture_output=True, text=True)
+    if r.returncode:
+        print("%s  `make` failed before the declared artefacts:%s %s"
+              % (YELLOW, OFF, (r.stderr or r.stdout)[-300:]))
+    # ONE MAKE FOR THE LOT, then one each only if that fails. The Makefile's
+    # parse is most of the cost of an up-to-date target, and paying it thirty
+    # times to be told thirty times that nothing needs doing is the kind of
+    # fixed cost a soak notices. A failure then re-runs them singly, because
+    # "one of these thirty did not build" is not a usable message.
+    r = subprocess.run(["make", "-s"] + want, cwd=ROOT,
+                       capture_output=True, text=True)
+    missing = [a for a in want if not os.path.exists(os.path.join(ROOT, a))]
+    if not r.returncode and not missing:
+        return []
+    bad = []
+    for art in want:
+        r = subprocess.run(["make", "-s", art], cwd=ROOT,
+                           capture_output=True, text=True)
+        if r.returncode or not os.path.exists(os.path.join(ROOT, art)):
+            bad.append(art)
+            print("%s  `make %s` failed:%s %s"
+                  % (YELLOW, art, OFF, (r.stderr or r.stdout)[-300:]))
+    return bad
+
+
+def publish(rows, unbuilt):
+    """Tell the rows which artefacts are already built ($OS88_PREBUILT).
+
+    `tools/os88fixture.need()` reads it and does nothing for a target that is
+    in it - which is what lets a row drop `builds=True` and share the emulator
+    lane, because the flag is only ever about a `make` in the SHARED tree.
+    And a target NOT in it is an error there rather than a build, which is the
+    check no reader of a script can make: `need(DISK)` and `need(a.apps)` are
+    as common as a literal path, so whether `wants=` covers them is a question
+    only the call itself can answer.
+
+    EVERY SELECTED ROW'S wants, not just the ones this run had to build: a
+    declared artefact that was already present is equally not to be rebuilt.
+    """
+    done = sorted({f for r in rows for f in getattr(r, "wants", ())
+                   if f not in unbuilt})
+    os.environ["OS88_PREBUILT"] = " ".join(done)
+    return done
 
 
 def kernel_is_stale(rows):
@@ -278,13 +500,13 @@ def main():
     ap.add_argument("-j", type=int, default=min(4, (os.cpu_count() or 2)),
                     help="parallel lanes for the host-side rows")
     ap.add_argument("--marty-jobs", type=int, dest="mj",
-                    default=int(os.environ.get("OS88_MARTY_JOBS", "1")),
-                    help="how many EMULATOR rows may run at once (default 1). "
-                         "Instances are isolated, so this is a question about "
-                         "how many cores the box has, not about safety - see "
-                         "the header. Rows marked builds=True (cannot share the "
-                         "TREE) or alone=True (cannot share the CORES) run "
-                         "alone whatever this says.")
+                    default=_default_mj(),
+                    help="how many EMULATOR rows may run at once (default: "
+                         "cores-1). Instances are isolated, so this is a "
+                         "question about how many cores the box has, not about "
+                         "safety - see the header. Rows marked builds=True "
+                         "(cannot share the TREE) or alone=True (cannot share "
+                         "the CORES) run alone whatever this says.")
     ap.add_argument("--list", action="store_true", help="print the registry and exit")
     ap.add_argument("--strict", action="store_true",
                     help="a missing capability is a FAILURE, not a skip")
@@ -328,6 +550,19 @@ def main():
         print("%sos88test: %s%s" % (RED, stale, OFF))
         return 1
 
+    # AND THE ROWS THAT WANTED THEM SKIP - see run_row. A missing artefact is
+    # one row's problem, not the run's; aborting here cancelled a whole soak
+    # over one host tool nobody had installed.
+    unbuilt = set(prebuild(want))
+    publish(want, unbuilt)
+    if unbuilt:
+        hit = sorted(r.name for r in want
+                     if set(getattr(r, "wants", ())) & unbuilt)
+        print("%sos88test: %d artefact(s) would not build: %s%s"
+              % (YELLOW, len(unbuilt), " ".join(sorted(unbuilt)), OFF))
+        print("%s  %d row(s) will SKIP for it: %s%s"
+              % (YELLOW, len(hit), " ".join(hit), OFF))
+
     caps = capabilities()
     declared = sum(r.secs for r in want)
     cap = BUDGET[a.tier]
@@ -360,6 +595,20 @@ def main():
         elif res.ok:
             slip = "" if res.secs <= res.row.secs * SLIP + 1 else \
                 "  %s(declared %.0fs)%s" % (YELLOW, res.row.secs, OFF)
+            # ...and the OTHER direction, which had no report at all and is
+            # the worse one. A row finishing in a few percent of its
+            # declaration did not do what it says: it is an ABSENT gate, not a
+            # fast one. docs/plans/HANDOFF-SOAK-FINDINGS.md B4 records three rows
+            # that FAILED in 0.1s where they meant to skip, and those got
+            # investigated because they were red - `dispcp` was a LIBRARY
+            # registered as a row, reporting `ok` in 0.1s against 60 declared,
+            # and nobody investigates a pass. Only worth saying for a row that
+            # claims real time: a 0.1s declaration cannot underrun.
+            if not slip and res.row.secs >= 5.0 and res.secs < res.row.secs * UNDER:
+                slip = ("  %sUNDERRAN %.0f%% of its declared %.0fs - it ran "
+                        "nothing, or the declaration is wrong%s"
+                        % (YELLOW, 100.0 * res.secs / res.row.secs,
+                           res.row.secs, OFF))
             print("%s ok %s %-28s %5.1fs%s" % (GREEN, OFF, res.row.name, res.secs, slip))
         else:
             print("%sFAIL%s %-28s %5.1fs  %s" % (RED, OFF, res.row.name, res.secs, res.reason))
@@ -370,13 +619,14 @@ def main():
     # The host-side rows fan out; the emulator rows share one lane behind
     # them, for the port reason in the header.
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, a.j)) as ex:
-        futs = {ex.submit(run_row, r, caps, a.strict, a.verbose): r for r in par}
+        futs = {ex.submit(run_row, r, caps, a.strict, a.verbose, unbuilt): r
+                for r in par}
         for f in concurrent.futures.as_completed(futs):
             res = f.result()
             results.append(res)
             report(res)
     for r in ser:
-        res = run_row(r, caps, a.strict, a.verbose)
+        res = run_row(r, caps, a.strict, a.verbose, unbuilt)
         results.append(res)
         report(res)
     # ...and the emulator lane LAST, never beside the builders above: a `make`
@@ -384,7 +634,7 @@ def main():
     # row must not be reading.
     if conc:
         with concurrent.futures.ThreadPoolExecutor(max_workers=mj) as ex:
-            futs = {ex.submit(run_row, r, caps, a.strict, a.verbose): r
+            futs = {ex.submit(run_row, r, caps, a.strict, a.verbose, unbuilt): r
                     for r in conc}
             for f in concurrent.futures.as_completed(futs):
                 res = f.result()

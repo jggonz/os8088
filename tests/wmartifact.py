@@ -7,7 +7,7 @@
     python3 tests/wmartifact.py --part seam           # needs the dual machine
 
 Both were found while testing SPEC.md 65's Calculator and both are the window
-manager's; docs/WM-ARTIFACTS.md is the report and carries the measurements
+manager's; docs/history/WM-ARTIFACTS.md is the report and carries the measurements
 this script produces. It is written so that a reader who suspects the package
 can throw the package away: part 1 opens `hello`, which draws one greeting and
 nothing else, and part 2 drags a DISK WINDOW, which is the kernel's own.
@@ -386,7 +386,7 @@ def main():
         for f in fails:
             print("  - " + f)
         sys.exit(1)
-    print("wmartifact: both artifacts measured; docs/WM-ARTIFACTS.md is the "
+    print("wmartifact: both artifacts measured; docs/history/WM-ARTIFACTS.md is the "
           "report")
 
 

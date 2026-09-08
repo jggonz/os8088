@@ -9,13 +9,20 @@ carries the SLOT AND NOT THE BODY (SPEC.md 5.4.2), answers CF = 1, and Paint
 expands each row into `pt_line` as packed 4bpp for `gfx_blit4` instead.
 
 **BOTH PATHS ARE DRIVEN ON ONE KERNEL, AND THE ORACLE IS THE FILE.**  Which
-path runs is chosen by the CANVAS WIDTH: the fast path rounds the blit up to
-a multiple of 8 and gives up when that would reach past the picture, so a
-208-wide fixture takes `gfx_blit1` and a 204-wide one takes the row loop.
-That is better than running the two kernels against each other - it compares
-each against what the file actually says rather than against the other's
-opinion - and it needs no `kern_small` boot, whose B: drive the harness
-cannot open.
+path runs used to be chosen by the CANVAS WIDTH: the fast path rounded the
+blit up to a multiple of 8 and gave up when that reached past the picture, so
+a 208-wide fixture took `gfx_blit1` and a 204-wide one the row loop.  SPEC.md
+5.4.2.5 ended that - `gfx_blit1` merges the last partial byte under a mask -
+so BOTH widths take the fast path now, and the 204-wide one is the row whose
+tail byte is the thing under test: its last byte column holds four picture
+pixels and four of padding, and the padding must not land on the glass.  The
+row loop is then provoked the only way left on this kernel, by POKING THE
+KERNEL'S THUNK: `gfx_blit1` is `call far / ret` in `.text`, and `stc / ret`
+written over its first two bytes is exactly what kern_small answers - CF = 1,
+nothing drawn - with no rebuild and no second kernel.  That is better than running the two kernels against
+each other - it compares each against what the file actually says rather
+than against the other's opinion - and it needs no `kern_small` boot, whose
+B: drive the harness cannot open.
 
 WHICH PATH RAN IS ASKED OF THE PATH'S OWN SIDE EFFECT, not of a breakpoint:
 the fallback expands each row into `pt_line` and the fast path never touches
@@ -88,8 +95,12 @@ def expect(w):
     return out
 
 
-def arm(label, name, w, want_fast, machine):
-    """Open one fixture; establish WHICH path drew it, and that it is right."""
+def arm(label, name, w, want_fast, machine, refuse=False):
+    """Open one fixture; establish WHICH path drew it, and that it is right.
+
+    `refuse` pokes `stc / ret` over the kernel's gfx_blit1 thunk once Paint
+    is up, so the kernel answers CF = 1 the way kern_small does (SPEC.md
+    5.4.2) and the row loop is what draws."""
     img = dispapps.img_size("paint")
 
     def off(seg, n):
@@ -143,6 +154,8 @@ def arm(label, name, w, want_fast, machine):
         # and Ctrl+Z is what repaints out of the canvas (tests/paintundo.py).
         LINE = off(seg, "pt_line")
         SENT = bytes([0xA5]) * 64
+        if refuse:
+            m.write(S("gfx_blit1"), bytes([0xF9, 0xC3]))     # stc / ret
         m.write(off(seg, "pt_thick"), bytes([3]))
         m.advance(frames=4)
         m.run()
@@ -203,9 +216,9 @@ def arm(label, name, w, want_fast, machine):
                          "the fast path is not being taken (SPEC.md 42.23.4)"
                          % label)
         if not want_fast and not fell_back:
-            FAILS.append("%s: pt_line was untouched, so gfx_blit1 took a "
-                         "width off the byte grid - rounding it up paints "
-                         "canvas padding past the picture" % label)
+            FAILS.append("%s: pt_line was untouched, so a REFUSED gfx_blit1 "
+                         "did not send Paint to the row loop - the contract's "
+                         "second path is gone (SPEC.md 42.23.4)" % label)
 
 
 def main(argv):
@@ -215,15 +228,16 @@ def main(argv):
     os.chdir(ROOT)
 
     arm("byte grid", "PAT8.BMP", 208, True, a.machine)
-    arm("off grid", "PAT7.BMP", 204, False, a.machine)
+    arm("off grid", "PAT7.BMP", 204, True, a.machine)
+    arm("refused", "PAT7.BMP", 204, False, a.machine, refuse=True)
 
     for f in FAILS:
         print("paint1blit: " + f)
     if FAILS:
         print("paint1blit: FAIL")
         return 1
-    print("paint1blit: PASS - gfx_blit1 and the expansion fallback each draw "
-          "the file, and the width is what picks between them")
+    print("paint1blit: PASS - gfx_blit1 draws the file on and off the byte "
+          "grid, and a refused blit still reaches the row loop")
     return 0
 
 

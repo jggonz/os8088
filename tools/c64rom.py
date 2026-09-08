@@ -2,21 +2,19 @@
 # =============================================================================
 # os8088 - tools/c64rom.py
 #
-# Build C64.ROM, the C64 package's ROM SIDECAR (C64-SPEC §1.4), out of
-# the three Commodore ROM binaries committed under apps/c64/rom/.
+# Build C64.ROM, the C64 package's ROM PART (C64-SPEC §1.4), out of the
+# three Commodore ROM binaries committed under apps/c64/rom/.
 #
 #     python3 tools/c64rom.py                 -> build/c64-rom/C64.ROM
 #     python3 tools/c64rom.py -o <path>       -> somewhere else
 #     python3 tools/c64rom.py --check         -> verify the inputs, write
 #                                                nothing
 #
-# WHY A SIDECAR AND NOT AN EMBEDDED ARRAY. 20,480 bytes of ROM inside the
-# package would have put it at about 73,000 bytes against SPEC.md 73's 61,440
-# cap - refused on paper, before a line was written. So the ROMs live in a
-# file of their own that the package reads into a 20KB heap claim at launch,
-# which is also what the user asked for in so many words: "use a sidecar that
-# is loaded at runtime ... so that we can load the rom at runtime instead of
-# embedding it in the package."
+# WHERE IT GOES. os88pkg.py appends the file to C64.O88 as part 0 (SPEC.md
+# 20.12, the CC_PACKAGE call in the Makefile), LZ4-compressed on the disk and
+# claimed and decoded into a 20KB heap claim at launch by apps/cc/crt0.asm's
+# op_load, before any C runs. It was a SIDECAR file beside the package until
+# the parts standard existed; the layout did not change when it moved.
 #
 # THE LAYOUT IS FIXED AND THE PACKAGE DEPENDS ON IT (C64-SPEC §1.4):
 #
@@ -24,9 +22,7 @@
 #     0x2000  8192   BASIC    basic-901226-01.bin
 #     0x4000  4096   CHARGEN  chargen-901225-01.bin
 #             -----
-#             20480 = 40 sectors, exactly 20KB, 512-aligned by construction,
-#                     so os88_file_read_seg lands it straight at the base of
-#                     the claim with no scratch buffer (SPEC.md 2.1.1).
+#             20480 = exactly 20KB, 512-aligned by construction
 #
 # EVERY INPUT IS CHECKED BY SHA-256 BEFORE ANYTHING IS WRITTEN. The three
 # hashes below are the ones C64-SPEC §1.3 and apps/c64/rom/README.md

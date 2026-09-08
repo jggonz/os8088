@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/thewire/wrhttp.inc
 ;
-; THE WIRE'S HTTP/1.0 CLIENT (SPEC.md 88.4), and the worker that drives it.
+; THE WIRE'S HTTP/1.0 CLIENT (SPEC.md 92.4), and the worker that drives it.
 ;
 ; --- WRITTEN SO IT COULD MOVE TO apps/ -------------------------------------
 ; docs/WIRE-PLAN.md 11 defers a shared `apps/os88http.inc` and says why: the
@@ -18,7 +18,7 @@
 ;
 ; Everything else here is private. The one deliberate coupling is the
 ; INVERSION in wr_take - a WK_PIC body is stored `not`-ed, which is SPEC.md
-; 88.3's whole adapter story - and it is one instruction behind one compare.
+; 92.3's whole adapter story - and it is one instruction behind one compare.
 ;
 ; --- THE DESTINATION IS A FAR POINTER, WHICH THE BROWSER'S IS NOT ------------
 ; brnet.inc always drains into one claim. This drains into a claim (a catalog
@@ -225,7 +225,7 @@ wr_nstep:
                                         ; wire": no NETV_RECV is issued, so
                                         ; TCP's own receive window backs the
                                         ; server off while the UI task writes
-                                        ; a file (SPEC.md 88.14)
+                                        ; a file (SPEC.md 92.14)
 
 .open:
     call net_find                       ; WHICH driver, and is it one of ours?
@@ -447,7 +447,7 @@ wr_rputs:
 ; the pass started and is stale a thousand stores later.
 ;
 ; **AND IT MAY STOP BEFORE THE CHUNK IS SPENT.** An archive's unpacker pauses
-; at every entry boundary (SPEC.md 88.14) and a boundary lands wherever it
+; at every entry boundary (SPEC.md 92.14) and a boundary lands wherever it
 ; lands, so the read position is state rather than a register - which is also
 ; why the counter is carried in CX and written back at each exit rather than
 ; run down by `loop`.
@@ -491,7 +491,7 @@ wr_take:
     cmp byte [wr_kind], WK_PIC
     jne .st
     not al                              ; **THE PICTURE IS INVERTED AS IT
-                                        ; ARRIVES** (SPEC.md 88.3): the file's
+                                        ; ARRIVES** (SPEC.md 92.3): the file's
                                         ; 1 is ink and gfx_blit1 wants a set
                                         ; bit to be a LIT pixel, so one `not`
                                         ; here buys a draw with no adapter
@@ -506,7 +506,7 @@ wr_take:
     call wr_afeed                       ; THE UNPACKER, not a store: this byte
                                         ; is a header field, a literal or half
                                         ; of a pair, and where it lands is
-                                        ; wrarc.inc's business (SPEC.md 88.13)
+                                        ; wrarc.inc's business (SPEC.md 92.13)
     add word [wr_got], 1                ; ...and the count is 32-bit HERE ONLY,
     adc word [wr_got+2], 0              ; so a package and a picture keep the
                                         ; single `inc` they always had
@@ -599,7 +599,7 @@ wr_hdrline:
     inc si
     jmp short .sp
 .num:
-    ; **THE ACCUMULATOR IS 32 BITS** (SPEC.md 88.14): a .WPK is the one body
+    ; **THE ACCUMULATOR IS 32 BITS** (SPEC.md 92.14): a .WPK is the one body
     ; this client reads that may pass 64KB, and a word here would take a
     ; 196KB archive as a 65KB one - a small plausible number, which is
     ; PERFORMANCE.md rule 3's failure mode exactly. The low half is multiplied
@@ -739,7 +739,7 @@ wr_hdrdone:
     or ax, [wr_clen+2]
     jz .status                          ; no length is 'did not answer (0)',
                                         ; which is true and is what SPEC.md
-                                        ; 88.4 requires
+                                        ; 92.4 requires
     cmp byte [wr_kind], WK_ARC
     je .arc
     cmp word [wr_clen+2], 0             ; every OTHER kind lands in one claim,
@@ -768,7 +768,7 @@ wr_hdrdone:
 .arc:
     ; **AN ARCHIVE MUST BE EXACTLY THE BYTES THE CATALOG PROMISED**, over 32
     ; bits, and there is no claim to check it against: WC_SIZE is what the
-    ; transfer carries and WC_TOTAL what it unpacks to (SPEC.md 88.2), so this
+    ; transfer carries and WC_TOTAL what it unpacks to (SPEC.md 92.2), so this
     ; is the only bound the stream has before wr_ahdrck sees the header.
     call wr_selrec
     mov ax, [wr_clen]
@@ -814,7 +814,7 @@ wr_hdrdone:
 ; -----------------------------------------------------------------------------
 ; wr_finish / wr_failpost - the two ways a transfer ends
 ;
-; Both are the WORKER's half of SPEC.md 88.5's one byte: everything the
+; Both are the WORKER's half of SPEC.md 92.5's one byte: everything the
 ; handler will read is written first, and [wr_wake] LAST.
 ; -----------------------------------------------------------------------------
 wr_finish:
@@ -847,7 +847,7 @@ wr_pausepost:
     mov [wr_wkind], al
     mov al, [wr_apw]
     mov [wr_wake], al                   ; ...LAST, after everything the handler
-                                        ; will read (SPEC.md 88.5)
+                                        ; will read (SPEC.md 92.5)
     mov bx, [wr_win]
     call OSAPI_WM_WAKE
     call wr_nshow

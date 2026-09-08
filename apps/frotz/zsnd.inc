@@ -3,7 +3,7 @@
 ;
 ; @sound_effect, and nothing else. This module owns every sound Frotz makes
 ; and every decision about what a story's request maps onto (Standard 9,
-; docs/FROTZ-PLAN.md 7).
+; docs/plans/completed/FROTZ-PLAN.md 7).
 ;
 ; THE DECISION THAT SHAPES IT: the Standard divides sound into two things that
 ; are not variations of each other. Effects 1 and 2 are BLEEPS - "immediate
@@ -116,7 +116,7 @@ ZS_CH       equ 0                   ; the one FM channel we key. Channel 8 is
 ; choice.
 ;
 ; ES is pushed and popped although nothing here should disturb it: this runs
-; with ES = the story segment (docs/FROTZ-PLAN.md 3.1), OSAPI_SND_FM is
+; with ES = the story segment (docs/plans/completed/FROTZ-PLAN.md 3.1), OSAPI_SND_FM is
 ; X-stubbed (the stub restores the caller's ES) and the plain slots preserve
 ; it - but an ES that came back wrong would corrupt the machine's memory
 ; silently, and two bytes of stack is not a price.

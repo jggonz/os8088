@@ -43,6 +43,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
+import os88build                                            # noqa: E402
 import os88sym                                              # noqa: E402
 import shot                                                 # noqa: E402
 import os88qemu                                              # noqa: E402
@@ -83,25 +84,29 @@ def kill_stale():
 
 # NAMED TARGETS, never a bare `make`: the default goal runs the fast tier, and
 # `api-abi` there re-assembles the kernel plain and compares it against
-# build/kernel.bin - which is exactly what a knob kernel is not (CLAUDE.md's
-# third trap). So a bare `make VGADIRTY=1` fails on its own instrumentation.
-TARGETS = ["build/os8088.img", "build/apps.img"]
+# kernel.bin - which is exactly what a knob kernel is not (CLAUDE.md's third
+# trap). So a bare `make VGADIRTY=1` fails on its own instrumentation.
+# os88build.tree() names its targets for the same reason.
+TARGETS = ("os8088.img", "apps.img")
 
-
-def build(knob):
-    subprocess.run(["make"] + knob + TARGETS, cwd=ROOT, check=True,
-                   stdout=subprocess.DEVNULL)
+# THE KNOB KERNEL LIVES IN A TREE OF ITS OWN (tools/os88build.py), so this row
+# no longer writes build/ and no longer has to put it back. It used to be
+# `make VGADIRTY=1 build/os8088.img build/apps.img` followed by a `make` in a
+# `finally` - and the `finally` could only promise the restore, not deliver
+# it: a killed Python runs none.
+KNOB = os88build.tree("VGADIRTY=1", targets=TARGETS).apply()
 
 
 def launch():
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
     subprocess.run(
         em + " -S -machine pc,vmport=off"   # the msserial mouse drives this
-        " -drive file=build/os8088.img,format=raw,if=floppy -boot a"  # (SPEC.md
-        " -drive file=build/apps.img,format=raw,if=floppy,index=1"    # 9.11)
+        " -drive file=%s,format=raw,if=floppy -boot a"                # (SPEC.md
+        " -drive file=%s,format=raw,if=floppy,index=1"                # 9.11)
         " -chardev msmouse,id=m0 -serial chardev:m0"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
-        % (SOCK, PIDFILE), cwd=ROOT, shell=True, check=True)
+        % (KNOB.img("os8088.img"), KNOB.img("apps.img"), SOCK, PIDFILE),
+        cwd=ROOT, shell=True, check=True)
     # ...and it is DAEMONISED, so it outlives this script unless
     # somebody kills it - and the somebody is us (os88qemu).
     os88qemu.own(PIDFILE, SOCK)
@@ -116,7 +121,6 @@ def screen(q):
 
 def main():
     kill_stale()
-    build(["VGADIRTY=1"])
     try:
         launch()
         q = heapmap.Qmp(SOCK)
@@ -150,7 +154,6 @@ def main():
         q.hmp("quit")
     finally:
         kill_stale()
-        build([])                           # never leave a knob kernel in build/
 
     w, h, pix = shot_at
     dirty, inbox = [], 0

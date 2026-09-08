@@ -137,7 +137,7 @@ overlays = [
 # has a floor of its own, and nothing has ever squeezed one.
 #
 # It is also the only way to audit the PINNED boot claims honestly
-# (docs/KERN-SMALL-CUT-PLAN.md 8.2): a claim standing on a bare desktop is
+# (docs/plans/KERN-SMALL-CUT-PLAN.md 8.2): a claim standing on a bare desktop is
 # heap the machine never gets back, no assembler can see it, and its cost is
 # only real against the heap a 128KB machine actually has.
 #
@@ -1002,7 +1002,7 @@ overlays = [
     type = "CGA"
     clock_mode = "Dynamic"
 
-# THE PARALLEL-PORT MACHINE (SPEC.md 51, docs/NET-PLAN.md 1.4). The CGA
+# THE PARALLEL-PORT MACHINE (SPEC.md 51, docs/plans/completed/NET-PLAN.md 1.4). The CGA
 # GLaBIOS 5150 with a Centronics card at 0x378, which is the ONLY os8088
 # machine that has one - every other config here leaves the port range
 # unpopulated, so NET.DRV's latch probe correctly finds nothing and refuses
@@ -1016,7 +1016,7 @@ overlays = [
 # finds 0x378 - which is the whole attach path, the publication, the page and
 # the desktop zone. It has NO PARTNER on the other end and there is no way to
 # give it one: the status lines read a constant, so `mst_hello` times out and
-# the page says `No partner`, which is docs/NET-PLAN.md 1.4.4's own
+# the page says `No partner`, which is docs/plans/completed/NET-PLAN.md 1.4.4's own
 # distinction being drawn by the machine rather than by an argument. The WIRE
 # is the 5150's question and `tests/lptlink` is how it is asked.
 #
@@ -1095,7 +1095,7 @@ overlays = [
     clock_mode = "Dynamic"
 
 # A VGA AND A HERCULES, WHICH IS THE OTHER TWO-CARD MACHINE
-# (docs/DUAL-DISPLAY-VGA.md). os8088_5150_both_gla is a Hercules beside a CGA -
+# (docs/plans/completed/DUAL-DISPLAY-VGA.md). os8088_5150_both_gla is a Hercules beside a CGA -
 # the calibration 5150's own pair, and the one SPEC.md 39.12-39.19's extended
 # desktop ships for. This is the pair nobody in docs/FIELD-MACHINES.md owns and
 # that the period actually built the most of: EGA/VGA plus MDA is what CodeView

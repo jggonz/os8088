@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - tests/fmtest/fmtest.asm
 ;
-; FMTEST: the committed sound Phase 3 gate package (docs/SOUND-PLAN.md).
+; FMTEST: the committed sound Phase 3 gate package (docs/history/SOUND-PLAN.md).
 ; Exercises the public FM surface (slot 0x00F8, SPEC.md 20.3/34.2) end to
 ; end, so the AdLib gate can be re-run mechanically. It is NEVER shipped on
 ; the apps disks (their directory order is pinned) - the Makefile builds it

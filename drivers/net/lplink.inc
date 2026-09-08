@@ -7,7 +7,7 @@
 ; over. Two copies of a bit-banged handshake would drift, and the drift would
 ; present as a cable fault on somebody else's pair of machines.
 ;
-; docs/NET-PLAN.md 1.1 is the cable, 1.1.1 the handshake and why it is fully
+; docs/plans/completed/NET-PLAN.md 1.1 is the cable, 1.1.1 the handshake and why it is fully
 ; interlocked, 1.4 the port scan, and Set 39 the accounting - including why
 ; the deadline is lazy, which is 90% of the throughput.
 ;

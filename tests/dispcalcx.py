@@ -32,6 +32,8 @@ import os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty, os88mouse, os88sym, dispcp
+from os88geom import MBAR_H     # the bar's height, from the one copy
+                                # checked against kernel.asm at import
 
 S = os88sym.linear
 KERNEL_SEG = 0x0060
@@ -85,6 +87,30 @@ def both_diff(m, what, corner, soft=False):
     for nm, b, a in (("hercules", bh, ah), ("cga", bc, ac)):
         d = [i for i in range(len(b[2])) if b[2][i] != a[2][i]]
         d = [i for i in d if (i % b[0], i // b[0]) != corner]
+        # **AND THE MENU BAR'S CLOCK, which is not this test's to compare.**
+        # It changes once a guest MINUTE (SPEC.md 12.1), so a forced full
+        # repaint that straddles a tick redraws it and the diff blames
+        # whatever was on screen. tests/dispcalc.py has always dropped it and
+        # this file never did: measured, 6 and 25 differing pixels at
+        # x 704..710 y 6..12 on the Hercules - inside the clock band, which
+        # starts at 512 on a 720-wide screen.
+        #
+        # [vid_clk_hx] is the live left edge of that band, so this follows
+        # the adapter instead of assuming 640: it is
+        # (vid_pw - MENU_CLK_W - 14) & ~7, recomputed by vid_disp_init.
+        #
+        # **AND IT IS THE PRIMARY'S, because the menu bar is** (SPEC.md
+        # 39.2.1.2, and kernel/viddet.inc says so at the computation). The
+        # secondary has no bar and no clock, so masking that band there would
+        # hide real pixels in the top 20 rows of the other monitor - which is
+        # exactly the failure this file exists to catch. [vid_pw] names the
+        # primary's width and the two cards here differ by definition (720
+        # against 640), so which card to mask is a fact rather than a guess.
+        # No package can draw in the band on the card that HAS it - windows
+        # clamp below the bar - so nothing real is hidden there.
+        if b[0] == u16(m.read(S("vid_pw"), 2)):
+            clk = u16(m.read(S("vid_clk_hx"), 2))
+            d = [i for i in d if not (i // b[0] < MBAR_H and i % b[0] >= clk)]
         out.append(len(d))
         print("      %-9s %d differing of %d" % (nm, len(d), len(b[2])))
         if d:

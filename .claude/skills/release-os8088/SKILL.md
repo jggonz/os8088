@@ -551,7 +551,7 @@ step 4a makes you look at the releases page. Three things that will fool you:
 
 #### 4c. The Wire's library, every time
 
-**The site is now where the machine gets its software from** (SPEC.md 88), so
+**The site is now where the machine gets its software from** (SPEC.md 92), so
 a release ships a *catalog* as well as four floppy images, and nothing on the
 OS side can tell you it went wrong: a stale `catalog.bin` is a Wire that lists
 last release's programs at last release's sizes and hands out last release's
@@ -586,7 +586,7 @@ python3 tools/os88wire.py --dump   "$WEB_REPO/public/wire/catalog.bin"
 ```
 
 Run from the **OS** repo on purpose. `tools/os88wire.py` and the website's
-`tools/wire.py` are two independent writers of one format (SPEC.md 88.2), and
+`tools/wire.py` are two independent writers of one format (SPEC.md 92.2), and
 this is the one moment they meet: the OS repo's reader checking the website's
 bytes, with `--pkgdir` cross-checking every declared size and every embedded
 icon against the files actually published. Read the `--dump` output against

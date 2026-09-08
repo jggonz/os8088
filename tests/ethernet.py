@@ -43,7 +43,7 @@ SIX ASSERTIONS, and they climb the stack.
 
 5. NOT ONE BYTE OF THE BROWSER IS ABOUT ETHERNET. The `.o88` under test is the
    one `make` builds for the shipped floppy, and the only thing it was told is
-   a URL. That is stage E's whole claim (docs/NET-STACK-PLAN.md).
+   a URL. That is stage E's whole claim (docs/plans/completed/NET-STACK-PLAN.md).
 
 The driver is asked for by a SYSTEM.CFG that `make ethertest` puts on the disk,
 so nothing here drives the Control Panel: the driver is attached and DHCP has
@@ -65,7 +65,9 @@ sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
 import dispcp                                          # noqa: E402
 import os88sym                                         # noqa: E402
+import os88geom                                        # noqa: E402
 import os88qemu                                              # noqa: E402
+import os88build                                       # noqa: E402
 
 S = os88sym.linear
 SOCK = "build/qmp.sock"
@@ -130,7 +132,7 @@ def ether_syms():
                        + ["-I", "drivers/ether/", "-I", "drivers/net/",
                           "-I", "drivers/", "-I", "apps/", "-o", out, src],
                        check=True)
-        if open(out, "rb").read() != open("build/ether.bin", "rb").read():
+        if open(out, "rb").read() != open(os88build.at("build/ether.bin"), "rb").read():
             sys.exit("ethernet: the mapped build is not build/ether.bin - "
                      "every offset it names would be plausible and wrong")
         syms = {}
@@ -193,6 +195,25 @@ class Qemu:
         finally:
             f.close()
             s.close()
+
+    # --- SENDKEY, and it lives HERE rather than in a subclass ----------------
+    # tests/dispcp.py's scroller drives a list with ArrowDown/End, and it is
+    # the shared navigation every gate reuses. tests/ftpd.py worked out the
+    # mapping and put it on its OWN Qemu, so ethernet.py - the file that
+    # DEFINES this class and calls dispcp.open_named itself - had no `key` at
+    # all and died with AttributeError the moment it opened a package by name.
+    # One method on the base class is what ftpd's own comment already said it
+    # was: "the whole of what a QEMU-hosted gate is missing to reuse that
+    # scroller."
+    QKEYS = {"ArrowDown": "down", "ArrowUp": "up", "Home": "home",
+             "End": "end", "PageDown": "pgdn", "PageUp": "pgup",
+             "Tab": "tab", "Enter": "ret"}
+
+    def key(self, name):
+        if name not in self.QKEYS:
+            raise KeyError("no QMP sendkey name for %r" % name)
+        self.hmp("sendkey " + self.QKEYS[name])
+        time.sleep(0.05)
 
     def read(self, linear, n):
         p = os.path.join(self.tmp, "m.bin")
@@ -309,6 +330,22 @@ def stale(img, src):
     return os.path.getmtime(img) < os.path.getmtime(src)
 
 
+MC_SIZE = os88geom.MC_SIZE
+MEM_MAX = 32
+
+
+def claims(m, S):
+    """Every live heap claim: (base, paragraphs, owner, dma, rloc, hi)."""
+    raw = m.read(S("mem_tab"), MEM_MAX * MC_SIZE)
+    out = []
+    for i in range(MEM_MAX):
+        r = raw[i * MC_SIZE:(i + 1) * MC_SIZE]
+        if u16(r, 0):
+            out.append((u16(r, 0), u16(r, 2), u16(r, 4), u16(r, 6),
+                        u16(r, 8), r[10]))
+    return sorted(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--shot", default=None)
@@ -324,7 +361,7 @@ def main():
     # about DHCP. Staleness is not the hazard here - a dirty image is - and
     # `make` cannot see the difference, because the guest's write leaves the
     # image NEWER than everything it was built from.
-    if os.path.exists("build/ether360.img"):
+    if os.path.exists(os88build.at("build/ether360.img")):
         os.remove("build/ether360.img")
     r = subprocess.run(["make", "ethertest"], capture_output=True, text=True)
     if r.returncode:
@@ -439,6 +476,41 @@ def main():
                          "the RX rung and these two have come apart"
                          % (txcap, SK_TXMAX))
 
+        # --- 1c. ...AND THE POOL DECLARED ITSELF MOVABLE (SPEC.md 66.4.1) --
+        # docs/plans/HEAP-UNPIN-PLAN.md 5.1. This is the largest single block
+        # in 2.0's wall - 14KB of driver furniture claimed from the top and
+        # pinned there for the session - and it was pinned by a comment
+        # ("the card's own descriptors point into these rings and it DMAs into
+        # them") that is false for an NE2000: the 8390's DMA engines are
+        # internal, the host side is `in al, dx` / `stosb`, and this driver
+        # hooks no vector at all.
+        #
+        # IT IS READ FROM mem_tab AND NOT FROM THE DRIVER, because that is the
+        # only place a REFUSED declaration shows. mem_movable's fence is
+        # "yours, or not at all", so a wrong owner returns CF=1, writes no
+        # MC_RLOC, and looks identical from inside the driver - which is
+        # exactly how SPEC.md 66.5.6.2's silent refusal went unnoticed for a
+        # release.
+        pool = [c for c in claims(m, S) if c[0] == skseg]
+        if len(pool) != 1:
+            fails.append("no claim in mem_tab starts at sk_seg %04X, so the "
+                         "rings are not where the driver says they are"
+                         % skseg)
+        else:
+            base_, para_, own_, dma_, rloc_, hi_ = pool[0]
+            say("pool claim %04X %dKB owner %04X%s%s"
+                % (base_, para_ // 64, own_,
+                   " MOVABLE" if rloc_ else " PINNED",
+                   " HI" if hi_ else " low"))
+            if not rloc_:
+                fails.append("the socket pool's MC_RLOC is 0: the "
+                             "OSAPI_MEM_MOVABLE call in sk_claim was REFUSED "
+                             "and the driver cannot tell (SPEC.md 66.5.6.2)")
+            if not hi_:
+                fails.append("the socket pool's MC_HI is 0: it came in "
+                             "through the low door, so SPEC.md 66.4.1's "
+                             "descending pass will never reach it")
+
         for _ in range(80):                     # DHCP_WAIT is 110 ticks
             if db("dhcp_st") == DH_BOUND:
                 break
@@ -497,7 +569,7 @@ def main():
         subprocess.run(["python3", "tools/qmp.py", SOCK, "sendkey ret"],
                        check=True, capture_output=True)
 
-        img = os.path.getsize("build/browser.bin")
+        img = os.path.getsize(os88build.at("build/browser.bin"))
         nstate = nlines = 0
         for _ in range(60):
             time.sleep(0.5)

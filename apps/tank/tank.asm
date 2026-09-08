@@ -12,7 +12,7 @@
 ; in a window at twelve edges a frame. This exercises what is on the OTHER
 ; side of SPEC.md 53.7's fence - the machine, in a foreign mode, where NO
 ; kernel drawing slot is legal and every pixel is the app's - at about a
-; hundred edges a frame with a game attached. docs/GFX-FSX-PLAN.md is what
+; hundred edges a frame with a game attached. docs/plans/completed/GFX-FSX-PLAN.md is what
 ; that exercise found.
 ;
 ; THE THREE THINGS THAT DECIDE THE WHOLE DESIGN
@@ -187,7 +187,8 @@ TK_LASTB  equ 79                ; the last byte of a viewport row - and it is
                                 ; 640 at 1bpp and 320 Mode X byte-addresses are
                                 ; each 80 bytes
 TK_SHSEG  equ 16000             ; the CGA/Hercules shadow, in bytes
-TK_SHKB   equ 16                ; ...as a claim
+TK_SHKB   equ 32                ; ...as a claim, with the HUD TEMPLATE in its
+                                ; second half (SPEC.md 85.3.5)
 
 ; --- gameplay -----------------------------------------------------------------
 TK_TURN   equ 2                 ; angle units per TICK at full lock
@@ -228,7 +229,7 @@ TK_CLEARR equ 600               ; ...and no piece may stand nearer the spawn
 ; them a TICK. tk_input latches once a FRAME and tk_pmove spends up to
 ; TK_MAXSTEP of them, so the finest turn a player can COMMAND is
 ; TK_TURN * min(ticks a frame, TK_MAXSTEP) - SIX units, 8.44 degrees, on both
-; 1bpp adapters, where docs/GFX-FSX-PLAN.md 0 measures 6.06 and 4.32 fps. What
+; 1bpp adapters, where docs/plans/completed/GFX-FSX-PLAN.md 0 measures 6.06 and 4.32 fps. What
 ; that has to fit inside is tk_espoil's own window, 6,100/R units either side:
 ; 4.1 units wide at 3,000 and 3.1 at the shell's 3,900-unit reach. So the sweep
 ; steps clean over a distant tank and the phase of the press decides whether it
@@ -405,6 +406,12 @@ tk_entry:
     call OSAPI_WM_CREATE
     jc .full
     mov [tk_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, and not beside the
+    ; worker's declaration: a package with NO worker is the case that
+    ; moves most easily, and putting this at the spawn left exactly
+    ; those runs declaring nothing - measured, by the row that reads
+    ; MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     mov al, 1                       ; an 8-aligned content origin: every
     call OSAPI_WM_SNAP              ; font_run below reaches SPEC.md 6.1's
                                     ; single-store cell, and the score band's
@@ -419,7 +426,7 @@ tk_entry:
                                     ; pull-down (SPEC.md 12.2). WINDOWED only:
                                     ; inside an fsx bracket the app owns every
                                     ; pixel and there is no bar to pull down
-                                    ; (SPEC.md 53.7, docs/GFX-FSX-PLAN.md)
+                                    ; (SPEC.md 53.7, docs/plans/completed/GFX-FSX-PLAN.md)
 .full:
     pop di
     pop si
@@ -650,7 +657,7 @@ tk_s_enter:  db 'PRESS ENTER', 0
 ; =============================================================================
 ; WINDOWED ONLY, and that is the architecture rather than a choice: the game
 ; itself runs inside an fsx bracket where this package owns every pixel and no
-; kernel drawing slot is legal at all (SPEC.md 53.7, docs/GFX-FSX-PLAN.md), so
+; kernel drawing slot is legal at all (SPEC.md 53.7, docs/plans/completed/GFX-FSX-PLAN.md), so
 ; there is no bar to pull the item down from. The attract panel is where the
 ; kernel's chrome exists, and the card goes on it.
 ;
@@ -774,12 +781,31 @@ tk_tpl:
     ZWORD tk_page1
     ZBYTE tk_npage
     ZWORD tk_shseg
+    ZWORD tk_tmseg                  ; the template: the claim's second half
+    ZBYTE tk_tmpl                   ; ...and whether this backend has one
+    ZWORD tk_tmsave                 ; tk_spcur, while an item draws
+    ZBYTE tk_inrange                ; ENEMY IN RANGE, this frame
+    ZBUF  tk_tmc, 7 * 4             ; the items' cached keys (85.3.5)...
+    ZBUF  tk_tmr, 7 * 8             ; ...their rectangles...
+    ZBUF  tk_tmovl, 7               ; ...and which rectangles meet which
+    ZBYTE tk_tmbits
+    ZWORD tk_tmcur                  ; the rectangle being redrawn, or 0
+    ZBYTE tk_rtm_on                 ; the template holds a ridge (85.3.8)...
+    ZBYTE tk_rpa_tm                 ; ...drawn at this heading...
+    ZBYTE tk_rpa_last               ; ...and the heading of the last frame
+    ZWORD tk_rx0                    ; the columns tk_ridge draws between
+    ZWORD tk_rx1
     ZBYTE tk_par
     ZWORD tk_spcur
     ZWORD tk_spprv
     ZBUF  tk_spanp, 4
-    ZWORD tk_lineproc
-    ZWORD tk_elineproc              ; ...and the same walk taking ink away
+    ZWORD tk_lsh                    ; the live walk trio - shallow, steep,
+    ZWORD tk_lst                    ; vertical - reached by `jmp` from tk_seg
+    ZWORD tk_lvt                    ; (SPEC.md 85.3.4)
+    ZWORD tk_esh                    ; ...and the trio that takes ink AWAY
+    ZWORD tk_est
+    ZWORD tk_evt
+    ZBYTE tk_kshift                 ; log2 of the pixels in a byte: 3 or 2
     ZWORD tk_hrunproc
     ZWORD tk_glyphproc
     ZBYTE tk_ink
@@ -798,23 +824,30 @@ tk_tpl:
     ZBUF  tk_spguard1, 8
     ZBUF  tk_spans1, TK_MAXROW * 2
     ZBUF  tk_spguard2, 8
+    ZBUF  tk_spans2, TK_MAXROW * 2  ; the ridge's old runs, then the union
+    ZBUF  tk_spguard3, 8            ; (85.3.8)
+    ZBUF  tk_sprdg, TK_MAXROW * 2   ; the runs the template's ridge lit
+    ZBUF  tk_spguard4, 8
+    ZBUF  tk_spjunk, TK_MAXROW * 2  ; the set a template draw marks: nobody
+    ZBUF  tk_spguard5, 8            ; reads it
     ZBUF  tk_devoff, TK_MAXROW * 2
+    ZBUF  tk_rowoff, TK_MAXROW * 2  ; 80 x row: the target offset of a row,
+                                    ; looked up rather than multiplied
 
 ; --- the clipper and the walk -------------------------------------------------
     ZWORD tk_cx1                    ; these four are CONTIGUOUS and indexed
     ZWORD tk_cy1                    ; as a pair by tk_clip_x / tk_clip_y
     ZWORD tk_cx2
     ZWORD tk_cy2
-    ZWORD tk_lx
-    ZWORD tk_ly
-    ZWORD tk_err
-    ZWORD tk_e1
-    ZWORD tk_e2
-    ZWORD tk_cnt
-    ZWORD tk_ystep
+    ZWORD tk_e2                     ; the walk's per-row constants; everything
+    ZWORD tk_ystep                  ; it touches per PIXEL is in a register
     ZWORD tk_sistep
     ZBYTE tk_xdir
-    ZBYTE tk_steep
+    ZWORD tk_lx                     ; the slice's (85.3.6): its first x, whole
+    ZWORD tk_q                      ; step, error, runs to go and last run
+    ZWORD tk_err
+    ZWORD tk_cnt
+    ZWORD tk_final
 
 ; --- the geometry -------------------------------------------------------------
     ZWORD tk_csin
@@ -847,6 +880,8 @@ tk_tpl:
     ZBUF  tk_ridgex, 25 * 2
     ZBUF  tk_rpy, 25 * 2
     ZBYTE tk_ra
+    ZBUF  tk_kx, 2048 * 2           ; the projection tables (85.5.3): sclx and
+    ZBUF  tk_ky, 2048 * 2           ; scly over the depth, a row a bucket
 
 ; --- the world ----------------------------------------------------------------
     ZWORD tk_px
@@ -893,7 +928,7 @@ tk_tpl:
     ZWORD tk_hox                    ; the halo pass's displacement (85.8.1)
     ZWORD tk_hoy
     ZWORD tk_hset                   ; ...where it has got to in the table
-    ZWORD tk_lsave                  ; ...and the drawing walk, while it runs
+    ZBUF  tk_lsave, 6               ; ...and the drawing trio, while it runs
     ZBYTE tk_gosh                   ; 0 none, 1 shadow, 2 outline
     ZBYTE tk_still                  ; the settled frame is already on the glass
     ZBYTE tk_pquick                 ; ...and only its prompt needs redrawing

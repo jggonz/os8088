@@ -31,12 +31,16 @@ default_xtide.vhd - and overwrites the data area, so the geometry in the footer
 and the geometry the emulated controller reports cannot disagree.
 
   python3 tools/os88hdd.py --template build/martypc/run/media/hdds/default_xtide.vhd \\
-                           --out /tmp/boot.vhd --kernel build/kernel.bin \\
+                           --out /tmp/boot.vhd --kernel build/kernel.sys \\
                            --vbr build/boothd.bin --mbr build/mbr.bin
 """
 import argparse
+import os
 import struct
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from os88disk import CZ_HINT, CZ_H_MARK, CZ_H_HI, CZ_H_LO  # noqa: E402
 
 SECTOR = 512
 BOOTHD_KSECS = 508          # boot/boothd.asm's pinned patch offset
@@ -106,6 +110,37 @@ def pick_layout(tot):
     fail("no FAT16 layout fits %d sectors" % tot)
 
 
+def the_file(path):
+    """The kernel's bytes - refusing the IMAGE where the FILE was meant.
+
+    `kernel.bin` is what the kernel IS and `kernel.sys` is what goes on a
+    volume (docs/plans/O88-COMPRESSION-PLAN.md); since `PKGZ ?= lz4` they are
+    different bytes and different LENGTHS. The Makefile settles it in one
+    place - every rule that puts a kernel on a disk names `$(KERNFILE)` - but
+    a caller of this script has no such variable and has to type it, and
+    tests/hibernate.py typed `kernel.bin` for a cycle. Nothing complained:
+    the VHD took 208 sectors of unpacked image under a boot record built for
+    167 of packed, and the machine reached a loading screen and sat there for
+    the whole 360-second budget with no message at all.
+
+    So the check is HERE, once, rather than in each caller. It is not a guess
+    about the name: a packed tree has both files and they differ, so being
+    handed the one that is not the sibling `kernel.sys` is decidable. With
+    KZIP off the two are a copy of each other and this says nothing.
+    """
+    blob = open(path, "rb").read()
+    sib = os.path.join(os.path.dirname(os.path.abspath(path)), "kernel.sys")
+    if os.path.abspath(path) != sib and os.path.exists(sib):
+        want = open(sib, "rb").read()
+        if want != blob:
+            fail("%s is the IMAGE, not the FILE: %s is %d bytes and %s is "
+                 "%d. A boot record is built from the FILE (the Makefile's "
+                 "$(KERNFILE)), so a volume carrying the other one boots to "
+                 "a loading screen and stops. Pass %s."
+                 % (path, path, len(blob), sib, len(want), sib))
+    return blob
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--template", required=True, help="a VHD to take the footer and geometry from")
@@ -142,7 +177,7 @@ def main():
     vbr = bytearray(open(a.vbr, "rb").read())
     if len(vbr) != SECTOR:
         fail("%s is %d bytes, not %d" % (a.vbr, len(vbr), SECTOR))
-    kernel = open(a.kernel, "rb").read()
+    kernel = the_file(a.kernel)
     ksecs = (len(kernel) + SECTOR - 1) // SECTOR
 
     # --- the partition: from LBA = spt (the end of the MBR's own track, the
@@ -206,6 +241,21 @@ def main():
         struct.pack_into("<H", e, 24, ((2026 - 1980) << 9) | (1 << 5) | 1)
         struct.pack_into("<H", e, 26, nextc)
         struct.pack_into("<I", e, 28, len(blob))
+        # THE DIRECTORY HINT, os88disk.dirent's rule (SPEC.md 20.14.1): a
+        # 'CZ' file carries its unpacked size in the entry's spare bytes, and
+        # drv_find / mod_need size their claims from it. Without it a packed
+        # driver or module on this volume reads as PLAIN and its loader
+        # refuses the 'CZ' magic - which is what the hibernate row saw the
+        # day the drivers became containers and this tool did not follow.
+        if len(blob) >= 8 and blob[:2] == b"CZ" and blob[3] == 0 \
+                and blob[2] in (0, 1):
+            n = int.from_bytes(blob[4:8], "little")
+            if n >= (1 << 24):
+                fail("%s: expands to %d bytes and the hint carries 24 bits"
+                     % (name, n))
+            e[CZ_H_MARK] = CZ_HINT + blob[2]
+            e[CZ_H_HI] = n >> 16
+            struct.pack_into("<H", e, CZ_H_LO, n & 0xFFFF)
         root[nent * 32:nent * 32 + 32] = e
         laid.append((nextc, blob))
         nextc += n

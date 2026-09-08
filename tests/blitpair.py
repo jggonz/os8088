@@ -44,6 +44,12 @@ sys.path.insert(0, HERE)
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
 import dispapps                                              # noqa: E402
 
+# The two primitives a canvas can arrive through: gfx_blit4 on a colour
+# adapter, gfx_blit1 on a one-bit one since SPEC.md 42.23 made Paint's canvas
+# match the screen. `gfx_blit1_x` is the BODY - the thunk is a far shim and
+# the arguments are the caller's at both, in the same registers.
+BLITS = ("gfx_blit4", "gfx_blit1_x")
+
 if os.environ.get("NOPLANE"):
     os88sym.default_defines("NOPLANE")      # the knob kernel is a DIFFERENT
                                             # kernel and every address here
@@ -115,17 +121,32 @@ def main():
                          "colour derivation of build/OS8088.GIF)")
     a = ap.parse_args()
 
-    # SPEC.md 42.23.6's colour derivation, and THE ROW IS LOOKED UP BY THE
-    # NAME IT WAS GIVEN rather than by a constant. tests/paintpack.py builds
-    # the disk itself and runs this file as a subprocess, so a name hardcoded
-    # here disagrees with whatever the caller put on it - which is what
-    # happened: `'OS8088.GIF' is not in this folder - it lists
+    # **THE TWO-COLOUR LOGO, not SPEC.md 42.23.6's colour derivation**, and
+    # this row is the one place in the paint family where that distinction
+    # decides the answer. THE ROW IS STILL LOOKED UP BY THE NAME IT WAS GIVEN
+    # rather than by a constant, which is the other half of the same history:
+    # tests/paintpack.py builds the disk itself and runs this file as a
+    # subprocess, so a name hardcoded here disagrees with whatever the caller
+    # put on it - `'OS8088.GIF' is not in this folder - it lists
     # ['..', 'OS88COL.GIF']`, out of a disk paintpack had just built
-    # correctly. The pixels are identical either way (two unused colour-table
-    # entries), so this file's own claim - that the logo is two colours, so
-    # 39.4 sends every pixel to a solid class - is untouched.
+    # correctly.
+    #
+    # The fix for THAT was to default to `dispapps.colour_gif()`, on the
+    # reasoning that *"the pixels are identical either way (two unused
+    # colour-table entries)"*. The pixel INDICES are; the colours are not.
+    # colour_gif prepends its two entries deliberately - it has to, or the
+    # file stays one bit deep and Paint takes a 1bpp canvas, which is the
+    # planar rows' whole subject - so every pixel of the derived file is drawn
+    # in 0xAA0000 or 0x0000AA, and SPEC.md 39.4 reduces BOTH to the same class
+    # on a 1bpp adapter. This row then compared a solid canvas against an
+    # alternating file and read 20,327 differing pixels of 51,260, which is
+    # indistinguishable from the decoder bug it exists to catch and was filed
+    # as a pre-existing failure (docs/plans/HANDOFF-SOAK-FINDINGS.md F1).
+    #
+    # So: the logo itself. It is two colours, 39.4 sends each to a solid
+    # class, and the docstring at the top of this file is true again.
     if a.gif is None:
-        a.gif = dispapps.colour_gif()
+        a.gif = os.path.join(HERE, "..", "build", "OS8088.GIF")
 
     if a.apps == "/tmp/blitpair.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
@@ -171,37 +192,64 @@ def main():
         # The geometry is ASKED rather than computed: the canvas x depends on
         # the window template and the adapter, and a rect this test guessed
         # would be a second opinion about where Paint put its picture.
-        m.bp_exec("gfx_blit4")
+        # **EITHER PRIMITIVE** (SPEC.md 5.4.2.5, 42.23). This waited on
+        # `gfx_blit4` alone, and since a one-bit canvas reaches `gfx_blit1`
+        # on a 1bpp adapter that call never comes: the row spent its whole
+        # budget and reported "Paint never blitted a canvas", about a Paint
+        # that had drawn the picture perfectly. The question here is whether
+        # the canvas ARRIVED, not which primitive carried it, and the two
+        # take the same arguments in the same registers - so both are armed
+        # and the first wide enough wins.
+        m.bp_exec(*BLITS)
         mo.dblclick(rx, ry)
-        # The CANVAS, not a palette swatch or an icon: the first blit as wide
-        # as the picture. Which call that is depends on the adapter and on
-        # whether Paint is holding four planes, so it is asked rather than
-        # assumed.
+        # WHERE THE CANVAS IS: the first blit as wide as the picture. Its
+        # HEIGHT is not the canvas's and must not be read as one - the load
+        # path emits one 466x1 call per row through this same primitive, so
+        # which of the two shapes arrives first depends on the picture and on
+        # the adapter. Asserting `(bw, bh) == (iw, ih)` here reported
+        # `the canvas is 466x1 and the picture 466x110 - Paint cropped it`
+        # about a Paint that had cropped nothing, and requiring both
+        # dimensions instead found no such call at all.
+        #
+        # So this takes the ORIGIN from the blit and asks PAINT for the size,
+        # below, which is the thing that actually answers "did it crop".
         r = None
-        for _ in range(200):
+        for _ in range(400):
             if not m.wait_stop(limit=300.0):
                 break
             r = m.regs()
             if r["cx"] >= iw:
                 break
-            m.bp_exec("gfx_blit4")
+            m.bp_exec(*BLITS)
             m.run()
             r = None
         if r is None:
-            sys.exit("blitpair: Paint never blitted a canvas through gfx_blit4")
+            sys.exit("blitpair: Paint never blitted a canvas through %s"
+                     % " or ".join(BLITS))
         x, y, bw, bh = r["ax"], r["bx"], r["cx"], r["dx"]
         print("   blit x=%d y=%d w=%d h=%d" % (x, y, bw, bh))
         m.bp_exec()
         m.run()
-        time.sleep(6)
+        os88marty.guest_sleep(m, 6.0)
         mo.to(4, 4)
         os88marty.settle(m)
         w, h, fb = m.fbuf(card=0)
+        # **THE CANVAS'S SIZE COMES FROM PAINT**, not from a blit's CX and DX.
+        # SPEC.md 42.6.5 letterboxes a picture the heap cannot hold, and a
+        # cropped canvas compared against a whole file is two different things
+        # - so this has to be asked, and [pt_cw]/[pt_ch] are where Paint keeps
+        # the answer.
+        pseg = pkg[1] if (pkg := dispapps.pkg_seg(m, 0)) else None
+        if pseg is None:
+            sys.exit("blitpair: Paint's window is gone - nothing to ask")
+        cv = dispapps.words(m, pseg, "paint", ("pt_cw", "pt_ch"))
 
-    if (bw, bh) != (iw, ih):
-        sys.exit("blitpair: the canvas is %dx%d and the picture %dx%d - "
-                 "Paint cropped it, so this row is comparing two things"
-                 % (bw, bh, iw, ih))
+    if (cv["pt_cw"], cv["pt_ch"]) != (iw, ih):
+        sys.exit("blitpair: the canvas is %dx%d and the picture %dx%d - Paint "
+                 "letterboxed it (SPEC.md 42.6.5), so this row would be "
+                 "comparing two things"
+                 % (cv["pt_cw"], cv["pt_ch"], iw, ih))
+    bh = ih
     bad = [(c, rw)
            for rw in range(bh) for c in range(bw)
            if (fb[((y + rw) * w + x + c) * 3] < 128) != (px[rw * iw + c] == 1)]

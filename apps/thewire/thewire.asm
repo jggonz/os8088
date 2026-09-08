@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/thewire/thewire.asm
 ;
-; THE WIRE - the online software library (SPEC.md 88).
+; THE WIRE - the online software library (SPEC.md 92).
 ;
 ; A window listing every program the project publishes, fetched over
 ; ETHER.DRV from os8088.com, with a picture, a description, a
@@ -15,7 +15,7 @@
 ; THEWIRE.O88, header name 'The Wire'; nothing the user sees carries the file
 ; name.
 ;
-; --- THE DIVISION IS FORCED (SPEC.md 20.6 rule 7, 88.5) ----------------------
+; --- THE DIVISION IS FORCED (SPEC.md 20.6 rule 7, 92.5) ----------------------
 ; A worker may not call OSAPI_MEM_*, the file slots or the dialog, and every
 ; NETV_* verb is non-blocking. So the UI task claims and commits, the worker
 ; opens, polls, sends and drains, and between them is ONE BYTE: the worker
@@ -52,8 +52,8 @@
 %include "netpkg.inc"               ; THE DRIVER'S OWN HEADER, the same file
                                     ; drivers/ether/ether.asm includes, so the
                                     ; two ends cannot drift (SPEC.md 20.11)
-%include "wcat.inc"                 ; the catalog format (SPEC.md 88.2)
-%include "warc.inc"                 ; ...and the archive's (SPEC.md 88.13)
+%include "wcat.inc"                 ; the catalog format (SPEC.md 92.2)
+%include "warc.inc"                 ; ...and the archive's (SPEC.md 92.13)
 %include "rdabi.inc"                ; RD_STEPKB, the granule RDPV_MOUNT rounds
                                     ; a size to - the RAM disk's own constant
                                     ; rather than a second spelling of 8 here
@@ -131,7 +131,7 @@
     OS88_ICON16_END
 
 ; =============================================================================
-; GEOMETRY (SPEC.md 88.6) - content-relative throughout
+; GEOMETRY (SPEC.md 92.6) - content-relative throughout
 ;
 ; The content origin is 8-aligned by SPEC.md 11.94, so every constant here
 ; that is a multiple of 8 gives an 8-aligned SCREEN pen: font_run's
@@ -161,7 +161,7 @@ WR_DTX      equ 160             ; ...its text pen, 8-ALIGNED
                                 ; 216px: the first build drew the last two
                                 ; words of every description off the
                                 ; right-hand edge. The 27 is the CATALOG
-                                ; FORMAT (SPEC.md 88.2) and the website
+                                ; FORMAT (SPEC.md 92.2) and the website
                                 ; implements it too, so the pane is what
                                 ; moved: a pen at 160 ends at 375 with the
                                 ; frame at 383, eight pixels clear.
@@ -183,9 +183,9 @@ WR_DESCC    equ (WR_DX2 - WR_DTX) / 8   ; 27 cells: a pen at WR_DTX with 27
                                 ; with it, and wrtxt.inc's WR_PANE macro
                                 ; asserts every hand-written line against it
 %if WR_DESCC < WC_DESCW - 1
-  %error "the detail pane is narrower than a catalog description line (SPEC.md 88.2)"
+  %error "the detail pane is narrower than a catalog description line (SPEC.md 92.2)"
 %endif
-WR_BX1      equ 156             ; the two buttons, STACKED - see SPEC.md 88.6:
+WR_BX1      equ 156             ; the two buttons, STACKED - see SPEC.md 92.6:
 WR_BX2      equ 379             ; side by side they want 242px of a 232px pane
 WR_BH       equ 17
 WR_LNH      equ 10              ; a description line's pitch: an 8-row face
@@ -195,7 +195,7 @@ WR_STATN    equ 48              ; the status cell: 48 cells of 8 = the 384
 
 WR_PICMIN   equ 170             ; the pane height at which the picture fits
                                 ; beside a title, a tier line and a
-                                ; description (SPEC.md 88.6). A CGA's 108-row
+                                ; description (SPEC.md 92.6). A CGA's 108-row
                                 ; pane fails it and gets the sentences
 
 ; --- the two adapters' frames, for OS88_PREFER --------------------------------
@@ -209,7 +209,7 @@ WR_HCGA     equ 147             ; content 128 ->  6 rows
 ; brnet.inc carries the scar this copies the shape from - a test of "not IDLE"
 ; refused every fetch after the first for the life of the window.
 ;
-; **WS_PAUSE IS INSIDE THE RANGE AND HAD TO GO IN IT** (SPEC.md 88.14): an
+; **WS_PAUSE IS INSIDE THE RANGE AND HAD TO GO IN IT** (SPEC.md 92.14): an
 ; archive's worker spends most of the transfer parked at an entry boundary
 ; waiting for the UI task to write a file, and a pause the predicate read as
 ; `finished` would offer Load Program on a record whose tree is half on the
@@ -230,22 +230,22 @@ WS_FAIL     equ 8
 WK_CAT      equ 0
 WK_PIC      equ 1
 WK_FILE     equ 2
-WK_ARC      equ 3               ; an ARCHIVE (88.13): one stream, a folder
+WK_ARC      equ 3               ; an ARCHIVE (92.13): one stream, a folder
                                 ; tree, and the FIRST body this package reads
                                 ; that may be over 64KB - which is why
                                 ; [wr_got] and [wr_clen] are dwords
 
-; --- what the worker asks the UI task to do (SPEC.md 88.5's one byte) --------
+; --- what the worker asks the UI task to do (SPEC.md 92.5's one byte) --------
 WW_NONE     equ 0
 WW_DONE     equ 1
 WW_FAIL     equ 2
 WW_HDR      equ 3               ; the archive's 32-byte header has arrived and
-                                ; the ONE claim is sized from it (88.14)
+                                ; the ONE claim is sized from it (92.14)
 WW_ENTRY    equ 4               ; ...and one entry's bytes are decoded and
                                 ; waiting to be written
 
 WR_RAMSLACK equ 16              ; the KB asked for OVER the tree when a store
-                                ; is mounted for it (88.14 step 3): room for
+                                ; is mounted for it (92.14 step 3): room for
                                 ; what the program will save. A machine that
                                 ; cannot spare it gets a store sized to the
                                 ; tree alone rather than a refusal
@@ -461,7 +461,7 @@ wr_clip:
 ; every one of those holds owes the same three calls: SPEC.md 11.3's region
 ; before anything is drawn at absolute coordinates, and wr_geom because a
 ; window moves. Written once, so a hold that forgot the arm cannot be added by
-; hand - which is the defect 88.6.1 exists about.
+; hand - which is the defect 92.6.1 exists about.
 wr_lockarm:
     call OSAPI_GFX_LOCK
     call wr_clip
@@ -683,7 +683,7 @@ wr_drow:
     call wr_recs                        ; --- the icon, into a record with the
     add si, WC_ICON                     ; two-byte prefix OSAPI_ICON_DRAW wants
     call wr_icocopy                     ; (the catalog carries the 64 rows and
-                                        ; not the header, SPEC.md 88.2)
+                                        ; not the header, SPEC.md 92.2)
     mov cx, WR_ICX
     add cx, [wr_ox]
     mov dx, [wr_rowy]
@@ -995,7 +995,7 @@ wr_dpic:
     ret
 
 ; -----------------------------------------------------------------------------
-; wr_blitpic - the 1,024-byte band onto the glass (SPEC.md 88.3)
+; wr_blitpic - the 1,024-byte band onto the glass (SPEC.md 92.3)
 ;
 ; The buffer was INVERTED as it arrived, so a set bit is a paper pixel - which
 ; is what gfx_blit1 draws with its default pen on a VGA and what a 1bpp
@@ -1182,7 +1182,7 @@ wr_dinfo:
     ret
 
 ; -----------------------------------------------------------------------------
-; wr_ddesc - the five PRE-WRAPPED lines (SPEC.md 88.2)
+; wr_ddesc - the five PRE-WRAPPED lines (SPEC.md 92.2)
 ;
 ; The machine wraps nothing: the writer laid them out at 27 columns, which is
 ; the whole reason the description is five fixed fields and not one string.
@@ -1230,7 +1230,7 @@ wr_ddesc:
 
 ; -----------------------------------------------------------------------------
 ; wr_dbtns - the two buttons, greyed from THE SAME PREDICATE the click reads
-; (SPEC.md 47, 88.7). OS88UI_FILL because the greying MOVES: without the
+; (SPEC.md 47, 92.7). OS88UI_FILL because the greying MOVES: without the
 ; erase the second draw's checkerboard caption lands on top of the first
 ; draw's solid one and a disabled label comes out pixel-identical to a live
 ; one (os88ui.inc's own note).
@@ -1386,7 +1386,7 @@ wr_statbuild:
     cmp al, WS_BODY
     je .fig
     cmp al, WS_PAUSE                    ; an archive spends most of a transfer
-    jne .pad                            ; parked here (88.14), and a figure
+    jne .pad                            ; parked here (92.14), and a figure
 .fig:                                   ; that vanished at every entry would
                                         ; read as a stall
     mov ax, [wr_clen]
@@ -1472,7 +1472,7 @@ wr_sput:
 ; --- wr_sputn - at most CX bytes of the NUL string at ES:SI to DS:DI ---------
 ; ES because every caller of this one is copying out of the CATALOG CLAIM, and
 ; a byte below 0x20 ends the field: everything off the wire is hostile and the
-; font has no glyph for a control byte (SPEC.md 88.2's ASCII rule, enforced by
+; font has no glyph for a control byte (SPEC.md 92.2's ASCII rule, enforced by
 ; the reader as well as by the writer).
 wr_sputn:
     push ax
@@ -1564,7 +1564,7 @@ wr_kfig:
 ; in:  AX = a record index below [wr_n]; out ES:SI, AX preserved
 ; WIRE_CATMAX bounds [wr_n] at 63, so WIRE_HDR + WIRE_REC*i cannot leave 16
 ; bits - which is the reason that ceiling is a reader's rule and not only the
-; claim's size (SPEC.md 88.2).
+; claim's size (SPEC.md 92.2).
 wr_recs:
     push ax
     push cx
@@ -1718,7 +1718,7 @@ wr_vispos:
     ret
 
 ; -----------------------------------------------------------------------------
-; wr_catck - is what arrived a catalog? (SPEC.md 88.2)
+; wr_catck - is what arrived a catalog? (SPEC.md 92.2)
 ; in:  the claim is [wr_catseg], [wr_catlen] bytes of it filled
 ; out: CF = 1 refused, and NOTHING was stored: [wr_n] stays 0
 ;
@@ -1848,7 +1848,7 @@ wr_catck:
     ret
 
 .arcrec:
-    ; --- AN ARCHIVE'S RECORD (SPEC.md 88.2, 88.13) --------------------------
+    ; --- AN ARCHIVE'S RECORD (SPEC.md 92.2, 92.13) --------------------------
     ; **NONE OF THE THREE RULES ABOVE IS TRUE OF ONE**, and the site's real
     ; catalog is what said so: RunCPM's WC_SIZE is 231,463, which the 16-bit
     ; bound refused outright and took the whole catalog down with it.
@@ -1861,7 +1861,7 @@ wr_catck:
     ;   stream: a tree of incompressible files is stored, and the container
     ;   adds 32 bytes of header plus 64 an entry on top of it. So it is
     ;   checked for being there and not against WC_SIZE.
-    ;   n is 0 on every archive record (88.2), so there is no sidecar span to
+    ;   n is 0 on every archive record (92.2), so there is no sidecar span to
     ;   be in range and WC_SIDE0 is meaningless.
     cmp byte [es:si+WC_NSIDE], 0
     jne .no
@@ -1891,7 +1891,7 @@ wr_side:
     ret
 
 ; =============================================================================
-; THE PREDICATE - one routine, three consumers (SPEC.md 47, 88.7)
+; THE PREDICATE - one routine, three consumers (SPEC.md 47, 92.7)
 ; in:  AL = 0 "may Load?" / 1 "may Add?"
 ; out: CF = 0 allowed; CF = 1 refused and SI = the reason, a NUL string
 ;      Every other register preserved.
@@ -1930,8 +1930,8 @@ wr_may:
     mov al, [es:si+WC_FLAGS]
     test al, WF_ARC                     ; **AN ARCHIVE IGNORES WF_FLOPPY**, and
     jnz .arc                            ; the writer sets that bit WITH WF_ARC
-                                        ; on purpose (SPEC.md 88.2): a Wire
-                                        ; from before 88.13 does not know bit 4
+                                        ; on purpose (SPEC.md 92.2): a Wire
+                                        ; from before 92.13 does not know bit 4
                                         ; and greys both buttons with the
                                         ; floppy reason rather than fetching a
                                         ; .O88 that is not there. This reader
@@ -1947,10 +1947,10 @@ wr_may:
     or bl, bl
     jnz .yes                            ; Add to Disk unpacks wherever the
                                         ; dialog points, so an archive is
-                                        ; always addable (88.8)
+                                        ; always addable (92.8)
     xor al, al                          ; Load Program: the RAM disk decision,
     call wr_ramck                       ; ASKED and not acted on - this runs
-    jc .no                              ; from the painter (88.14 steps 1..3,
+    jc .no                              ; from the painter (92.14 steps 1..3,
                                         ; and SI is the reason)
 .yes:
     pop es
@@ -2565,7 +2565,7 @@ wr_abdismiss:
     ret
 
 ; =============================================================================
-; THE TWO ACTIONS (SPEC.md 88.8)
+; THE TWO ACTIONS (SPEC.md 92.8)
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -2608,7 +2608,7 @@ wr_do:
 .arc:
     mov al, 1                           ; --- Load Program on an ARCHIVE: the
     call wr_ramck                       ; SECOND ask, and the one that MOUNTS
-    jc .say                             ; (SPEC.md 88.14). The predicate has
+    jc .say                             ; (SPEC.md 92.14). The predicate has
                                         ; already answered, so a refusal here
                                         ; is a store that went away between
                                         ; the paint and the click
@@ -2751,7 +2751,7 @@ wr_saved:
     jz .chain
     call wr_arcstart                    ; --- an ARCHIVE unpacks where the
     jmp short .out                      ; dialog pointed, and THE TYPED NAME IS
-                                        ; IGNORED (88.8): the archive names its
+                                        ; IGNORED (92.8): the archive names its
                                         ; own files, so there is one name the
                                         ; user could have typed and fifty-nine
                                         ; the machine is about to write
@@ -2930,7 +2930,7 @@ wr_chaindone:
     mov si, wr_s_added
     cmp byte [wr_ramjob], 0             ; ...and WHERE it landed, which for an
     je .say                             ; archive run from RAM is not a disk
-    mov si, wr_s_addram                 ; the user can put in a drawer (88.8)
+    mov si, wr_s_addram                 ; the user can put in a drawer (92.8)
 .say:
     call wr_sput
     mov byte [di], 0
@@ -3057,7 +3057,7 @@ wr_picwant:
 
 ; =============================================================================
 ; THE WAKE HANDLER - the only place a claim is freed, a file written or a
-; program run (SPEC.md 88.5)
+; program run (SPEC.md 92.5)
 ; in:  SI = our window, the UI task, NO GFX LOCK
 ; =============================================================================
 wr_onwake:
@@ -3084,7 +3084,7 @@ wr_onwake:
     mov [wr_wake0], al                  ; BANK IT, then CLEAR, then act: acting
     mov byte [wr_wake], WW_NONE         ; is what starts the NEXT transfer, and
                                         ; a flag cleared after that would clear
-                                        ; the new one's wake (SPEC.md 88.5)
+                                        ; the new one's wake (SPEC.md 92.5)
     call OSAPI_GFX_LOCK
     call wr_geom
     call OSAPI_GFX_UNLOCK
@@ -3095,7 +3095,7 @@ wr_onwake:
     cmp al, WW_HDR                      ; --- the archive's two PAUSES, where
     je .ahdr                            ; the worker has stopped and the next
     cmp al, WW_ENTRY                    ; thing to do is a claim or a file, and
-    je .aent                            ; a worker may do neither (88.14)
+    je .aent                            ; a worker may do neither (92.14)
     cmp al, WW_DONE
     jne .failed
     mov al, [wr_wkind]
@@ -3139,7 +3139,7 @@ wr_onwake:
 .ahdr:
     call wr_arcbase                     ; --- the ONE claim, sized from the
     jc .wfail                           ; header, and `home` made and entered
-    call OSAPI_GFX_LOCK                 ; (88.14). NO LOCK for either: a claim
+    call OSAPI_GFX_LOCK                 ; (92.14). NO LOCK for either: a claim
     call wr_clip                        ; and a folder are not drawing
     call wr_geom
     call wr_dstat
@@ -3174,7 +3174,7 @@ wr_onwake:
 .file:
     cmp byte [wr_wkind], WK_ARC         ; A WW_DONE ON AN ARCHIVE is the stream
     jne .fnorm                          ; meeting its Content-Length with fewer
-    mov word [wr_msg], wr_s_lost        ; than N entries decoded (88.14), which
+    mov word [wr_msg], wr_s_lost        ; than N entries decoded (92.14), which
     jmp short .wfail                    ; is a short answer and not a small one
 .fnorm:
     cmp byte [wr_job], WJ_LOAD
@@ -3303,7 +3303,7 @@ wr_wrfail:
 ; **THE TWO NUMBERS ARE PASSED IN [wr_pnum] AND [wr_ptot]** rather than derived
 ; here, because there are two chains now and they count different things: the
 ; Add chain counts the .O88 and its sidecars (WC_NSIDE + 1) and an archive
-; counts the entries in its header (SPEC.md 88.14). One composer, two callers,
+; counts the entries in its header (SPEC.md 92.14). One composer, two callers,
 ; and the sentence a person reads is the same either way.
 wr_addprog:
     push ax
@@ -3354,7 +3354,7 @@ wr_addprog:
 ; [wr_rlen] IS THE LENGTH AND IT IS A WORD THE CALLER WRITES: for a plain Load
 ; Program it is [wr_got], what arrived (see wr_write's reason); for an archive
 ; it is the last entry's unpacked size, and the claim holding it is the same
-; claim the whole tree was decoded through (SPEC.md 88.14).
+; claim the whole tree was decoded through (SPEC.md 92.14).
 ;
 ; SPEC.md 21.x. The new instance's current directory is OURS (SPEC.md 19.2.1),
 ; which is why a WF_DISK record is refused by the predicate rather than
@@ -3419,7 +3419,7 @@ wr_pkgrun:
     ret
 
 ; =============================================================================
-; WIRE.CFG (SPEC.md 19.9, 88.4)
+; WIRE.CFG (SPEC.md 19.9, 92.4)
 ;
 ; SYSTEM/APPDATA on OUR OWN volume, and it is OSAPI_FILE_GOTO_QM and not the
 ; quiet twin: GOTO_Q moves the GLOBAL cwd and deliberately not the INSTANCE's,
@@ -3498,7 +3498,7 @@ wr_dive:
     push es
     mov [wr_dvname], si             ; **BANKED, AND NOT ON THE STACK**: this
                                     ; walk now runs on a RAM DISK as well as
-                                    ; on a floppy (SPEC.md 88.14), and on a
+                                    ; on a floppy (SPEC.md 92.14), and on a
                                     ; DVK_FILE volume CX, SI and DI are the
                                     ; DRIVER's across every file cell (SPEC.md
                                     ; 62.9). SI held the name we are looking
@@ -3697,9 +3697,9 @@ wr_cfgparse:
 wr_i_file:  dw wr_it_refr, wr_it_run, wr_it_add, wr_it_close
 
 ; =============================================================================
-%include "wrhttp.inc"                   ; the client and the worker (88.4)
-%include "wrarc.inc"                    ; the unpacker and the RAM disk (88.13,
-                                        ; 88.14)
+%include "wrhttp.inc"                   ; the client and the worker (92.4)
+%include "wrarc.inc"                    ; the unpacker and the RAM disk (92.13,
+                                        ; 92.14)
 %include "wrtxt.inc"                    ; every string (docs/WIRE-PLAN.md 7)
 
 %define OS88UI_SCROLL                   ; the list's bar...
@@ -3722,11 +3722,11 @@ wr_win      equ os88_image_end + 0      ; word
 wr_hired    equ os88_image_end + 2      ; byte
 wr_ready    equ os88_image_end + 3      ; byte: the first wake has run
 wr_abon     equ os88_image_end + 4      ; byte: the About card is up
-wr_nodrv    equ os88_image_end + 5      ; byte: no stack (SPEC.md 88.9)
+wr_nodrv    equ os88_image_end + 5      ; byte: no stack (SPEC.md 92.9)
 wr_picok    equ os88_image_end + 6      ; byte: [wr_pic] holds this selection's
 wr_filter   equ os88_image_end + 7      ; byte: 0 All, 1..4 tier <= n-1
 wr_job      equ os88_image_end + 8      ; byte: WJ_*
-wr_wake     equ os88_image_end + 9      ; byte: WW_*, THE ONE BYTE (88.5)
+wr_wake     equ os88_image_end + 9      ; byte: WW_*, THE ONE BYTE (92.5)
 wr_wake0    equ os88_image_end + 10     ; byte: ...banked by the handler
 wr_wkind    equ os88_image_end + 11     ; byte: what that wake was about
 wr_gen      equ os88_image_end + 12     ; byte: the generation (SPEC.md 71.11)
@@ -3768,7 +3768,7 @@ wr_dmax     equ os88_image_end + 66
 wr_got      equ os88_image_end + 68     ; DWORD: ...and how much has
 wr_clen     equ os88_image_end + 72     ; DWORD: Content-Length
                                         ; **BOTH ARE DWORDS BECAUSE OF THE
-                                        ; ARCHIVE** (88.13): a .WPK is the
+                                        ; ARCHIVE** (92.13): a .WPK is the
                                         ; first body here that may pass 64KB -
                                         ; the RunCPM master disk is 196KB
                                         ; compressed - and a 16-bit count laps
@@ -3850,7 +3850,7 @@ wr_rxb      equ os88_image_end + WR_B4 + WIRE_PICSZ ; WR_CHUNK, and it is in
                                                     ; NETV_RECV takes ES:DI
                                                     ; and ES is ours (77.10)
 
-; --- the archive (SPEC.md 88.13, 88.14; wrarc.inc is the code) ---------------
+; --- the archive (SPEC.md 92.13, 92.14; wrarc.inc is the code) ---------------
 ; **THE BIG BUFFER IS THE HEAP CLAIM AND NOT ANY OF THIS.** One entry is
 ; decoded at a time into a claim sized from the header's WA_MAXENT, so what
 ; the package's own bss owes the feature is the two headers it is reading, the
@@ -3914,7 +3914,7 @@ wr_dvname   equ os88_image_end + WR_B7 + 40         ; word: the folder name
                                                     ; that owns SI
 wr_anb      equ os88_image_end + WR_B7 + 42         ; 13: one path slot, copied
                                                     ; and TERMINATED. SPEC.md
-                                                    ; 88.13's twelve-character
+                                                    ; 92.13's twelve-character
                                                     ; name fills its slot with
                                                     ; no NUL, and every kernel
                                                     ; cell reads to one

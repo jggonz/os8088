@@ -3,7 +3,7 @@
 ;
 ; An NE1000/NE2000 card and a TCP/IP stack, answering the SAME socket verbs
 ; NET.DRV answers over a parallel cable (SPEC.md 62.11, drivers/net/netpkg.inc).
-; That is the whole claim of docs/NET-STACK-PLAN.md stage E and it is the test
+; That is the whole claim of docs/plans/completed/NET-STACK-PLAN.md stage E and it is the test
 ; of whether stage A's boundary was drawn in the right place: the browser and
 ; Telnet are not rebuilt against a new interface here, they ask for a socket
 ; and get one from a card instead of a cable.

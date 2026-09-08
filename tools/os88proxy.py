@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A reformatting HTTP proxy for the os8088 browser (docs/PROXY-PLAN.md).
+"""A reformatting HTTP proxy for the os8088 browser (docs/plans/completed/PROXY-PLAN.md).
 
 It runs on the OWNER'S machine - Windows, macOS or Linux, python3 and the
 standard library and nothing else - terminates TLS, and hands os8088 a page

@@ -447,7 +447,7 @@ static void c64_frame_regs(void)
     }
     /* $D011 bit 5 = BMM, bit 6 = ECM; $D016 bit 4 = MCM. Wave 1 composes
      * mode 0 and c64band.inc fills the rest with the background until wave 4
-     * writes them (docs/C64-PORT-PLAN.md wave 4). */
+     * writes them (docs/plans/completed/C64-PORT-PLAN.md wave 4). */
     c64_mode = (((c64_vic[0x11] >> 6) & 1) << 2)
              | (((c64_vic[0x11] >> 5) & 1) << 1)
              | ((c64_vic[0x16] >> 4) & 1);

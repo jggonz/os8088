@@ -89,6 +89,46 @@ AT_S1ST    equ 80                   ; 1bpp strip stride (640 px covers the
                                     ; widest text region, Hercules' 592)
 AT_S4ST    equ 304                  ; 4bpp strip stride (608 px)
 AT_SROWS   equ 30                   ; strip rows (the tallest row height)
+
+; --- the strip's POLARITY (SPEC.md 46.4.2) ------------------------------------
+; at_strip1 is composed in SCREEN polarity - a SET bit is PAPER - so it is
+; already the object OSAPI_GFX_BLIT1 takes and the DEFAULT pen (ink CWHITE on
+; paper CBLACK) delivers it correctly on every adapter with no pen call. The
+; ink-side-up composer that shipped before it is NOATBLIT1's arm, and these
+; three names are the whole of the difference: five writers into the strip and
+; one build-time table read it.
+; AT_PAPERAX is a MACRO and not an immediate so that the knob arm keeps
+; `xor ax, ax` and assembles byte for byte identical to the package before
+; this change - `mov ax, 0` is the same value in three bytes instead of two.
+%ifdef NOATBLIT1
+  %macro AT_PAPERAX 0
+    xor ax, ax                      ; at_compose / at_bigtext clear to this
+  %endmacro
+  %define AT_MERGE  or               ; at_glyph folds the row in with this
+  %define AT_RULE   0FFh             ; at_ruleat lays a rule down as this
+%else
+  %macro AT_PAPERAX 0
+    mov ax, 0FFFFh
+  %endmacro
+  %define AT_MERGE  and
+  %define AT_RULE   0
+%endif
+; --- the four characters that can style (SPEC.md 46.4.7, 46.4.8) --------------
+; ` * ~ [ are the ONLY bytes that reach at_parse's .code, .star, .tilde or
+; .bracket. at_scan proves a line free of them and at_parse trusts that proof,
+; so the two MUST test the same set - this macro is why they cannot drift, and
+; a fifth delimiter is one edit rather than two files.
+%macro AT_SPECIAL 1                 ; AL = the character; jumps to %1 if it can
+    cmp al, '`'                     ; style
+    je %1
+    cmp al, '*'
+    je %1
+    cmp al, '~'
+    je %1
+    cmp al, '['
+    je %1
+%endmacro
+
 AT_CBGCAP  equ 80                   ; per-8px-column background flags
 AT_UMAX    equ 15                   ; undo/redo depth (MAX_UNDO_LEVELS)
 AT_CLIPBSS equ 2048                 ; clipboard fallback when no claim
@@ -193,6 +233,28 @@ at_font_init:
     rep movsw
     pop es
     pop ds
+%ifndef NOATBLANK
+    ; SPEC.md 46.4.6: ASK THE FACE. The table above is the KERNEL's, and on a
+    ; `make FONT=` kernel that is a different typeface - so "glyph 32 is eight
+    ; zero bytes" is a fact about that table and not about this app. Glyph 32
+    ; is at offset 0: at_glyph indexes (ch - 32) * 8.
+    push cx
+    push si
+    mov byte [at_blankok], 1
+    mov si, at_fontbuf
+    mov cx, 8
+.blank:
+    cmp byte [si], 0
+    je .bnext
+    mov byte [at_blankok], 0        ; a face that inks its space composes
+    jmp short .bdone                ; spaces exactly as before
+.bnext:
+    inc si
+    loop .blank
+.bdone:
+    pop si
+    pop cx
+%endif
     pop di
     pop si
     pop dx
@@ -299,6 +361,11 @@ at_paint:
     cmp byte [at_fs], 0
     je .win
     call at_fs_paint_body
+%ifndef NOATSBAR
+    mov byte [at_sbst], 0           ; a W_PAINT arrives with a damage region
+%endif                              ; armed (SPEC.md 11.3), so what the body
+                                    ; just drew may have been clipped away:
+                                    ; poison on the way OUT, never set
     jmp short .done
 .win:
     call at_splash
@@ -354,6 +421,13 @@ at_fs_paint_all:
     mov dx, [at_vh]
     dec dx
     call OSAPI_GFX_FILL
+%ifndef NOATSBAR
+    mov byte [at_sbst], 0           ; SPEC.md 46.4.4: THE POISON THAT MATTERS.
+%endif                              ; The fill above just erased the gutter,
+                                    ; so without this the dispatcher inside
+                                    ; at_fs_paint_body answers "nothing moved",
+                                    ; returns 0 far calls, and the bar stays
+                                    ; erased for the rest of the session
     call at_fs_paint_body
     pop dx
     pop cx
@@ -514,7 +588,6 @@ at_fs_enter:
     call at_geom_init               ; the live screen, fresh every entry
     mov byte [at_fs], 1
     call at_layout                  ; the text width just became real
-    call at_cline_span
     call at_maxtop
     mov bx, ax
     mov ax, [at_top]
@@ -908,6 +981,7 @@ at_trp:
     %rep 4
         %assign hi ((n >> (7 - 2*k)) & 1)
         %assign lo ((n >> (6 - 2*k)) & 1)
+%ifdef NOATBLIT1
         %if hi
             %assign hv 0
         %else
@@ -918,6 +992,22 @@ at_trp:
         %else
             %assign lv %1
         %endif
+%else
+        ; SPEC.md 46.4.2: the strip is screen-polarity now, so a SET bit is the
+        ; background and a CLEAR one is ink. Swapping the arms of a build-time
+        ; table costs nothing at run time and keeps the 4bpp fallback drawing
+        ; the identical picture.
+        %if hi
+            %assign hv %1
+        %else
+            %assign hv 0
+        %endif
+        %if lo
+            %assign lv %1
+        %else
+            %assign lv 0
+        %endif
+%endif
         db (hv << 4) | lv
         %assign k k+1
     %endrep
@@ -985,8 +1075,36 @@ at_scpos    equ at_scend + 2                 ; word
 at_scskip   equ at_scpos + 2                 ; word
 at_sccw     equ at_scskip + 2                ; word: scan cell width
 at_sclst    equ at_sccw + 2                  ; word: scan line start
-at_stgs     equ at_sclst + 2                 ; AT_STGCAP words: staging starts
+at_sc1      equ at_sclst + 2                 ; byte: at_scan stops after ONE
+                                             ; logical line (SPEC.md 46.3.1)
+at_sbst     equ at_sc1 + 1                   ; byte: the scroll bar's bank -
+                                             ; 0 POISONED, 1 drawn, 2 known
+                                             ; blank (SPEC.md 46.4.4)
+at_sbmax    equ at_sbst + 1                  ; word: the at_maxtop it was
+                                             ; drawn for
+at_sbty     equ at_sbmax + 2                 ; word: the thumb y actually
+                                             ; DRAWN, never one recomputed
+at_scplain  equ at_sbty + 2                  ; byte: this visual line has no
+                                             ; styling character in it yet
+at_scplsp   equ at_scplain + 1               ; byte: ...as it stood at the last
+                                             ; SPACE, for the wrap rewind
+at_pplain   equ at_scplsp + 1                ; byte: at_parse took .rloop AND
+                                             ; the scale is 1, so every cell
+                                             ; of this line is visible,
+                                             ; unstyled and byte-aligned
+                                             ; (SPEC.md 46.4.9)
+at_scspsp   equ at_pplain + 1                ; byte: the span nibble at that
+                                             ; same space (SPEC.md 46.3.2)
+at_scsksp   equ at_scspsp + 1                ; word: ...and at_scskip with it
+at_blankok  equ at_scsksp + 2                ; byte: 1 = the kernel's face
+                                             ; draws glyph 32 blank, so a
+                                             ; space need not be composed
+                                             ; (SPEC.md 46.4.6)
+at_stgs     equ at_blankok + 1                ; AT_STGCAP words: staging starts
 at_stga     equ at_stgs + AT_STGCAP*2        ; AT_STGCAP bytes: staging attrs
+%if at_stgs < at_sbty + 2
+  %error "artful bss: at_stgs overlaps a scalar above it. Every name here is `equ <previous> + <size>`, so a chain that RESTATES an earlier base silently aliases two variables onto one address - which is what happened when at_sc1 was added and at_stgs kept saying `at_sclst + 2`. The alias was not a crash: at_sc1 read back as at_stgs[0]'s low byte, so the flag it controls was set by whatever offset the staging window happened to hold and the feature was inert for a document starting at offset 0."
+%endif
 at_rldel    equ at_stga + AT_STGCAP          ; word: relayout delta
 at_rlst     equ at_rldel + 2                 ; word: relayout scan start
 at_rlj      equ at_rlst + 2                  ; word: surviving old index
@@ -1012,7 +1130,11 @@ at_vis      equ at_lbuf + AT_LBUFCAP         ; AT_LBUFCAP bytes: 1 = hidden
 at_sty      equ at_vis + AT_LBUFCAP          ; AT_LBUFCAP bytes: AT_ST_*
 at_xmap     equ at_sty + AT_LBUFCAP          ; AT_LBUFCAP+1 words: x per char
 at_cellbg   equ at_xmap + (AT_LBUFCAP+1)*2   ; AT_CBGCAP bytes
-at_pcnt     equ at_cellbg + AT_CBGCAP        ; word
+at_pcb0     equ at_cellbg + AT_CBGCAP        ; word: first at_cellbg column set
+at_pcb1     equ at_pcb0 + 2                  ; word: ...and the last. 0FFFFh/0
+                                             ; is the empty span, which is what
+                                             ; at_codebg is refused on
+at_pcnt     equ at_pcb1 + 2                  ; word
 at_pstart   equ at_pcnt + 2                  ; word
 at_pcw      equ at_pstart + 2                ; word
 at_prh      equ at_pcw + 2                   ; word
@@ -1024,10 +1146,8 @@ at_plh      equ at_plt + 2                   ; word: link hide end
 at_pforce   equ at_plh + 2                   ; byte: force styled parse
 at_gsty     equ at_pforce + 1                ; byte: composing style
 at_grow     equ at_gsty + 1                  ; 4 bytes: scaled glyph row
-at_cll0     equ at_grow + 4                  ; word: caret paragraph first
-at_cll1     equ at_cll0 + 2                  ; word: caret paragraph last
 ; --- the strips ---------------------------------------------------------------
-at_strip1   equ at_cll1 + 2                  ; AT_S1ST * AT_SROWS
+at_strip1   equ at_grow + 4                  ; AT_S1ST * AT_SROWS
 at_strip4   equ at_strip1 + AT_S1ST*AT_SROWS ; AT_S4ST * AT_SROWS
 at_xw       equ at_strip4 + AT_S4ST*AT_SROWS ; word: expand/blit width
 at_dly      equ at_xw + 2                    ; word: draw-line y
@@ -1078,16 +1198,41 @@ at_spcx     equ at_sph + 2
 at_btx      equ at_spcx + 2                  ; bigtext/image cursor
 at_bty      equ at_btx + 2
 ; --- edit scratch -------------------------------------------------------------
-at_ocll0    equ at_bty + 2
-at_ocll1    equ at_ocll0 + 2
-at_oselb    equ at_ocll1 + 2
-at_nvlo     equ at_oselb + 2
-at_nvhi     equ at_nvlo + 2
-at_xrlo     equ at_nvhi + 2
+at_osela    equ at_bty + 2                   ; the pre-move SELECTION and caret -
+at_oselb    equ at_osela + 2                 ; between them, all a caret move can
+at_ocaret   equ at_oselb + 2                 ; change on the glass (46.2.1)
+at_xrlo     equ at_ocaret + 2
 at_xrhi     equ at_xrlo + 2
 at_xry      equ at_xrhi + 2
 at_rby      equ at_xry + 2
-at_pastepos equ at_rby + 2
+at_tby      equ at_rby + 2                    ; word: SPEC.md 46.4.10 - the
+                                              ; first row of the text region
+                                              ; that the repaint loop has NOT
+                                              ; drawn on, kept as it goes. It
+                                              ; is not at_line_y(at_nlines):
+                                              ; that walk is right only while
+                                              ; the loop ran to the end, and
+                                              ; a loop that stopped early
+                                              ; leaves the rows between the
+                                              ; last line and that answer
+                                              ; UNERASED - which is a stale
+                                              ; picture and how this shipped
+                                              ; wrong once.
+at_apnd     equ at_tby + 2                    ; byte: SPEC.md 46.4.11 - at_type
+                                              ; inserted a non-styling
+                                              ; character at the END of its
+                                              ; logical line. A ONE-SHOT, set
+                                              ; by at_type and cleared by
+                                              ; at_apply_edit at .see, so no
+                                              ; other caller of that proc can
+                                              ; inherit it.
+at_suseg    equ at_apnd + 1                   ; word: SPEC.md 46.5.1 - the claim
+at_sukb     equ at_suseg + 2                  ; word: holding the pull-down's
+at_surx1    equ at_sukb + 2                   ; word: banked pixels, and the
+at_sury1    equ at_surx1 + 2                  ; word: rect they came from. 0
+at_surx2    equ at_sury1 + 2                  ; word: in at_suseg is the whole
+at_sury2    equ at_surx2 + 2                  ; word: of "nothing was banked"
+at_pastepos equ at_sury2 + 2
 at_wlo      equ at_pastepos + 2
 at_whi      equ at_wlo + 2
 at_wplen    equ at_whi + 2

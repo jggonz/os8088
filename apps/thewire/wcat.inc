@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/thewire/wcat.inc
 ;
-; THE CATALOG FORMAT, version 1 (SPEC.md 88.2) - offsets and limits only.
+; THE CATALOG FORMAT, version 1 (SPEC.md 92.2) - offsets and limits only.
 ;
 ; **EVERY EQU HERE IS MIRRORED IN tools/os88wire.py** and tests/unit/t_wire.py
 ; compares the two files in the FAST tier. There is no linker in this tree, so
@@ -10,7 +10,7 @@
 ; tests/unit/t_mirror.py does for the constants the kernel and the SDK share.
 ;
 ; Nothing in this file emits a byte. It is included by thewire.asm at the top,
-; beside os88api.inc, and by nothing else on the machine: SPEC.md 88.1's
+; beside os88api.inc, and by nothing else on the machine: SPEC.md 92.1's
 ; boundary is that the PACKAGE is the only reader of this format here.
 ; =============================================================================
 
@@ -36,7 +36,7 @@ WC_SIDE0    equ 36              ; word, the first sidecar's table index
 WC_SIZE     equ 38              ; dword, the .O88's size
 WC_TOTAL    equ 42              ; dword, it plus every sidecar - an archive's
                                 ; UNPACKED total
-WC_NEEDKB   equ 46              ; word, an archive's RAM disk KB (88.13's
+WC_NEEDKB   equ 46              ; word, an archive's RAM disk KB (92.13's
                                 ; header figure); 0 on every other record
 WC_ICON     equ 48              ; 64: 16 mask words then 16 data words
 WC_DESC     equ 112             ; WC_DESCN lines of WC_DESCW, pre-wrapped
@@ -59,19 +59,19 @@ WF_FLOPPY   equ 8               ; only as a floppy image - its files live in a
                                 ; folder tree the Wire does not create. Both
                                 ; actions refuse - UNLESS WF_ARC is set too,
                                 ; which is what the writer does for every
-                                ; archive so a reader from before 88.13 greys
+                                ; archive so a reader from before 92.13 greys
                                 ; it rather than fetching a .O88 that is not
                                 ; there
 WF_ARC      equ 16              ; an ARCHIVE, /wire/pkg/<STEM>.WPK (SPEC.md
-                                ; 88.13): one stream, a folder tree. n = 0.
+                                ; 92.13): one stream, a folder tree. n = 0.
                                 ; Load Program unpacks into a RAM disk and
-                                ; runs it (88.14); Add to Disk unpacks where
+                                ; runs it (92.14); Add to Disk unpacks where
                                 ; the dialog points
 
 ; --- WC_KIND -----------------------------------------------------------------
 ; Only 0..2 are used today; the field is the room the brand leaves to grow,
 ; and a reader shows a kind it does not know AS A PROGRAM rather than
-; refusing the record (SPEC.md 88.2).
+; refusing the record (SPEC.md 92.2).
 WK_PROGRAM  equ 0
 WK_GAME     equ 1
 WK_UTILITY  equ 2
@@ -92,7 +92,7 @@ WIRE_ARCMAX equ 0x100000        ; 1 MB, and it is THE FIRST SIZE REFUSED: an
                                 ; three on the pair. There is never a claim for
                                 ; the whole of a .WPK - the reader decodes one
                                 ; entry at a time into a claim sized from
-                                ; WA_MAXENT (SPEC.md 88.13) - so this is a
+                                ; WA_MAXENT (SPEC.md 92.13) - so this is a
                                 ; SANITY bound and not a capacity one, which is
                                 ; why it is a round number rather than a
                                 ; derived figure. RunCPM's master disk is
@@ -106,7 +106,7 @@ WIRE_NMAX   equ 255             ; the format's ceiling. WIRE_CATMAX is the
                                 ; bits, which the reader's addressing needs
 WIRE_SCMAX  equ 8               ; sidecars per record
 
-; --- the picture (SPEC.md 88.3) ----------------------------------------------
+; --- the picture (SPEC.md 92.3) ----------------------------------------------
 WIRE_PICW   equ 128
 WIRE_PICH   equ 64
 WIRE_PICB   equ 16              ; bytes a row

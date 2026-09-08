@@ -46,6 +46,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 from harness import check, eq, done                        # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import os88drv                                            # noqa: E402
 
 BUILD = os.path.join(ROOT, "build")
 
@@ -164,8 +166,35 @@ def main():
         if not os.path.exists(p):
             continue                                # not built: t_pkg's job
         seen += 1
-        want = kb(os.path.getsize(p))
-        eq(s.get(img), want, "%s: %s is ceil(%s / 1024)" % (title, img, drv),
+        # THE RESIDENT SIZE, WHICH IS NO LONGER THE FILE SIZE. A driver's
+        # trailing zeros are stripped by os88drv.py and re-made by drv_bss, so
+        # what the loader claims is file + bss (byte +31, in paragraphs) -
+        # docs/plans/O88-COMPRESSION-PLAN.md 12.6. ether.drv is 13,602 bytes on the
+        # floppy and 17,666 in memory, and the column is the second number.
+        # ...AND THE FILE IS NO LONGER THE IMAGE EITHER (SPEC.md 20.13.2).
+        # Every shipped driver is LZ4 on the disk now, and every term below -
+        # the bss arithmetic, the KB column, DRV_MAX_KB - is about what
+        # drv_load CLAIMS, which is the unpacked size. Reading the file here
+        # under-reports all three at once, which is a column that is wrong in
+        # the safe direction and therefore the kind nobody notices.
+        blob = os88drv.image_unwrap(open(p, "rb").read())
+        # ...and the stripping is LOSSLESS. os88drv.py takes whole paragraphs
+        # of TRAILING ZEROS off the file and drv_bss puts them back at load, so
+        # the two together must reproduce the assembler's own output byte for
+        # byte. Rounding that count UP instead of down is what this catches:
+        # the first version did, and took seven bytes of real code off
+        # sound.drv with nine trailing zeros.
+        src = os.path.join(ROOT, "build", drv.replace(".drv", ".bin"))
+        if os.path.exists(src):
+            orig = open(src, "rb").read()
+            rebuilt = blob[:8] + orig[8:10] + blob[10:31] + b"\0" \
+                      + blob[32:] + b"\0" * (blob[31] * 16)
+            eq(rebuilt, orig, "%s: stripped + bss is the assembled image"
+               % title, "os88drv.py takes only whole paragraphs of trailing "
+               "zeros; anything else and drv_bss restores the wrong bytes")
+        want = kb(len(blob) + blob[31] * 16)
+        eq(s.get(img), want, "%s: %s is ceil((%s + its bss) / 1024)"
+           % (title, img, drv),
            "a driver's image IS a heap claim (drv_load rounds the file up to KB "
            "and claims that), so the column is wrong by the difference the "
            "moment the driver grows - and nothing else in the tree compares "

@@ -83,8 +83,13 @@
 ; through segment arithmetic off its base (c64cpu.inc 4.3), which is what an
 ; ASSET is for - and it is REQUIRED, so a machine that cannot spare its 20KB
 ; refuses the launch instead of starting a C64 with no ROM in it.
+; ...AND IT IS COMPRESSED (SPEC.md 20.12.7). 20,480 bytes of 6502 code and a
+; character generator go to 17,361 under LZ4 - 84.8%, which is machine code
+; again - for ~217 ms of decode at launch on a 4.77 MHz 8088 against the ~6
+; clusters of floppy it gives back. `len` stays 20,480, so a machine that
+; cannot spare the ROM still refuses before a sector is read.
     CC_PARTS_BEGIN 1
-      OS88_PART OP_ASSET
+      OS88_PART OP_ASSET, OP_COMP
     CC_PARTS_END
 
 %include "c64.gen.asm"              ; the compiled C, found through -I build/

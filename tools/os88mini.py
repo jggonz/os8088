@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """os88mini - reduce a package's embedded 16x16 icon to the 8x8 glyph the
-association table caches (SPEC.md 54, docs/ASSOC-PLAN.md 2.1/2.5).
+association table caches (SPEC.md 54, docs/plans/completed/ASSOC-PLAN.md 2.1/2.5).
 
 Emits one NASM line per package, for %include into kernel/assoc.inc, so the
 kernel ships knowing what its own default applications look like and needs no

@@ -255,7 +255,7 @@ structure the natural one to write. What CWORD does, and what it costs:
   overstrike sits one pixel above the glyph band and the double underline two
   below; at pitch 10 the rule landed exactly where the next row's italic goes
   and rubbed it out on every repaint. Model every pixel row outside the band
-  separately, and let a face off `FONTS/` bring its own height.
+  separately, and let a face off `SYSTEM/FONTS/` bring its own height.
 - **One decision per cell, one call per RUN.** Bold is a second strike one
   pixel right, italic a strike up-and-right, the underlines are drawn rules,
   small caps a case map — each ONE extra call per run, never one per glyph.
@@ -490,7 +490,7 @@ decided, done, and written down. That is the ratio to keep.
 ## 13. What the RunCPM port added
 
 `apps/runcpm` is RunCPM 6.9 (SPEC.md §74), ported across six waves by the
-skill this file belongs to; `docs/RUNCPM-PORT-PLAN.md` carries each wave's
+skill this file belongs to; `docs/plans/completed/RUNCPM-PORT-PLAN.md` carries each wave's
 measured paragraph. What it learned that CWORD had not, one line each:
 
 - **The `.OVL` cannot be loaded from `os88_main`** — there is no instance

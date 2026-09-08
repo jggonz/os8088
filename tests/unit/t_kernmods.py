@@ -50,7 +50,31 @@ import kernsize                                           # noqa: E402
 # a default build measures them at zero and that is the correct answer.  A
 # module joining this list is a decision: it is saying "this ships in no
 # kernel any disk carries", which is exactly what a knob is.
-KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc", "stkdiag.inc")
+#
+# **vmmouse.inc IS THE ONE ENTRY THAT IS NOT A KNOB** (SPEC.md 9.11.7), and it
+# is named here rather than exempted quietly because the distinction matters:
+# `make emu` is a SHIPPED PRODUCT - kern_big plus the VMware absolute pointer,
+# for v86 in a browser and for a desktop hypervisor - so build/emu.img is a
+# disk that carries it, which is precisely what the four above are saying is
+# not true of them. What it shares with them is the only thing this test can
+# see: it measures zero on the DEFAULT build, because the whole file is inside
+# %ifdef KERN_EMU and the target machine is a 4.77 MHz 8088 that can neither
+# speak a 32-bit backdoor protocol nor be spoken to. Its bytes are on the emu
+# variant's row instead - `tools/kernsize.py --modules -DKERN_BIG -DKERN_EMU`
+# prints them, exactly as `--modules -DKERN_SMALL` prints kern_small's.
+KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc", "stkdiag.inc",
+             "vmmouse.inc")
+
+# ...and a second reason for a zero row, which is NOT a knob: a file whose
+# whole contribution is an on-demand module IMAGE (SPEC.md 2.8).  Those
+# sections are cut out of kernel.bin by tools/os88mod.py and shipped as a
+# `.DRV`, so they are not in MOD_SECTIONS and never will be - the report is
+# about what a machine carries, and a module image is not it.  Every other
+# module file has a resident half as well (a thunk, a string, a `mod_tab`
+# row) and so measures somewhere; compress.inc is the first that is PURELY
+# the image, and its resident half lives on mod.inc's and files.inc's rows.
+# A file joining this list is saying "nothing of this is in KERNEL.SYS".
+IMAGE_ONLY = ("compress.inc",)
 
 
 def main():
@@ -94,7 +118,7 @@ def main():
 
     # 3. Nothing reads as free.
     for name, v in sorted(per.items()):
-        if name in KNOB_ONLY:
+        if name in KNOB_ONLY or name in IMAGE_ONLY:
             continue
         check(any(v[s] for s in kernsize.MOD_SECTIONS),
               "%s measures somewhere" % name,

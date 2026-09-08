@@ -56,8 +56,10 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
+import os88build                                             # noqa: E402
 import os88marty, os88mouse, os88sym, dispcp                 # noqa: E402
 import dispapps                                              # noqa: E402
 
@@ -82,9 +84,16 @@ def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
 
-def shots(image, apps, machine, defines):
-    """(even-phase frame, odd-phase frame, even cycles, odd cycles)."""
-    os88sym.default_defines(*defines)
+def shots(image, apps, machine, tree=None):
+    """(even-phase frame, odd-phase frame, even cycles, odd cycles).
+
+    `tree` is the build this kernel came out of, and it carries the defines
+    with it - os88sym re-assembles from those and checks the result byte for
+    byte against that tree's own kernel.bin, so neither travels alone. It also
+    moves os88sym's MODULE DEFAULT, which is what the library helpers below
+    resolve against (`no_saver` asks for `ss_idle` and takes no defines).
+    """
+    (tree or os88build.plain()).apply()
     S = os88sym.linear
     kbase = os88sym.KERNEL_SEG << 4
     out = []
@@ -254,26 +263,26 @@ def main():
                                "MEDIA:" + gif)
 
     print("   shipped kernel:")
-    fe, fo, ce, co, ge, go = shots(a.image, a.apps, a.machine, ())
+    fe, fo, ce, co, ge, go = shots(a.image, a.apps, a.machine)
 
-    # THIS ROW REBUILDS THE TREE, which no other one does, and the `finally`
-    # is not decoration: `make NOPLANE=1` writes build/kernel.bin, so a run
-    # that dies in the middle leaves the tree holding a kernel `make` did not
-    # put there - and every emulator row after it would then be driving a
-    # kernel its symbol map describes perfectly and nobody asked for. The
-    # knob image is COPIED out before the tree is put back, so the two
-    # captures are of two files rather than of one file twice.
-    ref = "/tmp/blitplane-noplane.img"
-    print("   NOPLANE=1 kernel: building")
-    try:
-        subprocess.check_call(["make", "NOPLANE=1", a.image],
-                              stdout=subprocess.DEVNULL)
-        subprocess.check_call(["cp", a.image, ref])
-        print("   NOPLANE=1 kernel:")
-        ne, no, rce, rco, nge, ngo = shots(ref, a.apps, a.machine,
-                                           ("NOPLANE",))
-    finally:
-        subprocess.check_call(["make"], stdout=subprocess.DEVNULL)
+    # THE KNOB KERNEL IS BUILT IN A TREE OF ITS OWN (tools/os88build.py), and
+    # this used to be the row that best showed why that matters. It ran `make
+    # NOPLANE=1` into build/, copied the image out, and ran a bare `make` in a
+    # `finally` to put the tree back - two full builds for one measurement,
+    # and in between, build/kernel.bin was a kernel nobody else had asked for.
+    # Any row reading the tree in that window drove it. That is what
+    # `builds=True` was protecting against, and it is why this row could never
+    # share the box with another.
+    #
+    # Now the knob lands in build/trees/noplane-<hash>/ and build/ is never
+    # written at all, so there is no restore, no `finally`, and no reason for
+    # this row to run alone. The defines come off the tree rather than being
+    # spelled here: a knob's make VARIABLE and its nasm DEFINE are not always
+    # the same string, and os88sym needs the second.
+    knob = os88build.tree("NOPLANE=1")
+    print("   NOPLANE=1 kernel: %s" % os.path.relpath(knob.dir, ROOT))
+    ne, no, rce, rco, nge, ngo = shots(knob.img(os.path.basename(a.image)),
+                                       a.apps, a.machine, tree=knob)
 
     bad = 0
     for name, x, y, g, ng in (("even", fe, ne, ge, nge),

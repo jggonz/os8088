@@ -80,7 +80,7 @@ mu_entry:
                                      ; wm_show and inst_bind_win both take it
 
 ; -----------------------------------------------------------------------------
-; The VANISH window - docs/MOUSEUP-PLAN.md 4.2, "the armed window may be gone"
+; The VANISH window - docs/plans/completed/MOUSEUP-PLAN.md 4.2, "the armed window may be gone"
 ;
 ; The one guard in the mouse-up work that no gesture could reach: between the
 ; press and the release, a package can tear its own window down, and

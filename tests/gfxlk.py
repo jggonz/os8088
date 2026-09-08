@@ -59,6 +59,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 
+import os88build                                            # noqa: E402
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
@@ -128,111 +129,169 @@ def sites(m):
 
 
 def main():
-    subprocess.check_call(["make", "GFXAUDIT=1"], cwd=ROOT,
-                          stdout=subprocess.DEVNULL)
+    # THE AUDIT KERNEL BUILDS IN A TREE OF ITS OWN (tools/os88build.py). It
+    # used to be `make GFXAUDIT=1` into build/ with a `finally` putting the
+    # plain kernel back - two builds, and in between the shared tree held a
+    # kernel nobody else had asked for, which is what made this row
+    # `builds=True` and unable to share the box.
+    t = os88build.tree("GFXAUDIT=1").apply()
     settle = os88marty.settle
-    try:
-        with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                              machine="os8088_xt_vga") as m:
-            mo = os88mouse.Mouse(marty=m)
+    with os88marty.launch(t.img("os8088-360.img"),
+                          apps=t.img("apps360.img"),
+                          machine="os8088_xt_vga") as m:
+        mo = os88mouse.Mouse(marty=m)
 
-            dispcp.open_drive(m, mo, S, settle, "B")        # a mount and a walk
-            disk = dispcp.win_list(m, S)[-1]
-            wx, wy = dispcp.win_rect(m, S, disk)[:2]
-            dispcp.open_named(m, mo, S, settle, wx, wy, "GAMES")
+        dispcp.open_drive(m, mo, S, settle, "B")        # a mount and a walk
+        disk = dispcp.win_list(m, S)[-1]
+        wx, wy = dispcp.win_rect(m, S, disk)[:2]
+        dispcp.open_named(m, mo, S, settle, wx, wy, "GAMES")
 
-            wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
-            entry = dispcp.row_of(m, S, "MINES.O88")
-            row = dispcp.scroll_to(m, mo, S, settle, wx, wy, entry)
-            rx, ry = dispcp.row_xy(wx, wy, row)
-            mo.dblclick(rx, ry, settle=0)
-            for i in range(40):         # THE HAND, MOVING THROUGH THE WAIT -
-                                        # it is what turns the exposure into a
-                                        # defect, and what this counts
-                m.mouse(dx=(3 if i % 8 < 4 else -3), dy=(2 if i % 6 < 3 else -2))
-                m.advance(frames=2)
-                m.run()
-            m.advance(frames=200)
+        wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
+        entry = dispcp.row_of(m, S, "MINES.O88")
+        row = dispcp.scroll_to(m, mo, S, settle, wx, wy, entry)
+        rx, ry = dispcp.row_xy(wx, wy, row)
+        mo.dblclick(rx, ry, settle=0)
+
+        # THE HAND, MOVING THROUGH THE WAIT - it is what turns the exposure
+        # into a defect, and what this counts. But it only counts while the
+        # CHROME IS UP: [gfx_aud_def] is the ISR reaching its draw with
+        # [fpg_on] set, so a hand that moves after the load has finished
+        # produces zero deferrals and the control below fires.
+        #
+        # THAT IS WHY THIS ROW WAS INTERMITTENT - 2 runs in 5, measured, and
+        # on the control leg rather than the assertion. A fixed 40 packets at
+        # two frames each is ~1.3 guest seconds racing a package load, and
+        # sometimes the load won. Waiting for [fpg_on] and then moving WHILE
+        # it is set makes the row establish its own precondition instead of
+        # hoping for it; the cap is a bound, not a plan.
+        os88marty.until(m, lambda mm: word(mm, "fpg_on"),
+                        "the progress chrome to come up", poll=0.02, guest=30.0)
+        i = 0
+        while word(m, "fpg_on") and i < 600:
+            m.mouse(dx=(3 if i % 8 < 4 else -3), dy=(2 if i % 6 < 3 else -2))
+            m.advance(frames=2)
             m.run()
+            i += 1
+        print("  moved the hand %d time(s) while the chrome was up" % i)
+        m.advance(frames=200)
+        m.run()
 
-            print("  drew with the lock free: %d call(s) - %s"
-                  % (word(m, "gfx_aud_tot"), ", ".join(sites(m)) or "none"))
-            print("  ISR cursor moves: %d, of them deferred by the gate: %d"
-                  % (word(m, "gfx_aud_mv") + word(m, "gfx_aud_def"),
-                     word(m, "gfx_aud_def")))
+        print("  drew with the lock free: %d call(s) - %s"
+              % (word(m, "gfx_aud_tot"), ", ".join(sites(m)) or "none"))
+        print("  ISR cursor moves: %d, of them deferred by the gate: %d"
+              % (word(m, "gfx_aud_mv") + word(m, "gfx_aud_def"),
+                 word(m, "gfx_aud_def")))
 
-            check("the widget went up", word(m, "gfx_aud_tot") > 0
-                  or word(m, "gfx_aud_def") > 0,
-                  "a session that never armed it proves nothing")
-            check("the gate fired at all", word(m, "gfx_aud_def") > 0,
-                  "%d deferrals - the control for the row below"
-                  % word(m, "gfx_aud_def"))
-            check("no ISR draw with the widget up", word(m, "gfx_aud_gate") == 0,
-                  "%d - SPEC.md 12.8.4's compare is what makes this 0"
-                  % word(m, "gfx_aud_gate"))
-            check("no ISR draw inside a primitive", word(m, "gfx_aud_race") == 0,
-                  "%d - the collision caught in the act; 0 here is weak "
-                  "evidence under MartyPC, see the header"
-                  % word(m, "gfx_aud_race"))
-            check("no save-under banked the arrow", word(m, "gfx_aud_bank") == 0,
-                  "%d gfx_save calls with the cursor still on the glass"
-                  % word(m, "gfx_aud_bank"))
+        check("the widget went up", word(m, "gfx_aud_tot") > 0
+              or word(m, "gfx_aud_def") > 0,
+              "a session that never armed it proves nothing")
+        # **THE CONTROL IS "THE ISR REACHED ITS DRAW WITH THE WIDGET UP", not
+        # "it was DEFERRED".** Those were the same thing when this was
+        # written: SPEC.md 12.8.4's compare made the draw unreachable while
+        # [fpg_on] was set, so every ISR arrival in the window was a deferral
+        # and counting them proved the session had armed the widget.
+        #
+        # SPEC.md 7.4 REVERSED THAT ON PURPOSE. The mouse ISR now draws the
+        # arrow through a disk transfer - that is the whole feature, and
+        # `NOCURDISK=1` is the knob that puts the old freeze back - so an
+        # arrival with the lock free is a DRAW and not a deferral. Deferrals
+        # now need the gfx lock to be held at the instant the packet lands,
+        # which is a race SPEC.md 7.4.2 made narrow by design: measured, 16
+        # hand moves inside the freeze produced 15 ISR moves and 0 deferrals,
+        # and this row was INTERMITTENT 2 runs in 5 on exactly this leg.
+        #
+        # The sum is what the docstring above actually asks for - "a zero
+        # cannot be a session that never armed the widget" - and it is
+        # unambiguous under either kernel.
+        check("the gate fired at all",
+              word(m, "gfx_aud_mv") + word(m, "gfx_aud_def") > 0,
+              "%d ISR arrival(s) in the window, %d of them deferred - the "
+              "control for the row below"
+              % (word(m, "gfx_aud_mv") + word(m, "gfx_aud_def"),
+                 word(m, "gfx_aud_def")))
+        check("no ISR draw with the widget up", word(m, "gfx_aud_gate") == 0,
+              "%d - SPEC.md 12.8.4's compare is what makes this 0"
+              % word(m, "gfx_aud_gate"))
+        check("no ISR draw inside a primitive", word(m, "gfx_aud_race") == 0,
+              "%d - the collision caught in the act; 0 here is weak "
+              "evidence under MartyPC, see the header"
+              % word(m, "gfx_aud_race"))
+        check("no save-under banked the arrow", word(m, "gfx_aud_bank") == 0,
+              "%d gfx_save calls with the cursor still on the glass"
+              % word(m, "gfx_aud_bank"))
 
-            # --- SPEC.md 11.101.2: the window that opens ABOVE the pointer ----
-            # apps/cyclone shows its own window from its entry proc, where the
-            # gfx lock is free (SPEC.md 20.2). The hand never moves: the row is
-            # SELECTED, the pointer is parked where the window is about to
-            # land, and Enter opens it - which is the field's own recipe.
-            wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
-            entry = dispcp.row_of(m, S, "CYCLONE.O88")
-            row = dispcp.scroll_to(m, mo, S, settle, wx, wy, entry)
-            rx, ry = dispcp.row_xy(wx, wy, row)
-            mo.dblclick(rx, ry)                 # once, to learn where it lands
-            m.advance(frames=300)
-            m.run()
-            opened = [w for w in dispcp.win_list(m, S) if w != disk]
-            if not opened:
-                sys.exit("gfxlk: CYCLONE did not open")
-            nx, ny, nw, nh = dispcp.win_rect(m, S, opened[-1])
-            mo.click(nx + 8, ny + 9)            # its close box
-            m.advance(frames=90)
-            m.run()
-            px, py = max(rx, nx + 12), max(min(ry, ny + nh - 12), ny + 12)
-            rect = (wx + 2, wy + TITLE_H + 20, wx + ww - 4, wy + wh - 24)
+        # --- SPEC.md 11.101.2: the window that opens ABOVE the pointer ----
+        # apps/cyclone shows its own window from its entry proc, where the
+        # gfx lock is free (SPEC.md 20.2). The hand never moves: the row is
+        # SELECTED, the pointer is parked where the window is about to
+        # land, and Enter opens it - which is the field's own recipe.
+        wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
+        entry = dispcp.row_of(m, S, "CYCLONE.O88")
+        row = dispcp.scroll_to(m, mo, S, settle, wx, wy, entry)
+        rx, ry = dispcp.row_xy(wx, wy, row)
+        mo.dblclick(rx, ry)                 # once, to learn where it lands
+        m.advance(frames=300)
+        m.run()
+        opened = [w for w in dispcp.win_list(m, S) if w != disk]
+        if not opened:
+            sys.exit("gfxlk: CYCLONE did not open")
+        nx, ny, nw, nh = dispcp.win_rect(m, S, opened[-1])
+        mo.click(nx + 8, ny + 9)            # its close box
+        m.advance(frames=90)
+        m.run()
+        px, py = max(rx, nx + 12), max(min(ry, ny + nh - 12), ny + 12)
+        rect = (wx + 2, wy + TITLE_H + 20, wx + ww - 4, wy + wh - 24)
 
-            mo.click(rx, ry)                    # SELECT the row - no launch
-            settle(m)
-            mo.to(px, py)                       # ...and park ON the landing site
-            settle(m)
-            m.key("Enter")                      # fm_onkey opens it, and the
-            m.advance(frames=300)               # hand never moves again
-            m.run()
-            opened = [w for w in dispcp.win_list(m, S) if w != disk]
-            if not opened:
-                sys.exit("gfxlk: Enter opened nothing")
-            nx, ny, nw, nh = dispcp.win_rect(m, S, opened[-1])
-            mo.click(nx + 8, ny + 9)
-            m.advance(frames=90)
-            m.run()
-            mo.to(*PARK)
-            settle(m)
-            before, dim = crop(m, rect)
-            b = brect((wx, wy, ww, wh))
-            mo.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)    # Refresh
-            settle(m)
-            mo.click(rx, ry)                    # ...and the same row selected,
-            settle(m)                           # or the highlight is the diff
-            mo.to(*PARK)
-            settle(m)
-            after, _ = crop(m, rect)
-            n = sum(1 for i in range(0, min(len(before), len(after)), 3)
-                    if before[i:i + 3] != after[i:i + 3])
-            check("the list survived a window opening over the pointer", n == 0,
-                  "%d pixels the list has that a repaint of it does not" % n)
-            check("...and no bank saw the arrow", word(m, "gfx_aud_bank") == 0,
-                  "%d" % word(m, "gfx_aud_bank"))
-    finally:
-        subprocess.check_call(["make"], cwd=ROOT, stdout=subprocess.DEVNULL)
+        mo.click(rx, ry)                    # SELECT the row - no launch
+        settle(m)
+        mo.to(px, py)                       # ...and park ON the landing site
+        settle(m)
+        m.key("Enter")                      # fm_onkey opens it, and the
+        m.advance(frames=300)               # hand never moves again
+        m.run()
+        opened = [w for w in dispcp.win_list(m, S) if w != disk]
+        if not opened:
+            sys.exit("gfxlk: Enter opened nothing")
+        nx, ny, nw, nh = dispcp.win_rect(m, S, opened[-1])
+        mo.click(nx + 8, ny + 9)
+        m.advance(frames=90)
+        m.run()
+        mo.to(*PARK)
+        settle(m)
+        before, dim = crop(m, rect)
+        b = brect((wx, wy, ww, wh))
+        mo.click((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)    # Refresh
+        settle(m)
+        # ...AND SCROLLED BACK TO WHERE `before` WAS TAKEN. Refresh re-reads
+        # the directory and returns the view to the TOP, so without this the
+        # two captures are the same files at different offsets and every row
+        # differs - 3971 pixels of "the list did not survive" about a list
+        # that survived perfectly. It only started mattering when GAMES grew
+        # past the window: scroll_to was a no-op while CYCLONE.O88 was
+        # visible from the top, and PACMAN.O88 and SKIES.O88 pushed it down.
+        row2 = dispcp.scroll_to(m, mo, S, settle, wx, wy, entry)
+        settle(m)
+        if row2 != row:
+            sys.exit("gfxlk: the refreshed view puts CYCLONE.O88 on row %d "
+                     "and it was on row %d - the two captures would be of "
+                     "different scroll positions" % (row2, row))
+        mo.click(rx, ry)                    # ...and the same row selected,
+        settle(m)                           # or the highlight is the diff
+        mo.to(*PARK)
+        settle(m)
+        after, _ = crop(m, rect)
+        n = sum(1 for i in range(0, min(len(before), len(after)), 3)
+                if before[i:i + 3] != after[i:i + 3])
+        if n and os.environ.get("GFXLK_DUMP"):
+            w = rect[2] - rect[0]
+            for nm, buf in (("before", before), ("after", after)):
+                os88marty.write_png_rgb("/tmp/gfxlk-%s.png" % nm, w,
+                                        len(buf) // (3 * w), buf)
+            print("  dumped /tmp/gfxlk-before.png and -after.png")
+        check("the list survived a window opening over the pointer", n == 0,
+              "%d pixels the list has that a repaint of it does not" % n)
+        check("...and no bank saw the arrow", word(m, "gfx_aud_bank") == 0,
+              "%d" % word(m, "gfx_aud_bank"))
 
     print("\ngfxlk: %s" % ("FAILED: " + ", ".join(fails) if fails else "all pass"))
     return 1 if fails else 0

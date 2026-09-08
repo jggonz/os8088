@@ -127,6 +127,13 @@ hd_tool_home:
 ; than the claim is refused by OSAPI_FILE_READ before any data moves
 ; (FERR_BIG is decided from the directory entry), and a smaller one just
 ; leaves the tail of the claim unread and zero.
+;
+; The file on the disk is a 'CZ' container like every other driver's (SPEC.md
+; 20.13.3.1) and OSAPI_FILE_READ is the transparent read (20.14.3): what lands
+; in the claim is the IMAGE, expanded in place, and DX:AX is its size. That is
+; why the claim is cut from hddtool.bin and not from the file, and why
+; hd_tool_check runs against real bytes rather than a stream - the header
+; would cross a stream verbatim and pass every test it makes.
 ; -----------------------------------------------------------------------------
 hd_tool_need:
     cmp word [hd_tseg], 0

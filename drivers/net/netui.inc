@@ -6,7 +6,7 @@
 ; cp_items from the five static rows plus one per loaded driver that publishes
 ; a name, and clearing the publication at detach is what makes the row go.
 ;
-; WHAT IT SAYS IS THE DIAGNOSIS, and that is the whole design. docs/NET-PLAN.md
+; WHAT IT SAYS IS THE DIAGNOSIS, and that is the whole design. docs/plans/completed/NET-PLAN.md
 ; 1.4.4: a port with nothing plugged into it and a port with a PRINTER on it
 ; read as the same constant status byte, and only a live partner reads as
 ; whatever we ask it to. So "not connected" on its own would send the user to

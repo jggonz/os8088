@@ -1,10 +1,12 @@
 ; =============================================================================
 ; os8088 - tests/facetest/facetest.asm
 ;
-; FACETEST: does apps/os88type.inc actually set type? It opens CHARTER.F88 off
-; the apps floppy, reports what the header said, and draws the same sentence
-; four ways, one under the other, so a single screendump answers every
-; question the library raises:
+; FACETEST: does apps/os88type.inc actually set type? It asks ty_scan what the
+; MACHINE has - SYSTEM/FONTS on the system disk, reached through OSAPI_VOL_SYS
+; and never named here (SPEC.md 19.8) - opens the first family it listed,
+; reports what the header said, and draws the same sentence four ways, one
+; under the other, so a single screendump answers every question the library
+; raises:
 ;
 ;   1  the kernel's 8x8 face through OSAPI_FONT_RUN      - the reference
 ;   2  face 0 through this library                       - the identity path
@@ -23,6 +25,11 @@
 ; kernel's face (SPEC.md 6.5), so lettering it through this library and
 ; through font_run must put the same pixels on the screen. If it does not, the
 ; library's compose is wrong and every face it ever sets will be wrong with it.
+;
+; ...and the SCAN's own answer is not on the screen in a form anything but a
+; person can read, so it is also published as four bytes at a fixed offset in
+; this package's bss (FT_ST_* at the bottom). tests/facescan.py is the row that
+; reads them: `families 10` and `families 1` are the same picture.
 ;
 ; Nothing here ships: `make bench` builds it, `all` never does.
 ; =============================================================================
@@ -45,9 +52,9 @@ ft_entry:
     call ty_init                    ; face 0, before anything can ask for it
 
     call ty_scan                    ; ...then what the MACHINE has (SPEC.md
-    mov al, [ty_nfam]               ; 19.8): FONTS/ on the system disk, found
-    mov [ft_nfam], al               ; through OSAPI_VOL_SYS rather than named
-    or al, al                       ; by this harness
+    mov al, [ty_nfam]               ; 19.8): SYSTEM/FONTS on the system disk,
+    mov [ft_nfam], al               ; found through OSAPI_VOL_SYS rather than
+    or al, al                       ; named by this harness
     jnz .some
     mov byte [ft_err], 0xFF         ; nothing on the disk at all
     jmp short .nofile
@@ -338,10 +345,6 @@ ft_cy:      dw 0
 ft_px:      dw 0
 ft_ry:      dw 0
 ft_rows:    dw 8
-ft_face:    db 0
-ft_nfam:    db 0
-ft_err:     db 0
-ft_cached:  db 0
 ft_noc:     db 0
 
 FT_BSS_OWN  equ 8
@@ -349,5 +352,26 @@ FT_BSS_OWN  equ 8
     OS88_BSS FT_BSS_OWN + TY_BSS_SIZE
     OS88_IMAGE_END
 
+; --- THE STATUS BLOCK, at a fixed offset from os88_image_end -----------------
+; What ty_scan found is the whole question this package exists to ask, and a
+; screendump cannot answer it: "families 10" and "families 1" are the same
+; picture to anything but a person reading the line. So the four bytes live at
+; a CONSTANT offset in this package's own bss - the tests/ftpd.py idiom - and
+; tests/facescan.py reads them out of the guest through the window's segment.
+;
+; BSS AND NOT `db 0` IN THE IMAGE, which is what they were: the assembler puts
+; a db wherever the code above it ended, so the offset moved with every edit to
+; this file and a host-side reader had no way to name it. Nothing is lost -
+; bss arrives zeroed (SPEC.md 20.3), which is what each of them was.
+FT_ST_NFAM  equ 0               ; byte: families ty_scan listed
+FT_ST_ERR   equ 1               ; byte: ty_openfam's answer; 0 = a face is open,
+                                ; 0xFF = the scan found nothing at all
+FT_ST_FACE  equ 2               ; byte: the handle it opened
+FT_ST_CACHE equ 3               ; byte: ty_cache built the pre-shifted table
+
 ft_own      equ os88_image_end + 0
+ft_nfam     equ ft_own + FT_ST_NFAM
+ft_err      equ ft_own + FT_ST_ERR
+ft_face     equ ft_own + FT_ST_FACE
+ft_cached   equ ft_own + FT_ST_CACHE
     TY_BSS os88_image_end + FT_BSS_OWN

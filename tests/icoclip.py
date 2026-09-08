@@ -96,8 +96,10 @@ import os88sym                                              # noqa: E402
 KERNEL_SEG = 0x60
 KB = KERNEL_SEG << 4
 
-MACHINES = (("cga", "os8088_5150_cga", 0xB800, 0x4000),
-            ("herc", "os8088_5150_herc", 0xB000, 0x8000))
+# THE GLaBIOS TWINS - `icon_draw` is called through the debugger over a
+# zeroed background, so nothing here reaches the BIOS (os88marty.machine).
+MACHINES = (("cga", os88marty.machine("os8088_5150_cga"), 0xB800, 0x4000),
+            ("herc", os88marty.machine("os8088_5150_herc"), 0xB000, 0x8000))
 
 ICON_Y = 64                     # a blank band of desktop, well clear of the
                                 # menu bar and of the volume zone's own icons

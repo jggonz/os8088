@@ -11,7 +11,7 @@ screen-scraped, so a pass is a memory read and not a picture:
   7  press a window that DESTROYS ITSELF, then
      release over where it was                   -> the release is REFUSED
 
-Case 7 is docs/MOUSEUP-PLAN.md 4.2 and it is the one no ordinary gesture can
+Case 7 is docs/plans/completed/MOUSEUP-PLAN.md 4.2 and it is the one no ordinary gesture can
 reach: between the two passes a package can free the record the kernel armed
 the release against, and .mup_pkg has to notice before it dispatches through
 it. muptest's second window does exactly that with OSAPI_WM_DESTROY.

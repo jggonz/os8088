@@ -58,6 +58,34 @@ DSK_B_HEADS  equ 26              ; BPB_NumHeads (word)
 DSK_R_NAME   equ 0               ; name[8] (space-padded)
 DSK_R_EXT    equ 8               ; ext[3] (space-padded)
 DSK_R_ATTR   equ 11              ; attribute byte
+DSK_R_CZM    equ 12              ; THE COMPRESSION HINT (SPEC.md 20.14,
+DSK_R_CZH    equ 13              ; docs/plans/O88-COMPRESSION-PLAN.md 15): a mark
+DSK_R_CZL    equ 20              ; byte, then the UNPACKED size as a high byte
+DSK_CZ_MARK  equ 0x5A            ; and a low word. **THE MARK CARRIES THE
+                                 ; FORMAT**: 0x5A + the LZ_* id, so 0x5A is
+                                 ; LZ4 and 0x5B is LZB (SPEC.md 20.14.1). It
+                                 ; had to when the two formats got different
+                                 ; answers at the capacity decision, which
+                                 ; happens BEFORE any data I/O; they get the
+                                 ; same answer now (20.13.7), and what the
+                                 ; format still buys is that Compress can
+                                 ; refuse a file already stored LZB without
+                                 ; reading it. THESE FOUR BYTES ARE FREE -
+                                 ; dskw_commit clears all 32 and writes only
+                                 ; name, attribute, the three stamps, cluster
+                                 ; and size, and 19.1 already documents @20 as
+                                 ; "FAT32-only per spec - ignored". The
+                                 ; directory sector is read anyway, so knowing
+                                 ; a file is compressed costs NO extra I/O at
+                                 ; mount, per listing or per entry.
+                                 ; **IT IS A CACHE**: a foreign tool may drop
+                                 ; it, a missing hint reads as "not
+                                 ; compressed", and trusting that would hand an
+                                 ; application compressed bytes - so the read
+                                 ; path checks the file's own 'CZ' header too
+DSK_CZ_MAG   equ 0x5A43          ; 'CZ', as the word a `cmp` reads it back as
+DSK_CZ_HDR   equ 8               ; magic, format, a reserved zero, and the
+                                 ; unpacked size as a dword
 DSK_R_CLUS   equ 26              ; FstClusLO (FstClusHI @20 is FAT32-only)
 DSK_R_SIZE   equ 28              ; file size, dword
 
@@ -144,7 +172,7 @@ DV_CLASS     equ 3               ; db: the DRVC_* whose published DSV_BLK owns
                                  ; nothing has to record WHICH driver a volume
                                  ; came from" - and that was true right up
                                  ; until a SECOND class could serve blocks
-                                 ; (docs/NET-PLAN.md 2.1: a cable and a hard
+                                 ; (docs/plans/completed/NET-PLAN.md 2.1: a cable and a hard
                                  ; disk have to coexist on the machine this
                                  ; project is calibrated against, which has an
                                  ; ST-225 in it). It costs NOTHING: the byte
@@ -370,7 +398,7 @@ FDD_DBG_SPAN equ ($ - fdd_dbg_span)
 %endif
 
 %ifdef DISK_COUNTERS
-; The measurement instruments of docs/DISK-PERF-PLAN.md 2, compiled in only by
+; The measurement instruments of docs/plans/completed/DISK-PERF-PLAN.md 2, compiled in only by
 ; `make DISKCNT=1` and never shipped. Read over QMP with `xp /3xh <linear>`;
 ; derive the offset from `nasm -l` after EVERY rebuild, because anything added
 ; to an include before this one moves it. They are never reset: take a reading,
@@ -954,7 +982,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; Only a machine with no vector at all falls back to the values above.
 ; -----------------------------------------------------------------------------
 section .ovlw                  ; THE BOOT OVERLAY (SPEC.md 2.5.2,
-                                ; docs/LAST-DROP-BYTES.md row 12): kmain runs
+                                ; docs/plans/LAST-DROP-BYTES.md row 12): kmain runs
                                 ; this once, before the first mount, and
                                 ; nothing re-installs int 1Eh afterwards -
                                 ; dsk_xfer READS the table, it does not
@@ -1470,7 +1498,8 @@ dsk_xfer:
     mov cx, ax                  ; the boot bar counts SECTORS, and a call now
 .notch:                         ; carries a run of them (SPEC.md 18.91) - so
     SPLCALL splf_step               ; it is stepped per sector rather than per
-    call KERNEL_SEG:cw_fpg_step               ; call, or the bar would under-count exactly
+    mov bp, fpg_step
+    call KERNEL_SEG:cw_mem_disp ; call, or the bar would under-count exactly
     loop .notch                 ; as far as the batching won. BOTH preserve
                                 ; every register and the flags - CX is this
                                 ; loop's counter and CF is dsk_xfer's answer
@@ -1614,7 +1643,7 @@ dsk_vol_row_x:
 ; out of, which is a stronger statement than any of the bounds would make.
 ; -----------------------------------------------------------------------------
 section .ovlw                  ; THE BOOT OVERLAY (SPEC.md 2.5.2,
-                                ; docs/LAST-DROP-BYTES.md row 4): which volume
+                                ; docs/plans/LAST-DROP-BYTES.md row 4): which volume
                                 ; the machine came off, asked once by kmain
                                 ; from the registers the boot sector left.
                                 ; dsk_bootltr goes with it - it is this
@@ -2331,7 +2360,7 @@ osapi_vol_fence:
 .cls:                           ; tested [drv_fseg2] alone - the DISK class -
     call drv_cls_fp_x             ; which is a fence that only one kind of
     jc .no                      ; driver can ever pass, and a second
-    cmp bx, [di+2]              ; block-serving class (docs/NET-PLAN.md 2.1)
+    cmp bx, [di+2]              ; block-serving class (docs/plans/completed/NET-PLAN.md 2.1)
     je .yes                     ; would have been refused its own volumes
     inc al
     cmp al, DRVC_MAX
@@ -4380,59 +4409,14 @@ dsk_fatw_claim:
 ; in the arena's floor. What it knew that this file must not forget is that the
 ; live window has a SECOND naming word, [dsk_fatseg]; dsk_fatw_demote below is
 ; where that now lives.
-section .text                   ; ...and dsk_dseg_reloc below still needs it:
-                                ; mem_reloc_call reaches a kernel proc through
-                                ; cw_mem_disp - `call bp` with CS = KERNEL_SEG
-                                ; - so BP has to be a .text offset. An INDIRECT
-                                ; transfer is the one class os88ovlchk cannot
-                                ; see, so nothing would have failed
-; -----------------------------------------------------------------------------
-; dsk_dseg_reloc - the KERNEL's half of a DONATED claim's move (SPEC.md 66.5.10.2)
-; in:  BX = the base it WAS at, DX = the base it is at now; DS = KERNEL_SEG
-; out: nothing (every register preserved)
-;
-; NOT A RELOCATION PROC: no claim names this in MC_RLOC, and it is not reached
-; through cw_mem_disp because some record asked for it. mem_reloc_call calls it
-; for EVERY move, before the owner's own proc, because the kernel is a holder
-; of claims it does not own - which is what osapi_vol_add's DX means (18.7).
-;
-; A DONATED claim has three naming words and the callback reaches one (66.5.10.1).
-; These are the other two: dsk_vtab's DV_SEG, where the donation is recorded,
-; and [dsk_dseg], where the listing is READ FROM - and the second equals the
-; first only while that volume is the one mounted. dsk_fatw_reloc's problem
-; exactly, one table along, and the scan is by VALUE for its reason: a
-; compaction can fire while a different volume is current.
-;
-; Every row, free ones included. A free row's DV_SEG is stale rather than
+; dsk_dseg_reloc lived here: the KERNEL's half of a DONATED claim's move
+; (SPEC.md 66.5.10.2). It walked dsk_vtab's DV_SEG by value and then the live
+; [dsk_dseg] - which is two rows of mem_rr_tab and nothing else, so it is two
+; rows of mem_rr_tab. What it knew that this file must not forget is WHY the
+; scan is by value and covers free rows too: a compaction can fire while a
+; different volume is current, and a free row's DV_SEG is stale rather than
 ; meaningless (6.1's clear leaves it alone), so writing the new base into one
-; costs a store and keeps the table honest; skipping it would need the kind
-; test, which is two more instructions to achieve nothing.
-;
-; .text, and 66.5.6.1 is why: cw_mem_disp is `call bp` with CS = KERNEL_SEG,
-; so BP has to be a .text offset. This sits above the section switch below for
-; that reason and not by accident.
-; -----------------------------------------------------------------------------
-dsk_dseg_reloc:
-    push ax
-    push cx
-    push si
-    mov si, dsk_vtab
-    mov cx, DVOL_MAX
-.scan:
-    cmp [si+DV_SEG], bx
-    jne .next
-    mov [si+DV_SEG], dx
-.next:
-    add si, DV_SIZE
-    loop .scan
-    cmp [dsk_dseg], bx          ; ...and the LIVE pointer, if the block being
-    jne .out                    ; moved is the mounted volume's
-    mov [dsk_dseg], dx
-.out:
-    pop si
-    pop cx
-    pop ax
-    ret
+; keeps the table honest where skipping it would need a kind test.
 section .cold                   ; ...and back, or every routine below joins it
 
 dsk_fatw_drop:
@@ -5543,6 +5527,25 @@ dsk_find_x:
     mov ax, [es:bx+DSK_R_SIZE]      ; size, which dsk_ent CLAMPS to a word
     mov dx, [es:bx+DSK_R_SIZE+2]    ; and a copy cannot work from
     mov cl, [es:bx+DSK_R_ATTR]      ; ...and the attribute, for the caller
+    mov ch, 0                   ; ...and whether it is COMPRESSED, which is
+    push ax                     ; the +22 word, and which changes
+    mov al, [es:bx+DSK_R_CZM]   ; ...the mark LESS its format (20.14.2.4), so
+    sub al, DSK_CZ_MARK         ; 0x5A and 0x5B both pass and nothing else
+    cmp al, LZ_LZB
+    pop ax
+    ja .plain                   ; the SIZE this cell answers: an application
+    mov ch, 1                   ; sizes its claim off +18 and must be told
+    cmp byte [dsk_fdraw], 0     ; what the file becomes, not what it occupies
+    jne .plain                  ; (SPEC.md 20.14.3) - unless the caller asked
+                                ; through api_file_find_raw, which is a COPIER
+                                ; and wants the length of what it is about to
+                                ; move. The FLAG is set either way: bit 0 of
+                                ; +22 is a fact about the file, not about which
+                                ; of its two sizes was reported
+    mov ax, [es:bx+DSK_R_CZL]   ; The hint is read from a
+    mov dl, [es:bx+DSK_R_CZH]   ; sector this walk is holding anyway, so a
+    mov dh, 0                   ; listing costs exactly what it cost before
+.plain:
     pop es
     jmp short .staged
 .stage:
@@ -5570,6 +5573,9 @@ dsk_find_x:
     pop cx
     mov [es:di], cl             ; +13 the attribute byte
     inc di
+    mov cl, ch                  ; +22 the flags word, written HERE because CH
+    mov ch, 0                   ; is the last live use of that register and
+    mov [es:di+8], cx           ; the alternative is a push between two pops
     mov ax, [dsk_ent+16]
     mov [es:di], ax             ; +14 the type word (1 file, 2 dir, 3 parent)
     mov ax, [dsk_ent+18]
@@ -5578,8 +5584,6 @@ dsk_find_x:
     pop ax
     mov [es:di+4], ax           ; +18 the size, all 32 bits of it
     mov [es:di+6], dx
-    mov word [es:di+8], 0       ; +22 reserved: a later field goes here and a
-                                ; caller that ignores it today still works
     mov cx, [dsk_fdord]
     inc cx                      ; the ordinal to ask for next
     pop di
@@ -6484,6 +6488,64 @@ dkf_dsk_vol_slot:    call dsk_vol_slot_x
 
 
 ; =============================================================================
+; PARKING THE HEADS ON THE WAY OUT (SPEC.md 18.100)
+;
+; `int 19h` RESETS NO HARDWARE, and §18.97's probe decides on a LEVEL READ of
+; the drive's own TRACK 0 line - so the next boot reads the head where this
+; session left it. A session that touched drive B: leaves it off track 0, the
+; probe's one-instruction fast path is missed on every restart after that, and
+; a head parked above cylinder 77 hands the probe the exact ST0 signature
+; §18.97.4 retires a drive on. §18.97.4 recorded that as a warm-restart
+; property and fixed the READ; this fixes the STATE, one step earlier.
+;
+; It is the ROM's own `int 13h AH=00h` - RESET DISK SYSTEM, which recalibrates
+; the head to track 0 - once per claimed unit. The BIOS does the handshake,
+; the wait and the retry; this reads no result, because the `int 19h` two
+; instructions along resets the FDC whatever state it is left in. Verified to
+; move the head from `ST3 = 29` (TRK0 clear) to `39` (set) on BOTH the field
+; GLaBIOS and the genuine IBM 5150 27-Oct-82 ROM §18.97.4 was reported on.
+;
+; A recalibrate needs no MEDIA - it is a head-carriage move, not a read - so a
+; Restart whose dialog has just told the user to take the floppy OUT (§52.10.6)
+; parks the empty drive's head all the same, which an `AH=02h` read could not.
+;
+; Reached only from `ui_cmd_reboot`, AFTER `sched_unhook`: the scheduler is
+; down by then, so no task can be switched onto a different stack in the middle
+; of the BIOS call - which is the one thing `dsk_dbg_raw`'s `sch_lock` guards
+; and this does not need. In .cold (§2.6): resident, outside KERN_CODE_MAX, run
+; once per session, and small enough that no rung moves.
+;
+; IT CANNOT BE AN ON-DEMAND MODULE (§2.8): a module is read off the system
+; disk, and the caller has just asked for the floppy to come OUT.
+; -----------------------------------------------------------------------------
+; dsk_fdd_park_x - FAR: recalibrate every claimed floppy head to track 0.
+; in:  nothing;  out: DOES NOT RETURN - the `int 0x19` at its tail is the
+;      last instruction of the GUI.  clobbers: AX, CX, DX, ES, flags
+;
+; EVERY UNIT THE EQUIPMENT WORD CLAIMED, not every unit with a volume row - so
+; a drive §18.97.2 wrongly retired, which has no row, is still recalibrated and
+; handed back on the next boot rather than lost on every restart after. int 11h
+; claims it afresh each boot; park what int 11h claims.
+; -----------------------------------------------------------------------------
+%ifndef NO_FDDPARK
+dsk_fdd_park_x:
+    mov cl, [fdd_dbg_eqp]       ; drives int 11h claimed (0..4), banked by
+                                ; desk_init before anything contested it (§57.5)
+.unit:
+    dec cl                      ; ...counted DOWN, so 0 claimed falls straight
+    js  dsk_rb_go               ; through the same test the last unit exits on
+    mov dl, cl                  ; this unit; DH is irrelevant to AH=00
+    xor ah, ah                  ; AH=00 RESET DISK SYSTEM = recalibrate to trk0
+    int 0x13                    ; the ROM handshakes, waits and retries. No
+                                ; result is read: the int 19h below resets the
+                                ; FDC whatever this leaves behind (§18.100)
+    jmp short .unit             ; the ORDER units are parked in does not matter
+dsk_rb_go:                      ; the last instruction of the GUI, in .cold
+    int 0x19
+    jmp $
+%endif                           ; NO_FDDPARK
+
+; =============================================================================
 ; THE FLOPPY-PRESENCE PROBE (SPEC.md 18.97)
 ;
 ; In the BOOT OVERLAY (SPEC.md 2.5), which is where this belongs twice over:
@@ -7137,6 +7199,11 @@ dsk_ioerr:    resb 1            ; status (AH) of the last FAILED transfer;
 ; transfer, so nothing can be inside dsk_xfer twice and one copy of each is
 ; enough. .bss and not .text because every one of them is WRITTEN at the top
 ; of the transfer that reads them.
+dsk_fdraw:    resb 1            ; dsk_find: report the ON-DISK size rather
+                                ; than the unpacked one (SPEC.md 20.14.3) -
+                                ; api_file_find_raw's whole difference, and a
+                                ; byte rather than a register because both
+                                ; cells reach the body through one fence
 dsk_fdhid:    resb 1            ; dsk_find: may this caller see hidden and
                                 ; system entries? (SPEC.md 19.6.1's fence)
 dsk_fdord:    resw 1            ; ...and the ordinal it was asked for

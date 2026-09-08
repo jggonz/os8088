@@ -32,10 +32,24 @@ app spends its own debt.
 REPAIR IS THE LEG THAT BITES, and it is written so it cannot pass vacuously.
 Without a live cache wm_damage answers WHOLE, tm_paint draws everything, and
 the pixels match a full repaint for the wrong reason - so the leg counts
-wm_su_occl with DI on our window record. That call sits in wm_su_try past
-every refusal in wm_su_ck, so reaching it IS the restore going ahead, and it
-is the one instrument 11.96.18.1 leaves standing: the cache WORD gave three
-different answers to three ways of looking at it.
+wm_su_occl with DI on our window record. Reaching it IS the restore going
+ahead, and it is the one instrument 11.96.18.1 leaves standing: the cache
+WORD gave three different answers to three ways of looking at it.
+
+**AND IT DOES NOT SIT PAST ONE REFUSAL, IT SITS PAST FOUR.** This banner said
+"past every refusal in wm_su_ck", and kernel/wm.inc says otherwise:
+`wm_su_ck`, `wm_su_vset`, `wm_su_ck` again and `wm_su_scrset` each answer CF
+and each `jc wm_su_tno`. So a zero here has four causes wanting four
+different fixes - a claim that is gone, a rect whose display moved
+(SPEC.md 39.14.8.1), an edge scratch that would not fit - and all four leave
+the GLASS CORRECT, because the fallback is W_PAINT and a full repaint. That
+is the exact signature of every failure this row has reported: `0 wm_su_occl
+call(s)` beside `0 subpixels differ`, twice now put down to the observation
+window because the report could not say anything else.
+
+So the five are armed together and the trace is printed either way. A failing
+run names the gate that refused; a healthy one reads `wm_su_ck -> wm_su_vset
+-> wm_su_ck -> wm_su_scrset -> wm_su_occl`, which is the source in order.
 
 Servicing a breakpoint and driving the mouse are the same loop here, which is
 why `edge` exists rather than mo.click: os88mouse waits on the guest's own
@@ -112,22 +126,64 @@ def raise_win(m, mo, slot, x, y, what):
 # shape below is the same one tests/clipkeep.py uses: advance a little, and if
 # the machine is sitting still look at where.
 
-def serve(m, at, di, hits):
-    """One turn of the pump. True if the guest was found at `at`."""
+# THE FOUR REFUSALS BETWEEN wm_su_try AND wm_su_occl, in the order they
+# stand. This row's own banner said the call "sits in wm_su_try past every
+# refusal in wm_su_ck", and that is not what the source says: `wm_su_ck`,
+# `wm_su_vset`, `wm_su_ck` again and `wm_su_scrset` each answer CF and each
+# `jc wm_su_tno`. So there are FOUR ways for the count to be zero, they want
+# different fixes, and every one of them leaves the glass CORRECT - the
+# fallback is W_PAINT and a full repaint, which is exactly the signature the
+# failing runs show: `0 wm_su_occl call(s)` beside `0 subpixels differ`.
+#
+# Naming the one that fired is the difference between a report that can be
+# acted on and "this leg proved nothing". They are all reached with DI still
+# holding the window record, so the same filter that counts the hit sorts the
+# path.
+SU_PATH = ("wm_su_ck", "wm_su_vset", "wm_su_scrset", "wm_su_occl", "wm_su_tno")
+
+
+def serve(m, at, di, hits, names=None, trace=None):
+    """One turn of the pump. True if the guest was found stopped.
+
+    `names` maps a flat address to what is there; when it is given, every stop
+    whose DI is ours is appended to `trace`. That is the only way a zero here
+    says anything: the count alone cannot tell a cache that was never claimed
+    from a rect whose display moved from a scratch that would not fit.
+    """
     if not m.stopped():
         return False
     r = m.regs()
-    if ((r["cs"] & 0xFFFF) << 4) + (r["ip"] & 0xFFFF) == at:
-        if (r["di"] & 0xFFFF) == di:
+    ip = ((r["cs"] & 0xFFFF) << 4) + (r["ip"] & 0xFFFF)
+    if (r["di"] & 0xFFFF) == di:
+        if ip == at:
             hits[0] += 1
+        if names is not None and ip in names and trace is not None:
+            trace.append(names[ip])
     m.run()
     return True
 
 
-def pump(m, at, di, hits, rounds=24, frames=8):
-    for _ in range(rounds):
-        if not serve(m, at, di, hits):
+def pump(m, at, di, hits, rounds=24, frames=8, names=None, trace=None):
+    """Give the guest `rounds * frames` frames, servicing stops as they come.
+
+    **A SERVICED STOP USED TO COST A ROUND**, so the guest got LESS time
+    exactly when more was happening - `for _ in range(rounds): if not serve():
+    advance()`. That is not a guest-anchored budget at all: it is
+    `rounds` minus however many breakpoints fired, which is a property of the
+    box's load and of what else is on screen.
+
+    It cost this row its REPAIR leg. In a three-wide emulator lane it read
+    `0 wm_su_occl call(s)` with `0 subpixels differ` - the repair itself
+    perfect, the call that performs it never observed - and
+    tests/dispcells.py's `serve` already warns that stops go missing here and
+    that "a zero from a single pass" means NOT SEEN. Counting only the rounds
+    that advanced makes the window a fixed amount of the machine's own time.
+    """
+    left = rounds
+    while left > 0:
+        if not serve(m, at, di, hits, names, trace):
             m.advance(frames=frames)
+            left -= 1
 
 
 def edge(m, mo, down, at, di, hits, tries=240):
@@ -149,19 +205,29 @@ def edge(m, mo, down, at, di, hits, tries=240):
     return False
 
 
-def watch_click(m, mo, x, y, sym, di, rounds=90):
-    """Click (x, y) with `sym` armed; answer how many hits named DI."""
+def watch_click(m, mo, x, y, sym, di, rounds=90, path=None):
+    """Click (x, y) with `sym` armed; answer how many hits named DI.
+
+    `path` is a list the refusal trace is appended to when SU_PATH is armed
+    alongside `sym` - see `serve`. Arming the extra four costs the pump
+    nothing it was not already paying: a stop that is not ours is serviced
+    and does not spend a round.
+    """
     mo.to(x, y)
     if mo.where()[2] & 1:
         mo.click(*dispcorner.PARK)
         mo.to(x, y)
     hits = [0]
     at = m.sym(sym)
-    m.bp_exec(sym)
+    names, arm = None, [sym]
+    if path is not None:
+        arm = list(SU_PATH)
+        names = {m.sym(n): n for n in arm}
+    m.bp_exec(*arm)
     m.run()
     ok = edge(m, mo, True, at, di, hits)
     ok = edge(m, mo, False, at, di, hits) and ok
-    pump(m, at, di, hits, rounds=rounds)
+    pump(m, at, di, hits, rounds=rounds, names=names, trace=path)
     m.breakpoints([])
     m.run()
     if not ok:
@@ -241,7 +307,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # the only thing left to do over the covered window is open a package.
     raise_win(m, mo, disk, dx + 30, dy + 9, "the drive window")
     dispcp.open_named(m, mo, S, os88marty.settle, dx, dy, "..")
-    dispcp.open_named(m, mo, S, os88marty.settle, dx, dy, "APPS")
+    dispcp.open_named(m, mo, S, os88marty.settle, dx, dy, "APPS", paint=True)
 
     # --- KEPT --------------------------------------------------------------
     raise_win(m, mo, slot, w.x + w.w - 24, w.y + 9, "the Task Manager")
@@ -277,7 +343,19 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         if [x for x in os88geom.windows(m) if "ello" in x.title]:
             fails.append("REPAIR: Hello did not close")
 
-    hits = watch_click(m, mo, big.x + 8, big.y + 9, "wm_su_occl", ours)
+    # **WHAT THE CACHE LOOKED LIKE THE INSTANT BEFORE THE UNCOVER**, which is
+    # the one reading that tells a REPAIR failure's two causes apart and the
+    # row did not have. `0 wm_su_occl` means either the cache was GONE by
+    # here - shed, dropped, withdrawn - or it was live and the call was
+    # MISSED, and those want opposite fixes. Two guest reads; it costs a
+    # failing run nothing and a passing one nothing worth measuring.
+    ww = win(m, slot)
+    bb = m.read(S("wm_su_ext") + slot * 4, 4)
+    print("BEFORE  : saveu=%s band=%r view=%d"
+          % (ww.promises if ww else None, list(bb), view(m, seg)))
+    path = []
+    hits = watch_click(m, mo, big.x + 8, big.y + 9, "wm_su_occl", ours,
+                       path=path)
     mo.to(*dispcorner.PARK)
     tick(m)
     if win(m, disk) and win(m, disk).visible:
@@ -303,11 +381,26 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     print("REPAIR  : %d wm_su_occl call(s) for us at the uncover - %d "
           "subpixels differ against a forced full repaint (%d moved while it "
           "was covered)" % (hits, diff, moved))
+    print("REPAIR  : the path for us was %s"
+          % (" -> ".join(path) if path else "(nothing - wm_su_try was never "
+                                            "entered for this window)"))
     if not hits:
+        # WHICH REFUSAL, because there are four and they want different
+        # fixes. The trace's last entry before wm_su_tno is the one that
+        # answered CF: wm_su_ck is the CLAIM (shed, or a header that does not
+        # match), wm_su_vset the rect against the displays (SPEC.md 39.14.8.1),
+        # wm_su_scrset the edge scratch. Nothing at all means wm_su_try was
+        # not entered, which is a different question again - the window was
+        # not the outgoing front, or nothing uncovered it.
+        why = path[-2] if len(path) > 1 and path[-1] == "wm_su_tno" \
+            else (path[-1] if path else None)
         fails.append("REPAIR: wm_su_occl was never reached for this window, "
                      "so there was no cache to restore and W_PAINT was told "
                      "WHOLE - this leg proved nothing (SPEC.md 11.96.18.1 on "
-                     "why the cache word is not the instrument)")
+                     "why the cache word is not the instrument). The path was "
+                     "%s, so the refusal is %s"
+                     % (" -> ".join(path) or "EMPTY",
+                        why or "before wm_su_try was entered at all"))
     if diff:
         fails.append("REPAIR: %d subpixels differ - tm_update did not replay "
                      "everything that moved while it was covered" % diff)

@@ -52,6 +52,7 @@ import dispcp                                          # noqa: E402
 from ethernet import (Qemu, ether_syms, u16, dotted, S, Mouse,  # noqa: E402
                       type_url)
 import os88qemu                                              # noqa: E402
+import os88build                                       # noqa: E402
 
 # the Control Panel's own geometry, as tests/ethernet.py reads it
 CP_I0Y, CP_IROWH, CP_RX = 6, 14, 96
@@ -110,7 +111,7 @@ def main():
 
     # A FRESH IMAGE, for the reason tests/ethernet.py rebuilds one: QEMU mounts
     # it writable and this test's whole subject is a file the guest writes.
-    if os.path.exists("build/ether360.img"):
+    if os.path.exists(os88build.at("build/ether360.img")):
         os.remove("build/ether360.img")
     r = subprocess.run(["make", "ethertest"], capture_output=True, text=True)
     if r.returncode:

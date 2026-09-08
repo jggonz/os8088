@@ -40,7 +40,7 @@ TWO ASSERTIONS, and they pull in opposite directions on purpose.
      tiles' own columns while the active tile moves. A mark skipped too
      eagerly is the dock drawn THROUGH a window, and that is what shows here.
 
-docs/WM-ARTIFACTS.md 0 is the method for the second one and its four rules
+docs/history/WM-ARTIFACTS.md 0 is the method for the second one and its four rules
 apply here unchanged: force the repaint from the guest, park the pointer,
 exclude the clock, settle first.
 """

@@ -96,7 +96,7 @@ DOCK_CTX_H  equ DOCK_CTX_N * MENU_ITEM_H + 2
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 ; IN THE BOOT OVERLAY (SPEC.md 2.5.3 - the WINDOW half, which is what OVWCALL
-; reaches; 2.5.2 is `.ovl`), docs/LAST-DROP-BYTES.md row 15. One caller,
+; reaches; 2.5.2 is `.ovl`), docs/plans/LAST-DROP-BYTES.md row 15. One caller,
 ; kmain:4525.
 ;
 ; It has NO outbound call at all now, which is what it costs `.text`: it used

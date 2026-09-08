@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The field's freeze: a straddling window over a Disk window, then a click
-(docs/DUAL-DISPLAY-VGA.md 8(11))
+(docs/plans/completed/DUAL-DISPLAY-VGA.md 8(11))
 
     make && python3 tests/dispfreeze.py
 

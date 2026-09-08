@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WHO WRITES ui_rebootq? (docs/DUAL-DISPLAY-VGA.md 8(11))
+"""WHO WRITES ui_rebootq? (docs/plans/completed/DUAL-DISPLAY-VGA.md 8(11))
 
     make && python3 tests/dispreboot.py
 
@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 
 from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
                       VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
+import os88build                                       # noqa: E402
 # SPEC.md 39.14's per-display record: DERIVED from VID_CTX_W and never
 # written down here. This file spelled it `42 + 36`, which is the
 # VID_CTX_W = 18 layout - two bytes early, and what sits there is
@@ -137,7 +138,7 @@ def textdiff(m, pad=""):
     evidence, and it must be taken while the machine is still healthy as well
     as after - a corrupt byte that was already there before the click is a
     different bug from one the click produced."""
-    img = open("build/kernel.bin", "rb").read()[:BSS0]
+    img = open(os88build.at("build/kernel.bin"), "rb").read()[:BSS0]
     ram = m.read(0x0060 << 4, BSS0)
     rs = runs_of(img, ram)
     print("%s.text vs kernel.bin: %d byte(s) in %d run(s)"
@@ -342,20 +343,40 @@ def main():
         # that has moved fails here loudly instead of being patched somewhere
         # else.
         # Step 0 grew when the flag became a REQUEST byte (UI_RBQ_*): the
-        # cmp/je pair now shelters a mov al / sub al / clear before the call,
-        # so the fingerprint is 18 bytes and the je hops 0x0D. The bytes are
-        # still CHECKED before they are overwritten, for the same reason.
-        step0 = m.read(S("ui_task"), 18)
+        # cmp/je pair shelters a mov al / clear before the call. **AND IT
+        # GREW AGAIN** - SPEC.md 87's hibernate put a whole second arm under
+        # the same `je`, so on kern_big the body is `cmp al, UI_RBQ_HIBER /
+        # jb .restart / call far hbf_perform / jmp .keys` before the flush
+        # arithmetic, and on kern_small it is not there at all. A typed
+        # 18-byte fingerprint could only ever describe one of them, and it
+        # described NEITHER after #143: this row failed with `ui_task step 0
+        # is not the expected 18 bytes` about a kernel that was perfectly
+        # healthy.
+        #
+        # So the HEAD is fingerprinted and the BODY is measured. The head is
+        # the fifteen bytes the patches below actually overwrite or depend on
+        # - the compare, the branch, the read and the clear - and it fails
+        # loudly if any of them moves. `.keys` is then wherever the `je` says
+        # it is, which is the one fact both kernels and every future arm
+        # agree on. (docs/WRITING-TESTS.md 7.2: pick a signal that means what
+        # you think it means. `je`'s displacement means "past step 0"; a byte
+        # count means "past the step 0 I happened to assemble".)
+        HEAD = 15
+        step0 = m.read(S("ui_task"), HEAD)
         want = bytes([0x80, 0x3E, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8, 0x00,          # cmp [q], 0
-                      0x74, 0x0D,                            # je .keys
+                      0x74, step0[6],                        # je .keys
                       0xA0, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8,                      # mov al, [q]
-                      0x2C, 0x01,                            # sub al, RBQ_FLUSH
                       0xC6, 0x06, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8, 0x00])         # mov byte [q], 0
-        if step0[:17] != want or step0[17] != 0xE8:
-            sys.exit("ui_task step 0 is not the expected 18 bytes: %s"
-                     % hexd(step0))
+        if step0 != want:
+            sys.exit("ui_task step 0 is not the expected %d-byte head: %s"
+                     % (HEAD, hexd(step0)))
+        KEYS = 7 + step0[6]                     # the `je`'s own target
+        print("ui_task step 0 is %d bytes (je .keys hops 0x%02X)"
+              % (KEYS, step0[6]))
         if NOP:
-            m.write(S("ui_task"), b"\x90" * 20)             # ...call included
+            # TO `.keys`, not a typed count: NOPping 20 bytes of a 31-byte
+            # step 0 lands in the middle of the far call to hbf_perform.
+            m.write(S("ui_task"), b"\x90" * KEYS)          # ...call included
             print("ui_task step 0 NOPped: the flag is now sticky and the "
                   "reboot cannot fire")
         else:
@@ -371,16 +392,18 @@ def main():
             # the flag really was set; AL ZERO means `cmp al,0` set ZF and the
             # `je` was taken, so control cannot have come through this pair at
             # all and the entry is from somewhere else.
-            # ...and `74 0D` (je .keys) becomes `EB 0D` (jmp .keys), so the
-            # branch is ALWAYS taken: the read/sub/clear at +7 and the call at +17 are
-            # both unreachable, the flag STICKS once written, and the reboot
+            # ...and `74 xx` (je .keys) becomes `EB xx` (jmp .keys), so the
+            # branch is ALWAYS taken: everything from +7 to `.keys` is
+            # unreachable - the read, the clear, the hibernate arm and the
+            # call alike - the flag STICKS once written, and the reboot
             # cannot fire. Two bytes for two bytes and the same instruction
-            # count, which is why this is the patch to use rather than 15
-            # NOPs - those change what the loop does, and six clicks under
-            # them produced no write at all.
+            # count, which is why this is the patch to use rather than a
+            # field of NOPs - those change what the loop does, and six clicks
+            # under them produced no write at all. **The displacement is the
+            # kernel's own**, so this holds whatever is inside step 0.
             m.write(S("ui_task"), bytes([0xA0, SY["ui_rebootq"] & 0xFF,
                                          SY["ui_rebootq"] >> 8, 0x3C, 0x00,
-                                         0xEB, 0x0D]))
+                                         0xEB, step0[6]]))
             print("ui_task step 0 patched: AL carries the byte read, and the "
                   "branch is unconditional so the flag sticks")
 

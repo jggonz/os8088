@@ -301,6 +301,133 @@ at_mgeom:
     ret
 
 ; -----------------------------------------------------------------------------
+; at_subank - bank the pixels a panel is about to cover (SPEC.md 46.5.1)
+; in:  AX/BX/CX/DX = the inclusive rect, gfx lock held
+; out: [at_suseg] set, or 0 if anything refused; preserves all registers
+;
+; WHAT IT REPLACES is at_mclose's line loop: the panel is ~120px wide and
+; at_draw_line is FULL WIDTH, all [at_tw] of it, so erasing a pull-down cost
+; 104.9 ms on a 4.77MHz 8088 against a write-back.
+;
+; THE CLAIM IS PER DROP, not per session - SPEC.md 12.4's rule and for its
+; reason. It is freed in at_surest, before the picked item runs, so whatever
+; that item claims gets a heap this menu has already left.
+;
+; EVERY REFUSAL IS THE SAME REFUSAL and none of them is a new path: no claim,
+; a rect straddling two displays, a zero-byte rect - [at_suseg] stays 0 and
+; at_mclose repaints, which is what it did before this existed.
+; -----------------------------------------------------------------------------
+at_subank:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    mov word [at_suseg], 0
+    mov di, [at_vw]                 ; clamp the way at_mclose's own erase does,
+    dec di                          ; or the bank is short by a column and the
+    cmp cx, di                      ; restore leaves it stale
+    jbe .xok
+    mov cx, di
+.xok:
+    mov di, [at_vh]
+    dec di
+    cmp dx, di
+    jbe .yok
+    mov dx, di
+.yok:
+    mov [at_surx1], ax
+    mov [at_sury1], bx
+    mov [at_surx2], cx
+    mov [at_sury2], dx
+    ; bytes = planes * rows * byte columns
+    mov ax, cx
+    mov cl, 3
+    shr ax, cl
+    mov bx, [at_surx1]
+    shr bx, cl
+    sub ax, bx
+    inc ax                          ; AX = byte columns
+    mov bx, [at_sury2]
+    sub bx, [at_sury1]
+    inc bx                          ; BX = rows
+    mul bx                          ; (a panel cannot reach 64KB of one plane)
+    mov bl, [at_vbpp]               ; ...OF THE CARD THIS WINDOW IS ON, which
+    xor bh, bh                      ; at_geom_init took from OSAPI_WM_DISPLAY:
+    cmp bl, 4                       ; OSAPI_VIDEO cannot answer that on a
+    je .planes                      ; two-card machine (SPEC.md 39.16.4)
+    mov bx, 1
+.planes:
+    mul bx
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl                      ; AX = KB, rounded up
+    or ax, ax
+    jz .no
+    mov [at_sukb], ax
+    call OSAPI_MEM_CLAIM            ; out CF=0, DX = base segment
+    jc .no
+    mov [at_suseg], dx
+    mov es, dx
+    xor di, di
+    mov ax, [at_surx1]
+    mov bx, [at_sury1]
+    mov cx, [at_surx2]
+    mov dx, [at_sury2]
+    call OSAPI_GFX_SAVE             ; CF=1 = the rect straddles two displays,
+    jnc .out                        ; and half a bank put back is worse than
+    mov dx, [at_suseg]              ; none: hand it straight back
+    call OSAPI_MEM_FREE
+.no:
+    mov word [at_suseg], 0
+.out:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_surest - put the banked pixels back and hand the claim over
+; in:  gfx lock held
+; out: CF=0 the screen is repaired, CF=1 nothing was banked and the caller
+;      owes the repaint; preserves all registers
+; -----------------------------------------------------------------------------
+at_surest:
+    cmp word [at_suseg], 0
+    jne .have
+    stc
+    ret
+.have:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov es, [at_suseg]
+    xor si, si
+    mov ax, [at_surx1]
+    mov bx, [at_sury1]
+    mov cx, [at_surx2]
+    mov dx, [at_sury2]
+    call OSAPI_GFX_REST
+    mov dx, [at_suseg]
+    call OSAPI_MEM_FREE             ; BEFORE the picked item runs (SPEC.md
+    mov word [at_suseg], 0          ; 12.4): whatever it claims gets a heap
+    pop es                          ; this menu has already left
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; at_mopen - draw the current pull-down and invert its title cell
 ; -----------------------------------------------------------------------------
 at_mopen:
@@ -313,6 +440,16 @@ at_mopen:
     mov [at_msx1], ax               ; latched for every row routine
     mov [at_msx2], cx
     mov [at_msy2], dx
+%ifndef NOATSU
+    ; SPEC.md 46.5.1, before a pixel of the panel is drawn. THE RECT IS
+    ; at_mclose's OWN - its erase grows the box by 2 for the drop shadow, and
+    ; a bank that is short by a column leaves that column stale.
+    add cx, 2
+    add dx, 2
+    call at_subank
+    mov cx, [at_msx2]               ; ...and the panel is drawn to the box
+    mov dx, [at_msy2]               ; itself, not to the erased extent
+%endif
     mov al, CWHITE
     call OSAPI_SET_COLOR
     mov ax, [at_msx1]
@@ -402,21 +539,27 @@ at_mrows:
     mov ah, al
     mov al, CBLACK
     cmp ah, 1
-    jne .ink
-    mov al, CLGRAY                  ; disabled: gray (dither on 1bpp)
+    je .dis
+    clc                             ; live: CBLACK with [gfx_dis] CLEAR, and it
+    jmp short .ink                  ; is set on EVERY item because the pen is
+.dis:                               ; one lock hold long and the item before
+    mov al, CDGRAY                  ; this one may have been the dead one
+    stc
 .ink:
     mov [at_ink], al                ; ...and the run's ink, kept: a package
-    call OSAPI_SET_COLOR            ; cannot read the pen back (SPEC.md 46.10)
+    call OSAPI_GFX_PEN              ; cannot read the pen back (SPEC.md 46.10)
                                     ;
-                                    ; THIS IS A SPEC.md 47 RULE 1 VIOLATION AND
-                                    ; IT IS LEFT STANDING HERE - see 46.10.1.
-                                    ; A grey store without [gfx_dis] reduces to
-                                    ; solid BLACK on a 1bpp adapter, so a dead
-                                    ; item looks live on the target machine.
-                                    ; The fix is OSAPI_GFX_PEN with CF, and it
-                                    ; is not in this commit because no state
-                                    ; this session could drive put a disabled
-                                    ; item on screen to diff it against
+                                    ; THE PEN AND THE FLAG TOGETHER (SPEC.md 47
+                                    ; rule 1), which is what 46.10.1 left open:
+                                    ; this was OSAPI_SET_COLOR with CLGRAY, the
+                                    ; colour WITHOUT the flag, and SPEC.md 39.4
+                                    ; rounds a middle grey to solid BLACK in
+                                    ; text - so on the machine this OS is for a
+                                    ; dead item was pixel-identical to a live
+                                    ; one. CF is the argument and at_mstate's
+                                    ; answer is what sets it; nothing between
+                                    ; the flag and the call touches one, `mov`
+                                    ; and the API cell both being flag-clean
     cmp ah, 2
     jne .nocheck
     ; a small hand-drawn check in the left gutter (no glyph exists for it)
@@ -466,6 +609,10 @@ at_mrows:
     jz .done
     jmp .item
 .done:
+    clc                             ; the pen back, in case the LAST item was
+    call OSAPI_GFX_PEN              ; the dead one: gfx_unlock would clear the
+                                    ; flag for us, but the hover bar and the
+                                    ; erase are still to draw inside this hold
     pop di
     pop si
     pop dx
@@ -690,6 +837,10 @@ at_mclose:
     push cx
     push dx
     call at_mtitlexor
+%ifndef NOATSU
+    call at_surest                  ; SPEC.md 46.5.1: the banked pixels, or
+    jnc .out                        ; CF=1 and the piecewise repaint that was
+%endif                              ; the only path before it
     call at_mgeom
     add cx, 2                       ; the shadow's columns and row
     add dx, 2
@@ -715,6 +866,9 @@ at_mclose:
     inc bx
     jmp short .lines
 .done:
+%ifndef NOATSU
+.out:
+%endif
     pop dx
     pop cx
     pop bx
@@ -1129,6 +1283,9 @@ at_mdclose:
     inc bx
     jmp short .lines
 .fin:
+%ifndef NOATSBAR
+    mov byte [at_sbst], 0           ; ...which is exactly why the bank may not
+%endif                              ; answer for it (SPEC.md 46.4.4)
     call at_sbar                    ; a wide card can reach the gutter
     call at_caret_on
     pop dx
@@ -1251,11 +1408,22 @@ at_bigtext:
     cld
     mov di, at_strip1
     mov cx, (AT_S1ST*24)/2          ; 24 rows covers scale 3
-    xor ax, ax
-    rep stosw
+    AT_PAPERAX                      ; SPEC.md 46.4.2 - the FIFTH writer into
+    rep stosw                       ; at_strip1, and the one in another file
     mov di, at_cellbg
     mov cx, AT_CBGCAP/2
-    rep stosw
+%ifndef NOATBLIT1
+    xor ax, ax                      ; ...and at_cellbg is a FLAG ARRAY, not
+%endif                              ; pixels, so it does NOT follow the strip's
+    rep stosw                       ; polarity. The two clears used to SHARE
+                                    ; the AX that `xor ax, ax` set for both;
+                                    ; carrying 0FFFFh into the second marks
+                                    ; every 8px column a code cell, at_expand
+                                    ; widens the lot through at_x4g, and the
+                                    ; splash title gets a grey ground. Caught
+                                    ; by tests/atblit.py's SPLASH scene at
+                                    ; 1,130 pixels - the document scene alone
+                                    ; never draws at_bigtext and stayed green.
     xor di, di                      ; DI = x within the strip
 .ch:
     lodsb

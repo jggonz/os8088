@@ -3,7 +3,7 @@
 ;
 ; A LapLink parallel cable to a DOS machine, as a BLOCK VOLUME: the far side
 ; serves 512-byte sectors out of an image file and os8088 mounts them as an
-; ordinary FAT12/16 drive. Stage 1 of docs/NET-PLAN.md.
+; ordinary FAT12/16 drive. Stage 1 of docs/plans/completed/NET-PLAN.md.
 ;
 ; WHY BLOCK MODE FIRST, when the ask was "browse the remote machine's files".
 ; Because everything above dsk_xfer already works: the BPB validator, the FAT

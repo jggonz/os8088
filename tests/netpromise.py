@@ -93,8 +93,24 @@ def raise_win(m, mo, x, y, i, what):
                     "%s to come to the front" % what, limit=90)
 
 
-def run(m, mo, app, pkgfile, title, owe):
-    """One app, five legs. `owe(m, seg)` raises a debt, or None to skip it."""
+def run(m, mo, app, pkgfile, title, owe, depth=True):
+    """One app, five legs. `owe(m, seg)` raises a debt, or None to skip it.
+
+    `depth` is whether this app claims WF_1BPP ON THIS MACHINE. It is not
+    a property of the app any more: SPEC.md 70.8.5 made TELNET's claim per
+    ADAPTER and per CALL, because after 70.8 its content is whatever
+    sixteen colours the board chose and "every pixel of my content is
+    colour 0 or colour 15" is FALSE on a colour screen. te_promise sends
+    OSAPI_SAVEU_ON alone on VGA and OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP on a
+    one-bit adapter.
+
+    The three legs that rest on the depth claim go with it, and the
+    package's own source says why: "the promise is then refused, the
+    window is not banked, and the raise repaints. That is the price of
+    colour." So on VGA TELNET is EXPECTED to carry no WF_1BPP, to hold no
+    cache, and to have no OWED leg - four planes of a window this size are
+    over wm_su_kb. Asserting the pre-70.8 shape reported three failures
+    about behaviour the spec describes and the code deliberately has."""
     tag = title.upper()
     disk = dispcp.win_list(m, S)[-1]
     wx, wy, _, _ = dispcp.win_rect(m, S, disk)
@@ -140,8 +156,12 @@ def run(m, mo, app, pkgfile, title, owe):
     if not w.promises:
         fails.append("%s REST: settled and it does not carry WF_SAVEU - "
                      "nothing is owed, so the glass matches" % tag)
-    if not w.mono:
+    if depth and not w.mono:
         fails.append("%s REST: it does not carry WF_1BPP" % tag)
+    if not depth and w.mono:
+        fails.append("%s REST: it carries WF_1BPP on a colour screen, "
+                     "where 11.96.17's promise cannot be true (70.8.5)"
+                     % tag)
 
     # --- TWO ---------------------------------------------------------------
     mo.to(*dispcorner.PARK)                 # the arrow is drawn INTO the
@@ -157,7 +177,7 @@ def run(m, mo, app, pkgfile, title, owe):
                 odd[p.hex()] = odd.get(p.hex(), 0) + 1
     print("%-7s TWO    : content %s - %d pixels neither 0 nor 15 %s"
           % (tag, (x1, y1, x2, y2), sum(odd.values()), sorted(odd.items())[:3]))
-    if odd:
+    if odd and depth:
         fails.append("%s TWO: %d content pixels are neither colour 0 nor 15 - "
                      "the WF_1BPP claim is not true" % (tag, sum(odd.values())))
 
@@ -166,8 +186,12 @@ def run(m, mo, app, pkgfile, title, owe):
     sg, pw, one, four = cache(m, slot)
     print("%-7s BANKED : claim %04X, %d planes, %d bytes (%d at four, ceiling "
           "%d)" % (tag, sg, pw or 0, one, four, SU_KB))
-    if not sg:
+    if not sg and depth:
         fails.append("%s BANKED: covered at rest and no cache was taken" % tag)
+    elif not sg:
+        print("%-7s BANKED : none, and that is 70.8.5's price of colour "
+              "- four planes of this window are over wm_su_kb, so the "
+              "promise is refused and the raise repaints" % tag)
     elif MACHINE.endswith("vga") and pw != 1:
         fails.append("%s BANKED: the claim is %d planes and the window claims "
                      "two colours - wanted 1" % (tag, pw))
@@ -189,6 +213,12 @@ def run(m, mo, app, pkgfile, title, owe):
                      "and the honest repaint" % (tag, diff))
 
     # --- OWED --------------------------------------------------------------
+    if owe is not None and not depth:
+        print("%-7s OWED   : SKIP - nothing was banked to lose (see "
+              "BANKED), because this adapter makes the depth claim "
+              "false (70.8.5)" % tag)
+        close(m, mo, w, slot, title)
+        return
     if owe is None:
         print("%-7s OWED   : SKIP - see the banner: this app has NO WORKER on "
               "a machine with no NIC, so nothing flushes and the debt cannot "
@@ -224,9 +254,12 @@ def close(m, mo, w, slot, title):
 
 
 def owe_telnet(m, seg):
-    """te_feed's own writes: mark row 0 dirty."""
-    m.write(bss(m, seg, "telnet", "te_dr0"), b"\x00\x00")
-    m.write(bss(m, seg, "telnet", "te_dr1"), b"\x00\x00")
+    """te_feed's own writes: mark row 0 dirty.
+
+    The dirty RANGE became a 25-bit BITMAP with SPEC.md 70.8.1 - cursor
+    addressing is exactly what a contiguous range cannot describe - so row 0
+    is bit 0 of the first of te_drb's four bytes."""
+    m.write(bss(m, seg, "telnet", "te_drb"), b"\x01\x00\x00\x00")
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
@@ -250,7 +283,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     disk = dispcp.win_list(m, S)[-1]
     wx, wy, _, _ = dispcp.win_rect(m, S, disk)
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
-    run(m, mo, "telnet", "TELNET.O88", "Telnet", owe_telnet)
+    # TELNET's depth claim is the ADAPTER's since SPEC.md 70.8.5, and
+    # MACHINE here is os8088_xt_vga - sixteen colours, so no WF_1BPP.
+    run(m, mo, "telnet", "TELNET.O88", "Telnet", owe_telnet,
+        depth=not MACHINE.endswith("vga"))
     run(m, mo, "ftpd", "FTPD.O88", "FTP", None)
 
 print()

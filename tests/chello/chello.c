@@ -3,7 +3,7 @@
  *
  * THE C TOOLCHAIN'S CAPABILITY GATE (SPEC.md 73): the first program written in
  * C that this operating system ever loaded and ran. Everything else about the
- * toolchain - the compiler patch set, tools/cc8086.py, apps/cc/crt0.asm, the
+ * toolchain - the compiler build, tools/cc8086.py, apps/cc/crt0.asm, the
  * cdecl bridge in apps/cc/os88thunk.asm - is inference from emitted assembly
  * until something built out of it appears on the screen. This is that
  * something, and it is under tests/ because it proves a capability rather than
@@ -45,7 +45,7 @@
  *     os88_wm_content()/os88_wm_geom() rather than dereferenced.
  *  3. THE FRAMES ARE TINY. No function here has more than four `int` locals;
  *     the build prints every frame size and the largest in this file is 8
- *     bytes. The UI task has about 700 bytes of headroom (73.8).
+ *     bytes. The UI task has about 266 bytes of headroom (73.8).
  *  4. NO 32-BIT INTEGER AND NO float. Nothing here wants one.
  *
  * ---------------------------------------------------------------------------
@@ -94,6 +94,21 @@ static int  ch_my = -1;                 /* content origin: the window moves,    
  * that "works" is the one whose content happens to overlap the old ink. */
 static int  ch_px = -1;
 static int  ch_py = -1;
+
+/* --- the heap claim, and the compactor moving it (SPEC.md 66) -------------
+ * The fifth capability this file gates, and the newest: until
+ * os88_mem_movable() existed a C package could not declare a claim movable at
+ * all, so every one of them was a pinned block in the middle of the arena for
+ * as long as the program ran (docs/plans/HEAP-UNPIN-PLAN.md 2.1.1 item 3).
+ *
+ * It is here rather than in an application for this file's own reason: the
+ * round trip is C -> thunk -> kernel -> cc_onmove -> C, and until something
+ * built out of it reports a move that actually happened, the trampoline's
+ * argument order is inference from emitted assembly. ch_was/ch_now are drawn
+ * in the window, so a swapped pair is visible rather than plausible. */
+static unsigned ch_seg;                 /* 0 = the claim was refused */
+static unsigned ch_moves;               /* how many times we have been told */
+static unsigned ch_was, ch_now;         /* ...and what we were told last */
 
 static char ch_line[48];                /* STATIC: os88_strcpy() and            */
 static char ch_num[8];                  /* os88_utoa() take their addresses     */
@@ -236,6 +251,28 @@ static void ch_draw(void *win)
     }
     os88_font_run(x, y, ch_line, OS88_BLACK, OS88_WHITE);
 
+    /* Line 4 - the heap claim and what the compactor has told us about it.
+     * Drawn rather than merely counted for the same reason the crosshair is:
+     * `was` and `now` in the wrong order still counts moves and still reads
+     * plausibly, and two numbers side by side say which is which: the live
+     * claim is on the left and where it CAME FROM is on the right, so after a
+     * move they must differ and the left one must be the new base. */
+    y += 12;
+    if (ch_seg == 0) {
+        os88_strcpy(ch_line, "no heap claim           ", sizeof(ch_line));
+    } else {
+        os88_strcpy(ch_line, "heap ", sizeof(ch_line));
+        ch_append_num((int) ch_seg);           /* utoa takes it unsigned, so a
+                                                * segment over 32767 still
+                                                * reads as itself */
+        ch_append(" mv ");
+        ch_append_num((int) ch_moves);
+        ch_append(" <-");
+        ch_append_num((int) ch_was);
+        ch_append("    ");
+    }
+    os88_font_run(x, y, ch_line, OS88_BLACK, OS88_WHITE);
+
     /* The mark, last so that it sits over anything it crosses, and banked as
      * "what is on the glass" so the next repaint can take it off again. */
     ch_cross(ch_mx, ch_my, OS88_BLACK);
@@ -246,6 +283,42 @@ static void ch_draw(void *win)
 /* --- the callbacks the shim declared ------------------------------------- */
 
 /* W_PAINT. The gfx lock is ALREADY HELD (SPEC.md 11): draw, never take it. */
+/* ch_fill - a pattern the move has to carry, word by word.
+ *
+ * The word at index w is w * 0x0101, so it varies with the OFFSET: a copy that
+ * shifted the contents inside the block would pass a constant fill and fails
+ * this one. 512 words is the first kilobyte - enough for a host-side hash to
+ * mean something, and 512 far calls rather than 4,096. */
+static void ch_fill(void)
+{
+    int i;
+
+    for (i = 0; i < 512; i++) {
+        os88_poke(ch_seg, (unsigned) (i * 2), (i * 0x0101) & 0xFF);
+        os88_poke(ch_seg, (unsigned) (i * 2 + 1), (i * 0x0101) >> 8 & 0xFF);
+    }
+}
+
+/* os88_onmove - THE COMPACTOR MOVED OUR CLAIM (SPEC.md 66.2, apps/cc/os88.h).
+ *
+ * ASSIGNMENTS ONLY. This runs inside mem_reloc_call, in the middle of the walk
+ * that is moving the heap, so SPEC.md 66.3 rule 3 forbids claiming, freeing,
+ * yielding, drawing and every file call - any of them re-enters the map being
+ * rewritten. Repainting to show the new number is the tempting one and it is
+ * the forbidden one; the window is repainted when something else next asks.
+ *
+ * The `was` test is not decoration: one handler is called for EVERY claim this
+ * package holds that moves, so a package with two must ask which. */
+void os88_onmove(unsigned was, unsigned now)
+{
+    if (ch_seg != 0 && ch_seg == was) {
+        ch_seg = now;
+        ch_was = was;
+        ch_now = now;
+        ch_moves++;
+    }
+}
+
 void os88_paint(void *win)
 {
     ch_draw(win);
@@ -297,5 +370,25 @@ void *os88_main(void)
      * no-op on VGA, so it is asked for unconditionally rather than after a
      * question about the adapter. */
     os88_wm_snap(win, 1);
+
+    /* THE CLAIM IS SIZED FROM THE MACHINE and not from a constant, because
+     * this file runs on the 128KB floor too (SPEC.md 24.5). A refusal is not
+     * fatal - the window is the gate, the claim is one line of it - and
+     * ch_seg staying 0 is what the drawing then says. */
+    if (os88_mem_largest_kb() >= 32) {
+        ch_seg = os88_mem_claim(8);
+        if (ch_seg != 0) {
+            ch_fill();
+            /* ...AND TAKE THE ANSWER. mem_movable's fence is "yours, or not
+             * at all", so a wrong segment writes no MC_RLOC and returns
+             * refused - which from in here looks exactly like success
+             * (SPEC.md 66.5.6.2). Dropping the claim on a refusal is what
+             * makes the window's own line true. */
+            if (os88_mem_movable(ch_seg, 1) != 0) {
+                os88_mem_free(ch_seg);
+                ch_seg = 0;
+            }
+        }
+    }
     return win;
 }

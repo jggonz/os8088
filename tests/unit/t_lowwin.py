@@ -7,7 +7,7 @@
 mount and are untouched before it - the same moment, and the same silence, as
 the FAT window under them.  Adjacent, the two are one contiguous 8,192-byte
 region that is dead for the whole of `kmain`, which is what the boot overlay
-is meant to land in and spill through (docs/BOOT-LADDER-PLAN.md stage B).
+is meant to land in and spill through (docs/plans/completed/BOOT-LADDER-PLAN.md stage B).
 
 THIS ROW EXISTS BECAUSE NOTHING ELSE WOULD NOTICE.  The placement is bought by
 one line - `kernel/dskwin.inc` being the FIRST file `kernel.asm` includes,

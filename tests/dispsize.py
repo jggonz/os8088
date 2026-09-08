@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """What happens to a window's SIZE when it is dragged between two displays?
-(docs/FIELD-NOTES.md 26, docs/WINDOW-SIZING-PLAN.md)
+(docs/FIELD-NOTES.md 26, docs/plans/completed/WINDOW-SIZING-PLAN.md)
 
     make && python3 tests/dispsize.py
 

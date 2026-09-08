@@ -164,14 +164,31 @@ PY_MIRROR = {
 # SPEC.md 51.0 took the same decision for MEM_P_FATW_N and states the rule.
 DIVERGENT = {
     "MAX_TASKS": "kern_small has 7 slots (SPEC.md 8.7, "
-                 "docs/KERN-SMALL-CUT-PLAN.md D1) and the SDK keeps 14: "
+                 "docs/plans/KERN-SMALL-CUT-PLAN.md D1) and the SDK keeps 14: "
                  "taskmgr sizes SS_TSTATE from it, so a package built at 14 "
                  "reading a 7-slot snapshot over-allocates and is safe, where "
                  "the reverse overflows",
     "MEM_MAX": "kern_small has 20 claim records "
-               "(docs/KERN-SMALL-CUT-PLAN.md D7) and the SDK keeps 32, which "
+               "(docs/plans/KERN-SMALL-CUT-PLAN.md D7) and the SDK keeps 32, which "
                "is CLAIM_SNAPSHOT_SIZE's input - same direction, same reason",
 }
+
+# --- constants mirrored under DIFFERENT NAMES --------------------------------
+# The gate above pairs by NAME, so a mirror that was deliberately spelled
+# differently is invisible to it. ALIAS is that case written down: each entry
+# is (file, name, file, name), and both must resolve to the same number.
+ALIAS = [
+    # SPEC.md 13.14.5. Word allocates its three combos with a LITERAL because
+    # WDVAR cannot evaluate an include's equ, and the drop-down records are
+    # packed back to back - so a size that drifts is not a build error, it is
+    # os88ui_drop writing over the next control's rect.
+    ("apps/os88ui.inc", "OS88UI_DR_SIZE", "apps/word/word.asm", "WD_DREC_SZ"),
+    # ...and a THIRD spelling, in Python: skiesui walks the two records by
+    # stride to prove one does not overlap the next, which is the very defect
+    # a stale size causes.
+    ("apps/os88ui.inc", "OS88UI_DR_SIZE", "tests/skiesui.py", "DR_SIZE"),
+]
+DEFINE = re.compile(r"^%define\s+([A-Z][A-Z0-9_]*)\s+([^\s;]+)", re.M)
 
 EQU = re.compile(r"^([A-Z][A-Z0-9_]*)\s+equ\s+([^\s;]+)", re.M)
 PYCONST = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=\s*([^\s#]+)", re.M)
@@ -251,6 +268,22 @@ def main():
               "both. If this divergence is deliberate, put it in DIVERGENT",
               got="; ".join("%s=%s" % (p, v) for p, v in places),
               want="one value")
+
+    # ...the ones spelled differently on purpose (SPEC.md 13.14.5),
+    for fa, na, fb, nb in ALIAS:
+        def anyof(rel, name):
+            for pat in (EQU, DEFINE, PYCONST, CCONST):
+                v = defs(rel, pat).get(name)
+                if v is not None:
+                    return v
+            return None
+
+        a, b = anyof(fa, na), anyof(fb, nb)
+        check(a is not None and b is not None and a == b,
+              "%s (%s) agrees with %s (%s)" % (na, fa, nb, fb),
+              "the same quantity under two names is still two constants, and "
+              "this one sizes a record the library writes past the end of",
+              got="%s=%s; %s=%s" % (na, a, nb, b), want="one value")
 
     # ...and the Python side, which cannot include anything at all.
     truth = tables["kernel/kernel.asm"]

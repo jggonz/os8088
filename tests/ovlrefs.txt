@@ -53,7 +53,7 @@ snd_init            kmain only (kernel.asm) - sound layer bring-up, SPEC.md 34
 ovl_font_init       kmain only (kernel.asm) - the BAKED_FONT typeface, SPEC.md 6.2. It keeps its name and its retf: it is a BODY, not a shim
 drv_snd_sniff       kmain only (kernel.asm) - what card is at 388h, SPEC.md 51.3.1
 
-# --- the boot-only bodies of docs/LAST-DROP-BYTES.md -----------------------
+# --- the boot-only bodies of docs/plans/LAST-DROP-BYTES.md -----------------------
 # Each one is a routine kmain runs ONCE, moved out of `.text` or `.cold` into
 # the blob so that it stops costing RAM at spl_finish.  The register names the
 # caller for every row and the closure walk that proved there is no other; what
@@ -75,7 +75,7 @@ wm_init             kmain only (kernel.asm:4291) - the window table cleared, SPE
 inst_init           kmain only (kernel.asm:4302) - the instance table cleared, SPEC.md 29
 vid_ctx_init        kmain only (kernel.asm:4203) - display 0's geometry banked, SPEC.md 39.12. NOT called from vid_switch: the comment above the body said so for a while and vid_switch's own call list (vid_avail_test, cur_unlazy, vid_blank, wm_su_drop_all, vid_equip, vid_apply, vid_setmode, vid_disp_init, desk_rowcalc) does not contain it
 vid_probe_avail     kmain only (kernel.asm:4211) - which adapters this machine HAS, SPEC.md 39.11.1. One inbound edge in the repository and zero outbound; the other two bodies of the trio (vid_memchk, vid_cga_alias) are near-called from inside `.ovl` and are named nowhere else
-sch_idle_start      kmain only (kernel.asm:4182) - spawns the idle task, docs/SCHED-IDLE-PLAN.md 6.2. The TASK outlives the blob and the spawner does not: its entry is sch_idle_body, a `.text` label, which is what the BX = 0 (KERNEL_SEG) argument names
+sch_idle_start      kmain only (kernel.asm:4182) - spawns the idle task, docs/plans/completed/SCHED-IDLE-PLAN.md 6.2. The TASK outlives the blob and the spawner does not: its entry is sch_idle_body, a `.text` label, which is what the BX = 0 (KERNEL_SEG) argument names
 
 # --- the loading screen's own captions, drawn while the blob is still live --
 # The splash is IN the blob (`.boot2`), so it cannot outlive `.ovl`: both are
@@ -87,7 +87,7 @@ ovl_spl_msg_fdd     kmain only (kernel.asm:4288) - "Drives" caption
 # longer cross and there is nothing here to account for.
 ovl_spl_redraw      spl_reset only (splash.inc:488) - repaint after a mode set
 
-# --- the settings parser, SPEC.md 51.5 / docs/SETTINGS-COST.md -------------
+# --- the settings parser, SPEC.md 51.5 / docs/plans/completed/SETTINGS-COST.md -------------
 # ovl_cfg_load was here for the same reason and has left for the same one: its
 # only caller moved into the section with it.
 

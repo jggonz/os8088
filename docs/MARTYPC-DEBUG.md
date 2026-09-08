@@ -4,67 +4,575 @@
 headless frontend, and a host client. It gives a process on your machine
 memory, registers, I/O ports, breakpoints, single-step and cycle counts on a
 running os8088, with **no code in the guest at all** — no driver, no UART, no
-interrupt, not one guest cycle spent.
+interrupt, not one guest cycle spent. `tools/martypc/` is the whole of the
+change to MartyPC: `debug_server.rs`, four patches, the machine configs and
+`build.sh`.
 
-**Why it exists.** 86Box has no automation socket of any kind and a real 5150
-has no debugger, so until this the only way to ask "what does the kernel
-think" about a machine outside the container was to ask a human for a MartyPC
-dump by hand (docs/FIELD-MACHINES.md). That document rates a dump the highest
-instrument in the register — *"ask for a dump whenever the question is 'what
-does the kernel think'"* — and it cost a menu click and a file transfer. This
-is that instrument as a command.
+**It is pinned and static, on purpose** (`tools/martypc/UPSTREAM`: MartyPC
+0.4.2, commit `e15cb04f`). A debugger that changes under you is one more
+variable in a session whose whole point is removing them; re-pinning is a
+deliberate act, not maintenance.
 
-**It is pinned and static, on purpose** (`tools/martypc/UPSTREAM`). A debugger
-that changes under you is one more variable in a session whose whole point is
-removing them; re-pinning is a deliberate act, not maintenance.
+**THIS IS WHAT YOU DEVELOP ON.** Anything that runs on an 8088 — the whole of
+this OS bar the 286/386 targets, including **all three** of SPEC.md §39's
+adapters, input, screenshots and sound — is tested here. QEMU is a fallback
+with a **six-item list** (docs/TESTING.md states it: 286/386, rung 1 of the
+hard-disk driver, SPEC.md §9.5's awkward mouse cases, the PS/2 mouse, the
+Ethernet card, the RTC's write half), stated as a list so that "a legitimate
+need" is something you can check rather than argue yourself into. The 5150
+remains where a number with a disk in its timing LANDS, though the floppy
+model below agrees with it to the measurement quantum.
 
-**THIS IS WHAT YOU DEVELOP ON.** Anything that runs on an 8088 — which is
-the whole of this OS bar the 286/386 targets, and now includes **all three**
-of SPEC.md §39's adapters, input, screenshots and sound — is tested here.
-QEMU is a fallback with a three-item list (286/386, **rung 1** of the
-hard-disk driver, and SPEC.md §9.5's COM2/cross-wired/modem mouse cases);
-docs/TESTING.md states it
-in full, and states it as a list on purpose, so that "a legitimate need" is
-something you can check rather than something you can argue yourself into.
-The 5150 remains the only instrument for anything with a disk in its timing.
-
-`make marty` builds from source with cargo, which costs a few minutes the
-first time in a fresh container — **build it at the start of a session rather
-than when you first need it**, because the moment you first need it is the
-moment the cost feels like a reason to type `make test` instead.
+`make marty` builds from source with cargo — a couple of minutes in a
+container with a warm cargo registry, longer cold. **Build it at the start of
+a session rather than when you first need it**, because the moment you first
+need it is the moment the cost feels like a reason to type `make test`
+instead. **A run past ~180 s has frozen rather than slowed** — the guest runs
+at several times real time, so the overrun is the finding; diagnose it rather
+than raising the timeout.
 
 ---
 
-## The disk: it used to have no platter, and now it has one
+## Build and run
 
-**Stock MartyPC does not model a floppy at all.** It models the 8088's
-instruction timing, its prefetch queue and its bus contention exactly, and
-then hands a sector over the instant it is asked for. Read the upstream source
-and there is nothing to look for: `operation_read_data` calls the drive once
-and streams the whole run to DMA as fast as the CPU can turn, `command_seek_head`
-returns `CommandComplete` in the same breath it is issued so a seek costs
-nothing, `FloppyDriveMechanicalState` — `MotorSpinningUp`, `HeadSeeking` — is an
-enum **no code anywhere references**, and `media_geom`'s sectors-per-track is
-hardcoded to `0` because until now nothing needed it. That is why it read a
-16 KB file ~30x faster than the 5150 (PERFORMANCE.md Part 9 Set 11).
+Needs `cargo` (Rust) and, on Linux, `libudev-dev` + `pkg-config` — MartyPC
+depends on `serialport`, whose build script hard-fails without them.
 
-`tools/martypc/patches/04-floppy-disk-timing.patch` gives it a platter.
+### Installing the deps in a fresh Ubuntu container
+
+**This subsection is about ONE environment**: a fresh Ubuntu container, which
+is what an agent session gets. A Mac has neither problem — `tools/setup-macos.sh`
+installs through Homebrew (but not Rust, so `make marty` there wants `cargo`
+put in front of it by hand).
+
+**`apt-get update` FIRST.** The shipped index names a `libudev-dev` that has
+been superseded and removed from the pool, so installing it straight off
+404s. A refresh is the whole fix.
+
+**...and if `apt-get update` says**
+
+```
+E: gpgv, gpgv2 or gpgv1 required for verification, but neither seems installed
+```
+
+while `/usr/bin/gpgv --version` answers perfectly well, the missing thing is
+not gpgv: apt drops to the unprivileged `_apt` user to fetch and verify, and
+in a container whose filesystem that user cannot traverse the check fails
+with that sentence. The tell is a plain `apt-get update` that ends in
+`W: Some index files failed to download` having touched nothing, after which
+the install 404s exactly as it does with no refresh at all. Run both steps
+with the sandbox off:
+
+```sh
+apt-get -o APT::Sandbox::User=root update
+apt-get -o APT::Sandbox::User=root install -y --no-install-recommends \
+        libudev-dev pkg-config
+```
+
+Do not pin a version here. Skipping the deps does not fail at apt: it fails
+minutes later inside cargo, on `serialport`.
+
+**`qemu-system-x86` fails the same way and needs the OPPOSITE fix.** The
+index lists the `noble-updates` build, whose `.deb` 404s on
+`archive.ubuntu.com` and then times out against `security.ubuntu.com`, so a
+plain install burns several minutes and fails. Pin all three packages to the
+**base** noble version:
+
+```sh
+V='1:8.2.2+ds-0ubuntu1'              # the BASE version, NOT -updates
+apt-get install -y --no-install-recommends \
+        "qemu-system-x86=$V" "qemu-system-common=$V" "qemu-system-data=$V"
+```
+
+`-t noble` is **not** enough — it still resolves to the `-updates` version.
+`--no-install-recommends` skips the gstreamer/libcaca display extras, which
+404 the same way and which a headless `-display none` run never touches.
+
+So: **`libudev-dev` wants the NEWER version a refreshed index names; QEMU
+wants an OLDER one than the index names.** Applying either cure to the other
+package reinstates the 404 you are trying to escape.
+
+If a previous attempt is wedged, clear `/var/lib/dpkg/lock-frontend` and run
+`dpkg --configure -a` first — and **do not `pkill -f apt-get` from inside a
+Bash tool call**, because the pattern matches the calling shell and kills it.
+
+### By hand
+
+```sh
+tools/martypc/build.sh              # clone at the pin, patch, stage, build
+cd build/martypc/run
+MARTYPC_DEBUG_ADDR=127.0.0.1:9001 ./martypc_headless \
+    --mount fd:0:media/floppies/os8088-360.img &
+
+python3 tools/os88marty.py 127.0.0.1:9001 run
+python3 tools/os88marty.py 127.0.0.1:9001 status
+```
+
+`--mount fd:N:path`, not `floppy:` — the device word is `fd`, `hd` or `cart`.
+`make marty` copies `build/os8088-360.img` into
+`build/martypc/run/media/floppies/` for you. `--machine-config-name <name>`
+picks a machine (the table under *The machines*); `--turbo` is the 7.16 MHz
+control.
+
+**The machine starts PAUSED**, whatever `auto_poweron` says, and `run` starts
+it. A debugger that attaches to a machine already millions of cycles into its
+boot cannot breakpoint anything it wanted to watch.
+
+### The IBM ROM is not in the tree
+
+`tools/martypc/roms/` is gitignored and ships empty: the 27 OCT 82 5150 BIOS
+is IBM's and cannot be redistributed under this tree's licence. `build.sh`
+names the file and its md5 (`BIOS_IBM5150_27OCT82_1501476_U33.BIN`, 8192
+bytes, `f453eb2df6daf21ec644d33663d85434`) when it does not find one. Without
+it every machine whose `rom_set` is `ibm5150_82_v4` exits at once with
+`Error loading ROM set: ibm5150_82_v4 not found in ROM set map` — **and that
+includes `os8088_5150_cga`, the default machine of both `os88marty.launch()`
+and the `os88marty.py launch` verb.** In a checkout without the ROM, name a
+GLaBIOS machine (`--machine os8088_5150_cga_gla`), or go through
+`os88marty.machine(name)` / `os88ui.boot()`, which resolve an IBM-romset name
+to its GLaBIOS twin. `machine(name, why_ibm="...")` is the form for a row
+that genuinely needs the period ROM: it raises when the ROM is absent, so the
+row SKIPS instead of quietly running on the twin.
+
+### From a script: `os88marty.launch`
+
+Do not hand-roll the above in Python. Every scripted session needs a fresh
+emulator, and none of the failures in those twenty lines announce themselves.
+
+```python
+import os88marty
+from os88mouse import Mouse
+
+with os88marty.launch("build/os8088-360.img",
+                      apps="build/apps360.img",
+                      machine="os8088_5150_cga_gla") as m:
+    mo = Mouse(marty=m)                 # ONE connection, shared
+    mo.dblclick(608, 105)
+    os88marty.settle(m)                 # ...instead of time.sleep(4)
+    m.vram("cga")
+```
+
+`launch(image, apps=None, machine="os8088_5150_cga", addr=None, run_dir=None,
+boot=True, timeout=..., extra=(), card=None, label=None, detach=False)`.
+`boot` is True to run until the desktop is up, a number of seconds to run
+blind, or 0 to return the machine paused.
+
+- **Every instance is isolated, and it takes no argument.** `addr=None`, the
+  default, has the emulator ask the OS for a free port under its own bind and
+  publish what it got, and the machine runs in a private directory under
+  `build/martypc/inst/`. Two of these in one checkout do not see each other.
+  The address is on the object afterwards (`m.addr`, `m.port`), which is
+  what to hand to `tools/os88mouse.py`. Pass `addr=` only to pin a port on
+  purpose.
+- **It reaps orphans and nothing else.** An emulator whose owning script died
+  is killed by PID; a live instance with a live owner is left alone.
+  `kill_all()` — `os88marty.py kill-all --yes` — is the sweep, kept as a
+  deliberate act and never automatic.
+- **Never `pkill -f martypc_headless` and never `pgrep -f`.** The pattern
+  matches the calling shell's own command line, so `pkill` can kill the
+  caller and `until ! pgrep -f …` never finishes — and it would kill
+  everybody else's instance, which is the damage this layer exists to
+  prevent.
+- **It owns the process.** `close()` — or leaving the `with` — kills it, on
+  the failure paths too. It takes the instance's media with it, so read a
+  disk *inside* the `with`, not after.
+- **It checks the PROCESS, not just the cycle count.** `ping` reports the
+  emulator's pid and `launch` compares it against the one it spawned:
+  `cycles == 0` says the machine has not run yet, which a stale emulator
+  paused at the start of its own boot also says.
+- **Each floppy is copied into the instance's own run directory.** The guest
+  WRITES to a mounted image (`SYSTEM.CFG`, saved files), so a run would
+  otherwise dirty `build/`. A machine with a hard disk gets its own clone of
+  the VHD for the same reason.
+- **`os88marty.py instances` is the first thing to type** when a session
+  behaves as though something else is driving the machine. It lists what is
+  running, whose it is, and whether the owner still exists; `reap` clears the
+  orphans; `kill <port>` ends one; `kill-all --yes` is the hammer.
+
+```
+$ python3 tools/os88marty.py instances
+PORT   PID     MACHINE                OWNER      AGE     LABEL
+38193  13983   os8088_5150_cga_gla    13979 running  12s   dispdrag.py
+43121  13987   os8088_5150_cga_gla    13979 running  11s   dispdrag.py
+```
+
+#### `settle(m)` — the wait, and the boot gate
+
+`settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None,
+guest=None)` replaces every `time.sleep(4)`: it returns once `stable`
+rendered frames `quiet` seconds apart are identical, which an os8088 screen
+only is between events. `launch` uses it with a gate for the boot, and the
+gate is not optional — the two obvious ones are both wrong:
+
+- **Stillness alone returns during the BIOS POST**, which sits perfectly
+  still for seconds before the floppy is touched (measured: an 8.3-second
+  "boot" showing a quarter of the desktop's lit pixels).
+- **"Has the card left text mode" hangs on Hercules.** MartyPC's MDA reports
+  text mode forever, in graphics mode as in any other.
+
+So the gate is the **desktop**, sampled through `vram` on the 1bpp cards and
+`fbuf` on VGA, and it is THREE facts: the menu bar's white field, the 1px
+black rule under it (SPEC.md §12), and the dock strip — the first thing on
+the screen and the last. The rule is what rejects POST text, the one screen
+whose top band is genuinely lit. Measured from reset, field / rule / dock:
+
+| | field | rule | dock |
+|---|---|---|---|
+| POST text | 0.26 | **0.25** | 0.25 |
+| splash | 0.00 | 0.00 | 0.00 |
+| CGA desktop | 0.93 | 0.00 | 0.96 |
+| Hercules desktop | 0.94 | 0.00 | 0.96 |
+| VGA desktop | 1.00 | 0.00 | 0.96 |
+
+**The gate and the stillness test read the screen ONCE, together.** The
+emulator runs the guest several times faster than real time, so a round trip
+is tens of milliseconds of *guest* time — most of a desktop paint on a
+4.77 MHz machine — and two reads one round trip apart can report a state that
+never existed (a probe built that way reported the menu bar up while the same
+screen was 26% lit). **When the host is fast, two questions asked separately
+are two questions asked about different machines.**
+
+**On a Hercules, `fbuf` is cropped: guest (x, y) renders at `fbuf`
+(x−16, y+2)**, over a 720x350 window on a 720x348 framebuffer. Measured twice
+independently (2,280 of 2,280 sampled pixels agree at that offset and at no
+other; a second correlation over 4,992 samples put the mismatch at 0.0000 at
+dx = −16, dy = +2). VGA comes back 640x480 at (0, 0) and CGA at (0, 0), so
+two adapters of three encourage the assumption the third breaks. A pixel
+gate that compares `fbuf` against anything else needs both halves.
+
+**It bites as a DEFECT REPORT, not as a shear**, which is why it is worth a
+paragraph rather than a footnote. Clear Skies spent a session chasing "94 lit
+pixels beside the view" that were the view's own leftmost sixteen, read at a
+box column they do not occupy; the shadow was clean and the spans were the
+view's, and both readings were taken as *the bleed comes from somewhere else*
+rather than as *there is no bleed* (SPEC.md 88.13.4.1). A band named in the
+guest's coordinates is off by exactly two bytes here, which is the size of a
+plausible bug. **On the 1bpp adapters read `m.vram()`** — the card's memory,
+byte for byte the arithmetic in `tools/hercshot.py` — and keep `fbuf` for
+VGA, where it is the only route.
+
+**`card=` is not optional on a two-card machine.** `settle`, `launch` and the
+screen probe ask `video` with no card by default, which answers MartyPC's
+**primary** — the first `[[machine.video]]` block — and os8088 need not be
+driving it. The boot gate then watches a card nothing is drawing on and
+times out after 120 s saying *"this machine never finished booting"* about a
+machine that booted fine. Pass `launch(..., card=1)`; a caller running
+`settle` itself passes `gate=desktop_up, card=<idx>`. `advance(frames=…)`
+takes it too, and there it decides which card's 50 Hz or 60 Hz is counted.
+
+Boot times are a property of the HOST (measured here: CGA 4.6 s, Hercules
+4.7 s, VGA 7.1 s; three to four times that on a slower container), which is
+exactly what `settle` exists so that nothing has to hard-code.
+
+**`quiesce(m, read, guest=0.5, stable=2, ...)`** is `settle`'s shape applied
+to a few bytes of guest memory instead of a framebuffer, over GUEST seconds:
+identical readings of `read(m)` a fixed guest interval apart. For a wait
+that is followed by a memory read and no pixel comparison, it is the cheaper
+instrument (docs/plans/SOAK-PARALLEL.md §11).
+
+### Start at `tools/os88ui.py`, not at the mouse
+
+The mouse drivers below are the layer under this one. What a test usually
+means is *"open the Disk window on B:"*, not *"double-click (584, 48)"* — and
+`tools/os88ui.py` is that vocabulary, resolved out of the guest's own tables
+and **confirmed by reading guest state**:
+
+```python
+import os88ui
+
+with os88ui.boot("build/os8088-360.img", apps="build/apps360.img") as ui:
+    disk = ui.open_drive("B")            # ...whatever ordinal B: has today
+    w    = ui.path("APPS/CALC.O88")      # ...scrolling if the row is below the fold
+    ui.drag_window(w, 20, 12)            # ...and checking where it landed
+    ui.raise_window("APPS")
+    ui.menu_pick("Calc", "Close")        # ...off menu_bar[], not four numbers
+```
+
+`boot(image, apps=None, machine="os8088_5150_cga", card=None, saver=False,
+why_ibm=None, verbose=True, limit=180.0, **kw)` is `launch` plus the two
+things most scripts forget: the machine name goes through
+`os88marty.machine`, so an IBM-romset name resolves to its GLaBIOS twin, and
+**the screen saver is turned off by default** — five guest minutes of no
+input is reachable on a busy lane. The verbs: `open_drive`, `open`, `path`,
+`window`, `wait_window`, `raise_window`, `close`, `move_window`,
+`drag_window`, `uncover`, `clear_desktop`, `disk_window`, `listing`,
+`scroll_to`, `menus`, `menu_pick`, `toast`, `wait_toast`, `settle`.
+
+**Confirming is FASTER than not confirming.** `settle` cannot know what it is
+waiting for, so it waits for the whole screen to go quiet and then `quiet`
+seconds more. Reading `wm_wins` to see whether the window has opened is a
+408-byte read that answers the actual question and returns the instant it
+is yes. Measured by `tests/uilayer.py`, the same three-step navigation:
+
+| | host | guest |
+|---|---|---|
+| double-click, `settle`, repeat | 15.0 s | 250,573,106 cycles (52.5 s) |
+| the same through `os88ui` | **5.2 s** | **87,422,885 cycles (18.3 s)** |
+
+`ui.settle()` is still there for a test that compares PIXELS.
+
+**A verb that cannot do what it was asked RAISES, naming what it saw** —
+`no window called 'MINES' is open. What is open: ['Disk', 'APPS']` — where a
+click that lands on bare desktop is reported twenty steps later wearing the
+costume of the feature under test. The cases it handles:
+
+- **a drive with no zone.** Zone position is the volume's place among the
+  *shown* ones, so a machine whose B: was retired by §18.97's probe numbers
+  them differently. `open_drive` walks `dsk_vtab` and says so instead of
+  clicking bare desktop.
+- **a row that is not a row.** §19.4 sorts by name, so a folder that gains an
+  entry renumbers every row after it, and one that outgrows the window puts
+  the row below the fold. `open` looks the name up, scrolls by reading
+  `FS_SCRL` back, and checks the row before it clicks.
+- **a title bar that is covered.** `raise_window` walks the z-order for a
+  column nothing covers, and falls back to the dock tile, which is always
+  visible (§30).
+- **the acting Disk window is not the front window.** `fm_vp_set` runs on a
+  file-manager raise and its navigations; nothing calls it when a Calculator
+  comes forward, so `[fm_vp]` goes on naming the last Disk window. A row
+  position computed off the front window then lands inside the Calculator.
+  `ui.disk_window()` resolves it through `[fm_vinst] → I_WIN`, and `ui.open`
+  raises it before scrolling, because the arrow keys only reach the
+  frontmost window.
+- **§11.94 snaps a dragged window's content origin to a multiple of 8**, so
+  a window dragged to *x* lands at `((x + 1) & ~7) - 1` (`os88geom.snapx`);
+  a check written against the requested x fails on a window manager doing
+  exactly what the spec says.
+- **a menu item carrying §12's `MENU_DIS` prefix cannot be selected**, so a
+  drag aimed at one releases over its neighbour. `menu_pick` refuses it
+  before the press, and checks `menu_sel` **before the release**.
+
+Every constant it uses comes from `tools/os88geom.py`, which checks itself
+against the kernel source at import and is checked again by
+`tests/unit/t_mirror.py` in the fast tier. `os88geom` decodes BOTH kernels'
+layouts; a kern_small script needs `$OS88_BUILD`/`$OS88_DEFINES` pointing at
+that build or `wm_wins` is decoded at the wrong stride.
+
+### Which mouse driver — there are two, and picking wrong fails silently
+
+| | | |
+|---|---|---|
+| **`tools/os88mouse.py`** | **ABSOLUTE — the default** | Reads the kernel's published `mouse_x` (SPEC.md §9.4.3), computes the exact remaining delta and **proves arrival**. `Mouse(marty=m)`, then `where` / `to` / `click` / `dblclick` / `drag` / `menu`. A target it cannot reach raises; it never clicks into empty desktop. |
+| **`tools/os88mouserel.py`** | RELATIVE | `Rel(m, pace="frames")`: dead reckoning off a corner pin (`home()`), guest-**frame** pacing for a bit-exact replay, proven button edges (`press`/`release`), and `drift()`/`check()` to say when reckoning has come apart. CLI verbs `packet`, `move`, `home`, `press`, `release`, `drift`. |
+| `Marty.mouse()` in `tools/os88marty.py` | the transport | One 3-byte Microsoft packet into the emulated UART. The layer both drivers sit on, and correct to call directly **only** for packet-level work. |
+
+**Use the absolute one unless your case is on this list**, which is the whole
+of it:
+
+1. **the mouse itself is under test** — packet decoding, SPEC.md §9.5's port
+   contest, the ISR's own stack (§9.10). Asking the kernel where the arrow is
+   would be asking the thing under test to mark its own work;
+2. **a replay must be reproducible** (docs/plans/completed/SNAPSHOT-PLAN.md
+   §7) — the absolute driver sends however many packets convergence needs,
+   and how many that is depends on the host;
+3. **the motion has no destination** — a paint stroke, a window drag, a sweep.
+
+The failure shape is why this needs writing down. A dead-reckoned click lands
+three pixels outside a 16-pixel control, **nothing happens, and no error is
+raised**. A packet carries a signed byte per axis, the 1200-baud UART drops
+one sent while the previous is in flight, and the kernel's edge clamp eats
+overshoot; those three are why aiming by hand does not work.
+
+```
+python3 tools/os88mouse.py 127.0.0.1:9001 click 445 153
+python3 tools/os88mouse.py 127.0.0.1:9001 dblclick 150 90   # NOT two clicks
+python3 tools/os88mouse.py 127.0.0.1:9001 where
+```
+
+### Several at once
+
+**Two agents, two terminals or two rows of the suite can drive MartyPC in one
+checkout, and nothing has to be arranged between them.** Three things are
+private per instance:
+
+| | |
+|---|---|
+| the port | **the OS picks it under the emulator's own bind** (`MARTYPC_DEBUG_ADDR=…:0`) and the emulator writes it to `MARTYPC_DEBUG_PORTFILE`. Probing for a quiet port from the client and then launching is a race — two launchers a millisecond apart pick the same port — which is why this is in `debug_server.rs` and not the wrapper |
+| the run tree | one directory per instance under `build/martypc/inst/`, read-only parts symlinked, floppies, VHDs and the log real and private |
+| the process table | a registry per instance, and `reap()` kills only what nobody owns |
+
+```python
+with os88marty.launch(IMG, label="herc") as a, \
+     os88marty.launch(IMG, machine="os8088_5150_herc_gla", label="cga") as b:
+    ...                             # two machines, no arrangement
+```
+
+Three failures are gated rather than left to be discovered:
+
+- **A second client on one instance is refused in words.** The server
+  accepts and answers `{"ok": false, "busy": true, …}` naming the client that
+  holds it, and `Marty` turns that into one sentence: *this debug server
+  already has a client (127.0.0.1:35214); it takes one at a time. Share that
+  connection, or launch a second emulator of your own.* Sharing is the
+  answer within a session: `Mouse(marty=m)`, `Flush(marty=m)`.
+- **A bind that fails is fatal and says so on stderr**, not only through
+  `log::`, whose level is a config away from being off. An emulator nothing
+  can talk to must not keep running: it holds the port against the next run.
+- **A port somebody else holds is an error that names them.** `launch(addr=…)`
+  checks the registry first, so pinning a port on purpose cannot silently
+  attach to the wrong machine.
+
+#### How many, and what stops you
+
+**There is no hard cap** — a refusal would be a new way to lose work. There
+is one line on stderr when the count goes past the box's core count
+(`OS88_MARTY_MAX` moves it), read as the narrowest of the hardware, this
+process's affinity and any CFS quota. Aggregate guest speed against a real
+4.77 MHz 8088, on a four-core container:
+
+| instances | per instance | aggregate |
+|---|---|---|
+| 1 | 3.42x | 3.4x |
+| 2 | 3.37–3.48x | 6.9x |
+| 4 | 2.96–3.43x | **13.1x** |
+| 6 | 1.96–2.88x | 13.9x |
+| 8 | 1.64–1.71x | 13.4x |
+
+**Flat past the core count**: the ninth instance does not make the box do
+more work, it makes the other eight slower. Nothing else binds first — an
+instance is ~50–100 MB of RSS and ~1 MB of disk (the 32 MB VHD is reflinked
+where the filesystem can).
+
+**Going past the ceiling is not broken, only slower.** Guest **cycle**
+counts, `disk()` counts and pixel comparisons are unchanged at any
+oversubscription, being counted rather than timed. What loses slack is
+host wall-clock: `settle`'s patience, an `until` limit, a suite row's
+timeout (4x its declared seconds). Four emulator rows through
+`os88test.py`: 175.6 s at `--marty-jobs 1`, 85.9 s at 3, each row 6–10%
+slower and none failing; three rows with single-figure host-second windows
+(`tests/bouncecost.py`, `tests/modstr.py`, `tests/paintcull.py`) all passed
+at eight instances on four cores. An IDLE guest is cheaper than the table
+says — an os8088 desktop is 96.9% halted (SPEC.md §8.1.2) and halted cycles
+are cheap to emulate — so "eight agents" is the worst case only when all
+eight are driving.
+
+#### A record names a PROCESS, not a PID
+
+`pid_max` in a container is 32,768, so a session launching emulators
+steadily wraps the PID counter in minutes. A registry record that carried a
+bare PID once matched somebody else's live instance and `reap()` killed it.
+A record is `(pid, start time)` — field 22 of `/proc/<pid>/stat`, or `ps -o
+lstart=` on Darwin — and one predicate, `_killable`, gates every signal: the
+record must carry a start time, that PID must be a `martypc_headless`
+started at that time, and the record must not already be retired. A record
+that cannot identify its process is left alone, record and process both.
+`tests/martyconc.py` (full tier) fabricates both shapes against a live
+instance and asserts it survives.
+
+#### A bench that outlives the command
+
+A session that boots once and then pokes at the machine from several
+separate commands — an agent at a terminal, `tools/notepad/` — wants an
+emulator that is nobody's to close. `launch(detach=True)` is that, and the
+CLI wraps it:
+
+```
+$ python3 tools/os88marty.py launch build/os8088-360.img --apps build/apps360.img --machine os8088_5150_cga_gla
+127.0.0.1:33689
+  pid 14625, os8088_5150_cga_gla, log build/martypc/inst/14621-bench-1/martypc.log
+  it OUTLIVES this command. `os88marty.py instances` lists it, `os88marty.py kill 33689` ends it.
+
+$ python3 tools/os88mouse.py 127.0.0.1:33689 dblclick 608 105
+$ python3 tools/os88marty.py 127.0.0.1:33689 shot /tmp/desk.png --rendered
+$ python3 tools/os88marty.py kill 33689
+```
+
+`launch` takes `--apps`, `--machine`, `--label`, `--no-boot` and `--card`.
+A detached instance has **no owner on purpose**, which is what distinguishes
+it from an orphan — `reap()` leaves it alone for ever and `kill` is how it
+ends. A bench you forget about is a core you have lost until you
+`instances` and notice it. The bench's run directory is the one in the log
+path it prints; `tools/os88flush.py` needs it as `--run-dir` (below).
+
+### `until(m, cond, what)` — the wait for work that draws nothing
+
+`settle` watches pixels, so it is **silently wrong for anything that holds
+the gfx lock for its whole run**. A hard-disk install freezes the UI while it
+copies: the screen is *more* still while it is busy than when it is done, so
+`settle` returns about five seconds in and a `with launch(...)` block then
+kills the emulator mid-copy — which looks like the installer stopping
+halfway.
+
+Ask about the thing instead. `cond` is called with the Marty each round and
+may look wherever the answer is — guest memory, or the **host** side of a
+mounted image, which is usually better because a commit tends to be one
+write you can watch for:
+
+```python
+STUB = bytes.fromhex("fa31c08ed88ec08ed0bc007c")   # hd_bootstub's opening
+os88marty.until(m, lambda _: open(vhd, "rb").read(12) == STUB,
+                "the installer to commit the MBR")
+```
+
+SPEC.md §52.10 writes the partition table **last**, as the commit, so that
+one comparison is an exact "the install finished".
+
+`until(m, cond, what, poll=1.0, limit=600.0, guest=None)` separates the two
+ways the wait fails. A guest that has **stopped executing** can never
+satisfy any condition, so it says which state and where — `the guest is
+'breakpoint' at 0060:3C21 and is not executing` — rather than blaming the
+condition; that is the shape a still-armed breakpoint takes. Everything else
+is an honest timeout: the guest is still running, so the limit is too short
+or the condition asks the wrong thing.
+
+**Pick by whether the screen is the evidence**: `settle` for a boot, a click
+or a repaint; `until` for a format, a copy, an install, a save.
+
+**Widening `settle`'s window to cope is the trap on the other side, and it
+raises.** `settle(m, quiet=30, limit=2400)` is unsatisfiable: `stable`
+samples `quiet` apart is `stable * quiet` **host** seconds of unchanged
+screen, the menu bar's clock changes once a **guest** minute, and the guest
+runs faster than real time, so no two samples can ever agree. It waits out
+the limit and blames the guest (an install driven that way sat for 40
+minutes with the install long finished). `settle` samples the cycle counter
+first and refuses a window it can prove cannot close, naming `until`.
+
+### Naming a kernel flag: `os88sym`
+
+`m.sym("fpg_on")` is the flat address of a kernel symbol, and `python3
+tools/os88sym.py --all` lists every one. **Do not take an address out of
+`nasm -l`'s listing** — for anything in `.bss` both the address column and
+the bracketed operand bytes are section-relative and fixed up afterwards, so
+`menu_bovr` reads as `0x0879` there and is at `0xCBA4` in the binary. That is
+a plausible small number pointing into `.text`: reading a byte from it
+succeeds, returns something, and means nothing.
+
+`os88sym` re-assembles a temporary copy of `kernel/kernel.asm` with
+`[map all]`, attributes every symbol to its section — `.text`/`.bss` at
+`KERNEL_SEG`, `.cold` at `COLD_SEG`, `.lowbss` at `LOW_SEG`, stage 2's blob
+where `[spl_fseg]` says — and asserts the result is byte-identical to
+`build/kernel.bin`, so a map describing a different kernel is an error
+rather than a subtly wrong answer. A knob build moves everything: pass the
+same `-D`s (`--define DISKCNT=1`, or `$OS88_DEFINES`), and a kern_small
+build wants `$OS88_BUILD=build/smallk`. **Committing moves three bytes of
+`.text`** (the About box's build number is the commit count, SPEC.md §14.2),
+so `make` after a commit or every row dies saying the map describes a
+different kernel.
+
+---
+
+## The disk has a platter
+
+**Stock MartyPC does not model a floppy's mechanics**: `operation_read_data`
+streams a whole run to DMA as fast as the CPU can turn, a seek returns
+`CommandComplete` in the breath it is issued, and `media_geom`'s
+sectors-per-track is hardcoded to 0. That is why it read a 16 KB file ~30x
+faster than the 5150 (PERFORMANCE.md Part 9 Set 11).
+`tools/martypc/patches/04-floppy-disk-timing.patch` gives it one.
 
 ### What it models
 
 | | |
 |---|---|
 | **Rotation** | a head angle per drive, advanced while the motor turns. 300 RPM (360K/720K/1.44M drives) or 360 (a 1.2M), so a revolution is 200 ms or 167 |
-| **Data rate** | 250 kbit/s DD, 500 HD, and **300** for DD media in a 1.2M drive, which spins it 20% fast. 32 us a byte at 250, so a 512-byte sector's data field is 16.384 ms |
-| **Interleave** | the physical order of the logical sectors round the track, from the machine config — a raw sector image cannot supply it. **No os8088 machine sets one**: the field 5150's media is 1:1 and the second revolution its track read costs is the ROM's, not the platter's (Set 37) |
-| **Pacing** | one sector at a time: wait for it to come round, stream it, wait for the next. Not one lump per run — see the GLaBIOS note below |
-| **Seek** | a step per cylinder crossed at the rate the BIOS asked for through SPECIFY, and **no settle** — the settle is the BIOS's own software wait and charging it here counted it twice (Set 37). The platter keeps turning while the head steps |
+| **Data rate** | 250 kbit/s DD, 500 HD, and **300** for DD media in a 1.2M drive. 32 us a byte at 250, so a 512-byte sector's data field is 16.384 ms |
+| **Interleave** | the physical order of the logical sectors round the track, from the machine config (`interleave`, default 1) — a raw sector image cannot supply it. **No os8088 machine sets one**: the field 5150's media is 1:1 |
+| **Pacing** | one sector at a time: wait for it to come round, stream it, wait for the next — a real controller DRQs as each sector arrives and pauses only over the gaps |
+| **Seek** | a step per cylinder crossed at the rate the BIOS asked for through SPECIFY, and **no settle** — the settle is the BIOS's own software wait, and charging it here counted it twice (Set 37). The platter keeps turning while the head steps |
 
-### Why one mechanism gets all three field rows right
-
-The 5150's three raw `int 13h` rows (Sets 14 and 22) are not three facts, they
-are one fact seen three ways — **a sector is readable only as it passes the
-head** — and the model reproduces them without being told any of them:
+The 5150's three raw `int 13h` rows (Sets 14 and 22) are one fact seen three
+ways — a sector is readable only as it passes the head — and the model
+reproduces them without being told any of them:
 
 | | field, IBM 5150 | this model |
 |---|---:|---:|
@@ -72,44 +580,38 @@ head** — and the model reproduces them without being told any of them:
 | a 9-sector track, one call | 398,211 us | **384,480** |
 | the same nine, as nine calls | 1,991,057 us | **2,004,789** |
 
-Row 1 is exact and rows 2 and 3 are **one measurement quantum** out — 13,731
-us, which is `bl_run`'s tick over the row's four iterations rather than
-anything either machine did. Row 2 sits on that boundary: 384,480 is the
-figure the *field machine itself* reported for it in Set 14.
+Rows 2 and 3 are one measurement quantum out — 13,731 us, `bl_run`'s tick
+over the row's four iterations. A 9-sector 1:1 track is **one** revolution of
+transfer and both machines take **two**: the missing turn is the IBM ROM
+asking for the diskette parameter table's head settle and spending 52.5 ms
+on it in a `LOOP $` at `F000:EEB8`, once per `int 13h`. MartyPC reproduces
+that by running the ROM (Set 37). The seek's step rate is 8.00 ms a cylinder
+against the field's 7.81 (Set 36), and five of `sysbench`'s six seek rows are
+exact; the 39-cylinder one is a tick short.
 
-The mechanism is worth stating because it is not the obvious one. A 9-sector
-1:1 track is **one** revolution of transfer and both machines take **two**,
-and the missing turn is not interleave: it is the IBM ROM asking for the
-diskette parameter table's 25 ms head settle and spending **52.5 ms** on it,
-in a `LOOP $` at `F000:EEB8`, once per `int 13h`. MartyPC reproduces that by
-running the ROM. PERFORMANCE.md Set 37 is how it was found and why the
-`11,570 B/s ≈ 11,520` agreement that had said "2:1 media" for four sets could
-never have discriminated.
+**The like-for-like boot** (`combo.img` on `os8088_5150_herc`) is **188
+`boot_ticks` against the field's 205** — 0.92x. The same image boots
+`os8088_5150_cga_gla` in ~175 and QEMU cannot be compared at all.
 
 ### What it does NOT fix, and this is the half that matters
 
-**It changes what the disk COSTS, not what it SAYS** — and that matters far
-less than it sounds, because **the BIOS is not modelled at all: it is
-EXECUTED.** With the real ROM in `roms/`, MartyPC runs IBM's own `int 13h`, so
-a bug in that code is present by construction.
-
-**Measured: SPEC.md §18.91's `AL` bug reproduces here.** Same image, same
-machine (`os8088_5150_herc`), shipped kernel against `make DISKAL=1`:
+**It changes what the disk COSTS, not what it SAYS — and the BIOS is not
+modelled, it is EXECUTED.** With the real ROM MartyPC runs IBM's own
+`int 13h`, so a bug in that code is present by construction. SPEC.md
+§18.91's `AL` bug reproduces here: same image, `os8088_5150_herc`, shipped
+kernel against `make DISKAL=1` —
 
 | | shipped (trusts `CF`) | `DISKAL=1` (trusts `AL`) |
 |---|---|---|
-| int 13h-level reads | 23 | **177** |
-| sectors moved | 177 | **846** — 4.8x |
+| int 13h-level reads | 24 | **183** |
+| sectors moved | 183 | **870** — 4.75x |
 | **longest run** | **9** | **9** |
-| `boot_ticks` | 211 | **1152** |
+| `boot_ticks` | 188 | **893** |
 
 `longest_run` is 9 in both: the kernel asks for nine sectors, is given nine,
-and asks again — Set 16's finding restated by the emulator — and the 4.8x
-traffic is Set 15's 4.6x. **QEMU missed this because SeaBIOS is a different
-BIOS**, not because emulation cannot see it, and that distinction was never
-drawn here, which is why MartyPC inherited a blindness it does not have.
-
-So the boundary has moved, and it now runs between the ROM and the chip:
+and asks again. **QEMU missed this because SeaBIOS is a different BIOS**, not
+because emulation cannot see it. So the boundary runs between the ROM and
+the chip:
 
 - **BIOS-level** — what `int 13h` returns, `int 1Eh`'s EOT, the ROM's own
   arithmetic: **reproduced**, because it is IBM's code executing.
@@ -117,218 +619,109 @@ So the boundary has moved, and it now runs between the ROM and the chip:
   whether a real drive ever returns short, what the result phase holds after
   an odd request: still the emulator author's belief, still the 5150's.
 - **timing**: worth asking here, still checked on the 5150 before anything
-  goes in PERFORMANCE.md.
+  goes in PERFORMANCE.md Part 9's disk rows.
 
-Not modelled, and each is a place not to trust a number: **motor spin-up**
-(the BIOS's own ~1 s wait is a CPU-timed loop and so was always accurate, but
-the drive itself comes up to speed instantly), **the PIO paths** (PCjr), and
-**Format Track**, charged a flat revolution and never calibrated.
-**Hard disks are untouched**: this is the floppy alone.
+Not modelled: **motor spin-up** (the BIOS's own ~1 s wait is a CPU-timed loop
+and so was always accurate, but the drive itself comes up instantly), **the
+PIO paths** (PCjr), and **Format Track**, charged a flat revolution and never
+calibrated. **Hard disks are untouched**: this is the floppy alone.
 
-**The seek WAS the one guess and is not any more** (PERFORMANCE.md Set 36).
-It took its step rate from what the BIOS asks for through SPECIFY and its
-settle from the DPT, because every raw row this project had read one track and
-never moved the head. `sysbench`'s seek block put the 5150 at **7.81 ms a
-cylinder against the model's 8.00**, with the break falling between 10 and 20
-cylinders exactly where the model puts it. What the same rows then exposed was
-MartyPC's **39-cylinder row at 3.000 revolutions against the field's 2.138** —
-one symptom of the same thing behind the track row and the boot, which Set 37
-identified as the 2:1 media the field machine never had plus a head settle
-charged twice. With both gone, **five of the six seek rows are exact** and the
-39-cylinder one is a tick short. The step rate is still 8.00 against the
-field's 7.81 and is the only part of the seek nothing has re-measured.
+Everything on the CPU side agrees with the 5150 to within 0–4% across 45 of
+47 `gfxbench` rows.
 
 ### Counting the traffic from outside: `m.disk()`
 
-The counters behind that table are the **controller's**, read over the debug
-socket, so the guest needs no `DISKCNT=1` kernel, no test package and no
-knowledge that it is being watched — which is the point, because a *shipped*
-image is what you want to measure and SPEC.md §18.94's block needs a
-knob-built one.
+The counters are the **controller's**, read over the debug socket, so the
+guest needs no `DISKCNT=1` kernel and no test package — a *shipped* image is
+what you want to measure.
 
 ```python
 m.disk(reset=True)          # ...drive the thing you care about...
 print(m.disk())
-# {'reads': 23, 'read_sectors': 177, 'longest_run': 9, 'writes': 0,
-#  'seeks': 28, 'seek_cylinders': 52, 'resets': 3,
-#  'transfer_ms': 7979.0, 'seek_ms': 716.0}
+# {'reads': 17, 'read_sectors': 186, 'longest_run': 18, 'writes': 0,
+#  'write_sectors': 0, 'seeks': 24, 'seek_cylinders': 239, 'resets': 5,
+#  'transfer_ms': 3236.7, 'seek_ms': 1912.0, 'ok': True}
 ```
 
 What to read in it: **`longest_run` near the track length** is a kernel
-batching properly; **`read_sectors` far above the payload** is §18.91's shape;
-**`resets`** is a BIOS giving up, which is how GLaBIOS's 250 ms limit was
-found.
+batching properly; **`read_sectors` far above the payload** is §18.91's
+shape; **`resets`** is a BIOS giving up, which is how GLaBIOS's 250 ms limit
+was found.
 
 ### Where a whole BOOT goes: `tools/os88boot.py`
 
-`m.disk()` says what the drive was asked for; this says what the *boot* spent,
-phase by phase, and it needs no knob kernel either.
+`m.disk()` says what the drive was asked for; this says what the *boot*
+spent, phase by phase, and needs no knob kernel either.
 
 ```
 python3 tools/os88boot.py --apps build/apps360.img --json build/boot.json
+python3 tools/os88boot.py --build build/smallk --define KERN_SMALL --image build/small360.img
 ```
 
 It is a **stopwatch and not a sampler** (`tools/os88prof.py` is the sampler,
-and is the right instrument for a package that loops). A boot is a straight
-line of named phases that each run once, so the exact instrument is a
-breakpoint on the RETURN ADDRESS of every `call` in `kmain` — the address a
-phase reaches exactly once, where a breakpoint on the callee would fire for
-every other caller of `gfx_lock`, `spl_step` and `vid_init` too — with the
-cycle counter and the FDC counters read at each. The addresses come out of the
-kernel's own listing, asserted byte-identical to `build/kernel-full.bin` on the
-way, and the marks are armed one at a time so a mark that is never reached is
-a timeout naming itself rather than a silent skip.
-
-Two phases are opened further, because between them they are most of a boot
-and neither is one thing. The machine's ROM `int 13h` and the loading bar are
-both bracketed inside the boot sector, by taking their return address off the
-**guest's own stack** at the entry: the sector relocates itself to the top of
-whatever `int 12h` reported, so its addresses are a property of the machine's
-memory size and there is nothing here to derive them from — and a far `call`
-and an `int` leave CS:IP as the bottom two words of the frame, so one read
-serves both.
+for a package that loops). A boot is a straight line of named phases that
+each run once, so the instrument is a breakpoint on the RETURN ADDRESS of
+every `call` in `kmain` — the address a phase reaches exactly once, where a
+breakpoint on the callee would fire for every other caller of `gfx_lock` too
+— with the cycle counter and the FDC counters read at each. The addresses
+come out of the kernel's own listing, asserted byte-identical to
+`build/kernel-full.bin`, and the marks are armed one at a time so a mark
+never reached is a timeout naming itself. The ROM's `int 13h` and the loading
+bar are bracketed inside the boot sector by taking their return address off
+the **guest's own stack** at the entry, because the sector relocates itself
+to the top of whatever `int 12h` reported.
 
 **Cycles are the answer and the host does not enter into it**: `cycles /
-4772727` is seconds on the field machine, the drive's mechanics included (the
-model above). Two full runs agree on every row to the cycle.
+4772727` is seconds on the field machine, the drive's mechanics included.
+Two full runs agree on every row to the cycle, and a complete walk agrees
+with SPEC.md §15.4's boot timer to under one tick.
 
-The walk cross-checks itself and prints the result. SPEC.md §15.4's boot timer
-is stamped by the boot sector from BIOS ticks, so it measures everything below
-`post`; a complete walk agrees with it to under one 54.9 ms tick, and a walk
-that has lost a phase does not.
+**On IRON, the knob instead.** `make BOOTPROF=1` (SPEC.md §15.5) asks the
+same question from inside and draws the answer on the desktop. The two
+instruments agreed row for row on `os8088_5150_cga` — `first paint` 178 ms
+against 178.2, `mouse_init` 1200 against 1196.7.
 
-**On IRON, the knob instead.** None of the above exists on a 5150 — no debug
-socket, no cycle counter, no symbol map — so `make BOOTPROF=1` (SPEC.md §15.5)
-asks the same question from inside and draws the answer on the desktop when
-the first frame is up. Eleven PIT stamps through `kmain`, so the sub-3 ms
-phases are real numbers rather than the zero a 54.9 ms tick would report;
-everything before `sched_init` is one row in ticks, because the clock does not
-exist yet. Boot it, photograph the box, and the first repaint takes it away.
-The two instruments agreed row for row on `os8088_5150_cga` — `first paint`
-178 ms against 178.2, `mouse_init` 1200 against 1196.7 — which is the check
-that neither is measuring something of its own.
+**The machine still decides whether the number may be quoted**: a GLaBIOS
+twin boots faster than any 5150 ever did, and only the IBM-ROM machines
+answer for the field machine. The mechanical column does not move with the
+ROM.
 
-**And the machine still decides whether the number may be quoted.** Two of the
-four things a boot spends time on are the ROM's own code, so the section
-below binds this tool exactly as it binds `m.disk()`: a GLaBIOS twin boots
-faster than any 5150 ever did, and only `os8088_5150_cga` and its IBM-ROM
-siblings answer for the field machine. What does *not* move with the ROM is
-the mechanical column, which is the FDC model Set 37 calibrated.
+### GLaBIOS gives up on a floppy op after ~250 ms
 
-### GLaBIOS gives up on a floppy op after ~250 ms, and that is still true
-
-It no longer forces a config difference — every machine here carries the same
-1:1 media (Set 37) — but it is why a disk number must not be taken off a
-GLaBIOS machine. Measured here: **that BIOS abandons a floppy operation after
-~250 ms and resets the controller**, three times in a row, after which the
-boot sector prints `DSK` — status **80**, a timeout, which
-`make BOOTDIAG=1` puts on the screen as two hex digits. It surfaced when the
-IBM machines were briefly given 2:1 media, where a 9-sector run takes 372 ms
-and can never finish under that BIOS; at 1:1 nothing here reaches the limit
-and `os8088_5150_cga_gla` boots `combo.img` in 175 ticks.
-
-Three things said it was the BIOS and not the model. The FDC presents a
-correctly BUSY status register for the whole delay (that bit comes from
-`self.busy`, which the patch does not touch). **Seeks of 329 ms complete fine
-on the same machine in the same boot** — so it is a read timeout, not an
-inability to wait. And the IBM ROM completed the identical reads.
-
-That episode produced the one modelling correction worth keeping. The first
-version charged a whole multi-sector run as **one silent delay**, which is not
-how a drive behaves — a real controller starts DRQing the moment the first
-sector arrives and pauses only over the inter-sector gaps. Pacing it per
-sector is both more faithful and shorter-gapped. It did not save GLaBIOS,
-because that BIOS's limit turned out to be on the whole operation rather than
-on silence — but the model is right for the reason it was changed.
+That BIOS abandons a floppy operation after ~250 ms and resets the
+controller, three times in a row, after which the boot sector prints `DSK`
+status **80** — a timeout. It surfaced when the IBM machines were briefly
+given 2:1 media, where a 9-sector run takes 372 ms; at 1:1 nothing here
+reaches the limit. Three things said it was the BIOS and not the model: the
+FDC presents a correctly BUSY status register for the whole delay, **seeks of
+329 ms complete fine on the same machine in the same boot**, and the IBM ROM
+completed the identical reads. It is one reason a disk number is not taken
+off a GLaBIOS machine; the other is in *Which of them a DISK number may come
+off* below.
 
 ### `int 19h` does not restart the machine on a GLaBIOS twin
 
-The Chip menu's Restart (SPEC.md 20.10) ends in `int 19h`, and on
+The Chip menu's Restart (SPEC.md §20.10) ends in `int 19h`, and on
 `os8088_5150_cga_gla` that leaves a **blank 80-column text screen with the
-tick still running** and never boots — measured on two kernels that differ by
-33 bytes, so it is the BIOS and not the build. On `os8088_5150_cga`, the same
-script reboots properly: the card comes back to `Mode6HiResGraphics` about
-twenty guest seconds later and the desktop is up.
-
-So **a restart is tested on an IBM-ROM machine**, and that is not a
-convenience: SPEC.md 9.6.5's freeze only exists on the far side of a completed
-reboot, and a machine that never gets there measures the wrong thing twice
-over — a `int 19h` that stalls in the BIOS still ticks, so a liveness check on
-`0040:006C` alone will call it healthy. Gate on the video MODE coming back to
-graphics before you believe anything after a Restart.
-
-### What it measures now
-
-`boot ticks`, os8088's own counter, on the 360KB image:
-
-| machine | stock | Set 35 (2:1) | **now** | field 5150 |
-|---|---|---|---|---|
-| `os8088_5150_cga_gla` (GLaBIOS) | 41 (2.25 s) | 130 (7.14 s) | **175** | — |
-| `os8088_5150_cga` (IBM ROM) | — | 210 (11.53 s) | **185** | 180 (Set 22, `herc.img`) |
-| `os8088_5150_herc` (IBM ROM) | — | 211 (11.59 s) | **188** | **180** |
-| ...`combo.img`, the like-for-like | — | 222 | **188** | **205** — 0.92x |
-
-The last row is the one to quote: the same image on both machines. **4.4x fast
-became 1.17x slow, then 1.27x slow once the platter really turned, and is now
-0.92x** — and the middle step is the instructive one, because making the
-rotation unconditional was plainly correct and made the headline number
-*worse*. That is what said the residual was somewhere a frozen platter had
-been flattering, and it was the media (Set 37).
-
-**Where the residual is, measured rather than assumed.** The 8% left on the
-boot is not the seek model, which the field pinned in Set 36 at 7.81 ms a
-cylinder against the model's 8.00. It is also not the comparison itself,
-though that has one caveat worth stating: the field boots a `make field` disk
-and this boots the shipped one, so `tools/fieldsize.py`'s rung check is what
-says the two are comparable. The one raw row still more than a quantum out is
-the 39-cylinder seek, one tick short.
-
-So the standing rule is **relaxed, not withdrawn**: a disk figure from here is
-now worth having, and PERFORMANCE.md Part 9's disk rows still come off the
-5150.
-
-**And it DOES catch a disk correctness bug, which is where the boundary now
-falls.** SPEC.md §18.91's `AL` bug is the worked example: `dsk_xfer` asked the
-BIOS for nine sectors, the BIOS moved nine, and answered `AL = 1` — and the
-kernel believed `AL` and re-read the rest one sector at a time. On the 5150
-that was 148 sectors in 34 `int 13h` calls for a 32-sector file, 4.6x the
-traffic, and it made the *batching optimisation measure slower than no
-batching*. **The same binary on the same image under QEMU moved 34 sectors in
-6 calls** — correct, fast, and completely silent about the bug, because
-SeaBIOS is a different BIOS. MartyPC runs the IBM ROM, so it reproduces the
-signature: `make DISKAL=1` boots `os8088_5150_herc` in **893 ticks against
-188**, with `m.disk()` reporting **870 sectors in 183 reads against 183 in
-24**, longest run 9 in both — 4.75x the traffic against the field's 4.6x, and
-no test package or `DISKCNT=1` kernel involved.
-
-**The boundary is between the ROM and the CHIP.** What a real 765 puts in ST1,
-or whether a real drive ever returns short, is still the emulator author's
-belief and still the 5150's question.
-
-Read that as a boundary on the tool, not a complaint about it: everything on
-the CPU side agrees with the 5150 to within 0–4% across 45 of 47 `gfxbench`
-rows, which is the closest any emulator has come here.
+tick still running** and never boots. On `os8088_5150_cga` the same script
+reboots properly: the card comes back to `Mode6HiResGraphics` about twenty
+guest seconds later. So **a restart is tested on an IBM-ROM machine**, and a
+liveness check on `0040:006C` alone will call the stalled one healthy — gate
+on the video MODE coming back to graphics before believing anything after a
+Restart.
 
 ---
 
-## …but the BYTES it writes can be checked, and now are
-
-The section above is about *time*. What the guest actually **wrote** is a
-different question, and the answer used to be that nobody could ask it.
+## …but the BYTES it writes can be checked
 
 MartyPC mounts a floppy by reading the file once into an in-memory
-`DiskImage`; every sector the guest writes after that lands there and nowhere
-else. Nothing in `martypc_headless` or `marty_core` ever writes one back —
-that is the eframe frontend's **Media ▸ Save Floppy As**, a `fluxfox::
-ImageWriter` behind a menu item a headless run does not have. So a scripted
-session could drive os8088 into saving a document and then had only one way to
-find out whether it had worked: ask os8088. **That is not a test.** The writer
-and the reader are the same FAT12 code, so the one failure that matters most —
-both halves agreeing on the same wrong thing — is precisely the one that
-cannot be seen from inside. docs/FIELD-NOTES.md 4 is what that costs when it
-happens: a stale listing resolved a display row against a snapshot that had
-shifted, the loader read the entry next door, and a perfectly good package was
-reported as `Bad package`.
+`DiskImage`; every sector the guest writes lands there and nowhere else.
+Nothing in `martypc_headless` writes one back — that is the eframe
+frontend's **Media ▸ Save Floppy As**, which a headless run does not have. So
+a scripted session could drive os8088 into saving a document and then only
+ask os8088 whether it worked, and **the writer and the reader are the same
+FAT12 code**: both halves agreeing on the same wrong thing is precisely what
+cannot be seen from inside (docs/FIELD-NOTES.md 4 is what that costs).
 
 `flush` is the missing menu item, reached from the socket, and
 **`tools/os88flush.py`** is what to do with the bytes on this side:
@@ -343,10 +736,7 @@ python3 tools/os88flush.py 127.0.0.1:9001 verify 0
 ```
 
 …and, in a scripted session, sharing the one connection the debug server
-allows (`Mouse(marty=m)`'s idiom, for `Mouse(marty=m)`'s reason — one instance
-takes one client, and a second is **refused**, with a sentence naming the one
-that holds it). Sharing the `Marty` shares the run directory too, which is
-what lets `Flush` resolve a mount path that is relative to *that instance*:
+allows:
 
 ```python
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img") as m:
@@ -357,570 +747,50 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img") as m:
     cfg = f.volume(0).read("SYSTEM.CFG")      # its exact bytes, on the host
 ```
 
+**`diff`, `dirty` and a bare `save` need the instance's run directory**,
+because the drive reports its image as a path relative to the emulator's
+working directory (`media/floppies/run0.img`). `Flush(marty=m)` takes it off
+a Marty that `launch()` returned; a `Marty(addr)` opened by hand, or the
+CLI, resolves against `build/martypc/run` and fails with *No such file* for
+an instance under `build/martypc/inst/` — pass `run_dir=` / `--run-dir
+build/martypc/inst/<tag>`, the directory of the log path `launch` printed.
+`ls`, `get`, `verify` and `save <path>` need no reference and work either
+way.
+
 The `Volume` class walks the BPB, the FAT and the directories itself, with no
-kernel code anywhere near it. That independence is the whole point, and it
-buys two things a guest-side check cannot: it sees the **hidden and system**
-files SPEC.md §19.6 marks and `disk_mount`'s species filter drops — a listing
-off a flushed system disk shows `KERNEL.SYS`, `SOUND.DRV`, `HDD.DRV` and
-`ASSOC.DAT`, none of which is visible from inside os8088 at all — and its
-`verify` hands the image to `tools/os88disk.py --verify`, the same structural
-fsck the build uses, so "os8088 is happy with this volume" and "this volume is
-coherent" stop being the same claim.
+kernel code anywhere near it. It sees the **hidden and system** files SPEC.md
+§19.6 marks and `disk_mount`'s species filter drops — a listing off a flushed
+system disk shows `KERNEL.SYS`, `SOUND.DRV`, `HDD.DRV` and `ASSOC.DAT`, none
+of them visible from inside os8088 — and `verify` hands the image to
+`tools/os88disk.py --verify`, the same structural fsck the build uses.
 
 Four things about it are load-bearing:
 
-- **It pauses the machine, and it has to.** A flush is a read of the image at
-  the instant it is asked for, and a save here is a multi-sector commit — data,
-  then the FAT, then the directory entry (SPEC.md §18.4). Caught mid-commit,
-  the volume that comes out is *genuinely* inconsistent, and it reads
-  afterwards as a corrupt disk rather than as a mistimed grab. Every verb
-  pauses, flushes and puts the machine back the way it found it, in both
-  directions.
+- **It pauses the machine, and it has to.** A save here is a multi-sector
+  commit — data, then the FAT, then the directory entry (SPEC.md §18.4) —
+  and caught mid-commit the volume that comes out is *genuinely*
+  inconsistent. Every verb pauses, flushes and puts the machine back the way
+  it found it.
 - **`writes` is not a dirty flag, and it looks exactly like one.** The count
-  in `disks` is fluxfox's `write_ct`. `post_load_process` sets it to **1** at
-  mount, so it never reads 0 — and for a raw sector image, which MartyPC loads
-  at BitStream resolution, it is never advanced at all: the one call that would
-  do it is commented out upstream (below). Measured here: it read 1 through a
-  Control Panel close that demonstrably wrote three sectors. `dirty()` compares
-  the **content** against the image the drive was mounted from, which is slower,
-  always right, and cannot rot.
+  in `disks` is fluxfox's `write_ct`; `post_load_process` sets it to **1** at
+  mount and for a raw sector image it is never advanced (the one call that
+  would is commented out upstream). It read 1 through a Control Panel close
+  that demonstrably wrote three sectors. `dirty()` compares **content**
+  against the image the drive was mounted from.
 - **A bare `save(drive)` writes back over the mounted image** — the menu's
-  *Save Floppy*, not *Save Floppy As* — which under `launch()` is the session's
-  private copy in the run tree. That is usually what you want, and it destroys
-  the only pristine copy `diff` and `dirty` have to compare against. Name a
-  path when you want to keep the reference.
-- **The emulator writes the file, so the path is the emulator's.** Its working
-  directory is the run tree, so a relative path lands there rather than beside
-  you; every verb here hands the server an absolute path and reads the result
-  back itself.
-
-Verified end to end on `os8088_5150_cga_gla`: a fresh boot is `dirty() ==
-False`; a Control Panel change plus a close puts `SYSTEM.CFG` in `added`, with
-sectors 1, 3, 5 and 268 differing — the two FAT copies, the root directory and
-the file's data cluster, which is SPEC.md §18.4's commit order made visible
-from outside the machine for the first time — and the file reads back 86 bytes
-beginning `O88CFG`. `get 1 APPS/HELLO.O88` off the live disk is byte-identical
-to `build/hello.o88`.
-
----
-
-## Build and run
-
-Needs `cargo` (Rust) and, on Linux, `libudev-dev` + `pkg-config` — MartyPC
-depends on `serialport`, whose build script hard-fails without them.
-
-### Installing the deps in a fresh Ubuntu container
-
-**This whole subsection is about ONE environment**: a fresh Ubuntu container,
-which is what an agent session gets. **A Mac has never had either problem** —
-`tools/setup-macos.sh` installs through Homebrew and neither of the two apt
-failures below exists there. (What the Mac script does *not* install is Rust,
-so `make marty` on a Mac wants `cargo` put in front of it by hand.)
-
-**`apt-get update` FIRST, before anything else.** The shipped index names
-`libudev-dev_255.4-1ubuntu8.14`, which has been superseded and removed from
-the pool, so installing it straight off 404s — and since this is the default
-test target, that 404 is the first thing a session hits. A refresh is the
-whole fix; it resolves to a version that exists (`…8.16` today) and installs.
-
-```sh
-apt-get update                       # the shipped index is stale; this is slow
-apt-get install -y --no-install-recommends libudev-dev pkg-config
-```
-
-**...and if `apt-get update` refuses to update anything**, saying
-
-```
-E: gpgv, gpgv2 or gpgv1 required for verification, but neither seems installed
-```
-
-while `/usr/bin/gpgv --version` answers perfectly well, the missing thing is
-not gpgv: apt drops to the unprivileged `_apt` user to fetch and verify, and in
-a container whose filesystem that user cannot traverse the check fails with
-that sentence. **Run the update and the install with the sandbox off**:
-
-```sh
-apt-get -o APT::Sandbox::User=root update
-apt-get -o APT::Sandbox::User=root install -y --no-install-recommends \
-        libudev-dev pkg-config
-```
-
-The failure is worth recognising by shape rather than by text, because it does
-not look like a permissions problem from either end: the index silently stays
-stale, so the install then 404s on `…8.14` exactly as it does with no refresh
-at all, and the cure above reads as unrelated to the error it fixes. A plain
-`apt-get update` that ends in `W: Some index files failed to download` having
-touched nothing is the tell.
-
-**Do not pin a version here.** Skipping the deps entirely does not fail at apt
-at all: it fails minutes later inside cargo, on `serialport`.
-
-**`qemu-system-x86` fails the same way and needs the OPPOSITE fix**, which is
-why the two are written down together — the shapes look identical and the
-cures are inverted. The index lists the `noble-updates` build, whose `.deb`
-404s on `archive.ubuntu.com` and then times out against
-`security.ubuntu.com`, so a plain install burns several minutes and fails.
-Pin all three packages to the **base** noble version:
-
-```sh
-V='1:8.2.2+ds-0ubuntu1'              # the BASE version, NOT -updates
-apt-get install -y --no-install-recommends \
-        "qemu-system-x86=$V" "qemu-system-common=$V" "qemu-system-data=$V"
-```
-
-`-t noble` is **not** enough — it still resolves to the `-updates` version.
-`--no-install-recommends` skips the gstreamer/libcaca display extras, which
-404 the same way and which a headless `-display none` run never touches.
-
-So: **`libudev-dev` wants the NEWER version a refreshed index names, because
-the stale entry has been superseded; QEMU wants an OLDER one than the index
-names, because the `-updates` build is the broken one.** Applying either
-cure to the other package reinstates exactly the 404 you are trying to
-escape. `pkg-config` installs normally either way.
-
-If a previous attempt is wedged, clear `/var/lib/dpkg/lock-frontend` and run
-`dpkg --configure -a` first — and **do not `pkill -f apt-get` from inside a
-Bash tool call**, because the pattern matches the calling shell and kills it.
-
-```sh
-tools/martypc/build.sh              # clone at the pin, patch, stage, build
-cd build/martypc/run
-MARTYPC_DEBUG_ADDR=127.0.0.1:9001 ./martypc_headless \
-    --mount fd:0:media/floppies/os8088-360.img &
-
-python3 tools/os88marty.py 127.0.0.1:9001 run
-python3 tools/os88marty.py 127.0.0.1:9001 verify
-```
-
-`--mount fd:N:path`, not `floppy:` — the device word is `fd`, `hd` or `cart`.
-Copy `build/os8088-360.img` into `build/martypc/run/media/floppies/` first.
-
-**The machine starts PAUSED**, whatever `auto_poweron` says, and `run` starts
-it. A debugger that attaches to a machine already millions of cycles into its
-boot cannot breakpoint anything it wanted to watch, and "it had already
-happened" is the one failure a debugger must not have.
-
-### From a script: `os88marty.launch`
-
-Do not hand-roll the above in Python. Every scripted session needs a fresh
-emulator, every one of them wrote the same twenty lines, and essentially all
-of this harness's lost time is in those twenty lines — none of whose failures
-announce themselves.
-
-```python
-import os88marty
-from os88mouse import Mouse
-
-with os88marty.launch("build/os8088-360.img",
-                      apps="build/apps360.img",
-                      machine="os8088_5150_cga") as m:
-    mo = Mouse(marty=m)                 # ONE connection, shared
-    mo.dblclick(608, 105)
-    os88marty.settle(m)                 # ...instead of time.sleep(4)
-    m.vram("cga")
-```
-
-- **Every instance is isolated, and it takes no argument.** `addr=None` — the
-  default — has the emulator ask the OS for a free port under its own bind
-  and publish what it got, and the machine runs in a private directory under
-  `build/martypc/inst/`. Two of these in one checkout do not see each other:
-  two terminals, two agents, two rows of the suite. The address is on the
-  object afterwards (`m.addr`, `m.port`), which is what to hand to
-  `tools/os88mouse.py`.
-- **It reaps orphans and nothing else.** An emulator whose owning script died
-  is a survivor nobody will close, so it is killed by PID; a live instance
-  with a live owner is left alone. That second half is the whole point:
-  `launch()` used to sweep **every** `martypc_headless` on the box before
-  starting its own, so two harnesses in one tree took turns killing each
-  other's machines and the loser saw `BrokenPipeError` from a socket to a
-  process that no longer existed — every symptom pointing at the emulator or
-  the guest while the cause was somewhere else. `kill_all()` is that sweep,
-  kept as a deliberate act (`os88marty.py kill-all --yes`) and never automatic.
-- **Never `pkill -f martypc_headless` and never `pgrep -f`.** The pattern
-  matches the calling shell's own command line, so `pkill` can kill the
-  caller and `until ! pgrep -f …` never finishes. The `[m]artypc` bracket
-  dodge fixes only the first of those — and it would now also kill everybody
-  else's instance, which is the damage this layer exists to prevent.
-- **It owns the process.** `close()` — or leaving the `with` — kills it, on
-  the failure paths too, so one session cannot leak a survivor onto the next.
-  It also takes the instance's media with it, so read a disk *inside* the
-  `with`, not after it.
-- **It checks the PROCESS, not just the cycle count.** `ping` reports the
-  emulator's pid and `launch` compares it against the one it spawned:
-  `cycles == 0` says the machine has not run yet, which a stale emulator
-  paused at the start of its own boot also says.
-- **Each floppy is copied into the instance's own run directory.** The guest
-  WRITES to a mounted image (`SYSTEM.CFG`, saved files), so a run would
-  otherwise dirty `build/` — and a *shared* run directory meant one
-  `media/floppies/run0.img` for everybody, which is a second session booting
-  the first's disk. A machine with a hard disk gets its own clone of the VHD
-  for the same reason.
-- **`os88marty.py instances` is the first thing to type** when a session
-  behaves as though something else is driving the machine. It lists what is
-  running, whose it is, and whether the owner still exists; `reap` clears the
-  orphans; `kill-all --yes` is the hammer.
-
-```
-$ python3 tools/os88marty.py instances
-PORT   PID     MACHINE                OWNER      AGE     LABEL
-38193  13983   os8088_5150_cga_gla    13979 running  12s   dispdrag.py
-43121  13987   os8088_5150_cga_gla    13979 running  11s   dispdrag.py
-```
-
-`settle(m)` is the wait, and it replaces every `time.sleep(4)`: it returns
-once two rendered frames a second apart are identical, which an os8088 screen
-only is between events. `launch` uses it with a gate for the boot, and the
-gate is not optional — the two obvious ones are both wrong:
-
-- **Stillness alone returns during the BIOS POST**, which sits perfectly
-  still for seconds before the floppy is touched. Measured: an 8.3-second
-  "boot" showing a quarter of the desktop's lit pixels.
-- **"Has the card left text mode" hangs on Hercules.** MartyPC's MDA reports
-  text mode forever, in graphics mode as in any other.
-
-So the gate is the **desktop**, sampled through `vram` on the 1bpp cards and
-`fbuf` on VGA — because `vram` is impossible on VGA and is the *exact* answer
-on the other two, where `fbuf` comes back cropped to a display aperture. **On a
-Hercules that crop is `(−16, +2)`: guest (x, y) renders at `fbuf` (x−16,
-y+2)**, over a 720x350 window on a 720x348 framebuffer. Measured, not assumed,
-and measured twice independently — `fbuf` scanned against `vram` over one
-desktop agrees on **2,280 of 2,280** sampled pixels at that offset and at no
-other, and a second correlation over a different desktop put the mismatch at
-**0.0000 at dx = −16, dy = +2** across 4,992 samples. The horizontal half of it
-had been written down here for a while; the vertical half had not, and a pixel
-gate that compares `fbuf` against anything else needs both.
-
-**It is THREE facts, and it was one.** The gate used to be the menu bar's
-white field alone, which is *nearly* enough — `wm_paint_all` draws the
-dither, the drive zones and the dock **before** the bar, so the bar going up
-means the rest is already there — but "nearly" was carrying the whole
-argument, and everything after a boot gate is measuring a machine it believed
-was ready. So the bar is tested the way SPEC.md §12 defines it, white field
-**and** the 1px black rule under it, and the **dock strip** as well: the first
-thing on the screen and the last. Measured from reset at 8 Hz, field / rule /
-dock —
-
-| | field | rule | dock |
-|---|---|---|---|
-| POST text | 0.26 | **0.25** | 0.25 |
-| splash | 0.00 | 0.00 | 0.00 |
-| CGA desktop | 0.93 | 0.00 | 0.96 |
-| Hercules desktop | 0.94 | 0.00 | 0.96 |
-| VGA desktop | 1.00 | 0.00 | 0.96 |
-
-— and the rule is what rejects POST text, which is the one screen here whose
-top band is genuinely lit.
-
-**And the gate and the stillness test read the screen ONCE, together.** They
-used to read it independently, one round trip apart — and this emulator runs
-the guest **several times faster than real time** (measured: a CGA boot is
-25.8M cycles, 5.4 guest seconds, in 1.25 s of host), so a round trip is tens
-of milliseconds of *guest* time, which is most of a desktop paint on a 4.77MHz
-machine. Two reads can therefore report a state that never existed: a probe
-built that way reported the menu bar up while the same screen was 26% lit, on
-a machine whose desktop is 56% and whose bar goes up last. That is a lie about
-the guest produced entirely by the instrument, and it is the same family as
-the offset crop above — **when the host is fast, two questions asked
-separately are two questions asked about different machines.**
-
-Measured boots: **CGA 4.6 s, Hercules 4.7 s, VGA 7.1 s** on this container,
-against 17.5 / 16.1 / 7.1 on the one those figures were first taken on and a
-26-second fixed sleep before that. The spread between the two containers is
-the point: a number that is a property of the HOST is exactly what `settle`
-exists so that nothing has to hard-code.
-
-**`card=` is not optional on a two-card machine.** `settle`, `launch` and
-`_Screen` ask `video` with no card by default, which answers MartyPC's
-**primary** — and os8088 need not be driving it: a `make VIDEO=herc` kernel on
-`os8088_5150_both_gla` draws on the Hercules while the config's first
-`[[machine.video]]` is the CGA. The boot gate then watches a card nothing is
-drawing on and times out after 120 seconds saying *"this machine never
-finished booting"*, about a machine that booted fine. Pass
-`launch(..., card=1)`; a caller running `settle` itself passes
-`gate=desktop_up, card=<idx>`, the card belonging to `settle` rather than to
-the predicate. `advance(frames=…)` takes it too, and there it decides which
-card's 50Hz or 60Hz is being counted.
-
-This paragraph used to say `fbuf` was **dead** on Hercules — that the MDA does
-not rasterise graphics mode at all — and that is not true at the pinned build:
-a real os8088 Hercules desktop measures **136,617 lit of 252,000 (54.2%)**
-through `fbuf` against **55.7%** through `vram`, the two agreeing to within the
-aperture crop. See the correction under `flicker` below.
-
-### Several at once
-
-**Two agents, two terminals or two rows of the suite can drive MartyPC in one
-checkout, and nothing has to be arranged between them.** That is new. It used
-to be one emulator per box — not by oversight but by a fix that overshot:
-
-> A survivor from a previous run kept port 9001. The new emulator could not
-> bind, said so only in its log, and the client then drove the **stale**
-> machine — a different image at a different point in its boot, which reads as
-> a hang or as a change that did nothing. So `launch()` killed **every**
-> `martypc_headless` before starting its own. That is right for a survivor and
-> fatal for two sessions: each new launch killed the other's running machine,
-> and the victim saw `BrokenPipeError` from a socket to a process that no
-> longer existed. Two things made it hard to see. The sweep killed *before* it
-> started, so the two emulators never coexisted and a `ps` showing one process
-> looked like proof that nothing was competing. And a MartyPC that lost the
-> race did not exit — it ran on headless and unreachable for ever, which is
-> where the next run's survivor came from.
-
-Three things were shared and are not:
-
-| | was | is |
-|---|---|---|
-| the port | fixed 9001, probed for | **the OS picks it under the emulator's own bind** (`MARTYPC_DEBUG_ADDR=…:0`) and the emulator writes it to `MARTYPC_DEBUG_PORTFILE` |
-| the run tree | one `build/martypc/run`, one `media/floppies/run0.img` per **drive** | one directory per **instance** under `build/martypc/inst/`, read-only parts symlinked, floppies, VHDs and the log real and private |
-| the process table | swept by pattern | a registry per instance, and `reap()` kills only what nobody owns |
-
-**Asking the OS for the port is the part that has to be in the emulator**, and
-it is why this needed a patch rather than a wrapper. Picking a quiet port from
-the client and then launching is a race — the probe has let the port go by the
-time the emulator asks for it, so two launchers a millisecond apart pick the
-same free port and the second one dies. `debug_server.rs` binds port 0 and
-publishes what the kernel gave it; nothing probes.
-
-```python
-with os88marty.launch(IMG, label="herc") as a, \
-     os88marty.launch(IMG, machine="os8088_5150_herc_gla", label="cga") as b:
-    ...                             # two machines, no arrangement
-```
-
-Three failures are gated rather than left to be discovered:
-
-- **A second client on one instance is refused in words.** It used to sit in
-  the accept backlog: `connect()` succeeded and the first read blocked until
-  the timeout — sixty seconds of nothing, reported as a hung guest. The server
-  now accepts and answers `{"ok": false, "busy": true, …}` naming the client
-  that holds it, and `Marty` turns that into one sentence. Sharing is still
-  the answer within a session: `Mouse(marty=m)`, `Flush(marty=m)`.
-- **A bind that fails is fatal and says so on stderr**, not only through
-  `log::`, whose level is a config away from being off. An emulator nothing
-  can talk to must not keep running: it holds the port against the next run.
-- **A port somebody else holds is an error that names them.** `launch(addr=…)`
-  checks the registry first, so pinning a port on purpose cannot silently
-  attach to the wrong machine.
-
-#### How many, and what stops you
-
-**There is no hard cap.** Nothing in `os88marty.py` refuses a launch — a
-refusal there would be a new way to lose work, which is the thing this layer
-exists to remove. What there is is one line on stderr when the count goes past
-the box's core count, and the ceiling is that count, measured rather than
-assumed. Aggregate guest speed against a real 4.77 MHz 8088, on a four-core
-container:
-
-| instances | per instance | aggregate |
-|---|---|---|
-| 1 | 3.42x | 3.4x |
-| 2 | 3.37–3.48x | 6.9x |
-| 4 | 2.96–3.43x | **13.1x** |
-| 6 | 1.96–2.88x | 13.9x |
-| 8 | 1.64–1.71x | 13.4x |
-
-It is **flat past the core count**. The ninth instance does not make the box
-do more work; it makes the other eight slower. That is the whole of the
-answer to "how many" — one per core, and the warning fires exactly there.
-
-Nothing else binds first. An instance is **~50–100 MB of RSS** and **~1 MB of
-disk** — the run tree symlinks everything read-only, and the 32 MB VHD is
-reflinked where the filesystem can (`cp --reflink=auto`, 3 ms against 113 for
-a real copy), so it costs nothing until something writes to it. Ports come
-from the ephemeral range, thousands of them.
-
-**Going past the ceiling is not broken, only slower.** At eight on four cores
-each guest still runs at **1.66x real time** — faster than the hardware it
-emulates — so what is lost is wall-clock and the slack in whatever is counting
-it: `settle`'s patience, an `until` limit, a suite row's timeout. Guest
-**cycle** counts, `disk()` counts and pixel comparisons are unchanged at any
-oversubscription, being counted rather than timed. `OS88_MARTY_MAX` moves the
-warning if you have decided otherwise.
-
-The core count is read as the narrowest of the hardware, this process's
-affinity **and any CFS quota** — a container can see four cores, be pinned to
-four, and be throttled to two cores' worth of time, which is the normal shape
-of a CI runner and of the container an agent works in.
-
-Measured end to end, four emulator rows through `os88test.py`: **175.6 s at
-`--marty-jobs 1`, 85.9 s at 3**, with each row 6–10% slower and none of them
-failing. A second sample, four soak rows drawn at random from the 79 eligible
-(soak, emulator, no `make`) and run at the core count itself:
-
-| row | solo | four at once |
-|---|---|---|
-| `sizesnap` | 25.0 s | 29.0 s (+16%) |
-| `fmthumb` | 30.1 s | 36.9 s (+23%) |
-| `drvcall` | 56.3 s | 62.7 s (+11%) |
-| `fmcommit` | 75.3 s | 83.9 s (+11%) |
-| **wall** | **186.8 s** | **83.9 s** |
-
-All four pass either way. **The cost lands on the clock and nowhere else** —
-which is the property that makes N agents on one box safe: an agent that takes
-a core off another agent lengthens their run and cannot invalidate it.
-
-**What that puts at risk is a HOST-CLOCK ASSUMPTION**, and there are three of
-them thin enough to name: `tests/bouncecost.py` (`wait_stop(limit=8.0)`),
-`tests/modstr.py` (`watch_toast(limit=8.0)`) and `tests/paintcull.py`
-(`wait_stop(limit=10.0)`) each give guest work a single-figure window of host
-seconds. All three were then run at **eight instances on four cores** — five
-detached load machines plus the three rows together — and all three passed:
-
-| row | idle box | 8 on 4 |
-|---|---|---|
-| `bouncecost` | 13.0 s | 22.2 s |
-| `modstr` | 53.3 s | 65.3 s |
-| `paintcull` | 67.9 s | 76.3 s |
-| **wall** | **134.2 s** | **76.3 s** |
-
-They survive because two of the three **retry** rather than assert on the
-window — `bouncecost` presses the menu up to six times, `paintcull` loops
-`wait_stop` — so a missed window costs a retry. `modstr` does not retry, and
-its risk runs the *other* way: a slower guest holds a toast up for longer in
-host seconds, which makes it easier to catch, not harder. Everything else has
-room by a wide margin: `settle` allows 120 s for a 7.6 s boot, and a suite
-row's timeout is `4x` its declared seconds.
-
-**Note what an IDLE guest costs**, because it changes the arithmetic above: at
-eight instances the load machines ran at **2.85x** real time, not the 1.66x
-the saturation table predicts. An idle os8088 desktop is 96.9% halted
-(SPEC.md §8.1.2), and halted cycles are cheap to emulate — so "eight agents"
-is only the worst case when all eight are actively driving their machine.
-
-#### The bug that eight-at-once found
-
-Running eight killed a load instance dead, silently: no log line, no panic,
-nothing but a socket that closed. It was **not** contention. `pid_max` on that
-container is 32,768, so a session launching emulators steadily **wraps the PID
-counter in minutes** — and it had: a finished row's registry record and a live
-instance both named pid 1666. `reap()` read the stale record, asked *"is 1666
-a live martypc_headless?"*, got **yes — somebody else's**, called it an orphan
-and killed it. That is exactly the failure this whole layer exists to remove,
-reintroduced one level down, and a PID alone cannot tell the two apart.
-
-A record is pinned to a **process** now, not a number: `(pid, start time)`,
-read from field 22 of `/proc/<pid>/stat` (after the last `)`, because the comm
-field can contain both spaces and parentheses) or from `ps -o lstart=` on
-Darwin. One predicate, `_killable`, gates every signal — the record must carry
-a start time, that PID must be a `martypc_headless` **started at that time**,
-and the record must not already be retired. A record that cannot identify its
-process is left entirely alone, record and process both: retiring one whose
-process may still be running is how a live instance becomes invisible.
-`tests/martyconc.py` fabricates both shapes (a wrong start time, and a record
-with none) against a live instance and asserts it survives — fabricated
-because reproducing a real wrap takes 32,768 processes, and the failure it
-produces is indistinguishable from the emulator having crashed.
-
-#### A bench that outlives the command
-
-A session that boots once and then pokes at the machine from several separate
-commands — which is what an agent at a terminal is doing, and what
-`tools/notepad/` is built around — wants an emulator that is nobody's to
-close. `launch(detach=True)` is that, and the CLI wraps it:
-
-```
-$ python3 tools/os88marty.py launch build/os8088-360.img --apps build/apps360.img
-127.0.0.1:34447
-  pid 18146, os8088_5150_cga, log build/martypc/inst/18142-bench-1/martypc.log
-  it OUTLIVES this command. `os88marty.py instances` lists it,
-  `os88marty.py kill 34447` ends it.
-
-$ python3 tools/os88mouse.py 127.0.0.1:34447 dblclick 608 105
-$ python3 tools/os88marty.py 127.0.0.1:34447 shot /tmp/desk.png --rendered
-$ python3 tools/os88marty.py kill 34447
-```
-
-A detached instance has **no owner on purpose**, which is the one thing that
-distinguishes it from an orphan — so `reap()` leaves it alone for ever and
-`kill` is how it ends. That is the trade: a bench you forget about is a core
-you have lost until you `instances` and notice it.
-
-`tests/martyconc.py` is the gate: separate ports, directories, disks and
-memories; a refusal that arrives in under a second and names the holder; and
-`reap()` taking an orphan while leaving a live, owned instance alone. Every
-one of those failures is silent — two instances sharing a floppy do not error,
-one of them boots the other's disk — which is why it is a `full`-tier row
-rather than a soak one.
-
-### `until(m, cond, what)` — the wait for work that draws nothing
-
-`settle` watches pixels, so it is **silently wrong for anything that holds
-the gfx lock for its whole run**. A hard-disk install freezes the UI while it
-copies: the screen is *more* still while it is busy than when it is done, so
-`settle` sees stillness about five seconds in and returns — and a
-`with launch(...)` block then kills the emulator mid-copy. Nothing about that
-looks like a wait ending early. It looks like the install stopping halfway,
-which is a bug in the installer, and it is where this call came from.
-
-Ask about the thing instead. `cond` is called with the Marty each round and
-may look wherever the answer actually is — guest memory, or the **host** side
-of a mounted image, which is usually the better one because a commit tends to
-be a single write you can watch for:
-
-```python
-STUB = bytes.fromhex("fa31c08ed88ec08ed0bc007c")   # hd_bootstub's opening
-os88marty.until(m, lambda _: open(vhd, "rb").read(12) == STUB,
-                "the installer to commit the MBR")
-```
-
-SPEC.md §52.10 writes the partition table **last**, as the commit, so that
-one comparison is an exact "the install finished" and needs no offsets and no
-`DISKCNT=1` kernel.
-
-It separates the two ways the wait fails, because they want different fixes.
-A guest that has **stopped executing** can never satisfy any condition, so it
-says which state and where — `the guest is 'breakpoint' at 0060:3C21 and is
-not executing` — rather than blaming the condition. That is the shape a
-still-armed breakpoint takes, and it is exactly what cost a session an
-afternoon above. Everything else is an honest timeout that says the guest is
-still running, so the limit is too short or the condition is asking about the
-wrong thing.
-
-**Pick by whether the screen is the evidence**: `settle` for a boot, a click
-or a repaint; `until` for a format, a copy, an install, a save — anything
-whose progress is on a disk rather than on the glass.
-
-**And widening `settle`'s window to cope is the trap on the other side, which
-now raises.** Reaching for `settle(m, quiet=30, limit=2400)` on an install
-looks like patience and is unsatisfiable: `stable` identical samples `quiet`
-apart is `stable * quiet` **host** seconds of unchanged screen, the menu
-bar's clock changes once a **guest** minute, and the guest runs *faster* than
-real time — so at 3.3x a 60-host-second window spans three ticks and no two
-samples can ever agree. It waits out the whole limit and then blames the
-guest. Measured: an install driven that way sat for **40 minutes** with the
-install long finished, and was reported as os8088 being slow. `settle` now
-samples the cycle counter first and refuses a window it can prove cannot
-close, naming `until` in the message.
-
-**The install itself is 64 guest seconds** (counters polled rather than
-pixels watched: floppy traffic goes quiet 63.6 s after the confirm click,
-1,250 sectors in 162 reads, 100 seeks over 583 cylinders, ending on *Done —
-remove the floppy, Restart* with C: mounted). That is ~19 s of host time
-here, and it matches the field machine's "under two minutes". **So the floppy
-timing patch is NOT implicated in that 40 minutes** — worth stating because
-it is the natural suspect, being the most recent thing to make the disk
-slower on purpose. Its modelled cost for that run is 28.1 s of transfer and
-4.7 s of seek: 22.4 ms per sector against the field's measured ~24 ms
-(Set 24's 21,307 B/s), and 8.0 ms per cylinder stepped. Both are right, and
-neither adds up to 40 minutes of anything.
-
-### Naming a kernel flag: `os88sym`
-
-`m.sym("fpg_on")` is the address of a kernel symbol, and `python3
-tools/os88sym.py --all` lists every one. **Do not take an address out of
-`nasm -l`'s listing** — for anything in `.bss` both the address column and
-the bracketed operand bytes are section-relative and fixed up afterwards, so
-`menu_bovr` reads as `0x0879` there and is at `0xCBA4` in the binary. That is
-a plausible small number pointing into `.text`: reading a byte from it
-succeeds, returns something, and means nothing. Two sessions have lost time
-to it, one of them concluding a feature was broken from a flag that was never
-the flag.
-
-`os88sym` uses `nasm`'s `[map]` directive on a *temporary copy* of
-`kernel/kernel.asm` — `kernsize.py`'s idiom — and asserts the result is
-byte-identical to `build/kernel.bin`, so a map describing a different kernel
-is an error rather than a subtly wrong answer. A knob build moves everything:
-pass the same `-D`s (`--define DISKCNT=1`).
+  *Save Floppy*, not *Save Floppy As* — which under `launch()` is the
+  session's private copy. That destroys the only pristine copy `diff` and
+  `dirty` compare against; name a path to keep the reference.
+- **The emulator writes the file, so the path is the emulator's.** Its
+  working directory is the run tree, so a relative path lands there rather
+  than beside you; every verb hands the server an absolute path and reads
+  the result back itself.
+
+Verified: a fresh boot is `dirty() == False`; a Control Panel change plus a
+close puts `SYSTEM.CFG` in `added`, with sectors 1, 3, 5 and 268 differing —
+the two FAT copies, the root directory and the file's data cluster, SPEC.md
+§18.4's commit order seen from outside. `get 1 APPS/HELLO.O88` off the live
+disk is byte-identical to `build/hello.o88`.
 
 ---
 
@@ -928,198 +798,123 @@ pass the same `-D`s (`--define DISKCNT=1`).
 
 ### Which of them a DISK number may come off
 
-Read this before quoting a floppy figure from any of them, because the answer
-is not "all of them" and the difference is 1.61x rather than a rounding error.
-
-**The drive is the same everywhere and that is measured** (PERFORMANCE.md Part
-9 Set 38). One `combo.img` booted on all eighteen machines, with `m.disk()`
-read from outside the guest, puts **six of them bit-identical** — 24 reads,
-186 sectors, longest run 9, 29 seeks, 54 cylinders, 432.0 ms of seek — across
-CGA, Hercules, a two-card machine, a Sound Blaster with no OPL, a 720KB drive
-as B: and a four-drive machine. There is no per-machine drive constant and
-nothing to tune: the Tandon TM100-2 does not care what is in the next slot.
+**The drive is the same everywhere and that is measured** (PERFORMANCE.md
+Part 9 Set 38): one `combo.img` on every machine, with `m.disk()` read from
+outside, puts the IBM-ROM ones bit-identical — 24 reads, 186 sectors, longest
+run 9, 29 seeks, 54 cylinders. There is no per-machine drive constant.
 
 **The BIOS is not the same, and it is what the number is made of.**
 
 | class | machines | a disk TIMING here is… |
 |---|---|---|
-| **IBM ROM, 5150** | `_cga`, `_herc`, `_both`, `_sb`, `_sbonly`, `_sb_128k`, `_sb_256k`, `_cga_720b`, `_cga_4fdd` | **field-comparable.** `sysbench`'s raw block lands 9–10 of 11 rows within one measurement quantum of docs/FIELD-MACHINES.md's 5150, 6–8 of them exactly |
-| **GLaBIOS** | `_cga_gla`, `_herc_gla`, `_both_gla`, `_both_gla_mono`, `_cga_1fd`, `_xt_vga`, `_xt_vga_sb`, `_xt_hdd`, `_xt_hdd_sb` | **counts yes, seconds no.** A track read is **1.61x** lighter, and nine one-sector reads cost *the same as one* track read where the IBM ROM pays ten revolutions |
+| **IBM ROM** (`rom_set = "ibm5150_82_v4"`) | `os8088_5150_cga`, `_herc`, `_both`, `_sb`, `_sbonly`, `_sb_128k`, `_sb_256k`, `_cga_hdd`, `_cga_720b`, `_cga_4fdd`, `_cga_ext720` | **field-comparable.** `sysbench`'s raw block lands 9–10 of 11 rows within one measurement quantum of docs/FIELD-MACHINES.md's 5150, 6–8 of them exactly |
+| **GLaBIOS** (`glabios_pc` on a 5150, `glabios_xt` on a 5160) | every `_gla` machine, every `os8088_xt_*`, `_cga_128k`, `_cga_1fd`, `_cga_lpt`, `_gla_192k`, `_gla_128k` | **counts yes, seconds no.** A track read is **1.61x** lighter, and nine one-sector reads cost *the same as one* track read where the IBM ROM pays ten revolutions |
+| **field clone ROMs** | `os8088_compaq_revh`, `os8088_eagle_spirit`, `os8088_columbia_mpc` | SPEC.md §18.93.2's question only |
 
-That last one is not an emulator artifact. On 1:1 media sector *n+1* follows
-*n* immediately, so nine separate reads fit one revolution **if the BIOS turns
-a call around inside one sector time (22 ms)**. GLaBIOS does; the 1982 IBM ROM
-cannot, its head-settle loop alone being 52.5 ms (Set 37).
+The 1.61x is not an emulator artifact: on 1:1 media sector *n+1* follows *n*
+immediately, so nine separate reads fit one revolution **if the BIOS turns a
+call around inside one sector time (22 ms)**. GLaBIOS does; the 1982 ROM
+cannot, its head-settle loop alone being 52.5 ms.
 
-**No single machine is "the calibration", including `os8088_5150_herc`.**
-Which rows land exactly shuffles between the three IBM machines measured —
-`_cga` nails both track rows and misses `seek 5 cyl`, `_herc` the reverse —
-because a row sitting on a 13,731 µs quantum boundary falls whichever side the
-guest's turnaround puts it. Quote the **class**, not the machine.
+**No single machine is "the calibration".** Which rows land exactly shuffles
+between the IBM machines — `_cga` nails both track rows and misses `seek 5
+cyl`, `_herc` the reverse — because a row on a 13,731 µs quantum boundary
+falls whichever side the guest's turnaround puts it. Quote the **class**, not
+the machine.
 
 ### The list
 
 `tools/martypc/configs/os8088_machines.toml` is appended to MartyPC's own
-`ibm5150.toml` by `build.sh`:
+`ibm5150.toml` by `build.sh`; each stanza's own comment is the fuller
+account. Every machine is 640 KB unless the row says otherwise. Which ROM a
+machine runs is its `rom_set` line: `ibm5150_82_v4` is the period ROM (not in
+this tree), `glabios_pc`/`glabios_xt` are bundled with MartyPC.
 
 | config | what it is |
 |---|---|
-| `os8088_5150_cga` | the default: IBM 5150, 8088 at 4.77MHz, 640K, CGA, real 1982 IBM BIOS |
-| `os8088_5150_herc` | the same with a Hercules — MartyPC models it as an MDA **subtype**, so the block needs `subtype = "Hercules"` as well as `type = "MDA"`, and SPEC.md §39.1's probe is what decides |
-| `os8088_5150_cga_gla` | the same with GLaBIOS |
-| `os8088_5150_sb` | the same with an AdLib **and** a Sound Blaster (DSP 2.01, 0x220, IRQ 7) |
-| `os8088_5150_sb_gla` | `_sb` with **GLaBIOS**, which is the sound machine a CONTAINER can actually run: `_sb` above wants `ibm5150_82_v4` and that ROM is IBM's and is not in this tree, so until this stanza existed a fresh checkout had **no machine with a Sound Blaster in it at all** and every mixer measurement had to be taken somewhere else. Every other class already had its `_gla` twin. The one thing it is not good for is a DISK number — PERFORMANCE.md Set 38 puts GLaBIOS's `int 13h` at 1.61x lighter than the period ROM's — which a CPU-bound measurement taken with the drive stopped does not touch |
-| `os8088_5150_sbonly` | ...and with the FM half taken out: a DSP at 0x220 and **nothing at 0x388**. No real card is built that way, which is why it needs an emulator — it is SPEC.md §51.3.1's jumpered-off-FM case, and `_sb`/`_sbonly` are one pair with `make SNDSNIFF=sb` between them |
-| `os8088_5150_sb_128k` | `_sb` at the **RAM floor** — 128KB, `MIN_RAM_KB`. It tests the CLAIM HEAP under a sound card rather than the card: `HEAP_SEG` is at 91.5KB, so this machine has **36.5KB of heap** for the driver's image, its DMA buffer, its staging pool and the app, where `_sb` has 548.5KB and can never show a refusal. SPEC.md §34.6's two claims are sized against this machine and neither can be judged on the other one. Boot it with `launch(..., boot=2)` and wait on the desktop's own lit count — `settle`'s menu-bar gate fires on the splash here, because a slow machine holds a still frame for longer than the gate's patience |
-| `os8088_5150_gla_192k` | `_cga_gla` with **192KB** and nothing else changed — `[machine.memory]`'s `conventional.size` is the whole diff. It exists because every other config here is 640KB or is the 128KB one below, and neither can show what a machine in between does: with 76KB of heap it picks **7 of SPEC.md §18.95.5's 14 directory-cache slots**, where 640KB picks the ceiling and the fixed-size version picked nothing at all. `type` is the MOTHERBOARD and not the total — `_cga_gla` is `Ibm5150v256K` and comes up with 640K — so **check `[mem_top]` in the guest rather than the number in the file**: a first cut asked for 144KB and the guest came up with 192, which reads as the code ignoring the config rather than the config not taking |
-| `os8088_5150_gla_128k` | ...and at `MIN_RAM_KB`. **It does not reach a desktop**: GLaBIOS posts `RAM [ 128 KB OK ]` and nothing of os8088 ever draws. Measured on both sides of §18.95.5 and identical, so it is not that change — and `os8088_5150_sb_128k` above cannot be used to check it, because that one wants an IBM ROM this tree does not fetch. The note on `_sb_128k` puts `HEAP_SEG` at 91.5KB and today it is at 117KB, which is the first thing to look at if somebody takes this up. Left here as the instrument that found it |
-| `os8088_xt_vga` | an IBM 5160 XT with GLaBIOS and a VGA — SPEC.md §39's mode 12h |
-| `os8088_xt_vga_sb` | ...and the same XT with the AdLib + Sound Blaster pair, which exists **to be run with `--turbo`** — see below |
-| `os8088_xt_hdd` | the same XT with an **XT-IDE** controller — SPEC.md §52's rung 0 — **and a parallel port**, which makes it the one machine here where TWO drivers publish a Control Panel page at once (SPEC.md §31.9/§62.7). That is what exercises `drv_cp_class`'s ordinal-to-class walk rather than asserting it: Hard Drive lands on row 5 and Network on row 6 with class 3 unpublished in between, and on a machine with one page an off-by-one there is invisible |
-| `os8088_xt_vga_hdd` | the XT-IDE disk behind a **VGA**, which no other machine here offers — every hard-disk config above is 1bpp, and the loading screen's dialog, caption and percentage are VGA-only (SPEC.md §15.3). So the one path that draws chrome from the KERNEL rather than from stage 2 could not be looked at: a hard-disk boot has no loader that ticks, so `spl_step` starts the screen itself (§2.9.9.1) and enters `spl_rechrome` (§2.9.9.2), and on CGA that path returns before any of it. It matters more since §15.3.2, which blits the caption and the percentage out of the ROM 8×8 set: `spl_kfont` asks the BIOS for that set with an `int 10h` at the first glyph of the boot, and on every other machine here the first glyph is stage 2's. It shares `default_xtide.vhd` with the two rows above, so install once and boot either. **GLaBIOS's boot menu times out to A: before frame 300 here** — the VGA BIOS's own init pushes POST out — so press `KeyC` more than once, which `tests/hdboot.py`'s single press at frame 300 does not |
-| `os8088_5150_cga_hdd` | the same XT-IDE disk on a **5150 behind the PERIOD ROM**, which every other hard-disk machine here lacks — the rest are `Ibm5160` on GLaBIOS, so until this existed "a hard disk" and "the ROM the reporter runs" were two axes that could not be crossed. That matters because this tree already has one defect (SPEC.md §18.91's `AL`) that *only* the IBM ROM exposes, and because a field report arrives in this shape: docs/FIELD-MACHINES.md's machine is a 5150 with an ST-225 on an ST11M, where a controller's own option ROM is rung 0 exactly as XT-IDE is here. Needs the ROM this tree cannot ship, so a container without one runs the GLaBIOS twins only |
-| `os8088_5150_cga_lpt` | the CGA GLaBIOS 5150 with a **Centronics card at 0x378** — SPEC.md §62's machine, and the only other one here with a parallel port. MartyPC's `ParallelPort` has a readable data register, so `lp_latch` succeeds and the whole os8088 side of the link is testable: the scan, the attach, the publication, the page, and `net_connect` failing in bounded time. **IT CAN BE GIVEN A PARTNER, and this row said for two milestones that it could not** — the claim was that the status lines read a constant, and they do until something writes them: stock `lpt_port.rs` implements `status_register_write` and stores the byte the guest reads back, so the debug server's `outb` drives exactly the lines `lp_snib`/`lp_rnib` poll. `tests/lptlink/partner.py` is that far end in both roles (SPEC.md §62.10.3), and on this machine it has driven a handshake, a mount, a listing and a whole recursive **folder copy** (§62.10.6). No patch was needed; the capability was there the whole time and the row was the reason nobody looked. What is still out of reach here is the WIRE's verdict — timings, levels, a real cable — which is the 5150's question, and `tests/lptlink` is how it is asked.
+| `os8088_5150_cga` | the default: IBM 5150, 8088 at 4.77 MHz, CGA, real 1982 IBM BIOS |
+| `os8088_5150_cga_gla` | the same with GLaBIOS — the ROM itself A/B'd with nothing else changed, and the machine most rows in the tree run on |
+| `os8088_5150_herc` / `_herc_gla` | a Hercules. MartyPC models it as an MDA **subtype**, so the block needs `subtype = "Hercules"` as well as `type = "MDA"` (below) |
+| `os8088_5150_herc_gla_144` | ...with **1.44 MB drives**, for `make combo144`. An anachronism on purpose — no stock XT reads 500 kbps media — so what it proves is that **our** boot sector and FAT12 code handle 18 spt on an 8088. Take no PERFORMANCE.md number off it |
+| `os8088_5150_both` / `_both_gla` | **two cards**: a CGA *and* a Hercules, docs/FIELD-MACHINES.md's machine as it actually is (SPEC.md §39.11; `tests/dualcheck.py` runs `_both_gla` by default) |
+| `os8088_5150_both_gla_mono` | `_both_gla` with `video_dip = "mda"` (patch 03): the switches set to mono, so os8088 boots on the Hercules — the calibration machine's arrangement, and the only machine that reaches SPEC.md §39.11.1's `vid_cga_alias` |
+| `os8088_xt_vga` | an IBM 5160 XT with GLaBIOS and a VGA — SPEC.md §39's mode 12h. An XT because an 8-bit ISA VGA in a 5160 is a machine people built; a correctness instrument, never a timing one (the field has no VGA) |
+| `os8088_xt_vga_sb` | ...with the AdLib + Sound Blaster pair, which exists **to be run with `--turbo`** (below) |
+| `os8088_xt_vga_mda` / `os8088_xt_vga_herc` | a VGA beside an MDA / a Hercules — the other period two-card pair (docs/plans/completed/DUAL-DISPLAY-VGA.md). The apertures are disjoint (A0000+B8000 against B0000) so no patch is needed and block order decides nothing. The VGA is declared first, so it is MartyPC's card 0 |
+| `os8088_5150_sb` / `_sb_gla` | an AdLib **and** a Sound Blaster (DSP 2.01, 0x220, IRQ 7). `_sb_gla` is the one a container can run; not a disk instrument |
+| `os8088_5150_sbonly` | a DSP at 0x220 and **nothing at 0x388** — SPEC.md §51.3.1's jumpered-off-FM case; `_sb`/`_sbonly` are one pair with `make SNDSNIFF=sb` between them |
+| `os8088_5150_sb_128k` / `_sb_256k` | `_sb` at 128 KB and 256 KB: SPEC.md §34.6's two claims are sized against the small one; Tracker cannot run at 128 KB at all, so the 256 KB one decides whether a MOD player's grants fit. IBM ROM, so neither boots in a container |
+| `os8088_5150_cga_128k` | **the 128 KB floor machine** — `kern_small`'s own (`make small && python3 tests/small128.py`). GLaBIOS |
+| `os8088_5150_cga_gla_256k` | 256 KB on GLaBIOS: the Weave family's floor (WEAVE-SPEC §1.4, `tests/weaveone.py`) |
+| `os8088_5150_gla_192k` / `_gla_128k` | GLaBIOS at 192 KB and 128 KB, for SPEC.md §18.95.5's directory-cache width (192 KB picks 7 of 14 slots). `type` is the MOTHERBOARD and not the total — **check `[mem_top]` in the guest rather than the number in the file**: a first cut asked for 144 KB and came up with 192. `_gla_128k` never reaches a desktop with the shipped kernel, and that is the floor: `kern_big`'s `MIN_RAM_KB` is 196 and `kern_small`'s is 128 (docs/KERNEL-MEMORY.md), so 128 KB is `os8088_5150_cga_128k` with `make small` |
+| `os8088_xt_hdd` | the XT with an **XT-IDE** controller — SPEC.md §52's rung 0 — **and a parallel port**, so it is the one machine where TWO drivers publish a Control Panel page at once (SPEC.md §31.9/§62.7) |
+| `os8088_xt_hdd_sb` | ...and a Sound Blaster too: five volumes and two drivers at once, which is what the per-volume FAT windows (SPEC.md §18.8.1) can be counted on |
+| `os8088_xt_vga_hdd` | the XT-IDE disk behind a **VGA**, the only place the hard-disk boot's VGA-only loading chrome (SPEC.md §15.3, §2.9.9.1) can be looked at. GLaBIOS's boot menu times out to A: before frame 300 here — the VGA BIOS's own init pushes POST out — so press `KeyC` more than once |
+| `os8088_5150_cga_hdd` | the XT-IDE disk on a **5150 behind the period ROM** — the only crossing of "a hard disk" with "the ROM the reporter runs" (SPEC.md §18.91 is a defect only that ROM exposes). Needs the ROM |
+| `os8088_5150_cga_lpt` | a Centronics card at 0x378 — SPEC.md §62's machine. MartyPC's `ParallelPort` stores what the guest writes to the status register, so the debug server's `outb` can be the far end: `tests/lptlink/partner.py` has driven a handshake, a mount and a recursive folder copy on it (§62.10.3, §62.10.6). Two traps: `net_connect`'s reply deadline is ten GUEST seconds and the guest free-runs at ~4x, so a 6 s host settle is 24 guest seconds of nobody answering and `net_lost` fires with **no wire traffic at all** — click with a short settle and answer immediately; and `Partner.serve` **steps** the guest, so call `m.run()` afterwards |
+| `os8088_5150_cga_720b` | an **80-cylinder drive as B** — SPEC.md §18.96.2's machine, the only one where §22.12's Space key has something to toggle to. Declares `[machine.fdc]` itself. Put a non-FAT image of the size under test in B: the reach test is whether LBA 1439 can be written and read back |
+| `os8088_5150_cga_4fdd` | four drives — two internal and the pair on the 37-pin external connector (SPEC.md §18.97). The 1982 ROM copies SW1 into `0040:0010`, so this machine must report 4 where `_cga` reports 2 |
+| `os8088_5150_cga_ext720` | the field 5150's own drives plus an IBM 4865: two 360K, an 80-cylinder 720K as unit 2 and a 360K as unit 3 — SPEC.md §18.98's configuration, one machine carrying both of §18.96.2's answers |
+| `os8088_5150_cga_1fd` | **one** drive, which is what the field 5150 has — SPEC.md §18.97's regression half (an uncontested machine must be untouched) |
+| `os8088_compaq_revh`, `os8088_eagle_spirit`, `os8088_columbia_mpc` | XT-class **clone** BIOSes (`configs/os8088_field_roms.toml`), for SPEC.md §18.93.2: does this machine's FDC do the multi-track flip a cylinder-bounded run depends on? Boot `build/rdiag360.img` on each and read the map |
 
-**Two things to know before driving it.** MartyPC headless free-runs at about **4x real time** (measured: 74.0 guest ticks a wall second against 18.2), and `net_connect` leaves the reply deadline at `REPLY_TMO` = ten GUEST seconds — so a mouse `settle` of 6 s is 24 guest seconds of nobody answering, `net_lost` fires, and every verb after it is refused by the `NS_LINKED` gate with **no wire traffic at all**. That reads as a UI that does nothing, nowhere near its cause. Click with a short settle and answer immediately. And `Partner.serve` **steps** the guest, so it leaves it paused: call `m.run()` afterwards or `os88mouse` reports the next target as one it cannot reach. GLaBIOS on purpose: nothing here is a timing question, so this is one of the machines that runs in a container with no IBM ROM |
-| `os8088_5150_both` | **two cards**: a CGA *and* a Hercules, which is docs/FIELD-MACHINES.md's machine as it actually is. SPEC.md §39.11's adapter switching exists for this, and docs/DUAL-DISPLAY-PLAN.md is the study of driving both at once |
-| `os8088_5150_both_gla` | its GLaBIOS twin, and the one `tests/dualcheck.py` runs by default — the IBM ROM this tree cannot ship is what the other needs |
-| `os8088_xt_vga_mda` | **two cards, and one of them is a VGA.** Every other two-card machine here is a CGA beside a Hercules, so both of its displays are 1bpp and every question the extended desktop raises about a COLOUR display is unanswerable — which is most of them, because the paths that differ by bit depth are the interesting ones. SPEC.md §5.4.3's `gfx_blitp` refuses a 1bpp adapter *and* refuses a straddle, so on the mono-only machines a window dragged across the seam takes both refusals at once and one of them changes what the app stores (§42.13.1); §39.4's colour reduction only exists on the mono side; and §11.98's adapter change is a real change of DEPTH here rather than of size. The field has had one of these for a while — 86Box's `XTDualVideoVGA` — and every report off it arrived as a screenshot nothing here could reproduce, `tests/dispblitp.py`'s bug included. The VGA is declared first, so it is MartyPC's card 0; which of them os8088 calls display 0 is the Control Panel's business (§39.19.1) and `tests/dispcp.py`'s `set_primary` drives it either way |
-| `os8088_5150_herc_gla` | a single-card Hercules on GLaBIOS: `os8088_5150_herc` without the ROM, and the control for "does this card rasterise at all" with no second card to confuse the question |
-| `os8088_5150_herc_gla_144` | ...and the same machine with **1.44MB drives**, for `make combo144`. It exists because every other machine here takes `pcxt_2_360k_floppies`, so a 1.44MB image could be BUILT here and never BOOTED here. **It is an anachronism on purpose**: a 1.44MB disk wants 500 kbps and the IBM XT's 8-bit controller runs 250, so no stock XT reads one — it took a third-party 8-bit HD controller and a driver, and the 5150's own ROM tops out at 360KB whatever is plugged in. MartyPC models the DRIVE (`FloppyDriveType::Floppy144M`, `type = "1.44m"`) and has the one `IbmNec` FDC, so what this proves is that **our** boot sector and **our** FAT12 code handle 18 spt on an 8088 — not that the media is period. Measured: it boots to a desktop **byte-identical** to `combo.img` on `_herc_gla` (139,438 lit pixels on both) in **128.7M cycles against 151.7M**, because 18 sectors a track is fewer `int 13h` calls for the same kernel; a Disk window opens on the volume, which is the mount, the FAT snapshot, the root listing and the icon harvest's per-package first-sector read. Take no PERFORMANCE.md number off it, and put no 1.44MB disk in the calibration 5150 (docs/FIELD-MACHINES.md). Its `fdc` is declared INLINE rather than as an overlay, so no file of upstream's needs patching — `build.sh` copies `install/` wholesale and only ever APPENDS our machine file |
-| `os8088_5150_cga_720b` | the default with an **80-cylinder drive as B** — SPEC.md §18.96.2's machine. The 1982 ROM answers no `AH=08h` for a floppy, so `dskw_fmt_probe` reads a 360KB machine and offers 360K for a disk that could hold 720K; this is the only machine here where §22.12's **Space** key has something to toggle to. It drops the `pcxt_2_360k_floppies` overlay and declares `[machine.fdc]` itself, because the drives are the point — upstream's own `pcxt_4_360k_floppies` is the other one worth knowing about, and the FDC takes **four**. Put a non-FAT image of the size under test in B: the reach test's verdict is whether LBA 1439 can be written and read back, so a 1440-sector image passes and a 720-sector one takes the 360K fallback |
+**Two cards took two patches to make honest.** Upstream maps a
+Hercules-subtype MDA at B0000 **and** B8000 unconditionally, a CGA maps
+B8000, and `Bus::register_map` resolves the overlap by last writer wins — so
+one card silently vanished into the other, and which one depended only on
+block order. `patches/02-hercules-page1-decode.patch` narrows the Hercules to
+page 0, which is what a real card with 3BFh bit 1 clear decodes and what
+`vid_setmode` leaves it at (SPEC.md §39.6). The obvious test — write B0000,
+write B8000, read both back — does not catch it, because they are 32 KB
+apart inside one card's 64 KB; `tests/dualcheck.py` asks the *rasters*
+instead, and is verified to fail with patch 02 reverted. Then SPEC.md
+§39.1's `vid_detect` reads `int 11h` bits 5:4, which upstream *derives* from
+the card list ("any CGA present → CGA"), so no two-card machine could boot
+mono: `patches/03-video-dip-config.patch` adds an optional `video_dip`
+(`"mda"` / `"cga_lores"` / `"cga_hires"` / `"expansion"`); absent, nothing
+changes.
 
-**Two cards is a real configuration and it took two patches to make honest.**
-The `[[machine.video]]` blocks are an array and the bus builder installs every
-one of them, keyed by `VideoCardId { idx, vtype }` in config order — but
-upstream maps a Hercules-subtype MDA at B0000 **and** B8000 unconditionally
-(the mapping is built in the constructor, before any guest has written 3BFh), a
-CGA maps B8000, and `Bus::register_map` resolves the overlap by **last writer
-wins**: it stamps `mmio_map_fast` and never reads the `priority` field the
-descriptor carries. So one card silently vanished into the other, and which one
-depended only on the block order. `patches/02-hercules-page1-decode.patch`
-narrows the Hercules to page 0 — what a real card with 3BFh bit 1 clear
-decodes, and what `vid_setmode` deliberately leaves it at (SPEC.md §39.6).
+**A two-card config lists the card os8088 will drive FIRST.** MartyPC's
+primary is the first `[[machine.video]]` block, and `fbuf` with no `card=`
+reports the primary — with the CGA first on `_both_gla_mono` the boot gate
+watches an unprogrammed card and times out on a machine that booted
+(`fbuf` returns 3 bytes). The DIP decides which card the **guest** picks; the
+order decides which one the **tooling** looks at.
 
-**The obvious test does not catch that**, which is why there is a gate: write
-to B0000, write to B8000, read both back, and they differ — because they are
-32KB apart inside one card's 64KB. `tests/dualcheck.py` asks the *rasters*
-instead (a write to one card's memory must change **that** card's rendered
-output and not the other's), parks the CPU so no guest contributes, and is
-verified to **fail** — revert patch 02 and it exits 1 naming the check.
+### `--turbo`: the fastest machine here is 7.16 MHz, and it is a CONTROL
 
-**And a third patch was needed to make a two-card machine boot the card the
-field one does.** SPEC.md §39.1's `vid_detect` chooses its adapter from
-`int 11h` bits 5:4 — SW1-5/6 on a 5150 — and upstream *derives* those bits
-from the card list: `have_expansion` first, then "any CGA present → CGA
-hires", then MDA. So every two-card machine reported colour whatever order the
-blocks were in, os8088 booted on the CGA, and the calibration machine's
-arrangement — both cards, switches set to mono, boots Hercules — could not be
-expressed at all. `patches/03-video-dip-config.patch` adds an optional
-`video_dip` to the machine config (`"mda"` / `"cga_lores"` / `"cga_hires"` /
-`"expansion"`); absent, the derivation runs exactly as before, so no existing
-machine moved. **`os8088_5150_both_gla_mono` is the result**, and it is the
-only machine here that reaches SPEC.md §39.11.1's `vid_cga_alias` — the
-routine that finds a CGA hiding behind a Hercules-primary machine, whose bug
-survived precisely because "the direction the old emulator could reproduce was
-CGA-primary, where the routine never runs". Verified: `avail = 0x06`, both
-cards seen, os8088 running Hercules, desktop rendered at 720×348.
+`--turbo` takes the XT clock from 4.77 MHz to 7.16, and that is the whole
+range: every machine MartyPC offers is an 8088/8086. 1.5x answers whether a
+cost is **CPU-bound**, which shows as a proportional change. **The CGA panics
+under turbo** — its video clock is derived from the CPU clock and
+`devices/cga/videocard.rs` asserts on the result — so the turbo machine is a
+VGA one (`os8088_xt_vga_sb`); the MDA is untested for the same reason. **No
+PERFORMANCE.md number may be taken off it.**
 
-**Its `[[machine.video]]` blocks list the MDA FIRST, and that is about the
-harness rather than the guest.** MartyPC's own primary card is the first in
-that list, and `fbuf` — which `os88marty.launch`'s boot gate reads — reports
-the primary. With the CGA first the gate watches an unprogrammed card, never
-sees a desktop and times out on a machine that booted perfectly (measured:
-`fbuf` returns *3 bytes*). The DIP decides which card the **guest** picks; the
-order decides which one the **tooling** looks at, and on a two-card machine
-they have to agree. `launch(..., card="herc")` does not rescue it, so put the
-card os8088 will drive first.
+### `subtype = "Hercules"` is load-bearing and its absence is silent
 
-The first five are shaped after docs/FIELD-MACHINES.md's calibration machine,
-as closely as MartyPC allows.
+Without it MartyPC builds a plain MDA whose `mem_mask` is 0x0FFF: the card
+decodes **4 KB and mirrors it eight times** across the 32 KB aperture. The
+kernel's own probe still reports Hercules (`[vid_w]`/`[vid_h]`/`[vid_stride]`
+= 720/348/90, `[vid_mono]` = 1), so **everything on the guest side looks
+right** while every write above 0x0FFF aliases on top of the first 4 KB. What
+it looks like: `shot` returns a **sheared** picture with the desktop repeated
+down the screen, and `shot --rendered` an **all-black** 720x350. The
+one-command diagnosis: `dump 0xB0000 32768 -o x.bin` and test whether byte
+*i* equals byte *i*+4096.
 
-**Which ROM you are running is decided by the machine's family, and the split
-is systematic: every `os8088_5150_*` runs the REAL IBM ROM** (the 27 Oct 1982
-`1501476`, in the repo), **and every `os8088_xt_*` — an IBM 5160 — runs
-GLaBIOS.** `os8088_5150_cga_gla` is the one deliberate exception, and it is
-there so the ROM itself can be A/B'd against `os8088_5150_cga` with nothing
-else changed.
+### The hard-disk machines test RUNG 0, and that is the point
 
-Worth stating rather than leaving to the table, because it decides what a
-result *means*: a BIOS-dependent measurement taken on a 5150 machine here is
-about the same ROM the field machine runs, and one taken on an XT is not.
-A session assumed the opposite and attributed a null result to GLaBIOS that
-had been measured on the IBM ROM (SPEC.md §39.6).
-
-### The fastest machine here is 7.16MHz, and it is a CONTROL
-
-`--turbo` takes the XT clock from 4.77MHz to 7.16, and that is the whole of
-the available range: MartyPC is an 8088/8086 emulator by design, so every
-machine type it offers is a 5150, a 5160, a PCjr, a Tandy or a Compaq
-Portable. 1.5x is not a modern CPU and it does not have to be — it answers
-whether a cost is **CPU-bound**, which shows as a proportional change and not
-as an absolute one.
-
-```
-./martypc_headless --machine-config-name os8088_xt_vga_sb --turbo \
-                   --mount fd:0:media/floppies/os8088-360.img
-```
-
-Two things about it. **The CGA panics under turbo** — its video clock is
-derived from the CPU clock and `devices/cga/videocard.rs:399` asserts on the
-result (`ticks_advanced: 27 > clocks: 20`), which is why the turbo machine is
-a VGA one; the MDA is untested for the same reason, and nothing in a timing
-question about a *worker* cares which adapter drew. And **no PERFORMANCE.md
-number may be taken off it**: 7.16MHz is not a machine anybody in
-docs/FIELD-MACHINES.md owns, and GLaBIOS is not a period ROM.
-
-Its first use is the worked example of what a control is for. SPEC.md
-§45.16.4's mode-C burst (since removed — §45.16.3; the reasoning below is
-what a control machine is FOR and does not depend on the mode still
-existing) was designed to hold a row for one system tick and
-measured ~700 ms for eight rows against a designed 385 — and the question
-"is that the design or is that the 5150 being slow" is exactly the question a
-faster machine answers. It was the latter: on the 5150 **99%** of the
-stretched burst steps have the worker mixing inside them against **2%** of
-the healthy ones, and at 7.16MHz the mean burst step is **5.3% of a cycle
-against one tick = 5.49%** — i.e. one tick, as designed — with the burst
-falling from ~69% of the cycle to 48% (the ideal, if no wake is ever missed,
-is 38.5%).
-
-**`subtype = "Hercules"` is load-bearing and its absence is silent.** Without
-it MartyPC builds a plain MDA, whose `mem_mask` is `MDA_MEM_MASK` = 0x0FFF —
-so the card decodes **4KB and mirrors it eight times** across the 32KB
-aperture, and the mask only ever moves to `HGC_MEM_MASK_HALF` inside an
-`if let VideoCardSubType::Hercules`. The kernel's own probe is unaffected and
-still reports Hercules (it programs 3BF/3B8 and reads the geometry back
-correctly: `[vid_w]`/`[vid_h]`/`[vid_stride]` = 720/348/90, `[vid_mono]` = 1),
-so **everything on the guest side looks right** — while every write above
-0x0FFF aliases on top of the first 4KB.
-
-What it looks like when it is wrong: `shot` returns a **sheared** picture with
-the desktop repeated down the screen, because it is decoding §39.3's four
-banks out of one mirrored page; `shot --rendered` returns an **all-black**
-720x350, because the card is rasterising MDA text out of graphics bytes. Both
-are pictures rather than errors, which is the failure mode this file warns
-about elsewhere. The one-command diagnosis is to dump the aperture and test
-it for period: `dump 0xB0000 32768` and check whether byte *i* equals byte
-*i*+4096.
-
-**The hard-disk one tests RUNG 0, and that is the point.** SPEC.md §52.1's
-rung 1 reads the IDE task file directly and is gated on `CPU_286`, because an
-8088's `in ax, dx` is two 8-bit bus cycles at the same port and loses the
-drive's high byte — so on the machine this project is about, an option ROM
-answering `int 13h` is the only transport there is, and QEMU (a modern CPU
-and an ATA disk at 1F0h) can only ever test the other rung. The controller is
-**XT-IDE** and not the IBM/Xebec because MartyPC's romdef matches the Xebec's
-BIOS by MD5 alone and that ROM is IBM's; the XT-IDE entry matches by
-filename, and `ide_xtl.bin` — XTIDE Universal BIOS, GPL — already ships in
-`media/roms/XUB/`. So this machine costs no new asset either.
-
-The disk is MartyPC's own bundled `media/hdds/default_xtide.vhd`: 615/4/26 =
-**63,960 sectors**, just under SPEC.md §18.7's 65,535-sector volume cap.
-**Copy it rather than mounting it in place** — a format is a write, and a
-test that mutates the run tree's shipped image behaves differently the second
-time:
+SPEC.md §52.1's rung 1 reads the IDE task file directly and is gated on
+`CPU_286`, because an 8088's `in ax, dx` is two 8-bit bus cycles at the same
+port and loses the drive's high byte — so on the target machine an option
+ROM answering `int 13h` is the only transport, and QEMU can only ever test
+the other rung. The controller is **XT-IDE** because MartyPC's romdef matches
+the IBM/Xebec BIOS by MD5 and that ROM is IBM's; `ide_xtl.bin` (XTIDE
+Universal BIOS, GPL) ships in `media/roms/XUB/`. The disk is MartyPC's
+bundled `media/hdds/default_xtide.vhd`: 615/4/26 = **63,960 sectors**, just
+under SPEC.md §18.7's cap. **Copy it rather than mounting it in place** — a
+format is a write, and `launch()` clones it for you:
 
 ```sh
 cp build/martypc/run/media/hdds/default_xtide.vhd /tmp/scratch.vhd
@@ -1129,95 +924,110 @@ MARTYPC_DEBUG_ADDR=127.0.0.1:9001 ./martypc_headless \
     --mount hd:0:/tmp/scratch.vhd &
 ```
 
-Verified end to end: the Drivers page loads `HDD.DRV`, its own Control Panel
-page appears (SPEC.md §31.9) reporting **`BIOS0  615x 4x 26  31M`** — the
-geometry MartyPC mounted, read back through `int 13h` — Format lists the
-partition table, Mount says `Mounted 1 volume` and puts an **`HDD C`** zone on
-the desktop, and opening it lists the DOS filesystem on the shipped image
-(`COMMAND.COM`, `CONFIG.SYS`, `AUTOEXEC.BAT`, `Free 31760K`).
-
-**Two bugs in headless had to be fixed to get there, both of which look like
-the driver failing.** Attaching a VHD is the eframe frontend's job, and the
-headless `insert_vhds()` that mirrors it had a `hdc_mut()` — the **Xebec
-alone** — so an XT-IDE machine took the else branch and logged "No Hard Disk
-Controller present" while having one. And it resolves a drive's name through
-the resource manager, which only ever scans `media/hdds/`, so
-`--mount hd:0:/abs/path.vhd` failed with "File not found scanning Vhd
-directory" — a path is taken as a path now, which is what a scratch copy
-needs.
-
-**The VGA one is an XT and not a 5150, deliberately.** An 8-bit ISA VGA card
-in a 5160 is a machine people actually built; a VGA in a 5150 is not, and the
-first version of this config was one. Nothing is lost by moving — the 5160 is
-the same 4.77MHz 8088 on the same bus — and nothing was ever at stake, because
-**this config could never have been a timing instrument**: the calibration
-machine has a Hercules and a CGA in it and no VGA at all, so there is no field
-number for a VGA figure to be compared against. It is a correctness
-instrument, and GLaBIOS boots it faster.
-
-**Use the IBM ROM for anything you will quote.** GLaBIOS is a modern
-reimplementation and is optimised in ways the 1982 ROM is not, so its POST and
-its `int 13h` are **not period timings** — it is the one to iterate against
-and never the one to take a number from. The BIOS in `tools/martypc/roms/` is
-the 27 OCT 82 `1501476` U33 part, which is the ROM the calibration machine
-actually has; MartyPC identifies it by MD5 and the machine configs name that
-ROM set explicitly rather than letting `auto` pick.
-
-*(That ROM is IBM's. It is here because the repo's owner put it here, and it
-is the one file in this tree not covered by the project's own licence.)*
+Verified: `HDD.DRV`'s Control Panel page reports `BIOS0  615x 4x 26  31M`,
+Mount puts an `HDD C` zone on the desktop, and opening it lists the shipped
+DOS filesystem. Two headless bugs had to be fixed in patch 01 to get there,
+both of which look like the driver failing: `insert_vhds()` only knew the
+Xebec (`hdc_mut()`), so an XT-IDE machine logged "No Hard Disk Controller
+present" while having one; and `--mount hd:0:/abs/path.vhd` was resolved
+through the resource manager, which only scans `media/hdds/`.
 
 ---
 
 ## The protocol
 
 Newline-delimited JSON over TCP, one reply per command. `tools/os88marty.py`
-is the client — a CLI, a REPL and an importable `Marty` class.
+is the client — a CLI, a REPL (address and no verb) and an importable
+`Marty` class.
 
 | command | |
 |---|---|
+| `ping` | the emulator's pid — what `launch` checks against the one it spawned |
 | `status` | exec state, cycles, instructions, CS:IP |
 | `regs` / `setreg` | all sixteen-bit registers and flags |
 | `read` / `write` | memory, by flat `addr` or by `seg`+`off` |
 | `inb` / `outb` | I/O ports |
 | `run` / `pause` / `step` / `reset` | execution |
-| `bp` | breakpoints: `exec`, `execseg`, `mem`, `memseg`, `int`, `io` |
+| `bp` | breakpoints: `exec`, `execseg`, `mem`, `memseg`, `int`, `io` — **replaces the whole set** |
+| `park` | point the CPU at `cs:ip` with the prefetch queue flushed |
 | `screen` | the video card's text, in text modes |
-| `video` | which card, its raster geometry and its display apertures |
+| `video` | which card, `mode`/`text`, its raster geometry and display apertures |
+| `cards` | **every** video card in config order: `idx`, `type`, `primary`, `mode`, `field_w/h`, `frames`. The answer to "did my two-card config produce two cards", which `video` cannot give |
 | `fbuf` | the card's RENDERED framebuffer as rgb24 — the only route on VGA |
+| `flicker` | one sample per DISPLAYED FRAME: `changed`, `transient`, `bbox`, `settled` |
+| `pace` | per-frame changed counts over a long run; `ignore` excludes a rect |
+| `advance` | run a bounded amount of GUEST time — `frames=` or `cycles=` |
+| `disk` | the FDC's counters (`m.disk()`), with `reset` |
+| `disks` / `flush` | what is in each drive and where it was mounted from / write a drive's live image to a host file |
+| `snapshot` / `restore` | fork a holder process; wake it on a port, any number of times |
+| `key` | a keypress by MartyKey name — `KeyA`, `Enter`, `ArrowRight` |
+| `mouse` | one Microsoft packet: relative `dx`/`dy` and buttons. **To click a CONTROL use `tools/os88mouse.py`** |
+| `history` / `callstack` | the CPU's own instruction history |
+| `quit` | stop the emulator |
 
-**Every capture takes an optional `card=` and every capture reports which card
-answered.** Absent means the primary, so nothing that already worked changes;
-otherwise it is an index (`VideoCardId.idx`, the `[[machine.video]]` position —
-**not** iteration order, which is a `MartyHashMap`'s business) or a type name,
-and an ambiguous type name is refused rather than guessed. It applies to
-`video`, `screen`, `fbuf`, `flicker`, `pace` and `advance` — the last because
-`frames=` is a question about one card and the two disagree, 50Hz Hercules
-against 60Hz CGA, so pacing a capture on the wrong counter reads as jitter that
-is not there. Before this, all six went through `primary_videocard()`, which is
-`videocard_ids[0]`: on a two-card machine they silently answered about card 0
-while the caller believed otherwise.
+**Every capture takes an optional `card=` and reports which card answered.**
+Absent means the primary; otherwise an index (`VideoCardId.idx`, the
+`[[machine.video]]` position — **not** iteration order) or a type name, and
+an ambiguous type name is refused. It applies to `video`, `screen`, `fbuf`,
+`flicker`, `pace` and `advance` — the last because `frames=` is a question
+about one card and the two disagree, 50 Hz Hercules against 60 Hz CGA.
 
-**`park` exists because `setreg ip` cannot be made to work.** `Register16::PC`
-is settable and setting it is not enough — `pc` is the FETCH pointer and the
-core derives `ip() = pc - queue.len()`, so a bare write leaves whatever the 8088
-had already prefetched from the old address in front of the new one, and those
-bytes execute first (measured: parking at 0x0500 landed at 0xD4CC). The flush is
-not reachable through `CpuDispatch`, so `park` goes through the CPU's reset
-vector, and **clears every register** as a documented consequence. Devices are
-untouched: it resets the processor, not the machine.
+Load-bearing:
 
-**So DO NOT park the CPU to call a kernel routine when a flag the kernel
-already polls will do it.** Forcing a `wm_paint_all` — which every "does the
-incremental drawing agree with a full repaint" test needs — was done for a
-while by building a stub in `menu_bcell`, parking on it, and handing it the
-banked SS:SP. It works, and it is a trap with a long fuse: the frame it is
-handed belongs to whichever task the pause happened to catch, so if that was
-the UI task **inside a lock hold**, the stub's own `gfx_lock` spins on
-`sti / task_yield`, the scheduler switches away, and the CS:IP restored at the
-end names a task whose stack has moved on. Measured, that surfaced THREE
-assertions later as a window rect reading 2056x2056 and a keyboard that had
-stopped arriving — nowhere near the call that caused it.
-`tests/dispcalc.py`'s `full_repaint` is the shape to copy instead:
+- **Reads do not perturb the machine.** Memory comes back through
+  `BusInterface::get_vec_at_ex`, which costs no cycles and only ever *peeks*
+  a mapped device — and **not** `peek_range`, which slices the flat memory
+  vector and does not resolve MMIO, so a read of `0xB8000` returned whatever
+  was in RAM under the card: a machine that had POSTed and printed `Disk Boot
+  Fail` looked, through `read`, exactly like one that had hung. **I/O ports
+  are the exception**: there is no peek for a port, so an `inb` is a real bus
+  read, and several devices clear a status or advance a sequencer by being
+  read at all.
+- **A HIT IS NOT `"paused"` — it is `"breakpoint"`.** A wait written as
+  `while status()["state"] != "paused"` is false forever at a breakpoint
+  that is firing perfectly. Test `!= "running"` (what `until()` does, and
+  what `Marty.stopped()` is), or `== "breakpoint"`. Five separate
+  investigations here concluded "breakpoints do not fire in this build" and
+  every one was the poll.
+- **`sym()` is FLAT; `execseg`'s `off` is an OFFSET.** `sym("wm_show")`
+  answers `KERNEL_SEG*16 + offset`, so it pairs with `{"type": "exec",
+  "addr": ...}`. Put it in an `execseg`'s `off` and the breakpoint is armed
+  0x600 further on, in real code that is never reached — no error, no hit.
+  `Marty.bp_exec("wm_show", ...)` takes symbols or flat addresses and cannot
+  get this wrong. `int` and `io` take their number in `addr` too:
+  `{"type": "int", "addr": 0x13}`.
+- **`execseg` and `memseg` are folded to flat addresses, because the
+  segmented types do not work.** `BreakPointType::Execute(seg, off)` and
+  `MemAccess(seg, off)` are declared in `breakpoints.rs` and matched by
+  **neither** CPU; passed through, they arm silently and never fire
+  (measured on `0060:37F5`, the timer hook). A flat breakpoint aliases every
+  `seg:off` pair reaching the same linear address, which on a real-mode 8086
+  is nearly always what was meant.
+- **The `int` type catches `INT n` as well as hardware interrupts** —
+  `sw_interrupt` ends in the same `intr_routine` — so `int` on 13h stops on
+  the guest's own disk calls. An `int 08h` breakpoint fires every 262,144
+  cycles (one tick) and `run` resumes it: MartyPC clears the latched
+  breakpoint flag only in `machine.run()`'s `BreakpointHit → Run` arm, and a
+  `run` that set the state itself skipped that clear and advanced **zero
+  cycles, forever**. If a resume ever looks stuck, check `cycles` across two
+  `status` calls before believing anything about the guest.
+- **`reset` does not zero the cycle counter.** It is free-running for the
+  life of the process, so every span is a delta.
+- **`park` exists because `setreg ip` cannot be made to work.** `pc` is the
+  FETCH pointer and `ip() = pc - queue.len()`, so a bare write leaves what
+  the 8088 had prefetched from the old address in front of the new one, and
+  those bytes execute first (parking at 0x0500 landed at 0xD4CC). The flush
+  is not reachable through `CpuDispatch`, so `park` goes through the CPU's
+  reset vector and **clears every register**; devices are untouched.
+
+**DO NOT park the CPU to call a kernel routine when a flag the kernel already
+polls will do it.** Forcing a `wm_paint_all` by building a stub, parking on
+it and handing it a banked SS:SP works and is a trap with a long fuse: the
+frame belongs to whichever task the pause caught, so if that was the UI task
+inside a lock hold the stub's own `gfx_lock` yields, the scheduler switches
+away, and the CS:IP restored at the end names a task whose stack has moved
+on — it surfaced three assertions later as a window rect reading 2056x2056.
+`tests/dispcalc.py`'s `full_repaint` is the shape to copy:
 
 ```python
 m.cmd(cmd="run")
@@ -1227,250 +1037,115 @@ while m.read(S("cp_dirty"), 1)[0]:  # / gfx_unlock, on its own stack
 os88marty.settle(m); m.cmd(cmd="pause")
 ```
 
-Nothing is parked, nothing is reset, no kernel scratch is borrowed, and the
-repaint happens at a moment the kernel chose. The general rule: **prefer
-poking a byte the guest already polls over executing kernel code from
-outside** — `[cp_dirty]`, `[desk_zdirty]`, `[menu_bdirty]`, `[cal_dirty]` and
-their kind are all deferred-work posts, which is exactly what a harness wants.
-The one cost is that the repaint now takes real wall time, so a run can
-straddle the menu bar's once-a-minute clock change: exclude `y < MBAR_H,
-x >= [vid_clk_hx]` rather than chasing 42 pixels at the top right.
-| `flicker` | one sample per DISPLAYED FRAME, and the flash/redraw counts |
-| `pace` | per-frame changed counts over a long run — frame pacing / smoothness. `ignore` excludes a rect (a blinking cursor); `video` reports the card's cursor state |
-| `advance` | run a bounded amount of GUEST time — `frames=` or `cycles=` |
-| `cards` | **every** video card, in config order: `idx`, `type`, `primary`, `mode`, `field_w/h`, `frames`. The answer to "did my two-card config actually produce two cards", which `video` cannot give — on a machine whose second entry was dropped it looks exactly like a one-card machine |
-| `park` | point the CPU at `cs:ip` with the prefetch queue flushed, so a harness can take the guest **out** of a measurement |
-| `snapshot` / `restore` | fork a holder process; wake it on a port, any number of times |
-| `key` | a keypress by MartyKey name — `KeyA`, `Enter`, `ArrowRight` |
-| `mouse` | one Microsoft packet: relative `dx`/`dy` and button state. **To click a CONTROL use `tools/os88mouse.py` instead** — it reads the live cursor from the debug registry (SPEC.md §9.4.3) and converges on an absolute target, where aiming this one by dead reckoning drifts and misses silently |
-| `history` / `callstack` | the CPU's own instruction history |
-| `disks` | what is in each floppy drive, and where it was mounted from |
-| `flush` | write a drive's live image back out to a host file — the guest's writes, which live nowhere else. `tools/os88flush.py` is the client |
-| `quit` | stop the emulator |
-
-Three things about it are load-bearing:
-
-- **Reads do not perturb the machine.** Memory comes back through
-  `BusInterface::get_vec_at_ex`, which costs no cycles and only ever *peeks* a
-  mapped device. It is `get_vec_at_ex` and **not** `peek_range`, which is the
-  obvious choice and does not resolve MMIO at all: it slices the flat memory
-  vector, so a read of `0xB8000` returned whatever was in RAM under the video
-  card — a screen of zeroes on any machine whose card had never written
-  through, with no error to say so. That
-  matters more than usual here: MartyPC is cycle-accurate, and an instrument
-  that costs cycles cannot measure a machine whose cycles are the thing under
-  test. **I/O ports are the exception and say so** — there is no peek for a
-  port, so an `inb` is a real bus read and several devices clear a status or
-  advance a sequencer by being read at all.
-- **`read` resolves MMIO, so video RAM reads like any other memory** — and
-  getting that wrong cost an hour, so it is worth the paragraph. It went
-  through `BusInterface::peek_range`, which slices the flat memory vector and
-  does **not** resolve MMIO, so `0xB8000` returned whatever was in RAM under
-  the card: a screen of zeroes, with no error to say so. A machine that had
-  POSTed and printed `Disk Boot Fail. You monster.` looked, through `read`,
-  exactly like one that had hung. `get_vec_at_ex` is the one to use — equally
-  side-effect-free (it peeks a mapped device rather than reading it), a plain
-  slice when the range touches no device, so ordinary reads cost what they
-  did. `screen` is still the right call for **text** modes, because it asks
-  the card for characters rather than making you decode them.
-- **`bp` replaces the whole set.** A debugger that can only add breakpoints
-  accumulates them until something stops for a reason nobody remembers asking
-  for.
-- **A HIT IS NOT `"paused"` — it is `"breakpoint"`.** `pause()` and a
-  breakpoint are different states, and a wait written as
-  `while status()["state"] != "paused"` is false forever at a breakpoint that
-  is firing perfectly: the tool reports success, the machine stops, and the
-  script sees nothing and times out. Test `!= "running"` (what `until()` does,
-  and what `Marty.stopped()` is), or `== "breakpoint"` (what
-  `tests/dispfreeze.py` does). **This cost a whole session here** — five
-  separate investigations concluded "breakpoints do not fire in this build",
-  including one against the live `int 08h` vector, and every one of them was
-  the poll and not the server.
-- **`sym()` is FLAT; `execseg`'s `off` is an OFFSET.** `sym("wm_show")`
-  answers `KERNEL_SEG*16 + offset`, so it pairs with `{"type": "exec",
-  "addr": ...}` — which is what every user in the tree does
-  (`tools/os88span.py`, `tools/winmove.py`, `tests/dispreboot.py`). Put it in
-  an `execseg`'s `off` instead and the breakpoint is armed 0x600 further on,
-  in real code, at an address that is simply never reached — no error, no hit.
-  `Marty.bp_exec("wm_show", ...)` takes symbols or flat addresses and cannot
-  get this wrong.
-- **`run` resumes from a breakpoint, and it took a fix in this server to do
-  it.** MartyPC clears the CPU's latched breakpoint flag in exactly one place,
-  `machine.run()`'s `BreakpointHit → Run` arm. `run` used to set the state to
-  `Running` itself, which enters through the `Running` arm instead and skips
-  that clear — so the next step re-reported the same breakpoint and the machine
-  advanced **zero cycles, forever, on the first breakpoint of the session**.
-  Both `run` and `advance` hand the transition to `machine.run()` now, the way
-  `reset` always did; measured, a resumed `int 08h` breakpoint advances ~260k
-  cycles between ticks where it advanced 0 before. **`advance` had the same
-  defect and its own comment said otherwise**: it routed through `Paused`
-  first, and `Paused → Run` does not clear the flag either — only the
-  `BreakpointHit` arms do.
-
-  This is worth keeping in mind even fixed, because of how it FAILED. Every
-  symptom pointed at the guest: `status` answered, `regs` answered, `read`
-  answered, and the guest merely stopped executing — so scripted input went
-  nowhere and read as *the guest ignoring the mouse*. `bp` answered `count: 0`
-  while `status` still said `"breakpoint"` at an address nothing was armed on.
-  A session lost an afternoon to it and wrote the workaround down here instead
-  of fixing it; if a resume ever looks stuck again, check `cycles` across two
-  `status` calls before believing anything about the guest.
-- **A `state` that is not `"running"` is not necessarily `"paused"`.** A
-  breakpoint reports **`"breakpoint"`**, and a poll written as
-  `if state != "paused": keep waiting` therefore spins straight through every
-  hit it was written to catch — the trace looks clean and reports that nothing
-  fired. Test for `state != "running"`, or for the pair.
-- **The `int` breakpoint type catches `INT n` as well as hardware
-  interrupts.** `sw_interrupt` ends in the same `intr_routine` the INTR
-  microcode uses, and that is where the vector's flag is tested — so `int` on
-  13h stops on the guest's own disk calls, not just on IRQs.
-- **`execseg` and `memseg` are folded to flat addresses, because the
-  segmented breakpoint types do not work.** `BreakPointType::Execute(seg,
-  off)` and `MemAccess(seg, off)` are declared in `breakpoints.rs` and matched
-  by **neither** CPU — grep `cpu_808x` and `cpu_vx0` for them and you get
-  nothing, while their `*Flat` twins are handled in six places each. Passed
-  through, they arm silently and never fire. That is measured, not inferred:
-  on `0060:37F5`, os8088's timer hook, which executes 18.2 times a second,
-  `execseg` never stopped and `exec` on the same address stopped immediately.
-  Folding costs one property worth naming — a flat breakpoint aliases every
-  `seg:off` pair reaching the same linear address — and on a real-mode 8086
-  that is nearly always what was meant.
-- **`reset` does not zero the cycle counter.** It is free-running for the life
-  of the process, so every span is a delta. A "cycles" figure read straight
-  out of `status` after a reset is the age of the emulator, not of the run.
+**Prefer poking a byte the guest already polls over executing kernel code
+from outside** — `[cp_dirty]`, `[desk_zdirty]`, `[menu_bdirty]`,
+`[cal_dirty]` and their kind are all deferred-work posts. The one cost is
+that the repaint takes real wall time, so a run can straddle the menu bar's
+once-a-minute clock change: exclude `y < MBAR_H, x >= [vid_clk_hx]`.
 
 ---
 
 ## What it is for, and what it is not
 
-**For:** anything on an emulator. `verify` is the one to reach for first —
-it dumps `KERNEL_SEG` and diffs it against `build/kernel.bin`, which proves in
-one command that the machine is running the build you think it is *and* hands
-you every live variable at its listing offset with no instrumentation added.
-Breakpoints answer questions that previously needed a knob kernel: an `int`
-breakpoint on 13h counts disk calls on an **unmodified shipped kernel**, where
-SPEC.md §18.94 needs `make DISKCNT=1` and a test package on the floppy.
+**For:** anything on an emulator. Breakpoints answer questions that used to
+need a knob kernel: an `int` breakpoint on 13h counts disk calls on an
+**unmodified shipped kernel**, where SPEC.md §18.94 needs `make DISKCNT=1`
+and a test package.
 
-**Screenshots, without leaving:** `os88marty.py shot out.png` reads the
-framebuffer straight out of VRAM and decodes SPEC.md §39.3's banked layout —
-the same arithmetic `tools/hercshot.py` applies to QEMU, so a picture from
-either route is the same picture. **Do not start QEMU just to look at the
-screen**: if MartyPC is already up, that is minutes of an agent's time for
-something one command already answers. Verified against QEMU's CGA on the
-same desktop: **60.0% lit in both**, 76,815 pixels against 76,809, and the
-six-pixel difference is the clock — MartyPC reads `Jul 04 2026`, which is
-SPEC.md §37.90's no-RTC fallback, correctly, because a 5150 has no CMOS.
+**`verify`** dumps `KERNEL_SEG` and diffs it against `build/kernel.bin`, so
+that live variables can be read at their listing offsets and the machine is
+proved to be running the build you think. **It reads the file from offset
+0, and since SPEC.md §2.9 put stage 2's blob at the front of the image
+`.text` sits at file offset `BOOT2_PAD` (`BOOT2_SECS` x 512 = 4,096)** — so
+against a correct kernel it reports ~96% differing today and its
+`boot_ticks ... in the file` line reads a blob byte. Until it skips the blob
+(and `.cold` at `COLD_SEG`, `.ovl` where `[spl_fseg]` says), the proof that
+the guest runs your build is `m.sym()` — which asserts its own map against
+`build/kernel.bin` — plus `m.read(m.sym("boot_ticks"), 2)` reading a
+stamped tick rather than `0xFFFF`.
 
-The card is asked which it is (`video`), never sniffed: an unmapped `0xB0000`
-reads as **zeroes rather than erroring**, so "is there something at the MDA
-aperture" answers yes on a CGA-only machine. That guess shipped for about ten
-minutes and produced a confident 720x348 image of nothing.
+### Screenshots, without leaving
 
-`shot` reads **guest VRAM** and is CGA and Hercules only, which is a property
-of the format rather than of the tool: both are 1bpp, so the bytes *are* the
-pixels. **Mode 12h is four planes behind the Graphics Controller's Read Map
-Select** and is not readable as flat memory at all — you would have to drive
-the latches to get a plane out.
+`os88marty.py <addr> shot out.png` reads the framebuffer straight out of
+VRAM and decodes SPEC.md §39.3's banked layout — the same arithmetic
+`tools/hercshot.py` applies to QEMU, so a picture from either route is the
+same picture. **Do not start QEMU just to look at the screen.** The card is
+asked which it is (`video`), never sniffed: an unmapped `0xB0000` reads as
+zeroes rather than erroring, so "is there something at the MDA aperture"
+answers yes on a CGA-only machine.
+
+`shot` reads **guest VRAM** and is CGA and Hercules only, a property of the
+format: both are 1bpp, so the bytes *are* the pixels. Mode 12h is four planes
+behind the Graphics Controller's Read Map Select and is not readable as flat
+memory.
 
 **`shot --rendered` is the other route, and it covers everything.** It asks
-the CARD what it rasterised (`fbuf`) instead of asking memory what is in it,
-so it works in every mode on every adapter and comes back as 24-bit colour.
-VGA takes it automatically, having no other option. The two are a genuine
-cross-check rather than a convenience: on a CGA desktop they produce
-framebuffers that agree on **0 pixels of 128,000**, one having walked
-SPEC.md §39.3's banked layout in guest memory and the other having come out
-of the card's raster. Reach for the VRAM route by default on the 1bpp
-adapters anyway, because its output is byte-comparable with
-`tools/hercshot.py` and so with every "0 differing pixels" check in this
-tree.
+the CARD what it rasterised (`fbuf`), so it works in every mode on every
+adapter and comes back as 24-bit colour; VGA takes it automatically. The two
+are a genuine cross-check: on a CGA desktop they agree on every pixel (76,218
+lit of 128,000 by both routes). Reach for the VRAM route by default on the
+1bpp adapters, because its output is byte-comparable with `hercshot.py` and
+so with every "0 differing pixels" check in this tree.
 
 Two traps live inside `fbuf`, and both produce a black or sheared picture
 rather than an error. `display_buf()` casts the card's own array to `&[u8]`,
 and the cards disagree about what an element is: CGA, MDA and EGA hold
 one-byte palette indices, **VGA holds packed RGBA at four bytes per pixel**
-— and a wrong guess still yields a plausible-looking histogram, because the
-VGA's channel bytes are full of `0x00` and `0xFF`. Deriving the size from
-`buf.len() / (pitch * field_h)` is the obvious fix and is wrong twice over:
-the buffer is allocated at the card's **maximum** raster rather than its
-current one, and `field_h` on a double-scanned CGA is twice the rows the card
-actually renders. `render_depth()` is the card's own answer and is the one to
-use. The palette is the VGA's alone (its DAC is the guest's to program);
-the others answer `None` and get the standard IBM 16.
+— and a wrong guess still yields a plausible histogram. Deriving the size
+from `buf.len() / (pitch * field_h)` is wrong twice over — the buffer is
+allocated at the card's **maximum** raster, and `field_h` on a double-scanned
+CGA is twice the rows rendered; `render_depth()` is the card's own answer.
 
-**Input, without a guest module and without QEMU.** This was the last thing
-on the "go to QEMU for it" list, and it should not have been. `key` enters
-the emulator's keyboard buffer, so the guest sees it through the 8255 and
-int 09h; `mouse` builds a **real Microsoft 3-byte packet** and clocks it into
-the serial controller, so the guest's own `mou_isr` decodes it. Neither needs
-a byte of code in the guest, and both exercise *more* than a poke would — a
-debug module writing `[mouse_x]` would skip the UART, the packet decoder and
-SPEC.md §9.5's whole port contest, which is the code most likely to be wrong.
-It is better than QEMU's `msmouse` on the same grounds: that one is not a
-UART-level device and ignores DTR entirely (docs/TESTING.md).
+### Input, without a guest module and without QEMU
 
-Verified, and the proof is deliberately not a screenshot. `mou_seen` — the
-byte SPEC.md §9.4.2 publishes, set by the mouse ISR only on a **complete
-decoded packet** — goes 0 → 1 when packets are injected, and the chip menu
-opens under a press-drag. For the keyboard, the test is SPEC.md §9.6: on a
-machine whose mouse has not spoken, the arrow keys *are* the mouse, so ten
-`ArrowRight` presses moved `mouse_x` from 320 to 350. That is the full path —
-emulator buffer, 8255, int 09h, BIOS buffer, int 16h, `kbm_poll` — and it is
-a path QEMU can barely reach, because there you would have to arrange for a
-machine with no mouse.
+`key` enters the emulator's keyboard buffer, so the guest sees it through the
+8255 and int 09h; `mouse` builds a **real Microsoft 3-byte packet** and
+clocks it into the serial controller, so the guest's own `mou_isr` decodes
+it. Both exercise *more* than a poke would — a debug module writing
+`[mouse_x]` would skip the UART, the packet decoder and SPEC.md §9.5's port
+contest, which is the code most likely to be wrong — and it is better than
+QEMU's `msmouse`, which is not a UART-level device and ignores DTR
+(docs/TESTING.md). Verified without a screenshot: `mou_seen` (SPEC.md
+§9.4.2, set only on a complete decoded packet) goes 0 → 1 under injected
+packets; and on a machine whose mouse has not spoken the arrow keys *are*
+the mouse (SPEC.md §9.6), so ten `ArrowRight` presses moved `mouse_x` from
+320 to 350 — the whole path, buffer, 8255, int 09h, BIOS buffer, int 16h,
+`kbm_poll`.
 
-`os88marty.py` wraps both: `key`, `type_text`, `mouse`, `mouse_move`,
-`click`. Long moves are chunked because a packet carries a **signed byte**,
-exactly as `tools/mouse.py` chunks for QEMU. `key` names a **MartyKey**
-variant — `KeyC`, `Enter`, `ArrowUp`, `Digit1` — the emulator's own
-vocabulary rather than a second mapping table here; a bare `'c'` is refused
-rather than guessed at.
+`Marty` wraps both: `key(name)`, `type_text(s)`, `ctrl(name)`, `mouse(dx, dy,
+l, r)`; the CLI verbs are `key`, `type` and `mouse dx dy [--click]`. `key`
+names a **MartyKey** variant — `KeyC`, `Enter`, `ArrowUp`, `Digit1` — and a
+bare `'c'` is refused rather than guessed at.
 
 **The speed scaler is forced to 1.0 by the `mouse` command, and that is what
 makes counting in pixels work at all.** MartyPC's mouse defaults to
-`DEFAULT_MOUSE_SPEED = 0.25` — a human's acceleration preference — so an
-unscaled `dx` of 60 reaches the guest as 15. A script that derives absolute
-position the way `tools/mouse.py` does, by slamming into a corner and
-counting from the kernel's own edge clamp, then lands **a quarter of the way**
-to everything it aims at. Nothing errors: the pointer moves, the chip menu
-opens under a press, and every click misses — which reads as a broken
-hit-test rather than a scaled delta, and cost a round of debugging before it
-was found. There is no TOML key for it in this build (`SerialMouseConfig`
-carries only `type` and `port`, and `bus/mod.rs` passes `None`), so the fix
-is at the command. In the **GUI** build the same knob is a runtime slider at
-**Input ▸ Mouse ▸ Speed**, 0.10x–2.00x, defaulting to 0.5x.
+`DEFAULT_MOUSE_SPEED = 0.25` (`devices/mouse.rs`), so an unscaled `dx` of 60
+reaches the guest as 15 and a script that counts from the kernel's edge
+clamp lands **a quarter of the way** to everything it aims at, with every
+click missing silently. There is no TOML key for it (`SerialMouseConfig`
+carries only `type` and `port`), so the fix is at the command.
 
-**On 86Box, none of this exists** and the question comes back. There the
-keyboard has a zero-code answer anyway — poke the BIOS buffer at
-`0040:001A`/`001C`, which `int 16h` reads — and the mouse would need
-a guest-side stub with an injection verb — the serial monitor that could have
-carried one is gone (SPEC.md §58). Neither is built; both are wanted only if
-86Box automation is.
+### Audio capture
 
-**Audio capture**, which headless MartyPC did not have at all — marty_core's
-`sound` feature was not even enabled for the crate, so a device's samples
-went nowhere. `MARTYPC_WAV=/tmp/cap` writes **one 16-bit PCM file per sound
+Headless MartyPC had none — marty_core's `sound` feature was not enabled for
+the crate. `MARTYPC_WAV=/tmp/cap` writes **one 16-bit PCM file per sound
 source** at that source's own rate (`/tmp/cap.pc_speaker.wav`), no mixing,
-because the speaker and a card run at different rates and answer different
-questions. The format is what `tools/sndcheck.py` already parses, so every
-existing assertion — RMS, the Goertzel dominant-frequency scan,
-`--expect-silence` — works against a MartyPC capture unchanged. Verified by
-programming PIT channel 2 for 880 Hz through `outb` alone, with nothing in
-the guest involved: `sndcheck` reported **dominant 891.0 Hz**, inside its 5%
-tolerance.
+in the format `tools/sndcheck.py` already parses, so every existing
+assertion — RMS, the Goertzel dominant-frequency scan, `--expect-silence` —
+works against it unchanged. Verified by programming PIT channel 2 for 880 Hz
+through `outb` alone: `sndcheck` reported dominant 891.0 Hz.
 
-Two differences from QEMU's `-audiodev wav` are worth knowing. The capture is
-**continuous**, not gated — QEMU's pcspk stream only runs while the speaker
-is on, so its file time *is* speaker-on time and a silent boot yields an
-empty file; here the file is guest time and silence is silence. And **the
-guest is also driving port 61h**, so a tone you open by hand may be closed
-again by `snd_tick` a moment later — which is why the run above shows 0.26 s
-of clean tone rather than the three seconds it was held for.
+Two differences from QEMU's `-audiodev wav`: the capture is **continuous**
+(QEMU's pcspk stream only runs while the speaker is on, so its file time
+*is* speaker-on time), and **the guest is also driving port 61h**, so a tone
+you open by hand may be closed again by `snd_tick` a moment later.
 
-**And there is a Sound Blaster now** — `devices/sblaster.rs`, added by our
-patch, which was the one real gap left on an 8088. Upstream had `adlib.rs`
-(an OPL2 via `opl3_rs`) and `dma.rs` but no DSP, so SPEC.md §34.5's stream
-tier could only be reached under QEMU. The card is a DSP 2.01 by default at
-`0x220`/IRQ 7 on 8-bit DMA channel 1:
+### The Sound Blaster
+
+`devices/sblaster.rs`, added by patch 01: upstream had `adlib.rs` (an OPL2
+via `opl3_rs`) and `dma.rs` but no DSP, so SPEC.md §34.5's stream tier could
+only be reached under QEMU. A DSP 2.01 by default at `0x220`/IRQ 7 on 8-bit
+DMA channel 1:
 
 ```toml
     [[machine.sound]]
@@ -1480,145 +1155,91 @@ tier could only be reached under QEMU. The card is a DSP 2.01 by default at
     dsp_version = [2, 1]
 ```
 
-`dsp_version` is the interesting knob and it is there for one reason: it is
-what the driver branches on. At `[2, 1]` os8088 takes the classic
-`0x48` + `0x1C` auto-init path; drop it to `[1, 5]` and the same driver has
-to re-arm the 8237 per half-buffer instead, which is a different code path in
-`sb.inc` that nothing else can make it take. The SB16-only commands (`0x41`,
-`0xC6`) are **refused rather than half-implemented**, which is honest: a card
-reporting a DSP below 4.00 is a card a correct driver never sends them to.
+`dsp_version` is the knob that matters, because it is what the driver
+branches on: at `[2, 1]` os8088 takes the classic `0x48` + `0x1C` auto-init
+path; at `[1, 5]` the same driver has to re-arm the 8237 per half-buffer,
+which is a code path in `sb.inc` nothing else can make it take. The
+SB16-only commands (`0x41`, `0xC6`) are **refused rather than
+half-implemented**.
 
-What it models, in the order it matters: the reset handshake (write 1 then 0
-at base+6, read `0xAA` at base+0xA), `0xE1` version, `0xF2` forced IRQ — which
-is how a driver *finds* its line, so it fires with nothing running — `0x40`
-time constant, `0x48` block length, `0x14`/`0x24` single-cycle and
-`0x1C`/`0x2C` auto-init in both directions, `0xD0`/`0xD4` pause and continue,
-`0xD1`/`0xD3` speaker, and `0xDA` exit-auto-init-at-the-block-boundary.
-Reading base+0xE acknowledges the 8-bit IRQ, and a block completing while the
-previous interrupt is **still unacknowledged is counted as a missed ack**
-rather than hidden — the guest not keeping up is exactly the thing a
-cycle-accurate card exists to show you.
+It models the reset handshake, `0xE1` version, `0xF2` forced IRQ (how a
+driver *finds* its line), `0x40` time constant, `0x48` block length,
+`0x14`/`0x24` single-cycle and `0x1C`/`0x2C` auto-init in both directions,
+`0xD0`/`0xD4` pause and continue, `0xD1`/`0xD3` speaker and `0xDA`
+exit-at-the-block-boundary. Reading base+0xE acknowledges the 8-bit IRQ, and
+a block completing while the previous interrupt is still unacknowledged is
+counted as a **missed ack** rather than hidden. It pulls bytes through the
+real 8237 (`do_dma_read_u8`, the FDC's call) and resamples through a carried
+fractional accumulator, so a long stream does not drift (an auto-init loop
+ran 53.96 s of guest time without leaving 1000.0 Hz). `tests/sbtest` is the
+gate: 2.00 s at dominant 1000.0 Hz, and an underrun leg of exactly 2,400
+granted bytes then silence.
 
-It pulls its bytes through the real 8237 (`do_dma_read_u8`, the same call the
-FDC makes) and resamples to the host rate through a carried fractional
-accumulator, so a long stream does not drift. Verified three ways:
+**One caveat: the `0x10` direct-DAC command is accepted and dropped.**
+Nothing in this tree uses it — os8088's driver is DMA-only — but a program
+that does will hear nothing and get no error.
 
-- **From outside the guest entirely** — buffer written straight into RAM,
-  8237 channel 1 and the DSP programmed over `outb`, nothing in the guest
-  involved. A 20,000-byte square at `tc=206` (20 kHz, period 20 samples) came
-  back as **1.00 s, peak rms 0.7500, dominant 1000.0 Hz** — duration,
-  amplitude and pitch all exact. The auto-init variant of the same test
-  looped for **53.96 s of guest time** without drifting off 1000.0 Hz.
-- **Through os8088's own driver.** The Drivers page loads `SOUND.DRV`, the
-  probe finds the card, and the Sound page's third radio button — `Sound
-  Blaster` — comes up selected. That is the whole discovery path: reset,
-  version, the `0xF2` IRQ probe against four candidate lines with the
-  driver's own stubs hooked, and the 8259 mask dance around it.
-- **`tests/sbtest`, the gate package**, which is the assertion that counts.
-  `g:00000 o:K` in its window and **2.00 s at dominant 1000.0 Hz** in the
-  capture — byte for byte the figure `docs/TESTING.md` documents for QEMU's
-  SB16. Its underrun leg is the sharper one: `st:1 c:02400` (underrun-paused,
-  exactly the 2,400 granted bytes consumed) with **0.30 s of tone and then
-  silence** — 2,400 bytes at 8,000 Hz to the sample, and nothing looping.
+### VGA mode 12h
 
-**One caveat, and it is the `0x10` command.** Direct DAC writes are accepted
-and dropped rather than played. Nothing in this tree uses them — os8088's
-driver is DMA-only — but a program that does will hear nothing and get no
-error, which is the failure mode worth writing down rather than discovering.
+marty_core ships a register-level VGA whose `vga` feature is on by default,
+and it rasterises 12h correctly. What patch 01 fixed was one line in the
+headless crate's `Cargo.toml`: `marty_frontend_common` was taken with
+`default-features = false`, so the arm of `get_rom_requirements` that asks
+for `ibm_vga` was compiled out and the machine came up with a VGA and no
+video BIOS, silently. The VGA BIOS is MartyPC's bundled `BOCHS-VGABIOS.bin`
+(LGPL). Two symptoms send a diagnosis the wrong way: the card's
+`is_in_graphics_mode()` answers **false in mode 12h** (`mode_graphics` is
+never assigned in the VGA, so `video`'s `graphics` field is dead there — use
+`mode`/`text`), and a framebuffer read as one byte per pixel comes back 57%
+"index 255", which is RGBA read wrong. `field_w`/`field_h` is the honest
+question: **800x524 is mode 12h's raster**.
 
-**And VGA mode 12h works, which this document said twice that it did not.**
-The correction is worth more than the feature, because the mistake was a
-*shape*: marty_core ships a register-level VGA — CRTC, sequencer, attribute
-controller, graphics controller, a 25.175 MHz dot clock and a `640x480+96+32`
-display aperture spelled out as constants — and its `vga` feature is **on by
-default**. It rasterises 12h correctly and always did. What was wrong was one
-line in the headless crate's `Cargo.toml`: `marty_frontend_common` was taken
-with `default-features = false` and nothing added back, so the arm of
-`get_rom_requirements` that asks for `ibm_vga` was **compiled out**. The
-machine then came up with a VGA card and no video BIOS behind it, the `_ =>
-{}` swallowed the requirement, and nothing in the log said a thing.
-
-Two symptoms sent the diagnosis the wrong way and are worth recognising. The
-card's `is_in_graphics_mode()` answers **false in mode 12h** — `mode_graphics`
-is initialised to false in the VGA and never assigned anywhere, so `video`
-reported a text mode on a machine that was drawing a desktop. And the first
-framebuffer read came back 57% "index 255", which reads as a plausible
-palette histogram and was four-bytes-per-pixel RGBA being read one byte at a
-time. Neither errored. `field_w`/`field_h` is the honest question: **800x524
-is mode 12h's raster** and a text mode's is not.
-
-Verified end to end: os8088 probes VGA, sets `vid_w=640 vid_h=480
-vid_planes=4 stride=80`, and the desktop, a Disk window and Minesweeper all
-render — the last with **eight distinct colours** on screen, every one a
-standard EGA/VGA palette entry (blue 1s, green 2s, a red 3, the exploded
-mine). The VGA BIOS is MartyPC's own bundled `BOCHS-VGABIOS.bin`, LGPL and
-shipped with its licence, so this cost no new asset.
-
-`os8088_xt_vga` is the machine. A 5150 with a VGA in it is an anachronism
-and a deliberate one: what is under test is os8088's mode 12h path on the CPU
-the project is calibrated against.
+`os8088_xt_vga` is the machine; verified end to end with `vid_w=640
+vid_h=480 vid_planes=4 stride=80` and Minesweeper drawing eight distinct
+palette colours.
 
 ## Capturing a screen — every mode, including the fullscreen ones
 
-There are **three** capture routes and they answer different questions. Picking
-the wrong one does not error; it produces a plausible picture of nothing.
+Three capture routes answer different questions. Picking the wrong one does
+not error; it produces a plausible picture of nothing.
 
 | route | what it is | works in |
 |---|---|---|
 | `shot` (VRAM) | decodes SPEC.md §39.3's banked **graphics** framebuffer out of guest memory | CGA mode 6, Hercules graphics |
-| `shot --rendered` (`fbuf`) | asks the CARD what it rasterised, as rgb24 | **every mode**, CGA and VGA (see the Hercules note) |
+| `shot --rendered` (`fbuf`) | asks the CARD what it rasterised, as rgb24 | **every mode**, every adapter |
 | `screen` | the card's text rows as **characters** | text modes |
 
 **THE RENDERED FRAME IS ONLY AS CURRENT AS THE RASTER.** Stop the machine at
 a breakpoint half way down a frame and `fbuf` gives you the new picture above
-the beam and the PREVIOUS one below it — and nothing says so, because the
-capture succeeds and two captures of the same stopped machine agree with each
-other perfectly (they are both reading the same stale buffer). What it looks
-like is a primitive that drew twenty rows and stopped: rows of whatever was
-on screen before, starting at a **different row every run**, because the
-raster is where it is. That is a full session's worth of chasing a bug that
-was never there, and the tell is the one thing a rendered frame cannot fake:
-**read the PLANES**. They are memory, they are always current, and
-`tests/blitp.py` is the worked example — drive Read Map Select (GC4 = 4, then
-the plane number to 3CF) through `outb` and read `0xA0000` with `read`. Use
-`fbuf` for a settled machine and the planes for a stopped one.
+the beam and the PREVIOUS one below it — and two captures of the same
+stopped machine agree with each other perfectly, because both read the same
+stale buffer. It looks like a primitive that drew twenty rows and stopped,
+starting at a different row every run. The tell is the one thing a rendered
+frame cannot fake: **read the PLANES**. They are memory and always current;
+`tests/blitp.py` is the worked example — drive Read Map Select (GC4 = 4,
+then the plane number to 3CF) through `outb` and read `0xA0000`. Use `fbuf`
+for a settled machine and the planes for a stopped one.
 
-**THE RENDERED FRAME IS NOT IN THE GUEST'S COORDINATE SYSTEM EITHER, and
-nothing says that.** A whole-screen capture does not care; **a CROP does**, and this is
-the trap that costs a session. Measured by correlating `fbuf` against the
-guest's own framebuffer on a Hercules desktop, the card's frame is **720x350
-for a 720x348 screen and sits at dx = −16, dy = +2** — a perfect match at
-that alignment and at no other. VGA mode 12h happens to come back 640x480 at
-(0, 0), and CGA at (0, 0) too, so two adapters out of three encourage the
-assumption the third breaks. There is no correction to apply blind: the
-offset is the card's raster phase, not a constant of the tool.
-
-What it looks like when it bites: a crop taken at a window's guest rect is
-sampling 16 columns to the *right* of that window, so the middle of the
-window still compares perfectly and only the edges disagree — 1,670 differing
-pixels of a Minesweeper window, all of them in the rightmost 14 columns, and
-every one of them showing the window *behind* it. That reads as a smeared
-restore, which is exactly the defect `tools/sucheck.py` exists to detect, and
-it survived a forced-full-repaint control (which agreed with the "broken"
-capture to 0 pixels, because both were mis-cropped identically).
-
-So: **crop with `vram` on the 1bpp adapters** — it decodes SPEC.md §39.3's
-banked layout out of guest memory and is in guest coordinates by
-construction — and on VGA, where there is no flat framebuffer to read, at
+**THE RENDERED FRAME IS NOT IN THE GUEST'S COORDINATE SYSTEM EITHER.** A
+whole-screen capture does not care; a CROP does. On a Hercules the card's
+frame is 720x350 for a 720x348 screen at dx = −16, dy = +2 (above); VGA and
+CGA come back at (0, 0). There is no correction to apply blind — the offset
+is the card's raster phase. What it looks like: a crop at a window's guest
+rect samples 16 columns to the *right*, so the middle compares perfectly and
+the rightmost columns show the window *behind* it — which reads as a smeared
+restore, the exact defect `tools/sucheck.py` exists to detect, and it
+survives a forced-full-repaint control because both are mis-cropped
+identically. So: **crop with `vram` on the 1bpp adapters**, and on VGA at
 least **assert `fbuf`'s dimensions against `[vid_w]`/`[vid_h]`** before
-believing a crop. `tools/sucheck.py`'s `fb()` is the worked example of both.
+believing a crop. `tools/sucheck.py`'s `fb()` is the worked example.
 
-**`video` reports `mode` and `text`, and that is the discriminator to use.**
-It comes from the card's `display_mode()`, derived from its actual registers —
-unlike `graphics`, which is a dead field on the VGA and always false. `shot`
-now reads it and routes itself, so the failure below cannot happen silently
-again.
-
-**The failure it exists to prevent.** SPEC.md §53.4's `FSXM_TEXT80` puts a
-fullscreen app into an 80x25 **text** mode; Tracker's XT-mode fullscreen
-(§45.13) is the shipped consumer. The VRAM route decodes character/attribute
-pairs as a bitmap, so it returns a full-size image made of noise, with no
-error and no clue. `shot` now says what it is doing:
+**`video` reports `mode` and `text`, and that is the discriminator.** It
+comes from the card's `display_mode()`, derived from its registers — unlike
+`graphics`, which is dead on the VGA. `shot` reads it and routes itself:
+SPEC.md §53.4's `FSXM_TEXT80` puts a fullscreen app into an 80x25 **text**
+mode (Tracker's XT-mode fullscreen, §45.13), where the VRAM route would
+decode character/attribute pairs as a bitmap and return a full-size image
+of noise.
 
 ```
 $ os88marty.py <addr> shot out.png
@@ -1627,89 +1248,58 @@ out.png: card is in Mode3TextCo80 (a TEXT mode) - capturing the RENDERED framebu
   For the characters themselves: os88marty.py <addr> screen
 ```
 
-and `--kind cga` against a text mode is **refused** rather than obeyed.
-
-**Every fullscreen mode, and how to capture it.** The nine `FSXM_*` ids
-(`apps/os88api.inc`) reduce to three cases:
+`--kind cga` against a text mode is **refused** rather than obeyed. The nine
+`FSXM_*` ids (`apps/os88api.inc`) reduce to three cases:
 
 | `FSXM_*` | what it is | capture with |
 |---|---|---|
-| `TEXT80`, `TEXT40` | 80x25 / 40x25 text | **`screen`** for content, `shot` (auto-rendered) for pixels |
+| `TEXT80`, `TEXT40` | 80x25 / 40x25 text | **`screen`** for content (`"Pos 08/52" in rows[1]`), `shot` (auto-rendered) for pixels |
 | `CGA320`, `CGA640`, `HERC` | 1bpp / 4-colour banked graphics | `shot` — VRAM route, byte-comparable with `hercshot.py` |
-| `VGA0D`, `VGA13`, `VGA12`, `MODEX` | planar or chunky VGA | `shot` — auto-rendered; VRAM is planar behind the GC and not flat-readable |
-
-For a text mode, **`screen` is usually what you actually wanted**: it gives
-you the characters, so an assertion can be `"Pos 08/52" in rows[1]` rather
-than a pixel comparison. Verified against Tracker's fullscreen:
-
-```
-  TRACKER   Beverly Hills Cop                                       XT 5500 Hz
-          Pos 08/52  Ptn 15  Row 33  BPM 125  Spd 07
-```
+| `VGA0D`, `VGA13`, `VGA12`, `MODEX` | planar or chunky VGA | `shot` — auto-rendered |
 
 **Flicker is measurable here, and that is PERFORMANCE.md Part 3.1.** The
 `flicker` command steps the machine until the card finishes a frame, grabs
 the rendered buffer, and repeats — sampling the glass exactly as often as an
-eye does, because a CRT shows whatever the raster read on its last pass. It
-reports two things per frame: `changed` (the ordinary delta, which prices a
-**visible redraw** in frames × the frame period) and `transient` — the pixels
-whose value before the operation and after it are the *same*, but which showed
-something else in between. That second one is the **double-draw flash** stated
-as arithmetic, and it needs no notion of "background" and cannot fire on an
-honest change.
+eye does. It reports `changed` per frame (a **visible redraw**, priced in
+frames × the frame period) and `transient` — pixels whose value before and
+after the operation is the *same* but which showed something else in
+between: the **double-draw flash** as arithmetic, needing no notion of
+"background" and unable to fire on an honest change.
 
 ```sh
 python3 tools/os88marty.py 127.0.0.1:9001 flicker -n 90 --click
 ```
 
-A Disk window's full repaint measures **11 frames (183 ms) of redraw and 1,963
-flashed pixels for 10 frames (166 ms)** on CGA; an idle desktop and a bare
-pointer move measure zero, and a Note Pad keystroke flashes nothing in its
-text. Three traps, all in Part 3.1 at length: inject the input while **paused**
-so the action lands inside the capture rather than racing it; check `settled`
-or every count was measured against a moving target; and **always read the
-bbox** — a count alone misattributes, which is how 42 pixels of "text flash"
-turned out to be the mouse pointer blinking under the gfx lock.
+A Disk window's full repaint measures **11 frames (183 ms) of redraw and
+1,963 flashed pixels for 10 frames** on CGA; an idle desktop and a bare
+pointer move measure zero. Three traps, all in Part 3.1: inject the input
+while **paused** so the action lands inside the capture; check `settled` or
+every count was measured against a moving target; and **always read the
+`bbox`** — a count alone misattributes, which is how 42 pixels of "text
+flash" turned out to be the mouse pointer blinking under the gfx lock.
 
-**IT DOES WORK ON HERCULES, and this paragraph used to say it did not.**
-Measured at the pinned build on `os8088_5150_herc_gla`: a 12-frame capture of
-an idle Hercules desktop returns `settled` with 0 changed and 0 transient — the
-same "the instrument is not manufacturing defects" baseline the CGA gives — at
-720x350, with frames arriving every ~93,500 cycles (19.6 ms, ~51 Hz, which is
-the Hercules field rate). `frame_count()` advances: 30 CGA frames against 25
-Hercules frames over the same interval, on the two-card machine.
+**It works on Hercules**: a 12-frame capture of an idle Hercules desktop
+returns `settled` with 0 changed and 0 transient at 720x350, frames every
+~93,500 cycles (19.6 ms, ~51 Hz). An MDA sitting in a machine whose guest is
+driving the *other* card reads 0 lit and never advances `frame_count()` —
+that is a card nobody has programmed, not a card that cannot rasterise. Two
+limits remain: `mode`/`text` is dead on the MDA (it answers `Mode0TextBw40`
+in Hercules graphics), so `field_w`/`field_h` is the discriminator there, as
+on VGA.
 
-The old claim was that the MDA does not rasterise graphics mode, so the
-rendered buffer is 0 lit of 252,000 and `frame_count()` never advances. Both
-halves of that are what a card **nobody has programmed** looks like, and that
-is not the same thing as a card that cannot rasterise — an MDA sitting in a
-machine whose guest is driving the *other* card reads exactly so, forever.
-Whatever produced the original observation, it does not reproduce: `fbuf` on a
-live Hercules desktop is 54.2% lit and tracks `vram` to within the aperture
-crop.
+### Determinism and snapshots
 
-**Two honest limits remain.** The correction was measured on the GLaBIOS
-machine, because the IBM ROM this tree cannot ship is needed for
-`os8088_5150_herc`; and `mode`/`text` is still dead on the MDA (it answers
-`Mode0TextBw40` in Hercules graphics), so `field_w`/`field_h` remains the
-discriminator there, exactly as it is on VGA.
+**The emulator is bit-exact deterministic**: two independent processes reach
+a breakpoint at the same cycle count with the same 1 MB memory hash, and stay
+identical through injected input — so "continue from a known state" is
+available by replaying the inputs (docs/plans/completed/SNAPSHOT-PLAN.md §7).
+**A wall-clock client destroys that**: two free-running instances paused
+after the same `sleep(22)` were 21.7 M cycles apart. So `advance(frames=…)` /
+`advance(cycles=…)` is the way to wait, never `time.sleep`, and
+`tools/os88mouserel.py` is the mouse driver paced that way.
 
-**It has snapshots, and it did not need a save format to get them** —
-docs/SNAPSHOT-PLAN.md is the full pattern, §7 and §8. The headline is that **the emulator is
-bit-exact deterministic**: two independent processes reach a breakpoint at the
-same 261,943,446 cycles with the same 1 MB memory hash, and stay identical
-through injected input. So "continue from a known state" is available today by
-replaying the inputs, with no snapshot format at all.
-
-The sharp edge is that **a wall-clock client destroys that determinism**: two
-free-running instances paused after the same `sleep(22)` were **21.7 M cycles
-apart**. So `advance(frames=…)` / `advance(cycles=…)` is the way to wait, never
-`time.sleep`, and `tools/os88drive.py` is the mouse driver paced that way —
-two processes running the same script from reset land on the identical cycle
-count and the identical 1 MB.
-
-**And `snapshot`/`restore` freezes a state outright**, by forking a holder
-process rather than serializing anything, so nothing can be left out of it:
+`snapshot`/`restore` freezes a state outright by forking a holder process,
+so nothing can be left out of it:
 
 ```python
 s = m.snapshot()               # {'id': 1, 'cycles': 167309139}
@@ -1717,123 +1307,99 @@ r = m.restore(s["id"], 9995)   # a Marty on the restored machine, byte-identical
 r.quit(); r = m.restore(s["id"], 9995)   # …and again, from the same state
 ```
 
-Unix only, in-memory only, and the mounted floppy is shared rather than rolled
-back — SNAPSHOT-PLAN §8 has the limits. Combine it with a `bp mem` watchpoint
-to snapshot the instant a value is touched.
+Unix only, in-memory only, and the mounted floppy is shared rather than
+rolled back — SNAPSHOT-PLAN §8 has the limits.
 
-**Not for:** the real 5150. That used to be `DEBUG.DRV`'s job and that driver
-is gone (SPEC.md §58), so on iron the floor is SPEC.md §57's registry read out
-of a photograph and a dump taken by whoever has the machine — neither of which
-single-steps anything. And not for a machine that is not an 8088: the 286 and
-386 targets are 86Box's.
+### Not for
 
-**And a number from it is still a number from an emulator.**
+The real 5150: `DEBUG.DRV` is gone (SPEC.md §58), so on iron the floor is
+SPEC.md §57's registry read out of a photograph and a dump taken by whoever
+has the machine. And not for a machine that is not an 8088: the 286 and 386
+targets are 86Box's.
+
+**A number from it is still a number from an emulator.**
 docs/FIELD-MACHINES.md's first rule is unchanged: a timing goes in
-PERFORMANCE.md Part 9 labelled MartyPC, and a dump is evidence about *logic*,
-never about time. On the CPU that labelling is a formality — it agrees with
-the 5150 to 0–4%. On a disk it is the whole point. What is new is that this one is cycle-accurate for the CPU,
-so `step` gives real cycle counts — 50 instructions measured 719 cycles on a
-booted desktop, 14.4 cycles per instruction, which is the same class of
-figure as PERFORMANCE.md Part 2's instruction floor.
+PERFORMANCE.md Part 9 labelled MartyPC, and a dump is evidence about *logic*.
+On the CPU that labelling is a formality — it agrees with the 5150 to 0–4%
+— and `step` gives real cycle counts (50 instructions measured 719 cycles on
+a booted desktop, 14.4 each). **The guest's cycle count is a DELTA
+instrument**: `cycles` is the age of the process, not of the run, and the
+rate against wall clock (~3.4–4.8x here) belongs to the HOST, so size every
+`settle(limit=)` as though guest seconds arrive faster than wall ones,
+because they do.
 
 ---
 
 ## What was verified, and how
 
-All of the following was run end to end in the container, against
-`build/os8088-360.img` and the real 27 OCT 82 IBM BIOS:
+Run end to end in a container with no IBM ROM, on `os8088_5150_cga_gla` with
+`build/os8088-360.img` and `build/apps360.img`:
 
-- The BIOS date string read out of `0xFFFF5` as `10/27/82`, and the reset
-  vector at `0xFFFF0` as `EA 5B E0 00 F0` — `jmp F000:E05B`.
-- os8088 boots, twice: once from the development tree and once from what
-  `build.sh` produces from scratch, with identical results.
-- **Reset to the kernel's first instruction is 300,798,299 cycles**,
-  23,586,325 instructions, 12.75 cycles each, on a 5150 with the 1982 IBM
-  BIOS reading `build/os8088-360.img`. That is an exec breakpoint on `0x600`
-  against a `reset`, which is the only honest way to ask it: the first two
-  attempts *polled memory* every few seconds of wall clock while MartyPC runs
-  faster than real time at a load-dependent rate, and got 81M and 313M cycles
-  for the same event on the same machine — a 3.9x spread that was measuring
-  when somebody looked. **The rate itself is ~4.8x** — measured 4.87 and 4.81
-  over two 10-second samples of the cycle counter against 4.772727 MHz, the
-  check `settle`'s docstring spells out — and it belongs to the HOST, so
-  re-measure rather than quoting it. For a harness it means every
-  `settle(limit=)` must be sized as though guest seconds arrive FASTER than
-  wall ones, because they do.
-  **It is a cycle count and NOT a boot time.** Dividing it by 4.772728 MHz
-  gives 63.02 s, and that figure was worth nothing when it was taken: a boot
-  is mostly POST and floppy, and this tool was then 30x fast on the floppy.
-  Since Set 37 the floppy half is within a quantum of the iron and the POST
-  half still is not measured against anything. The real machine's boot is
-  PERFORMANCE.md's **9,886 ms** (see the table above: 38,886 was the figure
-  before Part 9 Set 18's `AL` fix) and the only way to move that number is to
-  measure it there. What the cycle count IS good for is a **delta** against
-  another MartyPC run — that is how you tell whether a change to the boot path
-  did anything, which is a question this can answer and the 5150 answers
-  slowly.
-- `verify`: **71,624 bytes dumped, 1,351 differing (1.89%)** in 183 runs, with
-  `boot_ticks` reading 40 live against `0xFFFF` in the file — **byte-identical
-  between the development build and `build.sh`'s**, which is the check that
-  the vendored patch is the thing that was tested. For scale,
-  docs/FIELD-MACHINES.md's hand-taken MartyPC dump was 1,353 differing of
-  71,112 — the same instrument, automated.
-- `regs` at the desktop: `cs=0060 ds=0060 ss=1260 sp=2228` — SPEC.md §1's near
-  model on screen, CS = DS = `KERNEL_SEG` and SS = `LOW_SEG`.
-- Breakpoints: an `int 08h` breakpoint fired three times in a row at
-  `0060:37F5`, os8088's own tick hook — and **resumes**, ~260k cycles of guest
-  time between consecutive ticks, against 0 before the `run` fix above.
-- `step 50`: 50 instructions, 719 cycles.
-- `screen`: GLaBIOS's POST panel read back in full, including its
-  `RAM [ 256 KB OK ]`, `Video [ CGA ]` and `COM [ 03F8 02F8 ]` lines.
+- `make marty` from a clean `build/` clones, patches and builds in a couple
+  of minutes with a warm cargo registry.
+- `os88marty.py launch` with the default machine exits at once naming the
+  missing `ibm5150_82_v4`; with `--machine os8088_5150_cga_gla` it prints its
+  address and outlives the command; `instances` lists it; `kill <port>` ends
+  it; `reap` afterwards reports 0 orphans and leaves live owned instances
+  alone.
+- `status`, `regs` (`cs=0060 ds=0060`, SS = `LOW_SEG` — SPEC.md §1's near
+  model), `settle` (2.1 s host on a settled desktop), `m.sym()`, `m.disk()`,
+  `advance(frames=5)` (380,039 cycles), `dump ... -o`, `os88mouse.py where`.
+- A second `Marty(addr)` is refused in under a second naming the holder.
+- An `int 8` breakpoint stops the guest in state `"breakpoint"`
+  (`stopped()` True), `run` resumes it, and the next hit is 262,144 cycles
+  later.
+- `shot` and `shot --rendered` agree pixel for pixel (76,218 lit of 128,000).
+- `os88flush.py disks`, `ls 1 APPS`, `verify 0` (`os88disk: verify OK`),
+  `save 0 <path>` (368,640 bytes), `get 1 APPS/HELLO.O88` byte-identical to
+  `build/hello.o88`; `diff 0` reports 0 sectors once `--run-dir` names the
+  instance's directory.
+- `verify` reports ~96% differing against a correct kernel, for the reason
+  given under *What it is for*.
+
+The IBM-ROM claims — the BIOS date at `0xFFFF5` reading `10/27/82`, the
+disk calibration tables, `int 19h` restarting — were taken on a checkout
+carrying the ROM and are not re-checkable without it.
 
 ---
 
 ## Upstream findings
 
-All are in `tools/martypc/patches/01-headless-debug-server.patch` and all are
-worth offering upstream:
+All are in `tools/martypc/patches/01-headless-debug-server.patch` and worth
+offering upstream:
 
-- **`peek_range` was off by one.** (No longer load-bearing for us — `read`
-  uses `get_vec_at_ex` now — but still a real bug.) `if address + len < self.memory.len()`
-  refuses a range *ending* at the last byte of memory — so
-  `peek_range(0xFFFF0, 16)`, the reset vector paragraph and the most-read
-  sixteen bytes in an 8088 machine, was refused while fifteen bytes at the
-  same address succeeded. `<=`.
-- **Two breakpoint types are dead code.** `BreakPointType::Execute(seg, off)`
-  and `MemAccess(seg, off)` are in the public enum and no CPU matches on
-  them — so a frontend that offers them offers controls that arm and never
-  fire. This works around it (above); upstream should either implement or
-  retire them. **A control that looks live and is not** is the sharpest kind
-  of bug in a debugger, because it makes the *absence* of a stop look like
+- **`peek_range` was off by one.** `if address + len < self.memory.len()`
+  refuses a range *ending* at the last byte of memory — `peek_range(0xFFFF0,
+  16)`, the reset vector paragraph. `<=`. (No longer load-bearing here;
+  `read` uses `get_vec_at_ex`.)
+- **Two breakpoint types are dead code.** `BreakPointType::Execute(seg,
+  off)` and `MemAccess(seg, off)` are in the public enum and no CPU matches
+  on them. A control that looks live and is not is the sharpest kind of bug
+  in a debugger, because it makes the *absence* of a stop look like
   evidence.
-- **Headless mode never mounted floppies.** `--mount fd:N:path` is parsed into
-  `config.emulator.media.floppy` and then nothing reads it — mounting is done
-  by the eframe frontend's file manager, which a headless run does not have.
-  So a headless machine always booted with empty drives, which GLaBIOS reports
-  as `Disk Boot Fail. You monster.` and the IBM BIOS reports by dropping into
-  cassette BASIC. Both look like a bad image rather than an absent one.
+- **Headless mode never mounted floppies.** `--mount fd:N:path` is parsed
+  into `config.emulator.media.floppy` and then nothing reads it — mounting is
+  the eframe frontend's file manager's job. A headless machine always booted
+  with empty drives, which GLaBIOS reports as `Disk Boot Fail. You monster.`
+  and the IBM BIOS by dropping into cassette BASIC.
 - **A bitstream track's write counter never advances** (fluxfox, branch
-  `marty_consumer_0.34`). `DiskImage::write_sector` — the one the FDC actually
-  calls — delegates straight to the track and increments nothing, and
-  `BitStreamTrack::add_write` exists but its only call site is inside a
-  commented-out block; `MetaSectorTrack` does increment. Since
-  `post_load_process` sets the count to **1** at mount, `write_ct` on a raw
-  sector image reads 1 for the life of the machine however much the guest
-  writes, which the eframe floppy viewer uses to decide whether to redraw its
-  visualisation. It is the same shape as the dead breakpoint types: a signal
-  that is present, plausible and silently constant, so **the absence of a
-  change looks like evidence** that nothing happened. This works around it by
-  not believing it — `tools/os88flush.py` compares content — and the fix
-  upstream is one uncommented line.
-- **`attach_image` takes a path and throws it away.** The parameter is
-  literally `_path`, so once an image is in a drive nothing on the machine
-  knows where its bytes came from. The eframe frontend does not notice because
-  its file manager holds the path alongside the drive; a headless run mounts
-  from argv and has nowhere to put one. `mount_floppy` keeps its own two-entry
-  registry so that `flush` can write back over the file the drive was mounted
-  from, which is what makes *Save Floppy* (as opposed to *Save Floppy As*) a
-  thing a harness can ask for at all.
+  `marty_consumer_0.34`). `DiskImage::write_sector` delegates to the track
+  and increments nothing; `BitStreamTrack::add_write`'s only call site is
+  inside a commented-out block. Since `post_load_process` sets the count to
+  1 at mount, `write_ct` on a raw sector image reads 1 for the life of the
+  machine. `tools/os88flush.py` compares content instead; the fix upstream
+  is one uncommented line.
+- **`attach_image` takes a path and throws it away** (the parameter is
+  `_path`), so once an image is in a drive nothing knows where its bytes came
+  from. `mount_floppy` keeps its own registry so that `flush` can write back
+  over the file the drive was mounted from.
+- **`insert_vhds()` knew only the Xebec** and resolved a VHD through the
+  resource manager, so an XT-IDE machine had no disk and an absolute path
+  was "not found" (above).
+- **`run` from a breakpoint advanced zero cycles** unless the transition went
+  through `machine.run()`'s `BreakpointHit` arm (above).
 
-The server itself is the answer to the crate's own standing TODO — *"We don't
-have any backend to run an event loop. If we want to actually run the emulator
-now we need some way of controlling / stopping it."* A socket is both.
+The server itself is the answer to the crate's own standing TODO — *"We
+don't have any backend to run an event loop. If we want to actually run the
+emulator now we need some way of controlling / stopping it."* A socket is
+both.

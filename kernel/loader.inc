@@ -206,6 +206,82 @@ ld_hdr_ok:
     ret
 
 ; -----------------------------------------------------------------------------
+; ld_expand - turn the compressed file step 6 read HIGH into the image
+;             (module-internal; SPEC.md 20.13)
+; in:  [ld_base] the region, [ld_roff] where the file landed, [ld_fsz] the
+;      file, [ld_img] the image; the clear prefix and the format come off the
+;      header the file carries, at [ld_roff]
+; out: CF = 0 done; CF = 1 the stream was refused
+; clobbers: AX BX CX DX SI DI (DS is restored)
+;
+; TWO MOVES, and the first is easy to miss: the file was read high, so the
+; region's first `prefix` bytes - the header the disk-swap re-check below is
+; about to validate - are otherwise NEVER WRITTEN. They come down first. R is
+; at least 512 and the prefix at most 112, so the copy cannot overlap.
+;
+; Then the body. `lz_decomp_x` wants its destination at offset 0 of a segment
+; (SPEC.md 20.13.3) and the body belongs at `prefix`, which would be a
+; problem if the prefix were not always a multiple of 16 - 32, 48, 96 or 112.
+; It is, so the destination is a SEGMENT `prefix/16` paragraphs along and DI
+; stays 0, which keeps the offset bound one instruction.
+; -----------------------------------------------------------------------------
+ld_expand:
+    push ds
+    mov si, [ld_roff]           ; every kernel variable this needs is read
+    mov cx, [ld_fsz]            ; while DS is still KERNEL_SEG
+    mov dx, [ld_img]
+    mov ax, [ld_base]           ; (the format comes off the header itself,
+    mov es, ax                  ; below, once DS reaches it)
+    mov ds, ax                  ; source and destination are one region
+    mov al, [si+LD_H_FLAGS]     ; the CLEAR prefix, off the header the file
+    mov bx, LD_HDR_SIZE         ; carries at R: what the mount reads out of
+    test al, 1                  ; the first sector and must never have to
+    jz .noico                   ; decompress to get (SPEC.md 20.13.1) - the
+    add bx, 64                  ; header, the icon, the association block.
+.noico:                         ; At most 112, and ALWAYS a multiple of 16,
+    test al, 2                  ; which is what lets the body's destination
+    jz .noasc                   ; be a SEGMENT below
+    add bx, 16
+.noasc:
+    test al, 0x10               ; bit 4 says which format (SPEC.md 20.13): the
+    mov al, LZ_LZ4              ; decoder wants 0 or 1, and CX - the file's
+    jz .fmt                     ; length - is not a register to shift by
+    mov al, LZ_LZB
+.fmt:
+    xor di, di
+    push ax                     ; ...the format, across the copy
+    push cx
+    mov cx, bx
+    cld
+    rep movsb                   ; the prefix, down to offset 0 - and this
+                                ; leaves SI on the compressed body, and CX
+                                ; spent, which is when it can be a shift count
+    mov cl, 4
+    mov ax, bx
+    shr ax, cl                  ; the prefix in PARAGRAPHS...
+    mov cx, es
+    add ax, cx                  ; ...is where the body's segment starts
+    pop cx
+    sub cx, bx                  ; the body's length
+    sub dx, bx                  ; ...and what it must produce
+    mov es, ax
+    xor di, di
+    xor bx, bx                  ; BX:DX is the expected output (SPEC.md 20.14.5)
+                                ; and an image is 16 bits by ld_check_hdr
+    pop ax                      ; AL = the format
+    call lz_decomp_x
+    pop ds
+    mov es, [ld_base]           ; ES BACK TO THE REGION'S BASE. The destination
+                                ; above is a segment `prefix/16` paragraphs
+                                ; along, and step 6's disk-swap re-check reads
+                                ; the header at ES:0 - which without this is 96
+                                ; bytes into the image, and every launch of a
+                                ; compressed package answers "Bad package".
+                                ; `mov` leaves the flags alone, so the CF
+                                ; lz_decomp_x set is still the answer
+    ret
+
+; -----------------------------------------------------------------------------
 ; ld_check_hdr - validate a .o88 v3 header (module-internal)
 ; in:  ES:SI -> 32 readable header bytes; [ld_fsz] = the file's byte count
 ; out: CF = 0 and [ld_img]/[ld_bss]/[ld_ent] filled, or CF = 1 and
@@ -259,13 +335,34 @@ ld_check_hdr:
     jz .lowword                             ; under 64KB: compare exactly
     test byte [es:si+LD_H_FLAGS], 4
     jz .toobig
-    jmp short .imgok
+    jmp short .notover
 .lowword:
     cmp ax, [ld_fsz]
-    ja .bad                                 ; the image runs past the file
-    je .imgok                               ; exact
+    je .notover                             ; exact
+    ja .over                                ; the image runs PAST the file
     test byte [es:si+LD_H_FLAGS], 4         ; short of it: parts, or truncated
     jz .bad
+.notover:                                   ; ...AND THE COMPRESSION BITS ARE
+    test byte [es:si+LD_H_FLAGS], 0x18      ; A LIE ON EVERY ARM BUT .over
+    jnz .bad                                ; (SPEC.md 20.13.2). Step 6 reads a
+    jmp short .imgok                        ; compressed file at R =
+                                            ; roundup512(image - file), a plain
+                                            ; 16-bit subtract: with the file at
+                                            ; or past the image it BORROWS, and
+                                            ; an R of tens of KB lands the read
+                                            ; outside a region step 4 sized
+                                            ; from image + bss. Both bits and
+                                            ; not bit 3 alone - bit 4 without
+                                            ; it is a format os88pkg.py never
+                                            ; writes, and [ld_cfmt] below reads
+                                            ; it as LZB, which is non-zero and
+                                            ; takes that same path
+.over:                                      ; ...which is COMPRESSION (SPEC.md
+    test byte [es:si+LD_H_FLAGS], 8         ; 20.13.2): `image` keeps meaning
+    jz .bad                                 ; the UNPACKED bytes, so the file
+                                            ; is legitimately shorter. Without
+                                            ; the bit it is a truncated file
+                                            ; and the guard is unchanged
 .imgok:
     mov [ld_img], ax
     mov dx, [es:si+LD_H_BSS]
@@ -308,6 +405,21 @@ ld_check_hdr:
     cmp ax, [ld_img]
     jae .bad
     mov [ld_ent], ax
+
+    ; ...and SPEC.md 20.13's two facts about compression, captured here because
+    ; this is where the flags byte is already in hand and both callers of this
+    ; routine want them. AX is spent by now and DX is documented as clobbered.
+    mov al, [es:si+LD_H_FLAGS]
+    shr al, 1                               ; bits 3 and 4, as a number: 0 =
+    shr al, 1                               ; plain, 1 = LZ4, 3 = LZB - and 2,
+    shr al, 1                               ; bit 4 without bit 3, is not a
+    and al, 3                               ; thing os88pkg.py writes; it reads
+    mov [ld_cfmt], al                       ; (CX is a caller's, so no `shr
+                                            ; al, cl`)
+                                            ; as LZB and the decoder refuses
+                                            ; the plain bytes it is then given,
+                                            ; which is a refusal by the right
+                                            ; route
     clc
     ret
 .bad:
@@ -677,7 +789,7 @@ ld_run_body_x:
     mov al, LD_EDISK
 .ret1:
     ret
-.ret2:                          ; step 6 failed with a region already claimed
+.ret2:                          ; step 6 or 6a failed with a region already
     call ld_unreserve           ; (AL is the status): give it back, or a
     ret                         ; failed load would hold heap for the session.
                                 ; The record itself is unpublished, so it
@@ -688,19 +800,50 @@ ld_run_body_x:
 
     ; --- 6. read the whole file into the region --------------------------------
 .read:
+    mov word [ld_roff], 0       ; where in the region the read lands
     mov ax, [ld_img]            ; THE IMAGE, NOT THE FILE. On a v3 package the
-    call dsk_bytes_secs_x       ; two are equal and always were; on one
+                                ; two are equal and always were; on one
                                 ; carrying parts the region holds the primary
                                 ; alone and the rest is the package's to read
-                                ; (SPEC.md 20.12). DX = ceil(image/512)
+                                ; (SPEC.md 20.12)
+    cmp byte [ld_cfmt], 0
+    je .rdgo
+    ; COMPRESSED (SPEC.md 20.13): read the FILE, and read it HIGH so step 6a
+    ; can expand it DOWNWARDS into the same region - no second buffer and no
+    ; second claim, which is what makes this admissible on a 128KB machine.
+    ;   R = roundup512(image - file)
+    ; and 512 because that is what int 13h needs of a destination. There is no
+    ; margin in it: the stream's own raw tail makes image - file exactly
+    ; enough (SPEC.md 20.13.7). os88pkg.py computes the same R and REFUSES to
+    ; compress anything for which R + file does not fit the region this
+    ; loader was going to claim anyway - so the sizing at step 4 is untouched
+    ; and this cannot overflow it.
+    mov ax, [ld_fsz]
+    mov bx, [ld_img]
+    sub bx, ax
+    add bx, 511
+    and bx, 0FE00h
+    mov [ld_roff], bx
+.rdgo:
+    call dsk_bytes_secs_x       ; DX = ceil(AX/512)
     mov ax, [ld_clus]
-    mov es, [ld_base]           ; the package's OWN segment, offset 0
-    xor bx, bx
+    mov es, [ld_base]           ; the package's OWN segment
+    mov bx, [ld_roff]
     call dsk_read_chain_x ; in: AX=cluster, DX=sectors, ES:BX -> dest.
     jc .ret2                    ; on CF, AL is ALREADY the status: 1 =
                                 ; LD_EDISK (disk error), 2 = LD_EBAD (chain
                                 ; corrupt is bad data, not a disk error) -
                                 ; SPEC.md 21 step 6
+
+    ; --- 6a. expand it, if it came compressed (SPEC.md 20.13) -----------------
+    cmp byte [ld_cfmt], 0
+    je .expanded
+    call ld_expand
+    jnc .expanded
+    mov al, LD_EBAD             ; a stream that does not decode is BAD DATA and
+    jmp .ret2                   ; not a disk error - the same class as a
+                                ; corrupt chain, and the same status
+.expanded:
 
     xor si, si                  ; re-check against the in-region header - the
     call ld_check_hdr           ; disk could have been swapped between the
@@ -757,7 +900,8 @@ ld_alloc:
                                 ; FOR, never the size got
 
     ; --- 5. reserve an instance record + a pool region -------------------------
-    call KERNEL_SEG:cw_inst_alloc ; DI = record (unpublished: still free on
+    mov bp, inst_alloc
+    call KERNEL_SEG:cw_mem_disp ; DI = record (unpublished: still free on
     jc .nomem                   ; any later failure)
     mov [ld_rec], di            ; banked in .bss, not in BP: BP carries the
                                 ; entry offset into the dispatcher below,
@@ -879,6 +1023,16 @@ ld_start:
                                 ; one thing in that contract a package may
                                 ; ignore, which is what makes adding it
                                 ; compatible with every package built before
+                                ; THE SECOND DOOR INTO PACKAGE CODE, and the
+                                ; only other one (SPEC.md 66.6.1). Audited:
+                                ; there are exactly two `call far` sites in the
+                                ; kernel that reach a package - this and
+                                ; wm_pkgcall - plus mem_reloc_call's, which is
+                                ; the compactor's own and must NOT be counted.
+                                ; This one needs no bracket: the only region a
+                                ; frame of it can refer to is the one being
+                                ; loaded, and [ld_base] names that one for
+                                ; mem_frameless
     mov ds, [ld_base]           ; DS = the package's own segment, read through
     call far [es:ld_fp]         ; DS while DS still names the kernel and
     pop ds                      ; loaded in one instruction - the ordering
@@ -906,7 +1060,8 @@ ld_start:
     push es
     mov es, [ld_base]           ; the name field is in the package's image
     mov si, 16
-    call KERNEL_SEG:cw_inst_set_name_x ; ES:SI -> the 16-byte NUL-padded name
+    mov bp, inst_set_name_x
+    call KERNEL_SEG:cw_mem_disp ; ES:SI -> the 16-byte NUL-padded name
                                 ; ("out: nothing - all registers preserved")
     ; --- and the ICON, off the SAME ES -------------------------------------
     ; A SENTINEL, not a copy. The icon body is 64 bytes at a fixed offset in
@@ -924,7 +1079,8 @@ ld_start:
     mov word [di+I_ICON], I_ICO_PKG
 .noico:
     pop es
-    call KERNEL_SEG:cw_inst_bind_win ; DI = record, BX = window (from the entry)
+    mov bp, inst_bind_win
+    call KERNEL_SEG:cw_mem_disp ; DI = record, BX = window (from the entry)
     mov byte [di+I_STATE], 1    ; publish - the LAST record write
     ; --- the status BEFORE the repaint, not after ---------------------------
     ; A Disk window's status line draws [ld_status] (SPEC.md 22), so the
@@ -952,6 +1108,15 @@ ld_start:
     call KERNEL_SEG:cw_gfx_lock
     call KERNEL_SEG:cw_wm_show  ; in: BX = window ptr; repaints all
     call KERNEL_SEG:cw_gfx_unlock
+    mov word [ld_base], 0       ; ...AND NOTHING IS BEING LOADED ANY MORE
+                                ; (SPEC.md 66.6.1). mem_can_move pins the
+                                ; region whose base this names, so a value left
+                                ; standing after a successful launch pins the
+                                ; most recently launched package - the one most
+                                ; likely to be the largest - for the rest of
+                                ; the session. It was cleared on the ABORT path
+                                ; alone, where ld_undo frees by it, and never
+                                ; here, where nothing had asked
     mov al, LD_OK
     ret
 
@@ -966,7 +1131,8 @@ ld_start:
     ; The reserved instance record was never published, so it needs nothing.
     call KERNEL_SEG:cw_gfx_lock
     mov ax, [ld_base]
-    call KERNEL_SEG:cw_wm_destroy_seg
+    mov bp, wm_destroy_seg
+    call KERNEL_SEG:cw_mem_disp
     call KERNEL_SEG:cw_gfx_unlock
     ; ...but NOT its toast (SPEC.md 20.12.4). A refusal the entry proc SAID -
     ; os88parts.inc's four, a C package's - carries the reserved slot as its
@@ -996,7 +1162,7 @@ ld_start:
 
 ; -----------------------------------------------------------------------------
 ; ld_pkg_run - OSAPI_PKG_RUN: run a package image that is ALREADY IN MEMORY
-;              (SPEC.md 21.5), slot KERNEL_SEG:0x04F8
+;              (SPEC.md 21.5), slot KERNEL_SEG:0x0520
 ;
 ; in:  ES:SI = the image, byte for byte what the .O88 file holds, in a claim
 ;              of the caller's. ANY segment: it is COPIED, never adopted, so
@@ -1188,6 +1354,11 @@ ld_img:     resw 1              ; header: image size
 ld_bss:     resw 1              ; header: bss size
 ld_ent:     resw 1              ; header: image-relative entry
 ld_need:    resw 1              ; allocated region size (512-multiple)
+ld_cfmt:    resb 1              ; SPEC.md 20.13: flags bits 3 and 4 as a number -
+                                ; 0 plain, 1 LZ4, 3 LZB (ld_check_hdr)
+ld_roff:    resw 1              ; where in the region step 6 put the file: 0
+                                ; uncompressed, high enough to expand
+                                ; downwards from when it is not
 ld_lname:   resb 13             ; the launching file's display name, NUL
                                 ; terminated (SPEC.md 21 step 1b). Thirteen
                                 ; bytes for the whole machine, because step 9

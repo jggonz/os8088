@@ -52,14 +52,16 @@ WSM_ENTRY   equ 8                   ; ...and the far-called entry point
 ; caller's on entry and on return; the module switches its own and puts it
 ; back. ES is preserved. The answer is in AX.
 WSMV_BIND   equ 0                   ; BX = canvas claim seg, CX = bundle claim
-                                    ; seg, DX -> a 12-byte parameter block in
-                                    ; the CALLER's DS (below). out AX = 1
+                                    ; seg, DX -> a 16-byte parameter block in
+                                    ; the CALLER's DS (WSMP_*, below). out AX = 1
 WSMV_SPRITE equ 1                   ; BX = sprite index, CL = a WSMF_* field,
                                     ; DX = the value, AH = 0 read / 1 write.
                                     ; out AX = the value, or 1/0 for a write
                                     ; accepted / refused (frame out of range)
-WSMV_START  equ 2                   ; BX = fps 1..18. out AX = 1 running,
-                                    ; 0 = fps outside 1..18
+WSMV_START  equ 2                   ; BX = fps 1..18, CX = the window pointer
+                                    ; (the worker needs it for TASK_ALIVE and
+                                    ; WM_WAKE). out AX = 1 running, 0 = fps
+                                    ; outside 1..18
 WSMV_STOP   equ 3                   ; out AX = 1 once the worker has stopped
 WSMV_PAINT  equ 4                   ; BX = screen x, CX = screen y; the gfx
                                     ; lock is HELD by the caller and the clip

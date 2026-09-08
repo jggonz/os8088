@@ -1,7 +1,7 @@
 ; =============================================================================
 ; lptlink - what is on this machine's parallel ports, and how fast is the cable
 ;
-; Step 1 of docs/NET-PLAN.md, and it is deliberately ONE artifact rather than
+; Step 1 of docs/plans/completed/NET-PLAN.md, and it is deliberately ONE artifact rather than
 ; the two the plan first proposed (a port survey and a throughput benchmark).
 ; They want the same code and the same trip: a survey that stops at "there is
 ; a latch here" cannot answer the question that actually matters - is there a
@@ -15,7 +15,7 @@
 ;      an answer - comscan's warn_outside, in the other connector. FIELD
 ;      RESULT: the 5150's GB101 is at 3BC and the DOS machine's DIO-500 is at
 ;      378, which is why neither end of this may assume an address
-;      (docs/NET-PLAN.md 1.4.1)
+;      (docs/plans/completed/NET-PLAN.md 1.4.1)
 ;   2. is there a LapLink cable on one of them with a LIVE PARTNER - as
 ;      against nothing, or a printer, both of which read as a CONSTANT status
 ;      byte where a partner reads as whatever we ask it to (NET-PLAN 1.4.4)
@@ -859,7 +859,7 @@ put_ok:                         ; AL = 0/1
 
 s_title:
     db 13,10,'lptlink - parallel port survey and cable benchmark',13,10
-    db 'docs/NET-PLAN.md step 1.  Neither end of this is os8088.',13,10,13,10,0
+    db 'docs/plans/completed/NET-PLAN.md step 1.  Neither end of this is os8088.',13,10,13,10,0
 s_phead:
     db '  base  bios  latch  stat ctrl',13,10,0
 s_ind:      db '  ',0

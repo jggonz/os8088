@@ -1,5 +1,5 @@
 @echo off
-REM Build os88proxy.exe on this Windows machine (docs/PROXY-PLAN.md 13).
+REM Build os88proxy.exe on this Windows machine (docs/plans/completed/PROXY-PLAN.md 13).
 REM
 REM Needs python.org's Python 3.8+ - the "Add python.exe to PATH" box ticked -
 REM and nothing else. Run it from the repository root:

@@ -1275,7 +1275,7 @@ desk_draw_zone:
 
 %ifndef KERN_SMALL
 ; -----------------------------------------------------------------------------
-; osapi_desk_svc - slot 0x0500: a DRIVER registers the desktop SERVICE zone
+; osapi_desk_svc - slot 0x0528: a DRIVER registers the desktop SERVICE zone
 ;                  (SPEC.md 26.7)
 ; in:  AL = 1 add / 0 withdraw; ES:SI -> a DSV_R_SIZE record in the driver's
 ;      own segment (add only). ES is the caller's segment either way - the

@@ -11,7 +11,7 @@ screenshot. The feature is two halves and only the first is obvious:
   1. a held box INVERTS, and
   2. it comes back UP when the pointer slides off it while still held,
 
-and it is the SECOND that the feature exists for (docs/MOUSEUP-PLAN.md 7
+and it is the SECOND that the feature exists for (docs/plans/completed/MOUSEUP-PLAN.md 7
 declined a static invert precisely because it cannot do it, and reads as
 "held" about a gesture that is going to be cancelled). A test that only
 presses and releases passes on the version that says the opposite of what is

@@ -81,8 +81,8 @@ cp "$HERE/configs/os8088_field_roms.toml" "$RUN/configs/rom_definitions/"
 
 # The IBM BIOS is IBM's. It is not in this tree and cannot be - CONTRIBUTING.md
 # puts the whole tree under one MIT file, and IBM has never licensed this ROM
-# for redistribution. Supply your own copy; the five os8088_5150_* machines that
-# ask for rom_set = "ibm5150_82_v4" need it, and the three glabios_* ones do not.
+# for redistribution. Supply your own copy; the machines that ask for
+# rom_set = "ibm5150_82_v4" need it, and the glabios_* ones do not.
 IBM_ROM=BIOS_IBM5150_27OCT82_1501476_U33.BIN
 IBM_MD5=f453eb2df6daf21ec644d33663d85434
 if [ -d "$HERE/roms" ] && ls "$HERE"/roms/*.BIN >/dev/null 2>&1; then
@@ -90,8 +90,8 @@ if [ -d "$HERE/roms" ] && ls "$HERE"/roms/*.BIN >/dev/null 2>&1; then
 else
     cat >&2 <<EOF
 build.sh: note - no BIOS ROM in $HERE/roms/
-    The GLaBIOS machines (os8088_5150_fast, os8088_5150_vga, os8088_5150_hd)
-    will run. The period-accurate ones (rom_set = "ibm5150_82_v4") will not
+    The GLaBIOS machines (every *_gla one and every os8088_xt_* one) will
+    run. The period-accurate ones (rom_set = "ibm5150_82_v4") will not
     start until you drop in your own dump of the 27 OCT 82 IBM 5150 BIOS:
 
         $HERE/roms/$IBM_ROM

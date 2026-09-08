@@ -33,6 +33,7 @@ import os88sym                                               # noqa: E402
 import os88geom                                              # noqa: E402
 import stkwater                                              # noqa: E402
 from os88mouse import Mouse                                  # noqa: E402
+import dispcp                                                # noqa: E402
 
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_herc_gla"
 DEFS = tuple(d for d in os.environ.get("OS88_DEFINES", "").replace(",", " ").split() if d)
@@ -155,10 +156,22 @@ with M.launch(SYS, apps=APPS, machine=MACHINE) as m:
 
     mo.dblclick(vw - 30, 45); tick(m, 240)                   # drive A
     step("disk window")
-    mo.dblclick(140, 178); tick(m, 240)                      # MEDIA
+    # **BY NAME, NOT BY ROW** (docs/WRITING-TESTS.md 6). These were
+    # `mo.dblclick(140, 178)` and `mo.dblclick(160, 146)` - the pixel a row
+    # sits at when the listing is the one somebody had on screen the day they
+    # wrote it. SPEC.md 19.8.1 moved the typefaces into SYSTEM/FONTS, so A:\
+    # lost a folder, every entry below it moved up one row, and this row then
+    # opened a GAME and reported "the Paint window is gone" - which reads as
+    # Paint crashing and is a test clicking somewhere else. `open_named`
+    # resolves the row out of the guest's own listing and waits for the thing
+    # the entry's TYPE says will happen.
+    wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
+    dispcp.open_named(m, mo, S, lambda mm: tick(mm, 240), wx, wy, "MEDIA")
     step("MEDIA")
     refill()
-    mo.dblclick(160, 146); tick(m, 1200)                     # OS8088.GIF -> PAINT
+    wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
+    dispcp.open_named(m, mo, S, lambda mm: tick(mm, 1200), wx, wy,
+                      "OS8088.GIF")
     step("paint open")
 
     import random

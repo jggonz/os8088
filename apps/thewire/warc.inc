@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/thewire/warc.inc
 ;
-; THE ARCHIVE FORMAT, version 1 (SPEC.md 88.13) - offsets and limits only.
+; THE ARCHIVE FORMAT, version 1 (SPEC.md 92.13) - offsets and limits only.
 ;
 ; **EVERY EQU HERE IS MIRRORED IN tools/os88wire.py** and tests/unit/t_wire.py
 ; compares the two in the FAST tier, exactly as wcat.inc's are. The website's
@@ -39,7 +39,7 @@ WAH_PROGRAM equ 1               ; the LAST entry is a package to run
 
 ; --- WA_METHOD ---------------------------------------------------------------
 WAM_STORED  equ 0
-WAM_LZSS    equ 1               ; SPEC.md 88.13's decoder: distance 1..4096,
+WAM_LZSS    equ 1               ; SPEC.md 92.13's decoder: distance 1..4096,
                                 ; length 3..18, flags LSB first
 
 ; --- what the reader will hold ------------------------------------------------

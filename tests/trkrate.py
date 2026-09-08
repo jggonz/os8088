@@ -62,7 +62,7 @@ def main():
         # then animates - so `settle` can never return and the run dies
         # naming the saver rather than the tracker. Measured, in the pass-2
         # soak: "the screen was still changing after 120s because SPEC.md
-        # 79's SCREEN SAVER IS RUNNING" (docs/HANDOFF-SOAK-FINDINGS.md B7).
+        # 79's SCREEN SAVER IS RUNNING" (docs/plans/HANDOFF-SOAK-FINDINGS.md B7).
         os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")

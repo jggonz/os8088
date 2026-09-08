@@ -73,8 +73,8 @@
 %include "cword/cwmove.inc"
 
 ; The type library (SPEC.md 6.3/6.5) behind a C calling convention, which is
-; what lets the document be set in a face off the system disk's FONTS/ folder
-; (SPEC.md 19.8, 67.12.2). It carries apps/os88type.inc itself and the bss that
+; what lets the document be set in a face off the system disk's SYSTEM/FONTS
+; folder (SPEC.md 19.8). It carries apps/os88type.inc itself and the bss that
 ; file's TY_BSS macro places, so it has to be inside the image and before the
 ; line below closes it.
 %include "cword/cwtype.inc"

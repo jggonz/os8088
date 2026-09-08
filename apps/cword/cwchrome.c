@@ -208,12 +208,13 @@ static void cw_ribbon(void)
 }
 
 /* ==========================================================================
- * THE FONT LIST (SPEC.md 19.8, 67.12.2)
+ * THE FONT LIST (SPEC.md 19.8)
  *
- * The list is the MACHINE'S and not this program's: `FONTS/` sits beside
- * `SYSTEM/` on the system disk because a typeface is the machine's the way the
- * kernel's own 8x8 cell is, and a second application wanting the same family
- * should find it already there rather than carry a copy. So this panel is
+ * The list is the MACHINE'S and not this program's: `SYSTEM/FONTS` sits with
+ * the rest of the machine's own furniture on the system disk because a
+ * typeface is the machine's the way the kernel's own 8x8 cell is, and a second
+ * application wanting the same family should find it already there rather than
+ * carry a copy (SPEC.md 19.8.1). So this panel is
  * built from what apps/os88type.inc's ty_scan() found and its length is
  * whatever that disk holds - a disk carrying more faces needs no edit here.
  *

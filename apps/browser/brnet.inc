@@ -1,9 +1,9 @@
 ; =============================================================================
-; The browser's NETWORK half - docs/NET-STACK-PLAN.md stage D
+; The browser's NETWORK half - docs/plans/completed/NET-STACK-PLAN.md stage D
 ;
 ; SPEC.md 62.11's socket verbs, an HTTP/1.0 GET, and the page handed to the
 ; parser that already existed. The rendering half of this application needed
-; no change at all to gain a network, which is the claim docs/BROWSER-PLAN.md
+; no change at all to gain a network, which is the claim docs/plans/completed/BROWSER-PLAN.md
 ; made when it kept fetching out of the layout work entirely.
 ;
 ; --- THE WORKER OWNS THE FETCH, AND MAY NOT OWN THE MEMORY -------------------
@@ -37,7 +37,7 @@
 ; every server writes as a link, so the page says where it went and a click
 ; will follow it once links do.
 ;
-; EVERYTHING OFF THE WIRE IS HOSTILE (docs/NET-STACK-PLAN.md 8.5). The only
+; EVERYTHING OFF THE WIRE IS HOSTILE (docs/plans/completed/NET-STACK-PLAN.md 8.5). The only
 ; thing this trusts a server about is how many bytes it just handed over, and
 ; that is bounded by the capacity passed to NETV_RECV.
 ; =============================================================================
@@ -86,6 +86,15 @@ br_hire:
     call OSAPI_TASK_SPAWN
     jc .out
     mov byte [br_spawn], 1
+    ; ...AND THE WORKER MAY BE RESTARTED (SPEC.md 66.6.2). Hiring one
+    ; would otherwise pin the region for ever - task_spawn wrote our
+    ; segment into that worker's frame before its first instruction:
+    ; br_nstep banks a generation and every store is guarded on it, so a fetch
+    ; abandoned by a restart writes nothing - which is br_abort's own design.
+    ; The kernel restarts a worker only where it PARKS, which for us is
+    ; inside OSAPI_TASK_ALIVE at the top of the loop; we do not declare
+    ; OSAPI_MEM_PARKSAFE, so the gfx-lock park is not in play.
+    OS88_WORKER_RESTARTABLE br_worker
 .out:
     pop bx
     pop ax

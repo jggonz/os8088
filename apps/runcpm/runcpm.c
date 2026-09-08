@@ -657,7 +657,7 @@ static int rc_slice(void)
 }
 
 /* ==========================================================================
- * THE DEBUG LOADER (docs/RUNCPM-PORT-PLAN.md wave 2): Alt+L asks for a name
+ * THE DEBUG LOADER (docs/plans/completed/RUNCPM-PORT-PLAN.md wave 2): Alt+L asks for a name
  * on the terminal, reads NAME.COM from the floppy into the Z80 claim and
  * runs it at 0100h the way the CCP would: page zero patched, C = the
  * disk/user byte, SP under the CCP with 0000 on top so a RET warm-boots. It
@@ -938,8 +938,17 @@ void os88_onwake(void *win)
          * full - is transient, and RC_M_EXIT keeps wanting the wake until
          * it takes. */
         os88_gfx_lock();
-        if (os88_task_spawn(win) == 0)
+        if (os88_task_spawn(win) == 0) {
             rc_mode = RC_M_DEAD;
+            /* ...and the 64KB region stays movable (SPEC.md 66.6.2): the
+             * worker's whole loop is `if (rc_mode == RC_M_DEAD) close;
+             * task_alive; sleep`, every value a static, so a restart at the
+             * park inside os88_task_alive() costs one poll. This package is
+             * the largest single tenant on the machine and it is hired only
+             * on the way out, so the window in which the pin would apply is
+             * exactly the window in which the memory is most wanted. */
+            os88_task_restartable(1);
+        }
         os88_gfx_unlock();
     }
     if (rc_wants_wake())
@@ -1019,7 +1028,7 @@ void os88_paint(void *win)
 #define RC_SCAN_ALT_F 0x21
 #define RC_SCAN_ALT_L 0x26
 #define RC_SCAN_ALT_C 0x2E                  /* the flush counters, toasted
-                                             * (docs/RUNCPM-PORT-PLAN.md
+                                             * (docs/plans/completed/RUNCPM-PORT-PLAN.md
                                              * 'Verification': calls / cells /
                                              * scrolls since the last press) */
 /* the keys without an ASCII code, by scan code, and what a VT100 sends for

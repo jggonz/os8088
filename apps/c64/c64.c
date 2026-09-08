@@ -3,7 +3,7 @@
  *
  * A reimplementation of VICE 3.10's `x64` - the fast, non-cycle-exact C64 -
  * as an os8088 package: a 6510 in a 64KB heap claim, the KERNAL, BASIC and
- * character ROMs read at launch from the sidecar C64.ROM into a second claim,
+ * character ROMs carried as part 0 of the package and claimed at launch (1.4),
  * a VIC-II and two CIAs in the C subset of SPEC.md 73, and the 320x200 screen
  * composed into 1bpp bands and blitted into a window.
  *

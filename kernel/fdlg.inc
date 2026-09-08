@@ -487,7 +487,7 @@ fdlg_home_go:
     push si                     ; the MEDIA lookup below stages an entry
 %ifdef KERN_BIG
     mov bx, fdlg_path           ; the dialog is being PLACED, so it has walked
-    FDX pth_clear              ; nowhere yet (docs/TITLE-PLAN.md 5). Cleared
+    FDX pth_clear              ; nowhere yet (docs/plans/completed/TITLE-PLAN.md 5). Cleared
                                 ; here rather than in fdlg_open_x because this
                                 ; is what MOVES it, and .bss arrives holding
                                 ; whatever the last dialog left
@@ -1547,7 +1547,7 @@ FDBODY fdlg_paint_x
     je .place
 %ifdef KERN_BIG
     push bx                     ; the folder's own name, when the dialog
-    mov bx, fdlg_path           ; walked here (docs/TITLE-PLAN.md 5). The pen
+    mov bx, fdlg_path           ; walked here (docs/plans/completed/TITLE-PLAN.md 5). The pen
     FDX pth_leaf               ; is x=30 and the list frame starts at
     pop bx                      ; FD_LX2=213, so 22 cells are free and the
     or si, si                   ; longest 8.3 name needs 12 - measured before
@@ -2958,7 +2958,7 @@ fdlg_idrv:  resb 1              ; ...and the INSTANCE's drive, banked across
                                 ; into the folder that root named
 %ifdef KERN_BIG
 fdlg_path:  resb PTH_SIZE       ; the folders this dialog was walked down
-                                ; through (docs/TITLE-PLAN.md 5), the PTH_*
+                                ; through (docs/plans/completed/TITLE-PLAN.md 5), the PTH_*
                                 ; block files.inc defines. ONE of them, not
                                 ; one per window: the dialog is MODAL, so it
                                 ; can only ever be in one place at a time -

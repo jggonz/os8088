@@ -145,14 +145,14 @@ TY_FIND_CL  equ 16
 ; out: [ty_nfam] families listed; CF=1 = the system disk could not be reached
 ;      and [ty_nfam] is 0. Preserves every register.
 ;
-; FONTS/ on the system disk, which OSAPI_VOL_SYS is what names: a package
-; stands in the folder it was launched from and nothing else told it where the
-; machine's own files are. The visit is a bracket - bank OSAPI_FILE_HERE, go,
-; list, come back - and coming back matters more than it looks, because every
-; unqualified name the caller passes the file API afterwards resolves wherever
-; this left it standing.
+; SYSTEM/FONTS on the system disk, which OSAPI_VOL_SYS is what names: a
+; package stands in the folder it was launched from and nothing else told it
+; where the machine's own files are. The visit is a bracket - bank
+; OSAPI_FILE_HERE, go, list, come back - and coming back matters more than it
+; looks, because every unqualified name the caller passes the file API
+; afterwards resolves wherever this left it standing.
 ;
-; IT IS REAL FLOPPY I/O: four remounts and two listings, a couple of seconds
+; IT IS REAL FLOPPY I/O: five remounts and three listings, a couple of seconds
 ; on the target machine, UI-TASK CONTEXT ONLY like every other file slot. So
 ; call it when something is about to USE the list - the first time a Font menu
 ; opens - and not at launch. A menu nobody opens should cost nothing, which is
@@ -179,34 +179,10 @@ ty_scan:
     call OSAPI_FILE_HERE            ; bank where the caller was standing
     mov [ty_bkcwd], dx
     mov [ty_bkdrv], bl
-    call OSAPI_VOL_SYS              ; ...and where the system disk is
-    mov [ty_sysvol], bl
-    xor dx, dx                      ; its ROOT
-    call OSAPI_FILE_GOTO
-    jc .back
+    call ty_gofonts                 ; ...and go to SYSTEM/FONTS on the system
+    jc .back                        ; disk, which is the whole of the walk
 
-    xor cx, cx                      ; --- find FONTS in the root -------------
-.f1:
-    mov [ty_ord], cx
-    mov di, ty_find
-    call OSAPI_FILE_FIND
-    jc .back
-    mov [ty_ord], cx
-    cmp word [ty_find + TY_FIND_TY], OSAPI_FT_DIR
-    jne .f1n
-    mov si, ty_s_fonts
-    call ty_nameq                   ; CF=0 = this is it
-    jnc .have
-.f1n:
-    mov cx, [ty_ord]
-    jmp short .f1
-.have:
-    mov dx, [ty_find + TY_FIND_CL]
-    mov bl, [ty_sysvol]
-    call OSAPI_FILE_GOTO
-    jc .back
-
-    xor cx, cx                      ; --- and list the faces inside it -------
+    xor cx, cx                      ; --- list the faces inside it -----------
 .f2:
     mov [ty_ord], cx
     mov di, ty_find
@@ -423,39 +399,10 @@ ty_openfam:
     call OSAPI_FILE_HERE            ; the same bracket ty_scan uses: a face
     mov [ty_bkcwd], dx              ; lives on the system disk and the caller
     mov [ty_bkdrv], bl              ; is standing somewhere else entirely
-    call OSAPI_VOL_SYS
-    mov [ty_sysvol], bl
-    xor dx, dx
-    call OSAPI_FILE_GOTO
-    jc .fail
-    push si
-    xor cx, cx
-    push ds
-    pop es
-.g:
-    mov [ty_ord], cx
-    mov di, ty_find
-    call OSAPI_FILE_FIND
-    jc .gfail
-    mov [ty_ord], cx
-    cmp word [ty_find + TY_FIND_TY], OSAPI_FT_DIR
-    jne .gn
-    mov si, ty_s_fonts
-    call ty_nameq
-    jnc .gin
-.gn:
-    mov cx, [ty_ord]
-    jmp short .g
-.gin:
-    mov dx, [ty_find + TY_FIND_CL]
-    mov bl, [ty_sysvol]
-    call OSAPI_FILE_GOTO
-    pop si
-    jc .fail
+    call ty_gofonts                 ; ...and the same walk, which is why it is
+    jc .fail                        ; written once (SI is ours across it)
     call ty_open                    ; CF and AL are its answer, and ours
     jmp short .home
-.gfail:
-    pop si
 .fail:
     mov al, TYE_READ
     stc
@@ -476,6 +423,87 @@ ty_openfam:
     pop bx
     ret
 
+; =============================================================================
+; ty_gofonts - stand in SYSTEM/FONTS on the system disk (SPEC.md 19.8)
+; in:  -
+; out: CF=0 = standing in it. CF=1 = the system disk, SYSTEM/ or FONTS/ could
+;      not be reached, and this instance is left SOMEWHERE ON THE WAY THERE.
+;      Preserves every register - only CF is an answer.
+;
+; TWO descents rather than one, because the faces live under SYSTEM/ and not
+; beside it (SPEC.md 19.8): the root gives SYSTEM, SYSTEM gives FONTS. It is
+; one listing more than the old flat layout cost, on a bracket that was four
+; remounts and two listings already - and it is spent ONCE, lazily, on the
+; first Font menu, so what it adds to that is a fraction of the read of the
+; first face the user then picks.
+;
+; THE CALLER OWNS THE BRACKET, and that is why this does not bank
+; OSAPI_FILE_HERE itself: a failed descent leaves the instance standing in
+; SYSTEM/ or on the system root, where every unqualified name it passes the
+; file API afterwards would resolve. Both callers bank first and GOTO home on
+; every path out, CF=1 included.
+; =============================================================================
+ty_gofonts:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push ds
+    pop es                          ; ES:DI = our own FIND buffer throughout
+    call OSAPI_VOL_SYS              ; where the system disk is
+    mov [ty_sysvol], bl
+    xor dx, dx                      ; ...and its ROOT
+    call OSAPI_FILE_GOTO
+    jc .out
+    mov si, ty_s_system
+    call ty_dive
+    jc .out
+    mov si, ty_s_fonts
+    call ty_dive
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ty_dive - SI names a folder in the one we are standing in; stand in IT.
+; out: CF=0 done, CF=1 = no such folder here and we have not moved. Clobbers
+; AX, BX, CX, DX, DI and the FIND buffer; SI is preserved and ES must be DS.
+;
+; OSAPI_FT_DIR exactly, never `jae`: the synthesized '..' (OSAPI_FT_UP) sorts
+; above it and is a folder that a name compare could match on a disk somebody
+; else wrote.
+ty_dive:
+    xor cx, cx
+.f:
+    mov di, ty_find
+    call OSAPI_FILE_FIND
+    jc .no
+    mov [ty_ord], cx
+    cmp word [ty_find + TY_FIND_TY], OSAPI_FT_DIR
+    jne .n
+    call ty_nameq                   ; CF=0 = this is it
+    jnc .in
+.n:
+    mov cx, [ty_ord]
+    jmp short .f
+.in:
+    mov dx, [ty_find + TY_FIND_CL]
+    mov bl, [ty_sysvol]
+    call OSAPI_FILE_GOTO
+    ret
+.no:
+    stc
+    ret
+
+ty_s_system: db 'SYSTEM', 0
 ty_s_fonts: db 'FONTS', 0
 
 ; =============================================================================
@@ -500,8 +528,6 @@ ty_init:
     push di
     push es
 
-    mov ax, ds
-    mov [ty_selfseg], ax
     push ds
     pop es
     mov di, ty_tab
@@ -570,8 +596,17 @@ ty_open:
     jmp .fail
 .have:
     mov [ty_opdi], di
-    mov ax, TY_FACE_KB + 1          ; +1 KB, because the hand alignment below
-    mov cx, ax                      ; gives back up to 496 bytes of it
+    mov ax, TY_FACE_KB              ; ...AND NOT TY_FACE_KB + 1. It asked for
+    mov cx, ax                      ; the extra KB "because the hand alignment
+                                    ; below gives back up to 496 bytes of it",
+                                    ; and the hand alignment gave nothing back
+                                    ; ever: kernel.asm's guard 6b asserts that
+                                    ; every base mem_claim hands out is
+                                    ; HEAP_SEG + n*MEM_PARA_KB paragraphs and
+                                    ; that MEM_PARA_KB is a multiple of 32, so
+                                    ; the round-up could never move the base.
+                                    ; One KB of heap per open face, up to three
+                                    ; per Word or CWORD instance, for nothing
     call OSAPI_MEM_CLAIM_DMA
     jnc .got
     mov al, TYE_NOMEM
@@ -579,8 +614,14 @@ ty_open:
 .got:
     mov di, [ty_opdi]
     mov [di + TF_CLAIM], dx
-    add dx, 31                      ; round the SEGMENT to a multiple of 32
-    and dx, 0xFFE0                  ; paragraphs = a 512-byte boundary
+    test dl, 0x1F                   ; ...so ASSERT the alignment instead of
+    jnz .unaligned                  ; buying insurance against it. A package
+                                    ; cannot see guard 6b, and the rounding
+                                    ; this replaces was the one line that would
+                                    ; have noticed - silently, by pushing
+                                    ; TF_SEG up to 496 bytes into a claim that
+                                    ; no longer had 496 spare. Refusing the
+                                    ; face says so instead
     mov [di + TF_SEG], dx
 
     mov es, dx
@@ -606,6 +647,12 @@ ty_open:
     shr ax, cl
     clc
     jmp .out
+.unaligned:
+    mov al, TYE_NOMEM               ; there is nothing better to say: the base
+                                    ; is unusable and the caller's answer is
+                                    ; the same either way, which is the system
+                                    ; face (SPEC.md 6.4)
+    jmp short .freefail
 .badsum:
     mov al, TYE_SUM
 .freefail:
@@ -1553,8 +1600,15 @@ ty_bandbuf  equ (%1) + 0        ; the band FIRST: it is the buffer every
 ty_adv      equ ty_bandbuf + TY_BANDSZ      ; 95 bytes: the current style's
                                             ; advances, copied into OUR segment
 ty_tab      equ ty_adv + TY_NGLYPH          ; TY_MAXFACE face slots
-ty_selfseg  equ ty_tab + TY_MAXFACE * TF_SIZE   ; word: our own segment
-ty_curseg   equ ty_selfseg + 2  ; word: where the current face's glyphs are
+                                ; (`ty_selfseg` was here: our own segment,
+                                ; stored by ty_init and read by nothing at all.
+                                ; DS is CS for a package and the kernel reloads
+                                ; it from W_SEG on every dispatch, so there was
+                                ; never a moment this could say something `ds`
+                                ; did not - and once a region can move it would
+                                ; have been a stale word to fix for no reader)
+ty_curseg   equ ty_tab + TY_MAXFACE * TF_SIZE   ; word: where the current
+                                ; face's glyphs are
 ty_psseg    equ ty_curseg + 2   ; word: the pre-shifted table's claim, 0 = none
 ty_bm       equ ty_psseg + 2    ; word: the current style's bitmap block
 ty_rowfn    equ ty_bm + 2       ; word: the unrolled row set for [ty_rows]
@@ -1573,9 +1627,9 @@ ty_curadv   equ ty_psstyle + 1  ; byte: the advance, banked across a multiply
 ty_ok       equ ty_curadv + 1   ; byte: the last ty_flush drew (SPEC.md 6.5)
 ty_nfam     equ ty_ok + 1       ; byte: families ty_scan listed
 ty_bkcwd    equ ty_nfam + 1     ; word } where the caller was standing, so a
-ty_bkdrv    equ ty_bkcwd + 2    ; byte } visit to FONTS/ can put it back
+ty_bkdrv    equ ty_bkcwd + 2    ; byte } visit to SYSTEM/FONTS can put it back
 ty_sysvol   equ ty_bkdrv + 1    ; byte: OSAPI_VOL_SYS's answer, banked across
-                                ; the two GOTOs that both need it
+                                ; the three GOTOs that all need it
 ty_ord      equ ty_sysvol + 1   ; word: OSAPI_FILE_FIND's ordinal, in memory
                                 ; because the helpers between two of its calls
                                 ; are not all obliged to preserve CX
@@ -1585,6 +1639,6 @@ ty_dnames   equ ty_fnames + TY_MAXFAM * TY_NAMSZ    ; ...and the display ones
 %endmacro
 
 ; ...and its size, for the caller's OS88_BSS. The tail past the face table is
-; 27 bytes of scalars; 48 is that with the slack a new one would want.
+; 25 bytes of scalars; 48 is that with the slack a new one would want.
 TY_BSS_SIZE equ TY_BANDSZ + TY_NGLYPH + TY_MAXFACE * TF_SIZE + 48 \
                 + 24 + TY_MAXFAM * (TY_NAMSZ + TY_DISPSZ)

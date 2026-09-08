@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - apps/runcpm/hosttest/rcfstest.c    RUNCPM's disk layer, on the host
  *
- * A BUILD-HOST PROGRAM (docs/RUNCPM-PORT-PLAN.md wave 4). It never runs on
+ * A BUILD-HOST PROGRAM (docs/plans/completed/RUNCPM-PORT-PLAN.md wave 4). It never runs on
  * the 8086, it is not in the package, and apps/runcpm/build.sh compiles and
  * runs it BEFORE the target build; a failure stops the build. Part of RUNCPM
  * (SPEC.md 74), a reimplementation of RunCPM 6.9 by Marcelo Dantas / "Mockba

@@ -1,26 +1,21 @@
 # Working with upstream — the squash cycle, and how not to lose things in it
 
-**This document is written to be true wherever it is read** — on `main`, on an
-integration branch, or on a branch freshly cut from `main` — so it names
-`main` and "the integration branch" explicitly and never says "here". The two
-are the same tree at the moment of a squash and drift apart afterwards; almost
+This document names `main` and "the integration branch" explicitly and never
+says "here", so that it is true wherever it is read — on `main`, on the
+integration branch, or on a branch freshly cut from `main`. The two are the
+same tree at the moment of a squash and drift apart afterwards; almost
 everything below is about that gap.
-
-It exists because the shape has cost real work twice: once when a branch
-drifted far enough from `main` that it had to be re-cut, and once when a
-session concluded from a *shallow clone* that the two histories were unrelated
-and re-created three commits it could have merged.
 
 ## The topology
 
 | | |
 |---|---|
 | `jggonz/os8088` | **upstream.** `main` is the published history: linear, one commit per feature, by policy |
-| `Elendilon/os8088` | the fork. Its integration branch — `elendilon` at the time of writing — is where work lands and what gets tested on the iron (`docs/FIELD-MACHINES.md`) |
+| `Elendilon/os8088` | the fork. Its integration branch — `elendilon` — is where work lands and what gets tested on the iron (`docs/FIELD-MACHINES.md`). The previous cut is kept as `elendilon-old` |
 
 `main` is **squash-only**. The last merge commit on it is PR #14; every commit
-since has a single parent. That is a deliberate choice about how `main` reads,
-not an accident, and nothing in this document proposes changing it.
+since has a single parent and a `(#N)` suffix. That is a deliberate choice
+about how `main` reads, and nothing in this document proposes changing it.
 
 ## The cycle
 
@@ -28,7 +23,7 @@ not an accident, and nothing in this document proposes changing it.
    cut a branch from main
         │
         ▼
-   work on it, many commits, tested on QEMU and on the 5150
+   work on it, many commits, tested on MartyPC and on the 5150
         │
         ▼
    one PR  ──────►  jggonz/os8088:main, SQUASH-merged
@@ -62,9 +57,9 @@ git rev-list --max-parents=0 <ref> | wc -l   # >1 root = SHALLOW, not unrelated
 ```
 
 That last line is the tell. **This repository has one root commit**; a shallow
-clone showed six, and six roots is not a thing a real repository usually has.
-A session saw that, read `git merge-base` returning nothing as "unrelated
-histories", and ported three upstream commits as new SHAs it could have merged.
+clone shows several. An empty `git merge-base` between `main` and the
+integration branch means the clone is shallow, not that the histories are
+unrelated — the real base is where the branch was cut.
 
 **Never reach for `git merge --allow-unrelated-histories` on these two
 repositories.** If the histories look unrelated, the clone is shallow. That
@@ -72,14 +67,13 @@ flag would duplicate the entire tree.
 
 ## Rule 0b — a squashed branch keeps a huge merge-base diff
 
-Rule 0's sibling, and it bites in the opposite direction: there the clone hid
-history, here the history is intact and the *branch* is the illusion.
+Rule 0's sibling, in the opposite direction: there the clone hid history, here
+the history is intact and the *branch* is the illusion.
 
-Because `main` squash-merges (see the cycle above), a branch whose work has
-fully landed keeps **every one of its own commits** and therefore keeps a large
-diff against `git merge-base`. `--is-ancestor` says "not merged" about content
-that is completely merged, because the squash carried the content and not the
-commits.
+Because `main` squash-merges, a branch whose work has fully landed keeps
+**every one of its own commits** and therefore keeps a large diff against
+`git merge-base`. `--is-ancestor` says "not merged" about content that is
+completely merged, because the squash carried the content and not the commits.
 
 **So never ask what a branch changed against its merge-base. Ask what it
 changes against the branch you are actually on.**
@@ -89,21 +83,10 @@ git diff --stat origin/elendilon <branch> -- <paths>   # the real question
 git log --oneline -5 origin/elendilon -- <path>        # ...and who last touched it
 ```
 
-Measured, on the two kernel-size branches:
-
-| | vs merge-base | vs `origin/elendilon` |
-|---|---|---|
-| `kernel-size-optimization-vx08di` (**done**, squashed as `2f33456`) | `mouse.inc` 497 lines | **33, and net-negative** |
-| `kernel-size-optimization-p2-zcuuac` (**running**) | `sched.inc` 481 | `sched.inc` 481, `mouse.inc` **untouched** |
-
-A session read the merge-base column and told its requester that the running
-pass was about to rewrite `mouse.inc` from under a measurement. The opposite was
-true twice over: the file's size pass was already **in** the measurement, and
-the running pass was nowhere near it. The tell is the sign — a branch whose diff
-against the integration branch is net-**negative** is *behind* it, not ahead of
-it, and content that far behind is content that already landed.
-
-**A net-negative diff is merged work, not pending work.**
+The tell is the sign: a branch whose diff against the integration branch is
+net-**negative** is *behind* it, not ahead of it, and content that far behind
+is content that already landed. **A net-negative diff is merged work, not
+pending work.**
 
 ## "N commits behind main" — read them before acting
 
@@ -118,7 +101,7 @@ things:
 
 | what the log shows | what it is | what to do |
 |---|---|---|
-| `Elendilon: …` / `Elendilon's experimental branch, integrated` | the integration branch's **own work**, squashed home | nothing. The content is already on the branch; the next re-cut absorbs the commit |
+| `Elendilon -> Main (…)` (older rounds: `Elendilon: …`, `Elendilon's experimental branch, integrated`) | the integration branch's **own work**, squashed home | nothing. The content is already on the branch; the next re-cut absorbs the commit |
 | the same, but the checkout predates it | a **stale cut** | re-cut from `main`, or merge if the branch has live work on it |
 | an ordinary feature title (`ModPlug Player: …`, `tools/setup-macos.sh: …`) | **genuine upstream work** | go and get it — merge, and expect to *adapt* it (below) |
 
@@ -128,7 +111,7 @@ trust: ask whether the tree already has the content.
 Mid-cycle upstream work is the case that does **not** self-heal. Waiting for
 the next re-cut is a legitimate answer if the branch is about to be retired —
 the work arrives free. Merging is the answer if the branch has months left in
-it. PRs #56/#57/#58 were this case, and were merged.
+it.
 
 ## Adapting upstream work to a diverged branch
 
@@ -139,29 +122,28 @@ against, and that is exactly the danger: **the code assembles cleanly and every
 difference is silent.**
 
 ModPlug Player is the worked example (SPEC.md §56, and §56.13 for the port
-itself). The checklist it produced, with each item stated as the general
-question rather than the particular answer:
+itself). The checklist, each item as the general question:
 
 - **SPEC section numbers collide.** The incoming code's section number may mean
-  something else on the branch. ModPlug was §52 on `main`; the branch already
-  had a hard-disk driver at §52 and ran to §55, so it became §56 and 63
-  references across five sources moved with it. Check what the number means
-  before keeping it.
-- **Compare slot ADDRESSES**, mechanically:
+  something else on the branch (ModPlug was §52 on `main` and became §56,
+  because the branch already had a hard-disk driver at §52). Check what the
+  number means before keeping it.
+- **Check every slot the package names is in THIS SDK**, mechanically:
   ```sh
-  git show upstream/main:apps/os88api.inc > /tmp/api_main.inc
   grep -ohE 'OSAPI_[A-Z0-9_]+' apps/<pkg>/* | sort -u | while read s; do
-      grep -q "^%define $s " apps/os88api.inc || echo "NOT IN THIS SDK: $s"
+      grep -qE "^(%define +)?$s\b" apps/os88api.inc || echo "NOT IN THIS SDK: $s"
   done
   ```
+  (`OSAPI_FIND_SZ` and `OSAPI_FT_DIR` are `equ` constants rather than
+  `%define` slots, which is what the optional prefix is for.)
 - **…and then look for two NAMES at one ADDRESS**, which the check above
   cannot see. It asks "is this slot in the SDK" and answers yes for both
   halves of a collision. When both trees APPEND to the same tail in the same
-  round — which is the normal case, `main`'s next free number being the
-  branch's next free number too — the merge is **clean**: two `%define`s with
-  different names, one address, no conflict marker, and nothing says a word
-  until a package calls one and gets the other. That is how
-  `OSAPI_DRV_CALL` and `OSAPI_DRV_DLG` both came to sit at `0x0428`.
+  round — the normal case, `main`'s next free number being the branch's next
+  free number too — the merge is **clean**: two `%define`s with different
+  names, one address, no conflict marker, and nothing says a word until a
+  package calls one and gets the other. It has happened once (`OSAPI_DRV_CALL`
+  and `OSAPI_DRV_DLG` both landed at `0x0428`).
   ```sh
   python3 - <<'EOF'
   import re, collections
@@ -176,49 +158,43 @@ question rather than the particular answer:
   ```
   **Run it after every merge from `main`, not only when a conflict points at
   the file** — a conflict is the one signal this failure does not give you.
-  The same applies one layer down to `drivers/os88drv.inc`'s `DSV_*` offsets,
-  where the collision is a service table whose cells have all shifted: this
-  merge's `DSV_PKGCALL` (28 on the branch) met `DSV_CPKEY` (28 upstream), and
-  the pad every table carries to `DSV_SIZE` is what kept it to a renumbering
-  rather than a driver publishing its file lister as a mouse handler.
+  The same applies one layer down to `drivers/os88drv.inc`'s `DSV_*` offsets:
+  two verbs appended at the same offset on both sides is a service table whose
+  cells have shifted, and the pad every driver carries to `DSV_SIZE` is what
+  keeps that to a renumbering rather than a driver publishing one verb as
+  another.
 - **A renumbered slot invalidates every `.o88` and `.drv`, and `make` rebuilds
   only the ones it builds at all.** The shipped packages follow. The gate and
   benchmark packages under `tests/` are not in `all` — they have their own
   on-demand targets (`make drvcalltest`, `make socktest`, `make bench`) — so a
-  binary built against the old number in some earlier session simply *stays on
-  its scratch image* until that target is asked for. Their rules do list
-  `apps/os88api.inc`, so the rebuild is correct once invoked; nothing invokes
-  it. A gate then far-calls whatever now lives at the old address — SPEC.md
-  §20.8 rule 4's failure exactly, assembles cleanly and runs wrong — and
-  reports the FEATURE as broken. `tests/drvcall.py` did, for a `DRVCALL.O88`
-  calling what had become the file dialog, and the hour went into the kernel's
-  publication path, which was correct throughout. **Run each gate's own build
-  target before believing a post-merge gate failure**; each test's docstring
-  names it in its first line.
+  binary built against the old number in an earlier session stays on its
+  scratch image until that target is asked for. A gate then far-calls whatever
+  now lives at the old address, assembles cleanly, runs wrong, and reports the
+  FEATURE as broken (`tests/drvcall.py` once reported the driver-call path
+  broken for a `DRVCALL.O88` that was calling the file dialog). **Run each
+  gate's own build target before believing a post-merge gate failure**; each
+  test's docstring names it in its usage line.
 - **Compare slot CONTRACTS where the address matches** — the same number can
-  mean something else. Each of these was, at the time, something the branch had
-  and `main` did not: `OSAPI_FONT_GLYPHS` answering `DX:SI` rather than `SI`
-  (the glyph table is not in `KERNEL_SEG`); the file-dialog completion proc
-  gaining `DX:CX` = the chosen file's size; worker task stacks halving from 512
-  bytes to 256. **That last one has since converged** — both trees have been
-  `SCH_STACK` = 384 since #112 — and it is left here as the SHAPE to look for,
-  not as a live difference. Check the constant, never this sentence.
-- **Greying must go through `OSAPI_GFX_PEN`** (SPEC.md §47 rule 1) wherever
-  that slot exists. Code written before it greys with `CDGRAY` alone — a real
-  grey on VGA and **solid black on Hercules and CGA**, pixel-identical to a
-  live control. Every greyed caption in ModPlug's three windows arrived broken
-  this way, and it is invisible on the adapter most people test on.
+  mean something else. The shape to look for: a slot answering `DX:SI` where
+  the incoming code expects `SI` (`OSAPI_FONT_GLYPHS`, the glyph table not
+  being in `KERNEL_SEG`); a completion proc gaining an output (the
+  file-dialog proc's `DX:CX` = the chosen file's size); a constant such as
+  `SCH_STACK` moving. Check the constant, never a sentence in a doc.
+- **Greying must go through `OSAPI_GFX_PEN`** (SPEC.md §47 rule 1). Code
+  written before that slot greys with `CDGRAY` alone — a real grey on VGA and
+  **solid black on Hercules and CGA**, pixel-identical to a live control. It
+  is invisible on the adapter most people test on.
 - **Look at it on a 1bpp adapter** before believing it works: `make test
   VIDEO=cga`, and `docs/HERCULES-TESTING.md` for the other one.
-- **Check the worker's stack** if the package claims one. A worker's stack is
-  **384** bytes today (`SCH_STACK`, SPEC.md §8, §20.6 rule 6) — and the point
-  of the check is the constant in `kernel/sched.inc`, not the number written
-  here: it has been 1,536, 512, 256 and 384, and a doc quoting the wrong one
-  is how a session concludes a contract moved when it did not. A static worst-case walk of the worker's
-  call tree compared against a known-good peer is the cheap check — Tracker's
-  worker measures 92 bytes, ModPlug's 98 — and `tests/stackprobe` on real iron
-  is the only thing that settles the margin, because SeaBIOS hides a real
-  BIOS's interrupt stack use.
+- **Check the worker's stack** if the package claims one. A worker gets the
+  stack CLASS its package header declares (SPEC.md §8.7, §20.6 rule 6), and
+  `SCH_STACK` = **384** bytes is the largest class — the constant is in
+  `kernel/sched.inc` and mirrored in `apps/os88api.inc`; read it there, not
+  here. `python3 tools/stkdepth.py apps/<pkg>/<pkg>.asm --from <worker>` is
+  the static worst-case walk, and comparing against a known-good peer is the
+  cheap check (Tracker's worker walks to 80 bytes, ModPlug's to 98).
+  `make stackprobe` on real iron is the only thing that settles the margin,
+  because SeaBIOS hides a real BIOS's interrupt stack use.
 
 ## Merging upstream in — resolving without losing things
 
@@ -227,13 +203,12 @@ content conflicts on the shared prose (`CLAUDE.md`, `SPEC.md`, `Makefile`,
 `README.md`, `docs/TESTING.md`, `docs/HERCULES-TESTING.md`).
 
 **`git checkout --ours` silently drops anything `main` has that the branch
-lacks.** That is not hypothetical: one such merge recovered a whole CLAUDE.md
-paragraph — the fractal restore cache, SPEC.md §40.1 — that an earlier botched
-conflict resolution had deleted along with some leftover markers. A blanket
-`--ours` would have made that loss permanent.
+lacks.** A whole CLAUDE.md paragraph (the fractal restore cache, SPEC.md
+§40.1) was lost that way once and only recovered by a later merge; a blanket
+`--ours` would have made the loss permanent.
 
 So verify per file, and prefer a mechanical check to eyeballing when the file
-is large (SPEC.md conflicted in sixteen places that day):
+is large (SPEC.md has conflicted in sixteen places in one merge):
 
 ```sh
 # every non-blank line main added since the merge base that is NOT on our side
@@ -261,10 +236,15 @@ Defaults that have held up:
   Gratuitous divergence re-conflicts at every future merge, which is the thing
   this document is trying to stop.
 
-Two things such a merge can most easily undo, so check both afterwards:
-`git ls-files build | wc -l` must be **0** (SPEC.md §16), and
-`kernel/taskmgr.inc` must stay deleted (SPEC.md §28 moved the Task Manager out
-to `apps/taskmgr`).
+After any merge in either direction, three checks git merges cleanly and
+reports nothing about:
+
+```sh
+grep -oE '^#+ [0-9.]+' SPEC.md | sort | uniq -d   # duplicate § headings: checkdocs resolves a
+                                                  # citation to the FIRST match and is happy
+git ls-files build | wc -l                        # must be 0 (SPEC.md §16)
+ls kernel/taskmgr.inc                             # must NOT exist (SPEC.md §28 moved it to apps/taskmgr)
+```
 
 ## The PR back to main
 
@@ -275,26 +255,36 @@ squashed, and that shapes what to write:
   the feature summary, in the house style — `git log upstream/main` is the
   reference.
 - **The body is auto-generated**: GitHub concatenates every commit message on
-  the branch as `* `-bulleted text. Observed sizes are 7,217 lines (PR #54) and
-  4,658 (#51). Nobody edits that down; it is an archive rather than a
-  narrative. So the *title* carries the meaning and the individual commit
-  messages fill the archive — both are worth writing well, for different
-  reasons.
+  the branch as `* `-bulleted text, thousands of lines, and nobody edits it
+  down. It is an archive rather than a narrative, so the *title* carries the
+  meaning and the individual commit messages fill the archive — both are worth
+  writing well, for different reasons.
 - **Never re-add `build/`.** It is gitignored outright and no artifact in it is
   tracked (SPEC.md §16).
 - **The squash replaces `main`'s tree wholesale**, so the branch's SPEC
-  numbering becomes `main`'s. When ModPlug landed, `main`'s §52 ModPlug became
-  §52 HDD plus §56 ModPlug. That is expected, not a conflict to resolve.
-  The second time it happened was PR #92: `main`'s §67 C toolchain met the
-  branch's §65 Calculator / §66 Heap compaction / §67 Cyclone 88, so the C
-  toolchain became **§70** and its Word/TeXPad references followed Word and
-  TeXPad to §68/§69. Git merges that cleanly and `checkdocs` cannot see the
-  duplicate `§67` heading, so after any merge in either direction check
-  `grep -oE '^#+ [0-9.]+' SPEC.md | sort | uniq -d` by hand. The third time
-  was PR #144: `main`'s §86 Hibernate (#143) met the branch's §86 Audio
-  Player, so Hibernate became **§87** - 99 lines across `kernel/hiber.inc`,
-  `kernel/ui.inc`, `tests/hibernate.py` and the rest, scoped to the lines
-  #143 added and nothing else.
+  numbering becomes `main`'s and it is the section coming *from `main`* that
+  renumbers. That is expected, not a conflict to resolve; scope the rewrite to
+  the lines `main` added (`git diff $BASE <main-commit>`), not to the whole
+  file. Precedents:
+  - #58: `main`'s §52 ModPlug met the branch's §52 HDD — ModPlug became §56.
+  - #92: `main`'s §67 C toolchain met the branch's §65 Calculator / §66 Heap
+    compaction / §67 Cyclone 88 — the C toolchain became §70 and its
+    Word/TeXPad references followed those to §68/§69 (it has since moved on
+    to §73).
+  - #144: `main`'s §86 Hibernate (#143) met the branch's §86 Audio Player —
+    Hibernate became §87, 99 lines across `kernel/hiber.inc`,
+    `kernel/ui.inc`, `tests/hibernate.py` and the rest.
+  - #172: `main`'s §88 The Wire (#158) met the branch's §88 Clear Skies — The
+    Wire became **§92**, 272 citations, seven of them outside the conflict
+    region and so resolving silently onto Clear Skies' subsections;
+    PERFORMANCE.md's Set 116 collided the same way and PACCMAN's became Set
+    118. **The API table collided in the same round and merged CLEANLY**:
+    both sides appended to the same tail, so `apps/os88api.inc` came out with
+    no conflict marker and two names at each of 0x04F8 and 0x0500 —
+    `OSAPI_DECOMP`/`OSAPI_PKG_RUN` and `OSAPI_FILE_FIND_RAW`/`OSAPI_DESK_SVC`.
+    The branch kept 0x04F8–0x0518 and `main`'s two moved to 0x0520 and 0x0528.
+    This is the failure the collision check above exists for, and it is the
+    check that found it.
 
 ## Quick reference
 
@@ -303,6 +293,7 @@ git rev-parse --is-shallow-repository && git fetch --unshallow   # ALWAYS first
 git fetch upstream main
 git log --oneline HEAD..upstream/main     # what am I behind by, and which kind?
 git merge upstream/main                   # only for genuine upstream work
+grep -oE '^#+ [0-9.]+' SPEC.md | sort | uniq -d   # no duplicate § headings
 git ls-files build | wc -l                # must be 0 after any merge
 make clean && make                        # zero warnings
 python3 tools/checkdocs.py                # no NEW problems

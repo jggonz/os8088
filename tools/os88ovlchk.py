@@ -47,7 +47,7 @@ CELL = re.compile(r'^\s*OSAPI_(?:SLOT|JSLOT|NSTUB|XSTUB)\s+(?:\w+\s*,\s*)?'
 CELLDEF = re.compile(r'^\s*OSAPI_(?:NSTUB|XSTUB)\s+([A-Za-z_]\w*)\s*,')
 MODS = ('.modc', '.modf', '.modl', '.modh', '.modp', '.modd')  # module images (2.8).
 # `.modp` is Cut/Copy/Paste and kern_small's ALONE (SPEC.md 22.3,
-# docs/KERN-SMALL-MODULE-SPLIT.md 9.2): filecp.inc emits its bodies there on
+# docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2): filecp.inc emits its bodies there on
 # that build and into `.cold` on kern_big, which is the first conditional
 # `section` in the tree. This scanner reads SOURCE and cannot evaluate the
 # %ifdef, so it files those bodies as `.modp` on both - which is why filecp.inc
@@ -1124,22 +1124,72 @@ def main():
 # fork may carry one this branch does not, and the walk should still check the
 # ones that are here. The count reported at the end is what was actually
 # walked, so a skipped package cannot be mistaken for a checked one.
-PKGS = ['apps/word/word.asm']
+PKGS = ['apps/word/word.asm', 'apps/scribe/scribe.asm']
 
 
-def expand(path, seen):
-    """The package's source with %include inlined, as NASM assembles it."""
+def expand(path, seen, defines=None):
+    """The package's source with %include inlined, as NASM assembles it.
+
+    %ifdef/%ifndef ARE FOLLOWED, but only as far as the stream itself proves
+    them, and only in the direction that DROPS rows.  A guard symbol is in
+    `defines` when a %define in the expansion put it there and no %undef took
+    it out again; an %ifndef on such a symbol skips its body, and every other
+    conditional - an %ifdef, an unknown symbol, an %if, an %elif - keeps its
+    body exactly as this walk always has.  So a build-flag guard like
+    `%ifdef SBDRAGOFF` is judged the way it was before this existed, and the
+    one thing that changes is a file %included TWICE behind its own guard.
+
+    apps/scribe/scribe.asm is why.  It pulls apps/os88img.inc in at the top for
+    the IMG_* constants alone, behind `%define OS88IMG_CONSTS_ONLY`, and again
+    inside `section .modc` for the code.  Without this the first copy's body -
+    which the assembler never sees - is walked in `.text`, its labels take the
+    `.modc` copy's classification, and the walk reports 21 `.text -> .modc`
+    near calls that do not exist in the binary.  The alternative the comment
+    below contemplates, deduping to the `.modc` copy, would guess where this
+    reads.
+    """
     if path in seen:
         return
     seen = seen | {path}
+    if defines is None:
+        defines = set()
     here = os.path.dirname(path)
+    skip = []                           # one entry a conditional, True = drop
     for n, raw in enumerate(open(path, errors='replace'), 1):
+        bare = raw.split(';')[0]
+        m = re.match(r'\s*%(ifn?def|if\w*|else|endif|define|undef)\b\s*(\S*)',
+                     bare)
+        if m:
+            word, sym = m.group(1), m.group(2)
+            if word == 'endif':
+                if skip:
+                    skip.pop()
+                continue
+            if word == 'else':
+                if skip:
+                    skip[-1] = False    # never drop the second arm: only the
+                continue                # proven-false %ifndef arm above does
+            if word == 'ifndef':
+                skip.append(sym in defines)
+                continue
+            if word.startswith('if'):   # %ifdef, %if, %ifmacro, ...
+                skip.append(False)
+                continue
+            if any(skip):
+                continue
+            if word == 'define':
+                defines.add(sym)
+            elif word == 'undef':
+                defines.discard(sym)
+            continue
+        if any(skip):
+            continue
         m = re.match(r'\s*%include\s+"([^"]+)"', raw)
         if m:
             for cand in (os.path.join(here, m.group(1)),
                          os.path.join('apps', m.group(1))):
                 if os.path.exists(cand):
-                    for row in expand(cand, seen):
+                    for row in expand(cand, seen, defines):
                         yield row
                     break
             continue

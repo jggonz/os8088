@@ -1,4 +1,4 @@
-# Fixtures for the reformatting proxy (docs/PROXY-PLAN.md)
+# Fixtures for the reformatting proxy (docs/plans/completed/PROXY-PLAN.md)
 
 Input pages for `python3 tools/os88proxy.py --selfcheck`, which renders each
 one and checks the result against the browser's own limits. Nothing here ships

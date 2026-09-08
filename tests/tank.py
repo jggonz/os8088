@@ -25,7 +25,7 @@ displayed frame and its FLOOR is asserted against its median, not its mean -
 a mean hides a dip and a dip is the defect.
 
 It is a GATE and not a measurement: the frame rate is in
-docs/GFX-FSX-PLAN.md, because a number that fails a build when a container
+docs/plans/completed/GFX-FSX-PLAN.md, because a number that fails a build when a container
 gets slower teaches nobody anything.
 """
 import argparse

@@ -118,11 +118,13 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
     dw 0x01EF                   ; VGA:  0,1,2,3 + 5,6,7,8
     dw 0x0011                   ; HERC: 0 (mode 7 text) + 4 (its own graphics)
     dw 0x000F                   ; CGA:  0,1,2,3
+%ifdef GFX_VGA                  ; the EGA row is kern_big's alone
     dw 0x000F                   ; EGA:  0,1,2,3 - the CGA-compatible modes only,
                                ; which an EGA BIOS all has. Its own mode 10h
                                ; has no FSXM id, and mode 0Dh (native, planar)
                                ; is a safe later addition, not pass 1
-                               ; (SPEC.md 39.24, docs/EGA-PLAN.md 7)
+                               ; (SPEC.md 39.24, docs/plans/completed/EGA-PLAN.md 7)
+%endif
 
 ; -----------------------------------------------------------------------------
 ; fsx_run - the bracket (SPEC.md 53.1, slot 0x02C8 via X stub)
@@ -258,6 +260,21 @@ fsx_run:
                                 ; promise on the secondary display.
 %endif
 
+    call wm_clip_clear          ; THE WHOLE SCREEN IS THE APP'S, so no window's
+                                ; clip region may survive into it (SPEC.md
+                                ; 53.1.1). A region dies at the caller's next
+                                ; gfx_unlock and the bracket runs INSIDE that
+                                ; same hold, so a package that armed one to
+                                ; draw in its click handler - which is what
+                                ; SPEC.md 11.3 tells it to do - and then
+                                ; entered a bracket handed us its own content
+                                ; rect as the clip for everything: the app's
+                                ; own drawing, and then fsx_restore's repaint
+                                ; of the DESKTOP. CLEAR SKIES' Fly button was
+                                ; exactly that, and the desktop came back with
+                                ; no background, no menu bar and no dock,
+                                ; while its windows drew correctly because
+                                ; wm_paint arms a region per window
     push bp                     ; the app owns the machine from here to its
     mov si, bx                  ; ret: wm_pkgcall's contract, record in SI,
     mov bp, ax                  ; offset in BP (SPEC.md 53.1)

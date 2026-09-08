@@ -39,13 +39,34 @@
 ;     there is no resident test that could answer the first question anyway.
 ;     The bit is therefore both the request and the record of it.
 ;
-; KERN_BIG only, and by the same reasoning as XMEM's: kern_small is the
-; 128-256KB product, every machine it runs on is an 8086, and drv_load_at and
-; the row would be a hook left outside its %ifdef - docs/KERN-SPLIT-PLAN.md 2's
-; first leak.
+; **kern_emu ONLY** (SPEC.md 9.11.7), and that is a tightening of what this
+; file first shipped as. It was KERN_BIG only, by XMEM's reasoning: kern_small
+; is the 128-256KB product and every machine it runs on is an 8086. That
+; argument was right and it did not go far enough, because the machine the
+; whole project is calibrated against - the 4.77 MHz 8088 in an IBM PC/XT -
+; runs kern_big, and it can no more speak a 32-bit backdoor protocol than a
+; kern_small machine can. What was left resident on it after the driver split
+; is a gate byte, a dispatch, a boot attach, a pump and the two sites that
+; branch over it - ui_task's pass and task_yield: real bytes of a real budget,
+; on a machine where [vmm_on] is nailed to 0 for the life of the product.
+;
+; So the split goes one step further than XMEM's. XMEM keeps a resident sniff
+; on kern_big because an 8086 CAN ask whether there is memory above 1MB and the
+; answer differs per machine. Here the probe itself is 386 code (vmm_boot_x's
+; [cpu_tier] gate, below), so there is no resident question an XT could ask and
+; nothing it could do with the answer. The honest cost on that machine is
+; therefore ZERO, and a third build is what makes zero available: kern_emu is
+; kern_big plus this file, for v86 in a browser and for a desktop hypervisor,
+; and `make emu` is what builds it.
+;
+; **AND THE DISK GOES WITH THE BYTES.** VMMOUSE.DRV is out of $(DRIVERS) and on
+; the kern_emu disks alone. A file no resident code can name is not "unused" on
+; a kern_big floppy, it is unreachable - SPEC.md 24.5's rule, which is already
+; why kern_small carries no `.DRV` at all - and on the 360KB system disk, which
+; had 17 of 354 clusters left, it was one of them.
 ; =============================================================================
 
-%ifdef KERN_BIG
+%ifdef KERN_EMU
 
 %include "vmmabi.inc"           ; the kernel <-> image contract, SHARED as
                                 ; source with drivers/vmmouse/vmmouse.asm and
@@ -106,9 +127,11 @@ vmm_dsp:
                                 ; things it was handed through
     mov  bp, [es:vmm_row+DRVR_ENT]
     mov  ds, [es:vmm_row+DRVR_SEG]
+    call COLD_SEG:wm_nest_pushd_x   ; SPEC.md 66.6.3 - this site is .text
     call far [es:vmm_row+DRVR_DISP]
     pop  es
-    pop  ds
+    pop  ds                     ; ...and DS names the kernel again, which is
+    call COLD_SEG:wm_nest_pop_x ; the segment the pop reads
     ret
 
 ; -----------------------------------------------------------------------------
@@ -222,10 +245,14 @@ vmm_poll:
     pop ax
     ret
 
-%endif                          ; KERN_BIG
+%endif                          ; KERN_EMU
 
 ; VMM_POLL - drain the backdoor's queue if it won the contest (SPEC.md 9.11.3).
-; Expands to nothing on kern_small. Used by ui_task's pass and by menu_drop,
+;
+; **Expands to nothing on kern_big AND kern_small** (SPEC.md 9.11.7) - it is
+; defined unconditionally and tests KERN_EMU in its body, so a call site needs
+; no %ifdef of its own and the two shipped kernels assemble it to no bytes at
+; all. Used by ui_task's pass and by menu_drop,
 ; both of which already hold DS = KERNEL_SEG; task_yield's site is written out
 ; longhand in sched.inc because it does not.
 ;
@@ -235,7 +262,7 @@ vmm_poll:
 ; task_yield's caller may be a package, so that one site pays it and gets back
 ; far more - see sched.inc.
 %macro VMM_POLL 0
-%ifdef KERN_BIG
+%ifdef KERN_EMU
     cmp byte [vmm_on], 0
     jz %%no_vmm
     call vmm_poll
@@ -243,7 +270,7 @@ vmm_poll:
 %endif
 %endmacro
 
-%ifdef KERN_BIG
+%ifdef KERN_EMU
 section .cold
 ; -----------------------------------------------------------------------------
 ; vmm_boot_x - attach the image and settle the contest (SPEC.md 9.11.2)
@@ -356,4 +383,4 @@ vmm_boot_x:
                                 ; shape
 
 section .text
-%endif                          ; KERN_BIG
+%endif                          ; KERN_EMU

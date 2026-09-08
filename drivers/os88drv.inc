@@ -14,13 +14,22 @@
 ;
 ; What is different from apps/os88api.inc, and why:
 ;
-; - **There is no bss.** A driver's zeroed data is written as `db 0` in the
-;   image and ships on the floppy. A package's bss is claimed by the loader
-;   because a package's is tens of KB; a driver's is a few hundred bytes, and
-;   paying for them on disk buys a load path with exactly one heap claim in
-;   it - made at the size the directory entry already reported, before a byte
-;   is read. Anything bulk (a DMA buffer, a ring) is your own
-;   OSAPI_MEM_CLAIM at attach, freed at detach.
+; - **You still write your zeroed data as `db 0`, and it no longer SHIPS.**
+;   There is nothing for a driver author to do here and nothing to declare:
+;   `os88drv.py` takes whole paragraphs of TRAILING zeros off the image, writes
+;   the count in the header's byte +31, and `drv_bss` zeroes them again at
+;   load. Measured, that is 6,672 bytes off every disk that carries the
+;   drivers - `ether.drv` alone had a 4,064-byte run - and it costs no decoder
+;   and no cycles (docs/plans/O88-COMPRESSION-PLAN.md 12.6).
+;
+;   **Put your buffers LAST if you want them off the disk.** Only the trailing
+;   run is stripped; a zeroed table with code after it still ships. The kernel
+;   claims from the size the directory entry reported - your IMAGE, since
+;   SPEC.md 20.13.3.1's read expands the file into the claim - and GROWS it to
+;   `image + bss` once it has read your header (SPEC.md 51.1.2). Anything bulk
+;   (a DMA buffer,
+;   a ring) is still your own OSAPI_MEM_CLAIM at attach, freed at detach: the
+;   header's byte caps a bss at 255 paragraphs.
 ;
 ; - **You have no window, no instance and no menu.** You are not an app: no
 ;   dock tile, no Task Manager row, no callbacks from the window manager. The
@@ -282,7 +291,8 @@ DSV_PKGCALL  equ 34             ; dw: near proc reached by OSAPI_DRV_CALL -
                                 ; no lock and raises no sch_lock, so a verb of
                                 ; yours is callable from a package's worker
                                 ; only if what it does is. Say so per verb.
-DSV_GEOM     equ 36             ; dw: near proc, DRVC_DISK only (SPEC.md 51.8,
+DSV_GEOM     equ DSV_BLK        ; == DSV_BLK: SUB-FUNCTION 2 of it (AL = 2),
+                                ; and not a cell of its own. DRVC_DISK (SPEC.md 51.8,
                                 ; 87.5): the TRANSPORT FACTS of one volume,
                                 ; for a caller that has to reach its sectors
                                 ; without you - the resume stub, which runs
@@ -294,7 +304,7 @@ DSV_GEOM     equ 36             ; dw: near proc, DRVC_DISK only (SPEC.md 51.8,
                                 ;       CF = 1: no such volume, or one the
                                 ;       ROM's int 13h does not reach (52.1's
                                 ;       rung 1). 0 = never, which is CF = 1
-DSV_SIZE     equ 38
+DSV_SIZE     equ 36
 
 ; --- DSV_FS: the file redirector's verbs (SPEC.md 62.9) ----------------------
 ; A DRVC_FILE volume has NO SECTORS - no BPB, no FAT, no directory to walk -

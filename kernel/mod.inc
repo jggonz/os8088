@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - mod.inc
 ;
-; On-demand kernel modules (SPEC.md 2.8, docs/ONDEMAND-PLAN.md): kernel code
+; On-demand kernel modules (SPEC.md 2.8, docs/plans/completed/ONDEMAND-PLAN.md): kernel code
 ; that lives in a file rather than in KERNEL.SYS, is read into a heap claim
 ; when the feature is asked for, and is freed when the feature is done.
 ; Prefix `mod_`.
@@ -21,7 +21,7 @@
 ; its header (SPEC.md 2.8.2) refuses the one case that would break that: a
 ; module file left over beside a kernel it was not built with.
 ;
-; WHAT MAY BE A MODULE is not a question about code (docs/ONDEMAND-PLAN.md 1):
+; WHAT MAY BE A MODULE is not a question about code (docs/plans/completed/ONDEMAND-PLAN.md 1):
 ; a feature qualifies only if the system disk is already required to use it,
 ; or can be required without interrupting what the user was doing - because on
 ; a one-floppy machine every load is a DISK SWAP. The Control Panel qualifies
@@ -39,23 +39,29 @@
 ; =============================================================================
 
 %ifdef FCP_MOD
-MOD_MAX     equ 6               ; rows in mod_tab - SIX on kern_small, which
+MOD_MAX     equ 5               ; rows in mod_tab - FIVE on kern_small, which
 %else                           ; alone carries Cut/Copy/Paste and the file
-MOD_MAX     equ 4               ; dialog as modules
+MOD_MAX     equ 4               ; dialog as modules, and no hibernate at all
 %endif
 MOD_CTRL    equ 0               ; the Control Panel (SPEC.md 31)
 MOD_FMT     equ 1               ; the floppy formatter (SPEC.md 18.96)
 MOD_CLONE   equ 2               ; the disk cloner (SPEC.md 18.99)
-MOD_HIBER   equ 3               ; hibernate and resume (SPEC.md 87) - on
-                                ; kern_small a one-entry stub, so that every
-                                ; kernel cuts the same first four files
+%ifdef KERN_BIG
+MOD_HIBER   equ 3               ; hibernate and resume (SPEC.md 87) - kern_big
+%endif                          ; alone: the 128KB machine has no hard disk to
+                                ; hibernate to, so it carries no ROW either
 %ifdef FCP_MOD
-MOD_FCP     equ 4               ; Cut/Copy/Paste (SPEC.md 22.3-22.5),
+MOD_FCP     equ 3               ; Cut/Copy/Paste (SPEC.md 22.3-22.5),
                                 ; kern_small's alone - kern_big keeps the
                                 ; bodies resident in `.cold`
-MOD_FDLG    equ 5               ; ...and the Standard File dialog (SPEC.md 38,
+MOD_FDLG    equ 4               ; ...and the Standard File dialog (SPEC.md 38,
                                 ; 38.0), on the same terms
 %endif
+                                ; The LZB compressor (SPEC.md 20.15) has NO
+                                ; row: it rides in the cloner's image as its
+                                ; second entry (20.15.3), on both builds, so a
+                                ; row, a name and a mod_fp block are what it
+                                ; does not cost
 
 MOD_NENT    equ 7               ; far-pointer slots reserved per module. A
                                 ; fixed stride, so a thunk's
@@ -212,13 +218,16 @@ section .text
 mod_f_ctrl: db 'CTRL.DRV', 0    ; .DRV for the attributes and nothing else
 mod_f_fmt:  db 'FORMAT.DRV', 0  ; (SPEC.md 19.6): os88disk.py stamps anything
 mod_f_clon: db 'CLONE.DRV', 0   ; ...and a third of them (SPEC.md 18.99)
+%ifdef KERN_BIG
 mod_f_hib:  db 'HIBER.DRV', 0   ; ...and a fourth: hibernate (SPEC.md 87),
                                 ; which qualifies twice - the user is leaving
                                 ; the machine, or has just booted it
+%endif
 %ifdef FCP_MOD
 mod_f_fcp:  db 'FILECP.DRV', 0  ; ...and kern_small's fifth (SPEC.md 22.3)
 mod_f_fdlg: db 'FDLG.DRV', 0    ; ...and its sixth (SPEC.md 38.0)
 %endif
+                                ; (the compressor has no file: SPEC.md 20.15.3)
                                 ; ending DRV read-only + hidden + system by
                                 ; EXTENSION, the installer's `*.DRV` copy rule
                                 ; picks it up, and neither of these is in
@@ -229,7 +238,9 @@ mod_tab:
     dw 0, mod_f_ctrl            ; MOD_CTRL
     dw 0, mod_f_fmt             ; MOD_FMT
     dw 0, mod_f_clon            ; MOD_CLONE
+%ifdef KERN_BIG
     dw 0, mod_f_hib             ; MOD_HIBER
+%endif
 %ifdef FCP_MOD
     dw 0, mod_f_fcp             ; MOD_FCP
 mod_r_fdlg:                     ; ...and this one is NAMED, because SPEC.md
@@ -245,6 +256,7 @@ mod_r_fdlg:                     ; ...and this one is NAMED, because SPEC.md
                                 ; together by KERN_SMALL, and decoupling them
                                 ; is an undefined symbol rather than a silent
 %endif                          ; read of the wrong word
+
 MOD_TAB_OFF equ mod_tab - $$    ; mod_tab AS A NUMBER. .text has vstart=0
                                 ; (kernel.asm), so this IS the address every
                                 ; `mov bx, mod_tab` loads - and a number can
@@ -572,7 +584,7 @@ mod_free_row:
 ; SPEC.md 31.8), and the formatter's is the confirmation ending, either way.
 ; Dropping a module that is still executing frees the code that is running -
 ; which does not fault and is why this is not, and must not become, something
-; the heap does on its own initiative. docs/ONDEMAND-PLAN.md 7.1/7.2 is the
+; the heap does on its own initiative. docs/plans/completed/ONDEMAND-PLAN.md 7.1/7.2 is the
 ; purgeable-claim design that would need a pin; it is deliberately not built.
 ; -----------------------------------------------------------------------------
 mod_drop:

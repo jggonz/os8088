@@ -3,16 +3,18 @@
 
     make && python3 tests/stk0water.py [machine]
 
-`STK0_SIZE` is 4x a measured 246-byte high-water mark, and SPEC.md 15.1 says
+`STK0_SIZE` = 512 is 2.08x a measured 246-byte high-water mark, and SPEC.md 15.1 says
 in as many words: **"Redo the fill probe before lowering either."** This is
 that probe, automated - it used to be a hand edit to `kmain` and a hand read
 afterwards, which is why it has been run once.
 
 Task 0's stack is the one worth the trouble. It is where the UI task runs, so
 it carries the DEEPEST kernel paths there are (a full `wm_paint_all` with a
-menu open), and it is the one stack `sch_switch`'s canary SKIPS - so nothing
-at run time will ever tell you it was too small. `tools/stkwater.py` cannot
-read it: that reads the slices `task_spawn` fills, and task 0 owns no slice.
+menu open). Since SPEC.md 8.6.1 its canary at `STK0_BOT` is seeded on every
+build and checked on every switch, so an overrun reaches `sch_stkdie` - this
+probe found that out by dying the moment its fill reached the magic word.
+`tools/stkwater.py` cannot read it: that reads the slices `task_spawn` fills,
+and task 0 owns no slice.
 
 **How.** Break at `kmain`'s `sti` - the instruction after `mov sp, STK0_TOP`,
 so SS:SP is live and the stack is at its shallowest - fill everything BELOW

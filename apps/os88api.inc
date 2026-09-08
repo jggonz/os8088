@@ -216,9 +216,13 @@ CWHITE    equ 15
                                  ; band got before this existed - and
                                  ; OSAPI_GFX_UNLOCK puts it back, so a pen is
                                  ; valid for exactly the lock hold you set it
-                                 ; in. Refuses NOTHING itself; the BLIT then
-                                 ; answers CF=1 for a pair whose two colours
-                                 ; share no plane in either direction.
+                                 ; in. Refuses NOTHING, and NEITHER DOES THE
+                                 ; BLIT: a pair whose two colours share no
+                                 ; plane in either direction used to answer
+                                 ; CF=1 and is drawn in two passes now, the
+                                 ; Map Mask splitting the band between them
+                                 ; (SPEC.md 5.4.2.2.1). Every pair of the
+                                 ; sixteen colours is a legal pen.
                                  ;
                                  ; NOT READ on a 1bpp adapter - a band there
                                  ; already means lit and unlit - so a package
@@ -305,7 +309,11 @@ KSC_ESC     equ 0x01
 
 ; --- sound (SPEC.md 20.3/34): the PC speaker, which is the whole of it.
 %define OSAPI_SND_CAPS      KERNEL_SEG:0x00E0   ; out AX = caps word (SND_CAP_*),
-                                 ; BL = 0 (the speaker), DX = 1 (present)
+                                 ; BL = where a tone goes right now: 0 the
+                                 ; speaker / 1 a sound driver's sink (34.8),
+                                 ; DX bit 0 = the speaker is present (always),
+                                 ; bit 1 = a sound driver is loaded. On
+                                 ; kern_small BL = 0 and DX = 1, always
 %define OSAPI_SND_TONE      KERNEL_SEG:0x00E8   ; AX = freq Hz (0 = off), CX =
                                  ; duration ticks (0 = until off), DL =
                                  ; priority (default 0x40); out CF=1 refused,
@@ -412,6 +420,50 @@ SND_OPENF_RING   equ 1           ; ring mode (SPEC.md 34.5): SI = ring base,
                                  ; Theme), not an application's. There is
                                  ; no clear, and no AL is read - see
                                  ; 11.99.2.1 for why.
+
+; --- decompression (docs/plans/O88-COMPRESSION-PLAN.md 12.1) -----------------------
+; The two format ids, mirrored from tools/os88lz.py, which is the reference
+; implementation both this and the kernel copy.
+OSAPI_LZ_LZ4 equ 0
+OSAPI_LZ_LZB equ 1
+%define OSAPI_DECOMP        KERNEL_SEG:0x04F8   ; DS:SI = the compressed bytes,
+                                 ; T word first (SPEC.md 20.13.7: every stream
+                                 ; ends in T raw bytes, and needs NO in-place
+                                 ; margin - a source read from exactly
+                                 ; output - packed above its destination is
+                                 ; never overtaken),
+                                 ; ES:0 = where they go and DI = 0 (the offset
+                                 ; bound is "no match may reach further back
+                                 ; than we have produced", which reads that way
+                                 ; only from zero - every caller hands over a
+                                 ; claim's base), CX = compressed bytes,
+                                 ; BX:DX = the EXACT expected output length,
+                                 ; 32 bits, AL = OSAPI_LZ_*.
+                                 ; out CF=0 and ES:DI one past the last byte;
+                                 ; CF=1 = refused, and nothing past the
+                                 ; declared length was written.
+                                 ; **THE OUTPUT CROSSES 64KB AND THE INPUT
+                                 ; DOES NOT** (SPEC.md 20.14.5): the output has
+                                 ; to, because a 116KB MOD is the biggest win
+                                 ; compression has in this system, and the
+                                 ; input need not, because a stream over 64KB
+                                 ; is a file that compressed badly and is
+                                 ; better stored plain. CX >= 64KB, or SI + CX
+                                 ; wrapping, is refused.
+                                 ; clobbers AX BX CX DX SI DI; DS and ES come
+                                 ; back YOURS - which is why this is a plain
+                                 ; cell and not an X one: the decompressor
+                                 ; reads no kernel data, so it wants both your
+                                 ; segments rather than needing a stub to
+                                 ; reach one of them.
+                                 ; A REFUSAL IS A NORMAL PATH. Every byte off a
+                                 ; disk is hostile (SPEC.md 19); a truncated
+                                 ; stream, a zero offset, a match reaching
+                                 ; below your buffer or one running past DX all
+                                 ; answer CF=1 rather than writing anywhere.
+                                 ; THE CELL IS IN BOTH KERNELS; which FORMATS
+                                 ; answer is a build knob, and one this kernel
+                                 ; does not carry is refused the same way.
 %define OSAPI_FULLSCREEN    KERNEL_SEG:0x0110   ; AL = 1 enter (BX=win ptr) / 0 exit;
                                  ; caller holds the gfx lock (window
                                  ; callbacks do); out CF=1 enter refused
@@ -460,6 +512,19 @@ SND_OPENF_RING   equ 1           ; ring mode (SPEC.md 34.5): SI = ring base,
                                  ; FERR_BIG is decided from the directory
                                  ; entry BEFORE any data I/O, so it leaves the
                                  ; buffer alone.
+                                 ; **A COMPRESSED FILE EXPANDS ON THE WAY IN**
+                                 ; (SPEC.md 20.14) and DX:AX is what it
+                                 ; expanded to, which is also the figure
+                                 ; OSAPI_FILE_FIND reported and the one you
+                                 ; sized your claim from. Two consequences you
+                                 ; can see: BX must be a multiple of 16, or the
+                                 ; call answers FERR_PROT (the expansion lands
+                                 ; at offset 0 of a segment, so every caller
+                                 ; hands over a claim's base and this is the
+                                 ; check rather than the hope); and the buffer
+                                 ; needs ~80 bytes more than the file, because
+                                 ; the packed bytes are read HIGH inside it and
+                                 ; expanded downwards. FERR_BIG says so.
 %define OSAPI_FILE_DELETE   KERNEL_SEG:0x0130   ; SI = name; out CF=0 AX=0, else FERR_*
 %define OSAPI_FILE_RENAME   KERNEL_SEG:0x0138   ; SI = old name, DI = new name; out as above
 %define OSAPI_FILE_DFREE    KERNEL_SEG:0x0140   ; out CF=0, DX:AX = free bytes, BX =
@@ -607,7 +672,7 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
 ; the Wire (SPEC.md 26.7), which fetches a .O88 over the network into a claim
 ; and has nowhere to put it: everything else in this system launches a package
 ; by naming a FILE, and there is no file here.
-%define OSAPI_PKG_RUN       KERNEL_SEG:0x04F8   ; ES:SI = a package image, byte for byte
+%define OSAPI_PKG_RUN       KERNEL_SEG:0x0520   ; ES:SI = a package image, byte for byte
                                  ; what the .O88 file holds, in a claim of
                                  ; YOURS. ANY segment - it is COPIED into a
                                  ; region of the kernel's own, never
@@ -657,7 +722,7 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
 ; to paint the picture. That is the whole design - most XTs have no network
 ; card, and a desktop icon whose art sat in every kernel would be carried by
 ; every machine that cannot use it.
-%define OSAPI_DESK_SVC      KERNEL_SEG:0x0500   ; AL = 1 add / 0 withdraw;
+%define OSAPI_DESK_SVC      KERNEL_SEG:0x0528   ; AL = 1 add / 0 withdraw;
                                  ; ES:SI = a 65-byte record in YOUR segment
                                  ; (add only):
                                  ;   +0  12  the caption, NUL (<= 11 chars)
@@ -806,11 +871,20 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
                                  ; and a move re-honours it (SPEC.md 50.3).
 ; ...AND THE SAME TWO FROM THE TOP OF THE HEAP (SPEC.md 50.3.2). For a buffer
 ; THE HARDWARE holds the address of - a sound card's DMA ring, a NIC's
-; descriptors - which can therefore never be moved and has no business in the
-; arena every data claim and the compactor share. SPEC.md 50.3 says why in its
-; own words: "one long-lived data claim landing mid-heap permanently splits the
-; space a package can be loaded into". If software is the only thing that reads
-; your block, use OSAPI_MEM_CLAIM above and let it be compacted.
+; descriptors - which has no business in the arena every data claim and the
+; compactor share. SPEC.md 50.3 says why in its own words: "one long-lived data
+; claim landing mid-heap permanently splits the space a package can be loaded
+; into". If software is the only thing that reads your block, use
+; OSAPI_MEM_CLAIM above and let it be compacted.
+;
+; A BLOCK CLAIMED HERE IS STILL BORN PINNED and stays pinned unless you declare
+; it, exactly like one from the low door. What the door decides is the
+; DIRECTION it is compacted in: the kernel records it (SPEC.md 50.3.2) and
+; SPEC.md 66.4.1's descending pass packs these towards the ceiling, so a
+; ceiling claim that CAN move - one only your own code addresses, put high
+; because it is long-lived rather than because a chip holds it - is worth
+; declaring OSAPI_MEM_MOVABLE. One a bus master is looking at is not, and
+; mem_can_move refuses an MC_DMA claim whatever you declare.
 %define OSAPI_MEM_CLAIM_HI  KERNEL_SEG:0x04C8   ; AX = KB; out CF, DX = segment
 %define OSAPI_MEM_CLAIM_DMA_HI KERNEL_SEG:0x04D0 ; ...and CX = the page-safe HEAD
 
@@ -889,6 +963,52 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
 ; display, or a kern_small kernel - and nothing was drawn. The fallback is one
 ; OSAPI_GFX_FILL per span, which draws the identical pixels; keep it, it is
 ; also the only path on a 128KB machine.
+; --- banking the pixels under something you are about to draw (SPEC.md 5.3) -
+; THE SAVE-UNDER PAIR. Draw a menu, a dialog or a tooltip over your content,
+; and taking it down is either a WRITE-BACK of what was there or a REPAINT of
+; what should be. On a 4.77MHz 8088 those are not the same price: a repaint
+; re-letters every text row the panel covered, at ~900us a glyph cell, and a
+; write-back is a blit. The kernel's own menu bar has banked its drop since
+; SPEC.md 12.4; this is that same pair of routines, published.
+;
+; SIZE THE BUFFER YOURSELF, and take the plane count from OSAPI_WM_DISPLAY's
+; DH and NOT from OSAPI_VIDEO - on a two-display machine the depth is the
+; DISPLAY's, not the primary's, and a buffer sized for the wrong one is the
+; field bug at SPEC.md 39.14.8 (a window banked on a Hercules and replayed
+; onto a VGA arrives as coloured noise):
+;
+;   bytes = planes * (y2-y1+1) * ((x2>>3) - (x1>>3) + 1)
+;
+; x1 is rounded DOWN to a byte column and x2 UP, which the formula already
+; carries. The layout is plane-major: all of plane 0's rows, then plane 1,
+; then 2, then 3 - one plane only on a 1bpp adapter.
+;
+; BOTH REFUSE A RECT THAT STRADDLES TWO DISPLAYS (CF = 1, nothing written).
+; A save is taken off ONE card, so a straddling rect would bank half and put
+; half back, leaving the rest stale. A refusal is not a failure path you have
+; to invent: repaint, which is what you did before you had these cells.
+;
+; The gfx lock is YOURS to hold across the pair, and the rect must still mean
+; the same pixels when you restore it - so do not yield to a repaint in
+; between, and do not bank a rect a window drag could have moved.
+%define OSAPI_GFX_SAVE      KERNEL_SEG:0x0508   ; AX = x1, BX = y1, CX = x2,
+                                 ; DX = y2 (INCLUSIVE, absolute screen),
+                                 ; ES:DI = your buffer. Copies those pixels
+                                 ; into it. ES is yours - a plain cell, no stub
+                                 ; - so the buffer lives in your own segment or
+                                 ; a heap claim you point ES at. out CF = 1
+                                 ; REFUSED (straddles two displays), nothing
+                                 ; written; CF = 0 taken and DI advanced past
+                                 ; the data. AX/BX/CX/DX come back yours, so
+                                 ; the rect is still in hand for the restore
+%define OSAPI_GFX_REST      KERNEL_SEG:0x0510   ; the same rect in AX/BX/CX/DX
+                                 ; and ES:SI = the buffer OSAPI_GFX_SAVE
+                                 ; filled; writes it back. out CF = 1 REFUSED,
+                                 ; CF = 0 and SI advanced. Restoring a rect
+                                 ; that is not the one you banked is not
+                                 ; refused and not detected - it is your
+                                 ; promise, exactly like OSAPI_WM_SAVEU's
+
 %define OSAPI_GFX_SPANS     KERNEL_SEG:0x04D8   ; AX = the y of the FIRST span,
                                  ; ES:SI = CX records of two words each, x1
                                  ; then x2, both INCLUSIVE; CX = rows, row n
@@ -913,11 +1033,14 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
                                  ; framebuffer's own bit order (row-major, bit
                                  ; 7 leftmost, 1 = a LIT pixel), BP = its
                                  ; stride in BYTES per row, AX = destination x
-                                 ; and CX = width in pixels - BOTH MUST BE
-                                 ; MULTIPLES OF 8 - BX = y, DX = rows, 1..255.
-                                 ; x and y are SIGNED: a window dragged half
-                                 ; off the left edge has content at a negative
-                                 ; x, and whole 8-pixel columns simply drop.
+                                 ; - A MULTIPLE OF 8 - CX = width in pixels,
+                                 ; ANY (off the byte grid, the last partial
+                                 ; byte is merged under a mask and the bits
+                                 ; past the width are untouched, SPEC.md
+                                 ; 5.4.2.5), BX = y, DX = rows, 1..255. x and
+                                 ; y are SIGNED: a window dragged half off the
+                                 ; left edge has content at a negative x, and
+                                 ; whole 8-pixel columns simply drop.
                                  ; out CF=1 = REFUSED and nothing drawn: the
                                  ; arguments broke one of the rules above, or
                                  ; this is a kern_small machine, which carries
@@ -1251,6 +1374,7 @@ MEM_K_CLIP  equ 0xFF07          ; the system clipboard's text (SPEC.md 55)
 MEM_K_MOD   equ 0xFF08          ; an on-demand kernel module's image (SPEC.md 2.8)
 MEM_K_CLONE equ 0xFF09          ; the disk cloner's buffer (SPEC.md 18.99)
 MEM_K_BAND  equ 0xFF0A          ; the 1bpp band composer's buffer (SPEC.md 5.9.2)
+MEM_K_CMPR  equ 0xFF0D          ; the Compress verb's working block (SPEC.md 22.22)
 ; 0xFF0B WAS MEM_K_OVL, the relocated boot overlay. It rides stage 2's blob
 ; now (SPEC.md 2.9.6) and is not a claim at all, so the tag is retired and
 ; LEFT UNUSED - a value that meant one thing in a shipped kernel and another
@@ -1319,10 +1443,12 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
 %endif
 
 %define OSAPI_CPU_INFO      KERNEL_SEG:0x0188   ; no inputs; out AL = CPU_8086 /
-                                 ; CPU_286 / CPU_386, AH = feature bits: bit 0
-                                 ; A20 verified open, bit 1 HMA claimed, bit 2
-                                 ; unreal mode armed. Preserves every register
-                                 ; but AX. Any context - it reads two bytes.
+                                 ; CPU_286 / CPU_386, AH = feature bits (the
+                                 ; CPU_F_* below): bit 0 A20 verified open,
+                                 ; bit 1 HMA claimed, bit 2 unreal mode armed,
+                                 ; bit 3 an x87 is in the socket. Preserves
+                                 ; every register but AX. Any context - it
+                                 ; reads two bytes.
 %define OSAPI_XMEM_CAPS     KERNEL_SEG:0x0190   ; no inputs; out AX = extended-
                                  ; memory KB the pool can still hand out (0 =
                                  ; none, and the three below will all refuse),
@@ -1497,8 +1623,8 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; disk: your instance stands in the folder it
                                  ; was launched from, or in one a dialog gave
                                  ; it, and nothing told you where the SYSTEM's
-                                 ; own files are. FONTS/ is the first of those
-                                 ; (SPEC.md 19.7).
+                                 ; own files are. SYSTEM/FONTS is the first of
+                                 ; those (SPEC.md 19.8).
                                  ;
                                  ; Bank OSAPI_FILE_HERE first and GOTO back
                                  ; when you are done: a visit leaves your
@@ -1740,6 +1866,61 @@ DRVC_FILE    equ 5              ; a volume served by somebody answering
                                  ; refuses to compact any driver-owned claim
                                  ; while any service task is unparked.
 
+%define OSAPI_TASK_RESTARTABLE KERNEL_SEG:0x0518  ; AX = a near offset in YOUR
+                                 ; own image, 0 to withdraw. out CF=1 = you are
+                                 ; not a live package instance. Preserves every
+                                 ; register.
+                                 ;
+                                 ; "IF YOU HAVE TO MOVE MY REGION, THROW MY
+                                 ; WORKER'S STACK AWAY AND RE-ENTER IT HERE"
+                                 ; (SPEC.md 66.6.2).
+                                 ;
+                                 ; WHY IT EXISTS. Your REGION - the block your
+                                 ; code and bss live in - is a claim like any
+                                 ; other, and OSAPI_MEM_MOVABLE already
+                                 ; declares it. But if you hire a worker
+                                 ; (OSAPI_TASK_SPAWN) the kernel wrote your
+                                 ; segment into that worker's frame before its
+                                 ; first instruction, and its own call chain
+                                 ; has pushed it again since, at depths nothing
+                                 ; can compute. So a region with a worker stays
+                                 ; PINNED however it is declared - unless you
+                                 ; say this.
+                                 ;
+                                 ; WHAT YOU ARE ASSERTING is stronger than
+                                 ; OSAPI_MEM_PARKSAFE and the difference
+                                 ; matters: that one says "you may STOP me
+                                 ; here", this says "you may DISCARD what I am
+                                 ; standing on and start me again there". Your
+                                 ; worker's loop begins AGAIN - not resumes.
+                                 ; Everything it needs must live in your region
+                                 ; (which moves with it) or in a claim of its
+                                 ; own (which has its own relocation proc), and
+                                 ; never on its stack across the declaration.
+                                 ;
+                                 ; IT IS A WINDOW, NOT A HEADER BIT. A pump, a
+                                 ; poller, a game loop or a redraw worker loses
+                                 ; a frame and nothing else, and may declare
+                                 ; once and leave it. A worker that mixes audio
+                                 ; or interprets a story file declares only
+                                 ; BETWEEN units of work and withdraws before
+                                 ; the next - the same shape as taking and
+                                 ; releasing OSAPI_MEM_PARKSAFE around a lock.
+                                 ;
+                                 ; THE ASYMMETRY TO WEIGH: parksafe declared
+                                 ; wrongly costs you a missed optimisation.
+                                 ; This costs you a lost loop iteration - and
+                                 ; if your worker was holding something the
+                                 ; declaration was wrong about, it costs you
+                                 ; correctness. The default is undeclared, and
+                                 ; undeclared is the safe answer.
+                                 ;
+                                 ; The kernel restarts your worker only when it
+                                 ; is PARKED (SPEC.md 66.5.4), because your
+                                 ; declaration is about YOUR stack and says
+                                 ; nothing about the kernel's - so declaring
+                                 ; this alongside OSAPI_MEM_PARKSAFE is what
+                                 ; reaches a worker that draws.
 %define OSAPI_MEM_PARKSAFE  KERNEL_SEG:0x0408   ; AL = 1 declare / 0 withdraw.
                                  ; out CF=1 = you are not a live package
                                  ; instance. Preserves every register.
@@ -1982,7 +2163,12 @@ W_H       equ 8             ; word: frame height, includes title bar
 W_TITLE   equ 10            ; word: near ptr to NUL title string
 W_PAINT   equ 12            ; word: near ptr, SI = win ptr; content only
 W_ONKEY   equ 14            ; word: near ptr or 0; AL=ascii, AH=scan, SI=win
-W_ONCLICK equ 16            ; word: near ptr or 0; CX=x, DX=y, SI=win
+W_ONCLICK equ 16            ; word: near ptr or 0; CX=x, DX=y, SI=win.
+                            ; GIVE SI BACK AS YOU GOT IT: ui_task arms the
+                            ; release to the SI it finds AFTER you return
+                            ; (SPEC.md 13.7), so a handler that comes back
+                            ; with SI pointing elsewhere has named that as
+                            ; the window, and the release goes through it
 W_MENUS   equ 18            ; word: app menu set ptr, 0 = none. NOT a
                             ; template word - set it with OSAPI_MENU_SET
 W_DISP    equ 20            ; dword: the kernel's far pointer to your
@@ -2066,7 +2252,7 @@ OS88_F_PARTS  equ 4             ; the FILE is longer than the image, on purpose
 ; skip: six slices was the whole supply.
 ;
 ; tools/stkdepth.py prints your worker's deepest static chain; add the kernel's
-; interrupt floor, which docs/STACK-SLOTS-PLAN.md 7.1 puts at 64 on the worst
+; interrupt floor, which docs/plans/completed/STACK-SLOTS-PLAN.md 7.1 puts at 64 on the worst
 ; real machine measured, and pick the class above the sum with margin.
 OS88_STACK_DEFAULT equ 0        ; the largest. What you get by saying nothing
 OS88_STACK_128     equ 1        ; a worker that sleeps and wakes: a close
@@ -2258,6 +2444,57 @@ OS88_STACK_384     equ 4        ; the largest, asked for on purpose: a deep
     %if (%1 %+ _end - %1 %+ _list) / AMENU_ENTSZ > MENU_APPMAX
         %error "OS88_MENUSET: at most MENU_APPMAX (5) menus fit in the bar"
     %endif
+%endmacro
+
+; -----------------------------------------------------------------------------
+; OS88_MOVE_PROC / OS88_REGION_MOVABLE / OS88_WORKER_RESTARTABLE
+;
+; Declare THIS PACKAGE'S REGION - the block your code and bss live in - movable
+; (SPEC.md 66.6.1), and, if you hired a worker, restartable (66.6.2).
+;
+;     OS88_REGION_MOVABLE                 ; once, when your window exists
+;     OS88_WORKER_RESTARTABLE my_worker   ; right after OSAPI_TASK_SPAWN took
+;
+; Both are self-contained: OS88_REGION_MOVABLE carries its own relocation proc
+; and jumps over it, so there is no second thing to place and no way to declare
+; without one.
+;
+; WHY THE PROC IS A `ret`. Your own code needs no relocation - every near
+; offset in it survives a move untouched - and every word that NAMES your
+; region is the KERNEL's, which mem_region_reloc puts right: your window's
+; W_SEG, your instance's I_SPTR, the owner of every claim you hold, your menu
+; bar's entries and seven kernel scalars. A proc is required all the same,
+; because "declared and named nothing" is the one shape the kernel cannot tell
+; from "declared and forgot" (66.2), and it is where YOUR fix-up goes if you
+; ever cache your own segment in a word of your own. Almost nothing does.
+;
+; WHAT THE RESTART COSTS YOU is one iteration of your worker's loop, and the
+; kernel takes it only where your worker PARKS - inside OSAPI_TASK_ALIVE, or,
+; if you also declared OSAPI_MEM_PARKSAFE, blocked in OSAPI_GFX_LOCK. The
+; first is the top of your loop and costs a poll. The SECOND IS ANYWHERE IN
+; IT, so a worker that mixes audio, interprets a story or draws half a frame
+; must NOT pair the two blanket-fashion: declare this as a window instead -
+; turn it on immediately before OSAPI_TASK_ALIVE and off immediately after.
+; -----------------------------------------------------------------------------
+%macro OS88_REGION_MOVABLE 0
+    push ax
+    push dx                     ; DX is the instance index in an entry proc
+    mov dx, cs                  ; ...and OUR REGION is the claim
+    mov ax, %%reloc
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    pop ax
+    jmp short %%over
+%%reloc:                        ; BX = the base it WAS at, DX = where it is now
+    ret
+%%over:
+%endmacro
+
+%macro OS88_WORKER_RESTARTABLE 1
+    push ax
+    mov ax, %1
+    call OSAPI_TASK_RESTARTABLE
+    pop ax
 %endmacro
 
 ; -----------------------------------------------------------------------------
@@ -2942,8 +3179,28 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; the bytes delivered, 0 meaning you are at
                                  ; or past the end - which is how the loop
                                  ; terminates. Offset AND capacity must each
-                                 ; be a cluster multiple; FERR_NAME if not
+                                 ; be a cluster multiple; FERR_NAME if not.
+                                 ; **THIS ONE IS RAW** (SPEC.md 20.14.3): a
+                                 ; compressed file is delivered as it sits on
+                                 ; the disk, wrapper and all, and the sizes it
+                                 ; works in are on-disk sizes. That is what
+                                 ; makes a byte-exact chunked COPY possible -
+                                 ; read here, write with OSAPI_FILE_WRITE, and
+                                 ; the copy is compressed too. Bit 0 of
+                                 ; OSAPI_FILE_FIND's +22 is how you tell
 
+%define OSAPI_FILE_FIND_RAW KERNEL_SEG:0x0500   ; OSAPI_FILE_FIND, with +18 the
+                                 ; size the file OCCUPIES rather than the one
+                                 ; it expands to (SPEC.md 20.14.3). THE CELL A
+                                 ; COPIER WANTS: OSAPI_FILE_READ_AT is already
+                                 ; raw, and this is the size that goes with it,
+                                 ; so `find -> read_at -> write` moves a
+                                 ; compressed file whole and a plain one
+                                 ; unchanged. Bit 0 of +22 still says
+                                 ; COMPRESSED on both cells - that is a fact
+                                 ; about the FILE, and you know which size you
+                                 ; got from which cell you called. Same buffer,
+                                 ; same ordinal walk, same fence
 %define OSAPI_FILE_MKDIR    KERNEL_SEG:0x0360   ; SI = a NUL 8.3 name; creates a
                                  ; FOLDER in your current directory (SPEC.md
                                  ; 18.5). out CF=0 AX=0, else AX = FERR_*
@@ -3109,7 +3366,13 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
 ;   +16  word      first cluster - what OSAPI_FILE_GOTO takes for a folder
 ;   +18  dword     the size in bytes, all 32 bits (unlike the listing's, which
 ;                  is clamped to a word)
-;   +22  word      reserved, currently 0
+;   +22  word      flags. **Bit 0 = the size at +18 is what this file
+;                  EXPANDS to** (SPEC.md 20.14.3) - it is compressed, it
+;                  occupies less than that on the disk, and OSAPI_FILE_READ
+;                  will hand you the expanded bytes. Every other bit is
+;                  reserved and zero. This word WAS reserved and zero, so a
+;                  package written before it still works
+OSAPI_FIND_CZ equ 1              ; ...that bit
 OSAPI_FIND_SZ equ 24
 
 ; The type word at +14, and the one thing about this record that has already
@@ -3476,8 +3739,9 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; window. Out: AX = width, BX = height, CX =
                                  ; the first row the dock owns, SI = the first
                                  ; row the desktop band has, DL = 0 VGA / 1
-                                 ; Hercules / 2 CGA, DH = bits per pixel. DI
-                                 ; preserved; no lock needed, any context.
+                                 ; Hercules / 2 CGA / 3 EGA (the VID_* kinds),
+                                 ; DH = bits per pixel. DI preserved; no lock
+                                 ; needed, any context.
                                  ;
                                  ; **OSAPI_VIDEO ANSWERS ABOUT THE PRIMARY**
                                  ; (SPEC.md 39.2.1) and is right to - but on a

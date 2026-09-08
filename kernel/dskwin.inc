@@ -21,9 +21,10 @@
 ;                       is the rung's first bytes, and the %if below holds it
 ;
 ; That is what the boot overlay is meant to land in and spill through
-; (docs/BOOT-LADDER-PLAN.md stage B): `.ovl` is 6,688 bytes and the FAT window
-; alone is 4,608, so the window alone stopped being enough when SPEC.md
-; 2.9.12's register moved twenty bodies into the overlay.
+; (docs/plans/completed/BOOT-LADDER-PLAN.md stage B): `.ovlw`, the window half of the
+; overlay (SPEC.md 2.5.3), is ~5,000 bytes and the FAT window alone is 4,608,
+; so the window alone stopped being enough when SPEC.md 2.9.12's register
+; moved twenty bodies into the overlay.
 ;
 ; NOTHING ELSE MOVED, and that is the point of doing it this way. `.lowbss` is
 ; `nobits`, so this costs no byte on the disk and no byte of RAM - the rung is

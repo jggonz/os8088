@@ -25,10 +25,12 @@ import sys
 import time
 
 sys.path.insert(0, "tools")
+sys.path.insert(0, "tests")             # dispcp - the by-name Disk navigation
 import os88marty as M
 from os88mouse import Mouse
 from os88geom import WIN_SIZE, MAX_WIN
 from os88fixture import need                             # noqa: E402
+import dispcp                                            # noqa: E402
 
 ARG = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
 DLG = ARG == "dlg"
@@ -137,7 +139,7 @@ def dialog(m, mo):
 # second - an ABSENT gate that reads as a failing one, which is worse than
 # either. fdlgup and mouseup want the same disk and have asked for it since
 # it was written; this row never did, so WHICH ROW RAN FIRST decided whether
-# it passed (docs/HANDOFF-SOAK-FINDINGS.md B4).
+# it passed (docs/plans/HANDOFF-SOAK-FINDINGS.md B4).
 need("build/muptest.img")
 
 if DLG:
@@ -189,7 +191,14 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     print(f"== {MACHINE} : the shared scroll bar (SPEC.md 13.10) ==")
 
     vw = int.from_bytes(m.read(m.sym("vid_w"), 2), "little")
-    mo.dblclick(vw - 40, 46)                    # a Disk window on B:
+    # **THE DRIVE BY LETTER** (docs/WRITING-TESTS.md 6). `mo.dblclick(vw - 40,
+    # 46)` is where B's icon sits when B is the second one down, and this row's
+    # own comment says B: while the pixel had been opening A: - which is why
+    # `APPS` below found six entries against the eleven the comment promised,
+    # and every paging assertion then failed on a folder with one row to
+    # scroll. `open_drive` resolves the icon out of the guest's own volume
+    # table and confirms the window that opens is that drive's.
+    dispcp.open_drive(m, mo, m.sym, M.settle, "B")
     M.settle(m)
     w = disk_win(m)
     check("a Disk window opened", w is not None, f"{w}")
@@ -203,10 +212,20 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     x1, y1, y2 = x2 - (FM_SB_W - 1), cy + FM_ROW_Y0, cy + listb - 1
     print(f"  bar {x1},{y1} .. {x2},{y2}")
 
-    # INTO A FOLDER WITH ENOUGH FILES TO PAGE. B:\ has six entries against
-    # five rows, so its maximum scroll is 1 - which is what an ARROW gives
-    # too, and the two would be indistinguishable. APPS has eleven.
-    mo.dblclick(cx + 40, cy + FM_ROW_Y0 + 8 + 16)
+    # INTO A FOLDER WITH ENOUGH FILES TO PAGE. B:\'s own root has fewer
+    # entries than rows, so its maximum scroll is 0 - and an arrow gives 0
+    # too, so every assertion below would pass on a bar that does nothing.
+    # B:\APPS has seventeen; A:\APPS has six, which is the whole reason the
+    # drive above is now asked for by letter.
+    #
+    # **BY NAME, NOT BY ROW** (docs/WRITING-TESTS.md 6). This was
+    # `mo.dblclick(cx + 40, cy + FM_ROW_Y0 + 8 + 16)` - row 1, which was APPS
+    # on the listing somebody had on screen when they wrote it. The root has
+    # since lost an entry, row 1 became GAMES, and the row reported `fit 5 of
+    # 2` and then five more failures about a scroll bar that was working
+    # perfectly on a folder with nothing to scroll. `open_named` resolves the
+    # row out of the guest's own listing.
+    dispcp.open_named(m, mo, m.sym, M.settle, w[0], w[1], "APPS")
     M.settle(m)
     w = disk_win(m)
     cx, cy = w[0] + 1, w[1] + TITLE_H

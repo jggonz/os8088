@@ -138,6 +138,15 @@ def stable_shot(m, card, tries=6):
     "residue", in whichever column got unlucky. Two identical reads in a row
     is the cheap fix and it costs nothing when the screen is genuinely still.
     """
+    # **RESUME FIRST.** Every caller reaches this straight out of an
+    # `advance(frames=...)`, which STOPS the emulator - and a stopped guest
+    # cannot settle, because its screen can never change again. That used to
+    # look like success: `settle` saw two identical frames at once and
+    # returned, so the "two identical reads" below were trivially satisfied
+    # and this routine photographed a machine that was not running. It is a
+    # loud failure now (os88marty's guest-stall check), which is how it was
+    # found; the fix is to say `run` rather than to weaken the check.
+    m.run()
     last = shot(m, card=card)
     for _ in range(tries):
         os88marty.settle(m)

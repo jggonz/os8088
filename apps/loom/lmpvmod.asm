@@ -19,7 +19,7 @@
 ;     in apps/loom/lmpv.inc and a claim - and nothing at all until the first
 ;     time somebody opens the pane.
 ;
-; docs/WEAVE-PLAN.md 2.10 prices the alternatives this beat, and the first
+; docs/plans/completed/WEAVE-PLAN.md 2.10 prices the alternatives this beat, and the first
 ; paragraph of the pull request names it as the decision the owner may
 ; reverse.
 ;

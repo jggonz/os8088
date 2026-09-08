@@ -39,6 +39,7 @@ the whole claim is about what happens while the CPU sits inside the ROM.
 Nothing here is a TIMING assertion, though: every figure is a count of
 samples, so an oversubscribed host changes none of it.
 """
+import atexit
 import os
 import subprocess
 import sys
@@ -47,18 +48,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
+import os88build                                             # noqa: E402
 import os88marty                                             # noqa: E402
 import os88mouse                                             # noqa: E402
 import os88sym                                               # noqa: E402
 import dispcp                                                # noqa: E402
 
 MACHINE = "os8088_5150_cga_gla"
-IMAGE = os.environ.get("OS88_SYSIMG", "build/os8088-360.img")
-APPS = os.environ.get("OS88_APPSIMG", "build/apps360.img")
-KNOB = os.path.join("build", "curdisk")   # the NOCURDISK=1 arm's OWN tree: a
-                                          # knob kernel over build/ would be
-                                          # what every later row boots if this
-                                          # one were killed before atexit
+IMAGE = "build/os8088-360.img"
+APPS = "build/apps360.img"
 
 # How long to watch, and how finely.  One frame is ~16.7 ms of guest time; a
 # mount plus a directory walk plus an icon harvest is seconds of it, so this
@@ -155,11 +153,20 @@ SCENARIOS = (
 )
 
 
-def leg(defines, label, which, image=None, apps=None):
-    S = (lambda n: os88sym.linear(n, defines))
+def leg(tree, label, which):
+    """One arm of the A/B, against the kernel in `tree`.
+
+    Applying the tree is what points BOTH the lookups below and the library
+    helpers they call (`no_saver` resolves `ss_idle` and takes no defines) at
+    this kernel rather than at the shipped one.
+    """
+    tree = tree or os88build.plain()
+    tree.apply()
+    S = (lambda n: os88sym.linear(n, tree.defines))
     name, path, why = which
     say("\n=== %s: %s ===\n" % (label, why))
-    with os88marty.launch(image or IMAGE, apps=apps or APPS,
+    with os88marty.launch(tree.img(os.path.basename(IMAGE)),
+                          apps=tree.img(os.path.basename(APPS)),
                           machine=MACHINE) as m:
         mo = os88mouse.Mouse(marty=m)
         os88marty.no_saver(m)
@@ -220,7 +227,7 @@ def main(argv):
     new, old = {}, {}
 
     for sc in SCENARIOS:
-        new[sc[0]] = leg((), "default (SPEC.md 7.4)", sc)
+        new[sc[0]] = leg(None, "default (SPEC.md 7.4)", sc)
 
     for k, r in new.items():
         if not r["busy"]:
@@ -252,20 +259,13 @@ def main(argv):
         say("\ncurdisk: --solo, the NOCURDISK=1 leg is skipped")
     else:
         say("\n--- building the other arm ---")
-        subprocess.check_call(["make", "BUILD=" + KNOB, "NOCURDISK=1"],
-                              cwd=ROOT, stdout=subprocess.DEVNULL)
-        os.environ["OS88_BUILD"] = os.path.join(ROOT, KNOB)   # os88sym reads it
-        os88sym.default_defines("NOCURDISK")   # ...and so do the helpers that
-        try:                                   # look symbols up with no defines
-                                               # of their own (no_saver, dispcp)
-            for sc in SCENARIOS:
-                old[sc[0]] = leg(("NOCURDISK",), "NOCURDISK=1, the freeze it "
-                                 "replaces", sc,
-                                 image=os.path.join(KNOB, "os8088-360.img"),
-                                 apps=os.path.join(KNOB, "apps360.img"))
-        finally:
-            del os.environ["OS88_BUILD"]
-            os88sym.default_defines()
+        # A TREE OF ITS OWN (tools/os88build.py). The `atexit` that used to
+        # follow this build - putting the plain kernel back into build/ - is
+        # gone with the write it was defending against.
+        knob = os88build.tree("NOCURDISK=1")
+        for sc in SCENARIOS:
+            old[sc[0]] = leg(knob, "NOCURDISK=1, the freeze it "
+                             "replaces", sc)
 
         for k, r in old.items():
             if r["moves"]:

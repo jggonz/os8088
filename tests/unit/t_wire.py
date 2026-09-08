@@ -4,9 +4,9 @@
     python3 tests/unit/t_wire.py
 
 THREE THINGS, and the third is the one that cannot be got by reading either
-file on its own. Each is done twice, once for the catalog (SPEC.md 88.2) and
-once for the archive (SPEC.md 88.13) - and the archive's round trip carries a
-FOURTH reading, because 88.13 pins its compression BY ITS DECODER: the tool's
+file on its own. Each is done twice, once for the catalog (SPEC.md 92.2) and
+once for the archive (SPEC.md 92.13) - and the archive's round trip carries a
+FOURTH reading, because 92.13 pins its compression BY ITS DECODER: the tool's
 encoder, the tool's reference decoder and a decoder written here from the
 paragraph alone must all agree, and the 8088's resumable unpacker will be the
 third of those to be written.
@@ -14,12 +14,12 @@ third of those to be written.
 1. **THE ROUND TRIP.** A fixture manifest naming `build/hello.o88`,
    `build/mines.o88` and a tier-3 entry with a sidecar is packed by
    `tools/os88wire.py --pack`, verified by `--verify`, dumped by `--dump`,
-   and then read back HERE by a reader written from SPEC.md 88.2 rather than
+   and then read back HERE by a reader written from SPEC.md 92.2 rather than
    by importing the tool's own. Two readings of one format; where they
    disagree the spec has a bug and the spec is fixed first. That is
    `tests/unit/t_wab.py`'s rule (WEAVE-SPEC 12.2), one format along.
 
-2. **THE REFUSALS.** Every rule in SPEC.md 88.2 that the WRITER owns is fed
+2. **THE REFUSALS.** Every rule in SPEC.md 92.2 that the WRITER owns is fed
    an input that breaks it, and the pack must refuse. A writer whose refusals
    are untested is a writer that emits a catalog the 8088 then refuses - and
    the machine's refusal is one line in a status cell, where this one names
@@ -65,7 +65,7 @@ WARC = os.path.join(ROOT, "apps", "thewire", "warc.inc")
 ICONS = os.path.join(ROOT, "kernel", "icons.inc")
 BUILD = os.path.join(ROOT, "build")
 
-# --- SPEC.md 88.2, read out of the spec and not out of the tool -------------
+# --- SPEC.md 92.2, read out of the spec and not out of the tool -------------
 S_HDR = 32
 S_REC = 256
 S_SC = 16
@@ -77,7 +77,7 @@ S_DESCN, S_DESCW = 5, 28
 S_WF_DISK, S_WF_PIC, S_WF_NEW, S_WF_FLOPPY, S_WF_ARC = 1, 2, 4, 8, 16
 S_ARCMAX = 0x100000                 # WIRE_ARCMAX, the archive's own ceiling
 
-# --- SPEC.md 88.13, the same way ---------------------------------------------
+# --- SPEC.md 92.13, the same way ---------------------------------------------
 S_AMAGIC = b"WPAK"
 S_AHDR = 32
 S_AENT = 64
@@ -151,7 +151,7 @@ def mirror(inc, least, pins, sect):
            "both files could agree on a number the SPEC does not say")
 
 
-# What SPEC.md 88.2 and 88.13 pin BY NUMBER, read out of the prose rather than
+# What SPEC.md 92.2 and 92.13 pin BY NUMBER, read out of the prose rather than
 # out of either file - the mirror above only proves the two spellings agree.
 CAT_PINS = (("WIRE_HDR", S_HDR), ("WIRE_REC", S_REC),
             ("WIRE_SC", S_SC), ("WIRE_VER", S_VER),
@@ -202,7 +202,7 @@ def icons():
        "os88wire.py's GENERIC_ICON_MASK is ico_app16's mask",
        "a record whose package declares no icon gets this one, and the Disk "
        "window draws ico_app16 for that same package - one program under two "
-       "pictures is the drift (SPEC.md 88.2)")
+       "pictures is the drift (SPEC.md 92.2)")
     eq(mod.GENERIC_ICON_DATA, rows[16:],
        "os88wire.py's GENERIC_ICON_DATA is ico_app16's data",
        "as above, and the tool cannot read kernel/icons.inc because the "
@@ -213,7 +213,7 @@ def icons():
 # 1. THE ROUND TRIP - a reader written from the spec
 # =============================================================================
 def read_catalog(blob):
-    """SPEC.md 88.2, by hand. Raises on anything the machine would refuse."""
+    """SPEC.md 92.2, by hand. Raises on anything the machine would refuse."""
     assert len(blob) >= S_HDR, "shorter than the header"
     assert len(blob) <= S_CATMAX, "over WIRE_CATMAX"
     assert blob[0:4] == S_MAGIC, "magic %r" % blob[0:4]
@@ -250,7 +250,7 @@ def read_catalog(blob):
              "needkb": struct.unpack_from("<H", blob, o + 46)[0],
              "icon": blob[o + 48:o + 112]}
         # +46 WAS the record's last spare word and is now WC_NEEDKB (SPEC.md
-        # 88.2): an archive's RAM disk figure, and zero on everything else.
+        # 92.2): an archive's RAM disk figure, and zero on everything else.
         if not r["flags"] & S_WF_ARC:
             assert r["needkb"] == 0, "%s: WC_NEEDKB is not zero on a record "\
                 "that is not an archive" % r["stem"]
@@ -333,7 +333,7 @@ def roundtrip(tmp):
         date, recs, sides = read_catalog(blob)
     except Exception as e:
         check(False, "the spec-side reader refused the packed catalog",
-              "SPEC.md 88.2 and tools/os88wire.py disagree; the SPEC is fixed "
+              "SPEC.md 92.2 and tools/os88wire.py disagree; the SPEC is fixed "
               "first", got="%s: %s" % (type(e).__name__, e))
         return
 
@@ -341,7 +341,7 @@ def roundtrip(tmp):
     eq(len(recs), 3, "three records")
     eq([r["stem"] for r in recs], ["HELLO", "MINES", "BIGONE"],
        "the records are in manifest order",
-       "the filter lists in CATALOG ORDER (SPEC.md 88.6), so the order is "
+       "the filter lists in CATALOG ORDER (SPEC.md 92.6), so the order is "
        "part of the format and not an implementation detail")
     eq(recs[0]["title"], "Hello", "the title")
     eq(recs[1]["kind"], 1, "a named kind becomes its number")
@@ -351,7 +351,7 @@ def roundtrip(tmp):
     check(not recs[1]["flags"] & S_WF_NEW, "MINES is not WF_NEW")
     check(recs[2]["flags"] & S_WF_DISK,
           "a record with a sidecar is WF_DISK",
-          "WF_DISK is DERIVED and not declared (SPEC.md 88.2): a sidecar "
+          "WF_DISK is DERIVED and not declared (SPEC.md 92.2): a sidecar "
           "without it would let Load Program run a program with its files "
           "nowhere, which is the one thing the flag exists to stop")
     check(not recs[0]["flags"] & S_WF_DISK, "one file is not WF_DISK")
@@ -363,14 +363,14 @@ def roundtrip(tmp):
     eq(recs[0]["size"], len(hello), "WC_SIZE is the file's own length")
     eq(recs[2]["total"], len(hello) + len(mines),
        "WC_TOTAL is the .O88 plus every sidecar",
-       "Add to Disk refuses on it before touching the disk (SPEC.md 88.7)")
+       "Add to Disk refuses on it before touching the disk (SPEC.md 92.7)")
     eq(recs[2]["sides"], [("MINES.O88", len(mines))],
        "the sidecar table names the second file and its size")
     eq(recs[0]["desc"],
        ["The smallest os8088", "package. One window, two",
         "lines of text and a File", "menu."],
        "the description is PRE-WRAPPED at 27 columns",
-       "the machine wraps nothing (SPEC.md 88.2) - it is five fixed fields "
+       "the machine wraps nothing (SPEC.md 92.2) - it is five fixed fields "
        "exactly so that a paint costs no wrapping")
     for r in recs:
         for line in r["desc"]:
@@ -408,7 +408,7 @@ def refusals(tmp):
            lambda m: m["entries"][0].__setitem__(
                "description", " ".join(["word"] * 60)),
            "the machine wraps nothing, so a sixth line is a sentence that "
-           "vanishes with no sign it was there (SPEC.md 88.2)")
+           "vanishes with no sign it was there (SPEC.md 92.2)")
     refuse("a word longer than a line",
            lambda m: m["entries"][0].__setitem__(
                "description", "supercalifragilisticexpialidocious!!"),
@@ -455,7 +455,7 @@ def refusals(tmp):
     check(r.returncode != 0,
           "--pack refuses a file over WIRE_FILEMAX without floppy_only",
           "the Wire moves a file in ONE claim and ONE OSAPI_FILE_WRITE, so a "
-          "63KB+ file has no path through the machine at all (SPEC.md 88.2)",
+          "63KB+ file has no path through the machine at all (SPEC.md 92.2)",
           got=(r.stdout + r.stderr).strip() or "exit 0")
     m["entries"][0]["flags"] = {"floppy_only": True}
     json.dump(m, open(os.path.join(tmp, "big.json"), "w"))
@@ -513,7 +513,7 @@ def corrupt(tmp):
         check(r.returncode != 0, "--verify fails %s" % what, why,
               got=(r.stdout + r.stderr).strip() or "exit 0")
 
-    # --- and the two arms of the ICON check (SPEC.md 88.2) ----------------
+    # --- and the two arms of the ICON check (SPEC.md 92.2) ----------------
     # MINES declares an OS88_ICON16, so its record must carry exactly those 64
     # bytes; HELLO declares none, so its record carries a GENERIC one and the
     # verifier may not compare it against anything - two writers may pick
@@ -555,13 +555,13 @@ def corrupt(tmp):
           got=(r.stdout + r.stderr).strip() or "exit 0")
 
     b = bytearray(good)                      # ...and HELLO's generic CHANGED
-    for k in range(64):                      # is NOT a failure: SPEC.md 88.2
+    for k in range(64):                      # is NOT a failure: SPEC.md 92.2
         b[S_HDR + 48 + k] ^= 0x0F            # leaves which generic to the
     open(p, "wb").write(bytes(b))            # writer
     r = run("--verify", p, "--pkgdir", pub)
     check(r.returncode == 0,
           "--verify ACCEPTS a different generic on a package with no icon",
-          "SPEC.md 88.2 says 'the package's own OS88_ICON16 block or the "
+          "SPEC.md 92.2 says 'the package's own OS88_ICON16 block or the "
           "site's generic program icon', so two independent writers may "
           "choose differently and both be right - this is the check that "
           "failed the website's real catalog on three records",
@@ -576,7 +576,7 @@ def corrupt(tmp):
 
 
 # =============================================================================
-# THE PICTURE (SPEC.md 88.3) - a PNG in, 1,024 bytes out
+# THE PICTURE (SPEC.md 92.3) - a PNG in, 1,024 bytes out
 #
 # The PNGs below are written HERE, by hand, in the two shapes the site's
 # captures come in: a 1-bit grayscale off a Hercules or a CGA, and a 4-bit
@@ -647,7 +647,7 @@ def picture(tmp):
         got = open(out, "rb").read()
         eq(len(got), 1024, "--pic writes %d bytes from a %s PNG"
            % (len(got), tag),
-           "the reader refuses any other Content-Length (SPEC.md 88.3)")
+           "the reader refuses any other Content-Length (SPEC.md 92.3)")
         eq(got, bytes(expect), "--pic cuts the right 128x64 from a %s PNG"
            % tag,
            "it is a 1:1 CROP and never a scale, and 1 is INK - a polarity "
@@ -660,7 +660,7 @@ def picture(tmp):
 
 
 # =============================================================================
-# THE ARCHIVE (SPEC.md 88.13) - a SECOND READER, written from the spec
+# THE ARCHIVE (SPEC.md 92.13) - a SECOND READER, written from the spec
 #
 # `unlzss` below is deliberately not `os88wire.lzss_decode`. The format is
 # pinned by its decoder, so two decoders written from the same paragraph are
@@ -669,7 +669,7 @@ def picture(tmp):
 # SPEC has a bug and the SPEC is fixed first (t_wab's rule, WEAVE-SPEC 12.2).
 # =============================================================================
 def unlzss(body, want):
-    """SPEC.md 88.13's method 1, by hand. Raises on the four refusals."""
+    """SPEC.md 92.13's method 1, by hand. Raises on the four refusals."""
     out = bytearray()
     p = 0
     while len(out) < want:
@@ -699,7 +699,7 @@ def unlzss(body, want):
 
 
 def read_archive(blob):
-    """SPEC.md 88.13, by hand. (header, entries); raises on any refusal."""
+    """SPEC.md 92.13, by hand. (header, entries); raises on any refusal."""
     assert len(blob) >= S_AHDR, "shorter than the header"
     assert blob[0:4] == S_AMAGIC, "magic %r" % blob[0:4]
     assert blob[4] == 1, "format version %d" % blob[4]
@@ -711,7 +711,7 @@ def read_archive(blob):
     needkb = struct.unpack_from("<H", blob, 12)[0]
     maxent = struct.unpack_from("<H", blob, 14)[0]
     assert maxent <= S_FILEMAX, "largest entry %d" % maxent
-    # A SLOT IS AT MOST TWELVE BYTES STOPPING AT A NUL (SPEC.md 88.13): no NUL
+    # A SLOT IS AT MOST TWELVE BYTES STOPPING AT A NUL (SPEC.md 92.13): no NUL
     # at all is a twelve-character 8.3 name filling it, which is what
     # CONSOLE7.COM and LEFT-OFF.TXT are. A byte AFTER the NUL is still a fault.
     def slot(s, what):
@@ -827,12 +827,12 @@ def lzss(mod):
            "LZSS round trip: %s (%d -> %d bytes)" % (what, len(src), len(enc)),
            "the encoder and the reference decoder are one file's two halves; "
            "a stream only this encoder can read is a stream the 8088 refuses "
-           "(SPEC.md 88.13)")
+           "(SPEC.md 92.13)")
         try:
             got = unlzss(enc, len(src))
         except AssertionError as e:
             check(False, "the SPEC-side decoder reads %s" % what,
-                  "SPEC.md 88.13 pins method 1 BY ITS DECODER, so two readings "
+                  "SPEC.md 92.13 pins method 1 BY ITS DECODER, so two readings "
                   "of that paragraph disagreeing is a bug in the paragraph",
                   got=str(e))
             continue
@@ -859,7 +859,7 @@ def lzss(mod):
 
 
 def decoder_refusals(mod):
-    """SPEC.md 88.13's four refusals, on streams made by hand."""
+    """SPEC.md 92.13's four refusals, on streams made by hand."""
     def refuse(what, body, want, why):
         try:
             mod.lzss_decode(body, want)
@@ -901,7 +901,7 @@ def decoder_refusals(mod):
 # THE ARCHIVE ROUND TRIP - pack, verify, dump, and read back from the SPEC
 # =============================================================================
 def arc_fixture(tmp):
-    """A tree with everything SPEC.md 88.13 has a rule about in it."""
+    """A tree with everything SPEC.md 92.13 has a rule about in it."""
     src = os.path.join(tmp, "tree")
     for d in ("", "DOCS", "DATA", os.path.join("DATA", "SUB"),
               os.path.join("DATA", "SUB", "DEEP")):
@@ -913,7 +913,7 @@ def arc_fixture(tmp):
         # not compress, so the writer must fall back to method 0), a
         # depth-WARC_DEPTH one, and the program LAST.
         "README.TXT": b"The Wire moves a folder tree in one stream.\r\n" * 40,
-        # ...and the two shapes 88.13 was AMENDED for: a twelve-character 8.3
+        # ...and the two shapes 92.13 was AMENDED for: a twelve-character 8.3
         # name FILLS its slot and carries no NUL, at the root and inside a
         # folder. Five of the RunCPM master disk's 77 files are these, and the
         # first draft of the format could not carry any of them.
@@ -947,7 +947,7 @@ def archive_roundtrip(tmp):
     r = run("--verify", wpk)
     check(r.returncode == 0, "--verify on the writer's own archive",
           "a writer and a reader that never meet is two readings of one "
-          "format (SPEC.md 88.13)",
+          "format (SPEC.md 92.13)",
           got=(r.stdout + r.stderr).strip(), want="exit 0")
     r = run("--dump", wpk)
     check(r.returncode == 0, "--dump on a .WPK",
@@ -963,20 +963,20 @@ def archive_roundtrip(tmp):
         hdr, ents = read_archive(blob)
     except AssertionError as e:
         check(False, "the SPEC-side reader refused the packed archive",
-              "SPEC.md 88.13 and tools/os88wire.py disagree; the SPEC is "
+              "SPEC.md 92.13 and tools/os88wire.py disagree; the SPEC is "
               "fixed first", got=str(e))
         return
 
     eq(hdr["home"], "WPKTEST", "the home folder survives the round trip",
        "the whole tree lands under it, which is what lets a later archive of "
-       "a CP/M game name the same home and paths under A/1/ (SPEC.md 88.13)")
+       "a CP/M game name the same home and paths under A/1/ (SPEC.md 92.13)")
     eq(hdr["n"], len(files), "every file in the tree is an entry")
     check(hdr["flags"] & 1, "WAH_PROGRAM is set",
           "Load Program runs the last entry when the tree has landed")
     eq(hdr["total"], sum(len(b) for b in files.values()),
        "the header's unpacked total is the tree's bytes",
        "it is copied into WC_TOTAL and Add to Disk's free-space check is "
-       "decided on it (SPEC.md 88.2)")
+       "decided on it (SPEC.md 92.2)")
     eq(hdr["maxent"], max(len(b) for b in files.values()),
        "the header's largest entry is the largest file",
        "it is the ONE claim the reader makes for the whole transfer")
@@ -994,7 +994,7 @@ def archive_roundtrip(tmp):
            "the tree is written to a disk or a RAM store from these bytes")
 
     # THE TWELVE-CHARACTER NAMES, on the bytes: the slot is full and there is
-    # no NUL in it, which is what SPEC.md 88.13 amended the format to say.
+    # no NUL in it, which is what SPEC.md 92.13 amended the format to say.
     # THE SLOT IS FULL AND THERE IS NO NUL IN IT, which is the whole of the
     # amendment: the reader above copies at most twelve bytes and stops at a
     # NUL, so a name coming back at twelve characters is the proof - a
@@ -1009,11 +1009,11 @@ def archive_roundtrip(tmp):
               "a twelve-character 8.3 name round-trips: %s" % path,
               "five of the RunCPM master disk's 77 files are these, so a "
               "format that could not carry them could not carry its own "
-              "motivating example (SPEC.md 88.13)", got=sorted(got))
+              "motivating example (SPEC.md 92.13)", got=sorted(got))
 
     eq(ents[-1]["path"], "HELLO.O88", "the program entry is LAST",
        "the claim still holds it when the transfer ends, and OSAPI_PKG_RUN "
-       "takes it from there with no second read (SPEC.md 88.14)")
+       "takes it from there with no second read (SPEC.md 92.14)")
     eq(ents[-1]["depth"], 0, "...and it is at depth 0")
     rand = [e for e in ents if e["path"] == "DATA/RANDOM.BIN"][0]
     eq(rand["method"], 0, "random bytes are STORED and not LZSS",
@@ -1027,7 +1027,7 @@ def archive_roundtrip(tmp):
     empty = [e for e in ents if e["path"] == "DOCS/EMPTY.TXT"][0]
     eq((empty["method"], empty["stored"], empty["size"]), (0, 0, 0),
        "an empty file is a stored entry of no bytes at all",
-       "0 is a legal unpacked size (SPEC.md 88.13) and a folder tree has "
+       "0 is a legal unpacked size (SPEC.md 92.13) and a folder tree has "
        "them; a writer that skipped it would lose a file with no sign")
 
     groups = []
@@ -1041,12 +1041,12 @@ def archive_roundtrip(tmp):
        "the reader banks the folder it stands in, so a tree in this order "
        "costs one folder change per FOLDER and not one per file - and a "
        "folder change on a floppy is FIND walks and a GOTO, each priced in "
-       "int 13h calls (SPEC.md 88.13)")
+       "int 13h calls (SPEC.md 92.13)")
     eq(groups[-1], "",
        "...and the root is the LAST run, because the program is in it",
        "sorting alone puts the root first, and lifting the program out of it "
        "to the end would leave the root appearing in two runs - both of "
-       "88.13's ordering rules hold only if the whole root group goes last")
+       "92.13's ordering rules hold only if the whole root group goes last")
     return wpk
 
 
@@ -1124,7 +1124,7 @@ def archive_corrupt(mod, wpk):
 
 
 # =============================================================================
-# THE CATALOG RECORD FOR AN ARCHIVE (SPEC.md 88.2's WF_ARC)
+# THE CATALOG RECORD FOR AN ARCHIVE (SPEC.md 92.2's WF_ARC)
 # =============================================================================
 def archive_record(tmp, wpk, mod):
     man = os.path.join(tmp, "arc.json")
@@ -1158,9 +1158,9 @@ def archive_record(tmp, wpk, mod):
     check(rec["flags"] & S_WF_FLOPPY,
           "...and the writer sets WF_FLOPPY WITH it",
           "wr_catck never refused a flag it did not know, so a Wire from "
-          "before 88.13 reads the same catalog, greys both buttons with the "
+          "before 92.13 reads the same catalog, greys both buttons with the "
           "floppy reason, and never fetches a .O88 that is not there "
-          "(SPEC.md 88.2)")
+          "(SPEC.md 92.2)")
     check(not rec["flags"] & S_WF_DISK,
           "...and WF_DISK is CLEAR on it",
           "the tree it unpacks IS its files on a disk, so Load Program is "
@@ -1174,7 +1174,7 @@ def archive_record(tmp, wpk, mod):
     eq(rec["needkb"], hdr["needkb"],
        "WC_NEEDKB is the archive header's own figure",
        "Load Program sizes the RAM disk store on the record and then fills "
-       "it from the stream (SPEC.md 88.14)")
+       "it from the stream (SPEC.md 92.14)")
     check(any(rec["icon"]),
           "the record carries an icon with pixels in it",
           "build/hello.o88 declares no OS88_ICON16, so this record gets the "
@@ -1197,7 +1197,7 @@ def archive_record(tmp, wpk, mod):
        "the record's icon is the archive's PROGRAM entry's own",
        "the Disk window draws that icon for the .O88 the tree lands as, so a "
        "row showing anything else puts one program under two pictures - the "
-       "rule the .O88 records have had since 88.2, reached through a decode")
+       "rule the .O88 records have had since 92.2, reached through a decode")
     check(not mod.verify(mcat, tmp), "...and it verifies against the .WPK",
           got=mod.verify(mcat, tmp))
     b = bytearray(mcat)
@@ -1206,7 +1206,7 @@ def archive_record(tmp, wpk, mod):
           "--verify fails an archive record carrying a different icon",
           "the picture is decoded out of the stream, so the website's second "
           "writer has to decode it too - which is why `--verify` run over "
-          "what that writer published is the arrangement (SPEC.md 88.13)",
+          "what that writer published is the arrangement (SPEC.md 92.13)",
           got="no complaint")
 
     # ...and the four ways the record can be wrong, each refused. These call
@@ -1218,11 +1218,11 @@ def archive_record(tmp, wpk, mod):
             ("WF_ARC without WF_FLOPPY",
              lambda b: b.__setitem__(S_HDR + 34,
                                      b[S_HDR + 34] & ~S_WF_FLOPPY),
-             "a Wire from before 88.13 would fetch a <STEM>.O88 that is not "
+             "a Wire from before 92.13 would fetch a <STEM>.O88 that is not "
              "published"),
             ("WF_ARC with WF_DISK",
              lambda b: b.__setitem__(S_HDR + 34, b[S_HDR + 34] | S_WF_DISK),
-             "88.2 clears bit 0 on an archive, and Load Program is greyed on "
+             "92.2 clears bit 0 on an archive, and Load Program is greyed on "
              "bit 0"),
             ("a WC_NEEDKB that is not the archive's",
              lambda b: struct.pack_into("<H", b, S_HDR + 46, 1),
@@ -1269,7 +1269,7 @@ def archive_record(tmp, wpk, mod):
           "the bound itself is refused",
           got="no complaint")
 
-    # A WC_NEEDKB on a record that is NOT an archive is a fault too: 88.2
+    # A WC_NEEDKB on a record that is NOT an archive is a fault too: 92.2
     # says the word is zero on every other record, and a reader that trusts
     # it would size a RAM disk for a program that never asked for one.
     b = bytearray(good)
@@ -1281,7 +1281,7 @@ def archive_record(tmp, wpk, mod):
 
 
 # =============================================================================
-# THE ARCHIVE WRITER'S REFUSALS (SPEC.md 88.13)
+# THE ARCHIVE WRITER'S REFUSALS (SPEC.md 92.13)
 # =============================================================================
 def archive_refusals(tmp, mod):
     root = os.path.join(tmp, "ref")
@@ -1369,7 +1369,7 @@ def archive_refusals(tmp, mod):
                            "DOCS/A.TXT\nDOCS/B.TXT\n")
     refuse("a program entry that is not last", curated,
            "the claim that holds the last entry is what OSAPI_PKG_RUN "
-           "launches; anything else is a second read (SPEC.md 88.14)",
+           "launches; anything else is a second read (SPEC.md 92.14)",
            program="HELLO.O88", order=order)
     open(order, "w").write("DOCS/A.TXT\nF.TXT\nDOCS/B.TXT\nHELLO.O88\n")
     refuse("entries that are not grouped by folder", curated,
@@ -1414,7 +1414,7 @@ def archive_refusals(tmp, mod):
     check(mod.WIRE_ARCMAX == S_ARCMAX,
           "WIRE_ARCMAX is 0x%X" % S_ARCMAX,
           "the poke above is restored, and the bound the tool actually ships "
-          "with is the one SPEC.md 88.2 gives", got=mod.WIRE_ARCMAX,
+          "with is the one SPEC.md 92.2 gives", got=mod.WIRE_ARCMAX,
           want=S_ARCMAX)
 
     # ...and the CLI reports a refusal as an exit code, which is what the
@@ -1446,8 +1446,8 @@ def main():
         if not os.path.exists(os.path.join(BUILD, f)):
             print("t_wire: no build/%s - run `make` first" % f)
             sys.exit(1)
-    mirror(WCAT, 25, CAT_PINS, "88.2")
-    mirror(WARC, 18, ARC_PINS, "88.13")
+    mirror(WCAT, 25, CAT_PINS, "92.2")
+    mirror(WARC, 18, ARC_PINS, "92.13")
     icons()
     mod = tool()
     lzss(mod)

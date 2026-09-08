@@ -104,16 +104,28 @@ drv_mounted:
 ; drv_cfg_save, and drv_load reaches no path that writes the settings file.
 ; In .text with real initialisers, because -f bin zeroes no .bss and A:'s root
 ; is the right answer before anything has been banked.
+;
+; **IT READS THE MACHINE'S OWN POSITION AND NOT osapi_file_here'S.** That cell
+; answers for the CALLING INSTANCE (SPEC.md 19.2.1) and only falls back to the
+; machine when there is no instance stamp - and the stamp is set for the length
+; of any dispatched callback, which is where every one of these brackets
+; actually runs. So a verb inside a window's own AM_ONCMD banked THAT WINDOW'S
+; instance directory, and the restore then MOVED the machine there: SPEC.md
+; 22.22's Compress read a file on B: and wrote the result to A:, which is the
+; exact bug this routine exists to prevent, arriving through the routine.
+;
+; What it wants is the two words drv_mounted is about to overwrite, and those
+; are [dsk_cwd] and [disk_drive]. It was invisible for as long as both callers
+; worked by DRIVE - a format and a driver load do not resolve a name in a
+; directory - and the first caller that wrote a file BY NAME after a module
+; load found it immediately. Four bytes shorter, and no far call.
 ; -----------------------------------------------------------------------------
 drv_vol_bank:
     push ax
-    push bx
-    push dx
-    call KERNEL_SEG:cw_osapi_file_here        ; DX = the directory cluster, BL = the drive
-    mov [drv_vol_cwd], dx
-    mov [drv_vol_drv], bl
-    pop dx
-    pop bx
+    mov ax, [dsk_cwd]
+    mov [drv_vol_cwd], ax
+    mov al, [disk_drive]
+    mov [drv_vol_drv], al
     pop ax
     ret
 
@@ -173,6 +185,13 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; which is what lets the claim be made at exactly the right size before a
 ; byte of the file is read. DX:CX is a 32-bit size and a driver is capped at
 ; DRV_MAX_KB, so a non-zero high word is simply not one of ours.
+;
+; **THE SIZE IS WHAT THE FILE BECOMES, NOT WHAT IT OCCUPIES** (SPEC.md
+; 20.13.3.1): a compressed .DRV or module is a 'CZ' file, dskw_read_x will
+; expand it into the claim, and the claim has to be cut from the size the
+; read is going to deliver. That is the directory hint's whole purpose
+; (SPEC.md 20.14.1), and dskw_stat_x has just left the raw entry in dskw_raw
+; - so the hint costs a compare and two loads, and no I/O.
 ; -----------------------------------------------------------------------------
 drv_find:
     push bx
@@ -180,7 +199,15 @@ drv_find:
     push dx
     push si
     call dskw_stat_x              ; AL = attribute, BX = first cluster,
-    jc .no                      ; DX:CX = the size
+    jc .no                      ; DX:CX = the size it OCCUPIES...
+    mov al, [dskw_raw+DSK_R_CZM]    ; ...and the hint says what it BECOMES:
+    sub al, DSK_CZ_MARK             ; the mark less its format (SPEC.md
+    cmp al, LZ_LZB                  ; 20.14.1), 0x5A and 0x5B pass
+    ja .plain
+    mov cx, [dskw_raw+DSK_R_CZL]
+    mov dl, [dskw_raw+DSK_R_CZH]
+    mov dh, 0
+.plain:
     test dx, dx
     jnz .no
     mov ax, cx

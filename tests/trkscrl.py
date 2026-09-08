@@ -48,6 +48,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88rate                                              # noqa: E402
+import os88fixture                                       # noqa: E402
 import os88qemu                                              # noqa: E402
 
 # Where things are on a 640x480 desktop with build/trkscrl.img in drive B:
@@ -186,8 +187,12 @@ def boot():
     # `make test` DAEMONISES the emulator, so it outlives this script
     # unless somebody kills it - and the somebody is us (os88qemu).
     os88qemu.own()
-    r = subprocess.run(["make", "test", "TESTAPPS=build/trkscrl.img"],
-                       capture_output=True, text=True)
+    # THROUGH os88fixture.make: `make test` is a LAUNCHER, and the only thing
+    # it leaves under build/ is the buildnum stamp the parse rewrites - this
+    # puts that back. Its prerequisites ($(TESTIMG) $(TESTAPPS)) are declared
+    # as this row's `wants=`, so the runner has them current and nothing is
+    # built here either.
+    r = os88fixture.make("test", "TESTAPPS=build/trkscrl.img")
     if r.returncode:
         raise SystemExit("trkscrl: make test failed:\n" + r.stdout + r.stderr)
 

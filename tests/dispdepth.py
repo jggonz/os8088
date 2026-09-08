@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Does a window dragged BACK from a different-depth display arrive intact?
-(SPEC.md 11.96.12.1, docs/DUAL-DISPLAY-VGA.md 4.3.1)
+(SPEC.md 11.96.12.1, docs/plans/completed/DUAL-DISPLAY-VGA.md 4.3.1)
 
     make && python3 tests/dispdepth.py --dump /tmp/live.bin
     make DRAGCACHE=0 && python3 tests/dispdepth.py --expect /tmp/live.bin

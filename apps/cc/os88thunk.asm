@@ -345,6 +345,56 @@ _os88_gfx_blit4:
     pop bp
     ret
 
+; int os88_gfx_blitp(const void *planes,int plane_step,int stride,
+;                    int x,int y,int w,int rows)
+; ES:SI = plane 0's first row, DI = the step to the next plane, BP = the row
+; stride inside one, AX = x (A MULTIPLE OF 8), BX = y, CX = width in pixels,
+; DX = rows (SPEC.md 5.4.3). Returns 0 taken, -1 REFUSED and nothing drawn.
+;
+; IT REFUSES MORE THAN IT ACCEPTS and the caller must read the answer: a 1bpp
+; adapter, an x that is not a multiple of 8, a block off the screen, a REAL
+; armed clip region, a straddle of two displays, and a kern_small kernel. The
+; fallback for every one of them is os88_gfx_blit4(), which draws the same
+; picture from the same packed bytes.
+;
+; PLANE_STEP'S BIT 15 IS THE PROBE (SPEC.md 5.4.3.2): pass `step | 0x8000` and
+; every refusal is decided against the rect alone - `planes` and `stride` are
+; not read and not one pixel is written - so a caller can ask "would a band
+; here be taken?" BEFORE it has composed anything. That is the question a
+; window on a two-card machine has no other way to ask, and a refused probe
+; changes nothing, so asking again next frame is the intended use.
+;
+; BP IS AN ARGUMENT TO THE SLOT and BP is also this file's frame pointer, so
+; the stride is pushed while BP still means the frame and popped into BP after
+; the frame has been saved. Reading it the other way round reads the stride as
+; a frame offset - a garbled blit, and nothing else to see.
+_os88_gfx_blitp:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov si, [bp+4]                  ; plane 0, an offset in OUR segment...
+    mov di, [bp+6]                  ; ...the plane step, bit 15 = probe
+    mov ax, [bp+10]
+    mov bx, [bp+12]
+    mov cx, [bp+14]
+    mov dx, [bp+16]
+    push ds
+    pop es                          ; ES:SI - the planes are ours, so ES = DS
+    push bp                         ; the frame, back in a moment
+    push word [bp+8]                ; ...the stride, read while BP still means
+    pop bp                          ; the frame. BP = stride, as the slot wants
+    call OSAPI_GFX_BLITP
+    pop bp                          ; frame pointer restored before any [bp+N]
+    mov ax, 0                       ; MOV: CF is the answer
+    jnc .ok
+    dec ax
+.ok:
+    pop di
+    pop si
+    pop bp
+    ret
+
 ; =============================================================================
 ; TEXT (SPEC.md 6). One 8x8 cell is ~900 us; a 78-cell row is ~71 ms.
 ; =============================================================================
@@ -504,6 +554,43 @@ _os88_wm_geom:
     jnc .ok
     dec ax
 .ok:
+    pop bp
+    ret
+
+; void os88_wm_display(void *win, struct os88_video *v) - BX = win; out AX =
+; width, BX = height, CX = the first row the dock owns, SI = the first row the
+; desktop band has, DL = kind, DH = bits per pixel (SPEC.md 39.16.4).
+;
+; OSAPI_VIDEO ANSWERS ABOUT THE PRIMARY and is right to (SPEC.md 39.2.1) - but
+; a window on a two-card machine can be dragged onto the other display, and
+; then every fact taken from os88_video() is about a screen this window is not
+; on. Ask this instead whenever the answer decides a LAYOUT or a DRAWING PATH,
+; and ask it again after an os88_onresize(): a drag across the seam fires that
+; handler too. No lock is needed and any context may ask, so a worker gating
+; its own draw on the display's depth may call it.
+;
+; SI is an ANSWER of the slot's and is clobbered; the desktop row it carries is
+; dropped, because struct os88_video has no field for it and the two callers
+; that want it (SPEC.md 39.16.4) can subtract OS88_MBAR_H like everyone else.
+_os88_wm_display:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov di, [bp+6]                  ; the struct, ours
+    mov bx, [bp+4]
+    call OSAPI_WM_DISPLAY
+    mov [di], ax
+    mov [di+2], bx
+    mov [di+4], cx
+    mov al, dl                      ; the two BYTES become two words, because
+    mov ah, 0                       ; a C `int` is what the struct declares
+    mov [di+6], ax
+    mov al, dh
+    mov ah, 0
+    mov [di+8], ax
+    pop di
+    pop si
     pop bp
     ret
 
@@ -1556,6 +1643,66 @@ _os88_mem_free:
 .ok:
     pop bp
     ret
+
+%ifdef CC_HAS_ONMOVE
+; int os88_mem_movable(unsigned seg, int on) - DX = the claim, AX = the near
+; proc or 0 (SPEC.md 66.2). `on` non-zero declares it movable and names
+; cc_onmove above as the handler; 0 PINS it again, which is a legal call and
+; the other half of SPEC.md 66.5.7.1's pin/unpin pair - pin a buffer for the
+; length of a file call and declare it again after.
+;
+; 0 = the kernel took it, -1 = refused. TAKE THE ANSWER: mem_movable's fence
+; is "yours, or not at all", so a segment you do not hold matches nothing,
+; writes no MC_RLOC and returns CF=1 - and from inside the package that is
+; indistinguishable from success (SPEC.md 66.5.6.2 is what that cost once).
+_os88_mem_movable:
+    push bp
+    mov bp, sp
+    mov dx, [bp+4]
+    xor ax, ax
+    cmp word [bp+6], 0
+    je .set
+    mov ax, cc_onmove
+.set:
+    call OSAPI_MEM_MOVABLE
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop bp
+    ret
+%endif
+
+%ifdef CC_HAS_WORKER
+; int os88_task_restartable(int on) - AX = cc_worker or 0 (SPEC.md 66.6.2).
+;
+; THE OFFSET IS NOT YOURS TO CHOOSE, and that is deliberate. The kernel
+; re-enters a restarted worker with a fresh frame - DS = CS = the new segment,
+; every register zeroed but DX - and the only entry in a C package that is
+; correct under those conditions is `cc_worker` itself, which banks its own SP
+; and pushes its own argument before calling os88_worker(). So this takes a
+; flag and names the entry; a C author cannot get it wrong by taking the
+; address of the wrong function, which is a mistake this SDK cannot detect
+; (SPEC.md 73's rule against taking the address of an overlay function is the
+; same shape one layer along).
+;
+; 0 = the kernel took it, -1 = refused (you are not a live package instance).
+_os88_task_restartable:
+    push bp
+    mov bp, sp
+    xor ax, ax
+    cmp word [bp+4], 0
+    je .set
+    mov ax, cc_worker
+.set:
+    call OSAPI_TASK_RESTARTABLE
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop bp
+    ret
+%endif
 
 ; unsigned os88_mem_regrow(unsigned seg, int kb) - DX = the claim, AX = the
 ; new size in KB; out DX = the claim's base NOW. ALWAYS TAKE THE ANSWER: a

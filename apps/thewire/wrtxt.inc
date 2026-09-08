@@ -65,7 +65,7 @@ wr_s_mach:   db 'This machine: ', 0     ; + a tier word: 23 cells at the worst
 ; --- the detail pane's empty and no-driver states ----------------------------
 ; **WR_PANE ASSERTS THE WIDTH AT ASSEMBLY TIME.** Everything the catalog
 ; supplies is wrapped to WC_DESCW - 1 by the writer and refused if it will not
-; fit (SPEC.md 88.2), but the pane's OWN sentences are written here by hand -
+; fit (SPEC.md 92.2), but the pane's OWN sentences are written here by hand -
 ; and the first spelling of the four below ran thirty characters into a pane
 ; that holds twenty-seven, so the no-driver advice was cut off at the frame in
 ; the one state where the whole point is that a person can read it. A `%strlen`
@@ -87,7 +87,7 @@ wr_s_mach:   db 'This machine: ', 0     ; + a tier word: 23 cells at the worst
     WR_PANE wr_nodrv5,  'library at os8088.com/wire'
 wr_nodrvl:   dw wr_nodrv1, wr_nodrv2, wr_nodrv3, wr_nodrv4, wr_nodrv5, 0
 
-; --- the predicate's reasons (SPEC.md 88.7, SPEC.md 47) ----------------------
+; --- the predicate's reasons (SPEC.md 92.7, SPEC.md 47) ----------------------
 ; Each one says what a person could DO about it, which is the whole of why a
 ; greyed control carries a reason at all.
 wr_r_nosel:  db 'Select a program first', 0
@@ -97,7 +97,7 @@ wr_r_disk:   db 'Needs its files on a disk - use Add to Disk', 0
 wr_r_flop:   db 'Available as a floppy from os8088.com', 0
 wr_r_space:  db 'Not enough room on that disk', 0
 
-; --- ...and the three the RAM disk answers (SPEC.md 88.7, 88.14) -------------
+; --- ...and the three the RAM disk answers (SPEC.md 92.7, 92.14) -------------
 ; The two with a figure in them are COMPOSED, so what is here is a head and a
 ; tail with wr_snum and wr_s_k between (wrarc.inc's wr_rreason). The figure is
 ; the SHORTFALL a person can act on - the size to set on the RAM disk's page,
@@ -127,7 +127,7 @@ wr_s_file:   db ' file', 0
 wr_s_files:  db ' files', 0
 wr_s_added:  db ' added to your disk', 0
 wr_s_addram: db ' added to the RAM disk', 0      ; ...and where an archive with
-                                                ; no WAH_PROGRAM lands (88.8)
+                                                ; no WAH_PROGRAM lands (92.8)
 wr_s_loaded: db 'Loaded ', 0
 wr_s_fromw:  db ' from the Wire', 0
 wr_s_wrote:  db 'Could not write ', 0
@@ -146,7 +146,7 @@ wr_ab5:      db 'os8088.com', 0
 wr_abdate:   db 'Catalog: ????????', 0
 WR_ABDATEO   equ 9                              ; where those eight start
 
-; --- the request, composed by wr_req (SPEC.md 88.4) --------------------------
+; --- the request, composed by wr_req (SPEC.md 92.4) --------------------------
 wr_s_get:    db 'GET ', 0
 wr_s_http:   db ' HTTP/1.0', 13, 10, 'Host: ', 0
 wr_s_tail:   db 13, 10, 'User-Agent: os8088 Wire 1.0', 13, 10
@@ -157,9 +157,9 @@ wr_p_pic:    db 'pic/', 0
 wr_f_cat:    db 'catalog.bin', 0
 wr_x_o88:    db '.O88', 0
 wr_x_pic:    db '.PIC', 0
-wr_x_wpk:    db '.WPK', 0               ; an archive record's file (88.13)
+wr_x_wpk:    db '.WPK', 0               ; an archive record's file (92.13)
 
-; --- WIRE.CFG (SPEC.md 19.9, 88.4) -------------------------------------------
+; --- WIRE.CFG (SPEC.md 19.9, 92.4) -------------------------------------------
 wr_cfg_name: db 'WIRE.CFG', 0
 wr_d_system: db 'SYSTEM', 0
 wr_d_appdat: db 'APPDATA', 0

@@ -19,7 +19,7 @@
 ; Nothing outside a module touches that module's block. The two exceptions are
 ; deliberate and named here rather than discovered: the UI task writes
 ; [zf_req]/[zf_reqres]/[zi_*] that the worker reads (the handshake in zio.inc,
-; docs/FROTZ-PLAN.md 4.1), and zexec.inc reads the whole story-header block
+; docs/plans/completed/FROTZ-PLAN.md 4.1), and zexec.inc reads the whole story-header block
 ; because that IS the machine's configuration.
 ; =============================================================================
 

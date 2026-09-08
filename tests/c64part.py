@@ -4,7 +4,7 @@
     make c64disk && python3 tests/c64part.py [machine] [system-image]
 
 THE FIRST REAL CONSUMER of the parts standard, and the one the design was
-argued for (docs/O88-MULTISEG-PLAN.md 11.1). `C64.ROM` was a 20,480-byte
+argued for (docs/plans/completed/O88-MULTISEG-PLAN.md 11.1). `C64.ROM` was a 20,480-byte
 SIDECAR: 8KB of KERNAL, 8KB of BASIC and 4KB of character generator, sitting
 beside C64.O88 in one folder, that a file copy could separate from the program
 it is useless without. The port carried a whole halted-machine state to say so
@@ -132,7 +132,7 @@ def run():
                 "C64.ROM is still on the disk. The whole point of the "
                 "conversion is that the ROM cannot be separated from the "
                 "program - a folder that still carries it is one where a "
-                "copy can still lose it (docs/O88-MULTISEG-PLAN.md 11.1)")
+                "copy can still lose it (docs/plans/completed/O88-MULTISEG-PLAN.md 11.1)")
         if "C64.O88" not in listed:
             raise SystemExit("c64part: C64.O88 is not in C64/ - run `make "
                              "c64disk`. The folder lists %r" % listed)

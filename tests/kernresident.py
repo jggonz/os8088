@@ -31,7 +31,7 @@ own - the rule is stated against the configuration that costs the most.
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
-import os88marty, os88sym
+import os88marty, os88sym, os88geom
 
 MACHINE = "os8088_xt_vga"
 for i, a in enumerate(sys.argv):
@@ -39,7 +39,8 @@ for i, a in enumerate(sys.argv):
         MACHINE = sys.argv[i + 1]
 
 S = os88sym.linear
-MC_SIZE, MC_SEG, MC_PARA, MC_OWN = 10, 0, 2, 4
+MC_SIZE, MC_SEG, MC_PARA, MC_OWN = (os88geom.MC_SIZE,
+    os88geom.MC_SEG, os88geom.MC_PARA, os88geom.MC_OWN)
 fails = []
 
 

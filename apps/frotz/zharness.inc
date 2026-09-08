@@ -380,7 +380,7 @@ zh_pdata:
 ; zh_snap - the window state, at a moment the host chose
 ; out: nothing; preserves every register INCLUDING ES and SI
 ;
-; ES and SI are the worker's live program counter (docs/FROTZ-PLAN.md 3.1) and
+; ES and SI are the worker's live program counter (docs/plans/completed/FROTZ-PLAN.md 3.1) and
 ; zw_upptr loads ES to reach the grid, so the save here is load-bearing rather
 ; than tidy. Called just before READ and KEY - the two moments the story is
 ; quiescent and the host is about to photograph the screen.

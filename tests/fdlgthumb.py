@@ -29,6 +29,7 @@ import sys
 import time
 
 sys.path.insert(0, "tools")
+import os88build as _B
 import os88marty as M
 from os88mouse import Mouse
 from os88geom import WIN_SIZE, MAX_WIN
@@ -141,22 +142,30 @@ def dragid(m):
 # `need` therefore deletes the very kernel it is about to test, from a make that
 # then reports "up to date". So the fixture is built here, with the same two
 # tools the Makefile would have used and no `make` at all.
-DISK = "build/fdthumb.img"
+# **EVERY PATH HERE GOES THROUGH `os88build.at`** (docs/plans/SOAK-PARALLEL.md
+# 14.2). This row is the one that may not call `make` at all, so it is also
+# the one that has to place its own output where the rest of the run reads:
+# `M.launch` resolves what it is handed, so writing `build/fdthumb.img`
+# literally built the disk in the shared tree and looked for it in the run's
+# own - a FileNotFoundError in `_clone` with the image sitting right there.
+DISK = _B.at("build/fdthumb.img")
+SRCDIR = _B.at("build/fdthumbsrc")
+MUP = _B.at("build/muptest.o88")
 if not os.path.exists(DISK):
-    os.makedirs("build/fdthumbsrc", exist_ok=True)
+    os.makedirs(SRCDIR, exist_ok=True)
     # Z-NAMED, so MUPTEST.O88 is row 0 of the Disk window however the listing
     # is ordered - the route below double-clicks row 0 to launch it, and with
     # plainly-named fillers it launched a text editor on FILE00.TXT instead
     # and the dialog never appeared.
-    if not os.path.exists("build/muptest.o88"):
+    if not os.path.exists(MUP):
         subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
-                               "-o", "build/muptest.bin",
+                               "-o", _B.at("build/muptest.bin"),
                                "tests/muptest/muptest.asm"])
         subprocess.check_call([sys.executable, "tools/os88pkg.py",
-                               "build/muptest.bin", "-o", "build/muptest.o88"])
-    names = ["build/muptest.o88"]
+                               _B.at("build/muptest.bin"), "-o", MUP])
+    names = [MUP]
     for i in range(24):
-        n = "build/fdthumbsrc/ZFILE%02d.TXT" % i
+        n = os.path.join(SRCDIR, "ZFILE%02d.TXT" % i)
         open(n, "w").write("row %d\n" % i)
         names.append(n)
     subprocess.check_call([sys.executable, "tools/os88disk.py",

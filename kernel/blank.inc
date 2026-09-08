@@ -413,7 +413,7 @@ blk_pass:
 ; every card but the bracket's for the same reason from the other end.
 ;
 ; No lock is taken and none is needed: this writes I/O ports and never touches
-; a framebuffer, and vid_seq1_blank owns the one access that has to be atomic.
+; a framebuffer, and vid_ac_pal owns the one access that has to be atomic.
 ; -----------------------------------------------------------------------------
 blk_set:
     mov [blk_on], al
@@ -432,8 +432,8 @@ blk_set:
     mov al, ch                  ; vid_ctx_ptr (whose DI IS an output).
     call vid_kind_of            ; vid_kind_of banks its own (`push di / call
     call blk_one                ; vid_ctx_ptr / ... / pop di`), and blk_one
-    inc ch                      ; reaches only vid_bk, vid_ac_pal and
-    cmp ch, cl                  ; vid_seq1_blank, none of which writes DI
+    inc ch                      ; reaches only vid_bk and vid_ac_pal,
+    cmp ch, cl                  ; neither of which writes DI
     jb .d                       ; a do-while: [vid_ndisp] is never 0, and a
                                 ; kernel that made it 0 would still do one -
                                 ; which is why this counts UP and not down: a

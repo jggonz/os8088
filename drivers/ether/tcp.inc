@@ -782,15 +782,59 @@ sk_try:
     mov cl, 10
     shr ax, cl                      ; AX = KB
     call OSAPI_MEM_CLAIM_HI         ; out DX = the base segment. FROM THE TOP
-                                    ; (SPEC.md 50.3.2): the card's own
-                                    ; descriptors point into these rings and it
-                                    ; DMAs into them, so this block is as
-                                    ; unmovable as a driver image and belongs at
-                                    ; the same end of the heap - not in the
-                                    ; arena the compactor and every data claim
-                                    ; share
+                                    ; (SPEC.md 50.3.2), because it is long-lived
+                                    ; and driver-owned and belongs at the same
+                                    ; end of the heap as a driver image - not in
+                                    ; the arena the compactor and every data
+                                    ; claim share.
+                                    ;
+                                    ; **NOT because the card writes into it: it
+                                    ; cannot.** This comment used to say "the
+                                    ; card's own descriptors point into these
+                                    ; rings and it DMAs into them, so this block
+                                    ; is as unmovable as a driver image", and
+                                    ; both clauses are false for an NE2000. The
+                                    ; 8390's two DMA engines are internal to the
+                                    ; card - frames land in ITS packet memory
+                                    ; between PSTART and PSTOP (ne2000.inc) and
+                                    ; the host side of remote DMA is `in al, dx`
+                                    ; / `stosb` through one port, so the CPU
+                                    ; moves every byte. There is no host-memory
+                                    ; descriptor to point anywhere, and this
+                                    ; driver hooks no vector at all (ether.asm:
+                                    ; "IT POLLS, AND HOOKS NOTHING").
+                                    ;
+                                    ; So the pool is UNDECLARED, not unmovable -
+                                    ; sk_reclaim below says so in as many words,
+                                    ; and a relocation proc for it is one store
+                                    ; to [sk_seg], because sk_ring re-derives ES
+                                    ; from that word on every access and
+                                    ; [sk_base] is an offset INSIDE the block.
+                                    ; docs/plans/HEAP-UNPIN-PLAN.md 5.1 is the
+                                    ; full argument and what declaring it would
+                                    ; cost. Placement stays either way: top-down
+                                    ; is right for a long-lived driver block
     jc .no
     mov [sk_seg], dx
+    push ax                         ; ...AND IT IS MOVABLE (SPEC.md 66.2).
+    mov ax, sk_reloc                ; docs/plans/HEAP-UNPIN-PLAN.md 2.0 is the
+    call OSAPI_MEM_MOVABLE          ; case: mount ETHER at boot, open three
+    pop ax                          ; apps, mount SOUND and unmount ETHER, and
+                                    ; whatever is left below the ceiling is a
+                                    ; wall for the rest of the session. This is
+                                    ; the largest single block in that wall,
+                                    ; and it was the one there was no reason to
+                                    ; pin - the pool is undeclared rather than
+                                    ; unmovable, which the comment above says
+                                    ; in as many words.
+                                    ;
+                                    ; IT WAITED FOR SPEC.md 66.4.1 on purpose.
+                                    ; Declaring it before the descending pass
+                                    ; existed would have slid it DOWN to close
+                                    ; the gap beneath it - an improvement, but
+                                    ; the wrong one: what is wanted is for it
+                                    ; to pack UP with the rest of the ceiling,
+                                    ; and only that pass does that
     mov ax, bx                      ; TX starts above ALL the RX rings: the
     add ax, SK_NLEAN * SK_LEANRX    ; bulk one and then the lean ones
     mov [sk_txoff], ax
@@ -805,6 +849,30 @@ sk_try:
     pop cx
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; sk_reloc - THE HEAP COMPACTOR MOVED THE SOCKET POOL (SPEC.md 66.2, 66.4.1)
+; in:  BX = the base segment it WAS at, DX = the base it is at NOW.
+;      DS = CS = ours, ES = KERNEL_SEG. The bytes have already moved.
+; out: nothing; every register preserved
+;
+; ONE WORD, and sbl_reloc's shape exactly, because the property that makes it
+; one word was designed in for a different reason: sk_ring below re-derives ES
+; from [sk_seg] on EVERY access - "every ring access goes through this rather
+; than loading [sk_seg] by hand" - and [sk_base] is an offset INSIDE the block,
+; so nothing outside this word names where the pool is.
+;
+; The four sites that do load [sk_seg] into a register (they have to: the word
+; is unreachable once DS moves for a copy) hold it across a `rep movsb` and
+; nothing else. A compaction can only fire from inside a claim, and no claim
+; happens in any of those windows.
+; -----------------------------------------------------------------------------
+sk_reloc:
+    cmp bx, [sk_seg]
+    jne .out
+    mov [sk_seg], dx
+.out:
     ret
 
 %endif  ; ETH_NOEMIT

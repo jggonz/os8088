@@ -30,9 +30,10 @@ Three assertions, and the third is the one a memory dump cannot make:
 import sys, os, time, hashlib, argparse, subprocess, tempfile
 sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
+import os88fixture                                       # noqa: E402
 import os88marty, os88mouse, os88sym, os88geom, dispcp
 
-MC_SIZE, MEM_MAX = 10, 32
+MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 PKG_HEAPFRAG, PKG_PAINT = "HEAPFRAG.O88", "PAINT.O88"
 
 
@@ -100,6 +101,19 @@ def uncovered(m, S, win, prefer_title=False):
     return None
 
 
+def park(mo, m):
+    """Put the POINTER somewhere neither capture is looking.
+
+    The arrow is drawn into the framebuffer, so it is part of any picture
+    compared - and the two captures below are taken after different gestures,
+    so it is somewhere different in each. tests/sheetmove.py failed on exactly
+    that and the difference was six pixels wide. Bottom-left of the desktop is
+    clear of every window these rows open.
+    """
+    mo.to(5, 195)
+    os88marty.settle(m)
+
+
 def pkg_seg(m, S, title):
     for w in os88geom.windows(m, S):
         if w.title.startswith(title):
@@ -120,8 +134,14 @@ def main():
     # the symbols below come from the SOURCE. The offsets then miss by a few
     # bytes and [pt_base] reads as garbage, which looks exactly like the heap
     # corruption this row exists to catch. Make is the dependency graph; ask it.
-    subprocess.run(["make", "build/heapfrag360.img"], check=True,
-                   capture_output=True)
+    # THE SAME `make`, AND IT DOES NOTHING once the runner has built the
+    # artefact: Row(wants=...) declares it and os88test's prebuild builds
+    # it before any row starts. That is what lets this row drop
+    # builds=True and share the emulator lane.
+    os88fixture.need("build/heapfrag360.img")
+    # has
+        # already built the artefact (Row(wants=...) and os88test's prebuild).
+        # That is what lets this row drop builds=True and share the lane.
     with os88marty.launch("build/os8088-360.img", apps="build/heapfrag360.img",
                           machine=a.machine, boot=False) as m:
         m.run()
@@ -205,6 +225,7 @@ def main():
         # pt_geom would recompute, so it must survive a move unchanged
         d0 = [(u16(rows0, i * 2) - cbase) & 0xFFFF for i in range(nrows)]
         h0 = hashlib.md5(m.read(cbase * 16, canvas[1] * 16)).hexdigest()
+        park(mo, m)
         shot0 = m.vram("cga")
         print("canvas [pt_base]=%04x %dKB rows=%d  md5 %s"
               % (cbase, canvas[1] // 64, nrows, h0[:12]))
@@ -271,11 +292,24 @@ def main():
         # --- raise Paint: the repaint is what reads pt_rowseg ---------------
         mo.click(pt_win.x + 60, pt_win.y + 9)
         os88marty.settle(m)
+        park(mo, m)
         shot1 = m.vram("cga")
 
         def band(v):
+            """The window's content rectangle, ONE BYTE PER PIXEL.
+
+            m.vram() answers a row per scanline and a BYTE per pixel - the
+            colour index, not packed bits - so the slice is x directly. It
+            said `x // 8` for a year, which against a 640-wide frame compared
+            the leftmost (cx1-cx0)/8 PIXELS of each row instead of this
+            window: a strip of desktop that is identical in both captures
+            whatever the window does. The assertion below was therefore green
+            by construction. Found while writing tests/sheetmove.py, which
+            failed on it the other way round - the strip it happened to
+            compare had a window in one capture and desktop in the other.
+            """
             _, _, rows = v
-            return b"".join(bytes(rows[y][cx0 // 8:cx1 // 8])
+            return b"".join(bytes(rows[y][cx0:cx1])
                             for y in range(cy0, min(cy1, len(rows))))
 
         same = band(shot0) == band(shot1)

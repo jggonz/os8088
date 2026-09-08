@@ -9,12 +9,15 @@
 ; centre rule, headings a 2x/3x bit-doubled scale-up; the expander
 ; (at_expand) widens 1bpp to packed 4bpp through a 256-entry table (white
 ; background, or light-gray for code spans, chosen per 8px column); and the
-; whole line reaches the screen as ONE OSAPI_GFX_BLIT4. The keystroke path
-; repaints one line; scrolling is OSAPI_GFX_SCROLL plus the revealed lines;
-; only mode/zoom switches and W_PAINT redraw everything.
+; whole line reaches the screen as ONE OSAPI_GFX_BLIT4. On a 1bpp adapter
+; at_codebg turns the code cell over on the way past, a grey one being
+; unreadable under text there (SPEC.md 46.4.1). The keystroke path repaints
+; one line; scrolling is OSAPI_GFX_SCROLL plus the revealed lines; only
+; mode/zoom switches and W_PAINT redraw everything.
 ;
 ; The colours survive every adapter (SPEC.md 39.4): black text on white,
-; CLGRAY code cells (a dither on 1bpp), XOR selection and caret.
+; CLGRAY code cells on a colour card and INVERSE ones on a 1bpp adapter
+; (46.4.1 - a dither cannot carry a letter), XOR selection and caret.
 ;
 ; The caret is an XOR vertical bar with strict on/off bookkeeping
 ; (at_caret_on/off): anything that may touch its pixels turns it off first
@@ -71,33 +74,11 @@ at_geom_init:
 .tall:
     mov [at_ty0], ax
     mov [at_ty1], cx
+%ifndef NOATSBAR
+    mov byte [at_sbst], 0           ; the geometry [at_sbty] is expressed in
+%endif                              ; has just moved (SPEC.md 46.4.4)
     pop dx
     pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; at_cline_span - cache the caret's logical line as a visual-line range
-; out: [at_cll0]/[at_cll1] = first/last visual line of the caret's logical
-;      line (the range that renders RAW in Writer mode); preserves all
-; -----------------------------------------------------------------------------
-at_cline_span:
-    push ax
-    push bx
-    mov ax, [at_caret]
-    call at_line_of
-    call at_lhome
-    mov [at_cll0], bx
-.fwd:
-    inc bx
-    cmp bx, [at_nlines]
-    jae .end
-    test byte [bx+at_lattr], 4
-    jnz .fwd
-.end:
-    dec bx
-    mov [at_cll1], bx
     pop bx
     pop ax
     ret
@@ -108,16 +89,26 @@ at_cline_span:
 ; out: at_lbuf = the slice, [at_pcnt] chars, [at_pstart] logical start,
 ;      at_vis[] (0 draw / 1 hidden), at_sty[] (AT_ST_*), at_xmap[0..cnt] =
 ;      x px relative to the text origin (entry cnt = end-of-line caret x),
-;      at_cellbg[] per 8px column (0 white / 1 gray), [at_pcw]/[at_prh] =
-;      cell width / row height, [at_psc] = scale 1..3; preserves all regs
+;      at_cellbg[] per 8px column (0 white / 1 gray) with [at_pcb0]/[at_pcb1]
+;      spanning the ones it set, [at_pcw]/[at_prh] = cell width / row height,
+;      [at_psc] = scale 1..3; preserves all regs
 ;
-; RAW when Markdown mode, or when the line belongs to the caret's logical
-; line in Writer mode (the live-preview rule, SPEC.md 46.2): every char
-; visible, no styles. STYLED otherwise: span delimiters hidden and their
+; RAW in Markdown mode, STYLED in Writer mode - THE MODE DECIDES AND NOTHING
+; ELSE (SPEC.md 46.2.1). The caret's own logical line used to render raw here
+; as well; a document that is one paragraph then never styled at all, which is
+; how this shipped. Styled: span delimiters hidden and their
 ; text styled (at_span's exact toggle semantics, seeded from the line's
 ; attr nibble), the heading prefix hidden on the logical line's first
 ; visual line, links recognised within the line ([text](url): text
 ; underlined and verbatim, the rest hidden).
+;
+; ...and then at_reveal shows back the one run the caret is standing at the
+; end of (SPEC.md 46.2.2), which is what lets markdown be TYPED into a view
+; that hides it. It is the last thing this proc does, because it rebuilds
+; at_xmap and at_cellbg out of the at_vis it changed. A LINK is the one
+; construct that answers to the caret rather than to the run (46.2.3), and it
+; has to do that in the FSM above rather than in at_reveal: a click cannot land
+; inside a hidden run, so nothing would ever put the caret at the end of one.
 ; -----------------------------------------------------------------------------
 at_parse:
     push ax
@@ -146,16 +137,24 @@ at_parse:
     xor ax, ax
     rep stosw
     pop es
-    ; raw or styled?
+    mov word [at_pcb0], 0FFFFh      ; ...and an EMPTY code span, which is what
+    mov word [at_pcb1], 0           ; a raw line keeps (at_codebg's gate)
+    ; raw or styled? MODE ALONE DECIDES (SPEC.md 46.2.1) - Writer styles every
+    ; line of the document including the one the caret is on, which is what
+    ; the original's BuildHiddenView did and what the View menu's two names
+    ; promise. The caret's paragraph used to render RAW here; see 46.2.1 for
+    ; why that had to go and what it cost the caret to take it out.
     cmp byte [at_pforce], 0
     jne .styled                     ; at_cmd_none needs the hidden set as
     cmp byte [at_writer], 0         ; the parser defines it, in either mode
     je .raw
-    cmp bx, [at_cll0]
-    jb .styled
-    cmp bx, [at_cll1]
-    jbe .raw
-    jmp short .styled
+%ifdef NOATPLAIN
+    jmp .styled
+%else
+    test byte [bx+at_lattr], 8      ; SPEC.md 46.4.8: at_scan already PROVED
+    jz .styled                      ; this line free of the four characters
+%endif                              ; that could style it, walking bytes it
+                                    ; was reading anyway
 .raw:
     xor si, si                      ; SI = char index
     xor dx, dx                      ; DX = x
@@ -175,6 +174,15 @@ at_parse:
     mov di, si
     shl di, 1
     mov [di+at_xmap], dx
+%ifndef NOATCELL
+    ; SPEC.md 46.4.9: .rloop wrote at_vis = 0 and at_sty = 0 for EVERY cell,
+    ; and at scale 1 at_xmap[i] is i*8 - so cell i's byte column is i. That is
+    ; exactly what at_compose needs to drop the per-cell call.
+    mov byte [at_pplain], 1
+    cmp word [at_psc], 1
+    je .out
+    mov byte [at_pplain], 0
+%endif
     jmp .out
 .styled:
     mov al, [bx+at_lattr]
@@ -292,7 +300,11 @@ at_parse:
 .bracket:
     call at_linkscan                ; CF=0: at_plt/at_plh set
     jc .stylevis
-    jmp short .hide                 ; the '[' itself is hidden
+    call at_linkcaret               ; CF=1: the caret is standing IN this link
+    jnc .hide                       ; ...otherwise the '[' itself is hidden
+    mov word [at_plt], 0FFFFh       ; a link the caret is in stays LITERAL, so
+    mov word [at_plh], 0FFFFh       ; its URL can be clicked into and edited
+    jmp .stylevis                   ; (SPEC.md 46.2.3)
 .place:
     mov [si+at_vis], ch
     mov [si+at_sty], cl
@@ -305,29 +317,7 @@ at_parse:
     jnz .next
     test cl, AT_ST_C
     jz .adv
-    ; gray background columns for this cell
-    push ax
-    push bx
-    push dx
-    mov ax, di
-    mov cl, 3
-    shr ax, cl                      ; first 8px column
-    mov dx, di
-    add dx, [at_pcw]
-    dec dx
-    shr dx, cl                      ; last column
-    mov bx, ax
-.gcol:
-    cmp bx, AT_CBGCAP
-    jae .gdone
-    mov byte [bx+at_cellbg], 1
-    inc bx
-    cmp bx, dx
-    jbe .gcol
-.gdone:
-    pop dx
-    pop bx
-    pop ax
+    call at_codecols                ; this cell's grey background columns
 .adv:
     add di, [at_pcw]
 .next:
@@ -339,8 +329,155 @@ at_parse:
     xchg bx, dx
     mov [bx+at_xmap], di
     xchg bx, dx
+    call at_reveal                  ; ...and the run the caret is typing
+%ifndef NOATCELL
+    mov byte [at_pplain], 0         ; a styled line has hidden cells and
+%endif                              ; per-cell styles: no fast loop
 .out:
     pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_codecols - mark a code cell's 8px background columns from the pen x in DI
+; out: at_cellbg[] set across the cell and [at_pcb0]/[at_pcb1] widened to the
+;      span of every column set; preserves every register
+; Factored out of at_parse's .place because at_reveal has to lay these again
+; from scratch: they are a function of the pen, and the pen moves when a
+; hidden run turns visible.
+; -----------------------------------------------------------------------------
+at_codecols:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, di
+    mov cl, 3
+    shr ax, cl                      ; first 8px column
+    mov dx, di
+    add dx, [at_pcw]
+    dec dx
+    shr dx, cl                      ; last column
+    mov bx, ax
+    cmp bx, [at_pcb0]               ; ...and the SPAN of them, so at_codebg
+    jae .g0                         ; walks a code run rather than the line
+    mov [at_pcb0], bx
+.g0:
+.gcol:
+    cmp bx, AT_CBGCAP
+    jae .gdone
+    mov byte [bx+at_cellbg], 1
+    cmp bx, [at_pcb1]
+    jbe .g1
+    mov [at_pcb1], bx
+.g1:
+    inc bx
+    cmp bx, dx
+    jbe .gcol
+.gdone:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_reveal - show the delimiter run the caret is standing at the end of
+;             (SPEC.md 46.2.2)
+; in:  at_vis[]/at_sty[]/at_xmap[] as the styled pass left them
+; out: the run of HIDDEN characters ending exactly at the caret turned visible,
+;      and at_xmap/at_cellbg/[at_pcb0]/[at_pcb1] rebuilt around it; preserves
+;      every register. Nothing happens in Markdown mode, under at_pforce, or on
+;      a line the caret is not standing on.
+;
+; THE ONE EXCEPTION TO 46.2.1, and it is what makes typing markdown by hand
+; bearable in a view that hides it: `**` you have just typed is a `**` you can
+; see, and it disappears at the keystroke that ends it.
+;
+;     *            ->  *              the run is the caret's, so it shows
+;     **           ->  **
+;     **H          ->  H (bold)       H is not a delimiter: the run is behind
+;     **Hello      ->  Hello          the caret now, and hides
+;     **Hello*     ->  Hello*         a new run, at the caret again
+;     **Hello**    ->  Hello**
+;     **Hello** _  ->  Hello_         the space ends it
+;
+; It is defined on the RUN and not on the span, which is why one rule covers
+; every delimiter the parser has - `*`, `**`, backtick, `~~`, a heading's `#`
+; prefix and a link's `](url)` tail - and why the tail of a link is typeable
+; without a carve-out of its own: every character of a URL is hidden and each
+; one you type is the run's new end.
+;
+; The rebuild is not optional and it is the whole cost: at_xmap and at_cellbg
+; are functions of the PEN, the pen only advances on a visible cell, and the
+; run just changed which cells those are. Only the caret's line ever pays it.
+; -----------------------------------------------------------------------------
+at_reveal:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [at_pforce], 0
+    jne .out                        ; at_cmd_none wants the hidden set whole
+    cmp byte [at_writer], 0
+    je .out
+    mov ax, [at_caret]
+    sub ax, [at_pstart]
+    jb .out                         ; the caret is not on this line...
+    cmp ax, [at_pcnt]
+    ja .out                         ; ...at either end
+    mov si, ax                      ; SI = the caret's slice index
+    mov cx, si
+.back:
+    or cx, cx
+    jz .done
+    mov bx, cx
+    dec bx
+    cmp byte [bx+at_vis], 0
+    je .done                        ; a visible character ends the run
+    mov byte [bx+at_vis], 0
+    mov cx, bx
+    jmp short .back
+.done:
+    cmp cx, si
+    je .out                         ; nothing was hidden there
+    push es                         ; --- the pen moved: lay the columns again
+    push ds
+    pop es
+    cld
+    mov di, at_cellbg
+    mov cx, AT_CBGCAP/2
+    xor ax, ax
+    rep stosw
+    pop es
+    mov word [at_pcb0], 0FFFFh
+    mov word [at_pcb1], 0
+    xor si, si                      ; SI = index
+    xor di, di                      ; DI = pen x
+.rex:
+    mov bx, si
+    shl bx, 1
+    mov [bx+at_xmap], di
+    cmp si, [at_pcnt]
+    jae .out
+    cmp byte [si+at_vis], 0
+    jne .rnext
+    test byte [si+at_sty], AT_ST_C
+    jz .radv
+    call at_codecols
+.radv:
+    add di, [at_pcw]
+.rnext:
+    inc si
+    jmp short .rex
+.out:
     pop di
     pop si
     pop dx
@@ -361,6 +498,48 @@ at_pkbuf:
 .no:
     xor ah, ah
     pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; at_linkcaret - is the caret standing inside the link at slice index SI?
+; in:  SI = the '[' index, [at_plh] = the ')' index (at_linkscan just set it)
+; out: CF=1 when [at_caret] is anywhere in [ '[' .. one past ')' ]; preserves
+;      every register
+;
+; SPEC.md 46.2.3: 46.2.2's run rule reveals the delimiters at the caret, which
+; is enough to TYPE a link and not enough to EDIT one - a click cannot land
+; inside a hidden run at all, because at_xy2log walks a zero-width cell past.
+; So a link is treated as one construct: the caret anywhere in it, the visible
+; text included, and the whole `[text](url)` draws literally.
+;
+; One past the ')' counts, which is where End and the last typed character of
+; a URL both leave the caret; the character after THAT is outside, and the link
+; collapses - the same shape as the space that ends a `**` run.
+; -----------------------------------------------------------------------------
+at_linkcaret:
+    push ax
+    push dx
+    cmp byte [at_writer], 0
+    je .no                          ; markdown draws the syntax anyway
+    cmp byte [at_pforce], 0
+    jne .no                         ; at_cmd_none wants the hidden set whole
+    mov ax, [at_caret]
+    sub ax, [at_pstart]
+    jb .no                          ; the caret is not on this line
+    cmp ax, si
+    jb .no                          ; ...or is before the link
+    mov dx, [at_plh]
+    inc dx
+    cmp ax, dx
+    ja .no                          ; ...or past its close
+    pop dx
+    pop ax
+    stc
+    ret
+.no:
+    pop dx
+    pop ax
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -423,10 +602,63 @@ at_compose:
     mov cx, AT_S1ST/2
     mul cx
     mov cx, ax
-    xor ax, ax
-    rep stosw
+    AT_PAPERAX                      ; SPEC.md 46.4.2: screen polarity, so the
+    rep stosw                       ; ground is SET and at_glyph clears ink
     pop es
     xor si, si
+%ifndef NOATCELL
+    ; --- SPEC.md 46.4.9: a PLAIN scale-1 line, composed without a call ------
+    ; at_glyph is 1,034 cycles a cell and its eight-row emitter is 264 of
+    ; them; the rest is a call, seven register banks, a range check and a
+    ; strip cursor recomputed from at_xmap. On a line at_parse took .rloop
+    ; for at scale 1, NONE of that can differ: every cell is visible and
+    ; unstyled, so there is no style to dispatch on and no hidden cell to
+    ; skip, and cell i's byte column is i - so the cursor is an `inc`.
+    cmp byte [at_pplain], 0
+    je .ch
+    mov cx, [at_pcnt]
+    jcxz .done
+    mov di, at_strip1               ; cell 0's byte column
+.fastc:
+    mov al, [si+at_lbuf]
+    cmp al, ' '
+    jne .fdraw
+    cmp byte [at_blankok], 0        ; 46.4.6, and there is no rule to draw:
+    jne .fnext                      ; a plain cell carries no link or strike
+.fdraw:
+    cmp al, 32
+    jb .fhuh
+    cmp al, 126
+    jbe .fok
+.fhuh:
+    mov al, '?'
+.fok:
+    push cx
+    xor ah, ah
+    sub ax, 32
+    mov cl, 3
+    shl ax, cl
+    mov bx, ax
+    add bx, at_fontbuf              ; BX -> the eight glyph rows
+    push di
+    mov cx, 8
+.frow:
+    mov al, [bx]
+    inc bx
+%ifndef NOATBLIT1
+    not al
+%endif
+    mov [di], al
+    add di, AT_S1ST
+    loop .frow
+    pop di
+    pop cx
+.fnext:
+    inc di
+    inc si
+    loop .fastc
+    jmp short .done
+%endif
 .ch:
     cmp si, [at_pcnt]
     jae .done
@@ -442,6 +674,100 @@ at_compose:
     inc si
     jmp short .ch
 .done:
+    call at_codebg                  ; ...and the code span's own ground, which
+                                    ; on a 1bpp adapter only this side can draw
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_codebg - the code span's ground on a 1bpp adapter (SPEC.md 46.4.1)
+; out: on 1bpp, at_strip1's code columns INVERTED and at_cellbg cleared;
+;      nothing at all on a colour adapter. Preserves every register.
+;
+; CLGRAY is the code cell's background everywhere else and it is the RIGHT
+; colour: SPEC.md 39.4 reduces a middle grey to the kernel's 50% dither, which
+; is what every other grey in the system wants. It is wrong HERE, and only
+; here, because a code cell is the one grey in the UI with TEXT ON TOP OF IT -
+; a black 8x8 glyph on a 50% checkerboard carries the same ink as its own
+; ground, so the word inside the span stops being a word. Measured on a
+; Hercules, `code` came back a smudge: the one style of the six that did not
+; survive the adapter.
+;
+; A LIGHTER GROUND IS NOT THE ANSWER, and the glass is what settled it: a 25%
+; stipple was built first and read barely better, because what destroys the
+; letter is not the ground's density but a dot that TOUCHES a stroke - one
+; beside the bowl of an `o` closes it - and knocking a one-pixel halo out
+; under every glyph pixel bought legible-if-you-squint, for ~30 bytes and a
+; dilation per column. Inverting the span is FOUR bytes and reads outright.
+;
+; So on 1bpp the code cell is the badge turned over: `not` makes the ground
+; black and the glyph a hole in it, which is the same distinction the colour
+; adapter draws and the only one this adapter can draw legibly. The rules
+; at_glyph laid - a strike, a link's underline - invert with it, correctly.
+;
+; The expander is then told the truth for this adapter, which is that the line
+; has no grey columns in it at all: at_cellbg is CLEARED, so at_expand widens
+; every byte through at_x4w and its hot loop pays NOTHING for any of this. The
+; app owning the code ground is the same division of labour the styling
+; already uses - at_compose bolds, shears, underlines and rules its own glyphs
+; rather than asking the kernel for a face it has not got.
+;
+; [at_pcb0]/[at_pcb1] are why this is not on the keystroke path: at_parse
+; records the code span's first and last 8px column, and a line with no code
+; in it - which is nearly every line - leaves 0FFFFh > 0 and is refused on the
+; first compare. A line that HAS one walks the span, never the line.
+;
+; SS != DS, so BP is a COUNTER here and never an address (at_glyph's rule);
+; the strip is addressed [bx+si], both DS defaults.
+; -----------------------------------------------------------------------------
+at_codebg:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    cmp byte [at_vbpp], 1
+    ja .out                         ; a colour adapter keeps CLGRAY, which is
+                                    ; a light grey there and reads perfectly
+    mov dx, [at_pcb1]
+    cmp [at_pcb0], dx
+    ja .out                         ; no code span on this line
+    mov si, at_strip1               ; SI = this row's base in the strip
+    xor bp, bp                      ; BP = row
+.row:
+    cmp bp, [at_prh]
+    jae .clear
+    mov bx, [at_pcb0]               ; BX = 8px column
+.col:
+    cmp byte [bx+at_cellbg], 0
+    je .nxc
+    not byte [bx+si]
+.nxc:
+    inc bx
+    cmp bx, dx
+    jbe .col
+    add si, AT_S1ST
+    inc bp
+    jmp short .row
+.clear:
+    push es                         ; the ground is drawn: the expander has no
+    push ds                         ; grey columns left to widen
+    pop es
+    cld
+    mov di, at_cellbg
+    mov cx, AT_CBGCAP/2
+    xor ax, ax
+    rep stosw
+    pop es
+.out:
+    pop bp
     pop di
     pop si
     pop dx
@@ -473,6 +799,21 @@ at_glyph:
     mov al, '?'
 .chok:
     mov [at_gsty], dl
+%ifndef NOATBLANK
+    ; SPEC.md 46.4.6: a SPACE inks nothing, and at_compose has already laid
+    ; this cell's ground. AT_ST_L and AT_ST_S are the two styles that ink a
+    ; blank cell, and at_ruleat draws them AFTER the row loop, so a cell
+    ; carrying either is composed normally. Bold, both nibble doublers and the
+    ; clc-seeded shear all preserve blankness.
+    cmp al, ' '
+    jne .notsp
+    test dl, AT_ST_L | AT_ST_S
+    jnz .notsp
+    cmp byte [at_blankok], 0        ; ...and only if the FACE agrees
+    je .notsp
+    jmp .nst
+.notsp:
+%endif
     xor ah, ah
     sub ax, 32
     mov cl, 3
@@ -484,6 +825,33 @@ at_glyph:
     mov bx, at_strip1
     add bx, di                      ; BX = strip write cursor
     xor bp, bp                      ; BP = source row 0..7
+%ifndef NOATFAST
+    ; --- THE UNSTYLED SCALE-1 CELL (SPEC.md 46.4.3) ------------------------
+    ; ...which is nearly every character of body text and ALL of Markdown
+    ; mode. The general body below answers the same four questions eight
+    ; times a cell - bold? scale? italic? - and folds four bytes in; here
+    ; every answer is fixed and the row is one byte at one column.
+    ;
+    ; A plain STORE is correct rather than a fold because at_compose has
+    ; already laid this cell's ground down, and at scale 1 no two visible
+    ; cells share a byte column (at_xmap's x is a multiple of 8). The
+    ; general path's [bx+1..3] writes are no-ops here anyway: at_grow+1..3
+    ; are zero, which complemented is 0FFh, and `and 0FFh` changes nothing.
+    or dl, dl                       ; the style, still live in DL
+    jnz .row
+    cmp word [at_psc], 1            ; a WORD compare: at_psc IS a word, and a
+    jne .row                        ; low-byte one reads scale 257 as scale 1
+    mov cx, 8
+.fast:
+    lodsb                           ; DF is clear: at_compose and at_bigtext
+%ifndef NOATBLIT1
+    not al                          ; both `cld` before they call in, which
+%endif                              ; this makes a precondition rather than a
+    mov [bx], al                    ; coincidence
+    add bx, AT_S1ST
+    loop .fast
+    jmp .nst                        ; no rule to draw - AT_ST_L and AT_ST_S
+%endif                              ; are in DL, and DL is zero on this path
 .row:
     mov al, [si]
     inc si
@@ -541,6 +909,7 @@ at_glyph:
     mov [at_grow+2], bl
     pop bx
 .sheared:
+%ifdef NOATROW
     ; italic: the top half (source rows 0..3) shifts right by `scale` px
     test byte [at_gsty], AT_ST_I
     jz .noshear
@@ -555,20 +924,70 @@ at_glyph:
     rcr byte [at_grow+3], 1
     loop .shr
 .noshear:
-    ; OR the scaled row into `scale` consecutive strip rows
+%ifndef NOATBLIT1
+    not word [at_grow]
+    not word [at_grow+2]
+%endif
+    ; fold the scaled row into `scale` consecutive strip rows
     mov dx, [at_psc]
 .vrep:
     mov al, [at_grow]
-    or [bx], al
+    AT_MERGE [bx], al
     mov al, [at_grow+1]
-    or [bx+1], al
+    AT_MERGE [bx+1], al
     mov al, [at_grow+2]
-    or [bx+2], al
+    AT_MERGE [bx+2], al
     mov al, [at_grow+3]
-    or [bx+3], al
+    AT_MERGE [bx+3], al
     add bx, AT_S1ST
     dec dx
     jnz .vrep
+%else
+    ; --- SPEC.md 46.4.5: the row into REGISTERS, once ----------------------
+    ; at_grow is four bss bytes, and the two stages below treated it as
+    ; working storage rather than as a value: the shear read-modify-wrote all
+    ; four PER SHIFT STEP and .vrep re-read all four ON EVERY REPEAT - eight
+    ; reads a repeat at scale 2, to move one byte of glyph.
+    ;
+    ; THE BYTE ORDER IS INVERTED ON PURPOSE. at_grow[0] is the LEFTMOST 8 px
+    ; and must sit in AH, because that is what makes `rcr ax,1 / rcr dx,1` a
+    ; genuine 32-bit shift right across b0->b1->b2->b3: rcr ax,1 carries AH's
+    ; bit 0 into AL's bit 7 and out of AL into DX. `mov ax, [at_grow]` would
+    ; put b0 in AL and run the shear BACKWARDS - every italic mirrored, and
+    ; nothing anywhere raises.
+    mov ah, [at_grow]               ; b0, the leftmost 8 px
+    mov al, [at_grow+1]
+    mov dh, [at_grow+2]
+    mov dl, [at_grow+3]
+    test byte [at_gsty], AT_ST_I
+    jz .noshear
+    cmp bp, 4                       ; the top half only
+    jae .noshear
+    mov cx, [at_psc]
+.shr:
+    clc                             ; a clear bit shifted in is NO INK, which
+    rcr ax, 1                       ; is why 46.4.2's complement is below and
+    rcr dx, 1                       ; not above this
+    loop .shr                       ; `loop` writes no flag, so CF survives it
+.noshear:
+%ifndef NOATBLIT1
+    ; SPEC.md 46.4.2. The complement is HERE and can be nowhere above: the
+    ; bold overstrike and the shear above both reason in INK. All four bytes,
+    ; because .vrep writes all four at every scale.
+    not ax
+    not dx
+%endif
+    ; fold the scaled row into `scale` consecutive strip rows. The counter is
+    ; CX now: DX is half the glyph row.
+    mov cx, [at_psc]
+.vrep:
+    AT_MERGE [bx], ah
+    AT_MERGE [bx+1], al
+    AT_MERGE [bx+2], dh
+    AT_MERGE [bx+3], dl
+    add bx, AT_S1ST
+    loop .vrep
+%endif
     inc bp
     cmp bp, 8
     jb .row
@@ -620,7 +1039,7 @@ at_ruleat:
     mov bx, ax
     mov cx, [at_psc]
 .b:
-    mov byte [bx+at_strip1], 0FFh
+    mov byte [bx+at_strip1], AT_RULE
     inc bx
     loop .b
     pop ax
@@ -721,9 +1140,14 @@ at_draw_line:
     mov [at_dly], ax
     call at_parse
     call at_compose
-    mov ax, [at_tw]
-    mov [at_xw], ax
-    call at_expand
+%ifdef NOATBLIT1
+    mov ax, [at_tw]                 ; the pre-46.4.2 order, kept verbatim so
+    mov [at_xw], ax                 ; this arm assembles byte for byte
+    call at_expand                  ; identical to the package before it
+%endif
+    ; THE ROW CLAMP STAYS ABOVE THE ARM AND MUST: OSAPI_GFX_BLIT1 refuses
+    ; DX = 0 with CF = 1, and a refusal falls into the expander below, which
+    ; would then draw a full-height line off the bottom of the text region.
     mov dx, [at_prh]
     mov ax, [at_dly]
     add ax, dx
@@ -732,8 +1156,57 @@ at_draw_line:
     mov dx, [at_ty1]
     sub dx, [at_dly]
     jg .rows
+%ifdef NOATBLIT1
     jmp short .out                  ; fully below the region: nothing
+%else
+    jmp .out                        ; ...and the band arm below puts .out out
+%endif                              ; of a short jump's reach
 .rows:
+%ifndef NOATBLIT1
+    ; --- the band arm (SPEC.md 46.4.2) -------------------------------------
+    ; at_compose has already built exactly what OSAPI_GFX_BLIT1 takes: 1bpp,
+    ; row-major, bit 7 leftmost, SCREEN polarity, at at_tx0 = 64 with at_tw
+    ; masked to a multiple of 8 (at_geom_init) and at_prh <= AT_SROWS = 30
+    ; against the slot's 255. The DEFAULT pen carries it on every adapter, so
+    ; there is no OSAPI_GFX_BLIT1_PEN call: on 1bpp the pen is not read, and
+    ; on VGA the default pair short-circuits gfx_blit1's .pvga with no port
+    ; write and takes the plain `rep movsw` emit rather than the complemented
+    ; one. This is what deletes at_expand AND the kernel's 4bpp decode from
+    ; the line: 64.3 -> 3.3 ms on Hercules, 135.4 -> 2.9 on VGA (PREDICTED;
+    ; Paint's identical round trip MEASURED 22x, SPEC.md 42.23.4).
+    cmp byte [at_vbpp], 1
+    jbe .band                       ; 1bpp: at_codebg has already CLEARED
+                                    ; at_cellbg, so no grey column survives
+                                    ; and the band is the whole truth
+    mov ax, [at_pcb1]               ; a colour adapter keeps CLGRAY, so only a
+    cmp [at_pcb0], ax               ; line with NO code span is two colours -
+    ja .band                        ; at_codebg's own compare, reused
+    jmp short .wide
+.band:
+    push ds
+    pop es
+    push bx
+    push dx
+    mov si, at_strip1
+    mov bp, AT_S1ST
+    mov ax, [at_tx0]
+    mov bx, [at_dly]
+    mov cx, [at_tw]
+    call OSAPI_GFX_BLIT1
+    pop dx                          ; pop leaves the flags, so CF still speaks
+    pop bx
+    jnc .sel                        ; CF = 1 is a REFUSAL and nothing drawn -
+                                    ; kern_small carries the slot and not the
+                                    ; body (SPEC.md 5.4.2.5) - so fall into
+                                    ; the expander, which is that build's only
+                                    ; path and draws the identical picture
+.wide:
+    ; ...and on the band path the expansion happens HERE, below the clamp, so
+    ; a line the clamp threw away never pays for it either.
+    mov ax, [at_tw]
+    mov [at_xw], ax
+    call at_expand
+%endif
     push ds
     pop es
     push bx
@@ -744,6 +1217,7 @@ at_draw_line:
     mov cx, [at_tw]
     call OSAPI_GFX_BLIT4
     pop bx
+.sel:
     call at_selxor
 .out:
     pop es
@@ -864,6 +1338,34 @@ at_line_y:
     ret
 
 ; -----------------------------------------------------------------------------
+; at_filltail - white from row AX down to at_ty1-1, across the text width
+; in:  AX = first row (< at_ty1); out: nothing; preserves all registers
+; SPEC.md 46.4.10. The two whole-view repaints had this inline and used it to
+; erase the ground they were about to draw on; it erases what the text does
+; NOT cover now, which is why it takes the top row as an argument.
+; -----------------------------------------------------------------------------
+at_filltail:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov ax, [at_tx0]
+    mov cx, ax
+    add cx, [at_tw]
+    dec cx
+    mov dx, [at_ty1]
+    dec dx
+    call OSAPI_GFX_FILL
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; at_draw_text - repaint the whole text region (erase + every visible line)
 ; out: nothing; preserves all registers; lock held by the caller
 ; -----------------------------------------------------------------------------
@@ -873,25 +1375,34 @@ at_draw_text:
     push cx
     push dx
     call at_caret_off
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, [at_tx0]
-    mov bx, [at_ty0]
-    mov cx, ax
-    add cx, [at_tw]
-    dec cx
-    mov dx, [at_ty1]
-    dec dx
-    call OSAPI_GFX_FILL
+%ifdef NOATTAIL
+    mov ax, [at_ty0]                ; the pre-46.4.10 erase: the WHOLE region,
+    call at_filltail                ; every pixel of it drawn over again below
+%else
+    mov ax, [at_ty0]
+    mov [at_tby], ax                ; SPEC.md 46.4.10: the first row nothing
+%endif                              ; has drawn on yet
     mov bx, [at_top]
 .line:
     cmp bx, [at_nlines]
-    jae .done
+    jae .tail
     call at_line_y
-    jc .done
+    jc .tail
     call at_draw_line
+%ifndef NOATTAIL
+    mov ax, [at_dly]                ; ...and at_parse's own row height, which
+    add ax, [at_prh]                ; is the one at_line_y would walk to
+    mov [at_tby], ax
+%endif
     inc bx
     jmp short .line
+.tail:
+%ifndef NOATTAIL
+    mov ax, [at_tby]
+    cmp ax, [at_ty1]
+    jae .done                       ; the text reached the bottom by itself
+    call at_filltail
+%endif
 .done:
     call at_caret_on
     pop dx
@@ -948,6 +1459,31 @@ at_caret_on:
     call at_line_y
     jc .out
     mov [at_ccy], ax
+%ifndef NOATCX
+    ; SPEC.md 46.4.8: on a line at_scan has PROVED plain, at_xmap[i] is i*pcw
+    ; by construction - so the caret's x is a multiply and none of at_parse is
+    ; needed. Not the slice either: the proof came off the layout's own walk,
+    ; which is what makes this worth more than proving it here would be.
+    test byte [bx+at_lattr], 8
+    jz .parse
+    call at_lgeom                   ; AX = cell width, DX = row height
+    mov [at_pcw], ax
+    mov [at_prh], dx
+    mov cl, 3
+    shr ax, cl
+    mov [at_psc], ax                ; the glyph box below wants the scale
+    push bx
+    shl bx, 1
+    mov ax, [bx+at_lstart]
+    pop bx
+    mov [at_pstart], ax
+    mov cx, [at_caret]
+    sub cx, ax                      ; AX is still at_pstart
+    mov ax, cx
+    mul word [at_pcw]               ; DX is dead here and pushed at entry
+    jmp short .havex
+.parse:
+%endif
     call at_parse
     mov ax, [at_caret]
     sub ax, [at_pstart]
@@ -956,6 +1492,7 @@ at_caret_on:
     shl bx, 1
     mov ax, [bx+at_xmap]
     pop bx
+.havex:
     add ax, [at_tx0]
     mov [at_ccx], ax
     mov ax, [at_psc]
@@ -1197,6 +1734,7 @@ at_sbar:
     push si
     cmp byte [at_fs], 0
     je .out
+%ifdef NOATSBAR
     mov al, CWHITE
     call OSAPI_SET_COLOR
     mov ax, [at_sbx]
@@ -1209,6 +1747,67 @@ at_sbar:
     call at_maxtop
     or ax, ax
     jz .out                         ; the document fits: no bar at all
+    mov si, ax
+%else
+    ; --- SPEC.md 46.4.4: what is already on the glass ---------------------
+    ; at_maxtop is walked ONCE here and handed to at_thumby_m below; it used
+    ; to be walked again inside at_thumby.
+    call at_maxtop
+    mov si, ax                      ; SI = maxtop, live to the end
+    or ax, ax
+    jnz .want
+    ; the document FITS, so there is no bar. Erase one only if one is there.
+    cmp byte [at_sbst], 2
+    je .out                         ; already known blank: ZERO far calls,
+                                    ; which is what every Enter in a short
+                                    ; document used to pay a full-height
+                                    ; gutter fill for - the fill sat ABOVE
+                                    ; the test that decides there is no bar
+    call .blank
+    mov byte [at_sbst], 2
+    jmp .out
+.want:
+    cmp byte [at_sbst], 1
+    jne .full                       ; POISONED or blank: draw the lot
+    cmp si, [at_sbmax]
+    jne .full                       ; the document's length moved
+    mov cx, si
+    call at_thumby_m
+    cmp ax, [at_sbty]
+    je .out                         ; NOTHING MOVED. On a long document this
+                                    ; is most scrolls: the travel is
+                                    ; ty1-ty0-47 px over maxtop lines, so a
+                                    ; 1,000-line Hercules document moves the
+                                    ; thumb 0.24 px a line
+    ; --- only the thumb moved: grey its old span and draw it again --------
+    ; The span is sbx+1..sbx+14 - the SHAFT's width, not the thumb's 16. The
+    ; columns either side are the OUTER frame, black for the bar's whole
+    ; height, and the thumb's own frame only ever redraws them the same
+    ; colour. gfx_fill_gray's dither phase is a function of absolute y, so a
+    ; partial re-grey is phase-correct by construction.
+    push ax
+    mov ax, [at_sbx]
+    inc ax
+    mov bx, [at_sbty]
+    mov cx, [at_sbx]
+    add cx, 14
+    mov dx, bx
+    add dx, 15
+    call OSAPI_GFX_FILL_GRAY
+    pop ax
+    mov [at_sbty], ax
+    call .thumb
+    jmp .out
+.full:
+    ; BANK MAXTOP NOW, not at the thumb below: the two arrow loops between
+    ; here and there use SI as their own 1..5 counter, so SI is ZERO by the
+    ; time the thumb is drawn. Reading it there banked at_sbmax = 0 - which
+    ; made every later call miss its own bank and take this path again - and
+    ; handed at_thumby_m a zero divisor. tests/atblit.py caught it as a thumb
+    ; frozen at the top of the shaft while the view was at the bottom.
+    mov [at_sbmax], si
+    call .blank                     ; the arrow boxes' ground
+%endif
     mov al, CBLACK
     call OSAPI_SET_COLOR
     ; frame + the two arrow boxes
@@ -1268,9 +1867,40 @@ at_sbar:
     sub dx, 16
     call OSAPI_GFX_FILL_GRAY
     ; thumb
+%ifdef NOATSBAR
     call at_thumby
-    mov bx, ax
-    mov dx, ax
+    mov [at_sbty], ax
+%else
+    mov cx, [at_sbmax]              ; ...and read it back from the bank, for
+    call at_thumby_m                ; the reason above
+    mov [at_sbty], ax
+    mov byte [at_sbst], 1
+%endif
+    call .thumb
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; the gutter's ground, and the thumb at [at_sbty] - the two pieces both the
+; full body and 46.4.4's incremental arm need
+.blank:
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov ax, [at_sbx]
+    mov bx, [at_ty0]
+    dec bx
+    mov cx, ax
+    add cx, 15
+    mov dx, [at_ty1]
+    call OSAPI_GFX_FILL
+    ret
+.thumb:
+    mov bx, [at_sbty]
+    mov dx, bx
     add dx, 15
     mov al, CWHITE
     call OSAPI_SET_COLOR
@@ -1288,12 +1918,6 @@ at_sbar:
     mov cx, ax
     add cx, 15
     call OSAPI_GFX_FRAME
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1336,11 +1960,22 @@ at_maxtop:
 ; out: AX = y; preserves all else
 ; -----------------------------------------------------------------------------
 at_thumby:
+    push cx                         ; the public form, which resolves maxtop
+    call at_maxtop                  ; itself - at_sb_click's call site is
+    mov cx, ax                      ; unchanged by SPEC.md 46.4.4
+    call at_thumby_m
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; at_thumby_m - the same, with maxtop ALREADY in CX (and nonzero)
+; in:  CX = maxtop; out: AX = the thumb's y; preserves BX/CX/DX
+; at_sbar walks at_maxtop once and hands it here; it used to be walked TWICE
+; per bar, once there and once in at_thumby (SPEC.md 46.4.4).
+; -----------------------------------------------------------------------------
+at_thumby_m:
     push bx
-    push cx
     push dx
-    call at_maxtop
-    mov cx, ax                      ; CX = maxtop (nonzero at the call site)
     mov ax, [at_ty1]
     sub ax, [at_ty0]
     sub ax, 47                      ; travel = shaft height - 16 (thumb):
@@ -1357,6 +1992,5 @@ at_thumby:
     add ax, [at_ty0]
     add ax, 15
     pop dx
-    pop cx
     pop bx
     ret

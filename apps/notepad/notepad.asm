@@ -69,14 +69,15 @@
 ;
 ; IT IS NOT A SECOND ABI AND MUST NEVER BECOME ONE. A small-built NOTEPAD.O88
 ; runs on kern_big exactly as it runs on kern_small - it calls the same API
-; table at the same offsets (docs/KERN-SPLIT-PLAN.md 3) and simply has fewer
+; table at the same offsets (docs/history/KERN-SPLIT-PLAN.md 3) and simply has fewer
 ; features. What pairs it with kern_small is the DISK it ships on, not
 ; anything the kernel does or does not publish. That is the whole design:
 ; `make small`'s note that a package is "one package, both kernels" still
 ; holds, because this is one package built twice rather than two packages.
 ;
-; WHY IT EXISTS. On a 128KB machine kern_small leaves ~36.5KB of heap
-; (docs/KERNEL-MEMORY.md), and an instance of this package is its image plus
+; WHY IT EXISTS. On a 128KB machine kern_small leaves ~47KB of heap
+; (docs/KERNEL-MEMORY.md's ladder line; tests/small128.py measures what a
+; boot actually leaves), and an instance of this package is its image plus
 ; its bss in one claim, plus a kilobyte for the document. The full build is
 ; 18,407 + 1,972 = 20,379 of that before the note has a byte in it, so Note
 ; Pad on the floor machine is not a tight fit - it is a coin toss against the
@@ -891,11 +892,22 @@ np_sbclick:
     mov ax, [np_top]
     add ax, [np_vrows]
 .set:
+    ; A REQUEST ABOVE ROW 0 IS NOT A REQUEST PAST THE END (SPEC.md 27.7.6.1).
+    ; Every one of the four arms above is RELATIVE, so `[np_top] - NP_SB_STEP`
+    ; at the top of a note is -4 - and the test below is UNSIGNED, which read
+    ; that as row 65,532 and bought the WHOLE remaining count in one hold.
+    ; Measured on a 4.77MHz 8088 with README.TXT open: the up arrow at
+    ; [np_top] = 0 froze for 1,053 ms and scrolled NOTHING, which is exactly
+    ; the freeze 27.7.6 took off every other button on the bar. np_scrollto
+    ; clamps a negative row to 0 whatever happens here.
+    or ax, ax
+    js .doset
     ; [np_drows] is a LOWER BOUND while the count is unfinished (SPEC.md
     ; 27.7.4), so np_scrollmax would clamp this short of a row that really
     ; exists. Only a request that reaches past the counted extent needs the
-    ; exact total - every other one is answered by what is already known, and
-    ; every one of them used to pay for a full walk (SPEC.md 27.7.6).
+    ; count carried further - every other one is answered by what is already
+    ; known, and every one of them used to pay for a full walk (SPEC.md
+    ; 27.7.6).
     cmp byte [np_hdirty], 0
     je .doset
     push ax                         ; the row being asked for...
@@ -905,9 +917,12 @@ np_sbclick:
     cmp ax, bx
     jbe .doset
     push si                         ; SI is the CALLER's - np_onclick has more
-    mov si, [np_win]                ; to do with it after this returns
-    call np_height
-    pop si
+    push ax                         ; to do with it after this returns, and AX
+    mov si, [np_win]                ; is the row .doset is about to scroll to
+    add ax, [np_vrows]              ; ...AND NO FURTHER THAN THE VIEW THIS
+    call np_height                  ; CLICK ASKED FOR (SPEC.md 27.7.6.1): the
+    pop ax                          ; count only has to say whether that row
+    pop si                          ; exists, not how many follow it
 .doset:
     call np_scrollto                ; CF = 1: an END STOP - it did not move,
     jc .yes                         ; so there is nothing to draw
@@ -998,18 +1013,50 @@ np_sbd_out:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
+; np_bandx - the byte-column span the scroll blit moves
+; in:  np_bounds run
+; out: AX = x1, CX = x2, with x1 and x2+1 both multiples of 8 (which is what
+;      OSAPI_GFX_SCROLL refuses without); preserves every other register
+;
+; IT IS CUT FROM THE CELLS AND NOT FROM THE CONTENT'S RIGHT EDGE, and that is
+; the whole of why a scroll no longer flashes the scroll bar (SPEC.md 27.7.2).
+; [np_rgt] is the last drawable text column and the bar's frame begins at
+; [np_rgt]+1, so rounding THAT up to a byte column reached up to seven columns
+; into the bar on every single scroll - which then had to be blanked and the
+; whole bar drawn again. What the user saw was a white gash down the bar's left
+; half, held for the band's entire relettering, and then the bar reappearing:
+; PERFORMANCE.md Part 1's DOUBLE-DRAW FLASH, ~130 ms of it for one arrow click
+; on a 4.77MHz 8088. Caught with a breakpoint on np_sbar, on a CGA where the
+; blit took six of the bar's fourteen columns.
+;
+; No glyph reaches past cell [np_rcols]-1: np_walk's wrap rule sends a cell
+; that would cross [np_rgt] to the next row, and np_rflush draws cells
+; 0..[np_rcols]-1 of the row buffer and nothing else. So the span that CONTAINS
+; the text is [np_tx] .. [np_tx] + 8*[np_rcols] - 1, and with the content
+; origin on a multiple of 8 - OSAPI_WM_SNAP, on every adapter (SPEC.md 11.94) -
+; both ends of THAT are already byte columns. The bar is never touched and
+; np_scrollpaint's strip pass never runs.
+;
+; A window too wide to snap keeps the blit rather than losing it: [np_tx] is
+; then off the grid, the round-up can still reach past [np_rgt], and the strip
+; pass sees that for itself and repairs exactly as it always did.
+; -----------------------------------------------------------------------------
+np_bandx:
+    mov ax, [np_rcols]
+    call np_x8
+    add ax, [np_tx]                 ; the first column past the last cell...
+    add ax, 7
+    and ax, 0xFFF8                  ; ...rounded UP to a byte column
+    mov cx, ax
+    dec cx                          ; CX = x2, x2+1 a multiple of 8
+    mov ax, [np_tx]
+    and ax, 0xFFF8                  ; x1, DOWN to one - which stays inside the
+    ret                             ; content, NP_MARGIN being 8
+
+; -----------------------------------------------------------------------------
 ; np_vshift - move the whole text band DI pixels (signed; positive = text up)
 ; in:  DI = the signed pixel distance, np_bounds run, gfx lock held
 ; out: CF = OSAPI_GFX_SCROLL's answer; preserves all registers
-;
-; The x span is rounded OUTWARD to byte columns, and that is what lets this
-; work on every adapter rather than only where OSAPI_WM_SNAP aligns the
-; content (SPEC.md 11.94). Rounding x1 DOWN stays inside the content because
-; NP_MARGIN is 8 and the rounding moves it at most 7; rounding x2+1 UP reaches
-; at most seven columns into the scroll bar, which np_sbar redraws
-; immediately afterwards because the thumb has moved anyway. The band
-; therefore CONTAINS every glyph pixel, which the break's np_scroll - rounding
-; inward, and needing [np_tx] aligned for it - does not have to.
 ; -----------------------------------------------------------------------------
 np_vshift:
     push ax
@@ -1017,13 +1064,8 @@ np_vshift:
     push cx
     push dx
     push si
-    mov ax, [np_tx]
-    and ax, 0xFFF8                  ; x1, down to a byte column
+    call np_bandx                   ; AX = x1, CX = x2 (SPEC.md 27.7.2)
     mov bx, [np_ty]                 ; y1
-    mov cx, [np_rgt]
-    add cx, 8
-    and cx, 0xFFF8
-    dec cx                          ; x2, with x2+1 up to a byte column
     mov dx, [np_vrows]              ; y2 stops at the bottom of the last WHOLE
     push cx                         ; row, not at [np_bot]: a content height
     mov cl, 3                       ; that is not a multiple of 8 leaves a
@@ -1159,17 +1201,17 @@ np_scrollpaint:
     call np_vshift
     jc .nope                        ; refused, and having drawn nothing
 
-    ; Rounding x2+1 outward carried up to seven columns of furniture with the
-    ; text: the scroll bar's left frame at np_rgt+1, and the left edge of the
-    ; grow box below it. Blank that strip and let the two things that own it
-    ; put themselves back - np_sbar at the end of this routine, and the grow
-    ; box here, because np_sbar stops short of the corner it sits in.
+    ; A band cut from the CELLS stops inside the text, so on a snapped window -
+    ; which is every window that can be snapped (SPEC.md 11.94) - none of this
+    ; runs. It is the window too WIDE to snap that still needs it: [np_tx] is
+    ; then off a byte column, np_bandx's round-up can reach past [np_rgt], and
+    ; what it carries with the text is the scroll bar's left frame and the left
+    ; edge of the grow box below it. Blank that strip and let the two things
+    ; that own it put themselves back - the bar at the end of this routine, and
+    ; the grow box here, because the bar stops short of the corner it sits in.
+    call np_bandx                   ; CX = the last column the blit moved
     mov ax, [np_rgt]
     inc ax                          ; x1, the first column past the text
-    mov cx, [np_rgt]
-    add cx, 8
-    and cx, 0xFFF8
-    dec cx                          ; x2, the same one np_vshift moved
     cmp ax, cx
     ja .nostrip
     mov bx, [np_ty]
@@ -1179,6 +1221,12 @@ np_scrollpaint:
     mov bx, si
     call OSAPI_WM_GROW              ; SPEC.md 11.1/27
     pop bx
+    mov word [np_sbrows], 0xFFFF    ; ...and the bar has to be drawn WHOLE and
+                                    ; not merely moved: np_sbcheck's cheap path
+                                    ; draws the thumb and trusts the picture
+                                    ; around it, which this fill has just taken
+                                    ; a strip out of. A row count can never be
+                                    ; 0xFFFF, so it is the sentinel for free
 .nostrip:
 
     mov ax, [np_sdlt]               ; the rows the blit did not fill in
@@ -1292,8 +1340,15 @@ np_scrollpaint:
 
     mov ax, [np_top]
     mov [np_ptop], ax               ; the screen shows this view now
-    call np_sbar                    ; unconditional: the thumb moved, and the
-                                    ; blit reached into the bar's columns
+    call np_sbcheck                 ; THE THUMB MOVED AND NOTHING ELSE ON THE
+                                    ; BAR DID, so this is three drawing calls
+                                    ; against the full draw's sixteen (SPEC.md
+                                    ; 13.10.3). It was np_sbar, unconditional,
+                                    ; because the blit used to reach into the
+                                    ; bar's own columns and the strip above had
+                                    ; to blank them - np_bandx stops short of
+                                    ; them now, and the strip pass says so by
+                                    ; poisoning [np_sbrows] when it does run
     clc
     jmp short .out
 .nope:
@@ -1450,7 +1505,7 @@ np_bounds:
 ; never touched.
 ;
 ; NOT USED IN np_rflush, which is the per-ROW text flush and the one caller
-; on the hot path (docs/TEXT-PLAN.md): its two sites take the triple shift
+; on the hot path (docs/plans/completed/TEXT-PLAN.md): its two sites take the triple shift
 ; INLINE, which is the same six bytes it already spent and faster than what
 ; it spent them on. Everywhere else a near call is ~11us against a
 ; GFX_FILL's 756us floor (PERFORMANCE.md Part 2), so the fills below cost
@@ -3137,12 +3192,15 @@ np_sigsame:
 ; It preserves the two query fields because np_onclick sets them BEFORE it
 ; gets here, and a walk consumes them.
 ;
-; It comes in two sizes (SPEC.md 27.7.3). np_height finishes the count in one
-; hold, for the one caller that needs the answer exact - a click on the bar.
-; np_hchunk does NP_HCHUNK rows of it and hands the lock back, which is what
+; It comes in two sizes (SPEC.md 27.7.3), and NEITHER of them is the whole
+; note. np_hchunk does NP_HCHUNK rows and hands the lock back, which is what
 ; the worker calls: the count of a 16KB note is seconds of walking, and doing
 ; it in one hold freezes the machine behind it with nothing on the disk and
-; nothing on the glass.
+; nothing on the glass. np_height carries it to a row the CALLER names, in one
+; hold, for the one question that cannot wait - whether the row a scroll bar
+; click asks for exists (SPEC.md 27.7.6.1). It used to walk to the last
+; character whoever asked, so a click that needed to know about row 550 of a
+; 718-row note paid for all 718 of them.
 ;
 ; Chunking is legal because the gfx lock here is a mutex over the walk's
 ; SCRATCH and not a drawing lock - np_height writes no framebuffer, and nine of
@@ -3158,23 +3216,38 @@ np_sigsame:
 ; -----------------------------------------------------------------------------
 np_height:
     push ax
-    mov ax, 0x7FFF                  ; no bound: to the last character, however
-    call np_hwalk                   ; many rows that is
+    call np_hstale
+    sub ax, [np_top]                ; [np_lastrow] is a VISIBLE row and the
+    call np_hwalk                   ; caller names an absolute one
     pop ax
     ret
 
 np_hchunk:
     push ax
-    mov ax, [np_hi]                 ; a stale seed can only mean the note shrank
-    cmp ax, [np_len]                ; without going through np_hmark; np_walk
-    jbe .seedok                     ; would fall back to a full walk, and the
-    mov word [np_hrow], 0           ; bound below would then be a chunk's worth
-    mov word [np_hi], 0             ; of rows past where it actually starts -
-.seedok:                            ; one unbounded hold, the thing being fixed
+    call np_hstale
     mov ax, [np_hrow]               ; [np_lastrow] is a VISIBLE row and
     sub ax, [np_top]                ; [np_hrow] is absolute, so the bound is
     add ax, NP_HCHUNK               ; this chunk's own start plus its length
     call np_hwalk
+    pop ax
+    ret
+
+; np_hstale - forget a resume pair the note has outgrown; preserves everything
+;
+; A stale seed can only mean the note shrank without going through np_hmark;
+; np_walk would fall back to a full walk, and a bound derived from [np_hrow]
+; would then be a chunk's worth of rows past where it actually starts - one
+; unbounded hold, the thing being fixed. Shared, because np_height's bound is
+; the caller's and np_hchunk's is [np_hrow]'s, and BOTH are answered against a
+; pair that has to describe this note.
+np_hstale:
+    push ax
+    mov ax, [np_hi]
+    cmp ax, [np_len]
+    jbe .out
+    mov word [np_hrow], 0
+    mov word [np_hi], 0
+.out:
     pop ax
     ret
 
@@ -3460,7 +3533,7 @@ np_ckword:
 ; edit cannot reach. Backing up through it re-decides a break nobody ever
 ; decided: on a note that is one 249-character run, the caret's row backed up
 ; NINE rows to index 0 and pass 1 then laid out the whole view from the top of
-; the note, on every keystroke (docs/NOTEPAD-NOTES.md 5.6).
+; the note, on every keystroke (docs/plans/completed/NOTEPAD-NOTES.md 5.6).
 ;
 ; THE MARGIN IS WHY THIS COUNTS TO np_rcols + 2 AND NOT np_rcols + 1. The
 ; threshold np_wordfit actually applies is `length > np_rcols`, and this runs
@@ -4064,7 +4137,13 @@ np_paint:
     mov ax, [np_top]                ; padding to the band's edge to erase with
     mov [np_ptop], ax               ; ...and the screen now shows THIS view
     pop ax
-    call np_sbar                    ; the fill took the bar with it
+    cmp byte [np_sbkeep], 0         ; THE FILL TOOK THE BAR WITH IT - unless
+    je .barfull                     ; the caller says otherwise (SPEC.md
+    call np_sbcheck                 ; 27.7.2.1), in which case the thumb is the
+    jmp short .bardone              ; only thing that can have moved: three
+.barfull:                           ; drawing calls against sixteen, and the
+    call np_sbar                    ; frame, the rules and both arrow glyphs
+.bardone:                           ; are never taken off the screen at all
 %ifdef NPF_FIND
     call np_fpaint                  ; ...and the find panel, which lives in the
                                     ; strip np_bounds took off the top of the
@@ -5634,7 +5713,7 @@ np_append:
     je .norows
     mov cx, [np_rowsn]
     cmp cx, NP_MAXROWS              ; [np_rowsn] is not capped to the array it
-    jbe .rok                        ; indexes (docs/NOTEPAD-NOTES.md 5.3.1), so
+    jbe .rok                        ; indexes (docs/plans/completed/NOTEPAD-NOTES.md 5.3.1), so
     mov cx, NP_MAXROWS              ; this caller clamps like np_seedtail does
 .rok:
     mov bx, [np_ckpr]
@@ -5820,7 +5899,7 @@ np_redraw:
                                 ; bottom visible row puts the caret one row
                                 ; below the view and re-walked the entire note
                                 ; to find it, which is seconds on the most
-                                ; used key there is (docs/NOTEPAD-NOTES.md 1.4)
+                                ; used key there is (docs/plans/completed/NOTEPAD-NOTES.md 1.4)
 .haveit:
     call np_seecaret                ; when it MOVED. A scroll bar click also
     jnc .scrolled                   ; ends here, and following the caret then
@@ -5936,7 +6015,9 @@ np_redraw:
     ; exactly what used to happen every time.
     call np_scrollpaint
     jnc .done
-    jmp short .fullpaint
+    mov byte [np_sbkeep], 1         ; ...and a REFUSAL drew nothing (SPEC.md
+                                    ; 27.7.2.1), so the scroll bar and the grow
+    jmp short .fullpaint            ; box below it are still on the glass
 
 .full:
     ; Reached when np_sigsame REFUSED - a resize, a toast arriving or leaving,
@@ -5979,11 +6060,22 @@ np_redraw:
     pop ax                          ; x1
     add cx, ax
     dec cx                          ; CX = x2
+    cmp byte [np_sbkeep], 0         ; ...AND IT STOPS AT THE TEXT when the bar
+    je .fillall                     ; is still on the glass (SPEC.md 27.7.2.1):
+    mov cx, [np_rgt]                ; [np_rgt] is the last drawable text column
+.fillall:                           ; and the bar owns everything right of it,
+                                    ; the grow box included
     call np_fillw ; white-fill the content
                                 ; variable - keep x1 across the call
     call np_paint                   ; SI still = window ptr
+    cmp byte [np_sbkeep], 0
+    jne .kept
     mov bx, si                      ; the white fill erased the grow box;
     call OSAPI_WM_GROW              ; restore it (SPEC.md 11.1/27)
+.kept:
+    mov byte [np_sbkeep], 0         ; ONE-SHOT: whoever set it meant THIS
+                                    ; repaint, and the next one may well be
+                                    ; W_PAINT over a content the kernel filled
 .out:
     call np_hirechk                 ; a debt left by ANY of this routine's
                                     ; exits, not just the .done path it used to
@@ -11121,6 +11213,18 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                             ; parks it at the sentinel, so Left and Right (kind
                             ; 4 as well, and adjacent rows they do not measure)
                             ; can never inherit an Up's bound
+
+    NPVAR np_sbkeep, 1      ; byte: THE BAR IS STILL ON THE GLASS (SPEC.md
+                            ; 27.7.2.1). A one-shot, set by np_redraw's
+                            ; .scrolled when the blit was refused - a refusal
+                            ; draws nothing, so the bar the last pass left is
+                            ; still exactly right - and read TWICE: by
+                            ; .fullpaint, which then fills only as far as the
+                            ; text, and by np_paint, which then MOVES the
+                            ; thumb instead of drawing the bar again. Clear on
+                            ; every other path, which is what makes W_PAINT -
+                            ; where the KERNEL has white-filled the whole
+                            ; content - keep the full draw it needs
 
     NPVAR np_rbuf, NP_MAXCOL + 1  ; the row being accumulated, space-filled
     NPVAR np_prow, NP_MAXCOL      ; ...and what was last DRAWN on the cached

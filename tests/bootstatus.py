@@ -50,6 +50,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
+import os88build as _B
+import os88fixture                                       # noqa: E402
 import os88marty                                            # noqa: E402
 import os88sym                                              # noqa: E402
 
@@ -105,16 +107,19 @@ def image(bits):
     below is what stops it coming back, because the whole failure was a disk
     that did not carry what this function was asked for.
     """
-    recipe = subprocess.run(["make", "-n", "build/ether360.img"], cwd=ROOT,
-                            capture_output=True, text=True, check=True).stdout
-    recipe = recipe.replace("\\\n", " ")
-    lines = [l for l in recipe.splitlines() if "os88disk.py" in l]
-    assert len(lines) == 1, recipe
-    cmd = lines[0].strip()
-    assert "build/system.cfg" in cmd, cmd
+    # THROUGH os88fixture.make - see tests/heapmap.py's note. `make -n` still
+    # runs the parse, and the parse rewrites build/buildnum.inc; this puts it
+    # back, so lifting a recipe out leaves the tree untouched.
+    cmd, goal = os88fixture.recipe("build/ether360.img", "os88disk.py")
+    # THE RECIPE SPELLS ITS PATHS THE WAY `BUILD=` DOES, which is RELATIVE to
+    # the repo root - so the comparison has to be relative too. `at` answers
+    # an absolute path when the run has a tree, and an absolute needle is
+    # never in a relative haystack.
+    cfg = os.path.relpath(_B.at("build/system.cfg"), ROOT)
+    assert cfg in cmd, (cfg, cmd)
     out = os.path.join(BUILD, "bootstatus", "boot.img")
-    cmd = (cmd.replace("build/system.cfg", cfgfile(bits))
-              .replace("-o build/ether360.img", "-o " + out))
+    cmd = (cmd.replace(cfg, cfgfile(bits))
+              .replace("-o " + goal, "-o " + out))
     subprocess.run(cmd, cwd=ROOT, shell=True, check=True,
                    stdout=subprocess.DEVNULL)
     got = cfg_on_disk(out)
@@ -172,6 +177,9 @@ def run(img, machine, kind, want):
                                                 # 2.9.6): the offset in the map
                                                 # IS the offset in the segment
 
+    cold = os88sym.equates()["COLD_SEG"]     # ...and the value that word holds
+                                             # when the blob is NOT published
+
     lines, bands, last, prev = [], set(), None, None
     with os88marty.launch(img, machine=machine, boot=0) as m:
         started = False
@@ -187,7 +195,24 @@ def run(img, machine, kind, want):
                 started = True
 
             seg = int.from_bytes(m.read(lin_seg, 2), "little")
-            if seg:
+            # COLD_SEG IN THIS WORD MEANS "NO BLOB", NOT "A BLOB AT COLD_SEG".
+            # [spl_fseg] is .text seeded COLD_SEG so that a SPLCALL made before
+            # stage 2 publishes the blob refuses through COLD_SEG:mod_gone
+            # rather than jumping into offset 0 (kernel.asm, above spl_fp). The
+            # `started` guard above says the kernel's own bytes are resident;
+            # it says nothing about stage 2 having REACHED its handoff, which
+            # is the last thing it does. So the seed is live for a stretch, and
+            # `spl_mline`'s offset through COLD_SEG is arbitrary cold memory:
+            # this row read `uV` out of it and reported that 15.6.4's two lines
+            # do not precede the settings read, about a boot that was perfectly
+            # correct. What it depends on is the PACKED KERNEL'S BYTE COUNT,
+            # which moves whenever anything in .text does - so it fails for
+            # whoever next grows the kernel and passes for the commit after.
+            #
+            # The seed comes BACK at the other end, when kmain gives the blob
+            # to the heap (SPEC.md 2.9.5), and that window reads as raw code -
+            # printable often enough to be a line. One comparison closes both.
+            if seg and seg != cold:
                 txt = m.readseg(seg, off_line, 33).split(b"\0")[0]
                 txt = txt.decode("latin1").rstrip()
                 if txt != prev:
@@ -213,7 +238,9 @@ def run(img, machine, kind, want):
                         lines.append(txt)
 
             w, h, rows = m.vram(kind)
-            msg = int.from_bytes(m.readseg(seg, off_msg, 2), "little") if seg else 0
+            msg = (int.from_bytes(m.readseg(seg, off_msg, 2), "little")
+                   if seg and seg != cold else 0)      # the same word, and the
+                                                       # same two dead windows
             band = bytes(rows[msg + 3]) if 0 < msg < h - 3 else b""
             if sum(band):
                 d = hashlib.md5(band).hexdigest()

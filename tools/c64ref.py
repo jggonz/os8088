@@ -3,7 +3,7 @@
 # os8088 - tools/c64ref.py
 #
 # THE INDEPENDENT PIXEL-LEVEL REFERENCE COMPOSITOR for the C64 package
-# (C64-SPEC §14.5, docs/C64-PORT-PLAN.md Decision 21).
+# (C64-SPEC §14.5, docs/plans/completed/C64-PORT-PLAN.md Decision 21).
 #
 #     python3 tools/c64ref.py --check STATE FRAME
 #     python3 tools/c64ref.py --render STATE -o OUT.pbm
@@ -21,7 +21,7 @@
 # custom character set, the hires-bitmap cell transpose, multicolour, and
 # sprite priority and expansion. Wave 1 checks standard text with the CHARGEN
 # ROM and with a RAM character set; the rest arrive with the modes
-# (docs/C64-PORT-PLAN.md wave 4).
+# (docs/plans/completed/C64-PORT-PLAN.md wave 4).
 #
 # THE RISK IT CARRIES, STATED. A second implementation written by reading the
 # first is not a second implementation. `--selftest` therefore injects a

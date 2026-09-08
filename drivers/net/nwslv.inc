@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - drivers/net/nwslv.inc
 ;
-; THE SOCKET COMMANDS, SERVED (SPEC.md 62.11.1, docs/NET-PLAN.md 5)
+; THE SOCKET COMMANDS, SERVED (SPEC.md 62.11.1, docs/plans/completed/NET-PLAN.md 5)
 ;
 ; netsock.inc's NW_* seen from the far end of the cable. The master encodes
 ; them; this decodes, hands each to the SAME socket verb ETHER.DRV serves
@@ -165,7 +165,7 @@ nw_s_accept:
 
 ; --- NW_ADDR: - -> status, four IP bytes ------------------------------------
 ; The address the MASTER should publish is this machine's, because this is the
-; machine an inbound connection reaches (docs/NET-STACK-PLAN.md 1.5). It is
+; machine an inbound connection reaches (docs/plans/completed/NET-STACK-PLAN.md 1.5). It is
 ; eth_v_addr's own answer, so the two transports cannot come to differ.
 ;
 ; FOUR BYTES WHATEVER THE STATUS SAYS - the fixed-frame rule, and the failure

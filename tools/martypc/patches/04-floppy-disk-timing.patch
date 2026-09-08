@@ -22,7 +22,7 @@ index 40f78faa..aeb68dd9 100644
 +/// gone (PERFORMANCE.md Part 9 Set 37).
 +pub const FDC_HEAD_SETTLE_US: f64 = 0.0;
 +/// Step rate used until the BIOS issues SPECIFY. A 360K drive's own spec is
-+/// 6 ms a cylinder, which is what docs/ASSOC-PLAN.md's seek model assumes.
++/// 6 ms a cylinder, which is what docs/plans/completed/ASSOC-PLAN.md's seek model assumes.
 +pub const FDC_STEP_RATE_DEFAULT_US: f64 = 6_000.0;
 +
  // Main Status Register Bit Definitions

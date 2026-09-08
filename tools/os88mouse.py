@@ -8,6 +8,12 @@
     python3 tools/os88mouse.py 127.0.0.1:9001 menu 12 8 40 45
     python3 tools/os88mouse.py 127.0.0.1:9001 drag 200 78 200 120
 
+THIS IS THE DEFAULT. Reach for it whenever a script wants something on the
+screen clicked. The RELATIVE driver is tools/os88mouserel.py and it is for a
+much shorter list - the mouse itself under test, a bit-exact replay, or motion
+with no destination (a paint stroke, a window drag). Its header has the whole
+of that list; if your case is not on it, you are in the right file.
+
 WHY THIS EXISTS. MartyPC's mouse is RELATIVE and deliberately so: the `mouse`
 command clocks a real 3-byte Microsoft packet through the emulated UART, so a
 scripted click drives mou_isr and the packet decoder exactly as a hand on a
@@ -62,10 +68,12 @@ units the kernel compares, so the check is the kernel's rather than a guess
 about host timing. Too slow, or an edge that never arrived, RAISES.
 """
 import argparse
+import os
 import sys
 import time
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import os88marty                                           # noqa: E402
 from os88marty import Marty, MartyError                    # noqa: E402
 
 REG_AT = 0x0600 + 0x0E          # 0060:000E - the debug registry (SPEC.md 57)
@@ -79,11 +87,91 @@ STEP = 100
 # 1200 baud, 3 bytes: ~25 ms of guest time. Below this the server blocks and
 # the client times out, which reads exactly like a hung emulator.
 GAP = 0.12
-SETTLE = 0.25                   # let the ISR and the UI task see the packet
+# WHAT ONE PACKET IS ALLOWED, in GUEST seconds. `to` used to sleep a fixed
+# 0.25 HOST seconds after each one - about 0.9 guest seconds on an idle box
+# here and 0.25 on a full one, so the same click bought the machine four times
+# less work under load and then failed somewhere further on. It reads the
+# pointer back instead (`_landed`), which on a quiet guest answers in a few
+# milliseconds; this is only the deadline, and reaching it means the packet
+# was dropped - which `to`'s loop handles by sending another.
+PKT_GUEST = 1.0
 BUSY = 6.0                      # ...and how long a repaint may hold the guest
-                                # before `to` gives up on it. A window
+                                # before `to` gives up on it - GUEST seconds
+                                # now, for the same reason. A window
                                 # straddling two displays repainting on a
                                 # 4.77MHz 8088 is the worst case measured
+
+# --- GUEST PACING (off by default) ------------------------------------------
+#
+# `click(settle=1.5)` waits 1.5 HOST seconds for the guest to act on the
+# press.  How much guest work that buys is a property of the box.  Measured on
+# this container over 118 waits in each arm - the same waits in the same
+# scripts - the median HOST cost was 2.2s in both and the GUEST cost 7.3s
+# against 5.9s, up to -37% per script.  The row does not get slower (measured: 1.06x
+# wall across twelve rows), it gets LESS THOROUGH, and then fails somewhere
+# further on looking like the thing under test.  That is the mechanism behind
+# docs/plans/HANDOFF-SOAK-FINDINGS.md B5, and it is why "it passed alone" has been
+# such an unsatisfying diagnosis: the wall times never showed anything.
+#
+# `OS88_GUEST_PACE=<ratio>` spends the same wait in GUEST seconds instead -
+# `settle * ratio` of the machine's own time - so a click buys the same work
+# whatever else the box is doing.
+#
+# IT IS OFF BY DEFAULT, and that is deliberate rather than timid.  B5 says
+# rewriting these waits onto guest time "reaches 194 files, changes how much
+# guest work every row gets per settle, and would want a full soak behind it".
+# That is right, and a knob is how this project takes a change of that shape:
+# the arm exists, it is measurable against the default, and the flip is a
+# decision somebody makes with a soak behind it rather than one that happens
+# quietly here.  Set it to the box's own idle ratio to reproduce today's
+# coverage exactly; below that and rows get less guest time than they do now.
+GUEST_PACE = float(os.environ.get("OS88_GUEST_PACE", "0"))
+
+
+def _wait(m, secs, why="click"):
+    """Spend `secs`, in host time or - under OS88_GUEST_PACE - in guest time.
+
+    One function so that every wait in this file moves together: a run where
+    the click is guest-paced and the drag is not is a run whose contention
+    behaviour nobody can reason about.
+
+    IT LOGS TO OS88_WAITLOG TOO, and that is what makes the log worth
+    reading. `settle` and `until` are waits FOR something and end the moment
+    it happens; these are UNCONDITIONAL - the wait IS the cost, every time,
+    whether or not the guest needed it. A profile recording only the
+    conditional half accounts for the part of a row that is already efficient
+    and is silent about the part that is pure margin. The `fixed` rows are
+    the ones to cut.
+
+    What it records is what the wait BOUGHT: guest seconds across the sleep.
+    That is the number a decision needs - "1.5 host seconds bought 5.2 guest
+    seconds of a machine that needed 0.4" is an argument; "1.5 seconds" is
+    not.
+    """
+    log = bool(os88marty.WAITLOG) and m is not None
+    c0 = None
+    if log:
+        try:
+            c0 = int(m.status().get("cycles", 0))
+        except Exception:
+            c0 = None
+    t0 = time.time()
+    if GUEST_PACE > 0 and m is not None:
+        os88marty.guest_sleep(m, secs * GUEST_PACE)
+    else:
+        time.sleep(secs)
+    if log:
+        try:
+            c1 = int(m.status().get("cycles", 0))
+            guest = 0.0 if c0 is None else (c1 - c0) / os88marty.GUEST_HZ
+            host = time.time() - t0
+            with open(os88marty.WAITLOG, "a") as f:
+                f.write("fixed\t%s\t%.2f\t%.2f\t%.3f\t%s %.2fs\n"
+                        % (os88marty._caller(), guest, host,
+                           guest / host if host > 0.01 else 0.0, why, secs))
+        except Exception:
+            pass
+
 
 # The BIOS tick count, 18.2 Hz. A fact about the PC rather than about os8088 -
 # sch_isr chains the ROM's handler (SPEC.md 7), so this advances on every
@@ -157,12 +245,56 @@ class Mouse:
         return (b[0] | (b[1] << 8), b[2] | (b[3] << 8), b[4])
 
     # --- moving ------------------------------------------------------------
-    def _pk(self, dx=0, dy=0, l=False):
-        self.m.mouse(dx, dy, l=l)
+    def _pk(self, dx=0, dy=0, l=False, r=False):
+        self.m.mouse(dx, dy, l=l, r=r)
         time.sleep(GAP)
 
-    def to(self, x, y, tries=None, l=False, retry=True):
-        """Drive to (x, y) and PROVE it, or raise."""
+    def _landed(self, was, guest=PKT_GUEST):
+        """Wait for the published pointer to leave `was`. Did it?
+
+        THIS REPLACES A FIXED `time.sleep(SETTLE)` AFTER EVERY PACKET, and it
+        is both faster and safer - the same trade as everywhere else in this
+        harness, because the check REPLACES the wait rather than following it.
+
+          * FASTER, because the answer is usually there in a few
+            milliseconds. A packet is 3 bytes at 1200 baud - about 25 ms of
+            GUEST time - and `mou_isr` publishes `mouse_x` from the interrupt
+            gate, so the word moves as soon as the UART delivers. The fixed
+            wait was 0.25 HOST seconds, which on this box is ~0.9 guest
+            seconds: thirty times what the packet needs. `to` sends two or
+            three packets, so that was most of the cost of every click in the
+            suite.
+          * SAFER, because the budget is the GUEST's clock. The old spelling
+            made the whole of `to`'s patience a host quantity - and its own
+            docstring says what that is for: a guest busy repainting eats
+            packets (the 8250 has no FIFO), and a wait cut short by a busy BOX
+            then looks exactly like the kernel refusing to go there. Two
+            investigations have been lost to that, one of them concluding a
+            drag clamp that does not exist.
+
+        A `False` here is not a verdict - `to`'s loop simply re-reads and
+        sends again, which is what it did before.
+        """
+        c0 = None
+        for i in range(4000):
+            if self.where()[:2] != was:
+                return True
+            if i % 4 == 3:                      # a status is a round trip;
+                c = self.m.status().get("cycles", 0)     # the position read
+                if c0 is None:                  # is the pacing, this is only
+                    c0 = c                      # the deadline
+                elif (c - c0) / os88marty.GUEST_HZ >= guest:
+                    return False
+            time.sleep(0.005)
+        return False
+
+    def to(self, x, y, tries=None, l=False, retry=True, r=False):
+        """Drive to (x, y) and PROVE it, or raise.
+
+        `l` and `r` are the button LEVELS to carry while moving - a Microsoft
+        packet states both on every one, so a drag with a button held has to
+        keep saying so or the guest sees a release halfway across.
+        """
         if tries is None:
             # A packet moves at most STEP per axis, so the budget has to scale
             # with the DISTANCE: a fixed six was enough for a short hop and
@@ -189,8 +321,9 @@ class Mouse:
                 return
             # One packet's worth at a time; the read after it is what makes
             # the next one exact rather than hopeful.
-            self._pk(max(-STEP, min(STEP, dx)), max(-STEP, min(STEP, dy)), l=l)
-            time.sleep(SETTLE)
+            self._pk(max(-STEP, min(STEP, dx)), max(-STEP, min(STEP, dy)),
+                     l=l, r=r)
+            self._landed((cx, cy))
         cx, cy, _ = self.where()        # ...and CHECK AFTER THE LAST MOVE, or
         if (cx, cy) == (x, y):          # a target needing exactly `tries`
             return                      # packets is reported as unreachable
@@ -201,22 +334,24 @@ class Mouse:
         # the previous one is read is an overrun and is GONE - and a repaint
         # on a 4.77MHz 8088 is SECONDS, not milliseconds. A window straddling
         # two displays is the worst case in the tree. The whole budget above
-        # is ~`tries` x SETTLE, so a guest busy for longer than that eats
-        # every packet and the pointer does not move AT ALL, which reads as
+        # is ~`tries` x PKT_GUEST of the GUEST's own time, so a guest busy for
+        # longer than that eats every packet and the pointer does not move AT
+        # ALL, which reads as
         # "the kernel will not let me go there" and has now cost two
         # investigations - one of them concluding a drag clamp that does not
-        # exist (docs/DUAL-DISPLAY-VGA.md 8(10)).
+        # exist (docs/plans/completed/DUAL-DISPLAY-VGA.md 8(10)).
         #
         # So exhaustion is not a verdict: wait out the repaint and run the
         # loop again, ONCE. It cannot turn an unreachable target into a
         # reachable one, because arrival is still tested exactly - it can only
         # stop a slow one being called impossible.
         if retry:
-            time.sleep(BUSY)
-            self.to(x, y, tries=tries, l=l, retry=False)
+            os88marty.guest_sleep(self.m, BUSY)
+            self.to(x, y, tries=tries, l=l, retry=False, r=r)
             return
         raise MartyError("could not reach (%d,%d): stuck at (%d,%d) after a "
-                         "%.0fs wait, so it is not the guest being busy. A "
+                         "%.0f GUEST-second wait, so it is not the guest "
+                         "being busy and not the box being loaded either. A "
                          "target outside the screen, or off the kernel's "
                          "clamp, cannot be reached." % (x, y, cx, cy, BUSY))
 
@@ -226,7 +361,7 @@ class Mouse:
             self._edge(False)           # would make this press no edge at all
         self._edge(True)
         self._edge(False)
-        time.sleep(settle)
+        _wait(self.m, settle, "click")
 
     # --- clicking that PROVES itself ---------------------------------------
     def ticks(self):
@@ -234,7 +369,7 @@ class Mouse:
         b = self._raw(BIOS_TICKS, 4)
         return b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)
 
-    def _edge(self, down, tries=60, resend=20):
+    def _edge(self, down, tries=60, resend=20, btn=1):
         """One button edge, PROVEN: send the packet, then wait until the
         published mouse_btn agrees. A packet clocked into the UART while the
         previous one is still in flight is simply dropped, and the only
@@ -253,17 +388,18 @@ class Mouse:
         mouse_btn to agree before it returns, so a re-send cannot turn a
         genuinely stuck button into a pass.
         """
-        want = 1 if down else 0
+        want = btn if down else 0
         for i in range(tries):
             if i % resend == 0:
-                self.m.mouse(0, 0, l=down)
-            if (self.where()[2] & 1) == want:
+                self.m.mouse(0, 0, l=down and btn == 1, r=down and btn == 2)
+            if (self.where()[2] & btn) == want:
                 return
             time.sleep(0.02)
         raise MartyError(
-            "the %s was never decoded (mouse_btn = %02x). The 1200-baud UART "
-            "drops a packet sent while the previous one is in flight."
-            % ("press" if down else "release", self.where()[2]))
+            "the %s %s was never decoded (mouse_btn = %02x). The 1200-baud "
+            "UART drops a packet sent while the previous one is in flight."
+            % ("right" if btn == 2 else "left",
+               "press" if down else "release", self.where()[2]))
 
     def dblclick(self, x, y, settle=2.0):
         """Two presses inside the kernel's own double-click window.
@@ -289,7 +425,7 @@ class Mouse:
                 "that cannot keep up." % (span, DBL_TICKS))
         if self.verbose:
             print("  double-click at (%d,%d): %d tick(s) apart" % (x, y, span))
-        time.sleep(settle)
+        _wait(self.m, settle, "dblclick")
         return span
 
     def menu(self, x0, y0, x1, y1, settle=2.0):
@@ -310,17 +446,45 @@ class Mouse:
         """
         self._press_drag_release(x0, y0, x1, y1, settle)
 
+    def rmenu(self, x0, y0, x1, y1, settle=2.0, aim=None):
+        """The same for the RIGHT button: the context menu (SPEC.md 12.4).
+
+        `fm_rclick` pops the menu under the pointer and `menu_track` then
+        polls a LEVEL exactly as the bar's does, so this is `menu` with the
+        other button and not a click - a press and release in place would open
+        it and close it in one breath.
+
+        `aim(self)` -> (x, y) IS CALLED WITH THE BUTTON DOWN, once the menu is
+        on screen, and its answer replaces (x1, y1). A popup is anchored at
+        the pointer and then SHIFTED rather than clipped - left off the right
+        edge, up off the bottom (menu_popup) - so a caller computing an item's
+        y from the press point is right until the press is near an edge, and
+        then silently picks a different item. Reading `menu_x1`/`menu_y1` out
+        of the guest at this moment is the only spelling that cannot.
+        """
+        if aim is None:
+            self._press_drag_release(x0, y0, x1, y1, settle, btn=2)
+            return
+        self.to(x0, y0)
+        if self.where()[2] & 2:
+            self._edge(False, btn=2)
+        self._edge(True, btn=2)
+        x1, y1 = aim(self)
+        self.to(x1, y1, r=True)
+        self._edge(False, btn=2)
+        _wait(self.m, settle, "drag/menu")
+
     def drag(self, x0, y0, x1, y1, settle=1.5):
         self._press_drag_release(x0, y0, x1, y1, settle)
 
-    def _press_drag_release(self, x0, y0, x1, y1, settle):
+    def _press_drag_release(self, x0, y0, x1, y1, settle, btn=1):
         self.to(x0, y0)
-        if self.where()[2] & 1:
-            self._edge(False)
-        self._edge(True)
-        self.to(x1, y1, l=True)
-        self._edge(False)
-        time.sleep(settle)
+        if self.where()[2] & btn:
+            self._edge(False, btn=btn)
+        self._edge(True, btn=btn)
+        self.to(x1, y1, l=btn == 1, r=btn == 2)
+        self._edge(False, btn=btn)
+        _wait(self.m, settle, "drag/menu")
 
 
 def main():

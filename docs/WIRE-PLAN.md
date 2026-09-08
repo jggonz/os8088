@@ -537,7 +537,7 @@ Every row registered in `tests/suite.py` or exempted with a reason
   when a third client wants it.
 - **Resuming a broken transfer**: no `Range:`; a failure is retried whole.
 
-## 12. Archives and run-from-RAM — the second wave (SPEC.md §88.13, §88.14, §62.9.16)
+## 12. Archives and run-from-RAM — the second wave (SPEC.md §92.13, §92.14, §62.9.16)
 
 §11's first deferred item, folder-tree sidecars, is answered by a container
 rather than by a path field: one HTTP stream carries the tree, entries carry
@@ -564,7 +564,7 @@ decided the shape:
    game archive names `RUNCPM` and paths under `A/1/`, and lands beside a
    RunCPM that is already there on either path.
 
-**The arithmetic on the 640KB XT** is in §88.14, and it was measured: the
+**The arithmetic on the 640KB XT** is in §92.14, and it was measured: the
 whole 360KB curation as one archive mounts and unpacks and RunCPM then fails
 to get a region, so the website publishes a CORE archive (the package, CCP,
 `.SUB`s, DRI utilities, MBASIC — 132KB unpacked) that runs beside RunCPM on
@@ -575,6 +575,6 @@ archives on the site (the master disk ships first; each game is a decision
 about redistribution the site's owner takes), and WEAVE/LOOM as archives (they
 work as sidecar records and would only gain the one-connection saving).
 
-**The clip defect fixed in the same wave** (§88.6.1): the wake handler drew
+**The clip defect fixed in the same wave** (§92.6.1): the wake handler drew
 the buttons into the window Load Program had just opened. It was a background
 painter that never armed §11.3's region.

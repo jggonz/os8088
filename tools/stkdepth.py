@@ -5,10 +5,11 @@
     python3 tools/stkdepth.py drivers/ether/ether.asm            # every root
 
 `tools/stkwater.py` says HOW DEEP a task slice went; this says WHERE, and it
-says it without an emulator, a network or a lucky sample. `SCH_STACK` is 384
-bytes for every background task (SPEC.md 8) and `ETHER.DRV`'s service worker
-has been measured at 208 of them, so "which chain do we cut" is a question with
-a numeric answer and this is what answers it.
+says it without an emulator, a network or a lucky sample. A background task
+gets the smallest slot class that fits what it declared, 128 to `SCH_STACK` =
+384 (SPEC.md 8.7), and `ETHER.DRV`'s service worker has been measured at 208
+of a 384 slice, so "which chain do we cut" is a question with a numeric answer
+and this is what answers it.
 
 --- WHAT IT COUNTS ---------------------------------------------------------
 The NASM listing, not the source: `%if` is already resolved and every byte has

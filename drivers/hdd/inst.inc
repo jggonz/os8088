@@ -2447,20 +2447,31 @@ hd_ilvl_bx:
 ; in:  SI -> its NUL name (hd_ient's, or a literal for KERNEL.SYS)
 ; out: CF=1 and [hd_imsg] set
 ;
-; Two shapes, and the split is SPEC.md 18.4.4's: a file that fits the buffer
-; is one read and one write, and a bigger one is a run of chunked takes. The
-; chunk is the BUFFER, which is a whole number of KB and therefore of clusters
-; on every geometry this kernel mounts - the rule that has to hold at BOTH
-; ends, since the destination's cluster size need not equal the source's.
+; ONE SHAPE: a run of chunked takes, however small the file. The chunk is the
+; BUFFER, which is a whole number of KB and therefore of clusters on every
+; geometry this kernel mounts - the rule that has to hold at BOTH ends, since
+; the destination's cluster size need not equal the source's.
 ;
-; A SYSTEM file goes through the _SYS twin of whichever verb the shape needs
-; (SPEC.md 19.6.1) so it lands hidden and system exactly as it is on the
-; floppy. BOTH shapes have one now, which is what removed this routine's only
-; refusal: append used to meet the two bits the create had stamped, so a
-; system file had to fit the buffer WHOLE, and the largest file the installer
-; carries - KERNEL.SYS - is a system file. hd_ibuf_get's HIW_KMAXKB is a speed
-; choice today; it was a capability one, and on a machine that took the 32KB
-; fallback the answer was that the disk you booted from cannot be installed.
+; **IT WAS TWO SHAPES AND THAT IS WHAT BROKE IT** (SPEC.md 52.10.13). A file
+; that fitted the buffer took one OSAPI_FILE_READ and one OSAPI_FILE_WRITE,
+; and OSAPI_FILE_READ IS THE TRANSPARENT ONE (SPEC.md 20.14.3): a compressed
+; source arrived EXPANDED and was installed as a plain file, hint and all
+; gone. The chunked shape used OSAPI_FILE_READ_AT and was raw and correct all
+; along - so the two shapes disagreed about the one thing they had to agree
+; on, and which one a file got was decided by its size. `README.TXT` is 8,850
+; bytes on the disk and 16,304 expanded; it took the whole-file shape, and an
+; installed machine carried the bigger one.
+;
+; Deleting the shape rather than repairing it is the fix, because the defect
+; was the SPLIT. For a file that fits, the loop below is the same two calls
+; plus a compare - `hd_isrc_here` is already standing in the source, so its
+; OSAPI_FILE_GOTO_Q is a compare and a return (SPEC.md 18.9.1).
+;
+; A SYSTEM file goes through the _SYS twin of each verb (SPEC.md 19.6.1) so it
+; lands hidden and system exactly as it is on the floppy. That is also what
+; removed this routine's only refusal: append used to meet the two bits the
+; create had stamped, so a system file had to fit the buffer WHOLE, and the
+; largest file the installer carries - KERNEL.SYS - is a system file.
 ; -----------------------------------------------------------------------------
 hd_icopy_one:
     push ax
@@ -2512,32 +2523,7 @@ hd_icopy_one:
     jne .notmine
 .mine:
 
-    ; Does it fit the buffer whole? A 32-BIT compare, and it has to be: the
-    ; buffer is up to HIW_KMAXKB and `kb << 10` overflows a word at 64KB, so
-    ; the 16-bit version made every file of 64KB or more take the chunked path
-    ; - including KERNEL.SYS, which is a system file and cannot be appended to
-    ; (SPEC.md 18.4.4). It refused the one file the whole feature exists for.
-    call hd_ibufbytes           ; DX:AX = the buffer's capacity
-    cmp dx, [hd_isize+2]
-    ja .whole
-    jb .chunked
-    cmp ax, [hd_isize]
-    jb .chunked
-.whole:
-
-    ; --- the whole-file shape ------------------------------------------------
-    HDBSTEP 3
-    call hd_iread_whole
-    jc .fail
-    HDBSTEP 4
-    call hd_idst_here
-    jc .fail
-    HDBSTEP 5
-    call hd_iwrite_whole
-    jc .fail
-    jmp short .ok
-
-    ; --- and the chunked one (SPEC.md 18.4.4) --------------------------------
+    ; --- the copy (SPEC.md 18.4.4, 52.10.13) ---------------------------------
     ; No species test HERE any more, and its absence is the fix rather than a
     ; simplification. It read `cmp byte [hd_isys], 0 / jne .toobig` - "a system
     ; file cannot be appended to" - which was true of the kernel it was written
@@ -2548,7 +2534,6 @@ hd_icopy_one:
     ; from is carrying, and a kernel that grew past 96KB would have got the
     ; same answer on every machine. OSAPI_FILE_APPEND_SYS is the door
     ; (SPEC.md 19.6.1); hd_ibuf_get's size is a speed choice now.
-.chunked:
 .chunk:
     HDBSTEP 6
     call hd_isrc_here
@@ -2569,13 +2554,23 @@ hd_icopy_one:
     add [hd_ioff], ax           ; the next read starts exactly there
     adc word [hd_ioff+2], 0
 
-    mov ax, [hd_ioff+2]         ; ...and STOP when that is the whole file,
-    cmp ax, [hd_isize+2]        ; instead of going round to be told so. The
-    jb .chunk                   ; extra pass costs a source remount and a
-    ja .ok                      ; directory walk to answer 0 bytes, which
-    mov ax, [hd_ioff]           ; hd_istat already told us at the top - the
-    cmp ax, [hd_isize]          ; loop knows it is finished the moment the
-    jb .chunk                   ; offset reaches the size (SPEC.md 52.10.7)
+    call hd_ichunk              ; ...and STOP on a SHORT take, instead of going
+    cmp ax, [hd_itake]          ; round to be told so: the extra pass costs a
+    ja .ok                      ; source remount and a directory walk to answer
+    jmp .chunk                  ; 0 bytes (SPEC.md 52.10.7).
+                                ;
+                                ; THE SHORT TAKE AND NOT [hd_isize], which is
+                                ; what the test used to be. OSAPI_FILE_READ_AT
+                                ; is RAW and OSAPI_FILE_FIND's size is what the
+                                ; file EXPANDS to (SPEC.md 20.14.3), so on a
+                                ; compressed file the offset reached the end of
+                                ; the data and never reached that number - the
+                                ; loop went round once more for nothing. A take
+                                ; shorter than one full chunk is the end of the
+                                ; file whatever the file is, which is the only
+                                ; terminator a RAW copier can use and the rule
+                                ; the whole-file shape got wrong by not having
+                                ; a loop at all
 .notmine:                       ; SPEC.md 52.10.12: not the apps phase's
 .ok:
     clc
@@ -2648,57 +2643,6 @@ hd_istat:
     pop dx
     pop cx
     pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_iread_whole / hd_iwrite_whole - the small-file shape (module internal)
-; -----------------------------------------------------------------------------
-hd_iread_whole:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push es
-    mov es, [hd_ibufseg]
-    xor bx, bx
-    mov si, hd_iname
-    call hd_ibufbytes           ; DX:AX = the capacity, 32-bit
-    mov cx, ax                  ; ...and DX:CX is what the slot takes
-    call OSAPI_FILE_READ
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-hd_iwrite_whole:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push es
-    mov es, [hd_ibufseg]
-    xor bx, bx
-    mov si, hd_iname
-    mov cx, [hd_isize]
-    mov dx, [hd_isize+2]
-    cmp byte [hd_isys], 0
-    jne .sys
-    call OSAPI_FILE_WRITE
-    jmp short .out
-.sys:
-    call OSAPI_FILE_WRITE_SYS   ; hidden + system, as it is on the floppy
-.out:
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

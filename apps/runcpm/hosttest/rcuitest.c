@@ -284,6 +284,15 @@ int  os88_task_spawn(void *win)
     spawned++;
     return 0;
 }
+/* SPEC.md 66.6.2, declared right after the spawn takes - and the harness
+ * checks the LOCK the same way, because it is on that same path */
+static int restartable;
+int  os88_task_restartable(int on)
+{
+    need_lock("task_restartable");
+    restartable = on;
+    return 0;
+}
 void os88_wm_destroy(void *win) { need_lock("wm_destroy"); destroyed++; }
 void os88_task_alive(void *win)
 {
@@ -1786,7 +1795,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
     if (rc_bells != 0) { printf("FAIL: the overrun bell was not serviced\n"); fails++; }
     rc_khead = rc_ktail = 0;
 
-    /* A 40KB TYPE (docs/RUNCPM-PORT-PLAN.md wave 5): 512 lines of 78
+    /* A 40KB TYPE (docs/plans/completed/RUNCPM-PORT-PLAN.md wave 5): 512 lines of 78
      * characters put out three lines a slice - the pacing the target's slice
      * length gives a TYPE loop (~2 control transfers a byte, a few hundred
      * bytes a slice on the 8088) - and flushed once a slice. Nothing may

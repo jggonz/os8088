@@ -301,9 +301,9 @@ clip_reloc:
                                 ; clip_reloc; and the clipboard holds at most
                                 ; one claim at a time (clip_drop frees before
                                 ; clip_put claims), so there is never a second
-                                ; record naming this proc. dsk_dseg_reloc is
-                                ; the one proc that runs for blocks it does
-                                ; not own and it keeps its scan; this is not
+                                ; record naming this proc. mem_region_reloc is
+                                ; the one walk that runs for blocks it does
+                                ; not own and it scans by VALUE; this is not
                                 ; that
 
 section .bss

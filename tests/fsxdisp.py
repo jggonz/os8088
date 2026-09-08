@@ -79,6 +79,7 @@ import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dispcp                                                # noqa: E402
+import os88build
 from os88fixture import need                                 # noqa: E402
 
 # desk.inc's zone layout and files.inc's row layout both come from os88geom
@@ -111,7 +112,7 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_both_gla_mono")
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/fsxtest360.img")
+    ap.add_argument("--apps", default=os88build.at("build/fsxtest360.img"))
     ap.add_argument("--primary", choices=("auto", "herc", "cga"),
                     default="auto",
                     help="which card the KERNEL drives; anything but auto "

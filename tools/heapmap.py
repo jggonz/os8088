@@ -12,10 +12,18 @@ Reads, per sample:
   mem_tab                 - MEM_MAX records of MC_SIZE (.lowbss, LOW_SEG)
 
 A record is base segment, size in paragraphs, owner, the page-safe DMA head,
-and MC_RLOC - which is 0 for PINNED and the near offset of a relocation proc
-otherwise (SPEC.md 66.2). That last word is the whole point: "can this claim
-be compacted" is a machine-readable fact, not something to grep the drivers
-for.
+MC_RLOC - which is 0 for PINNED and the near offset of a relocation proc
+otherwise (SPEC.md 66.2) - and, in MC_DMA's top bit, the DOOR it came in by.
+Those last two are the whole point: "can this claim be compacted, and WHERE TO" is a
+machine-readable fact, not something to grep the drivers for.
+
+THE DOOR BIT IS HALF THE ANSWER AND WAS MISSING HERE. A claim goes back through the
+door it came in by (SPEC.md 66.4.1): the ascending pass packs the bottom-up
+claims down and must not drag a top-down one with it, and the descending pass
+is the mirror. Without the bit, `compacted()` below packed EVERY movable claim
+downwards and over-reported the room a claimant can have by the whole ceiling
+stack - a driver image, a kernel module, a package's region. It models both
+passes now, and says which one `mem_compact` would pick.
 
 Import it, or run it against a live QMP socket:
 
@@ -29,18 +37,21 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import os88geom                                               # noqa: E402
 import os88sym                                              # noqa: E402
 
 MEM_MAX = 32
-MC_SIZE = 10
+MC_SIZE = os88geom.MC_SIZE
 MC_SEG, MC_PARA, MC_OWN, MC_DMA, MC_RLOC = 0, 2, 4, 6, 8
+MC_DMA_HI = os88geom.MC_DMA_HI      # MC_DMA bit 15: the door it came in by
+MC_DMA_HEAD = os88geom.MC_DMA_HEAD  # ...and the page-safe head under it
 INST_MAX = 12
 
 # 0xFF00 | tag - the kernel's own claims (SPEC.md 50.2); 0xFB..0xFE in the
 # high byte is a PURGEABLE tag carrying its priority (50.6.4).
 KTAG = {0xFF01: "SAVE",  0xFF03: "DRV",   0xFF04: "COPY",
         0xFF06: "ASC",   0xFF07: "CLIP",  0xFF08: "MOD",  0xFF09: "CLONE",
-        0xFF0A: "BAND",  0xFF0B: "OVL",   0xFF0C: "HIB"}
+        0xFF0A: "BAND",  0xFF0B: "OVL",   0xFF0C: "HIB",  0xFF0D: "CMPR"}
 # Purgeable RANGES: base -> (name, count). The consumer adds an ordinal to the
 # base, so these are decoded before the exact-match table (SPEC.md 50.6).
 # 0xFF05 was MEM_K_FATW until the FAT window became a cache (SPEC.md 18.8.4).
@@ -114,13 +125,15 @@ def u16(b, i=0):
 
 
 class Claim(object):
-    __slots__ = ("seg", "para", "own", "dma", "rloc")
+    __slots__ = ("seg", "para", "own", "dma", "rloc", "hi")
 
     def __init__(self, r):
         self.seg = u16(r, MC_SEG)
         self.para = u16(r, MC_PARA)
         self.own = u16(r, MC_OWN)
-        self.dma = u16(r, MC_DMA)
+        place = u16(r, MC_DMA)          # ONE WORD, two placement facts:
+        self.dma = place & MC_DMA_HEAD  # the page-safe head...
+        self.hi = (place & MC_DMA_HI) != 0   # ...and the door it came in by
         self.rloc = u16(r, MC_RLOC)
 
     @property
@@ -140,12 +153,13 @@ class Claim(object):
         return PGO_MIN <= (self.own >> 8) <= PGO_MAX
 
     def key(self):
-        return (self.seg, self.para, self.own, self.rloc)
+        return (self.seg, self.para, self.own, self.rloc, self.hi)
 
     def __repr__(self):
-        return ("%05X..%05X %7.1fK  %-14s %s%s"
+        return ("%05X..%05X %7.1fK  %-14s %-8s %s%s"
                 % (self.seg << 4, self.end << 4, self.kb, owner(self.own),
-                   "PINNED " if self.pinned else "movable",
+                   "PINNED" if self.pinned else "movable",
+                   "top-down" if self.hi else "bottom-up",
                    "  dma-head %d para" % self.dma if self.dma else ""))
 
 
@@ -203,7 +217,7 @@ class Map(object):
             out.append((at, self.top - at))
         return out
 
-    def compacted(self):
+    def compacted(self, up=False):
         """Free runs after mem_claim's FULL refusal path (SPEC.md 66.9).
 
         `runs(drop_purgeable=True)` models the shed and stops there, which was
@@ -215,6 +229,14 @@ class Map(object):
         the two differ by every movable claim that sits above a cache, which
         on a 640K boot is `kern:ASC` and 6.5K of stranded floor.
 
+        `up=False` is the ASCENDING pass and `up=True` the DESCENDING one
+        (SPEC.md 66.4.1), and the difference is not a detail: **a claim goes
+        back through the door it came in by**, so each pass moves only its own
+        half and treats the other half as a wall. Modelling one pass over both
+        halves - which this did before MC_HI was read - packs every driver
+        image, kernel module and package region down onto the floor and
+        promises room the kernel will never produce.
+
         This is a MODEL of the kernel's walk and not a reading of it, which is
         the one thing about this line to keep in mind: SPEC.md 66.4 says the
         plan and the run disagreeing is how this feature promises room it does
@@ -222,19 +244,34 @@ class Map(object):
         third thing that can disagree. It is here because nothing else can see
         the number at all.
         """
-        out, at = [], self.base
-        for c in self.claims:
-            if c.purgeable:                     # dissolved, not walked past
+        out = []
+        if not up:
+            at = self.base
+            for c in self.claims:
+                if c.purgeable:                 # dissolved, not walked past
+                    continue
+                if c.pinned or c.hi:            # a barrier: the gap under it
+                    if c.seg > at:              # is a run, and the fill point
+                        out.append((at, c.seg - at))    # resumes above it
+                    at = c.end
+                else:
+                    at += c.para                # packs down onto the fill point
+            if self.top > at:
+                out.append((at, self.top - at))
+            return out
+        at = self.top                           # the mirror, from the ceiling
+        for c in reversed(self.claims):
+            if c.purgeable:
                 continue
-            if c.pinned:                        # a barrier: the gap under it
-                if c.seg > at:                  # is a run, and the fill point
-                    out.append((at, c.seg - at))  # resumes above it
-                at = c.end
+            if c.pinned or not c.hi:
+                if c.end < at:
+                    out.append((c.end, at - c.end))
+                at = c.seg
             else:
-                at += c.para                    # packs down onto the fill point
-        if self.top > at:
-            out.append((at, self.top - at))
-        return out
+                at -= c.para
+        if at > self.base:
+            out.append((self.base, at - self.base))
+        return sorted(out)
 
     def report(self, label):
         print("\n=== %s ===" % label)
@@ -255,10 +292,21 @@ class Map(object):
             if any(c.purgeable for c in self.claims):
                 print("  ...WITH THE CACHES SHED: %.1fK, in %d run(s)"
                       % (max(p for _, p in sh) / 64.0, len(sh)))
-            cp = self.compacted()
-            print("  ...AND AFTER A COMPACTION: %.1fK, in %d run(s) - what a "
-                  "claimant can actually have (modelled)"
-                  % (max(p for _, p in cp) / 64.0, len(cp)))
+            asc, dsc = self.compacted(), self.compacted(up=True)
+            bigasc = max(p for _, p in asc) / 64.0 if asc else 0.0
+            bigdsc = max(p for _, p in dsc) / 64.0 if dsc else 0.0
+            print("  ...AFTER AN ASCENDING PASS:  %.1fK, in %d run(s)"
+                  % (bigasc, len(asc)))
+            print("  ...AFTER A DESCENDING PASS:  %.1fK, in %d run(s)"
+                  % (bigdsc, len(dsc)))
+            # mem_compact TRIES ASCENDING FIRST and flips only when that plan
+            # is not worth running (SPEC.md 66.4.1), so the bigger number is
+            # not automatically the one a claimant gets - it is the one the
+            # kernel would pick, and for a small ask that is the ascending
+            # pass even when the descending one would free more.
+            print("  ...WHAT A CLAIMANT CAN HAVE: %.1fK - the ASCENDING "
+                  "figure unless that plan is not worth running, in which "
+                  "case mem_compact flips (all modelled)" % bigasc)
         else:
             print("  free runs: none")
 

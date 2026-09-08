@@ -36,8 +36,8 @@ checked second, three ways:
 
   * "SPEC.md §N"        -> SPEC.md, always;
   * "<DOC> §N"          -> that document, where <DOC> is any tracked .md file
-                           named in full (`docs/ASSOC-PLAN.md`) or by its
-                           upper-case stem (ASSOC-PLAN, SPEC);
+                           named in full (`docs/plans/completed/ASSOC-PLAN.md`)
+                           or by its upper-case stem (ASSOC-PLAN, SPEC);
   * a bare "§N"         -> SPEC.md, OR the containing file's own headings when
                            that file numbers its sections.
 
@@ -65,7 +65,12 @@ CITE = re.compile(r"(?:SPEC\.md\s+§?|§)(\d{1,2}(?:\.\d+)*(?:/\d{1,2}(?:\.\d+)*
 # The document a citation is qualified with, immediately before it. Upper-case
 # only, so an ordinary word ending a sentence cannot be read as a file name -
 # and the whole token is taken, so "REDRAW-SPEC.md" is never "SPEC.md".
-QUAL = re.compile(r"`?((?:docs/)?(?:[A-Z][A-Z0-9-]*\.md|[A-Z][A-Z0-9-]*))`?\s+$")
+# The directory part is ANY lower-case path, not just `docs/`: the plans moved
+# under docs/plans/ and docs/history/, and a citation naming one in full is the
+# normal way they are written. Only the basename is used to resolve (`stems`),
+# so the depth never matters - but a prefix the pattern cannot match makes the
+# citation look UNQUALIFIED, which silently checks it against SPEC.md instead.
+QUAL = re.compile(r"`?((?:[a-z][a-z0-9_-]*/)*(?:[A-Z][A-Z0-9-]*\.md|[A-Z][A-Z0-9-]*))`?\s+$")
 # PERFORMANCE.md's field sets are headings too, and `HEAD` cannot see one: the
 # word "Set" sits between the hashes and the number, so `### Set 93` is not a
 # numbered heading by that grammar and neither is a citation of it - those are
@@ -113,18 +118,23 @@ HELD = set()
 # HISTORICAL PAIRS are the reason this is a table and not an equality. The
 # sweep's own record quotes where it STARTED, and those numbers are correct
 # and must never be "fixed" to the current ones - SPEC.md 6.6.5's "111 sites
-# in 49 files" is where the last batch began (docs/TEXT-PLAN.md 4 item 6 says
-# so in as many words). A pair here is a claim that the number describes a
+# in 49 files" is where the last batch began (docs/plans/completed/TEXT-PLAN.md
+# 4 item 6 says so in as many words). A pair here is a claim that the number
+# describes a
 # moment other than now; give the moment.
 SITES = re.compile(r"(\d+) sites? in (\d+) files?")
 SITES_HIST = {
-    (189, 61): "docs/TEXT-PLAN.md 2 - where the ratchet started",
-    (111, 49): "SPEC.md 6.6.5 / docs/TEXT-PLAN.md 4 item 6 - where the LAST "
+    (189, 61): "docs/plans/completed/TEXT-PLAN.md 2 - where the "
+               "ratchet started",
+    (111, 49): "SPEC.md 6.6.5 / docs/plans/completed/TEXT-PLAN.md 4 item 6 - where the LAST "
                "batch started, which is not where the sweep started",
-    (37, 17): "SPEC.md 6.6.5 / docs/TEXT-PLAN.md 4.4 - what stage 4 LEFT. "
+    (37, 17): "SPEC.md 6.6.5 / docs/plans/completed/TEXT-PLAN.md 4.4 - what stage 4 LEFT. "
               "Sheet and Chart (SPEC.md 81, 83) were written on main while "
               "6.6 was being written here, so they joined the ratchet at the "
               "merge and neither number is the sweep's account of itself",
+    (59, 20): "docs/reports/TIER-TIMINGS-2026-09-07.md - what the suite read "
+              "on 7 Sep 2026, before SCRIBE's two inherited sites joined the "
+              "ratchet at its merge (SPEC.md 94.1)",
 }
 
 
@@ -193,7 +203,7 @@ def main() -> int:
     tracked = [f for f in tracked if not f.startswith("build/")]
 
     docs = {f: headings(f) for f in tracked if f.endswith(".md")}
-    # ASSOC-PLAN -> docs/ASSOC-PLAN.md, SPEC -> SPEC.md, and so on.
+    # ASSOC-PLAN -> docs/plans/completed/ASSOC-PLAN.md, SPEC -> SPEC.md, and so on.
     stems = {f.rsplit("/", 1)[-1][:-3].upper(): f for f in docs}
     spec = docs["SPEC.md"]
 

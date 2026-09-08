@@ -10,7 +10,7 @@
 ; *.O88 over 64KB is still a package, that flags bit 2 means the file is
 ; longer than the image on purpose, and it tells your ENTRY PROC the name of
 ; the file it came out of. There is no .o88 v6, no kernel-parsed block and no
-; API slot. docs/O88-MULTISEG-PLAN.md 1 is why - the kernel-side version of
+; API slot. docs/plans/completed/O88-MULTISEG-PLAN.md 1 is why - the kernel-side version of
 ; this was built to five waves and thrown away at 2,560 resident bytes.
 ;
 ; --- what you write ----------------------------------------------------------
@@ -88,6 +88,18 @@ OP_XMS        equ 1             ; flags (SPEC.md 20.12.4) - later waves
 OP_ZERO       equ 2
 OP_OPT        equ 4
 OP_LAZY       equ 8
+OP_COMP       equ 16            ; ...and the part is COMPRESSED on the disk
+                                ; (SPEC.md 20.12.7). `len` below stays the
+                                ; UNPACKED byte count - it is what sizes the
+                                ; claim, so a refusal still costs no disk -
+                                ; and `zkb`, which the macro already forbids
+                                ; on a file-backed row, carries the packed one
+OP_MARGIN     equ 0             ; what a compressed run needs ABOVE its
+                                ; unpacked bytes: NOTHING, since every stream
+                                ; ends in a raw tail (SPEC.md 20.13.7) - the
+                                ; name is kept because the arithmetic below
+                                ; is written in terms of it and reads better
+                                ; with the term in than with it silently gone
 
 OP_ROW        equ 8             ; db kind, db flags, dw off (512-byte units),
 OP_R_KIND     equ 0             ; dw len, dw zkb - off and len are os88pkg.py's
@@ -95,7 +107,19 @@ OP_R_FLAG     equ 1             ; and zkb is yours
 OP_R_OFF      equ 2
 OP_R_LEN      equ 4
 OP_R_ZKB      equ 6             ; KB of zero-filled scratch, OP_ZERO rows only
+                                ; - or the PACKED byte count on an OP_COMP row,
+                                ; or a fetched OP_LAZY row's segment. One word,
+                                ; three meanings, and no two of them can be on
+                                ; the same row: the macro below refuses every
+                                ; pairing (SPEC.md 20.12.7)
 OP_T_ROWS     equ 10            ; the rows start past the magic and the count
+OP_T_FMT      equ 9             ; ...and the byte before them is the FORMAT the
+                                ; OP_COMP rows use: 0 = LZ4, 1 = LZB, and
+                                ; meaningless with no such row. It is the
+                                ; table's own reserved byte, which os88pkg.py
+                                ; validated as zero and now writes - the
+                                ; package's own scope, so it needs nothing of
+                                ; the header's and nothing of the kernel's
 
 OP_CHUNK      equ 32768         ; bytes a read moves at a time: a multiple of
                                 ; EVERY legal cluster size (512 bytes to 32KB,
@@ -154,6 +178,15 @@ op_t_n:
     %if ((%2) & OP_LAZY) && ((%2) & OP_XMS)
         %error "OP_LAZY with OP_XMS: the parts above 1MB are ONE block claimed and filled at load, so a lazy member would force that block to be claimed anyway"
     %endif
+    %if ((%2) & OP_COMP) && ((%2) & OP_ZERO)
+        %error "OP_COMP on a scratch part: there are no file bytes to compress, and zkb is the KB it asks for"
+    %endif
+    %if ((%2) & OP_COMP) && ((%2) & OP_LAZY)
+        %error "OP_COMP with OP_LAZY: a lazy row's zkb word banks the segment it was fetched into, and a compressed row's carries its packed length - one word, and a fetched part would overwrite the length it needs to be fetched again"
+    %endif
+    %if ((%2) & OP_COMP) && ((%2) & OP_XMS)
+        %error "OP_COMP with OP_XMS: the span above 1MB is staged through a transient conventional buffer a chunk at a time, and a stream cannot be expanded a chunk at a time - the parts up there are stored plain"
+    %endif
     db %1                       ; +0 kind
     db %2                       ; +1 flags
     dw 0                        ; +2 off, in 512-byte units - the packer's
@@ -185,7 +218,7 @@ op_t_n:
 ; THE ORDER IS THE POINT. Sizing comes first and reads nothing: the table is
 ; already in front of us, so a machine that cannot fit this package is told so
 ; before a single disk revolution is spent - which is the third thing the
-; whole design exists for (docs/O88-MULTISEG-PLAN.md 0).
+; whole design exists for (docs/plans/completed/O88-MULTISEG-PLAN.md 0).
 ; -----------------------------------------------------------------------------
 op_load:
     ; --- the name, out of the kernel's buffer and into ours ----------------
@@ -293,6 +326,10 @@ op_load:
     je .zero
     call op_read
     jc .ioerr
+    cmp byte [op_zn], 0         ; ...and if any of it arrived COMPRESSED, walk
+    je .zero                    ; it down out of where it landed (20.12.7). It
+    call op_unpack              ; is the only thing a compressed part costs at
+    jc .fail                    ; run time, and op_unpack has said why
 .zero:
     call op_scrub               ; ...and the scratch, which cost no disk
     cmp byte [op_xmson], 0
@@ -303,6 +340,9 @@ op_load:
     clc
     ret
 
+.fail:                          ; op_unpack has already put its own message up
+    stc
+    ret
 .toobig:
     mov si, op_s_big
     jmp op_say
@@ -335,6 +375,9 @@ op_size:
     mov word [op_secs], 0
     mov word [op_tail], 0
     mov word [op_bytes], 0
+    mov word [op_usecs], 0
+    mov word [op_ubytes], 0
+    mov byte [op_zn], 0
     mov word [op_reqkb], 0
     mov word [op_allkb], 0
     mov word [op_xoff], 0
@@ -363,7 +406,7 @@ op_size:
     jmp .next                   ; A LAZY PART IS IN NO TOTAL AND IN NO RUN.
                                 ; That is the whole of what lazy is here: not
                                 ; a mechanism, a row this loop steps over
-                                ; (docs/O88-MULTISEG-PLAN.md 6.3). op_fetch
+                                ; (docs/plans/completed/O88-MULTISEG-PLAN.md 6.3). op_fetch
                                 ; claims and reads it later, on its own, and
                                 ; os88pkg.py has put every lazy row AFTER the
                                 ; run so stepping over one cannot leave a hole
@@ -416,14 +459,47 @@ op_size:
     mov bx, ax                  ; the first filed row anchors the run
 .have:
     push cx
-    mov cx, [si+OP_R_LEN]       ; the row's length is in BYTES; the run is
-    add cx, 511                 ; measured in whole sectors, because that is
-    jc .ovfc                    ; the granularity a part is laid out on
     push ax
-    mov ax, cx
+    mov ax, [si+OP_R_LEN]       ; the UNPACKED total, which is what the CLAIM
+    add ax, 511                 ; is cut from - so a compressed row costs the
+    jc .ovfd                    ; machine exactly what it would have cost
+    mov cl, 9                   ; uncompressed, and refusing still reads no
+    shr ax, cl                  ; disk at all (SPEC.md 20.12.7)
+    add [op_usecs], ax
+    jc .ovfd
+    pop ax
+    push ax
+
+    mov cx, [si+OP_R_LEN]       ; ...and the DISK extent, which on a compressed
+    test byte [si+OP_R_FLAG], OP_COMP   ; row is the PACKED length in zkb. The
+    jz .clen                            ; two are the same run measured at its
+    mov cx, [si+OP_R_ZKB]               ; two ends
+    inc byte [op_zn]
+.clen:
+    mov [op_bend], cx           ; ...AND THE RUN'S EXACT BYTE END, which the
+                                ; sector count below is not. A part is padded
+                                ; UP to a sector in the file, but the last one
+                                ; is the end of the FILE - so a packed length
+                                ; that is not a sector multiple leaves those
+                                ; bytes not merely unread but ABSENT, and
+                                ; op_want asking for them is `Cannot read my
+                                ; parts` on a package that is entirely
+                                ; correct. Rows are laid out in increasing
+                                ; order, so the last one to reach here wins
+    add cx, 511                 ; the row's length is in BYTES; the run is
+    jc .ovfd                    ; measured in whole sectors, because that is
+    mov ax, cx                  ; the granularity a part is laid out on
     mov cl, 9
     shr ax, cl
     mov cx, ax
+    pop ax
+    push ax
+    sub ax, bx                  ; sectors from the run's start...
+    push cx
+    mov cl, 9
+    shl ax, cl                  ; ...as bytes, and the run is under 64KB
+    pop cx
+    add [op_bend], ax           ; ...so this is (off - first) * 512 + packed
     pop ax
     add ax, cx
     pop cx
@@ -483,7 +559,20 @@ op_size:
     mov cl, 9
     shl ax, cl                  ; sectors -> bytes; <= 65,536 by the test above
     mov [op_bytes], ax
-    mov ax, dx
+
+    ; ...and the same run at its UNPACKED end, which is what the CLAIM is cut
+    ; from. With no compressed row the two are equal by construction - the
+    ; packer lays each part at roundup512(len) past the one before - so
+    ; everything below reads exactly as it did (SPEC.md 20.12.7).
+    mov ax, [op_usecs]
+    cmp ax, 128
+    jae .bad                    ; the carve's own ceiling, on the side that
+                                ; decides the claim rather than the read
+    push ax
+    mov cl, 9
+    shl ax, cl
+    mov [op_ubytes], ax
+    pop ax
     inc ax
     shr ax, 1                   ; sectors -> KB, rounded up
     add [op_reqkb], ax          ; the carve is never optional: it is one claim
@@ -498,6 +587,10 @@ op_size:
     pop ax                      ; .ovfc's single pop it returned at depth +1
     stc                         ; and `ret` took the saved AX for its return
     ret                         ; address (SPEC.md 20.12)
+.ovfd:                          ; the .conv arm banks AX *and* CX, so its
+    pop ax                      ; overflow exit gives both back - .ovfc's
+    pop cx                      ; single pop returned at depth +1 and `ret`
+    jmp short .bad              ; took the saved word for its return address
 .ovfc:
     pop cx
     jmp short .bad
@@ -526,6 +619,7 @@ op_claim:
     mov word [op_slack], 0
     mov word [op_cap], 0
     mov word [op_runkb], 0
+    mov word [op_rpara], 0
     cmp word [op_secs], 0
     je .scratchonly             ; nothing to read: the claim is scratch alone
     mov ax, [op_first]          ; the run's first sector -> its byte offset,
@@ -544,7 +638,7 @@ op_claim:
     mov [op_off], ax            ; ...and the read starts there
     mov [op_off+2], dx
 
-    mov ax, [op_bytes]          ; capacity = slack + the run, rounded up to a
+    mov ax, [op_bend]           ; capacity = slack + the run, rounded up to a
     add ax, bx                  ; whole number of clusters, which is the
     jc .no                      ; slot's other precondition. THE CARRY IS THE
     push ax                     ; ...and before the rounding, THIS is what has
@@ -564,6 +658,47 @@ op_claim:
     and ax, dx
     mov [op_cap], ax
 
+    ; --- R: how far UP the packed run lands (SPEC.md 20.12.7) --------------
+    ; The image's trick one level up, and the same arithmetic: read the packed
+    ; bytes high enough that expanding them downwards can never overtake the
+    ; source. At the start of part i the write pointer is at sum(len) and the
+    ; read pointer at R + sum(packed), both over the rows before it - so the
+    ; gap is R - (unpacked - packed) accumulated, which is at its smallest at
+    ; the very end and is OP_MARGIN there by construction. Within one part the
+    ; measured margin bounds the dip, and os88pkg.py refuses a part that needs
+    ; more than OP_MARGIN.
+    ;
+    ; **AND THE EXTRA SECTOR IS NOT A ROUNDING HABIT.** Both totals above are
+    ; measured in whole SECTORS, so a row contributes roundup512(len) to one
+    ; and roundup512(packed) to the other - and what row i actually needs is
+    ; (len - packed) + its own measured margin, in EXACT bytes. The telescoping
+    ; leaves gap(i) >= (roundup512(len) - roundup512(packed)) + OP_MARGIN,
+    ; which is short of that by up to 511 when packed lands one byte past a
+    ; sector boundary and len lands on one. 512 closes it for every row at
+    ; once, and it is 512 bytes of claim ONCE - not per part.
+    cmp byte [op_zn], 0
+    je .plainrun                ; nothing compressed: R is 0 and the run lands
+    mov ax, [op_ubytes]         ; at the base, exactly as it always has
+    sub ax, [op_bytes]
+    add ax, OP_MARGIN + 512 + 15
+    jc .no
+    and ax, 0FFF0h
+    mov cl, 4
+    shr ax, cl
+    mov [op_rpara], ax          ; ...in paragraphs, which is what a segment
+.plainrun:                      ; adjustment takes
+
+    ; The claim's share for the run is R PLUS THE READ, and that one quantity
+    ; covers both things that have to fit: the read occupies R + op_cap from
+    ; the base, and the unpacked carve occupies slack + op_ubytes - and
+    ; R + op_cap >= (unpacked - packed + margin) + (slack + packed), which is
+    ; slack + unpacked + margin, so the read is always the larger. With
+    ; nothing compressed R is 0 and this is the line that was here before.
+    mov ax, [op_rpara]
+    mov cl, 4
+    shl ax, cl                  ; R, in bytes - it is under 64KB because
+    add ax, [op_cap]            ; op_ubytes is (op_size refuses 128 sectors)
+    jc .no
     add ax, 1023                ; the READ's share of the claim, in KB - the
     jc .no                      ; slack included, because the read starts at
     mov cl, 10                  ; the cluster below the run and those bytes
@@ -576,10 +711,11 @@ op_claim:
     ; with six parts must not make six claims. The scratch that was GRANTED is
     ; op_kb less the run's own KB - op_size put the run in both totals, and
     ; op_kb is whichever of them the machine allowed.
-    mov dx, [op_secs]
+    mov dx, [op_usecs]
     inc dx
     shr dx, 1                   ; DX = ceil(run sectors / 2), op_size's figure
-    mov bx, [op_kb]
+    mov bx, [op_kb]             ; - and op_size's is the UNPACKED one, which is
+                                ; what it put in both totals
     sub bx, dx                  ; BX = the granted scratch, in KB
     mov ax, [op_runkb]
     add ax, bx
@@ -589,6 +725,8 @@ op_claim:
     call OSAPI_MEM_CLAIM        ; out DX = the base segment
     jc .no
     mov [op_base], dx
+    add dx, [op_rpara]          ; ...and R paragraphs up is where op_read fills
+    mov [op_rdseg], dx
     clc
     ret
 .no:
@@ -615,7 +753,10 @@ op_claim:
 op_read:
     push bp
     mov di, [op_cap]            ; DI = bytes still to move
-    mov bp, [op_base]           ; BP = where the next chunk lands
+    mov bp, [op_rdseg]          ; BP = where the next chunk lands - which is
+                                ; the claim's base until a part is COMPRESSED,
+                                ; and R paragraphs above it when one is
+                                ; (SPEC.md 20.12.7). Every caller sets it
 .chunk:
     or di, di
     jz .done
@@ -667,7 +808,7 @@ op_read:
     ; now refuses at load with a message, instead of handing the package
     ; segments into a claim holding whatever the heap had. Wave 6's first
     ; consumer is what found it: C64 was about to grow a hand-written "is the
-    ; ROM really there" test that belongs here (docs/O88-MULTISEG-PLAN.md 11).
+    ; ROM really there" test that belongs here (docs/plans/completed/O88-MULTISEG-PLAN.md 11).
     cmp word [op_want], 0
     jne .fail
     push ds
@@ -681,6 +822,137 @@ op_read:
     pop bp
     stc
     ret
+
+; -----------------------------------------------------------------------------
+; op_unpack - walk the run down out of where it was read (SPEC.md 20.12.7)
+; out: CF=0; CF=1 = a stream was refused, and a toast has said so
+; clobbers: AX, BX, CX, DX, SI, DI, ES, flags
+;
+; **CALLED ONLY WHEN A ROW IS COMPRESSED**, and it is the whole of what a
+; compressed part costs at run time. op_read has put the PACKED run R
+; paragraphs up the claim; this walks the rows in order, moving the write
+; pointer by roundup512(len) and the read pointer by roundup512(packed), and
+; either EXPANDS the row or MOVES it down.
+;
+; THE GAP IS THE INVARIANT AND IT NEVER CLOSES. At the top of row i the write
+; pointer is at sum(len) and the read pointer at R + sum(packed), both over the
+; rows already done, so the gap is R - sum(len - packed) - and R was cut as
+; (total unpacked - total packed) + OP_MARGIN, so the gap is at its smallest
+; at the LAST row and is OP_MARGIN there. Inside one row the decoder's own
+; measured margin bounds the dip, and os88pkg.py refuses a part needing more
+; than OP_MARGIN. A plain row in between is a forward `rep movsb` down, which
+; is safe for the same reason and for the ordinary one as well.
+;
+; BOTH POINTERS ARE SEGMENTS WITH OFFSET ZERO. Every step is a multiple of 512
+; and therefore of 16, so the walk is paragraph arithmetic and nothing here
+; can carry past a segment - which is also what OSAPI_DECOMP wants (DI = 0,
+; SPEC.md 20.13.3).
+; -----------------------------------------------------------------------------
+op_unpack:
+    push bp
+    mov ax, [op_slack]
+    mov cl, 4
+    shr ax, cl                  ; the slack is a multiple of 512 (20.12.2)
+    mov dx, [op_base]
+    add dx, ax
+    mov bp, dx                  ; BP = where the next row LANDS
+    add dx, [op_rpara]
+    mov [op_zsrc], dx           ; ...and DX = where its bytes are NOW
+
+    mov si, op_table + OP_T_ROWS
+    mov cl, [op_t_n]
+    xor ch, ch
+.one:
+    or cx, cx
+    jnz .body
+    jmp .done
+.body:
+    cmp word [si+OP_R_OFF], 0
+    je .next                    ; scratch: no file bytes and no place in the run
+    test byte [si+OP_R_FLAG], OP_LAZY
+    jnz .next                   ; not in the run at all - and never compressed
+    test byte [si+OP_R_FLAG], OP_XMS
+    jz .inrun
+    cmp byte [op_xmson], 0
+    jne .next                   ; it went above 1MB and op_xload has it
+.inrun:
+    push cx
+    push si
+    test byte [si+OP_R_FLAG], OP_COMP
+    jz .plain
+
+    mov cx, [si+OP_R_ZKB]       ; --- expand it ------------------------------
+    mov dx, [si+OP_R_LEN]
+    push ds
+    mov al, [op_table + OP_T_FMT]   ; THE FORMAT, AND IT IS READ HERE BECAUSE
+    xor ah, ah                      ; op_table is OUR data - one instruction
+                                    ; later DS is the stream's and this byte is
+                                    ; unreachable. The first version banked the
+                                    ; source SEGMENT in AX instead and handed
+                                    ; the decoder its low half as the format,
+                                    ; which refused every stream: `A part will
+                                    ; not unpack` on a package whose bytes,
+                                    ; lengths and pointers were all correct
+    mov es, bp
+    mov bx, [op_zsrc]
+    mov ds, bx
+    xor si, si                  ; DS:SI is the stream, at the base of where the
+    xor di, di                  ; read put it - **and DI = 0**, which is the
+    xor bx, bx                  ; contract (SPEC.md 20.13.3). BX:DX is the
+                                ; 32-bit expected output and a part is 16 bits
+    call OSAPI_DECOMP           ; by os88pkg.py, so the high word is zero
+    pop ds
+    push ds
+    pop es
+    jc .refuse
+    pop si
+    push si
+    mov ax, [si+OP_R_ZKB]       ; the READ pointer moves by the PACKED length
+    jmp short .step
+.plain:                         ; --- or move it down, which is the same walk -
+    mov cx, [si+OP_R_LEN]
+    push ds
+    mov ax, [op_zsrc]
+    mov es, bp
+    mov ds, ax
+    xor si, si
+    xor di, di
+    cld
+    rep movsb
+    pop ds
+    push ds
+    pop es
+    pop si
+    push si
+    mov ax, [si+OP_R_LEN]
+.step:
+    add ax, 511                 ; both pointers step by whole SECTORS, which is
+    and ax, 0FE00h              ; the granularity a part is laid out on
+    mov cl, 4
+    shr ax, cl                  ; ...as paragraphs
+    add [op_zsrc], ax
+    mov ax, [si+OP_R_LEN]       ; ...and the landing pointer by the UNPACKED
+    add ax, 511                 ; length, rounded the same way
+    and ax, 0FE00h
+    mov cl, 4
+    shr ax, cl
+    add bp, ax
+    pop si
+    pop cx
+.next:
+    add si, OP_ROW
+    dec cx
+    jmp .one
+.done:
+    pop bp
+    clc
+    ret
+.refuse:
+    pop si
+    pop cx
+    pop bp
+    mov si, op_s_zbad
+    jmp op_say
 
 ; -----------------------------------------------------------------------------
 ; op_xload - the OP_XMS span, in ONE block above 1MB (SPEC.md 20.12.4)
@@ -903,7 +1175,9 @@ op_seg:
     test byte [si+OP_R_FLAG], OP_LAZY
     jz .notlazy
     mov ax, [si+OP_R_ZKB]       ; A LAZY ROW BANKS ITS SEGMENT IN ITS OWN zkb
-    jmp short .out              ; WORD, and 0 there means "not fetched". The
+    jmp .out                    ; WORD, and 0 there means "not fetched". The
+                                ; jump is NEAR: 20.12.7's walk went in below
+                                ; and .out is past it. The
                                 ; table is in the image, which is this
                                 ; instance's own RAM, so it is per-instance
                                 ; state that costs no bss and needs no second
@@ -922,6 +1196,10 @@ op_seg:
     or bx, bx
     jz .scratch                 ; no file bytes: it is in the scratch area
 
+    cmp byte [op_zn], 0
+    jne .zwalk                  ; a compressed row is in the table, so the
+                                ; claim is NOT the disk's layout any more
+
     mov ax, bx                  ; --- a filed part: inside the carved run ----
     sub ax, [op_first]          ; sectors past the run's start...
     mov cl, 5
@@ -930,6 +1208,54 @@ op_seg:
     mov cl, 4
     shr dx, cl                  ; the head slack in paragraphs - exact, because
     add ax, dx                  ; it is a multiple of 512 (SPEC.md 20.12.2)
+    add ax, [op_base]
+    jmp .out
+
+    ; --- ...or the UNPACKED layout, which op_unpack laid down (20.12.7) -----
+    ; The arithmetic above reads the DISK's layout - part i sits where its own
+    ; sectors sit - and that is exactly what compressing one breaks. So this
+    ; walks the rows instead and accumulates roundup512(len), which is where
+    ; op_unpack put each of them. **It answers the same address as the
+    ; arithmetic above when nothing is compressed** - the packer lays part i at
+    ; roundup512(len) past part i-1, so the sum IS (off - first) * 512 - which
+    ; is why the fast path can stay and why a package with no compressed part
+    ; is untouched.
+.zwalk:
+    push ax                     ; AL = the index we are placing
+    mov dx, [op_slack]
+    mov cl, 4
+    shr dx, cl                  ; DX = paragraphs from the base, running
+    xor bx, bx                  ; BX = the row we are stepping over
+.zw:
+    cmp bl, al
+    jae .zfound
+    push ax
+    mov ax, bx
+    call op_row                 ; SI -> row BX
+    pop ax
+    cmp word [si+OP_R_OFF], 0
+    je .zwnext                  ; scratch: not in the run
+    test byte [si+OP_R_FLAG], OP_LAZY
+    jnz .zwnext                 ; not in the run either
+    test byte [si+OP_R_FLAG], OP_XMS
+    jz .zwadd
+    cmp byte [op_xmson], 0
+    jne .zwnext                 ; it went above 1MB
+.zwadd:
+    push ax
+    mov ax, [si+OP_R_LEN]       ; the UNPACKED length, rounded to a sector
+    add ax, 511
+    and ax, 0FE00h
+    mov cl, 4
+    shr ax, cl
+    add dx, ax
+    pop ax
+.zwnext:
+    inc bx
+    jmp short .zw
+.zfound:
+    pop ax
+    mov ax, dx
     add ax, [op_base]
     jmp short .out
 
@@ -1209,19 +1535,26 @@ op_fetch:
     mov [op_cap], ax
 
     ; THE CARVE'S READ WORDS ARE BORROWED AND PUT BACK. op_read reads
-    ; [op_off] and [op_cap] into [op_base], there is exactly one read in
+    ; [op_off] and [op_cap] into [op_rdseg], there is exactly one read in
     ; flight at a time, and a lazy fetch is that same read pointed somewhere
     ; else - which is cheaper than a second copy of the chunk loop and
     ; honester than three more words of bss that are live for one call.
     ; op_seg reads [op_base] for every EAGER filed part, so it goes back
-    ; whatever happens.
+    ; whatever happens - and [op_rdseg] with it, because on a package with a
+    ; compressed part that is the base plus R and NOT the base (SPEC.md
+    ; 20.12.7). A lazy part is never compressed (the macro refuses the
+    ; pairing), so this one lands at the claim itself.
     pop dx
     push si
     push bx
     push dx
     push word [op_base]
+    push word [op_rdseg]
     mov [op_base], dx
+    mov [op_rdseg], dx
     call op_read
+    pop dx
+    mov [op_rdseg], dx
     pop dx
     mov [op_base], dx
     pop dx                      ; the claim
@@ -1247,6 +1580,9 @@ op_fetch:
 .nodisk:
     mov si, op_s_disk
     jmp op_say
+.fail:                          ; op_unpack has already put its own message up
+    stc
+    ret
 .toobig:
     mov si, op_s_big
     jmp op_say
@@ -1329,7 +1665,7 @@ op_row:
 ; NO DISK IS READ HERE and that is the whole of what a scratch part is: a
 ; working set DECLARED rather than claimed from the entry proc and refused
 ; afterwards, which is what every workaround in the tree does today
-; (docs/O88-MULTISEG-PLAN.md 2.3).
+; (docs/plans/completed/O88-MULTISEG-PLAN.md 2.3).
 ; -----------------------------------------------------------------------------
 op_scrub:
     xor bx, bx
@@ -1390,6 +1726,7 @@ op_s_mem:   db 'Not enough memory', 0
 op_s_disk:  db 'No disk to read from', 0
 op_s_read:  db 'Cannot read my parts', 0
 op_s_lazy:  db 'Not a fetchable part', 0
+op_s_zbad:  db 'A part will not unpack', 0
 
 ; --- our bss, and YOURS FOLLOWS IT ------------------------------------------
 ; This SDK's bss is an equ chain off os88_image_end (SPEC.md 20.5), so the
@@ -1455,4 +1792,32 @@ op_tail     equ OP_BSS_AT + 71      ; ...less this: the sector padding AFTER the
                                     ; write (tools/os88pkg.py pads BEFORE each
                                     ; body and never after the last), so a run
                                     ; that ends the file arrives short by it
-OP_BSS      equ 73
+
+op_zn       equ OP_BSS_AT + 73      ; byte: how many rows carry OP_COMP. ZERO
+                                    ; IS THE WHOLE OF THE OLD BEHAVIOUR - every
+                                    ; path below tests it and takes exactly
+                                    ; what it took before, so a package with no
+                                    ; compressed part is unchanged to the
+                                    ; instruction (SPEC.md 20.12.7)
+op_usecs    equ OP_BSS_AT + 74      ; the run's UNPACKED length in sectors...
+op_ubytes   equ OP_BSS_AT + 76      ; ...and in bytes. The claim is cut from
+                                    ; these and the READ from op_secs/op_bytes,
+                                    ; and the two are the same run measured at
+                                    ; its two ends
+op_rpara    equ OP_BSS_AT + 78      ; R, in paragraphs: how far up the claim the
+                                    ; packed run lands so op_unpack can walk
+                                    ; down onto it. 0 = it lands at the base,
+                                    ; which is what it always did
+op_rdseg    equ OP_BSS_AT + 80      ; ...and the segment that comes to, which is
+                                    ; what op_read fills from. Its callers set
+                                    ; it: op_claim to the base plus R, op_fetch
+                                    ; to the claim it just made
+op_zsrc     equ OP_BSS_AT + 82      ; op_unpack's read pointer, as a segment -
+                                    ; BP is its write pointer and there is no
+                                    ; third register left to hold this one
+op_bend     equ OP_BSS_AT + 84      ; the run's EXACT byte end, where op_bytes
+                                    ; is the same run rounded to whole sectors.
+                                    ; op_want is cut from this one, because the
+                                    ; last part's padding is the end of the
+                                    ; FILE and asking for it is a short read
+OP_BSS      equ 86

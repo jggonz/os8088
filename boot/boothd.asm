@@ -234,10 +234,29 @@ entry:
     mov dx, BLOB_SEG            ; because two `mov word [mem], imm` a pass is
     call load_all               ; six bytes this sector has not got
     ; --- PASS 2: `.text` onward, to KERNEL_SEG, which [lba] already names ---
+    ; ...OR R PARAGRAPHS ABOVE IT, when the kernel is PACKED (SPEC.md
+    ; 2.9.13.5). This sector has its own reader and never enters stage 2, so a
+    ; compressed KERNEL.SYS read to KERNEL_SEG would simply be JUMPED INTO -
+    ; and there are 23 spare bytes here to do something about that in. Five is
+    ; what it takes, because the two loaders' arithmetic agrees: one run to
+    ; KERNEL_SEG + R puts the plain head at the bottom of it and the packed
+    ; blocks at KERNEL_SEG + R + head/16, which is exactly where the floppy's
+    ; two separate reads put them. So the blob's own kz_hd moves the head down
+    ; and expands, on the same addresses, with no second copy of anything.
+    ;
+    ; KZ_RPARA is an IMMEDIATE here where [ksecs] is patched, and that is the
+    ; same assumption BLOB_SEG and SPL_FSEG already make: this sector ships
+    ; inside HDD.DRV, built from the kernel it will boot.
     mov ax, [ksecs]
     sub ax, BOOT2_SECS
+%ifdef KZIP
+    mov dx, KERNEL_SEG + KZ_RPARA
+    call load_all
+    call BLOB_SEG:KZ_HD         ; ...and the blob puts it where it belongs
+%else
     mov dx, KERNEL_SEG
     call load_all
+%endif
 
     ; --- hand off -----------------------------------------------------------
     ; DL is the BIOS drive and BX:CX the partition base, which is what the

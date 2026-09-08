@@ -19,9 +19,9 @@
 #
 # THIS IS A RATCHET, NOT A CLEAN GATE. It starts at the count the tree has,
 # because a rule that cannot be enforced from the day it is written is not
-# enforced at all. docs/TEXT-PLAN.md 4 is the order to work it down in.
+# enforced at all. docs/plans/completed/TEXT-PLAN.md 4 is the order to work it down in.
 #
-# STAGE 4 IS FINISHED (SPEC.md 6.6.5, docs/TEXT-PLAN.md 4.4). Every line below
+# STAGE 4 IS FINISHED (SPEC.md 6.6.5, docs/plans/completed/TEXT-PLAN.md 4.4). Every line below
 # now carries a REASON. FOUR still say `backlog:` and not one of the four is a
 # conversion waiting to be typed: wm_draw_title's compose-and-blit answer has
 # SHIPPED and the line left is its fallback, Arkanoid's capsule letter is a
@@ -43,6 +43,7 @@
 # strike, leaving a one-pixel stub - the two passes have to be one opaque and
 # one transparent, in that order, and no primitive can collapse them.
 2 apps/word/word.asm  # ONE LINE PER FILE, so two cases on it: 6.6.2 case 6 is wd_drawrun's BOLD second strike (68.1), and 6.6.2 case 1 is the ruler's inch digits over the tick pattern (68)
+2 apps/scribe/scribe.asm  # the same two, inherited: SCRIBE is a fork of word.asm, so sc_drawrun's BOLD strike and the ruler's inch digits are word.asm's two sites under SCRIBE's own names (94.1)
 1 apps/texpad/texpad.asm  # 6.6.2 case 6 - the bold overstrike, tp_draw's second pass
 1 apps/weave/wdraw.inc  # 6.6.2 case 6 - the bold overstrike, w_draw's second pass. WEAVE-SPEC 6.2 makes BOLD a double-strike one pixel right, and the header above is why it cannot be one call: the second run would repaint the ground and erase the first strike
 1 apps/frotz/zwin.inc  # 6.6.2 case 6 - zw_run's bold strike (FROTZ-PLAN 5.1)
@@ -56,7 +57,7 @@
 3 apps/os88ui.inc  # 6.6.2 case 4's other half - two of these three are UI_STR's MACRO BODIES, one per build, not call sites; the third is ui_button's UNFILLED case - a button with neither DOWN nor FILL never fills its interior, so the ground under the caption's cells is not ours to repaint. The FILLED shapes take font_run now (SPEC.md 11.96.17.1). They go when font_str does
 
 # --- backlog: three, and none of them is a conversion ------------------------
-1 kernel/wm.inc  # backlog: wm_draw_title's fifteen-call path, which is what EVERY shipping build draws. The composed bar is a KNOB (SPEC.md 5.9.6): wm_title_band is `%ifdef BAND`, so no floppy this project ships even assembles it, and this gfx_fill plus font_str_x writes every title pixel twice on chrome that redraws on every window operation. kern_small has no gfx_blit1 at all, so the conversion is owed on both builds. docs/TEXT-PLAN.md 6.1, Stage 7
+1 kernel/wm.inc  # backlog: wm_draw_title's fifteen-call path, which is what EVERY shipping build draws. The composed bar is a KNOB (SPEC.md 5.9.6): wm_title_band is `%ifdef BAND`, so no floppy this project ships even assembles it, and this gfx_fill plus font_str_x writes every title pixel twice on chrome that redraws on every window operation. kern_small has no gfx_blit1 at all, so the conversion is owed on both builds. docs/plans/completed/TEXT-PLAN.md 6.1, Stage 7
 2 apps/arkanoid/arkanoid.asm  # backlog: the capsule letter is TEXT-PLAN 3.1's worked example - a sprite, so it wants compose-and-blit, not a run
 3 kernel/bootprof.inc  # backlog: TEXT-PLAN 4. BOOTPROF=1 only - the one surface no shipping build draws, so a conversion here cannot be seen without building the knob
 

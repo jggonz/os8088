@@ -49,7 +49,6 @@ at_cmd_newdoc:
     or al, al
     jnz .name
     call at_layout
-    call at_cline_span
     pop di
     pop si
     pop cx
@@ -296,7 +295,6 @@ at_load_named:
     mov word [at_rtop], 0
     call at_dfit                    ; give back what the file did not need
     call at_layout
-    call at_cline_span
     clc
     jmp short .out
 .err:

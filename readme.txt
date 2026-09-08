@@ -36,7 +36,7 @@ os8088 comes on two disks: the system disk, which is the OS, and the apps disk, 
 
 Put the system disk in drive A: and switch the machine on. A progress bar appears while the system loads - a few seconds on a 4.77MHz machine - and when the desktop appears os8088 is ready.
 
-With two floppy drives, put the apps disk in B: and leave it there. With one, swap disks when you want a program: take the system disk out, put the apps disk in, and press R in a disk window. The apps disk then answers as A:.
+With two floppy drives, put the apps disk in B: and leave it there. With one, swap disks when you want a program: put the apps disk in and press R in a disk window. The apps disk then answers as A:.
 
 Both are ordinary FAT floppies, so a DOS PC or a modern computer can read and write them too.
 
@@ -55,7 +55,7 @@ DOCK
 The white strip along the bottom, one small tile per running program. A heavy border marks the one in use; a tile drawn in reverse is a program put away out of sight. Clicking a tile does whatever it is not: it brings back a program put away, puts away the one in use, and brings any other to the front. The right button offers Close.
 
 SCREEN BLANKING
-After five minutes with no key pressed and no mouse moved the screen goes dark, to save the tube. Any key or a nudge of the mouse brings it back as you left it, and that first press is not passed on to anything - so nothing can happen by accident while you cannot see.
+After five minutes with no key pressed and no mouse moved the screen goes dark, to save the tube. Any key or a nudge of the mouse brings it back as you left it, and that first press is not passed on, so nothing can happen by accident while you cannot see.
 
 
 ----------------------------
@@ -88,7 +88,7 @@ Two buttons sit at the top right: Refresh re-reads the disk, which you want afte
 Double-click an item to open it. A folder opens in the same window, a program starts, and a document opens in the program that made it if that program is on either disk. Backspace, or Nav > Up One Folder, goes back up; the ".." at the top of every folder does the same. The top of a disk is the root, and there is nothing above it.
 
 THE MENUS
-While a disk window is in front the menu bar carries four. File holds Open, New Folder, Rename, Delete and Format Disk. Edit holds Cut, Copy and Paste. Nav is everywhere you can go: new windows, Refresh, up one folder, the root, and either floppy drive. Builtins is the desktop's own menu again.
+While a disk window is in front the menu bar carries four. File holds Open, New Folder, Rename, Delete, Compress and Format Disk. Edit holds Cut, Copy and Paste. Nav is everywhere you can go: new windows, Refresh, up one folder, the root, and either floppy drive. Builtins is the desktop's own menu again.
 
 The right button inside a disk window opens a short menu of commands for whatever is under the pointer.
 

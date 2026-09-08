@@ -52,8 +52,12 @@ import os88sym                                              # noqa: E402
 KERNEL_SEG = 0x60
 KB = KERNEL_SEG << 4
 
-MACHINES = (("cga", "os8088_5150_cga", 0xB800),
-            ("herc", "os8088_5150_herc", 0xB000))
+# THE GLaBIOS TWINS.  This file calls `gfx_fill_pat` through the debugger
+# over rows it has zeroed itself: the BIOS is nowhere on that path, so the
+# period ROM buys nothing here and naming it only meant the row ran on
+# whatever the box happened to have (os88marty.machine).
+MACHINES = ((("cga"), os88marty.machine("os8088_5150_cga"), 0xB800),
+            (("herc"), os88marty.machine("os8088_5150_herc"), 0xB000))
 
 Y0 = 64                         # a blank band of desktop, clear of the menu
 NROW = 20                       # bar and of the volume zone's icons

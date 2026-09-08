@@ -102,6 +102,15 @@ WIN_SIZE equ 34                 ; NOT a power of two: never shift, multiply
 WIN_SIZE equ 28                 ; ...and kern_small stops where SPEC.md 13.7
 %endif                          ; left it
 MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
+WM_PKGD_MAX equ 8               ; how deep wm_pkgs records the nest (SPEC.md
+                                ; 66.6.1). Callbacks nest across packages - a
+                                ; callback may call OSAPI_WM_SHOW, which
+                                ; repaints, which dispatches another package's
+                                ; paint proc - and there is no bound on that in
+                                ; principle, so past this depth mem_frameless
+                                ; pins EVERY region rather than answer from an
+                                ; incomplete stack. Eight is three deeper than
+                                ; anything measured
 
 ; --- the title bar's two boxes (SPEC.md 11) ----------------------------------
 ; The close box on the left, the minimize box mirrored at the right, both the
@@ -316,8 +325,20 @@ wm_pkgcall:
     pop ax                      ; keeps the word above safe to push and pop
     cmp word [es:si+W_SEG], 0   ; (the cmp sets the flags the branch reads, so
     je .near                    ; the `and` above cannot reach it)
-    mov ds, [es:si+W_SEG]       ; DS = the package's own segment
+    mov ds, [es:si+W_SEG]       ; DS = the package's own segment...
+    call COLD_SEG:wm_nest_pushd_x   ; ...WHICH A FRAME IS ABOUT TO REFER TO
+                                ; (SPEC.md 66.6.1), and the push reads it from
+                                ; DS, so the segment costs no register here at
+                                ; all - AX and BX are the CALLBACK's
     call far [es:si+W_DISP]     ; ...and off to its dispatcher
+    push cs                     ; DS IS THE PACKAGE'S at the return, and `.out`
+    pop ds                      ; below restores the caller's, so borrowing it
+    call COLD_SEG:wm_nest_pop_x ; for two instructions costs nothing. ES is no
+                                ; safer - a callback may clobber it (SPEC.md
+                                ; 13). A CALLBACK ANSWERS IN THE FLAGS (an
+                                ; entry proc's CF, W_ONSIZE's), so the pop
+                                ; brackets its `dec` and `push cs`/`pop ds`
+                                ; writes none
     jmp short .out
 .near:
     call bp                     ; a kernel window: DS is already ours
@@ -340,7 +361,7 @@ wm_pkgcall:
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
-; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/LAST-DROP-BYTES.md row 14). One
+; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/plans/LAST-DROP-BYTES.md row 14). One
 ; caller, kmain:4291, and zero outbound: it is four `rep stos` runs over `.bss`
 ; through ES = DS = KERNEL_SEG, which `.ovl` supplies unchanged.
 section .ovlw
@@ -352,9 +373,14 @@ wm_init:
     push ds
     pop es
     xor ax, ax
-    mov di, wm_wins             ; wins + zord + zn are contiguous in .bss
-    mov cx, MAX_WIN*WIN_SIZE + MAX_WIN + 1 + MAX_WIN*2
-    rep stosb
+    mov di, wm_pkgd             ; pkgd + pkgs + wins + zord + zn are contiguous
+    mov cx, 2 + WM_PKGD_MAX*2 + MAX_WIN*WIN_SIZE + MAX_WIN + 1 + MAX_WIN*2
+    rep stosb                   ; in .bss. THE NEST STACK IS IN THE RUN
+                                ; (SPEC.md 66.6.1): .bss is never zeroed at
+                                ; boot and int 19h keeps the LAST kernel's, so
+                                ; a stale [wm_pkgd] past WM_PKGD_MAX pins every
+                                ; region and image for the rest of the session
+                                ; and one below it walks garbage segments
     mov al, 0xFF                ; wm_owner is NOT part of the zero run: its
     mov di, wm_owner            ; empty value is 0xFF (unowned, SPEC.md 11)
     mov cx, MAX_WIN
@@ -653,7 +679,7 @@ wm_fs_setrect:
 ; out:      nothing; every register preserved, FLAGS INCLUDED
 ;
 ; **THE RULE IS ABOUT ADAPTER IDENTITY AND NOT ABOUT GEOMETRY**, which is the
-; whole of docs/WINDOW-SIZING-PLAN.md 12 and the correction of everything
+; whole of docs/plans/completed/WINDOW-SIZING-PLAN.md 12 and the correction of everything
 ; above it. What a window wants is not "a size that fits the box the drag left
 ; me in" but "my size for adapter kind Y, and I am standing on adapter kind
 ; Y" - so the TRIGGER is a change of kind and nothing else. A move within one
@@ -1154,7 +1180,7 @@ wm_reflows:
 ; clobbers: AX, CX, DX, SI, DI, flags
 ;
 ; The ORIGIN and not the centre, deliberately: wm_disp_of's centre test is for
-; deciding which monitor an app OWNS (docs/DUAL-DISPLAY-PLAN.md 6.5.1), and
+; deciding which monitor an app OWNS (docs/plans/completed/DUAL-DISPLAY-PLAN.md 6.5.1), and
 ; this is deciding which edges a frame may not pass - which is a question
 ; about the corner the clamps are written from. A window whose origin is in
 ; the dead zone gets the primary, the only answer that cannot leave it
@@ -1222,7 +1248,7 @@ wm_fit_box:
 ; CGA's dock ceiling of 175 was applied to the Hercules part as well and every
 ; vacated row below it there was never dithered - 3,844 stale pixels, which is
 ; 320 columns x 24 rows half-lit in a 50% dither to within four
-; (docs/WM-ARTIFACTS.md 2). A one-display machine could not show it and never
+; (docs/history/WM-ARTIFACTS.md 2). A one-display machine could not show it and never
 ; will, so the shape of the contract is the only thing that stops it coming
 ; back: there is no point-shaped entry point here any more to reach for.
 ;
@@ -1971,10 +1997,12 @@ wm_pref_take:
     push si
     push di
     push es
+%ifdef GFX_VGA                  ; no EGA on a build with no VGA renderer
     cmp al, VID_EGA             ; the per-window PREF table has THREE entries,
     jne .kindok                 ; VID_VGA / VID_HERC / VID_CGA, and the kind
     mov al, VID_VGA             ; indexes it (kind*4) below - so an unclamped
 .kindok:                        ; EGA reads si+12, off the end of a table in
+%endif
                                 ; the PACKAGE's own segment. An EGA machine
                                 ; takes VGA's row - it is VGA's planar path,
                                 ; and a package cannot supply a fourth pair
@@ -2189,8 +2217,8 @@ wm_kind_was:
 ;              0x0488, SPEC.md 39.16.4)
 ; in:  BX = the window
 ; out: AX = width, BX = height, CX = the first row the DOCK owns, SI = the
-;      first row the desktop band has, DL = 0 VGA / 1 Hercules / 2 CGA,
-;      DH = bits per pixel; DI preserved
+;      first row the desktop band has, DL = 0 VGA / 1 Hercules / 2 CGA / 3 EGA
+;      (the VID_* kinds), DH = bits per pixel; DI preserved
 ;
 ; **OSAPI_VIDEO ANSWERS ABOUT THE PRIMARY AND SAYS SO** (39.2.1), and it is
 ; right to: windows open there, everything a package draws is window-relative,
@@ -2996,7 +3024,7 @@ wm_wk_none:
 ;      preserved
 ; clobbers: nothing else (flags)
 ;
-; The other half of what docs/PAINT-NOTES.md asked for. wm_resize is how an
+; The other half of what docs/plans/completed/PAINT-NOTES.md asked for. wm_resize is how an
 ; app changes its OWN size; this is how the kernel asks before changing it
 ; for them - and the answer is a size rather than a yes/no, because the case
 ; that motivated it (apps/paint refusing to crop artwork) is per-axis: a drag
@@ -3030,7 +3058,7 @@ wm_ask_size:
 ;      size and everything is repainted
 ;
 ; The sanctioned version of what apps/paint had to do behind the kernel's
-; back (docs/PAINT-NOTES.md): an app that adopts a picture's dimensions has
+; back (docs/plans/completed/PAINT-NOTES.md): an app that adopts a picture's dimensions has
 ; to move its own frame, and ui_grow and wm_fullscreen were the only things
 ; that could. Clamps exactly as a drag does - never smaller than WMIN_W/
 ; WMIN_H, never past the screen edge or the dock - and then re-fits the
@@ -7823,7 +7851,7 @@ wm_draw_title:
     sar cx, 1
     add cx, [di+W_X]            ; CX = text left
 %ifdef TITLESNAP
-    ; docs/TEXT-PLAN.md 6.1: centre to the nearest CELL rather than to the
+    ; docs/plans/completed/TEXT-PLAN.md 6.1: centre to the nearest CELL rather than to the
     ; exact pixel. A window title is the hottest text in the system - it
     ; redraws on every window operation - and centring puts its pen off the
     ; 8px grid seven times in eight, which costs SPEC.md 6.1's fast path and
@@ -8652,7 +8680,7 @@ wm_damage:
 ;
 ; Raising an obscured window was measured at 1,026 ms on a 4.77MHz 8088, and
 ; 578 ms of that is W_PAINT lettering cells that were genuinely overwritten
-; while the window was covered (docs/NOTEPAD-NOTES.md 5.3). There is no faster
+; while the window was covered (docs/plans/completed/NOTEPAD-NOTES.md 5.3). There is no faster
 ; way to draw them; the only way under one typematic repeat is not to draw
 ; them at all. So the content is BANKED when the window is covered and put
 ; back when it is raised: ~10 ms of blit each way against 578 ms of glyphs.
@@ -8760,7 +8788,7 @@ wm_su_scrsz: dw 0               ; scratch begins, and how big that is
 wm_su_pw: dw 4                  ; HOW DEEP THE DISPLAY THIS CACHE IS ON IS, in
                                 ; planes, which is not [vid_planes_w] the
                                 ; moment two displays can differ
-                                ; (docs/DUAL-DISPLAY-VGA.md 4.3). Set by
+                                ; (docs/plans/completed/DUAL-DISPLAY-VGA.md 4.3). Set by
                                 ; wm_su_flay, which is the one place both the
                                 ; take and the check establish the content
                                 ; rect, and read by wm_su_bytes, wm_su_scrset,
@@ -8786,7 +8814,7 @@ wm_su_pw: dw 4                  ; HOW DEEP THE DISPLAY THIS CACHE IS ON IS, in
 ; the NAME here rather than keeping the word and feeding it is what makes the
 ; small build measure +0: the word, the store and the four instructions that
 ; bank CX/DX around it are not assembled at all. Written down because the
-; plan (docs/DUAL-DISPLAY-VGA.md 6) calls that +0 non-negotiable and it is
+; plan (docs/plans/completed/DUAL-DISPLAY-VGA.md 6) calls that +0 non-negotiable and it is
 ; the cheapest regression test the whole feature has - and because the first
 ; version of this DID cost it 17 bytes, by writing [vid_planes_w] into a word
 ; nothing else could ever have put anything different in.
@@ -10154,7 +10182,7 @@ wm_dc_take:
                                 ; once every eight pixels
 %ifdef KERN_BIG
     mov ax, [di+W_X]            ; ...AND THE DEPTH IS THE SECOND THING IT
-    mov bx, [di+W_Y]            ; CANNOT DO (docs/DUAL-DISPLAY-VGA.md 4.3.1).
+    mov bx, [di+W_Y]            ; CANNOT DO (docs/plans/completed/DUAL-DISPLAY-VGA.md 4.3.1).
     call vid_disp_planes        ; The byte phase above is this same argument
     mov si, cx                  ; about x; this is it about PLANES. gfx_save
     mov ax, [ui_origx]          ; lays the buffer out with the depth of the
@@ -11727,10 +11755,111 @@ wm_noanim:
 wm_animon   db 1                ; 0 = Off, 1 = On
 
 ; -----------------------------------------------------------------------------
-; wm.inc .bss - window table + z-order (wm_init zeroes all of it as one run,
-; so these three must stay contiguous and in this order)
+; wm_nest_pushd / wm_nest_pop - WHICH IMAGES THE MACHINE IS EXECUTING IN
+; wm_nest_pushd in:  DS = the image being entered, ES = KERNEL_SEG
+; wm_nest_pop   in:  DS = KERNEL_SEG
+; both preserve every register and the FLAGS - a callback's answer is its CF.
+;
+; ONE STACK FOR BOTH KINDS OF IMAGE (SPEC.md 66.6.1, 66.6.3). A package region
+; and a driver image are the same question asked twice - may this block move
+; out from under a return address - and they were two stacks, two brackets and
+; two walks until the answers were found to be the same one. A segment in here
+; means a frame somewhere refers to it; past WM_PKGD_MAX the answer is "pin
+; everything", which is free and safe. mem_in_nest is the reader.
+;
+; A STACK AND NOT A DEPTH, and that is the whole difference between a feature
+; that fires and one that does not: a package reaches mem_claim only from
+; inside its own callback and `sbl_v_grant` CLAIMS from inside a driver verb,
+; so a global depth is non-zero at exactly the moment a compaction runs.
+;
+; **`pushf`/`cli` AND NOT A BARE `inc`.** driver.inc's service cell is reached
+; from snd_tick INSIDE IRQ0 (SPEC.md 34.5), so the read-modify-write can be
+; interrupted by another push/pop pair and lose the update - leaving a depth
+; that never returns to zero, and a machine that never compacts an image again.
+; The pop needs none: `dec byte [m]` is one instruction, and an 8086 takes an
+; interrupt only between two.
+;
+; THE PUSH IS ES-RELATIVE AND THE POP DS-RELATIVE, which is not an
+; inconsistency but what every call site can actually promise. Entering, DS has
+; just been loaded with the image and ES is the kernel at eight of the nine;
+; returning, a verb may have clobbered ES (SPEC.md 13) and it is DS the site
+; puts back. drv_pkg_call_x is the ninth - ES is the CALLING PACKAGE's there
+; and has to still be at the far call, so that site banks it, borrows it for
+; the push and hands it back. .cold, so `cs:` is COLD_SEG and reaches neither.
+; -----------------------------------------------------------------------------
+section .cold
+wm_nest_pushd:
+    pushf
+    cli
+    push ax
+    push bx
+    push ds
+    pop ax                      ; AX = the image, at no register cost to the
+    mov bx, [es:wm_pkgd]        ; caller
+    cmp bx, WM_PKGD_MAX
+    jae .over                   ; deeper than wm_pkgs records: mem_in_nest
+    shl bx, 1                   ; pins every image rather than guess
+    mov [es:bx+wm_pkgs], ax
+.over:
+    inc word [es:wm_pkgd]
+    pop bx
+    pop ax
+    popf
+    ret
+
+wm_nest_pop:
+    pushf
+    dec word [wm_pkgd]
+    popf
+    ret
+
+; ...and the FAR entries, for the sites that are .text (wm_pkgcall itself,
+; vmmouse.inc, xmem.inc). SPEC.md 2.6.1: a far entry ends in `retf` and is
+; never near-called, so the pair above cannot simply be far-called - hence four
+; bytes each rather than a second copy. `call`/`retf` touch no flag.
+wm_nest_pushd_x:
+    call wm_nest_pushd
+    retf
+wm_nest_pop_x:
+    call wm_nest_pop
+    retf
+section .text
+
+; -----------------------------------------------------------------------------
+; wm.inc .bss - the nest stack, window table + z-order (wm_init zeroes all of
+; it as one run, so these five must stay contiguous and in this order)
 ; -----------------------------------------------------------------------------
 section .bss
+wm_pkgd:    resw 1              ; NESTING DEPTH OF KERNEL -> PACKAGE CALLS. A
+                                ; WORD for one byte's rent: both readers load
+                                ; it into a whole register and bound it against
+                                ; WM_PKGD_MAX, so a byte costs each of them a
+                                ; `xor` the word does not - and it leaves
+                                ; wm_pkgs word-aligned into the bargain.
+                                ; (SPEC.md 66.6.1), and wm_pkgs the SEGMENT at
+                                ; each level. A level naming a segment means a
+                                ; frame somewhere refers to that package's
+                                ; region - as a far-return CS, as OSAPI_SLOT's
+                                ; own `push ds`, or as anything the package
+                                ; pushed itself - and mem_can_move pins that
+                                ; region while it does.
+                                ;
+                                ; A STACK AND NOT A COUNT, which is the whole
+                                ; difference between a feature that fires and
+                                ; one that does not. A package reaches
+                                ; mem_claim only from inside its own callback,
+                                ; so a global depth is ALWAYS non-zero at the
+                                ; one moment a package-driven compaction runs,
+                                ; and a compactor resting on one would move a
+                                ; region only on a KERNEL-initiated claim.
+                                ; Recording which costs 16 bytes and lets
+                                ; package A's claim pack package B's region.
+                                ;
+                                ; The loader's entry call is NOT counted here:
+                                ; the only region a frame of it can refer to is
+                                ; the one being loaded, and [ld_base] names
+                                ; that one already
+wm_pkgs:    resw WM_PKGD_MAX
 wm_wins:    resb MAX_WIN * WIN_SIZE ; 12 windows x WIN_SIZE bytes
 wm_zord:    resb MAX_WIN            ; window indices, [0] = backmost
 wm_zn:      resb 1                  ; entries in wm_zord

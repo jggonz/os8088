@@ -604,6 +604,8 @@ hd_dev_mb:
 ; is the floppy's code, unchanged.
 ; -----------------------------------------------------------------------------
 hd_blk:
+    cmp al, 2                   ; SPEC.md 51.8: sub-function 2 is GEOM, which
+    je hd_geom                  ; wants none of the transfer frame below
     push bx
     push cx
     push dx
@@ -1179,7 +1181,7 @@ hd_ide_setparams:
 ; driver-backed volume started handing the whole count to DSV_BLK in one call
 ; (SPEC.md 18.7): a command is a task-file write, a BSY poll and a DRQ poll,
 ; and paying that per 512 bytes is most of what a copy costs on a real drive.
-; Measured on the reference copy (docs/HDD-PLAN.md part 13): 1,918 commands
+; Measured on the reference copy (docs/plans/completed/HDD-PLAN.md part 13): 1,918 commands
 ; became 141.
 ;
 ; No DMA page bound here, unlike the BIOS rung: PIO moves every byte through
@@ -1343,8 +1345,6 @@ hd_services:
     dw hd_page_drag             ; DSV_CPDRAG  - ...and follows the pointer
                                 ;               between the edges (13.8.4)
     dw 0                        ; DSV_PKGCALL - no package reaches a raw sector
-    dw hd_geom                  ; DSV_GEOM    - the transport facts (SPEC.md
-                                ;               87.5), for the resume stub
     times DSV_SIZE - ($ - hd_services) db 0
                                 ; drv_publish copies DSV_SIZE bytes
                                 ; whatever this table's length is, so

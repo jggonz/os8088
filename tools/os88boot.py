@@ -88,7 +88,13 @@ def callsites(defines=("KERN_BIG",), build="build"):
         if os.path.normpath(os.path.join(ROOT, build)) != \
                 os.path.normpath(os.path.join(ROOT, "build")):
             cmd += ["-I", os.path.join(ROOT, "build") + os.sep]
-        for d in defines:
+        # ...and a PACKED kernel's own four numbers (SPEC.md 2.9.13.4), the
+        # way os88sym takes them: build/kernel-full.bin is pass 2's assembly,
+        # and a listing made with pass 1's placeholders differs from it in
+        # .boot2 alone - which the byte compare below cannot tell from a
+        # stale tree. It refused every packed kernel until it asked.
+        import os88sym
+        for d in os88sym.kz_defines(os.path.join(ROOT, build), defines):
             cmd += ["-D" + d]
         cmd += ["-l", lst, "-o", binf, src]
         subprocess.run(cmd, check=True, cwd=ROOT)

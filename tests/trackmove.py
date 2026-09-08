@@ -29,9 +29,10 @@ Six assertions. The last is the one no memory dump can make:
 import sys, os, time, hashlib, argparse, subprocess, tempfile
 sys.path.insert(0, "/home/user/os8088/tools")
 sys.path.insert(0, "/home/user/os8088/tests")
+import os88fixture                                       # noqa: E402
 import os88marty, os88mouse, os88sym, os88geom, dispcp
 
-MC_SIZE, MEM_MAX = 10, 32
+MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 PKG_MOD, PKG_HEAPFRAG = "BEVERLY.MOD", "HEAPFRAG.O88"
 MS_SZ, MS_SEG = 12, 0
 MP_CHSZ, MP_SEG = 40, 6
@@ -103,8 +104,14 @@ def main():
 
     # `make bench` shapes this disk; a suite row cannot assume somebody ran
     # it. One make of the exact artifact is cheap and idempotent.
-    if not os.path.exists("build/trackmove360.img"):
-        subprocess.check_call(["make", "build/trackmove360.img"])
+    # THE SAME `make`, AND IT DOES NOTHING once the runner has built the
+    # artefact: Row(wants=...) declares it and os88test's prebuild builds
+    # it before any row starts. That is what lets this row drop
+    # builds=True and share the emulator lane.
+    os88fixture.need("build/trackmove360.img")
+    # has
+        # already built the artefact (Row(wants=...) and os88test's prebuild).
+        # That is what lets this row drop builds=True and share the lane.
 
     with os88marty.launch("build/os8088-360.img", apps="build/trackmove360.img",
                           machine=a.machine, boot=False) as m:

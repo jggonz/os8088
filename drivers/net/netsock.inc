@@ -1,11 +1,11 @@
 ; =============================================================================
-; NET.DRV - the SOCKET half (docs/NET-STACK-PLAN.md stage B, SPEC.md 62.11)
+; NET.DRV - the SOCKET half (docs/plans/completed/NET-STACK-PLAN.md stage B, SPEC.md 62.11)
 ;
 ; drivers/net/netpkg.inc is the ABI a package sees; this is the driver's side
 ; of it, and between them the kernel has learned nothing about TCP.
 ;
 ; THE SHAPE. os8088 is the master and never receives unsolicited data
-; (docs/NET-PLAN.md 1.3), so a socket verb is one request-and-reply over the
+; (docs/plans/completed/NET-PLAN.md 1.3), so a socket verb is one request-and-reply over the
 ; cable and the far side answers it OUT OF STATE IT ALREADY HAS. It never
 ; goes and waits for the network on our behalf - which is exactly what makes
 ; every verb non-blocking without a queue, a mux, or a framing question about
@@ -354,7 +354,7 @@ nsk_hchk:
 ; in:  AL = the handle byte off the wire, AH = the state to record
 ; out: CF=0 and AX = the handle; CF=1 and AX = NETE_IO for one out of range
 ;
-; EVERYTHING OFF THE WIRE IS HOSTILE (docs/NET-STACK-PLAN.md 8.5), and a
+; EVERYTHING OFF THE WIRE IS HOSTILE (docs/plans/completed/NET-STACK-PLAN.md 8.5), and a
 ; handle is the cheapest thing to get wrong: this array is NET_SOCKS bytes
 ; and an unchecked index writes somewhere else in the driver's own segment.
 ; -----------------------------------------------------------------------------
@@ -545,7 +545,7 @@ nsk_accept:
 ; for one we do not have. The DOS box owns the IP, an inbound connection
 ; arrives there and is forwarded down the cable, so the address an FTP client
 ; must dial for a passive transfer really is the far end's
-; (docs/NET-STACK-PLAN.md 1.5). Reporting anything else would put an
+; (docs/plans/completed/NET-STACK-PLAN.md 1.5). Reporting anything else would put an
 ; unreachable quad in a 227 reply.
 ;
 ; Gated on NET_VER_ADDR and not on nsk_do's NET_VER_SOCK: a version-2 partner

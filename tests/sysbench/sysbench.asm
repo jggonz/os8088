@@ -112,12 +112,14 @@ SB_RAH_WMAX  equ 12               ; the run count to a pair.
                                   ; it is 12 and the file is 104KB: the
                                   ; deepest byte a floppy sweep touches is
                                   ; (12-1) x 9216 + 1024 = 102,400. It still
-                                  ; brackets DSK_RAH_RUNS = 8 with a step of
-                                  ; headroom - free through 8, missing at 10,
-                                  ; confirmed at 12 - and a run count raised
-                                  ; past 10 would report no cliff rather than
-                                  ; a wrong one, which the row below says in
-                                  ; words. Raising this means growing
+                                  ; bracketed DSK_RAH_RUNS when that was 8 -
+                                  ; free through 8, missing at 10, confirmed
+                                  ; at 12. DSK_RAH_RUNS is 14 now (a CEILING;
+                                  ; SPEC.md 18.95.5 sizes the width from the
+                                  ; free run), so on a 640KB machine the sweep
+                                  ; sees no cliff and says so in words rather
+                                  ; than reporting a wrong one. Raising this
+                                  ; means growing
                                   ; bigfile.dat in the Makefile to match; the
                                   ; sweep stops honestly either way.
 SB_WR_KB     equ 128              ; the LARGE write, KB. Stepped down by halves
@@ -1432,11 +1434,11 @@ sb_mouse:
     call sb_mb
 
     mov si, sb_l_mhpt               ; --- did the poller ever touch it? -------
-    mov bx, [sb_mstate]             ; mou_hpt is a WORD and is the assertion
-    mov ax, [es:bx+28]              ; that matters: 0 = it never dropped DTR
+    mov bx, [sb_mstate]             ; mou_hpt is a WORD: the desktop tick, then
+    mov ax, [es:bx+28]              ; each drop and each raise (SPEC.md 9.4.8)
     call sb_num
-    mov si, sb_l_mhps
-    mov al, 27                      ; mou_hpst
+    mov si, sb_l_mhps               ; ...and mou_hpst is the assertion that
+    mov al, 27                      ; matters: 0 = it never dropped DTR
     call sb_mb
 
     mov si, sb_l_msn                ; --- settled state; the operator's own
@@ -5180,8 +5182,8 @@ sb_l_mok0:   db '  identified COM1', 0
 sb_l_mok1:   db '  identified COM2', 0
 sb_l_mnd0:   db '  packets needed COM1', 0
 sb_l_mnd1:   db '  packets needed COM2', 0
-sb_l_mhpt:   db '  poller stamp (0=nvr)', 0
-sb_l_mhps:   db '  poller state', 0
+sb_l_mhpt:   db '  poller stamp (tick)', 0
+sb_l_mhps:   db '  poller state (0=nvr)', 0
 sb_l_msn:    db '  mouse found', 0
 sb_l_mpt:    db '  winning row 0/2/4=PS2', 0
 sb_l_mln:    db '  winning IRQ 10=4 FF=P2', 0

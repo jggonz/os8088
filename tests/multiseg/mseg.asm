@@ -45,10 +45,24 @@ MS_OPT_KB  equ 600                  ; chosen so NOTHING here can grant it: a
                                     ; make this row report the MACHINE rather
                                     ; than the mechanism
 
+; MSEG_COMP=1 puts OP_COMP on parts 0 and 2 (SPEC.md 20.12.7), and nothing
+; else about this package changes - which is the point of building it both
+; ways from one source. The MIX is what is being tested: part 0 is the FIRST
+; row, so its expansion starts at the very base of the carve; part 2 is in the
+; MIDDLE, so a plain row is expanded past on each side; and parts 1 and 5 are
+; plain, so they take op_unpack's `move it down` arm. All seven of ms_partchk's
+; assertions then have to come out identical to the uncompressed build, which
+; is a stronger statement than any new check would be.
+%ifdef MSEG_COMP
+  %define MS_ZF OP_COMP
+%else
+  %define MS_ZF 0
+%endif
+
     OS88_PARTS_BEGIN MS_PARTS
-      OS88_PART OP_SEG                  ; 0 code
+      OS88_PART OP_SEG, MS_ZF           ; 0 code
       OS88_PART OP_SEG                  ; 1 code
-      OS88_PART OP_ASSET                ; 2 data - and `kind` changes NOTHING
+      OS88_PART OP_ASSET, MS_ZF         ; 2 data - and `kind` changes NOTHING
                                         ;   about how it is claimed or read
                                         ;   here, which is deliberate: it is
                                         ;   the package's own note about what

@@ -180,10 +180,20 @@ def validate_o88(path: str) -> bytes:
     parts = bool(data[3] & 4)          # flags bit 2 (SPEC.md 20.12)
     if len(data) > 0xFFFF and not parts:
         fail(f"{path}: {len(data)} bytes overflows the 16-bit size field")
+    comp = bool(data[3] & 8)           # flags bit 3 (SPEC.md 20.13)
     image = struct.unpack_from("<H", data, 8)[0]
-    if not 32 <= image <= len(data):
+    lo = 32 if comp else max(32, len(data))
+    if not 32 <= image <= (0xFFFF if comp else len(data)):
         fail(f"{path}: header image size {image} out of range")
-    if image != len(data) and not parts:
+    if comp:
+        # COMPRESSED: `image` keeps meaning the UNPACKED bytes, so the file is
+        # SHORTER than it by design (SPEC.md 20.13.2) - which is the very case
+        # the truncated-file guard below refuses without the bit.
+        if image <= len(data):
+            fail(f"{path}: flags bit 3 is set but the image ({image}) is not "
+                 f"bigger than the file ({len(data)}) - a compressed package "
+                 "that saved nothing should have been shipped uncompressed")
+    elif image != len(data) and not parts:
         fail(f"{path}: header image size {image} != file size {len(data)}; "
              "a v3 package has no relocation table (run os88pkg.py first)")
     # WITH flags bit 2 the file is longer than the image ON PURPOSE and the
@@ -425,13 +435,49 @@ def sys_attr(name11: bytes, boot: bool) -> int:
     return A_SYSTEM if name11.endswith(b"DRV") else A_LOCKED
 
 
-def dirent(name11: bytes, attr: int, clus: int, size: int) -> bytes:
+# THE COMPRESSION HINT (docs/plans/O88-COMPRESSION-PLAN.md 15). A FAT12/16 entry is
+# 32 bytes and os8088 writes only six of its fields, so these four are zeroed
+# on create and never read: +12 (NT case flags), +13 (creation tenths) and
+# +20..21, which SPEC.md 19.1 already documents as "FstClusHI - FAT32-only per
+# spec, ignored". The directory sector is read anyway, so knowing that a file
+# is compressed - and how big it expands to - costs NO extra I/O at mount, per
+# listing or per entry, which is what lets a listing stay exactly as fast as it
+# was.
+#
+# **IT IS A CACHE AND THE FILE'S OWN 'CZ' HEADER IS THE AUTHORITY.** A foreign
+# tool that rewrites the entry may drop these bytes; a missing hint reads as
+# "not compressed", and if that were TRUSTED the kernel would hand an
+# application compressed bytes. So the read path checks the header too.
+CZ_HINT = 0x5A                     # +12: a value a conformant FAT writer never
+                                   # puts there, so it cannot be forged by
+                                   # luck - AND THE FORMAT RIDES IN IT, so
+                                   # 0x5A is LZ4 and 0x5B is LZB (SPEC.md
+                                   # 20.14.2.4). The kernel's capacity
+                                   # decision happens before any data I/O and
+                                   # the two formats get different answers
+                                   # there, so a hint that could not tell them
+                                   # apart would have to read the file - the
+                                   # one thing this hint exists to avoid
+CZ_H_MARK, CZ_H_HI, CZ_H_LO = 12, 13, 20
+
+
+def dirent(name11: bytes, attr: int, clus: int, size: int,
+           body: bytes = None) -> bytes:
     e = bytearray(32)
     e[0:11] = name11
     e[11] = attr
     # NT byte 0, CrtTimeTenth 0; every timestamp fixed for determinism.
     struct.pack_into("<HHH", e, 14, FIXED_TIME, FIXED_DATE, FIXED_DATE)
     struct.pack_into("<HHHHI", e, 20, 0, FIXED_TIME, FIXED_DATE, clus, size)
+    if body is not None and len(body) >= 8 and body[:2] == b"CZ" \
+            and body[3] == 0 and body[2] in (0, 1):
+        n = int.from_bytes(body[4:8], "little")
+        if n >= (1 << 24):
+            fail(f"{name11!r}: a compressed file expands to {n} bytes and the "
+                 "directory hint carries 24 bits")
+        e[CZ_H_MARK] = CZ_HINT + body[2]    # ...the mark, PLUS the format
+        e[CZ_H_HI] = n >> 16
+        struct.pack_into("<H", e, CZ_H_LO, n & 0xFFFF)
     return bytes(e)
 
 
@@ -839,7 +885,7 @@ def build(args) -> int:
         for i, (name11, body, _) in enumerate(groups[k]):
             off = (slot + i) * 32
             raw[off:off + 32] = dirent(name11, sys_attr(name11, boot),
-                                       chains[at + i][0], len(body))
+                                       chains[at + i][0], len(body), body)
         at += len(groups[k])
         put(dir_chains[k], bytes(raw))
 
@@ -857,7 +903,7 @@ def build(args) -> int:
     for i, (name11, body, _) in enumerate(root_files):
         chain = chains[len(files) - len(root_files) + i]
         root[slot * 32:(slot + 1) * 32] = dirent(
-            name11, sys_attr(name11, boot), chain[0], len(body))
+            name11, sys_attr(name11, boot), chain[0], len(body), body)
         slot += 1
 
     image = bytearray(boot_sector(spt, heads, tot, spc, fatsz, root_ent,
@@ -1253,7 +1299,18 @@ def verify(path: str) -> int:
             clus_hi, = struct.unpack_from("<H", e, 20)
             clus, = struct.unpack_from("<H", e, 26)
             size, = struct.unpack_from("<I", e, 28)
-            if clus_hi:
+            if CZ_HINT <= e[CZ_H_MARK] <= CZ_HINT + 1:  # ...either format
+                # ...not FstClusHI at all: the COMPRESSION HINT (SPEC.md
+                # 20.14.1) writes its low word there and its high byte at +13,
+                # which is why the note below has to test the mark first - a
+                # deliberate field reported as an anomaly is a note nobody
+                # reads by the fourth file.
+                unpacked = clus_hi | (e[CZ_H_HI] << 16)
+                if unpacked <= size:
+                    note(f"{name}: compression hint says it expands to "
+                         f"{unpacked} and the file is {size} - the kernel "
+                         "refuses that as FERR_IO")
+            elif clus_hi:
                 note(f"{name}: nonzero FstClusHI {clus_hi:#x} ignored "
                      "(FAT32-only field; the kernel ignores it too)")
             if attr & 0x10:

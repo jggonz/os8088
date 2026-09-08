@@ -44,6 +44,8 @@ import sys
 
 sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
+import os88fixture                                       # noqa: E402
+import os88build
 import os88marty
 import os88mouse
 import os88sym
@@ -54,14 +56,18 @@ S = os88sym.linear
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_herc_gla_144"
 # The images, overridable so this row can be pointed at a SECOND kernel.
 # kern_small carries Cut/Copy/Paste as an on-demand module (SPEC.md 22.3,
-# docs/KERN-SMALL-MODULE-SPLIT.md 9.2), so the engine this script drives is
+# docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2), so the engine this script drives is
 # read off the disk there rather than being resident - which is exactly the
 # arm nothing else exercises. Pair it with $OS88_BUILD and $OS88_DEFINES, the
 # knobs os88sym already has, or the symbol map will be the wrong kernel's:
 #   OS88_DEFINES=KERN_SMALL OS88_BUILD=build/smallk \
 #   OS88_SYSIMG=build/small.img python3 tests/fcpcopy.py
-SYS_IMG = os.environ.get("OS88_SYSIMG", "build/os8088.img")
-SRC_APPS = os.environ.get("OS88_APPSIMG", "build/apps.img")
+SYS_IMG = os88build.at(os.environ.get("OS88_SYSIMG", "build/os8088.img"))
+SRC_APPS = os88build.at(os.environ.get("OS88_APPSIMG", "build/apps.img"))
+                                # THE RUN'S TREE (tests/unit/t_artpath.py):
+                                # the fcpsmall arm overrides both to the small
+                                # pair, and shutil.copyfile reads SRC_APPS
+                                # itself - a use site launch() never sees
 OUT = os.path.abspath(os.path.join("build", "fcpcopy"))
 KERNEL_SEG = 0x0060
 MB_ENTSZ, MB_SEG, MB_XL, MB_XR = 12, 10, 6, 8
@@ -134,8 +140,13 @@ def main():
     # about would simply never run. `make small` is idempotent and builds
     # into build/smallk/, so it disturbs nothing in the default tree.
     if "smallk" in os.environ.get("OS88_BUILD", ""):
-        subprocess.check_call(["make", "small"],
-                              stdout=subprocess.DEVNULL)
+        # THE DISKS, NOT THE TARGET. `make small` builds every kern_small
+        # artefact; these two are what this arm opens, and naming them is what
+        # `Row(wants=...)` can carry - so the runner builds them before any row
+        # starts and os88fixture.need does nothing here. That is what lets the
+        # row drop builds=True. build/small.img's own prerequisites are what
+        # put build/smallk/ there, which is where the symbols come from.
+        os88fixture.need("build/small.img", "build/smallapps.img")
     os.makedirs(OUT, exist_ok=True)
     apps = os.path.join(OUT, "apps-scratch.img")
     shutil.copyfile(SRC_APPS, apps)      # NEVER the shipped image

@@ -415,7 +415,7 @@ inst_ico_ctrl:
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
-; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/LAST-DROP-BYTES.md row 18). One
+; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/plans/LAST-DROP-BYTES.md row 18). One
 ; caller, kmain:4302, and zero outbound.
 section .ovlw
 inst_init:
@@ -630,6 +630,41 @@ inst_parksafe_set:
     mov [bx+inst_parksafe], al  ; table's indexing lives
     clc                         ; inst_fhome_idx clobbers the flags
 .no:                            ; ...and the CF=1 arm arrives carrying its own
+    pop di
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_restart_set - API slot 0x0518: "if you have to move my region, throw my
+;                    worker's stack away and re-enter it here" (SPEC.md 66.6.2)
+; in:  AX = a near offset in the caller's own image, 0 to withdraw;
+;      ES = the caller's segment (the X stub's)
+; out: CF = 0 recorded; CF = 1 the caller is not a live package instance
+; clobbers: flags
+;
+; inst_parksafe_set's shape exactly, and deliberately: the two are the same
+; kind of promise one step apart. That one says "you may STOP me here"; this
+; one says "you may DISCARD what I am standing on and start me again there".
+;
+; NO VALIDATION OF THE OFFSET, and that is not an oversight. Every offset in a
+; package's own image is legal to it, the kernel has no map of what is code,
+; and a wrong one is a package that crashes ITSELF - which is what a wrong
+; W_PAINT does too (SPEC.md 20.2). What the kernel does check is the one thing
+; it can: that the caller owns the instance whose worker it is arming.
+; -----------------------------------------------------------------------------
+inst_restart_set:
+    push ax
+    push bx
+    push di
+    mov bx, es
+    call inst_of_seg
+    jc .no
+    call inst_fhome_idx         ; BX = the slot, the one place the side
+    shl bx, 1                   ; tables' indexing lives - doubled here alone,
+    mov [bx+inst_restart], ax   ; this being the only WORD table among them
+    clc                         ; inst_fhome_idx clobbers the flags
+.no:
     pop di
     pop bx
     pop ax
@@ -1010,6 +1045,10 @@ inst_alloc:
     call inst_fhome_clr         ; ...nor its Standard File location (38.10)
     push bx                     ; ...nor a dead instance's PARKSAFE (66.5.4):
     call inst_fhome_idx         ; the byte is a side table keyed by slot, and
+    push bx                     ; ...and the restart point with it (SPEC.md
+    shl bx, 1                   ; 66.6.2), for the same reason one line down:
+    mov word [bx+inst_restart], 0 ; a reused slot inheriting a dead package's
+    pop bx                      ; offset would re-enter a new one at it
     mov byte [bx+inst_parksafe], 0 ; a package that never declared it must
     pop bx                      ; not be parked in gfx_lock because the last
     clc                         ; tenant of its slot said so
@@ -2371,6 +2410,14 @@ inst_parksafe: resb INST_MAX    ; ...and which instances said the kernel may
                                 ; Declared, never assumed: what a task's stack
                                 ; holds while it spins in gfx_lock is the
                                 ; package's business
+inst_restart: resw INST_MAX     ; ...and where to RE-ENTER an instance's worker
+                                ; if its region has to move under it (SPEC.md
+                                ; 66.6.2): a near offset in the package's own
+                                ; image, 0 = never declared and the region
+                                ; stays pinned. A side table for
+                                ; inst_parksafe's reason - I_RECSZ is full -
+                                ; and a WORD because it is an offset and not a
+                                ; flag
 sch_parked:   resb MAX_TASKS    ; ...and which TASKS have. PER TASK and not per
                                 ; instance (SPEC.md 66.5.5): a driver's worker
                                 ; has T_INST = 0xFF and no record to be parked

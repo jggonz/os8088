@@ -164,7 +164,7 @@ Then write the plan into the tree, in this order:
    with any other package. SPEC is updated **before** the code, and this is
    the section every wave amends. `make` runs `tools/checkdocs.py`, so every
    `§` you cite must exist.
-2. **`docs/<NAME>-PORT-PLAN.md`** — the plan itself, with the user's answers
+2. **`docs/plans/<NAME>-PORT-PLAN.md`** — the plan itself, with the user's answers
    folded in and the questions section replaced by "Decisions". This is the
    file the implementation workflow reads.
 3. Commit the two: `Plan the <NAME> port (SPEC.md §<N>)`.
@@ -184,7 +184,7 @@ For each wave `n` in the plan, in order:
 
 ```
 Workflow({ scriptPath: "<abs repo>/.claude/skills/port-to-os8088/workflows/implement.js",
-           args: { repo: "<abs repo>", plan: "<abs repo>/docs/<NAME>-PORT-PLAN.md",
+           args: { repo: "<abs repo>", plan: "<abs repo>/docs/plans/<NAME>-PORT-PLAN.md",
                    wave: n, name: "<NAME>", dir: "apps/<dir>",
                    sources: ["<abs path>", ...],
                    decisions: "<every user answer so far, verbatim>", rounds: 2 } })
@@ -232,7 +232,7 @@ When the last wave is done:
    overlay gets a **folder of its own** on that disk, never `APPS/`).
 2. **The documents.** The SPEC section is final and its numbers are the
    shipping ones (`os88pkg` line, overlay size, frame max, the harness's cost
-   table). `docs/<NAME>-PORT-PLAN.md` gets a closing "What shipped" section.
+   table). `docs/plans/<NAME>-PORT-PLAN.md` gets a closing "What shipped" section.
    `README.md` gets a paragraph beside the CWORD one under *A package can also
    be written in C*. `CLAUDE.md`'s command table gets the new targets if they
    are on demand like `cword`'s.

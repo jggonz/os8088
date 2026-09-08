@@ -38,7 +38,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 # resident and there is nothing to give back. Set before the imports, because
 # os88sym checks the map against the binary the moment it is asked.
 os.environ.setdefault("OS88_DEFINES", "KERN_SMALL")
-os.environ.setdefault("OS88_BUILD", "build/smallk")
+import os88build                                           # noqa: E402
+os88build.use_build("build/smallk")
 import os88marty as M                                      # noqa: E402
 from os88mouse import Mouse                                # noqa: E402
 from os88fixture import need                               # noqa: E402

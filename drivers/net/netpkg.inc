@@ -4,7 +4,7 @@
 ; Included by BOTH ends, exactly as drivers/ramdisk/rdpkg.inc is: the driver
 ; that answers these and every package that asks. Nothing here is a kernel
 ; slot and nothing here is in SPEC.md's API table - which is the whole point
-; of the door (docs/NET-STACK-PLAN.md 1.1). A sockets ABI in the kernel would
+; of the door (docs/plans/completed/NET-STACK-PLAN.md 1.1). A sockets ABI in the kernel would
 ; be a contract os8088 owes for ever on a subject it has no code for; here it
 ; is the DRIVER's, it lives beside the driver, and it can be got wrong once
 ; and fixed.
@@ -111,7 +111,7 @@ NETV_RESOLVE equ 9              ; RESERVED, AND NOT IMPLEMENTED. It is in the
                                 ; numbering so that adding it later does not
                                 ; move anything below it. NETV_OPEN taking a
                                 ; NAME subsumes it for everything in
-                                ; docs/NET-STACK-PLAN.md's staging - a browser
+                                ; docs/plans/completed/NET-STACK-PLAN.md's staging - a browser
                                 ; and an FTP client both want the connection,
                                 ; never the address - and a verb whose only
                                 ; caller is hypothetical is a contract to get
@@ -138,7 +138,7 @@ NETV_ADDR    equ 10             ; out ES:DI = filled with FOUR bytes, this
                                 ; is, which is why five verbs' worth of
                                 ; networking got built without one.
                                 ;
-                                ; docs/NET-STACK-PLAN.md 1.3 always said
+                                ; docs/plans/completed/NET-STACK-PLAN.md 1.3 always said
                                 ; NETV_STATE "reports whether there is a stack
                                 ; and what its address is", and the half after
                                 ; the `and` was never built - AL is flags and
@@ -152,7 +152,7 @@ NETV_ADDR    equ 10             ; out ES:DI = filled with FOUR bytes, this
                                 ;
                                 ; **ON THE CABLE THE ANSWER IS THE DOS BOX'S**
                                 ; and that is the honest answer rather than a
-                                ; convenient one (docs/NET-STACK-PLAN.md 1.5):
+                                ; convenient one (docs/plans/completed/NET-STACK-PLAN.md 1.5):
                                 ; mTCP on the far end owns the IP, an inbound
                                 ; connection arrives THERE and is forwarded,
                                 ; so the address a client must dial really is
@@ -364,7 +364,7 @@ NET_SOCKS    equ 8              ; simultaneous handles. **A SLOT AND A RING
                                 ; by the ring's address being the slot NUMBER.
                                 ;
                                 ; Four was the FLOOR an FTP server needs
-                                ; (docs/NET-STACK-PLAN.md 1.2) - control, data
+                                ; (docs/plans/completed/NET-STACK-PLAN.md 1.2) - control, data
                                 ; and a listener that stays open across both -
                                 ; and a floor is what you cannot build on: a
                                 ; listener, a TIME-WAIT and a connection the

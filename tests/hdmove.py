@@ -42,15 +42,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+import os88ui
 import dispcp                                               # noqa: E402
 import os88geom                                             # noqa: E402
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
+import os88build                                       # noqa: E402
 
 MACHINE = "os8088_xt_hdd"
 PKG_HEAPFRAG = "HEAPFRAG.O88"
-MC_SIZE, MEM_MAX = 10, 32
+MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 DRVR_SZ, DRVR_SEG = 16, 2
 HDD_ROW = 1                             # drv_tab row 1 is the hard disk
 CP_I0Y, CP_IROWH, CP_RX = 6, 14, 96
@@ -71,7 +73,7 @@ def drv_syms():
     it this assembles to an error before the emulator is ever started.
     """
     src = os.path.join(ROOT, "drivers/hdd/hdd.asm")
-    kb = (os.path.getsize(os.path.join(ROOT, "build/hddtool.bin")) + 1023) // 1024
+    kb = (os.path.getsize(os.path.join(ROOT, os88build.at("build/hddtool.bin"))) + 1023) // 1024
     with tempfile.TemporaryDirectory() as d:
         cp, mp = os.path.join(d, "h.asm"), os.path.join(d, "h.map")
         open(cp, "w").write(open(src).read() + "\n[map symbols %s]\n" % mp)
@@ -129,9 +131,15 @@ def main():
         def hdseg():
             return u16(m.read(S("drv_tab") + HDD_ROW * DRVR_SZ + DRVR_SEG, 2))
 
-        def lseg(seg):
-            """HDV_LSEG of every live hd_vols row, in the driver's image."""
-            raw = m.read(seg * 16 + H["hd_vols"], HD_MAXVOL * HDV_SIZE)
+        def lseg(_ignored=None):
+            """HDV_LSEG of every live hd_vols row, in the driver's image.
+
+            THE IMAGE'S SEGMENT IS RE-READ, never banked: since SPEC.md 66.6.3
+            a driver image moves, and reading the driver's own words at the
+            base it loaded at returns a plausible number out of freed memory.
+            `tests/rdmove.py` failed for exactly that for a release.
+            """
+            raw = m.read(hdseg() * 16 + H["hd_vols"], HD_MAXVOL * HDV_SIZE)
             return [u16(raw, i * HDV_SIZE + HDV_LSEG) for i in range(HD_MAXVOL)]
 
         def dvsegs():
@@ -200,16 +208,35 @@ def main():
             return 1
 
         # --- OPEN the volume, so [dsk_dseg] names the claim, not the floor --
-        letter = None
+        # THE ZONE HAS TO BE ON THE GLASS. The Disk window opened above sits
+        # over the hard disk's zone, and a desktop zone is behind every
+        # window - so every candidate below would fail on a click that went
+        # somewhere else. `open_drive` names that now; this is what to do
+        # about it.
+        #
+        # UNCOVER AND NOT clear_desktop: this row still needs the Heap
+        # Compaction window it opened, and its dock tile a few lines below.
+        # Clearing the desktop got the zone and lost the window, and the row
+        # then failed on "window slot 1 has no instance, so no dock tile".
+        _ui = os88ui.UI(m, mouse=mo, verbose=False)
+        for cand in "CDEF":
+            try:
+                _ui.uncover(*os88geom.drive_pt(m, cand, S))
+            except Exception:
+                pass                            # no zone for that letter
+        letter, why = None, []
         for cand in "CDEF":
             try:
                 dispcp.open_drive(m, mo, S, os88marty.settle, cand)
                 letter = cand
                 break
-            except Exception:
-                continue
-        if letter is None:
+            except Exception as e:              # KEEP THE REASON. Four
+                why.append("%s: %s" % (cand,    # candidates all failing used
+                                       str(e).split("\n")[0][:120]))
+        if letter is None:                      # to print one sentence that
             print("FAIL: the hard disk mounted no browsable volume")
+            for w in why:                       # named none of them, and the
+                print("      %s" % w)           # harness knows exactly why
             return 1
         hdwin = dispcp.win_list(m, S)[-1]
         os88marty.settle(m)
@@ -235,6 +262,28 @@ def main():
             return 1
 
         # --- and run it again, whose big claim forces the compaction --------
+        #
+        # BACK TO B: FIRST, and this is not housekeeping. There is ONE Disk
+        # window on this machine and opening C: above RE-NAVIGATED it rather
+        # than opening a second (desk_click_x: files_open_drive "fronts a
+        # window already showing that drive's root, or opens one, or at the
+        # cap moves the front one"). So `dslot` is showing the hard disk's
+        # root now, and asking it for HEAPFRAG.O88 reads the DOS volume -
+        # `'HEAPFRAG.O88' is not in this folder. It holds ['AUTOEXEC.BAT',
+        # 'COMMAND.COM', ...]`, which is the harness saying exactly what
+        # happened and was previously a silent double-click on nothing.
+        _ui.uncover(*os88geom.drive_pt(m, "B", S))
+        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        # ...AND THAT RE-MOUNT IS WHAT CHECK 4 HAS TO BE KEYED ON. Going back
+        # to B: puts [dsk_dseg] on the .lowbss floor again (disk.inc's
+        # `mov word [dsk_dseg], LOW_SEG` at the mount), so the value sampled
+        # when C: was opened is not the value in force when the compaction
+        # fires four lines below. Check 4 read the earlier one, decided the
+        # pointer HAD named the claim, and then failed the kernel for not
+        # moving a pointer that correctly named somewhere else - "every
+        # listing read goes to the wrong segment until the next mount", about
+        # a mount that had already happened.
+        dseg_pre = u16(m.read(S("dsk_dseg"), 2))
         wx, wy, _, _ = dispcp.win_rect(m, S, dslot)
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_HEAPFRAG)
         time.sleep(22)
@@ -269,28 +318,44 @@ def main():
             bad.append("a dsk_vtab row still names the OLD base: a mount would "
                        "read the listing out of whatever claimed that memory")
 
-        # 4 - the KERNEL's live pointer.
+        # 4 - the KERNEL's live pointer, and THE ONLY FAILURE IT CAN SEE IS
+        # THE OLD BASE. `dsk_dseg_reloc` follows the pointer if and only if it
+        # names the block being moved - "the second equals the first only
+        # while that volume is the one mounted", in the routine's own words -
+        # so any value that is neither the old base nor the new one is a
+        # MOUNT having re-pointed it, which is correct and is not this check's
+        # business.
         #
-        # NOT EXERCISED unless [dsk_dseg] happened to name the claim when the
-        # compaction fired, and it is HARD to stage from the UI rather than
-        # unimportant: dsk_list_pick points it at the donated claim at the
-        # MOUNT (disk.inc, SPEC.md 22.6), and the only way this test has to
-        # force a compaction is to launch heapfrag out of the B: window - which
-        # mounts B: and puts the pointer back on the .lowbss floor on its way.
-        # So it is reported as what it is. The arm itself is two instructions
-        # on the same inputs as check 3, in the same routine, immediately after
-        # the loop check 3 proves ran.
+        # It used to demand the new base whenever the pointer had named the
+        # claim earlier in the run, and failed the kernel with "every listing
+        # read goes to the wrong segment until the next mount" over a pointer
+        # reading LOW_SEG - the .lowbss floor, which is exactly where a mount
+        # of B: puts it. The mount is not incidental either: the only way this
+        # row has to force a compaction is to LAUNCH heapfrag out of the B:
+        # window, and the launch mounts B: on its way to the file, before
+        # heapfrag's big claim can fire anything. So the sequence is mount,
+        # then compact, and the pointer correctly names the floppy's listing
+        # when `dsk_dseg_reloc` runs.
+        #
+        # NOT EXERCISED is therefore the designed outcome here rather than a
+        # gap, and it is hard to stage from the UI rather than unimportant.
+        # The arm itself is two instructions on the same inputs as check 3, in
+        # the same routine, immediately after the loop check 3 proves ran -
+        # and check 4b below catches the failure that matters whatever was
+        # mounted.
         dseg1 = u16(m.read(S("dsk_dseg"), 2))
-        if dseg0 != base:
-            print("  4 [dsk_dseg] followed NOT EXERCISED - it named %04x (the "
-                  ".lowbss floor), not the claim, when the compaction fired"
-                  % dseg0)
-        elif dseg1 == new:
+        if dseg1 == base and moved:
+            print("  4 [dsk_dseg] followed NO  (still %04x)" % dseg1)
+            bad.append("[dsk_dseg] still names the OLD base - every listing "
+                       "read goes to memory the next claim owns")
+        elif dseg1 == new and moved:
             print("  4 [dsk_dseg] followed OK  %04x" % dseg1)
         else:
-            print("  4 [dsk_dseg] followed NO  (still %04x)" % dseg1)
-            bad.append("[dsk_dseg] still names the old base - every listing "
-                       "read goes to the wrong segment until the next mount")
+            print("  4 [dsk_dseg] followed NOT EXERCISED - it names %04x, "
+                  "neither base: a mount re-pointed it (it was %04x while %s: "
+                  "was open and %04x before the compaction, and launching "
+                  "heapfrag mounts B: on its way to the file)"
+                  % (dseg1, dseg0, letter, dseg_pre))
 
         # 4b - THE ONE THAT IS NEVER VACUOUS: nothing anywhere still holds the
         # old base. This is the actual failure a missed holder produces - a

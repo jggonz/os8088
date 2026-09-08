@@ -9,7 +9,7 @@ machine is an 8088 and an 8088 has nothing above linear 0x0FFFFF - so those
 rows prove the FALLBACK, which is what makes `OP_XMS` a hint rather than a
 mode. THIS row is the other half.
 
-WHY QEMU: docs/TESTING.md's closed list, entry 6's shape - MartyPC cannot host
+WHY QEMU: docs/TESTING.md's closed list, entry 1 - MartyPC cannot host
 extended memory at all, so there is no "prefer MartyPC" to weigh. It is the
 same reason tests/xmcheck.py is here, and this borrows its boot and its
 block-table reader.
@@ -69,9 +69,16 @@ import os88fixture                                          # noqa: E402
 sys.path.insert(0, os.path.join(HERE, "multiseg"))
 import msegsym                                              # noqa: E402
 import os88qemu                                              # noqa: E402
+import os88build
 
-IMG = os.path.join(ROOT, "build", "mseg.img")
-O88 = os.path.join(ROOT, "build", "mseg.o88")
+IMG = os.path.join(ROOT, os88build.at("build/mseg.img"))
+                                # THE RUN'S TREE, not build/: os88fixture.make
+                                # passes BUILD=<tree> so `make test` resolves its
+                                # own goals there, and a TESTAPPS= pointing at
+                                # build/ is then a target with no rule under that
+                                # BUILD - which is how this failed a soak while
+                                # passing by hand (tests/unit/t_artpath.py)
+O88 = os.path.join(ROOT, os88build.at("build/mseg.o88"))
 PKG = "MSEG.O88"
 XMS_PART = 5                        # a SEMANTIC index and not derivable; the
                                     # count below is, and is read out of the
@@ -108,8 +115,12 @@ def boot():
     # `make test` DAEMONISES the emulator, so it outlives this script
     # unless somebody kills it - and the somebody is us (os88qemu).
     os88qemu.own()
-    r = subprocess.run(["make", "test", "TESTAPPS=" + IMG],
-                       capture_output=True, text=True, cwd=ROOT)
+    # THROUGH os88fixture.make: `make test` is a LAUNCHER, and the only thing
+    # it leaves under build/ is the buildnum stamp the parse rewrites - this
+    # puts that back. Its prerequisites ($(TESTIMG) $(TESTAPPS)) are declared
+    # as this row's `wants=`, so the runner has them current and nothing is
+    # built here either.
+    r = os88fixture.make("test", "TESTAPPS=" + IMG)
     if r.returncode:
         raise SystemExit("msegxms: make test failed:\n" + r.stdout + r.stderr)
     for _ in range(150):

@@ -83,6 +83,8 @@ void os88_mouse(struct os88_mouse *m);
 void os88_task_yield(void);
 void os88_task_sleep(int ticks);
 int  os88_task_spawn(void *win);
+int  os88_task_restartable(int on);   /* SPEC.md 66.6.2 - a stub here:
+                                       * the host has no heap to compact */
 void os88_task_alive(void *win);
 int  os88_peek(unsigned seg, unsigned off);
 unsigned os88_file_read(const char *name, void *buf, unsigned cap);

@@ -201,7 +201,7 @@ def check_kernel(v, kernel):
        "%s: KERNEL.SYS is contiguous" % v.name,
        "the boot sector has no cluster-chain walker (SPEC.md 19.3) - a fragmented "
        "kernel builds, verifies and mounts cleanly and does not boot")
-    eq(size, len(kernel), "%s: KERNEL.SYS size matches build/kernel.bin" % v.name)
+    eq(size, len(kernel), "%s: KERNEL.SYS size matches build/kernel.sys" % v.name)
     base = v.cluster_lba(chain[0]) * v.byts
     eq(v.blob[base:base + len(kernel)], kernel,
        "%s: KERNEL.SYS bytes are the kernel this tree built" % v.name,
@@ -248,7 +248,14 @@ def check_attrs(v, is_system):
 
 def main():
     build = os.path.join(ROOT, "build")
-    kernel = read(os.path.join(build, "kernel.bin"))
+    # **build/kernel.sys AND NOT kernel.bin**, because the two stopped being the
+    # same file when the kernel learned to ship compressed (SPEC.md 2.9.13).
+    # kernel.bin is the IMAGE - what runs, what os88sym resolves against, what
+    # every size guard is about - and kernel.sys is the FILE, which under
+    # KZIP is 40 sectors shorter and under no knob at all is a copy. What goes
+    # on a floppy is the file, so that is what a floppy is compared with; the
+    # Makefile ships $(KERNFILE) for exactly the same reason.
+    kernel = read(os.path.join(build, "kernel.sys"))
     seen = 0
     for img, is_system in ([(i, True) for i in SYSTEM_IMAGES] +
                            [(i, False) for i in DATA_IMAGES]):

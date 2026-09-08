@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Split the on-demand kernel modules out of the assembled kernel.
 
-SPEC.md 2.8, docs/ONDEMAND-PLAN.md.  `kernel.asm` assembles to
+SPEC.md 2.8, docs/plans/completed/ONDEMAND-PLAN.md.  `kernel.asm` assembles to
 `.text | pad | .cold | pad | .ovl | .modc | .modf | .modmap`, and everything
 from `.modc` onward is code that must NOT ship inside KERNEL.SYS: each module
 becomes a file of its own that the kernel reads into a heap claim when the
@@ -33,6 +33,10 @@ import hashlib
 import os
 import re
 import struct
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import os88lz  # noqa: E402
 import sys
 
 MAGIC = 0x384F                  # 'O','8', as a little-endian word
@@ -155,6 +159,11 @@ def main():
     ap.add_argument("--build", type=int, default=None,
                     help="the kernel's build number, checked against each "
                          "module's stamp")
+    ap.add_argument("--wrap", choices=("lz4", "lzb"), default=None,
+                    help="write each module as a 'CZ' container in this "
+                         "format (SPEC.md 20.14) - checked FIRST, as the "
+                         "image, then wrapped; a module that would not get "
+                         "smaller is written plain")
     ap.add_argument("-q", "--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -192,8 +201,12 @@ def main():
             fail("%s: layout stamp %#06x against %s's %#06x - two modules out "
                  "of one assembly cannot disagree about the kernel they are "
                  "for" % (os.path.basename(path), layout, out[0][0], out[0][3]))
+        data = img
+        if args.wrap:
+            data, _ = os88lz.cz_wrap(
+                img, os88lz.LZ4 if args.wrap == "lz4" else os88lz.LZB)
         with open(path, "wb") as fh:
-            fh.write(img)
+            fh.write(data)
         out.append((os.path.basename(path), size, nent, layout))
 
     kern = blob[:cut]

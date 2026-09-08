@@ -24,6 +24,15 @@ that the number of relocation calls equals the number of blocks that moved,
 which with the compactor gone is 0 == 0. It is vacuously true there, which is
 exactly why check 10 ("something moved at all") is a separate assertion: 11
 alone cannot tell a working compactor from an absent one.
+
+CHECK 13 NEEDED A SECOND A/B, because HEAPCOMPACT=0 is too blunt for it: with
+no compactor at all everything past check 6 goes red, so that arm cannot tell
+"the descending pass works" from "some pass works". It was therefore verified
+by AMPUTATION - mem_compact's `.flip` arm patched to `jmp .undo` and nothing
+else changed - and the result is the assertion in one line: checks 1..12 pass
+and only 13 goes red. It is not a knob because it would be a permanent knob
+for a question asked once; the amputation is two lines and reproducible from
+this paragraph (docs/WRITING-TESTS.md 1).
 """
 import sys, time, argparse
 sys.path.insert(0, "/home/user/os8088/tools")
@@ -32,7 +41,7 @@ import os88marty, os88mouse, os88sym, os88geom, dispcp
 from os88fixture import need
 
 KERNEL_SEG = 0x0060
-MC_SIZE = 10
+MC_SIZE = os88geom.MC_SIZE
 MEM_MAX = 32
 # every window-record offset comes from os88geom, which checks itself
 # against wm.inc at import - WIN_SIZE has moved 18 -> 28 over this tree
@@ -40,10 +49,15 @@ MEM_MAX = 32
 LABELS = ["worker hired", "room", "comb built", "pattern round-trip",
           "declare movable", "break the comb", "heap IS fragmented",
           "the big claim", "contents intact", "pinned block held",
-          "something moved", "told once per move"]
-# With the compactor removed these two must go the other way. Check 11 is NOT
+          "something moved", "told once per move",
+          "ceiling packed up", "dma lands page-safe"]
+# With the compactor removed these THREE must go the other way. Check 11 is NOT
 # here: 0 moves and 0 notifications agree, so it passes honestly in both.
-OFF_MUST_FAIL = {7, 10}
+# Check 12 is the descending pass (SPEC.md 66.4): its ask can only be funded by
+# merging the run under a ceiling block with the hole above it, so with no
+# compactor at all there is nothing to merge and the claim is refused. Check 13
+# is SPEC.md 66.4.2's page-constrained move, and its ask is the same shape.
+OFF_MUST_FAIL = {7, 10, 12, 13}
 
 
 def u16(b, i=0):
@@ -147,6 +161,7 @@ def main():
             print("   block %d  %04x -> %04x%s"
                   % (i, u16(b, 72 + i * 2), u16(b, 56 + i * 2),
                      "   (freed)" if u16(b, 56 + i * 2) == 0 else ""))
+        print("dma landed at page offset %d paragraphs" % u16(b, 114))
         print("L0=%dK S=%dK L1=%dK want=%dK  moved=%d told=%d stranger=%d"
               % (u16(b, 6), u16(b, 4), u16(b, 8), u16(b, 10),
                  nmoved, nrel, nbad))

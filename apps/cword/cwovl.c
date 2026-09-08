@@ -148,8 +148,8 @@ static const struct cw_ctl cw_dc_ask[] = {
  * one 8x8 face - a fact about how the build renders, which belongs in SPEC.md
  * and in the greyed items themselves (SPEC.md 47), not in the box a user opens
  * to find out whose software this is. It also went stale the day View > Page
- * and a face off FONTS/ landed (SPEC.md 73.12.1, 67.12.2), which is what a
- * release note in an About box does.
+ * and a face off SYSTEM/FONTS landed (SPEC.md 73.12.1, 73.12.2), which is
+ * what a release note in an About box does.
  *
  * TWELVE ROWS, AND THAT NUMBER IS THE 640x200 ADAPTERS' (SPEC.md 39). A
  * control's y is its ROW - ovl_ctl_y() is cw_d_y + 6 + row * 10 - while

@@ -45,7 +45,7 @@
 ; --- task table (SPEC.md 8) --------------------------------------------------
 %ifdef KERN_SMALL
 MAX_TASKS   equ 7               ; SIX worker slices and the UI task
-                                ; (docs/KERN-SMALL-CUT-PLAN.md D1). The SDK's
+                                ; (docs/plans/KERN-SMALL-CUT-PLAN.md D1). The SDK's
                                 ; copy STAYS AT 14, on SPEC.md 51.0's rule for
                                 ; MEM_P_FATW_N: apps/os88api.inc publishes this
                                 ; to packages and taskmgr sizes buffers from it
@@ -128,7 +128,7 @@ SCH_IDLE_STK    equ 128         ; the idle task. Its own footprint is at most 4
                                 ; bytes - `pushf` then `cli`, then task_yield's
                                 ; own `pushf`/`cli` - so what it needs IS the
                                 ; interrupt floor, measured at 32 on QEMU and
-                                ; 40-64 on real iron (docs/STACK-SLOTS-PLAN.md
+                                ; 40-64 on real iron (docs/plans/completed/STACK-SLOTS-PLAN.md
                                 ; 7.1). 128 is 2x the worst of those
 SCH_BUILTIN_STK equ 128         ; a built-in kind's task. Timer and Bounce are
                                 ; the two that take one, and six Bounces at
@@ -159,7 +159,7 @@ SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
 ; sch_stkbase's addresses, sch_stksize's sizes, the total sch_stacks reserves,
 ; and the count that must agree with MAX_TASKS. Edit here and nowhere else.
 ;
-; It is a FIXED PARTITION and not an allocator (docs/STACK-SLOTS-PLAN.md 6.2):
+; It is a FIXED PARTITION and not an allocator (docs/plans/completed/STACK-SLOTS-PLAN.md 6.2):
 ; the slices exist from boot, a spawn takes the smallest free one that is big
 ; enough, and running out is OSAPI_TASK_SPAWN's existing CF=1 - which SPEC.md
 ; 20.6 already requires every package to degrade on. No compaction, no
@@ -169,9 +169,9 @@ SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
 ; stop being uniform, and every reader had to stop assuming otherwise first.
 ; -----------------------------------------------------------------------------
 %ifdef KERN_SMALL
-; --- kern_small's SIX (docs/KERN-SMALL-CUT-PLAN.md D1) -----------------------
+; --- kern_small's SIX (docs/plans/KERN-SMALL-CUT-PLAN.md D1) -----------------------
 ; 1,280 bytes against kern_big's 2,816. The COUNT is the owner's; what is
-; chosen here is WHICH SIX, off the same survey (docs/STACK-SLOTS-PLAN.md 12.1)
+; chosen here is WHICH SIX, off the same survey (docs/plans/completed/STACK-SLOTS-PLAN.md 12.1)
 ; read against what SPEC.md 24.5 actually puts on the small disks:
 ;
 ;   the 384 class  ftpd, the Browser and Frotz - NONE of which ships on
@@ -212,7 +212,7 @@ SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
                                 ; on the CALLER's stack - they ask for 256
     SCH_SLOT 192                ; THE MODAL CLASS - eleven of the twenty
     SCH_SLOT 192                ; workers in the tree land here
-    SCH_SLOT 192                ; (docs/STACK-SLOTS-PLAN.md 12.1): WIREFRAME,
+    SCH_SLOT 192                ; (docs/plans/completed/STACK-SLOTS-PLAN.md 12.1): WIREFRAME,
     SCH_SLOT 192                ; Artful, the Task Manager, the Fractal, WEAVE,
     SCH_SLOT 192                ; Cyclone, Notepad, Arkanoid, Tracker
     SCH_SLOT 192
@@ -276,7 +276,7 @@ SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
 ; out:      nothing
 ; clobbers: flags
 ;
-; IT IS IN THE BOOT OVERLAY (SPEC.md 2.5, docs/LAST-DROP-BYTES.md row 3), which
+; IT IS IN THE BOOT OVERLAY (SPEC.md 2.5, docs/plans/LAST-DROP-BYTES.md row 3), which
 ; is 166 bytes of `.text` that stop existing when kmain gives the blob back.
 ; kmain:4170 is its ONE caller and there is no second entry: nothing
 ; re-initialises the scheduler, the reboot path is sched_unhook - which RESTORES
@@ -532,8 +532,10 @@ sch_fdivs:  dw 32768, 21845, 16384      ; N = 2, 3, 4
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 sched_unhook:
+%ifdef NO_FDDPARK
     push ax
     push es
+%endif
 
     xor ax, ax
     mov es, ax
@@ -563,12 +565,20 @@ sched_unhook:
     out 0x40, al
     popf
 
+%ifdef NO_FDDPARK
     pop es
     pop ax
     ret
+%else
+    jmp COLD_SEG:dsk_fdd_park_x ; ...and straight on into SPEC.md 18.100's park
+                                ; and the int 19h at its tail. NEVER RETURNS on
+                                ; this arm: both callers are the reboot path
+                                ; and neither has an instruction after it, so
+                                ; AX/ES need not come back either
+%endif
 
 ; -----------------------------------------------------------------------------
-; sch_wake_ui - make the UI task ready (PROBE, docs/SCHED-IDLE-PLAN.md 6.3)
+; sch_wake_ui - make the UI task ready (PROBE, docs/plans/completed/SCHED-IDLE-PLAN.md 6.3)
 ;
 ; One byte store, atomic on an 8086, so an ISR may do it with nothing held.
 ; Task 0 is the UI task and its record is at offset 0 of sch_tasks, so this is
@@ -656,7 +666,7 @@ sch_idle_body:
 ; in:  nothing.  out: CF=1 if no slot was free (the machine keeps the old
 ;      resume-the-outgoing fallback and nothing else changes)
 ;
-; IN THE BOOT OVERLAY (docs/LAST-DROP-BYTES.md row 16). One caller, kmain:4182,
+; IN THE BOOT OVERLAY (docs/plans/LAST-DROP-BYTES.md row 16). One caller, kmain:4182,
 ; and the idle task it spawns outlives it by construction - a task's code is
 ; sch_idle_body in `.text`, which is what BX = 0 above names. Taking the address
 ; of a `.text` label from `.ovl` is correct and taking the address of an `.ovl`
@@ -860,26 +870,10 @@ task_spawn:
                                 ; address is already parked in T_SP above, so
                                 ; stosw may walk it. DF is 0 from the fill's
                                 ; own cld and nothing between touches it
-    mov ax, bp
-    stosw                       ; DS  = the task's own segment
-    mov ax, KERNEL_SEG
-    stosw                       ; ES  = the kernel, always (SPEC.md 20.1)
-    xor ax, ax
-    stosw                       ; BP
-    stosw                       ; DI
-    stosw                       ; SI
-    stosw                       ; BX
-    xchg ax, dx                 ; one byte each way, and DX is wanted below
-    stosw                       ; DX  = the spawn argument
-    xchg ax, dx
-    stosw                       ; CX
-    stosw                       ; AX
-    mov ax, si
-    stosw                       ; IP  = entry
-    mov ax, bp
-    stosw                       ; CS  = the task's own segment
-    mov ax, 0x0202
-    stosw                       ; FLAGS: IF=1, reserved bit 1 set
+    call sch_frame              ; BP = the segment, SI = the entry, DX = the
+                                ; spawn argument, ES:DI = the frame - and
+                                ; sch_wk_restart builds the identical twelve
+                                ; words when it throws a worker's stack away
     mov [bx+T_INST], dl         ; owning instance (0xFF = none)
     mov byte [bx+T_FLAGS], 0    ; TF_SERVICE is the driver cell's to set
                                 ; (SPEC.md 53.2), never inherited
@@ -914,6 +908,116 @@ task_spawn:
     ret
 
 ; -----------------------------------------------------------------------------
+; sch_frame - write a task's initial register frame (module internal)
+; in:  BP = the segment it runs in, SI = the entry offset, DX = the instance
+;      index (the worker's documented `in:`), ES:DI = the frame, DF = 0
+; out: DI past it; AX spent, everything else preserved
+;
+; TWELVE WORDS IN sch_switch's POP ORDER, and there are two callers because
+; there are two ways a task's stack comes to be empty: task_spawn cuts a fresh
+; slice, and sch_wk_restart throws a live one away (SPEC.md 66.6.2). They must
+; agree word for word - a frame the scheduler resumes is not a structure it
+; validates - so they are one body rather than two that look alike.
+; -----------------------------------------------------------------------------
+sch_frame:
+    mov ax, bp
+    stosw                       ; DS  = the task's own segment
+    mov ax, KERNEL_SEG
+    stosw                       ; ES  = the kernel, always (SPEC.md 20.1)
+    xor ax, ax
+    stosw                       ; BP
+    stosw                       ; DI
+    stosw                       ; SI
+    stosw                       ; BX
+    xchg ax, dx                 ; one byte each way, and DX is wanted by the
+    stosw                       ; DX  = the instance index
+    xchg ax, dx                 ; caller
+    stosw                       ; CX
+    stosw                       ; AX
+    mov ax, si
+    stosw                       ; IP  = entry
+    mov ax, bp
+    stosw                       ; CS  = the task's own segment
+    mov ax, 0x0202
+    stosw                       ; FLAGS: IF=1, reserved bit 1 set
+    ret
+
+; -----------------------------------------------------------------------------
+; sch_wk_restart - throw a worker's stack away and re-enter it (SPEC.md 66.6.2)
+; in:  AL = the task slot, BX = the segment to run it in, CX = the entry offset
+; out: nothing (all registers and the flags preserved)
+;
+; task_spawn's tail, run again on a slot that ALREADY EXISTS. It is the one way
+; past SPEC.md 66.6.1's limit: a worker's stack carries its own package's
+; segment from before its first instruction and at depths nothing can find
+; (docs/plans/HEAP-UNPIN-PLAN.md 4.1), so the answer is not to find them - it
+; is to arrange for the stack not to matter, which only the package can
+; authorise (OSAPI_TASK_RESTARTABLE).
+;
+; A REBUILD IN PLACE AND NOT A KILL AND RESPAWN, for two reasons that both
+; matter. A respawn can FAIL - first fit over a busy table - and the kernel
+; would then have destroyed a worker it could not promise to return; and
+; task_exit releases the INSTANCE record with the task, which is a package
+; being closed rather than a worker being restarted.
+;
+; WHAT IT DOES NOT REDO. The slice keeps its 0xCC fill and its SCH_MAGIC
+; canary: both are properties of a slice that has already been cut, and the
+; high-water mark tools/stkwater.py reads is MORE useful across a restart, not
+; less - it is still the deepest this worker has ever been.
+;
+; **IT MUST CLEAR [sch_parked].** The worker is standing in inst_park_hold or
+; in gfx_lock's .block arm, and BOTH clear that byte on the way out - which is
+; a way out this routine has just deleted. Left set, inst_seg_parked answers
+; "parked" for ever and the next compaction moves the claims of a worker that
+; is running. (gfx_lock's [gfx_lock_want] is left set and that one is
+; harmless: SPEC.md 7.3 makes it a fairness hint the next contended acquire
+; spends.)
+; -----------------------------------------------------------------------------
+sch_wk_restart:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+    cli                         ; the frame below is what sch_switch resumes
+                                ; from, so it is built whole or not at all
+    xor ah, ah                  ; AX = the slot
+    mov si, ax
+    mov byte [si+sch_parked], 0 ; ...and it is NOT parked any more: see above
+    shl si, 1                   ; SI = slot*2, the index BOTH slice tables take
+    mov di, [si+sch_stkbase]
+    add di, [si+sch_stksize]    ; base + size = the slice TOP...
+    sub di, SCH_FRAME           ; ...and the frame is carved from it, exactly
+    shl si, 1                   ; as task_spawn carves it. T_SIZE = 8, so the
+    shl si, 1                   ; record index is two more open shifts
+                                ; (sch_currec's idiom)
+    mov [si+sch_tasks+T_SP], di
+    mov dl, [si+sch_tasks+T_INST]   ; DX = THE INSTANCE INDEX and not the task
+    xor dh, dh                      ; slot: it is task_spawn's spawn argument
+                                    ; and the worker's documented `in:`, and
+                                    ; the two are different numbers
+    mov bp, bx                  ; the segment and the entry into the shared
+    mov si, cx                  ; builder's registers
+    push ss
+    pop es                      ; ES = LOW_SEG: the frame lives there and DS
+    cld                         ; cannot reach it
+    call sch_frame              ; ...and the same twelve words task_spawn
+    pop bp                      ; writes, from the same body
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; task_yield - give up the rest of this time slice
 ;
 ; Fakes the hardware int 08h frame (FLAGS with the caller's IF, CS, IP) with
@@ -926,7 +1030,7 @@ task_spawn:
 ; clobbers: flags only (arithmetic flags; IF preserved via the frame)
 ; -----------------------------------------------------------------------------
 task_yield:
-%ifdef KERN_BIG
+%ifdef KERN_EMU
     ; --- the VMware absolute pointer's service point (SPEC.md 9.11.3) --------
     ; vmmouse is POLLED, not interrupt-driven, so every spin loop that waits on
     ; the mouse - a drag, a grow, a menu track, the file manager's icon drag -
@@ -939,11 +1043,20 @@ task_yield:
     ; is for ui_task and menu_drop, which already hold the kernel's; this site
     ; does not - task_yield is an OSAPI slot, so the caller may be a package
     ; with its own DS. The GATE is still the macro's cs-relative compare, and
-    ; the segment load moves INSIDE the branch: a machine with no backdoor then
-    ; pays 9 bytes and ~39 clocks (the 8088's fetch floor over the encoding,
+    ; the segment load moves INSIDE the branch: a machine with no backdoor pays
+    ; 9 bytes and ~39 clocks (the 8088's fetch floor over the encoding,
     ; PERFORMANCE.md Part 2) instead of 16 and 91 - 8.2 us against 19.1, or
-    ; 1.2% of a 693 us switch instead of 2.8%. That is the whole price the
-    ; target machine pays for a branch it can never take.
+    ; 1.2% of a 693 us switch instead of 2.8%.
+    ;
+    ; THE TARGET MACHINE NO LONGER PAYS EVEN THAT, and this block is why the
+    ; guard is KERN_EMU and not KERN_BIG (SPEC.md 9.11.7). task_yield is the
+    ; hottest thing in the kernel - every drag, every grow, every menu track
+    ; and every worker goes through it - so 9 bytes and 39 clocks HERE were the
+    ; largest single share of what an XT was charged for a protocol it cannot
+    ; speak. On kern_big this now assembles to nothing at all; the arithmetic
+    ; above is kept because it is what the arrangement buys on the build that
+    ; DOES take the branch, where a hypervisor guest pays the 9-byte form on
+    ; every switch the backdoor is idle for.
     ;
     ; Before the cli/frame build: this is still the caller's task context with
     ; IF as it left it, exactly as ui_task's own VMM_POLL - and vmm_poll takes
@@ -1015,7 +1128,7 @@ task_yield:
 ; The idiom stood in six places and was spelled three different ways.  Five
 ; are now calls; THE SIXTH IS NOT AND MUST NOT BE - sch_switch's copy is on
 ; the switch path, where a near call and ret (~43 clocks) is 0.05% of an idle
-; machine but ~1.4% at the 1,541 switches a second docs/SCHED-IDLE-PLAN.md
+; machine but ~1.4% at the 1,541 switches a second docs/plans/completed/SCHED-IDLE-PLAN.md
 ; 6.1.2 measures with an app open.  That is why this saves what it saves.
 ;
 ; PLACEMENT: outside the sch_isr -> sch_switch -> sch_resume fall-through run.
@@ -2345,7 +2458,7 @@ sch_s_ui:   db 'UI TASK', 0
 ; right independently and a table is something they look up.
 ;
 ; A DERIVATION ALSO CANNOT SURVIVE VARIABLE SIZES, which is what
-; docs/STACK-SLOTS-PLAN.md 6 needs: with classes there is no expression from
+; docs/plans/completed/STACK-SLOTS-PLAN.md 6 needs: with classes there is no expression from
 ; the slot index to the base at all. So the table is the enabling mechanism as
 ; well as the simplification, and both of those were true before any class
 ; existed.
@@ -2407,7 +2520,7 @@ sch_stksize:
 %macro SCH_SLOT 1
     dw %1
 %endmacro
-    dw STK0_SIZE                ; slot 0: the UI task's 1,024
+    dw STK0_SIZE                ; slot 0: the UI task's 512
     SCH_PARTITION
 %unmacro SCH_SLOT 1
 

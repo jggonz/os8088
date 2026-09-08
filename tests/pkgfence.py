@@ -120,7 +120,9 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
                          "fence (SPEC.md 19.1)" % (fname, have[fname]))
 
     for fname, img, bss, wrapped, damage in CASES:
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, fname)
+        # ...and it must REFUSE: this row is the size fence (SPEC.md 19.1).
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, fname,
+                          expect="refusal")
         os88marty.settle(m)
         got = m.read(S("ld_status"), 1)[0]
         say("%-13s image %#06x + bss %#06x = %#07x, wraps to %#06x -> %s "

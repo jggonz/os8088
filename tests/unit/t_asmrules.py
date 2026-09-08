@@ -350,7 +350,7 @@ def orphan_sources():
     clean: the two hits it had were both real - a greyed-control sentence
     `hd_ibhit` can never produce, and a "will not boot" arm the SYSTEM phase
     took with it when SPEC.md 52.10.10 moved the commit
-    (docs/HANDOFF-SOAK-FINDINGS.md A4).
+    (docs/plans/HANDOFF-SOAK-FINDINGS.md A4).
     """
     ok = (os.path.join(ROOT, "kernel"), os.path.join(ROOT, "drivers"))
     return [p for p in sources()

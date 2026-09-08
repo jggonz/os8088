@@ -5,7 +5,7 @@
     make mseg && python3 tests/msegnomem.py [machine] [system-image]
 
 This is the third thing the whole design exists for, said as a measurement.
-Every workaround in the tree today (docs/O88-MULTISEG-PLAN.md 2.2) answers the
+Every workaround in the tree today (docs/plans/completed/O88-MULTISEG-PLAN.md 2.2) answers the
 size question AFTER the program is running: it reads the whole of itself off
 the disk, gets a segment, runs its entry proc and only then asks for the
 memory it cannot live without. The parts standard answers it from a table that
@@ -58,9 +58,11 @@ import subprocess
 import sys
 sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
+import os88build
 import os88marty
 import os88mouse
 import os88sym
+import os88geom                                              # noqa: E402
 import dispcp
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -69,7 +71,8 @@ DEFINES = ["DISK_COUNTERS"]
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_herc_gla_144"
 SYS_IMG = sys.argv[2] if len(sys.argv) > 2 else "build/os8088-360.img"
 APPS_IMG = "build/mseg.img"
-MEM_MAX, MC_SIZE, MC_SEG, MC_OWN = 32, 10, 0, 4
+MEM_MAX, MC_SIZE, MC_SEG, MC_OWN = (os88geom.MEM_MAX, os88geom.MC_SIZE,
+                                    os88geom.MC_SEG, os88geom.MC_OWN)
 LD_OK, LD_EABORT = 0, 4
 fails = []
 
@@ -111,7 +114,12 @@ def run():
         # --- the REFUSAL, and what it cost ---------------------------------
         c0 = struct.unpack_from("<H", m.read(i13, 2), 0)[0]
         s0 = struct.unpack_from("<H", m.read(secs, 2), 0)[0]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MSEGBIG.O88")
+        # EXPECT A REFUSAL, and say so: assertion 1 IS that MSEGBIG does not
+        # open. `expect="refusal"` requires no window and reports ld_status
+        # as the answer - a stronger statement than the blind settle it
+        # replaces, which could not tell a refusal from a slow launch.
+        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MSEGBIG.O88",
+                          expect="refusal")
         os88marty.settle(m)
         c1 = struct.unpack_from("<H", m.read(i13, 2), 0)[0]
         big_secs = (struct.unpack_from("<H", m.read(secs, 2), 0)[0] - s0) & 0xFFFF
@@ -130,20 +138,33 @@ def run():
                 "nothing on it; 2 or 3 mean the KERNEL refused the file, "
                 "which is a different mechanism from the package refusing "
                 "itself (SPEC.md 20.12)" % (big_status, LD_EABORT))
-        # THE KERNEL'S WORDS, NOT THE PACKAGE'S, AND THAT IS THE CONTRACT.
-        # op_load does put up `Not enough memory` - but step 10 toasts
-        # [ld_status] over fm_stattab for EVERY outcome including LD_EABORT,
-        # and it runs after the entry proc returns. So a package that refuses
-        # from its entry is always overwritten by `Load failed`, and asserting
-        # the package's own string here would be asserting a race. A package
-        # that wants to name the figure has to survive to draw it.
-        if toast != "Load failed":
+        # THE PACKAGE'S WORDS, NOT THE KERNEL'S, AND THAT IS THE CONTRACT NOW.
+        #
+        # THIS ASSERTION WAS INVERTED, and it had been for as long as SPEC.md
+        # 20.12.4 has existed. It read: step 10 toasts [ld_status] over
+        # fm_stattab for every outcome including LD_EABORT, so a package that
+        # refuses from its entry is always overwritten by `Load failed`. That
+        # was true, and 20.12.4 is the decision to stop doing it - in
+        # loader.inc's own words at the abort:
+        #
+        #     "Step 10 would toast `Load failed` over it and the reason would
+        #      never reach the glass. So when the toast that is up is this
+        #      instance's, re-home it to the kernel ... and tell
+        #      ld_say_status to record the verdict without saying it."
+        #
+        # `ld_said` is that flag and `ld_say_status` reads it. So the string a
+        # user sees when a package refuses ITSELF is the package's - which is
+        # the whole point of a package being allowed to refuse itself, and is
+        # strictly more use than `Load failed`. A toast raised by anybody else
+        # during the launch is not the instance's and IS still overwritten.
+        if toast != "Not enough memory":
             fails.append(
-                "the toast says %r and should be 'Load failed'. That is the "
-                "kernel's LD_EABORT message from SPEC.md 21 step 10, which "
-                "runs after the entry returns and replaces whatever op_load "
-                "put up - so this string is what a user actually sees when a "
-                "package refuses itself" % toast)
+                "the toast says %r and should be the PACKAGE's own 'Not "
+                "enough memory'. SPEC.md 20.12.4: a refusal the entry proc "
+                "SAID is left on the glass and ld_say_status records the "
+                "verdict without saying it, because `Load failed` over the "
+                "top would lose the reason. The kernel's own string here "
+                "would mean [ld_said] never reached ld_say_status" % toast)
 
         # --- and the SUCCESS on the same disk, for the difference ----------
         c0 = struct.unpack_from("<H", m.read(i13, 2), 0)[0]
@@ -207,20 +228,25 @@ def check_heap(before, refused):
 
 
 def main():
+    # A PRIVATE TREE (tools/os88build.py), so the counted kernel never lands in
+    # build/ and there is nothing to put back. The `finally` that used to do
+    # that could only promise the restore - a killed Python runs none - and it
+    # cost a second full build every run.
     print("  building the counted kernel (%s)..." % " ".join(KNOBS))
-    r = subprocess.run(["make"] + KNOBS, cwd=ROOT, capture_output=True,
-                       text=True, timeout=900)
-    if r.returncode != 0:
-        raise SystemExit("msegnomem: `make %s` failed, so nothing below would "
-                         "mean what it says:\n%s"
-                         % (" ".join(KNOBS), r.stdout[-2000:] + r.stderr[-2000:]))
-    try:
-        os88sym.default_defines(*DEFINES)
-        before, refused = run()
-        check_heap(before, refused)
-    finally:
-        subprocess.run(["make"], cwd=ROOT, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL)
+    global SYS_IMG, APPS_IMG
+    # `mseg` COMES ALONG, and that is a fix rather than tidiness: this row's
+    # own usage line says `make mseg && python3 tests/msegnomem.py`, mseg is NOT
+    # in `all`, and the row never built it - so on any tree where somebody had
+    # not typed that by hand it died with FileNotFoundError on build/mseg.o88.
+    # That is docs/plans/HANDOFF-SOAK-FINDINGS.md B4's shape exactly: an ABSENT gate
+    # reading as a failing one. A private tree has to name what it wants, and
+    # naming it is what fixed it.
+    t = os88build.tree(*KNOBS, targets=("os8088-360.img", "mseg")).apply()
+    SYS_IMG = t.img("os8088-360.img")
+    APPS_IMG = t.img("mseg.img")
+    os88sym.default_defines(*DEFINES)
+    before, refused = run()
+    check_heap(before, refused)
 
     if fails:
         print("\nmsegnomem: FAIL")

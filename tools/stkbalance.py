@@ -98,7 +98,7 @@ POP = re.compile(r"^(pop|popa|popf)\b", re.I)
 RET = re.compile(r"^(ret|retn|retf|iret)\b", re.I)
 RETF = re.compile(r"^retf\b", re.I)
 PUSHF = re.compile(r"^pushf\b", re.I)
-JMP = re.compile(r"^jmp\s+(?:short\s+|near\s+|word\s+)?(\S+)", re.I)
+JMP = re.compile(r"^jmp\s+(?:strict\s+)?(?:short\s+|near\s+|word\s+)?(\S+)", re.I)
 JCC = re.compile(r"^(j[a-z]{1,3}|loop|loope|loopne|loopz|loopnz)\s+"
                  r"(?:short\s+)?(\S+)$", re.I)
 SPADD = re.compile(r"^(add|sub)\s+sp\s*,\s*(\S+)$", re.I)
@@ -118,7 +118,7 @@ MACDEF = re.compile(r"^%macro\s+([A-Za-z_][A-Za-z0-9_]*)\s+(\d+)", re.I)
 MACEND = re.compile(r"^%endmacro\b", re.I)
 # `jmp %1` / `call %1` inside a macro body: the macro's ARGUMENT is a branch
 # target, so an invocation is control flow and not an address being taken.
-MACJMP = re.compile(r"^(?:jmp|j[a-z]{1,3})\s+(?:short\s+)?%1\s*$", re.I)
+MACJMP = re.compile(r"^(?:jmp|j[a-z]{1,3})\s+(?:strict\s+)?(?:short\s+|near\s+)?%1\s*$", re.I)
 MACCALL = re.compile(r"^call\s+%1\s*$", re.I)
 # `jmp short $+2` and friends: a jump to the very next instruction, used all
 # over this tree to let an I/O port settle.  It is not a tail call.

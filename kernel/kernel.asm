@@ -151,7 +151,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; folder it created from the file dialog - the deepest mark left was 246 bytes
 ; on task 0's stack and 150 on a background task's.
 ; =============================================================================
-; --- the split (docs/KERN-SPLIT-PLAN.md) -------------------------------------
+; --- the split (docs/history/KERN-SPLIT-PLAN.md) -------------------------------------
 ; KERN_BIG and KERN_SMALL are two builds off this one tree, and the knob is
 ; `make KERN_BIG=1`. The reason is three budget moves old and is written out
 ; below and in docs/KERNEL-MEMORY.md: a 128KB machine and a 640KB machine stop
@@ -187,6 +187,42 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %endif
 %elifndef KERN_SMALL
 %define KERN_BIG
+%endif
+
+; --- the THIRD build: kern_emu (SPEC.md 9.11.7) ------------------------------
+; KERN_EMU is not a fourth tier beside those two - it is KERN_BIG WITH ONE
+; FEATURE ADDED, and it is written as an addition rather than as a tier for a
+; reason that is structural rather than stylistic: a third exclusive name would
+; fall outside every `%ifdef KERN_BIG` already in this tree, so kern_emu would
+; lose the RAM disk, the extended store, the loadable drivers and the whole
+; feature set it is meant to be a superset of. It is therefore ADDITIVE, and
+; kernel.asm defines KERN_BIG for it here so that no site below has to spell
+; `%ifdef KERN_BIG` or `%ifdef KERN_EMU` to mean "the big feature set".
+;
+; WHAT IT BUYS is SPEC.md 9.11's absolute pointer and nothing else. The
+; backdoor protocol is 32-bit and the target machine is an 8088, so the whole
+; feature is dead weight on every machine this project is calibrated against -
+; which is the same argument SPEC.md 41.12 made for XMEM.DRV, one level up:
+; XMEM moved the BODY out and kept a resident sniff because an 8086 can ask
+; whether there is memory above 1MB. Here even the PROBE is 386 code, so there
+; is nothing an XT can usefully keep, and the honest resident cost on that
+; machine is ZERO rather than a small one.
+;
+; SO kern_big AND kern_small PAY NOTHING - not a byte of image, not a cluster
+; of floppy. VMMOUSE.DRV is off their disks too ($(DRIVERS) in the Makefile),
+; because a driver no resident code can name is 521 bytes of a 360KB floppy
+; that had 17 clusters left.
+;
+; NEITHER IS AN ERROR: KERN_EMU with KERN_SMALL would be a 128KB machine
+; running a 386 protocol, which is not a product, so it is refused here rather
+; than left to fail somewhere below as a missing symbol.
+%ifdef KERN_EMU
+ %ifdef KERN_SMALL
+%error "KERN_EMU and KERN_SMALL are both defined - the emulator build is big"
+ %endif
+ %ifndef KERN_BIG
+  %define KERN_BIG
+ %endif
 %endif
 
 ; BANDCOMP - the 1bpp band composer (SPEC.md 5.9), and since SPEC.md 5.9.6 it
@@ -264,7 +300,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 ; SPEC.md 51's LOADABLE DRIVERS are kern_big's too (SPEC.md 51.0). It is the
-; largest single item in docs/KERN-SMALL-CUT-PLAN.md's hardware group and the
+; largest single item in docs/plans/KERN-SMALL-CUT-PLAN.md's hardware group and the
 ; only one there that is not a device - it is the ABILITY to load one - so it
 ; is the one that needed a product decision rather than a measurement. The
 ; decision is the owner's, in their words: *"remove the drivers from the OS
@@ -282,7 +318,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 ; ...and with them go the sound layer's CARD tiers (SPEC.md 34.0). This is
-; the half of docs/KERN-SMALL-CUT-PLAN.md's A1 that OS88_DRIVERS has already
+; the half of docs/plans/KERN-SMALL-CUT-PLAN.md's A1 that OS88_DRIVERS has already
 ; made unreachable rather than merely unwanted: every route to an OPL2 or a
 ; Sound Blaster is a `[drv_svc + DSV_*]` read, and on a build that can load no
 ; driver that table is zero for the life of the machine. The PC SPEAKER is
@@ -319,7 +355,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 ; SPEC.md 22.3-22.5's Cut/Copy/Paste is an ON-DEMAND MODULE on kern_small
-; (SPEC.md 2.8, docs/KERN-SMALL-MODULE-SPLIT.md 9.2 wave 1) and stays resident
+; (SPEC.md 2.8, docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2 wave 1) and stays resident
 ; `.cold` on kern_big, which keeps its speed and its one contiguous boot read:
 ; a module is CUT OUT of kernel.bin by tools/os88mod.py and MODC_START is
 ; exactly where the image ends, so nothing about big's read changes.
@@ -333,7 +369,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 ; SPEC.md 38's Standard File dialog, on FCP_MOD's terms one block up and
-; through the same seam (SPEC.md 38.0, docs/KERN-SMALL-MODULE-SPLIT.md 9.2
+; through the same seam (SPEC.md 38.0, docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2
 ; wave 2). SEVEN entries against MOD_NENT's eight, because SPEC.md 13.10.5's
 ; thumb drag is kern_big's already and takes fdlg_onup and fdlg_ondrag with
 ; it - so this fits the mechanism as it stands and needed no MOD_NENT raise.
@@ -358,7 +394,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
   %endif
 %endif
 
-; GFX_VGA - does this build drive a VGA at all? (docs/MONO-RECLAIM-PLAN.md 2)
+; GFX_VGA - does this build drive a VGA at all? (docs/plans/MONO-RECLAIM-PLAN.md 2)
 ;
 ; kern_big does. kern_small DOES NOT, and that is a product decision rather
 ; than a size trim that happened to fit: a 128KB machine has no business with
@@ -413,7 +449,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; separate blocks and nothing else would notice them parting.
 %ifdef GFX_PLANE
  %ifndef GFX_VGA
-%error "GFX_PLANE without GFX_VGA - the planar row decoder is VGA-only code (SPEC.md 5.4.1.3); see docs/MONO-RECLAIM-PLAN.md 2"
+%error "GFX_PLANE without GFX_VGA - the planar row decoder is VGA-only code (SPEC.md 5.4.1.3); see docs/plans/MONO-RECLAIM-PLAN.md 2"
  %endif
 %endif
 
@@ -428,9 +464,10 @@ KERN_BUDGET equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16
                                 ; figure: the kernel's span starts at
                                 ; KERNEL_SEG and rule 3 says where it ends, so
                                 ; there is nothing left to choose. The ledger
-                                ; in docs/KERNEL-MEMORY.md stops at move 35
-                                ; for that reason - a 36th would be a change
-                                ; to the RULE, not to a number.
+                                ; below - this comment, move by move, and
+                                ; the only copy of it - stops at move 35 for
+                                ; that reason: a 36th would be a change to
+                                ; the RULE, not to a number.
                                 ;
                                 ; The static half only. What an assembler
                                 ; cannot see is a claim made during boot and
@@ -590,7 +627,7 @@ KERN_BUDGET equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16
                                 ;         COMPOSED BAR. 1,625 raw bytes,
                                 ;         attributed per routine in 5.9.1. It
                                 ;         buys a title bar with NO double-draw
-                                ;         anywhere in it - docs/TEXT-PLAN.md
+                                ;         anywhere in it - docs/plans/completed/TEXT-PLAN.md
                                 ;         1.1's whole point - at 36.5 ms
                                 ;         against the fifteen calls' 40.8 on
                                 ;         Hercules and 37.1 against 42.0 on
@@ -898,7 +935,7 @@ KERN_BUDGET equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16
                                 ; RECORD STANDS BELOW. That grant said the work
                                 ; would be reconsidered rather than the figure
                                 ; raised again, and it was honoured: every
-                                ; conversion in docs/UIHELPERS-PLAN.md 15.4
+                                ; conversion in docs/plans/completed/UIHELPERS-PLAN.md 15.4
                                 ; landed inside the 1KB. This is a different
                                 ; ask for a different reason.
                                 ;
@@ -909,7 +946,7 @@ KERN_BUDGET equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16
                                 ; 13.8.2's tracking edge and 13.9's one-shot
                                 ; timer, and the conversion of every control
                                 ; that still acts on the PRESS to act on the
-                                ; release instead (docs/UIHELPERS-PLAN.md
+                                ; release instead (docs/plans/completed/UIHELPERS-PLAN.md
                                 ; 15.4).
                                 ;
                                 ; THE GRANT'S TERMS ARE WORTH KEEPING, because
@@ -976,7 +1013,7 @@ KERN_BUDGET equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16
                                 ; failed the build.
                                 ;
                                 ; NAMED FOR TWO THINGS, on the grant's own
-                                ; terms: docs/DUAL-DISPLAY-VGA.md's VGA +
+                                ; terms: docs/plans/completed/DUAL-DISPLAY-VGA.md's VGA +
                                 ; HERCULES EXTENDED DESKTOP, and BUGFIXES.
                                 ;
                                 ; WHAT ARRIVED AT ZERO IS WORTH THE LINE,
@@ -1012,7 +1049,7 @@ KERN_BUDGET equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16
                                 ; the third of those. 2KB on the thirteenth
                                 ; move's terms - headroom, half a step - for
                                 ; SPEC.md 62's NETWORK DRIVER
-                                ; (docs/NET-PLAN.md).
+                                ; (docs/plans/completed/NET-PLAN.md).
                                 ;
                                 ; WHAT IT HAS ALREADY SPENT is stage 1, which
                                 ; is on this branch and is 175 bytes: DV_CLASS
@@ -1091,11 +1128,19 @@ KERN_BUDGET equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16
                                 ;
                                 ; TWO WAYS TO HAND THE FIRST STEP BACK if the
                                 ; footprint is ever wanted, both costed:
-                                ; docs/LAST-DROP.md 3's packed single table
-                                ; (256 bytes, two loop variants, ~30 bytes of
-                                ; code back), and dropping the VGA span writer
-                                ; (169 bytes, SPEC.md 5.4.1) at the price of
-                                ; its 1.95x. Neither is a rewrite.
+                                ; packing SPEC.md 5.4.1.1's gfx_pairtab0 and
+                                ; gfx_pairtab1 into a single table (256 bytes,
+                                ; two loop variants, ~30 bytes of code back),
+                                ; and dropping the VGA span writer (169 bytes,
+                                ; SPEC.md 5.4.1) at the price of its 1.95x.
+                                ; Neither is a rewrite. (This cited a
+                                ; LAST-DROP.md 3 that has not existed for
+                                ; some time and never carried the claim: that
+                                ; file's 3 was the blit decoder's hybrid, and
+                                ; it split into LAST-DROP-BYTES and
+                                ; LAST-DROP-PERF, neither of which mentions a
+                                ; packed table. The costing above is this
+                                ; comment's own.)
                                 ;
                                 ; THE SEVENTEENTH MOVE, 98,304 -> 100,352,
                                 ; ASKED FOR AND GRANTED, and the first since
@@ -1127,7 +1172,7 @@ KERN_BUDGET equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16
                                 ; thirteenth move's terms (headroom, half a
                                 ; step) with the round's biggest item still to
                                 ; come: a raise restoring only what was
-                                ; COVERED (docs/HANDOFF-REDRAW.md item A),
+                                ; COVERED (docs/plans/completed/HANDOFF-REDRAW.md item A),
                                 ; which is a wm_raise change and not a new
                                 ; mechanism, and which turns Paint's 8.7 s
                                 ; canvas into ~0.9 s on the case the reporter
@@ -1157,7 +1202,7 @@ KERN_BUDGET equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16
                                 ; THE FIFTEENTH MOVE, 94,208 -> 96,256, AND
                                 ; THE FIRST THAT IS kern_big's ALONE. 2KB,
                                 ; asked for and granted, for SPEC.md 39's
-                                ; dual display (docs/DUAL-DISPLAY-PLAN.md):
+                                ; dual display (docs/plans/completed/DUAL-DISPLAY-PLAN.md):
                                 ; the estimate is 1,400-1,900 bytes and the
                                 ; spare had fallen to 1,024 (two steps) after
                                 ; the disk round, so the feature no longer
@@ -1234,8 +1279,8 @@ KERN_BUDGET equ 107520          ; the whole kernel's FOOTPRINT. Growing past
                                 ; THE NUMBERING IS THE TABLE'S, not this
                                 ; arm's own count - the paragraphs below run
                                 ; on a local sequence that has collided with
-                                ; itself twice, and docs/KERNEL-MEMORY.md's
-                                ; ledger is the copy that file says to trust.
+                                ; itself twice, and the kern_big arm's
+                                ; sequence above is the one to trust.
                                 ;
                                 ; THE OVERRUN WAS SIX BYTES and the grant is
                                 ; a whole rung, which is the shape moves 22
@@ -1391,7 +1436,7 @@ KERN_BUDGET equ 107520          ; the whole kernel's FOOTPRINT. Growing past
                                 ;
                                 ; WHAT IT BUYS IS NOT A FEATURE. SPEC.md
                                 ; 13.8/13.8.2/13.9's whole family is kern_big's
-                                ; (18 in docs/UIHELPERS-PLAN.md) and none of it
+                                ; (18 in docs/plans/completed/UIHELPERS-PLAN.md) and none of it
                                 ; is here. What is here is 26 bytes: the three
                                 ; API CELLS plus one shared stc/ret, which is
                                 ; the floor of keeping ONE SDK - a slot number
@@ -1451,7 +1496,7 @@ KERN_BUDGET equ 107520          ; the whole kernel's FOOTPRINT. Growing past
                                 ; IT IS ALLOCATED TO WINDOW REDRAW
                                 ; IMPROVEMENTS, which is the seventeenth move's
                                 ; allocation continued rather than a new one:
-                                ; docs/HANDOFF-REDRAW.md's remaining items are
+                                ; docs/plans/completed/HANDOFF-REDRAW.md's remaining items are
                                 ; 11.91's marking keyed on redrawn REGIONS
                                 ; rather than rects, and 11.96.11.1's general
                                 ; kept region. The argument is the seventeenth's
@@ -1677,8 +1722,8 @@ KERN_BUDGET equ 107520          ; the whole kernel's FOOTPRINT. Growing past
                                 ; asked for and granted in ADVANCE, for two
                                 ; plans costed together before either was
                                 ; written: SPEC.md 54's file type
-                                ; associations (docs/ASSOC-PLAN.md, ~1,600)
-                                ; and the disk path (docs/DISK-PERF-PLAN.md,
+                                ; associations (docs/plans/completed/ASSOC-PLAN.md, ~1,600)
+                                ; and the disk path (docs/plans/completed/DISK-PERF-PLAN.md,
                                 ; ~200), against the 1,536 that were spare,
                                 ; which the two do not fit. Granted in
                                 ; advance is the fifth move's warning, so the
@@ -1697,7 +1742,7 @@ KERN_BUDGET equ 107520          ; the whole kernel's FOOTPRINT. Growing past
                                 ; SPEC.md 18.91's batched transfer is 117
                                 ; bytes that took a directory change from 12
                                 ; int 13h calls to 5, and mechanism D
-                                ; (docs/DISK-PERF-PLAN.md 5.5) removes 8 of
+                                ; (docs/plans/completed/DISK-PERF-PLAN.md 5.5) removes 8 of
                                 ; the 13 an APPS/ open still costs.
                                 ;
                                 ; The eighth move, 78,336 -> 80,384, is the
@@ -2045,7 +2090,7 @@ MIN_RAM_KB  equ 128
 DSK_FAT_SECS equ 2              ; TWO on kern_small: 1,024 bytes of FAT_SEG
                                 ; instead of 4,608, and the largest volume it
                                 ; will mount is a 360KB floppy
-                                ; (docs/KERN-SMALL-CUT-PLAN.md D2).
+                                ; (docs/plans/KERN-SMALL-CUT-PLAN.md D2).
                                 ;
                                 ; It is an ACCEPTANCE threshold like the value
                                 ; below, so this is not a buffer that might
@@ -2059,7 +2104,7 @@ DSK_FAT_SECS equ 2              ; TWO on kern_small: 1,024 bytes of FAT_SEG
                                 ; volume any host mounts.
                                 ;
                                 ; IT COULD NOT HAVE BEEN TAKEN BEFORE SPEC.md
-                                ; 37.0.1. docs/KERN-SMALL-CUT-PLAN.md 7 is the
+                                ; 37.0.1. docs/plans/KERN-SMALL-CUT-PLAN.md 7 is the
                                 ; floor: `.ovlw` is loaded ONTO this window and
                                 ; spills through the mount buffers, so it has
                                 ; to fit FAT_PARA*16 + DSK_WIN_BYTES. At 2
@@ -2099,7 +2144,7 @@ STK0_SIZE   equ 512             ; task 0's stack - the UI task's, and so the
                                 ;
                                 ; 2.08x SPEC.md 15.1's 246, and that is
                                 ; GENEROUS by the standard this tree actually
-                                ; holds: docs/STACK-SLOTS-PLAN.md 12 has Frotz
+                                ; holds: docs/plans/completed/STACK-SLOTS-PLAN.md 12 has Frotz
                                 ; at 1.26x - a 22-level chain reading 240 of a
                                 ; 384 slice - as the thinnest margin in the
                                 ; tree, and it is accepted because a slice's
@@ -2196,13 +2241,14 @@ LOW_PARA    equ ((KLOW_SIZE + STK0_SIZE + 511) / 512) * 32
 STK0_TOP    equ KLOW_SIZE + STK0_SIZE - 2   ; task 0's stack top, growing down
 STK0_BOT    equ KLOW_SIZE       ; ...and the floor it grows down ONTO, which is
                                 ; the top of .lowbss - the other tasks' slices,
-                                ; the glyph table and the disk buffers. Task 0
-                                ; is the one stack sch_switch's canary check
-                                ; skips, so an overrun here is silent; KFZ=1
-                                ; seeds a word at this address and the
-                                ; heartbeat reports whether it survived
-                                ; onto the top of .lowbss; guard 3 proves the
-                                ; two cannot meet
+                                ; the glyph table and the disk buffers. Slot 0
+                                ; of sch_stkbase holds this address, sched_init
+                                ; seeds SCH_MAGIC here on every build, and
+                                ; sch_switch checks it on every switch like
+                                ; any other slot's (SPEC.md 8.6.1), so an
+                                ; overrun reaches sch_stkdie rather than
+                                ; going quiet; guard 3 proves the two cannot
+                                ; meet
 VGABUF_SEG  equ LOW_SEG + LOW_PARA   ; THE PLANAR DECODER'S BUFFERS (SPEC.md
                                 ; 5.4.1.3), and a rung of their own because
                                 ; they are the one part of the kernel a
@@ -2372,7 +2418,7 @@ BOOT2_SECS  equ 8               ; sectors stage 1 reads before it jumps - the
                                 ; BOOT-ONLY bodies out of `.text` and `.cold`
                                 ; into `.ovl`, where mem_unblob gives them back
                                 ; to the heap at the end of kmain.
-                                ; docs/LAST-DROP-BYTES.md is the register of
+                                ; docs/plans/LAST-DROP-BYTES.md is the register of
                                 ; them and names the caller that makes each one
                                 ; boot-only. 18 is 36 bytes short of the whole
                                 ; register; 19 takes it with room over.
@@ -2420,7 +2466,7 @@ BOOT2_SECS  equ 8               ; sectors stage 1 reads before it jumps - the
 ; The sentence that used to end here - "the NEXT claim on this file is
 ; BOOT2_SECS, and that one is a real ~24 ms on every boot" - was right, and
 ; SPEC.md 2.9.12 is that claim being taken: 13 sectors to 19, for the boot-only
-; bodies in docs/LAST-DROP-BYTES.md.
+; bodies in docs/plans/LAST-DROP-BYTES.md.
 OVL_AT      equ 2624            ; ...and it is ONE value for every build now.
                                 ; SPLSTARS=1 took 3,072 here AND a blob a
                                 ; sector longer, because its `.boot2` was
@@ -2462,7 +2508,7 @@ section .ovl     start=OVL_AT vstart=OVL_AT
 ; room; the split is what buys the lifetime back for the half that needs it.
 OVLW_START equ BOOT2_PAD + (FAT_SEG - KERNEL_SEG) * 16
 section .ovlw    start=OVLW_START vstart=0
-; --- on-demand kernel modules (SPEC.md 2.8, docs/ONDEMAND-PLAN.md) -----------
+; --- on-demand kernel modules (SPEC.md 2.8, docs/plans/completed/ONDEMAND-PLAN.md) -----------
 ; Code that is NOT in KERNEL.SYS at all. Each of these is assembled here, with
 ; this kernel's data addresses, and then SPLIT OUT of the binary by
 ; tools/os88mod.py into a file of its own; the kernel loads one into a heap
@@ -2480,7 +2526,9 @@ section .ovlw    start=OVLW_START vstart=0
 section .modc    start=MODC_START vstart=0
 section .modf    start=MODF_START vstart=0
 section .modl    start=MODL_START vstart=0
+%ifdef KERN_BIG
 section .modh    start=MODH_START vstart=0
+%endif
 %ifdef FCP_MOD
 section .modp    start=MODP_START vstart=0
 %endif
@@ -2553,7 +2601,7 @@ DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4
 DBG_TAG_FDD   equ 0x4446          ; 'FD' - SPEC.md 57.5
 DBG_TAG_BUILD equ 0x4449          ; 'ID' - SPEC.md 57.6
 DBG_TAG_BPROF equ 0x5042          ; 'BP' - SPEC.md 15.5, BOOTPROF=1
-DBG_TAG_STKD  equ 0x4453          ; 'SD' - docs/STACK-SLOTS-PLAN.md, STKDIAG=1
+DBG_TAG_STKD  equ 0x4453          ; 'SD' - docs/plans/completed/STACK-SLOTS-PLAN.md, STKDIAG=1
 
 ; =============================================================================
 ; Fixed entry points
@@ -2677,14 +2725,14 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
 %macro OSAPI_XCELL 1                ; 8 bytes exactly
     push bp                         ; 55        the CALLER's, under the frame
     mov bp, %1                      ; BD lo hi
-    jmp near api_x                  ; E9 lo hi
+    jmp strict near api_x           ; E9 lo hi
     db 0
 %endmacro
 
 %macro OSAPI_NCELL 1                ; 8 bytes exactly
     push bp
     mov bp, %1
-    jmp near api_n
+    jmp strict near api_n
     db 0
 %endmacro
 
@@ -2789,7 +2837,7 @@ osapi_table:
     OSAPI_SLOT wm_resize          ; 0x01D0 - resize a window (SPEC.md 11.1):
                                   ;          BX = win, CX = w, DX = h; lock
                                   ;          held. Retires the last liberty
-                                  ;          in docs/PAINT-NOTES.md - an app
+                                  ;          in docs/plans/completed/PAINT-NOTES.md - an app
                                   ;          writing W_W/W_H itself
     OSAPI_SLOT gfx_blit4          ; 0x01D8 - packed 4bpp block (SPEC.md 5.4):
                                   ;          ES:SI = source, BP = stride,
@@ -2847,7 +2895,7 @@ osapi_table:
     OSAPI_SLOT wm_onsize          ; 0x0220 - install the resize negotiator
                                   ;          (SPEC.md 11.1): BX = win, AX =
                                   ;          near proc. The other half of
-                                  ;          docs/PAINT-NOTES.md's resize
+                                  ;          docs/plans/completed/PAINT-NOTES.md's resize
                                   ;          complaint - wm_resize is the app
                                   ;          asking, this is the app answering
     OSAPI_SLOT osapi_file_here    ; 0x0228 - where the file API's names
@@ -3756,7 +3804,62 @@ osapi_table:
                                   ;          (SPEC.md 20.8 rule 4), and on
                                   ;          kern_small the bit is simply set
                                   ;          and never read
-    OSAPI_SLOT osapi_pkg_run      ; 0x04F8 - run a package image that is
+    OSAPI_JSLOT api_decomp        ; 0x04F8 - expand a compressed block
+                                  ;          (docs/plans/O88-COMPRESSION-PLAN.md
+                                  ;          12.1). A JSLOT and not an X or N
+                                  ;          cell: BOTH segment registers are
+                                  ;          the caller's here, because the
+                                  ;          decompressor reads no kernel data
+                                  ;          at all and so needs no stub to
+                                  ;          reach the caller's segment - it
+                                  ;          needs the OPPOSITE, to be left
+                                  ;          alone. OSAPI_GFX_BLIT4 is the
+                                  ;          precedent for a cell taking a
+                                  ;          caller far pointer this way.
+                                  ;          IN BOTH KERNELS and never
+                                  ;          %ifdef'd (SPEC.md 20.8 rule 4):
+                                  ;          COMPRESS= decides which FORMATS
+                                  ;          answer, not whether the cell is
+                                  ;          there, and a format this build
+                                  ;          lacks is refused with CF
+    OSAPI_JSLOT api_file_find_raw ; 0x0500 - OSAPI_FILE_FIND, answering what
+                                  ;          the file OCCUPIES rather than
+                                  ;          what it expands to (SPEC.md
+                                  ;          20.14.3). The cell a COPIER wants:
+                                  ;          OSAPI_FILE_READ_AT is already raw,
+                                  ;          and this is the size to go with it
+    OSAPI_SLOT api_gfx_save       ; 0x0508 - AX/BX/CX/DX = an inclusive rect,
+                                  ;          ES:DI = your buffer. Bank the
+                                  ;          pixels under a thing you are about
+                                  ;          to draw over (SPEC.md 5.4.3), so
+                                  ;          taking it down is a write-back
+                                  ;          instead of a repaint. CF = 1
+                                  ;          REFUSED - the rect straddles two
+                                  ;          displays - and nothing is written
+    OSAPI_SLOT api_gfx_rest       ; 0x0510 - ...and put it back: same rect,
+                                  ;          ES:SI = the buffer the save filled
+    OSAPI_XCELL inst_restart_set  ; 0x0518 - X: AX = a near offset in YOUR own
+                                  ;          image, 0 to withdraw. out CF = 1 =
+                                  ;          you are not a live package
+                                  ;          instance.
+                                  ;          "IF YOU HAVE TO MOVE MY REGION,
+                                  ;          THROW MY WORKER'S STACK AWAY AND
+                                  ;          RE-ENTER IT HERE" (SPEC.md
+                                  ;          66.6.2). The one way past 66.6.1's
+                                  ;          limit - a worker's stack carries
+                                  ;          its own segment at depths nothing
+                                  ;          can find, so the answer is not to
+                                  ;          find them but to arrange for the
+                                  ;          stack not to matter.
+                                  ;          IT IS A WINDOW, NOT A PROPERTY,
+                                  ;          and the asymmetry against
+                                  ;          OSAPI_MEM_PARKSAFE is the thing to
+                                  ;          weigh: parksafe declared wrongly
+                                  ;          costs a missed optimisation, this
+                                  ;          costs a lost loop iteration - and
+                                  ;          if the worker was holding
+                                  ;          something, correctness
+    OSAPI_SLOT osapi_pkg_run      ; 0x0520 - run a package image that is
                                   ;          ALREADY IN MEMORY (SPEC.md 21.5):
                                   ;          ES:SI = the image in a claim of
                                   ;          yours, DX:CX its length, DI a
@@ -3767,7 +3870,7 @@ osapi_table:
                                   ;          caller's DS (SPEC.md 20.3), which
                                   ;          is the one segment the image is
                                   ;          least likely to be in
-    OSAPI_XCELL osapi_desk_svc      ; 0x0500 - X: a DRIVER registers the
+    OSAPI_XCELL osapi_desk_svc      ; 0x0528 - X: a DRIVER registers the
                                   ;          desktop SERVICE zone (SPEC.md
                                   ;          26.7). in AL = 1 add / 0
                                   ;          withdraw, ES:SI = a 39-byte
@@ -3793,7 +3896,7 @@ osapi_table:
                                   ;          instructions that refuse: there is
                                   ;          no driver there that would
                                   ;          register one
-osapi_table_end:                  ; 0x0508
+osapi_table_end:                  ; 0x0530
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -3801,8 +3904,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 159 * 8
-%error "os8088 API jump table must be exactly 159 8-byte slots"
+%if OSAPI_TABLE_LEN != 164 * 8
+%error "os8088 API jump table must be exactly 164 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -3834,7 +3937,7 @@ dbg_reg:
                                     ; so it has to be in the build the field
                                     ; machine is actually sent
 %ifdef STK_DIAG
-    dw DBG_TAG_STKD, sd_dbg_blk     ; docs/STACK-SLOTS-PLAN.md - `make
+    dw DBG_TAG_STKD, sd_dbg_blk     ; docs/plans/completed/STACK-SLOTS-PLAN.md - `make
                                     ; STKDIAG=1`, knob-built under 57.2's rule
                                     ; for bprof's reason: it COUNTS
 %endif
@@ -3980,6 +4083,64 @@ api_fdlg_open:
     retf
 
 ; -----------------------------------------------------------------------------
+; api_decomp - slot 0x04F8. The whole stub, because there is nothing to do:
+; DS:SI, ES:DI, CX, DX and AL are already what lz_decomp_x wants and both
+; segment registers come back the caller's. The far call is only because the
+; body is `.cold` and its CS is not this one.
+; -----------------------------------------------------------------------------
+api_decomp:
+    call COLD_SEG:lzf_decomp
+    retf                        ; CF is lz_decomp_x's answer: neither the far
+                                ; return above nor this one touches the flags
+
+; -----------------------------------------------------------------------------
+; api_gfx_save / api_gfx_rest - slots 0x0508 / 0x0510 (SPEC.md 5.3)
+;
+; gfx_save and gfx_restore have been in this kernel since the menu save-under
+; and are on BOTH builds - unlike gfx_blit1, which is kern_big only - so what a
+; package was missing was the CELL and not the code. The one thing it was also
+; missing is the test the kernel's own callers owe them: GFXDENTERR puts the
+; whole shape on the display holding the top-left (SPEC.md 39.14.6), so a
+; straddling rect banks one display's half and, on the way back, leaves the
+; other display's half STALE. wm_su_take asks vid_span_one for exactly this
+; reason; a package has no published way to ask, so the cell asks for it.
+;
+; Refusing is the whole answer rather than a shortcoming: a caller that gets
+; CF = 1 repaints, which is what it did before it had this cell at all
+; (SPEC.md 12.4's [menu_sseg] = 0 rule, one layer out).
+;
+; vid_span_one takes AX/BX/CX/DX inclusive - the same four registers these two
+; take - so the guard needs no frame, and gfx_save/gfx_restore preserve all
+; four, so the caller's rect survives for the restore.
+; -----------------------------------------------------------------------------
+api_gfx_save:
+%ifdef KERN_BIG
+    call vid_span_one           ; ...and only kern_big HAS a second display to
+    jc .no                      ; straddle: vid_span_one is inside that build's
+%endif                          ; guard because the extended desktop is, so on
+    call gfx_save               ; the small kernel the question cannot arise
+    clc                         ; and the cell is five bytes lighter
+    ret
+%ifdef KERN_BIG
+.no:
+    stc
+    ret
+%endif
+
+api_gfx_rest:
+%ifdef KERN_BIG
+    call vid_span_one           ; symmetric with the save on purpose: a
+    jc .no                      ; contract that refuses on one side and not
+%endif                          ; the other is the kind that costs somebody a
+    call gfx_restore            ; day
+    clc
+    ret
+%ifdef KERN_BIG
+.no:
+    stc
+    ret
+%endif
+
 ; osapi_pkg_run - slot 0x04F8's resident thunk (SPEC.md 21.5)
 ;
 ; The body is loader.inc's and loader.inc is `.cold`, so this is the ordinary
@@ -4008,6 +4169,39 @@ osapi_pkg_run:
 ; directory that OSAPI_FILE_READ would resolve a name in, or a package would
 ; enumerate one folder and open files from another.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; api_file_find_raw - slot 0x0500, and api_file_find's twin in one respect
+;
+; **THE SIZE, AND NOTHING ELSE.** A compressed file has two of them (SPEC.md
+; 20.14.3): what it occupies and what it expands to. `api_file_find` answers
+; the second, because an application sizes its claim from +18 and then reads
+; the file with OSAPI_FILE_READ, which expands it. A COPIER wants the first -
+; OSAPI_FILE_READ_AT delivers the packed bytes, so the packed length is the
+; number that describes what it is about to move.
+;
+; It exists because the record has nowhere to put both. `OSAPI_FIND_SZ` is 24
+; and published, so a caller's buffer is 24 bytes wide and growing it would
+; write past one; and asking per file with a second call would put a directory
+; walk on every entry of every listing. A second CELL over the same walk costs
+; a slot and nothing per entry.
+;
+; **Bit 0 of +22 still means COMPRESSED**, on both cells, because that is a
+; fact about the FILE rather than about which number was reported - and a
+; caller knows which it got from which cell it called.
+;
+; The fence is unchanged: hidden and system entries go to a DRIVER and not to
+; a package, on this cell exactly as on the other one (SPEC.md 19.6.1).
+; -----------------------------------------------------------------------------
+api_file_find_raw:
+    push ds
+    push si
+    push bx
+    mov bx, ds
+    push cs
+    pop ds
+    mov byte [dsk_fdraw], 1
+    jmp short api_ff_fence
+
 api_file_find:
     push ds
     push si
@@ -4015,6 +4209,8 @@ api_file_find:
     mov bx, ds                  ; the caller's segment, for the fence
     push cs
     pop ds                      ; DS = KERNEL
+    mov byte [dsk_fdraw], 0
+api_ff_fence:
     call inst_vol_enter         ; this instance's own folder; preserves
                                 ; everything including the flags
     call COLD_SEG:dvf_drv_owns_seg ; CF = 0: a loaded driver, so it may see the
@@ -4197,13 +4393,20 @@ ovw_mou_p2dw:       call mou_p2dw
                     retf
 ovw_mou_p2wcmd:     call mou_p2wcmd
                     retf
+%ifdef KERN_EMU
 ovw_mou_lockon:     call mou_lockon     ; ...and a sixth, for SPEC.md 9.11:
                     retf                ; vmm_boot_x settles the contest on the
                                         ; backdoor and has to retire the UARTs
                                         ; from `.ovl`, where mouse_init already
                                         ; is. The five above were mouse_init's
-                                        ; own; this is the one the absolute
-                                        ; pointer added
+                                        ; own and are kern_big's; THIS ONE IS
+                                        ; kern_emu's, because vmm_boot_x is its
+                                        ; only caller and that routine does not
+                                        ; exist on the other builds (SPEC.md
+                                        ; 9.11.7). A wrapper whose callee is
+                                        ; compiled out is 4 bytes of overlay
+                                        ; nothing can reach
+%endif
 %endif
 ovw_font_run_x:     call font_run_x     ; SPEC.md 15.6's status line composes
                     retf                ; into the OVERLAY, so its string is
@@ -4597,7 +4800,7 @@ kmain:
                                 ; the OTHER HEAD's sectors
     MARK 4
     OVWCALL  sched_init         ; pre-emption live from here on. IN THE BLOB
-                                ; (docs/LAST-DROP-BYTES.md row 3) - one
+                                ; (docs/plans/LAST-DROP-BYTES.md row 3) - one
                                 ; caller, and this is it
     MARK 5
 %ifdef SCH_QUANTUM
@@ -4608,7 +4811,7 @@ kmain:
                                 ; here, and this also closes the ticks-only
                                 ; era - the boot sector's load and the three
                                 ; calls above it
-    OVWCALL  sch_idle_start     ; PROBE (docs/SCHED-IDLE-PLAN.md 6.2): the idle
+    OVWCALL  sch_idle_start     ; PROBE (docs/plans/completed/SCHED-IDLE-PLAN.md 6.2): the idle
                                 ; task. Inert while ui_task never sleeps - the
                                 ; scan skips its slot, so it is reached only
                                 ; where sch_switch used to resume the outgoing
@@ -4810,7 +5013,7 @@ kmain:
     MARK 28
 
     OVLGATE1 drv_boot_x         ; ...and load what SYSTEM.CFG asks for
-%ifdef KERN_BIG
+%ifdef KERN_EMU
     call COLD_SEG:vmm_boot_x    ; ...one of which may be SPEC.md 9.11's
                                 ; absolute pointer, which is DRVC_OVL and so
                                 ; stops at drv_check with nothing called: the
@@ -4918,6 +5121,23 @@ kmain:
 
     call cursor_show
 
+    mov ax, [ticks]             ; TIME THE HOT-PLUG POLLER FROM THE DESKTOP
+    mov [mou_hpt], ax           ; (SPEC.md 9.4.8). [mou_hpt] is the poll
+                                ; interval's base and starts at 0, and [ticks]
+                                ; started at sched_init, so the poller's first
+                                ; DTR drop fired the instant [ticks] passed
+                                ; MOU_REPOLL - which on a boot that reaches the
+                                ; desktop past tick 55 (a hard disk, or any
+                                ; driver) is the FIRST UI pass, dropping the
+                                ; mouse's power under the user's hand. Based
+                                ; here, the ~3s interval is measured from when
+                                ; the pointer first exists: a user who moves
+                                ; inside it settles the port and the poller
+                                ; never drops. "The poller fired" is read off
+                                ; [mou_hpst] >= 1 instead (SPEC.md 9.4.2). AX
+                                ; is dead - the boot timer above stored its
+                                ; count
+
     call COLD_SEG:drv_notice_x  ; ...and only NOW say what did not load: a
                                 ; window needs a screen that has been painted
     BPMARK 10                   ; ...the cursor and the driver notice
@@ -4934,7 +5154,7 @@ kmain:
 %endif
 
 %ifdef STK_DIAG
-    call sd_start               ; docs/STACK-SLOTS-PLAN.md: the diagnostic task
+    call sd_start               ; docs/plans/completed/STACK-SLOTS-PLAN.md: the diagnostic task
                                 ; and its panel. AFTER the desktop, so the
                                 ; first paint has somewhere to land, and after
                                 ; BOOT_PROFILE's table so the two knobs do not
@@ -5031,7 +5251,12 @@ osapi_font_glyphs:
 ; is not merely stale, it is about the wrong disk.
 osapi_file_dfree:
     call inst_vol_enter
-    jmp dskw_dfree              ; a tail call: its outputs and CF are ours
+    call COLD_SEG:dwf_dskw_dfree    ; its outputs and CF are ours. DIRECTLY,
+    ret                             ; not through a dskw_dfree shim: this was
+                                    ; the one cold shim in the kernel whose
+                                    ; only reference was a call - every other
+                                    ; one is an API cell or a kind template,
+                                    ; where the near entry is the contract
 
 ; ---- osapi_file_here / osapi_file_goto - the volume's location (SPEC.md 19.2)
 ;
@@ -5111,8 +5336,8 @@ osapi_file_here:
 ; that boots from its hard disk (SPEC.md 52.10.3), and the kernel has read it
 ; that way for the driver load and the Control Panel for as long as both have
 ; existed. This cell is that fact handed OUT, so a package can reach the
-; system disk's own folders - FONTS/ is the first (SPEC.md 19.7) - without
-; guessing a drive letter or walking every volume looking for one.
+; system disk's own folders - SYSTEM/FONTS is the first (SPEC.md 19.8) -
+; without guessing a drive letter or walking every volume looking for one.
 osapi_vol_sys:
     mov bl, [dsk_bootvol]
     ret
@@ -5418,7 +5643,7 @@ section .text
                                 ; ui.inc, which use the VMM_POLL macro
 %include "bootprof.inc"       ; the boot phase table (SPEC.md 15.5), BOOTPROF=1
 %include "stkdiag.inc"        ; what an interrupt costs a task stack
-                              ; (docs/STACK-SLOTS-PLAN.md), STKDIAG=1
+                              ; (docs/plans/completed/STACK-SLOTS-PLAN.md), STKDIAG=1
 %include "moudiag.inc"        ; ...and what the identify window saw (SPEC.md
                                 ; 9.4.6), MOUDIAG=1. Both are knob-only and
                                 ; both draw on the finished desktop, because
@@ -5481,12 +5706,22 @@ section .text
                               ; every module it serves, because a module's
                               ; own section carries the header that names
                               ; MOD_* and MOD_NENT
+%include "lz.inc"             ; decompression (docs/plans/O88-COMPRESSION-PLAN.md):
+                                ; BEFORE every loader that calls it, and it
+                                ; calls nothing itself - no kernel data, no
+                                ; kernel routine, just the caller's two
+                                ; segments and a four-byte stack frame
 %include "disk.inc"
 %include "diskw.inc"          ; the FAT write path (SPEC.md 18.4): after
                                 ; disk.inc, whose constants and layout it uses
 %include "clone.inc"          ; the disk cloner (SPEC.md 18.99): after
                                 ; diskw.inc, whose FERR_* neighbours its own
                                 ; CERR_*, and before files.inc, which arms it
+%include "compress.inc"       ; ...and the one thing that COMPRESSES (SPEC.md
+                                ; 20.15), which rides in the CLONER'S image:
+                                ; this file emits `.modl` after clone.inc's
+                                ; header and not one byte of `.text`, and
+                                ; modl_end below both is where the image ends
 %include "loader.inc"
 %include "files.inc"
 %include "filecp.inc"        ; Cut/Copy/Paste and the recursive paste
@@ -5989,8 +6224,6 @@ cw_evq_mup:             call evq_mup        ; them out of its 75-byte rung.
                                             ; and one was born (SPEC.md 74.1.1)
 cw_font_run:            call font_run
                     retf
-cw_fpg_step:             call fpg_step
-                     retf
 %ifdef KERN_BIG                 ; ...and gfx_disp_enter is dual display's
 cw_gfx_disp_enter:      call gfx_disp_enter
                     retf
@@ -6033,10 +6266,6 @@ cw_gfx_pixel:           call gfx_pixel
 cw_gfx_rowbase:         call gfx_rowbase
                     retf
 %endif
-cw_gfx_scroll:          call gfx_scroll
-                    retf                    ; retf leaves the flags alone, so
-                                            ; gfx_scroll's CF is still its
-                                            ; answer at the cold caller
 cw_gfx_unlock:          call gfx_unlock
                     retf
 cw_gfx_vline:           call gfx_vline
@@ -6062,8 +6291,6 @@ cw_inst_caller:         call inst_caller    ; OSAPI_PKG_RUN reads its name
                                             ; 21.5), and loader.inc is cold
 cw_inst_find_kind:      call inst_find_kind
                     retf
-cw_inst_set_name_x:     call inst_set_name_x
-                    retf
 cw_inst_fhome_idx:      call inst_fhome_idx
                     retf
 cw_inst_win_owner:      call inst_win_owner
@@ -6088,7 +6315,7 @@ cw_menu_item_dis:       call menu_item_dis
                     retf
 cw_mou_clamp:           call mou_clamp
                     retf
-; ...and the BOOT OVERLAY's (docs/LAST-DROP-BYTES.md rows 15 and 17):
+; ...and the BOOT OVERLAY's (docs/plans/LAST-DROP-BYTES.md rows 15 and 17):
 ; dock_init and menu_init moved into `.ovl`; menu_init has exactly one
 ; outbound call left, and dock_init now has NONE - what it asked cw_dock_force
 ; for was "the whole strip is owed", which is two words it writes itself, so
@@ -6099,8 +6326,6 @@ cw_menu_draw_bar:       call menu_draw_bar
                     retf
 cw_menu_popup:          call menu_popup
                     retf
-cw_osapi_file_here:      call osapi_file_here
-                     retf
 cw_osapi_snd_tone:      call osapi_snd_tone
                     retf
 cw_snd_beep:            call snd_beep
@@ -6146,7 +6371,7 @@ cw_vid_dual_ok:         call vid_dual_ok
 cw_vid_span_one:        call vid_span_one
                     retf
 ; ...and these two are the BOOT OVERLAY's, not cold code's: vid_ctx_init went
-; into `.ovl` (docs/LAST-DROP-BYTES.md row 13) and calls both. They are `cw_`
+; into `.ovl` (docs/plans/LAST-DROP-BYTES.md row 13) and calls both. They are `cw_`
 ; rather than `ovw_` for the reason the clock's pair is - `ovw_` names the
 ; overlay, and what these actually name is "resident, reached from another
 ; address space", which is the same shim whichever side asks.
@@ -6171,8 +6396,6 @@ cw_wm_create:           call wm_create
                     retf
 cw_wm_destroy:          call wm_destroy
                     retf
-cw_wm_destroy_seg:      call wm_destroy_seg
-                    retf
 cw_wm_minsize:          call wm_minsize
                     retf
 cw_wm_snap:             call wm_snap    ; OUTSIDE the KERN_BIG gate below:
@@ -6187,23 +6410,7 @@ cw_wm_onmouseup:        call wm_onmouseup
                     retf
 cw_wm_ondrag:           call wm_ondrag
                     retf
-; ...and the seven HIBER.DRV needs (SPEC.md 87): a kernel window closed from
-; its own release handler, and the reboot path's and fsx_restore's pieces -
-; text mode out, the desktop mode back, the two forced strips, the idle clock
-cw_app_close_win:       call app_close_win
-                    retf
-cw_vid_reboot:          call vid_reboot
-                    retf
-cw_vid_setmode:         call vid_setmode
-                    retf
-cw_menu_force:          call menu_force
-                    retf
-cw_dock_force:          call dock_force
-                    retf
-cw_blk_wake:            call blk_wake
-                    retf
-cw_sched_unhook:        call sched_unhook
-                    retf
+; ...and HIBER.DRV's seven needs go through cw_mem_disp (`call bp / retf`)
 %endif
 cw_wm_dmg_add:           call wm_dmg_add
                      retf
@@ -6217,8 +6424,6 @@ cw_wm_hit:              call wm_hit
                     retf
 cw_wm_idx2ptr:          call wm_idx2ptr
                     retf
-cw_wm_obscured:         call wm_obscured
-                    retf
 cw_wm_paint_all:        call wm_paint_all
                     retf
 cw_wm_paint_dmg:         call wm_paint_dmg
@@ -6227,10 +6432,6 @@ cw_wm_pkgcall:          call wm_pkgcall
                     retf
 cw_wm_show:             call wm_show
                     retf
-cw_wm_wake_call:        call wm_wake_call   ; assoc_run's second phase (SPEC.md
-                    retf                    ; 54.10): the launched window is on
-                                            ; the glass, so the package may now
-                                            ; spend the document it was handed
 %ifdef WM_ANIM
 cw_inst_unmin:          call inst_unmin
                     retf
@@ -6299,7 +6500,11 @@ gfx_blit1:            call COLD_SEG:gbz_gfx_blit1
 %else
 gfx_blit1:            stc               ; kern_small carries the SLOT and not
                   ret                   ; the body: a package tests CF and
-%endif                                  ; letters in the 8x8 face instead
+%endif                                  ; letters in the 8x8 face instead -
+                                        ; or, Paint, expands a row at a time
+                                        ; (SPEC.md 42.23.4). The body was
+                                        ; measured on this build and refused
+                                        ; (SPEC.md 5.4.2.5)
 
 ; --- ...and SPEC.md 13.8.2/13.9's three, which are kern_big's ALONE. The CELL
 ; is in both tables - a slot number that exists in one build and not another
@@ -6335,8 +6540,6 @@ wm_ontimer_c:         stc       ; which of the three it is refusing
 ; filecp.inc needs none - every caller of an fcp_ routine is files.inc, which
 ; is cold too, so those calls stayed near.
 dskw_delete:          call COLD_SEG:dwf_dskw_delete
-                    ret
-dskw_dfree:           call COLD_SEG:dwf_dskw_dfree
                     ret
 dskw_read:            call COLD_SEG:dwf_dskw_read
                     ret
@@ -6677,7 +6880,7 @@ kret_ret:         ret         ; NAMED so a test can breakpoint the RETURN.
                               ; Every routine that leaves through this ladder
                               ; returns HERE, with sp back at its own entry
                               ; value, which is what a caller matching on sp
-                              ; needs (docs/HANDOFF-SOAK-FINDINGS.md B2).
+                              ; needs (docs/plans/HANDOFF-SOAK-FINDINGS.md B2).
 
 section .cold
 kretc_es:         pop es
@@ -6774,7 +6977,7 @@ KTEXT_SIZE equ kernel_text_end - $$
 ; into the boot overlay through spl_gate. `.ovl` is aboard before stage 1 jumps
 ; and vid_detect would be too, which reads as free - but spl_gate is at the far
 ; end of `.text` (sector 104 of 119), so the PATH is not aboard even though the
-; destination is. docs/LAST-DROP-BYTES.md rows 10 and 22 are refused on this,
+; destination is. docs/plans/LAST-DROP-BYTES.md rows 10 and 22 are refused on this,
 ; and without this line nothing in the tree would have said so.
 SPL_RES_SIZE equ spw_resident_end - $$
 %if SPL_RES_SIZE > SPL_RESIDENT * 512
@@ -6870,14 +7073,17 @@ OVL_SIZE equ ovl_end - $$       ; `$$` is the SECTION's base, which is OVL_AT
 MODC_START   equ OVLW_START + OVLW_SIZE
 MODF_START   equ MODC_START + MODC_SIZE
 MODL_START   equ MODF_START + MODF_SIZE
-MODH_START   equ MODL_START + MODL_SIZE
-%ifdef FCP_MOD
-MODP_START   equ MODH_START + MODH_SIZE   ; Cut/Copy/Paste, kern_small's alone
+%ifdef KERN_BIG
+MODH_START   equ MODL_START + MODL_SIZE   ; hibernate, kern_big's alone
+MODMAP_START equ MODH_START + MODH_SIZE
+%else
+MODP_START   equ MODL_START + MODL_SIZE   ; Cut/Copy/Paste, kern_small's alone
 MODD_START   equ MODP_START + MODP_SIZE   ; ...and the file dialog after it
 MODMAP_START equ MODD_START + MODD_SIZE
-%else
-MODMAP_START equ MODH_START + MODH_SIZE
-%endif
+%endif                                    ; The
+                                          ; compressor has no image of its
+                                          ; own: it rides in the cloner's
+                                          ; (SPEC.md 20.15.3)
 
 section .modc
 modc_end:
@@ -6891,9 +7097,11 @@ section .modl
 modl_end:
 MODL_SIZE equ modl_end - $$
 
+%ifdef KERN_BIG
 section .modh
 modh_end:
 MODH_SIZE equ modh_end - $$
+%endif
 
 %ifdef FCP_MOD
 section .modp
@@ -6921,8 +7129,10 @@ MODD_SIZE equ modd_end - $$
 %if MODL_SIZE > MOD_MAX_KB*1024
 %error "the clone module is over MOD_MAX_KB - mod_need would refuse it at run time"
 %endif
-%if MODH_SIZE > MOD_MAX_KB*1024
+%ifdef KERN_BIG
+ %if MODH_SIZE > MOD_MAX_KB*1024
 %error "the hibernate module is over MOD_MAX_KB - mod_need would refuse it at run time"
+ %endif
 %endif
 %ifdef FCP_MOD
  %if MODP_SIZE > MOD_MAX_KB*1024
@@ -6957,10 +7167,11 @@ mod_map:
                                 ; flags but this tree's -w+error
     dd MODF_START, MODF_SIZE
     dd MODL_START, MODL_SIZE
-    dd MODH_START, MODH_SIZE
-%ifdef FCP_MOD
-    dd MODP_START, MODP_SIZE    ; ...and kern_small's fifth (SPEC.md 22.3)
-    dd MODD_START, MODD_SIZE    ; ...and its sixth (SPEC.md 38.0)
+%ifdef KERN_BIG
+    dd MODH_START, MODH_SIZE    ; ...and kern_big's fourth: hibernate (87)
+%else
+    dd MODP_START, MODP_SIZE    ; ...or kern_small's fourth (SPEC.md 22.3)
+    dd MODD_START, MODD_SIZE    ; ...and its fifth (SPEC.md 38.0)
 %endif
     dd MODMAP_START             ; ...where the table began, and
     dw 0x384F                   ; the last two bytes of the file
@@ -7011,10 +7222,10 @@ SKB_IMG    equ KERN_SIZE - SKB_FAT - SKB_DSK - SKB_STK - SKB_STK0
 ; one. Guard 7 proves both.
 ;
 ; SKB_IMG IS ACCUMULATED LAST, AND THAT IS THE WHOLE OF THE ORDERING RULE.
-; The other four are fixed facts about the design - seven stacks of 384, one
-; of 1,024, nine FAT sectors, three disk buffers - and none of them has any
-; business reading differently on kern_small than on the shipped kernel. Put
-; the image first and they do: its half-kilobyte lands in the running total,
+; The other four are fixed facts about the build - SCH_PARTITION's slices,
+; STK0_SIZE, DSK_FAT_SECS sectors, three disk buffers - each a constant of its
+; own configuration and none of them a remainder of anything. Put the image
+; first and they become one: its half-kilobyte lands in the running total,
 ; so every boundary after it moves with the build and a 3,584-byte buffer
 ; rounds to 4 KB on one configuration and 3 on the next. Last, the image takes
 ; the build's own remainder, which is the one row it belongs to - SKB_IMG is
@@ -7024,8 +7235,8 @@ SKB_IMG    equ KERN_SIZE - SKB_FAT - SKB_DSK - SKB_STK - SKB_STK0
 ; 4.5 KB and the disk buffers 3.5, both round either way, and 12 KB of buffer
 ; will not stretch to cover both rounding up. The disk buffers take it. They
 ; are the row somebody reads as a size (docs/KERNEL-MEMORY.md heads a section
-; "Disk buffers - 3,584 B"), and the FAT window's own section names the
-; sectors rather than the kilobytes.
+; "Disk buffers" with the byte count), and the FAT window's own section names
+; the sectors rather than the kilobytes.
 %define SK_R(b)  (((b) + 512) / 1024)     ; bytes -> KB, nearest, ties up
 SK_CUM1    equ SKB_STK
 SK_CUM2    equ SK_CUM1 + SKB_STK0
@@ -7105,9 +7316,10 @@ SK_VGAB_KB equ SK_R(SK_CUM5) - SK_R(SK_CUM5 - VGABUF_PARA * 16)
 
 ; 1. KERN_BUDGET - the FOOTPRINT. The whole kernel - image, scratch, FAT
 ;    snapshot, disk buffers and every task stack - is one span starting at
-;    KERNEL_SEG, and it fits KERN_BUDGET (72.5KB) just above the BIOS data
-;    area. This is the guard the project is steering by; raising KERN_BUDGET
-;    is a decision, not a build fix (docs/KERNEL-MEMORY.md).
+;    KERNEL_SEG, and it fits KERN_BUDGET (129,536 on kern_big, derived from
+;    rule 3; 107,520 on kern_small) just above the BIOS data area. This is
+;    the guard the project is steering by; raising KERN_BUDGET is a decision,
+;    not a build fix (docs/KERNEL-MEMORY.md).
 ;
 ;    **A KNOB KERNEL IS NOT THE SHIPPED KERNEL, AND KERN_BUDGET DOES NOT
 ;    BIND IT.** Guard 2 below does, and nothing else does: a build with any
@@ -7347,7 +7559,7 @@ SK_VGAB_KB equ SK_R(SK_CUM5) - SK_R(SK_CUM5 - VGABUF_PARA * 16)
 ;    back at spl_finish and the arena is compacted onto it, so it is not
 ;    footprint in KERN_BUDGET's sense - but it IS occupied at the same moment
 ;    the boot sector and its stack are, which is exactly what guard 5 asks
-;    about. docs/SETTINGS-COST.md 7.2 is the same shape: a transient the
+;    about. docs/plans/completed/SETTINGS-COST.md 7.2 is the same shape: a transient the
 ;    minimum machine still has to be able to hold.
 ;
 ; 5c. RETIRED, BECAUSE STAGE 1 NOW ASKS THE QUESTION ITSELF (SPEC.md 2.7.1).
@@ -7484,9 +7696,11 @@ section .modl
 %if ($ - $$) != MODL_SIZE
   %error "something landed in .modl below modl_end - os88mod.py would CUT the clone module short of it"
 %endif
+%ifdef KERN_BIG
 section .modh
 %if ($ - $$) != MODH_SIZE
   %error "something landed in .modh below modh_end - os88mod.py would CUT the hibernate module short of it"
+%endif
 %endif
 section .modmap
 %if ($ - $$) != MODMAP_SIZE

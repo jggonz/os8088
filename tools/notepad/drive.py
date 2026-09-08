@@ -191,7 +191,7 @@ def pkg_present(m, name=b"NOTEPAD", lo=0x1000, hi=0xA000):
 def wait_until(m, pred, frames=60, tries=60):
     """Advance guest time until `pred` holds. Returns True if it did.
 
-    A CONDITION, not a sleep. docs/NOTEPAD-NOTES.md 6.1 is a whole wrong
+    A CONDITION, not a sleep. docs/plans/completed/NOTEPAD-NOTES.md 6.1 is a whole wrong
     answer caused by two runs waiting different lengths of time, and a wall
     sleep cannot be matched across builds that differ in speed - this can,
     because it stops when the thing has actually happened.

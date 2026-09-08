@@ -15,7 +15,7 @@ in the guest at all**.
 | `UPSTREAM` | the pinned commit. Editing it is a deliberate act, not maintenance |
 | `debug_server.rs` | the new module, copied in whole |
 | `patches/` | everything else: the upstream files that had to change, plus `devices/sblaster.rs`, the Sound Blaster upstream does not have, and `04-floppy-disk-timing.patch`, the platter |
-| `configs/` | five IBM 5150 machine configs shaped after docs/FIELD-MACHINES.md |
+| `configs/` | the machine configs (docs/MARTYPC-DEBUG.md's *The list*), the first shaped after docs/FIELD-MACHINES.md's 5150 |
 | `roms/` | **gitignored, and you supply it** — see the note at the bottom |
 | `build.sh` | clone at the pin, patch, stage a run tree, build |
 
@@ -94,8 +94,8 @@ file — which is a grant this project cannot make for someone else's ROM. The
 same reasoning already kept the IBM/Xebec hard disk controller out
 (docs/MARTYPC-DEBUG.md).
 
-Three of the eight machines use **GLaBIOS**, which MartyPC bundles, and they
-build and run with nothing added. The five period-accurate ones
+The `_gla` and `os8088_xt_*` machines use **GLaBIOS**, which MartyPC bundles,
+and they build and run with nothing added. The period-accurate ones
 (`rom_set = "ibm5150_82_v4"`) need your own dump of the 27 OCT 82 5150 BIOS:
 
 ```

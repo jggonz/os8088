@@ -152,7 +152,7 @@ SNAP_NCALL   equ 24             ; SPEC.md 11.94.2: off-grid callers logged per
 ; baked table would be dead code on every machine that ever runs it, and a
 ; baked table kept behind a probe would never be the thing being tested.
 ;
-; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/LAST-DROP-BYTES.md row 7), where it
+; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/plans/LAST-DROP-BYTES.md row 7), where it
 ; sits beside ovl_font_init - the twin it is the alternative to, which has been
 ; there since SPEC.md 6.2. One caller, kmain:4287, and zero outbound. What it
 ; reads is the ROM through ES:BP and what it writes is font_glyphs through

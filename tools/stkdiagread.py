@@ -4,7 +4,7 @@
     make stkdiag && make test STKDIAG=1
     python3 tools/stkdiagread.py                    # ...then this, after ~95s
 
-The panel (kernel/stkdiag.inc, docs/STACK-SLOTS-PLAN.md 10) is drawn to be
+The panel (kernel/stkdiag.inc, docs/plans/completed/STACK-SLOTS-PLAN.md 10) is drawn to be
 PHOTOGRAPHED, because that is the only channel a 5150 has. On an emulator a
 photograph is a screenshot somebody then has to read with their eyes, and a
 number transcribed by eye is a number that can be transcribed wrong - so the

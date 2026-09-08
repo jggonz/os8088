@@ -116,9 +116,15 @@ def main():
     off = ksig_off()                     # the MEMORY offset, from KERNEL_SEG
     lengths = boot2_secs()               # ...every blob length it must be legal for
     fileoff = off + lengths[0] * 512     # ...and where those bytes sit in the FILE
-    kern = BUILD / "kernel.bin"
+    # THE FILE AND NOT THE IMAGE (SPEC.md 2.9.13.3). What has to be long
+    # enough to hold a canary word is what LANDS ON THE DISK, and under KZIP
+    # that is 40 sectors shorter than the kernel - while the canary's file
+    # offset does not move at all, KSIG_OFF being a memory offset whose
+    # constraint is that its SECTOR crosses a head, which is a property of the
+    # geometry rather than of what is in the sector.
+    kern = BUILD / "kernel.sys"
     if not kern.exists():
-        sys.exit("t_canary: no build/kernel.bin - run make first")
+        sys.exit("t_canary: no build/kernel.sys - run make first")
     k = kern.read_bytes()
     if len(k) < fileoff + 2:
         sys.exit(f"t_canary: KERNEL.SYS is {len(k)} bytes, shorter than the "

@@ -686,6 +686,16 @@ at_layout:
 ; -----------------------------------------------------------------------------
 at_scan:
     push cx
+%ifndef NOATFETCH
+    ; SPEC.md 46.3.3: ES holds the DOCUMENT for the whole walk, so the
+    ; per-character fetch below is a compare and a load rather than a call
+    ; that banks and reloads a segment for one byte. It is saved and restored
+    ; because a package's ES is the KERNEL's on entry (SPEC.md 20.2), and
+    ; every callee inside the loop either leaves ES alone or - at_getb, which
+    ; at_peek still reaches - banks it itself.
+    push es
+    mov es, [at_dseg]
+%endif
     mov [at_scend], cx
     mov [at_scpos], ax
 .lline:
@@ -742,6 +752,9 @@ at_scan:
     mov si, [at_scpos]
     mov [at_sclst], si              ; this line's start (for at_respan)
     call at_emit
+%ifndef NOATPLAIN
+    mov byte [at_scplain], 1        ; SPEC.md 46.4.8: nothing seen yet
+%endif
     mov byte [at_sccont], 4         ; any further line of this lline wraps
     mov di, [at_tw]                 ; DI = room left, px
     mov bp, 0FFFFh                  ; BP = last space position (none)
@@ -750,9 +763,29 @@ at_scan:
     mov bx, si
     cmp bx, [at_scend]
     jae .enddoc
+%ifdef NOATFETCH
     call at_getb
+%else
+    ; at_getb's body, inlined, with the segment already loaded. BX carries
+    ; the PHYSICAL offset only across the load: at_span compares it against
+    ; [at_scskip], which is a LOGICAL one, so it goes straight back.
+    cmp bx, [at_gs]
+    jb .lo
+    add bx, [at_ge]
+    sub bx, [at_gs]
+.lo:
+    mov al, [es:bx]
+    mov bx, si
+%endif
     cmp al, AT_NL
     je .endline
+%ifndef NOATPLAIN
+    AT_SPECIAL .notplain            ; the one list, shared with at_parse
+    jmp short .plainok
+.notplain:
+    mov byte [at_scplain], 0
+.plainok:
+%endif
     call at_span
     cmp di, [at_sccw]
     jb .wrap
@@ -760,6 +793,25 @@ at_scan:
     cmp al, ' '
     jne .nsp
     mov bp, si
+%if 1
+    ; BANK THE WALK'S STATE AT THE SPACE. The walk runs PAST the break before
+    ; .wrap rewinds to it, so everything it learned beyond the break belongs
+    ; to the NEXT line. Banking here is what lets both the plain flag
+    ; (46.4.8) and the span nibble (46.3.2) be REWOUND instead of re-derived.
+    ; A space changes neither at_span's nibble nor at_scskip, so the state
+    ; after processing it IS the state at the break.
+    push ax
+%ifndef NOATPLAIN
+    mov al, [at_scplain]
+    mov [at_scplsp], al
+%endif
+%ifndef NOATRESPAN
+    mov [at_scspsp], dl
+    mov ax, [at_scskip]
+    mov [at_scsksp], ax
+%endif
+    pop ax
+%endif
 .nsp:
     inc si
     jmp short .ch
@@ -768,17 +820,51 @@ at_scan:
     je .hard
     mov si, bp
     inc si                          ; break after the last space
+    push ax                         ; ...and the state as it stood there
+%ifndef NOATPLAIN
+    mov al, [at_scplsp]
+    mov [at_scplain], al
+%endif
+%ifndef NOATRESPAN
+    mov dl, [at_scspsp]
+    mov ax, [at_scsksp]
+    mov [at_scskip], ax
+%endif
+    pop ax
 .hard:
+%ifndef NOATPLAIN
+    call at_mkplain
+%endif
     mov [at_scpos], si
+%ifdef NOATRESPAN
     call at_respan                  ; the walk ran past the break: re-derive
-    jmp short .vline                ; the nibble for the next line's start
+%else
+    ; SPEC.md 46.3.2: DL IS the nibble at at_scpos on both arms now - carried
+    ; by the walk on a hard break, rewound from the space on a soft one - so
+    ; there is nothing to re-derive.
+    mov [at_scspan], dl
+%endif
+    jmp .vline                      ; the nibble for the next line's start
 .endline:
+%ifndef NOATPLAIN
+    call at_mkplain
+%endif
     inc si                          ; step over the newline
     mov [at_scpos], si
+%ifndef NOATWALK
+    cmp byte [at_sc1], 0            ; SPEC.md 46.3.1: at_relayout wants ONE
+    jne .done                       ; logical line, and reads [at_scpos] back
+%endif                              ; as the next paragraph's start
     jmp .lline
 .enddoc:
+%ifndef NOATPLAIN
+    call at_mkplain
+%endif
     mov [at_scpos], si
 .done:
+%ifndef NOATFETCH
+    pop es
+%endif
     pop cx
     ret
 
@@ -922,6 +1008,47 @@ at_peek:
 ;      relayout treats a full window as its fallback cue, and at_inslim
 ;      refuses input long before the main table can fill)
 ; -----------------------------------------------------------------------------
+%ifndef NOATPLAIN
+; -----------------------------------------------------------------------------
+; at_mkplain - mark the entry at_emit LAST wrote as plain (SPEC.md 46.4.8)
+; in:  [at_scplain] = 1 if no styling character was seen on that visual line
+; out: bit 3 of its attr set when it is plain; preserves every register
+;
+; at_emit writes the entry at the line's START, before its characters are
+; known, so the flag can only be applied here - at [at_lput]-1, in whichever
+; table at_stgmode selected. The heading level and the entry span nibble are
+; already IN that attr, so this tests them there rather than tracking them
+; twice: plain means bits 0-1 (level) and 4-7 (nibble) all clear. Bit 2 is the
+; continuation flag and a wrapped line is plain like any other.
+; -----------------------------------------------------------------------------
+at_mkplain:
+    cmp byte [at_scplain], 0
+    je .out
+    push ax
+    push bx
+    mov bx, [at_lput]
+    or bx, bx
+    jz .pop
+    dec bx
+    cmp byte [at_stgmode], 0
+    jne .stg
+    mov al, [bx+at_lattr]
+    test al, 0F3h
+    jnz .pop
+    or byte [bx+at_lattr], 8
+    jmp short .pop
+.stg:
+    mov al, [bx+at_stga]
+    test al, 0F3h
+    jnz .pop
+    or byte [bx+at_stga], 8
+.pop:
+    pop bx
+    pop ax
+.out:
+    ret
+%endif
+
 at_emit:
     push ax
     push bx
@@ -999,8 +1126,12 @@ at_relayout:
     ; --- rescan paragraphs into staging until convergence ------------------
     mov word [at_lput], 0
     mov byte [at_stgmode], 1
+%ifndef NOATWALK
+    mov byte [at_sc1], 1            ; ...and its lifetime is at_stgmode's, so
+%endif                              ; it is cleared at BOTH exits below
     mov ax, [at_rlst]
 .para:
+%ifdef NOATWALK
     ; scan limit = end of the logical line at AX (one past its newline)
     push ax
     call at_dlen
@@ -1022,6 +1153,21 @@ at_relayout:
 .atend:
     pop ax
     call at_scan                    ; appends this paragraph's lines
+%else
+    ; SPEC.md 46.3.1: NO SEPARATE SEARCH. The walk this replaced read every
+    ; byte of the paragraph through at_getb - a near call that banks ES,
+    ; reloads it from [at_dseg] and pops it, for ONE byte - and its only
+    ; product was the offset one past the newline, which at_scan's own
+    ; .endline discovers as it goes. at_scan is given the whole document as
+    ; its limit and told to stop after one logical line, and [at_scpos] is
+    ; then exactly what .findnl was computing.
+    push ax
+    call at_dlen
+    mov cx, ax                      ; CX = the document end
+    pop ax
+    call at_scan                    ; ...one logical line of it
+    mov cx, [at_scpos]              ; CX = this paragraph's end
+%endif
     mov ax, [at_lput]
     cmp ax, AT_STGCAP
     jae .fallback                   ; window full: bulk edit, full layout
@@ -1064,10 +1210,16 @@ at_relayout:
     call at_splice
     jmp short .done
 .fallback:
+%ifndef NOATWALK
+    mov byte [at_sc1], 0            ; at_layout scans the WHOLE document
+%endif
     mov byte [at_stgmode], 0
     mov byte [at_rlfull], 1         ; the repaint must go whole-screen
     call at_layout
 .done:
+%ifndef NOATWALK
+    mov byte [at_sc1], 0
+%endif
     mov byte [at_stgmode], 0
     pop bp
     pop di

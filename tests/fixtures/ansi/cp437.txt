@@ -1,0 +1,65 @@
+fixture: cp437
+  The CP437 house rule: bytes 0x80-0xFF are GLYPHS and never C1
+  controls, and so is every C0 byte that is not one of the seven this
+  terminal answers to. The block-drawing range 0xB0-0xDF is what BBS art is
+  actually made of, so it gets a row of its own.
+
+stream:  639 bytes
+cursor:  row 14 col 71 (0-based)   attribute 07   415 glyph(s)
+state:   GROUND   bells 0   scrolls 0
+cursor visible: True
+
+    +--------------------------------------------------------------------------------+
+  0 |C0 glyphs (00 and 07-0D and 18 1A 1B excepted):                                 |
+  1 |☺☻♥♦♣♠♂♫☼►◄↕‼¶§▬↨↓∟↔▲▼                                                          |
+  2 |7F is a glyph too: ⌂                                                            |
+  3 |                                                                                |
+  4 |20  !"#$%&'()*+,-./0123456789:;<=>?                                             |
+  5 |40 @ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_                                             |
+  6 |60 `abcdefghijklmnopqrstuvwxyz{|}~⌂                                             |
+  7 |80 ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒ                                             |
+  8 |A0 áíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐                                             |
+  9 |C0 └┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀                                             |
+ 10 |E0 αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■                                              |
+ 11 |                                                                                |
+ 12 |                                                                                |
+ 13 |blocks on colour:                                                               |
+ 14 |░▒▓█▄▌▐▀ ░▒▓█▄▌▐▀ ░▒▓█▄▌▐▀ ░▒▓█▄▌▐▀ ░▒▓█▄▌▐▀ ░▒▓█▄▌▐▀ ░▒▓█▄▌▐▀ ░▒▓█▄▌▐▀         |
+ 15 |                                                                                |
+ 16 |                                                                                |
+ 17 |                                                                                |
+ 18 |                                                                                |
+ 19 |                                                                                |
+ 20 |                                                                                |
+ 21 |                                                                                |
+ 22 |                                                                                |
+ 23 |                                                                                |
+ 24 |                                                                                |
+    +--------------------------------------------------------------------------------+
+
+attributes, run-length encoded, one row per line:
+  0 80*07
+  1 80*07
+  2 80*07
+  3 80*07
+  4 80*07
+  5 80*07
+  6 80*07
+  7 80*07
+  8 80*07
+  9 80*07
+ 10 80*07
+ 11 80*07
+ 12 80*07
+ 13 80*07
+ 14 9*07 8*17 1*07 8*27 1*07 8*37 1*07 8*47 1*07 8*57 1*07 8*67 1*07 8*77 9*07
+ 15 80*07
+ 16 80*07
+ 17 80*07
+ 18 80*07
+ 19 80*07
+ 20 80*07
+ 21 80*07
+ 22 80*07
+ 23 80*07
+ 24 80*07

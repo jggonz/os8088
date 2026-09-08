@@ -30,6 +30,7 @@ import sys
 import time
 
 sys.path.insert(0, "tools")
+import os88build as _B
 import os88marty as M
 from os88mouse import Mouse
 from os88geom import WIN_SIZE, MAX_WIN
@@ -137,7 +138,7 @@ FS_SCRL_OFS = int(re.search(r"^FS_SCRL\s+equ\s+(\d+)", src, re.M).group(1))
 # maps onto ONE row of travel, so a drag the length of it moves the view by a
 # row and a drag most of the way moves it by nothing - which is a correct bar
 # and a useless gate. This disk makes the thumb small and the range long.
-DISK = "build/thumbdisk.img"
+DISK = _B.at("build/thumbdisk.img")
 if not os.path.exists(DISK):
     os.makedirs("build/thumbsrc", exist_ok=True)
     names = []

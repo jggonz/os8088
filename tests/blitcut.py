@@ -41,8 +41,10 @@ import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
+import os88build                                            # noqa: E402
 import os88marty                                            # noqa: E402
 import dispapps                                              # noqa: E402
 
@@ -112,8 +114,17 @@ def diff_box(mine, theirs, skip=None):
     return n, (None if n == 0 else (x0, y0, x1, y1))
 
 
-def run(image, apps, machine, defines):
-    """-> (cycles, geometry, [card framebuffers as bit strings])"""
+def run(image, apps, machine, defines, tree=None):
+    """-> (cycles, geometry, [card framebuffers as bit strings])
+
+    `tree` is the build this kernel came out of, and applying it is not
+    optional. os88sym re-assembles from the defines and checks the result
+    against that tree's own kernel.bin, so the two travel together - and the
+    MODULE DEFAULT has to move with them, because the library helpers below
+    (`no_saver` resolves `ss_idle`) do not take a `defines` argument and go
+    to it. `Tree.apply()` sets all three.
+    """
+    (tree or os88build.plain()).apply()
     def S(n):
         return os88sym.linear(n, defines)
 
@@ -129,7 +140,7 @@ def run(image, apps, machine, defines):
         # blit to arrive - which at 3.4x is over thirteen guest minutes with
         # no input. What the saver would then do is not fail this row, it is
         # make it wait out the whole 240 and report that the blit never came
-        # (docs/HANDOFF-SOAK-FINDINGS.md B7).
+        # (docs/plans/HANDOFF-SOAK-FINDINGS.md B7).
         os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, settle)
@@ -291,20 +302,15 @@ def main():
     print("   shipped kernel:")
     cyc, geom, fbs, clk = run(a.image, a.apps, a.machine, ())
 
-    # THIS ROW REBUILDS THE TREE (blitplane.py says why, and the `finally` is
-    # not decoration): `make NOBLITCUT=1` writes build/kernel.bin, so a run
-    # that dies in the middle leaves every emulator row after it driving a
-    # kernel nobody asked for.
-    ref = "/tmp/blitcut-noblitcut.img"
-    print("   NOBLITCUT=1 kernel: building")
-    try:
-        subprocess.check_call(["make", "NOBLITCUT=1", a.image],
-                              stdout=subprocess.DEVNULL)
-        subprocess.check_call(["cp", a.image, ref])
-        print("   NOBLITCUT=1 kernel:")
-        rcyc, rgeom, rfbs, _ = run(ref, a.apps, a.machine, ("NOBLITCUT",))
-    finally:
-        subprocess.check_call(["make"], stdout=subprocess.DEVNULL)
+    # THE KNOB KERNEL IS BUILT IN A TREE OF ITS OWN (tools/os88build.py;
+    # blitplane.py is the same conversion). It used to go into build/ with a
+    # `finally` putting the plain kernel back, so a run that died in the
+    # middle left every emulator row after it driving a kernel nobody asked
+    # for. Now build/ is never written and there is nothing to put back.
+    knob = os88build.tree("NOBLITCUT=1")
+    print("   NOBLITCUT=1 kernel: %s" % os.path.relpath(knob.dir, ROOT))
+    rcyc, rgeom, rfbs, _ = run(knob.img(os.path.basename(a.image)), a.apps,
+                               a.machine, knob.defines, tree=knob)
 
     bad = 0
     if geom != rgeom:

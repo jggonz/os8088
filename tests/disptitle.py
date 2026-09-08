@@ -36,7 +36,7 @@ many pixels are lit but which way up the picture is, and a bar that is white on
 one monitor cannot be black on the other.
 
 It is the only test in this tree that can see the defect: two cards of
-DIFFERENT DEPTH is `os8088_xt_vga_herc` (docs/DUAL-DISPLAY-VGA.md 7.1), 86Box's
+DIFFERENT DEPTH is `os8088_xt_vga_herc` (docs/plans/completed/DUAL-DISPLAY-VGA.md 7.1), 86Box's
 `xt-multimon` is a Hercules beside a CGA and those two agree about depth, and
 one card cannot straddle anything.
 """
@@ -51,6 +51,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
+import os88build                                            # noqa: E402
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
@@ -130,22 +131,21 @@ def main(argv):
     a = ap.parse_args(argv)
 
     # SPEC.md 5.9.6: the composed bar is `make BAND=1` and nothing else, so
-    # this row builds it. A knob kernel is a DIFFERENT kernel and os88sym
-    # refuses a map that is not byte-identical to build/kernel.bin, so the
-    # define goes in once here rather than at each of the lookups below.
+    # this row builds it - in a TREE OF ITS OWN (tools/os88build.py), which is
+    # what removed the paragraph that used to sit here about putting the
+    # default kernel back. A knob kernel left in build/ under the shipped
+    # names was CLAUDE.md's own trap, and an `atexit` was the best available
+    # defence against it; not writing build/ at all is a better one, and it
+    # needs no defence.
+    #
+    # `apply()` sets os88sym's module default as well as the environment, so
+    # the lookups below - and the library helpers they call, which take no
+    # defines - all describe THIS kernel.
     if not a.no_build:
-        subprocess.check_call(["make", "BAND=1"], cwd=ROOT,
-                              stdout=subprocess.DEVNULL)
-        a.define = list(a.define) + ["BAND"]
-        # ...AND THE DEFAULT KERNEL GOES BACK, whichever way this run ends. A
-        # knob kernel left in build/ under the shipped names is CLAUDE.md's
-        # own trap: the next row resolves symbols against it, os88sym refuses
-        # a map that does not match, and the failure points at the kernel
-        # rather than at what left it there. atexit rather than a try/finally
-        # around the launch below, because half a dozen sys.exit()s inside it
-        # are the normal way this row gives up on a machine it cannot drive.
-        atexit.register(subprocess.check_call, ["make"], cwd=ROOT,
-                        stdout=subprocess.DEVNULL)
+        knob = os88build.tree("BAND=1").apply()
+        a.image = knob.img(os.path.basename(a.image))
+        a.apps = knob.img(os.path.basename(a.apps))
+        a.define = list(a.define) + list(knob.defines)
 
     global S
     if a.define:
