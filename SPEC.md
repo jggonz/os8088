@@ -52145,6 +52145,17 @@ It is 1.81× and not 2× at z=0 because a mirrored row is still *emitted* —
   height. A view change funnels through `fr_kick` and cannot reach that, but
   the key costs one compare and turns an argument into a check.
 
+**Two rules keep `[fr_lrow]` honest, and the mirror fires only with both.**
+The twin has to be a real canvas row: `2·rc − r` is −1 — which *is* the
+`0FFFFh` "`fr_line` holds nothing" sentinel — for `r = 2·rc + 1`, an ordinary
+row of the walk wherever the axis sits high enough for one, so `fr_twin`
+range-tests the twin against `[fr_ch]` before it compares against `[fr_lrow]`.
+And only a **half-decoded** `fr_take` may invalidate `[fr_lrow]`: `fr_worker`
+calls `fr_take` and then `fr_twin`, so a wipe on the ordinary "the cursor is
+at the frontier, compute it" exit clears the row the twin test is about to
+ask for, on every row of every fresh render, and the table above becomes a
+number this code never reaches.
+
 **Cost.** `[fr_mrc]` and `[fr_lrow]` — the row `fr_line` currently holds, which
 is what the twin test compares against and what `fr_kick` invalidates — are
 the only new state. Mandelbrot and Tricorn get the mirror; the two Julias

@@ -1140,15 +1140,22 @@ fr_cache_row:
 ; fr_kick emptying the cache under this walk ends it rather than running it
 ; off the claim. The row it half-decoded is then dropped by the restart
 ; check, like any other stale row.
+;
+; The two refusals are NOT the same exit. Only a walk that gave up mid-row has
+; written into fr_line, and only that one may invalidate [fr_lrow]; the
+; ordinary "the cursor is at the frontier, compute it" refusal leaves fr_line
+; and [fr_lrow] exactly as they were, because fr_worker calls fr_twin on the
+; very next instruction and a wipe here would mean the mirror never fires at
+; all (SPEC.md 40.6).
 ; -----------------------------------------------------------------------------
 fr_take:
     mov byte [fr_cfrom], 0
     mov ax, [fr_cseg]
     or ax, ax
-    jz .none
+    jz .quiet
     mov si, [fr_cpos]
     cmp si, [fr_cn]
-    jae .none                       ; the cursor is at the frontier: compute
+    jae .quiet                      ; the cursor is at the frontier: compute
     xor di, di                      ; DI = the column this run starts at
 .run:
     mov es, ax                      ; (AX holds fr_cseg for the whole walk)
@@ -1188,8 +1195,10 @@ fr_take:
     ret                             ; would hand fr_twin the wrong row (40.6)
 .none:
     mov word [fr_lrow], 0FFFFh      ; half a row may have been decoded into
-    stc                             ; fr_line before this gave up
-    ret
+                                    ; fr_line before this gave up
+.quiet:                             ; ...where nothing was: fr_line still holds
+    stc                             ; the row [fr_lrow] names, and the twin
+    ret                             ; test is about to want it (SPEC.md 40.6)
 
 ; -----------------------------------------------------------------------------
 ; fr_replay - put the cached PASS-0 rows back onto the canvas
@@ -1614,7 +1623,7 @@ fr_band:
 
 ; -----------------------------------------------------------------------------
 ; fr_twin - does fr_line ALREADY hold the row about to be drawn? (SPEC.md 40.6)
-; in:  [fr_row] [fr_mrc] [fr_lrow]
+; in:  [fr_row] [fr_mrc] [fr_lrow] [fr_ch]
 ; out: CF clear = yes: fr_line is this row's colours, do not compute it
 ;      CF set   = no
 ; clobbers: nothing
@@ -1628,9 +1637,12 @@ fr_band:
 ; sweep that was not looking.
 ;
 ; It compares against [fr_lrow] and NOTHING else, so the failure mode is a
-; recompute rather than a wrong row: fr_kick and a refused fr_take both park
-; 0FFFFh there, and a value that is merely stale cannot match a twin the
-; render has not reached yet.
+; recompute rather than a wrong row: fr_kick and a HALF-DECODED fr_take both
+; park 0FFFFh there, and a value that is merely stale cannot match a twin the
+; render has not reached yet. The range test is what makes that sentinel safe:
+; 2*rc - row is -1, which IS 0FFFFh, for row 2*rc+1 - an ordinary row of the
+; walk wherever the axis sits high enough for one - so without it the sentinel
+; would read as a match and paint that row from whatever fr_line last held.
 ; -----------------------------------------------------------------------------
 fr_twin:
     push ax
@@ -1641,6 +1653,9 @@ fr_twin:
     sub ax, [fr_row]                ; AX = 2*rc - row, the twin
     cmp ax, [fr_row]
     je .no                          ; the axis row is its own twin
+    cmp ax, [fr_ch]
+    jae .no                         ; ...and a twin off the canvas is no row at
+                                    ; all - unsigned, so row -1 fails here
     cmp ax, [fr_lrow]
     jne .no
     pop ax
