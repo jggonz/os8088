@@ -79119,6 +79119,13 @@ move a region on a kernel-initiated claim and never on any other. Recording
 claim pack package B's region. Past that depth the answer is *pin everything*
 rather than a guess.
 
+**And the stack has to START empty.** `-f bin` zeroes no `.bss` and `int 19h`
+zeroes none either, so a warm boot inherits the *previous* kernel's `[wm_pkgd]`
+— past `WM_PKGD_MAX` that pins every region and image for the rest of the
+session, below it the walk compares garbage segments. `wm_init` zeroes
+`wm_pkgd` and `wm_pkgs` in the same `rep stosb` as the window table, which is
+why they are contiguous with it and first.
+
 **`[ld_base]` had to start being cleared.** It was zeroed on the *abort* path,
 where `ld_undo` frees by it, and never on the success path — so a value left
 standing pinned the most recently launched package's region, the one most

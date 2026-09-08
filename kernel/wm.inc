@@ -373,9 +373,14 @@ wm_init:
     push ds
     pop es
     xor ax, ax
-    mov di, wm_wins             ; wins + zord + zn are contiguous in .bss
-    mov cx, MAX_WIN*WIN_SIZE + MAX_WIN + 1 + MAX_WIN*2
-    rep stosb
+    mov di, wm_pkgd             ; pkgd + pkgs + wins + zord + zn are contiguous
+    mov cx, 2 + WM_PKGD_MAX*2 + MAX_WIN*WIN_SIZE + MAX_WIN + 1 + MAX_WIN*2
+    rep stosb                   ; in .bss. THE NEST STACK IS IN THE RUN
+                                ; (SPEC.md 66.6.1): .bss is never zeroed at
+                                ; boot and int 19h keeps the LAST kernel's, so
+                                ; a stale [wm_pkgd] past WM_PKGD_MAX pins every
+                                ; region and image for the rest of the session
+                                ; and one below it walks garbage segments
     mov al, 0xFF                ; wm_owner is NOT part of the zero run: its
     mov di, wm_owner            ; empty value is 0xFF (unowned, SPEC.md 11)
     mov cx, MAX_WIN
@@ -11821,8 +11826,8 @@ wm_nest_pop_x:
 section .text
 
 ; -----------------------------------------------------------------------------
-; wm.inc .bss - window table + z-order (wm_init zeroes all of it as one run,
-; so these three must stay contiguous and in this order)
+; wm.inc .bss - the nest stack, window table + z-order (wm_init zeroes all of
+; it as one run, so these five must stay contiguous and in this order)
 ; -----------------------------------------------------------------------------
 section .bss
 wm_pkgd:    resw 1              ; NESTING DEPTH OF KERNEL -> PACKAGE CALLS. A
