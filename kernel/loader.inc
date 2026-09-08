@@ -335,14 +335,28 @@ ld_check_hdr:
     jz .lowword                             ; under 64KB: compare exactly
     test byte [es:si+LD_H_FLAGS], 4
     jz .toobig
-    jmp short .imgok
+    jmp short .notover
 .lowword:
     cmp ax, [ld_fsz]
-    je .imgok                               ; exact
+    je .notover                             ; exact
     ja .over                                ; the image runs PAST the file
     test byte [es:si+LD_H_FLAGS], 4         ; short of it: parts, or truncated
     jz .bad
-    jmp short .imgok
+.notover:                                   ; ...AND THE COMPRESSION BITS ARE
+    test byte [es:si+LD_H_FLAGS], 0x18      ; A LIE ON EVERY ARM BUT .over
+    jnz .bad                                ; (SPEC.md 20.13.2). Step 6 reads a
+    jmp short .imgok                        ; compressed file at R =
+                                            ; roundup512(image - file), a plain
+                                            ; 16-bit subtract: with the file at
+                                            ; or past the image it BORROWS, and
+                                            ; an R of tens of KB lands the read
+                                            ; outside a region step 4 sized
+                                            ; from image + bss. Both bits and
+                                            ; not bit 3 alone - bit 4 without
+                                            ; it is a format os88pkg.py never
+                                            ; writes, and [ld_cfmt] below reads
+                                            ; it as LZB, which is non-zero and
+                                            ; takes that same path
 .over:                                      ; ...which is COMPRESSION (SPEC.md
     test byte [es:si+LD_H_FLAGS], 8         ; 20.13.2): `image` keeps meaning
     jz .bad                                 ; the UNPACKED bytes, so the file

@@ -32642,6 +32642,19 @@ The compressed length needs no header field: the loader already has the file's
 size staged from the directory entry (§19.1), and the compressed body is that
 minus the clear prefix.
 
+**BIT 3 IS HONOURED ON ONE ARM OF THE LADDER AND REFUSED ON THE OTHERS**
+(binding). `image > file` is not a consequence of the bit, it is the
+*precondition* for it: §21 step 6 reads a compressed file at
+`R = roundup512(image − file)`, a 16-bit subtract, so a header that sets bit 3
+(or bit 4, which `ld_check_hdr` reads as a format and `os88pkg.py` never
+writes) on any of the other three arms — file past 64KB with bit 2, `image ==
+file`, or `image < file` with bit 2 — borrows or answers zero, and the read
+lands outside a region sized from `image + bss` at step 4. `ld_check_hdr`
+therefore answers `LD_EBAD` for the compression bits on every arm that has not
+proved `image > file`. Every byte off a disk is hostile (§19) and `os88pkg.py`
+is not a gate on a foreign `.O88` — the same rule, and the same class of
+defect, as the `image + bss` carry fence one test along (§21 step 4).
+
 #### 20.13.3 `OSAPI_DECOMP` (0x04F8) — a plain cell, and why
 
 ```
