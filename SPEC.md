@@ -79258,10 +79258,14 @@ used to be an unconditional pin. It is now:
    be forgotten by one written after — §47's *grey a fact, never a guess*
    applied to the compactor. It sets no `[mem_wpin]`: a park cannot unhook a
    vector.
-2. **`mem_in_nest`** — is a frame standing in the image right now? The seven
+2. **`mem_in_nest`** — is a frame standing in the image right now? The eight
    kernel sites that far-call a driver bracket themselves with
    `wm_nest_pushd`/`wm_nest_pop`, so `wm_pkgs[0..wm_pkgd)` is exactly the set of
-   images the machine is executing in. It is a **stack of segments and not a
+   images the machine is executing in. **`drv_pkg_call_x` is one of the eight**,
+   and it is the one that most needs to be: it takes no lock and is legal from a
+   worker (§20.6 rule 7), so a package is fully pre-emptible inside `ETHER.DRV`
+   — whose `[drv_wcnt]` is permanently 0 (§72.19) and whose 18KB image is
+   therefore pinned by this test and by nothing else. It is a **stack of segments and not a
    depth**, for §66.6.1's reason one layer along: `sbl_v_grant` claims, so the
    depth is non-zero at precisely the moment a driver-triggered compaction runs,
    and a compactor resting on a count alone would pin every image against
@@ -79300,13 +79304,16 @@ interrupt only between two.
 
 **The push is `ES`-relative and the pop `DS`-relative**, which is not an
 inconsistency but what every call site can actually promise. Entering, `DS` has
-just been loaded with the image and `ES` is `KERNEL_SEG` at all eight sites;
-returning, a verb may have clobbered `ES` (§13) and it is `DS` the site puts
-back — so the pop goes *after* the site's `pop es`/`pop ds`, where `DS` names
-the kernel again. The pair lives in `.cold`, so `cs:` is `COLD_SEG` and reaches
-neither. The three `.text` sites — `wm_pkgcall` itself, `vmmouse.inc` and
-`xmem.inc` — reach it through four-byte `retf` wrappers, §2.6.1 forbidding a
-far-called body that ends in a near `ret`. The push reads the image out of `DS`
+just been loaded with the image and `ES` is `KERNEL_SEG` at eight of the nine
+sites; returning, a verb may have clobbered `ES` (§13) and it is `DS` the site
+puts back — so the pop goes *after* the site's `pop es`/`pop ds`, where `DS`
+names the kernel again. The ninth is `drv_pkg_call_x`, where `ES` is the
+**calling package's** and has to still be at the far call — a socket verb's
+buffer is the package's (§20.11) — so that site alone banks `ES`, borrows it
+for the push and hands it straight back. The pair lives in `.cold`, so `cs:` is
+`COLD_SEG` and reaches neither. The four `.text` sites — `wm_pkgcall` itself,
+`vmmouse.inc`, `xmem.inc` and `drv_pkg_call_x` — reach it through four-byte
+`retf` wrappers, §2.6.1 forbidding a far-called body that ends in a near `ret`. The push reads the image out of `DS`
 rather than taking it in a register, which is why `wm_pkgcall` spends nothing
 at all on it: the `mov ds, [es:si+W_SEG]` it already does IS the argument.
 

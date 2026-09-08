@@ -11776,9 +11776,11 @@ wm_animon   db 1                ; 0 = Off, 1 = On
 ;
 ; THE PUSH IS ES-RELATIVE AND THE POP DS-RELATIVE, which is not an
 ; inconsistency but what every call site can actually promise. Entering, DS has
-; just been loaded with the image and ES is the kernel at all seven sites;
+; just been loaded with the image and ES is the kernel at eight of the nine;
 ; returning, a verb may have clobbered ES (SPEC.md 13) and it is DS the site
-; puts back. .cold, so `cs:` is COLD_SEG and reaches neither.
+; puts back. drv_pkg_call_x is the ninth - ES is the CALLING PACKAGE's there
+; and has to still be at the far call, so that site banks it, borrows it for
+; the push and hands it back. .cold, so `cs:` is COLD_SEG and reaches neither.
 ; -----------------------------------------------------------------------------
 section .cold
 wm_nest_pushd:

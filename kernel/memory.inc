@@ -1636,7 +1636,7 @@ mem_busy_seg:
 ; SPEC.md 66.6.1 and 66.6.3, WHICH ARE ONE QUESTION. A package region and a
 ; driver image are both a CS on the heap, and "may it move out from under a
 ; return address" has the same answer and the same evidence for either: the
-; seven sites that far-call a driver image and the one that far-calls a package
+; eight sites that far-call a driver image and the one that far-calls a package
 ; bracket themselves with wm_nest_pushd / wm_nest_pop, so wm_pkgs[0..wm_pkgd)
 ; is exactly the set of images the machine is executing in. It was two stacks
 ; and two walks - and `sbl_v_grant` CLAIMS, so that set is non-empty at

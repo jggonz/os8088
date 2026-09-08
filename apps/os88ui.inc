@@ -3057,27 +3057,29 @@ os88ui_drbank:
     call os88ui_drrect
     push ax                     ; --- bytes = planes x rows x byte columns ---
     push bx
-    mov cl, 3
-    shr ax, cl
-    shr cx, cl
-    sub cx, ax
-    inc cx                      ; CX = byte columns
+    mov di, cx                  ; x2, BEFORE `mov cl, 3` takes CX's low byte -
+    mov cl, 3                   ; the sizing reads x2 and the shift count out
+    shr ax, cl                  ; of the same register (atui.inc's at_surban
+    shr di, cl                  ; banks x2 the same way)
+    sub di, ax
+    inc di                      ; DI = byte columns
     sub dx, bx
     inc dx                      ; DX = rows
     mov ax, dx
-    mul cx                      ; AX = one plane's bytes (a list is far under
-    mov cx, ax                  ; 64KB of one, OS88UI_DRMAX bounding it)
+    mul di                      ; AX = one plane's bytes (a list is far under
+                                ; 64KB of one, OS88UI_DRMAX bounding it)
     mov bx, [ds:bp+OS88UI_DR_WIN]
     or bx, bx
     jz .none
-    call OSAPI_WM_DISPLAY       ; DH = the bpp OF THE DISPLAY WE ARE ON, which
-    mov bl, dh                  ; OSAPI_VIDEO cannot answer on a two-card
-    xor bh, bh                  ; machine (SPEC.md 39.16.4): a buffer sized for
-    cmp bl, 4                   ; the wrong one arrives as noise (39.14.8)
+    push ax                     ; ...and the plane count is banked across the
+    call OSAPI_WM_DISPLAY       ; call: DH = the bpp OF THE DISPLAY WE ARE ON,
+    mov bl, dh                  ; which OSAPI_VIDEO cannot answer on a two-card
+    xor bh, bh                  ; machine (SPEC.md 39.16.4) - and CX comes back
+    pop ax                      ; as the dock's first row (a buffer sized for
+    cmp bl, 4                   ; the wrong one arrives as noise, 39.14.8)
     je .planes
     mov bx, 1
 .planes:
-    mov ax, cx
     mul bx
     add ax, 1023
     mov cl, 10
