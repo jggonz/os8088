@@ -53,9 +53,9 @@
                                     ; neither of them is a package stem
 
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *) - the
-                                    ; II+ byte map's make half (APPLE2-SPEC
-                                    ; section 6.1). Wave 1 carries the
-                                    ; callback and the chord fence only
+                                    ; II+ byte map's MAKE half (APPLE2-SPEC
+                                    ; section 6.1), plus the two reset chords
+                                    ; Ctrl+F2 and Ctrl+F3 (section 6.3)
 %define CC_HAS_ONCLICK              ; void os88_onclick(int, int, void *) - a
                                     ; click KICKS the wake, so a wake the
                                     ; event ring refused cannot park a running
@@ -142,8 +142,19 @@
                                     ; memory hooks and the entry/exit shell
 %include "apple2/a2mem.inc"         ; the RAM/ROM claim accessors and movers
                                     ; (APPLE2-SPEC section 3.4)
-%include "apple2/a2band.inc"        ; the 1bpp composers, the span compare and
-                                    ; the row signature (APPLE2-SPEC 7.3)
+%define A2_SHIP 1                   ; ...and a2band.inc's `a2_rowsig` is NOT in
+                                    ; it. The shift test compares forty source
+                                    ; bytes now (APPLE2-SPEC 7.7 step 2) and
+                                    ; nothing calls the signature; nasm has no
+                                    ; dead-code elimination, so this define is
+                                    ; what keeps ~34 unreachable bytes out of
+                                    ; the resident image. The two harnesses
+                                    ; that %include a2band.inc themselves -
+                                    ; tests/a2band/a2bandbench.asm and
+                                    ; hosttest/a2memtest.asm - do not define
+                                    ; it, and keep the routine as their subject
+%include "apple2/a2band.inc"        ; the 1bpp composers and the span compare
+                                    ; (APPLE2-SPEC 7.3)
 %include "apple2/a2nib.inc"         ; the 6-and-2 encoder - a STUB until the
                                     ; Disk II follow-up PR (section 14)
 %include "apple2/a2fsx.inc"         ; the foreign-mode raster writers - a STUB

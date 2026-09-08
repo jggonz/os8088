@@ -1,5 +1,5 @@
 /* ============================================================================
- * os8088 - apps/apple2/a2kbd.c       the II+ keyboard - A WAVE-1 STUB
+ * os8088 - apps/apple2/a2kbd.c              the II+ keyboard byte map
  *
  * Part of APPLE2 (docs/APPLE2-SPEC.md section 6). #included into
  * apps/apple2/apple2.c - ONE translation unit (SPEC.md 73.1).
@@ -41,8 +41,9 @@
  * WHAT LANDS HERE LATER
  * ----------------------------------------------------------------------------
  * WAVE 3 brings the rest: F1 and F2 as the game BUTTONS PB0 and PB1 read as a
- * LEVEL through os88_key_down, Ctrl+F3's Open-Apple-Ctrl-Reset chord, and the
- * keyboard-mouse rule.
+ * LEVEL through os88_key_down, and the keyboard-mouse rule. BOTH RESET CHORDS
+ * ARE HERE ALREADY - Ctrl+F2 is Ctrl-Reset and Ctrl+F3 its Open-Apple form
+ * (section 6.3, and a2_key below).
  *
  * WAVE 4 brings the paste feeder's peek-and-consume handshake and Copy's
  * screen-encoding walk.

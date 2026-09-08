@@ -183,8 +183,14 @@ make apple2disk #   an Apple II Plus — a 6502 in a 48K claim, the II+'s video
                 #   `tools/getapple2rom.py` FETCHES at pinned SHA-256s and
                 #   NEVER commits (`make clean` spares build/apple2-rom/, so
                 #   a rebuilt tree needs no network). `make a2bandbench` is
-                #   the composer's icount bench and `make a2memtest` the
-                #   mover and write-fence gate (SS ≠ DS, in raw QEMU).
+                #   the composer's icount bench, `make a2memtest` the
+                #   mover and write-fence gate (SS ≠ DS, in raw QEMU), and
+                #   `make a2cputest` the 6502's — Klaus Dormann's functional
+                #   test at a pinned SHA-256 (fetched, never committed),
+                #   tools/c64dec.py's 262,144 decimal cases and the Apple II
+                #   memory model's own boundaries, every row with a negative
+                #   control that must fail; minutes, so it is NOT in `all` —
+                #   it arrives with the core.
                 #   THE CONTRACT IS docs/APPLE2-SPEC.md, not a section of
                 #   SPEC.md — and apps/apple2/ is GPL-2-or-later by way of
                 #   VICE, which the rest of this tree is not

@@ -1117,10 +1117,19 @@ D untouched and SP pulled down three within page one.
 
 | resident image | bss | resident total | `APPLE2.OVL` | resident shims | largest C frame |
 |---|---|---|---|---|---|
-| **26,706** | **10,394** | **37,100** of 61,440 | **883** | **8** | **42** of 96 |
+| **28,396** | **12,240** | **40,636** of 61,440 | **883** | **8** | **46** of 96 |
 
-**24,340 spare; 17,900 under SPEC.md 73.9's 55,000 split trigger and 16,900
-under the 54,000 end-of-wave-5 ceiling.** `a2cpu.inc` alone assembles to 6,510
+**20,804 spare; 14,364 under SPEC.md 73.9's 55,000 split trigger and 13,364
+under the 54,000 end-of-wave-5 ceiling.** (The review pass that followed the
+wave added 234 image bytes and 2 of bss - the scroll's phase guard, the shift
+test's probe budget and the permanent JAM row - and gave 32 back by keeping
+`a2_rowsig`, which nothing on a shipping path calls any more, out of the image
+behind an `%ifdef`.) 1,920 of the bss is the SOURCE
+SHADOW the k-row scroll test compares against (APPLE2-SPEC section 7.7 step 2
+and 15.0): forty bytes a character row rather than a 16-bit signature, which
+is what lets a verified shift mark the shifted rows CLEAN. A one-row scroll is
+**41.9 ms instead of 406.2**, and **32.4 instead of 238.1** on the clipped CGA
+band. `a2cpu.inc` alone assembles to 6,510
 bytes, within 8 of the C64 core's measured 6,518, which is this plan's `-120`
 term landing where it was estimated. **The contested budget of Decision 13 is
 settled in this plan's favour** - the fit review's 60,500-63,500 reading does
@@ -1144,15 +1153,47 @@ with RTI.
 II+ banner and the `]` prompt at launch; the cursor photographed on BOTH flash
 phases; `PRINT 2+2` showing `4`; Machine > Control-Reset abandoning a
 half-typed line and printing a fresh prompt, with `PRINT 3*7` = `21` after it
-to show the machine still runs. The status row reads **383 %** of a 1.02 MHz
-Apple under QEMU, which is the honest-speed posture doing its job: the figure
-is measured, not claimed.
+to show the machine still runs; a `FOR I=1 TO 40: PRINT I: NEXT` scrolling the
+page twenty times, on the 480-line desktop and on the clipped CGA band, with
+the cursor photographed on both flash phases AFTER the scroll (`a2_flrow[]`
+moves with the rows, or flashing text that has scrolled stops flashing); a
+forced `JAM` showing `6502: JAM at $0300` and then, once the message expires,
+a BLANK speed field - a number about a machine that is not running is what
+SPEC.md 47 forbids - and Control-Reset recovering from it.
+
+The status row reads **2,180 %** of a 1.02 MHz Apple under QEMU on the VGA
+desktop and **2,775 %** on the CGA one, and it MOVES from second to second,
+which is what a measurement does. **The first version of this field read
+`383%` for every machine speed above about 380 %**: `a2_cyc_add` stopped
+accumulating at 60,000 64-cycle units and the one-second denominator is 157,
+so 383 was the saturation value and the `pct > 9999` clamp was unreachable
+dead code. The unit doubles instead now (`64 << a2_csh`, capped at 4,096
+cycles), and `hosttest/a2uitest.c` drives seven speeds from 3 % to 6,000 %
+through the arithmetic and checks each, with a 12,000 % case that must clamp -
+a field that reads the same for two very different machine speeds being the
+whole of what is tested.
 
 **Wave 1's `a2_selftext()` placeholder page is deleted**, as this plan said it
 would be. `a2_have_cpu` revives Control-Reset and Open-Apple-Control-Reset -
 the two rows whose bodies this wave wrote - and a second flag `a2_have_cmd`
 carries the rows whose bodies wave 4 writes, `Power On` among them because
 section 10.2 gives it a two-row confirmation that arrives with them.
+
+**AND `CPU > Normal: 1MHz` IS MARKED FROM THE MEASUREMENT, WHICH IS MII'S OWN
+RULE** (`mii_mui_menus.c:165-170`: the tick goes on only while the measured
+speed is between 0.9 and 1.1, and comes off otherwise). It was ticked
+unconditionally, which put `* Normal: 1MHz` in the pull-down directly above a
+status row reading 383 % - a mode label asserting a speed the same screen
+refuted. The two facts that went with it are restated: there is no speed
+control in this build at all, so `Fast: 3.5MHz` is greyed on THAT and not on
+"this machine runs at 1.02 MHz". `README.TXT`, which ships on all four
+geometries, is rewritten for the same reason - it still described a build with
+no processor, showing a placeholder page this wave deleted.
+
+**`make a2cputest` is in CLAUDE.md's make-target map** beside `a2memtest` and
+`a2bandbench`, on the C64 block's own precedent - a gate that takes minutes
+and is deliberately outside `all` is the one a reader will not find by
+grepping the Makefile.
 
 ### Wave 3
 

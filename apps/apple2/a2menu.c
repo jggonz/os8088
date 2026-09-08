@@ -41,10 +41,16 @@
  *     FACT THAT GREYS IT IS IN A COMMENT BESIDE IT (SPEC.md 47). Nothing is
  *     silently missing, nothing is faked, and NOTHING IS LIVE THAT ONLY
  *     TOASTS A REFUSAL - an item the user can pick and that answers "not yet"
- *     is the one thing 47 exists to stop. In wave 1 that covers every command
- *     that needs a 6502, because there is not one yet: a2_menu_state() greys
- *     them off `a2_have_cpu`, and wave 2 sets that flag and they come alive
- *     with nothing else moving.
+ *     is the one thing 47 exists to stop. IT IS TWO FLAGS AND NOT ONE, and
+ *     the split is WHERE THE BODIES ARE (section 10.3): `a2_have_cpu` says
+ *     there is a 6502, which wave 2 gave, and revives the two rows whose
+ *     bodies are wave 2's own subject - `Control-Reset` and
+ *     `Open-Apple-Control-Reset`. `a2_have_cmd` says the COMMAND has a body,
+ *     which wave 4 gives, and holds Load Program..., Save Program..., Copy,
+ *     Paste, Power On, Stop/Continue and Warp. A row greyed off either flag
+ *     has no user-visible fact beside it, because there is no user of a wave
+ *     - what ships is the PR - and the alternative, a live row that can only
+ *     answer "not yet", is what 47 exists to stop.
  *  5. A CHECK ITEM'S STATE IS A `*` IN THE LABEL and the item pointer is
  *     swapped between the two spellings. MII reads its state from a TICK
  *     glyph (`MUI_GLYPH_TICK`); this kernel's menu has no check mark and its
@@ -123,10 +129,14 @@ static const char a2_sep[] = D "-----------------";
  * APPLE2-SPEC section 12's reason: there is no Disk II in this PR, and a
  * listing has to get in somehow. */
 static const char *a2_file_items[] = {
-    D "Load Program...",                    /* OURS (section 12). Greyed until
-                                             * there is a 6502 to load a
-                                             * program INTO */
-    D "Save Program...",                    /* OURS (section 12) */
+    D "Load Program...",                    /* OURS (section 12). The 6502 is
+                                             * here now: what is not is the
+                                             * BODY, which is wave 4's - so
+                                             * this row is greyed off
+                                             * a2_have_cmd and not
+                                             * a2_have_cpu (section 10.3) */
+    D "Save Program...",                    /* OURS (section 12). a2_have_cmd,
+                                             * for the row above's reason */
     a2_sep,
     "Quit"                                  /* mii_mui_menus.h m_file_menu.
                                              * LIVE, and answered in the
@@ -142,8 +152,10 @@ static const char *a2_file_items[] = {
  * the text page out - and it is here because a machine you can paste INTO and
  * not out of is half a clipboard. */
 static const char *a2_edit_items[] = {
-    D "Copy",                               /* OURS. Greyed: no text page to
-                                             * copy until there is a machine */
+    D "Copy",                               /* OURS. There IS a text page now;
+                                             * the reader that walks it is
+                                             * wave 4's, so this is greyed off
+                                             * a2_have_cmd (section 10.3) */
     D "Paste"                               /* interface.cpp:365 */
 };
 
@@ -154,7 +166,28 @@ static const char *a2_mach_items[] = {
                                              * Reset", with the glyph spelled
                                              * out. 24 glyphs, exactly
                                              * MENU_MAXCH */
-    D "Control-Reset",                      /* m_machine_menu */
+    D "Control-Reset  Ctrl+F2",             /* m_machine_menu, AND THE ONE ROW
+                                             * ON THE BAR THAT CAN CARRY ITS
+                                             * CHORD. MII supplies `.kcombo`
+                                             * on this row and on three others
+                                             * here (mii_mui_menus.h:98-104,
+                                             * :48-52) and c64menu.c captions
+                                             * every live row it has from
+                                             * VICE's hotkeys.vhk - so the
+                                             * question is per-row arithmetic
+                                             * against MENU_MAXCH = 24 and not
+                                             * a policy. `Control-Reset` is 13
+                                             * glyphs, the two-space separator
+                                             * c64menu.c uses is 2 and
+                                             * `Ctrl+F2` is 7: 22 of 24, and
+                                             * it fits. `Open-Apple-Control-
+                                             * Reset` is ALREADY 24 and
+                                             * `Toggle Fullscreen  Ctrl+F` is
+                                             * 25, so those two cannot, which
+                                             * section 10.1 records with the
+                                             * arithmetic. The chord itself is
+                                             * section 6.3's, LIVE since this
+                                             * wave (a2kbd.c) */
     D "Power On",                           /* AppleWin help/keyboard.html:15,
                                              * `F2 (Power On)` - its own
                                              * user-visible name for the cold
@@ -169,7 +202,24 @@ static const char *a2_mach_items[] = {
                                              * WinFrame.cpp:2002-2012's two
                                              * rows, `Are you sure you want to
                                              * reboot?` / `(All data will be
-                                             * lost!)` */
+                                             * lost!)`.
+                                             * WHY IT IS GREYED, WHICH EVERY
+                                             * OTHER ROW HERE SAYS AND THIS
+                                             * ONE DID NOT: the body exists
+                                             * and works - a2_power_on - but
+                                             * the confirmation above does
+                                             * not, and the dialog machinery
+                                             * lands in wave 4. A row that
+                                             * wipes 48KB of the user's RAM
+                                             * one menu pick away, shipped
+                                             * without the confirmation its
+                                             * contract names, is not the item
+                                             * section 10.2 describes. So it
+                                             * is on a2_have_cmd with the
+                                             * rest, and the two reset chords
+                                             * - neither of which touches RAM
+                                             * - are the recovery a real II+
+                                             * user has */
     D "Configure Slots...",                 /* m_machine_menu. THE FACT:
                                              * No Disk II in this build.
                                              * (section 10.3, and Disk II is a
@@ -237,35 +287,72 @@ static const char *a2_mach_items[] = {
 /* MII's m_cpu_menu whole, plus Warp. MII ticks `Normal: 1MHz` when the speed
  * is ~1 and `Fast: 3.5MHz` when it is over 2, and retitles Stop -> Stopped
  * and Running -> Continue from its MUI_MENUBAR_ACTION_PREPARE arm
- * (mii_mui_menus.c:130-205), which is what a2_menu_state does here. */
+ * (mii_mui_menus.c:130-205), which is what a2_menu_state does here.
+ *
+ * AND MII'S TICK ON `Normal: 1MHz` IS A MEASUREMENT, NOT A MODE LABEL:
+ * mii_mui_menus.c:165-170 sets the mark only while `mii->speed <= 1.1 &&
+ * >= 0.9` and CLEARS it otherwise. This port ticked it unconditionally, which
+ * put `* Normal: 1MHz` in the pull-down directly above a status row reading
+ * 383 % - the contradiction visible in one screendump. a2_menu_state marks it
+ * from a2_pct now, on MII's own band. */
 static const char *a2_cpu_items[] = {
-    D ON "Normal: 1MHz",                    /* m_cpu_menu. The radio that is
-                                             * always selected on this machine
-                                             * - it is what turns Warp OFF.
-                                             * Greyed off a2_have_cpu like
-                                             * every other CPU row, NOT
-                                             * permanently: the `D` here is
-                                             * only the wave-1 spelling and
-                                             * a2_menu_state rewrites it */
-    D OFF "Fast: 3.5MHz",                   /* m_cpu_menu. THE FACT: This
-                                             * machine runs at 1.02 MHz. Warp
-                                             * is this port's speed control
-                                             * and is beside it.
+    D ON "Normal: 1MHz",                    /* m_cpu_menu. Its MARK is the
+                                             * measurement (MII's rule above)
+                                             * and its GREYING is a2_have_cmd,
+                                             * because the row's body - the
+                                             * thing that turns Warp off - is
+                                             * wave 4's. The `D` and the `ON`
+                                             * here are only the launch
+                                             * spelling; a2_menu_state rewrites
+                                             * both */
+    D OFF "Fast: 3.5MHz",                   /* m_cpu_menu. THE FACT: There is
+                                             * no speed control in this build.
+                                             * The core runs the whole of each
+                                             * wake's slice and the status row
+                                             * reports what that came to.
                                              * (section 10.3) */
-    D OFF "Warp",                           /* OURS: this port's speed control,
-                                             * which is what the row above
-                                             * points at. Greyed off
-                                             * a2_have_cpu, and rewritten by
-                                             * a2_menu_state - a row whose `D`
-                                             * is baked into the literal and
-                                             * never rewritten is a row wave 2
-                                             * cannot revive */
+    D OFF "Warp",                           /* OURS: the speed control the row
+                                             * above points at, and wave 4's.
+                                             * Greyed off a2_have_cmd, and
+                                             * rewritten by a2_menu_state - a
+                                             * row whose `D` is baked into the
+                                             * literal and never rewritten is a
+                                             * row no later wave can revive */
     a2_sep,
-    D "Stop",                               /* m_cpu_menu, retitled `Stopped` */
-    D "Running",                            /* m_cpu_menu, retitled `Continue` */
-    D "Step",                               /* m_cpu_menu. THE FACT: There is
-                                             * no debugger in this port. */
-    D "Next"                                /* m_cpu_menu, same fact */
+    D OFF "Stop",                           /* m_cpu_menu, retitled `Stopped`.
+                                             * THE COLUMN IS IN EVERY SPELLING
+                                             * (rule 5): MII keeps `mark` a
+                                             * field of its own and only fills
+                                             * or empties the glyph, so the
+                                             * title never moves */
+    D OFF "Running",                        /* m_cpu_menu, retitled `Continue` */
+    D OFF "Step",                           /* m_cpu_menu. THE FACT: There is
+                                             * no debugger in this port.
+                                             * THE TWO-GLYPH COLUMN IS RULE 5
+                                             * ONE ROW-GROUP ALONG: it was
+                                             * given to Stop and Running and
+                                             * not to these two, so the CPU
+                                             * pull-down had five labels
+                                             * starting at one column and two
+                                             * at another - `one label in the
+                                             * pull-down starting two cells
+                                             * left of the others`, which is
+                                             * the rule's own words for the
+                                             * defect. MII draws the mark
+                                             * INSIDE a margin every item gets
+                                             * (mui_menus_draw.c:73-89: `an
+                                             * icon shifts the title right, a
+                                             * 'mark' doesn't`, and
+                                             * `title.l += margin_left` is
+                                             * unconditional), so marked and
+                                             * unmarked titles start on the
+                                             * same x there. os8088 has no
+                                             * margin, so the column is spelled
+                                             * into the label - and here it is
+                                             * free: the longest CPU label is
+                                             * 12 glyphs and the cap is 24 */
+    D OFF "Next"                            /* m_cpu_menu, same fact, same
+                                             * column */
 };
 
 /* AM_NAME IS THE SHORT PRODUCT NAME (section 16.1). The kernel bar shows the
@@ -289,11 +376,15 @@ static struct os88_menuset a2_menus = {
  * ========================================================================*/
 /* a2_menu_state - point each item at the spelling its state calls for.
  *
- * WAVE 1 IS THE `a2_have_cpu` HALF ONLY. Every command whose body needs a
- * 6502 is greyed until wave 2 sets that flag: rule 4 forbids a live item that
- * can only refuse, and a "not in this build yet" toast is exactly that. MII's
- * dynamic retitling (Stop -> Stopped, Running -> Continue) is wired here and
- * takes effect the moment there is a machine to be stopped. */
+ * IT READS FOUR THINGS: `a2_have_cpu` (there is a 6502 - wave 2 set it, and it
+ * revives the two reset chords, whose bodies are that wave's own subject),
+ * `a2_have_cmd` (the command has a body - wave 4 sets it, and it holds
+ * everything else that needs the machine), `a2_have_snd` (wave 5's speaker),
+ * and THE MEASURED SPEED, which is what marks `Normal: 1MHz`. Rule 4 forbids
+ * a live item that can only refuse, and a "not in this build yet" toast is
+ * exactly that. MII's dynamic retitling (Stop -> Stopped, Running ->
+ * Continue) is wired here and takes effect the moment there is a machine to
+ * be stopped. */
 static void a2_menu_state(void)
 {
     a2_file_items[A2_I_LOAD] = a2_have_cmd ? "Load Program..."
@@ -312,8 +403,8 @@ static void a2_menu_state(void)
      * confirmation the contract gives it is not the item the SPEC describes. */
     a2_mach_items[A2_I_OARESET] = a2_have_cpu ? "Open-Apple-Control-Reset"
                                               : D "Open-Apple-Control-Reset";
-    a2_mach_items[A2_I_RESET] = a2_have_cpu ? "Control-Reset"
-                                            : D "Control-Reset";
+    a2_mach_items[A2_I_RESET] = a2_have_cpu ? "Control-Reset  Ctrl+F2"
+                                            : D "Control-Reset  Ctrl+F2";
     a2_mach_items[A2_I_POWER] = a2_have_cmd ? "Power On" : D "Power On";
     a2_mach_items[A2_I_FLASH] = a2_fl_ok ? ON "Flashing text"
                                          : OFF "Flashing text";
@@ -324,22 +415,41 @@ static void a2_menu_state(void)
      *
      * `Fast: 3.5MHz` AND `Color NTSC` KEEP THEIR BAKED `D` ON PURPOSE, and
      * that is the rule's other half rather than an exception to it: the fact
-     * that greys each is a property of the MACHINE and of the windowed PATH
-     * ("this machine runs at 1.02 MHz", "the window is monochrome"), not of a
-     * flag some later wave sets, so there is nothing for a rewrite to read.
+     * that greys each is a property of the BUILD and of the windowed PATH
+     * ("there is no speed control in this build", "the window is
+     * monochrome"), not of a flag some later wave sets, so there is nothing
+     * for a rewrite to read. `Fast: 3.5MHz` USED TO SAY "this machine runs at
+     * 1.02 MHz", which is a claim about the MACHINE that the status row's own
+     * measured figure refutes by 3.8x on the host this is developed on: there
+     * is no throttle here at all, and a2_slice simply runs a2_budget cycles a
+     * wake.
      * What they DID need is the two-glyph column, which rule 5 above has, and
      * they carry it in the literal. Mute is the opposite case and is
      * rewritten below, because a2_have_snd is exactly such a flag. */
-    a2_cpu_items[A2_I_NORMAL] = a2_have_cmd ? ON "Normal: 1MHz"
-                                            : D ON "Normal: 1MHz";
+    /* `Normal: 1MHz` IS MARKED FROM THE MEASUREMENT, which is MII's own rule
+     * (mii_mui_menus.c:165-170: the mark goes on only while the measured speed
+     * is between 0.9 and 1.1). There is no throttle in this build, so on the
+     * host this is developed on the row is UNMARKED and the status row's
+     * figure is why; on the 4.77 MHz XT the port targets it will be unmarked
+     * the other way. Ticking it unconditionally asserted a speed the same
+     * screen refuted. a2_speed_fold calls this routine when a2_pct moves. */
+    a2_cpu_items[A2_I_NORMAL] = (a2_pct >= 90 && a2_pct <= 110)
+        ? (a2_have_cmd ? ON "Normal: 1MHz" : D ON "Normal: 1MHz")
+        : (a2_have_cmd ? OFF "Normal: 1MHz" : D OFF "Normal: 1MHz");
     a2_cpu_items[A2_I_WARP] = a2_have_cmd ? OFF "Warp" : D OFF "Warp";
     a2_mach_items[A2_I_MUTE] = a2_have_snd ? OFF "Mute" : D OFF "Mute";
+    /* ...AND SO DO Stop AND Running, WHICH IS RULE 5 AGAIN. The first version
+     * gave the marked spelling the two-glyph prefix and the unmarked one
+     * nothing, so each label would have jumped two cells left and right as the
+     * machine started and stopped - invisible today only because a2_have_cmd
+     * is never set and all four rows are greyed. MII does not do this: it
+     * keeps `mark` a field of its own and only fills or empties the glyph. */
     a2_cpu_items[A2_I_STOP] = a2_have_cmd
-        ? ((a2_state == A2_ST_RUN) ? "Stop" : ON "Stopped")
-        : D "Stop";
+        ? ((a2_state == A2_ST_RUN) ? OFF "Stop" : ON "Stopped")
+        : D OFF "Stop";
     a2_cpu_items[A2_I_RUN] = a2_have_cmd
-        ? ((a2_state == A2_ST_RUN) ? ON "Running" : "Continue")
-        : D "Running";
+        ? ((a2_state == A2_ST_RUN) ? ON "Running" : OFF "Continue")
+        : D OFF "Running";
 }
 
 /* ==========================================================================

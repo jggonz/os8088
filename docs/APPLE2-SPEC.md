@@ -427,6 +427,24 @@ runs and misbehaves rather than one that fails:
 - **The JAM is cleared.** A jammed core that is never un-jammed makes
   Ctrl-Reset - the one recovery a user has - do nothing at all, which reads as
   the port having frozen.
+
+**AND THE JAM SAYS SO, PERMANENTLY.** The line is **`6502: JAM at $XXXX`** - 18
+glyphs, drawn at cell 16 of the 42-cell status row (section 9). **It is the
+port's own string and this is where it is pinned**: a grep of all three
+reference trees returns no JAM message at all, because none of MII, AppleWin
+or apple2emu says anything on the glass when the 6502 jams, so it is modelled
+on VICE's `Main CPU: JAM at $%04X` (`src/maincpu.c:612`, the string
+`apps/c64/c64.c` carries) with `6502` for the CPU, this machine having one
+processor and no reason to call it the main one. **It is a PERMANENT ROW STATE
+and not a five-second message** (`A2_ST_JAM` read by `a2_status`, never
+`a2_say`), for the two reasons `apps/c64/c64.c:1071-1087` states one machine
+along: a jam does not expire, so once the message deadline passed the glass
+showed a dead machine and an idle one identically; and the expiry itself
+forced the row's full path and re-lettered the identical line at the identical
+place, ~21 ms that changes not one pixel. **The speed field goes blank while
+it is up** - a percentage about a machine that is not running is SPEC.md 47's
+"grey a fact, never a guess" inverted - and the jam line in the message area
+is what says why.
 - **`D` is NOT cleared by an NMOS reset**, and it is tempting to clear it.
   Software that relies on the real machine's behaviour would see a different
   one here.
@@ -933,24 +951,88 @@ The flush runs **at most once per host tick**, never once per slice, and holds
 the gfx lock only around itself:
 
 1. compose the dirty scan lines;
-2. test for a whole-frame shift - the **k-row scroll test** on a 16-bit
-   signature of the row's SOURCES, asked only when at least 4/5 of the rows on
-   the glass are dirty (a fraction, not a count). On a hit: one
-   `OSAPI_GFX_SCROLL` plus the k vacated rows. The signature is a **hint** -
-   every shifted row is still composed and compared against the moved shadow,
-   so a collision costs a redraw and never a wrong screen. **IT IS ASKED OF A
+2. test for a whole-frame shift - the **k-row scroll test**, asked only when
+   at least 4/5 of the rows on the glass are dirty (a fraction, not a count).
+   On a hit: one `OSAPI_GFX_SCROLL`, the k vacated rows, and **the shifted
+   rows are marked CLEAN**. It is **EXACT**: a **SOURCE SHADOW** of 24 x 40
+   bytes holds the sources each row's pixels were composed from, and the test
+   compares the row's forty live bytes against them. **THE EXACTNESS IS WHAT
+   PAYS FOR THE CLEAR**, and the clear is the whole optimisation: a ROM scroll
+   writes all 23 source rows, so without it `a2_dirty_scan` had every row
+   marked and the flush composed all 24 at full width - 120 groups, 292 ms -
+   to discover that 23 were byte-identical to the shadow it had just shifted.
+   A 16-bit signature could not carry that decision: `xor al, b / rol ax, 1`
+   is linear over GF(2), so two cells sixteen apart changing by the same XOR
+   delta cancel exactly - a shape a text screen makes. The forty-byte compare
+   is also CHEAPER than the signature it replaced (a row read is 0.31 ms
+   against `a2_rowsig`'s 0.67), and it costs 1,920 bytes of bss.
+   **THE SOURCE SHADOW IS ONLY A PROOF WHILE EVERY OTHER INPUT TO THE
+   COMPOSITION IS UNCHANGED - which today means THE FLASH PHASE.**
+   `a2_band_text` takes `a2_fl_phase` as a second argument and `a2_shsrc[]`
+   records forty source bytes and nothing else, so equal sources say the moved
+   pixels are right for the phase the shadow row was composed at and not for
+   the phase this flush is composing at. `os88_ontimer` flips the phase and
+   `a2_flash_force` marks the flashing rows dirty for a reason no source
+   compare can see; the next flush consumes that mark, and during scrolling
+   output that flush is a SCROLL flush - so **a row whose incoming flash flag
+   is set is RECOMPOSED rather than marked clean**, and only that row. Without
+   it a scrolled flashing cell holds one phase for three half-periods, ~825 ms
+   against 275 - a cursor stutter during exactly the scrolling output the
+   scroll path exists for, invisible in a still screendump and invisible to
+   the harness's scroll case until that case flips the phase across the
+   scroll. A non-flashing row's pixels are phase-independent, so the test
+   stays exact and the cost is the rows that actually flash - one on an
+   Applesoft prompt, five groups. **The same hole opens on MODE**:
+   `a2_band_lores` and `a2_band_hires` are a third input the shadow does not
+   record, the test is refused outside TEXT today, and the wave that adds a
+   composer owns re-stating this. **`a2_flrow[]`
+   IS SHIFTED WITH THE ROWS**: it is what a phase flip forces off, and it was
+   correct before only because every row was being recomposed - the moment the
+   composes stop, flashing text that has scrolled stops flashing. **AND THE
+   VACATED ROWS' FLAGS ARE ZEROED AFTER THAT SHIFT AND NOT BEFORE IT.** The
+   shift reads `a2_flrow[i+k]` up to row 23, so zeroing rows 24-k..23 first
+   hands rows 24-2k..23-k a zero whatever they were flashing (row 22 at k=1,
+   rows 8..15 at k=8) - and the same pass marks them clean, so nothing
+   recomposes them and `a2_rowflash` never rewrites the flag: flashing text
+   that scrolled up out of the bottom k rows stops flashing permanently. The
+   defect the shift exists to fix, surviving at its own boundary, and the
+   fixture that catches it has to sit in the bottom k rows. **AND THE
+   SHIFT IS REFUSED WHILE ANY VISIBLE LINE'S GLASS IS UNKNOWN**
+   (`a2_lnf`): `gfx_scroll` would move somebody else's paint up by k rows
+   while the flag stayed where it was, and the shifted shadow would then
+   compare equal over the garbage. The scan asks the VISIBLE lines only -
+   nothing ever clears the forced bit of a line below `a2_gl0`, so a
+   whole-array scan answers "unknown" for ever on a clipped band, which
+   `hosttest/a2uitest.c`'s CGA row caught. **IT IS ASKED OF A
    CLIPPED BAND TOO.** The test used to require all 192 scan lines on the
    glass, which a 640x200 desktop never has - `dock_top` 176 clamps the
    window, 111 lines fit and `a2_gl0` is 81 - so a scrolling Applesoft
    session, the ordinary case, took the span path for every scrolled line:
-   ~210 ms A LINE on a 4.77 MHz 8088 against ~26, a twenty-line `LIST` in ~4 s
-   instead of ~0.5 s. Nothing tied it to full visibility but the shadow shift,
+   ~210 ms A LINE on a 4.77 MHz 8088 against 32.4. Nothing tied it to full
+   visibility but the shadow shift,
    which moved all 192 lines; the `gfx_scroll` rect was already the VISIBLE
    band. So the shadow is shifted from `a2_gl0` down, and **both the row scan
-   and the signature compare start at the first row the glass has ever
-   shown** - a row that was never composed has no signature to compare, and
-   comparing its permanent 0 against live memory is what made the test answer
-   "no shift" on every CGA screen;
+   and the source compare start at the first row the glass has ever
+   shown** - a row that was never composed has no shadow source to compare,
+   and comparing its permanent 0 against live memory is what made the test
+   answer "no shift" on every CGA screen. **AND THE MISS PATH IS BOUNDED AT 96
+   PROBES.** The k loop is `sum(k=1..23) of (24-k)` = 276 forty-byte compares
+   in the worst case, 0.31 ms each (section 7.9.1's `ROWSPAN` row measures the
+   equal and the differing case at the same 0.875 counts), so 87 ms to be told
+   nothing scrolled - and the shape that reaches it is ordinary: a long run of
+   IDENTICAL rows above the content with every row dirty, which
+   `HOME : VTAB 20 : PRINT` in a loop is exactly, since `HOME` writes all 24
+   rows and meets the 4/5 threshold every iteration. **It is the EQUAL probes
+   that cost**, which is what rules out a hash or signature prefilter rather
+   than sizing one: a differing pair is the loop's cheap terminator, because
+   `repe cmpsb` stops at the first differing byte, while a run of blank rows
+   has equal signatures and would take the full compare anyway. Confirming a
+   true shift of `k` costs at most 23 probes and the `k' < k` that fail before
+   it are failing on a screen whose content HAS moved, so each breaks in one
+   or two - a k=8 scroll is ~30 probes and never reaches the budget. What 96
+   refuses is the screen with many identical rows, which is the screen that
+   did not scroll, and 96 x 0.31 is 30 ms against the ~301 ms whole-page
+   compose the test exists to save;
 3. otherwise compare each composed line against the shadow and **draw only the
    differing spans**;
 4. update the shadow;
@@ -1094,9 +1176,20 @@ the bench's, per operation; the millisecond column is `counts x 0.359`:
 | `BAND 1 group compose+blit` | 12.875 | 4.62 |
 | `ROWSPAN 40 equal` / `differing` | 0.875 | 0.31 |
 | `ROWCOPY 40 bytes` | 0.875 | 0.31 |
-| `ROWSIG 40 cells` | 1.875 | 0.67 |
+| `ROWSIG 40 cells` - **BENCH-ONLY**, see below | 1.875 | 0.67 |
+| one row's forty SOURCE bytes (`a2_zcopy_out`) | = `ROWCOPY` | 0.31 |
 | `ROWFLASH 40 cells` | 2.875 | 1.03 |
 | `BAND_X2 8 rows` | 25.625 | 9.20 |
+
+**`ROWSIG` IS NOT ON ANY SHIPPING PATH AND IS NOT IN THE SHIPPING IMAGE.** The
+k-row shift test compares forty source bytes (section 7.7 step 2) and nothing
+calls `a2_rowsig`; `nasm -f bin` has no dead-code elimination, so the routine
+is assembled behind `%ifndef A2_SHIP` and `apple2.asm` defines `A2_SHIP`
+before the `%include`. It stays in `a2band.inc` because
+`tests/a2band/a2bandbench.asm` times it and `hosttest/a2memtest.asm`'s
+ES-sentinel row 5b is written against it, and both `%include` the file
+themselves without that define - so the routine is still their subject and the
+row above is still measured, while the package carries none of it.
 
 **A GROUP IS 2.434 ms AND A CELL IS THEREFORE 304 us**, with a call floor of
 0.393 ms - taken from the two BANDTEXT rows, which differ by four groups. That
@@ -1113,20 +1206,22 @@ whole-operation rows, which the harness prints on every build:
 |---|---|---|
 | an idle wake | 0.0 | nothing at all |
 | one changed cell | 11.9 | 1 blit, 1 group |
-| one changed character row | 22.0 | 1 blit, 5 groups |
-| two pokes at opposite ends of the page | 216.0 | 3 blits, 60 groups - the page bitmap is per 256 bytes and the window is ONE range, so twelve rows are recomposed. The stated cost of a global window |
-| **ONE FLASH PHASE FLIP** | 65.6 | 3 blits, 15 groups, with three flashing rows on the screen - written by the harness itself, because `a2_selftext()` is wave-1 scaffolding that wave 2 deletes. **This is the number that decides the `CPU_8086` greying** in wave 3, and at **3.64 flips a second it is 239 ms/s** of an 8088 |
-| a one-row scroll | 406.2 | 1 `gfx_scroll` + 1 blit + all 120 groups recomposed and compared: the signature saves the SCROLL, never the compare (step 2 says why) |
-| a full 320 x 192 repaint | 505.4 | 24 blits, 5 fills, 120 groups. **The fifth fill is the STATUS STRIP's**, and it is a fix rather than a cost: `A2_STATH` is 10 and `os88_font_run` draws EIGHT rows, so scan lines `a2_gsty+8` and `+9` were painted by nothing at all - `a2_border_fill` stops at `a2_gsty-1` - and under `WF_OWNBG` they kept whatever was under the window. One fill on the FULL-REDRAW arm only, `apps/c64/c64scr.c:1014`'s rule: the delta path never erases, because `font_run` arrives in final polarity |
-| a partial expose, 16 scan lines of the band | 38.8 | 2 blits, 10 groups - WF_OWNBG hands back a damage RECT, and this is what asking for it is worth against the 505.4 above |
-| a partial expose, 16 lines x **190 px** (a menu) | 33.9 | 2 blits, **8** groups against the 10 the full-width rect above costs. `a2_blank_rect` carries the damage rect's COLUMNS as well as its rows, so the flush's forced arm widens to whole GROUPS of the range and not to all forty cells. A group is 56 pixels, so a 190-px pull-down is four groups of the five: `apps/c64/c64scr.c` takes the same column span and measured its own pair at 122 ms against 75 |
-| a flash flip and a narrow write on ANOTHER row | 33.7 | 2 blits, **6** groups - five for the flashing row, which must be composed whole, and ONE for the row whose write window narrowed it. The widening is per ROW (`a2_rowwide[]`, `c64_rowd`'s shape) and not per flush: one flag read by all 24 made a blinking `]` compose every other dirty row full width, 10 groups here |
-| a write straddling two character rows | 56.6 | 2 blits, 12 groups - the compose span is an INTERSECTION and not a containment; a containment test composes 20 |
-| an expose the About panel does not cover | 38.8 | 2 blits, 10 groups - the panel is 1 fill + 2 frames + 8 `font_run` over 196 cells, ~185 ms, and `os88_paint` tests the damage rect against its rect before spending it |
-| closing the About panel, as damage | 306.9 | 16 blits, 80 groups - the 16 character rows it covered. It was 348.5 while `a2_about_close` invalidated the whole status row unconditionally; at the shipping geometry the panel's foot is 43 pixels clear of that row, so the test is asked rather than assumed |
-| a one-row scroll on a CLIPPED band (CGA) | 238.1 | 1 `gfx_scroll` + 1 blit + 70 groups, on the 111-line band a 640x200 desktop gives. It was 244.8 while the shift test signed all 24 rows: `a2_gl0` is 81 there, so the first TEN have no visible scan line, are never composed, and have a permanently-zero shadow signature - signing them is 0.673 ms a row spent comparing a live value against a sentinel it cannot equal. The shift test used to require all 192 lines on the glass, which a CGA never has: every scrolled line then cost the span path, ~210 ms A LINE, and a twenty-line `LIST` was ~4 s instead of ~0.5 s |
+| one changed character row | 21.6 | 1 blit, 5 groups |
+| two pokes at opposite ends of the page | 207.0 | 2 blits, 60 groups - the page bitmap is per 256 bytes and the window is ONE range, so twelve rows are recomposed. The stated cost of a global window |
+| **ONE FLASH PHASE FLIP** | 43.1 | 2 blits, 10 groups, with **two** flashing rows on the screen - written by the harness itself, because `a2_selftext()` is wave-1 scaffolding that wave 2 deletes, and the wave-1 figure of 65.6 ms was three of `a2_selftext`'s own rows. **This is the number that decides the `CPU_8086` greying** in wave 3, and at **3.64 flips a second it is 157 ms/s** of an 8088 |
+| a one-row scroll | **41.9** | 1 `gfx_scroll` + 1 blit + **5** groups + 24 forty-byte source reads. It was **406.2** while the shift test only saved the SCROLL: the shifted rows stayed marked, so all 120 groups were composed and compared to be told they matched the shadow that had just been moved under them. Step 2 is why that is now a clean mark instead - and why the compare had to become exact first |
+| **a one-row scroll CARRYING A FLASH-PHASE FLIP** | **106.2** | 4 blits, **20** groups - the one vacated row plus the THREE rows the fixture flashes, each recomposed at the new phase. The source shadow does not record the phase `a2_band_text` was called with, so a verified shift may not mark a FLASHING row clean on a flush whose phase has moved (step 2): the glass would keep the previous phase, the next flip would compose back to it and draw nothing, and the cursor would hold one phase for ~825 ms instead of 275 during exactly the printing the scroll path exists for. `a2_sh_phase` is the one int that makes it cost these rows on a flip flush and NOTHING on the ordinary scrolling wake above: recomposing every shifted flashing row on EVERY scroll is equally correct and measures **91.1 ms and 20 groups** on that row against 41.9 and 5 |
+| a HOME-shaped screen the shift test must **REFUSE** | 436.4 | 1 blit, 120 groups, and **96 probes** of the k loop - the budget, against 200 measured with it removed (62.8 ms of asking) and 276 worst case. A run of identical rows above the content with every row dirty is what `HOME : VTAB 20 : PRINT` makes on every iteration; the compose behind it is the real cost and the test's job is not to add to it |
+| a full 320 x 192 repaint | 496.8 | 24 blits, 5 fills, 120 groups. **The fifth fill is the STATUS STRIP's**, and it is a fix rather than a cost: `A2_STATH` is 10 and `os88_font_run` draws EIGHT rows, so scan lines `a2_gsty+8` and `+9` were painted by nothing at all - `a2_border_fill` stops at `a2_gsty-1` - and under `WF_OWNBG` they kept whatever was under the window. One fill on the FULL-REDRAW arm only, `apps/c64/c64scr.c:1014`'s rule: the delta path never erases, because `font_run` arrives in final polarity |
+| a partial expose, 16 scan lines of the band | 38.0 | 2 blits, 10 groups - WF_OWNBG hands back a damage RECT, and this is what asking for it is worth against the 496.8 above |
+| a partial expose, 16 lines x **190 px** (a menu) | 33.2 | 2 blits, **8** groups against the 10 the full-width rect above costs. `a2_blank_rect` carries the damage rect's COLUMNS as well as its rows, so the flush's forced arm widens to whole GROUPS of the range and not to all forty cells. A group is 56 pixels, so a 190-px pull-down is four groups of the five: `apps/c64/c64scr.c` takes the same column span and measured its own pair at 122 ms against 75 |
+| a flash flip and a narrow write on ANOTHER row | 33.0 | 2 blits, **6** groups - five for the flashing row, which must be composed whole, and ONE for the row whose write window narrowed it. The widening is per ROW (`a2_rowwide[]`, `c64_rowd`'s shape) and not per flush: one flag read by all 24 made a blinking `]` compose every other dirty row full width, 10 groups here |
+| a write straddling two character rows | 55.8 | 2 blits, 12 groups - the compose span is an INTERSECTION and not a containment; a containment test composes 20 |
+| an expose the About panel does not cover | 38.0 | 2 blits, 10 groups - the panel is 1 fill + 2 frames + 8 `font_run` over 196 cells, ~185 ms, and `os88_paint` tests the damage rect against its rect before spending it |
+| closing the About panel, as damage | 301.1 | 16 blits, 80 groups - the 16 character rows it covered. It was 348.5 while `a2_about_close` invalidated the whole status row unconditionally; at the shipping geometry the panel's foot is 43 pixels clear of that row, so the test is asked rather than assumed |
+| a one-row scroll on a CLIPPED band (CGA) | **32.4** | 1 `gfx_scroll` + 1 blit + **5** groups, on the 111-line band a 640x200 desktop gives. It was **238.1** for the whole-band row's reason (the shifted rows were recomposed) and 244.8 before that, while the shift test read all 24 rows: `a2_gl0` is 81 there, so the first TEN have no visible scan line, are never composed, and have a permanently-zero shadow source - reading them is 0.31 ms a row spent comparing a live value against a sentinel it cannot equal. The shift test used to require all 192 lines on the glass, which a CGA never has: every scrolled line then cost the span path, ~210 ms A LINE, so a twenty-line `LIST` was ~4.2 s where it is now ~0.65 s |
 
-**505 ms for a full repaint is 2.5x this document's PLANNED ~200 ms**, and it
+**497 ms for a full repaint is 2.5x this document's PLANNED ~200 ms**, and it
 is recorded rather than smoothed: the composer is the cost, the tier table in
 wave 3 is written from it, and the four size levers in section 15.4 do not
 touch it.
@@ -1205,7 +1300,8 @@ few per cent of real speed on the target.
 | field | carries |
 |---|---|
 | message area | refusals, the overlay's `Unable to load APPLE2.OVL.`, the speaker's stated fact, and - from the Disk II wave - the sentence that says the drive is spinning and names Ctrl-Reset as the way to `]` |
-| speed | the **measured** percentage of a 1.02 MHz Apple II, right-aligned at the row's last cells and **drawn only while the message area is clear**. There is no column a message and a widget can both have - the mode fields hold 0-15 and `Unable to load APPLE2.OVL.` is 26 glyphs, which reaches cell 41 exactly - so the choice is which one loses, and a message is transient where a speed figure is not news; narrowing the message cap to 19 instead would truncate the one message a user most needs to read whole. It is counted in **64-cycle units with the remainder carried**, because 1,020,484 cycles a second does not fit the 16-bit `int` this C has and a truncation that dropped up to 63 cycles a slice would misreport by ~0.4 % on a machine taking sixty slices a second. The units are written from the XT reading taken in wave 7 |
+| speed | the **measured** percentage of a 1.02 MHz Apple II, right-aligned at the row's last cells, **drawn only while the message area is clear**, and **drawn only while the 6502 is RUNNING** - a jammed machine's field goes blank rather than freezing on the last window's figure, which would be a number about a machine that is not running (SPEC.md 47). There is no column a message and a widget can both have - the mode fields hold 0-15 and `Unable to load APPLE2.OVL.` is 26 glyphs, which reaches cell 41 exactly - so the choice is which one loses, and a message is transient where a speed figure is not news; narrowing the message cap to 19 instead would truncate the one message a user most needs to read whole. It is counted in **64-cycle units with the remainder carried**, because 1,020,484 cycles a second does not fit the 16-bit `int` this C has and a truncation that dropped up to 63 cycles a slice would misreport by ~0.4 % on a machine taking sixty slices a second |
+| ...and **THE UNIT DOUBLES RATHER THAN THE COUNT SATURATING** | this is the field's own history and it binds. Its first form simply stopped accumulating - `if (a2_c64u < 60000u)` - and the one-second denominator is `876 x 18 / 100` = 157, so the largest per cent the arithmetic could produce was **383**: 380 %, 400 %, 1,000 % and 3,000 % all printed the same number, `pct > 9999` was unreachable dead code, and 383 is what wave 2's own screendumps show on a host that runs the core at some thousands of per cent. The count now holds units of `64 << a2_csh` cycles; when it would pass 32,767 it is halved and the shift goes up, so nothing is dropped at any speed, and the fold undoes the shift on **quotient and remainder both** (`(q << sh) + ((r << sh) / den)`) - dividing by a shifted denominator loses a third of the answer. `a2_csh` caps at 6, which holds 13,300 % of a one-second window, and the 9,999 % clamp fires first and is therefore REACHABLE. **`hosttest/a2uitest.c` is the gate**: seven machine speeds from 3 % to 6,000 % driven through the arithmetic and checked against what each should read, plus a 12,000 % case that must clamp. A field that reads the same for two very different machine speeds is the whole thing being tested |
 | video mode | the live mode: `TEXT` / `LORES` / `HIRES` at cells 0-4, plus `MIXED` at 6-10 and **`PG2`** at 12-14. `PG2` and not `PAGE2`, and it is arithmetic rather than taste: the message area starts at cell **16** because `Unable to load APPLE2.OVL.` is 26 glyphs and the row is 42, so the mode fields hold cells 0-15 and the third field has **four**. `PAGE2` is five |
 | drive | the motor lamp and `%02d/%02d` of current track and current byte over 256 - **the Disk II follow-up PR** |
 
@@ -1248,29 +1344,40 @@ from the authority row's own file - `mii_mui_menus.h`, apple2emu's
 `interface.cpp`, or the AppleWin file that owns it - and each greyed item
 carries **the FACT that greys it in a comment beside it** in `a2menu.c`.
 
-**NO ROW CARRIES A SHORTCUT CAPTION, AND THAT IS A DECISION.** `c64menu.c`
-captions its rows (`Exit emulator  Alt+Q`, `Paste  Alt+Insert`) from VICE's own
-`hotkeys.vhk`, and MII supplies the same material as `.kcombo` on Quit, Toggle
-Fullscreen, Control-Reset, Open-Apple-Control-Reset, Mute, Louder, Stop,
-Running, Step and Next. Two things stop it here, and both are per-row rather
-than blanket. The **item cap is 24 glyphs** (`MENU_MAXCH`) and
-`Open-Apple-Control-Reset` is already 24 with nothing appended, while
-`Toggle Fullscreen  Ctrl+F` is 25 - so the two rows a user would most want the
-chord for are exactly the two that cannot carry it. And **not one chord is
-live in wave 1**: `a2_key()` drops every keystroke, Alt+Enter and Ctrl+F
-arrive in wave 3, and section 6.3's Ctrl+F2 / Ctrl+F3 table is not confirmed
-on iron until wave 7 - a caption for a chord that does nothing is worse than
-no caption, because the menu is the thing that IS supposed to work. **The
-captions land in the wave that makes the chords live**, on `c64menu.c`'s
-`label  chord` spelling, and only on rows that fit under the cap. This is that transcription, and it replaces the draft's
+**EXACTLY ONE ROW CARRIES A SHORTCUT CAPTION, AND THE OTHERS ARE REFUSED BY
+ARITHMETIC RATHER THAN BY POLICY.** `c64menu.c` captions its rows
+(`Exit emulator  Alt+Q`, `Paste  Alt+Insert`) from VICE's own `hotkeys.vhk`,
+and MII supplies the same material as `.kcombo` on Quit, Toggle Fullscreen,
+Control-Reset, Open-Apple-Control-Reset, Mute, Louder, Stop, Running, Step and
+Next. **Four chords are live**, and section 6.3 is where each comes from: Ctrl+F
+and Alt+Enter in RESIDENT code **from wave 1** - they have to be, because a
+`WF_FULL` window has no menu bar and they are the only way back out of the item
+that got the user in - and **Ctrl+F2 (Control-Reset) and Ctrl+F3
+(Open-Apple-Control-Reset) from wave 2** (`a2kbd.c`). So the only question is
+the **24-glyph item cap** (`MENU_MAXCH`), asked per row against `c64menu.c`'s
+`label  chord` spelling, whose separator is two spaces:
+
+| row | arithmetic | caption |
+|---|---|---|
+| `Control-Reset` | 13 + 2 + `Ctrl+F2` 7 = **22** of 24 | **`Control-Reset  Ctrl+F2`**, and it ships |
+| `Open-Apple-Control-Reset` | **24** with nothing appended | none, ever, at this cap |
+| `Toggle Fullscreen` | 17 + 2 + `Ctrl+F` 6 = **25** | none. `Alt+Enter` is 9 and worse |
+
+So the two rows a user would most want the chord for are exactly the two that
+cannot carry one, which is a fact about their names rather than a decision to
+revisit; wave 3 does not re-open it. This paragraph read *"no row carries a
+shortcut caption"* and gave *"not one chord is live in wave 1"* as half the
+reason, which section 6.3's own **AND THE FULLSCREEN CHORDS LAND IN WAVE 1**
+paragraph had already contradicted on the page above it. The rest of the
+table below is the wave-1 transcription, and it replaces the draft's
 table, which had been written from the plan rather than from the files:
 
 | menu | rows, in order, as `a2menu.c` carries them |
 |---|---|
 | **File** (4) | `Load Program...`, `Save Program...`, separator, `Quit` |
 | **Edit** (2) | `Copy`, `Paste` |
-| **Machine** (11) | `Open-Apple-Control-Reset`, `Control-Reset`, `Power On`, `Configure Slots...`, `Joystick...`, separator, `Toggle Fullscreen`, `  Color NTSC`, `* Flashing text`, `  Mute`, `Louder` |
-| **CPU** (8) | `* Normal: 1MHz`, `  Fast: 3.5MHz`, `  Warp`, separator, `Stop`, `Running`, `Step`, `Next` |
+| **Machine** (11) | `Open-Apple-Control-Reset`, `Control-Reset  Ctrl+F2`, `Power On`, `Configure Slots...`, `Joystick...`, separator, `Toggle Fullscreen`, `  Color NTSC`, `* Flashing text`, `  Mute`, `Louder` |
+| **CPU** (8) | `  Normal: 1MHz`, `  Fast: 3.5MHz`, `  Warp`, separator, `  Stop`, `  Running`, `  Step`, `  Next` |
 
 **EVERY ROW OF A MARKED GROUP OWNS THE TWO-GLYPH COLUMN, whatever its state.**
 `Fast: 3.5MHz` shipped without it while `Normal: 1MHz` and `Warp` - its two
@@ -1282,6 +1389,31 @@ Machine. MII ticks `mhz1`/`mhz3` and `vdc0` and `aud0` from ONE
 `MUI_MENUBAR_ACTION_PREPARE` arm (`mii_mui_menus.c:139-175`), so every one of
 those rows owns a tick slot there too. It is also what lets wave 5 revive
 `Mute` without re-widening the row and shuffling every label under it.
+
+**AND IN THE CPU MENU THE COLUMN IS THE WHOLE MENU'S, NOT THE MARKED GROUP'S.**
+`Step` and `Next` shipped without it while the five rows above them had it, so
+the pull-down had two labels starting two cells left of the other five - the
+same sixteen pixels, one row-group along. In MII that cannot happen: the mark
+is drawn INSIDE a left margin every item gets (`mui_menus_draw.c:73` - *"An
+icon shifts the title right, a 'mark' doesn't"* - with `title.l +=
+margin_left` unconditional at `:88`), so marked and unmarked titles start on
+the same x. os8088's `menu.inc` has no such margin, so the column is spelled
+into the label, and in CPU it is free: the longest label is 12 glyphs against
+a cap of 24.
+
+**MACHINE'S LEFT EDGE IS RAGGED, AND THE 24-GLYPH CAP IS WHY.** `Color NTSC`,
+`Flashing text` and `Mute` carry the column and the other eight rows do not,
+so those three are indented against their neighbours. Giving the column to all
+eleven is arithmetically impossible: `Open-Apple-Control-Reset` is **24** with
+nothing prefixed and `Control-Reset  Ctrl+F2` is 22, so the pair that would
+have to lose two glyphs are the two whose text is fixed by the machine's own
+vocabulary. The alternative - dropping the column from the three markable rows
+and marking by some other means - would need a mark the kernel's menu code
+does not have. **So the trade is stated rather than left as an accident**: the
+three tickable rows are two cells in, the eight untickable ones are not, and
+this is a cap on a 320-pixel screen rather than an oversight. Nothing in MII,
+AppleWin or apple2emu shows a ragged edge, because none of them draws a mark
+in the title.
 
 **THE PULL-DOWN CAP IS ELEVEN ITEMS** (`MENU_POPMAX`, kernel/menu.inc:208)
 **and the item cap is twenty-four glyphs** (`MENU_MAXCH`, :236). Both are
@@ -1365,8 +1497,8 @@ Are you sure you want to reboot?
 | Machine > `Color NTSC`, folding MII's four other tint rows | `The window is monochrome.` **The colour sentence lands in WAVE 5**, which is the wave that writes the foreign video mode: `Colour is in the foreign video mode - Machine > Toggle Fullscreen on a VGA.` names a route that does not exist in this build, and rule 5 is that a greying states a fact rather than a promise |
 | Machine > `Mute`, until the speaker lands | `There is no speaker in this build.` - and it is `a2_have_snd` that greys it, never a `D` baked into the literal, so wave 5 revives the row with nothing else moving |
 | Machine > `Louder`, folding MII's `Quieter` | `The Apple's speaker is a one-bit toggle. There is no volume on it.` - PERMANENT, and the one audio row that stays greyed after wave 5 |
-| Machine > `Flashing text`, **on the `CPU_8086` tier only** | `Flashing forces a text repaint 3.6 times a second. On a 4.77 MHz 8088 that is <measured> ms each time and the machine would spend it on the phase rather than on the 6502.` **Wave 1 measured one flip at 65.6 ms with three flashing rows on the screen** (section 7.9.1), which at a 274.6 ms toggle is 239 ms/s; the number in the greying is filled in from wave 3's bench, when the tier table is written, and until then the item is LIVE on every tier - refusing on a figure nobody has taken on the machine that would refuse would be the guess SPEC.md 47 forbids |
-| CPU > Fast: 3.5MHz | `This machine runs at 1.02 MHz. Warp is this port's speed control and is beside it.` |
+| Machine > `Flashing text`, **on the `CPU_8086` tier only** | `Flashing forces a text repaint 3.6 times a second. On a 4.77 MHz 8088 that is <measured> ms each time and the machine would spend it on the phase rather than on the 6502.` **Wave 2's harness measures one flip at 43.1 ms with TWO flashing rows on the screen** (section 7.9.1 - wave 1 read 65.6 with three of `a2_selftext()`'s own, and that scaffolding is deleted), which at a 274.6 ms toggle is 157 ms/s; the number in the greying is filled in from wave 3's bench, when the tier table is written, and until then the item is LIVE on every tier - refusing on a figure nobody has taken on the machine that would refuse would be the guess SPEC.md 47 forbids |
+| CPU > Fast: 3.5MHz | `There is no speed control in this build. The core runs the whole of each wake's slice and the status row reports what that came to.` **It read `This machine runs at 1.02 MHz. Warp is this port's speed control and is beside it.` through wave 2's first form, and that is a claim about the MACHINE which the status row on the same screen refutes**: there is no throttle here at all - `a2_slice` runs `a2_budget` cycles a wake - and the measured figure is 2,180 % on the VGA desktop and 2,775 % on CGA. A greying may state what the BUILD does not have; it may not state a speed the glass above it contradicts (SPEC.md 47 rule 5). The `Warp` half went with it: the row it pointed at is greyed too, so it named a route the reader cannot take |
 | CPU > Step, CPU > Next | `There is no debugger in this port.` |
 | `.NIB`, `.WOZ`, `.2MG`, `.HDV` on the disk dialog's refusal, named rather than silently rejected (the follow-up PR) | `This build reads a 143,360-byte .DSK, .DO or .PO. A .WOZ is a flux image and needs a bit-cell model - a decision every four emulated cycles, which on a 4.77 MHz 8088 is the difference between a slow emulator and a stopped one.` |
 | a wrong-sized disk image, on the "Invalid Disk Image" alert (the follow-up PR) | `File '<name>' is the wrong size, <size> too <big\|small>.` - MII's wording, with the size formatted human-readably as MII formats it, **not** as a raw byte delta |
@@ -1767,15 +1899,39 @@ with the headline below: there is no 6502 in it.
 
 | | measured | against |
 |---|---|---|
-| resident image | **26,706** | 43,500 planned |
-| bss | **10,394** | 13,000 planned |
-| **resident total** | **37,100** of 61,440 | **24,340 spare** |
+| resident image | **28,396** | 43,500 planned |
+| bss | **12,240** | 13,000 planned |
+| **resident total** | **40,636** of 61,440 | **20,804 spare** |
 | `APPLE2.OVL` | **883** | 6,000 planned |
 | resident shims | **8** | - |
-| largest C frame | **42** bytes | the 96-byte cap |
-| the FILE on disk | **41,984** (image + `APPLE2.ROM`'s 14,848 and the header) | `WIRE_FILEMAX` 64,512 |
+| largest C frame | **46** bytes | the 96-byte cap |
+| the FILE on disk | **43,520** (image + `APPLE2.ROM`'s 14,848 and the header) | `WIRE_FILEMAX` 64,512 |
 
-**It is 17,900 UNDER the 55,000 split trigger and 16,900 under the
+**THE bss FIGURE CARRIES THE SOURCE SHADOW**, which is 1,920 of it: the k-row
+scroll test compares a character row's forty SOURCE bytes against the forty
+the glass was composed from (section 7.7 step 2), where it used to compare a
+16-bit signature. That is what lets a verified shift CLEAR the shifted rows'
+dirty bits, and a one-row scroll is **41.9 ms instead of 406.2** because of
+it. The exactness is not a luxury: `xor al, b / rol ax, 1` is linear over
+GF(2), so two cells sixteen apart changing by the same XOR delta cancel
+exactly - a shape a text screen makes rather than a one-in-65,536 accident -
+and a test that decides what is NOT drawn cannot be a hint.
+
+**THE CEILING IS THE TOTAL, AND THE TWO-LINE SPLIT BELOW IS INDICATIVE.** The
+gate is `image + bss <= 61,440` and the two triggers (55,000 and 54,000) are
+on that same total; section 15.1's 43,500/13,000 split is the plan's estimate
+of where the bytes would fall and is not a second pair of ceilings. Wave 2 is
+what makes saying so necessary: bss moved 10,394 -> **12,240** against a
+planned 13,000 - 760 left - and 1,920 of that is the source shadow this wave
+added, while the image came in **15,104 UNDER** its own planned line. The
+growth still to come lands on both halves (the lo-res and hi-res composers'
+shared accumulator, the paste feeder, `a2fsx.inc`'s raster writers), so wave 3
+is measured against the 61,440 total and the 55,000 trigger, **not** against a
+13,000 bss line it will pass on its first buffer. Re-split honestly, the
+measured 28,396/12,240 leaves the plan's own 56,500 total 15,864 of headroom
+wherever it is spent.
+
+**It is 14,364 UNDER the 55,000 split trigger and 13,364 under the
 end-of-wave-5 ceiling of 54,000, with the whole 6502 in it** - the core, the
 Apple II memory model, the soft switches in both directions, the II+ keyboard
 map and the reset line. `a2cpu.inc` assembles to **6,510 bytes**, which is
@@ -1790,6 +1946,17 @@ no longer a budget decision at all: the follow-up PR's ~1,200 resident bytes
 fit with room to spare and the wave was lifted out for the two reasons that
 remain, the heap it wants for two drive images and the P5 ROM's authentic
 no-disk hang.
+
+**AND THE SPEED FIGURE ON THE STATUS ROW IS A MEASUREMENT AGAIN.** It shipped
+in wave 2's first form saturating at **383 %** - `a2_cyc_add` stopped
+accumulating at 60,000 64-cycle units and the one-second denominator is 157,
+so 380 %, 400 %, 1,000 % and 3,000 % all printed the same number and the
+`pct > 9999` clamp was unreachable. The unit now DOUBLES when the accumulator
+would not hold the window (`64 << a2_csh`, capped at 4,096 cycles), the fold
+undoes the shift on quotient and remainder both, and
+`hosttest/a2uitest.c` drives seven machine speeds from 3 % to 6,000 % through
+the arithmetic and checks each against what it should read, with a 12,000 %
+case that must hit the clamp. Section 9 is the field's contract.
 
 **What is still to come**, on this document's own per-file terms: the three
 composers' other two (`a2_band_lores`, `a2_band_hires`, ~+1,400 with the shared

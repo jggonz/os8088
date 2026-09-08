@@ -442,12 +442,29 @@ _a2_rowcopy:
 ; one frame the character generator and the flash phase are fixed, so two rows
 ; with the same source bytes compose to the same pixels.
 ;
-; AND IT IS A HINT, NOT AN ORACLE. A 16-bit signature can collide. Nothing
-; rests on it: after the scroll is emitted, the shadow is moved with it and
-; every line still goes through a2_rowspan against the moved shadow - a row
-; that did not really shift simply compares unequal and is drawn. The scroll
-; is an optimisation whose failure mode is a redraw, never a wrong screen.
+; IT IS NO LONGER ON THE FLUSH'S PATH, AND THE REASON IS WORTH KEEPING HERE.
+; It shipped as a HINT - after the scroll was emitted every line still went
+; through a2_rowspan against the moved shadow, so a collision cost a redraw
+; and never a wrong screen. But the redraw was the whole cost: a verified
+; shift now CLEARS the shifted rows' dirty bits (a2scr.c), which is what takes
+; a one-row scroll from 406 ms to ~34, and a test that decides what is NOT
+; drawn is an oracle whether or not it is called one. This signature could not
+; be one: `xor al, b / rol ax, 1` is LINEAR over GF(2), so two cells SIXTEEN
+; apart changing by the same XOR delta cancel exactly - a shape an ordinary
+; text screen makes, not a one-in-65,536 accident. a2scr.c compares the forty
+; SOURCE bytes instead, which is exact and, at a2_zcopy_out's ~0.17 ms a row
+; against this routine's 0.673, cheaper.
+;
+; IT STAYS IN THIS FILE AND OUT OF THE PACKAGE. tests/a2band/a2bandbench.asm
+; times it and hosttest/a2memtest.asm's ES-sentinel row 5b is written against
+; it, and both of them %include a2band.inc themselves - so it is still their
+; subject wherever it is assembled. What it must not do is SHIP: `nasm -f bin`
+; has no dead-code elimination (apps/apple2/a2disk.c says the same of an
+; uncalled ovl_*), so a routine nothing can call was ~34 bytes of the resident
+; image. apple2.asm defines A2_SHIP before its %include and the two harnesses
+; do not, which is the whole of the difference.
 ; -----------------------------------------------------------------------------
+%ifndef A2_SHIP
 _a2_rowsig:
     push bp
     mov bp, sp
@@ -469,6 +486,7 @@ _a2_rowsig:
     pop si
     pop bp
     ret
+%endif                                  ; A2_SHIP
 
 ; -----------------------------------------------------------------------------
 ; void a2_x2init(void) - build a2_x2tab once (see its declaration above).

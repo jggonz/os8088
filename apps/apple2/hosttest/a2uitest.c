@@ -664,8 +664,15 @@ void a2_zfill(unsigned a, int v, unsigned n)
 void a2_zcopy_in(unsigned a, const void *src, unsigned n)
 { memcpy(h_ram + (a & 0xFFFF), src, n); }
 
+static int n_srcrd;                     /* forty-byte SOURCE reads, below */
+
+/* AND IT IS COUNTED. a2_zcopy_out is how the flush reads a character row's
+ * forty SOURCE bytes - the k-row shift test's compare and the shadow source it
+ * keeps (a2scr.c) - so leaving it unpriced would have made every cost row
+ * below read 0.31 ms a composed row too cheap. It replaced a2_rowsig, which
+ * WAS counted, so the table's own history is the check. */
 void a2_zcopy_out(void *dst, unsigned a, unsigned n)
-{ memcpy(dst, h_ram + (a & 0xFFFF), n); }
+{ n_srcrd++; memcpy(dst, h_ram + (a & 0xFFFF), n); }
 
 int a2_wrote(void) { return h_scr[A2_SCR_ANY]; }
 
@@ -924,7 +931,10 @@ static void no_gunk(const char *where)
  *   BLIT1 320x8          4.875 counts    1.75 ms
  *   ROWSPAN 40           0.875 counts    0.31 ms
  *   ROWCOPY 40           0.875 counts    0.31 ms
- *   ROWSIG 40            1.875 counts    0.67 ms
+ *   ROWSIG 40            1.875 counts    0.67 ms   (off the flush's path now:
+ *                                                   the shift test compares
+ *                                                   the forty SOURCE bytes)
+ *   a 40-byte SOURCE read  = ROWCOPY, 0.31 ms      (the same `rep movsb`)
  *   ROWFLASH 40          2.875 counts    1.03 ms
  *   BAND_X2 8 rows      25.625 counts    9.20 ms
  *
@@ -941,18 +951,33 @@ static void no_gunk(const char *where)
 #define MS_SPAN     0.314
 #define MS_COPY     0.314
 #define MS_SIG      0.673
+#define MS_SRCRD    0.314               /* ONE CHARACTER ROW'S FORTY SOURCE
+                                         * BYTES, read by a2_zcopy_out for the
+                                         * shift test and the shadow source it
+                                         * keeps. IT IS ROWCOPY'S MEASURED
+                                         * FIGURE and not a guess of its own:
+                                         * both are one `rep movsb` over the
+                                         * same forty bytes and differ by the
+                                         * two segment loads a2_zcopy_out makes
+                                         * (a2mem.inc) - about ten cycles, or
+                                         * 0.002 ms on a 4.77 MHz 8088, which
+                                         * is under one part in a hundred of
+                                         * the figure. It is a MEASURED number
+                                         * with a bounded correction on it,
+                                         * not a per-byte guess of the kind
+                                         * section 7.9 says never to believe */
 #define MS_FLASH    1.032
 #define MS_TAKE     0.190               /* a2_dirty_take, section 7.5 */
 
 static int c_blit, c_fill, c_frame, c_run, c_cells, c_scroll;
-static int c_band, c_group, c_span, c_sig, c_flash, c_copy, c_take;
+static int c_band, c_group, c_span, c_sig, c_flash, c_copy, c_take, c_srcrd;
 
 static void cost_mark(void)
 {
     c_blit = n_blit; c_fill = n_fill; c_frame = n_frame; c_run = n_run;
     c_cells = n_cells; c_scroll = n_scroll; c_band = n_band;
     c_group = n_group; c_span = n_span; c_sig = n_sig; c_flash = n_flash;
-    c_copy = n_copy; c_take = n_take;
+    c_copy = n_copy; c_take = n_take; c_srcrd = n_srcrd;
 }
 
 static void cost_row(const char *what)
@@ -967,6 +992,7 @@ static void cost_row(const char *what)
               + (n_group - c_group) * MS_GROUP
               + (n_span - c_span) * MS_SPAN
               + (n_sig - c_sig) * MS_SIG
+              + (n_srcrd - c_srcrd) * MS_SRCRD
               + (n_flash - c_flash) * MS_FLASH
               + (n_copy - c_copy) * MS_COPY
               + (n_take - c_take) * MS_TAKE;
@@ -1107,6 +1133,56 @@ static void h_puts(int row, int col, const char *s, int form)
     }
 }
 
+/* check_phase_row - DOES THE GLASS AT CHARACTER ROW r HOLD THE PIXELS ITS
+ * SOURCES MAKE AT THE PHASE THE PROGRAM IS CURRENTLY IN?
+ *
+ * audit() cannot ask this. It compares the glass against a2_sh, and a2_sh is
+ * what the flush BELIEVES it drew - so a row the flush decided not to
+ * recompose passes the audit while showing the previous flash phase. The
+ * reference here is the composer itself, asked for the whole row at
+ * a2_fl_phase, which is the same oracle the "flash flip and a narrow write"
+ * case uses one screen up.
+ *
+ * IT IS WHAT THE SCROLL'S CLEAN NEEDED. The k-row shift test proves forty
+ * SOURCE bytes and the composition takes the phase as a second input, so a
+ * verified shift is only a proof that the moved pixels are right while the
+ * phase has not moved under them (APPLE2-SPEC section 7.7 step 2). */
+static void check_phase_row(int r, const char *what)
+{
+    static unsigned char pbnd[A2_BSTRIDE * 8];
+    unsigned pbase;
+    int i;
+
+    memset(pbnd, 0, sizeof(pbnd));
+    pbase = a2_tbase[r] + (unsigned)(a2_mode_page() - A2_TXT1);
+    a2_band_text(pbnd, 0, A2_GROUPS - 1, a2_m.ramseg, pbase,
+                 a2_fl_phase ? 0x7F : 0x00);
+    for (i = 0; i < 8; i++)
+        if (memcmp(pbnd + i * A2_BSTRIDE,
+                   a2_sh + ((int)A2_X8(r) + i) * A2_BSTRIDE,
+                   A2_BSTRIDE) != 0) {
+            fail(what);
+            return;
+        }
+}
+
+/* h_scroll_up - the fixture the ROM's own scroll makes: every source row
+ * takes the one below it and the bottom row is filled with spaces. It is a
+ * function because the scroll is now driven three times - once plain, once
+ * with a flash-phase flip in the same wake, and once on the clipped CGA
+ * band. */
+static void h_scroll_up(void)
+{
+    int r, i;
+
+    for (r = 0; r < A2_ROWS - 1; r++)
+        for (i = 0; i < A2_COLS; i++)
+            a2_wr(a2_tbase[r] + (unsigned)i,
+                  (unsigned)a2_rd(a2_tbase[r + 1] + (unsigned)i));
+    for (i = 0; i < A2_COLS; i++)
+        a2_wr(a2_tbase[A2_ROWS - 1] + (unsigned)i, 0xA0);
+}
+
 static void dump_for_a2ref(const char *stem)
 {
     char path[256];
@@ -1138,6 +1214,8 @@ int main(void)
     FILE *f;
     void *win;
     int i, r, before, n0, whole_blits, rect_blits, straddle_groups;
+    int scroll_groups, flip_groups, probes;
+    unsigned probe0;
     int abt_runs, abt_cells, wake0, fire0;
     int rect_groups, narrow_groups, wide_groups, sigs;
 
@@ -1343,6 +1421,15 @@ int main(void)
      * because the shadow is updated from the same narrow band. The reference
      * is the composer itself, asked for the whole row. */
     h_puts(8, 30, "WROTE", 0);          /* the window narrows to the far end */
+    /* ...AND A FLASHING FIXTURE ON THE BOTTOM ROW, for the scroll below.
+     * a2_flrow[] is SHIFTED, and the vacated rows' flags have to be zeroed
+     * AFTER that shift: zeroing them first hands rows A2_ROWS-2k..A2_ROWS-k-1
+     * a zero whatever they were flashing - row 22 at k=1 - and the same pass
+     * marks them clean, so they are never recomposed and the flag is never
+     * rewritten. The fixtures at rows 8 and 10 cannot see it, because at k=1
+     * their sources are rows 9 and 11 and the zeroed window is row 23 alone.
+     * It has to be planted on the BOTTOM row. */
+    h_puts(A2_ROWS - 1, 2, "BOTTOM FLASH", 2);
     the_ticks += A2_FLASH_TICKS;
     do_wake();
     audit("a flash flip and a narrow write in the same flush");
@@ -1366,15 +1453,11 @@ int main(void)
     }
 
     /* --- a scroll: the whole page moves up one row ------------------------ */
-    for (r = 0; r < A2_ROWS - 1; r++)
-        for (i = 0; i < A2_COLS; i++)
-            a2_wr(a2_tbase[r] + (unsigned)i,
-                  (unsigned)a2_rd(a2_tbase[r + 1] + (unsigned)i));
-    for (i = 0; i < A2_COLS; i++)
-        a2_wr(a2_tbase[A2_ROWS - 1] + (unsigned)i, 0xA0);
+    h_scroll_up();
     cost_mark();
     before = n_scroll;
     do_wake();
+    scroll_groups = n_group - c_group;
     cost_row("a one-row scroll");
     if (n_scroll == before)
         fail("a whole-page shift was not turned into a gfx_scroll");
@@ -1382,6 +1465,156 @@ int main(void)
         fail("the scroll moved the wrong way or the wrong distance - "
              "POSITIVE dy moves the content UP (SPEC.md 5.5)");
     audit("after the scroll");
+    /* THE SCROLL HAS TO SAVE THE COMPOSE AND NOT ONLY THE SCROLL. A ROM
+     * scroll writes all 23 source rows, so every row arrives dirty; the shift
+     * test proved forty bytes a row that the glass under them is already
+     * right, and the flush must therefore compose only the k VACATED rows.
+     * Without the clear this read 120 groups and 406.2 ms - the whole
+     * optimisation reduced to one gfx_scroll call - and nothing here saw it,
+     * because the audit passes either way: recomposing a row that was already
+     * correct draws no pixel. */
+    if (scroll_groups > A2_GROUPS)
+        printf("a2uitest: FAIL - a one-row scroll composed %d groups where "
+               "the ONE vacated row owes %d: the shifted rows are still "
+               "marked dirty, so the scroll saves the scroll and nothing "
+               "else\n", scroll_groups, A2_GROUPS),
+        fails++;
+    /* ...AND a2_flrow[] MOVES WITH THE ROWS. It is what a phase flip forces
+     * off, and it was right before the clear only because every row was being
+     * recomposed and a2_rowflash rewrote it. Rows 8 and 10 held the flashing
+     * fixtures; after one row of scroll they are rows 7 and 9. */
+    if (!a2_flrow[7] || !a2_flrow[9])
+        fail("a2_flrow[] was not shifted with the scroll - flashing text that "
+             "has scrolled would simply stop flashing");
+    if (a2_flrow[8] || a2_flrow[10])
+        fail("a2_flrow[] was not shifted with the scroll - a row that no "
+             "longer flashes would be force-composed on every phase flip");
+    /* ...AND THE BOTTOM ROW'S FLAG SURVIVED THE SHIFT. The rows-8-and-10
+     * assertions above pass whether the vacated rows are zeroed before the
+     * shift or after it; row 23's is the only one that does not, because at
+     * k=1 the zeroed window is row 23 alone and row 22's source IS row 23.
+     * A flag lost here is flashing text that scrolled up off the bottom and
+     * stopped flashing for the rest of the session - the very defect the
+     * shift was written to prevent, surviving at its own boundary. */
+    if (!a2_flrow[A2_ROWS - 2])
+        fail("a2_flrow[22] was zeroed by the scroll's own vacated-row pass - "
+             "the vacated rows must be cleared AFTER the shift reads them, "
+             "not before");
+    if (a2_flrow[A2_ROWS - 1])
+        fail("a2_flrow[23] survived the scroll - the vacated row holds "
+             "spaces and nothing in it flashes");
+
+    /* --- A SCROLL AND A FLASH-PHASE FLIP IN THE SAME WAKE -----------------
+     * THE SOURCE SHADOW CANNOT SEE THE PHASE, and this is the case that says
+     * so. a2_band_text takes a2_fl_phase as a second input; a2_shsrc[] holds
+     * forty source bytes. os88_ontimer flips the phase and a2_flash_force
+     * marks the flashing rows dirty for a reason no source compare can
+     * detect, and the very next flush consumes that mark - which during
+     * scrolling output is a SCROLL flush. Clearing a2_lnd for every shifted
+     * row on the strength of the source proof therefore ate the flip: the
+     * glass kept the old phase, the next flip composed back to the phase
+     * already on it and drew nothing, and only the flip after that redrew.
+     * One phase for ~825 ms instead of 275, on the cursor, during exactly the
+     * printing the scroll path exists for.
+     *
+     * THE CASE ABOVE CANNOT SEE IT because it does not flip the phase across
+     * the scroll, and audit() cannot see it either - the shadow agrees with
+     * the glass whatever phase both are in. check_phase_row asks the composer
+     * instead. */
+    h_scroll_up();
+    cost_mark();
+    before = n_scroll;
+    n0 = a2_fl_phase;
+    the_ticks += A2_FLASH_TICKS;        /* the SAME wake carries both */
+    do_wake();
+    flip_groups = n_group - c_group;
+    cost_row("a one-row scroll WITH a flash-phase flip");
+    if (a2_fl_phase == n0)
+        fail("the flash phase did not flip in the scroll's own wake - the "
+             "case is not testing what it says it tests");
+    if (n_scroll == before)
+        fail("a flash-phase flip stopped the shift test from finding the "
+             "scroll");
+    audit("after a scroll that carried a phase flip");
+    check_phase_row(6, "a SCROLLED FLASHING ROW kept the previous phase's "
+                       "pixels - the source shadow is only a proof while the "
+                       "phase it was composed at is unchanged");
+    check_phase_row(8, "a SCROLLED FLASHING ROW kept the previous phase's "
+                       "pixels (the second fixture)");
+    check_phase_row(A2_ROWS - 3, "the BOTTOM flashing fixture, scrolled "
+                                 "twice, kept the previous phase's pixels");
+    /* AND IT IS PAID IN ROWS, NOT IN PAGES. Three fixtures flash and the
+     * scroll vacates one row, so four rows are owed a compose: 20 groups.
+     * Under A2_GROUPS would mean the flip was eaten (check_phase_row above
+     * says the same thing about the pixels); anywhere near 120 would mean the
+     * clean had been given up altogether, which is the 406 ms flush this
+     * whole path replaced. */
+    if (flip_groups <= A2_GROUPS)
+        printf("a2uitest: FAIL - a scroll carrying a phase flip composed %d "
+               "groups: the flashing rows were marked clean and the flip was "
+               "thrown away\n", flip_groups),
+        fails++;
+    if (flip_groups > 6 * A2_GROUPS)
+        printf("a2uitest: FAIL - a scroll carrying a phase flip composed %d "
+               "groups where four rows (%d) are owed - the scroll's clean is "
+               "not being taken\n", flip_groups, 4 * A2_GROUPS),
+        fails++;
+    cost_mark();                        /* check_phase_row composed rows of
+                                         * its own: they are the harness's,
+                                         * not the flush's */
+
+    /* --- THE SHIFT TEST'S MISS PATH IS BOUNDED (APPLE2-SPEC 7.7 step 2) ---
+     * The k loop is up to sum(k=1..23) of (24-k) = 276 forty-byte compares,
+     * 0.31 ms each: 87 ms to be told nothing scrolled. The shape that reaches
+     * it is ordinary - a long run of IDENTICAL rows above the content with
+     * every row dirty - and `HOME : VTAB 20 : PRINT` in a loop is exactly it,
+     * because HOME writes all 24 rows and meets the 4/5 threshold on every
+     * iteration while each k walks the blank run to its end before the
+     * content row breaks it. A signature prefilter cannot help: the EQUAL
+     * probes are the cost, a differing pair is the loop's cheap terminator,
+     * and a run of blank rows has equal signatures. So the budget is a count.
+     *
+     * THE FIXTURE IS THAT SCREEN, TWICE. The first wake settles the shadow;
+     * the second re-writes the same 24 rows with one changed content row, so
+     * every row is dirty, the threshold is met, and the test is asked. */
+    for (r = 0; r < A2_ROWS; r++)
+        for (i = 0; i < A2_COLS; i++)
+            a2_wr(a2_tbase[r] + (unsigned)i, 0xA0);
+    h_puts(A2_ROWS - 5, 2, "HOME VTAB 20", 0);
+    h_puts(A2_ROWS - 1, 2, "]", 0);     /* the prompt on the bottom row, so
+                                         * that no LARGE k can match either:
+                                         * without it rows 0..3 (blank) equal
+                                         * shadow rows 20..23 (blank) and the
+                                         * test would answer k=20 - exact, and
+                                         * a 20-row scroll with 20 rows
+                                         * redrawn behind it */
+    do_wake();
+    for (r = 0; r < A2_ROWS; r++)
+        for (i = 0; i < A2_COLS; i++)
+            a2_wr(a2_tbase[r] + (unsigned)i, 0xA0);
+    h_puts(A2_ROWS - 5, 2, "HOME VTAB 21", 0);
+    h_puts(A2_ROWS - 1, 2, "]", 0);
+    probe0 = a2_n_probe;
+    before = n_scroll;
+    cost_mark();
+    do_wake();
+    probes = (int)(a2_n_probe - probe0);
+    cost_row("a HOME-shaped screen the shift test must REFUSE");
+    if (n_scroll != before)
+        fail("a gfx_scroll was emitted for a screen whose content did not "
+             "move up by any number of rows");
+    if (probes > A2_SHIFT_PROBES)
+        printf("a2uitest: FAIL - the shift test spent %d probes where the "
+               "budget is %d: the miss path is unbounded again\n",
+               probes, A2_SHIFT_PROBES),
+        fails++;
+    if (probes == 0)
+        fail("the shift test was never asked on a screen with every row "
+             "dirty - the miss-path budget has nothing to bound");
+    printf("a2uitest: the shift test refused a HOME-shaped screen in %d "
+           "probes (budget %d, worst case without one 276)\n",
+           probes, A2_SHIFT_PROBES);
+    audit("after a screen the shift test refused");
 
     /* --- a full repaint --------------------------------------------------- */
     cost_mark();
@@ -1743,10 +1976,25 @@ int main(void)
      * UI task with nothing to do inside them. It is reachable from two picks
      * of Machine > Toggle Fullscreen while another window holds it, and from
      * two menu picks on a disk with no APPLE2.OVL. */
+    /* IT IS ASKED OF a2_st_dirty DIRECTLY, and of the wake COUNT only on a
+     * machine that is not running. The wake count alone cannot see this: a
+     * RUNNING machine wants a wake unconditionally (`a2_state == A2_ST_RUN`
+     * is its own arm in a2_wants_wake, because the 6502 has cycles owed to
+     * it), so the count moves on every wake whatever the row does and the
+     * assertion below then passed or failed on whether the flash timer
+     * happened to fire in the same wake - a coin the tick count of every case
+     * ABOVE this one flips. The flag is the subject; the two h_halt/h_go
+     * brackets on either side of this block are what make the count
+     * deterministic, which is what the minimized and covered cases already
+     * had. */
     a2_say("Another window has it.");
     do_wake();
     a2_say("Another window has it.");   /* the IDENTICAL string */
     do_wake();
+    if (a2_st_dirty)
+        fail("an identical status message left a2_st_dirty SET - the wake "
+             "re-posts for the whole life of the message");
+    h_halt();
     {
         int w0 = h_wake_posted, f0 = h_tmr_fires;
 
@@ -1755,6 +2003,7 @@ int main(void)
             fail("an identical status message left the row dirty - the wake "
                  "re-posts for the whole life of the message");
     }
+    h_go();
     audit("after the same status message twice");
 
     /* --- A WINDOW NOTHING SHOWS OF DRAWS NOTHING, AND STOPS ASKING -------
@@ -1899,6 +2148,75 @@ int main(void)
                wide_groups, A2_GROUPS),
         fails++;
 
+    /* --- THE SPEED FIELD (APPLE2-SPEC section 9) -------------------------
+     * IT IS THE ONE WIDGET ON THE GLASS WHOSE VALUE IS ARITHMETIC, AND IT
+     * SHIPPED SATURATED. a2_cyc_add stopped accumulating at 60,000 64-cycle
+     * units, so with den = 876 x 18 / 100 = 157 the largest per cent it could
+     * ever print was 382: 380 %, 400 %, 1000 % and 3000 % all read `383%`,
+     * the `pct > 9999` clamp was unreachable dead code, and 383 is what the
+     * wave-2 screendumps show. Nothing here saw it, because the fixtures
+     * above never advance the clock far enough to fold a window and no
+     * assertion read a2_pct.
+     *
+     * THE GATE IS THAT TWO VERY DIFFERENT MACHINE SPEEDS DO NOT READ THE
+     * SAME. Each case feeds the exact number of cycles a machine running at
+     * that per cent would have run in an 18-tick window, one A2_SLICE_MAX
+     * slice at a time, and asks the field what it says. The tolerance is one
+     * per cent of the figure plus 2, which is the truncation the unit's own
+     * shift can cost. */
+    {
+        static const int want[] = { 3, 100, 383, 400, 1000, 3000, 6000, 0 };
+        long cyc;
+        int ci, ran, tol, got;
+
+        for (ci = 0; want[ci]; ci++) {
+            a2_cyc_zero();
+            a2_pct = -1;
+            a2_sp_tick = the_ticks;
+            /* 18 ticks of a 1.02 MHz Apple is 1,009,260 cycles; `want`
+             * per cent of that is what this machine would have run */
+            cyc = (long)18 * 56070L * (long)want[ci] / 100L;
+            while (cyc > 0) {
+                ran = (cyc > (long)A2_SLICE_MAX) ? A2_SLICE_MAX : (int)cyc;
+                a2_cyc_add(ran);
+                cyc -= (long)ran;
+            }
+            the_ticks += 18;
+            a2_speed_fold();
+            got = a2_pct;
+            tol = 2 + want[ci] / 100;
+            if (got < want[ci] - tol || got > want[ci] + tol) {
+                printf("a2uitest: FAIL - the speed field read %d %% for a "
+                       "machine running at %d %% of a 1.02 MHz Apple "
+                       "(tolerance %d)\n", got, want[ci], tol);
+                fails++;
+            }
+        }
+        /* ...AND THE CLAMP IS REACHABLE, which is the other half: a figure
+         * the arithmetic cannot produce is a figure nobody has checked. */
+        a2_cyc_zero();
+        a2_pct = -1;
+        a2_sp_tick = the_ticks;
+        cyc = (long)18 * 56070L * 12000L / 100L;
+        while (cyc > 0) {
+            ran = (cyc > (long)A2_SLICE_MAX) ? A2_SLICE_MAX : (int)cyc;
+            a2_cyc_add(ran);
+            cyc -= (long)ran;
+        }
+        the_ticks += 18;
+        a2_speed_fold();
+        if (a2_pct != 9999)
+            printf("a2uitest: FAIL - 12,000 %% read %d %% and not the 9999 "
+                   "clamp: the clamp is unreachable again\n", a2_pct),
+            fails++;
+        printf("a2uitest: the speed field tracks 3 %% to 6,000 %% and clamps "
+               "at 9,999\n");
+        a2_cyc_zero();
+        a2_pct = 0;
+        a2_sp_tick = the_ticks;
+        a2_menu_state();
+    }
+
     /* --- WHAT THE ABOUT PANEL CARRIES (APPLE2-SPEC section 11) ------------
      * The row CONTENT is section 11's list and the list is the binding part.
      * Two of its rows are there because something outside this program
@@ -1946,7 +2264,18 @@ int main(void)
             "No bands here - text only.",
             "Another window has it.",
             "No loader in this build.",
-            "6502: JAM at $",
+            "6502: JAM at $FFFF",       /* THE WIDEST FORM, and it is here
+                                         * although it is no longer an
+                                         * a2_say(): the jam is a PERMANENT
+                                         * row state now (section 4.5), so
+                                         * build.sh's source walk cannot find
+                                         * it and this array is the only thing
+                                         * that measures it. It is spelled
+                                         * with four F's because a2_jam
+                                         * appends four hex digits - the bare
+                                         * `6502: JAM at $` the gate used to
+                                         * hold measured 14 of the 18 that
+                                         * reach the glass */
             "Too large for a 48K Apple.",
             0
         };

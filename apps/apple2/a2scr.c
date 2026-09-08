@@ -57,6 +57,11 @@
 #ifdef A2_HOST
 static unsigned a2_n_blit, a2_n_fill, a2_n_scroll, a2_n_run, a2_n_cell;
 static unsigned a2_n_band, a2_n_group, a2_n_span, a2_n_sig, a2_n_take;
+/* ...and the k-row shift test's own PROBES, which the harness reads: the
+ * flush's per-line compare goes through the same a2_rowspan, so the two
+ * cannot be told apart from outside and the miss path's cost - the whole
+ * subject of A2_SHIFT_PROBES - would be unmeasurable. */
+static unsigned a2_n_probe;
 #endif
 
 
@@ -85,11 +90,30 @@ static unsigned char a2_lnf[A2_SCRH / 8];
  * its byte is still true. */
 static unsigned char a2_flrow[A2_ROWS];
 
-/* The row signatures for the k-row scroll test: this frame's, and the
- * shadow's. */
-static unsigned a2_sig[A2_ROWS];
-static unsigned a2_shsig[A2_ROWS];
-static int a2_sig_ok;                       /* a2_sig[] was filled THIS flush */
+/* THE SOURCE SHADOW, for the k-row scroll test: this frame's forty source
+ * bytes per character row, and THE FORTY THE GLASS WAS COMPOSED FROM.
+ *
+ * IT IS FORTY BYTES A ROW AND NOT A SIXTEEN-BIT SIGNATURE, and the reason is
+ * that the test now carries the DRAW DECISION and not just the scroll. A
+ * verified shift CLEARS a2_lnd for the rows that moved (the flush's own
+ * comment), so a row that compares equal is never composed again - and a hint
+ * that decides what is not drawn is an oracle whether or not it is called
+ * one. The old signature was `xor al, b / rol ax, 1`, which is LINEAR over
+ * GF(2) and has a 320-bit domain in a 16-bit range: two cells SIXTEEN APART
+ * changing by the same XOR delta cancel exactly, which is not a one-in-65,536
+ * accident but a shape an ordinary text screen makes (a table redrawn, a bar
+ * of dashes overwritten by stars). Forty bytes compared is EXACT, and it is
+ * also CHEAPER than what it replaces: a2_zcopy_out of a row is ~0.17 ms
+ * against a2_rowsig's 0.673, and the k-loop's compare is a2_rowspan's
+ * 0.31 ms (APPLE2-SPEC section 7.9.1).
+ *
+ * 1,920 bytes of bss for a test that was 96 - and the flush it saves is
+ * 406 ms (section 7.9.1's one-row scroll row). */
+static unsigned char a2_src[A2_ROWS * A2_COLS];
+static unsigned char a2_shsrc[A2_ROWS * A2_COLS];
+static int a2_sig_ok;                       /* a2_src[] was filled THIS flush */
+static int a2_src_r0;                       /* ...from THIS row up, and below
+                                             * it a2_src[] holds nothing */
 
 /* a2_dirty_take's target: the 32-byte page bitmap then the window's two
  * words, in one call. */
@@ -143,6 +167,11 @@ static int a2_fl_ok = 1;                    /* the tier allows the phase.
                                              * on a guess would be the guess
                                              * SPEC.md 47 forbids */
 static int a2_fl_phase;                     /* 0 normal, 1 swapped */
+/* ...AND THE PHASE THE SHADOW WAS COMPOSED AT. The frame shadow is pixels and
+ * the SOURCE shadow is forty bytes a row; neither records the second input
+ * a2_band_text takes, which is this. One int, read by the scroll's clean and
+ * written once a flush - see a2_flush. */
+static int a2_sh_phase;
 static unsigned a2_fl_tick;
 
 /* --- the flush's own pacing ----------------------------------------------- */
@@ -157,7 +186,10 @@ static char a2_st_glass[A2_STCELLS + 1];    /* ...and what is ON THE GLASS, so
                                              * changed is not redrawn */
 static char a2_st_tmp[A2_STCELLS + 1];
 static int  a2_st_ok;                       /* the row on the glass is ours */
-static int  a2_st_dirty;                    /* ...and it wants redrawing */
+/* a2_st_dirty - "...and it wants redrawing" - is declared in apple2.c with the
+ * rest of the state the parts share, because a2io.c sets it (a video switch
+ * that changed nothing on the glass still moves the MIXED field) and a2io.c is
+ * #included ABOVE this file. */
 static char a2_msg[A2_STCELLS + 1];
 static char a2_pctbuf[8];                   /* the speed field's digits and
                                              * its `%` (section 9) */
@@ -257,10 +289,16 @@ static void a2_sh_inval(void)
     a2_st_ok = 0;
     a2_st_dirty = 1;
     a2_border_dirty = 1;
-    for (i = 0; i < A2_ROWS; i++) {
-        a2_shsig[i] = 0;
+    for (i = 0; i < A2_ROWS; i++)
         a2_rowwide[i] = 1;
-    }
+    /* THE SOURCE SHADOW IS EMPTIED, not left stale. Nothing compares it while
+     * a2_sh_ok is 0 - every row is composed and rewrites its own forty bytes -
+     * but a row that has NEVER been composed (one wholly above a2_gl0 on a
+     * clipped band) would carry the previous geometry's bytes into the first
+     * shift test after the window grew. The old signature array was zeroed
+     * here for exactly this reason. */
+    for (i = 0; i < A2_ROWS * A2_COLS; i++)
+        a2_shsrc[i] = 0;
     a2_force_wide();
 }
 
@@ -471,7 +509,7 @@ static void a2_border_fill(void)
  * WF_OWNBG is set, so the kernel did NOT whiten the content and did not paint
  * anything: what a partial expose costs us is exactly the pixels the rect
  * covers, and the rest of the frame is still on the glass and still described
- * by the shadow. Invalidating the whole shadow instead is the 505.4 ms full
+ * by the shadow. Invalidating the whole shadow instead is the 496.8 ms full
  * repaint of section 7.9.1 - 24 rows composed, 24 blits, five fills
  * and 192 span compares - run under the desktop's gfx lock, so opening and
  * closing a pull-down over the window would stop the desktop for half a
@@ -663,7 +701,30 @@ static void a2_status(void)
      * user most needs to read whole - the one that would be truncated. */
     if (a2_msg[0]) {
         a2_st_put(16, a2_msg);
-    } else if (a2_state != A2_ST_HALT) {
+    } else if (a2_state == A2_ST_JAM) {
+        /* A JAMMED MACHINE IS A PERMANENT ROW STATE, NOT A FIVE-SECOND
+         * MESSAGE (section 4.5, and apps/c64/c64.c:1071-1075 one machine
+         * along). A2_ST_JAM used to be set and read by nothing here: the
+         * sentence went up through a2_say, expired, and the row then said
+         * `TEXT` and nothing else about a machine that was dead - a dead
+         * machine and an idle one drawn identically, which is the defect the
+         * C64 port already found and wrote up. Blanking the SPEED field was
+         * right and losing the sentence that explains it was not. It sits
+         * ABOVE the A2_ST_RUN arm so the two cannot both draw, and below the
+         * message arm so a transient line (the OVL refusal) still wins for
+         * its five seconds. */
+        a2_st_put(16, a2_jamline);
+    } else if (a2_state == A2_ST_RUN) {
+        /* `== A2_ST_RUN` AND NOT `!= A2_ST_HALT`. A2_ST_HALT is 0 and is now
+         * only the PRE-LAUNCH value - a2_power_on sets A2_ST_RUN inside
+         * os88_main, before the window exists, and a2_status only ever runs
+         * from a flush - so the old test was always true. What it let through
+         * is a JAMMED machine still drawing a speed percentage: the last
+         * folded window's figure, frozen because a2_wants_wake stops
+         * re-posting, which is SPEC.md 47's "grey a fact, never a guess"
+         * inverted - a number about a machine that is not running. The field
+         * goes blank instead, and the JAM line in the message area is what
+         * says why. */
         os88_utoa((unsigned)a2_pct, a2_pctbuf);
         l = os88_strlen(a2_pctbuf);
         a2_pctbuf[l] = '%';
@@ -741,60 +802,99 @@ static void a2_status(void)
  * THE K-ROW SCROLL TEST (section 7.7 step 2)
  * ========================================================================*/
 /* It is only asked when enough rows are dirty for a scroll to be what
- * happened - a keystroke dirties one row and a 24-row signature pass would
- * cost more than the draw it saves - and only in the mode whose signature
- * means anything.
+ * happened - a keystroke dirties one row and a 24-row source pass would cost
+ * more than the draw it saves - and only in the mode whose sources mean
+ * anything.
  *
  * FOUR FIFTHS OF THE ROWS, and it is the C64's measured constant rather than
  * a taste: a scroll dirties the whole page by definition, while a one-row
  * change dirties the rows of the two pages it touches, and at a low threshold
- * the test runs, finds a spurious match on a screen with several blank rows,
- * and emits a scroll the span compare then has to undo. Correctness survives
- * that - the signature is a HINT - and the cost does not. */
+ * the test runs on screens a scroll did not touch and spends its own cost for
+ * nothing. It cannot emit a scroll that is WRONG - the compare is exact - but
+ * it can spend 24 row reads to be told so. */
 #define A2_SHIFT_NUM 4                      /* ...of A2_SHIFT_DEN, and the
                                              * denominator is spelled as a
                                              * shift sum at the one place it
                                              * is used */
 #define A2_SHIFT_DEN 5
 
-/* a2_shift_test - `k` character rows up, or 0.
+/* ...AND THE MISS PATH IS BOUNDED, WHICH THE FIRST VERSION WAS NOT.
+ *
+ * The k loop is `sum(k=1..23) of (24-k)` = 276 forty-byte compares in the
+ * worst case, and a compare is 0.31 ms (section 7.9.1's ROWSPAN row, which
+ * measures the equal and the differing case at the same 0.875 counts): 87 ms
+ * to be told nothing scrolled. The shape that reaches it is ordinary rather
+ * than contrived - a screen with a long run of IDENTICAL rows above the
+ * content, every row dirty. `HOME : VTAB 20 : PRINT ...` in a loop is exactly
+ * that: HOME writes all 24 rows so the 4/5 threshold is met on every
+ * iteration, and each k walks the blank run to its end before the first
+ * content row breaks it.
+ *
+ * IT IS THE EQUAL PROBES THAT COST, and that is what sizes the budget rather
+ * than any prefilter. A DIFFERING pair is the loop's cheap terminator -
+ * `repe cmpsb` stops at the first differing byte - so a hash or signature
+ * compared ahead of a2_rowspan can only cheapen the probe that was already
+ * cheap: a run of blank rows has EQUAL signatures and would take the full
+ * compare anyway. The counter below is asked once a probe, and answering "no
+ * shift" early costs only the optimisation.
+ *
+ * NINETY-SIX, AND A TRUE SHIFT NEVER REACHES IT. Confirming a shift of k
+ * costs 24-k probes, at most 23; the k' < k that fail before it are failing
+ * on a screen whose content HAS moved, so each breaks in one or two. A k=8
+ * scroll is ~30 probes. What the budget refuses is the screen with many
+ * identical rows, which is the screen that did not scroll. 96 x 0.31 is
+ * 30 ms, a tenth of the ~301 ms whole-page compose the test exists to save. */
+#define A2_SHIFT_PROBES 96
+
+/* a2_shift_test - `k` character rows up, or 0. EXACT: forty source bytes a
+ * row, compared against the forty the glass was composed from.
  *
  * `r0` IS THE FIRST ROW THE GLASS HAS EVER SHOWN, and it is a parameter
- * rather than 0 because a2_shsig[] only exists for rows the flush has
+ * rather than 0 because a2_shsrc[] only exists for rows the flush has
  * COMPOSED. On a 640x200 desktop a2_gl0 is 81, so the bottom anchor puts the
  * first TEN character rows entirely off the top of the content box (row 10 is
- * the partial one and is composed); their signatures are permanently 0, and
- * comparing them against live memory made the test answer "no shift" on every
- * screen - which is the CGA arm of the very case this routine exists for. */
+ * the partial one and is composed); their shadow sources are permanently 0,
+ * and comparing them against live memory made the test answer "no shift" on
+ * every screen - which is the CGA arm of the very case this routine exists
+ * for. */
 static int a2_shift_test(int r0)
 {
     unsigned base;
-    int i, k, ok;
+    int i, k, ok, probes;
 
-    /* THE ROWS ABOVE r0 ARE NOT SIGNED, THEY ARE ZEROED. They have no visible
-     * scan line, so the flush never composes one and a2_shsig[] for them is
-     * permanently 0 - signing them is 0.673 ms a row spent comparing a live
-     * value against a sentinel it can never equal. On a 640x200 desktop that
-     * is TEN of the twenty-four, 6.7 ms off every shift test. 0 is written
-     * rather than left stale because the scroll's own copy below reads
-     * a2_sig[] from 0, and a stale value there is a signature that lies. */
-    for (i = 0; i < r0; i++)
-        a2_sig[i] = 0;
+    /* THE ROWS ABOVE r0 ARE NOT READ AT ALL. They have no visible scan line,
+     * so the flush never composes one and a2_shsrc[] for them is permanently
+     * 0 - reading them is 0.17 ms a row spent comparing a live value against
+     * a sentinel it can never equal. On a 640x200 desktop that is TEN of the
+     * twenty-four. a2_src[] below r0 is left alone for the same reason: the
+     * scroll's own copy reads it from r0 up, and the compose loop asks
+     * a2_sig_ok only for rows it composes, which are rows the glass shows. */
     for (i = r0; i < A2_ROWS; i++) {
         base = a2_tbase[i] + (unsigned)(a2_mode_page() - A2_TXT1);
-        a2_sig[i] = a2_rowsig(a2_m.ramseg, base, A2_COLS);
+        a2_zcopy_out(a2_src + A2_X40(i), base, A2_COLS);
 #ifdef A2_HOST
         a2_n_sig++;
 #endif
     }
     a2_sig_ok = 1;
+    a2_src_r0 = r0;
+    probes = 0;
     for (k = 1; k + r0 < A2_ROWS; k++) {
         ok = 1;
-        for (i = r0; i + k < A2_ROWS; i++)
-            if (a2_sig[i] != a2_shsig[i + k]) {
+        for (i = r0; i + k < A2_ROWS; i++) {
+            if (++probes > A2_SHIFT_PROBES)
+                return 0;                   /* the budget above: this screen
+                                             * is expensive to ask about and
+                                             * has not answered yes */
+#ifdef A2_HOST
+            a2_n_probe++;
+#endif
+            if (a2_rowspan(a2_src + A2_X40(i), a2_shsrc + A2_X40(i + k),
+                           A2_COLS) >= 0) {
                 ok = 0;
                 break;
             }
+        }
         if (ok)
             return k;                       /* what was at row i+k is now at
                                              * row i: the content moved UP */
@@ -875,11 +975,12 @@ static void a2_flush(void *win)
 {
     unsigned base;
     int r, s, line, g0, g1, b0, b1, sp, df, dl;
-    int i, k, nd, trust, drew, rowf, ux0, ux1, r0, nvis;
+    int i, k, nd, nf, nb, trust, drew, rowf, ux0, ux1, r0, nvis;
 
     if (a2_geom(win) < 0)
         return;
     a2_sig_ok = 0;
+    a2_src_r0 = A2_ROWS;
     a2_font_row = -1;
 
     /* --- THE MESSAGE DEADLINE, AT THE TOP, BEFORE ANY BRANCH CAN RETURN.
@@ -906,20 +1007,39 @@ static void a2_flush(void *win)
      * lines fit and a2_gl0 is 81 - so a scrolling Applesoft session, the
      * ORDINARY case, took the span path for every scrolled line: ~14 visible
      * rows each fully composed and blitted, ~210 ms A LINE on a 4.77 MHz
-     * 8088 against ~26 for the scroll. A twenty-line LIST was ~4 s instead of
-     * ~0.5 s.
+     * 8088 against ~34 for the scroll.
      *
      * Nothing tied it to full visibility but the shadow memcpy below, which
      * shifted all 192 lines: the gfx_scroll rect was ALREADY the visible band
      * and lines under a2_gl0 are never compared or drawn. So the shadow is
-     * shifted from a2_gl0 down, and both the row scan and the signature
-     * compare start at the first row the glass has ever shown - a row that
-     * was never composed has no signature to compare (a2_shift_test's own
+     * shifted from a2_gl0 down, and both the row scan and the source compare
+     * start at the first row the glass has ever shown - a row that was never
+     * composed has no shadow source to compare (a2_shift_test's own
      * header). */
     k = 0;
     r0 = a2_gl0 >> 3;                       /* the first row with any visible
                                              * scan line: 8r+7 >= a2_gl0 */
     nvis = A2_ROWS - r0;
+    /* ...AND NOT WHILE ANY VISIBLE LINE'S GLASS IS UNKNOWN. a2_lnf says
+     * "somebody else painted here"; gfx_scroll would move that paint UP by k
+     * rows while the flag stayed where it was, and the shifted shadow - which
+     * holds what we composed, not what the menu drew - then compares EQUAL
+     * over the garbage and leaves it on the glass for the rest of the
+     * session. It is one scan of 24 bytes against a defect no still
+     * screendump taken after the covering window has gone can show. The span
+     * path draws those rows whole, which is what a2_lnf is for.
+     *
+     * IT IS ASKED OF THE VISIBLE LINES ONLY, and that is not tidiness: the
+     * lines BELOW a2_gl0 are never drawn, so nothing ever clears their forced
+     * bit - a2_sh_inval sets all 192 and the flush's per-line loop skips
+     * exactly those - and a whole-array scan therefore answers "unknown" for
+     * ever on any clipped band. hosttest/a2uitest.c's CGA row is what said
+     * so, in the one word it can: the clipped scroll went back to 70 groups
+     * and the harness failed it.
+     *
+     * IT IS ASKED LAST, AFTER THE DIRTY-ROW THRESHOLD. A keystroke dirties one
+     * row and never reaches this scan at all; only a flush that already looks
+     * like a scroll pays its ~31 tests. */
     if (a2_sh_ok && !a2_v_hires && !a2_abt_up && nvis > 0) {
         nd = 0;
         for (r = r0; r < A2_ROWS; r++)
@@ -934,8 +1054,19 @@ static void a2_flush(void *win)
          * and hosttest/a2uitest.c is what says the two still agree - the
          * multiplicand is a VARIABLE now, so it is a real multiply rather
          * than the constant fold this used to be. */
-        if (nd + (nd << 2) >= (nvis << 2))
-            k = a2_shift_test(r0);
+        if (nd + (nd << 2) >= (nvis << 2)) {
+            nf = 0;
+            nb = (a2_gl0 + 7) >> 3;         /* the first WHOLE byte at or
+                                             * above a2_gl0 */
+            for (line = a2_gl0; line < (int)A2_X8(nb); line++)
+                if (a2_line_is(a2_lnf, line))
+                    nf = 1;
+            for (r = nb; r < A2_SCRH / 8; r++)
+                if (a2_lnf[r])
+                    nf = 1;
+            if (!nf)
+                k = a2_shift_test(r0);
+        }
     }
     if (k) {
         if (os88_gfx_scroll(a2_gsx, a2_gsy,
@@ -959,22 +1090,147 @@ static void a2_flush(void *win)
             for (r = A2_ROWS - k; r < A2_ROWS; r++) {
                 for (s = 0; s < 8; s++)
                     a2_line_force((int)A2_X8(r) + s);
-                a2_shsig[r] = 0;
+                for (s = 0; s < A2_COLS; s++)
+                    a2_shsrc[A2_X40(r) + s] = 0;
                 a2_rowwide[r] = 1;
             }
+            /* a2_flrow[] IS NOT ZEROED HERE, AND THAT IS THE WHOLE OF A
+             * DEFECT THIS BLOCK SHIPPED WITH. The shift below reads
+             * a2_flrow[i+k] for i+k up to A2_ROWS-1, so zeroing rows
+             * A2_ROWS-k..A2_ROWS-1 FIRST hands rows A2_ROWS-2k..A2_ROWS-k-1 a
+             * zero whatever they were flashing - row 22 at k=1, rows 8..15 at
+             * k=8 - and the same pass then marks them clean, so nothing ever
+             * recomposes them and a2_rowflash never rewrites the flag. On the
+             * glass that is flashing text which scrolled up out of the bottom
+             * k rows and STOPPED FLASHING for the rest of the session, which
+             * is precisely the defect the shift below was written to fix,
+             * surviving at its own boundary. The vacated rows are zeroed
+             * AFTER the shift instead, which costs nothing and keeps both
+             * statements true. */
             /* ...AND THE FORCED BAND-BYTE RANGE GOES BACK TO THE WHOLE BAND.
              * gfx_scroll left garbage across the vacated rows' FULL WIDTH, so
              * a range a damage rect had narrowed earlier in the same flush
              * would leave the letterbox and the far cells of those rows
              * holding it. Nothing else in the flush forces a line. */
             a2_force_wide();
-            /* the shifted rows' signatures moved with them, and a2_sig[]
-             * already holds exactly those values. THE ROWS ARE STILL
-             * COMPOSED AND COMPARED: the signature is a hint and nothing
-             * rests on it, so a collision costs a redraw and never a wrong
-             * screen. */
-            for (i = 0; i + k < A2_ROWS; i++)
-                a2_shsig[i] = a2_sig[i];
+            /* --- AND THE SHIFTED ROWS ARE CLEAN, WHICH IS THE WHOLE WIN.
+             *
+             * The test just PROVED, forty bytes a row, that row i's sources
+             * are the ones row i+k's pixels were composed from; gfx_scroll
+             * has moved those pixels to row i and the shadow was moved with
+             * them. So the glass at row i is already right, and the flush
+             * owes it nothing.
+             *
+             * WITHOUT THIS CLEAR THE SCROLL SAVED THE SCROLL AND NOTHING
+             * ELSE. A ROM scroll writes all 23 source rows, so a2_dirty_scan
+             * had marked every row and the write window spanned the whole
+             * page: the loop below then composed all 24 rows at FULL WIDTH -
+             * 120 groups, 292 ms on the target - to discover that 23 of them
+             * were byte-identical to the shadow it had just shifted.
+             * APPLE2-SPEC section 7.9.1 measured that at 406.2 ms, and
+             * 238.1 on the clipped CGA band, against ~210 ms a line for the
+             * span path it replaced: 20 x 238 ms is 4.8 s, so on its own
+             * numbers the scroll was no better than the thing it was
+             * introduced to beat. PERFORMANCE.md rule 5 exactly - the shape
+             * of the optimisation survived and the reason did not.
+             *
+             * ONLY THE VISIBLE LINES ARE CLEARED. Lines below a2_gl0 were not
+             * shifted in the shadow (the memcpy starts there), so their
+             * shadow is stale; they are never drawn and never compared, and
+             * leaving their bits set costs nothing but keeps the shadow's own
+             * statement true.
+             *
+             * a2_lnf IS NOT TOUCHED and does not need to be: the shift is
+             * refused outright while any line's glass is unknown. */
+            for (i = r0; i + k < A2_ROWS; i++) {
+                /* the shifted rows' shadow sources moved with them, and
+                 * a2_src[] already holds exactly those bytes */
+                a2_rowcopy(a2_shsrc + A2_X40(i), a2_src + A2_X40(i), A2_COLS);
+                /* AND THE FLASH FLAGS MOVE TOO. a2_flrow[] is what a phase
+                 * flip forces off, and it was correct before this clear only
+                 * by accident - every row was being recomposed, so
+                 * a2_rowflash rewrote it. The moment the composes stop,
+                 * flashing text that has scrolled stops flashing and a row
+                 * that no longer flashes is force-composed on every flip. */
+                a2_flrow[i] = a2_flrow[i + k];
+                if (a2_flrow[i] && a2_sh_phase != a2_fl_phase) {
+                    /* --- AND A ROW WHOSE CONTENT FLASHES IS RECOMPOSED,
+                     * NEVER MARKED CLEAN, WHEN THE PHASE HAS MOVED UNDER IT.
+                     * THE SOURCE SHADOW IS ONLY A PROOF WHILE THE PHASE IS
+                     * UNCHANGED.
+                     *
+                     * a2_band_text takes a2_fl_phase as a SECOND input
+                     * (`a2_fl_phase ? 0x7F : 0x00`) and a2_shsrc[] records
+                     * the forty SOURCE bytes and nothing else. The shadow row
+                     * was composed in an EARLIER frame, so equal sources do
+                     * not imply the moved pixels are right for the phase the
+                     * flush is composing at now. os88_ontimer flips the phase
+                     * and a2_flash_force marks the flashing rows dirty for a
+                     * reason no source compare can see; the very next flush
+                     * consumes that mark, and during scrolling output that
+                     * flush is a SCROLL flush - so the clear below would eat
+                     * it and the glass would keep the previous phase. The
+                     * next flip composes back at the old phase, the span
+                     * compare says equal, nothing is drawn, and only the flip
+                     * after that redraws: a scrolled flashing cell holds one
+                     * phase for three half-periods, ~825 ms instead of 275.
+                     * A cursor stutter during exactly the scrolling output
+                     * the scroll path exists for, and invisible in a still
+                     * screendump.
+                     *
+                     * TWO CONDITIONS, AND BOTH ARE NEEDED. A non-flashing
+                     * row's pixels are phase-INDEPENDENT, so marking it clean
+                     * stays exact whatever the phase did; and a flashing row
+                     * on a flush whose phase has NOT moved is already right,
+                     * by the invariant below. So the recompose is paid only
+                     * on a flush that carries a scroll AND a flip - one or
+                     * two rows, ~5 groups each, against the 120 groups the
+                     * clean exists to save. On the ordinary scrolling wake it
+                     * costs nothing, which is what keeps the one-row scroll
+                     * at section 7.9.1's 41.9 ms: the blunt form of this test
+                     * (recompose every shifted flashing row, every scroll)
+                     * is equally correct and MEASURES 91.1 ms and 20 groups
+                     * on that row against 41.9 and 5 - PERFORMANCE.md's
+                     * standing budget going backwards, and the harness's own
+                     * `the ONE vacated row owes 5` assertion fires on it.
+                     *
+                     * THE INVARIANT a2_sh_phase KEEPS: at the end of every
+                     * flush, every visible row whose a2_flrow is set shows
+                     * pixels composed at a2_fl_phase. It holds because a flip
+                     * runs a2_flash_force, which marks exactly those rows
+                     * dirty, and this is the one place that mark could be
+                     * thrown away. A row that BECOMES flashing by being
+                     * shifted inherits row i+k's glass, which the invariant
+                     * already covers. a2_sh_phase is written once a flush,
+                     * AFTER this block reads it; a flush that returns early
+                     * leaves it stale, which can only over-recompose.
+                     *
+                     * THE SAME HOLE OPENS ON MODE (wave 3): a2_band_lores and
+                     * a2_band_hires are a third input a2_shsrc does not
+                     * record. The shift test is refused outside TEXT today
+                     * (`!a2_v_hires`, and the mode's own switch calls
+                     * a2_dirty_all), and the wave that adds a composer owns
+                     * re-stating this. */
+                    for (s = 0; s < 8; s++) {
+                        line = (int)A2_X8(i) + s;
+                        if (line >= a2_gl0)
+                            a2_lnd[line >> 3] |= (unsigned char)A2_LBIT(line);
+                    }
+                    a2_rowwide[i] = 1;      /* a2_flash_force's reason: the
+                                             * write window says nothing about
+                                             * which cells flashed */
+                    continue;
+                }
+                for (s = 0; s < 8; s++) {
+                    line = (int)A2_X8(i) + s;
+                    if (line >= a2_gl0)
+                        a2_lnd[line >> 3] &= (unsigned char)~A2_LBIT(line);
+                }
+            }
+            /* ...AND NOW the vacated rows' flash flags, after every read of
+             * them the shift above makes (the note at the vacated-row loop). */
+            for (r = A2_ROWS - k; r < A2_ROWS; r++)
+                a2_flrow[r] = 0;
         } else {
             k = 0;                          /* refused: spans, and the shadow
                                              * stays true - nothing moved */
@@ -982,6 +1238,12 @@ static void a2_flush(void *win)
     }
 
     /* --- compose, compare, draw ------------------------------------------- */
+    /* THE PHASE THIS FLUSH COMPOSES AT, recorded HERE - after the shift block
+     * has read the previous one and before the first a2_band_text call takes
+     * it. It is the second input to the composition and the source shadow
+     * does not hold it; see the shift's clean above for the invariant it
+     * keeps. */
+    a2_sh_phase = a2_fl_phase;
     a2_run_n = 0;
     for (r = 0; r < A2_ROWS; r++) {
         drew = 0;
@@ -1105,18 +1367,20 @@ static void a2_flush(void *win)
         a2_n_group += (unsigned)(g1 - g0 + 1);
         a2_n_cell += (unsigned)((g1 - g0 + 1) * 8);
 #endif
-        /* the shadow's SIGNATURE is updated HERE, with the row that was just
+        /* THE SHADOW'S SOURCES are updated HERE, with the row that was just
          * recomposed, and nowhere else: a row this flush did not recompose
-         * did not change its sources either, so its old signature is still
-         * true. And when the shift test has already run this flush it
-         * computed exactly this value from exactly these bytes - the lock is
-         * held throughout - so it is read rather than taken again. */
-        a2_shsig[r] = a2_sig_ok ? a2_sig[r]
-                                : a2_rowsig(a2_m.ramseg, base, A2_COLS);
+         * did not change its sources either, so its old forty bytes are still
+         * true. And when the shift test has already run this flush it read
+         * exactly these bytes - the lock is held throughout - so they are
+         * copied rather than fetched again. */
+        if (a2_sig_ok && r >= a2_src_r0) {
+            a2_rowcopy(a2_shsrc + A2_X40(r), a2_src + A2_X40(r), A2_COLS);
+        } else {
+            a2_zcopy_out(a2_shsrc + A2_X40(r), base, A2_COLS);
 #ifdef A2_HOST
-        if (!a2_sig_ok)
             a2_n_sig++;
 #endif
+        }
 
         a2_run_row = r;
         for (s = 0; s < 8; s++) {

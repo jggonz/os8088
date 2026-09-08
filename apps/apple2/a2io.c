@@ -129,12 +129,32 @@ static int a2_video_set(int which, int on)
     if (a2_mode_page() != page0)
         a2_watch_page();                    /* the write window follows the
                                              * page it is taken over */
-    if (a2_mode_of() != mode0 || a2_mode_page() != page0 || which == 1)
+    if (a2_mode_of() != mode0 || a2_mode_page() != page0
+        || (which == 1 && !a2_v_text)) {
         a2_dirty_all();                     /* a change that actually changes
                                              * the renderer, the page or the
                                              * MIXED split marks the whole
                                              * frame; one that does not marks
                                              * nothing */
+    } else {
+        /* ...AND MIXED IN TEXT MODE IS THE `changes nothing` CASE, NOT THE
+         * `changes the split` ONE. The split only exists in a GRAPHICS mode:
+         * while a2_v_text is 1 the whole screen is text whatever MIXED says,
+         * so a2_dirty_all() here set a2_rowwide[] on all 24 rows and called
+         * a2_force_wide, the flush composed 24 x 5 = 120 groups (~292 ms on
+         * the target), and the span compare then drew ZERO pixels because the
+         * glass was never unknown. It is reachable and ordinary: Applesoft's
+         * GR sets MIXED and TEXT does not clear it, so the switch is left on
+         * and any later POKE -16302,0 / -16301,0 pays it. This is the C64's
+         * measured 25 forced blits / ~234 ms (section 7.7) one condition
+         * along from where it was guarded.
+         *
+         * THE STATUS ROW STILL HAS TO MOVE, and it is marked here rather than
+         * left to the running machine's next write: the MIXED field is on it,
+         * and a program that flips the switch and then loops without touching
+         * the display page would leave the row stale. */
+        a2_st_dirty = 1;
+    }
     return 1;
 }
 

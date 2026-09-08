@@ -1,4 +1,10 @@
 build/
+# ...and a KNOB build's own directory. `make BUILD=build-cga VIDEO=cga` spares
+# build/ (which is the point), and what it leaves behind was untracked and NOT
+# ignored - a live staging hazard in a tree whose rule is to name every path
+# rather than `git add -A`. One wildcard for the same reason the vm/ block
+# below carries one.
+build-*/
 .DS_Store
 
 # 86Box writes NVRAM and dumped BIOS ROMs next to the VM config.

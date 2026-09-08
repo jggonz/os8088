@@ -259,7 +259,13 @@ unsigned char a2_chr[512];
 /* --- what the machine is doing -------------------------------------------- */
 #define A2_ST_HALT 0                        /* not started: the state a2_state
                                              * holds until os88_main has the
-                                             * ROM and the claims */
+                                             * ROM and the claims. IT IS ONLY
+                                             * THE PRE-LAUNCH VALUE - wave 2's
+                                             * a2_power_on leaves A2_ST_RUN
+                                             * before the window exists, so no
+                                             * callback can ever see it and a
+                                             * callback that tests for it is
+                                             * testing a constant */
 #define A2_ST_RUN  1
 #define A2_ST_JAM  2
 #define A2_ST_DEAD 3                        /* the close is in flight (75.2) */
@@ -345,6 +351,14 @@ static int a2_have_snd;                     /* ...and WAVE 5 SETS THIS, which
  * that each part has one definition to read and none of them can quietly
  * declare a second copy of a flag the others set. */
 static int a2_dirty_any;                    /* something wants composing */
+static int a2_st_dirty;                     /* the status row wants redrawing.
+                                             * HERE and not in a2scr.c with the
+                                             * rest of the row's state: a2io.c
+                                             * sets it too - a video switch
+                                             * that changes nothing on the
+                                             * glass still moves the row's
+                                             * MIXED field - and a2io.c is
+                                             * #included above a2scr.c */
 static int a2_pct;                          /* THE SPEED FIGURE (section 9):
                                              * per cent of a 1.02 MHz Apple
                                              * II, folded once a second by
@@ -355,6 +369,19 @@ static int a2_pct;                          /* THE SPEED FIGURE (section 9):
                                              * above every #include, so the
                                              * writer and the reader cannot
                                              * drift into two copies */
+/* THE JAM LINE, WHICH IS A PERMANENT ROW STATE AND NOT A MESSAGE (section
+ * 4.5). It is declared here for this block's reason - a2_jam WRITES it and
+ * a2scr.c's status row READS it - and it is not an a2_say() for the reason
+ * apps/c64/c64.c:1071-1087 states one machine along: a2_say expires after
+ * five seconds and a jammed machine is a PERMANENT condition, so the glass
+ * showed a dead machine and an idle one identically once the deadline passed
+ * (build/port-shots/wave2fix-16-jam-blank.png is that state - a status row
+ * reading `TEXT` and nothing else, five seconds after the machine died).
+ * Going through a2_say also drew the same 22 glyphs TWICE: the expiry forces
+ * the row's full path and re-letters the identical line at the identical
+ * place, ~21 ms that changes not one pixel, which is PERFORMANCE.md rule 2's
+ * erase-then-letter in the one place it is free to avoid. */
+static char a2_jamline[24];
 static int a2_sh_ok;                        /* the shadow describes the glass */
 static int a2_border_dirty;                 /* the border wants filling */
 static int a2_full;                         /* the fullscreen latch is ours */
@@ -459,10 +486,11 @@ static int  ovl_a2_prog(int mode, const char *name, unsigned size_lo);
  * the parts #included into it). Every one of them is a written prerequisite
  * in the Makefile, because make cannot see through #include. */
 #include "a2io.c"                           /* the soft switches, both
-                                             * directions - a stub with the
-                                             * video state in it until wave 2 */
-#include "a2kbd.c"                          /* the II+ byte map - a stub until
-                                             * wave 2 */
+                                             * directions, and the video state
+                                             * they set */
+#include "a2kbd.c"                          /* the II+ byte map - AppleWin
+                                             * asciicode row 0, and both reset
+                                             * chords */
 #include "a2scr.c"                          /* the damage model, the flash
                                              * phase, the flush, the status
                                              * row and the geometry */
@@ -533,29 +561,76 @@ static unsigned a2_clk;                     /* the emulated clock, a 16-bit
  * 15,945, which does. The remainder is carried rather than dropped, so the
  * count is EXACT and not a truncation that loses up to 63 cycles a slice - on
  * a machine taking sixty slices a second that would be 0.4 % of the figure
- * being reported, drifting the wrong way. */
+ * being reported, drifting the wrong way.
+ *
+ * ...AND THE UNIT GROWS WHEN THE ACCUMULATOR WOULD NOT HOLD THE WINDOW, WHICH
+ * IS THE FIX FOR A FIELD THAT SATURATED AND CALLED IT A MEASUREMENT. The first
+ * version simply STOPPED counting at 60,000 units:
+ *
+ *     if (a2_c64u < 60000u) a2_c64u += a2_crem >> 6;
+ *
+ * With den = 876 x 18 / 100 = 157 for a one-second window, the largest per
+ * cent that arithmetic can produce is 60000 / 157 = 382 - so 380 %, 400 %,
+ * 1000 % and 3000 % all printed `383%`, the `pct > 9999` clamp below was
+ * unreachable, and 383 is exactly what wave 2's own screendumps show on a host
+ * the report itself described as running at some thousands of per cent. The
+ * clamp's own comment named the failure it then committed: "a count that
+ * wrapped would report a small plausible number". It did not wrap; it
+ * saturated, and reported a small plausible number in silence.
+ *
+ * So the unit DOUBLES instead. a2_c64u counts units of `64 << a2_csh` cycles;
+ * when it would pass 32,767 the count is halved and the shift goes up by one,
+ * and a2_cru holds the 64-cycle units not yet folded in - so nothing is
+ * dropped, at any speed. The fold below undoes the shift EXACTLY, quotient and
+ * remainder both, which is why the arithmetic there is `(q << sh) + ((r << sh)
+ * / den)` and not a division by a shifted denominator: `den >> 6` is 2 and
+ * loses a third of the answer.
+ *
+ * The ceiling is now the CLAMP and nothing else: a2_csh stops at 6, so a
+ * one-second window holds 32,767 x 4,096 = 134 million cycles - 13,300 % of a
+ * 1.02 MHz Apple - and the clamp fires first, at 9,999 %. That is a number no
+ * host emulating an 8086 can reach, which is the point: the field measures
+ * everything a reader can actually produce. */
 #define A2_CYC_TICK  876                    /* 56,070 / 64, per host tick */
-static unsigned a2_c64u;                    /* 64-cycle units this window */
+#define A2_CSH_MAX   6                      /* the unit stops at 4,096 cycles */
+static unsigned a2_c64u;                    /* units of (64 << a2_csh) cycles */
+static unsigned a2_cru;                     /* 64-cycle units not yet folded */
 static unsigned a2_crem;                    /* ...and the cycles left over */
+static int a2_csh;                          /* the unit's shift, 0..6 */
 static unsigned a2_sp_tick;                 /* the window's start */
 
 static void a2_cyc_add(int ran)
 {
     a2_crem += (unsigned)ran;
-    if (a2_c64u < 60000u)                   /* the clamp is BEFORE the add and
-                                             * not after a cast: under QEMU
-                                             * this core runs at some
-                                             * thousands of per cent, and a
-                                             * count that wrapped would report
-                                             * a small plausible number */
-        a2_c64u += a2_crem >> 6;
+    a2_cru += a2_crem >> 6;
     a2_crem &= 63u;
+    a2_c64u += a2_cru >> a2_csh;
+    a2_cru = a2_cru & (unsigned)((1 << a2_csh) - 1);
+    while (a2_c64u > 32767u && a2_csh < A2_CSH_MAX) {
+        a2_c64u = a2_c64u >> 1;
+        a2_csh++;
+    }
+    if (a2_c64u > 32767u)                   /* a2_csh is at its cap: 13,300 %
+                                             * of an Apple in one second, and
+                                             * the clamp below has already
+                                             * said 9,999. Stopping here
+                                             * cannot make the field read low,
+                                             * because the clamp is under it */
+        a2_c64u = 32767u;
+}
+
+static void a2_cyc_zero(void)
+{
+    a2_c64u = 0;
+    a2_cru = 0;
+    a2_crem = 0;
+    a2_csh = 0;
 }
 
 /* a2_speed_fold - the window, folded once a second. */
 static void a2_speed_fold(void)
 {
-    unsigned t, el, den;
+    unsigned t, el, den, q, rr;
     int pct;
 
     t = os88_ticks();
@@ -566,24 +641,38 @@ static void a2_speed_fold(void)
                                              * measures nothing, so it is
                                              * restarted and the figure stands */
         a2_sp_tick = t;
-        a2_c64u = 0;
-        a2_crem = 0;
+        a2_cyc_zero();
         return;
     }
     den = (A2_CYC_TICK * el) / 100u;        /* one per cent of the window, in
                                              * 64-cycle units. `876 * el` is
-                                             * at most 31,536 and fits */
+                                             * at most 31,536 and fits, and el
+                                             * >= 18 makes den >= 157 */
     if (den < 1u)
         den = 1u;
-    pct = (int)(a2_c64u / den);
+    /* THE SHIFT IS UNDONE ON BOTH HALVES OF THE DIVISION. q << 6 is at most
+     * 208 << 6 = 13,312 and (r << 6) is at most 314 << 6 = 20,096, so both
+     * fit the 16-bit unsigned this C has. */
+    q = a2_c64u / den;
+    rr = a2_c64u % den;                     /* `%` and not `c64u - q * den`:
+                                             * cc8086 refuses a multiply whose
+                                             * scratch it cannot prove dead
+                                             * (LESSONS.md 3), and the divide
+                                             * hands both halves back anyway */
+    pct = (int)((q << a2_csh) + ((rr << a2_csh) / den));
     if (pct > 9999)
-        pct = 9999;
+        pct = 9999;                         /* REACHABLE, and only above
+                                             * 9,999 % - the accumulator holds
+                                             * 13,300 % of a one-second window */
     a2_sp_tick = t;
-    a2_c64u = 0;
-    a2_crem = 0;
+    a2_cyc_zero();
     if (pct != a2_pct) {
         a2_pct = pct;
         a2_st_dirty = 1;
+        a2_menu_state();                    /* CPU > `Normal: 1MHz` is MARKED
+                                             * FROM THIS FIGURE, MII's own rule
+                                             * (a2menu.c) - so the mark moves
+                                             * when the measurement does */
     }
 }
 
@@ -600,21 +689,35 @@ static void a2_hex4(char *d, unsigned v)
     }
 }
 
-/* a2_jam - a JAM opcode. The machine stops and says where.
+/* a2_jam - a JAM opcode. The machine stops and GOES ON SAYING SO.
  *
  * On a real Apple II+ the recovery is Ctrl-Reset, which is exactly what this
  * port offers: a2_reset_cpu CLEARS THE JAMMED STATE (section 4.5), and the
- * menu item is the guaranteed route to it. */
+ * menu item is the guaranteed route to it.
+ *
+ * THE LINE IS THE PORT'S OWN, and section 4.5 pins it. A grep of all three
+ * reference trees returns no JAM string at all - a jammed 6502 is not a thing
+ * MII, AppleWin or apple2emu says on the glass - so this is modelled on
+ * VICE's `Main CPU: JAM at $%04X` (src/maincpu.c:612), the string
+ * apps/c64/c64.c carries, with `6502` for the CPU because this machine has
+ * one processor and no reason to call it the main one. 18 glyphs into a
+ * 42-cell row.
+ *
+ * IT DOES NOT GO THROUGH a2_say, and a2_jamline's own declaration above says
+ * why: a message expires and this condition does not. a2_status draws it as a
+ * permanent row state until a2_reset_cpu takes A2_ST_JAM off. */
 static void a2_jam(void)
 {
-    static char line[24];
-
     a2_state = A2_ST_JAM;
-    os88_strcpy(line, "6502: JAM at $", 15);
-    a2_hex4(line + 14, a2_m.pc);
-    line[18] = 0;
-    a2_say(line);
-    os88_toast(line, 0);                    /* SPEC.md 59's second route: the
+    os88_strcpy(a2_jamline, "6502: JAM at $", 15);
+    a2_hex4(a2_jamline + 14, a2_m.pc);
+    a2_jamline[18] = 0;
+    a2_dirty_any = 1;                       /* ...or the wake's flush gate
+                                             * never opens and the row keeps
+                                             * saying what a running machine
+                                             * says (c64.c's own note) */
+    a2_st_dirty = 1;
+    os88_toast(a2_jamline, 0);              /* SPEC.md 59's second route: the
                                              * status row is UNDER a WF_FULL
                                              * window and this machine spends
                                              * time there */
@@ -695,7 +798,7 @@ static void a2_reset_service(void)
  * did not whiten the content and os88_wm_damage() says which part needs
  * drawing. Invalidating the whole shadow on every W_PAINT instead forced all
  * 192 scan lines - 24 rows composed, 24 blits, five fills and 192 span
- * compares, the 505.4 ms of section 7.9.1 - under the desktop's gfx lock, so
+ * compares, the 496.8 ms of section 7.9.1 - under the desktop's gfx lock, so
  * opening and closing a pull-down over this window (kernel/menu.inc closes
  * one through wm_paint_dmg) or dragging another window across a corner of it
  * was half a second of stopped desktop. apps/c64/c64.c's os88_paint is the

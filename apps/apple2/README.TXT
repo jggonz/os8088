@@ -58,15 +58,34 @@ a menu that greyed them would be handing you a //e's checklist.
 Every menu item that cannot work in this build is present, greyed, and the
 fact that greys it is written beside it in the source.
 
-WHAT THIS BUILD DOES NOT DO YET
--------------------------------
-This is the FIRST wave of the port. What is on the disk today is the screen:
-the window, the character generator read out of the machine's own ROM, the
-seven-pixel text cell, inverse and flashing text, and the damage model that
-draws only what changed. The 6502 itself, the keyboard, the graphics modes,
-the commands, the speaker and the Disk II arrive in the waves after it, and
-docs/APPLE2-PORT-PLAN.md in the source tree says which is which.
+WHAT THIS BUILD DOES, AND WHAT IT DOES NOT DO YET
+------------------------------------------------
+The machine runs. Double-click APPLE2.O88 and the Apple II Plus banner and
+the `]` prompt come up out of the machine's own ROM, with the cursor
+flashing; Applesoft answers, the keyboard is the II Plus's own byte map, and
+Machine > Control-Reset and Machine > Open-Apple-Control-Reset are live.
 
-Until the processor lands, the window shows a text page this package writes
-itself at launch, and it says so on this line rather than looking like a
-machine that has stopped.
+The screen is the TEXT page: the window, the character generator read out of
+the ROM, the seven-pixel cell, inverse and flashing text, and a damage model
+that draws only what changed.
+
+Still to come, and docs/APPLE2-PORT-PLAN.md in the source tree says which
+wave has which:
+
+    the lo-res and hi-res composers, and the MIXED split and PAGE2 with them
+    fullscreen MAGNIFICATION - Machine > Toggle Fullscreen works today, at
+        1:1, and Ctrl+F and Alt+Enter are its chords
+    colour, which is the foreign video mode and needs the fullscreen above
+    File > Load Program... and Save Program..., and Edit > Copy and Paste
+    Machine > Power On, which is greyed until it has its confirmation
+    the game buttons and the paddles
+    the speaker
+    the Disk II
+
+A menu item that cannot work in this build is present and GREYED, with the
+fact that greys it beside it in the source. Nothing here is silently
+missing, and nothing is live that can only answer "not yet".
+
+There is no speed control: the 6502 runs the whole of every slice the OS
+gives it, and the percentage at the right-hand end of the status row is what
+that came to, measured against a 1.02 MHz Apple.

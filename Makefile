@@ -6343,9 +6343,9 @@ apple2rom: $(BUILD)/apple2-rom/APPLE2.ROM
 # FOUR GEOMETRIES, each --verify'd: 1.44MB, 720KB, 1.2MB and 360KB. A 360KB
 # disk's cluster is 1,024 bytes (tools/os88disk.py GEOMETRY[360], spc = 2), so
 # COPYING's 21,533 bytes are 22 of its 354 clusters, and the whole folder -
-# apple2.o88 34,304 (the ROM part included) + APPLE2.OVL 843 + README.TXT
-# 3,655 + COPYING 21,533 = 60,335 bytes, plus the folder's own directory
-# cluster - is what os88disk.py --verify reports as 63 of 354. Even the 360KB
+# apple2.o88 43,520 (the ROM part included) + APPLE2.OVL 883 + README.TXT
+# 4,539 + COPYING 21,533 = 70,475 bytes, plus the folder's own directory
+# cluster - is what os88disk.py --verify reports as 73 of 354. Even the 360KB
 # disk carries the licence with room to spare.
 APPLE2DISK := $(BUILD)/apple2.o88 $(BUILD)/APPLE2.OVL \
               apps/apple2/COPYING apps/apple2/README.TXT tools/os88disk.py
