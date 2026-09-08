@@ -963,7 +963,7 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
 ; display, or a kern_small kernel - and nothing was drawn. The fallback is one
 ; OSAPI_GFX_FILL per span, which draws the identical pixels; keep it, it is
 ; also the only path on a 128KB machine.
-; --- banking the pixels under something you are about to draw (SPEC.md 5.4.3) -
+; --- banking the pixels under something you are about to draw (SPEC.md 5.3) -
 ; THE SAVE-UNDER PAIR. Draw a menu, a dialog or a tooltip over your content,
 ; and taking it down is either a WRITE-BACK of what was there or a REPAINT of
 ; what should be. On a 4.77MHz 8088 those are not the same price: a repaint

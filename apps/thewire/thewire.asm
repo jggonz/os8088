@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/thewire/thewire.asm
 ;
-; THE WIRE - the online software library (SPEC.md 88).
+; THE WIRE - the online software library (SPEC.md 92).
 ;
 ; A window listing every program the project publishes, fetched over
 ; ETHER.DRV from os8088.com, with a picture, a description, a

@@ -4094,7 +4094,7 @@ api_decomp:
                                 ; return above nor this one touches the flags
 
 ; -----------------------------------------------------------------------------
-; api_gfx_save / api_gfx_rest - slots 0x0508 / 0x0510 (SPEC.md 5.4.3)
+; api_gfx_save / api_gfx_rest - slots 0x0508 / 0x0510 (SPEC.md 5.3)
 ;
 ; gfx_save and gfx_restore have been in this kernel since the menu save-under
 ; and are on BOTH builds - unlike gfx_blit1, which is kern_big only - so what a

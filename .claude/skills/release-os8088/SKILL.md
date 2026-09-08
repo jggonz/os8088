@@ -551,7 +551,7 @@ step 4a makes you look at the releases page. Three things that will fool you:
 
 #### 4c. The Wire's library, every time
 
-**The site is now where the machine gets its software from** (SPEC.md 88), so
+**The site is now where the machine gets its software from** (SPEC.md 92), so
 a release ships a *catalog* as well as four floppy images, and nothing on the
 OS side can tell you it went wrong: a stale `catalog.bin` is a Wire that lists
 last release's programs at last release's sizes and hands out last release's

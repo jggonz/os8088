@@ -1,7 +1,10 @@
 # Nothing left unmovable — unpinning regions, driver images and overlays
 
-**Status: RESEARCH. Nothing here is built, and every byte figure below is an
-estimate against a measured comparable.** SPEC.md 66.6 is the door this
+**Status: BUILT, except §12's open questions.** The unpinning this document
+plans has shipped — regions, driver images, overlays and `SOUND.DRV`'s ring all
+move, and `tests/suite.py`'s `reg*`, `drvmove`, `sndmove` and `hdmove` rows are
+its gates. The byte figures below are the ESTIMATES the plan was written
+against, not what it cost; `docs/reports/` carries the measurement. SPEC.md 66.6 is the door this
 document costs and SPEC.md 66.9 is the register it works through.
 
 It is a *last resort* by construction: everything in it is reached only after

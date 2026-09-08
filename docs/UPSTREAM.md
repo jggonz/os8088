@@ -274,6 +274,17 @@ squashed, and that shapes what to write:
   - #144: `main`'s §86 Hibernate (#143) met the branch's §86 Audio Player —
     Hibernate became §87, 99 lines across `kernel/hiber.inc`,
     `kernel/ui.inc`, `tests/hibernate.py` and the rest.
+  - #172: `main`'s §88 The Wire (#158) met the branch's §88 Clear Skies — The
+    Wire became **§92**, 272 citations, seven of them outside the conflict
+    region and so resolving silently onto Clear Skies' subsections;
+    PERFORMANCE.md's Set 116 collided the same way and PACCMAN's became Set
+    118. **The API table collided in the same round and merged CLEANLY**:
+    both sides appended to the same tail, so `apps/os88api.inc` came out with
+    no conflict marker and two names at each of 0x04F8 and 0x0500 —
+    `OSAPI_DECOMP`/`OSAPI_PKG_RUN` and `OSAPI_FILE_FIND_RAW`/`OSAPI_DESK_SVC`.
+    The branch kept 0x04F8–0x0518 and `main`'s two moved to 0x0520 and 0x0528.
+    This is the failure the collision check above exists for, and it is the
+    check that found it.
 
 ## Quick reference
 

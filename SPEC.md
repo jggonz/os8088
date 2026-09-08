@@ -62380,7 +62380,7 @@ text under the View menu):
 | `at_mopen` | 256,076 cy — **53.7 ms** |
 | `at_mclose` | 500,863 cy — **104.9 ms** |
 
-`OSAPI_GFX_SAVE` / `OSAPI_GFX_REST` (§5.4.3) are what that was missing. The
+`OSAPI_GFX_SAVE` / `OSAPI_GFX_REST` (§5.3) are what that was missing. The
 shape is Word's, one package along (§68.2.1), and so are its rules:
 
 - **The claim is per drop, not per session.** A pull-down over a 1bpp page is

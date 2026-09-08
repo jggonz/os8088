@@ -2716,7 +2716,7 @@ EMUDRIVERS = $(DRIVERS) $(BUILD)/vmmouse.drv
 # SHIPPED kernel's modules. See `make emu` for what the directory is for.
 EMUDIR := $(BUILD)/emuk
 
-# ...and THE WIRE (SPEC.md 88) beside it, which is a SYSAPPS package and not
+# ...and THE WIRE (SPEC.md 92) beside it, which is a SYSAPPS package and not
 # one of $(CORE_TOOLS) below. The distinction is not size: a core package is a
 # second copy of something that also rides the apps disk, in the folder it
 # occupies over there; the Wire is in SYSTEM/, it is launched BY NAME by the
@@ -4543,7 +4543,7 @@ $(BUILD)/telnet.bin: apps/telnet/telnet.asm apps/telnet/tetxt.inc \
 $(BUILD)/telnet.o88: $(BUILD)/telnet.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/telnet.bin -o $@
 
-# THE WIRE (SPEC.md 88) - Telnet's include set for Telnet's reason: netpkg.inc
+# THE WIRE (SPEC.md 92) - Telnet's include set for Telnet's reason: netpkg.inc
 # is the DRIVER's own ABI header and both ends include it, so the two cannot
 # drift (SPEC.md 20.11). wcat.inc is the catalog format, and its every equ is
 # mirrored in tools/os88wire.py - `tests/unit/t_wire.py` compares the two in
@@ -10019,7 +10019,7 @@ xt-sound-1.44: $(IMG360) $(ALLAPPSIMG)
 	@$(UNPROTECT) $(VMXTSND144)/86box.cfg
 	$(BOX) -P $(VMXTSND144) -N
 
-# THE WIRE'S MACHINE (SPEC.md 88): xt-sound's XT - the 1986 board, 640KB, an
+# THE WIRE'S MACHINE (SPEC.md 92): xt-sound's XT - the 1986 board, 640KB, an
 # OTI-067 and the SB 2.0 - with a Novell NE1000 on 86Box's slirp. The NE1000
 # rather than the NE2000 because it is the 8-BIT card, the one an XT's bus
 # can take; ETHER.DRV drives both as the same 8390 and probes 0x300 first,
