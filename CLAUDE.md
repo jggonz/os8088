@@ -38,19 +38,19 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/KERNEL-MEMORY.md](docs/KERNEL-MEMORY.md)** | spending any memory |
 | **[docs/HERCULES-TESTING.md](docs/HERCULES-TESTING.md)** | testing on Hercules — it *is* automatable, and all three ways of getting it wrong give you a black image rather than an error |
 | **[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** | writing or building a package in C (§73) — how to install the compiler, the four C rules and what each refusal means, and what the language does not have here |
-| **[docs/NET-STACK-PLAN.md](docs/NET-STACK-PLAN.md)** | anything on the wire (§72) — the stack's stages, what each layer refuses, and why TLS is not on this machine |
-| **[docs/BROWSER-PLAN.md](docs/BROWSER-PLAN.md)** | the browser (§71) — the renderer's steps, and `tools/htmsim.py` is its reference implementation |
-| **[docs/VMMOUSE-PLAN.md](docs/VMMOUSE-PLAN.md)** | the browser's grabless absolute pointer (§9.11) — why the VMware backdoor probe is the whole of "detect the browser". **Its §15 is the fork**: the study plans resident kernel code behind `[cpu_tier]`, and `VMMOUSE.DRV` is what shipped — the protocol is 32-bit, and a tier gate cannot survive a hibernate image carried to an 8088 |
-| **[docs/PROXY-PLAN.md](docs/PROXY-PLAN.md)** | the host-side proxy — it exists because an RSA-2048 private operation is *minutes* on a 4.77 MHz 8088, so TLS terminates off the machine |
+| **[docs/plans/completed/NET-STACK-PLAN.md](docs/plans/completed/NET-STACK-PLAN.md)** | anything on the wire (§72) — the stack's stages, what each layer refuses, and why TLS is not on this machine |
+| **[docs/plans/completed/BROWSER-PLAN.md](docs/plans/completed/BROWSER-PLAN.md)** | the browser (§71) — the renderer's steps, and `tools/htmsim.py` is its reference implementation |
+| **[docs/plans/completed/VMMOUSE-PLAN.md](docs/plans/completed/VMMOUSE-PLAN.md)** | the browser's grabless absolute pointer (§9.11) — why the VMware backdoor probe is the whole of "detect the browser". **Its §15 is the fork**: the study plans resident kernel code behind `[cpu_tier]`, and `VMMOUSE.DRV` is what shipped — the protocol is 32-bit, and a tier gate cannot survive a hibernate image carried to an 8088 |
+| **[docs/plans/completed/PROXY-PLAN.md](docs/plans/completed/PROXY-PLAN.md)** | the host-side proxy — it exists because an RSA-2048 private operation is *minutes* on a 4.77 MHz 8088, so TLS terminates off the machine |
 | **[docs/MARTYPC-DEBUG.md](docs/MARTYPC-DEBUG.md)** | driving the emulator — `launch`/`settle`/`sym`, the debug server, reading the guest's floppy back on the host, and installing the deps in a fresh Ubuntu container |
 | **[docs/UPSTREAM.md](docs/UPSTREAM.md)** | any claim about what is ahead, behind, merged or unrelated. **Its Rule 0: a fresh clone is SHALLOW, and git answers ancestry questions confidently and wrongly on one** |
 | **[docs/FIELD-MACHINES.md](docs/FIELD-MACHINES.md)** | asking for a field run — who has the hardware, what is in it, what a run costs them, and the two rules that bind whoever reads a result |
 | **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** | a bug that reproduces on hardware and not here — open, reproduced, unfixed, with what has already been ruled out for each |
-| **[docs/FTP-PERF.md](docs/FTP-PERF.md)** | picking the FTP server's speed back up (§77, §72.15) — what moved it from 7 to 15 KB/s, the four things that did NOT work, where the time goes now (57% of it is ABOVE the driver), and the next five candidates in the order the evidence ranks them |
+| **[docs/plans/completed/FTP-PERF.md](docs/plans/completed/FTP-PERF.md)** | picking the FTP server's speed back up (§77, §72.15) — what moved it from 7 to 15 KB/s, the four things that did NOT work, where the time goes now (57% of it is ABOVE the driver), and the next five candidates in the order the evidence ranks them |
 | **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** | answering any user-facing "how do I write, burn or boot the live USB/CD" — it is the reader's guide (dd, Rufus, BIOS settings, troubleshooting) and the README links it; §80 stays the design record and this file must follow it, never lead |
 | **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/` and `apps/loom/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader. **Two packages share one document and a lot of source**: WEAVE runs a bundle, LOOM builds one, and what they share they share as SOURCE (`%include`/`#include`), never as a copy — WEAVE-SPEC §1.2 is the rule and `apps/weave/wfxc.c` is the worked example, being LOOM's FX compiler as well as WEAVE's formula bar's |
-| **[docs/WIRE-PLAN.md](docs/WIRE-PLAN.md)** | anything in The Wire (§88, `apps/thewire/`, the desktop zone and `OSAPI_PKG_RUN`) — the design record: the four facts that decided the shape, the catalog and picture formats as they were pinned, and what was deferred with the arithmetic attached. SPEC.md §88 is the contract and this is why it reads that way; its brand table is **fixed by the user and not to be reworded** |
-| **[docs/WEAVE-PLAN.md](docs/WEAVE-PLAN.md)** | re-opening a Weave design decision — why each fork went the way it did, the judged alternatives, and what was deferred with the arithmetic attached |
+| **[docs/WIRE-PLAN.md](docs/WIRE-PLAN.md)** | anything in The Wire (§92, `apps/thewire/`, the desktop zone and `OSAPI_PKG_RUN`) — the design record: the four facts that decided the shape, the catalog and picture formats as they were pinned, and what was deferred with the arithmetic attached. SPEC.md §92 is the contract and this is why it reads that way; its brand table is **fixed by the user and not to be reworded** |
+| **[docs/plans/completed/WEAVE-PLAN.md](docs/plans/completed/WEAVE-PLAN.md)** | re-opening a Weave design decision — why each fork went the way it did, the judged alternatives, and what was deferred with the arithmetic attached |
 
 ## Commands
 
@@ -72,6 +72,24 @@ make test     # boot headless, QMP socket at build/qmp.sock — this is how you 
 make test-snd # ...plus PC speaker capture to build/snd.wav (verify: tools/sndcheck.py)
 make debug    # boot halted, waiting for gdb on :1234
 make bench    # build the tests/ apps — ON DEMAND ONLY; nothing under tests/ ships
+make bootdiag # WHY a BIOS answers `Disk error` and stops (§2.9.10). SIX
+              # images: the same payload behind TWO loaders. bootdiag<n>.img
+              # loads it through tests/bootdiag/bdboot.asm, which depends on
+              # NONE of the things under test — one sector an int 13h, no
+              # relocation, no int 1Eh patch, a DL fallback, geometry off the
+              # BPB — and bootdiagx<n>.img through the SHIPPED boot/boot.asm.
+              # THE PAIR IS THE EXPERIMENT and neither disk alone is: one
+              # booting and the other not is a one-bit answer about whether
+              # the fault is in the loader or under it. It reports the ROM's
+              # identity, the DL it handed over, its int 1Eh table and whether
+              # our copy stays installed, WHETHER THE TOP-OF-RAM STAGE 1
+              # RELOCATES INTO EXISTS AND STAYS PUT — two questions nothing
+              # else here has ever asked — and int 13h's answer to the eight
+              # read shapes the loader uses, every one checked against the
+              # DATA and not the carry flag (§18.91 and §18.93.1 are both a
+              # BIOS answering CF=0 for a transfer it did not make).
+              # BOOTDIAG.COM rides on all six for a machine that boots DOS
+              # but not this. Nothing here ever writes to a disk
 make test-fast   # THE REGRESSION SUITE (docs/TESTING.md, tools/os88test.py,
 make test-full   #   tests/suite.py). Three tiers, each with an ENFORCED
 make test-soak   #   wall-clock budget — the runner FAILS a tier that
@@ -204,7 +222,7 @@ make vmmousetest # THE ABSOLUTE POINTER'S DISK (§9.11.6): a SYSTEM.CFG with
                 #   `make vmmousetest && python3 tests/vmmouse.py`. QEMU by
                 #   name: its `pc` machine carries the backdoor and MartyPC
                 #   has none, and `make run VMPORT=on` is the interactive form
-make thewiretest # THE WIRE'S GATE DISKS (§88.12): ethertest's shape plus one
+make thewiretest # THE WIRE'S GATE DISKS (§92.12): ethertest's shape plus one
                 #   file - a SYSTEM/APPDATA/WIRE.CFG naming 10.0.2.2:8092
                 #   instead of os8088.com, so the machine fetches a fixture
                 #   catalog the test packed with tools/os88wire.py and every
@@ -221,6 +239,41 @@ make ethertest  # THE ETHERNET GATE'S DISK (§72.9): a SYSTEM.CFG that already
                 #   all, and tests/ethernet.py asserts behaviour and never
                 #   speed because the machine under it is not an 8088
 make browsertest # ...and the browser's page disk, for tests/br*.py
+make small    # kern_small and its system disks, into build/smallk/ (the
+make smallapps#   128KB floor machine, docs/history/KERN-SPLIT-PLAN.md). `smallapps` is
+              #   the APPS half of it: the same floppies with the SMALL BUILD
+              #   of any package that has one in place of the shipped one -
+              #   Note Pad (SPEC.md §27.16) 13,520 bytes an instance against
+              #   20,379, Paint (§42.22) 24,636 against 32,891, Calculator
+              #   (§65.10) 5,563 against 7,351, Solitaire (§43.12) 6,954
+              #   against 7,406, and the Task Manager (§28.12) **6,693
+              #   against 11,138**, which is 39.9% and the largest saving in
+              #   the tree - it is the only one of the five that trades whole
+              #   PAGES rather than features, and the memory view takes more
+              #   with it than the heap page does. `make smallapps` prints
+              #   every row (tools/os88pkgsize.py); quote it rather than this.
+              #   IT IS NOT A SECOND ABI: a
+              #   small-built package calls the same API table at the same
+              #   offsets, so it runs on kern_big too and what pairs it with
+              #   kern_small is only which floppy it is written to. The
+              #   shipped build/apps*.img are untouched, and
+              #   `tests/unit/t_appsmall.py` says so - the default arm must
+              #   stay byte-identical. **`make small`'s SYSTEM disks take the
+              #   small arm too**: the two floppies are a PAIR, one boots and
+              #   the other is what goes in B:, so the Task Manager - which
+              #   lives in SYSTEM/ on both (§28.3) - shipping small on one and
+              #   full on the other would be a machine that gets whichever
+              #   disk it was pointed at.
+              #
+              #   **§24.5 is what they LEAVE OFF**, and it is a REQUIREMENT
+              #   test rather than a size one: eight packages that cannot
+              #   reach a driver kern_small does not ship (Browser, FTPD,
+              #   Telnet on ETHER.DRV; ModPlug, Recorder, Tracker, Audio on
+              #   SOUND.DRV) or a surface it has (Tank on fsx) are not on the
+              #   disk at all, because a package that merely wants heap can
+              #   REFUSE ITSELF in its own words and one that cannot reach its
+              #   driver can say nothing. The small SYSTEM disk carries
+              #   §24.3's core packages too, filtered the same way (§24.5.1)
 make allapps  # build/apps-all.img (§19.10): ONE 1.44MB floppy with every app
               #   on it, Frotz, both Words, RunCPM (with its drive A), the
               #   C64 and the Weave family's two — one folder each, so
@@ -292,23 +345,30 @@ exactly like the feature being broken.
 `xt-mfm` (a 20MB ST-225 on a Xebec MFM controller — the machine to install
 and hibernate on; `build/mfm20.img` is created blank and kept),
 `xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-sound`,
-`xt-sound-1.44`, `xt-wire`, `286`,
+`xt-sound-1.44`, `xt-wire`, `286`, `286-525`,
 `286-sound`, the eight `286-525-*` application machines (`-z`, `-word`,
 `-cword`, `-runcpm`, `-c64`, `-weave`, `-loom`, `-all` — `vm/286-525` with a
 1.2MB app disk in B: instead of the apps floppy, and the only machines in the
 tree that read that geometry at all: a 1.2MB drive wants the AT's 500 kbps
 controller, so no XT profile can host one),
-`386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
+`386sx`, `386`, `386-sound`, `386-ps2`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
 `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-weave`, `386-weave`, `xt-weave-256`;
-plus `marty` (MartyPC). `xt-multimon` is the
+plus `marty` (MartyPC). **`386-ps2` is the only machine here with a PS/2
+mouse** — every other config is `mouse_type = msserial`, which is why §9.9
+shipped and went untested on anything but QEMU for months; it is a Packard
+Bell Legend 300SX, whose bus flags are what give 86Box's 8042 an auxiliary
+port at all. **`286-525` is the only machine here with 5.25" HD drives** —
+every other AT-class profile is `fdd_type = 35_2hd` — so it is the only one
+that can boot §19's 1.2MB pair, and the only place that geometry is exercised
+on period hardware at all. `xt-multimon` is the
 **two-card** XT — a CGA and a Hercules, a monitor window each — and the only
 86Box machine that can show §39.12–§39.19's extended desktop; it boots Single,
 and Control Panel → Display → Desktop is what extends it (§39.19.1).
 **`xt-wire` is the NETWORKED XT** — `xt-sound`'s machine plus a Novell NE1000
 on slirp, booting `make ethertest`'s disk so `ETHER.DRV` is up before the
-first paint and The Wire (§88) reaches os8088.com's live catalog with nothing
+first paint and The Wire (§92) reaches os8088.com's live catalog with nothing
 running on the host; the only 86Box profile with a NIC, and its B: is a kept
 scratch disk because Add to Disk writes. `xt-z`
 and `386-z` are the Frotz machines (§61.9), `xt-word`/`386-word` are the Word
@@ -397,6 +457,16 @@ learned.
 - **Label hygiene.** One flat namespace: every module-internal label carries
   its module prefix (`vga_`, `wm_`, `menu_`, `fm_`, `dsk_`, …) or is a NASM
   local label.
+- **Text is `font_run`, not `font_str` (§6.1, §6.6).** `font_char`/`font_str`
+  are TRANSPARENT — they leave what is underneath — so a `gfx_fill` followed by
+  one of them writes every pixel twice, and the gap between the two passes is
+  *visible* on the target machine. `font_run` draws the ground and the glyph in
+  one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
+  `tests/textsites.txt` is the ratchet: a new call site fails the build until it
+  is registered with a reason, and the count can only go down. **The sweep is
+  finished** (§6.6.5): the registry stands at 59 sites in 20 files, every one
+  with a reason, so a new transparent call is now an argument to win rather
+  than a queue to join.
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are
   VGA *reference* values, not the truth — the live screen is
   `[vid_w]`/`[vid_h]`/`[vid_stride]`. Anything that clips, centres or anchors
@@ -413,10 +483,10 @@ learned.
   mechanisms. **Raising either is a decision to take with whoever asked for the
   feature, not a build fix.**
 - **Before spending a resident byte, ask whether the feature is an ON-DEMAND
-  MODULE** (§2.8, `kernel/mod.inc`, docs/ONDEMAND-PLAN.md §1's test): kernel
-  code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`, `CLONE.DRV`,
-  `HIBER.DRV`) and is
-  read into a heap claim when the feature is asked for, freed when it is
+  MODULE** (§2.8, `kernel/mod.inc`, docs/plans/completed/ONDEMAND-PLAN.md §1's
+  test): kernel code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`,
+  `CLONE.DRV`, `HIBER.DRV`, and on kern_small `FILECP.DRV` and `FDLG.DRV`) and
+  is read into a heap claim when the feature is asked for, freed when it is
   done. A feature qualifies when the system disk is already required to use
   it, or can be required without interrupting what the user was doing. When
   it qualifies, the resident part is the menu item, the greying predicate and
@@ -424,6 +494,10 @@ learned.
   the test may grow `.text`/`.cold`, and moving code to `.cold` or the boot
   overlay relieves `KERN_CODE_MAX` but not `KERN_BUDGET` — a module relieves
   both. Check `tools/kernsize.py` before and after: a byte costs a byte.
+  **docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md is what the mechanism
+  REFUSES**, and it refused two of four candidates: `mod_need`'s own transitive
+  cone is 155 symbols in 7 files, so a module inside it must be gated rather
+  than moved, and a layer with 33 entry points cannot fit `MOD_NENT`'s 7.
 - **A heap claim can MOVE, and the default is that it may not** (§66). A record
   is born `MC_RLOC` = 0, PINNED; `OSAPI_MEM_MOVABLE` opts one in and takes a
   relocation **proc**, not the address of the word naming the block — a holder
@@ -476,7 +550,8 @@ how long it takes.** Estimate with these, measured on a real 5150:
 
 | | cost |
 |---|---|
-| any `gfx_*` drawing call, whatever it draws | **756 us** fixed |
+| any `gfx_*` drawing call — the FIXED PART, not the call | **756 us** (measured small: an 8px hline, a pixel. A real one is more — a 6px `gfx_hline` is 678 us and a 312px one 862; `gfx_frame` on an 11x11 box is 3.4 ms. **Never quote 756 as a floor a design must beat** — Set 89) |
+| one coalesced RUN of a 4bpp blit, VGA, direct | **~377 us** (1,797 cycles — and, like the row above, near enough flat in the run's length. A dithered picture is one run a PIXEL, which is what §5.4.1.3's decoder exists for) |
 | one 8×8 glyph cell | **~900 us** |
 | one 78-cell row of text | **~71 ms** |
 | an `OSAPI_*` far call / a near `call`+`ret` | 46.7 us / 11 us |
@@ -564,17 +639,18 @@ paragraph above.
 
 Three traps not written down elsewhere:
 
-- **Committing invalidates `build/kernel.bin` for the symbol reader.** Every
-  emulator row resolves kernel symbols through `tools/os88sym.py`, which
+- **A knob kernel in `build/` is a different kernel to the symbol reader.**
+  Every emulator row resolves kernel symbols through `tools/os88sym.py`, which
   re-assembles `kernel.asm` and refuses an address unless the result is
-  byte-identical to `build/kernel.bin` — and the About box's build number is
-  the COMMIT COUNT (§14.2), so a commit moves three bytes of `.text` and
-  nothing else. Every row then dies saying "the map describes a DIFFERENT
-  kernel", which points at the kernel rather than at what you did. `make`
-  after committing. `os88test.py` asks once, before any row runs, and says so;
-  it deliberately does not rebuild, because a knob kernel (`VIDEO=`, `RTC=`)
-  in `build/` differs from the plain assembly on purpose and a preflight
-  `make` would silently overwrite the build under test.
+  byte-identical to `build/kernel.bin`. A commit does NOT trip it — the About
+  box's build number is the commit count (§14.2), and `os88sym` reads the
+  number out of the image and assembles with that one — but a `VIDEO=` or
+  `RTC=` kernel left in `build/` does, and every row then dies saying "the
+  map describes a DIFFERENT kernel", which points at the kernel rather than at
+  what you did. Pass the knob's `--define` (or `$OS88_DEFINES`), or build
+  knob kernels into a private tree with `tools/os88build.py`. `os88test.py`
+  checks once, before any row runs, and deliberately does not rebuild,
+  because a preflight `make` would silently overwrite the build under test.
 
 - **A previous session's QEMU may still be running.** `make test` then fails
   with `cannot create PID file`, but the stale instance keeps answering on
@@ -618,7 +694,7 @@ in docs/TESTING.md, per capability.
   `os88sock.inc`. `tools/os88proxy.py` is the host-side other end and
   `os88proxygui.py` its desk-side front. `apps/ftpd/` is the FTP **server**
   (§77) — the same ABI listening rather than connecting, and the last stage of
-  docs/NET-STACK-PLAN.md.
+  docs/plans/completed/NET-STACK-PLAN.md.
 - `tools/` — host-side Python: `os88pkg.py` (validates/stamps `.bin` → `.o88`),
   `os88disk.py` (builds FAT12 images; `--verify` is a structural fsck),
   `checkdocs.py` (the doc gate every `make` runs), `os88test.py` (the suite
@@ -655,15 +731,30 @@ checking all four. This is the rule for the on-demand APPLICATION floppies too
 reached them.
 
 **Nine images, not seven.** The system and apps disks in four geometries each,
-plus `build/media360.img` — `BEVERLY.MOD` is 114 of a 360KB disk's 354 clusters
-and is data rather than software, so at that geometry alone it rides a disk of
-its own (§24.4); every other apps disk carries it in `MEDIA/`, which is why
+plus `build/media360.img` — `BEVERLY.MOD` is data rather than software and
+was 114 of a 360KB disk's 354 clusters before packages were compressed, so at
+that geometry it rides a disk of its own (§24.4). **It is not on `apps360.img`
+as well any more, and cannot be**: lz4-packed it is 42 clusters and that disk
+is at 346 of 354, so no trimming reaches it — taking AUDIO, MODPLUG and
+FONTVIEW off buys 27. At 360KB the module is a disk SWAP, which is what §24.4
+was always for; `tests/lzship.py` carries both halves on one scratch image
+because the harness cannot change a floppy under a running guest. Every other
+apps disk carries it in `MEDIA/`, which is why
 there is no 720KB or 1.2MB media disk to go with it. The **core packages** ship on the system disk too, a second
 copy and never a move (§24.3), and an application's own state goes in
 `SYSTEM/APPDATA/` rather than beside the user's documents (§19.9).
-**`THEWIRE.O88` is the exception to both halves of that** (§88): it is a
+**`THEWIRE.O88` is the exception to both halves of that** (§92): it is a
 `SYSAPPS` package like `TASKMGR.O88`, so it lives in `SYSTEM/` on all FOUR
 system-disk geometries and on **no** apps disk — a program whose whole subject
 is fetching software off the network belongs on the disk the machine booted
 from. `kern_small` leaves it off (`SMALLSYSAPPS`, derived from `SMALLOMIT`):
 there is no NIC there, so there is nothing for it to refuse on.
+
+**Adding a geometry is not only a table row**, and §19 carries what the 1.2MB
+one cost: §18.93.1's boot canary sits at a fixed *file sector*, and the band of
+sectors that cross a head is the **intersection** over every shipped disk — so
+a fourth geometry made a canary nothing had touched inert on one disk of four,
+which is precisely the fault it exists to catch. `tests/unit/t_canary.py`
+caught it and `KSIG_OFF` moved. The gates that walk "every shipped image"
+(`t_image`, `t_diskverify`, `t_canary`, `t_blobruns`) each hold their own list,
+so a new image is not covered until it is in all four of them.
