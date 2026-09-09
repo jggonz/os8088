@@ -415,9 +415,10 @@ section 16.4 — each a copy of the corresponding `vm/*-c64` with **only**
 in the polish wave *with the measurement that justifies them*, because an XT
 target before anyone has measured the port there is a claim and not a
 machine. **`xt-apple2` is where that measurement was taken** and the answer
-is **0.41% of a 1.02 MHz Apple**, so the status row reads `0%` — an XT
+is **0.54% of a 1.02 MHz Apple**, so the status row reads `0%` — an XT
 reaches the `]` prompt and answers a keystroke and is a machine to look at,
-which is why the Wire record is tier 3), and
+which is why the Wire record is tier 3; it was 0.41% until APPLE2-SPEC
+section 4.3.1 made the wall slice a duty-cycle controller), and
 `xt-weave`/`386-weave`/`xt-weave-256` the Weave family's
 (WEAVE-SPEC §13.1) — the eighteen that put a dedicated
 floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave

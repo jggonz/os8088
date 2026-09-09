@@ -1212,11 +1212,27 @@ static int h_run_wr_in;                 /* slices until the write; 0 = never */
 static unsigned h_run_wr_a;
 static int h_run_wr_v;
 
+/* ...AND A SLICE CAN BE GIVEN A WALL-CLOCK PRICE, which is the one thing the
+ * slice controller (APPLE2-SPEC section 4.3.1) is about and the one thing a
+ * run that returns instantly cannot exercise. `h_run_cost` is MICROTICKS of
+ * host clock per emulated cycle - a millionth of an 18.2 Hz tick - and the
+ * stub advances `the_ticks` by however many tick boundaries the slice crossed.
+ * The phase carries over from slice to slice exactly as it does on the
+ * machine, which is what makes the crossing RATE the duty cycle. 0 is the
+ * default and is a run that costs nothing, which is every other case here. */
+static unsigned h_run_cost;
+static unsigned long h_run_ut;
+
 int a2_run(unsigned cycles)
 {
-    (void)cycles;
     h_runs++;
     a2_m.cnt = 0;
+    if (h_run_cost) {
+        unsigned long was = h_run_ut / 1000000UL;
+
+        h_run_ut += (unsigned long)cycles * (unsigned long)h_run_cost;
+        the_ticks += (unsigned)(h_run_ut / 1000000UL - was);
+    }
     if (h_run_wr_in > 0 && --h_run_wr_in == 0)
         a2_wr(h_run_wr_a, h_run_wr_v);
     if (h_run_jam) {
@@ -4043,6 +4059,87 @@ int main(void)
         a2_pct = 0;
         a2_sp_tick = the_ticks;
         a2_menu_state();
+    }
+
+    /* ======================================================================
+     * THE WALL SLICE'S DUTY-CYCLE CONTROLLER (APPLE2-SPEC section 4.3.1)
+     *
+     * The rule this replaced could not leave `A2_SLICE_MIN` on a 4.77 MHz
+     * 8088 and that was arithmetic, not luck - four consecutive clean slices
+     * to double against one tick-crossing to halve has a fixed point at 14 %
+     * of a host tick. Both arms below are the machine the port cannot ask an
+     * emulator about: MartyPC is an 8088 and every profile in the tree is a
+     * 5150, so the FAST tier has no host at all here, and the slow one takes
+     * ten minutes a reading. `h_run_cost` prices a slice instead and this
+     * runs in `build.sh`.
+     * ====================================================================*/
+    {
+        int i, b;
+        int st = a2_state, pz = a2_pause;
+
+        a2_state = A2_ST_RUN;
+        a2_pause = 0;
+
+        /* --- A MACHINE THE BUDGET IS NOWHERE NEAR: it must reach the cap.
+         * This is the old rule's fast arm, kept whole as `a2_adx == 0`, and
+         * it is what a 386 and a 486 take. */
+        h_run_cost = 0;
+        h_run_ut = 0;
+        a2_budget = A2_SLICE_MIN;
+        a2_adn = 0;
+        a2_adx = 0;
+        for (i = 0; i < 200; i++)
+            do_wake();
+        if (a2_budget != A2_SLICE_MAX) {
+            printf("a2uitest: FAIL - 200 slices that cost no host tick left "
+                   "the budget at %d and not the %d cap: the fast arm is "
+                   "gone, so every tier above the 8088 lost its speed\n",
+                   a2_budget, A2_SLICE_MAX);
+            fails++;
+        }
+
+        /* --- ...AND THE 4.77 MHz 8088, at the price MEASURED on MartyPC
+         * (APPLE2-SPEC 16.4.1: 256 cycles took 22.5 ms of a 54.9 ms tick, so
+         * a cycle is ~1,600 microticks). The band is wide on purpose - the
+         * controller OSCILLATES inside its deadband by design - and what it
+         * pins is the two things that matter: the budget LEFT the floor, and
+         * it stopped a long way short of a slice that overruns a tick. */
+        h_run_cost = 1600;
+        h_run_ut = 0;
+        a2_budget = A2_SLICE_MIN;
+        a2_adn = 0;
+        a2_adx = 0;
+        for (i = 0; i < 600; i++)
+            do_wake();
+        b = a2_budget;
+        if (b <= A2_SLICE_MIN) {
+            printf("a2uitest: FAIL - a priced 4.77 MHz slice left the budget "
+                   "at %d, which is A2_SLICE_MIN: the controller has the old "
+                   "rule's fixed point again and the XT is back to 0.41 %%\n",
+                   b);
+            fails++;
+        } else if (b < 384 || b > 768) {
+            printf("a2uitest: FAIL - a priced 4.77 MHz slice settled at %d "
+                   "cycles; ~0.75 of a tick is ~469 and the band is "
+                   "384..768\n", b);
+            fails++;
+        } else {
+            printf("a2uitest: the slice controller reaches the cap on a free "
+                   "machine and settles at %d cycles - %d %% of a host tick - "
+                   "on a priced 4.77 MHz one\n",
+                   b, (int)((long)b * 1600L / 10000L));
+        }
+
+        h_run_cost = 0;
+        h_run_ut = 0;
+        a2_budget = A2_SLICE_MIN;
+        a2_adn = 0;
+        a2_adx = 0;
+        a2_state = st;
+        a2_pause = pz;
+        a2_cyc_zero();
+        a2_pct = 0;
+        a2_sp_tick = the_ticks;
     }
 
     /* ======================================================================

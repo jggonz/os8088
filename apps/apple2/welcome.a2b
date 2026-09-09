@@ -19,20 +19,23 @@ REM is aimed at - and it says where the COLOURS are rather than pretending the
 REM window has any (section 13.1: colour is FSXM_VGA13 and needs a VGA).
 REM
 REM AND IT IS SIZED FOR A 4.77 MHz XT, WITH THE MEASUREMENT ATTACHED. At
-REM 0.51% of a 1.02 MHz Apple (section 16.4.1) a loop of 1,600 PLOTs is many
+REM 0.64% of a 1.02 MHz Apple (section 16.4.1) a loop of 1,600 PLOTs is many
 REM minutes, so the lo-res picture is 32 HLINs and the hi-res one 7 HPLOT
 REM lines, and every wait is a GET rather than a FOR/NEXT delay - a delay
 REM loop tuned on a 386 is a machine that looks hung on an XT.
 REM
 REM WHAT THAT COSTS, MEASURED ON THE XT ITSELF and not estimated (section
 REM 16.2.1, build/a2welcome.py, off the BIOS tick counter): the text screen
-REM is 6.0 s from RUN, the lo-res screen 91.2 s and the hi-res screen
-REM 106.2 s. Both graphics screens draw PROGRESSIVELY - a band or a line at
-REM a time - so the machine is visibly working rather than hung, and
-REM README.TXT says the same number to the reader who has not opened this
-REM file. It is the emulated Apple that is slow and not the window: this is
-REM what 0.51% of a 1.02 MHz machine feels like, which is the one thing a
-REM demonstration on this port is FOR.
+REM is 2-3 s from RUN, the lo-res screen 76.2 s and the hi-res screen
+REM 78.2 s. Two runs agreed to a tenth of a second on both graphics screens;
+REM the text figure is the noisy one, being short enough that the launch is
+REM most of it. They were 6.0, 91.2 and 106.2 before section 4.3.1's slice
+REM controller, which is where the difference went. Both graphics screens
+REM draw PROGRESSIVELY - a band or a line at a time - so the machine is
+REM visibly working rather than hung, and README.TXT says the same number to
+REM the reader who has not opened this file. It is the emulated Apple that is
+REM slow and not the window: this is what 0.64% of a 1.02 MHz machine feels
+REM like, which is the one thing a demonstration on this port is FOR.
 REM
 REM Lines outside this header are the program. A `REM` line here whose first
 REM word is REM and which carries no line number is a COMMENT and is not

@@ -363,6 +363,69 @@ gfx lock held only around the flush and never around a slice.
 The wake also spends the latches set under the desktop's lock before it runs
 the slice: exit, reset, power cycle, the clipboard pair, and the paste feeder.
 
+#### 4.3.1 The budget is a DUTY-CYCLE CONTROLLER, and the rule it replaces
+had a fixed point at 14 % of a tick
+
+**The adaptation that shipped in wave 7 could not leave `A2_SLICE_MIN` on a
+4.77 MHz 8088, and that was arithmetic rather than luck.** It doubled the
+budget after **four consecutive** slices that cost no host tick and halved it
+on **one** that did. A slice of length *d* crosses a tick boundary with
+probability *d*/55: the wake is POSTED and dispatched (`a2_wants_wake`,
+SPEC.md 74.1), never timed, so its phase against the tick drifts freely -
+**measured, a 22.5 ms slice crossed on 0.40 of its wakes against the 0.41 the
+model predicts**. Solving `(1-p)^4 / 4 = p` - the rate the walk steps up
+against the rate it steps down - puts the fixed point at **p = 0.14**, so on
+any machine where a slice is a real fraction of a tick the budget sat at 256
+for ever. That is exactly the target machine, and section 16.4.1 is the
+measurement.
+
+So the crossing **rate** is measured instead of a run of luck being waited
+for, and that rate **is** the duty cycle by definition. Over a window of
+`A2_ADAPT_N` = 8 slices, `a2_adx` of them cost a host tick, and `a2_adx / 8`
+is the share of a tick a slice is taking:
+
+| the window said | what happens | why |
+|---|---|---|
+| a slice elapsed **>= 2** ticks | halve on the spot, window restarted | not a duty cycle any more - the UI task is stopped for a whole tick it will never get back, and nothing waits for statistics about a slice that has already overrun |
+| `a2_adx == 0` | **double** | nothing cost a tick at all, so the budget is nowhere near this machine. This is the old rule's fast arm kept whole: a 386 still reaches the cap in a fraction of a second |
+| `a2_adx <= A2_ADAPT_LO` (5) | `+ budget / 8` | under ~70 % of a tick |
+| `a2_adx >= A2_ADAPT_HI` (7) | `- budget / 8` | over ~80 % |
+| 6 of 8 | hold | the target band |
+
+**The two steps are the same size on purpose**: the fixed point is then the
+middle of the band and not an artefact of the arithmetic, which is the whole
+defect of the rule above. The clamp - the cap, the `<= 0` test for a doubling
+that landed past a 16-bit `int`, and the floor - is in ONE place under all
+five arms rather than inside each.
+
+**It self-tunes to WALL TIME and not to a cycle count, which is the property
+that matters and is visible in the measurement.** Idle at the `]` prompt the
+controller settles at **512** cycles and in a running `FOR/NEXT` at **648** -
+and the slice is **40.5 ms** and **40.7 ms**, the same 0.74 of a host tick in
+both. Applesoft spends fewer 8088 clocks per emulated 6502 cycle than the
+Monitor's keyboard poll does, and the budget absorbs the difference instead
+of the user paying for it in latency.
+
+`A2_SLICE_MIN` is unchanged at 256. A tier-dependent floor was the other way
+to reach the same slice and is NOT what shipped: the controller arrives at
+0.74 of a tick by measuring the machine it is on, so a V20, a 4.77 MHz 8088
+and a 286 each get their own budget with no tier table to keep true.
+
+**AND `hosttest/a2uitest.c` IS THE GATE, because neither arm has a host in
+this tree.** MartyPC is an 8088 and every profile in it is a 5150, so the
+FAST tier - the `a2_adx == 0` arm, which is what a 386 and a 486 take - has
+no emulator here at all, and the slow arm costs ten minutes a reading. So the
+harness's `a2_run` stub takes a WALL-CLOCK PRICE: `h_run_cost` is microticks
+of host clock per emulated cycle, and the stub advances the modelled tick by
+however many boundaries the slice crossed, carrying the phase over from slice
+to slice exactly as the machine does. Two cases, in `build.sh` on every build:
+200 slices priced at **nothing** must reach `A2_SLICE_MAX`, and 600 priced at
+the MEASURED **1,600 microticks a cycle** - section 16.4.1's 22.5 ms for 256
+cycles - must settle between 384 and 768, the band being wide because the
+controller oscillates inside its deadband by design. **The first thing that
+case asserts is that the budget LEFT `A2_SLICE_MIN`**, which is the rule
+above failing, in one line, without an emulator.
+
 ### 4.4 The core's gate - `make a2cputest`
 
 `apps/apple2/hosttest/a2cputest.asm` on `c64cputest.asm`'s boot-sector shape,
@@ -1966,11 +2029,14 @@ cap by `build.sh` (section 16.6), with an explicit expected **minimum**, so a
 corpus of zero literals is a failure and not a pass.
 
 **THE UNITS ARE WHOLE PER CENT AND ON AN XT THAT IS `0%`** (section 16.4.1):
-measured on MartyPC's 4.77 MHz 8088, the machine runs the Apple at **0.41% of
-1.02 MHz idle and 0.51% inside a BASIC loop**, and both truncate to 0. The
+measured on MartyPC's 4.77 MHz 8088, the machine runs the Apple at **0.54% of
+1.02 MHz idle and 0.64% inside a BASIC loop**, and both truncate to 0. The
 field is not broken there and it is not rounded up either - a `0%` that is
 honest is the point of measuring rather than estimating, and the arithmetic
-that produces it is `a2_budget` at `A2_SLICE_MIN`, one wake a tick.
+that produces it is section 4.3.1's budget, ~40 ms of 6502 in a wake that
+takes about two host ticks. It was 0.41% and 0.51% before that controller,
+and `0%` either way - which is what a whole-per-cent field costs and what
+section 16.4.1 says out loud.
 
 **AND ONE THING THE GLASS SHOWED THAT THIS DOCUMENT CANNOT YET EXPLAIN, WHICH
 IS RECORDED RATHER THAN TIDIED.** On that same MartyPC XT the mode field reads
@@ -3678,13 +3744,18 @@ DROPPED.** Section 15.0.4 gives both against wave 5's line and nothing
 restated them against wave 7's, so a reader of 13.2 or of the Disk II
 follow-up was quoting a number that had moved:
 
-- **the 54,000 resident gate now has 614 bytes in it** (it had 716 at the end
-  of wave 5, and 694 at the end of wave 7's first draft);
-- the line is **1,614 under SPEC.md 73.9's 55,000 split trigger**, so Disk
-  II's ~1,200 resident bytes leave **414** rather than wave 5's 516 - which
+- **the 54,000 resident gate now has 514 bytes in it** (it had 716 at the end
+  of wave 5, 694 at the end of wave 7's first draft, and 614 until section
+  4.3.1's slice controller spent **98** of them - `image + bss` is
+  39,140 + 14,346 = **53,486**, against 39,042 + 14,344 before it);
+- the line is **1,514 under SPEC.md 73.9's 55,000 split trigger**, so Disk
+  II's ~1,200 resident bytes leave **314** rather than wave 5's 516 - which
   is the number that wave opens on, and it is smaller than it was. Section
-  13.2's no-fix argument spends from the same 614, so it cites this section
-  and not 15.0.4.
+  13.2's no-fix argument spends from the same 514, so it cites this section
+  and not 15.0.4;
+- **`APPLE2.O88` on the disk did not move**, and the paragraph below is why:
+  the ROM part starts at a sector boundary, so those 98 bytes came out of the
+  slack under it and the file is **54,272** before and after.
 
 **THE FILE ON DISK DID NOT MOVE AND THAT IS ARITHMETIC RATHER THAN LUCK.**
 `os88pkg` starts a part at a 512-byte SECTOR boundary (SPEC.md 2.1.1), so the
@@ -4019,19 +4090,21 @@ at a time and read back off the Apple's own text page, and each screen is
 timed off the BIOS tick counter at `0040:006C` from the keypress that starts
 it to the caption the program prints when the loop is done.
 
-| screen | what it draws | measured |
-|---|---|---|
-| text, from `RUN` | 8 `PRINT`s and `INVERSE` | **6.0 s** (110 ticks) |
-| lo-res | `GR` + 32 `HLIN 0,39` | **91.2 s** (1,659 ticks) |
-| hi-res | `HGR` + 7 `HPLOT X,0 TO 279-X,159` | **106.2 s** (1,932 ticks) |
+| screen | what it draws | measured | before section 4.3.1 |
+|---|---|---|---|
+| text, from `RUN` | 8 `PRINT`s and `INVERSE` | **2-3 s** | 6.0 s (110 ticks) |
+| lo-res | `GR` + 32 `HLIN 0,39` | **76.2 s** (1,386 ticks) | 91.2 s (1,659 ticks) |
+| hi-res | `HGR` + 7 `HPLOT X,0 TO 279-X,159` | **78.2 s** (1,423 ticks) | 106.2 s (1,932 ticks) |
 
-Two runs a build apart agreed to a second and a half: 6.0 / 92.2 / 104.2 on
-the first and 6.0 / 91.2 / 106.2 on the shipping one, which is the
-`FOR/NEXT`-shaped scatter of section 16.4.1's own loop rows and not a
-difference between the builds.
+**Two runs agreed to a TENTH OF A SECOND on both graphics screens** - 76.2 /
+78.2 and 76.2 / 78.1 - which is a tighter pair than the second and a half the
+two pre-controller runs agreed to (6.0 / 92.2 / 104.2 and 6.0 / 91.2 / 106.2),
+and is the sample the slower budget could not take. **The text figure is the
+noisy one and is quoted as a range**: 2.0 s and 3.0 s over the same two runs,
+being short enough that the package launch is most of it.
 
-**That is a minute and a half a picture, and it is said out loud rather than
-discovered.** It is what 0.51% of a 1.02 MHz Apple *is*, so it is not a defect
+**That is a minute and a quarter a picture, and it is said out loud rather than
+discovered.** It is what 0.64% of a 1.02 MHz Apple *is*, so it is not a defect
 in the port and there is nothing to fix in the drawing: the windowed flush
 narrows to the touched scan lines and costs ~16 ms a pass, which is why both
 screens draw **progressively**, a band or a line at a time, and the machine
@@ -4089,7 +4162,9 @@ machine**, which is why two of the three land in wave 7.
 
 #### 16.4.1 THE MEASURED XT SPEED - 9 September 2026
 
-**0.4% of a 1.02 MHz Apple II, and the status row reads `0%`.**
+**0.5% of a 1.02 MHz Apple II idle and 0.6% under BASIC, and the status row
+still reads `0%`.** It was 0.41% and 0.51% when this section was first written;
+section 4.3.1 is the change and the before rows are kept below.
 
 Taken on **MartyPC**, not on 86Box, and that is the whole reason the figure
 exists: 86Box launches a window a person can look at and cannot assert
@@ -4105,24 +4180,37 @@ clock and the card are the same, and a BIOS does not run the 6502. It booted
 `make xt-apple2` puts in that drive, and APPLE2 was launched from the Disk
 window.
 
-**THREE RUNS, AND THE IDLE FIGURE IS THE SAME IN ALL THREE.** Each row is
-that run's one-second windows, read by sampling the guest every 0.2 s and
-taking `a2_c64u` at each fold:
+**THREE RUNS OF EACH, BEFORE AND AFTER.** Each row is that run's one-second
+windows, read by sampling the guest every 0.2 s and taking `a2_c64u` at each
+fold. The **before** rows are the wave-7 slice rule (`a2_budget` pinned at
+`A2_SLICE_MIN` = 256); the **after** rows are section 4.3.1's duty-cycle
+controller, and nothing else about the machine, the disk or the instrument
+moved between them:
 
-| what the machine was doing | run | windows | measured |
-|---|---|---|---|
-| the `]` prompt, idle - the Monitor's keyboard poll | A | 11 | 0.38% - 0.46%, **mean 0.41%** |
-| " | B | 11 | 0.34% - 0.46%, **mean 0.41%** |
-| " | C | 12 | 0.36% - 0.46%, **mean 0.41%** |
-| `FOR I = 1 TO 1000 : NEXT`, **running** | A | 13 | 0.51% - 0.58%, **mean 0.52%** |
-| " | B | 12 | 0.43% - 0.61%, **mean 0.51%** |
-| " | C | 12 | 0.48% - 0.53%, **mean 0.51%** |
+| what the machine was doing | | run | windows | measured |
+|---|---|---|---|---|
+| the `]` prompt, idle - the Monitor's keyboard poll | before | A | 11 | 0.38% - 0.46%, mean 0.41% |
+| " | " | B | 11 | 0.34% - 0.46%, mean 0.41% |
+| " | " | C | 12 | 0.36% - 0.46%, mean 0.41% |
+| " | **after** | A | 12 | 0.43% - 0.61%, **mean 0.51%** |
+| " | " | B | 11 | 0.52% - 0.62%, **mean 0.56%** |
+| " | " | C | 12 | 0.47% - 0.56%, **mean 0.54%** |
+| `FOR I = 1 TO 1000 : NEXT`, **running** | before | A | 13 | 0.51% - 0.58%, mean 0.52% |
+| " | " | B | 12 | 0.43% - 0.61%, mean 0.51% |
+| " | " | C | 12 | 0.48% - 0.53%, mean 0.51% |
+| " | **after** | A | 11 | 0.56% - 0.78%, **mean 0.65%** |
+| " | " | B | 12 | 0.54% - 0.79%, **mean 0.64%** |
+| " | " | C | 11 | 0.50% - 0.75%, **mean 0.62%** |
 
-**So the number is 0.41% idle and 0.51% under BASIC**, and the second is
-higher than the first for the reason a reader would expect: Applesoft's
-`FOR/NEXT` spends fewer 6502 cycles per emulated instruction in the Monitor's
-keyboard-poll loop, so the same slice budget covers more of a real Apple's
-second.
+**So the number is 0.54% idle and 0.64% under BASIC**, against 0.41% and
+0.51% before - **a third faster at the prompt and a quarter faster under a
+listing**. The loop figure is the higher of the pair for the reason a reader
+would expect: Applesoft's `FOR/NEXT` spends fewer 8088 clocks per emulated
+6502 cycle than the Monitor's keyboard-poll loop, so the same 40 ms of wall
+clock covers more of a real Apple's second - and section 4.3.1's controller
+is what turns that into cycles rather than into idle time, settling at a
+budget of 648 in the loop against 512 at the prompt with the SLICE the same
+length in both.
 
 **AND THE LOOP ROWS ARE A REVIEW CORRECTION, WHICH IS RECORDED RATHER THAN
 QUIETLY REPLACED.** The first take (`build/a2speed4.py`) typed
@@ -4149,39 +4237,101 @@ artefact, from sampling the guest every two seconds and seeing two folds as
 one: sampled every 0.2 s the windows are **18-20 ticks**, which is the
 one-second fold working exactly as designed.
 
-**WHERE THE 0.4% GOES, and it is the SLICE and not the emulator.**
-`a2_budget` sits at `A2_SLICE_MIN` = **256** cycles and never doubles: the
-adaptive rule (section 4.3) grows the budget only after four consecutive
-slices that finish inside ONE host tick, and on a 4.77 MHz 8088 a 256-cycle
-slice is already ~21 ms of a 55 ms tick, so the tick boundary is crossed often
-enough to halve it back. 256 cycles at 18.2 wakes a second is 4,659 emulated
-cycles a second, which is 0.46% of 1,020,484 - the measurement, from the other
-end. **Lifting that ceiling is a scheduler decision with a UI-latency price
-and is not this wave's** (the tree has already refused a full-CPU mode once);
-what this wave owes is the number, and this is it.
+**WHERE THE TICK ACTUALLY GOES, MEASURED ON THE WALL AND NOT MODELLED.** The
+package was built once with four counters in it - host ticks summed across
+the slice, across the flush and across the whole wake, over a thousand wakes
+each, which is how a 55 ms clock measures a 7 ms event - and read out of the
+guest by MartyPC. They are an instrument and are not in the shipping source;
+`build/a2slice.py` is the driver:
 
-**THE PLAN PREDICTED 3-4% AND IT WAS OUT BY EIGHT.** docs/APPLE2-PORT-PLAN.md's
-risk section arrived at "~400 8088 clocks per emulated 6502 instruction" and
-divided by nothing else; what it left out is that the port gets ONE wake a
-tick and spends a bounded slice inside it, so the ceiling is the slice and not
-the interpreter. The arithmetic that would have caught it is the one above,
-and it needs `A2_SLICE_MIN` in it.
+| | before (`a2_budget` = 256) | after (512 idle) |
+|---|---|---|
+| the slice | **22.5 ms** - 0.41 of a host tick | **40.5 ms** - 0.74 of one |
+| one flush | 110.9 ms | 125.0 ms |
+| the whole wake | 54.4 ms | 96.3 ms |
+| wakes a second | 17.7 | 10.2 |
+| emulated cycles a second | 4,531 | 5,223 |
+
+**AND THE FIRST READING CORRECTS THIS SECTION'S OWN ARITHMETIC.** It said the
+budget was pinned because a 256-cycle slice is "~21 ms of a 55 ms tick, so the
+tick boundary is crossed often enough to halve it back" - the 21 ms is right
+(22.5 measured) and the conclusion is not. A 22.5 ms slice crosses a boundary
+on 0.41 of its wakes, and the rule needed FOUR clean slices in a row to double
+against ONE crossing to halve, so the walk's fixed point was **14 %** of a
+tick whatever the machine: it was not near the tick, it was pinned a long way
+below it. Section 4.3.1 has the solved equilibrium.
+
+**AND THE SLICE IS NOT WHERE MOST OF THE XT'S TIME GOES - THE FLUSH IS.** At
+the idle prompt the machine spent **39 %** of every second in the 6502 and
+**50 %** inside `a2_flush`, at 110.9 ms a flush and 4.6 flushes a second. That
+is the ceiling the section 4.3 lever cannot reach past, and it is why the
+gain here is a third rather than the several-fold a reader might expect from
+a slice that doubled: the raw core throughput on this machine is **~11,500
+emulated cycles a second** (1.13 % of an Apple), and everything between 0.54 %
+and that is redraw. The flush's own pacing is section 7.8's tier rule and was
+deliberately not touched by this change.
+
+**THE WHOLE BUDGET CURVE, IN ONE BOOT** (`build/a2sweep.py` - the instrumented
+build takes a forced budget poked in from the host, so every row is the same
+machine at the same prompt):
+
+| forced budget | slice | whole wake | wakes/s | cycles/s | % of an Apple |
+|---|---|---|---|---|---|
+| 256 | 22.5 ms | 54.4 ms | 17.7 | 4,531 | 0.44% |
+| 384 | 32.8 ms | 75.4 ms | 12.8 | 4,915 | 0.48% |
+| **512** | **36.8 ms** | **88.3 ms** | **11.1** | **5,683** | **0.56%** |
+| 768 | 49.4 ms | 119.8 ms | 8.2 | 6,298 | 0.62% |
+| 1024 | 75.3 ms | 138.1 ms | 7.0 | 7,168 | 0.70% |
+| 2048 | 132.7 ms | 267.8 ms | 3.7 | 7,578 | 0.74% |
+| 4096 | 260.0 ms | 398.2 ms | 2.5 | 10,240 | 1.00% |
+
+The curve is real and it keeps going, and **the price is on the same row**:
+1.00 % costs a wake of 398 ms, which is the desktop's menu bar not answering
+for seven ticks. 512 is where the controller lands on its own and it is the
+last row whose whole wake is inside two ticks.
+
+**AND THE MENU STILL COMES DOWN**, which is the half a speed figure cannot
+say. `build/a2uilat.py` presses the bar's **Machine** cell while
+`FOR I = 1 TO 9999 : NEXT` is running and polls the kernel's own `menu_ent`
+and then the pull-down's PIXELS, twelve presses an arm, with the loop proved
+still running at the end:
+
+| | before | after |
+|---|---|---|
+| the click reaches `menu_track` | median 1 tick, worst 1 | median 1 tick, worst 3 |
+| the pull-down is on the glass | median 2 ticks (110 ms), worst 3 (165 ms) | median **2 ticks** (110 ms), worst 4 (220 ms) |
+
+**The median is unchanged and the worst case costs one more tick.** Both arms
+already exceed two ticks in the worst case and did before this change, for the
+flush's reason above and not the slice's.
+
+**THE PLAN PREDICTED 3-4% AND IT WAS OUT BY SIX**, and the reason is not the
+one this section first gave. docs/APPLE2-PORT-PLAN.md's risk section arrived
+at "~400 8088 clocks per emulated 6502 instruction" and divided by nothing
+else. The measurement says **~415 clocks per emulated CYCLE** - about 1,250 a
+6502 instruction, three times the plan's figure - on a cycle-accurate 4.77 MHz
+8088 with its prefetch queue and DRAM refresh in the price. That alone caps
+the port at 1.13 %; the redraw takes it from there to 0.54 %. The slice is a
+third of the answer and was worth taking, and it was never the whole eight.
 
 **WHAT THAT MEANS FOR A READER**, and it is what `README.TXT`, the Wire page
 and the tier all say: an XT reaches the `]` prompt, answers a keystroke and
-draws - it is a machine to look at. A listing runs at about a **200th** of a
-real Apple's speed - the measured 0.51% is 1/196, and the idle 0.41% is 1/244
+draws - it is a machine to look at. A listing runs at about a **150th** of a
+real Apple's speed - the measured 0.64% is 1/156, and the idle 0.54% is 1/185
 - so what a real Apple does in a second takes minutes here, which is
-`README.TXT`'s own wording. The 386 is where this port is usable and a 486 is where
+`README.TXT`'s own wording. It was a 200th before section 4.3.1. The 386 is where this port is usable and a 486 is where
 it is comfortable, which is why the Wire record is **tier 3** (section 18.1),
 the same tier the C64 takes for the same honest reason.
 
 **Manual evidence, recorded** (section 16.5): `build/port-shots/
-wave7-xt-idle.png` and `wave7-xt-loop.png` are the machine at the prompt and
-inside the loop, with `0%` on the row - and the second one now **shows** the
-loop: `]FOR I = 1 TO 1000 : NEXT` with no `]` under it, which is what a
-running program looks like on an Apple. The pair used to be indistinguishable,
-which is the defect above. No gate rests on either.
+wave7b-xt-idle.png` and `wave7b-xt-loop.png` are the machine at the prompt and
+inside the loop **over section 4.3.1's controller**, with `0%` on the row -
+and the second one **shows** the loop: `]FOR I = 1 TO 1000 : NEXT` with no `]`
+under it, which is what a running program looks like on an Apple. The wave-7
+pair (`wave7-xt-idle.png` / `wave7-xt-loop.png`) is kept beside them as the
+before picture; the pair before THAT was indistinguishable, which is the
+defect above. `wave7b-xt-welcome-text/gr/hgr.png` are the same re-take of
+section 16.2.1's three. No gate rests on any of them.
 
 **AND THE ONE-TIME COLOUR FACT CANNOT BE EXERCISED ON ANY EMULATOR IN THIS
 TREE**, which is said here rather than left as an untested claim (section
@@ -4493,7 +4643,7 @@ requires **exactly** these keys, no more and no less.
 | `stem` | `APPLE2` - 6 characters, matches `[A-Z0-9_-]{1,8}` |
 | `title` | `Apple II+` - 23 characters maximum |
 | `kind` | **0** (Applications), as C64 and RUNCPM are |
-| `tier` | **3** (`486+`), from the MEASURED 0.41% of section 16.4.1 - the same tier the C64 takes, for the same honest reason. A judgement, and the release skill asks for every tier touched to be flagged as reviewable in the PR |
+| `tier` | **3** (`486+`), from the MEASURED 0.54% of section 16.4.1 - 0.41% when the record was written, and section 4.3.1's slice controller does not move a tier that is about a machine being USABLE rather than about a decimal - the same tier the C64 takes, for the same honest reason. A judgement, and the release skill asks for every tier touched to be flagged as reviewable in the PR |
 | `flags` | `["new"]` - only `new` and `floppy_only` are manifest-settable |
 | `files` | `APPLE2.O88`, `APPLE2.OVL`, `WELCOME.BAS`, `{name: APPLE2.TXT, source: apps/apple2/README.TXT}`, `{name: COPYING.A2, source: apps/apple2/COPYING}` - five, because the folder is the binding shape (section 16.2) and a listing nobody can open is a file that should not be published. A bare string is taken from `<os-repo>/build/`, which is where the first three live; `files[0]` must be exactly `<STEM>.O88` |
 | `summary` | one sentence, printable ASCII, the site card's |

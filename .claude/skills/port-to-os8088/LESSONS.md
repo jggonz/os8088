@@ -641,15 +641,35 @@ paragraph. What it learned that CWORD and RUNCPM had not, one line each:
   the result back through the same table - a tokeniser is exactly the tool
   whose output looks fine and runs wrong, and one byte out is a `]` prompt
   whose `LIST` is empty.
-- **THE EMULATED MACHINE'S SPEED IS THE SLICE, NOT THE INTERPRETER, AND THE
-  PLAN'S ESTIMATE WAS OUT BY EIGHT.** The port plan divided 8088 clocks by
-  6502 instructions and predicted 3-4% of a 1.02 MHz Apple on an XT; the
-  measurement is **0.41%** idle and **0.51%** in a BASIC loop, because the
-  package gets one wake a tick and runs
-  `A2_SLICE_MIN` = 256 cycles inside it (256 x 18.2 = 4,659 cycles a second =
-  0.46%). An estimate of emulated speed that does not have the SLICE and the
-  wake rate in it is not an estimate. Take the number on the slow machine
-  before the tier, the README row and the Wire page are written from it.
+- **THE PLAN'S SPEED ESTIMATE WAS OUT BY EIGHT, AND THE FIRST EXPLANATION OF
+  WHY WAS ALSO WRONG - WHICH IS THE LESSON.** The port plan divided 8088
+  clocks by 6502 instructions and predicted 3-4% of a 1.02 MHz Apple on an XT;
+  the first measurement was **0.41%** idle and **0.51%** in a BASIC loop, and
+  the wave wrote that down as "the ceiling is the SLICE and not the
+  interpreter", `A2_SLICE_MIN` = 256 cycles once a wake. Instrumenting the
+  package - host ticks summed around the slice, around the flush and around
+  the whole wake, read out of the guest - found three things that arithmetic
+  had guessed at, and it disagreed on two of them:
+  - the **interpreter** is ~415 8088 clocks an emulated 6502 *cycle*, about
+    1,250 an instruction against the plan's 400. That alone caps the port at
+    **1.13%**, so most of the factor of eight was never the slice's;
+  - the **flush** took 50% of every second at 110.9 ms a flush, against the
+    6502's 39%. The redraw, not the emulation, is what the remaining gap is;
+  - the slice really was pinned at the floor, but not for the stated reason.
+    A 256-cycle slice is 22.5 ms of a 55 ms tick - nowhere near it. The rule
+    doubled after **four consecutive** slices that cost no host tick and
+    halved on **one** that did, and solving `(1-p)^4/4 = p` puts that walk's
+    fixed point at **p = 0.14**: an asymmetric step size is a controller with
+    a set point in it, and the set point was 14% of a tick on every machine.
+    Measuring the crossing RATE over a window instead - the rate IS the duty
+    cycle - took the XT to 0.54% / 0.64% for 98 bytes.
+
+  **So: an estimate of emulated speed needs the slice, the wake rate AND the
+  redraw in it, and a rule with two different step sizes needs its fixed point
+  solved before it is believed.** Take the number on the slow machine before
+  the tier, the README row and the Wire page are written from it - and if the
+  number surprises you, put counters in the wake before writing down which
+  part of it was to blame.
 - **AND A PER-CENT FIELD RUNS OUT OF RESOLUTION BEFORE THE MACHINE DOES.**
   The status row reads `0%` on an XT, honestly, and that is worth saying in
   the SPEC beside the figure: a reader who sees `0%` and no explanation

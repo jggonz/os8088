@@ -78,10 +78,18 @@
  * ----------------------------------------------------------------------------
  * The polish: WELCOME.BAS on all four disks and on `make allapps` (section
  * 16.2), `vm/xt-apple2` and `vm/286-apple2`, `tests/apple2part.py`, the
- * measured XT speed - **0.41% of a 1.02 MHz Apple at the prompt and 0.51% in
- * a BASIC loop, so the status row reads 0%** (section 16.4.1) - and colour's
+ * measured XT speed (section 16.4.1) - and colour's
  * price said once on the CPU_8086 tier
  * (section 13.1). Nothing in the machine changed.
+ *
+ * ...AND A WAVE OF ITS OWN TOOK THAT MEASUREMENT UP: **0.54% of a 1.02 MHz
+ * Apple at the prompt and 0.64% in a BASIC loop**, the status row still
+ * reading 0%. The adaptation is a DUTY-CYCLE CONTROLLER now (section 4.3.1,
+ * and the declaration of a2_adn below carries the whole argument): the rule
+ * it replaces needed four consecutive clean slices to double against one
+ * tick-crossing to halve, and that asymmetry has a fixed point at 14 % of a
+ * host tick, so on a 4.77 MHz 8088 the budget never left A2_SLICE_MIN. The
+ * flush, not the slice, is where the rest of that machine's second goes.
  *
  * AND THE REVIEW ADDED ONE THING THAT IS NOT POLISH: `a2_fsx_main` had no
  * TIER PACING, so on the very machine the new colour message is about it
@@ -1243,8 +1251,33 @@ static void a2_warp_set(int on)
         a2_sound_stop();
 }
 
-static int a2_fastn;                        /* consecutive slices that cost no
-                                             * host tick at all */
+/* THE ADAPTATION IS A DUTY-CYCLE CONTROLLER, and section 4.3.1 is why.
+ *
+ * The rule this replaces doubled after FOUR consecutive slices that cost no
+ * host tick and halved on ONE that did, and that asymmetry has an equilibrium
+ * in it: a slice of length d crosses a tick boundary with probability d/55 (the
+ * wake is posted and dispatched, so its phase against the tick drifts freely -
+ * MEASURED, a 22.5 ms slice crossed on 0.40 of its wakes against the 0.41 the
+ * model predicts).  Solving `(1-p)^4/4 = p` puts the walk's fixed point at
+ * p = 0.14, so the budget sat at A2_SLICE_MIN for ever on any machine where a
+ * slice is a real fraction of a tick - which is exactly the 4.77 MHz 8088.
+ *
+ * So the crossing RATE is measured instead of a run of luck being waited for,
+ * and it is the duty cycle by definition: over a window of A2_ADAPT_N slices,
+ * `a2_adx` of them crossed, and `a2_adx / A2_ADAPT_N` IS the share of a host
+ * tick a slice is taking.  The target is A2_ADAPT_LO..A2_ADAPT_HI - six of
+ * eight, ~75 % of a tick - and the two steps are the same size, so the fixed
+ * point is the middle of the band rather than an artefact of the arithmetic.
+ *
+ * The old rule's FAST arm survives as `a2_adx == 0`: a window in which nothing
+ * cost a tick at all is a machine the budget is nowhere near, and it doubles
+ * exactly as it used to, so a 386 still reaches the cap in a fraction of a
+ * second. */
+#define A2_ADAPT_N   8                      /* slices in a window */
+#define A2_ADAPT_LO  5                      /* <= this many crossings: raise */
+#define A2_ADAPT_HI  7                      /* >= this many: lower */
+static int a2_adn;                          /* slices in this window */
+static int a2_adx;                          /* ...of them that cost a host tick */
 static unsigned a2_clk;                     /* the emulated clock, a 16-bit
                                              * wrapping cycle count. It is the
                                              * paddles' clock and nothing
@@ -2101,26 +2134,40 @@ void os88_onwake(void *win)
 
         a2_slice();
         if (a2_state == A2_ST_RUN) {
-            if (os88_ticks() == t0) {
-                a2_fastn++;
-                if (a2_fastn >= 4) {
-                    a2_fastn = 0;
-                    if (a2_budget < a2_slice_cap()) {
-                        a2_budget += a2_budget;
-                        /* THE DOUBLING IS CLAMPED AND THE TEST IS `<= 0` AS
-                         * WELL AS `>`: `int` is SIXTEEN BITS here, so a
-                         * doubling that landed past 32,767 would arrive at the
-                         * core NEGATIVE and expire before the first fetch -
-                         * a machine stopped dead by its own speed. */
-                        if (a2_budget > a2_slice_cap() || a2_budget <= 0)
-                            a2_budget = a2_slice_cap();
-                    }
-                }
+            unsigned el = (unsigned)(os88_ticks() - t0);
+
+            if (el >= 2u) {
+                /* THE ONE HARD CASE: the slice ran past a WHOLE host tick, so
+                 * it is not a duty cycle any more - it is the UI task stopped
+                 * for a tick it will never get back. Halve on the spot and
+                 * start the window again; nothing here waits for statistics
+                 * about a slice that has already overrun. */
+                a2_adn = 0;
+                a2_adx = 0;
+                a2_budget = a2_budget / 2;
             } else {
-                a2_fastn = 0;
-                if (a2_budget > A2_SLICE_MIN)
-                    a2_budget = a2_budget / 2;
+                a2_adn++;
+                if (el)
+                    a2_adx++;
+                if (a2_adn >= A2_ADAPT_N) {
+                    if (a2_adx == 0)
+                        a2_budget += a2_budget;      /* nowhere near it yet */
+                    else if (a2_adx <= A2_ADAPT_LO)
+                        a2_budget += a2_budget / 8;
+                    else if (a2_adx >= A2_ADAPT_HI)
+                        a2_budget -= a2_budget / 8;
+                    a2_adn = 0;
+                    a2_adx = 0;
+                }
             }
+            /* THE CLAMP IS ONE PLACE AND THE TEST IS `<= 0` AS WELL AS `>`:
+             * `int` is SIXTEEN BITS here, so a doubling that landed past
+             * 32,767 would arrive at the core NEGATIVE and expire before its
+             * first fetch - a machine stopped dead by its own speed. */
+            if (a2_budget > a2_slice_cap() || a2_budget <= 0)
+                a2_budget = a2_slice_cap();
+            if (a2_budget < A2_SLICE_MIN)
+                a2_budget = A2_SLICE_MIN;
         }
     }
     a2_speed_fold();

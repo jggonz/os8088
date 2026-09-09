@@ -1571,6 +1571,30 @@ cycles a second, 0.46%. Lifting that ceiling is a scheduler decision with a
 UI-latency price and was not taken here. `APPLE2-SPEC` 16.4.1 is the record,
 with its date and machine.
 
+**AND IT WAS TAKEN IN A WAVE OF ITS OWN, AFTERWARDS: 0.54% IDLE AND 0.64%
+UNDER BASIC** (`APPLE2-SPEC` 4.3.1 and 16.4.1, both re-measured on the same
+machine with the before rows kept). What pinned the budget was not the tick
+being near - a 256-cycle slice measures 22.5 ms of a 55 ms tick - but the
+rule's own asymmetry: FOUR consecutive clean slices to double against ONE
+crossing to halve has a fixed point at **14 %** of a tick whatever the
+machine, so the budget could not leave its floor. The adaptation is a
+**duty-cycle controller** now - the crossing RATE over a window of eight
+slices IS the share of a tick a slice is taking - and it settles at 512 cycles
+idle and 648 in a `FOR/NEXT`, the slice being ~40 ms of a 55 ms tick in both.
+**+98 bytes resident.** The menu still comes down: pressed while the loop
+runs, the pull-down is on the glass in a median of **2 host ticks** either
+way, with the worst case one tick longer.
+
+**AND THE INSTRUMENT FOUND THE REAL CEILING, WHICH IS NOT THE SLICE.** Built
+once with tick counters around the slice, the flush and the whole wake, the
+XT spent **39 %** of its second in the 6502 and **50 %** inside `a2_flush` at
+110.9 ms a flush. The core's own throughput on this machine is ~11,500
+emulated cycles a second - **1.13 %** of an Apple - so everything between
+0.54 % and that is redraw, and the plan's "3-4 %" was out by six on the
+INTERPRETER before the slice is reached at all: ~415 8088 clocks an emulated
+6502 CYCLE, about 1,250 an instruction, against the plan's 400. The flush's
+pacing is section 7.8's tier rule and was deliberately left alone.
+
 **AND THE FIGURE IS WHAT THE TIER, THE README AND THE WIRE PAGE NOW SAY.**
 Tier **3** (`486+`), the C64's tier for the C64's reason; `README.TXT` says an
 XT is a machine to look at and a 386 is where the port is usable; the Wire

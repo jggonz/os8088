@@ -35,13 +35,13 @@ and still draws, because the character-generator decode is in the package and
 not in the overlay. The licence is a document and is read by nobody but you,
 so it may sit wherever it lands.
 
-HOW LONG WELCOME.BAS TAKES, ON THE SLOWEST MACHINE THIS RUNS ON. On a 4.77MHz
-XT the text screen is up 6 seconds after RUN, the lo-res screen takes about a
-minute and a half to draw its bands, and the hi-res fan about a minute and
-three quarters. Both draw progressively - a band or a line at a time - so you
-can watch them arrive. It is the emulated Apple that is slow and not the
-window; the same program is a blink on a 486. The numbers were measured on
-the machine, not estimated.
+HOW LONG WELCOME.BAS TAKES, ON THE SLOWEST MACHINE THIS RUNS ON. On a
+4.77MHz XT the text screen is up two or three seconds after RUN, and the
+lo-res screen and the hi-res fan take about a minute and a quarter each.
+Both draw progressively - a band or a line at a time - so you can watch them
+arrive. It is the emulated Apple that is slow and not the window; the same
+program is a blink on a 486. The numbers were measured on the machine, not
+estimated.
 
 LICENCE
 -------
@@ -160,11 +160,10 @@ row is what that came to, measured against a 1.02 MHz Apple. CPU > Warp is
 this port's speed control - it lifts the ceiling the slice may grow to.
 
 HOW FAST IT ACTUALLY IS, MEASURED AND NOT ESTIMATED. On an IBM PC/XT - an
-8088 at 4.77 MHz - the machine runs the Apple at 0.41% of 1.02 MHz at the
-prompt and 0.51% inside a BASIC loop, so the status row reads 0% and stays
+8088 at 4.77 MHz - the machine runs the Apple at 0.54% of 1.02 MHz at the
+prompt and 0.64% inside a BASIC loop, so the status row reads 0% and stays
 there: the `]` prompt answers, typing arrives, and a listing that would take
-a real Apple a second takes minutes.
-That is a machine to LOOK at rather than to use. It is usable on a 386 and
-comfortable on a 486; the percentage on the row is the honest number for
-whatever you are running it on, and it is measured every second rather than
-assumed.
+a real Apple a second takes minutes. That is a machine to LOOK at rather
+than to use. It is usable on a 386 and comfortable on a 486; the percentage
+on the row is the honest number for whatever you are running it on, and it
+is measured every second rather than assumed.
