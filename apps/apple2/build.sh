@@ -124,14 +124,86 @@ apps/apple2/hosttest/a2memtest.sh
 # of apps/apple2/*.c and requires the array to contain each one, AND requires
 # the corpus to reach an explicit MINIMUM, so that "no literals at all" is a
 # failure rather than a pass.
+#
+# ...AND IT WALKS THE COMPOSED MESSAGES TOO. ovl_a2_named("Loaded ", name)
+# builds "Loaded <name>" into a buffer and hands a2_say a VARIABLE, so neither
+# verb ever reached the corpus - a second route around a gate, added in the
+# same wave that designed around the first one call along (a2cmd.c's "TWO
+# CALLS AND NOT A TERNARY"). Every call site of BOTH must have a literal first
+# argument, and a composed message is checked as verb + the 12 cells a FAT12
+# name can be.
 python3 - <<'PY'
 import re, sys, glob
-A2_SAY_MIN = 5
+A2_SAY_MIN = 20
+A2_ROW_CELLS = 26                           # the status row, a2uitest's bound
+A2_NAME_MAX = 12                            # 8.3 with the dot
 said = set()
+bad = []
 for f in glob.glob('apps/apple2/*.c'):
     src = open(f).read()
     for m in re.finditer(r'a2_say\(\s*"((?:[^"\\]|\\.)*)"', src):
         said.add(m.group(1))
+    # EVERY call site of either, literal or not - a gate that only sees the
+    # literals is a gate that stops looking the moment somebody composes one.
+    # Comments are stripped first (they discuss both names), prototypes and
+    # definitions are `(const char`, and a2_say(a2_progmsg) is THE ONE
+    # composed call: it is ovl_a2_named's own tail, and what the gate checks
+    # for it is the VERB at every call site of ovl_a2_named below.
+    code = re.sub(r'/\*.*?\*/', ' ', src, flags=re.S)
+    for m in re.finditer(r'(?<![A-Za-z0-9_])((?:ovl_)?a2_(?:say|named))'
+                         r'\(\s*([A-Za-z0-9_"]*)', code):
+        arg = m.group(2)
+        if arg.startswith('"') or arg == 'const' or arg == 'a2_progmsg':
+            continue
+        bad.append('%s: %s(%s...) - the first argument is not a literal, so '
+                   'the length gate cannot see it' % (f, m.group(1), arg))
+    for m in re.finditer(r'ovl_a2_named\(\s*"((?:[^"\\]|\\.)*)"', code):
+        verb = m.group(1)
+        if len(verb) + A2_NAME_MAX > A2_ROW_CELLS:
+            bad.append('%s: ovl_a2_named("%s", ...) is %d cells with a %d-char '
+                       'name and the row is %d'
+                       % (f, verb, len(verb) + A2_NAME_MAX, A2_NAME_MAX,
+                          A2_ROW_CELLS))
+# ...AND THE TOASTS, WHICH ARE A DIFFERENT ROW WITH A DIFFERENT BOUND.
+# TOAST_MAX is 24 characters (kernel/toast.inc:85) and a longer one is
+# TRUNCATED rather than refused, so `APPLE2: no APPLE2.OVL beside the program
+# - the menu commands will refuse` reached the glass as
+# `APPLE2: no APPLE2.OVL be` and the consequence was in the half that was cut.
+# Nothing was checking, which is why it shipped.
+TOAST_MAX = 24
+# ...AND THE COMPOSED ONES, WHICH IS THE ARM THAT WAS MISSING. A literal-only
+# walk cannot see os88_toast(line, 0), and `line` is exactly the message this
+# wave found truncated at 24 characters - so the arm that mattered most was
+# the one nothing checked, while the a2_say arm beside it already failed a
+# non-literal outright. A composed toast is allowed only by NAME, with the
+# bound its composer proves in its own header; anything else is `bad`.
+TOAST_COMPOSED = {
+    'a2_jamline': 18,       # `6502: JAM at $` + four hex digits (a2_jam)
+    'line': 22,             # `APPLE2: 64K, ` + a 3-digit KB figure + `K free`
+}                           #   - a2_refuse_kb's own arithmetic
+for f in glob.glob('apps/apple2/*.c'):
+    code = re.sub(r'/\*.*?\*/', ' ', open(f).read(), flags=re.S)
+    for m in re.finditer(r'os88_toast\(\s*((?:"(?:[^"\\]|\\.)*"\s*)+)', code):
+        lit = ''.join(re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1)))
+        if len(lit) > TOAST_MAX:
+            bad.append('%s: os88_toast("%s") is %d characters and TOAST_MAX '
+                       'is %d - the rest is silently cut off the glass'
+                       % (f, lit, len(lit), TOAST_MAX))
+    for m in re.finditer(r'os88_toast\(\s*([A-Za-z_][A-Za-z0-9_]*)', code):
+        name = m.group(1)
+        if name not in TOAST_COMPOSED:
+            bad.append('%s: os88_toast(%s, ...) is composed and is not in '
+                       'TOAST_COMPOSED - the length gate cannot see it, and '
+                       'TOAST_MAX %d TRUNCATES rather than refusing'
+                       % (f, name, TOAST_MAX))
+        elif TOAST_COMPOSED[name] > TOAST_MAX:
+            bad.append('%s: os88_toast(%s, ...) is bounded at %d and '
+                       'TOAST_MAX is %d'
+                       % (f, name, TOAST_COMPOSED[name], TOAST_MAX))
+if bad:
+    for b in bad:
+        print('a2msgs: ' + b)
+    sys.exit(1)
 h = open('apps/apple2/hosttest/a2uitest.c').read()
 i = h.index('static const char *msgs[] = {')
 listed = set(re.findall(r'"((?:[^"\\]|\\.)*)"', h[i:h.index('};', i)]))
@@ -146,5 +218,7 @@ if len(said) < A2_SAY_MIN:
           'expects at least %d - a corpus this small is a gate that is not '
           'looking' % (len(said), A2_SAY_MIN))
     sys.exit(1)
-print('a2msgs: %d a2_say literal(s), every one in the length gate' % len(said))
+print('a2msgs: %d a2_say literal(s), every one in the length gate, every '
+      'a2_say/ovl_a2_named call site literal, and every os88_toast - literal '
+      'or composed - inside TOAST_MAX' % len(said))
 PY

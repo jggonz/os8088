@@ -129,12 +129,13 @@ static const char a2_sep[] = D "-----------------";
  * APPLE2-SPEC section 12's reason: there is no Disk II in this PR, and a
  * listing has to get in somehow. */
 static const char *a2_file_items[] = {
-    D "Load Program...",                    /* OURS (section 12). The 6502 is
-                                             * here now: what is not is the
-                                             * BODY, which is wave 4's - so
-                                             * this row is greyed off
-                                             * a2_have_cmd and not
-                                             * a2_have_cpu (section 10.3) */
+    D "Load Program...",                    /* OURS (section 12). Greyed off
+                                             * a2_have_cmd and not a2_have_cpu
+                                             * (section 10.3), because what it
+                                             * waited for was the BODY - and
+                                             * wave 4 wrote it. The `D` here is
+                                             * only the launch spelling;
+                                             * a2_menu_state rewrites it */
     D "Save Program...",                    /* OURS (section 12). a2_have_cmd,
                                              * for the row above's reason */
     a2_sep,
@@ -143,7 +144,21 @@ static const char *a2_file_items[] = {
                                              * RESIDENT half: it is the one
                                              * command that must work on a
                                              * disk whose APPLE2.OVL is
-                                             * missing (section 10.1) */
+                                             * missing (section 10.1).
+                                             * IT DOES NOT CONFIRM AND MII
+                                             * DOES (mii_mui_menus.c:243-249,
+                                             * `Do you really want to quit the
+                                             * emulator?`), which section 10.2
+                                             * records as a stated departure:
+                                             * the OS owns the close, a close
+                                             * box is one click away with no
+                                             * confirmation at all, so a
+                                             * confirming Quit is the slower
+                                             * of two routes to the same loss
+                                             * and does not protect the fast
+                                             * one. Power On confirms because
+                                             * nothing in the OS stands behind
+                                             * it */
 };
 
 /* --- Edit ---------------------------------------------------------------- */
@@ -152,10 +167,11 @@ static const char *a2_file_items[] = {
  * the text page out - and it is here because a machine you can paste INTO and
  * not out of is half a clipboard. */
 static const char *a2_edit_items[] = {
-    D "Copy",                               /* OURS. There IS a text page now;
-                                             * the reader that walks it is
-                                             * wave 4's, so this is greyed off
-                                             * a2_have_cmd (section 10.3) */
+    D "Copy",                               /* OURS. Greyed off a2_have_cmd
+                                             * (section 10.3) - the reader that
+                                             * walks the text page is wave 4's
+                                             * and is written. The `D` is the
+                                             * launch spelling only */
     D "Paste"                               /* interface.cpp:365 */
 };
 
@@ -220,20 +236,24 @@ static const char *a2_mach_items[] = {
                                              * - neither of which touches RAM
                                              * - are the recovery a real II+
                                              * user has */
-    D "Configure Slots...",                 /* m_machine_menu. THE FACT:
-                                             * No Disk II in this build.
-                                             * (section 10.3, and Disk II is a
-                                             * follow-up PR.) THE SECOND
-                                             * SENTENCE IS WAVE 4'S - `Load
+    D "Configure Slots...",                 /* m_machine_menu. THE FACT, WHOLE
+                                             * AGAIN NOW THAT BOTH ROUTES
+                                             * EXIST (section 10.3):
+                                             * No Disk II in this build. Load
                                              * Program reads an Applesoft
                                              * program, and Paste types a
-                                             * listing in` is untrue of a
-                                             * build whose File > Load
-                                             * Program... and Edit > Paste are
-                                             * both greyed, and SPEC.md 47's
-                                             * rule 5 is that a greying states
-                                             * a FACT, never a guess about a
-                                             * later wave */
+                                             * listing in.
+                                             * Wave 1 shortened it to the
+                                             * first sentence because the two
+                                             * routes it names were themselves
+                                             * greyed, and a greying that
+                                             * points the reader at something
+                                             * they cannot do is the guess
+                                             * SPEC.md 47's rule 5 forbids.
+                                             * WAVE 4 wrote both, so the
+                                             * shortening has stopped being
+                                             * true. Disk II is still a
+                                             * follow-up PR */
     D "Joystick...",                        /* m_machine_menu, and it is
                                              * `.disabled = 1` in MII's OWN
                                              * table - the authentic grey.
@@ -258,12 +278,23 @@ static const char *a2_mach_items[] = {
                                              * Open-Apple key at all, it has
                                              * three inputs at $C061-$C063 */
     a2_sep,
-    "Toggle Fullscreen",                    /* m_video_menu. LIVE, and
+    OFF "Toggle Fullscreen",                /* m_video_menu. LIVE, and
                                              * RESIDENT: a WF_FULL window has
                                              * no menu bar, so a chord that
                                              * had to load APPLE2.OVL would
                                              * refuse on a bar the user cannot
-                                             * see (section 6.3) */
+                                             * see (section 6.3).
+                                             * THE TWO-GLYPH COLUMN IS RULE 5,
+                                             * and this row-group is where it
+                                             * was ragged: `Color NTSC`,
+                                             * `Flashing text` and `Mute` all
+                                             * carry the prefix and these two
+                                             * did not, so three labels in one
+                                             * group started two cells right of
+                                             * the two around them - the rule's
+                                             * own words for the defect, and
+                                             * visible in wave 4's own
+                                             * evidence. 19 of MENU_MAXCH 24 */
     D OFF "Color NTSC",                     /* m_video_menu, FOLDING `Color
                                              * NTSC (Alt)`, `Color Mega2`,
                                              * `Green` and `Amber` by rule 3.
@@ -308,11 +339,13 @@ static const char *a2_mach_items[] = {
                                              * a2_have_snd that greys it, so
                                              * wave 5 revives it with nothing
                                              * else moving */
-    D "Louder"                              /* m_audio_menu, FOLDING `Quieter`
+    D OFF "Louder"                          /* m_audio_menu, FOLDING `Quieter`
                                              * by rule 3. THE FACT: The
                                              * Apple's speaker is a one-bit
                                              * toggle. There is no volume on
-                                             * it. (section 10.3) */
+                                             * it. (section 10.3)
+                                             * ...and the column, for the row
+                                             * above's reason. 8 of 24 */
 };
 
 /* --- CPU ----------------------------------------------------------------- */
@@ -330,19 +363,31 @@ static const char *a2_mach_items[] = {
 static const char *a2_cpu_items[] = {
     D ON "Normal: 1MHz",                    /* m_cpu_menu. Its MARK is the
                                              * measurement (MII's rule above)
-                                             * and its GREYING is a2_have_cmd,
+                                             * and its GREYING was a2_have_cmd,
                                              * because the row's body - the
                                              * thing that turns Warp off - is
-                                             * wave 4's. The `D` and the `ON`
+                                             * WAVE 4'S AND IS WRITTEN
+                                             * (a2cmd.c). The `D` and the `ON`
                                              * here are only the launch
                                              * spelling; a2_menu_state rewrites
                                              * both */
     D OFF "Fast: 3.5MHz",                   /* m_cpu_menu. THE FACT: There is
-                                             * no speed control in this build.
-                                             * The core runs the whole of each
-                                             * wake's slice and the status row
-                                             * reports what that came to.
-                                             * (section 10.3) */
+                                             * no 3.5MHz mode. CPU > Warp is
+                                             * this port's speed control and
+                                             * is beside it. (section 10.3)
+                                             *
+                                             * THE SECOND SENTENCE IS BACK,
+                                             * AND ITS REASON EXPIRED IN WAVE
+                                             * 4. Wave 2 struck it because the
+                                             * row it pointed at was greyed
+                                             * too, so it named a route the
+                                             * reader could not take; `Warp`
+                                             * is LIVE now, so the fact is a
+                                             * fact again. A greying may not
+                                             * outlive its reason, and neither
+                                             * may the removal of one - the
+                                             * same test this wave applied to
+                                             * `Configure Slots...` */
     D OFF "Warp",                           /* OURS: the speed control the row
                                              * above points at, and wave 4's.
                                              * Greyed off a2_have_cmd, and
@@ -417,6 +462,16 @@ static struct os88_menuset a2_menus = {
  * exactly that. MII's dynamic retitling (Stop -> Stopped, Running ->
  * Continue) is wired here and takes effect the moment there is a machine to
  * be stopped. */
+/* a2_running - MII's `mii->state == MII_RUNNING` (mii_mui_menus.c:180-196),
+ * and it is TWO facts on this port rather than one: a jammed machine is not
+ * running and neither is a stopped one, and both spell the pair Stopped /
+ * Continue. It is written once because the retitling arm asks it twice and
+ * two copies of a condition are two conditions. */
+static int a2_running(void)
+{
+    return (a2_state == A2_ST_RUN && !a2_pause) ? 1 : 0;
+}
+
 static void a2_menu_state(void)
 {
     a2_file_items[A2_I_LOAD] = a2_have_cmd ? "Load Program..."
@@ -476,7 +531,15 @@ static void a2_menu_state(void)
     a2_cpu_items[A2_I_NORMAL] = (a2_pct >= 90 && a2_pct <= 110)
         ? (a2_have_cmd ? ON "Normal: 1MHz" : D ON "Normal: 1MHz")
         : (a2_have_cmd ? OFF "Normal: 1MHz" : D OFF "Normal: 1MHz");
-    a2_cpu_items[A2_I_WARP] = a2_have_cmd ? OFF "Warp" : D OFF "Warp";
+    /* WARP IS A CHECK ITEM, on rule 5's two spellings and NOT on MENU_DIS:
+     * greying the row that is ON would report the feature as unavailable and
+     * make it impossible to turn off. It is one of the three radio partners
+     * that own the two-glyph column (`Normal: 1MHz`, `Fast: 3.5MHz`, `Warp`),
+     * so both spellings carry it and the label does not jump two cells when
+     * the state changes. */
+    a2_cpu_items[A2_I_WARP] = a2_have_cmd
+        ? (a2_warp ? ON "Warp" : OFF "Warp")
+        : D OFF "Warp";
     a2_mach_items[A2_I_MUTE] = a2_have_snd ? OFF "Mute" : D OFF "Mute";
     /* ...AND SO DO Stop AND Running, WHICH IS RULE 5 AGAIN. The first version
      * gave the marked spelling the two-glyph prefix and the unmarked one
@@ -484,11 +547,22 @@ static void a2_menu_state(void)
      * machine started and stopped - invisible today only because a2_have_cmd
      * is never set and all four rows are greyed. MII does not do this: it
      * keeps `mark` a field of its own and only fills or empties the glyph. */
-    a2_cpu_items[A2_I_STOP] = a2_have_cmd
-        ? ((a2_state == A2_ST_RUN) ? OFF "Stop" : ON "Stopped")
+    /* ...AND A JAMMED MACHINE GREYS BOTH, which is a2_jam's own sentence -
+     * "there is no machine left to stop" - acted on rather than merely
+     * written. The core never runs again after A2_ST_JAM, so `Continue` was a
+     * live item that could only change a flag nothing reads, and its
+     * `Running.` overwrote the JAM line that says why the machine is dead
+     * (a2cmd.c carries the whole account). THE FACT IS ALREADY ON THE GLASS
+     * and is permanent: a2_status draws `6502: JAM at $xxxx` in the message
+     * area for as long as the state lasts, which is what SPEC.md 47 asks of a
+     * greyed row and is why these two need no sentence of their own. The
+     * launch spelling comes back with the `D`, because `Stopped` / `Continue`
+     * would describe a machine that could be continued. */
+    a2_cpu_items[A2_I_STOP] = (a2_have_cmd && a2_state != A2_ST_JAM)
+        ? (a2_running() ? OFF "Stop" : ON "Stopped")
         : D OFF "Stop";
-    a2_cpu_items[A2_I_RUN] = a2_have_cmd
-        ? ((a2_state == A2_ST_RUN) ? ON "Running" : OFF "Continue")
+    a2_cpu_items[A2_I_RUN] = (a2_have_cmd && a2_state != A2_ST_JAM)
+        ? (a2_running() ? ON "Running" : OFF "Continue")
         : D OFF "Running";
 }
 

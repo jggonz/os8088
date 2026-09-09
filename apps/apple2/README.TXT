@@ -65,6 +65,23 @@ the `]` prompt come up out of the machine's own ROM, with the cursor
 flashing; Applesoft answers, the keyboard is the II Plus's own byte map, and
 Machine > Control-Reset and Machine > Open-Apple-Control-Reset are live.
 
+A PROGRAM GETS IN AND OUT TWO WAYS. Edit > Paste types a listing from the
+system clipboard into the keyboard, at whatever rate the machine drinks it -
+lower case folds to upper, because a II Plus keyboard has none - so a BASIC
+listing written in Note Pad and copied runs here. Edit > Copy puts the text
+page back on the clipboard, one line a row with the trailing spaces off.
+File > Save Program... writes a tokenised Applesoft program to a `.BAS` file
+and File > Load Program... reads one back; a `.BAS` beside APPLE2.O88 is
+double-clickable on its own, and a program saved from a machine whose program
+area was somewhere else is repaired on the way in, as Applesoft's own
+FIX.LINKS does. A file that is not a tokenised Applesoft program is refused by
+name, and nothing is written into the machine until it has been checked.
+
+Machine > Power On cold-starts the machine and asks first. CPU > Stop and
+CPU > Continue stop and start the 6502; CPU > Warp lifts the ceiling on how
+much of a slice it may run, which does nothing on a 4.77 MHz 8088 and says
+so.
+
 ALL THREE SCREENS ARE HERE: the 40x24 TEXT page with the character generator
 read out of the ROM, the seven-pixel cell, inverse and flashing text; 40x48
 LO-RES blocks; and 280x192 HI-RES - with MIXED (a graphics picture over four
@@ -91,8 +108,6 @@ Still to come, and docs/APPLE2-PORT-PLAN.md in the source tree says which
 wave has which:
 
     colour, which is the foreign video mode at full screen
-    File > Load Program... and Save Program..., and Edit > Copy and Paste
-    Machine > Power On, which is greyed until it has its confirmation
     the paddles, which answer centre
     the speaker
     the Disk II
@@ -101,6 +116,7 @@ A menu item that cannot work in this build is present and GREYED, with the
 fact that greys it beside it in the source. Nothing here is silently
 missing, and nothing is live that can only answer "not yet".
 
-There is no speed control: the 6502 runs the whole of every slice the OS
-gives it, and the percentage at the right-hand end of the status row is what
-that came to, measured against a 1.02 MHz Apple.
+There is no 3.5MHz mode and no throttle: the 6502 runs the whole of every
+slice the OS gives it, and the percentage at the right-hand end of the status
+row is what that came to, measured against a 1.02 MHz Apple. CPU > Warp is
+this port's speed control - it lifts the ceiling the slice may grow to.

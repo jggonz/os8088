@@ -234,11 +234,45 @@ static int a2_video_set(int which, int on)
  * WRITE, at $C010-$C01F, $C030-$C03F, $C050-$C05F and $C070-$C07F. */
 static int a2_kb_code;                      /* the Apple byte, bit 7 clear */
 static int a2_kb_ready;                     /* ...and the strobe */
+/* **THE PASTE'S CLAIM LIVES HERE, BESIDE THE LATCH, AND THAT IS A COST
+ * DECISION RATHER THAN A FILING ONE.** The three arms below used to ask
+ * `a2_paste_live()`, and cc8086 emits a REAL near call for it - a bp frame,
+ * two memory compares and a ret - on EVERY $C000 read, every $C010 read and
+ * every $C010 write, whether or not a paste exists. An idle Apple II at `]`
+ * does nothing but poll $C000 (the Monitor's KEYIN loop is one read per ~15
+ * emulated cycles) and every echoed keystroke strobes $C010, so that was a
+ * permanent per-emulated-cycle tax on every session, charged straight out of
+ * the per cent the status row reports, for a feature most sessions never use.
+ * A word already in DS costs one `cmp`/`jz`, which is what the comment on the
+ * $C000 arm claimed all along and now describes.
+ *
+ * a2kbd.c OWNS THE REST OF THE QUEUE and the invariant that makes this legal
+ * is its: a2_paste_take calls a2_paste_stop the moment the last byte is
+ * consumed, so `a2_paste_seg != 0` and `a paste is in flight` are the same
+ * fact and there is no second state to keep in step. */
+static unsigned a2_paste_seg;               /* 0 = no paste in flight */
+static int a2_paste_up;                     /* THE BYTE IN THE LATCH IS EDIT >
+                                             * PASTE'S, and it lives here
+                                             * beside the latch rather than
+                                             * with the rest of the queue in
+                                             * a2kbd.c because a2_kb_put is
+                                             * the one place that CLEARS it.
+                                             * The strobe at $C010 advances
+                                             * the queue only while it is set:
+                                             * a paste presents into a free
+                                             * latch now (a2_paste_peek), so a
+                                             * key the user typed sits in the
+                                             * latch instead, and a strobe
+                                             * that consumed a queue byte for
+                                             * a keystroke would DROP one
+                                             * pasted character per key. */
 
 static void a2_kb_put(int b)
 {
     a2_kb_code = b & 0x7F;
     a2_kb_ready = 1;
+    a2_paste_up = 0;                        /* the user's key, not the paste's
+                                             * - see above */
 }
 
 /* ==========================================================================
@@ -388,8 +422,23 @@ static int a2_io_rd(unsigned a)
     lo = (int)(a & 0x00FF);
     switch (lo >> 4) {
     case 0x0:                               /* $C000-$C00F, the latch */
+        /* EDIT > PASTE IS A PEEK HERE (apple2emu's keyboard_read,
+         * src/keyboard.cpp:176-195): while a paste is in flight the next byte
+         * is PRESENTED rather than queued, so the machine takes it at its own
+         * rate and can never be overrun. a2_paste_peek does the folds and the
+         * latch write; with no paste in flight this is one compare against a
+         * word of DS - see a2_paste_seg above, which is in THIS file for
+         * exactly that reason (APPLE2-SPEC section 6.5). */
+        if (a2_paste_seg)
+            a2_paste_peek();
         return a2_kb_code | (a2_kb_ready ? 0x80 : 0);
     case 0x1:                               /* $C010-$C01F, the strobe */
+        if (a2_paste_seg)
+            a2_paste_take();                /* ...and THIS is the consume half
+                                             * (keyboard_clear, :198-215): the
+                                             * pointer advances and the next
+                                             * $C000 read presents the next
+                                             * byte */
         a2_kb_ready = 0;
         return A2_FLOAT;
     case 0x3:                               /* $C030-$C03F, the speaker */
@@ -422,6 +471,13 @@ static void a2_io_wr(unsigned a, int v)
     lo = (int)(a & 0x00FF);
     switch (lo >> 4) {
     case 0x1:
+        if (a2_paste_seg)
+            a2_paste_take();                /* the strobe is cleared by a WRITE
+                                             * as well as by a read (section
+                                             * 5.1), and a paste has to
+                                             * advance on both or a program
+                                             * that uses `STA $C010` types the
+                                             * first character for ever */
         a2_kb_ready = 0;
         break;
     case 0x3:

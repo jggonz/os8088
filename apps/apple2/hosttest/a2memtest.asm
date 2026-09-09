@@ -83,6 +83,7 @@ SEG_STACK   equ 0x1000
 SEG_KERNEL  equ 0x3000
 SEG_RAM     equ 0x4000
 SEG_ROM     equ 0x5000
+SEG_CLAIM   equ 0x6000        ; a transient heap claim, for the wave-4 movers
 IMG_SECTORS equ 64
 
 %macro PUSHI 1
@@ -814,6 +815,134 @@ body:
     call putc
     inc bp
 
+    ; --- (10) THE WAVE-4 MOVERS: a2_zzcopy_in/out, a2_scan0, a2_copy_row -----
+    ; FAR TO FAR, neither end a C pointer (APPLE2-SPEC section 3.4), plus the
+    ; linked-line walk's scanner and Edit > Copy's per-byte loop. SEG_CLAIM
+    ; stands in for a transient heap claim.
+.w4:
+    call astabfill
+    call ramclear
+    push es
+    mov ax, SEG_CLAIM
+    mov es, ax
+    mov di, 0x0100                  ; 24 bytes of source in the "claim"
+    mov cx, 24
+    xor al, al
+.w4f:
+    mov [es:di], al
+    inc di
+    inc al
+    loop .w4f
+    mov byte [es:0x0400], 0x11      ; ...and the scanner's subject: three
+    mov byte [es:0x0401], 0x22      ; non-zero bytes then a zero
+    mov byte [es:0x0402], 0x33
+    mov byte [es:0x0403], 0x00
+    mov byte [es:0x0404], 0x44
+    pop es
+
+    mov word [pushes], 4
+    PUSHI 24
+    PUSHI 0x0100
+    PUSHI SEG_CLAIM
+    PUSHI 0x0B00
+    call disc_call
+    dw _a2_zzcopy_in
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    mov cx, 24
+    xor bx, bx
+.w4c:
+    mov al, bl
+    cmp [es:bx+0x0B00], al
+    jne .w4pf
+    inc bx
+    loop .w4c
+    pop es
+
+    mov word [pushes], 4
+    PUSHI 24
+    PUSHI 0x0B00
+    PUSHI 0x0200
+    PUSHI SEG_CLAIM
+    call disc_call
+    dw _a2_zzcopy_out
+    push es
+    mov ax, SEG_CLAIM
+    mov es, ax
+    mov cx, 24
+    xor bx, bx
+.w4d:
+    mov al, bl
+    cmp [es:bx+0x0200], al
+    jne .w4pf
+    inc bx
+    loop .w4d
+    pop es
+
+    ; the scanner: the zero at $0403, and $FFFF when the window ends first
+    mov word [pushes], 3
+    PUSHI 16
+    PUSHI 0x0400
+    PUSHI SEG_CLAIM
+    call disc_call
+    dw _a2_scan0
+    cmp ax, 0x0403
+    jne .w4e
+    mov word [pushes], 3
+    PUSHI 3                         ; ...a window that stops one short of it
+    PUSHI 0x0400
+    PUSHI SEG_CLAIM
+    call disc_call
+    dw _a2_scan0
+    cmp ax, 0xFFFF
+    jne .w4e
+
+    ; a2_copy_row: the mask, the fold, the TRIM and the CR. `HI I` in three
+    ; attribute forms, padded with normal spaces.
+    mov si, _a2_scrow
+    mov cx, 40
+    mov al, 0xA0
+.w4s:
+    mov [si], al
+    inc si
+    loop .w4s
+    mov byte [_a2_scrow+0], 0xC8    ; normal  H
+    mov byte [_a2_scrow+1], 0x49    ; flashing I
+    mov byte [_a2_scrow+2], 0xA0    ; a space in the middle, which stays
+    mov byte [_a2_scrow+3], 0x09    ; inverse I
+    mov word [pushes], 3
+    PUSHI 40
+    PUSHI 0x0300
+    PUSHI SEG_CLAIM
+    call disc_call
+    dw _a2_copy_row
+    cmp ax, 5                       ; four cells and the CR: the 36 trailing
+    jne .w4e                        ; spaces came off
+    push es
+    mov ax, SEG_CLAIM
+    mov es, ax
+    cmp byte [es:0x0300], 'H'
+    jne .w4pf
+    cmp byte [es:0x0301], 'I'
+    jne .w4pf
+    cmp byte [es:0x0302], ' '
+    jne .w4pf
+    cmp byte [es:0x0303], 'I'
+    jne .w4pf
+    cmp byte [es:0x0304], 13
+    jne .w4pf
+    pop es
+    mov al, '.'
+    call putc
+    jmp .neg
+.w4pf:
+    pop es
+.w4e:
+    mov al, 'A'
+    call putc
+    inc bp
+
     ; --- (7) THE FOUR NEGATIVE CONTROLS -------------------------------------
 .neg:
     mov word [disc_expect_bad], 1
@@ -1131,7 +1260,35 @@ _a2_chr: times 512 db 0
 ; phase B reaches all three by name).
 _a2_rev:   times 128 db 0
 _a2_lopat: times 16 db 0
+; ...and EDIT > COPY's two, which a2_copy_row indexes by name (APPLE2-SPEC
+; section 6.5). In the package a2_scrow is one character row brought out of
+; the RAM claim by a2_zcopy_out and a2_astab is the 128-entry fold of the
+; Apple's screen encoding to ASCII, built in os88_main; here the row is the
+; test's own and astabfill builds the same table from the same rule.
+_a2_scrow: times 40 db 0
+_a2_astab: times 128 db 0
 section .text
+
+; -----------------------------------------------------------------------------
+; astabfill - the SPECIFICATION's table, built here rather than copied out of
+; the package: the screen byte's top two bits are the attribute and a II+
+; character generator holds 64 glyphs, so index & 0x3F is the glyph and a
+; glyph below $20 is `@A-Z[\]^_`, ASCII $40-$5F.
+; -----------------------------------------------------------------------------
+astabfill:
+    xor bx, bx
+.l:
+    mov al, bl
+    and al, 0x3F
+    cmp al, 0x20
+    jae .s
+    add al, 0x40
+.s:
+    mov [_a2_astab+bx], al
+    inc bx
+    cmp bx, 128
+    jb .l
+    ret
 
 ; ...and a2cpu.inc calls OUT to the compiled C for every $C000-$C0FF access in
 ; BOTH DIRECTIONS (APPLE2-SPEC section 3.2). This harness tests the MOVERS,

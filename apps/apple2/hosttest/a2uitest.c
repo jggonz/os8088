@@ -542,6 +542,35 @@ int os88_clip_get(void *buf, unsigned cap)
 
 int os88_clip_size(void) { return h_clip_n; }
 
+/* THE _seg FORMS, which are the ones Edit > Copy and Edit > Paste use: the
+ * staging area is a transient heap CLAIM and never bss (APPLE2-SPEC section
+ * 6.5). h_clip_refuse_put models a clipboard that will not take the screen -
+ * over CLIP_MAXKB, or a kernel that refuses - which is a refusal the program
+ * has to SAY (SPEC.md 47). */
+static int h_clip_refuse_put;
+static unsigned char *segbase(unsigned seg);
+
+int os88_clip_put_seg(unsigned seg, unsigned off, unsigned len)
+{
+    if (h_clip_refuse_put)
+        return -1;
+    if (len > sizeof(h_clip))
+        len = sizeof(h_clip);
+    memcpy(h_clip, segbase(seg) + off, len);
+    h_clip_n = (int)len;
+    return 0;
+}
+
+int os88_clip_get_seg(unsigned seg, unsigned off, unsigned cap)
+{
+    int n = h_clip_n < 0 ? 0 : h_clip_n;
+
+    if ((unsigned)n > cap)
+        n = (int)cap;
+    memcpy(segbase(seg) + off, h_clip, (size_t)n);
+    return n;
+}
+
 /* ==========================================================================
  * THE CLAIMS - the Apple's 64KB and the ROM part
  * ========================================================================*/
@@ -552,37 +581,208 @@ static unsigned char h_ram[65536];
 static unsigned char h_rom[14848];
 static int claims_live;
 
+/* THE TRANSIENT CLAIMS WAVE 4 ADDED - Copy's staging, Paste's queue and Load
+ * and Save's file buffer (sections 6.5, 12). They are the point of several
+ * assertions below rather than scenery: a claim that is not FREED is a leak
+ * the machine would show as an arena that never comes back, and h_scr_live
+ * plus claims_live are what see it. */
+#define H_SCR_MAX  4
+#define H_SCRSEG0  0x3000u
+#define H_SCRBYTES 49152                /* 48KB: A2_PRGMAX rounded up */
+static unsigned char h_scr_mem[H_SCR_MAX][H_SCRBYTES];
+static int h_scr_live[H_SCR_MAX];
+static int h_scr_kb[H_SCR_MAX];
+static int h_claim_refuse;              /* the next transient claim is refused */
+static int h_claim_n;                   /* transient claims ever made */
+
 static unsigned char *segbase(unsigned seg)
 {
     if (seg == H_RAMSEG)
         return h_ram;
     if (seg == H_ROMSEG)
         return h_rom;
+    if (seg >= H_SCRSEG0 && seg < H_SCRSEG0 + H_SCR_MAX) {
+        int i = (int)(seg - H_SCRSEG0);
+
+        if (!h_scr_live[i]) {
+            fail("a claim read or written after it was freed");
+            exit(1);
+        }
+        return h_scr_mem[i];
+    }
     fail("a segment nobody claimed");
     exit(1);
 }
 
 unsigned os88_mem_claim(int kb)
 {
-    if (kb != 64) {
-        fail("a claim that is not the Apple's 64KB");
+    int i;
+
+    if (kb == 64 && claims_live == 0) {
+        claims_live++;
+        return H_RAMSEG;                /* the Apple's own address space */
+    }
+    if (h_claim_refuse) {
+        h_claim_refuse = 0;
         return 0;
     }
-    claims_live++;
-    return H_RAMSEG;
+    if (kb < 1 || kb * 1024 > H_SCRBYTES) {
+        fail("a transient claim of an impossible size");
+        return 0;
+    }
+    for (i = 0; i < H_SCR_MAX; i++)
+        if (!h_scr_live[i]) {
+            h_scr_live[i] = 1;
+            h_scr_kb[i] = kb;
+            h_claim_n++;
+            memset(h_scr_mem[i], 0xCC, sizeof(h_scr_mem[i]));
+            return H_SCRSEG0 + (unsigned)i;
+        }
+    fail("more transient claims live at once than the harness models - which "
+         "on the machine is a claim nobody freed");
+    return 0;
 }
 
-int os88_mem_free(unsigned seg) { (void)seg; claims_live--; return 0; }
-unsigned os88_mem_largest_kb(void) { return 200; }
+int os88_mem_free(unsigned seg)
+{
+    if (seg >= H_SCRSEG0 && seg < H_SCRSEG0 + H_SCR_MAX) {
+        int i = (int)(seg - H_SCRSEG0);
+
+        if (!h_scr_live[i])
+            fail("a claim freed twice");
+        h_scr_live[i] = 0;
+        return 0;
+    }
+    claims_live--;
+    return 0;
+}
+
+/* h_claims_out - how many transient claims are live. Copy's must be gone
+ * inside its own wake; Paste's is held for exactly as long as there are bytes
+ * left to type and not a wake longer (section 6.5). */
+static int h_claims_out(void)
+{
+    int i, n = 0;
+
+    for (i = 0; i < H_SCR_MAX; i++)
+        n += h_scr_live[i];
+    return n;
+}
+static int h_largest_kb = 200;          /* what the heap says it can spare -
+                                         * a fixture, because the association
+                                         * arm's ceiling is min(largest,
+                                         * A2_PRGKB) and the two refusals it
+                                         * can end at are told apart by which
+                                         * of those two bound it */
+unsigned os88_mem_largest_kb(void) { return (unsigned)h_largest_kb; }
 unsigned os88_part_seg(int i) { return i == 0 ? H_ROMSEG : 0; }
 int os88_peek(unsigned seg, unsigned off) { return segbase(seg)[off]; }
 void os88_poke(unsigned seg, unsigned off, int v)
 { segbase(seg)[off] = (unsigned char)v; }
 
+/* THE ONE HOST FILE (section 12). Load Program reads it and Save Program
+ * writes it, so a save-then-load round trip is a real assertion about the
+ * bytes and not about a mock. */
+static unsigned char h_file[H_SCRBYTES];
+static unsigned h_file_n;
+static char h_file_name[16];
+static int h_file_short;                /* the read comes up short: a media
+                                         * error, which the program must SAY */
+static int h_write_refuse;
+static int h_dlg_up;                    /* another modal dialog owns the
+                                         * screen, so os88_file_dlg refuses */
+static int h_dlg_mode, h_dlg_n;
+static char h_dlg_def[16];
+static int h_ferr;
+
+int os88_ferr(void) { return h_ferr; }
+
+/* **THE STUB REFUSES THE WAY THE KERNEL REFUSES, AND THAT IS THE WHOLE
+ * POINT OF IT.** It used to TRUNCATE - `if (n > cap) n = cap;` - which is a
+ * behaviour no os8088 kernel has: kernel/diskw.inc:1836-1845 compares the
+ * directory entry's 32-bit size against the caller's capacity BEFORE any data
+ * I/O and answers FERR_BIG with the destination untouched, and apps/cc/os88.h
+ * says so in words ("os88_file_read() refuses a short buffer with FERR_BIG
+ * and reads nothing").
+ *
+ * A stub that truncates makes the program's "did the read get cut off?" arm
+ * REACHABLE in the harness and unreachable on the machine, which is
+ * LESSONS.md 7's "a stub that always refuses measures the fallback path" with
+ * the sign flipped: the gate below it passes and the machine does something
+ * else entirely. `h_file_short` is the OTHER thing - a media error, a genuine
+ * short read - and it stays. */
+static int h_read_n;                     /* how many reads have been made - the
+                                         * lock gate below counts them */
+
 unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
-{ (void)name; (void)seg; (void)cap; return 0; }
+{
+    unsigned n = h_file_n;
+
+    (void)name;
+    h_read_n++;
+    h_ferr = OS88_FERR_OK;
+    if (n > cap) {                          /* the kernel's .toobig: nothing is
+                                             * written and nothing is read */
+        h_ferr = OS88_FERR_BIG;
+        return 0;
+    }
+    if (h_file_short && n > 0)
+        n--;
+    memcpy(segbase(seg), h_file, (size_t)n);
+    return n;
+}
+
+int os88_file_write_seg(const char *name, unsigned seg, unsigned count)
+{
+    h_read_n++;                         /* a write is a floppy operation too,
+                                         * and os88.h says it stalls every
+                                         * painter for its duration */
+    if (h_write_refuse)
+        return -1;
+    if (count > sizeof(h_file))
+        count = sizeof(h_file);
+    memcpy(h_file, segbase(seg), (size_t)count);
+    h_file_n = count;
+    os88_strcpy(h_file_name, name, sizeof(h_file_name));
+    return 0;
+}
+
+/* THE LAUNCH DOCUMENT (SPEC.md 54.5). h_arg names the file a double-click
+ * would have handed this instance; it is READ-AND-CLEAR on the machine and it
+ * is read-and-clear here. */
+static char h_arg[13];
+static int h_goto_fail, h_goto_n;
+
+int os88_arg_file(char *name13, struct os88_place *p)
+{
+    if (!h_arg[0])
+        return -1;
+    os88_strcpy(name13, h_arg, 13);
+    p->clus = 7;
+    p->vol = 1;
+    h_arg[0] = 0;
+    return 0;
+}
+
+int os88_file_goto(struct os88_place *p)
+{
+    (void)p;
+    h_goto_n++;
+    return h_goto_fail ? -1 : 0;
+}
+
 int os88_file_dlg(int mode, void *win, const char *defname)
-{ (void)mode; (void)win; (void)defname; return -1; }
+{
+    (void)win;
+    if (h_dlg_up)
+        return -1;
+    h_dlg_mode = mode;
+    h_dlg_n++;
+    os88_strcpy(h_dlg_def, defname ? defname : "", sizeof(h_dlg_def));
+    return 0;                           /* it does NOT block: the answer
+                                         * arrives at os88_onfile later, which
+                                         * the script below delivers by hand */
+}
 
 void os88_memset(void *p, int c, unsigned n) { memset(p, c, n); }
 void os88_memcpy(void *d, const void *s, unsigned n) { memmove(d, s, n); }
@@ -729,6 +929,51 @@ void a2_zcopy_out(void *dst, unsigned a, unsigned n)
 
 int a2_wrote(void) { return h_scr[A2_SCR_ANY]; }
 
+/* --- THE WAVE-4 SHIMS (APPLE2-SPEC sections 3.4, 6.5, 12) -----------------
+ * A new assembly shim is a new host stub IN THE SAME EDIT (LESSONS.md 4): a
+ * shim added to the package without its stub here fails to LINK, which is the
+ * failure you want, three steps earlier than the one you do not.
+ *
+ * a2_copy_row is modelled from the SPECIFICATION and not from the assembly -
+ * the fold, the trim and the CR - so the two are an independent pair. The
+ * assembly's own gate is hosttest/a2memtest.asm, on a real x86 with SS != DS. */
+static int n_copyrow;
+static int n_srcrd_copy;                /* ...and the row reads one Copy made */
+
+void a2_zzcopy_in(unsigned a, unsigned seg, unsigned off, unsigned n)
+{ memmove(h_ram + (a & 0xFFFF), segbase(seg) + off, n); }
+
+void a2_zzcopy_out(unsigned seg, unsigned off, unsigned a, unsigned n)
+{ memmove(segbase(seg) + off, h_ram + (a & 0xFFFF), n); }
+
+unsigned a2_scan0(unsigned seg, unsigned off, unsigned n)
+{
+    unsigned char *b = segbase(seg);
+    unsigned i;
+
+    for (i = 0; i < n; i++)
+        if (b[off + i] == 0)
+            return off + i;
+    return 0xFFFFu;
+}
+
+int a2_copy_row(unsigned dseg, unsigned doff, int n)
+{
+    unsigned char *d = segbase(dseg) + doff;
+    int i, last = 0, c;
+
+    n_copyrow++;
+    for (i = 0; i < n; i++) {
+        c = a2_astab[a2_scrow[i] & 0x7F];
+        d[i] = (unsigned char)c;
+        if (c != ' ')
+            last = i + 1;               /* one past the last non-space */
+    }
+    d[last] = 0x0D;                     /* the trailing spaces come off and the
+                                         * separator is CR */
+    return last + 1;
+}
+
 void a2_zpower(unsigned a, unsigned n)
 {
     unsigned i;
@@ -759,9 +1004,15 @@ int a2_bread(unsigned a)
  * whole budget and answers A2_RUN_SLICE, so a2_m.cnt is 0 and `ran = asked -
  * cnt` is the budget. Nothing writes the Apple's memory, which is why every
  * fixture below pokes the text page itself. */
+static long h_runs;                     /* ...and HOW MANY SLICES WERE RUN, so
+                                         * "the machine is stopped while the
+                                         * reboot confirmation is up" is a
+                                         * test and not a claim */
+
 int a2_run(unsigned cycles)
 {
     (void)cycles;
+    h_runs++;
     a2_m.cnt = 0;
     return A2_RUN_SLICE;
 }
@@ -1206,6 +1457,26 @@ static void no_gunk(const char *where)
 #define MS_FLASH    1.032
 #define MS_TAKE     0.190               /* a2_dirty_take, section 7.5 */
 
+/* --- EDIT > COPY (APPLE2-SPEC section 6.5) --------------------------------
+ * THESE TWO ARE DERIVED AND NOT MEASURED, and the difference is stated
+ * because everything else in this table came off tests/a2band's icount
+ * harness. a2_copy_row is in a2mem.inc, which that harness does not %include
+ * - it would need the register file and a claim segment - so its per-cell
+ * figure is the 8088's own INSTRUCTION-FETCH FLOOR over the loop as written,
+ * PERFORMANCE.md Part 2's max(clocks, 4.34 x instruction bytes) applied
+ * instruction by instruction:
+ *
+ *   mov bl,[si] 13 | inc si 4.34 | and bl,7F 13.02 | mov al,[tab+bx] 17.36
+ *   mov [es:di],al 14 | inc di 4.34 | cmp al,' ' 8.68 | je 8.68
+ *   mov dx,di 8.68 | dec cx 4.34 | jnz 16          = 112.4 clocks
+ *
+ * which at 4.77 MHz is 23.6 us a cell; the call floor is the near call and
+ * return (11 us, CLAUDE.md's table) plus a nine-instruction prologue. A
+ * MEASURED figure would be better and is what the Disk II wave's own bench
+ * should take if a2mem.inc ever joins that harness. */
+#define MS_CPYCELL  0.0236              /* ...per folded cell, DERIVED */
+#define MS_CPYCALL  0.030               /* ...and per row, DERIVED */
+
 static int c_blit, c_fill, c_frame, c_run, c_cells, c_scroll;
 static int c_band, c_group, c_span, c_sig, c_flash, c_copy, c_take, c_srcrd;
 static int c_band_l, c_group_l, c_band_h, c_group_h, c_x2, c_blit2;
@@ -1327,6 +1598,38 @@ static void do_about(void)
                                          * own, which is the whole point of
                                          * modelling it */
     os88_gfx_unlock();
+}
+
+/* do_file - the Standard File dialog's ANSWER, which arrives long after the
+ * command that opened it and in the same environment as a click: UI task,
+ * gfx lock HELD (os88.h, and kernel/fdlg.inc:45-48 of every proc around
+ * fdlg_commit). It is the only way into os88_onfile.
+ *
+ * **AND IT GATES WHAT THE HANDLER DID UNDER THAT LOCK.** os88_onfile used to
+ * call ovl_a2_prog inline: up to six heap claims, a floppy read of up to
+ * 46 KB and a 48KB-capable block move, with the pointer frozen, the dock
+ * frozen and every other task's painter blocked in os88_gfx_lock. The handler
+ * LATCHES now and the wake spends it, so the assertion is that not one claim
+ * and not one file operation happened before the lock came off - which is the
+ * only form of this that an emulator cannot show and a host CAN. */
+static void do_file(int mode, const char *name, unsigned size)
+{
+    int c0 = h_claim_n, r0 = h_read_n;
+
+    os88_gfx_lock();
+    os88_onfile(mode, name, size, 0, the_win);
+    if (h_claim_n != c0)
+        fail("os88_onfile took a heap claim UNDER THE DESKTOP'S GFX LOCK - "
+             "mem_claim may compact an arena this package has a pinned 64KB "
+             "in, which is a memcpy in tenths of a second with the whole "
+             "desktop stopped behind it (section 12)");
+    if (h_read_n != r0)
+        fail("os88_onfile went to the FLOPPY under the desktop's gfx lock - "
+             "seconds of frozen pointer and dock on a 4.77 MHz XT; the "
+             "handler latches and the wake spends it (section 12)");
+    os88_gfx_unlock();
+    do_wake();                          /* ...and THIS is where the work
+                                         * happens, with no lock held */
 }
 
 static void do_cmd(int menu, int item)
@@ -3086,6 +3389,747 @@ int main(void)
         a2_menu_state();
     }
 
+    /* ======================================================================
+     * WAVE 4 - THE COMMANDS, THE CLIPBOARD, AND PROGRAM LOAD AND SAVE
+     * (APPLE2-SPEC sections 6.5, 10.2, 12)
+     *
+     * The same script the QMP session drives on the glass, against the model:
+     * paste a listing, copy the text page back, save a program, load it
+     * again, and refuse the files and the claims that have to be refused.
+     * ====================================================================*/
+    {
+        static const unsigned char prog[] = {
+            /* 10 PRINT "HI" : the link, the line number, the tokens, $00 */
+            0x0B, 0x08, 0x0A, 0x00, 0xBA, 0x22, 0x48, 0x49, 0x22, 0x00,
+            /* 20 GOTO 10 - eight bytes at $080B, so its link is $0813 */
+            0x13, 0x08, 0x14, 0x00, 0xAB, 0x31, 0x30, 0x00,
+            /* ...and the terminator, which is part of the program */
+            0x00, 0x00
+        };
+        static unsigned char before[sizeof(prog)];
+        static char want[2048];
+        static char got[2048];
+        int k, n, c, r, ok;
+        unsigned a, vartab;
+
+        /* --- EDIT > COPY: the text page onto the clipboard ---------------- */
+        for (a = 0; a < 24; a++)
+            for (k = 0; k < A2_COLS; k++)
+                a2_wr(a2_tbase[a] + (unsigned)k, 0xA0);
+        h_puts(0, 0, "HELLO", 0);           /* normal */
+        h_puts(1, 0, "]", 1);               /* INVERSE, which folds to the same
+                                             * letter: what the user sees
+                                             * flashing and what the clipboard
+                                             * gets are one character */
+        h_puts(2, 0, "10 PRINT", 2);        /* flashing */
+        do_wake();
+        do_paint();
+
+        h_clip_n = -1;
+        n = h_claims_out();
+        n_copyrow = 0;
+        n_srcrd_copy = n_srcrd;
+        do_cmd(A2_M_EDIT, A2_I_COPY);
+        if (h_clip_n != -1)
+            fail("Edit > Copy touched the clipboard from os88_oncmd, which is "
+                 "dispatched under the DESKTOP's gfx lock (section 6.5)");
+        if (h_claims_out() != n)
+            fail("Edit > Copy took a heap claim under the gfx lock");
+        do_wake();
+        n_srcrd_copy = n_srcrd - n_srcrd_copy;
+        if (h_claims_out() != n)
+            fail("Edit > Copy's staging claim outlived its own wake");
+
+        /* the expectation, built here from the rule and not from the program */
+        k = 0;
+        for (r = 0; r < 24; r++) {
+            const char *row = (r == 0) ? "HELLO"
+                            : (r == 1) ? "]"
+                            : (r == 2) ? "10 PRINT" : "";
+            while (*row)
+                want[k++] = *row++;
+            want[k++] = 0x0D;
+        }
+        /* WHAT THE WHOLE-SCREEN COPY COSTS, AND HOW MANY TIMES IT CROSSES
+         * THE SEGMENT BOUNDARY (section 6.5). The bridge count is the point:
+         * ONE crossing - os88_oncmd into ovl_a2_cmd and back - because the
+         * command is a latch and every per-byte step is resident. The C64's
+         * first draft of the same pair crossed 2,000 times, two a cell, and
+         * a call-counting cost model charged one. */
+        printf("a2uitest:   Edit > Copy of the whole 40x24 text page: "
+               "%.1f ms, %d a2_zcopy_out + %d a2_copy_row + 1 clip_put, "
+               "ONE bridge crossing\n",
+               n_srcrd_copy * MS_SRCRD
+               + n_copyrow * (MS_CPYCALL + A2_COLS * MS_CPYCELL)
+               + 3 * 0.0467,            /* clip_put, mem_claim, mem_free */
+               n_srcrd_copy, n_copyrow);
+        if (h_clip_n != k || memcmp(h_clip, want, (size_t)k) != 0) {
+            printf("a2uitest: FAIL - Edit > Copy put %d bytes on the "
+                   "clipboard where the 24 trimmed rows are %d\n",
+                   h_clip_n, k);
+            fails++;
+        }
+
+        /* ...AND THE REFUSALS ARE SAID. A claim that cannot be had and a
+         * clipboard that will not take the screen are both facts (SPEC.md 47),
+         * and neither may touch the machine. */
+        h_claim_refuse = 1;
+        do_cmd(A2_M_EDIT, A2_I_COPY);
+        do_wake();
+        if (strcmp(a2_msg, "No memory for the copy.") != 0)
+            fail("a Copy with no heap for its staging claim said nothing");
+        h_clip_refuse_put = 1;
+        do_cmd(A2_M_EDIT, A2_I_COPY);
+        do_wake();
+        if (strcmp(a2_msg, "The clipboard refused it.") != 0)
+            fail("a Copy the clipboard refused said nothing");
+        h_clip_refuse_put = 0;
+        if (h_claims_out() != n)
+            fail("a refused Copy leaked its staging claim");
+
+        /* --- EDIT > PASTE: the peek/consume handshake --------------------- */
+        /* THE LATCH IS EMPTIED FIRST, AND THAT IS A REAL PRECONDITION rather
+         * than harness hygiene: a2_paste_peek presents only into a FREE latch
+         * now, so a key left in it by an earlier test is delivered ahead of
+         * the queue - which is the whole point of the guard and is asserted
+         * on its own two blocks down. */
+        a2_io_rd(0xC010);
+        os88_clip_put("10 print \"hi\"\r\n20 goto 10\n", 26);
+        n = h_claims_out();
+        do_cmd(A2_M_EDIT, A2_I_PASTE);
+        if (h_claims_out() != n)
+            fail("Edit > Paste took its claim under the gfx lock");
+        do_wake();
+        if (h_claims_out() != n + 1)
+            fail("Edit > Paste has no queue claim after the wake that "
+                 "serviced it");
+
+        /* THE MACHINE DRINKS IT AT ITS OWN RATE, which is what $C000 and
+         * $C010 are: a peek and a consume (apple2emu's keyboard_read and
+         * keyboard_clear). Reading $C000 twice without a strobe must present
+         * the SAME byte - anything else is input overrun, the third defect no
+         * screendump can show. */
+        k = 0;
+        for (r = 0; r < 200; r++) {
+            c = a2_io_rd(0xC000);
+            if ((c & 0x80) == 0)
+                break;                      /* the queue is drained */
+            if (a2_io_rd(0xC000) != c) {
+                fail("two $C000 reads with no strobe between them presented "
+                     "DIFFERENT bytes - the paste is running ahead of the "
+                     "machine (section 6.5)");
+                break;
+            }
+            got[k++] = (char)(c & 0x7F);
+            a2_io_rd(0xC010);
+        }
+        got[k] = 0;
+        if (strcmp(got, "10 PRINT \"HI\"\r20 GOTO 10\r") != 0) {
+            printf("a2uitest: FAIL - the paste typed \"%s\": the folds are "
+                   "LF to CR, CR LF to ONE CR and lower case to upper "
+                   "(section 6.5)\n", got);
+            fails++;
+        }
+        if (h_claims_out() != n)
+            fail("a drained paste did not give its claim back");
+
+        /* --- A KEY TYPED DURING A PASTE REACHES THE MACHINE, AND COSTS THE
+         * QUEUE NOTHING (section 6.5) --------------------------------------
+         * The peek used to rewrite the latch on EVERY $C000 read while a
+         * paste was live, so a key the user typed was destroyed before the
+         * machine could see it: Ctrl-C - the only in-machine way to stop a
+         * runaway paste - could never arrive. Presenting only into a free
+         * latch fixes that and creates the second half of this test: the
+         * strobe that follows the user's key must NOT advance the queue, or
+         * every keystroke would swallow one pasted character. */
+        os88_clip_put("AB", 2);
+        do_cmd(A2_M_EDIT, A2_I_PASTE);
+        do_wake();
+        if ((a2_io_rd(0xC000) & 0x7F) != 'A')
+            fail("the paste did not present its first byte");
+        a2_kb_put(0x03);                    /* the user types Ctrl-C */
+        if ((a2_io_rd(0xC000) & 0x7F) != 0x03)
+            fail("a key typed during a paste was overwritten by the queue - "
+                 "Ctrl-C can never reach the emulated program (section 6.5)");
+        a2_io_rd(0xC010);                   /* ...and the machine takes IT */
+        if ((a2_io_rd(0xC000) & 0x7F) != 'A')
+            fail("the strobe after a user keystroke consumed a QUEUED byte - "
+                 "one pasted character lost per key");
+        a2_io_rd(0xC010);
+        if ((a2_io_rd(0xC000) & 0x7F) != 'B')
+            fail("the paste did not resume behind the user's key");
+        a2_io_rd(0xC010);
+        if (a2_io_rd(0xC000) & 0x80)
+            fail("the paste queue did not drain");
+        if (h_claims_out() != n)
+            fail("the interrupted paste did not give its claim back");
+
+        os88_clip_put("AB", 2);
+        do_cmd(A2_M_EDIT, A2_I_PASTE);
+        do_wake();
+        a2_reset_req = A2_RST_CTRL;
+        do_wake();                          /* a reset empties the queue */
+        if (a2_io_rd(0xC000) & 0x80)
+            fail("a reset left the previous machine's paste still typing");
+        if (h_claims_out() != n)
+            fail("a reset emptied the paste queue and kept its claim");
+
+        h_clip_n = -1;
+        do_cmd(A2_M_EDIT, A2_I_PASTE);
+        do_wake();
+        if (strcmp(a2_msg, "The clipboard is empty.") != 0)
+            fail("a Paste of an empty clipboard said nothing");
+
+        /* --- FILE > SAVE PROGRAM..., THEN LOAD IT BACK -------------------- */
+        for (k = 0; k < (int)sizeof(prog); k++)
+            a2_wr(0x0801 + (unsigned)k, prog[k]);
+        vartab = 0x0801 + sizeof(prog);
+        a2_wr(0x0069, (int)(vartab & 0xFF));
+        a2_wr(0x006A, (int)(vartab >> 8));
+        memcpy(before, prog, sizeof(prog));
+
+        h_dlg_n = 0;
+        do_cmd(A2_M_FILE, A2_I_SAVE);
+        if (h_dlg_n != 1 || h_dlg_mode != OS88_FDLG_SAVE)
+            fail("File > Save Program... did not open a SAVE dialog");
+        h_file_n = 0;
+        do_file(OS88_FDLG_SAVE, "WORK.BAS", 0);
+        if (h_file_n != sizeof(prog)
+            || memcmp(h_file, prog, sizeof(prog)) != 0) {
+            printf("a2uitest: FAIL - Save Program wrote %u bytes where "
+                   "$0801 to VARTAB-1 is %u (section 12)\n",
+                   h_file_n, (unsigned)sizeof(prog));
+            fails++;
+        }
+
+        /* the machine forgets, and the file brings it back */
+        for (k = 0; k < 64; k++)
+            a2_wr(0x0801 + (unsigned)k, 0xEE);
+        a2_wr(0x0069, 0);
+        a2_wr(0x006A, 0);
+        n = h_claims_out();
+        do_cmd(A2_M_FILE, A2_I_LOAD);
+        if (h_dlg_mode != OS88_FDLG_OPEN)
+            fail("File > Load Program... did not open an OPEN dialog");
+        do_file(OS88_FDLG_OPEN, "WORK.BAS", h_file_n);
+        ok = 1;
+        for (k = 0; k < (int)sizeof(prog); k++)
+            if (a2_rd(0x0801 + (unsigned)k) != before[k])
+                ok = 0;
+        if (!ok)
+            fail("a Save and a Load did not round-trip the program bytes");
+        if (h_claims_out() != n)
+            fail("Load Program leaked its file claim");
+        for (a = 0x67; a <= 0x6E; a += 2) {
+            unsigned v = (unsigned)a2_rd(a) | ((unsigned)a2_rd(a + 1) << 8);
+
+            if (a == 0x67 ? (v != 0x0801) : (v != vartab)) {
+                printf("a2uitest: FAIL - after a Load, $%02X reads $%04X: "
+                       "TXTTAB is $0801 and VARTAB = ARYTAB = STREND = "
+                       "PRGEND = the end (section 12)\n", a, v);
+                fails++;
+            }
+        }
+        if (((unsigned)a2_rd(0xAF) | ((unsigned)a2_rd(0xB0) << 8)) != vartab)
+            fail("after a Load, PRGEND is not the end of the program");
+
+        /* --- AND THE SAME FILE THROUGH THE ASSOCIATION (SPEC.md 54.5) ----
+         * `CC_ASSOC` declares `BAS`, so a double-click hands this package a
+         * NAME AND A FOLDER AND NO SIZE - which is the arm the picker never
+         * takes. It is spent in the WAKE, because the loader is an ovl_ and
+         * os88_main has no instance to resolve a module for. */
+        for (k = 0; k < 64; k++)
+            a2_wr(0x0801 + (unsigned)k, 0xEE);
+        os88_strcpy(h_arg, "WORK.BAS", sizeof(h_arg));
+        memcpy(h_file, prog, sizeof(prog));
+        h_file_n = sizeof(prog);
+        if (os88_arg_file(a2_argname, &a2_argplace) != 0)
+            fail("os88_arg_file gave nothing back for a launch document");
+        a2_argp = 1;
+        a2_argdl = the_ticks + A2_ARGWAIT;
+        r = h_goto_n;
+
+        /* ...AND IT WAITS FOR THE MACHINE TO REACH `]` FIRST. On the first
+         * wake the 6502 has run a few hundred cycles: the Autostart Monitor
+         * has not handed over yet and Applesoft's cold start ENDS IN A NEW,
+         * so a load spent here is wiped by the ROM a moment later and LIST
+         * comes up empty with nothing saying why. The power-on pattern is
+         * what $67/$68 hold until the cold start writes them. */
+        a2_wr(0x0067, 0x00);
+        a2_wr(0x0068, 0xFF);
+        do_wake();
+        if (h_goto_n != r)
+            fail("the launch document was loaded before the machine had "
+                 "cold-started - Applesoft's own NEW is about to wipe it");
+        if (!a2_argp)
+            fail("the launch document was given up on while the machine was "
+                 "still booting");
+        a2_wr(0x0067, 0x01);            /* TXTTAB = $0801 ... */
+        a2_wr(0x0068, 0x08);
+        a2_wr(0x0069, 0x03);            /* ...and VARTAB = $0803, which is
+                                         * what the cold start's NEW leaves */
+        a2_wr(0x006A, 0x08);
+        do_wake();
+        if (h_goto_n != r + 1)
+            fail("the launch did not stand in the document's own folder "
+                 "(SPEC.md 54.9)");
+        ok = 1;
+        for (k = 0; k < (int)sizeof(prog); k++)
+            if (a2_rd(0x0801 + (unsigned)k) != before[k])
+                ok = 0;
+        if (!ok)
+            fail("a .BAS double-click launched the emulator and did NOT load "
+                 "the program - which is the `launches and then refuses` this "
+                 "association was held back for (section 12)");
+        os88_strcpy(h_arg, "WORK.BAS", sizeof(h_arg));
+        os88_arg_file(a2_argname, &a2_argplace);
+        a2_argp = 1;
+        a2_argdl = the_ticks + A2_ARGWAIT;
+        h_goto_fail = 1;
+        do_wake();
+        h_goto_fail = 0;
+        if (strcmp(a2_msg, "Cannot open that folder.") != 0)
+            fail("a launch whose folder could not be listed went quiet - the "
+                 "window comes up at `]` and the double-click looks like it "
+                 "did nothing (cword.c:2650)");
+
+        /* ...AND THE WAIT IS BOUNDED. A machine that never reaches `]` must
+         * not leave a load armed for the rest of the session: it would then
+         * fire on the user's own NEW, minutes later, with no `]` in sight. */
+        os88_strcpy(h_arg, "WORK.BAS", sizeof(h_arg));
+        os88_arg_file(a2_argname, &a2_argplace);
+        a2_argp = 1;
+        a2_argdl = the_ticks + 2;
+        a2_wr(0x0067, 0x00);
+        a2_wr(0x0068, 0xFF);
+        the_ticks += 4;
+        do_wake();
+        if (a2_argp)
+            fail("a launch document whose machine never got to `]` stayed "
+                 "armed for the rest of the session");
+        if (strcmp(a2_msg, "No ] prompt to load into.") != 0)
+            fail("giving up on a launch document said nothing");
+        a2_wr(0x0067, 0x01);
+        a2_wr(0x0068, 0x08);
+
+        /* --- THE LINKS ARE REPAIRED, AS FIX.LINKS DOES (section 12) -------
+         * The same program with its chain written for a load address of
+         * $1801. Applesoft rebuilds the chain from the line LENGTHS, and so
+         * does this: what lands in memory must be the $0801 chain. */
+        memcpy(h_file, prog, sizeof(prog));
+        h_file[0] = 0x0B;
+        h_file[1] = 0x18;                   /* $180B */
+        h_file[10] = 0x13;
+        h_file[11] = 0x18;                  /* $1813 */
+        h_file_n = sizeof(prog);
+        do_file(OS88_FDLG_OPEN, "OTHER.BAS", h_file_n);
+        if (a2_rd(0x0801) != 0x0B || a2_rd(0x0802) != 0x08
+            || a2_rd(0x080B) != 0x13 || a2_rd(0x080C) != 0x08)
+            fail("a program whose links name another load address was not "
+                 "REPAIRED to $0801 (section 12's FIX.LINKS walk)");
+
+        /* --- AND WHAT IS REFUSED IS REFUSED BEFORE ANYTHING IS WRITTEN ---- */
+        for (k = 0; k < 8; k++) {
+            h_file[k] = 0xEE;
+            a2_wr(0x0801 + (unsigned)k, 0x5A);
+        }
+        h_file_n = 8;                       /* a link that never terminates */
+        do_file(OS88_FDLG_OPEN, "JUNK.BAS", h_file_n);
+        if (strcmp(a2_msg, "Not an Applesoft program.") != 0)
+            fail("a file that fails the walk was not refused by name");
+        for (k = 0; k < 8; k++)
+            if (a2_rd(0x0801 + (unsigned)k) != 0x5A)
+                fail("a REFUSED program was written into the machine anyway - "
+                     "nothing may move before the walk passes (section 12)");
+        h_file_short = 1;
+        do_file(OS88_FDLG_OPEN, "SHORT.BAS", h_file_n);
+        if (strcmp(a2_msg, "Cannot read the file.") != 0)
+            fail("a short read was not said");
+        h_file_short = 0;
+        h_claim_refuse = 1;
+        do_file(OS88_FDLG_OPEN, "JUNK.BAS", h_file_n);
+        if (strcmp(a2_msg, "No heap for the program.") != 0)
+            fail("a Load with no heap for the file said nothing");
+        h_dlg_up = 1;
+        do_cmd(A2_M_FILE, A2_I_LOAD);
+        if (strcmp(a2_msg, "A file dialog is open.") != 0)
+            fail("a picker refused because another dialog owns the screen was "
+                 "a silent no-op (SPEC.md 47)");
+        h_dlg_up = 0;
+
+        /* --- THE ASSOCIATION ARM ENDS AT THE SAME CEILING AS THE DIALOG'S -
+         * A `.BAS` OPENED BY DOUBLE-CLICK ARRIVES WITH NO SIZE (section 12.1),
+         * and the claim used to be a flat 47 KB = 48,128 bytes - 1,025 ABOVE
+         * A2_PRGMAX, whose own comment said 47,615 when $C000-$0801 is 47,103.
+         * The file below is 47,104 bytes and is a WELL-FORMED chain: one line
+         * whose $00 lands at 47,101, then the $0000 terminator. Every link it
+         * makes is under $C000, so the walk PASSED - and `plen` came out
+         * 47,104, so a2_zzcopy_in wrote one byte at Apple $C000, outside the
+         * 48K the a2_wr fence protects, and TXTTAB..PRGEND were set to $C001,
+         * above MEMSIZ. The status row said `Loaded` for a program the machine
+         * cannot RUN. With `cap` clamped to A2_PRGMAX the file is one byte
+         * larger than the claim, so THE KERNEL REFUSES THE READ ITSELF -
+         * kernel/diskw.inc:1836-1845 answers FERR_BIG off the directory
+         * entry's size, before any data I/O and with the destination
+         * untouched - and the arm that reads os88_ferr() names the ceiling
+         * that bound it. This block used to say `the read stops one byte
+         * short of the terminator, the walk refuses`, which is a truncating
+         * read no os8088 kernel performs: it passed only because THE HOST
+         * STUB truncated, which is LESSONS.md 7 with the sign flipped. The
+         * stub refuses the way the kernel does now, and this is the gate that
+         * proves the program refuses on the same file either way. */
+        memset(h_file, 0x41, 47104);
+        h_file[0] = 0x00;                   /* the link is repaired anyway */
+        h_file[1] = 0x08;
+        h_file[2] = 0x0A;                   /* line 10 */
+        h_file[3] = 0x00;
+        h_file[47101] = 0x00;               /* ...the line's own terminator */
+        h_file[47102] = 0x00;               /* ...and the program's */
+        h_file[47103] = 0x00;
+        h_file_n = 47104;
+        a2_wr(0x0801, 0x5A);
+        do_file(OS88_FDLG_OPEN, "BIG.BAS", 0);   /* 0 = the ASSOCIATION arm */
+        if (strcmp(a2_msg, "Too large for a 48K Apple.") != 0)
+            fail("a 47,104-byte .BAS opened by double-click was not refused "
+                 "at A2_PRGMAX - the association arm's claim is above the "
+                 "ceiling the dialog arm refuses on (section 12)");
+        if (a2_rd(0x0801) != 0x5A)
+            fail("a program refused for size was written into the machine "
+                 "anyway");
+        if (a2_rd(0x0067) != 0x01 || a2_rd(0x0068) != 0x08
+            || (unsigned)a2_rd(0x0069) + ((unsigned)a2_rd(0x006A) << 8)
+               > 0xC000u)
+            fail("a program refused for size moved TXTTAB or VARTAB");
+        if (h_claims_out() != n)
+            fail("a program refused for size leaked its claim");
+
+        /* ...AND THE CLAIM STEPS DOWN RATHER THAN REFUSING (section 12).
+         * The association arm asked for the whole ceiling whatever the file
+         * was, so this wave's own done_when document - a 45-byte WORK.BAS -
+         * asked a busy 640KB desktop for a 46 KB PINNED claim on top of this
+         * package's already-pinned 64 KB and was told `No heap for the
+         * program.` about one cluster. h_claim_refuse turns the FIRST claim
+         * down; the loop halves and the listing loads. */
+        memcpy(h_file, prog, sizeof(prog));
+        h_file_n = sizeof(prog);
+        h_claim_refuse = 1;
+        do_file(OS88_FDLG_OPEN, "WORK.BAS", 0);
+        if (strcmp(a2_msg, "Loaded WORK.BAS") != 0)
+            fail("an association load whose FIRST claim was refused gave up "
+                 "instead of asking for less (section 12)");
+        if (h_claims_out() != n)
+            fail("a stepped-down association load leaked its claim");
+
+        /* ...AND THE OTHER CEILING, WHICH IS THE HEAP AND NOT THE MACHINE.
+         * The same 47,104-byte file with a heap that can spare 8 KB: the
+         * claim steps to 8,192, the kernel refuses the read with FERR_BIG
+         * again, and the sentence changes because what bound it changed.
+         * `Too large for free memory.` had no gate at all before this - it
+         * was reached, in the version this replaces, only through an arm the
+         * machine could never take. */
+        memset(h_file, 0x41, 47104);
+        h_file[0] = 0x00;
+        h_file[1] = 0x08;
+        h_file[2] = 0x0A;
+        h_file[3] = 0x00;
+        h_file[47101] = 0x00;
+        h_file[47102] = 0x00;
+        h_file[47103] = 0x00;
+        h_file_n = 47104;
+        h_largest_kb = 8;
+        do_file(OS88_FDLG_OPEN, "BIG.BAS", 0);
+        h_largest_kb = 200;
+        if (strcmp(a2_msg, "Too large for free memory.") != 0)
+            fail("a .BAS larger than the claim a BUSY heap could give was "
+                 "not told which ceiling bound it - the machine's 48K and "
+                 "the desktop's free memory are two different things to be "
+                 "told (section 12)");
+        if (h_claims_out() != n)
+            fail("a load refused by the heap ceiling leaked its claim");
+
+        /* --- THE 2-BYTE LENGTH PREFIX IS A HINT, AND A HINT CAN BE WRONG --
+         * The test is `word 0 == filesize - 2`, and a HEADERLESS file trips it
+         * whenever its first line's link happens to equal that - which this
+         * port's OWN Save can write, because Save is headerless. Such a file
+         * loads and RUNs on a real Apple II and used to be refused here as
+         * `Not an Applesoft program.`
+         *
+         * The walk runs at the hinted base, fails, and RE-RUNS AT ZERO, which
+         * is only possible because the validating pass writes nothing: a
+         * repairing walk at base 2 overwrites the bytes a walk at base 0 reads
+         * as the first line's NUMBER. */
+        memcpy(h_file, prog, sizeof(prog));
+        h_file[0] = (unsigned char)(sizeof(prog) - 2);
+        h_file[1] = 0x00;                   /* word 0 == filesize - 2, BY
+                                             * ACCIDENT - the link is repaired
+                                             * from the line lengths anyway */
+        h_file_n = sizeof(prog);
+        a2_wr(0x0801, 0x5A);
+        do_file(OS88_FDLG_OPEN, "HINT.BAS", h_file_n);
+        if (strcmp(a2_msg, "Loaded HINT.BAS") != 0)
+            fail("a headerless program whose first word happens to equal "
+                 "filesize - 2 was refused - the prefix is a HINT and the "
+                 "walk has to be able to fall back to base 0 (section 12)");
+        vartab = (unsigned)a2_rd(0x0069)
+               | ((unsigned)a2_rd(0x006A) << 8);
+        if (vartab != 0x0801 + (unsigned)sizeof(prog))
+            fail("the fallback base loaded the wrong length");
+        if (a2_rd(0x0801) != 0x0B || a2_rd(0x0802) != 0x08)
+            fail("the fallback base did not repair the first link - the "
+                 "validating pass must write NOTHING, or the retry reads the "
+                 "bytes the first pass clobbered (section 12)");
+
+        /* --- A LOAD MARKS THE ROWS IT REACHED, AND NO OTHERS (section 7.5) -
+         * a2_zzcopy_in goes round the core's own write path, so the mark is
+         * made by hand - and it was a2_dirty_all(), which marked all 192 scan
+         * lines and widened all 24 rows for a 28-byte listing NOT ONE
+         * DISPLAYED BYTE OF WHICH HAD MOVED. That is ~301 ms of compose on
+         * the target to produce the identical pixels, and it happened at
+         * LAUNCH too: a cold double-click of a `.BAS` runs the same loader.
+         * The machine is halted for this so the only thing that can mark the
+         * screen is the load. */
+        h_halt();
+        a2_io_rd(0xC051);                   /* TEXT... */
+        a2_io_rd(0xC054);                   /* ...PAGE 1: $0400-$07FF, and
+                                             * $0801 is nowhere near it */
+        do_wake();
+        do_wake();
+        if (a2_dirty_any)
+            fail("the fixture did not reach a clean glass before the load");
+        memcpy(h_file, prog, sizeof(prog));
+        h_file_n = sizeof(prog);
+        /* **THE FLUSH IS HELD OFF WHILE THE LOAD RUNS**, and it has to be:
+         * the file latch is spent at the TOP of the wake and the flush is at
+         * the BOTTOM of that same wake, so a wake that drew would clear the
+         * very marks this assertion is about and the gate would pass on any
+         * loader at all. h_clip_refuse is `not one pixel of us shows`, which
+         * is the one thing that skips the flush and leaves every flag
+         * standing. (Before the load ran in the wake at all, the marks
+         * survived by accident - os88_onfile did the work under the lock and
+         * no wake had run yet.) */
+        h_clip_refuse = 1;
+        do_file(OS88_FDLG_OPEN, "WORK.BAS", h_file_n);
+        h_clip_refuse = 0;
+        /* THE QUESTION IS THE MARKS AND NOT a2_dirty_any, and the difference
+         * only appeared once the load ran in the WAKE. a2_dirty_any is the
+         * coarse "the machine wrote something" flag, and the loader's five
+         * ovl_a2_wr16 calls go through a2_wr - the core's own write path - to
+         * set TXTTAB..PRGEND in ZERO PAGE, so it is legitimately 1 and
+         * a2_dirty_scan is what would find that none of it is displayed. What
+         * this gate is about is the by-hand marks a2_zzcopy_in owes, which
+         * were a2_dirty_all()'s 192 lines and are ovl_a2_dirty_range's none. */
+        ok = 1;
+        for (k = 0; k < A2_SCRH; k++)
+            if (a2_line_is(a2_lnd, k))
+                ok = 0;
+        if (!ok)
+            fail("a load that changed no DISPLAYED byte marked a scan line - "
+                 "the whole page would be recomposed to produce the identical "
+                 "pixels (section 7.5)");
+        a2_io_rd(0xC055);                   /* PAGE 2: $0800-$0BFF, which
+                                             * $0801 IS inside */
+        do_wake();
+        do_wake();
+        if (a2_dirty_any)
+            fail("the page switch did not settle");
+        h_clip_refuse = 1;
+        do_file(OS88_FDLG_OPEN, "WORK.BAS", h_file_n);
+        h_clip_refuse = 0;
+        if (!a2_line_is(a2_lnd, 0))
+            fail("a load INTO the displayed page marked nothing - row 0 of "
+                 "text page 2 is $0800-$0827 and the program starts at $0801");
+        if (a2_line_is(a2_lnd, 8))
+            fail("a load marked row 1, which is $0880-$08A7 and 96 bytes "
+                 "past the end of a 28-byte program (section 7.5)");
+        a2_io_rd(0xC054);
+        do_wake();
+        do_wake();
+        h_go();
+
+        /* --- CPU > STOP / CONTINUE, AND WARP ----------------------------- */
+        do_cmd(A2_M_CPU, A2_I_STOP);
+        if (!a2_pause)
+            fail("CPU > Stop left the machine running");
+        do_wake();
+        do_wake();
+        if (a2_wants_wake())
+            fail("a STOPPED machine with nothing to draw still asks for "
+                 "wakes - c64_wants_wake's `THE PAUSE IS THE HALF THAT WAS "
+                 "MISSING`, one machine along");
+        if (strcmp(a2_cpu_items[A2_I_STOP], "* Stopped") != 0
+            || strcmp(a2_cpu_items[A2_I_RUN], "  Continue") != 0)
+            fail("CPU > Stop did not retitle the pair Stopped / Continue "
+                 "(MII's PREPARE arm, section 10.1)");
+        do_cmd(A2_M_CPU, A2_I_RUN);
+        if (a2_pause)
+            fail("CPU > Continue did not restart the machine");
+        if (strcmp(a2_cpu_items[A2_I_STOP], "  Stop") != 0
+            || strcmp(a2_cpu_items[A2_I_RUN], "* Running") != 0)
+            fail("CPU > Continue did not retitle the pair Stop / Running");
+        do_cmd(A2_M_CPU, A2_I_WARP);
+        if (!a2_warp || strcmp(a2_cpu_items[A2_I_WARP], "* Warp") != 0)
+            fail("CPU > Warp is not a check item");
+        a2_budget = A2_SLICE_WARP;
+        do_cmd(A2_M_CPU, A2_I_WARP);
+        if (a2_warp || a2_budget > A2_SLICE_MAX)
+            fail("warp off left the budget above the ceiling it was granted "
+                 "for");
+
+        /* --- MACHINE > POWER ON'S TWO-ROW CONFIRMATION (section 10.2) ----- */
+        do_wake();
+        do_paint();
+        do_cmd(A2_M_MACHINE, A2_I_POWER);
+        if (!a2_abt_up || a2_pan_kind != A2_PAN_CFM)
+            fail("Machine > Power On did not raise its confirmation");
+        if (a2_reset_req != 0)
+            fail("Machine > Power On latched the cold boot BEFORE the user "
+                 "answered - the confirmation is not decoration");
+        if (strcmp(a2_cfm_text[0], "Are you sure you want to reboot?") != 0
+            || strcmp(a2_cfm_text[1], "(All data will be lost!)") != 0)
+            fail("the confirmation is not AppleWin's two rows "
+                 "(WinFrame.cpp:2003-2004)");
+        do_click(a2_cfm_bx[1] + 4, a2_cfm_by + 4);      /* No */
+        if (a2_abt_up || a2_reset_req != 0)
+            fail("No on the reboot confirmation did not dismiss it, or reset "
+                 "the machine anyway");
+        do_wake();
+        audit("after a dismissed reboot confirmation");
+        do_cmd(A2_M_MACHINE, A2_I_POWER);
+        do_click(a2_cfm_bx[0] + 4, a2_cfm_by + 4);      /* Yes */
+        if (a2_abt_up || a2_reset_req != A2_RST_POWER)
+            fail("Yes on the reboot confirmation did not latch the cold boot");
+        do_wake();
+        if (a2_reset_req != 0)
+            fail("the wake did not spend the Power On latch");
+        do_paint();
+        audit("after a confirmed Power On");
+        /* ...AND THE MACHINE IS STOPPED WHILE THE BOX WAITS (section 11).
+         * The About panel does NOT stop it - its hold range keeps the glass
+         * correct and a machine mid-RUN carries on behind it - but the
+         * confirmation is 52 pixels tall and holds ~6 of the 24 rows, so a
+         * machine that was printing kept composing and blitting the other ~18
+         * on every host tick, ~200 ms of the target per tick, for as long as
+         * a human took to read two lines. And the answer is about to wipe the
+         * machine, so there is nothing behind it worth a pixel. */
+        do_cmd(A2_M_MACHINE, A2_I_POWER);
+        do_wake();
+        c = (int)h_runs;
+        do_wake();
+        do_wake();
+        if ((int)h_runs != c)
+            fail("the 6502 kept running behind the reboot confirmation - the "
+                 "rows the box does not cover are recomposed on every tick "
+                 "while it waits (section 11)");
+        if (a2_wants_wake())
+            fail("the app re-posted a wake a tick while the reboot "
+                 "confirmation waited for a human");
+        do_key(27, 1);                      /* Esc answers NO */
+        if (a2_abt_up || a2_reset_req != 0)
+            fail("Esc on the reboot confirmation did not answer NO");
+        do_wake();
+        c = (int)h_runs;
+        do_wake();
+        if ((int)h_runs == c)
+            fail("the machine did not start again when the confirmation was "
+                 "dismissed");
+        do_paint();
+        /* THE OPEN PICKER GETS NO DEFAULT NAME (SPEC.md 38.9, 38.10). It was
+         * handed `"*.BAS"` - a FILTER written into a slot that is a default
+         * NAME - so the literal sat in the box (fdlg draws the name in Open
+         * mode and suppresses only the caret) and fdlg_actok lit the Open
+         * button before anything was selected: pressing it committed the name
+         * `*.BAS` and ended at `Cannot read the file.` */
+        h_dlg_def[0] = 'x';
+        do_cmd(A2_M_FILE, A2_I_LOAD);
+        if (h_dlg_def[0] != 0)
+            fail("File > Load Program... seeded the OPEN dialog with a name - "
+                 "the third argument is a default NAME and the dialog does no "
+                 "filtering by extension (SPEC.md 38.9)");
+        do_cmd(A2_M_FILE, A2_I_SAVE);
+        if (strcmp(h_dlg_def, "PROGRAM.BAS") != 0)
+            fail("File > Save Program... lost its default name, which SAVE "
+                 "mode is what the slot is for");
+
+        /* --- MACHINE > POWER ON WITH THE ABOUT PANEL UP (SPEC.md 47) ------
+         * ovl_a2_confirm returned 1 in silence here, on the argument that it
+         * `cannot happen from a menu the panel is swallowing clicks in front
+         * of`. The panel is drawn INSIDE our own window and only os88_onclick
+         * / os88_onkey swallow input - the KERNEL'S menu bar is untouched -
+         * so the pick lands, and a silent no-op is the shape 47 exists to
+         * stop. */
+        do_about();
+        do_wake();
+        a2_msg[0] = 0;
+        do_cmd(A2_M_MACHINE, A2_I_POWER);
+        if (a2_pan_kind == A2_PAN_CFM)
+            fail("Machine > Power On raised a confirmation over the About "
+                 "panel - one panel at a time");
+        if (strcmp(a2_msg, "Close the About panel.") != 0)
+            fail("Machine > Power On with the About panel up was a SILENT "
+                 "no-op - the kernel's menu bar is not swallowed by a panel "
+                 "drawn inside our own window (SPEC.md 47)");
+        do_click(100, 100);
+        if (a2_abt_up)
+            fail("the About panel did not close after the Power On refusal");
+        do_wake();
+        do_paint();
+
+        /* --- CPU > CONTINUE ON A JAMMED MACHINE (section 4.5, 10.3) -------
+         * The core never runs again after A2_ST_JAM, so `Continue` was a LIVE
+         * item that set a flag nothing reads and then said `Running.` - over
+         * the top of `6502: JAM at $xxxx`, because a2_status draws the
+         * message arm ABOVE the jam arm, and a jammed machine posts no wake
+         * so nothing was going to expire it. Both rows are greyed now, and
+         * the command refuses in silence if it is dispatched anyway. */
+        h_halt();
+        a2_menu_state();
+        if (a2_cpu_items[A2_I_STOP][0] != 1
+            || a2_cpu_items[A2_I_RUN][0] != 1)
+            fail("a JAMMED machine still offers CPU > Stop and Continue LIVE "
+                 "- there is no machine left to stop, which a2_jam's own "
+                 "comment says and a2_menu_state has to act on");
+        a2_msg[0] = 0;
+        a2_pause = 0;
+        do_cmd(A2_M_CPU, A2_I_RUN);         /* the kernel would not dispatch a
+                                             * disabled row, but a2_state can
+                                             * change between the pull-down
+                                             * being built and the pick */
+        if (a2_msg[0] != 0)
+            fail("CPU > Continue on a JAMMED machine said something - "
+                 "`Running.` REPLACES the 6502: JAM line, which is the one "
+                 "row that says why the machine is dead (section 4.5)");
+
+        /* ...AND THE LAUNCH DOCUMENT'S WAIT MAY NOT OUTLIVE THE 6502
+         * (SPEC.md 8.1.2). a2_argp used to sit in a2_wants_wake's LATCH arm,
+         * above the running gate, so a machine that cannot ever reach `]` -
+         * jammed, stopped, or behind the reboot confirmation - re-posted a
+         * wake at full rate for the whole 60-tick deadline, on the SHARED UI
+         * task. It rides the 6502's own arm now. */
+        a2_wr(0x0067, 0x00);                /* no `]` yet, and the deadline is
+                                             * a long way off, so the arm can
+                                             * neither fire nor expire */
+        a2_wr(0x0068, 0xFF);
+        a2_argp = 1;
+        a2_argdl = the_ticks + 1080;
+        do_wake();
+        if (!a2_argp)
+            fail("the fixture's launch document was spent before the test");
+        if (a2_wants_wake())
+            fail("a launch document waiting for `]` on a machine that is NOT "
+                 "RUNNING re-posts a wake at full rate - 60 seconds of the "
+                 "shared UI task with nothing able to satisfy it "
+                 "(SPEC.md 8.1.2)");
+        a2_argp = 0;
+        a2_wr(0x0067, 0x01);
+        a2_wr(0x0068, 0x08);
+        h_go();
+        a2_menu_state();
+        do_wake();
+
+        printf("a2uitest: the clipboard, program load and save, warp, stop "
+               "and the reboot confirmation all behaved\n");
+    }
+
     /* --- WHAT THE ABOUT PANEL CARRIES (APPLE2-SPEC section 11) ------------
      * The row CONTENT is section 11's list and the list is the binding part.
      * Two of its rows are there because something outside this program
@@ -3132,7 +4176,6 @@ int main(void)
             "Unable to load APPLE2.OVL.",
             "No bands here - text only.",
             "Another window has it.",
-            "No loader in this build.",
             "6502: JAM at $FFFF",       /* THE WIDEST FORM, and it is here
                                          * although it is no longer an
                                          * a2_say(): the jam is a PERMANENT
@@ -3146,6 +4189,42 @@ int main(void)
                                          * hold measured 14 of the 18 that
                                          * reach the glass */
             "Too large for a 48K Apple.",
+            "Too large for free memory.",   /* ...the OTHER ceiling: an
+                                             * association load whose claim
+                                             * stepped down below A2_PRGMAX
+                                             * and was exactly filled by the
+                                             * read (a2prog.c) */
+            /* --- WAVE 4's (sections 6.5, 10.2, 12) --------------------- */
+            "A file dialog is open.",
+            "Close the About panel.",        /* Machine > Power On with the
+                                             * About panel up: the kernel's
+                                             * menu bar is NOT swallowed by a
+                                             * panel drawn inside our own
+                                             * window, so the pick lands and
+                                             * has to say something (a2cmd.c) */
+            "The window is covered.",
+            "No memory for the copy.",
+            "The clipboard refused it.",
+            "The clipboard is empty.",
+            "No memory for the paste.",
+            "Cannot read the clipboard.",   /* 26 of 26 - the widest of the
+                                             * wave, and it shares the cap
+                                             * with `Unable to load
+                                             * APPLE2.OVL.` */
+            "Pasting 2048 bytes only.",     /* A2_PASTEMAX, spelled out */
+            "Not an Applesoft program.",
+            "No heap for the program.",
+            "Cannot read the file.",
+            "Cannot write the file.",
+            "Bad program pointers.",
+            "No program to save.",
+            "Cannot open that folder.",
+            "No ] prompt to load into.",
+            "Stopped.",
+            "Running.",
+            "Warp off.",
+            "Warp on.",
+            "Warp on - no change.",
             "ScrollLock: arrows, Space.",   /* section 6.6, and the widest of
                                              * the lot at 25 of 26 cells: the
                                              * kernel is eating the keys this

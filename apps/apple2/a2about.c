@@ -50,6 +50,31 @@
 #define A2_ABT_PADY 6
 #define A2_ABT_H    (A2_ABT_PADY + A2_ABT_ROWS * A2_ABT_LH + 16)
 
+/* ...AND MACHINE > POWER ON'S CONFIRMATION IS THE SAME PANEL WITH A KIND
+ * (section 10.2, apple2.c's A2_PAN_*). AppleWin's ConfirmReboot
+ * (source/Windows/WinFrame.cpp:1997-2013) is MB_ICONWARNING|MB_YESNO titled
+ * `Reboot`, and its first two lines are these two verbatim. The rest of that
+ * box is about a `Confirm reboot` checkbox in a Configuration dialog this
+ * port does not have, so it is not transcribed: a confirmation that points at
+ * a control the reader cannot reach is the guess SPEC.md 47 forbids.
+ *
+ * THREE ROWS, AND THE ROW COUNT IS A 640x200 COMPATIBILITY CONSTANT for this
+ * file's own reason - a control's y is `A2_ABT_PADY + row * A2_ABT_LH` and
+ * nothing clamps it, so adding a row here is a decision and not an edit. At
+ * three the panel is 52 pixels tall against the ~122 a framed CGA content box
+ * has, with 70 to spare. */
+#define A2_CFM_ROWS 3
+#define A2_CFM_H    (A2_ABT_PADY + A2_CFM_ROWS * A2_ABT_LH + 16)
+
+static const char *a2_cfm_text[2] = {
+    "Are you sure you want to reboot?",     /* WinFrame.cpp:2003 */
+    "(All data will be lost!)"              /* WinFrame.cpp:2004 */
+};
+static const char *a2_cfm_btn[2] = { "Yes", "No" };  /* MB_YESNO, in MB_YESNO's
+                                                      * own order: Yes is
+                                                      * button 0 and is where
+                                                      * a2_cfm_bx[0] is */
+
 /* TEN ROWS, AND EVERY ONE OF THEM IS SECTION 11'S LIST. `APPLE2 for os8088`
  * stood in row 2 as the version and is not one - it is the product name
  * again, one line down - so the row carries a REAL version, on
@@ -61,8 +86,27 @@
  * three blank spacers left: A2_ABT_H is a 640x200 compatibility constant
  * (this file's header) and adding a row is a decision, not an edit. */
 static const char *a2_abt_text[A2_ABT_ROWS] = {
-    "The Apple II Plus Emulator",           /* MII's model row, section 16.1's
-                                             * LONG product name */
+    "Apple II Plus Emulator",               /* AppleWin source/Common.h:50,
+                                             * TITLE_APPLE_2_PLUS - section
+                                             * 16.1's LONG product name, and
+                                             * the window title's own string
+                                             * (apple2.c's a2_title).
+                                             *
+                                             * THE ARTICLE IS GONE AND THE
+                                             * CITATION WAS WRONG. This row
+                                             * said `The Apple II Plus
+                                             * Emulator` and cited "MII's
+                                             * model row"; MII contains no
+                                             * such string anywhere, and the
+                                             * definer is the #define above -
+                                             * which every other place in this
+                                             * package already quotes without
+                                             * the article. So the one row
+                                             * that names the product was the
+                                             * one place the name was not the
+                                             * product's, in a package whose
+                                             * stated discipline is that no
+                                             * string is typed from memory. */
     "APPLE2 1.0 for os8088",                /* the VERSION row */
     "A 48K Apple II Plus, Applesoft in ROM", /* what this PORT is - the
                                               * MACHINE, not the rendering */
@@ -127,7 +171,7 @@ static int ovl_about_geom(void)
     a2_abt_w = a2_gbw;
     if (a2_abt_w > a2_gw)
         a2_abt_w = a2_gw;
-    a2_abt_h = A2_ABT_H;
+    a2_abt_h = (a2_pan_kind == A2_PAN_CFM) ? A2_CFM_H : A2_ABT_H;
     if (a2_abt_h > a2_gh)
         a2_abt_h = a2_gh;
     a2_abt_x = a2_gsx;
@@ -173,9 +217,16 @@ static int ovl_about_geom(void)
     return 1;
 }
 
+/* ovl_about_draw - the panel on the glass, EITHER KIND.
+ *
+ * The frame, the ground, the centred rows and the clamp are one piece of code
+ * with two texts and two button rows, which is what "a kind rather than a
+ * second panel" buys: a change to the clamp cannot fix one panel and leave
+ * the other broken. */
 static int ovl_about_draw(void)
 {
-    int i, y, w, x, bx, by;
+    int i, y, w, x, bx, by, nrows, nbtn;
+    const char *row;
 
     os88_set_color(OS88_WHITE);
     os88_gfx_fill(a2_abt_x, a2_abt_y,
@@ -183,11 +234,16 @@ static int ovl_about_draw(void)
     os88_set_color(OS88_BLACK);
     os88_gfx_frame(a2_abt_x, a2_abt_y,
                    a2_abt_x + a2_abt_w - 1, a2_abt_y + a2_abt_h - 1);
-    for (i = 0; i < A2_ABT_ROWS; i++) {
-        if (a2_abt_text[i][0] == 0)
+    nrows = (a2_pan_kind == A2_PAN_CFM) ? A2_CFM_ROWS : A2_ABT_ROWS;
+    nbtn = (a2_pan_kind == A2_PAN_CFM) ? 2 : 1;
+    for (i = 0; i < nrows; i++) {
+        row = (a2_pan_kind == A2_PAN_CFM)
+            ? ((i < 2) ? a2_cfm_text[i] : "")
+            : a2_abt_text[i];
+        if (row[0] == 0)
             continue;                       /* an empty row is a blank line
                                              * and not a call */
-        w = (int)os88_strlen(a2_abt_text[i]) * 8;
+        w = (int)os88_strlen(row) * 8;
         x = a2_abt_x + (a2_abt_w - w) / 2;
         y = a2_abt_y + A2_ABT_PADY + i * A2_ABT_LH;
         if (y + 8 > a2_abt_y + a2_abt_h - 1)
@@ -198,10 +254,10 @@ static int ovl_about_draw(void)
         /* ONE CALL A ROW, ink over paper, so no pixel is written twice - the
          * fill above is the ground the frame stands on and nothing else
          * (PERFORMANCE.md rule 2). */
-        os88_font_run(x, y, a2_abt_text[i], OS88_BLACK, OS88_WHITE);
+        os88_font_run(x, y, row, OS88_BLACK, OS88_WHITE);
 #ifdef A2_HOST
         a2_n_run++;
-        a2_n_cell += os88_strlen(a2_abt_text[i]);
+        a2_n_cell += os88_strlen(row);
 #endif
     }
 
@@ -215,16 +271,30 @@ static int ovl_about_draw(void)
      * the DESKTOP): a2_about_geom clamps a2_abt_h to a short content box, so
      * the button is placed against the panel's own foot when the rows have
      * eaten the space. */
-    bx = a2_abt_x + (a2_abt_w - 48) / 2;
-    by = a2_abt_y + A2_ABT_PADY + A2_ABT_ROWS * A2_ABT_LH;
-    if (by + 13 > a2_abt_y + a2_abt_h - 1)
-        by = a2_abt_y + a2_abt_h - 15;
-    if (by > a2_abt_y) {
-        os88_gfx_frame(bx, by, bx + 47, by + 13);
-        os88_font_run(bx + 16, by + 3, "OK", OS88_BLACK, OS88_WHITE);
+    by = a2_abt_y + A2_ABT_PADY + nrows * A2_ABT_LH;
+    if (by + A2_CFM_BH > a2_abt_y + a2_abt_h - 1)
+        by = a2_abt_y + a2_abt_h - A2_CFM_BH - 2;
+    a2_cfm_by = by;
+    for (i = 0; i < nbtn; i++) {
+        /* ONE button centred, or TWO with a 16-pixel gap - and the rects are
+         * REMEMBERED, because the resident click handler is what hit-tests
+         * them (apple2.c's os88_onclick). A static an ovl_* writes stays
+         * resident and DS-relative like every other: only code moves. */
+        bx = a2_abt_x + (a2_abt_w - (nbtn * A2_CFM_BW + (nbtn - 1) * 16)) / 2
+           + i * (A2_CFM_BW + 16);
+        a2_cfm_bx[i] = bx;
+        if (by <= a2_abt_y)
+            continue;                       /* the panel was clamped to a short
+                                             * content box: no room for a row
+                                             * of buttons in it */
+        os88_gfx_frame(bx, by, bx + A2_CFM_BW - 1, by + A2_CFM_BH - 1);
+        row = (a2_pan_kind == A2_PAN_CFM) ? a2_cfm_btn[i] : "OK";
+        w = (int)os88_strlen(row) * 8;
+        os88_font_run(bx + (A2_CFM_BW - w) / 2, by + 3, row,
+                      OS88_BLACK, OS88_WHITE);
 #ifdef A2_HOST
         a2_n_run++;
-        a2_n_cell += 2;
+        a2_n_cell += os88_strlen(row);
 #endif
     }
     return 1;
@@ -267,7 +337,7 @@ static int ovl_about_paint(void *win)
  * THE CLOSE IS DRAWN AS DAMAGE AND NOT AS A REPAINT: exactly the scan lines
  * the panel held are forced, and the flush draws them. A full repaint here
  * would be ~200 ms on the target for a rectangle 122 pixels tall. */
-static void a2_about_close(void *win)
+static void a2_panel_close(void *win, int yes)
 {
     /* THE THREE STATEMENTS ARE a2_about_gone's (a2scr.c), because every route
      * out of the panel owes exactly them: the latch down, the hold range
@@ -286,6 +356,20 @@ static void a2_about_close(void *win)
      * panel really does reach the top border strip, and there it still says
      * so. */
     a2_about_gone();
+    if (a2_pan_kind == A2_PAN_CFM && yes)
+        a2_reset_req = A2_RST_POWER;        /* ...and the WAKE spends it: a
+                                             * power-on is a 48KB fill and
+                                             * this runs under the desktop's
+                                             * gfx lock (apple2.c's
+                                             * a2_reset_service) */
+    a2_pan_kind = A2_PAN_ABOUT;
     a2_kick = 1;
     os88_wm_wake(win);
+}
+
+/* a2_about_close - the About panel's own route out, which is a2_panel_close
+ * with the answer that a panel carrying no question has. */
+static void a2_about_close(void *win)
+{
+    a2_panel_close(win, 0);
 }

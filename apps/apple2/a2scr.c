@@ -348,6 +348,68 @@ static void a2_dirty_split(void)
     a2_st_dirty = 1;
 }
 
+/* ovl_a2_dirty_range - THE ROWS A BLOCK MOVE ACTUALLY REACHED, and no others
+ * (section 7.5).
+ *
+ * File > Load Program writes [$0801, $0801+plen) straight into the RAM claim
+ * with a2_zzcopy_in, which goes round the core's own write path and so sets
+ * no page bit and no write window - the mark has to be made by hand. It was
+ * a2_dirty_all(), and that is a2_dirty_split's defect one call along: a
+ * five-line listing is ~45 bytes and, with text page 1 or either hi-res page
+ * on the glass, NOT ONE DISPLAYED BYTE MOVED - so all 192 lines were marked,
+ * all 24 rows widened, and the next flush recomposed the whole page at full
+ * width to produce the identical pixels. That is ~301 ms of compose on the
+ * target (section 7.9.2) for nothing, and it is reachable at LAUNCH: a cold
+ * double-click of a `.BAS` runs the same loader, so 301 ms was the first
+ * thing that happened after the wait for `]`.
+ *
+ * THE TEST IS PER ROW AND PER SCAN LINE, because that is how the source is
+ * laid out: a text or lo-res row is ONE forty-byte range at a2_row_base(r),
+ * and a hi-res row is EIGHT of them $400 apart (section 7.2) - which is the
+ * same distinction a2_dirty_scan makes, for the same reason. So a load
+ * displayed on text page 2 marks the four rows $0801 lands in, a load long
+ * enough to reach $2000 marks the hi-res lines it reached, and the ordinary
+ * listing marks nothing at all.
+ *
+ * a2_rowwide GOES WITH THE MARK for a2_dirty_split's reason: the write window
+ * says nothing about a range that never went through it, so it may not narrow
+ * the compose. a2_force_wide is called ONLY IF SOMETHING WAS MARKED - it
+ * widens the forced band-byte range, and doing that for a load nothing shows
+ * of would hand the next flush a full-width band for free.
+ *
+ * `ovl_` because it runs once per File > Load Program (section 15.0.2), and
+ * it ANSWERS 1 on LESSONS.md 5's rule that an overlay function answers a
+ * status and 0 means it did not happen. Nothing outside the module reaches it
+ * today, so nothing can be told 0 - but the rule is what the next reader
+ * copies, and ovl_a2_wr16 carries the same note one file along. */
+static int ovl_a2_dirty_range(unsigned lo, unsigned hi)
+{
+    int r, s, any;
+    unsigned b, l;
+
+    any = 0;
+    for (r = 0; r < A2_ROWS; r++) {
+        b = a2_row_base(r);
+        if (a2_row_mode(r) == A2_MODE_HIRES) {
+            for (s = 0; s < 8; s++) {
+                l = b + ((unsigned)s << 10);
+                if (l <= hi && l + (A2_COLS - 1) >= lo) {
+                    a2_line_dirty((int)A2_X8(r) + s);
+                    a2_rowwide[r] = 1;
+                    any = 1;
+                }
+            }
+        } else if (b <= hi && b + (A2_COLS - 1) >= lo) {
+            a2_row_dirty(r);
+            a2_rowwide[r] = 1;
+            any = 1;
+        }
+    }
+    if (any)
+        a2_force_wide();
+    return 1;
+}
+
 /* a2_sh_inval - the glass is unknown EVERYWHERE. The kernel has painted the
  * window's background over whatever was there, or a panel has owned it. */
 static void a2_sh_inval(void)

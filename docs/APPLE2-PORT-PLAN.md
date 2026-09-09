@@ -1286,6 +1286,124 @@ grepping the Makefile.
 
 ### Wave 4
 
+**The four menus went live, a listing gets in and out through the clipboard,
+and a program survives being saved and double-clicked.** Every item that has a
+body has one: File > Load Program... / Save Program... through `os88_fdlg`,
+Edit > Copy and Paste, Machine > Power On with AppleWin's two-row
+confirmation, CPU > `Normal: 1MHz`, Stop/Continue and Warp; File > Quit,
+Toggle Fullscreen and Flashing text stay in the RESIDENT half for the reasons
+`a2menu.c` states beside each. `a2_have_cmd` is set, so `a2_menu_state`
+rewrites every row it was holding and the two greyings that pointed at routes
+this build did not have come back WHOLE - Machine > Configure Slots... reads
+`No Disk II in this build. Load Program reads an Applesoft program, and Paste
+types a listing in.` again.
+
+**Every per-command body was written `ovl_` from the start** rather than moved
+there when the ceiling arrived, which is LESSONS.md 5's own instruction and is
+why the resident line moved 2,854 bytes for a wave that added seven commands, a
+clipboard pair, a loader, a saver and a modal dialog while `APPLE2.OVL` more
+than tripled. **The staging buffers are heap claims and not bss** - 1KB for
+Copy, 2KB for Paste, 47KB for a load, each freed the moment it is spent -
+which is the C64's 3,074-byte finding applied before the bytes were spent.
+
+**THE SIZE LINE (APPLE2-SPEC section 15.0.2):**
+
+| resident image | bss | resident total | `APPLE2.OVL` | resident shims | largest C frame |
+|---|---|---|---|---|---|
+| **34,220** | **13,852** | **48,072** of 61,440 | **4,266** | **37** | **54** of 96 |
+
+**13,368 spare; 6,928 under SPEC.md 73.9's 55,000 split trigger and 5,928
+under the 54,000 end-of-wave-5 ceiling**, so lever 1 is not pulled. The
+package FILE is 49,152 bytes with the ROM part in it, against The Wire's
+`WIRE_FILEMAX` of 64,512.
+
+**Three things this wave learned that were not in the plan.**
+
+1. **A `.BAS` double-click has to WAIT FOR `]`.** The first wake happens the
+   moment the window is on the glass, and Applesoft's cold start ends in a
+   `NEW`: a load spent there is wiped by the ROM and the glass shows a prompt
+   whose `LIST` is empty with nothing saying why. The condition is the cold
+   start's own output - `TXTTAB` = `$0801` and `VARTAB` >= `$0803`, measured
+   on the glass at 2049 and 2051 - and not a wall clock, which would be wrong
+   at both ends. APPLE2-SPEC section 12.1 is the contract.
+2. **The association path has no SIZE**, where the Standard File dialog has
+   one. The claim is `os88_mem_largest_kb()` capped at `A2_PRGMAX` and
+   **stepped down until the heap takes it**, and the read's own answer is the
+   size. The review found both halves of that wrong on the first cut: the cap
+   was a flat 47 KB = 48,128, which is 1,025 bytes ABOVE the `$C000 - $0801`
+   ceiling the dialog arm refuses on (the constant's comment said 47,615 when
+   it is 47,103), so a 47,104-byte `.BAS` double-clicked passed the walk and
+   wrote a byte at Apple `$C000` with `VARTAB` above `MEMSIZ`; and the claim
+   was that size WHATEVER the file was, so this wave's own 45-byte done_when
+   document asked a busy desktop for 46 KB pinned and was told `No heap for
+   the program.` about one cluster.
+3. **The reboot confirmation is the About panel with a KIND**, not a second
+   modal panel: the hold range, the geometry, the damage close and the
+   `os88_paint` arm are one piece of code with two texts, so a fix to one
+   cannot leave the other broken.
+
+**The `os88pkg` line, verbatim, and it now carries `assoc=1`:**
+
+```
+os88pkg: 'APPLE2' entry=+0x0070 image=34220 bss=13852 icon=yes assoc=1
+```
+
+which is 48,072 of 61,440 resident with `APPLE2.OVL` at 4,266 - **6,928 under
+the 55,000 split trigger**, so lever 1 stays unpulled.
+
+Two review passes moved the resident line **-60** against the wave's own first
+cut, and both spent their share on the same rule: **a per-command body is
+`ovl_` from the start.** The first pass moved `a2_wr16` and `a2_named` out;
+the second moved `a2_clip_service` and `a2_copy_screen`, whose split
+`a2kbd.c`'s own header asserted and the build did not have - about 170 x86
+instructions of resident image for the claims, both clipboard calls and all
+six refusals, none of which runs more than once per menu pick. The second pass
+also added `ovl_a2_walk` (the chain walk lifted out so the length-prefix hint
+can be second-guessed) and **+20 bytes of bss for the file command's latch**,
+which is what takes the loader out from under the desktop's gfx lock.
+
+**A whole-screen Edit > Copy is 31.1 ms and ONE bridge crossing** - 24
+`a2_zcopy_out` + 24 `a2_copy_row` + one `os88_clip_put_seg`. The per-row read
+is `tests/a2band`'s measured 0.314 ms; the 23.6 us per cell is DERIVED from
+the 8088's instruction-fetch floor and is labelled as derived, because
+`a2mem.inc` is not in that bench's `%include` list. The C64's first draft of
+the same pair crossed the segment boundary 2,000 times.
+
+**The second review's four majors**, and each has a gate that was proved to
+BITE by reverting the fix under it: **os88_onfile ran the whole loader under
+the DESKTOP'S GFX LOCK** - six claims, a 46 KB floppy read and a 48KB-capable
+block move, with the pointer and dock frozen and every other painter blocked -
+so it latches now and the wake spends it beside the launch document's arm;
+**the host stub truncated a read the kernel refuses**, which made an
+unreachable arm testable and the refusal it gates was the wrong sentence, so
+the stub answers `FERR_BIG` the way `kernel/diskw.inc` does and the loader
+reads `os88_ferr()`; **`a2_argp` sat above the running gate in
+`a2_wants_wake`**, spinning the shared UI task for a minute on a machine that
+could never reach `]`; and **CPU > Continue told a JAMMED machine it was
+running**, printing `Running.` over the one row that says why it is dead.
+
+**The evidence.** `make` green (34 fast-tier rows); `a2uitest` drives the whole
+wave-4 script against the model - the clipboard round trip with all three
+folds, a save and a load that round-trip byte for byte, a repaired chain from
+another load address, a refused file that does not touch the machine, the
+launch document's wait, the bounded give-up, the retitling and the
+confirmation's Yes/No/Esc - and `a2memtest` gained a tenth row for
+`a2_zzcopy_in`/`_out`, `a2_scan0` and `a2_copy_row` on a real x86 with
+SS != DS. On the glass, a driven QMP session: a five-line lower-case listing
+typed into Note Pad and copied, pasted into the Apple as upper case with one
+RETURN a line, `LIST`, `RUN` printing 1 to 5, `Save Program...` to `WORK.BAS`
+on a SCRATCH disk, Edit > Copy round-tripping the text page back into Note
+Pad, the Power On confirmation answered No and then Yes, File > Quit, and then
+a COLD reboot in which `WORK.BAS` wears the package's icon and a double-click
+brings the same listing back to `LIST` and `RUN`. The negative control is a
+scratch disk with `APPLE2.OVL` removed: a working Apple II at `]` whose menu
+commands say `Unable to load APPLE2.OVL.` on the status row and toast it on
+the bar - and toast it ONCE, naming `the menu commands that need it`, because
+Quit, Toggle Fullscreen and Flashing text are answered in the resident half -
+which is Decision 17's CHARGEN choice proved rather than asserted.
+The 1bpp pass is on `VIDEO=cga` in `build-cga/`: the confirmation renders
+inside a 200-line content box and `Configure Slots...` is legibly greyed.
+
 ### Wave 5
 
 ### Wave 6 - the follow-up PR

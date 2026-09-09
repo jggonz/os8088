@@ -402,11 +402,55 @@ Traps in the harness itself:
 - **Verify a saved file from the host by walking the FAT12 directory entry
   to its cluster**, not by grepping the image for its magic — the first grep
   found the package's own string literals.
-- **The C SDK has no build-time association block**, so `assoc=0` in the
-  header and `.RTF` is not double-clickable on a cold boot until the program
-  has run once (`os88_assoc_set()` is runtime). Known, ~15 lines in
-  `crt0.asm` (§54.6), left as an SDK change. Say so in the plan if the port
-  has a document type.
+- **A STUB THAT IS MORE PERMISSIVE THAN THE KERNEL IS LESSON 7 WITH THE SIGN
+  FLIPPED.** `a2uitest`'s `os88_file_read_seg` TRUNCATED to the caller's
+  capacity; the kernel REFUSES — `kernel/diskw.inc` compares the directory
+  entry's 32-bit size against the capacity before any data I/O and answers
+  `FERR_BIG` with the destination untouched, which `apps/cc/os88.h:854` says
+  in words. So the package grew a "was the read cut off?" arm that the machine
+  can never reach, the refusal a user would actually get was the WRONG
+  SENTENCE, and a new gate passed while asserting behaviour that does not
+  exist. When you write a stub for a slot that can refuse, **copy the
+  refusal, not the convenience** — and give the harness `os88_ferr()`, because
+  0 bytes means both "empty" and "refused" and nothing else tells them apart.
+- **`os88_onfile` ARRIVES UNDER THE DESKTOP'S GFX LOCK, and so does every
+  Standard File proc around it** (`kernel/fdlg.inc:45-48`, and `fdlg_commit`'s
+  own in-contract repeats it). `os88_onwake` is the ONE callback without it.
+  So the picker's answer is a LATCH — `os88_strcpy` the name (the kernel
+  reuses `fdlg_name`, so the pointer may not be kept), store the mode and
+  size, `os88_wm_wake` — and the wake does the claims, the read and the
+  parse. APPLE2 shipped the loader inline: six heap claims that may compact an
+  arena the package has a pinned 64KB in, a 46 KB floppy read and a 48KB block
+  move, all with the pointer frozen, the dock frozen and every other task's
+  painter blocked. It also defeats the overlay fence one line above it — that
+  fence exists so a locked caller does not go to the floppy for the `.OVL`.
+  **The host harness can assert this and an emulator cannot**: count claims
+  and file calls across the locked call and require both to be zero.
+- **The C SDK HAS a build-time association block, and this line used to say it
+  did not.** `%define CC_ASSOC "<pkg>/<pkg>assoc.inc"` in the shim, plus a file
+  holding a count byte and `OS88_ASSOC_EXT 'XXX'` per extension - the bracket
+  and the offset assertions are `crt0.asm`'s. `apps/apple2/a2assoc.inc` and
+  `apps/weave/wvassoc.inc` are the worked examples, and `os88pkg` prints
+  `assoc=1` when it took. So a document IS double-clickable on a cold boot with
+  no prior run, which `os88_assoc_set()` (runtime) cannot do. CWORD's `assoc=0`
+  is a fact about CWORD and not about the SDK.
+  **Declare it only in the wave that can OPEN the file**: an extension the
+  build cannot open launches the program and then refuses, which is worse than
+  no association - the user has spent a floppy seek, a claim and a window to be
+  told no. Write the `.inc` early (make cannot see through a `%include`, so it
+  has to be a written prerequisite from the start) and add the `%define` late.
+- **A launch document arrives with NO SIZE**, where the Standard File dialog
+  reads one out of the mount snapshot and hands it over so the program can
+  refuse before the motor spins. Claim what `os88_mem_largest_kb()` can spare,
+  capped at what the format can be, and take the READ's own answer as the size.
+- **`os88_arg_file()` is read-and-clear and the `.OVL` cannot be reached from
+  `os88_main`**, so the name is BANKED at launch and SPENT in the first wake -
+  and if the document has to be handed to something the emulated machine has
+  not finished booting yet, the wait is on that MACHINE's own state and not on
+  a wall clock. APPLE2 loaded an Applesoft program on the first wake and
+  Applesoft's cold start, which ends in a `NEW`, wiped it a moment later: a `]`
+  prompt whose `LIST` is empty, invisible to any screendump that does not type
+  `LIST`. Bound the wait, or a load left armed fires on the user's own `NEW`.
 - **The 86Box machine is a copy of one that has booted**, with the B: image
   and the uuid changed and *nothing else*: 86Box does not reject an unknown
   `cpu_family`, it substitutes a default speed and rewrites the config on

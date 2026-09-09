@@ -8,16 +8,17 @@
 ; apps/weave/wvassoc.inc and apps/frotz/frotz.asm do.
 ;
 ; ----------------------------------------------------------------------------
-; THIS FILE IS NOT %included YET, AND THAT IS THE DECISION AND NOT AN OVERSIGHT
+; IT IS %included FROM WAVE 4, AND THE DELAY WAS THE DECISION
 ; ----------------------------------------------------------------------------
-; `%define CC_ASSOC "apple2/a2assoc.inc"` goes into apps/apple2/apple2.asm in
-; the wave that makes File > Load Program... work, and not before.
-; APPLE2-SPEC section 12 states the reason: declaring an extension the build
+; `%define CC_ASSOC "apple2/a2assoc.inc"` went into apps/apple2/apple2.asm in
+; the wave that made File > Load Program... work, and not before.
+; APPLE2-SPEC section 12.1 states the reason: declaring an extension the build
 ; cannot open means a double-click LAUNCHES THE EMULATOR AND THEN REFUSES,
 ; which is worse than no association at all - the user has spent a floppy
-; seek, a 64KB claim and a window to be told no.
+; seek, a 64KB claim and a window to be told no. `os88pkg` prints `assoc=1`
+; when it has taken.
 ;
-; The file exists from wave 1 because it is a WRITTEN PREREQUISITE in the
+; The file existed from wave 1 because it is a WRITTEN PREREQUISITE in the
 ; Makefile (APPLE2SRC/APPLE2INC): make cannot see through a %include, and a
 ; file a later wave adds is a build the tree does not know about
 ; (LESSONS.md 9).

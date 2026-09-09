@@ -720,10 +720,112 @@ mask, **one call a row** through `a2_copy_row` in assembly, into a **transient
 heap claim** - not bss. The C64 gave back 3,074 bytes of bss doing exactly
 this.
 
+**THE MASK IS THE WHOLE OF THE INVERSE/FLASH/NORMAL QUESTION.** An Apple II+
+character generator holds 64 glyphs and the screen byte's top two bits pick
+the ATTRIBUTE rather than the character (section 7.3), so `and $7F` collapses
+inverse and flashing onto the normal codes and `a2_astab[128]` folds what is
+left: `$00-$1F` and `$40-$5F` are `@A-Z[\]^_`, ASCII `$40-$5F`; everything
+else is ASCII `$20-$3F` unchanged. What the user sees flashing and what the
+clipboard gets are the same letter, which is what a listing copied off a `]`
+prompt has to be. The table is built in `os88_main` and is RESIDENT: 128
+bytes of bss and a nine-line loop against a `.data` array paid for twice, on
+the floppy and in the region.
+
+**The row separator is CR** (`$0D`), which is what this OS's own clipboard
+readers store - SPEC.md 27.6 folds CR LF and a lone LF onto it - and what
+Paste feeds the Apple, so a Copy pastes back byte for byte. Trailing spaces
+come off each row: an Apple text row is space-padded to forty cells and a
+listing pasted elsewhere must not be.
+
 **Paste** types a listing into the keyboard latch on apple2emu's
-peek-and-consume handshake: `$C000` peeks the next byte with bit 7 set,
-`$C010` consumes it, `\n` folds to `\r`, `\0` ends the paste. **The emulated
-program sets the rate, so there is no pacing state at all.**
+peek-and-consume handshake (`src/keyboard.cpp:176-215`): `$C000` PEEKS the next
+byte and presents it with bit 7 set, `$C010` CONSUMES it and the next `$C000`
+read presents the next byte, `\n` folds to `\r`, `\0` ends the paste. **The
+emulated program sets the rate, so there is no pacing state at all** - and a
+byte stands at the latch for exactly as long as the machine has not taken it,
+which is the one shape that cannot overrun the machine's input
+(PERFORMANCE.md's third emulator-invisible defect). The strobe advances on a
+WRITE as well as on a read (section 5.1), or a program using `STA $C010` would
+type the first character for ever.
+
+**IT PRESENTS ONLY INTO A FREE LATCH, AND THAT ONE COMPARE IS TWO FIXES.**
+`a2_paste_peek` is called on EVERY `$C000` read while a paste is in flight -
+not once per byte the machine takes - and wave 4 had it rewrite the latch
+unconditionally. So **a key the user typed during a paste was destroyed**:
+`a2_kb_put` set the latch and the machine's next read overwrote it before
+returning, which put **Ctrl-C - the only in-machine way to stop a runaway
+paste of up to 2 KB - permanently out of reach**, leaving the Machine menu as
+the only escape. And the cost claim was wrong with it: Applesoft's `ISCNTC`
+polls `$C000` between statements and does **not** strobe `$C010` unless the
+byte is Ctrl-C, so a `RUN` with a queue still in it paid the guard +
+`a2_paste_peek` + `os88_peek` - ~33 us on the target - **per emulated poll**,
+for a queue that could not advance. `if (a2_kb_ready) return;` closes both:
+the queue's byte is still presented and `a2_paste_i` has not moved, so nothing
+is lost.
+
+**AND THE GUARD IN FRONT OF ALL THREE ARMS IS A DATA TEST, NOT A CALL.** It
+was `a2_paste_live()`, and `cc8086` emits a real near call for it - a `bp`
+frame, two memory compares and a `ret` - on **every `$C000` read, every
+`$C010` read and every `$C010` write**, whether or not a paste exists. An idle
+Apple II at `]` does nothing but poll `$C000` (the Monitor's KEYIN loop is one
+read per ~15 emulated cycles) and every echoed keystroke strobes `$C010`, so
+that was a permanent per-emulated-cycle tax on every session - charged
+straight out of the per cent the status row reports - for a feature most
+sessions never use. `a2_paste_seg` is declared in `a2io.c` beside `a2_kb_put`
+and `a2_paste_up`, and the three arms test it directly: **one compare against a
+word of DS, and zero calls when nothing is pasting.** What makes that legal is
+`a2kbd.c`'s own invariant - `a2_paste_take` calls `a2_paste_stop` the moment
+the last byte is consumed, so `a2_paste_seg != 0` and *a paste is in flight*
+are the same fact and there is no second state to keep in step. `a2_paste_live`
+is gone rather than left unused.
+
+**AND THE STROBE THEN NEEDS TO KNOW WHOSE BYTE IT IS.** Once the latch can
+hold something that is not the queue's, `$C010` can no longer assume it is
+consuming a pasted character - without `a2_paste_up` (one byte, declared in
+`a2io.c` beside `a2_kb_put`, which is the one place that clears it) every key
+the user typed during a paste would swallow one queued byte on the strobe
+behind it. `a2_paste_take` advances only while it is set.
+
+**THREE FOLDS, AND EACH IS ONE LINE.** `\n` to `\r` is apple2emu's own
+(`:181-183`); **a CR LF pair becomes ONE `\r`**, so a listing copied on a
+DOS-line-ending machine types one RETURN a line and not two; and **lower case
+folds to upper as `a2_key` folds it** (section 6.1), because a II+ keyboard
+has no lower case at all and Applesoft would answer `?SYNTAX ERROR` to every
+line of a lower-case listing.
+
+**BOTH COMMANDS ARE A LATCH, AND THE WORK IS SPLIT BY FREQUENCY.**
+`os88_oncmd` is dispatched under the desktop's gfx lock, so `ovl_a2_cmd` sets
+one word and `ovl_a2_clip_service` (`a2kbd.c`) spends it from the top of the
+next wake with no lock held and before the slice - between the pick and the
+work not one emulated cycle has run, so the page copied is the page on the
+glass.
+
+**AND THE ONCE-PER-PICK HALF IS `ovl_`.** `a2_clip_service` and
+`a2_copy_screen` were RESIDENT while `a2kbd.c`'s header said they were not -
+about 170 x86 instructions of image for the claims, both clipboard calls, the
+row walk and all six refusals, none of which runs more than once per menu
+pick. They are legally `ovl_` because the wake is a UI-task context holding no
+lock and the latch can only have been set through `ovl_a2_cmd`, so the module
+is already resolved; a 0 from the service means the runtime refused the module
+and the wake says so once. The per-byte and per-`$C000`-read halves -
+`a2_paste_peek`, `_take`, `_stop` - stay resident and must.
+
+**THE MEASURED COST OF A WHOLE-SCREEN COPY IS 31.1 ms** (`a2uitest`'s own row):
+24 `a2_zcopy_out` + 24 `a2_copy_row` + one `os88_clip_put_seg`, one bridge
+crossing. The per-row read is `tests/a2band`'s measured 0.314 ms; the per-cell
+term, 23.6 us, is DERIVED from the 8088's instruction-fetch floor over the
+loop as written (PERFORMANCE.md Part 2's `max(clocks, 4.34 x bytes)`) and is
+labelled as derived in `a2uitest.c`, because `a2mem.inc` is not in that bench's
+`%include` list.
+
+**Copy's staging claim is 1KB and Paste's queue is 2KB.** Copy's bound is its
+own - 24 rows of at most 40 folded cells and a CR is 984 bytes - and Paste's is
+what ONE `os88_clip_get` can be given, because `OSAPI_CLIP_GET` has no offset
+and so cannot be read in chunks; a longer clipboard is pasted as far as it fits
+and `Pasting 2048 bytes only.` says so with the number in it. Copy's claim is
+freed inside its own wake; Paste's is held for exactly as long as there are
+bytes left to type, and **a reset empties the queue and frees it** - after a
+Power On it is not that machine any more.
 
 Paste is the **primary way a BASIC program gets in** before Disk II exists.
 
@@ -1083,6 +1185,25 @@ phase that changes not one pixel of it.
 ### 7.5 The damage model
 
 Taken whole from `C64-SPEC §9.2`, with the mapping step replaced.
+
+**A BLOCK MOVE MARKS THE ROWS IT REACHED, AND NO OTHERS** (`ovl_a2_dirty_range`
+in `a2scr.c`). `a2_zzcopy_in` - File > Load Program's one write into the
+machine - goes round the core's own write path, so it sets no page bit and no
+write window and the mark has to be made by hand. Wave 4 made it with
+`a2_dirty_all()`, which is `a2_dirty_split`'s own defect one call along: a
+five-line listing is ~45 bytes at `$0801`, and with text page 1 or either
+hi-res page on the glass **not one displayed byte moved** - yet all 192 scan
+lines were marked and all 24 rows widened, so the next flush recomposed the
+whole page at full width to produce identical pixels. That is the **~301 ms**
+of section 7.9.1's `a mode switch that draws the same picture`, and it was
+reachable at LAUNCH: a cold double-click of a `.BAS` runs the same loader, so
+301 ms was the first thing that happened after the wait for `]`. The range test
+is per row and per SCAN LINE for section 7.2's reason - a text or lo-res row is
+one forty-byte range at `a2_row_base(r)` and a hi-res row is eight of them
+`$400` apart - so an ordinary listing marks nothing, a load displayed on text
+page 2 marks the rows `$0801` lands in, and a program long enough to reach
+`$2000` marks the hi-res lines it reached. `a2_force_wide` is called only if
+something was marked.
 
 - **A 32-byte dirty-page bitmap**, one bit per 256-byte page, ORed on every
   RAM write from a `cs:`-resident mask table. Reads are not the hazard; only
@@ -1787,7 +1908,7 @@ table, which had been written from the plan rather than from the files:
 |---|---|
 | **File** (4) | `Load Program...`, `Save Program...`, separator, `Quit` |
 | **Edit** (2) | `Copy`, `Paste` |
-| **Machine** (11) | `Open-Apple-Control-Reset`, `Control-Reset  Ctrl+F2`, `Power On`, `Configure Slots...`, `Joystick...`, separator, `Toggle Fullscreen`, `  Color NTSC`, `* Flashing text`, `  Mute`, `Louder` |
+| **Machine** (11) | `Open-Apple-Control-Reset`, `Control-Reset  Ctrl+F2`, `Power On`, `Configure Slots...`, `Joystick...`, separator, `  Toggle Fullscreen`, `  Color NTSC`, `* Flashing text`, `  Mute`, `  Louder` |
 | **CPU** (8) | `  Normal: 1MHz`, `  Fast: 3.5MHz`, `  Warp`, separator, `  Stop`, `  Running`, `  Step`, `  Next` |
 
 **EVERY ROW OF A MARKED GROUP OWNS THE TWO-GLYPH COLUMN, whatever its state.**
@@ -1812,19 +1933,28 @@ the same x. os8088's `menu.inc` has no such margin, so the column is spelled
 into the label, and in CPU it is free: the longest label is 12 glyphs against
 a cap of 24.
 
-**MACHINE'S LEFT EDGE IS RAGGED, AND THE 24-GLYPH CAP IS WHY.** `Color NTSC`,
-`Flashing text` and `Mute` carry the column and the other eight rows do not,
-so those three are indented against their neighbours. Giving the column to all
-eleven is arithmetically impossible: `Open-Apple-Control-Reset` is **24** with
-nothing prefixed and `Control-Reset  Ctrl+F2` is 22, so the pair that would
-have to lose two glyphs are the two whose text is fixed by the machine's own
-vocabulary. The alternative - dropping the column from the three markable rows
-and marking by some other means - would need a mark the kernel's menu code
-does not have. **So the trade is stated rather than left as an accident**: the
-three tickable rows are two cells in, the eight untickable ones are not, and
+**MACHINE'S COLUMN IS THE ROW-GROUP'S, AND THE 24-GLYPH CAP IS THE FENCE.**
+The five rows BELOW the separator - `Toggle Fullscreen`, `Color NTSC`,
+`Flashing text`, `Mute`, `Louder` - all carry the column, and that is the fix
+this wave's review asked for: `Color NTSC`, `Flashing text` and `Mute` had it
+and the two around them did not, so **three labels in one group started two
+cells right of the two beside them** - the rule's own words for the defect,
+photographed in `w4r-31-menu-machine.png` and `w4r-54-cga-menu-machine.png`.
+The arithmetic allows it: `Toggle Fullscreen` is 17 + 2 = **19** of 24 and
+`Louder` is 6 + 2 = **8**.
+
+**The five rows ABOVE the separator cannot follow, and that is a fact about
+their names**: `Open-Apple-Control-Reset` is **24** with nothing prefixed and
+`Control-Reset  Ctrl+F2` is 22, so the pair that would have to lose two glyphs
+are the two whose text is fixed by the machine's own vocabulary. The
+alternative - dropping the column from the markable rows and marking by some
+other means - would need a mark the kernel's menu code does not have. **So the
+trade is stated rather than left as an accident**: the video/audio group is
+columned throughout, the reset/configure group above the separator is not, and
 this is a cap on a 320-pixel screen rather than an oversight. Nothing in MII,
 AppleWin or apple2emu shows a ragged edge, because none of them draws a mark
-in the title.
+in the title - `mui_menus_draw.c` adds `margin_left` to every title
+unconditionally, marked or not.
 
 **THE PULL-DOWN CAP IS ELEVEN ITEMS** (`MENU_POPMAX`, kernel/menu.inc:208)
 **and the item cap is twenty-four glyphs** (`MENU_MAXCH`, :236). Both are
@@ -1881,6 +2011,19 @@ because it is the one command that must work on a disk whose `APPLE2.OVL` is
 missing. It goes through `OSAPI_WM_CLOSE`, spent from the WAKE and not from
 `os88_oncmd`.
 
+**AND IT DOES NOT CONFIRM, WHICH IS A DEPARTURE FROM ITS OWN CITED
+AUTHORITY.** MII's `quit` action puts up
+`mui_alert(..., "Quitting", "Do you really want to quit the emulator?",
+MUI_ALERT_WARN)` (`mii_mui_menus.c:243-249`), and this port closes the window
+straight away. The reason is that **the OS owns the close**: on os8088 a
+window's close box is one click away with no confirmation at all, so a
+confirming Quit would be the *slower* of two routes to the same loss and
+would still not protect the fast one. Machine > Power On confirms because
+there is no OS idiom behind it - it wipes 48K and leaves the window open, and
+AppleWin confirms exactly that (`WinFrame.cpp:1997-2013`). The two rows are
+inconsistent on the glass and this is why; recording it is the point, because
+a citation that is only half true is the thing this file exists to prevent.
+
 ### 10.2 What is live
 
 Load Program... , Save Program... , Quit, Copy, Paste, Control-Reset,
@@ -1898,19 +2041,75 @@ Are you sure you want to reboot?
 (All data will be lost!)
 ```
 
+**IT IS THE ABOUT PANEL WITH A KIND, AND THAT IS A DECISION RATHER THAN A
+SHORTCUT.** AppleWin's `ConfirmReboot`
+(`source/Windows/WinFrame.cpp:1997-2013`) is `MB_ICONWARNING|MB_YESNO` titled
+`Reboot`, and the two rows above are its first two verbatim; the rest of that
+box is about a `Confirm reboot` checkbox in a Configuration dialog this port
+does not have, so it is **not transcribed** - a confirmation that points at a
+control the reader cannot reach is the guess SPEC.md 47 forbids. What it needs
+on this machine is exactly what the About panel already is (section 11): modal,
+snapped to the band, holding the Apple scan lines it covers so nothing under
+it is drawn, dismissed as DAMAGE and not as a repaint. A second copy would be
+a second `ovl_about_geom`, a second hold range and a second arm in
+`os88_paint`, and the two would drift; so it is `a2_pan_kind`, and
+`A2_CFM_ROWS` = 3 is a 640x200 compatibility constant for the same reason
+`A2_ABT_ROWS` = 10 is.
+
+**Yes is button 0 and No is button 1** (`MB_YESNO`'s own order), the hit test
+is RESIDENT and the two button rects are statics the overlay's drawing wrote -
+a click is a callback and a callback is reached by a near offset, while only
+code moves. **ANY KEY MEANS YES IS NOT A THING TO DO TO A ROW WHOSE SECOND
+LINE IS `(All data will be lost!)`**: Enter and `Y` answer yes and every other
+key - Esc, `N`, a letter typed at a machine the user had forgotten was behind
+a card - answers NO and dismisses, as does a click anywhere that is not the
+Yes button. **Nothing is latched by the PICK**; the ANSWER is what sets
+`A2_RST_POWER`, and the wake is what spends it, because a power-on is a 48KB
+fill and `os88_oncmd` runs under the desktop's lock.
+
+**`Normal: 1MHz`'s body is WARP OFF.** MII's `mhz1` sets the machine's speed
+back to `MII_SPEED_NTSC` (`mii_mui_menus.c:327-329`); this port has no throttle
+at all, so what "normal" means here is the un-warped machine, and
+`Normal: 1MHz` / `Fast: 3.5MHz` / `Warp` are the same three radio partners MII
+has with the two reachable ends live. **Its MARK is not its state**: section
+10.1's table ticks it from the MEASURED per cent on MII's own 0.9-1.1 band, so
+on a host running the core at 2,000 % the row is unticked with warp off and
+the status row is why. Picking it on an already un-warped machine does nothing
+and says nothing, exactly as picking `Stop` on a stopped machine does - which
+is MII's own behaviour and not a silent refusal.
+
+**`Warp` is the wall slice's CAP and nothing else**, because there is no
+throttle here to take off: `a2_slice` runs `a2_budget` cycles a wake and the
+status row reports what that came to, so the only thing warp can lift is the
+ceiling the adaptation walks the budget up to - `A2_SLICE_MAX` 16,384 to
+`A2_SLICE_WARP` 30,000, still under the signed countdown's 32,767 (section
+4.2). **The cap comes back down with it**, or an adapted budget would outlive
+the warp it was granted for. On the `CPU_8086` tier it changes nothing and
+says so (`Warp on - no change.`): at 4.77 MHz a 16,384-cycle slice is far more
+than one host tick of work, so the adaptation settles the budget near its
+256-cycle floor and the ceiling is not what binds. It DOES bind on a 286 or a
+386, which is why the row is not greyed.
+
+**`Stop` and `Continue` are TWO ITEMS and not one toggle** - MII's
+`SIGNAL_STOP` and `SIGNAL_RUN` (`:333`, `:350`) - so picking Stop on a stopped
+machine does nothing. The latch is `a2_pause`, its own flag and not an
+`a2_state` value, because a paused machine is still a machine and a jammed one
+is not; a stopped machine answers 0 to `a2_wants_wake` and parks.
+
 ### 10.3 Present and greyed - the fact that greys it (SPEC.md 47)
 
 | item | the fact |
 |---|---|
-| **Machine > Configure Slots...** , in this PR | `No Disk II in this build.` **The second sentence lands in WAVE 4**: `Load Program reads an Applesoft program, and Paste types a listing in.` is untrue of a build whose File > Load Program... and Edit > Paste are both greyed, and a greying that points the reader at two routes they cannot take is exactly the guess SPEC.md 47's rule 5 forbids |
+| **Machine > Configure Slots...** , in this PR | `No Disk II in this build. Load Program reads an Applesoft program, and Paste types a listing in.` **WAVE 4 RESTORED THE SECOND SENTENCE**, because it is the wave that wrote both routes. Wave 1 shortened the fact to its first half rather than point the reader at two routes they could not take, which is exactly the guess SPEC.md 47's rule 5 forbids; a greying may not outlive its reason either |
 | Machine > Configure Slots... , once the Disk II follow-up lands: every slot but 6 | `Slot 6 holds a Disk II. There are no other cards in this port.` |
 | Machine > Joystick... (already `.disabled = 1` in MII's own menu table, which is the authentic grey) | `The paddles answer centre. The game buttons PB0 and PB1 are F1 and F2 - a departure from AppleWin's Left-Alt / Right-Alt.` **WAVE 3 RESTORED THE SECOND SENTENCE**, because it is the wave that reads them: wave 1 shortened the fact to its first half rather than name a control the build did not have, which is rule 5's guess. They are host conveniences and GAME BUTTONS, not //e Apple keys - section 6.3 |
 | Machine > `Color NTSC`, folding MII's four other tint rows | `The window is monochrome.` **The colour sentence lands in WAVE 5**, which is the wave that writes the foreign video mode: `Colour is in the foreign video mode - Machine > Toggle Fullscreen on a VGA.` names a route that does not exist in this build, and rule 5 is that a greying states a fact rather than a promise |
 | Machine > `Mute`, until the speaker lands | `There is no speaker in this build.` - and it is `a2_have_snd` that greys it, never a `D` baked into the literal, so wave 5 revives the row with nothing else moving |
 | Machine > `Louder`, folding MII's `Quieter` | `The Apple's speaker is a one-bit toggle. There is no volume on it.` - PERMANENT, and the one audio row that stays greyed after wave 5 |
 | Machine > `Flashing text`, **on the `CPU_8086` tier only** | `Flashing forces a text repaint 3.6 times a second. On a 4.77 MHz 8088 that is 43.1 ms each time and the machine would spend it on the phase rather than on the 6502.` **THE NUMBER IS FILLED IN AND THE ROW IS GREYED, FROM WAVE 3** (the tier table, section 7.8): the harness measures one flip at 43.1 ms with TWO flashing rows on the screen and at 3.64 flips a second that is 157 ms in every second of an 8088. Until this wave the item was LIVE on every tier, because refusing on a figure nobody had taken would have been the guess SPEC.md 47 forbids. **It is `a2_fl_ok` that both refuses and greys** - `a2_tier_init` clears it and `a2_menu_state` reads the tier beside it - so the refusal and the greying cannot disagree, and the row is greyed UNMARKED rather than greyed with a tick still beside it |
-| CPU > Fast: 3.5MHz | `There is no speed control in this build. The core runs the whole of each wake's slice and the status row reports what that came to.` **It read `This machine runs at 1.02 MHz. Warp is this port's speed control and is beside it.` through wave 2's first form, and that is a claim about the MACHINE which the status row on the same screen refutes**: there is no throttle here at all - `a2_slice` runs `a2_budget` cycles a wake - and the measured figure is 2,180 % on the VGA desktop and 2,775 % on CGA. A greying may state what the BUILD does not have; it may not state a speed the glass above it contradicts (SPEC.md 47 rule 5). The `Warp` half went with it: the row it pointed at is greyed too, so it named a route the reader cannot take |
+| CPU > Fast: 3.5MHz | `There is no 3.5MHz mode. CPU > Warp is this port's speed control and is beside it.` **It read `This machine runs at 1.02 MHz. Warp is this port's speed control and is beside it.` through wave 2's first form, and that is a claim about the MACHINE which the status row on the same screen refutes**: there is no throttle here at all - `a2_slice` runs `a2_budget` cycles a wake - and the measured figure is 2,180 % on the VGA desktop and 2,775 % on CGA. A greying may state what the BUILD does not have; it may not state a speed the glass above it contradicts (SPEC.md 47 rule 5). Wave 2 struck the `Warp` half with it, for a reason of its own - *the row it pointed at is greyed too, so it named a route the reader cannot take* - and **wave 4 put that half back, because the reason expired when `Warp` went live.** The first sentence lost `in this build` with it: what wave 4 removed is a 3.5 MHz MODE, and the build does have a speed control now, so the old wording said something the row two below it refutes. A greying may not outlive its reason and neither may the removal of one - the same test this wave applied to `Configure Slots...` and wave 3 to `Joystick...` |
 | CPU > Step, CPU > Next | `There is no debugger in this port.` |
+| CPU > `Stop` and CPU > `Continue`, **on a JAMMED machine only** | the fact is **already on the glass and is permanent**: `a2_status` draws `6502: JAM at $xxxx` in the message area for as long as `A2_ST_JAM` lasts (section 4.5), so these two rows are the one greying in this table with no sentence of its own and need none. The core never runs again after a jam - the slice, `a2_wants_wake` and the status row all test `a2_state == A2_ST_RUN` - so `Continue` was a LIVE item that set a flag nothing reads and then said `Running.` **over the top of the JAM line**, because the message arm is drawn ABOVE the jam arm and a jammed machine posts no wake to expire it. `a2_jam` already called `a2_menu_state` with the comment *there is no machine left to stop*; this is that sentence acted on. The launch spelling comes back with the `D`, because `Stopped` / `Continue` would describe a machine that could be continued |
 | `.NIB`, `.WOZ`, `.2MG`, `.HDV` on the disk dialog's refusal, named rather than silently rejected (the follow-up PR) | `This build reads a 143,360-byte .DSK, .DO or .PO. A .WOZ is a flux image and needs a bit-cell model - a decision every four emulated cycles, which on a 4.77 MHz 8088 is the difference between a slow emulator and a stopped one.` |
 | a wrong-sized disk image, on the "Invalid Disk Image" alert (the follow-up PR) | `File '<name>' is the wrong size, <size> too <big\|small>.` - MII's wording, with the size formatted human-readably as MII formats it, **not** as a raw byte delta |
 
@@ -1920,7 +2119,11 @@ which is its only home now that a Mockingboard row is off the bar entirely.
 **AND THREE GREYINGS ARE TEMPORARY AND SAY SO IN THE SOURCE**: in wave 1 every
 command whose body needs a 6502 wears `OS88_MENU_DIS` off `a2_have_cpu`, which
 **wave 2 set**; the commands whose BODIES wave 4 writes wear it off
-`a2_have_cmd`; and `Mute` wears it off `a2_have_snd`, which wave 5 sets. They
+`a2_have_cmd`, which **WAVE 4 SET** - Load Program..., Save Program..., Copy,
+Paste, Power On (with its confirmation), `Normal: 1MHz`, Stop/Continue and Warp
+all have bodies now, so the greying has stopped being true and 47 does not let
+one outlive its reason; and `Mute` wears it off `a2_have_snd`, which wave 5
+sets. They
 have no user-visible fact because there is no user of a wave - what ships is
 the PR - and rule 47's alternative, an item that is live and can only answer
 "not yet", is the thing 47 exists to stop.
@@ -2003,10 +2206,29 @@ the artifact colour is MII's ten-entry integer CLUT instead.
 ## 11. The About panel
 
 `ovl_about_show` in `a2about.c`, on MII's panel shape and the C64's mechanics
-(`C64-SPEC §12`): modal, the machine paused while it is up, its close drawn as
+(`C64-SPEC §12`): modal to INPUT, its close drawn as
 **damage and not as a repaint**, the panel snapped to the cell grid so the
 rows it covers are exact and `os88_paint` skips them, and **redrawn only when
-the damage rect actually reaches its rect**. The panel is 1 fill + 2 frames +
+the damage rect actually reaches its rect**.
+
+**IT DOES NOT PAUSE THE MACHINE, AND THE CONFIRMATION DOES.** This section
+read "modal, the machine paused while it is up" from wave 3 and the code never
+did that; the review of wave 4 made the two agree, and it made them agree in
+the direction the redraw budget argues rather than by pausing both. The About
+panel's HOLD RANGE is what keeps the glass correct - the flush composes and
+blits nothing under it - so a machine mid-`RUN` carries on behind it, and
+stopping the 6502 because somebody opened About would be a behaviour change
+with nothing asking for it. Machine > Power On's confirmation (section 10.2)
+is the other way round on both counts: it is 52 pixels tall against the About
+panel's 122, so it holds ~6 of the 24 character rows and a machine that is
+printing kept composing and blitting the other ~18 on **every host tick,
+~200 ms of the target apiece**, for as long as a human took to read two lines -
+which also makes the Yes/No click feel lost on a 4.77 MHz XT, the wake being
+busy drawing a picture the box is covering. And the answer is about to wipe the
+machine, so there is nothing running behind it worth a pixel. `A2_CFM_UP()`
+(apple2.c) is that one term, in the wake's slice arm and in `a2_wants_wake`,
+so the app IDLES while the box waits instead of re-posting a wake a tick;
+`a2uitest` counts `a2_run` calls across it. The panel is 1 fill + 2 frames +
 8 `font_run` over 196 glyph cells - **~185 ms on the target** - so repainting
 it on the latch alone made a partial expose with the panel up MORE expensive
 than one without it, which inverts the whole point of the hold rows: a
@@ -2067,7 +2289,11 @@ OK button clamped inside the panel.
 
 **What it carries, and this list is the binding part:**
 
-1. the product - `The Apple II Plus Emulator`;
+1. the product - `Apple II Plus Emulator`, which is AppleWin's own
+   `TITLE_APPLE_2_PLUS` (`source/Common.h:50`) and the window title's string.
+   **The row carried a leading `The` and a citation to "MII's model row"
+   through wave 3, and MII contains no such string**: the one row that names
+   the product was the one place the name was not the product's;
 2. the version - `APPLE2 1.0 for os8088`, and it is a **version**: the row
    read `APPLE2 for os8088`, which is the product name again one line down;
 3. what this **port** is;
@@ -2118,9 +2344,23 @@ DocuMentor: Applesoft).
 
 **Program text begins at `$0801` on a II+.**
 
-**Load Program...** uses `os88_fdlg` for the picker, then reads the file into
-`$0801` and writes `TXTTAB` = `$0801` and
+**Load Program...** uses `os88_fdlg` for the picker, then reads the
+file into a **transient heap claim**, walks it there, and only then moves the
+accepted program into `$0801` and writes `TXTTAB` = `$0801` and
 `VARTAB` = `ARYTAB` = `STREND` = `PRGEND` = end.
+
+**THE PICKER GETS NO DEFAULT NAME, AND `"*.BAS"` WAS A FILTER WRITTEN INTO A
+SLOT THAT HAS NONE.** `os88_file_dlg`'s third argument is a default NAME;
+SPEC.md 38.9 says outright that the dialog does no filtering by extension
+("an Open dialog that hid `.TXT` from Note Pad would be a lie about what is on
+the disk"), and 38.5 that Open mode has no field to type in - but the box is
+still DRAWN with the name in it (`kernel/fdlg.inc`'s `fdlg_name_body` draws
+`fdlg_name` in both modes and suppresses only the caret), and `fdlg_actok`
+lights the Open button as soon as the name is non-empty. So the literal
+`*.BAS` sat on the glass and **Open was live before anything was selected**,
+committing the name `*.BAS` and ending at `Cannot read the file.` The OPEN
+call passes **0**, which leaves SPEC.md 38.10's per-application last-picked
+name to seed the box - what the slot is for. SAVE keeps `PROGRAM.BAS`.
 
 **WHAT IS ACCEPTED IS DEFINED BY THE PROGRAM'S OWN STRUCTURE, NOT BY A
 LENGTH-PREFIX SNIFF.** This document called the 2-byte prefix "documented" and
@@ -2139,6 +2379,24 @@ skip it - and the acceptance is the **walk**:
   four pointers are written from** - not the file's length, which a trailing
   byte can make wrong.
 
+**AND A HINT THAT CANNOT BE SECOND-GUESSED IS NOT ONE.** The test fires on a
+**headerless** file whenever word 0 - which is then the first line's link,
+`$0801 + len(line 1)` - happens to equal `filesize - 2`, i.e. whenever the
+lines after the first total exactly 2,051 bytes. Such a file loads and RUNs on
+a real Apple II, and this port refused it, with the wrong sentence, **on files
+its own Save wrote** - Save is headerless. So the walk runs at the hinted base
+and, if it fails, **at zero**, and only a file that walks at neither is
+refused.
+
+**THAT IS WHY THE WALK IS TWO PASSES.** `ovl_a2_walk(seg, base, end, fix)`
+with `fix` = 0 **validates and writes nothing**; with `fix` = 1 it does the
+same walk and repairs each link. A repairing walk at base 2 has already
+overwritten the bytes a walk at base 0 would read as the first line's NUMBER,
+so the fallback is only possible if the deciding pass is read-only. The
+repairing pass then runs once, on the base that was accepted, and cannot fail.
+It costs one extra pass of four peeks and one `a2_scan0` a LINE, once per Load
+Program.
+
 **A file whose links point at another load address is REPAIRED and not
 trusted**, which is what Applesoft itself does: its own **`FIX.LINKS` at
 `$D4F2`** (`AppleWin/bin/A2_BASIC.SYM:224`) rebuilds the chain from the line
@@ -2150,10 +2408,127 @@ nothing is written into the machine's memory before the walk has passed: a
 half-loaded program is a `]` prompt that crashes on RUN with nothing saying
 why.
 
-**Save Program...** writes `$0801` to `VARTAB - 1`, headerless.
+**THE WALK'S INNER LOOP IS `a2_scan0` (`a2mem.inc`), ONE CALL A LINE.** A line
+ends at a `$00` and `FIX.LINKS` finds it by scanning; written in C that is one
+`os88_peek` a BYTE - ~235 ms for a 5KB program. What the walk costs is four
+peeks, one scan and two pokes A LINE, twice over, which is a bound this
+document can state.
+
+**AND NONE OF IT RUNS UNDER THE GFX LOCK.** `os88_onfile` is dispatched with
+the desktop's lock held - `kernel/fdlg.inc:45-48` states it of `fdlg_open`,
+the window procs and `fdlg_commit` alike - and the body is up to six
+`os88_mem_claim`s (each of which may **compact** an arena this package has a
+pinned 64KB in), a floppy read of up to 46 KB (`os88.h` prices 116KB at ~ten
+seconds of motor), the walk and a 48KB-capable block move; Save is the same
+shape with `os88_file_write_seg`, which `os88.h` flags as stalling every
+painter for its duration. Run inline that is **seconds of frozen pointer,
+frozen dock and every other task's painter blocked in `os88_gfx_lock`**, on
+the very target this port is for - and it defeated the `a2_ovl_ready` fence on
+the line above it, which exists so a locked caller does not go to the floppy
+for the 4 KB overlay. **The handler LATCHES** - the name copied (the kernel
+reuses `fdlg_name`), the mode and the size stored, one wake posted - **and the
+wake spends it**, beside the launch document's arm, which has always taken
+exactly this route. `a2uitest`'s `do_file` asserts that neither a claim nor a
+file operation happened before the lock came off. Its sentinel is **`$FFFF` and not `-1`**: a 48K program's offsets reach
+47,103, which read as a negative `int`, so a `< 0` test would refuse every line
+past the 32KB mark of a large listing.
+
+**BOTH ARMS END AT ONE CEILING, AND `A2_PRGMAX` IS 47,103.** `$C000 - $0801`
+is 47,103 and the constant's own comment said 47,615, which is where the
+association arm's flat 47 KB claim came from: 47 KB is 48,128, **1,025 bytes
+above the ceiling the size-known arm refuses on**. A `.BAS` between 47,104 and
+48,128 bytes double-clicked was therefore read and walked, and the walk's only
+ceiling is `next < $C000` - so a program whose terminator landed at `$BFFF`
+PASSED, one byte was written at Apple `$C000` (outside the 48K the `a2_wr`
+fence protects), and `TXTTAB`..`PRGEND` were set to `$C001`, above `MEMSIZ`.
+The status row said `Loaded` for a program the machine cannot RUN. `cap` is
+clamped to `A2_PRGMAX` on both arms, so `end` is bounded and the two arms
+refuse the same file; `a2uitest` loads a 47,104-byte well-formed chain and
+requires `Too large for a 48K Apple.` with `$0801` untouched.
+
+**AND THE ASSOCIATION ARM'S CLAIM STEPS DOWN.** Asking for the whole ceiling
+whatever the file is asks the desktop for a 46 KB **pinned** claim on top of
+this package's already-pinned 64 KB, and the commonest launch document is a
+one-cluster listing: on a busy 640KB machine the answer was `No heap for the
+program.` about 45 bytes. The claim halves until it is taken.
+
+**AND THE READ ITSELF IS WHAT SAYS THE FILE DID NOT FIT.** The first cut of
+this decided it from `got == cap` after the walk had failed, on the belief
+that a read can be **cut off** by a short buffer. No os8088 kernel does that:
+`kernel/diskw.inc:1836-1845` compares the directory entry's 32-bit size
+against the caller's capacity **before any data I/O** and answers `FERR_BIG`
+with the destination untouched, which `apps/cc/os88.h` states in words. So an
+oversized file arrives as `got` = 0 with `os88_ferr()` = `FERR_BIG`, and the
+arm that reads it names the ceiling that bound it - `Too large for a 48K
+Apple.` when `cap` reached `A2_PRGMAX`, `Too large for free memory.` when the
+heap is what bound it. The old arm was not merely unreachable: `got < 4` fired
+first, so an over-large association load was refused as `Cannot read the
+file.` **The gate that said otherwise passed on a HOST STUB that truncated**,
+which is the port skill's lesson 7 with the sign flipped, and the stub refuses
+the way the kernel refuses now. `a2uitest` gates both sentences on the same
+47,104-byte file, once against `A2_PRGMAX` and once against an 8 KB heap.
+
+**Save Program...** writes `$0801` to `VARTAB - 1`, headerless. `VARTAB` is the
+end of the program INCLUDING the two zero bytes of its terminating link, which
+is why a Save and a Load round-trip byte for byte: `NEW` leaves `TXTTAB` =
+`$0801` and `VARTAB` = `$0803`, so a saved empty program is two zero bytes.
+Both figures are measured on the glass - `PRINT PEEK(103)+PEEK(104)*256` reads
+2049 at a fresh `]` and `PEEK(105)/(106)` reads 2051.
 
 The bodies are `ovl_*` in `a2prog.c`, called by the **resident**
-`os88_onfile`.
+`os88_onfile`, which does the `size_hi` refusal (`Too large for a 48K Apple.`)
+before the disk is touched. Every other refusal is SAID on the status row by
+name and by reason - `Not an Applesoft program.`, `No heap for the program.`,
+`Cannot read the file.`, `Cannot write the file.`, `Bad program pointers.`,
+`No program to save.`, `Too large for free memory.` - and each answers 1, so a **0 at the call site can only
+mean the runtime refused the module** (`a2cmd.c`'s rule).
+
+### 12.1 The association, and what a double-click has to wait for
+
+**`CC_ASSOC` declares `BAS` from wave 4** (`a2assoc.inc`, turned on in
+`apple2.asm`), so a `.BAS` beside the package opens on the FIRST double-click
+of a COLD boot with no prior run - the mount's icon harvest reads the block out
+of the header's first sector, which the SDK's runtime `os88_assoc_set()` cannot
+do.
+
+**A double-click hands the package a NAME AND A FOLDER AND NO SIZE**, which is
+the arm the picker never takes: the Standard File dialog reads a size out of
+the mount snapshot so the program can refuse before the motor spins. With no
+size the claim is what `os88_mem_largest_kb()` can spare, capped at
+`A2_PRGMAX` and **stepped down until the heap takes it** (section 12's two
+paragraphs on the ceiling), and **the READ's own answer is the size**.
+`os88_arg_file()` is read-and-clear, so it is banked in `os88_main` and spent
+in the wake, which holds no lock, may call the file slots, and is the only
+place an `ovl_*` can be reached from at launch.
+
+**AND IT WAITS FOR THE MACHINE TO REACH `]` FIRST.** The first wake happens the
+moment the window is on the glass, and at that point the 6502 has run a few
+hundred cycles: the Autostart Monitor has not handed over to Applesoft yet, and
+**Applesoft's cold start ENDS IN A `NEW`**. A load spent on the first wake
+lands in `$0801` and is wiped by the ROM a moment later, and the glass shows a
+`]` prompt whose `LIST` is empty with nothing saying why - which is what the
+first cut of this did, and which no screendump that does not type `LIST` can
+see. The condition is the cold start's OWN OUTPUT and not a wall-clock guess:
+`TXTTAB` = `$0801` and `VARTAB` >= `$0803`, where the power-on pattern leaves
+`$67`/`$68` = `$00`/`$FF`. A wall clock would be wrong at both ends - the
+target runs the Apple at a few per cent of its own speed, so a cold start that
+is one emulated second is tens of wall seconds there and a fraction of one
+under an emulator. The wait is **bounded at one minute of host ticks** and
+gives up with `No ] prompt to load into.`, because a load left armed for the
+session would otherwise fire on the user's own `NEW`.
+
+**AND THE WAIT MAY NOT OUTLIVE THE 6502.** `a2_argp` sat in `a2_wants_wake`'s
+LATCH arm, above the running gate, on the argument that *what it is waiting for
+is the 6502* - which is precisely the reason it must sit BELOW that gate. A
+wait is not a wake's worth of work, and three machines can never satisfy it: a
+**jammed** one (`A2_ST_JAM`), one the user stopped with **CPU > Stop**, and one
+sitting behind the **Power On confirmation**, which `A2_CFM_UP()` was added in
+this very wave to stop the app re-posting for. Each of those wakes did two
+`a2_rd16`s and posted another - the 100 % spin SPEC.md 8.1.2 exists to remove,
+on the SHARED UI task, for a whole minute. It rides the running arm now, which
+is true whenever the ROM can reach `]`, and a stopped machine idles.
+`a2uitest` arms a launch document on a jammed machine and requires
+`a2_wants_wake()` to answer 0.
 
 **`CC_ASSOC` declares `BAS`** (SPEC.md 54.6), so a `.BAS` opens on the FIRST
 double-click of a **cold** boot with no prior run - which CWORD's runtime
@@ -2435,6 +2810,85 @@ was **~+1,400 with the shared accumulator** against an actual ~+1,500 of
 composer, which is the one number in section 15.2 that can be checked against
 a measurement rather than against another estimate.
 
+### 15.0.2 END OF WAVE 4, MEASURED
+
+| | end of wave 3 | end of wave 4 | moved |
+|---|---|---|---|
+| resident image | 31,426 | **34,220** | **+2,794** |
+| bss | 13,604 | **13,852** | **+248** |
+| **resident total** | 45,030 | **48,072** of 61,440 | **+3,042**, 13,368 spare |
+| `APPLE2.OVL` | 996 | **4,266** | +3,270 |
+| resident shims | 8 | **37** | +29 |
+| largest C frame | 54 | **54** bytes | the 96-byte cap |
+| the FILE on disk | 46,080 | **49,152** (image + `APPLE2.ROM`'s 14,848 and the header) | `WIRE_FILEMAX` 64,512 |
+
+The figures are the SECOND REVIEW's. Against the wave's own first cut
+(31,426+13,844 image/bss and a 3,167-byte overlay) the resident line has moved
+**-60 across the two review passes**, and **the overlay is where the wave
+went**: 4,266 against 996.
+
+The second pass moved the image **-142** and the overlay **+546**, and the
+whole of that is one rule applied twice more. `a2_clip_service` and
+`a2_copy_screen` were resident - about 170 x86 instructions of image for code
+that runs once per menu pick - while `a2kbd.c`'s own header claimed they were
+not; they are `ovl_a2_clip_service` and `ovl_a2_copy_screen` now. `ovl_a2_walk`
+is new, and is the load's whole chain walk lifted out of `ovl_a2_load` so the
+length-prefix hint can be second-guessed (section 12). The bss took **+20**:
+the file command's latch - `a2_fname[13]`, `a2_fmode`, `a2_fsize`, `a2_fileq` -
+which is what buys the desktop back from a floppy read under the gfx lock, and
+`a2_paste_live`'s deletion gave a few bytes of image back with it.
+
+**6,928 UNDER THE 55,000 SPLIT TRIGGER and 5,928 under the end-of-wave-5
+ceiling of 54,000**, so **lever 1 is NOT pulled this wave** (section 15.4):
+`a2_x2b`, the doubled band, stays in bss where the flush cannot refuse it.
+
+**THE OVERLAY TOOK THE LARGER SHARE OF THE WAVE, WHICH IS THE DESIGN AND NOT
+AN ACCIDENT.** `APPLE2.OVL` went from 996 bytes to 4,266 - the seven command
+bodies, the linked-line walk, the two file bodies, the clipboard service and
+the confirmation's drawing are all once-per-command by definition - while the
+resident image took only what runs per BYTE or per CALLBACK: the paste
+handshake, the two new movers, `a2_scan0`, `a2_copy_row`, the panel's hit test
+and the launch document's wait. Every per-command body in this wave was written `ovl_` from
+the start rather than moved there afterwards, which is LESSONS.md 5's own
+instruction and is why the resident line moved 2,936 for a wave that added
+seven commands, a clipboard pair, a loader, a saver and a modal dialog. **The
+review found two that had not been**: `a2_wr16` and `a2_named` were resident
+and reachable from `ovl_a2_load`/`ovl_a2_save` alone, ~120 bytes of the
+resident line (their bodies, two shims and two vectors) plus six bridge
+crossings a command that existed only because the rule had not been applied to
+them, and **the second review found two more**: `a2_clip_service` and
+`a2_copy_screen`, whose split `a2kbd.c`'s header asserted and the build did
+not have. The per-byte and per-`$C000`-read halves - `a2_paste_peek`,
+`_take`, `_stop` - stay resident and must, because they are on the emulator's
+hottest path.
+
+**bss moved 248 bytes, in five groups** - and the first version of this
+paragraph said "all of it is Edit > Copy's two arrays", which accounts for 176
+of the 244 and is the kind of sentence the next wave sizes a decision against:
+
+| group | bytes |
+|---|---|
+| Edit > Copy's fold table (128 entries) and its forty-byte row scratch | 168 |
+| the paste queue's four words - `a2_paste_seg`, `_n`, `_i`, `_cr` - and the review's fifth byte, `a2_paste_up` | ~10 |
+| the launch document's name, place, flag and deadline (`a2_argname[13]`, `a2_argplace`, `a2_argp`, `a2_argdl`) | ~22 |
+| the wave's own latches and rects: `a2_progmsg[28]`, `a2_copy_req`, `a2_paste_req`, `a2_pause`, `a2_warp`, `a2_pan_kind`, `a2_cfm_bx[2]`, `a2_cfm_by`, `a2_ovl_told` - less the 16 bytes the review took back off `a2_refuse_kb`'s line buffer when it was cut to `TOAST_MAX` | ~28 |
+| the file command's LATCH, which is what takes the loader out from under the desktop's gfx lock (section 12): `a2_fname[13]`, `a2_fmode`, `a2_fsize`, `a2_fileq` | ~20 |
+
+**The staging buffers are heap claims and not bss** - 1KB
+for Copy and 2KB for Paste, taken when the command runs and freed the moment
+it is spent - which is the C64's own 3,074-byte finding applied before the
+bytes were spent rather than after.
+
+**The `os88pkg` line, verbatim:**
+
+```
+os88pkg: 'APPLE2' entry=+0x0070 image=34362 bss=13832 icon=yes assoc=1
+```
+
+`assoc=1` is new and is section 12.1's own evidence: the association block is
+in the header from this wave, so a `.BAS` opens on the first double-click of a
+cold boot.
+
 ### 15.1 The headline - PLANNED
 
 | | PLANNED |
@@ -2552,13 +3006,13 @@ Pulled without stopping, each reported in the wave's measured paragraph.
 
 | file | holds | resident |
 |---|---|---|
-| `apps/apple2/apple2.c` | the translation unit's root and the only file nasm ever sees a `.c` through: the GPL-2+ + four-attribution header, every prototype, the geometry constants, `os88_main` (the 64KB RAM claim, `os88_part_seg(0)`, **the CHARGEN decode and the 7-bit reverse table**, the fetch-bias underflow guard, `os88_snd_caps` once, the tier init, the RAM power-on pattern, `os88_key_down` armed here and nowhere else, the window sized against `os88_video().dock_top`), `os88_paint`, `os88_onkey`, `os88_onclick`, `os88_onfile`, `os88_onwake` (THE slice driver), the latches the wake spends before the slice, and the `#include`s in order | yes |
-| `apps/apple2/a2io.c` | the `$C000-$C0FF` soft switches, both directions; the keyboard latch and strobe; the video switches guarded by value; the speaker toggle and its interval estimator; the paddle one-shots and the two buttons; the slot-ROM ladder; and (the follow-up) the Disk II controller's sixteen `$C0Ex` cases with the 6-cycle re-read. **Every read here is side-effecting and the file says so at the top** | yes |
-| `apps/apple2/a2kbd.c` | the scancode-to-Apple-byte map with its rejections and folds, the Ctrl folds routed on SCAN, the reset chords, Alt+Enter, the paste feeder's handshake, and Copy's screen-encoding walk. **The per-byte loops are HERE and resident**; only the command shells are `ovl_` | yes |
+| `apps/apple2/apple2.c` | the translation unit's root and the only file nasm ever sees a `.c` through: the GPL-2+ + four-attribution header, every prototype, the geometry constants, `os88_main` (the 64KB RAM claim, `os88_part_seg(0)`, **the CHARGEN decode and the 7-bit reverse table**, the fetch-bias underflow guard, `os88_snd_caps` once, the tier init, the RAM power-on pattern, `os88_key_down` armed here and nowhere else, the window sized against `os88_video().dock_top`), `os88_paint`, `os88_onkey`, `os88_onclick`, `os88_onfile` (**which LATCHES and nothing more** - section 12), `os88_onwake` (THE slice driver), the latches the wake spends before the slice, and the `#include`s in order | yes |
+| `apps/apple2/a2io.c` | the `$C000-$C0FF` soft switches, both directions; the keyboard latch and strobe, **and the paste's own `a2_paste_seg` beside them, so the three hot arms test a word of DS rather than calling** (section 6.5); the video switches guarded by value; the speaker toggle and its interval estimator; the paddle one-shots and the two buttons; the slot-ROM ladder; and (the follow-up) the Disk II controller's sixteen `$C0Ex` cases with the 6-cycle re-read. **Every read here is side-effecting and the file says so at the top** | yes |
+| `apps/apple2/a2kbd.c` | the scancode-to-Apple-byte map with its rejections and folds, the Ctrl folds routed on SCAN, the reset chords, Alt+Enter, and the paste feeder's per-byte handshake (`a2_paste_peek` / `_take` / `_stop`). **The per-byte and per-`$C000`-read halves are HERE and resident**; the once-per-pick half - `ovl_a2_clip_service` and `ovl_a2_copy_screen`, every claim, both clipboard calls and all six refusals - is `ovl_` and is in `APPLE2.OVL`. The first cut of this row claimed that split and the build did not have it | mixed |
 | `apps/apple2/a2scr.c` | the damage model, the frame shadow, the flash phase and its force pass, the flush, the k-row scroll test, the mode dispatch, the tier table, the letterbox fills, **the clamped-window bottom anchor**, and the fullscreen geometry (`a2_scw`/`a2_sch`, decided in ONE place) | yes |
 | `apps/apple2/a2menu.c` | the four menu tables with every string, mnemonic and caption, the `OS88_MENU_DIS` greying with the FACT in a comment beside each item, the menu-set struct, and the `os88_oncmd` dispatcher - two compares and then an `ovl_`, except File > Quit | yes |
 | `apps/apple2/a2cmd.c` | `ovl_*`: the first-wake probe and every menu command SHELL. **It does NOT carry the CHARGEN decode or the reverse table.** No per-byte loop is written in this file | **no** |
-| `apps/apple2/a2prog.c` | `ovl_*`: the Load and Save Program bodies (section 12) | **no** |
+| `apps/apple2/a2prog.c` | `ovl_*`: the Load and Save Program bodies, the two-pass chain walk (`ovl_a2_walk`) and the zero-page pointer write (section 12) | **no** |
 | `apps/apple2/a2disk.c` | `ovl_*`: the Configure Slots dialog, the image open and validate, the per-drive claim and drive 2's refusal, the sector-order pick and the eject (the follow-up PR) | **no** |
 | `apps/apple2/a2about.c` | `ovl_about_show` (section 11) | **no** |
 | `apps/apple2/a2cpu.inc` | the 6502 core (section 4) | yes |
@@ -2580,6 +3034,42 @@ fence, and the **WAKE**, which holds no lock, is what retries the load; and
 **the `.OVL` cannot be loaded from `os88_main`** - there is no instance yet -
 so the first `ovl_*` call is `ovl_a2_init()` from the **first wake**, printing
 `Unable to load APPLE2.OVL.` on the status row and toasting when it refuses.
+
+**ONE SENTENCE FOR ONE CONDITION, AND THE TOAST IS SAID ONCE.** `a2_ovl_ready`
+had a second string of its own - `No APPLE2.OVL yet.` - that **no user could
+ever read**: it clears `a2_ovl_asked`, so the very next wake re-runs the probe
+and the probe overwrites the row before a tick has passed. The wave shipped a
+message nothing could show, and its `yet` was a promise where SPEC.md 47 asks
+for the fact; both routes say `Unable to load APPLE2.OVL.` now. The ROW is
+said on every menu pick, because the row is the answer to what the user just
+did; the TOAST is an announcement and is made once (`a2_ovl_told`), where it
+used to repeat per pick.
+
+**AND THE TOAST IS 21 CHARACTERS, BECAUSE `TOAST_MAX` IS 24**
+(`kernel/toast.inc:85`) and a longer one is TRUNCATED rather than refused.
+`APPLE2: no APPLE2.OVL beside the program - the menu commands will refuse`
+reached the glass as **`APPLE2: no APPLE2.OVL be`** - 76 characters of which
+the user could read 24, with the consequence in the half that was cut. It says
+`APPLE2: no APPLE2.OVL` and the 26-cell status row beside it carries the rest.
+Two more of this package's toasts were over the same cliff and were cut with
+it: `Apple II+: 64KB wanted, 384KB free.` said `Apple II+: 64KB wanted, ` -
+the NUMBER, which is the whole message, in the cut half - and
+`Apple II+: the ROM claim is too low in memory` stopped at
+`Apple II+: the ROM claim`.
+
+**AND THE FIRST RECOMPOSITION CUT THE WRONG WORD.** `APPLE2 needs 64K, 384K`
+fits and reads as **two requirements**: the word that made the second figure
+mean anything was `free`. It says **`APPLE2: 64K, 384K free`** - 13 + a
+three-digit figure + 6, so 22 of the 24 - with the label and both halves of
+the arithmetic intact; the ROM row is `APPLE2: ROM too low`.
+
+`apps/apple2/build.sh` fails the build on an `os88_toast` **literal** over
+`TOAST_MAX`, the way it already did on an `a2_say` over the row - and on a
+**COMPOSED** one that is not in its `TOAST_COMPOSED` table with a proven
+bound (`line` 22, `a2_jamline` 18). The composed arm is the one that was
+missing, and it is the one that mattered: `a2_refuse_kb`'s toast is composed,
+so a literal-only walk never saw the very message this section is about.
+Nothing was checking, which is why all three shipped.
 
 **AND AN `ovl_*` ANSWERS A STATUS: 0 MEANS IT DID NOT HAPPEN** (SPEC.md 73.14,
 the port skill's lesson 5). `ovl_about_geom` and `ovl_about_draw` returned
@@ -2612,7 +3102,7 @@ like a change that did nothing.
 | source | `apps/apple2/` |
 | shipped files | `APPLE2.O88` (with the ROM as part 0), `APPLE2.OVL` |
 | window title | `Apple II Plus Emulator` |
-| About panel, first row | `The Apple II Plus Emulator` |
+| About panel, first row | `Apple II Plus Emulator` (AppleWin `source/Common.h:50`, `TITLE_APPLE_2_PLUS` - the same string as the window title; the leading `The` and the "MII's model row" citation were wave 3's and are corrected in wave 4) |
 | menu-set `AM_NAME` | `Apple II+` |
 | The Wire record title | `Apple II+` |
 | images | `build/apple2.img` (1.44MB), `build/apple2720.img` (720KB), `build/apple2120.img` (1.2MB), `build/apple2360.img` (360KB) |

@@ -19,6 +19,7 @@ struct os88_pt   { int x, y; };
 struct os88_size { int w, h; };
 struct os88_rect { int x1, y1, x2, y2; };
 struct os88_video { int w, h, dock_top, kind, bpp; };
+struct os88_place  { unsigned clus; int vol; };
 struct os88_mouse  { int x, y, btn; };
 
 #define OS88_MENU_MAX 5
@@ -40,6 +41,10 @@ struct os88_menuset { const char *name; int oncmd; int nmenus;
 #define OS88_MENU_DIS  1
 #define OS88_FDLG_OPEN 0
 #define OS88_FDLG_SAVE 1
+#define OS88_FERR_OK   0
+#define OS88_FERR_BIG 10                    /* apps/cc/os88.h:346, and the
+                                             * kernel's own value
+                                             * (kernel/diskw.inc:68) */
 
 void *os88_main(void);
 void os88_paint(void *win);
@@ -99,6 +104,10 @@ int  os88_snd_tone(int hz, int ticks, int prio);
 int  os88_clip_put(const void *text, unsigned len);
 int  os88_clip_get(void *buf, unsigned cap);
 int  os88_clip_size(void);
+/* ...and the _seg forms, which are the ones Edit > Copy and Edit > Paste use:
+ * the staging area is a transient heap CLAIM and never bss (section 6.5). */
+int  os88_clip_put_seg(unsigned seg, unsigned off, unsigned len);
+int  os88_clip_get_seg(unsigned seg, unsigned off, unsigned cap);
 
 unsigned os88_mem_claim(int kb);
 int      os88_mem_free(unsigned seg);
@@ -107,7 +116,14 @@ int  os88_peek(unsigned seg, unsigned off);
 void os88_poke(unsigned seg, unsigned off, int value);
 unsigned os88_part_seg(int i);
 unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap);
+int  os88_file_write_seg(const char *name, unsigned seg, unsigned count);
+int  os88_ferr(void);                       /* apps/cc/os88.h:882 - the FERR_*
+                                             * of the last file call, and the
+                                             * ONLY thing that tells a 0-byte
+                                             * read from a refusal */
 int  os88_file_dlg(int mode, void *win, const char *defname);
+int  os88_arg_file(char *name13, struct os88_place *p);   /* SPEC.md 54.5 */
+int  os88_file_goto(struct os88_place *p);
 
 void os88_memset(void *p, int c, unsigned n);
 void os88_memcpy(void *dst, const void *src, unsigned n);

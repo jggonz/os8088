@@ -85,13 +85,22 @@
                                     ; is C64-SPEC §15.2's correction already
                                     ; made rather than repeated
                                     ;
-                                    ; NO CC_ASSOC YET. The block is written
-                                    ; and sits in a2assoc.inc; APPLE2-SPEC
-                                    ; section 12 turns it on in the wave that
-                                    ; makes Load Program work, because
+%define CC_ASSOC "apple2/a2assoc.inc"   ; **WAVE 4 TURNED IT ON** (SPEC.md
+                                    ; 54.6, APPLE2-SPEC section 12): `.BAS` is
+                                    ; MINE, so a tokenised Applesoft program
+                                    ; beside APPLE2.O88 opens on the FIRST
+                                    ; double-click of a COLD boot - no prior
+                                    ; run and no search, which the SDK's
+                                    ; runtime os88_assoc_set() cannot do. It
+                                    ; was deliberately absent until this wave:
                                     ; declaring an extension the build cannot
-                                    ; open launches the emulator and refuses,
-                                    ; which is worse than no association
+                                    ; open launches the emulator and then
+                                    ; refuses, which is worse than no
+                                    ; association - the user has spent a
+                                    ; floppy seek, a 64KB claim and a window
+                                    ; to be told no. `DSK`, `DO` and `PO` land
+                                    ; with the Disk II follow-up PR, for the
+                                    ; same reason one wave along
 %define CC_HAS_OVL                  ; APPLE2.OVL (SPEC.md 73.14) - ON FROM THE
                                     ; FIRST COMMIT (APPLE2-SPEC section 15.1).
                                     ; The alternative is discovering at 55,000

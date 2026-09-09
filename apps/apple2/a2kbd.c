@@ -54,8 +54,8 @@
  * three digital inputs at $C061-$C063, of which PB0 and PB1 are the two a
  * game reads.
  *
- * WAVE 4 brings the paste feeder's peek-and-consume handshake and Copy's
- * screen-encoding walk.
+ * WAVE 4 BROUGHT the paste feeder's peek-and-consume handshake and Copy's
+ * screen-encoding walk; they are at the foot of this file.
  *
  * ALT+ENTER AND CTRL+F ARE **NOT** WAVE 3'S: Machine > Toggle Fullscreen is
  * LIVE from wave 1, a WF_FULL window has no menu bar, and a fullscreen window
@@ -259,4 +259,277 @@ static void a2_kbd_poll(void)
             }
         }
     }
+}
+
+/* ==========================================================================
+ * EDIT > COPY AND EDIT > PASTE (APPLE2-SPEC section 6.5)
+ *
+ * THE COMMANDS ARE LATCHES AND THE WORK IS SPLIT BY FREQUENCY, which is
+ * SPEC.md 73.14's rule applied to a pair of commands that would otherwise
+ * cross the segment boundary a thousand times:
+ *
+ *  - ONCE PER PICK - the two clipboard calls, the claims, the six refusals
+ *    and the row walk - is `ovl_a2_clip_service` / `ovl_a2_copy_screen`, in
+ *    APPLE2.OVL. This paragraph used to claim the split and the build did not
+ *    have it: both bodies sat in `section .text`, about 170 x86 instructions
+ *    of resident image for code that runs once per menu pick, and a2cmd.c
+ *    held only the two latch assignments. They are reachable as `ovl_`
+ *    because the wake is a UI-task context holding no lock and the latch can
+ *    only have been set through ovl_a2_cmd, so the module is already resolved.
+ *  - PER BYTE AND PER $C000 READ - `a2_paste_peek`, `_take`, `_live` and
+ *    `_stop` - IS RESIDENT AND MUST BE: those are on the emulator's hottest
+ *    I/O path, and `a2_paste_stop` is called by `a2_reset_service` too.
+ *  - PER ROW is a hand-written proc (`a2_copy_row`, a2mem.inc), called once a
+ *    row. A Copy is ONE bridge crossing - os88_oncmd -> ovl_a2_cmd and back -
+ *    plus the service's own, and the C64's header records what the first
+ *    draft of the same pair cost before any of this: 2,000 far-call round
+ *    trips, ~110 ms, all of it under the gfx lock.
+ *
+ * AND NEITHER RUNS IN ITS COMMAND HANDLER. os88_oncmd is dispatched under the
+ * DESKTOP's gfx lock (os88.h), so every instruction a command executes is the
+ * whole desktop stopped; both clipboard calls and both claims reach
+ * kernel/clip.inc's mem_claim, which may COMPACT an arena this app has a
+ * pinned 64KB in - a term nobody can bound from a command handler
+ * (LESSONS.md 6). ovl_a2_clip_service runs from the TOP of the wake with no lock
+ * held and BEFORE the slice, so between the pick and the work not one
+ * emulated cycle has run and the page copied is the page on the glass.
+ * ========================================================================*/
+#define A2_CLIPMAX  (A2_ROWS * (A2_COLS + 1))   /* 984: COPY'S OWN BOUND - 24
+                                                 * rows of at most 40 folded
+                                                 * cells and one CR, which is
+                                                 * the largest thing a 40x24
+                                                 * text page can produce */
+#define A2_CLIPKB   1                       /* ceil(984 / 1024) */
+#define A2_PASTEMAX 2048                    /* ...and PASTE's, which is a
+                                             * DIFFERENT question: it is what
+                                             * ONE os88_clip_get can be given,
+                                             * because OSAPI_CLIP_GET has no
+                                             * offset (kernel/clip.inc) and so
+                                             * cannot be read in chunks. 2,048
+                                             * is ~50 lines of an Applesoft
+                                             * listing; a longer clipboard is
+                                             * pasted as far as it fits and the
+                                             * truncation is SAID (SPEC.md 47),
+                                             * with the number spelled out */
+#define A2_PASTEKB  2
+
+/* NEITHER BUFFER IS bss, AND THAT IS SECTION 15'S OWN ARITHMETIC. The C64
+ * gave back 3,074 bytes doing exactly this: two staging arrays held for the
+ * life of the app so that two commands nobody may ever pick would have
+ * somewhere to put their bytes. Each is a TRANSIENT HEAP CLAIM instead -
+ * Copy's taken and freed inside one wake, Paste's held for exactly as long as
+ * there are bytes left to type. A claim that cannot be had is a refusal that
+ * is SAID, and the machine is untouched. */
+/* a2_paste_seg IS DECLARED IN a2io.c, beside a2_kb_put and a2_paste_up, and
+ * the note there says why: the soft-switch arms test it directly rather than
+ * calling a2_paste_live, so that a machine with no paste pays one compare on
+ * its hottest path instead of a near call. The queue's other three words are
+ * this file's. */
+static int a2_paste_n;                      /* bytes in the queue... */
+static int a2_paste_i;                      /* ...and how many are spent */
+static int a2_paste_cr;                     /* the last byte PRESENTED was a
+                                             * CR, so an LF behind it is the
+                                             * second half of a CR LF pair and
+                                             * not a second RETURN */
+
+/* a2_paste_stop - every route out of a queue: drained, reset, or a second
+ * Paste over the top of the first. It is also where the claim goes back, so
+ * the 2KB is held for exactly as long as there are bytes to type and never a
+ * wake longer. */
+static void a2_paste_stop(void)
+{
+    a2_paste_n = 0;
+    a2_paste_i = 0;
+    a2_paste_cr = 0;
+    a2_paste_up = 0;
+    if (a2_paste_seg != 0) {
+        os88_mem_free(a2_paste_seg);
+        a2_paste_seg = 0;
+    }
+}
+
+/* a2_paste_peek - THE PEEK HALF OF apple2emu's HANDSHAKE
+ * (src/keyboard.cpp:176-195, `keyboard_read`), called from the $C000 latch
+ * read and from nowhere else.
+ *
+ * THE EMULATED PROGRAM SETS THE RATE AND THERE IS NO PACING STATE AT ALL.
+ * apple2emu's keyboard_read looks at `*Clipboard_ptr` and answers it with bit
+ * 7 set; keyboard_clear ($C010) is what ADVANCES the pointer. So a byte is
+ * presented exactly as long as the machine has not taken it, and the next one
+ * appears the instant it has - which is the one shape that cannot overrun the
+ * machine's input (PERFORMANCE.md's third emulator-invisible defect). A
+ * feeder that pushed n bytes a wake would be a guess about how fast Applesoft
+ * drinks; this is not a guess.
+ *
+ * THE THREE FOLDS ARE THE DECISION'S, and each is one line:
+ *   `\n` -> `\r`   apple2emu's own (keyboard.cpp:181-183)
+ *   CR LF -> CR    the LF behind a presented CR is skipped, so a listing
+ *                  copied on a DOS-line-ending machine types one RETURN a
+ *                  line and not two
+ *   a-z -> A-Z     as a2_key folds it, because the II+ keyboard has no lower
+ *                  case at all (section 6.1) and Applesoft would answer
+ *                  `?SYNTAX ERROR` to every line of a lower-case listing
+ * and `\0` ENDS THE PASTE, because it ends the string apple2emu converts.
+ *
+ * **IT PRESENTS ONLY INTO A FREE LATCH, AND THAT ONE COMPARE IS TWO FIXES.**
+ * This is called on EVERY $C000 read while a paste is in flight, not once per
+ * byte the machine takes, and it used to rewrite the latch unconditionally.
+ * So (1) a key the USER typed during a paste was DESTROYED - a2_kb_put set
+ * the latch and the machine's next read overwrote it before returning, which
+ * put Ctrl-C, the only in-machine way to stop a runaway paste, permanently
+ * out of reach; and (2) Applesoft's ISCNTC polls $C000 between statements and
+ * does NOT strobe $C010 unless the byte is Ctrl-C, so a RUN with a queue
+ * still in it paid the guard + a2_paste_peek + os88_peek - ~33 us
+ * (CLAUDE.md's 11 us a near call) - per emulated poll, for a queue that
+ * could not advance. `if (a2_kb_ready) return;` closes both: a byte the
+ * machine has not taken is still presented and a2_paste_i has not moved, so
+ * nothing is lost; a key the user typed is delivered and the paste resumes
+ * behind it; and a poll loop that is not consuming stops paying for the look.
+ *
+ * IT TAKES ONE MORE BYTE OF STATE AND IT HAS TO. Once the latch can hold a
+ * byte that is not the queue's, the strobe at $C010 can no longer assume it
+ * is consuming a pasted character: without `a2_paste_up` (declared in a2io.c
+ * beside a2_kb_put, which is what clears it) every key the user typed during
+ * a paste would swallow one queued byte on the strobe that followed it.
+ *
+ * ONE os88_peek PER CHARACTER THE MACHINE ACTUALLY TAKES, which is what this
+ * costs: ~47 us once per byte the machine takes, because the latch is only
+ * written when it is empty - the KEYIN loop that reads $C000 a thousand times
+ * a second is reading a byte this has already presented and latched, and the
+ * compare above is all it pays. */
+static void a2_paste_peek(void)
+{
+    int k;
+
+    if (a2_kb_ready)                        /* the machine has not taken the
+                                             * last one - present nothing, and
+                                             * do not tread on a key the user
+                                             * typed */
+        return;
+    while (a2_paste_i < a2_paste_n) {
+        k = os88_peek(a2_paste_seg, (unsigned)a2_paste_i) & 0xFF;
+        if (k == 0) {
+            a2_paste_stop();
+            return;
+        }
+        if (k == '\n') {
+            if (a2_paste_cr) {              /* the LF of a CR LF pair */
+                a2_paste_i++;
+                continue;
+            }
+            k = '\r';
+        }
+        if (k >= 'a' && k <= 'z')
+            k -= 32;
+        a2_paste_cr = (k == '\r');
+        a2_kb_code = k & 0x7F;
+        a2_kb_ready = 1;
+        a2_paste_up = 1;                    /* ...and the strobe may consume
+                                             * it (a2io.c beside a2_kb_put) */
+        return;
+    }
+    a2_paste_stop();                        /* drained: the claim goes back */
+}
+
+/* a2_paste_take - THE CONSUME HALF (apple2emu's `keyboard_clear`,
+ * src/keyboard.cpp:198-215): the strobe advances the pointer and clears the
+ * latch, and the NEXT $C000 read presents the next byte. */
+static void a2_paste_take(void)
+{
+    if (!a2_paste_up)                       /* the byte the machine just took
+                                             * was the USER's - the queue has
+                                             * presented nothing to consume
+                                             * (a2io.c beside a2_kb_put) */
+        return;
+    a2_paste_up = 0;
+    a2_paste_i++;
+    if (a2_paste_i >= a2_paste_n)
+        a2_paste_stop();
+}
+
+/* ovl_a2_copy_screen - the 40x24 text page onto the clipboard, ONE CALL A
+ * ROW, and `ovl_` for this file's header's reason: it runs once per pick.
+ *
+ * 48 calls for the whole screen - one a2_zcopy_out and one a2_copy_row a row
+ * - against 960 table indexes and 984 os88_pokes if the loop were written
+ * here in C, which is docs/C-TOOLCHAIN.md's rule rather than a preference:
+ * "anything that touches bytes per iteration is a hand-written proc that C
+ * calls once".
+ *
+ * IT READS THE ROW BASES THE DISPLAY READS (a2_row_base), so a Copy on PAGE2
+ * copies page 2 and a Copy of a MIXED screen copies the four text rows and
+ * the twenty rows of graphics bytes folded as if they were text - which is
+ * what "the text page" means when the machine is showing something else, and
+ * is stated rather than hidden. The answer is the byte count. */
+static int ovl_a2_copy_screen(unsigned seg)
+{
+    int row, n;
+
+    n = 0;
+    for (row = 0; row < A2_ROWS; row++) {
+        a2_zcopy_out(a2_scrow, a2_row_base(row), A2_COLS);
+        n += a2_copy_row(seg, (unsigned)n, A2_COLS);
+    }
+    return n;
+}
+
+/* ovl_a2_clip_service - both commands, run from the wake (this file's
+ * header). It answers 1 because it ran: the runtime's own refusal path
+ * answers 0 without running, which is how the caller learns the module could
+ * not be resolved (a2cmd.c's header rule). */
+static int ovl_a2_clip_service(void)
+{
+    unsigned seg;
+    int n, got;
+
+    if (a2_copy_req) {
+        a2_copy_req = 0;
+        seg = os88_mem_claim(A2_CLIPKB);
+        if (seg == 0) {
+            a2_say("No memory for the copy.");
+        } else {
+            n = ovl_a2_copy_screen(seg);
+            if (os88_clip_put_seg(seg, 0, (unsigned)n) != 0)
+                a2_say("The clipboard refused it.");
+            os88_mem_free(seg);             /* gone before the slice runs: the
+                                             * claim lives for one wake */
+        }
+    }
+
+    if (a2_paste_req) {
+        a2_paste_req = 0;
+        n = os88_clip_size();
+        if (n == -1) {                      /* the ONE answer that means empty
+                                             * - a full 32,768-byte clipboard
+                                             * arrives as 0x8000, which a
+                                             * 16-bit int reads as -32,768 */
+            a2_say("The clipboard is empty.");
+            return 1;
+        }
+        a2_paste_stop();                    /* a second Paste over the first:
+                                             * the old claim goes back before
+                                             * the new one is asked for */
+        seg = os88_mem_claim(A2_PASTEKB);
+        if (seg == 0) {
+            a2_say("No memory for the paste.");
+            return 1;
+        }
+        a2_paste_seg = seg;
+        got = os88_clip_get_seg(seg, 0, (unsigned)A2_PASTEMAX);
+        if (got <= 0) {
+            a2_say("Cannot read the clipboard.");
+            a2_paste_stop();                /* ...which frees the claim */
+            return 1;
+        }
+        a2_paste_i = 0;
+        a2_paste_n = got;                   /* WHAT FITS, which is the read's
+                                             * answer and not the clipboard's
+                                             * whole length */
+        a2_paste_cr = 0;
+        if ((unsigned)n > (unsigned)A2_PASTEMAX)
+            a2_say("Pasting 2048 bytes only.");     /* A2_PASTEMAX, spelled
+                                                     * out; a2uitest checks
+                                                     * that the two agree */
+    }
+    return 1;
 }

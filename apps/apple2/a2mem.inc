@@ -479,3 +479,187 @@ _a2_zcopy_out:
     pop si
     pop bp
     ret
+
+; -----------------------------------------------------------------------------
+; void a2_zzcopy_in(unsigned a, unsigned seg, unsigned off, unsigned n)
+; void a2_zzcopy_out(unsigned seg, unsigned off, unsigned a, unsigned n)
+;
+; A HEAP CLAIM to and from the Apple's RAM - FAR TO FAR, neither side a C
+; pointer, which is this file's own (segment, offset) rule with both ends
+; wearing it (APPLE2-SPEC section 3.4). Load Program reads its file into a
+; transient claim, walks it there and moves the accepted program in with the
+; first; Save Program moves the program out with the second and writes the
+; claim. c64mem.inc's `_c64_zzcopy_in` is the shape; the OUT direction has no
+; precedent in that package because the C64 saves nothing.
+;
+; The arguments are read into registers BEFORE either segment register moves,
+; because [bp+n] is SS-relative and _a2_m is DS-relative: the DS load has to
+; be the last thing that happens before the move.
+; -----------------------------------------------------------------------------
+_a2_zzcopy_in:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push ds
+    push es
+    cld
+    mov di, [bp+4]                  ; the Apple address
+    mov ax, [bp+6]                  ; ...the claim's segment
+    mov si, [bp+8]                  ; ...and offset
+    mov cx, [bp+10]
+    mov es, [_a2_m+AM_RAMSEG]       ; through DS, which has not moved yet
+    mov ds, ax
+    jcxz .out
+    rep movsb                       ; cc8086:allow both segments loaded here on
+                                    ; purpose and both restored below
+.out:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop bp
+    ret
+
+_a2_zzcopy_out:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push ds
+    push es
+    cld
+    mov ax, [bp+4]                  ; the claim's segment...
+    mov di, [bp+6]                  ; ...and offset
+    mov si, [bp+8]                  ; the Apple address
+    mov cx, [bp+10]
+    mov es, ax
+    mov ds, [_a2_m+AM_RAMSEG]       ; ...last, for the reason in the header
+    jcxz .out
+    rep movsb                       ; cc8086:allow as above
+.out:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; int a2_copy_row(unsigned dseg, unsigned doff, int n)
+;     - ONE row of Edit > Copy, end to end (APPLE2-SPEC section 6.5): the n
+;       screen bytes already in a2_scrow, folded to ASCII through a2_astab,
+;       written into the CLAIM at dseg:doff with the trailing spaces trimmed
+;       and one CR appended. Answers the bytes written, at most n + 1.
+;
+; THIS IS THE per-BYTE LOOP, AND THAT IS WHY IT IS HERE. docs/C-TOOLCHAIN.md's
+; rule in one line: "the inner loop is assembly - anything that touches bytes
+; per iteration is a hand-written proc that C calls once". 24 calls for the
+; screen against 960 table indexes and 984 os88_pokes, which is the shape the
+; C64 measured at ~95 us a cell before c64_copy_row replaced it.
+;
+; THE MASK IS THE WHOLE OF THE INVERSE/FLASH/NORMAL QUESTION. An Apple II+
+; character generator holds 64 glyphs and the screen byte's top two bits pick
+; the ATTRIBUTE, not the character (section 7.3), so `and 0x7F` collapses
+; inverse and flashing onto the normal codes and a 128-entry table folds what
+; is left to ASCII. What a user sees flashing and what the clipboard gets are
+; the same letter, which is what a listing copied off a `]` prompt has to be.
+;
+; DS is the package's (a2_scrow and a2_astab are its bss); ES is the claim and
+; is restored.
+; -----------------------------------------------------------------------------
+_a2_copy_row:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    mov ax, [bp+4]
+    mov es, ax                      ; cc8086:allow ES is the claim, loaded here
+                                    ; on purpose and restored below
+    mov di, [bp+6]
+    mov dx, di                      ; DX = one past the last non-space
+    mov cx, [bp+8]
+    mov si, _a2_scrow
+    xor bh, bh
+    or cx, cx
+    jz .end
+.cell:
+    mov bl, [si]
+    inc si
+    and bl, 0x7F                    ; the attribute bits are not a character
+    mov al, [_a2_astab+bx]
+    mov [es:di], al
+    inc di
+    cmp al, ' '
+    je .sp
+    mov dx, di                      ; a non-space: the row keeps this far
+.sp:
+    dec cx
+    jnz .cell
+.end:
+    mov di, dx                      ; the trailing spaces come off - an Apple
+                                    ; text row is space-padded to 40 cells and
+                                    ; a listing pasted elsewhere must not be
+    mov byte [es:di], 0x0D          ; ...and the separator is CR, which is what
+    inc di                          ; this OS's own clipboard readers store
+                                    ; (SPEC.md 27.6 folds CR LF and a lone LF
+                                    ; onto it) AND what Edit > Paste feeds the
+                                    ; Apple, so a Copy pastes back byte for byte
+    mov ax, di
+    sub ax, [bp+6]
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; unsigned a2_scan0(unsigned seg, unsigned off, unsigned n)
+;     - the offset of the first zero byte in seg:off .. seg:off+n-1, or
+;       $FFFF when there is none.
+;
+; THE SENTINEL IS $FFFF AND NOT -1, and that is a 16-bit `int` decision rather
+; than a style one: a 48K program's offsets reach 47,615, which read as a
+; NEGATIVE int, so a `< 0` test at the call site would refuse every line past
+; the 32KB mark of a large listing. $FFFF is unreachable as an offset here -
+; the caller's claim is at most 47 KB - so it is a sentinel that cannot
+; collide.
+;
+; THE LINKED-LINE WALK'S INNER LOOP (APPLE2-SPEC section 12). A tokenised
+; Applesoft line ends at a $00 and Applesoft's own FIX.LINKS finds it by
+; scanning, so the walk is once per LINE here and once per BYTE without it:
+; a 5KB program would be five thousand os88_peek far calls, ~235 ms, INSIDE
+; os88_onfile - which is dispatched under the desktop's gfx lock. One call a
+; line is ~47 us; docs/C-TOOLCHAIN.md's rule again, and the bound the caller
+; can state.
+;
+; ES is the claim and is restored; DF is left clear.
+; -----------------------------------------------------------------------------
+_a2_scan0:
+    push bp
+    mov bp, sp
+    push di
+    push es
+    cld
+    mov es, [bp+4]                  ; cc8086:allow ES is the claim, loaded here
+                                    ; on purpose and restored below
+    mov di, [bp+6]
+    mov cx, [bp+8]
+    mov ax, 0xFFFF
+    jcxz .out
+    xor al, al                      ; the byte scanned for - and it is AX's
+                                    ; low half, so the sentinel is re-loaded
+                                    ; on the miss path below rather than
+                                    ; assumed to have survived
+    repne scasb
+    jne .none
+    lea ax, [di-1]                  ; scasb has already stepped past it
+    jmp .out
+.none:
+    mov ax, 0xFFFF
+.out:
+    pop es
+    pop di
+    pop bp
+    ret

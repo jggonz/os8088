@@ -126,6 +126,17 @@ void a2_chargen(void *dst, unsigned seg, unsigned off, unsigned n);
 void a2_zfill(unsigned a, int v, unsigned n);
 void a2_zcopy_in(unsigned a, const void *src, unsigned n);
 void a2_zcopy_out(void *dst, unsigned a, unsigned n);
+/* ...AND THE FAR-TO-FAR PAIR WAVE 4 ADDED (section 3.4, 6.5, 12): a heap
+ * claim to and from the Apple's RAM with neither end a C pointer. Load
+ * Program walks its file in a transient claim and moves the ACCEPTED program
+ * in with the first; Save Program moves the program out with the second and
+ * writes the claim; Edit > Copy composes into a claim of its own. */
+void a2_zzcopy_in(unsigned a, unsigned seg, unsigned off, unsigned n);
+void a2_zzcopy_out(unsigned seg, unsigned off, unsigned a, unsigned n);
+int  a2_copy_row(unsigned dseg, unsigned doff, int n);   /* ONE row of Edit >
+                                                          * Copy: the per-BYTE
+                                                          * loop, in assembly,
+                                                          * called 24 times */
 void a2_zpower(unsigned a, unsigned n);     /* AppleWin's FF FF 00 00 power-on
                                              * pattern, as a MOVER: the C form
                                              * is 12,288 iterations of two near
@@ -169,6 +180,11 @@ int  a2_rowflash(unsigned mseg, unsigned moff, int n);
 int  a2_rowspan(const unsigned char *a, const unsigned char *b, int n);
 void a2_rowcopy(unsigned char *dst, const unsigned char *src, int n);
 unsigned a2_rowsig(unsigned mseg, unsigned moff, int n);
+unsigned a2_scan0(unsigned seg, unsigned off, unsigned n);  /* the linked-line
+                                                             * walk's inner
+                                                             * loop (section
+                                                             * 12); $FFFF =
+                                                             * no zero byte */
 void a2_x2init(void);
 void a2_band_x2(unsigned char *dst, const unsigned char *src, int nbytes,
                 int rows);
@@ -322,7 +338,69 @@ static int a2_exit_req;                     /* File > Quit asked; spent at the
 #define A2_RST_POWER  3                     /* the cold machine: the FF FF 00
                                              * 00 pattern and the three pokes */
 static int a2_reset_req;
+
+/* --- THE WAVE-4 LATCHES, AND THEY ARE LATCHES FOR THE RESET LATCH'S REASON -
+ * os88_oncmd runs under the DESKTOP's gfx lock (os88.h), so every instruction
+ * a command executes is the whole desktop stopped - the mouse, the dock, every
+ * other task's drawing. Edit > Copy is 24 movers, 24 row composers and an
+ * OSAPI_CLIP_PUT; Edit > Paste is a heap claim and an OSAPI_CLIP_GET; and both
+ * clipboard calls reach kernel/clip.inc's mem_claim, which may COMPACT an
+ * arena this app has a pinned 64KB sitting in - "a memcpy in tenths of a
+ * second" in memory.inc's own words, and a term nobody can bound from a
+ * command handler (LESSONS.md 6). So the command latches and ovl_a2_clip_service
+ * (a2kbd.c) spends it from the TOP of the next wake with NO LOCK HELD, before
+ * the slice, so not one emulated cycle has run between the pick and the work
+ * and the screen copied is the screen the user was looking at. It is the
+ * C64's wave-3 lesson, where the same pair cost 2,000 bridge crossings and a
+ * call-counting cost model charged one. */
+static int a2_copy_req;
+static int a2_paste_req;
+
+/* --- THE LAUNCH DOCUMENT (SPEC.md 54.5, APPLE2-SPEC section 12) -----------
+ * `CC_ASSOC` declares `BAS` from this wave, so a double-click on a tokenised
+ * Applesoft program launches THIS package with the file as its argument. That
+ * is why the association could not be declared any earlier: an extension the
+ * build cannot open launches the emulator and then refuses, which is worse
+ * than no association.
+ *
+ * READ-AND-CLEAR, so it is BANKED in os88_main and SPENT IN THE FIRST WAKE.
+ * The name and the folder arrive together and the first caller gets them; the
+ * floppy is touched from the wake, which holds no lock and may call the file
+ * slots by contract (SPEC.md 54.10, 74.1) - and which is also the only place
+ * an ovl_* may be reached from at launch, because os88_main has no instance
+ * to resolve a module for. */
+static char a2_argname[13];
+static struct os88_place a2_argplace;
+static int a2_argp;
+static unsigned a2_argdl;                   /* ...AND IT WAITS FOR THE MACHINE
+                                             * TO REACH `]`. See os88_onwake:
+                                             * this is the deadline that stops
+                                             * the wait being unbounded */
+#define A2_ARGWAIT (18 * 60)                /* one minute of host ticks */
+static int a2_pause;                        /* CPU > Stop / Continue - MII's
+                                             * SIGNAL_STOP and SIGNAL_RUN
+                                             * (mii_mui_menus.c:333,350). It
+                                             * is its own flag and not an
+                                             * a2_state value, because a
+                                             * PAUSED machine is still a
+                                             * machine and A2_ST_JAM is not */
+static int a2_warp;                         /* CPU > Warp - OURS (section
+                                             * 10.1), and on this port it is
+                                             * the wall slice's CAP and
+                                             * nothing else: there is no
+                                             * throttle here to take off */
 static int a2_ovl_asked;                    /* the first-wake probe ran... */
+static int a2_ovl_told;                     /* ...and its REFUSAL has been said
+                                             * once. The probe is re-armed by
+                                             * every menu pick on a disk with
+                                             * no module (a2_ovl_ready), so
+                                             * without this the toast was
+                                             * repeated per pick. The ROW is
+                                             * said every time, because the row
+                                             * is the answer to what the user
+                                             * just did; the toast is the
+                                             * announcement, and an
+                                             * announcement is made once. */
 static int a2_ovl_res;                      /* ...AND IT ANSWERED YES, WHICH IS
                                              * A DIFFERENT FACT and the one
                                              * that keeps floppy I/O out of
@@ -349,26 +427,31 @@ static int a2_have_cpu = 1;                 /* **WAVE 2 SET IT.** The two
                                              * refuse, and a "not in this
                                              * build yet" toast is exactly
                                              * that */
-static int a2_have_cmd;                     /* ...and WAVE 4 SETS THIS, which
-                                             * is the OTHER half of the same
-                                             * rule and the reason it is two
-                                             * flags rather than one. Load and
-                                             * Save Program, Copy, Paste,
-                                             * Stop/Continue, Warp and Power
-                                             * On have no BODIES until wave 4
-                                             * (docs/APPLE2-PORT-PLAN.md), and
-                                             * Power On additionally owes
-                                             * section 10.2's TWO-ROW
-                                             * confirmation before it may be
-                                             * live at all: a data-loss row
-                                             * with no confirmation is not the
-                                             * item the SPEC describes. Both
-                                             * greyings are TEMPORARY AND SAY
-                                             * SO IN THE SOURCE, which is
-                                             * section 10.3's own paragraph -
-                                             * they have no user-visible fact
-                                             * because there is no user of a
-                                             * wave, what ships is the PR */
+static int a2_have_cmd = 1;                 /* **WAVE 4 SET IT**, and what it
+                                             * MEANS is unchanged: the COMMAND
+                                             * has a body. That is the other
+                                             * half of a2_have_cpu's rule and
+                                             * the reason it is two flags -
+                                             * Load and Save Program, Copy,
+                                             * Paste, Stop/Continue, Warp and
+                                             * Power On had none until this
+                                             * wave, and Power On additionally
+                                             * owed section 10.2's TWO-ROW
+                                             * confirmation before it could be
+                                             * live at all, because a
+                                             * data-loss row without the
+                                             * confirmation its contract names
+                                             * is not the item the SPEC
+                                             * describes. Wave 4 wrote all
+                                             * seven bodies and the
+                                             * confirmation, so the greying
+                                             * has stopped being true and
+                                             * SPEC.md 47 does not let one
+                                             * outlive its reason. The flag
+                                             * STAYS - it is what a2_menu_state
+                                             * rewrites every row from, and
+                                             * the Disk II follow-up has rows
+                                             * of its own to revive */
 static int a2_have_snd;                     /* ...and WAVE 5 SETS THIS, which
                                              * is Machine > Mute's own gate.
                                              * Two flags and not one, because
@@ -420,6 +503,37 @@ static int a2_full;                         /* the fullscreen latch is ours */
  * READS. One definition, here, so the two cannot drift into two copies of the
  * same fact (which is what the whole of this block exists to prevent). */
 static int a2_abt_up;                       /* the panel is on the glass... */
+/* ...AND WHICH PANEL IT IS. Wave 4 gave Machine > Power On the TWO-ROW
+ * confirmation its contract names (section 10.2), and a confirmation is the
+ * About panel one field along: modal, snapped to the band, holding the Apple
+ * scan lines it covers so nothing under it is drawn, and dismissed as DAMAGE
+ * rather than as a repaint. So it is the same panel with a KIND rather than a
+ * second copy of ovl_about_geom, a second hold range and a second arm in
+ * os88_paint - which is what "one definition, so the two cannot drift" means
+ * when the second thing is a whole mechanism. */
+#define A2_PAN_ABOUT 0
+#define A2_PAN_CFM   1                      /* AppleWin's Reboot box
+                                             * (source/Windows/WinFrame.cpp
+                                             * :1997-2013), MB_YESNO */
+static int a2_pan_kind;
+/* A2_CFM_UP - the CONFIRMATION is up, and the 6502 is stopped while it is
+ * (section 11).
+ *
+ * THE ABOUT PANEL DOES NOT STOP IT AND THIS ONE DOES, which is the one place
+ * the two kinds part company. The About panel's hold range already keeps the
+ * glass correct - the flush composes and blits nothing under it - so a
+ * machine mid-RUN carries on behind it, and stopping it because somebody
+ * opened About would be a behaviour change nobody asked for. The
+ * confirmation is the other way round on the redraw budget AND on its
+ * subject: it is 52 pixels tall and holds ~6 of the 24 character rows, so a
+ * machine that is printing kept composing and blitting the other ~18 on every
+ * host tick - ~200 ms of the target per tick - for as long as the box waited
+ * for a human to read two lines, which also made the Yes/No click feel lost;
+ * and the answer to the question is about to wipe the machine, so there is
+ * nothing running behind it worth a pixel. a2_wants_wake carries the same
+ * term, so the app IDLES while the box is up instead of re-posting a wake a
+ * tick. */
+#define A2_CFM_UP() (a2_abt_up && a2_pan_kind == A2_PAN_CFM)
 /* ...at THIS rectangle, in screen coordinates. ovl_about_geom writes the
  * four, ovl_about_draw draws to them, and os88_paint TESTS the damage rect
  * against them - which is what stops a two-pixel expose in a corner from
@@ -432,6 +546,14 @@ static int a2_abt_x, a2_abt_y, a2_abt_w, a2_abt_h;
  * exactly them (damage, never a repaint). */
 static int a2_hold_l0 = 1;
 static int a2_hold_l1;
+/* THE CONFIRMATION'S TWO BUTTONS, in screen coordinates, written by the
+ * overlay that draws them and read by the RESIDENT hit test - because a click
+ * is a callback and a callback is reached by a near offset (a2about.c's own
+ * rule). Only code moves; a static an ovl_* writes is resident and
+ * DS-relative like every other (SPEC.md 73.14). */
+static int a2_cfm_bx[2], a2_cfm_by;
+#define A2_CFM_BW 48
+#define A2_CFM_BH 13
 static int a2_covered;                      /* the last wake's clip_set found
                                              * not one pixel of us on the
                                              * glass - a2_wants_wake's own
@@ -569,6 +691,26 @@ static const unsigned char a2_lum[16] = {
  * global for a2_rev's reason. */
 unsigned char a2_lopat[16];
 
+/* EDIT > COPY'S TWO ARRAYS, and they are globals for a2_chr's reason: nasm
+ * has to see the labels, because a2_copy_row (a2mem.inc) is the per-byte loop
+ * and indexes both directly (APPLE2-SPEC section 6.5).
+ *
+ *  - a2_scrow  ONE character row, brought out of the RAM claim by a single
+ *              a2_zcopy_out - 24 calls for the screen, not 960.
+ *  - a2_astab  the 128-entry fold of the Apple's SCREEN encoding to ASCII.
+ *              The screen byte's top two bits are the ATTRIBUTE - inverse,
+ *              flashing, normal - and a II+ character generator holds 64
+ *              glyphs, so `and 0x7F` collapses the three forms onto one index
+ *              and this table folds what is left: $00-$1F and $40-$5F are
+ *              `@A-Z[\]^_`, which is ASCII $40-$5F, and $20-$3F and $60-$7F
+ *              are ASCII $20-$3F unchanged. It is built in os88_main and not
+ *              in the overlay, because 128 bytes of bss and a nine-line loop
+ *              are cheaper than either a .data array paid for twice or a
+ *              second reason for a disk with no APPLE2.OVL to behave
+ *              differently. */
+unsigned char a2_scrow[A2_COLS];
+unsigned char a2_astab[128];
+
 static char a2_title[] = "Apple II Plus Emulator";   /* section 16.1's long
                                                       * form: the window title
                                                       * and the About panel's
@@ -584,6 +726,7 @@ static void a2_sh_inval(void);
 static void a2_dirty_all(void);
 static void a2_line_dirty(int line);
 static void a2_row_dirty(int row);
+static int  ovl_a2_dirty_range(unsigned lo, unsigned hi);
 static void a2_dirty_split(void);           /* the MIXED split's four rows,
                                              * and a2_rowwide with them -
                                              * a2scr.c owns a2_rowwide, so
@@ -609,8 +752,20 @@ static void a2_power_on(void);
 static void a2_kb_put(int b);
 static void a2_reset_service(void);
 static void a2_speed_fold(void);
+static void a2_warp_set(int on);
 static void a2_jam(void);
 static void a2_about_close(void *win);
+static void a2_panel_close(void *win, int yes);
+static int  ovl_a2_clip_service(void);
+static void a2_paste_stop(void);
+/* ...and the two halves of apple2emu's paste handshake, which a2io.c's soft
+ * switches call and a2kbd.c defines - a2io.c is #included first, so the
+ * declaration has to be here (section 6.5). THE GUARD IN FRONT OF THEM IS NO
+ * LONGER A CALL: a2io.c tests a2_paste_seg, which it declares itself, so the
+ * hottest path in the emulator pays a compare rather than a near call and
+ * a2_paste_live is gone. */
+static void a2_paste_peek(void);
+static void a2_paste_take(void);
 static int  ovl_about_paint(void *win);
 /* AN `ovl_` ANSWERS A STATUS AND 0 MEANS IT DID NOT HAPPEN (SPEC.md 73.14,
  * LESSONS.md 5). Both of the panel's bodies live in APPLE2.OVL, so both can
@@ -622,7 +777,9 @@ static int  a2_ovl_ready(void *win);
 static int  ovl_a2_init(void);
 static int  ovl_a2_cmd(int menu, int item, void *win);
 static int  ovl_about_show(void *win);
-static int  ovl_a2_prog(int mode, const char *name, unsigned size_lo);
+static int  ovl_a2_prog(int mode, const char *name, unsigned size_lo,
+                        void *win);
+static int  ovl_a2_confirm(void *win);
 
 /* THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1: one .c, because `nasm -f
  * bin` has no notion of an external symbol, so a C package is one file with
@@ -659,7 +816,13 @@ static int a2_ovl_ready(void *win)
     if (a2_ovl_res)
         return 1;
     a2_ovl_asked = 0;                       /* ...so the next wake retries */
-    a2_say("No APPLE2.OVL yet.");
+    /* ONE SENTENCE FOR ONE CONDITION. This used to say `No APPLE2.OVL yet.`,
+     * which no user could ever read: clearing a2_ovl_asked makes the very
+     * next wake re-run the probe, and the probe overwrites the row with
+     * `Unable to load APPLE2.OVL.` before a tick has passed - so the wave
+     * shipped a second string for the same fact that nothing could show. The
+     * `yet` was a promise as well, where SPEC.md 47 asks for the fact. */
+    a2_say("Unable to load APPLE2.OVL.");
     return 0;
 }
 
@@ -686,7 +849,41 @@ static int a2_ovl_ready(void *win)
                                              * that arrives negative and the
                                              * core expires before its first
                                              * fetch - a machine stopped dead */
+#define A2_SLICE_WARP 30000                 /* ...and CPU > Warp's, which is
+                                             * the WHOLE of what warp is on
+                                             * this port: there is no throttle
+                                             * here to take off - a2_slice
+                                             * runs a2_budget cycles a wake and
+                                             * the status row reports what that
+                                             * came to - so the only thing warp
+                                             * can lift is the ceiling the
+                                             * adaptation walks up to. It is
+                                             * still below 32,767 for the
+                                             * signed countdown's reason above */
 static int a2_budget = A2_SLICE_MIN;
+
+/* a2_slice_cap - the ceiling the adaptation may walk the budget up to, which
+ * is the one place the warp latch is read. Two call sites in the wake, and
+ * writing the test twice is how the two arms drift apart. */
+static int a2_slice_cap(void)
+{
+    return a2_warp ? A2_SLICE_WARP : A2_SLICE_MAX;
+}
+
+/* a2_warp_set - CPU > Warp's latch, and THE CAP COMES BACK DOWN WITH IT.
+ * An adapted budget above A2_SLICE_MAX would otherwise outlive the warp it was
+ * granted for: the only thing that lowers the budget is a slice that overruns
+ * a host tick, and one that already fits never would. It is RESIDENT and the
+ * command in the overlay calls it, because a2_budget and the two ceilings
+ * belong to the slice driver and a second copy of the ceiling in a2cmd.c is a
+ * second ceiling. */
+static void a2_warp_set(int on)
+{
+    a2_warp = on ? 1 : 0;
+    if (!a2_warp && a2_budget > A2_SLICE_MAX)
+        a2_budget = A2_SLICE_MAX;
+}
+
 static int a2_fastn;                        /* consecutive slices that cost no
                                              * host tick at all */
 static unsigned a2_clk;                     /* the emulated clock, a 16-bit
@@ -903,6 +1100,13 @@ static void a2_reset_service(void)
     int kind = a2_reset_req;
 
     a2_reset_req = 0;
+    /* A RESET EMPTIES THE PASTE QUEUE, which is VICE's kbdbuf_abort one
+     * machine along (apps/c64/c64kbd.c's c64_paste_stop) and is right here
+     * for a plainer reason: the bytes are being typed at a MACHINE, and after
+     * a Power On it is not that machine any more. Without it a cold boot
+     * carries on typing the previous session's listing into the new one, and
+     * the 2KB claim is held until it finishes. */
+    a2_paste_stop();
     if (kind == A2_RST_POWER) {
         a2_power_on();
     } else {
@@ -1080,9 +1284,21 @@ void os88_onkey(int ascii, int scan, void *win)
         return;
     }
 
-    if (a2_abt_up) {                        /* the panel is modal: any key
-                                             * closes it and nothing reaches
-                                             * the machine */
+    if (a2_abt_up) {                        /* the panel is modal: nothing
+                                             * reaches the machine while it is
+                                             * up */
+        if (a2_pan_kind == A2_PAN_CFM) {
+            /* AppleWin's box is MB_YESNO and Yes is its default button, but
+             * ANY KEY MEANS YES is not a thing to do to a row whose second
+             * line is `(All data will be lost!)`. Enter and Y answer yes;
+             * every other key - Esc, N, a letter typed at a machine the user
+             * had forgotten was behind a card - answers NO and dismisses. A
+             * confirmation nobody can dismiss by accident is the whole point
+             * of having one. */
+            a2_panel_close(win, (ascii == 13 || ascii == 'y' || ascii == 'Y')
+                                ? 1 : 0);
+            return;
+        }
         a2_about_close(win);
         return;
     }
@@ -1096,6 +1312,23 @@ void os88_onclick(int x, int y, void *win)
     if (a2_state == A2_ST_DEAD)
         return;
     if (a2_abt_up) {
+        if (a2_pan_kind == A2_PAN_CFM) {
+            /* THE HIT TEST IS RESIDENT and the RECTS ARE THE OVERLAY'S, which
+             * is the split working rather than an exception to it: a click is
+             * a callback and a callback is reached by a near offset
+             * (a2about.c's header), while the two button rects are statics
+             * the drawing code wrote and every static stays resident.
+             *
+             * A click anywhere else - on the panel, on the picture, on the
+             * border - answers NO and dismisses, for the same reason Esc
+             * does. The one thing a data-loss box must not do is stay up with
+             * no obvious way out. */
+            a2_panel_close(win,
+                           (y >= a2_cfm_by && y < a2_cfm_by + A2_CFM_BH
+                            && x >= a2_cfm_bx[0]
+                            && x < a2_cfm_bx[0] + A2_CFM_BW) ? 1 : 0);
+            return;
+        }
         a2_about_close(win);
         return;
     }
@@ -1113,21 +1346,56 @@ void os88_about(void *win)
 {
     if (!a2_ovl_ready(win))
         return;
+    a2_pan_kind = A2_PAN_ABOUT;             /* the kernel's name pull-down
+                                             * always means the About panel;
+                                             * a confirmation that was
+                                             * dismissed left this ABOUT
+                                             * already, and setting it here is
+                                             * what makes that true even if
+                                             * some later route forgets */
     ovl_about_show(win);
 }
+
+/* THE FILE COMMAND'S LATCH (APPLE2-SPEC section 12), and the reason it is one.
+ *
+ * os88_onfile arrives UNDER THE DESKTOP'S GFX LOCK - kernel/fdlg.inc:45-48
+ * states it of fdlg_open, the window procs and fdlg_commit alike - and
+ * ovl_a2_prog is up to six os88_mem_claims (each of which may COMPACT an
+ * arena this package has a pinned 64KB in), a floppy read of up to 46 KB
+ * (os88.h prices 116KB at ~ten seconds of motor), the two-pass walk and a
+ * 48KB-capable block move; Save is the same shape with os88_file_write_seg,
+ * which os88.h flags as stalling every painter for its duration. Run inline
+ * that is SECONDS of frozen pointer, frozen dock and every other task's
+ * painter blocked in os88_gfx_lock, on the very target this port is for.
+ *
+ * It also defeated the a2_ovl_ready fence one line above it: the fence exists
+ * so a LOCKED caller does not go to the floppy for the 4 KB overlay, and
+ * the next line then read 46 KB under the same lock.
+ *
+ * So the handler copies the name - THE KERNEL REUSES fdlg_name, so the
+ * pointer may not be kept - stores the mode and the size, and posts the wake.
+ * The wake spends it beside the launch document's arm, which has always taken
+ * exactly this route and is the working proof of it. */
+static char a2_fname[13];                   /* 8.3 with the dot and the NUL */
+static int a2_fmode;
+static unsigned a2_fsize;
+static int a2_fileq;
 
 void os88_onfile(int mode, const char *name,
                  unsigned size_lo, unsigned size_hi, void *win)
 {
-    if (size_hi) {                          /* a file this machine's 48K
+    if (mode == OS88_FDLG_OPEN && size_hi) {    /* a file this machine's 48K
                                              * cannot hold, refused by SIZE
-                                             * before anything is claimed */
+                                             * before anything is claimed -
+                                             * and this IS free under the
+                                             * lock: one compare */
         a2_say("Too large for a 48K Apple.");
         return;
     }
-    if (!a2_ovl_ready(win))
-        return;
-    ovl_a2_prog(mode, name, size_lo);
+    os88_strcpy(a2_fname, name, sizeof(a2_fname));
+    a2_fmode = mode;
+    a2_fsize = size_lo;
+    a2_fileq = 1;
     a2_kick = 1;
     os88_wm_wake(win);
 }
@@ -1189,13 +1457,31 @@ static int a2_wants_wake(void)
      * second to be told no. The work is still OWED; W_PAINT is what comes and
      * asks for it, and it clears this. */
     if (a2_covered)
-        return (a2_state == A2_ST_RUN) ? 1 : 0;
+        return (a2_state == A2_ST_RUN && !a2_pause && !A2_CFM_UP()) ? 1 : 0;
     if (a2_dirty_any || a2_border_dirty || a2_st_dirty || !a2_sh_ok)
         return 1;
-    if (a2_state == A2_ST_RUN)
+    if (a2_copy_req || a2_paste_req || a2_fileq)
+        return 1;                           /* a latch is a wake's worth of
+                                             * work by definition */
+    /* **AND a2_argp IS NOT ONE OF THEM, WHICH IS A FIX RATHER THAN A TIDY.**
+     * The launch document's arm is a WAIT for the ROM to reach `]`, and it
+     * used to sit in the line above - so a machine that cannot ever satisfy
+     * it re-posted a wake at full rate for the whole 60-tick deadline. Three
+     * such machines are reachable and one was added in this very wave: a
+     * JAMMED machine (a2_state == A2_ST_JAM), a machine the user stopped with
+     * CPU > Stop, and one sitting behind the Power On confirmation - which
+     * A2_CFM_UP() exists precisely to stop re-posting for. Each of those wakes
+     * did two a2_rd16s and posted another: the 100 % spin SPEC.md 8.1.2 exists
+     * to remove, on the SHARED UI task, starving every other window for a
+     * minute. What the arm is waiting for is the 6502, so it rides the 6502's
+     * own arm below and a stopped machine idles. */
+    if (a2_state == A2_ST_RUN && !a2_pause && !A2_CFM_UP())
         return 1;                           /* WAVE 2: and a paused machine
                                              * answers 0 here, which is the
-                                             * half c64 had to go back for */
+                                             * half c64 had to go back for -
+                                             * WAVE 4 gave the user a way to
+                                             * pause one (CPU > Stop), so the
+                                             * arm is now reachable */
     if (a2_tmr_ok)
         return 0;                           /* the phase is the timer's */
     return (a2_fl_ok && a2_any_flash()) ? 1 : 0;
@@ -1289,8 +1575,128 @@ void os88_onwake(void *win)
     if (!a2_ovl_asked) {
         a2_ovl_asked = 1;
         a2_ovl_res = ovl_a2_init();
-        if (!a2_ovl_res)
+        if (!a2_ovl_res) {
+            /* THE ROW **AND** THE TOAST, and they are two audiences rather
+             * than one message said twice: under a WF_FULL window there is no
+             * desktop for a toast to land on (section 9), and a user who
+             * never opens a menu still sees the row. SPEC.md 59's second
+             * route is exactly this pair.
+             *
+             * THE ROW IS SAID EVERY TIME AND THE TOAST ONCE (a2_ovl_told's
+             * own comment), because a2_ovl_ready re-arms this probe on every
+             * menu pick - so the toast was repeated per pick for a fact that
+             * had not changed.
+             *
+             * ...AND THE TOAST NAMES WHAT ACTUALLY REFUSES. `the menu
+             * commands will refuse` over-claimed: File > Quit, Machine >
+             * Toggle Fullscreen and Machine > Flashing text are answered in
+             * the RESIDENT half and work on a disk with no module at all
+             * (ovl_a2_cmd's header lists the three). */
             a2_say("Unable to load APPLE2.OVL.");
+            if (!a2_ovl_told) {
+                a2_ovl_told = 1;
+                /* **TOAST_MAX IS 24 CHARACTERS** (`kernel/toast.inc:85`),
+                 * and a longer one is TRUNCATED rather than refused. This
+                 * said `APPLE2: no APPLE2.OVL beside the program - the menu
+                 * commands will refuse` and reached the glass as
+                 * `APPLE2: no APPLE2.OVL be` - 76 characters of which a user
+                 * could read 24, with the consequence in the half that was
+                 * cut. Photographed, not reasoned about. The status ROW has
+                 * 26 cells and carries the rest. */
+                os88_toast("APPLE2: no APPLE2.OVL", 0);
+            }
+        }
+    }
+
+    /* --- THE LAUNCH DOCUMENT, SPENT HERE (SPEC.md 54.10, section 12) ------
+     * Below the overlay probe deliberately: the loader is an ovl_ and a disk
+     * with no APPLE2.OVL has to REFUSE this the same way it refuses File >
+     * Load Program..., on the row, rather than launching and going quiet.
+     *
+     * AND THE `goto` GETS ITS OWN ARM. It answers -1 when the folder could
+     * not be listed, and with no arm the whole launch failed in silence - the
+     * window came up at `]` and a double-click looked like it had done
+     * nothing, which is the trap cword.c:2650 records one package along. */
+    if (a2_argp) {
+        /* **IT WAITS FOR THE MACHINE TO REACH `]` FIRST, AND THAT IS THE
+         * WHOLE OF WHY THIS IS NOT ONE LINE.** The first wake happens the
+         * moment the window is on the glass, and at that point the 6502 has
+         * run a few hundred cycles: the Autostart Monitor has not handed over
+         * to Applesoft yet, and Applesoft's cold start ENDS IN A `NEW` - it
+         * writes TXTTAB itself and clears the program. A load spent on the
+         * first wake lands in $0801 and is wiped a moment later by the ROM,
+         * and the glass shows a `]` prompt whose LIST is empty with nothing
+         * saying why. That is exactly what the first cut of this did, and it
+         * is invisible in any screendump that does not type LIST.
+         *
+         * THE CONDITION IS THE COLD START'S OWN OUTPUT and not a wall-clock
+         * guess: `TXTTAB` = $0801 and `VARTAB` >= $0803 is what Applesoft's
+         * NEW leaves (measured on the glass -
+         * `PRINT PEEK(103)+PEEK(104)*256` reads 2049 and PEEK(105)/(106)
+         * reads 2051), and before it the power-on pattern has $67/$68 =
+         * $00/$FF. A wall-clock wait would be wrong on both ends: the target
+         * runs the Apple at a few per cent of its own speed, so a cold start
+         * that is one emulated second is tens of wall seconds there and a
+         * fraction of one here.
+         *
+         * The wait is BOUNDED, because a machine that never gets to `]` must
+         * not leave a load armed for the rest of the session - it would then
+         * fire on the user's own NEW. */
+        if (a2_rd16(A2_TXTTAB) != A2_PROG
+            || a2_rd16(A2_VARTAB) < (unsigned)(A2_PROG + 2)) {
+            if ((unsigned)(os88_ticks() - a2_argdl) < 0x8000u) {
+                a2_argp = 0;
+                a2_say("No ] prompt to load into.");
+            }
+        } else {
+            a2_argp = 0;
+            /* ...AND THE `goto` GETS ITS OWN ARM. It answers -1 when the
+             * folder could not be listed, and with no arm the whole launch
+             * failed in silence - the window came up at `]` and a
+             * double-click looked like it had done nothing, which is the trap
+             * cword.c:2650 records one package along. */
+            if (os88_file_goto(&a2_argplace) != 0)
+                a2_say("Cannot open that folder.");
+            else if (a2_ovl_ready(win))
+                ovl_a2_prog(OS88_FDLG_OPEN, a2_argname, 0, win);
+        }
+    }
+
+    /* --- FILE > LOAD PROGRAM... / SAVE PROGRAM..., SPENT HERE (section 12) -
+     * The picker's answer arrives at os88_onfile UNDER THE GFX LOCK and that
+     * handler only latches; this is the same lock-free route the arm above
+     * takes, and os88_onfile's own header carries the arithmetic. The overlay
+     * fence is asked HERE, where a 400 ms floppy read for the module costs
+     * nobody else anything. */
+    if (a2_fileq) {
+        a2_fileq = 0;
+        if (a2_ovl_ready(win))
+            ovl_a2_prog(a2_fmode, a2_fname, a2_fsize, win);
+    }
+
+    /* --- EDIT > COPY AND EDIT > PASTE, SPENT HERE (section 6.5) -----------
+     * At the TOP of the wake, with no lock held and BEFORE the slice, so not
+     * one emulated cycle has run since the user picked the item: the text
+     * page copied is the text page that was on the glass. Both latches are
+     * spent whatever the machine's state, so a paused or jammed machine still
+     * services the Copy in front of it. */
+    if (a2_copy_req || a2_paste_req) {
+        /* ...AND THE BODY IS AN `ovl_` (SPEC.md 73.14, section 15.0.2): what
+         * runs once per PICK - the claims, the two clipboard calls, the six
+         * refusals - goes out, and only the per-BYTE and per-$C000-read
+         * halves (a2_paste_peek / _take / _live / _stop) stay resident. It is
+         * legally reachable as one: this is the UI task, no lock is held, and
+         * the latch can only have been set through ovl_a2_cmd, so the module
+         * has already been resolved once.
+         *
+         * 0 MEANS THE RUNTIME REFUSED THE MODULE, which is the one thing this
+         * caller can act on, and the latch is dropped so the refusal is said
+         * once rather than on every wake. */
+        if (!ovl_a2_clip_service()) {
+            a2_copy_req = 0;
+            a2_paste_req = 0;
+            a2_say("Unable to load APPLE2.OVL.");
+        }
     }
 
     /* --- the flash phase (APPLE2-SPEC section 7.6), THE SECOND PATH -------
@@ -1314,7 +1720,7 @@ void os88_onwake(void *win)
      *
      * ...AND ONLY A GENUINELY EXHAUSTED SLICE ADAPTS THE BUDGET. A slice that
      * ended early - jammed - leaves the estimate alone (LESSONS.md 13). */
-    if (a2_state == A2_ST_RUN) {
+    if (a2_state == A2_ST_RUN && !a2_pause && !A2_CFM_UP()) {
         unsigned t0 = os88_ticks();
 
         a2_slice();
@@ -1323,15 +1729,15 @@ void os88_onwake(void *win)
                 a2_fastn++;
                 if (a2_fastn >= 4) {
                     a2_fastn = 0;
-                    if (a2_budget < A2_SLICE_MAX) {
+                    if (a2_budget < a2_slice_cap()) {
                         a2_budget += a2_budget;
                         /* THE DOUBLING IS CLAMPED AND THE TEST IS `<= 0` AS
                          * WELL AS `>`: `int` is SIXTEEN BITS here, so a
                          * doubling that landed past 32,767 would arrive at the
                          * core NEGATIVE and expire before the first fetch -
                          * a machine stopped dead by its own speed. */
-                        if (a2_budget > A2_SLICE_MAX || a2_budget <= 0)
-                            a2_budget = A2_SLICE_MAX;
+                        if (a2_budget > a2_slice_cap() || a2_budget <= 0)
+                            a2_budget = a2_slice_cap();
                     }
                 }
             } else {
@@ -1404,15 +1810,33 @@ void os88_onwake(void *win)
 /* ==========================================================================
  * LAUNCH
  * ========================================================================*/
+/* a2_refuse_kb - the launch refusal, with the number in it.
+ *
+ * **IT IS COMPOSED TO FIT TOAST_MAX = 24** (`kernel/toast.inc:85`), which
+ * TRUNCATES rather than refusing: this read `Apple II+: 64KB wanted, 384KB
+ * free.` and reached the glass as `Apple II+: 64KB wanted, ` - the whole point
+ * of the message, the number, in the half that was cut.
+ *
+ * AND THE FIRST RECOMPOSITION CUT THE WRONG WORD. `APPLE2 needs 64K, 384K`
+ * fits, and reads as TWO REQUIREMENTS - the word that made the second figure
+ * mean anything was `free`, and it was what got dropped. `APPLE2: 64K, ` is
+ * 13, a three-digit figure is 3 (640 is the most a real-mode heap can answer)
+ * and `K free` is 6: 22 of the 24, with the label and both halves of the
+ * arithmetic intact.
+ *
+ * build.sh CHECKS THIS BOUND BY NAME. A composed toast is invisible to a
+ * literal-only walk - which is how all three over-long toasts shipped - so
+ * the gate's TOAST_COMPOSED table carries `line` at 22 and `a2_jamline` at
+ * 18, and a composed toast that is in neither fails the build. */
 static void a2_refuse_kb(const char *what)
 {
-    static char line[42];
+    static char line[26];
     static char num[8];
 
     os88_strcpy(line, what, sizeof(line));
     os88_utoa(os88_mem_largest_kb(), num);
-    os88_strcpy(line + os88_strlen(line), num, 8);
-    os88_strcpy(line + os88_strlen(line), "KB free.", 10);
+    os88_strcpy(line + os88_strlen(line), num, 6);
+    os88_strcpy(line + os88_strlen(line), "K free", 7);
     os88_toast(line, 0);
 }
 
@@ -1426,7 +1850,7 @@ void *os88_main(void)
     a2_m.ramseg = os88_mem_claim(64);       /* the Apple's address space is its
                                              * own segment */
     if (a2_m.ramseg == 0) {
-        a2_refuse_kb("Apple II+: 64KB wanted, ");
+        a2_refuse_kb("APPLE2: 64K, ");
         return 0;
     }
     /* THE ROM IS A PART AND IT IS ALREADY HERE (section 1.5, SPEC.md 20.12).
@@ -1437,7 +1861,10 @@ void *os88_main(void)
     a2_m.romseg = os88_part_seg(A2_ROM_PART);
     if (a2_m.romseg < A2_ROM_MINSEG) {      /* the fetch bias would underflow */
         os88_mem_free(a2_m.ramseg);
-        os88_toast("Apple II+: the ROM claim is too low in memory", 0);
+        os88_toast("APPLE2: ROM too low", 0);    /* TOAST_MAX = 24: the long
+                                                 * form reached the glass as
+                                                 * `Apple II+: the ROM claim`
+                                                 * and stopped there */
         return 0;
     }
 
@@ -1448,11 +1875,12 @@ void *os88_main(void)
      * without. A disk with no APPLE2.OVL must be a program whose MENUS
      * refuse, not a window that draws nothing. The negative control for that
      * is "both tables exist after os88_main and BEFORE any wake":
-     * hosttest/a2uitest.c asserts it on the host today, and
-     * `tests/apple2part.py` WILL assert it on the machine in WAVE 4
-     * (docs/APPLE2-PORT-PLAN.md). That file is not in this tree yet - written
-     * in the present tense it would be exactly the drift this decision is
-     * trying to protect against. */
+     * hosttest/a2uitest.c asserts it on the host, and WAVE 4 PROVED IT ON THE
+     * MACHINE - a scratch disk with APPLE2.OVL deleted boots to a working
+     * Apple II at `]` whose menu commands refuse politely
+     * (build/port-shots/wave4-23-noovl.png and the two beside it). It is a
+     * driven QMP run and not a registered test row, which is what the wave's
+     * done_when asked for. */
     a2_chargen(a2_chr, a2_m.romseg, A2_CHR_BLOCK, sizeof(a2_chr));
     for (i = 0; i < 128; i++) {
         j = 0;
@@ -1467,6 +1895,21 @@ void *os88_main(void)
     }
 
     /* --- the interleaved row bases (section 7.2) -------------------------- */
+    /* ...AND EDIT > COPY'S FOLD, HERE FOR THE SAME REASON ONE STEP ALONG.
+     * The screen byte's top two bits are the attribute and a II+ character
+     * generator holds 64 glyphs, so `and 0x7F` collapses inverse, flashing
+     * and normal onto one index and this folds what is left to ASCII:
+     * $00-$1F and $40-$5F are `@A-Z[\]^_`, ASCII $40-$5F; everything else is
+     * ASCII $20-$3F unchanged (APPLE2-SPEC section 6.5). It is nine lines and
+     * 128 bytes of bss against a .data array paid for twice - on the floppy
+     * and in the region - which is LESSONS.md 5's own arithmetic. */
+    for (i = 0; i < 128; i++) {
+        j = i & 0x3F;
+        if (j < 0x20)
+            j += 0x40;
+        a2_astab[i] = (unsigned char)j;
+    }
+
     for (i = 0; i < A2_ROWS; i++) {
         a2_tbase[i] = (unsigned)(1024 + 256 * ((i / 2) % 4)
                                       + 128 * (i % 2)
@@ -1539,6 +1982,13 @@ void *os88_main(void)
     os88_menu_set(win, (struct os88_menuset *)&a2_menus);
     os88_about_set(win);
     os88_wm_onwake(win);                    /* the slice driver's entry (74.1) */
+    /* ...and the document a double-click named (SPEC.md 54.5). BANKED, not
+     * read: the wake is where the floppy is touched and where an ovl_ can be
+     * reached at all. */
+    if (os88_arg_file(a2_argname, &a2_argplace) == 0) {
+        a2_argp = 1;
+        a2_argdl = os88_ticks() + A2_ARGWAIT;
+    }
     /* THE FLASH PHASE'S HEARTBEAT (SPEC.md 13.9), installed and armed - and
      * the arm is a TEST: kern_small carries WM_TIMER's slot and not its body,
      * so a refusal here is what puts the phase back on the wake's poll
