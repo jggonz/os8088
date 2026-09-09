@@ -298,15 +298,48 @@ static const char *a2_mach_items[] = {
     D OFF "Color NTSC",                     /* m_video_menu, FOLDING `Color
                                              * NTSC (Alt)`, `Color Mega2`,
                                              * `Green` and `Amber` by rule 3.
-                                             * THE FACT: The window is
-                                             * monochrome. (section 10.3.) THE
-                                             * SECOND SENTENCE IS WAVE 5'S -
-                                             * `Colour is in the foreign video
-                                             * mode` points at a mode this
-                                             * build does not have, and a
-                                             * greying that names a route the
-                                             * reader cannot take is rule 5's
-                                             * guess */
+                                             *
+                                             * **WAVE 5 GAVE IT A BODY**, and
+                                             * it is the row that enters the
+                                             * FOREIGN VIDEO MODE (section
+                                             * 13): on a VGA it is LIVE and
+                                             * takes the machine into
+                                             * FSXM_VGA13, where lo-res's
+                                             * sixteen colours and hi-res's
+                                             * artifact colours are what the
+                                             * reader sees. The `D` here is
+                                             * the launch spelling only;
+                                             * a2_menu_state rewrites it from
+                                             * os88_fsx_caps, which is a FACT
+                                             * about the display this window
+                                             * is on and not a guess.
+                                             *
+                                             * THE FACT WHERE IT IS GREYED,
+                                             * WHICH IS CGA AND HERCULES
+                                             * (section 10.3):
+                                             * The window is monochrome, and
+                                             * the foreign modes this screen
+                                             * has measured SLOWER than it -
+                                             * 695 ms a frame against 632.
+                                             * Wave 1 shortened this to the
+                                             * first clause because the second
+                                             * named a mode the build did not
+                                             * have; wave 5 wrote the mode AND
+                                             * measured the two 1bpp writers
+                                             * out of it (section 13.4), so
+                                             * both halves are facts now.
+                                             *
+                                             * IT IS NOT A CHECK ITEM. MII
+                                             * ticks its five tint rows
+                                             * because they are a persistent
+                                             * MODE; this is a bracket that
+                                             * RETURNS, so there is no state
+                                             * to tick and a tick would
+                                             * describe a screen that is not
+                                             * on the glass. The two-glyph
+                                             * column stays, because rule 5's
+                                             * other half is that every row of
+                                             * a marked group owns it */
     ON "Flashing text",                     /* OURS: the flash phase's own
                                              * control (section 7.6). LIVE on
                                              * every tier but one.
@@ -340,10 +373,36 @@ static const char *a2_mach_items[] = {
                                              * wave 5 revives it with nothing
                                              * else moving */
     D OFF "Louder"                          /* m_audio_menu, FOLDING `Quieter`
-                                             * by rule 3. THE FACT: The
-                                             * Apple's speaker is a one-bit
-                                             * toggle. There is no volume on
-                                             * it. (section 10.3)
+                                             * by rule 3. THE FACT: The tone
+                                             * sink has no volume. This
+                                             * machine plays a bare square
+                                             * wave. (section 10.3)
+                                             *
+                                             * AND THE FACT IS THE OS's, NOT
+                                             * THE APPLE'S. It used to read
+                                             * `The Apple's speaker is a
+                                             * one-bit toggle. There is no
+                                             * volume on it.` - a true
+                                             * sentence about the wrong
+                                             * machine, and one that implied
+                                             * MII's own row was meaningless.
+                                             * In MII this row is LIVE:
+                                             * ui_gl/mii_mui_menus.c:294-302
+                                             * calls mii_audio_volume(&mii->
+                                             * speaker.source, volume +/- 1),
+                                             * a 0..10 sample multiplier
+                                             * (src/mii_audio.c:80-89), and it
+                                             * is greyed only at the ends of
+                                             * that range (menus.c:157-161).
+                                             * Host playback volume has
+                                             * nothing to do with the speaker
+                                             * being one bit. What is true
+                                             * HERE became true in wave 5:
+                                             * os88_snd_tone(hz, ticks, prio)
+                                             * has no amplitude argument, so
+                                             * the sink is a bare PC-speaker
+                                             * square-wave gate with nothing
+                                             * to turn up.
                                              * ...and the column, for the row
                                              * above's reason. 8 of 24 */
 };
@@ -540,7 +599,24 @@ static void a2_menu_state(void)
     a2_cpu_items[A2_I_WARP] = a2_have_cmd
         ? (a2_warp ? ON "Warp" : OFF "Warp")
         : D OFF "Warp";
-    a2_mach_items[A2_I_MUTE] = a2_have_snd ? OFF "Mute" : D OFF "Mute";
+    /* MUTE IS A CHECK ITEM ON A CAPABILITY, which is two questions about one
+     * row and not one: `a2_have_snd` says the machine HAS a square voice - the
+     * fact that greyed the row for four waves - and `a2_mute` says the user
+     * has switched it off. Greying the row that is ON would report the
+     * feature as unavailable AND make it impossible to un-mute, which is rule
+     * 5's own sentence, so the mark and the greying are separate. */
+    /* COLOR NTSC IS GREYED ON A DISPLAY WITH NO FOREIGN COLOUR MODE, and the
+     * predicate is os88_fsx_caps itself - the same bit os88_fsx_mode would
+     * refuse on, so the greying and the refusal are ONE fact (SPEC.md 47).
+     * It is asked here and not banked at launch because on a two-display
+     * desktop (SPEC.md 39.18.2) it is a question about a DISPLAY and a window
+     * moves between them; one far call at 46.7 us, on a routine that runs
+     * about once a second. */
+    a2_mach_items[A2_I_TINT] = a2_fsx_avail(a2_win)
+        ? OFF "Color NTSC" : D OFF "Color NTSC";
+    a2_mach_items[A2_I_MUTE] = a2_have_snd
+        ? (a2_mute ? ON "Mute" : OFF "Mute")
+        : D OFF "Mute";
     /* ...AND SO DO Stop AND Running, WHICH IS RULE 5 AGAIN. The first version
      * gave the marked spelling the two-glyph prefix and the unmarked one
      * nothing, so each label would have jumped two cells left and right as the
@@ -592,6 +668,18 @@ void os88_oncmd(int item, int menu, void *win)
         a2_fullscreen_toggle(win);          /* RESIDENT for section 6.3's
                                              * reason: the way BACK has to
                                              * work on a bar that is not there */
+        return;
+    }
+    if (menu == A2_M_MACHINE && item == A2_I_TINT) {
+        /* Machine > Color NTSC - THE FOREIGN VIDEO MODE (section 13), and it
+         * is RESIDENT for a sharper version of Toggle Fullscreen's reason:
+         * the bracket's entry proc must be a plain resident function whose
+         * address is taken (tools/cc8086.py refuses an ovl_ address by name),
+         * and the 53KB shadow claim it takes first can COMPACT the arena - so
+         * taking it from inside ovl_a2_cmd would be moving the module whose
+         * code is running. It works on a disk with no APPLE2.OVL, which File
+         * > Quit and Toggle Fullscreen also do. */
+        a2_fsx_enter(win);
         return;
     }
     if (menu == A2_M_MACHINE && item == A2_I_FLASH) {

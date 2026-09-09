@@ -159,6 +159,30 @@ static int ovl_a2_cmd(int menu, int item, void *win)
              * happens here but a panel going up. */
             return ovl_a2_confirm(win);
         }
+        if (item == A2_I_MUTE) {
+            /* Machine > Mute - MII's m_audio_menu `Mute`, ticked from the
+             * same MUI_MENUBAR_ACTION_PREPARE arm as `Color NTSC`
+             * (mii_mui_menus.c:151-156), which is why the row already owned
+             * the two-glyph column before this wave gave it a body.
+             *
+             * IT TAKES THE NOTE DOWN ON THE PICK and not on the next wake:
+             * a2_spk_service tests a2_mute too, so the tone could not survive
+             * a wake either, but the user pressed a menu item called Mute and
+             * the 55 ms is audible. Un-muting says nothing and restores
+             * nothing - the estimator re-measures, which is a2_sound_stop's
+             * own rule (section 8): a machine that stopped toggling while
+             * muted is silent, and one that is still toggling is sounding
+             * again three toggles later. */
+            a2_mute = !a2_mute;
+            if (a2_mute)
+                a2_sound_stop();
+            a2_menu_state();
+            if (a2_mute)
+                a2_say("Muted.");
+            else
+                a2_say("Unmuted.");
+            return 1;
+        }
         return 0;
     }
 

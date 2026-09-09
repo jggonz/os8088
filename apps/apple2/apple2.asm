@@ -116,6 +116,18 @@
                                     ; not Apple's rainbow mark, which is trade
                                     ; dress
 
+%define CC_HAS_FSX                  ; THE EXCLUSIVE BRACKET (SPEC.md 53,
+                                    ; APPLE2-SPEC section 13): Machine >
+                                    ; Color NTSC borrows the machine and puts
+                                    ; the Apple's raster in mode 13h. The four
+                                    ; os88_fsx_* thunks are 92 bytes and this
+                                    ; is the only package in the tree that
+                                    ; wants them - CC_HAS_PARTS's own idiom,
+                                    ; and for a2band.inc's A2_SHIP reason:
+                                    ; nasm has no dead-code elimination, so a
+                                    ; define is the only thing that keeps them
+                                    ; out of CWORD, WEAVE and LOOM
+
 %define CC_HAS_PARTS                ; THE ROM IS IN THE PACKAGE (APPLE2-SPEC
                                     ; section 1.5, SPEC.md 20.12). A sidecar
                                     ; is a file a copy can separate from the
@@ -166,7 +178,14 @@
                                     ; (APPLE2-SPEC 7.3)
 %include "apple2/a2nib.inc"         ; the 6-and-2 encoder - a STUB until the
                                     ; Disk II follow-up PR (section 14)
-%include "apple2/a2fsx.inc"         ; the foreign-mode raster writers - a STUB
-                                    ; until wave 5 (section 13)
+%include "apple2/a2fsx.inc"         ; THE FOREIGN-MODE RASTER WRITERS (section
+                                    ; 13): a2_fsx_row's three-mode scan-line
+                                    ; composer over a CELL RANGE - a masked
+                                    ; glyph row, MII's lo-res CLUT and its
+                                    ; artifact rule flattened into a 128-entry
+                                    ; table by a2_fsx_init - a2_fsx_put's span
+                                    ; compare one geometry along, the polled
+                                    ; int 16h the bracket's whole input path
+                                    ; is, and a2_fsx_dac's palette load
 
     CC_IMAGE_END                    ; cc_bss_end and cc_image_end

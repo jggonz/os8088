@@ -108,6 +108,18 @@ AB_GROUPS  equ 5                  ; ...which is five groups of eight
 AB_STRIDE  equ 40                 ; a2_band_text's stride: A2_BSTRIDE, always
 AB_W       equ 320                ; the band, letterbox included
 AB_N       equ 8                  ; iterations a row (bandbench's)
+AB_SPANOFF equ 8 * 7               ; ab_spanck's slice: cells 8..15 of a
+AB_SPANLEN equ 8 * 7               ; composed scan line, seven bytes a cell
+AB_FSXW1   equ 70                 ; a 1bpp foreign scan line: 560 px doubled
+                                  ; from the Apple's 280, which is 70 bytes
+A2_ROWS_B  equ 24                 ; the frame, in character rows...
+A2_LINES_B equ 192                ; ...and in scan lines
+AB_SCROLL_L equ 23 * 8            ; A SCROLL'S OWN CHANGE SET: the ROM copies
+                                  ; 23 character rows up one and clears the
+                                  ; 24th, so 184 scan lines hold different
+                                  ; bytes than they did and the 8 vacated ones
+                                  ; are drawn whatever the compare says
+                                  ; (APPLE2-SPEC section 13.2)
 
 ; -----------------------------------------------------------------------------
 ; ab_entry - package entry (SPEC.md 20.2)
@@ -237,6 +249,7 @@ ab_setup:
     ; input is degenerate is one nobody can check by looking at it.
     mov di, ab_hsrc
     mov dx, 8
+    xor ah, ah
 .hl:
     push di
     mov cx, AB_CELLS
@@ -244,9 +257,13 @@ ab_setup:
 .hb:
     mov al, [si]
     inc si
-    mov [di], al
-    inc di
-    loop .hb
+    xor al, ah                      ; ...AND BIT 7 ALTERNATES CELL BY CELL, so
+    xor ah, 0x80                    ; BOTH of MII's colour sets are in the
+    mov [di], al                    ; fixture. The seed is ASCII and had bit 7
+    inc di                          ; clear in all forty cells, which left the
+    loop .hb                        ; half-dot shift's arm untaken - and the
+                                    ; span self-check below is about exactly
+                                    ; the cross-cell state that arm feeds
     pop di
     add di, 0x400
     dec dx
@@ -254,6 +271,10 @@ ab_setup:
 
     call _a2_x2init                 ; the 512-byte doubling table, once,
                                     ; outside every timed row
+    call _a2_fsx_init               ; ...and MII's artifact rule, flattened
+                                    ; into a2_hitab. Both are per-launch
+                                    ; tables and neither belongs in a timed
+                                    ; row (APPLE2-SPEC section 13)
 
     pop es
     pop di
@@ -295,11 +316,17 @@ ab_onkey:
     jc .out
     mov bl, al
     or bl, 0x20
+    cmp bl, 'i'
+    je .ident
     cmp bl, 'r'
     je .run
     call bl_key
     jc .out
     call bl_paint
+    jmp short .out
+.ident:
+    xor byte [ab_identon], 1        ; ...and the identity block is a KEY now
+    call ab_repaint                 ; (see ab_repaint)
     jmp short .out
 .run:
     call ab_run
@@ -358,7 +385,16 @@ ab_repaint:
     call OSAPI_GFX_FILL
     mov si, [ab_win]
     call bl_paint
+    ; THE IDENTITY BLOCK IS BEHIND `i` AND IS OFF BY DEFAULT, and that is the
+    ; foreign rows' own doing: the report is 49 rows now and the four
+    ; full-width picture rows sit on the last three of them, so what wave 5's
+    ; measurement most needed to read was underneath a picture. It is a
+    ; correctness assertion and not a measurement - a screendump IS the
+    ; assertion - so it costs nothing to ask for it.
+    cmp byte [ab_identon], 0
+    je .noident
     call ab_ident
+.noident:
     pop si
     pop dx
     pop cx
@@ -586,6 +622,314 @@ ab_b_x2s:
     push ax
     call _a2_band_x2
     add sp, 8
+    ret
+
+; =============================================================================
+; THE FOREIGN VIDEO MODE (APPLE2-SPEC section 13), AND THE MEASUREMENT THAT
+; DECIDES WHICH OF ITS THREE WRITERS SHIP
+;
+; `FSXM_VGA13` ships on its COLOUR, which is not in question - a 1bpp window
+; cannot express artifact colour at any width. `FSXM_CGA640` and `FSXM_HERC`
+; are a SPEED claim and nothing else, and the SPEC states the arithmetic
+; against them: 560 x 192 is 13,440 bytes a frame against the windowed
+; 7,680, 1.75x the raster work on the slowest machine in the name of going
+; faster. So they ship ONLY IF THEY BEAT THE WINDOWED PATH HERE, on the same
+; change set, and are cut if they do not.
+;
+; TWO CHANGE SETS, because one number cannot answer it:
+;
+;   FRAME   every scan line differs - entering the mode, a HOME, a scroll in
+;           a graphics mode, a picture load. The worst case, and the one the
+;           1.75x argument is about.
+;   ROW     one character row differs - a keystroke, which is what the machine
+;           spends almost all of its time doing. The foreign path's span
+;           compare answers "nothing moved" for the other 184 scan lines and
+;           the windowed path never composes them either, so this is where
+;           the two are closest.
+;
+; WHAT THIS BENCH DOES NOT MODEL, stated because it cuts BOTH ways: -icount
+; prices INSTRUCTIONS, not bus contention, so a write into VRAM costs what a
+; write into RAM costs here. That is true of every row in this file including
+; the BLIT1 ones, which go to the real framebuffer through the kernel - so the
+; comparison is like for like, and neither side is being flattered.
+; =============================================================================
+
+; --- a2_fsx_row(dst, mode, mseg, moff, line, fmask, cell0, ncells) ----------
+; `ncells` cells of ONE scan line of palette indices. The three modes are three
+; rows, because they are three phase Bs: a masked glyph row, a colour nibble
+; and MII's artifact rule.
+;
+; AND EACH IS MEASURED AT TWO WIDTHS, which is what turns a per-CALL price into
+; a per-CELL one. The composer takes a cell range now (a2fsx.inc), because an
+; Applesoft COUT moves one or two cells and composing forty of them is the
+; defect PERFORMANCE rule 1 names; a harness cost table that prices every call
+; at the forty-cell figure would report the narrowing as free and a bench that
+; only ever measured forty cells is what let it be written that way. Forty and
+; EIGHT - one group, which is the narrowest span a2_flush's own predicate can
+; produce - and the two numbers give the call floor and the slope.
+%macro AB_FSXROW 5                  ; mode, moff, line, cell0, ncells
+    mov ax, %5
+    push ax                         ; ncells
+    mov ax, %4
+    push ax                         ; cell0
+    xor ax, ax
+    push ax                         ; fmask
+    mov ax, %3
+    push ax                         ; line
+    mov ax, %2
+    push ax                         ; moff
+    mov ax, ds
+    push ax                         ; mseg
+    mov ax, %1
+    push ax                         ; mode
+    mov ax, ab_fsxrow
+    push ax                         ; dst
+    call _a2_fsx_row
+    add sp, 16
+%endmacro
+
+ab_b_fsxrow_t:
+    AB_FSXROW 0, ab_mat, 0, 0, 40
+    ret
+
+ab_b_fsxrow_l:
+    AB_FSXROW 1, ab_mat, 0, 0, 40
+    ret
+
+ab_b_fsxrow_h:
+    AB_FSXROW 2, ab_hsrc, 0, 0, 40
+    ret
+
+; ...AND THE SAME THREE OVER ONE GROUP, which is what a keystroke owes. The
+; cell0 is 8 rather than 0 on purpose: a hi-res range that does not start at
+; the row's first cell has to take its `b0` and its parity from the SOURCE,
+; and a bench that always started at 0 would never execute that seeding.
+; --- THE SPAN SELF-CHECK, WHICH IS NOT A TIMED ROW --------------------------
+; A CELL RANGE MUST PRODUCE THE BYTES THE WHOLE ROW WOULD, and in hi-res that
+; is not free: artifact colour is decided by a pixel's NEIGHBOURS, so a range
+; starting at cell 8 has to seed `b0` from the byte before it and `odd` from
+; cell 8's own parity, and a range ENDING short of cell 39 still has a next
+; byte to read. Get any of the three wrong and the picture is right at 40
+; cells and wrong at 8 - which is to say right the first time the mode is
+; entered and wrong on every keystroke after it, and then RECORDED in the
+; foreign shadow, so it stays for the session.
+;
+; Nothing else in this tree can see that: the host harness models a2_fsx_row
+; in C rather than running it, tools/a2ref.py compares the WINDOWED composer,
+; and a screendump of artifact colour is not a thing anyone can check by
+; looking. So the bench, which is the only harness that runs this routine on
+; an x86 at all, asserts it before it times it.
+ab_spanck:
+    push es
+    push ds
+    pop es
+    cld
+    AB_FSXROW 2, ab_hsrc, 0, 0, 40  ; the whole row...
+    mov si, ab_fsxrow + AB_SPANOFF  ; ...cells 8..15 of it, kept
+    mov di, ab_fsxspan
+    mov cx, AB_SPANLEN
+    rep movsb
+    mov di, ab_fsxrow               ; ...and the row scrubbed, so a range that
+    mov cx, A2_FSXW                 ; wrote nothing cannot pass by leaving the
+    mov al, 0xEE                    ; previous answer where it was
+    rep stosb
+    AB_FSXROW 2, ab_hsrc, 0, 8, 8   ; the same eight cells, narrowly
+    mov si, ab_fsxspan
+    mov di, ab_fsxrow + AB_SPANOFF
+    mov cx, AB_SPANLEN
+    repe cmpsb
+    mov si, ab_s_spanok
+    je .ok
+    mov si, ab_s_spanbad
+.ok:
+    pop es
+    call bl_sline
+    ret
+
+ab_b_fsxrow_t8:
+    AB_FSXROW 0, ab_mat, 0, 8, 8
+    ret
+
+ab_b_fsxrow_l8:
+    AB_FSXROW 1, ab_mat, 0, 8, 8
+    ret
+
+ab_b_fsxrow_h8:
+    AB_FSXROW 2, ab_hsrc, 0, 8, 8
+    ret
+
+; --- a2_fsx_put(fbseg, fboff, shseg, shoff, src, n) -------------------------
+; The span compare one geometry along. TWO rows per width, because the
+; answers are different in kind: a line that has not changed costs one
+; `repe cmpsb` and writes nothing, and that is 184 of the 192 on an ordinary
+; keystroke.
+;
+; THE DIFFERING ROW POKES BOTH ENDS OF THE SHADOW FIRST, and it has to: the
+; routine's own job is to bring the shadow up to date, so without the poke the
+; second iteration and every one after it would take the EQUAL path and the
+; row would measure the thing above it. Two `mov byte [mem], imm` is about
+; eight clocks against a 280-byte compare and two 280-byte copies.
+%macro AB_FSXPUT 2                  ; src, n
+    mov ax, %2
+    push ax                         ; n
+    mov ax, %1
+    push ax                         ; src
+    mov ax, ab_fsxsh
+    push ax                         ; shoff
+    mov ax, ds
+    push ax                         ; shseg
+    mov ax, ab_fsxfb
+    push ax                         ; fboff
+    mov ax, ds
+    push ax                         ; fbseg - the bench's own bss stands in
+    call _a2_fsx_put                ; for the foreign framebuffer (see above)
+    add sp, 12
+%endmacro
+
+ab_b_fsxput_d:
+    mov byte [ab_fsxsh], 0xFE
+    mov byte [ab_fsxsh + A2_FSXW - 1], 0xFE
+    AB_FSXPUT ab_fsxrow, A2_FSXW
+    ret
+
+ab_b_fsxput_e:
+    AB_FSXPUT ab_fsxrow, A2_FSXW
+    ret
+
+ab_b_fsxput1_d:
+    mov byte [ab_fsxsh], 0xFE
+    mov byte [ab_fsxsh + AB_FSXW1 - 1], 0xFE
+    AB_FSXPUT ab_x2buf, AB_FSXW1
+    ret
+
+ab_b_fsxput1_e:
+    AB_FSXPUT ab_x2buf, AB_FSXW1
+    ret
+
+; --- THE WHOLE-FRAME AND ONE-ROW BODIES -------------------------------------
+; The three paths, each doing the SAME visible work: 192 scan lines, or the
+; eight of one character row.
+;
+; THE SHADOW IS ONE LINE AND IS REUSED FOR ALL 192, and that is a statement
+; about addresses and not about work: the compare, the two copies and the
+; compose are the same length whichever line's shadow they are handed, and an
+; 53,760-byte buffer in a bench package's bss is a launch this OS refuses.
+; THE COUNTER IS IN MEMORY AND NOT IN A REGISTER, and it is not tidiness:
+; a2band.inc's and a2fsx.inc's routines are cdecl and cdecl here preserves BP,
+; DS, SS:SP and DF AND NOTHING ELSE (SPEC.md 73.3) - `_a2_band_text` loads BL
+; with the flash mask on its second instruction. A loop counter in BX
+; therefore never comes back, and what that looks like is not a wrong number:
+; the first cut of these four bodies HUNG, and a bench that hangs looks
+; exactly like one that is merely slow.
+ab_b_win2x:
+    mov word [ab_lc], A2_ROWS_B
+.r:
+    call ab_b_band                  ; the windowed composer, five groups
+    call ab_b_x2                    ; ...doubled, a whole character row
+    call ab_b_blit2                 ; ...and down in ONE blit1, 640x16
+    dec word [ab_lc]
+    jnz .r
+    ret
+
+ab_b_fsx13:
+    mov word [ab_lc], A2_LINES_B
+.l:
+    AB_FSXROW 2, ab_hsrc, 0, 0, 40
+    mov byte [ab_fsxsh], 0xFE
+    mov byte [ab_fsxsh + A2_FSXW - 1], 0xFE
+    AB_FSXPUT ab_fsxrow, A2_FSXW
+    dec word [ab_lc]
+    jnz .l
+    ret
+
+; --- A SCROLL, WHICH IS THE ORDINARY EVENT THE FOREIGN FRAME HAS NO ANSWER
+; FOR, MEASURED RATHER THAN ARGUED ABOUT.
+;
+; The windowed flush answers a scroll with ONE os88_gfx_scroll and the vacated
+; row (a2_shift_test proves it, forty source bytes a row, and the kernel moves
+; the pixels): APPLE2-SPEC section 7.9.1 measured 34 ms. THE FOREIGN FRAME HAS
+; NO COUNTERPART - a2_fsx_frame starts at a2_dirty_scan and there is no shift
+; block below it - so a RETURN typed at the bottom line of an Applesoft
+; session recomposes and rewrites 184 scan lines, and this row is what that
+; costs. TEXT and not hi-res on purpose: a scroll is a text-mode event, and it
+; is a2_shift_test's own gate (`a2_v_text`) on the windowed side.
+;
+; It is a row and not a fix because a fix is a second damage model - a foreign
+; a2_shsrc, a foreign mode key, a foreign phase and a mover for the framebuffer
+; and the shadow - and section 13.2 records the number and the omission
+; instead. What the row makes impossible is the omission being SILENT.
+ab_b_fsx13sc:
+    mov word [ab_lc], AB_SCROLL_L
+.l:
+    AB_FSXROW 0, ab_mat, 0, 0, 40
+    mov byte [ab_fsxsh], 0xFE       ; ...and every line DIFFERS, which is what
+    mov byte [ab_fsxsh + A2_FSXW - 1], 0xFE  ; a scrolled row is
+    AB_FSXPUT ab_fsxrow, A2_FSXW
+    dec word [ab_lc]
+    jnz .l
+    ret
+
+ab_b_fsx1bpp:
+    mov word [ab_lc], A2_ROWS_B
+.r:
+    call ab_b_band                  ; the SAME composer and the SAME doubler:
+    call ab_b_x2                    ; a 1bpp foreign frame is the windowed
+    dec word [ab_lc]                ; band at the windowed magnification
+    jnz .r
+    mov word [ab_lc], A2_LINES_B
+.l:
+    mov byte [ab_fsxsh], 0xFE
+    mov byte [ab_fsxsh + AB_FSXW1 - 1], 0xFE
+    AB_FSXPUT ab_x2buf, AB_FSXW1
+    dec word [ab_lc]
+    jnz .l
+    ret
+
+; ...and the ONE-ROW forms of the three, which is what a keystroke costs.
+ab_b_win2x1:
+    call ab_b_band
+    call ab_b_x2
+    call ab_b_blit2
+    ret
+
+ab_b_fsx131:
+    mov word [ab_lc], 8
+.l:
+    AB_FSXROW 2, ab_hsrc, 0, 0, 40
+    mov byte [ab_fsxsh], 0xFE
+    mov byte [ab_fsxsh + A2_FSXW - 1], 0xFE
+    AB_FSXPUT ab_fsxrow, A2_FSXW
+    dec word [ab_lc]
+    jnz .l
+    ret
+
+; ...AND THE ONE-ROW FORM AS THE PACKAGE ACTUALLY DRAWS IT, which is the row
+; the first cut of this bench did not have and the reason the column narrowing
+; was written without a number on it. `ROW FSXM_VGA13` above composes all forty
+; cells of eight scan lines, and an Applesoft COUT moves ONE cell: a2_fsx_frame
+; hands the composer a2_flush's own group span, which is eight cells, and the
+; compare the matching byte range.
+ab_b_fsx131n:
+    mov word [ab_lc], 8
+.l:
+    AB_FSXROW 2, ab_hsrc, 0, 8, 8
+    mov byte [ab_fsxsh], 0xFE
+    mov byte [ab_fsxsh + AB_SPANLEN - 1], 0xFE
+    AB_FSXPUT ab_fsxrow + AB_SPANOFF, AB_SPANLEN
+    dec word [ab_lc]
+    jnz .l
+    ret
+
+ab_b_fsx1bpp1:
+    call ab_b_band
+    call ab_b_x2
+    mov word [ab_lc], 16            ; a character row is SIXTEEN doubled scan
+.l:                                 ; lines, and each is its own compare
+    mov byte [ab_fsxsh], 0xFE
+    mov byte [ab_fsxsh + AB_FSXW1 - 1], 0xFE
+    AB_FSXPUT ab_x2buf, AB_FSXW1
+    dec word [ab_lc]
+    jnz .l
     ret
 
 ; -----------------------------------------------------------------------------
@@ -943,6 +1287,99 @@ ab_run:
     mov si, ab_r_blit2
     call ab_rowb
 
+    ; --- THE FOREIGN FRAME (APPLE2-SPEC section 13) -----------------------
+    call bl_blank
+    mov si, ab_s_hdr3
+    call bl_sline
+    call ab_spanck                  ; ...and the cell range is CHECKED before
+                                    ; it is timed (see ab_spanck)
+
+    mov word [bl_body], ab_b_fsxrow_t
+    mov si, ab_r_fsxrt
+    xor al, al
+    call bl_run
+    mov word [bl_body], ab_b_fsxrow_l
+    mov si, ab_r_fsxrl
+    xor al, al
+    call bl_run
+    mov word [bl_body], ab_b_fsxrow_h
+    mov si, ab_r_fsxrh
+    xor al, al
+    call bl_run
+    mov word [bl_body], ab_b_fsxrow_t8
+    mov si, ab_r_fsxrt8
+    xor al, al
+    call bl_run
+    mov word [bl_body], ab_b_fsxrow_l8
+    mov si, ab_r_fsxrl8
+    xor al, al
+    call bl_run
+    mov word [bl_body], ab_b_fsxrow_h8
+    mov si, ab_r_fsxrh8
+    xor al, al
+    call bl_run
+
+    call ab_b_fsxrow_h              ; ...so the shadow the EQUAL row compares
+    call ab_b_fsxput_d              ; against really does match the line
+    mov word [bl_body], ab_b_fsxput_d
+    mov si, ab_r_fsxpd
+    xor al, al
+    call bl_run
+    call ab_b_fsxput_d
+    mov word [bl_body], ab_b_fsxput_e
+    mov si, ab_r_fsxpe
+    xor al, al
+    call bl_run
+
+    call ab_b_fsxput1_d
+    mov word [bl_body], ab_b_fsxput1_d
+    mov si, ab_r_fsxp1d
+    xor al, al
+    call bl_run
+    call ab_b_fsxput1_d
+    mov word [bl_body], ab_b_fsxput1_e
+    mov si, ab_r_fsxp1e
+    xor al, al
+    call bl_run
+
+    ; --- and the three PATHS, on the same change set ----------------------
+    ; ONE iteration each: a whole frame is 192 lines of work and the row is
+    ; the answer to `what does a frame cost`, not to `what does a call cost`.
+    mov word [bl_n], 1
+    mov word [bl_body], ab_b_win2x
+    mov si, ab_r_win2x
+    call ab_rowb                    ; it BLITS, so it is preflight-gated
+    mov word [bl_body], ab_b_fsx13
+    mov si, ab_r_fsx13
+    xor al, al
+    call bl_run
+    mov word [bl_body], ab_b_fsx1bpp
+    mov si, ab_r_fsx1b
+    xor al, al
+    call bl_run
+    mov word [bl_body], ab_b_fsx13sc
+    mov si, ab_r_fsxsc
+    xor al, al
+    call bl_run
+
+    mov word [bl_n], 4
+    mov word [bl_body], ab_b_win2x1
+    mov si, ab_r_win2x1
+    call ab_rowb
+    mov word [bl_body], ab_b_fsx131
+    mov si, ab_r_fsx131
+    xor al, al
+    call bl_run
+    mov word [bl_body], ab_b_fsx131n
+    mov si, ab_r_fsx131n
+    xor al, al
+    call bl_run
+    mov word [bl_body], ab_b_fsx1bpp1
+    mov si, ab_r_fsx1b1
+    xor al, al
+    call bl_run
+    mov word [bl_n], AB_N
+
     call ab_ident
     call bl_lclr
     mov si, ab_r_ident
@@ -966,6 +1403,9 @@ ab_run:
     pop ax
     ret
 
+%include "apple2/a2fsx.inc"         ; ...AND THE FOREIGN WRITERS (section 13),
+                                    ; whose rows are what decide whether two
+                                    ; of the three ship at all
 %include "apple2/a2band.inc"        ; THE THING MEASURED - the package's own
 %include "benchlib.inc"
 
@@ -989,7 +1429,7 @@ ab_tpl:
 ab_ttl:     db 'Apple II Band Bench', 0
 
 ab_s_title: db 'A2BANDBENCH - the 7-pixel composer (apps/apple2/a2band.inc)', 0
-ab_s_hint:  db 'Click the window, or press R, to run.', 0
+ab_s_hint:  db 'Click the window, or press R, to run; I for the identity rows.', 0
 ab_s_hdr:   db '-- the line: 40 cells of 7x8, 280 px in a 320 band --', 0
 ab_s_hdr2:  db '-- the compare, the copy, the signature, the flash --', 0
 ab_s_noblit: db 'OSAPI_GFX_BLIT1 REFUSES: no band rows below', 0
@@ -1016,6 +1456,27 @@ ab_r_sig:     db 'ROWSIG 40 cells', 0
 ab_r_flash:   db 'ROWFLASH 40 cells', 0
 ab_r_x2:      db 'BAND_X2 8r x 40b', 0
 ab_r_x2s:     db 'BAND_X2 1r x 7b', 0
+ab_r_fsxrt:   db 'FSXROW13 text 280px', 0
+ab_r_fsxrl:   db 'FSXROW13 lores 280px', 0
+ab_r_fsxrh:   db 'FSXROW13 hires 280px', 0
+ab_s_spanok:  db 'FSXROW13 cell range: 8 cells == the whole row', 0
+ab_s_spanbad: db 'FSXROW13 CELL RANGE MISMATCH - see ab_spanck', 0
+ab_r_fsxrt8:  db 'FSXROW13 text 8 cells', 0
+ab_r_fsxrl8:  db 'FSXROW13 lores 8 cells', 0
+ab_r_fsxrh8:  db 'FSXROW13 hires 8 cells', 0
+ab_r_fsxpd:   db 'FSXPUT 280 differing', 0
+ab_r_fsxpe:   db 'FSXPUT 280 equal', 0
+ab_r_fsxp1d:  db 'FSXPUT 70 differing', 0
+ab_r_fsxp1e:  db 'FSXPUT 70 equal', 0
+ab_s_hdr3:    db '-- the foreign frame: 192 lines, then ONE row --', 0
+ab_r_win2x:   db 'FRAME windowed 2x', 0
+ab_r_fsx13:   db 'FRAME FSXM_VGA13', 0
+ab_r_fsx1b:   db 'FRAME FSXM_CGA640/HERC', 0
+ab_r_fsxsc:   db 'SCROLL FSXM_VGA13 (184 lines)', 0
+ab_r_win2x1:  db 'ROW windowed 2x', 0
+ab_r_fsx131:  db 'ROW FSXM_VGA13', 0
+ab_r_fsx131n: db 'ROW FSXM_VGA13 one group', 0
+ab_r_fsx1b1:  db 'ROW FSXM_CGA640/HERC', 0
 ab_r_ident:   db 'identity blit says', 0
 ab_s_perb:    db '  ...per source byte', 0
 ab_s_drawn:   db 'DRAWN (CF=0)', 0
@@ -1035,6 +1496,10 @@ ab_fmask:   dw 0
 ab_gfirst:  db 0
 ab_cf:      db 0
 ab_blitok:  db 1            ; the preflight's answer (see ab_run)
+ab_lc:      dw 0            ; the composite bodies' loop counter, in MEMORY
+                            ; (see ab_b_win2x)
+ab_identon: db 0            ; ...and whether `i` has asked for the identity
+                            ; rows, which sit on top of the report's last three
 
 ; a2band.inc reads the decoded character generator out of the C's own storage
 ; in the package (it is an ordinary global there, so nasm can see the label).
@@ -1052,8 +1517,8 @@ _a2_lopat:  times 16 db 0
 ; ab_band 320 + ab_shad 320 + ab_mat 80 + ab_x2buf 1280, and the eight bytes
 ; of slack that make the arithmetic legible
 AB_BSS_OWN  equ AB_STRIDE * 8 + AB_STRIDE * 8 + AB_CELLS * 2 \
-                + 80 * 16 + 0x1C00 + AB_CELLS + 8
-AB_BSS_TOTAL equ AB_BSS_OWN + BL_BSS_SIZE + 900   ; + a2band.inc's scratch
+                + 80 * 16 + 0x1C00 + AB_CELLS + 8 + A2_FSXW * 3
+AB_BSS_TOTAL equ AB_BSS_OWN + BL_BSS_SIZE + 1350  ; + a2band.inc's scratch
                                                   ; (a2_grow 320 + a2_x2tab
                                                   ; 512 + 6), with slack;
                                                   ; ab_entry checks the sum and
@@ -1074,6 +1539,14 @@ ab_x2buf:   resb 80 * 16            ; the pixel-doubled band
 ; handing it forty bytes and letting it read the seven lines after them would
 ; be reading past this claim and into somebody else's memory.
 ab_hsrc:    resb 0x1C00 + AB_CELLS
+ab_fsxrow:  resb A2_FSXW            ; the composed foreign scan line...
+ab_fsxsh:   resb A2_FSXW            ; ...the foreign-frame shadow's row...
+ab_fsxspan: resb AB_SPANLEN          ; ...ab_spanck's kept slice of a whole-row
+                                    ; compose
+ab_fsxfb:   resb A2_FSXW            ; ...and the framebuffer's, which on the
+                                    ; machine is a segment of the VGA's own
+                                    ; A000 and here is ours (see the foreign
+                                    ; section's header)
 ab_bl:      resb BL_BSS_SIZE
 ab_bss_end:
 section .text

@@ -276,14 +276,129 @@ static void a2_kb_put(int b)
 }
 
 /* ==========================================================================
- * THE SPEAKER - COUNTED AND SILENT THIS WAVE (section 8)
+ * THE SPEAKER - THE TOGGLE-INTERVAL ESTIMATOR (section 8)
  * ========================================================================*/
-/* $C030-$C03F toggles the one-bit speaker on a read OR a write. The toggle
- * interval estimator that turns those toggles into a tone is WAVE 5's, and it
- * exists in no reference - all three synthesize - so it is this port's own
- * design and is labelled as such. What is here is the count, because the
- * toggle is a real side effect of a read and the ladder has to take it. */
-static unsigned a2_spk_n;
+/* $C030-$C03F toggles the one-bit speaker on a read OR a write, and there is
+ * NO FREQUENCY REGISTER ANYWHERE ON THIS MACHINE: the beep, `PRINT CHR$(7)`,
+ * every game's engine noise and every piece of music on an Apple II is a
+ * program timing its own toggles in a 6502 loop.
+ *
+ * **THE ESTIMATOR IS THIS PORT'S OWN DESIGN AND EXISTS IN NO REFERENCE.** MII,
+ * AppleWin and apple2emu all synthesize PCM from the toggle train; a PCM
+ * stream at ~22 kHz on a 4.77 MHz 8088 that is already running an emulated
+ * 6502 at a few per cent of real speed is minutes of arithmetic a second, so
+ * OSAPI_SND_STREAM is REFUSED WITH THAT ARITHMETIC and not deferred. What is
+ * here instead measures the interval between toggles and asks the kernel's
+ * square voice for the tone that interval implies:
+ *
+ *   - a last-toggle EMULATED-cycle stamp (a2_now(), which is exact inside a
+ *     run - the paddles' own clock, and for the same reason: this is reached
+ *     from INSIDE a2_run, where the C's per-slice counter has not moved);
+ *   - `hz = 1,020,484 / (2 * delta)`, which is `510,242 / delta`, through ONE
+ *     32-bit division in a2mem.inc and never two 16-bit roundings;
+ *   - played with os88_snd_tone(hz, 0, prio) WHEN THE LAST A2_SPK_N INTERVALS
+ *     AGREE within a tolerance, so a click track and a scattering of
+ *     unrelated toggles produce silence rather than a stream of wrong notes;
+ *   - taken down by the ONE a2_sound_stop() after a silent 1/18 s, and by
+ *     pause, reset, JAM, warp, Machine > Mute and the About panel.
+ *
+ * WHAT IT CANNOT REPRODUCE IS A FACT AND IT IS SAID ONCE, ON THE STATUS ROW
+ * (section 8) and in the SPEC, and NOT in the About panel, which carries what
+ * the port IS and not how this build renders: a program that shapes the
+ * waveform toggle by toggle - a click track, Karateka-style synthesis, the
+ * Mockingboard - is not reproduced.
+ *
+ * THE COST OF THE MEASUREMENT IS ON THE HOT PATH AND IS STATED. The old body
+ * here was `a2_spk_n++`; this is that plus one a2_now() (a far-ish near call
+ * that reads two words of the core's scratch) and a three-entry shift, per
+ * $C030 access. The paddle trigger at $C070 already pays the same a2_now()
+ * from the same context, which is why the shape is the established one rather
+ * than a new hazard - and the alternative, computing the hertz per toggle,
+ * would put a 32-bit divide on the same path.
+ *
+ * A2_SPK_DMIN / DMAX ARE THE BAND'S OWN EDGES AND NOT A GUESS. The kernel's
+ * tone sink is asked for 20..12,000 Hz (apps/c64/c64io.c takes the same band
+ * one machine along), and 510,242/12,000 = 42 while 510,242/20 = 25,512. An
+ * interval outside that pair is not a note this machine can play, so it
+ * INVALIDATES the run rather than being clamped into one: clamping would
+ * answer 20 Hz for a machine that had simply stopped toggling. */
+#define A2_SPK_N     3                      /* intervals that must agree */
+#define A2_SPK_DMIN  42                     /* 510,242 / 12,000 Hz */
+#define A2_SPK_DMAX  25512                  /* 510,242 / 20 Hz */
+#define A2_SPK_HI    0x0007                 /* ...and 510,242 as a pair of */
+#define A2_SPK_LO    0xC922                 /* words, for a2_div32 */
+static unsigned a2_spk_n;                   /* toggles this session - the wake
+                                             * reads it to date the silence */
+static unsigned a2_spk_stamp;               /* the last toggle's cycle... */
+static int a2_spk_seen;                     /* ...and whether there is one */
+static unsigned a2_spk_d[A2_SPK_N];         /* the last N intervals, newest
+                                             * first */
+static int a2_spk_fill;                     /* how many of them are real */
+
+static void a2_spk_toggle(void)
+{
+    unsigned now, d;
+    int i;
+
+    a2_spk_n++;
+    now = (unsigned)a2_now();
+    if (!a2_spk_seen) {
+        a2_spk_seen = 1;
+        a2_spk_stamp = now;
+        return;
+    }
+    /* THE CLOCK IS A 16-BIT WRAPPING COUNTER (a2cpu.inc), so the DIFFERENCE is
+     * taken and never the values - and it is exact for any interval under
+     * 65,536 cycles, which every interval inside the audible band is by a
+     * factor of two and a half.
+     *
+     * THE MASK IS FOR THE HOST HARNESS AND COSTS THE MACHINE NOTHING. `int`
+     * is sixteen bits here, so `now - stamp` already wraps and `& 0xFFFF` is
+     * the identity; on the host it is 32 bits and a2_now's answer arrives
+     * SIGN-EXTENDED, so a wrap that the machine takes in its stride would
+     * read as a 4-billion-cycle interval in the model and the two would
+     * disagree on exactly the case the wrap exists for (a2cpu.inc's clock
+     * turns over every 64 ms of emulated time). */
+    d = (now - a2_spk_stamp) & 0xFFFFu;
+    a2_spk_stamp = now;
+    if (d < A2_SPK_DMIN || d > A2_SPK_DMAX) {
+        a2_spk_fill = 0;                    /* not a note: the run is broken */
+        return;
+    }
+    for (i = A2_SPK_N - 1; i > 0; i--)
+        a2_spk_d[i] = a2_spk_d[i - 1];
+    a2_spk_d[0] = d;
+    if (a2_spk_fill < A2_SPK_N)
+        a2_spk_fill++;
+}
+
+/* a2_spk_hz - the tone the last N intervals imply, or 0 if they do not agree.
+ *
+ * THE TOLERANCE IS AN EIGHTH OF THE LONGEST INTERVAL, which is a shift and
+ * not a divide - `imul` and `idiv` by a constant are both shapes cc8086.py
+ * refuses where it cannot prove a scratch register dead (LESSONS.md 3). An
+ * eighth is ~1.7 semitones, wide enough that an Applesoft loop whose branch
+ * costs differ by a cycle or two still counts as steady and narrow enough
+ * that a rising sweep does not read as one held note. */
+static int a2_spk_hz(void)
+{
+    unsigned lo, hi;
+    int i;
+
+    if (a2_spk_fill < A2_SPK_N)
+        return 0;
+    lo = a2_spk_d[0];
+    hi = a2_spk_d[0];
+    for (i = 1; i < A2_SPK_N; i++) {
+        if (a2_spk_d[i] < lo)
+            lo = a2_spk_d[i];
+        if (a2_spk_d[i] > hi)
+            hi = a2_spk_d[i];
+    }
+    if (hi - lo > (hi >> 3))
+        return 0;
+    return (int)a2_div32(A2_SPK_HI, A2_SPK_LO, a2_spk_d[0]);
+}
 
 /* ==========================================================================
  * THE GAME CONNECTOR (section 5.1)
@@ -442,7 +557,7 @@ static int a2_io_rd(unsigned a)
         a2_kb_ready = 0;
         return A2_FLOAT;
     case 0x3:                               /* $C030-$C03F, the speaker */
-        a2_spk_n++;
+        a2_spk_toggle();
         return A2_FLOAT;
     case 0x5:
         a2_c05x(lo);
@@ -481,7 +596,7 @@ static void a2_io_wr(unsigned a, int v)
         a2_kb_ready = 0;
         break;
     case 0x3:
-        a2_spk_n++;
+        a2_spk_toggle();
         break;
     case 0x5:
         a2_c05x(lo);
@@ -585,5 +700,7 @@ static void a2_power_on(void)
     a2_io_init();                           /* the switches back to TEXT */
     a2_kb_ready = 0;
     a2_spk_n = 0;
+    a2_spk_seen = 0;
+    a2_spk_fill = 0;
     a2_reset_cpu();
 }

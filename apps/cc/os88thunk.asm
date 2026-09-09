@@ -980,6 +980,138 @@ _os88_fullscreen:
     pop bp
     ret
 
+%ifdef CC_HAS_FSX
+; =============================================================================
+; FULLSCREEN EXCLUSIVE (SPEC.md 53) - the four slots a C package can hold
+;
+; THE BLOCK IS GATED, on the idiom this file already uses twice (CC_HAS_FDLG,
+; CC_HAS_PARTS). nasm has no dead-code elimination, so four thunks nothing
+; references still cost every C package that assembles this file 92 bytes of
+; its 61,440 - and the package they were added for is the only one that will
+; ever enter a bracket. Ungated they took LOOM to 30 bytes of spare image, and
+; the next SDK addition of a dozen bytes would have failed LOOM's build with a
+; message pointing at LOOM. The four prototypes and the OS88_FSX* constants
+; stay unconditional in os88.h: an unreferenced prototype costs nothing, and a
+; package that calls one without the %define gets nasm naming the symbol.
+;
+; This is a DIFFERENT thing from os88_fullscreen() above, which is SPEC.md
+; 11.2's window latch: there the desktop's mode, primitives, cursor and event
+; ladder all stay live and the app is merely a window the size of the screen.
+; Here the app BORROWS THE MACHINE - multitasking suspended, every kernel
+; drawer parked, and the video mode the app's to change - and os88_fsx_run()
+; does not return until the entry proc does.
+;
+; NONE OF THE BRACKET'S RULES IS CHECKABLE FROM C, which is why os88.h's
+; "what is not wrapped" list carried these four for as long as it did. They
+; are wrapped now because APPLE2 (docs/APPLE2-SPEC.md section 13) is the
+; first C package to want a foreign video mode, and the rules are stated
+; there and obeyed by hand in ONE function whose header is the list:
+;
+;   - the entry is a plain RESIDENT C function whose address is taken, and
+;     NEVER an ovl_ - tools/cc8086.py refuses that address by name, because
+;     an overlay call site is a shim the loader has to resolve and the
+;     bracket has parked the machine that would resolve it;
+;   - after the first os88_fsx_mode() every drawing slot renders DESKTOP
+;     geometry into a foreign framebuffer and is off-limits until the entry
+;     returns;
+;   - keys come from a polled int 16h and the mouse from OSAPI_MOUSE, with
+;     the app edge-detecting the buttons: no events are dispatched in here;
+;   - frames are paced with os88_fsx_wait() and NEVER os88_task_sleep(),
+;     which degenerates to an immediate return with nothing else eligible;
+;   - nothing may touch PIT channel 0, the sound ports or int 10h mode sets.
+;
+; os88_fsx_run, os88_fsx_mode and os88_fsx_wait each answer 0, or -1 on CF.
+; os88_fsx_caps DOES NOT TEST CF and answers the MASK: SPEC.md 53.4 makes it
+; callable from any context, lock held or not - that is the whole point of it,
+; since a mode row has to be greyed per SPEC.md 47 BEFORE a bracket exists to
+; refuse anything - so it has no refusal to report and "no foreign mode on
+; this display" is a mask of 0. A caller that guards it with `< 0` has written
+; a branch that cannot be taken.
+; =============================================================================
+
+; int os88_fsx_caps(void *win, int *kind) - BX = the window to ask ABOUT
+; (SPEC.md 53.4); out AX = the FSXM_* bitmask settable on the display that
+; window is on, DL = that display's VID_* kind. Any context, lock held or
+; not, so a mode row can be greyed with it BEFORE the bracket is entered
+; (SPEC.md 47).
+;
+; PASS YOUR OWN WINDOW AND ASK AGAIN WHERE THE ANSWER IS USED: on a
+; two-display desktop (SPEC.md 39.18.2) this is a question about a DISPLAY
+; and a window moves between them. `kind` is an OUT-PARAMETER, so it must be
+; a static and never `&local` (SPEC.md 73.5): the store below is DS-relative
+; and a stack offset dereferenced through the package segment is the failure
+; that assembles, runs and reads the wrong memory.
+_os88_fsx_caps:
+    push bp
+    mov bp, sp
+    mov bx, [bp+4]
+    call OSAPI_FSX_CAPS
+    mov bx, [bp+6]                  ; the mask is the RETURN value, so DL is
+    mov dh, 0                       ; widened into the out-parameter and AX is
+    mov [bx], dx                    ; left alone
+    pop bp
+    ret
+
+; int os88_fsx_run(void (*entry)(void), void *win, int flags) - AX = a near
+; entry inside our own image, BX = our window, CX = FSXF_* (SPEC.md 53.1).
+; DOES NOT RETURN until `entry` does. -1 = refused, and the refusals are one
+; predicate each: already in a bracket, the file dialog is up, the caller is
+; not task 0, or the ownership fence (the window must be a live instance of
+; ours and the entry inside our image+bss).
+_os88_fsx_run:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    mov bx, [bp+6]
+    mov cx, [bp+8]
+    call OSAPI_FSX_RUN
+    mov ax, 0                       ; MOV: CF is the answer
+    jnc .ok
+    dec ax
+.ok:
+    pop bp
+    ret
+
+; int os88_fsx_mode(int id, void *fsi) - AL = FSXM_*, ES:DI = an FSI_SIZE
+; block of OURS (SPEC.md 53.4). Bracket-only. The block is the caller's own
+; data, so ES is loaded from DS and put back - the callback contract is
+; ES = KERNEL_SEG and every routine in this file leaves it as it found it.
+_os88_fsx_mode:
+    push bp
+    mov bp, sp
+    push di
+    push es
+    mov ax, [bp+4]
+    mov di, [bp+6]
+    push ds
+    pop es                          ; ES:DI = ours, as gfx_blit4's contract is
+    call OSAPI_FSX_MODE
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop es
+    pop di
+    pop bp
+    ret
+
+; int os88_fsx_wait(int kind) - AL = FSXW_TICK (0) / FSXW_VSYNC (1) /
+; FSXW_FRAME (2), and it is also THE PRESENT (SPEC.md 53.5): the bracket
+; never unlocks, so this is where a buffered frame reaches the glass. Draw,
+; wait, repeat. Bracket-only, -1 outside one or on an unknown kind.
+_os88_fsx_wait:
+    push bp
+    mov bp, sp
+    mov ax, [bp+4]
+    call OSAPI_FSX_WAIT
+    mov ax, 0
+    jnc .ok
+    dec ax
+.ok:
+    pop bp
+    ret
+%endif
+
 ; =============================================================================
 ; TASKS AND TIME (SPEC.md 8, 20.6)
 ; =============================================================================

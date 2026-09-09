@@ -663,3 +663,43 @@ _a2_scan0:
     pop di
     pop bp
     ret
+
+; -----------------------------------------------------------------------------
+; unsigned a2_div32(unsigned hi, unsigned lo, unsigned d)
+;     - (hi:lo) / d, in ONE 32-bit division. 0xFFFF when d is 0 or when the
+;       quotient would not fit in sixteen bits.
+;
+; THE SPEAKER'S FREQUENCY IS ONE ROUNDING AND NOT TWO (APPLE2-SPEC section 8),
+; and that is the whole reason this routine exists rather than a pair of
+; sixteen-bit divides in the C. `hz = 1,020,484 / (2 * delta)` is
+; `510,242 / delta`, and 510,242 does not fit in the `int` this C has - it is
+; not even the product of two sixteen-bit factors (510,242 = 2 x 255,121 and
+; 255,121 is prime), so apps/c64/c64mem.inc's `(a * b) / d` shape cannot hold
+; it either and the DIVIDEND is passed as its two halves instead. The C64
+; measured what rounding twice costs one machine along: F = 341 answered 19 Hz
+; against a true 20, which is the difference between the 20 Hz floor refusing
+; the note and playing it.
+;
+; The overflow guard is not decoration: `div` on an 8086 raises INT 0 when the
+; quotient does not fit, and INT 0 in a package is a machine that stops. The
+; caller's own band (delta 42..25,512 for 20..12,000 Hz) keeps it far away
+; from that, and the guard is what makes the routine safe for the next caller
+; who has not done that arithmetic.
+; -----------------------------------------------------------------------------
+_a2_div32:
+    push bp
+    mov bp, sp
+    mov dx, [bp+4]                  ; hi
+    mov ax, [bp+6]                  ; lo
+    mov cx, [bp+8]                  ; d
+    or cx, cx
+    jz .over
+    cmp dx, cx                      ; DX >= CX would overflow the quotient
+    jae .over
+    div cx
+    pop bp
+    ret
+.over:
+    mov ax, 0xFFFF
+    pop bp
+    ret

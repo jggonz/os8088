@@ -86,6 +86,54 @@ int  os88_wm_wake(void *win);
 void os88_wm_destroy(void *win);
 void os88_wm_close(void *win);              /* SPEC.md 75.2 */
 int  os88_fullscreen(void *win, int enter);
+
+/* THE EXCLUSIVE BRACKET (SPEC.md 53, APPLE2-SPEC section 13) - the four
+ * thunks this port added to the C SDK, stubbed here IN THE SAME EDIT as the
+ * thunk and the prototype, because a shim without a host stub is three link
+ * failures away (LESSONS.md 7). a2uitest.c models them: os88_fsx_caps
+ * answers a MASK the test chooses, os88_fsx_run CALLS the entry, and
+ * os88_fsx_mode fills the block and switches the modelled glass over to a
+ * foreign framebuffer of its own.
+ *
+ * THEY ARE BEHIND `%define CC_HAS_FSX` ON THE TARGET (apps/cc/os88.h's gate
+ * list, apps/apple2/apple2.asm's own line) and unconditional here, which is
+ * right for a harness and is stated so that the two files' difference is a
+ * decision and not a drift: the host has no nasm and no image budget, and a
+ * package that forgot the %define fails at the shim rather than here.
+ *
+ * AND THE EXIT CHORD IS Ctrl+F, not SPEC.md 11.2.1's bare `f` with Esc -
+ * 11.2.1's own exemption for an app that takes typed text, which is this one:
+ * the II+ owns every letter and owns Esc (APPLE2-SPEC section 13.3). */
+int  os88_fsx_caps(void *win, int *kind);
+int  os88_fsx_run(void (*entry)(void), void *win, int flags);
+int  os88_fsx_mode(int id, void *fsi);
+int  os88_fsx_wait(int kind);
+
+#define OS88_FSXM_TEXT80 0
+#define OS88_FSXM_TEXT40 1
+#define OS88_FSXM_CGA320 2
+#define OS88_FSXM_CGA640 3
+#define OS88_FSXM_HERC   4
+#define OS88_FSXM_VGA0D  5
+#define OS88_FSXM_VGA13  6
+#define OS88_FSXM_VGA12  7
+#define OS88_FSXM_MODEX  8
+#define OS88_FSXF_KEEPWORKER 1
+#define OS88_FSXF_FASTTICK   2
+#define OS88_FSXW_TICK  0
+#define OS88_FSXW_VSYNC 1
+#define OS88_FSXW_FRAME 2
+#define OS88_FSI_SEG    0
+#define OS88_FSI_W      2
+#define OS88_FSI_H      4
+#define OS88_FSI_STRIDE 6
+#define OS88_FSI_FLAGS  8
+#define OS88_FSI_BPP    9
+#define OS88_FSI_BANKS  10
+#define OS88_FSI_PAGES  11
+#define OS88_FSI_BSTEP  12
+#define OS88_FSI_MODE   14
+#define OS88_FSI_SIZE   16
 void os88_menu_set(void *win, struct os88_menuset *set);
 void os88_about_set(void *win);
 

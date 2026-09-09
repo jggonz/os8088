@@ -2032,3 +2032,584 @@ static void a2_flush(void *win)
     a2_flushed = 1;
     a2_fltick = os88_ticks();
 }
+
+/* ==========================================================================
+ * THE FOREIGN VIDEO MODE - COLOUR (APPLE2-SPEC section 13)
+ * ========================================================================*/
+/* SPEC.md 53's exclusive bracket, which is a DIFFERENT thing from the
+ * OSAPI_FULLSCREEN latch above it: there the app is a window the size of the
+ * screen and the desktop's mode, primitives, cursor and event ladder all stay
+ * live; here the app borrows the machine and the video mode is its own.
+ *
+ * **THIS IS WHERE THE PORT IS IN COLOUR, AND IT IS THE ONLY PLACE IT CAN BE.**
+ * A II+ makes fifteen colours out of a 280 x 192 raster and the windowed path
+ * has a 1bpp band: no width and no cleverness gets artifact colour onto a
+ * monochrome surface, and SPEC.md 47 says a fact and not a promise, which is
+ * why Machine > Color NTSC greyed with `The window is monochrome.` for four
+ * waves. FSXM_VGA13 is 320x200x256 with the Apple's 280x192 centred at
+ * (20, 4), ONE BYTE A PIXEL, and MII's "Color NTSC" palette straight into the
+ * DAC.
+ *
+ * ----------------------------------------------------------------------------
+ * WHAT THE BENCH SAID, AND WHAT IT CUT (section 13.4, `make a2bandbench`)
+ * ----------------------------------------------------------------------------
+ * FSXM_CGA640 and FSXM_HERC were a SPEED claim - the Apple's native
+ * monochrome geometry, whole, on a machine whose window can only show 111 of
+ * its 192 scan lines - and the wave measured them before writing them.
+ * **THEY LOST AND THEY ARE CUT**: 695.4 ms a frame against the windowed
+ * path's 632.6, and 34.8 ms a character row against 26.4. The reason is not
+ * the raster the SPEC argued about: both paths compose with a2_band_text and
+ * double with a2_band_x2, byte for byte the same, and what differs is the
+ * EMIT - one os88_gfx_blit1 of 640x16 at 8.875 counts against sixteen
+ * a2_fsx_put compares at 2.0 each. A band that is going down WHOLE does not
+ * need a span compare, and the kernel's blit is the cheaper call.
+ *
+ * So on CGA and Hercules this row greys with that number, and colour is a
+ * statement about a VGA-class machine - which is what section 13.1 says
+ * rather than implying an XT gets colour.
+ *
+ * ----------------------------------------------------------------------------
+ * THE COST, MEASURED, AND WHY THE FRAME IS DIRTY-LINE DRIVEN
+ * ----------------------------------------------------------------------------
+ * A whole VGA13 frame is 3,365 ms on a 4.77 MHz 8088 and one character row is
+ * 140. A per-frame raster write would pay the first of those numbers sixty
+ * times a second, which is what the dirty-page bitmap, the write window, the
+ * scan-line map and the span compare exist to avoid (PERFORMANCE.md Part 5).
+ * So a foreign frame is driven off THE SAME a2_lnd/a2_lnf SET THE WINDOWED
+ * FLUSH COMPUTES, against a foreign-frame shadow in a heap claim: an ordinary
+ * keystroke composes and compares eight scan lines and answers "nothing
+ * moved" for the other 184 at 1.08 ms each.
+ * ========================================================================*/
+#define A2_FSXW      280                    /* the Apple's raster, one byte a
+                                             * pixel. It is a2fsx.inc's
+                                             * A2_FSXW and the mirror check in
+                                             * hosttest/a2uitest.c is what says
+                                             * the two still agree */
+#define A2_FSX13_W   320                    /* ...inside mode 13h's frame */
+#define A2_FSX13_H   200
+#define A2_FSX13_X   20                     /* (320 - 280) / 2 */
+#define A2_FSX13_Y   4                      /* (200 - 192) / 2 */
+#define A2_FSX_KB    53                     /* 280 x 192 = 53,760 bytes */
+#define A2_FSX_BYTES 53760u                 /* ...and the byte count itself,
+                                             * written out rather than as
+                                             * A2_SCRH * A2_FSXW: 192 x 280
+                                             * does not fit the SIGNED int
+                                             * this C folds constants in, and
+                                             * a silent -11,776 handed to a
+                                             * `rep stosb` is a CX of 53,760
+                                             * anyway - right by accident on
+                                             * this one and not a thing to
+                                             * leave in the file */
+
+static int a2_fsx_id = -1;                  /* the FSXM_* this display can
+                                             * give, or -1 for none */
+/* a2_fsx_up - whether we are INSIDE the bracket, which is what fences the
+ * drawing slots reachable from a slice - is declared in apple2.c above every
+ * #include, because THAT is the file that reads it (a2_jam, a2_spk_service)
+ * and this one that writes it. */
+static int a2_fsx_ok;                       /* the foreign shadow describes
+                                             * the foreign glass */
+static unsigned a2_fsx_sh;                  /* the shadow's claim... */
+static unsigned a2_fsx_seg;                 /* ...and the framebuffer's */
+static int a2_fsx_stride;
+static void *a2_fsx_win;
+static unsigned char a2_fsxbuf[A2_FSXW];    /* the composed scan line, which
+                                             * is the compare's left side.
+                                             * bss and not a claim because it
+                                             * is one line and is spent inside
+                                             * one call; the SHADOW is 53,760
+                                             * bytes that outlive the frame */
+
+/* a2_fsx_avail - IS THERE A FOREIGN COLOUR MODE ON THE DISPLAY THIS WINDOW IS
+ * ON? A FACT and not a guess (SPEC.md 47): os88_fsx_caps answers the bitmask
+ * of ids that are settable on THAT display, and fsx_mode refuses on the same
+ * bit - one predicate for the greying and for the refusal.
+ *
+ * IT IS ASKED WHERE THE ANSWER IS USED and never banked, because on a
+ * two-display desktop (SPEC.md 39.18.2) this is a question about a DISPLAY
+ * and a window moves between them: an answer taken in os88_main describes the
+ * window we were LAUNCHED from, which does not exist yet. */
+static int a2_fsx_avail(void *win)
+{
+    static int kind;                        /* an out-parameter, so a STATIC:
+                                             * `&local` is a stack offset
+                                             * dereferenced through the
+                                             * package segment (SPEC.md 73.5) */
+    int mask;
+
+    a2_fsx_id = -1;
+    if (win == 0)
+        return 0;
+    /* THERE IS NO `mask < 0` TEST HERE AND THERE MUST NOT BE ONE. It stood
+     * for a wave and could never fire: os88_fsx_caps is the one of the four
+     * slots that does NOT answer through CF - SPEC.md 53.4 makes it callable
+     * from any context, lock held or not, precisely so a mode row can be
+     * greyed BEFORE a bracket is entered - so the thunk returns the MASK
+     * verbatim, the widest mask SPEC.md 53.4 defines is VGA's 0x1EF, and bit
+     * 15 is never set. A guard that cannot fire reads as a refusal being
+     * handled and is not one; "no foreign mode here" is a mask of 0, which
+     * the test below answers correctly on its own. */
+    mask = os88_fsx_caps(win, &kind);
+    if (mask & (1 << OS88_FSXM_VGA13))
+        a2_fsx_id = OS88_FSXM_VGA13;
+    /* ...AND THERE IS NO SECOND ARM HERE. FSXM_CGA640 and FSXM_HERC were cut
+     * on the bench (this file's header), so a CGA or a Hercules answers -1
+     * and the row greys with the measured number rather than entering a mode
+     * that is slower than the window it came from. */
+    return (a2_fsx_id >= 0) ? 1 : 0;
+}
+
+/* a2_fsx_frame - ONE foreign frame, off the dirty-line set.
+ *
+ * It is a2_flush's own loop with TWO substitutions and NOTHING ELSE: the
+ * composer writes 280 palette indices instead of 40 band bytes, and the emit
+ * is a2_fsx_put instead of os88_gfx_blit1. a2_dirty_scan, the per-ROW mode
+ * dispatch, the group span, the flash phase's mask, the flash flag, the
+ * per-line marks and - since the wave-5 review - THE ROW'S EARLY-OUT are all
+ * a2_flush's, taken line for line rather than re-derived. That last one was a
+ * THIRD substitution nobody meant to make: this loop ran the whole row
+ * prologue for all 24 rows before discovering that 23 of them had no marked
+ * line, where a2_flush computes `drew` first and returns out. Section 13.2.
+ *
+ * IT IS ALSO GATED BY ITS CALLER, which is the other half of a2_flush's own
+ * shape: a2_fsx_main reads a2_wrote() and calls this only when something is
+ * owed, exactly as os88_onwake does.
+ *
+ * THE WINDOWED SHADOW IS NOT UPDATED HERE and must not be: a2_sh describes
+ * PIXELS ON THE DESKTOP'S GLASS and the desktop is not on the glass. The
+ * marks this loop consumes are the windowed flush's too, so the exit
+ * invalidates a2_sh outright - which costs one full repaint, once, against
+ * carrying a second damage model for the length of a fullscreen session. */
+static void a2_fsx_frame(void)
+{
+    int r, s, line, rmode, rowf, c0, c1, nc, nb, drew, ls0, ls1;
+    unsigned base, fboff, shoff, off;
+
+    a2_dirty_scan();
+    for (r = 0; r < A2_ROWS; r++) {
+        /* --- ONE PASS OVER THE EIGHT LINES, AND IT IS FIRST. THAT ORDER IS
+         * a2_flush's OWN (its `drew`/`rowf` pass at the top of the row) AND
+         * IT WENT MISSING HERE, which is the third substitution the header
+         * above claims there are only two of.
+         *
+         * The prologue below - a2_row_mode, a2_row_base, the span predicate,
+         * a2_row_watched and up to eight a2_span_of calls, the c0/c1/off/nb
+         * arithmetic - is between fifteen and twenty-three near calls, and it
+         * ran for ALL TWENTY-FOUR ROWS before the per-line loop discovered
+         * that twenty-three of them had not one marked line. On the ordinary
+         * change - one character row dirty - that is ~5 ms in text and ~10 in
+         * hi-res of a 4.77 MHz 8088 spent proving nothing moved, against the
+         * 15.7 / 31.2 ms of real work the narrowing was written to buy.
+         *
+         * `ls0`/`ls1` are the same pass's other answer, a2_flush's again: the
+         * range of scan lines that will be read, so the loop below starts at
+         * the first marked line instead of at 0. Its own per-line test stays,
+         * because a gap inside the range is legal (a HPLOT touching lines 0
+         * and 7 marks neither of the six between them). */
+        rowf = 0;
+        drew = 0;
+        ls0 = 8;
+        ls1 = -1;
+        for (s = 0; s < 8; s++) {
+            line = (int)A2_X8(r) + s;
+            if (a2_line_is(a2_lnf, line))
+                rowf = 1;
+            if (!a2_fsx_ok || a2_line_is(a2_lnd, line)
+                || a2_line_is(a2_lnf, line)) {
+                drew = 1;
+                if (s < ls0)
+                    ls0 = s;
+                ls1 = s;
+            }
+        }
+        if (!drew) {
+            /* THE WHOLESALE MARK IS STILL SPENT ON THE SKIPPED PATH, or the
+             * narrowing never re-engages: a2_rowwide[] is set by the damage
+             * model and by the scroll's vacated rows, and a row that leaves
+             * it standing composes full width for the rest of the session. */
+            a2_rowwide[r] = 0;
+            continue;
+        }
+        rmode = a2_row_mode(r);
+        base = a2_row_base(r);
+
+        /* --- THE COLUMN SPAN, WHICH IS a2_flush's OWN AND NOT A SECOND ONE.
+         * a2_dirty_scan has just filled a2_wlo/a2_whi, a2_rowwide[] and the
+         * page bitmap for this frame, and the first version read NONE of it:
+         * every row composed all forty cells and every line compared all 280
+         * bytes. On the ordinary change - a COUT writing one or two cells -
+         * that is 8 x 15.39 ms of compose and 8 x 2.15 of compare against the
+         * ~16 ms the edit could have moved, in the one mode whose per-line
+         * cost is the highest this port has (section 13.2).
+         *
+         * The predicate is a2_flush's, term for term with a2_fsx_ok standing
+         * in for a2_sh_ok, so the two paths cannot narrow differently: a
+         * shadow that describes the glass, a row the write window is allowed
+         * to speak for, a window that is not empty, and a row on the watched
+         * page. `rowf` is the fourth term the windowed path spells as
+         * `!a2_sh_ok || rowf` - a line somebody else painted over is a glass
+         * this row knows nothing about, so it goes down whole. */
+        c0 = 0;
+        c1 = A2_COLS - 1;
+        if (a2_fsx_ok && !rowf && !a2_rowwide[r] && a2_wlo <= a2_whi
+            && a2_row_watched(r)) {
+            a2_sgany = 0;
+            if (rmode == A2_MODE_HIRES) {
+                for (s = 0; s < 8; s++)
+                    a2_span_of(base + ((unsigned)s << 10));
+            } else {
+                a2_span_of(base);
+            }
+            if (a2_sgany) {
+                c0 = a2_sg0 * 8;
+                c1 = a2_sg1 * 8 + 7;
+                /* ...AND HI-RES PADS BY ONE CELL EACH SIDE, which the 1bpp
+                 * band does not and must not. Artifact colour is decided by a
+                 * pixel's NEIGHBOURS (a2fsx.inc's eleven-bit window), so a
+                 * write inside cell k moves pixels in cells k-1 and k+1; the
+                 * windowed composer has no artifact colour at any width and
+                 * owes no such padding. Without this the span would be
+                 * correct for the source and wrong for the picture, and the
+                 * wrong pixel would then be recorded in the shadow and stay
+                 * for the session. */
+                if (rmode == A2_MODE_HIRES) {
+                    if (c0 > 0)
+                        c0--;
+                    if (c1 < A2_COLS - 1)
+                        c1++;
+                }
+            }
+        }
+        nc = c1 - c0 + 1;
+        /* A CELL IS SEVEN BYTES, AND SEVEN IS 8 - 1. `c0 * 7` is an
+         * `imul ax, ax, 7`, which tools/cc8086.py refuses on an 8086 for want
+         * of a provably dead scratch register (docs/C-TOOLCHAIN.md); the
+         * shift-and-subtract is what a2fsx.inc's own prologue does with the
+         * same number. */
+        off = ((unsigned)c0 << 3) - (unsigned)c0;
+        nb = (nc << 3) - nc;
+
+        for (s = ls0; s <= ls1; s++) {
+            line = (int)A2_X8(r) + s;
+            if (a2_fsx_ok
+                && !a2_line_is(a2_lnd, line) && !a2_line_is(a2_lnf, line))
+                continue;
+            if (rmode == A2_MODE_HIRES)
+                a2_fsx_row(a2_fsxbuf, 2, a2_m.ramseg,
+                           base + ((unsigned)s << 10), 0, 0, c0, nc);
+            else if (rmode == A2_MODE_LORES)
+                a2_fsx_row(a2_fsxbuf, 1, a2_m.ramseg, base, s, 0, c0, nc);
+            else
+                a2_fsx_row(a2_fsxbuf, 0, a2_m.ramseg, base, s,
+                           a2_fl_phase ? 0x7F : 0x00, c0, nc);
+            fboff = (unsigned)(A2_FSX13_Y + line) * (unsigned)a2_fsx_stride
+                  + A2_FSX13_X + off;
+            shoff = (unsigned)line * A2_FSXW + off;
+            a2_fsx_put(a2_fsx_seg, fboff, a2_fsx_sh, shoff,
+                       a2_fsxbuf + off, nb);
+            a2_lnd[line >> 3] &= (unsigned char)~A2_LBIT(line);
+            a2_lnf[line >> 3] &= (unsigned char)~A2_LBIT(line);
+        }
+
+        /* --- THE FLASH FLAG IS MAINTAINED HERE, EXACTLY AS a2_flush DOES IT.
+         * a2_flrow[] is written at COMPOSE time and read by a2_flash_force,
+         * and a2_flush is the only other place that composes - so for a wave
+         * the whole bracket ran on flags taken before it was entered. Three
+         * things came of it, none visible in an emulator: entering colour
+         * from a hi-res screen (the natural thing, colour being the point)
+         * left every flag zero, so a program returning to TEXT had a `]` that
+         * never blinked again; entering from text and scrolling left the flag
+         * on a row the cursor had moved off, so the cursor froze AND the
+         * wrong eight lines were recomposed 3.64 times a second for ever; and
+         * entering from text and running HGR recomposed eight stale text rows
+         * as hi-res on every flip - ~480 ms of every second of a 4.77 MHz
+         * 8088 spent proving to a2_fsx_put that nothing had changed.
+         *
+         * ROWS THIS FRAME DID NOT COMPOSE KEEP THEIR FLAG, which is correct
+         * here for the reason it is correct in a2_flush: a row nothing wrote
+         * holds the same source bytes and therefore the same answer. */
+        /* ...and it is UNCONDITIONAL here, where it used to be `if (drew)`:
+         * the row that composed nothing took the `continue` above and never
+         * reaches this line, so the two statements are the same one. */
+        a2_flrow[r] = (rmode == A2_MODE_TEXT)
+                    ? (unsigned char)a2_rowflash(a2_m.ramseg, base, A2_COLS)
+                    : (unsigned char)0;
+        a2_rowwide[r] = 0;                  /* ...and the wholesale mark is
+                                             * spent, or the narrowing above
+                                             * would never engage again after
+                                             * the entry's own a2_sh_inval */
+    }
+    a2_fsx_ok = 1;
+    a2_dirty_any = 0;
+    a2_force_wide();                        /* a2_flush's own last two lines,
+                                             * for a2_flush's own reason: the
+                                             * forced range belongs to the
+                                             * NEXT frame to narrow */
+}
+
+/* ==========================================================================
+ * a2_fsx_main - THE BRACKET, AND THIS COMMENT IS ITS RULE LIST
+ * ==========================================================================
+ * NOTHING IN THE TOOLCHAIN ENFORCES ANY OF THE SEVEN RULES BELOW (SPEC.md
+ * 53.7, APPLE2-SPEC section 13.3), which is why the whole session lives in
+ * ONE function and the list lives on top of it. Every one of them is obeyed
+ * by hand and each is named where it is obeyed:
+ *
+ *  1. THE ENTRY IS A PLAIN RESIDENT FUNCTION WHOSE ADDRESS IS TAKEN, and
+ *     never an `ovl_`: tools/cc8086.py refuses that address BY NAME, because
+ *     the bracket has parked the machine that would load the module. This
+ *     function, a2_fsx_frame, a2_fsx_key and everything they call are in
+ *     a2scr.c, a2io.c, a2kbd.c, a2band.inc, a2cpu.inc and a2fsx.inc - all
+ *     resident (APPLE2-SPEC section 15.5).
+ *  2. AFTER THE FIRST os88_fsx_mode EVERY DRAWING SLOT IS OFF-LIMITS until
+ *     this returns: they render DESKTOP geometry into a foreign framebuffer.
+ *     Nothing below calls one - and `a2_fsx_up` (apple2.c, beside a2_abt_up)
+ *     is what fences the one path that could, a2_jam's os88_toast, which is
+ *     reachable from the slice. IT IS READ, in a2_jam and in a2_spk_service's
+ *     two say-once latches; a fence a rule list describes and no line of code
+ *     tests is a sentence, and this one was exactly that for a wave.
+ *     a2_say and a2_menu_state are the two other things the slice can reach
+ *     from in here and NEITHER DRAWS: a2_say copies a string and stamps a
+ *     deadline, a2_menu_state assigns item pointers the kernel reads when a
+ *     pull-down is next opened. They are legal, and what they are not is
+ *     VISIBLE - which is why the say-once latches are deferred rather than
+ *     spent (a2_snd_fact's own note).
+ *  3. KEYS COME FROM A POLLED int 16h (a2_fsx_key, a2fsx.inc) and never from
+ *     the event ladder: NO EVENTS ARE DISPATCHED in here, the queue simply
+ *     fills and is drained by the kernel at exit. Which means every latch the
+ *     wake would spend has to be spent in the loop below by hand: the flash
+ *     phase and THE RESET CHORDS, both named where they are spent.
+ *  4. THE MOUSE WOULD COME FROM os88_mouse AND THIS BRACKET READS NONE. An
+ *     Apple II+ has no mouse, the kernel's pointer is parked for the whole
+ *     session (the gfx lock is held from before fsx_run to after it), and the
+ *     only input this machine owes is its own keyboard and the two exit
+ *     chords. The rule is written here so the next bracket does not reach for
+ *     the event queue instead.
+ *  5. FRAMES ARE PACED WITH os88_fsx_wait AND NEVER os88_task_sleep, which
+ *     degenerates to an immediate return because nothing else is eligible.
+ *  6. NOTHING TOUCHES PIT CHANNEL 0, THE SOUND PORTS OR AN int 10h MODE SET.
+ *     The DAC is programmed directly and that is legal and stated: SPEC.md
+ *     53.7 gives the app the video hardware while a foreign mode is up, and
+ *     the exit mode set reprograms everything a2_fsx_dac touched.
+ *  7. THE EXIT IS THIS FUNCTION RETURNING, on Ctrl+F and Alt+Enter - which
+ *     are THIS PORT'S fullscreen chords (section 6.3) and not SPEC.md
+ *     11.2.1's bare `f` and Esc, for 11.2.1's own stated exception: the Apple
+ *     II+ owns both of those keys. `f` is a letter and every letter goes to
+ *     the machine; Esc is the Monitor's and the Applesoft screen editor's.
+ *     A port that swallowed either would be a machine you cannot type at, in
+ *     the one mode whose whole point is looking at it.
+ *
+ * AND THE SPEAKER STAYS LIVE, which is rule 6 read the right way round: the
+ * snd slots are legal throughout (SPEC.md 53.7) and a2_spk_service is one far
+ * call on a change. A machine that went silent the moment it went to colour
+ * would be a worse machine.
+ * ========================================================================*/
+static void a2_fsx_main(void)
+{
+    static char fsi[OS88_FSI_SIZE];
+    unsigned k;                             /* int 16h's AX, and UNSIGNED: see
+                                             * the test below */
+
+    if (os88_fsx_mode(a2_fsx_id, fsi) < 0)
+        return;                             /* refused, and nothing was drawn:
+                                             * the desktop's mode never
+                                             * changed and there is nothing to
+                                             * put back */
+    /* The block is BYTES and is read as bytes: a C struct over it would have
+     * to promise nasm's alignment, and two 8-bit reads are what the machine
+     * does anyway. */
+    a2_fsx_seg = (unsigned)(unsigned char)fsi[OS88_FSI_SEG]
+               | (((unsigned)(unsigned char)fsi[OS88_FSI_SEG + 1]) << 8);
+    a2_fsx_stride = (int)((unsigned)(unsigned char)fsi[OS88_FSI_STRIDE]
+                   | (((unsigned)(unsigned char)fsi[OS88_FSI_STRIDE + 1]) << 8));
+    a2_fsx_up = 1;
+    a2_fsx_ok = 0;                          /* no line may be skipped on the
+                                             * first pass: all 192 are owed */
+    /* ...AND THE SHADOW IS MADE TRUE RATHER THAN LEFT UNKNOWN, which is a
+     * different statement and the one that matters. SPEC.md 53.4 is binding
+     * that the mode set CLEARS the screen, so a zeroed shadow describes the
+     * glass exactly and every compare from here on is sound.
+     *
+     * `a2_fsx_ok = 0` alone is not enough and this shipped believing it was.
+     * It defeats the per-LINE skip above; the defect is one level down, in
+     * a2_fsx_put's per-BYTE compare, which has no idea the frame it is
+     * comparing against was thrown away. The heap gives this 53KB claim back
+     * with whatever was in it, and after a free and a same-size claim that is
+     * very often the LAST session's shadow - so the compare answered "nothing
+     * moved" and wrote nothing, leaving those lines as the mode set left
+     * them. SEEN ON THE GLASS: entering Machine > Color NTSC a second time on
+     * an unchanged hi-res screen drew three of its six lines and a truncated
+     * pair of verticals. It is also the cheaper arm - the black parts of the
+     * picture are already black and are not written. */
+    a2_fsx_zero(a2_fsx_sh, 0, A2_FSX_BYTES);
+    /* THE WINDOWED SHADOW IS A LIE FROM THIS INSTRUCTION ON, AND IT IS SAID
+     * HERE RATHER THAN AT THE EXIT (section 13.3). The desktop's glass is
+     * gone and the frames below consume the a2_lnd/a2_lnf marks the windowed
+     * flush would have used, so a2_sh describes pixels nobody can see.
+     *
+     * SAYING IT AT THE EXIT COST A SECOND WHOLE-WINDOW REPAINT. SPEC.md 53.6
+     * step 4 runs a full wm_paint_all BEFORE fsx_run returns, and os88_paint
+     * answers a whole-window W_PAINT with exactly this call plus one flush -
+     * 192 lines composed and blitted, the border and the status row, ~633 ms
+     * of a 4.77 MHz 8088. Invalidating again AFTER that put every line mark
+     * back on pixels the kernel's own paint had just made correct, and the
+     * next wake composed and blitted all 192 of them a second time, for
+     * nothing. Here the paint that is already owed finds a2_sh_ok = 0, does
+     * the one repaint, and leaves the shadow describing the glass; and it
+     * costs the bracket nothing, because the first foreign frame writes all
+     * 192 lines whatever these marks say.
+     *
+     * IT IS PAST THE MODE SET, so the arm that never entered a mode never
+     * pays it: a refused os88_fsx_mode returns above with the desktop
+     * untouched, and a refused os88_fsx_run never reaches this function at
+     * all. a2_sh_inval calls no drawing slot - it is marks, flags and one
+     * memset of the source shadow - so rule 2 is intact. */
+    a2_sh_inval();
+    a2_fsx_dac();                           /* MII's palette into the DAC */
+    for (;;) {
+        k = a2_fsx_key();
+        /* THE SENTINEL IS 0xFFFF AND THE TEST IS UNSIGNED, and this ONE
+         * COMPARE was the whole of a defect that shut one of the two doors
+         * rule 7 pins. `int` is 16 bits here, so an AX whose scan code has
+         * bit 7 set is a NEGATIVE int: AH=0xA6 - Alt+Enter in the ENHANCED
+         * set, which is the very code the comment below says is taken rather
+         * than guessed - is k = -22528, and `if (k >= 0)` threw it away four
+         * lines above the branch that reads it. The KSC_ALT_ENTER arm was
+         * dead code, and Alt+0/-/= (AH 0x81/0x82/0x83) were dropped with it.
+         * The shim always answered 0xFFFF in AX; nothing about a2fsx.inc
+         * changed. AND NO HARNESS COULD SEE IT: a host `int` is 32 bits, so
+         * 0xA600 is positive there - which is why hosttest/a2uitest.c now
+         * queues 0xA600 and asserts the bracket exits on it, a row that fails
+         * against the signed test and passes against this one. */
+        if (k != 0xFFFFu) {
+            /* Ctrl+F is ASCII 6 on every BIOS; Alt+Enter is scan 0x1C in the
+             * classic set and 0xA6 in the enhanced one, and BOTH are taken
+             * rather than one being guessed - os88_onkey's own pair, tested
+             * the same way one input path along. */
+            if ((k & 0xFF) == 6
+                || ((k & 0xFF) == 0
+                    && (((k >> 8) & 0xFF) == KSC_ENTER
+                        || ((k >> 8) & 0xFF) == KSC_ALT_ENTER)))
+                break;
+            /* ...AND EVERY OTHER KEY GOES TO THE MACHINE, through the same
+             * a2_key the event path uses: the II+ byte map, the Ctrl folds,
+             * the two arrows and the two reset chords, one map and not two.
+             * It draws nothing - it puts a byte in the keyboard latch and
+             * sets the reset latch the loop below spends - which is what
+             * makes it legal in here at all. */
+            a2_key((int)(k & 0xFFu), (int)((k >> 8) & 0xFFu), a2_fsx_win);
+        }
+        /* AND THE RESET LATCH IS SPENT HERE, WHERE THE WAKE WOULD SPEND IT.
+         * a2_key answers Ctrl+F2 and Ctrl+F3 by setting a2_reset_req, and the
+         * ONLY other place that is read is os88_onwake - which is an EVENT,
+         * and no event is dispatched in a bracket (rule 3). So for a wave the
+         * two reset chords were inert for the whole colour session and then
+         * fired the instant the user left, resetting a machine they thought
+         * they had reset a minute ago. Nothing about a2_reset_service is
+         * illegal in here: it stops the note, empties the paste queue, fills
+         * the RAM claim, re-takes the write window, re-spells the menu rows
+         * and marks lines - not one drawing slot, and the frame below then
+         * draws the reset machine in the mode the user is looking at. */
+        if (a2_reset_req)
+            a2_reset_service();
+        /* THE FLASH PHASE IS POLLED HERE, because W_ONTIMER is an EVENT and
+         * no event is dispatched inside a bracket (rule 3). It is the same
+         * a2_flash_step the wake uses on a kernel with no timer slot, it
+         * draws nothing, and without it a flashing cursor would simply stop
+         * for the length of the session. */
+        a2_flash_step(os88_ticks());
+        if (a2_state == A2_ST_RUN && !a2_pause)
+            a2_slice();
+        a2_spk_service();
+        /* --- AND THE FRAME IS GATED, WHICH IS os88_onwake's OWN GATE ONE
+         * PATH ALONG. The windowed flush reads ONE byte (a2_wrote) and then
+         * asks whether anything at all is owed before it composes; this loop
+         * called a2_fsx_frame unconditionally, so os88_fsx_wait's 18.2 ticks
+         * a second each paid the whole skeleton - a2_dirty_scan's 24 row
+         * probes plus, before the hoist above, a fifteen-to-twenty-three call
+         * prologue per row - to discover that the 6502 had written nothing.
+         * Counted out of build/apple2.raw.asm at the 20-25 us a call the
+         * a2_dirty_scan header is calibrated on, that was 17-21 ms a tick in
+         * text and 23-29 in hi-res: a third of a 4.77 MHz 8088, eighteen
+         * times a second, in the one mode whose frame is the most expensive
+         * this port has.
+         *
+         * THE GATE IS EXACT rather than a heuristic. a2_wrote() is the one
+         * term the C side cannot see - it is a byte in the emulated
+         * machine's own memory, set by the write path - and EVERY other
+         * producer already sets a2_dirty_any, because they all go through
+         * a2_line_dirty or a2_line_force: a2_flash_force, a2_dirty_all,
+         * a2_dirty_split and a2_reset_service included. `!a2_fsx_ok` is the
+         * first frame of a session, which is owed all 192 lines whatever the
+         * marks say. a2_fsx_frame clears a2_dirty_any itself, exactly as
+         * a2_flush does.
+         *
+         * An idle colour session is now one byte read and fsx_wait's hlt. */
+        if (a2_wrote())
+            a2_dirty_any = 1;
+        if (a2_dirty_any || !a2_fsx_ok)
+            a2_fsx_frame();
+        os88_fsx_wait(OS88_FSXW_TICK);
+    }
+    a2_fsx_up = 0;
+}
+
+/* a2_fsx_enter - Machine > Color NTSC.
+ *
+ * IT IS RESIDENT, like Machine > Toggle Fullscreen and for a sharper version
+ * of the same reason: the claim below is 53KB and a heap claim can COMPACT
+ * the arena, so taking it from inside ovl_a2_cmd would be moving the module
+ * whose code is executing. The command works on a disk with no APPLE2.OVL,
+ * which is the same property File > Quit and Toggle Fullscreen have.
+ *
+ * THE CLAIM IS TAKEN AT THE LATCH AND A REFUSAL IS LEGAL HERE (section 13.2),
+ * which is the whole reason the shadow is a claim and not bss: the FLUSH may
+ * never refuse, and this may. */
+static void a2_fsx_enter(void *win)
+{
+    if (!a2_fsx_avail(win)) {
+        /* The row is greyed on such a machine, so the kernel does not
+         * dispatch it - but a2_menu_state runs on picks, not on displays, and
+         * a window can move between them on a two-display desktop. One test,
+         * so the greying and the refusal cannot disagree. */
+        a2_say("No colour on this screen.");
+        a2_st_dirty = 1;
+        return;
+    }
+    a2_fsx_sh = os88_mem_claim(A2_FSX_KB);
+    if (a2_fsx_sh == 0) {
+        a2_say("No memory for colour.");
+        a2_st_dirty = 1;
+        return;
+    }
+    a2_fsx_init();                          /* MII's artifact rule, flattened.
+                                             * HERE and not in os88_main: it
+                                             * is the foreign mode's alone, so
+                                             * a machine that never enters
+                                             * colour never spends it */
+    /* The shadow is a fresh claim and its contents are not promised, so the
+     * frame is declared unknown rather than assumed blank - a2_fsx_main
+     * clears a2_fsx_ok and the first pass writes all 192 lines whatever the
+     * claim happened to hold. */
+    a2_fsx_win = win;
+    if (os88_fsx_run(a2_fsx_main, win, 0) < 0) {
+        a2_say("The screen refused it.");
+        a2_st_dirty = 1;
+    }
+    os88_mem_free(a2_fsx_sh);
+    a2_fsx_sh = 0;
+    a2_fsx_up = 0;
+    /* THE DESKTOP IS BACK, AND THE REPAINT IT OWES HAS ALREADY HAPPENED: the
+     * kernel repaints every window before fsx_run returns (SPEC.md 53.6 step
+     * 4) and the shadow was invalidated on the way IN, so that one paint is
+     * the whole cost of the session. Nothing is invalidated here - doing it
+     * again is the double repaint section 13.3 prices at a second ~633 ms.
+     *
+     * WHAT IS STILL OWED IS THE WAKE. The bracket dispatched no events, so
+     * the chain that keeps the 6502 running has to be re-posted by hand - one
+     * API call, no pixels. A window that was COVERED at step 4 got no paint,
+     * a2_sh_ok is still 0 from the entry, and the first W_PAINT after it
+     * uncovers does the repaint then. */
+    a2_kick = 1;
+    os88_wm_wake(win);
+}

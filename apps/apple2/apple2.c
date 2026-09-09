@@ -143,6 +143,16 @@ void a2_zpower(unsigned a, unsigned n);     /* AppleWin's FF FF 00 00 power-on
                                              * calls, ~270 ms on the target
                                              * (section 4.5) */
 
+unsigned a2_div32(unsigned hi, unsigned lo, unsigned d);
+                                            /* (hi:lo) / d in ONE 32-bit
+                                             * division, 0xFFFF on overflow -
+                                             * the speaker's hertz, and the
+                                             * whole reason it is assembly is
+                                             * that ONE rounding and not two is
+                                             * what the C64 measured at a whole
+                                             * hertz near the floor (section
+                                             * 8) */
+
 /* --- a2cpu.inc: the core (section 4) -------------------------------------- */
 int  a2_run(unsigned cycles);           /* -> A2_RUN_*, and a2_m.cnt is what
                                          * was NOT spent, so the caller's
@@ -188,6 +198,45 @@ unsigned a2_scan0(unsigned seg, unsigned off, unsigned n);  /* the linked-line
 void a2_x2init(void);
 void a2_band_x2(unsigned char *dst, const unsigned char *src, int nbytes,
                 int rows);
+
+/* --- a2fsx.inc: the foreign video mode (section 13) ------------------------
+ * The bracket's own five. a2_fsx_row composes `ncells` cells of ONE scan line
+ * starting at cell `cell0` - MII's artifact rule for hi-res, its lo-res CLUT,
+ * white on black for text; the range is a2_flush's own group span one
+ * geometry along, which is what keeps a COUT's compose to the cells a COUT
+ * could have moved - and a2_fsx_put is the span compare one geometry along: it
+ * answers 0 for a line that has not moved and writes only the differing run
+ * when it has, to the framebuffer AND to the foreign-frame shadow.
+ *
+ * a2_fsx_key IS THE BRACKET'S WHOLE INPUT PATH and is assembly for the one
+ * reason a package ever writes assembly for a slot: there is no int 16h in
+ * the C SDK and a bracket may not use the event ladder (SPEC.md 53.1). */
+void a2_fsx_row(unsigned char *dst, int mode, unsigned mseg, unsigned moff,
+                int line, int fmask, int cell0, int ncells);
+int  a2_fsx_put(unsigned fbseg, unsigned fboff, unsigned shseg,
+                unsigned shoff, const unsigned char *src, int n);
+void a2_fsx_zero(unsigned seg, unsigned off, unsigned n);
+void a2_fsx_init(void);                 /* MII's artifact rule, flattened */
+void a2_fsx_dac(void);                  /* ...and its palette into the DAC */
+unsigned a2_fsx_key(void);              /* the polled int 16h: 0xFFFF for
+                                         * nothing, else int 16h's own AX -
+                                         * (scan << 8) | ascii.
+                                         *
+                                         * IT IS `unsigned` AND THE SENTINEL
+                                         * IS 0xFFFF, WHICH IS ONE DEFECT AND
+                                         * NOT A STYLE. `int` is 16 bits here,
+                                         * so an AX whose SCAN CODE has bit 7
+                                         * set - Alt+Enter's enhanced 0xA6,
+                                         * Alt+0/-/= at 0x81/0x82/0x83 - is a
+                                         * NEGATIVE int, and a caller testing
+                                         * `>= 0` for "a key arrived" throws
+                                         * every one of them away before
+                                         * looking at it. The shim already
+                                         * answers 0xFFFF in AX (a2fsx.inc);
+                                         * what was wrong was the C's reading
+                                         * of it, and the harness could never
+                                         * see it because a host `int` is 32
+                                         * bits and 0xA600 is positive there. */
 
 /* THE DECODED CHARACTER GENERATOR, and it is an ordinary global rather than a
  * static because nasm has to see the label: a2band.inc's phase B indexes
@@ -391,6 +440,15 @@ static int a2_pause;                        /* CPU > Stop / Continue - MII's
                                              * a2_state value, because a
                                              * PAUSED machine is still a
                                              * machine and A2_ST_JAM is not */
+static int a2_mute;                         /* Machine > Mute - MII's
+                                             * m_audio_menu row, given a body
+                                             * by wave 5 (section 8). It is
+                                             * declared HERE, above every
+                                             * #include, for this block's whole
+                                             * reason: a2cmd.c moves it and
+                                             * apple2.c's a2_spk_service reads
+                                             * it, and two copies of a latch
+                                             * are two latches */
 static int a2_warp;                         /* CPU > Warp - OURS (section
                                              * 10.1), and on this port it is
                                              * the wall slice's CAP and
@@ -506,6 +564,23 @@ static char a2_jamline[24];
 static int a2_sh_ok;                        /* the shadow describes the glass */
 static int a2_border_dirty;                 /* the border wants filling */
 static int a2_full;                         /* the fullscreen latch is ours */
+/* ...AND WHETHER THE EXCLUSIVE BRACKET IS UP (section 13.3), which is a2scr.c's
+ * to SET and this file's to READ - which is why it is here with a2_abt_up and
+ * not down there with the rest of the foreign mode.
+ *
+ * IT IS THE FENCE ON RULE 2, AND IT WAS WRITE-ONLY FOR A WAVE. a2_fsx_main's
+ * rule list says "`a2_fsx_up` is what fences the one path that could, a2_jam's
+ * os88_toast, which is reachable from the slice" - and nothing read it. A
+ * 6502 that JAMs inside the bracket (a $02 opcode, which any wild jump
+ * reaches) raised a toast, and kernel/toast.inc's toast_show ends in
+ * toast_now, whose predicate - the gfx lock held by task 0 - is EXACTLY the
+ * bracket's state, so menu_draw_bar and the panel went down IMMEDIATELY: 640-
+ * wide planar desktop chrome written into an A000 the card has just put into
+ * chained mode 13h, at a stride of 320, and the foreign shadow then believes
+ * those bytes are ours, so it is permanent for the rest of the session
+ * (SPEC.md 53.7 names the whole class binding-illegal). Two paths read it now
+ * and each says so where it is. */
+static int a2_fsx_up;
 /* ...and the About panel's three, which a2about.c WRITES and a2scr.c's flush
  * READS. One definition, here, so the two cannot drift into two copies of the
  * same fact (which is what the whole of this block exists to prevent). */
@@ -760,6 +835,24 @@ static void a2_kb_put(int b);
 static void a2_reset_service(void);
 static void a2_speed_fold(void);
 static void a2_warp_set(int on);
+/* ...and the three the FOREIGN BRACKET needs. It lives in a2scr.c, beside the
+ * dirty-line set it is driven off, and is therefore ABOVE all three
+ * definitions (section 13.3).
+ *
+ * THEY ARE THREE LINES AND ONE COMMENT, AND THE FIRST CUT WAS THREE COMMENTS
+ * THAT NEVER CLOSED: a `/*` opened on the first line ate the two declarations
+ * under it, the header still compiled, and the only symptom was two
+ * `implicit function declaration` errors pointing at a2scr.c. LESSONS.md 11
+ * records the same shape eating OS88_FDLG_SAVE one package along. */
+static void a2_slice(void);
+static void a2_spk_service(void);
+static int  a2_flash_step(unsigned t);
+static void a2_sound_stop(void);            /* THE ONE PLACE A STOPPED MACHINE
+                                             * GOES QUIET (section 8) - and it
+                                             * is declared here because five
+                                             * of its callers are in the
+                                             * #included parts above its
+                                             * definition */
 static void a2_jam(void);
 static void a2_about_close(void *win);
 static void a2_panel_close(void *win, int yes);
@@ -834,6 +927,237 @@ static int a2_ovl_ready(void *win)
 }
 
 /* ==========================================================================
+ * THE SPEAKER, THE OTHER HALF (APPLE2-SPEC section 8)
+ * ========================================================================*/
+/* a2io.c measures the toggle intervals; this is what turns them into ONE far
+ * call and what takes the note back down again. The six rules the C64 learned
+ * (apps/c64/c64.c's c64_sound_stop and the retry bound) all apply here and
+ * each is named where it is obeyed.
+ *
+ * THE PRIORITY IS THE C64'S 0x40 (SPEC.md 34.3's router): an emulated machine
+ * making a noise is an application's sound and must lose to an alert. */
+#define A2_SND_CAP_TONE 0x01                /* apps/os88api.inc:370 */
+#define A2_SND_PRI      0x40
+#define A2_SND_HZMIN    20                  /* the sink's own band, and the
+                                             * band A2_SPK_DMIN/DMAX were
+                                             * derived from */
+#define A2_SND_HZMAX    12000
+#define A2_SND_TRIES    8                   /* wakes a refused grant is retried
+                                             * for, then dropped with the fact
+                                             * said once (rule 4) */
+#define A2_SND_ODD      4                   /* ...and wakes of a TOGGLING
+                                             * speaker this estimator could
+                                             * not turn into a tone before the
+                                             * stated fact is said anyway
+                                             * (below) */
+/* THE SILENCE IS TWO TICKS AND THE SPEC SAYS 1/18 s, and the difference is
+ * what a 18.2 Hz counter can express rather than a change of mind: `t -
+ * a2_spk_tick >= 1` fires on a tone whose last toggle merely landed on the
+ * far side of a tick boundary, which is every other note. Two means the
+ * silence measured is between one and two ticks - 55 to 110 ms - and a tone
+ * loop that has stopped is still cut off inside a tenth of a second. */
+#define A2_SPK_QUIET    2
+static int a2_snd_hz;                       /* what is SOUNDING, 0 = nothing */
+static int a2_snd_want;                     /* ...and what was last ASKED for,
+                                             * which is what bounds the retry:
+                                             * a new note restarts the count */
+static int a2_snd_tries;
+static int a2_snd_said;                     /* the stated fact, said once */
+static int a2_snd_busy_said;                /* ...and the busy one, likewise */
+static int a2_snd_odd;                      /* consecutive wakes in which the
+                                             * speaker TOGGLED and the
+                                             * estimator answered nothing
+                                             * steady */
+static unsigned a2_spk_tick;                /* the host tick a toggle last
+                                             * arrived on... */
+static unsigned a2_spk_last;                /* ...and the count that dated it */
+
+/* a2_sound_stop - THE ONE PLACE A STOPPED MACHINE GOES QUIET.
+ *
+ * The tone is played with duration 0, which SPEC.md 34 holds until something
+ * takes it down, and the only thing that ever would is the guest toggling
+ * again. So every way of STOPPING the machine has to come through here: the
+ * silence timeout, CPU > Stop, a JAM, both resets, Power On, CPU > Warp (the
+ * C64's rule, and VICE's - a machine at 3,000 % has nothing meaningful to
+ * play), Machine > Mute, the About panel and the confirmation. That is the
+ * C64's own list one machine along, and it is a list because a duration-0
+ * tone that outlives its owner sounds on a desktop the user has gone back to.
+ *
+ * AND IT RE-ARMS RATHER THAN REMEMBERING. The interval ring is emptied, so a
+ * resumed machine plays whatever it is ACTUALLY toggling three toggles later
+ * rather than the note that was taken away - which for a program that changed
+ * its loop while stopped is the only right answer, and which is the C64's
+ * "re-read the current registers" with no registers to re-read. */
+static void a2_sound_stop(void)
+{
+    if (a2_have_snd && a2_snd_hz)
+        os88_snd_tone(0, 0, A2_SND_PRI);
+    a2_snd_hz = 0;
+    a2_snd_want = 0;
+    a2_snd_tries = 0;
+    a2_snd_odd = 0;
+    a2_spk_fill = 0;
+}
+
+/* a2_snd_fact - THE STATED FACT (section 8), SAID ONCE AND ON THE ROW.
+ *
+ * It is not at launch, where it would be a sentence about a feature the user
+ * has not reached, and NOT in the About panel, which carries what the port IS
+ * and not how this build renders. 23 of the row's 26 cells.
+ *
+ * IT IS ARMED BY THE FAILURE AS WELL AS BY THE SUCCESS, and that was the
+ * whole defect in the first version: the latch sat inside the successful
+ * os88_snd_tone arm, so the sentence fired exactly when the emulation was
+ * working and never when it was not. The programs the sentence EXISTS for -
+ * a click track, Karateka-style waveform synthesis, a Mockingboard - produce
+ * toggle intervals that do not agree, so a2_spk_hz answers 0, no tone is ever
+ * asked for, and the row stayed blank for the one user who needed it. A
+ * caller that saw the speaker TOGGLE and could not turn it into a tone says
+ * it too, after A2_SND_ODD such wakes.
+ *
+ * AND IT IS NOT SPENT WHERE NOBODY CAN READ IT. a2_spk_service runs inside
+ * the exclusive bracket as well as from the wake (rule 6 of a2_fsx_main's
+ * list, read the right way round: the snd slots stay legal), and the status
+ * row is not on the glass there - a2_msg_until would expire five seconds
+ * later with the desktop still gone. The LATCH is left unspent, so the first
+ * wake after the bracket says it. */
+static void a2_snd_fact(void)
+{
+    if (a2_snd_said || a2_fsx_up)
+        return;
+    a2_snd_said = 1;
+    a2_say("Square-wave tones only.");
+}
+
+/* a2_spk_service - ONE far call a wake, on a CHANGE only.
+ *
+ * Called from the wake AFTER the slice, so the intervals it reads are the
+ * ones the emulated machine just made, and BEFORE the flush, so a note and
+ * the picture that goes with it reach the user in the same wake. */
+static void a2_spk_service(void)
+{
+    unsigned t;
+    int hz, toggled;
+
+    /* A MACHINE WITH NO SQUARE VOICE IS A DIFFERENT FACT FROM A BUSY ONE, so
+     * it is a different sentence and it is not retried at all - it is asked
+     * ONCE, in os88_main, and every machine this OS boots answers yes
+     * (kernel/snd.inc ORs the bit in unconditionally). The guard is written
+     * anyway, because a package that calls a slot it never established the
+     * machine has is guessing (SPEC.md 73.11), and the harness drives it. */
+    if (!a2_have_snd)
+        return;
+
+    t = os88_ticks();
+    toggled = (a2_spk_n != a2_spk_last) ? 1 : 0;
+    if (toggled) {
+        a2_spk_last = a2_spk_n;
+        a2_spk_tick = t;
+    }
+    /* Every way of being quiet, in one test each. The silence timeout is
+     * first because it is the one that ends an ordinary beep. */
+    if ((unsigned)(t - a2_spk_tick) >= A2_SPK_QUIET
+        || a2_mute || a2_warp || a2_pause || a2_abt_up
+        || a2_state != A2_ST_RUN) {
+        if (a2_snd_hz)
+            a2_sound_stop();
+        a2_snd_odd = 0;                     /* a quiet speaker is not a
+                                             * speaker this build failed to
+                                             * follow */
+        return;
+    }
+    hz = a2_spk_hz();
+    if (hz < A2_SND_HZMIN || hz > A2_SND_HZMAX) {
+        /* The intervals do not agree, or they imply a note outside the sink's
+         * band. Either way nothing steady is being played, and a held tone
+         * that outlives the loop that asked for it is what rule 3 is about.
+         *
+         * ...AND THIS IS WHERE THE STATED FACT IS EARNED. The speaker moved
+         * (`toggled`) and no tone came of it, which is exactly the class of
+         * program section 8 names: a click track, waveform synthesis, a
+         * Mockingboard. Four consecutive such wakes and the row says what
+         * this build can and cannot do, once. */
+        if (a2_snd_hz)
+            a2_sound_stop();
+        if (toggled && ++a2_snd_odd >= A2_SND_ODD)
+            a2_snd_fact();
+        return;
+    }
+    a2_snd_odd = 0;
+    if (hz == a2_snd_hz)
+        return;                             /* already sounding: no call */
+    /* ...AND "CHANGED" IS A BAND AND NOT A COMPARE, WHICH IS THE ONE PLACE A
+     * MEASURED FREQUENCY IS NOT A REGISTER.
+     *
+     * The C64's rule is `one far call a wake, on a change only`, and there a
+     * change is EXACT: the guest wrote a SID register and the number either
+     * moved or it did not. Here the number is MEASURED off a toggle interval,
+     * and an Applesoft loop's iterations differ by a cycle or two - a
+     * page-crossed branch, a carry - so the estimate walks between
+     * neighbouring hertz for ever. Every step of that walk is a far call at
+     * 46.7 us, and every one of them also does `out 0x43`, which RESTARTS PIT
+     * channel 2's count (kernel/snd.inc's spk_tone) in the middle of a note
+     * nobody asked to change. A wake is not 18 Hz - a2_wants_wake re-posts
+     * one for as long as the machine has anything to draw - so a running tone
+     * loop would re-programme the timer some hundreds of times a second.
+     *
+     * A SIXTY-FOURTH IS INAUDIBLE AND THE WOBBLE IS SMALLER STILL, which is
+     * why the band is narrow rather than the agreement window's eighth. One
+     * cycle of interval at the 62 Hz an Applesoft `POKE -16336,0 : GOTO 10`
+     * actually makes (8,230 emulated cycles a toggle - MEASURED on the glass)
+     * moves the estimate by 0.008 Hz against a band of 0.97; at 1,000 Hz it
+     * moves it by 2 against a band of 15. A glide still glides: 0.27 of a
+     * semitone is under a fifth of what anyone can hear, where the eighth
+     * this was first written with is 1.7 semitones and would have stepped a
+     * siren. */
+    if (a2_snd_hz) {
+        int d = hz - a2_snd_hz;
+
+        if (d < 0)
+            d = -d;
+        if (d <= (a2_snd_hz >> 6))
+            return;
+    }
+    /* THE BOUND COUNTS CONSECUTIVE REFUSALS AND NOT REFUSALS OF ONE NOTE, and
+     * the difference is the whole of whether the bound exists.
+     *
+     * `a2_snd_want != hz` restarts it, and after a refusal a2_snd_hz is 0 - so
+     * the sixty-fourth band above is skipped and every wobble of the measured
+     * estimate reads as a NEW note. The wobble is ~2 Hz at 1,000 (this file's
+     * own measurement), so a refused high tone loop re-asked a busy kernel on
+     * every wake for ever, never reached A2_SND_TRIES, and never said the
+     * fact section 8 promises. The same band applied to a2_snd_want is what
+     * makes "this note again" mean what it says while nothing is sounding. */
+    {
+        int d = hz - a2_snd_want;
+
+        if (d < 0)
+            d = -d;
+        if (d > (a2_snd_want >> 6)) {
+            a2_snd_want = hz;               /* a NEW note restarts the bound */
+            a2_snd_tries = 0;
+        } else if (a2_snd_tries >= A2_SND_TRIES) {
+            return;                         /* eight wakes asked for THIS
+                                             * note and were refused: dropped,
+                                             * and the next note asks again */
+        }
+    }
+    if (os88_snd_tone(hz, 0, A2_SND_PRI) == 0) {
+        a2_snd_hz = hz;
+        a2_snd_tries = 0;
+        a2_snd_fact();                      /* the first time this machine
+                                             * actually makes a noise */
+    } else if (++a2_snd_tries >= A2_SND_TRIES && !a2_snd_busy_said
+               && !a2_fsx_up) {
+        /* ...AND NOT INSIDE THE BRACKET EITHER, for a2_snd_fact's reason: the
+         * row is not on the glass and the message would expire unseen. The
+         * latch is left unspent, so it is said on the first wake after. */
+        a2_snd_busy_said = 1;
+        a2_say("The speaker is busy.");
+    }
+}
+
+/* ==========================================================================
  * THE WALL SLICE (APPLE2-SPEC section 4.3)
  * ========================================================================*/
 /* THERE IS NO ALARM SCHEDULER AT ALL, and that is a real simplification this
@@ -889,6 +1213,14 @@ static void a2_warp_set(int on)
     a2_warp = on ? 1 : 0;
     if (!a2_warp && a2_budget > A2_SLICE_MAX)
         a2_budget = A2_SLICE_MAX;
+    /* ...AND WARP SILENCES THE SPEAKER, which is VICE's rule (vsync.c:181
+     * calls sound_suspend on the warp arm) and the C64's: a machine running
+     * at some thousands of per cent has nothing meaningful to play, and the
+     * intervals it produces are a tone that is not the tone the program
+     * meant. a2_spk_service tests a2_warp too, so the note could not survive
+     * the next wake either - this is what makes it stop on the PICK. */
+    if (a2_warp)
+        a2_sound_stop();
 }
 
 static int a2_fastn;                        /* consecutive slices that cost no
@@ -1056,6 +1388,7 @@ static void a2_hex4(char *d, unsigned v)
 static void a2_jam(void)
 {
     a2_state = A2_ST_JAM;
+    a2_sound_stop();                        /* a dead 6502 holds no note */
     os88_strcpy(a2_jamline, "6502: JAM at $", 15);
     a2_hex4(a2_jamline + 14, a2_m.pc);
     a2_jamline[18] = 0;
@@ -1064,10 +1397,19 @@ static void a2_jam(void)
                                              * saying what a running machine
                                              * says (c64.c's own note) */
     a2_st_dirty = 1;
-    os88_toast(a2_jamline, 0);              /* SPEC.md 59's second route: the
-                                             * status row is UNDER a WF_FULL
-                                             * window and this machine spends
-                                             * time there */
+    /* SPEC.md 59's second route: the status row is UNDER a WF_FULL window and
+     * this machine spends time there.
+     *
+     * ...AND NOT INSIDE THE EXCLUSIVE BRACKET, WHICH IS RULE 2 (section 13.3).
+     * a2_slice is called from a2_fsx_main and a JAM is what a wild jump
+     * reaches, so this is the one drawing slot the bracket can arrive at -
+     * and a toast is not deferred: toast_now draws the bar and the panel on
+     * the spot when the gfx lock is held by task 0, which is precisely the
+     * state a bracket is in. Nothing is lost by the fence: a2_jamline is a
+     * PERMANENT row state rather than a message, so the exit's own repaint
+     * says it, and it says it where the user can read it. */
+    if (!a2_fsx_up)
+        os88_toast(a2_jamline, 0);
     a2_menu_state();                        /* Stop/Continue re-spelled: there
                                              * is no machine left to stop */
 }
@@ -1107,6 +1449,13 @@ static void a2_reset_service(void)
     int kind = a2_reset_req;
 
     a2_reset_req = 0;
+    a2_sound_stop();                        /* ...and the note the old machine
+                                             * was holding, which nothing else
+                                             * will ever take down (section
+                                             * 8): a Ctrl-Reset in the middle
+                                             * of a tone loop is exactly how a
+                                             * duration-0 grant outlives its
+                                             * owner */
     /* A RESET EMPTIES THE PASTE QUEUE, which is VICE's kbdbuf_abort one
      * machine along (apps/c64/c64kbd.c's c64_paste_stop) and is right here
      * for a plainer reason: the bytes are being typed at a MACHINE, and after
@@ -1755,6 +2104,11 @@ void os88_onwake(void *win)
         }
     }
     a2_speed_fold();
+    /* --- THE SPEAKER (section 8) -----------------------------------------
+     * AFTER the slice, so the intervals read are the ones the machine just
+     * made, and BEFORE the flush, so a note and the picture it goes with
+     * reach the user in the same wake. One far call, on a change only. */
+    a2_spk_service();
     /* THE TICK IS RE-READ AFTER THE SLICE, and that is not tidiness: the flush
      * is paced at most once per HOST tick and a slice can cross one, so a `t`
      * taken before the slice prices the flush against the tick the wake
@@ -1935,6 +2289,13 @@ void *os88_main(void)
 
     a2_x2init();                            /* the pixel-doubling table, once */
     a2_tier_init();                         /* the flush rate, off os88_cpu() */
+    /* WHAT CAN THIS MACHINE'S SOUND HARDWARE DO? ASKED ONCE, HERE (section
+     * 8, and apps/c64/c64.c:1639 one machine along). SPEC.md 34 puts the
+     * square voice on OSAPI_SND_TONE, and a package that calls a slot without
+     * establishing the capability first is guessing (SPEC.md 73.11). It is
+     * also Machine > Mute's own gate: a2_menu_state greys that row off this
+     * flag and nothing else. */
+    a2_have_snd = (os88_snd_caps() & A2_SND_CAP_TONE) ? 1 : 0;
     a2_io_init();                           /* the soft-switch state: TEXT on,
                                              * MIXED/PAGE2/HIRES off, which is
                                              * what a II+ powers up in */

@@ -127,7 +127,12 @@ ASM = ["boot/boot.asm", "boot/boothd.asm",
        # wrong scratch word and presents as a stale screen; a drifted
        # A2_RUN_JAM is a machine that never stops.
        "apps/apple2/a2cpu.inc", "apps/apple2/a2band.inc",
-       "apps/apple2/a2mem.inc"]
+       "apps/apple2/a2mem.inc",
+       # ...and a2fsx.inc, whose A2_FSXW - the Apple's 280-pixel raster, one
+       # byte a pixel - is typed out in a2scr.c as well: the composer writes
+       # it and the frame loop strides by it, and a drift is a picture that
+       # walks sideways one line at a time rather than an error.
+       "apps/apple2/a2fsx.inc"]
 
 # ...and the kernel, whole. `kernel/*.inc` + `kernel.asm`: 44 files, of which
 # the hand-written list named five. The knob-only files (band.inc, moudiag.inc)

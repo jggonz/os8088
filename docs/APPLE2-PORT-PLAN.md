@@ -1406,6 +1406,132 @@ inside a 200-line content box and `Configure Slots...` is legibly greyed.
 
 ### Wave 5
 
+**The speaker, the four `OSAPI_FSX_*` thunks, and colour on a VGA.**
+
+**THE SIZE LINE IS THE GATE AND IT PASSES**: `os88pkg: 'APPLE2' entry=+0x0070
+image=38944 bss=14340 icon=yes assoc=1` - resident **53,284** of 61,440 against
+the wave-5 ceiling of **54,000**, so **716 to spare and not one lever
+pulled**, `APPLE2.OVL` **4,349**, **38** resident shims, largest C frame
+**54** of the 96-byte cap. It is 1,716 under SPEC.md 73.9's 55,000 split
+trigger, so Disk II's ~1,200 resident bytes still fit in the follow-up PR by
+the arithmetic Decision 13 asked for - with 516 over, which is the number that
+wave opens on rather than a comfortable one. **Two review passes are 978 of
+it** (`APPLE2-SPEC` 15.0.4's last two rows): the first's six fixes at 808, one
+of which REMOVES ~633 ms from every colour session rather than adding anything
+to it, and the second's three at **170** - the key sentinel made `unsigned`
+(the enhanced Alt+Enter, scan 0xA6, was dead code because a 16-bit `int`
+makes it negative and the test was `k >= 0`), the frame GATED on `a2_wrote()`
+the way `os88_onwake` has always been (17-29 ms a tick of an idle colour
+session, 18.2 times a second), and the row early-out HOISTED above the
+prologue as `a2_flush` has always had it (~5 ms a frame in text, ~10 in
+hi-res). Two of those three take work OUT of every frame.
+
+**AND THE SCROLL IS MEASURED AND STATED RATHER THAN FIXED.** `a2_fsx_frame`
+has no counterpart to the windowed flush's shift block, so a RETURN at the
+bottom line of an Applesoft session recomposes 184 scan lines: a new bench row
+(`SCROLL FSXM_VGA13 (184 lines)`) reads **4,867 counts = 1,747.2 ms** against
+the windowed path's **41.9**, **41.7x**. The fix is a second damage model -
+`a2_shsrc`, a mode key, a phase, the probe budget, the `a2_lnf` refusal and a
+mover for the framebuffer and the shadow - and the gate has 716 bytes in it,
+so `APPLE2-SPEC` 13.2 records the number, the shape of the fix and the ~6x it
+would buy, and 13.1 prices the whole mode on the `CPU_8086` tier in one table
+rather than leaving the reader to infer it. `APPLE2-SPEC` section 15.0.4 has the
+breakdown; the interesting half is that the foreign video mode - the wave's
+headline - is the cheaper of the two features at ~2,346 bytes against the
+speaker's ~1,034, and that the OVERLAY moved only +83, because a per-`$C030`
+estimator and a bracket whose entry `tools/cc8086.py` refuses to let be an
+`ovl_` are both resident by construction.
+
+**The four thunks cost 92 bytes, not the 72 this plan booked** - 23 each - and
+they are **charged to APPLE2 and to nothing else**, behind `%ifdef
+CC_HAS_FSX`, which is `os88thunk.asm`'s own idiom (`CC_HAS_FDLG`,
+`CC_HAS_PARTS`) and `apple2.asm`'s own (`A2_SHIP`). The first cut of the wave
+charged all six other C packages for four thunks none of them will ever call,
+and **it is LOOM and not CWORD that is the tight one**: LOOM builds with
+**122** bytes of its 61,440 left, which ungated thunks cut to **30**, where the
+SPEC had CWORD's 1,043 as the smallest margin in the tree. `APPLE2-SPEC`
+section 17 has all seven rows, gated and ungated, and `make test-full` passes.
+
+**THE MEASUREMENT CUT TWO OF THE THREE WRITERS, WHICH IS Decision 14 SPENDING
+ITSELF EXACTLY AS IT WAS WRITTEN TO.** `a2bandbench` gained seven primitive
+rows and six whole-path rows and `FSXM_CGA640` / `FSXM_HERC` lost on BOTH
+change sets: **695.4 ms a frame against the windowed path's 632.6**, and
+**34.8 ms a character row against 26.3**. They are cut, Machine > `Color NTSC`
+greys on CGA and Hercules with that number, and colour is a claim about a
+VGA-class machine. **The reason is not the raster this plan argued about**:
+both paths compose and double with the identical routines, and what differs is
+the emit - ONE `os88_gfx_blit1` of 640x16 at 8.875 counts against sixteen
+`a2_fsx_put` compares at 2.0. A band going down whole needs no span compare.
+**And the cut gave back nothing**, because section 15.4's lever 3 was taken at
+the design: there is one `a2_fsx_put` and the three writers differed only in
+the caller's offset, so the ~1,200 bytes were booked against a shape that was
+never built.
+
+**`FSXM_VGA13` is 3,376 ms a frame on a 4.77 MHz 8088** - an order of magnitude
+over this plan's ~300 - which is why every foreign frame is driven off the same
+dirty-line set the windowed flush computes, against a 53KB shadow claimed at
+the fullscreen LATCH where a refusal is legal. The harness asserts the drive
+rather than the pixels: the first frame writes 192 lines and three frames with
+nothing changing write 192 in total, where a per-frame raster write would be
+576. It also asserts the rule nothing in the toolchain can - **not one drawing
+slot between the mode set and the return** - and, after the review, the two
+things that rule was only DESCRIBED by: a 6502 driven into a JAM inside the
+bracket must raise no toast, and a Ctrl-Reset typed inside it must be spent
+inside it.
+
+**AND THE FRAME IS DRIVEN BY COLUMN AS WELL AS BY LINE.** The first cut read
+none of the `a2_wlo`/`a2_whi`/`a2_rowwide` state `a2_dirty_scan` had just
+filled for it and composed all forty cells of every dirty row: **140.7 ms a
+keystroke** against the windowed path's 26.3. `a2_fsx_frame` takes
+`a2_flush`'s own group span now - padded by ONE CELL each side in hi-res,
+because artifact colour is decided by a pixel's neighbours and the 1bpp band
+has none - and `a2_fsx_row` takes a cell range: **31.2 ms**, measured as its
+own bench row, and checked before it is timed by `ab_spanck`, which requires
+eight cells composed as a RANGE to equal the same eight composed as part of
+the whole row. **On the glass, a narrow-write frame and a full recompose of
+the same memory are pixel-identical: 0 differing bytes of 768,000.**
+
+**AND ONE DEFECT THE REVIEW DID NOT NAME AND THE GLASS DID.** Entering Machine
+> `Color NTSC` a SECOND time on an unchanged hi-res screen drew three of its
+six lines and a truncated pair of verticals. The 53KB shadow is freed at the
+exit and re-claimed at the next latch, and a free followed by a same-size claim
+lands on the same block - so it arrived holding the last session's frame, and
+`a2_fsx_put`'s per-byte compare answered "nothing moved" against a framebuffer
+SPEC.md 53.4 had just cleared. `a2_fsx_ok = 0` defeats the per-LINE skip and
+says nothing to the compare one level down; the fix is to make the shadow TRUE
+rather than unknown, which the mode set's own clear allows. `a2_fsx_zero`
+zeroes it at entry, the harness's `h_claim_keep` row is the gate - its negative
+control draws **0** lit pixels where the first session drew 27,344 - and on the
+glass a second session is now pixel-identical to the first, 0 of 768,000.
+
+**On the glass** (`build/port-shots/wave5-*.png`): a hi-res `HCOLOR` ladder in
+artifact colour inside `FSXM_VGA13` - green, purple, white, orange, blue,
+exactly Applesoft's own `HCOLOR` order through MII's ten-entry CLUT - a lo-res
+`GR` ladder in all sixteen of MII's "Color NTSC" colours, the Machine menu with
+`Color NTSC` and `Mute` live on a VGA and `Color NTSC` greyed on `VIDEO=cga`,
+`Square-wave tones only.` on the status row, and a clean exit on Ctrl+F with
+the desktop and the window repainted whole. **`make test-snd` + `sndcheck`**
+read the Applesoft beep at **934 Hz** and a two-line `POKE -16336,0 / GOTO 10`
+loop at **62 Hz**, which is Applesoft's own speed (8,230 emulated cycles a
+toggle) and not a defect; the capture is 5.5 s of a 40-second session, which is
+the silence timeout.
+
+**TWO THINGS WENT WRONG AND BOTH ARE WRITTEN DOWN WHERE THEY HAPPENED.** The
+bench's four composite bodies HUNG the first time they ran, because cdecl here
+preserves BP, DS, SS:SP and DF and nothing else and `_a2_band_text` loads BL on
+its second instruction - a loop counter in BX never came back, and under
+`-icount` a bench that never finishes is indistinguishable from one that is
+merely slow. And a `make test-snd` capture was read as five seconds of DC and a
+whole paragraph of `apple2.c` was written about a defect that did not exist:
+the scan started at 30 Hz in steps of 5 and answered `60`, and 62 Hz at
+44.1 kHz is 355 identical samples a half-period. What settled it was putting the
+estimator's own answer on the status row for one build and reading `62%` off
+the glass. The frequency band the wrong diagnosis produced is KEPT, on its own
+merits - a measured frequency wobbles, and every step of that walk is a far
+call plus an `out 0x43` that restarts the PIT mid-note - but at a
+sixty-fourth rather than an eighth, and `APPLE2-SPEC` section 8 says which
+half of that story is the machine's and which was the instrument's.
+
 ### Wave 6 - the follow-up PR
 
 ### Wave 7

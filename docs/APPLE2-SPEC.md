@@ -1809,11 +1809,29 @@ routine's measurement for another's work.
 | **one changed cell at 2x** | **12.9** | 1 doubled blit, 1 group, **56 source byte-rows doubled** - the RUN's own rectangle, seven band bytes over eight scan lines. The same row priced with the per-ROW call is **21.5** - 320 byte-rows for a run that covered 56, the doubling then twice the entire rest of the keystroke - and that is arithmetic on the measured `BAND_X2` figures rather than a second run, because the only term that moves is the doubler's. The bound the harness asserts is 64 - eight bytes over eight lines - and anything wider is the per-row form back again |
 | a slice with no tick boundary (an idle wake) | **0.0** | nothing at all - the wake's flush is paced at most once per host tick, and a wake that finds nothing dirty draws nothing |
 
+#### 7.9.4 The whole-operation rows wave 5 measured - THE FOREIGN FRAME
+
+Section 13.4 has the primitives and the recipe; these are the rows this table
+owes, in milliseconds, on the two change sets that matter. The `FSXM_VGA13`
+row is also `hosttest/a2uitest.c`'s, which counts the calls and prices them
+from the same primitives and reads **3,369.4** against the bench's 3,365.3.
+
+| operation | XT ms | what it costs |
+|---|---|---|
+| **one foreign frame, `FSXM_VGA13`, every line dirty** | **3,365.3** | 192 `a2_fsx_row` (hi-res, 15.39 each) + 192 `a2_fsx_put` that all moved (2.15). The dearest picture in this document, and the reason a foreign frame is driven off the dirty-line set rather than written whole |
+| ...the same frame, windowed at 2x | **632.6** | 24 composes, 24 doublings, 24 blits - and the two are NOT alternatives: one of them is in colour |
+| ...the same frame, `FSXM_CGA640` / `FSXM_HERC` | **695.4** | the identical 24 composes and doublings, then 192 `a2_fsx_put` of 70 bytes. **CUT** (section 13.1): it loses to the 632.6 above |
+| **one character row, `FSXM_VGA13`** - a keystroke | **140.4** | 8 rows + 8 puts. The other 184 scan lines answer `nothing moved` |
+| ...one character row, windowed at 2x | **26.4** | |
+| ...one character row, `FSXM_CGA640` / `FSXM_HERC` | **34.8** | **CUT** with the row above it |
+| **A SCROLL, `FSXM_VGA13`** - a RETURN at the bottom line | **1,747.2** | 184 text composes at full width + 184 puts that all moved, measured as its own bench row (`SCROLL FSXM_VGA13 (184 lines)`, 4,867 counts). There is no shift block in `a2_fsx_frame`, so the ROM's line-by-line copy is recomposed rather than moved |
+| ...the same scroll, windowed | **41.9** | one `os88_gfx_scroll`, one blit, five groups - the row above this table's own (7.9.1). **41.7x**, and section 13.2 records why it is a number rather than a fix |
+| a foreign frame in which NOTHING changed | **0.0** | 0 composes, 0 puts - and from the wave-5 review, **not even a frame call**: `a2_fsx_main` reads `a2_wrote()` and gates `a2_fsx_frame` on `a2_dirty_any \|\| !a2_fsx_ok`, which is `os88_onwake`'s own gate one path along. Ungated, `a2_dirty_scan` plus the per-row prologue ran 18.2 times a second for nothing: 17-21 ms a tick in text, 23-29 in hi-res. The harness asserts the drive: three frames with nothing changing write 192 lines in TOTAL, which is the first frame's and no more |
+
 Rows still to publish, in milliseconds and never in calls:
 
 | operation | measured in |
 |---|---|
-| **ONE FOREIGN FRAME per FSX writer, against the windowed flush on the same change set** | wave 5 |
 | ONE TRACK CHANGE through the nibbliser | the Disk II follow-up |
 
 The model also charges what a call-count model hides, at
@@ -1848,13 +1866,74 @@ the status row. It is:
 - taken down after a silent 1/18 s.
 
 **Duration 0 means something must take it down**, so there is **exactly one**
-`a2_sound_stop()`, and a pause, a reset, a JAM, warp, Machine > Audio > Mute
-and the About panel all reach it. Capability is established **once** in
-`os88_main` from `os88_snd_caps()`. A refused grant (-1: another instance
-holds the speaker) is retried, bounded at eight wakes, then dropped with the
-fact said once.
+`a2_sound_stop()`, and a pause, a reset, a JAM, warp, Machine > `Mute` and the
+About panel all reach it. Capability is established **once** in `os88_main`
+from `os88_snd_caps()`. A refused grant (-1: another instance holds the
+speaker) is retried, bounded at eight wakes, then dropped with `The speaker is
+busy.` said once.
 
-It reproduces the beep, `CHR$(7)` and any square-wave tone loop.
+**AND THE BOUND COUNTS CONSECUTIVE REFUSALS, NOT REFUSALS OF ONE NOTE**, which
+is the difference between a bound and a sentence about one. The first writing
+restarted the count whenever the measured hertz differed from the last note
+ASKED for - and after a refusal nothing is sounding, so the sixty-fourth band
+below is skipped and every 2 Hz wobble of a 1,000 Hz estimate read as a new
+note. A refused tone loop therefore re-asked a busy kernel on every wake for
+ever, never reached the eighth, and never said the fact this paragraph
+promises. The same band is applied to the note last asked for, so "this note
+again" means what it says while nothing is sounding.
+
+**THE STATED FACT IS ARMED BY THE FAILURE AS WELL AS BY THE SUCCESS**, and
+that is section 9's row read the right way round. `Square-wave tones only.` is
+said ONCE - the first time this machine makes a noise, **OR the first time it
+makes one this build cannot turn into a tone**: four consecutive wakes in
+which `$C030` toggled and the estimator answered nothing steady. The first
+writing latched it only inside the successful `os88_snd_tone` arm, so the
+sentence fired exactly when the emulation was working and never when it was
+not - and the programs the sentence EXISTS for (a click track, Karateka-style
+waveform synthesis, a Mockingboard) are precisely the ones whose intervals do
+not agree, so no tone is ever asked for. A user who loaded a beeping program
+heard the beep and was told the limitation; a user who loaded Karateka heard
+nothing and was told nothing.
+
+**AND NEITHER SENTENCE IS SPENT WHERE NOBODY CAN READ IT.** `a2_spk_service`
+runs inside the exclusive bracket as well as from the wake (section 13.3 rule
+6 - the snd slots stay legal in there), and the status row is not on the glass
+during a foreign-mode session: a message would expire five seconds later with
+the desktop still gone. Both say-once LATCHES are therefore left unspent while
+`a2_fsx_up`, so the first wake after the bracket returns says it.
+
+It reproduces the beep, `CHR$(7)` and any square-wave tone loop, and **wave 5
+measured both on the glass** with `make test-snd` + `tools/sndcheck.py`:
+
+| what | measured |
+|---|---|
+| the II+ cold-start beep, and `PRINT CHR$(7)` | **934 Hz**, 0.11 s |
+| a two-line `10 POKE-16336,0 / 20 GOTO 10` loop | **62 Hz** - which is Applesoft's own speed and not a defect: 510,242 / 62 is **8,230 emulated cycles a toggle**, and that is what a `POKE` of a negative expression plus a `GOTO` costs an interpreter running at 1.02 MHz |
+| the silence timeout | the capture is **5.5 s of a 40-second session**: QEMU's wav backend writes only while the speaker is sounding, so the file length IS the sounding time. The beep's 0.11 s and the loop's five seconds are in it and nothing else is |
+
+**AND "ONE FAR CALL ON A CHANGE ONLY" NEEDED A BAND, WHICH IS THE ONE PLACE A
+MEASURED FREQUENCY IS NOT A REGISTER.** `C64-SPEC §11.4`'s rule is exact for a
+SID write - the guest wrote a number and it either moved or it did not - and
+here the number is measured off an interval that moves by a cycle whenever a
+branch crosses a page. Every step of that walk is a far call at 46.7 us AND an
+`out 0x43`, which restarts PIT channel 2's count (`kernel/snd.inc`'s
+`spk_tone`) in the middle of a note nobody asked to change; a wake is not 18 Hz
+here, it is however often `a2_wants_wake` re-posts one. So a new estimate
+within **a sixty-fourth** of the sounding note is not a change. That is 0.27 of
+a semitone - under a fifth of what anyone can hear, so a glide still glides -
+against a wobble of 0.008 Hz at the 62 Hz measured above and 2 Hz at 1,000.
+`hosttest/a2uitest.c` drives a train whose interval moves by ONE cycle over six
+wakes and requires the kernel to be asked **once**.
+
+**THE FIRST WRITING OF THAT PARAGRAPH CLAIMED IT FIXED FIVE SECONDS OF DC IN A
+`make test-snd` CAPTURE, AND THAT WAS THE ANALYSIS AND NOT THE MACHINE.** The
+capture really did read as a constant full-scale level - but the scan that said
+so started at 30 Hz in steps of 5 and answered `60`, and 62 Hz sampled at
+44.1 kHz is 355 identical samples a half-period, which is exactly what "DC"
+looks like from forty samples away. The band above is kept on its own merits,
+which are the far call and the `out 0x43`; the machine was right and the
+instrument was not. What settled it was putting the estimator's own answer on
+the status row for one build and reading `62%` off the glass.
 
 **THE STATED FACT, which lives here and on the status row and NOT in the About
 panel:**
@@ -1876,7 +1955,7 @@ few per cent of real speed on the target.
 
 | field | carries |
 |---|---|
-| message area | refusals, the overlay's `Unable to load APPLE2.OVL.`, the speaker's stated fact, and - from the Disk II wave - the sentence that says the drive is spinning and names Ctrl-Reset as the way to `]` |
+| message area | refusals, the overlay's `Unable to load APPLE2.OVL.`, **the speaker's stated fact - `Square-wave tones only.`, 23 cells, said ONCE the first time the machine makes a noise, or the first time it makes one this build cannot turn into a tone (section 8)** - the speaker's refusal `The speaker is busy.`, the two mute picks' `Muted.` / `Unmuted.` (the port's own pick-says-what-it-did idiom, beside `Stopped.` and `Warp off.`), the foreign mode's three refusals (`No colour on this screen.`, `No memory for colour.`, `The screen refused it.`) and - from the Disk II wave - the sentence that says the drive is spinning and names Ctrl-Reset as the way to `]` |
 | speed | the **measured** percentage of a 1.02 MHz Apple II, right-aligned at the row's last cells, **drawn only while the message area is clear**, and **drawn only while the 6502 is RUNNING** - a jammed machine's field goes blank rather than freezing on the last window's figure, which would be a number about a machine that is not running (SPEC.md 47). There is no column a message and a widget can both have - the mode fields hold 0-15 and `Unable to load APPLE2.OVL.` is 26 glyphs, which reaches cell 41 exactly - so the choice is which one loses, and a message is transient where a speed figure is not news; narrowing the message cap to 19 instead would truncate the one message a user most needs to read whole. It is counted in **64-cycle units with the remainder carried**, because 1,020,484 cycles a second does not fit the 16-bit `int` this C has and a truncation that dropped up to 63 cycles a slice would misreport by ~0.4 % on a machine taking sixty slices a second |
 | ...and **THE UNIT DOUBLES RATHER THAN THE COUNT SATURATING** | this is the field's own history and it binds. Its first form simply stopped accumulating - `if (a2_c64u < 60000u)` - and the one-second denominator is `876 x 18 / 100` = 157, so the largest per cent the arithmetic could produce was **383**: 380 %, 400 %, 1,000 % and 3,000 % all printed the same number, `pct > 9999` was unreachable dead code, and 383 is what wave 2's own screendumps show on a host that runs the core at some thousands of per cent. The count now holds units of `64 << a2_csh` cycles; when it would pass 32,767 it is halved and the shift goes up, so nothing is dropped at any speed, and the fold undoes the shift on **quotient and remainder both** (`(q << sh) + ((r << sh) / den)`) - dividing by a shifted denominator loses a third of the answer. `a2_csh` caps at 6, which holds 13,300 % of a one-second window, and the 9,999 % clamp fires first and is therefore REACHABLE. **`hosttest/a2uitest.c` is the gate**: seven machine speeds from 3 % to 6,000 % driven through the arithmetic and checked against what each should read, plus a 12,000 % case that must clamp. A field that reads the same for two very different machine speeds is the whole thing being tested |
 | video mode | the live mode: `TEXT` / `LORES` / `HIRES` at cells 0-4, plus `MIXED` at 6-10 and **`PG2`** at 12-14. `PG2` and not `PAGE2`, and it is arithmetic rather than taste: the message area starts at cell **16** because `Unable to load APPLE2.OVL.` is 26 glyphs and the row is 42, so the mode fields hold cells 0-15 and the third field has **four**. `PAGE2` is five |
@@ -1939,6 +2018,23 @@ the **24-glyph item cap** (`MENU_MAXCH`), asked per row against `c64menu.c`'s
 | `Control-Reset` | 13 + 2 + `Ctrl+F2` 7 = **22** of 24 | **`Control-Reset  Ctrl+F2`**, and it ships |
 | `Open-Apple-Control-Reset` | **24** with nothing appended | none, ever, at this cap |
 | `Toggle Fullscreen` | 17 + 2 + `Ctrl+F` 6 = **25** | none. `Alt+Enter` is 9 and worse |
+| `Color NTSC` (wave 5) | 10 + 2 + `Ctrl+F` 6 = 18, + the 2-glyph mark column = **20** of 24 | none, and it **FITS** - it is declined on the next paragraph's reason and not on arithmetic |
+
+**`Color NTSC` IS THE ONE ROW WHERE THE CAPTION FITS AND IS STILL WRONG, AND
+THAT IS A DEPARTURE FROM SPEC.md 11.2.1's KEY-HINT HALF, RECORDED HERE.**
+SPEC.md 11.2.1 says, of Paint, *"Ctrl+F is what the menu item names, because a
+menu item's key hint has to be true in every state"* - and the state a menu
+caption is READ in is the windowed one, with the pull-down open. In that state
+**Ctrl+F is Toggle Fullscreen's**, the SPEC.md 11.2 window latch, and it is
+NOT a way into the SPEC.md 53 bracket this row opens. `Color NTSC  Ctrl+F`
+would therefore name a key that, pressed where the caption is read, does
+something else - which is the precise failure 11.2.1's sentence is about, one
+level down from the one it is usually quoted for. There is no chord that
+enters this row (MII has none either: `m_video_menu`'s tint rows carry no
+`.kcombo`), and inventing one is inventing UI. So the row carries no caption,
+the departure is stated rather than left as an accident, and section 13.3
+carries the other half of it - **what the user is not told, and where the
+gap is**.
 
 So the two rows a user would most want the chord for are exactly the two that
 cannot carry one, which is a fact about their names rather than a decision to
@@ -2073,11 +2169,29 @@ a citation that is only half true is the thing this file exists to prevent.
 
 Load Program... , Save Program... , Quit, Copy, Paste, Control-Reset,
 Open-Apple-Control-Reset, Power On (with the two-row confirmation), Toggle
-Fullscreen, Flashing text (outside the `CPU_8086` tier), Mute, Stop /
+Fullscreen, **`Color NTSC` on a VGA** (wave 5 - it enters `FSXM_VGA13`, and it
+greys on CGA and Hercules with the number that cut their writers, section
+13.4), Flashing text (outside the `CPU_8086` tier), **Mute** (wave 5), Stop /
 Continue, Warp. **There is no `White` row**: MII's Video submenu has no such
 item - White is apple2emu's tint list - and the windowed path's monochrome is
 stated on `Color NTSC`'s greying instead of implied by a row that would do
 nothing.
+
+**`Color NTSC` AND `Toggle Fullscreen` ARE TWO DIFFERENT THINGS AND THE MENU
+SAYS SO BY KEEPING BOTH ROWS.** Toggle Fullscreen is SPEC.md 11.2's WINDOW
+LATCH - the frame becomes the whole screen, the desktop's mode and cursor and
+event ladder all stay live, and the picture is the same 1bpp band magnified
+(section 7.8's tier table). `Color NTSC` is SPEC.md 53's EXCLUSIVE BRACKET: the
+app borrows the machine, the video mode is its own, and the picture is
+280 x 192 palette indices. **MII HAS FIVE TINT ROWS** - `Color NTSC`,
+`Color NTSC (Alt)`, `Color Mega2`, `Green`, `Amber`, all five separately in
+`m_video_menu` (`mii_mui_menus.h:66-80`) and each independently ticked from
+the `MUI_MENUBAR_ACTION_PREPARE` arm (`mii_mui_menus.c:139-150`) - and **this
+port** folds them into one row that does something, which is `a2menu.c`'s own
+rule 3. The sentence here used to read *"MII folds five tint rows into the
+first of them"*, which credits the reference with this port's work and is
+exactly the kind of claim this document's discipline exists to catch. The two
+rows are not alternatives and neither replaces the other.
 
 **Machine > `Power On`'s confirmation is TWO rows and not one:**
 
@@ -2148,9 +2262,9 @@ is not; a stopped machine answers 0 to `a2_wants_wake` and parks.
 | **Machine > Configure Slots...** , in this PR | `No Disk II in this build. Load Program reads an Applesoft program, and Paste types a listing in.` **WAVE 4 RESTORED THE SECOND SENTENCE**, because it is the wave that wrote both routes. Wave 1 shortened the fact to its first half rather than point the reader at two routes they could not take, which is exactly the guess SPEC.md 47's rule 5 forbids; a greying may not outlive its reason either |
 | Machine > Configure Slots... , once the Disk II follow-up lands: every slot but 6 | `Slot 6 holds a Disk II. There are no other cards in this port.` |
 | Machine > Joystick... (already `.disabled = 1` in MII's own menu table, which is the authentic grey) | `The paddles answer centre. The game buttons PB0 and PB1 are F1 and F2 - a departure from AppleWin's Left-Alt / Right-Alt.` **WAVE 3 RESTORED THE SECOND SENTENCE**, because it is the wave that reads them: wave 1 shortened the fact to its first half rather than name a control the build did not have, which is rule 5's guess. They are host conveniences and GAME BUTTONS, not //e Apple keys - section 6.3 |
-| Machine > `Color NTSC`, folding MII's four other tint rows | `The window is monochrome.` **The colour sentence lands in WAVE 5**, which is the wave that writes the foreign video mode: `Colour is in the foreign video mode - Machine > Toggle Fullscreen on a VGA.` names a route that does not exist in this build, and rule 5 is that a greying states a fact rather than a promise |
-| Machine > `Mute`, until the speaker lands | `There is no speaker in this build.` - and it is `a2_have_snd` that greys it, never a `D` baked into the literal, so wave 5 revives the row with nothing else moving |
-| Machine > `Louder`, folding MII's `Quieter` | `The Apple's speaker is a one-bit toggle. There is no volume on it.` - PERMANENT, and the one audio row that stays greyed after wave 5 |
+| Machine > `Color NTSC`, **on CGA and Hercules only, from wave 5** | `The window is monochrome, and the foreign modes this screen has measured SLOWER than it - 695 ms a frame against 632.` **BOTH HALVES ARE FACTS NOW AND NEITHER WAS BEFORE.** Wave 1 shortened this to the first clause because the second named a mode the build did not have; wave 5 wrote the mode AND measured `FSXM_CGA640` and `FSXM_HERC` out of it (section 13.4), so the row is **LIVE on a VGA** - it enters `FSXM_VGA13`, which is where this port is in colour - and greys on the other two adapters with the number that cut them. **The predicate is `os88_fsx_caps` itself**, asked where the answer is used and never banked: it is a question about a DISPLAY and a window moves between them on a two-display desktop (SPEC.md 39.18.2), and it is the same bit `os88_fsx_mode` would refuse on, so the greying and the refusal are one fact. **It is not a check item**, where MII ticks its five tint rows: MII's are a persistent MODE and this is a bracket that RETURNS, so a tick would describe a screen that is not on the glass |
+| Machine > `Mute`, until the speaker lands | `There is no speaker in this build.` - and it is `a2_have_snd` that greys it, never a `D` baked into the literal, so **wave 5 revived the row with nothing else moving**, exactly as this line said it would. It is a CHECK item on a CAPABILITY, which is two questions about one row and not one: `a2_have_snd` says the machine has a square voice and `a2_mute` says the user switched it off, and greying the row that is ON would report the feature as unavailable AND make it impossible to un-mute |
+| Machine > `Louder`, folding MII's `Quieter` | `The tone sink has no volume. This machine plays a bare square wave.` - PERMANENT, and the one audio row that stays greyed after wave 5. **THE FACT IS THE OS's AND NOT THE APPLE's, AND IT WAS THE OTHER WAY ROUND FOR A WAVE.** It read `The Apple's speaker is a one-bit toggle. There is no volume on it.`, which is a true sentence about the wrong machine and one that implies MII's own row is meaningless - **in MII this row is LIVE**: `ui_gl/mii_mui_menus.c:294-302` calls `mii_audio_volume(&mii->speaker.source, volume ± 1)`, a 0..10 sample multiplier (`src/mii_audio.c:80-89`), greyed only at the ends of that range (`menus.c:157-161`). Host playback volume has nothing to do with the speaker being one bit. **The departure is recorded rather than hidden** (section 10.2's idiom): MII's `Louder`/`Quieter` drive a host mixer, and what this OS gives a package is `os88_snd_tone(hz, ticks, prio)` - no amplitude argument, so the sink is a bare PC-speaker square-wave gate with nothing to turn up. That is a fact about wave 5's own sink, and it is the reason the row is permanent |
 | Machine > `Flashing text`, **on the `CPU_8086` tier only** | `Flashing forces a text repaint 3.6 times a second. On a 4.77 MHz 8088 that is 43.1 ms each time and the machine would spend it on the phase rather than on the 6502.` **THE NUMBER IS FILLED IN AND THE ROW IS GREYED, FROM WAVE 3** (the tier table, section 7.8): the harness measures one flip at 43.1 ms with TWO flashing rows on the screen and at 3.64 flips a second that is 157 ms in every second of an 8088. Until this wave the item was LIVE on every tier, because refusing on a figure nobody had taken would have been the guess SPEC.md 47 forbids. **It is `a2_fl_ok` that both refuses and greys** - `a2_tier_init` clears it and `a2_menu_state` reads the tier beside it - so the refusal and the greying cannot disagree, and the row is greyed UNMARKED rather than greyed with a tick still beside it |
 | CPU > Fast: 3.5MHz | `There is no 3.5MHz mode. CPU > Warp is this port's speed control and is beside it.` **It read `This machine runs at 1.02 MHz. Warp is this port's speed control and is beside it.` through wave 2's first form, and that is a claim about the MACHINE which the status row on the same screen refutes**: there is no throttle here at all - `a2_slice` runs `a2_budget` cycles a wake - and the measured figure is 2,180 % on the VGA desktop and 2,775 % on CGA. A greying may state what the BUILD does not have; it may not state a speed the glass above it contradicts (SPEC.md 47 rule 5). Wave 2 struck the `Warp` half with it, for a reason of its own - *the row it pointed at is greyed too, so it named a route the reader cannot take* - and **wave 4 put that half back, because the reason expired when `Warp` went live.** The first sentence lost `in this build` with it: what wave 4 removed is a 3.5 MHz MODE, and the build does have a speed control now, so the old wording said something the row two below it refutes. A greying may not outlive its reason and neither may the removal of one - the same test this wave applied to `Configure Slots...` and wave 3 to `Joystick...` |
 | CPU > Step, CPU > Next | `There is no debugger in this port.` |
@@ -2160,6 +2274,13 @@ is not; a stopped machine answers 0 to `a2_wants_wake` and parks.
 
 **The speaker's synthesis fact** is stated on the status row and in section 8,
 which is its only home now that a Mockingboard row is off the bar entirely.
+**Wave 5 put it there**: `Square-wave tones only.` - 23 of the row's 26 cells -
+said ONCE, the first time this machine actually makes a noise **or the first
+time it makes one this build cannot turn into a tone** (section 8), rather
+than at launch, where it would be a sentence about a feature the user has not
+reached.
+It is NOT in the About panel, which carries what the port IS and not how this
+build renders (section 11).
 
 **AND THREE GREYINGS ARE TEMPORARY AND SAY SO IN THE SOURCE**: in wave 1 every
 command whose body needs a 6502 wears `OS88_MENU_DIS` off `a2_have_cpu`, which
@@ -2600,16 +2721,69 @@ speed.** SPEC.md 53's exclusive bracket, reached through four
 | mode | geometry | what it is for |
 |---|---|---|
 | **`FSXM_VGA13`** | 320x200x256, the Apple's 280x192 centred | **THIS is where the port is in colour.** Lo-res's 16 colours and hi-res's artifact colours straight into the DAC, with **no dithering** |
-| **`FSXM_CGA640`** | 560x192 inside a 640x200 mono frame | **the Apple's native monochrome geometry**, half-dot shift and all |
-| **`FSXM_HERC`** | the same 640-wide viewport in Hercules' four banks | as above |
+| **`FSXM_CGA640`** | 560x192 inside a 640x200 mono frame | **CUT** - the Apple's native monochrome geometry, and slower than the window it came from (below) |
+| **`FSXM_HERC`** | the same 640-wide viewport in Hercules' four banks | **CUT**, with it |
 
-**`FSXM_VGA13` ships on its COLOUR, which is not in question. `FSXM_CGA640`
-and `FSXM_HERC` ship ONLY IF THEY MEASURE FASTER THAN THE WINDOWED PATH on
-the XT tier.** They are 560 x 192 = **13,440 bytes a frame against the windowed
-7,680** - 1.75x the raster work on the slowest machine, in the name of speed -
-so "an XT gets its speed back" is a claim to prove and not to assert. If they
-lose they are **cut**, about 1,200 bytes come back, and **Machine > Toggle
-Fullscreen** greys on those adapters with the measured fact.
+**`FSXM_VGA13` SHIPS ON ITS COLOUR, WHICH WAS NEVER IN QUESTION. `FSXM_CGA640`
+AND `FSXM_HERC` WERE A SPEED CLAIM, THEY WERE MEASURED, AND THEY ARE CUT.**
+
+They are 560 x 192 = **13,440 bytes a frame against the windowed 7,680** -
+1.75x the raster work on the slowest machine, in the name of speed - so "an XT
+gets its speed back" was a claim to prove and not to assert. Wave 5 wrote all
+three writers, benched them and **lost the argument for two of them**
+(section 13.4 has the table):
+
+| change set | windowed 2x | `FSXM_CGA640` / `FSXM_HERC` |
+|---|---|---|
+| a whole frame, every line dirty | **632.6 ms** | 695.4 ms |
+| one character row - a keystroke | **26.4 ms** | 34.8 ms |
+
+**AND THE REASON IS NOT THE RASTER THIS SECTION ARGUED ABOUT.** Both paths
+compose with `a2_band_text` and double with `a2_band_x2`, byte for byte the
+same routines over the same source; what differs is the EMIT, and one
+`os88_gfx_blit1` of 640x16 measures **8.875 counts** against sixteen
+`a2_fsx_put` compares at **2.0** each. A band that is going down WHOLE does not
+need a span compare at all, and the kernel's blit is the cheaper call. The
+1.75x was real and was not what decided it.
+
+So **Machine > Color NTSC greys on CGA and on Hercules** with that number, and
+*"this port is in colour"* is a claim about a **VGA-class machine** - which is
+what section 13.1 already said rather than implying an XT gets colour.
+
+**AND THE ROW IS LIVE ON THE CPU_8086 TIER, WHICH IS A DECISION AND IS
+PRICED HERE RATHER THAN LEFT TO BE INFERRED.** `a2_fsx_avail` asks
+`os88_fsx_caps` about the DISPLAY and nothing about the CPU, so an 8088 with a
+VGA enters `FSXM_VGA13`. What it costs there, all four figures measured by
+`tests/a2band` at `-icount shift=3` and converted at 0.359 ms a PIT count:
+
+| inside `FSXM_VGA13`, on a 4.77 MHz 8088 | |
+|---|---|
+| the first frame of a session - every line owed | **3,376 ms** |
+| one character row, narrowed to its group span | **31.2 ms** |
+| a **SCROLL** - 184 lines recomposed (section 13.2) | **1,747 ms** |
+| an idle tick, nothing written | one byte read (`a2_wrote`) and `fsx_wait`'s halt |
+
+Section 7.8's tier table greys **Machine > Flashing text** on that same tier
+for a cost it prices at 157 ms in every second, which is roughly a twentieth
+of the scroll above - so the two are not being judged by one rule, and the
+reason is that the flash phase is a cost the user did not ask for on a
+timer, where colour is a cost a user asks for once by picking a menu row and
+leaves with a chord. Colour is the wave's headline feature and the maintainer's
+stated decision was that `FSXM_VGA13` **ships on its colour whatever the bench
+says**; greying it on the target machine is a scope cut and is therefore the
+maintainer's to take, not this document's. **What is not left to inference is
+the price**, which is the table above.
+
+**WHAT THE CUT GAVE BACK IS NOTHING, AND THAT IS THE DESIGN AND NOT A
+DISAPPOINTMENT.** Section 15.4's lever 3 - *"the Hercules writer becomes the
+CGA640 writer at a different stride"* - was taken at the DESIGN rather than as
+a rescue: `a2_fsx_put` is ONE routine for all three writers and what makes a
+CGA frame different from a Hercules one is the caller's offset. The ~1,200
+bytes this section booked against them were booked against a shape with three
+routines in it. The two that were cut were never a second routine, so cutting
+them costs and saves nothing but the C-side frame loop that was never
+written - and `a2_fsx_put`'s 70-byte path stays, because it is the same code
+`FSXM_VGA13` runs.
 
 **`FSXM_VGA13` is VGA-only**, so *"this port is in colour"* is a claim about a
 **VGA-class machine** and this document says exactly that rather than implying
@@ -2623,9 +2797,115 @@ write window, the scan-line map and the span compare exist to avoid**
 dirty-line set the windowed flush computes**, against a **foreign-frame
 shadow in a heap claim**.
 
-The arithmetic that makes this non-negotiable: VGA13 at 280 x 192 = 53,760
-pixels with a per-pixel artifact index is **~300 ms a frame on a 4.77 MHz
-8088** (PLANNED, measured in wave 5).
+The arithmetic that makes this non-negotiable, **MEASURED** in wave 5 and an
+order of magnitude worse than this section planned: VGA13 at 280 x 192 =
+53,760 pixels with a per-pixel artifact index is **3,376 ms a frame on a
+4.77 MHz 8088** against the ~300 planned, and one character row is **140.7**. A
+whole-frame write sixty times a second is not a thing that could ever have
+happened; driven off the dirty-line set, an ordinary keystroke **that does not
+scroll** composes and compares eight scan lines and answers "nothing moved"
+for the other 184 at 1.08 ms each.
+
+**AND A KEYSTROKE THAT DOES SCROLL IS A WHOLE-FRAME RECOMPOSE, WHICH IS
+STATED HERE BECAUSE IT IS NOT FIXED.** The sentence above used to read *"an
+ordinary keystroke"* with no qualifier, and a RETURN typed at the bottom line
+of an Applesoft session is the most ordinary keystroke this machine has.
+`a2_flush` answers a scroll with `a2_shift_test` - forty source bytes a row,
+EXACT - one `os88_gfx_scroll`, one blit and five groups: **41.9 ms**
+(section 7.9.1's own row).
+`a2_fsx_frame` has **no counterpart**: it starts at `a2_dirty_scan` and there
+is no shift block below it, so the ROM's line-by-line copy marks all 184 lines
+and every one of them is composed full width and written. Measured as its own
+bench row - `SCROLL FSXM_VGA13 (184 lines)`, section 13.4 - that is **184 x
+(a 280-pixel text row + a differing put)** and lands where the arithmetic said
+it would: **4,867 counts = 1,747.2 ms of a 4.77 MHz 8088**, **41.7x** the
+windowed path's answer to the same event. The row checks against its own
+parts: 184 x (20.500 + 6.125) = 4,899 against the measured 4,867, and it read
+4,863 / 4,868 / 4,867 over three runs.
+
+**WHY IT IS A NUMBER AND NOT A FIX.** The windowed shift is not one routine,
+it is a second damage model: `a2_shsrc` maintained per composed row,
+`a2_sh_mkey` and `a2_sh_phase` as the two proofs that the recorded sources
+still describe the recorded pixels, the probe budget, the `a2_lnf` refusal, the
+vacated rows' forced marks and their flash flags. A foreign copy of it needs
+all six plus a mover for the framebuffer AND the shadow, and the wave-5 size
+gate has 716 bytes in it. So the omission is recorded with its price and with
+the shape of the fix - one `rep movsw` of `(192 - 8k) x 280` bytes up `k x 8`
+rows in each of the framebuffer and the shadow (~280 ms against ~1,750, a 6x),
+plus `a2_fsx_frame` maintaining `a2_shsrc` with `a2_rowcopy` exactly as
+`a2_flush:1942` does - rather than left as a claim the code does not keep.
+
+**AND THE FRAME IS GATED, WHICH IS `os88_onwake`'s OWN GATE ONE PATH ALONG.**
+`os88_fsx_wait(FSXW_TICK)` returns 18.2 times a second and `a2_fsx_main`
+called `a2_fsx_frame` on every one of them, with no "did anything change"
+test - so an idle colour session paid `a2_dirty_scan`'s 24 row probes plus,
+per row, the whole prologue below, to discover that the 6502 had written
+nothing: **17-21 ms a tick in text and 23-29 in hi-res**, a third of a
+4.77 MHz 8088, eighteen times a second. The windowed flush has had both halves
+of the gate since wave 1 (`a2_wrote()` then `a2_dirty_any || !a2_sh_ok || ...`),
+and the foreign loop now has the same one: `a2_wrote()` is the single term the
+C side cannot see, and every other producer already sets `a2_dirty_any`
+because they all go through `a2_line_dirty`/`a2_line_force`. An idle colour
+session is one byte read and `fsx_wait`'s halt.
+
+**AND THE ROW'S EARLY-OUT IS FIRST, WHICH IS THE THIRD SUBSTITUTION THIS
+SECTION USED TO SAY THERE WERE ONLY TWO OF.** `a2_flush` computes `drew` and
+the scan-line range in ONE pass over the row's eight lines and returns out
+*before* `a2_row_mode`, `a2_row_base`, the span predicate and `a2_span_of`.
+The foreign copy ran all of that - fifteen calls in text, twenty-three in
+hi-res - for **all twenty-four rows** and only then discovered in the per-line
+loop that twenty-three of them had not one marked line: ~5 ms a frame in text
+and ~10 in hi-res, against the 15.7 / 31.2 ms of real work the narrowing was
+written to buy. The pass is hoisted now and it answers `rowf`, `drew` and the
+`ls0..ls1` range together, exactly as `a2_flush`'s does; the skipped path still
+spends `a2_rowwide[r]`, or the narrowing would never re-engage.
+
+**AND IT IS DRIVEN BY COLUMN AS WELL AS BY LINE**, which the first cut of this
+wave was not. `a2_dirty_scan` fills `a2_wlo`/`a2_whi`, `a2_rowwide[]` and the
+page bitmap for the foreign frame exactly as it does for the windowed flush,
+and `a2_fsx_frame` read none of it: every dirty row composed all forty cells
+and every line compared all 280 bytes, so an Applesoft `COUT` writing one cell
+cost 140.7 ms where ~16 was owed. It takes `a2_flush`'s **own** group span now,
+term for term with `a2_fsx_ok` standing in for `a2_sh_ok`, so the two paths
+cannot narrow differently - **31.2 ms**, section 13.4's own bench row.
+
+**HI-RES PADS THAT SPAN BY ONE CELL EACH SIDE and the 1bpp band does not.**
+Artifact colour is decided by a pixel's NEIGHBOURS (`a2fsx.inc`'s eleven-bit
+window), so a write inside cell *k* moves pixels in *k-1* and *k+1*; the
+windowed composer has no artifact colour at any width and owes no such padding.
+Without the pad the span is right about the SOURCE and wrong about the
+PICTURE, and the wrong pixel is then recorded in the shadow and stays for the
+session. `a2_fsx_row` takes a cell range and seeds a hi-res range's cross-cell
+state - the byte before it, the byte after it, and the cell's parity - from the
+source, and `tests/a2band`'s `ab_spanck` requires eight cells composed as a
+RANGE to equal the same eight composed as part of the whole row before it times
+either.
+
+**THE SHADOW IS MADE TRUE AT ENTRY, NOT LEFT UNKNOWN - AND THAT DISTINCTION
+COST A VISIBLE DEFECT.** `a2_fsx_main` clearing `a2_fsx_ok` defeats the
+per-LINE skip and says nothing to `a2_fsx_put`'s per-BYTE compare one level
+down. The heap gives the 53KB claim back with whatever was in it, and after a
+free and a same-size claim that is very often the LAST session's shadow - so
+the compare answered "nothing moved" for every line the picture still agreed
+with and wrote nothing, against a framebuffer SPEC.md 53.4 had just cleared.
+**Seen on the glass: entering Machine > Color NTSC a second time on an
+unchanged hi-res screen drew three of its six lines and a truncated pair of
+verticals.** SPEC.md 53.4 is binding that the mode set clears the screen, so
+`a2_fsx_main` ZEROES the shadow at entry (`a2_fsx_zero`, 53,760 bytes once a
+session): it then describes the glass exactly and every compare from the first
+frame on is sound. It is also the cheaper arm, because the black parts of the
+picture are already black and are not written. The gate is
+`hosttest/a2uitest.c`'s `h_claim_keep` row, which hands a re-claimed slot back
+unchanged the way the heap does, and its negative control draws **0** lit
+pixels where the first session drew 27,344.
+
+**`a2_fsx_put` IS THE SPAN COMPARE ONE GEOMETRY ALONG** and is what makes that
+sentence true: it answers 0 for a line that has not changed and writes only the
+differing run when it has - to the framebuffer AND to the shadow, one pass over
+each. `hosttest/a2uitest.c` asserts the drive rather than the pixels: the first
+frame of a session writes **192** lines because the shadow is a fresh claim,
+and three frames with nothing changing write **192 in total**. A per-frame
+raster write would be 576.
 
 The foreign-frame shadow is **13,440 bytes for CGA640 and HERC, 53,760 for
 VGA13**, claimed at the **fullscreen-LATCH**, where a refusal is legal and
@@ -2647,15 +2927,190 @@ bracket lives in one function whose header is this list:
   the app edge-detecting buttons;
 - **frames are paced with `os88_fsx_wait` and never `task_sleep`**;
 - no events are dispatched;
-- the exit is **the proc returning**, on F with Esc as the escape hatch
-  (SPEC.md 53.7). The ~200 ms `wm_paint_all` it costs is paid once a session.
+- the exit is **the proc returning**, and the chords are **Ctrl+F and
+  Alt+Enter** - this port's own (section 6.3) and NOT SPEC.md 53.7's bare `f`
+  with Esc, for 53.7's own stated exception one paragraph along: **the Apple
+  II+ owns both of those keys.** `f` is a letter and every letter goes to the
+  machine; Esc is the Monitor's ESC-I/J/K/M and the Applesoft screen editor's.
+  A port that swallowed either would be a machine you cannot type at, in the
+  mode whose whole point is looking at it. `os88_onkey` binds the identical
+  pair for the SPEC.md 11.2 surface, and both scan codes for Alt+Enter - 0x1C
+  classic and 0xA6 enhanced - are taken rather than one being guessed. The
+  ~200 ms `wm_paint_all` the exit costs is paid once a session.
+  **AND THE ENHANCED ONE WAS DEAD CODE FOR A WAVE, WHICH IS A SIXTEEN-BIT
+  DEFECT AND NOT A KEYBOARD ONE.** `a2_fsx_key` answers `int 16h`'s AX -
+  `(scan << 8) | ascii`, with 0xFFFF for an empty buffer - and the bracket
+  packed it into an `int`, which is 16 bits here, and tested `k >= 0`. Every
+  scan code with bit 7 set is a NEGATIVE `int`: AH=0xA6 is -22528, so the
+  `KSC_ALT_ENTER` arm four lines below the test could never be reached, and
+  Alt+0/-/= (AH 0x81/0x82/0x83) were dropped with it. The shim was always
+  right; the C's reading of it was not. `a2_fsx_key` is `unsigned` now and the
+  test is `k != 0xFFFFu`. **No harness could see it, and the fix is what makes
+  one able to**: a host `int` is 32 bits, so 0xA600 is positive there whatever
+  the target does - `hosttest/a2uitest.c` queues 0xA600 and requires the
+  bracket to exit on it, and the empty marker is 0xFFFF on both sides now, so
+  a signed test passes on neither;
+- **the MOUSE is legal and this bracket reads none.** A II+ has no mouse, the
+  kernel's pointer is parked for the whole session (the gfx lock is held from
+  before `fsx_run` to after it), and the only input the bracket owes is the
+  machine's own keyboard and the two chords. The rule is written down so the
+  next bracket does not reach for the event queue instead;
+- **the speaker stays live**, which is the "no sound ports" rule read the right
+  way round: the snd slots are legal throughout (SPEC.md 53.7) and
+  `a2_spk_service` is one far call on a change. A machine that went silent the
+  moment it went to colour would be a worse machine;
+- **the flash phase is POLLED here** (`a2_flash_step`), because `W_ONTIMER` is
+  an event and no event is dispatched inside a bracket. It is the same routine
+  the wake polls on a kernel with no timer slot and it draws nothing.
 
-### 13.4 Measure first, then write
+**AND NOTHING ON THE GLASS NAMES THE WAY BACK, WHICH IS STATED HERE RATHER
+THAN LEFT AS AN ACCIDENT.** Picking `Color NTSC` takes the menu bar, the
+status row, the desktop and the pointer away, and the only exits are Ctrl+F
+and Alt+Enter. In MII the row is one of five mutually-exclusive TICKED palette
+rows, `mii->video.color_mode` starts at 0 so `Color NTSC` is the DEFAULT, and
+picking it removes no pixel of UI - so the reference offers no precedent for
+telling the user anything, because in MII there is nothing to tell. Here there
+is, and **the port has two doors to a menu-less screen and neither one names
+its chord**: section 10.1's arithmetic table shows `Color NTSC  Ctrl+F` FITS
+at 20 of `MENU_MAXCH` 24 and records why it is declined anyway - Ctrl+F,
+pressed in the state a menu caption is read in, is Toggle Fullscreen's and not
+this row's, so the caption would be false in exactly the state SPEC.md
+11.2.1's key-hint sentence is about. `Toggle Fullscreen`'s own caption does not
+fit at all (25 of 24). **What would close the gap is a hint drawn INSIDE the
+foreign frame** - the letterbox is 20 px each side and 4 px top and bottom, so
+a legible one would have to go over the Apple's own raster, which means a
+renderer for mode 13h and a fact for the shadow to carry - and that is a
+feature, not a review fix. Until it exists the chords are in section 6.3, in
+`a2_fsx_main`'s rule 7 and in the README, and **not on the glass**.
 
-**Wave 5 gains its bench rows before it writes a writer.** `a2bandbench`
-prints ms per foreign frame for each writer against the windowed flush **on
-the same change set**, and that measurement is what decides whether CGA640 and
-HERC exist at all.
+### 13.4 Measure first, then write - AND THE MEASUREMENT
+
+`tests/a2band/a2bandbench.asm` gained the rows below and they are what decided
+the section above. The recipe is section 7.9's, unchanged - `make a2bandbench`
+then `make test TESTAPPS=build/a2band.img QEMU="qemu-system-i386 -icount
+shift=3"`, where one PIT count is **0.359 ms of a real 4.77 MHz XT** - and the
+`counts` column is the bench's own, divided by its iteration count.
+
+**EVERY COMPOSE ROW IS MEASURED AT TWO WIDTHS**, because both routines take a
+range and a single figure cannot be divided into a floor and a slope. The
+`8 cells` rows start at **cell 8** rather than cell 0 on purpose: a hi-res
+range that does not begin at the row's first cell has to seed its cross-cell
+state from the SOURCE, and a bench that always started at 0 would never run
+that code.
+
+| row | counts/op | XT ms |
+|---|---|---|
+| `FSXROW13 text 280px` - one scan line of palette indices | 20.500 | **7.36** |
+| `FSXROW13 lores 280px` | 7.000 | **2.51** |
+| `FSXROW13 hires 280px` - MII's five branches over 280 pixels | 42.875 | **15.39** |
+| `FSXROW13 text 8 cells` - one group, which is what a COUT moves | 4.500 | **1.62** |
+| `FSXROW13 lores 8 cells` | 1.875 | **0.67** |
+| `FSXROW13 hires 8 cells` | 9.375 | **3.37** |
+| `FSXPUT 280 differing` - a 280-byte compare and two 280-byte copies | 6.000 | **2.15** |
+| `FSXPUT 280 equal` - the line that did not move | 3.000 | **1.08** |
+| `FSXPUT 70 differing` - a 1bpp foreign line | 2.000 | **0.72** |
+| `FSXPUT 70 equal` | 1.000 | **0.36** |
+
+So a compose is **0.180 + 0.180/cell** ms in text, **0.213 + 0.0575** in
+lo-res and **0.359 + 0.376** in hi-res, and a span compare **0.239 +
+0.006838/byte** when the range moved and **0.120 + 0.003419** when it did not.
+`hosttest/a2uitest.c`'s cost table is those six pairs and no longer six
+per-call constants, which is what let the first cut price a narrowed compose at
+the forty-cell figure and report the narrowing as free.
+
+...and the PATHS, each doing the same visible work:
+
+| row | counts/op | XT ms |
+|---|---|---|
+| `FRAME windowed 2x` - 24 rows composed, doubled and blitted | 1762 | **632.6** |
+| `FRAME FSXM_VGA13` | 9405 | **3,376.4** |
+| `FRAME FSXM_CGA640/HERC` | 1937 | **695.4** |
+| `ROW windowed 2x` - one character row, which is a keystroke | 73.250 | **26.3** |
+| `ROW FSXM_VGA13` - all forty cells of it | 392.000 | **140.7** |
+| `ROW FSXM_VGA13 one group` - **as the package draws it** | 87.000 | **31.2** |
+| `ROW FSXM_CGA640/HERC` | 97.000 | **34.8** |
+| `SCROLL FSXM_VGA13 (184 lines)` - **added by the wave-5 review** | 4867 | **1,747.2** |
+
+**AND THE SCROLL ROW IS THE ONE THIS BENCH DID NOT HAVE, WHICH IS WHY THE
+OMISSION IT MEASURES COULD BE WRITTEN WITHOUT A NUMBER ON IT.** The rows above
+it time `a2_fsx_row` and `a2_fsx_put`; none of them times the loop that
+decides which of the two to call, and a scroll is the change set where that
+loop has no answer at all (section 13.2). It is TEXT and not hi-res on
+purpose, because the windowed shift test is a text-mode test and so the two
+sides of the comparison are the same event. Its parts: 184 x (20.500 + 6.125)
+= 4,899 against 4,867 measured, and three runs read 4,863 / 4,868 / 4,867.
+
+**AND ONE ROW OF THIS TABLE HAS TO BE READ WITH ITS FLAG.** `FRAME
+FSXM_VGA13` printed **`w`** and **0 counts** on all three of the review's
+runs. That is `benchlib.inc`'s lap detector firing falsely, not a measurement:
+the test is `ticks >= N && ticks > the PIT total's high word`, and at
+`bl_n = 1` - which every `FRAME` row uses, because a frame is 192 lines of
+work - *any* row that happens to cross one tick boundary satisfies both
+clauses, since the high word of anything under 65,536 counts is 0. The re-run
+with method T then measures a 7.9 ms row in whole ticks and reads 0. The
+value stands at **9405 / 3,376.4 ms** on the wave's own run, and it is
+corroborated twice over on the review's: 192 x (42.875 + 6.125) = **9,408**
+from this table's own primitives, and `ROW FSXM_VGA13` at 392.25 x 24 =
+**9,414**. **Do not read a `w` row's number**; read its parts.
+
+**AND THAT LAST PAIR IS THE COLUMN NARROWING, MEASURED.** `ROW FSXM_VGA13`
+composes all forty cells of eight scan lines and compares all 280 bytes of
+each, and an Applesoft `COUT` moves ONE cell: `a2_fsx_frame` hands the composer
+`a2_flush`'s own group span and `a2_fsx_put` the matching byte range, which is
+**31.2 ms against 140.7**, 4.5x, and within a fifth of the windowed path's own
+26.3. The first cut of this wave read none of the state `a2_dirty_scan` had
+just filled for it and paid the 140.7 on every keystroke of a colour session -
+PERFORMANCE rule 1 in the mode whose per-line cost is the highest this port
+has.
+
+**THE ROWS CHECK AGAINST THEIR OWN PARTS AND AGAINST THE HARNESS.**
+192 x (42.875 + 6.000) = 9,384 against the measured 9,405; 24 x (35.000 +
+29.500) + 192 x 2.000 = 1,932 against 1,937; 24 x (35.000 + 29.500 + 8.875) =
+1,761 against 1,762; and the narrowed row's 8 x (9.375 + 0.667 + 56 x 0.019) =
+88.8 against 87.000. The counts are integers over eight iterations, so
++/-0.125 a row is the instrument and not the machine.
+
+**AND THE HARNESS READS THE SAME FRAME.** `hosttest/a2uitest.c` counts calls
+and prices them from the first table; its `colour: first frame + SPEC 53.6 step
+4's repaint` row reads **3,970.3 ms**. That row now carries the kernel's own
+exit repaint, because the stub models step 4 (13.3) - and 3,970.3 - 3,376.4 =
+**593.9**, which is that repaint priced by the same table that prices the
+`a full repaint` row at 496.8, plus the border fills and the status row. Two
+independent readings of one frame.
+
+**AND THE CELL RANGE IS CHECKED BEFORE IT IS TIMED.** `ab_spanck` composes the
+whole row, keeps cells 8..15, scrubs the buffer, composes the same eight cells
+as a RANGE and requires the 56 bytes to be identical - printed as a line above
+the rows. Nothing else in the tree can see that: the host harness models
+`a2_fsx_row` in C rather than running it, `tools/a2ref.py` compares the
+WINDOWED composer, and artifact colour is not something anyone checks by
+looking at a screendump. Get the seeding wrong and the picture is right at
+forty cells and wrong at eight - right the first time the mode is entered and
+wrong on every keystroke after it, and then recorded in the foreign shadow, so
+it stays for the session. The hi-res fixture's bit 7 alternates cell by cell
+for the same reason: the seed string is ASCII, so both of MII's colour sets are
+in it now and the half-dot shift's arm is taken.
+
+**TWO CHANGE SETS, BECAUSE ONE NUMBER CANNOT ANSWER IT.** A FRAME is entering
+the mode, a `HOME`, a scroll in a graphics mode, a picture load - the worst
+case, and the one the 1.75x argument was about. A ROW is a keystroke, which is
+what the machine spends almost all of its time doing, and is where the two
+paths are closest. **The 1bpp writers lose on both**, which is why the decision
+needed no judgement.
+
+**WHAT THE BENCH DOES NOT MODEL, and it cuts both ways:** `-icount` prices
+INSTRUCTIONS and not bus contention, so a write into VRAM costs what a write
+into RAM costs. That is true of every row in this document including the
+`BLIT1` ones, which go to the real framebuffer through the kernel, so the
+comparison is like for like and neither side is being flattered.
+
+**AND THE BENCH'S FOUR COMPOSITE BODIES HUNG THE FIRST TIME THEY RAN.**
+`a2band.inc` and `a2fsx.inc` are cdecl, and cdecl here preserves BP, DS, SS:SP
+and DF **and nothing else** (SPEC.md 73.3): `_a2_band_text` loads BL with the
+flash mask on its second instruction, so a loop counter in BX never came back.
+What that looks like is not a wrong number - it is a bench that never finishes,
+which is indistinguishable from one that is merely slow under `-icount`. The
+counters are in memory now and the file says why.
 
 ---
 
@@ -2957,6 +3412,81 @@ arithmetic, the flush's one test of the moved flag and the rule's tick compare.
 **Nothing crossed a lever** (section 15.4): still 6,650 under the 55,000 split
 trigger.
 
+### 15.0.4 THE END OF WAVE 5, MEASURED - **AND IT IS THE GATE**
+
+| | the CGA fix | end of wave 5 | moved |
+|---|---|---|---|
+| resident image | 34,494 | **38,944** | **+4,450** |
+| bss | 13,856 | **14,340** | **+484** |
+| **resident total** | 48,350 | **53,284** of 61,440 | **+4,934**, 8,156 spare |
+| `APPLE2.OVL` | 4,266 | **4,349** | +83 |
+| resident shims | 37 | **38** | +1 |
+| largest C frame | 54 | **54** bytes | the 96-byte cap |
+| the FILE on disk | 49,664 | **54,272** | `WIRE_FILEMAX` 64,512 |
+
+**THE GATE IS 54,000 RESIDENT AND THE LINE IS 53,284: it PASSES with 716 to
+spare, and NOT ONE LEVER WAS PULLED** (section 15.4). `a2_x2b`, the doubled
+band, stays in bss where the flush cannot refuse it; the lo-res composer stays
+its own routine; and lever 3 - the Hercules writer becoming the CGA640 writer
+at a different stride - was taken at the DESIGN rather than as a rescue, which
+is why section 13.1's cut gave nothing back. It is also **1,716 under the
+55,000 split trigger**, so Disk II's ~1,200 resident bytes still fit in the
+follow-up PR by the arithmetic Decision 13 asked for - **and with 516 bytes
+over, which is the number that wave opens on rather than a comfortable one.**
+
+**THE FIRST REVIEW ADDED 808 OF THAT**, and it bought two blockers, four
+majors and one defect the review did not name and the glass did:
+the fence that makes `a2_fsx_up` a flag rather than a sentence, the reset
+latch spent inside the bracket, the shadow invalidated on the way IN rather
+than on the way out (which REMOVES a whole 633 ms repaint), `a2_flrow`
+maintained where the foreign frame composes, the column narrowing (section
+13.4's 31.2 ms against 140.7), and the speaker's fact armed by the estimator's
+failure as well as its success.
+
+**AND THE SECOND ADDED 170**, for one blocker-class defect and two redraw
+ones: the key sentinel made `unsigned` (section 13.3 - the enhanced
+Alt+Enter was dead code and the harness could not have seen it), the frame
+GATED on `a2_wrote()` and `a2_dirty_any` (section 13.2 - 17-29 ms a tick of
+an idle colour session, eighteen times a second), and the row's early-out
+HOISTED above the prologue the way `a2_flush` has always had it (~5 ms a
+frame in text, ~10 in hi-res). **Two of the three REMOVE work from every
+frame**, which is why 170 bytes is the whole price of them.
+
+**The `os88pkg` line, verbatim:**
+
+```
+os88pkg: 'APPLE2' entry=+0x0070 image=38944 bss=14340 icon=yes assoc=1
+```
+
+Where the 4,764 went, and the interesting half is that the foreign video mode -
+the wave's headline feature - is the cheaper of the two:
+
+| group | image | bss |
+|---|---|---|
+| the four `OSAPI_FSX_*` thunks (section 17), which every C package pays | **+92** | 0 |
+| the speaker: `a2_spk_toggle`, `a2_spk_hz`, `a2_div32`, `a2_sound_stop`, `a2_spk_service`, Machine > Mute and its menu state | ~+1,034 | +28 |
+| `a2fsx.inc`: `a2_fsx_row`'s three phase Bs, `a2_fsx_put`, `a2_fsx_init`, `a2_fsx_dac`, `a2_fsx_key` and the three tables | +868 | +142 |
+| the bracket in `a2scr.c`: `a2_fsx_avail`, `a2_fsx_frame`, `a2_fsx_main`, `a2_fsx_enter` and the 280-byte composed row | ~+1,478 | +310 |
+| **the first review's six fixes plus `a2_fsx_zero`**: the `a2_fsx_up` fence, the reset latch, the shadow moved to the entry, `a2_flrow` maintained, the column span (`a2_span_of` + the hi-res pad + `a2_fsx_row`'s cell range), the speaker's failure-armed fact, and the shadow zeroed at entry | **+808** | +4 |
+| **the second review's three**: the unsigned key sentinel, the frame gate, and the hoisted row early-out (which is a REORDERING plus one `ls0`/`ls1` pass) | **+170** | 0 |
+
+**AND THE OVERLAY BARELY MOVED (+83), WHICH IS THIS WAVE'S SHAPE AND NOT AN
+OVERSIGHT.** Wave 4's rule was that a per-COMMAND body goes out; wave 5's two
+features are a per-`$C030`-READ estimator and a bracket whose entry proc
+`tools/cc8086.py` refuses to let be an `ovl_` at all (section 13.3, rule 1).
+Machine > Color NTSC is answered in the RESIDENT half beside File > Quit and
+Toggle Fullscreen for a sharper version of their reason - the 53KB shadow claim
+it takes first can COMPACT the arena, so taking it from inside `ovl_a2_cmd`
+would be moving the module whose code is executing - and the side effect is
+that colour works on a disk with no `APPLE2.OVL`. The only thing that went out
+is Machine > Mute's shell.
+
+**THE HEAP, WHICH IS NEITHER:** the foreign-frame shadow is **53KB claimed at
+the fullscreen LATCH and freed when the bracket returns** (section 13.2). It is
+the largest transient claim this package takes, it is why the harness's own
+scratch segments had to grow from 48KB to 54, and a refusal there is legal and
+greys with the fact where the flush's could never be.
+
 ### 15.1 The headline - PLANNED
 
 | | PLANNED |
@@ -3068,6 +3598,17 @@ Pulled without stopping, each reported in the wave's measured paragraph.
 | 3 | `a2fsx.inc`'s Hercules writer becomes the CGA640 writer at a different stride | **~-450** |
 | 4 | the CGA640 and HERC writers are cut entirely if wave 5's bench says they do not beat the windowed path | **~-1,200** |
 
+**NONE OF THE FOUR WAS PULLED AND THE LAST TWO ARE SPENT** (section 15.0.4).
+Wave 5 came in at 53,114 against the 54,000 gate, so levers 1 and 2 are still
+there for the Disk II follow-up. Lever 3 was taken **at the design**: there is
+one `a2_fsx_put` and the three writers differ only in the caller's offset, so
+there was never a second routine to fold. And lever 4's ~1,200 bytes were
+booked against a shape with three routines in it - the bench did cut CGA640 and
+HERC (section 13.1) and the saving is **zero**, because what was cut was a
+C-side frame loop that had not been written. A lever that is already pulled is
+not a lever, and this table says so rather than leaving 1,650 bytes of
+imaginary headroom in the follow-up's arithmetic.
+
 **There is no second overlay.** One `.OVL` per package, by construction.
 
 ### 15.5 The file split
@@ -3087,7 +3628,7 @@ Pulled without stopping, each reported in the wave's measured paragraph.
 | `apps/apple2/a2mem.inc` | the claim accessors and the movers (section 3.4) | yes |
 | `apps/apple2/a2band.inc` | the three composers and the row primitives (section 7.3) | yes |
 | `apps/apple2/a2nib.inc` | the 6-and-2 encoder (the follow-up PR) - **assembly and resident** | yes |
-| `apps/apple2/a2fsx.inc` | the three foreign-mode raster writers (section 13) | yes |
+| `apps/apple2/a2fsx.inc` | **WAVE 5 WROTE IT**: `a2_fsx_row`'s three phase Bs (a masked glyph row, MII's lo-res CLUT, MII's artifact rule flattened into a 128-entry table), `a2_fsx_put` - the span compare one geometry along, and ONE routine for all three writers - `a2_fsx_init`, `a2_fsx_dac` and `a2_fsx_key`, which is the bracket's whole input path and is assembly because there is no `int 16h` in the C SDK and a bracket may not use the event ladder | yes |
 | `apps/apple2/apple2.asm` | the shim, and nothing else belongs in it: `CC_PKG_NAME 'APPLE2'`; `CC_HAS_ONKEY` / `ONCLICK` / `ABOUT` / `ONWAKE` / `MENUS` / `FDLG` / `OVL` / `PARTS` / `ICON` (**no `WORKER`**, and **`CC_ASSOC` only from the wave that makes Load Program work**, section 12); `%include cc/crt0.asm`, then `CC_PARTS_BEGIN 1` / `OS88_PART OP_ASSET` / `CC_PARTS_END`, then `apple2.gen.asm`, then `a2cpu.inc`, `a2mem.inc`, `a2band.inc`, `a2nib.inc` and `a2fsx.inc`, then `CC_IMAGE_END`. **`a2cpu.inc` comes first** because it declares the register file and the scratch layout the other two address through | yes |
 | `apps/apple2/a2assoc.inc` | the build-time association block (section 12) | yes |
 | `apps/apple2/icon.inc` | a 16x16 1-bit icon **drawn for this port** - not Apple's rainbow mark, which is trade dress | yes |
@@ -3304,7 +3845,8 @@ publishes.
 
 All four slots **exist** and all four are deliberately unwrapped for C in
 `apps/cc/os88.h`'s "what is not wrapped" list, and **no C package in this tree
-uses fsx** (TANK is assembly).
+uses fsx** (TANK is assembly). **The wrappers are therefore GATED** - see the
+cost table below.
 
 | thunk | slot | shape |
 |---|---|---|
@@ -3313,24 +3855,71 @@ uses fsx** (TANK is assembly).
 | `os88_fsx_mode` | `OSAPI_FSX_MODE` slot `0x02d0` | `int os88_fsx_mode(int id, void *fsi)` - the thunk does `push ds / pop es` so ES:DI is the caller's static `FSI_SIZE` block, and puts ES back |
 | `os88_fsx_wait` | `OSAPI_FSX_WAIT` slot `0x02d8` | `int os88_fsx_wait(int kind)` |
 
-Each returns 0, or -1 on CF.
+`os88_fsx_run`, `os88_fsx_mode` and `os88_fsx_wait` each answer 0, or -1 on
+CF. **`os88_fsx_caps` DOES NOT TEST CF and answers the MASK**, which the block
+header in `os88thunk.asm` said otherwise for a wave: SPEC.md 53.4 makes it
+callable from any context, lock held or not - that is the point of it, since a
+mode row has to be greyed per SPEC.md 47 *before* a bracket exists to refuse
+anything - so it has no refusal to report, and "no foreign mode on this
+display" is a mask of 0. `a2_fsx_avail` carried a `mask < 0` guard that could
+never fire (the widest mask SPEC.md 53.4 defines is VGA's 0x1EF); it is gone,
+with a comment saying why there must not be one.
 
-**THE MEASURED COST TO EVERY OTHER C PACKAGE.** `nasm -f bin` has no dead-code
-elimination, so a thunk nobody calls is still image. The C64 measured its
-added thunks at **~18 bytes each** in CWORD's image, so four is **~72 bytes**
-charged to CWORD, RUNCPM, C64, WEAVE and LOOM. **CWORD ships with 1,043 bytes
-spare, so it fits - but it is MEASURED before and after on all five**, and the
-`os88pkg` lines go here when wave 5 takes them:
+**AND THE GATE IS DECLARED WHERE A C AUTHOR READS IT.** `apps/cc/os88.h`
+carried the seven-line rule list and no `Needs %define CC_HAS_FSX` note, while
+every other gated entry point in that file says so at its declaration
+(`CC_HAS_ONTIMER`, `CC_HAS_MENUS`, `CC_HAS_ABOUT`, `CC_HAS_ONCLOSE`,
+`CC_HAS_WORKER`). It is also a **new kind of gate** that the file's own
+`CC_HAS_*` table did not have a row for: every row there gates a callback the
+package EXPORTS, and this one gates calls the package MAKES. Both are fixed in
+`os88.h` - the note at the declaration, a row in the table with the clause
+that says which direction it gates, and the "133 C entry points" count
+reconciled to say that four of them exist only for a package that sets the
+define. Without it the author gets nasm's `binary output format does not
+support external references` from a line in `build/*.gen.asm` they did not
+write, which is LESSONS.md 3's own confusing failure.
 
-| package | before | after |
-|---|---|---|
-| CWORD | measured in wave 5 | measured in wave 5 |
-| RUNCPM | measured in wave 5 | measured in wave 5 |
-| C64 | measured in wave 5 | measured in wave 5 |
-| WEAVE | measured in wave 5 | measured in wave 5 |
-| LOOM | measured in wave 5 | measured in wave 5 |
+**THE MEASURED COST, AND IT IS +92 TO APPLE2 AND +0 TO EVERY OTHER C PACKAGE.**
+`nasm -f bin` has no dead-code elimination, so a thunk nobody calls is still
+image. The C64 measured its added thunks at ~18 bytes each and this section
+predicted **~72 bytes**; wave 5 measured **92**, which is **23 a thunk**. The
+first cut of the edit charged that to every C package in the tree, and the four
+thunks are **gated behind `%ifdef CC_HAS_FSX`** instead - `os88thunk.asm`'s own
+idiom, used twice already for `CC_HAS_FDLG` and `CC_HAS_PARTS`, and
+`apple2.asm`'s own for `A2_SHIP`. `apps/apple2/apple2.asm` is the ONE file in
+the tree that defines it. The four prototypes and the `OS88_FSX*` constants
+stay unconditional in `apps/cc/os88.h`: an unreferenced prototype costs
+nothing, and a package that calls one without the `%define` gets nasm naming
+the symbol.
+
+Measured, `os88pkg`'s own lines - ungated (what the first cut shipped) against
+gated (what ships):
+
+| package | image ungated | image gated | bss | resident total | spare of 61,440 |
+|---|---|---|---|---|---|
+| APPLE2 | 38,944 | **38,944** | 14,340 | 53,284 | 8,156 |
+| CWORD | 36,538 | **36,446** | 24,533 | 60,979 | 461 |
+| PACCMAN | 42,190 | **42,098** | 5,230 | 47,328 | 14,112 |
+| RUNCPM | 39,846 | **39,754** | 11,689 | 51,443 | 9,997 |
+| C64 | 41,642 | **41,550** | 13,190 | 54,740 | 6,700 |
+| WEAVE | 51,932 | **51,840** | 9,214 | 61,054 | 386 |
+| LOOM | 55,194 | **55,102** | 6,216 | **61,318** | **122** |
 
 `make test-full` is the gate that proves the edit broke none of them.
+
+**AND IT IS LOOM AND NOT CWORD THAT IS THE TIGHT PACKAGE, WHICH THIS SECTION
+HAD WRONG.** The paragraph above was written when CWORD's 1,043 bytes spare was
+the smallest margin in the tree; LOOM has shipped since, and it builds with
+**122 bytes** of its 61,440 left - which is what ungated thunks would have cut
+to **30**. That is a fact to hand to whoever adds the next SDK line rather than
+a problem this wave created, and it is why the gate is there: an unconditional
+addition of a dozen bytes fails a build in a package that has nothing to do
+with it, and the failure reads as LOOM's.
+
+**PACCMAN and SCRIBE were measured too.** PACCMAN is a C package that this
+section's list had missed (`grep CC_PACKAGE Makefile`); SCRIBE is **assembly**
+- it has no `crt0.asm` and no thunk table - so it does not move, and it is
+named here so the next reader does not go looking for its row.
 
 ### 17.1 The slots used as they stand
 

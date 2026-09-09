@@ -471,9 +471,19 @@ void os88_about_set(void *win) { (void)win; h_about_set = 1; }
 
 void os88_task_sleep(int ticks) { the_ticks += (unsigned)ticks; }
 
+/* ...AND IT IS COUNTED, because it is a DRAWING SLOT and the bracket's rule 2
+ * is about drawing slots (SPEC.md 53.7). kernel/toast.inc's toast_show ends in
+ * toast_now, whose predicate - the gfx lock held, owner 0, task 0 - is exactly
+ * the state a bracket is in, so a toast raised in there is not deferred: the
+ * menu bar and the panel go down IMMEDIATELY, in desktop geometry, into a
+ * framebuffer the card has just put into mode 13h. The rule-2 assertion
+ * counted blit/fill/run/scroll/clip and this is in none of them. */
+static int n_toast;
+
 int os88_toast(const char *text, int ticks)
 {
     (void)ticks;
+    n_toast++;
     strncpy(last_toast, text, sizeof(last_toast) - 1);
     last_toast[sizeof(last_toast) - 1] = 0;
     return 0;
@@ -515,8 +525,176 @@ int os88_key_down(int scan)
     return h_down[scan & 0xFF] ? 1 : 0;
 }
 
-int os88_snd_caps(void) { return 1; }
-int os88_snd_tone(int hz, int t, int p) { (void)hz; (void)t; (void)p; return 0; }
+/* THE SPEAKER (APPLE2-SPEC section 8). The stub RECORDS rather than
+ * discarding, because what is being tested is arithmetic that no screendump
+ * can show: the estimator turns toggle intervals into a hertz through ONE
+ * 32-bit division, and a rounding error near the floor is the difference
+ * between the sink refusing the note and playing it (the C64 measured that at
+ * F = 341 answering 19 against a true 20).
+ *
+ * h_snd_refuse MODELS THE REFUSAL, which is the other half: os88_snd_tone
+ * answers -1 when another instance holds the speaker (SPEC.md 34.3), and the
+ * C64 shipped a version that threw that answer away and went silent for the
+ * session. A stub that always grants measures the happy path only, which is
+ * LESSONS.md 7 with the sign flipped. */
+static int h_snd_caps = 1;                  /* SND_CAP_TONE, and the harness
+                                             * can take it away */
+static int h_snd_hz = -1;                   /* the last hz GRANTED */
+static int h_snd_asked = -1;                /* ...and the last one ASKED for */
+static int h_snd_calls;
+static int h_snd_refuse;                    /* refuse this many grants */
+
+int os88_snd_caps(void) { return h_snd_caps; }
+int os88_snd_tone(int hz, int t, int p)
+{
+    (void)t;
+    (void)p;
+    h_snd_calls++;
+    h_snd_asked = hz;
+    if (h_snd_refuse > 0 && hz != 0) {
+        h_snd_refuse--;
+        return -1;
+    }
+    h_snd_hz = hz;
+    return 0;
+}
+
+/* THE EXCLUSIVE BRACKET (SPEC.md 53, APPLE2-SPEC section 13), stubbed IN THE
+ * SAME EDIT AS THE THUNK (LESSONS.md 7).
+ *
+ * THE STUB MODELS THE REFUSALS AND NOT THE CONVENIENCE (LESSONS.md 9's rule
+ * with the sign flipped): h_fsx_mask is what THIS machine's display can set,
+ * so the harness can be a CGA - where the answer is "no foreign colour mode
+ * here" and the menu row must grey with the measured fact - as easily as a
+ * VGA; os88_fsx_run REFUSES when it is asked from anywhere but a window
+ * callback, which is the fence SPEC.md 53.1 puts on it; and os88_fsx_mode
+ * refuses an id that is not in the mask, which is the SAME BIT the caps
+ * answer carried, so a package that greys off one and enters on the other
+ * cannot disagree with itself. */
+#define H_FSX_SEG 0x8000u                   /* the foreign framebuffer's
+                                             * fictional segment, which
+                                             * segbase() turns back into
+                                             * h_fsx_fb.
+                                             *
+                                             * IT WAS 0x3000 AND THAT IS
+                                             * H_SCRSEG0, the first transient
+                                             * claim - so segbase() answered
+                                             * the framebuffer for the SHADOW
+                                             * as well, every compare read the
+                                             * glass it had just written, and
+                                             * the frame was self-consistent
+                                             * and wrong. The letterbox
+                                             * assertion below is what caught
+                                             * it, which is the argument for
+                                             * asserting what a routine must
+                                             * NOT have touched. */
+static int h_fsx_mask = 1 << OS88_FSXM_VGA13;   /* a VGA, by default */
+static int h_fsx_kind = OS88_VID_VGA;
+static int h_fsx_in;                        /* inside the bracket */
+static int h_fsx_runs;                      /* ...and how many were entered */
+static int h_fsx_modes;                     /* ...and how many mode sets */
+static int h_fsx_waits;
+static int h_fsx_refuse_run;                /* the kernel refuses the bracket */
+static unsigned char h_fsx_fb[320 * 200];   /* THE FOREIGN GLASS - a real
+                                             * framebuffer, so a2_fsx_put's
+                                             * writes can be read back and
+                                             * asserted (the windowed model's
+                                             * own rule: the glass is pixels
+                                             * and not a promise) */
+static int h_fsx_keyq[16];                  /* keys the polled int 16h will
+                                             * answer with, in order */
+static int h_fsx_keyn, h_fsx_keyi;
+
+int os88_fsx_caps(void *win, int *kind)
+{
+    (void)win;
+    if (kind)
+        *kind = h_fsx_kind;
+    return h_fsx_mask;
+}
+
+/* ...AND IT MODELS SPEC.md 53.6 STEP 4, WHICH IS THE HALF THE FIRST STUB LEFT
+ * OUT. The kernel does not simply return when the entry proc does: it puts the
+ * desktop mode back and runs A FULL wm_paint_all, with the caller's gfx lock
+ * still held, BEFORE fsx_run returns. Without that here, the harness could not
+ * see the largest redraw defect this package has - an exit that invalidates
+ * the windowed shadow on pixels the kernel's own paint has just made correct,
+ * and so composes and blits all 192 lines a SECOND time on the next wake, ~633
+ * ms of a 4.77 MHz 8088 for nothing. The row that asserted "the windowed
+ * shadow was invalidated on the way out" passed on the stub that never
+ * repainted, and it was asserting the opposite of what shipped.
+ *
+ * IT IS THE LOCKED, CLIP-ARMED, WHOLE-WINDOW PAINT and not do_paint(), because
+ * the lock is HELD across the whole bracket (53.6's closing paragraph) and a
+ * stub that locked again would model a machine this one is not. */
+static void h_paint_locked(void);
+
+/* ...AND RULE 2 IS MEASURED HERE AND NOT AROUND do_cmd, now that step 4 is
+ * modelled: that repaint calls drawing slots BY DESIGN and after the mode is
+ * back, so a count taken across the whole command would read it as the
+ * violation it is not. h_fsx_drawn is what the entry proc itself spent. */
+static long h_fsx_drawn;
+
+static long h_draws(void)
+{
+    return (long)n_blit + n_fill + n_run + n_scroll + n_clip + n_toast;
+}
+
+int os88_fsx_run(void (*entry)(void), void *win, int flags)
+{
+    long d0;
+
+    (void)flags;
+    if (h_fsx_refuse_run || h_fsx_in)
+        return -1;
+    h_fsx_runs++;
+    h_fsx_in = 1;
+    d0 = h_draws();
+    entry();
+    h_fsx_drawn = h_draws() - d0;
+    h_fsx_in = 0;
+    if (win)
+        h_paint_locked();               /* step 4, before the return */
+    return 0;
+}
+
+int os88_fsx_mode(int id, void *fsi)
+{
+    unsigned char *b = (unsigned char *)fsi;
+
+    if (!h_fsx_in || id < 0 || id > 8 || !(h_fsx_mask & (1 << id)))
+        return -1;
+    h_fsx_modes++;
+    memset(h_fsx_fb, 0, sizeof(h_fsx_fb));
+    memset(b, 0, OS88_FSI_SIZE);
+    /* The framebuffer SEGMENT is a fiction on the host and the harness's
+     * segbase() is what turns it back into a pointer, exactly as it does for
+     * the Apple's RAM claim. */
+    b[OS88_FSI_SEG] = (unsigned char)(H_FSX_SEG & 0xFF);
+    b[OS88_FSI_SEG + 1] = (unsigned char)(H_FSX_SEG >> 8);
+    b[OS88_FSI_W] = 320 & 0xFF;
+    b[OS88_FSI_W + 1] = 320 >> 8;
+    b[OS88_FSI_H] = 200;
+    b[OS88_FSI_STRIDE] = 320 & 0xFF;
+    b[OS88_FSI_STRIDE + 1] = 320 >> 8;
+    b[OS88_FSI_BPP] = 8;
+    b[OS88_FSI_BANKS] = 1;
+    b[OS88_FSI_PAGES] = 1;
+    b[OS88_FSI_MODE] = (unsigned char)id;
+    return 0;
+}
+
+int os88_fsx_wait(int kind)
+{
+    (void)kind;
+    if (!h_fsx_in)
+        return -1;
+    h_fsx_waits++;
+    the_ticks++;                            /* a frame is a tick: the bracket
+                                             * paces on this and the flash
+                                             * phase is polled off os88_ticks */
+    return 0;
+}
 
 static char h_clip[4096];
 static int h_clip_n = -1;
@@ -588,17 +766,28 @@ static int claims_live;
  * plus claims_live are what see it. */
 #define H_SCR_MAX  4
 #define H_SCRSEG0  0x3000u
-#define H_SCRBYTES 49152                /* 48KB: A2_PRGMAX rounded up */
+#define H_SCRBYTES 55296                /* 54KB - it was 48 (A2_PRGMAX rounded
+                                         * up) until wave 5's foreign-frame
+                                         * SHADOW, which is 280 x 192 = 53,760
+                                         * bytes and is the largest transient
+                                         * claim this package takes (section
+                                         * 13.2) */
 static unsigned char h_scr_mem[H_SCR_MAX][H_SCRBYTES];
 static int h_scr_live[H_SCR_MAX];
 static int h_scr_kb[H_SCR_MAX];
-static int h_claim_refuse;              /* the next transient claim is refused */
+static int h_claim_refuse;
+static int h_claim_keep;                    /* ...and hand a re-claimed slot
+                                             * back with what was in it, which
+                                             * is what the heap does after a
+                                             * free and a same-size claim */              /* the next transient claim is refused */
 static int h_claim_n;                   /* transient claims ever made */
 
 static unsigned char *segbase(unsigned seg)
 {
     if (seg == H_RAMSEG)
         return h_ram;
+    if (seg == H_FSX_SEG)
+        return h_fsx_fb;                /* THE FOREIGN GLASS (section 13) */
     if (seg == H_ROMSEG)
         return h_rom;
     if (seg >= H_SCRSEG0 && seg < H_SCRSEG0 + H_SCR_MAX) {
@@ -635,7 +824,8 @@ unsigned os88_mem_claim(int kb)
             h_scr_live[i] = 1;
             h_scr_kb[i] = kb;
             h_claim_n++;
-            memset(h_scr_mem[i], 0xCC, sizeof(h_scr_mem[i]));
+            if (!h_claim_keep)
+                memset(h_scr_mem[i], 0xCC, sizeof(h_scr_mem[i]));
             return H_SCRSEG0 + (unsigned)i;
         }
     fail("more transient claims live at once than the harness models - which "
@@ -1009,11 +1199,30 @@ static long h_runs;                     /* ...and HOW MANY SLICES WERE RUN, so
                                          * reboot confirmation is up" is a
                                          * test and not a claim */
 
+/* ...AND TWO HOOKS, because inside the exclusive bracket the loop is the
+ * kernel's for a whole session and THE CORE IS THE ONLY THING THE HARNESS CAN
+ * DRIVE FROM IN THERE. h_run_jam makes the next slice answer A2_RUN_JAM (a
+ * $02 opcode is what a wild jump reaches), which is the one path that can
+ * reach a drawing slot from inside a bracket; h_run_wr_in makes the Nth slice
+ * WRITE one cell, which is what an Applesoft COUT does and what the column
+ * span exists to narrow. Neither is reachable any other way: no event is
+ * dispatched in there, so there is no step between two frames. */
+static int h_run_jam;
+static int h_run_wr_in;                 /* slices until the write; 0 = never */
+static unsigned h_run_wr_a;
+static int h_run_wr_v;
+
 int a2_run(unsigned cycles)
 {
     (void)cycles;
     h_runs++;
     a2_m.cnt = 0;
+    if (h_run_wr_in > 0 && --h_run_wr_in == 0)
+        a2_wr(h_run_wr_a, h_run_wr_v);
+    if (h_run_jam) {
+        h_run_jam = 0;
+        return A2_RUN_JAM;
+    }
     return A2_RUN_SLICE;
 }
 void a2_cut(void) { }
@@ -1028,6 +1237,21 @@ static unsigned h_clkb;
 
 void a2_clk_set(unsigned v) { h_clkb = v & 0xFFFFu; }
 int  a2_now(void) { return (int)(short)(unsigned short)h_clkb; }
+
+/* a2_div32 (a2mem.inc) - (hi:lo) / d in ONE division, 0xFFFF on overflow.
+ * The host has a 32-bit type and the target does not, which is the whole
+ * point of the routine; the OVERFLOW GUARD is modelled too, because on an
+ * 8086 a quotient that does not fit raises INT 0 and a package that takes
+ * INT 0 is a machine that stops - the harness must be able to reach the arm
+ * that prevents it. */
+unsigned a2_div32(unsigned hi, unsigned lo, unsigned d)
+{
+    unsigned long n = ((unsigned long)hi << 16) | (unsigned long)lo;
+
+    if (d == 0 || (unsigned long)hi >= (unsigned long)d)
+        return 0xFFFFu;
+    return (unsigned)(n / (unsigned long)d);
+}
 
 /* --- the composer, transcribed (a2band.inc) ------------------------------ */
 static int n_band, n_group;
@@ -1202,6 +1426,171 @@ unsigned a2_rowsig(unsigned mseg, unsigned moff, int n)
 }
 
 static unsigned char h_x2tab[512];
+
+/* ==========================================================================
+ * a2fsx.inc, TRANSCRIBED (APPLE2-SPEC section 13)
+ *
+ * MII's rule is written out here the long way - five branches and three
+ * shifts a pixel, exactly as `_mii_line_render_hires` has it - where the
+ * package flattens it into a 128-entry table. That is deliberate and it is
+ * this harness's whole method: a transcription that agrees with the shipping
+ * routine proves the RULE, and the only thing it cannot prove is the
+ * FLATTENING, which is why the wave's done_when is a screendump inside
+ * FSXM_VGA13 and not this file (LESSONS.md 7's "a transcription that is
+ * correct is precisely what makes the real routine's defect invisible").
+ * ========================================================================*/
+static int n_fsxrow_t, n_fsxrow_l, n_fsxrow_h;
+static long n_fsxcell_t, n_fsxcell_l, n_fsxcell_h;
+static const unsigned char h_locol[16] = {
+    0, 6, 7, 1, 8, 9, 3, 11, 12, 4, 10, 13, 2, 14, 15, 5
+};
+static const unsigned char h_hicol[10] = { 0, 1, 2, 2, 1, 3, 4, 4, 3, 5 };
+
+void a2_fsx_init(void) { }
+void a2_fsx_dac(void) { }
+
+/* ...AND IT TAKES A CELL RANGE, WHICH THIS MODEL HONOURS INDEPENDENTLY. The
+ * shipping routine composes `ncells` cells from `cell0`; a model that
+ * composed all forty and let the caller's offsets pick a slice out would
+ * agree with it on every byte and prove nothing about the one thing that is
+ * hard here - a hi-res range's cross-cell state (the byte before it, the byte
+ * after it, and the cell's parity), which is what makes a partial compose
+ * produce the bytes a whole one would. So the loop starts at cell0, ends at
+ * cell0 + ncells, and reads its neighbours out of the SOURCE. */
+void a2_fsx_row(unsigned char *dst, int mode, unsigned mseg, unsigned moff,
+                int line, int fmask, int cell0, int ncells)
+{
+    const unsigned char *src = segbase(mseg) + moff;
+    int c, i, mask, g, n, b0, b1, b2, run, odd, off, idx, cend;
+
+    if (cell0 < 0 || ncells < 1 || cell0 + ncells > 40) {
+        fail("a2_fsx_row was asked for a cell range outside the Apple's "
+             "forty cells");
+        return;
+    }
+    cend = cell0 + ncells;
+    if (mode == 2) {
+        n_fsxrow_h++;
+        n_fsxcell_h += (long)ncells;
+        b0 = cell0 ? src[cell0 - 1] : 0;
+        b1 = src[cell0];
+        for (c = cell0; c < cend; c++) {
+            b2 = (c == 39) ? 0 : src[c + 1];
+            run = ((b0 & 0x60) >> 5) | ((b1 & 0x7F) << 2) | ((b2 & 0x03) << 9);
+            odd = (c & 1) << 1;
+            off = (b1 & 0x80) >> 5;
+            for (i = 0; i < 7; i++) {
+                int left = (run >> (1 + i)) & 1;
+                int pix = (run >> (2 + i)) & 1;
+                int right = (run >> (3 + i)) & 1;
+
+                idx = 0;
+                if (pix)
+                    idx = (left || right) ? 9 : off + odd + (i & 1) + 1;
+                else if (left && right)
+                    idx = off + odd + 1 - (i & 1) + 1;
+                dst[c * 7 + i] = h_hicol[idx];
+            }
+            b0 = b1;
+            b1 = b2;
+        }
+        return;
+    }
+    if (mode == 1)
+    {
+        n_fsxrow_l++;
+        n_fsxcell_l += (long)ncells;
+    } else {
+        n_fsxrow_t++;
+        n_fsxcell_t += (long)ncells;
+    }
+    for (c = cell0; c < cend; c++) {
+        if (mode == 1) {
+            n = (line < 4) ? (src[c] & 0x0F) : ((src[c] >> 4) & 0x0F);
+            for (i = 0; i < 7; i++)
+                dst[c * 7 + i] = h_locol[n];
+            continue;
+        }
+        b0 = src[c];
+        mask = (b0 < 0x40) ? 0x7F : ((b0 < 0x80) ? (fmask & 0xFF) : 0x00);
+        g = (a2_chr[(b0 & 0x3F) * 8 + line] ^ mask) & 0x7F;
+        for (i = 0; i < 7; i++)
+            dst[c * 7 + i] = (g & (0x40 >> i)) ? 5 : 0;   /* WHITE on BLACK */
+    }
+}
+
+/* a2_fsx_put - THE SPAN COMPARE ONE GEOMETRY ALONG, and the harness COUNTS
+ * its two answers separately: "nothing moved" is 184 of the 192 scan lines on
+ * an ordinary keystroke and is what makes the foreign path affordable at all
+ * (section 13.2). A model that always wrote would price the wrong path. */
+static int n_fsxput, n_fsxsame;
+static long n_fsxbytes;                 /* bytes actually COPIED... */
+static long n_fsxcmp_d, n_fsxcmp_s;     /* ...and bytes COMPARED, per arm,
+                                         * which is what the cost table
+                                         * prices: a2_fsx_put takes a byte
+                                         * range now, so a call is a floor
+                                         * plus a slope and no longer one
+                                         * 280-byte constant */
+
+/* a2_fsx_zero - the shadow made TRUE at entry, because SPEC.md 53.4's mode set
+ * clears the screen and a2_fsx_put's compare has no other way to know the
+ * frame it is comparing against was thrown away. The claim stub fills with
+ * 0xCC on purpose, and `h_claim_keep` makes it hand a re-claimed slot back
+ * UNCHANGED - which is what the real heap does after a free and a same-size
+ * claim, and is the case that found this. */
+void a2_fsx_zero(unsigned seg, unsigned off, unsigned n)
+{
+    memset(segbase(seg) + off, 0, (size_t)n);
+}
+
+int a2_fsx_put(unsigned fbseg, unsigned fboff, unsigned shseg, unsigned shoff,
+               const unsigned char *src, int n)
+{
+    unsigned char *fb = segbase(fbseg) + fboff;
+    unsigned char *sh = segbase(shseg) + shoff;
+    int f, l;
+
+    for (f = 0; f < n; f++)
+        if (src[f] != sh[f])
+            break;
+    if (f >= n) {
+        n_fsxsame++;
+        n_fsxcmp_s += (long)n;
+        return 0;
+    }
+    n_fsxcmp_d += (long)n;
+    for (l = n - 1; l > f; l--)
+        if (src[l] != sh[l])
+            break;
+    memcpy(fb + f, src + f, (size_t)(l - f + 1));
+    memcpy(sh + f, src + f, (size_t)(l - f + 1));
+    n_fsxput++;
+    n_fsxbytes += (long)(l - f + 1);
+    return 1;
+}
+
+/* a2_fsx_key - the polled int 16h, from a queue the test fills. 0xFFFF is
+ * "the buffer is empty", which is the answer 53.1's bracket sees on almost
+ * every frame and is the one that must never block.
+ *
+ * IT IS `unsigned` AND THE MARKER IS 0xFFFF BECAUSE THE TARGET'S IS, and this
+ * stub is exactly where the two used to disagree: a host `int` is 32 bits, so
+ * a -1 marker and a signed `k >= 0` test both work here and neither works on
+ * the 8086, where AH=0xA6 is k = -22528. A stub whose sentinel is cheaper
+ * than the machine's is LESSONS.md 9's rule with the sign flipped - copy the
+ * refusal, not the convenience. */
+#define A2H_NOKEY 0xFFFF                /* ...and every step below queues THIS
+                                         * and not -1, so a test author cannot
+                                         * write the marker the target does
+                                         * not use */
+unsigned a2_fsx_key(void)
+{
+    if (h_fsx_keyi >= h_fsx_keyn)
+        return A2H_NOKEY;
+    /* MASKED TO SIXTEEN BITS, because AX is sixteen bits. A host `int` is 32
+     * and that width is exactly what hid the defect this stub now models. */
+    return (unsigned)(h_fsx_keyq[h_fsx_keyi++] & 0xFFFF);
+}
 
 void a2_x2init(void)
 {
@@ -1463,6 +1852,41 @@ static void no_gunk(const char *where)
                                          * section 7.9 says never to believe */
 #define MS_FLASH    1.032
 #define MS_TAKE     0.190               /* a2_dirty_take, section 7.5 */
+/* THE FOREIGN VIDEO MODE'S FOUR (APPLE2-SPEC section 13.4), all of them wave
+ * 5's `make a2bandbench` under -icount shift=3, where one PIT count is
+ * 0.359 ms of a real 4.77 MHz XT. They are what makes the harness's foreign
+ * row a COST and not a decoration, and the arithmetic checks against the
+ * bench's own whole-frame row: 192 x (15.39 + 2.15) = 3,368 ms against the
+ * measured 3,365. */
+/* BOTH ROUTINES TAKE A RANGE, SO BOTH ARE A FLOOR PLUS A SLOPE, and each is
+ * fitted from TWO measured widths rather than divided out of one. A single
+ * per-call constant priced every compose at the forty-cell figure, which
+ * reports the column narrowing as free - the exact shape of error
+ * PERFORMANCE.md's own rule 4 warns about, in the table that is supposed to
+ * catch it. */
+#define MS_FSXROW_T 0.180               /* a2_fsx_row's call floor, TEXT: the
+                                         * 40-cell row is 20.500 counts and
+                                         * the 8-cell one 4.500, so the slope
+                                         * is 16.000/32 = 0.500 counts a cell
+                                         * and the floor is what is left */
+#define MS_FSXCELL_T 0.180              /* ...per cell */
+#define MS_FSXROW_L 0.213               /* ...LO-RES: 7.000 and 1.875 */
+#define MS_FSXCELL_L 0.0575
+#define MS_FSXROW_H 0.359               /* ...and HI-RES: 42.875 and 9.375,
+                                         * which is MII's five branches a
+                                         * pixel over seven pixels a cell */
+#define MS_FSXCELL_H 0.3758
+#define MS_FSXPUT   0.239               /* a2_fsx_put's call floor when the
+                                         * range MOVED: 280 bytes is 6.000
+                                         * counts and 70 is 2.000 */
+#define MS_FSXBYTE_D 0.006838           /* ...and its per-byte slope - a
+                                         * compare and two copies */
+#define MS_FSXSAME  0.120               /* ...and when nothing moved: 3.000
+                                         * and 1.000, which is 184 of the 192
+                                         * lines on an ordinary keystroke and
+                                         * is the whole reason the foreign
+                                         * path is affordable (section 13.2) */
+#define MS_FSXBYTE_S 0.003419           /* ...one `repe cmpsb` a byte */
 
 /* --- EDIT > COPY (APPLE2-SPEC section 6.5) --------------------------------
  * THESE TWO ARE DERIVED AND NOT MEASURED, and the difference is stated
@@ -1487,6 +1911,9 @@ static void no_gunk(const char *where)
 static int c_blit, c_fill, c_frame, c_run, c_cells, c_scroll;
 static int c_band, c_group, c_span, c_sig, c_flash, c_copy, c_take, c_srcrd;
 static int c_band_l, c_group_l, c_band_h, c_group_h, c_x2, c_blit2;
+static int c_fsxrow_t, c_fsxrow_l, c_fsxrow_h, c_fsxput, c_fsxsame;
+static long c_fsxcell_t, c_fsxcell_l, c_fsxcell_h;
+static long c_fsxcmp_d, c_fsxcmp_s;
 static long c_gl_h, c_line_h, c_x2_u;
 
 static void cost_mark(void)
@@ -1498,6 +1925,11 @@ static void cost_mark(void)
     c_band_l = n_band_l; c_group_l = n_group_l;
     c_band_h = n_band_h; c_group_h = n_group_h; c_gl_h = n_gl_h; c_line_h = n_line_h;
     c_x2 = n_x2; c_x2_u = n_x2_u; c_blit2 = n_blit2;
+    c_fsxrow_t = n_fsxrow_t; c_fsxrow_l = n_fsxrow_l; c_fsxrow_h = n_fsxrow_h;
+    c_fsxcell_t = n_fsxcell_t; c_fsxcell_l = n_fsxcell_l;
+    c_fsxcell_h = n_fsxcell_h;
+    c_fsxcmp_d = n_fsxcmp_d; c_fsxcmp_s = n_fsxcmp_s;
+    c_fsxput = n_fsxput; c_fsxsame = n_fsxsame;
 }
 
 static void cost_row(const char *what)
@@ -1523,7 +1955,17 @@ static void cost_row(const char *what)
               + (n_srcrd - c_srcrd) * MS_SRCRD
               + (n_flash - c_flash) * MS_FLASH
               + (n_copy - c_copy) * MS_COPY
-              + (n_take - c_take) * MS_TAKE;
+              + (n_take - c_take) * MS_TAKE
+              + (n_fsxrow_t - c_fsxrow_t) * MS_FSXROW_T
+              + (double)(n_fsxcell_t - c_fsxcell_t) * MS_FSXCELL_T
+              + (n_fsxrow_l - c_fsxrow_l) * MS_FSXROW_L
+              + (double)(n_fsxcell_l - c_fsxcell_l) * MS_FSXCELL_L
+              + (n_fsxrow_h - c_fsxrow_h) * MS_FSXROW_H
+              + (double)(n_fsxcell_h - c_fsxcell_h) * MS_FSXCELL_H
+              + (n_fsxput - c_fsxput) * MS_FSXPUT
+              + (double)(n_fsxcmp_d - c_fsxcmp_d) * MS_FSXBYTE_D
+              + (n_fsxsame - c_fsxsame) * MS_FSXSAME
+              + (double)(n_fsxcmp_s - c_fsxcmp_s) * MS_FSXBYTE_S;
 
     printf("  %-38s %8.1f ms   %2d blit %2d fill %2d scroll %3d group\n",
            what, ms, n_blit - c_blit, n_fill - c_fill, n_scroll - c_scroll,
@@ -1535,6 +1977,16 @@ static void cost_row(const char *what)
 /* ==========================================================================
  * THE SCRIPT
  * ========================================================================*/
+/* h_paint_locked - a whole-window W_PAINT with the lock ALREADY held, which is
+ * what wm_paint_all does at SPEC.md 53.6 step 4 and what os88_fsx_run's stub
+ * calls. */
+static void h_paint_locked(void)
+{
+    clip_armed = 1;
+    os88_paint(the_win);
+    clip_armed = 0;
+}
+
 static void do_paint(void)
 {
     os88_gfx_lock();
@@ -1820,6 +2272,46 @@ static void dump_for_a2ref(const char *stem)
     if (!f) { fail("cannot write the a2ref frame file"); return; }
     fwrite(a2_sh, 1, sizeof(a2_sh), f);
     fclose(f);
+}
+
+/* spk_train - n toggles of the speaker at `per` emulated cycles apart,
+ * driven straight at a2_io_rd($C030) - the same entry the 6502 core reaches
+ * through its read hook - with the clock stepped between them the way a run
+ * steps it (APPLE2-SPEC section 8).
+ *
+ * IT IS A HELPER AND NOT A LOOP IN THE TEST because every wake in the
+ * speaker's script needs one in front of it: the silence timeout is real, so
+ * a script that toggles once and then wakes four times is testing the timeout
+ * and not the thing it says it is testing. That is exactly how the first cut
+ * of the refusal rows failed. */
+static unsigned h_spk_clk = 0x1000;
+
+static void spk_train(int per, int n)
+{
+    int k;
+
+    for (k = 0; k < n; k++) {
+        a2_clk_set(h_spk_clk);
+        h_spk_clk += (unsigned)per;
+        a2_io_rd(0xC030);
+    }
+}
+
+/* spk_noise - A TOGGLING SPEAKER THAT IS NOT A TONE, which is the case the
+ * stated fact exists for: a click track, Karateka-style waveform synthesis, a
+ * Mockingboard. The intervals disagree wildly, so a2_spk_hz answers 0 and no
+ * tone is ever asked for. */
+static void spk_noise(int n)
+{
+    static int seed = 12345;
+    int k;
+
+    for (k = 0; k < n; k++) {
+        seed = seed * 31 + 7;
+        a2_clk_set(h_spk_clk);
+        h_spk_clk += (unsigned)(300 + ((seed >> 3) & 0x1FFF));
+        a2_io_rd(0xC030);
+    }
 }
 
 int main(void)
@@ -4139,6 +4631,740 @@ int main(void)
             fail("warp off left the budget above the ceiling it was granted "
                  "for");
 
+        /* --- THE SPEAKER: A TOGGLE TRAIN BECOMES A NOTE (section 8) -------
+         *
+         * NONE OF THIS IS VISIBLE IN A SCREENDUMP and none of it is visible
+         * to `make test-snd` either beyond "a tone of about the right pitch
+         * came out": what is asserted here is the ARITHMETIC - that
+         * 1,020,484 / (2 x delta) is one rounding and not two, that the
+         * agreement window rejects a train that is not steady, that the
+         * silence timeout takes a duration-0 grant down, and that a REFUSED
+         * grant is retried a bounded number of times and then dropped with
+         * the fact said once. The C64 shipped three of those four wrong.
+         *
+         * EVERY WAKE HERE HAS A TRAIN IN FRONT OF IT, which is spk_train's
+         * own note: the silence timeout is two ticks and a wake is a tick, so
+         * a script that toggles once and wakes four times measures the
+         * timeout and nothing else. */
+        {
+            int k;
+
+            do_cmd(A2_M_CPU, A2_I_RUN);     /* running, un-warped, un-muted */
+            a2_mute = 0;
+            h_snd_refuse = 0;
+            h_snd_hz = -1;
+            h_snd_asked = -1;
+
+            /* 1 kHz: 510,242 / 1,000 = 510 cycles a half-period, and the
+             * estimator's answer is 510,242 / 510 = 1,000 exactly. */
+            spk_train(510, A2_SPK_N + 1);
+            do_wake();
+            if (h_snd_hz != 1000)
+                printf("a2uitest: FAIL - a 510-cycle toggle train played %d Hz "
+                       "and the arithmetic says 1000 (section 8)\n",
+                       h_snd_hz), fails++;
+            if (!a2_snd_said)
+                fail("the speaker's stated fact was never said - what the "
+                     "estimator cannot reproduce is a fact about the build "
+                     "and belongs on the row (section 8)");
+
+            /* ...AND ONE FAR CALL ON A CHANGE ONLY. A tone that has not moved
+             * must not be re-granted every wake: it is 46.7 us of far call
+             * plus the router's work for a note that is already sounding. */
+            k = h_snd_calls;
+            spk_train(510, A2_SPK_N);
+            do_wake();
+            if (h_snd_calls != k)
+                fail("a steady tone asked the kernel for the note it was "
+                     "already playing (section 8)");
+
+            /* --- A WOBBLING ESTIMATE IS ONE NOTE, NOT A RE-GRANT A WAKE --
+             * A MEASURED frequency is not a register: the C64's `one far call
+             * a wake, on a change only` is exact for a SID write and is not
+             * exact for an interval that moves by a cycle. Every step of that
+             * walk would be a far call at 46.7 us AND an `out 0x43`, which
+             * restarts PIT channel 2's count in the middle of a note nobody
+             * asked to change - and a wake here is not 18 Hz, it is however
+             * often a2_wants_wake re-posts one.
+             *
+             * The train below moves by ONE cycle a toggle and the kernel must
+             * be asked ONCE. */
+            k = h_snd_calls;
+            for (i = 0; i < 6; i++) {
+                spk_train(510 + (i & 1) - 1, 2);   /* 509, 510, 509, ... */
+                do_wake();
+            }
+            if (h_snd_calls != k)
+                printf("a2uitest: FAIL - a toggle train whose interval moved "
+                       "by ONE cycle re-granted the tone %d time(s); every "
+                       "one is a far call and an `out 0x43` that restarts the "
+                       "PIT mid-note (section 8)\n",
+                       h_snd_calls - k),
+                fails++;
+            /* ...AND A REAL CHANGE STILL GETS THROUGH. A sixty-fourth is the
+             * band - 0.27 of a semitone, under a fifth of what anyone can
+             * hear - and 510 -> 340 cycles is 1,000 -> 1,500 Hz. */
+            spk_train(340, A2_SPK_N + 1);
+            do_wake();
+            if (h_snd_hz != 1500)
+                printf("a2uitest: FAIL - a toggle train that moved from 1,000 "
+                       "to 1,500 Hz played %d - the hysteresis band swallowed "
+                       "a real change (section 8)\n", h_snd_hz),
+                fails++;
+            spk_train(510, A2_SPK_N + 1);
+            do_wake();
+
+            /* THE SILENCE TIMEOUT. Duration 0 means SOMETHING has to take it
+             * down, and nothing else will: the guest has stopped toggling and
+             * the note would sound for the rest of the session, on a desktop
+             * the user has gone back to. */
+            the_ticks += A2_SPK_QUIET;
+            do_wake();
+            if (h_snd_asked != 0)
+                fail("a toggle train that stopped left its duration-0 note "
+                     "sounding for ever (section 8, rule 3)");
+
+            /* A TRAIN THAT IS NOT STEADY IS NOT A NOTE. Alternating 510 and
+             * 900 cycles is a different hertz every toggle and none of them
+             * is what the program meant; the agreement window is what makes
+             * the answer silence rather than a stream of wrong notes. */
+            for (k = 0; k < 8; k++)
+                spk_train((k & 1) ? 900 : 510, 1);
+            do_wake();
+            if (h_snd_asked != 0)
+                fail("an unsteady toggle train played a note - the last "
+                     "A2_SPK_N intervals have to AGREE (section 8)");
+
+            /* ...AND AN INTERVAL OUTSIDE THE SINK'S BAND IS NOT CLAMPED INTO
+             * IT. 40,000 cycles is 12.8 Hz, below the 20 Hz floor; clamping
+             * would answer 20 Hz for a machine that had simply stopped. */
+            spk_train(26000, A2_SPK_N + 1);     /* 26,000 cycles is 19.6 Hz,
+                                                 * one step under the floor -
+                                                 * and A2_SPK_DMAX is 25,512,
+                                                 * so the TOGGLE handler
+                                                 * rejects it and the run
+                                                 * never fills */
+            do_wake();
+            if (h_snd_asked != 0)
+                fail("an interval below the sink's 20 Hz floor was clamped "
+                     "into the band instead of being refused (section 8)");
+
+            /* A REFUSED GRANT IS RETRIED, AND THE RETRY IS BOUNDED. The C64
+             * cleared its latch BEFORE the call and threw the answer away, so
+             * one refusal silenced the machine for the session; and an
+             * unbounded retry asks once a wake for ever on a speaker somebody
+             * else holds for good. */
+            a2_sound_stop();
+            h_snd_refuse = 3;
+            h_snd_hz = -1;
+            h_snd_asked = -1;
+            spk_train(510, A2_SPK_N + 1);
+            do_wake();
+            if (h_snd_asked != 1000 || h_snd_hz == 1000)
+                fail("the first grant after a refusal was not even attempted");
+            for (k = 0; k < 3; k++) {
+                spk_train(510, 2);
+                do_wake();
+            }
+            if (h_snd_hz != 1000)
+                fail("a REFUSED tone grant was never retried - one refusal "
+                     "silenced the machine for the session (section 8, "
+                     "rule 4)");
+
+            /* ...AND A SPEAKER HELD FOR GOOD IS DROPPED. 700 cycles is 728 Hz
+             * and is a NEW note, so the bound starts again from there. */
+            h_snd_refuse = 64;
+            a2_sound_stop();
+            for (k = 0; k < A2_SND_TRIES + 4; k++) {
+                spk_train(700, 2);
+                do_wake();
+            }
+            k = h_snd_calls;
+            spk_train(700, 2);
+            do_wake();
+            spk_train(700, 2);
+            do_wake();
+            if (h_snd_calls != k)
+                fail("a speaker held for good is asked once a wake for ever "
+                     "- the retry is bounded at A2_SND_TRIES wakes and then "
+                     "dropped (section 8, rule 4)");
+            if (!a2_snd_busy_said)
+                fail("the speaker being busy was never said - a dropped "
+                     "grant is a fact and SPEC.md 47 asks for it once");
+            h_snd_refuse = 0;
+
+            /* --- THE STATED FACT IS ARMED BY THE FAILURE TOO --------------
+             * It used to latch only inside the successful os88_snd_tone arm,
+             * so it fired exactly when the emulation was WORKING and never
+             * when it was not - and every program the sentence exists for
+             * produces intervals that do not agree, so a2_spk_hz answers 0,
+             * no tone is asked for, and the row stayed blank for the one user
+             * who needed it. Four consecutive wakes of a speaker that TOGGLED
+             * and could not be followed say it (section 8). */
+            a2_sound_stop();
+            a2_snd_said = 0;
+            a2_msg[0] = 0;
+            h_snd_asked = -1;
+            for (k = 0; k < A2_SND_ODD - 1; k++) {
+                spk_noise(A2_SPK_N + 1);
+                do_wake();
+            }
+            if (a2_snd_said)
+                fail("the speaker's stated fact was said before A2_SND_ODD "
+                     "wakes of a speaker this build could not follow");
+            spk_noise(A2_SPK_N + 1);
+            do_wake();
+            if (!a2_snd_said)
+                fail("a TOGGLING speaker this estimator could not turn into a "
+                     "tone never said `Square-wave tones only.` - the fact "
+                     "fired only when the emulation was working, which is the "
+                     "opposite of what section 8 asks for");
+            if (strcmp(a2_msg, "Square-wave tones only.") != 0)
+                fail("the fact armed by the failure is not section 8's "
+                     "sentence");
+            if (h_snd_asked != -1)
+                fail("a speaker whose intervals do not agree was turned into "
+                     "a tone anyway");
+
+            /* MACHINE > MUTE, AND WARP. Both silence it, and warp is VICE's
+             * own rule (vsync.c:181's sound_suspend): a machine at some
+             * thousands of per cent has nothing meaningful to play. */
+            a2_sound_stop();
+            h_snd_asked = -1;
+            h_snd_hz = -1;
+            spk_train(510, A2_SPK_N + 1);
+            do_wake();
+            if (h_snd_hz != 1000)
+                fail("the machine went quiet for good after a dropped grant");
+            do_cmd(A2_M_MACHINE, A2_I_MUTE);
+            if (!a2_mute || strcmp(a2_mach_items[A2_I_MUTE], "* Mute") != 0)
+                fail("Machine > Mute is not a check item (section 10.1)");
+            if (h_snd_asked != 0)
+                fail("Machine > Mute did not take the note down ON THE PICK");
+            do_cmd(A2_M_MACHINE, A2_I_MUTE);
+            if (a2_mute || strcmp(a2_mach_items[A2_I_MUTE], "  Mute") != 0)
+                fail("Machine > Mute did not un-mute");
+            h_snd_hz = -1;
+            spk_train(510, A2_SPK_N + 1);
+            do_wake();
+            if (h_snd_hz != 1000)
+                fail("un-muting did not let the machine play again");
+            do_cmd(A2_M_CPU, A2_I_WARP);
+            if (h_snd_asked != 0)
+                fail("CPU > Warp did not silence the speaker (VICE's rule, "
+                     "section 8)");
+            do_cmd(A2_M_CPU, A2_I_WARP);
+
+            /* A MACHINE WITH NO SQUARE VOICE IS A DIFFERENT FACT, and it is
+             * not retried at all: the capability is asked ONCE in os88_main
+             * and Machine > Mute is greyed off it. The flag is poked here
+             * because os88_main decides it once a launch. */
+            a2_have_snd = 0;
+            a2_sound_stop();
+            a2_menu_state();
+            if (strcmp(a2_mach_items[A2_I_MUTE], "\001  Mute") != 0)
+                fail("a machine with no square voice does not grey Machine > "
+                     "Mute with the fact (section 10.3)");
+            k = h_snd_calls;
+            spk_train(510, A2_SPK_N + 1);
+            do_wake();
+            if (h_snd_calls != k)
+                fail("a machine with no square voice called the tone slot "
+                     "anyway - a package that calls a slot without "
+                     "establishing the capability is guessing (73.11)");
+            a2_have_snd = 1;
+            a2_menu_state();
+            a2_sound_stop();
+        }
+
+        /* --- THE FOREIGN VIDEO MODE (section 13) -------------------------
+         *
+         * WHAT IS ASSERTED HERE IS THE DRIVE AND THE FENCE, not the pixels.
+         * Whether MII's artifact rule reaches the glass is a SCREENDUMP
+         * INSIDE FSXM_VGA13 and cannot be anything else (a2fsx.inc's own
+         * note: this file transcribes the rule, so a transcription that
+         * agrees proves the rule and not the flattening). What this file CAN
+         * see, and what an emulator never could:
+         *
+         *   - a foreign frame is driven off the SAME dirty-line set as the
+         *     windowed flush, so the FIRST frame writes 192 lines and every
+         *     frame after it that changes nothing writes NONE. A per-frame
+         *     raster write is 3,365 ms of a 4.77 MHz 8088 (section 13.2) and
+         *     looks identical on the glass;
+         *   - NO DRAWING SLOT is called between the mode set and the return
+         *     (rule 2 of a2_fsx_main's list), which is the rule nothing in
+         *     the toolchain checks;
+         *   - the 53KB shadow claim is taken at the LATCH and FREED, and a
+         *     refusal there is legal and says so;
+         *   - the menu row greys on a display with no foreign colour mode,
+         *     off the same bit os88_fsx_mode would refuse on. */
+        {
+            int fb0, colour, lit, k;
+
+            h_mode(0, 0, 0, 1);             /* HI-RES, which is the mode with
+                                             * artifact colour in it */
+            h_hires();
+            do_wake();
+            do_paint();
+
+            /* THE ROW IS LIVE ON A VGA... */
+            a2_menu_state();
+            if (strcmp(a2_mach_items[A2_I_TINT], "  Color NTSC") != 0)
+                fail("Machine > Color NTSC is greyed on a display whose "
+                     "os88_fsx_caps offers FSXM_VGA13 (section 13.1)");
+
+            n_fsxput = 0;
+            n_fsxsame = 0;
+            n_fsxbytes = 0;
+            h_fsx_runs = 0;
+            h_fsx_modes = 0;
+            fb0 = h_claim_n;
+            cost_mark();
+            c = n_blit + n_fill + n_run + n_scroll + n_clip + n_toast;
+            (void)c;
+            h_fsx_keyn = 3;                 /* two frames, then Ctrl+F */
+            h_fsx_keyi = 0;
+            h_fsx_keyq[0] = A2H_NOKEY;
+            h_fsx_keyq[1] = A2H_NOKEY;
+            h_fsx_keyq[2] = 6;              /* ASCII 6 - Ctrl+F, one of this
+                                             * port's two chords (rule 7) */
+            do_cmd(A2_M_MACHINE, A2_I_TINT);
+            if (h_fsx_runs != 1 || h_fsx_modes != 1)
+                fail("Machine > Color NTSC did not enter the bracket and set "
+                     "a mode exactly once");
+            if (h_claim_n != fb0 + 1)
+                fail("the foreign-frame shadow was not claimed at the LATCH "
+                     "(section 13.2)");
+            if (h_claims_out() != 0)
+                fail("the foreign-frame shadow was not freed when the "
+                     "bracket returned - 53KB of the heap, per entry");
+            if (h_fsx_in)
+                fail("the bracket did not return on Ctrl+F");
+            /* RULE 2: NOT ONE DRAWING SLOT between the mode set and the
+             * return. They render DESKTOP geometry into a foreign
+             * framebuffer, and what that looks like is not a refusal - it is
+             * the desktop's chrome drawn into the middle of the Apple's
+             * raster. */
+            if (h_fsx_drawn != 0)
+                fail("a DRAWING SLOT was called inside the exclusive bracket "
+                     "- every one of them renders desktop geometry into a "
+                     "foreign framebuffer (SPEC.md 53.7, rule 2)");
+            /* THE DRIVE. 192 lines on the first frame because the shadow is a
+             * fresh claim and the frame is declared unknown; NONE on the
+             * second, because nothing changed and the dirty-line set says so.
+             * A per-frame raster write would be 384. */
+            if (n_fsxput != A2_SCRH)
+                printf("a2uitest: FAIL - the first foreign frame wrote %d "
+                       "lines and the raster is %d (section 13.2)\n",
+                       n_fsxput, A2_SCRH),
+                fails++;
+            if (n_fsxsame != 0)
+                printf("a2uitest: FAIL - the first foreign frame COMPARED %d "
+                       "lines it had never written; the frame is unknown at "
+                       "the latch and every line is owed\n", n_fsxsame),
+                fails++;
+            /* ...AND THE PICTURE IS IN THE FRAME, at the offset section 13.1
+             * pins: 280 x 192 centred at (20, 4) of a 320 x 200 mode. */
+            colour = 0;
+            lit = 0;
+            for (i = 0; i < A2_SCRH; i++) {
+                int x;
+
+                for (x = 0; x < A2_FSXW; x++) {
+                    k = h_fsx_fb[(4 + i) * 320 + 20 + x];
+                    if (k != 0)
+                        lit++;              /* ...and every non-black one, for
+                                             * the second-entry row below */
+                    if (k != 0 && k != 5)
+                        colour++;
+                }
+            }
+            if (colour == 0)
+                fail("a hi-res screen in FSXM_VGA13 put not one coloured "
+                     "pixel in the frame - artifact colour is the whole "
+                     "reason the foreign mode exists (section 13.1)");
+            for (i = 0; i < 200; i++)
+                for (k = 0; k < 20; k++)
+                    if (h_fsx_fb[i * 320 + k] != 0) {
+                        fail("the foreign frame wrote outside the Apple's "
+                             "280 x 192 raster - the letterbox is the mode "
+                             "set's own clear and nothing else");
+                        i = 200;
+                        break;
+                    }
+            cost_row("colour: first frame + SPEC 53.6 step 4's repaint");
+
+            /* --- A SECOND ENTRY ON THE SAME HEAP BLOCK DRAWS THE WHOLE
+             * PICTURE, AND FOR A WAVE IT DREW A THIRD OF IT ---------------
+             * The 53KB shadow is freed at the exit and claimed again at the
+             * next latch, and a free followed by a same-size claim lands on
+             * the same block - so the shadow arrives holding the LAST
+             * session's frame. `a2_fsx_ok = 0` defeats the per-LINE skip and
+             * has no idea a2_fsx_put's per-BYTE compare is about to answer
+             * "nothing moved" for every line the picture still agrees with,
+             * against a framebuffer SPEC.md 53.4 has just cleared. Found on
+             * the glass: entering Machine > Color NTSC a second time on an
+             * unchanged hi-res screen drew three of its six lines.
+             *
+             * a2_fsx_main zeroes the shadow at entry now, which makes it TRUE
+             * rather than unknown - the mode set's clear is what it describes.
+             * The count of coloured pixels is the assertion, because it is the
+             * one thing a compare that wrongly answers EQUAL takes away. */
+            h_claim_keep = 1;
+            h_fsx_keyn = 2;
+            h_fsx_keyi = 0;
+            h_fsx_keyq[0] = A2H_NOKEY;
+            h_fsx_keyq[1] = 6;
+            do_cmd(A2_M_MACHINE, A2_I_TINT);
+            h_claim_keep = 0;
+            k = 0;
+            for (i = 0; i < A2_SCRH; i++) {
+                int x;
+
+                for (x = 0; x < A2_FSXW; x++)
+                    if (h_fsx_fb[(4 + i) * 320 + 20 + x] != 0)
+                        k++;
+            }
+            if (k != lit)
+                printf("a2uitest: FAIL - a second fullscreen-colour session "
+                       "on the same heap block put %d lit pixels in the frame "
+                       "where the first put %d. The shadow arrived holding "
+                       "the last session's picture and a2_fsx_put answered "
+                       "'nothing moved' against a framebuffer the mode set "
+                       "had just cleared (section 13.2)\n", k, lit),
+                fails++;
+
+            /* --- A SECOND ENTRY WITH NOTHING CHANGED WRITES NOTHING -------
+             * The shadow is a FRESH claim each time, so the first frame of
+             * the second session writes 192 lines again - which is correct
+             * and is the price of not holding 53KB across a session. What is
+             * asserted is the frame AFTER it. */
+            n_fsxput = 0;
+            n_fsxsame = 0;
+            h_fsx_keyn = 4;                 /* three frames, then the chord */
+            h_fsx_keyi = 0;
+            h_fsx_keyq[0] = A2H_NOKEY;
+            h_fsx_keyq[1] = A2H_NOKEY;
+            h_fsx_keyq[2] = A2H_NOKEY;
+            h_fsx_keyq[3] = 0x1C00;         /* Alt+Enter, the other chord:
+                                             * scan 0x1C, ascii 0 */
+            do_cmd(A2_M_MACHINE, A2_I_TINT);
+            if (h_fsx_in)
+                fail("the bracket did not return on Alt+Enter - BOTH chords "
+                     "are taken rather than one being guessed (rule 7)");
+            if (n_fsxput != A2_SCRH)
+                printf("a2uitest: FAIL - three foreign frames with nothing "
+                       "changing wrote %d lines; the first owes %d and the "
+                       "other two owe NONE. A per-frame raster write is what "
+                       "section 13.2 exists to refuse\n",
+                       n_fsxput, A2_SCRH),
+                fails++;
+
+            /* --- AND ALT+ENTER IN THE *ENHANCED* SET, WHICH IS SCAN 0xA6 --
+             * THE ROW THAT WOULD NOT HAVE COMPILED THE DEFECT AWAY. The
+             * bracket packed int 16h's AX into a 16-bit `int` and tested
+             * `k >= 0`, so every key whose SCAN CODE has bit 7 set was thrown
+             * away before it was looked at: AH=0xA6 is k = -22528, and the
+             * KSC_ALT_ENTER arm four lines below the test was dead code while
+             * its own comment said both codes were taken rather than guessed.
+             * Alt+0/-/= (AH 0x81/0x82/0x83) went the same way.
+             *
+             * THIS FILE COULD NOT SEE IT AND STILL CANNOT SEE IT BY ITSELF: a
+             * host `int` is 32 bits, so 0xA600 is positive here whatever the
+             * target does. What makes the row real is the pair - the sentinel
+             * is 0xFFFF on BOTH sides now and a2_fsx_key answers `unsigned`
+             * on both - so a signed test on the target cannot pass this queue
+             * and a signed test here cannot pass it either. The old queue
+             * only ever held 0x1C00, which is positive in sixteen bits, so
+             * every existing row above ran on the ONE of the two codes that
+             * worked. */
+            h_fsx_keyn = 2;
+            h_fsx_keyi = 0;
+            h_fsx_keyq[0] = A2H_NOKEY;
+            h_fsx_keyq[1] = 0xA600;         /* Alt+Enter, ENHANCED: scan 0xA6,
+                                             * ascii 0 */
+            do_cmd(A2_M_MACHINE, A2_I_TINT);
+            if (h_fsx_in)
+                fail("the bracket did not return on Alt+Enter in the "
+                     "ENHANCED set (scan 0xA6) - a scan code with bit 7 set "
+                     "is a NEGATIVE 16-bit int, and the key test has to be "
+                     "unsigned against 0xFFFF (rule 7, section 13.3)");
+
+            /* --- THE WINDOWED SHADOW IS INVALIDATED ON THE WAY *IN*, AND
+             * THE EXIT COSTS EXACTLY ONE REPAINT ---------------------------
+             * The bracket consumes the marks the windowed flush would have
+             * used and a2_sh describes pixels that have been off the glass
+             * for a whole session, so a2_sh_ok has to go - but SPEC.md 53.6
+             * step 4 runs a full wm_paint_all BEFORE fsx_run returns, and
+             * os88_paint answers a whole-window W_PAINT with a2_sh_inval()
+             * plus one flush. Invalidating AGAIN after that put every line
+             * mark back on pixels the kernel's own paint had just made
+             * correct, and the next wake composed and blitted all 192 lines a
+             * SECOND time: ~633 ms of a 4.77 MHz 8088, the largest double
+             * draw this package has, and PERFORMANCE rule 2 at the largest
+             * scale it comes at.
+             *
+             * So the shadow must be VALID here - step 4 has repainted it -
+             * and the wake that follows must draw NOTHING. */
+            if (!a2_sh_ok)
+                fail("the exit invalidated the windowed shadow AFTER "
+                     "SPEC.md 53.6 step 4's own wm_paint_all - the next wake "
+                     "then composes and blits all 192 lines a second time "
+                     "(section 13.3)");
+            h_halt();
+            c = n_blit + n_band + n_band_h + n_band_l;
+            do_wake();
+            if (n_blit + n_band + n_band_h + n_band_l != c)
+                fail("the wake after a fullscreen-colour session composed or "
+                     "blitted - step 4's repaint already drew the window and "
+                     "this is the second one");
+            h_go();
+            do_wake();
+            do_paint();
+            audit("after a fullscreen-colour session");
+
+            /* ================================================================
+             * RULE 2'S FENCE, ASSERTED RATHER THAN DESCRIBED
+             * ==============================================================
+             * a2_fsx_main's rule list said "`a2_fsx_up` is what fences the
+             * one path that could, a2_jam's os88_toast, which is reachable
+             * from the slice" - and for a wave nothing read the flag. This is
+             * the path: a2_fsx_main -> a2_slice -> A2_RUN_JAM -> a2_jam ->
+             * os88_toast, and kernel/toast.inc's toast_show ends in
+             * toast_now, whose predicate (the gfx lock held by task 0) is
+             * EXACTLY the bracket's state - so the desktop's menu bar and
+             * panel go down immediately, in 640-wide planar geometry, into an
+             * A000 the card has just put into chained mode 13h at a stride of
+             * 320. The foreign shadow then believes those bytes are ours, so
+             * it is permanent for the rest of the session. */
+            n_toast = 0;
+            h_run_jam = 1;                  /* the first slice in there JAMs */
+            h_fsx_keyn = 2;
+            h_fsx_keyi = 0;
+            h_fsx_keyq[0] = A2H_NOKEY;
+            h_fsx_keyq[1] = 6;
+            do_cmd(A2_M_MACHINE, A2_I_TINT);
+            if (a2_state != A2_ST_JAM)
+                fail("the core did not JAM inside the bracket - the fence "
+                     "below would then be asserting nothing");
+            if (n_toast != 0)
+                fail("a2_jam raised a TOAST from inside the exclusive "
+                     "bracket - os88_toast is a DRAWING SLOT and toast_now "
+                     "draws it on the spot when the lock is held by task 0 "
+                     "(SPEC.md 53.7, section 13.3 rule 2)");
+            if (h_fsx_drawn != 0)
+                fail("a JAM inside the bracket reached a drawing slot");
+            if (strncmp(a2_jamline, "6502: JAM at $", 14) != 0)
+                fail("the JAM line was not left on the status row - the "
+                     "fence costs nothing only because the row says it "
+                     "anyway when the desktop comes back");
+            do_cmd(A2_M_MACHINE, A2_I_RESET);   /* the port's own way out */
+            do_wake();
+            if (a2_state != A2_ST_RUN)
+                fail("Control-Reset did not bring the machine back from the "
+                     "JAM this step drove it into");
+
+            /* --- AND THE RESET CHORDS ARE SPENT *INSIDE* THE BRACKET ------
+             * a2_key answers Ctrl+F2 and Ctrl+F3 by setting a2_reset_req, and
+             * the only other place that is read is os88_onwake - which is an
+             * EVENT, and rule 3 says none is dispatched in here. So for a
+             * wave the two chords were inert for the whole colour session and
+             * then fired the instant the user left, resetting a machine they
+             * thought they had reset a minute ago. */
+            a2_m.pc = 0x1234;
+            h_fsx_keyn = 3;
+            h_fsx_keyi = 0;
+            h_fsx_keyq[0] = 0x5F00;         /* Ctrl+F2, scan 0x5F ascii 0 */
+            h_fsx_keyq[1] = A2H_NOKEY;
+            h_fsx_keyq[2] = 6;
+            do_cmd(A2_M_MACHINE, A2_I_TINT);
+            if (a2_reset_req != 0)
+                fail("Ctrl-Reset typed in a fullscreen-colour session was "
+                     "still LATCHED when the bracket returned - it fires on "
+                     "the next wake instead, resetting a machine the user "
+                     "reset a minute ago (rule 3)");
+            if (a2_m.pc == 0x1234)
+                fail("Ctrl-Reset inside the bracket never reached the 6502 - "
+                     "the reset vector was not taken");
+            if (h_fsx_drawn != 0)
+                fail("a reset inside the bracket reached a drawing slot");
+            do_wake();
+            do_paint();
+
+            /* ================================================================
+             * THE FLASH FLAGS ARE MAINTAINED INSIDE THE BRACKET
+             * ==============================================================
+             * a2_flrow[] is written at COMPOSE time, and a2_flush is the only
+             * other place that composes - so for a wave the whole colour
+             * session ran on flags taken before it was entered, and
+             * a2_flash_step forced eight lines 3.64 times a second off them.
+             * Three consequences, none visible in an emulator: entering from
+             * HI-RES left every flag zero, so a program returning to TEXT had
+             * a `]` that never blinked again; entering from TEXT and
+             * scrolling left the flag on a row the cursor had moved off; and
+             * entering from TEXT and running HGR recomposed eight stale text
+             * rows as hi-res on every flip - ~480 ms of every second of a
+             * 4.77 MHz 8088 producing no pixel.
+             *
+             * The flags are ZEROED by hand first, so nothing but the foreign
+             * frame can be what set them. */
+            h_mode(1, 0, 0, 0);             /* TEXT */
+            h_puts(8, 2, "FLASHING", 2);    /* $40-$7F: the flashing form */
+            h_puts(9, 2, "STEADY", 0);
+            do_wake();
+            do_paint();
+            for (i = 0; i < A2_ROWS; i++)
+                a2_flrow[i] = 0;
+            a2_dirty_all();
+            h_fsx_keyn = 2;
+            h_fsx_keyi = 0;
+            h_fsx_keyq[0] = A2H_NOKEY;
+            h_fsx_keyq[1] = 6;
+            do_cmd(A2_M_MACHINE, A2_I_TINT);
+            if (!a2_flrow[8])
+                fail("a foreign frame composed a TEXT row holding a $40-$7F "
+                     "byte and did not record its flash flag - the cursor "
+                     "stops blinking for the length of the session "
+                     "(section 13.2)");
+            if (a2_flrow[9])
+                fail("a foreign frame flagged a text row with nothing "
+                     "flashing in it - a2_flash_force then forces eight lines "
+                     "3.64 times a second on a row that cannot flash");
+
+            /* ...AND A GRAPHICS ROW CLEARS ITS STALE FLAG. Only a TEXT row
+             * can flash: a lo-res byte of $60 is two colour blocks and a
+             * hi-res byte of $60 is three pixels, and asking a2_rowflash
+             * about either would force-compose the row 3.6 times a second for
+             * a phase that changes not one pixel of it. */
+            for (i = 0; i < A2_ROWS; i++)
+                a2_flrow[i] = 1;            /* stale text flags, everywhere */
+            h_mode(0, 0, 0, 1);             /* HI-RES */
+            h_hires();
+            do_wake();
+            do_paint();
+            h_fsx_keyn = 2;
+            h_fsx_keyi = 0;
+            h_fsx_keyq[0] = A2H_NOKEY;
+            h_fsx_keyq[1] = 6;
+            do_cmd(A2_M_MACHINE, A2_I_TINT);
+            for (i = 0; i < A2_ROWS; i++)
+                if (a2_flrow[i])
+                    fail("a foreign frame composed a HI-RES row and left a "
+                         "stale text flash flag on it - eight text rows are "
+                         "then recomposed as hi-res on every phase flip "
+                         "(section 13.2)");
+
+            /* ================================================================
+             * THE COLUMN SPAN: A ONE-CELL WRITE COMPOSES ONE GROUP
+             * ==============================================================
+             * a2_dirty_scan fills a2_wlo/a2_whi and a2_rowwide[] for the
+             * foreign frame exactly as it does for the windowed flush, and
+             * the first version read NONE of it: every row composed all forty
+             * cells and every line compared all 280 bytes. On the ordinary
+             * change - an Applesoft COUT writing one cell - that is 8 x 15.39
+             * ms of compose and 8 x 2.15 of compare where ~16 ms was owed, in
+             * the mode whose per-line cost is the highest this port has.
+             *
+             * The arithmetic is exact and is why this is a count and not a
+             * cost row: frame 1 is the fresh claim, so 24 rows x 8 lines x 40
+             * cells = 7,680; frame 2 sees one written cell, which is one
+             * GROUP of eight cells over that row's eight lines = 64. Without
+             * the narrowing frame 2 is 320. */
+            h_mode(1, 0, 0, 0);             /* TEXT */
+            do_wake();
+            do_paint();
+            /* THE FLASH PHASE IS PARKED FIRST, so this row measures the
+             * WRITE and nothing else. a2_flash_step is polled at the top of
+             * every iteration (rule 3), and a flip forces every flashing row
+             * WHOLE - which is correct, and is 320 cells a row of arithmetic
+             * that has nothing to do with the span being asserted here. The
+             * previous fixtures leave two flashing rows on this page, and
+             * that is exactly the 640 cells an unparked clock added. */
+            a2_fl_tick = os88_ticks();
+            n_fsxcell_t = 0;
+            n_fsxput = 0;
+            n_fsxsame = 0;
+            n_fsxcmp_d = 0;
+            n_fsxcmp_s = 0;
+            cost_mark();
+            h_run_wr_in = 2;                /* the SECOND slice writes... */
+            h_run_wr_a = a2_tbase[5] + 3;   /* ...one cell of row 5, group 0 */
+            h_run_wr_v = 0xC1;              /* 'A', normal form */
+            h_fsx_keyn = 3;                 /* two frames, then Ctrl+F */
+            h_fsx_keyi = 0;
+            h_fsx_keyq[0] = A2H_NOKEY;
+            h_fsx_keyq[1] = A2H_NOKEY;
+            h_fsx_keyq[2] = 6;
+            do_cmd(A2_M_MACHINE, A2_I_TINT);
+            if (h_run_wr_in != 0)
+                fail("the fixture write never reached the Apple's memory - "
+                     "the step below is asserting nothing");
+            if (n_fsxcell_t != (long)A2_ROWS * 8 * A2_COLS + 8 * 8)
+                printf("a2uitest: FAIL - a one-cell write inside the bracket "
+                       "composed %ld cells; the first frame owes %d and the "
+                       "second owes 64, one group over eight lines "
+                       "(section 13.2)\n",
+                       n_fsxcell_t, A2_ROWS * 8 * A2_COLS),
+                fails++;
+            if (n_fsxcmp_d + n_fsxcmp_s
+                != (long)A2_SCRH * A2_FSXW + 8 * 8 * 7)
+                printf("a2uitest: FAIL - the span compare read %ld bytes; "
+                       "the first frame owes %d and the second owes 448 - "
+                       "a2_fsx_put takes a byte range for the same reason "
+                       "the composer takes a cell range\n",
+                       n_fsxcmp_d + n_fsxcmp_s, A2_SCRH * A2_FSXW),
+                fails++;
+            cost_row("colour: one cell written, + that repaint");
+
+            /* --- A REFUSED CLAIM IS LEGAL AT THE LATCH -------------------- */
+            h_mode(0, 0, 0, 1);             /* back to HI-RES for the rows
+                                             * below, which is where this
+                                             * block found the screen */
+            h_hires();
+            do_wake();
+            do_paint();
+            h_claim_refuse = 1;
+            h_fsx_runs = 0;
+            do_cmd(A2_M_MACHINE, A2_I_TINT);
+            if (h_fsx_runs != 0)
+                fail("the bracket was entered with no shadow to write into - "
+                     "the LATCH may refuse and the FLUSH may not (13.2)");
+
+            /* --- AND SO IS A REFUSED BRACKET ----------------------------- */
+            h_fsx_refuse_run = 1;
+            fb0 = h_claim_n;
+            do_cmd(A2_M_MACHINE, A2_I_TINT);
+            if (h_claims_out() != 0)
+                fail("a refused os88_fsx_run leaked the 53KB shadow");
+            h_fsx_refuse_run = 0;
+
+            /* --- A DISPLAY WITH NO FOREIGN COLOUR MODE GREYS WITH THE FACT
+             * FSXM_CGA640 and FSXM_HERC were CUT on the bench (section 13.4):
+             * 695.4 ms a frame against the windowed path's 632.6, and 34.8 ms
+             * a character row against 26.4. So a CGA offers this port nothing
+             * and the row says so rather than entering a mode that is slower
+             * than the window it came from. */
+            h_fsx_mask = 0;
+            h_fsx_kind = OS88_VID_CGA;
+            a2_menu_state();
+            if (strcmp(a2_mach_items[A2_I_TINT], "\001  Color NTSC") != 0)
+                fail("Machine > Color NTSC is LIVE on a display with no "
+                     "foreign colour mode (section 13.1)");
+            h_fsx_runs = 0;
+            do_cmd(A2_M_MACHINE, A2_I_TINT);
+            if (h_fsx_runs != 0)
+                fail("Machine > Color NTSC entered a bracket on a display "
+                     "whose caps mask has no FSXM_VGA13 bit - the greying and "
+                     "the refusal are one predicate (SPEC.md 47)");
+            h_fsx_mask = 1 << OS88_FSXM_VGA13;
+            h_fsx_kind = OS88_VID_VGA;
+            a2_menu_state();
+            h_mode(1, 0, 0, 0);             /* back to TEXT, where the rest of
+                                             * the script lives */
+            do_wake();
+            do_paint();
+        }
+
         /* --- MACHINE > POWER ON'S TWO-ROW CONFIRMATION (section 10.2) ----- */
         do_wake();
         do_paint();
@@ -4389,6 +5615,26 @@ int main(void)
             "Warp off.",
             "Warp on.",
             "Warp on - no change.",
+            /* --- WAVE 5's (sections 8, 13) ----------------------------- */
+            "Square-wave tones only.",      /* THE STATED FACT, said once the
+                                             * first time this machine makes a
+                                             * noise: what the estimator
+                                             * cannot reproduce is a fact
+                                             * about the BUILD and belongs on
+                                             * the row and in the SPEC, never
+                                             * in the About panel (section 8) */
+            "The speaker is busy.",         /* ...and the refused grant,
+                                             * bounded at eight wakes */
+            "Muted.",
+            "Unmuted.",
+            "No colour on this screen.",    /* Machine > Color NTSC on an
+                                             * adapter with no foreign mode
+                                             * that beat the windowed path
+                                             * (section 13) */
+            "No memory for colour.",        /* ...and the fullscreen-LATCH
+                                             * claim refusing, which is legal
+                                             * where the flush's is not */
+            "The screen refused it.",
             "ScrollLock: arrows, Space.",   /* section 6.6, and the widest of
                                              * the lot at 25 of 26 cells: the
                                              * kernel is eating the keys this

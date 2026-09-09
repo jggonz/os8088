@@ -91,14 +91,35 @@ changed. GR, HGR and the soft switches all do what a II Plus does.
 The window is MONOCHROME and says so: a lo-res colour is black or white by
 its luminance, and hi-res drops the half-dot shift, which is what MII and
 apple2emu do in mono. AppleWin instead shifts the picture half a dot, which a
-280-pixel monochrome band cannot express. Colour is the foreign video mode and
-is still to come, and the half-dot shift comes back with it.
+280-pixel monochrome band cannot express.
 
-Machine > Toggle Fullscreen MAGNIFIES: 2x on both axes on a VGA, 2x
-horizontally on CGA and Hercules - where 384 doubled scan lines do not fit -
-and 1:1 on an 8088, where the doubling costs more than it is worth. Ctrl+F
-and Alt+Enter are its chords, and Esc is NOT: Esc is a key on an Apple II
-Plus keyboard and goes to the machine.
+Machine > Color NTSC IS THE COLOUR, and it takes the whole machine rather
+than the whole window: 320x200x256 with the Apple's 280x192 centred in it, one
+byte a pixel, lo-res's sixteen colours and hi-res's artifact colours - the
+half-dot shift included - straight out of MII's own palette. It needs a VGA
+and greys on CGA and on Hercules with the number that cut the monochrome
+writers.
+
+CTRL+F AND ALT+ENTER LEAVE IT, and they are the only way out. There is no
+menu bar in there to pick anything from, and Esc is NOT a way out - Esc is a
+key on an Apple II Plus keyboard and goes to the machine, as every letter
+does, which is why the chords have a Ctrl and an Alt in them.
+
+Machine > Toggle Fullscreen is the other one and is a WINDOW the size of the
+screen, in monochrome, with the desktop still under it. It MAGNIFIES: 2x on
+both axes on a VGA, 2x horizontally on CGA and Hercules - where 384 doubled
+scan lines do not fit - and 1:1 on an 8088, where the doubling costs more than
+it is worth. Ctrl+F and Alt+Enter are its chords too.
+
+THE SPEAKER SOUNDS. $C030 is timed rather than sampled: the interval between
+toggles becomes a frequency and the OS's square voice plays it while the
+interval holds steady, which is what an Applesoft beep, a BEEP-style POKE
+loop and most of the era's music routines are. What it cannot reproduce is
+anything whose sound IS the waveform - click tracks, sampled speech, a
+Mockingboard - and the status row says `Square-wave tones only.` once rather
+than leaving the reader to wonder. Machine > Mute switches it off; CPU > Warp
+silences it, because a note timed off an emulated clock running as fast as it
+can is not the note the program asked for.
 
 F1 and F2 are the game buttons PB0 and PB1. On a machine with NO MOUSE the
 system takes the arrow keys and the space bar for its pointer, and the status
@@ -107,9 +128,7 @@ row says `ScrollLock: arrows, Space.` once - ScrollLock hands them back.
 Still to come, and docs/APPLE2-PORT-PLAN.md in the source tree says which
 wave has which:
 
-    colour, which is the foreign video mode at full screen
     the paddles, which answer centre
-    the speaker
     the Disk II
 
 A menu item that cannot work in this build is present and GREYED, with the

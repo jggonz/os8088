@@ -6384,6 +6384,7 @@ $(BUILD)/apple2360.img: $(APPLE2DISK)
 a2bandbench: $(BUILD)/a2band.img
 
 $(BUILD)/a2bband.bin: tests/a2band/a2bandbench.asm apps/apple2/a2band.inc \
+                      apps/apple2/a2fsx.inc \
                       tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
 	python3 tools/benchlint.py tests/a2band/a2bandbench.asm
 	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/a2band/a2bandbench.asm

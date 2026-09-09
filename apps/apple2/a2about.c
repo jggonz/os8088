@@ -313,6 +313,13 @@ static int ovl_about_show(void *win)
     if (os88_wm_clip_set(win) < 0)
         return 0;                           /* not one pixel of us is visible */
     a2_abt_up = 1;
+    /* ...AND THE SPEAKER GOES QUIET WITH THE CARD (APPLE2-SPEC section 8).
+     * The panel owns the glass and the reader is looking at it, not at the
+     * machine; a duration-0 tone would go on sounding underneath it. It is
+     * here as well as in a2_spk_service's own list because the service is a
+     * WAKE and this is the PICK - one is 55 ms later than the other, and the
+     * one the user hears is the pick. */
+    a2_sound_stop();
     if (!ovl_about_draw()) {
         a2_abt_up = 0;
         return 0;
