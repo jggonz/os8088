@@ -67,7 +67,27 @@
  *
  * THE FIRST HONEST SIZE LINE IS QUOTED IN APPLE2-SPEC section 15.0 and in the
  * plan's wave-2 paragraph: image 26,706 + bss 10,394 = 37,100 resident of
- * 61,440, APPLE2.OVL 883, 8 resident shims, largest C frame 42 of 96.
+ * 61,440, APPLE2.OVL 883, 8 resident shims, largest C frame 42 of 96. **That
+ * is wave 2's figure and not this build's**: the SHIPPING line is section
+ * 15.0.5's - image 39,042 + bss 14,344 = 53,386 resident of 61,440,
+ * APPLE2.OVL 4,349, 38 resident shims, largest C frame 54 of 96, and the file
+ * on disk 54,272 with the ROM part inside it.
+ *
+ * ----------------------------------------------------------------------------
+ * WHAT WAVE 7 ADDED (docs/APPLE2-PORT-PLAN.md)
+ * ----------------------------------------------------------------------------
+ * The polish: WELCOME.BAS on all four disks and on `make allapps` (section
+ * 16.2), `vm/xt-apple2` and `vm/286-apple2`, `tests/apple2part.py`, the
+ * measured XT speed - **0.41% of a 1.02 MHz Apple at the prompt and 0.51% in
+ * a BASIC loop, so the status row reads 0%** (section 16.4.1) - and colour's
+ * price said once on the CPU_8086 tier
+ * (section 13.1). Nothing in the machine changed.
+ *
+ * AND THE REVIEW ADDED ONE THING THAT IS NOT POLISH: `a2_fsx_main` had no
+ * TIER PACING, so on the very machine the new colour message is about it
+ * issued a 140 ms frame between every 256-cycle slice (APPLE2-SPEC section
+ * 13.2). It carries `a2_flush`'s term now, at four ticks rather than two,
+ * which is the ratio a colour row costs against a windowed one.
  * ==========================================================================*/
 
 #include "os88.h"

@@ -5,24 +5,43 @@ APPLE2.O88 is a windowed 48K Apple II Plus: a 6502 in a 64KB heap claim,
 Applesoft BASIC and the Autostart Monitor in ROM, and the machine's 280x192
 screen composed into 1bpp bands and blitted into a window.
 
-TWO FILES AND A LICENCE, IN ONE FOLDER
---------------------------------------
+THREE FILES AND A LICENCE, IN ONE FOLDER
+----------------------------------------
 APPLE2.O88  the package - and the Apple II+ ROMs are INSIDE it, 14,848 bytes
             appended past the program and claimed and read at launch before
             anything else runs: Applesoft and the Autostart Monitor, the
             character generator, and the Disk II boot ROM
 APPLE2.OVL  its second segment - the menu commands, Load and Save Program,
             the disk dialog and the About panel
+WELCOME.BAS a short Applesoft program written for this port. Double-click it
+            and the machine starts with it already loaded: type RUN, or LIST
+            to read it. It shows the text page, INVERSE text, lo-res with
+            MIXED's four text rows, hi-res, and the speaker - and nothing
+            this build does not draw.
 COPYING     the GNU General Public License, version 2, plus the MIT notices
             of the two MIT-licensed emulators this port is derived from. It
             is not read by the program; it is here because the licence has to
-            travel with the binary.
+            travel with the binary. (Installed from The Wire, the flat
+            catalog gives it and this file the names COPYING.A2 and
+            APPLE2.TXT - the same two documents under names that cannot
+            collide with another program's.)
 
-The first two must be in the SAME folder: the .OVL is resolved in the
-launching instance's current directory. A disk with no APPLE2.OVL is a
+APPLE2.O88 AND APPLE2.OVL must be in the SAME folder, and WELCOME.BAS must be
+there too if you want to open it by double-click: the .OVL is resolved in the
+launching instance's current directory, and a double-click on a document
+leaves that directory on the DOCUMENT's. A disk with no APPLE2.OVL is a
 program whose menu commands refuse, politely - the machine itself still runs
 and still draws, because the character-generator decode is in the package and
-not in the overlay.
+not in the overlay. The licence is a document and is read by nobody but you,
+so it may sit wherever it lands.
+
+HOW LONG WELCOME.BAS TAKES, ON THE SLOWEST MACHINE THIS RUNS ON. On a 4.77MHz
+XT the text screen is up 6 seconds after RUN, the lo-res screen takes about a
+minute and a half to draw its bands, and the hi-res fan about a minute and
+three quarters. Both draw progressively - a band or a line at a time - so you
+can watch them arrive. It is the emulated Apple that is slow and not the
+window; the same program is a blink on a 486. The numbers were measured on
+the machine, not estimated.
 
 LICENCE
 -------
@@ -139,3 +158,13 @@ There is no 3.5MHz mode and no throttle: the 6502 runs the whole of every
 slice the OS gives it, and the percentage at the right-hand end of the status
 row is what that came to, measured against a 1.02 MHz Apple. CPU > Warp is
 this port's speed control - it lifts the ceiling the slice may grow to.
+
+HOW FAST IT ACTUALLY IS, MEASURED AND NOT ESTIMATED. On an IBM PC/XT - an
+8088 at 4.77 MHz - the machine runs the Apple at 0.41% of 1.02 MHz at the
+prompt and 0.51% inside a BASIC loop, so the status row reads 0% and stays
+there: the `]` prompt answers, typing arrives, and a listing that would take
+a real Apple a second takes minutes.
+That is a machine to LOOK at rather than to use. It is usable on a 386 and
+comfortable on a 486; the percentage on the row is the honest number for
+whatever you are running it on, and it is measured every second rather than
+assumed.

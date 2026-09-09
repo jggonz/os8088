@@ -191,6 +191,12 @@ make apple2disk #   an Apple II Plus — a 6502 in a 48K claim, the II+'s video
                 #   memory model's own boundaries, every row with a negative
                 #   control that must fail; minutes, so it is NOT in `all` —
                 #   it arrives with the core.
+                #   `make apple2disk` puts FIVE files in one APPLE2/
+                #   folder on all four geometries — the package, the
+                #   overlay, README.TXT, COPYING and `WELCOME.BAS`, an
+                #   Applesoft listing `tools/a2bas.py` tokenises from
+                #   apps/apple2/welcome.a2b against the token table in the
+                #   PINNED ROM itself, `--selfcheck` in the recipe.
                 #   THE CONTRACT IS docs/APPLE2-SPEC.md, not a section of
                 #   SPEC.md — and apps/apple2/ is GPL-2-or-later by way of
                 #   VICE, which the rest of this tree is not
@@ -374,7 +380,8 @@ controller, so no XT profile can host one),
 `386sx`, `386`, `386-sound`, `386-ps2`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
 `386-runcpm`, `xt-c64`,
-`286-c64`, `386-c64`, `386-apple2`, `xt-weave`, `386-weave`, `xt-weave-256`;
+`286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,
+`xt-weave`, `386-weave`, `xt-weave-256`;
 plus `marty` (MartyPC). **`386-ps2` is the only machine here with a PS/2
 mouse** — every other config is `mouse_type = msserial`, which is why §9.9
 shipped and went untested on anything but QEMU for months; it is a Packard
@@ -401,14 +408,18 @@ PACMAN.O88's 4.14) comes off MartyPC, not off it —
 geometry because the three disks carry different software and the machines
 run at different speeds — which for a CP/M game IS the play speed (§74.5,
 §74.6) — `xt-c64`/`286-c64`/`386-c64` the C64 emulator's (C64-SPEC §14.3,
-one per geometry for that same reason), `386-apple2` the Apple II+
-emulator's (APPLE2-SPEC section 16.4 — a copy of `vm/386-c64` with **only**
-`fdd_02_fn` and the uuid changed, and the ONLY one of its family so far:
-`xt-apple2` and `286-apple2` land in the polish wave *with the measurement
-that justifies them*, because an XT target before anyone has measured the
-port there is a claim and not a machine), and
+one per geometry for that same reason),
+`xt-apple2`/`286-apple2`/`386-apple2` the Apple II+ emulator's (APPLE2-SPEC
+section 16.4 — each a copy of the corresponding `vm/*-c64` with **only**
+`fdd_02_fn` and the uuid changed; the 386 landed in wave 1 and the other two
+in the polish wave *with the measurement that justifies them*, because an XT
+target before anyone has measured the port there is a claim and not a
+machine. **`xt-apple2` is where that measurement was taken** and the answer
+is **0.41% of a 1.02 MHz Apple**, so the status row reads `0%` — an XT
+reaches the `]` prompt and answers a keystroke and is a machine to look at,
+which is why the Wire record is tier 3), and
 `xt-weave`/`386-weave`/`xt-weave-256` the Weave family's
-(WEAVE-SPEC §13.1) — the sixteen that put a dedicated
+(WEAVE-SPEC §13.1) — the eighteen that put a dedicated
 floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
 disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
 family on one floppy — so it is where that geometry of it is booted at all,

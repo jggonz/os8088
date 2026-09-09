@@ -1535,3 +1535,145 @@ half of that story is the machine's and which was the instrument's.
 ### Wave 6 - the follow-up PR
 
 ### Wave 7
+
+**The polish, the documents, the disks, the two 86Box machines and The Wire -
+and the wave's one number is the one nobody had.**
+
+**THE SIZE LINE**: `os88pkg: 'APPLE2' entry=+0x0070 image=39042 bss=14344
+icon=yes assoc=1` - resident **53,386** of 61,440, **8,054 spare**,
+`APPLE2.OVL` **4,349** unchanged, **38** resident shims, largest C frame **54**
+of the 96-byte cap, the FILE on disk **54,272** (the ROM part starts at a
+sector, so 448 bytes of slack absorb an image change whole). `APPLE2-SPEC`
+15.0.5 has the arithmetic: **+78** for the one-time colour fact, **+80** for
+the foreign frame's tier pacing that the review found missing, **-58** given
+back to every C package in the tree and **-2** for a shorter status message.
+The **54,000 resident gate has 614 bytes in it** and the line is **1,614**
+under the 55,000 split trigger, so the deferred Disk II wave's ~1,200 leave
+**414**.
+
+**THE MEASURED XT SPEED, WHICH IS THE WAVE'S HEADLINE AND IS NOT WHAT THIS
+PLAN PREDICTED.** On MartyPC's `os8088_5150_cga` - docs/FIELD-MACHINES.md's
+calibration machine, an 8088 at 4.77 MHz with a CGA and two 360K drives -
+booting `build/os8088-360.img` with `build/apple2360.img` in B:, the machine
+runs the Apple at **0.41% of 1.02 MHz idle at the `]` prompt - the same mean
+in all THREE runs - and 0.51% inside a RUNNING
+`FOR I = 1 TO 1000 : NEXT`** (0.52 / 0.51 / 0.51 over three runs of a dozen
+one-second windows each). **The loop rows are a review re-take**: the first
+driver typed the line in one burst, the BIOS's 15-key buffer dropped
+everything after `FOR I = 1 TO 10` including RETURN, and both the rows and
+`wave7-xt-loop.png` were the machine at the prompt with a half-typed command
+on it - which is why they had read the same as idle. The status row reads **`0%`**, honestly: the field is
+whole per cent and 0.4 truncates. **The risk section above predicted 3-4% and
+was out by eight**, and the reason is written down rather than explained away:
+it divided 8088 clocks by 6502 instructions and left out the SLICE, which is
+`A2_SLICE_MIN` = 256 cycles once a wake, 18.2 wakes a second, 4,659 emulated
+cycles a second, 0.46%. Lifting that ceiling is a scheduler decision with a
+UI-latency price and was not taken here. `APPLE2-SPEC` 16.4.1 is the record,
+with its date and machine.
+
+**AND THE FIGURE IS WHAT THE TIER, THE README AND THE WIRE PAGE NOW SAY.**
+Tier **3** (`486+`), the C64's tier for the C64's reason; `README.TXT` says an
+XT is a machine to look at and a 386 is where the port is usable; the Wire
+page says the same in the words a reader meets first.
+
+**`WELCOME.BAS`, AND IT IS TOKENISED FROM THE PINNED ROM'S OWN TABLE.**
+`tools/a2bas.py` reads Applesoft's TOKEN.NAME.TABLE at `$D0D0` out of
+`APPLE2.ROM` itself - 107 names from `END` to `MID$`, asserted - and
+implements the ROM's PARSE at `$D559`; `--selfcheck` LISTs the tokenised
+program back through the same table and requires it to agree with the source.
+42 lines, **884 bytes**. The proof that outranks the gate is the machine's
+own `LIST`: `build/port-shots/wave7-05-welcome-list.png` is Applesoft printing
+the program back, and `wave7-06-welcome-run.png`, `wave7-07-welcome-gr.png`
+and `wave7-08-welcome-hgr.png` are it RUNNING - the text page with INVERSE,
+the lo-res bars with MIXED's four text rows, and the hi-res fan. It claims
+nothing this build does not draw: no `FLASH`, which the `CPU_8086` tier
+refuses; where it names colour it names Machine > Color NTSC and a VGA; and
+**the geometries it prints are MIXED's** - `40 X 40` and `280 X 160`, not the
+full-screen `40 X 48` and `280 X 192` the first draft printed under a mixed
+screen (`APPLE2-SPEC` 16.2 has the correction and why it counts as a false
+claim). `wave7-13-colour-gr.png` and `wave7-14-colour-hgr.png` are the colour
+sentence being true - the same program's bars and fan in `FSXM_VGA13`.
+
+**IT ARRIVES BY DOUBLE-CLICK.** `wave7-04-welcome-launch.png` is a cold
+machine opened straight from `WELCOME.BAS` in the Disk window, which is the
+`CC_ASSOC` block of wave 4 doing what it was declared for.
+
+**COLOUR'S PRICE IS ON THE GLASS ONCE**, on the `CPU_8086` tier and on the way
+OUT of the first session, because there is no status row under the bracket to
+read one on: `Colour: 1.7 s a scroll.`, 23 cells of 26, from
+`APPLE2-SPEC` 7.9.4's own measurement of a SCROLL. The row stays LIVE on every
+tier - that decision did not move. **The RECURRING cost and not the entry
+one**: the first draft said the 3.4 seconds of a first frame, which is paid
+once and is behind the reader by the time the row exists again. **And it
+names the SCROLL and not `per RETURN`**, the review's second correction to
+the same 26 cells: 1,747.2 ms is the whole TEXT page, where a RETURN in the
+MIXED modes `GR` and `HGR` select scrolls four rows for ~304 ms.
+
+**THE SDK'S THREE OVERLAY REFUSALS WERE ALL BEING CUT OFF THE GLASS**, in
+every C package in the tree, and nothing was checking (`APPLE2-SPEC` 17.3).
+`TOAST_MAX` is 24 and truncates rather than refusing, so
+`APPLE2.OVL is not on this disk` reached a reader as
+`APPLE2.OVL is not on thi`. They are `No <NAME>.OVL`, `No RAM: <NAME>` and
+`Old <NAME>.OVL` now, **sized from the SDK's own 15-character name field** and
+not from the longest name this tree happens to hold, with a gate in
+`tests/unit/t_mirror.py` - a FAST-tier row, so every `make` runs it - that
+reads the cap out of `kernel/toast.inc`, the literals out of `crt0.asm`, the
+name cap out of `crt0.asm`'s `%fatal` and the names out of every shim in the
+tree. It gives **-58 image** back to every C package with an overlay.
+`build/port-shots/wave7-33-noovl-refusal.png` is the whole sentence on the
+glass at last, on a disk with `APPLE2.OVL` deleted, beside a machine still
+running at `]`.
+
+**THE FOUR DISKS ARE FIVE FILES IN ONE FOLDER** and `make allapps` - and
+therefore `make live` - carries `APPLE2\` as a folder of its own: 93 of a
+360KB disk's 354 clusters, each geometry `--verify`'d in its recipe. The
+1.44MB everything disk is **2,720 of 2,847** clusters and the 1.2MB one
+**2,244 of 2,371**.
+
+**`vm/xt-apple2` AND `vm/286-apple2`**, each a copy of the corresponding
+`vm/*-c64` with `fdd_02_fn` and the uuid changed and nothing else, with
+`make xt-apple2` / `make 286-apple2` beside `386-apple2`.
+
+**AND THE REVIEW OF THIS WAVE FOUND ONE THING THAT IS NOT POLISH**, which is
+recorded here rather than folded into the paragraphs above. `a2_fsx_main` -
+the fullscreen colour bracket - had the "did anything change" gate the
+windowed flush has and **not the tier pacing**, so on the `CPU_8086` tier this
+wave had just measured, and had just printed a message about, it issued a
+140 ms frame between every 256-cycle slice: `os88_fsx_wait` returned at once
+because the frame had already overrun the tick, and the emulated machine ran
+at roughly a third of the speed the WINDOW manages on the same box.
+`APPLE2-SPEC` 13.2 has the arithmetic and the fix - `a2_fsx_tick` beside
+`a2_fsx_ok`, and four ticks where the window takes two, which is the ratio a
+colour row costs against a windowed one - and it cost **80 bytes of image and
+2 of bss**. The review also caught three documentation defects worth naming:
+`wave7-xt-loop.png` showed a HALF-TYPED command at the `]` prompt rather than
+a running loop (and so did the loop measurement behind it - see the corrected
+table in `APPLE2-SPEC` 16.4.1); `a2_pct` was named in two places as the
+instrument the XT figure came off when the figure came off `a2_c64u`; and the
+size argument in 13.2 that keeps the biggest redraw defect in this package
+UNFIXED was quoting a headroom figure two waves stale.
+
+**AND `WELCOME.BAS`'s OWN COST IS MEASURED NOW** (`APPLE2-SPEC` 16.2.1). Its
+header priced the loops it did NOT ship and put no number on the ones it did.
+On the 5150: the text screen is **6.0 s** from `RUN`, the lo-res screen
+**91.2 s** and the hi-res screen **106.2 s**, off the BIOS tick counter, with
+the package launched by DOUBLE-CLICK on the document. The loops keep their
+size - halving a minute and a half is still a minute - and the header and
+`README.TXT` carry the figure instead, which is the port's posture everywhere
+else.
+
+**`tests/apple2part.py`** is `c64part.py`'s shape in the soak tier: the ROM is
+not a file on the disk, the part is one ASSET of 14,848, `os88_part_seg(0)` is
+what the C put in `a2_m.romseg`, three windows of the ROM in the guest equal
+`build/apple2-rom/APPLE2.ROM`, the RESET vector at `$FFFC` reads `$FA62`, and
+**both display tables exist after `os88_main` and before any wake** - the
+negative control for keeping the chargen decode and the reverse table off the
+overlay. It passes on `os8088_5150_herc_gla_144`.
+
+**AND ONE DEFECT IS RECORDED RATHER THAN TIDIED** (`APPLE2-SPEC` 9): on the
+MartyPC XT the mode field reads `TEX` while the row's own shadow holds `TEXT`,
+read out of the guest's CGA VRAM byte for byte. It does not reproduce under
+QEMU's `VIDEO=cga`, nothing in this wave touched `a2_status`, and the shape
+that fits is a first full-row draw cut short with the shadow recording it as
+drawn. It is open, it is one field on one machine class, and the SPEC names
+the first thing to try.

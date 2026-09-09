@@ -1965,6 +1965,64 @@ Every message literal in `apps/apple2/*.c` is walked against the row's cell
 cap by `build.sh` (section 16.6), with an explicit expected **minimum**, so a
 corpus of zero literals is a failure and not a pass.
 
+**THE UNITS ARE WHOLE PER CENT AND ON AN XT THAT IS `0%`** (section 16.4.1):
+measured on MartyPC's 4.77 MHz 8088, the machine runs the Apple at **0.41% of
+1.02 MHz idle and 0.51% inside a BASIC loop**, and both truncate to 0. The
+field is not broken there and it is not rounded up either - a `0%` that is
+honest is the point of measuring rather than estimating, and the arithmetic
+that produces it is `a2_budget` at `A2_SLICE_MIN`, one wake a tick.
+
+**AND ONE THING THE GLASS SHOWED THAT THIS DOCUMENT CANNOT YET EXPLAIN, WHICH
+IS RECORDED RATHER THAN TIDIED.** On that same MartyPC XT the mode field reads
+**`TEX`**: the row's shadow holds `TEXT` and the CGA VRAM under it holds three
+glyphs and a blank cell, read out of the guest byte for byte with
+`_a2_st_glass` beside it - **a VRAM read and not a screendump**, which is why
+no file is cited here: the difference is four bytes of CGA text memory and a
+photograph of them would prove less than the bytes do. It is
+**not** reproducible under QEMU's `VIDEO=cga`, where the same build draws
+`TEXT` - the difference between the two runs is `a2_gox` (8 there, 0 here) and
+the `CPU_8086` tier's every-other-tick flush. The shape that fits every
+observation is a FIRST full-row draw that was cut short and a shadow that
+recorded it as drawn, so no later delta ever repairs the middle: the `0%` at
+cells 40-41 is on the glass because the speed field changed again afterwards
+and its own delta redrew it. Nothing in wave 7 touched `a2_status`. It is
+**open**, it is one field on one machine class, and it belongs to whoever
+takes the Disk II follow-up.
+
+**AND ONE ROUTE IS ALREADY CLOSED, WHICH IS WORTH MORE THAN A GUESS.** An
+earlier draft of this paragraph sent the next reader after "invalidate
+`a2_st_ok` wherever `a2_sh_ok` is invalidated" - and that is a no-op:
+`a2_sh_ok` is assigned 0 at exactly ONE place in the package,
+`a2_sh_inval` (`a2scr.c:428`), and `a2_st_ok = 0` is two statements below it
+at 430. There is no site where one is invalidated and the other is not, so
+that session would be spent proving it. It is also the wrong SHAPE of lead: a
+shadow that says drawn while the glass is not is a TRUST failure and not a
+missed invalidation, and this package already knows the difference one path
+along - `a2_row_font` TESTS `os88_gfx_blit1`'s answer, and the comment above
+it says why ("Discarding the answer and updating the shadow anyway is worse
+than a missing row... the row is never retried").
+
+**`a2_status` is the one shadow-keeper here that cannot ask.**
+`os88_font_run` returns `void` (`apps/cc/os88.h:591`), so cells 0-41 are
+recorded into `a2_st_glass` (`a2scr.c:1168-1171`) whatever the kernel put on
+the glass, and no later delta can repair a cell whose text does not change
+again - which is exactly the observed pair, `0%` surviving at cells 40-41
+because the speed field changed and `TEXT`'s fourth cell not surviving
+because it did not. So the two open leads are:
+
+- **the repair shape is a periodic or on-suspicion full-row rewrite** - clear
+  `a2_st_ok` every N flushes, or on the first flush after `a2_gox`/`a2_gw`
+  move - rather than an invalidation hunt. A row that is redrawn whole
+  occasionally cannot stay wrong forever, and a full row is ONE `font_run` of
+  42 cells - the same call the delta arm already makes, only wider - which is
+  a cost this document can afford occasionally and could not on every flush.
+- **the reproduction should read `_a2_st_glass` AND `_a2_gox`/`_a2_gw`/
+  `_a2_gsty` beside `m.vram()`** on a MartyPC launch on `os8088_5150_cga` -
+  the shadow, the pen and the pixels in the same breath. `a2_gox` is the one
+  recorded difference between the failing run and the passing one (0 against
+  8), and the row's x is `a2_gox + f * 8` (`a2scr.c:1163`), so it is the first
+  thing the pair has to agree about.
+
 **THE STRIP IS `A2_STATH` = 10 ROWS AND `os88_font_run` DRAWS EIGHT, SO THE
 FULL-REDRAW ARM FILLS IT FIRST.** `a2_border_fill` stops at `a2_gsty - 1` and
 the lettering stops at `a2_gsty + 7`, so scan lines `a2_gsty+8` and `+9` were
@@ -2774,6 +2832,54 @@ says**; greying it on the target machine is a scope cut and is therefore the
 maintainer's to take, not this document's. **What is not left to inference is
 the price**, which is the table above.
 
+**AND FROM WAVE 7 THE PRICE IS SAID ON THE GLASS, ONCE.** The row stays live
+on every tier - that is the decision above and it did not move - and the
+FIRST colour session on the `CPU_8086` tier leaves
+**`Colour: 1.7 s a scroll.`** on the status row: 23 cells of 26, and the
+number is section 7.9.4's measured **1,747.2 ms** for a SCROLL - 184 lines
+recomposed - rounded to the tenth of a second a reader can use.
+
+**IT NAMES THE OPERATION AND NOT AN EVENT THAT SOMETIMES CAUSES IT**, which
+is a second review correction to the same row. The draft that shipped into
+review read `Colour: 1.7 s per RETURN.`, and 1,747.2 ms is a scroll of the
+whole 24-row TEXT page. `GR` and `HGR` set the Apple's text window to rows
+20-23 (section 7.4), and `WELCOME.BAS` selects exactly that, so a RETURN in
+MIXED moves three rows up and clears one - **32 scan lines, ~304 ms** by
+section 7.9.4's own 7.34 + 2.15 per line - and a RETURN that is not on the
+bottom line at all is one row's **140.4 ms**. So `per RETURN` was **5.7x
+high in the two modes half of this port's own demo lives in**, and `a
+scroll` is true in every mode. It is the same standard section 16.2 applied
+to `WELCOME.BAS`'s own `40 X 40`: a number this document prints has to be
+true of what the reader is looking at.
+
+**IT IS THE RECURRING COST AND NOT THE ENTRY COST, WHICH IS A CHANGE THIS
+SECTION MADE AFTER REVIEW.** Section 7.9.4 measures three figures on this
+tier: **3,365.3 ms** for a whole first frame, **140.4 ms** for one character
+row - a keystroke - and **1,747.2 ms** for a scroll of the full TEXT page.
+The first draft said the 3.4 seconds, and that is the
+one number of the three that cannot change what the reader does next: it is
+paid once, it is already behind them by the time the status row exists again,
+and a reader who enters colour and stays for a session is paying 1.7 s a
+scroll with nothing said about it. The row is one message long, so it says the one a
+reader can act on. `a2_fsx_told` is the latch and it is once
+per RUN, on `Square-wave tones only.`'s shape (section 8) - a fact is news the
+first time and furniture the second. **It cannot be exercised on either
+emulator in this tree and section 16.4.1 says why**: the combination it needs -
+an 8088 with a VGA that offers `FSXM_VGA13` - does not exist here, so what
+stands behind it is the length gate, `a2uitest`'s `msgs[]` and four lines
+under one flag.
+
+**IT IS SAID ON THE WAY OUT AND NOT ON THE WAY IN**, and that is the status
+row's arithmetic rather than a preference: `a2_say` stamps `a2_msg_until` five
+seconds ahead, the bracket owns the whole screen for as long as the reader
+stays in colour, and **there is no status row under it to read one on**. A
+message raised before `os88_fsx_run` has expired unread by the time a row
+exists again. The first tick after the bracket returns is the first moment the
+sentence can be read, and by then the reader has spent the 3.4 seconds of the
+first frame and knows what a line costs before deciding to come back. The three refusals (`No colour on this screen.`, `No memory for
+colour.`, `The screen refused it.`) still win where they apply, because they
+are said on the arms that never reach the bracket at all.
+
 **WHAT THE CUT GAVE BACK IS NOTHING, AND THAT IS THE DESIGN AND NOT A
 DISAPPOINTMENT.** Section 15.4's lever 3 - *"the Hercules writer becomes the
 CGA640 writer at a different stride"* - was taken at the DESIGN rather than as
@@ -2828,8 +2934,10 @@ it is a second damage model: `a2_shsrc` maintained per composed row,
 `a2_sh_mkey` and `a2_sh_phase` as the two proofs that the recorded sources
 still describe the recorded pixels, the probe budget, the `a2_lnf` refusal, the
 vacated rows' forced marks and their flash flags. A foreign copy of it needs
-all six plus a mover for the framebuffer AND the shadow, and the wave-5 size
-gate has 716 bytes in it. So the omission is recorded with its price and with
+all six plus a mover for the framebuffer AND the shadow, and **the 54,000
+resident gate has 614 bytes in it** (section 15.0.5, which is where the live
+figure is kept - it was 716 when this paragraph was written against wave 5's
+line, and every wave since has spent from it). So the omission is recorded with its price and with
 the shape of the fix - one `rep movsw` of `(192 - 8k) x 280` bytes up `k x 8`
 rows in each of the framebuffer and the shadow (~280 ms against ~1,750, a 6x),
 plus `a2_fsx_frame` maintaining `a2_shsrc` with `a2_rowcopy` exactly as
@@ -2847,6 +2955,44 @@ and the foreign loop now has the same one: `a2_wrote()` is the single term the
 C side cannot see, and every other producer already sets `a2_dirty_any`
 because they all go through `a2_line_dirty`/`a2_line_force`. An idle colour
 session is one byte read and `fsx_wait`'s halt.
+
+**AND IT IS PACED BY TIER TOO, WHICH IS `a2_flush`'s SECOND TERM ONE PATH
+ALONG AND WAS MISSING FOR A WAVE.** Section 7.8's tier table gave the windowed
+flush its `a2_tier_slow ? (t - a2_fltick >= 2) : (t != a2_fltick)` because a
+496.8 ms repaint cannot keep up with a 55 ms tick. **The foreign frame is more
+expensive, not less** - 140.4 ms for ONE character row against the windowed
+row's 26.4, a **5.3x** - and it was issued at 18.2 Hz with no such term at
+all. The consequence is arithmetic rather than taste: on the `CPU_8086` tier
+`a2_budget` sits at `A2_SLICE_MIN` = 256 (section 16.4.1), a one-row frame is
+**2.5 ticks during which no slice runs**, `fsx_wait` then returns at once, and
+the loop spends the session at one 256-cycle slice per ~200 ms where the
+window gets one per 55. `a2_fsx_main` carries the tier term now - **four**
+ticks where the window takes two, which is the ratio the row costs - so
+several slices accumulate per frame instead of one, at the **same pixels**:
+the dirty set is exact and accumulates across the skipped ticks, so a deferred
+frame draws the same picture later rather than a different one. What it costs
+is latency, which is the trade section 7.8 already took for the window. It
+cost **80 bytes of image and 2 of bss** (section 15.0.5), and `!a2_fsx_ok` sits
+outside the pacing on both arms because the first frame of a session is owed
+all 192 lines and is what stamps `a2_fsx_tick` in the first place. **Wave 7
+measured that tier and shipped a sentence about it without pricing the loop
+the sentence is about**, which is what the review caught.
+
+**AND THE GATE FOR IT IS A TEXT ROW, WHICH IS SAID RATHER THAN DRESSED UP.**
+`apps/apple2/build.sh`'s `a2pace` requires BOTH redraw paths to name a tier
+term and a stamp - `os88_onwake` on `a2_fltick`, `a2_fsx_main` on
+`a2_fsx_tick`, `a2_tier_slow` in each - and refuses a `a2_fsx_tick` that
+nothing assigns. It is a text gate because neither of the two things that
+would be better can reach this loop: `a2uitest` drives the bracket with the
+6502 STOPPED, so nothing marks a line between iterations and neither arm
+composes a second frame to count; and no emulator in this tree can host the
+slow arm at all, for section 16.4.1's reason - it needs a `CPU_8086` machine
+with a foreign-mode-capable VGA and there is none. What the row refuses is the
+SHAPE going away, which is exactly how the term went missing: the gate was
+copied from `a2_flush` and the pacing beside it was not. Its negative control
+was run - deleting the term gives
+`a2pace: apps/apple2/a2scr.c: a2_fsx_main does not mention a2_fsx_tick`, exit
+1 - and restoring it passes.
 
 **AND THE ROW'S EARLY-OUT IS FIRST, WHICH IS THE THIRD SUBSTITUTION THIS
 SECTION USED TO SAY THERE WERE ONLY TWO OF.** `a2_flush` computes `drew` and
@@ -3487,6 +3633,71 @@ the largest transient claim this package takes, it is why the harness's own
 scratch segments had to grow from 48KB to 54, and a refusal there is legal and
 greys with the fact where the flush's could never be.
 
+### 15.0.5 THE END OF WAVE 7, MEASURED
+
+**The polish wave spent 158 bytes and gave 60 back**, 58 of them to every C
+package in the tree, which is the shape of a wave whose features are a
+message, a listing, a set of documents and one redraw fix the review found.
+
+| | end of wave 5 | end of wave 7 | moved |
+|---|---|---|---|
+| resident image | 38,944 | **39,042** | **+98** |
+| bss | 14,340 | **14,344** | **+4** |
+| **resident total** | 53,284 | **53,386** of 61,440 | **+102**, 8,054 spare |
+| `APPLE2.OVL` | 4,349 | **4,349** | 0 |
+| resident shims | 38 | **38** | 0 |
+| largest C frame | 54 | **54** bytes | the 96-byte cap |
+| the FILE on disk | 54,272 | **54,272** | the ROM part starts at a SECTOR |
+
+**The `os88pkg` line, verbatim:**
+
+```
+os88pkg: 'APPLE2' entry=+0x0070 image=39042 bss=14344 icon=yes assoc=1
+os88pkg:   part 0 ASSET   -    sector 77 len 14848  <- build/apple2-rom/APPLE2.ROM
+```
+
+Where the 102 went, and there are groups pulling both ways:
+
+| group | image | bss |
+|---|---|---|
+| section 13.1's one-time price on the `CPU_8086` tier - the `a2_fsx_told` latch, the arm and the literal | **+78** | +2 |
+| section 13.2's tier pacing for `a2_fsx_frame` - `a2_fsx_tick` and the predicate around the call in `a2_fsx_main` | **+80** | +2 |
+| the SDK's three overlay refusals, shortened to fit `TOAST_MAX` (section 17) | **-58** | 0 |
+| `Colour: 1.7 s per RETURN.` becoming `Colour: 1.7 s a scroll.` (section 13.1) | **-2** | 0 |
+| **net** | **+98** | **+4** |
+
+**The SDK half is measured and not derived**, and it is measurable here
+because the strings are in this package's own image: the same tree with the
+OLD literals restored builds `image=39022` against the 38,964 of the build
+that carried only wave 7's first three groups, so the shortening is **-58**
+for APPLE2 exactly as it is for every other C package with an overlay
+(section 17.3).
+
+**AND THE TWO GATES ARE RESTATED HERE, WHICH THE FIRST DRAFT OF THIS SECTION
+DROPPED.** Section 15.0.4 gives both against wave 5's line and nothing
+restated them against wave 7's, so a reader of 13.2 or of the Disk II
+follow-up was quoting a number that had moved:
+
+- **the 54,000 resident gate now has 614 bytes in it** (it had 716 at the end
+  of wave 5, and 694 at the end of wave 7's first draft);
+- the line is **1,614 under SPEC.md 73.9's 55,000 split trigger**, so Disk
+  II's ~1,200 resident bytes leave **414** rather than wave 5's 516 - which
+  is the number that wave opens on, and it is smaller than it was. Section
+  13.2's no-fix argument spends from the same 614, so it cites this section
+  and not 15.0.4.
+
+**THE FILE ON DISK DID NOT MOVE AND THAT IS ARITHMETIC RATHER THAN LUCK.**
+`os88pkg` starts a part at a 512-byte SECTOR boundary (SPEC.md 2.1.1), so the
+image has 448 bytes of slack under sector 77 before the file grows at all: an
+image change of -58 or +78 is absorbed whole. `WIRE_FILEMAX` is 64,512 and the
+file is 54,272, so The Wire's per-file cap has 10,240 bytes of headroom
+(section 18).
+
+**AND THE FOLDER IS FIVE FILES NOW** (section 16.2): `WELCOME.BAS` is 884
+bytes of tokenised Applesoft, so the whole payload is 54,272 + 4,349 + 884 +
+9,500 + 21,533 = **90,538 bytes**, which `os88disk.py --verify` reports as
+**93 of a 360KB disk's 354 clusters**, folder directory included.
+
 ### 15.1 The headline - PLANNED
 
 | | PLANNED |
@@ -3726,11 +3937,11 @@ across all four surfaces in wave 7.
 ### 16.2 Disks
 
 **Four geometries**, each `os88disk.py --verify`'d in the recipe, each
-carrying **`APPLE2.O88` + `APPLE2.OVL` + `README.TXT` + `COPYING` in ONE
-folder `APPLE2/`** - plus **`WELCOME.BAS`, which is PLANNED and lands in wave
-7**, with Load Program (wave 4) that opens it. It is listed here because the
-folder is the binding shape; it is not on a disk this branch builds, and the
-Makefile's four `--verify` figures are the four files above.
+carrying **`APPLE2.O88` + `APPLE2.OVL` + `WELCOME.BAS` + `README.TXT` +
+`COPYING` in ONE folder `APPLE2/`** - five files, since wave 7 added the
+listing. The whole folder is **90,538 bytes**, which `--verify` reports as
+**93 of a 360KB disk's 354 clusters**, the folder's own directory cluster
+included.
 
 **One folder, and it is a correctness requirement rather than a layout
 choice**: SPEC.md 73.14 resolves an overlay in the **launched-from**
@@ -3745,12 +3956,96 @@ other thing goes.**
 On `make allapps` and on `make live` the package gets **a folder of its own,
 `APPLE2\`, never a place in `APPS/`** (SPEC.md 19.9, SPEC.md 19.10).
 
-**`WELCOME.BAS` - PLANNED, wave 7.** An Applesoft listing written for this
-port that demonstrates what this build actually renders - text, GR, HGR -
-**and nothing it does not**, on CWORD's `WELCOME.RTF` rule. It cannot ship
-before the wave that can open it (Load Program is wave 4) and before the modes
-it demonstrates exist (wave 3): a listing on the disk that names GR and HGR on
-a build with neither would be exactly the claim that rule forbids.
+**`WELCOME.BAS` - SHIPPED, wave 7.** An Applesoft listing written for this
+port that demonstrates what this build actually renders - text, INVERSE, GR
+with MIXED's four text rows, HGR, and the speaker - **and nothing it does
+not**, on CWORD's `WELCOME.RTF` rule. It could not ship before the wave that
+can open it (Load Program is wave 4) and before the modes it demonstrates
+exist (wave 3): a listing on the disk that names GR and HGR on a build with
+neither would be exactly the claim that rule forbids. It does not use `FLASH`,
+which the `CPU_8086` tier refuses and greys with its cost (section 7.8) - a
+listing that said *"this flashes"* would be false on the machine this port is
+aimed at - and where it names colour it names **Machine > Color NTSC and a
+VGA** (section 13.1) rather than implying the window has any.
+
+**AND THE RULE BITES ON A GEOMETRY, WHICH IS HOW IT WAS CAUGHT.** The first
+draft printed `GR: 40 X 48 BLOCKS` and `HGR: 280 X 192` - the FULL-SCREEN
+fields of both graphics modes - while the screen under the sentence was
+**MIXED**, which is the top 160 scan lines in the graphics mode and the bottom
+32 in text (section 7.4). `GR` and `HGR` are the Applesoft verbs that select
+mixed, so the lo-res field is **40 x 40** and the hi-res one **280 x 160**,
+and the program already knew: line 290's `HPLOT X,0 TO 279 - X,159` stops at
+159 because 160 is the field. It now prints `GR: 40 X 40 BLOCKS` and
+`HGR: 280 X 160`. **A demo is a claim about the machine and is held to the
+same standard as this document** - and the failing pair was on the glass in
+two published screendumps and in the website's own hero image before anybody
+read the numbers rather than the picture.
+
+**IT IS TOKENISED, AND FROM THE PINNED ROM'S OWN TABLE.** Load Program accepts
+the program's STRUCTURE - the line chain of section 12 - so a plain ASCII
+listing on the disk is refused by name, correctly. `apps/apple2/welcome.a2b`
+is the SOURCE and `build/WELCOME.BAS` the artefact, on `tools/os88rtf.py`'s
+shape one package along: **`tools/a2bas.py`** reads Applesoft's own
+TOKEN.NAME.TABLE at **`$D0D0`** (`AppleWin/bin/A2_BASIC.SYM:805`, which is
+offset `0xD0` of `APPLE2.ROM` by section 1.4's layout), asserts its measured
+shape - 107 names from `END` to `MID$` - and implements the ROM's PARSE
+(`$D559`): upper case, a quoted string verbatim, the rest of a `REM` or `DATA`
+statement verbatim, `?` for `PRINT`, and otherwise the token names tried in
+TABLE ORDER with spaces skipped in the input, first match winning. **A
+hand-typed token table would be a second transcription of something the build
+already has in front of it**, and the ROM is pinned by SHA-256, so the shipped
+bytes rebuild byte for byte.
+
+**`--selfcheck` IS THE GATE AND IT IS IN THE RECIPE**, not in a target of its
+own: it tokenises, LISTs the result back through the same table and requires
+the two to agree once spaces outside strings are normalised away. A tokeniser
+is exactly the kind of tool whose output looks fine and runs wrong - one byte
+out is a `]` prompt whose `LIST` is empty or full of `SYNTAX ERROR`, which no
+screendump of a booted machine shows. It is 42 lines and **884 bytes**, and
+the machine's own `LIST` printing it back is the proof that outranks the
+gate (`build/port-shots/wave7-05-welcome-list.png`).
+
+#### 16.2.1 WHAT THE LISTING COSTS ON THE MACHINE IT IS SIZED FOR
+
+The listing's header said it *"IS SIZED FOR A 4.77 MHz XT"* and then did the
+arithmetic **for the loops that were rejected** - a 1,600-`PLOT` fill - and
+none at all for the ones that shipped. So the one file a user double-clicks
+first named the target machine and put no number on it, which is the failure
+the rest of this document exists to prevent. **The number is measured now**,
+on the same MartyPC 5150 section 16.4.1's speed figure came off, by
+`build/a2welcome.py`: the package is launched by **double-click on
+`WELCOME.BAS`** (the `CC_ASSOC` route of wave 4), `RUN` is typed a character
+at a time and read back off the Apple's own text page, and each screen is
+timed off the BIOS tick counter at `0040:006C` from the keypress that starts
+it to the caption the program prints when the loop is done.
+
+| screen | what it draws | measured |
+|---|---|---|
+| text, from `RUN` | 8 `PRINT`s and `INVERSE` | **6.0 s** (110 ticks) |
+| lo-res | `GR` + 32 `HLIN 0,39` | **91.2 s** (1,659 ticks) |
+| hi-res | `HGR` + 7 `HPLOT X,0 TO 279-X,159` | **106.2 s** (1,932 ticks) |
+
+Two runs a build apart agreed to a second and a half: 6.0 / 92.2 / 104.2 on
+the first and 6.0 / 91.2 / 106.2 on the shipping one, which is the
+`FOR/NEXT`-shaped scatter of section 16.4.1's own loop rows and not a
+difference between the builds.
+
+**That is a minute and a half a picture, and it is said out loud rather than
+discovered.** It is what 0.51% of a 1.02 MHz Apple *is*, so it is not a defect
+in the port and there is nothing to fix in the drawing: the windowed flush
+narrows to the touched scan lines and costs ~16 ms a pass, which is why both
+screens draw **progressively**, a band or a line at a time, and the machine
+looks busy rather than hung. **The listing keeps its loops** - halving them
+halves a figure that is long either way, and the pictures are the
+demonstration - and the header and `README.TXT` carry the measurement instead,
+which is this port's posture everywhere else: the status row prints the speed
+rather than the port pretending.
+
+**Manual evidence** (section 16.5): `build/port-shots/
+wave7-xt-welcome-text.png`, `wave7-xt-welcome-gr.png` and
+`wave7-xt-welcome-hgr.png` are the three screens on the XT, in that order,
+each taken at the instant its caption appeared. They are also the **only**
+published screendumps of the double-click route on the target machine.
 
 ### 16.3 The Makefile
 
@@ -3760,6 +4055,12 @@ file; `build/apple2-rom/APPLE2.ROM` with **exactly ONE owner - the Makefile
 rule** - because `build.sh` reads it and writing it from the stamp recipe
 would re-make a downstream prerequisite behind make's back; the four disk
 geometries each `--verify`'d; and the phony targets.
+
+`build/WELCOME.BAS` is the fifth file on every geometry and has a rule of its
+own (`tools/a2bas.py apps/apple2/welcome.a2b --selfcheck -o $@`), with the
+pinned ROM as a **written prerequisite** because the token table is read out
+of it (section 16.2). `make allapps` and therefore `make live` carry the whole
+folder as `APPLE2\`, never a place in `APPS/` (SPEC.md 19.9, 19.10).
 
 Nothing in `all` reaches the ROM fetch, so this package is **on demand** like
 `cworddisk` and `runcpm`.
@@ -3786,6 +4087,121 @@ machine**, which is why two of the three land in wave 7.
 
 `RESET=1|cmos|flash|both` clears a stale CMOS on the way in.
 
+#### 16.4.1 THE MEASURED XT SPEED - 9 September 2026
+
+**0.4% of a 1.02 MHz Apple II, and the status row reads `0%`.**
+
+Taken on **MartyPC**, not on 86Box, and that is the whole reason the figure
+exists: 86Box launches a window a person can look at and cannot assert
+anything (section 16.5), where MartyPC's debug server can read the package's
+own counters out of the guest - and the one read here is **`a2_c64u`**, the
+raw one-second cycle fold of section 9, because `a2_pct` is whole per cent
+and reads **0** on this machine (below). The machine is `os8088_5150_cga` -
+docs/FIELD-MACHINES.md's calibration machine, an **8088 at 4.77 MHz** with
+640K, a CGA and two 360K drives - resolved to its GLaBIOS twin
+(`os8088_5150_cga_gla`) because this checkout has no IBM ROM; the CPU, the
+clock and the card are the same, and a BIOS does not run the 6502. It booted
+`build/os8088-360.img` with **`build/apple2360.img`** in B:, exactly what
+`make xt-apple2` puts in that drive, and APPLE2 was launched from the Disk
+window.
+
+**THREE RUNS, AND THE IDLE FIGURE IS THE SAME IN ALL THREE.** Each row is
+that run's one-second windows, read by sampling the guest every 0.2 s and
+taking `a2_c64u` at each fold:
+
+| what the machine was doing | run | windows | measured |
+|---|---|---|---|
+| the `]` prompt, idle - the Monitor's keyboard poll | A | 11 | 0.38% - 0.46%, **mean 0.41%** |
+| " | B | 11 | 0.34% - 0.46%, **mean 0.41%** |
+| " | C | 12 | 0.36% - 0.46%, **mean 0.41%** |
+| `FOR I = 1 TO 1000 : NEXT`, **running** | A | 13 | 0.51% - 0.58%, **mean 0.52%** |
+| " | B | 12 | 0.43% - 0.61%, **mean 0.51%** |
+| " | C | 12 | 0.48% - 0.53%, **mean 0.51%** |
+
+**So the number is 0.41% idle and 0.51% under BASIC**, and the second is
+higher than the first for the reason a reader would expect: Applesoft's
+`FOR/NEXT` spends fewer 6502 cycles per emulated instruction in the Monitor's
+keyboard-poll loop, so the same slice budget covers more of a real Apple's
+second.
+
+**AND THE LOOP ROWS ARE A REVIEW CORRECTION, WHICH IS RECORDED RATHER THAN
+QUIETLY REPLACED.** The first take (`build/a2speed4.py`) typed
+`FOR I = 1 TO 1000 : NEXT` into the guest in one `m.type_text()` burst. The
+BIOS keyboard buffer holds **15 keys**, so everything after `FOR I = 1 TO 10`
+was dropped - RETURN included - and its "loop" rows and its
+`wave7-xt-loop.png` were both **the machine at the `]` prompt with a
+half-typed command on the input line**. That is exactly why they read the same
+as idle (0.41-0.50% against 0.41%), and the agreement was read as a null
+result rather than as the instrument reporting the wrong state.
+`build/a2speed5.py` is the re-take, and it proves each of the three things the
+first one assumed: every character is read back off the **Apple's own text
+page** before the next is sent (a shifted letter's shift-up and the next key's
+shift-down also collapse at 4.77 MHz, so `1 TO 1000` first came back as
+`1 T !)))`), RETURN is proved taken because the trailing `]` is **gone**, and
+the loop is proved **still running** after the last window and again at the
+screendump.
+
+**AND `a2_pct` READS 0 IN BOTH, WHICH IS THE FIELD DOING WHAT IT SAYS.** The
+speed figure is a whole per cent (section 9) and 0.4 truncates to 0; the row
+is honest and simply has no resolution left at this speed. It is NOT the
+`el > 36` arm discarding the window - that was the first reading's own
+artefact, from sampling the guest every two seconds and seeing two folds as
+one: sampled every 0.2 s the windows are **18-20 ticks**, which is the
+one-second fold working exactly as designed.
+
+**WHERE THE 0.4% GOES, and it is the SLICE and not the emulator.**
+`a2_budget` sits at `A2_SLICE_MIN` = **256** cycles and never doubles: the
+adaptive rule (section 4.3) grows the budget only after four consecutive
+slices that finish inside ONE host tick, and on a 4.77 MHz 8088 a 256-cycle
+slice is already ~21 ms of a 55 ms tick, so the tick boundary is crossed often
+enough to halve it back. 256 cycles at 18.2 wakes a second is 4,659 emulated
+cycles a second, which is 0.46% of 1,020,484 - the measurement, from the other
+end. **Lifting that ceiling is a scheduler decision with a UI-latency price
+and is not this wave's** (the tree has already refused a full-CPU mode once);
+what this wave owes is the number, and this is it.
+
+**THE PLAN PREDICTED 3-4% AND IT WAS OUT BY EIGHT.** docs/APPLE2-PORT-PLAN.md's
+risk section arrived at "~400 8088 clocks per emulated 6502 instruction" and
+divided by nothing else; what it left out is that the port gets ONE wake a
+tick and spends a bounded slice inside it, so the ceiling is the slice and not
+the interpreter. The arithmetic that would have caught it is the one above,
+and it needs `A2_SLICE_MIN` in it.
+
+**WHAT THAT MEANS FOR A READER**, and it is what `README.TXT`, the Wire page
+and the tier all say: an XT reaches the `]` prompt, answers a keystroke and
+draws - it is a machine to look at. A listing runs at about a **200th** of a
+real Apple's speed - the measured 0.51% is 1/196, and the idle 0.41% is 1/244
+- so what a real Apple does in a second takes minutes here, which is
+`README.TXT`'s own wording. The 386 is where this port is usable and a 486 is where
+it is comfortable, which is why the Wire record is **tier 3** (section 18.1),
+the same tier the C64 takes for the same honest reason.
+
+**Manual evidence, recorded** (section 16.5): `build/port-shots/
+wave7-xt-idle.png` and `wave7-xt-loop.png` are the machine at the prompt and
+inside the loop, with `0%` on the row - and the second one now **shows** the
+loop: `]FOR I = 1 TO 1000 : NEXT` with no `]` under it, which is what a
+running program looks like on an Apple. The pair used to be indistinguishable,
+which is the defect above. No gate rests on either.
+
+**AND THE ONE-TIME COLOUR FACT CANNOT BE EXERCISED ON ANY EMULATOR IN THIS
+TREE**, which is said here rather than left as an untested claim (section
+13.1). It needs a `CPU_8086` machine WITH a foreign-mode-capable VGA, and
+neither emulator has one: QEMU's CPU answers a fast tier, and MartyPC's
+`os8088_xt_vga` - an 8088 with a VGA, which is exactly the shape - **greys
+Machine > Color NTSC**, because `os88_fsx_caps` reports no `FSXM_VGA13` on
+that card. Read off the live menu rather than guessed: `('  Color NTSC',
+False)` in `menu_bar[]`, beside `('  Toggle Fullscreen', True)`. So the
+greying is SPEC.md 47 doing its job on that machine, the sentence is checked
+for length by `build.sh`'s corpus and by `a2uitest`'s `msgs[]`, and the arm
+that raises it is four lines under one flag. `build/port-shots/
+wave7-xtvga-01.png` is that machine with the Machine menu **held open** under
+the screendump - `Color NTSC` greyed, `Toggle Fullscreen` beside it live, the
+`]` prompt behind and `0%` on the row - because "colour greyed" is what the
+file is cited for and a decoded `menu_bar[]` is not a photograph. The first
+take of it was neither: it was shot sixteen emulated seconds in, before the
+Autostart Monitor had cleared the screen, so it photographed a power-on RAM
+pattern of `?` with the menu shut.
+
 ### 16.5 Automated evidence, and manual evidence
 
 **Automated evidence** is section 16.6's harnesses and the QMP screendumps.
@@ -3808,7 +4224,9 @@ GUI emulator cannot assert a boot.
 | `apps/apple2/hosttest/a2memtest.asm` + `.sh` | `a2mem.inc`'s and `a2band.inc`'s string loops on a real x86 with SS != DS and an ES sentinel, in raw QEMU, with **four negative controls** - one each for ES, DF, BP and DS. **All THREE composers from wave 3**, each against hand-computed packed bytes: it is the only gate that runs the SHIPPING ASSEMBLY rather than a second transcription of it, which is what `a2uitest` and `a2ref.py` between them cannot be. In `build.sh`, because it takes seconds. From the Disk II wave it also covers the segment arithmetic that reaches a track inside a claim larger than 64KB |
 | `apps/apple2/hosttest/a2cputest.asm` + `.sh` | section 4.4's twelve rows. `make a2cputest`, minutes, **not** in `build.sh` |
 | `tests/a2band/a2bandbench.asm` | the composers' icount bench on `tests/benchlib.inc`, `make a2bandbench`. **Driven under plain `-icount shift=3` and NOT `sleep=off`** (section 7.9). Per CELL, per SOURCE BYTE and per CALL in microseconds for all three composers plus `rowspan`/`rowcopy`/`rowsig`/`band_x2` - and, from wave 5, **per foreign FRAME for each FSX writer against the windowed flush on the same change set**. **The tier table and the cost table are written from these numbers.** It arms the clip on its rerun callbacks, saves ES around every blit, and preflights `OSAPI_GFX_BLIT1` |
-| `tests/apple2.py`, `tests/apple2part.py` | registered in `tests/suite.py`, or the fast tier's own registration row fails the build. `apple2part.py` is `c64part.py`'s shape: `APPLE2.ROM` is NOT a file on the disk; the package file is image + 14,848; `os88_part_seg(0)` is the segment the C put in the machine record; three windows of the ROM read out of the guest equal `build/apple2-rom/APPLE2.ROM` byte for byte; the RESET vector at `$FFFC` reads `$FA62`; **and the CHARGEN table and the reverse table exist after `os88_main` and BEFORE any wake** - the negative control for keeping them off the overlay |
+| `tests/apple2part.py` | registered in `tests/suite.py`'s **soak** tier, or the fast tier's own registration row fails the build. `c64part.py`'s shape: `APPLE2.ROM` is NOT a file on the disk; the package file is image + 14,848; `os88_part_seg(0)` is the segment the C put in the machine record; three windows of the ROM read out of the guest equal `build/apple2-rom/APPLE2.ROM` byte for byte; the RESET vector at `$FFFC` reads `$FA62`; **and the CHARGEN table and the reverse table exist after `os88_main` and BEFORE any wake** - the negative control for keeping them off the overlay |
+| `tools/a2bas.py --selfcheck` | the welcome listing tokenised against the PINNED ROM's own token table and LISTed back through it, in the recipe that writes `build/WELCOME.BAS` (section 16.2). A tokeniser's output looks fine and runs wrong |
+| the SDK-toast row in `tests/unit/t_mirror.py` | the SDK's three overlay refusals in `apps/cc/crt0.asm` against `TOAST_MAX` read out of `kernel/toast.inc`, for a **full-length** `CC_PKG_NAME` (the cap read out of `crt0.asm`'s own `%fatal`) and for **every** `%define CC_PKG_NAME` in the tree (section 17.3). This wave found them truncating and wrote the check in `build.sh`, which was the wrong home: that script runs only for `make apple2`, so the edit the gate exists to catch would not have run it. `t_mirror` is a FAST-tier row and runs on every `make` |
 | QEMU + QMP | `make test TESTAPPS=build/apple2.img`, `tools/mouse.py`, `tools/qmp.py sendkey`, `tools/shot.py --crop --zoom`. Every screendump assertion lives here |
 
 **THE 1BPP PASS IS BINDING AND IS NOT OPTIONAL.**
@@ -3905,22 +4323,6 @@ gated (what ships):
 | WEAVE | 51,932 | **51,840** | 9,214 | 61,054 | 386 |
 | LOOM | 55,194 | **55,102** | 6,216 | **61,318** | **122** |
 
-`make test-full` is the gate that proves the edit broke none of them.
-
-**AND IT IS LOOM AND NOT CWORD THAT IS THE TIGHT PACKAGE, WHICH THIS SECTION
-HAD WRONG.** The paragraph above was written when CWORD's 1,043 bytes spare was
-the smallest margin in the tree; LOOM has shipped since, and it builds with
-**122 bytes** of its 61,440 left - which is what ungated thunks would have cut
-to **30**. That is a fact to hand to whoever adds the next SDK line rather than
-a problem this wave created, and it is why the gate is there: an unconditional
-addition of a dozen bytes fails a build in a package that has nothing to do
-with it, and the failure reads as LOOM's.
-
-**PACCMAN and SCRIBE were measured too.** PACCMAN is a C package that this
-section's list had missed (`grep CC_PACKAGE Makefile`); SCRIBE is **assembly**
-- it has no `crt0.asm` and no thunk table - so it does not move, and it is
-named here so the next reader does not go looking for its row.
-
 ### 17.1 The slots used as they stand
 
 | need | slot | note |
@@ -3950,6 +4352,126 @@ colour RUNS at ~215 us a run, which is 0.2-0.35 s per band on the target.
 windowed path's monochrome is greyed as a FACT with the foreign mode named as
 where colour lives.
 
+### 17.3 The SDK's own overlay refusals, and the cap nothing was checking
+
+**ALL THREE OF THEM WERE BEING CUT OFF THE GLASS, IN EVERY C PACKAGE IN THE
+TREE.** `OSAPI_TOAST` copies `TOAST_MAX` = 24 characters
+(`kernel/toast.inc:85`) and **truncates** what is longer rather than refusing
+it, and `apps/cc/crt0.asm`'s three overlay refusals are assembled from
+`CC_PKG_NAME`, so their length is different in every package that includes the
+SDK. With this package's six-character name they were 32, 30 and 38
+characters and what a reader saw was:
+
+| the literal, before | what reached the glass |
+|---|---|
+| `Not enough memory for APPLE2.OVL` | `Not enough memory for A` |
+| `APPLE2.OVL is not on this disk` | `APPLE2.OVL is not on thi` |
+| `APPLE2.OVL does not match this program` | `APPLE2.OVL does not matc` |
+
+**The consequence was in the half that was cut, in all three.** Nothing in the
+tree was looking, which is how it outlived seven packages - and it is the same
+defect this port already found in its own toast one file along
+(`APPLE2: the ROM claim` reaching the glass and stopping there, apple2.c).
+
+They are rewritten to the SHAPE the cap allows rather than trimmed by eye -
+**and the shape is sized from the NAME FIELD, not from the names this tree
+happens to contain today**. `crt0.asm`'s header `%fatal`s a `CC_PKG_NAME`
+longer than **15** and docs/C-TOOLCHAIN.md tells every package author 15 is
+legal, so 15 is the number the arithmetic has to hold:
+
+| the literal, now | prose | fits a 15-char name at | as APPLE2 sees it |
+|---|---|---|---|
+| `No <NAME>.OVL` | 3 (+4) | **22** of 24 | `No APPLE2.OVL` (13) |
+| `No RAM: <NAME>` | 8 | **23** of 24 | `No RAM: APPLE2` (14) |
+| `Old <NAME>.OVL` | 4 (+4) | **23** of 24 | `Old APPLE2.OVL` (14) |
+
+**THE FIRST DRAFT OF THIS FIX GOT TWO OF THE THREE WRONG, AND THE WAY IT WAS
+WRONG IS THE LESSON.** It kept the prose and sized it against the longest name
+in the tree: `No RAM for <NAME>.OVL` is 11 + name + 4 and holds a name of
+**9**, `<NAME>.OVL is stale` is name + 17 and holds **11**. Both passed,
+because the longest C package name in this tree is 7 - and both would have
+failed a build in a package that has not been written yet, a legally-named
+`BBSTERMINAL` or `SPREADSHEET` at 11 characters, with the failure landing
+inside somebody else's build and reading as APPLE2's. **A shared SDK's message
+is sized by its own field**; a cap that only the corpus enforces is not a cap.
+
+**AND IT IS A GATE RATHER THAN A COMMENT - AND NOT IN THIS PACKAGE'S
+BUILD.SH.** The check was written in `apps/apple2/build.sh`, which was the
+wrong home for the same reason the defect survived seven packages: that script
+runs only for `make apple2`, an on-demand C target outside `all` and outside
+`make test-full`, so lengthening a literal in `crt0.asm` - the one edit the
+gate exists to catch - would not have run it. It is a row of
+**`tests/unit/t_mirror.py`** instead, which is a FAST-tier row and therefore
+runs on every `make`. It reads `TOAST_MAX` out of `kernel/toast.inc`, the
+three literals out of `crt0.asm`, the name cap out of `crt0.asm`'s own
+`%fatal`, and **every `%define CC_PKG_NAME` in the tree** (ten today), and it
+checks both arms: the declared cap of 15, and every name that actually exists.
+Verified to fail: put the old `No RAM for` literal back and the row reports
+`cc_ovm_mem is 30 characters with a 15-character name`, exit 1.
+
+**MEASURED, AND IT IS -58 IMAGE FOR EVERY C PACKAGE WITH AN OVERLAY**, which
+is the 59 characters of `.data` the three shorter strings save with a
+six-character name (100 characters before, 41 after) less the byte the trim's
+paragraph rounding keeps. `PACCMAN` does not move because it has no overlay
+and therefore never assembled the strings at all:
+
+| package | image before | image after | bss | resident total | spare of 61,440 |
+|---|---|---|---|---|---|
+| APPLE2 | 38,944 | **38,886** | 14,340 | 53,226 | 8,214 |
+| CWORD | 36,446 | **36,388** | 24,533 | 60,921 | 519 |
+| PACCMAN | 42,098 | **42,098** | 5,230 | 47,328 | 14,112 |
+| RUNCPM | 39,754 | **39,696** | 11,689 | 51,385 | 10,055 |
+| C64 | 41,550 | **41,492** | 13,190 | 54,682 | 6,758 |
+| WEAVE | 51,840 | **51,782** | 9,214 | 60,996 | 444 |
+| LOOM | 55,102 | **55,044** | 6,216 | **61,260** | **180** |
+
+Every row but APPLE2's is the shipping build of that package, read off its own
+`os88pkg` line; **APPLE2's is the isolated figure** - the SDK change alone
+against the end of wave 5 - because this wave also spent 78 bytes on section
+13.1 in the same package and 80 more on section 13.2's pacing, so its shipping
+line is **39,042 / 53,386 / 8,054 spare** and section 15.0.5 has that
+arithmetic.
+
+`LOOM` is the tight package (this section's own note above) and it is 180
+bytes of 61,440 clear now rather than 122.
+
+**`make test-full` is the gate that proves the edit broke none of them**, and
+the change is one file every C package includes: it is the SDK, not this
+package.
+
+**AND THE SAME FAILURE CLASS IS STILL SPOKEN IN A SECOND VOICE, WHICH THIS
+WAVE IS NOT FIXING.** `crt0.asm`'s three are the SDK's; one call along,
+`apps/weave/wload.c` and `apps/loom/lmprev.c` toast `WEAVE.WSM is not on this
+disk.` (30), `WEAVE.WSM does not match this program.` (37) and `Not enough
+memory for LOOM.WPV.` (31) through `w_say` -> `os88_toast`, and they truncate
+today exactly as `crt0`'s did - so WEAVE now says `No WEAVE.OVL` for its
+overlay and `WEAVE.WSM is not on thi` for its module in the same window.
+**Those sentences are pinned by docs/WEAVE-SPEC.md as that family's
+contract**, so rewording them is the Weave family's call and not this PR's
+(this wave is not to touch another package's source), and widening
+`t_mirror`'s row to walk `os88_toast` literals across `apps/` would fail the
+build on three strings this wave may not edit. It is recorded here so that the
+next reader is not told the SDK's toasts were fixed everywhere: **they were
+fixed in the SDK**, and `apps/weave` and `apps/loom` are the follow-up.
+
+**AND IT IS LOOM AND NOT CWORD THAT IS THE TIGHT PACKAGE, WHICH THIS SECTION
+HAD WRONG.** The paragraph above was written when CWORD's 1,043 bytes spare was
+the smallest margin in the tree; LOOM has shipped since, and when this
+paragraph was first written it built with **122 bytes** of its 61,440 left -
+which is what ungated thunks would have cut to **30**. The `crt0` shortening
+above gave 58 of those back, so the live figure is the table's **180** and the
+ungated-thunk arithmetic is 180 - 92 = **88**; the paragraph's point is
+unchanged and its numbers are the ones in the table two screens up. That is a fact to hand to whoever adds the next SDK line rather than
+a problem this wave created, and it is why the gate is there: an unconditional
+addition of a dozen bytes fails a build in a package that has nothing to do
+with it, and the failure reads as LOOM's.
+
+**PACCMAN and SCRIBE were measured too.** PACCMAN is a C package that this
+section's list had missed (`grep CC_PACKAGE Makefile`); SCRIBE is **assembly**
+- it has no `crt0.asm` and no thunk table - so it does not move, and it is
+named here so the next reader does not go looking for its row.
+
+
 ---
 
 ## 18. The Wire listing
@@ -3971,9 +4493,9 @@ requires **exactly** these keys, no more and no less.
 | `stem` | `APPLE2` - 6 characters, matches `[A-Z0-9_-]{1,8}` |
 | `title` | `Apple II+` - 23 characters maximum |
 | `kind` | **0** (Applications), as C64 and RUNCPM are |
-| `tier` | from the **MEASURED** speed of wave 7's XT and 386 readings. A judgement, and the release skill asks for every tier touched to be flagged as reviewable in the PR |
+| `tier` | **3** (`486+`), from the MEASURED 0.41% of section 16.4.1 - the same tier the C64 takes, for the same honest reason. A judgement, and the release skill asks for every tier touched to be flagged as reviewable in the PR |
 | `flags` | `["new"]` - only `new` and `floppy_only` are manifest-settable |
-| `files` | `APPLE2.O88`, `APPLE2.OVL`, `{name: README.TXT, source: apps/apple2/README.TXT}`, `{name: COPYING, source: apps/apple2/COPYING}`. `files[0]` must be exactly `<STEM>.O88` |
+| `files` | `APPLE2.O88`, `APPLE2.OVL`, `WELCOME.BAS`, `{name: APPLE2.TXT, source: apps/apple2/README.TXT}`, `{name: COPYING.A2, source: apps/apple2/COPYING}` - five, because the folder is the binding shape (section 16.2) and a listing nobody can open is a file that should not be published. A bare string is taken from `<os-repo>/build/`, which is where the first three live; `files[0]` must be exactly `<STEM>.O88` |
 | `summary` | one sentence, printable ASCII, the site card's |
 | `description` | **pre-wrapped by the writer to 5 lines of 27 characters** - single spaces, no word longer than 27. This is the field the machine draws |
 | `page` | an HTML fragment that says **honestly what an XT does and does not do, and that colour is a VGA feature** |
@@ -3986,15 +4508,48 @@ bit 2 set, and **a ROM shipped as a part sets bit 2**. So the record greys
 **Load Program** with `Needs its files on a disk - use Add to Disk`, exactly as
 the C64's does. `WF_PIC` is derived from `screenshot` being non-null.
 
-**`FILE_MAX` is 64,512 per file**, and the PLANNED `APPLE2.O88` is ~58,300
-with its ROM inside. That headroom is why Integer BASIC is refused (section
-10.4).
+**`FILE_MAX` is 64,512 per file**, and the MEASURED `APPLE2.O88` is **54,272**
+with its ROM inside - 10,240 bytes of headroom, where the planned figure was
+~58,300. That headroom is why Integer BASIC is refused (section 10.4).
 
 ### 18.2 The rest of the change
 
 | what | where |
 |---|---|
-| the package bytes | `public/wire/pkg/APPLE2.O88`, `APPLE2.OVL`, `README.TXT`, `COPYING` |
+| the package bytes | `public/wire/pkg/APPLE2.O88`, `APPLE2.OVL`, `WELCOME.BAS`, `APPLE2.TXT`, `COPYING.A2` |
+
+**AND THE README AND THE LICENCE ARE PUBLISHED UNDER NAMES OF THEIR OWN,
+WHICH IS NOT A PREFERENCE.** `public/wire/pkg/` is ONE FLAT DIRECTORY shared
+by every record, and the C64 already publishes `README.TXT` and `COPYING`
+there: a second record naming those files **overwrites the C64's bytes**,
+which `os88wire.py --verify --pkgdir` then fails on, because the C64's catalog
+entry still says 3,842 and the file on disk is this package's 9,500. Measured,
+by doing it: one `release.py` run wrote `wire/pkg/README.TXT 3,842` and
+`wire/pkg/README.TXT 8,575` on consecutive lines (the second figure is that
+day's `README.TXT`; it is 9,500 now and the collision is the same one).
+**It is the user's disk too** - Add to Disk writes the published name - so two
+programs fetched into one folder would collide there as well.
+
+**AND THE README HAD TO LEARN ITS OWN PUBLISHED NAMES**, which the review
+caught: `apps/apple2/README.TXT` described the folder as *"THREE FILES AND A
+LICENCE"* and told the reader the licence was in `COPYING` and that *"All four
+must be in the SAME folder"*. On a Wire-installed disk the licence is
+`COPYING.A2` and the readme itself is `APPLE2.TXT`, so the file named two of
+the four wrongly - including the one the GPL notice points at - on the one
+route where the reader cannot check by looking at the floppy they were given.
+It now names both Wire names in the `COPYING` entry, and it says what actually
+has to share a folder: **`APPLE2.O88` and `APPLE2.OVL`, plus `WELCOME.BAS` for
+the double-click route**. The licence is a document nobody but the reader
+opens and may sit wherever it lands. **The floppy build was never affected**;
+only the Wire route was.
+
+**AND AN 8.3 NAME DOES NOT ALWAYS FIT THE SIDECAR FIELD.** The catalog's
+sidecar name is **12 bytes NUL-terminated**, so **11 characters**, and
+`A2README.TXT` is 12 - the writer refuses it (`wire: APPLE2 sidecar: 12
+bytes, maximum 11`). An 8-character stem with a 3-character extension is a
+legal 8.3 name and an illegal sidecar name; the stem has to be **7 or
+shorter**. `APPLE2.TXT` (10) and `COPYING.A2` (10) both fit, and both say
+whose they are on a disk that may already hold the C64's.
 | the machine's picture | `public/wire/pic/APPLE2.PIC` - **generated**: 1,024 bytes, 128 x 64, 1bpp, 16 bytes a row, bit 7 leftmost, **a 1:1 crop of a real screendump and never scaled** |
 | the site screenshots | `public/img/apple2/`, with `tools/scenes.apple2.json` |
 | the catalog and the page | `public/wire/catalog.bin` and `public/wire/index.html` - both **generated** |

@@ -1600,6 +1600,34 @@ SOAK = [
         "c64disk`, so it needs the C toolchain.",
         needs=("marty", "cc"), serial=True,
         wants=("build/c64.img",)),
+    Row("apple2part", "soak", py("tests/apple2part.py"), 30.0,
+        "c64part's shape one machine along (SPEC.md 20.12, APPLE2-SPEC 1.5), "
+        "and the difference is that APPLE2 never had a sidecar to convert: "
+        "the 14,848 bytes of Applesoft, the Autostart Monitor, the character "
+        "generator and the Disk II boot ROM have been part 0 since wave 1, so "
+        "what this row defends is that the shape STAYED that way. SIX "
+        "ASSERTIONS - APPLE2.ROM is not a file in the folder, read out of the "
+        "guest's own listing (and WELCOME.BAS is, because the folder is the "
+        "binding shape); the package declares parts, its image is smaller "
+        "than its file and the one part is an ASSET of exactly 14,848; it "
+        "launched; os88_part_seg(0) is the segment the C put in a2_m.romseg "
+        "and it is at or above $0D00, below which the core's `romseg - "
+        "($D000 >> 4)` fetch bias underflows silently; THREE 16-byte windows "
+        "of the ROM in the guest equal build/apple2-rom/APPLE2.ROM - "
+        "including the LAST SIXTEEN BYTES, because a carve one sector short "
+        "reads perfectly at the front - and the RESET vector at $FFFC reads "
+        "$FA62, which is the one number that says AUTOSTART Monitor rather "
+        "than some other Apple II ROM; and BOTH DISPLAY TABLES EXIST after "
+        "os88_main and before any wake, which is the negative control for "
+        "keeping the chargen decode and the 7-bit reverse table off the "
+        "overlay (APPLE2-SPEC 7.3) - a disk with no APPLE2.OVL has to be a "
+        "program whose MENUS refuse, not a window that draws nothing. It also "
+        "says the 6502 is RUNNING and not jammed, and stops there: what the "
+        "machine puts ON THE GLASS belongs to the driven QMP runs and to "
+        "a2uitest. Needs `make apple2disk`, so it needs the C toolchain and "
+        "the pinned ROM fetch.",
+        needs=("marty", "cc"), serial=True,
+        wants=("build/apple2.img",)),
     Row("mseglazy", "soak", py("tests/mseglazy.py"), 50.0,
         "SPEC.md 20.12.4: an OP_LAZY part is NOT READ AT LOAD and can be "
         "given back. That is the first half of goal 3 - `load only some "

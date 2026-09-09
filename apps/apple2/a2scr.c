@@ -2109,10 +2109,17 @@ static int a2_fsx_id = -1;                  /* the FSXM_* this display can
  * and this one that writes it. */
 static int a2_fsx_ok;                       /* the foreign shadow describes
                                              * the foreign glass */
+static unsigned a2_fsx_tick;                /* the tick the last foreign frame
+                                             * ran on - a2_fltick's twin, and
+                                             * read only while a2_fsx_ok is 1
+                                             * (the first frame of a session
+                                             * is forced and stamps it) */
 static unsigned a2_fsx_sh;                  /* the shadow's claim... */
 static unsigned a2_fsx_seg;                 /* ...and the framebuffer's */
 static int a2_fsx_stride;
 static void *a2_fsx_win;
+static int a2_fsx_told;                     /* the CPU_8086 tier's price, said
+                                             * once a run (a2_fsx_enter) */
 static unsigned char a2_fsxbuf[A2_FSXW];    /* the composed scan line, which
                                              * is the compare's left side.
                                              * bss and not a claim because it
@@ -2340,6 +2347,8 @@ static void a2_fsx_frame(void)
                                              * the entry's own a2_sh_inval */
     }
     a2_fsx_ok = 1;
+    a2_fsx_tick = os88_ticks();             /* ...and a2_flush's a2_fltick,
+                                             * for the pacing in a2_fsx_main */
     a2_dirty_any = 0;
     a2_force_wide();                        /* a2_flush's own last two lines,
                                              * for a2_flush's own reason: the
@@ -2544,10 +2553,36 @@ static void a2_fsx_main(void)
          * marks say. a2_fsx_frame clears a2_dirty_any itself, exactly as
          * a2_flush does.
          *
-         * An idle colour session is now one byte read and fsx_wait's hlt. */
+         * An idle colour session is now one byte read and fsx_wait's hlt.
+         *
+         * ...AND IT IS PACED BY TIER TOO, WHICH IS a2_flush's SECOND TERM ONE
+         * PATH ALONG (section 7.8, and section 13.4 for the arithmetic). The
+         * windowed flush is at most once a host tick and, on the CPU_8086
+         * tier, at most once every SECOND tick, because a 496.8 ms repaint
+         * cannot keep up with a 55 ms tick and a second pass inside one
+         * machine-visible change is the whole cost of the first for pixels
+         * that were already right. The foreign frame is MORE expensive, not
+         * less - 140.4 ms for one character row against the windowed row's
+         * 26.4, a 5.3x - and it shipped with no such term at all: on an 8088
+         * a one-row frame is 2.5 ticks during which no slice runs, fsx_wait
+         * then returns at once, and the loop spends the session at one
+         * A2_SLICE_MIN slice per ~200 ms instead of one per 55. So the tier
+         * term is FOUR ticks here where the window takes two - the ratio the
+         * row costs - and what it buys is slices, at the same pixels: the
+         * dirty set is exact and accumulates across the skipped ticks, so a
+         * frame that is deferred draws the same picture later rather than a
+         * different one. What it costs is latency, which is the trade
+         * section 7.8 already took for the window.
+         *
+         * `!a2_fsx_ok` is outside the pacing on both arms, for the reason it
+         * is outside the gate above: the first frame of a session is owed all
+         * 192 lines and is what stamps a2_fsx_tick in the first place. */
         if (a2_wrote())
             a2_dirty_any = 1;
-        if (a2_dirty_any || !a2_fsx_ok)
+        if ((a2_dirty_any || !a2_fsx_ok)
+            && (!a2_fsx_ok
+                || (unsigned)(os88_ticks() - a2_fsx_tick)
+                       >= (a2_tier_slow ? 4u : 1u)))
             a2_fsx_frame();
         os88_fsx_wait(OS88_FSXW_TICK);
     }
@@ -2595,6 +2630,49 @@ static void a2_fsx_enter(void *win)
     if (os88_fsx_run(a2_fsx_main, win, 0) < 0) {
         a2_say("The screen refused it.");
         a2_st_dirty = 1;
+    } else if (a2_tier_slow && !a2_fsx_told) {
+        /* THE PRICE OF COLOUR ON THE CPU_8086 TIER, SAID ONCE (section 13.1).
+         * a2_fsx_avail asks os88_fsx_caps about the DISPLAY and nothing about
+         * the CPU, so an 8088 with a VGA enters FSXM_VGA13 and the row stays
+         * LIVE there - a stated decision, priced rather than greyed, because
+         * colour is a cost a user asks for by picking a menu row where the
+         * flash phase is one a timer spends for them. What is not left to
+         * inference is the number.
+         *
+         * AND THE NUMBER IS THE RECURRING ONE, NOT THE ENTRY ONE. Section
+         * 7.9.4 measures three costs on this tier - 3,365.3 ms for a whole
+         * first frame, 140.4 ms for one character row, and 1,747.2 ms for a
+         * SCROLL. The first is paid once and is already behind the reader by
+         * the time this row exists; the last is what the next session in
+         * colour will actually feel, and is therefore the one that can change
+         * what the reader does next. A fact that cannot inform the decision
+         * it is about is furniture.
+         *
+         * ...AND IT NAMES THE OPERATION, NOT AN EVENT THAT SOMETIMES CAUSES
+         * IT, WHICH IS A REVIEW CORRECTION. The first draft read `Colour:
+         * 1.7 s per RETURN.` and that is true only of a full 24-row TEXT
+         * page. `GR` and `HGR` set the Apple's text window to rows 20-23
+         * (section 7.4, and WELCOME.BAS selects exactly that), so a RETURN in
+         * MIXED scrolls FOUR rows - 32 scan lines, ~304 ms by section 7.9.4's
+         * own 7.34 + 2.15 per line - and a RETURN that is not on the bottom
+         * line at all is the 140.4 ms of one row. 1,747.2 ms is a SCROLL of
+         * the whole page, so that is the word: `a scroll` is true in every
+         * mode where `per RETURN` was 5.7x high in the two modes half of
+         * this port's own demo lives in.
+         *
+         * IT IS SAID ON THE WAY OUT AND NOT ON THE WAY IN, and that is the
+         * status row's own arithmetic rather than a preference: a2_say stamps
+         * a2_msg_until five seconds ahead, the bracket owns the whole screen
+         * for as long as the reader stays in colour, and there is no status
+         * row under it to read - so a message raised before os88_fsx_run has
+         * expired unread by the time one is on the glass again. This is the
+         * first tick at which the row exists, and the reader has just spent
+         * the 3.4 seconds of the first frame the row no longer names.
+         *
+         * ONCE PER RUN, on `Square-wave tones only.`'s shape (section 8): a
+         * fact is news the first time and furniture the second. */
+        a2_fsx_told = 1;
+        a2_say("Colour: 1.7 s a scroll.");
     }
     os88_mem_free(a2_fsx_sh);
     a2_fsx_sh = 0;

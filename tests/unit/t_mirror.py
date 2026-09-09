@@ -411,9 +411,117 @@ def main():
                         for c in pstale) or "none",
           want="every copy equal to the include, or imported from os88parts")
 
+    # ...and the same shape once more, over a LITERAL rather than a constant:
+    # the SDK's three overlay refusals against the kernel's TOAST_MAX.
+    # apps/cc/crt0.asm assembles `No <NAME>.OVL`, `No RAM: <NAME>` and
+    # `Old <NAME>.OVL` out of CC_PKG_NAME, so their length is different in
+    # every C package that includes the SDK; OSAPI_TOAST TRUNCATES what is
+    # longer than TOAST_MAX rather than refusing it, so all three were being
+    # cut off the glass in all seven C packages - `APPLE2.OVL is not on this
+    # disk` reaching the reader as `APPLE2.OVL is not on thi` - and nothing
+    # in the tree was looking.
+    #
+    # THE BOUND IS THE NAME FIELD AND NOT THIS TREE'S NAMES, which is the
+    # whole reason this row is not a list of seven package names: crt0.asm
+    # %fatals a CC_PKG_NAME longer than 15 and docs/C-TOOLCHAIN.md tells
+    # authors 15 is legal, so a literal sized by the longest name that
+    # happens to exist today (7) fails inside somebody else's build the day
+    # an 11-character package arrives. Both arms are checked - the declared
+    # cap, and every %define CC_PKG_NAME in the tree, so a name too long for
+    # the FIELD is caught by the header's own %fatal and one too long for a
+    # MESSAGE is caught here.
+    #
+    # AND THE SECOND ARM IS DEFENCE IN DEPTH, WHICH IS SAID HERE BECAUSE IT
+    # CANNOT FIRE ON ITS OWN IN A HEALTHY TREE: every name really is <=
+    # name_cap (crt0.asm %fatals otherwise), so the cap arm is the strictly
+    # stronger test and the per-name arm is silent whenever it passes. What
+    # the per-name arm is for is the day one of the two things it does NOT
+    # depend on breaks - the %fatal fence being deleted, the cap being raised
+    # without re-sizing the literals, or the `%if cc__namelen > (\d+)` regex
+    # above quietly matching something smaller - and then it reports the
+    # PACKAGE, by path, rather than an abstract ceiling. It was EXERCISED
+    # rather than assumed: a scratch tests/_toastprobe/probe.asm declaring a
+    # 17-character CC_PKG_NAME makes this arm and only this arm fail
+    # (`cc_ovm_mem with CC_PKG_NAME 'SEVENTEENCHARSXYZ' ... is 25
+    # characters`, exit 1) while the cap arm stays quiet at 23 - which is
+    # also how the four-conversion/five-argument TypeError that had kept it
+    # from ever running was found.
+    toast_src = open(os.path.join(ROOT, "kernel", "toast.inc")).read()
+    m = re.search(r"^TOAST_MAX\s+equ\s+(\d+)", toast_src, re.M)
+    check(m, "kernel/toast.inc still defines TOAST_MAX",
+          "this row reads the cap out of the kernel rather than typing 24 a "
+          "third time; a renamed constant must fail rather than skip",
+          got="TOAST_MAX equ <n>" if m else "<not found>", want="TOAST_MAX equ <n>")
+    toast_max = int(m.group(1)) if m else 0
+
+    crt0_path = os.path.join(ROOT, "apps", "cc", "crt0.asm")
+    crt0 = open(crt0_path).read()
+    mc = re.search(r"%if\s+cc__namelen\s*>\s*(\d+)", crt0)
+    check(mc, "apps/cc/crt0.asm still %fatals on CC_PKG_NAME's length",
+          "the declared cap is what the three overlay refusals have to fit; "
+          "without it this row would only know the names that exist today",
+          got=("cap %s" % mc.group(1)) if mc else "<not found>",
+          want="a %if cc__namelen > <n> fence")
+    name_cap = int(mc.group(1)) if mc else 0
+
+    # every C package's name, from the one place each of them states it
+    ccnames = {}
+    for f in (glob.glob(os.path.join(ROOT, "apps", "*", "*.asm"))
+              + glob.glob(os.path.join(ROOT, "tests", "*", "*.asm"))):
+        for d in re.finditer(r"^\s*%define\s+CC_PKG_NAME\s+'([^']*)'",
+                             open(f).read(), re.M):
+            ccnames[d.group(1)] = os.path.relpath(f, ROOT)
+    check(ccnames, "the tree still declares C package names to size against",
+          "a corpus of zero is a gate that has stopped looking",
+          got="%d name(s)" % len(ccnames), want="at least one CC_PKG_NAME")
+
+    # ...and the literals, as crt0.asm assembles them: a quoted run
+    # contributes its own characters and CC_PKG_NAME contributes a name's.
+    ovm = []
+    for line in crt0.splitlines():
+        m2 = re.match(r"^(cc_ovm_[A-Za-z0-9_]*)\s*:?\s*db\s+(.*)$", line)
+        if not m2:
+            continue
+        rest = m2.group(2)
+        fixed = sum(len(t) for t in re.findall(r"'([^']*)'", rest))
+        uses = len(re.findall(r"\bCC_PKG_NAME\b", rest))
+        ovm.append((m2.group(1), fixed, uses))
+    check(len(ovm) == 3,
+          "apps/cc/crt0.asm still carries three cc_ovm_* refusals",
+          "the overlay loader raises three - missing, out of memory and "
+          "stale - and a row that finds fewer has stopped looking rather "
+          "than passing",
+          got="%d literal(s)" % len(ovm), want="3")
+
+    long = []
+    for label, fixed, uses in ovm:
+        n = fixed + uses * name_cap
+        if n > toast_max:
+            long.append("%s is %d characters with a %d-character name"
+                        % (label, n, name_cap))
+        for nm, where in sorted(ccnames.items()):
+            n = fixed + uses * len(nm)
+            if n > toast_max:
+                long.append("%s with CC_PKG_NAME %r (%s) is %d characters"
+                            % (label, nm, where, n))
+    check(not long,
+          "every SDK overlay refusal fits TOAST_MAX for a full-length "
+          "CC_PKG_NAME",
+          "OSAPI_TOAST TRUNCATES rather than refusing, so the consequence is "
+          "in the half that is cut. Size the prose from the NAME FIELD (%d "
+          "characters, crt0.asm's own %%fatal) and not from the longest name "
+          "in the tree today - a message that fits only a short name is a "
+          "build failure in a package that has not been written yet"
+          % name_cap,
+          got="; ".join(long) or "none",
+          want="every cc_ovm_* literal <= TOAST_MAX %d with a %d-character "
+               "name" % (toast_max, name_cap))
+
     print("t_mirror: %d names mirrored across %d asm/c files, %d host-tool "
-          "copies, %d local constants scanned, %d os88parts copies"
-          % (len(mirrored), len(asm) + len(CDEF), pychecked, copies, pcopies))
+          "copies, %d local constants scanned, %d os88parts copies, %d SDK "
+          "toast(s) against TOAST_MAX %d for %d CC_PKG_NAME(s)"
+          % (len(mirrored), len(asm) + len(CDEF), pychecked, copies, pcopies,
+             len(ovm), toast_max, len(ccnames)))
     done("t_mirror")
 
 

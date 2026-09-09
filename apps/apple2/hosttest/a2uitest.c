@@ -5635,8 +5635,28 @@ int main(void)
                                              * claim refusing, which is legal
                                              * where the flush's is not */
             "The screen refused it.",
-            "ScrollLock: arrows, Space.",   /* section 6.6, and the widest of
-                                             * the lot at 25 of 26 cells: the
+            /* --- WAVE 7's (section 13.1) ------------------------------- */
+            "Colour: 1.7 s a scroll.",     /* 23 of 26: the price of a
+                                             * SCROLL in FSXM_VGA13 on the
+                                             * CPU_8086 tier (section 7.9.4's
+                                             * 1,747.2 ms), said once on the
+                                             * way OUT of the first colour
+                                             * session because there is no
+                                             * status row under the bracket to
+                                             * read one on the way in. The
+                                             * RECURRING cost and not the
+                                             * 3,365 ms entry cost, which the
+                                             * reader has already paid by the
+                                             * time this row exists - and it
+                                             * names the SCROLL rather than
+                                             * `per RETURN`, which was true
+                                             * of a full TEXT page and 5.7x
+                                             * high in MIXED, where GR and
+                                             * HGR put the text window on
+                                             * four rows (section 7.4) */
+            "ScrollLock: arrows, Space.",   /* section 6.6, at 25 of 26 cells
+                                             * - the wave's widest, with
+                                             * `Colour:` above it: the
                                              * kernel is eating the keys this
                                              * machine types with, and this is
                                              * the one sentence that says

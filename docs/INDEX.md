@@ -286,7 +286,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 
 | package | source | SPEC | ships |
 |---|---|---|---|
-| APPLE2 | `apps/apple2/apple2.asm` | `docs/APPLE2-SPEC.md` | no |
+| APPLE2 | `apps/apple2/apple2.asm` | `docs/APPLE2-SPEC.md` | yes |
 | ARKANOID | `apps/arkanoid/arkanoid.asm` | §44 | yes |
 | AUDIO PLAYER | `apps/audio/audio.asm` | §86 | yes |
 | ArtfulType | `apps/artful/artful.asm` | §46 | yes |

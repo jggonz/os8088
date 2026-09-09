@@ -112,7 +112,8 @@ make xt-c64   # 86Box: the 4.77MHz XT with the 360KB C64 disk in B: - where
 make 286-c64  # 86Box: the 12.5MHz 286 with the 720KB one
 make 386-c64  # 86Box: the 386DX with the 1.44MB one
 make apple2disk # build the Apple II Plus floppy - a 48K II+: the package,
-              # its overlay, COPYING and README.TXT in one APPLE2/ folder;
+              # its overlay, WELCOME.BAS, COPYING and README.TXT in one
+              # APPLE2/ folder;
               # Applesoft, the Monitor and the character generator ride
               # INSIDE the package as an embedded part (SPEC.md 20.12).
               # The ROMs are Apple's and are FETCHED at a pin, never
@@ -120,7 +121,11 @@ make apple2disk # build the Apple II Plus floppy - a 48K II+: the package,
               # network and no build/apple2-rom/ cache cannot build it
               # ...in all four geometries: apple2.img, apple2720.img,
               # apple2120.img, apple2360.img
-make 386-apple2 # 86Box: the 386DX with the 1.44MB Apple II+ disk in B:
+make xt-apple2 # 86Box: the 4.77MHz XT with the 360KB Apple II+ disk in B: -
+              # where the speed figure was measured, and it is 0.4% of a
+              # 1.02MHz Apple, so the status row reads 0%
+make 286-apple2 # 86Box: the 12.5MHz 286 with the 720KB one
+make 386-apple2 # 86Box: the 386DX with the 1.44MB one
 make weavedisk # build the Weave floppy - web-style apps compiled to a .WAB
               # bundle and run natively: the runtime, its two companion
               # modules, three demo bundles, LOOM (the in-OS IDE that edits
@@ -649,10 +654,10 @@ cleanly and runs wrong when C meets this machine.
 | `build/runcpm*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`). What drive A carries is chosen per geometry at build time, so the 1.2MB disk fills itself and names what it left off in its own `LEFT-OFF.TXT` |
 | `build/paccman*.img`   | 1.44MB / 720KB / 1.2MB / 360KB | PaccMan, the C Pac-Man: the package and its README, no overlay (`make paccmandisk`) |
 | `build/c64*.img`       | 1.44MB / 720KB / 1.2MB / 360KB | Commodore 64, package (the ROMs are part 0 of `C64.O88`) + `C64.OVL` (`make c64disk`) |
-| `build/apple2*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Apple II Plus, package + `APPLE2.OVL` + `README.TXT` + `COPYING` in one `APPLE2/` folder (`make apple2disk`). The Apple II+ ROMs are inside the package as a part and are fetched at a pin, never committed |
+| `build/apple2*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Apple II Plus, package + `APPLE2.OVL` + `WELCOME.BAS` + `README.TXT` + `COPYING` in one `APPLE2/` folder (`make apple2disk`). The Apple II+ ROMs are inside the package as a part and are fetched at a pin, never committed |
 | `build/weave*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Weave: the runtime and its two modules, the demo bundles, LOOM, the demo sources and `CATALOG.TXT` (`make weavedisk`) |
 | `build/loom*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | the Weave IDE's own disk, with the demo sources flat (`make loomdisk`) |
-| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the eight above included (`make allapps`) |
+| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy — every on-demand disk above except Scribe's (`make allapps`) |
 | `build/apps-all-120.img` | 1.2MB FAT12            | the same disk for the 5.25" HD machine. There is no 720KB or 360KB build: the payload does not fit either |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
@@ -683,14 +688,14 @@ neither 3.5" disk. It *can* boot the 360KB one, because a 1.2MB drive reads
 360KB media, and that is what it had to do; it then got 354 clusters of
 software in a drive with 2,371, and had to swap the media disk in for
 `BEVERLY.MOD`. The 1.2MB pair carries the full 1.44MB payload instead, and so
-does every application floppy: the seven on-demand disks above are built in
+does every application floppy: the ten on-demand disks above are built in
 this geometry too, and so is the everything disk.
 
 Its clusters are 512 bytes like the 1.44MB disk's rather than 1,024 like the
 two DD disks', so it has 2,371 of them — 1,185KB against 1,423KB — and that
-ratio, not the raw one, is what each disk is measured against. Five of the
-eight (Word, cword, PaccMan, the C64, Weave/LOOM) are small enough that every
-geometry carries the identical payload. Three are not, and each answers it in its own
+ratio, not the raw one, is what each disk is measured against. Eight of the
+eleven (Word, Scribe, cword, PaccMan, the C64, the Apple II+, Weave and LOOM)
+are small enough that every geometry carries the identical payload. Three are not, and each answers it in its own
 way: the **story disk** is a straight cut, because the 1.44MB story list alone
 is 2,519 clusters and two titles have to come off; the **RunCPM disk** drops
 its largest CP/M software area so that the master disk keeps its programs, and
@@ -807,6 +812,9 @@ All targets, at a glance:
 | `xt-c64` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
 | `286-c64` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
 | `386-c64` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
+| `xt-apple2` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
+| `286-apple2` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `386-apple2` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
 | `xt-weave` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
 | `386-weave` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
 | `xt-weave-256` | IBM PC/XT | 8088 @ 4.77MHz | **256KB** | OTI-067 VGA | — |

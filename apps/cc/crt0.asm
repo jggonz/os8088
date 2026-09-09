@@ -1209,11 +1209,46 @@ cc_ovbind:
     pop ax
     ret
 
+; THE THREE REFUSALS, AND EVERY ONE OF THEM USED TO BE CUT OFF THE GLASS.
+; OSAPI_TOAST copies TOAST_MAX = 24 characters (kernel/toast.inc:85) and
+; TRUNCATES what is longer rather than refusing it, so with a 6-character
+; package name the three strings below were 32, 30 and 38 characters and what
+; the reader saw was `Not enough memory for A`, `APPLE2.OVL is not on thi` and
+; `APPLE2.OVL does not matc` - the consequence, in all three, in the half that
+; was cut. Nothing was checking, which is why it shipped in the SDK every C
+; package in the tree shares.
+;
+; They are rewritten to the SHAPE the cap allows rather than trimmed by eye,
+; AND THE SHAPE IS SIZED FROM THE NAME FIELD AND NOT FROM THIS TREE'S NAMES.
+; The header above %fatals a CC_PKG_NAME longer than 15, and every package
+; author reading docs/C-TOOLCHAIN.md is told 15 is legal - so 15 is the number
+; the arithmetic has to hold, and `len(prose) + 15 (+ 4 for the `.OVL`)`:
+;
+;     `No <NAME>.OVL`      3 + 15 + 4 = 22 of 24
+;     `No RAM: <NAME>`     8 + 15     = 23 of 24
+;     `Old <NAME>.OVL`     4 + 15 + 4 = 23 of 24
+;
+; The first draft of this fix sized the other two by the longest name in the
+; tree instead - `No RAM for <NAME>.OVL` (11 + name + 4) and `<NAME>.OVL is
+; stale` (name + 17) hold only 9 and 11 characters of name - which is a cap
+; nothing states and nothing enforces, and would have failed a legally-named
+; C package inside somebody else's build. A shared SDK's message is sized by
+; its own field.
+;
+; And that is a GATE rather than a comment: tests/unit/t_mirror.py - a
+; FAST-tier row, so every `make` runs it - reads these literals out of this
+; file, TOAST_MAX out of kernel/toast.inc and the `%fatal` cap out of the
+; header above, and requires all three to fit a name of the full cap AND
+; every `%define CC_PKG_NAME` in the tree. It is deliberately not in
+; apps/apple2/build.sh, where it was written: that script runs only for `make
+; apple2`, an on-demand C target outside `all` and outside `make test-full`,
+; so the one edit the gate exists to catch - lengthening a literal here -
+; would not have run it.
 section .data
 cc_ovfile:  db CC_PKG_NAME, '.OVL', 0
-cc_ovm_mem: db 'Not enough memory for ', CC_PKG_NAME, '.OVL', 0
-cc_ovm_gone:db CC_PKG_NAME, '.OVL is not on this disk', 0
-cc_ovm_stale: db CC_PKG_NAME, '.OVL does not match this program', 0
+cc_ovm_mem: db 'No RAM: ', CC_PKG_NAME, 0
+cc_ovm_gone:db 'No ', CC_PKG_NAME, '.OVL', 0
+cc_ovm_stale: db 'Old ', CC_PKG_NAME, '.OVL', 0
 section .text
 %endif  ; CC_HAS_OVL
 

@@ -221,13 +221,20 @@ VM286C64 := $(CURDIR)/vm/286-c64
 VMXTC64 := $(CURDIR)/vm/xt-c64
 VM286C64 := $(CURDIR)/vm/286-c64
 
-# ...and the APPLE2 machine (docs/APPLE2-SPEC.md section 16.4), which is a
-# copy of vm/386-c64 that HAS BOOTED with fdd_02_fn and the uuid changed and
-# NOTHING else. ONE of them in wave 1 - vm/xt-apple2 and vm/286-apple2 land in
-# the polish wave, WITH THE MEASUREMENT THAT JUSTIFIES THEM, because an XT
-# target before anyone has measured the port there is a claim and not a
-# machine. It is MANUAL EVIDENCE and never a gate.
+# ...and the APPLE2 machines (docs/APPLE2-SPEC.md section 16.4), one per
+# FLOPPY GEOMETRY for the reason the C64's three are: the disks are not the
+# same disk and the machines that take them do not run at the same speed - and
+# for an emulator the machine IS the emulated machine's speed, which the
+# status row prints. Each is a copy of the corresponding vm/*-c64 that HAS
+# BOOTED with fdd_02_fn and the uuid changed and NOTHING else.
+#
+# ONE OF THEM LANDED IN WAVE 1 AND TWO IN WAVE 7, WITH THE MEASUREMENT THAT
+# JUSTIFIES THEM, because an XT target before anyone has measured the port
+# there is a claim and not a machine. All three are MANUAL EVIDENCE and never
+# a gate (section 16.5).
 VM386APPLE2 := $(CURDIR)/vm/386-apple2
+VMXTAPPLE2 := $(CURDIR)/vm/xt-apple2
+VM286APPLE2 := $(CURDIR)/vm/286-apple2
 
 # The WEAVE machines (WEAVE-SPEC §13.1, wave 7's row landed early
 # because a runtime nobody can boot on a period machine is a runtime nobody
@@ -1831,6 +1838,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         paccman paccmandisk pmcbandbench xt-paccman \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         apple2 apple2disk apple2rom a2bandbench a2memtest a2cputest 386-apple2 \
+        xt-apple2 286-apple2 \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
@@ -6307,6 +6315,14 @@ $(BUILD)/apple2.bin: $(APPLE2INC) apps/apple2/icon.inc
 # makes: a2uitest reads it (it is the CHARGEN the composer is checked against)
 # and the file has exactly one owner - the rule below - because it is also the
 # package's PART through CC_PACKAGE's fourth argument.
+#
+# AND THE SDK'S OWN TOAST GATE IS NOT LISTED HERE ON PURPOSE. It was written
+# in build.sh, where it read apps/cc/crt0.asm, kernel/toast.inc and every C
+# package's shim - none of them prerequisites of this stamp, so the very edits
+# it existed to catch left the stamp up to date and never ran it. It is a row
+# of tests/unit/t_mirror.py now (fast tier, every `make`), which needs no
+# prerequisite at all, and adding those files here would only rebuild APPLE2
+# whenever an unrelated package's shim changed.
 $(BUILD)/.apple2-hostchecks: apps/apple2/apple2.c $(APPLE2SRC) $(APPLE2HOST) \
                              $(BUILD)/apple2-rom/APPLE2.ROM | $(BUILD)
 	apps/apple2/build.sh
@@ -6343,14 +6359,29 @@ apple2rom: $(BUILD)/apple2-rom/APPLE2.ROM
 # FOUR GEOMETRIES, each --verify'd: 1.44MB, 720KB, 1.2MB and 360KB. A 360KB
 # disk's cluster is 1,024 bytes (tools/os88disk.py GEOMETRY[360], spc = 2), so
 # COPYING's 21,533 bytes are 22 of its 354 clusters, and the whole folder -
-# apple2.o88 43,520 (the ROM part included) + APPLE2.OVL 883 + README.TXT
-# 4,539 + COPYING 21,533 = 70,475 bytes, plus the folder's own directory
-# cluster - is what os88disk.py --verify reports as 73 of 354. Even the 360KB
-# disk carries the licence with room to spare.
-APPLE2DISK := $(BUILD)/apple2.o88 $(BUILD)/APPLE2.OVL \
+# apple2.o88 54,272 (the ROM part included) + APPLE2.OVL 4,349 + WELCOME.BAS
+# 884 + README.TXT 9,500 + COPYING 21,533 = 90,538 bytes, plus the folder's
+# own directory cluster - is what os88disk.py --verify reports as 93 of 354.
+# Even the 360KB disk carries the licence and the listing with room to spare.
+# ...AND WELCOME.BAS, WHICH IS TOKENISED AND NOT TYPED (section 16.2). The
+# package loads a program by WALKING its line chain (section 12), so a plain
+# ASCII listing on the disk is refused by name and correctly - the welcome
+# program has to ship in the machine's own form. tools/a2bas.py tokenises
+# apps/apple2/welcome.a2b against the token name table in the PINNED ROM
+# itself ($D0D0, AppleWin bin/A2_BASIC.SYM:805), so the shipped bytes rebuild
+# byte for byte and no token in them was typed from memory; --selfcheck is in
+# the recipe rather than in a target of its own because it costs milliseconds
+# and the failure it catches - one byte out - is a `]` prompt whose LIST is
+# wrong, which no screendump of a booted machine shows.
+$(BUILD)/WELCOME.BAS: tools/a2bas.py apps/apple2/welcome.a2b \
+                      $(BUILD)/apple2-rom/APPLE2.ROM | $(BUILD)
+	python3 tools/a2bas.py apps/apple2/welcome.a2b --selfcheck -o $@
+
+APPLE2DISK := $(BUILD)/apple2.o88 $(BUILD)/APPLE2.OVL $(BUILD)/WELCOME.BAS \
               apps/apple2/COPYING apps/apple2/README.TXT tools/os88disk.py
 APPLE2IMG = python3 tools/os88disk.py -o $(1) --size $(2) \
 	    APPLE2:$(BUILD)/apple2.o88 APPLE2:$(BUILD)/APPLE2.OVL \
+	    APPLE2:$(BUILD)/WELCOME.BAS \
 	    APPLE2:apps/apple2/README.TXT APPLE2:apps/apple2/COPYING
 apple2disk: $(BUILD)/apple2.img $(BUILD)/apple2720.img \
             $(BUILD)/apple2120.img $(BUILD)/apple2360.img
@@ -6420,12 +6451,28 @@ a2cputest: apps/apple2/hosttest/a2cputest.asm apps/apple2/hosttest/a2cputest.sh 
 # and never commit the nvr/. RESET=1|cmos|flash|both clears a stale CMOS.
 #
 # IT IS MANUAL EVIDENCE AND NEVER A GATE (section 16.5): a make target that
-# launches a GUI emulator cannot assert that anything booted. vm/xt-apple2 and
-# vm/286-apple2 land in the polish wave, with the measurement that justifies
-# them.
+# launches a GUI emulator cannot assert that anything booted.
 386-apple2: $(IMG) $(BUILD)/apple2.img
 	@$(UNPROTECT) $(VM386APPLE2)/86box.cfg
 	$(BOX) -P $(VM386APPLE2) -N
+
+# ...and the XT and the 286, one per floppy geometry exactly as the C64
+# machines are: vm/xt-c64 / vm/286-c64 with B: = the 360KB / 720KB APPLE2 disk
+# and the uuid changed and nothing else.
+#
+# THE XT IS WHERE THE SPEED FIGURE IS TAKEN (section 16.4) - the measured
+# percentage of a 1.02 MHz Apple II that the status row prints - and where
+# Ctrl+F2, Ctrl+F3 and Alt+Enter are confirmed on a real AT/XT BIOS rather
+# than on QEMU's SeaBIOS, which passes enhanced codes a period ROM drops.
+# Read by a person, off the glass, and recorded in the SPEC with its date and
+# machine.
+xt-apple2: $(IMG360) $(BUILD)/apple2360.img
+	@$(UNPROTECT) $(VMXTAPPLE2)/86box.cfg
+	$(BOX) -P $(VMXTAPPLE2) -N
+
+286-apple2: $(IMG) $(BUILD)/apple2720.img
+	@$(UNPROTECT) $(VM286APPLE2)/86box.cfg
+	$(BOX) -P $(VM286APPLE2) -N
 
 
 # --- WEAVE, the .WAB runtime (WEAVE-SPEC 1.2) --------------------------------
@@ -9351,16 +9398,19 @@ zset:
 # THE EVERYTHING DISK (ON DEMAND: `make allapps`) - SPEC.md 19.10
 # =============================================================================
 # build/apps-all.img: ONE 1.44MB floppy with every application this project
-# ships on it, including the seven that have their own disks and therefore
+# ships on it, including the nine that have their own disks and therefore
 # never appear on the shipped apps disk - FROTZ (SPEC.md 61), WORD (SPEC.md
-# 65), CWORD (SPEC.md 73.12), RUNCPM (SPEC.md 74), C64 (docs/C64-SPEC.md) and
-# the Weave family's two, WEAVE and LOOM (WEAVE-SPEC 1.2).
+# 65), CWORD (SPEC.md 73.12), PACCMAN (SPEC.md 91), RUNCPM (SPEC.md 74), C64
+# (docs/C64-SPEC.md), APPLE2 (docs/APPLE2-SPEC.md) and the Weave family's two,
+# WEAVE and LOOM (WEAVE-SPEC 1.2). SCRIBE has its own disk and is deliberately
+# NOT here - it is a FORK of WORD (SPEC.md 67) and the two would collide.
 #
-# SEVEN AND NOT EIGHT: APPLE2 (docs/APPLE2-SPEC.md) has a disk of its own too
-# and is DELIBERATELY NOT in $(ALLAPPSARGS) yet. It is being built a wave at a
-# time and joins this disk in WAVE 7, with the folder shape section 16.2
-# pins; adding it now would put a package with no 6502 in it on the disk a
-# release page offers as "every application".
+# NINE, AND APPLE2 IS THE ONE THAT JOINED LAST: it was deliberately kept off
+# this disk while it was being built a wave at a time - a package with no 6502
+# in it on the disk a release page offers as "every application" is a claim
+# nobody made - and it lands here in WAVE 7 with the folder shape section 16.2
+# pins, all five files of it: the package (with the ROM inside it), the
+# overlay, README.TXT, COPYING and WELCOME.BAS.
 # It is a CONVENIENCE, offered beside the
 # shipped images on a release page for somebody who wants one disk rather
 # than four, and nothing in the tree boots it by default.
@@ -9427,9 +9477,9 @@ zset:
 # the tree above has besides RUNCPM\A\0, one cluster each at 1.44MB's 16
 # entries a cluster - DERIVED from ALLAPPSARGS below (ALLAPPSDIRS: every
 # DIR: prefix, each one's parent, --folder DOCS, and RUNCPM\A, the
-# selection's own parent; fourteen today: APPS, GAMES, MEDIA, WORD,
-# CWORD, PACCMAN, RUNCPM, RUNCPM\A, C64, WEAVE, LOOM, SYSTEM, SYSTEM\DOS,
-# DOCS), so
+# selection's own parent; fifteen today: APPS, GAMES, MEDIA, WORD,
+# CWORD, PACCMAN, RUNCPM, RUNCPM\A, C64, APPLE2, WEAVE, LOOM, SYSTEM,
+# SYSTEM\DOS, DOCS), so
 # the budget is derived
 # here as it is for build/runcpm.img, and a folder added to the tree above
 # is priced without anyone remembering a constant. One parent level is
@@ -9444,6 +9494,9 @@ ALLAPPSFILES := $(APPS) $(BUILD)/frotz.o88 \
                 $(PACCMANDISK) \
                 $(BUILD)/c64.o88 $(BUILD)/C64.OVL \
                 apps/c64/README.TXT apps/c64/COPYING \
+                $(BUILD)/apple2.o88 $(BUILD)/APPLE2.OVL \
+                $(BUILD)/WELCOME.BAS \
+                apps/apple2/README.TXT apps/apple2/COPYING \
                 $(WEAVEDISK) $(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS) \
                 $(RUNCPMDISK)
 # These images use the RunCPM master disk, but not the separate CP/M
@@ -9477,6 +9530,10 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BUILD)/frotz.o88) \
                $(addprefix RUNCPM:,$(RUNCPMDISK)) \
                $(addprefix C64:,$(BUILD)/c64.o88 $(BUILD)/C64.OVL \
                                 apps/c64/README.TXT apps/c64/COPYING) \
+               $(addprefix APPLE2:,$(BUILD)/apple2.o88 $(BUILD)/APPLE2.OVL \
+                                   $(BUILD)/WELCOME.BAS \
+                                   apps/apple2/README.TXT \
+                                   apps/apple2/COPYING) \
                $(addprefix WEAVE:,$(WEAVEDISK)) \
                $(addprefix LOOM:,$(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS)) \
                $(APPSYSARGS) \

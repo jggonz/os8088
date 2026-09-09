@@ -222,3 +222,76 @@ print('a2msgs: %d a2_say literal(s), every one in the length gate, every '
       'a2_say/ovl_a2_named call site literal, and every os88_toast - literal '
       'or composed - inside TOAST_MAX' % len(said))
 PY
+
+# BOTH REDRAW PATHS CARRY A TIER TERM, WHICH IS THE ROW THAT WOULD HAVE
+# CAUGHT WAVE 7's ONE REAL DEFECT. The windowed flush has been paced since
+# wave 1 - at most once a host tick, and on the CPU_8086 tier at most once
+# every SECOND tick, because a 496.8 ms repaint cannot keep up with a 55 ms
+# one (APPLE2-SPEC 7.8). The FULLSCREEN bracket draws the same picture more
+# expensively - a colour character row is 140.4 ms against the windowed row's
+# 26.4 - and shipped with the "did anything change" gate COPIED and the
+# pacing term left behind, so on the one tier that wave had just measured it
+# issued a frame between every 256-cycle slice (APPLE2-SPEC 13.2). Nothing in
+# the toolchain could see it: both paths compile, both draw the right pixels,
+# and the difference is only in how much emulated machine runs between them.
+#
+# It is a TEXT gate and it says so: the harness cannot reach this loop's
+# pacing (a2uitest drives the bracket with the 6502 stopped, so no producer
+# marks a line between iterations and neither arm composes a second frame),
+# and no emulator in this tree can host the arm at all - it needs a CPU_8086
+# machine with a foreign-mode-capable VGA, which section 16.4.1 shows does not
+# exist here. What this row refuses is the SHAPE going away.
+python3 - <<'PY' || exit 1
+import re, sys
+bad = []
+want = [
+    ('apps/apple2/apple2.c', 'os88_onwake', ['a2_tier_slow', 'a2_fltick'],
+     'the windowed flush'),
+    ('apps/apple2/a2scr.c', 'a2_fsx_main', ['a2_tier_slow', 'a2_fsx_tick'],
+     'the fullscreen colour bracket'),
+]
+for path, fn, terms, what in want:
+    code = re.sub(r'/\*.*?\*/', ' ', open(path).read(), flags=re.S)
+    # the DEFINITION and not the forward declaration: the last mention that
+    # is followed by a brace rather than a semicolon
+    i = -1
+    for m in re.finditer(r'(?<![A-Za-z0-9_])' + fn + r'\s*\([^;{]*\)\s*\{',
+                         code):
+        i = m.start()
+    if i < 0:
+        bad.append('%s: %s has no definition in this file' % (path, fn))
+        continue
+    body = code[i:i + 8000]
+    for t in terms:
+        if t not in body:
+            bad.append('%s: %s does not mention %s - %s has to be PACED by '
+                       'tier and not only gated on "did anything change" '
+                       '(APPLE2-SPEC 7.8 and 13.2)' % (path, fn, t, what))
+# ...and the stamp, without which the foreign term reads a word nothing writes
+code = re.sub(r'/\*.*?\*/', ' ', open('apps/apple2/a2scr.c').read(), flags=re.S)
+if not re.search(r'a2_fsx_tick\s*=\s*os88_ticks\(\)', code):
+    bad.append('apps/apple2/a2scr.c: nothing stamps a2_fsx_tick, so the '
+               'pacing term above compares against a word that never moves')
+if bad:
+    for b in bad:
+        print('a2pace: ' + b)
+    sys.exit(1)
+print('a2pace: both redraw paths are gated AND paced - a2_flush on '
+      'a2_fltick, a2_fsx_main on a2_fsx_tick, each with a2_tier_slow in it')
+PY
+
+# THE SHARED SDK'S OWN TOASTS ARE GATED TOO, AND NOT FROM HERE. The three
+# overlay refusals apps/cc/crt0.asm raises are assembled from CC_PKG_NAME and
+# are therefore a different length in every C package that includes the SDK;
+# all three were over TOAST_MAX and were being cut off the glass in every one
+# of them - `APPLE2.OVL is not on this disk` reaching the reader as
+# `APPLE2.OVL is not on thi` - and nothing in the tree was looking, which is
+# how a defect in the SDK outlived seven packages. This wave found it here and
+# the check was written here first, WHICH WAS THE WRONG HOME: this script runs
+# only for `make apple2`, an on-demand C target outside `all` and outside
+# `make test-full`, so lengthening a literal in crt0.asm or adding a C package
+# with a long name would not have run the gate that exists to catch exactly
+# that. It is a row of tests/unit/t_mirror.py instead - fast tier, every
+# `make` - reading the literals out of crt0.asm, TOAST_MAX out of
+# kernel/toast.inc and the name cap out of crt0.asm's own `%fatal`. See
+# docs/APPLE2-SPEC.md section 17.3.
