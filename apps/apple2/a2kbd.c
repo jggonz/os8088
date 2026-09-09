@@ -38,12 +38,21 @@
  * the table above that an ascii byte cannot express.
  *
  * ----------------------------------------------------------------------------
- * WHAT LANDS HERE LATER
+ * THE REST OF IT, WHICH IS A POLL AND NOT A KEYSTROKE (section 6.3, 6.6)
  * ----------------------------------------------------------------------------
- * WAVE 3 brings the rest: F1 and F2 as the game BUTTONS PB0 and PB1 read as a
- * LEVEL through os88_key_down, and the keyboard-mouse rule. BOTH RESET CHORDS
- * ARE HERE ALREADY - Ctrl+F2 is Ctrl-Reset and Ctrl+F3 its Open-Apple form
- * (section 6.3, and a2_key below).
+ * F1 and F2 are the II+'s GAME BUTTONS PB0 and PB1 at $C061/$C062, and a
+ * button is a LEVEL rather than an event: a game reads the address in a loop
+ * and asks whether the button is down NOW. So they are polled once per wake
+ * through os88_key_down (SPEC.md 9.7) and cached in a2_btn[], where the soft
+ * switch reads them - never one bridge crossing per emulated read, which is
+ * what a game polling $C061 would cost.
+ *
+ * They are a DEPARTURE FROM AppleWin'S Left-Alt / Right-Alt, with its reason:
+ * Alt+Enter is this port's fullscreen chord (section 6.3). And they are host
+ * conveniences rather than keys of the machine - `Open-Apple` and
+ * `Solid-Apple` are //e KEYBOARD keys and a II+ has none; what a II+ has is
+ * three digital inputs at $C061-$C063, of which PB0 and PB1 are the two a
+ * game reads.
  *
  * WAVE 4 brings the paste feeder's peek-and-consume handshake and Copy's
  * screen-encoding walk.
@@ -84,6 +93,54 @@
  * this chord could not wait for it: os88_onkey's own comment says why. */
 #define KSC_ALT_ENTER 0xA6
 
+/* ==========================================================================
+ * THE KEYBOARD-MOUSE RULE (APPLE2-SPEC section 6.6, C64-SPEC 7.6)
+ * ========================================================================*/
+/* SPEC.md 9.6: on a machine with NO MOUSE the kernel eats the arrows, Space
+ * and Del as its pointer, and ScrollLock hands them back. On this machine
+ * that is worse than a nuisance and better than a mystery: LEFT and RIGHT are
+ * keys of the Apple II+ (asciicode row 0 gives $08 and $15) and SPACE is the
+ * key a person typing BASIC presses most often after the letters.
+ *
+ * THE SDK CANNOT BE ASKED `HAS A MOUSE SPOKEN`. os88_mouse() answers x, y and
+ * the button and nothing else, and adding a slot for it would spend kernel
+ * headroom, which is a decision and not a build fix. So this asks a question
+ * the package CAN answer and that has the same answer:
+ *
+ *   kbm_key (kernel/mouse.inc) intercepts one of those keys when, and only
+ *   when, no mouse has spoken AND ScrollLock is off - and an intercepted key
+ *   never reaches os88_onkey. So `the down-map says one is held, and
+ *   os88_onkey has never once delivered one` IS `the kernel is eating them`,
+ *   observed rather than inferred.
+ *
+ * NOTHING HERE READS SCROLLLOCK'S OWN SCAN CODE (0x46), and that is the whole
+ * design rather than an omission: the rule is INFERRED from three polls and a
+ * one-way latch, so a scan-code test for it would be a second, weaker answer
+ * to a question already answered. apps/c64/c64kbd.c, the precedent, names no
+ * such constant for the same reason; a `#define KSC_SCRLK` sat here unread
+ * for a wave and was deleted, because a dead constant beside a rule that
+ * deliberately reads no scan code invites the next reader to add one.
+ *
+ * THREE CONSECUTIVE POLLS, because a wake posted BEFORE a press is dispatched
+ * ahead of the key event behind it, so one poll can legitimately see the
+ * ISR's bit with the W_ONKEY still queued. The latch is ONE WAY - a kernel
+ * that has delivered one of these keys is not going to start eating them -
+ * and the message is said once a session (SPEC.md 47). */
+static int a2_key_typed;                    /* os88_onkey delivered one of the
+                                             * kernel's pointer keys: the
+                                             * keyboard mouse is not taking
+                                             * them, and it cannot start to */
+static int a2_key_held;                     /* consecutive polls with one held
+                                             * and none ever typed */
+static int a2_slock_said;
+
+static int a2_ptr_key(int scan)
+{
+    return (scan == KSC_LEFT || scan == KSC_RIGHT || scan == KSC_UP
+            || scan == KSC_DOWN || scan == KSC_SPACE || scan == KSC_DEL)
+           ? 1 : 0;
+}
+
 #ifdef A2_HOST
 static int a2_ndrop;                        /* keys dropped, for the harness's
                                              * cost table. -DA2_HOST keeps the
@@ -109,6 +166,13 @@ static void a2_key(int ascii, int scan, void *win)
     int c;
 
     (void)win;
+    /* SECTION 6.6'S OBSERVABLE, AND IT IS ONE WAY. A key the kernel's
+     * pointer would have eaten has ARRIVED, so it is not eating them: either
+     * a mouse has spoken or ScrollLock is already on, and neither un-happens.
+     * It is tested before every drop below, because a dropped key is still a
+     * delivered one. */
+    if (a2_ptr_key(scan))
+        a2_key_typed = 1;
     if (ascii == 0 && scan == KSC_CTRL_F2) {
         a2_reset_req = A2_RST_CTRL;
         return;
@@ -145,4 +209,54 @@ static void a2_key(int ascii, int scan, void *win)
             c -= 32;                        /* Caps Lock is always on */
     }
     a2_kb_put(c);
+}
+
+/* a2_kbd_poll - the LEVEL half of the keyboard, once per wake.
+ *
+ * The two game buttons and section 6.6's message, from one pass of the
+ * down-map. It runs at the top of the wake with no lock held, AFTER the reset
+ * latches are spent - so Ctrl+F3's `PB0 held across the reset` survives this
+ * poll rather than being overwritten by it (a2_reset_service). */
+static void a2_kbd_poll(void)
+{
+    int held;
+
+    /* THE GAME BUTTONS, AS LEVELS. F1 and F2 are PB0 and PB1 (section 6.3). */
+    a2_btn[0] = os88_key_down(KSC_F1) ? 1 : 0;
+    a2_btn[1] = os88_key_down(KSC_F2) ? 1 : 0;
+
+    /* ...AND PB2 IS THE SHIFT-KEY MOD, ACTIVE WHEN SHIFT IS UP (AppleWin
+     * Joystick.cpp:640-651, citing Sather UTAII p7-36; a2io.c has the whole
+     * of it). BEHIND ITS OWN READER: two more os88_key_down calls are 93 us
+     * a wake on the target, and almost no program asks, so the poll starts
+     * only once $C063 has actually been read. Until then a2_btn[2] holds its
+     * initial 1, which is Shift's own resting state. */
+    if (a2_btn2_want)
+        a2_btn[2] = (os88_key_down(KSC_LSHIFT) || os88_key_down(KSC_RSHIFT))
+                  ? 0 : 1;
+
+    /* ...AND THE KEYBOARD-MOUSE MESSAGE'S FIVE READS ARE BEHIND ITS OWN
+     * ANSWER (section 6.6). The message is a ONE-SHOT: once a2_slock_said or
+     * a2_key_typed is set, nothing can read `held` again - and a2_key_typed
+     * latches on the first Space or arrow the user types into BASIC, which on
+     * a machine that HAS a mouse is within seconds of launch. Asking anyway
+     * was five OSAPI far calls at 46.7 us - 234 us a wake, for ever, on the
+     * target - producing a value nothing reads. The `||` does not
+     * short-circuit when no key is down, which is the common case. The two
+     * button reads above stay unconditional: those ARE the level $C061
+     * answers. */
+    if (!a2_slock_said && !a2_key_typed) {
+        held = (os88_key_down(KSC_LEFT) || os88_key_down(KSC_RIGHT)
+                || os88_key_down(KSC_UP) || os88_key_down(KSC_DOWN)
+                || os88_key_down(KSC_SPACE)) ? 1 : 0;
+        if (!held) {
+            a2_key_held = 0;
+        } else {
+            a2_key_held++;
+            if (a2_key_held >= 3) {
+                a2_slock_said = 1;
+                a2_say("ScrollLock: arrows, Space.");
+            }
+        }
+    }
 }

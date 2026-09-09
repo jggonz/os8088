@@ -78,13 +78,61 @@ static int a2_mode_of(void)
     return a2_v_hires ? A2_MODE_HIRES : A2_MODE_LORES;
 }
 
-/* a2_mode_page - the base address of the page the display is reading NOW.
+/* a2_mode_page - the base address of the page the display is reading NOW, and
+ * a2_page_len - how long it is. Text and lo-res share $0400/$0800; hi-res is
+ * $2000/$4000 and is eight times the size (APPLE2-SPEC section 7.2).
  *
- * Text and lo-res share $0400/$0800; hi-res is $2000/$4000 and is wave 3's,
- * which is why this answers the text page for every wave-1 mode. */
+ * THIS IS THE PAGE THE WRITE WINDOW IS TAKEN OVER (section 7.5) and it is the
+ * GRAPHICS page in a graphics mode, MIXED or not: the four text rows of a
+ * MIXED screen are outside it, and a2_dirty_scan marks them from the page
+ * bitmap alone with the row widened, because a window taken somewhere else
+ * says nothing about them. Widening the watch range to cover both pages
+ * instead would span $0400-$3FFF - which is where an Applesoft program and
+ * every one of its variables live - and the per-row intersection would then
+ * answer "all forty cells" for every row of every flush, which is the whole
+ * thing the window exists to prevent. */
 static int a2_mode_page(void)
 {
+    if (!a2_v_text && a2_v_hires)
+        return a2_v_page2 ? A2_HGR2 : A2_HGR1;
     return a2_v_page2 ? A2_TXT2 : A2_TXT1;
+}
+
+static int a2_page_len(void)
+{
+    return (!a2_v_text && a2_v_hires) ? A2_HGRLEN : A2_PGLEN;
+}
+
+/* a2_row_mode - WHICH RENDERER OWNS CHARACTER ROW r (section 7.4).
+ *
+ * MIXED is the top 160 scan lines in the graphics mode and the bottom 32 in
+ * TEXT, and 160 is 20 character rows exactly - so the split is a row test and
+ * never a scan-line one, and no row is ever half one renderer and half the
+ * other. */
+static int a2_row_mode(int r)
+{
+    if (a2_v_text)
+        return A2_MODE_TEXT;
+    if (a2_v_mixed && r >= A2_MIXROW)
+        return A2_MODE_TEXT;                /* ...and it reads the TEXT page,
+                                             * PAGE2 and all: a real II+
+                                             * selects the second page for
+                                             * both halves with one switch */
+    return a2_v_hires ? A2_MODE_HIRES : A2_MODE_LORES;
+}
+
+/* a2_row_base - the row's forty SOURCE bytes.
+ *
+ * For text and lo-res that is the interleaved text-page row; for hi-res it is
+ * SCAN LINE 0 of the row group, whose other seven lines a2_band_hires walks
+ * at $400 apart. Both maps are built in os88_main and page 2 is +$400 on one
+ * and +$2000 on the other, which is why this is one function and not an
+ * offset the callers add. */
+static unsigned a2_row_base(int r)
+{
+    if (a2_row_mode(r) == A2_MODE_HIRES)
+        return a2_hbase[r] + (unsigned)(a2_v_page2 ? A2_HGR2 - A2_HGR1 : 0);
+    return a2_tbase[r] + (unsigned)(a2_v_page2 ? A2_TXT2 - A2_TXT1 : 0);
 }
 
 /* a2_io_init - what a II+ powers up in: TEXT on, everything else off.
@@ -129,13 +177,26 @@ static int a2_video_set(int which, int on)
     if (a2_mode_page() != page0)
         a2_watch_page();                    /* the write window follows the
                                              * page it is taken over */
-    if (a2_mode_of() != mode0 || a2_mode_page() != page0
-        || (which == 1 && !a2_v_text)) {
+    if (a2_mode_of() != mode0 || a2_mode_page() != page0) {
         a2_dirty_all();                     /* a change that actually changes
-                                             * the renderer, the page or the
-                                             * MIXED split marks the whole
-                                             * frame; one that does not marks
-                                             * nothing */
+                                             * the RENDERER or the PAGE really
+                                             * does change every row, so the
+                                             * whole frame is marked */
+    } else if (which == 1 && !a2_v_text) {
+        /* ...BUT THE MIXED SPLIT MOVES FOUR ROWS AND NOT TWENTY-FOUR, and
+         * a2_dirty_all() here was the same waste the else-arm below diagnoses
+         * one condition along - on the arm where the switch really does
+         * something. a2_row_mode(r) for r < A2_MIXROW never reads a2_v_mixed,
+         * a2_row_base does not move and neither does the page, so twenty of
+         * the twenty-four rows were recomposed from identical sources by the
+         * identical composer to produce identical pixels: ~417 ms of hi-res
+         * compose plus 192 span compares to draw four rows that owed ~70
+         * (section 7.9.2's per-group figures). a2_dirty_split marks exactly
+         * the split's rows, WHOLE - a2scr.c owns why both marks are needed.
+         *
+         * THE STATUS ROW moves with them: a2_dirty_split sets a2_st_dirty for
+         * the else-arm's reason, the MIXED field being on it. */
+        a2_dirty_split();
     } else {
         /* ...AND MIXED IN TEXT MODE IS THE `changes nothing` CASE, NOT THE
          * `changes the split` ONE. The split only exists in a GRAPHICS mode:
@@ -201,11 +262,32 @@ static unsigned a2_spk_n;
  * the unmapped $FF path. */
 static int a2_an[4];
 
-/* THREE digital inputs at $C061-$C063, not two (Memory.cpp:726-728). PB0 and
- * PB1 are the two a game reads and WAVE 3 puts F1 and F2 on them; PB2 has no
- * host key at all. They REPORT a level and change nothing - reading $C061 no
- * more presses a button than reading $C000 consumes a key (section 5.3). */
-static int a2_btn[3];
+/* THREE digital inputs at $C061-$C063, not two (Memory.cpp:723-726 dispatches
+ * all three to JoyReadButton). PB0 and PB1 are the two a game reads and F1
+ * and F2 are on them (section 6.3). They REPORT a level and change nothing -
+ * reading $C061 no more presses a button than reading $C000 consumes a key
+ * (section 5.3) - and the level is refreshed ONCE A WAKE by a2_kbd_poll
+ * rather than per emulated read, because a game reads $C061 in a loop and
+ * each read would otherwise be a bridge crossing.
+ *
+ * **$C063 IS THE SHIFT-KEY MOD, AND IT IS ACTIVE WHEN SHIFT IS *UP*.** This
+ * is the one of the three that is a fact about the MACHINE rather than a host
+ * convenience, and the port answered it 0 - the inverse of the default state
+ * - for a wave. AppleWin's JoyReadButton (Joystick.cpp:640-651) is the
+ * authority and it is explicit: on a II/II+ with no joystick,
+ * `pressed = !(GetKeyState(VK_SHIFT) < 0)`, cited in its own comment to
+ * Sather, *Understanding The Apple II* p7-36. So a program probing the mod
+ * on a stock II+ reads $80 with Shift up and $00 with it held, and that is
+ * what this machine does.
+ *
+ * IT IS POLLED ONLY ONCE A PROGRAM HAS ASKED. Shift needs TWO os88_key_down
+ * calls (left and right), 93 us a wake on the target, for a level almost
+ * nothing reads - so a2_btn2_want latches on the first $C063 read and the
+ * poll is free until then. a2_btn[2] starts at 1 because Shift up IS the
+ * resting state, so even the very first read - the one before any poll has
+ * seen the key - answers what the reference answers. */
+static int a2_btn[3] = { 0, 0, 1 };
+static int a2_btn2_want;
 
 /* THE PADDLE ONE-SHOTS. A read or a write anywhere in $C070-$C07F arms all
  * four (Memory.cpp:753-756, :783-786) - and AppleWin leaves each timer that is
@@ -282,8 +364,12 @@ static int a2_c06x(int lo)
     n = lo & 7;
     if (n == 0)
         return A2_FLOAT;                    /* $C060 TAPEIN - no cassette */
-    if (n < 4)
+    if (n < 4) {
+        if (n == 3)
+            a2_btn2_want = 1;               /* the shift-key mod has a reader
+                                             * now: a2_kbd_poll starts asking */
         return a2_btn[n - 1] ? A2_FLOAT : (A2_FLOAT & 0x7F);
+    }
     return a2_pdl_rd(n - 4);
 }
 

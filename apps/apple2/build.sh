@@ -30,10 +30,13 @@
 #                                  the glass must show what the 7,680-byte
 #                                  shadow says it shows, and the cost table is
 #                                  printed in MILLISECONDS (section 7.9)
-#   tools/a2ref.py --check         ...and the composed frame against an
-#                                  INDEPENDENT compositor, bit for bit - twice,
-#                                  once on each FLASH PHASE, which is the same
-#                                  memory and different pixels. Then
+#   tools/a2ref.py --check         ...and the composed frames against an
+#                                  INDEPENDENT compositor, bit for bit - FIVE
+#                                  of them: text on each FLASH PHASE, which is
+#                                  the same memory and different pixels, then
+#                                  lo-res, hi-res and a MIXED screen, which is
+#                                  both graphics composers and the text one in
+#                                  one frame. Then
 #                                  --selftest, which injects a one-bit defect
 #                                  and requires the compare to FAIL: a check
 #                                  that cannot fail is not a check. And
@@ -51,10 +54,6 @@
 # 4.4 (`make a2cputest`) - the rcz80test precedent. It arrives with the core
 # it gates, in wave 2.
 #
-# NOT here YET: `a2ref.py --lumcheck`, which is the lo-res composer's 16-entry
-# luminance ladder over all 256 ordered pairs. Its SUBJECT does not exist
-# until the wave that writes that composer, and a green pass over a table that
-# is not there is exactly what these harnesses are built not to print.
 #
 # The compiler for the TARGET is not in this tree: tools/setup-cc.sh fetches
 # SmallerC at its pinned commit into build/cc/ (gitignored). The checks below
@@ -94,7 +93,25 @@ $BUILD/a2uitest
 # one thing on the glass the damage model cannot see (section 7.6).
 python3 tools/a2ref.py --check text $BUILD/a2ref-state.bin $BUILD/a2ref-frame.bin
 python3 tools/a2ref.py --check text $BUILD/a2ref2-state.bin $BUILD/a2ref2-frame.bin
+# ...AND THE OTHER TWO COMPOSERS, AND MIXED, WHICH IS BOTH OF THEM IN ONE
+# FRAME. The mode list is EXPLICIT for the reason above: `--check lores` on a
+# build whose lo-res composer does not exist is a failure and not a skip.
+python3 tools/a2ref.py --check lores $BUILD/a2lores-state.bin $BUILD/a2lores-frame.bin
+python3 tools/a2ref.py --check hires $BUILD/a2hires-state.bin $BUILD/a2hires-frame.bin
+python3 tools/a2ref.py --check hires $BUILD/a2mixed-state.bin $BUILD/a2mixed-frame.bin
 python3 tools/a2ref.py --selftest text $BUILD/a2ref-state.bin $BUILD/a2ref-frame.bin
+python3 tools/a2ref.py --selftest hires $BUILD/a2hires-state.bin $BUILD/a2hires-frame.bin
+# ...and the lo-res LUMINANCE LADDER over all 256 ordered pairs, against
+# luminances a2ref.py derives from MII's `palettes[0]` "Color NTSC"
+# (mii_emu src/mii_video.c:94-113) taken through MII's own lo-res mapping
+# (src/mii_video.c:173-177) - a table the reference actually DISPLAYS, which
+# AppleWin's `PaletteRGB_NTSC` lores block is not (its own first line says so
+# and VideoInitializeOriginal overwrites it). apple2emu's `Lores_colors`
+# (src/video.cpp:100-115) is the cross-check and agrees on every lit/dark
+# decision. Its subject exists now, which is why this line does: a green pass
+# over a table that is not there is exactly what these harnesses are built not
+# to print.
+python3 tools/a2ref.py --lumcheck $BUILD/a2lum.bin
 
 # The movers and the composer's string loops, on a real x86 with SS != DS.
 apps/apple2/hosttest/a2memtest.sh

@@ -20,8 +20,12 @@
 ; -----------------------------------------------------------------------------
 ; 280 / 40 = 7. Therefore no cell after the first lands on a byte boundary, a
 ; decoded glyph is never a pixel byte, there is no per-cell store shape
-; anywhere on this machine, and all three composers - text here, lo-res and
-; hi-res in wave 3 - are SHIFT-ACCUMULATOR composers of one class.
+; anywhere on this machine, and all three composers - text, lo-res and hi-res,
+; all three of them here - are SHIFT-ACCUMULATOR composers of one class. They
+; share `a2_pack` LITERALLY, which is what makes that a fact about the code
+; rather than a family resemblance: phase B decides what seven-bit value each
+; cell contributes and phase C, the same routine for all three, packs eight of
+; them into seven bytes.
 ;
 ; EIGHT CELLS ARE FIFTY-SIX BITS ARE SEVEN BYTES, EXACTLY, and that is the
 ; whole of the design: the composer's unit is a GROUP of eight cells, a group
@@ -51,8 +55,10 @@
 
 section .bss
 
-; The masked glyph bytes of ONE character row, laid out as eight pixel rows of
-; forty cells, which phase C then packs seven bits at a time. Interleaving the
+; The seven-bit value each cell contributes, laid out as eight pixel rows of
+; forty cells, which phase C then packs seven bits at a time. It is a masked
+; glyph row in text, a luminance block in lo-res and a reversed hi-res byte in
+; hi-res, and phase C cannot tell which. Interleaving the
 ; two phases would need the glyph pointer AND the pixel row in addressing
 ; registers at once, and the 8086 has no [reg + reg + reg]; this way phase B
 ; writes eight bytes per cell at immediate displacements (the c64_band1 shape)
@@ -74,6 +80,16 @@ a2_spl:     resw 1                  ; ...and its last
 ; for a count phase C then decrements per row. Four bytes of bss against a
 ; register the loop does not have.
 a2_bgc:     resw 1
+
+; ...AND THE PIXEL-ROW RANGE PHASE C PACKS, for the same reason. It is 0..7
+; for text and lo-res, whose eight pixel rows all come out of ONE source byte
+; a cell - narrowing them would save nothing. HI-RES IS THE ONE THAT MOVES:
+; its eight scan lines are eight separate 40-byte source rows $400 apart, the
+; damage model marks hi-res ONE SCAN LINE AT A TIME (a2scr.c), and composing
+; all eight for a one-line HPLOT is eight times the work the machine asked
+; for.
+a2_bgs:     resw 1                  ; the first pixel row phase C packs...
+a2_bgr:     resw 1                  ; ...and how many
 
 section .text
 
@@ -131,6 +147,8 @@ _a2_band_text:
     cmp cx, 0
     jle .out                        ; an empty span composes nothing
     mov [a2_bgc], cx                ; phase C wants it back
+    mov word [a2_bgs], 0            ; ...and ALL EIGHT pixel rows: one source
+    mov word [a2_bgr], 8            ; byte a cell makes all eight of them
     shl cx, 1
     shl cx, 1
     shl cx, 1                       ; ...and CX is the CELL count, groups * 8
@@ -196,7 +214,33 @@ _a2_band_text:
     inc di
     loop .cell
 
-    ; --- phase C: the shift accumulator, eight cells to seven bytes ---------
+    call a2_pack                    ; PHASE C, and it is SHARED (see below)
+
+.out:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; a2_pack - PHASE C, AND IT IS THE WHOLE OF WHAT MAKES THE THREE COMPOSERS ONE
+;           CLASS (APPLE2-SPEC section 7.3).
+;
+; in:  [bp+4] dst, [bp+6] g0 - the frame every composer below sets up, in that
+;      order, because they all take (dst, g0, g1, mseg, moff, ...)
+;      [a2_bgc] the group count, [a2_bgs]/[a2_bgr] the pixel-row range, and
+;      a2_grow filled by the caller's phase B over exactly that range
+; out: dst's pixel rows [a2_bgs] .. [a2_bgs]+[a2_bgr]-1, groups g0.. packed
+; clobbers AX, BX, CX, DX, SI, DI. Near, and reached by three callers.
+;
+; Text, lo-res and hi-res differ ONLY in phase B - which seven-bit value each
+; cell contributes: a masked glyph row, a luminance block, or a reversed hi-res
+; byte. Once those are in a2_grow the packing is identical, which is why this
+; is one routine rather than three copies of the same forty-nine lines. Wave 3
+; extracted it; the text composer's own body is unchanged.
+; -----------------------------------------------------------------------------
+a2_pack:
     ; out[j] = (g[j] << (j+1)) | (g[j+1] >> (6-j)),  j = 0..6
     ;
     ; and that is exactly the high byte of `(g[j] << 8 | g[j+1] << 1) << (j+1)`,
@@ -219,7 +263,21 @@ _a2_band_text:
     add di, ax                      ; g0 * 7 - the group's output offset
     add di, [bp+4]                  ; + dst
     add di, A2_LBOX                 ; + the left letterbox
-    mov bx, 8                       ; the eight pixel rows
+    ; ...AND THE FIRST PIXEL ROW. a2_grow's stride and the band's are both 40,
+    ; so ONE offset serves both pointers: s0*40 = (s0<<5) + (s0<<3).
+    mov bx, [a2_bgs]
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1                       ; s0 * 8
+    add si, bx
+    add di, bx
+    shl bx, 1
+    shl bx, 1                       ; s0 * 32
+    add si, bx
+    add di, bx
+    mov bx, [a2_bgr]                ; the pixel rows to pack
+    cmp bx, 0
+    jle .done
 .row:
     push si
     push di
@@ -277,7 +335,215 @@ _a2_band_text:
     add di, A2_BSTRIDE
     dec bx
     jnz .row
+.done:
+    ret
 
+; -----------------------------------------------------------------------------
+; void a2_band_lores(unsigned char *dst, int g0, int g1,
+;                    unsigned mseg, unsigned moff)
+;
+; Compose groups g0..g1 of ONE character row of LO-RES into an 8-row band at
+; dst, stride A2_BSTRIDE (APPLE2-SPEC section 7.3).
+;
+; LO-RES IS THE TEXT PAGE READ AS 40 x 48 BLOCKS OF 7 x 4. One byte is TWO
+; blocks stacked: the LOW nibble is the top four scan lines of the character
+; row and the HIGH nibble the bottom four, which is `c = (byte >> ((line/4 &
+; 1)*4)) & 0xF` written out as two nibble reads and eight unrolled stores.
+;
+; THE WINDOWED PATH IS MONOCHROME (APPLE2-SPEC section 10.3: `The window is
+; monochrome.`), so a block is BLACK or WHITE by the colour's LUMINANCE - and
+; because THIS path's block is therefore UNIFORM, its seven-bit contribution
+; is one constant, 0x00 or 0x7F. _a2_lopat is that sixteen-entry table,
+; derived at launch from _a2_lum, which is the palette's luminance RANK
+; (tools/a2ref.py --lumcheck is its independent gate). The draft's `{and,
+; xor}` pair per entry is what a composer that had to preserve an underlying
+; pattern would need; there is nothing to preserve HERE, and one byte a
+; colour is the whole ladder.
+;
+; AND THAT IS A DECISION, NOT A FACT ABOUT MONOCHROME LO-RES. MII's own mono
+; arm (src/mii_video.c:567-586) reverse4s the nibble, replicates it and
+; phase-shifts odd columns to emit a per-pixel DOT PATTERN - COLOR=5 is
+; %0101, alternating pixels on a real II+'s mono monitor, not solid white.
+; This port does not, because MII's pattern is a 14-pixel cell carrying the
+; NTSC phase and a 7-pixel 1bpp cell cannot carry it. The 16 colours arrive
+; with the foreign video mode (APPLE2-SPEC section 13).
+; -----------------------------------------------------------------------------
+_a2_band_lores:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+
+    mov cx, [bp+8]                  ; g1
+    sub cx, [bp+6]                  ; - g0
+    inc cx                          ; = the group count
+    cmp cx, 0
+    jle .out
+    mov [a2_bgc], cx
+    mov word [a2_bgs], 0            ; ...and ALL EIGHT pixel rows: one source
+    mov word [a2_bgr], 8            ; byte a cell makes all eight of them
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1                       ; ...and CX is the CELL count
+
+    mov es, [bp+10]                 ; mseg
+    mov si, [bp+12]                 ; moff - the row's forty TEXT-page bytes
+    mov di, [bp+6]                  ; g0
+    shl di, 1
+    shl di, 1
+    shl di, 1
+    add si, di
+    add di, a2_grow
+.cell:
+    mov al, [es:si]
+    inc si
+    mov bl, al
+    and bl, 0x0F
+    xor bh, bh
+    add bx, _a2_lopat               ; the label goes into BX rather than into
+                                    ; a displacement, which is _a2_chr's own
+                                    ; idiom above: a forward-referenced label
+                                    ; in `[bx+label]` makes nasm choose disp8
+                                    ; or disp16 on a value it does not know
+                                    ; yet, and the file that %includes this
+                                    ; one and defines the table AFTER it then
+                                    ; fails with `label changed during code
+                                    ; generation` and no hint of where
+    mov dl, [bx]                    ; the LOW nibble: scan lines 0-3
+    mov bl, al
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1                       ; ...and the HIGH nibble: 4-7
+    xor bh, bh
+    add bx, _a2_lopat
+    mov dh, [bx]
+    mov [di], dl
+    mov [di+A2_GSTRIDE], dl
+    mov [di+A2_GSTRIDE*2], dl
+    mov [di+A2_GSTRIDE*3], dl
+    mov [di+A2_GSTRIDE*4], dh
+    mov [di+A2_GSTRIDE*5], dh
+    mov [di+A2_GSTRIDE*6], dh
+    mov [di+A2_GSTRIDE*7], dh
+    inc di
+    loop .cell
+
+    call a2_pack
+.out:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void a2_band_hires(unsigned char *dst, int g0, int g1,
+;                    unsigned mseg, unsigned moff, int s0, int nlines)
+;
+; Compose groups g0..g1 of scan lines s0..s0+nlines-1 of one character row of
+; HI-RES (APPLE2-SPEC section 7.3).
+;
+; `moff` is scan line 0 of the row group - a2_hbase[r], which is
+; a2_tbase[r] + $1C00 - and the eight lines are +$400 apart, which is the
+; whole of the interleave this routine has to know: the C hands it one address
+; and it walks the sub-line stride itself.
+;
+; IT TAKES A SCAN-LINE RANGE AND THE OTHER TWO DO NOT, and that asymmetry is
+; the damage model's (APPLE2-SPEC section 7.4). Hi-res is the one mode marked
+; ONE SCAN LINE AT A TIME - one HPLOT touches one of them - because its eight
+; lines are eight separate 40-byte source rows $400 apart. Text and lo-res
+; make all eight pixel rows out of ONE source byte a cell, so there is nothing
+; there to narrow. This routine composed all eight whatever the caller had
+; marked until wave 3's review: a single-scan-line HPLOT cost 2.434 ms a group
+; where 0.30 was owed, on every row it crossed.
+;
+; 40 SOURCE BYTES TO 35 OUTPUT BYTES A SCAN LINE, THROUGH THE 128-ENTRY
+; REVERSE TABLE, WITH BIT 7 DROPPED. Hi-res data in RAM carries bit 0 as the
+; LEFTMOST pixel and the framebuffer wants MSB first (SPEC.md 5.4.2), so every
+; source byte goes through _a2_rev - which is the one thing about this machine
+; most likely to be got backwards, because the CHARACTER GENERATOR is already
+; the right way up and needs no reversal at all.
+;
+; BIT 7 IS THE COLOUR (HALF-DOT) SHIFT AND IS DROPPED - which is what
+; apple2emu's `render_mono_hires_cell` (src/video.cpp:511-537, `byte &= 0x7f`)
+; and MII's mono arm (src/mii_video.c:459-470, which reads `run >> (2+i)` and
+; never touches the offset) do, and NOT what AppleWin does:
+; `updateScreenSingleHires40` (NTSC.cpp:1628-1633) applies the half-dot shift
+; at signal level, before its monochrome tables are indexed. Expressing it
+; needs 560 pixels, which is the foreign mode's business (section 13), so this
+; is a NAMED DEPARTURE from AppleWin rather than three references agreeing.
+; -----------------------------------------------------------------------------
+_a2_band_hires:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+
+    mov cx, [bp+8]
+    sub cx, [bp+6]
+    inc cx
+    cmp cx, 0
+    jle .out
+    mov [a2_bgc], cx
+    mov dx, [bp+16]                 ; nlines
+    cmp dx, 0
+    jle .out
+    mov [a2_bgr], dx
+    mov bx, [bp+14]                 ; s0
+    mov [a2_bgs], bx
+
+    mov es, [bp+10]                 ; mseg
+    mov ax, [bp+6]                  ; g0
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                       ; the first cell
+    mov si, [bp+12]
+    add si, ax                      ; the source, at scan line 0...
+    mov di, a2_grow
+    add di, ax
+    ; ...and forward to scan line s0: $400 a line in the SOURCE, one a2_grow
+    ; row in the destination. Phase C picks the same rows up out of [a2_bgs].
+    mov cl, 10
+    shl bx, cl                      ; s0 * $400
+    add si, bx
+    mov bx, [bp+14]
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1                       ; s0 * 8
+    add di, bx
+    shl bx, 1
+    shl bx, 1                       ; s0 * 32
+    add di, bx                      ; = s0 * A2_GSTRIDE
+.line:
+    push si
+    push di
+    mov cx, [a2_bgc]
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+.cell:
+    mov al, [es:si]
+    inc si
+    and al, 0x7F                    ; bit 7 is the half-dot shift: DROPPED
+    mov bl, al
+    xor bh, bh
+    add bx, _a2_rev                 ; the label into BX, for the reason
+                                    ; a2_band_lores' own note gives
+    mov al, [bx]                    ; bit 0 leftmost -> bit 6 leftmost
+    mov [di], al
+    inc di
+    loop .cell
+    pop di
+    pop si
+    add si, 0x400                   ; the next scan line of THIS row group
+    add di, A2_GSTRIDE
+    dec dx
+    jnz .line
+
+    call a2_pack
 .out:
     pop es
     pop di
@@ -541,33 +807,53 @@ _a2_x2init:
     ret
 
 ; -----------------------------------------------------------------------------
-; void a2_band_x2(unsigned char *dst, const unsigned char *src, int rows)
+; void a2_band_x2(unsigned char *dst, const unsigned char *src,
+;                 int nbytes, int rows)
 ;
-; Pixel-double a composed band: `rows` source rows of A2_BSTRIDE bytes become
-; 2 * rows rows of A2_X2STRIDE, each source byte becoming two through
-; a2_x2tab. This is fullscreen's 2x, where the tier table says the machine can
-; afford it (APPLE2-SPEC section 7.8) - and ONE ROUTINE SERVES BOTH AXES,
-; because X-only doubling is the same buffer read at twice the stride.
+; Pixel-double PART of a composed band: `rows` source rows of `nbytes` bytes
+; become 2 * rows rows of 2 * nbytes, each source byte becoming two through
+; a2_x2tab. Source rows are A2_BSTRIDE apart and destination rows
+; A2_X2STRIDE - the full strides, because what is doubled is a WINDOW of each
+; row and not the whole of it. This is fullscreen's 2x, where the tier table
+; says the machine can afford it (APPLE2-SPEC section 7.8) - and ONE ROUTINE
+; SERVES BOTH AXES, because X-only doubling is the same buffer read at twice
+; the stride.
 ;
-; THE FLUSH DOES NOT CALL IT IN WAVE 1. Fullscreen is 1:1 centred until wave 3
-; writes the tier table FROM tests/a2band's measured numbers; the routine and
-; its table are here because the bench times them and because the alternative
-; is a wave that discovers the doubler is wrong on the glass.
+; WAVE 3 PUT THE FLUSH ON IT, off the tier table written FROM tests/a2band's
+; measured numbers (APPLE2-SPEC section 7.8): 2x both axes on a VGA, 2x
+; horizontal on CGA and Hercules - where 192 x 2 does not fit the adapter -
+; and 1:1 centred on the CPU_8086 tier, which cannot afford the doubling at
+; all. The DOUBLING IS AT BLIT TIME AND NOWHERE ELSE: the frame shadow stays
+; 280 x 192 and every compare, span and source read stays in Apple pixels.
+;
+; AND "AT BLIT TIME" IS LITERAL, AND PER RUN - a2scr.c calls this from
+; a2_emit with the RUN's own rectangle, not from the compose loop and not once
+; per row (APPLE2-SPEC section 7.8). It is DRAW preparation and it is owed
+; exactly by the pixels about to be drawn. Wave 3 shipped it per ROW, over the
+; whole forty bytes and all eight lines whatever the run covered: an ordinary
+; keystroke doubles 7 bytes x 8 lines and paid for 40 x 8 - 1.85 ms of work
+; and 8.7 ms of waste, more than the rest of the keystroke put together - and
+; a one-line HPLOT paid 10.59 ms for 0.40 ms owed. Runs within a row are
+; disjoint rectangles, so per-run doubling can never exceed their union: the
+; "three runs must not double three times" property the per-row latch kept by
+; hand is now structural.
 ; -----------------------------------------------------------------------------
 _a2_band_x2:
     push bp
     mov bp, sp
     push si
     push di
-    mov dx, [bp+8]                  ; rows
+    mov dx, [bp+10]                 ; rows
     cmp dx, 0
+    jle .out
+    cmp word [bp+8], 0              ; nbytes
     jle .out
     mov si, [bp+6]
     mov di, [bp+4]
 .row:
     push si
     push di
-    mov cx, A2_BSTRIDE
+    mov cx, [bp+8]
 .b:
     mov bl, [si]
     inc si
@@ -586,7 +872,8 @@ _a2_band_x2:
     push di
     mov si, di
     add di, A2_X2STRIDE
-    mov cx, A2_X2STRIDE / 2
+    mov cx, [bp+8]                  ; nbytes source bytes are nbytes WORDS of
+                                    ; doubled output
     push es
     mov ax, ds
     mov es, ax

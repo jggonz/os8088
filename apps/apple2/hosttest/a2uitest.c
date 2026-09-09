@@ -77,6 +77,10 @@ static unsigned char glass[GLH][GLW];
 static int cur_colour = OS88_WHITE, pen_disabled;
 static int fails;
 
+/* THE ADAPTER, so the tier table can be driven over more than one of them.
+ * The defaults are a VGA desktop; the CGA rows below poke these. */
+static int h_scr_w = 640, h_scr_h = 480, h_dock_top = 448;
+
 static int h_win_x, h_win_y, h_win_w, h_win_h;
 static int h_cont_x, h_cont_y, h_cont_w, h_cont_h;
 static int h_norm_x, h_norm_y, h_norm_w, h_norm_h;  /* the FRAME the window
@@ -94,6 +98,12 @@ static int h_wake_posted, h_closed, h_menu_set, h_about_set, h_onwake_set;
 /* the cost counters the glass model keeps (the package's own live in
  * a2scr.c under -DA2_HOST) */
 static int n_blit, n_fill, n_frame, n_scroll, n_run, n_cells, n_scroll_dy;
+/* ...and the DOUBLED blits among them, told apart by their stride. The stubs
+ * are compiled ahead of apple2.c, so this is the literal and main() asserts
+ * it against the package's own A2_X2STRIDE - which is what stops it becoming
+ * a third copy of a constant tests/unit/t_mirror.py already checks twice. */
+#define H_X2STRIDE 80
+static int n_blit2;
 
 static void fail(const char *what)
 {
@@ -183,6 +193,14 @@ void os88_gfx_frame(int x1, int y1, int x2, int y2)
     n_frame++;
 }
 
+/* WHICH SCREEN ROWS A BLIT TOUCHED, since the last time this was cleared.
+ * The About panel's hold range is in APPLE scan lines and a blit is in SCREEN
+ * pixels, and at 2x those are not the same thing - so the test that asks
+ * "did anything draw under the card" converts one to the other AFTER the
+ * wake, where a2_gsy, a2_gl0 and a2_sch are all in scope. This stub is above
+ * `#include "apple2.c"` and cannot read them itself. */
+static unsigned char h_blitrow[512];
+
 int os88_gfx_blit1(const void *bits, int stride, int x, int y, int w, int rows)
 {
     const unsigned char *b = (const unsigned char *)bits;
@@ -196,7 +214,17 @@ int os88_gfx_blit1(const void *bits, int stride, int x, int y, int w, int rows)
     for (r = 0; r < rows; r++)
         for (c = 0; c < w; c++)
             plot(x + c, y + r, (b[r * stride + (c >> 3)] >> (7 - (c & 7))) & 1);
+    for (r = 0; r < rows; r++)
+        if ((unsigned)(y + r) < sizeof h_blitrow)
+            h_blitrow[y + r] = 1;
     n_blit++;
+    /* ...AND A DOUBLED BLIT IS PRICED AS ONE. The stride says which it is -
+     * A2_X2STRIDE is the doubled band's and nothing else in this package uses
+     * it - and it costs 3.23 ms against 1.75 for four times the pixels
+     * (wave 3's bench). Charging every blit the 320x8 figure would understate
+     * every fullscreen row in the table below. */
+    if (stride == H_X2STRIDE)
+        n_blit2++;
     return 0;
 }
 
@@ -406,15 +434,28 @@ int os88_fullscreen(void *win, int enter)
         return -1;
     h_fs = enter;
     if (enter) {
-        h_win_x = 0; h_win_y = 0; h_win_w = 640; h_win_h = 480;
+        h_win_x = 0; h_win_y = 0; h_win_w = h_scr_w; h_win_h = h_scr_h;
     } else {
         h_win_x = h_norm_x; h_win_y = h_norm_y;
         h_win_w = h_norm_w; h_win_h = h_norm_h;
     }
-    h_cont_x = (h_win_x + 1 + 7) & ~7;
-    h_cont_y = h_win_y + OS88_TITLE_H;
-    h_cont_w = h_win_w - 2;
-    h_cont_h = h_win_h - OS88_TITLE_H - 1;
+    if (enter) {
+        /* A WF_FULL WINDOW'S CONTENT **IS** ITS FRAME (kernel/wm.inc's
+         * wm_geom and wm_content: no border, no title bar, SPEC.md 11.2).
+         * Modelling it as frame-minus-two put the content box at 638 and the
+         * tier table's own test - `is there room for 640 doubled pixels` -
+         * could then never be true here, so the whole 2x path would have been
+         * unreachable in the harness and first seen on the glass. */
+        h_cont_x = 0;
+        h_cont_y = 0;
+        h_cont_w = h_win_w;
+        h_cont_h = h_win_h;
+    } else {
+        h_cont_x = (h_win_x + 1 + 7) & ~7;
+        h_cont_y = h_win_y + OS88_TITLE_H;
+        h_cont_w = h_win_w - 2;
+        h_cont_h = h_win_h - OS88_TITLE_H - 1;
+    }
     /* the nested repaint. NO os88_gfx_lock() here - the caller is os88_oncmd
      * and the lock is already held, which is exactly the environment the
      * kernel dispatches this in. */
@@ -438,28 +479,40 @@ int os88_toast(const char *text, int ticks)
     return 0;
 }
 
-int os88_cpu(void) { return OS88_CPU_386; }
+/* THE TIER, so the CPU_8086 arm of section 7.8's table has a subject here.
+ * a2_tier_init reads this once, from os88_main; the row below sets it and
+ * calls a2_tier_init again, which is what the machine's own launch does. */
+static int h_cpu = OS88_CPU_386;
+
+int os88_cpu(void) { return h_cpu; }
 
 void os88_video(struct os88_video *v)
 {
-    v->w = 640;
-    v->h = 480;
-    v->dock_top = 448;
+    v->w = h_scr_w;
+    v->h = h_scr_h;
+    v->dock_top = h_dock_top;
     v->kind = OS88_VID_VGA;
     v->bpp = 1;
 }
 
 unsigned os88_ticks(void) { return the_ticks; }
 
+/* THE KEY-STATE MAP, WITH KEYS THE SCRIPT CAN HOLD DOWN. os88_key_down is a
+ * LEVEL (SPEC.md 9.7) and the two game buttons and section 6.6's rule are both
+ * read through it, so the harness has to be able to hold one. h_down[] is
+ * that: a scan code is "held" while its entry is set. */
+static unsigned char h_down[256];
+static int n_keydown;
+
 int os88_key_down(int scan)
 {
-    (void)scan;
+    n_keydown++;
     if (!h_key_armed) {
         h_key_armed = 1;
         h_key_first_in_main = h_in_main;
         return 0;                       /* the FIRST call always answers up */
     }
-    return 0;
+    return h_down[scan & 0xFF] ? 1 : 0;
 }
 
 int os88_snd_caps(void) { return 1; }
@@ -727,6 +780,19 @@ int  a2_now(void) { return (int)(short)(unsigned short)h_clkb; }
 
 /* --- the composer, transcribed (a2band.inc) ------------------------------ */
 static int n_band, n_group;
+/* ...and PER COMPOSER, because the three do not cost the same: a hi-res group
+ * is eight scan lines and measures 3.444 ms against text's 2.434 and lo-res'
+ * 1.997 (wave 3's `make a2bandbench`). One counter would price a hi-res
+ * repaint at the text composer's figure. */
+static int n_band_l, n_group_l, n_band_h, n_group_h, n_x2;
+static long n_gl_h, n_line_h;                         /* ...and hi-res GROUP-LINES: the
+                                             * composer takes a scan-line
+                                             * range, so a group is not one
+                                             * unit of work any more */
+static long n_x2_u;                         /* ...and the SOURCE BYTE-ROWS it
+                                             * was asked for, which is what
+                                             * the doubling is priced by now
+                                             * that it is per RUN */
 
 void a2_band_text(unsigned char *dst, int g0, int g1,
                   unsigned mseg, unsigned moff, int fmask)
@@ -760,6 +826,81 @@ void a2_band_text(unsigned char *dst, int g0, int g1,
                                     | (gl[j + 1] >> (6 - j)));
         }
     }
+}
+
+/* a2_pack, transcribed once: eight cells of seven bits into seven bytes, MSB
+ * first. It is ONE routine in a2band.inc and it is one here, for the same
+ * reason - the three composers differ only in what each cell contributes. */
+static void h_pack(unsigned char *dst, int g0, int g1,
+                   const unsigned char *grow, int s0, int nlines)
+{
+    int g, line, j;
+
+    for (line = s0; line < s0 + nlines; line++)
+        for (g = g0; g <= g1; g++)
+            for (j = 0; j < 7; j++)
+                dst[line * A2_BSTRIDE + A2_LBOXB + g * 7 + j] =
+                    (unsigned char)
+                    (((grow[line * A2_COLS + g * 8 + j] << (j + 1)) & 0xFF)
+                     | (grow[line * A2_COLS + g * 8 + j + 1] >> (6 - j)));
+}
+
+static unsigned char h_grow[8 * A2_COLS];
+
+/* LO-RES: two nibbles a byte, the low one the top four scan lines of the
+ * character row and the high one the bottom four, each through the luminance
+ * ladder's pattern table. A monochrome block is UNIFORM, so its contribution
+ * is one seven-bit constant. */
+void a2_band_lores(unsigned char *dst, int g0, int g1,
+                   unsigned mseg, unsigned moff)
+{
+    unsigned char *src = segbase(mseg) + moff;
+    int g, c, line;
+
+    if (g1 < g0)
+        return;
+    n_band_l++;
+    n_group_l += g1 - g0 + 1;
+    for (line = 0; line < 8; line++)
+        for (g = g0; g <= g1; g++)
+            for (c = 0; c < 8; c++)
+                h_grow[line * A2_COLS + g * 8 + c] =
+                    a2_lopat[(src[g * 8 + c] >> ((line < 4) ? 0 : 4)) & 0x0F];
+    h_pack(dst, g0, g1, h_grow, 0, 8);
+}
+
+/* HI-RES: forty source bytes a SCAN LINE, the lines of the row group $400
+ * apart, each byte through the 7-bit reverse table with bit 7 dropped.
+ *
+ * IT TAKES A SCAN-LINE RANGE, which the other two composers do not: hi-res is
+ * the one mode the damage model marks a line at a time (a2band.inc). The
+ * counter is therefore GROUPS x LINES and not groups - a one-line HPLOT is an
+ * eighth of a whole row group's work and the cost table has to say so. */
+void a2_band_hires(unsigned char *dst, int g0, int g1,
+                   unsigned mseg, unsigned moff, int s0, int nlines)
+{
+    unsigned char *base = segbase(mseg) + moff;
+    int g, c, line;
+
+    if (g1 < g0 || nlines <= 0)
+        return;
+    if (s0 < 0 || s0 + nlines > 8)
+        fail("a2_band_hires was asked for scan lines outside the row group");
+    /* n_group_h STAYS THE GROUP SPAN and the LINES are counted beside it.
+     * Every budget assertion in this file is written in groups - "the split
+     * owns four rows, so it owes at most 20" - and folding the lines into
+     * that number would make those sentences mean something else. The cost
+     * model prices GROUP-LINES, which is what the composer actually does. */
+    n_band_h++;
+    n_group_h += g1 - g0 + 1;
+    n_gl_h += (g1 - g0 + 1) * nlines;
+    n_line_h += nlines;
+    for (line = s0; line < s0 + nlines; line++)
+        for (g = g0; g <= g1; g++)
+            for (c = 0; c < 8; c++)
+                h_grow[line * A2_COLS + g * 8 + c] =
+                    a2_rev[base[line * 0x400 + g * 8 + c] & 0x7F];
+    h_pack(dst, g0, g1, h_grow, s0, nlines);
 }
 
 static int n_flash, n_span, n_sig, n_copy;
@@ -824,17 +965,25 @@ void a2_x2init(void)
     }
 }
 
-void a2_band_x2(unsigned char *dst, const unsigned char *src, int rows)
+void a2_band_x2(unsigned char *dst, const unsigned char *src, int nbytes,
+                int rows)
 {
     int r, c;
 
+    n_x2++;
+    if (nbytes > 0 && rows > 0)
+        n_x2_u += (long)nbytes * rows;
+
+    /* THE WINDOW MOVES AND THE STRIDES DO NOT: source rows are A2_BSTRIDE
+     * apart and destination rows 80, because what is doubled is a rectangle
+     * inside each row (a2band.inc). */
     for (r = 0; r < rows; r++) {
-        for (c = 0; c < A2_BSTRIDE; c++) {
+        for (c = 0; c < nbytes; c++) {
             dst[r * 2 * 80 + c * 2] = h_x2tab[src[r * A2_BSTRIDE + c] * 2];
             dst[r * 2 * 80 + c * 2 + 1] =
                 h_x2tab[src[r * A2_BSTRIDE + c] * 2 + 1];
         }
-        memcpy(dst + (r * 2 + 1) * 80, dst + r * 2 * 80, 80);
+        memcpy(dst + (r * 2 + 1) * 80, dst + r * 2 * 80, (size_t)nbytes * 2);
     }
 }
 
@@ -851,7 +1000,16 @@ static int audit(const char *where)
         for (byte = 0; byte < A2_BSTRIDE; byte++)
             for (bit = 0; bit < 8; bit++) {
                 want = (a2_sh[line * A2_BSTRIDE + byte] >> (7 - bit)) & 1;
-                got = glass[a2_gsy + line - a2_gl0][a2_gsx + byte * 8 + bit];
+                /* THE SHADOW IS IN APPLE PIXELS AND THE GLASS IS IN SCREEN
+                 * PIXELS, and at full screen those are not the same thing
+                 * (APPLE2-SPEC section 7.8: the doubling is at BLIT time).
+                 * The audit therefore samples the FIRST screen pixel of each
+                 * Apple pixel - which is enough, because a2_band_x2 writes
+                 * both of a pair from one source bit and the sample below
+                 * would catch a doubler that wrote one of them from
+                 * somewhere else. */
+                got = glass[a2_gsy + ((line - a2_gl0) * a2_sch)]
+                           [a2_gsx + (byte * 8 + bit) * a2_scw];
                 if (got != want) {
                     if (bad < 4)
                         printf("a2uitest:   %s: scan line %d, band byte %d "
@@ -936,7 +1094,28 @@ static void no_gunk(const char *where)
  *                                                   the forty SOURCE bytes)
  *   a 40-byte SOURCE read  = ROWCOPY, 0.31 ms      (the same `rep movsb`)
  *   ROWFLASH 40          2.875 counts    1.03 ms
- *   BAND_X2 8 rows      25.625 counts    9.20 ms
+ *   BAND_X2 8r x 40b    29.500 counts   10.59 ms   (a whole character row of
+ *                                                   doubling - what entering
+ *                                                   full screen pays per row)
+ *   BAND_X2 1r x 7b      1.125 counts    0.40 ms   (...and ONE RUN of one
+ *                                                   scan line, which is the
+ *                                                   shape the per-run change
+ *                                                   exists for)
+ *      -> per source byte-row 0.0907 counts = 0.0325 ms,
+ *         call floor 0.490 = 0.176 ms
+ *
+ * THE BANDTEXT ROWS ABOVE ARE WAVE 1'S AND ARE KEPT DELIBERATELY: wave 3's
+ * review re-measured `BANDTEXT 5 groups` at 35.000 counts / 12.57 ms - wave
+ * 1's figure exactly - and `BANDTEXT 1 group` at 8.125 against 7.875, a
+ * quarter of a count, which is the two `mov word [mem], imm` the composers
+ * now spend telling a2_pack its pixel-row range. That is 0.09 ms a call on
+ * the target and every published row that rests on these stands.
+ *
+ * BAND_X2 IS REPLACED rather than kept, because it is not one row any more:
+ * the routine takes a byte count and is called PER RUN, so it is priced with
+ * a floor and a per-source-byte-row term and the two BAND_X2 rows above are
+ * the two points that fix them. 0.176 + 320 x 0.0325 = 10.58, which is the
+ * whole-row row back to two places.
  *
  * MEASURE THE BAND BEFORE BELIEVING A PER-CELL GUESS: 2.434 ms a GROUP is
  * 304 us a CELL, which is eight times what a naive model of "a table lookup
@@ -947,6 +1126,64 @@ static void no_gunk(const char *where)
 #define MS_GLYPH    0.900               /* ...and one 8x8 glyph cell */
 #define MS_BAND     0.393               /* a2_band_text's call floor */
 #define MS_GROUP    2.434               /* ...and per eight-cell group */
+/* ...AND THE OTHER TWO COMPOSERS HAVE THEIR OWN PRICES (wave 3's
+ * `make a2bandbench`, the same icount recipe: one PIT count is 0.359 ms of a
+ * real 4.77 MHz XT). Pricing a hi-res row at the text composer's figure would
+ * be quoting one routine's measurement for another's work, and the two differ
+ * by 42 %:
+ *
+ *   BANDTEXT  5 groups 35.000 counts/op, 1 group  8.125  -> 6.719/grp, 1.41 floor
+ *   BANDLORES 5 groups 28.625,           1 group  6.750  -> 5.469/grp, 1.28 floor
+ *
+ * HI-RES IS THREE ROWS AND NOT TWO, because it takes a SCAN-LINE RANGE and
+ * the other two composers do not (a2band.inc): a group is no longer one unit
+ * of work, so a two-point fit in groups alone prices a one-line call 23 % too
+ * high - and the one-line call is the whole reason the range is there.
+ *
+ *   BANDHIRES 5 grp x8ln  50.875 counts/op
+ *   BANDHIRES 1 grp x8ln  12.375
+ *   BANDHIRES 5 grp x1ln   7.125
+ *      -> floor 0.875, per LINE 0.234, per GROUP-LINE 1.203 counts
+ *         (0.875 + 8 x 0.234 + 40 x 1.203 = 50.875 exactly)
+ *
+ * The text and lo-res figures are wave 1's and are KEPT: BANDTEXT 5 groups
+ * re-measures at wave 1's own 35.000, and the one-group floors moved by a
+ * quarter of a count - the two stores that hand a2_pack its row range. */
+#define MS_BAND_L   0.539               /* a2_band_lores' call floor */
+#define MS_GROUP_L  1.930               /* ...and per eight-cell group */
+#define MS_BAND_H   0.314               /* a2_band_hires' call floor... */
+#define MS_LINE_H   0.084               /* ...per SCAN LINE, whatever it is
+                                         * wide: the source pointer walk and
+                                         * a2_pack's own row step */
+#define MS_GL_H     0.432               /* ...and per GROUP-LINE, which is the
+                                         * work itself. A group is not one
+                                         * unit here, because the composer
+                                         * takes a scan-line range: a whole
+                                         * row group is 0.314 + 8 x 0.084 +
+                                         * 40 x 0.432 = 18.27 ms and one line
+                                         * of it is 0.918 */
+#define MS_X2      10.590               /* a2_band_x2 over a WHOLE character
+                                         * row - 8 rows x 40 bytes, which is
+                                         * what entering full screen pays per
+                                         * row. Kept because the tier table is
+                                         * written from it */
+#define MS_X2_CALL  0.176               /* ...and the model's two terms, now
+                                         * that the routine is called PER RUN:
+                                         * the call floor... */
+#define MS_X2_B     0.0325              /* ...and per SOURCE BYTE-ROW.
+                                         * 0.176 + 320 x 0.0325 = 10.58, which
+                                         * is MS_X2 back to two places; the
+                                         * bench's two BAND_X2 rows are the two
+                                         * points that fix them */
+#define MS_BLIT2    3.190               /* ...and the 640x16 blit that puts
+                                         * the doubled band down. It is 1.85x
+                                         * the 320x8 figure for FOUR times the
+                                         * pixels, and it was 111 ms until the
+                                         * bench's own window was widened to
+                                         * 640: at 632 every one of those
+                                         * blits went down the CLIPPED path,
+                                         * which is not the path full screen
+                                         * takes (tests/a2band's ab_tpl) */
 #define MS_BLIT     1.750               /* one 320x8 blit1 */
 #define MS_SPAN     0.314
 #define MS_COPY     0.314
@@ -971,6 +1208,8 @@ static void no_gunk(const char *where)
 
 static int c_blit, c_fill, c_frame, c_run, c_cells, c_scroll;
 static int c_band, c_group, c_span, c_sig, c_flash, c_copy, c_take, c_srcrd;
+static int c_band_l, c_group_l, c_band_h, c_group_h, c_x2, c_blit2;
+static long c_gl_h, c_line_h, c_x2_u;
 
 static void cost_mark(void)
 {
@@ -978,11 +1217,22 @@ static void cost_mark(void)
     c_cells = n_cells; c_scroll = n_scroll; c_band = n_band;
     c_group = n_group; c_span = n_span; c_sig = n_sig; c_flash = n_flash;
     c_copy = n_copy; c_take = n_take; c_srcrd = n_srcrd;
+    c_band_l = n_band_l; c_group_l = n_group_l;
+    c_band_h = n_band_h; c_group_h = n_group_h; c_gl_h = n_gl_h; c_line_h = n_line_h;
+    c_x2 = n_x2; c_x2_u = n_x2_u; c_blit2 = n_blit2;
 }
 
 static void cost_row(const char *what)
 {
-    double ms = (n_blit - c_blit) * (MS_GFXCALL + MS_BLIT)
+    double ms = (n_blit - c_blit - (n_blit2 - c_blit2)) * (MS_GFXCALL + MS_BLIT)
+              + (n_blit2 - c_blit2) * (MS_GFXCALL + MS_BLIT2)
+              + (n_x2 - c_x2) * MS_X2_CALL
+              + (double)(n_x2_u - c_x2_u) * MS_X2_B
+              + (n_band_l - c_band_l) * MS_BAND_L
+              + (n_group_l - c_group_l) * MS_GROUP_L
+              + (n_band_h - c_band_h) * MS_BAND_H
+              + (double)(n_line_h - c_line_h) * MS_LINE_H
+              + (double)(n_gl_h - c_gl_h) * MS_GL_H
               + (n_fill - c_fill) * MS_GFXCALL
               + (n_frame - c_frame) * MS_GFXCALL
               + (n_scroll - c_scroll) * MS_GFXCALL
@@ -999,7 +1249,8 @@ static void cost_row(const char *what)
 
     printf("  %-38s %8.1f ms   %2d blit %2d fill %2d scroll %3d group\n",
            what, ms, n_blit - c_blit, n_fill - c_fill, n_scroll - c_scroll,
-           n_group - c_group);
+           (n_group - c_group) + (n_group_l - c_group_l)
+           + (n_group_h - c_group_h));
     cost_mark();
 }
 
@@ -1183,6 +1434,55 @@ static void h_scroll_up(void)
         a2_wr(a2_tbase[A2_ROWS - 1] + (unsigned)i, 0xA0);
 }
 
+/* h_mode - set the four display switches the way the emulated machine does,
+ * through the SAME a2_video_set the soft switch calls: guarded by value, and
+ * marking the frame only when the renderer, the page or the MIXED split
+ * actually moves (APPLE2-SPEC section 5.4). Answers how many of the four
+ * reported a change, which is what the by-value assertions read. */
+static int h_mode(int text, int mixed, int page2, int hires)
+{
+    int n = 0;
+
+    n += a2_video_set(0, text);
+    n += a2_video_set(1, mixed);
+    n += a2_video_set(2, page2);
+    n += a2_video_set(3, hires);
+    return n;
+}
+
+/* h_lores - a lo-res screen: every one of the sixteen colours, in blocks, on
+ * the TEXT page. One byte is two stacked blocks - low nibble on top - so a
+ * byte of $F0 is black over white. */
+static void h_lores(void)
+{
+    int r, c;
+
+    for (r = 0; r < A2_ROWS; r++)
+        for (c = 0; c < A2_COLS; c++)
+            a2_wr(a2_tbase[r] + (unsigned)c,
+                  ((c & 0x0F) << 4) | ((c + r) & 0x0F));
+}
+
+/* h_hires - a hi-res screen: a diagonal, a vertical rule and a run of solid
+ * bytes, written through a2_wr so the page bitmap and the write window see
+ * every one of them. `line` is the Apple SCAN LINE and the address is the
+ * interleave's own: a2_hbase[line >> 3] + $400 * (line & 7). */
+static void h_hplot(int line, int byte, int v)
+{
+    a2_wr(a2_hbase[line >> 3] + ((unsigned)(line & 7) << 10) + (unsigned)byte,
+          v);
+}
+
+static void h_hires(void)
+{
+    int y;
+
+    for (y = 0; y < A2_SCRH; y++) {
+        h_hplot(y, y / 5, 0x7F);            /* the diagonal */
+        h_hplot(y, 20, 0x2A);               /* ...and a rule down the middle */
+    }
+}
+
 static void dump_for_a2ref(const char *stem)
 {
     char path[256];
@@ -1195,7 +1495,10 @@ static void dump_for_a2ref(const char *stem)
     fwrite(h_ram, 1, sizeof(h_ram), f);
     fwrite(h_rom + A2_ROM_CHRGEN, 1, 2048, f);
     memset(st, 0, sizeof(st));
-    st[0] = 0;                          /* mode: TEXT */
+    /* THE LIVE MODE, and not a constant. Wave 1 wrote a 0 here because TEXT
+     * was the only renderer there was; a dump that says TEXT of a hi-res
+     * screen would hand tools/a2ref.py the wrong reference and pass. */
+    st[0] = (unsigned char)a2_mode_of();
     st[1] = (unsigned char)a2_v_mixed;
     st[2] = (unsigned char)a2_v_page2;
     st[3] = (unsigned char)a2_fl_phase;
@@ -1218,6 +1521,7 @@ int main(void)
     unsigned probe0;
     int abt_runs, abt_cells, wake0, fire0;
     int rect_groups, narrow_groups, wide_groups, sigs;
+    int lores_groups, hires_groups;
 
     memset(glass, GUNK, sizeof(glass));
 
@@ -1303,6 +1607,9 @@ int main(void)
      * `#define NAME <value>`, not arithmetic, so both are spelled as literals
      * in apple2.c and the DERIVATION is checked here instead. Getting one
      * wrong is a stale screen or a band composed short, never an error. */
+    if (A2_X2STRIDE != H_X2STRIDE)
+        fail("A2_X2STRIDE is not the stride this harness tells a doubled blit "
+             "apart by - every fullscreen row would be priced as a 320x8 one");
     if (A2_BSTRIDE != A2_BANDW / 8)
         fail("A2_BSTRIDE is not A2_BANDW / 8 - the band's stride and the "
              "band's width disagree");
@@ -2148,6 +2455,568 @@ int main(void)
                wide_groups, A2_GROUPS),
         fails++;
 
+
+    /* ======================================================================
+     * WAVE 3: THE OTHER TWO COMPOSERS, MIXED, PAGE2, AND THE TIER TABLE
+     *
+     * Everything above this line is a TEXT screen, which is what wave 1 and
+     * wave 2 had. From here the fixtures change the renderer, so this block
+     * comes last and puts the machine back in TEXT when it is done.
+     * ====================================================================*/
+
+    /* --- LO-RES: 40 x 48 blocks of 7 x 4, black or white by luminance ---- */
+    h_lores();
+    if (h_mode(0, 0, 0, 0) == 0)
+        fail("TEXT off did not change the renderer - a2_video_set's by-value "
+             "guard is refusing a switch that DID move");
+    if (a2_mode_of() != A2_MODE_LORES)
+        fail("TEXT off with HIRES off is LO-RES");
+    cost_mark();
+    do_wake();
+    lores_groups = n_group_l - c_group_l;
+    cost_row("a full 40x48 lo-res repaint");
+    audit("a lo-res screen");
+    dump_for_a2ref("a2lores");
+    for (i = 0; i < A2_ROWS; i++)
+        if (a2_flrow[i]) {
+            /* A LO-RES BYTE OF $60 IS TWO COLOUR BLOCKS AND NOT A FLASHING
+             * `@`. Asking a2_rowflash about a graphics row would force-
+             * compose it 3.64 times a second for a phase that changes not one
+             * pixel of it - and the fixture above writes bytes across the
+             * whole $00-$FF range, so this is not a vacuous test. */
+            fail("a LO-RES row was marked as flashing - the flash phase is a "
+                 "TEXT-mode thing and a graphics row has no $40-$7F range");
+            break;
+        }
+    cost_mark();
+    a2_wr(a2_tbase[5] + 3, 0x9C);
+    do_wake();
+    cost_row("one changed lo-res block");
+    audit("one changed lo-res block");
+
+    /* --- A MODE SWITCH THAT DRAWS THE SAME PICTURE -----------------------
+     * A change that actually changes the renderer marks the whole frame
+     * (section 7.4), and the span compare is then what decides that nothing
+     * moved. The compose is the cost and the draw is nothing, which is the
+     * honest shape of this row: 120 groups and 0 blits. */
+    cost_mark();
+    before = n_blit;
+    h_mode(1, 0, 0, 0);                 /* to TEXT... */
+    h_mode(0, 0, 0, 0);                 /* ...and back to LO-RES */
+    do_wake();
+    cost_row("a mode switch that draws the same picture");
+    if (n_blit != before)
+        fail("a mode switch that ended where it started drew something - the "
+             "span compare is what says the picture did not move");
+    audit("a mode switch that drew the same picture");
+
+    /* --- EIGHT SOFT-SWITCH READS THAT CHANGE NOTHING ---------------------
+     * Every read in $C050-$C05F is side-effecting (section 5.3) and every one
+     * of them is GUARDED BY VALUE (5.4). The C64 measured the unguarded form
+     * at 25 forced full-width blits, ~234 ms, for register writes that
+     * changed nothing. */
+    cost_mark();
+    before = n_blit;
+    n0 = n_group + n_group_l + n_group_h;
+    for (i = 0; i < 8; i++)
+        a2_io_rd(0xC050);               /* TEXT off - and it is already off */
+    do_wake();
+    cost_row("eight soft-switch reads that change nothing");
+    if (n_blit != before || n_group + n_group_l + n_group_h != n0)
+        fail("eight soft-switch reads that changed nothing composed or drew "
+             "something - a2_video_set's by-value guard is not holding");
+
+    /* --- A SCROLL IN A GRAPHICS MODE IS NOT A SCROLL ---------------------
+     * The k-row shift test proves forty SOURCE bytes and the composition
+     * takes the RENDERER as an input the source shadow does not record, so it
+     * is a TEXT-mode test and the mode key refuses it here (section 7.7 step
+     * 2). What a lo-res screen scrolling costs is the span path, and this row
+     * is what that costs. */
+    cost_mark();
+    before = n_scroll;
+    h_scroll_up();
+    do_wake();
+    cost_row("a one-row scroll in a graphics mode");
+    if (n_scroll != before)
+        fail("a gfx_scroll was emitted in a graphics mode - the source "
+             "shadow holds forty bytes and says nothing about which composer "
+             "turned them into pixels");
+    audit("a scroll in a graphics mode");
+
+    /* --- HI-RES: 40 source bytes to 35 output bytes a SCAN LINE ---------- */
+    h_hires();
+    h_mode(0, 0, 0, 1);
+    if (a2_mode_of() != A2_MODE_HIRES)
+        fail("HIRES on with TEXT off is hi-res");
+    if (a2_mode_page() != A2_HGR1)
+        fail("the hi-res display page is $2000, and the write window is "
+             "taken over it");
+    cost_mark();
+    do_wake();
+    cost_row("a full 280x192 hi-res repaint");
+    audit("a hi-res screen");
+    dump_for_a2ref("a2hires");
+
+    /* ...AND ONE CHANGED SCAN LINE COSTS ONE SCAN LINE. A hi-res row group's
+     * eight lines are eight SEPARATE forty-byte ranges $400 apart, so the
+     * dirty scan asks about each of them: marking the row from one write
+     * would blit eight lines where the machine changed one. */
+    cost_mark();
+    before = n_blit;
+    h_hplot(100, 10, 0x55);
+    do_wake();
+    hires_groups = n_group_h - c_group_h;
+    cost_row("one changed hi-res scan line");
+    audit("one changed hi-res scan line");
+    if (n_blit - before != 1)
+        printf("a2uitest: FAIL - one hi-res byte cost %d blits: the dirty "
+               "scan is marking the whole row group where the machine wrote "
+               "ONE of its eight scan lines\n", n_blit - before),
+        fails++;
+    if (hires_groups > A2_GROUPS)
+        printf("a2uitest: FAIL - one hi-res byte composed %d groups where the "
+               "write window narrows it to 1: the span is not being taken "
+               "over the row's eight ranges\n", hires_groups),
+        fails++;
+
+    /* --- MIXED: the top 160 scan lines graphics, the bottom 32 text ------
+     * 160 is TWENTY character rows exactly, so the split is a row test and no
+     * row is ever half one renderer and half the other (section 7.4). */
+    h_mode(0, 1, 0, 1);
+    if (a2_row_mode(A2_MIXROW - 1) != A2_MODE_HIRES
+        || a2_row_mode(A2_MIXROW) != A2_MODE_TEXT)
+        fail("MIXED does not split at row 20 - 160 scan lines is 20 rows");
+    if (a2_row_base(A2_MIXROW) != a2_tbase[A2_MIXROW])
+        fail("a MIXED text row reads the TEXT page, whatever the graphics "
+             "page is");
+    h_puts(A2_MIXROW + 1, 2, "MIXED TEXT AT THE FOOT", 0);
+    cost_mark();
+    do_wake();
+    cost_row("a MIXED screen: hi-res over four text rows");
+    audit("a MIXED screen");
+    dump_for_a2ref("a2mixed");
+    /* THE TEXT ROWS OF A MIXED SCREEN ARE OUTSIDE THE WRITE WINDOW'S RANGE.
+     * The window is taken over the hi-res page, so it says nothing whatever
+     * about a write to $0400 - and a dirty scan that asked it anyway would
+     * answer `the window does not reach this row` for every text write and
+     * the four rows would never be drawn at all. a2_scan_range's `watched`
+     * arm is what stops that, and this is the case that would catch it: the
+     * reference is the composer itself, asked for the whole row. */
+    {
+        static unsigned char mbnd[A2_BSTRIDE * 8];
+
+        memset(mbnd, 0, sizeof(mbnd));
+        a2_band_text(mbnd, 0, A2_GROUPS - 1, a2_m.ramseg,
+                     a2_row_base(A2_MIXROW + 1), a2_fl_phase ? 0x7F : 0x00);
+        for (i = 0; i < 8; i++)
+            if (memcmp(mbnd + i * A2_BSTRIDE,
+                       a2_sh + ((int)A2_X8(A2_MIXROW + 1) + i) * A2_BSTRIDE,
+                       A2_BSTRIDE) != 0) {
+                fail("a MIXED screen's TEXT rows were not drawn - they are "
+                     "outside the range the write window was taken over, and "
+                     "the page bitmap alone is what has to mark them");
+                break;
+            }
+    }
+
+    /* --- AND THE FLIP ITSELF MOVES FOUR ROWS, NOT TWENTY-FOUR (wave 3's
+     * review). a2_row_mode(r) for r < A2_MIXROW never reads a2_v_mixed,
+     * a2_row_base does not move and neither does the page, so a2_dirty_all on
+     * this arm recomposed twenty rows from identical sources with the
+     * identical composer to produce identical pixels - ~417 ms of hi-res
+     * compose plus 192 span compares to draw four rows that owed ~70. POKE
+     * -16302,0 / POKE -16301,0 in a graphics mode is ordinary, and a program
+     * that flips the split per frame paid it every frame. a2_dirty_split is
+     * the narrow mark; this row is what says it is narrow, in BOTH
+     * directions - the rows arrive from the other page each way. */
+    {
+        int g0, gx;
+
+        cost_mark();
+        g0 = n_group + n_group_l + n_group_h;
+        h_mode(0, 0, 0, 1);                 /* MIXED off, still hi-res */
+        do_wake();
+        gx = (n_group + n_group_l + n_group_h) - g0;
+        cost_row("MIXED off in hi-res - the split's four rows");
+        if (gx > 4 * A2_GROUPS)
+            printf("a2uitest: FAIL - clearing MIXED in a graphics mode "
+                   "composed %d groups; the split owns four rows, so it owes "
+                   "at most %d\n", gx, 4 * A2_GROUPS),
+            fails++;
+        audit("MIXED cleared in hi-res");
+
+        cost_mark();
+        g0 = n_group + n_group_l + n_group_h;
+        h_mode(0, 1, 0, 1);                 /* ...and MIXED back on */
+        do_wake();
+        gx = (n_group + n_group_l + n_group_h) - g0;
+        cost_row("MIXED on in hi-res - the split's four rows");
+        if (gx > 4 * A2_GROUPS)
+            printf("a2uitest: FAIL - setting MIXED in a graphics mode "
+                   "composed %d groups; the split owns four rows, so it owes "
+                   "at most %d\n", gx, 4 * A2_GROUPS),
+            fails++;
+        audit("MIXED set again in hi-res");
+    }
+
+    /* --- PAGE2, ON BOTH SIDES OF THE SPLIT ------------------------------
+     * One switch selects the second page for both halves: text $0800 and
+     * hi-res $4000, which are +$400 and +$2000 on their own maps. */
+    h_mode(0, 1, 1, 1);
+    if (a2_mode_page() != A2_HGR2)
+        fail("PAGE2 in hi-res is $4000");
+    if (a2_row_base(0) != a2_hbase[0] + (A2_HGR2 - A2_HGR1))
+        fail("PAGE2 did not move the hi-res row base by $2000");
+    if (a2_row_base(A2_MIXROW) != a2_tbase[A2_MIXROW] + (A2_TXT2 - A2_TXT1))
+        fail("PAGE2 did not move the MIXED text rows to $0800");
+    do_wake();
+    audit("a MIXED screen on page 2");
+
+    /* --- and back to TEXT, which is where the rest of the script lives --- */
+    h_mode(1, 0, 0, 0);
+    do_wake();
+    audit("back in TEXT after the graphics modes");
+
+    /* --- FULL SCREEN AND THE TIER TABLE (section 7.8) --------------------
+     * The magnification is decided in ONE place, a2_geom, off the LIVE
+     * content box - and a WF_FULL window's content IS its frame, so the box
+     * below is the whole screen. VGA 640x480 holds 640 x 384 and gets 2x on
+     * both axes; a 200-line CGA holds the width and not the height and gets
+     * 2x horizontal, which is the RIGHT SHAPE there because a CGA pixel is
+     * already 2:1; the CPU_8086 tier gets 1:1 whatever the adapter, because
+     * a2_band_x2 is 10.59 ms for a whole character row - 254 ms on a whole-frame
+     * repaint (APPLE2-SPEC 7.9.1, 7.9.2). */
+    cost_mark();
+    do_cmd(A2_M_MACHINE, A2_I_FULLSCR);
+    cost_row("entering full screen at 2x on VGA");
+    if (!h_fs)
+        fail("Toggle Fullscreen did not enter fullscreen for the tier row");
+    if (a2_scw != 2 || a2_sch != 2)
+        printf("a2uitest: FAIL - a 640x480 VGA at full screen is 2x on both "
+               "axes and this build chose %dx%d\n", a2_scw, a2_sch),
+        fails++;
+    do_wake();
+    audit("full screen at 2x");
+    /* ...AND EVERY APPLE PIXEL IS TWO SCREEN PIXELS, BOTH OF THEM. audit()
+     * samples the first of each pair, which a doubler that wrote only one
+     * would pass; this is the other half, and it is the bug c64band.inc's
+     * header names twice. */
+    {
+        int y, x, bad2 = 0;
+
+        for (y = 0; y < a2_gnl && bad2 == 0; y++)
+            for (x = 0; x < A2_BANDW; x++) {
+                if (glass[a2_gsy + y * 2][a2_gsx + x * 2]
+                    != glass[a2_gsy + y * 2][a2_gsx + x * 2 + 1]
+                    || glass[a2_gsy + y * 2][a2_gsx + x * 2]
+                       != glass[a2_gsy + y * 2 + 1][a2_gsx + x * 2]) {
+                    printf("a2uitest: FAIL - the doubled band is not doubled "
+                           "at Apple pixel (%d,%d)\n", x, y);
+                    fails++;
+                    bad2 = 1;
+                    break;
+                }
+            }
+    }
+    no_gunk("full screen at 2x");
+    /* ...AND THE DOUBLING IS OWED BY A DRAW AND NOT BY A COMPOSE (wave 3's
+     * review). a2_band_x2 used to sit beside a2_band_text on the compose
+     * side, so a flush that recomposed the frame and drew NOTHING still spent
+     * 24 x 10.59 = 254 ms doubling it. That flush is ordinary: a mode switch
+     * that draws the same picture, a rect-forced row whose pixels turn out
+     * identical, the reset recompose. It is a2_emit's now, behind a per-row
+     * latch - so a row that produces no run costs nothing, and a row that
+     * produces three runs still doubles ONCE. */
+    {
+        int x0, b0;
+
+        cost_mark();
+        x0 = n_x2;
+        b0 = n_blit;
+        h_mode(0, 0, 0, 1);                 /* to hi-res... */
+        h_mode(1, 0, 0, 0);                 /* ...and back to TEXT: two
+                                             * a2_dirty_all's, one picture */
+        do_wake();
+        cost_row("a fullscreen recompose that draws nothing");
+        if (n_blit != b0)
+            fail("the fullscreen zero-blit fixture drew something - it is "
+                 "meant to recompose the identical picture");
+        if (n_x2 != x0)
+            printf("a2uitest: FAIL - a fullscreen flush that blitted nothing "
+                   "still called a2_band_x2 %d time(s); the doubling belongs "
+                   "on the DRAW side (%.1f ms each)\n", n_x2 - x0, MS_X2),
+            fails++;
+        audit("a fullscreen recompose that draws nothing");
+    }
+
+    /* --- ...AND IT IS OWED BY THE RUN AND NOT BY THE ROW -----------------
+     * Wave 3 moved a2_band_x2 to the draw side and left it doubling the WHOLE
+     * band - all forty bytes, all eight scan lines - whatever the run about to
+     * be blitted covered. An ordinary keystroke at 2x emits ONE run seven band
+     * bytes wide over eight lines: 56 source byte-rows of work against the 320
+     * it paid for, 2.0 ms against 10.6, more than the rest of the keystroke
+     * put together. The bound is the run's own rectangle; anything wider is
+     * the per-row version back again. */
+    {
+        long u0;
+        int x0;
+
+        do_wake();                      /* let the flash phase and anything
+                                         * the fixtures above left dirty
+                                         * settle: this row is about ONE cell */
+        do_wake();
+        u0 = n_x2_u;
+        x0 = n_x2;
+        cost_mark();
+        h_puts(3, 4, "K", 0);
+        do_wake();
+        cost_row("one changed cell at 2x - the doubling is the RUN's");
+        if (n_x2 == x0)
+            fail("a keystroke at 2x doubled nothing at all - the blit reads "
+                 "the doubled band, so this cannot be right");
+        if (n_x2_u - u0 > 8L * 8L)
+            printf("a2uitest: FAIL - one changed cell at 2x doubled %ld "
+                   "source byte-rows; the run is at most eight bytes over "
+                   "eight scan lines, so it owes at most 64 (%.3f ms each)\n",
+                   n_x2_u - u0, MS_X2_B),
+            fails++;
+        audit("one changed cell at 2x");
+    }
+
+    /* --- THE ABOUT PANEL AT 2x, WHICH IS WHERE THE HOLD RANGE WAS WRONG --
+     * The panel's rect is in SCREEN pixels and the hold range is in APPLE
+     * scan lines, and at 2x those are not the same thing (section 7.8: the
+     * doubling is at BLIT time). ovl_about_geom shipped without the divide,
+     * so at VGA fullscreen it held lines [131,191] while covering [66,125] -
+     * two DISJOINT ranges. Everything under the card was recomposed and
+     * blitted straight over it on the next flush, and the bottom third of the
+     * picture froze. Neither the fullscreen rows above nor the About rows
+     * further up could see it, because they never crossed.
+     *
+     * THE ASSERTION IS THE CONVERSION DONE BY HAND, and then a wake with the
+     * blit stub watching: it mirrors the flush's hold test in Apple-line
+     * coordinates (this file's blit1), so a blit inside the range is caught
+     * where it happens. */
+    {
+        int wl0, wl1, t;
+
+        do_about();
+        if (!a2_abt_up)
+            fail("the About panel did not come up at 2x");
+        if (a2_abt_w != a2_gbw)
+            printf("a2uitest: FAIL - the About panel is %d px wide against a "
+                   "band of %d; a narrower panel leaves live Apple picture "
+                   "either side of it and the flush's hold is per ROW, so "
+                   "those strips freeze\n", a2_abt_w, a2_gbw),
+            fails++;
+        /* the panel's rect, converted by hand: an Apple line is a2_sch screen
+         * rows, and only a line covered WHOLLY may be held */
+        t = a2_abt_y - a2_gsy;
+        wl0 = a2_gl0 + (t + a2_sch - 1) / a2_sch;
+        t = a2_abt_y + a2_abt_h - a2_gsy;
+        wl1 = a2_gl0 + t / a2_sch - 1;
+        if (wl1 > A2_SCRH - 1)
+            wl1 = A2_SCRH - 1;
+        if (a2_hold_l0 != wl0 || a2_hold_l1 != wl1)
+            printf("a2uitest: FAIL - the About panel at %dx%d holds Apple "
+                   "lines [%d,%d] and covers [%d,%d]\n", a2_scw, a2_sch,
+                   a2_hold_l0, a2_hold_l1, wl0, wl1),
+            fails++;
+        memset(h_blitrow, 0, sizeof h_blitrow);
+        a2_dirty_all();                 /* every line asks to be drawn... */
+        do_wake();
+        {
+            int l, k, sy, over = 0;
+
+            for (l = a2_hold_l0; l <= a2_hold_l1; l++)
+                for (k = 0; k < a2_sch; k++) {
+                    sy = a2_gsy + (l - a2_gl0) * a2_sch + k;
+                    if ((unsigned)sy < sizeof h_blitrow && h_blitrow[sy])
+                        over++;
+                }
+            if (over)
+                printf("a2uitest: FAIL - %d screen row(s) under the About "
+                       "panel were BLITTED with the card up; the picture is "
+                       "being drawn over it on every flush\n", over),
+                fails++;
+        }
+        audit("the About panel at 2x");
+        do_click(a2_abt_x + 4, a2_abt_y + 4);
+        do_wake();
+        if (a2_abt_up)
+            fail("a click did not close the About panel at 2x");
+        audit("the About panel closed at 2x");
+    }
+    do_cmd(A2_M_MACHINE, A2_I_FULLSCR);
+    do_wake();
+    audit("back out of full screen");
+    if (a2_scw != 1 || a2_sch != 1)
+        fail("a framed window is 1:1 - it is authored 336 wide and there is "
+             "nothing to fill");
+
+    /* --- THE CGA ARM: 2x HORIZONTAL ONLY --------------------------------- */
+    {
+        int sw = h_scr_w, sh = h_scr_h;
+
+        h_scr_w = 640;
+        h_scr_h = 200;
+        do_cmd(A2_M_MACHINE, A2_I_FULLSCR);
+        do_wake();
+        if (a2_scw != 2 || a2_sch != 1)
+            printf("a2uitest: FAIL - a 640x200 CGA at full screen is 2x "
+                   "HORIZONTAL only and this build chose %dx%d\n",
+                   a2_scw, a2_sch),
+            fails++;
+        if (a2_gnl >= A2_SCRH)
+            fail("a 200-line screen cannot show all 192 Apple scan lines "
+                 "with a border and a status row - the band must clip");
+        audit("full screen on a 640x200 CGA");
+        do_cmd(A2_M_MACHINE, A2_I_FULLSCR);
+        h_scr_w = sw;
+        h_scr_h = sh;
+        do_paint();
+        do_wake();
+        audit("back out of the CGA fixture");
+    }
+
+    /* --- THE CPU_8086 TIER: 1:1, AND THE FLASH PHASE REFUSED ------------
+     * The refusal carries the MEASURED cost of a flip (section 10.3), and it
+     * is a2_fl_ok that is cleared - the same byte Machine > Flashing text
+     * moves - so the refusal and the greying cannot disagree. */
+    {
+        h_cpu = OS88_CPU_8086;
+        a2_tier_init();
+        a2_menu_state();
+        if (a2_fl_ok)
+            fail("the CPU_8086 tier does not refuse the flash phase - a flip "
+                 "is 43.1 ms and 3.64 of them a second is 157 ms/s of an "
+                 "8088 (section 10.3)");
+        if (a2_mach_items[A2_I_FLASH][0] != 1)
+            fail("Machine > Flashing text is not GREYED on the CPU_8086 tier "
+                 "- an item that is live and can only refuse is what SPEC.md "
+                 "47 exists to stop");
+        n0 = a2_fl_phase;
+        the_ticks += A2_FLASH_TICKS * 2;
+        do_wake();
+        if (a2_fl_phase != n0)
+            fail("the flash phase flipped on the CPU_8086 tier");
+        do_cmd(A2_M_MACHINE, A2_I_FULLSCR);
+        do_wake();
+        if (a2_scw != 1 || a2_sch != 1)
+            printf("a2uitest: FAIL - the CPU_8086 tier is 1:1 at full screen "
+                   "and this build chose %dx%d\n", a2_scw, a2_sch),
+            fails++;
+        audit("full screen on the CPU_8086 tier");
+        do_cmd(A2_M_MACHINE, A2_I_FULLSCR);
+        h_cpu = OS88_CPU_386;
+        a2_tier_init();
+        a2_fl_ok = 1;
+        a2_menu_state();
+        do_paint();
+        do_wake();
+        audit("back off the CPU_8086 tier");
+    }
+
+    /* --- THE GAME BUTTONS ARE LEVELS (section 6.3) -----------------------
+     * F1 and F2 are PB0 and PB1 at $C061/$C062, polled once a wake through
+     * os88_key_down and read from the cache by the soft switch - not one
+     * bridge crossing per emulated read, which is what a game polling $C061
+     * in a loop would cost. */
+    h_down[KSC_F1] = 1;
+    do_wake();
+    if ((a2_io_rd(0xC061) & 0x80) == 0)
+        fail("F1 is PB0 and $C061 answers bit 7 SET while it is held");
+    if ((a2_io_rd(0xC062) & 0x80) != 0)
+        fail("F2 is PB1 and $C062 must not answer PB0's level");
+    if ((a2_io_rd(0xC069) & 0x80) == 0)
+        fail("$C060-$C06F decodes THREE address bits - $C069 mirrors $C061 "
+             "(UTAIIe 7-5)");
+    h_down[KSC_F1] = 0;
+    h_down[KSC_F2] = 1;
+    do_wake();
+    if ((a2_io_rd(0xC061) & 0x80) != 0 || (a2_io_rd(0xC062) & 0x80) == 0)
+        fail("the two game buttons are not independent");
+    h_down[KSC_F2] = 0;
+    do_wake();
+    if ((a2_io_rd(0xC061) & 0x80) != 0)
+        fail("a released F1 is still reported down - the buttons are LEVELS "
+             "and the poll is what takes them back up");
+    /* ...AND Ctrl+F3 HOLDS PB0 ACROSS THE RESET IT ASKS FOR, which is what
+     * `Open-Apple-Control-Reset` means on a machine with no Open-Apple key
+     * (section 6.3). The poll runs at the TOP of the wake and the reset
+     * service after it, which is the order that makes this survive. */
+    do_key(0, 0x60);
+    do_wake();
+    if (!a2_btn[0])
+        fail("Ctrl+F3 did not hold PB0 across the reset - it is the II+'s "
+             "own spelling of AppleWin's Open-Apple-Control-Reset");
+    do_wake();
+    if (a2_btn[0])
+        fail("PB0 stayed down after the reset's own wake - the poll is what "
+             "takes it back up");
+
+    /* --- THE KEYBOARD-MOUSE RULE (section 6.6) --------------------------
+     * On a machine with no mouse the kernel eats the arrows, Space and Del as
+     * its pointer, and ScrollLock hands them back. The package cannot ask
+     * `has a mouse spoken`, so it asks a question with the same answer: the
+     * down-map says one is held and os88_onkey has never once delivered one.
+     * THREE consecutive polls, because a wake posted before a press is
+     * dispatched ahead of the key event behind it. */
+    a2_msg[0] = 0;
+    h_down[KSC_SPACE] = 1;
+    do_wake();
+    if (a2_msg[0])
+        fail("the keyboard-mouse message was said on ONE poll - a wake posted "
+             "before the press is dispatched ahead of the key event behind it");
+    do_wake();
+    do_wake();
+    if (!a2_msg[0])
+        fail("three polls with Space held and no key ever delivered is the "
+             "kernel eating it, and section 6.6 says so once a session");
+    do_wake();
+    do_wake();
+    h_down[KSC_SPACE] = 0;
+    /* ...AND THE LATCH IS ONE WAY. A key the pointer would have eaten has
+     * ARRIVED, so it is not eating them - either a mouse has spoken or
+     * ScrollLock is on, and neither un-happens. */
+    a2_key_typed = 0;
+    a2_slock_said = 0;
+    a2_key_held = 0;
+    a2_msg[0] = 0;
+    do_key(32, KSC_SPACE);              /* Space, delivered */
+    h_down[KSC_LEFT] = 1;
+    do_wake();
+    do_wake();
+    do_wake();
+    do_wake();
+    if (a2_msg[0])
+        fail("the keyboard-mouse message was said after one of those keys had "
+             "been DELIVERED - the latch is one way and this is the whole of "
+             "what it observes");
+    h_down[KSC_LEFT] = 0;
+    do_wake();
+    audit("after the keyboard rows");
+
+    /* --- THE LO-RES LUMINANCE LADDER, FOR tools/a2ref.py --lumcheck ------
+     * The package's sixteen bytes are the palette's luminance RANK; a2ref
+     * derives its own ordering from MII's `palettes[0]` "Color NTSC"
+     * (src/mii_video.c:94-113) through MII's own lo-res mapping
+     * (src/mii_video.c:173-177) - the palette the reference DISPLAYS, where
+     * AppleWin's PaletteRGB_NTSC lores block is a placeholder its own comment
+     * disclaims - and compares all 256 ordered pairs. apple2emu's
+     * Lores_colors (src/video.cpp:100-115) is the cross-check. Writing the
+     * table out is how the two meet. */
+    {
+        FILE *lf = fopen("build/a2lum.bin", "wb");
+
+        if (!lf)
+            fail("cannot write build/a2lum.bin");
+        else {
+            fwrite(a2_lum, 1, 16, lf);
+            fclose(lf);
+        }
+    }
+
     /* --- THE SPEED FIELD (APPLE2-SPEC section 9) -------------------------
      * IT IS THE ONE WIDGET ON THE GLASS WHOSE VALUE IS ARITHMETIC, AND IT
      * SHIPPED SATURATED. a2_cyc_add stopped accumulating at 60,000 64-cycle
@@ -2277,6 +3146,12 @@ int main(void)
                                          * hold measured 14 of the 18 that
                                          * reach the glass */
             "Too large for a 48K Apple.",
+            "ScrollLock: arrows, Space.",   /* section 6.6, and the widest of
+                                             * the lot at 25 of 26 cells: the
+                                             * kernel is eating the keys this
+                                             * machine types with, and this is
+                                             * the one sentence that says
+                                             * which key hands them back */
             0
         };
         int nm = 0;

@@ -237,14 +237,26 @@ static const char *a2_mach_items[] = {
     D "Joystick...",                        /* m_machine_menu, and it is
                                              * `.disabled = 1` in MII's OWN
                                              * table - the authentic grey.
-                                             * THE FACT: The paddles answer
-                                             * centre and there are no buttons
-                                             * in this build. The F1/F2
-                                             * sentence - with its `a
+                                             * THE FACT, WHOLE AGAIN NOW THAT
+                                             * THE BUTTONS ARE READ (section
+                                             * 10.3): The paddles answer
+                                             * centre. The game buttons PB0
+                                             * and PB1 are F1 and F2 - a
                                              * departure from AppleWin's
-                                             * Left-Alt / Right-Alt` - returns
-                                             * in WAVE 3, which is the wave
-                                             * that reads the buttons */
+                                             * Left-Alt / Right-Alt.
+                                             * Wave 1 shortened it to the
+                                             * first half because the second
+                                             * named a control the build did
+                                             * not have, which is the guess
+                                             * SPEC.md 47 rule 5 forbids; this
+                                             * is the wave that reads F1 and
+                                             * F2 as LEVELS through
+                                             * os88_key_down (section 6.3), so
+                                             * the sentence is a fact again.
+                                             * They are GAME BUTTONS and not
+                                             * //e Apple keys: a II+ has no
+                                             * Open-Apple key at all, it has
+                                             * three inputs at $C061-$C063 */
     a2_sep,
     "Toggle Fullscreen",                    /* m_video_menu. LIVE, and
                                              * RESIDENT: a WF_FULL window has
@@ -265,11 +277,31 @@ static const char *a2_mach_items[] = {
                                              * reader cannot take is rule 5's
                                              * guess */
     ON "Flashing text",                     /* OURS: the flash phase's own
-                                             * control (section 7.6). LIVE -
-                                             * the phase exists from wave 1.
-                                             * WAVE 3 greys it on the
-                                             * CPU_8086 tier with the MEASURED
-                                             * cost of one flip in the fact */
+                                             * control (section 7.6). LIVE on
+                                             * every tier but one.
+                                             * THE FACT, ON THE CPU_8086 TIER
+                                             * ONLY (section 10.3): Flashing
+                                             * forces a text repaint 3.6 times
+                                             * a second. On a 4.77 MHz 8088
+                                             * that is 43.1 ms each time and
+                                             * the machine would spend it on
+                                             * the phase rather than on the
+                                             * 6502. The 43.1 is MEASURED -
+                                             * a2uitest's own ONE FLASH PHASE
+                                             * FLIP row, priced from
+                                             * `make a2bandbench`'s 2.434 ms a
+                                             * group - and 3.64 flips a second
+                                             * makes it 157 ms in every second
+                                             * of an 8088. a2_tier_init clears
+                                             * a2_fl_ok there, so the row is
+                                             * greyed AND unmarked together -
+                                             * and it is a2_tier_slow that
+                                             * GREYS it, a2_fl_ok that MARKS
+                                             * it, which a2_menu_state's own
+                                             * note spells out: greying off
+                                             * a2_fl_ok alone would grey the
+                                             * row for a user who simply
+                                             * switched flashing off */
     D OFF "Mute",                           /* m_audio_menu. THE FACT: There
                                              * is no speaker in this build.
                                              * (section 10.3) - and it is
@@ -406,8 +438,16 @@ static void a2_menu_state(void)
     a2_mach_items[A2_I_RESET] = a2_have_cpu ? "Control-Reset  Ctrl+F2"
                                             : D "Control-Reset  Ctrl+F2";
     a2_mach_items[A2_I_POWER] = a2_have_cmd ? "Power On" : D "Power On";
-    a2_mach_items[A2_I_FLASH] = a2_fl_ok ? ON "Flashing text"
-                                         : OFF "Flashing text";
+    /* ...AND ON THE CPU_8086 TIER THE ROW IS GREYED WITH ITS MEASURED COST
+     * (section 10.3). It is `a2_tier_slow` that greys it and `a2_fl_ok` that
+     * marks it, which is two different questions about one row: `you cannot
+     * have this here` and `it is on`. Greying it while it is MARKED would say
+     * the feature is unavailable and leave a tick beside it, so the slow tier
+     * clears a2_fl_ok in a2_tier_init and the row is greyed and unmarked
+     * together. */
+    a2_mach_items[A2_I_FLASH] = a2_tier_slow
+        ? D OFF "Flashing text"
+        : (a2_fl_ok ? ON "Flashing text" : OFF "Flashing text");
     /* THE THREE THAT USED TO BE GREYED FOR EVER. `D` baked into a literal
      * that a2_menu_state never rewrites is a row no later wave can revive,
      * and a greyed row with no fact is what SPEC.md 47 forbids; both facts
@@ -481,6 +521,14 @@ void os88_oncmd(int item, int menu, void *win)
         return;
     }
     if (menu == A2_M_MACHINE && item == A2_I_FLASH) {
+        /* ...AND THE CPU_8086 TIER'S REFUSAL IS NOT UNDOABLE FROM HERE. The
+         * row is greyed there, so the kernel does not dispatch it and this
+         * arm is unreachable in the ordinary way - but a2_fl_ok is the byte
+         * the tier CLEARED (section 7.8), and a command that toggled it back
+         * would turn on a 157 ms/s phase the greying beside it says the
+         * machine will not spend. One test, so the two cannot disagree. */
+        if (a2_tier_slow)
+            return;
         a2_fl_ok = !a2_fl_ok;
         if (!a2_fl_ok && a2_fl_phase) {
             a2_fl_phase = 0;                /* turning it off leaves the text
@@ -521,11 +569,15 @@ void os88_oncmd(int item, int menu, void *win)
  * has already run and already invalidated. It is the REFUSED arm that owes a
  * repaint, and it owes one because the kernel did nothing at all.
  *
- * WAVE 1 IS 1:1 AND SAYS SO. The magnification table - 2x on VGA, 2x
- * horizontal on CGA and Hercules, 1:1 on the CPU_8086 tier - is written in
- * wave 3 FROM tests/a2band's measured numbers (section 7.8), and a2_band_x2
- * and its table are already here and already benched. Nothing is faked and
- * nothing is silently missing: fullscreen works, it does not magnify. */
+ * THE MAGNIFICATION IS NOT DECIDED HERE. a2_geom decides it, in one place,
+ * off the LIVE content box - 2x on both axes on VGA, 2x horizontal on CGA and
+ * Hercules, 1:1 on the CPU_8086 tier - from tests/a2band's measured numbers
+ * (sections 7.8, 7.9.2). What this function owes that table is the LATCH:
+ * a2_full moves BEFORE the call and rolls back on a refusal, because
+ * OSAPI_FULLSCREEN repaints synchronously and a2_geom therefore runs NESTED
+ * inside it. Latching after the call measured the new box at 1:1, drew 192
+ * lines, and let the next flush draw them again at 2x - half a second of
+ * double-draw, invisible in a still dump. */
 static void a2_fullscreen_toggle(void *win)
 {
     /* AND THE PANEL DOES NOT SURVIVE A GEOMETRY CHANGE. This is reachable
@@ -553,14 +605,24 @@ static void a2_fullscreen_toggle(void *win)
                                              * rect handed on as damage */
         a2_dirty_any = 1;
     }
-    if (os88_fullscreen(win, a2_full ? 0 : 1) < 0) {
+    /* THE LATCH MOVES **BEFORE** THE CALL AND ROLLS BACK ON A REFUSAL, which
+     * is apps/c64/c64.c's own order and is a correctness requirement rather
+     * than a tidiness one now that there is a magnification to decide.
+     * OSAPI_FULLSCREEN repaints the window whole and SYNCHRONOUSLY, so
+     * os88_paint - and a2_geom under it - runs NESTED inside the call below:
+     * with the latch still down, that repaint measures the new full-screen
+     * box at 1:1, draws all 192 lines, and the next flush then draws them
+     * again at 2x. Half a second of pure double-draw (PERFORMANCE.md rule 2)
+     * on every entry, and invisible in a still screendump because the second
+     * picture is the right one. */
+    a2_full = !a2_full;
+    if (os88_fullscreen(win, a2_full ? 1 : 0) < 0) {
+        a2_full = !a2_full;                 /* refused: the latch rolls back */
         a2_say("Another window has it.");
         a2_st_dirty = 1;
         a2_kick = 1;                        /* ...and the REFUSAL owes the
                                              * panel's rows a draw, because
                                              * the kernel did nothing at all */
         os88_wm_wake(win);
-        return;
     }
-    a2_full = !a2_full;
 }

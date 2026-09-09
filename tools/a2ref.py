@@ -68,8 +68,19 @@ MODES = {"text": MODE_TEXT, "lores": MODE_LORES, "hires": MODE_HIRES}
 # WHICH MODES THIS FILE HAS A REFERENCE FOR. `--check lores` on a build whose
 # lo-res composer does not exist is a FAILURE and not a skip: the plan's rule
 # is that every harness step fails rather than passing when its subject is
-# absent (docs/APPLE2-PORT-PLAN.md Decision 12).
-IMPLEMENTED = {"text"}
+# absent (docs/APPLE2-PORT-PLAN.md Decision 12). Wave 3 added the other two.
+IMPLEMENTED = {"text", "lores", "hires"}
+
+# THE MIXED SPLIT: the top 160 scan lines in the graphics mode and the bottom
+# 32 in text, which is 20 character rows exactly (APPLE2-SPEC section 7.4).
+MIXROW = 20
+
+
+def hires_map(i):
+    """The interleaved hi-res row base - $1C00 above the text map, which is
+    what makes `$2000 + $400*sub + $80*(r&7) + $28*(r>>3)` and the text map
+    one table (APPLE2-SPEC section 7.2). Page 1; page 2 is +$2000."""
+    return 0x1C00 + text_map(i)
 
 
 def text_map(i):
@@ -123,17 +134,27 @@ class State(object):
         return g ^ mask
 
 
-def compose_text(st, out):
+def a2_lit(c):
+    """Is lo-res colour c LIT on the monochrome windowed path?
+
+    The threshold is HALF OF WHITE'S LUMINANCE, applied to luminances this
+    file computes from MII's own RGBs - so the package's sixteen-byte rank
+    ladder and this are two independent statements about the same palette, and
+    a disagreement about one colour is a bit-for-bit frame mismatch rather
+    than a matter of opinion (APPLE2-SPEC section 7.3)."""
+    return a2_pm(c) >= 500
+
+
+def compose_text(st, out, r0=0, r1=ROWS - 1):
     """40 x 24 cells of 7 x 8, packed eight cells to seven bytes.
 
     56 bits is exactly seven bytes, so a group of eight cells is byte-aligned
     in the output at both ends. The stream is MSB first: cell k occupies bits
     7k..7k+6 and within a cell the leftmost pixel is the most significant.
     """
-    base0 = text_map
     page = 1024 if st.page2 else 0
-    for row in range(ROWS):
-        base = base0(row) + page
+    for row in range(r0, r1 + 1):
+        base = text_map(row) + page
         for line in range(8):
             bits = []
             for col in range(COLS):
@@ -149,14 +170,90 @@ def compose_text(st, out):
                 out[o + i // 8] = v
 
 
+def pack_row(bits, row, line, out):
+    """280 bits -> 35 bytes, starting at the left letterbox's end. The stream
+    is MSB first: cell k occupies bits 7k..7k+6 and within a cell the leftmost
+    pixel is the most significant."""
+    o = (row * 8 + line) * BSTRIDE + LBOX
+    for i in range(0, SCRW, 8):
+        v = 0
+        for j in range(8):
+            v = (v << 1) | bits[i + j]
+        out[o + i // 8] = v
+
+
+def compose_lores(st, out, r0=0, r1=ROWS - 1):
+    """40 x 48 blocks of 7 x 4, off the TEXT page.
+
+    One byte is TWO blocks stacked: the low nibble is the top four scan lines
+    of the character row and the high nibble the bottom four
+    (apple2emu src/video.cpp's lo-res walk, MII's mii_video.c:340-378). The
+    windowed path is MONOCHROME, so a block is seven lit or seven dark pixels
+    by its colour's luminance.
+    """
+    page = 1024 if st.page2 else 0
+    for row in range(r0, r1 + 1):
+        base = text_map(row) + page
+        for line in range(8):
+            bits = []
+            for col in range(COLS):
+                b = st.ram[(base + col) & 0xFFFF]
+                c = (b >> (0 if line < 4 else 4)) & 0x0F
+                bits += [1 if a2_lit(c) else 0] * 7
+            pack_row(bits, row, line, out)
+
+
+def compose_hires(st, out, r0=0, r1=ROWS - 1):
+    """280 x 192 monochrome: 40 source bytes to 35 output bytes a SCAN LINE.
+
+    Hi-res data carries BIT 0 AS THE LEFTMOST PIXEL - the other way up from
+    the character generator, which is the one thing about this machine most
+    likely to be got backwards - and BIT 7 IS THE HALF-DOT SHIFT AND IS
+    DROPPED. That is what apple2emu's `render_mono_hires_cell`
+    (src/video.cpp:511-537, `byte &= 0x7f`) and MII's mono arm
+    (src/mii_video.c:459-470, which reads `run >> (2+i)` and never touches the
+    offset) do.
+
+    APPLEWIN IS A NAMED DEPARTURE HERE and not a third agreeing reference:
+    `updateScreenSingleHires40` (NTSC.cpp:1628-1633) reads
+    `g_aPixelDoubleMaskHGR[m & 0x7F]` and then, `if (m & 0x80)`, shifts the
+    result left by one and pulls in the previous column's last pixel - the
+    half-dot shift, applied at signal level BEFORE the monochrome tables are
+    indexed. A 280-pixel 1bpp band cannot express half a dot; the 560-pixel
+    foreign mode (APPLE2-SPEC section 13) is where it comes back.
+    """
+    page = 0x2000 if st.page2 else 0
+    for row in range(r0, r1 + 1):
+        for line in range(8):
+            base = hires_map(row) + page + 0x400 * line
+            bits = []
+            for col in range(COLS):
+                b = st.ram[(base + col) & 0xFFFF]
+                for k in range(7):
+                    bits.append((b >> k) & 1)
+            pack_row(bits, row, line, out)
+
+
 def compose(st):
     out = bytearray(FRAME_LEN)
     if st.mode == MODE_TEXT:
         compose_text(st, out)
+        return bytes(out)
+    if st.mode == MODE_LORES:
+        gfx = compose_lores
+    elif st.mode == MODE_HIRES:
+        gfx = compose_hires
     else:
-        raise SystemExit("a2ref: no reference for mode %d - lo-res and hi-res "
-                         "arrive with the composers that draw them (wave 3)"
-                         % st.mode)
+        raise SystemExit("a2ref: no reference for mode %d" % st.mode)
+    # MIXED is the top 160 scan lines in the graphics mode and the bottom 32
+    # in text - 20 character rows exactly, so no row is ever half one renderer
+    # and half the other (section 7.4). The text half reads the TEXT page,
+    # PAGE2 and all, which is what one switch selecting both halves means.
+    if st.mixed:
+        gfx(st, out, 0, MIXROW - 1)
+        compose_text(st, out, MIXROW, ROWS - 1)
+    else:
+        gfx(st, out)
     return bytes(out)
 
 
@@ -205,8 +302,9 @@ def check(modes, state_path, frame_path, selftest=False):
                   % (st.mode, st.mixed, st.page2, st.phase))
             return 1
     print("a2ref: the composed frame equals the reference bit for bit "
-          "(mode %d, page2 %d, flash phase %d, %d bytes)"
-          % (st.mode, st.page2, st.phase, FRAME_LEN))
+          "(mode %s, mixed %d, page2 %d, flash phase %d, %d bytes)"
+          % (("text", "lores", "hires")[st.mode], st.mixed, st.page2,
+             st.phase, FRAME_LEN))
     return 0
 
 
@@ -259,40 +357,82 @@ def romshape(path):
     return 0
 
 
-# THE LO-RES LUMINANCE LADDER'S GATE. apple2emu's src/video.cpp:94-113 carries
-# the 16 Apple colours as mrob.com RGB values; a monochrome composer only ever
-# asks whether one is lighter than, darker than or equal to another, so the
-# table is right exactly when all 256 ORDERED answers match. The RGBs are
-# transcribed here and the Y is Rec.601 in PARTS PER THOUSAND, so that this
-# oracle derives its ordering from the reference's own numbers and not from a
-# rounded 0..255 copy of them in the package.
+# THE LO-RES LUMINANCE LADDER'S GATE. The sixteen Apple lo-res colours are
+# MII's `palettes[0]` "Color NTSC" (mii_emu src/mii_video.c:94-113), taken
+# through MII's own lo-res mapping `mii_base_clut.lores[0]`
+# (src/mii_video.c:173-177) - which is the half that is easy to lose, because
+# MII's CI_* enum is NOT in Apple colour order (CI_PURPLE is 1; lo-res colour
+# 1 is MAGENTA). A monochrome composer only ever asks whether one colour is
+# lighter than, darker than or equal to another, so the package's rank table
+# is right exactly when all 256 ORDERED answers match. The RGBs are
+# transcribed here and the Y is Rec.601, so that this oracle derives its
+# ordering from the reference's own numbers and not from a rounded copy of
+# them in the package.
+#
+# WHY MII AND NOT APPLEWIN. This gate first shipped against AppleWin's
+# `PaletteRGB_NTSC` lores block, whose own first line
+# (source/RGBMonitor.cpp:148) reads "Note: this is a placeholder. This palette
+# is overwritten by VideoInitializeOriginal()" - and it is, at start-up
+# (RGBMonitor.cpp:1186-1196, called from NTSC.cpp:2366-2368), with sixteen
+# colours GenerateBaseColors (NTSC.cpp:2697-2721) computes from a signal-level
+# simulation rather than lists. So AppleWin never displays those literals and
+# they cannot be transcribed; under them purple and medium blue came out at
+# 467 and 499 per mille and drew BLACK, decided by one part per mille of a
+# palette no emulator shows.
+#
+# apple2emu's `Lores_colors` (src/video.cpp:100-115, the mrob.com values) is
+# the CROSS-CHECK: it is indexed by lo-res colour directly, agrees with MII
+# exactly on twelve of the sixteen, and agrees on ALL SIXTEEN lit/dark
+# decisions at the 500-per-mille threshold. It is not the definer, because
+# where it and MII disagree it is MII's live CLUT that this port's mapping was
+# read out of.
+#
+# TRANSCRIBED, NOT ADAPTED. An earlier draft carried dark green as
+# 0x00,0x80,0x2F, which is in NO reference - AppleWin's placeholder dark green
+# crossed with Le Chat Mauve Feline's (RGBMonitor.cpp:191) - and it was
+# precisely the byte that made this gate green over a wrong ladder. A gate
+# that transcribes an adapted palette is a gate that checks the package
+# against itself.
 #
 # IT HAS NO SUBJECT UNTIL THE LO-RES COMPOSER EXISTS (wave 3), which is why
 # apps/apple2/build.sh does not call it before then: a green pass over a table
 # that is not there is exactly what these harnesses are built not to print.
 A2_RGB = [
-    (0x00, 0x00, 0x00),                 # 0  black
-    (0x9D, 0x09, 0x66),                 # 1  magenta
-    (0x2A, 0x2A, 0xE5),                 # 2  dark blue
-    (0xC7, 0x34, 0xFF),                 # 3  purple
-    (0x00, 0x80, 0x2F),                 # 4  dark green
-    (0x80, 0x80, 0x80),                 # 5  grey 1
-    (0x0D, 0xA1, 0xFF),                 # 6  medium blue
-    (0xAA, 0xAA, 0xFF),                 # 7  light blue
-    (0x55, 0x55, 0x00),                 # 8  brown
-    (0xF2, 0x5E, 0x00),                 # 9  orange
-    (0xC0, 0xC0, 0xC0),                 # 10 grey 2
-    (0xFF, 0x89, 0xE5),                 # 11 pink
-    (0x38, 0xCB, 0x00),                 # 12 green
-    (0xD5, 0xD5, 0x1A),                 # 13 yellow
-    (0x62, 0xF6, 0x99),                 # 14 aqua
-    (0xFF, 0xFF, 0xFF),                 # 15 white
+    (0x00, 0x00, 0x00),                 # 0  black      CI_BLACK
+    (0xE3, 0x1E, 0x60),                 # 1  magenta    CI_MAGENTA
+    (0x60, 0x4E, 0xBD),                 # 2  dark blue  CI_DARKBLUE
+    (0xFF, 0x44, 0xFD),                 # 3  purple     CI_PURPLE
+    (0x00, 0xA3, 0x60),                 # 4  dark green CI_DARKGREEN
+    (0x9C, 0x9C, 0x9C),                 # 5  grey 1     CI_GRAY1
+    (0x14, 0xCF, 0xFD),                 # 6  medium blue CI_BLUE
+    (0xD0, 0xC3, 0xFF),                 # 7  light blue CI_LIGHTBLUE
+    (0x60, 0x72, 0x03),                 # 8  brown      CI_BROWN
+    (0xFF, 0x6A, 0x3C),                 # 9  orange     CI_ORANGE
+    (0x9C, 0x9C, 0x9C),                 # 10 grey 2     CI_GRAY2
+    (0xFF, 0xA0, 0xD0),                 # 11 pink       CI_PINK
+    (0x14, 0xF5, 0x3C),                 # 12 green      CI_GREEN
+    (0xD0, 0xDD, 0x8D),                 # 13 yellow     CI_YELLOW
+    (0x72, 0xFF, 0xD0),                 # 14 aqua       CI_AQUA
+    (0xFF, 0xFF, 0xFF),                 # 15 white      CI_WHITE
 ]
 
 
 def a2_luma(i):
+    """Rec.601 luma of lo-res colour i, at FULL precision (0 .. 255000).
+
+    NOT divided down. The ladder has pairs a per-mille rounding would TIE -
+    dark blue is 376.6 and brown 376.3 - and a tie the palette does not have
+    is exactly the kind of accident this oracle exists to refuse. The only
+    tie in the sixteen is the palette's own: grey 1 and grey 2 are the same
+    three bytes.
+    """
     r, g, b = A2_RGB[i]
-    return (299 * r + 587 * g + 114 * b) // 255
+    return 299 * r + 587 * g + 114 * b
+
+
+def a2_pm(i):
+    """...and the same figure in PARTS PER THOUSAND of white, for messages."""
+    return a2_luma(i) // 255
 
 
 def lumcheck(path):
@@ -314,13 +454,13 @@ def lumcheck(path):
                           % (a, b,
                              ("lighter", "the same", "darker")[1 - got],
                              ("lighter", "the same", "darker")[1 - want],
-                             wa, wb))
+                             a2_pm(a), a2_pm(b)))
                 bad += 1
     if bad:
         print("a2ref: %d luminance disagreement(s)" % bad)
         return 1
-    print("a2ref: the luminance ladder agrees with apple2emu's palette over "
-          "all 256 ordered pairs")
+    print("a2ref: the luminance ladder agrees with MII's Color NTSC palette "
+          "over all 256 ordered pairs")
     return 0
 
 

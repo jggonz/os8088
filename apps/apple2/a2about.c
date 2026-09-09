@@ -96,29 +96,80 @@ static const char *a2_abt_text[A2_ABT_ROWS] = {
  * the panel covers - all forty bytes of each - and then paint the panel over
  * the middle of what it just drew. That is PERFORMANCE.md's erase-then-letter
  * pair, and it is invisible in any screendump. At the band's own width "the
- * lines the panel covers" is exact, and nothing under it is drawn at all. */
+ * lines the panel covers" is exact, and nothing under it is drawn at all.
+ *
+ * ...AND "THE BAND'S WIDTH" IS a2_gbw AND NOT A2_BANDW, which is the half of
+ * that sentence wave 3's magnification broke. At 2x the band on the glass is
+ * 640 pixels wide and a 320-wide panel leaves 160 pixels of LIVE Apple
+ * picture down each side - and a2scr.c's hold is per ROW, so those strips
+ * freeze instead. It is placed AT a2_gsx rather than centred in the content
+ * box, so "as wide as the band" and "over the band" are one statement.
+ *
+ * THE SCREEN-TO-APPLE-LINE CONVERSION IS DIVIDED BY THE MAGNIFICATION, at the
+ * second and last place the two coordinate systems cross (a2_blank_rect is
+ * the first, and section 7.8 is the rule: the doubling is at BLIT time). This
+ * is what the wave shipped wrong: without the divide, the panel at VGA
+ * fullscreen held Apple lines [131,191] while covering [66,125] - two
+ * DISJOINT ranges, so every line under the card was recomposed and blitted
+ * straight over it on the next flush and the bottom third of the picture
+ * froze.
+ *
+ * IT HOLDS ONLY LINES THE PANEL COVERS **WHOLLY**. At 2x an Apple line is two
+ * screen rows, so the panel's edge can fall inside one: `ceil` at the top and
+ * `floor` at the bottom, which at 1:1 is exactly what this always did. A
+ * held line that is not covered would freeze a sliver; an unheld covered one
+ * is drawn over the card. The half-line at each edge is drawn as damage when
+ * the panel goes, like everything else the panel held. */
 static int ovl_about_geom(void)
 {
-    int y;
+    int t;
 
-    a2_abt_w = A2_BANDW;
+    a2_abt_w = a2_gbw;
     if (a2_abt_w > a2_gw)
         a2_abt_w = a2_gw;
     a2_abt_h = A2_ABT_H;
     if (a2_abt_h > a2_gh)
         a2_abt_h = a2_gh;
-    a2_abt_x = a2_gox + (a2_gw - a2_abt_w) / 2;
+    a2_abt_x = a2_gsx;
+    if (a2_abt_x + a2_abt_w > a2_gox + a2_gw)
+        a2_abt_x = a2_gox + a2_gw - a2_abt_w;
+    if (a2_abt_x < a2_gox)
+        a2_abt_x = a2_gox;
     a2_abt_y = a2_goy + (a2_gh - A2_STATH - a2_abt_h) / 2;
     if (a2_abt_y < a2_goy)
         a2_abt_y = a2_goy;
+    /* ...AND AT 2x IT IS SNAPPED TO THE APPLE LINE GRID, top and height both,
+     * so that "the lines it covers" and "the lines it covers WHOLLY" are the
+     * same set. Without it the card's last screen row is half of an Apple
+     * line the hold does not contain: that line is drawn on every flush, over
+     * the card's own bottom edge, which is the very double-draw the hold
+     * exists to stop - and a2uitest's audit sees it as panel pixels where the
+     * shadow says picture. It moves the panel by at most one screen pixel. */
+    if (a2_sch == 2) {
+        if (a2_abt_y > a2_gsy)
+            a2_abt_y -= (a2_abt_y - a2_gsy) & 1;
+        a2_abt_h &= ~1;
+    }
 
-    /* the Apple scan lines it covers, in the shadow's own coordinates */
-    y = a2_abt_y - a2_gsy + a2_gl0;
-    a2_hold_l0 = (y < 0) ? 0 : y;
-    y = a2_abt_y + a2_abt_h - 1 - a2_gsy + a2_gl0;
-    a2_hold_l1 = (y >= A2_SCRH) ? A2_SCRH - 1 : y;
-    if (a2_hold_l1 < a2_hold_l0)
-        a2_hold_l1 = a2_hold_l0;
+    /* the Apple scan lines it covers WHOLLY, in the shadow's own coordinates */
+    t = a2_abt_y - a2_gsy;
+    if (t < 0)
+        t = 0;
+    if (a2_sch == 2)
+        a2_hold_l0 = a2_gl0 + ((t + 1) >> 1);
+    else
+        a2_hold_l0 = a2_gl0 + t;
+    t = a2_abt_y + a2_abt_h - a2_gsy;
+    if (t < 0)
+        t = 0;
+    if (a2_sch == 2)
+        a2_hold_l1 = a2_gl0 + (t >> 1) - 1;
+    else
+        a2_hold_l1 = a2_gl0 + t - 1;
+    if (a2_hold_l1 > A2_SCRH - 1)
+        a2_hold_l1 = A2_SCRH - 1;
+    /* l0 > l1 is the EMPTY range the flush and a2_about_gone already speak:
+     * a panel that covers no whole Apple line holds none. */
     return 1;
 }
 

@@ -65,20 +65,35 @@ the `]` prompt come up out of the machine's own ROM, with the cursor
 flashing; Applesoft answers, the keyboard is the II Plus's own byte map, and
 Machine > Control-Reset and Machine > Open-Apple-Control-Reset are live.
 
-The screen is the TEXT page: the window, the character generator read out of
-the ROM, the seven-pixel cell, inverse and flashing text, and a damage model
-that draws only what changed.
+ALL THREE SCREENS ARE HERE: the 40x24 TEXT page with the character generator
+read out of the ROM, the seven-pixel cell, inverse and flashing text; 40x48
+LO-RES blocks; and 280x192 HI-RES - with MIXED (a graphics picture over four
+text rows) and PAGE2 on both of them, and a damage model that draws only what
+changed. GR, HGR and the soft switches all do what a II Plus does.
+
+The window is MONOCHROME and says so: a lo-res colour is black or white by
+its luminance, and hi-res drops the half-dot shift, which is what MII and
+apple2emu do in mono. AppleWin instead shifts the picture half a dot, which a
+280-pixel monochrome band cannot express. Colour is the foreign video mode and
+is still to come, and the half-dot shift comes back with it.
+
+Machine > Toggle Fullscreen MAGNIFIES: 2x on both axes on a VGA, 2x
+horizontally on CGA and Hercules - where 384 doubled scan lines do not fit -
+and 1:1 on an 8088, where the doubling costs more than it is worth. Ctrl+F
+and Alt+Enter are its chords, and Esc is NOT: Esc is a key on an Apple II
+Plus keyboard and goes to the machine.
+
+F1 and F2 are the game buttons PB0 and PB1. On a machine with NO MOUSE the
+system takes the arrow keys and the space bar for its pointer, and the status
+row says `ScrollLock: arrows, Space.` once - ScrollLock hands them back.
 
 Still to come, and docs/APPLE2-PORT-PLAN.md in the source tree says which
 wave has which:
 
-    the lo-res and hi-res composers, and the MIXED split and PAGE2 with them
-    fullscreen MAGNIFICATION - Machine > Toggle Fullscreen works today, at
-        1:1, and Ctrl+F and Alt+Enter are its chords
-    colour, which is the foreign video mode and needs the fullscreen above
+    colour, which is the foreign video mode at full screen
     File > Load Program... and Save Program..., and Edit > Copy and Paste
     Machine > Power On, which is greyed until it has its confirmation
-    the game buttons and the paddles
+    the paddles, which answer centre
     the speaker
     the Disk II
 

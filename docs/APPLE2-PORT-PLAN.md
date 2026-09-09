@@ -382,8 +382,9 @@ bss, `APPLE2.OVL`, resident shims, largest frame - and checked against the
   accumulator and span argument** - the whole composer set is one class, which
   is the correction that makes wave 1's work reusable rather than special.
   Hi-res: 40 source bytes to 35 output bytes a scan line through the 128-entry
-  reverse table, the high bit DROPPED (both references drop it in mono, and
-  the half-dot shift it causes needs 560 pixels, which is wave 5's business).
+  reverse table, the high bit DROPPED (MII and apple2emu drop it in mono;
+  AppleWin instead shifts by half a dot at signal level, which is a NAMED
+  DEPARTURE - expressing it needs 560 pixels, which is wave 5's business).
   Lo-res: 7x4 blocks, two nibbles a byte selected by `(line/4)&1`, through a
   16-entry luminance ladder as `{and, xor}` pairs, because an equal-luminance
   cell is `{0x00, level}` and an XOR alone cannot express a uniform block.
@@ -431,6 +432,92 @@ ms. **ON `VIDEO=cga`, with `mouse.py --screen 640x200`**: a greyed menu item
 the bottom anchor puts the text window and the `]` cursor on the glass on a
 200-line adapter. The size line is quoted against the 55,000 trigger and the
 54,000 ceiling; if it is past 54,000, lever 1 is pulled this wave.
+
+**WHAT WAVE 3 MEASURED, and it is done**
+
+| | measured |
+|---|---|
+| resident image | **31,426** (wave 2: 28,396; the wave's own first cut 31,124) |
+| bss | **13,604** (wave 2: 12,240) |
+| **resident total** | **45,030** of 61,440 - **9,970 under the 55,000 trigger**, 8,970 under the end-of-wave-5 ceiling |
+| `APPLE2.OVL` | **996** (was 883) - the About panel's magnification arithmetic is overlay code |
+| resident shims | **8**, unchanged |
+| largest C frame | **54** of 96 |
+
+**Lever 1 was NOT pulled**: `a2_x2b`, the 1,280-byte doubled band, stays in
+bss where the flush cannot refuse it. The estimate this plan carried for the
+two composers was ~+1,400 "with the shared accumulator" and the actual is
+~+1,500 of composer, which is the shared accumulator being real: `a2_pack` is
+one routine the three of them CALL, extracted from the text composer, so the
+class is a fact about the image rather than a family resemblance.
+
+`make a2bandbench`, per call and **per SOURCE byte**, on the icount harness
+(one PIT count is 0.359 ms of a real 4.77 MHz XT):
+
+| composer | counts/op, 5 groups | XT ms | per source byte |
+|---|---|---|---|
+| `a2_band_text` | 35.000 (40 bytes) | 12.57 | 0.73 us host |
+| `a2_band_lores` | 28.625 (40 bytes) | 10.28 | 0.59 us host |
+| `a2_band_hires` | 50.875 (320 bytes, 8 scan lines) | 18.26 | 0.13 us host |
+| `a2_band_hires` x **1 line** | 7.125 (40 bytes) | 2.56 | 0.14 us host |
+| `BAND_X2 8r x 40b` | 29.500 | 10.59 | - |
+| `BAND_X2 1r x 7b` | 1.125 | 0.40 | - |
+| `BLIT1 640x16 stride 80` | 8.875 | 3.19 | - |
+
+**The text composer re-measured at wave 1's own 35.000 counts an operation**,
+so every published row that rests on it stands unchanged, and the two new
+composers are priced separately in the cost model rather than at the text
+composer's figure. **Hi-res and the doubler are each TWO measurements now**,
+because each takes a range: a group is not one unit of work for a composer
+that can be asked for one scan line, and a two-point fit in groups alone
+prices a one-line call 23 % too high. APPLE2-SPEC section 7.9.2 and 7.9.3
+carry the whole of it, including the whole-operation rows: a full hi-res
+repaint **621.9 ms**, one changed hi-res scan line **4.2**, a full lo-res
+repaint **430.7**, a MIXED screen **91.2**, a mode switch that draws the same
+picture **305.0** with **zero blits**, eight soft-switch reads that change
+nothing **0.0**, a scroll in a graphics mode **396.6** (the shift test is a
+TEXT-mode test and refuses), entering full screen at 2x **783.6**, a
+fullscreen recompose that draws nothing **410.3** with **zero `a2_band_x2`
+calls**, and one changed cell at 2x **12.9** with 56 source byte-rows doubled.
+
+**Five of those rows are the review's** (sections 7.4, 7.8, 11). A MIXED flip
+was **504.9** because `a2_video_set` called `a2_dirty_all` on it, and the split
+moves four rows and not twenty-four - `a2_dirty_split` is the narrow mark, and
+both directions are now measured at 20 groups. `a2_band_x2` sat on the COMPOSE
+side, so a flush that recomposed the frame and blitted nothing still spent 253
+ms doubling it (**663.5 against 410.3**); it is `a2_emit`'s now - and, after
+the second review, **per RUN**, so a keystroke at 2x doubles the 56 source
+byte-rows it draws rather than the 320 the row holds (**12.9 against 21.5**).
+`a2_band_hires` composed all eight scan lines whatever the flush had marked,
+so the per-scan-line damage model delivered the compare and not the compose
+(**4.2 against 7.6** on a one-line `HPLOT`). The About panel's hold range was
+never taught about the magnification and, at VGA fullscreen, held Apple lines
+[131,191] while covering [66,125] - two DISJOINT ranges, so the picture ate the
+card on every flush and the bottom third of the screen froze. And the lo-res
+luminance ladder was transcribed from a block **AppleWin's own source
+disclaims as a placeholder**: under it `GR : COLOR=3` and `COLOR=6` drew black
+where every live reference palette draws them white. The harness asserts all
+five.
+
+**The tier table is written from those numbers** (section 7.8): 2x on both
+axes on a VGA, 2x horizontal on CGA and Hercules, **1:1 on the `CPU_8086`
+tier** because the doubler is 253 ms on a whole-frame repaint; the flush every
+OTHER tick there; and the **FLASH PHASE REFUSED** there with the measured
+43.1 ms a flip - 157 ms in every second - in the greying (section 10.3). Two
+greying sentences came back whole: Joystick...'s `The game buttons PB0 and PB1
+are F1 and F2 - a departure from AppleWin's Left-Alt / Right-Alt.`, and
+Flashing text's measured cost.
+
+**On the glass**, in `build/port-shots/`: `GR : COLOR=13 : PLOT 20,20` with
+two more plots and an HLIN/VLIN pair, cropped at zoom 8 to show the 7x4 block;
+`HGR : HPLOT 0,0 TO 279,159`; a MIXED screen with the text window scrolling
+under the picture; full screen at 2x on a VGA, zoomed to show every Apple
+pixel as a 2x2 block, and Ctrl+F back out of it; `PB0 SEEN AT F1` printed by
+an Applesoft loop polling `$C061`; and **the whole 1bpp pass** - on
+`VIDEO=cga` a greyed item as a checkerboard, the status row, a MIXED screen
+and a screen that has SCROLLED once (the bottom anchor putting the `]` on a
+200-line adapter), and on `VIDEO=herc` the same machine at 720x348 plus full
+screen at 2x HORIZONTAL, which is that adapter's own row of the tier table.
 
 ### Wave 4 - The commands, the clipboard, and Applesoft program load and save
 

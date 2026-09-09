@@ -155,12 +155,23 @@ int  a2_now(void);                      /* ...and the clock itself, EXACT
 /* --- a2band.inc: the composers (section 7.3) ------------------------------ */
 void a2_band_text(unsigned char *dst, int g0, int g1,
                   unsigned mseg, unsigned moff, int fmask);
+/* ...AND THE OTHER TWO OF THE ONE CLASS (APPLE2-SPEC section 7.3). All three
+ * take (dst, g0, g1, mseg, moff) in that order and share a2_pack, the seven-bit
+ * shift accumulator, LITERALLY; only text has a sixth argument, because only
+ * text has a flash phase. `moff` is the row's forty TEXT-page bytes for lo-res
+ * and SCAN LINE 0 of the row group for hi-res, whose other seven lines are
+ * $400 apart - the interleave the composer walks itself. */
+void a2_band_lores(unsigned char *dst, int g0, int g1,
+                   unsigned mseg, unsigned moff);
+void a2_band_hires(unsigned char *dst, int g0, int g1,
+                   unsigned mseg, unsigned moff, int s0, int nlines);
 int  a2_rowflash(unsigned mseg, unsigned moff, int n);
 int  a2_rowspan(const unsigned char *a, const unsigned char *b, int n);
 void a2_rowcopy(unsigned char *dst, const unsigned char *src, int n);
 unsigned a2_rowsig(unsigned mseg, unsigned moff, int n);
 void a2_x2init(void);
-void a2_band_x2(unsigned char *dst, const unsigned char *src, int rows);
+void a2_band_x2(unsigned char *dst, const unsigned char *src, int nbytes,
+                int rows);
 
 /* THE DECODED CHARACTER GENERATOR, and it is an ordinary global rather than a
  * static because nasm has to see the label: a2band.inc's phase B indexes
@@ -216,6 +227,15 @@ unsigned char a2_chr[512];
  * checks. The derivation is not lost: a2uitest asserts it at run time, in the
  * gate that already runs. */
 #define A2_BSTRIDE 40                       /* = A2_BANDW / 8 */
+#define A2_X2STRIDE 80                      /* ...and of a PIXEL-DOUBLED band
+                                             * (section 7.8). A literal again,
+                                             * and typed out as an `equ` in
+                                             * a2band.inc, for the reason
+                                             * above: tests/unit/t_mirror.py
+                                             * compares `#define NAME <value>`
+                                             * against `NAME equ <value>` and
+                                             * can read neither side's
+                                             * arithmetic */
 #define A2_LBOXB   (A2_LBOXL / 8)                           /* ...2 of them */
 #define A2_BORDER  8                        /* on every side */
 #define A2_STATH   10                       /* the status row */
@@ -255,6 +275,17 @@ unsigned char a2_chr[512];
 #define A2_TXT1 0x0400                      /* text/lo-res page 1 */
 #define A2_TXT2 0x0800                      /* ...and page 2 */
 #define A2_PGLEN 0x0400
+/* ...AND THE HI-RES PAGES, WHICH ARE EIGHT TIMES THE SIZE (section 7.2). The
+ * write window is taken over the LIVE display page, so its length moves with
+ * the mode: 1KB of text or lo-res, 8KB of hi-res. */
+#define A2_HGR1 0x2000
+#define A2_HGR2 0x4000
+#define A2_HGRLEN 0x2000
+/* MIXED IS THE TOP 160 SCAN LINES IN THE GRAPHICS MODE AND THE BOTTOM 32 IN
+ * TEXT (section 7.4), and 160 is a multiple of 8: the split falls on a
+ * CHARACTER ROW boundary, so no row is ever half one renderer and half the
+ * other and the flush's row loop needs no partial case. */
+#define A2_MIXROW 20
 
 /* --- what the machine is doing -------------------------------------------- */
 #define A2_ST_HALT 0                        /* not started: the state a2_state
@@ -428,13 +459,115 @@ static int a2_tmr_ok;                       /* OSAPI_WM_TIMER answered YES, so
  * `hires_map[row] + 1024*sub` - wave 3's business, off this same table. */
 static unsigned a2_tbase[A2_ROWS];
 
+/* ...AND THE HI-RES ONE, WHICH IS THAT TABLE PLUS $1C00 (section 7.2). Scan
+ * line 8r+sub of hi-res page 1 is at
+ *
+ *   $2000 + $400*sub + $80*(r & 7) + $28*(r >> 3)
+ *
+ * and $80*(r&7) + $28*(r>>3) is exactly a2_tbase[r] - $400, so the whole
+ * hi-res map is a2_tbase[r] + $1C00 with the eight scan lines $400 apart.
+ * Forty-eight bytes of bss built beside the text map rather than an addition
+ * in the flush, so the two maps are read the same way and a2_band_hires is
+ * handed ONE address. Page 2 is +$2000 here, where text page 2 is +$400. */
+static unsigned a2_hbase[A2_ROWS];
+
 /* THE 7-BIT REVERSE TABLE (section 7.3). 128 entries of one byte, ONE table
  * in ONE place, built here and RESIDENT - hi-res source bytes carry bit 0 as
  * the LEFTMOST pixel and the framebuffer wants MSB first, so every hi-res
- * byte goes through this in wave 3. THE CHARACTER GENERATOR IS THE OTHER WAY
- * UP and needs no reversal at all, which is the one thing about this machine
- * most likely to be got backwards. */
-static unsigned char a2_rev[128];
+ * byte goes through this in a2_band_hires. THE CHARACTER GENERATOR IS THE
+ * OTHER WAY UP and needs no reversal at all, which is the one thing about
+ * this machine most likely to be got backwards.
+ *
+ * IT IS AN ORDINARY GLOBAL AND NOT A static, for a2_chr's reason one table
+ * along: a2band.inc's hi-res phase B indexes `_a2_rev` directly, and nasm can
+ * only see a name the compiler emitted as a global. */
+unsigned char a2_rev[128];
+
+/* --- THE LO-RES LUMINANCE LADDER (section 7.3) ---------------------------
+ * THE WINDOWED PATH IS MONOCHROME and says so as a fact (section 10.3), so a
+ * lo-res block is black or white by its colour's LUMINANCE. The figure
+ * compared is Rec.601 luma - 299R + 587G + 114B - and the per-mille numbers
+ * below are that sum over white's.
+ *
+ * THE PALETTE IS ONE THE REFERENCE ACTUALLY DISPLAYS, and that is the whole
+ * of why it is MII's and not AppleWin's. This ladder first shipped off
+ * AppleWin's `PaletteRGB_NTSC` lores block (source/RGBMonitor.cpp:149-164) -
+ * whose own first line reads "Note: this is a placeholder. This palette is
+ * overwritten by VideoInitializeOriginal()", and it is:
+ * VideoInitializeOriginal (RGBMonitor.cpp:1186-1196) memcpy's sixteen
+ * NTSC-GENERATED colours over exactly that block and NTSC_VideoInit
+ * (NTSC.cpp:2366-2368) calls it at start-up, so AppleWin never puts those
+ * literals on a screen. They are not transcribable either: the colours that
+ * replace them come out of GenerateBaseColors (NTSC.cpp:2697-2721), which
+ * runs a signal-level simulation rather than listing values.
+ *
+ * SO THE DEFINER IS MII's `palettes[0]` "Color NTSC" (src/mii_video.c:94-113)
+ * - a live table, read straight into the CLUT it renders through - taken
+ * through MII's OWN lo-res mapping, `mii_base_clut.lores[0]`
+ * (src/mii_video.c:173-177). THAT SECOND HALF IS LOAD-BEARING: MII's CI_*
+ * enum is not in Apple colour order (CI_PURPLE is 1, and lo-res colour 1 is
+ * MAGENTA), so a table read by enum index rather than through the clut is
+ * scrambled.
+ *
+ * apple2emu's Lores_colors (src/video.cpp:100-115, the mrob.com values) is
+ * the CROSS-CHECK and not the definer: it is indexed by lo-res colour
+ * directly, it agrees with MII exactly on twelve of the sixteen and within a
+ * few units on the rest, and - the fact that matters here - IT AGREES ON ALL
+ * SIXTEEN LIT/DARK DECISIONS. Two live tables, one threshold, no
+ * disagreement about any pixel this build can draw.
+ *
+ * WHAT THE PLACEHOLDER COST: under it, purple (467 per mille) and medium blue
+ * (499) drew BLACK, decided by one part per mille of a palette no emulator
+ * shows. Under both live tables purple is 568 and medium blue 613 and both
+ * are LIT, which is what `GR : COLOR=3` and `GR : COLOR=6` look like in every
+ * reference this port names.
+ *
+ * WHAT IS STORED IS THE RANK AND NOT THE LUMINANCE, and that is arithmetic
+ * rather than taste: a byte's own granularity is 0.39 % and the ladder has
+ * pairs closer than that, so any scaling of the figures into a byte ties an
+ * ordering the palette has. A monochrome composer asks only "is this lighter
+ * than that", so the rank is the whole of what it needs - and it is exactly
+ * what tools/a2ref.py --lumcheck checks, over all 256 ordered pairs, against
+ * luminances IT computes from the same RGBs, at FULL precision.
+ *
+ * THE ONE TIE IS THE PALETTE'S OWN. Grey 1 and grey 2 are the same three
+ * bytes in MII's table (0x9C,0x9C,0x9C) and in apple2emu's, so they share
+ * rank 7; nothing else in the sixteen ties. Ranks are therefore not dense -
+ * 8 is unused - which is correct and is what --lumcheck asserts.
+ *
+ * THE THRESHOLD IS HALF OF WHITE. A colour is LIT when its luminance is at or
+ * above 500 per mille, which is the eleven colours from purple (568) up;
+ * purple is rank 5, so A2_LUM_LIT is 5. a2ref.py applies the same 500 to its
+ * own numbers, so a disagreement about one colour is a bit-for-bit frame
+ * mismatch and not a matter of opinion. */
+#define A2_LUM_LIT 5
+static const unsigned char a2_lum[16] = {
+     0,      /*  0 black        0 per mille - rank  0 */
+     3,      /*  1 magenta    378            - rank  3 */
+     2,      /*  2 dark blue  376            - rank  2 */
+     5,      /*  3 purple     568            - rank  5 */
+     4,      /*  4 dark green 418            - rank  4 */
+     7,      /*  5 grey 1     611            - rank  7 */
+     9,      /*  6 med blue   613            - rank  9 */
+    12,      /*  7 light blue 806            - rank 12 */
+     1,      /*  8 brown      376            - rank  1 */
+     6,      /*  9 orange     569            - rank  6 */
+     7,      /* 10 grey 2     611            - rank  7 */
+    11,      /* 11 pink       760            - rank 11 */
+    10,      /* 12 green      614            - rank 10 */
+    14,      /* 13 yellow     815            - rank 14 */
+    13,      /* 14 aqua       813            - rank 13 */
+    15       /* 15 white     1000            - rank 15 */
+};
+
+/* ...and the seven-bit pattern each colour contributes, derived from the
+ * ladder at launch. THIS path's block is UNIFORM - by the luminance decision
+ * above, not because monochrome lo-res has no pattern: MII's mono arm
+ * (src/mii_video.c:567-586) draws a per-pixel dot pattern and this port
+ * deliberately does not (APPLE2-SPEC section 7.3) - so it is one constant per
+ * colour, 0x00 or 0x7F, and a2_band_lores is one table read a nibble. A
+ * global for a2_rev's reason. */
+unsigned char a2_lopat[16];
 
 static char a2_title[] = "Apple II Plus Emulator";   /* section 16.1's long
                                                       * form: the window title
@@ -451,11 +584,21 @@ static void a2_sh_inval(void);
 static void a2_dirty_all(void);
 static void a2_line_dirty(int line);
 static void a2_row_dirty(int row);
+static void a2_dirty_split(void);           /* the MIXED split's four rows,
+                                             * and a2_rowwide with them -
+                                             * a2scr.c owns a2_rowwide, so
+                                             * a2io.c asks for the mark rather
+                                             * than reaching into the array */
 static int  a2_geom(void *win);
 static void a2_tier_init(void);
 static void a2_watch_page(void);
 static void a2_menu_state(void);
 static int  a2_mode_page(void);
+static int  a2_page_len(void);
+static int  a2_mode_of(void);
+static int  a2_row_mode(int r);
+static unsigned a2_row_base(int r);
+static void a2_kbd_poll(void);
 static void a2_fullscreen_toggle(void *win);
 static void a2_flash_force(void);
 static void a2_line_force(int line);
@@ -770,6 +913,14 @@ static void a2_reset_service(void)
              * break that equality and take the ordinary reset - RAM intact,
              * which is what makes it a different row from Power On. */
             a2_wr(0x03F4, (a2_rd(0x03F3) ^ 0xA5 ^ 0xFF) & 0xFF);
+            /* ...AND PB0 IS HELD ACROSS IT, which is the chord's name read in
+             * II+ terms (section 6.3). What a //e calls Open-Apple IS the PB0
+             * input on this machine, so Ctrl+F3 asserts it for the reset the
+             * way holding the key would, and a program that samples $C061 in
+             * its start-up sees it. The poll at the top of the wake has
+             * already run, which is why this is not overwritten a moment
+             * later. */
+            a2_btn[0] = 1;
         }
         a2_reset_cpu();
     }
@@ -1118,6 +1269,19 @@ void os88_onwake(void *win)
         return;
     }
 
+    /* --- THE LEVEL HALF OF THE KEYBOARD (APPLE2-SPEC section 6.3, 6.6) ----
+     * The two game buttons and the keyboard-mouse message, from ONE pass of
+     * the down-map. It is here rather than inside the soft switch because a
+     * button is a LEVEL a game reads in a loop: the BUTTONS are two bridge
+     * crossings a wake against two per emulated read of $C061. (The message's
+     * own five reads are behind its one-shot and stop the moment it is spent
+     * or the user types - a2_kbd_poll says why.)
+     *
+     * IT IS AHEAD OF THE RESET SERVICE, which is what lets Ctrl+F3 hold PB0
+     * ACROSS the reset it asks for (section 6.3): the poll would otherwise
+     * overwrite the button a moment after the chord set it. */
+    a2_kbd_poll();
+
     if (a2_reset_req)
         a2_reset_service();
 
@@ -1198,8 +1362,16 @@ void os88_onwake(void *win)
      * 7.7). Two flushes inside one tick can only ever draw the same picture
      * twice, and on the target the second one is the whole cost of the first
      * for no pixels at all. */
+    /* ...AND EVERY OTHER TICK ON THE CPU_8086 TIER (section 7.8's tier table,
+     * written from `make a2bandbench`). A full repaint measures 496.8 ms and
+     * a host tick is 55, so on an 8088 the flush cannot keep up with its own
+     * pacing and a second one inside one machine-visible change is the whole
+     * cost of the first for pixels that were already right. On every other
+     * tier the rate is one per tick, which is what it has always been. */
     if ((a2_dirty_any || !a2_sh_ok || a2_border_dirty || a2_st_dirty)
-        && (!a2_flushed || t != a2_fltick)) {
+        && (!a2_flushed
+            || (a2_tier_slow ? ((unsigned)(t - a2_fltick) >= 2u)
+                             : (t != a2_fltick)))) {
         /* THE CLIP REGION IS OURS TO ARM. The kernel arms one for W_PAINT and
          * for NOTHING ELSE (SPEC.md 11.3, os88.h), and this is a BACKGROUND
          * painter: without it a2_flush's 24 blits, five fills and the
@@ -1295,10 +1467,21 @@ void *os88_main(void)
     }
 
     /* --- the interleaved row bases (section 7.2) -------------------------- */
-    for (i = 0; i < A2_ROWS; i++)
+    for (i = 0; i < A2_ROWS; i++) {
         a2_tbase[i] = (unsigned)(1024 + 256 * ((i / 2) % 4)
                                       + 128 * (i % 2)
                                       + A2_X40((i / 8) % 4));
+        a2_hbase[i] = a2_tbase[i] + 0x1C00u;        /* ...and the hi-res map,
+                                                     * which IS that one plus
+                                                     * $1C00 (section 7.2) */
+    }
+
+    /* ...and the lo-res patterns, derived from the luminance ladder ONCE.
+     * The ladder is the palette's rank and the threshold is half of white's
+     * luminance; what the composer reads is one seven-bit constant a colour,
+     * because a monochrome block is uniform (section 7.3). */
+    for (i = 0; i < 16; i++)
+        a2_lopat[i] = (unsigned char)((a2_lum[i] >= A2_LUM_LIT) ? 0x7F : 0x00);
 
     a2_x2init();                            /* the pixel-doubling table, once */
     a2_tier_init();                         /* the flush rate, off os88_cpu() */

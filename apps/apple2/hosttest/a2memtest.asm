@@ -51,6 +51,16 @@
 ;      PACKING checked against a hand-computed byte, because eight cells to
 ;      seven bytes is the one piece of arithmetic in this package that a
 ;      transcription can get plausibly wrong;
+;   5a2. **THE OTHER TWO COMPOSERS, ON THE SAME BOUNDARY** (wave 3), each
+;      against hand-computed bytes for the same reason: a2_band_lores taking
+;      the LOW nibble for pixel rows 0-3 and the HIGH one for 4-7 through the
+;      lo-res pattern table - which here is a STAND-IN and says nothing about
+;      the shipping ladder (tabfill's own note; --lumcheck is the ladder's
+;      gate) - and a2_band_hires reversing a byte through the
+;      128-entry table with BIT 7 DROPPED ($81 must decode exactly as $01) and
+;      walking the $400 SUB-LINE STRIDE off the one address it is handed. All
+;      three share a2_pack, so what these rows add over 5a is each composer's
+;      own phase B - which is the only thing that differs;
 ;   5b. a2_rowsig answers a different signature when one byte of the claim
 ;      moves, and a2_rowflash finds a $40-$7F byte and only that;
 ;   5c. a2_rowspan answers "same" on equal rows and the exact first/last
@@ -155,6 +165,7 @@ body:
     call ramclear
     call romfill
     call chrfill
+    call tabfill
 
     ; --- (1) the accessors ---------------------------------------------------
     mov word [pushes], 2
@@ -520,11 +531,138 @@ body:
                                     ; not reaching the $40-$7F cell
     mov al, '.'
     call putc
-    jmp .sig
+    jmp .band2
 .f6e:
     mov al, '6'
     call putc
     inc bp
+
+    ; --- (5c) THE LO-RES COMPOSER, ACROSS THE SAME BOUNDARY -----------------
+    ; ONE GROUP whose first two cells are the two nibble halves and whose
+    ; other six are black:
+    ;   cell 0  $0F  low nibble LIT, high nibble DARK  -> lines 0-3 lit
+    ;   cell 1  $F0  the other way round               -> lines 4-7 lit
+    ; The hand-computed bytes below are what a composer that read the WRONG
+    ; nibble for a line, or packed the seven-bit value at the wrong shift,
+    ; cannot produce.
+.band2:
+    call ramclear
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    mov byte [es:0x0400], 0x0F
+    mov byte [es:0x0401], 0xF0
+    mov bx, 0x0402
+    mov cx, 6
+.l2s:
+    mov byte [es:bx], 0
+    inc bx
+    loop .l2s
+    pop es
+
+    mov word [pushes], 5
+    PUSHI 0x0400                    ; moff
+    PUSHI SEG_RAM                   ; mseg
+    PUSHI 0                         ; g1
+    PUSHI 0                         ; g0
+    mov ax, banda
+    push ax                         ; dst
+    call disc_call
+    dw _a2_band_lores
+    ; PIXEL ROW 0 takes the LOW nibble of every cell: 0x7F, 0x00, 0 x6, so
+    ; out[0] = (0x7F << 1) | (0x00 >> 6) = 0xFE and out[1] = 0x00.
+    cmp byte [banda + A2_LBOX], 0xFE
+    jne .f6c
+    cmp byte [banda + A2_LBOX + 1], 0x00
+    jne .f6c
+    ; ...and PIXEL ROW 4 takes the HIGH nibble: 0x00, 0x7F, 0 x6, so
+    ; out[0] = (0x00 << 1) | (0x7F >> 6) = 0x01 and
+    ; out[1] = (0x7F << 2) | (0x00 >> 5) = 0xFC.
+    cmp byte [banda + A2_BSTRIDE*4 + A2_LBOX], 0x01
+    jne .f6c
+    cmp byte [banda + A2_BSTRIDE*4 + A2_LBOX + 1], 0xFC
+    jne .f6c
+    cmp byte [banda + A2_BSTRIDE*4], 0      ; the letterbox, again
+    jne .f6c
+    mov al, '.'
+    call putc
+    jmp .band3
+.f6c:
+    mov al, '7'
+    call putc
+    inc bp
+
+    ; --- (5d) THE HI-RES COMPOSER: THE REVERSE TABLE, THE DROPPED BIT 7 AND
+    ;          THE $400 SUB-LINE STRIDE ------------------------------------
+    ; Scan line 0 at $0400: cells $01, $40, $81 - and $81 must decode exactly
+    ; as $01 does, which is the whole of "bit 7 is the half-dot shift and is
+    ; DROPPED". Scan line 1 is at $0400 + $400, which is the interleave the
+    ; composer walks itself off the ONE address it is handed.
+.band3:
+    call ramclear
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    mov byte [es:0x0400], 0x01
+    mov byte [es:0x0401], 0x40
+    mov byte [es:0x0402], 0x81
+    mov byte [es:0x0800], 0x7F      ; ...and scan line 1, $400 along
+    pop es
+
+    mov word [pushes], 7
+    PUSHI 8                         ; nlines - hi-res takes a scan-line RANGE
+    PUSHI 0                         ; s0
+    PUSHI 0x0400
+    PUSHI SEG_RAM
+    PUSHI 0
+    PUSHI 0
+    mov ax, banda
+    push ax
+    call disc_call
+    dw _a2_band_hires
+    ; rev[$01] = $40, rev[$40] = $01, rev[$81 & $7F] = $40, so scan line 0's
+    ; seven-bit values are $40, $01, $40, 0, 0, 0, 0, 0 and
+    ;   out[0] = ($40 << 1) | ($01 >> 6) = $80
+    ;   out[1] = ($01 << 2) | ($40 >> 5) = $04 | $02 = $06
+    cmp byte [banda + A2_LBOX], 0x80
+    jne .f6d
+    cmp byte [banda + A2_LBOX + 1], 0x06
+    jne .f6d
+    ; ...and scan line 1 is the byte $400 along: rev[$7F] = $7F, so
+    ;   out[0] = ($7F << 1) | 0 = $FE
+    cmp byte [banda + A2_BSTRIDE + A2_LBOX], 0xFE
+    jne .f6d
+    cmp byte [banda + A2_BSTRIDE + A2_LBOX + 1], 0x00
+    jne .f6d
+    mov al, '.'
+    call putc
+    jmp .restore
+.f6d:
+    mov al, '8'
+    call putc
+    inc bp
+
+    ; ...AND THE TEXT FIXTURE GOES BACK, because (5b) below READS IT: its flash
+    ; scan asserts that the row holds a byte in $40-$7F and then that taking
+    ; cell 2 away leaves none. The two rows above laid their own bytes over
+    ; $0400 and one of them ($40, a hi-res cell) is in that range, so without
+    ; this the flash scan's second half fails on a fixture that is not its
+    ; own - which is what it did, once, and cost a debug pass.
+.restore:
+    call ramclear
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    mov byte [es:0x0400], 0xC1
+    mov byte [es:0x0401], 0x01
+    mov byte [es:0x0402], 0x41
+    mov bx, 0x0403
+    mov cx, 5
+.rs:
+    mov byte [es:bx], 0xA0
+    inc bx
+    loop .rs
+    pop es
 
     ; --- (5b) the signature and the flash scan ------------------------------
 .sig:
@@ -652,8 +790,10 @@ body:
     mov [si], al
     inc si
     loop .x2f
-    mov word [pushes], 3
-    PUSHI 1
+    mov word [pushes], 4
+    PUSHI 1                         ; rows
+    PUSHI 40                        ; nbytes - the routine takes a WINDOW of
+                                    ; each row now, not the whole of it
     mov ax, banda
     push ax
     mov ax, bandc
@@ -885,6 +1025,54 @@ chrfill:
     pop cx
     ret
 
+; tabfill - the two tables the OTHER two composers read by name. The package
+; builds both in os88_main; here they are built the same way, because what is
+; under test is the COMPOSER and not the C that fills its tables.
+;   _a2_rev    bit b of the index becomes bit 6-b (hi-res carries bit 0 as the
+;              LEFTMOST pixel and the framebuffer wants MSB first)
+;   _a2_lopat  0x7F for the top eight colours and 0x00 for the bottom eight -
+;              a DELIBERATELY SIMPLER table and NOT the package's ladder,
+;              which is eleven lit and five dark. Nothing here says anything
+;              about the ladder; what is being checked is that the composer
+;              reads the right nibble and indexes the table with it. The
+;              ladder's own gate is `tools/a2ref.py --lumcheck`
+tabfill:
+    push ax
+    push bx
+    push cx
+    push si
+    xor si, si
+.rev:
+    xor al, al
+    mov cx, 7
+    mov bx, si
+.revb:
+    shr bl, 1
+    rcl al, 1
+    loop .revb
+    mov bx, si
+    mov [_a2_rev+bx], al
+    inc si
+    cmp si, 128
+    jb .rev
+    mov si, 16
+.lop:
+    dec si
+    mov al, 0x7F
+    cmp si, 8
+    jae .lit
+    xor al, al
+.lit:
+    mov bx, si
+    mov [_a2_lopat+bx], al
+    or si, si
+    jnz .lop
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; zcheck - the RAM claim at AX.. holds the 24-byte pattern and the bytes
 ; either side are 0. CF = 1 on a mismatch.
 zcheck:
@@ -938,6 +1126,11 @@ section .text
 ; harness's, filled by chrfill.
 section .data
 _a2_chr: times 512 db 0
+; ...and the two tables the OTHER two composers read, which the package builds
+; in os88_main and this harness fills in the rows that use them (a2band.inc's
+; phase B reaches all three by name).
+_a2_rev:   times 128 db 0
+_a2_lopat: times 16 db 0
 section .text
 
 ; ...and a2cpu.inc calls OUT to the compiled C for every $C000-$C0FF access in

@@ -75,6 +75,17 @@ static unsigned char a2_sh[A2_SHBYTES];
  * compare, and costs no second code path (a2band.inc's header). */
 static unsigned char a2_bnd[A2_BSTRIDE * 8];
 
+/* THE DOUBLED BAND (section 7.8), and it is bss rather than a heap claim
+ * because THE FLUSH CANNOT REFUSE - the same reason the frame shadow is. It
+ * is 1,280 bytes: sixteen rows of A2_X2STRIDE, which is one character row's
+ * eight scan lines doubled on both axes. 2x HORIZONTAL reads the same buffer
+ * at twice the stride, which is what makes one routine serve both axes.
+ *
+ * It is LEVER 1 of section 15.4 if the budget ever needs it - a claim taken
+ * at the fullscreen LATCH, where a refusal is legal - and the size line at
+ * the end of this wave is what says whether it does. */
+static unsigned char a2_x2b[A2_X2STRIDE * 16];
+
 /* THE DIRTY SET, one BIT per scan line - 192 of them in 24 bytes each.
  *   a2_lnd  the SOURCES changed: recompose this line
  *   a2_lnf  the GLASS is unknown here: draw it whatever the compare says
@@ -119,6 +130,13 @@ static int a2_src_r0;                       /* ...from THIS row up, and below
  * words, in one call. */
 static unsigned char a2_dpg[36];
 static unsigned a2_wlo, a2_whi;
+/* ...and THE WATCH RANGE the core took that window over, kept on this side
+ * too. It is the LIVE DISPLAY PAGE and nothing else, so in a MIXED graphics
+ * mode the four TEXT rows are OUTSIDE it: their page bits still arrive, and a
+ * window taken over the hi-res page says nothing whatever about them. A row
+ * outside the range is therefore marked from the page bitmap alone and
+ * composed WHOLE, which is a2_scan_range's else arm. */
+static unsigned a2_wat_lo, a2_wat_hi;
 /* ...and PER CHARACTER ROW, "the write window says nothing useful about THIS
  * row this flush: compose it whole".
  *
@@ -149,6 +167,17 @@ static int a2_fx_any;                       /* ...and whether a RECT set it */
 static int a2_gox, a2_goy;                  /* the content box's origin */
 static int a2_gw, a2_gh;                    /* ...and its live size */
 static int a2_gsx, a2_gsy;                  /* the band's top-left ON THE GLASS */
+/* THE MAGNIFICATION, AND IT IS DECIDED IN ONE PLACE (section 7.8): a2_geom,
+ * off the LIVE content box, so the tier table is arithmetic about the box
+ * rather than a list of adapters. 1 or 2 on each axis, and 1 everywhere but
+ * full screen. */
+static int a2_scw = 1, a2_sch = 1;
+static int a2_gbw, a2_gbh;                  /* ...and what the band therefore
+                                             * measures ON THE GLASS: 320 or
+                                             * 640 wide, a2_gnl or twice it
+                                             * tall. Every fill, rect and
+                                             * scroll reads these two and not
+                                             * A2_BANDW */
 static int a2_gsty;                         /* the status row's y */
 static int a2_gl0;                          /* the FIRST Apple scan line that
                                              * is on the glass - THE BOTTOM
@@ -172,6 +201,18 @@ static int a2_fl_phase;                     /* 0 normal, 1 swapped */
  * a2_band_text takes, which is this. One int, read by the scroll's clean and
  * written once a flush - see a2_flush. */
 static int a2_sh_phase;
+/* ...AND THE MODE IT WAS COMPOSED AT, which is the same hole one input along
+ * and the one APPLE2-SPEC section 7.7 step 2 said the wave that adds a
+ * composer owns. a2_shsrc[] records forty SOURCE bytes and nothing else, so
+ * equal sources prove equal pixels only while the RENDERER that turned them
+ * into pixels is the same one. A lo-res screen and a text screen can hold
+ * byte-for-byte identical rows, and the shift test would then mark rows clean
+ * over pixels composed by the other composer. The key carries the renderer,
+ * MIXED and PAGE2, is written once at the end of every flush, and the shift
+ * test is refused on the one flush after a change - which is exactly the
+ * flush a2_dirty_all has already marked every row of, so every a2_shsrc row
+ * is rewritten inside it. */
+static int a2_sh_mkey = -1;
 static unsigned a2_fl_tick;
 
 /* --- the flush's own pacing ----------------------------------------------- */
@@ -274,6 +315,39 @@ static void a2_dirty_all(void)
     a2_force_wide();
 }
 
+/* a2_dirty_split - THE MIXED SPLIT'S OWN ROWS, and nothing else (section 7.4).
+ * Flipping MIXED inside a GRAPHICS mode moves the renderer for rows
+ * A2_MIXROW..23 and for NO other row: a2_row_mode(r) for r < A2_MIXROW does
+ * not read a2_v_mixed at all, a2_row_base does not move and neither does the
+ * page. a2_dirty_all() there would recompose twenty rows from identical
+ * sources with the identical composer to produce identical pixels - priced
+ * off section 7.9.2, ~417 ms of hi-res compose plus 192 span compares to draw
+ * four rows that owed ~70 - which is the defect a2io.c's else-arm diagnoses
+ * for MIXED-in-TEXT, one condition along on the arm where the switch really
+ * does something. POKE -16302,0 / POKE -16301,0 in a graphics mode is
+ * ordinary, and a program that flips the split per frame paid it every frame.
+ *
+ * BOTH MARKS ARE NEEDED. a2_row_dirty is explicit rather than left to
+ * a2_dirty_scan, because the rows arriving from the OTHER page - the text
+ * page on MIXED-on, the graphics page on MIXED-off - may have no page bit set
+ * at all; and a2_rowwide is needed because the write window was taken over a
+ * page it says nothing about, so it may not narrow the compose.
+ *
+ * IT IS SAFE FOR THE SHIFT TEST for the same reason a2_dirty_all is: a2_shsrc
+ * is written only for TEXT rows and the test is refused unless a2_v_text, and
+ * every transition INTO a2_v_text moves a2_mode_of() and so takes the full
+ * arm. */
+static void a2_dirty_split(void)
+{
+    int r;
+
+    for (r = A2_MIXROW; r < A2_ROWS; r++) {
+        a2_row_dirty(r);
+        a2_rowwide[r] = 1;
+    }
+    a2_st_dirty = 1;
+}
+
 /* a2_sh_inval - the glass is unknown EVERYWHERE. The kernel has painted the
  * window's background over whatever was there, or a panel has owned it. */
 static void a2_sh_inval(void)
@@ -360,15 +434,68 @@ static void a2_watch_page(void)
 {
     unsigned base = (unsigned)a2_mode_page();
 
-    a2_watch_set(base, base + A2_PGLEN - 1);
+    /* ...AND ITS LENGTH MOVES WITH THE MODE: 1KB of text or lo-res, 8KB of
+     * hi-res (section 7.2). A hi-res page watched as 1KB would leave seven
+     * eighths of the picture with no window at all. */
+    a2_wat_lo = base;
+    a2_wat_hi = base + (unsigned)a2_page_len() - 1;
+    a2_watch_set(a2_wat_lo, a2_wat_hi);
+}
+
+/* a2_row_watched - is this row's forty bytes inside the range the write
+ * window was taken over? A row group lives wholly within one page - forty
+ * text bytes inside 1KB, eight hi-res scan lines inside 8KB - so the base
+ * answers for the whole of it. */
+static int a2_row_watched(int r)
+{
+    unsigned b = a2_row_base(r);
+
+    return (b >= a2_wat_lo && b <= a2_wat_hi) ? 1 : 0;
 }
 
 /* a2_dirty_scan - the page bitmap and the write window in ONE call, mapped
  * ROW-WARD onto scan lines (this file's header says why). */
+/* a2_scan_range - ONE forty-byte source range: is it dirty, and can the write
+ * window narrow it?
+ *
+ * `watched` says whether the window was taken over a range that CONTAINS this
+ * one. A MIXED screen's four text rows are the case that is not: the window
+ * is on the hi-res page, so it can say nothing about a write to $0400, and
+ * the row is marked from the page bitmap alone and composed WHOLE. */
+static void a2_scan_range(int r, unsigned base, int line0, int nlines,
+                          int watched)
+{
+    unsigned last;
+    int p0, p1, s;
+
+    last = base + A2_COLS - 1;
+    p0 = (int)(base >> 8);
+    p1 = (int)(last >> 8);
+    if (!(a2_dpg[p0 >> 3] & (0x80 >> (p0 & 7)))
+        && !(a2_dpg[p1 >> 3] & (0x80 >> (p1 & 7))))
+        return;                             /* neither of the range's pages
+                                             * was written */
+    if (watched && a2_wlo <= a2_whi) {
+        /* ...and the window has to REACH the range, or the page bit was set
+         * by a write somewhere else in the same 256 bytes - the stack, zero
+         * page, a variable. That is the whole point of the window. */
+        if (a2_whi < base || a2_wlo > last)
+            return;
+    } else {
+        /* an EMPTY window (a2_dirty() marks a page with no write at all,
+         * which is what a PAGE2 switch needs), or a range the window was not
+         * taken over: nothing here can narrow the compose, and it is THIS
+         * row's flag, so the rows a real window did narrow keep their span */
+        a2_rowwide[r] = 1;
+    }
+    for (s = 0; s < nlines; s++)
+        a2_line_dirty(line0 + s);
+}
+
 static void a2_dirty_scan(void)
 {
-    unsigned base, last;
-    int r, p0, p1;
+    unsigned base;
+    int r, s, w;
 
     a2_dirty_take(a2_dpg);
     a2_wlo = (unsigned)a2_dpg[32] | ((unsigned)a2_dpg[33] << 8);
@@ -377,27 +504,34 @@ static void a2_dirty_scan(void)
      * last flush. A page bit can still be set: a2_dirty() marks a page with
      * no write at all, which is what a PAGE2 switch needs. So an empty window
      * cannot narrow anything and the rows it marks are marked WHOLE. */
+    /* ...AND THE ROW'S THREE QUESTIONS ARE ASKED ONCE. a2_row_watched calls
+     * a2_row_base, which calls a2_row_mode; asking watched, base and mode
+     * separately was five near calls and three evaluations of the same branch
+     * per row, for all 24 rows, on EVERY flush - ~2-3 ms of the target before
+     * a single dirty bit is examined, and the one-key flush paid it as fully
+     * as a whole repaint. base answers `watched` on its own (a2_row_watched's
+     * own body), so it is inlined here rather than called. */
     for (r = 0; r < A2_ROWS; r++) {
-        base = a2_tbase[r] + (unsigned)(a2_mode_page() - A2_TXT1);
-        last = base + A2_COLS - 1;
-        p0 = (int)(base >> 8);
-        p1 = (int)(last >> 8);
-        if (!(a2_dpg[p0 >> 3] & (0x80 >> (p0 & 7)))
-            && !(a2_dpg[p1 >> 3] & (0x80 >> (p1 & 7))))
-            continue;                       /* neither of the row's pages was
-                                             * written */
-        /* ...and the window has to REACH the row, or the page bit was set by
-         * a write somewhere else in the same 256 bytes - the stack, zero
-         * page, a variable. That is the whole point of the window. */
-        if (a2_wlo <= a2_whi && (a2_whi < base || a2_wlo > last))
-            continue;
-        a2_row_dirty(r);
-        if (a2_wlo > a2_whi)
-            a2_rowwide[r] = 1;              /* a page was marked with no window
-                                             * to narrow it by - and it is
-                                             * THIS row's flag, so the rows a
-                                             * real window did narrow keep
-                                             * their span */
+        base = a2_row_base(r);
+        w = (base >= a2_wat_lo && base <= a2_wat_hi) ? 1 : 0;
+        if (a2_row_mode(r) == A2_MODE_HIRES) {
+            /* PER SCAN LINE, because a hi-res row group's eight lines are
+             * eight SEPARATE forty-byte ranges $400 apart (section 7.2): one
+             * HPLOT touches one of them, and marking all eight would compose
+             * and compare eight times the pixels the machine wrote.
+             *
+             * AND THE COMPOSER HONOURS IT. It did not for a wave: the per-line
+             * loop in the flush skipped clean lines for the COMPARE and then
+             * called a2_band_hires for all eight anyway, so this narrowing
+             * delivered the compare and not the compose. The composer takes a
+             * scan-line range now (a2band.inc) and the flush hands it the
+             * union of this row's dirty-or-forced lines. */
+            for (s = 0; s < 8; s++)
+                a2_scan_range(r, base + ((unsigned)s << 10),
+                              (int)A2_X8(r) + s, 1, w);
+        } else {
+            a2_scan_range(r, base, (int)A2_X8(r), 8, w);
+        }
     }
 }
 
@@ -409,12 +543,31 @@ static int a2_tier_slow;                    /* the CPU_8086 tier */
 static void a2_tier_init(void)
 {
     a2_tier_slow = (os88_cpu() == OS88_CPU_8086) ? 1 : 0;
-    /* AND NOTHING IS DECIDED FROM IT IN WAVE 1. The tier table - the flush
-     * rate, the flash phase's refusal and the fullscreen magnification - is
-     * written in WAVE 3 from `make a2bandbench`'s measured microseconds, and
-     * PERFORMANCE.md rule 4 is explicit that a constant sized while looking
-     * at an emulator encodes the wrong range. The flag is read here so that
-     * the wave which measures has one place to write. */
+    /* --- WAVE 3'S TIER TABLE, WRITTEN FROM `make a2bandbench` (section 7.8;
+     * every figure below is section 7.9.2's, which is where a bench number
+     * lives - nothing here is a second measurement)
+     *
+     * The measurement is a GROUP at 2.434 ms and a text row at 12.52, taken
+     * on the icount harness where one PIT count is 0.359 ms of a real 4.77
+     * MHz XT. Three things fall out of it and they are all here:
+     *
+     *  - THE FLASH PHASE IS REFUSED ON THE CPU_8086 TIER, and the greying
+     *    carries the measured cost (section 10.3). A flip force-composes
+     *    every row that holds a byte in $40-$7F; the harness measures one at
+     *    43.1 ms with two flashing rows, and at 3.64 flips a second that is
+     *    157 ms in every second of an 8088 spent on the phase rather than on
+     *    the 6502. It is a2_fl_ok that is cleared, which is the same byte
+     *    Machine > Flashing text moves, so there is one mechanism and not
+     *    two - and a2_menu_state greys the row off the SAME flag.
+     *  - THE FLUSH RUNS EVERY OTHER TICK there (os88_onwake), because a full
+     *    repaint is 496.8 ms and a tick is 55: the pacing that costs nothing
+     *    on a 386 is a queue on an 8088, and the second flush inside one
+     *    machine-visible change draws the same picture twice.
+     *  - FULL SCREEN IS 1:1 (a2_geom): a2_band_x2 is 29.500 counts - 10.59 ms
+     *    for eight rows, which is 253 ms added to a 192-line repaint for
+     *    pixels that are twice the size and no more informative. */
+    if (a2_tier_slow)
+        a2_fl_ok = 0;
 }
 
 /* ==========================================================================
@@ -451,17 +604,57 @@ static int a2_geom(void *win)
      * with nothing saying so. */
     a2_gsty = org.y + sz.h - A2_STATH;
 
-    d = (sz.w - A2_BANDW) / 2;
-    if (d < A2_BORDER)
-        d = A2_BORDER;
-    a2_gsx = org.x + (d & ~7);
-
+    /* --- SECTION 7.8'S TIER TABLE, IN ONE PLACE, AND IT IS ARITHMETIC ABOUT
+     * THE LIVE BOX rather than a list of adapters. 2x is a FULLSCREEN-only
+     * thing - a framed window is authored 336 wide and there is nothing to
+     * fill - and the two axes are decided separately, because the adapters
+     * differ in exactly that way. A WF_FULL window's content IS its frame
+     * (kernel/wm.inc's wm_geom), so the box below is the whole screen:
+     *
+     *   VGA 640x480       640 >= 640 and 454 >= 384  -> 2x both, 640x384
+     *   CGA 640x200       640 >= 640, 174 < 384      -> 2x HORIZONTAL only
+     *   Hercules 720x348  720 >= 640, 322 < 384      -> 2x horizontal
+     *   the CPU_8086 tier                            -> 1:1 centred
+     *
+     * A CGA pixel is already 2:1, so doubling X alone is what makes the
+     * picture the RIGHT SHAPE there rather than half a job; and the 8086 tier
+     * is 1:1 because a2_band_x2 measures 10.59 ms for a whole character row,
+     * 254 ms on a
+     * whole-frame repaint that is already 497 (sections 7.9.1, 7.9.2). */
     avail = a2_gsty - org.y - A2_BORDER * 2;
     if (avail < 0)
         avail = 0;
-    a2_gnl = (avail > A2_SCRH) ? A2_SCRH : avail;
+    a2_scw = 1;
+    a2_sch = 1;
+    if (a2_full && !a2_tier_slow) {
+        if (sz.w >= A2_BANDW * 2)
+            a2_scw = 2;
+        if (a2_scw == 2 && avail >= A2_SCRH * 2)
+            a2_sch = 2;
+    }
+    a2_gbw = (a2_scw == 2) ? A2_BANDW * 2 : A2_BANDW;
+
+    /* THE BORDER FLOOR IS A 1:1 THING AND MUST NOT SURVIVE INTO 2x
+     * (apps/c64/c64scr.c's own note). At 1:1 the framed window is 336 wide
+     * and (336 - 320) / 2 IS A2_BORDER, so the floor changes nothing there
+     * and only catches a window narrower than the Apple. At 2x on a
+     * 640-pixel screen the picture is 640 wide and the margin is 0: forcing
+     * 8 would slide it right and clip eight pixels off the last column. */
+    d = (sz.w - a2_gbw) / 2;
+    if (a2_scw == 1) {
+        if (d < A2_BORDER)
+            d = A2_BORDER;
+    } else if (d < 0) {
+        d = 0;
+    }
+    a2_gsx = org.x + (d & ~7);
+
+    a2_gnl = (a2_sch == 2) ? (avail >> 1) : avail;
+    if (a2_gnl > A2_SCRH)
+        a2_gnl = A2_SCRH;
     a2_gl0 = A2_SCRH - a2_gnl;              /* THE BOTTOM ANCHOR */
-    a2_gsy = org.y + A2_BORDER + (avail - a2_gnl) / 2;
+    a2_gbh = (a2_sch == 2) ? (a2_gnl << 1) : a2_gnl;
+    a2_gsy = org.y + A2_BORDER + (avail - a2_gbh) / 2;
     return 0;
 }
 
@@ -471,7 +664,7 @@ static int a2_geom(void *win)
  * border puts phantom milliseconds in every cost row the harness prints. */
 static void a2_border_fill(void)
 {
-    int sbot = a2_gsy + a2_gnl;
+    int sbot = a2_gsy + a2_gbh;
 
     os88_set_color(OS88_BLACK);
     if (a2_gsy > a2_goy) {
@@ -493,8 +686,8 @@ static void a2_border_fill(void)
             a2_n_fill++;
 #endif
         }
-        if (a2_gsx + A2_BANDW < a2_gox + a2_gw) {
-            os88_gfx_fill(a2_gsx + A2_BANDW, a2_gsy,
+        if (a2_gsx + a2_gbw < a2_gox + a2_gw) {
+            os88_gfx_fill(a2_gsx + a2_gbw, a2_gsy,
                           a2_gox + a2_gw - 1, sbot - 1);
 #ifdef A2_HOST
             a2_n_fill++;
@@ -528,18 +721,18 @@ static void a2_blank_rect(int x1, int y1, int x2, int y2)
 {
     int l0, l1, l, sbot, c0, c1, d;
 
-    sbot = a2_gsy + a2_gnl;                 /* one past the band's last line */
+    sbot = a2_gsy + a2_gbh;                 /* one past the band's last line */
 
     /* the border strips, and only when the rect actually reaches one */
     if (y1 < a2_gsy || y2 >= sbot
-        || x1 < a2_gsx || x2 >= a2_gsx + A2_BANDW)
+        || x1 < a2_gsx || x2 >= a2_gsx + a2_gbw)
         a2_border_dirty = 1;
     if (y2 >= a2_gsty)
         a2_st_ok = 0;                       /* the status row's pixels are no
                                              * longer ours */
 
     if (y2 < a2_gsy || y1 >= sbot
-        || x2 < a2_gsx || x1 >= a2_gsx + A2_BANDW)
+        || x2 < a2_gsx || x1 >= a2_gsx + a2_gbw)
         return;                             /* the rect misses the band */
 
     /* THE COLUMNS, IN BAND BYTES, UNIONED WITH ANY EARLIER RECT THIS FLUSH.
@@ -548,13 +741,22 @@ static void a2_blank_rect(int x1, int y1, int x2, int y2)
      * widening in the flush's `rowf` arm is what keeps a group's own bytes
      * whole around it. `d` is clamped before the shift: a rect that starts
      * left of the band gives a negative offset. */
+    /* ...AND THE RECT IS IN SCREEN PIXELS, WHICH AT 2x ARE HALF AN APPLE
+     * PIXEL EACH. The shadow, the compare and the band bytes are all in Apple
+     * pixels (section 7.8: the doubling is at BLIT time and nowhere else), so
+     * every screen coordinate that arrives from outside is divided by the
+     * magnification here, at the one place they cross. */
     d = x1 - a2_gsx;
     if (d < 0)
         d = 0;
+    if (a2_scw == 2)
+        d = d >> 1;
     c0 = d >> 3;
     d = x2 - a2_gsx;
     if (d < 0)
         d = 0;
+    if (a2_scw == 2)
+        d = d >> 1;
     c1 = d >> 3;
     if (c0 > A2_BSTRIDE - 1)
         c0 = A2_BSTRIDE - 1;
@@ -572,8 +774,18 @@ static void a2_blank_rect(int x1, int y1, int x2, int y2)
     }
 
     /* ...and the Apple scan lines it covers, in the shadow's coordinates. */
-    l0 = y1 - a2_gsy + a2_gl0;
-    l1 = y2 - a2_gsy + a2_gl0;
+    l0 = y1 - a2_gsy;
+    l1 = y2 - a2_gsy;
+    if (l0 < 0)
+        l0 = 0;
+    if (l1 < 0)
+        l1 = 0;
+    if (a2_sch == 2) {
+        l0 = l0 >> 1;
+        l1 = l1 >> 1;
+    }
+    l0 += a2_gl0;
+    l1 += a2_gl0;
     if (l0 < a2_gl0)
         l0 = a2_gl0;
     if (l1 > A2_SCRH - 1)
@@ -625,7 +837,7 @@ static void a2_row_font(int r, int y)
     unsigned base;
     int c, b;
 
-    base = a2_tbase[r] + (unsigned)(a2_mode_page() - A2_TXT1);
+    base = a2_row_base(r);
     for (c = 0; c < A2_COLS; c++) {
         b = a2_rd(base + (unsigned)c) & 0x3F;
         if (b < 0x20)
@@ -639,6 +851,27 @@ static void a2_row_font(int r, int y)
 #ifdef A2_HOST
     a2_n_run++;
     a2_n_cell += A2_COLS;
+#endif
+    if (!a2_blit_said) {
+        a2_blit_said = 1;
+        a2_say("No bands here - text only.");
+    }
+}
+
+/* ...AND A GRAPHICS ROW HAS NO SECOND RENDERER AT ALL, only a second
+ * STATEMENT. os88_font_run letters ASCII; a lo-res block and a hi-res scan
+ * line are pixels, and lettering their source bytes would draw forty
+ * arbitrary glyphs and call it a picture. So the run's rectangle is filled
+ * black - which is what SPEC section 7.7 names as the graphics arm of the
+ * refusal - and the status row's `No bands here - text only.` is the fact
+ * (SPEC.md 47): on a kernel with no OSAPI_GFX_BLIT1 body this machine has
+ * text and nothing else. */
+static void a2_row_blank(int x, int y, int w, int rows)
+{
+    os88_set_color(OS88_BLACK);
+    os88_gfx_fill(x, y, x + w - 1, y + rows - 1);
+#ifdef A2_HOST
+    a2_n_fill++;
 #endif
     if (!a2_blit_said) {
         a2_blit_said = 1;
@@ -870,7 +1103,7 @@ static int a2_shift_test(int r0)
      * scroll's own copy reads it from r0 up, and the compose loop asks
      * a2_sig_ok only for rows it composes, which are rows the glass shows. */
     for (i = r0; i < A2_ROWS; i++) {
-        base = a2_tbase[i] + (unsigned)(a2_mode_page() - A2_TXT1);
+        base = a2_row_base(i);
         a2_zcopy_out(a2_src + A2_X40(i), base, A2_COLS);
 #ifdef A2_HOST
         a2_n_sig++;
@@ -903,6 +1136,40 @@ static int a2_shift_test(int r0)
 }
 
 /* ==========================================================================
+ * THE COMPOSE SPAN, UNIONED OVER A ROW'S RANGES
+ * ========================================================================*/
+/* The composer takes ONE group span for a whole row group. In text and lo-res
+ * a row is one forty-byte range and the span is the window's intersection
+ * with it; in hi-res it is EIGHT ranges $400 apart (section 7.2), and the
+ * span is the union of what the window reaches in each of them.
+ *
+ * IT IS AN INTERSECTION AND NOT A CONTAINMENT, and the difference is the
+ * ordinary case rather than an edge one - see the flush's own note where this
+ * is called. */
+static int a2_sg0, a2_sg1, a2_sgany;
+
+static void a2_span_of(unsigned base)
+{
+    unsigned last = base + A2_COLS - 1;
+    int g0, g1;
+
+    if (a2_whi < base || a2_wlo > last)
+        return;
+    g0 = (a2_wlo > base) ? (int)((a2_wlo - base) >> 3) : 0;
+    g1 = (a2_whi < last) ? (int)((a2_whi - base) >> 3) : A2_GROUPS - 1;
+    if (!a2_sgany) {
+        a2_sg0 = g0;
+        a2_sg1 = g1;
+        a2_sgany = 1;
+        return;
+    }
+    if (g0 < a2_sg0)
+        a2_sg0 = g0;
+    if (g1 > a2_sg1)
+        a2_sg1 = g1;
+}
+
+/* ==========================================================================
  * THE FLUSH (section 7.7)
  *
  * The lock is held by the caller and only around this, never around a slice.
@@ -925,16 +1192,57 @@ static int a2_font_row = -1;
 
 static void a2_emit(void)
 {
-    int i, line, s, w, rc, fy;
+    int i, line, s, w, rc, fy, ey;
 
     if (a2_run_n <= 0)
         return;
     w = a2_run_x1 - a2_run_x0 + 1;
     s = a2_run_l0 - (int)A2_X8(a2_run_row);
-    rc = os88_gfx_blit1(a2_bnd + A2_X40(s) + a2_run_x0, A2_BSTRIDE,
-                        a2_gsx + a2_run_x0 * 8,
-                        a2_gsy + (a2_run_l0 - a2_gl0),
-                        w * 8, a2_run_n);
+    /* THE DOUBLING HAPPENS HERE AND NOWHERE ELSE (section 7.8). Everything
+     * above this line - the band, the shadow, the span compare, the source
+     * reads - is in APPLE pixels, so no compare path has a second version and
+     * nothing else in this file knows the magnification exists. 2x on both
+     * axes reads the doubled band at A2_X2STRIDE and 2x HORIZONTAL at twice
+     * that, which is the one routine serving both axes.
+     *
+     * IT IS THE RUN'S OWN RECTANGLE AND NOT THE ROW'S, which is the second
+     * half of "at blit time" and the half wave 3 first shipped wrong. It used
+     * to sit on the COMPOSE side, next to a2_band_text, charging 10.59 ms to
+     * every recomposed row whether or not one pixel was blitted - 24 x 10.59
+     * = 253 ms on a flush that draws nothing, and the cases are ordinary: the
+     * reset recompose, a mode switch that draws the same picture (section
+     * 7.9.3 measures it at ZERO blits), a rect-forced row whose pixels turn
+     * out identical, a MIXED flip. Moving it here fixed that and left the
+     * other end alone: it still doubled all forty bytes and all eight lines
+     * for a run of seven bytes on one line. A keystroke owed 1.85 ms and
+     * spent 10.59; a single-scan-line HPLOT owed 0.40 and spent 10.59.
+     *
+     * PER RUN NEEDS NO LATCH, and that is the point of doing it this way: the
+     * runs of a row are DISJOINT rectangles, so doubling each one costs at
+     * most their union - the "three runs must not double three times"
+     * property the per-row latch kept by hand is now structural. The
+     * destination offset is the blit's own, computed once below and once
+     * here from the same three terms. */
+    if (a2_scw == 2)
+        a2_band_x2(a2_x2b + (unsigned)((s << 1) * A2_X2STRIDE)
+                          + (unsigned)(a2_run_x0 << 1),
+                   a2_bnd + A2_X40(s) + a2_run_x0, w, a2_run_n);
+    ey = a2_run_l0 - a2_gl0;
+    if (a2_sch == 2)
+        ey = ey << 1;
+    ey += a2_gsy;
+    if (a2_scw == 2) {
+        rc = os88_gfx_blit1(a2_x2b + (unsigned)((s << 1) * A2_X2STRIDE)
+                                   + (unsigned)(a2_run_x0 << 1),
+                            (a2_sch == 2) ? A2_X2STRIDE : A2_X2STRIDE * 2,
+                            a2_gsx + (a2_run_x0 << 4), ey,
+                            w << 4,
+                            (a2_sch == 2) ? (a2_run_n << 1) : a2_run_n);
+    } else {
+        rc = os88_gfx_blit1(a2_bnd + A2_X40(s) + a2_run_x0, A2_BSTRIDE,
+                            a2_gsx + (a2_run_x0 << 3), ey,
+                            w << 3, a2_run_n);
+    }
 #ifdef A2_HOST
     if (rc == 0)
         a2_n_blit++;
@@ -953,13 +1261,22 @@ static void a2_emit(void)
          * lines and the font path draws CHARACTERS, so a second run inside
          * the same row has nothing new to draw and no y of its own to draw
          * it at. */
-        if (a2_font_row != a2_run_row) {
+        if (a2_row_mode(a2_run_row) != A2_MODE_TEXT) {
+            a2_row_blank(a2_gsx + ((a2_scw == 2) ? (a2_run_x0 << 4)
+                                                 : (a2_run_x0 << 3)),
+                         ey,
+                         (a2_scw == 2) ? (w << 4) : (w << 3),
+                         (a2_sch == 2) ? (a2_run_n << 1) : a2_run_n);
+        } else if (a2_font_row != a2_run_row) {
             a2_font_row = a2_run_row;
             fy = (int)A2_X8(a2_run_row);
             if (fy < a2_gl0)
                 fy = a2_run_l0;             /* the bottom anchor cut this
                                              * row's top off the glass */
-            a2_row_font(a2_run_row, a2_gsy + (fy - a2_gl0));
+            fy = fy - a2_gl0;
+            if (a2_sch == 2)
+                fy = fy << 1;
+            a2_row_font(a2_run_row, a2_gsy + fy);
         }
     }
     for (i = 0; i < a2_run_n; i++) {
@@ -976,6 +1293,7 @@ static void a2_flush(void *win)
     unsigned base;
     int r, s, line, g0, g1, b0, b1, sp, df, dl;
     int i, k, nd, nf, nb, trust, drew, rowf, ux0, ux1, r0, nvis;
+    int rmode, mkey, ls0, ls1;
 
     if (a2_geom(win) < 0)
         return;
@@ -1040,7 +1358,34 @@ static void a2_flush(void *win)
      * IT IS ASKED LAST, AFTER THE DIRTY-ROW THRESHOLD. A keystroke dirties one
      * row and never reaches this scan at all; only a flush that already looks
      * like a scroll pays its ~31 tests. */
-    if (a2_sh_ok && !a2_v_hires && !a2_abt_up && nvis > 0) {
+    /* THE MODE KEY (this file's a2_sh_mkey): the renderer, MIXED and PAGE2 in
+     * one int, so the shift test can ask whether the pixels the shadow holds
+     * were made by the same composer as the pixels it is about to prove
+     * something about.
+     *
+     * MIXED IS IN THE KEY ONLY WHERE IT CAN REACH A PIXEL, which is the same
+     * statement a2_video_set's else-arm makes: in TEXT mode the split does
+     * not exist - a2_row_mode returns A2_MODE_TEXT before it reads
+     * a2_v_mixed, a2_row_base does not move, a2_mode_page does not read it -
+     * so `POKE -16302,0` marks no row and must not invalidate the shadow
+     * either. It used to, and the flush that carried a scroll then refused
+     * the shift test over a shadow exactly as valid as it had been a moment
+     * before: a 24-row recompose and 24 blits, ~497 ms on the target, instead
+     * of one os88_gfx_scroll at ~100. This is EXACT and not a loosening -
+     * every transition that makes MIXED visible also moves a2_mode_of(),
+     * which is in the key already and takes the a2_dirty_all arm anyway. */
+    mkey = a2_mode_of() | ((!a2_v_text && a2_v_mixed) ? 0x10 : 0)
+         | (a2_v_page2 ? 0x20 : 0);
+    /* ...AND THE SHIFT TEST IS A TEXT-MODE TEST, which is `a2_v_text` and not
+     * `!a2_v_hires`: a LO-RES screen has forty source bytes a row too and
+     * they scroll like anything else, but they are composed by a different
+     * routine and a2_shsrc records no such thing. The test is also refused on
+     * the ONE flush after any mode change, because a2_shsrc then describes
+     * pixels the other composer drew - and that flush is by construction the
+     * one a2_dirty_all marked every row of, so every row of a2_shsrc is
+     * rewritten inside it and the flush after is exact again. */
+    if (a2_sh_ok && a2_v_text && mkey == a2_sh_mkey && !a2_abt_up
+        && nvis > 0) {
         nd = 0;
         for (r = r0; r < A2_ROWS; r++)
             if (a2_line_is(a2_lnd, (int)A2_X8(r)))
@@ -1070,8 +1415,9 @@ static void a2_flush(void *win)
     }
     if (k) {
         if (os88_gfx_scroll(a2_gsx, a2_gsy,
-                            a2_gsx + A2_BANDW - 1, a2_gsy + a2_gnl - 1,
-                            (int)A2_X8(k)) == 0) {
+                            a2_gsx + a2_gbw - 1, a2_gsy + a2_gbh - 1,
+                            (a2_sch == 2) ? ((int)A2_X8(k) << 1)
+                                          : (int)A2_X8(k)) == 0) {
 #ifdef A2_HOST
             a2_n_scroll++;
 #endif
@@ -1205,12 +1551,16 @@ static void a2_flush(void *win)
                      * AFTER this block reads it; a flush that returns early
                      * leaves it stale, which can only over-recompose.
                      *
-                     * THE SAME HOLE OPENS ON MODE (wave 3): a2_band_lores and
-                     * a2_band_hires are a third input a2_shsrc does not
-                     * record. The shift test is refused outside TEXT today
-                     * (`!a2_v_hires`, and the mode's own switch calls
-                     * a2_dirty_all), and the wave that adds a composer owns
-                     * re-stating this. */
+                     * THE SAME HOLE OPENED ON MODE, AND WAVE 3 CLOSED IT:
+                     * a2_band_lores and a2_band_hires are a third input
+                     * a2_shsrc does not record. The gate that ships is
+                     * `a2_v_text` - NOT `!a2_v_hires`, which is true of a
+                     * lo-res screen and so lets one through - plus one
+                     * flush's refusal after any renderer / MIXED / PAGE2
+                     * change, keyed on a2_sh_mkey. a2_dirty_all runs on
+                     * exactly that change, so every a2_shsrc row is rewritten
+                     * inside the refused flush and the flush after is exact
+                     * again. The gate itself is below, with its own note. */
                     for (s = 0; s < 8; s++) {
                         line = (int)A2_X8(i) + s;
                         if (line >= a2_gl0)
@@ -1248,6 +1598,15 @@ static void a2_flush(void *win)
     for (r = 0; r < A2_ROWS; r++) {
         drew = 0;
         rowf = 0;
+        /* ...AND THE SCAN-LINE RANGE, in the same pass, because a2_band_hires
+         * takes one (section 7.4). `drew` is exactly "this line will be read
+         * out of the band below" - dirty, or forced, or the shadow is not
+         * trusted at all - so the union of the lines that set it is the
+         * union the composer owes, FORCED LINES INCLUDED: the !trust arm
+         * below draws b0..b1 straight out of the band with no compare, and a
+         * band row this flush never wrote would be last flush's pixels. */
+        ls0 = 8;
+        ls1 = -1;
         for (s = 0; s < 8; s++) {
             line = (int)A2_X8(r) + s;
             if (line < a2_gl0)
@@ -1256,8 +1615,12 @@ static void a2_flush(void *win)
             if (a2_line_is(a2_lnf, line))
                 rowf = 1;
             if (a2_line_is(a2_lnd, line) || a2_line_is(a2_lnf, line)
-                || !a2_sh_ok)
+                || !a2_sh_ok) {
                 drew = 1;
+                if (s < ls0)
+                    ls0 = s;
+                ls1 = s;
+            }
         }
         if (!drew) {
             /* nothing of this row is both dirty and visible: clear whatever
@@ -1285,7 +1648,8 @@ static void a2_flush(void *win)
             && (int)A2_X8(r) + 7 <= a2_hold_l1)
             continue;
 
-        base = a2_tbase[r] + (unsigned)(a2_mode_page() - A2_TXT1);
+        rmode = a2_row_mode(r);
+        base = a2_row_base(r);
 
         /* THE COMPOSE SPAN, in GROUPS of eight cells - which is what makes it
          * byte-aligned at both ends (a2band.inc's header). */
@@ -1300,10 +1664,25 @@ static void a2_flush(void *win)
         g0 = 0;
         g1 = A2_GROUPS - 1;
         if (a2_sh_ok && !a2_rowwide[r] && a2_wlo <= a2_whi
-            && a2_whi >= base && a2_wlo <= base + A2_COLS - 1) {
-            g0 = (a2_wlo > base) ? (int)((a2_wlo - base) >> 3) : 0;
-            g1 = (a2_whi < base + A2_COLS - 1)
-               ? (int)((a2_whi - base) >> 3) : A2_GROUPS - 1;
+            && a2_row_watched(r)) {
+            /* IN HI-RES THE ROW IS EIGHT SEPARATE RANGES and the span is the
+             * UNION of what the window reaches in each: the composer takes
+             * one group span for the whole row group, so a write on line 3
+             * and a write on line 6 give the groups both of them need and
+             * nothing wider. a2_span_of is that union, and its `any` is what
+             * says the window reached none of them - which cannot happen
+             * here, because a2_scan_range only marked the row when it did. */
+            a2_sgany = 0;
+            if (rmode == A2_MODE_HIRES) {
+                for (s = 0; s < 8; s++)
+                    a2_span_of(base + ((unsigned)s << 10));
+            } else {
+                a2_span_of(base);
+            }
+            if (a2_sgany) {
+                g0 = a2_sg0;
+                g1 = a2_sg1;
+            }
         }
         b0 = A2_LBOXB + (int)A2_X7(g0);
         b1 = A2_LBOXB + (int)A2_X7(g1) + A2_GBYTES - 1;
@@ -1359,9 +1738,38 @@ static void a2_flush(void *win)
                 b1 = a2_fx1;
         }
 
-        a2_band_text(a2_bnd, g0, g1, a2_m.ramseg, base,
-                     a2_fl_phase ? 0x7F : 0x00);
-        a2_flrow[r] = (unsigned char)a2_rowflash(a2_m.ramseg, base, A2_COLS);
+        /* --- THE DISPATCH, AND IT IS THE WHOLE OF WHAT MIXED MEANS HERE
+         * (section 7.4). One 40-byte-stride frame, one shadow, one band
+         * buffer; which routine fills it is a per-ROW question, because the
+         * MIXED split falls on a character-row boundary (160 scan lines is
+         * 20 rows) and no row is ever half one renderer and half the other. */
+        /* HI-RES IS COMPOSED OVER THE DIRTY SCAN LINES AND NOT ALL EIGHT,
+         * which is the other half of a2scr.c's own statement that hi-res is
+         * marked ONE LINE AT A TIME. Text and lo-res make all eight pixel
+         * rows out of one source byte a cell and have nothing to narrow; a
+         * hi-res row group is eight separate 40-byte source rows $400 apart,
+         * so composing all eight for a one-line HPLOT was eight times the
+         * work the machine asked for - 2.434 ms a group against the 0.30 that
+         * was owed, on every row the plot crossed. */
+        if (rmode == A2_MODE_HIRES)
+            a2_band_hires(a2_bnd, g0, g1, a2_m.ramseg, base,
+                          ls0, ls1 - ls0 + 1);
+        else if (rmode == A2_MODE_LORES)
+            a2_band_lores(a2_bnd, g0, g1, a2_m.ramseg, base);
+        else
+            a2_band_text(a2_bnd, g0, g1, a2_m.ramseg, base,
+                         a2_fl_phase ? 0x7F : 0x00);
+        /* ...AND ONLY A TEXT ROW CAN FLASH. A lo-res byte of $60 is two
+         * colour blocks and a hi-res byte of $60 is three pixels; asking
+         * a2_rowflash about either would force-compose the row 3.6 times a
+         * second for a phase that changes not one pixel of it. */
+        a2_flrow[r] = (rmode == A2_MODE_TEXT)
+                    ? (unsigned char)a2_rowflash(a2_m.ramseg, base, A2_COLS)
+                    : (unsigned char)0;
+        /* ...and the DOUBLED copy is NOT taken here. It is a2_emit's, on the
+         * DRAW side and PER RUN: a row that composes and draws nothing owes
+         * no doubling at all, and a row that draws seven bytes of one scan
+         * line owes seven bytes of one scan line (section 7.8). */
 #ifdef A2_HOST
         a2_n_band++;
         a2_n_group += (unsigned)(g1 - g0 + 1);
@@ -1373,13 +1781,20 @@ static void a2_flush(void *win)
          * true. And when the shift test has already run this flush it read
          * exactly these bytes - the lock is held throughout - so they are
          * copied rather than fetched again. */
-        if (a2_sig_ok && r >= a2_src_r0) {
-            a2_rowcopy(a2_shsrc + A2_X40(r), a2_src + A2_X40(r), A2_COLS);
-        } else {
-            a2_zcopy_out(a2_shsrc + A2_X40(r), base, A2_COLS);
+        /* ...AND ONLY FOR A TEXT ROW, because the shift test is a text-mode
+         * test: forty source bytes of a hi-res row group describe ONE of its
+         * eight scan lines, so recording them would be 0.31 ms a row spent on
+         * a proof nothing is allowed to use. A mode change is what makes them
+         * true again, through the mkey refusal above. */
+        if (rmode == A2_MODE_TEXT) {
+            if (a2_sig_ok && r >= a2_src_r0) {
+                a2_rowcopy(a2_shsrc + A2_X40(r), a2_src + A2_X40(r), A2_COLS);
+            } else {
+                a2_zcopy_out(a2_shsrc + A2_X40(r), base, A2_COLS);
 #ifdef A2_HOST
-            a2_n_sig++;
+                a2_n_sig++;
 #endif
+            }
         }
 
         a2_run_row = r;
@@ -1453,6 +1868,9 @@ static void a2_flush(void *win)
 
     a2_dirty_any = 0;
     a2_sh_ok = 1;
+    a2_sh_mkey = mkey;                      /* what the glass was composed BY,
+                                             * beside a2_sh_phase, which is
+                                             * what it was composed AT */
     for (r = 0; r < A2_ROWS; r++)
         a2_rowwide[r] = 0;
     /* ...AND THE FORCED RANGE IS THE NEXT FLUSH'S TO NARROW, not this one's

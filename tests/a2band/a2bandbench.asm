@@ -32,6 +32,26 @@
 ;   BANDTEXT 5 groups       the compose alone, drawing nothing: 40 cells, the
 ;                           whole Apple row, and the number section 7.9's
 ;                           model quotes per cell
+;   BANDLORES 5 / 1 group   ...and the LO-RES composer over the same span: two
+;                           nibbles a byte through the luminance ladder, the
+;                           same a2_pack under it
+;   BANDHIRES 5 / 1 group   ...and the HI-RES one: forty source bytes a SCAN
+;                           LINE through the 7-bit reverse table, up to EIGHT
+;                           lines a call, which is why its per-call figure is
+;                           the odd one out and its per-SOURCE-BYTE figure is
+;                           not
+;   BANDHIRES 5 grp x1ln    ...and the same span for ONE scan line, which is
+;                           what a single-line HPLOT asks for. Hi-res is the
+;                           mode the damage model marks a LINE at a time, so
+;                           this composer takes a range and the other two do
+;                           not - and one measurement of eight lines cannot
+;                           price one
+;   per source byte         each composer's per-call figure divided by the
+;                           forty source bytes a five-group call consumes -
+;                           the figure APPLE2-SPEC section 7.9's cost table is
+;                           written from, printed rather than derived by hand
+;   BLIT1 640x16 stride80   the DOUBLED emit, which is what full screen at 2x
+;                           puts down for each character row (7.8)
 ;   BANDTEXT 1 group        ...and the floor - EIGHT cells, because eight
 ;                           cells is fifty-six bits is seven bytes and the
 ;                           group is the composer's unit (7.3). A one-cell
@@ -50,7 +70,12 @@
 ;                           test asks for 24 of these before it decides (7.7)
 ;   ROWFLASH 40             the flash scan - asked once per row COMPOSE, and
 ;                           it is what makes the phase flip cost what it costs
-;   BAND_X2 8 rows          fullscreen's pixel doubling (7.8)
+;   BAND_X2 8r x 40b        fullscreen's pixel doubling, a whole character
+;                           row of it (7.8)
+;   BAND_X2 1r x 7b         ...and one RUN of one scan line of it, which is
+;                           what a single-scan-line HPLOT asks for. The
+;                           routine is called per RUN, so one shape cannot
+;                           price it
 ;
 ; AND THE IDENTITY ROWS, a correctness test in a benchmark's clothes: a line
 ; of Apple screen codes composed by the SHIPPING a2_band_text and blitted
@@ -167,6 +192,65 @@ ab_setup:
     inc si
     inc di
     loop .c
+
+    ; THE 7-BIT REVERSE TABLE, built here exactly as os88_main builds it: bit
+    ; b of the source becomes bit 6-b, which is what turns a hi-res byte (bit
+    ; 0 leftmost) into the framebuffer's order (MSB first).
+    xor si, si
+.rev:
+    xor al, al
+    mov cx, 7
+    mov bx, si
+.revb:
+    shr bl, 1
+    rcl al, 1
+    loop .revb
+    mov bx, si
+    mov [_a2_rev+bx], al
+    inc si
+    cmp si, 128
+    jb .rev
+
+    ; ...and the lo-res pattern table: eight dark colours and eight lit.
+    ; THAT IS A DELIBERATELY SIMPLER TABLE AND NOT THE PACKAGE'S LADDER, which
+    ; is nine lit and seven dark and disagrees with this stand-in on colours 5
+    ; and 8. Nothing here is a statement about the ladder - what is being timed
+    ; is two nibble reads, a table index and eight stores a cell, and that
+    ; costs the same whatever the sixteen entries hold. The ladder's own gate
+    ; is `tools/a2ref.py --lumcheck`, over all 256 ordered pairs.
+    mov si, 16
+.lop:
+    dec si
+    mov al, 0x7F
+    cmp si, 8
+    jae .lit
+    xor al, al
+.lit:
+    mov bx, si
+    mov [_a2_lopat+bx], al
+    or si, si
+    jnz .lop
+
+    ; ...and the HI-RES source, eight scan lines $400 apart, so the composer
+    ; is not timed on a page of zeroes. What it costs is a mask, a table read
+    ; and a store a cell, which the data cannot change - but a bench whose
+    ; input is degenerate is one nobody can check by looking at it.
+    mov di, ab_hsrc
+    mov dx, 8
+.hl:
+    push di
+    mov cx, AB_CELLS
+    mov si, ab_seed
+.hb:
+    mov al, [si]
+    inc si
+    mov [di], al
+    inc di
+    loop .hb
+    pop di
+    add di, 0x400
+    dec dx
+    jnz .hl
 
     call _a2_x2init                 ; the 512-byte doubling table, once,
                                     ; outside every timed row
@@ -315,6 +399,71 @@ ab_b_band:
     add sp, 12
     ret
 
+; --- a2_band_lores(dst, 0, [ab_last], DS, ab_mat) ---------------------------
+; The lo-res composer over the SAME group span as the text one, off the same
+; forty source bytes: a lo-res byte is two colour nibbles and a text byte is a
+; screen code, and the composer does not care which - what it costs is two
+; table reads and eight stores a cell, then the shared a2_pack.
+ab_b_lores:
+    mov ax, ab_mat
+    push ax
+    mov ax, ds
+    push ax
+    push word [ab_last]
+    xor ax, ax
+    push ax
+    mov ax, ab_band
+    push ax
+    call _a2_band_lores
+    add sp, 10
+    ret
+
+; --- a2_band_hires(dst, 0, [ab_last], DS, ab_hsrc, s0, nlines) --------------
+; EIGHT SCAN LINES A CALL, $400 apart, which is the interleave the composer
+; walks itself - so this row's per-call figure covers 320 source bytes where
+; the other two cover 40, and the per-source-byte row under it is the one to
+; compare across the three.
+;
+; ...AND ONE SCAN LINE A CALL, which is the shape a single-scan-line HPLOT
+; asks for: hi-res is the mode the damage model marks a LINE at a time, so
+; this composer takes a range where the other two do not (a2band.inc), and one
+; measurement of eight lines cannot price one.
+ab_b_hires:
+    mov ax, 8                       ; nlines
+    push ax
+    xor ax, ax                      ; s0
+    push ax
+    mov ax, ab_hsrc
+    push ax
+    mov ax, ds
+    push ax
+    push word [ab_last]
+    xor ax, ax
+    push ax
+    mov ax, ab_band
+    push ax
+    call _a2_band_hires
+    add sp, 14
+    ret
+
+ab_b_hires1l:
+    mov ax, 1                       ; nlines - ONE scan line
+    push ax
+    xor ax, ax                      ; s0
+    push ax
+    mov ax, ab_hsrc
+    push ax
+    mov ax, ds
+    push ax
+    push word [ab_last]
+    xor ax, ax
+    push ax
+    mov ax, ab_band
+    push ax
+    call _a2_band_hires
+    add sp, 14
+    ret
+
 ; --- BLIT1: the emit alone, the whole 320-pixel band at stride 40 ------------
 ; ES IS SAVED AND PUT BACK: this runs inside a window callback, which the
 ; kernel enters with ES = KERNEL_SEG (SPEC.md 20.1), and a callback that
@@ -337,6 +486,25 @@ ab_b_blit:
 ab_b_cband:
     call ab_b_band
     call ab_b_blit
+    ret
+
+; --- BLIT1 at 2x: the DOUBLED band, 640 x 16 at stride 80 -------------------
+; What full screen at 2x puts down for one character row (APPLE2-SPEC section
+; 7.8). It is a separate row because the cost table prices a blit per CALL and
+; this one moves four times the pixels of the row above it: quoting the 320x8
+; figure for a 640x16 blit would understate every fullscreen row in the table.
+ab_b_blit2:
+    push es
+    mov si, ab_x2buf
+    mov bp, A2_X2STRIDE
+    mov ax, [ab_bx]
+    mov bx, [ab_by]
+    mov cx, AB_W * 2
+    mov dx, 16
+    push ds
+    pop es
+    call OSAPI_GFX_BLIT1
+    pop es
     ret
 
 ; --- ROWSPAN: the compare that decides whether anything is drawn -------------
@@ -387,16 +555,37 @@ ab_b_flash:
     add sp, 6
     ret
 
-; --- BAND_X2: fullscreen's pixel doubling, eight rows ------------------------
+; --- BAND_X2: fullscreen's pixel doubling ------------------------------------
+; TWO ROWS, because the routine is called PER RUN now (a2band.inc) and one
+; measurement of one shape cannot price both ends of it. The whole band -
+; 8 rows x 40 bytes, 320 source byte-rows - is what entering full screen
+; costs a character row; 1 row x 7 bytes is a single-scan-line HPLOT, which
+; is the shape the per-run change exists for. The two together give the call
+; floor and the per-byte-row cost, the way BANDTEXT's two rows do.
 ab_b_x2:
-    mov ax, 8
+    mov ax, 8                       ; rows
+    push ax
+    mov ax, A2_BSTRIDE              ; nbytes
     push ax
     mov ax, ab_band
     push ax
     mov ax, ab_x2buf
     push ax
     call _a2_band_x2
-    add sp, 6
+    add sp, 8
+    ret
+
+ab_b_x2s:
+    mov ax, 1                       ; rows
+    push ax
+    mov ax, 7                       ; nbytes - one run of one group
+    push ax
+    mov ax, ab_band
+    push ax
+    mov ax, ab_x2buf
+    push ax
+    call _a2_band_x2
+    add sp, 8
     ret
 
 ; -----------------------------------------------------------------------------
@@ -531,6 +720,43 @@ ab_norow:
     pop di
     ret
 
+; -----------------------------------------------------------------------------
+; ab_perbyte - one DERIVED row: the row just measured, per SOURCE BYTE.
+;
+; bl_run leaves [bl_lastus] - hundredths of a microsecond per iteration - for
+; exactly this. A five-group call consumes forty source bytes in text and
+; lo-res and 320 in hi-res, so the divisor is the caller's: SI is the label
+; and CX the source bytes that call read. This is the figure APPLE2-SPEC
+; section 7.9's cost table is written from, printed rather than derived by
+; hand off the column beside it.
+; -----------------------------------------------------------------------------
+ab_perbyte:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call bl_lclr
+    xor di, di
+    call bl_lput
+    mov ax, [bl_lastus]
+    mov dx, [bl_lastus+2]
+    call bl_div32                   ; ...by the caller's CX
+    mov di, BL_C_US
+    call bl_usfield
+    mov si, bl_s_us
+    mov di, BL_C_UNIT
+    call bl_lput
+    call bl_lcommit
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; =============================================================================
 ; ab_run - the whole report
 ; =============================================================================
@@ -610,6 +836,9 @@ ab_run:
     mov si, ab_r_band40
     xor al, al
     call bl_run
+    mov si, ab_s_perb               ; ...IMMEDIATELY after its own row: the
+    mov cx, AB_CELLS                ; derived figure reads [bl_lastus], which
+    call ab_perbyte                 ; is whatever bl_run measured LAST
 
     mov word [bl_body], ab_b_blit
     mov si, ab_r_blit40
@@ -618,6 +847,30 @@ ab_run:
     mov word [bl_body], ab_b_cband
     mov si, ab_r_cband40
     call ab_rowb
+
+    mov word [bl_body], ab_b_lores
+    mov si, ab_r_lores40
+    xor al, al
+    call bl_run
+    mov si, ab_s_perb
+    mov cx, AB_CELLS
+    call ab_perbyte
+
+    mov word [bl_body], ab_b_hires
+    mov si, ab_r_hires40
+    xor al, al
+    call bl_run
+    mov si, ab_s_perb
+    mov cx, AB_CELLS * 8            ; EIGHT scan lines a call
+    call ab_perbyte
+
+    mov word [bl_body], ab_b_hires1l
+    mov si, ab_r_hires1l
+    xor al, al
+    call bl_run
+    mov si, ab_s_perb
+    mov cx, AB_CELLS                ; ...and ONE, which is 40 source bytes
+    call ab_perbyte
 
     mov word [ab_last], 0
     mov word [bl_body], ab_b_band
@@ -628,6 +881,16 @@ ab_run:
     mov word [bl_body], ab_b_cband
     mov si, ab_r_cband1
     call ab_rowb
+
+    mov word [bl_body], ab_b_lores
+    mov si, ab_r_lores1
+    xor al, al
+    call bl_run
+
+    mov word [bl_body], ab_b_hires
+    mov si, ab_r_hires1
+    xor al, al
+    call bl_run
     mov word [ab_last], AB_GROUPS - 1
 
     ; --- the compare, the copy, the signature and the flash scan ----------
@@ -669,6 +932,17 @@ ab_run:
     xor al, al
     call bl_run
 
+    mov word [bl_body], ab_b_x2s
+    mov si, ab_r_x2s
+    xor al, al
+    call bl_run
+
+    call ab_b_x2                    ; ...and the doubled band it just made is
+                                    ; what the 2x blit puts down
+    mov word [bl_body], ab_b_blit2
+    mov si, ab_r_blit2
+    call ab_rowb
+
     call ab_ident
     call bl_lclr
     mov si, ab_r_ident
@@ -700,7 +974,16 @@ ab_run:
 ; =============================================================================
 
 ab_tpl:
-    dw 7, 22, 632, 448
+    ; X = 0 AND WIDTH = THE WHOLE SCREEN, and that is the doubled blit's row
+    ; rather than a preference: a window that SPANS the screen has no side
+    ; border and its content is the whole frame width (SPEC.md 11.95.3), so a
+    ; 640-pixel blit fits exactly. At 632 it did not, and `BLIT1 640x16
+    ; stride80` measured 309.9 counts an operation - 111 ms of XT for four
+    ; times the pixels of a row that costs 1.75 - because every one of those
+    ; rows was going down the CLIPPED path. A measurement of a clip is not a
+    ; measurement of the blit, and full screen, which is the only thing that
+    ; issues this call, is never clipped.
+    dw 0, 22, 640, 448
     dw ab_ttl, ab_paint, ab_onkey, ab_onclick
 
 ab_ttl:     db 'Apple II Band Bench', 0
@@ -719,14 +1002,22 @@ ab_r_band40:  db 'BANDTEXT 5 groups', 0
 ab_r_blit40:  db 'BLIT1 320x8 stride40', 0
 ab_r_cband40: db 'BAND 5 grp comp+blit', 0
 ab_r_band1:   db 'BANDTEXT 1 group', 0
+ab_r_lores40: db 'BANDLORES 5 groups', 0
+ab_r_lores1:  db 'BANDLORES 1 group', 0
+ab_r_hires40: db 'BANDHIRES 5 grp x8ln', 0
+ab_r_hires1:  db 'BANDHIRES 1 grp x8ln', 0
+ab_r_hires1l: db 'BANDHIRES 5 grp x1ln', 0
+ab_r_blit2:   db 'BLIT1 640x16 stride80', 0
 ab_r_cband1:  db 'BAND 1 grp comp+blit', 0
 ab_r_spaneq:  db 'ROWSPAN 40 equal', 0
 ab_r_spandiff: db 'ROWSPAN 40 differing', 0
 ab_r_copy:    db 'ROWCOPY 40 bytes', 0
 ab_r_sig:     db 'ROWSIG 40 cells', 0
 ab_r_flash:   db 'ROWFLASH 40 cells', 0
-ab_r_x2:      db 'BAND_X2 8 rows', 0
+ab_r_x2:      db 'BAND_X2 8r x 40b', 0
+ab_r_x2s:     db 'BAND_X2 1r x 7b', 0
 ab_r_ident:   db 'identity blit says', 0
+ab_s_perb:    db '  ...per source byte', 0
 ab_s_drawn:   db 'DRAWN (CF=0)', 0
 ab_s_refused: db 'REFUSED (CF=1)', 0
 
@@ -750,10 +1041,18 @@ ab_blitok:  db 1            ; the preflight's answer (see ab_run)
 ; Here it is the bench's, filled by ab_setup from the kernel's font.
 _a2_chr:    times 512 db 0
 
+; ...and the two tables the OTHER two composers read by name. The package
+; builds both in os88_main and this fills them in ab_setup: _a2_rev is the
+; 7-bit reverse (hi-res bytes carry bit 0 as the LEFTMOST pixel) and
+; _a2_lopat the lo-res luminance ladder's pattern per colour, which is 0x00 or
+; 0x7F because a monochrome block is uniform.
+_a2_rev:    times 128 db 0
+_a2_lopat:  times 16 db 0
+
 ; ab_band 320 + ab_shad 320 + ab_mat 80 + ab_x2buf 1280, and the eight bytes
 ; of slack that make the arithmetic legible
 AB_BSS_OWN  equ AB_STRIDE * 8 + AB_STRIDE * 8 + AB_CELLS * 2 \
-                + 80 * 16 + 8
+                + 80 * 16 + 0x1C00 + AB_CELLS + 8
 AB_BSS_TOTAL equ AB_BSS_OWN + BL_BSS_SIZE + 900   ; + a2band.inc's scratch
                                                   ; (a2_grow 320 + a2_x2tab
                                                   ; 512 + 6), with slack;
@@ -769,6 +1068,12 @@ ab_shad:    resb AB_STRIDE * 8      ; ...and the frame shadow's row
 ab_mat:     resb AB_CELLS * 2       ; two screen rows: normal, and alternating
                                     ; inverse
 ab_x2buf:   resb 80 * 16            ; the pixel-doubled band
+; ...and the HI-RES source, which is EIGHT scan lines $400 apart and therefore
+; $1C00 + 40 bytes of the package's own segment. a2_band_hires walks that
+; stride itself off ONE address, so the bench has to give it a real one:
+; handing it forty bytes and letting it read the seven lines after them would
+; be reading past this claim and into somebody else's memory.
+ab_hsrc:    resb 0x1C00 + AB_CELLS
 ab_bl:      resb BL_BSS_SIZE
 ab_bss_end:
 section .text

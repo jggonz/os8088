@@ -184,7 +184,7 @@ unconditionally.
 | Character-generator decode: `n = rom[i*8 + (y&7)]`; if the entry is in the low 1KB and bit 7 is clear, `n ^= 0x7F`; the 7 pixel bits are stored BIT-REVERSED (the comment cites UTAII:8-30) | AppleWin `source/NTSC_CharSet.cpp:180-234` (`userVideoRom2K`) and `:246-253` (`VideoRomForIIandIIPlus`) |
 | Text flashing, which is a FRAME COUNTER and not an encoding: a screen byte in `$40-$7F` swaps between its normal `$80-$BF` form and its inverse `$00-$3F` form by +/- `$40` on a 16-frame counter | MII `src/mii_video.c:476-521` (`_mii_line_render_text`), `:507-511` |
 | Lo-res cell rule: 40x48 blocks of 7x4, `c = (byte >> ((line/4 & 1)*4)) & 0xF`, low nibble the top four scan lines and high nibble the bottom four | apple2emu `src/video.cpp:484-509` (`render_lores_cell`); second reading at MII `src/mii_video.c:524-585` |
-| Lo-res 16-colour palette, for the VGA13 DAC and for the 1bpp luminance ladder the windowed path uses | apple2emu `src/video.cpp:94-113` (mrob.com values); cross-check AppleWin `source/RGBMonitor.cpp:118-165` (`PaletteRGB_NTSC`) |
+| Lo-res 16-colour palette, for the VGA13 DAC and for the 1bpp luminance ladder the windowed path uses. **A palette the reference DISPLAYS**: AppleWin's `PaletteRGB_NTSC` lores block is refused here because its own first line (`RGBMonitor.cpp:148`) says it is a placeholder overwritten at start-up by `VideoInitializeOriginal` (`:1186-1196`, from `NTSC.cpp:2366-2368`) with colours `GenerateBaseColors` (`NTSC.cpp:2697-2721`) computes rather than lists | MII `src/mii_video.c:94-113` (`palettes[0]`, "Color NTSC") through MII's own lo-res mapping `mii_base_clut.lores[0]` (`src/mii_video.c:173-177`) - MII's `CI_*` enum is NOT in Apple colour order; cross-check apple2emu `src/video.cpp:100-115` (the mrob.com values, indexed by colour directly, whose two greys are the same byte) - the two agree on all sixteen lit/dark decisions |
 | Hi-res, monochrome: 7 pixels a byte, and BOTH references throw the high bit away in mono (apple2emu writes `byte &= 0x7f`; MII's mono arm never reads bit 7) | apple2emu `src/video.cpp:511-537` (`render_mono_hires_cell`); MII `src/mii_video.c:459-470` |
 | Hi-res artifact colour, the integer form that fits a 256-colour DAC with no floating point: `run = ((b0 & 0x60) >> 5) \| ((b1 & 0x7f) << 2) \| ((b2 & 0x03) << 9)`, `odd = (x & 1) << 1`, `offset = (b1 & 0x80) >> 5`, then a TEN-entry CLUT { black, purple, green, green, purple, blue, orange, orange, blue, white } | MII `src/mii_video.c:414-455` (the index) and `:188-196` (the CLUT) |
 | The speaker: `$C030`, and the fact that READS AND WRITES BOTH toggle | AppleWin `source/Memory.cpp:634-651` (`IORead_C03x` / `IOWrite_C03x`, both call `SpkrToggle`) |
@@ -627,15 +627,41 @@ clears the waiting flag and answers the floating bus. Nothing else.
 | chord | what it does | why this chord |
 |---|---|---|
 | **Ctrl+F2** | Ctrl-Reset | AppleWin's own, scan `0x5F`, in the classic non-enhanced set an 83-key XT BIOS delivers |
-| **Ctrl+F3** | Open-Apple-Ctrl-Reset | scan `0x60`, same set. **On a II+ its body is not a //e chord carried over**: what Open-Apple-Ctrl-Reset does on a //e is force a COLD start, and on a II+ the Autostart Monitor decides that from `$03F4` != `$03F3` XOR `$A5` (section 4.5) - so the honest body is to break that equality and take the ordinary reset, RAM intact, which is what makes it a different row from `Power On` |
+| **Ctrl+F3** | Open-Apple-Ctrl-Reset | scan `0x60`, same set. **On a II+ its body is not a //e chord carried over**: what Open-Apple-Ctrl-Reset does on a //e is force a COLD start, and on a II+ the Autostart Monitor decides that from `$03F4` != `$03F3` XOR `$A5` (section 4.5) - so the honest body is to break that equality and take the ordinary reset, RAM intact, which is what makes it a different row from `Power On`. **AND IT HOLDS PB0 ACROSS THE RESET**, which is the chord's own name read in II+ terms: what a //e calls Open-Apple IS the PB0 input on this machine, so a program that samples `$C061` in its start-up sees it held. The poll runs at the TOP of the wake and the reset service after it, which is the order that makes that survive |
 | **Alt+Enter** | full screen, both directions | **AppleWin's own chord**, out of `help/keyboard.html`. An Apple II+ has no Alt key, so it collides with nothing |
 | **Ctrl+F** | full screen | SPEC.md 11.2.1's unconditional door, kept |
-| **F1** / **F2** | the II+'s **game buttons PB0 and PB1** (`$C061`/`$C062`), read as LEVEL through `os88_key_down` | a departure from AppleWin's Left-Alt / Right-Alt, recorded with its reason: Alt+Enter is this port's fullscreen chord. **They are HOST CONVENIENCES and not keys of the machine**: "Open-Apple" and "Solid-Apple" are //e KEYBOARD keys (`AppleWin/help/keyboard.html:29-44`) and a II+ has none - what it has is three digital inputs at `$C061-$C063` (`Memory.cpp:726-728`), of which PB0 and PB1 are the two a game reads |
+| **F1** / **F2** | the II+'s **game buttons PB0 and PB1** (`$C061`/`$C062`), read as LEVEL through `os88_key_down` | a departure from AppleWin's Left-Alt / Right-Alt, recorded with its reason: Alt+Enter is this port's fullscreen chord. **They are HOST CONVENIENCES and not keys of the machine**: "Open-Apple" and "Solid-Apple" are //e KEYBOARD keys (`AppleWin/help/keyboard.html:29-44`) and a II+ has none - what it has is three digital inputs at `$C061-$C063` (`Memory.cpp:723-726` dispatches all three to `JoyReadButton`), of which PB0 and PB1 are the two a game reads. **PB2 is not a third convenience: it is the SHIFT-KEY MOD**, and it is a fact about the machine rather than a host choice - see below |
 | **Esc** | **NOTHING. It is the Apple's own key and goes to the machine.** | **SPEC.md 11.2.1's stated exception, taken the way `C64-SPEC §9.8` takes it.** 11.2.1 binds the bare letter `f` and **Esc** to enter and leave a fullscreen surface - *"the key that got you there is the key that leaves"* - and this machine **owns both**. Esc is a key on an Apple II+ keyboard and the ROM reads it: the Autostart Monitor's **ESC-I / ESC-J / ESC-K / ESC-M** move the cursor, and the Applesoft screen editor reads the same four, so a port that swallowed Esc is a machine whose screen editor does not work. `f` is a letter, and every letter goes to the machine. **So Ctrl+F and Alt+Enter above are the WHOLE door**, and they are the reason this exception pays for itself: `C64-SPEC §9.8`'s own sentence is *"that exception only pays for itself if the chord is IMPLEMENTED"*, and both of ours are, in RESIDENT code, from wave 1 |
 
 **Alt+Enter is the C64 precedent read correctly.** The C64's Alt+D is VICE's
 OWN hotkey out of `data/hotkeys/hotkeys.vhk`, so the precedent is *keep the
 ORIGINAL's chord*, not *keep the other port's key*.
+
+**`$C063` IS THE SHIFT-KEY MOD, AND IT IS ACTIVE WHEN SHIFT IS *UP*.** This
+is the one of the three digital inputs that is a fact about the II+ and not a
+host convenience, and wave 3 shipped it as the inverse of its own default
+state - a flat 0 - with `Memory.cpp`'s dispatch table cited for a behaviour
+that lives one call down. The authority is `JoyReadButton` case `0x63`
+(`AppleWin/source/Joystick.cpp:640-651`): on a II/II+ with no joystick it is
+`pressed = !(GetKeyState(VK_SHIFT) < 0)`, cited in AppleWin's own comment to
+Sather, *Understanding The Apple II* p7-36. So a program probing the mod on a
+stock II+ reads `$80` with Shift up and `$00` with it held, and that is what
+this machine answers.
+
+**It is polled only once a program has ASKED.** Shift is two `os88_key_down`
+calls (left and right), 93 us a wake on the target, for a level almost nothing
+reads - so the first `$C063` read latches `a2_btn2_want` and the poll starts
+there. `a2_btn[2]` is born 1, because Shift up IS the resting state, so even
+the read before any poll answers what the reference answers.
+
+**A BUTTON IS A LEVEL AND IS POLLED ONCE A WAKE**, not read across the bridge
+per emulated access. A game reads `$C061` in a loop and asks whether the
+button is down NOW, so `a2_kbd_poll` asks `os88_key_down` twice at the top of
+each wake and the soft switch answers from the cache: two bridge crossings a
+wake against two per emulated read. The map is **advice, not an oracle**
+(section 6.4) and that is exactly the right shape for a level - a break code
+the ISR missed leaves the button held until its next press, which is what a
+real button that stuck would do.
 
 **Ctrl-Reset also has a menu item**, which is the guaranteed route. **The
 fullscreen chord must be implemented in RESIDENT code**, because a `WF_FULL`
@@ -709,6 +735,34 @@ arrows, Space and Del as its pointer, and ScrollLock hands them back. The port
 `os88_onkey` has never once delivered one - over three consecutive polls, with
 a one-way latch.
 
+**IT MATTERS MORE HERE THAN ON THE C64**, and that is worth saying rather than
+inheriting. On the C64 those four keys are a JOYSTICK; on this machine LEFT
+and RIGHT are keys of the Apple II+ itself (`asciicode` row 0 gives `$08` and
+`$15`, section 6.1) and **SPACE is the key a person typing BASIC presses most
+often after the letters**. A machine whose space bar moves the desktop pointer
+is a machine you cannot type at, and nothing on the glass would say why.
+
+**THE SDK CANNOT BE ASKED "HAS A MOUSE SPOKEN"** (`C64-SPEC §7.6`'s own
+finding): `os88_mouse()` answers x, y and the button and nothing else, and
+adding a slot for it would spend kernel headroom, which is a decision and not
+a build fix. So the package asks a question it CAN answer and that has the
+same answer - `kbm_key` (`kernel/mouse.inc`) intercepts one of those keys when
+and only when no mouse has spoken AND ScrollLock is off, and an intercepted
+key never reaches `os88_onkey`.
+
+**THREE CONSECUTIVE POLLS**, because a wake posted BEFORE a press is
+dispatched ahead of the key event behind it, so one poll can legitimately see
+the ISR's bit with the `W_ONKEY` still queued. **The latch is ONE WAY** - a
+kernel that has delivered one of those keys is not going to start eating
+them - and the message is said **once a session** (SPEC.md 47):
+
+```
+ScrollLock: arrows, Space.
+```
+
+25 cells of the status row's 26, which is what the message-length gate
+(section 9) is for.
+
 ---
 
 ## 7. The screen
@@ -768,10 +822,16 @@ the C64's `c64_dmask`. Not the 192-entry table a first reading suggests.
 | routine | composes | shape |
 |---|---|---|
 | `a2_band_text` | 40 x 24 cells of 7 x 8 | the 7-bit shift accumulator, one decoded glyph and one **per-cell XOR mask** |
-| `a2_band_lores` | 40 x 48 blocks of 7 x 4 | `c = (byte >> ((line/4 & 1)*4)) & 0xF`, through a 16-entry luminance ladder held as `{and, xor}` pairs |
-| `a2_band_hires` | 280 x 192 mono | 40 source bytes -> 35 output bytes a scan line through the 128-entry 7-bit reverse table, **high bit dropped** |
+| `a2_band_lores` | 40 x 48 blocks of 7 x 4 | `c = (byte >> ((line/4 & 1)*4)) & 0xF`, through a 16-entry luminance ladder |
+| `a2_band_hires` | 280 x 192 mono | 40 source bytes -> 35 output bytes a scan line through the 128-entry 7-bit reverse table, **high bit dropped**, EIGHT scan lines a call |
 
-All three share **ONE 7-bit shift accumulator and one span argument**. Stride
+All three share **ONE 7-bit shift accumulator and one span argument** - and
+**they share it LITERALLY**, which wave 3 made true rather than aspirational:
+phase C is `a2_pack`, one near routine the three of them CALL, so "one class"
+is a fact about the image and not a family resemblance. Phase B is the only
+thing that differs, and all it decides is which seven-bit value each cell
+contributes: a masked glyph row, a luminance block, or a reversed hi-res byte.
+Stride
 is the assemble-time constant **40** and the rows are unrolled
 (PERFORMANCE.md Set 64's lesson). Beside them: `a2_rowspan` (two `repe cmpsb`,
 the second with DF set), `a2_rowcopy`, `a2_rowsig`, `a2_rowflash`, `a2_x2init`
@@ -789,6 +849,22 @@ void a2_band_text(unsigned char *dst, int g0, int g1,
                   unsigned mseg, unsigned moff, int fmask);
 ```
 
+and the other two take the same five arguments and no sixth, because only text
+has a flash phase:
+
+```
+void a2_band_lores(unsigned char *dst, int g0, int g1,
+                   unsigned mseg, unsigned moff);
+void a2_band_hires(unsigned char *dst, int g0, int g1,
+                   unsigned mseg, unsigned moff);
+```
+
+**`moff` IS THE ROW'S FORTY BYTES IN TWO OF THEM AND SCAN LINE 0 IN THE
+THIRD.** Text and lo-res read one forty-byte range; hi-res reads EIGHT of them
+`$400` apart, and `a2_band_hires` walks that stride itself off the one address
+it is handed - so the caller has one row base per row whatever the mode, which
+is what keeps the flush's row loop one loop.
+
 where `fmask` is the FLASH PHASE as the mask a `$40-$7F` cell takes right
 now - `0x00` while flashing text shows its normal form, `0x7F` while it shows
 its inverse. That one byte is the whole of flashing (section 7.6): there is no
@@ -802,9 +878,100 @@ of the SECOND operand is where that difference is paid.
 `hosttest/a2memtest.asm` checks two of those bytes against hand-computed
 values for exactly this reason.
 
-**The luminance ladder is `{and, xor}` pairs and not an XOR alone**, because
-an equal-luminance cell is `{0x00, level}` and an XOR alone cannot express a
-uniform block.
+**The luminance ladder is SIXTEEN BYTES AND ONE CONSTANT A COLOUR** (wave 3's
+measured correction to the draft's `{and, xor}` pairs). A pair per entry is
+what a composer that had to preserve an underlying pattern would need; on
+**this** path a block is UNIFORM - the windowed renderer is monochrome by
+LUMINANCE, so each colour is seven lit pixels or seven dark ones - so its
+contribution is one seven-bit constant, `0x00` or `0x7F`, and `a2_band_lores`
+is one table read a nibble.
+
+**And "uniform" is this port's decision, not a fact about monochrome lo-res**,
+which is worth saying because it is the sentence a later wave would reason
+from. MII's own monochrome arm (`src/mii_video.c:567-586`, inside the range
+section 2 cites for the lo-res cell rule) does the opposite: it takes the
+4-bit colour, `reverse4`s it, replicates it (`c |= c<<4; c |= c<<8`),
+phase-shifts odd columns (`if (x & 1) c >>= 2`) and emits a per-pixel DOT
+PATTERN, which is what a real II+ on a mono monitor shows - `COLOR=5` is
+`%0101`, alternating pixels, not solid white. **This port deliberately does
+not do that on the windowed path**, and the reason is arithmetic: MII's
+pattern is a 14-pixel cell carrying the NTSC phase, and a 7-pixel 1bpp cell
+cannot carry it - half of it is not a dimmer version of it, it is a different
+colour. The 16 colours arrive with the foreign video mode (section 13).
+
+**THE PALETTE IS ONE THE REFERENCE ACTUALLY DISPLAYS**, and that is the whole
+of why it is MII's. This ladder first shipped off AppleWin's
+`PaletteRGB_NTSC` lores block (`source/RGBMonitor.cpp:149-164`) - and the
+line immediately above that block, `RGBMonitor.cpp:148`, reads *"Note: this
+is a placeholder. This palette is overwritten by VideoInitializeOriginal()"*.
+It is: `VideoInitializeOriginal` (`RGBMonitor.cpp:1186-1196`) `memcpy`s
+sixteen NTSC-generated colours over exactly that block, and `NTSC_VideoInit`
+(`NTSC.cpp:2366-2368`) calls it at start-up, so **AppleWin never puts those
+literals on a screen**. Nor can they simply be replaced with the ones that
+overwrite them: `GenerateBaseColors` (`NTSC.cpp:2697-2721`) runs a
+signal-level NTSC simulation - sixteen phases per colour, averaged - rather
+than listing values, so there is nothing to transcribe.
+
+So the definer is **MII's `palettes[0]`, "Color NTSC"**
+(`src/mii_video.c:94-113`) - a live table read straight into the CLUT MII
+renders through - taken through **MII's own lo-res mapping**,
+`mii_base_clut.lores[0]` (`src/mii_video.c:173-177`). *That second half is
+load-bearing*: MII's `CI_*` enum is not in Apple colour order (`CI_PURPLE` is
+1, and lo-res colour 1 is MAGENTA), so a table read by enum index rather than
+through the clut is scrambled. apple2emu's `Lores_colors`
+(`src/video.cpp:100-115`, the mrob.com values) is the **cross-check**: it is
+indexed by lo-res colour directly, agrees with MII exactly on twelve of the
+sixteen and within a few units on the rest, and **agrees on all sixteen
+lit/dark decisions**.
+
+**WHAT THE PLACEHOLDER COST WAS ON THE GLASS.** Under it purple came out at
+467 per mille and medium blue at 499, against a 500 threshold, so `GR :
+COLOR=3` and `GR : COLOR=6` drew **BLACK** - three of the sixteen colours
+decided by one part per mille of a palette no emulator shows. Under both live
+tables purple is **568** and medium blue **613**, and both are lit, which is
+what every reference this port names draws.
+
+**WHAT IS STORED IS THE RANK AND NOT THE LUMINANCE**, and that is arithmetic
+rather than taste. The figure compared is Rec.601 luma - `299R + 587G + 114B`
+- and a byte's own granularity is 0.39 % while the ladder has pairs closer
+than that, so ANY scaling of the figures into a byte ties an ordering the
+palette has. A monochrome composer asks only "is this lighter than that", so
+`a2_lum[]` is the RANK, `a2_lopat[]` is derived from it at launch, and
+**`tools/a2ref.py --lumcheck` is the independent gate**: it computes its own
+luminances from the same RGBs, **at full precision and not in per mille**, and
+requires all 256 ORDERED pairs to agree.
+
+**THE ONE TIE IS THE PALETTE'S OWN.** Grey 1 and grey 2 are the same three
+bytes (`0x9C,0x9C,0x9C`) in MII's table and in apple2emu's, so they share rank
+7; nothing else in the sixteen ties. The ranks are therefore **not dense** - 8
+is unused - which is correct and is what `--lumcheck` asserts.
+
+| colour | per mille | rank | | colour | per mille | rank |
+|---|---|---|---|---|---|---|
+| 0 black | 0 | 0 | | 8 brown | 376 | 1 |
+| 1 magenta | 378 | 3 | | 9 orange | 569 | 6 |
+| 2 dark blue | 376 | 2 | | 10 grey 2 | 611 | 7 |
+| 3 purple | 568 | 5 | | 11 pink | 760 | 11 |
+| 4 dark green | 418 | 4 | | 12 green | 614 | 10 |
+| 5 grey 1 | 611 | 7 | | 13 yellow | 815 | 14 |
+| 6 medium blue | 613 | 9 | | 14 aqua | 813 | 13 |
+| 7 light blue | 806 | 12 | | 15 white | 1000 | 15 |
+
+**THE THRESHOLD IS HALF OF WHITE**, `A2_LUM_LIT` = 5: the eleven colours from
+purple (568 per mille) up are lit and the five below it are dark.
+`a2ref.py` applies the same 500 to its own numbers, so a disagreement about
+one colour is a bit-for-bit frame mismatch rather than a matter of opinion.
+
+**The gate is only independent if the palette is TRANSCRIBED, and only
+meaningful if the palette is one that is SHOWN** - and wave 3's review is
+where both halves were learned. The ladder first shipped with dark green above
+brown, off an RGB - `0x00,0x80,0x2F` - that is in no reference at all:
+AppleWin's placeholder dark green (`0x00,0x80,0x00`) crossed with Le Chat
+Mauve Feline's (`0x00,0x83,0x2F`, `RGBMonitor.cpp:191`). `--lumcheck` was
+green because it carried the same adapted byte. Transcribing AppleWin's block
+exactly fixed *that* and left the deeper defect standing, because the block
+itself is a placeholder; the fix for both is a live table plus an independent
+one that agrees with it.
 
 **The character generator, and why 64 glyphs cover 128 bitmaps.** Decoding the
 pinned `Apple2_Video.rom` through AppleWin's own algorithm yields **128
@@ -847,7 +1014,71 @@ MIXED is the top 160 scan lines in the graphics mode and the bottom 32 in
 text, in **one 40-byte-stride frame with one shadow**. PAGE2 selects the
 second text page (`$0800`) or the second hi-res page (`$4000`). The mode
 dispatch is guarded by value (section 5.4); a mode change that actually
-changes the renderer marks the whole frame dirty.
+changes the RENDERER or the PAGE marks the whole frame dirty.
+
+**A MIXED FLIP IS NOT ONE OF THOSE**, and wave 3's review is where that was
+paid for. Flipping MIXED inside a graphics mode moves the renderer for rows
+`A2_MIXROW..23` and for **no** other row: `a2_row_mode(r)` for `r <
+A2_MIXROW` never reads `a2_v_mixed`, `a2_row_base` does not move and neither
+does the page. `a2_dirty_all()` there recomposed twenty rows from identical
+sources with the identical composer to produce identical pixels - **504.9 ms
+against 91.2** (section 7.9.3), which is the very defect the MIXED-in-TEXT
+guard beside it exists to stop, one condition along on the arm where the
+switch really does something. `a2_dirty_split()` marks the split's four rows
+and the status row, and it marks them **WHOLE and EXPLICITLY**: the rows
+arrive from the OTHER page each way - the text page on MIXED-on, the graphics
+page on MIXED-off - so neither the page bitmap nor the write window can be
+trusted to speak for them. It stays safe for the shift test because `a2_shsrc`
+is written only for TEXT rows and the test is refused unless `a2_v_text`, and
+every transition INTO `a2_v_text` moves `a2_mode_of()` and so still takes the
+full arm.
+
+**160 SCAN LINES IS TWENTY CHARACTER ROWS EXACTLY**, and that is what makes
+MIXED cost nothing structurally: the split falls on a row boundary, so no row
+is ever half one renderer and half the other, `a2_row_mode(r)` is a row test,
+and the flush's loop needs no partial case at all. Rows 0-19 take the
+graphics composer and rows 20-23 take `a2_band_text`.
+
+**AND THE MIXED TEXT ROWS READ THE TEXT PAGE, PAGE2 AND ALL.** One switch
+selects the second page for both halves on a real II+, so with PAGE2 set the
+graphics half is `$4000` and the text half `$0800` - `+$2000` on one map and
+`+$400` on the other, which is why `a2_row_base(r)` is one function rather
+than an offset each caller adds.
+
+**AND THOSE FOUR ROWS ARE OUTSIDE THE WRITE WINDOW'S RANGE**, which is the
+one thing about MIXED that is not free. The window is taken over the LIVE
+display page (section 7.5) and that is the GRAPHICS page in a graphics mode,
+so it can say nothing whatever about a write to `$0400`. Widening the watch
+range to cover both would span `$0400-$3FFF` - where an Applesoft program and
+every one of its variables live - and the per-row intersection would then
+answer "all forty cells" for every row of every flush, which is the whole
+thing the window exists to prevent. So a row outside the range is marked from
+the **page bitmap alone** and composed WHOLE: four rows, twenty groups, on any
+flush that carries a write to the text page. `a2_scan_range`'s `watched`
+argument is that arm, and a dirty scan that asked the window anyway would
+answer "the window does not reach this row" for every one of those writes and
+never draw them at all.
+
+**HI-RES IS MARKED ONE SCAN LINE AT A TIME, AND THE COMPOSER HONOURS IT.** A
+hi-res row group's eight lines are eight separate 40-byte ranges `$400` apart,
+so `a2_dirty_scan` asks about each one and an `HPLOT` that moves a pixel marks
+ONE of them. Wave 3 shipped only half of that: the flush's per-line loop
+skipped clean lines for the COMPARE and then called `a2_band_hires` for all
+eight anyway, so the narrowing delivered the compare and not the compose -
+**2.434 ms a group where 0.30 was owed**, on every row a single-scan-line plot
+crossed. `a2_band_hires` takes a **scan-line range** now (section 7.9.2) and
+the flush hands it the union of the row's dirty-or-forced lines, computed in
+the same pass that already walks all eight bits. **FORCED lines are in the
+union**, because the `!trust` arm draws `b0..b1` straight out of the band with
+no compare and a band row this flush never wrote is last flush's pixels. Text
+and lo-res take no range and want none: their eight pixel rows all come out of
+one source byte a cell.
+
+**ONLY A TEXT ROW CAN FLASH.** A lo-res byte of `$60` is two colour blocks
+and a hi-res byte of `$60` is three pixels; `a2_rowflash` is asked of a text
+row and nothing else, or a graphics row holding bytes in `$40-$7F` - which the
+ordinary picture does - would be force-composed 3.64 times a second for a
+phase that changes not one pixel of it.
 
 ### 7.5 The damage model
 
@@ -866,6 +1097,11 @@ Taken whole from `C64-SPEC §9.2`, with the mapping step replaced.
   `gline = (a & 0x7f)/40`, `line = (group + gline*8)*8`, mark 8 lines; hi-res
   hole = `(a & 0x78) == 0x78`, mark ONE line. **A hi-res write above the mixed
   line is dropped and a text write below it is kept.**
+- **AND HI-RES IS MARKED PER SCAN LINE** (wave 3). A hi-res row group's eight
+  lines are eight SEPARATE forty-byte ranges `$400` apart, so the scan asks
+  about each of them: one `HPLOT` writes one, and marking the row from it
+  would blit eight lines where the machine changed one. Measured at **1 blit
+  and 1 group** for one changed hi-res byte (section 7.9.1).
 - **THE MAPPING IS DONE ROW-WARD AND NOT ADDRESS-WARD** (wave 1), which is the
   same rule read from the other end and is cheaper. MII walks an ADDRESS to a
   line through the arithmetic above; `a2scr.c` walks the **24 rows** and asks
@@ -982,10 +1218,30 @@ the gfx lock only around itself:
    the harness's scroll case until that case flips the phase across the
    scroll. A non-flashing row's pixels are phase-independent, so the test
    stays exact and the cost is the rows that actually flash - one on an
-   Applesoft prompt, five groups. **The same hole opens on MODE**:
-   `a2_band_lores` and `a2_band_hires` are a third input the shadow does not
-   record, the test is refused outside TEXT today, and the wave that adds a
-   composer owns re-stating this. **`a2_flrow[]`
+   Applesoft prompt, five groups. **AND THE SAME HOLE ON MODE IS CLOSED THE SAME WAY** (wave 3, which is the
+   wave that added the composers and owed this): `a2_band_lores` and
+   `a2_band_hires` are a THIRD input `a2_shsrc[]` does not record, and a
+   lo-res screen and a text screen can hold byte-for-byte identical rows. So
+   `a2_sh_mkey` - the renderer, MIXED and PAGE2 in one int, written once at
+   the end of every flush beside `a2_sh_phase` - has to equal the flush's own
+   key before the test is asked. **MIXED enters that key only where it can
+   reach a pixel** (`!a2_v_text && a2_v_mixed`), which is the same statement
+   `a2_video_set`'s else-arm makes and is exact rather than a loosening: in
+   TEXT mode the split does not exist, so `POKE -16302,0` marks no row and
+   must not invalidate the shadow either - and every transition that makes
+   MIXED visible moves `a2_mode_of()`, which is in the key already. Unguarded,
+   a soft switch two files away call a no-op made the next flush refuse the
+   test over a shadow exactly as valid as it had been a moment before: if that
+   flush carried a scroll, a 24-row recompose and 24 blits, **~497 ms against
+   ~100**. The test is a **TEXT-mode** test besides
+   (`a2_v_text`, not `!a2_v_hires`: lo-res rows scroll like anything else and
+   are composed by another routine). The refusal costs one flush, and it is by
+   construction the flush a mode change has already marked every row of - so
+   every row of `a2_shsrc` is rewritten inside it and the flush after is exact
+   again. **`a2_shsrc` is maintained for TEXT rows only**, for the same
+   reason: forty source bytes of a hi-res row group describe ONE of its eight
+   scan lines, and recording them would be 0.31 ms a row spent on a proof
+   nothing is allowed to use. **`a2_flrow[]`
    IS SHIFTED WITH THE ROWS**: it is what a phase flip forces off, and it was
    correct before only because every row was being recomposed - the moment the
    composes stop, flashing text that has scrolled stops flashing. **AND THE
@@ -1129,16 +1385,78 @@ not a claim, because **the flush cannot refuse**. (It is lever 1 of section
 15.4 if the budget needs it, moved to a claim taken at fullscreen-LATCH time
 where a refusal is legal.)
 
-| adapter / tier | fullscreen |
-|---|---|
-| VGA | **2x both axes**, centred |
-| CGA 640x200 | **2x horizontal only** - a CGA pixel is already 2:1, so 1:1 draws the picture half as wide as it should be |
-| Hercules 720x348 | 2x horizontal, 1x vertical |
-| the `CPU_8086` tier | **1:1 centred**, whatever the adapter can hold |
+**AND "AT BLIT TIME" IS LITERAL: `a2_band_x2` is called from `a2_emit`, not
+from the compose loop.** The doubler is pure DRAW preparation, so it is owed
+by a row that puts pixels on the glass and by no other; on the compose side it
+was charged to every recomposed row, and a flush that recomposed the frame and
+blitted nothing still spent **24 x 10.59 = 254 ms** doubling it (section
+7.9.3's zero-draw row: **663.5 against 410.3**). That flush is ordinary - a
+mode switch that draws the same picture, the reset recompose, a rect-forced
+row whose pixels turn out identical, a MIXED flip.
 
-**The tier table is written FROM `tests/a2band`'s measured numbers in wave
-3**, and the same measurement decides whether the `CPU_8086` tier flushes
-every tick or every other one.
+**AND IT IS PER RUN, NOT PER ROW** - which is the other half of the same
+sentence, and wave 3's review is where it was finished. Moving the call to
+`a2_emit` and leaving it doubling all forty bytes and all eight scan lines
+fixed the flush that draws NOTHING and left the flush that draws a LITTLE
+exactly where it was: an ordinary keystroke at 2x emits one run seven band
+bytes wide over eight lines and paid for 320 source byte-rows where 56 were
+owed - **2.0 ms of work and 8.6 ms of waste, more than the rest of the
+keystroke put together** - and a single-scan-line `HPLOT` owed 0.40 ms and
+spent 10.59, **26x**. `a2_band_x2` therefore takes a BYTE COUNT as well as a
+row count and is handed the run's own rectangle, at the destination offset the
+blit two lines below computes from the same three terms.
+
+**The per-run form needs no latch, and that is why it is the right shape.**
+The runs of a row are disjoint rectangles, so doubling each one can never cost
+more than their union: "a row that produced three runs must not double three
+times" was a property the per-row latch (`a2_x2_row`) kept by hand, and it is
+now structural. The latch is deleted.
+
+| adapter / tier | fullscreen | what decides it |
+|---|---|---|
+| VGA 640x480 | **2x both axes**, centred | `640 >= 640` and `454 >= 384` |
+| CGA 640x200 | **2x horizontal only** - a CGA pixel is already 2:1, so 1:1 draws the picture half as wide as it should be | `640 >= 640`, `174 < 384` |
+| Hercules 720x348 | 2x horizontal, 1x vertical | `720 >= 640`, `322 < 384` |
+| the `CPU_8086` tier | **1:1 centred**, whatever the adapter can hold | `a2_band_x2` is 10.59 ms for a whole character row |
+
+**IT IS ARITHMETIC ABOUT THE LIVE CONTENT BOX AND NOT A LIST OF ADAPTERS**
+(wave 3). `a2_geom` asks two questions - is there room for 640 doubled pixels,
+and for 384 doubled scan lines - and the three rows above are what the three
+adapters answer. A `WF_FULL` window's content **is** its frame
+(`kernel/wm.inc`'s `wm_geom`), so the box it asks is the whole screen; at 638
+the first question could never be true, which is what the host harness's
+fullscreen stub had to be corrected to model.
+
+**THE TIER TABLE IS WRITTEN FROM `tests/a2band`'s MEASURED NUMBERS** (section
+7.9.1, and wave 3 took them):
+
+- **the `CPU_8086` tier gets 1:1**, because `BAND_X2 8r x 40b` is 29.500
+  counts - **10.59 ms** a character row, **254 ms** added to a whole-frame
+  repaint that is already 497 - for pixels that are twice the size and no more
+  informative. **The per-run change does not soften this**, and that is the
+  point of quoting it here: a whole-frame repaint draws every row at full
+  width, so the union of its runs IS the whole band and the tier's arithmetic
+  is unchanged. What the per-run change buys is the *small* draw, which is
+  every draw the tier table is not about;
+- **the `CPU_8086` tier flushes every OTHER tick**, because a full repaint is
+  496.8 ms against a host tick's 55: the pacing that costs nothing on a 386 is
+  a queue on an 8088, and the second flush inside one machine-visible change
+  is the whole cost of the first for pixels that were already right;
+- **the `CPU_8086` tier refuses the FLASH PHASE**, with the measured cost in
+  the greying (section 10.3): one flip is **43.1 ms** with two flashing rows
+  on the screen, and at 3.64 flips a second that is **157 ms in every second**
+  of an 8088 spent on the phase rather than on the 6502. It is `a2_fl_ok` that
+  is cleared - the same byte Machine > Flashing text moves - so the refusal
+  and the greying cannot disagree.
+
+**AND THE LATCH MOVES BEFORE THE CALL.** `OSAPI_FULLSCREEN` repaints the
+window whole and SYNCHRONOUSLY, so `os88_paint` - and `a2_geom` under it -
+runs NESTED inside it: with the latch still down, that repaint measures the
+new box at 1:1, draws all 192 lines, and the next flush draws them again at
+2x. Half a second of pure double-draw on every entry, invisible in a still
+screendump because the second picture is the right one.
+`apps/c64/c64.c`'s own order is latch, call, roll back on refusal, and this
+port takes it.
 
 **`OSAPI_FULLSCREEN` repaints synchronously in both directions**, so the
 success arm does nothing - a shadow-invalidate there is pure double-draw. It
@@ -1146,8 +1464,9 @@ is the **REFUSED** arm that owes a repaint.
 
 ### 7.9 The cost table
 
-**The graphics rows are PLANNED and are written from `make a2bandbench` in
-wave 3**, and again in wave 5 for the foreign rows. The bench runs under
+**The graphics rows below are MEASURED** - wave 3 took them from
+`make a2bandbench` and from the counts `hosttest/a2uitest.c` prints - and the
+foreign rows are wave 5's. The bench runs under
 `make test QEMU="qemu-system-i386 -icount shift=3"`, where **one PIT count is
 0.359 ms of a real 4.77 MHz XT**, which is where every millisecond in this
 document comes from and is why the foreign-mode measurement is not blocked on
@@ -1179,7 +1498,83 @@ the bench's, per operation; the millisecond column is `counts x 0.359`:
 | `ROWSIG 40 cells` - **BENCH-ONLY**, see below | 1.875 | 0.67 |
 | one row's forty SOURCE bytes (`a2_zcopy_out`) | = `ROWCOPY` | 0.31 |
 | `ROWFLASH 40 cells` | 2.875 | 1.03 |
-| `BAND_X2 8 rows` | 25.625 | 9.20 |
+| `BAND_X2 8r x 40b` (**wave 3's re-measure**, 25.625 / 9.20 as wave 1 first read it - the one row here that moved by more than an eighth of a count, and the tier table is written from this figure. The review re-measured it again at 29.500 after the routine gained a byte count: an eighth of a count, which is the two extra instructions a row) | 29.500 | 10.59 |
+
+#### 7.9.2 What wave 3 measured - the other two composers
+
+The same recipe, the same bench, the three composers side by side. The figures
+below are the **review's** re-measurement, taken after `a2_band_hires` gained
+a scan-line range and `a2_band_x2` a byte count. **The text and lo-res rows
+are wave 1's and are KEPT**: `BANDTEXT 5 groups` re-measures at wave 1's own
+**35.000**, and the one-group floors moved by a quarter of a count - the two
+`mov word [mem], imm` the composers now spend telling `a2_pack` which pixel
+rows to pack, 0.09 ms a call on the target.
+
+| row | counts/op | XT ms | per SOURCE byte |
+|---|---|---|---|
+| `BANDTEXT 5 groups` (40 source bytes) | 35.000 | 12.57 | **0.73 us** host / 0.314 ms XT |
+| `BANDTEXT 1 group` | 8.125 | 2.92 | |
+| `BANDLORES 5 groups` (40 source bytes) | 28.625 | **10.28** | **0.59 us** host / 0.257 ms XT |
+| `BANDLORES 1 group` | 6.750 | 2.42 | |
+| `BANDHIRES 5 groups x 8 lines` (320 source bytes) | 50.875 | **18.26** | **0.13 us** host / 0.057 ms XT |
+| `BANDHIRES 1 group x 8 lines` | 12.375 | 4.44 | |
+| `BANDHIRES 5 groups x **1 line**` (40 source bytes) | 7.125 | **2.56** | **0.14 us** host / 0.064 ms XT |
+| `BAND_X2 8r x 40b` - a whole character row doubled | 29.500 | **10.59** | |
+| `BAND_X2 1r x 7b` - ...and ONE RUN of one scan line | 1.125 | **0.40** | |
+| `BLIT1 640x16 stride 80` - the DOUBLED emit | 8.875 | **3.19** | |
+
+The bench prints the per-source-byte figure itself, beside each five-group
+row, rather than leaving it to be divided off the column: it is the figure
+that makes the three comparable, and it is the one this table is written from.
+
+Per GROUP and per CALL, which is what the cost model charges - taken from each
+composer's own pair, five groups against one:
+
+| composer | per group | call floor |
+|---|---|---|
+| `a2_band_text` | 6.719 counts, **2.412 ms** (wave 1 published 2.434 and the model keeps it) | 1.406 counts, 0.505 ms |
+| `a2_band_lores` | 5.469 counts, **1.963 ms** (wave 1 published 1.930 and the model keeps it) | 1.281 counts, 0.460 ms |
+
+**HI-RES IS THREE ROWS AND NOT TWO**, because it is the one composer that
+takes a **scan-line range** - hi-res is the mode the damage model marks a line
+at a time, and its eight lines are eight separate 40-byte source rows `$400`
+apart, where text and lo-res make all eight pixel rows out of ONE source byte
+a cell and have nothing to narrow. A group is therefore no longer one unit of
+work for it, and a two-point fit in groups alone prices a one-line call **23 %
+too high** - on the very call the range exists for. Three points fit it
+exactly:
+
+| `a2_band_hires` term | counts | XT ms |
+|---|---|---|
+| call floor | 0.875 | **0.314** |
+| per SCAN LINE, whatever it is wide | 0.234 | **0.084** |
+| per GROUP-LINE - the work itself | 1.203 | **0.432** |
+
+`0.875 + 8 x 0.234 + 40 x 1.203 = 50.875`, which is the five-group row exactly.
+A whole row group is **18.27 ms** and one scan line of it **0.918** - and
+until wave 3's review the composer charged the whole row group for a one-line
+`HPLOT`, **eight times the work the machine had asked for**, in the one mode
+whose damage model already knew better (section 7.4).
+
+**HI-RES IS THE DEAREST PER CALL AND THE CHEAPEST PER SOURCE BYTE, AND BOTH
+ARE TRUE OF THE SAME ROUTINE.** A full hi-res call composes EIGHT scan lines -
+320 source bytes - where a text or lo-res call composes one row's forty and
+gets eight pixel rows out of them, so the per-call figure is not comparable
+across the three and the per-byte one is.
+
+**AND `a2_band_x2` IS TWO TERMS**, for the same reason one call along: it
+takes a byte count and is called per RUN (section 7.8), so a floor and a
+per-source-byte-row cost are what price it. From the two `BAND_X2` rows:
+**0.490 counts / 0.176 ms** floor and **0.0907 counts / 0.0325 ms** a source
+byte-row, and `0.176 + 320 x 0.0325 = 10.58` is the whole-row row back to two
+places. An ordinary keystroke at 2x doubles 7 bytes over 8 lines - **2.0 ms**
+against the 10.59 the per-row form spent.
+
+**AND THE DOUBLED BLIT IS 1.8x THE PLAIN ONE FOR FOUR TIMES THE PIXELS**
+(3.19 ms against 1.75). It measured **111 ms** until the bench's own window
+was widened to the full 640: at 632 a 640-pixel blit does not fit and every
+one of those rows went down the CLIPPED path, which is not the path full
+screen takes. A measurement of a clip is not a measurement of the blit.
 
 **`ROWSIG` IS NOT ON ANY SHIPPING PATH AND IS NOT IN THE SHIPPING IMAGE.** The
 k-row shift test compares forty source bytes (section 7.7 step 2) and nothing
@@ -1226,18 +1621,34 @@ is recorded rather than smoothed: the composer is the cost, the tier table in
 wave 3 is written from it, and the four size levers in section 15.4 do not
 touch it.
 
+#### 7.9.3 The whole-operation rows wave 3 measured
+
+The same harness, the same model, with each composer charged its OWN figures
+above - pricing a hi-res row at the text composer's would be quoting one
+routine's measurement for another's work.
+
+| operation | XT ms | what it costs |
+|---|---|---|
+| a full 40 x 48 LO-RES repaint | **430.7** | 24 blits, 120 groups. Cheaper than the text screen's 496.8 for the same 24 rows, because a lo-res group is 1.997 ms against 2.434: two nibble reads and eight stores a cell, where text is a glyph pointer and a mask |
+| one changed LO-RES block | **8.9** | 1 blit, 1 group - the write window narrows a POKE to the one group its cell is in, exactly as in text |
+| a full 280 x 192 HI-RES repaint | **621.9** | 24 blits, 120 groups (960 group-LINES). The dearest picture this machine draws, and the reason the `CPU_8086` tier's flush pacing is every other tick. The scan-line range buys nothing HERE - every line is dirty - which is what makes the row a control on it |
+| **one changed HI-RES scan line** | **4.2** | **1 blit, 1 group, ONE group-line** - and the blit is one scan line, not eight. A hi-res row group's eight lines are eight separate ranges, so the dirty scan asks about each; marking the row from one write would blit eight lines where the machine changed one. It was **7.6** until wave 3's review, because the DRAW was narrowed and the COMPOSE was not: `a2_band_hires` composed all eight lines whatever the caller had marked, so an `HPLOT` that moves one scan line at a time paid **2.434 ms a group where 0.30 was owed** on every row it crossed. The composer takes a scan-line range now (section 7.9.2) and the flush hands it the union of the row's dirty-or-forced lines - FORCED included, because the `!trust` arm draws straight out of the band with no compare |
+| a MIXED screen: hi-res over four text rows | **91.2** | 4 blits, **20 groups**. The MIXED split moves rows `A2_MIXROW..23` and NO other row - `a2_row_mode(r)` for `r < A2_MIXROW` never reads `a2_v_mixed`, and neither `a2_row_base` nor the page moves - so `a2_dirty_split` marks the split's four rows WHOLE and nothing else. It was **504.9** with `a2_dirty_all` there (wave 3's review): 120 groups composed from identical sources by the identical composer to draw four rows that owed 20 |
+| clearing MIXED in hi-res, then setting it again | **108.6** / **91.2** | 4 blits, 20 groups each way. Both directions, because the four rows arrive from the OTHER page each time - the text page on MIXED-on, the graphics page on MIXED-off - and neither page may have a bit set, which is why `a2_dirty_split` marks the rows EXPLICITLY and marks them WHOLE. `POKE -16302,0 / POKE -16301,0` in a graphics mode is ordinary and a program that flips the split per frame used to pay ~500 ms of an 8088 each time |
+| a mode switch that draws the same picture | **305.0** | **0 blits**, 120 groups. A change that changes the renderer marks the whole frame (section 7.4) and the span compare is what decides that nothing moved: the compose is the cost and the draw is nothing |
+| eight soft-switch reads that change nothing | **0.0** | 0 blits, 0 groups. Every video switch is guarded BY VALUE (section 5.4); the C64 measured the unguarded form at 25 forced full-width blits, ~234 ms |
+| a one-row scroll in a GRAPHICS mode | **396.6** | 24 blits, 120 groups, and **no `gfx_scroll`**. The k-row shift test is a TEXT-mode test - the source shadow says nothing about which composer turned forty bytes into pixels - so a graphics screen that scrolls takes the span path. It is the honest price of the refusal and it is stated rather than hidden |
+| **entering full screen at 2x on VGA** | **783.6** | 24 doubled blits, 3 fills, 120 groups **and 24 `a2_band_x2` calls over 7,680 source byte-rows**. The doubling is 254 ms of it, which is what makes the `CPU_8086` tier 1:1 - and it does not move on the per-run change, because every row here draws at full width and the union of a row's runs is the whole band |
+| a fullscreen recompose that DRAWS NOTHING | **410.3** | **0 blits, 0 `a2_band_x2` calls**, 120 groups. The doubling is DRAW preparation and is charged on the draw side in `a2_emit` - so a row that produces no run costs nothing. With `a2_band_x2` beside `a2_band_text` on the compose side (wave 3's first cut) this same flush was **663.5**, spending 253 ms doubling a band no pixel of which was blitted. The case is ordinary: a mode switch that draws the same picture, the reset recompose, a rect-forced row whose pixels turn out identical |
+| **one changed cell at 2x** | **12.9** | 1 doubled blit, 1 group, **56 source byte-rows doubled** - the RUN's own rectangle, seven band bytes over eight scan lines. The same row priced with the per-ROW call is **21.5** - 320 byte-rows for a run that covered 56, the doubling then twice the entire rest of the keystroke - and that is arithmetic on the measured `BAND_X2` figures rather than a second run, because the only term that moves is the doubler's. The bound the harness asserts is 64 - eight bytes over eight lines - and anything wider is the per-row form back again |
+| a slice with no tick boundary (an idle wake) | **0.0** | nothing at all - the wake's flush is paced at most once per host tick, and a wake that finds nothing dirty draws nothing |
+
 Rows still to publish, in milliseconds and never in calls:
 
 | operation | measured in |
 |---|---|
-| one changed hi-res scan line | wave 3 |
-| a full 280 x 192 hi-res repaint | wave 3 |
-| a mode switch that draws the same picture | wave 3 |
-| eight soft-switch reads that change nothing | wave 3 |
-| entering fullscreen at 2x on VGA | wave 3 |
 | **ONE FOREIGN FRAME per FSX writer, against the windowed flush on the same change set** | wave 5 |
 | ONE TRACK CHANGE through the nibbliser | the Disk II follow-up |
-| a slice with no tick boundary | wave 3 |
 
 The model also charges what a call-count model hides, at
 PERFORMANCE.md's own arithmetic: **756 us a `gfx_*` call, 900 us a glyph
@@ -1493,11 +1904,11 @@ Are you sure you want to reboot?
 |---|---|
 | **Machine > Configure Slots...** , in this PR | `No Disk II in this build.` **The second sentence lands in WAVE 4**: `Load Program reads an Applesoft program, and Paste types a listing in.` is untrue of a build whose File > Load Program... and Edit > Paste are both greyed, and a greying that points the reader at two routes they cannot take is exactly the guess SPEC.md 47's rule 5 forbids |
 | Machine > Configure Slots... , once the Disk II follow-up lands: every slot but 6 | `Slot 6 holds a Disk II. There are no other cards in this port.` |
-| Machine > Joystick... (already `.disabled = 1` in MII's own menu table, which is the authentic grey) | `The paddles answer centre and there are no buttons in this build.` **The buttons sentence lands in WAVE 3**, which is the wave that reads them, and it says `F1 and F2 are the game buttons PB0 and PB1 - a departure from AppleWin's Left-Alt / Right-Alt.` (section 6.3: they are host conveniences, and *Open-Apple* / *Solid-Apple* are //e keyboard keys this machine does not have) |
+| Machine > Joystick... (already `.disabled = 1` in MII's own menu table, which is the authentic grey) | `The paddles answer centre. The game buttons PB0 and PB1 are F1 and F2 - a departure from AppleWin's Left-Alt / Right-Alt.` **WAVE 3 RESTORED THE SECOND SENTENCE**, because it is the wave that reads them: wave 1 shortened the fact to its first half rather than name a control the build did not have, which is rule 5's guess. They are host conveniences and GAME BUTTONS, not //e Apple keys - section 6.3 |
 | Machine > `Color NTSC`, folding MII's four other tint rows | `The window is monochrome.` **The colour sentence lands in WAVE 5**, which is the wave that writes the foreign video mode: `Colour is in the foreign video mode - Machine > Toggle Fullscreen on a VGA.` names a route that does not exist in this build, and rule 5 is that a greying states a fact rather than a promise |
 | Machine > `Mute`, until the speaker lands | `There is no speaker in this build.` - and it is `a2_have_snd` that greys it, never a `D` baked into the literal, so wave 5 revives the row with nothing else moving |
 | Machine > `Louder`, folding MII's `Quieter` | `The Apple's speaker is a one-bit toggle. There is no volume on it.` - PERMANENT, and the one audio row that stays greyed after wave 5 |
-| Machine > `Flashing text`, **on the `CPU_8086` tier only** | `Flashing forces a text repaint 3.6 times a second. On a 4.77 MHz 8088 that is <measured> ms each time and the machine would spend it on the phase rather than on the 6502.` **Wave 2's harness measures one flip at 43.1 ms with TWO flashing rows on the screen** (section 7.9.1 - wave 1 read 65.6 with three of `a2_selftext()`'s own, and that scaffolding is deleted), which at a 274.6 ms toggle is 157 ms/s; the number in the greying is filled in from wave 3's bench, when the tier table is written, and until then the item is LIVE on every tier - refusing on a figure nobody has taken on the machine that would refuse would be the guess SPEC.md 47 forbids |
+| Machine > `Flashing text`, **on the `CPU_8086` tier only** | `Flashing forces a text repaint 3.6 times a second. On a 4.77 MHz 8088 that is 43.1 ms each time and the machine would spend it on the phase rather than on the 6502.` **THE NUMBER IS FILLED IN AND THE ROW IS GREYED, FROM WAVE 3** (the tier table, section 7.8): the harness measures one flip at 43.1 ms with TWO flashing rows on the screen and at 3.64 flips a second that is 157 ms in every second of an 8088. Until this wave the item was LIVE on every tier, because refusing on a figure nobody had taken would have been the guess SPEC.md 47 forbids. **It is `a2_fl_ok` that both refuses and greys** - `a2_tier_init` clears it and `a2_menu_state` reads the tier beside it - so the refusal and the greying cannot disagree, and the row is greyed UNMARKED rather than greyed with a tick still beside it |
 | CPU > Fast: 3.5MHz | `There is no speed control in this build. The core runs the whole of each wake's slice and the status row reports what that came to.` **It read `This machine runs at 1.02 MHz. Warp is this port's speed control and is beside it.` through wave 2's first form, and that is a claim about the MACHINE which the status row on the same screen refutes**: there is no throttle here at all - `a2_slice` runs `a2_budget` cycles a wake - and the measured figure is 2,180 % on the VGA desktop and 2,775 % on CGA. A greying may state what the BUILD does not have; it may not state a speed the glass above it contradicts (SPEC.md 47 rule 5). The `Warp` half went with it: the row it pointed at is greyed too, so it named a route the reader cannot take |
 | CPU > Step, CPU > Next | `There is no debugger in this port.` |
 | `.NIB`, `.WOZ`, `.2MG`, `.HDV` on the disk dialog's refusal, named rather than silently rejected (the follow-up PR) | `This build reads a 143,360-byte .DSK, .DO or .PO. A .WOZ is a flux image and needs a bit-cell model - a decision every four emulated cycles, which on a 4.77 MHz 8088 is the difference between a slow emulator and a stopped one.` |
@@ -1615,6 +2026,32 @@ repaints the window whole and SYNCHRONOUSLY, so that paint runs NESTED inside
 the call: the panel comes down FIRST there, its rect handed on as damage, and
 the REFUSED arm owes those rows a draw because the kernel did nothing at all.
 `apps/c64/c64.c`'s `c64_fullscreen_toggle` carries the same fix.
+
+**THE HOLD RANGE IS IN APPLE SCAN LINES AND THE PANEL'S RECT IS IN SCREEN
+PIXELS, AND AT 2x THOSE ARE NOT THE SAME THING.** This is the second place the
+two coordinate systems cross - `a2_blank_rect` is the first - and wave 3
+taught only the first of them. `ovl_about_geom` converted its rect with no
+divide by `a2_sch` and set the panel's width to the constant `A2_BANDW`, so at
+VGA fullscreen it **held Apple lines [131,191] while covering [66,125]: two
+DISJOINT ranges**. Every one of the 62 lines under the opaque card was
+recomposed and blitted straight over it on the next flush - eight rows of
+compose and eight blits of pure waste per flush, for as long as the card was
+up, which is exactly the double-draw the hold exists to prevent - and 65 lines
+the panel did not cover were held and never drawn, so the bottom third of the
+picture froze. The panel is `a2_gbw` wide now and placed at `a2_gsx`, so "as
+wide as the band" is true at both magnifications, and the conversion divides
+by `a2_sch` at the one place it happens.
+
+**IT HOLDS ONLY LINES THE PANEL COVERS WHOLLY, AND IT IS SNAPPED TO THE APPLE
+LINE GRID SO THAT THERE ARE NONE OTHER.** At 2x an Apple line is two screen
+rows and the card's edge can fall inside one: a held line the panel does not
+cover freezes a sliver, and an unheld line it does cover is drawn over the
+card. `ovl_about_geom` rounds the panel's top and height to the grid at 2x -
+at most one screen pixel of movement - so the two sets are identical and
+neither case exists. `a2uitest` asserts the conversion by hand at 2x and then
+watches every blit of a whole-frame flush: a blit landing on a held line is a
+failure. Nothing saw this before, because the harness had fullscreen rows and
+About rows and never crossed them.
 
 **AND ITS CLOSE TESTS THE BORDER AND THE STATUS ROW RATHER THAN ASSUMING
 THEM.** `a2_about_close` invalidated both unconditionally, which cost 42 glyph
@@ -1958,13 +2395,45 @@ undoes the shift on quotient and remainder both, and
 the arithmetic and checks each against what it should read, with a 12,000 %
 case that must hit the clamp. Section 9 is the field's contract.
 
-**What is still to come**, on this document's own per-file terms: the three
-composers' other two (`a2_band_lores`, `a2_band_hires`, ~+1,400 with the shared
-accumulator), MIXED and PAGE2 and the tier table, the rest of the keyboard, the
+**What is still to come**, on this document's own per-file terms: the
 clipboard pair, Load and Save Program, the speaker's estimator and
 `a2fsx.inc`'s three raster writers (~+2,000). The planned total below still
 stands as the number to watch; what wave 2 removes is the risk that the port
 would hit the ceiling mid-feature, which is how CWORD lost time twice.
+
+### 15.0.1 END OF WAVE 3, MEASURED
+
+| | end of wave 2 | end of wave 3 | moved |
+|---|---|---|---|
+| resident image | 28,396 | **31,426** | **+3,030** |
+| bss | 12,240 | **13,604** | **+1,364** |
+| **resident total** | 40,636 | **45,030** of 61,440 | **+4,394**, 16,410 spare |
+| `APPLE2.OVL` | 883 | **996** | +113 |
+| resident shims | 8 | **8** | unchanged |
+| largest C frame | 46 | **54** bytes | the 96-byte cap |
+| the FILE on disk | 43,520 | **46,080** (image + `APPLE2.ROM`'s 14,848 and the header) | `WIRE_FILEMAX` 64,512 |
+
+The figures are the REVIEW's, which moved the image +302 and the overlay +113
+over the wave's own first cut (31,124 / 883): `a2_band_hires`'s scan-line
+range, `a2_band_x2`'s byte count, `a2_pack`'s row range, `$C063`'s shift-key
+mod, and the About panel's magnification arithmetic - which is overlay code
+and is where the 113 went.
+
+**9,970 UNDER THE 55,000 SPLIT TRIGGER and 8,970 under the end-of-wave-5
+ceiling of 54,000**, so **lever 1 is NOT pulled this wave** (section 15.4):
+`a2_x2b`, the doubled band, stays in bss where the flush cannot refuse it
+rather than moving to a claim taken at the fullscreen latch.
+
+**WHERE THE 3,964 WENT.** The image took the two composers and the shared
+`a2_pack` they and the text one now call (the extraction gave a third of that
+back), the mode dispatch and the row-base and row-mode functions, the
+magnification arithmetic, the per-scan-line hi-res dirty scan and the game
+buttons' poll. The bss took **1,280 of `a2_x2b`** - sixteen rows of 80, the
+doubled band - plus the 48-byte hi-res row map, the 16-byte lo-res pattern
+table and the mode key. The estimate this document carried for the composers
+was **~+1,400 with the shared accumulator** against an actual ~+1,500 of
+composer, which is the one number in section 15.2 that can be checked against
+a measurement rather than against another estimate.
 
 ### 15.1 The headline - PLANNED
 
@@ -2233,11 +2702,11 @@ GUI emulator cannot assert a boot.
 
 | | what it does |
 |---|---|
-| `apps/apple2/build.sh` | the host checks, each of which **stops the build**, run through a stamp file that is a prerequisite of `apple2.raw.asm`: `getapple2rom.py --check`; `a2ref.py --romshape`; `a2uitest`; `a2ref.py --check <explicit mode list>` (TWICE in wave 1, once per FLASH PHASE) + `--selftest`; `a2memtest.sh`; and the `a2_say()` literal walk **with an explicit expected MINIMUM**. **Every step FAILS rather than passing when its subject is absent** - `--check` takes an explicit mode list and wave 1 asks for text alone, so a step whose subject does not exist yet fails instead of printing green. **`--lumcheck` is NOT called until the wave that writes the lo-res composer**, for that same reason one level along: it is implemented in `a2ref.py` from wave 1 and fails on an absent or short table, and calling it over a ladder that does not exist would be the green pass these harnesses are built not to print |
+| `apps/apple2/build.sh` | the host checks, each of which **stops the build**, run through a stamp file that is a prerequisite of `apple2.raw.asm`: `getapple2rom.py --check`; `a2ref.py --romshape`; `a2uitest`; `a2ref.py --check <explicit mode list>` - **FIVE frames from wave 3**: text on each FLASH PHASE, then lo-res, hi-res and a MIXED screen, which is a graphics composer and the text one in one frame - plus `--selftest` on text and on hi-res, `--lumcheck`, `a2memtest.sh`, and the `a2_say()` literal walk **with an explicit expected MINIMUM**. **Every step FAILS rather than passing when its subject is absent** - `--check` takes an explicit mode list, so a mode whose composer does not exist yet fails instead of printing green, and `--lumcheck` was NOT called until the wave that wrote the ladder it reads |
 | `apps/apple2/hosttest/os88.h` | the stub SDK - the same structs and constants as `apps/cc/os88.h`, only the prototypes the program calls, no `long`/`float` poison (the host needs `printf`), **plus every new thunk's prototype in the SAME edit that adds the thunk**. It is a second copy of an interface and it will drift; when it does the harness fails to COMPILE, which is the failure you want |
 | `apps/apple2/hosttest/a2uitest.c` | the whole program against that stub, with a **PIXEL model of the glass**: `gfx_blit1` writes real pixels, `gfx_scroll` fills the vacated rows with **GARBAGE**, and after every driven step it asserts pixel for pixel over the whole 320x192 that **the glass shows what the shadow says it shows**. **Every drawing primitive asserts BOTH of its preconditions**: the gfx lock, whose absence hangs the machine dead, and **an armed CLIP REGION**, whose absence draws over somebody else's window and shows up in no screendump taken afterwards. The region is modelled as the kernel scopes it - armed by `clip_set`, dead at the next `gfx_unlock` - so one lock hold's clip cannot vouch for the next one's drawing. **It drives the flash phase across a flip** and asserts that exactly the lines whose text rows hold `$40-$7F` bytes were forced, and that a flip landing in the same flush as a narrow write still composes the flashing rows whole. It drives **a partial expose with the About panel up**, **a content box that changes size with it up**, **`Toggle Fullscreen` with it up**, **the fullscreen chords in both directions**, **the same status message twice**, **a `clip_set` REFUSAL**, and **a one-row scroll on the 111-line band a 640x200 desktop gives**. Prints the cost table in milliseconds. Compiled `-DA2_HOST`, which keeps the counters out of the shipping image. **Verify the stubs model what the machine does** - the C64's `blit1` stub REFUSED for a whole wave, so the cost table priced the fallback and nobody noticed |
-| `tools/a2ref.py` | an **INDEPENDENT pixel-level reference compositor** in Python, written from AppleWin's `NTSC_CharSet.cpp`, apple2emu's `video.cpp` and MII's `mii_video.c` - **never from `a2band.inc`**. Also asserts the pinned ROM's measured shape (`--romshape`: 128 distinct 8-byte bitmaps, block `$00` = block `$80` XOR `$7F`). The harness compares **bit for bit**. This is the file that catches a composer whose transcription is correct and whose assembly is not. `--selftest` injects a one-bit defect and requires the compare to FAIL |
-| `apps/apple2/hosttest/a2memtest.asm` + `.sh` | `a2mem.inc`'s and `a2band.inc`'s string loops on a real x86 with SS != DS and an ES sentinel, in raw QEMU, with **four negative controls** - one each for ES, DF, BP and DS. In `build.sh`, because it takes seconds. From the Disk II wave it also covers the segment arithmetic that reaches a track inside a claim larger than 64KB |
+| `tools/a2ref.py` | an **INDEPENDENT pixel-level reference compositor** in Python, written from AppleWin's `NTSC_CharSet.cpp`, apple2emu's `video.cpp` and MII's `mii_video.c` - **never from `a2band.inc`**. **All three composers and MIXED** from wave 3, off the state file's own mode bytes. Also asserts the pinned ROM's measured shape (`--romshape`: 128 distinct 8-byte bitmaps, block `$00` = block `$80` XOR `$7F`) and the lo-res **luminance ladder** over all 256 ordered pairs (`--lumcheck`), against luminances it derives from MII's `palettes[0]` "Color NTSC" (`src/mii_video.c:94-113`) through MII's own lo-res mapping (`:173-177`) rather than from the package's table - apple2emu's `Lores_colors` being the cross-check that agrees on every lit/dark decision. The harness compares **bit for bit**. This is the file that catches a composer whose transcription is correct and whose assembly is not. `--selftest` injects a one-bit defect and requires the compare to FAIL |
+| `apps/apple2/hosttest/a2memtest.asm` + `.sh` | `a2mem.inc`'s and `a2band.inc`'s string loops on a real x86 with SS != DS and an ES sentinel, in raw QEMU, with **four negative controls** - one each for ES, DF, BP and DS. **All THREE composers from wave 3**, each against hand-computed packed bytes: it is the only gate that runs the SHIPPING ASSEMBLY rather than a second transcription of it, which is what `a2uitest` and `a2ref.py` between them cannot be. In `build.sh`, because it takes seconds. From the Disk II wave it also covers the segment arithmetic that reaches a track inside a claim larger than 64KB |
 | `apps/apple2/hosttest/a2cputest.asm` + `.sh` | section 4.4's twelve rows. `make a2cputest`, minutes, **not** in `build.sh` |
 | `tests/a2band/a2bandbench.asm` | the composers' icount bench on `tests/benchlib.inc`, `make a2bandbench`. **Driven under plain `-icount shift=3` and NOT `sleep=off`** (section 7.9). Per CELL, per SOURCE BYTE and per CALL in microseconds for all three composers plus `rowspan`/`rowcopy`/`rowsig`/`band_x2` - and, from wave 5, **per foreign FRAME for each FSX writer against the windowed flush on the same change set**. **The tier table and the cost table are written from these numbers.** It arms the clip on its rerun callbacks, saves ES around every blit, and preflights `OSAPI_GFX_BLIT1` |
 | `tests/apple2.py`, `tests/apple2part.py` | registered in `tests/suite.py`, or the fast tier's own registration row fails the build. `apple2part.py` is `c64part.py`'s shape: `APPLE2.ROM` is NOT a file on the disk; the package file is image + 14,848; `os88_part_seg(0)` is the segment the C put in the machine record; three windows of the ROM read out of the guest equal `build/apple2-rom/APPLE2.ROM` byte for byte; the RESET vector at `$FFFC` reads `$FA62`; **and the CHARGEN table and the reverse table exist after `os88_main` and BEFORE any wake** - the negative control for keeping them off the overlay |
