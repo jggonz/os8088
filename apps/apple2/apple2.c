@@ -287,6 +287,13 @@ unsigned char a2_chr[512];
 #define A2_X7(i)  ((((unsigned)(i)) << 3) - ((unsigned)(i)))
 #define A2_X8(i)  (((unsigned)(i)) << 3)
 
+/* --- the monitor's zero page, where the SCREEN's own state lives ---------- */
+/* CV, the cursor's character row (0-23), written by the Autostart ROM's COUT
+ * and by VTAB/HOME. It is what the visible band follows on a desktop too
+ * short to hold all 192 scan lines (a2scr.c's a2_geom, APPLE2-SPEC section
+ * 7.1) - read AS RAM, never through a soft switch. */
+#define A2_CV   0x0025
+
 /* --- the display pages (section 7.2) -------------------------------------- */
 #define A2_TXT1 0x0400                      /* text/lo-res page 1 */
 #define A2_TXT2 0x0800                      /* ...and page 2 */
@@ -1960,9 +1967,10 @@ void *os88_main(void)
     /* ASK THE ADAPTER, DO NOT ASSUME (os88.h, SPEC.md 39). A2_CONT_H is 218
      * and that is a 480-line number: on a 200-line CGA desktop dock_top is
      * 176 and the window cannot have it. The window asks for what the desktop
-     * can give, and a2_geom anchors what it got to the BOTTOM of the Apple
-     * frame - which is where the `]` cursor line and MIXED's four text rows
-     * both are (APPLE2-SPEC section 7.1's bottom anchor). */
+     * can give, and a2_geom anchors what it got to the row the Apple's own
+     * CURSOR is on, which is the one row a reader needs and is NOT at the
+     * bottom of a machine that has not scrolled yet (APPLE2-SPEC section
+     * 7.1's cursor anchor). */
     os88_video(&vid);
     wh = A2_W_H;
     if (vid.dock_top > 0 && A2_W_Y + wh > vid.dock_top)

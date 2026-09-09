@@ -180,9 +180,14 @@ static int a2_gbw, a2_gbh;                  /* ...and what the band therefore
                                              * A2_BANDW */
 static int a2_gsty;                         /* the status row's y */
 static int a2_gl0;                          /* the FIRST Apple scan line that
-                                             * is on the glass - THE BOTTOM
+                                             * is on the glass - THE CURSOR
                                              * ANCHOR (section 7.1) */
 static int a2_gnl;                          /* ...and how many of them fit */
+static int a2_gl0_moved;                    /* ...and it MOVED, so every line
+                                             * of the glass now shows a
+                                             * different Apple line and the
+                                             * shadow describes none of them
+                                             * (a2_flush consumes this) */
 
 /* --- the flash phase (section 7.6) ---------------------------------------- */
 /* 16 frames at 60 Hz is ~267 ms, which is ~5 host ticks at 18.2 Hz. */
@@ -633,15 +638,46 @@ static void a2_tier_init(void)
 }
 
 /* ==========================================================================
- * THE GEOMETRY - AND THE BOTTOM ANCHOR IS A CORRECTNESS REQUIREMENT
+ * THE GEOMETRY - AND THE ANCHOR IS A CORRECTNESS REQUIREMENT
  * ========================================================================*/
 /* On a 640x200 desktop os88_video().dock_top is 176, so the window is clamped
- * to about 156 rows of content and only ~114 of the Apple's 192 scan lines
- * fit. The visible band therefore anchors to the BOTTOM of the Apple frame,
- * because the `]` cursor line and MIXED's four text rows are both there
- * (APPLE2-SPEC section 7.1). Anchoring to the top would show the Apple's
- * empty upper screen and hide the prompt, which is the one thing a reader
- * needs to see.
+ * to 137 rows of content and only 111 of the Apple's 192 scan lines fit - so
+ * SOMETHING has to be chosen, and which 111 is a correctness question rather
+ * than a preference (APPLE2-SPEC section 7.1).
+ *
+ * IT FOLLOWS THE CURSOR, and the fixed BOTTOM anchor this replaced is what
+ * made the port look DEAD on the one adapter class it most needs to work on.
+ * The reasoning that shipped was "the `]` cursor line and MIXED's four text
+ * rows are both at the bottom", and the first half of that is FALSE of a
+ * machine that has not scrolled yet: the Autostart ROM's cold start prints
+ * `APPLE ][` on row 0 and leaves the cursor around row 2, so on a 640x200
+ * desktop - where a2_gl0 was 81 and the glass began at row 10 - the banner,
+ * the prompt and every line of a short session were composed, blitted and
+ * landed off the visible band. The window was BLACK on launch, `PRINT 6*7`
+ * answered into pixels nobody could see, and the status row went on reading
+ * TEXT and 2,000% beside it. It took thirty Returns to scroll the prompt down
+ * to row 23 before one character appeared
+ * (build/port-shots/cga-diag-returns.png), which is also why wave 3's own CGA
+ * evidence looked fine: its `scrolled` shot had run a FOR loop first.
+ *
+ * So the band holds the CURSOR ROW, which is the one row a reader needs, and
+ * it MOVES ONLY WHEN IT HAS TO. CV ($25) is the monitor's own cursor row and
+ * is read as RAM; while row CV is wholly inside the band the anchor does not
+ * move at all, and when it leaves, the anchor moves the LEAST it can to bring
+ * it back - which is what makes an ordinary session pay for it about once.
+ * A fresh boot keeps a2_gl0 at 0 and shows rows 0-13; a session that scrolls
+ * walks the cursor to row 23 and the anchor arrives at 81, where the old code
+ * started, and stays. It costs a full repaint of the band each time it moves
+ * (~290 ms on the target for the 14 visible rows), because the shadow is
+ * indexed by APPLE scan line and a moved anchor puts every one of them at a
+ * different screen y - so `HOME : VTAB 20 : PRINT` in a loop pays it twice an
+ * iteration. That is the price of showing the user what they typed, and the
+ * shape that pays it is a program the reader is not typing at.
+ *
+ * IT IS A TEXT-MODE RULE. There is no cursor in lo-res or hi-res, and in
+ * MIXED the interactive part is the four text rows at the bottom, so both
+ * keep the bottom anchor - which for MIXED is the same row range the cursor
+ * would have chosen.
  *
  * `& ~7` on the horizontal offset is not cosmetic: os88_wm_snap put the
  * content origin on a cell boundary and OSAPI_GFX_SCROLL refuses a rect whose
@@ -651,7 +687,7 @@ static int a2_geom(void *win)
 {
     static struct os88_pt org;
     static struct os88_size sz;
-    int d, avail;
+    int d, avail, lim, ngl0, cl0;
 
     if (os88_wm_geom(win, &sz) < 0)
         return -1;
@@ -714,7 +750,50 @@ static int a2_geom(void *win)
     a2_gnl = (a2_sch == 2) ? (avail >> 1) : avail;
     if (a2_gnl > A2_SCRH)
         a2_gnl = A2_SCRH;
-    a2_gl0 = A2_SCRH - a2_gnl;              /* THE BOTTOM ANCHOR */
+
+    /* THE CURSOR ANCHOR, and this file's header is why it is not the bottom
+     * one. `lim` is the lowest legal anchor, so a band that holds the whole
+     * frame has exactly one answer and never reads CV at all. */
+    lim = A2_SCRH - a2_gnl;
+    ngl0 = a2_gl0;
+    if (ngl0 > lim)
+        ngl0 = lim;                         /* the window grew */
+    if (ngl0 < 0)
+        ngl0 = 0;
+    if (lim > 0) {
+        if (a2_v_text) {
+            cl0 = a2_rd(A2_CV) & 0xFF;      /* CV: the monitor's own cursor
+                                             * row, read AS RAM */
+            if (cl0 >= A2_ROWS)
+                cl0 = A2_ROWS - 1;          /* a program that put junk in $25 */
+            cl0 = (int)A2_X8(cl0);
+            /* ...AND WHEN IT HAS TO MOVE, THE CURSOR ROW GOES TO THE BOTTOM
+             * OF THE BAND, whichever way the cursor went. Putting it at the
+             * TOP when it went up is the obvious other spelling and it is
+             * wrong for this machine: what a reader wants beside the cursor
+             * is the HISTORY, which is above it. On a cold start CV is 2 and
+             * the ROM's `APPLE ][` banner is on row 0, so a top-anchored
+             * move hid the banner one row up while showing thirteen blank
+             * rows below - and the clamp turns the same arithmetic into
+             * "line 0, show everything" for free. */
+            if (cl0 < ngl0 || cl0 + 8 > ngl0 + a2_gnl)
+                ngl0 = cl0 + 8 - a2_gnl;
+            if (ngl0 > lim)
+                ngl0 = lim;
+            if (ngl0 < 0)
+                ngl0 = 0;
+        } else {
+            ngl0 = lim;                     /* no cursor in lo-res or hi-res,
+                                             * and MIXED's four text rows are
+                                             * at the bottom anyway */
+        }
+    }
+    if (ngl0 != a2_gl0) {
+        a2_gl0 = ngl0;
+        a2_gl0_moved = 1;                   /* every visible line now shows a
+                                             * different Apple line: a2_flush
+                                             * turns this into a2_sh_inval */
+    }
     a2_gbh = (a2_sch == 2) ? (a2_gnl << 1) : a2_gnl;
     a2_gsy = org.y + A2_BORDER + (avail - a2_gbh) / 2;
     return 0;
@@ -1146,9 +1225,10 @@ static void a2_status(void)
  *
  * `r0` IS THE FIRST ROW THE GLASS HAS EVER SHOWN, and it is a parameter
  * rather than 0 because a2_shsrc[] only exists for rows the flush has
- * COMPOSED. On a 640x200 desktop a2_gl0 is 81, so the bottom anchor puts the
- * first TEN character rows entirely off the top of the content box (row 10 is
- * the partial one and is composed); their shadow sources are permanently 0,
+ * COMPOSED. On a 640x200 desktop a2_gl0 reaches 81 once a session has
+ * scrolled, and the anchor then puts the first TEN character rows entirely off
+ * the top of the content box (row 10 is the partial one and is composed);
+ * their shadow sources are permanently 0,
  * and comparing them against live memory made the test answer "no shift" on
  * every screen - which is the CGA arm of the very case this routine exists
  * for. */
@@ -1333,8 +1413,8 @@ static void a2_emit(void)
             a2_font_row = a2_run_row;
             fy = (int)A2_X8(a2_run_row);
             if (fy < a2_gl0)
-                fy = a2_run_l0;             /* the bottom anchor cut this
-                                             * row's top off the glass */
+                fy = a2_run_l0;             /* the anchor cut this row's
+                                             * top off the glass */
             fy = fy - a2_gl0;
             if (a2_sch == 2)
                 fy = fy << 1;
@@ -1359,6 +1439,15 @@ static void a2_flush(void *win)
 
     if (a2_geom(win) < 0)
         return;
+    /* THE ANCHOR MOVED, so the shadow describes NOTHING on the glass: it is
+     * indexed by Apple scan line and every one of them is now drawn at a
+     * different screen y. a2_geom is called twice a wake - once for the
+     * covered test in os88_onwake and once here - so the flag is STICKY and
+     * this is the one place that spends it. */
+    if (a2_gl0_moved) {
+        a2_gl0_moved = 0;
+        a2_sh_inval();
+    }
     a2_sig_ok = 0;
     a2_src_r0 = A2_ROWS;
     a2_font_row = -1;
@@ -1672,8 +1761,8 @@ static void a2_flush(void *win)
         for (s = 0; s < 8; s++) {
             line = (int)A2_X8(r) + s;
             if (line < a2_gl0)
-                continue;                   /* the bottom anchor: this line is
-                                             * not on the glass */
+                continue;                   /* the anchor: this line is not
+                                             * on the glass */
             if (a2_line_is(a2_lnf, line))
                 rowf = 1;
             if (a2_line_is(a2_lnd, line) || a2_line_is(a2_lnf, line)

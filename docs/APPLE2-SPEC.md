@@ -852,11 +852,19 @@ same answer - `kbm_key` (`kernel/mouse.inc`) intercepts one of those keys when
 and only when no mouse has spoken AND ScrollLock is off, and an intercepted
 key never reaches `os88_onkey`.
 
-**THREE CONSECUTIVE POLLS**, because a wake posted BEFORE a press is
-dispatched ahead of the key event behind it, so one poll can legitimately see
-the ISR's bit with the `W_ONKEY` still queued. **The latch is ONE WAY** - a
-kernel that has delivered one of those keys is not going to start eating
-them - and the message is said **once a session** (SPEC.md 47):
+**THREE CONSECUTIVE POLLS AND FOUR TICKS**, because a wake posted BEFORE a
+press is dispatched ahead of the key event behind it, so a poll can
+legitimately see the ISR's bit with the `W_ONKEY` still queued. **The POLL
+COUNT ALONE WAS NOT ENOUGH and QEMU caught it**: a wake runs about 1,400 times
+a second on a fast host, so three consecutive polls span about two
+MILLISECONDS - far inside that gap - and the first Space of `PRINT 6*7` put
+this message in the status row of a machine that HAS a mouse and was eating
+nothing. So the window is measured in TICKS: `A2_KBM_TICKS` is 4, ~220 ms,
+which is longer than any keystroke takes to come back round as an event and
+shorter than a press somebody is holding to move a pointer with. The poll count
+stays as the cheap half. **The latch is ONE WAY** - a kernel that has delivered
+one of those keys is not going to start eating them - and the message is said
+**once a session** (SPEC.md 47):
 
 ```
 ScrollLock: arrows, Space.
@@ -878,14 +886,51 @@ ScrollLock: arrows, Space.
 | origin | `os88_wm_snap` puts the content x on a cell boundary, which is what lets `OSAPI_GFX_SCROLL` accept the rect |
 | height | **asked against `os88_video().dock_top`**, on `apps/c64/c64.c:1684`'s shape. A 200-line desktop cannot give 218 |
 
-**THE BOTTOM ANCHOR, and it is a correctness requirement rather than a
-preference.** On a 640x200 desktop `dock_top` is 176 and only about **114 of
-the Apple's 192 scan lines fit**. The visible band therefore anchors to the
-**BOTTOM** of the Apple frame, because the `]` cursor line and MIXED's four
-text rows are both there. **Machine > Toggle Fullscreen** is the stated route
-to the whole frame - the bar has no submenu mechanism at all (section 10.1), so
-there is no `Video` menu for it to hang under and the row is folded into
-Machine.
+**THE CURSOR ANCHOR, and it is a correctness requirement rather than a
+preference.** On a 640x200 desktop `dock_top` is 176, the content box is 137
+tall and only **111 of the Apple's 192 scan lines fit**, so *which* 111 is a
+question the port has to answer. The visible band **holds the character row
+the Apple's own cursor is on** - `CV`, zero page `$25`, read as RAM - and
+moves only when that row leaves it. **Machine > Toggle Fullscreen** is the
+stated route to more of the frame - the bar has no submenu mechanism at all
+(section 10.1), so there is no `Video` menu for it to hang under and the row
+is folded into Machine - and even at full screen a 200-line adapter cannot
+show all 192 lines, which is why the anchor is not a fullscreen-only concern.
+
+**IT WAS A FIXED BOTTOM ANCHOR AND THAT MADE THE PORT LOOK DEAD ON CGA.** The
+reasoning that shipped was *"the `]` cursor line and MIXED's four text rows are
+both at the bottom"*, and the first half of that is **false of a machine that
+has not scrolled yet**: the Autostart ROM's cold start prints `APPLE ][` on row
+0 and leaves the cursor on row 2, so with `a2_gl0` pinned at 81 the glass began
+at character row 10 and every pixel of a freshly booted screen was composed,
+blitted and landed **off the band**. The window was BLACK on launch, `PRINT
+6*7` answered into pixels nobody could see, and the status row went on reading
+`TEXT` and 2,000% beside it - a defect with no wrong pixel in it anywhere. It
+took thirty Returns to walk the prompt down to row 23 before one character
+appeared. Wave 3's own CGA evidence looked fine for the same reason its
+`scrolled` shot did: it had run a `FOR` loop first.
+
+**WHEN IT MOVES, THE CURSOR ROW GOES TO THE BOTTOM OF THE BAND**, whichever
+way the cursor went, because what a reader wants beside the cursor is the
+HISTORY and that is above it. Anchoring the row at the TOP is the obvious other
+spelling and it hides the banner one row above the prompt - photographed doing
+exactly that before the clamp went in. The same arithmetic gives "line 0, show
+everything" for free on a cold start, and walks to 81 - where the old code
+started - as soon as a session has scrolled the cursor to row 23, and stays.
+
+**IT MOVES RARELY, AND IT COSTS A FULL BAND REPAINT WHEN IT DOES** (~290 ms on
+the target for the 14 visible rows): the frame shadow is indexed by APPLE scan
+line, so a moved anchor puts every one of them at a different screen y and
+`a2_sh_inval` is the honest answer. An ordinary session pays it about once.
+`HOME : VTAB 20 : PRINT` in a loop pays it twice an iteration, which is the
+price of showing the user what they typed, and the shape that pays it is a
+program the reader is not typing at.
+
+**IT IS A TEXT-MODE RULE.** There is no cursor in lo-res or hi-res, and in
+MIXED the interactive part is the four text rows at the bottom, so both keep
+the bottom anchor - which for MIXED is the same row range the cursor would have
+chosen. `a2_v_text` is the gate, and a band that holds the whole frame never
+reads `$25` at all.
 
 The flush reads the **live** content box every time it runs: the status row is
 at `content.y + content.h - 10` whatever that is, the scan lines drawn are
@@ -2820,7 +2865,7 @@ a measurement rather than against another estimate.
 | `APPLE2.OVL` | 996 | **4,266** | +3,270 |
 | resident shims | 8 | **37** | +29 |
 | largest C frame | 54 | **54** bytes | the 96-byte cap |
-| the FILE on disk | 46,080 | **49,152** (image + `APPLE2.ROM`'s 14,848 and the header) | `WIRE_FILEMAX` 64,512 |
+| the FILE on disk | 46,080 | **49,664** (image + `APPLE2.ROM`'s 14,848 and the header) | `WIRE_FILEMAX` 64,512 |
 
 The figures are the SECOND REVIEW's. Against the wave's own first cut
 (31,426+13,844 image/bss and a 3,167-byte overlay) the resident line has moved
@@ -2889,6 +2934,29 @@ os88pkg: 'APPLE2' entry=+0x0070 image=34362 bss=13832 icon=yes assoc=1
 in the header from this wave, so a `.BAS` opens on the first double-click of a
 cold boot.
 
+### 15.0.3 THE CGA FIX, MEASURED
+
+The wave-4 defect (section 7.1's cursor anchor and section 6.6's tick window)
+against the end-of-wave-4 line:
+
+| | end of wave 4 | with the fix | moved |
+|---|---|---|---|
+| resident image | 34,220 | **34,494** | **+274** |
+| bss | 13,852 | **13,856** | **+4** |
+| **resident total** | 48,072 | **48,350** of 61,440 | **+278**, 13,090 spare |
+| `APPLE2.OVL` | 4,266 | **4,266** | 0 |
+
+**The `os88pkg` line, verbatim:**
+
+```
+os88pkg: 'APPLE2' entry=+0x0070 image=34494 bss=13856 icon=yes assoc=1
+```
+
+The bss is `a2_gl0_moved` and `a2_key_t0`; the image is `a2_geom`'s anchor
+arithmetic, the flush's one test of the moved flag and the rule's tick compare.
+**Nothing crossed a lever** (section 15.4): still 6,650 under the 55,000 split
+trigger.
+
 ### 15.1 The headline - PLANNED
 
 | | PLANNED |
@@ -2927,7 +2995,7 @@ C64's measured files, and every term is signed.**
 | `a2cpu.inc` + `a2mem.inc` | **-120** - the read fast path is two instructions and one compare shorter, no bank ladder, no `_bread` |
 | `a2io.c` | **-1,500** - no VIC-II raster or sprites, no SID, no two CIAs with timers and TOD, no bank ladder; ADDING the soft switches, the speaker estimator and the paddles |
 | `a2kbd.c` | **-800** - no 8x8 matrix, no two-way PETSCII chain; ADDING the paste feeder |
-| `a2scr.c` | **+900** - the interleaved page-to-scan-line map, both screen-hole tests, MIXED, PAGE2, the flash phase and its force pass, the clamped-window bottom anchor, all against the C64's linear row arithmetic |
+| `a2scr.c` | **+900** - the interleaved page-to-scan-line map, both screen-hole tests, MIXED, PAGE2, the flash phase and its force pass, the clamped-window cursor anchor, all against the C64's linear row arithmetic |
 | `a2band.inc` | **+1,400** - THREE shift-accumulator composers against `c64band.inc`'s one text composer |
 | `a2fsx.inc` | **+2,000** - new, and carrying a dirty-line-driven update rather than a whole-frame write |
 | `a2nib.inc` | **+700** - the follow-up PR, assembly |
@@ -3009,7 +3077,7 @@ Pulled without stopping, each reported in the wave's measured paragraph.
 | `apps/apple2/apple2.c` | the translation unit's root and the only file nasm ever sees a `.c` through: the GPL-2+ + four-attribution header, every prototype, the geometry constants, `os88_main` (the 64KB RAM claim, `os88_part_seg(0)`, **the CHARGEN decode and the 7-bit reverse table**, the fetch-bias underflow guard, `os88_snd_caps` once, the tier init, the RAM power-on pattern, `os88_key_down` armed here and nowhere else, the window sized against `os88_video().dock_top`), `os88_paint`, `os88_onkey`, `os88_onclick`, `os88_onfile` (**which LATCHES and nothing more** - section 12), `os88_onwake` (THE slice driver), the latches the wake spends before the slice, and the `#include`s in order | yes |
 | `apps/apple2/a2io.c` | the `$C000-$C0FF` soft switches, both directions; the keyboard latch and strobe, **and the paste's own `a2_paste_seg` beside them, so the three hot arms test a word of DS rather than calling** (section 6.5); the video switches guarded by value; the speaker toggle and its interval estimator; the paddle one-shots and the two buttons; the slot-ROM ladder; and (the follow-up) the Disk II controller's sixteen `$C0Ex` cases with the 6-cycle re-read. **Every read here is side-effecting and the file says so at the top** | yes |
 | `apps/apple2/a2kbd.c` | the scancode-to-Apple-byte map with its rejections and folds, the Ctrl folds routed on SCAN, the reset chords, Alt+Enter, and the paste feeder's per-byte handshake (`a2_paste_peek` / `_take` / `_stop`). **The per-byte and per-`$C000`-read halves are HERE and resident**; the once-per-pick half - `ovl_a2_clip_service` and `ovl_a2_copy_screen`, every claim, both clipboard calls and all six refusals - is `ovl_` and is in `APPLE2.OVL`. The first cut of this row claimed that split and the build did not have it | mixed |
-| `apps/apple2/a2scr.c` | the damage model, the frame shadow, the flash phase and its force pass, the flush, the k-row scroll test, the mode dispatch, the tier table, the letterbox fills, **the clamped-window bottom anchor**, and the fullscreen geometry (`a2_scw`/`a2_sch`, decided in ONE place) | yes |
+| `apps/apple2/a2scr.c` | the damage model, the frame shadow, the flash phase and its force pass, the flush, the k-row scroll test, the mode dispatch, the tier table, the letterbox fills, **the clamped-window cursor anchor**, and the fullscreen geometry (`a2_scw`/`a2_sch`, decided in ONE place) | yes |
 | `apps/apple2/a2menu.c` | the four menu tables with every string, mnemonic and caption, the `OS88_MENU_DIS` greying with the FACT in a comment beside each item, the menu-set struct, and the `os88_oncmd` dispatcher - two compares and then an `ovl_`, except File > Quit | yes |
 | `apps/apple2/a2cmd.c` | `ovl_*`: the first-wake probe and every menu command SHELL. **It does NOT carry the CHARGEN decode or the reverse table.** No per-byte loop is written in this file | **no** |
 | `apps/apple2/a2prog.c` | `ovl_*`: the Load and Save Program bodies, the two-pass chain walk (`ovl_a2_walk`) and the zero-page pointer write (section 12) | **no** |
@@ -3194,7 +3262,7 @@ GUI emulator cannot assert a boot.
 |---|---|
 | `apps/apple2/build.sh` | the host checks, each of which **stops the build**, run through a stamp file that is a prerequisite of `apple2.raw.asm`: `getapple2rom.py --check`; `a2ref.py --romshape`; `a2uitest`; `a2ref.py --check <explicit mode list>` - **FIVE frames from wave 3**: text on each FLASH PHASE, then lo-res, hi-res and a MIXED screen, which is a graphics composer and the text one in one frame - plus `--selftest` on text and on hi-res, `--lumcheck`, `a2memtest.sh`, and the `a2_say()` literal walk **with an explicit expected MINIMUM**. **Every step FAILS rather than passing when its subject is absent** - `--check` takes an explicit mode list, so a mode whose composer does not exist yet fails instead of printing green, and `--lumcheck` was NOT called until the wave that wrote the ladder it reads |
 | `apps/apple2/hosttest/os88.h` | the stub SDK - the same structs and constants as `apps/cc/os88.h`, only the prototypes the program calls, no `long`/`float` poison (the host needs `printf`), **plus every new thunk's prototype in the SAME edit that adds the thunk**. It is a second copy of an interface and it will drift; when it does the harness fails to COMPILE, which is the failure you want |
-| `apps/apple2/hosttest/a2uitest.c` | the whole program against that stub, with a **PIXEL model of the glass**: `gfx_blit1` writes real pixels, `gfx_scroll` fills the vacated rows with **GARBAGE**, and after every driven step it asserts pixel for pixel over the whole 320x192 that **the glass shows what the shadow says it shows**. **Every drawing primitive asserts BOTH of its preconditions**: the gfx lock, whose absence hangs the machine dead, and **an armed CLIP REGION**, whose absence draws over somebody else's window and shows up in no screendump taken afterwards. The region is modelled as the kernel scopes it - armed by `clip_set`, dead at the next `gfx_unlock` - so one lock hold's clip cannot vouch for the next one's drawing. **It drives the flash phase across a flip** and asserts that exactly the lines whose text rows hold `$40-$7F` bytes were forced, and that a flip landing in the same flush as a narrow write still composes the flashing rows whole. It drives **a partial expose with the About panel up**, **a content box that changes size with it up**, **`Toggle Fullscreen` with it up**, **the fullscreen chords in both directions**, **the same status message twice**, **a `clip_set` REFUSAL**, and **a one-row scroll on the 111-line band a 640x200 desktop gives**. Prints the cost table in milliseconds. Compiled `-DA2_HOST`, which keeps the counters out of the shipping image. **Verify the stubs model what the machine does** - the C64's `blit1` stub REFUSED for a whole wave, so the cost table priced the fallback and nobody noticed |
+| `apps/apple2/hosttest/a2uitest.c` | the whole program against that stub, with a **PIXEL model of the glass**: `gfx_blit1` writes real pixels, `gfx_scroll` fills the vacated rows with **GARBAGE**, and after every driven step it asserts pixel for pixel over **the visible band** - `a2_gnl` lines from `a2_gl0`, which stopped being "everything below `a2_gl0`" the moment the anchor started following the cursor - that **the glass shows what the shadow says it shows**. **Every drawing primitive asserts BOTH of its preconditions**: the gfx lock, whose absence hangs the machine dead, and **an armed CLIP REGION**, whose absence draws over somebody else's window and shows up in no screendump taken afterwards. The region is modelled as the kernel scopes it - armed by `clip_set`, dead at the next `gfx_unlock` - so one lock hold's clip cannot vouch for the next one's drawing. **It drives the flash phase across a flip** and asserts that exactly the lines whose text rows hold `$40-$7F` bytes were forced, and that a flip landing in the same flush as a narrow write still composes the flashing rows whole. It drives **a partial expose with the About panel up**, **a content box that changes size with it up**, **`Toggle Fullscreen` with it up**, **the fullscreen chords in both directions**, **the same status message twice**, **a `clip_set` REFUSAL**, **a one-row scroll on the 111-line band a 640x200 desktop gives**, **a COLD START on that band** - the banner on row 0, the prompt on row 2, `CV` at 2, starting from the bottom anchor - which asserts that the anchor moved to line 0 and that the banner's and the prompt's pixels are LIT on the glass, and **twenty polls inside ONE tick with Space held**, which is section 6.6's window measured the way a fast host polls. Prints the cost table in milliseconds. Compiled `-DA2_HOST`, which keeps the counters out of the shipping image. **Verify the stubs model what the machine does** - the C64's `blit1` stub REFUSED for a whole wave, so the cost table priced the fallback and nobody noticed |
 | `tools/a2ref.py` | an **INDEPENDENT pixel-level reference compositor** in Python, written from AppleWin's `NTSC_CharSet.cpp`, apple2emu's `video.cpp` and MII's `mii_video.c` - **never from `a2band.inc`**. **All three composers and MIXED** from wave 3, off the state file's own mode bytes. Also asserts the pinned ROM's measured shape (`--romshape`: 128 distinct 8-byte bitmaps, block `$00` = block `$80` XOR `$7F`) and the lo-res **luminance ladder** over all 256 ordered pairs (`--lumcheck`), against luminances it derives from MII's `palettes[0]` "Color NTSC" (`src/mii_video.c:94-113`) through MII's own lo-res mapping (`:173-177`) rather than from the package's table - apple2emu's `Lores_colors` being the cross-check that agrees on every lit/dark decision. The harness compares **bit for bit**. This is the file that catches a composer whose transcription is correct and whose assembly is not. `--selftest` injects a one-bit defect and requires the compare to FAIL |
 | `apps/apple2/hosttest/a2memtest.asm` + `.sh` | `a2mem.inc`'s and `a2band.inc`'s string loops on a real x86 with SS != DS and an ES sentinel, in raw QEMU, with **four negative controls** - one each for ES, DF, BP and DS. **All THREE composers from wave 3**, each against hand-computed packed bytes: it is the only gate that runs the SHIPPING ASSEMBLY rather than a second transcription of it, which is what `a2uitest` and `a2ref.py` between them cannot be. In `build.sh`, because it takes seconds. From the Disk II wave it also covers the segment arithmetic that reaches a track inside a claim larger than 64KB |
 | `apps/apple2/hosttest/a2cputest.asm` + `.sh` | section 4.4's twelve rows. `make a2cputest`, minutes, **not** in `build.sh` |
@@ -3209,8 +3277,10 @@ GUI emulator cannot assert a boot.
 rounds to black on 1bpp, so it must be a checkerboard), at the About panel's
 OK button, at the status row - **and at a MIXED screen and a screen that has
 SCROLLED once**, because on CGA `dock_top` is 176 and only ~114 of the Apple's
-192 scan lines fit, so the bottom anchor is the only thing putting MIXED's
-text window and the `]` cursor on the glass. **QEMU double-scans CGA mode 6 to
+192 scan lines fit, so the CURSOR ANCHOR (section 7.1) is the only thing
+putting the `]` prompt and MIXED's text window on the glass - **and a LAUNCH
+screen is a first-class row beside them**, because the fixed bottom anchor
+this replaced showed a black window there and nothing else could see it. **QEMU double-scans CGA mode 6 to
 640x400**, so a dump cropped at 640x200 shows the top half only - take every
 second row.
 

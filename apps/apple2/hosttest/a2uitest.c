@@ -1245,7 +1245,14 @@ static int audit(const char *where)
 {
     int line, byte, bit, want, got, bad = 0;
 
-    for (line = a2_gl0; line < A2_SCRH; line++) {
+    /* THE BAND IS a2_gnl LINES FROM a2_gl0 AND NOT "everything below
+     * a2_gl0". That was the same thing while the anchor was the BOTTOM of
+     * the Apple frame, and it stopped being one when the band started
+     * following the cursor: on a cold start a2_gl0 is 0 and the band ends at
+     * line 110, so a loop that ran to 191 sampled the glass eighty lines
+     * BELOW the band - other windows' pixels - and reported them as the
+     * shadow lying. */
+    for (line = a2_gl0; line < a2_gl0 + a2_gnl && line < A2_SCRH; line++) {
         if (a2_abt_up && line >= a2_hold_l0 && line <= a2_hold_l1)
             continue;                   /* a panel owns these lines */
         for (byte = 0; byte < A2_BSTRIDE; byte++)
@@ -2643,6 +2650,116 @@ int main(void)
     do_paint();                         /* ...and the exposure is what pays */
     audit("after the window came back out from under");
 
+    /* --- THE LAUNCH SCREEN ON A 640x200 DESKTOP: THE CURSOR ANCHOR -------
+     * WAVE 4'S DEFECT, AND NOTHING ELSE IN THIS FILE COULD SEE IT. The band
+     * used to anchor to the BOTTOM of the Apple frame unconditionally, on the
+     * reasoning that "the ] cursor line is there" - which is false of a
+     * machine that has not scrolled yet. The Autostart ROM's cold start puts
+     * `APPLE ][` on row 0 and leaves the cursor around row 2, so on a CGA
+     * desktop, where a2_gl0 was 81 and the glass began at character row 10,
+     * every pixel of a freshly booted screen was composed, blitted and landed
+     * off the visible band: the window was BLACK, `PRINT 6*7` answered where
+     * nobody could see it, and the status row went on reading TEXT and
+     * 2,000% beside it. It took thirty Returns to walk the prompt down to row
+     * 23 before one character appeared.
+     *
+     * Every existing row here passed throughout, because they all write into
+     * the rows the anchor happened to be showing. So this one asks the
+     * question the glass asks: after the first flush of a COLD START, is
+     * there a lit pixel where the banner is?
+     */
+    {
+        int sav_h = h_cont_h, lit0, lit2, x, y, before3;
+
+        h_cont_h = 137;                 /* the CGA content box */
+        for (r = 0; r < A2_ROWS; r++)
+            for (i = 0; i < A2_COLS; i++)
+                a2_wr(a2_tbase[r] + (unsigned)i, 0xA0);
+        /* THE BAND STARTS AT THE BOTTOM, which is where a session that has
+         * been scrolling leaves it - and where the very first flush of a
+         * launch leaves it too, because a2_power_on's FF FF 00 00 pattern is
+         * in $25 until the ROM's own COUT writes a cursor row there. So the
+         * cold start below is a move UP and not a lucky initial value. */
+        a2_wr(A2_CV, A2_ROWS - 1);
+        a2_sh_inval();
+        do_paint();
+        if (a2_gl0 != A2_SCRH - a2_gnl)
+            fail("the cold-start fixture did not start from the bottom "
+                 "anchor - the move it is about is not being made");
+        /* ...AND NOW THE COLD START: the Autostart ROM's banner on row 0, the
+         * prompt on row 2 and CV with it. */
+        h_puts(0, 16, "APPLE ][", 0);
+        h_puts(2, 0, "]", 0);
+        a2_wr(A2_CV, 2);
+        before3 = n_blit;
+        do_wake();
+        if (a2_gnl >= A2_SCRH)
+            fail("the cold-start fixture did not clip the band at all - the "
+                 "case it exists to test is not being tested");
+        if (a2_gl0 != 0)
+            printf("a2uitest: FAIL - a cold start with the cursor on row 2 "
+                   "left the band anchored at scan line %d: the banner and "
+                   "the ] prompt are above it and the window is BLACK\n",
+                   a2_gl0),
+            fails++;
+        /* THE CURSOR ROW GOES TO THE BOTTOM OF THE BAND AND NOT THE TOP, so
+         * the HISTORY above it comes with it. Anchoring the cursor row at the
+         * top is the other spelling of "follow the cursor" and it hides the
+         * banner one row above the prompt. */
+        if (n_blit == before3)
+            fail("a cold start on a clipped band blitted NOTHING");
+        /* ...AND THE PIXELS, WHICH IS THE ONLY QUESTION THAT MATTERS. Row 0
+         * carries the banner and row 2 the prompt; both are inside the band
+         * now, so both owe lit pixels on the glass. */
+        lit0 = 0;
+        lit2 = 0;
+        for (y = 0; y < 8; y++)
+            for (x = 0; x < a2_gbw; x++) {
+                if (glass[a2_gsy + y][a2_gsx + x] == 1)
+                    lit0++;
+                if (glass[a2_gsy + 16 + y][a2_gsx + x] == 1)
+                    lit2++;
+            }
+        if (lit0 == 0)
+            fail("the APPLE ][ banner is not on the glass after a cold "
+                 "start on a 640x200 desktop");
+        if (lit2 == 0)
+            fail("the ] prompt is not on the glass after a cold start on a "
+                 "640x200 desktop");
+        audit("a cold start on a clipped band");
+        no_gunk("a cold start on a clipped band");
+
+        /* ...AND THE ANCHOR FOLLOWS THE CURSOR DOWN, ONCE. A session that
+         * scrolls walks CV to row 23 and the band arrives at the bottom
+         * anchor the old code started at - and STAYS there, which is what
+         * keeps the move off the ordinary scrolling wake. */
+        h_puts(23, 0, "]", 0);
+        a2_wr(A2_CV, 23);
+        do_wake();
+        if (a2_gl0 != A2_SCRH - a2_gnl)
+            printf("a2uitest: FAIL - the cursor reached row 23 and the band "
+                   "stayed anchored at scan line %d\n", a2_gl0),
+            fails++;
+        lit2 = 0;
+        for (y = 0; y < 8; y++)
+            for (x = 0; x < a2_gbw; x++)
+                if (glass[a2_gsy + a2_gnl - 8 + y][a2_gsx + x] == 1)
+                    lit2++;
+        if (lit2 == 0)
+            fail("the cursor row is not on the glass after the band "
+                 "followed it to the bottom");
+        audit("after the anchor followed the cursor down");
+        before3 = n_blit;
+        do_wake();
+        if (n_blit != before3)
+            fail("a wake with nothing to draw redrew the band - the anchor "
+                 "is moving on every flush");
+        h_cont_h = sav_h;
+        a2_sh_inval();
+        do_paint();
+        audit("after the cold-start fixture gave the box back");
+    }
+
     /* --- THE SCROLL TEST ON A CLIPPED BAND (a 640x200 desktop) -----------
      * The guard used to be `a2_gnl == A2_SCRH` - the whole 192-line frame on
      * the glass - which on a CGA desktop is NEVER true: dock_top 176 clamps
@@ -2656,6 +2773,13 @@ int main(void)
         int sav_h = h_cont_h, before2;
 
         h_cont_h = 137;                 /* the CGA content box */
+        /* ...AND CV SAYS WHERE THE CURSOR IS, because the band FOLLOWS it
+         * (a2scr.c's a2_geom). A scrolling Applesoft session has walked the
+         * cursor to the last row, which is the shape this row is about and
+         * the one that puts the anchor at 81. Leaving $25 to whatever an
+         * earlier fixture wrote is how this row went on passing while the
+         * cold-start case above was black. */
+        a2_wr(A2_CV, A2_ROWS - 1);
         a2_sh_inval();
         do_paint();
         if (a2_gnl != 111 || a2_gl0 != 81)
@@ -3263,8 +3387,12 @@ int main(void)
      * its pointer, and ScrollLock hands them back. The package cannot ask
      * `has a mouse spoken`, so it asks a question with the same answer: the
      * down-map says one is held and os88_onkey has never once delivered one.
-     * THREE consecutive polls, because a wake posted before a press is
-     * dispatched ahead of the key event behind it. */
+     * Three consecutive polls AND A2_KBM_TICKS ticks, because a wake posted
+     * before a press is dispatched ahead of the key event behind it - and on
+     * a fast host that gap is many polls wide, which is why the window is
+     * measured in TICKS. do_wake() here advances the tick once per wake,
+     * which is the SLOWEST a real machine ever polls; the fixture below asks
+     * the other end of that range. */
     a2_msg[0] = 0;
     h_down[KSC_SPACE] = 1;
     do_wake();
@@ -3273,12 +3401,48 @@ int main(void)
              "before the press is dispatched ahead of the key event behind it");
     do_wake();
     do_wake();
+    if (a2_msg[0])
+        fail("the keyboard-mouse message was said three polls after the "
+             "press, inside the window a keystroke's own dispatch takes");
+    do_wake();
+    do_wake();
     if (!a2_msg[0])
-        fail("three polls with Space held and no key ever delivered is the "
+        fail("Space held for A2_KBM_TICKS with no key ever delivered is the "
              "kernel eating it, and section 6.6 says so once a session");
     do_wake();
     do_wake();
     h_down[KSC_SPACE] = 0;
+
+    /* ...AND THE FAST-HOST CASE, WHICH IS THE ONE THAT SHIPPED WRONG. A wake
+     * runs about 1,400 times a second, so twenty polls span about fourteen
+     * milliseconds - well inside the gap between the ISR setting Space's
+     * down-bit and the W_ONKEY carrying that very Space being dispatched. The
+     * three-poll rule latched there, and QEMU - which HAS a mouse and was
+     * eating nothing - answered the first Space of `PRINT 6*7` by putting
+     * `ScrollLock: arrows, Space.` in the status row
+     * (build/port-shots/wave4-cga-print.png). do_wake() advances the tick, so
+     * the fixture puts it back: that is the whole difference between a poll
+     * count and a window. */
+    a2_key_typed = 0;
+    a2_slock_said = 0;
+    a2_key_held = 0;
+    a2_msg[0] = 0;
+    h_down[KSC_SPACE] = 1;
+    {
+        unsigned t_hold;
+
+        for (i = 0; i < 20; i++) {
+            t_hold = the_ticks;
+            do_wake();
+            the_ticks = t_hold;
+        }
+    }
+    if (a2_msg[0])
+        fail("twenty polls inside ONE tick latched the keyboard-mouse "
+             "message - that is a keystroke's own dispatch gap on a fast "
+             "host, not a kernel eating the key");
+    h_down[KSC_SPACE] = 0;
+    do_wake();
     /* ...AND THE LATCH IS ONE WAY. A key the pointer would have eaten has
      * ARRIVED, so it is not eating them - either a mouse has spoken or
      * ScrollLock is on, and neither un-happens. */

@@ -1314,7 +1314,7 @@ which is the C64's 3,074-byte finding applied before the bytes were spent.
 
 **13,368 spare; 6,928 under SPEC.md 73.9's 55,000 split trigger and 5,928
 under the 54,000 end-of-wave-5 ceiling**, so lever 1 is not pulled. The
-package FILE is 49,152 bytes with the ROM part in it, against The Wire's
+package FILE is 49,664 bytes with the ROM part in it (49,152 before the CGA cursor-follow fix), against The Wire's
 `WIRE_FILEMAX` of 64,512.
 
 **Three things this wave learned that were not in the plan.**

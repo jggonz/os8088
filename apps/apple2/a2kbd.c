@@ -132,7 +132,21 @@ static int a2_key_typed;                    /* os88_onkey delivered one of the
                                              * them, and it cannot start to */
 static int a2_key_held;                     /* consecutive polls with one held
                                              * and none ever typed */
+static unsigned a2_key_t0;                  /* ...and the tick the run of them
+                                             * started on */
 static int a2_slock_said;
+
+/* THE WINDOW IS TICKS AND NOT POLLS, and three polls was NOT ENOUGH. A wake
+ * runs about 1,400 times a second on a fast host, so three consecutive polls
+ * span about two MILLISECONDS - far inside the gap between the ISR setting a
+ * key's down-bit and the W_ONKEY carrying that key being dispatched. So the
+ * first Space of `PRINT 6*7` latched the message on QEMU, which HAS a mouse
+ * and was never eating anything (build/port-shots/wave4-cga-print.png caught
+ * it in the status row). The poll count is kept as the cheap half and this is
+ * the half that means something: four ticks is ~220 ms, which is longer than
+ * any keystroke takes to come back round as an event and shorter than a press
+ * somebody is holding to move a pointer with. */
+#define A2_KBM_TICKS 4
 
 static int a2_ptr_key(int scan)
 {
@@ -252,8 +266,11 @@ static void a2_kbd_poll(void)
         if (!held) {
             a2_key_held = 0;
         } else {
+            if (a2_key_held == 0)
+                a2_key_t0 = os88_ticks();
             a2_key_held++;
-            if (a2_key_held >= 3) {
+            if (a2_key_held >= 3
+                && (unsigned)(os88_ticks() - a2_key_t0) >= A2_KBM_TICKS) {
                 a2_slock_said = 1;
                 a2_say("ScrollLock: arrows, Space.");
             }
