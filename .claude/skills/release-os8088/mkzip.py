@@ -22,7 +22,8 @@ the zip) first; a missing REQUIRED image stops the script, and a missing
 optional one is reported and skipped. That split is the point -- the nine
 images `make` produces are the release (four geometries of each pair since
 SPEC.md 19's 1.2MB disk, plus the 360KB-only media disk), and
-`apps-all`/`word`/`cword`/`runcpm`/`c64`/`weave`/`loom` and the live media
+`apps-all`/`word`/`cword`/`scribe`/`runcpm`/`c64`/`apple2`/`paccman`/`weave`/`loom`
+and the live media
 (`make live`, SPEC.md 80) are on-demand targets that a tree without the C
 toolchain cannot build at all.
 
@@ -67,15 +68,21 @@ MANIFEST = [
                               "power-off; the USB image keeps them."),
     ("apps-all.img",   False, "Every program on one 1.44MB software disk, including both "
                               "word processors, the story reader, the CP/M emulator, the "
-                              "Commodore 64 and the Weave programs and their editor. Use "
-                              "this instead of apps.img if you would rather swap one disk "
-                              "than seven."),
+                              "Commodore 64, the Apple II Plus and the Weave programs and "
+                              "their editor. Use this instead of apps.img if you would "
+                              "rather swap one disk than nine."),
     ("apps-all-120.img", False, "The same everything-disk at 1.2MB. There is no 720KB or "
                               "360KB version -- the programs do not fit at those sizes."),
     ("word.img",       False, "Word processor disk, 1.44MB."),
     ("word720.img",    False, "Word processor disk, 720KB."),
     ("word120.img",    False, "Word processor disk, 1.2MB."),
     ("word360.img",    False, "Word processor disk, 360KB."),
+    ("scribe.img",     False, "Scribe disk, 1.44MB. Scribe is the word processor with a "
+                              "second set of choices -- same document format, its own "
+                              "package -- and carries a welcome document to open."),
+    ("scribe720.img",  False, "Scribe disk, 720KB."),
+    ("scribe120.img",  False, "Scribe disk, 1.2MB."),
+    ("scribe360.img",  False, "Scribe disk, 360KB."),
     ("cword.img",      False, "Word processor disk built by the C compiler, 1.44MB."),
     ("cword720.img",   False, "Word processor disk built by the C compiler, 720KB."),
     ("cword120.img",   False, "Word processor disk built by the C compiler, 1.2MB."),
@@ -95,6 +102,18 @@ MANIFEST = [
     ("c64720.img",     False, "Commodore 64 disk, 720KB."),
     ("c64120.img",     False, "Commodore 64 disk, 1.2MB."),
     ("c64360.img",     False, "Commodore 64 disk, 360KB."),
+    ("apple2.img",     False, "Apple II Plus disk, 1.44MB. Carries the emulator, with "
+                              "Applesoft BASIC and the character generator inside it, a "
+                              "BASIC program to load, a README and COPYING."),
+    ("apple2720.img",  False, "Apple II Plus disk, 720KB."),
+    ("apple2120.img",  False, "Apple II Plus disk, 1.2MB."),
+    ("apple2360.img",  False, "Apple II Plus disk, 360KB."),
+    ("paccman.img",    False, "PaccMan disk, 1.44MB. The arcade-accurate Pac-Man, built by "
+                              "the C compiler. It wants a 386 to play at full speed; the "
+                              "other Pac-Man on the software disk is the one for an XT."),
+    ("paccman720.img", False, "PaccMan disk, 720KB."),
+    ("paccman120.img", False, "PaccMan disk, 1.2MB."),
+    ("paccman360.img", False, "PaccMan disk, 360KB."),
     ("weave.img",      False, "Weave disk, 1.44MB. Web-style programs - markup, script "
                               "and formulas - compiled into one bundle file and run "
                               "natively. Carries the runtime, three demo programs, the "
@@ -123,6 +142,15 @@ EXTRAS = [
      "The GNU General Public License version 2, which is the licence the "
      "Commodore 64 emulator is under. It applies to that one program and to "
      "nothing else here."),
+    ("apple2.img", "apps/apple2/COPYING", "COPYING.APPLE2",
+     "The GNU General Public License version 2, which is the licence the "
+     "Apple II Plus emulator is under -- its display code came from the "
+     "same project the Commodore 64 emulator's did. It applies to that one "
+     "program and to nothing else here."),
+    ("paccman.img", "apps/paccman/LICENSE", "LICENSE.PACCMAN",
+     "The MIT licence on Andre Weissflog's pacman.c, which PaccMan was "
+     "ported from. It names him as its copyright holder; the rest of this "
+     "release is under the project's own MIT licence."),
 ]
 
 README = """\
