@@ -322,9 +322,8 @@ SH_T_ERR     equ 4
 ; ERROR.TYPE and ISERR become a table lookup if they are ever added. They are
 ; NOT the BIFF file's error codes: BOOLERR and a FORMULA's error result use
 ; 00H #NULL!, 07H #DIV/0!, 0FH #VALUE!, 17H #REF!, 1DH #NAME?, 24H #NUM!,
-; 2AH #N/A, and the BIFF writer and reader currently carry these numbers
-; untranslated (docs/BIFF-NOTES.md, "Values") - so this app's own files
-; round-trip and an Excel file's error codes do not.
+; 2AH #N/A, and sh_biff_e2b/sh_biff_b2e translate at every point a code
+; crosses the file (SPEC.md 81.22.2).
 SH_ERR_NULL  equ 1                  ; #NULL!
 SH_ERR_DIV0  equ 2                  ; #DIV/0!   - the only one produced today
 SH_ERR_VALUE equ 3                  ; #VALUE!
@@ -9987,6 +9986,62 @@ sh_sheets_used:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_recalc_all - evaluate every formula cell on every sheet, as its own sheet
+; (SPEC.md 81.22.1). Preserves all registers.
+;
+; EVALUATION IS LAZY: sh_eval_cell runs when a cell is READ, and a repaint only
+; reads what is on the glass. The SYLK and BIFF writers read a cell's value
+; with sh_cellval_to_acc_si, the STORED double, and never ask for a fresh one -
+; so a formula scrolled out of sight since it was loaded, or since a cell it
+; names changed, was written with whatever it last held: after a load, the zero
+; sh_setformula leaves. DIF reads through sh_getcell2, which evaluates, which is
+; why it looked like a SYLK/BIFF quirk rather than a hole.
+;
+; NOTHING HERE DECIDES WHAT IS STALE. sh_eval_cell's pass stamp already does,
+; and does the right thing in both modes: automatic advances sh_pass on every
+; repaint, so anything not recomputed since is stale and recomputes; manual
+; does not, so only a cell never computed at all (stamped 0xFFFF) runs - which
+; keeps manual mode meaning what it says.
+;
+; THE SHEET IS IMPERSONATED per record, sh_rowcol_op's idiom: sh_findcell packs
+; [sh_cursheet] into every reference, so a Sheet 2 formula evaluated as Sheet 1
+; would read Sheet 1's cells.
+; -----------------------------------------------------------------------------
+sh_recalc_all:
+    push ax
+    push cx
+    push dx
+    push di
+    push es
+    push word [sh_cursheet]
+    xor di, di
+    mov cx, [sh_ncells]
+    jcxz .done
+.l:
+    mov es, [sh_cellseg]                ; re-read each time: the claim is
+    test byte [es:di+SH_C_FLAGS], 1     ; movable (66.2) and a word is what
+    jz .next                            ; sh_reloc keeps right, not ES
+    mov ax, [es:di+SH_C_ROW]
+    rol ax, 1                           ; the sheet is the row word's top two
+    rol ax, 1                           ; bits
+    and ax, 3
+    mov [sh_cursheet], ax
+    push cx                             ; the parser under sh_eval_cell is
+    call sh_eval_cell                   ; free with CX and DX; DI and ES it
+    pop cx                              ; keeps
+.next:
+    add di, SH_C_SZ
+    loop .l
+.done:
+    pop word [sh_cursheet]
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_dowrite - pick the writer from the file name's extension.
 ;
 ; AND SAY SO WHEN A SAVE CANNOT CARRY EVERYTHING. SYLK and DIF have no
@@ -9996,7 +10051,8 @@ sh_sheets_used:
 ; format here that CAN carry them, and does (81.10.5).
 ; -----------------------------------------------------------------------------
 sh_dowrite:
-    push si
+    call sh_recalc_all                  ; every formula CURRENT before any
+    push si                             ; writer reads one (81.22.1)
     push di
     mov si, sh_name
     mov di, sh_s_ext_dif
@@ -11580,6 +11636,56 @@ sh_biff_workbook:
 ; sheet (81.10.5). The BIFF3 path calls it exactly once, with sh_wsheet set to
 ; sh_cursheet, and emits the same bytes it always did.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_biff_e2b / sh_biff_b2e - an error code between SH_C_AUX's numbering
+; (ERROR.TYPE, 1..7) and the file's (SPEC.md 81.22.2). AL in, AL out,
+; everything else preserved.
+;
+; TWO NUMBERINGS FOR THE SAME SEVEN ERRORS: BOOLERR's byte and a FORMULA
+; result's use 00H 07H 0FH 17H 1DH 24H 2AH. A #DIV/0! went out as 02H, which
+; is not a code the format defines, and came back in as 02H and was read as
+; ERROR.TYPE 2, which is #DIV/0! again - perfectly symmetric, perfectly wrong,
+; and invisible until a file from outside was read: Excel's 07H arrived as
+; ERROR.TYPE 7, #N/A.
+; -----------------------------------------------------------------------------
+sh_biff_errtab: db 0x00, 0x07, 0x0F, 0x17, 0x1D, 0x24, 0x2A
+
+sh_biff_e2b:                          ; ERROR.TYPE 1..7 -> the BIFF code
+    push bx
+    xor bh, bh
+    mov bl, al
+    dec bl
+    cmp bl, 6
+    ja .bad
+    mov al, [bx+sh_biff_errtab]
+    pop bx
+    ret
+.bad:
+    mov al, 0x0F                      ; an out-of-range code travels as
+    pop bx                            ; #VALUE!, which is what a reader that
+    ret                               ; cannot place it will show anyway
+
+sh_biff_b2e:                          ; the BIFF code -> ERROR.TYPE 1..7
+    push bx
+    push cx
+    mov cl, al
+    xor bx, bx
+.l:
+    cmp cl, [bx+sh_biff_errtab]
+    je .hit
+    inc bx
+    cmp bx, 7
+    jb .l
+    mov al, SH_ERR_VALUE              ; an unknown code is still an error, and
+    jmp .out                          ; #VALUE! is the honest one to show
+.hit:
+    mov al, bl
+    inc al
+.out:
+    pop cx
+    pop bx
+    ret
+
 sh_biff_cells:
     mov byte [sh_trunc], 0
     mov word [sh_wrow], 0            ; reused here as the record index
@@ -11733,7 +11839,8 @@ sh_biff_cells:
     xor ah, ah
     mov al, [sh_wrec_fmt]
     call sh_biffw
-    mov al, [sh_wrec_aux]
+    mov al, [sh_wrec_aux]              ; in the FILE's numbering (81.22.2)
+    call sh_biff_e2b
     call sh_stgputb
     mov al, 1                          ; fError
     call sh_stgputb
@@ -11883,7 +11990,8 @@ sh_biff_formula:
 .errresult:
     mov ax, 2                         ; byte 0 = 2: an error code
     call sh_biffw
-    mov al, [sh_wrec_aux]             ; byte 2 = which one
+    mov al, [sh_wrec_aux]             ; byte 2 = which one, in the FILE's
+    call sh_biff_e2b                  ; numbering (81.22.2)
     xor ah, ah
     call sh_biffw
     xor ax, ax
@@ -12184,7 +12292,9 @@ sh_doread_biff:
     cmp byte [sh_acc], 2
     jne .fresnum
     push es
-    mov dl, [sh_acc+2]
+    mov al, [sh_acc+2]                 ; the FILE's code, into ERROR.TYPE's
+    call sh_biff_b2e                   ; (81.22.2)
+    mov dl, al
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
     call sh_seterr
@@ -12221,6 +12331,9 @@ sh_doread_biff:
     push es
     or al, al
     jz .isbool
+    mov al, dl                         ; an ERROR: the file's code is the
+    call sh_biff_b2e                   ; FORMAT's numbering, not ERROR.TYPE's
+    mov dl, al                         ; (81.22.2)
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
     call sh_seterr

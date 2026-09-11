@@ -96661,6 +96661,59 @@ overrun corrupts a value; this one corrupts an *address*, and the next large
 it is worth knowing that bss adjacency can arrange it without anyone loading a
 segment register wrongly at all.
 
+### 81.22 A saved file said what the sheet did not
+
+Two ways a file SHEET wrote disagreed with the sheet it came from, each
+invisible from inside because SHEET read its own files back the same way.
+
+#### 81.22.1 A Save recalculates first
+
+**Evaluation is lazy.** `sh_eval_cell` runs when a cell is *read*, memoized
+against `sh_pass`, and a repaint reads only what is on the glass. That is the
+right shape for a display and the wrong one for a file, because two of the three
+writers never ask: the SYLK and BIFF writers read a cell's value with
+`sh_cellval_to_acc_si`, the **stored** double, while DIF reads through
+`sh_getcell2`, which evaluates. So a formula off-screen since it was loaded, or
+since a cell it names changed, was saved with whatever it last held — after a
+load, the zero `sh_setformula` leaves. Ten formulas `=A1*1` … `=A1*10` on a
+5150, opened and saved as SYLK: the four on the glass came back right and the
+six below them came back **0**.
+
+`sh_dowrite` now calls `sh_recalc_all`, which walks every record and calls
+`sh_eval_cell` on each formula. It decides nothing: the pass stamp already knows
+what is stale, in both modes — automatic advances `sh_pass` on every repaint, so
+anything not recomputed since recomputes; manual does not, so only a cell never
+computed (stamped `0xFFFF`) runs. **Every sheet is evaluated as itself**, the
+`sh_rowcol_op` impersonation, because `sh_findcell` packs `[sh_cursheet]` into
+every reference. 64 bytes.
+
+What it costs is time at Save for a sheet whose formulas were not computed at
+paint, and nothing on the glass says so — which is also why a harness that waits
+for the *screen* to settle reads the floppy before the file exists.
+
+#### 81.22.2 Error codes in the file's own numbering
+
+`SH_C_AUX` holds an error as `ERROR.TYPE` numbers it, 1–7. The file does not:
+BIFF's error byte, in a `BOOLERR` and in a `FORMULA` result alike, is 00H
+`#NULL!`, 07H `#DIV/0!`, 0FH `#VALUE!`, 17H `#REF!`, 1DH `#NAME?`, 24H `#NUM!`,
+2AH `#N/A`. The writer put the internal number into that byte and the reader
+took it back out the same way — so SHEET's own files round-tripped perfectly,
+which is exactly what hid it, and `docs/BIFF-NOTES.md` recorded the gap and
+the four places a fix had to go. Measured before: an error constant and
+`=1/0` saved as Normal carried **02H**, not a code the format has; Excel's
+`#DIV/0!` (07H), as a constant and as a formula's cached result, opened as
+`#N/A`.
+
+`sh_biff_errtab` holds the seven codes in `ERROR.TYPE` order; `sh_biff_e2b`
+converts on the way out (`.aserr`, `.errresult`) and `sh_biff_b2e` on the way
+in (`.isboolerr`, `.isformula`). An internal code outside 1–7 is written as
+`#VALUE!`, and a file's code the table does not hold reads as `#VALUE!`, since
+it is still an error and that is the honest one to show. 75 bytes.
+
+Both measured with a host-side reader that shares no code with SHEET (the one
+this project's fork uses as its second opinion, `tools/os88sheetfmt.py` there),
+before and after, on this tree's build under MartyPC.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

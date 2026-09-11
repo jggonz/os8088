@@ -150,14 +150,16 @@ accepted only the integer form dropped those cells in silence.
 those four back - any other id, including a custom `FORMAT`'s, reads as
 General.
 
-**Error codes are `SH_ERR_*`, 1-7 in `ERROR.TYPE` order, on both sides.**
-That is NOT the file format's numbering: BIFF's error byte in `BOOLERR` and
-in a `FORMULA` result is 00H #NULL!, 07H #DIV/0!, 0FH #VALUE!, 17H #REF!,
-1DH #NAME?, 24H #NUM!, 2AH #N/A. Sheet's own files round-trip because the
-reader applies the same numbers, but a `#DIV/0!` written here is byte 2 in
-a file where Excel expects 07H, and Excel's 07H reads back here as code 7,
-#N/A. No translation exists yet; add one in both `sh_biff_cells` (`.aserr`,
-`.errresult`) and `sh_doread_biff` (`.isboolerr`, `.isformula`) together.
+**Error codes are translated at the file's edge.** Inside SHEET they are
+`SH_ERR_*`, 1-7 in `ERROR.TYPE` order; BIFF's error byte in `BOOLERR` and in
+a `FORMULA` result is 00H #NULL!, 07H #DIV/0!, 0FH #VALUE!, 17H #REF!, 1DH
+#NAME?, 24H #NUM!, 2AH #N/A. `sh_biff_e2b` converts on the way out
+(`sh_biff_cells`' `.aserr`, `.errresult`) and `sh_biff_b2e` on the way in
+(`sh_doread_biff`'s `.isboolerr`, `.isformula`) - the four places this note
+used to say a translation had to go (SPEC.md 81.22.2). Before it, SHEET's
+own files round-tripped because the reader applied the same wrong numbers,
+while a `#DIV/0!` written here was byte 2 where Excel expects 07H, and
+Excel's 07H read back here as #N/A.
 
 ## What the reader accepts, and what it drops
 
