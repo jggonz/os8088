@@ -122,8 +122,7 @@ MANIFEST = [
     ("apple2120.img",  False, "Apple II Plus disk, 1.2MB."),
     ("apple2360.img",  False, "Apple II Plus disk, 360KB."),
     ("paccman.img",    False, "PaccMan disk, 1.44MB. The arcade-accurate Pac-Man, built by "
-                              "the C compiler. It wants a 386 to play at full speed; the "
-                              "other Pac-Man on the software disk is the one for an XT."),
+                              "the C compiler. It wants a 386 to play at full speed."),
     ("paccman720.img", False, "PaccMan disk, 720KB."),
     ("paccman120.img", False, "PaccMan disk, 1.2MB."),
     ("paccman360.img", False, "PaccMan disk, 360KB."),
