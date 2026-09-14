@@ -1,0 +1,336 @@
+# PIXELSTEIN 3D — the plan (FINAL, reconciled)
+
+**Package:** `apps/pixelstein/` → `PXSTEIN.O88`, header name `'Pixelstein 3D'`,
+label prefix `px_` (loader `pxl_`), SPEC.md **§96** — the heading carries the
+literal string `Pixelstein 3D` because `tools/os88index.py` matches the header
+name against SPEC headings with `\b…\b` (`os88index.py:499-503`); renumber
+before merging `main` if a parallel branch takes 96 first. Tree: `main` @
+`2237d1ba`.
+
+**Reconciled from:** the draft (`plan-draft.md`) and three adversarial reviews
+(`review-xtfit.md`, `review-tree.md`, `review-process.md`). Every finding is
+either folded in below or named in §10 (risks) with why it stays open. `§N`
+alone means SPEC.md; **M** = measured in the tree, **D** = derived, arithmetic
+shown.
+
+---
+
+## 0. What the reviews changed, in one page
+
+| finding | decision |
+|---|---|
+| **XT-1 (blocker)** — the frame table omitted the sprite texel loads, the far-call overhead, the `spotvis` clear and the candidate walk; 64×100 misses its own 7.0 gate | Table re-derived from **store + load + overhead COUNTS** (§3). **XT default is 64×80**, 48×80 the reserve rung, 64×100 the 286 setting. The ÷1.2 "believed" fudge is retired — the gate measures nominal. Two structural savings taken: a column-driver loop generated into part 3 (ONE far call a frame, not 64+110), and `spotvis` as a **generation byte** (no per-frame clear at all) |
+| **XT-5 (major)** — the DDA cannot hold six words in registers; "≤130 a crossing" needs the steps patched, as Wolf did | **The four quadrant bodies are generated into part 3 and the two step immediates patched once per column** (4 stores ≈ 100 clk against 10 × 24 of memory operand). Two patch sites in the package, both in the pinned part 3, both rewritten by the routine that owns them |
+| **XT-2 (major)** — the Hercules flip charged no retrace wait; `OSAPI_FSX_PAGE` waits (os88api.inc:2830); 20 ms quantisation | Priced honestly (§3): 128 ms of draw → 140 ms quantised = **7.1 fps against the shadow arm's 7.7**. **The flip arm is DROPPED from the shipped set**; the banked row table stays a documented generator input in §96.11 with this arithmetic, so a later measurement can bring it back as a Mode item. Wave 5's row-table work, per-page HUD dirty and the weapon-ladder finding (XT-7) go with it |
+| **XT-3 (major)** — a flip backend Δ-fills against N frames ago; §88.12 measured Mode X slowest | **Mode X drops to 2 pages** (the third bought nothing under an unconditional wait); a ×2 Δ-fill staleness term is charged; the shadow+copy arm is the named fallback if wave 2's `pxsperf` on `os8088_xt_vga` reads §88.12's fate |
+| **XT-4 (major)** — `cs_blit.expand` is ~48 clk/B, not 26 | CGA16 re-priced and given a **narrower view: 48 bytes × 80 rows** (96 logical px, two texels a byte). Still the second Mode item on `VID_CGA` |
+| **XT-6 (major)** — the gate's corridor scene is the Δ-fill's best case | **Two pinned scenes** — a corridor and a 90° turn at a doorway — and the promise is made on both: **≥ 7.0 corridor / ≥ 6.0 turning** fullscreen, **≥ 6.0 / ≥ 5.0** windowed |
+| **XT-7 (minor)** — a DI bias cannot move a scaler on a banked table | Moot with the flip dropped; the rule stays in §96.3: *every off-centre writer assumes rows are 80 apart, and the generator is the only thing allowed to know otherwise* |
+| **XT-8 / tree-3** — "seven claims of MEM_OWNER_MAX 8" is wrong; the parts carve is ONE claim (os88partsbody.inc:628-632) | Claim list rewritten (§4.2): loader region + **one contiguous parts claim** + shadow + two lazy fetches = 5 of 8. The real ask — a ~132 KB contiguous run (147 on Mode X) — is stated, and parts 3/4/5 carry **`OP_OPT`** so a refusal degrades to the Low rung instead of failing the load |
+| **XT-9 (minor)** — image estimate below SKIES' comparable, no overflow route | Estimate raised to ~39.5 KB image + 11.5 KB bss = **51,000 of 61,440**; the overflow route (a far-called COLD part for menus/About/cards/scores/settings) is named in §96.9 and its dispatch thunk designed in wave 1, populated only if `os88pkg.py`'s assert trips |
+| **XT-10 (minor)** — texture 0 is "open", so fifteen materials, not sixteen | **15 materials**, part 4 = 15 × 2 × 1 KB = 30 KB (45 on Mode X); `t_pxsart` asserts the count against the nibble range |
+| **tree-1 (blocker)** — the parts run is bounded at 128 unpacked SECTORS (os88partsbody.inc:430,460); bss ships inside part 0; OP_COMP does not relieve it | **Parts 1 (art) and 2 (levels) are `OP_LAZY`**, fetched by `op_fetch` and expanded by the package through `OSAPI_DECOMP` (skies' `csl_art`, csload.asm:78-99). The run is part 0 alone, ~100 sectors; **the recipe asserts run < 128 at build** through `tools/os88parts.py` |
+| **tree-2 (blocker)** — the small arm was sized against free bytes; the binding number is the 17.5–20 KB largest run in a 52.5 KB arena | **The small arm is a §24.5 OMISSION carrying SKIES' ground** (§4.3): the smallest honest arm is ~32 KB image+bss + a 10 KB shadow = 42 KB, against TANK's 36 KB — the largest thing measured to fit — and a 32 KB image may not even load against a 20 KB run. `SMALLOMIT_GAMES += pxstein.o88` with the arithmetic beside it; the door is left open with the measurement that would reopen it |
+| **process-2 (major)** — the Low-detail rung lived in part 3, so a build without part 3 had no renderer | **The linear (80-stride) ceiling/floor/flat-column ladders are STATIC, assembled into the image** — `row(r) = r × 80` is known at assembly time — and are the **Low rung the full build exposes as a Detail item and falls back to when part 3/4/5 is refused**. Only textured scalers, the DDA bodies and the column driver are generated. One path, exercised on every machine from wave 1 |
+| **tree-4 (major)** — WIN1's 140 content rows do not fit a 640×200 CGA desktop (~137 max after `TITLE_H`) | The windowed Rows rung is a function of the content height `WM_GEOM` returns after `WM_PREFER`; the XT default 80 + 24 + 16 = **120 rows fits everywhere**; Rows 100 is offered only where the desktop returns ≥ 140 |
+| **tree-5 / process-1 (major)** — five fast rows against a tier at 31.9 s of a 30 s budget; the registry's own rule (suite.py:344-345) | **One fast row**, `pxs-gen` in `t_paccman`'s mould (0.3 s): regenerate `pxtab.inc`/`pxart.inc`/`pxlev.inc` and hash against the committed copies. The DDA sweep, the reference-renderer frames and the scaler byte image are **soak** (`soak -k 'pxs*'`) with CLEAR SKIES' sentence. `t_pxsmap`'s sweep is sampled (every open cell × 16 headings) and still soak |
+| **tree-6 (major)** — `APPS_GAMES` has five consumers; `apps-all.img` has 127 spare clusters (65 KB) | All five named (§4.4). **`PXSTEIN.O88` packed ≤ 56 KB is a hard `$(error)` in its recipe**, so wave 6's real art cannot grow past the cluster arithmetic silently |
+| **tree-7/8/9/10 (minor)** | Windowed, the ENTER state and the score write are on the UI task through `W_ONKEY`; the shadow is claimed **at entry, before `WM_CREATE`**, so a refusal is §42.6's sentence in the window; a THIRD staleness fix (`OSAPI_GFX_BLIT1`'s kern_small comment, os88api.inc:1105-1107); two INDEX rows expected; `tests/pxsbench.py` is a named instrument with `wants=("build/pxsbench.o88",)` |
+| **process-3 (major)** — the instrument sat inside the wave it prices | **Wave 0** is the instrument, the tables, the level tool and the reference renderer, nothing else; its `done_when` is a table of measured numbers, and wave 1 picks the default rung from them |
+| **process-4 (major)** — the questions | Q3 (text-mode flip) settled in §96.11 by its own arithmetic. Added: the **default rung** question (64 at ~7.7 or 48 at ~9.7 — both ship), the **theme** question (before wave 2 fixes the material list), and the **three kernel gaps as one question with prices**. Q4 and Q5 merged into one content-scope question |
+| **process-5/6** — file lists; wave 1's menus, parts and HUD band | Fixed: `pxgame.asm` in wave 3; `pxlev.inc` + `t_pxsmap` in every wave that adds a level; wave 1 installs the Mode item only; only parts that exist are declared; wave 1's screendump shows a black HUD band |
+| **process-7** — the art pipeline as a process | The recipe and the key rule written into §5 and `--check`; a losable `--preview` criterion; **the 15 wall masters move to wave 2, the guard masters to wave 3** |
+| **process-8** — models | The orchestrator's rubric decides (fable on engine/raster/inner-loop waves, opus on mechanical ones), so the reviewer's inversion is not taken; **wave 5 is split** so no one failing subsystem blocks three others |
+| **process-9** — the guest-reading mechanism is unnamed | `tests/pxslib.py` is a wave-1 deliverable: `pkg_syms()` (tests/mcperf.py:66), `winptr()` (tools/os88geom.py:782), `tools/os88parts.py`, plus the new part-claim locator (read part 3's segment out of the instance's parts table) |
+| **process-10** — launch-path costs unpriced | `pxsbench` row (h): generate once, `bt_build` once. **One byte-texture set resident at a time**; the F toggle rebuilds it (~50 K stores ≈ 0.3 s, behind a mode set the player already sees as black). §96.3 states the strongest claim outright: **the scaler set is identical across WIN1, CGA4, CGA16 and Mode X because all four are an 80-byte stride** |
+
+Decisions **kept** from the draft: raycaster over voxel (C §2.4's 2.5–3.2× per column; a flyover is not a Wolfenstein); one ray per shadow byte; compiled scalers with DS = destination; Δ-fill + row-range present + nothing-dirty predicate; CGA4 shadow default and no text-mode flip; Mode X far-dark third shade; WIN1 as a 1bpp band, WIN4 on 286+ only; DOT DELIRIUM's session; eight-facings-by-mirror; Wolf's door, guard and HUD beats; `games360.img` at 360 KB.
+
+---
+
+## 1. The engine
+
+### 1.1 Fixed point and tables
+
+| quantity | format | note |
+|---|---|---|
+| map | 64×64 bytes `[y<<6 \| x]`; high nibble = **material 1–15** (0 = open); low nibble bit 0 SOLID, bit 1 DOOR, bit 2 DOOR_EW, bit 3 SPECIAL (elevator switch on a solid cell; secret door on a door cell) | 4 KB bss |
+| position | Q8.8 unsigned per axis; tile = high byte | no shift anywhere |
+| angle | 12-bit, 4,096/turn, `and ax,0FFFh` | 10.7 units a column at 64 |
+| `px_sin` | 1,024-entry quarter table Q14; `cos(a) = sin(a+1024)` | 2 KB image |
+| `px_tan` | 1,024-entry quarter table Q8.8, clamped ±127.996 | the DDA's steps; no divide |
+| `px_fan[n]` | pixelangle per column for 48/56/64/72/80 and Mode X 160/320 | `tools/pxstab.py` → `pxtab.inc` |
+| height | `h = PX_HEIGHTK / nx`, ONE `div` a column (163 clk M) | a `px_h[]` table is the wave-2 micro-option |
+| `spotvis` | **a GENERATION byte per cell**: written with the frame's generation `CL` at every crossing (`mov [si+PX_SPOTVIS],cl`, the same 4-byte store), tested by `cmp …,gen`; cleared only when the generation wraps (every 255 frames) | the per-frame clear XT-1 priced at 8,600–34,000 clk is gone |
+
+No `mul`/`div`/`shl reg,cl` in any per-pixel loop.
+
+### 1.2 The trace — four generated quadrant bodies, patched steps
+
+Per column: `angle = heading + px_fan[c]`, quadrant from the top 2 bits, `xstep`/`ystep` from `px_tan`, initial intercepts by 2 `mul` (266 M). Then:
+
+- **The four quadrant bodies live in part 3** (generated at launch from a template in the image, ~40 bytes each) and **the two step magnitudes are patched into their `add reg,imm16` once per column** — 4 byte stores ≈ 100 clk, against 10 crossings × ~24 clk for a memory-resident step. This is what lets the body hold its state in registers: BX/DX the two intercept fractions, SI/DI the two candidates' map indices (the y tile kept pre-shifted as `ytile<<6`, stepped by ±64 immediates fixed per body), CL the generation, AL the map read. ≤ 24 bytes, ≤ 3 memory operands (map read, `spotvis` write, nothing else). **Budget ≤ 130 clk a crossing (D); 155 is the pessimistic anchor and TANK's 159 the ceiling** — `pxsbench` row (c) measures it in wave 0 before anything is shaped around it.
+- Doors in the DDA: half-step the intercept (`sar` pair), compare the fraction with `doorpos[door]`; through → continue; struck → hit with `u = frac − doorpos`. ~200 clk. The two cells beside a door show material 15, the jamb.
+- Hit: `nx` by two `imul` (MUL14, `tk3d.inc:31`), clamp `MINDIST` 0.09, `h = K/nx`, `u = frac>>3` (32 texels, mirrored per side), side → lit/dark. Outputs `wallh[c]` (the sprite z-buffer), `scaler[c]`, `texcol[c]`, `shade[c]`.
+- Cast ≈ 64 × (150 + 266 + 100 + 10 × 130 + 630) ≈ **156,500** at 64 columns (D).
+
+### 1.3 The compiled scalers and the static ladders (`pxgen.inc`)
+
+- **Static, in the image (~1.3 KB)**: the linear ceiling ladder, floor ladder and flat-column ladder — Duff ladders of `mov [di+r×80],bl/bh`, entered at index. `row(r) = r × 80` is known at assembly time, so nothing generates them. **These are the Low rung**: the Detail item "Low (flat walls)" in the full build, the fallback when part 3/4/5 is refused, and what wave 1 draws with.
+- **Generated into part 3 (`OP_ZERO | OP_OPT`, ~30 KB, ~150 ms once, row (h) measures it)**: one textured scaler per height (2-row steps to 60, 3-row above, to 1.5·H clipped), body `mov al,[es:si+v]` (23) per texel and `mov [di+r×80],al` (25 RAM / 31 VRAM) per row, `retf`; **DS = the destination, ES = the byte-texture set**; `codeofs[33]` per scaler; `px_sctab[h]`; the four DDA bodies; and **the column-driver loop** (~200 bytes) so the frame makes ONE far call into part 3 and every scaler entry is a near call inside it. The part is pinned (`MC_RLOC` 0), never `OSAPI_MEM_MOVABLE`; no register preserved (§85.3.4).
+- **The scaler set is IDENTICAL across WIN1, CGA4, CGA16 and Mode X** — all four are an 80-byte row stride — and is regenerated only on a Size/Rows/Detail change. The Hercules banked table is the one input that would differ and it is not shipped (§0).
+- **Two patch sites, both in part 3, both owned by one routine each**: the `retf` patched over the first store of row `v_bottom` for a sprite post or a clipped wall (Wolf's ScaleLine), restored in the same routine before any `jc`; and the DDA step immediates, rewritten at the top of every column. `tests/pxsscale.py` diffs the generated part against `tools/pxsgen.py` byte for byte; the patches are transient and the diff is taken between frames.
+- Every off-centre writer (weapon, Tab map, cards, fade) biases DI by `k × 80` and may do so **only because the stride is linear**; the rule is written in §96.3.
+
+### 1.4 Δ-fill, row range, the idle predicate (`pxcomp.inc`)
+
+Per column `top[c]`, `bot[c]` — the union of wall, sprite and weapon extents drawn last frame, **per page on Mode X (2 × 80 × 2 words)**. Ceiling rows `[top, top')` rewritten only if `top' > top`, floor `(bot', bot]` only if `bot' < bot`; nothing written twice. Every other writer widens the extents through `px_touch(col, top, bot)`. The present copies `[min(top, lasttop) .. max(bot, lastbot)]` across all columns. **Nothing dirty → nothing composed** (no move/turn/door/sprite/weapon/HUD/fade): step the sim, `FSXW_TICK` / `TASK_SLEEP 1`; the gate pokes `[px_force]`.
+
+### 1.5 Sprites and the weapon (`pxspr.inc`)
+
+Candidates = actors and statics whose cell's `spotvis` byte equals the generation (~5,000 clk for 128 tests). Transform 4 `imul` + 2 `div` ≈ 1,000 each, ≤ 8 considered, insertion sort far-to-near. Per covered column: one word compare against `wallh[c]` is the z-test; each **post** is one patched-`retf` scaler entry (~350 clk of patch + near call + restore inside the driver). 8 facings from ≤ 5 masters by a mirror table built at load (the mirrored post list is the columns reversed). Bounded by `t_pxsmap` (no cell from which more than two guards reach melee) and by the **8,000-store cap** (past it the farther sprite is drawn at every second column). Weapon: 16 byte-columns × 24 rows, columns 24–39 of the bottom 24 rows, 3 weapons × 3 frames, through `codeofs[0]` of the height-24 scaler, DI biased by row; no depth test; extents through `px_touch`.
+
+### 1.6 Doors, keys, secrets, the exit (`pxgame.inc`)
+
+≤ 64 doors `{cell, axis, pos, state, timer, lock}`; Use opens if unlocked; 16 units a tick (~0.9 s), holds 5 s, closes unless a body is in it; collision passes at `pos ≥ 128`; gold/silver locks; secret doors (bit 3 on a door — the wall's texture, counts in secrets %); the elevator switch (bit 3 on a solid cell, material 14 → 13 on Use, ends the floor). Pushwalls absent.
+
+### 1.7 The clock, the input, the states
+
+`tk_steps` verbatim: sim once per elapsed tick, capped at 3; a step ≤ 1/4 tile with per-axis collision at radius 0.25 (§93.6.1). `OSAPI_KEY_DOWN` (232 µs M) read once at the first owed step and cached; armed by a throwaway call in entry; the tap latch. `int 16h` in the bracket / `W_ONKEY` windowed through one `px_key_common`; `dd_kbdrain`; `dd_focus_ck` sticky pause; `[px_inbr]` set before `OSAPI_FSX_RUN`, cleared INSIDE the proc; restart at bracket entry after a game over. **Windowed, the ENTER state is advanced by `W_ONKEY` on the UI task and the score file is written there** (§20.6 rule 7; ddhs.inc:592-594's sentence); fullscreen the bracket IS the UI task. States: ATTRACT / READY ("Floor N") / PLAY / DIE (red fade = a shade-table swap, 12 ticks) / LEVELDONE (ratios card) / OVER / ENTER. Mouse turn ∝ pointer offset, clamped, off by default.
+
+---
+
+## 2. Adapters
+
+`px_r_setup` (cs_r_setup's shape) binds six indirect words per backend — `setup`, `begin`, `col`, `sprite`, `glyph`, `end` — every branch writing both ways (csraster.inc:225). Menus from `OSAPI_FSX_CAPS` **on this window** (`tank.asm:499-508`), re-asked on `W_ONRESIZE`; a refused item renamed with its reason by rewriting its string pointer (`tank.asm:534-539`, §47). Settings one byte each in `SYSTEM/APPDATA/PXSTEIN.CFG`, clamped on load. Art is authored in **material indices**; `px_bt_build` transposes the masters into **one resident byte-texture set for the current backend** (part 4, byte per texel, column-major, lit + dark; far-dark on Mode X) through an ink table; the F toggle rebuilds it (row (h)); §39.4's UI mono map is never on the art path.
+
+| backend | mode | XT default view | on the glass | HUD | present | ink |
+|---|---|---|---|---|---|---|
+| **CGA4** (CGA first item; EGA; VGA-as-CGA) | `FSXM_CGA320` | **64 × 80** | 256×80 at (32,28) | 24 rows | 16 KB shadow, row-range `rep movsw` to the 2-bank rows (`cs_devrows`) at 18.6 clk/B; palette 0 via `int 10h AH=0Bh` | 4 solid + 6 2×2 dithers = 10 tones; dark one tone down |
+| **CGA16** (second item, `[vid_kind] == VID_CGA` only) | `FSXM_TEXT80` retimed to 160×100×16 (`cs_c160_mode`) | **48 × 80** | 96×80 logical at (32,4) | 20 rows | shadow + `cs_blit.expand` at **~48 clk/B** (csraster.inc:942-954 is a lodsw/stosb pair, not a rep); snow on a genuine CGA accepted (§88.15.4) | attribute nibbles, texels u and u+1 in one byte; dark = §88.15.3's table |
+| **HERC** | `FSXM_HERC` 720×348, TANK's box at (40,74) | 64 × 80 | 512×80 at box row 60 | 24 rows | **shadow + 4-bank span copy on every Hercules** (lone or dual); the flip arm is absent, §0 | density 0/25/50/75/100% from a Rec.601 luminance ladder (`pxsart.py`, a2ref's idiom); phase arm chosen by `--preview` in wave 2; one-pixel features solid |
+| **MODEX** (VGA) | `FSXM_MODEX` 320×240×256, **2 pages** | 64 × 80 | 256×80 at (32,48) | 24 rows | `OSAPI_FSX_PAGE`, DS = A000, map mask 0Fh; per-page extents; Detail 80/160/320 rays (mask 0Fh / 03h+0Ch / per plane) defaulted by `OSAPI_CPU_INFO`; the retrace wait charged | DAC 0–15 lit, 16–31 dark 60%, 32–47 far-dark beyond 8 tiles, 48–63 sprites/HUD |
+| **WIN1** (any desktop; the XT default) | — | 64 × 80 | 512×80 1bpp band + a 16-px `font_run` line; frame 528 × (80+24+16 = **120**) via `WM_PREFER`, 8-aligned by `WM_SNAP`, `WM_OWNBG`, `WM_ONRESIZE` hooked, no `WM_SAVEU`, not resizable | 24 | ONE `OSAPI_GFX_BLIT1` of the row range (ES:SI = shadow+8, BP = 80, CX = 512, DX = rows), `_PEN` light grey on black on VGA; geometry re-asked every frame (`WM_CONTENT`/`WM_GEOM`/`WM_DISPLAY`) | the Hercules byte set |
+| **WIN4** (VGA, tier ≥ 286) | — | 64 × 100 | 512×100 4bpp in four 25-row strips | 24 | four `OSAPI_GFX_BLIT4`s from the shadow claim's spare 6,400 B (of 6,464 — said in §96 so nobody adds a HUD row); greyed on `CPU_8086` with the price ("Colour: 1.2 s a frame on this CPU") | the Mode X set through a 32→16 table |
+
+**The windowed Rows rung is what `WM_GEOM` allows**: a 640×200 CGA desktop returns ~137 content rows (`os88api.inc:2494-2499`, `TITLE_H` 18), so Rows 80 (120 total) is the ceiling there and Rows 100 (140) is offered where the desktop returns ≥ 140. Not offered: `FSXM_CGA640`, `FSXM_VGA13`, 0Dh, a same-mode bracket. Windowed 16 colours on an XT is a kernel change — question 6.
+
+---
+
+## 3. The per-frame arithmetic (D, anchored on M units; re-derived from counts)
+
+Units: store 25 RAM / 31 VRAM; texel load 23; DDA crossing 130; `mul` 132.5 M; `div` 162.9 M; `rep movsw` → VRAM 18.6/B; `KEY_DOWN` ~1,100 M; windowed tax 3.8 ms mono / 6.7 VGA M; `gfx_blit1` 0.40 ms + 3.9 µs/B mono, 2.2 ms + ~1.0 µs/B VGA M; retrace period 20 ms Herc / 16.7 ms CGA-VGA (scout-perf §2.4). 4,772,727 clk/s; 8 fps = 596,600.
+
+**Scene A (corridor), 64 × 80**: mean wall 32 rows, 10 crossings, 3 sprites 25 columns × 24 rows, weapon, Δ-fill ~700 stores, 1.3 ticks of sim.
+
+| stage | counts | clk |
+|---|---|---:|
+| cast | 64 × (150 + 266 + 100 patch + 10 × 130 + 630) | 156,500 |
+| candidate walk | 128 × ~40 | 5,000 |
+| stores | walls 2,048 + Δ-fill 700 + sprites 1,800 + weapon 384 = 4,932 × 25 | 123,300 |
+| loads | walls 2,048 + sprites 1,800 + weapon 384 = 4,232 × 23 | 97,300 |
+| overhead | 64 columns × 240 + 75 posts × 350 + 16 weapon posts × 350 + 8 transforms × 1,000 + one far call | 59,000 |
+| HUD amortised | | 5,000 |
+| simulation | `dd_step` 6.8–8.7 ms M for five actors, scaled to 1.3 ticks | 45,000 |
+| input + OS | 8 × 1,100 × 0.6 + int 16h + ~10 calls | 8,300 |
+| **adapter-independent** | | **499,400** |
+
+| backend, 64 × 80 | present | frame | ms | fps |
+|---|---:|---:|---:|---:|
+| **CGA4 shadow** | 5,120 × 18.6 + 8,000 = 103,000 | 602,000 | 126 | **7.9** |
+| **Hercules shadow** | 103,000 | 602,000 | 126 | **7.9** |
+| CGA16 48 × 80 (cast ×0.75, draw ×0.75) | 3,840 × 48 = 184,000 | 583,000 | 122 | 8.2 |
+| Mode X 2 pages, XT-VGA | +6 × 4,900 VRAM stores + Δ-fill ×2 (+19,000) + 64 outs + retrace mean 40,000 | 588,000 → quantised to 133 | 133 | 7.5 |
+| WIN1 on a 1bpp desktop | 0.40 + 5,120 × 3.9 µs + 3.9 tax = 24.3 ms | 615,000 | 129 | **7.8** |
+| WIN1 on an XT-VGA | 2.2 + 5.1 + 6.7 = 14 ms | 566,000 | 119 | 8.4 |
+| *(not shipped)* Hercules flip | +29,000 VRAM + 19,000 staleness + 47,700 wait, no copy | 595,000 → quantised to 140 | 140 | 7.1 |
+
+**Scene B (a 90° turn at a doorway)**: the Δ-fill band is tens of rows on the columns crossing an edge — ~2,500 Δ-fill stores instead of 700 (+49,000), present = every row (already). CGA4 ≈ 651,000 = 136 ms = **7.3 fps** (D); windowed mono ≈ 7.2. TANK's +55% turning premium does not apply — it repaints its whole wireframe — but this is the number the gate must measure, not derive.
+
+**Rungs (CGA4, corridor)**: 64 × 100 → 669,000 = 7.1; **64 × 80 → 7.9 (the default)**; 56 × 80 → 8.7; **48 × 80 → ~494,000 = 9.7 (the reserve)**; flat walls (Low) → +5% only. Worst frames: two guards at melee 10,240 stores → ~6 fps before the cap; a 20-crossing corridor −83,000.
+
+**The promise** (`tests/pixelstein.py`, cycle-exact on MartyPC, `[px_force]` poked): **≥ 7.0 fps on scene A and ≥ 6.0 on scene B** fullscreen on `os8088_5150_cga_gla` (CGA4) and `os8088_5150_herc_gla`; **≥ 6.0 / ≥ 5.0 windowed** on the Hercules desktop; Mode X and windowed VGA measured on `os8088_xt_vga` and reported. If the default misses, the rung moves (64 → 56 → 48 columns) before the gate is edited. Wave 0 replaces every D unit above with an M one before wave 1 shapes code around it.
+
+Against the tree: TANK 72–123 ms (8.1–13.9 fps), CLEAR SKIES 164 ms (6.1), both called playable. A 286-12 is ~5–6× faster and tick-bound at 64 × 100 / 160 rays; a 386 draws 320 rays in Mode X tick-bound.
+
+---
+
+## 4. Memory, the package's shape, the disks
+
+### 4.1 Image + bss (part 0, ≤ 61,440)
+
+| | bytes |
+|---|---:|
+| code: cast + the DDA template, generator, static ladders (1.3 KB), Δ-fill, sprites, doors, actors, player, HUD, presents + glyph writers, window/worker/bracket, menus, About, settings, scores, loader glue | ~34,000 |
+| tables: sin 2,048, tan 2,048, fan 5 × 160 + 2 × 640, five 32-byte ink tables, strings | ~5,500 |
+| bss: map 4,096, spotvis 4,096, column arrays 80 × 4 words, per-page extents 2 × 80 × 2 words, actors 32 × 24, doors 64 × 6, statics 96 × 4, player/HUD/settings/scores | ~11,500 |
+| **image + bss (SKIES' game part is 51,776 for comparison)** | **~51,000 of 61,440** |
+
+**The overflow route**, named before it is needed: a far-called **cold part** (`OP_ASSET`, code at org 0 reading its data through DS = part 0) for menus, About, the cards, scores and settings; the dispatch thunk is designed in wave 1 and the part is created only when `os88pkg.py`'s size assert trips. Worker stack `OS88_STACK_256` sized with `tools/stkdepth.py` + 64 + SOUND.DRV's 16.
+
+### 4.2 Heap — five claims, one of them contiguous
+
+| claim | KB | when |
+|---|---:|---|
+| the loader's own region | 2 | freed after `OSAPI_PKG_REHOME` |
+| **the parts claim, ONE contiguous run** (os88partsbody.inc:628): part 0 (51, `OP_SEG \| OP_COMP`) + part 3 scalers/DDA/driver (~30, `OP_ZERO \| OP_OPT`) + part 4 byte-textures (30; 45 Mode X, `OP_ZERO \| OP_OPT`) + part 5 sprite set (~21, `OP_ZERO \| OP_OPT`) | **~132 (147 VGA)** | `op_load`; **the read run is part 0 alone, ~100 of the 127 sectors the carve allows** (os88partsbody.inc:430,460; §20.12.7 keeps `len` unpacked) |
+| shadow 80 × 104 rows in 16 KB (WIN4's strips in the spare 6,400 B) | 16 | **at entry, before `WM_CREATE`** — a refusal is §42.6's sentence in the window, never a black bounce (§24.5's SKIES row) |
+| part 1 art masters, `OP_LAZY`, LZ4 stream expanded by the package through `OSAPI_DECOMP` (`csl_art`'s shape; `OP_COMP \| OP_LAZY` is refused by the macro) | 24 | first paint; resident (the F toggle re-transposes from it) |
+| part 2 levels, `OP_LAZY`, RLE | ~6 | first paint |
+| **total** | **~180 KB (195 VGA)**, 5 of `MEM_OWNER_MAX` 8 | a 640 KB XT has ~500 KB free; a second instance is refused on the contiguous run, in the package's words |
+
+**When the scratch parts are refused** (`OP_OPT`, checked through `op_seg` = 0): any of 3/4/5 missing puts the game on the **Low rung** — static ladders, flat walls, sprites as flat silhouettes through the flat ladder — the same code the Detail item exposes, so it is exercised on every machine.
+
+### 4.3 The 128 KB floor — an OMISSION, with the ground written down
+
+The floor machine's arena is **52.5 KB** and the largest run a claimant can have once the caches are shed is **17.5–20 KB** (§24.5's SKIES row, §85.3.5.1, Makefile:8699-8706). TANK's small arm — image 18 KB + an 18 KB claim = 36 KB — is the largest thing measured to fit. Pixelstein's smallest honest arm (no generator, static ladders, a generic DDA, 3 levels, 16×16 sprites, the same 64×64 map + `spotvis` + column arrays) is ~32 KB image+bss + a 10 KB shadow = **42 KB, and a 32 KB image may not load at all against a 20 KB run**. So `SMALLOMIT_GAMES += $(BUILD)/pxstein.o88` with this arithmetic in §96.9 and a row in §24.5's table (**a REQUIREMENT the machine cannot meet: a 64-tile world plus its visibility plus a frame is more contiguous memory than the arena holds**). The door stays open: a 32×32-level, 48×64 arm measured on `os8088_5150_cga_128k` would be a substitution — nobody has measured it and the plan does not promise it. `soak -k smallreq` reads the built floppy either way.
+
+### 4.4 Disk
+
+Loader 2 + part 0 packed ~33 (11.5 KB of bss zeros pack well) + art ~16 + levels ~5 ≈ **56 KB packed**, and **56 KB is a hard `$(error)` in the recipe** (`stat` after `$(OS88PKG)`), because wave 6's real art lands after the disk arithmetic was checked. `APPS_GAMES += $(BUILD)/pxstein.o88` and **its five consumers** (tree-6): `APPS360` (Makefile:10039) and `APPSARGS360` (:10081) take `APPS_GAMES_360 := $(filter-out …)` with the §24.6.1 sentence; `GAMES360`/`GAMESARGS360` (:10215) KEEP the unfiltered list; `dbg-apps360.img` (:4958,4963, a 360 KB disk off `all`) takes the filtered list; `SMALLGAMES` (:8844) subtracts it through `SMALLOMIT_GAMES`. Measured now: `apps360.img` 313/354 clusters (cannot take it), `games360.img` 120/354, **`apps-all.img` 2,720/2,847 — 127 spare clusters = 65 KB, so the package leaves ~9 KB on the disk `make live` carries**. A soak row asserts `PXSTEIN.O88` is on `games360.img` and `apps.img` and NOT on `apps360.img` or `smallapps360.img`.
+
+---
+
+## 5. Assets and the host tools
+
+- **Masters** in `apps/pixelstein/art/`, 16-colour PNGs in material indices: **15 walls** 32×32 (the theme is question 3; the placeholder list: grey stone ×2, blue stone, wood ×2, brick, banner, portrait, emblem, cell door, cell bars, steel door, elevator 14, elevator-used 13, jamb 15), guard 5 facings × 3 + attack 2 + pain 1 + die 3 + dead 1 = 22 frames, dog 4 × 2 + 3, 6 decorations, 8 pickups 16×16, weapon 3 × 3 at 16×24, face 6, digits 0–9 16×24, icons.
+- **The image-model recipe** (process-7): generate **flat, posterised, low-frequency** at 256×256 or 512×512; downsample by an **integer factor with a mode filter** (a box filter returns mush); snap to the 16 RGBs; **the sprite key comes from ALPHA, never from near-magenta** (index 5 is the key; an image model puts near-magenta inside a sprite) — `--check` refuses a master with index 5 inside its alpha. `--preview DIR` renders every asset through all five ink tables at each aspect (VGA 1.00, Hercules 1.55, CGA 2.40); **the losable criterion**: two named materials (brick, stone) must be distinguishable at 64 columns in the CGA4 render at 1:1, the same crop each time, and the guard's front and side facings distinguishable at 12 columns; a wave that fails it re-chooses materials before it is done.
+- **`tools/pxsart.py`** (csart.py's shape; stdlib only for anything `make` runs; `--pil` an authoring aid; `--placeholder` procedural art; `--dither` both arms in `--preview`) → `pxart.inc` (offsets, sizes, the five ink tables incl. the Rec.601 ladder, post directories — never pixels) + `build/pxsart.bin` (the LZ4 stream); the 16×20 HUD crops for CGA16; asserts 15 materials.
+- **`tools/pxstab.py`** → `pxtab.inc`. **`tools/pxslevel.py`** → `build/pxslev.bin` + `pxlev.inc` from `levels/*.txt` (one character a cell; the legend in the tool), with the checks: reachability, keys before doors, ≤ 64 doors / 32 actors / 96 statics, no axial sight line over 24 cells, the DDA budget (mean ≤ 12, worst ≤ 26 over every open cell × 16 sampled headings), the melee invariant.
+- **`tools/pxssim.py`** — the host reference renderer (htmsim/weavesim's shape): the same tables, DDA, hit and Δ-fill byte semantics; renders (position, heading, size, backend) to shadow bytes and a PNG; `--dump` the column arrays.
+- **`tools/pxsgen.py`** — the host model of part 3: the byte image of every scaler, the DDA bodies and the driver for (H, columns).
+- **`tests/pxslib.py`** — the guest-side reader every soak row uses: `pkg_syms()` (tests/mcperf.py:66), `winptr()` (tools/os88geom.py:782), `tools/os88parts.py` for the table, and **the part-claim locator** (part 3's segment out of the instance's parts table) — new work, a wave-1 deliverable.
+
+---
+
+## 6. Package conventions
+
+`pxstein.asm` the loader (csload.asm's shape, first in the rule so `os88index.py` finds it — **expect two INDEX rows**, as SKIES has, docs/INDEX.md:326-327) + `pxgame.asm` part 0; `PXSTEIN_SRC` on dotdel's idiom with skies' `--part` lines, `$(PKGZSTAMP)`, `$(OS88PKG)`. Entry order from tank.asm:407: `op_load` / shadow claim / `OSAPI_VIDEO`, `KEY_DOWN` arm, `SRAND`, `WM_CREATE`, `REGION_MOVABLE`, `PREFER`, `SNAP`, `OWNBG`, `ONRESIZE`, `ONWAKE`, `MENU_SET` (wave 1 installs **Mode only**; Size/Rows/Detail arrive in wave 2, Sound/Mouse in wave 4), `OSAPI_ABOUT_SET` via `os88ui_about`; sound byte 1. `font_run` only. §96 written BEFORE the code with **three** staleness fixes in the same commit: §53.5's `gfx_flush` clause; `os88api.inc:2773`'s `OSAPI_FSX_RUN` CX comment; **`os88api.inc:1105-1107`'s `OSAPI_GFX_BLIT1` "kern_small carries the slot and not the body"** (withdrawn by §5.4.2.5.1). `tools/os88index.py` regenerated by every wave that adds a tool or package file; every generated-and-committed include regenerated by the wave that changes its input.
+
+---
+
+## 7. Waves
+
+Each wave builds (`make`, fast tier green), boots, and is photographed. The model named implements it (the orchestrator's rubric: fable on engine/raster/inner-loop waves, opus on mechanical ones).
+
+### Wave 0 — the instrument, the tables, the reference renderer — **fable**
+
+Files: `SPEC.md` (§96 drafted with D numbers marked, the three staleness fixes), `Makefile` (`pxsbench` on `bench.img`; `PXSTEIN_SRC` skeleton), `tools/{pxstab.py, pxslevel.py, pxssim.py}`, `apps/pixelstein/{pxtab.inc, pxlev.inc}`, `apps/pixelstein/levels/e1m1.txt`, `tests/pxsbench/pxsbench.asm`, `tests/pxsbench.py`, `tests/suite.py` (the instrument row, `wants=("build/pxsbench.o88",)`; the `pxs-gen` fast row), `tests/unit/t_pxsgen.py` (the digest row), `docs/INDEX.md`, `docs/reports/PXS-FRAME-<date>.md`.
+
+Features: `pxsbench` (INSTRUMENT, `make bench`) rows (a) the 4-byte compiled store ladder, 80 rows, to RAM/B800/B000/A000; (b) the static vertical ladder; (c) **the patched-immediate DDA body at 10 and 20 crossings**; (d) a 5,120 B span copy to B800/B000 and a 512-wide `OSAPI_GFX_BLIT1`; (e) `cs_blit.expand` of 3,840 B and the direct attribute-stride store; (f) a two-phase `xlat` texel; (g) `KEY_DOWN` × 8; **(h) one scaler-set generation and one `bt_build` transpose**. `pxstab.py` + `pxslevel.py` + e1m1 (rooms, corridors, a door slab, ≤ 24-tile sight lines) + `pxssim.py` rendering e1m1's spawn and the doorway-turn scene to PNGs.
+
+Done when: `python3 tests/pxsbench.py` prints all eight rows on `_cga_gla` and `_herc_gla` (expect ~25 RAM / ~31 VRAM stores, ~27 ladder, ≤ 155 DDA, ~18.6/B copy, ~48/B expand, the blit1 row term at 512 wide, the generation and transpose in ms); §3's table is re-run with the M units and **the XT default rung is written into §96.1 from measurement** (expect 64 × 80); `tools/pxssim.py` produces the two scenes' PNGs; the `pxs-gen` fast row is registered and the fast tier's declared total is quoted (< 30 s); `make` green.
+
+### Wave 1 — the skeleton, the Low rung on every adapter, WIN1, the gate — **fable**
+
+Files: `SPEC.md`, `Makefile` (the loader/game rules, `--part`, the 56 KB assert, `APPS_GAMES` + `APPS_GAMES_360` at all five sites, `SMALLOMIT_GAMES`), `apps/pixelstein/{pxstein.asm, pxgame.asm, pxicon.inc, pxcast.inc, pxgen.inc, pxcomp.inc, pxrast.inc, pxwin.inc, pxgame.inc}`, `tools/pxssim.py`, `tests/pxslib.py`, `tests/{pixelstein.py, pxssim.py, pxsdisk.py}`, `tests/suite.py`, `tests/unit/t_registry.py`, `docs/INDEX.md`, `README.md`, `docs/reports/PXS-FRAME-<date>.md`.
+
+Features: the loader + part 0 + the parts table declaring **only what exists** (part 0, the lazy level part; the art part arrives in wave 2); the shadow claimed at entry; the icon; menus with the **Mode item only**; About; the cold-part dispatch thunk designed (not populated). The four-quadrant DDA **as a generated, patched body in part 3** with the generic memory-step body as the image-side fallback; the hit; the column arrays; `spotvis` generations; the **static ladders** (Low rung) drawing flat lit/dark walls; the Δ-fill; the row range; the nothing-dirty predicate. All four fullscreen backends' geometry, mode set, palette and present (CGA4 shadow, CGA16 48-wide on `VID_CGA`, HERC shadow, MODEX 2 pages via `fsx_page` with per-page extents); F/f/Esc; `[px_inbr]`. The worker, WIN1 through one `gfx_blit1` (pen on VGA), geometry every frame, the Rows-from-`WM_GEOM` rule, focus, `dd_kbdrain`, the `font_run` line. `tk_steps`, cached `KEY_DOWN`, the tap latch, move/turn/strafe/run, per-axis collision. `tests/pxslib.py` (the guest reader + part-claim locator). `tests/pxssim.py` (soak: guest column arrays and shadow vs host, both scenes). `tests/pixelstein.py`: draws (`px_frames` climbs), advances, no flash (FLOOR 70 over 40 frames), **fps on BOTH pinned scenes** with `[px_force]` poked, on `_cga_gla`, `_herc_gla`, `_xt_vga`, windowed on `_herc_gla`. `tests/pxsdisk.py` (soak: on `games360`/`apps`, off `apps360`/`smallapps360`; the packed size).
+
+Done when: a screendump on each of CGA4, CGA16, Hercules, Mode X and in a window shows the flat-shaded corridor with lit/dark faces, a door slab, the ceiling/floor split **and a black HUD band** (nothing paints it until wave 4), from the same spawn as `pxssim.py`'s PNG; `tests/pxssim.py` 0 differing heights / 0 differing shadow bytes on both scenes; `tests/pixelstein.py` ≥ 7.0 (A) / ≥ 6.0 (B) on CGA4 and Hercules with flat walls (expect ~8.3 / ~7.7) and the numbers filed as the wave-1 row; `tools/os88parts.py` reports the run < 128 sectors; `make` and `make test-full` green; `kernsize.py` unchanged.
+
+### Wave 2 — textures, the scalers, the walls — **fable**
+
+Files: `apps/pixelstein/{pxgen.inc, pxrast.inc, pxcomp.inc, pxcast.inc, pxart.inc, pxset.inc, pxgame.asm, pxstein.asm}`, `apps/pixelstein/art/*.png` (**the 15 real wall masters** on question 3's answer; `--placeholder` if it has not come), `tools/{pxsart.py, pxsgen.py, pxssim.py}`, `tests/{pxsscale.py, pxs160.py, pxsfsx.py, pxsperf.py}`, `tests/unit/{t_pxsart.py, t_pxsgen.py}`, `tests/suite.py`, `docs/reports/PXS-FRAME-<date>.md`, `PERFORMANCE.md`, `SPEC.md`, `docs/INDEX.md`.
+
+Features: `pxsart.py` (the pipeline, the recipe, the key rule, `--preview` with the losable criterion, `--check`, the five ink tables, both Hercules phase arms previewed and one chosen — recorded in §96.4) → the lazy art part + `pxart.inc`. `px_bt_build` → part 4 (one resident set; rebuilt on the F toggle; the C160 two-texel byte). The full textured scaler set with `codeofs`, `px_sctab`, the `retf` patch/restore helpers, **the column driver in part 3** (one far call a frame); `pxsgen.py` + `t_pxsgen` (soak) + `pxsscale.py` (soak, byte for byte). Doors in the DDA with the sliding u, jambs, u mirroring. Size/Rows rows + the V key; the Mode X Detail row 80/160/320 by tier; **Detail: Low** exposing the static ladders; regeneration on change; `PXSTEIN.CFG`. `pxssim.py` gains textures and ink. `pxsperf.py` (INSTRUMENT, skiesperf's shape, `-DPXPROBE` md5 byte-identical); `pxs160.py` (the text backend vs a forced full redraw); `pxsfsx.py` (restore equality after cycling every Mode/Size/Rows/Detail, the Low rung included).
+
+Done when: screendumps on all five backends show textured walls with jambs beside the door slab and the `--preview` criterion passes on the CGA4 and Hercules renders (brick vs stone at 64 columns); `pxsscale.py` 0 differing bytes; `pxssim.py` 0/0 with textures; `pixelstein.py` ≥ 7.0 / ≥ 6.0 on CGA4 and Hercules at the default (expect ~7.9 / ~7.3); Mode X and windowed VGA reported off `_xt_vga` — if Mode X reads under 6.0 the shadow+copy arm is tried before the wave closes; the stage table (cast / walls / present / sim) filed in `docs/reports/` and PERFORMANCE.md Part 5.
+
+### Wave 3 — sprites, guards, doors, combat — **fable**
+
+Files: `apps/pixelstein/{pxspr.inc, pxact.inc, pxgame.inc, pxgame.asm, pxcast.inc, pxcomp.inc, pxart.inc, pxlev.inc}`, `apps/pixelstein/art/*.png` (**the guard's 5 masters**, weapon 3 × 3, 8 pickups, 6 decorations), `apps/pixelstein/levels/e1m1..e1m3.txt`, `tools/{pxsart.py, pxslevel.py}`, `tests/unit/t_pxsmap.py` (soak), `tests/{pixelstein.py, pxsact.py}`, `tests/suite.py`, `SPEC.md`.
+
+Features: sprites — posts, the mirror table, transform, sort, the `wallh` z-test, the patched-`retf` post draw inside the driver, the 8,000-store cap, `px_touch`, part 5. The weapon over the view, hitscan, ammo, knife at 0; health/damage. Doors: slide, timers, blocked-while-occupied, locks, secret doors, the elevator switch. Guards: stand / patrol / alert / chase / attack (Wolf's hit table) / pain / die / dead; LOS = `spotvis` + a ≤ 32-step walk once a tick; the DIE fade. Pickups and statics. Three levels; `t_pxsmap`'s melee invariant and waypoints. `--preview` on the guard decides **8 vs 4 facings** here, with three waves left to act on it. `pxsact.py` (soak): a poked guard sees, turns, shoots, dies; a body keeps a door open; the two-guard frame reported.
+
+Done when: a screendump shows a guard (facings across four headings), the pistol, an open door with jambs, a pickup; `pixelstein.py` still ≥ 7.0 / ≥ 6.0 and the two-at-melee frame reported (expect ~6 before the cap); `pxsact.py` green; `t_pxsmap` refuses three guards at one cell's melee; part 5 measures ~21 KB; `tools/os88parts.py` run < 128.
+
+### Wave 4 — HUD, states, scores, sound, the episode — **opus**
+
+Files: `apps/pixelstein/{pxhud.inc, pxhs.inc, pxgame.inc, pxgame.asm, pxrast.inc, pxart.inc, pxlev.inc}`, `apps/pixelstein/art/*.png` (digits, face, icons), `apps/pixelstein/levels/e1m1..e1m8.txt`, `tools/{pxsart.py, pxslevel.py}`, `tests/unit/t_pxsmap.py`, `tests/{pxsstate.py, pxshud.py}`, `tests/suite.py`, `README.md`, `SPEC.md`.
+
+Features: the status bar (24 rows; 20 on CGA16): floor, score, lives, health, ammo, keys, weapon, 6-frame face, 16×24 digits, `OSAPI_FONT_GLYPHS` labels through per-backend glyph writers; change-only; per-page dirty on Mode X; the windowed `font_run` line. The seven states, READY and LEVELDONE cards, pause, sticky auto-pause, restart at bracket entry; **ENTER on the UI task windowed**. `PXSTEIN.HS` (tkhs.inc's shape, `FILE_GOTO` never `_Q`, magic `'PX8',1`); 4-letter floor passwords. Sound through `OSAPI_SND_TONE` only (the draft's list), Sound/Mouse menu items. Eight levels. The About card's full text. `pxsstate.py` (walks the states in BOTH worlds, reads the score back after a restart); `pxshud.py` (zero HUD rewrites over a quiet second).
+
+Done when: screendumps of the bar on CGA4, Hercules and Mode X; the two cards photographed; `pxsstate.py` green in the bracket and windowed with the file read back; `pxshud.py` green; `t_pxsmap` green on eight levels; `pixelstein.py` unchanged; the run still < 128 and the package < 56 KB.
+
+### Wave 5 — WIN4 and the two-display gates — **fable**
+
+Files: `apps/pixelstein/{pxrast.inc, pxwin.inc, pxcomp.inc, pxgame.asm}`, `tests/{pxswin.py, pxsmd.py}`, `tests/suite.py`, `SPEC.md`.
+
+Features: WIN4 — the Mode X set expanded through a 32→16 table into four 25-row 4bpp strips in the shadow's spare 6,400 B, four `OSAPI_GFX_BLIT4`s, default on `CPU_286`+ with VGA, greyed with the price on an 8088. `pxswin.py` (a window MOVE costs zero repaints; the band lands 8-aligned; pen vs 1bpp identical bits; a seam drag takes the right byte set); `pxsmd.py` (a bracket changes its own card only, QEMU two-card).
+
+Done when: a screendump of WIN4 on the 386 QEMU shows 16-colour walls in a window and the same window on an XT-VGA shows the greyed item with its price; `pxswin.py` and `pxsmd.py` green; `pixelstein.py` unchanged.
+
+### Wave 6 — the dog, the map, the machines, the numbers — **opus**
+
+Files: `apps/pixelstein/{pxact.inc, pxspr.inc, pxgame.inc, pxgame.asm, pxart.inc}`, `apps/pixelstein/art/*.png` (the dog, polish), `tools/pxsart.py`, `vm/xt-pixelstein/86box.cfg`, `vm/xt-pixelstein-herc/86box.cfg`, `Makefile` (the two targets), `README.md`, `SPEC.md` (§96's measured numbers), `PERFORMANCE.md`, `docs/reports/PXS-FRAME-<date>.md`, `docs/INDEX.md`, `tests/{pxsact.py, suite.py}`.
+
+Features: the dog (4 facings × 2 walk + bite + die; melee, fast); the Tab overhead map of seen cells into the view, `px_touch`ed off. `vm/xt-pixelstein` (xt-cga + `games360.img`) and `vm/xt-pixelstein-herc` (xt-hercules + `games360.img`); `make xt-pixelstein` / `xt-pixelstein-herc`; README says which target shows which backend. The final frame table from `pxsperf.py` on all four MartyPC machines into §96, PERFORMANCE.md Part 5 and the report; the About card's numbers; the spotlight capture recipe; a follow-up note for the os8088.com Wire entry. The full gate run.
+
+Done when: screendumps of the same corridor on CGA4, CGA16, Hercules, Mode X, WIN1 and WIN4 beside `--preview`'s renders; `make xt-pixelstein` boots 86Box to the game; the dog bites in `pxsact.py`; the map photographed; `pixelstein.py` green on all four machines with the numbers matching §96 within 5%; `make`, `make test-full`, `soak -k 'pxs*'` green; every shipped image `--verify`'d, `PXSTEIN.O88` on `games360.img` and `apps.img`, not on `apps360.img` or the small disks.
+
+---
+
+## 8. Tests (the registry)
+
+| row | tier | asserts |
+|---|---|---|
+| `pxs-gen` | **fast, 0.3 s** | regenerated `pxtab.inc` / `pxart.inc` / `pxlev.inc` hash-equal to the committed copies (t_paccman's mould) |
+| `t_pxsgen`, `t_pxssim`, `t_pxsmap`, `t_pxsart` | soak | the scaler byte image, the reference frames, the sampled DDA sweep + level rules, the material count and key rule — "ONE package, beside a change to it: `soak -k 'pxs*'`" |
+| `pixelstein` | soak, MartyPC × 4 | draws / advances / no flash; **fps ≥ 7.0 (A) / ≥ 6.0 (B) fullscreen, ≥ 6.0 / ≥ 5.0 windowed** |
+| `pxssim`, `pxsscale` | soak | guest arrays + shadow == host; guest part 3 == `pxsgen.py` |
+| `pxs160`, `pxsfsx`, `pxsdisk` | soak | Δ-fill ghost gate; restore equality over every setting incl. Low; the disk membership and packed size |
+| `pxsact`, `pxsstate`, `pxshud`, `pxswin`, `pxsmd` | soak | as above |
+| `pxsbench`, `pxsperf` | instruments, `wants=` | the unit costs; the staged frame |
+
+---
+
+## 9. Verification
+
+`make` (the fast tier incl. `pxs-gen`; the four every-shipped-image gates walking `games360.img`); `make test-full` alone; `python3 tools/os88test.py soak -k 'pxs*' --marty-jobs 1`; `make bench && python3 tests/pxsbench.py` on `_cga_gla` / `_herc_gla`; `python3 tests/pixelstein.py --machine … [--windowed] --scene a|b`; `python3 tests/pxsperf.py` per backend; `python3 tools/os88disk.py --verify` on every apps image with cluster counts quoted (`apps-all.img` spare ≥ 15); `python3 tools/os88parts.py build/pxstein.o88` run < 128; `tools/kernsize.py` unchanged; `pxsart.py --preview` LOOKED AT on CGA4 and Hercules; `make xt-pixelstein` / `xt-pixelstein-herc` / `xt-ega` / `386` screenshots per claim; `stkdepth.py` on the worker's deepest chain; `grep -c` two patch sites in part 3's generator, each restored in its owner; `tests/textsites.txt` unchanged; `checkdocs.py` clean; the fast tier's declared total quoted < 30 s.
+
+## 10. Risks
+
+1. The unit costs are DERIVED until wave 0 measures them; a 2× miss on the store is the 48 × 80 rung, a 2× miss on everything is ~5 fps and a redesign of the promise, not the engine.
+2. The DDA body's 130 rests on patched immediates in part 3; if row (c) reads 155 the cast is +10,000 and the table says so.
+3. Two patch sites in generated code in a pinned claim; a patch left by a fault path is a wrong picture — `pxsscale.py` between frames and the "restore before any `jc`" rule.
+4. **The contiguous parts claim** (~132 KB, 147 on VGA): a fragmented heap refuses it whole; `OP_OPT` on 3/4/5 degrades to Low, and a second instance is refused in words.
+5. **The 128-sector run**: part 0 at ~100 sectors has 27 spare; the build asserts it, but growth past 127 fails at LAUNCH.
+6. The image at ~51,000 of 61,440 with SKIES' 51,776 the comparable; the cold-part route is designed in wave 1 but not exercised until needed.
+7. `apps-all.img` at 127 spare clusters: this package leaves ~9 KB, so the NEXT package is a §19.10 curation decision; the 56 KB assert is what keeps wave 6's art from eating it.
+8. Two guards at melee ~6 fps before the cap; the frame to photograph on the 5150.
+9. Mode X on an XT-VGA priced at 7.5 (quantised) against §88.12's 4.3 for a run renderer; wave 2 measures and the shadow+copy arm is the fallback.
+10. CGA16 snow on a genuine IBM CGA — accepted, second item.
+11. Δ-fill ghosts from any writer bypassing `px_touch` — the forced-full-redraw diff.
+12. Pixel aspect on CGA4 (9.6:1 per byte-row) — `--preview`'s losable criterion in wave 2, and CGA16 one item away.
+13. Two-display desktops — depth from `WM_DISPLAY`, caps on `W_ONRESIZE`; `pxsmd.py`.
+14. The art remains the schedule risk, now spread over waves 2, 3 and 6 with the theme asked first.
+15. The small-disk omission's ground is a claim about the arena (52.5 KB / 20 KB run); a kernel change to either reopens it (`soak -k smallreq`).
+16. The fast tier is at 31.9 s declared of 30; one 0.3 s row is added and the total is quoted in wave 0.
+17. §96 is taken mid-wave on a long branch.
+18. Eight levels of original content the arithmetic does not cover.
+19. The Hercules flip and the small arm are both decided by arithmetic, not measurement; both are written as reopenable with the measurement that would reopen them.
+
+## 11. Questions for the user
+
+1. **Commit the PNG masters** under `apps/pixelstein/art/` (CONTRIBUTING.md §6; the C64-ROM class of decision)? Recommended yes.
+2. **The XT default rung**: 64 columns × 80 rows at ~7.9 fps (D), or 48 × 80 at ~9.7? Both ship on the Size row; this is what a new player sees first. Recommended 64 × 80 — Wolfenstein's own 320-ray look at a fifth of the rays still reads as a wall, and 48 is one V press away.
+3. **The theme**: what are the walls and who are the guards? The plan ships an original setting ("the Pixelstein" — a castle of stone, wood and iron with helmeted guards and dogs) and nothing of Wolfenstein's own art or iconography. Needed before wave 2 fixes 15 materials.
+4. **360 KB placement**: `games360.img` only (recommended, §24.6.1's dated decision) — or displace a package from `apps360.img`.
+5. **Content scope**: 8 floors + passwords, guard + dog, no saves, the officer a follow-up (recommended) — or 10 floors + a 6 KB save file and the officer staged in wave 6.
+6. **The three kernel gaps, with prices**: (a) a clip-honouring `gfx_blitp` (16 colours in a window on an XT — ~150 bytes of `.text` in `kernel/vga12.inc` and a §5.4.2 rule; §5.4.2.5.1 is the precedent for taking a kernel change for a package), (b) `OSAPI_MOUSE_REL` for mouse-look (a slot, ~60 bytes, and a driver-side delta), (c) nothing for the text-mode flip (settled: 16,000 of 16,384 bytes). Recommended: none in this PR, all three named in §96.11.
+
+---
+
+## 12. Decisions (taken 2026-09-13; the questions above are closed)
+
+1. **PNG masters are committed** under `apps/pixelstein/art/` (the C64-ROM class of decision, CONTRIBUTING.md §6 departure stated in §96).
+2. **The XT default rung is 64 × 80** until wave 0's measurement says otherwise; 48 × 80 ships on the Size row and is what the gate falls back to if 64 misses ≥ 7.0 / ≥ 6.0.
+3. **The theme is original**: "the Pixelstein" — a castle of grey and blue stone, wood, brick and iron; helmeted guards and dogs; nothing of Wolfenstein's own art, names or iconography. Materials are named in wave 2 from `--preview`.
+4. **360 KB placement: `games360.img` only** (§24.6.1's dated decision); `apps360.img` is not reopened.
+5. **Content scope: 8 floors + 4-letter floor passwords, guard + dog, no save file**; the officer is a follow-up.
+6. **No kernel change in this PR.** The three gaps (clip-honouring `gfx_blitp`, `OSAPI_MOUSE_REL`, the text-mode flip) are named in §96.11 with their prices and not taken.
+7. **8087: not taken, by arithmetic.** The frame's only `mul`/`div` are per COLUMN (1 `div` 163 clk + 4 `mul`/`imul` ~530) ≈ 700 clk × 64 columns ≈ 45,000 of a ~600,000-clock frame (7.5%), and per sprite transform (≈ 1,000 × ≤ 8). An 8087 `FMUL` is 130–145 clk and `FDIV` 193–203, before the `FILD`/`FIST(P)` transfers (50–90 each) through memory that every operand and result would pay on an 8-bit bus — so the coprocessor is slower per operation than the integer unit it would replace, and there is nothing in a per-pixel loop for it to touch (no `mul`/`div` there by design). The option would cost a run-time probe, a second code path and a test machine, for a frame that gets no faster. Re-open only if a per-column reciprocal table (`px_h[]`, the wave-2 micro-option) is refused for size and the `div` count rises.
+8. **Language: NASM 8086 assembly**, not C (PACCMAN measured 2.18 fps against PACMAN's 4.14 on the XT).
+9. **Technique references** (read for technique, never copied — the game's art and code are original): `WolfensteinCGA` (jhhoward; the Wolf3D engine modified to run on 8088 and CGA/mono) and `cubicDoom` (nanochess; an 8086 boot-sector raycaster), both cloned read-only under the session scratchpad; the planner's own research in `/tmp/pxs-reports/research-codex.md` and `scout-research.md`.
+10. **Models per wave** as §7 names them (fable on 0/1/2/3/5, opus on 4/6); Codex reviews each wave's diff read-only as a fourth lens.
