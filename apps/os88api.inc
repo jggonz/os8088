@@ -1099,11 +1099,16 @@ VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.2
                                  ; left edge has content at a negative x, and
                                  ; whole 8-pixel columns simply drop.
                                  ; out CF=1 = REFUSED and nothing drawn: the
-                                 ; arguments broke one of the rules above, or
-                                 ; this is a kern_small machine, which carries
-                                 ; the slot and not the body. TEST CF AND HAVE
-                                 ; A SECOND PATH - letter the run with
-                                 ; OSAPI_FONT_RUN in the 8x8 face.
+                                 ; arguments broke one of the rules above.
+                                 ; (It used to say "or this is a kern_small
+                                 ; machine, which carries the slot and not the
+                                 ; body" - SPEC.md 5.4.2.5.1 REVERSED that and
+                                 ; the body ships on both builds; nine of the
+                                 ; slot's callers were taking a fallback on the
+                                 ; build with least to spare for a refusal that
+                                 ; no longer happens.) TEST CF anyway: the
+                                 ; argument refusals stay, and a package that
+                                 ; has a second path keeps it cheap.
                                  ;
                                  ; This is the call for text your package has
                                  ; SET ITSELF (SPEC.md 5.4.2): compose the
@@ -2771,8 +2776,14 @@ OS88_BSS_SIZE equ 0
                                                 ; In AX = a near proc in your
                                                 ; image, BX = your window
                                                 ; ptr, CX = flags (bit 0 =
-                                                ; FSXF_KEEPWORKER; all others
-                                                ; must be 0). UI-task window
+                                                ; FSXF_KEEPWORKER, bit 1 =
+                                                ; FSXF_FASTTICK - SPEC.md
+                                                ; 53.2.1; all others must be
+                                                ; 0, or it refuses). This
+                                                ; comment said "bit 0; all
+                                                ; others 0" for a cycle after
+                                                ; bit 1 was accepted; trust
+                                                ; the constants. UI-task window
                                                 ; callback only, lock held -
                                                 ; the wm_fullscreen contract.
                                                 ; DOES NOT RETURN until your

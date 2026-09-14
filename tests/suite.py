@@ -424,6 +424,22 @@ FAST = [
         "about the band's three sizes, which is a constant written down in "
         "two files with no linker here to notice. The byte-for-byte "
         "reproduction row SKIPS, naming the pin, without $PACMANC_SRC"),
+    Row("pxs-gen", "fast", py("tests/unit/t_pxsgen.py"), 0.3,
+        "PIXELSTEIN 3D's generated includes are what their generators produce "
+        "(SPEC.md 96.12): apps/pixelstein/pxtab.inc - the sine, tangent and "
+        "fan tables the package, the reference renderer and the level tool "
+        "all read - and pxlev.inc, the level directory, are COMMITTED text "
+        "held to tools/pxstab.py and tools/pxslevel.py byte for byte, "
+        "t_paccman's mould. A stale one is a package assembled against "
+        "numbers tools/pxssim.py does not share, which fails as a wrong wall "
+        "on a 5150 three boots later rather than here. pxart.inc joins the "
+        "list when wave 2 writes it. FAST and not soak, and the EXCEPTION to "
+        "the one-package rule pxs-level below obeys (suite.py's 'ONE package, "
+        "beside a change to it'): these includes are a BUILD INPUT - a "
+        "Makefile recipe assembles the bench against pxtab.inc and two host "
+        "tools import the same tables - not a package invariant, so a stale "
+        "one is wrong on every machine and in every tool at once, which is "
+        "t_paccman's ground for its fast row; and the row is 0.3s"),
     Row("csworld", "soak", py("tests/unit/t_csworld.py"), 2.0,
         "SPEC.md 88.6.3: no collidable building in any CLEAR SKIES world"
         " stands in that world's own water - every base footprint against"
@@ -4270,6 +4286,32 @@ SOAK = [
         "which is also the only thing keeping the old routine assembling",
         needs=("marty", "nasm"), serial=True,
         wants=("build/glyphbn360.img",)),
+    Row("pxs-level", "soak", py("tests/unit/t_pxslevel.py"), 3.0,
+        "SPEC.md 96.7: every level under apps/pixelstein/levels/ passes every "
+        "rule of tools/pxslevel.py INCLUDING the DDA sweep - every open cell "
+        "x 16 headings through 96.2's walker, mean <= 12 crossings and worst "
+        "<= 26 - which is the rule the frame table of 96.1 rests on and the "
+        "one the fast row (pxs-gen, --no-sweep) does not run; the stream the "
+        "lazy level part carries is well-formed; and a 40 x 40 open hall is "
+        "refused by the sweep in words (the negative control). SOAK and not "
+        "fast for the registry's own reason (a tier at its budget), beside a "
+        "change to the package: `soak -k 'pxs*'`. Declared here in the SOAK "
+        "list, where it runs - its first cut sat in FAST and read as fast to "
+        "anyone scanning the list, though membership is by the tier field"),
+    Row("pxsbench", "soak", py("tests/pxsbench.py"), 150.0,
+        "SPEC.md 96.10: PIXELSTEIN 3D's unit costs, MEASURED. Every figure "
+        "the frame table of 96.1 is built from - the compiled store, the "
+        "static ladder, the patched DDA body at 10 and 20 crossings, the two "
+        "presents, the C160 expand, the texel row, the key read, one "
+        "scaler-set generation - taken by tests/pxsbench/pxsbench.asm on "
+        "MartyPC's cycle-exact 5150 and read back out of the package's bss. "
+        "An INSTRUMENT with one assertion: every row it lists produced a "
+        "number, unlapped, on the adapter it ran on - a row that is blank is "
+        "a rung the plan cannot price. The numbers are reported for "
+        "docs/reports/, never asserted against (tests/tank.py's rule). Needs "
+        "`make bench`; --machine picks the adapter",
+        needs=("marty", "nasm"), serial=True, alone=True,
+        wants=("build/bench360.img",)),
     Row("mcperf", "soak", py("tests/mcperf.py"), 50.0,
         "SPEC.md 48.16.2: does Missile play the SAME GAME twice? A fixed"
         "seed, scripted shots and 400 frames back to back rather than one a"

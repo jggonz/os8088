@@ -252,7 +252,7 @@ Read first: [§53 fsx.inc — fullscreen exclusive](../SPEC.md#53-fsxinc--fullsc
 |---|---|---|
 | `0x0110` | `OSAPI_FULLSCREEN` | AL = 1 enter (BX=win ptr) / 0 exit; caller holds the gfx lock (window callbacks do); out CF=1 enter refused (screen already owned)... |
 | `0x02C0` | `OSAPI_FSX_CAPS` | in BX = the window to ask ABOUT (0 = whatever is frontmost)... |
-| `0x02C8` | `OSAPI_FSX_RUN` | the bracket (SPEC.md 53.1). In AX = a near proc in your image, BX = your window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER... |
+| `0x02C8` | `OSAPI_FSX_RUN` | the bracket (SPEC.md 53.1). In AX = a near proc in your image, BX = your window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 = FSXF_FASTTICK... |
 | `0x02D0` | `OSAPI_FSX_MODE` | in AL = FSXM_*, ES:DI = an FSI_SIZE buffer of yours (set ES = DS). Bracket-only... |
 | `0x02D8` | `OSAPI_FSX_WAIT` | in AL = FSXW_TICK (0) the next tick / FSXW_VSYNC (1) vertical retrace (bounded... |
 | `0x04E8` | `OSAPI_FSX_PAGE` | AL = a page index; out CF=1 refused. SHOW that page, and wait for the vertical retrace that latches it... |
@@ -437,6 +437,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 93 | DOT DELIRIUM — a maze chase, sized from the surface (`apps/dotdel/`) |
 | 94 | Picture decoders (`apps/os88img.inc`) |
 | 95 | SCRIBE (`apps/scribe/`) — the fork of WORD |
+| 96 | PIXELSTEIN 3D — a raycast shooter in a foreign mode (`apps/pixelstein/`) |
 
 ## docs/
 
@@ -444,11 +445,11 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 
 *How it works today - `docs/` (21):* `APPLE2-PORT-PLAN.md`, `APPLE2-SPEC.md`, `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `IMAGER.md`, `KERNEL-MEMORY.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `PACCMAN-PORT-PLAN.md`, `README.md`, `TELNET-PLAN.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WIRE-PLAN.md`, `WRITING-TESTS.md`
 
-*Plans with work still open - `docs/plans/` (16):* `ARTFUL-PERF-PLAN.md`, `HANDOFF-SOAK-FINDINGS.md`, `HANDOFF-STOP-DETECTION.md`, `HEAP-UNPIN-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SMALL-NOCOMPACT.md`, `KERNEL-BYTE-QUEUE.md`, `LAST-DROP-BYTES.md`, `LAST-DROP-PERF.md`, `MONO-RECLAIM-PLAN.md`, `MOUSE-BOOT-FREEZE-PLAN.md`, `O88-COMPRESSION-PLAN.md`, `PARTS-REHOME-PLAN.md`, `SKIES-FRAME-PLAN.md`, `SOAK-PARALLEL.md`, `UI-MENU-ELEMENT.md`
+*Plans with work still open - `docs/plans/` (17):* `ARTFUL-PERF-PLAN.md`, `HANDOFF-SOAK-FINDINGS.md`, `HANDOFF-STOP-DETECTION.md`, `HEAP-UNPIN-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SMALL-NOCOMPACT.md`, `KERNEL-BYTE-QUEUE.md`, `LAST-DROP-BYTES.md`, `LAST-DROP-PERF.md`, `MONO-RECLAIM-PLAN.md`, `MOUSE-BOOT-FREEZE-PLAN.md`, `O88-COMPRESSION-PLAN.md`, `PARTS-REHOME-PLAN.md`, `PIXELSTEIN-PLAN.md`, `SKIES-FRAME-PLAN.md`, `SOAK-PARALLEL.md`, `UI-MENU-ELEMENT.md`
 
 *Design records for what shipped - `docs/plans/completed/` (69):* `ASSOC-PLAN.md`, `AUDIO-PLAN.md`, `BOOT-LADDER-PLAN.md`, `BOOT-PERF-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CTRL-GLYPH-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DISK-PERF-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `DUAL-DISPLAY-VGA.md`, `EGA-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `FTP-PERF.md`, `GFX-EMBEDDABLE-PLAN.md`, `GFX-FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HANDOFF-DISK-IO.md`, `HANDOFF-DOTDEL-TEXT.md`, `HANDOFF-FONTCHAR-SEAM.md`, `HANDOFF-KERNEL-SIZE-P2.md`, `HANDOFF-KERNEL-SIZE-P3.md`, `HANDOFF-KERNEL-SIZE-P4.md`, `HANDOFF-KERNEL-SIZE.md`, `HANDOFF-PAINT-BLANK-LOAD.md`, `HANDOFF-REDRAW.md`, `HANDOFF-SOUND-MEMORY.md`, `HANDOFF.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `KERN-SMALL-CUT-BUILT.md`, `KERN-SMALL-MODULE-SPLIT.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `NOTEPAD-NOTES.md`, `O88-MULTISEG-PLAN.md`, `ONDEMAND-PLAN.md`, `PAINT-1BPP-PLAN.md`, `PAINT-NOTES.md`, `PAINT-STROKE-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SAVEUNDER-LIVE-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SDK-INCLUDE-SIZE.md`, `SETTINGS-COST.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `STACK-SLOTS-PLAN.md`, `STKBALANCE-KERNEL.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `UI-FREEZE-PLAN.md`, `UIHELPERS-PLAN.md`, `VMMOUSE-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
 
 *Superseded and closed - `docs/history/` (9):* `DUAL-DISPLAY-BUG2.md`, `HANDOFF-TESTS-A-STRADDLE.md`, `HANDOFF-TESTS-B-LAUNCH.md`, `HANDOFF-TESTS-C-FRESH.md`, `HANDOFF-TESTS.md`, `KERN-SPLIT-PLAN.md`, `SOUND-PLAN.md`, `TRACKER-PLAN.md`, `WM-ARTIFACTS.md`
 
-*Measurements, each true of the tree it was taken on - `docs/reports/` (9):* `BUSY-CURSOR-COST-2026-09-10.md`, `CYCLONE-STACK-2026-09-10.md`, `DOTDEL-FRAME-PROFILE-2026-09-09.md`, `GLYPH-AND-LINE-COST-2026-09-10.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-07.md`, `PR-CYCLE-ACCOUNTING-2026-09-11.md`, `SKIES-FRAME-DELTA-2026-09-10.md`, `STKDIAG-PC5150-2026-09-10.md`, `TIER-TIMINGS-2026-09-07.md`
+*Measurements, each true of the tree it was taken on - `docs/reports/` (10):* `BUSY-CURSOR-COST-2026-09-10.md`, `CYCLONE-STACK-2026-09-10.md`, `DOTDEL-FRAME-PROFILE-2026-09-09.md`, `GLYPH-AND-LINE-COST-2026-09-10.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-07.md`, `PR-CYCLE-ACCOUNTING-2026-09-11.md`, `PXS-FRAME-2026-09-13.md`, `SKIES-FRAME-DELTA-2026-09-10.md`, `STKDIAG-PC5150-2026-09-10.md`, `TIER-TIMINGS-2026-09-07.md`
 

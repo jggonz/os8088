@@ -5208,6 +5208,47 @@ $(BUILD)/dotdel.bin: $(DOTDEL_SRC) | $(BUILD)
 $(BUILD)/dotdel.o88: $(BUILD)/dotdel.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/dotdel.bin -o $@
 
+# PIXELSTEIN 3D (SPEC.md 96): a raycast first-person shooter, fullscreen in
+# a foreign mode on every adapter and windowed as a 1bpp band. The package
+# arrives in wave 1 (docs/plans/PIXELSTEIN-PLAN.md 7); what is here now is
+# what every wave rests on - the generated tables and the level directory,
+# COMMITTED as text and held to their generators by the `pxs-gen` fast row
+# (tests/unit/t_pxsgen.py), so `make` never has to regenerate them and a
+# tree without the tools' dependencies builds the package unchanged.
+#
+#   make pxsgen                    # regenerate pxtab.inc, pxlev.inc, pxslev.bin
+#                                  # after editing a level or a table constant
+#
+# PXSTEIN_SRC is the package rule's prerequisite list. PROVISIONAL: nothing
+# consumes it until wave 1 writes the .bin rule, and when that rule lands
+# the list MUST be re-derived from the package's actual %include lines
+# (every %included file is a prerequisite, or an edit to it is a stale
+# build) - a variable nothing references is checked by nobody.
+PXSTEIN_GEN := apps/pixelstein/pxtab.inc apps/pixelstein/pxlev.inc
+PXSTEIN_SRC := $(PXSTEIN_GEN) apps/os88api.inc
+PXSLEVELS   := $(wildcard apps/pixelstein/levels/*.txt)
+
+# the level STREAM the lazy level part carries (SPEC.md 96.9): one record a
+# level, run-length coded, with every level rule checked on the way - a
+# refused level fails this rule, in words, on the host. `make pxsgen` reaches
+# it (below) and wave 1's package rule will; the same command is also the
+# `pxs-level` soak row (tests/unit/t_pxslevel.py), so the DDA sweep runs
+# somewhere automated and not only when a person types this
+$(BUILD)/pxslev.bin: tools/pxslevel.py tools/pxssim.py tools/pxstab.py $(PXSLEVELS) | $(BUILD)
+	python3 tools/pxslevel.py --check --stream $@
+	@echo "pxslev: $(call FILESIZE,$@) bytes of level stream"
+
+# regenerate the committed includes, then build the stream THROUGH its rule
+# (one command line for the level check, not two): pxtab first, because the
+# level tool's sweep reads its tables, then pxlev, then the stream - whose
+# rule re-checks the include it just wrote against the tool
+.PHONY: pxsgen
+pxsgen:
+	python3 tools/pxstab.py
+	python3 tools/pxslevel.py
+	rm -f $(BUILD)/pxslev.bin
+	$(MAKE) $(BUILD)/pxslev.bin
+
 $(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/arkanoid/arkanoid.asm
 	@echo "arkanoid: $(call FILESIZE,$@) bytes"
@@ -8274,6 +8315,17 @@ BENCHPKGS := $(BUILD)/fontbnch.o88 $(BUILD)/typebnch.o88 \
              $(BUILD)/bandbnch.o88 $(BUILD)/facetest.o88
 BENCHDATA := $(BUILD)/bench.dat $(BUILD)/benchsml.dat $(BUILD)/bigfile.dat
 
+# BENCHPKGS HAS EIGHT CONSUMERS, NOT TWO: besides bench.img and bench360.img
+# it is FIELDBENCH (herc.img, cga.img, cga720.img, flop1.img, cqdiag.img -
+# the 360KB field disks, which also carry bigfile.dat's 104 clusters) and
+# COMBOBENCH (combo.img at ~343 of 354 clusters, combo720, combo144). A
+# bench package is NOT compressed (the recipes below are bare os88pkg.py),
+# so PXSBENCH.O88 is 20 clusters on a 1KB-cluster disk, which overflows
+# combo.img on the spot. It is therefore named HERE, for the two bench
+# disks only, and never added to BENCHPKGS - the plan's APPS_GAMES lesson
+# (docs/plans/PIXELSTEIN-PLAN.md 0, tree-6) applied to the list it missed.
+BENCHIMGPKGS := $(BENCHPKGS) $(BUILD)/pxsbench.o88
+
 bench: $(BUILD)/bench.img $(BUILD)/bench360.img
 
 $(BUILD)/fontbnch.bin: tests/fontbench/fontbench.asm apps/os88api.inc | $(BUILD)
@@ -8311,6 +8363,20 @@ $(BUILD)/bandbnch.bin: tests/bandbench/bandbench.asm tests/benchlib.inc apps/os8
 
 $(BUILD)/bandbnch.o88: $(BUILD)/bandbnch.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/bandbnch.bin -o $@
+
+# ...and PIXELSTEIN 3D's unit costs (SPEC.md 96.10): the compiled store, the
+# static ladder, the patched DDA body, the two presents, the C160 expand, the
+# texel row, the key read, and one scaler-set generation - every figure the
+# frame table of 96.1 is built from, taken in one run on one adapter. The
+# VRAM rows run inside a fullscreen bracket in the mode the game takes there.
+# tests/pxsbench.py reads the rows back off MartyPC's cycle-exact 5150.
+$(BUILD)/pxsbench.bin: tests/pxsbench/pxsbench.asm tests/benchlib.inc apps/os88api.inc apps/pixelstein/pxtab.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/pxsbench/pxsbench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/pxsbench/pxsbench.asm
+	@echo "pxsbench: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/pxsbench.o88: $(BUILD)/pxsbench.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/pxsbench.bin -o $@
 
 # ...and the one that shows a FACE rather than timing one: it draws the same
 # sentence through the kernel, through face 0, and through both of the
@@ -8397,11 +8463,11 @@ $(BUILD)/wbband.o88: $(BUILD)/wbband.bin tools/os88pkg.py
 $(BUILD)/weaveband.img: $(BUILD)/wbband.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/wbband.o88
 
-$(BUILD)/bench.img: $(BENCHPKGS) $(BENCHDATA) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BENCHPKGS) $(BENCHDATA)
+$(BUILD)/bench.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BENCHIMGPKGS) $(BENCHDATA)
 
-$(BUILD)/bench360.img: $(BENCHPKGS) $(BENCHDATA) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BENCHPKGS) $(BENCHDATA)
+$(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BENCHIMGPKGS) $(BENCHDATA)
 
 # --- the BROWSER's test disk (docs/plans/completed/BROWSER-PLAN.md 10 step 1) -----------------
 # The renderer with no network in the machine: the package plus tests/htm/'s
