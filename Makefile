@@ -254,6 +254,9 @@ VM386CWORD := $(CURDIR)/vm/386-c-word
 # substitutes a default and rewrites the config on the way out.
 VMXTPACCMAN := $(CURDIR)/vm/xt-paccman
 VM386PACCMAN := $(CURDIR)/vm/386-paccman
+VMXTSPEEDYBASIC := $(CURDIR)/vm/xt-speedybasic
+VM286SPEEDYBASIC := $(CURDIR)/vm/286-speedybasic
+VM386SPEEDYBASIC := $(CURDIR)/vm/386-speedybasic
 
 # The RUNCPM machines (SPEC.md 74.5, 74.6): one per FLOPPY GEOMETRY, because
 # the three RUNCPM disks do not carry the same software and the machines that
@@ -1900,6 +1903,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         scribe scribedisk \
         cc-note chello covl pkgrun pkgbig cword cworddisk 386-c-word runcpm runcpmdisk \
         paccman paccmandisk pmcbandbench xt-paccman 386-paccman \
+        speedybasic speedybasicdisk xt-speedybasic 286-speedybasic 386-speedybasic \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
@@ -6211,6 +6215,85 @@ $(BUILD)/paccman360.img: $(PACCMANDISK) tools/os88disk.py
 paccmandisk: $(BUILD)/paccman.img $(BUILD)/paccman720.img \
              $(BUILD)/paccman120.img $(BUILD)/paccman360.img
 
+# --- SPEEDY BASIC, the Turbo Basic interpreter ------------------------------
+# The web version's parser and runner are ported as one C package. It is
+# on-demand, like CWORD and PACCMAN: the default build must keep working with
+# nasm and python3 alone, while `make speedybasic` brings in SmallerC through
+# CC_PACKAGE. The included sb*.c files form one translation unit, so they are
+# named here; make cannot see through C #include or NASM %include.
+$(eval $(call CC_PACKAGE,speedybasic,speedybasic,SPEEDYBA.OVL))
+
+SPEEDYBASICSRC := $(wildcard apps/speedybasic/sb*.c) \
+                  $(wildcard apps/speedybasic/sb*.h) \
+                  $(wildcard apps/speedybasic/sb*.inc)
+$(BUILD)/speedybasic.raw.asm: $(SPEEDYBASICSRC)
+$(BUILD)/speedybasic.bin: $(wildcard apps/speedybasic/*.inc) \
+                          apps/os88api.inc apps/os88ui.inc apps/os88fp.inc
+
+speedybasic: $(BUILD)/speedybasic.o88
+
+# The build artifact keeps the descriptive stem used by the C pipeline, but a
+# FAT directory name is 8.3. This is the disk-facing copy; its package header
+# remains the source package's and os88pkg validation has already run.
+$(BUILD)/speedyd/SPEEDYBA.O88: $(BUILD)/speedybasic.o88
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+# The source repository stores its demonstrations inside a TypeScript module.
+# A build cannot require that sibling checkout, so the 29 extracted .BAS files
+# are vendored under apps/speedybasic/demos. The extractor checks them against
+# ../speedybasic when it is present and materializes the same bytes in build/.
+SPEEDYBASIC_DEMO_NAMES := $(shell sed -e '/^\#/d' -e '/^$$/d' \
+                          apps/speedybasic/demos/MANIFEST.TXT)
+SPEEDYBASIC_DEMOS := $(addprefix $(BUILD)/speedybasic-demos/,\
+                                 $(SPEEDYBASIC_DEMO_NAMES))
+SPEEDYBASIC_DEMO_ARGS := $(addprefix SPEEDY/DEMOS:,$(SPEEDYBASIC_DEMOS))
+
+$(BUILD)/.speedybasic-demos: tools/speedybasic_samples.py \
+                             apps/speedybasic/demos/MANIFEST.TXT \
+                             $(wildcard apps/speedybasic/demos/*.BAS) | $(BUILD)
+	python3 tools/speedybasic_samples.py -o $(BUILD)/speedybasic-demos
+	@touch $@
+
+$(SPEEDYBASIC_DEMOS): $(BUILD)/.speedybasic-demos
+	@test -f $@
+
+# One folder holds the executable and its on-disk guide; DEMOS below it holds
+# all 29 web samples. Sixty-four directory slots leave room for programs saved
+# from the editor, because FAT directories cannot grow on this OS (SPEC.md
+# 18.5). Every application disk is built in all four standard geometries.
+SPEEDYBASICDISK := $(BUILD)/speedyd/SPEEDYBA.O88 $(BUILD)/SPEEDYBA.OVL apps/speedybasic/README.TXT \
+                   $(BUILD)/.speedybasic-demos
+SPEEDYBASICARGS := SPEEDY:$(BUILD)/speedyd/SPEEDYBA.O88 \
+                   SPEEDY:$(BUILD)/SPEEDYBA.OVL \
+                   SPEEDY:apps/speedybasic/README.TXT \
+                   $(SPEEDYBASIC_DEMO_ARGS)
+SPEEDYBASICDISKOPTS := --deep-folders --dir-slots SPEEDY/DEMOS=64 \
+                       $(APPDATAFOLDER)
+
+speedybasicdisk: $(BUILD)/speedybasic.img $(BUILD)/speedybasic720.img \
+                 $(BUILD)/speedybasic120.img $(BUILD)/speedybasic360.img
+
+$(BUILD)/speedybasic.img: $(SPEEDYBASICDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(SPEEDYBASICDISKOPTS) \
+		$(SPEEDYBASICARGS)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/speedybasic720.img: $(SPEEDYBASICDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(SPEEDYBASICDISKOPTS) \
+		$(SPEEDYBASICARGS)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/speedybasic120.img: $(SPEEDYBASICDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(SPEEDYBASICDISKOPTS) \
+		$(SPEEDYBASICARGS)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/speedybasic360.img: $(SPEEDYBASICDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(SPEEDYBASICDISKOPTS) \
+		$(SPEEDYBASICARGS)
+	@python3 tools/os88disk.py --verify $@
+
 # THE BAND BENCH (SPEC.md 91, PERFORMANCE.md): tests/pmcband/pmcbandbench.asm
 # %includes the SHIPPING apps/paccman/pmcband.inc and brackets each of its
 # routines, one OSAPI_GFX_BLITP of a 224x8 band and one OSAPI_GFX_BLIT4 of the
@@ -10376,6 +10459,8 @@ ALLAPPSFILES := $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 $(BUILD)/WELCOME.BAS \
                 apps/apple2/README.TXT apps/apple2/COPYING \
                 $(WEAVEDISK) $(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS) \
+                $(BUILD)/speedyd/SPEEDYBA.O88 $(BUILD)/SPEEDYBA.OVL \
+                apps/speedybasic/README.TXT $(SPEEDYBASIC_DEMOS) \
                 $(RUNCPMDISK)
 # These images use the RunCPM master disk, but not the separate CP/M
 # software collection used by runcpmdisk. Do not fetch that unused payload.
@@ -10395,7 +10480,7 @@ ALLAPPS := $(ALLAPPSFILES) $(BUILD)/runcpm-src.stamp tools/getruncpm.py
 # directory at one cluster; LOOM asks os88disk.py for 32 directory slots
 # (ALLAPPSARGS), and 32 entries x 32 bytes is 1,024 - two clusters at
 # 1.44MB's 512. The second is the difference.
-ALLAPPSEXTRA := 1
+ALLAPPSEXTRA := 4
 
 ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                                  $(BUILD)/frotz.o88) \
@@ -10415,6 +10500,10 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                                    apps/apple2/COPYING) \
                $(addprefix WEAVE:,$(WEAVEDISK)) \
                $(addprefix LOOM:,$(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS)) \
+               SPEEDY:$(BUILD)/speedyd/SPEEDYBA.O88 \
+               SPEEDY:$(BUILD)/SPEEDYBA.OVL \
+               SPEEDY:apps/speedybasic/README.TXT \
+               $(SPEEDYBASIC_DEMO_ARGS) \
                $(APPSYSARGS) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS))
 ALLAPPSDIRS := $(sort $(foreach a,$(ALLAPPSARGS),$(firstword $(subst :, ,$a))) \
@@ -10434,7 +10523,7 @@ allapps: $(ALLAPPSIMG) $(ALLAPPSIMG120)
 define ALLAPPSIMGRULE
 sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select $(2) --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve-clusters $(ALLAPPSEXTRA) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
 [ -n "$$sel" ] || { echo "allapps: getruncpm.py --select $(2) chose nothing"; exit 1; }; \
-python3 tools/os88disk.py -o $(1) --size $(2) --deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) --dir-slots LOOM=32 --folder DOCS $(APPDATAFOLDER) $(ALLAPPSARGS) $$sel
+ python3 tools/os88disk.py -o $(1) --size $(2) --deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) --dir-slots LOOM=32 --dir-slots SPEEDY/DEMOS=64 --folder DOCS $(APPDATAFOLDER) $(ALLAPPSARGS) $$sel
 endef
 
 $(ALLAPPSIMG): $(ALLAPPS) tools/os88disk.py
@@ -11618,3 +11707,14 @@ clean-cc:
 	rm -rf $(BUILD)/cc
 
 distclean: clean clean-marty clean-cc
+xt-speedybasic: $(IMG360) $(BUILD)/speedybasic360.img
+	@$(UNPROTECT) $(VMXTSPEEDYBASIC)/86box.cfg
+	$(BOX) -P $(VMXTSPEEDYBASIC) -N
+
+286-speedybasic: $(BUILD)/os8088-120.img $(BUILD)/speedybasic120.img
+	@$(UNPROTECT) $(VM286SPEEDYBASIC)/86box.cfg
+	$(BOX) -P $(VM286SPEEDYBASIC) -N
+
+386-speedybasic: $(IMG) $(BUILD)/speedybasic.img
+	@$(UNPROTECT) $(VM386SPEEDYBASIC)/86box.cfg
+	$(BOX) -P $(VM386SPEEDYBASIC) -N

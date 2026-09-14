@@ -1,0 +1,22 @@
+CLS
+COLOR 15, 0
+LOCATE 1, 30
+PRINT "=== LOCATE Demo ==="
+COLOR 14, 0
+LOCATE 3, 5
+PRINT "Row 3, Col 5"
+COLOR 10, 0
+LOCATE 5, 20
+PRINT "Row 5, Col 20"
+COLOR 12, 0
+LOCATE 8, 35
+PRINT "Row 8, Col 35"
+COLOR 11, 0
+LOCATE 12, 10
+PRINT "Row 12, Col 10"
+COLOR 13, 0
+LOCATE 15, 25
+PRINT "Text can go anywhere!"
+COLOR 7, 0
+LOCATE 24, 1
+PRINT "Press F5 to run again."

@@ -1860,8 +1860,8 @@ fp_floor:
     push ax
     call fp_a_to_tv                   ; keep the original to compare against
     call fp_trunc
-    cmp byte [fp_as], 0
-    je .out                           ; positive: truncation IS the floor
+    test byte [fp_tv+7], 0x80         ; trunc(-fraction) clears A's sign at zero
+    jz .out                           ; use the ORIGINAL sign, not truncated A
     call fp_a_to_b                    ; negative: did anything get cut off?
     call fp_tv_to_a
     call fp_cmpab
