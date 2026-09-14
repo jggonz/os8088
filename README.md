@@ -101,6 +101,13 @@ make xt-paccman # 86Box: the 4.77MHz XT with the 720KB PaccMan disk in B: -
               # the machine the "more performant on XTs" question was about
 make 386-paccman # 86Box: the 386DX/25 with the 1.44MB disk in B: - full speed
 make pmcbandbench # its band composer's benchmark, under QEMU -icount shift=3
+make speedybasicdisk # build the Speedy BASIC floppy in all four geometries:
+              # a windowed Turbo Basic editor/interpreter, its on-disk guide,
+              # and all 29 text, graphics, sound and hardware demos from the
+              # web version. Programs open through its File menu; SPEEDY BASIC
+              # does not claim .BAS because APPLE2 already owns that suffix
+              # on the everything disk. `make speedybasic` builds only the
+              # package; both targets bring in the C toolchain on demand
 make c64disk  # build the C64 floppy - a Commodore 64: the package, its
               # overlay; the KERNAL/BASIC/CHARGEN ROM rides INSIDE the
               # package as an embedded part (SPEC.md 20.12)
@@ -145,7 +152,7 @@ make 286-525-word #   instead of the apps floppy - one per application disk:
 make 286-525-cword#   -z -word -cword -runcpm -c64 -weave -loom -all. The
 make 286-525-all  #   ONLY machines that read a 1.2MB disk (an XT cannot)
 make allapps  # one floppy with every program on it - both word processors,
-              # Frotz, RunCPM, the Commodore 64, PaccMan and the Weave
+              # Frotz, RunCPM, the Commodore 64, PaccMan, Speedy BASIC and the Weave
               # family included. 1.44MB and 1.2MB; the two DD geometries cannot
               # hold the payload at all
 make live     # the live media (docs/LIVE-MEDIA.md): os8088-usb.img, a
@@ -167,7 +174,7 @@ make clean
 
 `make` builds the nine shipping floppies and needs nothing but `nasm` and
 `python3`. The disks that carry the C applications — `cworddisk`,
-`runcpmdisk`, `allapps` and the live media (`make live`) — automatically run
+`speedybasicdisk`, `runcpmdisk`, `allapps` and the live media (`make live`) — automatically run
 `tools/setup-cc.sh` when the compiler is missing. It fetches and builds it
 into `build/cc`, and nothing else in the tree depends on
 it. `runcpmdisk`, `allapps` and `live` also fetch RunCPM's command processor
@@ -653,12 +660,13 @@ cleanly and runs wrong when C meets this machine.
 | `build/cword*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
 | `build/runcpm*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`). What drive A carries is chosen per geometry at build time, so the 1.2MB disk fills itself and names what it left off in its own `LEFT-OFF.TXT` |
 | `build/paccman*.img`   | 1.44MB / 720KB / 1.2MB / 360KB | PaccMan, the C Pac-Man: the package and its README, no overlay (`make paccmandisk`) |
+| `build/speedybasic*.img` | 1.44MB / 720KB / 1.2MB / 360KB | Speedy BASIC, required `SPEEDYBA.OVL`, its guide and all 29 web-version `.BAS` demos (`make speedybasicdisk`) |
 | `build/c64*.img`       | 1.44MB / 720KB / 1.2MB / 360KB | Commodore 64, package (the ROMs are part 0 of `C64.O88`) + `C64.OVL` (`make c64disk`) |
 | `build/apple2*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Apple II Plus, package + `APPLE2.OVL` + `WELCOME.BAS` + `README.TXT` + `COPYING` in one `APPLE2/` folder (`make apple2disk`). The Apple II+ ROMs are inside the package as a part and are fetched at a pin, never committed |
 | `build/weave*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Weave: the runtime and its two modules, the demo bundles, LOOM, the demo sources and `CATALOG.TXT` (`make weavedisk`) |
 | `build/loom*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | the Weave IDE's own disk, with the demo sources flat (`make loomdisk`) |
-| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy — every on-demand disk above except Scribe's (`make allapps`) |
-| `build/apps-all-120.img` | 1.2MB FAT12            | the same disk for the 5.25" HD machine. There is no 720KB or 360KB build: the payload does not fit either |
+| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy — every on-demand disk above except Scribe's, including Speedy BASIC, `SPEEDYBA.OVL` and its 29 demos (`make allapps`) |
+| `build/apps-all-120.img` | 1.2MB FAT12            | every application for the 5.25" HD machine; Speedy BASIC's 29-demo corpus remains on `speedybasic120.img` because the source set does not fit here. There is no 720KB or 360KB everything-disk build |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.

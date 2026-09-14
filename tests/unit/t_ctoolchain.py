@@ -98,6 +98,8 @@ TARGETS = [
     # re-link the package they guard; it costs about 2.5 s.
     ("paccman",  ["build/paccman.o88", "build/.paccman-hostchecks"],
                                                          ["build/paccman.gen.asm"]),
+    ("speedybasic", ["build/speedybasic.o88"],
+                     ["build/speedybasic.gen.asm"]),
 ]
 
 

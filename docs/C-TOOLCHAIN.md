@@ -208,6 +208,8 @@ make chello                            the capability gate   -> build/chello.img
 make covl                              the overlay gate      -> build/covl.img, covl360.img
 make cword                             the application       -> build/cword.o88 + CWORD.OVL
 make cworddisk                         ...and its floppy in all four geometries
+make speedybasic                       Turbo Basic runtime    -> build/speedybasic.o88
+make speedybasicdisk                   ...and all 29 demos in all four geometries
 make test TESTAPPS=build/cword.img     boot it in QEMU, B: = that floppy
 make 386-c-word                        boot it on a period 386 in 86Box
 ```
@@ -726,6 +728,7 @@ in your shim). Adding one of the rest is a dozen lines in `os88thunk.asm`.
 | **`tests/chello/chello.c`** | the capability gate — the first C program this OS ran. Written to make every part of the round trip visible in a screendump, including a crosshair at the click point, because a swapped x/y still counts up correctly and only the mark can tell you. It also gates `os88_mem_movable()` and draws the claim's live base beside where it came from, for the same reason. `make chello` |
 | **`tests/covl/covl.c`** | the overlay gate — argument offsets across a far call, a call back out of the module, a call inside it. `make covl` |
 | **`apps/cword/cword.c`** | the application: a word processor, ~9,700 lines across nine files, RTF in and out, in two segments. Read its header comment for the redraw model and the cost table. `make cworddisk` |
+| **`apps/speedybasic/speedybasic.c`** | the Speedy BASIC application: a windowed Turbo Basic editor and interpreter, with its `sb*.c` parser/runner units included into one translation unit and all 29 web-version demos on its dedicated disk. `make speedybasicdisk` |
 
 `apps/runcpm`, `apps/c64`, `apps/weave` and `apps/loom` are the other C
 packages in the tree — larger, and each with its own SPEC section.

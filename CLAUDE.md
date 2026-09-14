@@ -157,6 +157,16 @@ make pmcbandbench #   the COMMITTED pmc_rom.c, the four ghosts, the attract
                   #   composer's bench, run under `qemu-system-i386 -icount
                   #   shift=3` and READ ON THE SECOND RUN (the first prices
                   #   BLIT4 10% high)
+make speedybasic      # SPEEDY BASIC (docs/SPEEDYBASIC-SPEC.md), the windowed
+make speedybasicdisk  #   Turbo Basic editor and interpreter ported from the
+                      #   sibling web project. The disk target builds all four
+                      #   geometries with README.TXT and all 29 .BAS demos in
+                      #   SPEEDY/DEMOS/. The demos are committed build inputs;
+                      #   tools/speedybasic_samples.py checks them against
+                      #   ../speedybasic when present and works without it.
+                      #   It declares no BAS association because APPLE2 owns
+                      #   BAS on allapps/live (§54.5/§95.2); open a program
+                      #   through Speedy BASIC's File menu
 make cpmsw      # the CP/M games and applications the RUNCPM floppies carry
                 #   beside RunCPM's master disk (§74.6) - LADDER, CATCHUM,
                 #   Nemesis, GAINA, WordStar, Turbo Pascal - fetched by
@@ -353,7 +363,8 @@ make emu      # THE THIRD KERNEL (§9.11.7): kern_emu, into build/emuk/, plus
               #   offsets, so there is no emu apps disk and must not be
 make allapps  # build/apps-all.img (§19.10): ONE 1.44MB floppy with every app
               #   on it, Frotz, both Words, RunCPM (with its drive A), the
-              #   C64 and the Weave family's two — one folder each, so
+              #   C64, Speedy BASIC with all 29 demos, and the Weave family's
+              #   two — one folder each, so
               #   `WEAVE/` carries the package, both modules and the bundles
               #   and `LOOM/` the IDE and its own — for a release page. The
               #   payload is DERIVED, so `make live` carries it too and

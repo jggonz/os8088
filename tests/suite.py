@@ -424,6 +424,14 @@ FAST = [
         "about the band's three sizes, which is a constant written down in "
         "two files with no linker here to notice. The byte-for-byte "
         "reproduction row SKIPS, naming the pin, without $PACMANC_SRC"),
+    Row("speedybasic-samples", "fast",
+        py("tests/unit/t_speedybasic_samples.py"), 0.2,
+        "the 29 Speedy BASIC demos carried on the application disk are the "
+        "web interpreter's ordered corpus byte for byte when the sibling "
+        "checkout exists, and materialize identically without it. This is a "
+        "build boundary rather than an interpreter test: TypeScript is the "
+        "upstream container, committed .BAS files are the standalone build's "
+        "input, and neither build system can see the other drift"),
     Row("csworld", "soak", py("tests/unit/t_csworld.py"), 2.0,
         "SPEC.md 88.6.3: no collidable building in any CLEAR SKIES world"
         " stands in that world's own water - every base footprint against"
@@ -1278,6 +1286,21 @@ FULL = [
 # single-subject gates; several are worth reading before touching their area.
 # --------------------------------------------------------------------------
 SOAK = [
+    Row("speedybasic-core", "soak",
+        ["apps/speedybasic/hosttest/coretest.sh"], 5.0,
+        "the shipping Speedy BASIC tokenizer, expression parser and runner "
+        "execute language, input, graphics and low-level hook cases through "
+        "a portable mock host, and all 29 vendored demos load through the "
+        "far-source path with no statement accepted as an ignored no-op. "
+        "SOAK and not fast: SPEEDY BASIC is one on-demand package",
+        needs=("cc", "nasm", "qemu")),
+    Row("speedybasic", "soak", py("tests/speedybasic.py"), 180.0,
+        "Speedy Basic's native window lifecycle: package launch, Editor/Output "
+        "switching, sliced execution of the welcome program into the retained "
+        "text surface, Ctrl+F fullscreen round trip, cover/expose repaint and "
+        "window teardown. App-specific, so it belongs in soak; the image is "
+        "declared as a wanted artifact so no emulator row builds in place",
+        needs=("marty", "cc"), wants=("build/speedybasic.img",)),
     Row("pacman", "soak", py("tests/pacman.py"), 100.0,
         "native 8088 Pac-Man movement, score, pellets, fruit, level transitions, "
         "pause, full-screen repaint and worker teardown", needs=("marty",), wants=("build/pacman.o88",)),

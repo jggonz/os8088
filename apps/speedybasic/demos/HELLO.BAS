@@ -1,0 +1,11 @@
+CLS
+PRINT "================================"
+PRINT "  Speedy Basic Web IDE"
+PRINT "  Foundation Phase 1"
+PRINT "================================"
+PRINT ""
+PRINT "Text mode rendering is online."
+PRINT "The screen buffer is working."
+PRINT ""
+PRINT "Try loading other samples from"
+PRINT "the File menu or Screen menu."

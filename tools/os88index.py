@@ -305,8 +305,17 @@ def packages():
     """
     mk = re.sub(r"\\\n\s*", " ", read("Makefile"))
     mvars = make_vars(mk)
-    shipped = set(re.findall(r"\$\(BUILD\)/([a-z0-9]+)\.o88",
-                             make_expand("$(ALLAPPSFILES)", mvars)))
+    reachable = make_expand("$(ALLAPPSFILES)", mvars)
+    shipped = set(re.findall(r"\$\(BUILD\)/([a-z0-9]+)\.o88", reachable))
+    # A descriptive build stem can exceed FAT's eight-character limit. Such a
+    # package ships through an 8.3 copy target (SPEEDY BASIC is the first), so
+    # follow that one Make edge rather than reporting a package present on the
+    # everything disk as unshipped.
+    for m in re.finditer(
+            r"^(\$\(BUILD\)/[^:\s]+\.[Oo]88):\s*"
+            r"\$\(BUILD\)/([a-z0-9]+)\.o88\b", mk, re.M):
+        if m.group(1) in reachable:
+            shipped.add(m.group(2))
     srcs = []
     for m in re.finditer(r"^\$\(BUILD\)/([a-z0-9]+)\.bin:([^\n]*)$", mk, re.M):
         got = re.search(r"(apps/[a-z0-9]+/[a-z0-9]+\.asm)",
