@@ -489,6 +489,19 @@ def main():
         for who, addr in indirect[:8]:
             print("          %s at 0x%04X" % (who, addr))
     leaves = tuple(a.leaf)
+    # A ROOT THAT IS NOT IN THIS IMAGE IS AN ERROR, NOT A ZERO. `--from` on a
+    # label the listing does not carry used to print "== root: 0 bytes ==",
+    # and tests/unit/t_stkclass.py read that 0 as a measured chain: PIXELSTEIN's
+    # worker lives in pxgame.asm (part 0) and the gate walked the LOADER's
+    # source for it, so the package passed at "0 + 64 in 384" while nothing
+    # had been walked at all. A gate cannot tell a shallow chain from an
+    # absent one unless this refuses.
+    missing = [r for r in a.roots if r not in rout]
+    if missing:
+        print("stkdepth: %s does not assemble a routine named %s - is the "
+              "worker in another image (a parts package's part 0)?"
+              % (a.asm, ", ".join(missing)))
+        return 2
     roots = a.roots or sorted(
         rout, key=lambda n: -deepest(rout, n, (), leaves)[0])[:a.top]
     for r in roots:

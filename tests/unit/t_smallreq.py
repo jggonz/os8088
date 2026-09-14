@@ -94,6 +94,13 @@ FORBIDDEN = {
     # 24.5 - a claim the floor machine cannot fund, made where it cannot refuse
     "SKIES.O88":    "a 32KB claim inside the fsx bracket - the refusal is a "
                     "black screen (SPEC.md 24.5, 88)",
+    "PXSTEIN.O88":  "one contiguous parts claim of ~48KB (a part 0 of ~33KB "
+                    "holding two 4KB map layouts and two 4KB spotvis "
+                    "arrays, the levels and the bodies' scratch, in ONE carve "
+                    "the loader makes before the program can refuse in its "
+                    "own words) plus a shadow claim of 16KB (6.4KB of it "
+                    "composed today), against a 52.5KB arena whose largest "
+                    "run is 17.5-20KB (SPEC.md 24.5, 96.9)",
     # DOTDEL.O88 IS NOT A ROW. It was omitted beside SKIES on a ground that
     # SPEC.md 5.4.2.5.1 withdrew (kern_small has a `gfx_blit1` body now), and
     # SPEC.md 24.5.5 is the measurement that put it back on the floppy. A name

@@ -357,7 +357,7 @@ def ink(backend, what, mat=0, side=0, row=0):
         if what == "ceil":
             return 0x00
         if what == "floor":
-            return 0x88
+            return 0x22                         # green: 8 is the dark faces'
         m = {1: 7, 2: 7, 3: 9, 4: 6, 5: 6, 6: 4, 12: 3, 14: 14, 13: 6}.get(mat, 7)
         d = {7: 8, 9: 1, 6: 8, 4: 8, 3: 3, 14: 6}.get(m, 8)
         v = m if side == 0 else d
@@ -497,10 +497,16 @@ def scenes(lv):
     return {
         # A: the corridor - the spawn, looking down the entry corridor
         "a": (sx * 256 + 128, sy * 256 + 128, sa),
-        # B: a 90-degree turn at a doorway - standing just EAST of the
-        # hall's door at (13,3), half way through a turn from the
-        # corridor's axis to south
-        "b": (14 * 256 + 128, 3 * 256 + 128, 512),
+        # B: a 90-degree turn at a doorway - standing one tile SOUTH-EAST
+        # of the hall's door at (13,3), half way through a turn from the
+        # corridor's axis to south, the jamb at the view's left edge and
+        # the far wall foreshortening across it. THE DELTA-FILL-HEAVY
+        # FRAME (96.10): a PX_TURN turn here rewrites all 32 columns for
+        # 1,706 Flat stores against scene A's 1,082 - the first B, at
+        # (14,3), read 1,486 and was cheaper than A on every frame
+        # measured; no scene in E1M1 is dearer than A on a FULL repaint,
+        # where the cast dominates, so A binds the promise and B the turn
+        "b": (14 * 256 + 128, 4 * 256 + 128, 512),
     }
 
 

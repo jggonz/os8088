@@ -57,7 +57,20 @@ LADDER = 24.1                      # a static-ladder row's STORE - DERIVED from
                                    # reading with the entry amortised in it,
                                    # and charging 25.5 AND the entry counted
                                    # the entry twice
-LADDER_ENTRY = 112.0               # ...and the entry, once a column
+LADDER_ENTRY = 112.0               # ...and the entry the bench could see: the
+                                   # computed jump into the ladder and its ret,
+                                   # amortised out of the two row readings
+LADDER_CALL = LADDER_ENTRY + 168.0 # THE WHOLE px_lad CALL, prologue to first
+                                   # store: the entry above plus ~168 D for
+                                   # what wraps it in the package and the bench
+                                   # did not run - the near call and ret (43),
+                                   # the cs:-prefixed row-table and base loads,
+                                   # the parity swap, the count-to-entry shifts
+                                   # and the byte/word fork (~20 instructions
+                                   # at the 8088's fetch floor). 280 is the one
+                                   # figure pxcomp.inc, SPEC.md 96.5/96.8 and
+                                   # the frame report quote for "a ladder
+                                   # entry"; 112 alone is the bench's row
 ROR = {"cga4": 18.0,               # `ror al, 1` x 2 after the load: +18.0 a
                                    # texel M (the datasheet's 2 x 8.7 = 17.4)
        "herc": 15.2, "mono": 15.2, "vga": 15.2,   # ONE `ror al, cl`, CL = 3:
@@ -93,6 +106,26 @@ RETRACE_VGA = HZ / 60.0            # Mode X presents on a retrace: 16.67 ms buck
 # RAM and registers). DOT DELIRIUM's five-dot step, 6.81 ms, stood in for it
 # through three takes of this table
 SIM = {"level": 4.60e-3 * HZ, "cap": 16.98e-3 * HZ}
+# --- WAVE 1's RESIDUALS, MEASURED (tests/pixelstein.py --stages, 2026-09-14,
+# docs/reports/PXS-FRAME-2026-09-14.md 3): five breakpoints split the
+# package's own frame into cast / compose / present / loop, so the gap between
+# this model and the measured frame has a STAGE and a per-column figure -----
+CAST_RESID = 1250.0                # a RAY: the cast measured 4,830 clk a ray
+                                   # on scene A (9.3 crossings) against the
+                                   # units' 3,581 - the far call and its retf
+                                   # (~90), px_col and px_qcur through memory,
+                                   # the tables by q*2, and a hit that is
+                                   # longer than the bench's (the jamb test,
+                                   # the mirror, the pushes). Textured
+                                   # inherits ALL of it: the cast is the same
+FLAT_RESID = 1400.0                # a COLUMN of the Flat rung: px_compose's
+                                   # per-column bookkeeping around its two or
+                                   # three px_lad calls (~90 cs:-prefixed
+                                   # instructions, fetch-bound), measured
+                                   # 4,538 a column at Low res against 3,104
+                                   # of stores + entries. The generated
+                                   # driver of wave 2 replaces this shape, so
+                                   # it is the Flat rung's and not the design's
 
 
 def stages(cols=64, rows=80, crossings=10, dfill=700, lowres=False,
@@ -101,7 +134,7 @@ def stages(cols=64, rows=80, crossings=10, dfill=700, lowres=False,
     k = cols / 64.0
     r = rows / 80.0
     rays = cols // 2 if lowres else cols
-    cast = rays * (SETUP + crossings * CROSS + HIT)
+    cast = rays * (SETUP + crossings * CROSS + HIT + CAST_RESID)
     walk = 11000.0                                 # candidates + graft 4
     wall, spr, wpn = 2048 * k * r, 1800 * k * r, 384 * k   # BYTES stored
     stores = wall + spr + wpn
@@ -111,6 +144,7 @@ def stages(cols=64, rows=80, crossings=10, dfill=700, lowres=False,
             tex = rays * LADDER_ENTRY + stores / 2 * (LADDER - STORE + WSTORE)
         else:
             tex = cols * LADDER_ENTRY + stores * LADDER
+        tex += rays * FLAT_RESID
     elif lowres:
         loads = stores / 2                         # one texel, two bytes
         tex = loads * LOWTEX
@@ -131,7 +165,10 @@ def stages(cols=64, rows=80, crossings=10, dfill=700, lowres=False,
     posts = (75 * k + 16) * 350
     over = rays * 240 + (posts / 2 if lowres else posts) + 8 * 1000 + 50
     hud = 5000.0
-    inp = 8 * KEY * 0.6 + 2000 + 10 * 223
+    # TEN OSAPI_KEY_DOWNs a frame, not eight: with nothing held every jc
+    # falls through to the second reader - LEFT, RIGHT, LSHIFT, RSHIFT, UP,
+    # W, DOWN, S, A, D (px_keys_read; wave 1's review counted them)
+    inp = 10 * KEY + 2000 + 10 * 223
     return dict(cast=cast, walk=walk, tex=tex, dfill=dfl, over=over, hud=hud,
                 inp=inp)
 
@@ -248,8 +285,23 @@ def main():
         sum(stages(flat=True, lowres=True).values()) + present("cga4"))
     row("CGA4 Flat 48x80 Full A",
         sum(stages(flat=True, cols=48).values()) + present("cga4", 48))
-    row("CGA4 Wire 64x80 Full A (~10 stores/col, ~30k present)",
-        sum(fl.values()) - fl["tex"] - fl["dfill"] + 64 * 10 * STORE + 30000)
+    # NO WIRE ROW: the rung is built and measured (docs/reports/PXS-FRAME-
+    # 2026-09-14.md), and the row this file carried - ~10 stores a column and
+    # a ~30,000-clk present - priced a frame no forced repaint can have (the
+    # history seeded to the whole column makes the first Wire frame lay 80
+    # rows of ground, and the review priced it to 0.6%). A model row for a
+    # measured rung is a second number for one fact.
+    print("--- wave 1's FULL REPAINT of the Flat rung, no sim (what the gate asserts on):")
+    print("    the whole view a column - 80 rows, three ladder entries - and the loop's")
+    print("    10 key reads; measured 88.3 ms Low res / 145.8 ms Full on _cga_gla")
+    for lowres, cols_, label in ((True, 32, "CGA4 Flat 64x80 Low res A, full repaint"),
+                                 (False, 64, "CGA4 Flat 64x80 Full A, full repaint")):
+        c = stages(lowres=lowres, flat=True)["cast"]
+        st = WSTORE if lowres else STORE
+        comp = cols_ * (80 * st + 3 * LADDER_CALL + FLAT_RESID)
+        n = c + comp + present("cga4") + 10 * KEY + 2000 + 10 * 223
+        print("%-42s cast %7.0f  compose %7.0f  present %7.0f  loop %5.0f  = %7.0f clk = %6.1f ms"
+              % (label, c, comp, present("cga4"), 10 * KEY + 2000 + 10 * 223, n, n / HZ * 1e3))
     print("tick %.0f clk; the cap binds at %.1f ms = %.2f fps; s = %.2f ms "
           "(E1M1) / %.2f ms (caps): dF/ds at the default = %.2f"
           % (TICK, 3 * TICK / HZ * 1e3, HZ / (3 * TICK), SIM["level"] / HZ * 1e3,
