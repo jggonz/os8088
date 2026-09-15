@@ -6,6 +6,7 @@ beyond Python 3 and macOS utilities. See docs/IMAGER.md.
 """
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,15 @@ import struct
 import subprocess
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os88disk  # noqa: E402  the --hdd image's own builder: hdd_retarget
+
 ROOT = Path(__file__).resolve().parent.parent
+STOCK_GEOMETRY = (os88disk.HDD_HEADS, os88disk.HDD_SPT)   # SPEC.md 80.1: 16 x 63
+MIB = 1024 ** 2
+# XTIDE Universal BIOS's addressing modes, by the card's P-CHS cylinder
+# count: NORMAL to 1024, LARGE to 8192, LBA above (SPEC.md 80.5).
+XTIDE_NORMAL_CYLS, XTIDE_LARGE_CYLS = 1024, 8192
 KINDS = ('floppy', 'usb', 'cd')
 LABELS = {'floppy': 'Floppy disks', 'usb': 'USB flash drives', 'cd': 'CD burners'}
 FLOPPY_SIZES = {360 * 1024, 720 * 1024, 1200 * 1024, 1440 * 1024}
@@ -228,22 +237,106 @@ def stream_and_verify(src, target, size, expected_hash):
     print('\nVerified: SHA-256 match.')
 
 
-def write_disk(path, expected, expected_hash):
+def xtide_geometry(size):
+    """The heads x spt an XTIDE Universal BIOS in Auto reports for a card of
+    `size` bytes whose P-CHS is 16 x 63 - what CompactFlash cards above
+    504 MiB report (SPEC.md 80.5). LARGE doubles the heads until the
+    cylinders fit in 1024 (Revised Enhanced CHS); LBA picks them by capacity
+    (assisted LBA), and a card LARGE cannot hold is past its last rung, so
+    it is 255. None for a NORMAL-mode card: that geometry is the card's
+    own, and this cannot know it."""
+    sectors = size // 512
+    cyls = sectors // (16 * 63)
+    if cyls <= XTIDE_NORMAL_CYLS:
+        return None
+    if cyls <= XTIDE_LARGE_CYLS:
+        heads = 16
+        while cyls > XTIDE_NORMAL_CYLS:
+            cyls //= 2
+            heads *= 2
+        return heads, 63, 'LARGE'
+    return 255, 63, 'LBA'
+
+
+def ask_geometry(device, image):
+    """SPEC.md 80.5's one question, for a partitioned image on a USB-bus
+    device: the stock geometry (None) or (heads, spt), or 'q'."""
+    if device['kind'] != 'usb' or image['kind'] != 'usb':
+        return None
+    stock = '%d/%d' % STOCK_GEOMETRY
+    print('\nGeometry: this image is %d heads x %d sectors per track. A PC booting a\n'
+          'USB stick, QEMU and 86Box take that from the partition table. An XTIDE\n'
+          'Universal BIOS (a CompactFlash card in an XT) reports the CARD\'s own\n'
+          'geometry instead, and the image must be written to match it (SPEC.md 80.5).'
+          % STOCK_GEOMETRY)
+    suggestion = xtide_geometry(device['size'])
+    if suggestion:
+        heads, spt, mode = suggestion
+        print('  A %s card runs XTIDE in %s mode, which reports %d/%d if the card\'s\n'
+              '  own geometry is 16/63 (the usual). Its boot menu names the mode: if it\n'
+              '  says %s, answer %d/%d.' % (size_label(device['size']), mode, heads, spt,
+                                            mode, heads, spt))
+    else:
+        print('  A %s card runs XTIDE in NORMAL mode, which reports the card\'s own\n'
+              '  geometry - unreadable through a USB reader. Type it from the card\'s\n'
+              '  datasheet (a 256 MB SanDisk is 16/32; a card that is 16/63 already\n'
+              '  boots the stock image).' % size_label(device['size']))
+    while True:
+        answer = input('Heads/sectors the booting BIOS reports (Enter keeps %s, q cancels): '
+                       % stock).strip().lower()
+        if answer == 'q':
+            return 'q'
+        if answer == '':
+            return None
+        try:
+            cyls, heads, spt = os88disk.parse_geometry(answer)
+        except ValueError as exc:
+            print('  %s' % exc)
+            continue
+        if cyls and cyls * heads * spt * 512 < image.get('size', 0):
+            print('  %d/%d/%d is %d sectors and the image is %d: the card cannot hold it.'
+                  % (cyls, heads, spt, cyls * heads * spt, image['size'] // 512))
+            continue
+        if (heads, spt) == STOCK_GEOMETRY:
+            return None
+        return heads, spt
+
+
+def retargeted(path, geometry):
+    """The image as it will be written under `geometry`: (stream, size,
+    SHA-256). The FILE is never touched; the ten bytes move in memory
+    (os88disk.hdd_retarget), and the digest of what is written is what the
+    read-back is compared with."""
+    data = path.read_bytes()
+    if geometry:
+        try:
+            data = os88disk.hdd_retarget(data, *geometry)
+        except ValueError as exc:
+            raise ImagerError('Cannot retarget this image: %s' % exc) from exc
+    return io.BytesIO(data), len(data), hashlib.sha256(data).hexdigest()
+
+
+def write_disk(path, expected, expected_hash, geometry=None):
     revalidate(expected)
     image = {'kind': image_kind(path), 'size': path.stat().st_size}
     if not compatible(expected, image) or digest_file(path) != expected_hash:
         raise ImagerError('Image changed or does not fit this medium.')
-    # Open the source BEFORE unmounting, so images on the selected medium
-    # cannot turn into missing paths halfway through the operation.
-    with path.open('rb') as src:
-        command(['diskutil', 'unmountDisk', '/dev/' + expected['id']])
-        revalidate(expected)
-        dev = '/dev/r' + expected['id']
-        fd = os.open(dev, os.O_RDWR | os.O_NOFOLLOW)
-        with os.fdopen(fd, 'r+b', buffering=0) as target:
-            if not stat.S_ISCHR(os.fstat(target.fileno()).st_mode):
-                raise ImagerError('Target is not a raw disk device.')
-            stream_and_verify(src, target, image['size'], expected_hash)
+    # Read the source BEFORE unmounting, so images on the selected medium
+    # cannot turn into missing paths halfway through the operation. Whole,
+    # because a retarget rewrites two sectors of it and the hash on the way
+    # out must be of what is written.
+    src, size, write_hash = retargeted(path, geometry)
+    if geometry:
+        print('Retargeted to %d heads x %d sectors; SHA-256 as written: %s'
+              % (geometry[0], geometry[1], write_hash))
+    command(['diskutil', 'unmountDisk', '/dev/' + expected['id']])
+    revalidate(expected)
+    dev = '/dev/r' + expected['id']
+    fd = os.open(dev, os.O_RDWR | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'r+b', buffering=0) as target:
+        if not stat.S_ISCHR(os.fstat(target.fileno()).st_mode):
+            raise ImagerError('Target is not a raw disk device.')
+        stream_and_verify(src, target, size, write_hash)
     command(['diskutil', 'eject', '/dev/' + expected['id']])
     print('Ejected. The medium is ready to remove.')
 
@@ -270,6 +363,14 @@ def perform(device, image):
     print('\nImage: %s (%s)\nTarget: %s — %s' %
           (path, size_label(image['size']), device['id'], device['name']))
     print('SHA-256: %s' % expected_hash)
+    geometry = ask_geometry(device, image)
+    if geometry == 'q':
+        print('Cancelled. Nothing was written.')
+        return
+    if geometry:
+        _, _, write_hash = retargeted(path, geometry)
+        print('Written as %d heads x %d sectors per track (the file is unchanged).\n'
+              'SHA-256 as written: %s' % (geometry[0], geometry[1], write_hash))
     print('This writes the selected medium and destroys its existing contents.')
     if device['kind'] == 'cd':
         print('Insert a blank writable CD.')
@@ -283,7 +384,8 @@ def perform(device, image):
         args = ['drutil', '-drive', device['id'], 'burn', '-verify', str(path)]
     else:
         args = ['sudo', sys.executable, str(Path(__file__).resolve()),
-                '--_write', str(path), json.dumps(device), expected_hash]
+                '--_write', str(path), json.dumps(device), expected_hash,
+                '%d/%d' % geometry if geometry else '-']
     if subprocess.call(args):
         raise ImagerError('Write or verification failed. The medium may be incomplete; rescan to retry.')
     print('Media creation completed.')
@@ -294,13 +396,18 @@ def main(argv=None):
     parser.add_argument('--scan', action='store_true', help='list devices and images without writing')
     parser.add_argument('--images', type=Path, default=ROOT / 'build',
                         help='search this directory recursively (default: build/)')
-    parser.add_argument('--_write', nargs=3, help=argparse.SUPPRESS)
+    parser.add_argument('--_write', nargs=4, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if sys.platform != 'darwin':
         raise ImagerError('Device detection and writing currently require macOS.')
     if args._write:
-        path, device, digest = args._write
-        write_disk(Path(path), json.loads(device), digest)
+        path, device, digest, geometry = args._write
+        if geometry == '-':
+            geometry = None
+        else:
+            _, heads, spt = os88disk.parse_geometry(geometry)
+            geometry = (heads, spt)
+        write_disk(Path(path), json.loads(device), digest, geometry)
         return 0
     print('os8088 imager')
     while True:

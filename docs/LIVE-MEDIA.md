@@ -180,7 +180,19 @@ system, and UEFI-only machines cannot start it.
   mouse, and that is QEMU's way of attaching one.
 - **86Box:** add `os8088-usb.img` as an existing hard-disk image; when it
   asks for a geometry, the image is **65 cylinders, 16 heads, 63 sectors**
-  (§80.1). **VirtualBox** does not take a raw image directly — convert it
+  (§80.1).
+- **An XT with an XTIDE card and a CompactFlash card, or a Book8088:** the
+  ROM reports the card's own geometry rather than reading it off the
+  partition table (a 256MB SanDisk is 16 heads × 32 sectors), so
+  the image has to be written *for that geometry* (§80.5). `make imager`
+  asks for it when the target is a USB-bus card reader, suggests what
+  XTIDE's Auto mode reports for a card of that size, and rewrites the ten
+  geometry bytes as it writes; by hand it is
+  `python3 tools/os88disk.py --retarget os8088-usb.img --geometry 64/63 -o cf.img`
+  and then `dd` of `cf.img`. Only the first 32MB of the card is used — the
+  volume ceiling is the kernel's (§52.10.3). Alternatively set the card to
+  16 heads × 63 sectors in XTIDECFG's *User specified CHS* and write the
+  stock image. **VirtualBox** does not take a raw image directly — convert it
   first (`VBoxManage convertfromraw os8088-usb.img os8088.vdi`) — or attach
   `os8088.iso` as a CD and boot from that.
 

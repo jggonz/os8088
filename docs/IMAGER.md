@@ -35,6 +35,30 @@ size, SHA-256 and target identity. Type the target's identifier to confirm.
 An empty answer cancels. A failure returns to the inventory so you can replace
 the medium and retry.
 
+**A partitioned image on a USB-bus device gets one more question: the
+geometry** (SPEC.md §80.5). The live image is laid out for 16 heads × 63
+sectors per track, which a PC booting a USB stick, QEMU and 86Box derive
+from its partition table. A period ROM does not derive anything — an XTIDE
+Universal BIOS reports a CompactFlash card's *own* geometry — and an image
+written for 16 × 63 to a card the ROM sees otherwise answers `Not bootable`,
+`Disk error` or a desktop whose files read wrong. The imager cannot read the
+card's geometry through a USB reader (the bridge does not pass ATA IDENTIFY
+through), so it tells you what XTIDE's Auto mode reports for a card of that
+capacity — LARGE mode's 32, 64 or 128 heads above 504 MiB, LBA's 255 above
+about 4 GiB, both at 63 sectors, assuming the card's own 16 × 63 — and asks.
+Press Enter to keep 16 × 63, or type `heads/sectors`. The ten bytes that
+name a geometry (the partition entry's CHS columns and the BPB's heads and
+sectors) are rewritten in memory as the image is written; the file on disk
+is untouched, and the SHA-256 printed second is the one the read-back is
+checked against. Below 504 MiB XTIDE runs in NORMAL mode and reports the
+card's own geometry, which the imager does not know: type it from the card's
+datasheet (a 256 MB SanDisk reports 16 heads × 32 sectors, and a Book8088
+boots the image written that way), or keep 16 × 63 and read the screen
+against §80.5's table. The same rewrite
+without the imager is
+`python3 tools/os88disk.py --retarget os8088-usb.img --geometry 64/63 -o cf.img`,
+for a `dd` user or another platform.
+
 Floppy and USB writes unmount the selected disk, request administrator rights
 with `sudo`, write the raw device with progress, flush it, read back the image
 length and compare SHA-256, then eject. CD burns use `drutil` with the selected

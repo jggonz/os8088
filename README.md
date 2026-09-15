@@ -153,7 +153,9 @@ make live     # the live media (docs/LIVE-MEDIA.md): os8088-usb.img, a
               # the same image as a live CD - the whole OS and every app
               # on one C: drive (make usb / make iso build them singly)
 make imager   # macOS: os8088 imager discovers floppy/USB/CD devices and
-              # offers compatible built images (docs/IMAGER.md)
+              # offers compatible built images (docs/IMAGER.md); asks the
+              # geometry a period ROM reports before writing a CompactFlash
+              # card for an XTIDE machine (SPEC.md 80.5)
 make burn     # macOS: interactively write the stick / burn the CD, with a
               # typed confirmation and a read-back verify
 make test     # boot headless with a QMP socket for scripted testing
@@ -177,6 +179,37 @@ it (`make cpmsw`); none of it is committed here.
 ![what it looks like: gray dithered desktop, menu bar, drive icons, Note Pad,
 Timer, Bounce, Control Panel and Task Manager windows, and the dock
 strip](docs/screenshot.png)
+
+## Writing real media: the disk imager
+
+`make imager` is the one tool for putting any built image on any real medium
+from a Mac ([docs/IMAGER.md](docs/IMAGER.md)). It scans what is plugged in,
+lists the images that fit each device, and never writes anything until you
+have typed the target's identifier back at it. Every write is read back and
+its SHA-256 compared, so a stick or card that silently drops bytes is caught
+before you carry it to the machine.
+
+| medium | what to plug in | what it writes |
+|---|---|---|
+| a floppy | a USB floppy drive with a disk in it | the floppy image whose geometry matches the disk: 1.44MB or 720KB on most USB drives, 360KB and 1.2MB where the drive can |
+| a USB stick | any removable USB flash drive | `os8088-usb.img`, the live disk (`make live`) -- boots any legacy-BIOS PC straight into the desktop as C: |
+| a CD-R | a CD burner | `os8088.iso`, the live CD, burned and verified by macOS's own `drutil` |
+| **a CompactFlash card** | the card in a USB reader | the same live image, **rewritten for the geometry the card's BIOS reports** |
+
+The last row is how os8088 gets onto a **Book8088** -- the 8088 laptop that
+boots CompactFlash through the XTIDE Universal BIOS -- or onto any XT with an
+XTIDE card. A modern PC derives a drive's geometry from the image's partition
+table; XTIDE reports the *card's own* geometry instead, so the image has to be
+written to match it or the machine answers `Not bootable`. The imager asks
+one extra question for a card: it suggests what XTIDE reports for a card of
+that size, and you confirm it or type the heads and sectors from the card's
+datasheet. It cannot read them itself -- a USB reader does not pass the
+card's identity through. A 256MB SanDisk, for example, reports 16 heads and
+32 sectors, and the Book8088 boots the image written that way. Only the
+first 32MB of the card is used; the rest is untouched.
+(`python3 tools/os88disk.py --retarget os8088-usb.img --geometry 16/32 -o
+cf.img` is the same rewrite for `dd` users and other platforms;
+SPEC.md 80.5 is the design.)
 
 ## What it does
 

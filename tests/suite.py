@@ -671,6 +671,10 @@ FAST = [
     Row("imager", "fast", py("tests/unit/t_imager.py"), 0.1,
         "host media detection, image compatibility, confirmation and read-back "
         "verification without writing physical devices"),
+    Row("hddgeom", "fast", py("tests/unit/t_hddgeom.py"), 0.3,
+        "SPEC.md 80.5: retargeting the live image to the geometry a period "
+        "ROM reports moves exactly ten bytes, round-trips, refuses a foreign "
+        "disk, and --verify-hdd fails the CHS/BPB disagreement note 33 was"),
     Row("image", "fast", py("tests/unit/t_image.py"), 0.1,
         "the shipped floppies read by an independent FAT12 walker: contiguity, "
         "the standard BPB, SPEC.md 19.6's attributes"),

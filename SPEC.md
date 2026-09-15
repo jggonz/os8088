@@ -99429,6 +99429,96 @@ menu row says so and does nothing, §47's shape), `hdiutil burn` to burn and
 verify. macOS only, and it says so: on Linux the same job is `lsblk` and
 `dd`, and a guide pretending to cover both would test as neither.
 
+### 80.5 A period ROM reports the card's own geometry — the image is retargeted as it is written
+
+§80.1's 16 × 63 is right for the consumer it was chosen for and wrong for
+the one it was not. A modern BIOS booting a USB stick *derives* its
+geometry from the partition table; an **XTIDE Universal BIOS** — or any
+option ROM answering int 13h for an IDE or CompactFlash card on an XT —
+derives nothing from the table. It reports the card's own IDENTIFY
+geometry, translated by its addressing mode: **NORMAL** (1024 cylinders or
+fewer, the card's P-CHS as it is), **LARGE** (1025–8192 cylinders, the
+heads doubled until the cylinders fit in 1024 — Revised Enhanced CHS), or
+**LBA** (8193 and up, assisted-LBA heads chosen by capacity). Under any
+geometry but 16 × 63 the image's CHS arithmetic — the MBR's column
+(§52.10.1), the BPB the boot record and `dsk_bpb_check` both divide by
+(§52.10.2) — lands on other sectors, and the field's first CompactFlash card
+did exactly that. What the screen says names which way it missed:
+
+| the ROM's geometry | what happens |
+|---|---|
+| a different sectors-per-track | `Not bootable` — C0/H1/S1 was not LBA 63, and the MBR read zeros |
+| fewer heads or sectors than 16 × 63 | `Disk error`, or the boot record's lone `D` — a read past the ROM's own track |
+| 63 spt and MORE than 16 heads (LARGE: 32, 64, 128) | a desktop, because everything below LBA 1008 is where cylinder 0 puts it under any such shape — and every file past it read off the wrong sectors |
+
+**Field note 33's invariant holds and decides the shape**: the geometry
+that *wrote* the volume is the one that reads it back. For a raw-written
+image the writer is the **imager**, and what it must write is the geometry
+the reader will use. Nothing in the image's LBA layout depends on geometry —
+the FATs, the root, `KERNEL.SYS`'s flat run are all at the same LBAs
+whatever the ROM believes — and exactly **ten bytes** do: the entry's two
+CHS columns (six) and `BPB_SecPerTrk`/`BPB_NumHeads` (four).
+`tools/os88disk.py --retarget IMG --geometry HEADS/SPT -o OUT` rewrites
+those and nothing else (`hdd_retarget` is the function, and the imager
+calls it in memory); it refuses heads outside 1..255, sectors outside 1..63,
+and a partition whose last sector would need a cylinder past 1023, and it
+refuses an image whose table and volume do not already agree, so a foreign
+disk cannot be quietly rewritten. `--verify-hdd` checks, for every
+partition, that the entry's CHS columns describe the same sectors the
+volume's own BPB geometry does — the disagreement note 33 was, made a
+diagnostic.
+
+**The imager asks, because it cannot know.** The card's IDENTIFY data is the
+only source of its geometry and a USB card reader does not pass it through
+(a mass-storage bridge speaks SCSI, and macOS offers no ATA pass-through to
+a user program), so for a partitioned image on a USB-bus device the imager
+puts the question once, before the typed confirmation: keep 16 × 63 (a PC's
+USB boot, QEMU, 86Box with the geometry typed in), or the heads and sectors
+the booting ROM reports. What it can compute is the answer XTIDE's Auto rule
+gives a card **of this capacity whose P-CHS is 16 × 63** — which is what
+CompactFlash cards above 504 MiB report, the ATA convention — so it offers
+that as the suggestion with the mode named (LARGE 32/64/128 heads, LBA 255),
+and the reader checks the mode against XTIDE's boot menu, which shows the
+mode and the capacity and not the C/H/S. Below 504 MiB the ROM is in NORMAL
+and the geometry is the card's own, which the imager says rather than
+guesses (§47's rule, on the host). A geometry can also be typed. The image
+FILE is never touched: the retargeted bytes are what is hashed, written and
+read back, and both digests are printed.
+
+**Measured, as an A/B on the ROM in question.** 86Box's `ibmxt86` with
+`hdc_1 = xtide` (XTIDE Universal BIOS r631, the ROM 86Box ships) and one
+IDE drive of **512 cylinders × 4 heads × 32 sectors** — a small
+CompactFlash card's shape, and every one of its three numbers different
+from the image's. The stock image: `Master at 300h: 86B_HD00`, `Booting
+C»C`, **`Not bootable`** — the table's first row, C0/H1/S1 being LBA 32 on
+that drive. The same image after `--retarget --geometry 512/4/32`, padded
+to the drive: the desktop, with **C:** on the dock beside A: and B:, ninety
+seconds from power-on. QEMU boots a 64-head retarget to the same desktop,
+which proves less — SeaBIOS derives its geometry from the table, so it
+agrees with any consistent image — and `tests/unit/t_hddgeom.py` is the
+host-side gate: the ten bytes and only those, a round trip that is the
+identity, every refusal, and `--verify-hdd` on the live image at four
+geometries.
+
+**And in the field, the NORMAL-mode case.** A 256 MB SanDisk CompactFlash
+card in a **Book8088** — the 8088 laptop that boots CompactFlash through
+the XTIDE Universal BIOS — is 980 cylinders × 16 heads × **32** sectors, the
+older SanDisk shape rather than the 16 × 63 that the retrocmp geometry table
+lists for other 256 MB cards; XTIDE is in NORMAL mode for a card that size
+and reports it as it is. The stock image did not boot; the image written as
+16/32 did (2026-09-15). It is the case the imager cannot compute, and the
+reason the prompt names that card as its example.
+
+**What would make it automatic is on the other end of the cable.** The one
+machine that knows the geometry is the XT itself, where int 13h AH=08h
+answers — an MBR that asked, compared the answer with the boot record's
+BPB, rewrote the ten bytes on the disk and then chained would make any
+raw-written image boot under any ROM with no question asked, and the MBR
+has 263 bytes free for it. Not taken here: it writes to the boot medium at
+boot, and a ROM that does not answer AH=08h at all (note 33's card) would
+get nothing from it. It is recorded as the next step rather than the
+absent one.
+
 ## 81. SHEET — the spreadsheet (`apps/sheet/sheet.asm`)
 
 A worksheet package: a grid of cells, formulas over them, formats on them, a
