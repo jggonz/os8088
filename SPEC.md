@@ -93748,6 +93748,34 @@ rather than by a gate, because both are invisible in the default configuration:
 and this one only shows on a machine with two cards and a theme that is not
 Bright.
 
+### 76.2.2. Wallpaper and the Control Panel list
+
+Wallpaper is a separate Control Panel page on `kern_big`, independent of
+chrome. `wp_kind` is a byte: 0 follows the theme, 1..8 are solid Black,
+White, Navy, Teal, Plum, Blue, Silver and Green; 9..16 are screen-aligned
+8x8 patterns (Confetti, Zigzag, Checker, Weave, Grid, Dots, Circuit and
+Hatch); 17 is a centered 128x128 monochrome AMD 8088 die photograph.
+Unknown values render as 0. The monochrome adapters use the existing color
+reduction. The bitmap and patterns remain resident because window damage
+must restore the desktop without disk I/O; page code and labels stay in
+CTRL.DRV. All fills intersect the requested damage rectangle and honor the
+existing graphics clip and display routing. The image's origin is aligned
+to eight pixels, centered separately on each display.
+
+`SYSTEM.CFG` adds a separate `WP` version 1, one-byte record. Existing keys
+keep their versions, so upgrading preserves all old settings. `kern_small`
+carries the byte for round trips but retains its default desktop.
+
+The category list keeps its 14px rows and 132px content height. When more
+than eight categories exist, it shows eight rows and a bottom `Up / Down`
+strip. `cp_top` is the first visible ordinal, clamped when membership changes;
+record IDs and hidden-row mapping are unchanged. Scrolling affects only the
+list, including when the selected page scrolls out of view. With eight or
+fewer categories there is no scroll strip. Wallpaper itself shows six choices
+per page, with Previous/Next controls and a selected marker; clicking a choice
+applies it immediately and posts the standard deferred desktop repaint.
+Closing the panel persists the choice through the normal settings flush.
+
 ### 76.3. The inverted run is SAID, not inferred
 
 `menu_bemit` letters one piece of the bar's composition buffer, and three

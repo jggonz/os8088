@@ -293,3 +293,12 @@ System menu > Restart reboots the machine at once, from any program, so close yo
 ----------------------------
 
 os8088 is free software, under the MIT licence. Enjoy it.
+
+WALLPAPER
+Chip menu > Control Panel > Wallpaper: choose solid colors, retro and
+technical patterns, or an 8088 die bitmap. Previous/Next browse choices;
+close the panel to save. Up/Down scroll the category list when needed.
+The small kernel retains the classic desktop.
+Die bitmap: AMD 8088 die.JPG by Pauli Rautakorpi, CC BY 3.0.
+Resized and monochrome-dithered; https://creativecommons.org/licenses/by/3.0/
+Source: https://commons.wikimedia.org/wiki/File:AMD_8088_die.JPG

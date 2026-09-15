@@ -4181,6 +4181,11 @@ thm_rpair:
     ret
 %endif
 
+wp_kind db 0                    ; carried by both kernels (76.2.2)
+%ifdef KERN_BIG
+%include "kernel/wallpaper.inc"
+%endif
+
 ; thm_desk - lay the desktop's ground over AX,BX..CX,DX (SPEC.md 76.2)
 ; Bright is SPEC.md 26's 50% dither; Dark is solid black. gfx_fill_gray is a
 ; CLIPPED primitive and so is gfx_fill, so wm_dmg_gray's region arithmetic is
@@ -4190,6 +4195,14 @@ thm_desk:
     jmp gfx_fill_gray           ; SPEC.md 26's dither, and the only ground
 %else                           ; this build has
 thm_desk:
+%ifdef KERN_BIG
+    cmp byte [wp_kind], 0
+    je .theme
+    cmp byte [wp_kind], WP_COUNT
+    jae .theme
+    jmp wp_draw
+.theme:
+%endif
     push ax
     mov al, [thm_deskc]
     cmp al, THM_DITHER

@@ -579,12 +579,14 @@ CFG_RBLOB   equ CFG_DBLOB + DRV_BLOB_SZ     ; DRV_RBLOB_SZ bytes: the SECOND
                                 ; its length and nothing about its contents,
                                 ; and it round-trips untouched on a machine
                                 ; whose driver never loads
-CFG_NB      equ CFG_RBLOB + DRV_RBLOB_SZ    ; ...the struct's size
+CFG_WP      equ CFG_RBLOB + DRV_RBLOB_SZ    ; wallpaper after the blobs
 %else
-CFG_NB      equ CFG_DBLOB + DRV_BLOB_SZ     ; no RAM disk here, so no second
+CFG_WP      equ CFG_DBLOB + DRV_BLOB_SZ     ; no RAM disk here, so no second
 %endif                          ; blob and 24 fewer bytes of settings struct
                                 ; carried on the machine that has least of it
                                 ; (SPEC.md 62.9.15)
+
+CFG_NB equ CFG_WP + 1
 
 ; key, ver, len, offset into the struct. ONE table drives the reader and the
 ; writer both, so a new setting is five bytes here and nothing else - and the
@@ -603,6 +605,8 @@ CFG_NB      equ CFG_DBLOB + DRV_BLOB_SZ     ; no RAM disk here, so no second
 ; table would destroy.
 %macro CFG_DATA 1
 %1 %+ _keys:
+    dw 'WP'
+    db 1, 1, CFG_WP
     dw 'DW'                     ; Driver Wanted, the row bitmap
     db 1, 2, CFG_WANT
     dw 'SR'                     ; Sound Route
@@ -642,9 +646,9 @@ CFG_NB      equ CFG_DBLOB + DRV_BLOB_SZ     ; no RAM disk here, so no second
 %ifdef KERN_BIG
     dw 'RD'                     ; Ram Disk - the second one (51.9.1)
     db 1, DRV_RBLOB_SZ, CFG_RBLOB
-CFG_NKEY    equ 9
+CFG_NKEY    equ 10
 %else
-CFG_NKEY    equ 8               ; no 'RD' key: kern_small has no RAM disk, and
+CFG_NKEY    equ 9               ; no 'RD' key: kern_small has no RAM disk, and
 %endif                          ; an unknown key is DROPPED rather than carried
                                 ; (SPEC.md 51.5 rule 1), which is the honest
                                 ; answer for a build with nothing to give it to
@@ -685,7 +689,9 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
     dw ss_secs
     db CFG_SSN
     dw ss_mins
-DRV_CFG_MAPN equ 8
+    db CFG_WP
+    dw wp_kind
+DRV_CFG_MAPN equ 9
 
 ; --- whose blob is whose (SPEC.md 51.9.1) ------------------------------------
 ; row index, size, offset into the struct. The ROW and not the class, for the
@@ -3462,6 +3468,12 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
                                 ; still STORED on a build with no theme - the
                                 ; map above did that - so the choice survives
                                 ; a kernel swap (SPEC.md 76.13)
+%endif
+%ifdef KERN_BIG
+    cmp byte [wp_kind], WP_COUNT
+    jb %%wp_ok
+    mov byte [wp_kind], 0
+%%wp_ok:
 %endif
     mov ax, [drv_cfg+CFG_WANT]
     call %1 %+ _want_set

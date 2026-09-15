@@ -2534,6 +2534,9 @@ SOAK = [
         "5.4.2.4) - it builds `make BAND=1` itself, the composer being a knob"
         "again since SPEC.md 5.9.6, and puts the default kernel back",
         needs=("marty",), serial=True),
+    Row("wallpaper", "soak", py("tests/wallpaper.py"), 200.0,
+        "Wallpaper pixels, damage, saved settings and CGA category scrolling",
+        needs=("marty",)),
     Row("dispthm", "soak", py("tests/dispthm.py"), 60.0,
         "Does SPEC.md 76's theme meet the extended desktop honestly? Color is"
         "a fact about the PRIMARY and a window can be on the other card",

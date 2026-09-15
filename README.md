@@ -299,6 +299,12 @@ every one of these on one 1.44MB floppy.
 - **8086 real mode throughout**, so everything from a 4.77MHz IBM PC/XT to a
   Pentium runs the same image.
 
+### Wallpaper
+
+The Control Panel includes [wallpaper choices](docs/WALLPAPER.md): eight solid
+colors, retro and technical patterns, and a monochrome 8088 die photograph.
+Its category list scrolls when needed, including on CGA.
+
 ## How
 
 | piece         | how it works on an XT                                       |
@@ -920,7 +926,7 @@ MIT -- see [LICENSE](LICENSE). As noted at the top, the code was written with
 AI coding agents; it is an experimental hobby project and, per the MIT text,
 comes with no warranty of any kind.
 
-Two things in the tree are not simply covered by that, and both are named
+Three things in the tree are not simply covered by that, and all are named
 rather than buried:
 
 - **The C compiler is not vendored.** SmallerC (2-clause BSD) is fetched at a
@@ -940,6 +946,10 @@ rather than buried:
   from it, should be aware of that and decide for themselves. The rest of both
   programs — their windows, their layout engines, their redraw paths — is
   os8088's own.
+
+- **The wallpaper die photograph** is by Pauli Rautakorpi, licensed under
+  CC BY 3.0. The monochrome bitmap and screenshots containing it retain that
+  attribution; see [the source and conversion details](docs/WALLPAPER.md).
 
 The website in the sibling `os8088-web` repository is a separate matter: it
 vendors the v86 emulator (BSD-2-Clause), SeaBIOS and SeaVGABIOS binaries

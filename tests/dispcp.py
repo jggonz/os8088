@@ -179,8 +179,20 @@ def open_panel(m, mo, S, settle, card=None, page=CP_IVID):
                            "one)" % page)
     row = sum(1 for r in range(page) if not (hide & (1 << r)))
     wx, wy = _cp_win(m, S)
+    # Scroll ordinals into view before translating to a physical list row.
+    top = _b(m, S, "cp_top")
+    visible = _b(m, S, "cp_lrows")
+    while not top <= row < top + visible:
+        down = row >= top + visible
+        mo.click(wx + 1 + (65 if down else CP_IX),
+                 wy + TITLE_H + 1 + CP_I0Y + 8 * CP_IROWH + 5,
+                 settle=0)
+        want = top + (1 if down else -1)
+        _cpwait(m, lambda: _b(m, S, "cp_top") == want,
+                "Control Panel categories to scroll")
+        top = want
     mo.click(wx + 1 + CP_IX + 30,
-             wy + TITLE_H + 1 + CP_I0Y + row * CP_IROWH + CP_IROWH // 2,
+             wy + TITLE_H + 1 + CP_I0Y + (row - top) * CP_IROWH + CP_IROWH // 2,
              settle=0)
     # [cp_sel] IS THE PAGE, and cp_onclick stores the RECORD index into it -
     # not the drawn row - so this is the same number the caller asked for.
