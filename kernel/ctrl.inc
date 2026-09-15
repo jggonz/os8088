@@ -377,6 +377,7 @@ cp_items:
     dw cp_s_vid,   cp_vid_paint,   cp_vid_click,   0
 %ifdef OS88_THEME
     dw cp_s_thm,   cp_thm_paint,   cp_thm_click,   0
+    dw cp_s_wp,    cp_wp_paint,    cp_wp_click,    0
 %endif
 cp_items_end:
 CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
@@ -434,21 +435,15 @@ cp_nst:   db CP_ITEMS
 ; [cp_nst], by the same single writer.
 cp_hide:  db 0
 
-; THE LIST HAS ROOM FOR NINE ROWS AND NO MORE: row i's bar runs
-; CP_I0Y + i*CP_IROWH .. + CP_IBH - 1, so row 8 ends at 129 inside a content
-; box 132 tall and row 9 would run through the bottom border onto the
-; desktop. Six static items plus the THREE drivers that publish a page
-; (SPEC.md 31.9 - the hard disk's, the debug monitor's and the network link's;
-; the sound driver publishes none) is exactly nine. The count was two until
-; NET.DRV (docs/plans/completed/NET-PLAN.md), and growing this constant is what the guard
-; below is FOR: it is a build-time %error, so the third page could not be
-; added without the window being made to hold it. CP_ITEMS and not [cp_nst],
-; because the guard has to hold on the machine that shows every row.
-;
-; A FOURTH page does not fit CGA (see CP_CH), so the answer then is a
-; scrolling list rather than another 14 rows of window.
-%if CP_ITEMS + 3 > (CP_CH - CP_I0Y) / CP_IROWH
-%error "ctrl: the item list can overflow its pane - grow CP_CH (SPEC.md 31.1)"
+; Eight rows plus a scroll strip fit the existing CGA window (76.2.2).
+CP_LROWS equ 8
+CP_LSCY equ CP_I0Y + CP_LROWS * CP_IROWH
+cp_top: db 0
+cp_lrows: db CP_LROWS
+cp_s_lup: db 'Up', 0
+cp_s_ldn: db 'Down', 0
+%if CP_ITEMS > 8
+    %error "ctrl: widen cp_hide before adding a ninth static record"
 %endif
 
 ; List names are at most 9 characters (72px): the selection bar ends at
@@ -461,6 +456,8 @@ cp_hide:  db 0
 ; the ground the desktop is laid with. It changes no geometry and claims no
 ; memory, so the only thing a switch owes is a repaint - which is [cp_dirty],
 ; the flag that already means "every window has to be told".
+cp_s_wp:    db 'Wallpaper', 0
+cp_wp_page: db 0
 cp_s_thm:   db 'Theme', 0       ; list name AND the page heading, so RESIDENT
                                 ; (SPEC.md 31.9). The page's own strings are
                                 ; in the image, at cp_modstr below
@@ -1091,6 +1088,28 @@ cp_onclick_x:
     cmp cx, CP_DIVX
     jge .page
 
+    cmp dx, CP_LSCY
+    jl .pick
+    cmp dx, CP_CH
+    jge .done
+    call cp_nitems
+    cmp al, CP_LROWS
+    jbe .done
+    cmp cx, CP_DIVX / 2
+    jge .scroll_down
+    cmp byte [cp_top], 0
+    je .done
+    dec byte [cp_top]
+    jmp short .scroll
+.scroll_down:
+    sub al, CP_LROWS
+    cmp [cp_top], al
+    jae .done
+    inc byte [cp_top]
+.scroll:
+    call cp_list
+    jmp .done
+.pick:
     call cp_pick                ; --- left pane: which row? ---
     jc .done                    ; below the last row: nothing
     mov ah, al                  ; AH = the ORDINAL, banked: cp_v2r clobbers AL
@@ -1967,29 +1986,31 @@ cp_skipset:
 ; the click is in the left pane, and the whole pane width selects.
 ; -----------------------------------------------------------------------------
 cp_pick:
+    push bx
     push dx
     sub dx, CP_I0Y
-    jl .miss                    ; signed: above the first row
+    jl .miss
     xor al, al
 .scan:
     cmp dx, CP_IROWH
     jl .hit
     sub dx, CP_IROWH
     inc al
-    push bx
-    mov bl, al
-    call cp_nitems              ; the static rows PLUS whatever a loaded
-    cmp bl, al                  ; driver publishes (SPEC.md 31.9)
-    mov al, bl
-    pop bx
+    cmp al, [cp_lrows]
     jb .scan
 .miss:
-    stc                         ; below the last row: no item
-    jmp .done
+    stc
+    jmp short .done
 .hit:
-    clc
+    add al, [cp_top]
+    mov bl, al
+    call cp_nitems
+    cmp bl, al
+    mov al, bl
+    cmc
 .done:
     pop dx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2019,6 +2040,10 @@ cp_listrow:
     push si
 
     mov bl, al                  ; BL = the ordinal, wanted after the multiply
+    sub al, [cp_top]
+    jc .out
+    cmp al, [cp_lrows]
+    jae .out
     mov cl, CP_IROWH
     mul cl                      ; AX = ordinal * pitch (8086: mul r/m8)
     add ax, bp
@@ -2070,6 +2095,7 @@ cp_listrow:
     pop ax                      ; It clobbers SI and nothing else, which is
     call KERNEL_SEG:cw_font_run ; why the row top could live there until now
 
+.out:
     pop si
     pop dx
     pop cx
@@ -2110,11 +2136,34 @@ cp_list:
     call KERNEL_SEG:cw_gfx_fill
 
     call cp_nitems
-    mov cx, ax
-    and cx, 0x00FF              ; CX = how many rows there are
+    mov byte [cp_lrows], CP_LROWS
+    cmp al, CP_LROWS
+    ja .scrollable
+    mov [cp_lrows], al
+    mov byte [cp_top], 0
+    jmp short .count
+.scrollable:
+    sub al, CP_LROWS
+    cmp [cp_top], al
+    jbe .arrows
+    mov [cp_top], al
+.arrows:
+    mov byte [gfx_color], CBLACK
+    mov cx, di
+    add cx, CP_IX
+    mov dx, bp
+    add dx, CP_LSCY + 2
+    mov si, cp_s_lup
+    call cp_run
+    add cx, 40
+    mov si, cp_s_ldn
+    call cp_run
+.count:
+    xor cx, cx
+    mov cl, [cp_lrows]
     jcxz .out
     mov byte [cp_lfull], 1      ; ...each on the ground laid above, so no
-    xor bx, bx                  ; BL = the ORDINAL being drawn
+    mov bl, [cp_top]            ; first visible ordinal
 .row:
     mov al, bl
     call cp_listrow
@@ -2367,6 +2416,126 @@ cp_run:
     call KERNEL_SEG:cw_font_run ; cp_thm_paint): content, in the ordinary pens
     pop ax
     ret
+
+%ifdef OS88_THEME
+; Wallpaper choices are list selections (cp_ctl id 0), so they apply once
+; on the press and neither drag tracking nor release repeats the action.
+cp_wp_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [gfx_color], CBLACK
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PHY
+    mov si, cp_s_wp
+    call cp_run
+    xor bx, bx
+    mov bl, [cp_wp_page]
+    mov ax, 6
+    mul bl
+    mov bx, ax
+    mov dx, bp
+    add dx, 22
+.row:
+    push bx
+    shl bx, 1
+    CPSTAGEX cp_wp_names, bx
+    pop bx
+    mov cx, di
+    add cx, 20
+    call cp_run
+    CPSTAGE cp_wp_off
+    cmp bl, [wp_kind]
+    jne .mark
+    CPSTAGE cp_wp_on
+.mark:
+    mov cx, di
+    add cx, 4
+    call cp_run
+    add dx, 14
+    inc bl
+    mov ax, dx
+    sub ax, bp
+    cmp ax, 106
+    jb .row
+    mov cx, di
+    add cx, 4
+    mov dx, bp
+    add dx, 118
+    CPSTAGE cp_wp_prev
+    call cp_run
+    add cx, 112
+    CPSTAGE cp_wp_next
+    call cp_run
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+cp_wp_click:
+    push ax
+    push bx
+    push dx
+    cmp cx, 2
+    jl .out
+    cmp cx, CP_PRGT - 2
+    jg .out
+    cmp dx, 118
+    jl .choice
+    cmp dx, 129
+    jg .out
+    xor al, al
+    call cp_ctl
+    jc .out
+    cmp cx, 108
+    jge .next
+    cmp byte [cp_wp_page], 0
+    je .out
+    dec byte [cp_wp_page]
+    jmp short .paint
+.next:
+    cmp byte [cp_wp_page], 2
+    jae .out
+    inc byte [cp_wp_page]
+.paint:
+    call cp_wp_paint
+    jmp short .out
+.choice:
+    sub dx, 22
+    jl .out
+    cmp dx, 84
+    jge .out
+    mov ax, dx
+    mov bl, 14
+    div bl
+    mov dl, al
+    mov al, [cp_wp_page]
+    mov bl, 6
+    mul bl
+    add al, dl
+    mov bl, al
+    xor al, al
+    call cp_ctl
+    jc .out
+    cmp bl, [wp_kind]
+    je .out
+    mov [wp_kind], bl
+    mov byte [cp_wdirty], 1
+    mov byte [cp_dirty], 1
+    mov byte [ui_post], 1
+    ; Only the marker columns change; the deferred repaint draws the page.
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+%endif
 
 %ifdef OS88_THEME
 ; -----------------------------------------------------------------------------
@@ -5920,6 +6089,32 @@ CPS cp_s_vsing, 'Single'
 CPS cp_s_vrgt,  'Right'
 CPS cp_s_vblw,  'Below'
 cp_vmodnam: dw cp_s_vsing, cp_s_vrgt, cp_s_vblw
+%endif
+
+%ifdef OS88_THEME
+cp_wp_names: dw cp_wp_n0, cp_wp_n1, cp_wp_n2, cp_wp_n3, cp_wp_n4, cp_wp_n5, cp_wp_n6, cp_wp_n7, cp_wp_n8, cp_wp_n9, cp_wp_n10, cp_wp_n11, cp_wp_n12, cp_wp_n13, cp_wp_n14, cp_wp_n15, cp_wp_n16, cp_wp_n17
+CPS cp_wp_n0, 'Theme default           '
+CPS cp_wp_n1, 'Solid: Black            '
+CPS cp_wp_n2, 'Solid: White            '
+CPS cp_wp_n3, 'Solid: Navy             '
+CPS cp_wp_n4, 'Solid: Teal             '
+CPS cp_wp_n5, 'Solid: Plum             '
+CPS cp_wp_n6, 'Solid: Blue             '
+CPS cp_wp_n7, 'Solid: Silver           '
+CPS cp_wp_n8, 'Solid: Green            '
+CPS cp_wp_n9, '80s: Confetti           '
+CPS cp_wp_n10, '80s: Zigzag             '
+CPS cp_wp_n11, '90s: Checker            '
+CPS cp_wp_n12, '90s: Weave              '
+CPS cp_wp_n13, 'Tech: Grid              '
+CPS cp_wp_n14, 'Tech: Dots              '
+CPS cp_wp_n15, 'Tech: Circuit           '
+CPS cp_wp_n16, 'Tech: Hatch             '
+CPS cp_wp_n17, '8088 die (AMD)          '
+CPS cp_wp_on, '*'
+CPS cp_wp_off, ' '
+CPS cp_wp_prev, '< Previous'
+CPS cp_wp_next, 'Next >'
 %endif
 
 CPS cp_s_sspk,  'PC Speaker'
