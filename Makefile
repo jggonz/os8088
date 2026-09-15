@@ -1900,7 +1900,8 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         scribe scribedisk \
         cc-note chello covl pkgrun pkgbig cword cworddisk 386-c-word runcpm runcpmdisk \
         paccman paccmandisk pmcbandbench xt-paccman 386-paccman \
-        speedybasic speedybasicdisk speedybasiccoretest \
+        speedybasic speedybasicdisk speedybasiccoretest speedybasic-compile-smoke \
+        speedybasic-compiled-test \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
@@ -6250,6 +6251,88 @@ $(BUILD)/.speedybasic-hostchecks: $(SPEEDYBASICSRC) $(SPEEDYBASICHOST) \
 speedybasiccoretest: $(BUILD)/.speedybasic-hostchecks
 
 speedybasic: $(BUILD)/speedybasic.o88
+
+# --- SPEEDY BASIC standalone compiler smoke ---------------------------------
+# speedybasic_compile.py emits one complete C translation unit.  The remaining
+# four stages are the ordinary C-package pipeline from apps/cc/Makefile.inc:
+# SmallerC -> cc8086 gate -> NASM flat image -> os88pkg validation.  Keep this
+# explicit instead of teaching CC_PACKAGE about generated sources; the macro's
+# source-under-apps contract is useful to every shipping package that uses it.
+SPEEDYBASIC_COMPILED_RUNTIME := \
+        apps/speedybasic/compiler/runtime.c \
+        apps/speedybasic/compiler/runtime.h \
+        apps/speedybasic/compiler/numrt.c \
+        apps/speedybasic/compiler/numrt.h \
+        apps/speedybasic/sbscreen.c \
+        apps/speedybasic/sbnum.h
+
+$(BUILD)/sbhello.c: tools/speedybasic_compile.py \
+                    apps/speedybasic/demos/HELLO.BAS \
+                    $(SPEEDYBASIC_COMPILED_RUNTIME) | $(BUILD)
+	python3 tools/speedybasic_compile.py apps/speedybasic/demos/HELLO.BAS \
+		-o $@ --name SBHELLO
+
+$(BUILD)/sbhello.raw.asm: $(BUILD)/sbhello.c $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
+		-I apps/speedybasic/compiler -I apps/speedybasic -I apps \
+		$< -o $@
+
+$(BUILD)/sbhello.gen.asm: $(BUILD)/sbhello.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/sbhello.bin: apps/speedybasic/compiler/compiled.asm \
+                      $(BUILD)/sbhello.gen.asm $(CC_RUNTIME) \
+                      apps/speedybasic/compiler/gfx.inc \
+                      apps/speedybasic/icon.inc \
+                      apps/speedybasic/sbnum.inc apps/speedybasic/sbmem.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ \
+		-DSB_COMPILED_NAME="'SBHELLO'" \
+		-DSB_COMPILED_GEN='"sbhello.gen.asm"' \
+		-o $@ apps/speedybasic/compiler/compiled.asm
+	@echo "sbhello: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/sbhello.o88: $(BUILD)/sbhello.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+
+$(BUILD)/sbstars.c: tools/speedybasic_compile.py \
+                    apps/speedybasic/demos/STARS3D.BAS \
+                    $(SPEEDYBASIC_COMPILED_RUNTIME) | $(BUILD)
+	python3 tools/speedybasic_compile.py apps/speedybasic/demos/STARS3D.BAS \
+		-o $@ --name SBSTARS
+
+$(BUILD)/sbstars.raw.asm: $(BUILD)/sbstars.c $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
+		-I apps/speedybasic/compiler -I apps/speedybasic -I apps \
+		$< -o $@
+
+$(BUILD)/sbstars.gen.asm: $(BUILD)/sbstars.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/sbstars.bin: apps/speedybasic/compiler/compiled.asm \
+                      $(BUILD)/sbstars.gen.asm $(CC_RUNTIME) \
+                      apps/speedybasic/compiler/gfx.inc \
+                      apps/speedybasic/icon.inc \
+                      apps/speedybasic/sbnum.inc apps/speedybasic/sbmem.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ \
+		-DSB_COMPILED_NAME="'SBSTARS'" \
+		-DSB_COMPILED_GEN='"sbstars.gen.asm"' \
+		-o $@ apps/speedybasic/compiler/compiled.asm
+	@echo "sbstars: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/sbstars.o88: $(BUILD)/sbstars.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+
+speedybasic-compile-smoke: $(BUILD)/sbhello.o88 $(BUILD)/sbstars.o88
+
+$(BUILD)/sbcompiled120.img: $(BUILD)/sbhello.o88 $(BUILD)/sbstars.o88 tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ \
+		$(BUILD)/sbhello.o88 $(BUILD)/sbstars.o88
+	python3 tools/os88disk.py --verify $@
+
+speedybasic-compiled-test: $(BUILD)/sbcompiled120.img $(IMG360)
+	python3 tests/speedybasic_compiled.py
 
 # The build artifact keeps the descriptive stem used by the C pipeline, but a
 # FAT directory name is 8.3. This is the disk-facing copy; its package header

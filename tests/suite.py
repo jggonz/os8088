@@ -1286,6 +1286,29 @@ FULL = [
 # single-subject gates; several are worth reading before touching their area.
 # --------------------------------------------------------------------------
 SOAK = [
+    Row("speedybasic-compiler", "soak",
+        py("tests/unit/t_speedybasic_compile.py"), 2.0,
+        "the AOT frontend tokenizes and links all 29 shipped demos, checks "
+        "expression precedence and structured control flow, and lowers the "
+        "HELLO, PATTERN and STARS3D native backend surfaces without falling "
+        "back to the interpreter",
+        needs=()),
+    Row("speedybasic-build", "soak",
+        py("tests/unit/t_speedybasic_build.py"), 2.0,
+        "the public host compiler driver presents its documented command, "
+        "rejects unsafe package names, preserves an existing output when "
+        "native lowering refuses a source, and takes HELLO.BAS through the "
+        "pinned SmallerC, cc8086, NASM and os88pkg pipeline to a valid "
+        "standalone v3 O88. SOAK because it invokes the C toolchain",
+        needs=("cc", "nasm")),
+    Row("speedybasic-compiled", "soak",
+        py("tests/speedybasic_compiled.py"), 50.0,
+        "the generated HELLO and STARS3D packages open directly in os8088; "
+        "HELLO reaches the retained text surface, STARS3D enters mode 13 and "
+        "performs native framebuffer POKEs, and both windowed and full-screen "
+        "paint paths run. Build with `make speedybasic-compile-smoke "
+        "build/sbcompiled120.img` first",
+        needs=("marty", "cc", "nasm"), serial=True, timeout=240),
     Row("speedybasic-core", "soak",
         ["apps/speedybasic/hosttest/coretest.sh"], 5.0,
         "the shipping Speedy BASIC tokenizer, expression parser and runner "

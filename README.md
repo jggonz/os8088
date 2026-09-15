@@ -181,6 +181,28 @@ it. `runcpmdisk`, `allapps` and `live` also fetch RunCPM's command processor
 and master disk (`make runcpm-src`) and the CP/M software that rides beside
 it (`make cpmsw`); none of it is committed here.
 
+Speedy BASIC source can also be compiled on the host into a standalone
+package that opens directly on os8088:
+
+```sh
+python3 tools/speedybasic_build.py program.BAS -o PROGRAM.O88 --name PROGRAM
+```
+
+The command prepares the repository's pinned SmallerC toolchain when needed,
+keeps its C and assembly intermediates in a temporary directory, applies the
+8086 safety gate, and validates the final package with `os88pkg.py`. `--name`
+is the 1–15 character name shown in the package header and window. The native
+backend covers numeric scalars and one-dimensional arrays, arithmetic and
+bitwise expressions, structured loops and branches, GOTO/GOSUB, SCREEN/PSET/
+LINE, and the OUT/REG/INTERRUPT/DEF SEG/POKE path used by `STARS3D.BAS`.
+`HELLO.BAS`, `PATTERN.BAS`, `CODEDIFF.BAS`, and `STARS3D.BAS` currently lower
+completely. The frontend parses and links all 29 shipped demos and reports an
+explicit source location when a backend feature (such as strings, procedures,
+DATA/READ, or multidimensional arrays) is not implemented yet.
+`make speedybasic-compile-smoke` rebuilds native HELLO and STARS3D packages;
+`make speedybasic-compiled-test` runs both in MartyPC, including windowed and
+full-screen rendering.
+
 ![what it looks like: gray dithered desktop, menu bar, drive icons, Note Pad,
 Timer, Bounce, Control Panel and Task Manager windows, and the dock
 strip](docs/screenshot.png)
