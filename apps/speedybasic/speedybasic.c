@@ -17,6 +17,7 @@ static int ovl_sb_source_resize(unsigned need);
 #include "sbscreen.c"
 #include "sbui.c"
 #include "sbcore.c"
+#ifndef SB_VM_TEMPLATE
 #define sbw_bind         ovl_sbw_bind
 #define sbw_header       ovl_sbw_header
 #define sbw_stack_class  ovl_sbw_stack_class
@@ -50,6 +51,7 @@ static int ovl_sb_source_resize(unsigned need);
 #undef sbw_assoc_ok
 #undef sbw_name_ok
 #undef sbw_final_ok
+#endif
 
 static struct sb_host sb_host = {
     sbs_host_mode,
@@ -73,12 +75,26 @@ static struct sb_host sb_host = {
     sbs_host_changed
 };
 
+#ifdef SB_VM_TEMPLATE
+static char sb_window_title[9] = "BASICVM";
+#else
+static char sb_window_title[16] = "Speedy Basic";
+#endif
+
+/* SPEEDYVM.RT patches byte zero to 1 and stores the embedded source length
+ * in bytes 1..2. The VM always receives an embedded program, so retaining the
+ * editor's welcome source there would only consume its tight 60K image+BSS
+ * budget. */
+#ifdef SB_VM_TEMPLATE
+static char sb_welcome[3] = "VM";
+#else
 static const char sb_welcome[] =
     "' SPEEDY BASIC FOR OS8088\n"
     "CLS\n"
     "COLOR 15, 1\n"
     "PRINT \"Speedy Basic is ready.\"\n"
     "PRINT \"Press F5 to run.\"\n";
+#endif
 
 /* Load the cold half before the first W_PAINT.  Editor/status painting calls
  * into it, so a missing overlay refuses launch rather than doing file I/O
@@ -129,21 +145,42 @@ void *os88_main(void)
 
     if (!ovl_speedy_ready())
         return 0;
+#ifndef SB_VM_TEMPLATE
     sb_compile_set_home();
+#endif
+#ifdef SB_VM_TEMPLATE
+    if ((unsigned char)sb_welcome[0] == 1) {
+        sb_source_seg = os88_part_seg(1);
+        sb_source_len = (unsigned char)sb_welcome[1]
+                        | (unsigned)((unsigned char)sb_welcome[2]) << 8;
+        sb_source_kb = (sb_source_len + 1023u) >> 10;
+        if (!sb_source_seg || sb_source_len > SB_SOURCE_MAX) return 0;
+    } else
+#endif
     if (ovl_sb_source_resize(1) < 0) {
         os88_toast("Speedy: needs 4K.", 0);
         return 0;
     }
-    ovl_sb_source_default();
+#ifdef SB_VM_TEMPLATE
+    if ((unsigned char)sb_welcome[0] != 1)
+#endif
+        ovl_sb_source_default();
     ovl_sbs_init();
     if (sb_init(&sb_host) < 0) {
         os88_toast("Speedy: core init failed.", 0);
         return 0;
     }
+#ifdef SB_VM_TEMPLATE
+    if ((unsigned char)sb_welcome[0] == 1) {
+        if (sb_load_seg(sb_source_seg, sb_source_len) < 0) return 0;
+        os88_strcpy(sb_file_name, "COMPILED.BAS", sizeof(sb_file_name));
+        sbu_build = SBU_BUILD_AUTORUN;
+    }
+#endif
 
     os88_video(&v);
     h = v.dock_top - OS88_MBAR_H - 1;
-    win = os88_wm_create(0, OS88_MBAR_H, v.w, h, "Speedy Basic");
+    win = os88_wm_create(0, OS88_MBAR_H, v.w, h, sb_window_title);
     if (win == 0)
         return 0;
     sb_win = win;
@@ -157,6 +194,9 @@ void *os88_main(void)
     os88_wm_onwake(win);
     os88_wm_ontimer(win);
     os88_key_down(0);                   /* arm make/break map before first key */
+#ifdef SB_VM_TEMPLATE
+    os88_wm_wake(win);                  /* start the embedded program */
+#endif
     return win;
 }
 
@@ -204,6 +244,7 @@ static void ovl_speedy_onfile(int mode, const char *name, unsigned size_lo,
     unsigned got;
 
     if (mode == OS88_FDLG_SAVE) {
+#ifndef SB_VM_TEMPLATE
         if (sbu_dialog == SBU_DLG_PACKAGE_SAVE) {
             sbu_dialog = SBU_DLG_NONE;
             os88_strcpy(sbu_package_name, name, sizeof(sbu_package_name));
@@ -212,6 +253,7 @@ static void ovl_speedy_onfile(int mode, const char *name, unsigned size_lo,
             ovl_sbu_repaint(win);
             return;
         }
+#endif
         sbu_dialog = SBU_DLG_NONE;
         if (os88_file_write_seg(name, sb_source_seg, sb_source_len) != 0) {
             os88_toast("Speedy: save failed.", 0);
@@ -262,7 +304,12 @@ void os88_onwake(void *win)
     static int paint_div;
     int state;
 
-    if (sbu_build == SBU_BUILD_READY) {
+    if (sbu_build == SBU_BUILD_AUTORUN) {
+        sbu_build = SBU_BUILD_IDLE;
+        ovl_sbu_run(win, 0);
+    }
+#ifndef SB_VM_TEMPLATE
+    else if (sbu_build == SBU_BUILD_READY) {
         sb_stop();
         sbu_build = SBU_BUILD_RUNNING;
         sbu_build_error[0] = 0;
@@ -283,6 +330,7 @@ void os88_onwake(void *win)
         ovl_sbu_repaint(win);
         os88_gfx_unlock();
     }
+#endif
 
     state = sb_state();
     if (state == SB_STATE_READY || state == SB_STATE_RUNNING ||

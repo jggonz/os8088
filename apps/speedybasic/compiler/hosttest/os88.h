@@ -4,8 +4,12 @@ struct os88_place { unsigned clus; int vol; };
 int os88_peek(unsigned segment, unsigned offset);
 void os88_poke(unsigned segment, unsigned offset, int value);
 int os88_file_write_seg(const char *name, unsigned segment, unsigned count);
+int os88_file_append_seg(const char *name, unsigned segment, unsigned off,
+                         unsigned count);
 unsigned os88_file_read_seg(const char *name, unsigned segment,
                             unsigned capacity);
+int os88_file_delete(const char *name);
+int os88_disk_cluster_sectors(void);
 int os88_ferr(void);
 unsigned os88_mem_claim(unsigned kilobytes);
 void os88_mem_free(unsigned segment);

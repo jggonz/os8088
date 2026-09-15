@@ -39,7 +39,11 @@ static const char *sbu_file_items[] = {
     "New", "Open...", "Save As...", "Close"
 };
 static const char *sbu_run_items[] = {
+#ifdef SB_VM_TEMPLATE
+    "Run  F5", "Stop", "Step  F8", "Reset"
+#else
     "Run  F5", "Stop", "Step  F8", "Reset", "Build Package..."
+#endif
 };
 static const char *sbu_view_items[] = {
     "Editor  F6", "Output  F6", "Full Screen  Ctrl+F", "Clear Output"
@@ -47,7 +51,13 @@ static const char *sbu_view_items[] = {
 static struct sbu_menuset sbu_menus = {
     "Speedy Basic", 0, 3,
     { { "File", sbu_file_items, 4 },
-      { "Run", sbu_run_items, 5 },
+      { "Run", sbu_run_items,
+#ifdef SB_VM_TEMPLATE
+        4
+#else
+        5
+#endif
+      },
       { "View", sbu_view_items, 4 } }
 };
 
@@ -78,11 +88,14 @@ static int sbu_crow, sbu_ccol;
 #define SBU_BUILD_RUNNING     2
 #define SBU_BUILD_DONE        3
 #define SBU_BUILD_ERROR       4
+#define SBU_BUILD_AUTORUN     5
 
 static int sbu_dialog;
 static int sbu_build;
+#ifndef SB_VM_TEMPLATE
 static char sbu_package_name[13];
 static char sbu_build_error[48];
+#endif
 
 static void ovl_sbui_paint(void *win);
 
@@ -144,6 +157,7 @@ static void ovl_sbu_status_make(void)
     ovl_sbu_cursor_pos();
     os88_strcpy(sb_ui_text, sbu_view == SBU_VIEW_EDIT ? "EDIT  " : "OUTPUT  ",
                 sizeof(sb_ui_text));
+#ifndef SB_VM_TEMPLATE
     if (sbu_build == SBU_BUILD_READY)
         os88_strcpy(sb_ui_text + os88_strlen(sb_ui_text), "Build queued",
                     sizeof(sb_ui_text) - os88_strlen(sb_ui_text));
@@ -161,6 +175,7 @@ static void ovl_sbu_status_make(void)
         os88_strcpy(sb_ui_text + os88_strlen(sb_ui_text), sbu_build_error,
                     sizeof(sb_ui_text) - os88_strlen(sb_ui_text));
     } else
+#endif
     if (sbu_view == SBU_VIEW_EDIT) {
         os88_strcpy(sb_ui_text + os88_strlen(sb_ui_text), "Ln ", 4);
         os88_utoa((unsigned)(sbu_crow + 1), sbu_num);
@@ -309,6 +324,7 @@ static void ovl_sbu_save(void *win)
         sbu_dialog = SBU_DLG_NONE;
 }
 
+#ifndef SB_VM_TEMPLATE
 static void ovl_sbu_package_default(void)
 {
     int i, dot;
@@ -340,6 +356,7 @@ static void ovl_sbu_build(void *win)
     if (os88_file_dlg(OS88_FDLG_SAVE, win, sbu_package_name) < 0)
         sbu_dialog = SBU_DLG_NONE;
 }
+#endif
 
 static void ovl_sbu_editor_key(int ascii, int scan, void *win)
 {
@@ -443,7 +460,9 @@ static void ovl_sbui_cmd(int item, int menu, void *win)
         else if (item == SBU_RUN_STOP) { sb_stop(); ovl_sbu_repaint(win); }
         else if (item == SBU_RUN_STEP) ovl_sbu_run(win, 1);
         else if (item == SBU_RUN_RESET) { sb_reset(); ovl_sbu_repaint(win); }
+#ifndef SB_VM_TEMPLATE
         else if (item == SBU_RUN_BUILD) ovl_sbu_build(win);
+#endif
     } else if (menu == 2) {
         if (item == SBU_VIEW_EDITOR) { sbu_view = SBU_VIEW_EDIT; ovl_sbu_repaint(win); }
         else if (item == SBU_VIEW_OUTPUT) { sbu_view = SBU_VIEW_RUN; ovl_sbu_repaint(win); }

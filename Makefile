@@ -1908,6 +1908,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         speedybasic speedybasicdisk speedybasiccoretest speedybasic-compile-smoke \
         xt-speedybasic 386-speedybasic \
         speedybasic-compiled-test speedybasic-inos-test \
+        speedybasic-inos-corpus-test \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
@@ -6232,6 +6233,7 @@ SPEEDYBASICSRC := $(wildcard apps/speedybasic/sb*.c) \
                   $(wildcard apps/speedybasic/sb*.inc) \
                   apps/speedybasic/compiler/aot.c \
                   apps/speedybasic/compiler/aot.h \
+                  apps/speedybasic/compiler/vm.h \
                   apps/speedybasic/compiler/guest.c \
                   apps/speedybasic/compiler/writer.c \
                   apps/speedybasic/compiler/writer.h
@@ -6273,6 +6275,43 @@ $(BUILD)/.speedybasic-hostchecks: $(SPEEDYBASICSRC) $(SPEEDYBASICHOST) \
 speedybasiccoretest: $(BUILD)/.speedybasic-hostchecks
 
 speedybasic: $(BUILD)/speedybasic.o88
+
+# The compiler's complete-parser fallback uses the same application as a VM
+# template. Its ordinary overlay is part 0 of the resulting single-file O88;
+# the BASIC source becomes part 1. CC_OVL_PART binds the existing far-call
+# vectors to that eager code part, so generated programs need no sidecar.
+$(BUILD)/speedybasicvm.raw.asm: apps/speedybasic/speedybasic.c \
+                                $(SPEEDYBASICSRC) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -DSB_VM_TEMPLATE \
+		apps/speedybasic/speedybasic.c -o $@
+
+$(BUILD)/speedybasicvm.gen.asm: $(BUILD)/speedybasicvm.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/speedybasicvm.bin: apps/speedybasic/speedybasic.asm \
+                            $(BUILD)/speedybasicvm.gen.asm $(CC_RUNTIME) \
+                            $(wildcard apps/speedybasic/*.inc) | $(BUILD)
+	$(NASM) -f bin -w+error -DSB_VM_ASM -I apps/ -I $(BUILD)/ \
+		-o $@ apps/speedybasic/speedybasic.asm
+	@echo "speedybasic VM template: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/SPEEDYVM.RT $(BUILD)/SPEEDYVM.OVL &: $(BUILD)/speedybasicvm.bin \
+                                                tools/os88ovl.py
+	python3 tools/os88ovl.py $< -o $(BUILD)/SPEEDYVM.OVL \
+		--trim $(BUILD)/SPEEDYVM.RT
+
+$(BUILD)/speedyvmz/SPEEDYVM.RT: $(BUILD)/SPEEDYVM.RT tools/os88lz.py
+	@mkdir -p $(dir $@)
+	python3 tools/os88lz.py --wrap $@ $<
+
+$(BUILD)/speedyvmz/SPEEDYVM.OVL: $(BUILD)/SPEEDYVM.OVL tools/os88lz.py
+	@mkdir -p $(dir $@)
+	python3 tools/os88lz.py --wrap $@ $<
+
+$(BUILD)/speedyccz/SPEEDYCC.RT: $(BUILD)/SPEEDYCC.RT tools/os88lz.py
+	@mkdir -p $(dir $@)
+	python3 tools/os88lz.py --wrap $@ $<
 
 # The resident compiler does not carry a linker or a second copy of the
 # window/graphics/numeric runtime.  It copies this fixed, uncompressed O88
@@ -6391,6 +6430,12 @@ speedybasic-compiled-test: $(BUILD)/sbcompiled120.img $(IMG360)
 speedybasic-inos-test: $(BUILD)/speedybasic.img $(IMG360)
 	python3 tests/speedybasic_inos_compile.py
 
+# Boot the shipping application in QEMU, compile all 29 vendored web demos
+# through its own Open/Build Package dialogs, then fsck and inspect the guest
+# writes on the host after QEMU has released its writable scratch disk.
+speedybasic-inos-corpus-test: $(BUILD)/speedybasic.img $(IMG)
+	python3 tests/speedybasic_inos_corpus.py
+
 # The build artifact keeps the descriptive stem used by the C pipeline, but a
 # FAT directory name is 8.3. This is the disk-facing copy; its package header
 # remains the source package's and os88pkg validation has already run.
@@ -6422,12 +6467,15 @@ $(SPEEDYBASIC_DEMOS): $(BUILD)/.speedybasic-demos
 # from the editor, because FAT directories cannot grow on this OS (SPEC.md
 # 18.5). Every application disk is built in all four standard geometries.
 SPEEDYBASICDISK := $(BUILD)/speedyd/SPEEDYBA.O88 $(BUILD)/SPEEDYBA.OVL \
-                   $(BUILD)/SPEEDYCC.RT \
+                   $(BUILD)/speedyccz/SPEEDYCC.RT $(BUILD)/speedyvmz/SPEEDYVM.RT \
+                   $(BUILD)/speedyvmz/SPEEDYVM.OVL \
                    apps/speedybasic/README.TXT \
                    $(BUILD)/.speedybasic-demos
 SPEEDYBASICARGS := SPEEDY:$(BUILD)/speedyd/SPEEDYBA.O88 \
                    SPEEDY:$(BUILD)/SPEEDYBA.OVL \
-                   SPEEDY:$(BUILD)/SPEEDYCC.RT \
+                   SPEEDY:$(BUILD)/speedyccz/SPEEDYCC.RT \
+                   SPEEDY:$(BUILD)/speedyvmz/SPEEDYVM.RT \
+                   SPEEDY:$(BUILD)/speedyvmz/SPEEDYVM.OVL \
                    SPEEDY:apps/speedybasic/README.TXT \
                    $(SPEEDYBASIC_DEMO_ARGS)
 SPEEDYBASICDISKOPTS := --deep-folders --dir-slots SPEEDY/DEMOS=64 \
@@ -10622,7 +10670,8 @@ ALLAPPSFILES := $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 apps/apple2/README.TXT apps/apple2/COPYING \
                 $(WEAVEDISK) $(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS) \
                 $(BUILD)/speedyd/SPEEDYBA.O88 $(BUILD)/SPEEDYBA.OVL \
-                $(BUILD)/SPEEDYCC.RT \
+                $(BUILD)/speedyccz/SPEEDYCC.RT $(BUILD)/speedyvmz/SPEEDYVM.RT \
+                $(BUILD)/speedyvmz/SPEEDYVM.OVL \
                 apps/speedybasic/README.TXT $(SPEEDYBASIC_DEMOS) \
                 $(RUNCPMDISK)
 # These images use the RunCPM master disk, but not the separate CP/M
@@ -10667,7 +10716,9 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                $(addprefix LOOM:,$(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS)) \
                SPEEDY:$(BUILD)/speedyd/SPEEDYBA.O88 \
                SPEEDY:$(BUILD)/SPEEDYBA.OVL \
-               SPEEDY:$(BUILD)/SPEEDYCC.RT \
+               SPEEDY:$(BUILD)/speedyccz/SPEEDYCC.RT \
+               SPEEDY:$(BUILD)/speedyvmz/SPEEDYVM.RT \
+               SPEEDY:$(BUILD)/speedyvmz/SPEEDYVM.OVL \
                SPEEDY:apps/speedybasic/README.TXT \
                $(SPEEDYBASIC_DEMO_ARGS) \
                $(APPSYSARGS) \
@@ -10678,10 +10729,14 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
 # interpreter available on apps-all-120 and direct compilation work to that
 # dedicated disk at this geometry.
 ALLAPPSFILES120 := $(filter-out apps/speedybasic/README.TXT \
-                                  $(BUILD)/SPEEDYCC.RT \
+                                  $(BUILD)/speedyccz/SPEEDYCC.RT \
+                                  $(BUILD)/speedyvmz/SPEEDYVM.RT \
+                                  $(BUILD)/speedyvmz/SPEEDYVM.OVL \
                                   $(SPEEDYBASIC_DEMOS),$(ALLAPPSFILES))
 ALLAPPSARGS120 := $(filter-out SPEEDY:apps/speedybasic/README.TXT \
-                                SPEEDY:$(BUILD)/SPEEDYCC.RT \
+                                SPEEDY:$(BUILD)/speedyccz/SPEEDYCC.RT \
+                                SPEEDY:$(BUILD)/speedyvmz/SPEEDYVM.RT \
+                                SPEEDY:$(BUILD)/speedyvmz/SPEEDYVM.OVL \
                                 SPEEDY/DEMOS:%,$(ALLAPPSARGS))
 ALLAPPSDIRS := $(sort $(foreach a,$(ALLAPPSARGS),$(firstword $(subst :, ,$a))) \
                       DOCS RUNCPM/A SYSTEM/APPDATA)

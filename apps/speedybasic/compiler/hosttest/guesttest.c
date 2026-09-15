@@ -12,8 +12,12 @@
 static unsigned char image_memory[65536];
 static unsigned char source_memory[65536];
 static unsigned char template_memory[65536];
-static unsigned char written[65536];
+static unsigned char vm_memory[65536];
+static unsigned char vm_overlay[65536];
+static unsigned char written[131072];
 static unsigned template_size;
+static unsigned vm_size;
+static unsigned vm_overlay_size;
 static unsigned write_size;
 static int claim_calls;
 static int free_calls;
@@ -43,12 +47,43 @@ void os88_poke(unsigned segment, unsigned offset, int value)
 unsigned os88_file_read_seg(const char *name, unsigned segment,
                             unsigned capacity)
 {
-    if (current_place.clus != 7u || current_place.vol != 1
-        || strcmp(name, SBAOT_TEMPLATE_FILE) != 0 || capacity < template_size)
-        return 0;
-    memcpy(segment_memory(segment), template_memory, template_size);
-    return template_size;
+    if (current_place.clus != 7u || current_place.vol != 1) return 0;
+    if (strcmp(name, SBAOT_TEMPLATE_FILE) == 0 && capacity >= template_size) {
+        memcpy(segment_memory(segment), template_memory, template_size);
+        return template_size;
+    }
+    if (strcmp(name, SBVM_TEMPLATE_FILE) == 0 && capacity >= vm_size) {
+        memcpy(segment_memory(segment), vm_memory, vm_size);
+        return vm_size;
+    }
+    if (strcmp(name, SBVM_OVERLAY_FILE) == 0
+        && capacity >= vm_overlay_size) {
+        memcpy(segment_memory(segment), vm_overlay, vm_overlay_size);
+        return vm_overlay_size;
+    }
+    return 0;
 }
+
+int os88_file_append_seg(const char *name, unsigned segment, unsigned off,
+                         unsigned count)
+{
+    (void)name;
+    if (current_place.clus != 9u || current_place.vol != 1
+        || write_size + count > sizeof(written)) return -1;
+    ++write_calls;
+    memcpy(written + write_size, segment_memory(segment) + off, count);
+    write_size += count;
+    return 0;
+}
+
+int os88_file_delete(const char *name)
+{
+    (void)name;
+    write_size = 0;
+    return 0;
+}
+
+int os88_disk_cluster_sectors(void) { return 1; }
 
 int os88_file_write_seg(const char *name, unsigned segment, unsigned count)
 {
@@ -68,7 +103,8 @@ int os88_ferr(void)
 unsigned os88_mem_claim(unsigned kilobytes)
 {
     ++claim_calls;
-    return kilobytes == SBAOT_TEMPLATE_KB ? IMAGE_SEG : 0;
+    return (kilobytes == SBAOT_TEMPLATE_KB || kilobytes == SBVM_TEMPLATE_KB)
+           ? IMAGE_SEG : 0;
 }
 
 void os88_mem_free(unsigned segment)
@@ -120,7 +156,8 @@ static unsigned word_at(const unsigned char *memory, unsigned offset)
     return (unsigned)memory[offset] | (unsigned)memory[offset + 1u] << 8;
 }
 
-static void load_template(const char *path)
+static unsigned load_file(const char *path, unsigned char *memory,
+                          unsigned capacity)
 {
     FILE *file;
     long size;
@@ -130,15 +167,15 @@ static void load_template(const char *path)
         exit(2);
     }
     if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) < 0
-        || size > (long)sizeof(template_memory)
+        || size > (long)capacity
         || fseek(file, 0, SEEK_SET) != 0
-        || fread(template_memory, 1, (size_t)size, file) != (size_t)size) {
+        || fread(memory, 1, (size_t)size, file) != (size_t)size) {
         fprintf(stderr, "guest: cannot read template %s\n", path);
         fclose(file);
         exit(2);
     }
     fclose(file);
-    template_size = (unsigned)size;
+    return (unsigned)size;
 }
 
 static void reset(const char *source)
@@ -217,7 +254,7 @@ static void test_supported_program(void)
           "END body returns the done result");
 }
 
-static void test_diagnostic(void)
+static void test_fallback(void)
 {
     static const char source[] = "CLS\nFOR I = 1 TO 10\nEND\n";
     char error[64];
@@ -226,26 +263,65 @@ static void test_diagnostic(void)
     error[0] = 0;
     answer = ovl_sbg_compile(SOURCE_SEG, (unsigned)strlen(source),
                              "BAD.O88", error, sizeof(error));
-    check(answer < 0, "unsupported syntax is refused");
-    check(strcmp(error, "Unsupported BASIC at line 2") == 0,
-          "diagnostic identifies the source line");
-    check(write_calls == 0, "failed program is not written");
-    check(claim_calls == 1 && free_calls == 1,
-          "failed compilation releases its template claim");
+    check(answer == 0 && error[0] == 0, "unsupported native syntax uses VM");
+    check(write_calls == 3, "VM primary, overlay, and source are written");
+    check(word_at(written, SBVM_PART_ROW0 + 4u) == SBVM_OVERLAY_SIZE
+          && word_at(written, SBVM_PART_ROW1 + 4u) == strlen(source),
+          "VM parts describe overlay and source");
+    check(written[SBVM_MARKER] == 1
+          && word_at(written, SBVM_MARKER + 1u) == strlen(source),
+          "VM autorun marker records source length");
+    check(memcmp(written + word_at(written, SBVM_PART_ROW1 + 2u) * 512u,
+                 source, strlen(source)) == 0,
+          "VM package embeds exact BASIC source");
+    check(claim_calls == 2 && free_calls == 2,
+          "native and VM template claims are released");
+}
+
+static void test_corpus(int argc, char **argv)
+{
+    FILE *file;
+    long size;
+    char error[64];
+    int i, answer;
+    for (i = 4; i < argc; ++i) {
+        file = fopen(argv[i], "rb");
+        if (!file || fseek(file, 0, SEEK_END) != 0
+            || (size = ftell(file)) < 0 || size > 65535
+            || fseek(file, 0, SEEK_SET) != 0
+            || fread(source_memory, 1, (size_t)size, file) != (size_t)size) {
+            fprintf(stderr, "guest: cannot read demo %s\n", argv[i]);
+            exit(2);
+        }
+        fclose(file);
+        reset("");
+        file = fopen(argv[i], "rb");
+        fread(source_memory, 1, (size_t)size, file);
+        fclose(file);
+        error[0] = 0;
+        answer = ovl_sbg_compile(SOURCE_SEG, (unsigned)size,
+                                 "CORPUS.O88", error, sizeof(error));
+        check(answer == 0, argv[i]);
+        check(write_size > 0, "corpus package has bytes");
+    }
 }
 
 int main(int argc, char **argv)
 {
-    if (argc != 2) {
-        fprintf(stderr, "usage: guesttest SPEEDYCC.RT\n");
+    if (argc < 4) {
+        fprintf(stderr, "usage: guesttest SPEEDYCC.RT SPEEDYVM.RT SPEEDYVM.OVL [DEMO.BAS ...]\n");
         return 2;
     }
-    load_template(argv[1]);
+    template_size = load_file(argv[1], template_memory,
+                              sizeof(template_memory));
+    vm_size = load_file(argv[2], vm_memory, sizeof(vm_memory));
+    vm_overlay_size = load_file(argv[3], vm_overlay, sizeof(vm_overlay));
     sb_compile_set_home();
     check(template_size == SBAOT_TEMPLATE_SIZE,
           "test template matches compiler's image size");
     test_supported_program();
-    test_diagnostic();
+    test_fallback();
+    test_corpus(argc, argv);
     if (failures) {
         fprintf(stderr, "guest: %d/%d failures\n", failures, checks);
         return 1;

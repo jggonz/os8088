@@ -975,6 +975,8 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap);
 int os88_file_write(const char *name, const void *buf, unsigned count);
 int os88_file_write_seg(const char *name, unsigned seg, unsigned count);
 int os88_file_append(const char *name, const void *buf, unsigned count);
+int os88_file_append_seg(const char *name, unsigned seg, unsigned off,
+                         unsigned count);
 
 /* os88_file_read_at - ONE CHUNK of a file, by byte offset (18.4.4), and the
  * read half of the pair whose write half is os88_file_append(). This is how a

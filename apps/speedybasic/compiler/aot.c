@@ -5,17 +5,17 @@
 
 #define SBAOT_TABLE       (SBAOT_CODE + 32u)
 #define SBAOT_BODY        (SBAOT_TABLE + 256u)
-#define SBAOT_PC          0x7e76u
+#define SBAOT_PC          0x7e7au
 #define SBAOT_MAX_STMTS   128
 
-#define SBAOT_RT_PRINT    0x3284u
-#define SBAOT_RT_PRINT_NL 0x3766u
-#define SBAOT_RT_SCREEN   0x33c2u
-#define SBAOT_RT_CLS      0x3430u
-#define SBAOT_RT_COLOR    0x3458u
-#define SBAOT_RT_LOCATE   0x3481u
-#define SBAOT_RT_PSET     0x34eau
-#define SBAOT_RT_LINE     0x3500u
+#define SBAOT_RT_PRINT    0x3287u
+#define SBAOT_RT_PRINT_NL 0x3769u
+#define SBAOT_RT_SCREEN   0x33c5u
+#define SBAOT_RT_CLS      0x3433u
+#define SBAOT_RT_COLOR    0x345bu
+#define SBAOT_RT_LOCATE   0x3484u
+#define SBAOT_RT_PSET     0x34edu
+#define SBAOT_RT_LINE     0x3503u
 
 int sbaot_arg[6];
 char *sbaot_text;

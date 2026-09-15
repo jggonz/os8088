@@ -3,7 +3,13 @@
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
 
+%ifdef SB_VM_ASM
+%define CC_PKG_NAME 'BASICVM'
+%define CC_HAS_PARTS
+%define CC_OVL_PART 0
+%else
 %define CC_PKG_NAME 'SPEEDYBA'
+%endif
 %define CC_HAS_ONKEY
 %define CC_HAS_ONCLICK
 %define CC_HAS_ONRESIZE
@@ -16,7 +22,15 @@
 %define CC_ICON "speedybasic/icon.inc"
 
 %include "cc/crt0.asm"
+%ifdef SB_VM_ASM
+    CC_PARTS_BEGIN 2
+      OS88_PART OP_SEG
+      OS88_PART OP_ASSET
+    CC_PARTS_END
+%include "speedybasicvm.gen.asm"
+%else
 %include "speedybasic.gen.asm"
+%endif
 %include "os88ui.inc"
 
 section .text

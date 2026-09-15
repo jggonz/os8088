@@ -3,12 +3,12 @@
 
 #define SBAOT_TEMPLATE_FILE  "SPEEDYCC.RT"
 #define SBAOT_TEMPLATE_KB    27
-#define SBAOT_TEMPLATE_SIZE  27242u
+#define SBAOT_TEMPLATE_SIZE  27246u
 #define SBAOT_TEMPLATE_BSS   5518u
 #define SBAOT_TEMPLATE_ENTRY 96u
-#define SBAOT_CODE           0x49b8u
+#define SBAOT_CODE           0x49bbu
 #define SBAOT_CODE_SIZE      8192u
-#define SBAOT_TITLE          0x6a2au
+#define SBAOT_TITLE          0x6a2eu
 
 #define SBAOT_END       0
 #define SBAOT_CLS       1

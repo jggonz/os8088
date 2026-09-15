@@ -7,12 +7,14 @@ HOSTBIN=$TMPBASE.host
 trap 'rm -f "$HOSTBIN" "$TMPBASE".*.asm' EXIT HUP INT TERM
 
 cd "$ROOT"
-make --no-print-directory build/SPEEDYCC.RT
+make --no-print-directory build/SPEEDYCC.RT build/SPEEDYVM.RT build/SPEEDYVM.OVL
 ${CC:-cc} -std=c89 -O1 -Wall -Wextra -Werror \
     -I apps/speedybasic/compiler/hosttest \
     -I apps/speedybasic/compiler \
     apps/speedybasic/compiler/hosttest/guesttest.c -o "$HOSTBIN"
-"$HOSTBIN" build/SPEEDYCC.RT
+"$HOSTBIN" build/SPEEDYCC.RT build/SPEEDYVM.RT build/SPEEDYVM.OVL \
+    apps/speedybasic/demos/*.BAS
+python3 apps/speedybasic/compiler/hosttest/vmabi.py
 
 # Keep all guest compiler modules within SmallerC's dialect and run the same
 # 8086 instruction/frame gate used by shipping application objects.

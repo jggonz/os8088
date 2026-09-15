@@ -1379,17 +1379,7 @@ _os88_file_write:
     mov cx, [bp+8]
     mov dx, 0
     call OSAPI_FILE_WRITE
-    jc .err
-    mov word [cc_ferr], 0
-    mov ax, 0
-    jmp short .out
-.err:
-    mov [cc_ferr], ax
-    mov ax, -1
-.out:
-    pop si
-    pop bp
-    ret
+    jmp cc_file_far_result
 
 ; int os88_file_write_seg(const char *name, unsigned seg, unsigned count)
 _os88_file_write_seg:
@@ -1429,13 +1419,31 @@ _os88_file_append:
     pop es
     mov cx, [bp+8]
     call OSAPI_FILE_APPEND
-    jc .err
-    mov word [cc_ferr], 0
-    mov ax, 0
-    jmp short .out
-.err:
+    jmp short cc_file_far_result
+
+; int os88_file_append_seg(const char *name, unsigned seg, unsigned off,
+;                          unsigned count)
+; The far-buffer form used by package builders. The existing file size must
+; obey OSAPI_FILE_APPEND's cluster-alignment rule just as for the near form.
+_os88_file_append_seg:
+    push bp
+    mov bp, sp
+    push si
+    mov si, [bp+4]
+    mov es, [bp+6]
+    mov bx, [bp+8]
+    mov cx, [bp+10]
+    call OSAPI_FILE_APPEND
+    ; The three far-buffer writers have the same saved registers and result
+    ; contract.  One tail keeps the SDK thunk small enough for 60K C images.
+cc_file_far_result:
+    jnc .ok
     mov [cc_ferr], ax
     mov ax, -1
+    jmp short .out
+.ok:
+    mov word [cc_ferr], 0
+    mov ax, 0
 .out:
     pop si
     pop bp

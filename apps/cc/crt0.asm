@@ -348,6 +348,15 @@ cc_entry:
                                     ; next launch (SPEC.md 20.2, rule 1). A
                                     ; refusal has already toasted its reason,
                                     ; and the loader unwinds the region
+%ifdef CC_OVL_PART
+    mov ax, CC_OVL_PART
+    call op_seg
+    or ax, ax
+    jz .partsno
+    mov [cc_ovseg], ax
+    call cc_ovbind                  ; the ordinary overlay vectors, backed by
+                                    ; this package's eager OP_SEG part
+%endif
 %endif
     call _os88_main                 ; C: void *os88_main(void). It creates the
                                     ; window with os88_wm_create() - which is

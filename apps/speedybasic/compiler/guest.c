@@ -3,20 +3,20 @@
 #include "os88.h"
 #include "writer.h"
 #include "aot.h"
+#include "vm.h"
 
 #define SBG_LINE_MAX 79
 
 static unsigned sbg_source_seg;
 static unsigned sbg_source_len;
 static unsigned sbg_source_pos;
-static int sbg_line_no;
 static char sbg_line[SBG_LINE_MAX + 1];
 static char *sbg_at;
 static int sbg_num;
 static int sbg_a, sbg_b;
-static char sbg_number[8];
 static struct os88_place sbg_template_place;
 static struct os88_place sbg_output_place;
+static const char sbg_vm_error[] = "VM build failed";
 
 static void ovl_sbg_error(char *error, unsigned cap, const char *message)
 {
@@ -102,7 +102,7 @@ static int ovl_sbg_next_line(void)
     int ch, quote;
     unsigned n;
     if (sbg_source_pos >= sbg_source_len) return 0;
-    n = 0; quote = 0; ++sbg_line_no;
+    n = 0; quote = 0;
     while (sbg_source_pos < sbg_source_len) {
         ch = os88_peek(sbg_source_seg, sbg_source_pos++) & 255;
         if (ch == '\r') continue;
@@ -219,15 +219,6 @@ static int ovl_sbg_statement(char *p)
     return -1;
 }
 
-static void ovl_sbg_line_error(char *error, unsigned cap)
-{
-    unsigned n;
-    ovl_sbg_error(error, cap, "Unsupported BASIC at line ");
-    os88_utoa((unsigned)sbg_line_no, sbg_number);
-    n = os88_strlen(error);
-    if (n < cap) os88_strcpy(error + n, sbg_number, cap - n);
-}
-
 static void ovl_sbg_package_name(const char *file, char *name)
 {
     int i;
@@ -236,13 +227,126 @@ static void ovl_sbg_package_name(const char *file, char *name)
     name[i] = 0;
 }
 
+static void ovl_sbg_far_word(unsigned seg, unsigned off, unsigned value)
+{
+    os88_poke(seg, off, (int)value);
+    os88_poke(seg, off + 1u, (int)(value >> 8));
+}
+
+static unsigned ovl_sbg_cluster_round(unsigned count, unsigned cluster)
+{
+    return ((count + cluster - 1u) / cluster) * cluster;
+}
+
+/* Package the complete interpreter when the small native emitter cannot
+ * lower a statement.  Part 0 is its ordinary overlay and part 1 is the exact
+ * BASIC source, so every program accepted by Speedy's editor uses the same
+ * parser and runner after launch. */
+static int ovl_sbg_vm(unsigned source_segment, unsigned source_length,
+                      const char *output_name, char *error,
+                      unsigned error_capacity)
+{
+    unsigned seg, got, cluster, primary, overlay, i;
+    int wrote;
+    wrote = 0;
+    seg = os88_mem_claim(SBVM_TEMPLATE_KB);
+    if (!seg) {
+        ovl_sbg_error(error, error_capacity, sbg_vm_error);
+        return -1;
+    }
+    if (os88_file_goto(&sbg_template_place) != 0) {
+        ovl_sbg_error(error, error_capacity, sbg_vm_error);
+        goto done;
+    }
+    got = os88_file_read_seg(SBVM_TEMPLATE_FILE, seg,
+                             SBVM_TEMPLATE_KB << 10);
+    if (os88_file_goto(&sbg_output_place) != 0) {
+        ovl_sbg_error(error, error_capacity, sbg_vm_error);
+        goto done;
+    }
+    if (got != SBVM_TEMPLATE_SIZE
+        || os88_peek(seg, SBVM_PARTS) != 'O'
+        || os88_peek(seg, SBVM_PARTS + 8u) != 2) {
+        ovl_sbg_error(error, error_capacity, sbg_vm_error);
+        goto done;
+    }
+    cluster = (unsigned)os88_disk_cluster_sectors() << 9;
+    if (!cluster || cluster > 32768u) {
+        ovl_sbg_error(error, error_capacity, sbg_vm_error);
+        goto done;
+    }
+    primary = ovl_sbg_cluster_round(SBVM_TEMPLATE_SIZE, cluster);
+    overlay = ovl_sbg_cluster_round(SBVM_OVERLAY_SIZE, cluster);
+    if (primary > (SBVM_TEMPLATE_KB << 10)
+        || overlay > (SBVM_TEMPLATE_KB << 10)) {
+        ovl_sbg_error(error, error_capacity, sbg_vm_error);
+        goto done;
+    }
+
+    ovl_sbg_package_name(output_name, sbg_line);
+    if (!sbg_line[0]) {
+        ovl_sbg_error(error, error_capacity, sbg_vm_error);
+        goto done;
+    }
+    for (i = 0; i < 16u; ++i)
+        os88_poke(seg, 16u + i, i < os88_strlen(sbg_line) ? sbg_line[i] : 0);
+    for (i = 0; i < 9u; ++i)
+        os88_poke(seg, SBVM_TITLE + i,
+                  i < os88_strlen(sbg_line) ? sbg_line[i] : 0);
+    os88_poke(seg, SBVM_MARKER, 1);
+    ovl_sbg_far_word(seg, SBVM_MARKER + 1u, source_length);
+    ovl_sbg_far_word(seg, SBVM_PART_ROW0 + 2u, primary >> 9);
+    ovl_sbg_far_word(seg, SBVM_PART_ROW0 + 4u, SBVM_OVERLAY_SIZE);
+    ovl_sbg_far_word(seg, SBVM_PART_ROW1 + 2u,
+                     (primary >> 9) + (overlay >> 9));
+    ovl_sbg_far_word(seg, SBVM_PART_ROW1 + 4u, source_length);
+    for (i = SBVM_TEMPLATE_SIZE; i < primary; ++i) os88_poke(seg, i, 0);
+    if (os88_file_write_seg(output_name, seg, primary) != 0) {
+        ovl_sbg_error(error, error_capacity, sbg_vm_error);
+        goto done;
+    }
+    wrote = 1;
+
+    if (os88_file_goto(&sbg_template_place) != 0) {
+        ovl_sbg_error(error, error_capacity, sbg_vm_error);
+        goto done;
+    }
+    got = os88_file_read_seg(SBVM_OVERLAY_FILE, seg,
+                             SBVM_TEMPLATE_KB << 10);
+    if (os88_file_goto(&sbg_output_place) != 0) {
+        ovl_sbg_error(error, error_capacity, sbg_vm_error);
+        goto done;
+    }
+    if (got != SBVM_OVERLAY_SIZE) {
+        ovl_sbg_error(error, error_capacity, sbg_vm_error);
+        goto done;
+    }
+    for (i = SBVM_OVERLAY_SIZE; i < overlay; ++i) os88_poke(seg, i, 0);
+    if (os88_file_append_seg(output_name, seg, 0, overlay) != 0
+        || os88_file_append_seg(output_name, source_segment, 0,
+                                source_length) != 0) {
+        ovl_sbg_error(error, error_capacity, sbg_vm_error);
+        goto done;
+    }
+    os88_mem_free(seg);
+    return 0;
+done:
+    if (wrote) {
+        os88_file_goto(&sbg_output_place);
+        os88_file_delete(output_name);
+    }
+    os88_mem_free(seg);
+    return -1;
+}
+
 int ovl_sbg_compile(unsigned source_segment, unsigned source_length,
                     const char *output_name, char *error,
                     unsigned error_capacity)
 {
     unsigned image_seg, got;
-    int next, answer;
+    int next, answer, fallback;
     answer = -1;
+    fallback = 0;
     image_seg = os88_mem_claim(SBAOT_TEMPLATE_KB);
     if (!image_seg) {
         ovl_sbg_error(error, error_capacity, "Compiler: needs 27K free");
@@ -287,17 +391,16 @@ int ovl_sbg_compile(unsigned source_segment, unsigned source_length,
     sbg_source_seg = source_segment;
     sbg_source_len = source_length;
     sbg_source_pos = 0;
-    sbg_line_no = 0;
     for (;;) {
         next = ovl_sbg_next_line();
         if (!next) break;
         if (next < 0 || ovl_sbg_statement(sbg_line) < 0) {
-            ovl_sbg_line_error(error, error_capacity);
+            fallback = 1;
             goto done;
         }
     }
     if (ovl_sbaot_finish() < 0) {
-        ovl_sbg_error(error, error_capacity, "Compiler: program too large");
+        fallback = 1;
         goto done;
     }
     if (sbw_write(output_name) != SBW_OK) {
@@ -307,6 +410,9 @@ int ovl_sbg_compile(unsigned source_segment, unsigned source_length,
     answer = 0;
 done:
     os88_mem_free(image_seg);
+    if (fallback)
+        return ovl_sbg_vm(source_segment, source_length, output_name,
+                          error, error_capacity);
     return answer;
 }
 
