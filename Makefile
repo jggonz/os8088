@@ -2782,6 +2782,12 @@ DRIVERS += $(BUILD)/xmem.drv
 # back out ($(SMALLDRIVERS) below): drv_load_at, its only loader, is inside
 # %ifdef KERN_BIG and nothing on that kernel can name the file
 DRIVERS += $(BUILD)/saver.drv
+# ...and SPEC.md 9.12's CH375 USB mouse, the Book8088's. A drv_tab row with a
+# SYSTEM.CFG bit (6) and not wanted by default, so a disk that carries it
+# costs a machine without the chip one directory slot and nothing read. On
+# every kern_big disk, and kern_small's $(SMALLDRIVERS) is a restatement that
+# never held it
+DRIVERS += $(BUILD)/usbmouse.drv
 # ...and SPEC.md 9.11's absolute pointer is NOT HERE, which is the one entry
 # in this list that is an absence. Its code is 386 instructions and the target
 # machine is an 8088, so it is the one file in the tree that MUST NOT BE
@@ -3585,6 +3591,16 @@ $(BUILD)/vmmouse.bin: drivers/vmmouse/vmmouse.asm kernel/vmmabi.inc \
 $(BUILD)/vmmouse.drv: $(BUILD)/vmmouse.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/vmmouse.bin -o $@
 
+# USBMOUSE.DRV - the CH375 USB mouse (SPEC.md 9.12). `-I drivers/usbmouse/`
+# is for ch375sim.inc, which only the gate builds below include
+$(BUILD)/usbmouse.bin: drivers/usbmouse/usbmouse.asm drivers/usbmouse/ch375sim.inc \
+                       drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I drivers/usbmouse/ -I apps/ -o $@ $<
+	@echo "usbmouse: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/usbmouse.drv: $(BUILD)/usbmouse.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/usbmouse.bin -o $@
+
 # RAMDISK.DRV - a DRVC_FILE volume with no hardware behind it (SPEC.md 62.9),
 # and the FILE REDIRECTOR'S HARNESS: every branch site the redirector added to
 # the kernel runs on a cycle-accurate 8088 in a container, which is the one
@@ -3911,6 +3927,53 @@ $(BUILD)/vmmouse.img: $(KERNEL_SRC) $(KERNEL_INC) $(EMUDRIVERS) $(SYSAPPS) $(COR
 vmmousetest: $(BUILD)/vmmouse.img
 	@echo "vmmousetest: build/vmmouse.img - VMMOUSE.DRV already wanted."
 	@echo "             Run it with: python3 tests/vmmouse.py"
+
+# USBMOUSETEST - SPEC.md 9.12.6's gate disks. No emulator here carries a CH375,
+# so USBMOUSE.DRV is assembled a second time with -DCH375SIM: the same driver
+# with drivers/usbmouse/ch375sim.inc - a model of the chip and one device -
+# under its four port primitives. Two disks, because what is on the bus AT
+# POWER-ON is fixed before the test can write to the model's mailbox:
+#   usbmsim.img   nothing plugged; the test plugs, moves, clicks, unplugs
+#   usbmbusy.img  a flash drive the BIOS already configured, so attach must
+#                 refuse with DRVE_BUSY and never reset the bus
+# 360KB, the geometry MartyPC's 5150 boots - an 8088, the CPU the driver ships
+# for. Each file in a directory of its own for vmmcfg's reason: os88disk.py
+# names a file on the volume by its basename, and all three are USBMOUSE.DRV
+# or SYSTEM.CFG. The shipped build/usbmouse.drv is filtered out of the list
+# rather than overwritten, so the product disks never see the model.
+USBMSIMS = $(filter-out $(BUILD)/usbmouse.drv,$(DRIVERS))
+
+$(BUILD)/usbmsim/usbmouse.bin: drivers/usbmouse/usbmouse.asm drivers/usbmouse/ch375sim.inc \
+                               drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	@mkdir -p $(BUILD)/usbmsim
+	$(NASM) -f bin -w+error -I drivers/ -I drivers/usbmouse/ -I apps/ -DCH375SIM -o $@ $<
+
+$(BUILD)/usbmbusy/usbmouse.bin: drivers/usbmouse/usbmouse.asm drivers/usbmouse/ch375sim.inc \
+                                drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	@mkdir -p $(BUILD)/usbmbusy
+	$(NASM) -f bin -w+error -I drivers/ -I drivers/usbmouse/ -I apps/ -DCH375SIM -DSIMBOOT=2 -o $@ $<
+
+$(BUILD)/usbmsim/usbmouse.drv $(BUILD)/usbmbusy/usbmouse.drv: %.drv: %.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $< -o $@
+
+$(BUILD)/usbmcfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/usbmcfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 6).to_bytes(2,'little') + b'\0\0')" > $@
+
+$(BUILD)/usbmsim.img $(BUILD)/usbmbusy.img: $(BUILD)/usbm%.img: $(BUILD)/boot360.bin $(KERNFILE) $(USBMSIMS) \
+            $(BUILD)/usbm%/usbmouse.drv $(SYSAPPS) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) \
+            $(BUILD)/usbmcfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(USBMSIMS) $(BUILD)/usbm$*/usbmouse.drv $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG360) $(BUILD)/usbmcfg/system.cfg $(APPDATAFOLDER)
+
+.PHONY: usbmousetest
+usbmousetest: $(BUILD)/usbmsim.img $(BUILD)/usbmbusy.img
+	@echo "usbmousetest: build/usbmsim.img + build/usbmbusy.img - USBMOUSE.DRV"
+	@echo "              wanted, over a CH375 model. Run: python3 tests/usbmouse.py"
 
 # THEWIRETEST: the Wire's gate disks (SPEC.md 92.12), ethertest's shape and
 # for ethertest's reason - the driver is asked for by a SYSTEM.CFG that is ON

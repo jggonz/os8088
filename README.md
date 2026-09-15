@@ -211,6 +211,13 @@ first 32MB of the card is used; the rest is untouched.
 cf.img` is the same rewrite for `dd` users and other platforms;
 SPEC.md 80.5 is the design.)
 
+A **USB mouse** works in the Book8088's USB socket too: open the Control
+Panel's Drivers page, tick **USB Mouse**, and plug a mouse in -- it is found
+when it is plugged, not only at boot. The socket is a CH375 chip that the
+Book8088's BIOS uses for flash drives, so the driver leaves a flash drive
+alone. It has been exercised against a model of the chip rather than a real
+Book8088, so a report from one is welcome (SPEC.md 9.12).
+
 ## What it does
 
 Boots straight into the GUI, and boots *clean* — nothing is running, and

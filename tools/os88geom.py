@@ -378,6 +378,10 @@ _MIRROR = {
     # keeps the LARGER value, so a package over-allocates rather than
     # the kernel overflowing what it was handed (SPEC.md 51.0.0).
     "MAX_TASKS": ("kernel/sched.inc", {"big": 14, "small": 5}),
+    # kernel/ui.inc - the Restart request's "do not go near a disk" value,
+    # which a gate writes to [ui_rebootq] to reach the last instruction before
+    # int 19h (tests/fddpark.py, tests/usbmouse.py's detach leg)
+    "UI_RBQ_NOFLUSH": ("kernel/ui.inc", 2),
 }
 
 def _armval(name):

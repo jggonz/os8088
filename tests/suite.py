@@ -2262,6 +2262,25 @@ SOAK = [
         "covered on the kernel that ships",
         needs=("qemu", "nasm"), serial=True, timeout=420,
         wants=("build/os8088.img", "build/apps.img", "build/vmmouse.img")),
+    Row("usbmouse", "soak", py("tests/usbmouse.py"), 35.0,
+        "The CH375 USB mouse (SPEC.md 9.12), the Book8088's. NO EMULATOR HERE "
+        "CARRIES A CH375, so `make usbmousetest` builds USBMOUSE.DRV a second "
+        "time with -DCH375SIM - a model of the chip and one device under the "
+        "driver's four port primitives - onto two 360KB system disks whose "
+        "SYSTEM.CFG has bit 6 set. Everything above the primitives is the "
+        "shipped code, on MartyPC's 8088. Drives the model's mailbox: plug a "
+        "boot mouse (US_RUN, INT# proven, SET_PROTOCOL boot), reports that "
+        "move the pointer by HALF with the remainder carried, a press and "
+        "release through the menu bar (the tracker's spin loop keeps being "
+        "fed), an unplug with the button held (the driver feeds the release), "
+        "a flash drive left unconfigured, poll mode with INT# unwired, and a "
+        "Restart that detaches the worker and resets the chip, read at "
+        "dsk_rb_go. The second disk boots a flash drive the BIOS already "
+        "configured and wants DRVE_BUSY - which is also the row that found "
+        "drv_attach dropping every attach's refusal reason. What it cannot "
+        "see is the datasheet read wrong in both halves at once",
+        needs=("marty", "nasm"), serial=True, timeout=300,
+        wants=("build/usbmsim.img", "build/usbmbusy.img", "build/apps360.img")),
     Row("wirezone", "soak", py("tests/wirezone.py"), 50.0,
         "Does the desktop SERVICE zone arrive with its driver and LEAVE with "
         "it? (SPEC.md 26.7) The kernel's half of the Wire is a generic zone a "

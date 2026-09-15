@@ -3178,6 +3178,86 @@ mou_byte:
 .bout:
     ret
 
+; -----------------------------------------------------------------------------
+; osapi_mouse_feed - slot 0x0550: one relative report from a DRIVER (SPEC.md
+;                    9.12.1)
+;
+; in:  AX = dx, BX = dy, signed, POSITIVE dy IS DOWN; CL = the buttons in
+;      mouse_btn's own two bits. ES = the caller's DS (an X cell). Task
+;      context - the CH375 mouse's worker
+; out: CF = 0 applied; CF = 1 refused. Every register preserved
+;
+; vmm_poll's relative arm, taken out of a pump and put behind a fence: the
+; driver brings its own context (a TF_SERVICE worker), so the shipped kernel
+; carries no poll site and no task switch pays a compare for a chip almost no
+; machine has (SPEC.md 9.12.1).
+;
+; THE FENCE IS ONE CLASS'S SLOT. A driver's DS is its own segment, so
+; ES == [drv_fseg6] is an identity test - and it is DRVC_POINT's word alone,
+; not osapi_vol_fence's walk of all six, because that walk stores [dsk_vcls]
+; as it goes and a worker must not write that behind a volume add in flight on
+; the UI task. A zero ES is refused first: [drv_fseg6] is 0 whenever no pointer
+; driver is published, and a zero must never match a zero.
+;
+; THE WHOLE BODY IS ON mou_pstack, the contest settle included - mou_lockon
+; and mou_p2_off are the deepest part of it and the worker's stack is
+; SCH_DRV_STK. The swap is inside the cli for vmm_poll's reason (SP is what
+; sch_switch banks), and borrowing the stack is safe for SPEC.md 9.10's: both
+; mouse ISRs are IF=0 from gate to iret, so no task runs while one is inside
+; MOUPRIV_ENTER, and nothing here re-enables interrupts.
+; -----------------------------------------------------------------------------
+MOU_FEEDROW equ 8               ; [mou_port] once a DRIVER has won. Past
+                                ; MOU_P2ROW and distinct from kern_emu's
+                                ; MOU_VMROW (6), so a dump says which backend
+                                ; it was; reachable by no device, so every
+                                ; serial compare fails and mou_lockon retires
+                                ; both UARTs and the aux port
+%ifdef OS88_DRIVERS
+osapi_mouse_feed:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov dx, es
+    or dx, dx
+    jz .no
+    cmp dx, [drv_fseg6]         ; the segment published in DRVC_POINT
+    jne .no
+    pushf
+    cli
+    MOUPRIV_ENTER
+    cmp byte [mou_port], MOU_FEEDROW
+    je .settled                 ; every report after the first: one compare
+    mov byte [mou_port], MOU_FEEDROW    ; settle it as vmm_boot_x does
+    mov byte [mou_line], MOU_P2LINE     ; (SPEC.md 9.11.2), on the first
+    mov byte [mou_seen], 1              ; report and not at attach: a CH375
+    mov byte [mou_ptr], 1               ; with nothing plugged in has not
+    mov byte [mou_idany], 1             ; proven a pointer, and must not
+    call mou_lockon                     ; retire a serial mouse that has
+.settled:
+    call mou_apply              ; clobbers what the pushes above bank
+    MOUPRIV_LEAVE
+    popf
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%else
+osapi_mouse_feed:               ; kern_small: no driver can be published, so
+    stc                         ; nobody could pass the fence (SPEC.md 51.0)
+    ret
+%endif
+
 %ifdef KERN_EMU
 ; -----------------------------------------------------------------------------
 ; mou_apply_abs - an ABSOLUTE report (SPEC.md 9.11)

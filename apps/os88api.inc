@@ -1818,6 +1818,10 @@ DRVC_NET     equ 4              ; the parallel link (SPEC.md 62)
 DRVC_FILE    equ 5              ; a volume served by somebody answering
                                 ; questions about FILES rather than sectors
                                 ; (SPEC.md 62.9)
+DRVC_POINT   equ 6              ; a pointing device the kernel does not
+                                ; drive itself - the CH375 USB mouse (SPEC.md
+                                ; 9.12). Publishes no package entry point; its
+                                ; one kernel call is OSAPI_MOUSE_FEED
 %define OSAPI_FILE_HERE     KERNEL_SEG:0x0228   ; out DX = YOUR instance's
                                  ; current directory (0 = the root), BL = its
                                  ; drive. No disk I/O.
@@ -3118,6 +3122,24 @@ OSAPI_CUR_CROSS equ 1           ; the aiming crosshair, hot spot at its centre
                                                 ; changes and it is safe to
                                                 ; ignore: a refusal costs you
                                                 ; the picture and nothing more
+%define OSAPI_MOUSE_FEED    KERNEL_SEG:0x0550   ; AX = dx, BX = dy (signed;
+                                                ; POSITIVE dy IS DOWN), CL =
+                                                ; buttons in mouse_btn's bits
+                                                ; (1 left, 2 right). ONE
+                                                ; RELATIVE REPORT from a
+                                                ; pointing device the kernel
+                                                ; does not drive itself
+                                                ; (SPEC.md 9.12). DRIVERS
+                                                ; ONLY, and only the one
+                                                ; published in DRVC_POINT:
+                                                ; out CF=1 refused for anybody
+                                                ; else, and always on
+                                                ; kern_small. The first report
+                                                ; accepted settles the mouse
+                                                ; contest on the caller and
+                                                ; retires the serial and PS/2
+                                                ; ports. Callable from a
+                                                ; worker; every register kept
 %define OSAPI_WM_DAMAGE     KERNEL_SEG:0x03B0   ; BX = your window ptr, called
                                                 ; from inside your own W_PAINT.
                                                 ; CF=1 = draw the WHOLE content

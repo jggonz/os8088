@@ -12952,7 +12952,8 @@ The one such combination in the tree, and each half is load-bearing.
 finds the driver serving sound, or disks, or files. The kernel is this one's
 only caller and holds its row, so there is nothing to publish and nothing to
 find. `DRVC_MAX` stays 5. (The row is `kern_emu`'s alone — §9.11.7 — so
-`DRV_MAX` is **6** there, **5** on `kern_big` and **4** on `kern_small`.) `drv_load_row` already stops a `DRVC_OVL` row after
+`DRV_MAX` is **7** there, **6** on `kern_big` and **4** on `kern_small` —
+the seventh and sixth being §9.12's USB mouse.) `drv_load_row` already stops a `DRVC_OVL` row after
 `drv_check`, with `DRVR_SEG` and `DRVR_ENT` live and no verb sent, and leaves
 the attaching to the owner — the same division `HDD.DRV`/`HDDTOOL.DRV` runs
 on, and the same one `XMEM.DRV` reaches through `drv_load_at`.
@@ -13253,7 +13254,7 @@ baseline of its own in docs/KERNEL-MEMORY.md, blessable by
 | drivers | `$(EMUDRIVERS)` = `$(DRIVERS)` **plus** `VMMOUSE.DRV` — an addition, where `$(SMALLDRIVERS)` is a restatement from nothing |
 | `SYSTEM.CFG` | **shipped on this disk and on no other**, bit 5 set. Every row is not-wanted by default (§51.3), and a `kern_emu` machine that must be told to enable the one feature it was built for has been given nothing |
 | apps disk | the **shipped** `build/apps.img`, unchanged — `kern_emu` defines `KERN_BIG`, so it holds the same API table at the same offsets |
-| `DRV_MAX` | 6 here, 5 on `kern_big`, 4 on `kern_small` |
+| `DRV_MAX` | 7 here, 6 on `kern_big` (both counting §9.12's USB mouse), 4 on `kern_small` |
 | geometry | 1.44MB only. 360KB exists for real period hardware, and no machine that needs a 360KB floppy can execute a 386 instruction |
 
 **Rows 0-4 do not move, so `SYSTEM.CFG` stays readable both ways.** The row
@@ -13269,6 +13270,213 @@ same one-byte-per-row assertion `drv_memk` has always had.
 on the `build/emuk/` kernel, and `tests/vmmouse.py` sets `$OS88_BUILD` and
 `$OS88_DEFINES` so `os88sym` resolves against it — on the shipped kernel
 `vmm_on` is not a wrong address, it is not a symbol at all.
+
+### 9.12 The CH375 USB mouse — the Book8088's
+
+The **Book8088** is an 8088 laptop with one USB-A socket, wired to a WCH
+**CH375B** host controller at I/O ports **`0x260` (data) and `0x261`
+(command)**. Its BIOS uses the chip to boot from a flash drive; nothing uses it
+for a mouse. `USBMOUSE.DRV` does. The protocol is from WCH's CH375 datasheet
+and the public-domain proof of concept that first read a mouse on that machine
+(github.com/joshuashaffer/book8088-ch375mouse-poc, `a81b753`). Any 8-bit ISA
+CH375 card at `0x260` looks the same to it.
+
+**It is `kern_big`'s, and §9.11.7's argument does not reach it.** That section
+took the absolute pointer off the shipped kernel because *an 8088 has nothing
+to speak a 32-bit backdoor to*. A CH375 is an 8-bit ISA peripheral and the
+machine that carries it *is* an 8088, so a separate build would be a separate
+set of disks for a machine that boots the shipped ones. What the shipped kernel
+pays instead is kept to a slot, a class and a row, with **no poll site and no
+per-switch cost** (§9.12.5).
+
+| | |
+|---|---|
+| file | `USBMOUSE.DRV`, on every `kern_big` system disk |
+| class | **`DRVC_POINT` = 6**, a real publication slot (42 bytes: §51.2.1's price) |
+| row | `drv_tab` row 5 on `kern_big`, row 6 on `kern_emu` (after the absolute mouse); **`SYSTEM.CFG` bit 6** on both; not wanted by default (§51.3) |
+| kernel | **`OSAPI_MOUSE_FEED`**, slot **`0x0550`** — drivers only |
+| hooks | **nothing**: no vector, no IRQ line. A worker task polls the chip |
+
+#### 9.12.1 Why a worker and a slot, and not §9.11's pump
+
+§9.11.3 drains the backdoor from `ui_task`'s pass **and from `task_yield`**,
+which is what keeps a drag loop fed and costs every task switch on `kern_emu`
+a compare. Carried to `kern_big` that compare would be paid on every switch of
+every XT in the field, for a chip almost none of them have. So the driver
+brings its own context instead:
+
+- a **driver worker** (§51.7), spawned at `DRVV_READY`. Workers are
+  `TF_SERVICE`, so they stay eligible inside an exclusive bracket (§53.2) and
+  the pointer keeps working in a full-screen game;
+- a **drivers-only slot** that takes one relative report and applies it. The
+  apply is `vmm_poll`'s relative arm to the instruction: `pushf`/`cli`,
+  `MOUPRIV_ENTER`, `mou_apply`, `MOUPRIV_LEAVE`, `popf`. §9.10's invariant
+  holds — the `cur_move` chain lands on `mou_pstack`, never on the worker's
+  192-byte stack. It may borrow that stack because the whole apply is IF=0 and
+  both mouse ISRs run IF=0 from gate to `iret`, so neither can be inside
+  `MOUPRIV_ENTER` while a task is running.
+
+A class is what makes both possible without new kernel code: `drv_task`'s
+spawn fence and every other driver fence ask "is this a *published* driver's
+segment" (§51.7), and publication is per class. A `DRVC_OVL` row (§9.11.1)
+would have needed a boot attach of its own and a spawn of its own. The class
+also gets the Drivers page's tick and untick, `drv_shutdown` before `int 19h`
+and hibernate's detach (§87.4) for free.
+
+```
+OSAPI_MOUSE_FEED  KERNEL_SEG:0x0550   X cell
+in:  AX = dx, BX = dy, signed; POSITIVE dy IS DOWN (the HID convention, which
+     is the screen's); CL = buttons in mouse_btn's own bits (1 left, 2 right)
+out: CF = 0 applied; CF = 1 refused - the caller's segment is not the one
+     published in DRVC_POINT. kern_small: always CF = 1 (§20.8 rule 4)
+     every register preserved
+```
+
+**The fence is `ES == [drv_fseg6]`**, one class's slot and not a walk of all
+six: a sound driver has no business moving the pointer, and `osapi_vol_fence`
+— the shared walk — writes `[dsk_vcls]` as a side effect, which a worker must
+not do behind a volume add in flight on the UI task.
+
+**The first accepted report settles the contest** exactly as `vmm_boot_x`
+does (§9.11.2): `[mou_port] = MOU_FEEDROW` (**8**, reachable by no device and
+distinct from `MOU_VMROW`), `[mou_line] = MOU_P2LINE`, `[mou_seen]`,
+`[mou_ptr]` and `[mou_idany]` set, then `mou_lockon`. A serial mouse that
+spoke first is retired by the first USB report; unticking the driver does not
+un-retire it, so that takes effect at the next restart.
+
+#### 9.12.2 Attach — the chip, and whose it is
+
+`DRVV_ATTACH` runs at boot or on a Drivers-page click, and touches the bus as
+little as it can:
+
+1. **`CHECK_EXIST`** (`0x06`) with `0x57` must answer `0xA8`. An undriven
+   `0x260` floats to `0xFF` — `DRVE_HW`, nothing touched.
+2. **`TEST_CONNECT`** (`0x16`). `USB_INT_USB_READY` (`0x18`) means *somebody
+   has already configured a device* — on a Book8088, the BIOS serving a boot
+   flash drive through `int 13h`. Resetting that bus would take the disk away
+   from under the machine. So the configuration descriptor is read **at the
+   device's current address, without a reset** (`GET_DESCR 2`), and anything
+   that is not a boot mouse is refused with **`DRVE_BUSY`** — "found it and
+   cannot have it". A mouse, or a descriptor that will not come, proceeds: a
+   BIOS that probed a mouse at POST leaves it `READY` too, and refusing that
+   would refuse every mouse.
+
+Nothing else happens at attach. Enumeration waits on the device (a bus reset,
+then up to half a second before a mouse answers), and attach runs before the
+first paint — so it is the worker's.
+
+#### 9.12.3 The worker
+
+One loop, parked at `OSAPI_TASK_PARK` once a pass (§66.5.5), with three
+states:
+
+- **idle** — no device. `TEST_CONNECT` every `UM_IDLET` (9) ticks, and any
+  pending interrupt consumed. `USB_INT_CONNECT` or `USB_INT_USB_READY` moves
+  to enumerate. That is the whole hot-plug path.
+- **enumerate** — `SET_USB_MODE 7` (bus reset), two ticks, `SET_USB_MODE 6`
+  (host, SOF on), wait for the connect, four ticks of settling; `0B 17 D8`,
+  the proof of concept's low-speed switch (most mice are 1.5 Mbps and the
+  datasheet documents full speed only); `GET_DESCR 1`; `SET_ADDRESS 2` and
+  `SET_USB_ADDR 2`; `GET_DESCR 2`, parsed as a descriptor chain for an
+  interface of class 3 protocol 2 and its first interrupt-IN endpoint;
+  `SET_CONFIG`; then two class requests as hand-built control transfers —
+  **`SET_PROTOCOL(boot)`**, so the report is the 3-byte boot layout whatever
+  the mouse defaults to, and `SET_IDLE(0)`. A STALL on either is ignored (a
+  boot-protocol-only mouse is entitled to one). Not a mouse — a flash drive, a
+  keyboard — parks in **other**: no port touched but the `INT#` bit, until a
+  disconnect.
+- **run** — `SET_ENDP6` with the toggle, `ISSUE_TOKEN (ep << 4) | 9`, and wait.
+  `USB_INT_SUCCESS` flips the toggle, reads the report and feeds it;
+  `USB_INT_DISCONNECT` feeds a release if a button was down (a button held
+  across an unplug is otherwise a drag that never ends) and goes idle; a STALL
+  is `CLR_STALL` and a fresh DATA0; `UM_ERRMAX` (8) other failures in a row
+  re-enumerate.
+
+**Waiting is the `INT#` bit, not a delay.** The datasheet's parallel table:
+reading the command port returns `INT#` in bit 7, low = pending. So the worker
+sets `SET_RETRY 25 85` — **the chip retries a NAK by itself, forever** — and
+the transaction completes only when the mouse has something to say. An idle
+mouse costs one `in` a tick. After a report the worker **yields instead of
+sleeping** for `UM_HOTT` (9) ticks, so a moving mouse is read as fast as it
+reports rather than at 18.2 Hz.
+
+**If `INT#` does not reach bit 7 on some board, the worker finds out and
+falls back.** The first enumeration transaction waits three ticks for the bit;
+a `GET_STATUS` that then answers `USB_INT_SUCCESS` anyway proves the bit is
+dead, and the driver switches to **poll mode**: `SET_RETRY 25 05` (a NAK comes
+back at once as `0x2A`) and a status read two ticks after each token — the
+proof of concept's own delay-then-status shape, at 18.2 Hz / 2.
+
+**Every command is one IF=0 window.** The datasheet bounds the gap between a
+command byte and its data at **100 µs** (TSC) and between data bytes at 100
+µs (TSD). A timer tick and a task switch in that gap is ~700 µs on the target
+(PERFORMANCE.md), so a command written with interrupts on is a command the chip
+may drop. The longest window is `RD_USB_DATA` of a 64-byte descriptor.
+
+**The report.** Boot protocol: byte 0 buttons (bit 0 left, bit 1 right; the
+middle button is dropped — §10 has two), bytes 1 and 2 signed dx and dy. A
+report shorter than 3 bytes is dropped. Both deltas are **halved with the
+remainder carried** (`UM_SHIFT` = 1): a USB mouse counts at 400-800 dpi against
+a serial mouse's ~200, so unscaled it crossed a 640-pixel screen in a finger's
+width. A report that moves nothing and changes no button is not fed.
+
+**`DRVV_DETACH`** sets the stop byte; `drv_unload` waits on `[drv_wcnt]`
+(§51.7) while the worker feeds a release if a button is down, sends `ABORT_NAK`
+and **`RESET_ALL`** — the chip back in device mode as it powered up, so the
+BIOS after an `int 19h` finds what it expects — and exits. A detach with no
+worker resets the chip itself.
+
+#### 9.12.4 Not done
+
+- **Not verified on a Book8088.** No emulator in this tree carries a CH375
+  (docs/TESTING.md), so the protocol is exercised against a model (§9.12.6)
+  written from the same datasheet reading as the driver. The first field run
+  is the first time either meets the chip.
+- **A configuration descriptor is read at most 64 bytes** — the CH375's
+  buffer. A composite receiver whose mouse interface is past byte 64 (some
+  wireless keyboard-and-mouse dongles) is not found.
+- **No wheel, no middle button, no report-protocol mice.** A mouse that STALLs
+  `SET_PROTOCOL` and sends a report ID first will read as garbage.
+- **A click shorter than one poll can be lost in poll mode**, where the chip
+  holds only the last report.
+- **The port is not configurable.** `0x260` is the Book8088's and the lo-tech
+  card's default; the card's jumpers offer `0x230`-`0x250` too.
+
+#### 9.12.5 Cost
+
+Measured by `tools/kernsize.py` against the kernel before it; **no footprint
+rung crossed** on any build, and `KERN_SIZE` is unchanged on all three.
+
+| | `kern_big` | `kern_small` |
+|---|---|---|
+| `.text` | **+145** — the slot cell (8), `osapi_mouse_feed`, the row (16) and two strings, `drv_fptr6` (4), `drv_memk`'s word | **+12** — the cell, a two-instruction refusal, and `drv_owner`'s stub growing a word with `DRVC_MAX` |
+| `.bss` | **+38** — `drv_owner` and `drv_svc` for a sixth class | 0 |
+| `.cold` | **+9** — `drv_attach` keeping an attach's `AL` (§51.3) | 0 |
+| `.ovl` | **+1** — `drv_cfgbit`'s sixth byte | 0 |
+| the footprint | no rung: 70 bytes left in the image rung, 150 in cold | no rung |
+| every `task_yield` | **0** | **0** |
+| the system disk | `USBMOUSE.DRV`, 1,648 bytes of image, 1,390 on the floppy packed | none (§24.5: no drivers there) |
+
+#### 9.12.6 The gate — a CH375 that is a model
+
+`make usbmousetest` builds `build/usbmsim.img`: the shipped `kern_big`, a
+`SYSTEM.CFG` with bit 6 set, and **`USBMOUSE.DRV` assembled with
+`-DCH375SIM`**. That build swaps the four port primitives — command out, data
+out, data in, status in — for calls into `drivers/usbmouse/ch375sim.inc`, a
+CH375 and a boot mouse in about four hundred lines, with a **mailbox** at a
+fixed offset in the image: plug, device kind (mouse or flash drive), `INT#`
+readable or not, and one report slot the model hands out on the next IN token.
+The shipped driver never assembles the model; the gate disk is the only place
+it exists.
+
+`tests/usbmouse.py` boots that disk under **MartyPC** — an 8088, which is the
+CPU the driver ships for — finds the driver's segment through its row, and
+drives the mailbox: plug a mouse and expect the contest settled on
+`MOU_FEEDROW`; post reports and expect `mouse_x`/`mouse_y` to move by half of
+them with the remainder carried; press and release through the menu bar and
+expect the menu to open and close; unplug with the button down and expect the
+release; plug a flash drive and expect the worker to leave it alone; and the
+same in poll mode with `INT#` dead.
 
 
 ## 10. events.inc
@@ -69236,7 +69444,10 @@ it reaches through the table that entry returns.
 ```
 in:  AL = verb, DS = CS = the driver's segment, ES = KERNEL_SEG
 DRVV_ATTACH (0)  probe + hook.  out CF=0 and SI = the service table;
-                 CF=1 = no hardware, AND NOTHING WAS HOOKED
+                 CF=1 = refused, AND NOTHING WAS HOOKED - with AL = a
+                 DRVE_* saying why (DRVE_BUSY: found it, cannot have it),
+                 or anything else for DRVE_HW. PRESERVE BX: drv_attach
+                 reads the row through it on return
 DRVV_DETACH (1)  silence, unhook, restore, free. Cannot fail.
 DRVV_TIER   (2)  in AH = how much of yourself the user wants (SND_RT_*,
                  34.8). out CF=0 and SI = the service table, RE-COPIED
@@ -69558,7 +69769,10 @@ too** — a load into a class whose publication slot another row already holds
 software is asking for something a class-keyed slot cannot do.
 
 Two plumbing details make it *arrive*, and without either the refusal is
-correct and silent. `drv_attach` **banks a `DRVV_READY` refusal into
+correct and silent. `drv_attach` **keeps an attach refusal's `AL`** — it
+restored the caller's `AX` over it until §9.12's mouse refused a flash drive
+with `DRVE_BUSY` and the row read `No hardware found`, so no attach had ever
+been able to say anything else — and it **banks a `DRVV_READY` refusal into
 `DRVR_ERR`** — that answer used to be dropped, which is fine for "I could not
 re-mount" and useless here, because attach itself succeeded so the load is not
 a failure. And `drv_load` clears the previous attempt's code **before** the

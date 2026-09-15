@@ -42,7 +42,7 @@
 ; =============================================================================
 
 %ifdef KERN_EMU
-DRV_MAX     equ 6               ; rows in drv_tab. The FIFTH is SPEC.md 72's
+DRV_MAX     equ 7               ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; Ethernet card and the SIXTH is SPEC.md
                                 ; 9.11's absolute mouse - the one DRVC_OVL row
                                 ; in the table, which takes no publication
@@ -50,9 +50,14 @@ DRV_MAX     equ 6               ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; a bit for it and the page can untick it.
                                 ; **kern_emu ALONE** (SPEC.md 9.11.7): the row
                                 ; is the sixth on that build and does not
-                                ; exist on the other two.
+                                ; exist on the other two. The SEVENTH is
+                                ; kern_big's sixth, the CH375 USB mouse
+                                ; (SPEC.md 9.12) - after the absolute mouse
+                                ; here so that row keeps index 5
 %elifdef KERN_BIG
-DRV_MAX     equ 5               ; ...and kern_big stops at the parallel link.
+DRV_MAX     equ 6               ; ...and kern_big stops at the CH375 USB mouse
+                                ; (SPEC.md 9.12), appended after the parallel
+                                ; link so rows 0-4 keep their indices.
                                 ; The absolute mouse's row was HERE until
                                 ; SPEC.md 9.11.7 and the machine this project
                                 ; is calibrated against could never use it:
@@ -140,7 +145,15 @@ DRVC_FILE   equ 5               ; a volume served by somebody ANSWERING
                                 ; under an emulator are the same shape, and
                                 ; the last of those is the only one of the
                                 ; four that can be tested in a container
-DRVC_MAX    equ 5               ; classes, and so publication slots
+DRVC_POINT  equ 6               ; a POINTING DEVICE the kernel does not
+                                ; drive itself (SPEC.md 9.12): the CH375 USB
+                                ; mouse. A real class and not DRVC_OVL because
+                                ; the driver needs a WORKER, and drv_task's
+                                ; spawn fence - like every driver fence - asks
+                                ; whether the caller is a PUBLISHED driver.
+                                ; APPENDED, never slotted into the retired 3:
+                                ; a class number is ABI (DRVC_RETIRED3 above)
+DRVC_MAX    equ 6               ; classes, and so publication slots
 
 DRVC_OVL    equ 0x40            ; NOT A CLASS, and mirrored from
                                 ; drivers/os88drv.inc: a driver-shaped image
@@ -706,9 +719,13 @@ DRV_CFG_MAPN equ 8
 ; the kernel at the image's offset.
 %1 %+ _bit:
 %ifdef KERN_EMU
-    db 0, 1, 4, 2, 3, 5         ; sound, hdd, ether, ramdisk, net, vmmouse
+    db 0, 1, 4, 2, 3, 5, 6      ; sound, hdd, ether, ramdisk, net, vmmouse,
+                                ; usbmouse
 %elifdef KERN_BIG
-    db 0, 1, 4, 2, 3            ; sound, hdd, ether, ramdisk, net
+    db 0, 1, 4, 2, 3, 6         ; sound, hdd, ether, ramdisk, net, usbmouse -
+                                ; BIT 6 ON BOTH BUILDS, row 5 here and row 6
+                                ; there: bit 5 is the absolute mouse's even on
+                                ; a build that has no such row (SPEC.md 9.12)
 %else
     db 0, 1, 3, 2               ; sound, hdd, ether, net
 %endif
@@ -809,6 +826,12 @@ drv_t_vmm:   db 'Absolute mouse', 0  ; ALONE (SPEC.md 9.11.7) - 27 bytes that
                                 ; between - the one that HAS the driver
                                 ; mechanism and has no use for this driver
 %endif
+%ifdef KERN_BIG
+drv_f_usbm:  db 'USBMOUSE.DRV', 0 ; SPEC.md 9.12's CH375 mouse. kern_big's and
+drv_t_usbm:  db 'USB Mouse', 0  ; not kern_small's: the whole driver mechanism
+                                ; is OS88_DRIVERS already, and a 128KB machine
+                                ; with a CH375 has no disk that carries the file
+%endif
 drv_f_eth:   db 'ETHER.DRV', 0   ; ...and the card's, on BOTH builds: the store
 drv_t_eth:   db 'Ethernet', 0    ; a RAM disk is made of is what kern_small has
                                 ; none of, and a network card is not
@@ -849,6 +872,10 @@ drv_fptr4:   dw PKG_DISP        ; here and nowhere else
 drv_fseg4:   dw 0               ; class 4 (DRVC_NET)
 drv_fptr5:   dw PKG_DISP
 drv_fseg5:   dw 0               ; class 5 (DRVC_FILE)
+drv_fptr6:   dw PKG_DISP
+drv_fseg6:   dw 0               ; class 6 (DRVC_POINT). osapi_mou_feed's
+                                ; fence reads this segment word by name
+                                ; (SPEC.md 9.12.1)
 
 drv_cfgname: db 'SYSTEM.CFG', 0
 drv_sysname: db 'KERNEL.SYS', 0 ; what makes a disk THE system disk (19.6): the
@@ -1021,6 +1048,21 @@ vmm_row:                        ; row 5: the VMware absolute pointer (SPEC.md
     db 0
 %endif
 
+%ifdef KERN_BIG
+usbm_row:                       ; ...a label for tests/usbmouse.py, which finds
+                                ; the driver's segment here
+    dw PKG_DISP, 0              ; row 5 (row 6 on kern_emu, after the absolute
+    dw drv_f_usbm, drv_t_usbm   ; mouse): the CH375 USB mouse (SPEC.md 9.12).
+    dw 0, 0                     ; DRVC_POINT - a real class, because its
+    db DRVC_POINT               ; worker needs drv_task's publication fence
+    db 0                        ; NOT wanted by default (SPEC.md 51.3): attach
+                                ; writes to port 0x260, and on anything but a
+                                ; machine with a CH375 there that is somebody
+                                ; else's card
+    db DRVE_OK
+    db 0
+%endif
+
 
 ; =============================================================================
 ; What a driver costs to RUN, in KB (SPEC.md 31.6.2)
@@ -1063,6 +1105,7 @@ DRVM_IMG_NET equ 7              ; ceil(build/net.drv     / 1024) - SEVEN
                                 ; icon in drivers/wirezone.inc, which both
                                 ; network drivers include
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 1024)
+DRVM_IMG_USBM equ 2             ; ceil(build/usbmouse.drv / 1024)
 
 DRVM_SND     equ DRVM_IMG_SND + 8 + 20    ; SBL_DMASZ (the DMA-visible double
                                 ; buffer and record ring) + SBL_POOLKB (the
@@ -1087,6 +1130,10 @@ DRVM_RAM     equ (DRVM_IMG_RAM + 4 + 8) | DRVM_PLUS
 DRVM_VMM     equ DRVM_IMG_VMM   ; the absolute mouse claims nothing either: it
                                 ; hooks no vector, owns no port and keeps no
                                 ; buffer. The image IS the whole footprint
+DRVM_USBM    equ DRVM_IMG_USBM  ; the USB mouse claims nothing: its one
+                                ; buffer is the 64-byte descriptor, in the
+                                ; image. Its worker's stack is SCH_DRV_STK of
+                                ; the kernel's, not a claim
 DRVM_NET     equ DRVM_IMG_NET   ; the parallel link claims NOTHING: its packet
                                 ; buffers are bss, and a driver's bss ships
                                 ; INSIDE its image (DRV_H_IMG)
@@ -1101,6 +1148,9 @@ drv_memk:                       ; one word per drv_tab row, in the same order
     dw DRVM_NET                 ; the parallel link, last on both builds
 %ifdef KERN_EMU
     dw DRVM_VMM                 ; row 5: the absolute mouse (kern_emu alone)
+%endif
+%ifdef KERN_BIG
+    dw DRVM_USBM                ; the CH375 USB mouse, last on both big builds
 %endif
 %if ($ - drv_memk) / 2 != DRV_MAX
   %error "drv_memk has drifted from drv_tab: one word per row, same order"
@@ -2766,7 +2816,7 @@ drv_attach:
     push es
     mov al, DRVV_ATTACH
     call drv_call_ent           ; out: CF, and SI = its service table
-    jc .out
+    jc .no
     mov es, [bx+DRVR_SEG]
     call drv_publish            ; SI is an offset in ES, so copy it now
     cmp byte [bx+DRVR_CLASS], DRVC_SOUND
@@ -2795,6 +2845,17 @@ drv_attach:
     clc                         ; A refusal is STILL not a failed attach: the
                                 ; driver is up at whatever tier it could reach,
                                 ; and the Sound page shows which
+    jmp short .out
+.no:                            ; A REFUSAL KEEPS ITS AL. drv_load's .nohwal
+    push bp                     ; banks the reason the driver gave - DRVE_BUSY
+    mov bp, sp                  ; is "found it and cannot have it" - and the
+    mov [bp+8], al              ; `pop ax` below put the CALLER's AL back over
+    pop bp                      ; it, so every refusal read DRVE_HW. Nothing
+                                ; answered a reason until SPEC.md 9.12's mouse
+                                ; refused a flash drive. So the driver's AL is
+                                ; written INTO the saved AX (SS:BP+8, over es,
+                                ; bp and si), and CF is still the driver's:
+                                ; push, mov and pop write no flag
 .out:
     pop es
     pop bp

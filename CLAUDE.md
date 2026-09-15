@@ -259,6 +259,15 @@ make vmmousetest # THE ABSOLUTE POINTER'S DISK (§9.11.6): a SYSTEM.CFG with
                 #   `make vmmousetest && python3 tests/vmmouse.py`. QEMU by
                 #   name: its `pc` machine carries the backdoor and MartyPC
                 #   has none, and `make run VMPORT=on` is the interactive form
+make usbmousetest # THE CH375 USB MOUSE'S GATE DISKS (§9.12.6): no emulator
+                #   carries a CH375, so USBMOUSE.DRV is built a second time
+                #   with -DCH375SIM - a model of the chip under its four port
+                #   primitives - onto two 360KB disks with SYSTEM.CFG bit 6
+                #   set: usbmsim.img (nothing plugged; tests/usbmouse.py
+                #   plugs, moves, clicks and unplugs through the model's
+                #   mailbox on MartyPC) and usbmbusy.img (a flash drive the
+                #   BIOS configured, which attach must refuse). The shipped
+                #   driver never contains the model
 make thewiretest # THE WIRE'S GATE DISKS (§92.12): ethertest's shape plus one
                 #   file - a SYSTEM/APPDATA/WIRE.CFG naming 10.0.2.2:8092
                 #   instead of os8088.com, so the machine fetches a fixture

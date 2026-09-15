@@ -3978,7 +3978,19 @@ osapi_table:
                                   ;          fullscreen first, and neither zoom
                                   ;          is drawn (SPEC.md 11.99.5).
                                   ;          Preserves every register
-osapi_table_end:                  ; 0x0550
+    OSAPI_XCELL osapi_mouse_feed  ; 0x0550 - X: ONE RELATIVE REPORT from a
+                                  ;          pointing device the kernel does
+                                  ;          not drive itself (SPEC.md 9.12):
+                                  ;          AX = dx, BX = dy (positive is
+                                  ;          down), CL = buttons. DRIVERS ONLY
+                                  ;          - the fence is ES == the segment
+                                  ;          published in DRVC_POINT, which is
+                                  ;          why it is an X cell. out CF=1
+                                  ;          refused. THE CELL IS IN BOTH
+                                  ;          KERNELS (SPEC.md 20.8 rule 4); on
+                                  ;          kern_small the body refuses.
+                                  ;          Preserves every register
+osapi_table_end:                  ; 0x0558
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -3986,8 +3998,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 168 * 8
-%error "os8088 API jump table must be exactly 168 8-byte slots"
+%if OSAPI_TABLE_LEN != 169 * 8
+%error "os8088 API jump table must be exactly 169 8-byte slots"
 %endif
 
 ; =============================================================================
