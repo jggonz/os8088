@@ -2277,8 +2277,10 @@ SOAK = [
         "Restart that detaches the worker and resets the chip, read at "
         "dsk_rb_go. The second disk boots a flash drive the BIOS already "
         "configured and wants DRVE_BUSY - which is also the row that found "
-        "drv_attach dropping every attach's refusal reason. What it cannot "
-        "see is the datasheet read wrong in both halves at once",
+        "drv_attach dropping every attach's refusal reason. The datasheet "
+        "reading itself is confirmed by SPEC.md 9.12.4's field run - a wired "
+        "mouse on a real Book8088 - so what this row covers is every path "
+        "that run did not take",
         needs=("marty", "nasm"), serial=True, timeout=300,
         wants=("build/usbmsim.img", "build/usbmbusy.img", "build/apps360.img")),
     Row("wirezone", "soak", py("tests/wirezone.py"), 50.0,

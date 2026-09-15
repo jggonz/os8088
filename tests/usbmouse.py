@@ -15,7 +15,9 @@ remainder-carrying halving, OSAPI_MOUSE_FEED and the contest it settles - is
 the shipped code, on MartyPC's 8088.
 
 WHAT THE MODEL CANNOT SAY is whether the datasheet was read right: a
-misreading the driver and the model share passes here. SPEC.md 9.12.4 says so.
+misreading the driver and the model share passes here. SPEC.md 9.12.4's field
+run answers that for ONE mouse on ONE machine - it works on a Book8088 - and
+leaves every error path below the model's word, which is what this row is for.
 
 THE LEGS, on build/usbmsim.img (nothing plugged at power-on):
 

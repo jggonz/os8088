@@ -216,6 +216,37 @@ hits the same **2,161 B/s** floppy wall as the 5150 under `FLOPPY1=1`
 
 ---
 
+## The Book8088 — `Elendilon/os8088`'s, and the only machine here with USB
+
+A modern 8088 laptop rather than period iron, and the one machine in this
+register that can answer a question none of the others can: **what a CH375
+does** (§9.12). Its single USB socket is a WCH CH375B on the bus at
+`0x260`/`0x261`, which its BIOS drives for flash drives and `USBMOUSE.DRV`
+drives for a mouse.
+
+| | |
+|---|---|
+| owner | **`Elendilon/os8088`** |
+| CPU | an **8088** — the target instruction set, on the machine's own clock |
+| video | **CGA-compatible LCD**, so os8088 comes up at 640x200 mono |
+| sound | an **OPL3** |
+| storage | **CompactFlash**, adopted as C: — §80.5's imager writes the card |
+| USB | **CH375B** at `0x260`/`0x261`, the chip §9.12 is about |
+| BIOS | the **factory** one, not Kiselev's 8088_bios replacement |
+| disks | the live image, written for the card's own geometry (§80.5) |
+
+What it has been worth: **§9.12's field run**, 15 September 2026. A wired USB
+mouse in the socket, the pointer tracking and clicking, and `UM_SHIFT`'s
+halved count confirmed by feel — the one figure the gate's model could not
+settle, having been written to agree with the driver about it. §9.12.4 records
+what that run did *not* cover, which is most of the error paths.
+
+**It is not a performance machine.** It is an 8088 but not a 4.77 MHz IBM one,
+so nothing here is a PERFORMANCE.md set; Part 6 rule 8 applies as it does to
+PCem.
+
+---
+
 ## The Compaq Portable III — `Elendilon/os8088`'s, the two-port machine
 
 An AT-class BIOS, a 1.2 MB drive and a cross-wired serial card: it keeps the

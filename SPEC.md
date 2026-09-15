@@ -13426,12 +13426,33 @@ and **`RESET_ALL`** — the chip back in device mode as it powered up, so the
 BIOS after an `int 19h` finds what it expects — and exits. A detach with no
 worker resets the chip itself.
 
-#### 9.12.4 Not done
+#### 9.12.4 The field run, and what it did not cover
 
-- **Not verified on a Book8088.** No emulator in this tree carries a CH375
-  (docs/TESTING.md), so the protocol is exercised against a model (§9.12.6)
-  written from the same datasheet reading as the driver. The first field run
-  is the first time either meets the chip.
+**IT WORKS ON A BOOK8088.** Reported by `Elendilon/os8088` on **15 September
+2026**, the day the driver was written: a stock machine with its factory BIOS,
+booted from its CompactFlash card as C:, an ordinary **wired** USB mouse in the
+socket. The pointer tracked, clicks and menus worked, and `UM_SHIFT`'s halved
+count "felt right" — which is the one number here that no model could have
+settled, the model having been written to agree with the driver about it.
+
+So the datasheet reading is sound: the low-speed switch, the descriptor walk,
+`SET_PROTOCOL(boot)`, the toggle and the `INT#` bit are all confirmed by one
+mouse on one machine. **What that run did NOT cover, and what therefore stays
+a claim of the model's alone:**
+
+- **hot-plug and re-plug.** The mouse was in the socket; §9.12.3's idle state
+  and the release fed on `USB_INT_DISCONNECT` have been seen only in the gate.
+- **poll mode.** Which arm ran is not observable from the desktop — the
+  `[um_intok]` byte is the only record and nothing displays it — so `INT#`
+  reaching bit 7 on this board is an inference from the pointer being smooth
+  rather than a reading. If it had not, the fallback would look the same at
+  half the rate.
+- **the `DRVE_BUSY` refusal** (§9.12.2): no flash drive was in the socket, so
+  the one path that protects somebody's boot disk is still the model's word.
+- **any other mouse**, and in particular a **wireless receiver** — which is
+  also the device most likely to meet the 64-byte descriptor ceiling below.
+
+#### 9.12.4.1 Not done
 - **A configuration descriptor is read at most 64 bytes** — the CH375's
   buffer. A composite receiver whose mouse interface is past byte 64 (some
   wireless keyboard-and-mouse dongles) is not found.
