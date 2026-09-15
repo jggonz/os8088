@@ -12,6 +12,8 @@ int sbp_program(int budget);
 
 void sbr_screen(int mode);
 void sbr_cls(void);
+void sbr_color(int fg, int bg);
+void sbr_locate(int row, int col);
 void sbr_print_str(const char *s);
 void sbr_print_num(void);
 void sbr_print_nl(void);

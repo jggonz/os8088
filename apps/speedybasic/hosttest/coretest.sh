@@ -13,3 +13,6 @@ cd "$ROOT"
 "$OUT" apps/speedybasic/demos/MANIFEST.TXT apps/speedybasic/demos
 apps/speedybasic/hosttest/sbmemtest.sh
 apps/speedybasic/hosttest/sbnumtest.sh
+apps/speedybasic/compiler/hosttest/writertest.sh
+apps/speedybasic/compiler/hosttest/aotabi.sh
+apps/speedybasic/compiler/hosttest/guesttest.sh

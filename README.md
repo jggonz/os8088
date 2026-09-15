@@ -104,10 +104,14 @@ make pmcbandbench # its band composer's benchmark, under QEMU -icount shift=3
 make speedybasicdisk # build the Speedy BASIC floppy in all four geometries:
               # a windowed Turbo Basic editor/interpreter, its on-disk guide,
               # and all 29 text, graphics, sound and hardware demos from the
-              # web version. Programs open through its File menu; SPEEDY BASIC
+              # web version. Its Run > Build Package command emits standalone
+              # native .O88 programs inside os8088. Programs open through its
+              # File menu; SPEEDY BASIC
               # does not claim .BAS because APPLE2 already owns that suffix
               # on the everything disk. `make speedybasic` builds only the
               # package; both targets bring in the C toolchain on demand
+make xt-speedybasic  # 86Box: 4.77MHz 8088, 640KB, writable 360KB Speedy disk
+make 386-speedybasic # 86Box: 386DX/25, writable 1.44MB Speedy disk
 make c64disk  # build the C64 floppy - a Commodore 64: the package, its
               # overlay; the KERNAL/BASIC/CHARGEN ROM rides INSIDE the
               # package as an embedded part (SPEC.md 20.12)
@@ -181,8 +185,19 @@ it. `runcpmdisk`, `allapps` and `live` also fetch RunCPM's command processor
 and master disk (`make runcpm-src`) and the CP/M software that rides beside
 it (`make cpmsw`); none of it is committed here.
 
-Speedy BASIC source can also be compiled on the host into a standalone
-package that opens directly on os8088:
+Speedy BASIC can compile a program into a standalone package inside os8088.
+Open or type the source, choose **Run > Build Package**, name the `.O88` file
+in the Save As dialog, and then open it from the Speedy folder. The resident
+compiler copies `SPEEDYCC.RT`, patches its reserved code area with direct 8086
+instructions, finalizes the package header, and saves it through the os8088
+file API. Generated programs use a cooperative native statement dispatcher so
+their windows remain responsive. The initial in-system backend supports blank
+lines and comments, `CLS`, `END`/`STOP`, quoted or blank `PRINT`, plus constant
+`SCREEN`, `COLOR`, `LOCATE`, `PSET`, and `LINE` statements. Unsupported input
+reports its source line and leaves no partial package. The interpreter remains
+available for the full language and all 29 demos.
+
+Source can also be compiled on the host into a standalone package:
 
 ```sh
 python3 tools/speedybasic_build.py program.BAS -o PROGRAM.O88 --name PROGRAM
@@ -201,7 +216,9 @@ explicit source location when a backend feature (such as strings, procedures,
 DATA/READ, or multidimensional arrays) is not implemented yet.
 `make speedybasic-compile-smoke` rebuilds native HELLO and STARS3D packages;
 `make speedybasic-compiled-test` runs both in MartyPC, including windowed and
-full-screen rendering.
+full-screen rendering. `make speedybasic-inos-test` drives the editor's Build
+Package dialog, verifies the new file on the writable FAT disk, launches it,
+and checks its native output in MartyPC.
 
 ![what it looks like: gray dithered desktop, menu bar, drive icons, Note Pad,
 Timer, Bounce, Control Panel and Task Manager windows, and the dock
@@ -682,7 +699,7 @@ cleanly and runs wrong when C meets this machine.
 | `build/cword*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
 | `build/runcpm*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`). What drive A carries is chosen per geometry at build time, so the 1.2MB disk fills itself and names what it left off in its own `LEFT-OFF.TXT` |
 | `build/paccman*.img`   | 1.44MB / 720KB / 1.2MB / 360KB | PaccMan, the C Pac-Man: the package and its README, no overlay (`make paccmandisk`) |
-| `build/speedybasic*.img` | 1.44MB / 720KB / 1.2MB / 360KB | Speedy BASIC, required `SPEEDYBA.OVL`, its guide and all 29 web-version `.BAS` demos (`make speedybasicdisk`) |
+| `build/speedybasic*.img` | 1.44MB / 720KB / 1.2MB / 360KB | Speedy BASIC, required `SPEEDYBA.OVL` and `SPEEDYCC.RT`, its guide and all 29 web-version `.BAS` demos (`make speedybasicdisk`) |
 | `build/c64*.img`       | 1.44MB / 720KB / 1.2MB / 360KB | Commodore 64, package (the ROMs are part 0 of `C64.O88`) + `C64.OVL` (`make c64disk`) |
 | `build/apple2*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Apple II Plus, package + `APPLE2.OVL` + `WELCOME.BAS` + `README.TXT` + `COPYING` in one `APPLE2/` folder (`make apple2disk`). The Apple II+ ROMs are inside the package as a part and are fetched at a pin, never committed |
 | `build/weave*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Weave: the runtime and its two modules, the demo bundles, LOOM, the demo sources and `CATALOG.TXT` (`make weavedisk`) |

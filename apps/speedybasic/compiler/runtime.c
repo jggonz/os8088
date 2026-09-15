@@ -14,6 +14,10 @@
 
 static void *sb_win;
 static char sb_ui_text[81];
+/* The in-OS compiler patches this fixed-width field in its runtime template
+ * after the user chooses an output name.  Host-compiled packages get the
+ * same writable field, initialized from their --name value. */
+char sbr_title[16] = SB_PROGRAM_TITLE;
 static int rt_row, rt_col, rt_fg, rt_bg;
 static int rt_full;
 static int rt_done;
@@ -128,13 +132,13 @@ void sbr_cls(void)
     sbs_host_text_cursor(1, 1);
 }
 
-static void sbr_color(int fg, int bg)
+void sbr_color(int fg, int bg)
 {
     if (fg >= 0) rt_fg = fg & 15;
     if (bg >= 0) rt_bg = bg & 7;
 }
 
-static void sbr_locate(int row, int col)
+void sbr_locate(int row, int col)
 {
     if (row > 0) rt_row = row;
     if (col > 0) rt_col = col;
@@ -237,7 +241,7 @@ void *os88_main(void)
     }
     os88_video(&v);
     h = v.dock_top - OS88_MBAR_H - 1;
-    win = os88_wm_create(0, OS88_MBAR_H, v.w, h, SB_PROGRAM_TITLE);
+    win = os88_wm_create(0, OS88_MBAR_H, v.w, h, sbr_title);
     if (!win) return 0;
     sb_win = win;
     os88_wm_sizable(win, 1);
@@ -319,7 +323,8 @@ void os88_onwake(void *win)
     static int paint_div;
     if (!rt_done) rt_done = sbp_program(256);
     ++paint_div;
-    if (sbs_dirty && (sbs_mode != SB_MODE_GRAPHICS || !(paint_div & 7))) {
+    if (sbs_dirty && (sbs_mode != SB_MODE_GRAPHICS || rt_done
+                      || !(paint_div & 7))) {
         os88_gfx_lock();
         sbr_repaint(win);
         os88_gfx_unlock();

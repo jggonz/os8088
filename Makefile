@@ -255,6 +255,11 @@ VM386CWORD := $(CURDIR)/vm/386-c-word
 VMXTPACCMAN := $(CURDIR)/vm/xt-paccman
 VM386PACCMAN := $(CURDIR)/vm/386-paccman
 
+# Speedy BASIC's writable compiler disks on the two useful manual-test
+# machines: the period 4.77MHz XT and a comfortable 25MHz 386.
+VMXTSPEEDY := $(CURDIR)/vm/xt-speedybasic
+VM386SPEEDY := $(CURDIR)/vm/386-speedybasic
+
 # The RUNCPM machines (SPEC.md 74.5, 74.6): one per FLOPPY GEOMETRY, because
 # the three RUNCPM disks do not carry the same software and the machines that
 # take them do not run at the same speed - and a CP/M game is timing-sensitive
@@ -1901,7 +1906,8 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         cc-note chello covl pkgrun pkgbig cword cworddisk 386-c-word runcpm runcpmdisk \
         paccman paccmandisk pmcbandbench xt-paccman 386-paccman \
         speedybasic speedybasicdisk speedybasiccoretest speedybasic-compile-smoke \
-        speedybasic-compiled-test \
+        xt-speedybasic 386-speedybasic \
+        speedybasic-compiled-test speedybasic-inos-test \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
@@ -6223,7 +6229,12 @@ $(eval $(call CC_PACKAGE,speedybasic,speedybasic,SPEEDYBA.OVL))
 
 SPEEDYBASICSRC := $(wildcard apps/speedybasic/sb*.c) \
                   $(wildcard apps/speedybasic/sb*.h) \
-                  $(wildcard apps/speedybasic/sb*.inc)
+                  $(wildcard apps/speedybasic/sb*.inc) \
+                  apps/speedybasic/compiler/aot.c \
+                  apps/speedybasic/compiler/aot.h \
+                  apps/speedybasic/compiler/guest.c \
+                  apps/speedybasic/compiler/writer.c \
+                  apps/speedybasic/compiler/writer.h
 SPEEDYBASICHOST := apps/speedybasic/hosttest/coretest.c \
                    apps/speedybasic/hosttest/coretest.sh \
                    apps/speedybasic/hosttest/sbmem_host.c \
@@ -6236,6 +6247,17 @@ SPEEDYBASICHOST := apps/speedybasic/hosttest/coretest.c \
                    apps/speedybasic/hosttest/sbnumtest.asm \
                    apps/speedybasic/hosttest/sbnumtest.c \
                    apps/speedybasic/hosttest/sbnumtest.sh \
+                   apps/speedybasic/compiler/hosttest/aotabi.py \
+                   apps/speedybasic/compiler/hosttest/aotabi.sh \
+                   apps/speedybasic/compiler/hosttest/guesttest.c \
+                   apps/speedybasic/compiler/hosttest/guesttest.sh \
+                   apps/speedybasic/compiler/hosttest/os88.h \
+                   apps/speedybasic/compiler/hosttest/writertest.c \
+                   apps/speedybasic/compiler/hosttest/writertest.sh \
+                   apps/speedybasic/compiler/template.asm \
+                   apps/speedybasic/compiler/template.c \
+                   apps/speedybasic/compiler/runtime.c \
+                   apps/speedybasic/compiler/runtime.h \
                    apps/speedybasic/hosttest/FEATURES.md
 $(BUILD)/speedybasic.raw.asm: $(SPEEDYBASICSRC) \
                               $(BUILD)/.speedybasic-hostchecks
@@ -6251,6 +6273,36 @@ $(BUILD)/.speedybasic-hostchecks: $(SPEEDYBASICSRC) $(SPEEDYBASICHOST) \
 speedybasiccoretest: $(BUILD)/.speedybasic-hostchecks
 
 speedybasic: $(BUILD)/speedybasic.o88
+
+# The resident compiler does not carry a linker or a second copy of the
+# window/graphics/numeric runtime.  It copies this fixed, uncompressed O88
+# template and patches a reserved direct-8086 code slot in far memory.
+$(BUILD)/speedycc.raw.asm: apps/speedybasic/compiler/template.c \
+                           apps/speedybasic/compiler/runtime.c \
+                           apps/speedybasic/compiler/runtime.h \
+                           apps/speedybasic/compiler/numrt.c \
+                           apps/speedybasic/compiler/numrt.h \
+                           apps/speedybasic/sbscreen.c \
+                           apps/speedybasic/sbnum.h $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
+		-I apps/speedybasic/compiler -I apps/speedybasic -I apps \
+		$< -o $@
+
+$(BUILD)/speedycc.gen.asm: $(BUILD)/speedycc.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/speedycc.bin: apps/speedybasic/compiler/template.asm \
+                       $(BUILD)/speedycc.gen.asm $(CC_RUNTIME) \
+                       apps/speedybasic/compiler/gfx.inc \
+                       apps/speedybasic/icon.inc apps/speedybasic/sbnum.inc \
+                       apps/speedybasic/sbmem.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ \
+		-o $@ apps/speedybasic/compiler/template.asm
+	@echo "speedycc template: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/SPEEDYCC.RT: $(BUILD)/speedycc.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $< -o $@
 
 # --- SPEEDY BASIC standalone compiler smoke ---------------------------------
 # speedybasic_compile.py emits one complete C translation unit.  The remaining
@@ -6334,6 +6386,11 @@ $(BUILD)/sbcompiled120.img: $(BUILD)/sbhello.o88 $(BUILD)/sbstars.o88 tools/os88
 speedybasic-compiled-test: $(BUILD)/sbcompiled120.img $(IMG360)
 	python3 tests/speedybasic_compiled.py
 
+# Exercise the user-facing editor -> Save As -> guest compiler -> FAT write ->
+# package-loader path under the cycle-accurate 8088 harness.
+speedybasic-inos-test: $(BUILD)/speedybasic.img $(IMG360)
+	python3 tests/speedybasic_inos_compile.py
+
 # The build artifact keeps the descriptive stem used by the C pipeline, but a
 # FAT directory name is 8.3. This is the disk-facing copy; its package header
 # remains the source package's and os88pkg validation has already run.
@@ -6365,10 +6422,12 @@ $(SPEEDYBASIC_DEMOS): $(BUILD)/.speedybasic-demos
 # from the editor, because FAT directories cannot grow on this OS (SPEC.md
 # 18.5). Every application disk is built in all four standard geometries.
 SPEEDYBASICDISK := $(BUILD)/speedyd/SPEEDYBA.O88 $(BUILD)/SPEEDYBA.OVL \
+                   $(BUILD)/SPEEDYCC.RT \
                    apps/speedybasic/README.TXT \
                    $(BUILD)/.speedybasic-demos
 SPEEDYBASICARGS := SPEEDY:$(BUILD)/speedyd/SPEEDYBA.O88 \
                    SPEEDY:$(BUILD)/SPEEDYBA.OVL \
+                   SPEEDY:$(BUILD)/SPEEDYCC.RT \
                    SPEEDY:apps/speedybasic/README.TXT \
                    $(SPEEDYBASIC_DEMO_ARGS)
 SPEEDYBASICDISKOPTS := --deep-folders --dir-slots SPEEDY/DEMOS=64 \
@@ -10563,6 +10622,7 @@ ALLAPPSFILES := $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 apps/apple2/README.TXT apps/apple2/COPYING \
                 $(WEAVEDISK) $(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS) \
                 $(BUILD)/speedyd/SPEEDYBA.O88 $(BUILD)/SPEEDYBA.OVL \
+                $(BUILD)/SPEEDYCC.RT \
                 apps/speedybasic/README.TXT $(SPEEDYBASIC_DEMOS) \
                 $(RUNCPMDISK)
 # These images use the RunCPM master disk, but not the separate CP/M
@@ -10607,16 +10667,21 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                $(addprefix LOOM:,$(WEAVELOOM) $(LOOMRUN) $(LOOMSRCS)) \
                SPEEDY:$(BUILD)/speedyd/SPEEDYBA.O88 \
                SPEEDY:$(BUILD)/SPEEDYBA.OVL \
+               SPEEDY:$(BUILD)/SPEEDYCC.RT \
                SPEEDY:apps/speedybasic/README.TXT \
                $(SPEEDYBASIC_DEMO_ARGS) \
                $(APPSYSARGS) \
                $(addprefix SYSTEM/DOS:,$(APPS_DOS))
-# The 1.2MB everything disk has room for the interpreter and its required
-# overlay, but not another 190KB source corpus.  Its dedicated 1.2MB disk
-# carries every demo; keep the package itself available on apps-all-120.
+# The 1.2MB everything disk has room for the interpreter and overlay, but the
+# uncompressed native compiler template would put it 47 clusters over. Its
+# dedicated speedybasic120.img carries the template and every demo; keep the
+# interpreter available on apps-all-120 and direct compilation work to that
+# dedicated disk at this geometry.
 ALLAPPSFILES120 := $(filter-out apps/speedybasic/README.TXT \
+                                  $(BUILD)/SPEEDYCC.RT \
                                   $(SPEEDYBASIC_DEMOS),$(ALLAPPSFILES))
 ALLAPPSARGS120 := $(filter-out SPEEDY:apps/speedybasic/README.TXT \
+                                SPEEDY:$(BUILD)/SPEEDYCC.RT \
                                 SPEEDY/DEMOS:%,$(ALLAPPSARGS))
 ALLAPPSDIRS := $(sort $(foreach a,$(ALLAPPSARGS),$(firstword $(subst :, ,$a))) \
                       DOCS RUNCPM/A SYSTEM/APPDATA)
@@ -11639,6 +11704,17 @@ xt-paccman: $(IMG360) $(BUILD)/paccman720.img
 386-paccman: $(IMG) $(BUILD)/paccman.img
 	@$(UNPROTECT) $(VM386PACCMAN)/86box.cfg
 	$(BOX) -P $(VM386PACCMAN) -N
+
+# Speedy BASIC edits and compiles onto B:, so these use dedicated writable
+# application disks.  The XT is the performance machine; the 386 shortens the
+# edit/build cycle while exercising exactly the same package and template.
+xt-speedybasic: $(IMG360) $(BUILD)/speedybasic360.img
+	@$(UNPROTECT) $(VMXTSPEEDY)/86box.cfg
+	$(BOX) -P $(VMXTSPEEDY) -N
+
+386-speedybasic: $(IMG) $(BUILD)/speedybasic.img
+	@$(UNPROTECT) $(VM386SPEEDY)/86box.cfg
+	$(BOX) -P $(VM386SPEEDY) -N
 
 # The RUNCPM machine (SPEC.md 74.5): vm/386-c-word with B: = build/runcpm.img
 # and the uuid changed and NOTHING else, for the same reason that one is a

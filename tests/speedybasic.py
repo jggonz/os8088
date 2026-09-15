@@ -111,10 +111,12 @@ def open_named(m, mouse, S, wx, wy, name):
         except (os88marty.MartyError, RuntimeError) as error:
             # A late package launch can cross os88ui's timeout boundary: its
             # diagnostic snapshot then contains the successfully opened app.
-            if name == "SPEEDYBA.O88" and any(
-                    w.visible and w.title == "Speedy Basic"
+            late_title = ("Speedy Basic" if name == "SPEEDYBA.O88"
+                          else name.rsplit(".", 1)[0])
+            if name.endswith(".O88") and any(
+                    w.visible and w.title == late_title
                     for w in os88geom.windows(m, S)):
-                print("      open %s -> 'Speedy Basic' (late)" % name)
+                print("      open %s -> %r (late)" % (name, late_title))
                 return
             if "two FIRST clicks" not in str(error):
                 raise

@@ -3,6 +3,7 @@
 
 #include "os88.h"
 #include "sbasic.h"
+#include "sbcompile.h"
 
 static unsigned sb_source_seg;
 static unsigned sb_source_len;
@@ -16,6 +17,39 @@ static int ovl_sb_source_resize(unsigned need);
 #include "sbscreen.c"
 #include "sbui.c"
 #include "sbcore.c"
+#define sbw_bind         ovl_sbw_bind
+#define sbw_header       ovl_sbw_header
+#define sbw_stack_class  ovl_sbw_stack_class
+#define sbw_name         ovl_sbw_name
+#define sbw_write        ovl_sbw_write
+#define sbw_last_error   ovl_sbw_last_error
+#define sbw_file_error   ovl_sbw_file_error
+#define sbw_fail         ovl_sbw_fail
+#define sbw_byte         ovl_sbw_byte
+#define sbw_get          ovl_sbw_get
+#define sbw_word         ovl_sbw_word
+#define sbw_get_word     ovl_sbw_get_word
+#define sbw_assoc_ok     ovl_sbw_assoc_ok
+#define sbw_name_ok      ovl_sbw_name_ok
+#define sbw_final_ok     ovl_sbw_final_ok
+#include "compiler/writer.c"
+#include "compiler/aot.c"
+#include "compiler/guest.c"
+#undef sbw_bind
+#undef sbw_header
+#undef sbw_stack_class
+#undef sbw_name
+#undef sbw_write
+#undef sbw_last_error
+#undef sbw_file_error
+#undef sbw_fail
+#undef sbw_byte
+#undef sbw_get
+#undef sbw_word
+#undef sbw_get_word
+#undef sbw_assoc_ok
+#undef sbw_name_ok
+#undef sbw_final_ok
 
 static struct sb_host sb_host = {
     sbs_host_mode,
@@ -95,6 +129,7 @@ void *os88_main(void)
 
     if (!ovl_speedy_ready())
         return 0;
+    sb_compile_set_home();
     if (ovl_sb_source_resize(1) < 0) {
         os88_toast("Speedy: needs 4K.", 0);
         return 0;
@@ -169,6 +204,15 @@ static void ovl_speedy_onfile(int mode, const char *name, unsigned size_lo,
     unsigned got;
 
     if (mode == OS88_FDLG_SAVE) {
+        if (sbu_dialog == SBU_DLG_PACKAGE_SAVE) {
+            sbu_dialog = SBU_DLG_NONE;
+            os88_strcpy(sbu_package_name, name, sizeof(sbu_package_name));
+            sbu_build = SBU_BUILD_READY;
+            os88_wm_wake(win);
+            ovl_sbu_repaint(win);
+            return;
+        }
+        sbu_dialog = SBU_DLG_NONE;
         if (os88_file_write_seg(name, sb_source_seg, sb_source_len) != 0) {
             os88_toast("Speedy: save failed.", 0);
             return;
@@ -217,6 +261,28 @@ void os88_onwake(void *win)
     static int last_state = -1;
     static int paint_div;
     int state;
+
+    if (sbu_build == SBU_BUILD_READY) {
+        sb_stop();
+        sbu_build = SBU_BUILD_RUNNING;
+        sbu_build_error[0] = 0;
+        os88_gfx_lock();
+        ovl_sbu_repaint(win);
+        os88_gfx_unlock();
+        if (ovl_sbg_compile(sb_source_seg, sb_source_len,
+                            sbu_package_name, sbu_build_error,
+                            sizeof(sbu_build_error)) == 0) {
+            sbu_build = SBU_BUILD_DONE;
+            os88_toast("Speedy: package built.", 0);
+        } else {
+            sbu_build = SBU_BUILD_ERROR;
+            os88_toast(sbu_build_error[0] ? sbu_build_error :
+                       "Speedy: build failed.", 0);
+        }
+        os88_gfx_lock();
+        ovl_sbu_repaint(win);
+        os88_gfx_unlock();
+    }
 
     state = sb_state();
     if (state == SB_STATE_READY || state == SB_STATE_RUNNING ||
