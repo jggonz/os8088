@@ -182,6 +182,9 @@ make loomdisk                         # loom*.img -- the same family's IDE disk,
                                       # with the demo SOURCES instead of the
                                       # compiled bundles
 make runcpm-src && make runcpmdisk    # runcpm*.img
+make scribedisk paccmandisk           # scribe*.img, paccman*.img
+make apple2rom && make apple2disk     # apple2*.img -- apple2rom fetches the
+                                      # ROM once; `make clean` spares it
 make live                             # os8088-usb.img + os8088.iso -- the live
                                       # USB image and the live CD (SPEC.md 80).
                                       # Needs the fetch on the line above and
@@ -195,10 +198,19 @@ release that does not happen. `mkzip.py` prints the ones it did not find, so
 that list is generated rather than remembered. Boot any that were built in step
 3 like any other image (they go in B:, `make test TESTAPPS=build/word.img`).
 
-**Do not build the story disk for a release.** `make zdisk` fetches Infocom
-story files that nobody here has the right to redistribute, and they are not
-release content. `mkzip.py` will not pack them -- its manifest is an allowlist,
-not a glob -- but do not put them in `build/` on a release run either.
+**The live media carries the story files, and that is decided.** Since #188,
+`make live` puts every story in `tools/getstories.py`'s MANIFEST on the live
+USB image and the live CD, so the zip carries them inside those two files. The
+user decided at v1.0.20260916 that this ships: the MANIFEST is curated to files
+that are free to redistribute -- three Infocom and Activision giveaways (the
+two Samplers, Mini-Zork, ZTUU) and authors' own freeware -- and none of the
+Infocom games that were sold. Do not stop to ask about it again.
+
+What still stays out is the story disk as a zip entry. `zork*.img` is not in
+`mkzip.py`'s manifest, and `STORIES=` can add files a user owns but may not
+redistribute, so **never run a release build with `STORIES=` set**. If a new
+entry is proposed for the MANIFEST, it has to be free to redistribute, because
+it ships in the next release.
 
 ### 3. Smoke-test the build before publishing
 
