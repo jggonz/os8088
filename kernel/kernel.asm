@@ -6343,44 +6343,11 @@ cw_thm_set:             call thm_set
 %endif
 cw_dock_band:           call dock_band
                        retf
-cw_app_close_win: call app_close_win
-    retf
-cw_gfx_xor_rect: call gfx_xor_rect
-    retf
-cw_inst_icon_ptr: call inst_icon_ptr
-    retf
-cw_inst_minimize: call inst_minimize
-    retf
-cw_inst_restore: call inst_restore
-    retf
-cw_thm_bg: call thm_bg
-    retf
-cw_thm_ink: call thm_ink
-    retf
-cw_wm_clip_seed: call wm_clip_seed
-    retf
-cw_wm_clip_subr: call wm_clip_subr
-    retf
-cw_wm_front: call wm_front
-    retf
-cw_wm_fs_vis: call wm_fs_vis
-    retf
-cw_wm_top: call wm_top
-    retf
 cw_dock_drop: call dock_drop
     retf
-cw_dock_geom: call dock_geom
-    retf
-cw_desk_rowcalc: call desk_rowcalc
-    retf
-cw_wm_refit: call wm_refit
-    retf
-cw_wm_su_drop_all: call wm_su_drop_all
-    retf
-cw_dock_force: call dock_force
-    retf
 cw_dock_apply:          call dock_apply     ; the Dock page and the settings
-                    retf                    ; reader (SPEC.md 30.5)
+cw_kretf:           retf                    ; reader (SPEC.md 30.5). DOCK.DRV's
+                                            ; dkk_* stubs return through this
 cw_gfx_clip_query:      call gfx_clip_query ; CLIPQF: shared region query
                     retf                    ; from .cold (SPEC.md 30.6.1)
 ; THE SCREEN SAVER'S WAY BACK (SPEC.md 79.6), and it is THREE calls behind one

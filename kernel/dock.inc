@@ -163,23 +163,36 @@ section .text
 ; renderer below stays callable with no disk and no module allocation.
 ; A near caller keeps its own register contract. BP is private to dispatch
 ; and restored before returning, including through re-entrant repaint calls.
+; Every operation is a six-byte stub: BP = its index, then dock_route. The
+; first DKB_N have a basic body in dock_btab; the rest are reached only while
+; the module is loaded (a hidden strip, an open hole), so need no basic row.
+; DOCK.DRV's dkx_tab lists the same operations in the same order.
+DKI_GEOM      equ 0
+DKI_BAND      equ 2
+DKI_FORCE     equ 4
+DKI_PAINT     equ 6
+DKI_PX_HIT    equ 8
+DKI_CLICK     equ 10
+DKI_RCLICK    equ 12
+DKI_SLOT_RECT equ 14
+DKI_FORCE_R   equ 16
+DKI_DROP      equ 18
+DKB_N         equ 10
+DKI_PASS      equ 20
+DKI_HOLE_ARM  equ 22
+DKI_HOLE_SUB  equ 24
+DKI_HOLE_WIN  equ 26
+DKI_N         equ 14
+
 %macro DKCALL 1
     push bp
-    mov bp, dkx_ %+ %1
-    jmp dock_invoke
+    mov bp, DKI_ %+ %1
+    jmp short dock_route
 %endmacro
 
-dock_invoke:
-    call far [DKFP]
-    pop bp
-    ret
 DKFP equ mod_fp + MOD_DOCK * MODFP_STRIDE
 
-dock_geom:
-    cmp word [mod_r_dock], 0
-    je .basic
-    DKCALL geom
-.basic:
+dkb_geom:
     cmp word [spl_fseg], COLD_SEG
     jbe .panel
     OVLGATE1 ovl_dock_geom
@@ -259,11 +272,7 @@ DOCK_GEOM ovd
 section .text
 
 ; Fullscreen return has no settings module and never reads a disk.
-dock_band:
-    cmp word [mod_r_dock], 0
-    je .basic
-    DKCALL band
-.basic:
+dkb_band:
     push ax
     mov word [vid_band_x0], 0
     mov ax, [vid_pw]
@@ -306,112 +315,89 @@ dkf_apply:
     clc
 .apply:
     pushf                     ; retain failure for CP; boot gets basic fallback
-    call KERNEL_SEG:cw_dock_geom
-    call KERNEL_SEG:cw_desk_rowcalc
-    call KERNEL_SEG:cw_wm_refit
-    call KERNEL_SEG:cw_wm_su_drop_all
-    call KERNEL_SEG:cw_dock_force
+    call KERNEL_SEG:dock_reflow
     popf
     pop ax
     retf
 section .text
+dock_reflow:                    ; dkf_apply's far half: one entry, not five shims
+    call dock_geom
+    call desk_rowcalc
+    call wm_refit
+    call wm_su_drop_all
+    call dock_force
+    retf
 
 
-dock_force:
-    cmp word [mod_r_dock], 0
-    je db_force
-    DKCALL force
+dock_geom:      DKCALL GEOM
+dock_band:      DKCALL BAND
+dock_force:     DKCALL FORCE
+dock_paint:     DKCALL PAINT
+dock_px_hit:    DKCALL PX_HIT
+dock_click:     DKCALL CLICK
+dock_rclick:    DKCALL RCLICK
+dock_slot_rect: DKCALL SLOT_RECT
+dock_force_r:   DKCALL FORCE_R
+dock_drop:      DKCALL DROP
+gfx_hole_arm:   DKCALL HOLE_ARM
 
-dock_paint:
-    cmp word [mod_r_dock], 0
-    je db_paint
-    DKCALL paint
-
-dock_px_hit:
-    cmp word [mod_r_dock], 0
-    je db_px_hit
-    DKCALL px_hit
-
-dock_click:
-    cmp word [mod_r_dock], 0
-    je db_click
-    DKCALL click
-
-dock_rclick:
-    cmp word [mod_r_dock], 0
-    je db_rclick
-    DKCALL rclick
-
-dock_slot_rect:
-    cmp word [mod_r_dock], 0
-    je db_tile_rect
-    DKCALL slot_rect
-
-dock_force_r:
-    cmp word [mod_r_dock], 0
-    jne .advanced
-    call dock_live_hit
-    jnc .out
-    jmp db_force_x
-.advanced:
-    DKCALL force_r
-.out:
-    ret
-
+; the module-only operations test their own condition first
 dock_pass:
     cmp byte [dock_auto], 0
-    je .out
-    DKCALL pass
-.out:
-    ret
-
-dock_drop:
-    cmp word [mod_r_dock], 0
-    je .out
-    DKCALL drop
-.out:
-    ret
-
-gfx_hole_arm:
-    DKCALL gfx_hole_arm
-
-dock_hole_sub:
-    cmp word [gfx_hole], 0
-    je .no
-    DKCALL hole_sub
-.no:
-    clc
-    ret
-
-dock_hole_winb:
-    push di
-    mov di, bx
-    call dock_hole_win
-    pop di
-    ret
+    je dkb_ret
+    DKCALL PASS
 
 dock_hole_win:
     cmp word [gfx_hole], 0
-    je .no
-    DKCALL hole_win
-.no:
+    je dkb_clc
+    DKCALL HOLE_WIN
+
+dock_hole_sub:
+    cmp word [gfx_hole], 0
+    je dkb_clc
+    DKCALL HOLE_SUB
+
+; BP = DKI_*, the caller's BP on the stack. The operation sees every register
+; the stub was entered with but BP, and returns straight to that caller.
+dock_route:
+    ; STKBALANCE-OK: BP is banked by the stub; .basic swaps that slot for the target and RETs into it
+    cmp word [mod_r_dock], 0
+    je .basic
+    call far [DKFP]
+    pop bp
+    ret
+.basic:                         ; a TAIL jump, so the basic Dock runs at
+    push ax                     ; exactly the stack depth it always had
+    mov ax, [ds:bp+dock_btab]
+    mov bp, sp
+    xchg ax, [bp+2]             ; the banked BP's slot becomes the target
+    mov bp, ax
+    pop ax
+    ret
+
+dock_btab:
+    dw dkb_geom, dkb_band, db_force, db_paint, db_px_hit
+    dw db_click, db_rclick, db_tile_rect, dkb_force_r, dkb_ret
+%if ($ - dock_btab) != DKB_N * 2 || DKI_N * 2 != DKI_HOLE_WIN + 2
+  %error "dock_btab and the DKI_* indices disagree"
+%endif
+
+dkb_clc:
     clc
+dkb_ret:
+    ret
+
+dkb_force_r:
+    call dock_live_hit
+    jc db_force_x
     ret
 
 ; Shared rectangle queries need only the published geometry, even in basic mode.
-dock_live_hit:
-    cmp ax, [dock_lx2]
-    jg .no
-    cmp cx, [dock_lx1]
-    jl .no
-    cmp bx, [dock_ly2]
-    jg .no
-    cmp dx, [dock_ly1]
-    jl .no
-    stc
-    ret
-.no:
-    clc
+dock_live_hit:                  ; dock_lx1..ly2 IS a WCR_* x1,y1,x2,y2 block
+    push si
+    mov si, dock_lx1
+    call gfx_rect_hit
+    pop si
     ret
 
 dock_px_rect:
@@ -419,8 +405,6 @@ dock_px_rect:
     mov cx, [dock_px2]
     mov bx, [dock_lc1]
     mov dx, [dock_lc2]
-    jmp short dock_swap_side
-
 dock_swap_side:
     cmp byte [dock_side], DOCK_P_BOTTOM
     je .out

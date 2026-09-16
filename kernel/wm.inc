@@ -4211,45 +4211,34 @@ wm_dock_clear:
     push ax
     push bx
     push cx
+    push dx
     push si
-    mov si, wm_zord
+    push di
+    mov di, wm_zord
     mov cl, [wm_zn]
-    xor ch, ch
-    jcxz .clear
+    xor ch, ch                  ; CF = 0: an empty z-order is clear
+    jcxz .out
 .scan:
-    mov al, [si]
-    inc si
+    mov al, [di]
+    inc di
     call wm_idx2ptr
-    test byte [bx+W_FLAGS], 2
+    mov si, bx
+    test byte [si+W_FLAGS], 2   ; CF = 0 for a hidden one
     jz .next
-    mov ax, [bx+W_Y]            ; a rect overlap against the LIVE strip, on
-    add ax, [bx+W_H]            ; whichever edge (SPEC.md 30.5) - y+h and x+w
-    cmp ax, [dock_ly1]          ; being the drop shadow's own row and column
-    jl .next
-    mov ax, [bx+W_Y]
-    cmp ax, [dock_ly2]
-    jg .next
-    mov ax, [bx+W_X]
-    cmp ax, [dock_lx2]
-    jg .next
-    add ax, [bx+W_W]
-    cmp ax, [dock_lx1]
-    jge .dirty
+    push cx
+    call wm_win_rect            ; a rect overlap against the LIVE strip, on
+    call dock_live_hit          ; whichever edge (SPEC.md 30.5), frame and
+    pop cx                      ; drop shadow included
 .next:
+    jc .out
     loop .scan
-.clear:
+.out:
+    pop di
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
-    clc
-    ret
-.dirty:
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -6317,7 +6306,8 @@ wm_obscured:
     stc                         ; overlap: we are obscured
     jmp .out
 .clear:
-    call dock_hole_winb         ; ...or the OPEN dock lands on it (SPEC.md
+    mov di, bx                  ; (DI is popped below)
+    call dock_hole_win          ; ...or the OPEN dock lands on it (SPEC.md
 .out:                           ; 30.6.1): CF = 1 is the same answer
     pop di
     pop si
@@ -9018,13 +9008,10 @@ wm_su_owed:
     push bx
     push cx
     push dx
-    mov ax, [si+W_X]            ; ...or this window does not reach it: a RECT
-    mov bx, [si+W_Y]            ; overlap against the live strip, because a
-    mov cx, ax                  ; strip on a side is reached in x and not in y
-    add cx, [si+W_W]            ; (SPEC.md 30.5). x+w and y+h, the drop
-    mov dx, bx                  ; shadow's own column and row
-    add dx, [si+W_H]
-    call dock_live_hit
+    call wm_win_rect            ; ...or this window does not reach it: a RECT
+    call dock_live_hit          ; overlap against the live strip, because a
+                                ; strip on a side is reached in x and not in y
+                                ; (SPEC.md 30.5). Shadow included, as painted
     pop dx
     pop cx
     pop bx

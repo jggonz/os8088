@@ -9,8 +9,15 @@ modk_hdr:
     dw dkx_entry
     times MOD_NENT-1 dw 0
 dkx_entry:
-    call bp
+    call [cs:bp+dkx_tab]
     retf
+dkx_tab:                        ; dock.inc's DKI_* order
+    dw dkx_geom, dkx_band, dkx_force, dkx_paint, dkx_px_hit
+    dw dkx_click, dkx_rclick, dkx_slot_rect, dkx_force_r, dkx_drop
+    dw dkx_pass, dkx_gfx_hole_arm, dkx_hole_sub, dkx_hole_win
+%if ($ - dkx_tab) != DKI_N * 2
+  %error "dkx_tab and dock.inc's DKI_* indices disagree"
+%endif
 dkx_force:
     push ax
     push cx
@@ -357,7 +364,8 @@ dkx_live_set:
 ; stand up or lie down behind it.
 ; -----------------------------------------------------------------------------
 dkx_paint:
-    call KERNEL_SEG:cw_wm_fs_vis              ; a visible fullscreen window is OVER the strip
+    push cs
+    call dkk_wm_fs_vis              ; a visible fullscreen window is OVER the strip
     jnc .go                     ; (SPEC.md 11.2). Same reasoning as
     call dkx_force             ; menu_draw_bar's guard: whether the dock is on
     clc                         ; screen is a fact about the screen - and while
@@ -408,7 +416,8 @@ dkx_paint:
                                 ; this pair and had one caller each, but this
                                 ; had ONE caller in the whole tree
 
-    call KERNEL_SEG:cw_wm_top                 ; who owns the frontmost visible window? Its
+    push cs
+    call dkk_wm_top                 ; who owns the frontmost visible window? Its
     xor di, di                  ; tile gets the active mark (0 = nobody), and
     or bx, bx                   ; every tile's key depends on it, so it is
     jz .noact                   ; resolved before the first one is tested.
@@ -467,7 +476,8 @@ dkx_paint:
     ;   gfx_fill      "clobbers: flags"                   (vga12.inc)
     ; Four memory reads off this path, and it is the [dock_full] path - the
     ; one somebody drawing over the strip takes.
-    call KERNEL_SEG:cw_thm_ink                ; the rule, over the damaged span only - the
+    push cs
+    call dkk_thm_ink                ; the rule, over the damaged span only - the
     mov bx, [dock_rc]           ; LINE, while the strip is hidden (SPEC.md
     mov dx, bx                  ; 30.6), and it is one fill on any edge
     call dkx_span_fill
@@ -476,7 +486,8 @@ dkx_paint:
     mov dx, [dock_fc2]          ; strip does not have (fc1 > fc2)
     cmp bx, dx
     jg .nofield
-    call KERNEL_SEG:cw_thm_bg
+    push cs
+    call dkk_thm_bg
     call dkx_span_fill
 .nofield:
 
@@ -832,7 +843,8 @@ dkx_erase_tile:
     push cx
     push dx
     call dkx_tile_rect         ; AX/BX/CX/DX = the whole tile
-    call KERNEL_SEG:cw_thm_bg                 ; ("clobbers: nothing", so the rect survives)
+    push cs
+    call dkk_thm_bg                 ; ("clobbers: nothing", so the rect survives)
     call KERNEL_SEG:cw_gfx_fill
     jmp dkx_ret_dx
 
@@ -857,7 +869,8 @@ dkx_xor_ring:
     push cx
     push dx
     call dkx_mark_rect
-    call KERNEL_SEG:cw_gfx_xor_rect
+    push cs
+    call dkk_gfx_xor_rect
     jmp short dkx_xor_pop
 
 dkx_xor_body:
@@ -904,7 +917,8 @@ dkx_draw_tile:
     mov si, ax                  ; SI = tile left for the duration...
     push bx                     ; ...and the top on the stack, popped below
 
-    call KERNEL_SEG:cw_thm_ink                ; "clobbers: nothing (flags preserved)", so AX
+    push cs
+    call dkk_thm_ink                ; "clobbers: nothing (flags preserved)", so AX
     call dkx_rect_ab           ; and BX are STILL the corner here: the 1px
     call KERNEL_SEG:cw_gfx_frame              ; tile frame IS the tile rect, and gfx_frame
                                 ; is "clobbers: flags", so the rect survives it
@@ -915,7 +929,8 @@ dkx_draw_tile:
     inc dx
     inc dx
     push si
-    call KERNEL_SEG:cw_inst_icon_ptr          ; SI -> 64 bytes in OUR segment, staged if
+    push cs
+    call dkk_inst_icon_ptr          ; SI -> 64 bytes in OUR segment, staged if
     jnc .icon                   ; this instance's body lives in LOW_SEG
     mov si, ico_app16 + 2       ; generic fallback: skip the library
 .icon:                          ; record's 2-byte header (SPEC.md 25/30)
@@ -925,7 +940,8 @@ dkx_draw_tile:
 
     cmp di, [dock_act]          ; active: a second frame just inside the
     jne .mini                   ; first, which reads as a heavier border and
-    call KERNEL_SEG:cw_thm_ink                ; costs no colour (SPEC.md 39.4). The icon
+    push cs
+    call dkk_thm_ink                ; costs no colour (SPEC.md 39.4). The icon
     push bx                     ; body is at +4,+2 and 16x16, so it clears
     mov ax, si                  ; both new edges by 2px and 1px
     call dkx_mark_ab
@@ -1030,19 +1046,23 @@ dkx_act_slot:
     jne .out                    ; gone since the press: nothing to do
     test byte [di+I_FLAGS], 1
     jz .front
-    call KERNEL_SEG:cw_inst_restore           ; minimized: restore (clears bit0, wm_show)
+    push cs
+    call dkk_inst_restore           ; minimized: restore (clears bit0, wm_show)
     jmp short .out
 .front:
     mov cx, [di+I_WIN]          ; visible: front it - or minimize it, if it is
     jcxz .out                   ; already the front one (SPEC.md 30.4)
-    call KERNEL_SEG:cw_wm_top                 ; BX = the frontmost VISIBLE window, or 0
+    push cs
+    call dkk_wm_top                 ; BX = the frontmost VISIBLE window, or 0
     cmp bx, cx
     mov bx, cx                  ; mov does not touch flags: BX = our window for
     je .fmin                    ; whichever of the two calls is taken
-    call KERNEL_SEG:cw_wm_front
+    push cs
+    call dkk_wm_front
     jmp short .out
 .fmin:
-    call KERNEL_SEG:cw_inst_minimize          ; sets I_FLAGS bit0 and wm_hides, so the tile
+    push cs
+    call dkk_inst_minimize          ; sets I_FLAGS bit0 and wm_hides, so the tile
                                 ; inverts (SPEC.md 30.3)
 .out:
     jmp dkx_ret_di
@@ -1179,7 +1199,8 @@ dkx_close_slot:
     mov bx, [di+I_WIN]
     or bx, bx
     jz .out
-    call KERNEL_SEG:cw_app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4)
+    push cs
+    call dkk_app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4)
 .out:
     jmp dkx_ret_di
 
@@ -1331,14 +1352,16 @@ dkx_pass:
 %endif
     cmp word [fdlg_win], 0
     jne .off
-    call KERNEL_SEG:cw_wm_fs_vis
+    push cs
+    call dkk_wm_fs_vis
     jc .off
     call dkx_hit
     jc .off
     mov bx, DOCK_HOVER_T
     jmp short .count
 .open:
-    call KERNEL_SEG:cw_wm_fs_vis
+    push cs
+    call dkk_wm_fs_vis
     jc .close
 %ifdef KERN_BIG
     cmp byte [blk_sv], 0
@@ -1427,7 +1450,8 @@ dkx_gfx_hole_arm:
     xor dx, dx
     mov cx, [vid_wm1]
     mov si, [vid_hm1]
-    call KERNEL_SEG:cw_wm_clip_seed
+    push cs
+    call dkk_wm_clip_seed
     call dkx_hole_sub
     pop si
     pop dx
@@ -1514,7 +1538,8 @@ dkx_out_gfx_unlock:
     ret
 
 dkx_out_wm_clip_subr:
-    call KERNEL_SEG:cw_wm_clip_subr
+    push cs
+    call dkk_wm_clip_subr
     ret
 
 dkx_ret_di: pop di
@@ -1524,4 +1549,57 @@ dkx_ret_dx: pop dx
     pop bx
     pop ax
     ret
+
+; Kernel routines only this module calls. `push cs` + a near call to one of
+; these builds the far return frame; the kernel routine's near `ret` lands on
+; cw_kretf, which returns here - so no resident cw_* shim is needed.
+dkx_kretf: dw cw_kretf
+dkk_app_close_win:
+    ; STKBALANCE-NET: -1
+    push word [cs:dkx_kretf]
+    jmp KERNEL_SEG:app_close_win
+dkk_gfx_xor_rect:
+    ; STKBALANCE-NET: -1
+    push word [cs:dkx_kretf]
+    jmp KERNEL_SEG:gfx_xor_rect
+dkk_inst_icon_ptr:
+    ; STKBALANCE-NET: -1
+    push word [cs:dkx_kretf]
+    jmp KERNEL_SEG:inst_icon_ptr
+dkk_inst_minimize:
+    ; STKBALANCE-NET: -1
+    push word [cs:dkx_kretf]
+    jmp KERNEL_SEG:inst_minimize
+dkk_inst_restore:
+    ; STKBALANCE-NET: -1
+    push word [cs:dkx_kretf]
+    jmp KERNEL_SEG:inst_restore
+dkk_thm_bg:
+    ; STKBALANCE-NET: -1
+    push word [cs:dkx_kretf]
+    jmp KERNEL_SEG:thm_bg
+dkk_thm_ink:
+    ; STKBALANCE-NET: -1
+    push word [cs:dkx_kretf]
+    jmp KERNEL_SEG:thm_ink
+dkk_wm_clip_seed:
+    ; STKBALANCE-NET: -1
+    push word [cs:dkx_kretf]
+    jmp KERNEL_SEG:wm_clip_seed
+dkk_wm_clip_subr:
+    ; STKBALANCE-NET: -1
+    push word [cs:dkx_kretf]
+    jmp KERNEL_SEG:wm_clip_subr
+dkk_wm_front:
+    ; STKBALANCE-NET: -1
+    push word [cs:dkx_kretf]
+    jmp KERNEL_SEG:wm_front
+dkk_wm_fs_vis:
+    ; STKBALANCE-NET: -1
+    push word [cs:dkx_kretf]
+    jmp KERNEL_SEG:wm_fs_vis
+dkk_wm_top:
+    ; STKBALANCE-NET: -1
+    push word [cs:dkx_kretf]
+    jmp KERNEL_SEG:wm_top
 section .text

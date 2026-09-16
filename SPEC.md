@@ -46947,11 +46947,18 @@ lock, so drawing callbacks cannot still be executing the module at unload.
 Painting, hit testing and UI ticks never perform disk I/O.
 
 The module owns advanced geometry, tile packing, hover/linger and clip-region
-maintenance, drawing and input. One private entry dispatches to an operation
-offset in BP, resolved by the same assembly as the kernel and validated by
-the module build/layout stamps. Callers bank BP, and all operations preserve
-it. The basic bottom renderer remains resident; advanced rendering code does
-not. Shared geometry and state remain in the kernel. Basic geometry setup
+maintenance, drawing and input. Every Dock operation is a six-byte stub that
+banks BP, loads its `DKI_*` index and jumps to `dock_route`: loaded, the
+module's one private entry calls through its own `dkx_tab`; unloaded, the
+router tail-jumps through `dock_btab` to the basic body, so the basic Dock
+runs at the stack depth it always had. The two tables list the operations in
+one order and assembly refuses a mismatch; the module build/layout stamps
+refuse one from another build. Operations only a loaded module can be asked
+for (hover, an open hole) sit past `DKB_N` and have no basic row. Kernel
+routines only the module calls are reached through module-side `dkk_*` stubs
+(`push cs` + a near call, then a far jump whose near `ret` lands on
+`cw_kretf`), so they cost no resident shim. The basic bottom renderer remains
+resident; advanced rendering code does not. Shared geometry and state remain in the kernel. Basic geometry setup
 has boot-overlay and Control Panel copies; fullscreen return restores bounds
 without loading either module. Saved advanced settings request `DOCK.DRV`
 after the system volume is mounted. A missing, incompatible or unallocatable

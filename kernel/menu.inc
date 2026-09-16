@@ -2017,10 +2017,12 @@ menu_drop:
     ; menu is down and back at the release, before the restore - so a menu
     ; dropped over the open strip draws whole, and the refused-save repaint
     ; below goes round the strip again like everything else.
-    push word [gfx_hole]
-    push word [wm_clip_n]
-    mov word [gfx_hole], 0
-    mov word [wm_clip_n], 0
+    xor ax, ax                  ; AX is free: everything below reloads it
+    xchg ax, [gfx_hole]
+    push ax
+    xor ax, ax
+    xchg ax, [wm_clip_n]
+    push ax
 
     ; --- draw the menu: the chrome's ground, its frame, items 8px in ---------
     call thm_bg

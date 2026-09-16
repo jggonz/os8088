@@ -224,20 +224,20 @@ had added.
     "bss": 6151,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 39376,
+    "cold": 39356,
     "coldpara": 2464,
     "fatpara": 288,
-    "imgpara": 3552,
-    "kend": 7072,
+    "imgpara": 3520,
+    "kend": 7040,
     "kseg": 96,
-    "ksize": 111616,
+    "ksize": 111104,
     "lowbss": 9182,
     "lowpara": 608,
     "minramkb": 196,
     "ovl": 1588,
     "ovlw": 5052,
     "stk0": 512,
-    "text": 50337,
+    "text": 50146,
     "vgabuf": 848,
     "vgabufpara": 64
   },
@@ -247,7 +247,7 @@ had added.
     "bss": 6151,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 39500,
+    "cold": 39480,
     "coldpara": 2496,
     "fatpara": 288,
     "imgpara": 3552,
@@ -260,7 +260,7 @@ had added.
     "ovl": 1589,
     "ovlw": 5052,
     "stk0": 512,
-    "text": 50607,
+    "text": 50416,
     "vgabuf": 848,
     "vgabufpara": 64
   },
@@ -270,7 +270,7 @@ had added.
     "bss": 4332,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 26257,
+    "cold": 26237,
     "coldpara": 1664,
     "fatpara": 64,
     "imgpara": 2656,
@@ -283,7 +283,7 @@ had added.
     "ovl": 575,
     "ovlw": 2789,
     "stk0": 512,
-    "text": 38101,
+    "text": 37910,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -622,19 +622,19 @@ there and nowhere else.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 31,893 | 35.6% |
-| the window system and its furniture | 25,221 | 28.1% |
+| the window system and its furniture | 25,078 | 28.0% |
 | drawing: adapters, primitives, glyphs, icons | 13,160 | 14.7% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,054 | 10.1% |
-| the kernel proper: API table, heap, scheduler, events | 8,251 | 9.2% |
+| the kernel proper: API table, heap, scheduler, events | 8,183 | 9.1% |
 | the three built-in kinds | 1,542 | 1.7% |
 | the Control Panel | 592 | 0.7% |
-| **total** | **89,713** | |
+| **total** | **89,502** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |
 |---|---:|---:|---:|---:|---:|---:|
-| `wm.inc` — the window manager (§11) | 11,813 | 141 | **11,954** | 1,092 | — | — |
+| `wm.inc` — the window manager (§11) | 11,772 | 141 | **11,913** | 1,092 | — | — |
 | `files.inc` — the Disk window (§22) | 1,083 | 8,255 | **9,338** | 465 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,528 | 734 | **6,262** | 100 | 526 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 359 | 5,902 | **6,261** | 890 | — | — |
@@ -643,7 +643,7 @@ there and nowhere else.
 | `mouse.inc` — serial mouse and the cursor (§9) | 4,140 | — | **4,140** | 151 | 128 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 3,429 | — | **3,429** | 58 | — | — |
 | `memory.inc` — the claim heap (§50) | 207 | 2,857 | **3,064** | 20 | 324 | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,822 | 177 | **2,999** | 197 | 84 | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,816 | 177 | **2,993** | 197 | 84 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 563 | 2,080 | **2,643** | 301 | — | — |
 | `assoc.inc` — file type associations (§54) | 480 | 2,010 | **2,490** | 43 | — | — |
 | `instance.inc` — instances and the built-in kinds (§29) | 2,113 | 236 | **2,349** | 724 | — | — |
@@ -654,9 +654,9 @@ there and nowhere else.
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,292 | — | **1,292** | 20 | — | — |
 | `loader.inc` — the package loader (§21) | 4 | 1,232 | **1,236** | 46 | — | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,157 | — | **1,157** | 74 | — | — |
-| `dock.inc` — the dock strip (§30) | 1,059 | 60 | **1,119** | 103 | — | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 11 | 1,025 | **1,036** | 79 | — | — |
 | `snd.inc` — the sound layer (§34) | 1,024 | — | **1,024** | 287 | — | — |
+| `dock.inc` — the dock strip (§30) | 983 | 40 | **1,023** | 103 | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 992 | — | **992** | 9 | — | — |
 | `icons.inc` — the icon renderer (§10) | 975 | — | **975** | 281 | — | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 866 | — | **866** | — | 696 | 3 |
@@ -682,8 +682,8 @@ there and nowhere else.
 | `moudiag.inc` — what the identify window saw (§9.4.6), `MOUDIAG=1` | — | — | **0** | — | — | — |
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — optional advanced Dock image (DOCK.DRV) | — | — | **0** | — | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,222 | 18 | **3,240** | — | — | 421 |
-| **total** | **50,337** | **39,376** | **89,713** | **6,151** | **9,182** | **2,250** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,154 | 18 | **3,172** | — | — | 421 |
+| **total** | **50,146** | **39,356** | **89,502** | **6,151** | **9,182** | **2,250** |
 <!-- END generated table -->
 
 ### Reading it
@@ -806,9 +806,9 @@ The advanced Dock is an optional module (`DOCK.DRV`, SPEC.md §30.5).
 The basic bottom Dock allocates no module. Selecting a side or auto-hide
 loads the advanced renderer and runtime once, keeps that claim pinned while
 needed, and frees it when both settings return to basic mode. This reduces
-the entire feature's resident section increase to 810 bytes on BIG and 786
-on SMALL versus the parent of `ad0fe14d`; the approximately 500-byte goal is
-not met. Rounded kernel allocation increases are 1,024 and 512 bytes.
+the entire feature's resident section increase to 599 bytes on BIG and 575
+on SMALL versus the parent of `ad0fe14d`. Rounded kernel allocation increases
+are 512 bytes on both; BIG's image rung has 23 bytes left.
 Advanced mode additionally needs a 3 KB module claim; moving code out of the
 kernel is not a reduction in total RAM while that module is loaded. Basic
 and advanced renderers share the tile-state contract but have separate code,
