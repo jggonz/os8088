@@ -378,17 +378,19 @@ gfx_aud_end:                    ; the primitive's answer is in the flags on
 %endif
 %endmacro
 
-
 ; -----------------------------------------------------------------------------
 ; CLIPQ - "is a clip region armed?", asked the way every region-aware primitive
 ;         asks it: ZF = 1 no, ZF = 0 yes (SPEC.md 11.3, 30.6.1)
 ;
-; It was `cmp word [wm_clip_n], 0` at every site. An OPEN hidden dock makes
-; the answer "yes" even with nothing armed: the strip is over every window and
-; the desktop, so a primitive about to draw unclipped arms the desktop minus
-; the strip first (gfx_hole_arm) and takes its clipped path. The checks live
-; in one helper; each site pays a call/return instead of its own inline copy.
+; It was `cmp word [wm_clip_n], 0` at every site, and on kern_small it still
+; is: that kernel has no hidden dock (SPEC.md 30.5). On kern_big an OPEN hidden
+; dock makes the answer "yes" even with nothing armed: the strip is over every
+; window and the desktop, so a primitive about to draw unclipped arms the
+; desktop minus the strip first (gfx_hole_arm) and takes its clipped path. The
+; checks live in one helper; each site pays a call/return instead of its own
+; inline copy.
 ; -----------------------------------------------------------------------------
+%ifdef DOCK_OPT
 %macro CLIPQ 0
     call gfx_clip_query
 %endmacro
@@ -406,6 +408,14 @@ gfx_clip_query:
     jmp gfx_hole_arm
 .out:
     ret
+%else
+%macro CLIPQ 0
+    cmp word [wm_clip_n], 0
+%endmacro
+%macro CLIPQF 0
+    cmp word [wm_clip_n], 0
+%endmacro
+%endif
 
 ; -----------------------------------------------------------------------------
 ; GFXCLIP - the clip hook, at a public rect entry (SPEC.md 11.3)
@@ -415,8 +425,8 @@ gfx_clip_query:
 ; software renderer IS the direct path (SPEC.md 39.5), and a hook below the
 ; dispatch would work on VGA and silently do nothing on Hercules.
 ;
-; The shared query chooses the path. Armed, gfx_clip_run re-enters the raw
-; body once per visible fragment; otherwise the cursor hide is spent here.
+; CLIPQ chooses the path. Armed, gfx_clip_run re-enters the raw body once per
+; visible fragment; otherwise the cursor hide is spent here.
 ; -----------------------------------------------------------------------------
 %macro GFXCLIP 1
 %ifdef GFXAUDIT
@@ -433,10 +443,10 @@ gfx_clip_query:
     pop di
     jmp gfx_aud_end
 %else
-    CLIPQ
+    CLIPQ                       ; clipped background draw? (SPEC.md 11.3)
     jne %%clipped
-    CURUNLAZY
-    jmp %1
+    CURUNLAZY                   ; UNCLIPPED: this may write any pixel on the
+    jmp %1                      ; screen, so a deferred hide is owed (7.1.4)
 %%clipped:
     push di
     mov di, %1

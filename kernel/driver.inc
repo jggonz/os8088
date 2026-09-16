@@ -575,11 +575,15 @@ CFG_SSN     equ 13              ; db: [ss_mins], minutes of idle before any of
                                 ; honours the period, and a floppy carried
                                 ; between the two kernels must not come back
                                 ; with the modes silently re-ticked
+%ifdef DOCK_OPT
 CFG_DOCK    equ 14              ; db: [dock_cfg], where the dock stands and
                                 ; whether it hides (SPEC.md 30.5). A plain
                                 ; store, and the unpack re-derives the
                                 ; geometry from it, because that is not one
 CFG_DBLOB   equ 15              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+%else
+CFG_DBLOB   equ 14              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+%endif
                                 ; and the kernel does not know what is in
                                 ; them (SPEC.md 51.9). It knows the NAME and
                                 ; the LENGTH, carries them to disk and back,
@@ -654,18 +658,21 @@ CFG_NB      equ CFG_DBLOB + DRV_BLOB_SZ     ; no RAM disk here, so no second
                                 ; reached from the Theme page and belongs to
                                 ; the same question: what the machine spends
                                 ; on looking like itself
+%ifdef DOCK_OPT
     dw 'DK'                     ; DocK - its edge and Auto-hide (SPEC.md 30.5).
     db 1, 1, CFG_DOCK           ; A key of its own rather than a byte on 'TH':
                                 ; growing that record would bump its ver and
-                                ; put everybody's theme back to Bright once
+                                ; put everybody's theme back to Bright once.
+                                ; kern_big's alone, like the feature
+%endif
     dw 'HD'                     ; Hard Disk - the DRIVER's own blob (51.9)
     db 1, DRV_BLOB_SZ, CFG_DBLOB
 %ifdef KERN_BIG
     dw 'RD'                     ; Ram Disk - the second one (51.9.1)
     db 1, DRV_RBLOB_SZ, CFG_RBLOB
-CFG_NKEY    equ 10
+CFG_NKEY    equ 10              ; ...and 'DK' (DOCK_OPT is kern_big's)
 %else
-CFG_NKEY    equ 9               ; no 'RD' key: kern_small has no RAM disk, and
+CFG_NKEY    equ 8               ; no 'RD' key: kern_small has no RAM disk, and
 %endif                          ; an unknown key is DROPPED rather than carried
                                 ; (SPEC.md 51.5 rule 1), which is the honest
                                 ; answer for a build with nothing to give it to
@@ -706,9 +713,13 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
     dw ss_secs
     db CFG_SSN
     dw ss_mins
+%ifdef DOCK_OPT
     db CFG_DOCK
     dw dock_cfg
 DRV_CFG_MAPN equ 9
+%else
+DRV_CFG_MAPN equ 8
+%endif
 
 ; --- whose blob is whose (SPEC.md 51.9.1) ------------------------------------
 ; row index, size, offset into the struct. The ROW and not the class, for the
@@ -3536,11 +3547,13 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
 %endif
     mov ax, [drv_cfg+CFG_WANT]
     call %1 %+ _want_set
+%ifdef DOCK_OPT
     call KERNEL_SEG:cw_dock_apply ; the map above stored [dock_cfg]; the band,
                                 ; the strip and the drive column are DERIVED
                                 ; from it (SPEC.md 30.5), which is not a store.
                                 ; No window exists yet, so the refit inside it
                                 ; walks an empty table
+%endif
     call COLD_SEG:drvf_ss_mins2idle   ; the map above stored [ss_mins]; the
                                 ; TICKS blk_pass compares against are derived
                                 ; from it and clamped (SPEC.md 79.4), which is

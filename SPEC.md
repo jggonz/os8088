@@ -1157,9 +1157,9 @@ sector nothing: unset, the `%ifdef` is not assembled.
 kernel image.** It is read into a heap claim when its feature is asked for,
 far-called through a table of entry pointers, and freed when the feature is
 finished. Both builds carry `CTRL.DRV`, the Control Panel (§31),
-`FORMAT.DRV`, the floppy formatter (§18.96), `CLONE.DRV`, the disk cloner
-(§18.99), and optional `DOCK.DRV`, advanced Dock behavior (§30.5).
-`kern_big` also carries `HIBER.DRV` (§87); `kern_small` instead carries
+`FORMAT.DRV`, the floppy formatter (§18.96), and `CLONE.DRV`, the disk cloner
+(§18.99). `kern_big` also carries `HIBER.DRV` (§87) and the optional
+`DOCK.DRV`, advanced Dock behavior (§30.5); `kern_small` instead carries
 `FILECP.DRV` and `FDLG.DRV` (§22.3, §38.0), bodies `kern_big` keeps resident.
 **On the disk every one is a `'CZ'` container** (§20.13.5): `os88mod.py`
 checks each image the way `mod_check` will and then wraps it, `mod_need`
@@ -46929,7 +46929,14 @@ The strip used to be pinned to the bottom of the primary, and every reader of
 `[vid_dock_y0]` — the band a window is fitted into, the zoom rect, the drive
 column, the dither's last row — assumed so. **It can stand on the left or the
 right edge now**, chosen on the Control Panel's Dock page (§31.13) and kept in
-`SYSTEM.CFG`'s `DK` key (§51.5). The setting is one byte, `[dock_cfg]`:
+`SYSTEM.CFG`'s `DK` key (§51.5). **This section, §30.6 and §31.13 are
+`kern_big`'s alone.** `kern_small` has a bottom strip that never hides, no
+Dock page, no `DK` key and no `DOCK.DRV`: every kernel site the feature
+touched is `%ifdef DOCK_OPT` over its pre-feature code, so the 128KB floor
+machine pays nothing for it. A `SYSTEM.CFG` written by `kern_big` carries a
+`DK` record that `kern_small`'s reader skips as an unknown key (§51.5 rule
+1), and drops when that kernel next writes the file. The setting is
+one byte, `[dock_cfg]`:
 
 ```nasm
 DOCK_P_BOTTOM equ 0             ; bits 0..1: the edge
@@ -47375,7 +47382,8 @@ the kernel. `tools/os88ovlchk.py` refused the build, twice on this page now.
 #### 31.1.5 The item list scrolls too
 
 The Dock row (§31.13) is a seventh static item, and seven plus three driver
-pages is ten rows in a pane that holds nine. The window cannot grow — 151 is
+pages is ten rows in a pane that holds nine. **kern_big only**: `kern_small`
+has no Dock row, so its list still fits and none of this is assembled there. The window cannot grow — 151 is
 already the minimum that fits CGA — so the list scrolls, the way the Drivers
 page's list did first (§31.1.1).
 
@@ -48672,15 +48680,15 @@ button and stops. The page has no state line left at all.
 ### 31.13 Dock page — where the strip stands, and whether it hides
 
 `Dock` is the seventh static row in `cp_items`, **last**, so no record index
-before it moves (§31.10.1) — `CP_IDOCK` is 6 on kern_big and 4 on kern_small.
-It is the Theme page's shape (§76.4): a radio group and a check box, applied on
-the spot, remembered at the close.
+before it moves (§31.10.1) — `CP_IDOCK` is 6. **kern_big only** (§30.5):
+`kern_small`'s list has no Dock row and does not scroll. It is the Theme page's
+shape (§76.4): a radio group and a check box, applied on the spot, remembered
+at the close, with no caption — Auto-hide needs no explanation.
 
 ```nasm
 CPK_R0Y  equ 18                 ; Bottom glyph top; Left 34, Right 50
 CPK_ROWH equ 16
 CPK_AY   equ 74                 ; 'Auto-hide' check box glyph top
-CPK_CAPY equ 96                 ; caption: 'Rest on the edge to show'
 ```
 
 | id | control | greyed when |
@@ -70410,7 +70418,8 @@ the wrong settings. Every value now travels with a key that says what it is.
         db  data[len]
 ```
 
-`DK` is the dock's one byte (§30.5), a key of its own at ver 1. Seven keys at the time this paragraph was written, 81 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
+`DK` is the dock's one byte (§30.5), a key of its own at ver 1, on `kern_big`
+only. Seven keys at the time this paragraph was written, 81 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
 clock 12/24, `CS` clock seconds, `SM` scheduler mode, and
 `HD` — a **driver's** own settings, whose contents the kernel does not know
 (§51.9). They are ASCII so a hex dump of the file reads as the list of

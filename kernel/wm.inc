@@ -455,8 +455,13 @@ wm_fit:
     push dx
     push si
     push di
+%ifdef DOCK_OPT
     mov ax, [vid_band_x0]       ; x0 - off a left-hand strip (SPEC.md 30.5)
     mov cx, [vid_band_xe]       ; xe - ...and a right-hand one
+%else
+    xor ax, ax                  ; x0
+    mov cx, [vid_pw]            ; xe
+%endif
     mov si, MBAR_H              ; y0
     mov di, [vid_dock_y0]       ; ye
     mov dx, [vid_ph]            ; ...and the hard floor under it
@@ -846,8 +851,13 @@ wm_land_snap:
     push si
     push di
     push bp
+%ifdef DOCK_OPT
     mov ax, [vid_band_x0]       ; the NEAR edges of the display it is on -
     mov cx, [vid_band_xe]       ; MBAR_H on the primary and the card's own vy
+%else
+    xor ax, ax                  ; the NEAR edges of the display it is on -
+    mov cx, [vid_pw]            ; MBAR_H on the primary and the card's own vy
+%endif
     mov si, MBAR_H              ; anywhere else, since nothing but the primary
     mov di, [vid_dock_y0]       ; has a menu bar (39.16.2). ui_ylow answers the
     mov dx, [vid_ph]            ; same question and may not be used: it reads
@@ -1234,8 +1244,10 @@ wm_fit_box:
     mov si, MBAR_H              ; its whole height is desktop
     mov di, [vid_dock_y0]
     mov dx, [vid_ph]            ; ...and the primary's floor is its own height
+%ifdef DOCK_OPT
     mov ax, [vid_band_x0]       ; ...and its band's x extent, which a strip on
     mov cx, [vid_band_xe]       ; a side narrows (SPEC.md 30.5)
+%endif
 .done:
     pop bx
 .out:
@@ -1279,6 +1291,7 @@ wm_fit_box:
 ; per display - PERFORMANCE.md Part 2's ~756us per call is the thing not being
 ; spent twice.
 ; -----------------------------------------------------------------------------
+%ifdef DOCK_OPT
 wm_dmg_bands:
     mov [wm_db_r+0], ax
     mov [wm_db_r+2], bx
@@ -1432,6 +1445,152 @@ NR_Y    equ 2
 NR_W    equ 4                   ; ...and the "nothing banked" sentinel
 NR_H    equ 6
 NR_SIZE equ 8
+%else
+wm_dmg_bands:
+    mov [wm_db_r+0], ax
+    mov [wm_db_r+2], bx
+    mov [wm_db_r+4], cx
+    mov [wm_db_r+6], dx
+    mov word [wm_clip_n], 0
+    mov ax, 0x7FFF                      ; the bounding box, empty. AX is dead
+    mov [wm_db_b+0], ax                 ; here - it was stored four lines up
+    mov [wm_db_b+2], ax                 ; and is reloaded inside .disp
+    not ax
+    mov [wm_db_b+4], ax
+    mov [wm_db_b+6], ax
+    xor si, si                          ; SI = the display being asked
+.disp:
+%ifdef KERN_BIG
+    mov al, [vid_ndisp]
+    xor ah, ah
+    cmp si, ax
+    jae .done
+    mov ax, si
+    call vid_ctx_rect                   ; AX/BX/CX/DX = its inclusive virtual
+                                        ; rect - vidsel.inc's, and inside the
+                                        ; same %ifdef KERN_BIG as this arm
+%else
+    or si, si
+    jnz .done
+    xor ax, ax                          ; one display, and it IS the screen
+    xor bx, bx
+    mov cx, [vid_wm1]
+    mov dx, [vid_hm1]
+%endif
+    push si                             ; ...intersected with the damage
+    mov si, wm_db_r
+    call gfx_rect_isect
+    pop si
+    or si, si                           ; ...and the CHROME is display 0's
+    jnz .band                           ; alone (SPEC.md 39.16.2)
+    cmp bx, MBAR_H
+    jge .top
+    mov bx, MBAR_H
+.top:
+    push ax
+    mov ax, [vid_dock_y0]               ; stopping above the strip, which
+    dec ax                              ; dock_force_r restores: damage that
+    cmp dx, ax                          ; reaches it already forces the span,
+    jle .bot                            ; so dithering those rows is drawn only
+    mov dx, ax                          ; to be painted over (SPEC.md 30.3.2)
+.bot:
+    pop ax
+.band:
+    cmp ax, cx                          ; nothing of this display is desktop
+    jg .next                            ; here - and an empty seed must not
+    cmp bx, dx                          ; grow the bounding box either
+    jg .next
+    mov [wm_cl_fx1], ax
+    mov [wm_cl_fy1], bx
+    mov [wm_cl_fx2], cx
+    mov [wm_cl_fy2], dx
+    call wm_clip_add                    ; WM_CLIP_MAX is 16 and this appends at
+                                        ; most VID_NDISP_MAX, so the full case
+                                        ; is unreachable rather than handled
+    push si
+    mov si, wm_db_b
+    call wm_runion
+    pop si
+.next:
+    inc si
+    jmp .disp                   ; NEAR: the body outgrew a short jump
+.done:
+    cmp word [wm_clip_n], 0
+    je .none
+    mov ax, [wm_db_b+0]
+    mov bx, [wm_db_b+2]
+    mov cx, [wm_db_b+4]
+    mov dx, [wm_db_b+6]
+    clc
+    ret
+.none:
+    stc
+    ret
+
+wm_db_r     times 4 dw 0        ; wm_dmg_bands: the damage it was handed, and
+wm_db_b     times 4 dw 0        ; the bounding box of the seeds it emitted -
+                                ; .text for wm_clip_n's reason, and read back
+                                ; by wm_dmg_gray, which is its only caller
+
+; -----------------------------------------------------------------------------
+; The natural bank: the frame a window goes back to when the screen grows again
+; (SPEC.md 39.11.2.1).
+;
+; wm_fit is a CLAMP, and a clamp throws the number away. That cost nothing
+; while the screen was decided once at boot, and it stopped costing nothing at
+; vid_switch: a 640x480 window fitted onto a 640x200 CGA loses 280 rows, and
+; the record is the only place the old height lived - so VGA -> CGA -> VGA left
+; the Task Manager 155 rows tall on a 480-row screen, and its own layout still
+; drawing the 284 rows' worth it had computed at launch, through the bottom of
+; its frame and onto the desktop.
+;
+; So the rect a window ASKED FOR is banked beside it, and wm_refit replays that
+; instead of re-clamping whatever the last clamp left behind. One entry per
+; window SLOT, a side table rather than four more words in the record, for
+; wm_zoomr's reason one screen up: WIN_SIZE is what wm_idx2ptr multiplies by,
+; and every reader of a window would pay for a wider record whether the machine
+; it runs on has a second adapter or not.
+;
+; NR_W = 0 is "nothing banked" - wm_zoomr's sentinel, safe for wm_zoomr's
+; reason (a banked width is a live window's, which WMIN_W floors at 96) - and
+; wm_destroy clears it, or a reused slot restores a stranger's rect.
+;
+; IT IS A BACKSTOP AND NOT THE ARGUMENT, deliberately, because the tree
+; disagrees with itself about whether .bss arrives zeroed (kernel.asm's
+; overlay note says it does, vid_disp_relayout's says -f bin zeroes nothing)
+; and this must not be the thing that settles it. What actually holds is that
+; wm_refit only visits records whose USED bit is set, wm_init clears that bit
+; for every slot at boot, and the one routine that sets it is wm_create -
+; which banks. So a bank is always present by the time anything can take one,
+; whatever memory the machine came up holding.
+;
+; WHAT MAY BANK, and this is the whole list, because a writer that forgets
+; leaves a window restoring to a rect it stopped having some time ago:
+;
+;   wm_create      the TEMPLATE, before wm_fit can see it. The one place the
+;                  unclamped rect exists at all, and what lets a window created
+;                  while the machine is on the CGA still reach its full size
+;                  when the machine goes back to the VGA
+;   wm_resize_nb   an app sizing itself (SPEC.md 11.1) - and wm_zoom's .go with
+;                  it, that path ending here
+;   wm_zoom        ...and its RESTORE path, which writes the record directly
+;   ui_drag        the user put it there
+;   ui_grow        ...and sized it there
+;
+; WHAT MAY NOT, which is the half worth stating: wm_fit and wm_snap_win, the
+; clamp itself - banking there would make the clamp its own source and the bank
+; would say nothing; wm_dock_snap, which runs inside the two ui_ paths and is
+; covered by their bank after it; and BOTH fullscreen paths, because
+; wm_fs_setrect takes the whole screen and wm_fs_drop gives back what
+; wm_fs_save holds, and neither is a statement about the size the window wants
+; as a window.
+; -----------------------------------------------------------------------------
+NR_X    equ 0
+NR_Y    equ 2
+NR_W    equ 4                   ; ...and the "nothing banked" sentinel
+NR_H    equ 6
+NR_SIZE equ 8
+%endif
 
 ; -----------------------------------------------------------------------------
 ; wm_nat_slot - SI -> this window's entry in the natural bank (module internal)
@@ -1648,6 +1807,7 @@ wm_dock_snap:
     push ax
     push cx
     push dx
+%ifdef DOCK_OPT
     cmp byte [dock_side], DOCK_P_BOTTOM
     jne .no                     ; the BOTTOM strip's nudge alone (SPEC.md 30.5)
     mov ax, [bx+W_Y]
@@ -1660,6 +1820,16 @@ wm_dock_snap:
     mov dx, [dock_thk]          ; ...against half of what it RESERVES, which
     shr dx, 1                   ; is 0 for a hidden strip: no nudge off a line
     cmp ax, dx
+%else
+    mov ax, [bx+W_Y]
+    add ax, [bx+W_H]            ; AX = the drop shadow's own row
+    mov cx, [vid_dock_y0]
+    cmp ax, cx
+    jb .no                      ; clear of the strip already
+    sub ax, cx
+    inc ax                      ; AX = rows of the strip it covers
+    cmp ax, DOCK_H / 2
+%endif
     jae .no                     ; deliberate: leave it, and let the dock go
                                 ; under it
     mov dx, cx                  ; the highest y that keeps y+h off the strip
@@ -2176,8 +2346,12 @@ wm_disp_rest:
     jb .one
     jmp short .zero
 .x:
+%ifdef DOCK_OPT
     mov cx, [vid_band_xe]       ; the primary's USABLE width (SPEC.md 30.5)
     sub cx, [vid_band_x0]
+%else
+    mov cx, [vid_pw]
+%endif
     cmp [di+VID_CTX_CW], cx
     jb .one
 .zero:
@@ -3501,9 +3675,14 @@ wm_zoom:
     push cx
     push dx
     push si
+%ifdef DOCK_OPT
     mov ax, [vid_band_x0]       ; the standard state: x = the band's left
     mov cx, [vid_band_xe]       ; edge, and w = all of the band (SPEC 39.2,
     sub cx, ax                  ; 30.5)
+%else
+    xor ax, ax                  ; the standard state: x = the left edge...
+    mov cx, [vid_pw]            ; ...and w = the whole live screen (SPEC 39.2)
+%endif
     mov si, MBAR_H              ; ...y = under the bar, h = the desktop band,
     mov dx, [vid_dock_y0]       ; one pixel short of the dock - wm_fit's
     sub dx, MBAR_H + 1          ; clamp, for wm_fit's reason
@@ -4207,6 +4386,7 @@ wm_raise:
 ; that happens the dock has to be drawn before that window and the cheap
 ; path cannot order it, so it declines instead.
 ; -----------------------------------------------------------------------------
+%ifdef DOCK_OPT
 wm_dock_clear:
     push ax
     push bx
@@ -4240,6 +4420,43 @@ wm_dock_clear:
     pop bx
     pop ax
     ret
+%else
+wm_dock_clear:
+    push ax
+    push bx
+    push cx
+    push si
+    mov si, wm_zord
+    mov cl, [wm_zn]
+    xor ch, ch
+    jcxz .clear
+.scan:
+    mov al, [si]
+    inc si
+    call wm_idx2ptr
+    test byte [bx+W_FLAGS], 2
+    jz .next
+    mov ax, [bx+W_Y]
+    add ax, [bx+W_H]            ; the drop shadow's own row, y+h
+    cmp ax, [vid_dock_y0]
+    jae .dirty
+.next:
+    loop .scan
+.clear:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.dirty:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; wm_hide - clear the visible bit and repaint what it uncovered
@@ -5719,6 +5936,7 @@ wm_paint_dmg:
 .zones:
     mov ax, [wm_dmg_zn]
     call COLD_SEG:desk_paint_mask_x ; the touched drive zones, whole
+%ifdef DOCK_OPT
     mov ax, [wm_dmg_x1]         ; reached the strip? then whatever WAS covering
     mov bx, [wm_dmg_y1]         ; it has moved - the one case that owes the
     mov cx, [wm_dmg_x2]         ; strip a restore rather than a tile. Only the
@@ -5726,6 +5944,15 @@ wm_paint_dmg:
     call dock_force_r           ; and "reached" is dock_force_r's own overlap
                                 ; test now, so a strip on a SIDE is asked in x
                                 ; (SPEC.md 30.5)
+%else
+    mov ax, [wm_dmg_y2]         ; reached the strip? then the dither above
+    cmp ax, [vid_dock_y0]       ; just ran over it, and whatever WAS covering
+    jl .dock                    ; it has moved - the one case that owes the
+    mov ax, [wm_dmg_x1]         ; strip a restore rather than a tile. Only the
+    mov cx, [wm_dmg_x2]         ; DAMAGED span of it, though: this used to
+    call dock_force_x           ; force all 640px and rebuild every tile for a
+                                ; window that closed in one corner (SPEC 30.3)
+%endif
 .dock:
     call dock_paint             ; CF = 1 if it actually put pixels on the strip
     jnc .bar                    ; - and only then does a window sitting on the
@@ -5986,6 +6213,7 @@ wm_dock_under:
     jnc .out
     call wm_dock_clear          ; CF = 1 if a window is sitting on them
     jnc .out
+%ifdef DOCK_OPT
     push bx                     ; ...and the damage is the span dock_paint
     push cx                     ; PAINTED, not the whole strip (SPEC.md
     push dx                     ; 30.3.3): a focus change moves two tiles, and
@@ -5997,6 +6225,16 @@ wm_dock_under:
     pop dx
     pop cx
     pop bx
+%else
+    mov ax, [dock_px1]          ; ...and the damage is the span dock_paint
+    mov [wm_dmg_x1], ax         ; PAINTED, not the whole width (SPEC.md
+    mov ax, [vid_dock_y0]       ; 30.3.3): a focus change moves two tiles, and
+    mov [wm_dmg_y1], ax         ; the strip's empty end was marking every
+    mov ax, [dock_px2]          ; window standing over it for nothing. CF = 1
+    mov [wm_dmg_x2], ax         ; above, so the span is non-empty by
+    mov ax, [vid_phm1]          ; construction
+    mov [wm_dmg_y2], ax
+%endif
     mov byte [wm_dmg_dk], 1     ; dock_paint said CF = 1 above, so the strip
     call wm_dmg_wins            ; really was drawn (the rect covers it anyway,
 .out:                           ; but the flag is an argument and says so)
@@ -6023,6 +6261,7 @@ wm_paint_all:
     call wm_fs_vis              ; a visible fullscreen window covers the
     jc .fswins                  ; desktop, dock and menu bar - painting
                                 ; them under it is pure waste (SPEC.md 11.2)
+%ifdef DOCK_OPT
     mov ax, [vid_band_x0]       ; desktop: 50% dither under the bar, and
     mov bx, MBAR_H              ; STOPPING SHORT OF THE DOCK (SPEC.md 30.3.2,
     mov cx, [vid_band_xe]       ; 30.5) - dock_paint is the next call but one
@@ -6030,6 +6269,14 @@ wm_paint_all:
     mov dx, [vid_dock_y0]       ; dithering it was a band drawn to be painted
     dec dx                      ; over:
     call thm_desk               ; the double-draw flash, and the reason
+%else
+    xor ax, ax                  ; desktop: 50% dither under the bar, and
+    mov bx, MBAR_H              ; STOPPING ABOVE THE DOCK (SPEC.md 30.3.2) -
+    mov cx, [vid_pwm1]           ; dock_paint is the next call but one and owns
+    mov dx, [vid_dock_y0]       ; every row from here down, so dithering them
+    dec dx                      ; was a full-width band drawn to be painted
+    call thm_desk               ; over: the double-draw flash, and the reason
+%endif
                                 ; every tile had to be rebuilt afterwards
 %ifdef KERN_BIG
     call vid_disp_desk        ; ...and every OTHER display, whole (SPEC.md
@@ -6306,9 +6553,14 @@ wm_obscured:
     stc                         ; overlap: we are obscured
     jmp .out
 .clear:
+%ifdef DOCK_OPT
     mov di, bx                  ; (DI is popped below)
     call dock_hole_win          ; ...or the OPEN dock lands on it (SPEC.md
 .out:                           ; 30.6.1): CF = 1 is the same answer
+%else
+    clc
+.out:
+%endif
     pop di
     pop si
     pop dx
@@ -6394,10 +6646,12 @@ wm_clipwin  dw 0                ; the window wm_clip_set was given, banked
                                 ; all - and 11.96.18's drop, which happens
                                 ; after that walk, needs the same word in every
                                 ; build
+%ifdef DOCK_OPT
 gfx_hole    dw 0                ; non-0 while a hidden dock is OPEN (SPEC.md
                                 ; 30.6.1): CLIPQ and GFXCLIP then read "no
                                 ; region" as "the desktop minus the strip".
                                 ; .text for wm_clip_n's reason, beside it
+%endif
 wm_clip_n   dw 0                ; rects in wm_clip_tab; 0 = disarmed.
                                 ; Initialized data, NOT .bss: every gfx_fill
                                 ; reads it, including the machine's first,
@@ -6616,8 +6870,13 @@ wm_clip_occl_r:
     cmp word [wm_clip_n], 0
     jne .scan
 .done:
+%ifdef DOCK_OPT
     call dock_hole_sub          ; ...and the OPEN dock, which is over all of
     jmp short .out              ; them (SPEC.md 30.6.1). CF: its overflow
+%else
+    clc
+    jmp short .out
+%endif
 .over:
     stc
 .out:
@@ -6802,8 +7061,13 @@ wm_dmg_occl:
 .next:
     loop .scan
 .done:
+%ifdef DOCK_OPT
     call dock_hole_sub          ; ...and the open dock: no dither under it
     jmp short .out              ; (SPEC.md 30.6.1). CF: its overflow
+%else
+    clc
+    jmp short .out
+%endif
 .over:
     stc
 .out:
@@ -6884,8 +7148,10 @@ wm_clip_rect:
     cmp bx, wm_wins + MAX_WIN*WIN_SIZE
     jb .win
 .done:
+%ifdef DOCK_OPT
     call dock_hole_sub          ; ...and the open dock (SPEC.md 30.6.1)
     jc .over
+%endif
     cmp word [wm_clip_n], 0     ; ZF = 1: wholly covered. clc leaves it alone,
     clc                         ; and so does every pop below
     jmp short .out
@@ -9004,6 +9270,7 @@ wm_su_owed:
     mov dx, [wm_dmg_y2]
     cmp byte [wm_dmg_dk], 0
     je .out                     ; dock_paint put nothing on the strip
+%ifdef DOCK_OPT
     push ax
     push bx
     push cx
@@ -9032,6 +9299,26 @@ wm_su_owed:
     cmp dx, [dock_ly2]
     jge .out
     mov dx, [dock_ly2]
+%else
+    push di
+    mov di, [si+W_Y]
+    add di, [si+W_H]
+    cmp di, [vid_dock_y0]
+    pop di
+    jl .out                     ; ...or this window does not reach it
+    xor ax, ax                  ; it does, and the strip is drawn UNDER windows,
+    cmp cx, [vid_pwm1]          ; so this window owes the whole width of it -
+    jge .noc                    ; as a WIDENING of the painted box, never a
+    mov cx, [vid_pwm1]          ; replacement. The strip is the PRIMARY's
+.noc:                           ; (39.14), so replacing would hand a window on
+    cmp dx, [vid_phm1]          ; display 1 a rect disjoint from itself, and
+    jge .nod                    ; wm_su_srect reads that as "nothing this pass
+    mov dx, [vid_phm1]          ; painted reached the content" - which is
+.nod:                           ; permanent, nothing repaints it after
+    cmp bx, [vid_dock_y0]
+    jle .out
+    mov bx, [vid_dock_y0]
+%endif
 .out:
     ret
 
@@ -10361,8 +10648,10 @@ wm_su_take:
                                 ; the draws that earn it
     test byte [di+W_FLAGS], 2   ; not visible: there are no pixels to bank
     jz .out
+%ifdef DOCK_OPT
     call dock_hole_win          ; ...and under the OPEN dock some of them are
     jc .out                     ; the strip's, not ours (SPEC.md 30.6.1)
+%endif
     test byte [di+W_FLAGS], WF_FULL
     jnz .out                    ; a fullscreen window is not usefully covered
                                 ; by what is being raised over it, and it is
@@ -10878,8 +11167,10 @@ wm_su_try:
     push si
     push di
     push es
+%ifdef DOCK_OPT
     call dock_hole_win          ; a restore is not clipped, so under the OPEN
     jc wm_su_tno                ; dock it would blit over the strip (30.6.1)
+%endif
     call wm_su_ck               ; ...which lays the fragments out and checks
     jc wm_su_tno                ; them against the claim's own header, and
                                 ; answers AX = the claim

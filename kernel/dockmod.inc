@@ -1,6 +1,7 @@
 ; Advanced Dock runtime, optional and pinned while a setting needs it.
 ; DS = KERNEL_SEG. The sole private entry takes BP = an operation offset
 ; resolved by this same assembly. Every caller banks BP; all bodies are near.
+%ifdef DOCK_OPT                 ; kern_big only (SPEC.md 30.5)
 section .modk
 modk_hdr:
     dw 0x384F
@@ -1603,3 +1604,4 @@ dkk_wm_top:
     push word [cs:dkx_kretf]
     jmp KERNEL_SEG:wm_top
 section .text
+%endif

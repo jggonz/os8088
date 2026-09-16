@@ -1870,9 +1870,13 @@ inst_minimize:
 inst_tile_rect:
     call inst_idx               ; AX = this record's instance index
     mov cx, ax
+%ifdef DOCK_OPT
     jmp dock_slot_rect          ; near - dock.inc is .text (SPEC.md 30). The
                                 ; SLOT's tile, which a packed side strip puts
                                 ; somewhere else (SPEC.md 30.5.1)
+%else
+    jmp dock_tile_rect          ; near - dock.inc is .text (SPEC.md 30)
+%endif
 
 inst_an_tile:
     push ax

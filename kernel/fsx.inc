@@ -186,9 +186,11 @@ fsx_run:
                                 ; segment is the caller's own DS, and AX an
                                 ; entry inside its image+bss.  DI = the record
 
+%ifdef DOCK_OPT
     call dock_drop              ; an OPEN dock's hole would clip the app out
                                 ; of its own raster (SPEC.md 30.6.1), and
                                 ; fsx_restore repaints the whole screen anyway
+%endif
     mov dx, 0xFF00              ; DH = the kept worker's slot, or none; DL =
                                 ; task 0, checked above. 0xFF00 AND NOT
                                 ; 0x00FF: the store below is little-endian, so

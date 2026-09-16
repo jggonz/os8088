@@ -77,7 +77,7 @@ IMGS = ["build/small360.img", "build/small.img",
 # HDD.DRV, NET.DRV, ETHER.DRV, RAMDISK.DRV, RAMPAGE.DRV, HDDTOOL.DRV,
 # XMEM.DRV, SAVER.DRV and VMMOUSE.DRV are all out today, and so is the
 # eleventh one nobody has written.
-DRV_OK = {"CTRL.DRV", "FORMAT.DRV", "CLONE.DRV", "FILECP.DRV", "FDLG.DRV", "DOCK.DRV"}
+DRV_OK = {"CTRL.DRV", "FORMAT.DRV", "CLONE.DRV", "FILECP.DRV", "FDLG.DRV"}
 
 # (8.3 name, why it may not be on a small floppy). One row per SPEC.md 24.5
 # ground; the § is in the reason so a failure sends the reader to the argument

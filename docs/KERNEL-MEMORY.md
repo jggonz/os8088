@@ -267,23 +267,23 @@ had added.
   "small": {
     "boot2": 2250,
     "bootmax": 122368,
-    "bss": 4332,
+    "bss": 4242,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 26237,
+    "cold": 26197,
     "coldpara": 1664,
     "fatpara": 64,
-    "imgpara": 2656,
-    "kend": 4864,
+    "imgpara": 2624,
+    "kend": 4832,
     "kseg": 96,
-    "ksize": 76288,
+    "ksize": 75776,
     "lowbss": 5460,
     "lowpara": 384,
     "minramkb": 128,
-    "ovl": 575,
+    "ovl": 423,
     "ovlw": 2789,
     "stk0": 512,
-    "text": 37910,
+    "text": 37465,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -802,13 +802,16 @@ segment.
 
 ---
 
-The advanced Dock is an optional module (`DOCK.DRV`, SPEC.md §30.5).
-The basic bottom Dock allocates no module. Selecting a side or auto-hide
-loads the advanced renderer and runtime once, keeps that claim pinned while
-needed, and frees it when both settings return to basic mode. This reduces
-the entire feature's resident section increase to 599 bytes on BIG and 575
-on SMALL versus the parent of `ad0fe14d`. Rounded kernel allocation increases
-are 512 bytes on both; BIG's image rung has 23 bytes left.
+The advanced Dock is an optional module (`DOCK.DRV`, SPEC.md §30.5), and
+the feature is kern_big's alone. The basic bottom Dock allocates no module.
+Selecting a side or auto-hide loads the advanced renderer and runtime once,
+keeps that claim pinned while needed, and frees it when both settings return
+to basic mode. The whole feature's resident section increase is 599 bytes on
+BIG versus the parent of `ad0fe14d`, 512 bytes rounded; BIG's image rung has
+23 bytes left. kern_small does not have it at all: every site is
+`%ifdef DOCK_OPT` over the pre-feature code, and that kernel assembles byte
+for byte to its pre-feature image apart from the boot blob's ninth sector,
+which is freed before the desktop.
 Advanced mode additionally needs a 3 KB module claim; moving code out of the
 kernel is not a reduction in total RAM while that module is loaded. Basic
 and advanced renderers share the tile-state contract but have separate code,

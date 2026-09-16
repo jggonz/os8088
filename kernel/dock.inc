@@ -117,7 +117,9 @@ DOCK_CTX_H  equ DOCK_CTX_N * MENU_ITEM_H + 2
 ; straight into it by drv_cfg_unpack, and its default has to be right on a
 ; machine with no settings file at all - and across a warm boot, which keeps
 ; the old kernel's .bss. dock_geom is its one reader.
+%ifdef DOCK_OPT
 dock_cfg:   db DOCK_P_BOTTOM
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dock_init - reset module scratch
@@ -147,10 +149,16 @@ dock_cfg:   db DOCK_P_BOTTOM
 section .ovlw
 dock_init:
     push ax
+%ifdef DOCK_OPT
     mov ax, [dock_la1]          ; THE WHOLE STRIP is owed - dock_force's own
     mov [dock_dx1], ax          ; answer, written here rather than called for.
     mov ax, [dock_la2]          ; dock_geom ran inside vid_init (MARK 7), so
     mov [dock_dx2], ax          ; the along range is live
+%else
+    mov word [dock_dx1], 0      ; THE WHOLE STRIP is owed - dock_force's own
+    mov ax, [vid_pwm1]          ; answer, written here rather than called for
+    mov [dock_dx2], ax
+%endif
     mov ax, 07FFFh              ; ...and nothing has been PAINTED yet (SPEC.md
     mov [dock_px1], ax          ; 30.3.3) - the empty bounding box, which is
     inc ax                      ; 07FFFh..08000h and refuses every rect
@@ -159,11 +167,13 @@ dock_init:
     retf                        ; FAR: kmain reaches this through OVLGATE1
 section .text
 
+%ifdef DOCK_OPT
 ; Optional advanced operations have one private dispatch entry. The basic
 ; renderer below stays callable with no disk and no module allocation.
 ; A near caller keeps its own register contract. BP is private to dispatch
 ; and restored before returning, including through re-entrant repaint calls.
 ; Every operation is a six-byte stub: BP = its index, then dock_route. The
+; stub names the whole DKI_* constant: a bare BAND is `make BAND=1`'s %define. The
 ; first DKB_N have a basic body in dock_btab; the rest are reached only while
 ; the module is loaded (a hidden strip, an open hole), so need no basic row.
 ; DOCK.DRV's dkx_tab lists the same operations in the same order.
@@ -186,7 +196,7 @@ DKI_N         equ 14
 
 %macro DKCALL 1
     push bp
-    mov bp, DKI_ %+ %1
+    mov bp, %1
     jmp short dock_route
 %endmacro
 
@@ -329,33 +339,33 @@ dock_reflow:                    ; dkf_apply's far half: one entry, not five shim
     retf
 
 
-dock_geom:      DKCALL GEOM
-dock_band:      DKCALL BAND
-dock_force:     DKCALL FORCE
-dock_paint:     DKCALL PAINT
-dock_px_hit:    DKCALL PX_HIT
-dock_click:     DKCALL CLICK
-dock_rclick:    DKCALL RCLICK
-dock_slot_rect: DKCALL SLOT_RECT
-dock_force_r:   DKCALL FORCE_R
-dock_drop:      DKCALL DROP
-gfx_hole_arm:   DKCALL HOLE_ARM
+dock_geom:      DKCALL DKI_GEOM
+dock_band:      DKCALL DKI_BAND
+dock_force:     DKCALL DKI_FORCE
+dock_paint:     DKCALL DKI_PAINT
+dock_px_hit:    DKCALL DKI_PX_HIT
+dock_click:     DKCALL DKI_CLICK
+dock_rclick:    DKCALL DKI_RCLICK
+dock_slot_rect: DKCALL DKI_SLOT_RECT
+dock_force_r:   DKCALL DKI_FORCE_R
+dock_drop:      DKCALL DKI_DROP
+gfx_hole_arm:   DKCALL DKI_HOLE_ARM
 
 ; the module-only operations test their own condition first
 dock_pass:
     cmp byte [dock_auto], 0
     je dkb_ret
-    DKCALL PASS
+    DKCALL DKI_PASS
 
 dock_hole_win:
     cmp word [gfx_hole], 0
     je dkb_clc
-    DKCALL HOLE_WIN
+    DKCALL DKI_HOLE_WIN
 
 dock_hole_sub:
     cmp word [gfx_hole], 0
     je dkb_clc
-    DKCALL HOLE_SUB
+    DKCALL DKI_HOLE_SUB
 
 ; BP = DKI_*, the caller's BP on the stack. The operation sees every register
 ; the stub was entered with but BP, and returns straight to that caller.
@@ -413,6 +423,18 @@ dock_swap_side:
 .out:
     ret
 
+
+%else
+; kern_small: no placement, no auto-hide and no DOCK.DRV (SPEC.md 30.5), so
+; the basic renderer IS the Dock and its entry points are these names.
+dock_force     equ db_force
+dock_force_x   equ db_force_x
+dock_paint     equ db_paint
+dock_px_hit    equ db_px_hit
+dock_click     equ db_click
+dock_rclick    equ db_rclick
+dock_tile_rect equ db_tile_rect
+%endif
 
 ; Basic bottom Dock: independent of DOCK.DRV.
 db_force:
@@ -908,7 +930,11 @@ db_rect_ax:                   ; ...and the arithmetic ALONE, for a caller
                                 ; local for this label to re-parent
     mov cx, ax
     add cx, DOCK_TILE_W-1
+%ifdef DOCK_OPT
     mov bx, [dock_c0]
+%else
+    mov bx, [vid_dock_ty0]
+%endif
     mov dx, bx
     add dx, DOCK_TILE_H-1
     ret
@@ -1052,11 +1078,15 @@ db_draw_tile:
 db_hit:
     push bx
     cmp dx, [vid_dock_y0]
+%ifdef DOCK_OPT
     jb .miss
     cmp dx, [vid_phm1]
     ja .miss
     cmp cx, [vid_pwm1]
     ja .miss                   ; another display never owns a Dock tile
+%else
+    jb .out                    ; kern_small has one display (SPEC.md 39.19)
+%endif
 
     xor di, di                  ; in the strip, no tile yet
     cmp cx, DOCK_X0             ; left of the first tile (unsigned for the
@@ -1078,10 +1108,12 @@ db_hit:
 .out:
     pop bx
     ret
+%ifdef DOCK_OPT
 .miss:
     stc
     pop bx
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; db_click - hit-test a click against the strip (SPEC.md 30)
@@ -1259,6 +1291,7 @@ dock_act:   resw 1              ; the instance record owning the frontmost
                                 ; it is resolved once per dock_paint
 dock_ck:    resw INST_MAX       ; what each tile was last DRAWN as (dock_key)
 
+%ifdef DOCK_OPT
 ; --- SPEC.md 30.5/30.6: where the strip stands, written by dock_geom and
 ; dock_live_set alone. .bss, because vid_apply writes every one of them before
 ; anything reads it.
@@ -1298,5 +1331,7 @@ dock_lc1:   resw 1              ; ...and its across extent
 dock_lc2:   resw 1
 dock_timer_on:   resb 1        ; hover while hidden, linger while open
 dock_timer_tick: resw 1        ; modular start tick; survives cancellation
+
+%endif
 
 section .text
