@@ -678,6 +678,23 @@ FAST = [
     Row("image", "fast", py("tests/unit/t_image.py"), 0.1,
         "the shipped floppies read by an independent FAT12 walker: contiguity, "
         "the standard BPB, SPEC.md 19.6's attributes"),
+    Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
+        "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
+        "completeness, and until this row nothing in the tree had ever read "
+        "it. Four things were missing from every live image ever cut - "
+        "THEWIRE.O88 (a SYSAPPS package the desktop zone launches out of the "
+        "BOOT volume's SYSTEM/, and the live media IS the boot volume), the "
+        "four packages that ride no floppy, the whole Frotz story library "
+        "beside a FROTZ.O88 with nothing to play, and both CP/M fills, priced "
+        "in 1.44MB clusters on a 32MB partition. TWO HALVES that are not "
+        "interchangeable: PART A reads build/livepayload.txt - the "
+        "payload list `all` emits from $(LIVEARGS) itself - so a new apps/ "
+        "directory fails the build on the day it is added, which is the "
+        "enforcement this row exists for; PART B walks build/os8088-usb.img "
+        "when `make usb` has built one, because a list can name a file that "
+        "never lands. It reads that artefact rather than running `make "
+        "print-`, which registry refuses and rightly: a knob in the "
+        "environment makes $(VIDSTAMP) delete build/kernel.bin"),
     Row("catdisk", "fast", py("tests/unit/t_catdisk.py"), 0.1,
         "SPEC.md 24.6's three category disks, checked for the one thing they "
         "ARE: packages at the ROOT with no folder to click into, MEDIA/ and "
@@ -3519,6 +3536,23 @@ SOAK = [
         "116,085 bytes are compared BYTE FOR BYTE, because a decoder that got "
         "one match wrong across the boundary still opens a window, still "
         "shows the title, and still plays - it plays a click",
+        needs=("marty",), serial=True,
+        wants=("build/lzmod360.img",)),
+    Row("lzmod-dialog", "soak", py("tests/lzmod.py", "--dialog"), 30.0,
+        "SPEC.md 38.6.1: THE SAME MODULE THROUGH THE FILE DIALOG, which is a "
+        "different kernel size surface and was the WRONG one. fdlg_sizeof "
+        "answered out of the staged listing entry, whose size is deliberately "
+        "the ON-DISK one (19.1), so every app that funds a claim from 38.6's "
+        "DX:CX claimed a third of what the read was about to deliver - and "
+        "BEVERLY.MOD, the one shipped file this actually breaks, opened by "
+        "double-click and refused with 'File too big' from File > Open in "
+        "BOTH MOD players, on any machine. NOTHING SAW IT: `lzmod` above "
+        "drives the association, which goes through OSAPI_FILE_FIND and "
+        "decodes the hint, and the two fixtures that do drive a dialog "
+        "(trackmove360, mppmove360) ship the module UNCOMPRESSED, where the "
+        "two sizes are the same number. So this row is the route rather than "
+        "a new assertion: same disk, same bytes, same byte-for-byte compare, "
+        "reached through Tracker's own Open",
         needs=("marty",), serial=True,
         wants=("build/lzmod360.img",)),
     Row("lzmod-lzb", "soak", py("tests/lzmod.py", "--fmt", "lzb"), 30.0,

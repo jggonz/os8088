@@ -1,7 +1,28 @@
 #!/usr/bin/env python3
-"""BEVERLY.MOD, COMPRESSED, opened by a double-click (SPEC.md 20.14.5).
+"""BEVERLY.MOD, COMPRESSED, opened by a double-click - and by the DIALOG.
 
-    make lzmodtest && python3 tests/lzmod.py
+    make lzmodtest && python3 tests/lzmod.py              # SPEC.md 20.14.5
+    make lzmodtest && python3 tests/lzmod.py --dialog     # SPEC.md 38.6.1
+
+TWO ROUTES, AND THE SECOND ONE IS WHY THIS FILE HAS A FLAG. Until SPEC.md
+38.6.1 this row drove a double-click ONLY, which is the route that goes
+through OSAPI_FILE_FIND - and OSAPI_FILE_FIND decodes the compression hint.
+The Standard File dialog did not: fdlg_sizeof answered out of the staged
+listing entry, whose size is deliberately the ON-DISK one (SPEC.md 19.1), so
+every app that funds a claim from SPEC.md 38.6's DX:CX claimed a third of what
+the read was about to deliver and then failed its own read.
+
+The user-visible result was that **BEVERLY.MOD opened by double-click and
+refused with "File too big" from File > Open**, in BOTH MOD players, on any
+machine - and no gate saw it, because this one used the working route and the
+two fixtures that DO drive a dialog (trackmove360.img, mppmove360.img) ship
+the module UNCOMPRESSED, where the packed and unpacked sizes are the same
+number. A defect reachable only through the route nothing tested.
+
+So --dialog is the same disk, the same module and the same byte-for-byte
+comparison, reached through Tracker's own File > Open instead. It asserts
+nothing the default arm does not; what it changes is the surface that answers
+"how big is it", which is the entire bug.
 
 This is the file the whole feature is for. 116,085 bytes is 114 of a 360KB
 disk's 354 clusters, which is why that geometry ships the module on a floppy of
@@ -45,9 +66,13 @@ import os88sym                                         # noqa: E402
 import os88build                                       # noqa: E402
 import os88lz                                          # noqa: E402
 import dispcp                                          # noqa: E402
+import os88geom                                        # noqa: E402
+import os88ui                                          # noqa: E402
 from os88fixture import need                           # noqa: E402
 from trackmove import pkg_syms                         # noqa: E402
 
+FD_ROW0, FD_ROWH, FD_TEXTX = 22, 16, 28     # the dialog's list geometry,
+                                            # tests/editmove.py's figures
 SRC = "apps/tracker/beverly.mod"
 PACKED = "build/lzf/BEVERLY.MOD"
 IMG = "build/lzmod360.img"
@@ -121,6 +146,14 @@ def host_checks(fails):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
+    ap.add_argument("--dialog", action="store_true",
+                    help="open the module through Tracker's File > Open "
+                         "(SPEC.md 38.6.1) instead of by a double-click on "
+                         "the row. The dialog answers the size from a "
+                         "different kernel surface, and that surface reported "
+                         "the PACKED size until 38.6.1 - so this arm is the "
+                         "one that fails on the defect and the double-click "
+                         "arm is the one that cannot see it")
     ap.add_argument("--fmt", default="lz4", choices=("lz4", "lzb"),
                     help="lzb wraps the module with the bit-oriented format "
                          "instead - the only way LZB's own crossing arm is "
@@ -160,26 +193,92 @@ def main():
         wx, wy = dispcp.win_rect(m, S, wins[-1])[:2]
         say("lzmod: B: lists %r" % [r[0] for r in dispcp.listing(m, S)])
 
-        # The ASSOCIATION opens Tracker and loads the module in one action -
-        # which is the requirement, not a shortcut past the File menu.
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "BEVERLY.MOD")
+        if a.dialog:
+            # --- SPEC.md 38.6.1: through the DIALOG, whose size surface is
+            # the one that was wrong. Tracker is launched with NO module and
+            # then asked for one by name, so the figure trk_fdone funds its
+            # claim from is fdlg_sizeof's and nothing else's.
+            dispcp.open_named(m, mo, S, os88marty.settle, wx, wy,
+                              "TRACKER.O88")
+            try:
+                os88marty.until(
+                    m, lambda mm: len(dispcp.win_list(mm, S)) > len(wins),
+                    "Tracker's window to open", poll=0.2, guest=40.0)
+            except os88marty.MartyError:
+                pass
+            tw = dispcp.win_list(m, S)
+            trk = [w for w in os88geom.windows(m, S)
+                   if w.visible and w.title.startswith("Tracker")]
+            if len(tw) <= len(wins) or not trk:
+                fails.append("Tracker did not open from TRACKER.O88")
+                return report(fails)
+            trackwin = trk[-1].i         # BY TITLE: this arm has two windows
+                                         # open and the Disk window it was
+                                         # launched from lands at the same
+                                         # origin, so "the newest slot" is not
+                                         # a way to tell them apart
+
+            # THE MENU AND NOT THE 'L' ACCELERATOR. Both are Tracker's own
+            # Open (SPEC.md 45), and the key does not survive being scripted:
+            # menu_pick reads the LIVE bar out of menu_bar[], which
+            # menu_layout rebuilds on every raise, and it confirms the
+            # pull-down is down AND that the highlighted item is the one meant
+            # BEFORE it releases. A key press that lands on the wrong window,
+            # or arrives while a panel is still up, does nothing and says
+            # nothing - which is an hour of looking at a test that reports
+            # "the file dialog never opened" about a kernel that is fine.
+            ui = os88ui.UI(m, mo)
+            ui.menu_pick("File", "Open...")
+            os88marty.guest_sleep(m, 3.0)
+            os88marty.settle(m)
+            dlg = [w for w in os88geom.windows(m, S)
+                   if w.visible and w.title.startswith("Open")]
+            if not dlg:
+                fails.append("the file dialog never opened: File > Open ran "
+                             "and fdlg_win is %04X"
+                             % int.from_bytes(m.read(S("fdlg_win"), 2),
+                                              "little"))
+                return report(fails)
+            # THE CONTENT ORIGIN and not the frame's: FD_* below are offsets
+            # inside the dialog's content, which is where tests/editmove.py
+            # takes them from. Using the frame origin puts the click one
+            # border and one title bar too high, which lands on the row above
+            # row 0 - and there is no row above row 0, so nothing happens and
+            # the module never loads.
+            fx, fy = dlg[-1].content[:2]
+            # row 0 is BEVERLY.MOD: the listing sorts by name (SPEC.md 19.4)
+            # and this disk's root holds BEVERLY.MOD and TRACKER.O88
+            say("  dialog     content at %d,%d" % (fx, fy))
+            mo.dblclick(fx + FD_TEXTX + 20, fy + FD_ROW0 + FD_ROWH // 2)
+            say("  route      File > Open (fdlg_sizeof's answer)")
+        else:
+            # The ASSOCIATION opens Tracker and loads the module in one action
+            # - which is the requirement, not a shortcut past the File menu.
+            dispcp.open_named(m, mo, S, os88marty.settle, wx, wy,
+                              "BEVERLY.MOD")
+            say("  route      double-click (OSAPI_FILE_FIND's size)")
+            trackwin = None             # ...the association has not opened it
+                                        # yet; the wait below is what finds it
         # WAITED FOR, NOT SLEPT THROUGH, and the budget is the GUEST's clock -
         # so a loaded box gives the machine the same 40 seconds of its own
         # time this needs, instead of thirty host seconds of which it may get
         # twenty. The timeout is swallowed because the sentence below says
         # more about what went wrong than `until`'s does.
-        try:
-            os88marty.until(m,
-                            lambda mm: len(dispcp.win_list(mm, S)) > len(wins),
-                            "Tracker's window to open", poll=0.2, guest=40.0)
-        except os88marty.MartyError:
-            pass
+        if not a.dialog:
+            try:
+                os88marty.until(
+                    m, lambda mm: len(dispcp.win_list(mm, S)) > len(wins),
+                    "Tracker's window to open", poll=0.2, guest=40.0)
+            except os88marty.MartyError:
+                pass
         wins2 = dispcp.win_list(m, S)
-        if len(wins2) <= len(wins):
+        if len(wins2) < len(wins):
             fails.append("no window opened: the association did not run, or "
                          "Tracker refused the module")
             return report(fails)
-        rec = m.read(S("wm_wins") + wins2[-1] * dispcp.WIN_SIZE,
+        if trackwin is None:
+            trackwin = wins2[-1]
+        rec = m.read(S("wm_wins") + trackwin * dispcp.WIN_SIZE,
                      dispcp.WIN_SIZE)
         pseg = rec[22] | (rec[23] << 8)
         say("  window     Tracker at %04X" % pseg)
@@ -200,9 +299,15 @@ def main():
         os88marty.settle(m)
         modseg = claimed(m)
         if not modseg:
-            fails.append("[trk_modseg] is 0: Tracker opened and holds no "
-                         "module - a read that was REFUSED looks exactly like "
-                         "this, so check the kernel carries this format")
+            fails.append(
+                "[trk_modseg] is 0: Tracker opened and holds no module - a "
+                "read that was REFUSED looks exactly like this" +
+                (", and on THIS arm the first thing to check is SPEC.md "
+                 "38.6.1: fdlg_sizeof answering the PACKED size is exactly "
+                 "this failure, and the double-click arm passes through it "
+                 "because OSAPI_FILE_FIND decodes the hint"
+                 if a.dialog else
+                 ", so check the kernel carries this format"))
             return report(fails)
         say("  module     claimed at %04X" % modseg)
 

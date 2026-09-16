@@ -34,11 +34,36 @@ make live             # build/os8088-usb.img + build/os8088.iso
 ```
 
 `make usb` and `make iso` build the two singly. The first run also fetches
-RunCPM's command processor and master disk (`make runcpm-src`) and the CP/M
-software collection (`make cpmsw`, from Google Drive) — the RUNCPM package's
-prerequisites, though only the master disk goes on the live image. Nothing
-fetched is committed, and a tree behind a proxy that blocks either fetch
-stops there.
+three payloads, all of them pinned by SHA-256 and none of them committed:
+RunCPM's command processor and master disk (`make runcpm-src`), the CP/M
+software collection (`make cpmsw`, from Google Drive) and the Z-machine story
+library Frotz plays (`make stories`). **All three go on the live image in
+full** — it is the one image here whose premise is completeness, so it carries
+every one of RunCPM's 77 master-disk files, all nine areas of the CP/M
+collection and all fifteen stories, where a floppy takes a subset chosen to
+fit. A tree behind a proxy that blocks any of the three stops there.
+
+## What is on it
+
+One 32MB FAT16 partition the kernel adopts as **C:** — 420 files using about
+6MB, so **26MB is free for your own documents** (a stick remembers what you
+save; a CD does not, §80.3).
+
+| where | what |
+|---|---|
+| `APPS/` `GAMES/` | every application and game this project builds |
+| `MEDIA/` | the documents those programs open — the module, the two `.TEX` papers, the browser's manual page, a spreadsheet, a Markdown file and a bitmap |
+| `WORD/` `SCRIBE/` `CWORD/` | the three word processors, each whole in its own folder |
+| `C64/` `APPLE2/` `RUNCPM/` `PACCMAN/` | the emulators and the C arcade port |
+| `RUNCPM/A/` | CP/M drive A: RunCPM's whole master disk, plus LADDER, CATCHUM, Nemesis, GAINA, WordStar, Turbo Pascal, ZDE, BBC BASIC and the rest |
+| `STORIES/` | all fifteen Z-machine stories, in the three folders the Frotz disk uses, with `CATALOG.TXT` |
+| `WEAVE/` `LOOM/` | the Weave runtime with its demo bundles, and the IDE with their sources |
+| `SYSTEM/` | the Task Manager, The Wire, the ten typefaces, the DOS end of the parallel link |
+| the root | the drivers and `README.TXT` |
+
+Everything this project builds is here by rule rather than by anyone
+remembering: `tests/unit/t_livefull.py` fails the build when a program is
+added and does not reach this image (§80.6).
 
 The build is deterministic: the same source produces byte-identical images,
 so a checksum comparison against a release is meaningful.

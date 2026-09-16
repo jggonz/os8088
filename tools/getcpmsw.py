@@ -121,10 +121,20 @@ SPARE_SLOTS = 16
 # at all - 297 clusters cannot hold 206KB of arcade AND the programs, and a
 # disk that dropped the programs for games would not be RunCPM's disk any
 # more. GAMES.TXT says so on the disk itself.
+#
+# ...AND "hdd", WHICH CARRIES EVERY AREA (SPEC.md 80.6). The live USB/CD is
+# one FAT16 partition of 16,324 clusters of 2,048 bytes against the 1.44MB
+# disk's 2,847 of 512, so the whole collection - 1.9MB, nine areas - is 6% of
+# it. It is spelt as a POLICY entry and not as "everything when the volume is
+# big" because every other geometry here is a DECISION written down, and the
+# live volume's decision is the only one that needed no arithmetic: there is
+# nothing to leave off. A tenth area added to AREAS lands here the moment it
+# lands there, which is the one row in this table that must never be a list.
 POLICY = {1440: ["A/5", "N/0", "G/4", "D/0", "H/3"],
           1200: ["A/5", "N/0", "G/4", "D/0"],
           720: ["A/5"],
-          360: []}
+          360: [],
+          "hdd": None}        # None: every area in AREAS, resolved in select()
 
 # The public RunCPM software collection on Google Drive: the folder that holds
 # the A..P drive tree. Only --refresh reads it as a FOLDER; an ordinary fetch
@@ -673,6 +683,20 @@ SKIP = {
 }
 
 
+def geometry_arg(text):
+    """--select/--cost/--slots' value: a floppy's KB, or the word "hdd" for
+    the live volume (SPEC.md 80.6), which carries every area."""
+    if text == "hdd":
+        return "hdd"
+    try:
+        return int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "want one of " + ", ".join(str(g) for g in sorted(POLICY, key=str)
+                                       if g != "hdd") + ' or "hdd", '
+            f"not {text!r}")
+
+
 def fail(msg):
     print(f"getcpmsw: error: {msg}", file=sys.stderr)
     sys.exit(1)
@@ -807,10 +831,11 @@ def area_cost(sizes, cbytes):
 def select(out, geometry):
     """The areas a geometry carries (POLICY), and what they cost in its own
     clusters. Answers (chosen, dropped, used, sizes)."""
-    cbytes = {360: 1024, 720: 1024, 1200: 512, 1440: 512}.get(geometry)
+    cbytes = {360: 1024, 720: 1024, 1200: 512, 1440: 512,
+              "hdd": 2048}.get(geometry)
     if cbytes is None:
         fail("--select wants one of "
-             + ", ".join(str(g) for g in sorted(POLICY))
+             + ", ".join(str(g) for g in sorted(POLICY, key=str))
              + f", not {geometry}")
     sizes = {}
     for area, _, _, _, _ in AREAS:
@@ -819,8 +844,12 @@ def select(out, geometry):
             fail(f"no {d}: run tools/getcpmsw.py -o {out} first (or make cpmsw)")
         sizes[area] = {n: os.path.getsize(os.path.join(d, n))
                        for n in sorted(os.listdir(d))}
-    chosen = [a for a, _, _, _, _ in AREAS if a in POLICY[geometry]]
-    dropped = [a for a, _, _, _, _ in AREAS if a not in POLICY[geometry]]
+    # POLICY[geometry] is None for the live volume: every area, nothing dropped
+    carry = POLICY[geometry]
+    if carry is None:
+        carry = [a for a, _, _, _, _ in AREAS]
+    chosen = [a for a, _, _, _, _ in AREAS if a in carry]
+    dropped = [a for a, _, _, _, _ in AREAS if a not in carry]
     used = sum(area_cost(sizes[a], cbytes) for a in chosen)
     # GAMES.TXT rides A/0 beside the master disk, not in a game area: it is
     # what a session reads BEFORE it knows a game area exists, and it is
@@ -920,12 +949,12 @@ def main():
     ap.add_argument("--check", action="store_true",
                     help="verify what is cached; never download")
     ap.add_argument("--list", action="store_true", help="print what is shipped and exit")
-    ap.add_argument("--select", type=int, metavar="KB",
+    ap.add_argument("--select", type=geometry_arg, metavar="KB",
                     help="print the files a 360/720/1200/1440 disk carries, "
                          "'<DRIVE>/<USER>:<path>' a line")
-    ap.add_argument("--cost", type=int, metavar="KB",
+    ap.add_argument("--cost", type=geometry_arg, metavar="KB",
                     help="print what --select would spend, in that geometry's clusters")
-    ap.add_argument("--slots", type=int, metavar="KB",
+    ap.add_argument("--slots", type=geometry_arg, metavar="KB",
                     help="print the os88disk.py --dir-slots flags --select's areas "
                          "need, so a game that saves has a slot to save into")
     ap.add_argument("--from", dest="src", metavar="DIR",
@@ -967,7 +996,8 @@ def main():
             for name in sizes[area]:
                 print(f"{disk[area]}:"
                       f"{os.path.join(args.output, *area.split('/'), name)}")
-        print(f"getcpmsw: {geometry}KB: {' '.join(chosen) if chosen else 'no games'}"
+        label = "live volume" if geometry == "hdd" else f"{geometry}KB"
+        print(f"getcpmsw: {label}: {' '.join(chosen) if chosen else 'no games'}"
               f"{' (left off ' + ' '.join(dropped) + ')' if dropped else ''}, "
               f"{used} clusters", file=sys.stderr)
         return

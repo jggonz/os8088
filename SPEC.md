@@ -32512,7 +32512,57 @@ paid for it.
 
 **Frotz ships without a story.** `tools/getstories.py` fetches those and they
 are never committed (§61), so what rides here is the interpreter; `make zdisk`
-is still where a story disk comes from.
+is still where a story disk comes from. **The live media does carry them**
+(§80.6) — that volume is 32MB and the whole library is 2,519KB, where this one
+is a floppy the library alone would not fit on.
+
+### 19.10.1 The four packages that ride no floppy do not ride this one either — the 1.2MB disk decides it
+
+`RECORDER.O88` (§35.1), `HELLO.O88` (§27.0), `PACMAN.O88` (§89) and
+`SCRIBE.O88` (§95) are each built by `all` and carried by no shipped floppy,
+and every one of those four decisions is a **360KB cluster argument**: DOT
+DELIRIUM wanted PACMAN's six of the 354, two word processors are 49KB of one
+apps disk, `HELLO` is the SDK's worked example rather than a program. This
+disk's premise is completeness, so they belong here — **and they do not fit.**
+
+**The second geometry is the binding one**, which is the whole finding.
+`build/apps-all-120.img` is 2,371 clusters against 1.44MB's 2,847, and RunCPM's
+drive `A\0` on it is the ranked fill that absorbs whatever is left over: **43
+clusters, 21 of the master disk's 77 files**. Measured:
+
+| added | `A\0` budget | what the fill chooses |
+|---|---|---|
+| — | 43 clusters | 21 master-disk files |
+| the three small packages + `$(MEDIA_EXTRA)`, 12,844 bytes | **14** | **one file: its own `LEFT-OFF.TXT`** |
+| …and SCRIBE's three, 56,048 more | **−104** | nothing |
+
+A negative budget is answered by choosing nothing and `--verify` passes on the
+result, so what ships is **a CP/M emulator with no CP/M on its drive A** —
+thirteen kilobytes of package for twenty-one programs, on a disk nobody asked
+to make that trade. And a 1.44MB-only entry is not the answer either: the two
+geometries share **one** payload list on purpose, because *two hand-maintained
+everything-lists is exactly how they drift*.
+
+**So they ride the live media instead** (§80.6), where the whole of it is 0.2%
+of a 32MB partition and none of the four arguments is about 354 clusters.
+`$(ALLAPPSARGS)` and both everything-floppies are unchanged. The same goes for
+`$(MEDIA_EXTRA)`, the category disks' documents (§24.6.2) that `MEDIA/` here
+still lacks — `SALES.SLK`, `WRITING.MD`, `SAMPLE.BMP` — so Sheet, **Chart**
+(whose only launch path is `File > Open`: it declares no association at all),
+ArtfulType and Paint open their dialog on a folder with nothing they can read
+on this disk and not on the live one.
+
+**SCRIBE's "the two would collide" was stale**, and it is recorded here because
+it is what kept it off the live media too. WORD declares `.DOC`; a second
+claimant would not be refused but would *win or lose by directory order*,
+because `kernel/assoc.inc`'s `assoc_ext_new` ends in `mov [bx+3], dl`.
+`apps/scribe/scribe.asm` designed that out at the source — it declares **no
+association block at all** and spends twenty lines saying why — so the
+collision has been impossible since the fork landed.
+
+`tests/unit/t_livefull.py` is what keeps the live side of this true (§80.6):
+its PART A sweeps `apps/` and fails the build when a directory there reaches
+no payload list.
 
 ## 20. Loadable programs — the .o88 package format
 
@@ -35285,8 +35335,39 @@ claims 1,943 bytes for a 2,682-byte document.
 |---|---|---|
 | `OSAPI_FILE_READ` | **unpacked**, in `DX:AX` | **unpacked** |
 | `OSAPI_FILE_FIND` +18 | **unpacked**, with **bit 0 of +22** set | — |
+| the Standard File dialog's completion `DX:CX` (§38.6) | **unpacked** | — |
 | `OSAPI_FILE_READ_AT` | on-disk | **raw — the packed bytes** |
 | `OSAPI_FILE_DFREE`, the free-space arithmetic | on-disk | — |
+| a LISTING row, §19.1's staged entry at +20 | on-disk — *what it occupies* | — |
+
+**THE DIALOG ROW IS NEW AND THE TABLE'S OMISSION OF IT WAS THE BUG.** §38.6
+hands every completion proc the chosen file's size precisely so that an
+application can fund its claim before the motor turns, and `fdlg_sizeof`
+answered out of the LISTING — the last row above, the one that is deliberately
+raw. So the dialog and `OSAPI_FILE_FIND` disagreed about the same file, and
+the dialog was the wrong one:
+
+> `BEVERLY.MOD` is **116,085** bytes and **42,174** lz4-packed. Tracker and
+> ModPlug claimed 42KB off the dialog, `dskw_rbody` checked that capacity
+> against the 116,085 it was about to deliver, and both printed **"File too
+> big"** for a module that fits a 640KB machine six times over.
+> **Double-clicking the same file worked**, because §54.7's association route
+> goes through `OSAPI_FILE_FIND`.
+
+`kernel/compress.inc`'s `cmz_sizes` had already written the general hazard
+down — *"a listing showing a compressed file shows what it occupies, and a
+verb claiming from that would claim a third of what the read is about to
+deliver"* — at the one call site that solved it. The dialog was the call site
+that did not, and no row of this table named it, so there was nothing to read
+the hazard off. `fdlg_sizeof` decodes the hint now (§38.6.1).
+
+**The listing row stays raw and that is not a second defect.** A listing shows
+what a file occupies because that is what a listing is about, and §19.1's
+record is meaningful only to offset 23 — `kernel/dskwin.inc` took the eight
+dead bytes off the staged stride because 256 bytes of `.lowbss` is the
+tightest rung in the kernel. Widening it back to carry three bytes of hint
+would cost every entry of every volume on every machine, to answer a question
+asked once per dialog.
 
 **`OSAPI_FILE_READ_AT` IS THE RAW PATH AND STAYS RAW**, and it has a SIZE cell
 to go with it: `OSAPI_FILE_FIND_RAW` (0x0500) is the same walk into the same
@@ -41210,11 +41291,20 @@ example, and it is built rather than carried.
 
 ### 27.0 HELLO NO LONGER SHIPS — built by `all`, carried by no floppy
 
-`HELLO.O88` is off the apps disks at every geometry, off the small apps disks,
-off `build/apps-all.img` (§19.10), off the category disks (§24.6) and off the
-live media (§80). It is not in `$(APPS_TOOLS)`, so every list derived from that
-one lost it in the same edit, and it is on no system disk either — it was never
-a core package (§24.3). This is `RECORDER.O88`'s arrangement (§35.1) reached
+`HELLO.O88` is off the apps disks at every geometry, off the small apps disks
+and off the category disks (§24.6). It is not in `$(APPS_TOOLS)`, so every list
+derived from that one lost it in the same edit, and it is on no system disk
+either — it was never a core package (§24.3).
+
+**It IS on the live media** (§80.6), and that is not a reversal of the
+paragraph above. That image is the one that is *not* curated: completeness is
+its premise, so what rides it is decided by what this project builds rather
+than by what a 360KB disk has room to demonstrate. The SDK's worked example on
+the medium somebody downloads to see what the machine is, is exactly where a
+worked example belongs; the row it occupied in `APPS/` on a floppy someone
+actually uses is not. It is **not** on `build/apps-all.img`, and §19.10.1 is
+the arithmetic that decided so — that disk's 1.2MB geometry pays for a package
+out of RunCPM's drive A. This is `RECORDER.O88`'s arrangement (§35.1) reached
 from the other end: that one is a finished application whose disks ran out of
 reasons to carry it, and this one is a **demonstration** that was on a shipped
 floppy because the SDK's first example happened to be written before there was
@@ -49340,8 +49430,14 @@ any live stream and frees the grant.
 
 ### 35.1 IT NO LONGER SHIPS — built by `all`, carried by no floppy
 
-`RECORDER.O88` is off the apps disks at every geometry, off `build/apps-all.img`
-(§19.10) and off the live media (§80). It is not in `$(APPS_TOOLS)`, so every
+`RECORDER.O88` is off the apps disks at every geometry and off
+`build/apps-all.img` (§19.10.1 has the arithmetic: that disk's 1.2MB geometry
+pays for a package out of RunCPM's drive A). **It is on the live media**
+(§80.6) — that image is not curated and completeness is its premise, so a
+package this project builds and ships nowhere would be missing from the
+release rather than left off a disk; the sentence below is about the four apps
+FLOPPIES, which is where the decision was taken and the only place it holds.
+It is not in `$(APPS_TOOLS)`, so every
 list derived from that one lost it in the same edit and none of them names it
 any more: the small disks' `$(SMALLOMIT)` (§24.5) and the field combo's
 `$(COMBO_DROP)` both had a row for it, and both rows are **gone rather than
@@ -50463,6 +50559,16 @@ the size, not the largest run** — and read. `apps/tracker` is the reference
 consumer, and its three early refusals stop nothing and free nothing, so a
 mis-picked file does not interrupt what is already playing.
 
+**That last clause is load-bearing and it depends entirely on the figure being
+right** (§45.3.1.1): past the refusals the player frees the playing module to
+make room for the new claim, so the gate is the *whole* guarantee that a
+refused load leaves the machine as it found it. When `DX:CX` was the packed
+size a compressed module walked straight through the gate and destroyed what
+was playing to then fail its own read. The answer is a correct figure and
+**not** a reordering — holding both blobs doubles the peak on the 640KB
+machine this project is calibrated for, which is what makes a large module
+unloadable rather than merely slow.
+
 Adding `DX:CX` is **backward compatible**: it is an extra *input*, and a
 callback written against the older contract simply ignores two registers it
 was already free to clobber.
@@ -50484,6 +50590,43 @@ any of the three no longer matches a live (`I_STATE` = 1) record: a package
 whose window was closed while the dialog was up has had its region freed
 (§29.2 rule 7), and its near pointer no longer means anything. Checking the
 window pointer alone would not do — window slots are reused.
+
+#### 38.6.1 The size is what the READ will deliver, not what the file occupies
+
+`DX:CX` is the figure `OSAPI_FILE_READ` is about to hand over, so for a
+**compressed** file (§20.14) it is the **unpacked** size — the same answer
+`OSAPI_FILE_FIND` +18 gives, and for the same reason: the callback funds a
+claim with it.
+
+**It was the on-disk size and that was a bug.** `fdlg_sizeof` answered out of
+the mount's staged listing entry, whose +20 is deliberately raw (§19.1), so
+every compressed file was reported at a fraction of its real length and the
+reference consumer above did exactly what this section tells it to: claimed
+that fraction, then failed its own read. `BEVERLY.MOD` — 116,085 bytes,
+42,174 lz4-packed, and the default build packs every data file — produced
+**"File too big"** in both MOD players on a machine with 500KB free, while
+**double-clicking the same file loaded it**, the association route going
+through `OSAPI_FILE_FIND` instead. §20.14.3's table now carries a row for this
+surface; it did not, which is why nothing pointed the two implementations at
+each other.
+
+**What it costs.** This routine was written to answer out of RAM with no
+floppy I/O at all, so that an app could refuse a load without the motor ever
+spinning up, and the hint is not in the listing — §19.1's record is meaningful
+to offset 23 and `kernel/dskwin.inc` took the dead bytes off that stride
+because `.lowbss` is the tightest rung in the kernel. So the routine now
+**stats the name** when the listing says it is really a file, and reads the
+three-byte hint out of `dskw_raw` exactly as `cmz_sizes` does. One directory
+walk, once, on the OK path, immediately before the caller reads the whole
+file — and usually served out of §18.95's sector cache, the listing on screen
+having just walked the same directory. A name that is **not found**, a
+**folder**, a **typed Save name** and a **redirected volume** (§62.9) all still
+cost nothing: they leave by the listing half, before the stat. The redirected
+guard is correctness and not speed — `dskw_stat`'s `DVK_FILE` arm asks the
+driver and never writes `dskw_raw`.
+
+**42 bytes of `.cold`**, no rung crossed, `KERN_CODE_MAX` untouched; on
+`kern_small` the module is `FDLG.DRV` and it costs nothing resident.
 
 ### 38.7 Lifecycle
 
@@ -62460,6 +62603,32 @@ reference build: `File too big` / `No module loaded`, not a short module.
 same disk and same clicks:** the 300KB module is `File too big` /
 `No module loaded` before, and `OS8088 300K TEST` / `Playing` after. The
 `.o88` grows 73 bytes.
+
+#### 45.3.1.1 The early refusals are the whole guarantee that a bad pick does not stop the music
+
+`trk_fdone` refuses in three places that **stop nothing, free nothing and
+never touch the disk** — wrong extension, a size past the conversion's domain,
+a size past `OSAPI_MEM_AVAIL`'s largest run — and then, past `.sizeok`, it
+**frees the playing module before it claims the new one**. So a failure after
+that point leaves the machine with no module at all, the one that was playing
+included, and **the gate is the entire guarantee that a mis-picked file does
+not interrupt what is already playing** (§38.6).
+
+**The gate was broken and this is where it showed.** `fdlg_sizeof` handed over
+the file's **packed** size (§20.14.3, §38.6.1), so a compressed module sailed
+through `.nomem2` on a third of its real figure, reached `.alloc`, freed a
+playing module and then failed the read with `FERR_BIG`. Photographed: a
+Tracker playing *Beverly Hills Cop* turned into **`No module loaded`** by a
+load that never happened.
+
+**The free does not move below the read, and that is a decision.** The new
+claim comes out of the space the old blob occupies; holding both doubles the
+peak, and on the 640KB machine this project is calibrated against that is what
+makes a large module **unloadable** rather than merely slow — which is the
+ceiling §45.3.1 exists to have removed. The refusals that cannot be
+pre-checked — `.nomem` (the heap fragmented under a figure `OSAPI_MEM_AVAIL`
+had just answered), `.noring`, a genuine `FERR_IO` — are the residue of the
+single-copy peak, not an oversight.
 
 ### 45.4 Memory layout
 
@@ -75339,6 +75508,33 @@ Tracker refuses first and touches nothing; `.toobig`'s comment claiming
 "nothing is playing that this interrupted" was already wrong and is left
 alone, because the sized path can no longer reach it for any file a real heap
 could hold.
+
+#### 56.14.1 Two refusals, two sentences — and the ordering wart that outlived them
+
+`mpp_load_name` said **"File too big"** for two different things: a size past
+the conversion's domain (`DX >= 1023`, about 64MB — genuinely a statement
+about the file) and a size past `OSAPI_MEM_AVAIL`'s largest run, which is a
+statement about **this machine, today**. The second sends the reader to look at
+the file, which is the one thing that is not the matter; closing a window
+fixes it. Tracker has had `trk_s_nofit` — **"Too big for free memory"** — for
+both halves of that distinction since §45.3.1, and ModPlug borrows the string
+now, so the two players answer the same question the same way. §47's rule
+about greying a fact and never a guess, applied to a refusal.
+
+**The ordering wart is NOT fixed and is stated rather than hidden.** §56.14
+ported Tracker's refusals but not its shape: this player stops playback and
+frees the previous claim **before** `.alloc` looks at the size, where Tracker
+refuses first and touches nothing (§45.3.1.1). `.toobig`'s comment claiming
+"nothing is playing that this interrupted" has been wrong since, and rested on
+the sized path being unreachable for any file a real heap could hold.
+
+**That premise was false for as long as `fdlg_sizeof` reported packed sizes**
+(§38.6.1): a compressed module reached `.nofit` on a third of its figure with
+the previous module already freed. The figure is correct now and the premise
+holds again — but it is a premise, where Tracker's ordering is a guarantee.
+The fix is to hoist `.alloc`'s sizing above the stop-and-free; it is not
+attempted here, and the free itself cannot simply move below the read for
+§45.3.1.1's reason.
 
 ---
 
@@ -99733,6 +99929,111 @@ boot, and a ROM that does not answer AH=08h at all (note 33's card) would
 get nothing from it. It is recorded as the next step rather than the
 absent one.
 
+### 80.6 The live volume carries EVERYTHING, and `t_livefull` is what says so
+
+The live media is the one image in this tree whose premise is
+**completeness**. Every floppy here is a curation and says so: 354 clusters is
+the geometry that runs out first, this project keeps making applications, and
+§24.6.1 makes being on a 360KB disk *a decision with a date on it* rather than
+a property of the package. The live volume is **16,324 clusters of 2,048
+bytes**, it is on demand, and it is what a release page offers to somebody who
+wants the machine rather than a floppy — so a program missing from it is
+missing from the release rather than left off a disk.
+
+**That premise had nothing holding it, and it had already failed four ways.**
+The image was 154 files of a 32MB partition with 30,950KB free:
+
+- **`THEWIRE.O88` was absent, and that was a bug rather than a decision.**
+  §92.11 keeps it off every apps floppy for a real reason — the desktop zone
+  launches it **by name out of the BOOT volume's `SYSTEM/`** (§26.7), so a copy
+  on B: is never the one that runs. `$(LIVEARGS)` took `$(ALLAPPSARGS)`'s
+  `SYSTEM/` payload wholesale, which is `$(APPSYS)` — the Task Manager alone,
+  correct for a floppy. But **the live media is one volume: it *is* the boot
+  volume.** Every live USB and CD this project has cut booted to a desktop
+  whose Wire zone opened nothing. The fix is `$(LIVESYSARGS)`, derived as the
+  difference between `$(SYSAPPS)` and `$(APPSYS)`, so a second SYSAPPS package
+  lands here the day it lands there.
+- **The four packages that ride no floppy at all** — `RECORDER.O88` (§35.1),
+  `HELLO.O88` (§27.0), `PACMAN.O88` (§89) and `SCRIBE.O88` (§95) — were off
+  this image too, and **every one of those four exclusions is a 360KB-cluster
+  argument**: DOT DELIRIUM wanted PACMAN's six, two word processors are 49KB
+  of one apps disk. None of it is true at 32MB. They ride `$(LIVEPKGARGS)`,
+  which is **live-only and not `$(ALLAPPSARGS)`** — §19.10.1 is that
+  arithmetic, and it is the everything-FLOPPY's 1.2MB geometry that refuses
+  them, not this volume. SCRIBE gets a `SCRIBE/` folder of its own because it
+  resolves `SCRIBE.OVL` in the launching instance's directory (§19.2.1), and
+  because its `WELCOME.DOC` is a second copy of the name `WORD/` carries.
+- **`FROTZ.O88` rode `APPS/` with nothing to play.** The library is fetched
+  rather than committed (§61), which is why it was skipped — and that is not a
+  reason on a target that already acquires two other fetches. All fifteen
+  stories are 2,519KB, more than any floppy holds, which is why the Makefile
+  cuts the list per geometry; **a cut on a volume with 26MB free is a decision
+  nobody took.** They ride `STORIES/` in the story disk's own three folders,
+  with `BRONZE.PIX` in `STORIES/ART/` (§61.7), and the list is read out of
+  `getstories.py`'s MANIFEST at recipe time rather than written down again.
+- **Both CP/M fills were priced in floppy clusters.** `getruncpm.py --select`
+  and `getcpmsw.py --select` take a geometry and fill to its budget, and the
+  recipe passed `1440` — so a 32MB partition carried **62 of the master disk's
+  77 files, with a `LEFT-OFF.TXT` on it naming the other fifteen**, and no CP/M
+  software at all, the games being a fetch this target had never acquired.
+  Each tool has an **`hdd`** arm now: every area, the whole master disk, a
+  megabyte held back to save into, and the three files above the 65,535-byte
+  record limit (§74.3) still named in `LEFT-OFF.TXT`, which is the only honest
+  entry left in it.
+
+**The image is 420 files and 3,216 of 16,324 clusters** — 26,216KB still free,
+which matters: a stick is writable (§80.3) and the user's own documents go on
+it, so a payload that filled it would be a decision to take rather than to
+discover.
+
+**And `MEDIA/` finally has documents for the programs that open one.**
+`$(APPS_DATA)` is TeXPad's two `.TEX` files, the browser's page and the module;
+§24.6.2 wrote `SALES.SLK`, `WRITING.MD` and `SAMPLE.BMP` for the category
+disks and they never reached the image that is supposed to carry everything —
+so Sheet, **Chart** (whose *only* launch path is File > Open: it declares no
+association at all), ArtfulType and Paint all shipped here with an empty folder
+under the dialog that opens by default (§38.10). `$(MEDIA_EXTRA)` is derived
+from the category disks' own list in both `PKGZ` arms at once, and rides
+`$(LIVEPKGARGS)` with the four packages for §19.10.1's reason.
+
+**`$(LIVEFOLDERS)` is derived too, and is not `$(ALLAPPSFOLDERS)`.**
+`getruncpm.py --folders` prices every folder directory at a cluster, and this
+tree has folders the everything-floppy has not: `SCRIBE/`, `STORIES/` and its
+four, and **nine** CP/M areas under `RUNCPM/A` where the floppy has none. At
+26MB free an under-priced fill changes nothing today, which is precisely why it
+would sit there being wrong — so it is derived off `$(LIVEARGS)` itself plus
+the two fetch tools' own answers, the way `$(ALLAPPSDIRS)` is.
+
+**`tests/unit/t_livefull.py` is the enforcement, and it is two halves that are
+not interchangeable.** Nothing in this tree had ever read the live image,
+which is why four separate gaps sat in it at once.
+
+- **PART A asks `make` what the payload lists say and needs no image**, through
+  a `print-%` target whose whole existence is this gate: a check that answered
+  by re-implementing these lists in Python would be a *second* list to keep in
+  step, which is the failure it is written to catch. It sweeps `apps/` and
+  requires a package on the live media for every directory there, the name
+  derived mechanically (uppercase, first eight characters — `solitaire` is the
+  only one the truncation moves). **This is the row that fails the build on the
+  day somebody adds `apps/newthing/` and does not put it on the image**, and it
+  runs in the FAST tier, where no live image exists.
+- **PART B walks `build/os8088-usb.img`** when `make usb` has built one,
+  because a list can name a file that never lands — a folder the recipe forgot,
+  a `--select` that truncated. It checks every promised basename against the
+  FAT16 directory, every story against `getstories`' MANIFEST, every area
+  against `getcpmsw`'s `AREAS`, and every master-disk file against the fetch's
+  own `A0.list`. That last one is the check that a floppy-priced selection
+  cannot pass, and a truncated selection reads exactly like a working disk.
+
+**The exemptions are a list with a reason each**, which is `$(CORE_SYSONLY)`'s
+shape (§24.3) borrowed: `apps/cc` is the C SDK, `apps/fptest` and
+`apps/imgtest` are capability gates, and `apps/wire` is WIREFRAME — an
+*instrument* and not an application (§78.9), the only entry there that is a
+decision about the program rather than about the folder. A package leaves the
+live media by being written down, which cannot be done by accident; and an
+exemption naming a directory that no longer exists fails too, because an
+exception excusing nothing is how an exception list rots.
+
 ## 81. SHEET — the spreadsheet (`apps/sheet/sheet.asm`)
 
 A worksheet package: a grid of cells, formulas over them, formats on them, a
@@ -112720,7 +113021,14 @@ What the measurements say about the design, in the order it matters:
 
 `PACMAN.O88` is a native 8086 port of Roklan's Atari computer **disk version,
 revision 3.0, 10/03/82**, from `atari-pacman`, using only the public package
-ABI. It ships in `GAMES/` on every software-disk geometry. Prefix `pm_`; one
+ABI. **It came off the apps floppies while DOT DELIRIUM (§93) was developed** —
+the 360KB disk had eight spare clusters of 354, this package is six of them and
+that one is twelve — and it rides `GAMES/` on the live media, the one image
+that is not curated (§80.6).
+`all` names `$(BUILD)/pacman.o88` directly, so it keeps being built; taking it
+off the floppies is a 354-cluster decision and none of it is an argument about
+a 32MB partition. It is **not** on `build/apps-all.img` — that disk's 1.2MB
+geometry pays for a package out of RunCPM's drive A (§19.10.1). Prefix `pm_`; one
 segment per instance; no kernel changes, external ROM or heap claims.
 Provenance, the upstream license and reproducible extraction are in
 `apps/pacman/README.md` and `tools/pacman_assets.py`.
@@ -118126,12 +118434,31 @@ build of the same source and not a rename of the first: `SCRIBE.O88` and
 
 `make scribe` builds the package, `make scribedisk` its floppy in all four
 geometries. The **package** is in `all` and the **floppy** is not: `scribe.o88`
-is named there for `wire.o88`'s and `recorder.o88`'s reason — it ships on no
-disk, so building it is the only thing that keeps it assembling — while SCRIBE
-is on no shipped disk because WORD is the one that ships. Putting both on the
-apps floppy would spend 49KB to show two word processors that at the fork point
-differ only in their name. `apps/cword` is on demand for the same reason
-(§73.12).
+is named there for `wire.o88`'s and `recorder.o88`'s reason — building it is
+the only thing that keeps it assembling — while SCRIBE is on no shipped FLOPPY
+because WORD is the one that ships there. Putting both on the apps floppy would
+spend 49KB to show two word processors that at the fork point differ only in
+their name. `apps/cword` is on demand for the same reason (§73.12).
+
+**It IS on the live media** (§80.6), in a `SCRIBE/` folder of its own beside
+`WORD/` — that image is not curated and 49KB is not an argument about a 32MB
+partition. It has to be its own folder rather than a second `.O88` in `APPS/`:
+`SCRIBE.OVL` is resolved in the launching instance's directory (§19.2.1),
+which is the same requirement that gives each Word a folder, and its
+`WELCOME.DOC` is a second copy of the name `WORD/` already carries. It is
+**not** on `build/apps-all.img`: its three files are 56,048 bytes and take that
+disk's 1.2MB RunCPM budget to −104 clusters (§19.10.1).
+
+**And the two cannot collide, which is §95.2's whole subject and was for a
+while believed the other way round.** The everything-disk kept SCRIBE off with
+a note saying WORD and SCRIBE "would collide" — a claim that had been false
+since the fork landed, because this package declares **no association block at
+all** and says in twenty lines of `scribe.asm` why: `assoc_ext_new` ends in
+`mov [bx+3], dl`, so a second claimant on `.DOC` overwrites rather than being
+refused, and the owner of a double-click would be decided by directory order
+and would move when a disk was rebuilt. WORD keeps the double-click. SCRIBE
+reads and writes exactly the bytes Word does through `File > Open` and `Save
+As`, and `.RTF` is its own default (§95.4).
 
 ### 95.1 It carries the `sc_` prefix and the `sc*.inc` filenames
 

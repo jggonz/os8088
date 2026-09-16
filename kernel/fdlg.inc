@@ -880,9 +880,12 @@ fdlg_commit:
     push es                     ; the callback owes us nothing (SPEC.md
     push bp                     ; 38.6), and ES is the one register the
     mov bp, cx                  ; kernel cannot shrug off (SPEC.md 1)
-    call fdlg_sizeof            ; DX:CX = the chosen file's size, 0 if this
-                                ; listing has no such file (a typed Save
-                                ; name, a folder). A RAM lookup - no I/O.
+    call fdlg_sizeof            ; DX:CX = what the READ will deliver (SPEC.md
+                                ; 20.14.3: the unpacked size for a compressed
+                                ; file), 0 if this listing has no such file -
+                                ; a typed Save name, a folder. A RAM lookup,
+                                ; plus ONE directory walk when it is really a
+                                ; file, for the hint
     mov al, [fdlg_mode]         ; the callback's contract: AL = mode,
     mov ah, 0                   ; SI = its window, ES:DI = the name - ES,
     mov si, [fdlg_rqwin]        ; because for a package DS is its own
@@ -979,16 +982,53 @@ fdlg_rows:
 ; fdlg_sizeof - how big is the file the box now names? (SPEC.md 38.6)
 ;
 ; in:  fdlg_name = the chosen name, NUL, as the callback will receive it
-; out: DX:CX = its size in bytes, or 0:0 when this listing has no such FILE -
-;      a name typed for a Save, a folder, or anything not found. All other
-;      registers preserved.
+; out: DX:CX = the size OSAPI_FILE_READ will deliver - the UNPACKED size for a
+;      compressed file (SPEC.md 20.14.3), not the on-disk one - or 0:0 when
+;      this listing has no such FILE: a name typed for a Save, a folder, or
+;      anything not found. All other registers preserved.
 ;
-; A LISTING lookup, not a directory search: the mount snapshot is already in
-; RAM (SPEC.md 38.2 - modality is what lets this module read the global
-; snapshot directly), so this costs no floppy I/O at all. That is the whole
-; point of handing the size to the callback - an app can refuse a load it
-; cannot fund WITHOUT the motor ever spinning up, where before it had to
-; claim a buffer and let dskw_read walk the directory to be told FERR_BIG.
+; THE ANSWER IS WHAT THE READ WILL DELIVER, NOT WHAT THE FILE OCCUPIES
+; (SPEC.md 20.14.3, 38.6.1). The listing lookup below is where this routine
+; starts and used to end, and on a COMPRESSED file its answer is wrong in the
+; one direction that matters: SPEC.md 19.1's staged entry carries the RAW
+; on-disk size at offset 20, so the callback sized its claim off the packed
+; length and OSAPI_FILE_READ then refused the load it had just funded.
+; BEVERLY.MOD is 116,085 bytes and 42,174 lz4-packed; Tracker and ModPlug
+; claimed 42KB, dskw_rbody checked it against 116,085, and both printed
+; 'File too big' for a module that fits a 640KB machine six times over.
+; Double-clicking the same file WORKED, because assoc goes through
+; OSAPI_FILE_FIND - which decodes the hint (api_file_find's own comment says
+; an application "must be told what the file becomes, not what it occupies").
+; The two kernel surfaces disagreed and the dialog was the wrong one.
+;
+; cmz_sizes (kernel/compress.inc) states the general hazard in as many words
+; and is the precedent for the shape used here: stat the name, and read the
+; three-byte hint out of the raw entry dskw_stat leaves in dskw_raw.
+;
+; WHAT IT COSTS, and it is a real cost rather than a free correction. The
+; listing half is a RAM lookup - the mount snapshot is already there (SPEC.md
+; 38.2 - modality is what lets this module read the global snapshot directly)
+; - and the promise this routine was written with was "no floppy I/O at all",
+; so that an app could refuse a load it cannot fund without the motor ever
+; spinning up. THAT PROMISE IS NOW ONE DIRECTORY WALK for a name that is
+; really a file, on a path that is about to read the whole file: about 400ms
+; on a 4.77MHz 8088 if it misses, and it usually will not - the listing on
+; screen walked the same directory, so SPEC.md 18.95's sector cache is holding
+; it. It is called ONCE, from the OK path, and it is the identical trade
+; trk_sizeof and mpp_sizeof already took and documented in the packages.
+;
+; The 24-byte listing stride is why the hint cannot simply be staged instead:
+; SPEC.md 19.1's record is meaningful to offset 23 and kernel/dskwin.inc took
+; the eight dead bytes off it precisely because 256 bytes of `.lowbss` is the
+; tightest rung in the kernel. Widening it back for three bytes of hint would
+; cost every entry on every volume, on every machine, to answer a question
+; asked once per dialog.
+;
+; NOT-FOUND, A FOLDER AND A TYPED SAVE NAME ALL STILL COST NOTHING: they leave
+; by the listing half, before the stat. So does a REDIRECTED volume (SPEC.md
+; 62.9), and there the guard is CORRECTNESS and not speed - dskw_stat's
+; DVK_FILE arm asks the driver and never touches dskw_raw, so the hint read
+; would be whatever the last FAT stat left in it.
 ; -----------------------------------------------------------------------------
 fdlg_sizeof:
     push ax
@@ -1004,6 +1044,30 @@ fdlg_sizeof:
     jae .out                    ; loop, to read a size out of the entry it had
     mov cx, [si+20]             ; just staged. A folder has no size to report;
     mov dx, [si+22]             ; the size dword is at offsets 20/22
+
+    ; --- ...and the UNPACKED size when there is a hint (SPEC.md 20.14.3) ----
+    cmp byte [dsk_vkind], DVK_FILE
+    je .out                     ; a redirected volume: no raw entry to read a
+                                ; hint out of, and nothing on one is compressed
+    push bx                     ; dskw_stat clobbers AX BX CX DX and nothing
+    push dx                     ; else; the listing's answer is banked because
+    push cx                     ; a refusal leaves DX:CX undefined
+    mov si, fdlg_name
+    call COLD_SEG:dwf_dskw_stat ; AL = attribute, BX = cluster, DX:CX = size,
+                                ; and the 32 raw bytes in dskw_raw
+    pop cx                      ; `pop` leaves the flags (the same fact
+    pop dx                      ; api_file_find relies on), so the stat's own
+    pop bx                      ; answer is still readable below
+    jc .out                     ; it went away under us: keep the one answer
+                                ; this routine has always given
+    mov al, [dskw_raw+DSK_R_CZM]    ; the mark LESS its format (SPEC.md
+    sub al, DSK_CZ_MARK             ; 20.14.1): 0x5A and 0x5B both pass
+    cmp al, LZ_LZB
+    ja .out                     ; stored plain: what it occupies is what it
+                                ; becomes, and the listing already said so
+    mov cx, [dskw_raw+DSK_R_CZL]    ; U, 24 bits out of the hint
+    mov dl, [dskw_raw+DSK_R_CZH]
+    xor dh, dh
 .out:
     pop di
     pop si

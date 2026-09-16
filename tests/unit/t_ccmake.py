@@ -75,13 +75,25 @@ first second: cc-toolchain
             overlay.unlink()
 
     def test_fresh_live_dependency_graph(self):
+        """`make live` in a fresh tree acquires ALL FOUR of its inputs.
+
+        The compiler, RunCPM's master disk, the CP/M software collection and
+        the Frotz story library. The last two are new in SPEC.md 80.6 and this
+        row asserted their ABSENCE until then - the Makefile said "do not fetch
+        that unused payload", which was true while the live image carried
+        neither. It carries both now, because that image is the one whose
+        premise is completeness: FROTZ.O88 rode APPS/ on it with nothing to
+        play, and RUNCPM/A held the master disk's toolchain and no software.
+        A fetch missing from the graph is how a live image builds with an
+        empty folder in it and verifies clean."""
         result = subprocess.run(['make', '--dry-run', '-j4', 'live',
                                  'BUILD=' + str(self.root / 'fresh-live')],
                                 cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('tools/setup-cc.sh --build-dir', result.stdout)
         self.assertIn('tools/getruncpm.py -o', result.stdout)
-        self.assertNotIn('tools/getcpmsw.py -o', result.stdout)
+        self.assertIn('tools/getcpmsw.py -o', result.stdout)
+        self.assertIn('tools/getstories.py -o', result.stdout)
 
     def test_setup_failure_stops_dependent_targets(self):
         self.setup.write_text('#!/bin/sh\necho setup-failed >&2\nexit 7\n')

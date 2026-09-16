@@ -1924,7 +1924,7 @@ WEAVEDEMOS := apps/weave/demos
 WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(SHIPIMGS) $(BUILD)/wire.o88 $(BUILD)/recorder.o88 \
      $(BUILD)/hello.o88 $(BUILD)/pacman.o88 \
-     $(BUILD)/imgtest.o88 $(BUILD)/scribe.o88 \
+     $(BUILD)/imgtest.o88 $(BUILD)/scribe.o88 $(BUILD)/livepayload.txt \
      $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
      cc-note test-fast
 # wire.o88 is named here and NOWHERE else in `all`, because WIREFRAME is built
@@ -9991,6 +9991,28 @@ $(ZDATA)/SAMPLE.BMP: $(BUILD)/SAMPLE.BMP tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
 	@mkdir -p $(ZDATA)
 	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
 
+# THE OFFICE DISK'S DOCUMENTS THAT MEDIA/ DOES NOT ALREADY HAVE (SPEC.md
+# 24.6.2 -> 19.10). $(APPS_DATA) is the four files every apps disk carries in
+# MEDIA/, and it is TeXPad's pair, the browser's page and the module - so
+# Sheet, Chart, ArtfulType and Paint all ship on the everything disk and the
+# live media with NOTHING IN THE FOLDER THEIR OPEN DIALOG STARTS ON (SPEC.md
+# 38.10). The category disks fixed that at 360KB and the fix never reached
+# the two images that are supposed to carry everything.
+#
+# Derived rather than listed, in both PKGZ arms at once: the filter drops the
+# two .TEX files $(APPS_DATA) already names and the welcome document, which
+# is in WORD/ beside the program that opens it and would be a second copy
+# here. What is left is SALES.SLK (Sheet's, and CHART'S ONLY LAUNCH PATH -
+# it declares no association and File > Open is all it has), WRITING.MD and
+# SAMPLE.BMP. The %WELCOME.DOC pattern matches $(BUILD)/ and $(ZDATA)/ alike,
+# so this line is right in the plain arm and the packed one without being
+# written twice - which is the defect the PKGZ block above carries a whole
+# paragraph about.
+MEDIA_EXTRA := $(filter-out $(APPS_DATA) %WELCOME.DOC,$(OFFICE_DATA))
+$(if $(MEDIA_EXTRA),,$(error MEDIA_EXTRA is empty - the filter above no \
+     longer matches $(OFFICE_DATA), so the everything disk and the live \
+     media have lost Sheet's, Chart's, ArtfulType's and Paint's documents))
+
 # Paint's sample is DRAWN rather than committed (tools/os88sample.py's own
 # header carries the argument, which is os88logo.py's): a bitmap's defects
 # are entirely visual and a blob in the tree is one nobody can review. The
@@ -10429,6 +10451,39 @@ ALLAPPSIMG120 := $(BUILD)/apps-all-120.img
 # indistinguishable from broken" exactly. The apps floppies are the case that
 # does NOT need it, because a machine reading one has the system disk in the
 # other drive.
+#
+# THE FOUR PACKAGES THAT RIDE NO FLOPPY DO NOT RIDE THIS ONE EITHER, AND THAT
+# IS ARITHMETIC RATHER THAN TASTE (SPEC.md 19.10.1). RECORDER (SPEC.md 35.1),
+# HELLO (27.0), PACMAN (89) and SCRIBE (95) are built by `all` and carried by
+# no shipped disk. Completeness IS this disk's premise, so they were put on it
+# - and THE SECOND GEOMETRY IS THE BINDING ONE. build/apps-all-120.img is
+# 2,371 clusters against 1.44MB's 2,847, and its RunCPM drive A is whatever is
+# left after everything else: 43 clusters, 21 of the master disk's 77 files.
+#
+#   the three small ones   12,844 bytes with $(MEDIA_EXTRA) -> A/0 budget 43
+#                          clusters down to 14, and the fill chooses ONE FILE:
+#                          its own LEFT-OFF.TXT. Twenty-one programs to none.
+#   SCRIBE                 56,048 more -> the budget goes NEGATIVE, -104.
+#
+# A negative budget is answered by choosing nothing, the image verifies clean,
+# and what ships is a CP/M emulator with no CP/M on its drive A. So thirteen
+# kilobytes of package would have cost that disk RunCPM, which is not a trade
+# anybody asked for - and the two geometries share ONE payload list on purpose
+# ("two hand-maintained everything-lists is exactly how they drift", above),
+# so a 1.44MB-only entry here is not the answer either.
+#
+# THEY RIDE THE LIVE MEDIA INSTEAD ($(LIVEPKGARGS), SPEC.md 80.6), where the
+# whole of it is 0.2% of a 32MB partition and the four cluster arguments that
+# took them off the floppies are arguments about 354 clusters. This list and
+# both everything-floppies are BYTE-IDENTICAL to what they were.
+#
+# THE "THEY WOULD COLLIDE" CLAIM ABOUT SCRIBE WAS STALE, and it is worth
+# recording because it is what kept it off the LIVE media too:
+# apps/scribe/scribe.asm:148 declares NO association block at all, and says in
+# twenty lines why - assoc_ext_new ends in `mov [bx+3], dl`, which OVERWRITES
+# rather than refuses, so a second claimant on .DOC would win or lose by
+# directory order. Scribe designed the collision out at the source; the disk
+# list went on believing in it.
 ALLAPPSFILES := $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
@@ -10550,22 +10605,134 @@ $(ALLAPPSIMG120): $(ALLAPPS) tools/os88disk.py
 USBIMG := $(BUILD)/os8088-usb.img
 LIVEISO := $(BUILD)/os8088.iso
 
-LIVEARGS := $(DRIVERS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) $(ALLAPPSARGS)
+# --- WHAT THE LIVE VOLUME CARRIES THAT THE EVERYTHING-FLOPPY CANNOT ---------
+# SPEC.md 80.6. The paragraph above is still the rule - the payload is
+# DERIVED from the shipped lists and never re-typed here - and this is the
+# part of it the rule could not express, because three of these payloads do
+# not fit 1.44MB and one of them is wrong on a floppy by definition.
+#
+# THE WIRE (SPEC.md 92.11) is the one that was a BUG rather than a gap. It is
+# a SYSAPPS package: the desktop zone launches it BY NAME out of the BOOT
+# volume's SYSTEM/ (SPEC.md 26.7), so a copy on an apps floppy is never the
+# one that runs and $(APPSYS) rightly leaves it off. But the live media is ONE
+# VOLUME - it is the boot volume - so taking $(ALLAPPSARGS)' SYSTEM/ payload
+# wholesale took the apps FLOPPY's answer to a question the floppy was the
+# only reason for, and every live USB and CD this project has cut booted to a
+# desktop whose Wire zone opened nothing. Derived as the difference between
+# the two lists, so a second SYSAPPS package lands here the day it lands
+# there and neither list is edited twice.
+LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS)))
+# THE FOUR PACKAGES THAT RIDE NO FLOPPY, AND THE DOCUMENTS MEDIA/ LACKED.
+# RECORDER (SPEC.md 35.1), HELLO (27.0), PACMAN (89) and SCRIBE (95) are built
+# by `all` and shipped nowhere, and every one of those decisions is an argument
+# about 354 clusters - DOT DELIRIUM wanted PACMAN's six of them, two word
+# processors are 49KB of one apps disk, HELLO is a worked example rather than a
+# program. Here they are 0.2% of the partition.
+#
+# HERE AND NOT ON $(ALLAPPSARGS), which was the first shape and is wrong: the
+# everything-FLOPPY is 2,371 clusters at its binding geometry and its RunCPM
+# drive A is the fill that absorbs everything else, so thirteen kilobytes of
+# package took A/0 from 21 master-disk files to its own LEFT-OFF.TXT and
+# SCRIBE took the budget NEGATIVE. The note over $(ALLAPPSFILES) has the
+# arithmetic. A live volume with 26MB free has no such trade in it.
+#
+# SCRIBE GETS A FOLDER rather than a second .O88 in APPS/: SCRIBE.OVL is
+# resolved in the launching instance's directory (SPEC.md 19.2.1), the same
+# requirement that gives each Word one - and its WELCOME.DOC is a second copy
+# of the name WORD/ already carries, which only separate folders allow.
+#
+# $(MEDIA_EXTRA) is the category disks' documents (SPEC.md 24.6.2): SALES.SLK,
+# WRITING.MD and SAMPLE.BMP, so that Sheet, Chart, ArtfulType and Paint do not
+# open their File dialog on a folder with nothing they can read (SPEC.md
+# 38.10). Chart is the sharp case - it declares no association, so File > Open
+# is its ONLY launch path and a spreadsheet on the volume is the one thing it
+# must have.
+LIVEPKGDEPS := $(BUILD)/recorder.o88 $(BUILD)/hello.o88 $(BUILD)/pacman.o88 \
+               $(SCRIBEDISK) $(MEDIA_EXTRA)
+LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
+               GAMES:$(BUILD)/pacman.o88 \
+               $(addprefix SCRIBE:,$(SCRIBEDISK)) \
+               $(addprefix MEDIA:,$(MEDIA_EXTRA))
+$(if $(LIVESYSARGS),,$(error LIVESYSARGS is empty - $(SYSAPPS) and $(APPSYS) \
+     no longer differ, so THEWIRE.O88 is either on every apps disk or on \
+     none; SPEC.md 92.11 says it is on neither))
+
+# THE WHOLE STORY LIBRARY (SPEC.md 61, 80.6). FROTZ.O88 rides APPS/ on this
+# volume and has ridden it since the everything disk was built - WITH NOTHING
+# TO PLAY. The stories are fetched and never committed, which is why they were
+# skipped; it is not a reason, because this target already acquires two other
+# fetches. All fifteen are 2,519KB, more than any floppy holds, which is why
+# the Makefile has a cut per geometry - and a cut on a volume with 30MB free
+# is a decision nobody took. The list is read out of the MANIFEST at recipe
+# time (--disk-args), so a sixteenth story is on the live media without a
+# sixteenth list, and BRONZE.PIX rides ART/ exactly as it does on the story
+# disk (SPEC.md 61.7).
+LIVESTORYDIRS := --folder STORIES/SAVES
+LIVESTORYARGS := STORIES:$(BUILD)/zcat/live/CATALOG.TXT \
+                 STORIES/ART:$(BUILD)/BRONZE.PIX
+
+$(BUILD)/zcat/live/CATALOG.TXT: tools/getstories.py
+	@mkdir -p $(dir $@)
+	python3 tools/getstories.py --catalog $@
+
+LIVEARGS := $(DRIVERS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) $(ALLAPPSARGS) \
+            $(LIVESYSARGS) $(LIVEPKGARGS) $(LIVESTORYARGS)
+
+# ...and the live volume's own FOLDER COUNT, which is NOT $(ALLAPPSFOLDERS).
+# getruncpm.py --folders prices every folder directory at a cluster, and the
+# live tree has folders the everything-floppy does not: SCRIBE/, STORIES/ and
+# its four, and getcpmsw.py's nine areas under RUNCPM/A instead of none. At
+# 26MB free the under-pricing changes nothing today, which is exactly why it
+# would sit there being wrong - so it is DERIVED the way $(ALLAPPSDIRS) is,
+# off $(LIVEARGS) itself plus the --folder flags the recipe passes, and one
+# parent level (the tree nests one deep; RUNCPM/A/0 is why STORIES/ART needs
+# no third).
+LIVEDIRS := $(sort $(foreach a,$(LIVEARGS), \
+                     $(if $(findstring :,$a),$(firstword $(subst :, ,$a)))) \
+                   DOCS RUNCPM/A SYSTEM/APPDATA STORIES/SAVES \
+                   $(foreach d,$(shell python3 tools/getcpmsw.py --slots hdd 2>/dev/null), \
+                     $(if $(findstring /,$d),RUNCPM/$(firstword $(subst =, ,$d)))) \
+                   $(sort $(foreach a,$(shell python3 tools/getstories.py \
+                                        --disk-args STORIES/ 2>/dev/null), \
+                             $(firstword $(subst :, ,$a)))))
+LIVEDIRS := $(sort $(LIVEDIRS) \
+                   $(patsubst %/,%,$(filter-out ./,$(dir $(LIVEDIRS)))))
+LIVEFOLDERS := $(words $(LIVEDIRS))
 
 usb: $(USBIMG)
 iso: $(LIVEISO)
 live: $(USBIMG) $(LIVEISO)
 
+# THE SELECTIONS ARE "hdd" AND NOT 1440 (SPEC.md 80.6). Both fetch tools
+# price their fill in the target geometry's clusters, and this volume is
+# 16,324 of 2,048 bytes against a 1.44MB floppy's 2,847 of 512 - so asking
+# them for a floppy's answer truncated both: the live image carried 62 of the
+# master disk's 77 files, with a LEFT-OFF.TXT on it naming the other fifteen,
+# on a partition with 30MB spare; and it carried NO CP/M software at all,
+# because the games are a separate fetch this target had never acquired. The
+# "hdd" arm of each tool carries everything and leaves a megabyte to save
+# into. The GAMES are priced first and the master disk fills what is left,
+# which is RUNCPMIMG's order and is here for its reason.
 $(USBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
            $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
+           $(SYSAPPS) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
+           $(BUILD)/zcat/live/CATALOG.TXT $(BUILD)/cpmsw.stamp \
+           tools/getcpmsw.py tools/getstories.py \
            $(ALLAPPS) tools/os88disk.py
-	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select 1440 --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve-clusters $(ALLAPPSEXTRA) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
-	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select 1440 chose nothing"; exit 1; }; \
+	gsel="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --select hdd | sed 's,^,RUNCPM/,')"; \
+	gcost="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --cost hdd)"; \
+	gslot="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --slots hdd | sed 's,--dir-slots ,--dir-slots RUNCPM/,g')"; \
+	[ -n "$$gsel" ] || { echo "usb: getcpmsw.py --select hdd chose nothing"; exit 1; }; \
+	zsel="$$(python3 tools/getstories.py -o $(STORYDIR) --disk-args STORIES/)"; \
+	[ -n "$$zsel" ] || { echo "usb: getstories.py --disk-args printed nothing"; exit 1; }; \
+	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select hdd --dir-slots $(RUNCPMSLOTS) --folders $(LIVEFOLDERS) --reserve-clusters $$gcost --reserve $(ALLAPPSFILES) $(LIVEPKGDEPS) $(SYSAPPS) | sed 's,^,RUNCPM/A/0:,')"; \
+	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select hdd chose nothing"; exit 1; }; \
 	python3 tools/os88disk.py -o $@ --hdd \
 		--mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
 		--kernel $(KERNFILE) \
-		--deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) \
-		--folder DOCS $(APPDATAFOLDER) $(LIVEARGS) $$sel
+		--deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) $$gslot \
+		--folder DOCS $(APPDATAFOLDER) $(LIVESTORYDIRS) \
+		$(LIVEARGS) $$sel $$gsel $$zsel $(CPMSW) $(STORIES)
 	@python3 tools/os88disk.py --verify-hdd $@
 	@echo "usb:    $@ - the live USB image (SPEC.md 80.1). Write it raw"
 	@echo "        to a stick and boot a legacy-BIOS machine from it; the"
@@ -10587,6 +10754,42 @@ $(LIVEISO): $(USBIMG) $(SYSDOCRAW) tools/os88iso.py
 # so and takes a path (an unpacked release zip has the same files).
 burn:
 	@python3 tools/os88burn.py
+
+# `make print-ALLAPPSARGS` - one variable's expansion, on stdout, and nothing
+# else. FOR A PERSON AT A PROMPT, and deliberately not for a test: `make` with
+# any knob in the environment re-evaluates $(VIDSTAMP), whose rule DELETES
+# $(BUILD)/kernel.bin and every boot sector when the knob set differs (see the
+# BUILD= note at the top of this file), so a gate that shelled out to make
+# could rewrite build/ under any row running beside it. tests/unit/t_registry
+# refuses such a row by name, which is how this was caught.
+#
+# @-prefixed and with no prerequisites, so it builds nothing and prints one
+# line. An undefined variable prints an empty line rather than failing.
+.PHONY: print-%
+print-%:
+	@echo '$($*)'
+
+# --- build/livepayload.txt: THE LIVE MEDIA'S PAYLOAD, WRITTEN DOWN -----------
+# SPEC.md 80.6. tests/unit/t_livefull.py's PART A needs to know what
+# $(LIVEARGS) says without running make, for the reason one paragraph up - so
+# the BUILD emits it, as an ordinary artefact with the Makefile as its only
+# prerequisite. That is the derived answer rather than a second list: editing
+# any variable that feeds $(LIVEARGS) rewrites this file in the same `make`,
+# and the gate reads what the build actually computed.
+#
+# One `KEY value` line per entry, which is what lets a reader diff two of them
+# and what keeps the parse in the gate down to a split. It is in `all` and
+# costs a printf, so a tree that has never built a live image still has the
+# list the live image would be built from - which is the whole point: PART A
+# is the half that must fail on the day a package is added, and `make usb`
+# needs the C toolchain and three fetches that a plain clone has none of.
+$(BUILD)/livepayload.txt: Makefile | $(BUILD)
+	@{ printf 'LIVEARGS %s\n' $(LIVEARGS); \
+	   printf 'ALLAPPSARGS %s\n' $(ALLAPPSARGS); \
+	   printf 'LIVESYSARGS %s\n' $(LIVESYSARGS); \
+	   printf 'LIVEPKGARGS %s\n' $(LIVEPKGARGS); \
+	   printf 'MEDIA_EXTRA %s\n' $(MEDIA_EXTRA); } > $@.tmp
+	@mv -f $@.tmp $@
 
 # Discover built images and attached floppy/USB/CD media without building.
 .PHONY: imager

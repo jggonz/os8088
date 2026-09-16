@@ -376,11 +376,40 @@ make live     #   plus the allapps payload on one FAT16 partition that the
               #   kernel adopts as C:. Written raw to a stick it boots a
               #   legacy-BIOS machine; `iso` wraps the SAME image in an El
               #   Torito hard-disk-emulation CD, `live` builds both. On
-              #   demand for allapps' reason and needing the same fetch
-              #   (`make runcpm-src` once, first). A CD cannot write, and
-              #   §80.3 says what that costs; QEMU boots them with
+              #   demand for allapps' reason. It acquires its THREE fetches
+              #   itself now (RunCPM's master disk, the CP/M software
+              #   collection and the Frotz stories - `make runcpm-src cpmsw
+              #   stories` is the same thing by hand). A CD cannot
+              #   write, and §80.3 says what that costs; QEMU boots them with
               #   `-drive file=build/os8088-usb.img,format=raw -boot c` /
               #   `-cdrom build/os8088.iso -boot d`
+              #
+              #   **IT IS THE ONE IMAGE WHOSE PREMISE IS COMPLETENESS**
+              #   (§80.6), and it carries MORE than the everything-floppy:
+              #   THEWIRE.O88 in SYSTEM/ (a SYSAPPS package the desktop zone
+              #   launches out of the BOOT volume, and this IS that volume -
+              #   its absence made the Wire zone open nothing on every live
+              #   image ever cut), the four packages that ride no floppy
+              #   (RECORDER, HELLO, PACMAN, SCRIBE), the WHOLE Frotz story
+              #   library beside a FROTZ.O88 that had nothing to play, the
+              #   WHOLE RunCPM master disk and all nine areas of the CP/M
+              #   software collection - both fills were priced in 1.44MB
+              #   clusters on a 32MB partition, so the volume carried 62 of
+              #   77 master-disk files and no CP/M software at all - and the
+              #   category disks' documents in MEDIA/. 420 files, 3,216 of
+              #   16,324 clusters, 26MB still free.
+              #
+              #   `tests/unit/t_livefull.py` ENFORCES it and is in the FAST
+              #   tier. PART A reads build/livepayload.txt (which `all`
+              #   emits from $(LIVEARGS) itself) and sweeps apps/: **a new
+              #   package directory FAILS `make` until it is on the live
+              #   media or written into that file's EXEMPT_DIRS with a
+              #   reason.** PART B walks the built image when there is one.
+              #   The four packages are LIVE-ONLY and deliberately not on
+              #   build/apps-all.img: §19.10.1 is the arithmetic - that
+              #   disk's 1.2MB geometry pays for a package out of RunCPM's
+              #   drive A, and thirteen kilobytes took A\0 from 21 files to
+              #   one
 make burn     # the macOS guide onto REAL media (§80.4, tools/os88burn.py):
               #   lists the attached USB flash drives (USB + external +
               #   never the boot disk), typed-identifier confirmation,
