@@ -12,15 +12,17 @@
     python3 tools/getruncpm.py -o build/runcpm-disk --from DIR # take the files
                              # from a local checkout of RunCPM at the pin
 
-**Nothing this script downloads is committed** (CONTRIBUTING.md 6): the DRI
-CCP binary and the master disk are RunCPM's (Marcelo Dantas / Mockba the
-Borg, MIT - the LICENSE lands beside them), and the programs on the master
-disk are their own authors' (MBASIC, Z80ASM, TE, ...). The bytes land in
-build/, which is ignored outright, and the floppies are built from there -
-the same decision tools/getstories.py made for Frotz's stories, and the
-os8088 tree pins the upstream COMMIT rather than a branch so that the images
-rebuild byte for byte (tools/os88disk.py pins the volume serial and every
-timestamp; this pins the input).
+**The bytes come out of a COMMITTED zip** (SPEC.md 74.6.1,
+apps/runcpm/cache/cpmcache.zip via tools/cpmcache.py) before GitHub is ever
+asked - a user-decided departure from CONTRIBUTING.md 6, recorded in
+apps/runcpm/cache/README.md. The DRI CCP binary and the master disk are
+RunCPM's (Marcelo Dantas / Mockba the Borg, MIT - the LICENSE lands beside
+them), and the programs on the master disk are their own authors' (MBASIC,
+Z80ASM, TE, ...). They land in build/ and the floppies are built from there,
+and the os8088 tree pins the upstream COMMIT rather than a branch so that the
+images rebuild byte for byte (tools/os88disk.py pins the volume serial and
+every timestamp; this pins the input). A file the zip lacks is fetched from
+GitHub, and `tools/cpmcache.py --pack` then brings the zip up to date.
 
 THE PIN is the commit SPEC.md 74's banner names as its 'Built' date, and
 every artifact's SHA-256 is checked on the way in - a mismatch is a hard
@@ -212,7 +214,8 @@ def fetch(path):
 
 def get_artifact(path, out, check, src):
     """The bytes of one pinned repository file, from the cache, a local
-    checkout (--from) or the network, verified whichever way."""
+    checkout (--from), the committed zip or the network, verified whichever
+    way."""
     want_sha, want_size = PINNED[path]
     cache = os.path.join(out, ".artifacts", os.path.basename(path))
     data = None
@@ -228,9 +231,15 @@ def get_artifact(path, out, check, src):
         with open(p, "rb") as fh:
             data = fh.read()
     if data is None:
+        # the committed copy (tools/cpmcache.py) before the network
+        import cpmcache
+        data = cpmcache.member("runcpm/" + path)
+    if data is None:
         if check:
             fail(f"{path} is not cached in {out} (--check does not fetch)")
-        print(f"getruncpm: fetching {path}")
+        print(f"getruncpm: fetching {path} (not in "
+              f"apps/runcpm/cache/cpmcache.zip - `tools/cpmcache.py --pack` "
+              f"once it is fetched)")
         data = fetch(path)
     if len(data) != want_size or sha256(data) != want_sha:
         fail(f"{path}: SHA-256/size mismatch against the pin {COMMIT[:12]}\n"

@@ -159,9 +159,11 @@ make pmcbandbench #   the COMMITTED pmc_rom.c, the four ghosts, the attract
                   #   BLIT4 10% high)
 make cpmsw      # the CP/M games and applications the RUNCPM floppies carry
                 #   beside RunCPM's master disk (§74.6) - LADDER, CATCHUM,
-                #   Nemesis, GAINA, WordStar, Turbo Pascal - fetched by
-                #   tools/getcpmsw.py from the public RunCPM software
-                #   collection, every file pinned, nothing committed;
+                #   Nemesis, GAINA, WordStar, Turbo Pascal - extracted by
+                #   tools/getcpmsw.py from apps/runcpm/cache/cpmcache.zip, a
+                #   COMMITTED copy of the public RunCPM software collection
+                #   (§74.6.1: Drive a file at a time was minutes), every
+                #   file pinned;
                 #   CPMSW='A/5:FILE' adds your own. The 1.44MB disk carries
                 #   the lot, the 720KB one the arcade area, the 360KB one
                 #   none (GAMES.TXT on each says which and why)
@@ -169,7 +171,7 @@ make runcpm     # RUNCPM (§74), the second C application: RunCPM 6.9 as a
 make runcpmdisk #   windowed CP/M 2.2 emulator — the host checks, then the
                 #   package; then the three floppies, from RunCPM's CCP and
                 #   master disk that `tools/getruncpm.py` fetches at a pinned
-                #   commit (`make runcpm-src`; never committed). `make rczex`
+                #   commit (`make runcpm-src`; out of the committed cache zip). `make rczex`
                 #   / `make rcz80test` are the Z80 core's ZEXDOC gates (in the
                 #   OS / in raw QEMU), `make rcmemtest` the movers',
                 #   `make rcbandbench` the row composer's bench
@@ -548,7 +550,8 @@ worddisk` the Word disk, `make cworddisk` the CWORD disk — which carries
 adapted to what cword's RTF can actually say (§73.12.3) — and `make
 runcpmdisk` the RUNCPM disks (`tools/getruncpm.py` fetches RunCPM's CCP and
 master disk at a pinned commit and `tools/getcpmsw.py` the CP/M games and
-applications that ride beside it, §74.6 — never committed, either of them;
+applications that ride beside it, §74.6 — both out of the COMMITTED
+`apps/runcpm/cache/cpmcache.zip` (§74.6.1), the network only for a moved pin;
 `make rczex` and `make rcz80test` are the Z80 core's ZEXDOC gates, in the OS
 and in raw QEMU), `make c64disk` the C64 disks, `make paccmandisk` the PaccMan
 disks, `make apple2disk` the Apple II+ disks (`make apple2rom` fetches their

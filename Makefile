@@ -6345,16 +6345,18 @@ $(BUILD)/.runcpm-hostchecks: apps/runcpm/runcpm.c $(RUNCPMSRC) $(RUNCPMHOST) | $
 
 runcpm: $(BUILD)/runcpm.o88
 
-# THE MASTER DISK AND THE CCP ARE FETCHED, NEVER COMMITTED (CONTRIBUTING.md 6,
-# SPEC.md 74.5): tools/getruncpm.py takes RunCPM's CCP-DR.60K, LICENSE,
-# 1STREAD.ME and DISK/A0.zip at the pinned commit (the same hash the banner's
-# 'Built' line names), verifies every SHA-256, and unpacks the master disk
+# THE MASTER DISK AND THE CCP ARE PINNED (SPEC.md 74.5): tools/getruncpm.py
+# takes RunCPM's CCP-DR.60K, LICENSE, 1STREAD.ME and DISK/A0.zip at the pinned
+# commit (the same hash the banner's 'Built' line names) out of the COMMITTED
+# apps/runcpm/cache/cpmcache.zip (tools/cpmcache.py; GitHub only for a file
+# the zip lacks), verifies every SHA-256, and unpacks the master disk
 # into build/runcpm-disk/A/0 minus the three files above 65,535 bytes (which
 # A/0/LEFT-OFF.TXT names). A stamp rather than a directory, as the story cache
 # is: make cannot depend on eighty files, and the script is idempotent -
 # nothing is downloaded twice. `make runcpm-src` alone fetches.
 RUNCPMDIR := $(BUILD)/runcpm-disk
-$(BUILD)/runcpm-src.stamp: tools/getruncpm.py | $(BUILD)
+CPMCACHE := apps/runcpm/cache/cpmcache.zip
+$(BUILD)/runcpm-src.stamp: tools/getruncpm.py tools/cpmcache.py $(CPMCACHE) | $(BUILD)
 	python3 tools/getruncpm.py -o $(RUNCPMDIR)
 	@touch $@
 
@@ -6365,18 +6367,20 @@ $(RUNCPMDIR)/CCP-DR.60K $(RUNCPMDIR)/LICENSE $(RUNCPMDIR)/1STREAD.ME: $(BUILD)/r
 
 runcpm-src: $(BUILD)/runcpm-src.stamp
 
-# THE GAMES ARE FETCHED TOO, AND PINNED THE SAME WAY (SPEC.md 74.6):
-# tools/getcpmsw.py takes three user areas of the public RunCPM software
+# THE GAMES ARE PINNED THE SAME WAY, AND COME OUT OF THE SAME ZIP (SPEC.md
+# 74.6): tools/getcpmsw.py takes nine user areas of the public RunCPM software
 # collection - A/5 (LADDER, CATCHUM, PM), N/0 (Nemesis, Dungeon Master,
-# Castle) and G/4 (GAINA) - each file by its own id and SHA-256, and lands
-# them in build/cpmsw/<DRIVE>/<USER>/ under the collection's own coordinates,
-# so a file here is the file there. Nothing is committed (CONTRIBUTING.md 6),
-# every file is checked against the 65,535-byte whole-file limit on the way
+# Castle), G/4 (GAINA) and the rest its AREAS names - each file by its own
+# SHA-256, and lands them in build/cpmsw/<DRIVE>/<USER>/ under the
+# collection's own coordinates, so a file here is the file there. They are
+# read out of $(CPMCACHE), not off Google Drive a file at a time, which was
+# minutes of a clean `make live` (a user-decided departure from
+# CONTRIBUTING.md 6, apps/runcpm/cache/README.md); every file is checked against the 65,535-byte whole-file limit on the way
 # in (SPEC.md 74.3 - which is why Zork, Hitchhiker and Colossal Cave are not
 # among them: their data files are 76KB, 113KB and 68KB), and a stamp stands
 # in for the eighty files exactly as the master disk's does.
 CPMSWDIR := $(BUILD)/cpmsw
-$(BUILD)/cpmsw.stamp: tools/getcpmsw.py | $(BUILD)
+$(BUILD)/cpmsw.stamp: tools/getcpmsw.py tools/cpmcache.py $(CPMCACHE) | $(BUILD)
 	python3 tools/getcpmsw.py -o $(CPMSWDIR)
 	@touch $@
 
@@ -10413,7 +10417,7 @@ zset:
 # RUNCPM\, because it too has an .OVL resolved in the launching instance's
 # folder, and the CCP it loads and the CP/M drive A\0 below it are found the
 # same way - and, unlike FROTZ, WITH its disk: the master disk is fetched by
-# tools/getruncpm.py (never committed, the same rule as the stories) and this
+# tools/getruncpm.py (out of the committed CP/M cache zip) and this
 # target acquires the fetch as a prerequisite, which it can because it already
 # needs the C toolchain. The A\0 selection is the 1.44MB one - the whole
 # master disk minus the three files above 65,535 bytes, its LEFT-OFF.TXT
