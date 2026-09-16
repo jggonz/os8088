@@ -221,69 +221,69 @@ had added.
   "big": {
     "boot2": 2250,
     "bootmax": 192000,
-    "bss": 6123,
+    "bss": 6151,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 39316,
+    "cold": 39376,
     "coldpara": 2464,
     "fatpara": 288,
-    "imgpara": 3584,
-    "kend": 7104,
+    "imgpara": 3552,
+    "kend": 7072,
     "kseg": 96,
-    "ksize": 112128,
+    "ksize": 111616,
     "lowbss": 9182,
     "lowpara": 608,
     "minramkb": 196,
-    "ovl": 1737,
+    "ovl": 1588,
     "ovlw": 5052,
     "stk0": 512,
-    "text": 50987,
+    "text": 50337,
     "vgabuf": 848,
     "vgabufpara": 64
   },
   "emu": {
     "boot2": 2250,
     "bootmax": 192000,
-    "bss": 6123,
+    "bss": 6151,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 39440,
+    "cold": 39500,
     "coldpara": 2496,
     "fatpara": 288,
-    "imgpara": 3616,
-    "kend": 7168,
+    "imgpara": 3552,
+    "kend": 7104,
     "kseg": 96,
-    "ksize": 113152,
+    "ksize": 112128,
     "lowbss": 9182,
     "lowpara": 608,
     "minramkb": 196,
-    "ovl": 1738,
+    "ovl": 1589,
     "ovlw": 5052,
     "stk0": 512,
-    "text": 51257,
+    "text": 50607,
     "vgabuf": 848,
     "vgabufpara": 64
   },
   "small": {
     "boot2": 2250,
     "bootmax": 122368,
-    "bss": 4304,
+    "bss": 4332,
     "budget": 107520,
     "codemax": 65536,
-    "cold": 26197,
+    "cold": 26257,
     "coldpara": 1664,
     "fatpara": 64,
-    "imgpara": 2720,
-    "kend": 4928,
+    "imgpara": 2656,
+    "kend": 4864,
     "kseg": 96,
-    "ksize": 77312,
+    "ksize": 76288,
     "lowbss": 5460,
     "lowpara": 384,
     "minramkb": 128,
-    "ovl": 724,
+    "ovl": 575,
     "ovlw": 2789,
     "stk0": 512,
-    "text": 38743,
+    "text": 38101,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -621,14 +621,14 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 31,893 | 35.3% |
-| the window system and its furniture | 25,888 | 28.7% |
-| drawing: adapters, primitives, glyphs, icons | 13,160 | 14.6% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,054 | 10.0% |
-| the kernel proper: API table, heap, scheduler, events | 8,174 | 9.1% |
+| the file system, end to end | 31,893 | 35.6% |
+| the window system and its furniture | 25,221 | 28.1% |
+| drawing: adapters, primitives, glyphs, icons | 13,160 | 14.7% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,054 | 10.1% |
+| the kernel proper: API table, heap, scheduler, events | 8,251 | 9.2% |
 | the three built-in kinds | 1,542 | 1.7% |
 | the Control Panel | 592 | 0.7% |
-| **total** | **90,303** | |
+| **total** | **89,713** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -649,12 +649,12 @@ there and nowhere else.
 | `instance.inc` — instances and the built-in kinds (§29) | 2,113 | 236 | **2,349** | 724 | — | — |
 | `font.inc` — the 8×8 glyph renderer (§6) | 2,178 | — | **2,178** | 215 | 784 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,116 | **2,116** | 142 | — | — |
-| `dock.inc` — the dock strip (§30) | 1,786 | — | **1,786** | 103 | — | — |
 | `apps.inc` — the three built-in kinds (§14) | 282 | 1,260 | **1,542** | 11 | 240 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,410 | — | **1,410** | 207 | 2,944 | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,292 | — | **1,292** | 20 | — | — |
 | `loader.inc` — the package loader (§21) | 4 | 1,232 | **1,236** | 46 | — | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,157 | — | **1,157** | 74 | — | — |
+| `dock.inc` — the dock strip (§30) | 1,059 | 60 | **1,119** | 103 | — | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 11 | 1,025 | **1,036** | 79 | — | — |
 | `snd.inc` — the sound layer (§34) | 1,024 | — | **1,024** | 287 | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 992 | — | **992** | 9 | — | — |
@@ -666,7 +666,7 @@ there and nowhere else.
 | `toast.inc` — the menu bar's transient message (§59) | 433 | — | **433** | 25 | — | — |
 | `blank.inc` — the idle screen blanker (§64) | 194 | 236 | **430** | — | — | — |
 | `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 69 | 324 | **393** | 28 | — | — |
-| `mod.inc` — on-demand kernel modules (§2.8) | 56 | 309 | **365** | 112 | — | — |
+| `mod.inc` — on-demand kernel modules (§2.8) | 69 | 309 | **378** | 140 | — | — |
 | `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 340 | **340** | — | — | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 242 | — | **242** | 22 | — | — |
 | `clip.inc` — the system clipboard (§55) | 179 | — | **179** | 5 | — | — |
@@ -681,8 +681,9 @@ there and nowhere else.
 | `stkdiag.inc` — what an interrupt costs a task stack (STACK-SLOTS-PLAN §10), `STKDIAG=1` | — | — | **0** | — | — | — |
 | `moudiag.inc` — what the identify window saw (§9.4.6), `MOUDIAG=1` | — | — | **0** | — | — | — |
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,158 | 18 | **3,176** | — | — | 421 |
-| **total** | **50,987** | **39,316** | **90,303** | **6,123** | **9,182** | **2,250** |
+| `dockmod.inc` — optional advanced Dock image (DOCK.DRV) | — | — | **0** | — | — | — |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 3,222 | 18 | **3,240** | — | — | 421 |
+| **total** | **50,337** | **39,376** | **89,713** | **6,151** | **9,182** | **2,250** |
 <!-- END generated table -->
 
 ### Reading it
@@ -801,6 +802,18 @@ segment.
 
 ---
 
+The advanced Dock is an optional module (`DOCK.DRV`, SPEC.md §30.5).
+The basic bottom Dock allocates no module. Selecting a side or auto-hide
+loads the advanced renderer and runtime once, keeps that claim pinned while
+needed, and frees it when both settings return to basic mode. This reduces
+the entire feature's resident section increase to 810 bytes on BIG and 786
+on SMALL versus the parent of `ad0fe14d`; the approximately 500-byte goal is
+not met. Rounded kernel allocation increases are 1,024 and 512 bytes.
+Advanced mode additionally needs a 3 KB module claim; moving code out of the
+kernel is not a reduction in total RAM while that module is loaded. Basic
+and advanced renderers share the tile-state contract but have separate code,
+so the basic Dock never requires a disk read to draw or handle a click.
+
 ## The boot overlay: code that costs no memory at all
 
 Some of the kernel runs exactly once, from `kmain`, and is then unreachable.
@@ -810,7 +823,7 @@ it is two sections, because the two halves die at different times:
 
 | | bytes | lives until | lands on | reached by |
 |---|---:|---|---|---|
-| `.ovl` | 1,737 | `spl_finish` | stage 2's blob, at `OVL_AT` = 2,624 of `BOOT2_PAD` = 4,608 | `[spl_fseg]`, the pair of §2.9.5.1 |
+| `.ovl` | 1,588 | `spl_finish` | stage 2's blob, at `OVL_AT` = 2,624 of `BOOT2_PAD` = 4,608 | `[spl_fseg]`, the pair of §2.9.5.1 |
 | `.ovlw` | 5,052 | **the first mount** | `FAT_SEG`, off the kernel's own contiguous read, spilling through the mount-owned buffers (7,936 bytes, 7,680 readable — SPEC.md §2.1.2) | `call FAT_SEG:`, a constant |
 
 The blob is 9 sectors; whatever the loader is not using below `OVL_AT` the

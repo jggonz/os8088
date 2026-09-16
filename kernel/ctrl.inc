@@ -3208,14 +3208,32 @@ cp_dock_click:
 .change:
     cmp al, [dock_cfg]
     je .done                    ; already the setting: change nothing
+    mov ah, [dock_cfg]
     mov [dock_cfg], al
     call KERNEL_SEG:cw_dock_apply
+    jnc .changed
+    mov [dock_cfg], ah          ; failed enable: keep the working preference
+    push cx
+    push si
+    push es
+    CPSTAGE cp_dock_fail
+    push ds
+    pop es
+    xor cx, cx
+    call KERNEL_SEG:cw_toast_show
+    pop es
+    pop si
+    pop cx
+    jmp short .done
+.changed:
     mov byte [cp_wdirty], 1     ; remembered on close (SPEC.md 31.8)
     mov byte [cp_dirty], 1      ; ui_task repaints the world (SPEC.md 13)
     mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
 .done:
     pop ax
     ret
+
+cp_dock_fail: db 'Dock Module Unavailable', 0
 
 ; -----------------------------------------------------------------------------
 ; cp_sched_click - a click inside the Scheduler page

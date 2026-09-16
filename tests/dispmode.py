@@ -299,6 +299,26 @@ def main(argv):
             if ok is True:
                 fail.append("the second card is dark while extended: %s" % why)
 
+            if which == "below":
+                # A secondary desktop click below a primary Dock tile must
+                # never activate/minimize that tile's instance.
+                eq = os88sym.equates()
+                tab = m.read(S("inst_tab"), eq["INST_MAX"] * eq["I_RECSZ"])
+                slots = [i for i in range(eq["INST_MAX"])
+                         if tab[i * eq["I_RECSZ"] + eq["I_STATE"]] == 1
+                         and tab[i * eq["I_RECSZ"] + eq["I_KIND"]]
+                         == eq["KIND_CTRL"]]
+                assert len(slots) == 1, "expected one live Control Panel"
+                slot = slots[0]
+                mo.click(eq["DOCK_X0"] + slot * eq["DOCK_STEP"] + 12,
+                         d0["ch"] + MBAR_H + 40, settle=0)
+                os88marty.settle(m, card=gate)
+                flags = m.read(S("inst_tab") + slot * eq["I_RECSZ"]
+                               + eq["I_FLAGS"], 1)[0]
+                if flags & 1:
+                    fail.append("secondary desktop click minimized the "
+                                "primary Dock's Control Panel tile")
+
         # --- 3b: swapping the PRIMARY is the other two arrangements --------
         # SPEC.md 39.19.2 offers two placements and claims all four physical
         # arrangements, on the grounds that the primary is always at the

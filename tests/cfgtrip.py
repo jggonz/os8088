@@ -130,14 +130,16 @@ def main(argv=None):
         for n, v in WANT.items():
             if after[n] != v:
                 fail.append("%s came back %d, wrote %d" % (n, after[n], v))
-        # The saved dock setting must have run the boot copy of layout
-        # setup, without loading CTRL.DRV just to restore the desktop.
+        # Saved advanced settings load the Dock module at boot, without
+        # loading CTRL.DRV just to restore the desktop.
         def word(name):
             return int.from_bytes(m.read(S(name), 2), "little")
         bounds = (word("vid_band_x0"), word("vid_band_xe"), word("vid_dock_y0"))
         expected = (0, word("vid_pw") - 1, word("vid_ph"))
         if bounds != expected or m.read(S("dock_hidden"), 1) != b"\x01":
             fail.append("saved right auto-hide did not rebuild geometry: %r" % (bounds,))
+        if not word("mod_r_dock"):
+            fail.append("saved advanced Dock did not load DOCK.DRV")
         if word("mod_tab"):
             fail.append("restoring dock settings loaded CTRL.DRV at boot")
         seg = int.from_bytes(m.read(S("spl_fseg"), 2), "little")

@@ -2364,6 +2364,10 @@ SOAK = [
         "Does the dock strip mark windows it did not draw under? (SPEC.md"
         "30.3.3)",
         needs=("marty",), serial=True),
+    Row("dockmodule", "soak", py("tests/dockmodule.py"), 120.0,
+        "Optional Dock module: missing/corrupt file refusal and saved-setting "
+        "boot fallback, with no live callback into an unloaded claim",
+        needs=("marty",), serial=True),
     Row("dockpos", "soak", py("tests/dockpos.py", "--cga"), 300.0,
         "Does the dock stand on every edge and hide? (SPEC.md 30.5, 30.6,"
         "31.13) The Dock page drives Left, Right and Auto-hide on a 5150/"

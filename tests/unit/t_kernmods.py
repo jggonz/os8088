@@ -74,7 +74,7 @@ KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc", "stkdiag.inc",
 # row) and so measures somewhere; compress.inc is the first that is PURELY
 # the image, and its resident half lives on mod.inc's and files.inc's rows.
 # A file joining this list is saying "nothing of this is in KERNEL.SYS".
-IMAGE_ONLY = ("compress.inc",)
+IMAGE_ONLY = ("compress.inc", "dockmod.inc")
 
 
 def main():

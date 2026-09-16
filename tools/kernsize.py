@@ -218,7 +218,7 @@ THEMES = (
       "fdlg.inc", "loader.inc", "assoc.inc", "clone.inc", "lz.inc",
       "compress.inc")),
     ("the window system and its furniture",
-     ("wm.inc", "ui.inc", "menu.inc", "instance.inc", "desk.inc", "dock.inc",
+     ("wm.inc", "ui.inc", "menu.inc", "instance.inc", "desk.inc", "dock.inc", "dockmod.inc",
       "fsx.inc", "clip.inc", "fprog.inc", "toast.inc")),
     # moudiag.inc (SPEC.md 9.4.4) goes with the mouse and NOT with
     # bootprof.inc below, although both are knob-only: what it records is what

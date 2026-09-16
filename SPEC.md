@@ -1156,9 +1156,10 @@ sector nothing: unset, the `%ifdef` is not assembled.
 **A module is `.cold` code that ships as a file instead of as part of the
 kernel image.** It is read into a heap claim when its feature is asked for,
 far-called through a table of entry pointers, and freed when the feature is
-finished. **Four exist**: `CTRL.DRV`, the Control Panel (§31), `FORMAT.DRV`,
-the floppy formatter (§18.96), `CLONE.DRV`, the disk cloner (§18.99), and
-`HIBER.DRV`, hibernate and resume (§87) — plus, on `kern_small` alone,
+finished. Both builds carry `CTRL.DRV`, the Control Panel (§31),
+`FORMAT.DRV`, the floppy formatter (§18.96), `CLONE.DRV`, the disk cloner
+(§18.99), and optional `DOCK.DRV`, advanced Dock behavior (§30.5).
+`kern_big` also carries `HIBER.DRV` (§87); `kern_small` instead carries
 `FILECP.DRV` and `FDLG.DRV` (§22.3, §38.0), bodies `kern_big` keeps resident.
 **On the disk every one is a `'CZ'` container** (§20.13.5): `os88mod.py`
 checks each image the way `mod_check` will and then wraps it, `mod_need`
@@ -1239,17 +1240,18 @@ in the tree.
 - **`MOD_NENT` is what the modules use and not a round number.** It is
   **7**, which is what the largest module declares — §38.0's Standard File
   dialog on `kern_small` (`FD_NENT` 7). The others: `HB_NENT` 7 (§87,
-  `kern_big`; `kern_small` ships a one-entry stub), `CP_NENT` 7 on `kern_big`
-  and 6 on `kern_small`, `FM_NENT` 4, `FCP_NENT` 3, `CLO_NENT` 1. Every module
+  `kern_big` only), `CP_NENT` 7 on `kern_big`
+  and 6 on `kern_small`, `FM_NENT` 4, `FCP_NENT` 3, `CLO_NENT` 2, and one
+  Dock dispatcher entry. Every module
   header ends `times MOD_NENT - X dw 0`, which makes an eighth entry a **hard
   NASM error in the file that grew** rather than an overrun. It is **not**
   per-build, and that was tried: `tools/os88mod.py` scrapes the first
   `MOD_NENT equ` out of `mod.inc` and cannot evaluate an `%ifdef`. It was 8
   for as long as the scale factor had to be a power of two so `mod_fpr` could
   shift; ×7 is `×8 − ×1`, four instructions, and the power of two was buying
-  12 `.bss` bytes per module that nothing could declare. `MOD_MAX` is 4 on
-  `kern_big` and 6 on `kern_small`: `MOD_FCP` 4 and `MOD_FDLG` 5 exist under
-  `FCP_MOD` alone, after `MOD_HIBER` 3.
+  12 `.bss` bytes per module that nothing could declare. `MOD_MAX` is 5 on
+  `kern_big` and 6 on `kern_small`. BIG has `MOD_HIBER` 3 and `MOD_DOCK` 4;
+  SMALL has `MOD_FCP` 3, `MOD_FDLG` 4 and `MOD_DOCK` 5.
 - The loader itself is **`.cold`**. In `.text` it would be ~430 bytes against
   a `KERN_CODE_MAX` nobody can raise, and being cold also means the thunks
   that call it reach it with a near call.
@@ -2766,7 +2768,8 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/fdlg.inc`   | the Standard File dialog (§38): the kernel's Open/Save chooser, its modality gate and the completion callback — prefix `fdlg_`. **`.cold`** (§2.6) |
 | `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
 | `kernel/desk.inc`   | desktop drive icons: detect, paint, click/open (§26)    |
-| `kernel/dock.inc`   | bottom dock strip: one tile per running instance, minimize/restore/activate (§30) |
+| `kernel/dock.inc`   | basic bottom Dock, shared state, advanced-module dispatch and lifetime (§30) |
+| `kernel/dockmod.inc` | optional DOCK.DRV: placement, auto-hide, advanced painting and input (§30.5–30.6) |
 | `kernel/ctrl.inc`   | Control Panel window: two-pane item list + settings pages (§31), prefix `cp_`. **`.cold`** (§2.6) |
 | `kernel/snd.inc`    | sound core (§34): driver table + router, tone tier, speaker driver (tone + PWM clips), `snd_tick`, the five API slot targets, `snd_release_inst`/`snd_unhook` — prefix `snd_`, lands Phases 1–2 |
 | `kernel/fsx.inc`    | fullscreen exclusive (§53): the bracket, the scheduler freeze arming, foreign mode set + info block, and the frame clock/present — prefix `fsx_` |
@@ -46935,16 +46938,26 @@ DOCK_P_RIGHT  equ 2
 DOCK_F_AUTO   equ 4             ; bit 2: hide it (30.6)
 ```
 
-Layout setup uses the settings lifetime split: one `DOCK_GEOM` macro emits
-into the disposable boot overlay and `CTRL.DRV`. The boot copy requires one
-additional blob sector (8 to 9), released with the blob before the desktop.
-`dock_geom` dispatches to the overlay only while `[spl_fseg] > COLD_SEG`;
-after boot its callers are the already loaded Control Panel's Dock and
-Display actions. It never loads a module.
-The extra Control Panel entry fits the existing seven-slot module table.
-Fullscreen return calls resident `dock_band`, which restores the band and
-drive-column position from the unchanged dock geometry. It neither recalculates
-layout nor requires the settings module to be present.
+Advanced Dock behavior lives in optional `DOCK.DRV`, using §2.8's loader,
+build/layout validation and pinned module claim. Bottom placement without
+auto-hide needs no Dock module. Applying a non-default setting loads it once;
+returning to the basic bottom Dock restores basic geometry and disarms/frees
+the module after its last call returns. Settings changes hold the graphics
+lock, so drawing callbacks cannot still be executing the module at unload.
+Painting, hit testing and UI ticks never perform disk I/O.
+
+The module owns advanced geometry, tile packing, hover/linger and clip-region
+maintenance, drawing and input. One private entry dispatches to an operation
+offset in BP, resolved by the same assembly as the kernel and validated by
+the module build/layout stamps. Callers bank BP, and all operations preserve
+it. The basic bottom renderer remains resident; advanced rendering code does
+not. Shared geometry and state remain in the kernel. Basic geometry setup
+has boot-overlay and Control Panel copies; fullscreen return restores bounds
+without loading either module. Saved advanced settings request `DOCK.DRV`
+after the system volume is mounted. A missing, incompatible or unallocatable
+module falls back to the basic Dock and live setting at boot, leaving the
+existing settings file untouched. A Control Panel load failure leaves the old
+setting active and reports the refusal. The module is not a driver-table entry and cannot be detached there.
 
 `dock_geom` calculates the layout and `dock_band` publishes its desktop
 bounds. `vid_init` calls setup after the chrome's extent is published
@@ -46969,7 +46982,7 @@ each side of it — and **1** when the strip hides. `[vid_desk_zx]` is
 **The long axis is the one the damage span lives on.** §30.3.1's span and
 §30.3.3's painted span were x ranges; they are ranges along the strip now — x
 for the bottom, y for a side — and every routine that turns one into a rect
-(`dock_span_fill`, `dock_px_hit`, `wm_dock_under`'s damage) swaps the pair on
+(`dkx_span_fill`, `dock_px_hit`, `wm_dock_under`'s damage) swaps the pair on
 a side strip and nowhere else. `dock_force_x` is gone: `wm_paint_dmg` hands
 its whole damage rect to `dock_force_r`, which intersects it with the **live**
 rect (below) and unions the along-span, so the "does the damage reach the
@@ -47007,12 +47020,12 @@ bottom strip's is always `INST_MAX` (8 + 12·28 = 344 of 640). Every edge is
 offered on every adapter, and nothing greys.
 
 **A strip that holds every tile keeps §30's stable mapping** — position *i* is
-slot *i*, holes and all. One that holds fewer **packs**: `dock_map` writes
+slot *i*, holes and all. One that holds fewer **packs**: `dkx_map` writes
 `[dock_pos]`, the slot each position shows, and the live instances take
 positions in slot order with no holes, because a hole would spend a tile the
 strip does not have. `dock_paint` walks positions and keys them (§30.3's diff
 is per position, so a packed tile whose record changed is an identity change
-and rebuilds); `dock_hit` maps the position back to a slot; `inst_tile_rect`
+and rebuilds); `dkx_hit` maps the position back to a slot; `inst_tile_rect`
 asks `dock_slot_rect`, so a minimize flies to the tile the instance is shown
 at.
 
@@ -47032,11 +47045,11 @@ tick to ¼ s) opens it; once open, it closes **`DOCK_LEAVE_T` = 14 ticks**
 (0.77 s, the nearest to ¾ s) after the pointer leaves the strip's rect, and
 a pointer that comes back inside that time resets the count.
 
-`[dock_hidden]` is the one byte the painters ask, and `dock_live_set` is its
+`[dock_hidden]` is the one byte the painters ask, and `dkx_live_set` is its
 one writer: hidden is *auto and not open*. The **live rect**
 `[dock_lx1]..[dock_ly2]`, the live rule and field crosses and the live along
 range follow it — the line's own 1px rect while hidden, the whole strip
-otherwise — so `dock_paint`, `dock_hit`, `dock_px_hit`, `wm_dock_clear`,
+otherwise — so `dock_paint`, `dkx_hit`, `dock_px_hit`, `wm_dock_clear`,
 `wm_su_owed` and `wm_dock_under` never ask which mode they are in. A hidden
 `dock_paint` restores the line over the forced span and **skips the tiles
 entirely**: their keys keep what they last were, and the reveal forces the
@@ -47056,7 +47069,7 @@ the machine from drawing for as long as the pointer rests there. Neither is
 acceptable, and the clip region (§11.3) is what answers both: it is already
 how a background painter is kept off the windows above it.
 
-`dock_open` takes the lock **for the draw alone**, makes the whole strip
+`dkx_open` takes the lock **for the draw alone**, makes the whole strip
 live, forces and paints it, then enables `[gfx_hole]` and releases the lock.
 The dock does not allocate a save-under. Closing always repaints its old rect
 with `wm_paint_dmg`, after making the hidden line live again. This trades the

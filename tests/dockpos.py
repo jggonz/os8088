@@ -139,11 +139,32 @@ def strip_ok(px, w, h, cfg):
 
 def setting(m, mo, kind, cfg, want_cfg=None):
     """Drive the page to `cfg` and assert 1-3."""
+    before_seg = word(m, "mod_r_dock")
     have = byte(m, "dock_cfg")
     if (have & 3) != (cfg & 3):
         click_row(m, mo, CPK_R0Y + (cfg & 3) * CPK_ROWH)
     if (byte(m, "dock_cfg") & F_AUTO) != (cfg & F_AUTO):
         click_row(m, mo, CPK_AY)
+    check(bool(word(m, "mod_r_dock")) == bool(cfg),
+          "cfg %d: Dock module %s" % (cfg, "loaded" if cfg else "unloaded"))
+    seg = word(m, "mod_r_dock")
+    eq = os88sym.equates()
+    m.pause()
+    try:
+        tab = m.read(S("mem_tab"), eq["MEM_MAX"] * eq["MC_SIZE"])
+    finally:
+        m.run()
+    claims = {}
+    for off in range(0, len(tab), eq["MC_SIZE"]):
+        row = tab[off:off + eq["MC_SIZE"]]
+        claims[u16(row[eq["MC_SEG"]:])] = (
+            u16(row[eq["MC_PARA"]:]), u16(row[eq["MC_OWN"]:]))
+    if seg:
+        paras = ((eq["MODK_SIZE"] + 1023) // 1024) * 64
+        check(claims.get(seg) == (paras, eq["MEM_K_MOD"]),
+              "advanced Dock has exactly its rounded module claim")
+    elif before_seg:
+        check(before_seg not in claims, "disabling the Dock frees its old claim")
     got = byte(m, "dock_cfg")
     want = cfg if want_cfg is None else want_cfg
     check(got == want, "cfg %d: [dock_cfg] = %d" % (cfg, got))
@@ -184,6 +205,7 @@ def herc(a):
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
         os88marty.no_saver(m)
+        check(word(m, "mod_r_dock") == 0, "basic Dock boots without a module")
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, os88marty.settle, page=None)
         wx, wy = dispcp._cp_win(m, S)
@@ -276,6 +298,7 @@ def cga(a):
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
         os88marty.no_saver(m)
+        check(word(m, "mod_r_dock") == 0, "basic Dock boots without a module")
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, os88marty.settle, page=None)
         wx, wy = dispcp._cp_win(m, S)

@@ -2565,6 +2565,7 @@ section .modp    start=MODP_START vstart=0
 %ifdef FDLG_MOD
 section .modd    start=MODD_START vstart=0
 %endif
+section .modk    start=MODK_START vstart=0
 section .modmap  start=MODMAP_START vstart=0
 section .text
 
@@ -5827,6 +5828,7 @@ section .text
 %include "icons.inc"
 %include "desk.inc"
 %include "dock.inc"
+%include "dockmod.inc"
 %include "ctrl.inc"
 %include "hiber.inc"            ; hibernate and resume (SPEC.md 87): the
                                 ; resident thunks, the probe, and HIBER.DRV.
@@ -6339,12 +6341,44 @@ cw_thm_desk:            call thm_desk
 cw_thm_set:             call thm_set
                     retf
 %endif
-cw_dock_drop:           call dock_drop
-                       retf
 cw_dock_band:           call dock_band
                        retf
-cw_dock_live_set:       call dock_live_set
-                       retf
+cw_app_close_win: call app_close_win
+    retf
+cw_gfx_xor_rect: call gfx_xor_rect
+    retf
+cw_inst_icon_ptr: call inst_icon_ptr
+    retf
+cw_inst_minimize: call inst_minimize
+    retf
+cw_inst_restore: call inst_restore
+    retf
+cw_thm_bg: call thm_bg
+    retf
+cw_thm_ink: call thm_ink
+    retf
+cw_wm_clip_seed: call wm_clip_seed
+    retf
+cw_wm_clip_subr: call wm_clip_subr
+    retf
+cw_wm_front: call wm_front
+    retf
+cw_wm_fs_vis: call wm_fs_vis
+    retf
+cw_wm_top: call wm_top
+    retf
+cw_dock_drop: call dock_drop
+    retf
+cw_dock_geom: call dock_geom
+    retf
+cw_desk_rowcalc: call desk_rowcalc
+    retf
+cw_wm_refit: call wm_refit
+    retf
+cw_wm_su_drop_all: call wm_su_drop_all
+    retf
+cw_dock_force: call dock_force
+    retf
 cw_dock_apply:          call dock_apply     ; the Dock page and the settings
                     retf                    ; reader (SPEC.md 30.5)
 cw_gfx_clip_query:      call gfx_clip_query ; CLIPQF: shared region query
@@ -7193,15 +7227,24 @@ MODF_START   equ MODC_START + MODC_SIZE
 MODL_START   equ MODF_START + MODF_SIZE
 %ifdef KERN_BIG
 MODH_START   equ MODL_START + MODL_SIZE   ; hibernate, kern_big's alone
-MODMAP_START equ MODH_START + MODH_SIZE
+MODK_START   equ MODH_START + MODH_SIZE
 %else
 MODP_START   equ MODL_START + MODL_SIZE   ; Cut/Copy/Paste, kern_small's alone
 MODD_START   equ MODP_START + MODP_SIZE   ; ...and the file dialog after it
-MODMAP_START equ MODD_START + MODD_SIZE
+MODK_START   equ MODD_START + MODD_SIZE
 %endif                                    ; The
                                           ; compressor has no image of its
                                           ; own: it rides in the cloner's
                                           ; (SPEC.md 20.15.3)
+
+MODMAP_START equ MODK_START + MODK_SIZE
+
+section .modk
+modk_end:
+MODK_SIZE equ modk_end - $$
+%if MODK_SIZE > MOD_MAX_KB*1024
+  %error "Dock module exceeds its maximum claim"
+%endif
 
 section .modc
 modc_end:
@@ -7291,6 +7334,7 @@ mod_map:
     dd MODP_START, MODP_SIZE    ; ...or kern_small's fourth (SPEC.md 22.3)
     dd MODD_START, MODD_SIZE    ; ...and its fifth (SPEC.md 38.0)
 %endif
+    dd MODK_START, MODK_SIZE    ; optional advanced Dock
     dd MODMAP_START             ; ...where the table began, and
     dw 0x384F                   ; the last two bytes of the file
 modmap_end:
@@ -7819,6 +7863,10 @@ section .modh
 %if ($ - $$) != MODH_SIZE
   %error "something landed in .modh below modh_end - os88mod.py would CUT the hibernate module short of it"
 %endif
+%endif
+section .modk
+%if $ != modk_end
+  %error "something landed in .modk after modk_end"
 %endif
 section .modmap
 %if ($ - $$) != MODMAP_SIZE
