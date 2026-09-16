@@ -378,6 +378,35 @@ gfx_aud_end:                    ; the primitive's answer is in the flags on
 %endif
 %endmacro
 
+
+; -----------------------------------------------------------------------------
+; CLIPQ - "is a clip region armed?", asked the way every region-aware primitive
+;         asks it: ZF = 1 no, ZF = 0 yes (SPEC.md 11.3, 30.6.1)
+;
+; It was `cmp word [wm_clip_n], 0` at every site. An OPEN hidden dock makes
+; the answer "yes" even with nothing armed: the strip is over every window and
+; the desktop, so a primitive about to draw unclipped arms the desktop minus
+; the strip first (gfx_hole_arm) and takes its clipped path. One compare more
+; while no strip is open, and no site has to know the dock exists.
+; -----------------------------------------------------------------------------
+%macro CLIPQ 0
+    cmp word [wm_clip_n], 0
+    jne %%q
+    cmp word [gfx_hole], 0
+    je %%q
+    call gfx_hole_arm
+%%q:
+%endmacro
+; ...and CLIPQF, the same question from .cold, where the arm is a far call
+%macro CLIPQF 0
+    cmp word [wm_clip_n], 0
+    jne %%q
+    cmp word [gfx_hole], 0
+    je %%q
+    call KERNEL_SEG:cw_gfx_hole_arm
+%%q:
+%endmacro
+
 ; -----------------------------------------------------------------------------
 ; GFXCLIP - the clip hook, at a public rect entry (SPEC.md 11.3)
 ;
@@ -393,7 +422,7 @@ gfx_aud_end:                    ; the primitive's answer is in the flags on
 %macro GFXCLIP 1
 %ifdef GFXAUDIT
     call gfx_aud                ; make GFXAUDIT=1: is the lock even held, and
-    cmp word [wm_clip_n], 0     ; is IRQ4 inside this call? The tail jump below
+    CLIPQ                       ; is IRQ4 inside this call? The tail jump below
     jne %%aclipped              ; becomes a CALL so the body has an end to
     CURUNLAZY                   ; count from - one stack word deeper than the
     call %1                     ; kernel that ships, which is what a diagnostic
@@ -407,8 +436,12 @@ gfx_aud_end:                    ; the primitive's answer is in the flags on
 %else
     cmp word [wm_clip_n], 0     ; clipped background draw? (SPEC.md 11.3)
     jne %%clipped
+    cmp word [gfx_hole], 0      ; ...or the OPEN DOCK's hole (SPEC.md 30.6.1),
+    jne %%hole                  ; one compare while no strip is open
     CURUNLAZY                   ; UNCLIPPED: this may write any pixel on the
     jmp %1                      ; screen, so a deferred hide is owed (7.1.4)
+%%hole:
+    call gfx_hole_arm           ; the desktop minus the strip, armed now
 %%clipped:
     push di
     mov di, %1
@@ -1356,7 +1389,7 @@ gfx_ls_box:
     push bx
     push cx
     push di
-    cmp word [wm_clip_n], 0
+    CLIPQ                   
     jne .armed
     xor ax, ax
     mov [gfx_ls_bx1], ax
@@ -1665,7 +1698,7 @@ gfx_blit4:
     mov [gfx_blit_sv], si       ; - and AX is the TRANSLATED x by here
 
     ; --- may a run go straight into the framebuffer? (SPEC.md 5.4.1) -------
-    cmp word [wm_clip_n], 0
+    CLIPQ                   
     je .clipfree
     ; SPEC.md 5.4.1.4 - A REGION IS ARMED, BUT IS IT IN THE WAY? If the whole
     ; block lies inside ONE fragment there is nothing here to clip against and
@@ -2560,7 +2593,7 @@ gfx_blitp:
                                 ; carries this warning twenty lines up; this
                                 ; routine was written from it and put the line
                                 ; in the wrong place
-    cmp word [wm_clip_n], 0     ; ...and NOT the depth: SPEC.md 5.4.3.4 moves
+    CLIPQ                        ; ...and NOT the depth: SPEC.md 5.4.3.4 moves
     je .clipok                  ; that below the display hook
     cmp byte [wm_dmg_cull], 0   ; SPEC.md 5.4.3.3: THE CULL IS NOT A CLIP
     je .no                      ; REGION. A plane byte carries eight x's, so a
@@ -3100,7 +3133,7 @@ gfx_spans:
     stc                         ; kern_small carries the slot and no body,
     ret                         ; gfx_blit1's precedent (SPEC.md 5.4.2)
 %else
-    cmp word [wm_clip_n], 0     ; an armed region, or...
+    CLIPQ                        ; an armed region, or...
     jne .no
     cmp byte [vid_ndisp], 1     ; ...a second display: both re-cut the run,
     ja .no                      ; and the caller's gfx_fill loop does it right
@@ -3549,7 +3582,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_xor_rect:
-    cmp word [wm_clip_n], 0     ; clipped background draw? (SPEC.md 11.3)
+    CLIPQ                        ; clipped background draw? (SPEC.md 11.3)
     jne gfx_xor_rect_clip       ; an OUTLINE is not the intersection of its
                                 ; bounding rect with anything - clipping it
                                 ; that way would draw edges through the
@@ -5014,7 +5047,7 @@ gfx_blit1_x:
 .spanok:                        ; resolving its own display (SPEC.md 39.14.6)
 
     ; --- ...and the clip region, in the same VIRTUAL space wm_clip_tab is in
-    cmp word [wm_clip_n], 0
+    CLIPQF                  
     je .clipok
     push cx
     push dx
@@ -5038,7 +5071,7 @@ gfx_blit1_x:
     push bx
     push ax
 
-    cmp word [wm_clip_n], 0
+    CLIPQF                  
     je .rowsall
     push ax                     ; x, which this block spends AX to compute
     mov al, [wm_clip_r0]        ; skip the rows the region cut off the top:

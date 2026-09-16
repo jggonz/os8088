@@ -455,8 +455,8 @@ wm_fit:
     push dx
     push si
     push di
-    xor ax, ax                  ; x0
-    mov cx, [vid_pw]            ; xe
+    mov ax, [vid_band_x0]       ; x0 - off a left-hand strip (SPEC.md 30.5)
+    mov cx, [vid_band_xe]       ; xe - ...and a right-hand one
     mov si, MBAR_H              ; y0
     mov di, [vid_dock_y0]       ; ye
     mov dx, [vid_ph]            ; ...and the hard floor under it
@@ -846,8 +846,8 @@ wm_land_snap:
     push si
     push di
     push bp
-    xor ax, ax                  ; the NEAR edges of the display it is on -
-    mov cx, [vid_pw]            ; MBAR_H on the primary and the card's own vy
+    mov ax, [vid_band_x0]       ; the NEAR edges of the display it is on -
+    mov cx, [vid_band_xe]       ; MBAR_H on the primary and the card's own vy
     mov si, MBAR_H              ; anywhere else, since nothing but the primary
     mov di, [vid_dock_y0]       ; has a menu bar (39.16.2). ui_ylow answers the
     mov dx, [vid_ph]            ; same question and may not be used: it reads
@@ -1234,6 +1234,8 @@ wm_fit_box:
     mov si, MBAR_H              ; its whole height is desktop
     mov di, [vid_dock_y0]
     mov dx, [vid_ph]            ; ...and the primary's floor is its own height
+    mov ax, [vid_band_x0]       ; ...and its band's x extent, which a strip on
+    mov cx, [vid_band_xe]       ; a side narrows (SPEC.md 30.5)
 .done:
     pop bx
 .out:
@@ -1320,12 +1322,21 @@ wm_dmg_bands:
 .top:
     push ax
     mov ax, [vid_dock_y0]               ; stopping above the strip, which
-    dec ax                              ; dock_force_x restores: damage that
+    dec ax                              ; dock_force_r restores: damage that
     cmp dx, ax                          ; reaches it already forces the span,
     jle .bot                            ; so dithering those rows is drawn only
     mov dx, ax                          ; to be painted over (SPEC.md 30.3.2)
 .bot:
+    mov ax, [vid_band_xe]               ; ...and inside a SIDE strip's columns
+    dec ax                              ; for the same reason (SPEC.md 30.5)
+    cmp cx, ax
+    jle .rgt
+    mov cx, ax
+.rgt:
     pop ax
+    cmp ax, [vid_band_x0]
+    jge .band
+    mov ax, [vid_band_x0]
 .band:
     cmp ax, cx                          ; nothing of this display is desktop
     jg .next                            ; here - and an empty seed must not
@@ -1637,6 +1648,8 @@ wm_dock_snap:
     push ax
     push cx
     push dx
+    cmp byte [dock_side], DOCK_P_BOTTOM
+    jne .no                     ; the BOTTOM strip's nudge alone (SPEC.md 30.5)
     mov ax, [bx+W_Y]
     add ax, [bx+W_H]            ; AX = the drop shadow's own row
     mov cx, [vid_dock_y0]
@@ -1644,7 +1657,9 @@ wm_dock_snap:
     jb .no                      ; clear of the strip already
     sub ax, cx
     inc ax                      ; AX = rows of the strip it covers
-    cmp ax, DOCK_H / 2
+    mov dx, [dock_thk]          ; ...against half of what it RESERVES, which
+    shr dx, 1                   ; is 0 for a hidden strip: no nudge off a line
+    cmp ax, dx
     jae .no                     ; deliberate: leave it, and let the dock go
                                 ; under it
     mov dx, cx                  ; the highest y that keeps y+h off the strip
@@ -2161,7 +2176,8 @@ wm_disp_rest:
     jb .one
     jmp short .zero
 .x:
-    mov cx, [vid_pw]
+    mov cx, [vid_band_xe]       ; the primary's USABLE width (SPEC.md 30.5)
+    sub cx, [vid_band_x0]
     cmp [di+VID_CTX_CW], cx
     jb .one
 .zero:
@@ -3485,8 +3501,9 @@ wm_zoom:
     push cx
     push dx
     push si
-    xor ax, ax                  ; the standard state: x = the left edge...
-    mov cx, [vid_pw]            ; ...and w = the whole live screen (SPEC 39.2)
+    mov ax, [vid_band_x0]       ; the standard state: x = the band's left
+    mov cx, [vid_band_xe]       ; edge, and w = all of the band (SPEC 39.2,
+    sub cx, ax                  ; 30.5)
     mov si, MBAR_H              ; ...y = under the bar, h = the desktop band,
     mov dx, [vid_dock_y0]       ; one pixel short of the dock - wm_fit's
     sub dx, MBAR_H + 1          ; clamp, for wm_fit's reason
@@ -4205,10 +4222,19 @@ wm_dock_clear:
     call wm_idx2ptr
     test byte [bx+W_FLAGS], 2
     jz .next
+    mov ax, [bx+W_Y]            ; a rect overlap against the LIVE strip, on
+    add ax, [bx+W_H]            ; whichever edge (SPEC.md 30.5) - y+h and x+w
+    cmp ax, [dock_ly1]          ; being the drop shadow's own row and column
+    jl .next
     mov ax, [bx+W_Y]
-    add ax, [bx+W_H]            ; the drop shadow's own row, y+h
-    cmp ax, [vid_dock_y0]
-    jae .dirty
+    cmp ax, [dock_ly2]
+    jg .next
+    mov ax, [bx+W_X]
+    cmp ax, [dock_lx2]
+    jg .next
+    add ax, [bx+W_W]
+    cmp ax, [dock_lx1]
+    jge .dirty
 .next:
     loop .scan
 .clear:
@@ -5704,13 +5730,13 @@ wm_paint_dmg:
 .zones:
     mov ax, [wm_dmg_zn]
     call COLD_SEG:desk_paint_mask_x ; the touched drive zones, whole
-    mov ax, [wm_dmg_y2]         ; reached the strip? then the dither above
-    cmp ax, [vid_dock_y0]       ; just ran over it, and whatever WAS covering
-    jl .dock                    ; it has moved - the one case that owes the
-    mov ax, [wm_dmg_x1]         ; strip a restore rather than a tile. Only the
-    mov cx, [wm_dmg_x2]         ; DAMAGED span of it, though: this used to
-    call dock_force_x           ; force all 640px and rebuild every tile for a
-                                ; window that closed in one corner (SPEC 30.3)
+    mov ax, [wm_dmg_x1]         ; reached the strip? then whatever WAS covering
+    mov bx, [wm_dmg_y1]         ; it has moved - the one case that owes the
+    mov cx, [wm_dmg_x2]         ; strip a restore rather than a tile. Only the
+    mov dx, [wm_dmg_y2]         ; DAMAGED span of it, though (SPEC.md 30.3),
+    call dock_force_r           ; and "reached" is dock_force_r's own overlap
+                                ; test now, so a strip on a SIDE is asked in x
+                                ; (SPEC.md 30.5)
 .dock:
     call dock_paint             ; CF = 1 if it actually put pixels on the strip
     jnc .bar                    ; - and only then does a window sitting on the
@@ -5971,14 +5997,17 @@ wm_dock_under:
     jnc .out
     call wm_dock_clear          ; CF = 1 if a window is sitting on them
     jnc .out
-    mov ax, [dock_px1]          ; ...and the damage is the span dock_paint
-    mov [wm_dmg_x1], ax         ; PAINTED, not the whole width (SPEC.md
-    mov ax, [vid_dock_y0]       ; 30.3.3): a focus change moves two tiles, and
-    mov [wm_dmg_y1], ax         ; the strip's empty end was marking every
-    mov ax, [dock_px2]          ; window standing over it for nothing. CF = 1
-    mov [wm_dmg_x2], ax         ; above, so the span is non-empty by
-    mov ax, [vid_phm1]          ; construction
-    mov [wm_dmg_y2], ax
+    push bx                     ; ...and the damage is the span dock_paint
+    push cx                     ; PAINTED, not the whole strip (SPEC.md
+    push dx                     ; 30.3.3): a focus change moves two tiles, and
+    call dock_px_rect           ; the strip's empty end was marking every
+    mov [wm_dmg_x1], ax         ; window standing over it for nothing. CF = 1
+    mov [wm_dmg_y1], bx         ; above, so the span is non-empty by
+    mov [wm_dmg_x2], cx         ; construction. As a RECT, because on a side
+    mov [wm_dmg_y2], dx         ; strip the span is rows (SPEC.md 30.5)
+    pop dx
+    pop cx
+    pop bx
     mov byte [wm_dmg_dk], 1     ; dock_paint said CF = 1 above, so the strip
     call wm_dmg_wins            ; really was drawn (the rect covers it anyway,
 .out:                           ; but the flag is an argument and says so)
@@ -6005,12 +6034,13 @@ wm_paint_all:
     call wm_fs_vis              ; a visible fullscreen window covers the
     jc .fswins                  ; desktop, dock and menu bar - painting
                                 ; them under it is pure waste (SPEC.md 11.2)
-    xor ax, ax                  ; desktop: 50% dither under the bar, and
-    mov bx, MBAR_H              ; STOPPING ABOVE THE DOCK (SPEC.md 30.3.2) -
-    mov cx, [vid_pwm1]           ; dock_paint is the next call but one and owns
-    mov dx, [vid_dock_y0]       ; every row from here down, so dithering them
-    dec dx                      ; was a full-width band drawn to be painted
-    call thm_desk               ; over: the double-draw flash, and the reason
+    mov ax, [vid_band_x0]       ; desktop: 50% dither under the bar, and
+    mov bx, MBAR_H              ; STOPPING SHORT OF THE DOCK (SPEC.md 30.3.2,
+    mov cx, [vid_band_xe]       ; 30.5) - dock_paint is the next call but one
+    dec cx                      ; and owns the strip, on whichever edge, so
+    mov dx, [vid_dock_y0]       ; dithering it was a band drawn to be painted
+    dec dx                      ; over:
+    call thm_desk               ; the double-draw flash, and the reason
                                 ; every tile had to be rebuilt afterwards
 %ifdef KERN_BIG
     call vid_disp_desk        ; ...and every OTHER display, whole (SPEC.md
@@ -6287,8 +6317,8 @@ wm_obscured:
     stc                         ; overlap: we are obscured
     jmp .out
 .clear:
-    clc
-.out:
+    call dock_hole_winb         ; ...or the OPEN dock lands on it (SPEC.md
+.out:                           ; 30.6.1): CF = 1 is the same answer
     pop di
     pop si
     pop dx
@@ -6374,6 +6404,10 @@ wm_clipwin  dw 0                ; the window wm_clip_set was given, banked
                                 ; all - and 11.96.18's drop, which happens
                                 ; after that walk, needs the same word in every
                                 ; build
+gfx_hole    dw 0                ; non-0 while a hidden dock is OPEN (SPEC.md
+                                ; 30.6.1): CLIPQ and GFXCLIP then read "no
+                                ; region" as "the desktop minus the strip".
+                                ; .text for wm_clip_n's reason, beside it
 wm_clip_n   dw 0                ; rects in wm_clip_tab; 0 = disarmed.
                                 ; Initialized data, NOT .bss: every gfx_fill
                                 ; reads it, including the machine's first,
@@ -6592,8 +6626,8 @@ wm_clip_occl_r:
     cmp word [wm_clip_n], 0
     jne .scan
 .done:
-    clc
-    jmp short .out
+    call dock_hole_sub          ; ...and the OPEN dock, which is over all of
+    jmp short .out              ; them (SPEC.md 30.6.1). CF: its overflow
 .over:
     stc
 .out:
@@ -6778,8 +6812,8 @@ wm_dmg_occl:
 .next:
     loop .scan
 .done:
-    clc
-    jmp short .out
+    call dock_hole_sub          ; ...and the open dock: no dither under it
+    jmp short .out              ; (SPEC.md 30.6.1). CF: its overflow
 .over:
     stc
 .out:
@@ -6860,6 +6894,8 @@ wm_clip_rect:
     cmp bx, wm_wins + MAX_WIN*WIN_SIZE
     jb .win
 .done:
+    call dock_hole_sub          ; ...and the open dock (SPEC.md 30.6.1)
+    jc .over
     cmp word [wm_clip_n], 0     ; ZF = 1: wholly covered. clc leaves it alone,
     clc                         ; and so does every pop below
     jmp short .out
@@ -7177,7 +7213,7 @@ wm_clip_ptr:
 ; same decision one region in.
 ; -----------------------------------------------------------------------------
 wm_clip_test:
-    cmp word [wm_clip_n], 0
+    CLIPQ                       ; ...the open dock's hole counts (SPEC.md 30.6.1)
     je wm_clip_free             ; ...NOT a local label: the walk below is its
                                 ; own symbol now, so this one would belong to
                                 ; it rather than to the entry above
@@ -7279,7 +7315,7 @@ wm_clip_rows:
     push di
     push bp
     mov byte [wm_clip_r0], 0
-    cmp word [wm_clip_n], 0
+    CLIPQ
     je .all                     ; disarmed: every row, the same answer
                                 ; wm_clip_free gives for the whole shape
     cmp byte [wm_dmg_cull], 0
@@ -8978,24 +9014,37 @@ wm_su_owed:
     mov dx, [wm_dmg_y2]
     cmp byte [wm_dmg_dk], 0
     je .out                     ; dock_paint put nothing on the strip
-    push di
-    mov di, [si+W_Y]
-    add di, [si+W_H]
-    cmp di, [vid_dock_y0]
-    pop di
-    jl .out                     ; ...or this window does not reach it
-    xor ax, ax                  ; it does, and the strip is drawn UNDER windows,
-    cmp cx, [vid_pwm1]          ; so this window owes the whole width of it -
-    jge .noc                    ; as a WIDENING of the painted box, never a
-    mov cx, [vid_pwm1]          ; replacement. The strip is the PRIMARY's
-.noc:                           ; (39.14), so replacing would hand a window on
-    cmp dx, [vid_phm1]          ; display 1 a rect disjoint from itself, and
-    jge .nod                    ; wm_su_srect reads that as "nothing this pass
-    mov dx, [vid_phm1]          ; painted reached the content" - which is
-.nod:                           ; permanent, nothing repaints it after
-    cmp bx, [vid_dock_y0]
-    jle .out
-    mov bx, [vid_dock_y0]
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [si+W_X]            ; ...or this window does not reach it: a RECT
+    mov bx, [si+W_Y]            ; overlap against the live strip, because a
+    mov cx, ax                  ; strip on a side is reached in x and not in y
+    add cx, [si+W_W]            ; (SPEC.md 30.5). x+w and y+h, the drop
+    mov dx, bx                  ; shadow's own column and row
+    add dx, [si+W_H]
+    call dock_live_hit
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jnc .out
+    cmp ax, [dock_lx1]          ; it does, and the strip is drawn UNDER windows,
+    jle .a                      ; so this window owes the whole of it - as a
+    mov ax, [dock_lx1]          ; WIDENING of the painted box, never a
+.a:                             ; replacement. The strip is the PRIMARY's
+    cmp bx, [dock_ly1]          ; (39.14), so replacing would hand a window on
+    jle .b                      ; display 1 a rect disjoint from itself, and
+    mov bx, [dock_ly1]          ; wm_su_srect reads that as "nothing this pass
+.b:                             ; painted reached the content" - which is
+    cmp cx, [dock_lx2]          ; permanent, nothing repaints it after
+    jge .c
+    mov cx, [dock_lx2]
+.c:
+    cmp dx, [dock_ly2]
+    jge .out
+    mov dx, [dock_ly2]
 .out:
     ret
 
@@ -10325,6 +10374,8 @@ wm_su_take:
                                 ; the draws that earn it
     test byte [di+W_FLAGS], 2   ; not visible: there are no pixels to bank
     jz .out
+    call dock_hole_win          ; ...and under the OPEN dock some of them are
+    jc .out                     ; the strip's, not ours (SPEC.md 30.6.1)
     test byte [di+W_FLAGS], WF_FULL
     jnz .out                    ; a fullscreen window is not usefully covered
                                 ; by what is being raised over it, and it is
@@ -10840,6 +10891,8 @@ wm_su_try:
     push si
     push di
     push es
+    call dock_hole_win          ; a restore is not clipped, so under the OPEN
+    jc wm_su_tno                ; dock it would blit over the strip (30.6.1)
     call wm_su_ck               ; ...which lays the fragments out and checks
     jc wm_su_tno                ; them against the claim's own header, and
                                 ; answers AX = the claim

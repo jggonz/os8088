@@ -46915,6 +46915,179 @@ rect over the vacated frame and the tile's interior inverts through §30.3's
 mark diff — one `gfx_xor_fill`, no icon redrawn. Going the other way,
 `inst_restore` is unchanged.
 
+### 30.5 Where the strip stands — bottom, left or right
+
+The strip used to be pinned to the bottom of the primary, and every reader of
+`[vid_dock_y0]` — the band a window is fitted into, the zoom rect, the drive
+column, the dither's last row — assumed so. **It can stand on the left or the
+right edge now**, chosen on the Control Panel's Dock page (§31.13) and kept in
+`SYSTEM.CFG`'s `DK` key (§51.5). The setting is one byte, `[dock_cfg]`:
+
+```nasm
+DOCK_P_BOTTOM equ 0             ; bits 0..1: the edge
+DOCK_P_LEFT   equ 1
+DOCK_P_RIGHT  equ 2
+DOCK_F_AUTO   equ 4             ; bit 2: hide it (30.6)
+```
+
+`dock_geom` turns it into geometry, and it is the **only** writer of every word
+below. `vid_apply` calls it after the chrome's extent is published (§39.16),
+so an adapter switch re-derives it for free, and `dock_apply` — the geometry,
+`desk_rowcalc`, `wm_refit`, a raise-cache drop and `dock_force` — is what the
+page and the settings reader call when the byte itself changes.
+
+| word | bottom | left | right |
+|---|---|---|---|
+| strip rect `[dock_sx1]..[dock_sy2]` | `0, ph-24 .. pw-1, ph-1` | `0, MBAR_H .. 31, ph-1` | `pw-32, MBAR_H .. pw-1, ph-1` |
+| the rule | row `sy1` | column `sx2` | column `sx1` |
+| tile *i* | `(8 + 28i, sy1+3)` | `(4, MBAR_H+4 + 24i)` | `(sx1+4, MBAR_H+4 + 24i)` |
+| `[vid_dock_y0]` — band's first row NOT in it | `ph - T` | `ph` | `ph` |
+| `[vid_band_x0]` / `[vid_band_xe]` | `0` / `pw` | `T` / `pw` | `0` / `pw - T` |
+
+*T* is the strip's **reserved** thickness: `DOCK_H` = 24 at the bottom,
+`DOCK_SW` = 32 on a side — a 24px tile needs a rule, a field and a margin
+each side of it — and **1** when the strip hides. `[vid_desk_zx]` is
+`[vid_band_xe] - 56`, so the drive column moves in off a right-hand strip.
+
+**The long axis is the one the damage span lives on.** §30.3.1's span and
+§30.3.3's painted span were x ranges; they are ranges along the strip now — x
+for the bottom, y for a side — and every routine that turns one into a rect
+(`dock_span_fill`, `dock_px_hit`, `wm_dock_under`'s damage) swaps the pair on
+a side strip and nowhere else. `dock_force_x` is gone: `wm_paint_dmg` hands
+its whole damage rect to `dock_force_r`, which intersects it with the **live**
+rect (below) and unions the along-span, so the "does the damage reach the
+strip" test that used to sit in `wm_paint_dmg` as `y2 >= [vid_dock_y0]` is
+the intersection, and on a side strip it is an x test it could never have
+been.
+
+**Every site that fitted a window to "the desktop band" takes the x fence as
+well**: `wm_fit`, `wm_fit_box`'s primary arm, `wm_land_snap`, `wm_zoom`,
+`wm_disp_rest`, `wm_dmg_bands` and `wm_paint_all`'s dither. The three
+over-the-strip tests — `wm_dock_clear`, `wm_su_owed` and `dock_px_hit` — are
+rect overlaps against the live rect, which on the bottom strip are the tests
+they always were.
+
+**Two things are the bottom strip's alone**, and both are cheaper left alone
+than generalised:
+
+- **`wm_dock_snap`'s nudge** (§11.90). A window left a few pixels over a side
+  strip stays there and `wm_dock_under` pays for it, which is what that
+  routine is for. It also does not nudge off a hidden strip: half of a 1px
+  thickness is 0 rows.
+- **`OSAPI_VIDEO` and `OSAPI_WM_DISPLAY` publish only the ROW** (`CX` = the
+  first row the dock owns). There is no slot for the band's x extent and none
+  is added: a package sizes itself against the band's HEIGHT, and where a
+  window lands in x is `wm_fit`'s decision, which does see the fence. A side
+  strip answers `CX` = the screen's height.
+
+#### 30.5.1 A side strip that cannot hold every tile holds fewer
+
+A side strip lays tiles top to bottom at a 24px pitch from `MBAR_H + 4`, so
+the tiles it has room for are `(ph - MBAR_H - 8 - 20) / 24 + 1`, capped at
+`INST_MAX`: **every one** on VGA (12), **eleven** on Hercules and EGA, and
+**seven** on CGA's 200 rows. `dock_geom` writes that as `[dock_cap]`; the
+bottom strip's is always `INST_MAX` (8 + 12·28 = 344 of 640). Every edge is
+offered on every adapter, and nothing greys.
+
+**A strip that holds every tile keeps §30's stable mapping** — position *i* is
+slot *i*, holes and all. One that holds fewer **packs**: `dock_map` writes
+`[dock_pos]`, the slot each position shows, and the live instances take
+positions in slot order with no holes, because a hole would spend a tile the
+strip does not have. `dock_paint` walks positions and keys them (§30.3's diff
+is per position, so a packed tile whose record changed is an identity change
+and rebuilds); `dock_hit` maps the position back to a slot; `inst_tile_rect`
+asks `dock_slot_rect`, so a minimize flies to the tile the instance is shown
+at.
+
+**When more instances are live than there are tiles, the minimized ones are
+taken first.** The strip is the only way back to a minimized window, where an
+open one can be clicked. Seven minimized instances on a CGA side strip still
+leaves an eighth unreachable from the strip, and that is the limit of the
+arithmetic rather than a case handled.
+
+### 30.6 A strip that hides — the line, the hover and the linger
+
+With `DOCK_F_AUTO` set the strip is drawn as **one line of the chrome's ink on
+the outer edge** — the primary's last row, its first column or its last — and
+the band gives back all but that one pixel (§30.5's *T* = 1). A pointer that
+rests **on the line for `DOCK_HOVER_T` = 36 ticks** (2.0 s) opens it; once
+open, it closes **`DOCK_LEAVE_T` = 55 ticks** (3.0 s) after the pointer
+leaves the strip's rect, and a pointer that comes back inside those three
+seconds resets the count.
+
+`[dock_hidden]` is the one byte the painters ask, and `dock_live_set` is its
+one writer: hidden is *auto and not open*. The **live rect**
+`[dock_lx1]..[dock_ly2]`, the live rule and field crosses and the live along
+range follow it — the line's own 1px rect while hidden, the whole strip
+otherwise — so `dock_paint`, `dock_hit`, `dock_px_hit`, `wm_dock_clear`,
+`wm_su_owed` and `wm_dock_under` never ask which mode they are in. A hidden
+`dock_paint` restores the line over the forced span and **skips the tiles
+entirely**: their keys keep what they last were, and the reveal forces the
+whole strip, whose `.zap` clears every key before a tile is drawn.
+
+**The hover is timed off `ui_task`'s tick passes** (§13.12) — `dock_pass`,
+one byte compare on every pass that is not in auto mode. It declines while a
+button is held, while a §11.2 fullscreen window or a saver session (§79.5)
+covers the screen, and while a modal file dialog (§38.2) owns every press.
+
+#### 30.6.1 The open strip is a HOLE in the clip region — nothing waits for it
+
+**The strip is drawn under windows (§30), so a hidden strip that opened under
+them would open behind whatever the user was looking at** — and holding the
+screen while it is open, the way an open menu does, would stop every task on
+the machine from drawing for as long as the pointer rests there. Neither is
+acceptable, and the clip region (§11.3) is what answers both: it is already
+how a background painter is kept off the windows above it.
+
+`dock_open` takes the lock **for the draw alone**: `[dock_up]` = 1, a
+save-under of the strip's rect in a `MEM_K_SAVE` claim, `dock_force` and
+`dock_paint` over whatever is there, and `dock_hole_build`, which writes the
+region **"the virtual desktop minus the strip"** — at most four rects — into
+`[dock_hole_tab]`. Then `[gfx_hole]` is set and the lock is released. From
+there to the close, everything keeps running and keeps drawing, round the
+strip:
+
+| path | what keeps it off the strip |
+|---|---|
+| a primitive with **no region armed** — the frontmost window's paint, a title bar, a key or click handler, the kernel's own repaints | `GFXCLIP` and `CLIPQ` — the one question every region-aware primitive already asks — find `[wm_clip_n]` = 0 and `[gfx_hole]` set and call `gfx_hole_arm`, which spends the deferred cursor hide and copies the hole region in. The primitive takes its clipped path |
+| a region **being built** for a window or the desktop — `wm_clip_set`, `wm_covered`, `wm_chrome_clip`, the dither's `wm_dmg_occl`, `wm_clip_rect` | `dock_hole_sub` subtracts the strip at the end of the walk, over every window |
+| a background painter that asks `wm_obscured` and skips a frame | `wm_obscured` answers covered for a window under the strip |
+| the **raise cache** — a take reads pixels and a restore blits them unclipped | `wm_su_take` and `wm_su_try` refuse a window under the strip (`dock_hole_win`), so the window's own paint runs, clipped |
+| **a menu** | `menu_drop` puts the hole and any region away while the menu is down and puts them back at the release, before its restore — a menu over the open strip draws whole |
+| **the strip itself** | `dock_paint`, while open, does the same for its own draw — a focus change moves a tile's mark on the open strip with no flash — and answers CF = 0, because a strip on top damages no window under it. `dock_force_r` ignores damage while it is open, for the same reason |
+
+A `CLIPQ` is `cmp word [wm_clip_n], 0` plus one `cmp word [gfx_hole], 0`
+that is false whenever no strip is open, and it replaced the bare compare at
+every site, so no primitive knows the dock exists.
+
+**Clicks go to the open strip first.** `ui_task`'s press path and `ui_rdown`
+ask `dock_click` / `dock_rclick` before `wm_hit` while `[dock_up]` is set, and
+a tile acts under the lock exactly as it does on a visible strip; its repaints
+go round the strip like any other.
+
+**The close puts back the pixels only while they are still true.** Anything
+that wanted to draw under the open strip and was clipped round it —
+`gfx_hole_arm`, a `dock_hole_sub` that removed something, a refused cache —
+sets `[dock_stale]`, and then the save-under is older than what belongs there.
+`dock_shut` restores the buffer when it is clean; otherwise it frees it and
+runs `wm_paint_dmg` over the strip's rect, which is the repaint a closing
+window gets, with the line already live so the repaint draws the line. It is
+imprecise in the safe direction: `gfx_hole_arm` cannot see the rect about to
+be drawn, so a clock tick in the menu bar marks the strip stale too, and the
+cost of that is a damage repaint of the strip's rect.
+
+Four things close or forget it: the linger (`dock_pass`), a §11.2 fullscreen
+window (closed, and the repaint puts the window's pixels under the strip
+back), a saver session (**forgotten** by `dock_drop` — the saver owns every
+pixel and repaints on its way out, and a damage repaint would draw over it),
+and an fsx bracket or a geometry change (`dock_drop` again — the whole screen
+is repainted after both).
+
+**What is not clipped**: `gfx_xor_fill` takes no region. A desktop zone's
+selection XOR under an open right-hand strip inverts the strip's pixels, and
+the next XOR puts them back; zones under the strip cannot be clicked while it
+is open, so only a selection cleared from elsewhere reaches it.
+
 ## 31. ctrl.inc — the Control Panel window
 
 Built-in singleton app kind (KIND_CTRL = 5, cap 1), window "Control Panel",
@@ -47005,6 +47178,8 @@ cp_items:  dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
            dw cp_s_drv,   cp_drv_paint,   cp_drv_click,   0   ; §31.6
            dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0   ; §31.7
            dw cp_s_vid,   cp_vid_paint,   cp_vid_click,   0   ; §31.10
+           dw cp_s_thm,   cp_thm_paint,   cp_thm_click,   0   ; §76.4
+           dw cp_s_dock,  cp_dock_paint,  cp_dock_click,  0   ; §31.13
 cp_items_end:
 CP_ITEMS   equ (cp_items_end - cp_items) / CP_ISTRIDE
 CP_ITIME   equ 1     ; the Date/Time item's index: §12.1 selects it by name
@@ -47021,12 +47196,12 @@ CP_IBX1 to CP_IBX2 = 85 and the name starts at CP_IX = 6, so a tenth glyph
 would cross the divider. `'Scheduler'` and `'Date/Time'` are both exactly
 at that limit.
 
-**The list holds NINE rows and no more, and that is a build-time guard.**
-Row *i*'s bar runs `CP_I0Y + i*CP_IROWH .. + CP_IBH - 1`, so row 8 ends at 129
-inside a 132-tall content box and row 9 would run through the bottom border
-onto the desktop. Six static items plus the **three** drivers that publish a
-page (§31.9 — the hard disk's, the debug monitor's and the network link's; the
-sound driver publishes none) is exactly nine, and `%if CP_ITEMS + 3 > (CP_CH -
+**The pane holds NINE rows, and a longer list scrolls** (§31.1.5, which the
+Dock row made necessary). Row *i*'s bar runs `CP_I0Y + i*CP_IROWH .. + CP_IBH - 1`,
+so row 8 ends at 129 inside a 132-tall content box and row 9 would run through
+the bottom border onto the desktop. Six static items plus the **three** drivers
+that publish a page (§31.9 — the hard disk's, the debug monitor's and the
+network link's; the sound driver publishes none) was exactly nine, and `%if CP_ITEMS + 3 > (CP_CH -
 CP_I0Y) / CP_IROWH` is what makes a fourth fail to assemble rather than fail
 on the glass. It has fired twice and grown the window twice — 120 → 140 when
 Date/Time took its two option rows (§31.5), 140 → 151 when `DRVC_NET` (§62)
@@ -47167,6 +47342,33 @@ which is the argument for doing it at the first reorder rather than the third.
 through `DS` is not that table — the read and the write use the same wrong
 address, so the feature would have worked while five bytes landed somewhere in
 the kernel. `tools/os88ovlchk.py` refused the build, twice on this page now.
+
+#### 31.1.5 The item list scrolls too
+
+The Dock row (§31.13) is a seventh static item, and seven plus three driver
+pages is ten rows in a pane that holds nine. The window cannot grow — 151 is
+already the minimum that fits CGA — so the list scrolls, the way the Drivers
+page's list did first (§31.1.1).
+
+**A list of nine rows or fewer is the list it always was**: no arrows, and the
+pitch and first row of §31.1 unchanged, so every machine that does not load
+three page-publishing drivers draws the identical pane. A longer list shows
+**eight** rows from `[cp_ltop]` and puts two arrows where the ninth row was —
+`CP_DSW`-wide cells at x 22 and 52, row 118, drawn from the Drivers page's own
+interior fill and triangle, each greyed at its own end through one predicate
+(`cp_larrowok`, §47 rule 2).
+
+`cp_pick` answers an **ordinal** (the row plus `[cp_ltop]`) and `cp_listrow`
+draws nothing for an ordinal off the screen, so a selection change that
+leaves the view costs no pixels and nothing above either routine learned the
+list scrolls. An arrow acts on the press, like a row, and repaints the pane:
+every row moved, which is the one whole-pane repaint a scroll owes.
+
+**A selection made from outside the panel scrolls itself into view** — the
+menu bar clock opening Date/Time, `drv_notice` opening Drivers. `[cp_lsel]` is
+the selection the list last showed; `cp_lfix` (called by every whole-list
+paint) scrolls only when `[cp_sel]` differs from it, and a click on a row
+updates both, so a user's own scroll is never undone by the next repaint.
 
 #### 31.1.2 A scroll drew the list three times, and twice of that was the ARROW
 
@@ -48437,6 +48639,38 @@ lengths) and a call from the click path. One constant line needs none of the
 three: `cp_vid_cap` is gone, drawn inline in `cp_vid_paint` on ground
 `cp_page` has already whitened, and `cp_vid_click` redraws the dots and the
 button and stops. The page has no state line left at all.
+
+### 31.13 Dock page — where the strip stands, and whether it hides
+
+`Dock` is the seventh static row in `cp_items`, **last**, so no record index
+before it moves (§31.10.1) — `CP_IDOCK` is 6 on kern_big and 4 on kern_small.
+It is the Theme page's shape (§76.4): a radio group and a check box, applied on
+the spot, remembered at the close.
+
+```nasm
+CPK_R0Y  equ 18                 ; Bottom glyph top; Left 34, Right 50
+CPK_ROWH equ 16
+CPK_AY   equ 74                 ; 'Auto-hide' check box glyph top
+CPK_CAPY equ 96                 ; caption: 'Rest on the edge to show'
+```
+
+| id | control | greyed when |
+|---|---|---|
+| 1 | Bottom | never |
+| 2 | Left | never — a short screen holds fewer tiles (§30.5.1) |
+| 3 | Right | never |
+| 4 | Auto-hide | never |
+
+A click that changes the byte calls `dock_apply` through `cw_dock_apply`, sets
+`[cp_wdirty]` (§31.8 — no page writes on a click) and posts `[cp_dirty]`, and
+`wm_paint_all` puts the strip, the band and the drive column up where they now
+belong: its dither covers the rows and columns the strip has just vacated, and
+`dock_apply`'s `wm_refit` has already moved every window back inside the new
+band. A click on the live row, or on a greyed one, changes nothing and draws
+nothing.
+
+**The list grew to ten rows and scrolls** (§31.1.5): the window cannot grow,
+because 151 is already the minimum that fits CGA.
 
 ## 32. softgfx.inc — the software renderer (§39's 1bpp driver)
 
@@ -70147,7 +70381,7 @@ the wrong settings. Every value now travels with a key that says what it is.
         db  data[len]
 ```
 
-Seven keys today, 81 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
+`DK` is the dock's one byte (§30.5), a key of its own at ver 1. Seven keys at the time this paragraph was written, 81 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
 clock 12/24, `CS` clock seconds, `SM` scheduler mode, and
 `HD` — a **driver's** own settings, whose contents the kernel does not know
 (§51.9). They are ASCII so a hex dump of the file reads as the list of

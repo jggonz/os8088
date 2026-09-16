@@ -326,7 +326,7 @@ font_char:
     cmp dx, [vid_chm8]
     ja .done
 %endif
-    cmp word [wm_clip_n], 0     ; ...and against the clip region, which
+    CLIPQ                        ; ...and against the clip region, which
     je .noclip                  ; answers in ROWS (SPEC.md 11.3.2): a cell an
     push ax                     ; edge crosses horizontally draws the rows on
     mov ax, cx                  ; our side of it rather than nothing at all,
@@ -1315,7 +1315,7 @@ font_run_x:
     pop si
     or bp, bp
     jz .out                     ; nothing on screen: no rows to write
-    cmp word [wm_clip_n], 0
+    CLIPQ                   
     je .rm
     ; A region is armed. stosb walks CONSECUTIVE bytes, so it is only correct
     ; if every cell is drawn - one rejected in the middle breaks the run into
@@ -1668,7 +1668,7 @@ font_run_x:
                                 ; of it. wm_clip_test's contract is "clobbers:
                                 ; flags", so the rect survives the call and
                                 ; the fill below can have it as it stands
-    cmp word [wm_clip_n], 0
+    CLIPQ                   
     je .whole                   ; disarmed: the pair cannot disagree
     call wm_clip_test
     jnc .whole                  ; ...or the whole run is inside one fragment
@@ -1827,7 +1827,7 @@ font_run_cell:
 
     cmp cx, [vid_cwm8]          ; x only: the run's y was tested once, by the
     ja .out                     ; caller (SPEC.md 6.1.6)
-    cmp word [wm_clip_n], 0     ; the cell against the region in ROWS, exactly
+    CLIPQ                        ; the cell against the region in ROWS, exactly
     je .noclip                  ; as its glyphs are, background with them
     push ax                     ; (SPEC.md 11.3.2)
     mov ax, cx                  ; ...and x2/y2 in place: CX and DX already

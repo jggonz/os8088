@@ -2012,6 +2012,16 @@ menu_drop:
     call gfx_save
 .nosave:
 
+    ; --- A MENU IS OVER AN OPEN DOCK (SPEC.md 30.6.1) ------------------------
+    ; The strip's hole and any region armed round it are put away while the
+    ; menu is down and back at the release, before the restore - so a menu
+    ; dropped over the open strip draws whole, and the refused-save repaint
+    ; below goes round the strip again like everything else.
+    push word [gfx_hole]
+    push word [wm_clip_n]
+    mov word [gfx_hole], 0
+    mov word [wm_clip_n], 0
+
     ; --- draw the menu: the chrome's ground, its frame, items 8px in ---------
     call thm_bg
     mov ax, [menu_x1]
@@ -2112,6 +2122,8 @@ menu_drop:
 
     ; --- released: put the screen back, report the selection -------------------
 .up:
+    pop word [wm_clip_n]        ; the open dock's hole, back (see above)
+    pop word [gfx_hole]
     mov byte [menu_dropd], 0    ; the arrows are a pointer again (SPEC 9.6.3).
                                 ; The poll loop above has exactly this one way
                                 ; out, so no path can leave the flag standing

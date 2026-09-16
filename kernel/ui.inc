@@ -253,6 +253,11 @@ ui_task:
                                 ; is nothing left here to say
 
 .on_desktop:
+    cmp byte [dock_up], 0       ; an OPEN hidden dock is over every window
+    je .wmhit                   ; (SPEC.md 30.6.1), so it answers first
+    call dock_click
+    jc .yj1
+.wmhit:
     call wm_hit                 ; BX = window hit (0 = none), AL = region
     or bx, bx
     jz .desk_icons              ; no window: dock, then desktop icons
@@ -690,6 +695,13 @@ ui_task:
                                 ; edge is drawn - toast_show is reachable from
                                 ; a lock-holding callback, a worker holding
                                 ; nothing, and kernel code
+    call dock_pass              ; a pointer resting on a HIDDEN strip's line
+                                ; opens it, and one that left an open strip
+                                ; closes it (SPEC.md 30.6) - one byte compare
+                                ; on a machine that does not hide its strip.
+                                ; A tick-coalesced step for the toast's reason:
+                                ; a two-second dwell measured in ticks cannot
+                                ; tell 55 ms of lateness from none
     ; --- 4. the clock: keep time always, draw only when something changed ----
     ; Taking the gfx lock blinks the cursor, and that blink IS the flicker
     ; the "seconds in menu bar" setting exists to remove - so the lock is
@@ -1157,6 +1169,11 @@ ui_rdown:
 %endif
     jmp .ret
 .hit:
+    cmp byte [dock_up], 0       ; an OPEN hidden dock answers first, over the
+    je .whit                    ; windows (SPEC.md 30.6.1)
+    call dock_rclick
+    jc .ret
+.whit:
     call wm_hit                 ; BX = window hit (0 = none), AL = region
     or bx, bx
     jz .strip                   ; no window: the dock gets the press, and the

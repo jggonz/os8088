@@ -2358,6 +2358,16 @@ SOAK = [
         "Does the dock strip mark windows it did not draw under? (SPEC.md"
         "30.3.3)",
         needs=("marty",), serial=True),
+    Row("dockpos", "soak", py("tests/dockpos.py", "--cga"), 300.0,
+        "Does the dock stand on every edge and hide? (SPEC.md 30.5, 30.6,"
+        "31.13) The Dock page drives Left, Right and Auto-hide on a 5150/"
+        "Hercules: the band the kernel published, the rule on its edge and the"
+        "glass against a forced repaint for each, then a rest on the hidden"
+        "line opens the strip over the desktop, the 3 s linger, a screen put"
+        "back pixel for pixel, a press outside the open strip reaching the"
+        "window under it, the gfx lock free while it is open - and a 5150/CGA"
+        "standing it on the left with seven tiles",
+        needs=("marty",), serial=True),
     Row("dualcheck", "soak", py("tests/dualcheck.py"), 10.0,
         "Can this MartyPC drive TWO video cards at once?"
         "(docs/plans/completed/DUAL-DISPLAY-PLAN.md 9)",

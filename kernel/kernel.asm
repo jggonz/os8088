@@ -6337,6 +6337,10 @@ cw_thm_desk:            call thm_desk
 cw_thm_set:             call thm_set
                     retf
 %endif
+cw_dock_apply:          call dock_apply     ; the Dock page and the settings
+                    retf                    ; reader (SPEC.md 30.5)
+cw_gfx_hole_arm:        call gfx_hole_arm   ; CLIPQF: the open dock's hole
+                    retf                    ; from .cold (SPEC.md 30.6.1)
 ; THE SCREEN SAVER'S WAY BACK (SPEC.md 79.6), and it is THREE calls behind one
 ; shim rather than three shims, because the image rung it comes out of has
 ; single-figure bytes left in it (docs/KERNEL-MEMORY.md). wm_paint_all deliberately forces NEITHER

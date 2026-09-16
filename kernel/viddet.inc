@@ -250,8 +250,12 @@ vid_ph      dw SCREEN_H
 vid_pwm1    dw SCREEN_W-1
 vid_phm1    dw SCREEN_H-1
 
-vid_dock_y0 dw SCREEN_H-24      ; dock strip top row (DOCK_H, dock.inc)
-vid_dock_ty0 dw SCREEN_H-24+3   ; dock tile top row
+vid_dock_y0 dw SCREEN_H-24      ; the desktop band's first row that is NOT
+                                ; the band: the strip's top on a bottom dock,
+                                ; the screen's height on a side one. dock_geom
+                                ; is its writer (SPEC.md 30.5)
+vid_band_x0 dw 0                ; ...and the band's x extent, [x0, xe): a
+vid_band_xe dw SCREEN_W         ; side strip's reserved columns are outside it
 vid_clk_hx  dw (SCREEN_W-(MENU_CLK_W+14)) & 0FFF8h
                                 ; menu bar clock cell: the hit band's left
                                 ; edge, and the left edge of the clock's own
@@ -643,10 +647,13 @@ vid_apply:
     mov ax, [vid_h]             ; --- the heights that are NOT the display's
     sub ax, TITLE_H
     mov [vid_ymax], ax
-    sub ax, DOCK_H - TITLE_H
-    mov [vid_dock_y0], ax
-    add ax, 3
-    mov [vid_dock_ty0], ax
+    sub ax, DOCK_H - TITLE_H    ; the BOTTOM strip's band, which is what the
+    mov [vid_dock_y0], ax       ; loading screen and an fsx bracket's borrowed
+                                ; geometry want. dock_geom corrects all of it
+                                ; for the strip the user chose, and it is NOT
+                                ; called from here (SPEC.md 30.5): this runs
+                                ; from the splash's first tick, while dock.inc
+                                ; is still on the floppy
 
     ; --- the CHROME's extent (SPEC.md 39.16): the display this call is
     ; publishing, which for the primary is what every strip measures itself
@@ -690,7 +697,8 @@ vid_apply:
 
     mov ax, [vid_w]             ; --- the desktop's drive column, right-hung.
     sub ax, 56                  ; ONE word: desk_zone_rect derives the drawn
-    mov [vid_desk_zx], ax       ; rect from it (SPEC.md 26.4)
+    mov [vid_desk_zx], ax       ; rect from it (SPEC.md 26.4). dock_geom moves
+                                ; it in off a right-hand strip (30.5)
 
     ; --- ...AND [vid_popmax] IS NOT COMPUTED HERE ANY MORE. Nine instructions
     ; worked out min((h - MBAR_H - 2) >> 4, MENU_POPMAX) from a [vid_h] that
@@ -1232,6 +1240,10 @@ vid_cga_equip:
 vid_init:
     call vid_detect
     call vid_apply
+    call dock_geom              ; ...and the strip where the user put it
+                                ; (SPEC.md 30.5). HERE and never from
+                                ; vid_apply, which the splash reaches before
+                                ; dock.inc has come off the floppy
     cmp byte [spl_live], 0      ; the splash set THIS mode on its first tick
     jne .keep                   ; and is still drawing on it
     call vid_setmode
