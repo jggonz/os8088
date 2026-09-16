@@ -82,8 +82,8 @@ DOCK_P_RIGHT  equ 2
 DOCK_P_MASK   equ 3
 DOCK_F_AUTO   equ 4             ; ...and bit 2: the strip hides (SPEC.md 30.6)
 
-DOCK_HOVER_T  equ 14            ; ticks on the line before it opens: 0.77 s
-DOCK_LEAVE_T  equ 27            ; ticks off the strip before it closes: 1.48 s
+DOCK_HOVER_T  equ 5             ; ticks on the line before it opens: 0.27 s
+DOCK_LEAVE_T  equ 14            ; ticks off the strip before it closes: 0.77 s
 
 ; --- the tile key's low three bits (SPEC.md 30.3) ----------------------------
 ; The MARKS live here and nothing else does, so old XOR new says exactly what
