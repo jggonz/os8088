@@ -67,16 +67,50 @@ SPAWN = re.compile(r"^\s*call\s+OSAPI_TASK_SPAWN\b")
 ENTRY = re.compile(r"^\s*mov\s+ax\s*,\s*([A-Za-z_][\w]*)\s*(?:;.*)?$")
 
 
+INCLUDE = re.compile(r'^\s*%include\s+"([^"]+)"')
+
+
+def sources_of(path):
+    """The .asm and every file it %includes, transitively, that lives in its
+    own directory - the files that ASSEMBLE INTO THIS IMAGE.
+
+    Not "every .inc beside the .asm", which is what this read until
+    PIXELSTEIN: apps/pixelstein/ holds TWO images - pxstein.asm, the loader
+    that is PXSTEIN.O88, and pxgame.asm, part 0, which is where the worker
+    is spawned (pxwin.inc). A directory walk found px_worker for the loader
+    too, stkdepth.py walked the loader's listing for a routine it does not
+    contain and printed 0, and the loader's header (OS88_STACK_DEFAULT, 384)
+    passed at "0 + 64 in 384" while the header the kernel actually reads -
+    part 0's, OS88_STACK_256 - was never looked at. The include tree is what
+    the assembler sees, so it is what this reads.
+    """
+    here = os.path.dirname(path)
+    out, todo = [], [path]
+    while todo:
+        f = todo.pop(0)
+        if f in out or not os.path.exists(f):
+            continue
+        out.append(f)
+        for ln in open(f, errors="replace"):
+            m = INCLUDE.match(ln.split(";")[0])
+            if not m:
+                continue
+            cand = os.path.join(here, m.group(1))
+            if os.path.exists(cand) and os.path.dirname(os.path.abspath(cand)) == \
+               os.path.abspath(here):
+                todo.append(cand)
+    return out
+
+
 def worker_of(path):
     """The near entry the package hands OSAPI_TASK_SPAWN, or None.
 
     The spawn is not always in the top-level .asm: TANK's is in tkattr.inc and
     BROWSER's in brnet.inc, and a gate that read only the .asm sized neither
-    and said nothing - so every .inc beside the .asm is read too, the .asm
-    first.
+    and said nothing - so every .inc the .asm assembles is read too (its
+    include tree, sources_of), the .asm first.
     """
-    here = os.path.dirname(path)
-    files = [path] + sorted(p for p in glob.glob(os.path.join(here, "*.inc")))
+    files = sources_of(path)
     for f in files:
         lines = open(f, errors="replace").read().splitlines()
         for i, ln in enumerate(lines):
@@ -120,18 +154,33 @@ def c_worker(path):
 
 
 def spawns(path):
-    """Does any source of this package call OSAPI_TASK_SPAWN at all?"""
-    here = os.path.dirname(path)
-    for f in [path] + glob.glob(os.path.join(here, "*.inc")):
+    """Does any source of this IMAGE call OSAPI_TASK_SPAWN at all?"""
+    for f in sources_of(path):
         for ln in open(f, errors="replace"):
             if SPAWN.match(ln.split(";")[0]):
                 return True
     return False
 
 
-def declared(o88):
-    """The class byte out of the BUILT package, not out of the source."""
-    with open(o88, "rb") as f:
+def built_of(asm):
+    """The built file whose header the kernel reads the class out of: the
+    package's `.o88`, or - for an image that is a PART of one and has no
+    `.o88` of its own (SPEC.md 20.12.10: PIXELSTEIN's pxgame.asm is part 0
+    of PXSTEIN.O88, and the kernel reads byte +15 off the segment the
+    instance was re-homed onto, kernel/instance.inc) - its `.bin`, which
+    carries the same 32-byte header at offset 0 because os88pkg.py
+    validates and never relocates."""
+    stem = os.path.splitext(os.path.basename(asm))[0]
+    for ext in (".o88", ".bin"):
+        p = os.path.join(BUILD, stem + ext)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def declared(built):
+    """The class byte out of the BUILT image, not out of the source."""
+    with open(built, "rb") as f:
         hdr = f.read(32)
     if len(hdr) < 32:
         return None
@@ -173,8 +222,8 @@ def main():
             elif c_worker(asm):
                 cpkgs.append(app)        # a C worker: named, see c_worker()
             continue                     # no worker: nothing to size
-        o88 = os.path.join(BUILD, "%s.o88" % os.path.splitext(os.path.basename(asm))[0])
-        if not os.path.exists(o88):
+        o88 = built_of(asm)
+        if o88 is None:
             unbuilt.append(app)
             continue
         cls = declared(o88)

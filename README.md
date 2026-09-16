@@ -275,7 +275,12 @@ multi-instance:
 - **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, [Pac-Man](apps/pacman/README.md), Cyclone 88,
   Clear Skies, Tank Attack (a first-person wireframe tank duel that takes the
   whole machine, in 320x200 colour on CGA, Mode X on VGA and 640x200 mono in
-  the middle of a Hercules) and TameGram.
+  the middle of a Hercules), TameGram and Pixelstein 3D (a raycast
+  first-person shooter in the shape of the 1992 one, priced for the 4.77 MHz
+  8088 before a line of it was shaped - fullscreen in CGA 320x200x4, the
+  160x100x16 text retime, the Hercules box or Mode X, and windowed as a 1bpp
+  band; the flat-shaded corridors of its first wave, textures and guards to
+  follow).
 - ...plus the Task Manager itself, and HELLO, a minimal package that exists to
   be the smallest thing the SDK can build.
 
