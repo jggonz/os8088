@@ -845,15 +845,17 @@ CPE_PAINT   equ 0
 CPE_ONCLICK equ 1
 CPE_FLUSH   equ 2
 CPE_TICK    equ 3
-CPE_ONUP    equ 4               ; SPEC.md 13.8.3's two edges. The RELEASE is on
-%ifdef KERN_BIG                 ; both kernels - a driver's page acts on it
-CPE_ONDRAG  equ 5               ; (SPEC.md 13.8.4) - and the drag is kern_big's
-CP_NENT     equ 6               ; alone, so CP_NENT differs between the builds.
-%else                           ; Which is safe because MOD_H_NENT is IN the
-CP_NENT     equ 5               ; header and mod_check compares it against the
-%endif                          ; file it just read, so a CTRL.DRV with the
-                                ; wrong count is refused rather than
-                                ; dispatched into
+CPE_ONUP    equ 4               ; release exists on both kernels
+%ifdef KERN_BIG
+CPE_ONDRAG  equ 5               ; drag exists only on kern_big
+CPE_DOCK_GEOM equ 6
+CP_NENT     equ 7
+%else
+CPE_DOCK_GEOM equ 5
+CP_NENT     equ 6
+%endif
+; Layout setup uses the next free entry without growing MOD_NENT or mod_fp.
+; MOD_H_NENT and the layout stamp reject a module from another build.
 CPFP        equ mod_fp + MOD_CTRL * MODFP_STRIDE
 
 section .modc                   ; the on-demand image starts HERE, at its own
@@ -881,6 +883,7 @@ modc_hdr:
 %ifdef KERN_BIG
     dw modc_e_ondrag            ; CPE_ONDRAG
 %endif
+    dw modc_e_dock_geom         ; CPE_DOCK_GEOM: Dock and Display settings
     times MOD_NENT - CP_NENT dw 0   ; the table is a FIXED MOD_NENT words, so
                                 ; MOD_HDR_SZ is a constant and mod_check can
                                 ; refuse an entry offset that points into the
@@ -913,6 +916,10 @@ modc_e_onup:    call cp_onup_x
 modc_e_ondrag:  call cp_ondrag_x
             retf
 %endif
+
+modc_e_dock_geom: call cpd_geom
+    retf
+DOCK_GEOM cpd
 
 section .cold                   ; ...and the two that stay resident
 

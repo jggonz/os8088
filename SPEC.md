@@ -657,7 +657,8 @@ publish, nothing to retire. That is also the trade: the blob half can refuse a
 late call through `[spl_fseg]` (§2.9.5.1) and this half cannot, because the
 bytes are simply forfeit.
 
-**What it buys, measured:**
+**What it bought at the split, measured** (the Dock setup split in §30.5
+later raises the disposable blob from 8 to 9 sectors):
 
 | | before | after |
 |---|---:|---:|
@@ -1238,8 +1239,8 @@ in the tree.
 - **`MOD_NENT` is what the modules use and not a round number.** It is
   **7**, which is what the largest module declares — §38.0's Standard File
   dialog on `kern_small` (`FD_NENT` 7). The others: `HB_NENT` 7 (§87,
-  `kern_big`; `kern_small` ships a one-entry stub), `CP_NENT` 6 on `kern_big`
-  and 5 on `kern_small`, `FM_NENT` 4, `FCP_NENT` 3, `CLO_NENT` 1. Every module
+  `kern_big`; `kern_small` ships a one-entry stub), `CP_NENT` 7 on `kern_big`
+  and 6 on `kern_small`, `FM_NENT` 4, `FCP_NENT` 3, `CLO_NENT` 1. Every module
   header ends `times MOD_NENT - X dw 0`, which makes an eighth entry a **hard
   NASM error in the file that grew** rather than an overrun. It is **not**
   per-build, and that was tried: `tools/os88mod.py` scrapes the first
@@ -21984,7 +21985,8 @@ and such a page acts on the press exactly as before.
 `kern_big`'s.** `W_ONMOUSEUP` is in `kern_small`'s window record too
 (`WIN_SIZE` 28 includes it) and `W_ONDRAG` is not (§13.8.2), so `cp_kinit`,
 `cp_onup`, `cpf_cp_onup`, `CPE_ONUP`, `cp_pt` and `cp_drv_ev` are unconditional
-and `CP_NENT` is **5** there against 6. On `kern_small` `cp_onup_x` reduces to
+and `CP_NENT` is **6** there against 7 (including §30.5's layout entry).
+On `kern_small` `cp_onup_x` reduces to
 `cp_pt` + `DSV_CPUP` through `cp_drv_ev` and stops: the static pages there
 still act on the press, and none of the kernel's own arm, probe or pressed
 look crosses over. Without that edge the driver pages are dead on the 128KB
@@ -25792,8 +25794,9 @@ Four sectors, every one of them at the very top of `.text` — which is why
 carrying *"`.text` MAY NOT FALL BELOW 50,178 BYTES … and the answer then is a
 design change, not a new number"* in capitals. **This is that design change.**
 With one blob length the band is seven sectors wide and reaches memory 6,656,
-so `KSIG_OFF` is 6,656 (file sector 21) and the floor under `.text` is
-**6,658**. `tests/unit/t_canary.py` now derives *every* `BOOT2_SECS*` equate
+so `KSIG_OFF` became 6,656 (file sector 21). §30.5 later adds one
+boot-blob sector and moves it to 6,144, keeping file sector 21 and a
+**6,146** floor under `.text`. `tests/unit/t_canary.py` now derives *every* `BOOT2_SECS*` equate
 and requires the offset to cross on all of them, so a second blob length that
 comes back fails the fast tier instead of leaving one arm's canary inert — the
 "both lengths" rule lived in a Makefile comment and was enforced by nothing.
@@ -28831,17 +28834,19 @@ without leaving the constant no legal value — *"and the answer then is a desig
 change, not a new number"*. The next kernel size pass takes `.text` by ~600.
 The change is §15.3.8.5.1: the knob arm's blob was brought under 4,096, so
 **there is one blob length**, the band is the seven-sector single-length one,
-and `KSIG_OFF` is **6,656 — memory sector 13, file sector 21.**
+and `KSIG_OFF` became **6,656 — memory sector 13, file sector 21.**
+§30.5's layout setup later raises the blob to nine sectors, so the offset is
+now **6,144 — memory sector 12, still file sector 21**.
 
 It is a *lone* sector where 106 sat in a run of five, and that trade is
 deliberate: margin against a BPB that moves is worth less than margin against
 `.text`, because a geometry is a decision somebody takes and `.text` shrinks
-whenever anyone tidies anything. The floor under `.text` is **6,658** instead
+whenever anyone tidies anything. The floor under `.text` is **6,146** instead
 of 50,178. `tests/unit/t_canary.py` reads **every** `BOOT2_SECS*` equate and
 requires the offset to cross on all of them, so a second blob length coming
 back fails the fast tier rather than leaving one arm's canary inert — until
 this change that rule existed only as a Makefile comment and was enforced by
-nothing. 6,656 is inside the first 64KB, so the compare still reuses the `ES`
+nothing. 6,144 is inside the first 64KB, so the compare still reuses the `ES`
 the handoff already loads, and the word is the same for every geometry because
 `KERNEL.SYS` is one file. `tests/suite.py`'s `canary` row asserts all of that against the
 images `make` just built, so it cannot drift — and it asserts it over **every**
@@ -46930,9 +46935,21 @@ DOCK_P_RIGHT  equ 2
 DOCK_F_AUTO   equ 4             ; bit 2: hide it (30.6)
 ```
 
-`dock_geom` turns it into geometry, and it is the **only** writer of every word
-below. `vid_apply` calls it after the chrome's extent is published (§39.16),
-so an adapter switch re-derives it for free, and `dock_apply` — the geometry,
+Layout setup uses the settings lifetime split: one `DOCK_GEOM` macro emits
+into the disposable boot overlay and `CTRL.DRV`. The boot copy requires one
+additional blob sector (8 to 9), released with the blob before the desktop.
+`dock_geom` dispatches to the overlay only while `[spl_fseg] > COLD_SEG`;
+after boot its callers are the already loaded Control Panel's Dock and
+Display actions. It never loads a module.
+The extra Control Panel entry fits the existing seven-slot module table.
+Fullscreen return calls resident `dock_band`, which restores the band and
+drive-column position from the unchanged dock geometry. It neither recalculates
+layout nor requires the settings module to be present.
+
+`dock_geom` calculates the layout and `dock_band` publishes its desktop
+bounds. `vid_init` calls setup after the chrome's extent is published
+(§39.16); adapter and display-layout switches recalculate it, and
+`dock_apply` — the geometry,
 `desk_rowcalc`, `wm_refit`, a raise-cache drop and `dock_force` — is what the
 page and the settings reader call when the byte itself changes.
 
@@ -47039,42 +47056,34 @@ the machine from drawing for as long as the pointer rests there. Neither is
 acceptable, and the clip region (§11.3) is what answers both: it is already
 how a background painter is kept off the windows above it.
 
-`dock_open` takes the lock **for the draw alone**: `[dock_up]` = 1, a
-save-under of the strip's rect in a `MEM_K_SAVE` claim, `dock_force` and
-`dock_paint` over whatever is there, and `dock_hole_build`, which writes the
-region **"the virtual desktop minus the strip"** — at most four rects — into
-`[dock_hole_tab]`. Then `[gfx_hole]` is set and the lock is released. From
-there to the close, everything keeps running and keeps drawing, round the
-strip:
+`dock_open` takes the lock **for the draw alone**, makes the whole strip
+live, forces and paints it, then enables `[gfx_hole]` and releases the lock.
+The dock does not allocate a save-under. Closing always repaints its old rect
+with `wm_paint_dmg`, after making the hidden line live again. This trades the
+clean-buffer fast close for less resident code and no transient heap claim.
 
-| path | what keeps it off the strip |
-|---|---|
-| a primitive with **no region armed** — the frontmost window's paint, a title bar, a key or click handler, the kernel's own repaints | `GFXCLIP` and `CLIPQ` — the one question every region-aware primitive already asks — find `[wm_clip_n]` = 0 and `[gfx_hole]` set and call `gfx_hole_arm`, which spends the deferred cursor hide and copies the hole region in. The primitive takes its clipped path |
-| a region **being built** for a window or the desktop — `wm_clip_set`, `wm_covered`, `wm_chrome_clip`, the dither's `wm_dmg_occl`, `wm_clip_rect` | `dock_hole_sub` subtracts the strip at the end of the walk, over every window |
-| a background painter that asks `wm_obscured` and skips a frame | `wm_obscured` answers covered for a window under the strip |
-| the **raise cache** — a take reads pixels and a restore blits them unclipped | `wm_su_take` and `wm_su_try` refuse a window under the strip (`dock_hole_win`), so the window's own paint runs, clipped |
-| **a menu** | `menu_drop` puts the hole and any region away while the menu is down and puts them back at the release, before its restore — a menu over the open strip draws whole |
-| **the strip itself** | `dock_paint`, while open, does the same for its own draw — a focus change moves a tile's mark on the open strip with no flash — and answers CF = 0, because a strip on top damages no window under it. `dock_force_r` ignores damage while it is open, for the same reason |
+The existing region subtractor `wm_clip_subr` supplies both dock clip paths:
+`gfx_hole_arm` seeds the virtual desktop and subtracts the live dock;
+`dock_hole_sub` subtracts it from a region already being built. There is no
+second intersection scan and no cached copy of the hole region. One desktop
+rect minus one strip needs at most four fragments, within the clip capacity.
+The deferred cursor hide is spent before arming that region.
+`CLIPQ`, `CLIPQF` and primitive entries share `gfx_clip_query`, preserving
+registers and returning ZF = 1 only when no clip is required. This replaces
+repeated inline checks with a call/return on each query.
 
-A `CLIPQ` is `cmp word [wm_clip_n], 0` plus one `cmp word [gfx_hole], 0`
-that is false whenever no strip is open, and it replaced the bare compare at
-every site, so no primitive knows the dock exists.
+Window painters, desktop painters and unregioned primitives continue drawing
+around the open strip. Raise-cache capture and restore still refuse windows
+that overlap it. Menus and the dock itself temporarily suspend the hole and
+region while drawing; the open dock returns CF = 0 because it damages no
+window beneath it. Damage beneath it does not force its tiles.
 
-**Clicks go to the open strip first.** `ui_task`'s press path and `ui_rdown`
-ask `dock_click` / `dock_rclick` before `wm_hit` while `[dock_up]` is set, and
-a tile acts under the lock exactly as it does on a visible strip; its repaints
-go round the strip like any other.
+**Clicks go to the open strip first.** The left and right press paths ask the
+dock before `wm_hit` while `[dock_up]` is set. A press outside passes through.
 
-**The close puts back the pixels only while they are still true.** Anything
-that wanted to draw under the open strip and was clipped round it —
-`gfx_hole_arm`, a `dock_hole_sub` that removed something, a refused cache —
-sets `[dock_stale]`, and then the save-under is older than what belongs there.
-`dock_shut` restores the buffer when it is clean; otherwise it frees it and
-runs `wm_paint_dmg` over the strip's rect, which is the repaint a closing
-window gets, with the line already live so the repaint draws the line. It is
-imprecise in the safe direction: `gfx_hole_arm` cannot see the rect about to
-be drawn, so a clock tick in the menu bar marks the strip stale too, and the
-cost of that is a damage repaint of the strip's rect.
+Hover and linger share one active flag and start tick: only one can be running
+at a time. Transitioning or cancelling resets the flag; elapsed ticks use
+modular subtraction, retaining the 5-tick hover and 14-tick linger.
 
 Four things close or forget it: the linger (`dock_pass`), a §11.2 fullscreen
 window (closed, and the repaint puts the window's pixels under the strip

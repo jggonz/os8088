@@ -149,7 +149,7 @@ dock_init:
     push ax
     mov ax, [dock_la1]          ; THE WHOLE STRIP is owed - dock_force's own
     mov [dock_dx1], ax          ; answer, written here rather than called for.
-    mov ax, [dock_la2]          ; dock_geom ran inside vid_apply (MARK 7), so
+    mov ax, [dock_la2]          ; dock_geom ran inside vid_init (MARK 7), so
     mov [dock_dx2], ax          ; the along range is live
     mov ax, 07FFFh              ; ...and nothing has been PAINTED yet (SPEC.md
     mov [dock_px1], ax          ; 30.3.3) - the empty bounding box, which is
@@ -307,19 +307,30 @@ dock_swap_side:
 ;      [vid_band_x0], [vid_band_xe]), [vid_desk_zx] and the live set.
 ;      All registers preserved.
 ;
-; SPEC.md 30.5's table, and its ONLY writer. vid_apply calls it once the
-; chrome's extent is published, so an adapter switch re-derives the lot, and
+; SPEC.md 30.5's table. vid_init calls it after publishing the chrome extent;
+; adapter switches and display layout changes re-derive it, and
 ; dock_apply calls it when the setting itself moves. It closes the strip -
 ; [dock_up] = 0 - because a geometry that moved under an open one would make
-; its save-under describe a rect that is not there.
+; its clip hole describe a rect that is not there.
 ; -----------------------------------------------------------------------------
 dock_geom:
+    cmp word [spl_fseg], COLD_SEG
+    jbe .panel
+    OVLGATE1 ovl_dock_geom
+    ret
+.panel:
+    call far [CPFP + CPE_DOCK_GEOM*4] ; every post-boot caller owns CTRL.DRV
+    ret
+
+; Setup is emitted twice, like CFG_SHARED: no layout code remains resident.
+; DS stays KERNEL_SEG in either image; outbound calls use the resident shims.
+%macro DOCK_GEOM 1
+%1 %+ _geom:
     push ax
     push bx
     push cx
     push dx
-    call dock_drop              ; an OPEN strip's save-under and hole describe
-                                ; the geometry this is about to replace
+    call KERNEL_SEG:cw_dock_drop ; discard the old geometry's clip hole
     mov al, [dock_cfg]
     mov ah, al
     and al, DOCK_P_MASK
@@ -344,8 +355,6 @@ dock_geom:
     xor ax, ax
     mov [dock_sx1], ax
     mov [dock_la1], ax
-    mov [vid_band_x0], ax
-    mov [vid_band_xe], bx
     mov [dock_ffc2], cx         ; the field runs to the last row...
     mov [dock_ffar], cx         ; ...which is where a hidden strip's line is
     mov ax, [vid_pwm1]
@@ -365,12 +374,9 @@ dock_geom:
     mov word [dock_alen], DOCK_TILE_W
     mov ax, DOCK_H
     call .thick
-    sub dx, ax
-    mov [vid_dock_y0], dx       ; the band stops above what the strip keeps
     jmp .done
 
 .side:
-    mov [vid_dock_y0], dx       ; no ROW is the strip's: the band is the height
     mov ax, MBAR_H
     mov [dock_sy1], ax
     mov [dock_la1], ax
@@ -395,42 +401,36 @@ dock_geom:
     mov bx, [vid_pw]            ; (the divide spent BX)
     mov ax, DOCK_SW
     call .thick                 ; AX = the reserved thickness
+    mov cx, bx
+    sub cx, DOCK_SW            ; right strip's first column
+    mov dx, [vid_pwm1]
     cmp byte [dock_side], DOCK_P_LEFT
-    jne .right
-    xor cx, cx                  ; --- left
+    jne .srect
+    xor cx, cx                 ; left: the same cross geometry at column zero
+    mov dx, DOCK_SW - 1
+.srect:
     mov [dock_sx1], cx
-    mov [dock_ffc1], cx         ; the field starts at the screen edge...
-    mov [dock_ffar], cx         ; ...and so does a hidden strip's line
-    mov word [dock_c0], DOCK_SX
-    mov word [dock_sx2], DOCK_SW - 1
-    mov word [dock_frc], DOCK_SW - 1    ; the rule faces the desktop
-    mov word [dock_ffc2], DOCK_SW - 2
-    mov [vid_band_x0], ax
-    mov [vid_band_xe], bx
-    jmp short .done
-.right:
-    mov cx, bx                  ; --- right
-    sub cx, DOCK_SW
-    mov [dock_sx1], cx
-    mov [dock_frc], cx          ; the rule faces the desktop
+    mov [dock_sx2], dx
+    mov bx, cx
+    add bx, DOCK_SX
+    mov [dock_c0], bx
+    mov [dock_frc], cx         ; rule faces inward on the right strip
+    mov [dock_ffar], dx
     inc cx
+    cmp byte [dock_side], DOCK_P_LEFT
+    jne .field
+    dec cx
+    mov [dock_ffar], cx        ; left: outer edge at zero, rule at the far end
+    mov [dock_frc], dx
+    dec dx
+.field:
     mov [dock_ffc1], cx
-    add cx, DOCK_SX - 1
-    mov [dock_c0], cx
-    mov cx, [vid_pwm1]
-    mov [dock_sx2], cx
-    mov [dock_ffc2], cx
-    mov [dock_ffar], cx
-    mov word [vid_band_x0], 0
-    sub bx, ax
-    mov [vid_band_xe], bx
+    mov [dock_ffc2], dx
 
 .done:
     mov [dock_thk], ax          ; (wm_dock_snap's half-a-strip test)
-    mov ax, [vid_band_xe]       ; --- the drive column hangs off the BAND's
-    sub ax, 56                  ; right edge, so a right-hand strip moves it
-    mov [vid_desk_zx], ax       ; in (SPEC.md 26.4) - this was vid_apply's
-    call dock_live_set
+    call KERNEL_SEG:cw_dock_band
+    call KERNEL_SEG:cw_dock_live_set
     pop dx
     pop cx
     pop bx
@@ -442,6 +442,48 @@ dock_geom:
     je .tout
     mov ax, 1
 .tout:
+    ret
+
+%endmacro
+
+section .ovl
+ovl_dock_geom:
+    call ovd_geom
+    retf
+DOCK_GEOM ovd
+section .text
+
+; Restore chrome bounds after a fullscreen bracket without loading CTRL.DRV.
+; The full dock geometry survives vid_apply's temporary display geometry.
+; Preserves every register.
+dock_band:
+    push ax
+    push bx
+    push dx
+    xor ax, ax
+    mov [vid_band_x0], ax
+    mov bx, [vid_pw]
+    mov dx, [vid_ph]
+    cmp byte [dock_side], DOCK_P_BOTTOM
+    je .bottom
+    cmp byte [dock_side], DOCK_P_LEFT
+    jne .right
+    mov ax, [dock_thk]
+    mov [vid_band_x0], ax
+    jmp short .done
+.right:
+    sub bx, [dock_thk]
+    jmp short .done
+.bottom:
+    sub dx, [dock_thk]
+.done:
+    mov [vid_band_xe], bx
+    mov [vid_dock_y0], dx
+    sub bx, 56
+    mov [vid_desk_zx], bx
+    pop dx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -457,20 +499,19 @@ dock_geom:
 dock_live_set:
     push ax
     push cx
-    mov ax, [dock_sx1]
-    mov [dock_lx1], ax
-    mov ax, [dock_sy1]
-    mov [dock_ly1], ax
-    mov ax, [dock_sx2]
-    mov [dock_lx2], ax
-    mov ax, [dock_sy2]
-    mov [dock_ly2], ax
-    mov ax, [dock_frc]
-    mov [dock_rc], ax
-    mov ax, [dock_ffc1]
-    mov [dock_fc1], ax
-    mov ax, [dock_ffc2]
-    mov [dock_fc2], ax
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov si, dock_sx1
+    mov di, dock_lx1
+    mov cx, 7                 ; rect, rule, and field: identical word layouts
+    cld
+    rep movsw
+    pop es
+    pop di
+    pop si
     mov byte [dock_hidden], 0
     cmp byte [dock_auto], 0
     je .cross
@@ -1130,14 +1171,9 @@ dock_draw_tile:
 ; -----------------------------------------------------------------------------
 dock_hit:
     push bx
-    cmp cx, [dock_lx1]          ; the LIVE strip (SPEC.md 30.6): the line while
-    jl .miss                    ; it is hidden, and all of it otherwise. SIGNED:
-    cmp cx, [dock_lx2]          ; every bound is a screen coordinate and so is
-    jg .miss                    ; the point, and the miss is a stated CF = 1
-    cmp dx, [dock_ly1]          ; rather than a borrow the compare happened to
-    jl .miss                    ; leave
-    cmp dx, [dock_ly2]
-    jg .miss
+    mov bx, dock_lx1
+    call dock_point
+    jc .miss
 
     xor di, di                  ; in the strip, no tile yet
     cmp byte [dock_hidden], 0
@@ -1491,135 +1527,80 @@ dock_pass:
     cmp byte [dock_auto], 0
     je .ret
     push ax
+    push bx
     push cx
     push dx
+    push si
     push di
     mov cx, [mouse_x]
     mov dx, [mouse_y]
     cmp byte [dock_up], 0
     jne .open
-
-    cmp byte [mouse_btn], 0     ; --- HIDDEN: a held button is a drag or a
-    jne .off                    ; press somebody else owns
+    cmp byte [mouse_btn], 0
+    jne .off
 %ifdef KERN_BIG
-    cmp byte [blk_sv], 0        ; a saver session covers the screen (79.5)
+    cmp byte [blk_sv], 0
     jne .off
 %endif
-    cmp word [fdlg_win], 0      ; a modal dialog owns every press (38.2)
+    cmp word [fdlg_win], 0
     jne .off
-    call wm_fs_vis              ; ...and a fullscreen window covers the strip
+    call wm_fs_vis
     jc .off
-    call dock_hit               ; on the line? (clobbers AX and DI)
+    call dock_hit
     jc .off
-    mov ax, [ticks]
-    cmp byte [dock_hvon], 0
-    jne .count
-    mov [dock_hvt], ax          ; ...just arrived: start the count
-    mov byte [dock_hvon], 1
-    jmp short .out
-.count:
-    sub ax, [dock_hvt]          ; modular, so a [ticks] wrap is one more tick
-    cmp ax, DOCK_HOVER_T
-    jb .out
-    call dock_open
-.off:
-    mov byte [dock_hvon], 0
-    jmp short .out
-
-.open:                          ; --- OPEN: close under a fullscreen window
-    call wm_fs_vis              ; or a saver at once - they own every pixel,
-    jc .close                   ; the hole included
+    mov bx, DOCK_HOVER_T
+    jmp short .count
+.open:
+    call wm_fs_vis
+    jc .close
 %ifdef KERN_BIG
-    cmp byte [blk_sv], 0        ; a saver is drawing the whole screen and
-    je .nosv                    ; repaints it on the way out, so the strip is
-    call dock_drop              ; FORGOTTEN rather than put back - a damage
-    jmp short .out              ; repaint here would draw over the saver
+    cmp byte [blk_sv], 0
+    je .nosv
+    call dock_drop             ; the saver owes the repaint
+    jmp short .out
 .nosv:
 %endif
-    call dock_in_strip          ; ...and otherwise after the linger
-    jc .away
-    mov byte [dock_lvon], 0     ; on the strip: no count
-    jmp short .out
-.away:
+    call dock_in_strip
+    jnc .off
+    mov bx, DOCK_LEAVE_T
+.count:
     mov ax, [ticks]
-    cmp byte [dock_lvon], 0
-    jne .lcount
-    mov [dock_lvt], ax          ; ...just left: start it
-    mov byte [dock_lvon], 1
+    cmp byte [dock_timer_on], 0
+    jne .elapsed
+    mov [dock_timer_tick], ax
+    inc byte [dock_timer_on]
     jmp short .out
-.lcount:
-    sub ax, [dock_lvt]
-    cmp ax, DOCK_LEAVE_T
+.elapsed:
+    sub ax, [dock_timer_tick]
+    cmp ax, bx
     jb .out
+    cmp byte [dock_up], 0
+    jne .close
+    call dock_open
+.off:
+    mov byte [dock_timer_on], 0
+    jmp short .out
 .close:
     call gfx_lock
     call dock_shut
     call gfx_unlock
 .out:
-    pop di
-    pop dx
-    pop cx
-    pop ax
+    jmp kret_di
 .ret:
     ret
 
-; -----------------------------------------------------------------------------
-; dock_open - put the hidden strip up, OVER everything (SPEC.md 30.6.1)
-; in:  nothing; UI task, NO lock held
-; out: nothing (all registers preserved)
-;
-; The lock is held for the draw and for nothing else. What keeps the strip on
-; top afterwards is [gfx_hole]: every primitive that finds no region armed
-; arms "the desktop minus the strip" before it draws, and every region built
-; for a window has the strip subtracted, so nothing any task draws lands on it.
-; -----------------------------------------------------------------------------
+; Open over windows without holding the lock between UI passes. All registers
+; preserved. Closing repaints, so neither a save-under nor stale flag is needed.
 dock_open:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    push es
     call gfx_lock
     mov byte [dock_up], 1
-    call dock_live_set          ; the live strip is the whole strip now
-    mov byte [dock_stale], 1    ; ...and stale until a save-under says not
-    mov word [dock_sseg], 0
-    call dock_save_kb           ; AX = what THIS strip's rect needs
-    mov bx, MEM_K_SAVE
-    call mem_claim
-    jc .nosave                  ; refused: the close repaints instead
-    mov [dock_sseg], dx
-    mov es, dx
-    xor di, di
-    call dock_live_rect
-    call gfx_save
-    mov byte [dock_stale], 0
-.nosave:
-    call dock_force             ; the whole strip is owed, every key with it
-    call dock_paint             ; (which draws through the hole it is about to
-    call dock_hole_build        ; have, and would anyway)
+    call dock_live_set
+    call dock_force
+    call dock_paint
     mov word [gfx_hole], 1
-    mov byte [dock_lvon], 0
-    call gfx_unlock
-    pop es
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp gfx_unlock
 
-; -----------------------------------------------------------------------------
-; dock_shut - put the open strip away (SPEC.md 30.6.1)
-; in:  gfx lock held; out: nothing (all registers preserved)
-;
-; The save-under is the answer only while it is still TRUE: something that
-; wanted to draw under the strip and was clipped round it ([dock_stale]) left
-; the pixels beneath older than the buffer's, and then what is owed is the
-; damage repaint a closing window gets - wm_paint_dmg over the strip's rect,
-; with the line live again so the repaint draws the line and not the strip.
-; -----------------------------------------------------------------------------
+; gfx lock held; preserve the old rect before making the hidden line live.
 dock_shut:
     cmp byte [dock_up], 0
     je .ret
@@ -1627,229 +1608,53 @@ dock_shut:
     push bx
     push cx
     push dx
-    push si
-    push es
-    mov word [gfx_hole], 0      ; the hole goes first, and any region armed
-    mov word [wm_clip_n], 0     ; round it in this hold with it
-    call dock_live_rect         ; the WHOLE strip, while it is still live
-    mov byte [dock_up], 0
-    call dock_live_set          ; ...and the line from here
-    mov si, [dock_sseg]
-    or si, si
-    jz .repaint
-    cmp byte [dock_stale], 0
-    jne .free
-    push si
-    mov es, si
-    xor si, si
-    call gfx_restore
-    pop si
-.free:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov dx, si
-    mov bx, MEM_K_SAVE
-    call mem_free
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    mov word [dock_sseg], 0
-    cmp byte [dock_stale], 0
-    je .out
-.repaint:
-    call wm_paint_dmg           ; the desktop, the windows and the line
-.out:
-    mov byte [dock_hvon], 0     ; the pointer has to rest on the line afresh
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    call dock_live_rect
+    call dock_drop
+    call wm_paint_dmg
+    jmp kret_dx
 .ret:
     ret
 
-; -----------------------------------------------------------------------------
-; dock_drop - forget an open strip WITHOUT drawing: the caller repaints the
-;             whole screen (dock_geom's callers, an fsx bracket, a saver)
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
+; Forget without drawing: geometry changes, fsx and the saver repaint later.
 dock_drop:
+    mov byte [dock_timer_on], 0
     cmp byte [dock_up], 0
     je .ret
-    push bx
-    push dx
     mov word [gfx_hole], 0
     mov word [wm_clip_n], 0
     mov byte [dock_up], 0
-    mov dx, [dock_sseg]
-    or dx, dx
-    jz .nofree
-    mov bx, MEM_K_SAVE
-    call mem_free
-    mov word [dock_sseg], 0
-.nofree:
-    call dock_live_set
-    pop dx
-    pop bx
+    jmp dock_live_set
 .ret:
     ret
 
-; -----------------------------------------------------------------------------
-; dock_hole_build - the region "the desktop minus the open strip"
-; in:  the live rect is the whole strip; out: [dock_hole_tab]/[dock_hole_n]
-; All registers preserved.
-;
-; The virtual desktop's rect less one rect: at most four pieces - above,
-; below, left and right of the strip - and on an edge strip on one display it
-; is one. Built once at the open, copied into wm_clip_tab by gfx_hole_arm.
-; -----------------------------------------------------------------------------
-dock_hole_build:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov di, dock_hole_tab
-    xor ax, ax
-    mov [dock_hole_n], ax
-    mov bx, [dock_ly1]          ; --- above
-    dec bx
-    js .below
-    xor dx, dx
-    mov cx, [vid_wm1]
-    call .add
-.below:
-    mov bx, [dock_ly2]          ; --- below
-    inc bx
-    cmp bx, [vid_hm1]
-    jg .left
-    mov dx, [vid_hm1]
-    xor ax, ax
-    mov cx, [vid_wm1]
-    xchg bx, dx                 ; .add takes x1 AX, y1 DX, x2 CX, y2 BX
-    call .add
-.left:
-    mov cx, [dock_lx1]          ; --- left of it, over its own rows
-    dec cx
-    js .right
-    xor ax, ax
-    mov dx, [dock_ly1]
-    mov bx, [dock_ly2]
-    call .add
-.right:
-    mov ax, [dock_lx2]          ; --- right of it
-    inc ax
-    cmp ax, [vid_wm1]
-    jg .done
-    mov cx, [vid_wm1]
-    mov dx, [dock_ly1]
-    mov bx, [dock_ly2]
-    call .add
-.done:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-.add:                           ; AX = x1, DX = y1, CX = x2, BX = y2
-    mov [di+WCR_X1], ax
-    mov [di+WCR_Y1], dx
-    mov [di+WCR_X2], cx
-    mov [di+WCR_Y2], bx
-    add di, WCR_SZ
-    inc word [dock_hole_n]
-    ret
-
-; -----------------------------------------------------------------------------
-; gfx_hole_arm - a primitive found no region armed and the strip open: arm the
-;                desktop minus the strip (SPEC.md 30.6.1)
-; in:  gfx lock held; [wm_clip_n] = 0, [gfx_hole] set
-; out: ZF = 0 (armed); every register preserved
-;
-; Called from GFXCLIP and CLIPQ, the one question every region-aware primitive
-; already asks. It spends the deferred cursor hide first, because an armed
-; region is what tells a primitive the hide was already decided (SPEC.md
-; 7.1.4). It marks the strip STALE: something is drawing while the strip is
-; open, and it cannot be told here whether any of it was meant for the pixels
-; under the strip.
-; -----------------------------------------------------------------------------
+; No region is armed. Seed the virtual desktop and subtract the dock with
+; the existing rectangle splitter. At most four pieces, so this cannot overflow.
+; Every register preserved; ZF = 0 (the desktop outside the dock is nonempty).
 gfx_hole_arm:
     push ax
     push cx
+    push dx
     push si
-    push di
-    push es
     call cur_unlazy
-    mov byte [dock_stale], 1
-    push ds
-    pop es
-    mov si, dock_hole_tab
-    mov di, wm_clip_tab
-    mov cx, [dock_hole_n]
-    mov [wm_clip_n], cx
-    shl cx, 1                   ; four words a rect
-    shl cx, 1
-    cld
-    rep movsw
-    pop es
-    pop di
+    xor ax, ax
+    xor dx, dx
+    mov cx, [vid_wm1]
+    mov si, [vid_hm1]
+    call wm_clip_seed
+    call dock_hole_sub
     pop si
+    pop dx
     pop cx
     pop ax
-    cmp word [wm_clip_n], 0     ; ZF = 0: the list is never empty
+    cmp word [wm_clip_n], 0
     ret
 
-; -----------------------------------------------------------------------------
-; dock_hole_sub - subtract the open strip from a region being BUILT
-; in:  the list holds zero or more rects; out: CF = 1 it overflowed
-; clobbers: flags
-;
-; wm_clip_occl, wm_dmg_occl and wm_clip_rect subtract the windows over a
-; region; this is the strip, which is over all of them. A region that reached
-; the strip at all marks it STALE - the window it belongs to wanted pixels the
-; strip is covering.
-; -----------------------------------------------------------------------------
+; Subtract the open strip from an existing region. wm_clip_subr already tests
+; intersections and accepts an empty list. Preserve all registers; CF = overflow.
 dock_hole_sub:
     cmp word [gfx_hole], 0
     je .no
     push ax
-    push si
-    push cx
-    mov si, wm_clip_tab
-    mov cx, [wm_clip_n]
-    jcxz .clean
-.scan:
-    mov ax, [si+WCR_X2]
-    cmp ax, [dock_lx1]
-    jl .next
-    mov ax, [si+WCR_X1]
-    cmp ax, [dock_lx2]
-    jg .next
-    mov ax, [si+WCR_Y2]
-    cmp ax, [dock_ly1]
-    jl .next
-    mov ax, [si+WCR_Y1]
-    cmp ax, [dock_ly2]
-    jle .hit
-.next:
-    add si, WCR_SZ
-    loop .scan
-.clean:
-    pop cx
-    pop si
-    pop ax
-.no:
-    clc
-    ret
-.hit:
-    pop cx
-    pop si
-    mov byte [dock_stale], 1
     mov ax, [dock_lx1]
     mov [wm_cl_ox1], ax
     mov ax, [dock_ly1]
@@ -1859,7 +1664,10 @@ dock_hole_sub:
     mov ax, [dock_ly2]
     mov [wm_cl_oy2], ax
     pop ax
-    jmp wm_clip_subr            ; CF is its overflow answer
+    jmp wm_clip_subr
+.no:
+    clc
+    ret
 
 ; -----------------------------------------------------------------------------
 ; dock_hole_win - is window DI (or BX, for dock_hole_winb) under the open strip?
@@ -1876,68 +1684,41 @@ dock_hole_win:
     cmp word [gfx_hole], 0
     je .no
     push ax
-    mov ax, [di+W_X]
-    cmp ax, [dock_lx2]
-    jg .pno
-    add ax, [di+W_W]
-    cmp ax, [dock_lx1]
-    jl .pno
-    mov ax, [di+W_Y]
-    cmp ax, [dock_ly2]
-    jg .pno
-    add ax, [di+W_H]
-    cmp ax, [dock_ly1]
-    jl .pno
-    pop ax
-    mov byte [dock_stale], 1    ; whatever it skips is owed at the close
-    stc
-    ret
-.pno:
-    pop ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, di
+    call wm_win_rect
+    call dock_live_hit
+    jmp kret_si                ; pops preserve the overlap answer in CF
 .no:
     clc
     ret
 
 ; dock_in_strip - CX,DX on the strip's whole rect? CF = 1 no. Preserves all.
 dock_in_strip:
-    cmp cx, [dock_sx1]
+    push bx
+    mov bx, dock_sx1
+    call dock_point
+    pop bx
+    ret
+
+; CX,DX against the four consecutive words at DS:BX. CF = 1 outside;
+; registers preserved. Used for both the hidden line and the whole strip.
+dock_point:
+    cmp cx, [bx]
     jl .no
-    cmp cx, [dock_sx2]
+    cmp cx, [bx+4]
     jg .no
-    cmp dx, [dock_sy1]
+    cmp dx, [bx+2]
     jl .no
-    cmp dx, [dock_sy2]
+    cmp dx, [bx+6]
     jg .no
     clc
     ret
 .no:
     stc
-    ret
-
-; dock_save_kb - KB the strip's save-under needs (menu_save_kb's arithmetic)
-; out: AX; clobbers flags
-dock_save_kb:
-    push bx
-    push cx
-    push dx
-    mov ax, [dock_sx2]
-    mov cl, 3
-    shr ax, cl
-    mov bx, [dock_sx1]
-    shr bx, cl
-    sub ax, bx
-    inc ax                      ; span -> count, plus the misalignment byte
-    inc ax
-    mov bx, [dock_sy2]
-    sub bx, [dock_sy1]
-    inc bx
-    mul bx
-    mov bx, [vid_planes_w]
-    mul bx
-    call mem_bytes_kb
-    pop dx
-    pop cx
-    pop bx
     ret
 
 ; The whole descriptor (SPEC.md 12.4/30.2): one near pointer to a NUL string,
@@ -1975,12 +1756,8 @@ dock_side:  resb 1              ; the EDGE in use: DOCK_P_*, [dock_cfg]'s or
                                 ; the bottom when a side cannot hold the tiles
 dock_auto:  resb 1              ; non-0: the strip hides
 dock_up:    resb 1              ; ...and is open right now (dock_open)
-dock_stale: resb 1              ; something wanted the pixels under the open
-                                ; strip, so its save-under is older than them
 dock_cap:   resb 1              ; tiles the strip holds (SPEC.md 30.5.1)
 dock_pos:   resb INST_MAX       ; which slot each position shows (dock_map)
-dock_hole_n: resw 1             ; "the desktop minus the open strip", as the
-dock_hole_tab: resw 4 * 4       ; region gfx_hole_arm copies (<= 4 rects)
 dock_hidden: resb 1             ; auto and not open: the line is live
 dock_sx1:   resw 1              ; the strip's whole rect
 dock_sy1:   resw 1
@@ -2004,12 +1781,12 @@ dock_ly2:   resw 1
 dock_rc:    resw 1              ; ...its rule, across
 dock_fc1:   resw 1              ; ...its field, across (fc1 > fc2: none)
 dock_fc2:   resw 1
+%if dock_ffc2 - dock_sx1 != 12 || dock_fc2 - dock_lx1 != 12
+  %error "dock_live_set copies seven consecutive geometry words"
+%endif
 dock_lc1:   resw 1              ; ...and its across extent
 dock_lc2:   resw 1
-dock_hvon:  resb 1              ; the pointer is on the line, since [dock_hvt]
-dock_hvt:   resw 1
-dock_lvon:  resb 1              ; the pointer is off the open strip, since
-dock_lvt:   resw 1              ; [dock_lvt]
-dock_sseg:  resw 1              ; the open strip's save-under, 0 = none
+dock_timer_on:   resb 1        ; hover while hidden, linger while open
+dock_timer_tick: resw 1        ; modular start tick; survives cancellation
 
 section .text

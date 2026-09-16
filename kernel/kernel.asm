@@ -2425,7 +2425,9 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; reaches memory 6,656. A second blob length pinned the canary to the part of
 ; `.text` a size pass eats first, which is how it came to have thirty bytes of
 ; headroom left. The Makefile's KSIG_OFF block is the other end of this.
-BOOT2_SECS  equ 8               ; sectors stage 1 reads before it jumps - the
+; The ninth sector holds the boot copy of Dock layout setup (SPEC.md 30.5).
+; The whole blob is freed before the desktop; KERN_BUDGET is unchanged.
+BOOT2_SECS  equ 9               ; sectors stage 1 reads before it jumps - the
                                 ; loader and its screen up to OVL_AT, then the
                                 ; boot overlay from there to BOOT2_PAD. THE
                                 ; SPLIT IS OVL_AT AND THE TOTAL IS THIS, so
@@ -6337,9 +6339,15 @@ cw_thm_desk:            call thm_desk
 cw_thm_set:             call thm_set
                     retf
 %endif
+cw_dock_drop:           call dock_drop
+                       retf
+cw_dock_band:           call dock_band
+                       retf
+cw_dock_live_set:       call dock_live_set
+                       retf
 cw_dock_apply:          call dock_apply     ; the Dock page and the settings
                     retf                    ; reader (SPEC.md 30.5)
-cw_gfx_hole_arm:        call gfx_hole_arm   ; CLIPQF: the open dock's hole
+cw_gfx_clip_query:      call gfx_clip_query ; CLIPQF: shared region query
                     retf                    ; from .cold (SPEC.md 30.6.1)
 ; THE SCREEN SAVER'S WAY BACK (SPEC.md 79.6), and it is THREE calls behind one
 ; shim rather than three shims, because the image rung it comes out of has

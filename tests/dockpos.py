@@ -25,7 +25,7 @@ Hercules card and, for every setting, asserts three things:
      and the rule is drawn OVER the desktop;
   5. moved off, it is STILL open a moment later (the 0.75 s linger, SPEC.md 30.6)
      and closed after it - and the screen is then pixel-identical to the one
-     before it opened, because the tracker's save-under put it back;
+     before it opened, because the damage repaint restored it;
   6. a press outside the open strip is not eaten: it lands on the Dock page's
      Bottom radio, so the setting moves.
 
@@ -46,6 +46,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
+import os88ui
 import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
 
@@ -193,11 +194,20 @@ def herc(a):
         os88marty.settle(m)
         print("   panel at (%d,%d), Dock is row %d" % (wx, wy, row))
 
-        for cfg in (P_LEFT, P_RIGHT, P_BOTTOM | F_AUTO, P_RIGHT | F_AUTO):
+        for cfg in (P_LEFT, P_RIGHT, P_BOTTOM, P_LEFT | F_AUTO,
+                    P_BOTTOM | F_AUTO, P_RIGHT | F_AUTO):
             setting(m, mo, kind, cfg)
 
         # --- 4..5: the hover, the open strip, the linger ---------------------
         pw, ph = word(m, "vid_pw"), word(m, "vid_ph")
+        # Put a real window under the open strip: removing the clipping
+        # fence must fail the forced-repaint check below, not pass vacuously
+        # against an uncovered desktop.
+        ui = os88ui.UI(m, mouse=mo, sym=S)
+        panel = ui.window("Control Panel")
+        panel = ui.move_window(panel, pw - panel.w - 1, 80)
+        check(panel.x + panel.w > pw - DOCK_SW,
+              "the panel overlaps the strip that will open")
         mo.to(pw // 2, ph - 60)
         os88marty.settle(m)
         w, h, before = frame(m, kind)
@@ -216,6 +226,13 @@ def herc(a):
             rule = w - DOCK_SW
             check(all(open_px[y * w + rule] == 0 for y in range(MBAR_H, h)),
                   "the open strip's rule is drawn over the desktop")
+            full_repaint(m)
+            _, _, repainted = frame(m, kind)
+            changed = sum(open_px[y * w + x] != repainted[y * w + x]
+                          for y in range(MBAR_H, h)
+                          for x in range(rule, w))
+            check(not changed, "window repaint leaves the open strip intact "
+                  "(%d px)" % changed)
             # ONE PACKET off the strip, not the long way home: the harness
             # spends up to a guest second a packet, so the four it takes to
             # reach mid-screen are ~73 ticks - longer than the linger - and
@@ -226,9 +243,9 @@ def herc(a):
             # THE LINGER IN GUEST TICKS, not host seconds: a pointer move
             # through the harness is itself hundreds of guest milliseconds,
             # so "is it still open right after the move" measured MartyPC.
-            # [dock_lvt] is the tick the pointer was first seen off the
+            # [dock_timer_tick] is the tick the pointer was first seen off the
             # strip, and it survives the close.
-            gone = word(m, "ticks") - word(m, "dock_lvt")
+            gone = word(m, "ticks") - word(m, "dock_timer_tick")
             check(DOCK_LEAVE_T <= (gone & 0xFFFF) <= DOCK_LEAVE_T + 40,
                   "...%d ticks after it left (the 0.75 s linger is %d)"
                   % (gone & 0xFFFF, DOCK_LEAVE_T))
@@ -271,8 +288,9 @@ def cga(a):
         check(byte(m, "dock_side") == P_LEFT and
               word(m, "vid_band_x0") == DOCK_SW,
               "CGA: the strip stands on the left")
-        check(byte(m, "dock_cap") == 7, "CGA: it holds seven tiles (%d)"
-              % byte(m, "dock_cap"))
+        capacity = min(7, os88sym.equates()["INST_MAX"])
+        check(byte(m, "dock_cap") == capacity,
+              "CGA: capacity %d (%d)" % (capacity, byte(m, "dock_cap")))
 
 
 def main():

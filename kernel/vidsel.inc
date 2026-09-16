@@ -1741,7 +1741,7 @@ vid_fsx_leave:
     mov [vid_ndisp], al
     mov byte [vid_cur], 0
     call vid_desk_union
-    call dock_geom              ; ...and the strip where the user put it (30.5)
+    call dock_band              ; ...and the strip where the user put it (30.5)
     pop ax
 .out:
     ret

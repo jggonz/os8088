@@ -96,3 +96,5 @@ ovl_spl_redraw      spl_reset only (splash.inc:488) - repaint after a mode set
 # the assembler and consumed by the build.  No code reaches it and none can:
 # it is a number in a table, not an entry point.
 ovl_end             kernel.asm:6008 - a build-time size constant, never called
+
+ovl_dock_geom       dock_geom dispatches here only while spl_fseg > COLD_SEG; after spl_finish it dispatches to the loaded Control Panel. Fullscreen return uses dock_band.

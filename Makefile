@@ -774,13 +774,14 @@ BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 # gives it back: with one length the band is seven sectors wide and reaches
 # memory 6,656.
 #
-# 6656 is memory sector 13, file sector **13 + BOOT2_SECS** = 21. It is a LONE
+# Dock setup uses a nine-sector blob (SPEC.md 30.5), so the canary moves
+# to 6144: memory sector 12, file sector **12 + BOOT2_SECS** = 21. It is a LONE
 # sector rather than a run of five, which is what the old value's paragraph
 # preferred - a lone sector was not legal at all while there were two blob
 # lengths - and the trade is deliberate: margin against a BPB that moves is
 # worth less than margin against `.text`, because a geometry change is a
 # decision somebody takes and `.text` shrinks whenever anyone tidies anything.
-# `.text` may now fall to **6,658** before this constant needs looking at
+# `.text` may now fall to **6,146** before this constant needs looking at
 # again, against 50,178 before; it is 50,607 today. It is inside the first
 # 64KB, so the compare still reuses the ES the handoff already loads, and the
 # word is still the same for every geometry because KERNEL.SYS is one file.
@@ -798,7 +799,7 @@ BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 # runtime fence one line down, and it is enough on its own: a payload shorter
 # than this offset gets no -DKSIG, boot/boot.asm's `%define KSIG 0` applies,
 # and stage 2's `cmp word [b2_ksig], 0` skips the compare.
-KSIG_OFF := 6656
+KSIG_OFF := 6144
 #
 # A PAYLOAD SHORTER THAN THE OFFSET DEFINES NO KSIG AT ALL, and that is the
 # whole of this line's second job. It used to answer 0, and a fabricated zero is
