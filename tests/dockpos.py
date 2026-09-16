@@ -23,7 +23,7 @@ Hercules card and, for every setting, asserts three things:
 
   4. a pointer resting on the right-hand line opens the strip ([dock_up] = 1)
      and the rule is drawn OVER the desktop;
-  5. moved off, it is STILL open a moment later (the 3 s linger, SPEC.md 30.6)
+  5. moved off, it is STILL open a moment later (the 1.5 s linger, SPEC.md 30.6)
      and closed after it - and the screen is then pixel-identical to the one
      before it opened, because the tracker's save-under put it back;
   6. a press outside the open strip is not eaten: it lands on the Dock page's
@@ -54,7 +54,7 @@ TITLE_H, MBAR_H = 18, 20
 CP_RX = 96
 CPK_R0Y, CPK_ROWH, CPK_AY = 18, 16, 74      # ctrl.inc's Dock page
 DOCK_H, DOCK_SW = 24, 32
-DOCK_LEAVE_T = 55                           # dock.inc: 3.0 s of ticks
+DOCK_LEAVE_T = 27                           # dock.inc: 1.48 s of ticks
 P_BOTTOM, P_LEFT, P_RIGHT, F_AUTO = 0, 1, 2, 4
 FAIL = []
 
@@ -216,7 +216,11 @@ def herc(a):
             rule = w - DOCK_SW
             check(all(open_px[y * w + rule] == 0 for y in range(MBAR_H, h)),
                   "the open strip's rule is drawn over the desktop")
-            mo.to(pw // 2, ph - 60)
+            # ONE PACKET off the strip, not the long way home: the harness
+            # spends up to a guest second a packet, so the four it takes to
+            # reach mid-screen are ~73 ticks - longer than the linger - and
+            # the read below would measure the move rather than the close.
+            mo.to(pw - DOCK_SW - 16, ph // 2)
             closed = wait_for(m, "dock_up", 0, 60.0)
             check(closed, "moved off, it closes")
             # THE LINGER IN GUEST TICKS, not host seconds: a pointer move
@@ -226,8 +230,9 @@ def herc(a):
             # strip, and it survives the close.
             gone = word(m, "ticks") - word(m, "dock_lvt")
             check(DOCK_LEAVE_T <= (gone & 0xFFFF) <= DOCK_LEAVE_T + 40,
-                  "...%d ticks after it left (the 3 s linger is %d)"
+                  "...%d ticks after it left (the 1.5 s linger is %d)"
                   % (gone & 0xFFFF, DOCK_LEAVE_T))
+            mo.to(pw // 2, ph - 60)
             os88marty.settle(m)
             _, _, after = frame(m, kind)
             d = diff(before, after, w, word(m, "vid_clk_hx"))

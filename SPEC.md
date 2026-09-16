@@ -47010,10 +47010,10 @@ arithmetic rather than a case handled.
 With `DOCK_F_AUTO` set the strip is drawn as **one line of the chrome's ink on
 the outer edge** — the primary's last row, its first column or its last — and
 the band gives back all but that one pixel (§30.5's *T* = 1). A pointer that
-rests **on the line for `DOCK_HOVER_T` = 36 ticks** (2.0 s) opens it; once
-open, it closes **`DOCK_LEAVE_T` = 55 ticks** (3.0 s) after the pointer
-leaves the strip's rect, and a pointer that comes back inside those three
-seconds resets the count.
+rests **on the line for `DOCK_HOVER_T` = 14 ticks** (0.77 s, the nearest
+tick to ¾ s) opens it; once open, it closes **`DOCK_LEAVE_T` = 27 ticks**
+(1.48 s, the nearest to 1½ s) after the pointer leaves the strip's rect, and
+a pointer that comes back inside that time resets the count.
 
 `[dock_hidden]` is the one byte the painters ask, and `dock_live_set` is its
 one writer: hidden is *auto and not open*. The **live rect**
