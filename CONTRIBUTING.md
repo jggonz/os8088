@@ -200,8 +200,8 @@ What happens, and what it needs from you:
 2. **It asks where the original is.** Either it scans this directory and the
    one above for git checkouts and lets you pick, or you give it a list of
    repositories to clone into a scratch directory. The reference source stays
-   *outside* this repo — nothing is vendored (§6 below); the port quotes
-   strings, tables and formats and cites the file.
+   *outside* this repo; the port quotes strings, tables and formats and cites
+   the file.
 3. **It scouts, with a team of agents** (this is the "ultracode" multi-agent
    orchestration; invoking the skill authorises it), and drafts a plan: which
    file of the original is the authority for each menu, key, dialog and
@@ -430,8 +430,6 @@ make clean && make          # both geometries, no warnings (-w+error is on)
   with it, credential-shaped data is refused. `SKIP_GITLEAKS=1 git commit`
   bypasses it deliberately (for fixtures that are *meant* to look like keys).
 - **Don't commit `build/`.** It's gitignored; keep it that way.
-- **No vendored third-party code.** Everything in the OS is hand-written and
-  the whole tree is MIT under one license file. A dependency would break that.
 
 Commit messages here are a subject line that says what changed, then a
 paragraph or two on *why* and what it cost. Look at `git log` for the shape.
@@ -452,9 +450,8 @@ A good PR body says:
 - whether you checked the 360KB build or only QEMU.
 
 Things that won't merge: 186+ instructions, anything that breaks the 256KB /
-0xA000 budget, vendored code, changes to interfaces without the matching
-SPEC.md update, and features that only work in QEMU when they didn't have to
-be.
+0xA000 budget, changes to interfaces without the matching SPEC.md update, and
+features that only work in QEMU when they didn't have to be.
 
 ## Questions and security
 
