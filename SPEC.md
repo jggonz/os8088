@@ -93513,10 +93513,11 @@ Package `RUNCPM`, directory `apps/runcpm/`, images `build/runcpm.img` /
 `runcpm720.img` / `runcpm120.img` / `runcpm360.img` (each `--verify`'d), 86Box machine
 `vm/386-runcpm` (a copy of `vm/386-c-word` with the B: image and uuid
 changed), on `apps-all.img` as a folder of its own `RUNCPM\` (§19.10 — the
-CCP, the `.OVL` and drive `A\0` must sit beside the package, below). **Nothing
-third-party is committed** (CONTRIBUTING.md §6): `tools/getruncpm.py`
-fetches RunCPM at the pinned commit at build time (`make runcpm-src`, the
-stamp `build/runcpm-src.stamp`) — `CCP/CCP-DR.60K`, `LICENSE`,
+CCP, the `.OVL` and drive `A\0` must sit beside the package, below).
+`tools/getruncpm.py` takes RunCPM's files at the pinned commit at build time
+(`make runcpm-src`, the stamp `build/runcpm-src.stamp`) out of the
+**committed `apps/runcpm/cache/cpmcache.zip`** (§74.6.1), reaching GitHub
+only for a file the zip lacks — `CCP/CCP-DR.60K`, `LICENSE`,
 `DISK/1STREAD.ME` and `DISK/A0.zip`, every artifact's SHA-256 checked, the
 master disk unpacked into `build/runcpm-disk/A/0` MINUS the three files above
 65,535 bytes, which `A/0/LEFT-OFF.TXT` names on the disk — the way
@@ -93651,14 +93652,28 @@ The RUNCPM floppies carry **CP/M software of their own beside RunCPM's master
 disk** — arcade games, dungeon crawlers, a word processor and a compiler —
 fetched by **`tools/getcpmsw.py`** from the public **RunCPM software
 collection** on Google Drive, the `A..P/0..F` drive tree RunCPM users share
-(`A/0` of it is the master disk `getruncpm.py` fetches). **Nothing it
-downloads is committed** (CONTRIBUTING.md §6, `tools/getstories.py`'s
-paragraph and §74.5's rule): what is committed is the PIN — a Drive file id,
-a SHA-256 and a size **per file** — the bytes land in `build/cpmsw/`, and a
-collection that moved under us is a hard failure, never a warning, so the
-images still rebuild byte-for-byte. `make cpmsw` fetches; `--from DIR` takes
+(`A/0` of it is the master disk `getruncpm.py` fetches). What is pinned is
+a Drive file id, a SHA-256 and a size **per file**; the bytes come out of
+the committed cache zip (§74.6.1) and land in `build/cpmsw/`, and a file
+that does not match its pin is a hard failure, never a warning, so the
+images still rebuild byte-for-byte. `make cpmsw` extracts; `--from DIR` takes
 the files off a local copy instead; `--refresh` re-reads the collection and
 prints a new table to paste in.
+
+#### 74.6.1 The committed cache: `apps/runcpm/cache/cpmcache.zip`
+
+**Both CP/M fetches read one committed zip before the network**, a
+user-decided departure from CONTRIBUTING.md §6 in `apps/c64/rom/`'s shape and
+recorded in `apps/runcpm/cache/README.md`. The reason is time: Drive answers
+the collection one request and one virus-scan form a file, some eighty of
+them, and that was minutes of every clean `make live`. The zip holds
+`runcpm/<path>` for each `getruncpm.PINNED` entry and `cpmsw/<AREA>/<NAME>`
+for each `getcpmsw.PINNED` one, nothing else, and is a TRANSPORT rather than
+a second source of truth: every member is checked against the same pin a
+download is. `tools/cpmcache.py --check` verifies it (the `cpmcache` fast
+row); a moved pin falls through to the network, and `tools/cpmcache.py
+--pack` then rebuilds the zip — deterministically, so an unchanged repack is
+invisible to git.
 
 **The collection's own `<DRIVE>/<USER>` coordinates are the key of
 everything fetched** — `build/cpmsw/N/0/…`, so `--from` a local copy works

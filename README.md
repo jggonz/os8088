@@ -567,14 +567,15 @@ the emulator runs on the UI task in bounded slices and never blocks, so a
 program waiting for a key costs nothing — and it too spills into a second
 segment, `RUNCPM.OVL`, split by frequency: what a record, a console byte or a
 keystroke touches stays resident, and the per-command half of the disk layer
-goes out. Nothing of RunCPM's is committed: `tools/getruncpm.py` fetches the
-CCP and the master disk at a pinned commit and `make runcpmdisk` builds the
+goes out. `tools/getruncpm.py` takes the CCP and the master disk at a pinned
+commit out of a committed cache zip (`apps/runcpm/cache/`) and `make runcpmdisk` builds the
 four floppies from them (the 360KB one curated to the programs and texts,
 with a `LEFT-OFF.TXT` naming what it leaves off).
 
 **And there is software to run on it.** `tools/getcpmsw.py` fetches CP/M
 games and applications from the public RunCPM software collection — every
-file pinned by id, SHA-256 and size, nothing committed, the collection's own
+file pinned by id, SHA-256 and size and read out of that same committed zip
+rather than off Google Drive a file at a time, the collection's own
 `<DRIVE>/<USER>` coordinates kept — and each floppy takes what it holds, an
 area whole or not at all, every one of them a **user area of drive A** so
 that the emulator's own icon stays on the first screen of the Disk window:

@@ -17,14 +17,17 @@ beside RunCPM's master disk (SPEC.md §74.6).
     python3 tools/getcpmsw.py --refresh -o build/cpmsw     # re-read the
                               # collection and print a new PINNED table
 
-**Nothing this script downloads is committed** (CONTRIBUTING.md §6, and the
-same decision `tools/getstories.py` and `tools/getruncpm.py` took): the games
-are their own authors' work, a git repository is not a distribution channel
-for them, and the bytes land in `build/`, which is ignored outright. What IS
-committed is the PIN — a Google Drive file id, a SHA-256 and a size per file —
-so the floppies rebuild byte-for-byte (`tools/os88disk.py` pins the volume
-serial and every FAT timestamp; this pins the input) and a collection that
-moved under us is a hard failure rather than a silent difference.
+**THE BYTES COME OUT OF A COMMITTED ZIP, NOT OFF DRIVE** (SPEC.md §74.6.1):
+`apps/runcpm/cache/cpmcache.zip`, read by `tools/cpmcache.py`, because Drive
+answers one request and one virus-scan form a file and eighty of them were
+minutes of every clean `make live`. That is a user-decided departure from
+CONTRIBUTING.md §6 (`apps/runcpm/cache/README.md` records it). The PIN - a
+Google Drive file id, a SHA-256 and a size per file - is still the authority:
+every byte out of the zip is checked against it exactly as a download is, so
+the floppies rebuild byte-for-byte (`tools/os88disk.py` pins the volume serial
+and every FAT timestamp; this pins the input). Drive is reached only for a
+file the zip lacks - a moved pin - and `tools/cpmcache.py --pack` then brings
+the zip up to date.
 
 WHERE THEY COME FROM: the public **RunCPM software collection** on Google
 Drive — the A..P/0..F drive tree RunCPM users share, the same shape RunCPM
@@ -769,8 +772,8 @@ def write_if_changed(path, data):
 
 def get_file(area, name, out, check, src):
     """The bytes of one pinned file, from the output directory itself (it is
-    the cache), a local copy of the collection (--from) or Drive, verified
-    whichever way it arrived."""
+    the cache), a local copy of the collection (--from), the committed zip
+    or Drive, verified whichever way it arrived."""
     fid, want_sha, want_size = PINNED[area][name]
     dest = os.path.join(out, *area.split("/"), name)
     data = None
@@ -786,9 +789,16 @@ def get_file(area, name, out, check, src):
         with open(p, "rb") as fh:
             data = fh.read()
     if data is None:
+        # the committed copy (tools/cpmcache.py) before the network: Drive is
+        # one request and one scan-warning form a file, and that is minutes
+        import cpmcache
+        data = cpmcache.member(f"cpmsw/{area}/{name}")
+    if data is None:
         if check:
             fail(f"{area}/{name} is not cached in {out} (--check does not fetch)")
-        print(f"getcpmsw: fetching {area}/{name}")
+        print(f"getcpmsw: fetching {area}/{name} (not in "
+              f"apps/runcpm/cache/cpmcache.zip - `tools/cpmcache.py --pack` "
+              f"once it is fetched)")
         data = drive_get(fid)
     if len(data) != want_size or sha256(data) != want_sha:
         fail(f"{area}/{name}: SHA-256/size mismatch against the pin\n"

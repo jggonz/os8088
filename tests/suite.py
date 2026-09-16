@@ -678,6 +678,12 @@ FAST = [
     Row("image", "fast", py("tests/unit/t_image.py"), 0.1,
         "the shipped floppies read by an independent FAT12 walker: contiguity, "
         "the standard BPB, SPEC.md 19.6's attributes"),
+    Row("cpmcache", "fast", py("tests/unit/t_cpmcache.py"), 0.2,
+        "SPEC.md 74.6.1: apps/runcpm/cache/cpmcache.zip holds every file "
+        "getruncpm.py and getcpmsw.py pin, and nothing else. The scripts fall "
+        "back to the network for a file the zip lacks, so a pin moved without "
+        "a repack is a clean `make live` downloading from Google Drive a file "
+        "at a time again with nothing saying why"),
     Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
         "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
         "completeness, and until this row nothing in the tree had ever read "
