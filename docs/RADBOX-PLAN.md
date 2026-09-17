@@ -270,6 +270,19 @@ row names the section that is now binding.
 | a tune stopped by another program's F key | the driver unloads it (§53.3 releases every other instance's sound); RADBOX says "Stopped by another program." and replays from its own copy | — | 34.12.4, 96.6.1 |
 | fixtures | `RV1.RAD`, `RV1SLOW.RAD`, `RV2.RAD`, `RV2BPM.RAD`, `RV2SLOW.RAD` in `tests/fixtures/rad/`; `.RLG` 3-byte register logs with FFFEh/FFFFh/FFFDh markers | — | 96.7, 96.8 |
 
+**Settled in wave 2**: the OPL3 probe's status mask alone is not enough -
+QEMU's `-device adlib` (MAME's old `fmopl.c`) never sets status bits 1-2 and
+aliases 38Ah onto 388h, so it read OPL3. A maybe-OPL3 is now asked two more
+questions through 38Ah: with `NEW` = 1 timer 1 must NOT start (an aliasing
+OPL2 fails), and with `NEW` = 0 it MUST (a card with nothing at 38Ah/38Bh -
+stock MartyPC's - fails; review round 0 found the first version read that card
+as OPL3). SPEC.md 34.11.1 also records the rejected alternative: a read at
+38Ah is FFh on 86Box's OPL3. The 105h <- 00h on all-off and `DSV_RELINST` is
+the tune OWNER's (SPEC.md 34.11.3, 34.12.4) and lands in wave 3; the stream
+workers' verb 9 is made at IF = 0 for the nest stack's sake (34.13.7).
+`tests/opl3.py` (four arms, `MARTYPC_NO38A=1` the new one) and
+`tests/sndtick.py` are the wave's gates.
+
 **Still open**: XT burst spreading (§6, unchanged) and the replayer's resident
 size (§3.2's 2KB rule) are wave 3 measurements; §34.13.6 names the IF=0 frame
 cost as the measurement wave 3 records.

@@ -597,6 +597,11 @@ snd_release_inst:
     push dx
     mov bp, [drv_svc+DSV_RELINST]
     call drv_svc_call
+%ifdef OS88_SNDCARD                 ; SPEC.md 34.13.7's third site - its OWN
+    jc .keep                        ; ifdef, because this routine assembles on
+    mov [drv_svc+DSV_TICK], dx      ; kern_small too, where no driver answers
+.keep:                              ; DX and the six bytes would buy nothing
+%endif
     pop dx
     pop bp
     pop ax
@@ -848,6 +853,9 @@ osapi_snd_fm:
     call snd_req_inst           ; DH = the requester
     mov bp, [drv_svc+DSV_FM]
     call drv_svc_call
+    jc .keep                    ; SPEC.md 34.13.7: a successful verb answers
+    mov [drv_svc+DSV_TICK], dx  ; DX = the tick proc the driver wants now, or
+.keep:                          ; 0 - a refusal leaves the tick as it was
     pop es
     pop dx
     pop bp
@@ -914,6 +922,9 @@ osapi_snd_stream:
     call snd_req_inst           ; DH = the requester
     mov bp, [drv_svc+DSV_STREAM]
     call drv_svc_call
+    jc .keep                    ; SPEC.md 34.13.7: every verb but 3 answers DX
+    mov [drv_svc+DSV_TICK], dx  ; = the tick proc, or 0 (verb 3's DX is its
+.keep:                          ; ANSWER, so .status below is not a site)
     pop dx                      ; ...only the main path owes this one
 .pops:
     pop bp
@@ -1142,7 +1153,9 @@ section .text
 ;
 ; in:  DL = 1 a PCM_EXCL clip is about to start, 0 it has finished
 ; out: CF = 1 a background stream is open, so the clip must be refused
-; clobbers: nothing (flags)
+; clobbers: DX - the driver answers verb 8 with DX = its tick proc or 0
+;           (SPEC.md 34.13.7). Both callers are safe: spk_pcm_idle banks DX
+;           around the call and osapi_snd_play reads no DX after it (flags)
 ;
 ; **The kernel is the only side that can see both.** An exclusive clip raises
 ; sch_lock for its whole duration, which would freeze a loaded driver's refill

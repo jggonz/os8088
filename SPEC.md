@@ -10294,7 +10294,7 @@ A driver and the two kernel-side spawners have no header to declare in, so
 |---|---|---|
 | `SCH_IDLE_STK` | 128 | the idle task's own footprint is ≤ 4 bytes (§8.1.2), so what it needs *is* the interrupt floor — 32 on QEMU, 40–64 on real iron |
 | `SCH_BUILTIN_STK` | 128 | Timer and Bounce are the built-in kinds that take a task; six Bounces at once measured +10…24 over the floor |
-| `SCH_DRV_STK` | 192 | the sound driver's stream task, the only driver worker in the tree, walks 28 bytes statically — 64 + 28 = 92, so 2.1× |
+| `SCH_DRV_STK` | 192 | the sound driver's stream task, the only driver worker in the tree, walks 28 bytes statically — 64 + 28 = 92, so 2.1×. Its once-a-pass stream verb 9 (§34.13.7) goes through the kernel, which `stkdepth.py` does not walk, and is ~40-50 bytes by hand — but it is made at IF = 0, so no floor sits on it and 92 is still the deepest sum |
 
 `OSAPI_DRV_TASK` is called from one driver in the whole tree — the sound
 driver's refill and drain spawners, both light — which is why one number
@@ -10410,8 +10410,21 @@ a card pays the first row's figure for the tick (`DSV_TONE` is unchanged, and
 still costs what it costs while a tone sounds). The rows stand as the
 measurement they were; a class is still sized against the machine **playing**,
 because that is when a game's worker is running, and the ~16 bytes are still
-the price then. Wave 2 of docs/RADBOX-PLAN.md re-reads `stkdiag`'s floor on
-an idle Sound Blaster box and records it beside the 52.
+the price then. **Re-read in wave 2 of docs/RADBOX-PLAN.md as an A/B**, `STKDIAG=1`
+on QEMU with an SB16 and an OPL at 388h, nothing playing, ~125 s a boot, one
+kernel image for all three arms (byte-identical `kernel.bin`), and the driver's
+attach READ rather than assumed (`drv_tab` row 0's segment, the kernel's
+`DSV_CAPS` and `DSV_TICK`):
+
+| arm | `SOUND.DRV` attached | `[drv_svc+DSV_TICK]` | FLOOR, idle slice |
+|---|---|---|---|
+| the switched driver (§34.13.7) | yes, `DSV_CAPS` 0016h | **0** | **32** |
+| the driver before it, same kernel | yes, `DSV_CAPS` 0016h | `sbl_tick` | **52** |
+| no card | no | 0 | 32 |
+
+So the 20 bytes are the published tick and nothing else: the ROM chain's own
+stack read 52 and no chain was skipped on all three, and the idle floor with
+a card is now the no-card floor.
 
 - **The class is 256.** Measured at 256: **184, 188 and 192 of 256** over
   three runs, so 64–72 bytes free, and it takes slot 10. Cyclone was the
@@ -49714,22 +49727,88 @@ The four existing verbs, for the record — they were written down only in
 
 Channel 8 is the tone tier's voice and no verb may claim it (§34.8).
 
-#### 34.11.1 Detection is one mask on the read the probe already makes
+#### 34.11.1 Detection: the status mask, then the second decoder, both ways
 
 `opl_probe`'s timer-flag dance reads the status port twice: s1 after the
 mask/reset, s2 after timer 1 has overflowed. An OPL2 answers with bits 1 and 2
-of s2 **set** (06h); an OPL3 answers them **clear**. So, once the existing
-presence test has passed:
+of s2 **set** (06h); an OPL3 answers them **clear**. That mask is the
+classic test and it is **necessary but not sufficient**, and wave 2 measured
+why: QEMU's `-device adlib` is MAME's old `fmopl.c`, whose status read is
+`status & (statusmask | 80h)` with no 06h in it, so an OPL2 answers the mask
+exactly as an OPL3 does - `DSV_CAPS` read 0022h on the first build that
+trusted it. QEMU also decodes only A0 across 388h-38Bh, so 38Ah is an ALIAS of
+the address port there, as it is on a cheap AdLib clone. And a card can pass
+the mask and decode **nothing** at 38Ah/38Bh - stock MartyPC's is exactly that
+(a Nuked-OPL3 status byte, no second port pair), and so is any fully decoded
+two-port OPL2 clone whose undriven low status bits read 0. So a chip that
+passes the mask is asked TWO more questions, one of which only a second array
+answers "no" to and one of which only a decoded 38Ah answers "yes" to:
 
 ```
 present = (s1 & E0h) = 00h  and  (s2 & E0h) = C0h        ; unchanged
-opl3    = present           and  (s2 & 06h) = 00h        ; new
+maybe3  = present           and  (s2 & 06h) = 00h        ; the mask
+; ...then, on a maybe3 chip only.  Question A - NEW = 1, the timer must NOT run:
+04h <- 60h, 04h <- 80h, 02h <- FFh                       ; through 388h/389h
+38Ah <- 05h, 38Bh <- 01h                                 ; 105h <- 01h: NEW on
+38Ah <- 04h, 38Bh <- 21h                                 ; 104h <- 21h
+; >= 80 us of counted status reads at 388h, then s3 at 388h
+38Ah <- 04h, 38Bh <- 00h                                 ; 104h <- 00h, NEW still 1
+38Ah <- 05h, 38Bh <- 00h                                 ; 105h <- 00h: NEW off
+04h <- 60h, 04h <- 80h
+; Question B - NEW = 0, the timer MUST run:
+38Ah <- 04h, 38Bh <- 21h                                 ; the FIRST array's 04h
+; >= 80 us of counted status reads at 388h, then s4 at 388h
+04h <- 60h, 04h <- 80h
+opl3    = maybe3  and  (s3 & E0h) = 00h  and  (s4 & E0h) = C0h
 ```
 
-No port is written that was not written before, and no port at 38Ah/38Bh is
-touched on a machine where the test answers OPL2. The answer is kept in
-`[opl_is3]` (one byte of the driver's own data) and published as a capability
-bit:
+**Question A.** With `NEW` = 1 a YMF262 decodes 38Ah as the second array, so
+the 21h lands in the 4-op connection select and timer 1 stays stopped: s3
+reads 00h, and the next write puts 104h back before `NEW` goes off (§34.11.2's
+order). A chip that aliases 38Ah onto 388h hears "04h <- 21h" instead - timer 1
+starts and s3 reads C0h, exactly as the presence test a moment earlier proved
+it can. On an aliasing OPL2 the other writes land on 05h, which a YM3812 does
+not use, and on 04h, which the clean-up rewrites.
+
+**Question B is the positive half, and it is what makes A's absence
+evidence.** A stopped timer is also what a card with nothing at 38Ah/38Bh
+gives - the four writes vanish and s3 reads 00h - so A alone called stock
+MartyPC's card an OPL3, and would have let a version 2.1 tune past §96's
+needs-OPL3 gate onto a card that plays half of it. With `NEW` = 0 a YMF262
+decodes an address written to 38Ah into the FIRST array (every register but
+05h, §34.11.2), so "38Ah <- 04h, 38Bh <- 21h" is 04h <- 21h and timer 1 MUST
+start: s4 reads C0h. A card that does not decode 38Ah never starts it and
+answers OPL2. Question A runs first on purpose: it ends with 105h <- 00h, so B
+meets `NEW` = 0 even on a chip a warm boot (`int 19h` resets no hardware) left
+with `NEW` = 1.
+
+So the three kinds of card each fail exactly one question: an **aliasing**
+OPL2 fails A, a **non-decoding** mask-passing card fails B, and a YMF262 passes
+both. 86Box's Nuked OPL3 (`nuked_opl3_write_addr`: base+2 selects 1xxh when
+the value is 05h or `NEW` is set) and MartyPC's patch 05 model the decode that
+way, and so does DOSBox. **What no gate here reaches is real silicon**: the
+decode is taken from the YMF262's documented behaviour and three emulators
+that agree about it, and no physical OPL3 card has run this probe. A card that
+answers both questions like a YMF262 without being one is the probe's residual
+false positive, and it is a field report to take.
+
+What was NOT taken, and why. **A read at 38Ah** (a YMF262 decodes only A0 on
+a read) is wrong twice: QEMU's alias answers the status there as an OPL3
+would, and 86Box's OPL3 read handler answers FFh for any port but base+0, so
+it would have called 86Box's Sound Blaster Pro 2 and SB16 OPL2 and refused
+every version 2.1 tune on the listening machine. **Either question alone** is
+not a detector: B by itself cannot tell a YMF262 from an aliasing OPL2 - both
+run the timer - which is how an early build of this probe still read QEMU as an
+OPL3, and A by itself cannot tell one from a card with no second port pair.
+
+**No port at 38Ah/38Bh is touched on a machine whose status mask answers
+OPL2** - a real YM3812, 86Box's plain AdLib, `MARTYPC_OPL2=1` - and nothing
+else is written there that the probe did not write before. The twelve extra
+register writes (seven through 388h/389h, five through 38Ah/38Bh) and the two
+status waits are made once, cold, and only where the mask already said
+"maybe". The
+answer is kept in `[opl_is3]` (one byte of the driver's own data) and
+published as a capability bit:
 
 ```
 SND_CAP_OPL3  equ 20h     ; set only together with SND_CAP_FM
@@ -49742,13 +49821,16 @@ the capability bit is the machine-readable fact.
 
 **Three emulators, three answers, and each is a gate rather than an
 assumption.** QEMU's `-device adlib` is an OPL2 and must still read OPL2 after
-this change. MartyPC's Nuked-OPL3 core has **always** answered OPL3 - its
+this change - it passes the status mask and fails the second question, which
+makes it the gate on question A (`tests/opl3.py --qemu`). MartyPC's Nuked-OPL3 core has **always** answered OPL3 - its
 status byte never sets bits 1 and 2, on the stock pin too - and patch 05 is
 what makes that answer true, by decoding 38Ah/38Bh as the second array (and
 modelling `NEW`'s address decode, §34.11.2); the same patch's `MARTYPC_OPL2=1`
 turns every AdLib card in that process into an OPL2 (status bits 1-2 set,
-38Ah/38Bh not decoded), so the cycle-accurate 8088 has a machine of each kind
-and the probe is its own negative control. 86Box's Sound Blaster Pro 2 and
+38Ah/38Bh not decoded), and its `MARTYPC_NO38A=1` keeps the OPL3 status byte
+and takes the 38Ah/38Bh decode away - stock MartyPC's card, and question B's
+gate, which must read OPL2. So the cycle-accurate 8088 has a machine of each
+of the three kinds and the probe is its own negative control. 86Box's Sound Blaster Pro 2 and
 SB16 read OPL3 and its plain AdLib reads OPL2.
 
 #### 34.11.2 The second array, `NEW`, and the replay-path writer
@@ -49768,6 +49850,14 @@ so, and MartyPC does with patch 05 - so a 104h <- 00h made then is a write of
 a version 1.0 tune never sets `NEW` and never writes 1xxh but 105h), and
 `tools/radsim.py --selfcheck` asserts it over every stream it produces,
 reference and sent (§96.8).
+
+**The probe is the one exception, and it is deliberate.** §34.11.1's question
+B writes "38Ah <- 04h, 38Bh <- 21h" with `NEW` = 0 *because* a YMF262 decodes
+that into the first array's 04h - the write is a first-array timer start by
+design, made once at attach, on a chip that is not yet known to be an OPL3 and
+has no tune on it. Nothing else may rely on that decode, and `opl_probe3` is
+the only caller of `opl_wr2` that runs with `NEW` = 0 on a register other than
+105h.
 
 **Two writers, one port pair.**
 
@@ -49811,11 +49901,22 @@ That is 217 writes more than an OPL2's attach (3, plus the 214 registers of
 120h..1F5h), once, cold. On an OPL2 none of
 them is made.
 
-**OPL2 mode is the resting state and every exit returns to it**: on an
-OPL3, a RAD tune's stop (§34.12.2), all-off, `DSV_RELINST` and `DRVV_DETACH`
-each end with 105h <- 00h - preceded, for a version 2.1 tune (the only kind
-that sets `NEW`), by 104h <- 00h while `NEW` is still 1, which is §34.11.2's
-rule rather than a preference.
+**OPL2 mode is the resting state and every exit returns to it.** Only a RAD
+tune ever sets `NEW` (attach and the probe put it back before they return), so
+the writes that return an OPL3 to OPL2 mode belong to the exits of a TUNE, and
+§34.12.4 is who may take them: a tune's stop (§34.12.2), all-off **from the
+tune's owner**, `DSV_RELINST` **for the owner while a tune holds the chip**,
+and `DRVV_DETACH` each end with 105h <- 00h - preceded, for a version 2.1 tune
+(the only kind that sets `NEW`), by 104h <- 00h while `NEW` is still 1, which
+is §34.11.2's rule rather than a preference. **An all-off or a `DSV_RELINST`
+from anybody else writes neither register**: §34.12.4 says it touches no tune,
+and a 105h <- 00h under a playing version 2.1 tune would drop half its
+channels. With no tune there is nothing to restore, so until the replayer
+lands (docs/RADBOX-PLAN.md wave 3) the only exit that writes 105h is
+`DRVV_DETACH`, unconditionally on an OPL3 - one write, idempotent. That set
+includes the warm reboot: `int 19h` resets no hardware, so whatever path
+takes the machine down with a tune loaded owes both writes, and §34.11.1's
+question A clears a stale `NEW` on the next boot's probe regardless.
 
 ### 34.12 The RAD replayer — `OSAPI_SND_FM` verbs 4, 5 and 6
 
@@ -50716,10 +50817,32 @@ the table has no gap. The cost is one `OSAPI_SND_STREAM` far call and the
 driver's dispatch per pass while a stream is open - about 0.3-0.5 ms a pass
 on a 5150, 0.5-0.9% of the CPU while streaming (the far call alone is 46.7
 us) - and a few driver bytes; no kernel byte. On the worker's stack the call
-chain is ~40-50 bytes above the interrupt floor (the far call to the slot,
+chain is ~40-50 bytes (the `pushf`, the far call to the slot,
 `osapi_snd_stream`'s banks, `snd_req_inst`, `drv_svc_call` and
-`drv_svc_call_x`, then the driver's dispatch), on a 384-byte dynamic-pool
-stack, and wave 2 measures it rather than trusting that sum (below).
+`drv_svc_call_x`, then the driver's dispatch), on the worker's 192-byte
+`SCH_DRV_STK` slice (§8.7.3) - and because the call runs at IF = 0 (next
+paragraph), **no interrupt floor lands on top of it**: its worst case is the
+chain alone, below the 28 + 64 = 92 of `sbl_refill` under an interrupt, so the
+slice's margin is unchanged.
+
+**The worker's verb 9 is made at IF = 0: `pushf` / `cli` / `mov al, 9` /
+`call OSAPI_SND_STREAM` / `popf`.** The reason is not the tick cell - the
+recompute is already atomic - but **the nest stack** (§66.6.3). The call
+reaches `drv_svc_call_x`, which brackets the driver with `wm_nest_pushd` /
+`wm_nest_pop`, and that stack is ONE stack for the whole machine with no
+per-task save. A worker pre-empted between its push and its pop lets another
+task push above it; the worker's pop then drops *that* task's level, and
+`mem_in_nest` stops seeing a package image that is executing - the compactor
+may move it under its own return address. The driver's own workers are the
+first to enter the nest **once a tick for as long as a stream is open**, which
+on a 5150 puts a worker inside that window roughly once every 40 seconds of
+streaming, so they take the window away rather than accept it. Every routine on the chain is IF-neutral (`drv_svc_call`,
+`wm_nest_pushd`'s own `pushf`/`cli`/`popf`, `snd_tick_ans`'s), none yields or
+waits on a lock, and the cost is the ~0.3-0.4 ms the call already took, now
+at IF = 0, once a tick while streaming - no kernel byte. **A package worker
+through `drv_pkg_call_x` has the same interleave and is NOT covered by this
+rule**, and neither is a package's own worker making a sound verb (a stream
+feed from a worker, §20.6 rule 7); §66.6.3 names both as a known kernel hazard.
 
 **Each worker's exit path is a site too.** A worker that exits - the stream
 closed, or the watchdog set `SBL_ST_END` - calls verb 9 once more on its
@@ -50749,7 +50872,11 @@ emulator's memory interface:
   **36 ticks** - the negative control for the heal itself.
 
 The row also reads the refill worker's stack slot with `tools/stkwater.py`
-while verb 9 is in its loop, and records the figure beside §8.7.5's floor.
+while verb 9 is in its loop, and records the figure beside §8.7.5's floor. A
+high-water mark is a sample, not a bound: wave 2 read 44 of 192 on QEMU with
+the heal and the same 44 without it, which says the heal did not set the
+sampled maximum and says nothing about the worst case - the sum above is the
+bound.
 
 **Ended at interrupt time, switched off at the next verb.** Two things end
 without a verb: a Sound Blaster stream the watchdog stops (`SBL_ST_END`,
@@ -84825,6 +84952,20 @@ used to be an unconditional pin. It is now:
    driver running? All-or-nothing, because `TF_SERVICE` is the only handle the
    kernel has on *"a task inside a driver"* and it does not say which (§66.5.5).
    This one **does** set `[mem_wpin]`: a park fixes it.
+
+**A known hazard, not fixed: a pre-empted bracket.** The stack has no
+per-task save, so a bracket made from a pre-emptible task - a WORKER, since
+a UI task's callbacks nest properly - can interleave with another task's: W
+pushes at depth d, is switched out, the UI task enters package Q at d+1, W
+resumes and pops, and the depth reads d+1 with Q's level uncounted, so
+`mem_in_nest(Q)` answers "nobody inside" while Q executes. It needs a
+compaction, triggered by a claim, inside that window. `drv_pkg_call_x` from a
+package worker (§20.6 rule 7 allows it) is exposed today, and so is a
+package worker's own `OSAPI_SND_*` verb, which reaches `drv_svc_call_x`;
+`SOUND.DRV`'s stream
+workers, which enter the nest once a tick through stream verb 9, close it by
+making that call at IF = 0 (§34.13.7). A kernel fix - a per-task depth, or a
+bracket that refuses from a worker - is kernel bytes and is not taken here.
 
 **The push costs `pushf`/`cli` and not a bare `inc`.** `drv_dispatch` is
 reached from `snd_tick` **inside IRQ0** (§34.5), so the read-modify-write can be
@@ -121341,7 +121482,8 @@ the emulator gates compare against).
 | `tests/radopl3.py` | MartyPC + patch 05 | OPL3 detected; `RV2.RAD`'s and `RV1.RAD`'s sent streams from a `-DRADLOG` driver equal radsim's, tick-paced; `[drv_svc+DSV_TICK]` is 0 before start, non-zero while playing and 0 again after stop and after pause (§34.13.7) |
 | `tests/radopl2.py` | MartyPC + patch 05, `MARTYPC_OPL2=1` | OPL2 detected (the probe's negative control); `RV2.RAD` refused with §96.6's sentence; `RV1.RAD` plays tick-paced on an OPL2 and its sent stream has no 1xxh write |
 | `tests/radrtc.py` | QEMU `ADLIB=1` (an OPL2) | `RV2.RAD` refused; the RTC pacer: 50 frames a second, measured over **75 s** - past the 64 s at which un-renormalised word counters would lap (§34.13.3); a `-DRADSLOW` driver whose every frame busy-waits 4 ms still 50 ±1%, and with `-DRADNOCREDIT` too measurably short (the tick discipline's negative control); register B restored after close; the BIOS clock unharmed; `[drv_svc+DSV_TICK]` reads 0 throughout, because an RTC-class tune never asks for the tick (§34.13.7) |
-| `tests/sndtick.py` (wave 2) | QEMU `SB16=1`, and `ADLIB=1` | §34.13.7's switch: `[drv_svc+DSV_TICK]` reads 0 on an idle desktop on both boxes and non-zero while `tests/sbtest`'s stream is open on the Sound Blaster box, 0 again after its close; the planted lost update: while a `-DSBPOLL` sbtest's stream plays (it polls verb 3 only), 0 is poked into both `[drv_svc+DSV_TICK]` and the driver's own cell, and both read the proc again within 2 ticks; a `-DSNDREADBACK` driver (verb 9 answers its cell) and a `-DSNDNOHEAL` driver (no verb 9 in the workers' loops) are the two negative controls, each still 0 after 36 ticks; after close the cell is 0 again once the worker's exit-path verb 9 has run; the refill worker's stack slot read with `tools/stkwater.py` with verb 9 in its loop; and on the Sound Blaster box the idle slice's interrupt floor is measured (`stkdiag`) and recorded beside §8.7.5's 52. Beside it, not in it: `tools/kernsize.py` on both kernels, kern_big +18 `.text` and kern_small +0 |
+| `tests/sndtick.py` (wave 2) | QEMU `SB16=1`, and `ADLIB=1` | §34.13.7's switch: `[drv_svc+DSV_TICK]` reads 0 on an idle desktop on both boxes and non-zero while `tests/sbtest`'s stream is open on the Sound Blaster box, 0 again after its close; the planted lost update: while a `-DSBPOLL` sbtest's stream plays (it polls verb 3 only), 0 is poked into both `[drv_svc+DSV_TICK]` and the driver's own cell, and both read the proc again within 2 ticks; a `-DSNDREADBACK` driver (verb 9 answers its cell) and a `-DSNDNOHEAL` driver (no verb 9 in the workers' loops) are the two negative controls, each still 0 after 36 ticks; after close the cell is 0 again once the worker's exit-path verb 9 has run; the stream reopened with the card's IRQ masked at the PIC (HMP `o`) is ENDED by the watchdog and its dead worker switches the tick off before anybody closes it; SBTEST's 1 kHz square is in the capture; the refill worker's stack slot read with `tools/stkwater.py` with verb 9 in its loop; and on the Sound Blaster box the idle slice's interrupt floor is measured (`stkdiag`) and recorded beside §8.7.5's 52. Beside it, not in it: `tools/kernsize.py` on both kernels, kern_big +18 `.text` and kern_small +0 |
+| `tests/opl3.py` (wave 2) | QEMU `ADLIB=1`; MartyPC `os8088_5150_sb_gla` with patch 05, and again with `MARTYPC_OPL2=1` and with `MARTYPC_NO38A=1` | §34.11.1's probe on its three kinds of card and the real thing: QEMU's adlib passes the status mask and must read OPL2 (`SND_CAP_OPL3` clear, `[opl_is3]` 0 - question A's gate), MartyPC's card reads OPL3, `MARTYPC_OPL2=1` reads OPL2 off the mask alone, and `MARTYPC_NO38A=1` (the OPL3 status byte, nothing at 38Ah/38Bh) must read OPL2 - question B's gate, which the A-only probe failed; on all four FMTEST's patched 440 Hz note sounds at 880 Hz (`tools/sndcheck.py`) and `[drv_svc+DSV_TICK]` reads 0 after the two FM verbs that played it |
 | `tests/radfsx.py` | QEMU, three adapters | F and Esc round-trip, the pointer drawn, a click lands, frames never stall across either transition |
 
 **What no gate reaches, named with the scenario that would.** The RTC

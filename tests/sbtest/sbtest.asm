@@ -43,6 +43,14 @@
 ;   close box mid-stream: the snd_release_inst -> sbl_release_inst teardown
 ;            leg must silence the stream and free the grant.
 ;
+; -DSBPOLL (build/sbpoll.img, tests/sndtick.py - SPEC.md 34.13.7): the click's
+; open also arms a one-tick window timer, and from then on the package issues
+; ONLY stream verb 3, once a tick, until the stream closes. Verb 3 is not one
+; of the kernel's DSV_TICK sites, so this owner can never re-assert the tick -
+; a 0 planted in the cell is repaired by SOUND.DRV's worker heal or not at
+; all, which is the whole of what the row needs from an owner. The state digit
+; the poll reads lands in line 2 without a repaint.
+;
 ; Window procs run with the gfx lock held (SPEC.md 11) and preserve all
 ; registers, like every package.
 ;
@@ -69,6 +77,15 @@ sb_entry:
     push si
     mov si, sb_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
+%ifdef SBPOLL
+    jc .done
+    push ax
+    mov ax, sb_poll
+    call OSAPI_WM_ONTIMER           ; CF = 1 on kern_small: no poll, and the
+    pop ax                          ; row runs on kern_big anyway
+    clc
+.done:
+%endif
     pop si
     ret                            ; far-called by the loader (SPEC.md 20.5)
 
@@ -123,6 +140,13 @@ sb_onclick:
     jne .close
     mov cx, 0x1414                  ; CH = CL = 20 chunks: 16,000 B granted
     call sb_start                   ; and staged = 2 s at 8 kHz
+%ifdef SBPOLL
+    cmp byte [sb_openf], 0
+    je .repaint
+    mov bx, si
+    mov ax, 1
+    call OSAPI_WM_TIMER             ; the first poll, one tick from now
+%endif
     jmp .repaint
 .close:
     call sb_close
@@ -299,6 +323,35 @@ sb_start:
     pop bx
     pop ax
     ret
+
+%ifdef SBPOLL
+; -----------------------------------------------------------------------------
+; sb_poll - the SBPOLL owner's one-tick poll: verb 3 and nothing else
+; in:  SI = window ptr; UI task, gfx lock held (OSAPI_WM_ONTIMER)
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+sb_poll:
+    push ax
+    push bx
+    push dx
+    cmp byte [sb_openf], 0
+    je .out                         ; closed: the timer is not re-armed
+    mov ah, [sb_hand]
+    mov al, 3                       ; verb 3 status - NOT a DSV_TICK site
+    call OSAPI_SND_STREAM
+    jc .rearm
+    add al, '0'
+    mov [sb_s2+3], al               ; the state digit, no repaint
+.rearm:
+    mov bx, si
+    mov ax, 1
+    call OSAPI_WM_TIMER
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; sb_close - close the stream and free its grant

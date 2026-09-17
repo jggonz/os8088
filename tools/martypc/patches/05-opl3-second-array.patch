@@ -1,20 +1,21 @@
 diff --git a/crates/marty_core/src/devices/adlib.rs b/crates/marty_core/src/devices/adlib.rs
-index 31bd442b..735a6a72 100644
+index 31bd442b..198f11da 100644
 --- a/crates/marty_core/src/devices/adlib.rs
 +++ b/crates/marty_core/src/devices/adlib.rs
-@@ -52,6 +52,11 @@ pub struct AdLibCard {
+@@ -52,6 +52,12 @@ pub struct AdLibCard {
      pub usec_accum_second: f64,
      pub timewarp_usec: f64,
      pub addr: u8,
 +    // os8088 patch 05: the second register array, NEW, and an OPL2 mode.
 +    pub opl2: bool,
++    pub no38a: bool,
 +    pub new: bool,
 +    pub addr2: u8,
 +    pub addr2_secondary: bool,
  }
  
  impl AdLibCard {
-@@ -69,6 +74,17 @@ impl AdLibCard {
+@@ -69,6 +75,23 @@ impl AdLibCard {
              usec_accum_second: 0.0,
              timewarp_usec: 0.0,
              addr: 0,
@@ -26,13 +27,19 @@ index 31bd442b..735a6a72 100644
 +            // for an OPL2 (a RAD 2.1 tune) and its probe's negative control
 +            // run on, without a second machine config per card.
 +            opl2: std::env::var("MARTYPC_OPL2").map(|v| v == "1").unwrap_or(false),
++            // MARTYPC_NO38A=1 keeps the OPL3 status byte (bits 1-2 CLEAR) and
++            // takes base+2/base+3 away - the stock pin's card, which passes
++            // SPEC.md 34.11.1's status mask with no second port pair. It is
++            // the negative control for that section's question B: a probe
++            // that trusts "the timer did not start" alone reads it as OPL3.
++            no38a: std::env::var("MARTYPC_NO38A").map(|v| v == "1").unwrap_or(false),
 +            new: false,
 +            addr2: 0,
 +            addr2_secondary: false,
          }
      }
  
-@@ -136,9 +152,17 @@ impl IoDevice for AdLibCard {
+@@ -136,9 +159,20 @@ impl IoDevice for AdLibCard {
          self.catch_up(delta);
  
          //log::debug!("Read from Adlib port {:04X}", port - self.io_base);
@@ -46,14 +53,17 @@ index 31bd442b..735a6a72 100644
 +        // answer to SPEC.md 34.11.1's `(s2 & 06h) = 0` test, which this core
 +        // gave before the patch too - unless MARTYPC_OPL2=1, where they read
 +        // SET and base+2/base+3 are not decoded.
++        let decode2 = !self.opl2 && !self.no38a;
 +        match (port - self.io_base, self.opl2) {
-+            (0, false) | (2, false) => self.opl3.read_status(),
++            (0, false) => self.opl3.read_status(),
++            (2, false) if decode2 => self.opl3.read_status(),
 +            (0, true) => self.opl3.read_status() | 0x06,
-+            (1, _) | (3, false) => 0x1F,
++            (1, _) => 0x1F,
++            (3, false) if decode2 => 0x1F,
              _ => 0xFF,
          }
      }
-@@ -162,6 +186,38 @@ impl IoDevice for AdLibCard {
+@@ -162,6 +196,38 @@ impl IoDevice for AdLibCard {
              1 => {
                  _ = self.opl3.write_data(data, OplRegisterFile::Primary, false);
              }
@@ -68,7 +78,7 @@ index 31bd442b..735a6a72 100644
 +            // 105h <- 00h lands on 04h here as on the chip, and SPEC.md
 +            // 34.11.2's rule (no 1xxh write but 105h while NEW = 0) has a
 +            // machine that can catch it being broken.
-+            2 if !self.opl2 => {
++            2 if !self.opl2 && !self.no38a => {
 +                self.addr2 = data;
 +                self.addr2_secondary = self.new || data == 0x05;
 +                let file = if self.addr2_secondary {
@@ -78,7 +88,7 @@ index 31bd442b..735a6a72 100644
 +                };
 +                _ = self.opl3.write_address(data, file);
 +            }
-+            3 if !self.opl2 => {
++            3 if !self.opl2 && !self.no38a => {
 +                let file = if self.addr2_secondary {
 +                    OplRegisterFile::Secondary
 +                } else {
@@ -92,7 +102,7 @@ index 31bd442b..735a6a72 100644
              _ => {}
          }
      }
-@@ -171,6 +227,8 @@ impl IoDevice for AdLibCard {
+@@ -171,6 +237,8 @@ impl IoDevice for AdLibCard {
          let ports = vec![
              (String::from("Adlib Address"), self.io_base),
              (String::from("Adlib Data"), self.io_base + 1),

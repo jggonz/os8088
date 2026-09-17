@@ -113,6 +113,10 @@ snd_entry:
     mov word [snd_services+DSV_TONE], opl_tone
     mov word [snd_services+DSV_RELINST], snd_release_both
     or word [snd_services+DSV_CAPS], SND_CAP_FM
+    cmp byte [opl_is3], 0       ; SPEC.md 34.11.1: an OPL3 says so with a bit
+    je .opl2                    ; and nothing else - the chip is already back
+    or word [snd_services+DSV_CAPS], SND_CAP_OPL3   ; in OPL2 mode (34.11.3)
+.opl2:
     or word [snd_services+DSV_TIERS], 1 << SND_RT_FM
     mov word [snd_services+DSV_NAME], snd_s_opl
 .nofm:
@@ -133,7 +137,11 @@ snd_entry:
 .sbok:
     mov byte [drv_up], 1
     mov word [snd_services+DSV_STREAM], sbl_stream_op
-    mov word [snd_services+DSV_TICK], sbl_tick
+                                ; DSV_TICK is NOT published here any more: it
+                                ; is 0 at attach and switched through DX by
+                                ; the verbs that open and close what the tick
+                                ; serves (SPEC.md 34.13.7), so a Sound Blaster
+                                ; with nothing streaming pays no tick at all
     mov word [snd_services+DSV_RELINST], snd_release_both
                                 ; ...and the release verb, which the OPL leg
                                 ; above may already have published. It must be
@@ -238,10 +246,12 @@ snd_tier:
     call sbl_attach             ; probe + the 12KB page-safe claim; AL is the
     jc .no                      ; DRVE_* saying which of the two failed
     mov word [snd_services+DSV_STREAM], sbl_stream_op
-    mov word [snd_services+DSV_TICK], sbl_tick
     or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN
     mov word [snd_services+DSV_NAME], snd_s_sb
 .table:
+    push dx                     ; BOTH legs recompute the tick cell before the
+    call snd_tick_ans           ; kernel republishes the table (SPEC.md
+    pop dx                      ; 34.13.7): off has just closed any stream
     mov si, snd_services
     clc
     ret
@@ -281,6 +291,7 @@ snd_detach:
     call opl_wr
     mov ax, 0xBD00
     call opl_wr
+    call opl_opl2mode           ; an OPL3 is left an OPL2 (SPEC.md 34.11.3)
     call opl_state_init         ; forget every claim: a reload starts clean
 .done:
     mov byte [drv_up], 0
@@ -393,6 +404,70 @@ opl_wr:
     pop dx
     pop cx
     pop ax
+    ret
+
+; =============================================================================
+; opl_wr2 - write one register of an OPL3's SECOND array (SPEC.md 34.11.2)
+;
+; in:       AH = register index 00h..FFh, meaning 100h..1FFh; AL = value
+; out:      nothing
+; clobbers: nothing (flags)
+;
+; opl_wr's shape and timing with the address at 38Ah and the data at 38Bh -
+; the ninth register bit arrives as WHICH ROUTINE, which SPEC.md 34.11.2
+; leaves to the driver, so opl_wr and every existing caller of it are
+; byte-for-byte what they were. The counted status reads stay at 388h: a
+; YMF262 decodes only A0 on a read, and 388h is the port every OPL answers.
+; NEVER called on a chip that did not answer OPL3, and never while NEW = 0
+; except for 105h itself (34.11.2) - the callers own that rule.
+; =============================================================================
+opl_wr2:
+    push ax
+    push cx
+    push dx
+    pushf
+    cli
+    mov dx, 0x38A
+    xchg al, ah                 ; AL = register (value parked in AH)
+    out dx, al
+    mov dl, 0x88                ; 388h: the status port
+    mov cx, 6
+.post_addr:
+    in al, dx
+    loop .post_addr
+    mov al, ah                  ; the value
+    mov dl, 0x8B                ; 38Bh
+    out dx, al
+    popf                        ; the long delay runs at the caller's IF
+    mov dl, 0x88
+    mov cx, 35
+.post_data:
+    in al, dx
+    loop .post_data
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; opl_opl2mode - leave an OPL3 in OPL2-compatible mode (SPEC.md 34.11.3)
+; in:       nothing
+; out:      on an OPL3, 105h <- 00h (NEW off); on an OPL2 nothing is written
+; clobbers: nothing (flags)
+;
+; OPL2 mode is the resting state and every exit returns to it. The one
+; write is all an exit owes while nothing but OPL2-mode verbs has run: 104h
+; is 00h from attach and only a version 2.1 RAD tune sets it, and a tune's
+; own stop writes 104h <- 00h while NEW is still 1 before calling this.
+; -----------------------------------------------------------------------------
+opl_opl2mode:
+    cmp byte [opl_is3], 0
+    je .out
+    push ax
+    mov ax, 0x0500              ; 105h <- 00h
+    call opl_wr2
+    pop ax
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -680,7 +755,9 @@ opl_free:
 ;           2 patch-load (CL, ES:SI -> 11 bytes ALREADY STAGED BY THE KERNEL
 ;           into its own segment), 3 all-off. DH = the requesting instance
 ;           slot, stamped by the kernel (SPEC.md 34.3).
-; out:      CF = 1 refused / no FM sink
+; out:      CF = 1 refused / no FM sink; on CF = 0, DX = the tick proc or 0
+;           (SPEC.md 34.13.7), for the kernel only - the stub banks the
+;           caller's DX around it
 ; clobbers: nothing else (flags)
 ;
 ; Note-on and patch-load claim the channel on first touch; note-off leaves
@@ -753,6 +830,9 @@ opl_fm_op:
     pop cx
     pop bx
     pop ax
+    jc .ret                     ; a refusal: the kernel does not read DX
+    call snd_tick_ans           ; SPEC.md 34.13.7: every successful FM verb
+.ret:                           ; answers DX = the tick proc or 0, CF kept
     ret
 
 ; -----------------------------------------------------------------------------
@@ -760,8 +840,9 @@ opl_fm_op:
 ;                    instance holds, on BOTH halves of this driver
 ;
 ; in:       AL = instance slot
-; out:      nothing
-; clobbers: nothing (flags)
+; out:      CF = 0 always, DX = the tick proc or 0 (SPEC.md 34.13.7), for the
+;           kernel only - snd_release_inst banks the caller's DX
+; clobbers: nothing else (flags)
 ;
 ; The cell used to be `opl_release_inst` alone, which keys off FM channels and
 ; touches nothing of the Sound Blaster's - so a package that streamed and then
@@ -789,6 +870,62 @@ snd_release_both:
     je .out                             ; (DSV_FM is set once at attach and
     call opl_release_inst               ; never cleared, unlike DSV_STREAM)
 .out:
+    clc                         ; EXPLICIT: the kernel's third site takes DX
+    jmp snd_tick_ans            ; only on CF = 0, and the gates above leave CF
+                                ; as the compares did (SPEC.md 34.13.7). Tail
+                                ; call: DX = the tick proc or 0, CF kept
+
+; =============================================================================
+; The switched tick (SPEC.md 34.13.7, decision D6)
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; snd_tickp - THE tick proc: the one near proc DSV_TICK ever names
+;
+; in:       IF = 0 inside IRQ0, DS = ours (drv_svc_call), AX/DX free
+; out:      nothing
+; clobbers: AX, DX
+;
+; One proc, two clients. The Sound Blaster's watchdog runs first and tests its
+; own stream (it does nothing unless one is armed and playing); the RAD tick
+; pacer (SPEC.md 34.13.5) is the second client. Each tests its own state on
+; every call, because something that ends at interrupt time (the watchdog's
+; SBL_ST_END, a HALT) leaves this proc named until the next site verb.
+; -----------------------------------------------------------------------------
+snd_tickp:
+    jmp sbl_tick
+
+; -----------------------------------------------------------------------------
+; snd_tick_ans - the atomic answer every site verb ends in
+;
+; in:       nothing
+; out:      DX = snd_tickp while something needs the tick, else 0, and the
+;           same value written into our own snd_services+DSV_TICK
+; clobbers: DX only - FLAGS ARE PRESERVED (popf), so a caller's CF survives
+;
+; RECOMPUTED FROM LIVE STATE, WRITTEN AND LOADED under one pushf/cli...popf,
+; and the cell is NEVER READ BACK. Verbs run at the caller's IF = 1, so a value
+; decided outside the window could be written over a newer one by a task
+; switch and leave this cell holding a stale 0 no heal could repair. Only
+; interrupt time makes something NOT live (the watchdog), and it writes no
+; cell, so the one staleness this cell can carry is a harmless stale proc.
+;
+; Live: a stream is open and its state is not SBL_ST_END (paused counts - the
+; watchdog is what a resumed transfer is guarded by). The RAD tick-class half
+; of the test arrives with the replayer.
+; -----------------------------------------------------------------------------
+snd_tick_ans:
+    pushf
+    cli
+    xor dx, dx
+    cmp byte [sbl_str_act], 1
+    jne .set
+    cmp byte [sbl_str_state], SBL_ST_END
+    je .set
+    mov dx, snd_tickp
+.set:
+    mov [snd_services+DSV_TICK], dx
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -884,11 +1021,18 @@ opl_probe:
     call opl_wr                 ; clear for the next reader
     mov ax, 0x0480
     call opl_wr
+    mov byte [opl_is3], 0
     and bl, 0xE0
     jnz .absent
+    mov cl, bh                  ; s2 whole, for the OPL3 mask below
     and bh, 0xE0
     cmp bh, 0xC0
     jne .absent
+    test cl, 0x06               ; SPEC.md 34.11.1: an OPL2 sets status bits 1
+    jnz .init                   ; and 2 with the timer flag, an OPL3 does not
+    call opl_probe3             ; ...and QEMU's OPL2 does not either, so a
+                                ; "maybe" is asked through the second decoder
+.init:
     call opl_init               ; present: configure FULLY, then say so
     clc
     jmp short .out
@@ -898,6 +1042,86 @@ opl_probe:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; opl_probe3 - is a chip that passed the status mask really an OPL3?
+;              (SPEC.md 34.11.1's questions A and B)
+; in:       a present chip whose timer-flag status had bits 1-2 clear
+; out:      [opl_is3] = 1 yes, 0 no; timers masked and flags reset; NEW = 0
+; clobbers: nothing (flags)
+;
+; TWO questions, and each kind of impostor fails exactly one of them.
+;
+; A - NEW on through 38Ah/38Bh, then "104h <- 21h": the timer must NOT run. A
+; YMF262 decodes 38Ah as the SECOND array, so the 21h lands in the 4-op
+; connection select (s3 = 00h). A chip that ALIASES 38Ah onto 388h - QEMU's
+; adlib, a cheap AdLib clone - hears "04h <- 21h" and runs the timer it just
+; proved it has (s3 = C0h). 104h goes back to 00h while NEW is still 1, then
+; NEW off, which is 34.11.2's order.
+;
+; B - NEW now 0, "38Ah <- 04h, 38Bh <- 21h": the timer MUST run. A YMF262
+; with NEW = 0 decodes that into the FIRST array's 04h (34.11.2's one probe
+; exception), so s4 = C0h. A card with NOTHING at 38Ah/38Bh - stock MartyPC's,
+; a two-port OPL2 clone whose low status bits float to 0 - loses A's writes
+; too and would pass A on the absence alone; here it never starts the timer.
+; A runs first so a warm boot's stale NEW = 1 is cleared before B.
+;
+; Never reached on a chip whose status mask answered OPL2, so no 38xh port is
+; touched there.
+; -----------------------------------------------------------------------------
+opl_probe3:
+    push ax
+    push cx
+    push dx
+    mov byte [opl_is3], 0
+    mov ax, 0x0460              ; mask both timers, reset the flags
+    call opl_wr
+    mov ax, 0x0480
+    call opl_wr
+    mov ax, 0x02FF              ; timer 1 count FFh, through 388h
+    call opl_wr
+    mov ax, 0x0501              ; 105h <- 01h: NEW on (an alias: 05h, unused)
+    call opl_wr2
+    mov ax, 0x0421              ; 104h <- 21h (an alias: 04h, START TIMER 1)
+    call opl_wr2
+    mov dx, 0x388
+    mov cx, 200                 ; the presence test's >= 80us wait
+.wait:
+    in al, dx
+    loop .wait
+    in al, dx
+    mov ch, al                  ; s3 (the loop left CX = 0)
+    mov ax, 0x0400              ; 104h <- 00h while NEW is still 1
+    call opl_wr2
+    mov ax, 0x0500              ; 105h <- 00h: NEW off
+    call opl_wr2
+    mov ax, 0x0460              ; clean up as the presence test does
+    call opl_wr
+    mov ax, 0x0480
+    call opl_wr
+    test ch, 0xE0               ; A: the timer ran - an alias, not an array
+    jnz .out
+    mov ax, 0x0421              ; B: NEW = 0, so a YMF262 hears 04h <- 21h
+    call opl_wr2                ; (timer 1's count is still FFh)
+    mov cx, 200
+.wait2:
+    in al, dx
+    loop .wait2
+    in al, dx
+    mov ch, al                  ; s4
+    mov ax, 0x0460
+    call opl_wr
+    mov ax, 0x0480
+    call opl_wr
+    and ch, 0xE0
+    cmp ch, 0xC0                ; B: the timer did NOT run - nothing decodes
+    jne .out                    ; 38Ah, so no second array can be there
+    mov byte [opl_is3], 1       ; both answers: an OPL3
+.out:
+    pop dx
+    pop cx
     pop ax
     ret
 
@@ -936,6 +1160,21 @@ opl_init:
     cmp cl, 9
     jb .patch
     pop es
+    cmp byte [opl_is3], 0       ; SPEC.md 34.11.3: on an OPL3 only, and in
+    je .done                    ; this order - NEW on so the array below is
+    mov ax, 0x0501              ; writable, 104h <- 00h (every channel 2-op),
+    call opl_wr2                ; 120h..1F5h cleared (keys off), NEW off.
+    mov ax, 0x0400              ; 217 writes, once, cold; none on an OPL2
+    call opl_wr2
+    mov ah, 0x20
+.zero2:
+    xor al, al
+    call opl_wr2
+    inc ah
+    cmp ah, 0xF6                ; 120h..1F5h inclusive
+    jb .zero2
+    call opl_opl2mode           ; 105h <- 00h: an OPL2, as far as anyone can tell
+.done:
     pop si
     pop cx
     pop ax
@@ -956,6 +1195,7 @@ opl_init:
 ; =============================================================================
 
 drv_up:     db 0                ; 1 = attached, so detach knows there is work
+opl_is3:    db 0                ; 1 = the probe answered OPL3 (SPEC.md 34.11.1)
 opl_own:    times 9 db 0xFF     ; per-channel owner instance (0xFF = none)
 opl_b0:     times 9 db 0        ; per-channel B0h image: the single-write
                                 ; key-off's source (SPEC.md 8.2/34.3)

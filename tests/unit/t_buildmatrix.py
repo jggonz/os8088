@@ -185,6 +185,10 @@ KNOBS = [
     ("picomem",     ["PICOMEM=1"], "sound.drv"),
     ("picomem-ports", ["PICOMEM=1", "PM_BASE=0x2A0", "PM_SB_PORT=0x220"],
      "sound.drv"),
+    # SPEC.md 34.13.7's two negative controls (tests/sndtick.py): SOUND.DRV
+    # only, like PICOMEM, and nothing else builds either arm.
+    ("sndreadback", ["SNDREADBACK=1"], "sound.drv"),
+    ("sndnoheal",   ["SNDNOHEAL=1"], "sound.drv"),
     ("bootprof",    ["BOOTPROF=1"]),
     ("mouidslow",   ["MOUIDSLOW=1"]),
     ("trackrun",    ["TRACKRUN=1"], "boot360.bin"),

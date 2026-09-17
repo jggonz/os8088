@@ -79,7 +79,7 @@ which is the OPL3 answer to SPEC.md 34.11.1's `(s2 & 06h) = 0` test - on the
 stock pin too. What upstream did not do is decode the chip's second address
 pair, so 38Ah/38Bh went nowhere: a driver that detected OPL3 honestly wrote
 105h (`NEW`) and the whole 100h-1FFh array into the void.
-`patches/05-opl3-second-array.patch` does three things, all in
+`patches/05-opl3-second-array.patch` does four things, all in
 `devices/adlib.rs`:
 
 - base+2 is the second array's address register and base+3 its data register,
@@ -91,6 +91,11 @@ pair, so 38Ah/38Bh went nowhere: a driver that detected OPL3 honestly wrote
 - **`MARTYPC_OPL2=1`** in the environment makes every AdLib card in that
   process an **OPL2**: status bits 1-2 read set, base+2/base+3 decode nothing.
   There is no OPL2 here otherwise, and a RAD 2.1 tune's refusal needs one.
+- **`MARTYPC_NO38A=1`** keeps the OPL3 status byte (bits 1-2 clear) and makes
+  base+2/base+3 decode nothing - the unpatched pin's card, which passes the
+  status mask with no second port pair. It is SPEC.md 34.11.1's question B
+  gate (`tests/opl3.py`): a probe that reads "the timer did not start through
+  38Ah" as proof of a second array calls this card an OPL3, and must not.
 
 Proven by a parked probe (no BIOS, IF=0) that runs SPEC.md 34.11.1's
 detection and then plays a note on the second array's channel 0 alone, with

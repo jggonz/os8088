@@ -308,6 +308,12 @@ FAST = [
     Row("mirror", "fast", py("tests/unit/t_mirror.py"), 4.5,
         "a constant written down in two files must agree in both; there is no "
         "linker here to notice"),
+    Row("dsvtick", "fast", py("tests/unit/t_dsvtick.py"), 0.1,
+        "SPEC.md 34.13.7: the kernel takes DX as DSV_TICK after every "
+        "successful sound verb and far-calls it from IRQ0, so a driver that "
+        "publishes DSV_FM, DSV_STREAM or DSV_RELINST and has never heard of "
+        "DSV_TICK plants garbage there on its first verb - no build gate sees "
+        "it. origin/codex/hda-1015pn's HDA driver is that driver today"),
     Row("artpath", "fast", py("tests/unit/t_artpath.py"), 0.1,
         "a row that opens a BUILD ARTEFACT must resolve it through "
         "os88build.at(), or it reads build/ while the soak is reading its own "
@@ -510,6 +516,28 @@ FAST = [
         "the first desktop frame there - the first draft went to the Control "
         "Panel and clicked row 0, which UNLOADED it",
         wants=("build/sndmove360.img",)),
+    Row("sndtick", "soak", py("tests/sndtick.py"), 160.0,
+        "SPEC.md 34.13.7 (decision D6): DSV_TICK is switched by the driver. "
+        "Five QEMU boots - AdLib and Sound Blaster idle at 0; named while "
+        "SBTEST's stream is open and 0 after its close; a 0 PLANTED through "
+        "the gdb stub in both cells while an SBPOLL owner polls only verb 3 "
+        "heals within 2 ticks; and the two negative controls, a -DSNDREADBACK "
+        "driver and a -DSNDNOHEAL one, each still 0 after 36 ticks with the "
+        "stream checked live throughout, so neither passes on a dead stream",
+        needs=("qemu", "nasm"), serial=True, timeout=1500,
+        wants=("build/os8088.img", "build/sbtest.img", "build/sbpoll.img")),
+    Row("opl3", "soak", py("tests/opl3.py"), 110.0,
+        "SPEC.md 34.11.1: the OPL3 probe on the four machines that answer it "
+        "differently - QEMU's adlib passes the status mask and must still read "
+        "OPL2 (question A), MartyPC's patch-05 card reads OPL3, "
+        "MARTYPC_OPL2=1 reads OPL2 off the mask alone, and MARTYPC_NO38A=1 "
+        "(the OPL3 status byte, nothing at 38Ah) must read OPL2 (question B) "
+        "- and on all four "
+        "FMTEST's patched 440 Hz note sounds at 880 Hz and DSV_TICK reads 0 "
+        "after the two FM verbs that played it",
+        needs=("qemu", "marty", "nasm"), serial=True, timeout=1200,
+        wants=("build/os8088.img", "build/os8088-360.img",
+               "build/fmtest.img", "build/fmtest360.img")),
     Row("drvmove", "soak", py("tests/drvmove.py"), 170.0,
         "SPEC.md 66.6.3: a DRIVER IMAGE moves. It drives the scenario the "
         "whole study exists for - mount the hard disk, mount the RAM disk "

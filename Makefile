@@ -561,6 +561,22 @@ SNDDEF += -DPM_SB_PORT=$(PM_SB_PORT)
 endif
 endif
 
+# SNDREADBACK=1 / SNDNOHEAL=1 are tests/sndtick.py's two NEGATIVE CONTROLS for
+# SPEC.md 34.13.7's switched tick, and nothing else. SNDREADBACK builds a
+# SOUND.DRV whose stream verb 9 re-answers its own DSV_TICK cell instead of
+# recomputing it from live state; SNDNOHEAL one whose refill and drain workers
+# never call verb 9 in their loops. Each must leave a planted 0 in place for 36
+# ticks where the shipped driver heals it within 2 - which is what makes the
+# gate's positive half a test of the recompute and of the heal rather than of
+# luck. They touch the SOUND DRIVER only and are never shipped: build them into
+# a tree of their own (tools/os88build.py), which is what the row does.
+ifneq ($(SNDREADBACK),)
+SNDDEF += -DSNDREADBACK
+endif
+ifneq ($(SNDNOHEAL),)
+SNDDEF += -DSNDNOHEAL
+endif
+
 # FLOPPY1=1 puts the floppy transfer back to one sector per int 13h - the
 # pre-SPEC.md-18.91 loop, with nothing else changed. It exists so that the
 # batching can be A/B'd on real hardware without a source edit, which is the
@@ -1729,7 +1745,7 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSEAMCUT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE FATWNONE FATWGATE \
                              SNAPAUDIT SCROLLROW QUANTUM GFXAUDIT \
                              CURFIX \
-                             FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
+                             FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT SNDREADBACK SNDNOHEAL ANIMOFF DISINK0 \
                              BOOTPROF STKDIAG BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG FDDSLOW TRACKRUN SBDRAGOFF SBRATE \
                              ETHPROF FTPDSLOW FTPDBG \
                              KERN_SMALL KERN_EMU FSNOSTAMP THEMEDARK TITLESNAP SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK VGADIRTY DLJUNK COMPRESS NOKZIP,\
@@ -1751,6 +1767,9 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
 # ...and NOATBLIT1 for the identical reason one package along: it reaches
 # ARTFUL.O88 (SPEC.md 46.4.2) and no kernel byte, so it carries $(ATSTAMP) and
 # stays out of $(VIDSTAMP). The two are the whole of the package-only class.
+# ...and SNDREADBACK/SNDNOHEAL join it one driver along: tests/sndtick.py's
+# negative controls reach SOUND.DRV alone, carry $(SNDSTAMP), and stay out of
+# $(VIDSTAMP) so a control's tree does not rebuild its kernel for nothing.
 # ...and KERN_EMU joins KERN_SMALL in the exemption, for KERN_SMALL's exact
 # reason: it is not a diagnostic, it is the SHIPPED emulator kernel, and it
 # stays inside kern_big's budget rather than being excused from it. Getting
@@ -1758,7 +1777,7 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
 # kern_emu carrying -DKERN_KNOB would SKIP guard 1 (the KERN_BUDGET footprint
 # check), so the one build that adds a feature would be the one build nothing
 # measured.
-ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% NOHEDGE=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
+ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% NOHEDGE=% SNDREADBACK=% SNDNOHEAL=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
 VIDDEF += -DKERN_KNOB
 endif
 
@@ -3213,7 +3232,7 @@ $(BUILD)/fontview.o88: $(BUILD)/fontview.bin tools/os88pkg.py $(PKGZSTAMP)
 # rebuilt NOTHING - and the failure is the quiet one, because a driver with no
 # PicoMEM tier in it is exactly what a machine with no PicoMEM in it looks
 # like. The disk would have come out identical to the one that did not work.
-SNDSTAMP := $(BUILD)/.sound-$(if $(PICOMEM),pm$(PICOMEM),def)$(if $(PM_BASE),-b$(PM_BASE))$(if $(PM_SB_PORT),-s$(PM_SB_PORT))
+SNDSTAMP := $(BUILD)/.sound-$(if $(PICOMEM),pm$(PICOMEM),def)$(if $(PM_BASE),-b$(PM_BASE))$(if $(PM_SB_PORT),-s$(PM_SB_PORT))$(if $(SNDREADBACK),-rb)$(if $(SNDNOHEAL),-nh)
 
 $(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc \
                     drivers/sound/picomem.inc \
@@ -4520,6 +4539,27 @@ $(BUILD)/sbtest.o88: $(BUILD)/sbtest.bin tools/os88pkg.py
 
 $(BUILD)/sbtest.img: $(BUILD)/sbtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sbtest.o88
+
+# SBPOLL: sbtest built with -DSBPOLL, tests/sndtick.py's stream OWNER (SPEC.md
+# 34.13.7). After its open it issues ONLY verb 3, from a one-tick window timer
+# - and verb 3 is not a site - so nothing the owner does can re-assert
+# DSV_TICK, and a planted 0 is repaired by the driver's worker heal or not at
+# all. On a disk of its own, as SBPOLL.O88: never shipped.
+$(BUILD)/sbpoll.bin: tests/sbtest/sbtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DSBPOLL -I apps/ -o $@ tests/sbtest/sbtest.asm
+	@echo "sbpoll: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/sbpoll.o88: $(BUILD)/sbpoll.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/sbpoll.bin -o $@
+
+$(BUILD)/sbpoll.img: $(BUILD)/sbpoll.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sbpoll.o88
+
+# FMTEST on a 360KB disk, for tests/opl3.py's MartyPC half: the 5150 with a
+# Sound Blaster (os8088_5150_sb_gla) has 360KB drives, and build/fmtest.img is
+# 1.44MB for QEMU's `make test-snd ADLIB=1`.
+$(BUILD)/fmtest360.img: $(BUILD)/fmtest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/fmtest.o88
 
 # Minesweeper, the first loadable program: a flat binary with the .o88
 # package header. ONE assembly per package since SPEC.md 20.1 - a package
