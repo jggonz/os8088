@@ -13699,3 +13699,105 @@ before, so the new money is the *second*, landing on the next tick, which paid
 nothing. A DOT DELIRIUM frame on this adapter is **44.13 ms of a 54.93 ms
 tick**, so 418 µs is **3.9% of the slack**, on a quarter of the ticks. The
 answer to "do we have the headroom" is yes, with the arithmetic attached.
+
+### Set 147 — what a RAD replay frame costs on the 4.77 MHz 8088 (SPEC.md §34.13.6)
+
+Taken 2026-09-16 on MartyPC's cycle-accurate 8088, `os8088_5150_sb_gla` with
+patch 05's OPL3, kern_big, the shipped `SOUND.DRV` + `RADPLAY.DRV` (no
+`RADLOG`), `RADGATE` driving the verbs. `tests/radcost.py` arms exec
+breakpoints on the overlay's `rp_frame` entry and `.exit` and on `rp_tick` and
+`rp_tick.ret`, so each figure is a difference of the guest's own cycle counter
+with the machine halted - exact for the emulated machine, independent of the
+host. 1 ms = 4,772.7 cycles. The tick class (the XT's): 50 Hz is 2 or 3 frames
+a tick.
+
+| tune | frames / ticks | worst frame | worst tick | mean frame | mean tick |
+|---|---|---|---|---|---|
+| `RV2.RAD` (fixture, 2.1) | 400 / 192 | note frame **26.82 ms**; effect-only frame 2.90 ms | **33.22 ms** | 1.98 ms | 4.91 ms |
+| `RV1.RAD` (fixture, 1.0) | 400 / 192 | 12.26 ms | 8.40 ms | 0.74 ms | 2.17 ms |
+| Reality's `Cybernet` (2.1, a disk outside the tree, D4) | 900 / 300 | note frame 21.86 ms | 30.92 ms | 3.65 ms | 13.40 ms |
+| Reality's `Raster V2` (2.1, likewise) | 900 / 300 | note frame 22.29 ms | 30.66 ms | 2.15 ms | 10.21 ms |
+| t_rad's `HEAVY` (30 note plays a frame, BPM 300) | - / 64 | - | **161.42 ms** | - | 161.33 ms |
+
+**The teardowns at IF = 0** (wave 3 fixer round 1, `tests/radcost.py
+--teardown-only`, the same machine and driver; exec breakpoints on `rd_halt`
+.. `rd_halt.exit` and `rd_kill` .. `rd_kill.done`):
+
+| what | cycles | ms |
+|---|---|---|
+| a HALT: `FAN.RAD` (2.1, OPL3), the stop sequence and the default patch through the shadow inside IRQ0 | 180,963 | **37.92** |
+| ...the whole pacer tick that HALTed (its fan-out frame to the cap, then the HALT) | 815,093 | **170.78** |
+| a KILL: `RV2.RAD` playing, RADGATE's window closed - `DSV_RELINST` inside `snd_release_inst`'s `cli`, the body a §53 bracket entry pays for another instance's tune | 40,327 | **8.45** |
+
+SPEC.md §34.13.3 step 5 had priced the HALT at ~4.5 ms - the frame estimate's
+10x error once more: ~71 us a write through `rd_set`, not ~8.
+
+**Before the wave 3 engine pass** (same harness): `RV2.RAD` note frame 33.73 ms,
+effect frame 4.81, mean 3.89; `HEAVY` tick 195.88 ms. And before THAT, with the
+frames still going through `opl_wr`'s counted status reads because nothing set
+the fast writer after a start (a defect the register-log gates could not see -
+the stream is the same): note frame 71.78 ms, `HEAVY` 306.49 ms.
+
+**Where the instructions go** (Unicorn's instruction counter over the same
+overlay, a proxy - it counts instructions, not clocks): `HEAVY` spent 34% in
+`load_instrument` before it read a precomputed table and 16% in the writer; a
+real tune spent 45% in per-frame overhead - the status block rebuilt every
+frame (13%), the continuous-effect checks (18%), the riff ticks - which is why
+the pass moved the status build to verb 6 and inlined the do-nothing tests.
+
+**SPEC.md §34.13.6's 27 ms ceiling is not met by the bound tick and cannot be
+met by `RAD_PNMAX`**: ~2.7 ms a note play puts 27 ms at ~10 note plays a tick,
+`RAD_PNMAX` ~5, below Reality's busiest frame (14) - and Reality's own tunes
+are over 27 ms in their worst tick whatever the cap.
+
+**Decided (D7, docs/RADBOX-PLAN.md §1): on `CPU_8086` `RAD_PNMAX` stays 32 and
+the 27 ms rule is retired; AT-class machines keep it.** What that costs the
+8088, from the rows above, is the standing figure a later change to the replay
+path is measured against:
+
+| | on a 4.77 MHz 8088 + OPL3 |
+|---|---|
+| a real 2.1 tune's share of the machine at IF = 0 | **10-25%** (mean tick 10.2-13.4 ms of 54.9) |
+| its worst tick | **~31-33 ms** - 4x the serial mouse's 8.3 ms byte, so the pointer can stutter while it plays |
+| the bound tick (`HEAVY`, a hostile file just under the cap) | **161 ms**, every tick until stopped - and it LOSES IRQ0s: an 8259 latches one edge, so two of every three timer interrupts are gone, and the BIOS clock, `task_sleep`/`WM_TIMER` and the tick-paced tune itself run at about a third of their speed (SPEC.md §34.13.6) |
+| a 1.0 tune's worst tick | 8.4 ms |
+| a HALT, once (on top of the tick that halted) | **37.9 ms**; `FAN.RAD`'s halting tick 170.8 ms, two IRQ0s lost once |
+| a KILL (`DSV_RELINST` mid-tune), once | 8.45 ms |
+
+The AT-class figure that decides whether the rule bites there is NOT taken
+(SPEC.md §96.8): no cycle-exact 286 is instrumented here.
+
+**The RTC class's standing floor - an ESTIMATE, owed a measurement** (SPEC.md
+§34.13.6). The IRQ8 handler runs on all 1,024 of the RTC's interrupts a
+second while a tune plays, whatever its rate, and most run no frame: ~90
+instructions and eight port operations from `rad_i70`'s test to its `iret`,
+~500 clocks at a 286's instruction timings - **~40 us an interrupt, ~4% of a
+286-12 and ~8% of a 286-6 at IF = 0 before any frame plays**, and the 6-byte
+gate frame on each slice it lands on. No row here measures it (radrtc counts
+frames, not cycles); wave 3's fixer took the `rate x k` `mul` off the ~1,006
+interrupts a second whose `k` is 1.
+
+**Verb 6's own IF = 0 window - the one a package enters EVERY UI FRAME**
+(wave 3 fixer round 1, SPEC.md §34.12.7). Bracketed the same way, on the
+RESIDENT's symbols: `rad_stat`'s `pushf`/`cli` to its return, so the far
+call, the overlay's dispatch, the nine-channel status build and the 72-byte
+copy are all inside it. 30 windows a tune, RADGATE polling every 2 ticks.
+
+| tune | worst | mean |
+|---|---|---|
+| `RV2.RAD` (2.1) | **7,507 cycles = 1.573 ms** | 1.570 ms |
+| `RV1.RAD` (1.0) | 4,598 cycles = **0.963 ms** | 0.963 ms |
+
+Worst and mean agree to a few cycles because the work is FIXED - there is no
+data-dependent path in the block's construction. At 18.2 polls a second that
+is **2.9% of the machine** on a 2.1 tune and 1.8% on a 1.0 one, and a fifth
+of the 8.3 ms serial-mouse byte, so it cannot itself drop one. It is also
+what BOUGHT the frame figures above: rebuilding the position and per-channel
+halves every frame was 13% of a real tune's replay instructions, and it is
+built here instead, ~55 times a second less often.
+
+**The fixture rows are unchanged by wave 3's fixture extension**: `RV2.RAD`
+gained a pattern 2 and `RV1.RAD` a pattern 5 to reach replay outcomes only
+Reality's tunes had, and both play the same register stream as before over
+their first 600 frames (checked against the committed fixtures) - these rows
+were taken over the first 400.

@@ -87,6 +87,12 @@ DRVC_OVL     equ 0x40           ; NOT A KERNEL CLASS, so it stays here. A
 SND_CAP_FM       equ 02h        ; 9-ch 2-op patch + note-on/off (OPL2 model)
 SND_CAP_PCM_BG   equ 04h        ; self-clocked block PCM out - background-safe
 SND_CAP_PCM_IN   equ 10h        ; block PCM input (recording)
+SND_CAP_OPL3     equ 20h        ; the FM chip is an OPL3: a second register
+                                ; array at 38Ah/38Bh (SPEC.md 34.11). Only
+                                ; ever added together with SND_CAP_FM
+SND_CAP_RAD      equ 40h        ; this driver implements OSAPI_SND_FM verbs
+                                ; 4..6, the RAD replayer (SPEC.md 34.12). A
+                                ; RADE_* answer means nothing without it
 
 ; --- sound tiers (SPEC.md 34.8): what DRVV_TIER's AH carries -----------------
 ; The kernel's own [snd_route], mirrored here so a driver can compare against
@@ -173,8 +179,36 @@ DRVE_TWICE   equ 7              ; YOU were asked to attach while you were
 ;                   requesting instance slot)
 ;   DSV_TICK    dw  near proc called from snd_tick - INSIDE IRQ0, at IF=0.
 ;                   Keep it short and touch no port that needs a long delay.
+;                   PUBLISH 0 AT ATTACH AND SWITCH IT AFTERWARDS (SPEC.md
+;                   34.13.7): the kernel takes DX as the new DSV_TICK after
+;                   every SUCCESSFUL DSV_FM verb, every DSV_STREAM verb but
+;                   3 (whose DX is the consumed count), and DSV_RELINST. So
+;                   on every one of those answer DX = your tick proc while
+;                   anything needs the tick, 0 when nothing does - never the
+;                   caller's DX, which the kernel would far-call from IRQ0 -
+;                   and write the same value into this cell, because
+;                   DRVV_TIER republishes the whole table. RECOMPUTE, WRITE
+;                   AND LOAD DX IN ONE pushf/cli...popf WINDOW, from live
+;                   state and NEVER by reading this cell back (report-only
+;                   verbs too): verbs run at the caller's IF=1, and a value
+;                   decided outside the window can be written over a newer
+;                   one by a task switch - then this cell holds a stale 0
+;                   that no heal can repair. A refusal (CF=1) is not read,
+;                   and must not change what the tick serves.
+;                   THIS BINDS EVERY DRIVER PUBLISHING DSV_FM, DSV_STREAM OR
+;                   DSV_RELINST, even one that never wants the tick (it
+;                   answers DX = 0). The KERNEL's copy can still take a stale
+;                   0 (a task switch after your popf, or inside drv_publish):
+;                   a driver whose streams have a worker calls stream verb 9
+;                   (TICK) through the public slot once a pass and once on
+;                   the worker's exit path, and a RAD tune's owner keeps the
+;                   poll duty of SPEC.md 34.12.2. Something that ends at
+;                   interrupt time (a watchdog, a HALT) keeps the tick until
+;                   the next such verb: the proc must test its own state
+;                   every call.
 ;   DSV_RELINST dw  near proc: AL = an instance slot that is being torn down;
-;                   release every grant it holds.
+;                   release every grant it holds. Out: CF = 0, DX = the tick
+;                   (above).
 ;   DSV_TONE    dw  near proc: the tone tier's sink while you are loaded
 ;                   (in: AX = Hz or 0 = off, DL = voice; out CF). Publishing
 ;                   this MOVES tones off the PC speaker onto your hardware,

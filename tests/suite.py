@@ -308,6 +308,12 @@ FAST = [
     Row("mirror", "fast", py("tests/unit/t_mirror.py"), 4.5,
         "a constant written down in two files must agree in both; there is no "
         "linker here to notice"),
+    Row("dsvtick", "fast", py("tests/unit/t_dsvtick.py"), 0.1,
+        "SPEC.md 34.13.7: the kernel takes DX as DSV_TICK after every "
+        "successful sound verb and far-calls it from IRQ0, so a driver that "
+        "publishes DSV_FM, DSV_STREAM or DSV_RELINST and has never heard of "
+        "DSV_TICK plants garbage there on its first verb - no build gate sees "
+        "it. origin/codex/hda-1015pn's HDA driver is that driver today"),
     Row("artpath", "fast", py("tests/unit/t_artpath.py"), 0.1,
         "a row that opens a BUILD ARTEFACT must resolve it through "
         "os88build.at(), or it reads build/ while the soak is reading its own "
@@ -510,6 +516,94 @@ FAST = [
         "the first desktop frame there - the first draft went to the Control "
         "Panel and clicked row 0, which UNLOADED it",
         wants=("build/sndmove360.img",)),
+    Row("sndtick", "soak", py("tests/sndtick.py"), 160.0,
+        "SPEC.md 34.13.7 (decision D6): DSV_TICK is switched by the driver. "
+        "Five QEMU boots - AdLib and Sound Blaster idle at 0; named while "
+        "SBTEST's stream is open and 0 after its close; a 0 PLANTED through "
+        "the gdb stub in both cells while an SBPOLL owner polls only verb 3 "
+        "heals within 2 ticks; and the two negative controls, a -DSNDREADBACK "
+        "driver and a -DSNDNOHEAL one, each still 0 after 36 ticks with the "
+        "stream checked live throughout, so neither passes on a dead stream",
+        needs=("qemu", "nasm"), serial=True, timeout=1500,
+        wants=("build/os8088.img", "build/sbtest.img", "build/sbpoll.img")),
+    Row("opl3", "soak", py("tests/opl3.py"), 110.0,
+        "SPEC.md 34.11.1: the OPL3 probe on the four machines that answer it "
+        "differently - QEMU's adlib passes the status mask and must still read "
+        "OPL2 (question A), MartyPC's patch-05 card reads OPL3, "
+        "MARTYPC_OPL2=1 reads OPL2 off the mask alone, and MARTYPC_NO38A=1 "
+        "(the OPL3 status byte, nothing at 38Ah) must read OPL2 (question B) "
+        "- and on all four "
+        "FMTEST's patched 440 Hz note sounds at 880 Hz and DSV_TICK reads 0 "
+        "after the two FM verbs that played it",
+        needs=("qemu", "marty", "nasm"), serial=True, timeout=1200,
+        wants=("build/os8088.img", "build/os8088-360.img",
+               "build/fmtest.img", "build/fmtest360.img")),
+    Row("radrtc", "soak", py("tests/radrtc.py"), 600.0,
+        "SPEC.md 34.13.3, 96.8: the RAD replayer's RTC pacer on QEMU ADLIB=1 "
+        "(an AT, so RTC class). The shipped driver refuses RV2.RAD on the "
+        "OPL2, paces RV1.RAD at 50 frames a second over 75 s of BIOS ticks "
+        "AND BY IRQ8 - 200+ counted IRQ8s a second, one frame each - which "
+        "the RTC slowed to 16 Hz through register A fails while still "
+        "playing 50 on the credit (the negative control) "
+        "with DSV_TICK 0 throughout, gives register B, the int 70h vector and "
+        "the PIC mask bits back on stop, and HALTs FAN.RAD inside the handler "
+        "([opl_is3] poked for that load), and verb 5 START on that same "
+        "halted claim HALTs it again; a start with AIE already set refuses "
+        "RADE_PACER and no verb 6 poll sets PIE; a 10 s int 15h AH=86h wait "
+        "during playback takes the BIOS chain on every IRQ8, returns NO SLOWER "
+        "than the idle control (that one comparison is host-paced on both "
+        "sides, so it is one-sided against the shorter of two controls) and "
+        "the tune stays at 50 +-1% across the wait; killing RADGATE "
+        "mid-tune gives B, the vector and the masks back and frees the "
+        "claim; a -DRADSLOW "
+        "driver (4 ms frames at IF = 0) still paces 50 +-1% on the tick "
+        "discipline's credit, and with -DRADNOCREDIT too falls short - the "
+        "negative control",
+        needs=("qemu", "nasm"), serial=True, timeout=1500,
+        wants=("build/os8088.img", "build/radgate.img")),
+    Row("radopl3", "soak", py("tests/radopl3.py"), 110.0,
+        "SPEC.md 34.12, 96.8: the RAD replayer on MartyPC's 8088 with patch "
+        "05's OPL3 and a -DRADLOG driver (tick class). RADGATE feeds the whole "
+        "hostile-file table (tests/unit/radrows.py) to verb 4 and every answer "
+        "is radsim's; RV2.RAD's and RV1.RAD's register logs over 1,500+ "
+        "frames equal radsim's sent streams record for record; DSV_TICK names "
+        "the tick proc exactly while a tune plays (0 before, after stop, "
+        "paused and after all-off); FAN.RAD HALTs at interrupt time with "
+        "radsim's log and the chip given back, and verb 5 START on the "
+        "halted claim HALTs it again with the same log; RV2.RAD killed "
+        "mid-tune by closing RADGATE logs radsim's stream and then exactly "
+        "the kill's key-offs, 104h and 105h; the AdLib capture is not "
+        "silent",
+        needs=("marty", "nasm"), serial=True, timeout=1500,
+        wants=("build/os8088-360.img", "build/radgate360.img")),
+    Row("radopl2", "soak", py("tests/radopl2.py"), 90.0,
+        "SPEC.md 34.12, 34.13.5, 96.8: the RAD replayer on MartyPC's 8088 with "
+        "MARTYPC_OPL2=1 and a -DRADLOG driver. The hostile-file table's "
+        "answers are radsim's for an OPL2; RV2.RAD is refused RADE_NEEDOPL3 "
+        "(SPEC.md 96.6's sentence read out of SPEC.md); RV1.RAD plays "
+        "tick-paced at 2.75 frames a tick with radsim's stream and no 1xxh "
+        "write; DSV_TICK 0 after stop, and after the instance is killed "
+        "mid-tune DSV_RELINST has freed the claim, given channels 0..7 and "
+        "the chip back and switched the tick off without another verb",
+        needs=("marty", "nasm"), serial=True, timeout=1200,
+        wants=("build/os8088-360.img", "build/radgate360.img")),
+    Row("radmove", "soak", py("tests/radmove.py"), 900.0,
+        "SPEC.md 34.12.8, 96.8: SOUND.DRV's image MOVES under a loaded RAD "
+        "tune (§66.6.3 pins it only for a frame or a driver worker, and a "
+        "tune has neither) and the tune follows it. The arena is built with "
+        "RADGATE's own claims round a Control Panel unmount and remount, and "
+        "a forcing OSAPI_MEM_CLAIM_HI that only the descending pass can "
+        "answer, whose block is filled with cli/hlt where the image WAS. "
+        "QEMU ADLIB=1 (RTC class), RV1.RAD playing: the vector and the "
+        "claim's RO_RSEG follow, 50 frames a second and IRQ8s go on, stop "
+        "and START unhook and hook through the new segment; with rad_i70's "
+        "stamp NOPed the tune stalls. MartyPC 5150 + OPL3 (tick class), "
+        "FAN.RAD loaded across the move: its HALT's RADS_HALTED reaches the "
+        "moved image with rad_callseg's stamp NOPed too, and with snd_tickp's "
+        "also NOPed it does not. Five boots",
+        needs=("qemu", "marty", "nasm"), serial=True, timeout=2700,
+        wants=("build/os8088.img", "build/os8088-360.img",
+               "build/radgate.img", "build/radgate360.img")),
     Row("drvmove", "soak", py("tests/drvmove.py"), 170.0,
         "SPEC.md 66.6.3: a DRIVER IMAGE moves. It drives the scenario the "
         "whole study exists for - mount the hard disk, mount the RAM disk "
@@ -857,6 +951,64 @@ FAST = [
         "audience. "
         "SOAK and not fast: the .WAB format is the Weave family's - `soak "
         "-k 'weave*' -k 'wab' -k 'lmpack'`"),
+    Row("rad", "soak", py("tests/unit/t_rad.py"), 4.9,
+        "the RAD validator's hostile-file table (SPEC.md 96.4.4): 150-odd "
+        "files built by hand from the spec, each with the (RADE_*, RADC_*, "
+        "offset) triple verb 4 must answer, plus a truncation sweep, a "
+        "byte-flip sweep that must never walk the replayer off a tune's end, "
+        "a valid fan-out tune whose first frame reaches RAD_PNMAX and halts "
+        "(96.4.5 deviation 5, the cap taken out as its negative control), and "
+        "the PER-TICK budget on both pacer classes (34.13.6): two BPM-300 "
+        "tunes held to 2 x RAD_PNMAX - 1 = 63 note plays and WORK_TICK = "
+        "2,560 computed writes a tick, the one that caps every frame halting "
+        "on tick 0 and the one under the cap playing on - with round 0's "
+        "per-frame rule (81 a frame, no budget, no halt) as the negative "
+        "control that must exceed both. "
+        "The rules are SOUND.DRV's and the table holds tools/radsim.py to "
+        "them until the driver's own gate exists. "
+        "SOAK by rule 1 - the rules are one driver's - and still run by "
+        "EVERY `make` that could break it: the Makefile's .rad-hostchecks "
+        "stamp runs this file beside radsim --selfcheck whenever radsim, "
+        "this table, the fixtures or os88api.inc change (SPEC.md 96.8), so "
+        "a validator regression cannot pass `make` and the five seconds (4.85 "
+        "measured, CPU-bound) are "
+        "charged only to the change that touched the subject"),
+    Row("radrace", "soak", py("tests/unit/t_radrace.py"), 16.0,
+        "SPEC.md 34.12.2's windows: RADPLAY.DRV (the shipped build) run in "
+        "Unicorn with FAN.RAD loaded, and the tick-class pacer fired at EVERY "
+        "IF = 1 instruction boundary of verb 5's pause, stop, resume and "
+        "start in the stretch where a HALT can overtake a state test - "
+        "~425 boundaries, ~50 of them HALTing inside the verb. Whatever the "
+        "boundary: playing exactly when armed, the status block agreeing, a "
+        "HALTed tune ending stopped without the chip and the verb writing no "
+        "port after the HALT. The negative control assembles the overlay "
+        "with the cli out of the pause and stop windows and must fail. The "
+        "resident's half (start's claim re-read, rad_tickset) is SOUND.DRV's "
+        "and not reached (96.8). SOAK: one driver's rule",
+        needs=("nasm", "unicorn")),
+    Row("radfuzz", "soak", py("tests/unit/t_radfuzz.py"), 60.0,
+        "SPEC.md 96.4.4 and 96.4.5 at BREADTH: 2,500 seeded mutants of the "
+        "five RAD fixtures - bit flips, byte and burst corruption, "
+        "truncations, trailing junk and header bytes - through t_radrace's "
+        "rig (RADPLAY.DRV in Unicorn, a -DRADLOG build, driven the way "
+        "SOUND.DRV drives it). Every verb 4 answer must be radsim's `check` "
+        "to the byte, RADC_* reason and file offset included; and the ~40% "
+        "of mutants BOTH accept are then played 90 frames from a fresh start "
+        "and stopped, their register log compared with radsim's sent stream "
+        "record for record - which is the half the hostile-file table cannot "
+        "reach, an accepted mutant being a valid RAD file nobody wrote, in "
+        "note, effect and riff states no fixture visits. HALF THE 1.0 "
+        "MUTANTS ARE OFFERED TO AN OPL2 (RO_IS3 = 0, radsim asked for the "
+        "same stream), which is the only breadth over rd_set's 1xxh filter, "
+        "the 1.0 engine's OPL2 register choices and the OPL2 stop sequence - "
+        "the shipped configuration where 1.0 is the only thing that can "
+        "play, and which the table and the fixtures reach with ONE file, "
+        "once, in radopl2. 2.1 bases stay on the OPL3: verb 4 step 5 refuses "
+        "them outright on an OPL2 (D1). The negative "
+        "control blunts rv_need's end-of-file bound and must go red. Host "
+        "side, no emulator, reproducible from its seed. SOAK: minutes of "
+        "CPU for one subject",
+        needs=("nasm", "unicorn")),
     Row("wire", "fast", py("tests/unit/t_wire.py"), 2.5,
         "the Wire's two formats (SPEC.md 92.2 and 92.13), from both ends at "
         "once: tools/os88wire.py packs a fixture out of build/hello.o88 and "

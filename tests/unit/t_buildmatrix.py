@@ -185,6 +185,16 @@ KNOBS = [
     ("picomem",     ["PICOMEM=1"], "sound.drv"),
     ("picomem-ports", ["PICOMEM=1", "PM_BASE=0x2A0", "PM_SB_PORT=0x220"],
      "sound.drv"),
+    # SPEC.md 34.13.7's two negative controls (tests/sndtick.py): SOUND.DRV
+    # only, like PICOMEM, and nothing else builds either arm.
+    ("sndreadback", ["SNDREADBACK=1"], "sound.drv"),
+    ("sndnoheal",   ["SNDNOHEAL=1"], "sound.drv"),
+    # The RAD replayer's instruments (SPEC.md 96.8, tests/radopl3.py,
+    # radopl2.py, radrtc.py): RADLOG reaches both images, the other two
+    # RADPLAY.DRV alone, and nothing else builds any of the three arms.
+    ("radlog",      ["RADLOG=1"], "sound.drv"),
+    ("radlog-ovl",  ["RADLOG=1"], "radplay.drv"),
+    ("radslow",     ["RADSLOW=1", "RADNOCREDIT=1"], "radplay.drv"),
     ("bootprof",    ["BOOTPROF=1"]),
     ("mouidslow",   ["MOUIDSLOW=1"]),
     ("trackrun",    ["TRACKRUN=1"], "boot360.bin"),

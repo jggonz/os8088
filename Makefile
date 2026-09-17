@@ -19,6 +19,13 @@
 # `make deps-check` is the same question with no install: it reports and exits
 # nonzero if anything is missing.
 #
+# WHAT IT DELIBERATELY DOES NOT INSTALL, beside `make zscreens`' frotz and
+# pyte: Python's `unicorn`, which the two RAD unit rows want (`radrace` and
+# `radfuzz` run RADPLAY.DRV instruction by instruction on a host 8086 -
+# docs/TESTING.md, "The host-side tests"). Nothing in `all` needs it and
+# `pip install unicorn` belongs in a venv, so the suite withholds the
+# capability and those two rows SKIP instead of failing.
+#
 # .DEFAULT_GOAL IS NOT DECORATION. `all` is 1,800 lines down, and make takes
 # the FIRST TARGET IN THE FILE as the default goal - so putting these two
 # rules up here, where a reader finds them, silently made `make` mean
@@ -559,6 +566,45 @@ endif
 ifneq ($(PM_SB_PORT),)
 SNDDEF += -DPM_SB_PORT=$(PM_SB_PORT)
 endif
+endif
+
+# SNDREADBACK=1 / SNDNOHEAL=1 are tests/sndtick.py's two NEGATIVE CONTROLS for
+# SPEC.md 34.13.7's switched tick, and nothing else. SNDREADBACK builds a
+# SOUND.DRV whose stream verb 9 re-answers its own DSV_TICK cell instead of
+# recomputing it from live state; SNDNOHEAL one whose refill and drain workers
+# never call verb 9 in their loops. Each must leave a planted 0 in place for 36
+# ticks where the shipped driver heals it within 2 - which is what makes the
+# gate's positive half a test of the recompute and of the heal rather than of
+# luck. They touch the SOUND DRIVER only and are never shipped: build them into
+# a tree of their own (tools/os88build.py), which is what the row does.
+ifneq ($(SNDREADBACK),)
+SNDDEF += -DSNDREADBACK
+endif
+ifneq ($(SNDNOHEAL),)
+SNDDEF += -DSNDNOHEAL
+endif
+
+# RADLOG=1 builds SOUND.DRV and RADPLAY.DRV with the RAD replayer's register
+# log (SPEC.md 96.8): every register write a tune's start sequence, frames and
+# stop sequence send goes into a 32KB buffer as .RLG records, which
+# tests/radopl3.py and tests/radopl2.py read back and compare with
+# tools/radsim.py's sent stream. tests/trklog's shape one layer down, and never
+# shipped: build it into a tree of its own (tools/os88build.py).
+ifneq ($(RADLOG),)
+SNDDEF += -DRADLOG
+endif
+# RADSLOW=1 / RADNOCREDIT=1 are tests/radrtc.py's pair (SPEC.md 34.13.3, 96.8):
+# RADSLOW makes every replay frame busy-wait 4 ms at IF = 0, so the RTC's
+# periodic interrupts are lost under it the way a heavy frame on a slow AT
+# loses them; RADNOCREDIT computes the tick discipline and never credits what
+# it finds. RADSLOW alone must still pace 50 frames a second; with RADNOCREDIT
+# as well it must fall measurably short, which is what makes the first a test
+# of the credit. RADPLAY.DRV only, never shipped.
+ifneq ($(RADSLOW),)
+SNDDEF += -DRADSLOW
+endif
+ifneq ($(RADNOCREDIT),)
+SNDDEF += -DRADNOCREDIT
 endif
 
 # FLOPPY1=1 puts the floppy transfer back to one sector per int 13h - the
@@ -1729,7 +1775,7 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSEAMCUT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE FATWNONE FATWGATE \
                              SNAPAUDIT SCROLLROW QUANTUM GFXAUDIT \
                              CURFIX \
-                             FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
+                             FONT INSTCHUNK PICOMEM PM_BASE PM_SB_PORT SNDREADBACK SNDNOHEAL RADLOG RADSLOW RADNOCREDIT ANIMOFF DISINK0 \
                              BOOTPROF STKDIAG BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG FDDSLOW TRACKRUN SBDRAGOFF SBRATE \
                              ETHPROF FTPDSLOW FTPDBG \
                              KERN_SMALL KERN_EMU FSNOSTAMP THEMEDARK TITLESNAP SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK VGADIRTY DLJUNK COMPRESS NOKZIP,\
@@ -1751,6 +1797,11 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
 # ...and NOATBLIT1 for the identical reason one package along: it reaches
 # ARTFUL.O88 (SPEC.md 46.4.2) and no kernel byte, so it carries $(ATSTAMP) and
 # stays out of $(VIDSTAMP). The two are the whole of the package-only class.
+# ...and SNDREADBACK/SNDNOHEAL join it one driver along: tests/sndtick.py's
+# negative controls reach SOUND.DRV alone, carry $(SNDSTAMP), and stay out of
+# $(VIDSTAMP) so a control's tree does not rebuild its kernel for nothing.
+# RADLOG, RADSLOW and RADNOCREDIT are the RAD replayer's (SPEC.md 96.8) on the
+# same terms: SOUND.DRV and RADPLAY.DRV only, under $(SNDSTAMP).
 # ...and KERN_EMU joins KERN_SMALL in the exemption, for KERN_SMALL's exact
 # reason: it is not a diagnostic, it is the SHIPPED emulator kernel, and it
 # stays inside kern_big's budget rather than being excused from it. Getting
@@ -1758,7 +1809,7 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
 # kern_emu carrying -DKERN_KNOB would SKIP guard 1 (the KERN_BUDGET footprint
 # check), so the one build that adds a feature would be the one build nothing
 # measured.
-ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% NOHEDGE=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
+ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% NOHEDGE=% SNDREADBACK=% SNDNOHEAL=% RADLOG=% RADSLOW=% RADNOCREDIT=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
 VIDDEF += -DKERN_KNOB
 endif
 
@@ -1927,7 +1978,7 @@ WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(SHIPIMGS) $(BUILD)/wire.o88 $(BUILD)/recorder.o88 \
      $(BUILD)/hello.o88 $(BUILD)/pacman.o88 \
      $(BUILD)/imgtest.o88 $(BUILD)/scribe.o88 $(BUILD)/livepayload.txt \
-     $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
+     $(WEAVEWABS) $(BUILD)/.weave-hostchecks $(BUILD)/.rad-hostchecks \
      cc-note test-fast
 # wire.o88 is named here and NOWHERE else in `all`, because WIREFRAME is built
 # but does not ship (SPEC.md 78.9, `make wiredisk`). Keeping it in the default
@@ -2769,6 +2820,10 @@ DRIVERS += $(BUILD)/rampage.drv
 # drivers do but is NOT one of them: nothing puts it in drv_tab, the Drivers
 # page never lists it, and only HDD.DRV ever loads it (SPEC.md 52.11)
 DRIVERS += $(BUILD)/hddtool.drv
+# ...and SOUND.DRV's on-demand half, the RAD replayer, on the same terms:
+# no drv_tab row, never listed, and only SOUND.DRV's verb 4 reads it (SPEC.md
+# 34.12.8)
+DRIVERS += $(BUILD)/radplay.drv
 # ...and the store above 1MB (SPEC.md 41.12), which is an overlay for the same
 # reason and rides every KERN_BIG disk the same way: no drv_tab row, no
 # Drivers-page tick, no SYSTEM.CFG bit. The kernel's own boot sniff decides
@@ -3213,10 +3268,11 @@ $(BUILD)/fontview.o88: $(BUILD)/fontview.bin tools/os88pkg.py $(PKGZSTAMP)
 # rebuilt NOTHING - and the failure is the quiet one, because a driver with no
 # PicoMEM tier in it is exactly what a machine with no PicoMEM in it looks
 # like. The disk would have come out identical to the one that did not work.
-SNDSTAMP := $(BUILD)/.sound-$(if $(PICOMEM),pm$(PICOMEM),def)$(if $(PM_BASE),-b$(PM_BASE))$(if $(PM_SB_PORT),-s$(PM_SB_PORT))
+SNDSTAMP := $(BUILD)/.sound-$(if $(PICOMEM),pm$(PICOMEM),def)$(if $(PM_BASE),-b$(PM_BASE))$(if $(PM_SB_PORT),-s$(PM_SB_PORT))$(if $(SNDREADBACK),-rb)$(if $(SNDNOHEAL),-nh)$(if $(RADLOG),-rl)$(if $(RADSLOW),-rs)$(if $(RADNOCREDIT),-nc)
 
 $(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc \
-                    drivers/sound/picomem.inc \
+                    drivers/sound/picomem.inc drivers/sound/radres.inc \
+                    drivers/sound/radabi.inc \
                     drivers/os88drv.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(SNDDEF) -I drivers/sound/ -I drivers/ -I apps/ \
 		-o $@ drivers/sound/sound.asm
@@ -3229,6 +3285,23 @@ $(SNDSTAMP): | $(BUILD)
 
 $(BUILD)/sound.drv: $(BUILD)/sound.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/sound.bin -o $@
+
+# RADPLAY.DRV - the RAD replayer, SOUND.DRV's on-demand half (SPEC.md 34.12.8).
+# An OVERLAY in HDDTOOL.DRV's shape (SPEC.md 52.11): class DRVC_OVL, no
+# drv_tab row, no Drivers-page tick, read off the system volume by SOUND.DRV's
+# verb 4 into the tune's own claim and freed with the tune. The .DRV suffix is
+# os88disk.py's sys_attr and the installer's "every *.DRV" copy, as there. It
+# carries $(SNDSTAMP) because RADLOG=1 reaches it too.
+$(BUILD)/radplay.bin: drivers/sound/radplay.asm drivers/sound/radabi.inc \
+                      drivers/sound/radval.inc drivers/sound/rad2.inc \
+                      drivers/sound/rad1.inc drivers/sound/radpace.inc \
+                      drivers/os88drv.inc apps/os88api.inc $(SNDSTAMP) | $(BUILD)
+	$(NASM) -f bin -w+error $(SNDDEF) -I drivers/sound/ -I drivers/ -I apps/ \
+		-o $@ drivers/sound/radplay.asm
+	@echo "radplay: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/radplay.drv: $(BUILD)/radplay.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/radplay.bin -o $@
 
 # The store above 1MB (SPEC.md 41.12). An OVERLAY, not a driver: os88drv.py
 # stamps it and names it 'overlay' because its class byte is DRVC_OVL, which
@@ -4415,6 +4488,38 @@ $(BUILD)/fmtest.o88: $(BUILD)/fmtest.bin tools/os88pkg.py
 $(BUILD)/fmtest.img: $(BUILD)/fmtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/fmtest.o88
 
+# RADGATE: the RAD replayer's gate client (SPEC.md 96.8) - verbs 3-6 before
+# RADBOX exists, every answer kept in its own image for the rows to read. Like
+# fmtest it never ships. Its disks carry the five committed fixture tunes
+# (SPEC.md 96.7, ours) beside it: radgate360.img for MartyPC's 5150 and
+# radgate.img for QEMU. build/radrows.inc is tests/unit/radrows.py's
+# hostile-file table as NASM data, which the `v` key feeds to verb 4.
+# (tests/radtest is the RADIO GROUP's gate, SPEC.md 13.17 - a different "rad".)
+RADGATEFIX := $(wildcard tests/fixtures/rad/*.RAD)
+RADGATEFAN := $(BUILD)/radgate/FAN.RAD $(BUILD)/radgate/FANALL.RAD \
+              $(BUILD)/radgate/HEAVY.RAD
+$(BUILD)/radrows.inc: tests/radgate/mkrows.py tests/unit/radrows.py | $(BUILD)
+	@mkdir -p $(BUILD)/radgate
+	python3 tests/radgate/mkrows.py $@
+$(RADGATEFAN): $(BUILD)/radrows.inc
+
+$(BUILD)/radgate.bin: tests/radgate/radgate.asm apps/os88api.inc \
+                      $(BUILD)/radrows.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ tests/radgate/radgate.asm
+	@echo "radgate: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/radgate.o88: $(BUILD)/radgate.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/radgate.bin -o $@
+
+$(BUILD)/radgate.img: $(BUILD)/radgate.o88 $(RADGATEFIX) $(RADGATEFAN) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/radgate.o88 $(RADGATEFIX) $(RADGATEFAN)
+
+$(BUILD)/radgate360.img: $(BUILD)/radgate.o88 $(RADGATEFIX) $(RADGATEFAN) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/radgate.o88 $(RADGATEFIX) $(RADGATEFAN)
+
+.PHONY: radgate
+radgate: $(BUILD)/radgate.img $(BUILD)/radgate360.img
+
 # XMTEST: the extended-memory TEARDOWN gate (SPEC.md 41.5/29.4). It answers
 # "when an instance holding blocks above 1MB closes, are they freed?", which
 # needs a package because xm_alloc stamps a block with the CALLING INSTANCE -
@@ -4521,6 +4626,27 @@ $(BUILD)/sbtest.o88: $(BUILD)/sbtest.bin tools/os88pkg.py
 $(BUILD)/sbtest.img: $(BUILD)/sbtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sbtest.o88
 
+# SBPOLL: sbtest built with -DSBPOLL, tests/sndtick.py's stream OWNER (SPEC.md
+# 34.13.7). After its open it issues ONLY verb 3, from a one-tick window timer
+# - and verb 3 is not a site - so nothing the owner does can re-assert
+# DSV_TICK, and a planted 0 is repaired by the driver's worker heal or not at
+# all. On a disk of its own, as SBPOLL.O88: never shipped.
+$(BUILD)/sbpoll.bin: tests/sbtest/sbtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DSBPOLL -I apps/ -o $@ tests/sbtest/sbtest.asm
+	@echo "sbpoll: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/sbpoll.o88: $(BUILD)/sbpoll.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/sbpoll.bin -o $@
+
+$(BUILD)/sbpoll.img: $(BUILD)/sbpoll.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sbpoll.o88
+
+# FMTEST on a 360KB disk, for tests/opl3.py's MartyPC half: the 5150 with a
+# Sound Blaster (os8088_5150_sb_gla) has 360KB drives, and build/fmtest.img is
+# 1.44MB for QEMU's `make test-snd ADLIB=1`.
+$(BUILD)/fmtest360.img: $(BUILD)/fmtest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/fmtest.o88
+
 # Minesweeper, the first loadable program: a flat binary with the .o88
 # package header. ONE assembly per package since SPEC.md 20.1 - a package
 # links at org 0 and owns a segment, so it is position-independent and there
@@ -4594,6 +4720,28 @@ $(BUILD)/wire360.img: $(BUILD)/wire.o88 tools/os88disk.py
 # broken model stops the pack rather than writing bundles from it.
 $(BUILD)/.weave-hostchecks: tools/weavesim.py docs/WEAVE-SPEC.md | $(BUILD)
 	python3 tools/weavesim.py --selfcheck
+	@touch $@
+
+# --- RAD tunes: the host reference (SPEC.md 96.8) ------------------------------
+# tools/radsim.py is the validator and both replay engines SOUND.DRV's RAD verbs
+# are checked against (SPEC.md 34.12). --selfcheck is in `all` for weavesim's
+# reason: nothing else runs it until the driver's gates exist, and a model that
+# has drifted is only useful as a reference if something notices. It checks the
+# committed fixtures in tests/fixtures/rad/ are what `--make` composes, that
+# each still exercises what SPEC.md 96.7 promises, the start/stop sequences,
+# the sent-stream filter, the RADE_/RADC_ mirror with apps/os88api.inc, and the
+# pinned digests of each fixture's register stream - the streams `--crosscheck`
+# proved equal to Reality's own players, which is host-only and never here.
+# The stamp ALSO runs tests/unit/t_rad.py, the hostile-file table, which
+# --selfcheck does not cover: the suite registers it in soak (one driver's
+# rules, tests/suite.py rule 1), and a stamp is how a soak row is still run by
+# every `make` whose change could break it, and by no other.
+RADFIXTURES := $(wildcard tests/fixtures/rad/*.RAD)
+$(BUILD)/.rad-hostchecks: tools/radsim.py tests/unit/t_rad.py apps/os88api.inc \
+                          tests/unit/harness.py tests/unit/radrows.py \
+                          $(RADFIXTURES) | $(BUILD)
+	python3 tools/radsim.py --selfcheck
+	python3 tests/unit/t_rad.py
 	@touch $@
 
 $(BUILD)/FORM.WAB: $(WEAVEDEMOS)/form.wml $(WEAVEDEMOS)/form.wjs \

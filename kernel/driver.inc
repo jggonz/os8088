@@ -314,7 +314,12 @@ DRVV_TIER   equ 2               ; in AH = SND_RT_*: how much of itself the
 DSV_CAPS    equ 0               ; dw: capability bits it ADDS (SND_CAP_*)
 DSV_FM      equ 2               ; dw: near proc behind slot 0x00F8, 0 = none
 DSV_STREAM  equ 4               ; dw: near proc behind slot 0x0100, 0 = none
-DSV_TICK    equ 6               ; dw: near proc called from snd_tick, 0 = none
+DSV_TICK    equ 6               ; dw: near proc called from snd_tick, 0 = none.
+                                ; SWITCHED by the driver (SPEC.md 34.13.7):
+                                ; snd.inc's three sites copy the DX a
+                                ; successful FM verb, stream verb (not 3) or
+                                ; DSV_RELINST returns, so this copy changes
+                                ; between attach and tier publishes too
 DSV_RELINST equ 8               ; dw: near proc, release one instance's grants
 DSV_NAME    equ 10              ; dw: -> a NUL sink name, in ITS segment
 DSV_TONE    equ 12              ; dw: near proc, the tone tier's sink while

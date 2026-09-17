@@ -237,7 +237,7 @@ had added.
     "ovl": 1588,
     "ovlw": 5052,
     "stk0": 512,
-    "text": 50146,
+    "text": 50164,
     "vgabuf": 848,
     "vgabufpara": 64
   },
@@ -260,7 +260,7 @@ had added.
     "ovl": 1589,
     "ovlw": 5052,
     "stk0": 512,
-    "text": 50416,
+    "text": 50434,
     "vgabuf": 848,
     "vgabufpara": 64
   },
@@ -624,11 +624,11 @@ there and nowhere else.
 | the file system, end to end | 31,893 | 35.6% |
 | the window system and its furniture | 25,078 | 28.0% |
 | drawing: adapters, primitives, glyphs, icons | 13,160 | 14.7% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,054 | 10.1% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,072 | 10.1% |
 | the kernel proper: API table, heap, scheduler, events | 8,183 | 9.1% |
 | the three built-in kinds | 1,542 | 1.7% |
 | the Control Panel | 592 | 0.7% |
-| **total** | **89,502** | |
+| **total** | **89,520** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -654,8 +654,8 @@ there and nowhere else.
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,292 | — | **1,292** | 20 | — | — |
 | `loader.inc` — the package loader (§21) | 4 | 1,232 | **1,236** | 46 | — | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,157 | — | **1,157** | 74 | — | — |
+| `snd.inc` — the sound layer (§34) | 1,042 | — | **1,042** | 287 | — | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 11 | 1,025 | **1,036** | 79 | — | — |
-| `snd.inc` — the sound layer (§34) | 1,024 | — | **1,024** | 287 | — | — |
 | `dock.inc` — the dock strip (§30) | 983 | 40 | **1,023** | 103 | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 992 | — | **992** | 9 | — | — |
 | `icons.inc` — the icon renderer (§10) | 975 | — | **975** | 281 | — | — |
@@ -683,7 +683,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — optional advanced Dock image (DOCK.DRV) | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 3,154 | 18 | **3,172** | — | — | 421 |
-| **total** | **50,146** | **39,356** | **89,502** | **6,151** | **9,182** | **2,250** |
+| **total** | **50,164** | **39,356** | **89,520** | **6,151** | **9,182** | **2,250** |
 <!-- END generated table -->
 
 ### Reading it

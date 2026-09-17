@@ -113,7 +113,14 @@
  *   OSAPI_SND_FM / SND_STREAM / SND_PLAY  a sound DRIVER's verb interface and
  *     a clip player that freezes the desktop for its length; multi-verb
  *     register protocols that would read as a soup of ints in C. Write a
- *     sound app in assembly (apps/tracker is the reference).
+ *     sound app in assembly (apps/tracker is the reference). That includes
+ *     the RAD replayer's verbs 4..6 (SPEC.md 34.12): their segment rides in
+ *     BX and their status block is a byte layout, both apps/os88api.inc's
+ *     (SNDFM_*, RADE_*, RST_*) and apps/radbox the reference - and a tune's
+ *     owner carries SNDFM_RADPLAY's poll duty (an FM verb every 9 ticks on
+ *     CPU_8086, every 2 above, while a tune is loaded). What C CAN
+ *     ask is below: OS88_SND_CAP_OPL3 and OS88_SND_CAP_RAD from
+ *     os88_snd_caps().
  *   OSAPI_XMEM_*                          every argument and answer is a
  *     32-bit linear base, and there is no 32-bit type here (rule 4). The one
  *     part of the API that C genuinely cannot hold.
@@ -939,7 +946,17 @@ void os88_srand(int seed);
 int  os88_rand(void);
 
 /* --- sound, the resident half only (SPEC.md 34) --------------------------- */
-int os88_snd_caps(void);                         /* SND_CAP_* bits */
+int os88_snd_caps(void);                         /* OS88_SND_CAP_* bits */
+#define OS88_SND_CAP_TONE     0x01               /* = apps/os88api.inc's */
+#define OS88_SND_CAP_FM       0x02               /* SND_CAP_*: the FM, BG, */
+#define OS88_SND_CAP_PCM_BG   0x04               /* IN and OPL3 bits are */
+#define OS88_SND_CAP_PCM_EXCL 0x08               /* there only while a sound */
+#define OS88_SND_CAP_PCM_IN   0x10               /* driver is loaded */
+#define OS88_SND_CAP_OPL3     0x20               /* the FM chip is an OPL3
+                                                  * (SPEC.md 34.11); only ever
+                                                  * set with ..._FM */
+#define OS88_SND_CAP_RAD      0x40               /* the RAD replayer's verbs
+                                                  * exist (SPEC.md 34.12) */
 int os88_snd_tone(int hz, int ticks, int prio);  /* hz 0 = off, ticks 0 = until
                                                   * off, prio 0x40 is the
                                                   * default. -1 = refused.

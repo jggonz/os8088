@@ -968,9 +968,35 @@ sbl_grant_chk:
 ; =============================================================================
 ; The stream surface: slot 0x0100's live body (SPEC.md 20.3/34.5/34.6).
 ; osapi_snd_stream (snd.inc) tail-jumps here. AL = verb, AH = handle or
-; sub-op; every verb preserves all registers except its documented outputs.
+; sub-op; every verb preserves all registers except its documented outputs
+; AND DX: every verb but 3 that succeeds returns DX = the tick proc or 0, for
+; the kernel only (SPEC.md 34.13.7); verb 3's DX is its answer.
 ; =============================================================================
 sbl_stream_op:
+    cmp al, 3                   ; verb 3: DX is the consumed count, so the
+    je sbl_stream_vb            ; kernel takes no tick from it - not a site
+    cmp al, 9
+    je .tick
+    call sbl_stream_vb          ; SPEC.md 34.13.7: every other verb that
+    jc .out                     ; SUCCEEDS answers DX = the tick proc or 0,
+    call snd_tick_ans           ; verbs 0 and 4 (what arms the watchdog), 2
+.out:                           ; (what disarms it) and 8 included
+    ret
+.tick:                          ; --- verb 9: TICK, driver internal ---------
+%ifdef SNDREADBACK
+    mov dx, [snd_services+DSV_TICK] ; the NEGATIVE CONTROL for tests/sndtick.py:
+                                ; a verb 9 that re-answers its cell cannot
+                                ; heal a planted 0. Never shipped
+%else
+    call snd_tick_ans           ; the heal: RECOMPUTED, never read back
+%endif
+    xor ax, ax                  ; AX = 0 and CF = 0: no stream state moves
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_stream_vb - the verb dispatch proper, behind sbl_stream_op's tick answer
+; -----------------------------------------------------------------------------
+sbl_stream_vb:
     cmp byte [sbl_up], 0        ; no card attached: nothing can stream
     je .e4
     cmp al, 0
@@ -2084,10 +2110,22 @@ sbl_refill_task:
     cmp byte [sbl_str_state], SBL_ST_END
     je .die                     ; watchdog-stopped: nothing left to pace
     call sbl_refill
+%ifndef SNDNOHEAL
+    pushf                       ; SPEC.md 34.13.7's heal: re-assert the tick
+    cli                         ; through the public slot once a pass, which
+    mov al, 9                   ; repairs a stale 0 in the kernel's copy. AT
+    call OSAPI_SND_STREAM       ; IF = 0: the call brackets us on the kernel's
+    popf                        ; ONE nest stack, and a switch between its
+%endif                          ; push and pop drops another task's level
     mov ax, 1                   ; a block is >= 1.7 ticks at the 22kHz
     call OSAPI_TASK_SLEEP             ; ceiling: one-tick pacing always keeps up
     jmp .loop
 .die:
+    pushf                       ; ...and once more on the way out, BEFORE the
+    cli                         ; flag detach waits on: a closed or watchdog-
+    mov al, 9                   ; ended stream switches the tick off here
+    call OSAPI_SND_STREAM       ; rather than at the owner's next verb. IF = 0
+    popf                        ; for the nest stack's sake, as above
     mov byte [sbl_wtask], 0     ; ...and clears it as its last act but one
     xor ax, ax                  ; AX = 0: this worker is exiting (SPEC.md
     call OSAPI_DRV_TASK         ; 51.7). NEVER RETURNS
@@ -2293,10 +2331,22 @@ sbl_drain_task:
     cmp byte [sbl_str_state], SBL_ST_END
     je .die                     ; watchdog-stopped: nothing left to drain
     call sbl_drain
+%ifndef SNDNOHEAL
+    pushf                       ; the heal, as sbl_refill_task's - at IF = 0
+    cli                         ; for the same nest-stack reason (SPEC.md
+    mov al, 9                   ; 34.13.7)
+    call OSAPI_SND_STREAM
+    popf
+%endif
     mov ax, 1
     call OSAPI_TASK_SLEEP
     jmp .loop
 .die:
+    pushf                       ; the exit-path heal, as sbl_refill_task's,
+    cli                         ; at IF = 0
+    mov al, 9
+    call OSAPI_SND_STREAM
+    popf
     mov byte [sbl_wtask], 0     ; ...and clears it as its last act but one
     xor ax, ax                  ; AX = 0: this worker is exiting (SPEC.md
     call OSAPI_DRV_TASK         ; 51.7). NEVER RETURNS
@@ -2306,16 +2356,19 @@ sbl_drain_task:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; sbl_tick - the stream watchdog (SPEC.md 34.5), a snd_tick leaf
+; sbl_tick - the stream watchdog (SPEC.md 34.5), snd_tickp's first half
 ;
-; in:       IF = 0, DS = KERNEL_SEG, behind the snd_live gate; AX/DX free
+; in:       IF = 0, DS = ours, behind the snd_live gate; AX/DX free
 ; out:      nothing
 ; clobbers: AX, DX
 ;
 ; A block IRQ that fails to arrive within ~2x the block period stops the
 ; stream instead of hanging the owner: halt, stop expecting, state = ended.
-; The refill task exits on seeing the state; the owner sees it via verb 3
-; and closes. Idle cost: one compare and a branch.
+; The refill task exits on seeing the state (and its exit-path verb 9 switches
+; the tick off); the owner sees it via verb 3 and closes. Idle cost: NOTHING -
+; DSV_TICK names snd_tickp only while a stream is open (SPEC.md 34.13.7), and
+; the compares below are paid only between a stream ending at interrupt time
+; and the next site verb.
 ; -----------------------------------------------------------------------------
 sbl_tick:
     cmp byte [sbl_str_act], 1

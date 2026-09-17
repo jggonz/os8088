@@ -419,6 +419,23 @@ The ones to know by name:
 | `registry` | Every test in `tests/` is registered in a tier or says why not. This is the row that stops the suite going back to ninety unlisted scripts. |
 | `machines` | No row names a machine whose ROM the tree has not got (above). |
 
+**Two of them need one thing `make deps` does not install**: `radrace` and
+`radfuzz` run `RADPLAY.DRV` instruction by instruction in Python's
+[`unicorn`](https://pypi.org/project/unicorn/), a host 8086 rather than an
+emulated PC, because the windows and the mutant sweep they cover need a
+breakpoint at every instruction boundary and 2,500 loads a run. It is a pip
+package and nothing else in the tree wants it, so it is deliberately not a
+build dependency:
+
+```
+python3 -m venv /tmp/uc && /tmp/uc/bin/pip install unicorn
+/tmp/uc/bin/python3 tools/os88test.py soak -k 'rad*'
+```
+
+Without it `os88test.py` withholds the `unicorn` capability and both rows
+score **SKIP** rather than a silent pass — which is what to expect on a
+checkout that has not installed it, and is not a green run of those two rows.
+
 ### Adding a test
 
 docs/WRITING-TESTS.md, before the first line. `soak` is a real answer and
