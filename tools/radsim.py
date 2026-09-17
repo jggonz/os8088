@@ -59,7 +59,7 @@ RAD_PNMAX = 32              # SPEC.md 96.4.5, 2.1 deviation 5: notes per frame,
                             # and 34.13.3/34.13.5: the per-tick budget
 RAD_FRMAX = 7               # SPEC.md 34.13.5: frames one pacer interrupt runs
 RADE = dict(NOSINK=0, NOTRAD=1, VERSION=2, CORRUPT=3, NEEDOPL3=4, BIG=5,
-            BUSY=6, NOMEM=7, NOTUNE=8, PACER=9, BADARG=10)
+            BUSY=6, NOMEM=7, NOTUNE=8, PACER=9, BADARG=10, NOPLAYER=11)
 RADC = dict(TRUNC=1, FLAGS=2, BPM=3, INST=4, MIDI=5, ORDLEN=6, JUMP=7,
             ORDER=8, PATNUM=9, PATOFF=10, PTRUNC=11, EXTRA=12, LINE=13,
             CHAN=14, NOTE=15, INSNUM=16, EFFECT=17, RIFFID=18)
@@ -492,6 +492,7 @@ class EngineV2(object):
         self.write = write
         self.regs = [255] * 512
         self.midi_volume = 0          # SetVolume on an algorithm 7 channel
+        self.hits = {}                # BRANCHES name -> first frame it ran in
         self.inst = [_Inst() for _ in range(127)]
         self.chans = [_Chan() for _ in range(V2_CHANNELS)]
         self.tracks = [None] * V2_TRACKS
@@ -617,6 +618,10 @@ class EngineV2(object):
             ch.iriff.cnt = 0
 
     # -- Update --------------------------------------------------------------
+    def _hit(self, name):
+        if name not in self.hits:
+            self.hits[name] = self.frames
+
     def update(self):
         self.notes = 0
         for i, ch in enumerate(self.chans):
@@ -657,6 +662,7 @@ class EngineV2(object):
 
     def get_track(self):
         if self.order >= self.order_len:
+            self._hit("order-wrap")
             self.order = 0
         tn = self.b[self.order_list + self.order]
         if tn & 0x80:
@@ -671,6 +677,7 @@ class EngineV2(object):
             if lineid & 0x7F >= linenum:
                 return trk
             if lineid & 0x80:
+                self._hit("riff-jump-to-missing-line")
                 break
             trk += 1
             while True:
@@ -679,6 +686,7 @@ class EngineV2(object):
                 trk += NOTE_SIZE[(chanid >> 4) & 7]
                 if chanid & 0x80 or chan_riff:
                     break
+                self._hit("iriff-jump-walks-entries")
         return None
 
     def play_line(self):
@@ -750,6 +758,7 @@ class EngineV2(object):
                         r.toct, r.tnote = s8(octave), s8(notenum)
                         transposing = True
                     else:
+                        self._hit("iriff-without-note")
                         r.toct, r.tnote = 3, 12
                     r.cnt = 1
                     self.tick_riff(cn, r, False)
@@ -950,12 +959,14 @@ class EngineV2(object):
         vol = u8(vol * self.master_vol // 64)
         ins = ch.inst
         if ins is None:
+            self._hit("volume-without-instrument")
             return
         if ins.alg == 7:
             # SPEC.md 96.4.5 deviation 4: player20.cpp indexes AlgCarriers[7],
             # one row past its seven.  An algorithm 7 instrument has no
             # carriers: the channel's volume is recorded, no register written.
             self.midi_volume += 1
+            self._hit("midi-volume")
             return
         for i in range(4):
             if not ALG_CARRIERS[ins.alg][i]:
@@ -974,6 +985,7 @@ class EngineV2(object):
                 speed = s8(-speed)
             elif oldoct == oct_:
                 if oldfreq > freq:
+                    self._hit("toneslide-down-same-octave")
                     speed = s8(-speed)
                 elif oldfreq == freq:
                     speed = 0
@@ -985,6 +997,7 @@ class EngineV2(object):
         oct_ = u8(ch.oct)
         if freq < 0x156:
             if oct_ > 0:
+                self._hit("portamento-wraps-down")
                 oct_ -= 1
                 freq = u16(freq + 0x2AE - 0x156)
             else:
@@ -998,9 +1011,11 @@ class EngineV2(object):
         if toneslide:
             if amount >= 0:
                 if oct_ > fx.toct or (oct_ == fx.toct and freq >= fx.tfreq):
+                    self._hit("toneslide-reaches-up")
                     freq, oct_ = fx.tfreq, fx.toct
             else:
                 if oct_ < fx.toct or (oct_ == fx.toct and freq <= fx.tfreq):
+                    self._hit("toneslide-reaches-down")
                     freq, oct_ = fx.tfreq, fx.toct
         ch.freq = freq
         ch.oct = s8(oct_)
@@ -1019,6 +1034,7 @@ class EngineV2(object):
             if toct != 0:
                 self.oct_num = s8(self.oct_num + toct)
                 if self.oct_num < 0:
+                    self._hit("transpose-clamps-octave")
                     self.oct_num = 0
                 elif self.oct_num > 7:
                     self.oct_num = 7
@@ -1060,6 +1076,7 @@ class EngineV1(object):
         self.b = bytes(b)
         self.write = write
         self.frames = 0
+        self.hits = {}                # BRANCHES name -> first frame it ran in
         self.inst_ptrs = [0] * 31
         self.old43 = [0] * 9
         self.olda0 = [0] * 9
@@ -1083,6 +1100,10 @@ class EngineV1(object):
         """SPEC.md 34.12.2 step 0, then the start sequence."""
         self.zero_state()
         self.start()
+
+    def _hit(self, name):
+        if name not in self.hits:
+            self.hits[name] = self.frames
 
     def w(self, i):
         return self.b[i] | (self.b[i + 1] << 8)
@@ -1175,6 +1196,7 @@ class EngineV1(object):
             if b[si] & 0x7F >= line:
                 break
             if b[si] & 0x80:
+                self._hit("jump-to-missing-line")
                 si = 0
                 break
             si += 1
@@ -1190,6 +1212,7 @@ class EngineV1(object):
     def next_pattern(self):
         bx = self.order_pos + 1
         if bx >= self.order_size:
+            self._hit("order-wrap")
             bx = 0
         while True:
             self.order_pos = bx
@@ -1232,6 +1255,7 @@ class EngineV1(object):
             self.port[cn] = u8(-param)
         elif cmd == CM_TONESLIDE:
             if param:
+                self._hit("toneslide-param-without-note")
                 self.ts_speed[cn] = param
             self.ts_on[cn] = 1
         elif cmd in (CM_TONEVOL, CM_VOLSLIDE):
@@ -1736,10 +1760,21 @@ def compose_rv1():
              for k in range(9)]),
         (30, [V1E(8, "off", 0, CM_SETVOL, 10), V1E(8 - 8, (3, D), 1)][::-1]),
     ]
+    # Pattern 5 reaches two outcomes the lines above never do (w1-verify-0
+    # finding 3): a tone slide with a parameter and no note, which sets the
+    # speed of a slide already aimed, and a jump to a line the NEXT pattern
+    # (4) does not have, which leaves the rest of that pattern blank.
+    p5 = [
+        (0, [V1E(0, (3, C), 1), V1E(1, (4, C), 2)]),
+        (1, [V1E(1, None, 0, CM_PORTUP, 3)]),
+        (8, [V1E(0, (3, Ee), 0, CM_TONESLIDE, 0)]),       # aimed, speed kept
+        (9, [V1E(0, None, 0, CM_TONESLIDE, 7)]),          # parameter, no note
+        (12, [V1E(1, None, 0, CM_JUMP, 50)]),             # pattern 4 has no 50
+    ]
     # pattern 3 is named by the order list and has no data (offset 0)
     return build_v1("RV1 - radsim fixture\nRAD 1.0, every effect,     nine channels",
-                    4, False, ins, [0, 1, 3, 2, 4, 0x82],
-                    {0: p0, 1: p1, 2: p2, 4: p4})
+                    4, False, ins, [0, 1, 3, 5, 4, 2, 4, 0x82],
+                    {0: p0, 1: p1, 2: p2, 4: p4, 5: p5})
 
 
 def compose_rv1slow():
@@ -1794,6 +1829,11 @@ def compose_rv2():
                     riff=[(0, [E(0, (3, C), 13)])]),        # 12 and 13 recurse:
         13: fm_inst(1, 2, 1, 2, 0, 0, 41, 14, riff_speed=1,  # the depth-8 guard
                     riff=[(0, [E(0, (3, Ee), 12)])]),
+        14: fm_inst(2, 3, 2, 3, 5, 1, 52, 15, riff_speed=1,
+                    riff=[(0, [E(1, None, 0, CM_MULT, 2), E(2, None, 0, CM_MULT, 4),
+                               E(4, None, 0, CM_VOLUME, 9)]),
+                          (1, [E(0, (4, C), 0)]),
+                          (2, [E(0, None, 0, CM_JUMP, 1)])]),
         40: fm_inst(3, 0, 3, 9, 15, 15, 99, 12, name="wild"),   # fb/vol overflow
     }
     p0 = [
@@ -1838,6 +1878,24 @@ def compose_rv2():
         (9, [E(1, (4, C), 9, CM_RIFF, 91), E(3, None, 0, CM_JUMP, 70)]),
         (50, [E(8, (2, C), 0, CM_TONEVOL, 7)]),
     ]
+    # Pattern 2 reaches the replay outcomes the lines above never do
+    # (w1-verify-0 finding 3), each on its own channel so none masks another:
+    # a portamento that wraps DOWN an octave (C-3 less 40); tone slides that
+    # REACH their target upward and downward, the second within one octave;
+    # a transpose riff started at octave 0, whose (2, B) line clamps the
+    # octave at 0; an instrument riff started with no note (the default
+    # transpose); and Set Volume on a MIDI instrument's channel (96.4.5
+    # deviation 4).
+    p2 = [
+        (0, [E(0, (3, C), 1), E(1, (3, G), 1), E(2, (3, C), 1, CM_PORTDN, 40),
+             E(3, (0, C), 0, CM_TRANSPOSE, 21), E(4, None, 9), E(5, (4, C), 8)]),
+        (2, [E(0, (3, D), 0, CM_TONESLIDE, 60), E(1, (3, Ee), 0, CM_TONESLIDE, 60),
+             E(5, None, 0, CM_SETVOL, 30)]),
+        (4, [E(5, (4, D)),                          # a note on the MIDI channel
+             E(6, (3, A), 0, CM_TONESLIDE, 0),      # a slide with no speed yet
+             E(7, None, 0, CM_RIFF, 12),            # a riff jump the riff lacks
+             E(8, (3, C), 14)]),                    # an instrument riff's jump
+    ]                                               # walks a many-entry line
     riffs = {
         0x11: [(0, [E(0, (3, C), 2)]), (2, [E(0, (3, Ee), 10, CM_PORTDN, 3)]),   # both riffs slide at once
                (4, [E(0, None, 0, CM_RIFF, 21)]),            # a riff starts a riff
@@ -1847,18 +1905,20 @@ def compose_rv2():
                (3, [E(0, "off")]), (4, [E(0, (2, B), 0, CM_SPEED, 2)]),
                (6, [E(0, None, 0, CM_VOLSLIDE, 52)]),
                (63, [E(0, (4, Gs), 0, CM_PORTDN, 3)])],       # fx outlives line 63
+        0x12: [(0, [E(0, (3, Gs), 2)]), (1, [E(0, None, 0, CM_JUMP, 40)])],
         0x09: [(0, [E(0, (4, A), 5, CM_SETVOL, 40)]), (3, [E(0, (3, C), 0, None, 0, True)])],
         0x91: [(1, [E(0, (3, F), 6)]), (2, [E(0, None, 0, CM_TRANSPOSE, 21)])],
     }
     return build_v2("RV2 - radsim fixture\nevery algorithm, every effect", 4,
-                    False, 0, ins, [0, 1, 5, 3, 0x81], {0: p0, 1: p1, 3: p3},
+                    False, 0, ins, [0, 1, 5, 2, 3, 0x81], {0: p0, 1: p1, 2: p2, 3: p3},
                     riffs)
 
 
 def compose_rv2bpm():
     ins = {1: fm_inst(2, 3, 3, 4, 4, 2, 60, 21), 2: fm_inst(0, 0, 0, 2, 0, 0, 50, 22)}
     p0 = [(0, [E(0, (3, 1), 1), E(6, (4, 8), 2)]),
-          (3, [E(0, None, 0, CM_PORTUP, 2)]),
+          (3, [E(0, None, 0, CM_PORTUP, 2),
+               E(3, None, 0, CM_SETVOL, 20)]),                # no instrument yet
           (7, [E(6, "off"), E(8, None, 0, CM_SPEED, 0)]),     # a 256-frame line
           (9, [E(8, None, 0, CM_SPEED, 3)])]
     return build_v2("RV2BPM", 3, False, 150, ins, [0], {0: p0}, {})
@@ -2097,6 +2157,54 @@ FIXTURE_PROMISES = {
 }
 
 
+# The replay OUTCOMES each fixture must reach, and within how many frames of a
+# fresh start - SPEC.md 96.7.  FIXTURE_PROMISES reads a tune's bytes; these are
+# read off the engine as it plays (its `hits`), because an effect being in the
+# file is not the same as every way it can land being played: w1-verify-0
+# finding 3 found nine branches only Reality's tunes reached, and Reality's
+# tunes can never be in this tree, so the driver gates - which compare against
+# the fixtures alone - could not have seen a bug in any of them.  BRANCH_WINDOW
+# is how far the HOST looks; what each gate on the machine compares is
+# BRANCH_COMPARED below, and it is per fixture and shorter.
+BRANCH_WINDOW = 1000
+# ...and the number of frames the on-machine gates ACTUALLY compare for each
+# fixture, which is what makes a promise above mean anything: the tightest of
+# the rows that play it (radopl3's `frames_wanted`, radopl2's restart compare).
+# --selfcheck holds each promise's first hit against its own fixture's number
+# and the gates read it from here, so a fixture edit that pushes a branch past
+# what the machine compares fails on the host instead of quietly stopping being
+# covered.
+BRANCH_COMPARED = {
+    "RV1.RAD": 1000,            # radopl2's restart compare (radopl3: 1,500)
+    "RV2.RAD": 1500,            # radopl3
+    "RV2BPM.RAD": 760,          # radopl3's order-wrap row
+    "RV1SLOW.RAD": 420,         # ...and its 18.2 Hz one
+}
+BRANCH_PROMISES = {
+    "RV1.RAD": {"toneslide-param-without-note", "jump-to-missing-line"},
+    "RV2.RAD": {"portamento-wraps-down", "toneslide-reaches-up",
+                "toneslide-reaches-down", "toneslide-down-same-octave",
+                "midi-volume", "transpose-clamps-octave", "iriff-without-note",
+                "riff-jump-to-missing-line", "iriff-jump-walks-entries"},
+    "RV2BPM.RAD": {"volume-without-instrument", "order-wrap"},
+    "RV1SLOW.RAD": {"order-wrap"},   # the plain wraps RV2/RV1's jump markers
+}                                    # never take: radopl3 compares both
+
+
+def branch_hits(b, frames=BRANCH_WINDOW):
+    """{branch name: first frame} over `frames` frames of a fresh start."""
+    validate(b)
+    if b[0x10] == 0x21:
+        eng = EngineV2(b, lambda r, v: None)
+        step = eng.update
+    else:
+        eng = EngineV1(b, lambda r, v: None)
+        step = eng.frame
+    for _ in range(frames):
+        step()
+    return dict(eng.hits)
+
+
 # =============================================================================
 # --selfcheck
 # =============================================================================
@@ -2106,9 +2214,9 @@ FIXTURE_PROMISES = {
 # moves one is a change to RE-PROVE with --crosscheck, not a number to paste.
 SELFCHECK_FRAMES = 1600
 PINNED = {
-    "RV1.RAD": "9522d696a17f737c",
+    "RV1.RAD": "4d0fd53ab1b313f0",
     "RV1SLOW.RAD": "783119c100a4edeb",
-    "RV2.RAD": "8d277fa19ff492e3",
+    "RV2.RAD": "f4a6abd91f89149d",
     "RV2BPM.RAD": "b94c3e98a6d12328",
     "RV2SLOW.RAD": "1808c0e0f83eb7e5",
 }
@@ -2160,6 +2268,21 @@ def selfcheck(verbose=False):
         missing = FIXTURE_PROMISES[name] - cov
         ck(not missing, "%s no longer exercises %s" % (name, sorted(missing)))
         ck("UNDEFINED-INSTRUMENT" not in cov, "%s names an undefined instrument" % name)
+        gone = BRANCH_PROMISES.get(name, set()) - set(branch_hits(data))
+        ck(not gone, "%s no longer reaches %s within %d frames"
+           % (name, sorted(gone), BRANCH_WINDOW))
+        # ...and within what the MACHINE compares, which is the only window
+        # that makes the promise a gate (BRANCH_COMPARED)
+        if name in BRANCH_PROMISES:
+            ncmp = BRANCH_COMPARED[name]
+            hits = branch_hits(data, max(ncmp, BRANCH_WINDOW))
+            late = sorted(b for b in BRANCH_PROMISES[name]
+                          if hits.get(b, ncmp) >= ncmp)
+            ck(not late, "%s reaches %s only past frame %d, which is all the "
+               "driver gates compare of it" % (name, late, ncmp))
+        if name == "RV2.RAD":         # the negative control: RV2.RAD's pattern 2
+            ck(BRANCH_PROMISES[name] - set(branch_hits(data, 700)),   # starts at
+               "RV2.RAD's branch promises hold before pattern 2 plays")  # frame 734
         if data[0x10] == 0x21:
             ck(check(data, opl3=False) == (RADE["NEEDOPL3"], 0, 0),
                "%s is not refused on an OPL2" % name)
@@ -2328,7 +2451,25 @@ int main(int argc, char **argv) {
 """
 
 
-def crosscheck(ref_dir, frames=3000, extra=()):
+# SPEC.md 96.4.5 deviation 4, applied to the SCRATCH copy of player20.cpp the
+# way _v1_player_nasm applies the 1.0 deviations: SetVolume returns before its
+# carrier loop for an algorithm 7 instrument instead of reading AlgCarriers[7],
+# one row past the table.  RV2.RAD reaches it (BRANCH_PROMISES' midi-volume),
+# and --faithful-v2 leaves it out, which is how that is shown.
+V2_DEV4_AT = "void RADPlayer::SetVolume("
+V2_DEV4_OLD = "uint8_t alg = inst->Algorithm;"
+V2_DEV4_NEW = "uint8_t alg = inst->Algorithm; if (alg >= 7) return; /* radsim deviation 4 */"
+
+
+def _v2_player_patched(src):
+    at = src.find(V2_DEV4_AT)
+    k = src.find(V2_DEV4_OLD, at) if at >= 0 else -1
+    if k < 0:
+        return None
+    return src[:k] + V2_DEV4_NEW + src[k + len(V2_DEV4_OLD):]
+
+
+def crosscheck(ref_dir, frames=3000, extra=(), faithful=False):
     """0 pass or skip, 1 a mismatch."""
     if not ref_dir or not os.path.isfile(os.path.join(ref_dir, "Source", "player20.cpp")):
         print("radsim crosscheck: SKIP - no RAD V2.0a archive (pass --ref DIR or set "
@@ -2340,7 +2481,19 @@ def crosscheck(ref_dir, frames=3000, extra=()):
         return 0
     tmp = tempfile.mkdtemp(prefix="radsim-")
     try:
-        shutil.copy(os.path.join(ref_dir, "Source", "player20.cpp"), tmp)
+        src = open(os.path.join(ref_dir, "Source", "player20.cpp"),
+                   encoding="latin-1").read()
+        if not faithful:
+            src = _v2_player_patched(src)
+            if src is None:
+                print("radsim crosscheck: FAIL - player20.cpp's SetVolume is not "
+                      "where deviation 4's patch expects it")
+                return 1
+        with open(os.path.join(tmp, "player20.cpp"), "w", encoding="latin-1") as f:
+            f.write(src)
+        print("radsim crosscheck: player20.cpp %s" %
+              ("as shipped (--faithful-v2)" if faithful else
+               "with SPEC.md 96.4.5 deviation 4 applied"))
         with open(os.path.join(tmp, "harness.cpp"), "w") as f:
             f.write(HARNESS_CPP)
         exe = os.path.join(tmp, "harness")
@@ -2609,6 +2762,8 @@ def main(argv=None):
                     help="RAD V1.1a's directory (PLAYER.ASM, TUNES.ZIP)")
     ap.add_argument("--faithful-v1", action="store_true",
                     help="run PLAYER.ASM without radsim's deviations")
+    ap.add_argument("--faithful-v2", action="store_true",
+                    help="run player20.cpp without deviation 4's patch")
     ap.add_argument("--frames", type=int)
     ap.add_argument("--log")
     ap.add_argument("--dump", action="store_true")
@@ -2629,8 +2784,10 @@ def main(argv=None):
     if a.make:
         return 0 if make_fixtures(check_only=a.check) else 1
     if a.crosscheck:
-        rc2 = 0 if a.faithful_v1 else crosscheck(a.ref, frames=a.frames or 3000)
-        rc1 = crosscheck_v1(a.ref1, frames=a.frames or 2000, faithful=a.faithful_v1)
+        rc2 = 0 if a.faithful_v1 else crosscheck(a.ref, frames=a.frames or 3000,
+                                                 faithful=a.faithful_v2)
+        rc1 = 0 if a.faithful_v2 else crosscheck_v1(a.ref1, frames=a.frames or 2000,
+                                                    faithful=a.faithful_v1)
         return rc1 or rc2
     if not a.tune:
         ap.print_help()

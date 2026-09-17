@@ -73,6 +73,18 @@ UNREGISTERED = {
     "npbench.inc": "a benchmark body, %included",
     "harness.py": "tests/unit/'s check library - check(), eq(), done() - "
                   "imported by every t_*.py there, not a test",
+    "radcost.py": "an INSTRUMENT, not a test: it prices a RAD replay frame "
+                  "and a HEAVY pacer tick on MartyPC's 8088 with exec "
+                  "breakpoints and the cycle counter, and asserts nothing - "
+                  "PERFORMANCE.md records its figures (SPEC.md 34.13.6)",
+    "radlib.py": "a LIBRARY, not a test: what tests/radopl3.py, radopl2.py, radmove.py "
+                 "and radrtc.py share - the driver, overlay and RADGATE "
+                 "symbol maps, reading the tune's claim and the RADLOG "
+                 "register log, and the row-by-row compare with radsim",
+    "radrows.py": "DATA, not a test: the RAD hostile-file table (SPEC.md "
+                  "96.4.4), imported by t_rad.py - which runs radsim over it "
+                  "- and by tests/radgate/mkrows.py, which hands it to the "
+                  "driver for radopl3.py and radopl2.py",
     "mkclick.py": "a GENERATOR, not a test: it writes build/click.mod - a "
                   "metronome module for judging A/V sync by eye and ear - "
                   "and asserts nothing. It was REGISTERED as a soak row "

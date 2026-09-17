@@ -12,7 +12,7 @@ wins.
 > to play RAD files like Reality AdLib Tracker does.
 
 Decisions the user took, 2026-09-16 (D1-D4 at intake, D5-D6 answering wave
-1's two questions) — not to be re-opened without them:
+1's two questions, D7 answering wave 3's) — not to be re-opened without them:
 
 | # | question | decision |
 |---|---|---|
@@ -22,6 +22,8 @@ Decisions the user took, 2026-09-16 (D1-D4 at intake, D5-D6 answering wave
 | D4 | tunes | **ship none.** RAD v2.0a's archive carries no licence for `player20.cpp` or its six tunes, so RADBOX opens `.RAD` files the user brings and no disk carries a song |
 | D5 | beeps during playback (wave 1's Q1) | **the tone tier REFUSES while a tune holds the chip** - `OSAPI_SND_TONE` is silent during playback, and no kernel byte is spent on a speaker fallback. SPEC.md §34.12.3 as pinned |
 | D6 | the XT's tick (wave 1's Q2; replaces its option (a), "publish at attach") | **`DSV_TICK` is DRIVER-SWITCHED at run time.** A kernel change of exactly one shape at three sites in `kernel/snd.inc` - after `drv_svc_call` in `osapi_snd_fm`, in `osapi_snd_stream`'s main path (not verb 3's), and in `snd_release_inst`'s `DSV_RELINST` call: `jc .keep / mov [drv_svc+DSV_TICK], dx / .keep:`. `SOUND.DRV` answers DX = its one combined tick proc while a tick-class tune plays or a Sound Blaster stream is open, else 0. Prototyped by the coordinator at **+18 bytes kern_big `.text`, no rung crossed** (image rung 23 -> 5 left), kern_small unaffected. Lands in wave 2, SPEC text first. SPEC.md §34.13.7 |
+| D7 | the 8088's bound tick (wave 3's question: §34.13.6's 27 ms rule against the measured 161 ms) | **On `CPU_8086`, `RAD_PNMAX` stays 32 and the 27 ms bound-tick rule is RETIRED** (option 1). A known cost, recorded: a 2.1 tune on an 8088 + OPL3 spends 10-25% of the machine at IF = 0 in the tick (worst tick ~31-33 ms on real tunes, 161 ms on the bound tune `HEAVY`), which can drop serial-mouse bytes and make the pointer stutter while it plays; a hostile heavy file holds an 8088 ~160 ms a tick. AT-class machines keep the rule. The replayer stays the on-demand overlay `RADPLAY.DRV`. SPEC.md §34.13.6, §96.1 |
+| D8 | the `drv_svc_call_x` hang (wave 3's question: a verb 6 poll against an unmounted `SOUND.DRV`) | **It is a PRE-EXISTING defect on `main` and is fixed in a PR of its own** - no kernel file changes in this work. Wave 3 keeps `RADGATE`'s `rt_nopoll` workaround in `tests/radmove.py`, with a comment naming the defect and where it is fixed; SPEC.md §96.8 records it, and **§96.2 puts the guard on the package**: a program polling a sound verb tests `SND_CAP_RAD` from `OSAPI_SND_CAPS` (which reads 0 once the driver is gone) before every verb 6 and stops polling when the sink disappears, so wave 4's RADBOX is correct on a kernel with or without the fix. SPEC.md §96.2, §96.8 |
 
 ## 2. Facts that shape it
 
@@ -220,7 +222,8 @@ the §2.8 shape applied one level down.
 3. **Replayer + pacer.** Validator, v2 engine, v1 loader, IRQ8 and tick paths,
    `-DRADLOG`; the MartyPC and QEMU rows.
 4. **RADBOX windowed.** Open, transport, status, VGA meters, the XT minimal
-   view, association.
+   view, association; and D8's guard - `OSAPI_SND_CAPS` tested before every
+   verb 6 poll, polling stopped when `SND_CAP_RAD` goes clear (SPEC.md §96.2).
 5. **Full screen.** Mode X, CGA 320, Hercules; own pointer; `tests/radfsx.py`.
 6. **Ship.** Disk placement (every geometry that has room, and `make live` —
    `t_livefull` will fail `make` until it is placed), `§24.5` omission,
@@ -229,7 +232,8 @@ the §2.8 shape applied one level down.
 
 ## 6. Open, to settle while building
 
-- **Replayer resident size** (§3.2) — measured, then either kept or split.
+- ~~**Replayer resident size** (§3.2) — measured, then either kept or split.~~
+  Split (wave 3, §7).
 - **XT burst pacing.** Three frames in one tick is correct on average and
   audibly uneven for fast tunes; whether to spread them with a sub-tick
   `pit_now` check inside `DSV_TICK` is a measurement, not a guess.
@@ -283,7 +287,25 @@ workers' verb 9 is made at IF = 0 for the nest stack's sake (34.13.7).
 `tests/opl3.py` (four arms, `MARTYPC_NO38A=1` the new one) and
 `tests/sndtick.py` are the wave's gates.
 
-**Still open**: XT burst spreading (§6, unchanged) and the replayer's resident
-size (§3.2's 2KB rule) are wave 3 measurements; §34.13.6 names the IF=0 frame
-cost as the measurement wave 3 records.
+**Settled in wave 3** (SPEC.md §34.12.1, §34.12.2, §34.12.5, §34.12.7, §34.12.8,
+§34.13.6, §96.1, §96.6, §96.7, §96.8):
+
+| point | settled as | why |
+|---|---|---|
+| the 2KB rule | **split**: `RADPLAY.DRV`, an overlay in HDDTOOL.DRV's shape (SPEC.md 52.11), read by verb 4 into the tune's own claim | the replayer's code and tables are 8,075 bytes - four times the rule; the resident half is 1,646 (wave 3's fixers moved int 70h's entry and BIOS chain into it, SPEC.md 34.13.3, and re-stamp the resident's segment at every entry into the claim because the image can move, 34.12.8). The price is a read off the system volume on the first load, `RADE_NOPLAYER` when that disk is not in its drive |
+| the claim | overlay image, working set, then the tune at `RAD_TUNE` = 13,312, stack at the end; 62KB at `RAD_MAXLEN` | CS = DS = SS inside a frame, every state field an absolute address |
+| verb 4's order | busy and the claim before validation, and validation on the COPY | the validator is in the overlay; the copy is what the interrupt-time engine reads. A corrupt file on a busy chip or a full heap now answers `RADE_BUSY` / `RADE_NOMEM` |
+| a new refusal | `RADE_NOPLAYER` = 11, "The RAD player needs the system disk in its drive." | the split's one new failure |
+| the tick path | 6 bytes more on the interrupted stack than a resident pacer | the far call into the overlay and its dispatcher |
+| the status block | position and channel halves built at verb 6, not every frame | 13% of a real tune's frame instructions on the 8088 |
+| the gates | `radopl3`, `radopl2`, `radrtc` green; RADGATE (`tests/radgate/`) is the client; the hostile-file table moved to `tests/unit/radrows.py` so t_rad and both MartyPC rows read one table | — |
+| the 8088's bound tick | **decision D7**: `RAD_PNMAX` stays 32 on `CPU_8086` and §34.13.6's 27 ms rule is retired there; AT-class machines keep it, its measurement owed (SPEC.md §96.8) | measured on MartyPC's 8088 after the engine pass: `HEAVY` 161 ms a tick, Reality's own 2.1 tunes ~31 ms worst and 10-13 ms mean, `RV2.RAD`'s worst note frame 26.8 ms. 27 ms would need `RAD_PNMAX` ~5, which halts every Reality tune (busiest frame 14), and real music is over 27 ms regardless. The options judged and not taken: refuse 2.1 on `CPU_8086` (a cut against D1), `RAD_PNMAX` ~5 (halts real music everywhere), the replay step on a worker (§2 rejected it for timing) |
+| verb 5 against an interrupt-time HALT | **every state test commits in the IF = 0 window it was made in** (SPEC.md §34.12.2's table): pause, stop and the unload read the state and disarm in one window; resume and start set "playing" and arm in one; start's disarm is a new private verb, `RADV_DISARM` (`RAD_ABI_VER` 2), called BEFORE the resident claims, and the claim re-reads `opl_own`; `rad_tickset` reads and writes in one window. +55 bytes resident, +52 overlay | wave 1's verification left it open and wave 3's first overlay had it in all four verbs: `tests/unit/t_radrace.py` fires the pacer at every instruction boundary and the first version failed pause (a HALTed tune marked paused), stop (1,068 writes after the HALT), resume and start (a HALTed tune left "playing" with the pacer disarmed) |
+| the fixtures' reach | `RV2.RAD` gains pattern 2, `RV1.RAD` pattern 5, `RV2BPM.RAD` one Set Volume, reaching the seven 2.1 and two 1.0 replay outcomes only Reality's tunes reached, plus three more (and two unnamed branches) the same coverage run found unreached; `radsim --selfcheck` asserts each within 1,000 frames from the engines' own `hits`; the `player20.cpp` cross-check applies deviation 4 to its scratch copy (`--faithful-v2` leaves it out) | wave 1's verification, finding 3: the driver gates compare against the fixtures alone, so a driver bug in any of those branches passed. An off-by-one octave-wrap constant now fails `RV2.RAD` in radsim's cross-check and in the driver's register log alike |
+| the verb 6 poll against an unmounted driver | **decision D8**: the `drv_svc_call_x` near-`ret`-from-a-far-call hang is a defect on `main` and is fixed in a PR of its own - no kernel byte here. `tests/radmove.py` keeps the `rt_nopoll` hold-off across its Control Panel unmount (RADGATE's comment names SPEC.md §96.8), and §96.2 makes the package guard itself: `OSAPI_SND_CAPS` before every verb 6, polling stopped when `SND_CAP_RAD` goes clear | found by `radmove`'s arena, which unmounts `SOUND.DRV` while RADGATE polls. `osapi_snd_fm` does not pre-test its cell (`osapi_snd_stream` does), so an FM verb with no sink runs into `.lowbss` and hangs the UI task with the graphics lock held. The guard costs a poll nothing and is correct on either kernel; the kernel fix is 4 bytes of `.cold` and belongs to whoever owns `main` |
+| verb 4's requester byte | written at **step 7, under the verb lock**, with the other working copies | steps 8 and 9 yield for hundreds of ms, so a second instance's verb 4 - the one about to be refused `RADE_BUSY` - reached that byte first and the commit stamped its id on the lock holder's tune (§34.12.1) |
+| the validator's and the engines' breadth | `tests/unit/t_radfuzz.py`, a committed **soak** row: 2,500 seeded mutants of the fixtures through the shipped `RADV_LOAD`, and the ones both accept PLAYED and compared with radsim record for record | the hostile-file table is 116 hand-built rows and the fixtures are five; an accepted mutant is a valid file nobody wrote, which is the only way to reach the engines at breadth |
+| `radrtc`'s BIOS-wait row | **one-sided**, against the shorter of two controls taken back to back | both sides are host-paced samples and a stall can only lengthen one; a two-sided +-5% band made it go red on unchanged bytes |
+
+**Still open**: XT burst spreading (§6, unchanged).
 

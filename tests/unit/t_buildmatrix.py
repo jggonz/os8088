@@ -189,6 +189,12 @@ KNOBS = [
     # only, like PICOMEM, and nothing else builds either arm.
     ("sndreadback", ["SNDREADBACK=1"], "sound.drv"),
     ("sndnoheal",   ["SNDNOHEAL=1"], "sound.drv"),
+    # The RAD replayer's instruments (SPEC.md 96.8, tests/radopl3.py,
+    # radopl2.py, radrtc.py): RADLOG reaches both images, the other two
+    # RADPLAY.DRV alone, and nothing else builds any of the three arms.
+    ("radlog",      ["RADLOG=1"], "sound.drv"),
+    ("radlog-ovl",  ["RADLOG=1"], "radplay.drv"),
+    ("radslow",     ["RADSLOW=1", "RADNOCREDIT=1"], "radplay.drv"),
     ("bootprof",    ["BOOTPROF=1"]),
     ("mouidslow",   ["MOUIDSLOW=1"]),
     ("trackrun",    ["TRACKRUN=1"], "boot360.bin"),

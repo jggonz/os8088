@@ -169,6 +169,10 @@ _MIRROR = {
     # WF_HIBITS' sake - see the derivation below.
     "WF_NOANIM": ("kernel/wm.inc", 0x4000),
     "WF_STALE": ("kernel/wm.inc", 0x8000),
+    # kernel/driver.inc - the sound driver's service table (SPEC.md 51.2):
+    # the cell SPEC.md 34.13.7 switches, which tests/sndtick.py and the RAD
+    # replayer's rows (tests/radlib.py) both read out of drv_svc
+    "DSV_TICK": ("kernel/driver.inc", 6),
     # kernel/instance.inc - the instance record (SPEC.md 29)
     "I_STATE": ("kernel/instance.inc", 0),
     "I_FLAGS": ("kernel/instance.inc", 1),

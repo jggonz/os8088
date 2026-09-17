@@ -397,7 +397,14 @@ SND_CAP_RAD      equ 40h         ; OSAPI_SND_FM verbs 4..6 exist and answer in
                                  ; together with SND_CAP_FM
 
 ; --- the RAD replayer: OSAPI_SND_FM verbs 4..6 (SPEC.md 34.12, 96.4) ---------
-SNDFM_RADLOAD    equ 4           ; BX:SI -> a .RAD file, CX = its length
+SNDFM_RADLOAD    equ 4           ; BX:SI -> a .RAD file, CX = its length. BX
+                                 ; MUST NOT NAME A MOVABLE CLAIM (SPEC.md 66):
+                                 ; the verb banks the segment, yields for
+                                 ; hundreds of ms reading RADPLAY.DRV, then
+                                 ; re-reads it to copy the file, and a
+                                 ; compaction in that window relocates the
+                                 ; holder's word and not the driver's copy
+                                 ; (34.12). Pinned is the default
 SNDFM_RADPLAY    equ 5           ; AH = RADP_*. DUTY (34.12.2): while a tune
                                  ; is loaded, issue an OSAPI_SND_FM verb (6
                                  ; will do) every 9 ticks on CPU_8086, every 2
@@ -429,6 +436,8 @@ RADE_NOMEM       equ 7           ; the driver's claim for the tune was refused
 RADE_NOTUNE      equ 8           ; verb 5/6 with no tune of yours loaded
 RADE_PACER       equ 9           ; the RTC interrupt is in use (34.13.3)
 RADE_BADARG      equ 10          ; bad sub-op, or a buffer wrapping its segment
+RADE_NOPLAYER    equ 11          ; RADPLAY.DRV not on the system volume, or a
+                                 ; different vintage (SPEC.md 34.12.8)
 
 ; RADE_CORRUPT's detail, in AH (SPEC.md 96.4.4 - the rules and the offsets)
 RADC_TRUNC       equ 1           ; the file ends inside a structure
@@ -473,7 +482,8 @@ RAD_ST_LEN       equ 72
 RSTF_OPL3        equ 01h         ; the chip is an OPL3
 RSTF_SLOW        equ 02h         ; a slow-timer tune
 RSTF_LOOPED      equ 04h         ; the order list has wrapped / jumped
-RSTF_CHIP        equ 08h         ; the tune holds the chip (playing or paused)
+RSTF_CHIP        equ 08h         ; the tune holds the chip: playing or paused,
+                                 ; and through a refused start's stop sequence
 RSTF_HALTED      equ 10h         ; the DRIVER stopped it: a frame asked for more
                                  ; than RAD_PNMAX notes (96.4.5); next start clears
 

@@ -79,7 +79,7 @@ snd_entry:
     cmp al, DRVV_TIER
     je snd_tier
     cmp al, DRVV_READY
-    je .nosb                    ; nothing to do: this driver keeps no settings
+    je .ready                   ; nothing to do: this driver keeps no settings
                                 ; blob (SPEC.md 51.9) and the probe already
                                 ; ran at ATTACH, so READY just re-answers with
                                 ; the table it built then
@@ -112,7 +112,8 @@ snd_entry:
     mov word [snd_services+DSV_FM], opl_fm_op
     mov word [snd_services+DSV_TONE], opl_tone
     mov word [snd_services+DSV_RELINST], snd_release_both
-    or word [snd_services+DSV_CAPS], SND_CAP_FM
+    or word [snd_services+DSV_CAPS], SND_CAP_FM | SND_CAP_RAD
+    call rad_attach             ; SPEC.md 34.13.2: the RAD pacer's class
     cmp byte [opl_is3], 0       ; SPEC.md 34.11.1: an OPL3 says so with a bit
     je .opl2                    ; and nothing else - the chip is already back
     or word [snd_services+DSV_CAPS], SND_CAP_OPL3   ; in OPL2 mode (34.11.3)
@@ -181,6 +182,26 @@ snd_entry:
                                 ; card. It doubles as the answer to "did the
                                 ; DSP tier attach?", since nothing else can
                                 ; put that string on the page.
+    jmp short .nosb             ; THE ATTACH BODY ENDS HERE. It used to fall
+                                ; into .ready, so an OPL+SB machine ran
+                                ; rad_ready (an OSAPI_FILE_HERE) at ATTACH as
+                                ; well as at READY, while an AdLib-only one
+                                ; took .nosb above and ran it at READY alone.
+                                ; SPEC.md 51.2.2 pins the current directory to
+                                ; the driver's folder at DRVV_READY and not at
+                                ; DRVV_ATTACH, and [rad_scwd]/[rad_svol] are
+                                ; what every later verb 4 reads RADPLAY.DRV
+                                ; from - so the second call was reading the
+                                ; path off whatever directory the caller was
+                                ; in. Harmless only because drv_load always
+                                ; sends READY next; this is the routine whose
+                                ; last fallthrough leaked 12KB a load.
+.ready:
+    cmp byte [drv_up], 0
+    je .nohw
+    cmp word [snd_services+DSV_FM], 0
+    je .nosb
+    call rad_ready              ; where RADPLAY.DRV is (SPEC.md 34.12.8)
 .nosb:
     cmp byte [drv_up], 0
     je .nohw
@@ -269,8 +290,31 @@ snd_tier:
 snd_detach:
     push ax
     push cx
+    push dx
     cmp byte [drv_up], 0
     je .out
+    cmp word [rad_seg], 0       ; a RAD tune first: DSV_RELINST's body, at
+    je .notune                  ; IF = 0 as there (SPEC.md 34.12.4)
+    pushf
+    cli
+    call rad_kill
+    popf
+.notune:
+    mov cx, 40                  ; an int 70h BIOS chain suspended inside the
+.iwait:                         ; ROM's own sti returns into THIS image
+    cmp byte [rad_ibusy], 0     ; (rad_i70ch), and the kernel frees it the
+    je .inone                   ; moment we return: wait for it, bounded in
+    call OSAPI_GET_TICKS        ; ticks as sbl_detach's wait is (~2 s,
+    mov dx, ax                  ; SPEC.md 34.13.3)
+.itk:
+    call OSAPI_TASK_YIELD
+    cmp byte [rad_ibusy], 0
+    je .inone
+    call OSAPI_GET_TICKS
+    cmp ax, dx
+    je .itk
+    loop .iwait
+.inone:
     call sbl_detach             ; the Sound Blaster FIRST: it is the tier
                                 ; with an interrupt vector and a worker task
                                 ; in it, and neither may outlive this call -
@@ -306,6 +350,7 @@ snd_detach:
                                             ; attach that may clear this - a
                                             ; tier change must not
 .out:
+    pop dx
     pop cx
     pop ax
     ret
@@ -641,6 +686,13 @@ opl_tone:
     push cx
     or dl, dl                   ; one voice: the reserved channel 8
     jnz .bad
+    cmp byte [rad_chip], 0      ; a RAD tune holds the chip: a tone-on
+    je .free                    ; refuses and a tone-off answers without a
+    or ax, ax                   ; write (SPEC.md 34.12.3, decision D5)
+    jnz .bad
+    clc
+    jmp .out
+.free:
     mov cl, 8
     or ax, ax
     jz .off
@@ -770,12 +822,20 @@ opl_free:
 ; excluded by ownership, not by cli (SPEC.md 34.1).
 ; =============================================================================
 opl_fm_op:
+    cmp al, 4                   ; the RAD verbs keep their own registers
+    jb .note                    ; (AX and CX are answers there)
+    jmp rad_verbs
+.note:
     push ax
     push bx
     push cx
     push dx
     push si
     push ds
+    cmp al, 3
+    je .alloff
+    cmp byte [rad_chip], 0      ; a RAD tune holds the chip: verbs 0-2 refuse
+    jne .bad                    ; for every requester (SPEC.md 34.12.2)
     cmp al, 1
     jb .on
     je .off
@@ -783,7 +843,13 @@ opl_fm_op:
     je .patch
     cmp al, 3
     jne .bad
-                                ; --- verb 3: all-off --------------------------
+.alloff:                        ; --- verb 3: all-off --------------------------
+    cmp word [rad_seg], 0       ; from the tune's owner it unloads the tune
+    je .alloff2                 ; first (SPEC.md 34.12.4)
+    cmp [rad_owner], dh
+    jne .alloff2
+    call rad_unload
+.alloff2:
     mov cl, 0
 .all:
     call opl_owned
@@ -862,6 +928,16 @@ opl_fm_op:
 snd_release_both:
     cmp byte [drv_up], 0        ; nothing attached at all
     je .out
+    cmp word [rad_seg], 0       ; a dying tune owner's tune: silenced, the
+    je .norad                   ; chip in OPL2 mode, the claim freed - first,
+    cmp [rad_owner], al         ; so its channels are free before the FM
+    jne .norad                  ; release below would key them off again
+    call rad_kill
+.norad:
+    cmp [rad_lk], al            ; ...and a verb lock it died holding
+    jne .nolock
+    mov byte [rad_lk], 0xFF
+.nolock:
     cmp byte [sbl_up], 0        ; the Sound Blaster's grants + staging pool
     je .fm
     call sbl_release_inst
@@ -893,7 +969,19 @@ snd_release_both:
 ; SBL_ST_END, a HALT) leaves this proc named until the next site verb.
 ; -----------------------------------------------------------------------------
 snd_tickp:
-    jmp sbl_tick
+    call sbl_tick
+    cmp byte [rad_tick], 0      ; the RAD tick pacer (SPEC.md 34.13.5): one far
+    je .out                     ; call into the overlay, which swaps stacks
+    push es                     ; the claim told where we are NOW: the image
+    mov es, [rad_far+2]         ; can move between two ticks (34.12.8)
+.stamp:                         ; (tests/radmove.py's negative control)
+    mov [es:RO_RSEG], cs
+    pop es
+    mov al, RADV_TICK
+    mov bp, [rad_ent]
+    call far [rad_far]
+.out:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; snd_tick_ans - the atomic answer every site verb ends in
@@ -911,17 +999,21 @@ snd_tickp:
 ; cell, so the one staleness this cell can carry is a harmless stale proc.
 ;
 ; Live: a stream is open and its state is not SBL_ST_END (paused counts - the
-; watchdog is what a resumed transfer is guarded by). The RAD tick-class half
-; of the test arrives with the replayer.
+; watchdog is what a resumed transfer is guarded by), or a RAD tune armed on
+; the tick class ([rad_tick], SPEC.md 34.13.5).
 ; -----------------------------------------------------------------------------
 snd_tick_ans:
     pushf
     cli
     xor dx, dx
     cmp byte [sbl_str_act], 1
-    jne .set
+    jne .set0
     cmp byte [sbl_str_state], SBL_ST_END
+    jne .live
+.set0:
+    cmp byte [rad_tick], 0      ; ...or a RAD tune playing on tick class
     je .set
+.live:
     mov dx, snd_tickp
 .set:
     mov [snd_services+DSV_TICK], dx
@@ -1181,6 +1273,7 @@ opl_init:
     ret
 
 %include "sb.inc"               ; the Sound Blaster half (SPEC.md 34.5/34.6)
+%include "radres.inc"           ; the RAD replayer's resident half (34.12.8)
 
 %ifdef PICOMEM
 %include "picomem.inc"          ; ...and the PicoMEM's side of getting one to
@@ -1199,5 +1292,22 @@ opl_is3:    db 0                ; 1 = the probe answered OPL3 (SPEC.md 34.11.1)
 opl_own:    times 9 db 0xFF     ; per-channel owner instance (0xFF = none)
 opl_b0:     times 9 db 0        ; per-channel B0h image: the single-write
                                 ; key-off's source (SPEC.md 8.2/34.3)
+
+; --- the RAD replayer's resident state (radres.inc, SPEC.md 34.12.8) ---------
+rad_seg:    dw 0                ; the tune's claim, overlay and all; 0 = none
+rad_ent:    dw 0                ; the overlay's entry, out of its header
+rad_chip:   db 0                ; 1 = a tune holds the chip (34.12.2)
+rad_tick:   db 0                ; 1 = a tick-class tune is PLAYING (34.13.7)
+rad_class:  db 0                ; the pacer: 0 tick / 1 RTC (34.13.2)
+rad_svol:   db 0                ; the system volume RADPLAY.DRV is on...
+rad_scwd:   dw 0                ; ...and its folder, banked at DRVV_READY
+rad_nreq:   db 0                ; verb 4's working copies, under [rad_lk]
+rad_nver:   db 0
+rad_nseg:   dw 0
+rad_ncx:    dw 0
+rad_nsi:    dw 0
+rad_nbx:    dw 0
+rad_nrate:  dw 0
+rad_logseg: dw 0                ; a -DRADLOG build's register log, 0 = none
 
 OS88_DRV_END

@@ -128,7 +128,7 @@ small side task runs on, and a run sized to fill the box exactly is one that
 anything else on the box perturbs.  `$OS88_MARTY_JOBS` and `--marty-jobs`
 override.
 
-CAPABILITIES.  A row names what it needs (`marty`, `qemu`, `cc`, `net`) and
+CAPABILITIES.  A row names what it needs (`marty`, `qemu`, `cc`, `unicorn`, `net`) and
 is SKIPPED, loudly, when the machine has not got it - a container with no
 MartyPC build still gets the whole host-side tier rather than a wall of red.
 `--strict` turns a skip into a failure, which is what CI wants once the
@@ -234,6 +234,15 @@ def capabilities():
     # named its parent.
     if os.access(os.path.join(ROOT, "build/cc/SmallerC/smlrcc"), os.X_OK):
         caps.add("cc")
+    # Python's unicorn module - the host 8086 that runs a driver overlay
+    # instruction by instruction (t_radrace). A row that printed SKIP and
+    # returned 0 without it would score ok; a capability makes it a SKIP.
+    try:
+        import importlib.util
+        if importlib.util.find_spec("unicorn") is not None:
+            caps.add("unicorn")
+    except (ImportError, ValueError):
+        pass
     # WIREFRAME is an instrument and does not ship (SPEC.md 78.9), so `all`
     # builds wire.o88 and NO shipped floppy carries it - the disk comes from
     # `make wiredisk` and nothing in the suite runs that. Without this, the
