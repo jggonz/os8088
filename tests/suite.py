@@ -857,6 +857,28 @@ FAST = [
         "audience. "
         "SOAK and not fast: the .WAB format is the Weave family's - `soak "
         "-k 'weave*' -k 'wab' -k 'lmpack'`"),
+    Row("rad", "soak", py("tests/unit/t_rad.py"), 4.9,
+        "the RAD validator's hostile-file table (SPEC.md 96.4.4): 150-odd "
+        "files built by hand from the spec, each with the (RADE_*, RADC_*, "
+        "offset) triple verb 4 must answer, plus a truncation sweep, a "
+        "byte-flip sweep that must never walk the replayer off a tune's end, "
+        "a valid fan-out tune whose first frame reaches RAD_PNMAX and halts "
+        "(96.4.5 deviation 5, the cap taken out as its negative control), and "
+        "the PER-TICK budget on both pacer classes (34.13.6): two BPM-300 "
+        "tunes held to 2 x RAD_PNMAX - 1 = 63 note plays and WORK_TICK = "
+        "2,560 computed writes a tick, the one that caps every frame halting "
+        "on tick 0 and the one under the cap playing on - with round 0's "
+        "per-frame rule (81 a frame, no budget, no halt) as the negative "
+        "control that must exceed both. "
+        "The rules are SOUND.DRV's and the table holds tools/radsim.py to "
+        "them until the driver's own gate exists. "
+        "SOAK by rule 1 - the rules are one driver's - and still run by "
+        "EVERY `make` that could break it: the Makefile's .rad-hostchecks "
+        "stamp runs this file beside radsim --selfcheck whenever radsim, "
+        "this table, the fixtures or os88api.inc change (SPEC.md 96.8), so "
+        "a validator regression cannot pass `make` and the five seconds (4.85 "
+        "measured, CPU-bound) are "
+        "charged only to the change that touched the subject"),
     Row("wire", "fast", py("tests/unit/t_wire.py"), 2.5,
         "the Wire's two formats (SPEC.md 92.2 and 92.13), from both ends at "
         "once: tools/os88wire.py packs a fixture out of build/hello.o88 and "

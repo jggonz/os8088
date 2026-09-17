@@ -1,0 +1,103 @@
+diff --git a/crates/marty_core/src/devices/adlib.rs b/crates/marty_core/src/devices/adlib.rs
+index 31bd442b..735a6a72 100644
+--- a/crates/marty_core/src/devices/adlib.rs
++++ b/crates/marty_core/src/devices/adlib.rs
+@@ -52,6 +52,11 @@ pub struct AdLibCard {
+     pub usec_accum_second: f64,
+     pub timewarp_usec: f64,
+     pub addr: u8,
++    // os8088 patch 05: the second register array, NEW, and an OPL2 mode.
++    pub opl2: bool,
++    pub new: bool,
++    pub addr2: u8,
++    pub addr2_secondary: bool,
+ }
+ 
+ impl AdLibCard {
+@@ -69,6 +74,17 @@ impl AdLibCard {
+             usec_accum_second: 0.0,
+             timewarp_usec: 0.0,
+             addr: 0,
++            // MARTYPC_OPL2=1 makes every AdLib card in this process an OPL2:
++            // status bits 1-2 read SET (the YM3812's answer to SPEC.md
++            // 34.11.1's `(s2 & 06h) = 0` test) and base+2/base+3 decode
++            // nothing. The core is still Nuked-OPL3, which with NEW = 0 is
++            // the OPL2 register model; this is the machine a refusal gate
++            // for an OPL2 (a RAD 2.1 tune) and its probe's negative control
++            // run on, without a second machine config per card.
++            opl2: std::env::var("MARTYPC_OPL2").map(|v| v == "1").unwrap_or(false),
++            new: false,
++            addr2: 0,
++            addr2_secondary: false,
+         }
+     }
+ 
+@@ -136,9 +152,17 @@ impl IoDevice for AdLibCard {
+         self.catch_up(delta);
+ 
+         //log::debug!("Read from Adlib port {:04X}", port - self.io_base);
+-        match port - self.io_base {
+-            0 => self.opl3.read_status(),
+-            1 => 0x1F,
++        // os8088 patch 05: the core is Nuked-OPL3, a YMF262, so the card
++        // decodes the chip's second address pair as well. A YMF262 decodes
++        // only A0 on a read, so base+2 answers the status register exactly as
++        // base+0 does. The status byte's bits 1 and 2 read CLEAR - the OPL3
++        // answer to SPEC.md 34.11.1's `(s2 & 06h) = 0` test, which this core
++        // gave before the patch too - unless MARTYPC_OPL2=1, where they read
++        // SET and base+2/base+3 are not decoded.
++        match (port - self.io_base, self.opl2) {
++            (0, false) | (2, false) => self.opl3.read_status(),
++            (0, true) => self.opl3.read_status() | 0x06,
++            (1, _) | (3, false) => 0x1F,
+             _ => 0xFF,
+         }
+     }
+@@ -162,6 +186,38 @@ impl IoDevice for AdLibCard {
+             1 => {
+                 _ = self.opl3.write_data(data, OplRegisterFile::Primary, false);
+             }
++            // os8088 patch 05: base+2/base+3 (38Ah/38Bh) are the YMF262's
++            // second register array, 100h-1FFh. Before this they went
++            // nowhere, so 105h (NEW) could never be set and a driver that
++            // detected OPL3 off the status byte wrote into the void.
++            //
++            // NEW is modelled on the ADDRESS decode, as DOSBox does and a
++            // YMF262 does: with NEW = 0 an address written to base+2 selects
++            // the FIRST array, except 05h itself. So a 104h <- 00h made after
++            // 105h <- 00h lands on 04h here as on the chip, and SPEC.md
++            // 34.11.2's rule (no 1xxh write but 105h while NEW = 0) has a
++            // machine that can catch it being broken.
++            2 if !self.opl2 => {
++                self.addr2 = data;
++                self.addr2_secondary = self.new || data == 0x05;
++                let file = if self.addr2_secondary {
++                    OplRegisterFile::Secondary
++                } else {
++                    OplRegisterFile::Primary
++                };
++                _ = self.opl3.write_address(data, file);
++            }
++            3 if !self.opl2 => {
++                let file = if self.addr2_secondary {
++                    OplRegisterFile::Secondary
++                } else {
++                    OplRegisterFile::Primary
++                };
++                _ = self.opl3.write_data(data, file, false);
++                if self.addr2_secondary && self.addr2 == 0x05 {
++                    self.new = data & 0x01 != 0;
++                }
++            }
+             _ => {}
+         }
+     }
+@@ -171,6 +227,8 @@ impl IoDevice for AdLibCard {
+         let ports = vec![
+             (String::from("Adlib Address"), self.io_base),
+             (String::from("Adlib Data"), self.io_base + 1),
++            (String::from("OPL3 Address 2"), self.io_base + 2),
++            (String::from("OPL3 Data 2"), self.io_base + 3),
+         ];
+         ports
+     }

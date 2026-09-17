@@ -1927,7 +1927,7 @@ WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(SHIPIMGS) $(BUILD)/wire.o88 $(BUILD)/recorder.o88 \
      $(BUILD)/hello.o88 $(BUILD)/pacman.o88 \
      $(BUILD)/imgtest.o88 $(BUILD)/scribe.o88 $(BUILD)/livepayload.txt \
-     $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
+     $(WEAVEWABS) $(BUILD)/.weave-hostchecks $(BUILD)/.rad-hostchecks \
      cc-note test-fast
 # wire.o88 is named here and NOWHERE else in `all`, because WIREFRAME is built
 # but does not ship (SPEC.md 78.9, `make wiredisk`). Keeping it in the default
@@ -4594,6 +4594,28 @@ $(BUILD)/wire360.img: $(BUILD)/wire.o88 tools/os88disk.py
 # broken model stops the pack rather than writing bundles from it.
 $(BUILD)/.weave-hostchecks: tools/weavesim.py docs/WEAVE-SPEC.md | $(BUILD)
 	python3 tools/weavesim.py --selfcheck
+	@touch $@
+
+# --- RAD tunes: the host reference (SPEC.md 96.8) ------------------------------
+# tools/radsim.py is the validator and both replay engines SOUND.DRV's RAD verbs
+# are checked against (SPEC.md 34.12). --selfcheck is in `all` for weavesim's
+# reason: nothing else runs it until the driver's gates exist, and a model that
+# has drifted is only useful as a reference if something notices. It checks the
+# committed fixtures in tests/fixtures/rad/ are what `--make` composes, that
+# each still exercises what SPEC.md 96.7 promises, the start/stop sequences,
+# the sent-stream filter, the RADE_/RADC_ mirror with apps/os88api.inc, and the
+# pinned digests of each fixture's register stream - the streams `--crosscheck`
+# proved equal to Reality's own players, which is host-only and never here.
+# The stamp ALSO runs tests/unit/t_rad.py, the hostile-file table, which
+# --selfcheck does not cover: the suite registers it in soak (one driver's
+# rules, tests/suite.py rule 1), and a stamp is how a soak row is still run by
+# every `make` whose change could break it, and by no other.
+RADFIXTURES := $(wildcard tests/fixtures/rad/*.RAD)
+$(BUILD)/.rad-hostchecks: tools/radsim.py tests/unit/t_rad.py apps/os88api.inc \
+                          tests/unit/harness.py \
+                          $(RADFIXTURES) | $(BUILD)
+	python3 tools/radsim.py --selfcheck
+	python3 tests/unit/t_rad.py
 	@touch $@
 
 $(BUILD)/FORM.WAB: $(WEAVEDEMOS)/form.wml $(WEAVEDEMOS)/form.wjs \

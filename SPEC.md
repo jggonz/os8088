@@ -10394,12 +10394,24 @@ whichever slice the tick interrupted** (§34.2, §51.4):
 | SB 2.0, `snd_route = SPK` — `DSV_TICK` alone | **180** | 12 |
 | SB 2.0, both | **184–192** | **through the canary** |
 
-`DSV_TICK` costs **16 bytes of every slice, always** — it runs every tick
-whether or not anything is playing — and `DSV_TONE` costs the rest.
+`DSV_TICK` cost **16 bytes of every slice, always**, as measured before
+§34.13.7 switched it — it ran every tick whether or not anything was playing —
+and `DSV_TONE` costs the rest.
 `stkdiag`'s own floor row says the same thing one level up: **32 idle without
 a card, 52 with one.** So the 64 is short by ~16 the moment a driver is
 mounted, before a note is played, and the machine most likely to have a card
 in it is the one running a game.
+
+**The table above was taken while `DSV_TICK` was published at attach, and it
+is not any more** (§34.13.7): `SOUND.DRV` now asks for the tick only while a
+Sound Blaster stream is open or a tick-class RAD tune plays, so the middle
+row's 16 bytes are paid **while something streams**, and an idle machine with
+a card pays the first row's figure for the tick (`DSV_TONE` is unchanged, and
+still costs what it costs while a tone sounds). The rows stand as the
+measurement they were; a class is still sized against the machine **playing**,
+because that is when a game's worker is running, and the ~16 bytes are still
+the price then. Wave 2 of docs/RADBOX-PLAN.md re-reads `stkdiag`'s floor on
+an idle Sound Blaster box and records it beside the 52.
 
 - **The class is 256.** Measured at 256: **184, 188 and 192 of 256** over
   three runs, so 64–72 bytes free, and it takes slot 10. Cyclone was the
@@ -33589,8 +33601,18 @@ Two teardown corollaries, both about not trading a crash for a leak:
    `wm_clip_set`/`wm_clip_clear`, `osapi_video`,
    `osapi_get_ticks`, `osapi_mouse`, `osapi_srand`/`osapi_rand`,
    `task_sleep`, `task_yield`, `OSAPI_WM_WAKE`, `OSAPI_TASK_ALIVE`,
-   `osapi_snd_tone`/`osapi_snd_caps` and
+   `osapi_snd_tone`/`osapi_snd_caps`, **`OSAPI_SND_FM` verb 6 and no other
+   verb** (§34.12.7) and
    `wm_saveu`.
+   **`OSAPI_SND_FM` verb 6 is here because its own contract says ANY task**,
+   and a verb documented as worker-safe and missing from this list reads as
+   forbidden by omission (the paragraphs below say so twice). The slot's
+   body takes no lock and raises no `sch_lock` (`snd_req_inst` reads the
+   running task's instance, which on a worker is its own), and the driver's
+   verb 6 is one `pushf`/`cli` copy of 72 bytes out of the tune's claim. Verbs
+   0-5 are not on it: 4 claims heap memory and 5 hooks an interrupt and writes
+   hundreds of registers at the caller's IF - a visualiser's worker polls
+   verb 6 and its UI task does the rest.
    **`osapi_snd_tone` was missing from this list too, and is missing for the
    same reason `OSAPI_WM_WAKE` was.** `apps/os88api.inc` already names it
    among what a worker may call and spends five lines saying it is
@@ -48960,7 +48982,7 @@ Four things reach the driver, and the kernel decides all four:
 | `osapi_snd_caps` | ORs in `DSV_CAPS`, and reports the live tone route in BL |
 | `osapi_snd_fm` / `osapi_snd_stream` | dispatch to `DSV_FM` / `DSV_STREAM`, CF=1 with no driver |
 | `snd_tone_out` | the tone tier's sink: `DSV_TONE` if one is published, else `spk_tone` |
-| `snd_tick`, `snd_release_inst` | give the driver `DSV_TICK` and `DSV_RELINST` |
+| `snd_tick`, `snd_release_inst` | give the driver `DSV_TICK` and `DSV_RELINST`; the release, the FM slot and the stream slot take `DSV_TICK` back from the driver's DX (§34.13.7) |
 
 **The requesting instance is stamped by the kernel, not the driver.**
 `snd_req_inst` reads `[snd_inst]` and the running task's `T_INST`, both
@@ -49068,7 +49090,8 @@ and a `PCM_BG` stream may never be live at once.
 **Only the kernel can enforce it**, because the clip's state is `snd.inc`'s
 and the stream's is the driver's, and neither module can read the other's.
 `snd_str_busy` is the question and the answer in one call — stream **verb 8**,
-which is not in the package SDK: DL says what the kernel is about to do, AX
+which is not in the package SDK (nor is verb 9, the driver workers' own
+`DSV_TICK` re-assertion, §34.13.7): DL says what the kernel is about to do, AX
 comes back saying whether a stream is open. `osapi_snd_play` asks before its
 grant window opens (so the refusal owes no `popf`) and tells the driver again
 when the clip ends.
@@ -49667,6 +49690,1135 @@ whether `sbl_attach`'s F2h IRQ discovery agrees with the line the firmware
 took, are all the field machine's questions. The firmware reports DSP 2.1
 (`SBT_2`), which is the version gate `sb.inc` takes the auto-init `0x48`+`0x1C`
 path on, so that much is at least the path MartyPC's own DSP 2.01 exercises.
+
+### 34.11 OPL3 — the second register array, and the chip left in OPL2 mode
+
+`SOUND.DRV`'s FM tier was an OPL2 and nothing else: nine 2-op channels at
+388h/389h. A YMF262 (OPL3) answers the same two ports the same way, and adds a
+**second register array at 38Ah/38Bh** — nine more channels, the 4-op
+connection select at 104h and the `NEW` bit at 105h. This section is what the
+driver does with that, and it changes nothing for anything that does not ask:
+**every existing `OSAPI_SND_FM` verb, the tone tier and every FM package
+behave exactly as they did on an OPL2**, because the chip is left in OPL2 mode
+(105h = 0) whenever a RAD tune (§34.12) does not hold it.
+
+The four existing verbs, for the record — they were written down only in
+`apps/os88api.inc` and the driver until now:
+
+| AL | verb | registers |
+|---|---|---|
+| 0 | note-on | CL = channel 0..7, BX = Hz 19..6,208; claims the channel on first touch |
+| 1 | note-off | CL; the owner only |
+| 2 | patch-load | CL, DS:SI → 11 bytes (5 modulator registers, 5 carrier, C0h), staged by the X stub; claims |
+| 3 | all-off | keys off and releases every channel the requester holds — **and unloads its RAD tune** (§34.12.4) |
+
+Channel 8 is the tone tier's voice and no verb may claim it (§34.8).
+
+#### 34.11.1 Detection is one mask on the read the probe already makes
+
+`opl_probe`'s timer-flag dance reads the status port twice: s1 after the
+mask/reset, s2 after timer 1 has overflowed. An OPL2 answers with bits 1 and 2
+of s2 **set** (06h); an OPL3 answers them **clear**. So, once the existing
+presence test has passed:
+
+```
+present = (s1 & E0h) = 00h  and  (s2 & E0h) = C0h        ; unchanged
+opl3    = present           and  (s2 & 06h) = 00h        ; new
+```
+
+No port is written that was not written before, and no port at 38Ah/38Bh is
+touched on a machine where the test answers OPL2. The answer is kept in
+`[opl_is3]` (one byte of the driver's own data) and published as a capability
+bit:
+
+```
+SND_CAP_OPL3  equ 20h     ; set only together with SND_CAP_FM
+```
+
+in both `apps/os88api.inc` and `drivers/os88drv.inc` (`tests/unit/t_mirror.py`
+holds them equal). A package tests it from `OSAPI_SND_CAPS`'s AX exactly as it
+tests `SND_CAP_FM`. `DSV_NAME` does not change — nothing paints it (§34.8) and
+the capability bit is the machine-readable fact.
+
+**Three emulators, three answers, and each is a gate rather than an
+assumption.** QEMU's `-device adlib` is an OPL2 and must still read OPL2 after
+this change. MartyPC's Nuked-OPL3 core has **always** answered OPL3 - its
+status byte never sets bits 1 and 2, on the stock pin too - and patch 05 is
+what makes that answer true, by decoding 38Ah/38Bh as the second array (and
+modelling `NEW`'s address decode, §34.11.2); the same patch's `MARTYPC_OPL2=1`
+turns every AdLib card in that process into an OPL2 (status bits 1-2 set,
+38Ah/38Bh not decoded), so the cycle-accurate 8088 has a machine of each kind
+and the probe is its own negative control. 86Box's Sound Blaster Pro 2 and
+SB16 read OPL3 and its plain AdLib reads OPL2.
+
+#### 34.11.2 The second array, `NEW`, and the replay-path writer
+
+`opl_wr` keeps its contract (AH = register, AL = value) for 000h–0FFh and
+every existing caller. The replayer addresses **000h–1FFh**, so the driver's
+writers gain one input bit: a register number 100h–1FFh selects the address
+port **38Ah** and the data port **38Bh**. How the ninth bit reaches a routine
+is the driver's choice; the port pair is not.
+
+A write to 100h–1FFh is **never** made on a chip that did not answer OPL3,
+and **never while `NEW` = 0, except to 105h itself**. A YMF262 with `NEW` = 0
+decodes an address written to 38Ah into the FIRST array - DOSBox models it
+so, and MartyPC does with patch 05 - so a 104h <- 00h made then is a write of
+00h to 04h, the timer control register. Every sequence in this section and in
+§96.4.6 is ordered to obey the rule (104h before 105h <- 00h, never after it;
+a version 1.0 tune never sets `NEW` and never writes 1xxh but 105h), and
+`tools/radsim.py --selfcheck` asserts it over every stream it produces,
+reference and sent (§96.8).
+
+**Two writers, one port pair.**
+
+- **`opl_wr`** - select, 6 counted status reads at 388h, data, 35 counted
+  status reads, `pushf`/`cli` over select-to-data only (§34.1): ~270 us a
+  write on the 4.77 MHz 8088. Everything that runs at the caller's IF uses it:
+  FM verbs 0-3, the tone tier (whose tone-on runs inside `snd_tone_req`'s
+  window, §34.3, as it always has), attach, detach, and a RAD tune's start,
+  pause and stop (§34.12.2).
+- **`opl_wrf`, the replay-path writer** - index out, data out, and nothing
+  else. It is called only at IF = 0 - inside a replay frame (§34.13), and by
+  `DSV_RELINST`'s silence and patch reload (§34.12.3) - so it needs no window
+  of its own. Tens of clocks a write, against `opl_wr`'s ~1,300: a line that
+  retriggers nine instruments sends ~70 writes, which is ~19 ms at IF = 0
+  through `opl_wr` and well under a millisecond through this. Reality's own
+  players write this way (V1.1a's port routine is the two `out`s; V2.0a's
+  write callback is one register write), as has every DOS tracker, and the
+  counted reads were `opl_wr`'s margin for a note-level caller rather than
+  anything a YM3812 or YMF262 on the ISA bus has been shown to need. **If a
+  field machine's clone does need a gap, that is a report to take**, and the
+  fallback is `opl_wr` on the replay path, at the cost §34.13.6 names.
+
+The two cannot interleave: while a tune holds the chip FM verbs 0-2 refuse
+and a tone writes nothing (§34.12.3), and pause and stop disarm the pacer
+before their first write.
+
+#### 34.11.3 Attach on an OPL3 leaves it in OPL2 mode
+
+The YMF262 accepts writes to the second array (other than 105h itself) and to
+104h only while `NEW` = 1. So `opl_init` on an OPL3, after its existing
+first-array work, runs:
+
+```
+105h <- 01h            NEW on, so the array below is writable
+104h <- 00h            every channel 2-op
+120h..1F5h <- 00h      the second array cleared, keys off
+105h <- 00h            NEW off: an OPL2, as far as anyone can tell
+```
+
+That is 217 writes more than an OPL2's attach (3, plus the 214 registers of
+120h..1F5h), once, cold. On an OPL2 none of
+them is made.
+
+**OPL2 mode is the resting state and every exit returns to it**: on an
+OPL3, a RAD tune's stop (§34.12.2), all-off, `DSV_RELINST` and `DRVV_DETACH`
+each end with 105h <- 00h - preceded, for a version 2.1 tune (the only kind
+that sets `NEW`), by 104h <- 00h while `NEW` is still 1, which is §34.11.2's
+rule rather than a preference.
+
+### 34.12 The RAD replayer — `OSAPI_SND_FM` verbs 4, 5 and 6
+
+`OSAPI_SND_FM` is note-level: a frequency in Hz, a patch, a claim per channel.
+A tracker needs the whole chip at register level — its own F-Numbers and
+blocks, all nine channels, operator registers rewritten mid-note, and on an
+OPL3 both arrays — so a RAD tune (Reality AdLib Tracker, file versions 1.0 and
+2.1; §96.4 is the format) is played **inside `SOUND.DRV`**, and a package
+drives it with three new verbs. The replay step runs at **interrupt time**
+(§34.13), because a worker woken from an interrupt still waits for the
+running slice to end — up to 55 ms, and longest exactly when a full-screen
+visualiser is drawing (§8.1.2: only IRQ0 enters `sch_switch`).
+
+The slot is an X cell and its stub replaces ES with `KERNEL_SEG` before the
+driver runs (§20.3), so **no RAD verb can find the caller's segment in ES**.
+The two verbs that point at caller memory take the segment in **BX**, which no
+FM verb 4–6 otherwise uses. It is normally the caller's own DS; a heap claim's
+segment is equally valid, and is what a package with a large tune passes.
+
+**The verbs exist only where `SND_CAP_RAD` says so.** A driver that
+implements verbs 4-6 adds
+
+```
+SND_CAP_RAD   equ 40h     ; OSAPI_SND_FM verbs 4..6 answer in RADE_* codes;
+                          ; set only together with SND_CAP_FM
+```
+
+to its `DSV_CAPS` (in `apps/os88api.inc` and `drivers/os88drv.inc`, held equal
+by `tests/unit/t_mirror.py`, and `OS88_SND_CAP_RAD` in `apps/cc/os88.h`).
+**A `RADE_*` code means something only when that bit is set.** Without it
+verbs 4-6 do not answer in this vocabulary: `kern_small`'s slot is `stc` /
+`ret` with AL still the verb (§34.0), and a `SOUND.DRV` built before this
+section refuses every verb above 3 with CF = 1 and AX as the caller left it -
+so verb 4 comes back AL = 4, which reads as `RADE_NEEDOPL3`, and verb 6 AL = 6,
+which reads as `RADE_BUSY`. A system disk and an apps disk from different
+builds is an ordinary machine, so **a caller tests `SND_CAP_RAD` from
+`OSAPI_SND_CAPS` before its first verb 4**, and RADBOX says why when it is
+clear (§96.6).
+
+**Register contract, all three verbs.** In: AL = verb, the verb's own
+registers below; DH is overwritten with the requester by the kernel (§34.3)
+and restored on return. Out: CF = 0 and the verb's answer, or **CF = 1 and
+AL = a `RADE_*` code, AH = a detail (0 unless `RADE_CORRUPT`)**. BX, DX, SI,
+DI, BP, DS and ES are preserved; CX is an output where a verb says so and is
+preserved otherwise. `AX = 0` with CF = 1 is **`RADE_NOSINK`**: it is what
+`drv_svc_call` answers when no driver publishes `DSV_FM`, which a caller that
+tested `SND_CAP_RAD` does not meet, and it is numbered 0 so that a stray one
+reads as "no sink" rather than as a fault in the tune.
+
+| code | name | meaning |
+|---|---|---|
+| 0 | `RADE_NOSINK` | no sound driver, or no FM chip behind it |
+| 1 | `RADE_NOTRAD` | shorter than 17 bytes, or the 16-byte signature is not `RAD by REALiTY!!` |
+| 2 | `RADE_VERSION` | the version byte at 10h is neither 10h nor 21h |
+| 3 | `RADE_CORRUPT` | a validation rule failed: AH = the `RADC_*` detail, CX = the file offset (§96.4.4) |
+| 4 | `RADE_NEEDOPL3` | a version 2.1 tune on a chip that answered OPL2 (D1: refused, never downmixed) |
+| 5 | `RADE_BIG` | longer than `RAD_MAXLEN` |
+| 6 | `RADE_BUSY` | another instance holds an FM channel or a tune |
+| 7 | `RADE_NOMEM` | the claim for the tune was refused |
+| 8 | `RADE_NOTUNE` | verb 5 or 6 with no tune loaded by this requester |
+| 9 | `RADE_PACER` | the RTC's interrupt is already enabled by something else (§34.13.3) |
+| 10 | `RADE_BADARG` | an undefined sub-operation, or a buffer that wraps its segment |
+
+#### 34.12.1 Verb 4 — `SNDFM_RADLOAD`
+
+```
+in:   AL = 4, BX:SI -> the whole .RAD file, CX = its length in bytes
+out:  CF = 0: AL = file version (10h / 21h), AH = rate in whole Hz,
+              CX = rate in TENTHS of a Hz (§34.13.1)
+      CF = 1: AL = RADE_*, AH = RADC_* detail, CX = offset (RADE_CORRUPT only)
+context: a UI callback (it claims heap memory)
+```
+
+The checks run **in this order, and each refuses before the next reads**:
+
+1. `SI + CX > 10000h` → `RADE_BADARG`. A buffer that ends exactly at the
+   segment's end (`SI + CX` = 10000h) is legal.
+2. `CX < 17`, or bytes 0..15 are not the signature → `RADE_NOTRAD`.
+3. byte 10h not 10h/21h → `RADE_VERSION`.
+4. `CX > RAD_MAXLEN` → `RADE_BIG`.
+5. version 21h and `[opl_is3]` = 0 → `RADE_NEEDOPL3`.
+6. the full validation of §96.4.4 → `RADE_CORRUPT` with the first failure.
+7. another instance holds any of channels 0..7, or has a tune loaded →
+   `RADE_BUSY`.
+8. the claim (§34.12.5) → `RADE_NOMEM`.
+
+**Nothing is stopped, freed or written until every check has passed**, so a
+refused load leaves a tune that was already playing still playing. A load by
+the instance that already holds a tune replaces it: the old tune is stopped
+and freed (§34.12.4) only after step 8's claim has succeeded. **That order has
+a price, stated**: for the length of a replace the driver holds both claims,
+`ceil((old + RAD_WORK) / 1024)` KB and `ceil((new + RAD_WORK) / 1024)` KB - 46KB
+for two copies of the largest real 2.1 tune seen, 112KB at `RAD_MAXLEN` - and
+a machine without it refuses the replace with `RADE_NOMEM` while the old tune
+plays on. Stopping first (verb 5 stop, verb 3 all-off) frees the old claim and
+is the way through. The file is copied into the claim and the caller's copy is
+never read again.
+
+A load does **not** touch the chip. It is the start (verb 5) that takes it.
+
+```
+RAD_MAXLEN equ 49152      ; C000h
+```
+
+The ceiling is chosen from **addressing, not from the tunes that exist**: the
+tune and the replayer's whole working set (§34.12.5) share one claim that one
+16-bit offset addresses, and `RAD_MAXLEN + RAD_WORK` is 56KB — inside a
+segment with room to spare, and 3.3x the largest real version 2.1 tune seen
+(14,820 bytes). A worst-case valid 2.1 file is ~300KB (100 patterns of 2,945
+bytes), so no ceiling that fits a segment is "the format's", and the honest
+refusal is the one with a number in it.
+
+#### 34.12.2 Verb 5 — `SNDFM_RADPLAY`
+
+```
+in:   AL = 5, AH = sub-operation
+        0 RADP_START   from order 0, line 0 (a restart if already playing)
+        1 RADP_PAUSE   stop stepping and key every channel off
+        2 RADP_RESUME  carry on from where the pause left it
+        3 RADP_STOP    stop, silence, rewind, give the chip back
+out:  CF = 0, or CF = 1 and AL = RADE_NOTUNE / RADE_BUSY / RADE_PACER /
+      RADE_BADARG
+context: a UI callback (it hooks an interrupt and writes up to 534 registers:
+      a 2.1 stop sequence, 435, and the default patch reload, 99)
+duty: while a tune is loaded, its owner issues an OSAPI_SND_FM verb (verb 6
+      is enough) at least every 9 ticks on CPU_8086 and every 2 elsewhere,
+      from ONE task, in every state (§34.13.7)
+```
+
+**The poll duty binds every owner, not only RADBOX.** Verbs 4-6 are public
+SDK verbs, and the heal §34.13.7 relies on for a tick-class tune is the owner's
+next FM verb: a stale 0 a task switch writes into the kernel's `DSV_TICK` is
+repaired by nothing else. An owner that starts a tune and then never issues
+another FM verb leaves it frozen on held notes for as long as that lasts. So
+the period is part of verb 5's contract: from a start until the tune is
+unloaded, whatever its state, one task of the owner's issues an FM verb at
+least every **9 ticks** on `CPU_8086` and every **2** above it. Where the
+owner's UI task is held by a modal loop the duty lapses for that loop's length,
+and §34.13.7 states what that costs. §96.2 and §96.3 are RADBOX's instance.
+
+**Start takes the whole chip**, and refuses `RADE_BUSY` if another instance
+holds any of channels 0..7. What it does, in order, at the caller's IF except
+where a step says otherwise:
+
+0. If the tune is playing or paused, disarms the pacer (a restart writes no
+   stop sequence). Then **re-zeroes the whole replay state** to its at-load
+   values (§96.4.5) - so what a start plays is a function of the tune alone,
+   whether it follows a load, a stop, a pause, a HALT (§34.13.3 step 5,
+   whose `RSTF_HALTED` the start clears) or another start. Reality's
+   `player20.cpp` does not (its `Stop()` keeps channel frequencies, effects and
+   riff pointers), and a second start there depends on the first run.
+1. Claims channels 0..7 for the requester in `opl_own` and sets `[rad_chip]`.
+   From here until stop, **FM verbs 0, 1 and 2 refuse CF=1 for every
+   requester**, the tune's owner included — a note-on mixed into a tracker's
+   register stream corrupts both — and `DSV_TONE` refuses a tone-on with
+   CF = 1 and answers a tone-off with CF = 0 and no write (§34.12.3).
+2. Writes the version's **start sequence** (§96.4.6) — never filtered by the
+   shadow (§34.12.6), which it initialises.
+3. Arms the pacer (§34.13): on the RTC path this can refuse `RADE_PACER`, in
+   which case steps 1–2 are undone by the stop sequence before the refusal
+   returns.
+
+**Pause** disarms the pacer and keys off every channel whose shadowed B0h/1B0h
+image has bit 5 set (9 channels on version 1.0, 18 on 2.1), through the
+shadow. The chip stays claimed. **Resume** re-arms the pacer with its
+accumulator zeroed; notes held at the pause stay silent until the tune plays
+their channel again. Pause while paused, resume while playing and stop while
+stopped each answer CF = 0 and do nothing.
+
+**Stop** disarms the pacer, writes the version's **stop sequence** (§96.4.6,
+which on an OPL3 ends in OPL2 mode, §34.11.3), reloads the default patch on
+all nine channels (§34.12.3), releases channels 0..7, clears `[rad_chip]` and
+rewinds to order 0 - every write through `opl_wr` at the caller's IF. The tune
+stays loaded; start plays it again without a reload.
+
+#### 34.12.3 The tone tier, and the chip handed back
+
+The kernel copies a driver's service table at attach and at `DRVV_TIER`
+(§51.2) and at no other time, so a driver **cannot** move `DSV_TONE` for the
+length of a tune, and moving the tone tier to the PC speaker would take a
+kernel change (`snd_tone_out` falling back to `spk_tone` on the sink's
+refusal) that this section does not make - the user decided against it
+(decision D5 of docs/RADBOX-PLAN.md), so no kernel byte is spent on it. So
+**while a tune holds the chip, the tone tier refuses**: a beep during playback is silent, and
+`OSAPI_SND_TONE` answers CF = 1, which is a path the router already has
+(a sink's CF = 1 is how `opl_tone` already refuses a frequency above block 7). A
+tone that was sounding when the tune started was keyed off by the start
+sequence, and its later expiry arrives as a tone-off that the driver answers
+without touching the chip.
+
+**The chip comes back clean, at once, on every path.** A tune overwrites
+every channel's operators, including channel 8's tone patch, so whatever ends
+a tune reloads the default patch on all nine channels (99 writes) **before it
+clears `[rad_chip]`** - so no tone and no FM verb can reach a chip that still
+carries the tune's operators, and no flag is left to be tested on a later
+path. Who writes it depends on the IF they run at:
+
+- **A voluntary end** - verb 5 stop, or verb 3 all-off from the owner - is a
+  UI callback, and reloads through `opl_wr` at the caller's IF, right after the
+  stop sequence it has just written there.
+- **An involuntary end** - `DSV_RELINST`, and `DRVV_DETACH` through it - runs
+  at IF = 0 (§34.7's `snd_release_inst` window), and reloads through `opl_wrf`
+  (§34.11.2): ~120 back-to-back writes with its silence, about a millisecond
+  on the floor machine. Through `opl_wr` those 99 writes were ~28 ms of
+  interrupts off, which is why the first draft of this section deferred them
+  to the next tone-on - and that tone-on arrives inside `snd_tone_req`'s own
+  `pushf`/`cli` window (§34.3), so the deferral moved the 28 ms rather than
+  removing it. Nothing is deferred now.
+
+#### 34.12.4 Unloading: all-off, `DSV_RELINST`, detach
+
+- **All-off (verb 3)** from the tune's owner stops the tune (§34.12.2, if it
+  was playing or paused), frees its claim, and then does what verb 3 always
+  did. From anyone else it touches no tune.
+- **`DSV_RELINST`** for the owner (called at IF = 0 from both §29.4 teardown
+  paths, and from §53.3's bracket entry for every instance but the bracket's
+  own), if the tune holds the chip: disarms the pacer, keys off all 9 or 18
+  channels through the shadow, on an OPL3 writes 104h <- 00h (version 2.1
+  only) and 105h <- 00h, reloads the default patch (§34.12.3), then clears
+  `[rad_chip]` and releases channels 0..7. Holding the chip or not, it then
+  frees the claim. **A crashed or closed RADBOX cannot leave the chip in OPL3
+  mode, the RTC interrupting, or 56KB of heap claimed.** It writes at most 119
+  registers at IF = 0, all through `opl_wrf` - the full stop sequence is the
+  voluntary path's.
+- **`DRVV_DETACH`** runs the `DSV_RELINST` body first if a tune is loaded,
+  then its existing work.
+
+**A tune dies with another program's full-screen bracket.** §53.3 releases
+every other instance's sound on bracket entry, and a RAD tune is sound, so
+another package's F key stops RADBOX's tune (§96.6 says what RADBOX shows).
+RADBOX's own bracket keeps it — the bracket's caller is exempt.
+
+#### 34.12.5 The claim: the tune, the working set and the private stack
+
+Verb 4's claim is **one pinned block** (§66: never movable), taken with
+`OSAPI_MEM_CLAIM` for `ceil((CX + RAD_WORK) / 1024)` KB:
+
+```
++0                      the file, exactly as loaded
++CX (rounded up to even) the working set: per-instrument offsets, per-pattern
+                          and per-riff offsets, per-channel state, the
+                          512-byte register shadow, the status block
+end - RAD_STK           the private stack, growing down from the end
+```
+
+```
+RAD_WORK equ 8192        ; the working set plus the stack - a CEILING the
+                         ; driver asserts at assembly time, not a layout
+RAD_STK  equ 1024        ; the replay step's own stack
+```
+
+**Where each constant lives.** `RAD_WORK`, `RAD_STK` and `RAD_FRMAX`
+(§34.13.5) are the driver's own and live in `drivers/sound/sound.asm`; no
+package can see them. Everything a package also needs - `SND_CAP_*`,
+`SNDFM_*`, `RADP_*`, `RADE_*`, `RADC_*`, `RST_*`, `RSTF_*`, `RSC_*`,
+`RSCF_*`, `RAD_ST_LEN`, `RAD_MAXLEN` and `RAD_PNMAX` - is in
+`apps/os88api.inc`, and the driver's copy of each one it uses goes in
+`drivers/os88drv.inc` beside `SND_CAP_OPL3` (the driver includes that file and
+not the SDK); `tests/unit/t_mirror.py` holds every name the two files share
+equal. `tools/radsim.py --selfcheck` holds its own copies of the `RADE_*`,
+`RADC_*`, `RAD_MAXLEN` and `RAD_PNMAX` values to `apps/os88api.inc`.
+
+**The replay step runs on that private stack**, and returns to the
+interrupted stack before the handler returns. It has to: it runs inside IRQ0
+or IRQ8 on whichever task slice was interrupted, the version 2.1 engine
+recurses through riffs up to 8 deep (§96.4.5), and the slice it lands on may
+belong to a 192-byte stack class (§8.7.5).
+
+**The busy byte is tested BEFORE the swap, and both entries swap FIRST after
+it**, §9.10's way. `cmp byte [cs:rad_busy], 0` and `mov byte [cs:rad_busy], 1`
+need no register, and neither do `mov [cs:rad_oss], ss`, `mov [cs:rad_osp], sp`,
+`mov ss, [cs:rad_seg]` and `mov sp, [cs:rad_top]` - so **nothing is pushed
+before them**, and what each entry charges the stack it interrupted is fixed
+and stated. The order is the point: an entry that swapped first and tested
+second would reset SP to `rad_top` on a nested entry and write over the live
+frame it is nested inside - the outer handler's saved registers, or a BIOS
+handler running there.
+
+| entry | charged to the interrupted stack |
+|---|---|
+| the IRQ8 handler (§34.13.3), stepped | the CPU's 6-byte gate frame and nothing else |
+| the IRQ8 handler, the two BIOS chains (§34.13.3 steps 1 and 2) | the gate frame, 6 bytes of `pushf` and the far call, and the BIOS handler's own depth - the same BIOS depth the machine pays for that interrupt with no driver loaded, plus 6. Each chain is entered with the private stack EMPTY (step 1 and 2 pop what they pushed there before swapping back) |
+| the IRQ8 handler, nested (busy byte set, §34.13.3 step 0) | the gate frame and one `push ax`, 8 bytes, on top of whatever it nested inside - never the private stack |
+| tick class's pacer in `DSV_TICK` (§34.13.5) | `snd_tick`'s far call, 4 bytes, inside the ~16 bytes §8.7.5 measured for a driver's tick - **paid only while the tick is switched on** (§34.13.7): while a tick-class tune plays or a Sound Blaster stream is open, never on an idle machine. When a stream is open too, the watchdog half of the one tick proc runs first on the interrupted stack exactly as `sbl_tick` did, and the pacer swaps after it returns |
+
+**The busy byte is the whole re-entrancy guard.** It is set before the swap
+and cleared after the swap back, and both entries run at IF = 0 from gate to
+`iret` and **never `sti`** themselves - a nested IRQ0 on a stack in another
+segment would have `sch_switch` save an SP whose SS is not `LOW_SEG`. The
+only places an interrupt can nest are inside the two BIOS chains, which is
+why **both run on the interrupted stack**, where a nested IRQ0 finds the SS it
+expects: a BIOS int 70h handler may `sti` (the IBM AT listing's and SeaBIOS's
+periodic paths do not; nothing checks the AMI, Award and Phoenix ROMs of the
+86Box AT profiles or of a field machine, and nothing here depends on it). An
+IRQ8 that finds the byte set is acknowledged and not stepped (§34.13.3
+step 0); the tick discipline credits it.
+
+It is also why the replayer costs nothing resident beyond its code on a
+machine that never opens a tune: no stack, no shadow and no state exist until
+verb 4 claims them.
+
+#### 34.12.6 The register shadow, and what "the same writes" means
+
+The claim holds a 512-byte shadow of registers 000h–1FFh. The start and stop
+sequences are written **unconditionally** and set the shadow to what they
+wrote. After that, **a frame's write whose value equals the shadow is not
+sent** — on an OPL2 or OPL3 a repeated value is a no-op, key-on included (it
+is edge-triggered), and a line that retriggers nine instruments sends most of
+its two hundred-odd reference writes as repeats. That filter is the whole difference
+between the **reference stream** (every write the reference player makes) and
+the **sent stream** (what reaches the ports): `tools/radsim.py` produces both,
+and the driver's `-DRADLOG` build logs the sent stream (§96.8).
+
+**The version 2.1 engine reads registers back** - 104h in an instrument load,
+B0h/1B0h in a portamento, 20h/40h/C0h for effects M, V and U - and **it reads
+them from the shadow**. The shadow and the reference player's own image are
+equal while only the engine writes; they part only when something else writes
+through the shadow, which is pause's key-off (§34.12.2). Reading the shadow is
+what makes "notes held at the pause stay silent" true of a resumed portamento:
+it re-writes B0h with the key bit the pause cleared. radsim has no pause
+model, so the pause/resume stream is not gated (§96.8).
+
+#### 34.12.7 Verb 6 — `SNDFM_RADSTAT`
+
+```
+in:   AL = 6, BX:DI -> a buffer, CX = its length
+out:  CF = 0, CX = bytes written = min(CX, RAD_ST_LEN)
+      CF = 1, AL = RADE_BADARG (DI + min(CX, RAD_ST_LEN) > 10000h) - tested
+      FIRST - else RADE_NOTUNE (no tune of yours)
+context: ANY task, a worker included (§20.6 rule 7 names this verb and only
+      this one) - one pushf/cli copy, no lock, no sch_lock, no disk
+```
+
+**Verb 6 is a `DSV_TICK` site** (§34.13.7): after the copy it answers DX =
+the tick value recomputed from live state inside its own `cli` window, never a
+read of the cell, so a verb 6 on a tune the pacer HALTed switches the tick
+off. The kernel banks DX, so the caller never sees it.
+
+**On the RTC class, verb 6 also re-asserts PIE.** Inside the same window,
+while the tune is playing, it reads register B (§34.13.4's port discipline)
+and, if PIE is clear, sets it and reads C. §34.13.4 says what can clear it;
+RADBOX calls verb 6 every frame, so a pacer stopped that way restarts within
+one of RADBOX's frames instead of never.
+
+Everything a visualiser draws, in one far call a frame. The block is copied
+atomically, so a frame can never be seen half-stepped:
+
+```
+RST_STATE   equ 0    ; byte: 1 stopped / 2 playing / 3 paused. 0 is never
+                     ;       answered: with no tune, verb 6 refuses NOTUNE
+RST_VER     equ 1    ; byte: 10h / 21h
+RST_PACER   equ 2    ; byte: 0 the system tick / 1 the RTC (34.13)
+RST_FLAGS   equ 3    ; byte: RSTF_*
+RST_RATE    equ 4    ; word: frames per second in TENTHS (182 .. 1200)
+RST_ORDER   equ 6    ; byte: the order-list index playing
+RST_ORDLEN  equ 7    ; byte: the order list's length
+RST_PATT    equ 8    ; byte: the pattern playing, FFh = none
+RST_LINE    equ 9    ; byte: the line, 0..63
+RST_SPEED   equ 10   ; byte: frames per line
+RST_BURST   equ 11   ; byte: the most frames one pacer interrupt ran since
+                     ;       the last verb 6 - which clears it. 1 on the RTC
+                     ;       except when the tick discipline credits lost
+                     ;       periods (up to RAD_FRMAX); 2..7 is what a
+                     ;       tick-paced tune looks like
+RST_FRAMES  equ 12   ; dword: frames stepped since start
+RST_SECS    equ 16   ; word: whole seconds played since start, paused time
+                     ;       excluded, from the pacer's own clock; saturates
+RST_CHAN    equ 18   ; 9 x RSC_SIZE, tracker channel 0 first
+RAD_ST_LEN  equ 72
+
+RSTF_OPL3   equ 01h  ; the chip is an OPL3
+RSTF_SLOW   equ 02h  ; a "slow-timer" tune
+RSTF_LOOPED equ 04h  ; the order list has wrapped or a jump marker was taken
+RSTF_CHIP   equ 08h  ; the tune holds the chip (playing or paused)
+RSTF_HALTED equ 10h  ; the DRIVER stopped the tune: a frame asked for more
+                     ; than RAD_PNMAX note plays (96.4.5 deviation 5).
+                     ; RST_STATE is 1; the next start clears it
+
+RSC_NOTE    equ 0    ; byte: octave << 4 | note 1..12 of the channel's last
+                     ;       note; 0 = none since start
+RSC_INST    equ 1    ; byte: its instrument, 0 = none
+RSC_VOL     equ 2    ; byte: 2.1: the channel volume 0..64;
+                     ;       1.0: the carrier level 0..63
+RSC_KEYS    equ 3    ; byte: +1 on every key-on (wraps) - a new note is a
+                     ;       change, even the same note again
+RSC_FX      equ 4    ; byte: the effect the main track set on this line, 0 none
+RSC_FLAGS   equ 5    ; byte: RSCF_*
+RSC_SIZE    equ 6
+
+RSCF_KEYED  equ 01h  ; keyed on now
+RSCF_4OP    equ 02h  ; its instrument is algorithm 2..6 (2.1 only)
+RSCF_RIFF   equ 04h  ; a channel or instrument riff is running on it
+```
+
+A caller passing a shorter buffer gets the prefix; `CX` says how much, so a
+later, longer block is a compatible change.
+
+### 34.13 The pacer — RTC periodic interrupt on an AT, the system tick on an XT
+
+A RAD tune names its own frame rate, and the machine class decides what
+counts it (decision D2 of docs/RADBOX-PLAN.md). **PIT channel 0 is not
+touched** — §34.1 forbids re-rating it and nothing here asks to.
+
+#### 34.13.1 The rate, in tenths
+
+```
+slow-timer tune (flags bit 6)       182   (18.2 Hz, the system tick's rate)
+version 2.1 with a BPM (bit 5)      BPM x 4  (BPM 46..300 -> 184..1200)
+otherwise                           500   (50 Hz)
+```
+
+`BPM x 4` is `BPM x 2 / 5` in tenths, **exact** where the reference player
+truncates to whole Hz — a difference in timing only, never in the register
+stream. Verb 4's AH is the tenths divided by 10, truncated.
+
+#### 34.13.2 The class is decided at attach
+
+At `DRVV_ATTACH`, when the OPL answered:
+
+- `OSAPI_CPU_INFO` answers `CPU_8086` → **tick class**. No RTC port is read.
+- otherwise read CMOS registers A and B (indices 0Ah and 0Bh, the §34.13.4
+  port discipline). If `(A & 7Fh) = 26h` - the 32.768 kHz divider and the
+  BIOS's 1,024 Hz periodic rate - **and** `B & 70h = 0` - no periodic, alarm or
+  update interrupt on at rest - → **RTC class**; anything else → tick class.
+  A BIOS that leaves an RTC interrupt enabled at rest would otherwise refuse
+  `RADE_PACER` on every start, on a machine where the tick pacer works.
+
+The class never changes while the driver is loaded. **What the tick class
+needs from IRQ0 it asks for only while a tune plays**: `DSV_TICK` is no
+longer a cell a driver publishes at attach and leaves there, but one it
+**switches at run time** through the return of its own verbs (§34.13.7,
+decision D6 of docs/RADBOX-PLAN.md). `SOUND.DRV` has one tick proc, which
+serves both of its tick clients - the Sound Blaster watchdog (`sbl_tick`)
+and the tick class's pacer (§34.13.5) - and asks for it while **either** is
+live: a RAD tune playing on tick class, or a Sound Blaster stream open. RTC
+class never asks for the tick on a tune's behalf. So an XT with an AdLib that
+never opens a tune pays nothing for D2's tick pacer, and a machine with a
+Sound Blaster stops paying for its watchdog while nothing streams (§8.7.5).
+
+#### 34.13.3 RTC class — IRQ8, int 70h
+
+**Arm** (start, resume), in one `pushf`/`cli` window:
+
+1. Read register B. If `B & 30h` ≠ 0 - an alarm or update interrupt on - or
+   PIE (40h) is on while the BIOS wait flag (bit 0 of 0040:00A0h) is clear,
+   something else is using the RTC's interrupt: **refuse `RADE_PACER`**,
+   touching nothing. PIE on **with** the wait flag set is the BIOS's own
+   int 15h AH=83h/86h wait, and is joined rather than refused.
+2. Save the int 70h vector (0000:01C0h) and install the handler.
+3. Read register C, discarding a stale flag.
+4. Write register B with bit 6 (PIE) set and every other bit as read.
+5. Save bit 0 of the slave PIC mask (A1h) and bit 2 of the master's (21h);
+   clear both.
+6. Leave the index at 0Dh (§34.13.4). Zero the accumulator and the tick
+   discipline below, and record the BIOS tick count.
+
+**Register A is never written.** The periodic rate stays the BIOS's 1,024 Hz,
+which is the rate the BIOS's own int 15h AH=83h/86h wait counts in.
+
+**The handler**, entered at IF = 0 and never enabling interrupts itself:
+
+0. **Test the busy byte before anything else** (§34.12.5) - no register, no
+   push. If it is set, this IRQ8 has nested inside one of the BIOS chains of
+   steps 1 and 2: `push ax`, read register C, leave the index at 0Dh, EOI the
+   slave then the master, `pop ax`, `iret` - on the stack it interrupted,
+   never touching `rad_oss`, `rad_osp` or the private stack. It is not
+   stepped and not counted; the tick discipline credits it. Otherwise set the
+   busy byte and swap to the private stack.
+1. Read register B. If `B & 30h` ≠ 0 - an alarm or update interrupt that
+   something enabled **after** arm - pop everything pushed on the private
+   stack, swap back to the interrupted stack, and `pushf` / far-call the saved
+   vector **before** reading C, so the BIOS reads the AF/UF flags it is owed
+   and runs int 4Ah (it may `sti`; a nested IRQ8 takes step 0's path, a
+   nested IRQ0 finds `LOW_SEG`). On its return re-save SS:SP
+   (`mov [cs:rad_oss], ss` / `mov [cs:rad_osp], sp`), swap to the private
+   stack again, count this interrupt as one periodic interrupt and go to 5.
+   The count is sometimes one too many - an alarm-only interrupt, whose PF
+   the BIOS's read of C cleared before this handler could test it - and the
+   tick discipline's realignment absorbs it. A path nothing in os8088 creates:
+   no kernel code arms AIE or UIE, and arm refuses while either is on.
+2. If the BIOS wait flag (bit 0 of 0040:00A0h) is set, a BIOS int 15h
+   AH=83h/86h wait is running and **owns the flag register**: exactly as
+   step 1 - pop, swap back, `pushf` / far-call the saved vector **on the
+   interrupted stack** (it reads C, counts its wait and sends both EOIs, and
+   whether it `sti`s is the ROM's business, §34.12.5), re-save SS:SP, swap
+   in - then read register B and, if the BIOS cleared PIE on completing its
+   wait, set it again. Count this interrupt as one periodic interrupt. Go
+   to 5. This path is taken on every disk operation during playback on a
+   BIOS whose `int 13h` waits with AH=86h.
+3. Read register C. If bit 6 (PF) is clear the interrupt is spurious (B had no
+   alarm or update enabled, step 1): EOI the slave then the master and go
+   to 6 without stepping and without observing the tick count - a tick change
+   it misses is seen by the next counted interrupt, 976 us later.
+4. EOI the slave (A0h <- 20h), then the master (20h <- 20h).
+5. Leave the index at 0Dh, then:
+
+   ```
+   if the BIOS tick count's low word (0040:006Ch) differs from the value
+      last seen:  the tick discipline below -> credit; tick_notes = 0
+   k    = 1 + credit                         ; a word: at most 1 + 1,026
+   t    = acc + rate x k                     ; a DWORD - one 16 x 16 MUL
+   while t >= 10240 and fewer than RAD_FRMAX frames have run
+         and tick_notes < RAD_PNMAX:
+       t -= 10240 ; one frame ; tick_notes += the note plays it made
+       if the frame halted the tune (96.4.5 deviation 5): HALT, go to 6
+   if t >= 10240:  t = 10239                 ; plays slow, never queues
+   acc  = t                                  ; a word again, < 10240
+   if the loop left on tick_notes:  set the no-credit flag
+   secs_n += k ; if secs_n >= 1024: secs_n -= 1024, RST_SECS += 1 (saturating)
+   ```
+
+   `tick_notes` is **the note plays made since the BIOS tick last changed**,
+   whichever interrupts made them, so the work the replayer does in any one
+   tick is bounded at `2 x RAD_PNMAX - 1` note plays (§34.13.6) however many
+   periods land in it and however many are credited. `secs_n` is a word
+   (`k` is at most 1,027, so one subtraction suffices).
+
+   **HALT** is §96.4.5 deviation 5's end, run here at IF = 0: disarm (below),
+   write the version's stop sequence and reload the default patch through
+   `opl_wrf` (534 writes at most, ~4.5 ms once on the floor machine), release
+   channels 0..7, clear `[rad_chip]`, rewind to order 0, set `RST_STATE` = 1
+   and `RSTF_HALTED`. The tune stays loaded.
+6. Swap back, clear the busy byte, `iret`.
+
+**EOI is sent exactly once on every path**: by the handler on steps 0, 3
+and 4, by the chained BIOS handler on steps 1 and 2.
+
+**The tick discipline - the RTC paces, the BIOS tick keeps the count
+honest.** Counting interrupts is exact only while every period is delivered,
+and one is not whenever a frame outlasts it: the RTC raises no new interrupt
+until register C is read again and the PIC latches one edge, so a frame of
+3 ms at IF = 0 loses two of its three periods - on a 286 a retriggering line
+does that about eight times a second, ~4% slow at speed 6. So the handler
+also watches the BIOS tick count (0040:006Ch, low word), which IRQ0 keeps
+across any frame shorter than a tick, and credits what the RTC could not
+deliver:
+
+```
+n, exp, credit, d: words.  frac: a DWORD, and so are 290,672 and 1,193,182
+n += 1 for every counted periodic interrupt (steps 1, 2 and 5), saturating
+credit = 0
+when the tick count differs from the value last seen, by d = new - old:
+    if d is outside 1..18, or step 5's no-credit flag is set (cleared here):
+        exp = n = frac = 0                          ; re-recorded, no credit
+    else:
+        exp  += 56 x d ;  frac += 290,672 x d
+        while frac >= 1,193,182:  frac -= 1,193,182 ; exp += 1
+            ; 1,024 x 65,536 / 1,193,182 = 56.2436 periodic interrupts a tick
+        if exp > n:        credit = exp - n ; n = exp    ; periods never delivered
+        if n > exp + 57:   n = exp                       ; the two crystals, re-aligned
+        m = min(n, exp) ;  n -= m ;  exp -= m            ; renormalised
+    the new count is the value last seen
+a pause or arm:  exp = n = frac = 0, and the count re-recorded
+```
+
+**Renormalising is what keeps the words honest.** Without it `n` and `exp`
+only grow, a word laps after 1,165 ticks - 64 seconds of play - and at the lap
+`exp > n` credits ~65,000 periods. With it, after every tick change `exp` is 0
+and `n` is at most 57, so between two changes `exp` reaches at most
+`56 x 18 + 18` = 1,026 and the credit is bounded by the same figure. The two
+miscounts - step 1's alarm-only interrupt counted as periodic, and step 3's
+spurious interrupt not observing a tick change - are one period each way,
+absorbed by the realignment and by the next observation.
+
+The credit joins step 5's `k` for the interrupt that sees the tick change, so
+the average rate and `RST_SECS` follow the tick clock whatever a frame costs,
+and the spacing is still the RTC's 976 us grid. **A tick whose work reached
+`RAD_PNMAX` earns no credit**: those periods were swallowed by work the
+contract has just refused to repeat, and crediting them would run it again
+at once - the loop that keeps a heavy-but-legal file at IF = 0 all the time.
+
+**Disarm** (pause, stop, `DSV_RELINST`, detach, and step 5's HALT from inside
+the handler), one `pushf`/`cli` window. If
+the BIOS wait flag is **clear**: write B with PIE clear and every other bit as
+read; read C; restore the two PIC mask bits to what arm saved. If it is
+**set**, a BIOS wait still owns PIE and IRQ8, and B and both masks are left
+alone - clearing PIE there would strand the wait, and AH=86h would never
+return. Either way restore the vector and leave the index at 0Dh. The vector
+is restored unconditionally - nothing else in the system hooks int 70h, and a
+later hooker that did would be the defect.
+
+#### 34.13.4 The CMOS ports, and `clk_at_lock`
+
+`kernel/clock.inc` reads the CMOS through `clk_at_get` inside `pushf`/`cli`
+windows and writes it (`clk_at_write`) inside one, so **IRQ8 can never land
+between a kernel index write and its data access**. The driver follows the
+same discipline: index with bit 7 set (NMI masked) for the access, then 70h ←
+0Dh and one read of 71h to leave the index harmless with NMI enabled — the
+`clk_at_done` convention. A handler that runs between two separate
+`clk_at_lock` reads re-enables NMI one read early, which is harmless: each
+kernel read selects its own index. `clk_at_write` saves register B and
+restores it whole inside its window, so a clock set from the Control Panel
+during playback preserves PIE.
+
+**The BIOS rung is the one path that is not the kernel's discipline.** On a
+machine whose kernel clock took §37.90's `bios` rung - the ports answered the
+driver's register A test at attach, but the kernel's own `at` probe refused -
+a clock set from the Control Panel goes through `int 1Ah` AH=03h/05h
+(`clk_bios_write`), and a ROM may run that at IF = 1 between its own index
+and data. Two things can then happen during playback, and both are named
+rather than prevented, because the driver cannot ask which rung the kernel
+took:
+
+- IRQ8 lands between the ROM's index and data write and leaves the index at
+  0Dh, so that one write goes to register D, which ignores it: **the clock set
+  loses one field**, and setting it again fixes it.
+- The ROM writes register B with a constant and **clears PIE**: no periodic
+  interrupt arrives, so the tick discipline has nothing to credit from. Verb 6
+  re-asserts PIE while the tune plays (§34.12.7), and RADBOX calls it every
+  frame, so the tune stalls for at most one of RADBOX's frames.
+
+`int 1Ah` READS reach no RTC at run time: `clk_bios_read` is called only from
+`clk_probe`, at boot, before any driver attaches.
+
+#### 34.13.5 Tick class — `DSV_TICK` inside IRQ0
+
+`snd_tick` far-calls `DSV_TICK` inside IRQ0 at IF = 0, 18.2065 times a
+second (at the tick, never at `FSXF_FASTTICK`'s sub-ticks — §53.2.1). While a
+tune plays:
+
+```
+acc += rate ; tick_notes = 0
+while acc >= 182 and fewer than RAD_FRMAX frames have run
+      and tick_notes < RAD_PNMAX:
+    acc -= 182, one frame, tick_notes += its note plays   (§34.12.5's stack)
+    if the frame halted the tune: HALT (§34.13.3 step 5), return
+if acc >= 182: acc = 181                   (music never; a tick whose work
+                                            reached RAD_PNMAX, or a corrupt acc)
+secs2 += 2,000 ; while secs2 >= 36,413: secs2 -= 36,413, RST_SECS += 1
+```
+
+The tick is the interrupt here, so `tick_notes` is the same bound as the RTC
+class's - `2 x RAD_PNMAX - 1` note plays in any one tick - and HALT is the
+same end, less the pacer's hardware (tick class disarms by clearing its
+playing state). A HALT runs at interrupt time, where no verb returns, so the
+tick stays asked for until the owner's next FM verb - RADBOX's next verb 6
+poll - which answers the switch off (§34.13.7); until then each tick costs the
+tick proc one compare.
+
+```
+RAD_FRMAX equ 7          ; frames one pacer interrupt may run, either class
+```
+
+182 tenths of a tick against 18.2065 Hz is 0.04% slow. A 50 Hz tune runs
+**2 or 3 frames per tick**, 2.75 on average, and a 120 Hz one 6 or 7: the
+average is exact and the spacing is bursty, and the status block says so
+(`RST_PACER` = 0, `RST_BURST`). A slow-timer tune is exactly one frame per
+tick. `RAD_FRMAX` = 7 is the most the rate ceiling can ask of one tick
+(`(181 + 1,200) / 182`), so the cap bounds a corrupted accumulator and never
+music (and `tick_notes` never does: Reality's busiest seven consecutive
+frames play 26 notes, §34.13.6). `RST_SECS` in tick class counts ticks - 2,000 a tick against 36,413 a
+second, 18.2065 x 2,000, in sixteen bits.
+
+**A nested tick is not paced.** `snd_tick` is not called on a tick that nests
+inside the ROM chain's `sti` (`sch_chbusy`, §8.5), so that tick adds no rate
+and its frames are simply not played: the tune runs one tick late each time,
+which is the same event `[sch_chskip]` counts, and a 90-second QEMU run reads
+**0** of them. Spreading a burst across the tick with a sub-tick PIT read is an open
+measurement, not part of this contract (docs/RADBOX-PLAN.md §6).
+
+#### 34.13.6 What a frame may cost at IF = 0
+
+Both paths step at IF = 0, and on the target machine that is the budget that
+matters twice over: a 1,200-baud serial mouse delivers a byte every 8.3 ms
+into an 8250 with a one-byte holding register, so **a stretch longer than
+~8 ms at IF = 0 can lose a mouse byte**; and work that fills the tick it runs
+in leaves the UI task nothing, so **a stretch near 55 ms holds the machine**.
+The contract bounds the work three ways, prices it, and leaves the price to
+measure:
+
+1. **Port cost.** Every write in a frame goes through `opl_wrf` (§34.11.2),
+   tens of clocks, after §34.12.6's filter. The heaviest real line - every
+   channel retriggering an instrument - sends ~70 writes: ~19 ms through
+   `opl_wr`, under a millisecond through `opl_wrf`.
+2. **Work per frame.** A frame plays at most `RAD_PNMAX` = 32 notes, and the
+   frame that asks for more is the tune's last (§96.4.5 version 2.1
+   deviation 5): the driver HALTs it (§34.13.3 step 5). A version 1.0 frame
+   plays at most nine. Reality's busiest version 2.1 frame plays 14, and 27 is
+   every channel playing on its main track, its channel riff and its
+   instrument riff at once. What the cap stops is a file built to fan out -
+   riffs whose lines start riffs, nine channels at a time - whose one frame
+   would otherwise play ~9^8 notes: hours at IF = 0, a hang delivered by a
+   floppy.
+3. **Work per tick.** The cap per frame is not a bound on the machine:
+   `RAD_FRMAX` = 7 frames an interrupt multiplied it, and on the RTC class the
+   tick discipline credited back the periods a long frame swallowed, so the
+   heavier the frames the more of them ran (round 1 of wave 1 measured a legal
+   1,989-byte file holding every interrupt at the cap). So **no frame starts in
+   a BIOS tick whose note plays have reached `RAD_PNMAX`**, on either class,
+   and such a tick earns the RTC class no credit. The bound is therefore per
+   tick, whatever the file and whichever pacer:
+
+   ```
+   note plays in one tick     <=  2 x RAD_PNMAX - 1  =  63
+   computed reference writes  <=  WORK_TICK = 2,560     (t_rad's figure)
+   plus, once, a HALT         <=  534 opl_wrf writes
+   ```
+
+   `WORK_TICK` is what `tools/radsim.py`'s pacer model measures on the
+   heaviest shapes t_rad builds - 63 note plays at up to ~28 computed writes
+   each, and `RAD_FRMAX` frames of continuous effects - with headroom; the
+   same model under the round 0 rule (81 a frame, nothing a tick) computes
+   5,775 to 13,216. **Reality's tunes never reach the tick budget**: their
+   busiest three consecutive frames - a tick at 50 Hz - play 15 notes, and their busiest `RAD_FRMAX`
+   consecutive frames - one tick of the same music at the 120 Hz ceiling -
+   play 26. A tune that did would play those ticks slow, which is timing, never
+   the register stream.
+
+**The price, to be replaced by a measurement.** A computed reference write,
+the engine's arithmetic and the shadow compare whether or not it is sent,
+is ~10 us on the 4.77 MHz 8088 by this section's own line estimate (Reality's
+heaviest frame computes ~277 writes in ~2-3 ms), and could be three times
+that. So a tick at the bound is ~25 ms at IF = 0, and possibly ~75: the first
+is half a tick and the second is more than one. **The ceiling is half a tick,
+27 ms.** A 50 Hz tick holding a real line is ~4 ms and a 120 Hz one ~8 ms -
+the edge of the mouse budget, and the most any music asks. Wave 3 measures on
+MartyPC's 8088 the fixtures' worst line frame, their worst effect frame and a
+t_rad `HEAVY` tick at the bound, records all three in PERFORMANCE.md, and a
+bound tick over 27 ms **lowers `RAD_PNMAX` here** - 16 still clears every
+frame Reality wrote, and costs only the timing of their busiest 120 Hz ticks.
+On the RTC path a frame longer than one 976 us period costs a delivered
+interrupt, which §34.13.3's tick discipline credits back unless the tick's
+work reached the budget.
+
+#### 34.13.7 `DSV_TICK` is switched by the driver — the kernel change
+
+Decision D6 of docs/RADBOX-PLAN.md. Until this section `DSV_TICK` was fixed
+at attach: the kernel copies a driver's service table at `DRVV_ATTACH` and at
+`DRVV_TIER` (§51.2) and at no other time, so a driver that might ever want the
+tick had to publish it for good, and `snd_tick` far-called it inside IRQ0
+18.2 times a second for the life of the driver. A Sound Blaster published
+`sbl_tick` that way from the day it attached, and §8.7.5 measured what it
+cost: **~16 bytes of every slice, always**, and a far call's worth of cycles
+every tick, whether anything streamed or not. A tick-class RAD pacer would
+have added an XT with an AdLib to that bill.
+
+**The switch rides the return of the verbs that change what the tick has to
+serve.** `SOUND.DRV` returns **DX = the near proc (an offset in its own
+segment) the kernel should call each tick, or 0 for none**, and the kernel
+takes it, at exactly three sites in `kernel/snd.inc`, each immediately after
+the `call drv_svc_call` it already makes:
+
+| site | the call | when the kernel takes DX |
+|---|---|---|
+| `osapi_snd_fm` | `DSV_FM`, every verb (0-6) | CF = 0 |
+| `osapi_snd_stream`, main path | `DSV_STREAM`, every verb but 3 | CF = 0 |
+| `snd_release_inst` | `DSV_RELINST` | CF = 0 |
+
+```
+    call drv_svc_call
+    jc .keep                         ; a refusal leaves the tick as it was
+    mov [drv_svc+DSV_TICK], dx
+.keep:
+```
+
+- **Verb 3's path is not a site.** On `osapi_snd_stream`'s `.status` path DX
+  is the verb's answer (the consumed count, §34.5), so it is never a tick proc
+  and the kernel does not read it as one. A poll changes nothing the tick
+  serves.
+- **Stream verb 9, TICK, exists only to be a site.** It is not in the
+  package SDK, it takes no arguments, and it changes no stream state:
+  `SOUND.DRV` answers AX = 0, CF = 0 and DX = **the tick value recomputed
+  from live state** (below: the atomic answer) - never a read of its cell,
+  which is the whole of what makes it a heal. Its one caller is the driver's
+  own refill and drain workers, once a pass and **once more on each worker's
+  exit path** (below), through the public slot. A driver that has no worker
+  refuses it (CF = 1, AX = 7, bad verb), and a refusal writes nothing.
+- **`snd_str_busy`'s verb 8 is not a site either**, but verb 8 reached
+  through the public slot is: the main path takes every verb but 3. So
+  `SOUND.DRV` answers **DX = the atomic answer on verb 8 as well**,
+  whoever asks, and the kernel's own two callers of `snd_str_busy` must not
+  depend on DX surviving it. They do not: `spk_pcm_idle` banks DX around the
+  call and `osapi_snd_play` reads no DX after it and pops its own on exit.
+  `snd_str_busy`'s header comment says `clobbers: nothing`, and wave 2 corrects
+  it to DX - a comment, no byte.
+- **Every successful verb answers DX, not only the ones that change it.** The
+  kernel cannot tell a verb that armed something from one that did not, so a
+  driver that left DX as it found it would plant the caller's DX - with DH
+  stamped as the requester (§34.3) - in a cell IRQ0 far-calls. A refusal
+  (CF = 1) may leave DX as anything, because the kernel does not read it, and
+  **a refusal must not change what the tick serves**: arming a tune or a
+  stream is a success.
+- **`DSV_RELINST` answers CF = 0** (it cannot fail, §34.12.4), with DX.
+- **The caller never sees it.** Every site sits inside the stub's own
+  `push dx`/`pop dx` (`osapi_snd_fm`, the stream main path, and
+  `snd_release_inst`'s bank around `DSV_RELINST`), so §34.12's "DX preserved"
+  and §34.5's per-verb contracts are unchanged. DX out of `DSV_FM`,
+  `DSV_STREAM` and `DSV_RELINST` is the driver's contract with the kernel,
+  not a package's.
+
+**The atomic answer: recompute, write the cell, load DX - under one `cli`.**
+`DRVV_TIER` ends in `drv_publish`, which copies the whole table again (§51.2),
+so a driver that answered DX without writing `snd_services+DSV_TICK` would
+have the next tier change republish a stale proc - or a stale 0, unhooking a
+playing tune's clock. And driver verbs run in the caller's task at IF = 1
+under no lock (`drv_svc_call_x`), so a driver that decided its answer at one
+instant and wrote its cell at a later one would lose updates **in its own
+cell** exactly as the kernel's can (below). So every site verb - FM verbs 0-6
+(verb 6 included), every stream verb but 3 (verbs 8 and 9 included),
+`DSV_RELINST`, and both legs of `snd_tier` - ends in the same three steps
+**inside one `pushf`/`cli` ... `popf` window**, after whatever state change the
+verb made:
+
+```
+    pushf
+    cli
+    v = proc if (a stream is open and its state is not SBL_ST_END)
+               or (a tune is PLAYING on tick class)
+        else 0                          ; from live state, never from the cell
+    mov [snd_services+DSV_TICK], v
+    popf
+    DX = v
+```
+
+The cell is **never read back** - not by verb 9, not by verb 8, not by verb 6.
+What that buys is a property rather than a hope: **the driver's own cell cannot
+hold a stale 0.** Everything that makes something live (a stream open, a
+start, a resume) is a verb, and its recompute runs after its own state change
+with interrupts off, so the last recompute to run has seen every state change
+before it. Only interrupt time makes something not live (the watchdog's
+`SBL_ST_END`, the pacer's HALT) and it writes no cell, so the one staleness
+the driver's cell can carry is a **stale proc**, which is harmless (below). At
+attach the cell is 0, because nothing plays yet. The cost is driver bytes -
+a `pushf`/`cli`, two compares and a `popf` shared by every exit - and no
+kernel byte.
+
+**One proc, two clients.** `SOUND.DRV`'s tick proc runs `sbl_tick`'s watchdog
+when a Sound Blaster stream is open (its own tests are unchanged: it does
+nothing unless the stream is armed and playing), then the tick class's pacer
+when a tune plays on tick class (§34.13.5). The driver answers the proc while
+**either** is live and 0 when **neither** is, so the cell is:
+
+| live | `DSV_TICK` |
+|---|---|
+| nothing | **0** |
+| a Sound Blaster stream open (`sbl_str_act`), any class | the tick proc |
+| a RAD tune playing on tick class | the tick proc |
+| a RAD tune playing, or paused, on RTC class, and no stream | **0** |
+| a tune paused on tick class, and no stream | **0** |
+
+**What can be stale, and for how long - the kernel's copy only.** The driver
+decides DX and the kernel writes it, and between the two lie the driver's own
+`popf` and tail, `drv_svc_call_x`'s epilogue and the stub - all at IF = 1,
+under no lock.
+Site 3 is the exception: `snd_release_inst` runs its whole body inside
+`pushf`/`cli`, so nothing can come between its driver call and its write.
+At sites 1 and 2 **a tick can land in the gap, and so can a task switch**,
+and the two are different in kind.
+
+- **A tick in the gap** is harmless either way. The word `mov` is atomic
+  with respect to IRQ0 and the proc is a fixed offset in the driver's image
+  that tests its clients' state itself. Turning on (a start, an open), the
+  missed tick is not delivered, so a tune starts at most one tick later -
+  timing, never the register stream. Turning off (a stop, a close), the tick
+  calls the proc, which finds nothing live and returns.
+- **A task switch in the gap loses an update.** Task X's verb computes its
+  answer and X is switched out before the write; task Y's verb arms or
+  disarms something and writes its own answer; X resumes and writes the
+  older value over it. **A stale proc is harmless** - it costs the proc's
+  compares each tick until the next site verb, which is the "ended at
+  interrupt time" case below. **A stale 0 is not**: the tick is off while
+  something needs it. The interleavings that produce one: X's verb computes 0
+  (a close, a stop, or any poll with nothing live) while Y opens a stream or
+  starts a tick-class tune. Worker tasks are site callers too - a package's
+  stream feed (verb 1) or a RAD poll - so X and Y need not be UI tasks.
+- **`drv_publish` is a writer of the kernel's copy too**, at IF = 1 and
+  outside the three sites. It zeroes every cell and then copies the driver's
+  table, so a task switch inside it can leave the kernel's `DSV_TICK` at the
+  zero pass's 0, or at a value it read before Y's verb wrote a newer one. It is
+  the same stale 0 and the same heal repairs it: the driver's cell it copies
+  from is truthful, and the next site verb rewrites the kernel's.
+- **A stale proc from a different driver image** is the one case the
+  harmlessness argument does not cover. If X is switched out in the gap and,
+  before it resumes, `SOUND.DRV` detaches and a different sound-class driver
+  attaches and publishes, X's write plants the old image's offset in the new
+  driver's cell, and IRQ0 far-calls it until the new driver's first site verb
+  overwrites it. That needs a whole detach and attach - a Control Panel
+  round trip with disk reads - to complete inside one task's few-instruction
+  gap. **It is accepted and named, not guarded**, because a guard is kernel
+  bytes D6 did not grant.
+
+**A stale 0 in the kernel's copy is healed by the next site verb of whoever
+needs the tick** - which answers the atomic recompute, not the cell - **so each
+client is required to make one on a bounded period:**
+
+| client that needs the tick | its heal | a stale 0 lasts at most |
+|---|---|---|
+| a Sound Blaster stream (refill or drain worker live) | the worker calls stream **verb 9** through the public slot once every pass, before its one-tick sleep | one worker pass - normally one tick; longer while the worker waits on the scheduler or on a compaction (`OSAPI_TASK_PARK`). The 2-tick bound `tests/sndtick.py` asserts is a QEMU figure |
+| a tick-class RAD tune (§34.13.5) | the tune's owner issues an `OSAPI_SND_FM` verb on a bounded period **for as long as a tune is loaded** - the duty verb 5 pins on every owner (§34.12.2); RADBOX's instance is its verb 6 poll (§96.2) and its full-screen frame (§96.3) | one poll period (9 ticks on XT class, 2 elsewhere) or one full-screen frame; **longer while a modal loop holds the owner's UI task** - menu tracking, a window drag, a modal dialog, `OSAPI_WM_TIMER` not firing there - during which the tune holds its notes and resumes where it froze |
+
+The stream row is why verb 9 exists. Without it the stream owner's own
+polling is verb 3, which is not a site, so a stale 0 would last until close;
+the watchdog would never run, and on a lost block IRQ - the NORMAL path on
+QEMU (§35) - the stream would sit PLAYING forever, its worker never exiting
+and detach waiting on it (§51.7). Every stream has a worker for its whole
+open life (verb 0 spawns the refill worker and verb 4 the drain worker), so
+the table has no gap. The cost is one `OSAPI_SND_STREAM` far call and the
+driver's dispatch per pass while a stream is open - about 0.3-0.5 ms a pass
+on a 5150, 0.5-0.9% of the CPU while streaming (the far call alone is 46.7
+us) - and a few driver bytes; no kernel byte. On the worker's stack the call
+chain is ~40-50 bytes above the interrupt floor (the far call to the slot,
+`osapi_snd_stream`'s banks, `snd_req_inst`, `drv_svc_call` and
+`drv_svc_call_x`, then the driver's dispatch), on a 384-byte dynamic-pool
+stack, and wave 2 measures it rather than trusting that sum (below).
+
+**Each worker's exit path is a site too.** A worker that exits - the stream
+closed, or the watchdog set `SBL_ST_END` - calls verb 9 once more on its
+`.die` path, **before** `OSAPI_DRV_TASK AX=0`. `SBL_ST_END` counts as not live
+in the recompute, so the tick switches off when the worker leaves rather than
+when (if ever) the owner closes a dead stream; and if the worker's last pass
+raced the owner's close and left a stale proc, this call replaces it. A full fix - the three sites
+copying the driver's own cell under `cli` - would need kernel bytes beyond
+D6's 18 and is not taken.
+
+**The gate** is wave 2's `tests/sndtick.py`, and it **plants the lost update
+rather than waiting for one**, because the race needs a task switch in a gap
+of a few instructions and no emulator run will land it on purpose. The owner
+must not heal the cell itself, so the row's stream owner is a `-DSBPOLL` build
+of `tests/sbtest` that queues its data at open and afterwards issues **only
+verb 3** (not a site). While that stream plays, the row writes 0 through the
+emulator's memory interface:
+
+- **into both cells** - `[drv_svc+DSV_TICK]` and `SOUND.DRV`'s
+  `snd_services+DSV_TICK` - and asserts both read the tick proc again within
+  2 ticks (a QEMU figure). Poking the driver's cell too is what makes this row
+  a test of the recompute: a verb 9 that read its cell back would re-answer
+  the planted 0 for ever. A `-DSNDREADBACK` driver, whose verb 9 answers its
+  cell, is that negative control and must still read 0 after **36 ticks**;
+- **with a `-DSNDNOHEAL` driver** (no verb 9 call in either worker's loop), the
+  same owner and the same poke: the kernel's cell must still read 0 after
+  **36 ticks** - the negative control for the heal itself.
+
+The row also reads the refill worker's stack slot with `tools/stkwater.py`
+while verb 9 is in its loop, and records the figure beside §8.7.5's floor.
+
+**Ended at interrupt time, switched off at the next verb.** Two things end
+without a verb: a Sound Blaster stream the watchdog stops (`SBL_ST_END`,
+§34.5) and a tune the pacer HALTs (§34.13.3 step 5, §34.13.5). Neither can
+answer DX, so the tick stays asked for until the next site verb. For a
+stream that is the worker's own exit (above): the worker sees `SBL_ST_END`,
+and its `.die` path's verb 9 recomputes 0 - so a package that never closes a
+dead stream no longer keeps the tick on. For a tune it is the owner's next
+`OSAPI_SND_FM` verb, which §34.12.2's poll duty bounds. Until then each tick
+costs the proc its compares and nothing else, which is accepted and stated
+rather than fixed.
+
+**`DRVV_DETACH`** needs nothing new: `drv_release` clears the kernel's copy of
+the table (§51.4), `DSV_TICK` with it.
+
+**What it costs, and what it buys.** Measured by the coordinator on a
+prototype of exactly the shape above: **+18 bytes of kern_big `.text`**
+(three sites of `jc` + `mov [mem16], dx`, 6 bytes each), **no rung crossed** -
+the image's 512-byte rung goes from 23 bytes left to 5 - and **kern_small
+unaffected, +0**. Two of the three sites are already conditional:
+`osapi_snd_fm` and `osapi_snd_stream`'s live bodies are inside `%ifdef
+OS88_SNDCARD` (§34.0). The third is not - `snd_release_inst` assembles on
+both kernels, and `drv_svc` exists on kern_small - so **site 3's three lines
+carry their own `%ifdef OS88_SNDCARD` / `%endif`**, which is 0 bytes on
+kern_small and the same 6 on kern_big. Wave 2 lands the change and quotes
+`tools/kernsize.py` before and after **on both kernels** - kern_big +18
+`.text`, kern_small +0 - and a figure other than either is explained there,
+not absorbed. What it buys
+is every sound-card machine's idle tick: with nothing playing, `snd_tick`
+takes its `DSV_TICK = 0` branch, so a Sound Blaster machine stops paying
+§8.7.5's ~16 bytes of every slice and the watchdog's far call on every tick,
+and an XT with an AdLib pays nothing for a tick pacer it never uses. **The A/B
+stack gate** is wave 2's: on QEMU with `SB16=1` and with `ADLIB=1`,
+`[drv_svc+DSV_TICK]` reads 0 with nothing playing and non-zero while
+`tests/sbtest`'s stream is open (the Sound Blaster box), and while a tick-class
+tune plays (the RADBOX waves).
+
+**Every sound-class driver owes the DX answer, not only `SOUND.DRV`.** The
+duty binds any driver that publishes `DSV_FM`, `DSV_STREAM` or
+`DSV_RELINST` (§51.6 author rule 2): on every CF = 0 exit of each - verb 8
+included, and verb 9 if it answers it - DX is its tick proc or **0**. A
+driver that publishes none of the three owes nothing, and a driver that never
+wants the tick answers 0 everywhere. A driver that does want it owes the
+atomic answer above as well - recomputed from live state, written and loaded
+under one `cli` - or its own cell can hold a stale 0 that no heal repairs.
+Two drivers fail it today:
+
+- **A `SOUND.DRV` built before this section.** It answers its verbs with DX
+  as it happened to leave it, and the kernel would far-call that from IRQ0.
+  §51.2's table length (`DRV_H_DSV`) does not catch it, because no cell was
+  added. The two are always a pair on anything `make` writes - `KERNEL.SYS`
+  and `SYSTEM/SOUND.DRV` are on the same system disk, and the live media and a
+  hibernate image carry both - so the hazard is a driver copied by hand from an
+  older disk. It is named here rather than guarded, because a guard is kernel
+  bytes D6 did not grant.
+- **`drivers/hda/` on `origin/codex/hda-1015pn`**, not yet merged. Its
+  `hda_stream` publishes `DSV_STREAM`, and its verb 8 leaves the caller's DX
+  while its open and feed leave whatever DX last held. **Whichever of this
+  section and that branch merges second carries the fix**: every CF = 0 exit
+  of `hda_stream` (and of a `DSV_RELINST` if it publishes one) answers DX = 0.
+  Without it the first successful stream verb on an HDA machine plants a
+  garbage proc that IRQ0 far-calls at IF = 0 - a crash no build gate sees,
+  which is why wave 2 adds a host ratchet: a driver source that writes a
+  non-zero `DSV_FM`, `DSV_STREAM` or `DSV_RELINST` cell and never names
+  `DSV_TICK` fails `make`. **Its reach is exactly that** - a driver that has
+  never heard of `DSV_TICK`, the HDA shape. It cannot catch the older hazard
+  above: a pre-D6 `sound.asm` already names `DSV_TICK`, because it published
+  `sbl_tick` at attach, so the ratchet is no guard against an old
+  `SOUND.DRV`.
 
 ## 35. Recorder — the sound layer's recording client
 
@@ -69918,7 +71070,9 @@ attach so every later dispatch is a near read plus one far call:
 DSV_CAPS    dw  capability bits it ADDS to OSAPI_SND_CAPS
 DSV_FM      dw  near proc behind slot 0x00F8      (0 = none)
 DSV_STREAM  dw  near proc behind slot 0x0100      (0 = none)
-DSV_TICK    dw  near proc called from snd_tick - INSIDE IRQ0, at IF=0
+DSV_TICK    dw  near proc called from snd_tick - INSIDE IRQ0, at IF=0; 0 at
+                attach, then SWITCHED by the DX a sound driver answers
+                (34.13.7)
 DSV_RELINST dw  near proc: AL = an instance slot being torn down
 DSV_NAME    dw  -> a NUL sink name, in ITS segment
 DSV_TONE    dw  near proc: the tone tier's sink while it is loaded
@@ -70764,6 +71918,24 @@ spending nine bytes on a key entry and a record header, no longer has to.
    whole contract.
 2. **`DSV_TICK` runs inside IRQ0 at IF=0.** Keep it short, and touch no port
    that needs a long counted delay.
+   **Ask for it only while something needs it**: the kernel takes DX as the
+   new `DSV_TICK` after every successful `DSV_FM` verb, every `DSV_STREAM`
+   verb but 3, and `DSV_RELINST` (§34.13.7), so a sound driver answers DX =
+   its tick proc or 0 on every one of them, keeps its own table cell equal to
+   that answer (`DRVV_TIER` republishes the table), and never leaves DX as
+   the caller's. **Recompute, write and load in one `pushf`/`cli` ... `popf`
+   window**: the value comes from live state (what is open, what is playing)
+   and is never read back from the cell - verbs that only report, stream
+   verbs 8 and 9 and FM verb 6, included - because the verb runs at the
+   caller's IF = 1 and a decision taken outside the window can be written
+   over a newer one by a task switch. **This binds every driver that
+   publishes `DSV_FM`, `DSV_STREAM` or `DSV_RELINST`**, including one that
+   never wants the tick, which answers DX = 0 on all of them. The kernel's
+   copy can still be left at a stale 0 - by a task switch between the
+   driver's `popf` and the kernel's write, or inside `drv_publish` - so a
+   driver whose streams have a worker task calls stream verb 9 through the
+   public slot once a pass while one is open and once on the worker's exit
+   path, and a tune's owner keeps §34.12.2's poll duty (§34.13.7).
 3. **Stage what you are handed, and read it through ES.** A package's
    pointer is in the package's segment and you run in yours; the kernel
    stages the one case that exists (a patch-load's 11 bytes) into its own
@@ -119522,3 +120694,671 @@ The cheapest place to start is the pen: making `sc_advof` answer what
 change. It is not made here because it moves every caret, hit-test and
 alignment decision in the package at once, and that is a change to look at
 rather than to infer.
+
+## 96. RADBOX — "RAD BoomBox", a Reality AdLib Tracker player (`apps/radbox/`)
+
+A package that plays **RAD tunes** — the module format of Reality AdLib Tracker
+— through the replayer inside `SOUND.DRV` (§34.12), in a small window or full
+screen. The design record, with the four decisions the user took, is
+docs/RADBOX-PLAN.md; this section is the contract.
+
+| | |
+|---|---|
+| package | `apps/radbox/radbox.asm` → `RADBOX.O88`, header name `RADBOX` |
+| window title | `RAD BoomBox` |
+| documents | `.RAD`, declared (§54.6) and opened by association, or File ▸ Open |
+| requires | `SOUND.DRV` with an FM tier (`SND_CAP_FM`) and the RAD verbs (`SND_CAP_RAD`); a version 2.1 tune also `SND_CAP_OPL3` |
+| ships | **no tunes** (§96.7) |
+| `kern_small` | **omitted** (§96.9) |
+
+### 96.1 What it plays, and on what
+
+| file | version byte | OPL2 | OPL3 |
+|---|---|---|---|
+| RAD 1.0 (RAD V1.0a/1.1a) | 10h | plays | plays, in OPL2 mode |
+| RAD 2.1 (RAD V2.0a) | 21h | **refused** with its reason | plays |
+
+A version 2.1 tune on an OPL2 is **refused, never downmixed** (decision D1).
+Its four-operator instruments, its stereo panning and its use of eighteen
+channels have no honest OPL2 rendering, and a tune that plays wrong reads as a
+broken player rather than as a missing chip.
+
+### 96.2 The window
+
+One window, created at a size that fits every adapter (`OSAPI_WM_PREFER`),
+drawn with `font_run` (§6.1) and repainted **by field** — a field is repainted
+only when the status block (§34.12.7) says it changed (§11.90).
+
+**Every adapter, every CPU:**
+
+- the tune's **title line** — the first line of its description text (§96.4.2
+  decodes it), clipped to the window; `(no description)` when it is empty;
+- **order / pattern / line**, as `Ord 03/26  Pat 12  Line 41`;
+- **elapsed time** `m:ss` from `RST_SECS`;
+- the **rate and pacer**, as `50.0 Hz RTC` or `50.0 Hz tick` — the tick-paced
+  machine says so rather than pretending (decision D2);
+- three **transport buttons**, Play, Pause and Stop (`apps/os88ui.inc`), greyed
+  per §47 from `RST_STATE`;
+- one **message line** for the refusals of §96.6.
+
+**XT class** (`OSAPI_CPU_INFO` = `CPU_8086`) gets exactly that and nothing
+more: no meters, and the status block is polled every **9 ticks** (~0.5 s) by
+`OSAPI_WM_TIMER`. Every faster machine polls every **2 ticks**. **The poll
+runs for as long as a tune is loaded**, in every state including Pause and
+Stop, and never stops to save work: it is RADBOX's instance of the poll duty
+§34.12.2 puts on every tune owner, and the heal §34.13.7 names for a
+tick-class tune whose `DSV_TICK` a task switch set back to 0. `OSAPI_WM_TIMER`
+fires only from the UI main loop, so while a menu tracks, a window drags or a
+modal dialog - RADBOX's own File ▸ Open included - holds the UI task, the poll
+lapses, and §34.13.7 states that bound. **RADBOX issues
+every `OSAPI_SND_FM` verb from its UI task** - the WM_TIMER poll, the
+transport, the load - so it is one writer of the tick cell and never two, and
+no future full-screen worker of its own may call the slot.
+
+**Colour in the window is VGA only** (decision D3). When the window's own
+display (`OSAPI_WM_DISPLAY`, §39.16.4 — not the primary's) is `VID_VGA` and
+the CPU is not `CPU_8086`, the window adds **nine channel meters**, one per
+tracker channel in fixed colours, each a bar whose height follows `RSC_VOL`
+and which flashes on a change of `RSC_KEYS`. Every other display — CGA,
+Hercules, and the EGA geometry (§39.24) — gets **no meters**: not greyed
+meters, none.
+
+**Keys**: Space play/pause, `S` stop, `F` full screen, `O` File ▸ Open.
+
+**Menus** (§12.2): File (Open…, Close), Play (Play, Pause, Stop, Full Screen),
+and the About handler registered with `OSAPI_ABOUT_SET`.
+
+### 96.3 Full screen — F, and Esc back
+
+`F` enters an `OSAPI_FSX_RUN` bracket (§53.1) in the mode the window's adapter
+kind answers, **and the tune keeps playing across both transitions** — the
+replay step is an interrupt (§34.13), and §53.2 freezes tasks, not interrupts.
+The bracket is RADBOX's own, so §53.3's release on entry spares its tune.
+
+| adapter kind | mode | page flip | view |
+|---|---|---|---|
+| `VID_VGA`, CPU above `CPU_8086` | `FSXM_MODEX` 320x240x256 | `OSAPI_FSX_PAGE`, paced by `FSXW_VSYNC` | nine-channel VU/spectrum bars, the pattern's lines scrolling, the order strip, the tune text |
+| `VID_VGA`, `CPU_8086` | `FSXM_MODEX` 320x240x256 | **none**: the displayed page is drawn in place, dirty rectangles only, paced by `FSXW_TICK` | the same layout |
+| `VID_CGA`, `VID_EGA` | `FSXM_CGA320` 320x200x4 | none; dirty rectangles only, paced by `FSXW_TICK` | the same layout in the four-colour palette |
+| `VID_HERC` | `FSXM_HERC` 720x348 mono | none; dirty rectangles only, paced by `FSXW_TICK` | the same layout, 1bpp |
+
+The pattern view reads RADBOX's **own copy** of the file (§96.5), never the
+driver's.
+
+**A page flip redraws a whole page**, 76,800 pixels a frame, and on an 8088
+with a VGA that is a full repaint every frame - PERFORMANCE.md rule 1 broken on
+the target machine. So the flip is taken only above `CPU_8086`, where a full
+320x240 page is what Mode X is for; an XT-class VGA draws Mode X's displayed
+page in place with dirty rectangles, as CGA and Hercules do.
+
+**The pointer is RADBOX's.** Nothing in the bracket draws one (§53.1), so
+RADBOX draws its own arrow in every mode with a save-under, from
+`OSAPI_MOUSE` once per frame. **When pages flip, each page has its own
+save-under**: the arrow is drawn into the page about to be shown and erased
+from that page when it is next drawn, because the save-under of the page on
+the glass says nothing about the pixels of the page behind it. The mouse stays in **desktop coordinates**
+through a bracket (§53.1), so the position is scaled by the desktop geometry
+`OSAPI_VIDEO` answers **after `OSAPI_FSX_MODE` has returned** - inside the
+bracket it answers for the bracket's display alone (§39.18), which on a
+two-display machine is not the virtual desktop RADBOX's window was on - and
+then **clamped to the page**:
+
+```
+px = mouse_x * mode_w / desk_w          py = mouse_y * mode_h / desk_h
+px = min(px, mode_w - 1)                py = min(py, mode_h - 1)
+```
+
+— one right shift on VGA (640x480 → 320x240) and on CGA (640 → 320, 200 →
+200), none on Hercules, and the general form on the EGA geometry (350 → 200).
+The clamp is not decoration: a window on a second display enters the bracket
+with `mouse_x` at, say, 940, and `mou_clamp` pulls it onto the collapsed
+display only on the next movement, so the first poll scales to 470 on a Mode X
+page 320 wide - Missile Command's `mc_do_cross` clamps after scaling for the
+same reason. The coordinates are unsigned, so there is no low clamp to make.
+**The save-under rectangle is clipped to the page** as well: an arrow near
+the right or bottom edge saves, draws and restores only the part of its cell
+inside `mode_w x mode_h`.
+The three transport buttons are drawn and **clickable** in full screen, a
+press edge-detected from `OSAPI_MOUSE`'s AL. **Esc** or **F** leaves.
+
+**The frame loop polls verb 6 every frame**, from the UI task that runs the
+bracket. It is what the frame draws from anyway, and it is the poll duty of
+§34.12.2 inside a bracket where `OSAPI_WM_TIMER` does not fire: without it a
+stale 0 in `DSV_TICK` taken just before `F` would leave a tick-class tune frozen
+for the whole full-screen session. Every frame is well inside the duty's period
+on every pacing in the table above.
+
+### 96.4 The RAD file formats
+
+Pinned from Reality's own documentation and player sources — RAD V1.1a's
+`RAD.DOC` and `PLAYER.ASM`, RAD V2.0a's `RAD.HTML`, `player20.cpp` and
+`validate20.cpp` — **read for reference and never copied**: none of those
+files carries a licence, and nothing from either archive, code or tune, is in
+this repository (decision D4). All multi-byte values are little-endian.
+
+#### 96.4.1 The common header
+
+```
+00h..0Fh  "RAD by REALiTY!!"                 the signature, all 16 bytes
+10h       version: 10h = RAD 1.0, 21h = RAD 2.1
+11h       flags (per version, below)
+```
+
+#### 96.4.2 RAD 1.0 (version 10h)
+
+```
+11h   flags: bit 7 a description follows; bit 6 slow-timer tune;
+            bit 5 MUST be 0; bits 4..0 the initial speed
+12h   [description]  present iff flags bit 7: bytes up to and including a 00h
+      instruments    repeated: 1 byte number (00h ends the list),
+                     then 11 bytes - the operator registers, in this order:
+                       0 23h carrier    1 20h modulator
+                       2 43h carrier    3 40h modulator
+                       4 63h carrier    5 60h modulator
+                       6 83h carrier    7 80h modulator
+                       8 C0h            9 E3h carrier   10 E0h modulator
+      order list     1 byte length, then that many entries:
+                       00h..1Fh a pattern; 80h..FFh a jump marker to
+                       entry (value - 80h)
+      pattern table  32 words: each pattern's FILE OFFSET, 0 = empty
+      patterns       at the offsets the table names, each:
+                       line byte: bit 7 last line, bits 6..0 line number
+                       then entries until one has bit 7 set:
+                         channel byte: bit 7 last entry, bits 6..0 channel
+                         note byte:    bit 7 bit 4 of the instrument number,
+                                       bits 6..4 octave, bits 3..0 note
+                                       (1..12 = C# D D# E F F# G G# A A# B C,
+                                       15 = key-off, 0 = none)
+                         byte:         bits 7..4 instrument bits 3..0,
+                                       bits 3..0 the effect
+                         [parameter]   present iff the effect is not 0
+```
+
+The instrument number is 5 bits, 0 = none, 1..31. **A version 1.0 file has no
+end marker**: patterns may lie anywhere after the table, in any order, and
+bytes no offset reaches are ignored.
+
+The description (both versions) is text with a compression: 00h ends it, 01h
+starts a new line, 02h..1Fh stand for that many spaces, and 20h..FFh are
+themselves. RADBOX's title line is its first line.
+
+#### 96.4.3 RAD 2.1 (version 21h)
+
+```
+11h   flags: bit 7 MUST be 0; bit 6 slow-timer tune; bit 5 a BPM word
+            follows; bits 4..0 the initial speed
+12h   [BPM]          a word, present iff flags bit 5
+      description    ALWAYS present: bytes up to and including a 00h
+      instruments    repeated: 1 byte number (00h ends the list), then
+                       1 byte name length, the name,
+                       and either an FM instrument - 24 bytes:
+                         +0  bit 7 has a riff, bits 6..5 operators 3+4 pan,
+                             bits 4..3 operators 1+2 pan, bits 2..0 algorithm
+                             0..6
+                         +1  bits 7..4 operators 3+4 feedback,
+                             bits 3..0 operators 1+2 feedback
+                         +2  bits 7..4 detune, bits 3..0 the riff's speed
+                         +3  bits 5..0 volume
+                         +4  four operators, 5 bytes each: 20h-style
+                             (AM/VIB/EG/KSR/MULT), 40h-style (KSL, level),
+                             60h-style (AR/DR), 80h-style (SL/RR), E0h-style
+                             (waveform)
+                       or a MIDI instrument - 7 bytes counting byte +0,
+                         whose bits 2..0 = 7; byte +2 bits 7..4 = its
+                         version (only 0 is known)
+                       then, iff byte +0 bit 7: an instrument riff, a
+                         size-prefixed track (below)
+      order list     1 byte length (up to 128), then that many entries:
+                       00h..63h a pattern; 80h..FFh a jump marker
+      patterns       repeated: 1 byte number (FFh ends the list), a
+                       size-prefixed track
+      riffs          repeated: 1 byte id (FFh ends the list) - bits 7..4
+                       the riff 0..9, bits 3..0 the channel 1..9 - then a
+                       size-prefixed track
+      (end of file)
+```
+
+A **size-prefixed track** is a word N and then exactly N bytes of lines:
+
+```
+line byte:    bit 7 last line, bits 6..0 line number
+entry byte:   bit 7 last entry of the line, bit 6 a note byte follows,
+              bit 5 an instrument byte follows, bit 4 effect + parameter
+              follow, bits 3..0 the channel
+[note]        bit 7 reuse the channel's last instrument, bits 6..4 octave,
+              bits 3..0 note (1..12, or 15 = key-off)
+[instrument]  1..127
+[effect]      0..31, then [parameter] 0..99
+```
+
+**A pattern or an instrument riff has one or more entries per line** and ends
+the line on bit 7. **A channel riff has exactly one entry per line**: the
+reference player walks one entry and ignores the entry's channel nibble, so
+the validator requires that entry's bit 7 set, which every tune in RAD V2.0a's
+archive does.
+
+The effects, by number: 1 portamento up, 2 portamento down, 3 tone slide,
+5 tone slide + volume slide, 10 (A) volume slide, 12 (C) set volume, 13 (D)
+jump to line, 15 (F) set speed, and in 2.1 only 18 (I) ignore, 22 (M)
+multiplier, 27 (R) riff, 29 (T) transpose riff, 30 (U) feedback, 31 (V)
+operator volume. Every other number is accepted and does nothing.
+
+#### 96.4.4 Validation — the rules, the details and the offsets
+
+**Every byte of a tune is hostile** — it came off a floppy — and the reference
+players do no checking at all. So verb 4 (§34.12.1) validates the whole file
+before its first use, and `tools/radsim.py` implements **the same rules to the
+byte**, answering the same `(code, detail, offset)` triple;
+`tests/unit/t_rad.py` holds the two to a hostile-file table.
+
+The rules are **stricter than Reality's `validate20.cpp`** in four places, each
+because a looser file makes the replayer read outside the tune or walk a
+structure the tracker never writes: a jump marker may not name another jump
+marker (the reference then indexes its 100-entry pattern table with up to 127);
+a version 1.0 order list may not start with one (the reference's init does not
+resolve it); line numbers ascend strictly within a track and channels strictly
+within a line; and a pattern or riff number may not repeat. It also **corrects
+two bugs in Reality's documentation of its own format**: `validate20.cpp` reads
+the BPM word on flags bit 6, where the format document and the player both put
+it on bit 5; and `RAD.HTML` and `validate20.cpp` both give a MIDI instrument
+6 bytes, where `player20.cpp` reads the algorithm byte and skips six more -
+7 bytes, which is what both of the archive's MIDI tunes contain
+(`07 00 04 2C 00 00 40`), and at 6 bytes neither is valid. Every tune in both of Reality's
+archives passes these rules.
+
+The details (verb 4's AH when AL = `RADE_CORRUPT`):
+
+| detail | name | the rule that failed |
+|---|---|---|
+| 1 | `RADC_TRUNC` | the file ends inside a structure |
+| 2 | `RADC_FLAGS` | a flags bit that must be 0 is set (2.1 bit 7, 1.0 bit 5) |
+| 3 | `RADC_BPM` | the BPM word is outside 46..300 |
+| 4 | `RADC_INST` | an instrument number is out of range or not above the last one |
+| 5 | `RADC_MIDI` | a MIDI instrument's version nibble is not 0 |
+| 6 | `RADC_ORDLEN` | the order list is empty or longer than 128 |
+| 7 | `RADC_JUMP` | a jump marker names an entry past the list or another jump marker, or a 1.0 list starts with one |
+| 8 | `RADC_ORDER` | an order entry names a pattern past the format's range (1.0: 32, 2.1: 100) |
+| 9 | `RADC_PATNUM` | a 2.1 pattern number is 100 or more, or repeats |
+| 10 | `RADC_PATOFF` | a 1.0 pattern offset points inside the header or past the file |
+| 11 | `RADC_PTRUNC` | a 2.1 track's bytes end inside a line |
+| 12 | `RADC_EXTRA` | a 2.1 track, or the 2.1 file, has bytes after its end |
+| 13 | `RADC_LINE` | a line number is 64 or more, or not above the last |
+| 14 | `RADC_CHAN` | a channel is 9 or more, or not above the last in its line; or a channel-riff entry lacks bit 7 |
+| 15 | `RADC_NOTE` | a note nibble is 13 or 14 (2.1: also 0) |
+| 16 | `RADC_INSNUM` | a 2.1 entry's instrument byte is 0 or 128 or more |
+| 17 | `RADC_EFFECT` | a parameter is over 99 (2.1: or the effect over 31) |
+| 18 | `RADC_RIFFID` | a riff id's riff is over 9, its channel 0 or over 9, or it repeats |
+
+**The procedure** — `n` is the file length, `p` a cursor, `b[i]` a byte,
+`w[i]` the word at `i`; `need(k, at)` fails `RADC_TRUNC` at `at` when
+`p + k > n`; `fail(d, at)` returns `RADE_CORRUPT`, detail `d`, offset `at`.
+Steps are taken in exactly this order and the first failure is the answer.
+
+```
+V1  (verb 4 steps 1..5 have passed: n >= 17, signature, version)
+    p = 11h; need(1, 11h); flags = b[11h]; p = 12h
+V2  2.1: flags & 80h -> fail(FLAGS, 11h)
+         flags & 20h -> need(2, 12h); w[12h] outside 46..300 -> fail(BPM, 12h)
+                        p = 14h
+         description = yes
+    1.0: flags & 20h -> fail(FLAGS, 11h)
+         description = flags & 80h
+V3  if description: d = p; repeat: need(1, d); c = b[p]; p += 1 until c = 0
+V4  instruments: last = 0; repeat:
+      i = p; need(1, i); num = b[i]; p += 1; if num = 0: stop
+      1.0: num > 31 or num <= last -> fail(INST, i); last = num
+           need(11, i); p += 11
+      2.1: num > 127 or num <= last -> fail(INST, i); last = num
+           need(1, i); len = b[p]; p += 1; need(len + 1, i); p += len
+           alg = b[p]
+           if alg & 7 = 7: need(7, i); b[p+2] >> 4 != 0 -> fail(MIDI, i); p += 7
+           else:           need(24, i); p += 24
+           if alg & 80h: TRACK(instrument riff, rec = i)
+V5  order list: o = p; need(1, o); len = b[o]; p += 1
+      len = 0 or len > 128 -> fail(ORDLEN, o)
+      need(len, o)
+      for k = 0 .. len-1:  e = b[o+1+k]
+        if e & 80h: t = e & 7Fh
+             t >= len, or b[o+1+t] & 80h, or (1.0 and k = 0) -> fail(JUMP, o+1+k)
+        else: e >= (1.0: 32, 2.1: 100) -> fail(ORDER, o+1+k)
+      p += len
+V6  2.1 patterns: repeat: r = p; need(1, r); num = b[r]; p += 1
+      if num = FFh: stop
+      num >= 100 or num seen before -> fail(PATNUM, r)
+      TRACK(pattern, rec = r)
+V7  2.1 riffs: repeat: r = p; need(1, r); id = b[r]; p += 1
+      if id = FFh: stop
+      id >> 4 > 9, id & 0Fh = 0, id & 0Fh > 9, or id seen before
+        -> fail(RIFFID, r)
+      TRACK(channel riff, rec = r)
+    p != n -> fail(EXTRA, p)
+V8  1.0 patterns: t = p; need(64, t)
+      for k = 0 .. 31:  q = t + 2k; off = w[q]; if off = 0: next
+        off < t + 64 or off >= n -> fail(PATOFF, q)
+        p = off; last_line = -1
+        repeat (lines):
+          lp = p; lp >= n -> fail(TRUNC, lp)
+          lb = b[lp]; p += 1
+          lb & 7Fh >= 64 or lb & 7Fh <= last_line -> fail(LINE, lp)
+          last_line = lb & 7Fh; last_ch = -1
+          repeat (entries):
+            c = p; need(3, c)
+            b[c] & 7Fh >= 9 or b[c] & 7Fh <= last_ch -> fail(CHAN, c)
+            last_ch = b[c] & 7Fh; p += 3
+            b[c+1] & 0Fh is 13 or 14 -> fail(NOTE, c+1)
+            if b[c+2] & 0Fh != 0: q2 = p; need(1, q2)
+                                  b[q2] > 99 -> fail(EFFECT, q2); p += 1
+          until b[c] & 80h
+        until lb & 80h
+
+TRACK(kind, rec):
+    need(2, rec); size = w[p]; p += 2; p + size > n -> fail(TRUNC, rec)
+    e = p + size; last_line = -1
+    repeat (lines):
+      lp = p; p >= e -> fail(PTRUNC, lp)
+      lb = b[lp]; p += 1
+      lb & 7Fh >= 64 or lb & 7Fh <= last_line -> fail(LINE, lp)
+      last_line = lb & 7Fh; last_ch = -1
+      repeat (entries):
+        c = p; p >= e -> fail(PTRUNC, c); x = b[c]; p += 1
+        channel riff:         x & 80h = 0 -> fail(CHAN, c)
+        pattern / inst. riff: x & 0Fh >= 9 or x & 0Fh <= last_ch
+                                -> fail(CHAN, c); last_ch = x & 0Fh
+        if x & 40h: q = p; p >= e -> fail(PTRUNC, q)
+                    b[q] & 0Fh is 0, 13 or 14 -> fail(NOTE, q); p += 1
+        if x & 20h: q = p; p >= e -> fail(PTRUNC, q)
+                    b[q] = 0 or b[q] >= 128 -> fail(INSNUM, q); p += 1
+        if x & 10h: q = p; p + 2 > e -> fail(PTRUNC, q)
+                    b[q] > 31 or b[q+1] > 99 -> fail(EFFECT, q); p += 2
+      until channel riff, or x & 80h
+    until lb & 80h
+    p != e -> fail(EXTRA, p)
+```
+
+`need(k, at)` compares against the whole file (`n`); inside `TRACK` the bound
+is the track's end `e`, which `need(2, rec)` and the size test have already
+placed inside the file.
+
+#### 96.4.5 Replay semantics — the reference, and where we differ
+
+**Version 2.1 plays exactly as `player20.cpp` does** — its `Stop()`/`Update()`
+register stream is the reference stream (§34.12.6) — frame by frame: channel
+riffs and instrument riffs tick, the main track plays its line when the speed
+count runs out, and the continuous effects run for the instrument riff, the
+channel riff and the main track, in that order, on every channel. Tracker
+channels 0–2 pair OPL3 channels 0/3, 1/4, 2/5; 3–5 pair 100h/103h … 102h/105h;
+6–8 are 6/106h, 7/107h, 8/108h; algorithms 2 and 3 set the channel's bit in
+104h, 4–6 are built from two 2-op halves; riffs nest at most **8** deep; the
+master volume is fixed at 64. Its arithmetic is 16-bit and unsaturated where
+the reference's is, and the replayer reproduces the result byte for byte.
+The deviations, all five deliberate, and the last two each stop a read or a
+write the reference would make outside what it owns:
+
+1. **The start sequence begins with 105h <- 01h** (§96.4.6). The reference
+   clears the second array before it sets `NEW`, which a YMF262 ignores.
+2. **An instrument number the file does not define** plays as an all-zero FM
+   instrument - algorithm 0, no riff. The reference reads uninitialised
+   memory there; the validator cannot refuse it without refusing tunes RAD
+   itself saves.
+3. **The rate is exact in tenths** (§34.13.1) - timing only.
+4. **An algorithm 7 (MIDI) instrument has no carriers.** Set volume (C), or a
+   volume slide, on a channel whose instrument is a MIDI one records the
+   channel's volume and writes no register. The reference indexes its
+   carrier table with the algorithm, 7, one row past the table's seven.
+5. **A frame plays at most `RAD_PNMAX` notes, and the frame that asks for
+   more is the tune's last.** A counter zeroed at the top of every frame
+   counts each note play that passes the riff-depth guard; once it reaches
+   `RAD_PNMAX`, a note play returns at once, exactly as the depth guard makes
+   it return, **and marks the tune halted**. The frame runs to its end, and
+   then the tune stops: the reference stream is the frames up to and
+   including that one, `FFFDh` and the stop sequence, and the driver's HALT
+   (§34.13.3 step 5) writes the same stop sequence, reloads the patch and
+   sets `RSTF_HALTED`. The depth guard bounds how DEEP riffs nest (8), not
+   how WIDE they fan: a riff line may carry nine entries, each may start
+   another instrument's riff and play its first line at once, and a valid
+   226-byte file makes one frame of the reference play ~13 million notes and
+   write 36.5 million registers - hours at IF = 0 on the floor machine
+   (§34.13.6). **A tune that reaches the cap is not music**: the busiest frame
+   in Reality's tunes plays 14. Stopping it, rather than playing it capped
+   forever, is what bounds the machine to one heavy tick instead of every
+   tick; §34.13.6 has the per-tick half of that bound.
+
+```
+RAD_PNMAX equ 32         ; notes one frame plays before the tune halts, and
+                         ; the per-tick budget (34.13.3, 34.13.5). Above 27 -
+                         ; nine channels on main track, channel riff and
+                         ; instrument riff at once - and 2.3x Reality's 14
+```
+
+**The state a start begins from** (§34.12.2 step 0 re-zeroes to it, whatever
+came before): every channel's frequency, octave, volume, detune, key flags,
+last instrument and current instrument zero or none; every effect's
+portamento, volume slide and tone-slide state zero; every channel riff and
+instrument riff stopped (counter zero, no track); speed = flags bits 4..0,
+speed counter 1, order 0, line 0, riff depth 0, the note-play counter 0,
+master volume 64. An instrument the file never defines is all zero
+(deviation 2).
+
+**Version 1.0 plays exactly as RAD V1.1a's `PLAYER.ASM` does**, which is a
+different and smaller engine rather than the 2.1 one with fewer channels:
+
+- a frame first plays a line if the speed counter is 0 — resetting every
+  channel's portamento, volume slide and tone-slide flag — then sets the
+  counter to speed − 1 (so speed 0 is a 256-frame line), advances the line
+  and at line 64 the order; **then every frame** runs, per channel 0..8,
+  portamento, volume slide, tone slide;
+- a line's entry with a note first keys the channel off (B0h without bit 5),
+  loads its instrument if it names one, then writes A0h and then B0h with
+  key-on — except a key-off note (15), which writes no frequency; a tone slide
+  with a note sets the slide's target and plays nothing; the entry's effect
+  runs after its note;
+- a jump-to-line (D) **abandons the rest of its line**, moves to the next
+  order and seeks the first line at or after its parameter, and leaves the
+  speed counter at **speed** rather than speed − 1;
+- frequencies are handled as one absolute number, octave × 158h + (F-Number
+  − 156h), in 16-bit unsigned arithmetic including its wrap, and an effect
+  writes B0h first, then A0h;
+- set volume and volume slides change only the carrier level (43h-style),
+  clamped at 63; volume slide parameters 1..49 slide down and 51..99 slide up
+  by parameter − 50;
+- an instrument number the file does not define loads nothing.
+
+The deviations, three, and each stops a read outside the tune:
+
+1. **A note nibble of 0 is no note** - no key-off, no instrument load, no
+   frequency - whatever the octave and instrument bits say. `PLAYER.ASM`
+   indexes before its F-Number table there.
+2. **The last line of a pattern ends it.** `PLAYER.ASM` zeroes its pattern
+   pointer on the line whose bit 7 is set and then overwrites the zero with
+   the pointer past that line, so it goes on reading whatever follows the
+   pattern as more lines - the next pattern, or bytes past the end of the
+   file, none of them validated, where a channel byte of up to 127 indexes its
+   nine-entry register tables. Its own comment says the intent: the rest of
+   the pattern is blank.
+3. **A jump-to-line's seek reads the tune.** `PLAYER.ASM` reads each entry's
+   command nibble through CS, which is the tune only when the tune lies in the
+   player's own segment; here it is read from the tune.
+
+None of Reality's thirteen version 1.0 tunes reaches any of the three -
+`PLAYER.ASM` with and without them logs identically on every one - and
+`RV1.RAD` reaches deviations 2 and 3, each of which alone changes its log. A version 1.0 frame plays at most nine
+notes, one entry a channel, so it needs no note-play cap.
+
+**The state a start begins from** (§34.12.2 step 0): the tone-slide speed of
+every channel 1; its tone-slide target, tone-slide flag, portamento, volume
+slide and the carrier-level, A0h and B0h images 0; speed = flags bits 4..0,
+speed counter 0, order 0, line 0, and the pattern pointer order entry 0's
+pattern.
+
+**Both versions loop forever**: the order list wraps to entry 0, and
+`RSTF_LOOPED` records that it has.
+
+#### 96.4.6 The start and stop sequences
+
+Written unconditionally, in this order (§34.12.6):
+
+```
+1.0 start:  20h..F5h <- 00h ascending; 01h <- 20h; 08h <- 00h; BDh <- 00h
+1.0 stop:   20h..F5h <- 00h ascending
+            (then 105h <- 00h, on an OPL3 - 34.11.3; a 1.0 tune never sets
+            NEW, so 104h is not written, 34.11.2)
+
+2.1 start:  105h <- 01h;
+            for r = 20h..F5h:  v = FFh if 60h <= r < A0h, else 00h
+                               r <- v; (r + 100h) <- v
+            01h <- 20h; 08h <- 00h; BDh <- 00h; 104h <- 00h; 105h <- 01h
+2.1 stop:   the start sequence WITHOUT its leading 105h <- 01h,
+            then 104h <- 00h; 105h <- 00h
+```
+
+### 96.5 Opening a tune
+
+1. The name comes from `OSAPI_ARG_FILE` (an association launch, §54.5) or the
+   Standard File dialog (§38).
+2. A file longer than `RAD_MAXLEN` is refused **before it is read**, with
+   §96.6's sentence.
+3. RADBOX claims `ceil(size / 1024)` KB (`OSAPI_MEM_CLAIM`), reads the file
+   into it, and keeps it for the life of the tune — the full-screen pattern
+   view and the title line read it.
+4. `OSAPI_SND_FM` verb 4 with **BX = that claim's segment**, SI = 0, CX = the
+   size. A refusal is shown and the claim freed.
+5. Verb 5 `RADP_START`.
+
+A second tune replaces the first (verb 4 by the same instance, §34.12.1). A
+second RADBOX instance can load nothing while the first holds a tune; it says
+so (`RADE_BUSY`).
+
+**A replace costs twice, for a moment.** RADBOX keeps its old copy until
+verb 4 accepts the new one (a refused load leaves the old tune playing and
+viewable), and the driver holds both of its claims across the replace
+(§34.12.1): for two copies of the largest real 2.1 tune seen (14,820 bytes),
+15 + 15 KB in RADBOX and 23 + 23 KB in the driver, 76KB; at `RAD_MAXLEN`,
+48 + 48 and 56 + 56, 208KB. A machine short of that refuses with §96.6's
+memory sentence while the old tune plays on, and Stop then Open is the way
+through, because a stopped tune's claims go first.
+
+### 96.6 Refusals, in the window's own words
+
+Each is one line in the message area; none opens an alert.
+
+| cause | sentence |
+|---|---|
+| no sound driver (`OSAPI_SND_CAPS` DX bit 1 clear) | `No sound driver. Turn on SOUND.DRV in Control Panel > Drivers.` |
+| a driver with no FM tier (`SND_CAP_FM` clear), or `RADE_NOSINK` | `No FM chip. RAD tunes need an AdLib or a Sound Blaster.` |
+| an FM tier without the RAD verbs (`SND_CAP_RAD` clear, §34.12) - tested before verb 4 is ever called | `This SOUND.DRV is too old to play RAD tunes.` |
+| `RADE_NOTRAD` | `This is not a RAD tune.` |
+| `RADE_VERSION` | `Unknown RAD version. Only RAD 1.0 and 2.1 play.` |
+| `RADE_NEEDOPL3` | `This tune needs an OPL3 - this card is an OPL2.` |
+| `RADE_BIG` (or step 2 above) | `This tune is too big (over 48KB).` |
+| `RADE_CORRUPT` | `This tune is damaged: <reason> at <offset>h.` |
+| `RADE_BUSY` | `Another program is using the FM chip.` |
+| `RADE_NOMEM`, or RADBOX's own claim | `Not enough memory for this tune.` |
+| `RADE_PACER` | `The clock interrupt is in use by another program.` |
+| the tune vanished (§96.6.1) | `Stopped by another program.` |
+| the driver halted it (`RST_STATE` = 1 with `RSTF_HALTED`, §96.4.5 deviation 5) | `This tune is damaged: a frame plays too many notes.` |
+| `RADE_NOTUNE` anywhere else | `No tune is loaded.` |
+| `RADE_BADARG`, or a code this table does not name | `The sound driver refused (code <n>).` |
+
+`<offset>` is four hex digits, `<n>` is AL in decimal, and `<reason>` is, by
+detail: 1 `the file ends
+early`, 2 `bad header flags`, 3 `BPM out of range`, 4 `bad instrument`,
+5 `unknown MIDI instrument`, 6 `bad order list`, 7 `bad jump marker`, 8 `bad
+order entry`, 9 `bad pattern number`, 10 `bad pattern offset`, 11 `a pattern
+ends early`, 12 `extra bytes`, 13 `bad line number`, 14 `bad channel`, 15 `bad
+note`, 16 `bad instrument number`, 17 `bad effect`, 18 `bad riff number`.
+
+#### 96.6.1 A tune another program stopped
+
+§34.12.4: another package's full-screen bracket releases RADBOX's sound, and
+the driver unloads the tune. RADBOX learns it on its next poll — verb 6
+answers `RADE_NOTUNE` while RADBOX believes a tune is loaded — and shows the
+sentence above with the transport back at Stop. **Play** loads again from
+RADBOX's own copy (§96.5 step 4), so nothing is re-read from disk.
+
+### 96.7 No tunes ship, and the fixtures are ours
+
+**No disk carries a `.RAD` file** (decision D4). RADBOX opens tunes the user
+brings. The tests need tunes, so `tools/radsim.py --make` **writes its own**
+into `tests/fixtures/rad/` — composed by the tool, byte-deterministic, and
+committed — and `--make --check` fails when a committed fixture differs from
+what the tool now writes:
+
+| fixture | version | what it exercises |
+|---|---|---|
+| `RV1.RAD` | 1.0 | a description; 50 Hz; every 1.0 effect (1, 2, 3 with and without a note, 5, A up and down, C, D, F); key-off; all nine channels; a jump marker; instrument numbers above 15 (the note byte's bit 7) |
+| `RV1SLOW.RAD` | 1.0 | a slow-timer tune (18.2 Hz) |
+| `RV2.RAD` | 2.1 | 50 Hz; **every algorithm 0..6** and a MIDI instrument; all four pan settings on both operator pairs; every effect including I, M, R, T, U and V; instrument riffs and channel riffs, a riff that starts a riff; detune; a jump marker; jump-to-line in a pattern and in a riff |
+| `RV2BPM.RAD` | 2.1 | a BPM word (150 → 60 Hz) |
+| `RV2SLOW.RAD` | 2.1 | a slow-timer tune |
+
+Every instrument a fixture's notes name is defined (§96.4.5 deviation 2
+would otherwise make the reference comparison meaningless). `radsim.py
+--selfcheck` asserts the coverage in the table above from the fixtures
+themselves, not from a list, so a fixture that stops exercising an effect
+fails the build.
+
+### 96.8 `tools/radsim.py`, the register log, and the gates
+
+`tools/radsim.py` is the host reference, htmsim's shape: the validator of
+§96.4.4 and both replay engines of §96.4.5, in Python, turning a tune into a
+**register log**. `--selfcheck` is stamped into `make` like `weavesim.py`'s.
+A host-only cross-check, `--crosscheck`, holds both engines to Reality's own
+players. **Version 2.1**: it compiles `player20.cpp` in a scratch directory
+with a logging write callback and compares its log with radsim's reference
+stream on the three 2.1 fixtures, Reality's six tunes and its two MIDI tunes
+(`--ref` or `$RADSIM_REF`). **Version 1.0**: it translates V1.1a's TASM
+`PLAYER.ASM` to NASM in a scratch directory, applies §96.4.5's three 1.0
+deviations, runs it in Unicorn's 16-bit x86 and compares on the two 1.0
+fixtures and all thirteen tunes in `TUNES.ZIP` (`--ref1` or `$RADSIM_REF1`;
+`--faithful-v1` leaves the deviations out, which is how `RV1.RAD` is shown to
+reach them). It also reports the most notes any frame of each tune plays, so
+the claim that `RAD_PNMAX` never bites on music stays a measurement - and the
+most any `RAD_FRMAX` consecutive frames play, the per-tick budget's figure
+(§34.13.6). With no
+archive, no C++ compiler, no nasm or no `unicorn` module it **skips and says
+which** - but a `player20.cpp` harness that fails to compile with the archive
+and a compiler both present is a **failure**, never a skip - and nothing from either archive is ever in this tree.
+
+**The log format** (`.RLG`, and what the driver's `-DRADLOG` build writes):
+3-byte records, a register word then a value byte. Three register values are
+markers with a value of 00h:
+
+```
+FFFEh   the start sequence has ended; frame 1 follows
+FFFFh   a frame has ended
+FFFDh   the stop sequence follows
+```
+
+radsim writes either stream: the **reference stream** (every write the
+reference player makes — what the `player20.cpp` comparison uses) or the
+**sent stream** (§34.12.6's filter applied — what the driver logs and what
+the emulator gates compare against).
+
+| gate | where | asserts |
+|---|---|---|
+| `radsim.py --selfcheck` | host, `make` | the engines against the fixtures' own expectations; fixture coverage; §34.11.2's `NEW` rule over every stream; a start after a stop plays exactly what a fresh start does (§34.12.2 step 0) |
+| `tests/unit/t_rad.py` | host, `make` (run by the same stamp as `--selfcheck` whenever radsim, the table, a fixture, `os88api.inc` or `tests/unit/harness.py` changes; registered in `soak` as `rad`, one driver's rules) | every row of a hostile-file table gets the same `(code, detail, offset)` from radsim as this section states; a fan-out tune's frame stays within `RAD_PNMAX`, does not with the cap taken out, and halts the tune after that frame; through radsim's pacer model, on both classes over 64 ticks, `FANALL` (every frame would reach the cap) halts on its first tick and `HEAVY` (30 notes a frame, under the cap) plays on, each within §34.13.6's per-tick bound - which the round 0 rule, 81 a frame and nothing a tick, exceeds on both (the negative control) |
+| `tests/radopl3.py` | MartyPC + patch 05 | OPL3 detected; `RV2.RAD`'s and `RV1.RAD`'s sent streams from a `-DRADLOG` driver equal radsim's, tick-paced; `[drv_svc+DSV_TICK]` is 0 before start, non-zero while playing and 0 again after stop and after pause (§34.13.7) |
+| `tests/radopl2.py` | MartyPC + patch 05, `MARTYPC_OPL2=1` | OPL2 detected (the probe's negative control); `RV2.RAD` refused with §96.6's sentence; `RV1.RAD` plays tick-paced on an OPL2 and its sent stream has no 1xxh write |
+| `tests/radrtc.py` | QEMU `ADLIB=1` (an OPL2) | `RV2.RAD` refused; the RTC pacer: 50 frames a second, measured over **75 s** - past the 64 s at which un-renormalised word counters would lap (§34.13.3); a `-DRADSLOW` driver whose every frame busy-waits 4 ms still 50 ±1%, and with `-DRADNOCREDIT` too measurably short (the tick discipline's negative control); register B restored after close; the BIOS clock unharmed; `[drv_svc+DSV_TICK]` reads 0 throughout, because an RTC-class tune never asks for the tick (§34.13.7) |
+| `tests/sndtick.py` (wave 2) | QEMU `SB16=1`, and `ADLIB=1` | §34.13.7's switch: `[drv_svc+DSV_TICK]` reads 0 on an idle desktop on both boxes and non-zero while `tests/sbtest`'s stream is open on the Sound Blaster box, 0 again after its close; the planted lost update: while a `-DSBPOLL` sbtest's stream plays (it polls verb 3 only), 0 is poked into both `[drv_svc+DSV_TICK]` and the driver's own cell, and both read the proc again within 2 ticks; a `-DSNDREADBACK` driver (verb 9 answers its cell) and a `-DSNDNOHEAL` driver (no verb 9 in the workers' loops) are the two negative controls, each still 0 after 36 ticks; after close the cell is 0 again once the worker's exit-path verb 9 has run; the refill worker's stack slot read with `tools/stkwater.py` with verb 9 in its loop; and on the Sound Blaster box the idle slice's interrupt floor is measured (`stkdiag`) and recorded beside §8.7.5's 52. Beside it, not in it: `tools/kernsize.py` on both kernels, kern_big +18 `.text` and kern_small +0 |
+| `tests/radfsx.py` | QEMU, three adapters | F and Esc round-trip, the pointer drawn, a click lands, frames never stall across either transition |
+
+**What no gate reaches, named with the scenario that would.** The RTC
+handler's steps 0, 1 and 2 (§34.13.3) are not exercised by `radrtc`, which
+covers steps 3 to 5: the **nested** path and the **alarm chain** need a probe
+task that sets AIE (register B bit 5) during playback, and the **BIOS wait
+chain** needs a task that issues `int 15h AH=86h` during playback - on QEMU,
+whose SeaBIOS answers it. §34.13.4's BIOS-rung hazards need a machine whose
+kernel took the `bios` rung. **Pause and resume** have no reference stream:
+radsim has no pause model, so what a resumed portamento writes (§34.12.6) is
+held by the contract and by the emulator gates' ears, not by a log compare.
+
+### 96.9 Where it ships, and where it does not
+
+- **`kern_small`**: omitted, and a §24.5 row — it cannot reach `SOUND.DRV`
+  there, the ground `MODPLUG`, `TRACKER` and `AUDIO` already stand on.
+- **Disks and the live media**: placed in wave 6 of docs/RADBOX-PLAN.md.
+  From wave 4, which creates `apps/radbox/`, until wave 6,
+  `tests/unit/t_livefull.py` carries `radbox` in its exemptions with the
+  reason `placed in wave 6`.

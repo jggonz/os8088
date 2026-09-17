@@ -339,6 +339,24 @@ KSC_ESC     equ 0x01
                                  ; verb 3 or the instance is torn down;
                                  ; CHANNEL 8 IS NOT AVAILABLE - it is the tone
                                  ; tier's voice (SPEC.md 34.8).
+                                 ; Verbs 4..6 are the RAD replayer (SPEC.md
+                                 ; 34.12): 4 SNDFM_RADLOAD (BX:SI -> the file,
+                                 ; CX = length; out AL = version, AH = Hz,
+                                 ; CX = tenths of a Hz), 5 SNDFM_RADPLAY (AH =
+                                 ; RADP_*), 6 SNDFM_RADSTAT (BX:DI -> buffer,
+                                 ; CX = its length; out CX = bytes written).
+                                 ; THE SEGMENT IS IN BX, NOT ES: the stub
+                                 ; replaces ES before the driver runs. A
+                                 ; refusal is CF=1, AL = RADE_*, AH = RADC_*
+                                 ; (RADE_CORRUPT only, CX = the offset). While
+                                 ; a tune plays, verbs 0..2 refuse for everyone
+                                 ; and a tone-on is refused (SPEC.md 34.12.3).
+                                 ; TEST SND_CAP_RAD FIRST: without it verbs
+                                 ; 4..6 answer CF=1 with AL = the VERB (an old
+                                 ; SOUND.DRV, kern_small), which reads as a
+                                 ; RADE_* code it is not. Verb 6 is ANY-TASK,
+                                 ; a worker included (SPEC.md 20.6 rule 7);
+                                 ; verbs 0..5 are UI-callback only.
 ; OSAPI_SND_STREAM's context rule is PER-VERB (SPEC.md 20.3). Verbs 1
 ; (feed), 3 (status), 5 (read), 6 (stage) and 7 (grant) are ANY-TASK: a
 ; window callback or YOUR OWN worker may call them - the driver runs their
@@ -372,6 +390,104 @@ SND_CAP_FM       equ 02h
 SND_CAP_PCM_BG   equ 04h
 SND_CAP_PCM_EXCL equ 08h
 SND_CAP_PCM_IN   equ 10h
+SND_CAP_OPL3     equ 20h         ; the FM chip is an OPL3 (SPEC.md 34.11); only
+                                 ; ever set together with SND_CAP_FM
+SND_CAP_RAD      equ 40h         ; OSAPI_SND_FM verbs 4..6 exist and answer in
+                                 ; RADE_* codes (SPEC.md 34.12); only ever set
+                                 ; together with SND_CAP_FM
+
+; --- the RAD replayer: OSAPI_SND_FM verbs 4..6 (SPEC.md 34.12, 96.4) ---------
+SNDFM_RADLOAD    equ 4           ; BX:SI -> a .RAD file, CX = its length
+SNDFM_RADPLAY    equ 5           ; AH = RADP_*. DUTY (34.12.2): while a tune
+                                 ; is loaded, issue an OSAPI_SND_FM verb (6
+                                 ; will do) every 9 ticks on CPU_8086, every 2
+                                 ; above, from ONE task, in every state
+SNDFM_RADSTAT    equ 6           ; BX:DI -> a status buffer, CX = its length
+
+RADP_START       equ 0           ; from order 0 - and it takes the whole chip
+RADP_PAUSE       equ 1           ; stop stepping, key every channel off
+RADP_RESUME      equ 2
+RADP_STOP        equ 3           ; silence, rewind, give the chip back
+
+RAD_MAXLEN       equ 49152       ; the longest file verb 4 accepts (34.12.1)
+RAD_PNMAX        equ 32          ; the most notes one replay frame plays - the
+                                 ; fan-out cap, whose breach halts the tune
+                                 ; (SPEC.md 96.4.5 2.1 deviation 5) - and the
+                                 ; per-tick budget of 34.13.3/34.13.5
+
+; verb 4..6 refusals: CF=1 and AL = one of these - MEANINGFUL ONLY WHEN
+; SND_CAP_RAD IS SET (SPEC.md 34.12). AX = 0 is what drv_svc_call answers with
+; no FM sink published, which is why 0 is RADE_NOSINK.
+RADE_NOSINK      equ 0           ; no sound driver, or no FM chip behind it
+RADE_NOTRAD      equ 1           ; no RAD signature (or under 17 bytes)
+RADE_VERSION     equ 2           ; version byte neither 10h nor 21h
+RADE_CORRUPT     equ 3           ; AH = RADC_*, CX = the file offset (96.4.4)
+RADE_NEEDOPL3    equ 4           ; a RAD 2.1 tune on an OPL2 - never downmixed
+RADE_BIG         equ 5           ; over RAD_MAXLEN
+RADE_BUSY        equ 6           ; another instance holds FM channels or a tune
+RADE_NOMEM       equ 7           ; the driver's claim for the tune was refused
+RADE_NOTUNE      equ 8           ; verb 5/6 with no tune of yours loaded
+RADE_PACER       equ 9           ; the RTC interrupt is in use (34.13.3)
+RADE_BADARG      equ 10          ; bad sub-op, or a buffer wrapping its segment
+
+; RADE_CORRUPT's detail, in AH (SPEC.md 96.4.4 - the rules and the offsets)
+RADC_TRUNC       equ 1           ; the file ends inside a structure
+RADC_FLAGS       equ 2           ; a flags bit that must be 0 is set
+RADC_BPM         equ 3           ; BPM outside 46..300
+RADC_INST        equ 4           ; instrument number out of range / order
+RADC_MIDI        equ 5           ; unknown MIDI instrument version
+RADC_ORDLEN      equ 6           ; order list empty or over 128
+RADC_JUMP        equ 7           ; bad jump marker
+RADC_ORDER       equ 8           ; order entry names a pattern out of range
+RADC_PATNUM      equ 9           ; 2.1 pattern number >= 100 or repeated
+RADC_PATOFF      equ 10          ; 1.0 pattern offset outside the file
+RADC_PTRUNC      equ 11          ; a 2.1 track ends inside a line
+RADC_EXTRA       equ 12          ; bytes after a 2.1 track or file
+RADC_LINE        equ 13          ; line number >= 64 or not ascending
+RADC_CHAN        equ 14          ; channel >= 9 / not ascending / riff bit 7
+RADC_NOTE        equ 15          ; note 13 or 14 (2.1: also 0)
+RADC_INSNUM      equ 16          ; 2.1 entry instrument 0 or >= 128
+RADC_EFFECT      equ 17          ; parameter > 99 (2.1: effect > 31)
+RADC_RIFFID      equ 18          ; bad or repeated riff id
+
+; verb 6's status block (SPEC.md 34.12.7), RAD_ST_LEN bytes, copied atomically
+RST_STATE        equ 0           ; byte: 1 stopped / 2 playing / 3 paused
+                                 ; (0 never: no tune is RADE_NOTUNE)
+RST_VER          equ 1           ; byte: 10h / 21h
+RST_PACER        equ 2           ; byte: 0 the system tick / 1 the RTC
+RST_FLAGS        equ 3           ; byte: RSTF_*
+RST_RATE         equ 4           ; word: frames per second, in TENTHS
+RST_ORDER        equ 6           ; byte: order-list index playing
+RST_ORDLEN       equ 7           ; byte: order-list length
+RST_PATT         equ 8           ; byte: pattern playing, FFh = none
+RST_LINE         equ 9           ; byte: 0..63
+RST_SPEED        equ 10          ; byte: frames per line
+RST_BURST        equ 11          ; byte: most frames one pacer interrupt ran
+                                 ; since the last verb 6 (which clears it);
+                                 ; up to RAD_FRMAX on either pacer
+RST_FRAMES       equ 12          ; dword: frames since start
+RST_SECS         equ 16          ; word: seconds played, pauses excluded
+RST_CHAN         equ 18          ; 9 x RSC_SIZE, tracker channel 0 first
+RAD_ST_LEN       equ 72
+
+RSTF_OPL3        equ 01h         ; the chip is an OPL3
+RSTF_SLOW        equ 02h         ; a slow-timer tune
+RSTF_LOOPED      equ 04h         ; the order list has wrapped / jumped
+RSTF_CHIP        equ 08h         ; the tune holds the chip (playing or paused)
+RSTF_HALTED      equ 10h         ; the DRIVER stopped it: a frame asked for more
+                                 ; than RAD_PNMAX notes (96.4.5); next start clears
+
+RSC_NOTE         equ 0           ; byte: octave << 4 | note 1..12; 0 = none yet
+RSC_INST         equ 1           ; byte: instrument, 0 = none
+RSC_VOL          equ 2           ; byte: 2.1 volume 0..64 / 1.0 carrier 0..63
+RSC_KEYS         equ 3           ; byte: +1 on every key-on, wrapping
+RSC_FX           equ 4           ; byte: effect set on this line, 0 = none
+RSC_FLAGS        equ 5           ; byte: RSCF_*
+RSC_SIZE         equ 6
+
+RSCF_KEYED       equ 01h         ; keyed on now
+RSCF_4OP         equ 02h         ; a 4-op instrument (2.1 algorithm 2..6)
+RSCF_RIFF        equ 04h         ; a channel or instrument riff is running
 
 ; stream states returned by OSAPI_SND_STREAM verb 3 (SPEC.md 20.3/34.5)
 SND_ST_PLAYING   equ 0
@@ -2332,9 +2448,12 @@ OS88_F_PARTS  equ 4             ; the FILE is longer than the image, on purpose
 ; real machine measured, and pick the class above the sum with margin.
 ;
 ; THAT 64 IS A BARE MACHINE, AND IT IS NOT A FLOOR ON ONE WITH A DRIVER IN IT
-; (SPEC.md 8.7.5). A mounted SOUND.DRV alone is worth ~16 bytes of every slice
-; ALL THE TIME - snd_tick far-calls DSV_TICK from inside IRQ0 whether or not
-; anything is playing - and more while a tone is on. Cyclone was sized by this
+; (SPEC.md 8.7.5). A mounted SOUND.DRV is worth ~16 bytes of every slice
+; WHILE ANYTHING PLAYS - snd_tick far-calls DSV_TICK from inside IRQ0 while a
+; Sound Blaster stream is open or an XT's RAD tune plays (the driver switches
+; it off when nothing does, SPEC.md 34.13.7) - and more while a tone is on. A
+; game's worker runs while its sound does, so that is the case to size
+; against. Cyclone was sized by this
 ; recipe, passed its gate at 1.28x for months, and overflowed on the first
 ; machine with a sound card in it. If your worker DRAWS, size it against
 ; 64 + the driver, and measure with tools/stkwater.py on the real recipe

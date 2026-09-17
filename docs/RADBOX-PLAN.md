@@ -1,15 +1,18 @@
 # RADBOX — "RAD BoomBox", and the OPL3 under it
 
-Status: **PLAN, nothing built.** SPEC.md sections are written from this
-before any code (CLAUDE.md: update the contract first). Section numbers
-below are placeholders — the next free top-level is §96.
+Status: **wave 1 (the contract) written.** SPEC.md §34.11–§34.13 (OPL3, the
+RAD verbs, the pacer) and §96 (RADBOX, the file formats, validation, fixtures)
+are the contract now, and where they settled or changed something below,
+section 7 says what and why. Where this plan and SPEC.md disagree, SPEC.md
+wins.
 
 ## 1. What was asked, and what is already decided
 
 > Can we add OPL3 support by extending our OPL2 support? I want to be able
 > to play RAD files like Reality AdLib Tracker does.
 
-Decisions the user took, 2026-09-16 — not to be re-opened without them:
+Decisions the user took, 2026-09-16 (D1-D4 at intake, D5-D6 answering wave
+1's two questions) — not to be re-opened without them:
 
 | # | question | decision |
 |---|---|---|
@@ -17,6 +20,8 @@ Decisions the user took, 2026-09-16 — not to be re-opened without them:
 | D2 | replay clock | **RTC periodic interrupt (IRQ8) on an AT-class machine; the system tick on an XT**, and the XT says it is tick-paced rather than pretending |
 | D3 | where | **a new package, `RADBOX`, titled "RAD BoomBox".** Windowed: a small player view with minimal information on XT-class machines; colour in the window **on VGA only**. **F** goes full screen — **VGA Mode X 320x240**, **CGA 320x200 colour**, **Hercules 720x348 mono** — and **Esc** comes back. The mouse works in full screen at every resolution |
 | D4 | tunes | **ship none.** RAD v2.0a's archive carries no licence for `player20.cpp` or its six tunes, so RADBOX opens `.RAD` files the user brings and no disk carries a song |
+| D5 | beeps during playback (wave 1's Q1) | **the tone tier REFUSES while a tune holds the chip** - `OSAPI_SND_TONE` is silent during playback, and no kernel byte is spent on a speaker fallback. SPEC.md §34.12.3 as pinned |
+| D6 | the XT's tick (wave 1's Q2; replaces its option (a), "publish at attach") | **`DSV_TICK` is DRIVER-SWITCHED at run time.** A kernel change of exactly one shape at three sites in `kernel/snd.inc` - after `drv_svc_call` in `osapi_snd_fm`, in `osapi_snd_stream`'s main path (not verb 3's), and in `snd_release_inst`'s `DSV_RELINST` call: `jc .keep / mov [drv_svc+DSV_TICK], dx / .keep:`. `SOUND.DRV` answers DX = its one combined tick proc while a tick-class tune plays or a Sound Blaster stream is open, else 0. Prototyped by the coordinator at **+18 bytes kern_big `.text`, no rung crossed** (image rung 23 -> 5 left), kern_small unaffected. Lands in wave 2, SPEC text first. SPEC.md §34.13.7 |
 
 ## 2. Facts that shape it
 
@@ -125,7 +130,8 @@ accumulator (`acc += hz; while acc >= 1024: frame`) so 50 Hz is exact rather
 than 1024/20 = 51.2. The handler reads register C (re-arms), chains to the
 old vector when a PF was not ours, and sends EOI to both PICs. Unhook restores
 register B and the vector. On an XT, `DSV_TICK` runs `acc += hz * 10; while
-acc >= 182: frame` — frames arrive in bursts of up to three per tick, and the
+acc >= 182: frame` - and the driver asks for that tick only while a tune plays
+(D6, SPEC.md §34.13.7) — frames arrive in bursts of up to three per tick, and the
 status block says so.
 
 **Size.** The replayer has to cost nothing on machines that never open a
@@ -162,11 +168,11 @@ the §2.8 shape applied one level down.
 
 | gate | where | asserts |
 |---|---|---|
-| `tools/radsim.py --selfcheck` | host, fast tier | a Python reference replayer (htmsim's shape) turns a tune into a **per-frame register log**; its v2 half is checked against `player20.cpp` compiled on the host from the fetched archive when present, and SKIPS saying why when absent |
-| `tests/unit/t_rad.py` | host, fast tier | the validator refuses every row of a hostile-file table (truncations, out-of-range indices, runaway riffs) — the package's refusal codes and the simulator's must agree |
+| `tools/radsim.py --selfcheck` | host, `make` | a Python reference replayer (htmsim's shape) turns a tune into a **per-frame register log**; its v2 half is checked against `player20.cpp` compiled on the host from the fetched archive when present, and SKIPS saying why when absent |
+| `tests/unit/t_rad.py` | host, `make` (the radsim stamp; soak row `rad`) | the validator refuses every row of a hostile-file table (truncations, out-of-range indices, runaway riffs) — the package's refusal codes and the simulator's must agree |
 | fixture tunes | committed, **ours** | written by `tools/radsim.py --make`: a v1 and a v2 tune that touch every effect, 4-op algorithm and pan. No Reality tune is ever committed (D4) |
 | `tests/radopl3.py` | MartyPC + patch 05 | OPL3 detected; the v2 fixture's register writes, logged by a `-DRADLOG` driver build (§45.14's `trklog` shape), equal radsim's log byte for byte; the capture is not silent |
-| `tests/radopl2.py` | MartyPC | the v2 fixture is refused on an OPL2 with the right sentence; the v1 fixture plays tick-paced |
+| `tests/radopl2.py` | MartyPC, `MARTYPC_OPL2=1` | the v2 fixture is refused on an OPL2 with the right sentence; the v1 fixture plays tick-paced |
 | `tests/radrtc.py` | QEMU `ADLIB=1` | IRQ8 pacing: frames per second over 10 s is 50 ± 0; register B restored after close; the BIOS clock unharmed |
 | `tests/radfsx.py` | QEMU on all three adapters | F and Esc round-trip, the pointer is drawn, a click lands, the frame counter never stalls across either transition |
 | listening | `vm/386-radbox` (SB16, OPL3), `vm/xt-radbox` (SB Pro 2 on an XT if 86Box allows it) | a person hears it |
@@ -176,9 +182,41 @@ the §2.8 shape applied one level down.
 1. **Contract.** SPEC.md §34 amendments (OPL3, verbs 4–6, the IRQ8 pacer) and
    a new §96 for RADBOX; `apps/os88api.inc` and `apps/cc/os88.h`; INDEX
    regenerated. MartyPC patch 05. `tools/radsim.py` and the fixtures.
-2. **Driver OPL3.** Probe, the second array, `SND_CAP_OPL3`, OPL2-mode reset
-   on all-off; every existing FM gate still green (`fmtest`, Frotz's `zs_fm`,
-   Piano).
+2. **Driver OPL3, and D6's switched tick.** Probe, the second array,
+   `SND_CAP_OPL3`, OPL2-mode reset on all-off; every existing FM gate still
+   green (`fmtest`, Frotz's `zs_fm`, Piano). **The kernel change** (SPEC.md
+   §34.13.7): the three sites - site 3 (`snd_release_inst`) wrapped in its
+   OWN `%ifdef OS88_SNDCARD`, because that routine assembles on kern_small -
+   and `tools/kernsize.py` before and after on BOTH kernels (kern_big +18
+   `.text`, no rung; kern_small +0), the knob kernels and kern_small in
+   `buildmatrix`, `os88sym --all` on both kernels; `SOUND.DRV` answers DX on
+   every successful FM verb, stream verb but 3 (verbs 8 and 9 included) and
+   `DSV_RELINST`, publishes 0 at attach, and on each of them recomputes the
+   value from live state, writes its own cell and loads DX inside one
+   `pushf`/`cli` ... `popf` window - never reading the cell back;
+   `snd_release_both` (and `sbl_release_inst`) end in an explicit `clc`,
+   because today's release procs leave CF as they found it and site 3's `jc`
+   would skip the write at random; the new stream **verb 9** (TICK, driver
+   internal) and a call to it through the public slot once a pass, and once
+   more on the `.die` path before `OSAPI_DRV_TASK AX=0`, in both
+   `sbl_refill_task` and `sbl_drain_task`, which is the heal for a stale 0
+   written into the kernel's copy by a task switch between the driver's
+   answer and the kernel's write (or inside `drv_publish`);
+   `sbl_tick` becomes the watchdog half of one tick proc;
+   `snd_str_busy`'s header gains `clobbers: DX`; the gate `tests/sndtick.py`
+   on `SB16=1` and `ADLIB=1` - the A/B, plus the PLANTED lost update: a
+   `-DSBPOLL` sbtest owner that polls verb 3 only, 0 poked into both the
+   kernel's and the driver's `DSV_TICK` cell, both non-zero again within 2
+   ticks; `-DSNDREADBACK` (verb 9 reads its cell) and `-DSNDNOHEAL` (no verb
+   9 in the loops) as its two negative controls, each still 0 after 36
+   ticks; a `tools/stkwater.py` reading of the refill worker's slot with verb
+   9 in the loop; and a host ratchet: a driver source that writes a
+   non-zero `DSV_FM`, `DSV_STREAM` or `DSV_RELINST` cell and never names
+   `DSV_TICK` fails `make`. **Merge order with `origin/codex/hda-1015pn`**:
+   its `hda_stream` publishes `DSV_STREAM` and does not answer DX; whichever
+   of this wave and that branch merges second makes every CF = 0 exit of
+   `hda_stream` (verb 8 included) answer DX = 0, or an HDA machine far-calls
+   garbage from IRQ0 on its first stream verb (SPEC.md §34.13.7).
 3. **Replayer + pacer.** Validator, v2 engine, v1 loader, IRQ8 and tick paths,
    `-DRADLOG`; the MartyPC and QEMU rows.
 4. **RADBOX windowed.** Open, transport, status, VGA meters, the XT minimal
@@ -198,3 +236,41 @@ the §2.8 shape applied one level down.
 - **Tune size ceiling.** The largest real v2 tune seen is 14,820 bytes; the
   claim ceiling is chosen from the format's worst case, not from that.
 - **v1 layout** is pinned from Reality's v1 player source before wave 3.
+
+## 7. Settled by the contract (wave 1)
+
+What writing SPEC.md §34.11–§34.13 and §96 decided, changed or found. Each
+row names the section that is now binding.
+
+| point | settled as | why | § |
+|---|---|---|---|
+| verbs 4 and 6's pointer | **BX:SI / BX:DI**, not ES | `OSAPI_SND_FM` is an X cell and `osapi_snd_fm` replaces ES with `KERNEL_SEG` before the driver runs; BX is unused by verbs 4–6, so no kernel byte moves | 34.12 |
+| "the tone tier moves to the speaker" | **the tone tier REFUSES while a tune holds the chip** (beeps are silent during playback) - **decision D5** | the kernel copies `DSV_TONE` only at attach and `DRVV_TIER`, so a driver cannot swap it; the speaker fallback would need a kernel change (`snd_tone_out` falling back to `spk_tone` on the sink's refusal), and the user chose silence over spending kernel bytes on it | 34.12.3 |
+| when the chip is taken | at **start**, not at load; given back at **stop** | a loaded-but-stopped tune should not lock Piano out of FM | 34.12.2 |
+| refusal codes | `RADE_*` 0..10, with 0 = `RADE_NOSINK`; `RADC_*` details 1..18 with a file offset in CX; **meaningful only when the driver sets `SND_CAP_RAD` = 40h** | one vocabulary from "no driver" to "bad byte at offset" - and round 0 found that `kern_small` and a pre-RAD `SOUND.DRV` answer CF=1 with AL = the verb, which reads as `RADE_NEEDOPL3`, so the capability bit is tested first | 34.12, 96.4.4, 96.6 |
+| tune size ceiling | `RAD_MAXLEN` = **49,152** | chosen from addressing (tune + an 8KB working set + stack in one claim), because the format's own worst case is ~300KB and no segment holds it | 34.12.1 |
+| where the replay step's stack lives | **1,024 bytes at the top of the tune's own claim**, SS swapped, never `sti` | a riff recursion 8 deep inside IRQ0/IRQ8 on a 192-byte task stack class is not survivable; and a machine that never opens a tune pays no resident stack | 34.12.5 |
+| repeated register writes | a **shadow filter** on frame writes; start/stop sequences unfiltered | an IF=0 frame on a 4.77 MHz 8088 is the serial mouse's problem (8.3 ms a byte), and repeats are no-ops on the chip | 34.12.6, 34.13.6 |
+| the default patches after a tune | reloaded **at once** on every end: through `opl_wr` at the caller's IF on stop/all-off, through the replay-path writer `opl_wrf` at IF=0 in `DSV_RELINST` | the lazy reload of the first draft landed on a tone-on, which runs inside `snd_tone_req`'s cli window - it moved the 28 ms rather than removing it (round 0) | 34.12.3 |
+| the replay path's port writes | `opl_wrf`: index out, data out, no counted status reads | ~70 writes of a retriggering line are ~19 ms at IF=0 through `opl_wr`; Reality's players write back to back | 34.11.2 |
+| a frame's work | at most `RAD_PNMAX` = **32** note plays, and the frame that asks for more **halts the tune** (2.1 deviation 5, `RSTF_HALTED`); at most `RAD_FRMAX` = 7 frames an interrupt; **no frame starts in a BIOS tick whose note plays reached `RAD_PNMAX`**, and such a tick earns the RTC no credit - at most 63 note plays and 2,560 computed writes a tick | riffs fan out: a valid 226-byte file makes one frame of the reference play ~13 million notes (round 0); a per-frame cap times 7 frames an interrupt, re-armed by the RTC credit, held a legal 1,989-byte file at IF = 0 every tick (round 1) | 96.4.5, 34.13.3, 34.13.5, 34.13.6 |
+| RTC frames longer than a period | the **tick discipline**: the BIOS tick credits periods the RTC could not deliver | the RTC raises nothing until register C is read, so counting interrupts runs slow by every period a frame outlasts (round 0) | 34.13.3 |
+| a start after a stop | **re-zeroes the replay state**; the stream is a function of the tune alone | `player20.cpp`'s `Stop()` does not, and a driver matching radsim byte for byte needs one answer | 34.12.2, 96.4.5 |
+| a MIDI instrument | **7 bytes** counting the algorithm byte | `player20.cpp` and both MIDI tunes; `RAD.HTML` and `validate20.cpp` say 6 and are wrong | 96.4.3 |
+| `NEW` and the second array | no 1xxh write but 105h while NEW = 0; asserted over every radsim stream; MartyPC patch 05 models the address decode and has `MARTYPC_OPL2=1` | a 104h written after 105h <- 00h lands on 04h on a real YMF262, and MartyPC had no OPL2 for the refusal gate (round 0) | 34.11.2, 96.8 |
+| RTC vs tick | decided **at attach**: `CPU_8086` → tick; else register A = 26h **and B & 70h = 0** → RTC | the class is a property of the machine; what the class costs is not decided at attach (next row) | 34.13.2 |
+| when `DSV_TICK` is paid | **only while something needs it** - the driver switches it through DX on its verbs' return (**decision D6**); a tick-class tune or an open Sound Blaster stream asks for it, nothing else does | the kernel copied the table only at attach and `DRVV_TIER`, so the contract as first pinned made an XT+AdLib pay ~16 bytes of every slice for a tune it never opened; the user took a +18-byte kernel change instead, which also stops every Sound Blaster machine paying for its watchdog while nothing streams. Found while pinning it: **verb 8** reaches the main path through the public slot, so the driver answers DX there too and `snd_str_busy`'s callers must not rely on DX (they do not); something ended at interrupt time (the SB watchdog, a HALT) keeps the tick until that instance's next site verb; and a `SOUND.DRV` from before the change under a kernel after it far-calls garbage from IRQ0 - named in the SPEC, not guarded, because a guard is kernel bytes. Found in review (fix round 0): the write is pre-emptible at sites 1 and 2, so a task switch can put a STALE 0 over a newer proc; it is healed, not prevented - the SB workers re-assert through a new internal stream verb 9 once a pass, and RADBOX's verb 6 poll runs from its UI task for as long as a tune is loaded - because prevention is kernel bytes beyond D6. The DX duty binds every sound-class driver, and `codex/hda-1015pn`'s HDA driver does not meet it yet (merge order, wave 2). Site 3 needs its own `%ifdef OS88_SNDCARD` or kern_small grows 6 bytes | 34.13.7, 8.7.5, 51.6, 96.2 |
+| the RTC already in use | refused as `RADE_PACER` | the BIOS int 15h 83h/86h wait is chained and survives; an enabled AIE/UIE/PIE owner is somebody else's and there is no tick fallback on an RTC-class machine | 34.13.3 |
+| `DSV_NAME` "AdLib (OPL3)" | **not done** | nothing paints `DSV_NAME` (§34.8); `SND_CAP_OPL3` is the fact | 34.11.1 |
+| OPL3 NEW-bit ordering | a v2 start **prepends 105h ← 01h** | `player20.cpp` clears the second array before setting NEW, which a YMF262 ignores | 96.4.5 |
+| the RAD 1.0 layout | pinned from RAD V1.1a's `RAD.DOC` and `PLAYER.ASM` (fetched from Reality's public file system into the scratchpad, never committed) | — | 96.4.2 |
+| validation | stricter than `validate20.cpp` in four places, and corrects its BPM-flag bug (bit 6 vs bit 5); all six V2.0a tunes and both V1 tunes pass | — | 96.4.4 |
+| "a drop onto the window" | **dropped** | the OS has no file-drop-onto-window mechanism; association (§54) and File ▸ Open cover it | 96.5 |
+| EGA geometry | windowed: no meters (VGA-only colour, D3); full screen: `FSXM_CGA320` | EGA's fsx caps are the CGA modes (§53.4) | 96.2, 96.3 |
+| a tune stopped by another program's F key | the driver unloads it (§53.3 releases every other instance's sound); RADBOX says "Stopped by another program." and replays from its own copy | — | 34.12.4, 96.6.1 |
+| fixtures | `RV1.RAD`, `RV1SLOW.RAD`, `RV2.RAD`, `RV2BPM.RAD`, `RV2SLOW.RAD` in `tests/fixtures/rad/`; `.RLG` 3-byte register logs with FFFEh/FFFFh/FFFDh markers | — | 96.7, 96.8 |
+
+**Still open**: XT burst spreading (§6, unchanged) and the replayer's resident
+size (§3.2's 2KB rule) are wave 3 measurements; §34.13.6 names the IF=0 frame
+cost as the measurement wave 3 records.
+
