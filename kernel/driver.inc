@@ -1618,9 +1618,9 @@ drv_call:
 ; -----------------------------------------------------------------------------
 drv_svc_call_x:
     or bp, bp
-    jz drv_svc_none
+    jz .none
     cmp word [drv_fseg], 0
-    je drv_svc_none
+    je .none
     push ds
     push es
     push ds
@@ -1632,6 +1632,16 @@ drv_svc_call_x:
     pop ds                      ; ...and DS names the kernel again, which is
     call wm_nest_pop            ; the segment the pop reads
     retf
+.none:                          ; ITS OWN REFUSAL, not drv_svc_none's (SPEC.md
+    xor ax, ax                  ; 2.6.1.1). This body is FAR-entered - the
+    stc                         ; thunk in .text far-calls it - and the shared
+    retf                        ; tail is a near `ret`, because drv_fs_call
+                                ; and drv_blk_call_x are near-called. Four
+                                ; bytes here, or a refusal returns to the
+                                ; caller's OFFSET with CS still COLD_SEG: a
+                                ; wild jump, taken with the graphics lock
+                                ; held, on any OSAPI_SND_FM with no sound
+                                ; driver loaded
 
 ; -----------------------------------------------------------------------------
 ; drv_blk_call - the same, for the DRVC_DISK publication slot
@@ -1691,6 +1701,12 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; so the DATA stays in .text at every toggle
 
 
+; The shared refusal, and it is the NEAR one: every routine that ends here -
+; drv_fs_call and drv_blk_call_x - is near-called. drv_svc_call_x used to ride
+; it too and is far-entered, so it popped two bytes of a four-byte frame and
+; ran off into the cold segment; it has a `retf` of its own (SPEC.md 2.6.1.1).
+; A shared epilogue belongs to every routine that jumps to it, so it can only
+; serve one return kind - check how a new caller was ENTERED before adding it.
 drv_svc_none:
     xor ax, ax
     stc

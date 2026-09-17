@@ -510,6 +510,25 @@ FAST = [
         "the first desktop frame there - the first draft went to the Control "
         "Panel and clicked row 0, which UNLOADED it",
         wants=("build/sndmove360.img",)),
+    Row("fmrefuse", "soak", py("tests/fmrefuse.py"), 25.0,
+        "SPEC.md 2.6.1.1: a FAR-ENTERED body needs a FAR tail, and "
+        "drv_svc_call_x's refusal shared drv_svc_none's NEAR one with "
+        "drv_fs_call and drv_blk_call_x. So 'no driver publishes this verb' "
+        "popped two bytes of a four-byte far frame and resumed at the "
+        "caller's offset with CS still COLD_SEG - a wild jump, taken with the "
+        "graphics lock held, because a W_ONCLICK handler holds it. "
+        "osapi_snd_fm is the one sound slot with no zero test in front of it, "
+        "so ANY OSAPI_SND_FM on a machine with NO SOUND DRIVER reached it and "
+        "the desktop stopped. FMTEST.O88 on a card-less machine is the whole "
+        "experiment: its own ft_stage byte says the handler came back, its "
+        "status char says the verb refused, and a title-bar raise says the "
+        "desktop still answers. A/B'd against the kernel before the fix - 2, "
+        "3 and 5 red there, and the pointer itself could not be moved. "
+        "SOAK and not full: only a KERNEL change can break it "
+        "(docs/WRITING-TESTS.md 2.1 rule 2), and it is the person touching "
+        "the driver dispatch who runs it",
+        needs=("marty",), serial=True,
+        wants=("build/fmtest.img",)),
     Row("drvmove", "soak", py("tests/drvmove.py"), 170.0,
         "SPEC.md 66.6.3: a DRIVER IMAGE moves. It drives the scenario the "
         "whole study exists for - mount the hard disk, mount the RAM disk "
