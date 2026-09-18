@@ -24,7 +24,7 @@ oracle can be edited to agree with the code is not a gate.
 
 SEVEN ASSERTIONS.
 
-1. EVERY FIXTURE, ALL 4,000 BYTES. `te_scr` read out of guest memory against
+1. EVERY FIXTURE, ALL 4,000 BYTES. `con_scr` read out of guest memory against
    `ansisim.render(stream).raw()`, characters and attributes alike. Thirteen
    fixtures covering every state, every control, every CSI final and every SGR
    code in SPEC.md 70.9.
@@ -49,7 +49,7 @@ SEVEN ASSERTIONS.
    DSR 5 once and DA twice, and `ansisim` says exactly which bytes come back.
    Those bytes must be in the server's key log, in order.
 
-6. FULL SCREEN IS THE BOARD'S OWN SCREEN. `te_scr` maps 1:1 onto text VRAM
+6. FULL SCREEN IS THE BOARD'S OWN SCREEN. `con_scr` maps 1:1 onto text VRAM
    (SPEC.md 70.8.7), so this is a memcmp of 4,000 bytes and not a screenshot -
    and a screenshot besides, for a person.
 
@@ -92,8 +92,8 @@ PORT = 8094                     # NOT 8090 (tests/ethernet.py) and NOT 8092
 HOSTLINE = "10.0.2.2:%d" % PORT
 FIXDIR = os.path.join(ROOT, "tests", "fixtures", "ansi")
 
-TE_COLS, TE_ROWS = 80, 25
-TE_SCRSZ = TE_COLS * TE_ROWS * 2
+CON_COLS, CON_ROWS = 80, 25
+CON_SCRSZ = CON_COLS * CON_ROWS * 2
 TS_UP, TS_DOWN, TS_ERR = 3, 4, 5
 LN_X1, LN_Y1, LN_X2, LN_Y2 = 0, 2, 4, 6
 
@@ -310,16 +310,16 @@ def te_syms():
 
 def diff_report(got, want):
     """Which CELL differs, and how - a byte count says nothing about where."""
-    bad = [i for i in range(0, TE_SCRSZ, 2)
+    bad = [i for i in range(0, CON_SCRSZ, 2)
            if got[i:i + 2] != want[i:i + 2]]
     if not bad:
         return None
-    rows = sorted({(i // 2) // TE_COLS for i in bad})
+    rows = sorted({(i // 2) // CON_COLS for i in bad})
     first = bad[0] // 2
     return ("%d cell(s) of 2,000 differ, on row(s) %s; the first is "
             "(%d,%d) - got char %02X attr %02X, want char %02X attr %02X"
             % (len(bad), ",".join(str(r) for r in rows[:8]),
-               first // TE_COLS, first % TE_COLS,
+               first // CON_COLS, first % CON_COLS,
                got[bad[0]], got[bad[0] + 1], want[bad[0]], want[bad[0] + 1]))
 
 
@@ -348,10 +348,10 @@ def main():
         sys.exit("telansi: make telnettest failed:\n" + r.stdout + r.stderr)
 
     sy = te_syms()
-    for n in ("te_scr", "te_state", "te_soff", "te_zon", "te_zat", "te_obin",
-              "te_rxi", "te_rxn", "te_btn", "te_line", "te_pndn", "te_cvis",
-              "te_hbuf", "te_thint", "te_txm", "te_zn", "te_tseg",
-              "te_cx", "te_cy", "te_sx", "te_sy"):
+    for n in ("con_scr", "te_state", "te_soff", "te_zon", "te_zat", "te_obin",
+              "te_rxi", "te_rxn", "te_btn", "te_line", "te_pndn", "con_cvis",
+              "te_hbuf", "con_thint", "te_txm", "te_zn", "con_tseg",
+              "con_cx", "con_cy", "te_sx", "te_sy"):
         if n not in sy:
             sys.exit("telansi: %s is not in the package map" % n)
 
@@ -484,7 +484,7 @@ def main():
                              % (name, rb("te_state")))
                 break
             got_off = quiet()
-            scr = m.readseg(pseg, sy["te_scr"], TE_SCRSZ)
+            scr = m.readseg(pseg, sy["con_scr"], CON_SCRSZ)
             ref = ansisim.render(data)
             want = ref.raw()
             # **DID THE STREAM FINISH?** `quiet()` returns when [te_soff] has
@@ -572,7 +572,7 @@ def main():
         # --- 6: full screen IS the board's own screen -----------------------
         # **WITH A BOARD ON IT.** The first version ran this at the end of the
         # fixture loop, by which time Close and the mirror check had put the
-        # terminal through te_reset and te_clear - so the memcmp compared 4,000
+        # terminal through te_reset and con_clear - so the memcmp compared 4,000
         # bytes of SPACE against 4,000 bytes of space and passed, which is a
         # comparison that would pass against a renderer that drew nothing at
         # all. The screenshot is what said so: a black screen with the leave
@@ -745,8 +745,8 @@ def check_fullscreen(m, pseg, sy, shot, fails, press_connect, connected, quiet,
         fails.append("full screen: no session to put a board on the screen")
         return
     quiet()
-    scr0 = m.readseg(pseg, sy["te_scr"], TE_SCRSZ)
-    drawn = sum(1 for i in range(0, TE_SCRSZ, 2) if scr0[i] != 0x20)
+    scr0 = m.readseg(pseg, sy["con_scr"], CON_SCRSZ)
+    drawn = sum(1 for i in range(0, CON_SCRSZ, 2) if scr0[i] != 0x20)
     say("fsx       %d of 2,000 cells hold a glyph before ^]" % drawn)
     if drawn < 100:
         fails.append("only %d cells of the buffer are non-blank, so the memcmp "
@@ -759,18 +759,18 @@ def check_fullscreen(m, pseg, sy, shot, fails, press_connect, connected, quiet,
         fails.append("Ctrl+] did not enter the full-screen bracket "
                      "([te_txm] is 0) - nothing below this was tested")
         return
-    scr = m.readseg(pseg, sy["te_scr"], TE_SCRSZ)
+    scr = m.readseg(pseg, sy["con_scr"], CON_SCRSZ)
     # **THE SEGMENT IS ASKED, NOT ASSUMED.** It was a hardcoded 0xB8000, which
     # is right on VGA and CGA and wrong on Hercules - and the same gate pointed
     # at a Hercules run then reports "4,000 of 4,000 bytes differ" instead of
-    # "the wrong framebuffer". [te_tseg] is the answer OSAPI_FSX_MODE gave the
+    # "the wrong framebuffer". [con_tseg] is the answer OSAPI_FSX_MODE gave the
     # package (tetxt.inc), so this reads the machine's own.
-    tseg = u16(m.readseg(pseg, sy["te_tseg"], 2))
+    tseg = u16(m.readseg(pseg, sy["con_tseg"], 2))
     say("fsx seg   %04X" % tseg)
     if tseg not in (0xB800, 0xB000):
-        fails.append("[te_tseg] is %04X, which is neither text framebuffer - "
+        fails.append("[con_tseg] is %04X, which is neither text framebuffer - "
                      "the memcmp below would compare the wrong memory" % tseg)
-    vram = m.read(tseg << 4, TE_SCRSZ)
+    vram = m.read(tseg << 4, CON_SCRSZ)
     if shot:
         subprocess.run([sys.executable, os.path.join(ROOT, "tools", "shot.py"),
                         SOCK, shot], check=False, capture_output=True, cwd=ROOT)
@@ -780,13 +780,13 @@ def check_fullscreen(m, pseg, sy, shot, fails, press_connect, connected, quiet,
     # writes ` ^] to leave` straight into the last row's last twelve cells,
     # once, on entry, and the HOST IS ALLOWED TO OVERWRITE IT - a hint that
     # survives is a hint that fights the board for the row it needs. So the
-    # memcmp skips those cells while [te_thint] still says row 24, and asserts
+    # memcmp skips those cells while [con_thint] still says row 24, and asserts
     # them separately: the two facts are both worth having and neither is the
     # other's excuse.
     hint = b" ^] to leave"
     skip = set()
-    if m.readseg(pseg, sy["te_thint"], 1)[0] == TE_ROWS - 1:
-        base = ((TE_ROWS - 1) * TE_COLS + TE_COLS - len(hint)) * 2
+    if m.readseg(pseg, sy["con_thint"], 1)[0] == CON_ROWS - 1:
+        base = ((CON_ROWS - 1) * CON_COLS + CON_COLS - len(hint)) * 2
         skip = set(range(base, base + len(hint) * 2))
         got = bytes(vram[base + 2 * i] for i in range(len(hint)))
         att = {vram[base + 2 * i + 1] for i in range(len(hint))}
@@ -796,19 +796,19 @@ def check_fullscreen(m, pseg, sy, shot, fails, press_connect, connected, quiet,
                          % (got, sorted(att), hint))
         else:
             say("hint      %r inverse on row 24" % hint.decode())
-    bad = [i for i in range(TE_SCRSZ) if scr[i] != vram[i] and i not in skip]
+    bad = [i for i in range(CON_SCRSZ) if scr[i] != vram[i] and i not in skip]
     if bad:
-        fails.append("full screen: %d of 4,000 bytes differ between te_scr "
+        fails.append("full screen: %d of 4,000 bytes differ between con_scr "
                      "and text VRAM, the first at offset %d (row %d, col %d) "
                      "- the buffer maps 1:1 onto VRAM (SPEC.md 70.8.7)"
-                     % (len(bad), bad[0], (bad[0] // 2) // TE_COLS,
-                        (bad[0] // 2) % TE_COLS))
+                     % (len(bad), bad[0], (bad[0] // 2) // CON_COLS,
+                        (bad[0] // 2) % CON_COLS))
     else:
         say("fullscreen 4,000 bytes identical, the hint's twelve cells apart")
     # --- THE SAVED CURSOR, AND IT IS ASKED INSIDE THE BRACKET --------------
     # This is the one place the w3 review's BLOCKER 1 could be reached: te_fsi
     # aliased [te_sx]/[te_sy], so OSAPI_FSX_MODE's sixteen bytes landed on the
-    # saved cursor and the board's next `CSI u` sent te_putc 34,696 bytes past
+    # saved cursor and the board's next `CSI u` sent con_putc 34,696 bytes past
     # the package's claim. The `save` fixture is driven WINDOWED with all the
     # others and `art` has no CSI s/CSI u in it, so nothing in wave 3 asked the
     # question after a mode set. A restore with no prior save is legal and is
@@ -820,15 +820,15 @@ def check_fullscreen(m, pseg, sy, shot, fails, press_connect, connected, quiet,
     # (te_restcur) is defence in depth and would MASK a send-based test.
     sx = u16(m.readseg(pseg, sy["te_sx"], 2))
     sy_ = u16(m.readseg(pseg, sy["te_sy"], 2))
-    cx0 = u16(m.readseg(pseg, sy["te_cx"], 2))
-    cy0 = u16(m.readseg(pseg, sy["te_cy"], 2))
-    if sx >= TE_COLS or sy_ >= TE_ROWS:
+    cx0 = u16(m.readseg(pseg, sy["con_cx"], 2))
+    cy0 = u16(m.readseg(pseg, sy["con_cy"], 2))
+    if sx >= CON_COLS or sy_ >= CON_ROWS:
         fails.append("inside the bracket the SAVED cursor is (%d,%d) and the "
                      "screen is 80x25 - OSAPI_FSX_MODE has written over it, "
                      "which is te_fsi aliasing te_sx (the w3 review's BLOCKER "
-                     "1). te_celloff has no range check and te_putc is the one "
+                     "1). con_celloff has no range check and con_putc is the one "
                      "unguarded write in the package" % (sx, sy_))
-    elif cx0 >= TE_COLS or cy0 >= TE_ROWS:
+    elif cx0 >= CON_COLS or cy0 >= CON_ROWS:
         fails.append("inside the bracket the cursor is (%d,%d) and the screen "
                      "is 80x25" % (cx0, cy0))
     else:

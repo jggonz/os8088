@@ -78,6 +78,33 @@ def byte(m, name):
     return m.read(S(name), 1)[0]
 
 
+def mbase(m):
+    """DOCK.DRV's live segment - SPEC.md 30.5 keeps the advanced Dock's own
+    geometry (the whole-strip rect, the along axis, the cap, the packing
+    table and the hover timer) inside the MODULE IMAGE, so a machine with no
+    module mounted carries none of it. os88sym refuses a kernel-segment read
+    of one rather than answering with a plausible wrong address, which is why
+    these two helpers exist."""
+    seg = word(m, "mod_r_dock")
+    assert seg, "DOCK.DRV is not mounted - nothing to read"
+    return seg * 16
+
+
+def mbyte(m, name):
+    return m.read(mbase(m) + os88sym.syms()[name], 1)[0]
+
+
+def hidden(m):
+    """Is the strip HIDDEN? A machine with no DOCK.DRV mounted cannot hide
+    one at all (SPEC.md 30.6), and its [dock_hidden] does not exist - so the
+    basic bottom Dock answers 0 without a read."""
+    return mbyte(m, "dock_hidden") if word(m, "mod_r_dock") else 0
+
+
+def mword(m, name):
+    return u16(m.read(mbase(m) + os88sym.syms()[name], 2))
+
+
 def frame(m, kind):
     w, h, rows = m.vram(kind)
     return w, h, bytes(b for r in rows for b in r)
@@ -171,7 +198,7 @@ def setting(m, mo, kind, cfg, want_cfg=None):
     pw, ph = word(m, "vid_pw"), word(m, "vid_ph")
     e = expect(pw, ph, want)
     g = (word(m, "vid_band_x0"), word(m, "vid_band_xe"),
-         word(m, "vid_dock_y0"), byte(m, "dock_hidden"))
+         word(m, "vid_dock_y0"), hidden(m))
     check(g == e, "cfg %d: band x0/xe, dock_y0, hidden = %s (want %s)"
           % (want, g, e))
     os88marty.settle(m)
@@ -267,7 +294,7 @@ def herc(a):
             # so "is it still open right after the move" measured MartyPC.
             # [dock_timer_tick] is the tick the pointer was first seen off the
             # strip, and it survives the close.
-            gone = word(m, "ticks") - word(m, "dock_timer_tick")
+            gone = word(m, "ticks") - mword(m, "dock_timer_tick")
             check(DOCK_LEAVE_T <= (gone & 0xFFFF) <= DOCK_LEAVE_T + 40,
                   "...%d ticks after it left (the 0.75 s linger is %d)"
                   % (gone & 0xFFFF, DOCK_LEAVE_T))
@@ -312,8 +339,8 @@ def cga(a):
               word(m, "vid_band_x0") == DOCK_SW,
               "CGA: the strip stands on the left")
         capacity = min(7, os88sym.equates()["INST_MAX"])
-        check(byte(m, "dock_cap") == capacity,
-              "CGA: capacity %d (%d)" % (capacity, byte(m, "dock_cap")))
+        check(mbyte(m, "dock_cap") == capacity,
+              "CGA: capacity %d (%d)" % (capacity, mbyte(m, "dock_cap")))
 
 
 def main():

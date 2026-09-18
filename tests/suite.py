@@ -179,8 +179,7 @@ class Row:
         # cannot share four cores with two other guests: that is not a flaky
         # row, it is the wrong measurement. Neither can a row whose clicks are
         # paced by a HOST-timed settle, because how much guest time a settle
-        # covers is then a property of the box (docs/plans/HANDOFF-SOAK-FINDINGS.md
-        # B5).
+        # covers is then a property of the box.
         #
         # It used to be spelled by EXCLUDING those rows from the wide run and
         # taking them in a second one - `-x saverate -x deskbench ...`, written
@@ -222,8 +221,28 @@ def _kernel_sources():
 # fast - host-side, no emulator, no build. Runs on every `make`.
 # --------------------------------------------------------------------------
 FAST = [
-    Row("pacman-maze", "fast", py("tests/unit/t_pacman.py"), 0.1,
-        "the Atari maze has 260 reachable dots, bounded tunnel edges and complete sprites"),
+    Row("retired", "fast", py("tests/unit/t_retired.py"), 0.3,
+        "every package under apps/ ships, or apps/RETIRED.txt says why not "
+        "(SPEC.md 20.16). CLAUDE.md's Layout section states the invariant - "
+        "'apps/ - loadable packages; everything here ships' - and nothing "
+        "enforced it, so the shape it misses is not a package somebody chose "
+        "to withhold but one that ships nowhere because a list was edited and "
+        "nobody noticed; those two are indistinguishable from every angle but "
+        "intent. PACMAN is the worked example in BOTH directions: taking it "
+        "off the disk lists took it out of every BUILD too (found by a byte "
+        "audit months later, not by a person), and the same edit left it on "
+        "the LIVE volume, whose premise is completeness, where it went on "
+        "shipping for the whole time it was 'off the disks'. Two kinds, and "
+        "`retired` is checked harder than `instrument`: a retired package may "
+        "not be in `all` at all, where a bench may, because keeping a bench "
+        "assembling is the point of having it. Reads build/livepayload.txt - "
+        "the list `all` DERIVES from $(LIVEARGS), which is t_livefull's "
+        "reason too - and walks every shipped image recursively with "
+        "t_image's own Vol, matching the WHOLE 8.3 name: `ls` on the root "
+        "alone reported every package as not shipping, and a substring test "
+        "for WIRE.O88 matched THEWIRE.O88. FAST for t_movable's argument - it "
+        "is a rule about what apps/ means, so it belongs in front of the next "
+        "make rather than the next soak run"),
     Row("blobruns", "soak", py("tests/unit/t_blobruns.py"), 0.1,
         "how many int 13h calls stage 1 spends on the blob, per geometry "
         "(SPEC.md 15.3.8.5) - the count is NOT a function of BOOT2_SECS "
@@ -308,6 +327,25 @@ FAST = [
     Row("mirror", "fast", py("tests/unit/t_mirror.py"), 4.5,
         "a constant written down in two files must agree in both; there is no "
         "linker here to notice"),
+    Row("bits", "fast", py("tests/unit/t_bits.py"), 0.5,
+        "TWO FLAGS THAT SHARE ONE BYTE MAY NOT SHARE A BIT (SPEC.md 96.11.10). "
+        "t_mirror's sibling and the same class of gate: a flag is `NAME equ "
+        "32` and nothing in nasm knows what a bit field is, so the only thing "
+        "between 43 flag families and two names on one bit was sorting the "
+        "`equ` lines by eye. `FHF_DEV equ 32` went in beside `FHF_INPLC equ "
+        "16` - the line above it - seven lines from the `FHF_WROTE equ 32` "
+        "that owned bit 5, with four unrelated DOS_DEV_* codes in the gap. It "
+        "assembled, it booted, CON opened; and the first AH=40h on ANY handle "
+        "then made that handle read as a character DEVICE for ever, so every "
+        "later read answered end of file and every later write was ACCEPTED "
+        "AND DISCARDED with its full count reported. Microsoft Works saved a "
+        "document with a 384-byte header of zeroes and said nothing. THE LIST "
+        "MAINTAINS ITSELF: nothing enumerates the families, it reads the CODE "
+        "- a test/or/and/xor whose destination is a memory field and whose "
+        "source is a bare constant enrols that constant in that field - so a "
+        "flag added tomorrow is covered tomorrow. A PREFIX IS NOT A FAMILY "
+        "and grouping by one reports 81 false positives in this tree. "
+        "VERIFIED TO FAIL by putting FHF_DEV back on 32."),
     Row("artpath", "fast", py("tests/unit/t_artpath.py"), 0.1,
         "a row that opens a BUILD ARTEFACT must resolve it through "
         "os88build.at(), or it reads build/ while the soak is reading its own "
@@ -519,15 +557,23 @@ FAST = [
         "because a stale one does not fault: it far-calls a dispatcher in "
         "freed memory on the next volume access",
         wants=("build/regmove360.img",)),
-    Row("regapp", "soak", py("tests/regapp.py"), 150.0,
-        "SPEC.md 66.6.1/66.6.2 per SHIPPED PACKAGE: five that hire a worker "
-        "declare OS88_REGION_MOVABLE and OS88_WORKER_RESTARTABLE, and a "
-        "declaration the owner fence refused is indistinguishable from one "
-        "that took, from inside the package (66.5.6.2). So this reads MC_RLOC "
-        "and inst_restart back out of the kernel's own tables. regwork proves "
-        "the move; this proves the packages - and it found the region "
-        "declaration placed at the SPAWN, where a package that hires no "
-        "worker never reaches it",
+    Row("regapp", "soak", py("tests/regapp.py"), 210.0,
+        "SPEC.md 66.6.1/66.6.2 per SHIPPED PACKAGE: seven declare "
+        "OS88_REGION_MOVABLE, and those that hire a worker declare "
+        "OS88_WORKER_RESTARTABLE too - a declaration the owner fence refused "
+        "is indistinguishable from one that took, from inside the package "
+        "(66.5.6.2). So this reads MC_RLOC and inst_restart back out of the "
+        "kernel's own tables. Since 66.6.1.1 it carries the two SHAPES the "
+        "original five did not: CALC, which hires no worker at all, and "
+        "PACMAN, the canonical restartable pair. All five originals hire one, "
+        "so the row proved the RESTART half five times over and the plain "
+        "declaration not once - and the plain one is what 39 of the tree's 41 "
+        "are. 150s was five apps and this is seven, scaled at the same "
+        "per-app rate: measured at 122s on an idle 4-core container, so the "
+        "declaration keeps the original's headroom rather than this box's. "
+        "regwork proves the move; this proves the packages - and it found the "
+        "region declaration placed at the SPAWN, where a package that hires "
+        "no worker never reaches it",
         wants=("build/regapp360.img",)),
     Row("regwork", "soak", py("tests/regwork.py"), 170.0,
         "SPEC.md 66.6.2: a WORKER-OWNING region moves once the package has "
@@ -716,6 +762,13 @@ FAST = [
     Row("pkg", "fast", py("tests/unit/t_pkg.py"), 0.1,
         "package/driver/module headers, and every file on every image proved "
         "identical to the artifact it was built from"),
+    Row("docglyph", "fast", py("tests/unit/t_docglyph.py"), 0.6,
+        "a package may SHIP the 8x8 its documents wear (SPEC.md 54.3.2): the "
+        "validator's four refusals, the clear prefix keeping the block verbatim "
+        "through compression, os88mini baking the shipped bytes and not the "
+        "reduction, DOS.O88 setting the bit, and every shipped ASSOC.DAT being "
+        "version 2 with the glyph in DOS's row. Host-only, one package format "
+        "and three tools, which is why it is here beside `pkg` and not in soak"),
     Row("fonts", "fast", py("tests/unit/t_fonts.py"), 0.1,
         "the typefaces are in SYSTEM/FONTS on every shipped system image and "
         "nowhere else (SPEC.md 19.8.1), and apps/os88type.inc's ty_gofonts "
@@ -746,12 +799,32 @@ FAST = [
         "`ps2mouse` on the pre-merge gate with a write-lock error naming "
         "build/os8088.img: the cost of the leak is paid by an unrelated row, "
         "hours later, wearing a message about the wrong subject "
-        "(docs/plans/HANDOFF-SOAK-FINDINGS.md B9)"),
+        ""),
     Row("canary", "fast", py("tests/unit/t_canary.py"), 0.1,
         "SPEC.md 18.93.1's canary offset re-derived from every shipped image's "
         "own BPB: it has to name a sector a transfer run reads AFTER the head "
         "boundary, because the half before it loads correctly on exactly the "
         "machine the canary is for - which is how the first one shipped wrong"),
+    Row("volsig", "fast", py("tests/unit/t_volsig.py"), 0.4,
+        "NO TWO SHIPPED VOLUMES MAY SIGN THE SAME (SPEC.md 18.8.2). The "
+        "kernel's entire swap detector is a rotate-add sum over LBA 0, and "
+        "SPEC.md 18.95's sector cache and SPEC.md 18.8's FAT window are both "
+        "keyed on it - so two disks that sign alike are ONE disk to a running "
+        "machine: swap them and the old disk's directory sectors and FAT stay "
+        "valid against the new platter, and a write commits the old FAT onto "
+        "it. os88disk.py pinned BS_VolID to 0x88000888 on everything it built "
+        "for reproducibility, which made every non-bootable disk of a geometry "
+        "byte-identical in its boot sector - 23 images signing 0x2D68, and at "
+        "360KB that is every data floppy shipped. It computes the SIGNATURE "
+        "the kernel computes rather than asserting the field, so a future "
+        "scheme that distinguishes volumes differently still passes and a "
+        "derivation that collides still fails; and it asserts the other "
+        "direction too - images with IDENTICAL CONTENT must sign alike, which "
+        "is reproducibility stated where it can be checked. Scoped to "
+        "$(SHIPIMGS) READ OUT OF THE MAKEFILE, not a glob: the on-demand disks "
+        "and the images a soak's guests wrote live in build/ too. VERIFIED TO "
+        "FAIL by re-pinning the serial - red, naming apps/games/media/network/"
+        "office 360 as five volumes signing 0x2D68."),
     Row("mlen", "soak", py("tests/unit/t_mlen.py"), 3.4,
         "twelve month lengths, read back out of build/kernel.bin. clk_mlen "
         "carries the eleven non-February ones as a 16-bit MASK since kernel "
@@ -823,7 +896,7 @@ FAST = [
         "no row names a machine whose ROM this tree has not got. MartyPC "
         "falls back to glabios_pc when a romset is absent and says NOTHING, "
         "so nine rows spent months reporting passes about a machine they "
-        "never booted (docs/plans/HANDOFF-SOAK-FINDINGS.md E3). It also checks each "
+        "never booted. It also checks each "
         "GLaBIOS twin still differs from its IBM original in `rom_set` alone "
         "- a drifted twin measures the config's difference and calls it the "
         "kernel's"),
@@ -889,11 +962,92 @@ FAST = [
         "compilers agree - `soak -k 'lmpack'`, which is what a change to "
         "either one runs",
         needs=()),
+    Row("movable", "fast", py("tests/unit/t_movable.py"), 0.6,
+        "SPEC.md 66.6.1's ratchet: a package's region is born PINNED, so a "
+        "package that never declares OS88_REGION_MOVABLE is a WALL in the "
+        "arena for the life of the instance - and it is invisible from "
+        "inside, because nothing refuses and the program runs perfectly. The "
+        "door opened with six asm packages through it and twenty-eight that "
+        "were never followed up, for a cycle. Every package under apps/ now "
+        "declares or carries a line in tests/movable.txt saying why not, and "
+        "the list only turns one way. Checks the WORKER half too (66.6.2): a "
+        "region declaration on a package that hires a worker is INERT, which "
+        "is the most expensive shape there is because it reads as done. FAST "
+        "and not soak on t_textrules.py's argument - it is a rule about how "
+        "every package is written, so the place it belongs is in front of "
+        "the next `make` rather than the next soak run"),
+    Row("toast", "fast", py("tests/unit/t_toast.py"), 1.1,
+        "EVERY FIXED TOAST MESSAGE FITS THE BAR (SPEC.md 59.10). toast_show "
+        "copies at most TOAST_MAX = 24 characters and drops the rest "
+        "SILENTLY, and that cap is GEOMETRY rather than a budget: the clock's "
+        "field is 25 cells on every screen this runs on and 59.9.2's gap "
+        "takes one, so it cannot be raised without moving the toast back "
+        "somewhere a window can cover it. kernel/toast.inc claimed in as many "
+        "words that 'every message in the tree was revised to fit' - true of "
+        "the tree it was written on, held by nothing, and a bug report off an "
+        "86Box 286 found TWENTY-ONE over the cap in six files. Ten were in "
+        "HIBER.DRV, a MODULE the original sweep never walked, and the cut "
+        "lands on the word that carries the meaning: 'Hibernation file is "
+        "from another build' arrives as 'Hibernation file is from'. IT "
+        "OVER-APPROXIMATES ON PURPOSE - a toast argument arrives in SI, AX or "
+        "BX, through wrappers and shared jmp tails and sometimes composed at "
+        "run time, so this takes every db string any TOASTING procedure loads "
+        "and walks callers to a fixed point. That cannot MISS a fixed string, "
+        "which is the direction that matters; the false positives (a routine "
+        "that draws an About box and toasts one line of it) are registered in "
+        "tests/toastlong.txt as a ratchet that starts at two. The closure is "
+        "249 of 13,158 top-level labels - 1.9% - so it is not converging on "
+        "the whole program. TOAST_MAX is READ out of kernel/toast.inc, never "
+        "copied. VERIFIED RED three ways: a string put back to its old "
+        "length, a stale registry line, and lowering the cap.",
+        ),
     Row("textrules", "fast", py("tests/unit/t_textrules.py"), 0.7,
         "SPEC.md 6.6's ratchet: transparent text (font_char/font_str) draws every "
         "pixel twice and flashes on the target machine, so every call site is "
         "registered in tests/textsites.txt with a reason and the count can only "
         "go down"),
+    Row("btngesture", "soak", py("tests/btngesture.py"), 26,
+        "SPEC.md 13.7/13.8 ON THE GLASS: a standard button goes DOWN while "
+        "held, comes UP when the pointer slides off it, goes down again on the "
+        "way back, and does NOT act when the release lands elsewhere. Telnet's "
+        "Connect is the subject. The first assertion is the one that matters - "
+        "while it is HELD the action has not run, which under the press-fired "
+        "code this replaces it already had. Soak because it is about one "
+        "package and needs an emulator (docs/WRITING-TESTS.md 2.1); "
+        "tests/unit/t_btnrules.py is the static half that catches a NEW "
+        "offender", needs=("marty",)),
+    Row("btnall", "soak", py("tests/btnall.py"), 95,
+        "EVERY converted button, DRIVEN: the record is aimed after a plain "
+        "paint, its rects are a sane rectangle inside the window, a press "
+        "ARMS, and sliding off UN-arms. It exists because reading the code "
+        "was not enough - four packages shipped broken in a row (DOS aimed "
+        "its record in the click path, Browser declared the record on top of "
+        "its own state, Artful wrote the count after the draws and left a "
+        "whole click handler unconverted, Audio hit-tested screen rects with "
+        "content-relative coordinates) and every one was found by a person "
+        "looking at a screen. All four are visible in BT_DOWN and BT_N",
+        needs=("marty",)),
+    Row("btncp", "soak", py("tests/btncp.py"), 75,
+        "THE FAR SIDE of the button (SPEC.md 2.6): the Control Panel is an "
+        "on-demand module with a CS of its own and reaches the control by "
+        "`call COLD_SEG:os88ui_btn_f`, which a grep for `call os88ui_btn` "
+        "cannot see. That is how every page of it was missed when the control "
+        "started taking a record - the far entry went on pointing at the "
+        "record-based routine, which read a live count out of a RECTANGLE's "
+        "coordinates, and Date/Time filled the whole screen white. It asserts "
+        "PIXELS: a garbage rect whites the SCREEN, and a page that drew "
+        "nothing has an empty pane",
+        needs=("marty",)),
+    Row("btnrules", "fast", py("tests/unit/t_btnrules.py"), 0.3,
+        "SPEC.md 20.5.1.3's ratchet: os88ui_btn IS the button and carries the "
+        "13.7 gesture, where os88ui_btnraw is the bare painter a caller has to "
+        "drive by hand - and twenty-five call sites drove it by firing on the "
+        "PRESS with no pressed look. Every caller is registered in "
+        "tests/btnsites.txt with a reason and the raw count can only go down. "
+        "It is STATIC because a press-fired button and a release-fired one are "
+        "the same pixels in every still: the difference exists only while a "
+        "button is physically held, which is why this survived ten packages "
+        "and a written survey"),
     Row("deps", "fast", py("tests/unit/t_deps.py"), 0.1,
         "`make` MUST mean `all`. Adding the `deps` target near the top of the "
         "Makefile made it the default goal, so `make` printed a dependency "
@@ -1171,7 +1325,7 @@ FULL = [
         "out of build/hello.o88, build/mines.o88, a tier-3 WF_DISK entry and "
         "a WF_ARC one whose .WPK the test packs with --archive, and the "
         "machine fetches it because `make thewiretest`'s "
-        "SYSTEM/APPDATA/WIRE.CFG says to. Eleven assertions: the catalog is "
+        "SYSTEM/APPDATA/WIRE.CFG says to. Twelve assertions: the catalog is "
         "understood, the host saw the request it expected, the list is the "
         "catalog, the 8088/8086 filter cuts four rows to three, the predicate "
         "greys Load Program on a WF_DISK record and NOT Add to Disk, the "
@@ -1183,8 +1337,20 @@ FULL = [
         "byte count are read with a high word in them, an empty file and a "
         "TWELVE-character name that fills its slot with no NUL, read back on "
         "the host by an independent FAT12 reader after `quit` - "
-        "an archive mounts a RAM disk and runs its program entry off it "
-        "(SPEC.md 92.14), and SPEC.md 92.6.1's CLIP assertion: after Load "
+        "an archive mounts a RAM disk and runs its program entry off it BY "
+        "NAME (SPEC.md 92.14.2) - the entry being MSEG.O88, a package "
+        "carrying seven PARTS, because the image form refuses one for want "
+        "of a file to read them out of and the window it opens titles itself "
+        "`MSEG 7/7 OK` only if every part came back off the store; "
+        "[wr_rlen] and [wr_fseg] are read at the same moment and are both 0, "
+        "which is the ORDERING the title cannot see - the decode claim went "
+        "back BEFORE ld_alloc asked for a region rather than after it. That "
+        "pair is what took SPEC.md 62.9.18 out of the kernel: "
+        "dsk_read_chain_x asked a redirected volume for the WHOLE FILE where "
+        "its own contract is DX SECTORS, so a driver serving FSV_READ "
+        "correctly refused a file longer than the buffer and every package "
+        "on a RAM disk loaded until one had parts. And SPEC.md 92.6.1's CLIP "
+        "assertion: after Load "
         "Program the launched window's content is captured, dragged 8px and "
         "back for a clean repaint, and the two must agree pixel for pixel, "
         "which they do not when the Wire's wake handler has drawn its "
@@ -1305,9 +1471,6 @@ FULL = [
 # single-subject gates; several are worth reading before touching their area.
 # --------------------------------------------------------------------------
 SOAK = [
-    Row("pacman", "soak", py("tests/pacman.py"), 100.0,
-        "native 8088 Pac-Man movement, score, pellets, fruit, level transitions, "
-        "pause, full-screen repaint and worker teardown", needs=("marty",), wants=("build/pacman.o88",)),
     Row("paccman", "soak", py("tests/paccman.py"), 100.0,
         "PACCMAN's attract screen and tick path on a cycle-accurate 8088 "
         "(SPEC.md 91): the program opening on the attract screen with the "
@@ -1338,7 +1501,14 @@ SOAK = [
         "budget before this port, so a row that boots two machines belongs "
         "where there is no wall clock to overrun - what the full tier "
         "carries instead is t_ctoolchain BUILDING paccman, which runs "
-        "build.sh\'s three host gates", needs=("marty", "cc"), wants=("build/paccman.o88",)),
+        "build.sh\'s three host gates", needs=("marty", "cc"),
+        # BOTH PORTS, because the measurement above is the two side by side:
+        # the C one under test and PACMAN.O88 on a second machine. Wave 4 added
+        # that bracket and not this name, so in a frozen tree the row ran every
+        # assertion, printed the whole verdict, and then died on
+        # `cannot read build/pacman.o88` - a pass wearing a failure, and the
+        # ABSENT-artefact shape docs/WRITING-TESTS.md 4 is about.
+        wants=("build/paccman.o88", "build/pacman.o88")),
     Row("nasm3", "soak", py("tests/unit/t_nasm3.py"), 165.0,
         "THE OTHER ASSEMBLER. Every tier here assembles with whatever nasm "
         "the box has, which on this container, on CI and on every Debian or "
@@ -1652,12 +1822,12 @@ SOAK = [
     Row("rehomemove", "soak", py("tests/rehomemove.py"), 75.0,
         "SPEC.md 20.12.10.5 and 66.6.1: the block a re-homed program is left "
         "running in is an ORDINARY MOVABLE REGION afterwards, and the one "
-        "word no other package has to fix, gets fixed. 1.44MB IS THE "
-        "EXPERIMENT: a 512-byte-cluster volume gives op_claim a ZERO head "
-        "slack, so the program sits AT the carve's base and only then does "
-        "mem_is_region hold, mem_find_own reach it and OSAPI_MEM_MOVABLE "
-        "take - at 360KB the same package is refused, correctly, and there "
-        "is nothing to move. tests/filler forces the compaction, "
+        "word no other package has to fix, gets fixed. 1.44MB is the EASY "
+        "shape: a 512-byte-cluster volume gives op_claim a ZERO head slack, "
+        "so the program sits AT the carve's base and the claim is its region "
+        "in the obvious sense. `rehomemove360` is the same row in the shape "
+        "that was PINNED until SPEC.md 66.6.1.2, and that one is the gate on "
+        "the fix. tests/filler forces the compaction, "
         "tests/regmove.py's own idiom. FIVE ASSERTIONS: the claim moved at "
         "all; the package's proc was CALLED; the kernel's words followed "
         "(I_SPTR, claim owners); THE PACKAGE'S OWN WORD followed - the "
@@ -1671,6 +1841,25 @@ SOAK = [
         "rp_reloc stubbed to `ret` it reports [rp_moved] = 0, the vector "
         "outside the new extent and a zero delta. Needs `make rehome`.",
         needs=("marty",), serial=True, wants=("build/rehomemove.img",)),
+    Row("rehomemove360", "soak", py("tests/rehomemove.py", "360"), 75.0,
+        "THE SAME MOVE IN THE SHAPE THAT WAS PINNED (SPEC.md 66.6.1.2). The "
+        "row above runs on a 512-byte-cluster volume, where op_claim's head "
+        "slack is ZERO and the program sits AT its carve's base; at 360KB the "
+        "slack is non-zero and the program sits INSIDE the carve, which was "
+        "REFUSED the declaration - correctly, because FOUR places in the "
+        "compactor read *the claim's base* where they meant *the segment the "
+        "package runs in*: mem_is_region's equality, mem_frameless asking "
+        "mem_in_nest about the wrong segment, mem_rr_walk matching the base "
+        "alone, and mem_reloc_call far-calling PKG_DISP into the carve's head "
+        "SLACK. That cost the DOS box 14KB on a Sound Blaster machine "
+        "(96.35.4.1) and made every re-homing package a permanent wall. THIS "
+        "IS THE GATE ON THE FIX and the row above is not: at a zero slack all "
+        "four questions have the same answer either way, so only this "
+        "geometry can tell. Every one of the four fails SILENTLY and three of "
+        "them CORRUPT rather than refuse. Same five assertions, plus the head "
+        "slack printed so a geometry that stopped being the experiment says "
+        "so. Needs `make rehome`.",
+        needs=("marty",), serial=True, wants=("build/rehomemove360.img",)),
     Row("rehomeabort", "soak", py("tests/rehomeabort.py"), 40.0,
         "SPEC.md 20.12.10.6: a re-homed program REFUSES ITSELF, and nothing "
         "leaks. THE ONE UNWIND PATH NOTHING ELSE REACHES - by the time this "
@@ -1941,6 +2130,36 @@ SOAK = [
         "SPEC.md 11.96.18: a wholly covered window keeps its raise cache when"
         "it arms a clip, and a partly covered one still loses it.",
         needs=("marty",), serial=True),
+    Row("fcpapi", "soak", py("tests/fcpapi.py"), 55.0,
+        "OSAPI_FILE_COPY, THE PUBLISHED ENGINE, BOTH VERBS (SPEC.md "
+        "22.24). EVERY "
+        "ANSWER IS A FILE: a copy engine that goes wrong strands clusters, "
+        "cross-links two chains or writes a directory entry pointing at "
+        "nothing, and all three look perfectly fine from inside the guest - "
+        "the listing is drawn from the same structures that are wrong. So the "
+        "package writes its verdict into RESULT.TXT and stops, and the host "
+        "walks the volume afterwards with an independent FAT12 reader plus "
+        "`os88disk --verify`. CHECK 2 IS THE ROW and check 1 cannot replace "
+        "it: with [fcp_lclus] left at the file manager's value - which is "
+        "what a door that set only the pending file's drives would do, and "
+        "zero on a machine that has pasted nothing - fcp_floor hands "
+        "fcp_chunkset a buffer below one cluster, the chunk floors to ZERO, "
+        "and the copy CREATES THE DESTINATION, WRITES NOTHING AND REPORTS "
+        "SUCCESS. Verified by breaking it exactly that way: check 1 stays "
+        "green and check 2 goes red. It also asserts the two promises a "
+        "package cannot check for itself - the directory it was standing in "
+        "is restored, and a refused copy leaves no destination behind. CHECKS 6-9 "
+        "ARE THE MOVE, and the one that matters is not in the guest at all: a "
+        "move that quietly COPIED would pass every row the package writes - "
+        "right folder, gone from the old one, right bytes - so what says it "
+        "was RE-LINKED is that the first cluster is the same number on the "
+        "untouched gate image and on the one the guest left, which needs both "
+        "open at once. The other half is the answer AX=0, 'not attempted': a "
+        "cross-volume move must give that and not a FERR_*, because a caller "
+        "that reads it as a failure gives up on a move it could make and one "
+        "that reads it as success deletes a source that never went anywhere.",
+        needs=("marty",), serial=True,
+        wants=("build/fcpapi.img",)),
     Row("fcpcopy", "soak", py("tests/fcpcopy.py"), 70.0,
         "SPEC.md 22.3-22.5: Cut/Copy/Paste actually moves a file AND a folder "
         "tree. Nothing exercised kernel/filecp.inc at all until this row - a "
@@ -2326,7 +2545,7 @@ SOAK = [
         "by name: MartyPC has no network card of any kind",
         needs=("qemu", "nasm"), serial=True, timeout=420, builds=True),
     Row("pkgrun", "soak", py("tests/pkgrun.py"), 25.0,
-        "OSAPI_PKG_RUN (SPEC.md 21.5): the loader's back half with the disk "
+        "OSAPI_PKG_START (SPEC.md 21.5): the loader's back half with the disk "
         "read replaced by a copy, which is how the Wire runs a package it "
         "fetched over the network into a claim. `make pkgrun` builds a TEST "
         "package no shipped floppy carries (the mseg/covl shape, SPEC.md "
@@ -2337,13 +2556,42 @@ SOAK = [
         "magic and CF=1 / LD_EBAD for header flags bit 2, a package carrying "
         "PARTS, which are read out of a FILE that does not exist here "
         "(SPEC.md 20.12). The two refusals also say the region and the "
-        "instance record a failed load reserved were given back. MARTYPC, "
-        "through os88ui: it was hand-rolled QEMU on the argument that "
+        "instance record a failed load reserved were given back. "
+        "**AND THREE MORE ON THE OTHER DOOR** (SPEC.md 21.5): "
+        "OSAPI_PKG_START is the loader's FRONT half, which takes a NAME, and "
+        "what the pair settles is that the parts refusal belongs to the "
+        "CALLER'S SITUATION and not to the file. HELLO.O88 runs by name too "
+        "(two live HELLO records, one per door); a name that is not there is "
+        "LD_EBAD; and the sharp one is ONE FILE, TWO DOORS, TWO ANSWERS - "
+        "tests/multiseg's real seven-part MSEG.O88, not a flag set by hand, "
+        "is read into a claim and REFUSED by PKG_RUN and then opened BY NAME "
+        "and RUNS, with both halves asserted because either alone is a claim "
+        "about one door rather than about the difference. Its parts really "
+        "arrive: MSEG rewrites its own title to `MSEG 7/7 OK` and this reads "
+        "it, so a launch that produced a window and no parts cannot pass. "
+        "VERIFIED RED by downgrading the cell from OSAPI_NCELL to a plain "
+        "slot - which is exactly 21.6.1's claim, that the N stub's staging "
+        "and inst_vol_enter are what make the front half 14 resident bytes: "
+        "D and E's open half went red and the back door stayed green. "
+        "MARTYPC, through os88ui: it was hand-rolled QEMU on the argument "
+        "that "
         "nothing here is a time, which is not on docs/TESTING.md's list - "
         "and it FLAKED, driving remembered coordinates and reading a "
         "384-byte inst_tab off a RUNNING machine, which returns torn "
-        "records. It builds its own disk",
-        needs=("marty",), builds=True, wants=("build/hello.o88",)),
+        "records. It builds its own disk - and DECLARES it, because under "
+        "tools/os88soak.py the run reads a frozen tree and the row's own "
+        "`make` writes the shared build/: pkgrun360.img was built where the "
+        "launch was no longer looking, so the row died in shutil.copyfile "
+        "before a guest existed. It read as a product failure and passed "
+        "under os88test.py all along (docs/WRITING-TESTS.md: a `wants=` was "
+        "the answer, not a `builds=True`) - so the `builds=True` is gone "
+        "with it, tests/pkgrun.py's build() returning at once when "
+        "os88build.tree_root() is set, which leaves the by-hand invocation "
+        "in the file's own header working and the shared build/ untouched "
+        "mid-run",
+        needs=("marty",),
+        wants=("build/hello.o88", "build/mseg.o88",
+               "build/pkgrun360.img")),
     Row("heapmap", "soak", py("tests/heapmap.py"), 30.0,
         "What does the claim heap look like when the boot is over? (SPEC.md "
         "50, 66) Every driver attached at once on a machine WITH memory above "
@@ -2459,9 +2707,1851 @@ SOAK = [
         "check 4's repaint differs over 24 rows of the grid",
         needs=("marty",), serial=True,
         wants=("build/sheetmove360.img",)),
-    Row("heapcheck", "soak", py("tests/heapcheck.py"), 40.0,
+    Row("doscom", "soak", py("tests/doscom.py"), 30.0,
+        "THE DOS WAVE-1 GATE (SPEC.md 96): double-click a .COM in a Disk "
+        "window and assert a real DOS program RAN - its own output on the "
+        "text screen inside the fsx bracket, and its exit code in the "
+        "package's window after it. MartyPC and not QEMU, because the whole "
+        "point is a 4.77MHz 8088 executing DOS code natively. VERIFIED TO "
+        "FAIL, three ways, each seen on the way to writing it: far-jump to "
+        "PSP:0000 instead of PSP:0100 and it reads 'Exit code 000' with no "
+        "output; get PSP:0002 wrong and the KB line reads 8 instead of 520; "
+        "answer an unsupported INT 21h instead of setting CF in the PUSHED "
+        "flags and the program itself prints 'the gate has FAILED'.",
+        needs=("marty",), serial=True,
+        wants=("build/doscom360.img",)),
+    Row("dosglyph", "soak", py("tests/dosglyph.py"), 75.0,
+        "a SHIPPED document glyph (SPEC.md 54.3.2) reaches every path the "
+        "kernel fills a slot's glyph by - the baked table, the cache seed "
+        "at a volume switch, a cache hit at a mount and a miss's harvest "
+        "off the sector - each proved by POISONING the slot with the "
+        "reduction first, and the composed page-plus-glyph icon is found in "
+        "a Disk window's own pixels over a .COM. DOS is the package because "
+        "its CRT is the line drawing the 2x2 majority reduction empties. "
+        "tests/unit/t_docglyph.py is the host half. VERIFIED TO FAIL by "
+        "forcing assoc_img_glyph's flag test off in kernel/assoc.inc: steps "
+        "1-4 stay green and step 5 reads the reduction, which is the one "
+        "path that test guards. TWO LEGS CAME IN WITH SPEC.md 54.7.4, and "
+        "both are about the STORE outliving what it was filled from. Step 6 "
+        "re-enters the folder ONE MORE TIME with no poison: step 5 leaves a "
+        "store row behind, the next visit is a hit on it, and a harvest that "
+        "stored the body without the glyph left zeros there - so the hit "
+        "reduces and UNDOES step 5. Not a missing glyph, a worse one; "
+        "reported from the field as '.EXE icons are back to the downsized "
+        "full icon', and invisible to steps 1-5 because each of them looks "
+        "once and this needs the second look. Step 2b reads the composed "
+        "DOCUMENT row's key back out of the store: that body is the only one "
+        "there that is DERIVED, so the glyph it was composed from is in its "
+        "key - without which a slot created unresolved composes the bare "
+        "page and its documents draw it for the rest of the session even "
+        "after the glyph resolves. Both watched going red on their own "
+        "defect and no other leg",
+        needs=("marty",), wants=("build/doscom360.img",)),
+    Row("dosexe", "soak", py("tests/dosexe.py"), 28.0,
+        "THE DOS WAVE-2 GATE (SPEC.md 96.8, 96.9): a real MZ .EXE - header, "
+        "relocation table, and a last page that is exactly full so e_cblp is "
+        "0. It checks the four things only an .EXE has: the relocation "
+        "applied (a far pointer that reads back RELOC-OK instead of the "
+        "interrupt vector table), SS:SP taken from the HEADER and not the "
+        "PSP, the AH=4Ah-then-AH=48h pair every compiled program does at "
+        "startup, and a truthful largest-free-block from the BX=FFFFh probe. "
+        "VERIFIED TO FAIL: dos_movedown built its paragraphs-to-words shift "
+        "with `mov cl, 3 / shl cx, cl`, which destroys the low byte of the "
+        "count being shifted - 64 paragraphs became 3, 48 bytes of a 1KB "
+        "image moved, and the screen showed the machine's own memory as "
+        "text rather than any error.",
+        needs=("marty",), serial=True,
+        wants=("build/dosexe360.img",)),
+    Row("dosmouse", "soak", py("tests/dosmouse.py"), 60.0,
+        "THE DOS MOUSE GATE (SPEC.md 96.10): INT 33h is a TRANSLATION over "
+        "numbers os8088's own ISR is already keeping, so the row is a "
+        "COMPARISON - it moves the kernel's pointer, reads mouse_x/mouse_y "
+        "and vid_w/vid_h back out of the guest, scales them itself, and "
+        "asserts the DOS program printed exactly that. Both level reads are "
+        "taken at points far apart on BOTH axes, so a y that is tracking x "
+        "cannot pass. It also clicks while the program is BLOCKED in "
+        "AH=08h, which is what functions 5 and 6 have to survive. VERIFIED "
+        "TO FAIL: `mul` lands its product in DX, which is the y being "
+        "answered, so the first draft returned a divide remainder as the y "
+        "coordinate - exact on x, nonsense on y, and invisible in any test "
+        "that only looks at one axis.",
+        needs=("marty",), serial=True,
+        wants=("build/dosmou360.img",)),
+    Row("kdhdd", "soak", py("tests/kdhdd.py"), 150.0,
+        "THE FIXED DISK IS A VOLUME UNDER kern_dos, AND A PROGRAM READS ITS "
+        "OWN DRIVE (SPEC.md 96.46). Two defects with one instrument: the "
+        "fixture puts a DIFFERENT sixteen-byte marker in KDDATA.TXT on each "
+        "volume and KDHELLO.COM opens that name with NO DRIVE LETTER, so the "
+        "marker it prints back names the drive the open landed on - which "
+        "makes `the volume is not there` and `it opened the wrong drive's "
+        "copy` two different pictures instead of one silent wrong answer. "
+        "kern_dos carried disk.inc's STATIC dsk_vtab, and 18.7.1 pins the "
+        "boot partition at row 2, which that initialiser has DVK_FREE - so a "
+        "machine with a hard disk handed over an index kern_dos read as no "
+        "volume. VERIFIED TO FAIL: with the carry taken out the run under "
+        "kern_dos reports `(open failed)`.",
+        needs=("marty",), serial=True,
+        wants=("build/kdos/DOS.O88", "build/kernel.sys", "build/hiber.drv")),
+    Row("kdmouse", "soak", py("tests/kdmouse.py"), 120.0,
+        "THE SAME QUESTION WITH NO KERNEL ON THE MACHINE (SPEC.md 96.45). "
+        "`dosmouse` above is a TRANSLATION gate - the kernel owns the "
+        "hardware and the box scales its numbers - and under arm 3 there is "
+        "no kernel at all: the handoff calls `mouse_unhook` (it must, or a "
+        "live IRQ4 vectors into kern_dos's image at `mou_isr`'s KERNEL "
+        "offset), so the pointer has to be brought back by a second driver "
+        "off the port os8088 settled on. It cannot compare against "
+        "mouse_x/mouse_y - those are not wrong addresses here, they are not "
+        "symbols - so it drives RELATIVE motion and asserts the pointer "
+        "moved down-right by UNEQUAL amounts on the two axes, then clicks "
+        "while the program is blocked. VERIFIED TO FAIL, twice and for two "
+        "different reasons: with DHK_MOUSE unfilled it reads (0,0) -> (0,0) "
+        "having still reported a driver present, and with the launch "
+        "block's line mask overlapping the base's own high byte it reads "
+        "the same thing while kern_dos drives a UART at 0x10F8.",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/dosmou360.img")),
+    Row("dosfile", "soak", py("tests/dosfile.py"), 35.0,
+        "THE DOS FILE-HANDLE GATE (SPEC.md 96.11): os8088 has no file handle "
+        "anywhere - the published API is by NAME and by WHOLE FILE - so the "
+        "layer is built in the package over ONE cluster-aligned window carved "
+        "off the top of the arena, and this row says the bytes survive it. It "
+        "writes 20,480 bytes through AH=3Ch/40h, which crosses that 8KB "
+        "window TWICE so the first flush REPLACES and the two after it "
+        "APPEND; reads it all back checking every byte against its own "
+        "offset, so a window that refills at the wrong base is a wrong VALUE "
+        "at a seam rather than a short read; seeks to 12,345 and reads there; "
+        "then deletes it and proves the next open fails with code 2. VERIFIED "
+        "TO FAIL: it went red at `FAILED at create, code 1` - invalid "
+        "function - against a build/ that still held the PREVIOUS package, "
+        "because `make doscom` builds the gate disk and not the system one "
+        "the handler ships on.",
+        needs=("marty",), serial=True,
+        wants=("build/dosfile360.img",)),
+    Row("dosdbg", "soak", py("tools/os88dosdbg.py", "--selfcheck"), 0.3,
+        "THE DOS DEBUGGING TOOLKIT'S OWN SELF-CHECK (docs/DOS-DEBUGGING.md). "
+        "It is here rather than in `fast` because it is about one subject "
+        "nobody else touches, and because the tool ALSO checks itself on every "
+        "real use - the thing that must never go wrong quietly is the ring "
+        "layout, and `trace` and `ref` both refuse rather than decode from "
+        "inside the wrong entry. WHAT IT COVERS is the half that has no "
+        "emulator in it: apps/dos's constants assemble out and the ring is a "
+        "power of two (its mask depends on that), tests/dostrap/trap.asm "
+        "publishes its own layout and AGREES with the box on the entry size - "
+        "one reader decodes both rings, so a field added to one and not the "
+        "other reads as a plausible trace of a program that never ran - the "
+        "ring decodes oldest-first WRAPPED and not, and the alignment survives "
+        "a different load address and an inserted pair of calls, which is the "
+        "whole instrument: two runs of one program share no address and every "
+        "call site.",
+        needs=("nasm",)),
+    Row("dosfat", "soak", py("tools/os88fat.py", "--selfcheck"), 0.1,
+        "FAT12 SURGERY ON SOMEBODY ELSE'S DISK (tools/os88fat.py). It builds "
+        "its own image, so there is no fixture and no emulator. Two of the "
+        "four checks are the ones that are silent when wrong: that BOTH FATs "
+        "are written - a one-sided edit passes every reader in this tree and "
+        "fails chkdsk on the machine the disk is for - and that adding a file "
+        "leaves every other file's bytes exactly where they were, which is the "
+        "whole reason this exists beside os88disk.py rather than inside it: a "
+        "bootable DOS floppy keeps IBMBIO and IBMDOS where SYS put them. The "
+        "`reach` check is the geometry one, and it counts the LAST cylinder a "
+        "file touches, because a file that starts inside a 40-cylinder drive "
+        "and runs off the end truncates in the MIDDLE.",
+        needs=()),
+    Row("dosdir", "soak", py("tests/dosdir.py"), 35.0,
+        "THE DOS DIRECTORY, FIND, VECTOR AND CLOCK GATE (SPEC.md 96.12, "
+        "96.13). The clock half asserts that the DOS box and the MENU BAR "
+        "fall back to the same day on a machine with no clock chip - which "
+        "is every machine this project targets - and that 4 July 2026 comes "
+        "out a Saturday, which is the only digit a wrong Sakamoto table "
+        "moves; plus AH=2Dh then AH=2Ch agreeing with itself. THE FIND "
+        "COUNTS ARE THE ROW: the gate disk carries A.TXT, BB.TXT, CCC.TXT, "
+        "DATA.DAT and the program, chosen so the three patterns give three "
+        "DIFFERENT numbers - `*.*` 5, `*.TXT` 3, `?.TXT` 1. A matcher that "
+        "ignores wildcards, one that matches the printable NAME.EXT form "
+        "instead of the 8.3 one, and one that lets `*` run past the dot each "
+        "get a different number wrong and no two agree. AH=47h is checked "
+        "against a name the program CHOSE - it makes SUBDIR, stands in it and "
+        "asks - so the '..' walk cannot pass by naming something already on "
+        "the disk. Plus AH=25h/35h round-tripping a vector and AH=19h "
+        "answering B.",
+        needs=("marty",), serial=True,
+        wants=("build/dosdir360.img",)),
+    Row("dosdrv", "soak", py("tests/dosdrv.py"), 40.0,
+        "A DRIVE LETTER IN A NAME REACHES THE DRIVE IT NAMES (SPEC.md "
+        "96.6.2). THE FOUND COLUMN IS THE ROW: a search of another drive "
+        "that comes back with THIS drive's directory reports success, so it "
+        "is indistinguishable from a search that worked - which is how it "
+        "shipped, standing on B: and answering `A:*.*` with B:'s own files "
+        "and `C:*.*` on a machine with no hard disk. The assertion is WHICH "
+        "FILE, computed from the two floppies rather than written down: the "
+        "pair is built so each carries a name the other has not. THE `CUR` "
+        "COLUMN IS THE SECOND HALF and without it a wrong fix passes - a "
+        "letter must not MOVE the program, so a box that got the search "
+        "right by leaving it on A: would satisfy everything else here. THE "
+        "HANDLE ROWS ARE THE THIRD and are what a pattern cannot reach: a "
+        "handle is a NAME, re-resolved at every window, and the A: handle is "
+        "read AGAIN after the B: one has taken the window, which is the only "
+        "way to exercise the steal across volumes. The refusal code is "
+        "MEASURED - IBM DOS 3.30 answers 3 for a drive that is not there, "
+        "not 15, on 4Eh, 3Dh and 3Bh alike.",
+        needs=("marty",), serial=True,
+        wants=("build/dosdrv360.img", "build/dosdrvsys.img")),
+    Row("dosregs", "soak", py("tests/dosregs.py"), 25.0,
+        "DOES INT 21h GIVE BACK EVERY REGISTER IT DOES NOT ANSWER IN? "
+        "(SPEC.md 96.7.1.2). ONE BINARY RUNS ON BOTH - tests/dostrap/regs.asm "
+        "under this box and under a real IBM DOS 3.30 off a real floppy, "
+        "printing the same table - because the two findings before this one "
+        "each came out of a PROGRAM visibly breaking, and 'which register "
+        "does the next one destroy' is not a question reading the code "
+        "answers: 96.7.1 made the argument for SI, DI and ES and left DX out "
+        "of it, and DX was destroyed on 37 opens out of 37. Every register "
+        "the call does not need goes in carrying a sentinel and the whole set "
+        "is pushed THE INSTRUCTION AFTER THE `int` - before the AH=02h that "
+        "prints it, which is itself one of the calls under test. 45 calls: "
+        "every function the box dispatches except AH=4Bh (needs a child - "
+        "dosexec is its gate), AH=01h/07h/08h (they BLOCK on a keystroke), "
+        "AH=4Ch/00h (they do not return) and the memory trio, where a .COM "
+        "owning all of memory makes the comparison about DOS's memory model "
+        "rather than about registers. THE EXPECTED COLUMN IS THE "
+        "MEASUREMENT and not a rule: five functions answer in DX and two in "
+        "ES:BX, so those read a letter on a correct DOS too, and CF rides "
+        "every row because a call that fails on one machine and succeeds on "
+        "the other has a different set of outputs. It found three things - "
+        "AH=47h eating CX (a program that kept a count across `where am I` "
+        "got 132 back), AH=44h's bit 6, which 96.7.1.1 recorded and could "
+        "not fix, and AH=44h's DRIVE bits, which read the box's standing "
+        "drive where DOS answers the FILE's, so the last five rows stand the "
+        "machine on A: and open B:REGS.COM by name. The `57 ` row is RED ON "
+        "PURPOSE and named: AH=57h is unimplemented because "
+        "OSAPI_FILE_FIND's record carries no timestamp, and it is in the "
+        "table so that implementing it FAILS this row rather than quietly "
+        "passing on a stale expectation. VERIFIED RED three ways: dropping "
+        "the FHF_WROTE store, putting [dos_vol] back in the device word, and "
+        "un-pushing CX in .getcwd.",
+        needs=("marty",), wants=("build/dosregs360.img",)),
+
+    Row("icostore", "soak", py("tests/icostore.py"), 60.0,
+        "TWO VOLUMES, ONE BODY (SPEC.md 25.9). The Disk window's icons were a "
+        "64-byte slot PER ENTRY, per listing and mirrored per open window, so "
+        "the copy of a package on the system disk and the copy on the apps "
+        "disk were two bodies in RAM and a folder of documents was 64 zero "
+        "bytes apiece. This asserts the three things that replaced it and "
+        "that NONE of them is visible on the glass: a listing's references "
+        "are DISTINCT (the defect it catches shipped for one commit - the "
+        "per-entry paths reached the folder's SHARED allocator and dsk_icoix "
+        "read 00 00 00 ...), a FOLDER takes no row at all, and the SECOND "
+        "VOLUME REUSES THE FIRST'S ROWS, which SPEC.md 24.3 makes the "
+        "ordinary case by shipping the core packages twice. The key is "
+        "(name, size) because it is the only identity available without a "
+        "SECTOR READ - keying on either half alone over-merges and shows up "
+        "here as too few rows.",
+        needs=("marty",), wants=("build/os8088-360.img", "build/apps360.img")),
+
+    Row("ascabsorb", "soak", py("tests/ascabsorb.py"), 30.0,
+        "ASSOC.DAT'S BUFFER IS A FILE BUFFER (SPEC.md 54.7.4 / 25.9.4). The "
+        "volume's association cache was a 3KB claim held for the SESSION, and "
+        "2,560 of those bytes were icon bodies - the same pictures under the "
+        "same (stem, size) identity as SPEC.md 25.9's machine-wide store, "
+        "which is the duplication that whole design is against and was the "
+        "larger of the two copies. asc_use absorbs every row's body into the "
+        "store and frees the claim before it returns. Four verdicts: after a "
+        "mount there is NO MEM_K_ASC record in mem_tab and asc_seg is 0 - "
+        "asserted on the ALLOCATOR and not on the variable, because the "
+        "variable alone passes if the claim is LEAKED instead of freed, which "
+        "is the one way this could be worse than what it replaced; the bodies "
+        "survived, measured as a ROOT mount storing the whole volume's "
+        "packages (ASSOC.DAT covers the volume, and they live one folder down "
+        "so nothing has listed them); entering that folder then adds almost "
+        "nothing, which is the saving as a number; and a SHED clears asc_vol, "
+        "because the stamp means 'this volume is in the store' now and a "
+        "purged store that still claims it would cost a sector per package - "
+        "400 ms of int 13h apiece on the target machine. All four watched "
+        "going red: asc_drop removed fails 'gone' with the record still "
+        "there, asc_absorb removed fails 'absorbed' at the root count, and "
+        "ico_need's stamp clear removed fails 'stamp'.",
+        needs=("marty",), wants=("build/os8088-360.img", "build/apps360.img")),
+
+    Row("dosmcb", "soak", py("tests/dosmcb.py"), 30.0,
+        "A BLOCK GROWS BACK INTO WHAT IT GAVE UP (SPEC.md 96.9.2). AH=4Ah "
+        "grows only into the block immediately above it, which is DOS's own "
+        "rule and only half of DOS: DOS coalesces adjacent free blocks during "
+        "the allocation walk and this box did not. Every DOS memory manager "
+        "takes the largest block there is and then shrinks and grows it as "
+        "the program's heap moves, each shrink cutting a NEW free tail - so "
+        "after two of them the space given up is two or three adjacent free "
+        "blocks, and a grow that absorbs only the first REFUSES A BLOCK "
+        "SMALLER THAN ONE IT HAS ALREADY GRANTED, answering the previous "
+        "high-water mark. Measured on Commander Keen 2 under kern_dos: "
+        "granted 0x78C0 paragraphs (483 KB), refused 0x6900 (420 KB), with "
+        "221 KB free above the block in three pieces. ONE BINARY ON BOTH - "
+        "tests/dostrap/mcb.asm under this box and under a real IBM DOS 3.30 "
+        "off a real floppy - and THE NUMBERS ARE NOT COMPARABLE, the two "
+        "arenas differing by design: what holds on both is that all five "
+        "steps succeed with bx equal to the ask, and the fifth asks for LESS "
+        "than the second was granted. VERIFIED RED: without dos_mcb_join the "
+        "last step reads `ask=5FEA cf=1 bx=5236`.",
+        needs=("marty",), wants=("build/dosmcb360.img",)),
+
+    Row("dosvec", "soak", py("tests/dosvec.py"), 25.0,
+        "THE VECTORS A REAL DOS OWNS ARE INSTALLED, not left at 0000:0000 "
+        "(SPEC.md 96.5.2). The box hooked 20h 21h 22h 23h 24h 2Fh 33h and "
+        "left the other fourteen of DOS's own block empty - which is not "
+        "'unimplemented', it is a JUMP TO ADDRESS ZERO, and a program cannot "
+        "test for it beforehand because the probe IS the call. BOLOBALL asks "
+        "`int 2Ah AH=00h` - is a network redirector loaded - three "
+        "instructions after a version check we answer correctly, and ran off "
+        "into the IVT with SP walking down two bytes a lap; nothing in our "
+        "own INT 21h trace looks wrong at any point. ONE BINARY ON BOTH, "
+        "dosregs's shape: tests/dostrap/vecs.asm prints five lines under this "
+        "box and under a real IBM DOS 3.30 off a real floppy, and every "
+        "expected value here is that run. NUL=NONE is the block; 2A=00 is the "
+        "probe SURVIVING the call and the handler being an iret rather than "
+        "something that scribbles; 29=[*] is fast console output, where an "
+        "iret would be SILENCE and not a crash; SPD=0000 is INT 25h's stack, "
+        "those two being the only calls of the era that do not iret - DOS "
+        "leaves the FLAGS the INT pushed ON THE STACK, so a handler that "
+        "irets answers correctly and unbalances the caller by two bytes. CF "
+        "and AX on that line are NOT compared and the probe judges nothing: "
+        "DOS reads sector 0 of drive A and succeeds where this box refuses. "
+        "The last assertion is the exit code - the probe leaves through "
+        "AH=00h with AL=42h, whose code is ZERO, and reporting AL is where "
+        "the field's `Exit code 002` came from.",
+        needs=("marty",), wants=("build/dosvec360.img",)),
+
+    Row("dosfcb", "soak", py("tests/dosfcb.py"), 30.0,
+        "AH=29h PARSES A NAME INTO AN FCB, exactly as DOS does (SPEC.md "
+        "96.28). THE CARRY IS THE ROW: unimplemented, the call fell to the "
+        "invalid-function arm and answered CF=1 with AX=0001 - and DOS does "
+        "not use the carry for it at all, so a program reading AL, which for "
+        "this call every program does, was told its plain name HAD WILDCARDS "
+        "IN IT. A handler that gets the FCB right and leaves the carry set is "
+        "still broken, so CF is asserted on every row. The table is a "
+        "MEASUREMENT OF IBM DOS 3.30 (tests/dostrap/parsefcb.asm is the same "
+        "binary under a real DOS), so it is written down rather than derived "
+        "and cannot drift with the disk. FOUR ROWS DECIDE THE "
+        "IMPLEMENTATION and none is guessable: a wildcard becomes `?` and not "
+        "`*`; an invalid drive answers FFh AND STILL WRITES its number; the "
+        "name is upper-cased, which is what Prince's installer needs "
+        "(B:Prince.exe); and a PATH is not a path - A:\\DIR\\NAME advances SI "
+        "by TWO and leaves the name blank.",
+        needs=("marty",), serial=True,
+        wants=("build/dosfcb360.img",)),
+    Row("dosren", "soak", py("tests/dosren.py"), 30.0,
+        "AH=56h RENAMES WHERE IT STANDS (SPEC.md 96.31). The table is a "
+        "MEASUREMENT OF IBM DOS 3.30 by the same binary "
+        "(tests/dostrap/renref.asm), so it is a property of DOS and cannot "
+        "drift with the disk or the build. AX IS JUNK ON SUCCESS - DOS "
+        "reports 0012h on the rows that worked - so only CF is asserted "
+        "there. TWO ROWS DECIDE THE IMPLEMENTATION: the two names must "
+        "resolve to the SAME drive and an unqualified one means the CURRENT "
+        "drive, not the other name's, so a handler that resolves the new "
+        "name against wherever the old one lives renames happily on the "
+        "other drive where DOS answers 11h; and a path in the new name is a "
+        "MOVE that DOS makes and OSAPI_FILE_RENAME cannot, so it is refused "
+        "with 5. The drive letters are built at RUN TIME from AH=19h, which "
+        "is what lets one binary mean the same thing under a real DOS "
+        "(running from A:) and here (launched off B:).",
+        needs=("marty",), serial=True,
+        wants=("build/dosren360.img",)),
+    Row("dosshell", "soak", py("tests/dosshell.py"), 270.0,
+        "THE BUILT-IN COMMANDS - A COMMAND.COM THAT IS NOT A FILE (SPEC.md "
+        "96.30). AH=4Bh of a program named COMMAND.COM loads nothing: it "
+        "reads the command tail and runs one built-in, so a program's "
+        "system(\"copy ...\") works with no shell on the disk. EVERY ANSWER "
+        "IS A FILE, twice: the probe writes the eight exit codes into "
+        "RESULT.TXT and the host then walks the volume with an independent "
+        "FAT12 reader, because a shell that reports success and writes "
+        "nothing looks perfect from inside the guest. THE PROBE RUNS UNDER A "
+        "REAL IBM DOS UNCHANGED (tests/dostrap/shellref.asm), which is what "
+        "makes the expected codes a measurement of DOS rather than a "
+        "description of us - under DOS it drives the genuine COMMAND.COM. "
+        "The three .TXT bodies DIFFER on purpose, so 'the RIGHT file "
+        "arrived' is the assertion rather than 'a file arrived'. AND THE "
+        "MOVE'S CLAIM IS THE HOST'S ALONE: a move that quietly copied would "
+        "pass every row the probe can write, so what says it was RE-LINKED "
+        "(22.25) is the first cluster being the same number on the untouched "
+        "gate image and on the one the guest left.",
+        needs=("marty",), serial=True,
+        wants=("build/dossh360.img",)),
+    Row("dosexec", "soak", py("tests/dosexec.py"), 30.0,
+        "THE DOS EXEC GATE (SPEC.md 96.14): AH=4Bh loads another program and "
+        "runs it, and control comes back to the PARENT inside the INT 21h "
+        "call that asked - which is what a shell is made of. It asserts the "
+        "refusal FIRST (a 4Bh before the parent shrinks itself answers 8, "
+        "because the launched program was given the whole arena - DOS's own "
+        "rule, and a shim that found memory anyway would be lying), then "
+        "that the child printed, that its COMMAND TAIL arrived through the "
+        "parameter block's far pointer, that PSP:0016 names its parent, and "
+        "that the parent is STILL RUNNING afterwards with the child's code "
+        "readable through AH=4Dh. That last one is what a wrong stack "
+        "restore destroys, and it fails as a hang or as the bracket ending "
+        "rather than as a wrong number.",
+        needs=("marty",), serial=True,
+        wants=("build/dosexec360.img",)),
+    Row("dosxms", "soak", py("tests/dosxms.py"), 28.0,
+        "THE DOS XMS GATE (SPEC.md 96.15). ON AN 8088 THE WHOLE ASSERTION IS "
+        "A REFUSAL, and it is worth a row because getting it wrong is silent "
+        "both ways: int 2Fh AX=4300h must answer AL != 80h when the pool can "
+        "hand nothing out, because a program told YES has committed to XMS by "
+        "the time the first call refuses; every OTHER multiplex number must "
+        "answer AL=0, which an UNHOOKED vector cannot say; and asking has to "
+        "RETURN, an unhooked 2Fh on a ROM that does not implement it being "
+        "how a TSR probe becomes a hang. THE WORKING PATH IS THE OTHER ROW: "
+        "allocate, move, free needs a machine with memory above 1MB, which "
+        "this one by definition has not got, so it is `dosxmsq` on QEMU "
+        "(SPEC.md 96.15.3) and neither row can answer the other's half.",
+        needs=("marty",), serial=True,
+        wants=("build/dosxms360.img",)),
+    Row("dosxmsq", "soak", py("tests/dosxmsq.py"), 45.0,
+        "THE DOS XMS WORKING GATE (SPEC.md 96.15.3) - the other half of "
+        "`dosxms`, and QEMU because it has to be: the assertion needs a "
+        "machine with memory ABOVE 1MB and MartyPC's 8088 never has any, "
+        "which is docs/TESTING.md's QEMU list entry 1, the same ground "
+        "`xmcheck` stands on. A .COM asks int 2Fh AX=4300h (must be AL=80h "
+        "HERE, where the MartyPC row asserts it is NOT), takes the entry "
+        "point from AX=4310h and CALLS it, reads the pool, allocates 64KB, "
+        "moves a pattern OUT, then WIPES conventional memory with a third "
+        "value before moving it BACK - that wipe is the load-bearing step, "
+        "because without it a move that did nothing in either direction "
+        "passes - compares every byte and frees. It reads the bracket's text "
+        "screen out of 0xB8000 rather than through os88ui, which is a "
+        "MartyPC instrument with no QEMU form.",
+        needs=("qemu",), serial=True, timeout=600,
+        wants=("build/dosxmsq.img",)),
+    Row("kerndos", "soak", py("tests/kerndos.py"), 10.0,
+        "THE KERNEL'S DISK LAYER, OUTSIDE THE KERNEL "
+        "(docs/plans/KERN-DOS-PLAN.md W3): kernel/disk.inc, diskw.inc and "
+        "dskwin.inc assembled under kerndos/kerndos.asm - no scheduler, no "
+        "window manager, no drawing layer, no API table - mounting a FAT12 "
+        "floppy and reading a file. IT ASSEMBLES AND IT WORKS ARE DIFFERENT "
+        "CLAIMS: every entry in kerndos/kdshim.inc is a `ret`, a refusal or a "
+        "handful of bytes, and a `ret` where a value was expected assembles "
+        "perfectly and returns garbage. So the guest prints the entry count, "
+        "the length and a ROTATE-AND-ADD checksum, and tools/os88fat.py "
+        "computes the same two on the host off the same image - a plain sum "
+        "could not tell a reordered chain or a zero run from the real bytes, "
+        "which is exactly what a chain walk gets wrong. A: carries no file "
+        "system at all (a loader and the blob raw, because a FAT volume's "
+        "sectors 1..n are its FATs) and B: is the volume under test. It went "
+        "red four ways writing it, every one recorded in SPEC.md 96.37: the "
+        "shim's stubs at offset 0 instead of the entry jump, `.lowbss` "
+        "without vstart=0, a near `ret` under a FAR call, and the ON-DISK "
+        "record offsets read out of a SYNTHESIZED entry.",
+        needs=("marty",), serial=True),
+    Row("kdos", "soak", py("tests/kdos.py"), 10.0,
+        "A DOS PROGRAM RUNS OUTSIDE THE KERNEL "
+        "(docs/plans/KERN-DOS-PLAN.md W4, SPEC.md 96.38): W3 got the disk "
+        "layer out; this puts apps/dos/dos.asm WHOLE AND UNEDITED on top of "
+        "it over kerndos/kdback.inc, a second implementation of the twenty-two "
+        "dos_k_* doors. KERN-DOS-PLAN 3's claim is that a port is those doors "
+        "and nothing above them, and this row is what makes that a fact "
+        "rather than a reading of the source. THE PROGRAM IS FOUR ASSERTIONS "
+        "AND NOT ONE, every line of it out of INT 21h and none out of the "
+        "BIOS: a banner (AH=09h), the version (AH=30h - a dispatch that "
+        "RETURNS a value, where one that merely does not crash would pass a "
+        "banner-only test), the arena read out of PSP:0002, and a file it "
+        "opens and reads itself through the NEW doors - then AH=4Ch with a "
+        "known code, because a fall into the arena produces a clean-looking "
+        "zero as readily as a clean exit. It reads 500 KB above its own PSP "
+        "against the windowed box's 449, which is the number the whole plan "
+        "exists to move. A: carries no file system (the loader and the blob "
+        "raw) and B: is an ordinary FAT12 volume; measured at 4.5s idle.",
+        needs=("marty",), serial=True),
+    Row("kdpart", "soak", py("tests/kdpart.py"), 1.0,
+        "kern_dos IS REACHABLE AS ABSOLUTE SECTORS (W5c of "
+        "docs/plans/KERN-DOS-PLAN.md §4.1.1): the handoff gives the heap "
+        "away before it jumps, so the part is never LOADED as a part - its "
+        "bytes are walked into extents while the file layer is alive and the "
+        "stub reads them with int 13h. This is that arithmetic, done on the "
+        "host BEFORE any assembly depends on it, and every step has a way to "
+        "be quietly wrong: OP_R_OFF is in 512-byte units and not bytes or "
+        "clusters; a FAT chain's runs are what an extent list IS; file sector "
+        "N is the (N mod spc)'th of the (N div spc)'th cluster, which is the "
+        "one place an off-by-one lands in the MIDDLE of the image; and the "
+        "bytes at those sectors have to LZ4-expand to build/kerndos.bin "
+        "exactly, which is the only step a consistent mistake in the first "
+        "three cannot fool. It also checks the extent COUNT against HS_XMAX, "
+        "because the staging area is fixed at assembly time and a floppy "
+        "written to for a year is where a too-fragmented part would first "
+        "show up. Host-side, one second, and it reads THE SHIPPED SYSTEM DISK: since SPEC.md 96.44.5 flipped $(SYSROOT) to the parted package there is no gate disk to read instead, so this row also answers `did a shipped floppy lose kern_dos`.",
+        wants=("build/os8088-360.img", "build/kerndos.bin")),
+    Row("kdkbd", "soak", py("tests/kdkbd.py"), 60.0,
+        "KERN_DOS KEEPS THE BIOS KEY BUFFER OFF FULL (SPEC.md 96.50). "
+        "Reported off an 86Box 386: hold a direction key in Prince of Persia "
+        "under the whole-machine arm and the BIOS beeps for longer than the "
+        "typematic interval, so the next repeat overflows DURING the beep and "
+        "it never stops - SPEC.md 9.8's 'unbounded and fatal', which the "
+        "KERNEL has guarded since and kern_dos had not. The handoff's step 6 "
+        "puts int 09h back to the ROM's and MUST (kbm_isr sits at a "
+        "KERNEL_SEG offset that is kern_dos's image one instruction later); "
+        "putting nothing in its place is the gap. MEASURED, one probe, three "
+        "machines: windowed 0060:3986 = kbm_isr, kern_dos F000:E987 = the "
+        "ROM, and IBM DOS 3.30 at its own prompt F000:E987 - THE SAME ADDRESS "
+        "TO THE BYTE, so this was never a regression and never ours to cause. "
+        "THE BUFFER IS FORGED FROM INSIDE THE GUEST, which is why the probe "
+        "is a DOS program: a host-side forge is drained before the test key "
+        "lands, and that was measured and read as 'both arms survived'. What "
+        "is asserted is 9.8's own verification - a key on a full buffer winds "
+        "the tail 003C -> 003A and is STORED - and NOT the beep, which cannot "
+        "be reproduced here: the probe proves its own speaker instrument by "
+        "sounding one (control 65,536 of 65,536) and then reads ZERO on both "
+        "arms and on both ROMs this harness can boot, GLaBIOS and the genuine "
+        "27-Oct-82 IBM part. The beeping ROM is the reporter's 386 BIOS and "
+        "MartyPC is an 8088. VERIFIED RED against `os88build.py build "
+        "NOKDKBD=1`, whose image this row takes as an argument.",
+        needs=("marty",), serial=True, wants=("build/doscom360.img",)),
+    Row("kdhand", "soak", py("tests/kdhand.py"), 40.0,
+        "THE DOS HANDOFF, END TO END (SPEC.md 96.40, "
+        "docs/plans/KERN-DOS-PLAN.md 7): run a .COM in the window, then run "
+        "THE SAME .COM with the Memory page's third arm picked, and assert "
+        "that the second run happened on a machine with no os8088 in it - "
+        "589 KB against 437, a text screen the kernel is not drawing, the "
+        "program's own exit code, and an `int 19h` that brings the desktop "
+        "back. IT ASSERTS THE COMPARISON and not either figure: the second "
+        "number is a property of the machine and the DIFFERENCE is the "
+        "property of this feature, which is the only reason the arm exists. "
+        "Seven separate defects were caught by writing it and every one is "
+        "listed in its header - the post refused, the record read through the "
+        "poster's DS, a name looked up in the wrong segment, the part read as "
+        "a classic LZ4 block rather than SPEC.md 20.13.7's stream, `int 1Eh` "
+        "left naming a table at the old kernel's offset, `.bss` arriving as "
+        "the outgoing kernel's bytes, and `OSAPI_MOUSE` surviving into an "
+        "image where KERNEL_SEG is its own segment. MartyPC and it must be: "
+        "the whole point is a real 8088 running a DOS program with the "
+        "operating system gone. `make kdostest` builds the B: floppy; the system disk is the shipped one.",
+        wants=("build/os8088-360.img", "build/doscom360.img")),
+    Row("kdcylrun", "soak", py("tests/kdcylrun.py"), 40.0,
+        "kern_dos DOES NOT CROSS A HEAD IT WAS NEVER GIVEN LEAVE TO CROSS "
+        "(SPEC.md 96.44.14). SPEC.md 18.93.1 settles that ONCE, in the "
+        "loader, with a canary over its own transfer, and writes "
+        "`boot_cylrun`; `dsk_geom_check` reads it at EVERY MOUNT with a "
+        "`cmp word` and sets [dsk_cylrun]. kern_dos has no loader and no "
+        "canary, so nothing over there writes the cell - and it was declared "
+        "`resb 1`, ONE BYTE, with `kd_top` next. The word read was the byte "
+        "plus the ALLOCATOR CEILING's low byte, 0xC0 once the read-ahead is "
+        "claimed, so every mount under kern_dos turned head crossing ON, on "
+        "every machine, with nothing behind it. On a BIOS that will not cross "
+        "one - MR BIOS 286, docs/FIELD-NOTES.md 31 - that ROM answers CF=0 "
+        "for the whole request and transfers the first half only, so the back "
+        "half of every crossing run is whatever was in the buffer: silent, "
+        "deterministic, and reported from the field as Prince of Persia "
+        "asking for its own disk. THREE CHECKS AND NONE STANDS IN FOR "
+        "ANOTHER: the word is 0 or 1 (the defect itself reads 0xC000), "
+        "[dsk_cylrun] agrees with it (dsk_geom_check ran), and it MATCHES the "
+        "kernel's own finding read off this same machine before the handover "
+        "- which is 96.44.14.1's KDL_CYLRUN, without which the honest answer "
+        "costs 18.91.1's cylinder run on every machine that earned it. "
+        "VERIFIED TO FAIL both ways: `resb 1` takes check 1 red at 0xC000, "
+        "and removing the KDL_CYLRUN store from hbm_dosrun takes check 3 red "
+        "with 0 against the kernel's 1. NO EMULATOR HERE CAN SHOW THE "
+        "SYMPTOM - GLaBIOS, SeaBIOS and MartyPC all cross a head correctly, "
+        "which is why this reads the CELL rather than looking for corruption. "
+        "MartyPC: the cells are kern_dos's own, read while the program is up.",
+        needs=("marty",),
+        wants=("build/os8088-360.img", "build/doscom360.img",
+               "build/kerndos.bin")),
+    Row("kdarena", "soak", py("tests/kdarena.py"), 40.0,
+        "THE ARENA AND THE READ-AHEAD DO NOT OVERLAP (SPEC.md 96.44.11). "
+        "kern_dos sizes the DOS program's block and THEN mounts the volume "
+        "the program came off - and the mount CLAIMS, out of the same bump "
+        "allocator, so `dsk_rah_want` lowered `[kd_top]` by 32 KB under an "
+        "arena nothing re-read. The program was handed a block whose top "
+        "24 KB the cache was living in, with SPEC.md 96.11's 8 KB file "
+        "window inside the cache outright. THE FIGURE ON THE GLASS WAS RIGHT "
+        "THROUGHOUT, which is why no row saw it: 588 KB is 588 KB whether or "
+        "not something else is in the top of it - so this row checks the four "
+        "words kern_dos laid out against the ceiling they were cut from, and "
+        "not a number the program prints. Four assertions: the file window is "
+        "the paragraph the arena ends at, the block plus the window ends at "
+        "or below `[kd_top]`, the read-ahead is KD_RAH_KEEP rungs at the "
+        "ceiling after the handover because `kd_giveback` ran the ladder down "
+        "to the width SPEC.md 96.44.11.4 measured (it asserted 0 for a cycle "
+        "after that section, and was red), and - the one that "
+        "refuses the easy fix - the program still has every KB the ceiling "
+        "allows, since SHRINKING the arena would satisfy the other three and "
+        "leave it 32 KB worse off. Checked red at the base commit, where "
+        "assertion 2 reports the 32 KB by name. The map is re-assembled and "
+        "the BINARY compared with build/kerndos.bin, `os88sym`'s discipline, "
+        "because a map of another build resolves every name to a plausible "
+        "wrong address. MartyPC and it must be: the arm takes os8088 out of "
+        "memory, so every word is read out of a guest with no OS in it. "
+        "`make kdostest` builds the B: floppy.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/doscom360.img",
+               "build/kerndos.bin")),
+    Row("kdmix", "soak", py("tests/kdmix.py"), 55.0,
+        "A 1.44MB FLOPPY IN B: UNDER kern_dos (SPEC.md 96.40.5). Every other "
+        "kd* row boots two 360KB drives - not by choice, but because every "
+        "machine in tools/martypc/configs/os8088_machines.toml had two drives "
+        "of ONE type, so the one geometry kern_dos could mount was the only "
+        "one under test. It shipped able to mount nothing else and the field "
+        "found it in a day: `kerndos/kdshim.inc` carried kern_small's "
+        "`DSK_FAT_SECS equ 2`, and mount rule 10 refuses a floppy whose "
+        "FATSz16 is over it - which is 2 sectors at 360KB and NINE at 1.44MB. "
+        "The row boots `os8088_5150_cga_gla_mix`, the tree's only machine "
+        "with two drives of DIFFERENT types, and reads B: twice: through the "
+        "WINDOW first, which is the control - the same disk readable by one "
+        "half and not the other is exactly the shape of the report - and then "
+        "under kern_dos on the third arm. `build/doscom144.img` is built with "
+        "NO `--fatcap`, deliberately, so its FAT is the nine sectors a real "
+        "DOS writes. MartyPC; `make kdostest` builds the B: floppy.",
+        wants=("build/os8088-360.img", "build/doscom144.img")),
+    Row("kdbigexe", "soak", py("tests/kdbigexe.py"), 45.0,
+        "THE READ-AHEAD LADDER, UNDER THE LOAD (SPEC.md 96.44.11.1). "
+        "`kdarena` covers the handover, and the BOTTOM is all the ladder can "
+        "ever reach there - `dos_build_psp` hands a program everything and "
+        "`dos_exe_setup` reads MINALLOC, not MAXALLOC, so no intermediate rung "
+        "can fire. The rungs only mean something at the other site: "
+        "`.loadtry`, where `dos_load` is refused, one rung of the cache is "
+        "shed and the read is made again. NOTHING ALREADY IN THE TREE CAN "
+        "REACH IT - it needs a file between the arena's capacity WITH the "
+        "cache and its capacity without, 569,952 and 602,720 bytes on a 640KB "
+        "machine - so `tests/dosbig/big.asm` is a hand-built MZ .EXE sized to "
+        "the middle of that band, which leaves ~16KB of slack on each side "
+        "(sixteen rungs of KD_IMG_KB either way) and a failure message that "
+        "says which way it has drifted. THE WINDOWED RUN IS THE CONTROL and "
+        "must FAIL: 586KB does not fit the box's ~437KB arena, so a program "
+        "that would have run anywhere could not pass. Five assertions - the "
+        "windowed refusal, the program's own check of the image head 585KB "
+        "BELOW its code (a short read or a `dos_movedown` that bound at 64KB "
+        "is the one failure a `did it start` row would pass), that the file "
+        "really does not fit the cache's own capacity, the cache width at "
+        "every load attempt read through a breakpoint at the top of the retry "
+        "loop and checked against the ladder, and that it loaded on the FIRST "
+        "rung with room rather than shedding more than it had to. Checked red "
+        "twice on purpose: with `.loadtry` deleted the guest says `the "
+        "program could not be loaded`, and with the rungs collapsed the "
+        "widths read [7, 0] against [7, 4, 2, 0]. `os8088_5150_cga_gla_mix`, "
+        "the only machine here with two drives of different types, because "
+        "586KB does not fit a 360KB floppy. MartyPC; `make kdostest` builds "
+        "the disk.",
+        needs=("marty", "nasm"),
+        wants=("build/os8088-360.img", "build/dosbig144.img",
+               "build/BIG.EXE", "build/kerndos.bin")),
+    Row("kdnoprog", "soak", py("tests/kdnoprog.py"), 75.0,
+        "A PROGRAM THAT IS NOT THERE, ON ARM 1, SAYS SO (SPEC.md 96.40.7). "
+        "Field report: \"trying to run a program that doesn\'t exist, via "
+        "typing it in the text box and clicking run with shut down the os "
+        "checked, does not give any message\". What it really said was WORSE "
+        "than nothing - `C:\\NOSUCH.COM ended, exit code 255 (Arena: 597KB)`, "
+        "a refusal wearing a result\'s clothes: [dos_state] read DST_RAN, "
+        "[dos_err] read 0, and there is nothing in that line to act on. Two "
+        "causes that compound - every refusal arm in kd_entry ended at ONE "
+        "label writing 0xFF, and kd_puts writes the sentence to kern_dos\'s "
+        "OWN screen which kd_leave hands straight back from, so the diagnosis "
+        "existed and was thrown away a frame later. 255 cannot be the signal "
+        "either: it is a legal INT 21h AH=4Ch code. "
+        "IT HAS TO BE ARM 1 AND A REAL ROUND TRIP: arm 0 has always reported "
+        "this (dos_load fails inside dos_run and .freeerr sets [dos_err]) and "
+        "the console door says `Bad command or file name`. The silence is "
+        ".outq, the QUIET door (96.35.1), which exists so a successful post "
+        "does not print an exit line for a program that has not started - and "
+        "which skips dos_con_ended entirely. So only a machine that really "
+        "hibernates, boots kern_dos, fails and comes back can answer it, which "
+        "is why this row needs a FIXED DISK. THREE ASSERTIONS: DST_ERR and not "
+        "DST_RAN; [dos_err] is DER_READ specifically, because five refusal "
+        "arms reported one value between them and a row taking any non-zero "
+        "would pass the day they collapse again; and the sentence is ON THE "
+        "GLASS, read out of con_scr - the state bytes can be right while "
+        "nothing is printed, and a message that never arrived WAS the report. "
+        "**THE WAIT IS ON THE CONSOLE AND NOT ON [dos_state]**, which cost "
+        "this row its first run: dos_go sets DST_RAN BEFORE calling dos_run, "
+        "and on arm 1 dos_run posts and leaves without touching it, so DST_RAN "
+        "is the IN-FLIGHT state here and a predicate accepting it fires before "
+        "the machine has hibernated. VERIFIED red on the shipped kern_dos.",
+        needs=("marty",), serial=True),
+    Row("kdreturn", "soak", py("tests/kdreturn.py"), 37.0,
+        "THE DOS HANDOFF COMES BACK (SPEC.md 96.41, "
+        "docs/plans/KERN-DOS-PLAN.md 8). W5 restarted the machine because "
+        "there was nothing to return to; on a machine with a FIXED DISK the "
+        "kernel writes a hibernation image before the handoff, kern_dos "
+        "restarts as it always did, and the fresh boot finds the pointer and "
+        "resumes it WITHOUT ASKING - a hibernation the user did not ask for "
+        "and then has to answer for is worse than no return at all. It "
+        "asserts all four: the program ran with the whole machine, the "
+        "desktop came back by itself with no Resume window, the DOS window is "
+        "up with the program's own exit code in it, and the mailbox at "
+        "0040:00F0 is CLEARED so the next resume cannot pick up this one's "
+        "code. IT NEEDS A HARD DISK and boots off one - hb_pick is the "
+        "predicate on both sides, so a floppy-only machine takes W5's arm and "
+        "this row would assert nothing. The PROGRAM is on a floppy on "
+        "purpose: kern_dos mounts by volume index and has no volume table, so "
+        "a fixed disk is a geometry it has not got (the plan's open question "
+        "5), while the RETURN reads the part off the fixed disk through the "
+        "extent list either way. tests/hibernate.py's fixture; MartyPC.",
+        wants=("build/kdos/DOS.O88", "build/DOSHELLO.COM", "build/kernel.sys",
+               "build/boothd.bin", "build/mbr.bin", "build/hiber.drv",
+               "build/ctrl.drv", "build/hdd.drv")),
+    Row("dosenvfold", "soak", py("tests/dosenvfold.py"), 40.0,
+        "EVERY ENVIRONMENT ROW IS ON THE SETUP PAGE, AND REACHABLE (SPEC.md "
+        "96.32.2.1). The four NAME=VALUE rows had a page of their own while "
+        "the window was 288px wide; at 80 columns they fit under the first in "
+        "Setup's left column, so the page went and the < and > that cycled to "
+        "it went with it. What a fold like that breaks is GEOMETRY and it "
+        "breaks QUIETLY - a row placed past the content box is not drawn, and "
+        "a row the hit test does not reach is a box the user types into and "
+        "nothing reads. Four assertions: every row PLACED with a non-empty "
+        "rect, in order at DOS_EROWH pitch and not overlapping, the last "
+        "one's bottom CLEAR of dos_paint_furn's button row, and a click on "
+        "that last row taking the caret with the keystroke landing in ITS "
+        "buffer. CGA because its content box is the smallest of the three "
+        "(638x197 against 718x257), so a row that fits there fits everywhere: "
+        "it reads 4 rows with the last ending 131 of 179, which is the 96px "
+        "free and 48px needed the fold was measured on. VERIFIED RED by "
+        "doubling DOS_EROWH to 32 - row 3 then ends exactly ON the button "
+        "row and the third check names it. MartyPC.",
+        needs=("marty",)),
+    Row("kdreturnf", "soak", py("tests/kdreturn.py", "--boot", "floppy"), 42.0,
+        "...AND THE SAME ROUND TRIP ON A MACHINE THAT BOOTED OFF A FLOPPY "
+        "(SPEC.md 96.46.1). Which volume HIBERNAT.IMG lands on is hb_pick's: "
+        "the one the machine booted from when that is fixed, else the FIRST "
+        "FIXED VOLUME THERE IS - and boot off a floppy and the volume that "
+        "second arm names is DRIVER-backed, because dsk_boot_from_x adds a "
+        "DVK_BIOS partition row only on its hard-disk arm. The launch-block "
+        "gather wrote DVK_FREE for a DVK_DRV row, so kd_resume mounted an "
+        "index naming no volume, refused, and kd_leave fell back to int 19h: a "
+        "whole POST, a whole boot and a restore at the desktop. REPORTED FROM "
+        "THE FIELD, on exactly this configuration, and the LIVE_MAX cycle "
+        "bound kdreturn already carries is what goes red on the fallback - "
+        "which is why it is a bound and not a screen read, the live route's "
+        "own line being printed INTO the staging area the stub then "
+        "overwrites. It also checks the fixed disk is on a DRIVER before "
+        "asserting anything, because a row that quietly became the fixed-disk "
+        "one would pass for the wrong reason. Fixture: the SHIPPED 360KB "
+        "system disk plus one file, a SYSTEM.CFG asking for HDD.DRV - nothing "
+        "loads unless SYSTEM.CFG asks (SPEC.md 51.3), and without it there is "
+        "no C: and no return to test. MartyPC.",
+        wants=("build/kdos/DOS.O88", "build/DOSHELLO.COM", "build/kernel.sys",
+               "build/boothd.bin", "build/mbr.bin", "build/hiber.drv",
+               "build/ctrl.drv", "build/hdd.drv", "build/os8088-360.img")),
+    Row("kdreturnm", "soak",
+        py("tests/kdreturn.py", "--machine", "os8088_5150_herc_hdd_gla"), 36.0,
+        "...AND THE SAME ROUND TRIP ON A MONO MACHINE (SPEC.md 96.49.2). The "
+        "staging area IS the text framebuffer, so it is at B000 on a Hercules "
+        "primary and B800 everywhere else - and kd_stageseg read the BDA's "
+        "mode byte into AL and then loaded AX with 0xB800 before testing it, "
+        "so the cmp saw the constant's own low byte, was never equal, and the "
+        "B000 arm was DEAD CODE from the day it was written. Every mono "
+        "machine staged the resume stub into a segment a Hercules does not "
+        "decode and then far-jumped into it: the session froze for ever on "
+        "kd_resume's own 'putting the session back...' with the screen "
+        "otherwise CLEAN, which is the finding - the stub is rep movsb'd to "
+        "OFFSET 0 of that segment, so blank rows 0-1 are a page the copy "
+        "never reached. REPORTED FROM THE FIELD off an 86Box pc5150 "
+        "(docs/FIELD-NOTES.md 45), and reproduced here with DOSHELLO.COM, so "
+        "Prince of Persia was never in it. WHAT LET IT SHIP IS A HOLE IN THE "
+        "MACHINE LIST AND NOT IN THE ROWS: a hibernation needs a fixed disk "
+        "(hb_pick) and the ADAPTER picks the segment, so the two must be on "
+        "ONE machine before that line runs at all - and every profile in this "
+        "tree with an [machine.hdc] was a CGA or a VGA, so kdreturn, "
+        "kdreturnf, hibernate and mouresume were all green while all four "
+        "staged at B800 where B800 is right. This row is that hole closed; it "
+        "is kdreturn's own assertions on os8088_5150_herc_hdd_gla, which went "
+        "red on its first run. MartyPC.",
+        wants=("build/kdos/DOS.O88", "build/DOSHELLO.COM", "build/kernel.sys",
+               "build/boothd.bin", "build/mbr.bin", "build/hiber.drv",
+               "build/ctrl.drv", "build/hdd.drv")),
+    Row("kdreturnmode", "soak",
+        py("tests/kdreturn.py", "--mode", "--machine",
+           "os8088_5150_herc_hdd_gla"), 38.0,
+        "...AND THE SAME ROUND TRIP WITH A PROGRAM THAT SETS A BIOS VIDEO "
+        "MODE (SPEC.md 96.49.6). 96.49.2 fixed kd_stageseg so it CAN answer "
+        "B000; it still answers out of the BDA's video mode byte at "
+        "0040:0049, and THAT BYTE BELONGS TO THE DOS PROGRAM. hb_wake asks "
+        "[vid_kind] instead, so the two agree only while nothing has changed "
+        "the mode - and the field's own repro is DIGIRAIN.COM, 256 bytes "
+        "whose last act before AH=4Ch is `mov ax,2 / int 10h`. DOSMODE.COM is "
+        "DOSHELLO built -DMODESET=2, which is that instruction and nothing "
+        "else. THE SEGMENT IS CARRIED NOW rather than derived twice - "
+        "KDL_STAGE is hbm_stageseg's own answer - and kd_resume sets mode 3 "
+        "on a colour primary so B800 EXISTS whatever the program left "
+        "behind. WHAT THIS ARM CANNOT DO IS GO RED ON ITS OWN MACHINE, and "
+        "that is worth writing down rather than discovering: GLaBIOS on a "
+        "mono-only 5150 forces mode 7 back, so the BDA still reads 7 and both "
+        "hosts still say B000. It is here for the configuration whose BIOS "
+        "does not - a VGA+MDA machine - and because a quantity two hosts both "
+        "DERIVE is one that can disagree. kdreturngfx is the arm that goes "
+        "red. MartyPC.",
+        wants=("build/kdos/DOS.O88", "build/DOSMODE.COM", "build/kernel.sys",
+               "build/boothd.bin", "build/mbr.bin", "build/hiber.drv",
+               "build/ctrl.drv", "build/hdd.drv")),
+    Row("kdreturngfx", "soak",
+        py("tests/kdreturn.py", "--gfx", "--machine", "os8088_xt_vga_hdd"),
+        40.0,
+        "...AND THE SAME ROUND TRIP WITH A PROGRAM THAT EXITS IN A GRAPHICS "
+        "MODE (SPEC.md 96.49.6), which is the arm that goes RED. In mode 13h "
+        "a VGA decodes A000 ALONE - the Graphics Controller's memory map "
+        "field says so - so B800 is outside what the card answers, and "
+        "kd_stageseg answers B800 because that is what the BDA's 0x13 means "
+        "to it. VERIFIED RED before the fix: the machine came back with "
+        "[dos_state] = 0 and no exit code, every staged cell having been "
+        "written to memory that is not there. DOSGFX.COM is DOSHELLO built "
+        "-DMODESET=0x13, and a DOS game that exits without restoring text "
+        "mode is not exotic - it is most of them. The fix is two things at "
+        "once: the staging segment is CARRIED from the kernel (KDL_STAGE) "
+        "rather than asked for a second time, and kd_resume sets mode 3 on a "
+        "colour primary before it stages, which also CLEARS AND HOMES and so "
+        "retires 96.49.4's scroll hazard rather than ordering around it. "
+        "MartyPC, and it needs a VGA: on a CGA B800 is the framebuffer and is "
+        "mapped in every mode the card has.",
+        wants=("build/kdos/DOS.O88", "build/DOSGFX.COM", "build/kernel.sys",
+               "build/boothd.bin", "build/mbr.bin", "build/hiber.drv",
+               "build/ctrl.drv", "build/hdd.drv")),
+    Row("kdreturnpit", "soak", py("tests/kdreturn.py", "--pit"), 38.0,
+        "...AND THE MACHINE'S TIMEBASE SURVIVES A PROGRAM THAT TAKES PIT "
+        "CHANNEL 0 (SPEC.md 96.5, 96.5.3). DOSPIT.COM is DOSHELLO built "
+        "-DPITFAST: it reprograms channel 0 to 0x4000 - four times fast - and "
+        "never gives it back, which is what a DOS game does when it wants a "
+        "clock smoother than 18.2 Hz. MEASURED at each stage: 18.2 Hz on the "
+        "desktop, 72.8 while the program runs WINDOWED (the whole OS runs at "
+        "the program's rate, by design), 72.8 under kern_dos, 18.2 after the "
+        "return. THE OUTCOME IS HELD BY TWO INDEPENDENT RESTORES - "
+        "dos_restore_machine, which is in the SHARED CORE (SPEC.md 96.44) and "
+        "so runs on both hosts, and hb_wake's own, which SPEC.md 87.6 step 1 "
+        "needs to make its claim true on a route with no sched_init in front "
+        "of it. The row asserts the OUTCOME rather than either mechanism, so "
+        "removing one leaves it green and removing BOTH is what it catches. "
+        "VERIFIED RED that way: 72.8 Hz on the resumed desktop, and the clock "
+        "with it - it reported 309 seconds of a 60-second round trip, which "
+        "is the compound damage in one line. **WHAT IT DOES NOT COVER is the "
+        "MODE**, which is 96.5.3's own defect and is not observable from the "
+        "host: the same routine wrote 0x36 where sched_init writes 0x34, so "
+        "channel 0 came back in the ROM's mode 3 after every DOS program ever "
+        "run in a WINDOW - same rate, and `65536 - latched` no longer an "
+        "elapsed time. Fixed at the source and said out loud here so the next "
+        "reader does not take a green row for cover it has not got. MartyPC.",
+        wants=("build/kdos/DOS.O88", "build/DOSPIT.COM", "build/kernel.sys",
+               "build/boothd.bin", "build/mbr.bin", "build/hiber.drv",
+               "build/ctrl.drv", "build/hdd.drv")),
+    Row("dosbss", "soak", py("tests/unit/t_dosbss.py"), 1.7,
+        "THE DOS CORE'S bss IS AT THE SAME OFFSETS IN EVERY HOST (SPEC.md "
+        "96.44.2). docs/plans/KERN-DOS-PLAN.md 4.1.3 puts the INT 21h core in "
+        "a part BOTH the box and kern_dos join, so it is assembled once and "
+        "reads its state DS-relative at os88_image_end + DOS_B_* - and DOS_B_* "
+        "is a running sum, so ONE conditional row moves every cell after it. "
+        "Not hypothetical: 96.43.2 gated twenty-nine window rows out of "
+        "kern_dos and a thirtieth (DOS_B_PKTRAW) sat inside the packet "
+        "driver's own %ifndef, which would have put the whole tail of the "
+        "core's state at two different offsets. FOUR hard zeros: no DBSS row "
+        "is conditional (a row only some builds emit is a HOST's and belongs "
+        "to the second accumulator), no core proc names an HBSS cell, no "
+        "host-varying arm sits inside the core - and every DBSS row comes out "
+        "at the SAME OFFSET in all four builds, which is rule 4 and reads the "
+        "ASSEMBLER rather than the source. Rule 4 exists because the other "
+        "three were green while the halves disagreed by four bytes (96.44.2.1): "
+        "the offender was a row's SIZE, `2 * DVOL_MAX`, and what it cost was "
+        "every program typed at the parted box's prompt answering `Bad command "
+        "or file name`. Host-side; four nasm runs, and it fails naming the row "
+        "and both offsets.",
+        ),
+    Row("kdcwd", "soak", py("tests/kdcwd.py"), 50.0,
+        "WHERE A LAUNCHED PROGRAM STANDS, under BOTH arms of one machine "
+        "(SPEC.md 96.44.10). CWDHERE.COM in B:\\SUB\\ with the only copy of "
+        "HERE.TXT beside it prints four things - AH=19h's drive, AH=47h's "
+        "directory, a BARE-name open of the file that is only in that folder, "
+        "and the program path DOS 3+ leaves in the environment's tail - and "
+        "the row runs it windowed, then runs the SAME program on the SAME disk "
+        "with the whole machine under it, and requires the two answers to be "
+        "identical. THE PAIR IS THE POINT: the core is ONE object joined to "
+        "two back ends, so a row that runs either alone cannot see them "
+        "disagree. It caught OSAPI_FILE_PATH's X-cell ES - kern_dos bound the "
+        "door with a far call straight at dsk_path_x, which writes to ES:DI "
+        "and never reloads ES, so the environment's path came out as `B:` and "
+        "Prince of Persia answered `Unable to find necessary files`. The other "
+        "three rows were green throughout, which is why all four are printed. "
+        "IT ALSO READS THE ALLOCATOR AFTERWARDS (SPEC.md 96.44.11.3): the "
+        "bare-name open above is a MOUNT, and a mount used to send "
+        "dsk_rah_want at memory kd_giveback had already handed the program - "
+        "kern_dos claims downward from [kd_top] and kd_arena carves the block "
+        "and the file window off that same word, so a later claim takes "
+        "theirs. The row requires [kd_spent] set and the cache either gone or "
+        "clear of the program; broken on purpose the cache comes back at "
+        "9800..9FE0 against a window at 9E00..A000, which is how Prince of "
+        "Persia's PV.DAT record lost its checksum. "
+        "**AND THE PICTURE'S OWN EXTENT LIST IS GONE** (87.6.1): the handoff "
+        "claims MEM_K_HIB at step 3 and writes the image at 3b, so "
+        "HIBERNAT.IMG is a picture of a machine holding a live claim over a "
+        "list that is dead by the time it is restored - a HELD, PINNED block "
+        "wherever the writing machine's heap put it, worth 4KB of every DOS "
+        "arena for the rest of the session and reported from the field as "
+        "`Resume 33C0 4K HELD`. Asserted here because this row already pays "
+        "for the round trip and nothing cheaper can reach the state. VERIFIED "
+        "TO FAIL with hbm_wake's free removed: 2KB at 26C0 on this fixture, "
+        "and the largest free run after the return 393KB against 400. "
+        "MartyPC, the 720KB Hercules twin.",
+        needs=("marty",),
+        wants=("build/os8088-720.img", "build/cwdsub.img",
+               "build/kerndos.bin")),
+    Row("kdapi", "soak", py("tests/unit/t_kdapi.py"), 0.4,
+        "NO `OSAPI_*` FAR CALL MAY SURVIVE INTO A kern_dos IMAGE (SPEC.md "
+        "96.44.6). KERNEL_SEG is kern_dos's own segment, so a `call OSAPI_X` "
+        "that reaches that image is a far call to KD_SEG:0xNNNN - a jump into "
+        "the middle of the disk layer with the caller's registers - and "
+        "apps/dos/dos.asm is included whole with ~96 of them. It cost a day "
+        "once already: dos_getkey polls dos_mou_read, so every DOS program "
+        "that waits for a keystroke made one, and it presented as a machine "
+        "spinning in the ROM with a key already in the ring. IT USED TO CHECK "
+        "A WALL: 179 `stc`/`retf` cells at every published offset, 1,432 "
+        "bytes, and what held CORE_ORG at 0x0600 in both hosts. The wall was "
+        "catching six sites in four cells - dos_keeph's two, a window routine "
+        "mis-marked core, and dosh.inc's four reaching a heap only the "
+        "windowed host has - so the calls went instead and the wall with "
+        "them. This scans the ASSEMBLED images for opcode 9A with that "
+        "segment and fails the build naming the slot, which is strictly "
+        "better: a wall turns a wild jump into a wrong ANSWER at runtime, on "
+        "a machine with no operating system left to report it. Needs "
+        "`make kdostest`; it SKIPS without it rather than passing.",
+        wants=("build/kerndos.bin", "build/doscore.bin")),
+    Row("kdfar", "soak", py("tests/unit/t_kdfar.py"), 0.3,
+        "NEAR OR FAR HAS TO MATCH THE BODY (SPEC.md 96.38.1): kerndos/ calls "
+        "the kernel's disk layer by hand, and that layer is NOT one calling "
+        "convention - a handful of routines end in `retf` because in the "
+        "kernel they are reached from another segment, and nothing in the "
+        "name says which (dskw_read_x near, dsk_find_x far). A near `call` to "
+        "a `retf` body pops the return address AND two bytes under it, so "
+        "control resumes somewhere plausible with NO FAULT AT ALL. FOUR of "
+        "the sixteen targets kdback.inc names were written near and only ONE "
+        "was on a path W4 reached, so three would have waited for a DOS "
+        "program to call AH=4Eh or AH=36h - which is to say, for a bug "
+        "report. The list maintains itself (t_mirror's argument): it decides "
+        "each routine's flavour from its BODY and checks both directions, "
+        "kerndos into the kernel and the kernel into kdshim.inc's stubs.",
+        ),
+    Row("dosseam", "soak", py("tests/unit/t_dosseam.py"), 1.0,
+        "THE DOS BOX'S FILE SEAM (SPEC.md 96.4.1, 96.4.2): the INT 21h core "
+        "reaches the file system through the DBE_* doors and nothing else, "
+        "which SPEC.md 96.4.1 states for the STACK SWAP's sake and "
+        "docs/plans/KERN-DOS-PLAN.md 3 rests on for a different one - every "
+        "call outside a door is a straggler its port has to go and find. IT "
+        "WALKS THE CALL GRAPH from the interrupt entries and does not trust a "
+        "NAME: a prefix rule was tried first and got two of three wrong, "
+        "dos_drv_count and dos_drv_sel reading exactly like the window's "
+        "drive list and being called straight from dos_int21. A second, "
+        "weaker rule registers every OTHER OSAPI_* the core can reach "
+        "(tests/dosseam.txt), so the port's surface cannot grow silently. "
+        "SOAK AND NOT FAST, by docs/WRITING-TESTS.md 2.1 rule 1 - it is about "
+        "ONE package - although the plan's own wave table said fast. "
+        "VERIFIED TO FAIL both ways: putting `call OSAPI_FILE_HERE` back into "
+        "dos_walk_at names the file, the line and the path from dos_int21, "
+        "and adding a `call OSAPI_TASK_YIELD` to dos_fh_enter takes the "
+        "registry rule red."),
+    Row("dosram", "soak", py("tests/dosram.py"), 75.0,
+        "THE MEMORY PAGE'S FIGURE IS THE FIGURE THE PROGRAM GETS (SPEC.md "
+        "96.36.3). `For the program: ~NNNNN K` is one live number that every "
+        "control under it moves, and two of its terms can be checked against "
+        "the machine. **(1) A LIVE DRIVER BOX MOVES IT BY WHAT ITS OWN LABEL "
+        "SAYS** (96.36.7): the label's figure and the total's are one "
+        "OSAPI_DRV_CLASSK word read once per place, so clearing `Hard drives "
+        "(32 K)` must move the row by exactly 32 - two reads where 96.36.7 "
+        "says one is a page that disagrees with itself while a driver is "
+        "unloaded between them. **(2) ARM 1 CANNOT BE ASKED ANYTHING**, so "
+        "every term of its estimate is a constant this build knows - "
+        "`DOS_KDKB` most of all, which is deliberately NOT gated at assembly "
+        "against kern_dos's own `LOW_SEG + KD_LOW_KB * 64`, because that "
+        "moves with that image and a mirror would fail the build every time "
+        "it changed a byte: a gate that gets RAISED rather than read. THIS "
+        "ROW IS THAT GATE - it puts a program through arm 3 and compares the "
+        "promise against DOSHELLO's own `Memory to top of block`, which is "
+        "int 21h AH=4Ah's answer for its PSP and therefore the arena "
+        "dos_build_psp handed it. VERIFIED TO FAIL: DOS_KDKB 42 -> 80 reads "
+        "`promised ~542 K, got 579 K, a drift of 37 against a slack of 24`. "
+        "The slack is 24 KB on purpose - the terms are ESTIMATES and the row "
+        "is about DRIFT, so a kern_dos that grew a kilobyte is fine and one "
+        "that grew twenty-four is a figure nobody re-measured. Fixture: the "
+        "MartyPC template VHD with HDD.DRV and a SYSTEM.CFG that ASKS for it "
+        "(SPEC.md 51.3) - without that file the machine still boots off the "
+        "fixed disk, because the boot partition is a DVK_BIOS row served by "
+        "int 13h and not by the driver (18.7.1), so assertion 1 would pass "
+        "against a class that really is holding nothing. It also reads the "
+        "arena off the PROGRAM and not the BDA mailbox (96.41.1), which "
+        "carries the same number but is written at kd_leave - exiting AND "
+        "letting the live resume run, which is tests/kdreturn.py's subject.",
+        needs=("marty",), serial=True,
+        wants=("build/kdos/DOS.O88", "build/DOSHELLO.COM", "build/kernel.sys",
+               "build/boothd.bin", "build/mbr.bin", "build/hiber.drv",
+               "build/ctrl.drv", "build/hdd.drv")),
+    Row("dosmem", "soak", py("tests/dosmem.py"), 55.0,
+        "THE MEMORY PAGE'S TWO ARMS (SPEC.md 96.36, 96.25, 47): the choice "
+        "of how much of the machine a DOS program gets was a CHECK BOX, which "
+        "holds two answers; it became three arms, and it is TWO since "
+        "96.36.5 - `Keep the disk cache` and `Take the disk cache too` "
+        "differed in the cache and in nothing else, so the dial is its own "
+        "control and the arms are WHERE the program runs. Each heads a "
+        "SUBSECTION, so the pitch is a subsection's height and os88ui_rad "
+        "centres its ring in a ROW rather than in the pitch (13.17.5). **EVERY ASSERTION IS INVERTED since SPEC.md 96.40.3**: the "
+        "arm was greyed for four waves, first because kern_dos was unwritten "
+        "and then because it rode a gate disk while $(SYSROOT) shipped the "
+        "plain package, and it is LIVE on every shipped disk now. So the row "
+        "catches the opposite: a floppy that lost the part, a dos_mem_whole "
+        "that has started refusing, an arm offered and not pickable, or the "
+        "reason still drawn beside a live arm - where it sits at the labels' "
+        "own indent and reads as a fourth arm that works. tests/kdpart.py "
+        "says the same thing about the DISK; this one says it about the "
+        "GLASS. It is os88ui_rad's FIRST caller in the tree. A 1bpp "
+        "adapter on purpose (SPEC.md 47.2): grey rounds to black in text "
+        "there, so 'is this row disabled' is a PIXEL fact - the row counts "
+        "horizontally adjacent dark pairs, which a stipple has almost none of "
+        "and a solid glyph is full of, rather than counting ink, which only "
+        "says how much text there is. VERIFIED TO FAIL, three ways seen on "
+        "the way to writing it: dos_mem_whole answers in SI and so does the "
+        "record pointer, so asking it after loading SI drew the group at "
+        "screen 0,0 and left the rect at 0,0,0,0; a press on the greyed arm "
+        "'redrew something' until the POINTER was parked before the capture, "
+        "crop_rgb reading the card's rendered framebuffer with the arrow in "
+        "it; and step 8's demotion read 2 while dos_mem_fix hung off dos_run, "
+        "which an empty path box never reaches. What the inversion COST it is "
+        "one assertion it can no longer make - the demotion itself needs a "
+        "box whose package has no part, and no shipped disk carries one - so "
+        "step 8 asserts the other side of the same consumer: a pick the "
+        "machine CAN honour must survive the commit. **AND ARM 1'S ROW IS ITS "
+        "OWN OPTION** (96.36.8, 96.36.9): one row carries `Disable the mouse` "
+        "or the greyed arm's REASON and never both, and the box is greyed "
+        "while the other arm is the pick - so the first press picks the arm "
+        "and the second works the box, which is 96.36.4's hit order and "
+        "47 rule 2 asserted together."
+        "**AND A DIAL PICK MOVES THE FIGURE ABOVE IT** (96.36.6.2), driven "
+        "by REAL CLICKS through the control - four cache rows, four DISTINCT "
+        "and strictly increasing figures. The one control on this page whose "
+        "consequence is a number somewhere else, so it is the one that can be "
+        "wired up wrong and still look right, and it SHIPPED that way: "
+        "os88ui_drpress answers CF=1 for exactly one case - the refused "
+        "save-under (13.14.1) - AH=1 for any SPENT press including the one "
+        "that opens the list, and the pick is AL and only AL. dos_click_mem "
+        "tested CF then AH and never AL, under a comment asserting the "
+        "opposite, so every pick took the `nothing owed but the caret` path "
+        "while os88ui_drbox repainted the CAPTION on that same path - the box "
+        "said 32K and the line kept its old value, which reads as a dead "
+        "control. The field reported it as `changing the disk cache does not "
+        "change the estimate`. IT WAS MEMORY-DEPENDENT and that is why it "
+        "survived: CF=1 only when the bank is refused, so a machine too tight "
+        "to save under the list repainted correctly. POKING THE DIAL CANNOT "
+        "SEE IT - a poke plus a page re-entry repaints everything and passes "
+        "on the broken build, which is how a first measurement reported the "
+        "arithmetic as fine. doslnk drives the same list and asserts "
+        "[dos_cache], which was always right; dirwshed pokes the byte. Auto "
+        "is deliberately not one of the four rows: on a 640KB machine the "
+        "kernel's own solve picks 32K (18.95.5), so Auto and 32K read the "
+        "same figure for a TRUE reason. VERIFIED red on the shipped build. ",
+        needs=("marty",), serial=True),
+    Row("dosarena", "soak", py("tests/dosarena.py"), 35.0,
+        "THE DOS ARENA'S UNMOUNT-AND-COMPACT (SPEC.md 96.35, 51.11.1, 66.4.3): "
+        "SOUND.DRV is ~14KB at the TOP of the heap and the box unmounts it, "
+        "and that memory used to be unreachable because the suspend was fenced "
+        "on the fsx bracket - long AFTER the arena was claimed. It is an A/B "
+        "BETWEEN TWO MACHINES and that is the whole design: the same disk and "
+        "the same program on a 5150 WITH a Sound Blaster and on one WITHOUT, "
+        "so if the recovery works the card costs the program nothing. Reading "
+        "a state byte would have asserted the MECHANISM instead, and the "
+        "mechanism has three moving parts in two layers - the fence, the "
+        "posted compaction and the wake - any of which can be present and "
+        "still leave the program short. VERIFIED TO FAIL, on the way to "
+        "writing it and against each of two separate causes: 435KB against "
+        "449 while the suspend was still bracket-only, and 435 against 449 "
+        "again with the unmount happening and the DOS REGION not declared "
+        "movable, so the hole sat above a wall. **AND THE A/B IS RETIRED "
+        "since SPEC.md 96.40.3 shipped the four-piece DOS.O88** (96.35.4.1): "
+        "the box is PART 0 of a RE-HOMED package now, whose region is the "
+        "loader's carve re-stamped to the instance slot - so mem_find_own "
+        "cannot match it and OSAPI_MEM_MOVABLE is refused, by design and "
+        "correctly (I_SPTR is the part's segment at 0x8FE0 where the claim's "
+        "base is the carve's at 0x8FC0, and mem_rr_tab rewrites I_SPTR by "
+        "matching the old BASE). 426KB against 440, the driver's image plus "
+        "its ring, in a hole above a pinned region. A suspend that never "
+        "happened gives the SAME number, so the delta discriminates nothing: "
+        "the row asserts [dos_drvout] - the mechanism the A/B used to prove "
+        "indirectly - and holds the loss to the driver's own bytes, going red "
+        "if it GROWS (a second claim stopped moving) or SHRINKS (the kernel "
+        "learned to relocate a re-homed carve, and this row is stale).",
+        needs=("marty",), serial=True,
+        wants=("build/dossnd360.img",)),
+    Row("dosest", "soak", py("tests/dosest.py"), 40.0,
+        "THE MEMORY PAGE'S ESTIMATE IS WHAT THE MACHINE WOULD REALLY HAND "
+        "OVER (SPEC.md 96.36.3.1, 51.12.2) - two defects the field found in "
+        "one sitting on a 5150 with a Sound Blaster: the page read 433K, then "
+        "467K on going back in with nothing changed, and the program got 447. "
+        "BOTH NEED A CARD TO BE VISIBLE, which is why this is its own row and "
+        "not two assertions in dosram: the sound term is the only one added "
+        "unconditionally, so on a machine without one the arithmetic under "
+        "test never runs. (1) dos_mck_place fills the three class words the "
+        "arena is a sum of and DRAWS NOTHING, so it sat below the arena block "
+        "and the FIRST paint of a fresh window computed the figure from the "
+        "bss zeros the loader left. It is invisible to a probe that looks "
+        "afterwards - the word reads correctly by the time the paint RETURNS - "
+        "so this compares the row as first painted against a recompute that "
+        "changes nothing. (2) OSAPI_DRV_CLASSK's plain form quoted drv_memk, "
+        "which is 51.2.4's TOP RUNG - 6 image + 8 DMA + 20 SBL_POOLKB - and "
+        "the pool is claimed on the first grant, so a mounted silent driver "
+        "holds 14 and the estimate was 20 high for ever. The assertion is "
+        "against the CLAIM TABLE and not against a constant: the image record "
+        "plus everything owned by the driver's own segment. VERIFIED TO FAIL "
+        "on both, against the build that shipped them.",
+        needs=("marty",),
+        wants=("build/os8088-360.img", "build/apps360.img")),
+    Row("dosdev", "soak", py("tests/dosdev.py"), 25.0,
+        "`CON` IS A CHARACTER DEVICE, NOT A FILE NAME THAT IS MISSING "
+        "(SPEC.md 96.11.7). Microsoft Works - the first program anyone ran on "
+        "this box from outside the project - could not open its own WORKS.INI "
+        "and said `Too many files open` about it, while the handle table held "
+        "ONE slot of eight. Traced against IBM DOS 3.30 on the same disk, "
+        "Works opens CON at one call site until DOS refuses, counts what it "
+        "got and closes them: DOS hands it 7, 8, 9 then error 4, and we "
+        "failed the FIRST one with `file not found`, so it counted zero. THE "
+        "ASSERTION IS NOT `CON OPENS` - it is that two opens give two "
+        "DIFFERENT handles, which is what the counting loop rests on and what "
+        "an answer of `handle 1` would hang for ever. CONDEV.COM runs under "
+        "this box and under a real DOS unchanged, so its expected answers are "
+        "the reference\'s; it also covers AH=44h AL=08h and AH=0Dh, the other "
+        "two answers that trace showed DOS giving and us refusing.",
+        needs=("marty",),
+        wants=("build/os8088-360.img", "build/condev360.img")),
+    Row("dosgap", "soak", py("tests/dosgap.py"), 25.0,
+        "A WRITE PAST THE END OF A FILE THE SAME HANDLE CREATED (SPEC.md "
+        "96.11.6.3). Microsoft Works could not save a document - `Cannot "
+        "write file`, on a floppy with 42 free clusters - and its Save As is "
+        "one shape: create, seek to 0x180 on the EMPTY file, write the body "
+        "there, seek back to 0 and lay the 384-byte header it left room for. "
+        "A format whose header can only be filled in once the body is written "
+        "has no other shape to be. `.fwrite`'s append-only guard was two "
+        "`jne`s, which is not an ordering test at all: it refused a write "
+        "PAST the end in the same breath as one BEHIND it, and those are "
+        "opposite cases - behind is 96.11.2's real refusal, past is a GAP "
+        "`dos_fh_wiloop`'s `.ihole` already lays. WRGAP.COM runs under this "
+        "box and under a real DOS unchanged, so its expected answers are the "
+        "reference's; its last step also covers AH=41h on a name that is not "
+        "there, which answered `access denied` where DOS says `file not "
+        "found` (96.11.9). THE GAP'S OWN CONTENT IS DELIBERATELY NOT "
+        "ASSERTED - DOS leaves it undefined, so a probe checking it would "
+        "fail against the reference for being right. VERIFIED TO FAIL at step "
+        "B against the build that shipped the defect.",
+        needs=("marty",),
+        wants=("build/os8088-360.img", "build/wrgap360.img")),
+    Row("dosmouevt", "soak", py("tests/dosmouevt.py"), 60.0,
+        "INT 33h's EVENT HANDLER IS CALLED (SPEC.md 96.10.4). Microsoft Works "
+        "'had a mouse' and had none, and 96.10.3's histogram says why in one "
+        "line: it calls 00h, 08h, 0Ah and 0Ch SET EVENT HANDLER, and then "
+        "NOTHING - it never polls function 3. A box whose functions 3, 5, 6 "
+        "and 0Bh are all exact and which answers 0Ch with `not supported` has "
+        "told a program a mouse exists and then never mentions it again, "
+        "which a program cannot tell from no mouse at all. THE ASSERTION IS "
+        "NOT `THE POINTER MOVES` - function 3 was correct throughout that "
+        "report. It is that OUR CODE RUNS: a far handler installed through "
+        "0Ch and called from the chained IRQ0 (96.10.4.1), with a position "
+        "that tracks the mouse the harness is moving. It moves RELATIVELY, "
+        "because this is motion with no destination. MOUEVT.COM runs under "
+        "this box and under a real DOS unchanged, and prints SKIP on a DOS "
+        "with no mouse driver rather than failing. Its last step is that the "
+        "handler STOPS when the program asks for none - a callback into code "
+        "that may since have been freed.",
+        needs=("marty",),
+        wants=("build/os8088-360.img", "build/mouevt360.img")),
+    Row("dosattr", "soak", py("tests/dosattr.py"), 25.0,
+        "`AH=43h` IS ASKED ABOUT DIRECTORIES (SPEC.md 96.12.4). Microsoft "
+        "Works's Save As, given a name on another drive, asks about the "
+        "directory the file would go in before it writes anything - and puts "
+        "up `Directory not found` when that is refused. `.att_get` resolved "
+        "every name through `dos_fh_stat`, the FILE lookup AH=3Dh opens "
+        "through, so EVERY directory on EVERY disk read as missing. A ROOT is "
+        "the sharper half: `A:\\` parses to a drive and no 8.3 name at all, "
+        "so the lookup was for the empty name - which is why the failure "
+        "looked like the drive switch, and that works perfectly (the trace "
+        "shows AH=0Eh select A:, AH=19h confirming AL=00, and AH=0Eh back, "
+        "all before the refusal). THE REFERENCE IS THE SPECIFICATION and was "
+        "taken on the machine: IBM DOS 3.30 answers `\\` and `A:\\` with "
+        "CF=0 CX=0074, a subdirectory 0010, a file 0020, and only a missing "
+        "name CF=1 AX=0002. IT ASSERTS THE PROPERTY AND NOT DOS's EXACT CX "
+        "FOR A ROOT - 0074 is bits DOS never deliberately set, a root having "
+        "no directory entry to read them from, and copying an uninitialised "
+        "byte would be copying a bug and calling it a contract. ATTRDIR.COM "
+        "makes its own subdirectory and removes it again, and runs under a "
+        "real DOS unchanged. VERIFIED TO FAIL at A, B and C against the build "
+        "that shipped the defect.",
+        needs=("marty",),
+        wants=("build/os8088-360.img", "build/attrdir360.img")),
+    Row("kdmcur", "soak", py("tests/kdmcur.py"), 90.0,
+        "**A DOS MOUSE DRIVER DRAWS ITS OWN POINTER** (SPEC.md 96.10.5). "
+        "There is no compositor and no arrow the machine keeps for it, so "
+        "`01h` means put a cursor on the screen and keep it under the mouse - "
+        "and this box answered `01h` and `02h` with a shrug, on the reasoning "
+        "that the kernel owns the pointer. Right in the WINDOWED host and "
+        "wrong in `kern_dos`, where the program owns every pixel and the "
+        "kernel is not running at all, which is why the capability hangs off "
+        "a host hook (DHK_TXT) rather than an %ifdef. THE ASSERTION IS "
+        "ARITHMETIC AND NOT A PHOTOGRAPH: a text cursor is an attribute the "
+        "driver flips - `(cell AND screen_mask) XOR cursor_mask` - so "
+        "MCURSOR.COM writes a KNOWN word into every cell with `stosw` (what a "
+        "DOS application does; a driver that only saw int 10h writes would "
+        "pass a test written the other way), shows the cursor and reads the "
+        "cell under the pointer back out of the framebuffer. The mouse never "
+        "moves and there is nothing to settle. Five checks: the cell is "
+        "inverted (A), `02h` puts the original back byte for byte (B), the "
+        "MASKS ARE STATE - Works sets 77FF/7700 and then 80FF/F000 twice "
+        "more, measured against IBM DOS 3.30 with CTMOUSE (C) - and the show "
+        "counter NESTS, so hide/hide/show leaves it hidden (D) and the fourth "
+        "call brings it back (E). It runs under a real DOS unchanged, and "
+        "prints SKIP where INT 33h is not installed. IT IS TWO ARMS AND "
+        "BOTH ARE ASSERTIONS: under kern_dos the cursor must be drawn, and IN "
+        "THE WINDOW it must NOT be - there B800 is the kernel's framebuffer "
+        "and DHK_TXT is absent for that reason, so a row that only ran arm 3 "
+        "would pass just as happily with a box that scribbled on the desktop.",
+        needs=("marty",),
+        wants=("build/os8088-360.img", "build/mcursor360.img")),
+    Row("kdmredraw", "soak", py("tests/kdmredraw.py"), 66.0,
+        "**WRITTEN TO PROVE A DEFECT, AND IT MEASURED THE OTHER WAY ROUND** "
+        "(SPEC.md 96.10.5.4). kdmcur asks whether the driver can draw; this "
+        "asks what happens when the APPLICATION draws over what it drew, "
+        "which every DOS program does constantly by storing into B800. A "
+        "software text cursor is an attribute flipped into a cell the driver "
+        "does not own and it gets no notification of that store, so the "
+        "cursor is LOST until the pointer next moves - a status line or a "
+        "clock redrawing under a hand holding still takes it away. That "
+        "looked like an obvious bug and the probe went red exactly as "
+        "predicted, `B 1E2A want 612A`. **CuteMouse 1.9.1 under IBM DOS 3.30, "
+        "on the same machine, answers all four letters IDENTICALLY** - and A "
+        "passing proves the driver is alive, because only a driver can "
+        "compose that cell. A serial mouse that is not moving raises no "
+        "interrupt, so there is nothing to repaint from and neither driver "
+        "hooks the tick for it. So the behaviour STAYS and this row is a "
+        "COMPATIBILITY RATCHET: red if this box ever repaints where CuteMouse "
+        "does not. Four checks: the cursor is drawn (A, the control), the "
+        "program's own word survives a store over it (B), a hide leaves that "
+        "word alone rather than restoring the cell the driver saved - which "
+        "would be a character the program never wrote, and is permanent (C) - "
+        "and the pointer never moved, so B and C are about the cell they "
+        "claim (D). VERIFIED TO FAIL by building the seventeen-byte guarded "
+        "re-save that would have been the fix. Both arms, because the two "
+        "hosts reach dos_m33_paint differently and a windowed arm asserting "
+        "the wrong thing is how this cursor shipped broken once already.",
+        needs=("marty",),
+        wants=("build/os8088-360.img", "build/mredraw360.img")),
+    Row("dossnd", "soak", py("tests/dossnd.py"), 30.0,
+        "THE DOS SOUND GATE (SPEC.md 96.17, 51.11): a DOS program that wants "
+        "the Sound Blaster wants to program it ITSELF, and SOUND.DRV is in "
+        "the way three ways - an IRQ vector, DMA channel 1, and a refill "
+        "worker that is TF_SERVICE and so KEEPS RUNNING inside the bracket by "
+        "design. The row reads the driver's own DRVR_SEG out of the guest, "
+        "which is the only way to see the half with no pixels: LOADED at the "
+        "desktop, ZERO while the DOS program runs, loaded again after. It "
+        "uses NO SYSTEM.CFG deliberately - 51.3.1's boot sniff mounts the "
+        "driver on a machine with a card and no configuration at all, which "
+        "is the common case an earlier revision of 96.16 got wrong. The "
+        "visible half is BLASTER=, and its IRQ field is ABSENT on purpose: "
+        "discovery is deferred to first use, so naming a line here is naming "
+        "the wrong one.",
+        needs=("marty",), serial=True,
+        wants=("build/dossnd360.img",)),
+    Row("dosirq", "soak", py("tests/dosirq.py"), 25.0,
+        "THE DOS HARDWARE GATE (SPEC.md 96.18) - the row that says what the "
+        "DOS box is FOR. Every other dos* row asks about INT 21h, which is "
+        "our own code answering; this one asks about the machine underneath. "
+        "A program inside the bracket resets the Sound Blaster's DSP and "
+        "reads its version back (ports both ways), hooks INT 0Fh and unmasks "
+        "IRQ7 and asks the card for an interrupt with DSP command 0F2h - the "
+        "cheapest hardware interrupt on the machine, no DMA and no buffer - "
+        "then programs channel 1 of the 8237 for 256 bytes and counts the "
+        "completion. EXACTLY ONE EACH, not at-least-one: a re-raised line is "
+        "the spurious-IR7 case and is not the same thing as working. THE DMA "
+        "HALF CANNOT BE INFERRED from the IRQ half, because os8088 takes "
+        "channel 2 of that same controller inside dsk_xfer. It also reads "
+        "back the IMR the bracket handed over (IRQ7 masked, IRQ0 live) and "
+        "the buffer's PHYSICAL address, which is the one sum a program does "
+        "differently here - its segment is wherever the arena put it, so a "
+        "page register computed by habit is right everywhere it was tested "
+        "and wrong in the box. VERIFIED TO FAIL by nop-ing out the suspend; "
+        "worth knowing that the three hardware numbers DID NOT MOVE when it "
+        "did (96.18.2), because an idle driver has hooked no vector - which "
+        "is why the assertion is a read of drv_tab and not a symptom.",
+        needs=("marty",), serial=True,
+        wants=("build/dosirq360.img",)),
+    Row("dospkt", "soak", py("tests/dospkt.py"), 120.0,
+        "THE PACKET DRIVER, OVER A REAL CARD (SPEC.md 96.23, 72.22) - wave 4 "
+        "of DOS-EXEC-PLAN.md, and the row that says a DOS program can reach "
+        "the network. DOSPKT.COM walks 60h..80h for `PKT DRVR` at offset 3, "
+        "takes a handle with access_type, reads its own station address, "
+        "builds a broadcast ARP request for the gateway and sends it - then "
+        "SPINS ON THE BIOS TICK and never asks the driver for anything again. "
+        "QEMU'S, on CLAUDE.md's closed list for tests/ethernet.py's reason: "
+        "MartyPC has no NIC of any kind. IT READS THE DRIVER AND NOT THE "
+        "SCREEN, because the box has no windowed text yet (wave 6) and a "
+        "program's output dies with the bracket - so the evidence is "
+        "ETHER.DRV's own eth_nrawtx/eth_nraw, zeroed by NETV_RAW and "
+        "surviving its release, plus eth_raw back at 0 to prove the claim was "
+        "given back. THE RECEIVE HALF IS THE POINT: the probe polls nothing, "
+        "so a frame it counted arrived because our INT 08h chain pulled it "
+        "off the ring and up-called the client - which is what a Crynwr "
+        "client expects and what no other row here can reach. VERIFIED TO "
+        "FAIL by taking the DRVC_NET skip out of drv_suspend_x, which unloads "
+        "the driver at the bracket and leaves every counter 0. mTCP is NOT in "
+        "this repository and is not needed: MTCPDIR=<dir> puts its own "
+        "programs on the disk beside ours.",
+        needs=("qemu",), serial=True,
+        wants=("build/ether360.img", "build/dospkt360.img")),
+    Row("doscable", "soak", py("tests/doscable.py"), 600.0,
+        "A DOS PACKET-DRIVER CLIENT OVER THE PARALLEL CABLE (SPEC.md 96.26) - "
+        "the arm that is about the WIRE, where `dosxlat` is about the "
+        "endpoint. There the translation is FORCED over a card because that "
+        "is the only wire an emulator here can drive at speed; here "
+        "net_find picks NET.DRV with no knob at all, and 96.23's raw path "
+        "does not exist because NETV_RAW is one of the three verbs the cable "
+        "refuses (72.22.3). The GUEST is a cycle-accurate 8088 running the "
+        "shipped kernel, a real NET.DRV, the real DOS box and a real Crynwr "
+        "client; the CABLE is MartyPC's parallel port driven a nibble at a "
+        "time by tests/lptlink/partner.py; and the far side's TCP is not "
+        "modelled at all - partner.SocketBox is real host sockets. THE FAR "
+        "SIDE REDIRECTS ONE ADDRESS AND RECORDS IT: the probe dials "
+        "10.0.2.2:8099 because that is where slirp puts the host and the same "
+        "binary has to work on the card arm, so the SocketBox here connects "
+        "to this process's own listener instead - and the recorded string is "
+        "a STRONGER assertion than a connect, because it is the dotted quad "
+        "dn_tcp_open formatted out of an IP header (96.26.5). Five: the route "
+        "is the cable ([dos_pkt_xl]=1, [net_cls]=DRVC_FILE and not the CARD's "
+        "DRVC_NET); NET.DRV survives the bracket (drv_suspend_x's DRVC_FILE "
+        "skip); the far side was asked for exactly 10.0.2.2:8099; the "
+        "client's own record of every segment holds a SYN|ACK and no RST; and "
+        "the payload crossed both ways. EXACT RATHER THAN FAST - every nibble "
+        "is debug-server round trips with the emulator stepped between them, "
+        "which is why the answer is 45 bytes and not a page. MEASURED at "
+        "250.5s through the runner and 250s standalone, declared at 600 because the cost is debug round "
+        "trips and a loaded box has fewer of them per second - and because "
+        "the launch phase alone is 13.2 MILLION guest cycles, which "
+        "Partner.idle_until_wire steps in 516 coarse chunks where the nibble "
+        "loop would take 33,000.",
+        needs=("marty",), serial=True,
+        wants=("build/dospkt360.img",)),
+    Row("dosxlat", "soak", py("tests/dosxlat.py"), 75.0,
+        "THE CABLE TRANSLATION, ONE WHOLE TCP CONNECTION (SPEC.md 96.26). "
+        "Where `dospkt` asks whether a frame reached a CARD, this asks whether "
+        "a DOS client's own stack gets what TCP owes it over the PARALLEL "
+        "CABLE, which carries sockets and no frames at all (72.22.3): the box "
+        "terminates the client's TCP and re-opens it as a NETV_OPEN. NOTHING "
+        "OUTSIDE THE CLIENT CAN ANSWER THAT - every counter in the box and in "
+        "the driver reads correct while the client hears nothing, which is "
+        "exactly how three register defects hid (96.26.3) - so DOSPKT.COM "
+        "runs the connection by hand and BANKS THE FLAGS BYTE OF EVERY "
+        "SEGMENT its receiver was handed, and this row reads that array out "
+        "of the running program: 12 10 10 18 11 is a handshake, a reply and a "
+        "close. THE FAR SIDE IS THE TEST ITSELF, a socket on 10.0.2.2:8099 "
+        "writing a FIXED answer, so the byte count asserted is one the row "
+        "chose - http.server will not do, its Server: header carrying the "
+        "interpreter version. QEMU'S, on CLAUDE.md's closed list for "
+        "tests/ethernet.py's reason: MartyPC has no NIC. DOSNETCARD=1 IN A "
+        "PRIVATE TREE, because net_find prefers the card and 96.23's raw path "
+        "is better there, so the translation would otherwise run on no "
+        "machine an emulator here can host - and a stock `make` in build/ "
+        "would put the other arm of the package on the floppy and the row "
+        "would test the card path while reporting on this one. [dos_pkt_xl] "
+        "is read before anything is concluded, so that cannot happen "
+        "silently. BREAK IT: put dn_pump's counter back in CL and the data "
+        "assertions fire; take dn_tcp_in's .unknown arm out and the log "
+        "gains a trailing 14.",
+        needs=("qemu",), serial=True),
+    Row("pathcost", "soak", py("tests/pathcost.py"), 30.0,
+        "OSAPI_FILE_PATH, AND WHAT IT COSTS (SPEC.md 19.2.4). The slot exists "
+        "because dsk_find drops the on-disk dot links, so no package can walk "
+        "up - three of them each built a descent stack instead. But the "
+        "ASSERTION here is the DISK OPERATIONS, counted from outside the "
+        "guest with os88marty's disk(), because a kernel that re-mounted per "
+        "level would answer the identical path and look entirely correct from "
+        "inside. Four things: the path is right from a package the gate disk "
+        "puts THREE folders deep (a root-level one answers '\\' having read "
+        "nothing); the first walk fits under a bound three mounts could not "
+        "meet (a floppy mount is ~12 sectors, 18.8.2); the SECOND walk of the "
+        "same chain is cheaper, which is 19.2.3's cached window answering "
+        "warm - `make DIRW1=1` is the build where that fails on purpose; and "
+        "six same-volume GOTO_QM cost ZERO reads, which is 19.2.2's 'a WORD, "
+        "no I/O at all' measured rather than quoted. Reads 3/0/0 here.",
+        needs=("marty",), serial=True,
+        wants=("build/pathtest360.img",)),
+    Row("dosargs", "soak", py("tests/dosargs.py"), 90.0,
+        "CAN A DOS PROGRAM BE GIVEN ARGUMENTS? (SPEC.md 96.19). Half the DOS "
+        "software worth running is configured by its command line and the box "
+        "wrote an EMPTY tail until this wave - Creative's own card test says "
+        "'run this program again and select the other options manually' and "
+        "there was no way to say /M. The row drives the whole loop: run with "
+        "nothing, the window SURVIVES the exit with the program named, click "
+        "the field, type, and ENTER RUNS IT AGAIN (96.19.4) - without which "
+        "the field is a box the user types into and nothing reads. It asserts "
+        "the tail in BOTH FRAMINGS, because PSP:0080 is a length byte AND the "
+        "text after it ends in 0Dh: a program that treats the tail as a "
+        "counted string reads one and a program that parses its arguments "
+        "scans for the other, so a shim that wrote only one is wrong for half "
+        "the world. IT ALSO COUNTS WHAT THE TYPING COST, in glyph cells, "
+        "which is the only way to see it - redrawing the same glyph changes "
+        "NO PIXEL, so a field that repaints all twenty characters per "
+        "keystroke is invisible to the flick instrument and still costs ~18ms "
+        "a key on a 4.77MHz machine. 8 keys, 8 cells here; a whole-field "
+        "repaint would be 36. And MYPATH, because the environment's program "
+        "path was a bare 8.3 name until OSAPI_FILE_PATH (96.19.3) - hence a "
+        "program in a SUBDIRECTORY, since in the root both spellings agree. "
+        "IT ALSO DRIVES THE ENVIRONMENT PAGE (96.20) - the button, a row, "
+        "Done - and asserts the typed NAME=VALUE reaches the program's own "
+        "block; and that the post-exit fill STAYED INSIDE THE WINDOW "
+        "(96.19.5), measured BEFORE anything moves, because a move or a close "
+        "repaints the damage and erases the evidence: an earlier version of "
+        "that check moved the window first and stayed green with the bug "
+        "deliberately put back. VERIFIED TO FAIL at 0% ink against 50%.",
+        needs=("marty",), serial=True,
+        wants=("build/dosargs360.img",)),
+    Row("dosmedia", "soak", py("tests/dosmedia.py"), 90.0,
+        "A FLOPPY SWAPPED UNDER A RUNNING PACKAGE (SPEC.md 18.9.1.1). "
+        "Reported from the field: the DOS box standing on B:, DIR correct, a "
+        "DIFFERENT 720KB disk inserted, DIR again - and the listing was the "
+        "OLD disk\'s, permanently, until the program was closed and reopened. "
+        "**THE HARNESS CANNOT SWAP A FLOPPY UNDER A RUNNING GUEST** - "
+        "MartyPC\'s debug server has `disks` and `flush` and no `insert` - so "
+        "this row cannot stage the report, and what it asserts instead is "
+        "sharper: does a quiet re-stand on a floppy RE-READ LBA 0? That one "
+        "sector is the whole mechanism, because 18.95\'s read-ahead is keyed "
+        "on (volume, [dsk_sigcur]) and [dsk_sigcur] is the sum of the boot "
+        "sector THIS MOUNT READ - so if nothing re-reads it the key cannot "
+        "change and the cache serves the old disk for ever. It measured as "
+        "`reads=0` on every DIR, counted at the CONTROLLER with m.disk(). "
+        "A TWO-SIDED BUDGET: at zero the medium is never checked (the "
+        "defect), and at six or more the directory is being re-read and "
+        "18.95 is undone (the opposite regression). Plus the predicate\'s own "
+        "input - 0040:003F really carrying B:\'s motor bit while a DIR runs, "
+        "because a BIOS that never set it would make 18.9.1\'s skip dead "
+        "code, still correct and silently costing every re-stand a "
+        "revolution. **That third one replaced an assertion that passed while "
+        "measuring nothing**: `two DIRs back to back` cannot be back to back, "
+        "because typing goes through `settle` and the motor has always "
+        "stopped by the second one, so `burst <= n` was 1 <= 1 for ever",
+        needs=("marty",), wants=("build/doscom360.img",)),
+    Row("doscon", "soak", py("tests/doscon.py"), 100.0,
+        "THE DOS BOX'S CONSOLE, AND THE PROMPT IN IT (SPEC.md 96.33). The band "
+        "below the top bar carried three lines of status text and now carries "
+        "an 80x25 screen - apps/os88con.inc, which is Telnet's terminal made "
+        "into a shared include (70.8.12) because three consumers were coming. "
+        "SEVEN STEPS, in the order a person does them: the box opens on a "
+        "PROMPT and not on an error, naming the drive it was LAUNCHED from "
+        "(96.33.2 - it read `A:\\>` on a machine standing on C: until "
+        "OSAPI_FILE_HERE was asked); typing echoes; a BUILT-IN runs into the "
+        "band, which no prompt could reach before (dosh.inc was `AH=4Bh`'s "
+        "alone since 96.30); DIR lists the folder, being the one verb that "
+        "table was missing (96.33.4); CD moves and THE PROMPT FOLLOWS, which "
+        "is what says $P$G is recomposed rather than held; a FILE THAT IS NOT "
+        "A PROGRAM is refused by its EXTENSION (96.33.15); and a name that is "
+        "neither answers DOS's own `Bad command or file name` rather "
+        "than `It could not be read.` about a file the user never had. **STEP "
+        "6 IS THE WEDGE'S GUARD AND IT FAILS BY HANGING**: it types DOS.O88, "
+        "the box's own package in the folder it was launched from, and before "
+        "96.33.15 the box RAN it - 30KB of OP_ header and org-0 code entered "
+        "at PSP:0100, after which the machine does not come back, the bracket "
+        "up and the gfx lock held. The refusal it used to get was the wrong "
+        "one: [dos_dir] was the volume ROOT (96.33.13), so the file was simply "
+        "not there. IT "
+        "READS THE BUFFER AND NOT THE GLASS - con_scr is 2,000 cells of "
+        "character-and-attribute and every assertion above is about CHARACTERS "
+        "- with ONE picture check, that the band is BLACK WITH LIT PIXELS IN "
+        "IT, because a console with a perfect buffer and an empty glyph table "
+        "draws a black rectangle and passes every other check in the file. "
+        "That is not hypothetical: it is what the first build did, con_open "
+        "having not called con_font. STEP 8 IS FULL SCREEN (96.33.5) and it "
+        "reads TEXT VRAM'S OWN BYTES at the segment the bracket was handed, "
+        "because that is the whole claim the design makes: con_scr's cell IS "
+        "the cell in VRAM, so the renderer is a MOVE and not a translation "
+        "(70.8.7), CELL FOR CELL over all 2,000 - and Esc comes back to the "
+        "window on the prompt the console was left at, "
+        "which is the fence that keeps the key OURS only while the console has "
+        "the screen. STEP 8b IS A LAUNCH FROM INSIDE IT (96.33.16), reported "
+        "from the field on CGA as `weird flashing coloured glyphs and never "
+        "showed prince`: the wake dos_con_prog posts cannot be dispatched "
+        "while the UI task is inside dos_fsx_con's own poll loop, so the "
+        "program NEVER RAN, and the repaint that followed laid pixel rows into "
+        "a framebuffer that is character cells now. The assertion is the "
+        "three-state sequence and not a screenshot - [dos_fsxup]/[dos_inbr] "
+        "1/0 -> 0/1 -> 1/0 - because a screenshot of a text screen cannot say "
+        "which renderer wrote it. AND STEP 5b IS THE DRIVE CHANGE (96.33.6): a bare `B:` is "
+        "COMMAND.COM's and not a verb, which this box answered `Bad command "
+        "or file name` until it was reported - a drive letter falls through a "
+        "table that has no row for it - and `Z:` must be refused AND must not "
+        "move. STEP 5c IS THE OTHER HALF OF THAT SHAPE (96.33.7): a bare name "
+        "with no extension is a SEARCH, .COM then .EXE, and typing `PRINCE` "
+        "was refused by a box standing in a folder holding PRINCE.EXE. **B: IS "
+        "THE doscom DISK** for that step alone - it needs a `.COM` at a root "
+        "to type the bare name of, and every package on an apps disk is a "
+        "`.O88`.",
+        needs=("marty",), serial=True, wants=("build/doscom360.img",)),
+    Row("dosdirsw", "soak", py("tests/dosdirsw.py"), 260.0,
+        "DIR's SWITCHES, AND THE PAUSE THAT MAY NOT BLOCK (SPEC.md 96.33.9). "
+        "dsh_c_dir took a path and nothing else, so every switch was read as "
+        "part of the file name; reported from the field as \"dir doesn't have "
+        "most of its common command line args. Like /p\". WHAT THE SWITCHES "
+        "ARE WAS MEASURED - off the IBM DOS 3.30 image and out of "
+        "COMMAND.COM's own string table - and one answer is why this row "
+        "exists: **/B IS NOT A DOS 3.3 SWITCH**, the real thing answers "
+        "`Invalid parameter` exactly as it does for /Z, so a box reporting "
+        "3.31 that accepted it would be wrong in the direction nobody checks. "
+        "AND /P MAY NOT WAIT FOR A KEY: dos_con_key is W_ONKEY's handler and "
+        "its contract is the gfx lock HELD, so a built-in blocking there would "
+        "hold it until a human pressed something - no pointer, no repaint, no "
+        "other window, the whole machine and not just this box. The listing "
+        "SUSPENDS instead, and FIVE ASSERTIONS are about that mechanism rather "
+        "than about the text: an unknown switch is `Invalid parameter` and not "
+        "a file name (/Z, and /B beside it); /W keeps the FILE COUNT, which is "
+        "what says it is a layout and not a filter; /P STOPS with `Strike a "
+        "key when ready . . . ` on the glass, [dsh_more] set and NO PROMPT "
+        "UNDER IT, a machine asking two questions at once being the failure "
+        "mode this design has; a key RESUMES to the same total, a resume that "
+        "lost or repeated an entry still looking like a listing; and Esc "
+        "ABANDONS it. CGA by name: a page is [con_vrows]-1, so 16 rows here "
+        "against 24 where all 25 fit. **B: IS A FIXTURE**, build/dirsw360.img, "
+        "because /P can only be tested against a directory with more VISIBLE "
+        "entries than a page and no shipped floppy has one - the system disk's "
+        "root holds 21 entries and DIR shows FIVE, sixteen being hidden or "
+        "system, which DOS does not list and neither do we. **AND STEP 5 IS 96.33.13**: `CD BIN` then a bare name must resolve to B:\\BIN\\NAME.COM, not to the volume root. `CD` moves [dos_curdir] and dos_path_take's no-separator arm left [dos_dir] - the LAUNCH folder - so from the second directory onward every bare name looked in the first one, and the failure arrives as a read error about a file DIR has just listed.",
+        needs=("marty",), serial=True, wants=("build/dirsw360.img",)),
+    Row("dosconcga", "soak", py("tests/dosconcga.py"), 150.0,
+        "THE CONSOLE BAND ON THE SHORT ADAPTER (SPEC.md 96.33.8). CGA's 200 "
+        "lines leave the DOS box 17 of the console's 25 rows, and [con_vtop] "
+        "is which buffer row the band starts at. It was CON_ROWS - "
+        "[con_vrows] - the bottom of the BUFFER - which is the right number "
+        "only once the console has scrolled a whole screenful; at the first "
+        "paint the cursor is on row 4 and the view started at row 8, so every "
+        "live row was above the fold and the band was AN EMPTY BLACK "
+        "RECTANGLE. Reported from the field in those words. `doscon` cannot "
+        "see it: that row runs on os8088_5150_herc_gla, where 348 pixels hold "
+        "all 25 rows and vtop is 0 under either rule - which is SPEC.md 39's "
+        "standing trap, three adapters and one binary, and this row is the "
+        "second adapter. THREE ASSERTIONS: at the FIRST PAINT the cursor is "
+        "inside the view and the banner and prompt are on rows the band "
+        "shows; the band HAS LIT PIXELS, because a correct buffer pointed at "
+        "the wrong rows draws the same black rectangle as an empty glyph "
+        "table and only the glass can tell those apart (doscon's con_font "
+        "lesson one defect along); and IT STILL TRACKS ONCE IT SCROLLS - "
+        "enough output to drive the cursor past vrows, with the cursor in "
+        "view at every step and vtop actually moving, then the pixels read "
+        "again, because the viewport shift is spent as [con_scrl] and a shift "
+        "that is not spent leaves the band showing the old rows. VERIFIED TO "
+        "FAIL with vtop back on CON_ROWS - vrows: vtop 8, cy 4, nothing in "
+        "view."
+        " AND IT IS WHERE HELP`S SIXTEEN-LINE LIMIT IS DECIDED (96.33.23.1): "
+        "HELP has no pager, and the only reason it may not have one is that "
+        "its lines plus the prompt after them fit a CGA`s 17 rows - a "
+        "Hercules has 25 and could never show the constraint. The assembler "
+        "counts the lines (DHL`s DH_LINES); this counts what a user can SEE, "
+        "which is the thing the count is a proxy for.",
+        needs=("marty",), serial=True),
+    Row("dirwshed", "soak", py("tests/dirwshed.py"), 45.0,
+        "THE DIRECTORY READ-AHEAD WINDOW IS 32K A DOS PROGRAM CAN HAVE "
+        "(SPEC.md 66.10.4). 50.6.6 gave a claimant a FLOOR - \"compact the "
+        "disk cache, do not destroy it\" - and the DOS box is its ONE "
+        "consumer: the Setup page shows both figures and a radio picks "
+        "between them (96.24, 96.25). They read the SAME NUMBER for a release. "
+        "66.10 rests on \"a cache is genuinely unmovable\" and 18.95.7 "
+        "withdrew that sentence two waves later without re-reading it: "
+        "mem_cp_plan reaches mem_cp_drop only from its `.pinned` arm, so the "
+        "day MEM_P_DIRW became movable the door shut, a cache that CAN move "
+        "was moved and never dissolved, OSAPI_MEM_AVAIL_LVL answered "
+        "identically at every rank, and the box - which sizes its claim DOWN "
+        "from that figure - handed every program 32K less than the machine "
+        "had. FOUR ASSERTIONS, and each is a separate thing that can be "
+        "missing: the cache IS THERE (read out of mem_tab by owner 0xFE02, "
+        "because a machine with no window would pass every check below with "
+        "two equal numbers and mean nothing, and its size is what the rest are "
+        "measured against); the page's two figures DIFFER by it; a real "
+        "launch of a real .COM is HANDED the difference ([dos_akb], banked by "
+        "dos_run from the same slot the page asked, so a page that displays "
+        "the right pair while the launch uses the wrong one fails here alone); "
+        "and [dsk_rah_seg] - the KERNEL's own word - WENT, read under each arm "
+        "while the program is running, without which the row would pass on a "
+        "box that asked for the bigger number and was quietly given the "
+        "smaller. That last one is read INSIDE the bracket and not after it, "
+        "which is not a nicety: the window is claimed at a MOUNT (18.95.5) "
+        "and the box re-mounts every volume on the way out of an fsx bracket, "
+        "so a read taken once the program has exited finds the cache back and "
+        "says the shed never happened. The KEEP arm is asserted the other way "
+        "for 50.6.6's floor. IT READS STATE AND NOT THE GLASS. "
+        "THE ORDER IS LOAD-BEARING, twice: the page is read BEFORE any launch "
+        "because a DOS_MEM_DUMP launch SHEDS the cache and a page read after "
+        "it correctly reports two equal numbers about a machine that no "
+        "longer has one; and the launches happen with the CONSOLE up, because "
+        "console is the main page's band (96.33) and with Environment showing "
+        "there is nothing to type at and every [dos_akb] reads 0 - a failure "
+        "that names the arena and is really the test's own navigation. It "
+        "comes back by clicking dos_trect, the Return button's rect as the "
+        "guest itself composed it. **B: IS THE doscom DISK**: a launch is what "
+        "banks [dos_akb] and every package on an apps disk is a .O88. VERIFIED "
+        "TO FAIL with the avail query put back on mem_cp_plan - 453K and 453K, "
+        "a spread of 0 against a 32 KB cache. **[dos_keepc] IS A RADIO AND ITS "
+        "ARM 0 MEANS KEEP** (96.36): this row was written against the CHECK "
+        "BOX whose ON byte was 1 for \"keep\", the third arm turned the control "
+        "into an OS88UI_RD_SEL, and nothing re-read it - so both labels and "
+        "both comparisons ran backwards and it failed naming a spread of -32 "
+        "against a 32KB cache, the right quantity with the wrong sign. "
+        "tests/dosmem.py's header names that trap in as many words. "
+        "**TWO MORE ASSERTIONS SINCE 18.95.8**, which gave the box a door "
+        "that takes a WIDTH (OSAPI_DSK_CACHE) and collapsed the dial to ONE "
+        "list on both arms - so `Off` is item 4 here and used to be item 1, "
+        "and a row poking the old index picks 32K. (5) A MIDDLE RUNG IS REAL: "
+        "with `9K` picked the program runs with the cache STANDING and "
+        "[dsk_rah_runs] reading exactly 2, where before the slot every rung "
+        "but Auto was MEM_LVL_TOP and behaved identically to Off - and the "
+        "arena it is handed must land strictly between Auto\'s and Off\'s. "
+        "(5a) RELEASING A NARROW ONE WIDENS IT AGAIN: after the 9K run exits "
+        "the cache must be back above 2 chunks. 18.95.5.3 says there is no "
+        "grow path and there does not need to be one - true of a kernel "
+        "nobody commands, the bug the moment there is a cap, because a "
+        "release that hands back the PERMISSION and leaves the claim alone "
+        "keeps 9KB standing for the rest of the session, and the re-mount "
+        "cannot fix it (dsk_rah_want returns at its own guard while the claim "
+        "is held, whatever width it is held at). "
+        "(6) THE COMMAND IS GIVEN BACK: [dsk_rah_cap] is STICKY on purpose, "
+        "so dos_run\'s `.out` owes DSK_RAH_AUTO the way it owes dos_drv_back "
+        "- read AFTER the Off run has exited, the cap must be 0xFF and the "
+        "cache must be BACK. Without that second half the cap stays 0 and the "
+        "re-mount on the way out of the fsx bracket finds a machine told to "
+        "hold nothing, for the rest of the session.",
+        needs=("marty",), serial=True, wants=("build/doscom360.img",)),
+    Row("linecar", "soak", py("tests/linecar.py"), 60.0,
+        "THE CARET'S BAR, AFTER AN EDIT THAT MOVED IT (SPEC.md 83.1.1). "
+        "os88line_edit repaints what one keystroke changed instead of the "
+        "whole field (96.19.1) and was given the view and the length to work "
+        "that out but NOT the caret, which is the third thing a key moves - "
+        "so a cell the narrow path did not repaint KEPT the 1px bar standing "
+        "in it, and a field the user typed ABCD into and rubbed out was four "
+        "bars and no text. THE ASSERTION IS THREE HISTORIES AND ONE PICTURE, "
+        "which is what stops it being written vacuously: `AB` typed, `ABCD` "
+        "backspaced twice, and `AB` with Left then End all leave the field at "
+        "LEN 2 CAR 2 'AB', so the pixels must be identical and no notion of "
+        "what a caret looks like is encoded here at all. The guest's own "
+        "LN_LEN, LN_CAR and buffer are read per history, and the reference "
+        "must DIFFER from the EMPTY field - otherwise two blanks compare "
+        "equal and the row says nothing. EVERY HISTORY RUNS even when one has "
+        "already failed, because the backspace and the caret move are two "
+        "separate leaks in one routine and a partial fix must not read as a "
+        "whole one. The reset between them is Home-then-Delete and that is "
+        "chosen rather than convenient: both are os88line_edit's own "
+        "fall-back to a full redraw or leave the caret where it was, so the "
+        "reset is clean WITH THE DEFECT IN - clearing with backspaces would "
+        "carry history 1's trail into history 2 and compare two dirty "
+        "pictures. VERIFIED RED both ways with the caroff taken back out: "
+        "backspaced 16 pixels at two cells, moved 6 at one.",
+        needs=("marty",), serial=True),
+    Row("dospkg", "soak", py("tests/dospkg.py"), 190.0,
+        "A .O88 TYPED AT THE DOS PROMPT OPENS THE PACKAGE (SPEC.md 96.33.17), "
+        "BY ITS BARE NAME TOO (96.33.7). "
+        "96.33.15 refuses an extension that is not .COM or .EXE and .O88 went "
+        "with the rest - rightly, since entering 30KB of package image as a "
+        ".COM wedges the machine - and what was missing was not a fourth "
+        "extension to allow but something else to DO with one. "
+        "OSAPI_PKG_START (21.6) is it, so the box hands the name to the kernel "
+        "and the package opens in its own window, NOT inside the box. Four "
+        "steps and the last two are the ones that break silently: CALC.O88 "
+        "opens 'Calculator' AND the box is still there (a launch that "
+        "replaced it would be the .COM path back); NOSUCH.O88 says `Cannot "
+        "open NOSUCH.O88` and opens nothing, because at that point there is "
+        "no window to look at; a SECOND package launches, which a one-shot "
+        "flag or a name left in the shell's scratch would not deliver (the "
+        "launch is POSTED - the slot wants the gfx lock free and W_ONKEY "
+        "holds it); and from the FULL SCREEN the console's bracket comes "
+        "down first, which is 96.33.16's rule reaching a second kind of "
+        "launch - without it the wake is never dispatched and the machine "
+        "shows 80x25 text with a package running behind it. Asserted on "
+        "GUEST STATE and not pixels: wm_wins for the titles, the box's own "
+        "con_scr for the console. VERIFIED RED with the .O88 arm taken back "
+        "out of dos_con_ext - 5 of the assertions, every spelling answering "
+        "`Bad command or file name` again. STEP 1b IS THE BARE NAME: a bare "
+        "name is a SEARCH and .O88 is its third probe, after DOS's own two, "
+        "which is the order contract - this shipped as a SPLIT, the dotted "
+        "door answering a package and the bare one not, so CALC.O88 opened "
+        "Calculator and CALC beside it in the same folder said `Bad command "
+        "or file name`. It uses a DIFFERENT package from step 1 on purpose: "
+        "re-typing CALC opens a second Calculator and the title assertion was "
+        "already true. Its negative control is the half that breaks silently "
+        "- a bare NOSUCHPG matching none of the three must still say `Bad "
+        "command or file name` and NOT `Cannot open`, because the "
+        "[dos_ispkg] store sits on the arm where the probe HIT and one made "
+        "before it would send every unresolved word on the machine to the "
+        "package launcher. MEASURED at 55.6s for all six steps on a 2026 "
+        "container; the 190 declared keeps the ~4x headroom the 150 this row "
+        "shipped with had, because the declaration is read on slower boxes "
+        "than the one that takes it.",
+        needs=("marty",), serial=True),
+    Row("dosopen", "soak", py("tests/dosopen.py"), 240.0,
+        "A .O88 BY PATH, WITH A DOCUMENT, AND `OPEN` (SPEC.md 96.33.21, "
+        "96.33.22) - three things the DOS prompt could not do and ONE kernel "
+        "argument that carries all three: OSAPI_PKG_START takes a DOCUMENT "
+        "beside the name (21.5.3), so a package cannot tell the launch from a "
+        "DOUBLE-CLICK and no package changed. A: a typed path to a package - "
+        "dos_con_pkg copied dsh_a1 into a 13-byte cell, so B:\\APPS\\CALC.O88 "
+        "was truncated to twelve characters of PATH and answered `Cannot open "
+        "B:\\APPS\\CALC.O`; all three shapes now. B: `NOTEPAD README.TXT` "
+        "opens Note Pad ON that document, with the program found by the HINT "
+        "CACHE and not in the folder we stand in - the literal case, standing "
+        "on A:\\ with NOTEPAD.O88 in A:\\APPS\\. C: `OPEN` is the same with "
+        "the program left out, the extension naming it. THE VOLUME IS NEVER "
+        "BROWSED IN A DISK WINDOW HERE and that is the sharp part: the "
+        "association tables are filled by the mount HARVEST and every path a "
+        "program reaches this slot by is a QUIET mount which skips it "
+        "(21.5.3.1) - the DOS box seeds NOTHING, dos_drv_sel doing no mount "
+        "at all (96.48) - so the kernel seeds the cache itself and this row "
+        "proves it by never opening B:. FOUR NEGATIVE CONTROLS, which is the "
+        "half that breaks silently: a typo with NO tail still answers `Bad "
+        "command or file name` (the stem is looked up ONLY when a document "
+        "follows it, and without that rule every unresolved word on the "
+        "machine reaches the package launcher); a typo WITH a tail answers "
+        "`Cannot open NOTPAD`, naming the half that was wrong rather than "
+        "sending the user to look at the document; OPEN of an unclaimed "
+        "extension refuses in words, there being no window to look at; and a "
+        "program on ANOTHER volume is asserted NEITHER way, which is a "
+        "FINDING: pinned as a refusal it went GREEN on a fresh boot and RED "
+        "after this row's own earlier cases, in ONE build - what the tables "
+        "and the hint cache know is SESSION STATE (96.33.21.2), so either "
+        "arm asserts the order of the cases above it; the reliable half, "
+        "that a PATH carries it, is what case B asserts. The document "
+        "assertions read TeXPad's "
+        "own TITLE, which carries the file name, so they test the "
+        "OSAPI_ARG_FILE handover and not merely that a window opened. "
+        "VERIFIED RED at each stage of the build: before the resolver took a "
+        "parameter A refused three ways; before the kernel seed, every "
+        "lookup on an unbrowsed volume missed; before 96.33.21.2 the literal "
+        "`NOTEPAD README.TXT` answered `Bad command or file name: NOTEPAD`. "
+        "CASE IS FOLDED ON BOTH NAMES (21.5.3.2) and that arrived as a FIELD "
+        "REPORT: `notepad readme.txt` and `open readme.txt` both refused "
+        "while `open README.TXT` worked, because the association tables are "
+        "uppercase-exact - built from FAT names - and nothing on that path "
+        "goes through the file layer that would fold it. BOTH names had to "
+        "be folded and only the extension was ever going to be noticed: a "
+        "lowercase document name matches nothing on a FAT volume either, so "
+        "folding the extension alone turns a visible refusal into a package "
+        "opening an EMPTY WINDOW. AND THE REFUSALS ARE THREE, NOT ONE "
+        "(96.33.22.1): one string answered all of them and was wrong twice - "
+        "it named the PROGRAM when the thing missing was the FILE, and said "
+        "`on this disk` about a lookup that searches the volumes. Each is "
+        "asserted, because the FIRST fix then sent the PARSE failure to the "
+        "new association wording, which is the same defect wearing its "
+        "replacement`s clothes - `nosuchfile.txt` is FOURTEEN characters and "
+        "never reaches the lookup at all. A LAUNCH THAT WORKED OWES A PROMPT "
+        "(96.33.17.1), reported with a photograph: two `open`s in a row left "
+        "the cursor at column 0 of a bare line, so the second command had no "
+        "`A:\\>` in front of it - 96.33.17's gap rather than this feature's, "
+        "a DOS program's prompt coming back with its EXIT LINE and a package "
+        "having none, so BOTH spellings are asserted - and the fix for THAT "
+        "opened the next one (96.33.17.2): the prompt is printed after "
+        "OSAPI_PKG_START returns, so the package's window is already in "
+        "front, and a repaint from the wake handler has NO CLIP REGION, the "
+        "kernel arming one in front of W_PAINT and nowhere else. Reported off "
+        "the glass as Note Pad with a black band through it. Asserted on "
+        "GUEST STATE: [con_drb] is the console's dirty-ROW bitmap, so marks "
+        "kept rather than spent is exactly what `the draw was skipped` means "
+        "- and raising the box must then spend them, or a skipped draw would "
+        "cost the prompt. HELP is asserted here too (96.33.23) - that it PRINTS "
+        "whole, that the opening hint NAMES it (checked at the top, the "
+        "console being a 25-row screen rather than a log, so by the HELP case "
+        "the banner has scrolled off), and that it leaves a prompt. That it "
+        "FITS is dosconcga`s, on the CGA band that decides it. "
+        "The third needs a file no shipped "
+        "disk has (every visible document on both is associated, and the "
+        "unclaimed ones in the root are HIDDEN), so the row MAKES one with "
+        "the box`s own COPY onto the scratch B:. VERIFIED RED once more on "
+        "the way: `.nodoc` was placed between `jnc .out` and `.bad`, so every "
+        "refusal the LAUNCH earned fell through it and came back `File not "
+        "found` about a document that was there. 173.2s measured.",
+        needs=("marty",), serial=True),
+    Row("dosext", "soak", py("tests/dosext.py"), 170.0,
+        "A TYPED EXTENSION, AND THE ARGUMENTS AFTER IT (SPEC.md 96.33.15.1). "
+        "COMMAND.COM's rule has two halves - no extension is a search, an "
+        "extension must be one it can execute - and dos_con_ext shipped with a "
+        "check that answered NO to both: `mov ah, al` banked the literal one "
+        "instruction before the `pop ax` that restored the register it was "
+        "banked into, so the compare read a byte nobody had set and EVERY "
+        "dotted name on the machine came back `Bad command or file name` - "
+        "PRINCE.EXE, DOSARGS.COM, a fully qualified B:\\BIN\\FOO.COM. THE "
+        "REASON IT SHIPPED IS THE ROW AND NOT THE REGISTER: doscon step 8b "
+        "asserts that DOS.O88 is REFUSED, which a check stuck saying no passes "
+        "perfectly, so this one asserts the acceptance as loudly as the "
+        "refusal. The negative control is the sharp part - BIN/DOSARGS.DAT is "
+        "a BYTE-FOR-BYTE COPY of BIN/DOSARGS.COM, so its refusal cannot be "
+        "about the file being missing or not being a program: the same bytes "
+        "run under one name and are refused under the other, and the only "
+        "difference is three characters. Six spellings in one boot - bare, "
+        "with the extension, with arguments, with both, fully qualified, and "
+        "the .DAT - and the ones that run must report the exact argument text. "
+        "VERIFIED RED with the pop put back: three of the six, all three "
+        "dotted ones, while the search and the refusal stayed green.",
+        needs=("marty",), serial=True,
+        wants=("build/dosargs360.img",)),
+    Row("dostype", "soak", py("tests/dostype.py"), 120.0,
+        "TYPE, AND THE FLAG THAT MUTED THE BOX (SPEC.md 96.30.7). A tester "
+        "ran the verbs for the first time and TYPE answered `File creation "
+        "error` on every file - compressed, uncompressed, and a name that was "
+        "not there alike. FOUR defects standing on each other, one assertion "
+        "each. **IT COULD NOT READ A FILE AT ALL**: the chunk was 128 bytes "
+        "and OSAPI_FILE_READ_AT refuses a capacity that is not a whole number "
+        "of CLUSTERS (18.4.4), so the FIRST read was refused on every file on "
+        "every volume, and the smallest cluster this machine has is 512 bytes "
+        "- no geometry could have made 128 legal. NOTES.TXT is 9,200 bytes "
+        "against an 8KB chunk on purpose, so it takes two passes and finishes "
+        "on a partial one, which is the case 18.4.4 makes its own exception "
+        "for; SHORT.TXT is 13, so the first read IS the tail; CTRLZ.TXT has "
+        "text after a ^Z that must not appear. **ONE `>` MUTED THE BOX FOR "
+        "GOOD** - [dsh_quiet] is package bss and was never cleared, so one "
+        "redirection silenced every dsh_say for the life of a window somebody "
+        "leaves open, which is not an error to look at: VER prints nothing "
+        "and DIR keeps printing NAMES while losing its <DIR> markers, its "
+        "sizes and its footer, so the listing silently changes SHAPE. That is "
+        "asserted LAST and in that order, because a box that has stopped "
+        "speaking passes every other row in this file by printing nothing. "
+        "**AND THE REFUSAL WAS SILENCED BY THE FLAG IT SETS** - the `>` set it "
+        "before the target was judged, so `Cannot redirect to that file` never "
+        "printed and the command read as one that had worked, the wrong KIND "
+        "of answer 96.30.3 refuses a non-NUL target to avoid. Plus the "
+        "compressed arm (README.TXT on the SYSTEM disk is a 'CZ' container, so "
+        "fixing the capacity alone would have typed a wrapper) and a COPY AT "
+        "THE PROMPT, which is a fifth defect nothing had typed: the buffer "
+        "comes out of the DOS ARENA and at the prompt there is no arena "
+        "(96.30.7.2), so dos_mcb_alloc walked the interrupt vector table and "
+        "refused - COPY had that one first. VERIFIED RED against the tree "
+        "before the fix: ELEVEN of eleven, each naming its own defect, with "
+        "`File creation error` on five of them and a DIR reading `BIN CTRLZ "
+        "TXT NOTES TXT SHORT TXT` with no sizes on the last. 37s measured.",
+        needs=("marty",), serial=True,
+        wants=("build/dostype360.img",)),
+    Row("doslnk", "soak", py("tests/doslnk.py"), 150.0,
+        "A SHORTCUT: can what a DOS program needs be SAVED and reopened? "
+        "(SPEC.md 96.21). Arguments and an environment that have to be retyped "
+        "every launch are arguments nobody sets, so the box writes a .LNK "
+        "carrying the path, the command line and the variables - a real SHELL "
+        "LINK, because 8.3 leaves no room to invent an extension and the "
+        "format is one every other system already reads. THREE STEPS, and the "
+        "middle one is the reason the row exists: the program is run once with "
+        "arguments typed in, Save Shortcut writes the link, and then "
+        "tests/doslnk.py READS THAT FILE BACK OFF THE FLUSHED IMAGE WITH ITS "
+        "OWN SHELL LINK PARSER - HeaderSize 0x4C, the fixed CLSID, LinkFlags, "
+        "the counted StringData and the ExtraData chain - so a writer and a "
+        "reader that agreed on the same wrong bytes cannot both pass. Step 3 "
+        "boots again and double-clicks the link: the arguments, the "
+        "environment AND the working directory must all arrive, which is three "
+        "separate mechanisms (the PSP tail, the environment block, and a walk "
+        "DOWN from the volume root on OSAPI_FILE_GOTO_QM - the only direction "
+        "a package can walk). MYPATH is asserted whole, because a link that "
+        "ran the right name in the WRONG FOLDER is the failure this walk "
+        "exists to stop. VERIFIED TO FAIL three ways while it was written: a "
+        "link built before the dialog navigated recorded the wrong working "
+        "directory; two strings sharing one buffer put the program's name in "
+        "the filename field; and the field reload called os88line_set with no "
+        "DI, copying a stale pointer over the very arguments it was showing - "
+        "which is why os88line_resync exists (96.21.1). STEP 5 IS THE SECOND "
+        "TRY (96.21.2.1): WORKING_DIR is written FULLY QUALIFIED now - "
+        "`B:\\BIN` - which is right until the floppy turns up in another "
+        "drive, so the box tries the drive the link NAMES and then the drive "
+        "the link IS ON. The row forges that rather than hoping for it: one "
+        "byte of a COPY of the link is patched from `B` to `A` and the copy "
+        "is added to the ROOT of the same floppy, so try 1 walks A:\\BIN - the "
+        "system disk, which has no BIN - and try 2 walks B:\\BIN, which does. "
+        "THE PLACEMENT IS THE TEST: a link beside its program resolves "
+        "whether or not the fallback exists, because the folder it falls back "
+        "to is the one it was already in. VERIFIED RED by deleting the second "
+        "call - the box then keeps the link's own folder, B:\\, and starts no "
+        "program at all.",
+        needs=("marty",), serial=True,
+        wants=("build/doslnk360.img", "build/dosargs360.img")),
+    Row("heapcheck", "soak", py("tests/heapcheck.py"), 60.0,
         "Drive tests/heapfrag and read its verdict out of the guest (SPEC.md"
-        "66.8).",
+        "66.8). 60s is 42.8 MEASURED after SPEC.md 66.4.3 added the region "
+        "rows, which open PAINT first so heapfrag's own region lands under it "
+        "and closing Paint leaves a hole above it - that is a second package "
+        "launch and a close on top of the suite, and the row was 36.9s before.",
         needs=("marty",), serial=True,
         wants=("build/heapfrag360.img",)),
     Row("xmcheck", "soak", py("tests/xmcheck.py"), 50.0,
@@ -2497,6 +4587,15 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("dispband", "soak", py("tests/dispband.py"), 54.1,
         "Can a window use the SECOND display's top rows? (SPEC.md 39.16.2)",
+        needs=("marty",), serial=True),
+    Row("dispsaver", "soak", py("tests/dispsaver.py"), 20.0,
+        "Does a saver SESSION dark the second monitor? (SPEC.md 79.1.1) The "
+        "blanker always walked every display; the animation returned before "
+        "the walk, so an extended desktop saved one tube and left the other "
+        "lit with a frozen desktop. It sets the HERCULES primary on purpose - "
+        "MartyPC models the CGA's video-enable bit and not the mono card's, "
+        "so with the default CGA primary the instrument is blind and the row "
+        "is green on both kernels",
         needs=("marty",), serial=True),
     Row("dispzoom", "soak", py("tests/dispzoom.py"), 50.0,
         "SPEC.md 11.95.2.1: does a ZOOM land flush on an EXTENDED desktop?"
@@ -2562,9 +4661,19 @@ SOAK = [
         ["env", "OS88_DEFINES=KERN_SMALL", "OS88_BUILD=build/smallk"]
         + py("tests/dispclose.py", "--small"), 100.0,
         "...and the same suite on kern_small, which since SPEC.md 75.3.2 has "
-        "the identical behaviour rather than a fallback. It needs `make "
-        "small` first, and it is the ONE gate here that drives that build",
-        needs=("marty",), serial=True, timeout=900),
+        "the identical behaviour rather than a fallback. **IT DECLARED THE ARM "
+        "AND NOT THE ARTEFACT**, which is the failure docs/WRITING-TESTS.md 4 "
+        "is about: it carried a sentence saying it needed `make small` first "
+        "and claiming to be the one gate that drove that build, and it drove "
+        "nothing - every other kern_small row here declares `wants=` and this "
+        "one did not, so on a box where nobody had typed `make small` it died "
+        "in 0.2s on a FileNotFoundError for build/small360.img, several frames "
+        "from the cause and reading like a broken close path. The `wants=` "
+        "below is the whole fix: build/small360.img\'s own rule sub-makes into "
+        "build/smallk, so one artefact brings the kernel the env line above "
+        "points at",
+        needs=("marty",), serial=True, timeout=900,
+        wants=("build/small360.img",)),
     Row("dispcold", "soak", py("tests/dispcold.py"), 300.0,
         "WHO DRAWS INTO .cold? (docs/plans/completed/DUAL-DISPLAY-VGA.md 8(11))",
         needs=("marty",), serial=True),
@@ -2664,6 +4773,21 @@ SOAK = [
         "package, which compiles every path this row asserts on out",
         needs=("marty",), wants=("build/smallapps360.img", "build/small360.img"),
         serial=True),
+    Row("skiesworlds", "soak", py("tests/skiesworlds.py"), 25.0,
+        "SPEC.md 88.10.5.4.1: does EVERY Clear Skies location load its world"
+        "and fly? It exists because NOTHING FLEW SAN FRANCISCO - skieswater"
+        "visits LBG, LCY and JFK, skiesgeom both Paris runways, and every"
+        "other skies row takes the default, so the one location whose world is"
+        "the LAST stream in the package file shipped unflyable. cs_wldget"
+        "asked OSAPI_FILE_READ_AT for a capacity rounded UP to whole clusters"
+        "and then checked the DELIVERED count against that same rounded"
+        "number: every stream but the last has more file behind it and filled"
+        "it by accident, the last ends at EOF and never can. VERIFIED TO FAIL"
+        "against the package before the fix - eight locations fly either way"
+        "and SFO reports cs_wldnow FF, nothing loaded. The assertion is the"
+        "WORLD THAT ARRIVED and not a screen: a silent load failure takes no"
+        "mode, so there are no pixels to ask about",
+        needs=("marty",), serial=True),
     Row("skies", "soak", py("tests/skies.py"), 35.0,
         "SPEC.md 88: CLEAR SKIES draws and advances, takes off from the runway"
         " under full throttle and the stick, crashes when the nose is held"
@@ -2863,6 +4987,18 @@ SOAK = [
         " card frames is a fifth of one on Mode X, and under load the row"
         " reported that the key had not changed, which was true and useless",
         needs=("marty",), serial=True),
+    Row("skieswater", "soak", py("tests/skieswater.py"), 20.0,
+        "SPEC.md 88.6.1.1: a far model never stands in while the eye is"
+        " inside the near one. Draw Distance = Near scaled CSO_LOD to 0.6 and"
+        " four of the nine water strips are inside a river wider than that,"
+        " so the A5 spawned on a bay drawn as a centreline and sat on the"
+        " horizon band's ground - 12.5% dither on Hercules, which the field"
+        " read as 'it just looks like ground', green on Mode X. The row puts"
+        " the A5 on the strips still past the threshold at Near (Rio's was"
+        " re-laid inside it, 88.7.7.5) and asks the guest which model each"
+        " piece under it entered cs_flatverts as; --clobber-guard NOPs the"
+        " eight-byte clamp and every location goes red",
+        needs=("marty",), serial=True),
     Row("skiesfleet", "soak", py("tests/skiesfleet.py"), 71.0,
         "SPEC.md 88.7.5-88.7.7.1: the three aeroplanes that came after the"
         " Pitts, each checked on its MECHANIC. The Magister's roll rate ramps"
@@ -2889,6 +5025,37 @@ SOAK = [
         " zero (88.7.6.4), and every aeroplane's prompt is checked to name"
         " its OWN rotate speed (88.7.9). --clobber-lag, --clobber-amphib and"
         " --clobber-water are the three red runs",
+        needs=("marty",), serial=True),
+    Row("skiessound", "soak", py("tests/skiessound.py"), 120.0,
+        "SPEC.md 88.8.2: an ENGINE each. Every aeroplane used to be"
+        " [cs_thr] + 50, so a Fouga Magister and an Icon A5 were the same"
+        " note at the same lever; each reads its own record now, and this"
+        " asks the GUEST what it is playing rather than the table what it"
+        " should. Every powered aeroplane's tone is its own record's law at"
+        " idle, half and full, computed on the host off the record the guest"
+        " holds - and the jet's off [cs_thracc] at 8.8, which is the"
+        " resolution the sound actually uses. The four of them are four"
+        " DIFFERENT notes at full power, which is the whole of the ask and"
+        " the one check a shared record cannot pass. A shut throttle is an"
+        " IDLE and not silence. The Bijave plays nothing, and the rule behind"
+        " that is checked per row rather than as a special case: an aeroplane"
+        " has an engine record exactly when it has CSP_THRUST, so a sixth is"
+        " covered by arriving. THE NOTE IS STEADY - one value over sixteen"
+        " settled ticks, which is what replaced a beat the field heard as a"
+        " bug - and it GLIDES at a constant INTERVAL, 15 distinct notes on"
+        " the Cessna and 97 on the Magister when the lever shuts in one step,"
+        " which is CSS_CAP's ceiling and not CSS_LAG's share of the gap: a"
+        " share of the gap was a musical FOURTH at the bottom of the jet's"
+        " range (88.8.2.1). It is AT its note from a flight's FIRST TICK,"
+        " watched from outside the bracket because a ramp would be over"
+        " before a test could confirm the mode. And the Magister plays the"
+        " thrust it HAS - 426 Hz at a half-open lever against the 440 the"
+        " lever asks for, the two separable because cs_step rounds its target"
+        " to whole units. --clobber-lag, --clobber-shared and --clobber-spool"
+        " are the three red runs. Its breakpoint is cs_sound_step's OWN"
+        " .tick and not cs_step: 88.8.2.1.2 put a wall-clock gate in front of"
+        " the body, so cs_step runs up to CS_MAXSTEP times a frame and only"
+        " the first of them crosses a tick",
         needs=("marty",), serial=True),
     Row("skiesease", "soak", py("tests/skiesease.py"), 34.0,
         "SPEC.md 88.7.3: the horizon captures the approach - held toward"
@@ -2943,6 +5110,54 @@ SOAK = [
         " analysis. The trainer is wired to it through cs_axisp."
         " --clobber-body is the red run and it reproduces both reports",
         needs=("marty",), serial=True),
+    Row("skiesinv", "soak", py("tests/skiesinv.py"), 27.0,
+        "SPEC.md 88.7.8.3: INVERTED IS THE SAME AEROPLANE. cs_step turns by"
+        " CSP_TURNK x sin(roll) with no cos(pitch) in it, and lift along the"
+        " body up axis dotted into the track's right is exactly"
+        " sign(cos pitch) sin(roll) - ch^2 + sh^2 cancels the rest - so past"
+        " the vertical a right bank turned LEFT. Reported as *\"the direction"
+        " of travel is wrong, I seem to be going partially sideways\"*, and"
+        " it is 88.7.8.1's sign a third time. Same pair as skiesfacing"
+        " ((H,0,0) and (H+180,180,180) are one attitude), stepped a TICK at a"
+        " time with the speed pinned: the row proves the arms are one camera"
+        " and the SAME PHYSICAL BANK (right.y equal) before it asks anything"
+        " about the turn, so a difference cannot be two aeroplanes banking"
+        " different ways. What it sees that skiesfacing cannot is MOTION - a"
+        " still frame does not say which way an aeroplane is turning."
+        " Tolerance is one unit in the last place and that is MUL14's floor,"
+        " not slop: cos(0) is +32767 and cos(180) is -32767. --clobber-bank"
+        " is the red run and it reads +15,+30,+44 against -16,-31,-45 from"
+        " the same wing down",
+        needs=("marty",), serial=True),
+    Row("skiesfacing", "soak", py("tests/skiesfacing.py"), 30.0,
+        "SPEC.md 88.7.8.2: the SCENE reads the FACING and not the heading."
+        " The camera's forward vector is (sh cp, sp, ch cp), so past the"
+        " vertical cos(pitch) turns its horizontal part round and the"
+        " aeroplane is pointed the other way along its own heading - and"
+        " 88.5.1's cull, the occluder's across and 88.6.2.4's"
+        " which-threshold-is-ahead all worked in the heading's frame with no"
+        " cos(pitch) in them at all. Reported as *\"a vertical 180 in the"
+        " Pitts stops drawing buildings in the distance and the lines on the"
+        " runway, and a reverse vertical 180 clears it\"*, which is 88.7.8.1"
+        " one layer out. The A/B is EXACT: (H, 0, 0) and (H+180, 180, 180)"
+        " are one camera to the bit - the quarter table reflects exactly -"
+        " so the row asserts cs_m matches first and then requires the same"
+        " objects filed, the same runway threshold and the same 3D window,"
+        " pixel for pixel. It clears CSO_SEEN each pose, because the cull is"
+        " only consulted for a stranger and the defect is invisible to"
+        " anything already on the glass. --clobber-facing is the red run and"
+        " it reads 7 filed against 1, 8 against 5 and 10 against 8."
+        " THE COMPARISON IS THE WHOLE SCREEN, PANEL INCLUDED, and it did not"
+        " used to be: the 80 pixels the first version carved out as *the"
+        " panel legitimately reads a different Euler triple* were SPEC.md"
+        " 88.9.2.6 - the attitude line off the glass and the compass reading"
+        " the reciprocal, both reported by the field within the day."
+        " --clobber-panel is that half's red run and reproduces exactly 80."
+        " Its fourth pose flies both arms at 60 DEGREES OF BANK, which is the"
+        " only one that can tell the roll half of the fold from nothing - and"
+        " 60 rather than 90, where cos(roll) is exactly 0 over a 64-unit"
+        " window and a line-only horizon cannot say which way vertical leans",
+        needs=("marty",), serial=True),
     Row("skiesrad", "soak", py("tests/skiesrad.py"), 34.0,
         "SPEC.md 88.5.11: cs_pwhole never lies. cs_projall PREDICTS off"
         " CSM_RAD that an object is wholly in front of the near plane, and"
@@ -2971,7 +5186,16 @@ SOAK = [
         " because it is not the row's own business to report its absence: it"
         " said SKIP and returned 0 for its whole life, so the suite scored it"
         " `ok` in 0.1s and nothing ever drove the watchdog. wants= builds the"
-        " tree AND keeps it current, which a capability cannot do",
+        " tree AND keeps it current, which a capability cannot do."
+        " **ITS RUNNING CHECK WAS FALSE OF THE MACHINE** (88.14.4): it"
+        " required every banked IP to be a package offset, and the ring"
+        " banks whatever int 08h INTERRUPTED - which is regularly the ROM,"
+        " because cs_input polls int 16h (53.1) and that enters at"
+        " F000:E82E. On the tree it was written against it failed 12 of 12"
+        " three abreast naming e830/e832/e837/e83c/e84b, every one a"
+        " CORRECT sample, and passed serially on the same tree - which is"
+        " what made it look random. The CS is banked per slot now and the"
+        " row PLACES each sample instead of assuming it",
         needs=("marty",), wants=("build/skiesdiag/apps360.img",),
         serial=True),
     Row("skiesdrag", "soak", py("tests/skiesdrag.py"), 65.0,
@@ -3313,6 +5537,34 @@ SOAK = [
         "Single or Extend, where the second display sits, and does it survive"
         "a",
         needs=("marty",), serial=True),
+    Row("dispfsxherc", "soak", py("tests/dispfsxherc.py"), 40.0,
+        "Does the PRIMARY survive an fsx bracket on the SECOND display?"
+        "(SPEC.md 39.19.4.1) dispfsxcga's MIRROR - the DOS box dragged onto"
+        "the CGA of a Hercules-primary desktop, taken full screen and brought"
+        "back. The ROM's mode set is EQUIPMENT-driven, so vid_text asking for"
+        "mode 3 while 40:10 still says mono forced mode 7 and the 3B4h CRTC -"
+        "retiming the HERCULES for 80x25 text over its own graphics"
+        "framebuffer and never touching the card the app is on. VERIFIED TO"
+        "FAIL against the kernel before the fix, on four of five legs: the"
+        "mono raster 912 -> 882, 134,950 of 252,000 Hercules pixels changed,"
+        "20,320 coloured pixels where the full screen's text belongs, and"
+        "40:10 left claiming a colour primary. Leg 2 is the RASTER and not"
+        "40:65h, because IBM gives mode 3 and mode 7 the same mode byte",
+        needs=("marty",), serial=True),
+    Row("dispfsxcga", "soak", py("tests/dispfsxcga.py"), 35.0,
+        "Does the SECOND display survive an fsx bracket on the first?"
+        "(SPEC.md 39.18.1.1) A Hercules primary with a CGA beside it, the DOS"
+        "box taken full screen and brought back: fsx_mode's `int 10h AX=0007h`"
+        "stamps the BIOS's ONE CRT mode shadow at 40:65h, and"
+        "vid_unblank_kind's CGA arm used to write that byte to 3D8h - so the"
+        "CGA came back in 80x25 TEXT with blink on over a 6845 still timed for"
+        "mode 6, which the field saw as the dithered desktop turning green and"
+        "flickering. VERIFIED TO FAIL against the kernel before the fix: leg 3"
+        "reads Mode3TextCo80 where it wants Mode6HiResGraphics and leg 4 counts"
+        "115,010 of 128,000 pixels changed. Leg 2 is what keeps it honest - the"
+        "BIOS byte must be SEEN to move, or the row is passing on a ROM that"
+        "does not carry the defect's own input",
+        needs=("marty",), serial=True),
     Row("dispmodex", "soak", py("tests/dispmodex.py"), 120.0,
         "Which display does Missile Command ask about Mode X? (SPEC.md"
         "39.18.1)",
@@ -3410,6 +5662,41 @@ SOAK = [
         "never `paused`, a cap that overflows instead of wedging, and an "
         "on_hit that reads the .bss while the guest is still inside the "
         "routine",
+        # ALONE, for minesrc's reason one layer in: this row PARKS the guest
+        # on a breakpoint and then asserts that it is parked. MEASURED: it
+        # FAILS at --marty-jobs 4 with `the guest is parked at a stop
+        # ('running')` and PASSES at 1, and the two checks that DEPEND on the
+        # park pass in both - so the park happens and the assertion simply
+        # looked too early. A breakpoint's arrival is guest-paced and the
+        # look is host-paced, which is the one pairing contention can always
+        # break.
+        needs=("marty",), serial=True, alone=True),
+    Row("altenter", "soak", py("tests/altenter.py"), 33.0,
+        "SPEC.md 11.2.1.1: Alt+Enter reaches full screen in BOTH of the "
+        "mechanisms apps use - ArtfulType on SPEC.md 11.2's LATCH, where one "
+        "`cmp ax, KEY_ALTENTER` is both directions, and Tracker on SPEC.md "
+        "53's BRACKET, where nothing is dispatched (53.1) so leaving is "
+        "apps/os88alt.inc's poll of the key-state map and NOTHING ELSE IN "
+        "THE SUITE EXECUTES THAT FILE. tests/dosaltenter.py is the kernel "
+        "half. Two traps are written into it: `[fsx_cur]` is the wrong byte "
+        "(a same-mode bracket sets no mode, so it reads 0xFF throughout and "
+        "looks exactly like a dead feature), and ONE cycle proves less than "
+        "it looks - apps/paint passes the first and refuses the second, "
+        "which is why Paint is not in this row and why the bracket leg "
+        "round-trips twice",
+        needs=("marty",), serial=True),
+    Row("dosaltenter", "soak", py("tests/dosaltenter.py"), 20.0,
+        "SPEC.md 96.33.5.1: does Alt+Enter take the DOS box into full screen "
+        "and back out? Leg 0 is the premise and is the reason the mechanism "
+        "exists at all - the period XT ROM this boots enqueues NOTHING for "
+        "Alt+Enter (measured at 0040:001A/001C, the tail does not move), so "
+        "int 16h can never carry it and 9.7.1 latches the scancode instead. "
+        "Leg 4 is the one that needed a negative control to place: a held "
+        "key's typematic repeats are invisible from the WINDOW, because the "
+        "first press puts the bracket up and ui_task stops dispatching - it "
+        "is on the way BACK, with the key still down and fsx_restore having "
+        "just dropped the latch, that a missing guard throws the box "
+        "straight back into full screen",
         needs=("marty",), serial=True),
     Row("dispseam", "soak", py("tests/dispseam.py"), 300.0,
         "Does the one cell a display SEAM crosses still reach the glass?"
@@ -3697,7 +5984,14 @@ SOAK = [
         "the resident build. It builds its own image (`make small`) for "
         "smallboot's reason.",
         needs=("marty",), serial=True,
-        wants=("build/muptest.img", "build/small.img", "build/smallapps.img")),
+        # build/small360.img is what the COMMAND above opens (OS88_SYSIMG),
+        # and it was not in this list - so the frozen tree built the 1.44MB
+        # pair and the row died in 0.1s on the 360KB one it actually reads.
+        # A `wants=` that names a different artefact from the command is a row
+        # that cannot run anywhere but a checkout where somebody has already
+        # typed `make small` by hand (docs/WRITING-TESTS.md 4).
+        wants=("build/muptest.img", "build/small360.img",
+               "build/small.img", "build/smallapps.img")),
     Row("fdlgdrop", "soak", py("tests/fdlgdrop.py"), 80.0,
         "...and the module comes BACK on every route a dialog ends by "
         "(SPEC.md 38.0.1). The row above drives the dialog and never asks "
@@ -3728,6 +6022,21 @@ SOAK = [
         "SPEC.md 13.10.5: the Disk window's scroll-bar THUMB is dragged, and"
         "x is never read.",
         needs=("marty",), serial=True),
+    Row("sbrate286", "soak", py("tests/sbrate286.py"), 60.0,
+        "SPEC.md 13.10.5.4.1: the thumb's rate is a PAIR and os88ui_sbrate "
+        "picks on [cpu_tier]. ONE A/B on ONE boot of ONE build - the same "
+        "drag twice with `cpu_tier` poked between the arms, which is the only "
+        "way a 286 is testable here at all (MartyPC is an 8088 and QEMU "
+        "cannot say what a drag LOOKS like). Both arms of the macro: the "
+        "Disk window is `mov al, [cpu_tier]` and Note Pad is `call "
+        "OSAPI_CPU_INFO`, so one passing says nothing about the other - and "
+        "Note Pad's answer is PIXELS, because a package's copy of the "
+        "element is its own and os88ui_sbd_rate is the KERNEL's byte. It "
+        "reads its expectations out of the build's own defines ($OS88_DEFINES "
+        "/ $OS88_PKGDEFS over the %define), so `make SBRATE286=0` reds the "
+        "kernel case instead of quietly asserting the shipped numbers "
+        "against another tree.",
+        needs=("marty",), serial=True),
     Row("fdlgthumb", "soak", py("tests/fdlgthumb.py"), 50.0,
         "SPEC.md 13.10.5: ...and the Standard File dialog's, which is the"
         "second bar one gesture record has to tell apart (13.10.5.10).",
@@ -3745,18 +6054,29 @@ SOAK = [
         "CF, so the read compared 14,722 against a claim still at 1,024 and "
         "the file API answered the only thing it can, FERR_BIG: a MEMORY "
         "refusal reported as a sentence about the FILE, which sent the field "
-        "looking for a size limit that was not the cause. Four verdicts on "
+        "looking for a size limit that was not the cause. FIVE verdicts on "
         "the 128KB floor machine, driving Note Pad's own File > Open: the "
         "manual loads (np_len 14,427, the CRLF file folded, with the claim "
-        "at NP_MAXKB); a refused load leaves the note alone; PAINT.O88 at "
-        "21,285 bytes still says 'Too big' - the POSITIVE CONTROL, because "
-        "a Note Pad that had simply stopped saying it would pass every "
-        "other leg; and a SECOND Note Pad, which genuinely cannot be funded "
-        "here, says 'No memory'. The toast is read out of toast_buf and not "
+        "at NP_MAXKB); THE CACHES FELL to pay for it (19,456 -> 11,264), "
+        "which is the leg's real subject and was asserted from the free run "
+        "before - wrongly, because the run is read before the dialog and "
+        "FDLG.DRV's own image comes out of it, so a row printing 'a 16KB run "
+        "was already free, this did NOT exercise the shed' said so while the "
+        "shed was what funded the load; a refused load leaves the note "
+        "alone; PAINT.O88 at 21,285 bytes still says 'Too big' - the "
+        "POSITIVE CONTROL, because a Note Pad that had simply stopped saying "
+        "it would pass every other leg; and a SECOND Note Pad, which "
+        "genuinely cannot be funded here, says 'No memory'. That last one "
+        "empties the first note (File > New) before it launches, and has to: "
+        "two instances AND a grown document leave no 14,336-byte run for the "
+        "second region, so the row would die in the LOADER with LD_ENOMEM "
+        "before it read a toast - which is small128's subject and not this "
+        "row's. The toast is read out of toast_buf and not "
         "off the glass: it expires on a tick count (SPEC.md 59), so a settle "
         "long enough to be sure a load finished is long enough to lose it. "
         "Both halves were watched going red - the shed removed fails "
-        "'loaded' with np_len 0, and 27.6.1's compare removed fails 'nomem' "
+        "'loaded', 'shed', 'toobig' and 'intact', and 27.6.1's compare "
+        "removed fails 'nomem' alone "
         "reading 'Too big', which is the field report exactly. It builds its "
         "own kern_small into a private tree, and the row is on the SMALL "
         "kernel because that is where the heap is tight enough to reach it - "
@@ -3968,7 +6288,24 @@ SOAK = [
         "which happened, and one FAT reader reads both sides. It ERASES the "
         "VHD.",
         needs=("marty",), serial=True, timeout=1200),
-    Row("hibernate", "soak", py("tests/hibernate.py"), 300.0,
+    Row("instassoc", "soak", py("tests/instassoc.py"), 85.0,
+        "SPEC.md 52.10.14: the installed volume's ASSOC.DAT describes THAT "
+        "volume. The install copied the source floppy's copy, whose app rows "
+        "carry the cluster of a folder on the FLOPPY (SPEC.md 54.7.1) - so on "
+        "C: every row named a folder that was not there, and the file "
+        "described the 8 packages of the system disk out of the 25 installed. "
+        "What makes it worth a row rather than a line in instdeep is that the "
+        "ASSOCIATION survives the copy and the LOCATION does not: the machine "
+        "knows BROWSER.HTM opens with BROWSER, names it in the error, and "
+        "cannot find BROWSER.O88 in C:\\APPS - because SPEC.md 54.4.2's rung "
+        "4 tries the folder assoc_dfold names and that byte is 0 for every "
+        "slot asc_merge_ext created, so the one folder holding the program is "
+        "the one place the sweep cannot look. The installer says Done in both "
+        "cases and the difference is a hidden + system file, so this reads "
+        "the partition back on the HOST with instdeep's FAT reader. It "
+        "ERASES the VHD.",
+        needs=("marty",), serial=True, timeout=1200),
+    Row("hibernate", "soak", py("tests/hibernate.py"), 80.0,
         "SPEC.md 87: Hibernate... writes the machine to the hard disk and the "
         "next boot offers to resume it - the About box is the witness, read "
         "out of the restored instance table; then the same again with "
@@ -3981,6 +6318,24 @@ SOAK = [
         "SPEC.md 87 through HDD.DRV: a floppy boot whose SYSTEM.CFG wants the "
         "driver, so C: is a DVK_DRV volume and the resume's transport facts "
         "come through DSV_GEOM",
+        needs=("marty",), serial=True, timeout=1500),
+    Row("hibernatem", "soak",
+        py("tests/hibernate.py", "--machine", "os8088_5150_herc_hdd_gla"),
+        82.0,
+        "SPEC.md 87 ON A MONO MACHINE, which is the other half of "
+        "96.49.2's hole. The staging area IS the text framebuffer (87.5), so "
+        "it is at B000 on a Hercules primary and B800 everywhere else - and a "
+        "hibernation needs a FIXED DISK while the ADAPTER picks that segment, "
+        "so the two have to be on ONE machine before the mono arm runs at "
+        "all. Every profile in this tree with an [machine.hdc] was a CGA or a "
+        "VGA (five and two), so neither route had ever staged at B000 and the "
+        "DOS one shipped unable to: kd_stageseg held the mode byte in AL and "
+        "loaded AX before testing it. THIS ROUTE IS THE ONE THAT CANNOT HAVE "
+        "THAT DEFECT - hbm_stageseg compares a byte in MEMORY ([vid_kind]), "
+        "which the load cannot reach - and the row exists because that is a "
+        "claim about the source and not a measurement. It is green: 29 checks "
+        "on os8088_5150_herc_hdd_gla, the same 29 its CGA twin passes. Same "
+        "body as `hibernate`, one argument apart. MartyPC.",
         needs=("marty",), serial=True, timeout=1500),
     Row("instrest", "soak", py("tests/instrest.py"), 120.0,
         "SPEC.md 52.10.6.1: the installer's ACTION BUTTON reads Install and "
@@ -4017,7 +6372,20 @@ SOAK = [
         "SPEC.md 13.11's right button: it flags a Minesweeper cell, and it "
         "does nothing on the strip, on an open cell or on a window that was "
         "not already frontmost.",
-        needs=("qemu", "nasm"), serial=True, timeout=900,
+        # ALONE: every click here is paced by a fixed `time.sleep(0.4)` in the
+        # row's own Mouse helper, with nothing confirming guest state - so it
+        # is the shape alone=True is for ("one whose clicks are paced by a
+        # host-timed settle"). MEASURED: it FAILS at --marty-jobs 4 and PASSES
+        # at 1, and the check that goes is G's second press, the one that
+        # follows the only full-window RAISE in the sequence. Under load the
+        # guest does ~37% less work per host wait
+        # (docs/plans/SOAK-PARALLEL.md 1), so the read landed before the flag.
+        # Converting the helper to a guest-confirmed wait (os88marty.quiesce
+        # over [mn_flags], SOAK-PARALLEL 11's pattern) would let it rejoin the
+        # shared lane; until somebody does that this is the honest answer, and
+        # it costs the run nothing - an alone row goes in the same run's
+        # one-at-a-time lane.
+        needs=("qemu", "nasm"), serial=True, alone=True, timeout=900,
         wants=("build/os8088.img", "build/apps.img")),
     Row("tmsmall", "soak", py("tests/tmsmall.py"), 30.0,
         "SPEC.md 28.12: the APP_SMALL Task Manager gates out two of its three "
@@ -4079,6 +6447,26 @@ SOAK = [
         "books are checked beside it against MartyPC's own cycle counter, "
         "which is an authority outside the kernel's arithmetic.",
         needs=("marty",), serial=True, timeout=600),
+    Row("heapdrv", "soak", py("tests/heapdrv.py"), 20.0,
+        "SPEC.md 28.4.6: a DRIVER's own claims are on the heap page. "
+        "SOUND.DRV's image was on it - MEM_K_DRV is a kernel tag, so DrvImg "
+        "files under System - and the 8KB DMA ring the driver then claims for "
+        "itself was on no row at all: mem_own stamps a claim with the CALLING "
+        "segment, which for a driver is its image's, and that is neither a "
+        "kernel tag nor an instance nor any tm_ispt, so every arm of "
+        "tm_hmatch refused it and there was no third answer. It is a DEFECT "
+        "rather than a gap because tm_hsplit counts every live record into "
+        "HELD, so the ring was in the caption's total and in no column under "
+        "it - which is why this row asserts the ARITHMETIC (every live record "
+        "is on a row, counted off [tm_hrows] with the headings and pads taken "
+        "out) and only then the label. A row that looked for the word DrvBuf "
+        "alone would go green on a page that still lost the 8KB. Measured "
+        "red at 3 claim rows for 4 live records with the two arms reverted, "
+        "and the probe it prints on a miss found DrvImg on screen while the "
+        "ring's row was absent. It wants a Sound Blaster - os8088_5150_sb_gla "
+        "- and the driver is up at the first desktop frame there.",
+        needs=("marty",), serial=True, timeout=900,
+        wants=("build/sndmove360.img",)),
     Row("heapscrl", "soak", py("tests/heapscrl.py"), 120.0,
         "SPEC.md 28.4.4: the Task Manager's heap page scrolls, its bar "
         "survives six refreshes of the list beside it (tm_rowr), and a scroll "
@@ -4095,6 +6483,42 @@ SOAK = [
         "graphics fullscreen is not what a tier-0 machine draws.",
         needs=("qemu", "nasm"), serial=True, timeout=900,
         wants=("build/os8088.img", "build/trkscrl.img")),
+    Row("mouresume", "soak", py("tests/mouresume.py"), 150.0,
+        "SPEC.md 96.45.2: THE POINTER IS ALIVE AFTER A LIVE RESUME FROM "
+        "kern_dos. kd_mou_stop gives the port back quiet - IER 0 and the line "
+        "masked - and restored nothing, on the ground that the live restore "
+        "runs mouse_init again on the way up. It does not: mouse_init is in "
+        ".ovlw, which mem_unblob freed, and 96.49 re-enters at hbm_wake "
+        "rather than at a boot. It presents as a dead pointer on a working "
+        "machine because the vector, MCR and the line settings all come home "
+        "and only the UART's enable and the 8259 mask do not - the reporter "
+        "could type in the DOS window throughout. kdreturn drives this exact "
+        "resume and passes: NOTHING in the suite looked at the pointer after "
+        "a return, and kdmouse is about the mouse INSIDE the box. Reading 3 "
+        "is what stops the row passing vacuously - it asserts in guest CYCLES "
+        "that the LIVE route was taken, because kd_leave's fallback is a "
+        "whole boot and a boot runs mouse_init. VERIFIED TO FAIL both ways: "
+        "unfixed reads IER 00, and with IER restored but not the mask it "
+        "reads PIC21 BC with LSR showing DR and OVERRUN - bytes arriving at a "
+        "shut line.",
+        needs=("marty",), serial=True,
+        wants=("build/kdos/DOS.O88", "build/DOSHELLO.COM")),
+    Row("mouwheel", "soak", py("tests/mouwheel.py"), 20.0,
+        "SPEC.md 9.5.4: a WHEEL mouse's FOURTH byte must not break the packet "
+        "run. An IntelliMouse sends four bytes and the last has bit 6 CLEAR, "
+        "so it landed back at phase 0, read as a stray, and zeroed [mou_run] "
+        "EVERY PACKET - on a two-port machine the contest was unwinnable by "
+        "construction (docs/FIELD-NOTES.md 44). Nothing else here can see it: "
+        "every emulated mouse in this tree is a three-byte part, and the "
+        "defect is invisible the moment anything has settled the port, "
+        "because mou_claim then returns at its first compare. So the bytes "
+        "are the reporter's own and the instrument is INJECTION - each one "
+        "handed to the real mou_byte in the guest, which tests the shipped "
+        "decode rather than a model of it. VERIFIED TO FAIL: on the kernel "
+        "before 9.5.4 the wheel arms read mou_run 0 and seen 0, while the "
+        "three-byte and stray-byte CONTROLS still pass - so the row isolates "
+        "the defect instead of going red wholesale.",
+        needs=("marty",), serial=True),
     Row("mouseup", "soak", py("tests/mouseup.py"), 60.0,
         "SPEC.md 13.7's release, apps/os88ui.inc's arm, and MOUSEUP-PLAN"
         "4.2's guard.",
@@ -4365,10 +6789,10 @@ SOAK = [
         "stopped halfway. Needs `make bench`",
         # ...and SAYS SO to the runner, not only to the reader. `all` does not
         # build build/gfxbench.o88, so this row failed at HEAD and at the base
-        # alike and was written up as a pre-existing defect
-        # (docs/plans/HANDOFF-SOAK-FINDINGS.md F1). With the artefact present it
-        # passes: 256 plane-rows, 2,048 bytes, all as given. B4's shape again -
-        # the suite modelling tools rather than artefacts.
+        # alike and was written up as a pre-existing defect. With the artefact
+        # present it passes: 256 plane-rows, 2,048 bytes, all as given - the
+        # ABSENT-artefact shape again, the suite modelling tools rather than
+        # artefacts.
         needs=("marty", "nasm"), serial=True,
         wants=("build/gfxbench.o88",)),
     Row("blitpair", "soak", py("tests/blitpair.py"), 90.0,
@@ -4583,14 +7007,16 @@ SOAK = [
     Row("rdmove", "soak", py("tests/rdmove.py"), 150.0,
         "Compact the heap out from under the RAM disk's store (SPEC.md"
         "66.5.10).",
-        needs=("marty",), serial=True),
+        needs=("marty",), serial=True,
+        wants=("build/heapfrag360.img",)),
     Row("hdmove", "soak", py("tests/hdmove.py"), 120.0,
         "Compact the heap out from under a DONATED listing claim (SPEC.md "
         "66.5.10.2) - the only claim in the tree with three holders, two of "
         "them the kernel's and on the far side of the ABI from the callback. "
         "A declaration is not a mechanism: check 1 is that the block MOVED, "
         "and check 4b that no word anywhere still holds the old base",
-        needs=("marty", "nasm"), serial=True, timeout=900),
+        needs=("marty", "nasm"), serial=True, timeout=900,
+        wants=("build/heapfrag360.img",)),
     Row("heaphi", "soak", py("tests/heaphi.py"), 90.0,
         "A driver's second image goes at the TOP of the heap (SPEC.md "
         "50.3.2.1). The user's sequence - tick Hard Drive, tick Ram Disk, "
@@ -4605,7 +7031,13 @@ SOAK = [
         "modstr - a module's own strings letter correctly (SPEC.md 2.8.6). "
         "The bytes, out of fm_hdrbuf and toast_buf, because a string read "
         "through DS instead of CS lands in kernel code and letters plausible "
-        "rubbish rather than faulting",
+        "rubbish rather than faulting. ...and since the formatter's 97-byte "
+        "boot-sector template moved into its image too, the last check is "
+        "about bytes on a DISK: B: is re-opened after the format, and "
+        "SPEC.md 18.2 rule 2's 0EBh/0E9h test on the first byte is what makes "
+        "the MOUNT the assertion - a template read through DS puts 97 bytes "
+        "of KERNEL_SEG on the disk and the volume does not come back. "
+        "Measured at 47s",
         needs=("marty",), serial=True),
     Row("diskclone", "soak", py("tests/diskclone.py"), 120.0,
         "diskclone - Clone Disk... (SPEC.md 18.99/22.21) driven end to end, "
@@ -4615,6 +7047,39 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("rdup", "soak", py("tests/rdup.py"), 60.0,
         "SPEC.md 62.9.11.3: the Ram Disk page acts on the RELEASE.",
+        needs=("marty",), serial=True),
+    Row("toastbar", "soak", py("tests/toastbar.py"), 30.0,
+        "A TOAST OF THE MAXIMUM WIDTH REACHES THE BAR WHOLE, AND TOUCHES NO "
+        "MENU (SPEC.md 59.10.2). tests/unit/t_toast.py checks every fixed "
+        "message against TOAST_MAX; NOTHING CHECKED TOAST_MAX ITSELF, and it "
+        "is derived from a geometry by arithmetic - so it can be wrong by one "
+        "with every message in the tree quietly a cell short and the static "
+        "gate green for ever. This asks the machine: a message of exactly "
+        "TOAST_MAX characters is written into toast_buf, [toast_want] is set "
+        "and toast_pass draws it, which is toast_show's own path from its "
+        "second instruction and the only way to CHOOSE the width instead of "
+        "hunting for an application whose message happens to be the cap. "
+        "MEASURED: 24 characters draw 25 cells (54..78 on a 640 CGA), the "
+        "menus end at cell 50, clear by 4. Three claims, each of which has "
+        "bitten: it is all there, it touches no menu (SPEC.md 59.8 - the "
+        "strip used to borrow the MENUS segment, where menu_bput's clamp "
+        "dropped whatever it covered), and the bar comes back (59.9.2 left "
+        "two cells inverted PERMANENTLY, through the next toast and for the "
+        "rest of the session). SPEC.md 59.7 calls the test that found its "
+        "livelock 'the one worth keeping' AND IT IS IN NO REGISTRY, which is "
+        "why this file exists; 59.7's failure needed a strip wide enough to "
+        "reach a menu title's pen and 'every earlier test passed because the "
+        "strip never reached a menu', so the message here is the cap and the "
+        "front window is a Disk window - File/Folder/View/Special, the widest "
+        "menu set the kernel draws. THE THREE CAPTURES ARE COMPARED BY INK "
+        "AND NOT BYTE FOR BYTE, because the strip sits in the CLOCK's field "
+        "and the clock is live: the first draft compared raw pixels, found "
+        "the clock's last digit had changed between two captures seconds "
+        "apart, and reported it as 59.9.2's inverted cell. VERIFIED RED: a "
+        "cap of 40 reports the strip clipping at 25 cells (and confirms "
+        "59.7's clamp holds - it clips rather than reaching the menus), and "
+        "an expiry that clears [toast_on] without redrawing reports the bed "
+        "left on the glass, cell by cell.",
         needs=("marty",), serial=True),
     Row("sbar", "soak", py("tests/sbar.py"), 60.0,
         "SPEC.md 13.10: the shared scroll bar, and the two kernel bars are"
@@ -4659,7 +7124,7 @@ SOAK = [
         "tools/ansisim.py - the same state machine in Python, and the "
         "contract's second reader the way htmsim.py is the browser's. Thirteen "
         "fixtures from tests/fixtures/ansi/ are fed by tools/os88bbs.py in "
-        "deliberately RAGGED fragments, and te_scr is read out of guest memory "
+        "deliberately RAGGED fragments, and con_scr is read out of guest memory "
         "and compared with the simulator's 4,000 bytes CHARACTER AND ATTRIBUTE "
         "- the oracle computed at test time, never stored, so it cannot drift "
         "from the reference renderer. Then the negotiation and both "
@@ -4668,7 +7133,7 @@ SOAK = [
         "an option this terminal does not implement, the DSR and DA answers, "
         "the twelve special keys as the exact bytes on the wire, Enter as a "
         "BARE CR under TRANSMIT-BINARY, the Zmodem trigger's handover offset, "
-        "and full screen as a memcmp of te_scr against text VRAM. QEMU by "
+        "and full screen as a memcmp of con_scr against text VRAM. QEMU by "
         "name for tests/ethernet.py's reason: MartyPC has no NIC, so this "
         "package's receive path cannot be reached on it at all",
         needs=("qemu",), serial=True, builds=True),
@@ -4800,6 +7265,26 @@ SOAK = [
         "Compact the heap out from under a LOADED module (SPEC.md 66.5.2/45).",
         needs=("marty",), serial=True,
         wants=("build/trackmove360.img",)),
+    Row("trkbigmod", "soak", py("tests/trkbigmod.py"), 80.0,
+        "THE WHOLE DANCE (SPEC.md 45.3.2): boot 640K Hercules with SOUND.DRV"
+        " down, open Sheet/Paint/Clear Skies, mount the sound driver"
+        " MID-SESSION so its image is a wall under three regions that hold the"
+        " ceiling, open Tracker under that, close the three - and open a 397KB"
+        " module the 365KB run left cannot fund. The module is generated at an"
+        " exact size (tools/os88mkmod.py), because every real one that size is"
+        " somebody's file",
+        needs=("marty",), serial=True,
+        wants=("build/trkbig.img",)),
+    Row("trkcompact", "soak", py("tests/trkcompact.py"), 60.0,
+        "Tracker asks for the room before it refuses (SPEC.md 66.4.3, 45.3.1)"
+        " - the EXACT-requirement consumer of OSAPI_MEM_COMPACT's what-if"
+        " and its post. It stacks instances down from the ceiling"
+        " until the floor run is under the module's size, closes the topmost"
+        " so the survivor has a hole above it, and asserts the guest's own"
+        " verdict: [trk_cpq] seen set is the post, and the module playing is"
+        " a load that the same heap refused before the feature",
+        needs=("marty",), serial=True,
+        wants=("build/trackmove360.img",)),
     Row("tpdraw", "soak", py("tests/tpdraw.py"), 300.0,
         "Does TeXPad's INCREMENTAL source redraw draw what a full repaint"
         "draws? (SPEC.md 69.8)",
@@ -4814,6 +7299,11 @@ SOAK = [
         "rate (SPEC.md 45.13.7)",
         needs=("marty",), serial=True,
         wants=("build/trkship360.img",)),
+    Row("wmchrome", "soak", py("tests/wmchrome.py"), 180.0,
+        "chrome that is WHOLLY obstructed is not drawn - a covered drop "
+        "shadow (SPEC.md 11.97.3) and a covered title strip (11.97.4) - and "
+        "a resize that changed nothing does not repaint at all (11.91.5)",
+        needs=("marty",), serial=True),
     Row("wmartifact", "soak", py("tests/wmartifact.py"), 260.0,
         "Two window-manager artifacts, reproduced with NO package of ours"
         "involved.",

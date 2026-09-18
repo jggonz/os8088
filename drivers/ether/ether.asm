@@ -491,6 +491,9 @@ eth_vtab:
     dw eth_v_prof               ; 12 NETV_PROF - the stage timers (72.15)
     dw eth_v_sktab              ; 13 NETV_SKTAB - the socket table (72.20)
     dw eth_v_bulk               ; 14 NETV_BULK  - give me the big ring (72.21.1)
+    dw eth_v_raw                ; 15 NETV_RAW   - the wire is mine (72.22)
+    dw eth_v_rawtx              ; 16 NETV_RAWTX - one frame out
+    dw eth_v_rawrx              ; 17 NETV_RAWRX - one frame in
 eth_vtab_end:
 %if (eth_vtab_end - eth_vtab) / 2 != NETV_MAX + 1
   %error "ether: the verb table and NETV_MAX disagree"
@@ -561,3 +564,20 @@ eth_v_state:
 
 %include "ethstate.inc"         ; ...and the state it all runs on
     OS88_DRV_END
+
+; --- the published frame bounds against the real ones ------------------------
+; netpkg.inc publishes NET_FRAME and NET_EHSIZE so a RAW consumer can build a
+; frame without reaching into the driver's own files (SPEC.md 72.22). These
+; two say the published numbers still describe this card and this stack. At
+; the END of the file because that is where ne2000.inc and inet.inc have been
+; included by - the assertion was written above them and failed on the symbol
+; it exists to check.
+%if NE_FRAME != NET_FRAME
+  %error "ether: the card's frame size and netpkg.inc's published one disagree"
+%endif
+%if EH_SIZE != NET_EHSIZE
+  %error "ether: the stack's Ethernet header size and netpkg.inc's disagree"
+%endif
+%if ETY_IP != NET_ETY_IP || ETY_ARP != NET_ETY_ARP
+  %error "ether: the stack's ethertypes and netpkg.inc's published ones disagree"
+%endif

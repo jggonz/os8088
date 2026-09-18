@@ -46,6 +46,7 @@
 %include "fmt.inc"
 %include "tool.inc"
 %include "inst.inc"
+%include "iassoc.inc"
 
 ; -----------------------------------------------------------------------------
 ; hd_tentry - the dispatcher's landing site

@@ -43,6 +43,23 @@
 %define SB_RATE 0               ; RATE 0 (13.10.5.4): a scroll here ends in
 %endif                          ; wd_redraw, and this window is the widest in
 WD_SBRATE   equ SB_RATE         ; the system
+; ...AND A 286 GETS 2 (13.10.5.4.1). wd_redraw on a 286 is not wd_redraw on
+; an 8088: PERFORMANCE.md Part 5 prices this window's scroll-bar repaint at
+; 155 ms and a click above the thumb at 307 on the TARGET machine, and this
+; is the one number in the table a field 286 should check first.
+%ifndef SB_RATE286
+%define SB_RATE286 2
+%endif
+WD_SBRATE286 equ SB_RATE286
+; ...AND THE PAUSE COMMIT (13.10.5.4.2): a one-shot timer re-armed on every
+; movement fires only after this many ticks in which the thumb did not move,
+; which reaches the bars the RATE cannot - 13.10.5.4.3 measured a commit here
+; slower than any window the rate can name. No tier pair: half a second is
+; half a second on an 8088 and on a 286 alike.
+%ifndef SB_IDLE
+%define SB_IDLE 9               ; ticks of stillness before the view arrives;
+%endif                          ; 9 = 494 ms. 0 = no pause commit
+WD_SBIDLE   equ SB_IDLE
 %endif
 
     OS88_HEADER 'WORD', wd_entry, 3, OS88_STACK_256    ; bit 0 icon, bit 1 the DOC
@@ -860,6 +877,11 @@ wd_entry:
 %ifdef OS88UI_SBDRAG
     pushf                           ; the entry still owes the loader
     push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
+    mov ax, wd_ontimer          ; 13.10.5.4.2's PAUSE commit - FIRST of
+    call OSAPI_WM_ONTIMER       ; the three, because the `sbb al, al`
+                                ; below captures OSAPI_WM_ONDRAG's OWN
+                                ; CF and a third install after it would
+                                ; answer for the wrong slot
     mov ax, wd_onup                 ; SPEC.md 13.10.6.4: these two are the
     call OSAPI_WM_ONMOUSEUP         ; THUMB's alone. wd_mtrack's poll loop
     mov ax, wd_ondrag               ; (27.8.1) owns a gesture that cannot be
@@ -1182,21 +1204,94 @@ wd_ondrag:
                                     ; grabs the thumb, never both
     call os88ui_sbdragging
     jc wd_sbd_out
+    mov bx, si                  ; 13.10.5.4.2: EVERY movement pushes the
+    mov ax, WD_SBIDLE           ; one-shot out, which is what makes it an
+    call OSAPI_WM_TIMER         ; IDLE detector and not a cadence. 0 needs no
+                                ; test - the slot takes it as CANCEL
     call wd_bounds
     call wd_sbset               ; BX = the block; DX is still the pointer's y
     call os88ui_sbtrack         ; CF = 1: nothing owed - the rate, or the same
     jc wd_sbd_out               ; row
-    jmp short wd_sbd_go
+    jmp wd_sbd_go                ; NEAR: wd_dgfire now sits between
+wd_ontimer:                     ; the thumb has been STILL for WD_SBIDLE
+    push ax                     ; ticks (SPEC.md 13.9 disarms before this
+    push bx                     ; runs, and this does not re-arm: a pause is
+    push cx                     ; ONE commit however long it lasts)
+    push dx
+    call wd_bounds
+    call wd_sbset
+    call os88ui_sbowed          ; ...and NOT os88ui_sbdrop: a pause is not
+    jc wd_sbd_out                 ; the end of the gesture, so the record
+    jmp short wd_sbd_go          ; survives it
+; -----------------------------------------------------------------------------
+; wd_dgfire - the armed dialog button, released (SPEC.md 13.7)
+; in:  CX = x, DX = y (SCREEN, possibly outside the window); gfx lock held
+; out: CF = 1 this release was the dialog's and is spent; CF = 0 nothing armed
+;
+; The control is put back UP first and by REDRAWING, never by undoing - a
+; repaint between the two edges takes the pressed look off the glass by
+; itself, and an un-draw would then invert one that was already upright
+; (SPEC.md 13.8). Then the SAME hit test the press used runs again: pressed
+; and released on the same control is the gesture, anything else is the
+; cancel that makes press-and-slide-off a way to change your mind.
+; -----------------------------------------------------------------------------
+wd_dgfire:
+    push ax
+    push bx
+    push di
+    mov bx, [wd_dgdown]             ; BX BANKS the armed control across the
+    or bx, bx                       ; clear below - the compare at the end is
+    jz .none                        ; against what the PRESS landed on, and
+    mov word [wd_dgdown], 0         ; [wd_dgdown] has to be 0 before the
+    call wd_dgpaint                 ; repaint or it draws itself down again
+    cmp word [wd_dlg], 0
+    je .spent                       ; the dialog went away under us
+    call wd_dghit                   ; CF=0 and DI = the control under the
+    jc .spent                       ; RELEASE
+    cmp al, WDD_BTN
+    jne .spent
+    cmp di, bx
+    jne .spent
+    cmp word [di+10], 1
+    je .ok
+    cmp word [di+10], 3             ; the prompt's third verb (SPEC.md 68.4)
+    je .no
+    call wd_dgcancel                ; Cancel: discard
+    jmp short .spent
+.no:
+    call wd_dgno
+    jmp short .spent
+.ok:
+    call wd_dgok
+.spent:
+    pop di
+    pop bx
+    pop ax
+    stc
+    ret
+.none:
+    pop di
+    pop bx
+    pop ax
+    clc
+    ret
+
 wd_onup:
     push ax
     push bx
     push cx
     push dx
+    call wd_dgfire                  ; A DIALOG'S BUTTON FIRES HERE (SPEC.md
+    jc wd_sbd_out                   ; 13.7): it is app-modal, so when one is
+                                    ; armed nothing else may have this release
     call wd_drup                    ; the release over an item is the PICK, and
                                     ; the drag-out-of-the-box spelling of the
                                     ; gesture is the one that needs it
     call os88ui_sbdragging
     jc wd_sbd_out
+    mov bx, si                  ; the pause timer must not outlive the
+    xor ax, ax                  ; gesture it belongs to (13.10.5.4.2)
+    call OSAPI_WM_TIMER
     call wd_bounds
     call wd_sbset
     call os88ui_sbdrop
@@ -1273,8 +1368,9 @@ wd_sbclick:
     jne .yes                        ; now. BX is still the block and DX still
     cmp byte [wd_nodrag], 0         ; the press, absolute
     jne .yes
-    mov al, WD_SBRATE
-    call os88ui_sbgrab
+    mov ax, WD_SBRATE | (WD_SBRATE286 << 8)
+    call os88ui_sbrate          ; the rate THIS machine can afford
+    call os88ui_sbgrab          ; (SPEC.md 13.10.5.4.1)
 %endif
     jmp short .yes                  ; the thumb itself, or an inert track
 .lineup:
@@ -17592,10 +17688,16 @@ wd_abopen:
     add ax, 13
     mov [wd_abok+6], ax
     push si
-    mov bx, wd_abok
-    mov si, wd_s_ok
-    mov di, OS88UI_FILL | OS88UI_DEF
-    call os88ui_btn
+    mov word [wd_btlbl], wd_s_ok    ; the About card's OK, through the one
+    mov word [wd_btflg], OS88UI_FILL | OS88UI_DEF
+    mov bx, wd_btrec                ; control (SPEC.md 20.5.1.3). Word's
+    mov word [bx+OS88UI_BT_RECTS], wd_abok
+    mov word [bx+OS88UI_BT_LABELS], wd_btlbl
+    mov word [bx+OS88UI_BT_FLAGS], wd_btflg
+    mov word [bx+OS88UI_BT_N], 1    ; buttons are entries in its OWN control
+    mov word [bx+OS88UI_BT_DOWN], 0 ; list rather than a contiguous group, so
+    mov al, 1                       ; the record is staged one at a time and
+    call os88ui_btn                 ; the LIST stays the single description
     pop si
     mov byte [wd_about], 1
     jmp short .out
@@ -17999,8 +18101,22 @@ wd_dgctl:
     jz .nbdis                       ; os88ui's own flag (SPEC.md 47)
     or ax, OS88UI_DIS
 .nbdis:
-    mov di, ax
-    mov bx, wd_dgr
+    mov [wd_btflg], ax
+    mov [wd_btlbl], si
+    mov bx, wd_btrec
+    mov word [bx+OS88UI_BT_RECTS], wd_dgr
+    mov word [bx+OS88UI_BT_LABELS], wd_btlbl
+    mov word [bx+OS88UI_BT_FLAGS], wd_btflg
+    mov word [bx+OS88UI_BT_N], 1
+    xor ax, ax                      ; ...and the PRESSED look, from Word's own
+    pop di                          ; "which control is down": the identity is
+    push di                         ; the caller's (SPEC.md 13.7) and here it
+    cmp di, [wd_dgdown]             ; is the WDD record's own address
+    jne .nbdn
+    inc ax
+.nbdn:
+    mov [bx+OS88UI_BT_DOWN], ax
+    mov al, 1
     call os88ui_btn
     pop di
 .done:
@@ -18128,18 +18244,10 @@ wd_dgclick:
 .edit:
     call wd_dgfocus
     jmp short .out
-.btn:
-    cmp word [di+10], 1
-    je .ok
-    cmp word [di+10], 3             ; the prompt's third verb (SPEC.md 68.4)
-    je .no
-    call wd_dgcancel                ; Cancel: discard
-    jmp short .out
-.no:
-    call wd_dgno
-    jmp short .out
-.ok:
-    call wd_dgok
+.btn:                               ; **IT ONLY ARMS** (SPEC.md 13.6): OK,
+    mov [wd_dgdown], di             ; Cancel and No all decide the document's
+    call wd_dgpaint                 ; fate, so a mis-aimed press must be
+                                    ; cancellable. wd_dgfire has the action
 .out:
     pop di
     pop ax
@@ -19774,7 +19882,7 @@ wd_s_abou2: db 'Version 1.1a for os8088', 0
 wd_s_abou3: db 'UI from the CHM Opus source release', 0
 wd_s_abou4: db 'Ported by Jorge Gonzalez', 0
 wd_s_ok:    db 'OK', 0
-wd_m_noclose: db 'Close refused - try again', 0
+wd_m_noclose: db 'Close refused, try again', 0
 
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
 ; A word processor's frame, not a note pad's: 600x440 at the 640x480
@@ -19861,8 +19969,8 @@ wd_m_nopat:   db 'No search text', 0
 wd_m_repld:   db ' changes', 0       ; wd_saycnt's suffix: 'n changes' is the
                                      ; sweep's answer (SPEC.md 68.7)
 wd_m_noundo:  db 'Nothing to undo', 0
-wd_m_papfull: db 'Too many paragraph formats', 0
-wd_m_toobig:  db 'Document too complex to save', 0
+wd_m_papfull: db 'Too many formats', 0
+wd_m_toobig:  db 'Too complex to save', 0
 wd_m_noclip:  db 'The clipboard is empty', 0        ; ^c with nothing in it
 wd_m_replong: db 'Replacement too long', 0          ; ...and ^m/^c past
                                      ; WD_FRXMAX (SPEC.md 68.7)
@@ -20068,7 +20176,7 @@ wd_ovcall:
     ret
 
 wd_ovname:  db 'WORD.OVL', 0
-wd_m_noovl: db 'WORD.OVL is not on this disk', 0
+wd_m_noovl: db 'WORD.OVL is not here', 0
 
 ; --- the vectors: resident routines the module far-calls (rule 1) ------------
 ; Offset assembled in, segment stamped by wd_ovbind. They are contiguous and
@@ -20150,6 +20258,13 @@ section .text
 ; which is exactly what every line of code referencing these fields already
 ; relies on.
 %assign WDB 508 + WD_MAXROWS*2      ; where the original block ends
+; The button record's size, a MIRROR of os88ui.inc's OS88UI_BT_SIZE
+; because this bss chain is laid out ABOVE that include and the symbol
+; is not defined yet. DOS_BTREC_SZ in apps/dos/dos.asm is the same
+; mirror for the same reason; the %if below the include is what stops
+; either copy drifting.
+WD_BTREC_SZ equ 16
+
 %macro WDVAR 2                      ; name, size in bytes
     %1 equ os88_image_end + WDB
     %assign WDB WDB + %2
@@ -20652,6 +20767,29 @@ wd_sury2  equ wd_mnrec + 46     ; word } way back cannot disagree by a pixel
     WDVAR wd_dck,   1       ; byte: the attr byte the check boxes are editing
     WDVAR wd_dpad,  1       ; byte: keeps the words below even
     WDVAR wd_dgr,   8       ; 4 words: a button rect being drawn/hit
+    WDVAR wd_btlbl, 2       ; the one control's staging (SPEC.md 20.5.1.3):
+    WDVAR wd_btflg, 2       ; a one-entry label array and a one-entry flag one
+    WDVAR wd_btrec, WD_BTREC_SZ      ; the record itself - WD_BTREC_SZ and
+                            ; NOT 12, which is what it said and is
+                            ; FOUR SHORT of OS88UI_BT_SIZE: the
+                            ; record's OS88UI_BT_ONCLK (+12) and
+                            ; OS88UI_BT_NEXT (+14) landed on
+                            ; `wd_dgdown` just below and on the
+                            ; first word of `wd_dgrp`. Nothing
+                            ; writes those two offsets TODAY -
+                            ; this package drives the gesture off
+                            ; its own WDD list, not through
+                            ; os88ui_btninit - but btninit is
+                            ; exactly what a conversion adds, and
+                            ; what it would overwrite is this
+                            ; package's own "which control is a
+                            ; press live on". SHEET had the same
+                            ; shortfall and DOES call btninit, so
+                            ; there it was live: five records, four
+                            ; bytes each, every dialog open      ; ...and the record itself
+    WDVAR wd_dgdown, 2      ; WHICH control a press is live on - the WDD
+                            ; record's address, 0 for none. Word's own,
+                            ; because its buttons are entries in its list
 
 ; --- the real .DOC format (wddoc.inc, SPEC.md 68.4) --------------------------
     WDVAR wd_dgrp,  24      ; a grpprl under construction. Six paragraph
@@ -20803,6 +20941,10 @@ wd_sury2  equ wd_mnrec + 46     ; word } way back cannot disagree by a pixel
                                 ; which is the same story one control along -
                                 ; docs/plans/UI-MENU-ELEMENT.md
 %include "os88ui.inc"
+%if WD_BTREC_SZ != OS88UI_BT_SIZE
+ %error "WD_BTREC_SZ mirrors OS88UI_BT_SIZE and they have drifted - the bss chain is laid out before this include, so the size must be written twice; fix the literal"
+%endif
+
 
 ; wd_mnrec's WDVAR size is a LITERAL (the counter is %assign and cannot see an
 ; assembler equ - this file's own WD_PROPDRAW comment is about that exact

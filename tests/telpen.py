@@ -22,7 +22,7 @@ is no flat framebuffer to read either. `os8088_xt_vga` plus `fbuf` - what the
 CARD rasterised - is the whole apparatus.
 
 WHAT IT COMPARES, AND WHY IT IS NOT A GOLDEN IMAGE. TELNET's glyph table is
-read out of the GUEST (`te_glyf`, SPEC.md 70.8.6) and every cell is rendered
+read out of the GUEST (`con_glyf`, SPEC.md 70.8.6) and every cell is rendered
 on the HOST at the two colours its attribute names, then compared pixel for
 pixel with what the card put on the screen. So the assertion is "the machine
 drew the glyph it holds, in the colours the attribute asked for", and nothing
@@ -50,7 +50,7 @@ import dispcp                                           # noqa: E402
 import os88build                                       # noqa: E402
 
 S = os88sym.linear
-TE_COLS, TE_ROWS = 80, 25
+CON_COLS, CON_ROWS = 80, 25
 
 # The standard EGA/VGA sixteen, which mode 12h's DAC comes up holding: the
 # same table kernel/vga12.inc writes a plane bit for. It is a CONSTANT of the
@@ -135,9 +135,9 @@ def main():
             d = m.readseg(pseg, sy[n], 2)
             return d[0] | (d[1] << 8)
 
-        px, vcols, vtop = rw("te_px"), rw("te_vcols"), rw("te_vtop")
-        mono = m.readseg(pseg, sy["te_mono"], 1)[0]
-        say("telnet at %04X: te_px %d, te_vcols %d, te_vtop %d, te_mono %d"
+        px, vcols, vtop = rw("con_px"), rw("con_vcols"), rw("con_vtop")
+        mono = m.readseg(pseg, sy["con_mono"], 1)[0]
+        say("telnet at %04X: con_px %d, con_vcols %d, con_vtop %d, con_mono %d"
             % (pseg, px, vcols, vtop, mono))
         if mono:
             sys.exit("telpen: this machine is 1bpp and the pen is not read "
@@ -150,27 +150,27 @@ def main():
 
         # --- the buffer: one CASE per row, from row 0 ------------------------
         buf = bytearray()
-        for r in range(TE_ROWS):
+        for r in range(CON_ROWS):
             if r < len(CASES):
                 ink, paper, text = CASES[r]
                 at = (paper << 4) | ink
             else:
                 at, text = 0x07, ""
-            text = (text + " " * TE_COLS)[:TE_COLS]
+            text = (text + " " * CON_COLS)[:CON_COLS]
             for ch in text:
                 buf += bytes([ord(ch) & 0xFF, at])
         m.pause()
         try:
-            m.write(pseg * 16 + sy["te_scr"], bytes(buf))
-            m.write(pseg * 16 + sy["te_drb"], bytes([0xFF, 0xFF, 0xFF, 0x01]))
-            m.write(pseg * 16 + sy["te_cvis"], bytes([0]))   # no underline to
+            m.write(pseg * 16 + sy["con_scr"], bytes(buf))
+            m.write(pseg * 16 + sy["con_drb"], bytes([0xFF, 0xFF, 0xFF, 0x01]))
+            m.write(pseg * 16 + sy["con_cvis"], bytes([0]))   # no underline to
                                                              # account for
-            m.write(pseg * 16 + sy["te_scrl"], bytes([0, 0]))
+            m.write(pseg * 16 + sy["con_scrl"], bytes([0, 0]))
         finally:
             m.run()
         os88marty.settle(m)
 
-        glyf = m.readseg(pseg, sy["te_glyf"], 256 * 8)
+        glyf = m.readseg(pseg, sy["con_glyf"], 256 * 8)
         w, h, fb = m.fbuf()
         say("framebuffer %dx%d, %d bytes" % (w, h, len(fb)))
         if a.shot:
@@ -178,11 +178,11 @@ def main():
             say("wrote %s" % a.shot)
 
         # THE ORIGIN IS READ OUT OF THE GUEST, not derived from the window's
-        # corner. te_oy is what OSAPI_WM_CONTENT answered and TE_TOPY is the
+        # corner. con_oy is what OSAPI_WM_CONTENT answered and TE_TOPY is the
         # package's own constant, so this is the pen the renderer actually
         # used; deriving it as `frame + TITLE_H + 1` is one pixel out and
         # every cell then samples a scan line of the row below.
-        y0 = rw("te_oy") + 22                       # TE_TOPY
+        y0 = rw("con_oy") + 22                       # TE_TOPY
 
         def pix(x, y):
             i = (y * w + x) * 3
@@ -195,7 +195,7 @@ def main():
             first = None
             ncell = min(vcols, 46)                  # the text, not the padding
             for c in range(ncell):
-                ch = buf[(r * TE_COLS + c) * 2]
+                ch = buf[(r * CON_COLS + c) * 2]
                 rowsrc = glyf[ch * 8:ch * 8 + 8]
                 for sy_ in range(8):
                     bits = rowsrc[sy_]

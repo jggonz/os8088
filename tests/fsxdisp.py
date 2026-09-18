@@ -163,10 +163,15 @@ def main(argv):
             dockpos.click_row(m, mo0, dockpos.CPK_AY)
             if m.read(S("dock_cfg"), 1)[0] != 6:
                 raise RuntimeError("fsxdisp: could not enable right auto-hide")
+            # The LIVE rect rather than the whole-strip one: the strip's
+            # own rect is DOCK.DRV's private geometry and lives in the module
+            # image (SPEC.md 30.5), while the live rect is what every painter
+            # in the kernel reads - so this is the stronger of the two to
+            # find unchanged after the bracket.
             dock_bounds = {n: m.read(S(n), 2) for n in
                            ("vid_band_x0", "vid_band_xe", "vid_dock_y0",
-                            "vid_desk_zx", "dock_sx1", "dock_sy1",
-                            "dock_sx2", "dock_sy2")}
+                            "vid_desk_zx", "dock_lx1", "dock_ly1",
+                            "dock_lx2", "dock_ly2", "dock_thk")}
         dispcp.close_panel(m, mo0, S, os88marty.settle, card=gate_card)
 
         if a.dock and m.read(S("mod_tab"), 2) != b"\x00\x00":

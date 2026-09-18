@@ -386,6 +386,16 @@ hd_iw_paint:
 ; explanation (SPEC.md 47 rule 2) - and ONE for the action button whichever of
 ; its three captions is on it (SPEC.md 52.10.6.1).
 ; -----------------------------------------------------------------------------
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; A Control Panel page draws its buttons one at a time, so the record is
+; pointed at whichever rect the caller staged. The GESTURE here is the
+; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
+; release-fired; what changed is that the DRAW goes through the control.
+hdi_btlbl: dw 0
+hdi_btflg: dw 0
+    OS88UI_BTNREC hdi_btrec, 0, hdi_btlbl, hdi_btflg, 1
+
 hd_iw_button:
     push ax
     push bx
@@ -431,7 +441,16 @@ hd_iw_button:
                                 ; will fire (SPEC.md 13.8)
     mov bx, hd_ibrect           ; OS88UI_FILL because a RELEASE redraws this
     or di, OS88UI_FILL          ; button over a pressed one; on a full pass
-    call os88ui_btn             ; hd_ibtns_draw has already whited the band
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [hdi_btlbl], si          ; label and DI its flags, so the record takes
+    mov [hdi_btflg], di          ; all three and the picture is identical
+    mov [hdi_btrec+OS88UI_BT_RECTS], bx
+    mov bx, hdi_btrec
+    mov al, 1
+    call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop dx
@@ -1558,6 +1577,13 @@ hd_inst_step:
 .apps:
     call hd_inst_apps
     jc .failed
+    call hd_iassoc              ; ...and the volume's OWN association cache,
+                                ; built from what is actually on it (SPEC.md
+                                ; 52.10.14). LAST, so it sees both disks'
+                                ; packages, and SILENT: the MBR is already
+                                ; committed and a cache that cannot be written
+                                ; is SPEC.md 54.7's absent tier rather than a
+                                ; failed install
     mov byte [hd_iw_st], HII_DONE
 %ifdef INSTBENCH
     mov word [hd_imsg], hd_s_bdone  ; the rows below are the report now, so the
@@ -2335,6 +2361,34 @@ hd_icopy_tree:
                                 ; to say so, or a user's own KERNEL.SYS in a
                                 ; folder of their own would be skipped for
                                 ; sharing a name with the kernel
+    mov si, hd_ient             ; ...AND NEITHER IS ASSOC.DAT (SPEC.md
+    mov di, hd_s_assoc          ; 52.10.14). It is a per-VOLUME cache whose
+    call hd_iname_same          ; app rows carry the CLUSTER of the folder
+    jc .entry                   ; each program lives in (SPEC.md 54.7.1), so
+                                ; the source's copy describes the FLOPPY's
+                                ; layout and is not merely stale on the
+                                ; destination, it is wrong in a way the
+                                ; kernel cannot tell from right: `.HTM`
+                                ; resolves to BROWSER and then to a cluster
+                                ; that means nothing on C:. hd_iassoc builds
+                                ; the volume its own at the end of the
+                                ; install.
+                                ;
+                                ; ROOT-ONLY like the kernel above, and for a
+                                ; reason of its own: asc_root_find looks in
+                                ; the root and only there, so a user's own
+                                ; ASSOC.DAT in a folder of theirs is an
+                                ; ordinary file and is copied.
+                                ;
+                                ; THE APPS PHASE ALREADY REFUSED IT - SPEC.md
+                                ; 52.10.12's species test skips everything
+                                ; hidden + system, and its comment names this
+                                ; exact hazard. The SYSTEM phase is the one
+                                ; that carries it, because that phase's whole
+                                ; job is the hidden + system files, so the
+                                ; test that was written to keep the cache off
+                                ; the destination ran only on the half that
+                                ; was never going to bring it
 .file:
     mov si, hd_ient
     call hd_icopy_one
@@ -3358,6 +3412,8 @@ hd_s_igap:    db '    ', 0
 hd_s_idash:   db '   -', 0
 hd_s_ik:      db 'K', 0
 hd_s_kernel:  db 'KERNEL.SYS', 0
+hd_s_assoc:   db 'ASSOC.DAT', 0 ; ...the OTHER file the copy may not carry
+                                ; (SPEC.md 52.10.14)
 hd_s_iapps:   db 'APPS', 0      ; what makes a disk THE APPS DISK (52.10.5)
 hd_s_o88:     db '.O88', 0      ; ...and what has to be INSIDE it
 

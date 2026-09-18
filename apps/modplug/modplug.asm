@@ -226,6 +226,12 @@ mpp_entry:
     call OSAPI_WM_CREATE            ; out BX = win ptr, CF on full
     jc .out
     mov [mpp_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     mov si, mpp_menus
     call OSAPI_MENU_SET             ; preserves registers AND flags, so the
     mov si, mpp_about               ; loader's CF survives to the ret
@@ -400,6 +406,32 @@ mpp_hire:
     call OSAPI_TASK_SPAWN
     jc .out
     mov byte [mpp_hired], 1
+    ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
+    ; kernel wrote our segment into this worker's frame, so a region
+    ; declaration alone is INERT. It is PERMANENT and not a window
+    ; around OSAPI_TASK_ALIVE - the SDK note's advice for a park-safe
+    ; worker, which fails SILENTLY (REGION-SELF-COMPACT-PLAN 8.2):
+    ; mem_frameless reads [inst_restart] at PLAN time, and this worker
+    ; is outside its own ALIVE for essentially all of a tick, so a
+    ; windowed declaration would make OSAPI_MEM_COMPACT's what-if answer no
+    ; better for a heap the compactor could have emptied.
+    ;
+    ; SO BOTH PARK POINTS ARE ENUMERATED, Tracker's shape. We are
+    ; OSAPI_MEM_PARKSAFE, so the second one is BLOCKED IN
+    ; OSAPI_GFX_LOCK - never HOLDING it (66.5.4 marks the task only
+    ; across the yield inside the wait path).
+    ;   * ALIVE is the top of .loop.
+    ;   * THE MIXER IS THE CASE THE SDK NOTE NAMES, and it is safe for a
+    ;     reason rather than by luck: mpp_feed is LOCK-FREE, so the worker
+    ;     is never blocked in gfx_lock inside it, and [mpp_mixing] - the
+    ;     byte mpp_stream_close DRAINS on - is set first in that pass and
+    ;     cleared LAST, before mpp_render is even called. So it reads 0 at
+    ;     the one park point and no drain can wait on a worker that is no
+    ;     longer there.
+    ;   * mpp_render takes the lock as its first action after its pushes
+    ;     and sets nothing before it.
+    ; A restart costs one frame, never a half-mixed buffer.
+    OS88_WORKER_RESTARTABLE mpp_worker
 .out:
     pop bx
     pop ax

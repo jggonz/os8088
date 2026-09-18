@@ -399,7 +399,10 @@ clo_plan:
     push cx
     push dx
     push di
-    call COLD_SEG:mmf_mem_avail ; AX = the largest free run, in KB
+    call KERNEL_SEG:apic_osapi_mem_avail ; AX = the largest free run, in KB.
+                                ; The CELL (0x0210), whose chain ends at the
+                                ; same mem_avail_x our own shim called:
+                                ; osapi_mem_avail_x is a bare `jmp` to it
     sub ax, CLO_SLACK
     jc .nomem
     cmp ax, CLO_MINKB

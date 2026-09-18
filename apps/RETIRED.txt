@@ -1,0 +1,53 @@
+# apps/RETIRED.txt - the packages under apps/ that DO NOT SHIP, and why
+#
+# CLAUDE.md's Layout section says "apps/ - loadable packages; everything here
+# ships", and that sentence is the invariant this file registers exemptions
+# from (SPEC.md 20.16). It is tests/movable.txt's shape for the same reason:
+# the interesting case is a package that is in NEITHER the disks nor this
+# list, because that is what a new program hits, and it is the one shape
+# nobody notices - a package that quietly ships nowhere looks exactly like a
+# package somebody decided not to ship.
+#
+# ONE LINE PER PACKAGE: <kind> <package>  # <reason>
+#
+#   retired     A FAILURE. It does not ship, `all` does not build it, and no
+#               image or live payload carries it. The source and its SPEC.md
+#               section STAY, as the record of what was tried - deleting them
+#               loses the only account of why, and docs/ already keeps that
+#               kind of thing (docs/history/ is "true of no tree you can
+#               check out"). `make <name>` still builds it so the record can
+#               be run.
+#   instrument  NOT A PRODUCT. A bench or a gate that happens to be a
+#               package. `all` may build it - keeping it assembling is
+#               usually the point - but no shipped image carries it.
+#
+# tests/unit/t_retired.py is the gate. A `retired` line is checked HARDER
+# than an `instrument` one: `all` may not build it at all, where an
+# instrument may.
+#
+# THE BAR FOR A `retired` LINE IS THE OWNER'S CALL AND NOTHING ELSE. This is
+# not a performance verdict or a size verdict that a measurement could
+# overturn - a program is retired because the person who owns the project
+# says it is not worth shipping, and the reason below is a note of that
+# decision rather than an argument for it. Do not add one because a row is
+# red or a package is slow; fix it, or ask.
+#
+# A LINE TURNS ONE WAY, like every other registry here: if a retired package
+# reappears on a disk the gate FAILS rather than quietly accepting it, so
+# this cannot rot into a list of things that used to be true.
+
+retired    pacman      # SPEC.md 89.12. A failed port, superseded by DOT
+                       # DELIRIUM (SPEC.md 93), which is the maze chase this
+                       # project ships. It came off the floppies first "while
+                       # Dot Delirium is developed" and the owner has since
+                       # called it: it is not coming back. Source and SPEC.md
+                       # 89 stay as the record; `make pacman` still builds it.
+
+instrument wire        # SPEC.md 78.9. WIREFRAME is the bench for the draw
+                       # orders and for uilat, not an application - `all`
+                       # names build/wire.o88 and no shipped floppy carries
+                       # it. `make wiredisk` is its own disk.
+instrument imgtest     # SPEC.md 94. The picture decoders' capability gate,
+                       # driven by tests/img*.py off its own disk.
+instrument fptest      # SPEC.md 64. The floating-point gate. Not even built
+                       # by `all` - its own target only.

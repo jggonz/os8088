@@ -251,6 +251,17 @@ int  os88_wm_wake(void *win) { wakes_posted++; return 0; }
  * Fullscreen is 80x25 on every adapter; the framed geometry comes back on
  * exit. A stub that only recorded the flag measured nothing of the double
  * draw an rc_sh_inval() after the latch would have cost. */
+/* os88_key_down - the key-state map (SPEC.md 9.7). os88_main ARMS it, which
+ * on the machine is what makes SPEC.md 11.2.1.1's Alt+Enter latch exist at
+ * all; here nothing is ever held, because this harness delivers keys through
+ * os88_onkey and models no hold. Answering 0 always is the stub being honest
+ * rather than lazy - a `1` would make rc_onkey believe a chord nobody sent. */
+int  os88_key_down(int scan)
+{
+    (void) scan;
+    return 0;
+}
+
 static int fs_w, fs_h;
 int  os88_fullscreen(void *win, int enter)
 {

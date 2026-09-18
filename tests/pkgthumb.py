@@ -30,6 +30,7 @@ window's right edge.
 """
 import os
 import subprocess
+import re
 import sys
 import time
 
@@ -44,8 +45,24 @@ import dispcp
 APP = (sys.argv[1] if len(sys.argv) > 1 else "notepad").lower()
 ARGS = [a for a in sys.argv[2:] if not a.startswith("--")]
 MACHINE = ARGS[0] if ARGS else "os8088_5150_cga_gla"
+
+
+def _pkgnum(name, default):
+    """The constant THIS BUILD was assembled with. $(PKGSBDEF) reaches the
+    package builds, so the knob wins over the %define in the source - reading
+    only the source would assert the shipped numbers against another tree."""
+    for d in os.environ.get("OS88_PKGDEFS", "").replace("-D", " ").split():
+        k, _, v = d.partition("=")
+        if k == name and v:
+            return int(v, 0)
+    m = re.search(r"^%define\s+" + name + r"\s+(\d+)",
+                  open("apps/notepad/notepad.asm").read(), re.M)
+    return int(m.group(1)) if m else default
+
+
 RATE = int(next((a.split("=")[1] for a in sys.argv[1:]
-                 if a.startswith("--rate=")), "0"))
+                 if a.startswith("--rate=")), str(_pkgnum("SB_RATE", 0))))
+IDLE = _pkgnum("SB_IDLE", 0)         # 13.10.5.4.2's PAUSE commit
 W_FLAGS, W_X, W_Y, W_W, W_H = 0, 2, 4, 6, 8
 TITLE_H = 18
 
@@ -284,8 +301,17 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
     mo._edge(True)
     time.sleep(0.8)
     target = bar[3] - th // 2 - 2
-    mo.to(cx, target, l=True)
-    time.sleep(1.4)
+    # RAW PACKETS, AND THE READING IS TAKEN WITH NO SLEEP AFTER THEM. This used
+    # to be `mo.to(...); time.sleep(1.4)`, and SPEC.md 13.10.5.4.2's PAUSE
+    # commit made both halves wrong: the absolute driver confirms every packet
+    # by reading guest memory, which is ~680 GUEST ms a packet here, and a host
+    # sleep is magnified ~5.7x - so SB_IDLE's 494 ms elapsed BETWEEN two
+    # packets of one drag and again during the wait, and the row read the pause
+    # commit as "the content followed at rate 0". A raw stream is ~17 ms a
+    # packet, which is a real hand and is inside the deadline.
+    step = 8 if target > ttop else -8
+    for _ in range(abs(target - (ttop + th // 2)) // 8):
+        m.mouse(0, step, l=True)
     px1 = rows(m)
     b1, c1 = band(px1, barband), band(px1, content)
     check("the bar changed under the hand", b1 != b0)
@@ -293,6 +319,16 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
         check("...and the CONTENT did not, at rate 0", c1 == c0)
     else:
         check(f"...and the CONTENT followed, at rate {RATE}", c1 != c0)
+    # ...and now the PAUSE, which is a different trigger (13.10.5.4.2)
+    if IDLE:
+        got = False
+        for _ in range(70):
+            time.sleep(0.06)
+            if band(rows(m), content) != c1:
+                got = True
+                break
+        check("...and the PAUSE commits with the button still down", got,
+              f"(SB_IDLE {IDLE})")
     # --- D: x is never read, and it is ALSO how the thumb gets read ---------
     # THE POINTER HAS TO BE OFF THE BAR TO SEE THE THUMB. The cursor is drawn
     # over it during the drag - it is sitting ON the thing being dragged - and

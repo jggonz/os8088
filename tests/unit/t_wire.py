@@ -475,7 +475,7 @@ def refusals(tmp):
     r = run("--pack", os.path.join(tmp, "np.json"), "--pkgdir", tmp,
             "--out", os.path.join(tmp, "np.bin"))
     check(r.returncode != 0, "--pack refuses a file that is not an .o88",
-          "the icon and the header flags are read out of it, and OSAPI_PKG_RUN "
+          "the icon and the header flags are read out of it, and OSAPI_PKG_START "
           "would answer LD_EBAD after a whole transfer had been spent",
           got=(r.stdout + r.stderr).strip() or "exit 0")
 
@@ -1012,7 +1012,7 @@ def archive_roundtrip(tmp):
               "motivating example (SPEC.md 92.13)", got=sorted(got))
 
     eq(ents[-1]["path"], "HELLO.O88", "the program entry is LAST",
-       "the claim still holds it when the transfer ends, and OSAPI_PKG_RUN "
+       "the claim still holds it when the transfer ends, and OSAPI_PKG_START "
        "takes it from there with no second read (SPEC.md 92.14)")
     eq(ents[-1]["depth"], 0, "...and it is at depth 0")
     rand = [e for e in ents if e["path"] == "DATA/RANDOM.BIN"][0]
@@ -1347,7 +1347,7 @@ def archive_refusals(tmp, mod):
     refuse("a --program that is not at depth 0",
            tree("progdeep", {os.path.join("SUB", "HELLO.O88"): hello,
                              "F.TXT": b"x"}),
-           "OSAPI_PKG_RUN runs it with the instance's directory on the tree, "
+           "OSAPI_PKG_START runs it with the instance's directory on the tree, "
            "which is where its overlay and sidecars have to be",
            program="SUB/HELLO.O88")
     refuse("a --program that names nothing in the tree",
@@ -1368,7 +1368,7 @@ def archive_refusals(tmp, mod):
     open(order, "w").write("# the program is not last\nHELLO.O88\nF.TXT\n"
                            "DOCS/A.TXT\nDOCS/B.TXT\n")
     refuse("a program entry that is not last", curated,
-           "the claim that holds the last entry is what OSAPI_PKG_RUN "
+           "the claim that holds the last entry is what OSAPI_PKG_START "
            "launches; anything else is a second read (SPEC.md 92.14)",
            program="HELLO.O88", order=order)
     open(order, "w").write("DOCS/A.TXT\nF.TXT\nDOCS/B.TXT\nHELLO.O88\n")

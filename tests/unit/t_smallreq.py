@@ -56,6 +56,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import check, done                             # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import os88build                                            # noqa: E402
+
+
+def _at(rel):
+    """A `build/...` path, RESOLVED AGAINST THE RUN'S OWN TREE.
+
+    `os88soak` freezes a tree and builds every declared artefact into it, so
+    under a parallel run these four live in `build/trees/plain-<hash>/` and
+    NOT in `build/` - and a row that names `build/` there reads a directory
+    the freeze exists to leave alone. Measured: all four reported "missing"
+    against a tree that had all four, which is a false red with a message
+    pointing at the builder.
+    """
+    p = os88build.at(rel)
+    return p if os.path.isabs(p) else os.path.join(ROOT, p)
 ROOT = os.path.abspath(ROOT)
 
 # THE SYSTEM PAIR AND THE APPS PAIR, both geometries of each. All four are
@@ -161,7 +177,7 @@ def main():
     seen = 0
     pkgs = {}
     for rel in IMGS:
-        path = os.path.join(ROOT, rel)
+        path = _at(rel)
         if not os.path.exists(path):
             # NOT a silent pass. `make` does not build these - `make small`
             # and `make smallapps` do - so the row declares them in `wants=`

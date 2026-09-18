@@ -1052,7 +1052,7 @@ def archive(srcdir, home=None, program=None, order=None):
                           "entries" % program)
         if prog[0]:
             raise Refused("--program names %s and a program entry is at DEPTH "
-                          "0: OSAPI_PKG_RUN runs it with the instance's "
+                          "0: OSAPI_PKG_START runs it with the instance's "
                           "directory on the tree, which is where its overlay "
                           "and sidecars have to be (SPEC.md 92.14)" % program)
         if not prog[1].endswith(".O88"):
@@ -1065,7 +1065,7 @@ def archive(srcdir, home=None, program=None, order=None):
                 raise Refused("--program names %s and it is entry %d of %d; "
                               "the program entry is LAST, so the claim that "
                               "holds it at the end of the transfer is what "
-                              "OSAPI_PKG_RUN launches (SPEC.md 92.14)"
+                              "OSAPI_PKG_START launches (SPEC.md 92.14)"
                               % (program, ents.index(prog) + 1, len(ents)))
         else:
             # SORTED puts the depth-0 group FIRST (an empty tuple sorts before
@@ -1329,7 +1329,7 @@ def arc_verify(blob, name="the archive"):
         last = ents[-1]
         if last["depth"] or not last["name"].endswith(".O88"):
             bad.append("%s: WAH_PROGRAM is set and the last entry is %s - it "
-                       "is the .O88 at depth 0 that OSAPI_PKG_RUN launches "
+                       "is the .O88 at depth 0 that OSAPI_PKG_START launches "
                        "(SPEC.md 92.14)" % (name, paths[-1]))
         elif last["data"] is not None:
             try:

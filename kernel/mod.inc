@@ -450,6 +450,39 @@ mod_need:
     call mod_check
     jc .freefail
 
+%ifdef MOD_BSS
+    ; --- the claim's TAIL is the module's own bss, and it starts zeroed -----
+    ; mem_bytes_kb_x rounded the claim up to whole KB, so everything between
+    ; the image's end and the claim's end is memory this module owns for as
+    ; long as it is loaded and nothing else can see
+    ; (docs/plans/MODULE-SELFCONTAIN-PLAN.md 3.3). What the heap left there is
+    ; whatever the last holder wrote, so it is zeroed HERE rather than in each
+    ; module's arm entry: one place cannot be forgotten by the next module,
+    ; and a module that reads uninitialised state fails silently.
+    ;
+    ; BP is still the image's byte size and [bx+MODR_SEG] the claim, both
+    ; already live. The claim is at most MOD_MAX_KB so the KB->bytes shift
+    ; cannot carry.
+    ; NOTHING IS BANKED HERE, and that is not an oversight: mod_need's own
+    ; prologue pushed AX/CX/DI/ES and `mod_check` above is documented to
+    ; clobber all four, so they are dead at this point and the eight bytes of
+    ; push/pop would buy nothing.
+    mov es, [bx+MODR_SEG]
+    mov di, bp                  ; from the image's end...
+    mov ax, bp
+    call mem_bytes_kb_x         ; ...to the claim's: the SAME rounding that
+    mov cl, 10                  ; sized it thirty lines up, so the two cannot
+    shl ax, cl                  ; disagree. AX <= MOD_MAX_KB, so <<10 cannot
+    sub ax, bp                  ; carry
+    mov cx, ax
+    xor al, al
+    cld
+    rep stosb                   ; ~650 bytes worst case, about 1.2 ms on a
+                                ; 4.77 MHz 8088 against a load that is already
+                                ; one or more int 13h at ~400 ms each
+%endif                          ; MOD_BSS: kern_big declares no module bss, so
+                                ; it carries none of the above
+
     call drv_vol_back           ; preserves CF - and the success path FALLS
                                 ; INTO the answer below
 .already:

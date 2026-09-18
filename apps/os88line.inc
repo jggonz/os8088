@@ -40,6 +40,7 @@
 ;                             field that cannot scroll is one that silently
 ;                             refuses text
 ;   LN_FOCUS                  byte: 1 = the caret is drawn and keys land here
+;   LN_DIS                    byte: non-zero = disabled - see its equ below
 ;
 ; Declare `resb OS88LINE_SZ` in bss and fill the rect plus LN_BUF/LN_MAX
 ; before the first draw. SI IS THE BLOCK AND NOT BX, because the gfx
@@ -65,7 +66,26 @@ LN_LEN    equ 12
 LN_CAR    equ 14
 LN_VIEW   equ 16
 LN_FOCUS  equ 18
-LN_PAD    equ 19
+LN_DIS    equ 19                ; byte: non-zero = DISABLED (SPEC.md 47). It
+                                ; was LN_PAD, a byte the record already
+                                ; carried and nothing read, so a field that
+                                ; greys costs no package a byte of bss and a
+                                ; field that never greys reads 0 - the loader
+                                ; zeroes a package's bss (SPEC.md 20.4 step 7),
+                                ; so every existing caller is unchanged
+                                ; without touching a line.
+                                ;
+                                ; **THE CALLER SETS THE PEN, THIS SETS THE
+                                ; SHAPE** (47 rule 2, and cp_vid_btn in
+                                ; kernel/ctrl.inc is the kernel's own worked
+                                ; example). With it set, `os88line_draw`
+                                ; leaves the frame in whatever pen you armed
+                                ; with OSAPI_GFX_PEN instead of forcing black,
+                                ; and draws no caret. The TEXT needs nothing
+                                ; from this - [gfx_dis] is read by font_ink,
+                                ; so the same pen stipples it for free - and
+                                ; the interior stays WHITE, which is the
+                                ; kernel button's answer too
 OS88LINE_SZ equ 20
 
 LN_INSET  equ 3                 ; MINIMUM pixels between the frame and the first
@@ -188,8 +208,11 @@ os88line_draw:
     push di
     call os88line_fit
 
-    mov al, CBLACK              ; the frame
-    UI_INK
+    cmp byte [si+LN_DIS], 0     ; the frame - in the CALLER's pen when this
+    jne .frame                  ; field is disabled, so the ring and the text
+    mov al, CBLACK              ; inside it cannot come out one solid and one
+    UI_INK                      ; stippled (SPEC.md 47 rule 2)
+.frame:
     mov ax, [si+LN_X1]
     mov bx, [si+LN_Y1]
     mov cx, [si+LN_X2]
@@ -258,6 +281,10 @@ os88line_draw:
 .caret:
     cmp byte [si+LN_FOCUS], 0
     je .out
+    cmp byte [si+LN_DIS], 0     ; ...and a DISABLED field draws no caret, which
+    jne .out                    ; is 47 rule 6 in the control rather than in
+                                ; each caller's click path: a greyed box with a
+                                ; bar blinking in it is offering something
     mov ax, [si+LN_CAR]
     sub ax, [si+LN_VIEW]
     mov cl, 3
@@ -429,6 +456,148 @@ os88line_caroff:
     pop si
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; os88line_edit - repaint what ONE EDIT changed, and not the rest
+; in:  SI = the block, AX = LN_VIEW as it was BEFORE the key,
+;      BX = LN_LEN as it was before it, DX = LN_CAR as it was before it;
+;      the gfx lock held
+; out: CX = text cells drawn, for a caller that wants to count them.
+;      Everything else preserved.
+;
+; **WHY THIS EXISTS.** os88line_draw puts ONE opaque font_run over every
+; visible character, which is right for a repaint and wrong for a keystroke:
+; typing the 21st character into a field redraws twenty that did not change.
+; PERFORMANCE.md prices a glyph cell at ~900us on the target machine, so a
+; 20-character field cost ~18ms A KEYSTROKE - and none of it showed in the
+; flick instrument, because redrawing the same glyph changes no pixel at all.
+; It is a TIME defect, and the only way to see it is to count the cells.
+;
+; **IT IS DELIBERATELY NARROW, and falls back rather than getting clever.**
+; Three cases are handled here and everything else goes to os88line_draw:
+;
+;   the view SCROLLED      -> every visible cell moved. Full draw.
+;   the caret is NOT at    -> an insert shifts the whole tail right and a
+;   the end                   delete shifts it left. Full draw.
+;   the caret IS at the end-> an APPEND touched one cell and a BACKSPACE
+;                             blanked one. That is the case worth having,
+;                             because it is what typing IS.
+;
+; A partial repaint that got its arithmetic wrong would leave ink behind, and
+; ink left behind is worse than a slow repaint - so the cheap path is taken
+; only where it is obviously right, and the expensive one is still correct.
+;
+; The cells come from os88line_cell and the caret from os88line_caron, which
+; is this file's own rule: a cell repainted from arithmetic of its own lands
+; beside the one that was drawn rather than on it.
+;
+; **AND THE THIRD WORD IS THE CARET** (SPEC.md 83.1.1). The bar is a 1px fill
+; and nothing else on the machine knows it is there, so a cell this routine
+; does not repaint KEEPS it. The append is covered for free - the opaque cell
+; it draws is the one the bar was standing in - and the other two were not:
+; a backspace blanks the cell the CHARACTER was in, which is the one the caret
+; is moving TO, so the bar it left sat one cell right and the trail grew by one
+; per key; and End from the middle of a line moves the caret with the text
+; unchanged, which is the one shape of caret move that reaches this path at all
+; (any other lands away from the end, which is already a full redraw).
+; -----------------------------------------------------------------------------
+os88line_edit:
+    push ax
+    push bx
+    push dx
+    push di
+    push si
+    mov di, ax                  ; DI = the view as it was, BX = the length
+    call os88line_fit           ; ...which may scroll to follow the caret
+    xor cx, cx
+    cmp di, [si+LN_VIEW]
+    jne .full                   ; the whole visible span moved
+    mov di, dx                  ; DI = THE CARET AS IT WAS, which is where the
+                                ; bar on the glass is. The view question is
+                                ; answered and DI is free, so the block needs
+                                ; no storage for it - which is this file's
+                                ; whole rule (SPEC.md 83.1.1)
+    mov ax, [si+LN_CAR]
+    cmp ax, [si+LN_LEN]
+    jne .full                   ; a mid-string edit shifted the tail
+    cmp bx, [si+LN_LEN]
+    jb .grew
+    ja .shrank
+    jmp short .caret            ; neither grew nor shrank: a caret move, and
+                                ; caron/caroff have done their own cells
+.grew:
+    mov ax, [si+LN_LEN]         ; the character just typed is the last one...
+    dec ax
+    call os88line_cell          ; AX = its column, DX = the band, BX -> it
+    jc .caret                   ; scrolled out of sight: nothing to draw
+    mov cx, ax
+    push si
+    mov si, bx                  ; ...and ONE opaque cell, ground and glyph in
+    mov al, CBLACK              ; a single pass (SPEC.md 6.1). No NUL to bank:
+    mov ah, CWHITE              ; the last character is already followed by
+    call OSAPI_FONT_RUN         ; the buffer's own terminator
+    pop si
+    mov di, [si+LN_CAR]         ; ...AND NOTHING IS OWED AT .caret: the cell
+                                ; just drawn opaquely IS the one the bar was
+                                ; standing in, because a caret at the end
+                                ; before the key is at LN_LEN-1 after it
+    mov cx, 1
+    jmp short .caret
+.shrank:
+    mov ax, [si+LN_LEN]         ; the cell the deleted character had...
+    call os88line_cell
+    jc .caret
+    push ax
+    push dx
+    mov al, CWHITE              ; ...blanked, and only it
+    UI_INK
+    pop dx
+    pop ax
+    mov bx, dx
+    mov cx, ax
+    add cx, LN_CELL - 1
+    add dx, LN_CELL - 1
+    UI_FILL
+    mov al, CBLACK              ; AND THE PEN BACK: a colour left behind is
+    UI_INK                      ; what shows up two callers later
+    xor cx, cx
+.caret:
+    cmp byte [si+LN_FOCUS], 0
+    je .out
+    push cx
+    cmp di, [si+LN_CAR]
+    je .cnew                    ; the bar has not moved: it is already right
+    mov ax, di                  ; **THE BAR THE CARET LEFT**, and os88line_
+    call os88line_caroff        ; caroff reads the buffer as it is NOW, which
+                                ; is right rather than lucky: that cell either
+                                ; holds a character this edit did not touch, or
+                                ; is past the end of a text that just got
+                                ; shorter - where its .blank arm is the 8px
+                                ; white fill a rubbed-out cell wants
+.cnew:
+    mov ax, [si+LN_CAR]
+    call os88line_caron
+    pop cx
+.out:
+    pop si
+    pop di
+    pop dx
+    pop bx
+    pop ax
+    ret
+.full:
+    call os88line_draw
+    mov cx, [si+LN_LEN]         ; ...and say what it cost, for a caller that
+    sub cx, [si+LN_VIEW]        ; counts
+    jns .fout
+    xor cx, cx
+.fout:
+    pop si
+    pop di
+    pop dx
     pop bx
     pop ax
     ret
@@ -636,6 +805,51 @@ os88line_click:
 .no:
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; os88line_resync - the BUFFER was written behind the field's back; re-derive
+;                   LN_LEN, LN_CAR and LN_VIEW from what is in it now
+; in:  SI = the block. LN_BUF already holds a NUL string somebody else wrote
+; out: nothing; all registers preserved
+;
+; **THE CASE os88line_set CANNOT SERVE**, and mistaking one for the other is
+; a silent corruption rather than a wrong picture: `set` copies from DS:DI
+; INTO LN_BUF, so a caller whose data is ALREADY in LN_BUF has nothing to put
+; in DI and copies whatever it held - into the very buffer it meant to keep.
+; The DOS box hit exactly that (SPEC.md 96.21.1): a shortcut writes the
+; arguments straight into `dos_args`, which IS the field's buffer, and the
+; reload then overwrote them from a stale DI, so a link with arguments ran
+; with none.
+;
+; The length is measured rather than trusted: LN_MAX bounds the walk, so a
+; buffer somebody filled without a terminator ends the field at the cap
+; instead of running off it.
+; -----------------------------------------------------------------------------
+os88line_resync:
+    push ax
+    push bx
+    push cx
+    mov bx, [si+LN_BUF]
+    mov cx, [si+LN_MAX]
+    dec cx                      ; ...the most a NUL string in there can be
+    xor ax, ax
+.walk:
+    cmp ax, cx
+    jae .done
+    cmp byte [bx], 0
+    je .done
+    inc bx
+    inc ax
+    jmp short .walk
+.done:
+    mov byte [bx], 0            ; a buffer filled with no terminator gets one
+    mov [si+LN_LEN], ax
+    mov [si+LN_CAR], ax         ; the caret lands at the END, as `set` leaves it
+    mov word [si+LN_VIEW], 0
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

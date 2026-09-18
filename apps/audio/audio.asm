@@ -390,6 +390,24 @@ ap_entry:
     call OSAPI_WM_CREATE          ; BX = window ptr, CF on table full
     jc .fail
     mov [ap_win], bx
+    push ax                         ; **THE GESTURE'S TWO SLOTS** (SPEC.md
+    push bx                         ; 20.5.1.3): neither is a template word
+    push si
+    push di
+    push dx
+    mov ax, bx
+    mov bx, apu_btrec
+    mov si, ap_onup
+    mov di, ap_ondrag
+    mov dx, ap_onclick                ; OUR own click work; the library
+                                    ; takes the press FIRST and chains
+                                    ; here (SPEC.md 20.5.1.3.3)
+    call os88ui_btninit
+    pop dx
+    pop di
+    pop si
+    pop bx
+    pop ax
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, and not beside the
     ; worker's declaration: a package with NO worker is the case that
     ; moves most easily, and putting this at the spawn left exactly
@@ -499,7 +517,7 @@ ap_s_notask:  db 'No free task - close an app and retry', 0
 ap_s_hirate:  db 'Rate needs a Sound Blaster Pro', 0
 ap_s_opening: db 'Opening...', 0
 ap_s_endlist: db 'End of playlist', 0
-ap_s_queued:  db 'Sent to the running Audio Player', 0
+ap_s_queued:  db 'Sent to Audio Player', 0
 ap_s_added:   db 'Added to playlist', 0
 ap_s_notwav:  db 'Not a .WAV file', 0
 ap_s_full:    db 'Playlist is full', 0

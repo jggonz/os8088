@@ -81,6 +81,11 @@ void os88_wm_ownbg(void *win, int on);
 void os88_wm_onwake(void *win);
 int  os88_wm_wake(void *win);
 int  os88_fullscreen(void *win, int enter);
+int  os88_key_down(int scan);
+
+/* SPEC.md 11.2.1.1's full-screen chord, mirrored from apps/cc/os88.h */
+#define OS88_SCAN_ENTER 0x1C
+#define OS88_SCAN_ALT   0x38
 void os88_menu_set(void *win, struct os88_menuset *set);
 void os88_about_set(void *win);
 

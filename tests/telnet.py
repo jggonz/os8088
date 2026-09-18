@@ -22,7 +22,7 @@ SEVEN ASSERTIONS. The first four are this gate's originals, carried across the
 
 1. THE PEN AND THE ROWS FIT. The text pen must be a byte column, or a run's x
    is not a multiple of 8 and OSAPI_GFX_BLIT1 refuses the band outright
-   (5.4.2); and te_vrows rows of text must fit INSIDE the content box, because
+   (5.4.2); and con_vrows rows of text must fit INSIDE the content box, because
    the gfx primitives clip to the screen and not to the window, so the ones
    that did not fit used to be painted over the dock.
 
@@ -41,10 +41,10 @@ SEVEN ASSERTIONS. The first four are this gate's originals, carried across the
    reach it through a real refusal is a test of the network.
 
 4. THE INCREMENTAL DRAWING IS RIGHT, INCLUDING THE SCROLL. Cells are written
-   into te_scr, the rows that changed are marked in te_drb, and the worker
+   into con_scr, the rows that changed are marked in con_drb, and the worker
    composes and blits them; the result must be pixel-identical to drawing all
-   twenty-five. Then the buffer is scrolled by hand and [te_scrl] set, so
-   te_scrollpaint moves the pixels with one OSAPI_GFX_SCROLL - and that must
+   twenty-five. Then the buffer is scrolled by hand and [con_scrl] set, so
+   con_scrollpaint moves the pixels with one OSAPI_GFX_SCROLL - and that must
    be pixel-identical too. A screenshot of one build cannot say whether the
    pixels it did NOT draw were already correct; only the A/B can.
 
@@ -57,10 +57,10 @@ SEVEN ASSERTIONS. The first four are this gate's originals, carried across the
    is.
 
 6. FULL SCREEN IS THE BOARD'S OWN SCREEN, AND IT SCROLLS (70.8.7/70.8.8).
-   te_scr maps 1:1 onto text VRAM - all 25 rows, no centring, no status line -
+   con_scr maps 1:1 onto text VRAM - all 25 rows, no centring, no status line -
    so the assertion is a memcmp of 4,000 bytes rather than a screenshot. Then
-   a scroll debt is left the way te_scroll1 leaves one, and VRAM must FOLLOW
-   THE BUFFER. It did not: te_tx_owed zeroed [te_scrl] without moving
+   a scroll debt is left the way con_scroll1 leaves one, and VRAM must FOLLOW
+   THE BUFFER. It did not: te_tx_owed zeroed [con_scrl] without moving
    anything and te_scrollck marked exactly one row, so rows 0..23 kept
    pre-scroll text for the rest of the session and the bottom row was
    rewritten over and over. A board's output is one long scroll and it was
@@ -98,8 +98,8 @@ MACHINE = {c: os88marty.machine("os8088_5150_%s" % c)
            for c in ("cga", "herc")}
 
 TS_IDLE, TS_OPEN, TS_WAIT, TS_UP, TS_DOWN, TS_ERR = range(6)
-TE_COLS, TE_ROWS = 80, 25
-TE_CELLS = TE_COLS * TE_ROWS
+CON_COLS, CON_ROWS = 80, 25
+CON_CELLS = CON_COLS * CON_ROWS
 DRB_ALL = bytes([0xFF, 0xFF, 0xFF, 0x01])   # 25 bits (SPEC.md 70.8.1)
 DRB_NONE = bytes(4)
 
@@ -107,9 +107,9 @@ DRB_NONE = bytes(4)
 def cells(rows):
     """(text, attribute) a row -> the 80x25 char/attr buffer."""
     out = bytearray()
-    for r in range(TE_ROWS):
+    for r in range(CON_ROWS):
         t, at = rows[r] if r < len(rows) else ("", 0x07)
-        t = (t + " " * TE_COLS)[:TE_COLS]
+        t = (t + " " * CON_COLS)[:CON_COLS]
         for ch in t:
             out += bytes([ord(ch) & 0xFF, at])
     return bytes(out)
@@ -235,17 +235,17 @@ def main():
             w, h, rows = m.vram()
             stride = len(fb) // h
             # THE ORIGIN IS READ OUT OF THE GUEST rather than derived from
-            # the window's corner: te_oy is what OSAPI_WM_CONTENT answered and
+            # the window's corner: con_oy is what OSAPI_WM_CONTENT answered and
             # TE_TOPY is the package's own constant, so this is the pen the
             # renderer actually used. `frame + TITLE_H + 1` is one pixel out.
-            y0 = rw("te_oy") + 22
-            y1 = y0 + rw("te_vrows") * 8
+            y0 = rw("con_oy") + 22
+            y1 = y0 + rw("con_vrows") * 8
             # ...AND THE X RANGE IS IN PIXELS. `vram` answers one byte per
             # PIXEL, and this sliced it by BYTE COLUMN - so the comparison
             # covered the leftmost ten cells of the terminal and called that
             # the terminal. It is the whole width now.
-            x0 = rw("te_px")
-            x1 = x0 + rw("te_vcols") * 8
+            x0 = rw("con_px")
+            x1 = x0 + rw("con_vcols") * 8
             return b"".join(fb[y * stride + x0:y * stride + x1]
                             for y in range(y0, min(y1, h)))
 
@@ -281,11 +281,11 @@ def main():
         def wait_sized(secs=30):
             """Block until the package has SIZED ITS VIEW, or say it never did.
 
-            te_vcols/te_vrows/te_px are computed on the window's first paint,
+            con_vcols/con_vrows/con_px are computed on the window's first paint,
             not in the entry proc, so a read taken the instant the window
             appears is a read of zeros. It was taken that way, and on the
             faster machines it happened to be late enough - the CGA arm read
-            `te_px 0, te_vrows 0, te_vtop 0` and reported "the window does not
+            `con_px 0, con_vrows 0, con_vtop 0` and reported "the window does not
             show the BOTTOM of the buffer" about a view that reads 79x13 two
             assertions later, in the SAME RUN. Everything downstream that
             needs text on the screen failed with it, including 70.8.4's
@@ -293,18 +293,18 @@ def main():
 
             docs/WRITING-TESTS.md's rule again: wait on the condition."""
             for _ in range(int(secs / 0.25)):
-                if rw("te_vrows"):
+                if rw("con_vrows"):
                     return
                 os88marty.settle(m)
                 time.sleep(0.25)
-            sys.exit("telnet: te_vrows stayed 0 for %ds - the window never "
+            sys.exit("telnet: con_vrows stayed 0 for %ds - the window never "
                      "sized its view, which is a launch failure rather than "
                      "anything this row is about" % secs)
 
         # --- 1: the pen, and the rows that fit ------------------------------
         wait_sized()
-        px, vrows, vtop = rw("te_px"), rw("te_vrows"), rw("te_vtop")
-        say("te_px %d (%s), te_vrows %d, te_vtop %d"
+        px, vrows, vtop = rw("con_px"), rw("con_vrows"), rw("con_vtop")
+        say("con_px %d (%s), con_vrows %d, con_vtop %d"
             % (px, "8-aligned" if px % 8 == 0 else "SKEWED", vrows, vtop))
         if px % 8:
             fails.append("the text pen is at %d, which is not a byte column - "
@@ -317,23 +317,23 @@ def main():
             fails.append("%d rows need %d pixels in a %d-pixel content box - "
                          "the bottom is drawn outside the window (70.4)"
                          % (vrows, need, have))
-        if vtop + vrows != TE_ROWS:
-            fails.append("te_vtop %d + te_vrows %d is not TE_ROWS - the window "
+        if vtop + vrows != CON_ROWS:
+            fails.append("con_vtop %d + con_vrows %d is not CON_ROWS - the window "
                          "does not show the BOTTOM of the buffer"
                          % (vtop, vrows))
 
         # --- put some text on the screen, the way the host would ------------
         lines = [("line %02d  the quick brown fox jumps over it" % i)
-                 for i in range(TE_ROWS)]
+                 for i in range(CON_ROWS)]
         buf = cells([(l, 0x07) for l in lines])
-        poked([("te_scr", buf), ("te_drb", DRB_ALL)])
+        poked([("con_scr", buf), ("con_drb", DRB_ALL)])
         settle_draw()
         base = frame()
 
         # --- 1b: RESIZING moves the VIEW and never the screen (70.5) --------
         # The buffer stays 64x18 whatever the window is - the host is told
         # nothing and its idea of where a line wraps must not move - so what a
-        # resize changes is te_vcols and te_vrows, and a narrower window must
+        # resize changes is con_vcols and con_vrows, and a narrower window must
         # not paint one pixel outside itself, which is what font_run clipping
         # to the SCREEN would otherwise let it do.
         # THE TARGET IS CLAMPED TO THE SCREEN, and that is new with 80x25: the
@@ -354,8 +354,8 @@ def main():
             return dispcp.win_rect(m, S, tw)
 
         x0, y0, w0, h0 = dispcp.win_rect(m, S, tw)
-        c0, r0 = rw("te_vcols"), rw("te_vrows")
-        say("opened %dx%d: te_vcols %d, te_vrows %d" % (w0, h0, c0, r0))
+        c0, r0 = rw("con_vcols"), rw("con_vrows")
+        say("opened %dx%d: con_vcols %d, con_vrows %d" % (w0, h0, c0, r0))
         # THE WINDOW OPENS AS WIDE AS THE DESKTOP ALLOWS, UP TO EIGHTY
         # (70.8.10). On a 640-pixel screen it cannot reach eighty - the
         # aligned pen and the padding take the rest - and that is ACCEPTED
@@ -363,11 +363,11 @@ def main():
         # one keystroke away. So the assertion is the DERIVATION, which is
         # checkable at any size, and it is made again after each resize below.
         def viewfits():
-            """What te_vcols/te_vrows must be for the live content box."""
+            """What con_vcols/con_vrows must be for the live content box."""
             ox, cw, chh, px_ = (rw("te_ox"), rw("te_cw"), rw("te_chh"),
-                                rw("te_px"))
-            c = max(1, min(TE_COLS, (ox + cw - px_) // 8))
-            r = max(1, min(TE_ROWS, (chh - 22 - 10) // 8))
+                                rw("con_px"))
+            c = max(1, min(CON_COLS, (ox + cw - px_) // 8))
+            r = max(1, min(CON_ROWS, (chh - 22 - 10) // 8))
             return c, r
 
         wantc, wantr = viewfits()
@@ -378,8 +378,8 @@ def main():
                          "can show %dx%d - the view did not follow the box"
                          % (c0, r0, wantc, wantr))
         x1, y1, w1, h1 = grow(-140, -40)
-        c1, r1 = rw("te_vcols"), rw("te_vrows")
-        say("shrunk to %dx%d: te_vcols %d, te_vrows %d" % (w1, h1, c1, r1))
+        c1, r1 = rw("con_vcols"), rw("con_vrows")
+        say("shrunk to %dx%d: con_vcols %d, con_vrows %d" % (w1, h1, c1, r1))
         if w1 >= w0 or h1 >= h0:
             fails.append("the window did not resize (%dx%d -> %dx%d) - it may "
                          "not be WF_SIZABLE" % (w0, h0, w1, h1))
@@ -391,7 +391,7 @@ def main():
                 fails.append("a shorter window still shows %d rows" % r1)
             # ...and the run must END inside the window. **THIS IS AN
             # ASSERTION ABOUT THE GEOMETRY AND NOT ABOUT THE PIXELS, and it
-            # is worth being exact about which.** It catches a te_vcols
+            # is worth being exact about which.** It catches a con_vcols
             # derivation that stops following the box, which is the likely
             # regression. It does NOT prove that nothing is painted outside
             # the frame: two attempts at that both measured nothing. Counting
@@ -401,7 +401,7 @@ def main():
             # that letters all 64 columns regardless - which says the
             # apparatus was wrong, not that the overspill is impossible. The
             # pixel-level proof is not in this gate.
-            right = rw("te_px") + rw("te_vcols") * 8
+            right = rw("con_px") + rw("con_vcols") * 8
             edge = x1 + w1 - 1
             say("the run ends at x=%d and the window at x=%d"
                 % (right - 1, edge))
@@ -411,9 +411,9 @@ def main():
                              "columns are painted over whatever is beside it "
                              "(70.5)" % (right - 1, edge))
         x2, y2, w2, h2 = grow(140, 40)          # ...and back
-        c2, r2 = rw("te_vcols"), rw("te_vrows")
+        c2, r2 = rw("con_vcols"), rw("con_vrows")
         wantc, wantr = viewfits()
-        say("restored to %dx%d: te_vcols %d, te_vrows %d (the box can show "
+        say("restored to %dx%d: con_vcols %d, con_vrows %d (the box can show "
             "%dx%d)" % (w2, h2, c2, r2, wantc, wantr))
         # **NOT AN EXACT ROUND TRIP, AND DELIBERATELY NOT ASSERTED AS ONE.**
         # The window opens at the desktop's own width now, so the grow box
@@ -434,7 +434,7 @@ def main():
         # drags were an exact round trip. They are not one any more (see
         # `grow`), so a frame from before the dance is a frame of a WIDER
         # window and every byte past the new right edge is in the diff.
-        poked([("te_scr", buf), ("te_drb", DRB_ALL)])
+        poked([("con_scr", buf), ("con_drb", DRB_ALL)])
         settle_draw()
         park()
         base = frame()
@@ -522,21 +522,21 @@ def main():
         poked([("te_state", bytes([TS_IDLE])), ("te_want", bytes([0]))])
 
         # --- 4: the incremental drawing, and the scroll ---------------------
-        poked([("te_scr", buf), ("te_drb", DRB_ALL)])
+        poked([("con_scr", buf), ("con_drb", DRB_ALL)])
         settle_draw()
 
         # (a) one row changed: only that row is owed, and the screen must
         #     match a full redraw of the same buffer
         row = vtop + 3              # ...INSIDE the view: a short window shows
-                                    # the last te_vrows rows, and a row above
-                                    # te_vtop is correctly never drawn
+                                    # the last con_vrows rows, and a row above
+                                    # con_vtop is correctly never drawn
         newr = list((l, 0x07) for l in lines)
         newr[row] = ("row %02d REWRITTEN by the incremental path" % row, 0x07)
         cur = cells(newr)
-        poked([("te_scr", cur), ("te_drb", drb(row))])
+        poked([("con_scr", cur), ("con_drb", drb(row))])
         settle_draw()
         part = frame()
-        poked([("te_drb", DRB_ALL)])
+        poked([("con_drb", DRB_ALL)])
         settle_draw()
         full = frame()
         p0, f0 = band(part), band(full)
@@ -547,20 +547,20 @@ def main():
                          "- the partial path is not what the full one draws"
                          % n)
 
-        # (b) THE SCROLL. The buffer moves up one row by hand and [te_scrl] is
+        # (b) THE SCROLL. The buffer moves up one row by hand and [con_scrl] is
         #     set, which is exactly what te_scrollck leaves behind; the blit
         #     must land the same pixels as lettering every row.
         scr = newr[1:] + [("SCROLLED IN AT THE BOTTOM", 0x07)]
         scrolled = cells(scr)
-        poked([("te_scr", scrolled),
-               ("te_drb", drb(TE_ROWS - 1)),      # what te_scroll1 leaves:
+        poked([("con_scr", scrolled),
+               ("con_drb", drb(CON_ROWS - 1)),      # what con_scroll1 leaves:
                                                   # the bitmap shifted (nothing
                                                   # was owed) and the row it
                                                   # opened marked
-               ("te_scrl", bytes([1, 0]))])
+               ("con_scrl", bytes([1, 0]))])
         settle_draw()
         blit = frame()
-        poked([("te_drb", DRB_ALL)])
+        poked([("con_drb", DRB_ALL)])
         settle_draw()
         letters = frame()
         b1, l1 = band(blit), band(letters)
@@ -581,16 +581,16 @@ def main():
         # instrument here because nothing else on this screen is a negative of
         # anything, so a count that did not swap cannot be a coincidence.
         POL = "INVERSE and normal, the same forty characters in each"
-        prow = [(("", 0x07)) for _ in range(TE_ROWS)]
+        prow = [(("", 0x07)) for _ in range(CON_ROWS)]
         prow[vtop] = (POL, 0x30)        # black on cyan: bg != 0, fg 0
         prow[vtop + 1] = (POL, 0x03)    # cyan on black: the plain case
-        poked([("te_scr", cells(prow)), ("te_drb", DRB_ALL),
-               ("te_scrl", bytes([0, 0])), ("te_cvis", bytes([0]))])
+        poked([("con_scr", cells(prow)), ("con_drb", DRB_ALL),
+               ("con_scrl", bytes([0, 0])), ("con_cvis", bytes([0]))])
         settle_draw()
         w_, h_, vr = m.vram()
-        py = rw("te_oy") + 22
-        x0 = rw("te_px")
-        x1 = x0 + rw("te_vcols") * 8
+        py = rw("con_oy") + 22
+        x0 = rw("con_px")
+        x1 = x0 + rw("con_vcols") * 8
 
         def litrow(r):
             return sum(sum(vr[py + (r - vtop) * 8 + k][x0:x1])
@@ -609,7 +609,7 @@ def main():
             fails.append("a cell of cyan on black lit %d of %d pixels - a "
                          "colour on black is a lit glyph on dark ground and "
                          "is not inverted (70.8.4)" % (norm, span))
-        poked([("te_cvis", bytes([1]))])
+        poked([("con_cvis", bytes([1]))])
 
         # --- 6: THE TEXT-MODE BRACKET (SPEC.md 70.6/70.8.7) -----------------
         # ^] enters it, and what proves it is a FOREIGN mode is the kernel's
@@ -618,7 +618,7 @@ def main():
         # way. The terminal's own rows are then read back out of the
         # CHARACTER CELLS, which is the whole feature: a cell is one word
         # store there and a glyph cell here.
-        poked([("te_scr", buf), ("te_drb", DRB_ALL)])
+        poked([("con_scr", buf), ("con_drb", DRB_ALL)])
         settle_draw()
         m.ctrl("BracketRight")                  # ^], the escape
         os88marty.settle(m)
@@ -626,8 +626,8 @@ def main():
         # up - so "armed" is != 0xFF, not != 0, which is the way round a byte
         # named like a flag invites you to read it.
         latch = m.read(S("fsx_task"), 1)[0]
-        tseg = rw("te_tseg")
-        say("after ^]: te_txm %d, fsx_task %02X, te_tseg %04X"
+        tseg = rw("con_tseg")
+        say("after ^]: te_txm %d, fsx_task %02X, con_tseg %04X"
             % (rb("te_txm"), latch, tseg))
         if not rb("te_txm"):
             fails.append("^] did not enter the text bracket (te_txm 0)")
@@ -643,7 +643,7 @@ def main():
             else:
                 # --- 6a: THE BUFFER MAPS 1:1 (SPEC.md 70.8.7) ---------------
                 # 80x25 against 80x25, no centring, no status line: a row is
-                # at r*160 and te_scr's cell IS the cell in VRAM, so this is a
+                # at r*160 and con_scr's cell IS the cell in VRAM, so this is a
                 # memcmp of 4,000 bytes rather than a screenshot. On MDA the
                 # ATTRIBUTES are mapped (70.8.9), so the characters are what
                 # both adapters can be asked about.
@@ -654,14 +654,14 @@ def main():
                 # this pass is the assertion, and a hint that never appeared
                 # is a different failure from a row that did not.
                 HINT = b" ^] to leave"
-                HOFF = TE_CELLS - len(HINT)
+                HOFF = CON_CELLS - len(HINT)
 
                 def cmpvram(tag, want):
-                    v = m.readseg(tseg, 0, TE_CELLS * 2)
+                    v = m.readseg(tseg, 0, CON_CELLS * 2)
                     ch = bytes(v[i] for i in range(0, len(v), 2))
                     at = bytes(v[i + 1] for i in range(0, len(v), 2))
                     nd = sum(1 for i in range(HOFF) if ch[i] != want[i])
-                    stale = sum(1 for r in range(TE_ROWS - 1)
+                    stale = sum(1 for r in range(CON_ROWS - 1)
                                 if ch[r * 80:(r + 1) * 80]
                                 != want[r * 80:(r + 1) * 80])
                     say("  %s: %d of %d cells differ, %d whole rows above the "
@@ -694,19 +694,19 @@ def main():
                 # buffer, so the scroll below has nothing of the hint's to
                 # carry up the screen and every one of the 2,000 cells is in
                 # the comparison.
-                poked([("te_drb", drb(TE_ROWS - 1))])
+                poked([("con_drb", drb(CON_ROWS - 1))])
                 os88marty.settle(m)
-                HOFF = TE_CELLS
+                HOFF = CON_CELLS
 
                 # --- 6b: AND IT SCROLLS (SPEC.md 70.8.8, defect 1) ----------
-                # The state te_scroll1 leaves behind: the buffer moved up one,
+                # The state con_scroll1 leaves behind: the buffer moved up one,
                 # the bitmap shifted (nothing was owed) and the row it opened
-                # marked, and [te_scrl] standing at 1. VRAM must FOLLOW.
+                # marked, and [con_scrl] standing at 1. VRAM must FOLLOW.
                 sc = [(l, 0x07) for l in lines][1:]
                 sc.append(("SCROLLED IN FULL SCREEN", 0x07))
                 sbuf = cells(sc)
-                poked([("te_scr", sbuf), ("te_drb", drb(TE_ROWS - 1)),
-                       ("te_scrl", bytes([1, 0]))])
+                poked([("con_scr", sbuf), ("con_drb", drb(CON_ROWS - 1)),
+                       ("con_scrl", bytes([1, 0]))])
                 os88marty.settle(m)
                 want2 = bytes(sbuf[i] for i in range(0, len(sbuf), 2))
                 nd2, stale, _, _ = cmpvram("after a scroll debt", want2)
@@ -717,9 +717,9 @@ def main():
                                  "without moving anything and only the row it "
                                  "opened was re-emitted (70.8.8)"
                                  % (nd2, HOFF, stale))
-                if rw("te_scrl"):
-                    fails.append("[te_scrl] is %d after the pass - the debt "
-                                 "was not spent" % rw("te_scrl"))
+                if rw("con_scrl"):
+                    fails.append("[con_scrl] is %d after the pass - the debt "
+                                 "was not spent" % rw("con_scrl"))
 
                 # --- 7: THE KEPT WORKER IS TURNING (70.8.8, defect 2) -------
                 # te_step zeroes [te_dirty] at the top of every pass, so a 1

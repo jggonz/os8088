@@ -823,7 +823,7 @@ app_tmr_btn:
 %endif                          ; four combinations of the two flags are all
                                 ; reachable in one gesture
     mov bx, os88ui_krect
-    call os88ui_btn  ; the SHARED control (SPEC.md 2.6's far entry:
+    call os88ui_kbtn    ; the SHARED control (SPEC.md 2.6's far entry:
                                 ; the body is cold, where fdlg and ctrl are,
                                 ; and apps.inc is .text)
 .out:

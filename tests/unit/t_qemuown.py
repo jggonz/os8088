@@ -13,7 +13,7 @@ worktrees, still holding `build/os8088.img`.  `ps2mouse` — which launches with
 a pidfile of its own, so it had never had a chance to kill them — failed the
 pre-merge gate with `Failed to get "write" lock`, and passed the moment they
 were killed.  **The cost of the leak is paid by an unrelated row, hours later,
-wearing a message about the wrong subject.**  docs/plans/HANDOFF-SOAK-FINDINGS.md B9.
+wearing a message about the wrong subject.**
 
 THE RULE IS NARROW ON PURPOSE, because a wide one would need an exception list
 and an exception list is where this class comes back:

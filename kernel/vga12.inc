@@ -4509,15 +4509,21 @@ gfx_unlock:
                                 ; routine's contract requires, and is a
                                 ; compare and a return on the unlocks that saw
                                 ; no file work, which is nearly all of them
-    cmp byte [cur_shape], CUR_BUSYSH ; **AND THE HOURGLASS DIES WITH THE HOLD**
+    cmp byte [cur_shape], CUR_BUSYSH ; **AND THE CLOCK DIES WITH THE HOLD**
     jne .nowait                      ; (SPEC.md 7.5) - fpg_finish's argument
-    call cur_busy_undo               ; above applied to the pointer's picture:
-.nowait:                             ; the hold IS the busy, so the hold is the
-                                     ; extent and no caller can leave one on
-                                     ; the screen. HERE, above the test below,
-                                     ; because cur_shape_set spends the promised
+    push ax                          ; above applied to the pointer's picture:
+    mov al, [cur_shprev]             ; the hold IS the busy, so the hold is the
+    call cur_shape_set               ; extent and no caller can leave one on
+    pop ax                           ; the screen. HERE, above the test below,
+.nowait:                             ; because cur_shape_set spends the promised
                                      ; hide - which is what sends that test to
                                      ; cursor_show and draws the picture back.
+                                     ; THE BANKED SHAPE, not the arrow plus a
+                                     ; [cur_shchk] post: over a window that
+                                     ; named one, that is arrow-then-crosshair
+                                     ; a pass later (SPEC.md 7.5.2). And no
+                                     ; post at all - every pointer move and
+                                     ; every window change already makes one.
                                      ; ONE COMPARE against a byte that already
                                      ; exists, on the unlocks that never saw one
     cmp byte [cur_lazy], 0      ; was the hide ever spent? (SPEC.md 7.1.4)

@@ -139,7 +139,7 @@ def dialog(m, mo):
 # second - an ABSENT gate that reads as a failing one, which is worse than
 # either. fdlgup and mouseup want the same disk and have asked for it since
 # it was written; this row never did, so WHICH ROW RAN FIRST decided whether
-# it passed (docs/plans/HANDOFF-SOAK-FINDINGS.md B4).
+# it passed.
 need("build/muptest.img")
 
 if DLG:

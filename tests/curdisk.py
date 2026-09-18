@@ -34,6 +34,48 @@ the samples:
 
 Question 2 is the headline and question 1 is what a person actually reports.
 
+WHERE A SAMPLE PAIR STOPS BEING EVIDENCE, and it is question 2's whole
+soundness.  `busy` is read at the two ENDS of a pair and the claim is about
+the INTERVAL between them, so a pair is evidence only when the freeze can be
+shown to have covered the whole gap - and there is one place in the machine
+where it provably does not.  **`gfx_unlock`'s teardown moves the cursor with
+the lock still held** (SPEC.md 7.4.5), and it must: its own header says the
+order is binding - `fpg_finish` first (which clears `[fpg_on]`), then the
+cursor tail that catches the arrow up to the hand, then `.rel` releasing the
+flag.  Measured on the NOCURDISK=1 launch leg, that window is **420 guest
+cycles** in which a sample reads `lock 1, fpg 0` at a position the hand moved
+to during the freeze:
+
+    at cur_lazyend/cursor_show   lock=1 fpg=0 lvl=-1 drawn=(164,69) mouse=(164,27)
+    +60 cycles                   lock=1 fpg=0 lvl= 0 drawn=(164,27)
+    +420 cycles                  lock=0 fpg=0 lvl= 0 drawn=(164,27)
+
+Paired with the sample before it - busy via `[fpg_on]`, at the old position -
+that is a "move during the freeze" that no ISR made.  MEASURED, because "1
+move in 97 samples" is the shape of a race and N=1 is not a rate: over 90
+recorded NOCURDISK=1 launch legs - 54 at 696e1e49 and 36 at 2d24a373 - the
+old rule went red 8 times (7.4% and 11.1%), every one of them the same pair
+`(1,1)->(1,0)` at the same place, and the new rule 0 times.  To produce one
+on demand rather than waiting for it: break on `cur_lazyend`/`cursor_show`
+once the widget has been up 30 samples, and take the leg's next sample inside
+the window.
+
+So a pair counts only when the freeze reads the SAME at both ends, and the
+four task-level movers there are
+(`fpg_finish`'s show, `cur_shape_set`'s pair, `cursor_show`, `cur_lazyend`)
+all sit after `fpg_finish` has flipped `[fpg_on]`, so every one of them makes
+a pair whose two ends disagree.  Two samples 33 ms apart cannot both land in
+a 420-cycle window, so the straddling pair is the only shape they can take.
+
+THIS IS NOT A TOLERANCE.  The threshold stays exactly 0, the straddling pairs
+are COUNTED AND PRINTED rather than dropped in silence, and the assertion
+keeps every bit of its power: the defect it is looking for - the ISR drawing
+through a freeze - shows up in the freeze's INTERIOR, where the default arm
+reads 26-39 of them over the same window against this arm's 0.  Recomputed
+over ten recorded runs of both scenarios, the new rule costs the default arm
+at most ONE move of 26-39 (a `(1,0)->(1,1)` pair at the leading edge, where
+the widget armed inside a hold the arrow was already tracking through).
+
 ON MARTYPC, because QEMU cannot time anything (docs/TESTING.md) and because
 the whole claim is about what happens while the CPU sits inside the ROM.
 Nothing here is a TIMING assertion, though: every figure is a count of
@@ -100,6 +142,48 @@ def sample(m, S):
             m.read(S("cur_level"), 1)[0],
             int.from_bytes(m.read(S("cur_drawn_x"), 2), "little"),
             int.from_bytes(m.read(S("cur_drawn_y"), 2), "little"))
+
+
+def classify(s):
+    """Split the position changes seen during the freeze into two populations.
+
+    A pair of consecutive samples is evidence about the ISR only if the freeze
+    covered the whole interval between them, and `busy` is read at the two
+    ENDS.  The one place in the machine where those differ is `gfx_unlock`'s
+    teardown (SPEC.md 7.4.5): it takes the widget down, then catches the arrow
+    up to the hand, then releases the lock - so for ~420 cycles the machine
+    reads busy while a TASK, not the ISR, has just moved the cursor.  Every
+    task-level mover there is (`fpg_finish`'s show, `cur_shape_set`'s pair,
+    `cursor_show`, `cur_lazyend`) runs after `fpg_finish` has cleared
+    `[fpg_on]`, so a pair containing one always shows the freeze state
+    CHANGING - and two samples a whole packet apart cannot both land inside
+    420 cycles, so that is the only shape it can take.
+
+    So:  moves = the freeze read the same at both ends - the assertion;
+         edge  = it did not - reported, never asserted, never silent.
+
+    Nothing here is a threshold: `moves` is still asserted at exactly 0 on
+    NOCURDISK=1 and at >= MOVES_MIN on the default arm, and the defect this
+    row exists for lives in the freeze's interior, where the default arm reads
+    26-39 moves over the same window against the knob arm's 0.
+    """
+    moves, edge = [], []
+    for a, b in zip(s, s[1:]):
+        if not ((a[1] or a[0]) and (b[1] or b[0])):
+            continue                    # not both inside the freeze
+        if (a[3], a[4]) == (b[3], b[4]):
+            continue                    # the arrow did not move
+        (moves if (a[0], a[1]) == (b[0], b[1]) else edge).append((a, b))
+    return moves, edge
+
+
+def edge_kinds(edge):
+    """The freeze-state transitions the straddling pairs crossed, counted."""
+    out = {}
+    for a, b in edge:
+        k = "(%d,%d)->(%d,%d)" % (a[0], a[1], b[0], b[1])
+        out[k] = out.get(k, 0) + 1
+    return out
 
 
 def watch(m, S, mo, rx, ry):
@@ -192,9 +276,7 @@ def leg(tree, label, which):
     # holds no lock at all, so counting lock-held samples measures nothing
     # there and this row read a working kernel as a broken one.
     busy = [x for x in s if x[1] or x[0]]
-    moves = sum(1 for a, b in zip(s, s[1:])
-                if (a[1] or a[0]) and (b[1] or b[0])
-                and (a[3], a[4]) != (b[3], b[4]))
+    moves, edge = classify(s)
     # THE LIT SHARE IS MEASURED OVER THE WIDGET-UP SAMPLES ONLY, because that
     # is the phase in which the old kernel takes the arrow OFF the glass
     # (fpg_paint's unconditional cur_unlazy, SPEC.md 7.4.3).  Measured over the
@@ -209,7 +291,14 @@ def leg(tree, label, which):
     say("  arrow ON THE GLASS for %d of %d widget samples (%s)"
         % (len(wlit), len(wide),
            "%.0f%%" % (100.0 * len(wlit) / len(wide)) if wide else "n/a"))
-    say("  arrow MOVED during the freeze %d times" % moves)
+    say("  arrow MOVED during the freeze %d times" % len(moves))
+    if edge:
+        say("  ...and %d pair%s straddled a freeze-state change (%s), which "
+            "is gfx_unlock's teardown and evidence about neither kernel "
+            "(SPEC.md 7.4.5)"
+            % (len(edge), "" if len(edge) == 1 else "s",
+               ", ".join("%d x %s" % (v, k)
+                         for k, v in sorted(edge_kinds(edge).items()))))
     if "--trace" in sys.argv:
         say("    #   lock fpg lvl    x    y")
         for i, x in enumerate(s):
@@ -217,7 +306,8 @@ def leg(tree, label, which):
                 % (i, x[0], x[1], x[2] - 256 if x[2] > 127 else x[2],
                    x[3], x[4]))
     return {"n": len(s), "busy": len(busy), "wide": len(wide),
-            "lit": len(wlit), "moves": moves, "name": name}
+            "lit": len(wlit), "moves": len(moves), "edge": len(edge),
+            "name": name}
 
 
 def main(argv):
@@ -272,10 +362,15 @@ def main(argv):
                 fail.append("[%s] NOCURDISK=1 moved the arrow %d times during "
                             "the freeze, and it cannot: mou_apply's first "
                             "compare is `cmp byte [gfx_lock_flag], 0 / jne "
-                            ".dirty` and [fpg_on] gates the rest. Either the "
-                            "knob is not reaching the build (check VIDSTAMP "
-                            "and KNOBS in the Makefile) or these samples are "
-                            "not reading what they claim to." % (k, r["moves"]))
+                            ".dirty` and [fpg_on] gates the rest. These are "
+                            "pairs whose freeze state read the SAME at both "
+                            "ends, so gfx_unlock's teardown - the one place a "
+                            "task moves the cursor with the lock still held, "
+                            "SPEC.md 7.4.5 - is already out of this count and "
+                            "is the `straddled` line above instead. So either "
+                            "the knob is not reaching the build (check "
+                            "VIDSTAMP and KNOBS in the Makefile) or the ISR "
+                            "really did draw." % (k, r["moves"]))
             if not r["busy"]:
                 fail.append("SETUP [%s]: the NOCURDISK=1 leg never reached a "
                             "freeze either, so the two arms are not "
@@ -288,6 +383,14 @@ def main(argv):
         # zero above - mou_apply's first compare makes a move under the lock
         # unreachable, and [fpg_on] gates the lock-free case, so that zero is
         # structural rather than merely likely.
+        #
+        # NOR IS `edge` ASSERTED, on either arm, and that is the other half of
+        # `classify`. A straddling pair is a question the samples cannot
+        # answer - the freeze changed shape somewhere inside the interval -
+        # and on the DEFAULT arm most of them are honest tracking (the widget
+        # arming inside a hold the arrow was already following through). It is
+        # printed per leg and in the summary below so that a run where it
+        # grows is visible rather than silently swallowed.
 
     say("")
     if fail:
@@ -298,9 +401,11 @@ def main(argv):
     for k in new:
         o = old.get(k)
         say("curdisk: %-7s moves %d vs %s   widget-phase lit %d/%d vs %s"
+            "   straddled %d vs %s"
             % (k, new[k]["moves"], o["moves"] if o else "-",
                new[k]["lit"], new[k]["wide"],
-               ("%d/%d" % (o["lit"], o["wide"])) if o else "-"))
+               ("%d/%d" % (o["lit"], o["wide"])) if o else "-",
+               new[k]["edge"], o["edge"] if o else "-"))
     say("curdisk: pass")
     return 0
 

@@ -49,6 +49,22 @@
 %define SB_RATE 0               ; RATE 0 (13.10.5.4): a scrolled line is ~90 ms
 %endif                          ; here (br_scroll_by's own note), so a view
 BR_SBRATE   equ SB_RATE         ; that followed the hand IS input overrun
+; ...AND A 286 GETS 2 (13.10.5.4.1). The line is ~90 ms HERE; the same line
+; on a 286 is not the same line, and 13.10.5.4's throttle is what keeps the
+; difference a number rather than a rewrite.
+%ifndef SB_RATE286
+%define SB_RATE286 2
+%endif
+BR_SBRATE286 equ SB_RATE286
+; ...AND THE PAUSE COMMIT (13.10.5.4.2): a one-shot timer re-armed on every
+; movement fires only after this many ticks in which the thumb did not move,
+; which reaches the bars the RATE cannot - 13.10.5.4.3 measured a commit here
+; slower than any window the rate can name. No tier pair: half a second is
+; half a second on an 8088 and on a 286 alike.
+%ifndef SB_IDLE
+%define SB_IDLE 9               ; ticks of stillness before the view arrives;
+%endif                          ; 9 = 494 ms. 0 = no pause commit
+BR_SBIDLE   equ SB_IDLE
 %endif
 %include "netpkg.inc"          ; the SOCKET ABI (SPEC.md 62.11) - the
                                 ; same file drivers/net/net.asm
@@ -262,6 +278,24 @@ br_entry:
     mov si, br_menus
     call OSAPI_MENU_SET
     mov [br_win], bx
+    push ax                         ; **THE BUTTONS' THREE SLOTS** (SPEC.md
+    push bx                         ; 20.5.1.3.3): btninit links this record so
+    push cx                         ; the library's click thunk can find it,
+    push dx                         ; and installs the PRESS as well as the
+    push si                         ; release and the tracking edge. br_onclick
+    push di                         ; is our own click work and the library
+    mov ax, bx                      ; chains to it when the press was not a
+    mov bx, br_btrec                ; button's - which is what stops a package
+    mov si, br_onup                 ; having a click path that skips them
+    mov di, br_ondrag
+    mov dx, br_onclick
+    call os88ui_btninit
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, and not beside the
     ; worker's declaration: a package with NO worker is the case that
     ; moves most easily, and putting this at the spawn left exactly
@@ -271,6 +305,11 @@ br_entry:
 %ifdef OS88UI_SBDRAG
     pushf                           ; the entry still owes the loader
     push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
+    mov ax, br_ontimer          ; 13.10.5.4.2's PAUSE commit - FIRST of
+    call OSAPI_WM_ONTIMER       ; the three, because the `sbb al, al`
+                                ; below captures OSAPI_WM_ONDRAG's OWN
+                                ; CF and a third install after it would
+                                ; answer for the wrong slot
     mov ax, br_onup
     call OSAPI_WM_ONMOUSEUP
     mov ax, br_ondrag
@@ -1271,21 +1310,73 @@ br_ondrag:
     push cx
     push dx
     push si
-    call os88ui_sbdragging
+    mov bx, br_btrec            ; THE BUTTONS FIRST: the held one follows the
+    call os88ui_btndrag         ; pointer, and a package has ONE arm word, so
+    call os88ui_sbdragging      ; the bar and the buttons cannot both be live
     jc br_sbd_out
+    mov bx, si                  ; 13.10.5.4.2: EVERY movement pushes the
+    mov ax, BR_SBIDLE           ; one-shot out, which is what makes it an
+    call OSAPI_WM_TIMER         ; IDLE detector and not a cadence. 0 needs no
+                                ; test - the slot takes it as CANCEL
     call br_measure
     call br_sbfill                  ; BX = the block; DX is still the pointer
     call os88ui_sbtrack             ; CF = 1: nothing owed - the rate, or the
     jc br_sbd_out                   ; same line
     jmp short br_sbd_go
+br_ontimer:                     ; the thumb has been STILL for BR_SBIDLE
+    push ax                     ; ticks (SPEC.md 13.9 disarms before this
+    push bx                     ; runs, and this does not re-arm: a pause is
+    push cx                     ; ONE commit however long it lasts)
+    push dx
+    push si
+    call br_measure
+    call br_sbfill
+    call os88ui_sbowed          ; ...and NOT os88ui_sbdrop: a pause is not
+    jc br_sbd_out                 ; the end of the gesture, so the record
+    jmp short br_sbd_go          ; survives it
 br_onup:
     push ax
     push bx
     push cx
     push dx
     push si
+    mov bx, br_btrec            ; the toolbar FIRES here (SPEC.md 13.7)
+    call os88ui_btnup           ; AX = what fired, 0 = nothing of ours
+    or ax, ax
+    jz .nobtn
+    push si
+    cmp al, 1
+    jne .nb2
+    call br_okback              ; ONE predicate for the greying and the
+    jc .bdone                   ; refusal, so they cannot disagree (47 rule 5)
+    mov bx, [br_histi]
+    dec bx
+    mov [br_histi], bx
+    call br_hgo
+    jmp short .bdone
+.nb2:
+    cmp al, 2
+    jne .nb3
+    call br_okfwd
+    jc .bdone
+    mov bx, [br_histi]
+    inc bx
+    mov [br_histi], bx
+    call br_hgo
+    jmp short .bdone
+.nb3:
+    call br_okrel
+    jc .bdone
+    call br_reload
+.bdone:
+    pop si
+    jmp br_sbd_out
+.nobtn:
     call os88ui_sbdragging
     jc br_sbd_out
+    mov bx, si                  ; the pause timer must not outlive the
+    xor ax, ax                  ; gesture it belongs to (13.10.5.4.2)
+    call OSAPI_WM_TIMER
     call br_measure
     call br_sbfill
     call os88ui_sbdrop
@@ -1743,35 +1834,11 @@ br_onclick:
     add ax, BR_TBH - 1
     cmp dx, ax
     ja .nostrip
-    mov bx, br_r1
-    call br_inrect
-    jc .t2
-    call br_okback                  ; ONE predicate for the greying and the
-    jc .out                         ; refusal, so they cannot disagree
-    mov bx, [br_histi]              ; (SPEC.md 47 rule 5) - and a greyed
-    dec bx                          ; control explains itself, so a refused
-    mov [br_histi], bx              ; click says nothing more (rule 6)
-    call br_hgo
-    jmp .out
-.t2:
-    mov bx, br_r2
-    call br_inrect
-    jc .t3
-    call br_okfwd
-    jc .out
-    mov bx, [br_histi]
-    inc bx
-    mov [br_histi], bx
-    call br_hgo
-    jmp .out
-.t3:
-    mov bx, br_r3
-    call br_inrect
-    jc .out
-    call br_okrel                   ; ONE predicate for the greying and the
-    jc .out                         ; refusal...
-    call br_reload                  ; ...and ONE action behind both its doors
-    jmp .out
+    jmp .out                        ; the toolbar's press was the LIBRARY's
+                                    ; (SPEC.md 20.5.1.3.3) and never reaches
+                                    ; here; br_onup has the action, and it
+                                    ; asks the SAME ok-predicate the greying
+                                    ; does (47 rule 5)
 .nostrip:
     cmp cx, [br_sbx]
     jb .page                        ; not in the scroll bar: the PAGE's
@@ -1792,8 +1859,9 @@ br_onclick:
     jne .out                        ; now, where it was inert. BX is the block
     cmp byte [br_nodrag], 0         ; and DX the press, absolute, exactly as
     jne .out                        ; os88ui_sbhit just took them
-    mov al, BR_SBRATE
-    call os88ui_sbgrab
+    mov ax, BR_SBRATE | (BR_SBRATE286 << 8)
+    call os88ui_sbrate          ; the rate THIS machine can afford
+    call os88ui_sbgrab          ; (SPEC.md 13.10.5.4.1)
 %endif
     jmp .out                        ; the thumb, or nowhere: this app pages
                                     ; from the TRACK only, which the shared
@@ -2151,17 +2219,14 @@ br_toolbar:
     push di
     call br_hsync                   ; the History menu answers the same
                                     ; question these two buttons do
-    mov bx, br_r1
-    mov si, br_s_back
     call br_okback
+    mov al, 1
     call br_btn1
-    mov bx, br_r2
-    mov si, br_s_fwd
     call br_okfwd
+    mov al, 2
     call br_btn1
-    mov bx, br_r3
-    mov si, br_s_rel
     call br_okrel
+    mov al, 3
     call br_btn1
     call br_status
     pop di
@@ -2189,14 +2254,32 @@ br_inrect:
     ret
 
 ; --- br_btn1 - one toolbar button; CF on entry = 0 live, 1 disabled ----------
+; in: AL = the button's index PLUS ONE, CF from its own ok-predicate
+; The toolbar group's arrays (SPEC.md 20.5.1.3). The FLAGS are rewritten each
+; pass by br_btn1, from the very predicate that decides the refusal.
+br_btlbl: dw br_s_back, br_s_fwd, br_s_rel
+br_btflg: dw OS88UI_FILL, OS88UI_FILL, OS88UI_FILL
+    OS88UI_BTNREC br_btrec, br_r1, br_btlbl, br_btflg, 3
+
 br_btn1:
+    push bx
     push di
+    push si
     mov di, OS88UI_FILL
     jnc .live
     or di, OS88UI_DIS
 .live:
+    mov bl, al                      ; the flag goes in the record's array, at
+    xor bh, bh                      ; this button's slot, so the painter and
+    dec bx                          ; the record agree by construction
+    add bx, bx
+    add bx, br_btflg
+    mov [bx], di
+    mov bx, br_btrec
     call os88ui_btn
+    pop si
     pop di
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -6775,7 +6858,8 @@ br_tagtab:
 ; --- window template (SPEC.md 11) ----------------------------------------------
 br_tpl:
     dw 40, 30, 496, 150
-    dw br_ttl, br_paint, br_onkey, br_onclick
+    dw br_ttl, br_paint, br_onkey, 0    ; W_ONCLICK is installed by
+                                        ; os88ui_btninit (20.5.1.3.3)
 
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
 ; No Close item: SPEC.md 12.7 puts one in the app-NAME cell for every
@@ -7034,7 +7118,14 @@ br_tby      equ br_sbold + 2         ; word: the strip's top, derived
 br_r1       equ br_tby + 2            ; the three button rects {x1,y1,x2,y2}
 br_r2       equ br_r1 + 8
 br_r3       equ br_r2 + 8
-br_spen     equ br_r3 + 8             ; word: the state's pen, 8-aligned
+br_spen     equ br_r3 + 8         ; word: the state's pen, 8-aligned.
+                                       ; **PAST THE RECORD**, which was
+                                       ; declared at br_r3 + 8 beside it and
+                                       ; ALIASED it: every write to one
+                                       ; corrupted the other, and a record
+                                       ; whose rect pointer had been
+                                       ; overwritten drew a pressed button as
+                                       ; a black box over half the screen
 br_swid     equ br_spen + 2           ; word: ...and the cells it may use
 br_histn    equ br_swid + 2           ; word: entries in the stack
 br_histi    equ br_histn + 2          ; word: where we are in it

@@ -8,9 +8,7 @@ that produced it, kept because the method is what the next pass needs.
 
 Its companion is `docs/plans/completed/HANDOFF-KERNEL-SIZE.md`, which is pass 1's handoff and
 still the authority on **method** and on the mistakes not to repeat. Read that
-one for *how*; read this one for *what happened*, and
-`docs/plans/HANDOFF-SOAK-FINDINGS.md` for the queue of defects the closing soak
-turned up that are **not** this pass's to fix.
+one for *how* and this one for *what happened*.
 
 Branch: `claude/kernel-size-optimization-p2-zcuuac`, cut from `elendilon` at
 `ac1f74f`. One root commit; unshallow the clone before believing any ancestry
@@ -83,11 +81,10 @@ code is faster. A pass that removed 2,709 bytes of `.text` and shortened
 hundreds of encodings was always likely to buy speed as well as space.
 
 One regression survived scrutiny — `GFX_BLITP` +2.7%, on both 1bpp adapters,
-independent of block size, and **unexplained**: see
-`docs/plans/HANDOFF-SOAK-FINDINGS.md` A3. The Hercules "regressions" were a
-measurement artefact and the same file's C1 is the experiment that settled it —
-along with the finding that PERFORMANCE.md's documented Hercules write cost is
-low by about a quarter.
+independent of block size, and **unexplained** at the time; it was since
+closed as the shared epilogue ladder. The Hercules "regressions" were a
+measurement artefact — along with the finding that PERFORMANCE.md's documented
+Hercules write cost is low by about a quarter.
 
 ### What it found that was not size
 
@@ -106,8 +103,7 @@ low by about a quarter.
   caller. Named, not fixed.
 * **Three suite rows that FAIL where they mean SKIP**, and one benchmark that
   priced three of its eleven operations at 0.0 ms. Two of the three registrations
-  and the whole of `deskbench` are fixed; the rest is
-  `docs/plans/HANDOFF-SOAK-FINDINGS.md`.
+  and the whole of `deskbench` are fixed.
 
 ### The soak: 0 kernel regressions
 
@@ -115,9 +111,8 @@ low by about a quarter.
 toolchain. Fifteen failures were investigated and **not one is a regression in
 kernel behaviour**: three were contention, three were a host-side commit's
 per-instance disk isolation, four were pre-existing at both ends, three were a
-missing artefact, and two were fixed. Every one of them is written up with its
-evidence in `docs/plans/HANDOFF-SOAK-FINDINGS.md`, which is the work queue that came
-out of this pass.
+missing artefact, and two were fixed. Each was worked through and closed; the
+lessons live in the rows and harness they were learned on.
 
 ### The gates that did not exist before
 

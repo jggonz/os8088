@@ -272,25 +272,55 @@ def main():
     fails = []
     for key, rows in JUMPS:
         s0, p0 = peek("tds_scrl"), peek("tds_pat")
+        k0 = peek("tds_keys")
         v0 = peek("tui_vrow", 1)
         q.key(key)
         time.sleep(1.5)
         v1, s1, p1 = peek("tui_vrow", 1), peek("tds_scrl"), peek("tds_pat")
+        k1 = peek("tds_keys")
         w, a = q.screen()
         q.key("g")                      # the same view, drawn the other way
         time.sleep(1.5)
         _w, b = q.screen()
         bad = [y for y in range(y0, y1) if a[y] != b[y]]
         moved, scrolls, repaints = v1 - v0, s1 - s0, p1 - p0
-        ok = (moved == rows and scrolls == 1 and repaints == 0 and not bad)
-        say("  %-4s %+2d rows: view %2d->%2d  scrolls %d  repaints %d  %s"
-            % (key, rows, v0, v1, scrolls, repaints,
+        # **PER KEY THE BRACKET ACTUALLY SAW, and that is not pedantry.**
+        # `q.key("down")` is one `sendkey`, and on QEMU the guest gets TWO
+        # int 16h entries for it - MEASURED with `tds_keys` (the counter in
+        # trk_fsx_key, TRKDBG only): arrows 2, every ASCII key 1. It is not
+        # this application's doing and not the bracket's: the WINDOWED route
+        # doubles identically (`tds_wkeys` 2 through trk_onkey, which ui_task
+        # dispatches), ui_task dispatches exactly one W_ONKEY per key it takes
+        # from int 16h, and the kernel's ONLY write to the BIOS key buffer is
+        # kbd_ovflow's rewind, which REMOVES an entry and only when it is
+        # full. So the ROM enqueued twice, and under QEMU that ROM is SeaBIOS.
+        #
+        # This row's subject is SPEC.md 45.12.2 - a jump of n rows costs ONE
+        # gfx_scroll and no full repaint - so the honest expectation against
+        # two presses is two scrolls of one row each, which is what it reads.
+        # Scaling by the OBSERVED count keeps that subject measurable instead
+        # of reporting the emulator's keyboard as a scroll defect, which is
+        # the misdiagnosis this row already
+        # made about this exact row once.
+        keys = k1 - k0
+        ok = (keys >= 1 and moved == rows * keys and scrolls == keys
+              and repaints == 0 and not bad)
+        say("  %-4s %+2d rows: view %2d->%2d  scrolls %d  repaints %d  "
+            "keys %d  %s"
+            % (key, rows, v0, v1, scrolls, repaints, keys,
                "ok" if ok else "FAIL"))
-        if moved != rows:
-            fails.append("%s moved %d rows, not %d" % (key, moved, rows))
-        elif scrolls != 1 or repaints != 0:
-            fails.append("%s took %d scroll(s) and %d full repaint(s), not 1 "
-                         "and 0 - the reach is gone" % (key, scrolls, repaints))
+        if keys != 1:
+            say("       NOTE: one sendkey, %d key(s) at the app - the ROM's, "
+                "not this program's (see the comment here)" % keys)
+        if keys < 1:
+            fails.append("%s never reached the program at all" % key)
+        elif moved != rows * keys:
+            fails.append("%s moved %d rows, not %d - %d key(s) of %+d"
+                          % (key, moved, rows * keys, keys, rows))
+        elif scrolls != keys or repaints != 0:
+            fails.append("%s took %d scroll(s) and %d full repaint(s), not %d "
+                         "and 0 - the reach is gone"
+                         % (key, scrolls, repaints, keys))
         elif bad:
             fails.append("%s left %d screen row(s) different from a full "
                          "repaint, first %d" % (key, len(bad), bad[0]))

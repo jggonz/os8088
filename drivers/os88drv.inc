@@ -98,6 +98,15 @@ SND_RT_FM    equ 2              ; AdLib - FM only
 SND_RT_SB    equ 3              ; Sound Blaster - FM and streams
 
 ; --- entry verbs (AL on the far call into your entry proc) -------------------
+; --- the record OSAPI_DRV_SUSPEND fills from DRVV_HWINFO (SPEC.md 51.11.2) ---
+DQ_CLASS     equ 0              ; db: the DRVC_* this record is about
+DQ_FLAGS     equ 1              ; db: bit 0 = it went
+DQ_A         equ 2              ; dw: your class's own three words
+DQ_B         equ 4              ; dw
+DQ_C         equ 6              ; dw
+DQ_SIZE      equ 8
+DQ_MAXREC    equ 8              ; ...and the most one call can write
+
 DRVV_ATTACH  equ 0              ; out CF=0 and SI = your service table;
                                 ;     CF=1 = no hardware, nothing hooked
 DRVV_DETACH  equ 1              ; out: nothing. Cannot fail.
@@ -113,6 +122,22 @@ DRVV_READY   equ 3              ; "your services are published; the kernel can
                                 ; created by an attach that then says no would
                                 ; outlive the image. Optional - return if you
                                 ; have nothing to do here.
+DRVV_HWINFO  equ 4              ; "WHERE IS YOUR HARDWARE?" (SPEC.md 51.11.2).
+                                ; No inputs. out CF=0 with AX/BX/CX = your
+                                ; CLASS's own three words - for DRVC_SOUND the
+                                ; DSP base port, then (IRQ | DMA<<8), then the
+                                ; DSP version - or CF=1 if you have nothing to
+                                ; say. OPTIONAL, and asked only by
+                                ; OSAPI_DRV_SUSPEND on the way past: you are
+                                ; about to be unloaded so a fullscreen program
+                                ; can have the hardware, and you are the last
+                                ; thing that knows where it is.
+                                ;
+                                ; ANSWER CF=1 RATHER THAN A ZERO ADDRESS when
+                                ; the hardware is not there. The caller turns
+                                ; this into something a program acts on - a
+                                ; BLASTER= - and one naming a card that is
+                                ; absent is worse than none at all.
 DRVV_TIER    equ 2              ; in AH = how much of yourself the user wants
                                 ; (SPEC.md 34.8); out CF=0 and SI = your
                                 ; service table, which the kernel RE-COPIES

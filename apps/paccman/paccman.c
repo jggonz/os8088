@@ -536,8 +536,23 @@ void os88_paint(void *win)
      * os88.h). A refusal is normal and transient - the twelve-slot task table
      * can be full - so the flag is only set once the spawn took, and the next
      * paint asks again. */
-    if (!pmc_hired && os88_task_spawn(win) == 0)
+    if (!pmc_hired && os88_task_spawn(win) == 0) {
         pmc_hired = 1;
+        /* ...AND OUR REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2).
+         * crt0.asm declared the region movable before os88_main returned,
+         * and the spawn above just pinned it again: the kernel wrote our
+         * segment into this worker's frame before its first instruction, so
+         * mem_frameless refuses a region whose worker is undeclared however
+         * that region is declared. A declaration without this one is inert.
+         *
+         * WHAT THE RESTART COSTS is one pass of the loop. The park is inside
+         * os88_task_alive() and nowhere else - this package is not
+         * os88_mem_parksafe() - which is the TOP of os88_worker's loop, and
+         * the only automatic that crosses it there is `due`, which the
+         * restarted entry re-seeds from os88_ticks() anyway. Every byte of
+         * the game is a static and moves with us. */
+        os88_task_restartable(1);
+    }
 
     if (pmc_repaint(win) && pmc_about_up)
         os88_about_card_d(win, pmc_about_lines);
@@ -589,7 +604,6 @@ void os88_about(void *win)
  *        ordinary "any key" (DBG_ESCAPE governs only leaving the game loop) */
 void os88_onkey(int ascii, int scan, void *win)
 {
-    (void) ascii;
 
     /* ANY KEY TAKES THE ABOUT CARD DOWN, and starts nothing else. The widget
      * only draws; the flag and the dismissal are ours (apps/cc/os88.h), this
@@ -599,6 +613,20 @@ void os88_onkey(int ascii, int scan, void *win)
      * w_abdismiss and apps/pacman/pacman.asm's pm_dismiss_body both. */
     if (pmc_abdismiss(win))
         return;
+
+    /* ALT+ENTER IS THE SAME TOGGLE (SPEC.md 11.2.1.1), and it is the one key
+     * here that has to look at `ascii`: Enter's scancode is Enter's scancode
+     * whether or not Alt is held, and this handler ignores ascii everywhere
+     * else, so without the test a plain Enter on the attract screen would
+     * throw the cabinet full screen. ascii 0 is what makes it a chord. */
+    if (ascii == 0 && scan == OS88_SCAN_ENTER) {
+        pmc_full = !pmc_full;
+        if (os88_fullscreen(win, pmc_full) < 0) {
+            pmc_full = 0;
+            os88_toast("Another window is full screen.", 36);
+        }
+        return;
+    }
 
     if (scan == PMC_SC_F) {
         pmc_full = !pmc_full;

@@ -44,6 +44,7 @@ import os
 import re
 import subprocess
 import sys
+import shutil
 import tempfile
 import time
 
@@ -421,7 +422,23 @@ def _load(defines=(), check=True):
                     % (bn, bn))
         shadow = ["-I", sdir + os.sep]
 
-    cmd = ["nasm", "-f", "bin", "-w+error"] + shadow + [
+    # **THE ASSEMBLER IS $NASM AND NOT `nasm`.** This line read `["nasm", ...]`
+    # and the identity check below then compared THIS assembly against a
+    # `kernel.bin` that something else may have built with a DIFFERENT
+    # assembler. `tests/unit/t_nasm3.py` builds a whole private tree with
+    # `make NASM=<nasm3>` and then reads symbols out of it, and make exports a
+    # command-line variable to its recipes - so the map came from nasm 2.16
+    # and the image from nasm 3.02, and the row died on "the map describes a
+    # DIFFERENT kernel" with a traceback in $(BUILD)/boothd.bin's recipe,
+    # pointing at the kernel instead of at the assembler.
+    #
+    # The two really do differ, and harmlessly: on this tree it is exactly TWO
+    # bytes, at `kernel/disk.inc`'s `rep es movsb` - nasm 2 emits `F3 26` and
+    # nasm 3 `26 F3`, the REP and the ES override in the other order, which
+    # the 8086 decodes identically. So there was nothing wrong with the tree
+    # and nothing for a kernel change to fix; the reader simply has to use the
+    # assembler the image was built with.
+    cmd = [os.environ.get("NASM", "nasm"), "-f", "bin", "-w+error"] + shadow + [
            "-I", os.path.join(ROOT, "kernel") + os.sep,
            "-I", os.path.join(ROOT, "apps") + os.sep,
            "-I", bdir + os.sep] + \
@@ -482,6 +499,22 @@ def _load(defines=(), check=True):
     out, sect, equ = _parse_map(mapf)
     if not out:
         raise RuntimeError("nasm produced an empty symbol map (%s)" % mapf)
+
+    # **AND THE SCRATCH TREE GOES**, which it never did: this function
+    # re-assembles the whole kernel into a fresh mkdtemp and every caller
+    # leaves one behind - 5.8MB of kernel.asm, k.bin, k.map and the shadow
+    # buildnum.inc.  ONE CALL PER EMULATOR ROW plus one per os88sym import,
+    # so a session that runs the suite a few times leaks thousands: measured
+    # on this container, **13,167 directories and 29GB**, which filled a 252GB
+    # filesystem and began failing rows with ENOSPC far from the cause.
+    #
+    # It is removed HERE and not in a `finally`, on purpose: every raise above
+    # is a diagnosis - a nasm failure, an empty map, a kernel that does not
+    # match the image - and each one NAMES A FILE IN THIS DIRECTORY for the
+    # reader to go and look at.  Only the success path has nothing left to
+    # say, and by this line the map is parsed into memory.
+    shutil.rmtree(tmp, ignore_errors=True)
+
     _cache[key] = (out, sect, equ)
     return _cache[key]
 

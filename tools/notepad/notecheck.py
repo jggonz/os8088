@@ -12,8 +12,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from pkg import Lab                                     # noqa: E402
 from state import State                                 # noqa: E402
 
-BIN = "/home/user/os8088/build/npbench.bin"
-SRC = "/home/user/os8088/build/readme.txt"
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BIN = os.path.join(_OS88_ROOT, "build/npbench.bin")
+SRC = os.path.join(_OS88_ROOT, "build/readme.txt")
 
 
 def note(lab, st):

@@ -21,6 +21,15 @@ from the host without rendering anything:
 
 It is deliberately NOT a screenshot: a golden image fails on every legitimate
 pixel change, and what is being defended here is the text.
+
+AND SINCE THE FORMATTER'S TEMPLATE MOVED INTO ITS IMAGE TOO, the last check is
+about BYTES ON A DISK rather than bytes on the glass: the jump, the OEM name,
+the volume label, the FS type and the not-bootable stub are 97 bytes read
+through CS by `dskw_fmt_cpy`, and the verdict toast above would say
+"Formatted B:" just as happily if every one of them were wrong. So B: is
+opened again afterwards. SPEC.md 18.2 rule 2 tests the first byte for
+0EBh/0E9h, which makes the MOUNT the assertion: a template read through DS
+puts 97 bytes of KERNEL_SEG on the disk and the volume does not come back.
 """
 import os
 import re
@@ -126,5 +135,36 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
           "what drops the image (SPEC.md 2.8.6)",
           got=said, want="Formatted B:")
     M.settle(m, limit=120)
+
+    # --- ...and the BOOT SECTOR the formatter wrote out of its own image ----
+    # The verdict above is composed from image strings and proves nothing
+    # about the BYTES the format put on the disk. Since the jump, the OEM
+    # name, the volume label, the FS type and the not-bootable stub moved into
+    # FORMAT.DRV with the prompts (SPEC.md 2.8.6), a copier that read them
+    # through DS instead of CS would take 97 bytes from that offset in
+    # KERNEL_SEG - and still say "Formatted B:", because the verdict is
+    # composed somewhere else entirely.
+    #
+    # Re-opening the drive is the whole assertion, and it is the sharpest one
+    # available: SPEC.md 18.2 rule 2 tests the first byte for 0EBh/0E9h, so a
+    # boot sector built from the wrong bytes DOES NOT MOUNT. A listing here
+    # means the template survived the trip through the image.
+    try:
+        dispcp.open_drive(m, mo, lambda n: m.sym(n), M.settle, letter="B")
+        M.settle(m)
+        rows = dispcp.listing(m, lambda n: m.sym(n))
+        line = text(m, hdr)
+    except RuntimeError as e:                   # the mount REFUSED, which is
+        rows, line = None, str(e).split("\n")[0]   # what a bad template looks
+                                                # like from out here: no
+                                                # window, no listing, no fault
+    ok = rows == [] and re.match(r"^Size 0K\s+Free \d+K$", line)
+    check(ok, "...and the volume it wrote MOUNTS and reads empty",
+          "the geometry is not pinned - what is asserted is that a BPB "
+          "written out of the image parses at all, and that the first byte "
+          "passes SPEC.md 18.2 rule 2's 0EBh/0E9h test. A copier reading "
+          "through DS would put 97 bytes of KERNEL_SEG on the disk and this "
+          "mount would refuse",
+          got="%r / %r" % (rows, line), want="[] / 'Size 0K  Free <n>K'")
 
 done("modstr")

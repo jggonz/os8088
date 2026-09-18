@@ -272,7 +272,8 @@ multi-instance:
   Player (both play Amiga MOD files), an Audio Player that streams a WAV off
   the disk and keeps playing while you work in another window, and the three
   that talk over the network — Browser, Telnet and an FTP server.
-- **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, [Pac-Man](apps/pacman/README.md), Cyclone 88,
+- **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, Dot Delirium,
+  Cyclone 88,
   Clear Skies, Tank Attack (a first-person wireframe tank duel that takes the
   whole machine, in 320x200 colour on CGA, Mode X on VGA and 640x200 mono in
   the middle of a Hercules) and TameGram.

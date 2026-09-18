@@ -100,22 +100,72 @@ def main():
           "and it has to hold at the small widths too, not just at 14",
           got="violated at n = %s" % bad2, want="2*n*chunk <= 9n KB at every n")
 
-    check(9 * runs == 126, "the ceiling still wants the bar it always did",
-          "A 640KB machine must be unaffected by SPEC.md 18.95.5: at n = "
-          "DSK_RAH_RUNS the gate has to come out at the same 126KB free run "
-          "the fixed-size version demanded, or this changed behaviour where "
-          "it promised not to",
-          got="%dKB" % (9 * runs), want="126KB")
+    # ...and the THIRD of the three places, which was never read. This slot
+    # held `9 * runs == 126` - a literal that was DSK_RAH_RUNS = 14's own bar,
+    # written to guard SPEC.md 18.95.5 against changing what a 640KB machine
+    # gets. The shipped width is a DECISION below the ceiling now (SPEC.md
+    # 18.95.6), so that number moved and the rule did not: a row that pins a
+    # decision goes red when somebody takes it, which is the opposite of what
+    # a guard is for.
+    #
+    # What belongs here instead is the one number this file's own header names
+    # and nothing checked: the MULTIPLY. `kb_of` above is a TRANSCRIPTION of
+    # it, so every row that uses it is checking the kernel against a copy of
+    # the kernel. dsk_rah_want computes KB as:
+    #
+    #     mov cx, 9 / ... / div cx / ... / mul cx / inc ax / shr ax, 1
+    #
+    # which is ceil(n * 9 / 2) - and the 9 has to be DSK_RAH_SECS, because
+    # that is what makes it ceil(n * 4.5KB) for a 4,608-byte chunk. A factor
+    # dropped here claims LESS than the width it then fills, which is this
+    # row's headline failure with nothing above able to see it.
+    #
+    # **IT USED TO BE A SHIFT-ADD** - `mov bx,ax / shl ax,1 x3 / add ax,bx` -
+    # and the size pass replaced it with `mul cx`, CX still holding the very 9
+    # the divide two lines up was given. That is eight bytes off a resident
+    # kernel AND a stronger invariant than this row could check before: the
+    # multiplier is no longer a second spelling of the divisor that could
+    # drift from it, it is the SAME REGISTER. So the check below is that the
+    # KB block between `div cx` and the halve is exactly `mul cx / inc ax`,
+    # with nothing in it that could write CX in between.
+    want_body = re.search(r"^dsk_rah_want:(.*?)^osapi_dsk_cache_x:", src,
+                          re.S | re.M)
+    check(want_body is not None, "dsk_rah_want's body is findable in %s" % DISK,
+          "Every check below reads it; without it they would scan the whole "
+          "file and match somebody else's arithmetic", got=bool(want_body),
+          want=True)
+    want_src = want_body.group(1) if want_body else ""
+    m = re.search(r"^\s*div cx\b(.*?)shr ax, 1", want_src, re.S | re.M)
+    body = m.group(1) if m else ""
+    muls = len(re.findall(r"^\s*mul cx\b", body, re.M))
+    ups = len(re.findall(r"^\s*inc ax\b", body, re.M))
+    clob = re.findall(r"^\s*(?:mov|add|sub|xor|and|or|inc|dec|pop|xchg|shl|shr)"
+                      r"\s+(?:cx|cl|ch)\b", body, re.M)
+    check(m is not None and muls == 1 and ups == 1 and not clob,
+          "the KB block in the source IS ceil(n * <the divisor> / 2)",
+          "kb_of above is a transcription of this, so without this check "
+          "every width row is comparing the kernel with a copy of itself. "
+          "The claim is sized here and filled from [dsk_rah_runs], so a "
+          "multiplier one short claims less than it fills - an int 13h "
+          "landing in whatever the heap handed out next. The multiply reuses "
+          "the divide's own CX, so anything writing CX between them is the "
+          "one way the two can disagree",
+          got="%d x `mul cx`, %d x `inc ax`, CX written by %s"
+              % (muls, ups, clob or "nothing"),
+          want="1 x `mul cx`, 1 x `inc ax`, CX untouched between")
 
-    # ...and the divisor in the source is the same 9, not a second opinion
-    m = re.search(r"mov cx, (\d+)\s*;[^\n]*\n[^\n]*div cx", src)
-    check(m is not None and int(m.group(1)) == 9,
-          "the gate's divisor is the 9 these rows assume",
+    # ...and that shared divisor/multiplier is the chunk length these rows
+    # assume, not a second opinion
+    m = re.search(r"mov cx, (\d+)\s*;[^\n]*\n[^\n]*div cx", want_src)
+    got = int(m.group(1)) if m else None
+    check(got == 9 and got == secs,
+          "the gate's divisor is the DSK_RAH_SECS these rows assume",
           "The rows above prove the arithmetic; this one proves the kernel "
           "does that arithmetic. A divisor and a chunk size that disagree "
-          "give a width the claim does not cover",
-          got=m.group(1) if m else "no `div cx` after a `mov cx, <n>`",
-          want="9")
+          "give a width the claim does not cover - and since the KB multiply "
+          "now reuses this same CX, this one literal is BOTH halves",
+          got=got if m else "no `div cx` after a `mov cx, <n>`",
+          want="9, and == DSK_RAH_SECS (%d)" % secs)
 
     return done("dirwsize")
 

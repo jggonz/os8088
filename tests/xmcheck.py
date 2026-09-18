@@ -58,7 +58,6 @@ XM_BLKSZ, XM_MAX_BLKS = 8, 8        # XM_MAX_BLKS: kernel/kernel.asm.
                                     # is the stride this file decodes xm_tab
                                     # with, so a wrong citation sends the next
                                     # reader to the wrong file to check it
-DRVR_SEG = 2                        # kernel/driver.inc, into xm_row
 XB_OFF, XB_KB, XB_OWN = 0, 2, 4
 XM_OWN_KERN = 0xFF
 
@@ -187,8 +186,10 @@ def newest_window(sock):
 def table_base(sock):
     """Where xm_tab actually is this boot: the overlay's segment x 16, plus
     its offset inside the image."""
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import os88geom
     row = sym("xm_row")
-    seg = read_bytes(sock, row + DRVR_SEG, 2)
+    seg = read_bytes(sock, row + os88geom.DRVR_SEG, 2)
     seg = seg[0] | (seg[1] << 8)
     if not seg:
         raise SystemExit(

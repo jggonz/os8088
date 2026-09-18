@@ -179,6 +179,12 @@ rc_entry:
     mov si, rc_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     push ax                         ; SPEC.md 13.7: the buttons fire on the
     mov ax, rc_onup                 ; RELEASE, over the button the press
     call OSAPI_WM_ONMOUSEUP         ; landed on - so a mis-aimed press can be
@@ -1090,6 +1096,14 @@ rc_draw_btns:
 ; painter, a W_PAINT goes through it, and [rc_down] is consulted per button.
 ; Passing it as an argument would mean the press path knew and W_PAINT did not.
 ; -----------------------------------------------------------------------------
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; One button at a time: this package's rects are not one contiguous group,
+; so the record is pointed at whichever rect the caller staged.
+rc_btlbl: dw 0
+rc_btflg: dw 0
+    OS88UI_BTNREC rc_btrec, 0, rc_btlbl, rc_btflg, 1
+
 rc_btn:
     push ax
     push bx
@@ -1126,7 +1140,16 @@ rc_btn:
     jne .draw
     or di, OS88UI_DOWN              ; ...and DIS still outranks it inside
 .draw:                              ; os88ui_btn, which is where that rule lives
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [rc_btlbl], si          ; label and DI its flags, so the record takes
+    mov [rc_btflg], di          ; all three and the picture is identical
+    mov [rc_btrec+OS88UI_BT_RECTS], bx
+    mov bx, rc_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop bx
     pop ax

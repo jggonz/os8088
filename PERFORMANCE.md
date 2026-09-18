@@ -1968,7 +1968,7 @@ Three things fall out of it:
 **Two caveats on the whole table.** The scene is reproducible to about nine
 lit pixels and not to the pixel — CGA reads 78,821 / 78,825 / 78,830 across
 three runs of one build, because `new_window` waits on host time
-(`docs/plans/HANDOFF-SOAK-FINDINGS.md` B5) — so a few tenths of a percent is noise.
+ — so a few tenths of a percent is noise.
 And the scene is identical to itself *per adapter*, not across adapters: the
 Display page is hidden on a single-adapter machine (§39.11.1), so the Control
 Panel holds record 0 on CGA and Hercules and the Display page on VGA. Compare

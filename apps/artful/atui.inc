@@ -1124,7 +1124,13 @@ at_mdbuttons:
     jne .single
     mov ax, [at_msx2]
     sub ax, 64                      ; Save (56 wide), 8 in from the right
+    mov word [at_btrec+OS88UI_BT_N], 3   ; **THE COUNT FIRST**: os88ui_btn
+                                    ; refuses an index past the LIVE count, so
+                                    ; a count written after the draws is a
+                                    ; count of zero on the pass that matters
     mov si, at_s_save
+    mov [at_btlbl], si
+    mov byte [at_bslot], 0
     mov dx, 1
     call at_button                  ; out: CX = width
     mov [at_b1x], ax
@@ -1132,6 +1138,8 @@ at_mdbuttons:
     mov [at_b1w], cx
     sub ax, 80                      ; Cancel (72 wide), 8 gap
     mov si, at_s_cancel
+    mov [at_btlbl+2], si
+    mov byte [at_bslot], 1
     xor dx, dx
     call at_button
     mov [at_b2x], ax
@@ -1139,6 +1147,8 @@ at_mdbuttons:
     mov [at_b2w], cx
     sub ax, 112                     ; Don't Save (104 wide), 8 gap
     mov si, at_s_dontsave
+    mov [at_btlbl+4], si
+    mov byte [at_bslot], 2
     xor dx, dx
     call at_button
     mov [at_b3x], ax
@@ -1150,7 +1160,10 @@ at_mdbuttons:
     add ax, [at_msx2]
     shr ax, 1
     sub ax, 20                      ; OK is 40 wide: centre it
+    mov word [at_btrec+OS88UI_BT_N], 1   ; the count first, as above
     mov si, at_s_ok
+    mov [at_btlbl], si
+    mov byte [at_bslot], 0
     mov dx, 1
     call at_button
     mov [at_b1x], ax
@@ -1185,6 +1198,10 @@ at_mdbuttons:
 ; It gains a greyed state it does not use yet - at_button has never had one -
 ; and that is the point of the shared control rather than an accident of it.
 ; -----------------------------------------------------------------------------
+; in: ...and [at_bslot] = which of the group's three rects this one IS,
+;     0-based, set by the caller immediately before (SPEC.md 20.5.1.3). A
+;     group's rects must be contiguous, so the three x/y/width triples this
+;     modal used to keep - and hit-test from, separately - are one array now.
 at_button:
     push ax
     push bx
@@ -1213,7 +1230,27 @@ at_button:
     jz .go                          ; register being reused for the answer
     or di, OS88UI_DEF
 .go:
-    mov bx, at_brect
+    mov bl, [at_bslot]              ; --- into the group's own slot ---
+    xor bh, bh
+    mov ax, bx
+    add ax, ax
+    mov si, ax                      ; SI = slot * 2, the flag array's stride
+    mov [at_btflg+si], di
+    add ax, ax
+    add ax, ax                      ; AX = slot * 8, the rect stride
+    mov si, at_brects
+    add si, ax
+    mov ax, [at_brect+0]            ; the rect this pass just computed
+    mov [si+0], ax
+    mov ax, [at_brect+2]
+    mov [si+2], ax
+    mov ax, [at_brect+4]
+    mov [si+4], ax
+    mov ax, [at_brect+6]
+    mov [si+6], ax
+    mov bx, at_btrec
+    mov al, [at_bslot]
+    inc al                          ; the record's indices are one-based
     call os88ui_btn
     mov cx, [at_xw]
     pop di
@@ -1223,7 +1260,15 @@ at_button:
     pop ax
     ret
 
-at_brect:   dw 0, 0, 0, 0           ; the button being drawn
+at_brect:   dw 0, 0, 0, 0           ; the button being drawn, staged
+at_bslot:   db 0                    ; ...and which of the three it is
+at_brects:  dw 0,0,0,0, 0,0,0,0, 0,0,0,0   ; THE GROUP, contiguous
+at_btlbl:   dw 0, 0, 0                     ; its labels, written per pass
+at_btflg:   dw 0, 0, 0                     ; ...and its flags
+    OS88UI_BTNREC at_btrec, at_brects, at_btlbl, at_btflg, 3
+                                       ; THREE is the modal's; the splash and
+                                       ; the one-button modal set their own
+                                       ; OS88UI_BT_N before they draw
 
 ; -----------------------------------------------------------------------------
 ; at_btnhit - is the point (CX,DX) inside button (BX=x, AX=y, SI=width)?
@@ -1258,39 +1303,61 @@ at_modal_click:
     push ax
     push bx
     push si
-    mov bx, [at_b1x]
-    mov ax, [at_b1y]
-    mov si, [at_b1w]
-    call at_btnhit
-    jnc .b1
-    cmp word [at_b2w], 0
-    je .out
-    mov bx, [at_b2x]
-    mov ax, [at_b2y]
-    mov si, [at_b2w]
-    call at_btnhit
-    jnc .b2
-    cmp word [at_b3w], 0
-    je .out
-    mov bx, [at_b3x]
-    mov ax, [at_b3y]
-    mov si, [at_b3w]
-    call at_btnhit
-    jnc .b3
-.out:
-    pop si
-    pop bx
-    pop ax
-    ret
+    pop si                          ; document's fate, so none may fire on a
+    pop bx                          ; press the user can still take back. The
+    pop ax                          ; ladder this replaces was at_btnhit
+    ret                             ; against three separate x/y/width
+                                    ; triples - a second description of the
+                                    ; geometry at_button already owned
+
+; at_btn_up - the release, for WHICHEVER set of buttons is up
+; The splash and the modal share ONE record and os88ui.inc keeps ONE arm word
+; per package, so only one of them can ever have a gesture live; [at_modal]
+; is what says which, exactly as it does for the painter.
+at_modal_up:
+    push ax
+    push bx
+    push si
+    mov bx, at_btrec
+    call os88ui_btnup               ; AX = what FIRED, 0 = cancelled
+    or ax, ax
+    jz .out
+    cmp byte [at_modal], 0
+    jne .md
+    cmp al, 1                       ; --- the SPLASH: New, then Open ---
+    jne .spopen
+    call at_cmd_newdoc              ; a fresh document...
+    call at_fs_enter                ; ...and the whole screen
+    jmp short .out
+.spopen:
+    call at_dlg_open
+    jmp short .out
+.md:
+    cmp al, 1                       ; --- the MODAL: Save, Cancel, Don't ---
+    je .b1
+    cmp al, 2
+    je .b2
+    call at_md_dont
+    jmp short .out
 .b1:
     call at_md_default
     jmp short .out
 .b2:
     call at_md_cancel
-    jmp short .out
-.b3:
-    call at_md_dont
-    jmp short .out
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+at_modal_drag:
+    push ax
+    push bx
+    mov bx, at_btrec
+    call os88ui_btndrag
+    pop bx
+    pop ax
+    ret
 
 at_modal_key:
     push ax
@@ -1669,7 +1736,10 @@ at_splash:
     sub bx, 30                      ; button top
     mov ax, [at_spcx]
     sub ax, 76
+    mov word [at_btrec+OS88UI_BT_N], 2   ; the splash's pair, count first
     mov si, at_s_new
+    mov [at_btlbl], si
+    mov byte [at_bslot], 0
     mov dx, 1
     call at_button
     mov [at_b1x], ax
@@ -1678,6 +1748,8 @@ at_splash:
     mov ax, [at_spcx]
     add ax, 12
     mov si, at_s_open
+    mov [at_btlbl+2], si
+    mov byte [at_bslot], 1
     xor dx, dx
     call at_button
     mov [at_b2x], ax
@@ -1699,25 +1771,13 @@ at_splash_click:
     push ax
     push bx
     push si
-    mov bx, [at_b1x]
-    mov ax, [at_b1y]
-    mov si, [at_b1w]
-    call at_btnhit
-    jnc .new
-    mov bx, [at_b2x]
-    mov ax, [at_b2y]
-    mov si, [at_b2w]
-    call at_btnhit
-    jnc .open
-    jmp short .out
-.new:
-    call at_cmd_newdoc              ; a fresh document...
-    call at_fs_enter                ; ...and the whole screen
-    jmp short .out
-.open:
-    call at_dlg_open
-.out:
-    pop si
-    pop bx
-    pop ax
-    ret
+    pop si                          ; takes the whole screen, so neither may
+    pop bx                          ; fire on a press the user can still take
+    pop ax                          ; back. at_btn_up has the action. The
+    ret                             ; at_btnhit ladder this replaces was a
+                                    ; second description of the geometry
+                                    ; at_button already owned - and it was
+                                    ; missed when the MODAL was converted,
+                                    ; which is why the splash went on acting
+                                    ; on the press with a record that could
+                                    ; draw it down

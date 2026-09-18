@@ -80,15 +80,24 @@ def main():
     for d in ("bms-slow", "bms-fast"):
         shutil.rmtree(os.path.join(ROOT, "build", d), ignore_errors=True)
 
-    # 2. THE EXCLUSION STILL READS, and still names the two knobs it is for.
-    check(PKG_VARS == {"SBDRAGOFF", "SBRATE"},
-          "the package-knob list derived from $(PKGSBDEF) is the expected pair",
+    # 2. THE EXCLUSION STILL READS, and still names the knobs it is for.
+    # It was SBDRAGOFF and SBRATE; $(PKGSBDEF) grew SBRATE286 and SBIDLE and
+    # this line did not follow, which is the update its own `why` below asks
+    # for. The set is DERIVED from the Makefile, so it was right and only the
+    # expectation was stale - the failure said nothing about the mechanism.
+    WANT_PKG = {"SBDRAGOFF", "SBRATE", "SBRATE286", "SBIDLE"}
+    check(PKG_VARS == WANT_PKG,
+          "the package-knob list derived from $(PKGSBDEF) is the expected set",
           "t_buildmatrix reads this out of the Makefile so it cannot go stale "
           "there; this is the other end - a NEW name here is fine and wants "
           "this line updated, an EMPTY set means the derivation broke and "
           "every row would start sharing packages it must not",
-          got=sorted(PKG_VARS), want=["SBDRAGOFF", "SBRATE"])
-    check(not shares(["SBDRAGOFF=1"]) and not shares(["SBRATE=2"]),
+          got=sorted(PKG_VARS), want=sorted(WANT_PKG))
+    # ...and EVERY one of them, not just the first two: the value beside each
+    # is the one t_buildmatrix's own row uses, so the two files agree about
+    # what each knob is exercised with.
+    check(not shares(["SBDRAGOFF=1"]) and not shares(["SBRATE=2"])
+          and not shares(["SBRATE286=0"]) and not shares(["SBIDLE=0"]),
           "a row whose knob reaches a package does NOT share",
           "sharing there would stop apps/notepad being assembled under the "
           "knob at all - green, and one assembly gate poorer")

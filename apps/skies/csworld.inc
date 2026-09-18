@@ -74,6 +74,7 @@ cs_p_c172:
     dw 0                            ; CSP_FLAGS
     dw cs_art_c172                  ; CSP_ART      SIDE ON (88.10.1)
     dw 703                         ; CSP_INDK     the wing's own drag (88.7.12)
+    dw cs_snd_c172                  ; CSP_SND      a Lycoming (88.8.2)
 cs_s_c172:   db 'CESSNA 172', 0
 
 ; --- the second row: a PITTS SPECIAL (SPEC.md 88.7.2), an aerobatic biplane.
@@ -117,6 +118,7 @@ cs_p_pitts:
                                     ;              a different aeroplane
                                     ;              (88.10.1)
     dw 1440                        ; CSP_INDK     the wing's own drag (88.7.12)
+    dw cs_snd_pitts                 ; CSP_SND      six of them (88.8.2)
 cs_s_pitts:  db 'PITTS SPECIAL', 0
 
 ; --- the third row: a FOUGA CM.170 MAGISTER (SPEC.md 88.7.5), the French jet
@@ -161,6 +163,7 @@ cs_p_fouga:
                                     ;              tail is a butterfly tail
                                     ;              (88.10.1)
     dw 651                         ; CSP_INDK     the wing's own drag (88.7.12)
+    dw cs_snd_fouga                 ; CSP_SND      two turbojets (88.8.2)
 cs_s_fouga:  db 'FOUGA MAGISTER', 0
 
 ; --- the fourth row: a WASSMER WA-30 BIJAVE (SPEC.md 88.7.6), the French
@@ -203,6 +206,9 @@ cs_p_bijave:
                                     ;              its span, and a side view
                                     ;              hides all of it (88.10.1)
     dw 344                         ; CSP_INDK     the wing's own drag (88.7.12)
+    dw 0                            ; CSP_SND      NO ENGINE (88.8.2), and
+                                    ;              0 is the silence 88.7.6.1
+                                    ;              already gave it
 cs_s_bijave: db 'WASSMER BIJAVE', 0
 
 ; --- the fifth row: an ICON A5 (SPEC.md 88.7.7), the light sport amphibian.
@@ -260,6 +266,7 @@ cs_p_a5:
                                     ;              shows a hull is a hull
                                     ;              (88.10.1)
     dw 710                         ; CSP_INDK     the wing's own drag (88.7.12)
+    dw cs_snd_a5                    ; CSP_SND      a geared Rotax (88.8.2)
 cs_s_a5:     db 'ICON A5', 0
 
 ; =============================================================================
@@ -275,3 +282,55 @@ cs_s_a5:     db 'ICON A5', 0
 ; packed by tools/csworlds.py, each assembled on its own at the overlay's
 ; fixed org, and read into cs_wldat when a location is picked.
 ; =============================================================================
+
+; =============================================================================
+; THE ENGINES (SPEC.md 88.8.2)
+;
+; One record per aeroplane that has one. Four aeroplanes, four engines, and the
+; Bijave's word is 0 because a sailplane has none - its sound is the air's
+; swoop (88.7.6.3) and nothing here touches it.
+;
+; THESE NUMBERS HAVE BEEN LISTENED TO, which is the only way any of them could
+; have been settled (88.8.2.2): an emulator synthesises a square wave with none
+; of a real speaker's response, so every figure below is the field's and not
+; arithmetic's. What the first set got right was the trainer and the biplane,
+; and the idles - "idle is audible", "sounds pretty good at idle". What it got
+; wrong was the top of both the amphibian and the jet, and the BEAT, which is
+; gone (88.8.2.1).
+;
+; THE ORDER IS STILL THE POINT and it is still the honest one. What a listener
+; identifies in a piston aeroplane is the propeller's blade pass, which on a
+; four-cylinder four-stroke is the firing rate too: 2 x rpm / 60. A Cessna at
+; 2,700 rpm is 90 Hz, a six-cylinder Pitts firing three times a revolution is
+; 135, and a Rotax 912 turning 5,800 through a 2.43:1 gearbox fires at 193 - so
+; the amphibian is the highest-pitched piston here and the jet is not in the
+; same octave as any of them. What the FIELD then did to that is cut the top of
+; the two that were right on paper and wrong in a room, which is the whole
+; reason 88.8.2.2 says an emulator cannot settle this.
+; =============================================================================
+cs_snd_c172:   dw 60, 45                ; 60..105 Hz. A direct-drive Lycoming,
+               db 2, 4, 0               ; four cylinders, two blades - and the
+                                        ; one the field has passed twice
+cs_snd_pitts:  dw 75, 85                ; 75..160 Hz. Six cylinders firing 3 a
+               db 2, 5, 0               ; revolution is 135 at 2,700 rpm: the
+                                        ; loud one, and it should sound it. A
+                                        ; tighter ceiling than the trainer's -
+                                        ; "slightly steppy, but overall good" -
+                                        ; because its range is twice as wide
+cs_snd_fouga:  dw 180, 520              ; 180..700 Hz, off the thrust it HAS.
+               db 3, 6, CSSF_SPOOL      ; A Marbore at 21,500 rpm is a whine
+                                        ; and the arithmetic said 260..1200 -
+                                        ; which the field heard as "much too
+                                        ; high pitched for human ears", 1,200
+                                        ; sitting in the band a PC speaker is
+                                        ; harshest in. Down a fifth and a bit,
+                                        ; still an octave and a half clear of
+                                        ; every piston, and the TIGHTEST pitch
+                                        ; ceiling here because its range is
+                                        ; two octaves where no piston's is
+                                        ; more than one
+cs_snd_a5:     dw 95, 75                ; 95..170 Hz, and the top is the
+               db 2, 4, 0               ; field's: 190 was "slightly high
+                                        ; pitched at full. Probably accurate,
+                                        ; but again, human ears and all". It
+                                        ; stays the highest piston, by less

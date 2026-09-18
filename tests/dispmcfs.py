@@ -23,8 +23,15 @@ of the other cannot answer.
 import sys
 import time
 
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+import os
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 
 from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
                       VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
@@ -171,6 +178,10 @@ def main():
         os88marty.settle(m, card=sec)
         forced = state(m, mo, "after a forced repaint", g, both)
         shot(m, sec, "4-forced-herc")
+        shot(m, pri, "4-forced-vga")    # ...AND THE VGA'S, which is the card
+                                        # the comparison below fails on and
+                                        # the one capture this row never kept:
+                                        # 3-after-vga had no partner to diff
         # --- and the MODE-SETTING bracket still collapses (SPEC.md 39.18.3)
         # The collapse moved into fsx_mode, so this is the path that has to
         # keep it: back on the VGA, Mode X must still take the machine down
@@ -221,13 +232,30 @@ def main():
             # below it. The Hercules has no bar and is compared whole.
             w0 = m.fbuf(card=c)[0]
             base = skip * w0 * 3
-            n = sum(1 for i in range(base, len(after["fb"][c]), 3)
-                    if after["fb"][c][i:i + 3] != forced["fb"][c][i:i + 3])
+            # **THE BOUNDING BOX AND NOT ONLY THE COUNT.** A bare "240
+            # differing pixel(s)" names no suspect: this row was
+            # INTERMITTENT at 1/5 and the count alone could not say whether
+            # the difference was a window, the dock strip, a drive zone or
+            # the desktop dither, so every reading of it was a guess. The
+            # box, the count and the first row are three lines of arithmetic
+            # over a comparison that is already being made.
+            n, x1, y1, x2, y2 = 0, 1 << 15, 1 << 15, -1, -1
+            for i in range(base, len(after["fb"][c]), 3):
+                if after["fb"][c][i:i + 3] == forced["fb"][c][i:i + 3]:
+                    continue
+                px = i // 3
+                x, y = px % w0, px // w0
+                n += 1
+                x1, y1 = min(x1, x), min(y1, y)
+                x2, y2 = max(x2, x), max(y2, y)
             print("   %-9s after the round trip vs a forced repaint: "
                   "%d differing pixel(s)  %s"
                   % (name, n, "ok" if not n else "*** STALE ***"))
             if n:
-                bad.append("%s is stale after the round trip" % name)
+                print("   %-9s   they sit in (%d,%d)..(%d,%d), %dx%d"
+                      % ("", x1, y1, x2, y2, x2 - x1 + 1, y2 - y1 + 1))
+                bad.append("%s is stale after the round trip, %d pixel(s) in "
+                           "(%d,%d)..(%d,%d)" % (name, n, x1, y1, x2, y2))
         print()
         print("FAIL: %s" % "; ".join(bad) if bad else
               "PASS: the pointer moves and both cards come back")

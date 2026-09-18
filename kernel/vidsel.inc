@@ -104,7 +104,25 @@ vid_dbg_blk:
 ; What this buys is 256 bytes of the 64KB segment - the scarce guard - that
 ; stop existing when kmain gives the blob back.
 ; =============================================================================
-section .ovlw
+%ifndef KERN_SMALL
+section .ovlw                   ; kern_big: the WINDOW half (SPEC.md 2.5.3) -
+                                ; forfeit at the first mount, and this build's
+                                ; window has room to spare
+%else
+section .ovl                    ; ...and kern_small: the BLOB half instead
+                                ; (SPEC.md 2.5.3.2). Same deadline either way -
+                                ; every caller here runs before drv_boot - so
+                                ; the choice is only about WHOSE bytes: on this
+                                ; kernel `.ovlw` is what sizes the FAT window
+                                ; plus the mount buffers, and those bytes are
+                                ; the listing's. The blob is already read and
+                                ; has room, so the body goes there and the
+                                ; region sheds. `.ovl` is written LAST on
+                                ; purpose: tools/os88ovlchk.py reads SOURCE and
+                                ; cannot evaluate the %ifdef, so it files this
+                                ; block by the arm below - which is the build
+                                ; the check exists to protect
+%endif
 
 ; -----------------------------------------------------------------------------
 ; vid_memchk - is there display RAM at this segment? (SPEC.md 39.11.1)
@@ -1194,12 +1212,13 @@ vid_unblank_kind:
                                 ; duplicated exactly, which this file's own
                                 ; header says should not be
 vid_bk:
-    push ax
-    push es                     ; DH survives the CGA arm's `mov ax, 0x0040`,
-                                ; which is why the bit lives there. NOTHING
-                                ; BELOW MAY WRITE DH BEFORE THE ARM THAT READS
-                                ; IT - the mono arm's `mov dx, 0x3BF` does,
-                                ; which is why it tests DH first
+    push ax                     ; NOTHING BELOW MAY WRITE DH BEFORE THE ARM
+                                ; THAT READS IT - the mono arm's
+                                ; `mov dx, 0x3BF` does, which is why it tests
+                                ; DH first. NO `push es` ANY MORE: the CGA arm
+                                ; below reads a kernel byte where it used to
+                                ; reach into the BIOS data area (SPEC.md
+                                ; 39.18.1.1), and nothing else here names ES
     cmp al, VID_HERC
     je .mono
 %ifdef GFX_VGA                  ; no planar adapter in the build: [vid_kind]
@@ -1207,13 +1226,21 @@ vid_bk:
     cmp al, 2                   ; is inside %ifdef KERN_BIG, so no caller can
     jae .planar                 ; pass either. ONE compare for both planar
 %endif                          ; kinds: dec maps VGA -> FF, HERC -> 0,
-    mov ax, 0x0040              ; CGA -> 1, EGA -> 2, so planar is `al >= 2`
-                                ; unsigned. AL is dead below - the CGA arm's
-                                ; `mov ax, 0x0040` is the next thing to write
-                                ; it. Neither planar kind decodes 3D8h: both
-                                ; blank through the Attribute Controller
-    mov es, ax
-    mov al, [es:0x0065]         ; the BIOS's shadow of 3D8h...
+                                ; CGA -> 1, EGA -> 2, so planar is `al >= 2`
+                                ; unsigned. AL is dead below - the load into
+                                ; it is the next thing to write it. Neither
+                                ; planar kind decodes 3D8h: both blank through
+                                ; the Attribute Controller
+    mov al, [vid_cgamode]       ; OUR OWN shadow of 3D8h and NOT the BIOS's at
+                                ; 40:65h (SPEC.md 39.18.1.1): a BIOS keeps one
+                                ; of those and a machine has two cards, so the
+                                ; ROM's copy describes whichever card it last
+                                ; set a mode on - which after an fsx bracket's
+                                ; `int 10h` on the OTHER display is not this
+                                ; one. Reading it there put a CGA into 80x25
+                                ; text with blink on, over a 6845 still timed
+                                ; for mode 6, and the field saw the dithered
+                                ; desktop come back as green flicker
     and al, ~8                  ; ...minus the video-enable bit...
     or al, dh                   ; ...plus the one this direction wants. The
                                 ; unblank FORCES the bit where it used to
@@ -1252,10 +1279,22 @@ vid_bk:
                                 ; NONZERO, so this body's own direction byte
                                 ; - 0 dark, 8 lit - is already the argument
 .out:
-    pop es
     pop ax
     pop dx
     ret
+
+vid_cgamode db 0x1E             ; THE CGA'S OWN 3D8h VALUE (SPEC.md 39.18.1.1),
+                                ; banked by vid_setmode straight after the
+                                ; card's `int 10h AX=0006h` - the one moment
+                                ; the BIOS's 40:65h is known to describe THIS
+                                ; card. The initial value is mode 6's, which is
+                                ; the only mode the kernel ever puts a CGA in,
+                                ; so a blank/unblank pair that runs before any
+                                ; mode set (vid_disp_init's Single arm darks
+                                ; the other card at boot) is at least
+                                ; self-consistent. OUTSIDE this file's
+                                ; %ifdef KERN_BIG: the idle blanker is not a
+                                ; dual-display feature, and neither is this
 
 
 ; -----------------------------------------------------------------------------
@@ -1739,6 +1778,15 @@ vid_fsx_leave:
     mov al, [fsx_vkind]
     mov [vid_kind], al
     call vid_apply
+    call vid_equip              ; 40:10 BACK TO THE PRIMARY'S KIND, because a
+                                ; bracket on a COLOUR second display left it
+                                ; saying colour: vid_text's own arm flips it so
+                                ; that the ROM's mode set - and SPEC.md 96.33's
+                                ; teletype under it - reach the card the app is
+                                ; on (SPEC.md 39.19.4.1). vid_disp_init's
+                                ; .extend arm is this same three-call pattern
+                                ; for the same reason, and leaving the flag is
+                                ; what SPEC.md 39.20's Restart then reads
     mov al, [fsx_vndisp]
     mov [vid_ndisp], al
     mov byte [vid_cur], 0

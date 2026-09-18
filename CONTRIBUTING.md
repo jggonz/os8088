@@ -82,17 +82,26 @@ un-buildable for everyone whose only assembler is 3.x. That has happened
 it assembles the shipped set, `kern_small`, the `APP_SMALL` package arms,
 `kern_emu` and every knob arm with an nasm 3, in a build tree of its own.
 It needs one to run and **SKIPS** without one, which on Linux means building
-it — no distribution packages a 3.x yet:
+it — no distribution packages a 3.x yet (Ubuntu noble is 2.16.01, Debian
+trixie 2.16.03). One command:
 
 ```
-git clone --depth 1 -b nasm-3.02 https://github.com/netwide-assembler/nasm.git
-cd nasm && sh autogen.sh && ./configure && make
-export OS88_NASM3=$PWD/nasm
+tools/setup-nasm3.sh
 ```
 
-On macOS `brew install nasm` already gives 3.x, and the row finds it as
-plain `nasm` with nothing exported. `python3 tools/os88soak.py check` says
-which of the two you are.
+It probes first, so on macOS — where `brew install nasm` is already 3.x —
+it exits at once having done nothing; on Linux it clones, builds and prints
+the `export OS88_NASM3=` line to paste. `python3 tools/os88soak.py check`
+says which of the two you are in.
+
+**Do not do it by hand in a container.** The four lines that used to be
+printed here are correct and still do not work there, because the route has
+three traps that each report as something else — a proxy that refuses
+`nasm.us` while GitHub's own 403s make it look like the whole network is
+down, a git tree that ships no `configure`, and a `/dev/null` that is a
+regular file and silently corrupts the `config.status` autoconf generates.
+The script checks all three *before* it clones;
+docs/MARTYPC-DEBUG.md's *An nasm 3 in a fresh container* is the account.
 
 ### Linux
 

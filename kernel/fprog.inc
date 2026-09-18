@@ -473,77 +473,28 @@ fpg_arm:
     call cursor_hide
 .lit:
 %ifndef NOCURDISK
-    ; --- ...OR IT IS ALREADY DOWN, AND AN ARROW THAT IS DOWN CANNOT TRACK ---
-    ; (SPEC.md 7.4.3.1) The case above is the pointer sitting ON the bar. This
-    ; is the other one, and it is most of the machine: a handler that PAINTED
-    ; before it read - the Control Panel, a file dialog, a copy repainting its
-    ; list - spent gfx_lock's promised hide on the way past (SPEC.md 7.1.4),
-    ; so by the time any of the disk work starts the arrow is off the glass and
-    ; [cur_level] < 0 keeps the ISR off it for the rest of the hold.
-    ;
-    ; PUT IT BACK, AND PUT THE PROMISE BACK WITH IT. Re-arming [cur_lazy] is
-    ; what makes this need no new state and no debt to settle: the arrow is up
-    ; and owed a hide, which is exactly what that byte means, so every existing
-    ; consumer takes over unchanged - a later unclipped painter's cur_unlazy
-    ; hides it, a clipped one's cur_lazyck decides, and gfx_unlock's own tail
-    ; ends it either way. Without that re-arm this would be a lit arrow with no
-    ; promise outstanding, and the first painter after the transfer would draw
-    ; straight through it (SPEC.md 7.1.4's permanent smear).
-    ;
-    ; Five conditions, and the first two are the ones that make the rest sound:
-    cmp byte [fsx_task], 0xFF
-    jne .curdone                ; ANY fsx bracket owns the pointer (SPEC.md
-                                ; 53.6): .no above refuses a FOREIGN mode for
-                                ; the widget, but a same-mode bracket (53.7 -
-                                ; Paint fullscreen, Cyclone's high-score save)
-                                ; keeps the desktop's geometry and the app
-                                ; owns every pixel of it, so the system arrow
-                                ; has no business on that raster, and an app
-                                ; writing VRAM directly would never spend the
-                                ; re-armed promise - the stale save-under is
-                                ; restored at the bracket's end
-    cmp byte [gfx_lock_flag], 0
-    je .curdone                 ; HELD, and .no above already refused another
-                                ; task's - so it is ours. A free lock needs
-                                ; none of this: nothing spent the promise,
-                                ; because there was no hold to make one
-    cmp byte [cur_level], -1
-    jne .curdone                ; not hidden, or hidden more than once - a
-                                ; refcount we did not take is not ours to undo
-    cmp word [wm_clip_n], 0
-    jne .curdone                ; a region is armed, so the ISR will not move
-                                ; it anyway (SPEC.md 7.4.2) and lit-but-frozen
-                                ; is the thing 7.1.4.3 rejected
-    cmp word [mouse_y], MBAR_H + CUR_GH
-    jb .curdone                 ; [mouse_y] and NOT [cur_drawn_y]: the drawn
-                                ; position is meaningless while the arrow is
-                                ; hidden, and cursor_show draws at the live one
-    call cur_busy_take          ; ...AND IT COMES BACK AS AN HOURGLASS (SPEC.md
-                                ; 7.5). THE FREE HALF OF THE FEATURE: this
-                                ; site's whole reason for existing is that the
-                                ; pointer is off the glass and about to be put
-                                ; back, so the picture changes inside a
-                                ; cursor_show that was already going to happen
-                                ; and the machine draws exactly what it drew
-                                ; before. The five compares above are already
-                                ; the answer to "may a system pointer be on
-                                ; this screen at all", which is the same
-                                ; question the hourglass has to ask
-    mov byte [cur_lazy], 1
-    call cursor_show
-.curdone:
-    call cur_busy_on            ; **AND THE POINTER SAYS SO** (SPEC.md 7.5.3).
-                                ; BELOW the block above rather than inside it,
-                                ; because that block covers ONE of the three
-                                ; states this is found in and MEASURED ZERO of
-                                ; three arms in a session: a package launch and
+    call cur_busy_on            ; **AND THE POINTER SAYS SO** (SPEC.md 7.5.3),
+                                ; and an arrow that is already DOWN comes back
+                                ; with it (SPEC.md 7.4.3.1). The case above is
+                                ; the pointer sitting ON the bar; this is the
+                                ; other one, and it is most of the machine: a
+                                ; handler that PAINTED before it read - the
+                                ; Control Panel, a file dialog, a copy
+                                ; repainting its list - spent gfx_lock's
+                                ; promised hide on the way past (SPEC.md
+                                ; 7.1.4), so by the time the disk work starts
+                                ; the arrow is off the glass and [cur_level] <
+                                ; 0 keeps the ISR off it for the rest of the
+                                ; hold. cur_busy_on's DOWN arm is that block
+                                ; whole - the same tests, the re-armed promise
+                                ; and the show - with the clock riding inside
+                                ; a show that was going to happen anyway. Its
+                                ; LIT arm is the case that block never saw and
+                                ; which measured 2 of 3: a package launch and
                                 ; an assoc open both read with the lock FREE
-                                ; (SPEC.md 7.4.2.1), where there is no promised
-                                ; hide to spend and no show owed - the arrow is
-                                ; simply lit and tracking. The take inside that
-                                ; block stays, so when it DOES fire the picture
-                                ; changes inside a show that was going to
-                                ; happen and this call is four instructions.
+                                ; (SPEC.md 7.4.2.1), where nothing spent a
+                                ; promise and the arrow is simply lit and
+                                ; tracking.
                                 ;
                                 ; **INSIDE THE %ifndef, and tests/curdisk.py is
                                 ; why** (SPEC.md 7.5.3.1): NOCURDISK=1 is the

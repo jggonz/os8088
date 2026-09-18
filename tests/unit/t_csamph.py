@@ -32,11 +32,12 @@ and no emulator:
    Santos Dumont and no heading has them all in front - so the measure is
    comparative and carries a MARGIN.  The margin is defended by the two
    numbers either side of it rather than picked.  With the strips laid
-   right, the worst location is SDU, where reversing would gain **29.9
-   degrees** - a real trade, Corcovado coming into view as Sugarloaf goes
-   out - and it is the only one over 5.  Laid wrong, the four that can be
-   laid wrong gain **76.2 (SFO), 115.5 (Issy), 139.2 (LBG) and 166.8
-   (LCY)**.  45 sits in the middle of the gap between 29.9 and 76.2.
+   right, the worst location WAS SDU, where reversing gained **29.9
+   degrees** - a real trade, Corcovado coming into view as Sugarloaf went
+   out - until SPEC.md 88.7.7.5 laid that strip down the bay at Sugarloaf;
+   reversing it now LOSES 18.6, and no laid-right strip gains anything.
+   Laid wrong, the four that can be laid wrong gain **76.2 (SFO), 115.5
+   (Issy), 139.2 (LBG) and 166.8 (LCY)**.  45 sits in the gap below 76.2.
 
 --clobber-hdg <loc> reverses one location's strip in the reader, which is the
 "break it on purpose" arm: it must go red on LBG, LCY and SFO and must NOT on

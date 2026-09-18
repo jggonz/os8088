@@ -193,7 +193,7 @@ def build_disk(projects, errs):
     # LOAD, and a 360KB drive cannot step there. What the row reported was
     # "LOOM opens on the double-click" failing with no toast, no instance and
     # ld_status still 0, nine times over, which reads as an association or a
-    # double-click problem and is neither. docs/plans/HANDOFF-SOAK-FINDINGS.md E6
+    # double-click problem and is neither. The pass-3 soak
     # spent three runs on the host-speed theory the row's own message
     # proposes; the row was never able to load the package at all.
     #

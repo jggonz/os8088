@@ -127,10 +127,14 @@ spk_tone:
                                 ; never read
     pushf
     cli
-    mov al, 0xB6                ; ch2, lobyte/hibyte, mode 3 (square wave)
-    out 0x43, al
-    mov al, bl
-    out 0x42, al
+    cmp byte [snd_ch2mode], 1   ; ...AND ONLY WHEN A TONE IS NOT ALREADY
+    je .count                   ; SOUNDING (SPEC.md 34.1.1): the control word
+    mov al, 0xB6                ; RESTARTS the wave, so writing it on every
+    out 0x43, al                ; change makes a glide wobble instead of glide.
+.count:                         ; Mode 3 takes a new count at the end of the
+    mov al, bl                  ; current half-cycle, which is a clean retune,
+    out 0x42, al                ; and mode 3 is this chip's resting state -
+                                ; spk_pcm_idle latches it back (34.4)
     mov al, bh
     out 0x42, al
     in al, 0x61                 ; gate + speaker data on; upper bits kept

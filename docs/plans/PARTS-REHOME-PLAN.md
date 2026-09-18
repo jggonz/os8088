@@ -76,7 +76,7 @@ goes, and the only thing that can do that is the caller — `ld_start`. That is
 what forces the "tell the kernel and return" shape rather than a purely
 package-side one.
 
-### 2.2 `OSAPI_PKG_RUN` is already out of scope
+### 2.2 `OSAPI_PKG_START` is already out of scope
 
 The second launch door refuses parted images outright —
 `test byte [es:si+LD_H_FLAGS], 4 / jnz .bad`, *"parts, and no file to read

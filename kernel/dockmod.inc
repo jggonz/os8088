@@ -1,29 +1,141 @@
 ; Advanced Dock runtime, optional and pinned while a setting needs it.
-; DS = KERNEL_SEG. The sole private entry takes BP = an operation offset
-; resolved by this same assembly. Every caller banks BP; all bodies are near.
+; DS = KERNEL_SEG. The image publishes TWO entries and neither of them is an
+; operation: dkx_hook points dock.inc's dkv at this image and dkx_unhook puts
+; the kernel's own bodies back. After that the kernel reaches an operation by
+; far-jumping straight at its landing pad, so there is no dispatcher here, no
+; index to carry and no BP to bank - and the kernel keeps neither a second
+; copy of the basic table nor a per-operation trampoline, which is where
+; SPEC.md 30.5's routing bytes went.
 %ifdef DOCK_OPT                 ; kern_big only (SPEC.md 30.5)
 section .modk
 modk_hdr:
     dw 0x384F
     db MOD_VER, MOD_DOCK
-    dw BUILD_NUM, MOD_STAMP, modk_end, 1
-    dw dkx_entry
-    times MOD_NENT-1 dw 0
-dkx_entry:
-    call [cs:bp+dkx_tab]
+    dw BUILD_NUM, MOD_STAMP, modk_end, 2
+    dw dkx_hook, dkx_unhook
+    times MOD_NENT-2 dw 0
+
+; -----------------------------------------------------------------------------
+; dkx_hook / dkx_unhook - take dock.inc's dkv over, and give it back
+; in:  nothing; the graphics lock is held by dkf_apply's caller, so no
+;      operation can be executing while the table is rewritten (SPEC.md 30.5)
+; out: CF = 0; every register preserved
+;
+; THE TABLE IS WRITTEN FROM HERE BECAUSE THE BASIC ADDRESSES ARE KNOWN HERE.
+; A module is refused unless it was assembled with this very kernel - the
+; build number AND the layout stamp both (SPEC.md 2.8.2) - so dkb_tab below
+; is not a guess about the kernel's offsets, it is the kernel's own offsets.
+; The kernel therefore stores the basic table ONCE, as dkv's rest state, and
+; never needs a copy to restore from.
+dkx_hook:
+    push bx
+    push si
+    mov bx, cs                  ; ...this image
+    mov si, dkxf_tab
+    jmp short dkx_vset
+dkx_unhook:
+    push bx
+    push si
+    call dkx_drop               ; an open strip is forgotten on the way out -
+                                ; done HERE rather than through a resident
+                                ; cw_ shim, since we are about to be freed
+    mov bx, KERNEL_SEG          ; ...and back to the kernel's own
+    mov si, dkb_tab
+dkx_vset:
+    push ax
+    push cx
+    push di
+    mov di, dkv                 ; DS is KERNEL_SEG, so the WRITES are plain;
+    mov cx, DKI_N               ; the source is ours and is read through CS
+    cld
+.l:
+    cs lodsw
+    mov [di], ax
+    mov [di+2], bx
+    add di, 4
+    loop .l
+    pop di
+    pop cx
+    pop ax
+    pop si
+    pop bx
+    clc
     retf
-dkx_tab:                        ; dock.inc's DKI_* order
-    dw dkx_geom, dkx_band, dkx_force, dkx_paint, dkx_px_hit
-    dw dkx_click, dkx_rclick, dkx_slot_rect, dkx_force_r, dkx_drop
-    dw dkx_pass, dkx_gfx_hole_arm, dkx_hole_sub, dkx_hole_win
-%if ($ - dkx_tab) != DKI_N * 2
-  %error "dkx_tab and dock.inc's DKI_* indices disagree"
+
+; --- SPEC.md 30.5/30.6's ADVANCED GEOMETRY, in the image that uses it -------
+; Every one of these is written by dkx_geom or dkx_live_set and read by
+; nothing outside this file, so it lives HERE and not in the kernel's `.bss`:
+; a machine with no DOCK.DRV mounted - which is every machine until somebody
+; moves the strip - carries none of it. That is why the references above are
+; spelled `[cs:...]`: DS is the kernel's throughout (SPEC.md 2.6), so ours is
+; the segment that needs naming. The kernel keeps only what IT reads: the
+; live rect, its two crosses, [dock_side], [dock_up], [dock_c0] and
+; [dock_thk].
+dock_sx1:   dw 0                ; the strip's whole rect - SEVEN CONSECUTIVE
+dock_sy1:   dw 0                ; WORDS, which dkx_live_set copies over the
+dock_sx2:   dw 0                ; kernel's live block in one rep movsw
+dock_sy2:   dw 0
+dock_frc:   dw 0                ; ...its rule, ACROSS the long axis
+dock_ffc1:  dw 0                ; ...and its field, across
+dock_ffc2:  dw 0
+dock_ffar:  dw 0                ; its outer edge, where a hidden line stands
+dock_la1:   dw 0                ; the long axis's extent: x on the bottom
+dock_la2:   dw 0                ; strip, y on a side
+dock_a0:    dw 0                ; tile 0's along coordinate
+dock_astep: dw 0                ; along pitch
+dock_alen:  dw 0                ; along length of one tile
+dock_cap:   db 0                ; tiles the strip holds (SPEC.md 30.5.1)
+dock_pos:   times INST_MAX db 0 ; which slot each position shows (dkx_map)
+dock_hidden: db 0               ; auto and not open: the line is live
+dock_auto:  db 0                ; non-0: the strip hides
+dock_timer_on:   db 0           ; hover while hidden, linger while open
+dock_timer_tick: dw 0           ; modular start tick; survives cancellation
+%if dock_ffc2 - dock_sx1 != 12
+  %error "dkx_live_set copies seven consecutive geometry words"
 %endif
+
+dkb_tab:                        ; the KERNEL's bodies, in dock.inc's DKI_* order
+    dw dkb_geom, dkb_band, db_force, db_paint, db_px_hit
+    dw db_click, db_rclick, db_tile_rect, dkb_force_r, dkb_ret
+    dw dkb_ret, dkb_ret, dkb_clc, dkb_clc
+dkxf_tab:                       ; ...and this image's landing pads, likewise
+    dw dkxf_geom, dkxf_band, dkxf_force, dkxf_paint, dkxf_px_hit
+    dw dkxf_click, dkxf_rclick, dkxf_slot_rect, dkxf_force_r, dkxf_drop
+    dw dkxf_pass, dkxf_hole_arm, dkxf_hole_sub, dkxf_hole_win
+%if ($ - dkxf_tab) != DKI_N * 2 || (dkxf_tab - dkb_tab) != DKI_N * 2
+  %error "dkb_tab/dkxf_tab and dock.inc's DKI_* indices disagree"
+%endif
+
+; The landing pads. The kernel far-JUMPS here, so the caller's own near
+; return address is still the top of the stack: the pad near-calls the body,
+; which returns normally, and then goes home to a bare `ret` in the kernel -
+; a far jump, because CS is this image's until it does. Nothing here touches
+; a flag, so the CF an operation answers with arrives intact.
+%macro DKXPAD 1
+    call %1
+    jmp short dkxf_home
+%endmacro
+dkxf_geom:      DKXPAD dkx_geom
+dkxf_band:      DKXPAD dkx_band
+dkxf_force:     DKXPAD dkx_force
+dkxf_paint:     DKXPAD dkx_paint
+dkxf_px_hit:    DKXPAD dkx_px_hit
+dkxf_click:     DKXPAD dkx_click
+dkxf_rclick:    DKXPAD dkx_rclick
+dkxf_slot_rect: DKXPAD dkx_slot_rect
+dkxf_force_r:   DKXPAD dkx_force_r
+dkxf_drop:      DKXPAD dkx_drop
+dkxf_pass:      DKXPAD dkx_pass
+dkxf_hole_arm:  DKXPAD dkx_gfx_hole_arm
+dkxf_hole_sub:  DKXPAD dkx_hole_sub
+dkxf_hole_win:  DKXPAD dkx_hole_win
+dkxf_home:
+    jmp KERNEL_SEG:dkb_ret
 dkx_force:
     push ax
     push cx
-    mov ax, [dock_la1]          ; THE WHOLE STRIP: its along range, whichever
-    mov cx, [dock_la2]          ; edge it stands on (SPEC.md 30.5)
+    mov ax, [cs:dock_la1]          ; THE WHOLE STRIP: its along range, whichever
+    mov cx, [cs:dock_la2]          ; edge it stands on (SPEC.md 30.5)
     jmp dkx_force_r.union
 
 ; dkx_force_r - ...only the part of it inside rect AX,BX,CX,DX was
@@ -47,21 +159,21 @@ dkx_force_r:
     call dkx_live_hit          ; does the damage reach the strip at all?
     jnc .out
 %ifdef REDRAWFULL
-    mov ax, [dock_la1]          ; REFERENCE BUILD: every damage is the whole
-    mov cx, [dock_la2]          ; strip, the behaviour this replaced
+    mov ax, [cs:dock_la1]          ; REFERENCE BUILD: every damage is the whole
+    mov cx, [cs:dock_la2]          ; strip, the behaviour this replaced
 %else
     cmp byte [dock_side], DOCK_P_BOTTOM
     je .clamp                   ; bottom: the along axis IS x
     mov ax, bx                  ; a side: it is y
     mov cx, dx
 .clamp:
-    cmp ax, [dock_la1]
+    cmp ax, [cs:dock_la1]
     jge .c1
-    mov ax, [dock_la1]
+    mov ax, [cs:dock_la1]
 .c1:
-    cmp cx, [dock_la2]
+    cmp cx, [cs:dock_la2]
     jle .union
-    mov cx, [dock_la2]
+    mov cx, [cs:dock_la2]
 %endif
 .union:                         ; dkx_force enters HERE with its own pushes
     cmp ax, [dock_dx1]          ; SIGNED, because empty is 07FFFh..08000h -
@@ -162,50 +274,50 @@ dkx_geom:
 .have:
     mov [dock_side], al
     and ah, DOCK_F_AUTO
-    mov [dock_auto], ah
-    mov byte [dock_cap], INST_MAX   ; every tile fits a bottom strip (SPEC.md
+    mov [cs:dock_auto], ah
+    mov byte [cs:dock_cap], INST_MAX   ; every tile fits a bottom strip (SPEC.md
                                 ; 30.5.1): 8 + 12*28 = 344 of 640
     mov bx, [vid_pw]
     mov dx, [vid_ph]
     mov cx, [vid_phm1]          ; every strip ends on the primary's last row
-    mov [dock_sy2], cx
-    mov [dock_la2], cx          ; ...which is a side strip's along end too
+    mov [cs:dock_sy2], cx
+    mov [cs:dock_la2], cx          ; ...which is a side strip's along end too
     or al, al
     jnz .side
 
     ; --- bottom: the geometry this module always had --------------------------
     xor ax, ax
-    mov [dock_sx1], ax
-    mov [dock_la1], ax
-    mov [dock_ffc2], cx         ; the field runs to the last row...
-    mov [dock_ffar], cx         ; ...which is where a hidden strip's line is
+    mov [cs:dock_sx1], ax
+    mov [cs:dock_la1], ax
+    mov [cs:dock_ffc2], cx         ; the field runs to the last row...
+    mov [cs:dock_ffar], cx         ; ...which is where a hidden strip's line is
     mov ax, [vid_pwm1]
-    mov [dock_sx2], ax
-    mov [dock_la2], ax
+    mov [cs:dock_sx2], ax
+    mov [cs:dock_la2], ax
     mov ax, dx
     sub ax, DOCK_H
-    mov [dock_sy1], ax
-    mov [dock_frc], ax          ; the rule is the strip's first row
+    mov [cs:dock_sy1], ax
+    mov [cs:dock_frc], ax          ; the rule is the strip's first row
     inc ax
-    mov [dock_ffc1], ax
+    mov [cs:dock_ffc1], ax
     inc ax
     inc ax
     mov [dock_c0], ax           ; tile top = rule + 3
-    mov word [dock_a0], DOCK_X0
-    mov word [dock_astep], DOCK_STEP
-    mov word [dock_alen], DOCK_TILE_W
+    mov word [cs:dock_a0], DOCK_X0
+    mov word [cs:dock_astep], DOCK_STEP
+    mov word [cs:dock_alen], DOCK_TILE_W
     mov ax, DOCK_H
     call .thick
     jmp .done
 
 .side:
     mov ax, MBAR_H
-    mov [dock_sy1], ax
-    mov [dock_la1], ax
+    mov [cs:dock_sy1], ax
+    mov [cs:dock_la1], ax
     add ax, DOCK_SY0
-    mov [dock_a0], ax
-    mov word [dock_astep], DOCK_SSTEP
-    mov word [dock_alen], DOCK_TILE_H
+    mov [cs:dock_a0], ax
+    mov word [cs:dock_astep], DOCK_SSTEP
+    mov word [cs:dock_alen], DOCK_TILE_H
     mov ax, dx                  ; --- HOW MANY TILES THE SIDE HOLDS (SPEC.md
     sub ax, MBAR_H + 2*DOCK_SY0 + DOCK_TILE_H   ; 30.5.1): every one on VGA,
     jb .one                     ; eleven on Hercules and EGA, seven on CGA -
@@ -219,7 +331,7 @@ dkx_geom:
 .one:
     mov al, 1
 .cap:
-    mov [dock_cap], al
+    mov [cs:dock_cap], al
     mov bx, [vid_pw]            ; (the divide spent BX)
     mov ax, DOCK_SW
     call .thick                 ; AX = the reserved thickness
@@ -231,23 +343,23 @@ dkx_geom:
     xor cx, cx                 ; left: the same cross geometry at column zero
     mov dx, DOCK_SW - 1
 .srect:
-    mov [dock_sx1], cx
-    mov [dock_sx2], dx
+    mov [cs:dock_sx1], cx
+    mov [cs:dock_sx2], dx
     mov bx, cx
     add bx, DOCK_SX
     mov [dock_c0], bx
-    mov [dock_frc], cx         ; rule faces inward on the right strip
-    mov [dock_ffar], dx
+    mov [cs:dock_frc], cx         ; rule faces inward on the right strip
+    mov [cs:dock_ffar], dx
     inc cx
     cmp byte [dock_side], DOCK_P_LEFT
     jne .field
     dec cx
-    mov [dock_ffar], cx        ; left: outer edge at zero, rule at the far end
-    mov [dock_frc], dx
+    mov [cs:dock_ffar], cx        ; left: outer edge at zero, rule at the far end
+    mov [cs:dock_frc], dx
     dec dx
 .field:
-    mov [dock_ffc1], cx
-    mov [dock_ffc2], dx
+    mov [cs:dock_ffc1], cx
+    mov [cs:dock_ffc2], dx
 
 .done:
     mov [dock_thk], ax          ; (wm_dock_snap's half-a-strip test)
@@ -260,7 +372,7 @@ dkx_geom:
     ret
 
 .thick:                         ; AX = the strip's width -> AX = what it
-    cmp byte [dock_auto], 0     ; RESERVES: all of it, or the line
+    cmp byte [cs:dock_auto], 0     ; RESERVES: all of it, or the line
     je .tout
     mov ax, 1
 .tout:
@@ -298,8 +410,8 @@ dkx_band:
 
 ; -----------------------------------------------------------------------------
 ; dkx_live_set - the LIVE rect, rule, field and cross, from [dock_up]
-; in:  the strip's geometry (dkx_geom), [dock_auto], [dock_up]
-; out: [dock_hidden] and the live set; all registers preserved
+; in:  the strip's geometry (dkx_geom), [cs:dock_auto], [dock_up]
+; out: [cs:dock_hidden] and the live set; all registers preserved
 ;
 ; SPEC.md 30.6. Hidden is "auto and not open", and while it is the live strip
 ; is the outer edge's one line: its rect, a rule that IS the line, and no field
@@ -313,22 +425,26 @@ dkx_live_set:
     push di
     push es
     push ds
-    pop es
+    push ds
+    pop es                    ; ES = the kernel's, where the LIVE block is
+    push cs
+    pop ds                    ; DS = ours, where the STRIP block is (30.5)
     mov si, dock_sx1
     mov di, dock_lx1
     mov cx, 7                 ; rect, rule, and field: identical word layouts
     cld
     rep movsw
+    pop ds
     pop es
     pop di
     pop si
-    mov byte [dock_hidden], 0
-    cmp byte [dock_auto], 0
+    mov byte [cs:dock_hidden], 0
+    cmp byte [cs:dock_auto], 0
     je .cross
     cmp byte [dock_up], 0
     jne .cross
-    inc byte [dock_hidden]
-    mov ax, [dock_ffar]         ; the line: the outer edge
+    inc byte [cs:dock_hidden]
+    mov ax, [cs:dock_ffar]         ; the line: the outer edge
     mov [dock_rc], ax
     mov word [dock_fc1], 1      ; ...and no field: an empty cross
     mov word [dock_fc2], 0
@@ -504,12 +620,12 @@ dkx_paint:
                                 ; bytes and two register compares an iteration
                                 ; instead of two memory ones: the two `mov`s
                                 ; here cost exactly the four the body saves
-    mov ax, [dock_a0]           ; ALONG the strip, whichever edge it is on
+    mov ax, [cs:dock_a0]           ; ALONG the strip, whichever edge it is on
     mov di, dock_ck
     mov cx, INST_MAX
 .zap:
     mov bx, ax
-    add bx, [dock_alen]
+    add bx, [cs:dock_alen]
     dec bx
     cmp bx, dx
     jb .znext                   ; wholly left of the damage
@@ -522,17 +638,18 @@ dkx_paint:
                                 ; own example, a window closing in one corner)
     mov word [di], 0
 .znext:
-    add ax, [dock_astep]
+    add ax, [cs:dock_astep]
     inc di
     inc di
     loop .zap
 
 .scan:
-    cmp byte [dock_hidden], 0   ; a hidden strip has the line and no tiles
+    cmp byte [cs:dock_hidden], 0   ; a hidden strip has the line and no tiles
     jne .tdone                  ; (SPEC.md 30.6): the keys keep what they were,
                                 ; and the reveal forces the whole strip
     call dkx_map               ; which record each POSITION shows (30.5.1)
-    mov si, dock_pos            ; SI walks the positions
+    mov si, dock_pos            ; SI walks the positions - OURS, so the read
+                                ; below carries the override (SPEC.md 30.5)
     mov bx, dock_ck             ; ...and ITS KEY BESIDE IT: BX walks the side
                                 ; table rather than indexing it, which spends
                                 ; no shift and no 16-bit displacement per
@@ -546,7 +663,7 @@ dkx_paint:
     xor cx, cx                  ; CX = the POSITION
 .tile:
     xor di, di                  ; DI = the record it shows, 0 = none
-    mov al, [si]
+    mov al, [cs:si]
     cmp al, 0FFh
     je .key
     call KERNEL_SEG:cw_inst_ptr
@@ -784,14 +901,14 @@ dkx_key:
 ; out: AX = x, BX = y
 ; clobbers: the outputs and flags
 ;
-; ALONG the strip by [dock_astep] from [dock_a0], and at [dock_c0] ACROSS it
+; ALONG the strip by [cs:dock_astep] from [cs:dock_a0], and at [dock_c0] ACROSS it
 ; (SPEC.md 30.5): x and y on the bottom strip, y and x on a side.
 ; -----------------------------------------------------------------------------
 dkx_tile_xy:
     push dx
     mov ax, cx
-    mul word [dock_astep]       ; index <= 11 and a step <= 28: no DX
-    add ax, [dock_a0]
+    mul word [cs:dock_astep]       ; index <= 11 and a step <= 28: no DX
+    add ax, [cs:dock_a0]
     mov bx, [dock_c0]
     pop dx
     jmp dkx_tile_swap          ; bottom: AX along = x. A side: exchange
@@ -980,25 +1097,25 @@ dkx_hit:
     jc .miss
 
     xor di, di                  ; in the strip, no tile yet
-    cmp byte [dock_hidden], 0
+    cmp byte [cs:dock_hidden], 0
     jne .in                     ; the line: consumed, and no tile on it
     mov ax, cx                  ; the ALONG coordinate (SPEC.md 30.5): x on the
     cmp byte [dock_side], DOCK_P_BOTTOM
     je .along                   ; bottom strip, y on a side
     mov ax, dx
 .along:
-    sub ax, [dock_a0]           ; before the first tile (unsigned borrow)
+    sub ax, [cs:dock_a0]           ; before the first tile (unsigned borrow)
     jb .in
-    mov bl, [dock_astep]        ; slot = (along - a0) / step
+    mov bl, [cs:dock_astep]        ; slot = (along - a0) / step
     div bl                      ; AL = slot, AH = within-slot offset
-    cmp ah, [dock_alen]         ; in the gap between tiles?
+    cmp ah, [cs:dock_alen]         ; in the gap between tiles?
     jae .in
     cmp al, INST_MAX            ; past the last position?
     jae .in
     call dkx_map               ; ...and which SLOT it shows (SPEC.md 30.5.1)
     mov bl, al
     xor bh, bh
-    mov al, [dock_pos+bx]
+    mov al, [cs:dock_pos+bx]
     cmp al, 0FFh
     je .in                      ; none
     call KERNEL_SEG:cw_inst_ptr               ; DI = record (in: AL = index; AX survives)
@@ -1208,11 +1325,11 @@ dkx_close_slot:
 ; -----------------------------------------------------------------------------
 ; dkx_map - which instance SLOT each tile POSITION shows (SPEC.md 30.5.1)
 ; in:  nothing
-; out: [dock_pos] = INST_MAX bytes, a slot or 0FFh; all registers preserved
+; out: [cs:dock_pos] = INST_MAX bytes, a slot or 0FFh; all registers preserved
 ;
 ; A strip that holds every tile keeps SPEC.md 30's stable mapping - position i
 ; IS slot i, holes and all, so quitting one instance never moves another's
-; tile. A side strip on a short screen holds fewer ([dock_cap]: seven on CGA),
+; tile. A side strip on a short screen holds fewer ([cs:dock_cap]: seven on CGA),
 ; and there the live instances PACK in slot order instead, because a hole
 ; would cost a tile the strip does not have. When there are still more live
 ; instances than tiles, the MINIMIZED ones are taken first: the strip is the
@@ -1227,18 +1344,18 @@ dkx_map:
     push di
     xor bx, bx
 .fill:                          ; identity, which is the whole answer when
-    mov [dock_pos+bx], bl       ; every slot has a tile
+    mov [cs:dock_pos+bx], bl       ; every slot has a tile
     inc bx
     cmp bx, INST_MAX
     jb .fill
-    mov dl, [dock_cap]
+    mov dl, [cs:dock_cap]
     cmp dl, INST_MAX
     jae .out
 
     mov al, 0FFh                ; --- packed: nothing yet
     xor bx, bx
 .none:
-    mov [dock_pos+bx], al
+    mov [cs:dock_pos+bx], al
     inc bx
     cmp bx, INST_MAX
     jb .none
@@ -1273,7 +1390,7 @@ dkx_map:
 .take:
     mov si, inst_tab
     xor bx, bx                  ; BL = the slot
-    mov di, dock_pos            ; DI = the next position
+    mov di, dock_pos            ; DI = the next position, in OUR image
 .walk:
     cmp byte [si+I_STATE], 1
     jne .wnext
@@ -1288,7 +1405,7 @@ dkx_map:
     jz .wnext
     dec ah
 .put:
-    mov [di], bl
+    mov [cs:di], bl
     inc di
 .wnext:
     add si, I_RECSZ
@@ -1309,12 +1426,12 @@ dkx_slot_rect:
     call dkx_map
     xor si, si
 .find:
-    cmp [dock_pos+si], cl
+    cmp [cs:dock_pos+si], cl
     je .have
     inc si
     cmp si, INST_MAX
     jb .find
-    mov si, [dock_cap]          ; (a byte, and the word's high half is masked)
+    mov si, [cs:dock_cap]          ; (a byte, and the word's high half is masked)
     and si, 0FFh
     dec si
 .have:
@@ -1333,7 +1450,7 @@ dkx_slot_rect:
 ; the strip is open, round the hole the clip region makes for it (30.6.1).
 ; -----------------------------------------------------------------------------
 dkx_pass:
-    cmp byte [dock_auto], 0
+    cmp byte [cs:dock_auto], 0
     je .ret
     push ax
     push bx
@@ -1376,20 +1493,20 @@ dkx_pass:
     mov bx, DOCK_LEAVE_T
 .count:
     mov ax, [ticks]
-    cmp byte [dock_timer_on], 0
+    cmp byte [cs:dock_timer_on], 0
     jne .elapsed
-    mov [dock_timer_tick], ax
-    inc byte [dock_timer_on]
+    mov [cs:dock_timer_tick], ax
+    inc byte [cs:dock_timer_on]
     jmp short .out
 .elapsed:
-    sub ax, [dock_timer_tick]
+    sub ax, [cs:dock_timer_tick]
     cmp ax, bx
     jb .out
     cmp byte [dock_up], 0
     jne .close
     call dkx_open
 .off:
-    mov byte [dock_timer_on], 0
+    mov byte [cs:dock_timer_on], 0
     jmp short .out
 .close:
     call KERNEL_SEG:cw_gfx_lock
@@ -1428,7 +1545,7 @@ dkx_shut:
 
 ; Forget without drawing: geometry changes, fsx and the saver repaint later.
 dkx_drop:
-    mov byte [dock_timer_on], 0
+    mov byte [cs:dock_timer_on], 0
     cmp byte [dock_up], 0
     je .ret
     mov word [gfx_hole], 0
@@ -1511,8 +1628,12 @@ dkx_hole_win:
 ; dkx_in_strip - CX,DX on the strip's whole rect? CF = 1 no. Preserves all.
 dkx_in_strip:
     push bx
+    push ds                     ; the STRIP block is OURS and the hidden
+    push cs                     ; line's is the kernel's, so dkx_point reads
+    pop ds                      ; whichever DS its caller hands it
     mov bx, dock_sx1
     call dkx_point
+    pop ds
     pop bx
     ret
 

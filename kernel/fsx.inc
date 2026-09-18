@@ -328,6 +328,13 @@ fsx_restore:
     int 0x16
     jmp short .kd
 .kdone:
+    mov byte [kbd_ae], 0        ; ...and the Alt+Enter latch with it (SPEC.md
+                                ; 9.7.1), for the same reason the drain above
+                                ; exists: the keystroke that ENDED an exclusive
+                                ; app must not also reach the window underneath
+                                ; it. A box that leaves full screen on this key
+                                ; would otherwise be handed it again the moment
+                                ; ui_task ran, and go straight back in
     mov di, fsx_evtmp           ; drain the event queue into OUR OWN buffer -
     call evq_drain              ; the loop is shared, the buffer is not
                                 ; (SPEC.md 74.1.1)
@@ -592,6 +599,19 @@ fsx_setbios:
     push di
     push bp
     push es
+    call vid_cga_equip          ; THE THIRD SITE OF SPEC.md 39.19.4's defect,
+                                ; and the same fix: this routine is reached
+                                ; only with a COLOUR [vid_kind] (fsx_capstab
+                                ; gives a Hercules display ids 0 and 4 alone,
+                                ; and both branch away above the xlatb), so on
+                                ; a MONO-primary machine with the bracket on a
+                                ; colour second display 40:10 still says mono
+                                ; and the ROM would force mode 7 and the 3B4h
+                                ; CRTC - retiming the PRIMARY over its own
+                                ; graphics framebuffer and leaving this card
+                                ; untouched. TANK's FSXM_CGA320 (SPEC.md 85.3)
+                                ; is the shipped consumer; vid_fsx_leave puts
+                                ; the flag back (SPEC.md 39.19.4.1)
     xor ah, ah
     int 0x10
     pop es

@@ -430,6 +430,16 @@ eth_setdown:
 ; eth_draw_btns - both of them, in whatever state they are in
 ; in:  the gfx lock is held and [eth_px]/[eth_py] are current
 ; -----------------------------------------------------------------------------
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; A Control Panel page draws its buttons one at a time, so the record is
+; pointed at whichever rect the caller staged. The GESTURE here is the
+; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
+; release-fired; what changed is that the DRAW goes through the control.
+eu_btlbl: dw 0
+eu_btflg: dw 0
+eu_btrec: dw 0, eu_btlbl, eu_btflg, 1, 0, 0, 0, 0
+
 eth_draw_btns:
     push ax
     push bx
@@ -453,7 +463,16 @@ eth_draw_btns:
     jne .rdraw
     or  di, OS88UI_DOWN
 .rdraw:
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [eu_btlbl], si          ; label and DI its flags, so the record takes
+    mov [eu_btflg], di          ; all three and the picture is identical
+    mov [eu_btrec+OS88UI_BT_RECTS], bx
+    mov bx, eu_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     mov bx, eth_r2
     mov si, eu_s_setup
     mov di, OS88UI_FILL
@@ -461,7 +480,16 @@ eth_draw_btns:
     jne .sdraw
     or  di, OS88UI_DOWN
 .sdraw:
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [eu_btlbl], si          ; label and DI its flags, so the record takes
+    mov [eu_btflg], di          ; all three and the picture is identical
+    mov [eu_btrec+OS88UI_BT_RECTS], bx
+    mov bx, eu_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     mov bx, eth_r3
     call eu_bufcap              ; the caption IS the readout: whatever the
     mov di, OS88UI_FILL         ; ladder actually got, not what was asked for
@@ -474,7 +502,16 @@ eth_draw_btns:
     jne .bdraw
     or  di, OS88UI_DOWN
 .bdraw:
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [eu_btlbl], si          ; label and DI its flags, so the record takes
+    mov [eu_btflg], di          ; all three and the picture is identical
+    mov [eu_btrec+OS88UI_BT_RECTS], bx
+    mov bx, eu_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop bx

@@ -96,17 +96,40 @@ FM_SB_W     equ 14              ; scroll bar width
 ; it are the WINDOW's rather than the element's - which is 13.10.1's rule
 ; still holding.
 ;
-; **THE RATE DEFAULTS TO 0 AND THAT IS NOT A COP-OUT.** A scroll here is
+; **THE 8086 RATE IS 0 AND THAT IS NOT A COP-OUT.** A scroll here is
 ; fm_scroll_by - a gfx_scroll blit plus a relettering of every newly exposed
 ; row - and PERFORMANCE.md prices one 78-cell row at ~71 ms on a 4.77 MHz
 ; 8088. A thumb dragged the length of a 200-file listing with the view
 ; following would be seconds of repaint behind a hand that had already
 ; stopped: PERFORMANCE.md Part 1's VISIBLE REDRAW, which is invisible in an
 ; emulator and is exactly why the rate is a number rather than a cadence.
-; `make SBRATE=2` is the one to try on a fast machine.
+;
+; **A 286 IS A DIFFERENT MACHINE AND GETS A DIFFERENT NUMBER** (13.10.5.4.1).
+; The drag's commit here is `fm_scroll_by` past its blit tier - the whole
+; window - and it is the CHEAPEST of the bars measured for that section:
+; **116.9 ms** on a 4.77 MHz 8088 with a CGA, against Note Pad's 383.8 and
+; TeXPad's 417.3 (docs/reports/SBRATE-COMMIT-COST-2026-09-11.md). It takes
+; the shared number anyway, because 2 has headroom for all three and the
+; difference between 6 and 9 commits a second is not one anybody can see.
+; os88ui_sbrate picks between the two on [cpu_tier] - a FACT, not a guess
+; about speed (PERFORMANCE.md rule 7). `make SBRATE=n SBRATE286=n` sweeps it.
 %ifndef FM_SBRATE
-%define FM_SBRATE 0             ; ticks between commits; 0 = the release
+%define FM_SBRATE 1             ; ticks between commits; 0 = the release
 %endif                          ; commits and nothing before it
+%ifndef FM_SBRATE286
+%define FM_SBRATE286 1          ; ...and what a 286 or better is given. EQUAL
+%endif                          ; to the above because 1 is the FLOOR - the
+                                ; rate is counted in ticks and there is nothing
+                                ; faster to hand a 286 (13.10.5.4.1)
+;
+; ...AND THE PAUSE COMMIT (13.10.5.4.2), which is a different trigger and not
+; another value of the one above: a one-shot timer re-armed on every W_ONDRAG
+; fires only after this many ticks in which the thumb did not move. It takes NO
+; tier pair, because it is how long a PERSON pauses when they mean "show me"
+; and that is the same half second on every machine.
+%ifndef FM_SBIDLE
+%define FM_SBIDLE 9             ; ticks of stillness before the view arrives;
+%endif                          ; 9 = 494 ms. 0 = no pause commit at all
 %endif
 ; --- the band under the rows: the edge, then the status line (SPEC.md 22.20)
 ; The row area is UNCHANGED by all three of these - [fm_listb] is still
@@ -304,17 +327,34 @@ FM_MAXWIN   equ VIEW_SLOTS      ; = KD_CAP: one cache slot per window
 FV_ICONS    equ DSK_NENT*DSK_DE_STRIDE  ; icon images start here inside a
                                 ; FLOPPY-sized slot; a driver-backed volume's
                                 ; is [dsk_ioff], and fmv_iofs answers both
-%ifdef KERN_SMALL
-FV_ICOIX    equ DSK_ICO_N*DSK_ICO_SIZE  ; ...and SPEC.md 25.8.5's index sits
-                                ; ABOVE the pool, not below it, so that
-                                ; fmv_iofs's answer stays a multiple of 256.
-                                ; FS_IOFH holds that answer in ONE BYTE
-                                ; (fmv_viofs asserts it), and putting the
-                                ; 32-byte index in front would have made the
-                                ; pool base 800 and the assertion false
-%if DSK_NENT*DSK_DE_STRIDE + DSK_ICO_N*DSK_ICO_SIZE + DSK_ICOIX_N > VIEW_KB*1024
-  %error "the pooled view cache no longer fits VIEW_KB: entries, then DSK_ICO_N bodies, then one index byte per entry. fmv_fit claims VIEW_KB and fmv_store then writes this much into it, so the overflow lands on whatever the heap handed out next"
+FV_ICOIX    equ 0               ; SPEC.md 25.8.5's index, and it is the FIRST
+                                ; thing in the icon REGION rather than the
+                                ; last. It sat above the pool so that
+                                ; fmv_iofs's answer stayed a multiple of 256 -
+                                ; FS_IOFH holds that answer in ONE BYTE - and
+                                ; the objection recorded there was to putting
+                                ; it BETWEEN the entries and the region, which
+                                ; would make the region base 800. Inside the
+                                ; region at offset 0 the base is still 768,
+                                ; and the BODY base below is computed rather
+                                ; than stored, so it is free to be 832.
+                                ;
+                                ; WHY IT HAD TO MOVE: the pool's size is
+                                ; [dsk_icomax] now, 16 on a floppy and
+                                ; DSK_VENT out of a driver's own claim, so an
+                                ; index ABOVE the pool sits at an offset that
+                                ; MOVES WITH THE VOLUME KIND - and nothing
+                                ; records which kind a slot was filled with
+                                ; (FS_IOFH's own comment says FS_VKB cannot be
+                                ; asked, fmv_fit only ever growing the claim).
+                                ; Below the pool it is at a fixed offset for
+                                ; both, and no window gains a byte of state
+FV_ICOBODY  equ DSK_ICOIX_N     ; ...so the bodies start after it
+%if DSK_NENT*DSK_DE_STRIDE + DSK_ICOIX_N > VIEW_KB*1024
+  %error "the view cache no longer fits VIEW_KB: entries, then one REFERENCE byte per entry (DSK_ICOIX_N, which is DSK_VENT-wide). fmv_fit claims VIEW_KB and fmv_store then writes this much into it, so the overflow lands on whatever the heap handed out next"
 %endif
+%if DSK_VENT*DSK_DE_STRIDE + DSK_ICOIX_N > DSK_VKB*1024
+  %error "the DRIVER-BACKED view cache no longer fits DSK_VKB: a driver-backed volume lists DSK_VENT entries, and its window slot carries those and a reference byte apiece"
 %endif
 FM_HDRMAX   equ 48              ; fm_hdrbuf's size: the header and the status
                                 ; line are both staged whole and truncated
@@ -413,11 +453,11 @@ fm_kinit_x:
 %ifdef KERN_SMALL
     call fmv_owner              ; MEM_P_VIEW + the slot, off DI (SPEC.md 50.6)
 %else
-    mov ax, si                  ; window lists a driver-backed volume (22.6)
-    sub ax, inst_tab
-    mov cl, 5
-    shr ax, cl
-    mov bx, ax
+    push di                     ; window lists a driver-backed volume (22.6).
+    mov di, si                  ; `(record - inst_tab) >> 5` is ld_slot, which
+    call ld_slot                ; is `.cold` like this and is where that
+    pop di                      ; arithmetic lives - it reads DI, and DI is the
+                                ; state block here and still owed below
 %endif
     mov ax, VIEW_KB
     call mem_claim_x
@@ -493,6 +533,16 @@ fm_kinit_x:
 %ifdef KERN_BIG
     mov ax, fm_onup             ; SPEC.md 13.7/13.8.1: the two edges the two
     call KERNEL_SEG:cw_wm_onmouseup ; header buttons fire and track on. Not
+%ifdef OS88UI_SBDRAG
+    mov [bx + W_ONTIMER], ax    ; ...AND THE SAME PROC IS THE PAUSE COMMIT'S
+                                ; (SPEC.md 13.10.5.4.2): a timer that fires
+                                ; mid-drag is a release with the hand still
+                                ; down, and os88ui_sbdrop tells the two apart
+                                ; off [ui_armw]. A plain store, because
+                                ; wm_ontimer is one; nothing ARMS it here -
+                                ; fm_ondrag does, on movement - so a window
+                                ; merely open has no timer
+%endif
     mov ax, fm_ondrag           ; template words - the template is eight and
     call KERNEL_SEG:cw_wm_ondrag ; growing it would read one past every
                                 ; existing package's - so a KD_INIT is where
@@ -601,15 +651,12 @@ fmv_copy_in:
     mov dx, [fm_vseg]
     or dx, dx
     jnz .have                   ; no cache (the claim was refused): read the
-    mov dx, [dsk_dseg]          ; GLOBAL snapshot at the matching offset. A
-    call fmv_iofs               ; slot offset is 0-based and the snapshot's
-    cmp si, bx                  ; is not, so the two bases have to be swapped
-    jb .dir                     ; over - which is all this arithmetic is
-    sub si, bx
-    add si, [dsk_ioff]
-    jmp short .have
-.dir:
-    add si, [dsk_doff]
+    mov dx, [dsk_dseg]          ; GLOBAL snapshot at the matching offset. It
+    add si, [dsk_doff]          ; used to need the ICON base swapped over too,
+                                ; a slot's being 0-based where the snapshot's
+                                ; is not; there is no icon region in either
+                                ; now (SPEC.md 25.9), so entries are the whole
+                                ; of it
 .have:
     mov ax, ds                  ; the kernel segment, out of DS: this module
                                 ; is .cold, so CS is COLD_SEG (SPEC.md 2.6)
@@ -706,75 +753,43 @@ fmv_get_dir:
 ; clobbers: SI (the output), flags
 ; -----------------------------------------------------------------------------
 fmv_get_icon:
-%ifdef KERN_SMALL
-    cmp word [fm_vseg], 0       ; SPEC.md 25.8: with no cache of its own the
-    je dsk_get_icon_x           ; painter reads the GLOBAL icons, which here
-                                ; are a pool - and dsk_get_icon_x is that
-                                ; indirection, landing in the same dsk_ico
-                                ; with the same "all-zero = none". Taken
-                                ; ahead of fmv_copy_in's own fallback, whose
-                                ; [dsk_ioff] + index*64 is the arithmetic the
-                                ; pool invalidates
+    cmp word [fm_vseg], 0       ; SPEC.md 25.9: with no cache of its own the
+    je dsk_get_icon_x           ; painter reads the GLOBAL reference bytes,
+                                ; and dsk_get_icon_x is that indirection,
+                                ; landing in the same dsk_ico with the same
+                                ; "all-zero = none"
     push ax
     push bx
     push cx
+    push dx
+    push si
     push di
-    call fmv_viofs              ; THIS WINDOW'S pool base, not the global's -
-                                ; the one place the two can differ (22.6.1)
-    add ax, bx                  ; ...and the entry's INDEX BYTE above it
-    add ax, FV_ICOIX
+    call fmv_viofs              ; THIS WINDOW'S index, not the global's - the
+    add ax, bx                  ; one place the two can differ (22.6.1), and
+    add ax, FV_ICOIX            ; the whole of its icon region now
     mov si, ax
     mov di, dsk_ico             ; TWO bytes, because fmv_copy_in moves words.
-    mov cx, 2                   ; The second is the next entry's index, or the
-    call fmv_copy_in            ; first byte past the array and still inside
-                                ; the claim (FV_ICOIX's %if bounds it); it is
-                                ; overwritten below either way
+    mov cx, 2                   ; The second is the next entry's reference, or
+    call fmv_copy_in            ; the first byte past the array and still
+                                ; inside the claim; it is overwritten below
     mov al, [dsk_ico]
-    cmp al, 0xFF
-    je .none                    ; SPEC.md 25.8.5: THIS WINDOW'S answer and not
-                                ; the global's - a cache may still hold a
-                                ; listing the global has since replaced, so
-                                ; falling through to dsk_get_icon_x here would
-                                ; paint another volume's icon
-    xor ah, ah                  ; ...AX was the entry; now it is the BODY
-    mov cl, 6
-    shl ax, cl
-    add ax, bx
-    mov si, ax
-    mov di, dsk_ico
-    mov cx, DSK_ICO_SIZE
-    call fmv_copy_in
-    jmp short .out
-.none:
-    call dsk_ico_blank
-.out:
+    call dsk_ico_stage          ; ...and THE BODY COMES OUT OF THE ONE STORE
+                                ; (SPEC.md 25.9). The window used to carry its
+                                ; own copy of every body - 64 bytes an entry -
+                                ; which is what a volume-independent key makes
+                                ; unnecessary: the reference resolves whatever
+                                ; is mounted now. Staging it - the resolve,
+                                ; the 64-byte copy and the all-zero fallback -
+                                ; is disk.inc's routine and was written out a
+                                ; second time here
     pop di
+    pop si
+    pop dx
     pop cx
     pop bx
     pop ax
     mov si, dsk_ico
     ret
-%else
-    push ax
-    push bx
-    push cx
-    push di
-    mov cl, 6                   ; index * 64, past the entry images
-    shl ax, cl
-    call fmv_viofs              ; THIS WINDOW'S base, not the global's - the
-    add ax, bx                  ; one place the two can differ (SPEC.md 22.6.1)
-    mov si, ax
-    mov di, dsk_ico
-    mov cx, DSK_ICO_SIZE
-    call fmv_copy_in
-    pop di
-    pop cx
-    pop bx
-    pop ax
-    mov si, dsk_ico
-    ret
-%endif
-
 ; -----------------------------------------------------------------------------
 ; fmv_winof - which window owns the state block in DI? (the inst_tab walk)
 ; in:  DI = state block
@@ -796,6 +811,15 @@ fmv_get_icon:
 ; Seven routines in this file carried this eight-instruction scaffold. It is
 ; NOT fm_count's: that one asks I_STATE != 0, live OR dying, which is a
 ; different question about a different set.
+;
+; IT IS instance.inc's inst_next (SPEC.md 29.1.1) WITH TWO FILTERS FOLDED IN,
+; and the two were written independently to the same design - same
+; `inst_tab - I_RECSZ` start, same pointer bound, same CF contract. They stay
+; separate because THIS one is `.cold` and that one is `.text`, which are
+; different address spaces (SPEC.md 2.6): a near call between them is a jump
+; into the wrong segment and a thunk costs more than either body. fm_reloc,
+; the one walker in this file that is `.text`, calls inst_next instead - and
+; says so where it stands.
 ; -----------------------------------------------------------------------------
 fmv_ifirst:
     mov si, inst_tab-I_RECSZ
@@ -875,34 +899,26 @@ fmv_store:
     xor di, di
     mov cx, bx
     call fmv_copy_out
-%ifdef KERN_SMALL
-    ; SPEC.md 25.8.5: the cache MIRRORS the global - DSK_ICO_N bodies and one
-    ; index byte per entry - so both halves are block copies and the window
-    ; holds the same 1,056 bytes the global does instead of expanding them
-    ; back to one body per entry. The first version of this DID expand, to
-    ; keep fmv_get_icon's contract; carrying the pool through instead deletes
-    ; that loop AND a whole KB of every window's claim.
-    mov si, [dsk_ioff]
-    mov di, bx
-    mov cx, DSK_ICO_N*DSK_ICO_SIZE
-    call fmv_copy_out
-    mov si, dsk_icoix           ; the INDEX, which lives in `.lowbss` -
-    mov di, bx                  ; fmv_copy_out reads [dsk_dseg], and that IS
-    add di, FV_ICOIX            ; LOW_SEG on this kernel because SPEC.md 51.0
-    mov cx, DSK_ICOIX_N         ; leaves it no DVK_DRV volume to list from
-    call fmv_copy_out           ; anywhere else
-%else
-    mov si, [dsk_ioff]
-    mov di, bx
-    mov cx, [dsk_nmax]
-    mov dx, DSK_ICO_SIZE
-    push ax
-    mov ax, cx
-    mul dx
-    mov cx, ax
-    pop ax
-    call fmv_copy_out
-%endif
+    ; SPEC.md 25.8.5: the cache MIRRORS the global - the bodies and one index
+    ; byte per entry - so both halves are block copies and the window holds
+    ; what the global holds instead of expanding it back to one body per
+    ; entry. The first version of this DID expand, to keep fmv_get_icon's
+    ; contract; carrying the pool through instead deletes that loop AND a
+    ; whole KB of every window's claim.
+    ;
+    ; THE COUNT IS [dsk_icomax] AND NOT DSK_ICO_N: a driver-backed volume
+    ; raises the ceiling to DSK_VENT out of its own claim, so a hard disk's
+    ; window has more bodies to carry than a floppy's array even has room for.
+    mov si, dsk_icoix           ; ...AND THE INDEX, WHICH IS ALL THERE IS NOW
+    mov di, bx                  ; (SPEC.md 25.9). The bodies used to follow it
+    add di, FV_ICOIX            ; and are in the machine-wide store instead, so
+    mov cx, DSK_ICOIX_N         ; a window carries one byte an entry rather
+    push dx                     ; than 64.
+    mov dx, LOW_SEG             ;
+    call dsk_copy_seg_x         ; NOT fmv_copy_out: its source segment is
+    pop dx                      ; [dsk_dseg], which is the DRIVER'S CLAIM on a
+                                ; hard disk, and the index lives in `.lowbss`
+                                ; wherever the listing is
     pop di
     mov [di+FS_IOFH], bh        ; ...AND THE SHAPE IT WAS FILLED WITH, which
                                 ; is this mount's and not whichever one paints
@@ -1023,12 +1039,10 @@ fmv_owner:
     pop ax                      ; before anything reaches here
     ret
 .have:
-    sub ax, inst_tab
-    push cx
-    mov cl, 5
-    shr ax, cl
-    pop cx
-    mov bx, ax
+    push di                     ; ...and the same arithmetic, said in the same
+    mov di, ax                  ; one place (ld_slot, `.cold` like this and
+    call ld_slot                ; banking CX itself)
+    pop di
     pop ax
     ret
 %endif
@@ -2585,7 +2599,7 @@ fm_btn1:
     or di, OS88UI_DOWN
 .draw:
     mov bx, os88ui_krect
-    call os88ui_btn
+    call os88ui_kbtn
 .out:
     jmp kretc_di
 
@@ -2903,7 +2917,8 @@ fm_onclick_x:
 %ifdef OS88UI_SBDRAG
     cmp al, OS88UI_SBTHUMB      ; SPEC.md 13.10.5: the thumb is DRAGGED here
     jne .nograb                 ; now, where it used to page down. BX is still
-    mov al, FM_SBRATE           ; the block and DX still the press, absolute
+    mov ax, FM_SBRATE | (FM_SBRATE286 << 8)
+    call os88ui_sbrate          ; the block and DX still the press, absolute;
     call os88ui_sbgrab          ; CF = 1: no thumb to take after all, so the
     mov al, OS88UI_SBTHUMB      ; ladder below pages exactly as it did
     jc .nograb
@@ -3058,10 +3073,22 @@ fm_onup_x:
     call os88ui_sbdragging      ; SPEC.md 13.10.5: the release COMMITS, and it
     jc .btn                     ; commits unconditionally - a position the rate
     mov bx, si                  ; refused mid-drag is never lost, and a release
-    call fm_layout              ; that landed off the screen entirely still
+    mov word [bx+W_TIMER], 0    ; that landed off the screen entirely still
+                                ; ends the gesture (13.7's second rule).
+                                ; 13.10.5.4.2's timer is cancelled FIRST: it
+                                ; must not outlive the gesture it belongs to,
+                                ; because THIS proc is its handler and a
+                                ; release-then-press inside SB_IDLE would
+                                ; otherwise fire a header button early. A
+                                ; store of wm_timer's own sentinel, which is
+                                ; all its cancel arm is
+    call fm_layout
     call fm_sbset               ; ends the gesture (13.7's second rule).
     call os88ui_sbdrop          ; fm_sbset FIRST: the overlay's erase reads the
     jc .btn                     ; block's geometry. CF = 1 = the gesture was
+                                ; the DIALOG's bar (13.10.5.10). FROM THE TIMER
+                                ; TOO (13.10.5.4.2): the hand paused, so this
+                                ; answers the pos and keeps the record
     sub ax, [fm_lscr]           ; the DIALOG's bar (13.10.5.10) - spent by the
     call fm_scroll_by           ; call above, and this release is the button
     jc .paint                   ; arm's
@@ -3122,7 +3149,15 @@ fm_ondrag_x:
     call os88ui_sbdragging      ; SPEC.md 13.10.5: a live thumb drag owns this
     jc .btn                     ; movement whole - a header button cannot also
     mov bx, si                  ; be armed, but asking costs one compare and
-    call fm_layout              ; says so
+    mov ax, FM_SBIDLE           ; says so.
+    call KERNEL_SEG:cw_wm_timer ; 13.10.5.4.2: EVERY movement pushes the
+                                ; one-shot out, which is what makes it an IDLE
+                                ; detector and not a cadence - and what it
+                                ; fires is fm_onup, which reads the pause off
+                                ; [ui_armw]. FM_SBIDLE = 0 needs no test of
+                                ; its own - wm_timer takes 0 as CANCEL, so
+                                ; that build arms nothing
+    call fm_layout
     call fm_sbset               ; BX = the block; DX is still the pointer's y
     call os88ui_sbtrack         ; CF = 1: the thumb moved and the view is not
     jc .out                     ; owed a thing yet (the rate, or the same row)
@@ -6093,9 +6128,9 @@ fm_dgdrop:
     mov bx, [si+18]             ; a folder (or '..'): into THAT one
 .have:
     mov al, [fm_dgdrv]
-    cmp al, [fcp_drv]           ; the same folder it came from? then the
+    cmp al, [fcp_cbdrv]           ; the same folder it came from? then the
     jne .go                     ; drag went nowhere and there is nothing
-    cmp bx, [fcp_cwd]           ; to do - not a copy of it into itself
+    cmp bx, [fcp_cbcwd]           ; to do - not a copy of it into itself
     je .out
 .go:
     push ax
@@ -8413,7 +8448,9 @@ fmf_fm_onclick:         call fm_onclick_x
                     retf
 %ifdef KERN_BIG
 fmf_fm_ondrag:          call fm_ondrag_x
-                    retf
+                    retf                    ; ...and 13.10.5.4.2's PAUSE commit
+                                            ; is fmf_fm_onup, above: one proc
+                                            ; for both edges
 %endif
 
 section .text
@@ -8435,32 +8472,32 @@ section .text
 ; -----------------------------------------------------------------------------
 %ifndef KERN_SMALL              ; purgeable there, so it is shed and never moved
 fm_reloc:
-    push ax
-    push cx
     push si
     push di
-    mov si, inst_tab            ; ITS OWN WALK, and it stays that way: this
-    mov cx, INST_MAX            ; routine is `.text` and fmv_ifirst is `.cold`,
-.scan:                          ; so the near call the other six make is a
-    cmp byte [si+I_STATE], 1    ; jump into another address space
-    jne .next
-    cmp byte [si+I_KIND], KIND_FILES
-    jne .next
-    mov di, [si+I_SPTR]
-    cmp [di+FS_VSEG], bx
-    jne .next
-    mov [di+FS_VSEG], dx
-.next:
-    add si, I_RECSZ
-    loop .scan
+    mov di, inst_tab - I_RECSZ  ; NOT fmv_ifirst, and that has not changed: that
+.scan:                          ; one is `.cold` and this routine is `.text`, so
+    call inst_next              ; the near call the other six make is a jump
+    jc .done                    ; into another address space. What it CAN reach
+                                ; is instance.inc's own walk (SPEC.md 29.1.1),
+                                ; which is `.text` like this - so the record
+                                ; cursor moves to DI and the state block to SI,
+                                ; and CX stops being a counter at all
+    cmp byte [di+I_STATE], 1
+    jne .scan
+    cmp byte [di+I_KIND], KIND_FILES
+    jne .scan
+    mov si, [di+I_SPTR]
+    cmp [si+FS_VSEG], bx
+    jne .scan
+    mov [si+FS_VSEG], dx
+    jmp short .scan
+.done:
     cmp [fm_vseg], bx           ; ...and the mirror, which is the half a word
     jne .out                    ; poke would have missed
     mov [fm_vseg], dx
 .out:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
+    pop di                      ; ...and NEITHER AX NOR CX IS BANKED: CX was the
+    pop si                      ; count `inst_next` does not need, and AX was
+    ret                         ; never written on any arm of this routine
 %endif                          ; KERN_SMALL - fm_reloc is kern_big's
 

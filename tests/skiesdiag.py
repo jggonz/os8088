@@ -10,8 +10,9 @@ package's own render path, at an address it chose, and then asks the glass
 where the machine is. The watchdog must say that address.
 
   1. the hook is up - int 08h points into the package;
-  2. running normally, the COUNTER block advances every tick and the IP
-     blocks hold package addresses;
+  2. running normally, the COUNTER block advances every tick and every banked
+     sample is PLACED - inside the package when the CS banked with it is the
+     package's, and in the kernel or the ROM when it is not;
   3. frozen on purpose, the picture stops - and the counter keeps going,
      which is what says IRQ0 is alive and the freeze is ours;
   4. ...and the three IP blocks all name the patched address, within the
@@ -19,10 +20,36 @@ where the machine is. The watchdog must say that address.
 
 Check 4 is the whole row: 1 to 3 can pass on an instrument that samples the
 wrong word.
+
+WHAT THE RUNNING CHECK STILL CATCHES, broken on purpose in the guest's own
+copy of `cs_diag_isr` (docs/WRITING-TESTS.md 1), on `os8088_5150_herc_gla`:
+
+    arm                                       running check   check 4
+    control                                   green           green
+    banks the interrupted AX ([bp+8*2])       RED             RED
+    banks the interrupted BX ([bp+7*2])       RED             RED
+    `mov ax, 0x4242` - every sample the same  RED             RED
+    ring store NOPped and the ring zeroed     RED             RED
+
+The two wrong-word arms are the defect this row's own docstring says checks
+1 to 3 can pass on, and they go red here only because a register sampled a
+dozen times over a flight reaches zero; **check 4 is what catches them for
+certain**, and it did - `1c20 1c20 1c20` against the `5fff` the machine is
+stuck at. So the ordering above is still the right one to believe.
+
+CHECK 2 USED TO SAY "the ring holds package addresses" AND THAT IS NOT TRUE
+OF THIS MACHINE. The ring banks whatever `int 08h` interrupted, which while
+the flight is running is regularly somewhere else: `cs_input` polls the
+keyboard with the ROM's own `int 16h` (SPEC.md 53.1), so a tick landing in
+`F000:E82E`'s handful of instructions banked `e832`, `e83c`, `e84b`. The
+check read the IP alone, had no CS to place it by, and went red on a sample
+that was correct - about four runs in five. SPEC.md 88.14.4 banks the CS per
+slot and this asks the question that can be answered.
 """
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -47,10 +74,18 @@ def diagmap():
     """Assemble the CSDIAG package and take the four addresses off it.
 
     The listing rather than a map: nasm -f bin has no map, and these are
-    absolute offsets in the package's one segment either way."""
-    lst = os.path.join(ROOT, "build", "skiesdiag", "skies.lst")
-    binp = os.path.join(ROOT, "build", "skiesdiag", "skies.map.bin")
-    os.makedirs(os.path.dirname(lst), exist_ok=True)
+    absolute offsets in the package's one segment either way.
+
+    THE SCRATCH IS THIS PROCESS'S. Two invocations at once - this row and
+    `skieskfz`, which imports this function, or one of either run by hand
+    beside the suite - wrote the same `skies.lst` and each read what the
+    other had half-written. The symptom is NOT an error: a regex simply
+    misses and the row exits `no cs_render in the listing`, which reads as
+    the package having changed. Measured at 1 run in 24 three abreast."""
+    scratch = os.path.join(ROOT, "build", "skiesdiag", "map%d" % os.getpid())
+    lst = os.path.join(scratch, "skies.lst")
+    binp = os.path.join(scratch, "skies.map.bin")
+    os.makedirs(scratch, exist_ok=True)
     # -I THE PRIVATE TREE, and it is the tree's own and not build/'s: the
     # world index is GENERATED (SPEC.md 88.10.5), `make skiesdiag` writes a
     # copy of it beside the package it builds, and the two are only the same
@@ -74,9 +109,15 @@ def diagmap():
                  "address below would describe a package the guest has not "
                  "got. Run `make skiesdiag`.")
     out, text = {}, open(lst, errors="replace").read()
+    # ...and the package's own EXTENT, which is what places a sample banked
+    # with our CS. `0 < ip < 0xE000` was the old stand-in for this and it is
+    # 45KB of slack: the image is 0xcdc0
+    out["image"] = os.path.getsize(binp)
     for name, pat in (("cs_spguard2", r"mov si, cs_spguard2"),
                       ("cs_dtick", r"mov word \[cs_dtick\], 0"),
                       ("cs_dring", r"mov \[cs_dring \+ bx\], ax"),
+                      ("cs_dcsr", r"mov \[cs_dcsr \+ bx\], cx"),
+                      ("cs_dold", r"mov \[cs_dold\], ax"),
                       ("cs_doff", r"mov si, \[cs_doff \+ si\]"),
                       ("cs_diag_isr", r"mov word \[es:8\*4\], cs_diag_isr")):
         m = re.search(r"^\s*\d+ [0-9A-F]{8} ([0-9A-F]+)\[([0-9A-F]{4})\].*"
@@ -95,7 +136,9 @@ def diagmap():
                     out["cs_render"] = int(m.group(1), 16)
                     break
             break
-    return out
+    if out["cs_render"] is not None:    # a scratch only this run can see -
+        shutil.rmtree(scratch, True)    # kept when a regex missed, so the
+    return out                          # listing is there to be looked at
 
 
 def main(argv):
@@ -144,39 +187,109 @@ def main(argv):
                 m.readseg(seg, sym["cs_doff"] + 2 * row, 2), "little")
 
         def blocks():
-            """The four painted words, read off the GLASS and not off bss."""
+            """The nine painted words, read off the GLASS and not off bss.
+
+            PAUSED: SPEC.md 88.14.3 is the incident. A sampler that reads
+            these with the guest running has the ISR repaint between two of
+            its round trips and invents a mixture - which is where the "59
+            mixed readings" that section retracts came from. One stop, every
+            block, then go."""
+            m.pause()
             out = []
             for s in range(CSD_BLKS):
                 b = m.read(0xB0000 + devoff(s * CSD_ROWS), 2)
                 out.append((b[0] << 8) | b[1])
+            m.run()
             return out
 
         def ring():
-            """The ring and the counter out of BSS. While the flight is
-            RUNNING the frame overwrites the painted blocks between one read
-            and the next - which is the design (88.14) and not a fault, so
-            the running checks read the source and the frozen one reads the
-            glass, which is the claim that matters."""
-            r = [int.from_bytes(m.readseg(seg, sym["cs_dring"] + 2 * k, 2),
-                                "little") for k in range(CSD_SLOTS)]
-            return r + [int.from_bytes(m.readseg(seg, sym["cs_dtick"], 2),
-                                       "little")]
+            """Every slot's IP with the CS BANKED WITH IT (SPEC.md 88.14.4),
+            and the counter, out of BSS.
+
+            PAUSED, AND IN ONE CALL, for blocks()' reason one level in. Slot
+            at a time is worse than a mixture: the ISR fires between two round
+            trips and the IP of one tick comes back paired with the CS of
+            another, which is the single thing this reading must not do.
+
+            While the flight is RUNNING the frame overwrites the painted
+            blocks between one read and the next - which is the design (88.14)
+            and not a fault, so the running checks read the source and the
+            frozen one reads the glass, which is the claim that matters."""
+            lo = min(sym["cs_dring"], sym["cs_dcsr"], sym["cs_dtick"])
+            hi = max(sym["cs_dring"] + CSD_SLOTS * 2,
+                     sym["cs_dcsr"] + CSD_SLOTS * 2, sym["cs_dtick"] + 2)
+            m.pause()
+            blob = m.readseg(seg, lo, hi - lo)
+            m.run()
+
+            def w(at):
+                return int.from_bytes(blob[at - lo:at - lo + 2], "little")
+            return ([(w(sym["cs_dcsr"] + 2 * k), w(sym["cs_dring"] + 2 * k))
+                     for k in range(CSD_SLOTS)], w(sym["cs_dtick"]))
+
+        # the kernel's own int 08h CS, out of the vector cs_diag_on displaced
+        # - so "the kernel" is a fact off the guest rather than a constant
+        # this file mirrors. `cs_dold` is only written when the bracket goes
+        # up, which the check above has just established; read before that it
+        # is ZERO, and a zero here would fail every kernel sample for a reason
+        # that has nothing to do with the watchdog
+        kseg = int.from_bytes(m.readseg(seg, sym["cs_dold"] + 2, 2), "little")
+        if not kseg or kseg == seg:
+            sys.exit("skiesdiag: cs_dold holds %04x:%04x - the bracket was not"
+                     " up when it was read, so nothing below can be placed"
+                     % (kseg, int.from_bytes(
+                         m.readseg(seg, sym["cs_dold"], 2), "little")))
 
         seen = []
         for _ in range(4):
             seen.append(ring())
             m.advance(frames=6)
             m.run()
-        ticks = [s[CSD_SLOTS] for s in seen]
+        ticks = [t for _pairs, t in seen]
         print("      running: ticks %s" % ticks)
         check(all(ticks[i + 1] > ticks[i] for i in range(len(ticks) - 1)),
               "the counter advances every tick (%s)" % ticks)
-        ips = set()
-        for s in seen:
-            ips |= set(s[:CSD_SLOTS])
-        check(len(ips) > 2 and all(0 < v < 0xE000 for v in ips),
-              "the ring holds package addresses (%s)"
-              % " ".join("%04x" % v for v in sorted(ips)))
+        banked = set()
+        for pr, _t in seen:
+            banked |= set(pr)
+        mine = sorted(ip for cs, ip in banked if cs == seg)
+        away = sorted(set((cs, ip) for cs, ip in banked if cs != seg))
+        print("      sampled outside the package: %s"
+              % (" ".join("%04x:%04x" % x for x in away) or "none"))
+        # A SAMPLE THAT IS OURS IS AN OFFSET INSIDE OUR IMAGE, and that
+        # is what catches an instrument reading the wrong word off the frame:
+        # junk is spread over a 64KB range and the package is 0xcab0 of it.
+        # 7ac6ea14 reached the same diagnosis and could only say "at least
+        # one of them is in 0..0xE000", on the ground that "cs_dcseg is a
+        # single word and names only the LAST sample, so no per-slot filter
+        # is available to do better". That was true of the instrument and it
+        # cost FOUR BYTES of a CSDIAG-only ISR to stop being true (88.14.4).
+        # Its own `own` filter is worth keeping in mind: `0 < v < 0xE000`
+        # admits a KERNEL offset - 0060:3a41, 0060:00b8 and 0060:bebc were
+        # all banked here - so a ring holding nothing but kernel samples
+        # reads as "the watchdog is watching the flight" when it is not
+        check(len(set(ip for _c, ip in banked)) > 2 and mine
+              and all(0 < ip < sym["image"] for ip in mine),
+              "every sample banked with OUR cs is an offset inside the"
+              " package (%s, image %04x)"
+              % (" ".join("%04x" % v for v in mine), sym["image"]))
+        # ...AND A SAMPLE THAT IS NOT OURS NAMES SOMEWHERE THE FLIGHT GOES.
+        # There are two and only two: a kernel slot - or fsx_wait's own hlt,
+        # which is stage 10 - is KERNEL_SEG, and cs_input's `int 16h`
+        # keyboard poll (SPEC.md 53.1) is the ROM. Anything else is a real
+        # finding about where this package spends a tick, so it goes red
+        # naming itself rather than being swallowed by a range
+        strayed = [(cs, ip) for cs, ip in away
+                   if cs != kseg and cs < 0xF000]
+        if strayed:                 # only NOW is it worth assembling the
+            import os88sym          # kernel to place a `.cold` sample
+            cold = os88sym.equates().get("COLD_SEG")
+            strayed = [x for x in strayed if x[0] != cold]
+        check(not strayed,
+              "...and every sample banked with another names the kernel"
+              " (%04x) or the ROM (%s)"
+              % (kseg, " ".join("%04x:%04x" % x for x in strayed)
+                 or "none strayed"))
 
         # --- 2b: break a GUARD on purpose (SPEC.md 88.14.1) ------------------
         # The latch is the half that says whether memory went wrong BEFORE

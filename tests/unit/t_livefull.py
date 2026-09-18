@@ -19,9 +19,14 @@ THAT PREMISE HAD NOTHING HOLDING IT and it had already failed four ways:
                 off - and the live media took the floppy's answer although it
                 IS the boot volume. Every live image ever cut booted to a
                 desktop whose Wire zone opened nothing.
-  four packages RECORDER, HELLO, PACMAN and SCRIBE are each built by `all` and
+  three packages RECORDER, HELLO and SCRIBE are each built by `all` and
                 carried by no floppy, every one of them on a cluster argument
-                that is false at 32MB.
+                that is false at 32MB. It was four: PACMAN was on that list
+                too, which is how it went on shipping here throughout the
+                period it was called "off the disks", and it is RETIRED now
+                (SPEC.md 89.12) - reaching EXEMPT_DIRS through
+                apps/RETIRED.txt rather than through a second copy of the
+                list.
   the stories   FROTZ.O88 rode APPS/ with nothing to play, because the library
                 is fetched rather than committed - on a target that already
                 acquires two other fetches.
@@ -68,22 +73,39 @@ PAYLOAD = os.path.join(ROOT, "build", "livepayload.txt")
 
 # apps/ directories that are NOT a shipping package, each with the reason it
 # is not one. Anything else under apps/ must reach the live media.
-EXEMPT_DIRS = {
+# apps/cc is the only LOCAL exemption, because it is not a package at all.
+# Everything else that does not ship is named in apps/RETIRED.txt and read
+# from there (SPEC.md 20.16) - this list used to repeat that file's three
+# `instrument` rows, which is a constant written in two places with no linker
+# to notice (t_mirror's argument). The two gates are opposites and must agree:
+# this one says the live volume carries EVERYTHING, t_retired.py says it
+# carries no retired package, and a name in the registry is what makes both
+# true at once.
+LOCAL_EXEMPT = {
     "cc": "the C SDK (SPEC.md 73) - crt0, the thunks and ccsmoke, which is a "
           "gate rather than a program; the packages built WITH it are "
           "cword/, paccman/, runcpm/, c64/, apple2/, weave/ and loom/, and "
           "every one of those is checked below",
-    "fptest": "a capability gate, built by `make bench` and shipped on no "
-              "floppy (tests/ is where the non-shipping packages live; this "
-              "one predates that folder)",
-    "imgtest": "a capability gate, as fptest - `all` names build/imgtest.o88 "
-               "only to keep it assembling",
-    "wire": "WIREFRAME (SPEC.md 78.9) is an INSTRUMENT and not an "
-            "application: it is the bench for 78.5's draw orders, `make "
-            "wiredisk` builds its disk, and `all` names it only so that it "
-            "keeps compiling. The one entry here that is a decision about "
-            "the program rather than about the folder",
 }
+
+
+def _registry():
+    """{package: reason} from apps/RETIRED.txt (SPEC.md 20.16)."""
+    out = {}
+    path = os.path.join(ROOT, "apps", "RETIRED.txt")
+    if not os.path.exists(path):
+        return out
+    for line in open(path, encoding="utf-8").read().splitlines():
+        parts = line.split("#", 1)
+        f = parts[0].split()
+        if len(f) == 2:
+            out[f[1]] = "%s: %s" % (f[0], parts[1].strip() if len(parts) > 1
+                                    else "no reason given")
+    return out
+
+
+EXEMPT_DIRS = dict(LOCAL_EXEMPT)
+EXEMPT_DIRS.update(_registry())
 
 # apps/<dir> -> the 8.3 name its package lands under. The rule is mechanical -
 # uppercase, first eight characters - and `solitaire` is the only directory in
@@ -232,17 +254,25 @@ def main():
           "it the machine boots to a desktop whose Wire zone opens nothing. "
           "$(LIVESYSARGS) is what carries it")
 
-    # The four that ride no floppy at all (SPEC.md 19.10.1). Named here rather
+    # The three that ride no floppy at all (SPEC.md 19.10.1). Named here rather
     # than derived because the apps/ sweep above already covers them by
     # folder - this says so a second time in the words a reader would search
     # for, and fails with the sentence that explains the cluster argument.
+    #
+    # IT WAS FOUR. PACMAN.O88 was on this list, and being on it is what kept
+    # the package shipping on the live volume for the whole period it was
+    # described as "off the disks" - a cluster argument, correctly answered
+    # at 32MB, about a program that turned out not to be wanted at all. It is
+    # RETIRED now (SPEC.md 89.12) and reaches EXEMPT_DIRS through
+    # apps/RETIRED.txt, so this gate and t_retired.py cannot disagree about
+    # it. That is the distinction the registry exists to make: "off a floppy
+    # for want of room" and "not a shipping program" look identical here and
+    # are not the same fact.
     for name, why in (
             ("RECORDER.O88", "SPEC.md 35.1 - off the apps disks, built by "
                              "`all`"),
             ("HELLO.O88", "SPEC.md 27.0 - the SDK's worked example, off "
                           "every floppy"),
-            ("PACMAN.O88", "SPEC.md 89 - off the disk lists while DOT "
-                           "DELIRIUM wanted its six 360KB clusters"),
             ("SCRIBE.O88", "SPEC.md 95 - off the apps disk because two word "
                            "processors are 49KB of one floppy")):
         check(name in named,

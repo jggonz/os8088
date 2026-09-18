@@ -296,6 +296,23 @@ NP_SB_ARR    equ 11             ; ...and the arrow cells at each end of it
 %define SB_RATE 0
 %endif
 NP_SBRATE   equ SB_RATE
+; ...AND A 286 GETS 2 (13.10.5.4.1): the text arrives WITH the thumb there,
+; nine times a second, which is exactly what the sentence above describes
+; the absence of.
+%ifndef SB_RATE286
+%define SB_RATE286 2
+%endif
+NP_SBRATE286 equ SB_RATE286
+; ...AND THE PAUSE COMMIT (13.10.5.4.2), which is the trigger that reaches THIS
+; program: 13.10.5.4.3 measured one commit here at ~360 ms - 6.6 ticks - so no
+; value of the rate above is a throttle at all on the target machine, and the
+; sweep answers with the identical three commits from rate 1 to rate 6. A pause
+; commit is the same 360 ms spent ONCE against a hand that has stopped and is
+; waiting for it. No tier pair: half a second is half a second on any machine.
+%ifndef SB_IDLE
+%define SB_IDLE 9               ; ticks of stillness before the view arrives;
+%endif                          ; 9 = 494 ms. 0 = no pause commit
+NP_SBIDLE   equ SB_IDLE
 %endif
 
 NP_SB_STEP   equ 4              ; rows an arrow cell steps. The Disk window
@@ -508,21 +525,36 @@ np_entry:
                                     ; to open at content x = 61 there, skew 5,
                                     ; which typebench prices at 9.4% of every
                                     ; keystroke (SPEC.md 11.94)
-%ifdef OS88UI_SBDRAG
+%ifdef NPF_FIND
     pushf                           ; THE ENTRY STILL OWES THE LOADER
                                     ; wm_create's CF, and OSAPI_WM_ONDRAG
                                     ; STATES a flag of its own (SPEC.md
-                                    ; 13.8.2) - so the two installs go inside
+                                    ; 13.8.2) - so the installs go inside
                                     ; a pushf exactly as the CPU_INFO block
                                     ; below does
+%ifdef OS88UI_SBDRAG
+    mov ax, np_ontimer              ; 13.10.5.4.2's PAUSE commit - FIRST of the
+    call OSAPI_WM_ONTIMER           ; three, because the `sbb al, al` below
+                                    ; captures OSAPI_WM_ONDRAG's OWN CF and a
+                                    ; third install after it would answer for
+                                    ; the wrong slot
+%endif                              ; OS88UI_SBDRAG
     mov ax, np_onup                 ; SPEC.md 13.7 / 13.8.2: the release and
     call OSAPI_WM_ONMOUSEUP         ; the tracking edge, both AFTER wm_create
-    mov ax, np_ondrag               ; and neither a template word
-    call OSAPI_WM_ONDRAG
+    mov ax, np_ondrag               ; and neither a template word. **THE FIND
+    call OSAPI_WM_ONDRAG            ; PANEL'S, NOT THE BAR'S**: these two were
+                                    ; under the %ifdef above, so SBDRAGOFF=1
+                                    ; installed no release handler and the
+                                    ; panel's four buttons never fired
+%ifdef OS88UI_SBDRAG
     sbb al, al                      ; CF = 1 on kern_small: 0xFF into the byte
-    mov [np_nodrag], al             ; the grab site tests
+    mov [np_nodrag], al             ; the grab site tests. The CAPTURE is the
+                                    ; bar's even where the install is not:
+                                    ; with no bar gesture there is no thumb
+                                    ; to hold inert
+%endif                              ; OS88UI_SBDRAG
     popf
-%endif
+%endif                              ; NPF_FIND
     mov ax, np_onwake               ; SPEC.md 54.10: the kernel calls this once
     call OSAPI_WM_ONWAKE            ; our window is on the glass, and the
                                     ; launch document loads in front of it
@@ -544,6 +576,12 @@ np_entry:
                                     ; preserves flags too (SPEC.md 20.3)
     mov [np_win], bx                ; the worker (SPEC.md 27.3) has no callback
                                     ; to be handed this in SI
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     pushf                           ; the visual break exists for the machine
     push ax                         ; that cannot repaint a screenful between
     call OSAPI_CPU_INFO             ; keystrokes, and nowhere else: on anything
@@ -872,8 +910,9 @@ np_sbclick:
     jne .yes                        ; now, where it was inert. BX is still the
     cmp byte [np_nodrag], 0         ; block and DX still the press, absolute
     jne .yes
-    mov al, NP_SBRATE
-    call os88ui_sbgrab              ; CF = 1 = no thumb after all; either way
+    mov ax, NP_SBRATE | (NP_SBRATE286 << 8)
+    call os88ui_sbrate          ; the rate THIS machine can afford
+    call os88ui_sbgrab          ; (SPEC.md 13.10.5.4.1)              ; CF = 1 = no thumb after all; either way
 %endif                              ; this click scrolls nothing
     jmp short .yes                  ; the thumb itself, or an inert track
 .lineup:
@@ -938,7 +977,27 @@ np_sbclick:
     pop ax
     ret
 
+%ifdef NPF_FIND
+; -----------------------------------------------------------------------------
+; THE BLOCK IS THE FIND PANEL'S, and the bar only borrows two of its handlers.
+; np_ondrag and np_onup are ONE pair serving TWO gestures - os88ui_btndrag /
+; os88ui_btnup for the panel's four buttons (SPEC.md 13.7) and the thumb's
+; track/drop for the bar - so they exist whenever EITHER does, and each bar-
+; only part inside them carries its own %ifdef OS88UI_SBDRAG.
+;
+; They used to sit under that one instead, whose own header calls it "the
+; thumb gesture's other two edges". NPF_FIND and OS88UI_SBDRAG are not the
+; same question: APP_SMALL drops both, SBDRAGOFF drops only the bar. So
+; `SBDRAGOFF=1` installed NO release handler at all and Close / All / Repl /
+; Next drew pressed and did nothing - and it only ever showed up as a BUILD
+; error, `np_fp_act' not defined, because the panel's action routine had been
+; moved in beside them when the button work put it on the release.
+; -----------------------------------------------------------------------------
 %ifdef OS88UI_SBDRAG
+ %ifndef NPF_FIND
+  %error "the bar gesture borrows np_ondrag/np_onup, which are the find panel's"
+ %endif
+%endif
 ; -----------------------------------------------------------------------------
 ; np_ondrag / np_onup - the thumb gesture's other two edges (SPEC.md 13.10.5)
 ; in:  CX = x, DX = y (ABSOLUTE), SI = window ptr; gfx lock held
@@ -952,25 +1011,109 @@ np_sbclick:
 ; np_bounds first, because the block's rect and both of its counts come from
 ; the live window record and this app is resizable.
 ; -----------------------------------------------------------------------------
+; --- np_fp_act - the find panel's button BX (0-based) did fire ---------------
+; It was the TAIL of the press hit-test until SPEC.md 13.6 put these four on
+; the release. Every handler in it draws, so SI is the window throughout.
+np_fp_act:
+    push ax
+    push bx
+    push si
+    mov si, [np_win]
+    or bx, bx
+    jnz .h1
+    call np_fclose              ; 0 = close
+    call np_redrawall
+    jmp short .done
+.h1:
+    cmp bx, 1
+    jne .h2
+    call np_dorepall            ; 1 = All
+    mov si, [np_win]
+    call np_redraw
+    call np_pdrawn
+    jmp short .done
+.h2:
+    cmp bx, 2
+    jne .h3
+    call np_dorepl              ; 2 = Repl
+    mov si, [np_win]
+    call np_redraw
+    call np_pdrawn
+    jmp short .done
+.h3:
+    call np_donext              ; 3 = Next
+    mov si, [np_win]
+    call np_redraw
+.done:
+    pop si
+    pop bx
+    pop ax
+    ret
+
 np_ondrag:
     push ax
     push bx
     push cx
     push dx
-    call os88ui_sbdragging
+    push si
+    mov bx, np_btrec            ; THE FIND PANEL'S BUTTONS FIRST: the held one
+    call os88ui_btndrag         ; follows the pointer. A package has ONE arm
+    pop si                      ; word, so the bar and the buttons cannot both
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging      ; be live
     jc np_sbd_out
+    mov bx, si                  ; 13.10.5.4.2: EVERY movement pushes the
+    mov ax, NP_SBIDLE           ; one-shot out, which is what makes it an IDLE
+    call OSAPI_WM_TIMER         ; detector and not a cadence. SB_IDLE = 0 needs
+                                ; no test - the slot takes 0 as CANCEL - and
+                                ; neither does kern_small, which refuses the
+                                ; slot and never reaches here anyway (no
+                                ; tracking edge means no live drag to own it)
     call np_bounds
     call np_sbset               ; BX = the block; DX is still the pointer's y
     call os88ui_sbtrack         ; CF = 1: nothing owed - the rate, or the same
     jc np_sbd_out               ; row
     jmp short np_sbd_go
+%else
+    jmp short np_sbd_out        ; no bar gesture in this arm: the
+                                ; buttons above are the whole of it
+%endif                          ; OS88UI_SBDRAG
+%ifdef OS88UI_SBDRAG
+np_ontimer:                     ; the thumb has been STILL for NP_SBIDLE ticks
+    push ax                     ; (SPEC.md 13.9 disarms before this runs, and
+    push bx                     ; this does not re-arm: a pause is ONE commit
+    push cx                     ; however long it lasts)
+    push dx
+    call np_bounds
+    call np_sbset
+    call os88ui_sbowed          ; ...and NOT os88ui_sbdrop: a pause is not the
+    jc np_sbd_out               ; end of the gesture, so the record survives it
+    jmp short np_sbd_go
+%endif                          ; OS88UI_SBDRAG
 np_onup:
     push ax
     push bx
     push cx
     push dx
+    push si
+    mov bx, np_btrec            ; the find panel FIRES here (SPEC.md 13.7)
+    call os88ui_btnup           ; AX = what fired, 0 = nothing of ours
+    pop si
+    or ax, ax
+    jz .nobtn
+    push si
+    dec ax                      ; np_fp_act takes the 0-based button
+    mov bx, ax
+    call np_fp_act
+    pop si
+    jmp np_sbd_out
+.nobtn:
+%ifdef OS88UI_SBDRAG
     call os88ui_sbdragging
     jc np_sbd_out
+    mov bx, si                  ; the pause timer must not outlive the gesture
+    xor ax, ax                  ; it belongs to (13.10.5.4.2)
+    call OSAPI_WM_TIMER
     call np_bounds
     call np_sbset
     call os88ui_sbdrop
@@ -984,13 +1127,14 @@ np_sbd_go:                      ; FLAT labels and not `.go`/`.out`: the two
     call np_scrollto            ; AX = the row the hand is on, SI = the window
     jc np_sbd_out               ; an end stop: not one pixel changes
     call np_redraw
+%endif                          ; OS88UI_SBDRAG
 np_sbd_out:
     pop dx
     pop cx
     pop bx
     pop ax
     ret
-%endif
+%endif                          ; NPF_FIND
 
 ; =============================================================================
 ; Scrolling the PIXELS (SPEC.md 27.7.2)
@@ -2903,6 +3047,29 @@ np_hire:
     call OSAPI_TASK_SPAWN
     jc .out
     mov byte [np_hired], 1
+    ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
+    ; kernel wrote our segment into this worker's frame, so a region
+    ; declaration alone is INERT. It is PERMANENT and not a window
+    ; around OSAPI_TASK_ALIVE - the SDK note's advice for a park-safe
+    ; worker, which fails SILENTLY (REGION-SELF-COMPACT-PLAN 8.2):
+    ; mem_frameless reads [inst_restart] at PLAN time, and this worker
+    ; is outside its own ALIVE for essentially all of a tick, so a
+    ; windowed declaration would make OSAPI_MEM_COMPACT's what-if answer no
+    ; better for a heap the compactor could have emptied.
+    ;
+    ; SO BOTH PARK POINTS ARE ENUMERATED, Tracker's shape. We are
+    ; OSAPI_MEM_PARKSAFE, so the second one is BLOCKED IN
+    ; OSAPI_GFX_LOCK - never HOLDING it (66.5.4 marks the task only
+    ; across the yield inside the wait path).
+    ;   * ALIVE is the top of .loop and nothing above it is ours.
+    ;   * The worker's ONLY lock site is .go's, and everything before it
+    ;     in the pass READS - [np_bmode], [np_hdirty], [np_uopen],
+    ;     [np_fcdirty], OSAPI_WM_TOP, the idle tick. [np_sowed] is the one
+    ;     flag the pass clears and it is cleared UNDER the lock, so it is
+    ;     never standing at a park. The two other OSAPI_GFX_LOCK calls in
+    ;     this file are np_onwake's and np_selpace's, both UI task.
+    ; A restart costs one wake.
+    OS88_WORKER_RESTARTABLE np_worker
 .out:
     pop bx
     pop ax
@@ -9944,27 +10111,55 @@ np_pbutton:
     push dx
     push si
     push di
-    shl bx, 1
+    push bx                     ; BX = the 0-based slot, and it stays: the
+    shl bx, 1                   ; group's rects, labels and flags are three
+    mov [np_btlbl+bx], si       ; parallel arrays the record indexes together
     mov cx, [bx+np_pbw]
-    jcxz .out
+    pop ax                      ; AX = the slot again
+    jcxz .hide
     mov di, [bx+np_pbx]
     or di, di
-    jz .out
-    mov [np_brect+0], di
+    jz .hide
+    push ax
+    add ax, ax
+    add ax, ax
+    add ax, ax                  ; AX = slot * 8, the rect stride
+    mov bx, np_brects
+    add bx, ax
+    mov [bx+0], di
     add di, cx
     dec di                      ; ...x2 inclusive
-    mov [np_brect+4], di
+    mov [bx+4], di
     mov ax, [np_pbtny]
-    mov [np_brect+2], ax
+    mov [bx+2], ax
     add ax, NP_FP_BTNH - 1
-    mov [np_brect+6], ax
-    mov bx, np_brect
-    mov di, OS88UI_FILL         ; np_fpaint fills the panel band before the
+    mov [bx+6], ax
+    pop ax
+    push ax
+    add ax, ax
+    mov bx, ax
+    mov word [np_btflg+bx], OS88UI_FILL
+                                ; np_fpaint fills the panel band before the
                                 ; first button, but a button REDRAWN in place
                                 ; would or its caption onto the old one
                                 ; (os88ui.inc's own note), and this is the
                                 ; cheapest way for that never to become true
+    pop ax
+    mov bx, np_btrec
+    inc ax                      ; the record's indices are one-based
     call os88ui_btn
+    jmp short .out
+.hide:                          ; not shown: ZERO its rect, so os88ui_bfind
+    add ax, ax                  ; cannot answer for a button that is not there
+    add ax, ax
+    add ax, ax
+    mov bx, np_brects
+    add bx, ax
+    xor ax, ax
+    mov [bx+0], ax
+    mov [bx+2], ax
+    mov [bx+4], ax
+    mov [bx+6], ax
 .out:
     pop di
     pop si
@@ -9974,7 +10169,12 @@ np_pbutton:
     pop ax
     ret
 
-np_brect:   dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
+np_brects:  dw 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0   ; THE GROUP (SPEC.md
+                                ; 20.5.1.3): four rects, contiguous, in screen
+                                ; coordinates - a hidden one is zeroed
+np_btlbl:   dw 0, 0, 0, 0       ; ...its labels, written as each is drawn
+np_btflg:   dw 0, 0, 0, 0       ; ...and its flags
+    OS88UI_BTNREC np_btrec, np_brects, np_btlbl, np_btflg, 4
 
 ; -----------------------------------------------------------------------------
 ; np_fpaint - draw the whole panel
@@ -10185,24 +10385,12 @@ np_fpclick:
     mov bx, [np_pbtny]          ; --- the button row ---
     cmp dx, bx
     jb .fields
-    xor bx, bx
-.b:
-    mov di, bx
-    shl di, 1
-    mov ax, [di+np_pbw]
-    or ax, ax
-    jz .bnext
-    mov ax, [di+np_pbx]
-    cmp cx, ax
-    jb .bnext
-    add ax, [di+np_pbw]
-    cmp cx, ax
-    jae .bnext
-    jmp short .hit
-.bnext:
-    inc bx
-    cmp bx, 4
-    jb .b
+    mov bx, np_btrec            ; **THEY ONLY ARM** (SPEC.md 13.6): Replace
+    call os88ui_btnpress        ; All rewrites the document, so none of these
+    or ax, ax                   ; may fire on a press the user can take back.
+    jnz .yes                    ; np_fp_up has the action; the x/width ladder
+                                ; this replaces was a second description of
+                                ; the geometry np_pbutton already owned
     mov ax, [np_pcbx]           ; the Regex tick box, and its label with it
     cmp cx, ax
     jb .yes
@@ -10215,34 +10403,9 @@ np_fpclick:
     mov byte [np_fcdirty], 1
     call np_fpaint
     jmp short .yes
-.hit:
-    mov si, [np_win]            ; every handler below draws, and SI has to be
-    or bx, bx                   ; the window for all of them
-    jnz .h1
-    call np_fclose              ; 0 = close
-    call np_redrawall
-    jmp short .yes
-.h1:
-    cmp bx, 1
-    jne .h2
-    call np_dorepall            ; 1 = All
-    mov si, [np_win]
-    call np_redraw
-    call np_pdrawn
-    jmp short .yes
-.h2:
-    cmp bx, 2
-    jne .h3
-    call np_dorepl              ; 2 = Repl
-    mov si, [np_win]
-    call np_redraw
-    call np_pdrawn
-    jmp short .yes
-.h3:
-    call np_donext              ; 3 = Next
-    mov si, [np_win]
-    call np_redraw
-    jmp short .yes
+.hit:                           ; UNREACHED from the press now: np_fp_act is
+    call np_fp_act              ; the same ladder as a routine of its own, so
+    jmp short .yes              ; np_onup can reach it at the release
 
 .fields:
     mov ax, dx                  ; --- a text box ---

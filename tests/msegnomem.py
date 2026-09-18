@@ -245,7 +245,7 @@ def main():
     # own usage line says `make mseg && python3 tests/msegnomem.py`, mseg is NOT
     # in `all`, and the row never built it - so on any tree where somebody had
     # not typed that by hand it died with FileNotFoundError on build/mseg.o88.
-    # That is docs/plans/HANDOFF-SOAK-FINDINGS.md B4's shape exactly: an ABSENT gate
+    # That is the ABSENT-artefact shape exactly: an absent gate
     # reading as a failing one. A private tree has to name what it wants, and
     # naming it is what fixed it.
     t = os88build.tree(*KNOBS, targets=("os8088-360.img", "mseg")).apply()

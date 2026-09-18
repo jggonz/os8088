@@ -162,10 +162,13 @@ hd_tool_need:
     jc .fail                    ; it even if we never get to free it - and
     mov [hd_tseg], dx           ; FROM THE TOP (SPEC.md 50.3.2.1): [hd_tfar]
                                 ; is PKG_DISP:[hd_tseg], so this image's base
-                                ; is its CS and it can never move. 13KB of
-                                ; pinned claim in the middle of the arena is
+                                ; is its CS and it can never move. HDTOOL_KB
+                                ; of pinned claim in the middle of the arena is
                                 ; also the largest single thing this driver
-                                ; ever puts there
+                                ; ever puts there - and the figure is DERIVED
+                                ; from the tool image by the Makefile, so it is
+                                ; not written out here: it said 13 while the
+                                ; constant was 14 (SPEC.md 52.10.14)
 
     mov es, dx
     xor bx, bx

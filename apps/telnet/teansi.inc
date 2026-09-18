@@ -17,7 +17,7 @@
 ; one that is not split at all.
 ;
 ; **tools/ansisim.py IS THE SECOND READER** (SPEC.md 70.12), the same state
-; machine in Python, and tests/telansi.py compares all 4,000 bytes of te_scr
+; machine in Python, and tests/telansi.py compares all 4,000 bytes of con_scr
 ; with what it produced for the same stream. Where this file and that one
 ; disagree, one of them is wrong and the diff says which cell - which is
 ; htmsim's role for the browser and weavesim's for Weave. **Never change
@@ -49,7 +49,7 @@ TE_ANS      equ 12                  ; the DSR answer is at most `ESC[25;80R`
 
 ; -----------------------------------------------------------------------------
 ; te_pbyte - AL = one application byte through the parser
-; in:  AL = the byte; the worker's task, NO gfx lock (rule 3: te_scr is written
+; in:  AL = the byte; the worker's task, NO gfx lock (rule 3: con_scr is written
 ;      lock-free and te_show settles the debt under the lock)
 ; out: nothing; every register preserved
 ; -----------------------------------------------------------------------------
@@ -163,7 +163,7 @@ te_ground:                          ; AL = the byte
     je .drop                        ; detector that never saw it could not fire
     call te_isctl
     jc te_control                   ; one of the seven, tail-called
-    jmp te_putc                     ; ...and EVERY other byte is a CP437 GLYPH,
+    jmp con_putc                     ; ...and EVERY other byte is a CP437 GLYPH,
 .esc:                               ; 0x00-0x1F and 0x7F included: BBS art is
     mov byte [te_pst], PS_ESC       ; made of them (SPEC.md 70.9.2)
     call te_pclear
@@ -221,7 +221,7 @@ te_control:                         ; AL = one of the seven
                                     ; by the thousand - so the marks are here
                                     ; and not in a prologue every byte pays
     push ax
-    call te_markcur                 ; the row the cursor is LEAVING owes a
+    call con_markcur                 ; the row the cursor is LEAVING owes a
                                     ; redraw: the underline is composed into
                                     ; its band (SPEC.md 70.8.2)
     cmp al, 0x08
@@ -235,43 +235,43 @@ te_control:                         ; AL = one of the seven
     cmp al, 0x0D
     je .cr
 .out:
-    call te_markcur
+    call con_markcur
     pop ax
 .none:
     ret
 
 .bs:                                ; left one, stopping at column 0, AND NO
-    mov byte [te_pwrap], 0          ; ERASE: a board draws with the cursor
-    cmp word [te_cx], 0
+    mov byte [con_pwrap], 0          ; ERASE: a board draws with the cursor
+    cmp word [con_cx], 0
     je .out
-    dec word [te_cx]
+    dec word [con_cx]
     jmp short .out
 
 .ht:                                ; to the next multiple of eight, clamped to
-    mov byte [te_pwrap], 0          ; column 79, and NO ERASE. te_putc wrote
-    mov ax, [te_cx]                 ; eight spaces before this file, which is
+    mov byte [con_pwrap], 0          ; column 79, and NO ERASE. con_putc wrote
+    mov ax, [con_cx]                 ; eight spaces before this file, which is
     add ax, 8                       ; why a board's aligned menu came out with
     and ax, 0FFF8h                  ; holes in it
-    cmp ax, TE_COLS
+    cmp ax, CON_COLS
     jb .htset
-    mov ax, TE_COLS - 1
+    mov ax, CON_COLS - 1
 .htset:
-    mov [te_cx], ax
+    mov [con_cx], ax
     jmp short .out
 
 .lf:                                ; **AN INDEX ONLY - NO CARRIAGE RETURN.**
-    mov byte [te_pwrap], 0          ; A terminal that homes the column on a
-    call te_nextrow                 ; line feed puts every second line of a
+    mov byte [con_pwrap], 0          ; A terminal that homes the column on a
+    call con_nextrow                 ; line feed puts every second line of a
     jmp short .out                  ; two-column menu against the left margin
 
 .cr:
-    mov byte [te_pwrap], 0
-    mov word [te_cx], 0
+    mov byte [con_pwrap], 0
+    mov word [con_cx], 0
     jmp short .out
 
 .ff:                                ; clear with the CURRENT attribute, home
-    mov byte [te_pwrap], 0
-    call te_clear
+    mov byte [con_pwrap], 0
+    call con_clear
     jmp short .out
 
 ; --- te_bell - and it NEVER BLOCKS (SPEC.md 70.9.2) -------------------------
@@ -352,9 +352,9 @@ te_escape:                          ; AL = the byte after ESC
 ; Two slots would be two states to keep in step for no gain (SPEC.md 70.9.3).
 te_savecur:
     push ax
-    mov ax, [te_cx]
+    mov ax, [con_cx]
     mov [te_sx], ax
-    mov ax, [te_cy]
+    mov ax, [con_cy]
     mov [te_sy], ax
     pop ax
     ret
@@ -362,26 +362,26 @@ te_savecur:
 ; **AND IT CLAMPS**, which is defence in depth rather than a rule of the
 ; protocol: the slot is written by one routine and read by another, and the w3
 ; review's BLOCKER 1 was a THIRD writer - OSAPI_FSX_MODE, through a te_fsi that
-; aliased these two words - putting 47,104 in [te_sx]. te_celloff has no range
-; check and te_putc is the one unguarded write in the package, so a cursor that
+; aliased these two words - putting 47,104 in [te_sx]. con_celloff has no range
+; check and con_putc is the one unguarded write in the package, so a cursor that
 ; cannot be out of range by construction is worth two compares.
 te_restcur:
     push ax
-    call te_markcur
+    call con_markcur
     mov ax, [te_sx]
-    cmp ax, TE_COLS
+    cmp ax, CON_COLS
     jb .cxok
-    mov ax, TE_COLS - 1
+    mov ax, CON_COLS - 1
 .cxok:
-    mov [te_cx], ax
+    mov [con_cx], ax
     mov ax, [te_sy]
-    cmp ax, TE_ROWS
+    cmp ax, CON_ROWS
     jb .cyok
-    mov ax, TE_ROWS - 1
+    mov ax, CON_ROWS - 1
 .cyok:
-    mov [te_cy], ax
-    mov byte [te_pwrap], 0
-    call te_markcur
+    mov [con_cy], ax
+    mov byte [con_pwrap], 0
+    call con_markcur
     pop ax
     ret
 
@@ -635,18 +635,18 @@ te_csidisp:
     ; screen. So the position is remembered, the final runs, and the two rows
     ; are marked only if it MOVED (the cursor's underline is in the band, so
     ; the row it left owes a redraw as much as the row it arrived on). The
-    ; finals that change a CELL mark their own rows in te_fillcells.
-    mov si, [te_cy]
-    mov di, [te_cx]
+    ; finals that change a CELL mark their own rows in con_fillcells.
+    mov si, [con_cy]
+    mov di, [con_cx]
     call te_final
-    cmp di, [te_cx]
+    cmp di, [con_cx]
     jne .moved
-    cmp si, [te_cy]
+    cmp si, [con_cy]
     je .out
 .moved:
     mov bx, si
-    call te_mark
-    call te_markcur
+    call con_mark
+    call con_markcur
 .out:
     pop di
     pop si
@@ -686,8 +686,8 @@ te_csidisp:
 .dnext:
     cmp byte [te_prm + bx], 25
     jne .dmore
-    mov [te_cvis], dl
-    call te_markcur                 ; the underline appears or goes
+    mov [con_cvis], dl
+    call con_markcur                 ; the underline appears or goes
     jmp short .out
 .dmore:
     inc bx
@@ -776,12 +776,12 @@ te_final:
 ; times, and a clamp that was right in three places and wrong in the fourth is
 ; not a shape this can take.
 te_f_cuu:
-    mov bx, te_cy
+    mov bx, con_cy
     jmp short te_f_back
 te_f_cub:
-    mov bx, te_cx
+    mov bx, con_cx
 te_f_back:
-    mov byte [te_pwrap], 0
+    mov byte [con_pwrap], 0
     mov ax, [bx]
     sub ax, dx
     jns .set
@@ -791,14 +791,14 @@ te_f_back:
     ret
 
 te_f_cud:
-    mov bx, te_cy
-    mov cx, TE_ROWS - 1
+    mov bx, con_cy
+    mov cx, CON_ROWS - 1
     jmp short te_f_fwd
 te_f_cuf:
-    mov bx, te_cx
-    mov cx, TE_COLS - 1
+    mov bx, con_cx
+    mov cx, CON_COLS - 1
 te_f_fwd:
-    mov byte [te_pwrap], 0
+    mov byte [con_pwrap], 0
     mov ax, [bx]
     add ax, dx
     cmp ax, cx
@@ -814,29 +814,29 @@ te_f_cnl:
 te_f_cpl:                           ; store instead of two
     call te_f_cuu
 te_f_col0:
-    mov word [te_cx], 0
+    mov word [con_cx], 0
     ret
 
 te_f_cha:
-    mov byte [te_pwrap], 0
+    mov byte [con_pwrap], 0
     mov ax, dx
     dec ax
-    cmp ax, TE_COLS
+    cmp ax, CON_COLS
     jb .set
-    mov ax, TE_COLS - 1
+    mov ax, CON_COLS - 1
 .set:
-    mov [te_cx], ax
+    mov [con_cx], ax
     ret
 
 te_f_cup:                           ; 1-BASED, both axes, and clamped
-    mov byte [te_pwrap], 0
+    mov byte [con_pwrap], 0
     mov ax, dx                      ; DX is already parameter 0's default-1
     dec ax
-    cmp ax, TE_ROWS
+    cmp ax, CON_ROWS
     jb .rset
-    mov ax, TE_ROWS - 1
+    mov ax, CON_ROWS - 1
 .rset:
-    mov [te_cy], ax
+    mov [con_cy], ax
     mov ax, 1
     cmp byte [te_pn], 2
     jb .cset                        ; a missing second parameter is 1
@@ -847,11 +847,11 @@ te_f_cup:                           ; 1-BASED, both axes, and clamped
 .cset:
     xor ah, ah
     dec ax
-    cmp ax, TE_COLS
+    cmp ax, CON_COLS
     jb .cput
-    mov ax, TE_COLS - 1
+    mov ax, CON_COLS - 1
 .cput:
-    mov [te_cx], ax
+    mov [con_cx], ax
     ret
 
 ; --- the erases -------------------------------------------------------------
@@ -869,18 +869,18 @@ te_f_ed:
     ret                             ; any other Pn does nothing
 .from:
     call te_here
-    mov cx, TE_CELLS
+    mov cx, CON_CELLS
     sub cx, ax
-    jmp te_fillcells
+    jmp con_fillcells
 .to:
     call te_here
     mov cx, ax
     inc cx
     xor ax, ax
-    jmp te_fillcells
+    jmp con_fillcells
 .all:                               ; **and it HOMES the cursor** - ANSI.SYS's
-    mov byte [te_pwrap], 0          ; behaviour and not the VT's, and every
-    jmp te_clear                    ; board on the wire was written against
+    mov byte [con_pwrap], 0          ; behaviour and not the VT's, and every
+    jmp con_clear                    ; board on the wire was written against
                                     ; ANSI.SYS
 
 te_f_el:
@@ -893,26 +893,26 @@ te_f_el:
     je .whole
     ret
 .from:
-    add ax, [te_cx]
-    mov cx, TE_COLS
-    sub cx, [te_cx]
-    jmp te_fillcells
+    add ax, [con_cx]
+    mov cx, CON_COLS
+    sub cx, [con_cx]
+    jmp con_fillcells
 .to:
-    mov cx, [te_cx]
+    mov cx, [con_cx]
     inc cx
-    jmp te_fillcells
+    jmp con_fillcells
 .whole:
-    mov cx, TE_COLS
-    jmp te_fillcells
+    mov cx, CON_COLS
+    jmp con_fillcells
 
 te_f_ech:
     call te_here
-    mov cx, TE_COLS
-    sub cx, [te_cx]
+    mov cx, CON_COLS
+    sub cx, [con_cx]
     cmp cx, dx
-    jbe te_fillcells
+    jbe con_fillcells
     mov cx, dx
-    jmp te_fillcells
+    jmp con_fillcells
 
 ; --- line and character editing ---------------------------------------------
 ; **NONE OF THESE MOVES THE CURSOR**, they operate on rows cy..24 and columns
@@ -927,8 +927,8 @@ te_f_il:
 te_f_dl:
     mov si, te_delline
 te_f_rows:
-    mov ax, TE_ROWS
-    sub ax, [te_cy]
+    mov ax, CON_ROWS
+    sub ax, [con_cy]
     jmp short te_f_clamp
 
 te_f_ich:
@@ -937,8 +937,8 @@ te_f_ich:
 te_f_dch:
     mov si, te_delchar
 te_f_cols:
-    mov ax, TE_COLS
-    sub ax, [te_cx]
+    mov ax, CON_COLS
+    sub ax, [con_cx]
 te_f_clamp:
     cmp dx, ax
     jbe .go
@@ -948,12 +948,12 @@ te_f_clamp:
     jmp si
 
 te_f_su:
-    mov si, te_scrollup
+    mov si, con_scrollup
     jmp short te_f_screen
 te_f_sd:
-    mov si, te_scrolldown
+    mov si, con_scrolldown
 te_f_screen:
-    mov ax, TE_ROWS
+    mov ax, CON_ROWS
     jmp short te_f_clamp
 
 ; --- what the terminal SAYS BACK --------------------------------------------
@@ -975,12 +975,12 @@ te_f_dsr:
     stosb
     mov al, '['
     stosb
-    mov ax, [te_cy]
+    mov ax, [con_cy]
     inc ax
     call te_dec
     mov al, ';'
     stosb
-    mov ax, [te_cx]
+    mov ax, [con_cx]
     inc ax
     call te_dec
     mov al, 'R'
@@ -1060,12 +1060,12 @@ te_dec:
 ; entirely wrong, and one that only shows up on the boards that put the 7
 ; first.
 ;
-; So six logical bytes, and [te_attr] is derived from them after every SGR:
+; So six logical bytes, and [con_attr] is derived from them after every SGR:
 ;
 ;   fg = te_lfg & 0x0F              bg = te_lbg & 0x07
 ;   if te_rev:  fg, bg = (bg | (fg & 8)), (fg & 7)      ; intensity stays on fg
 ;   if te_con:  fg = bg
-;   te_attr = (te_blk ? 0x80 : 0) | ((bg & 7) << 4) | (fg & 0x0F)
+;   con_attr = (te_blk ? 0x80 : 0) | ((bg & 7) << 4) | (fg & 0x0F)
 ;
 ; The four check values, which this and ansisim must both produce:
 ; `CSI 0;7m` 0x70, `CSI 1;7m` 0x78, `CSI 7;31m` 0x10, `CSI 44;8m` 0x44.
@@ -1232,7 +1232,7 @@ te_derive:
     je .set
     or al, 0x80
 .set:
-    mov [te_attr], al
+    mov [con_attr], al
     pop cx
     pop bx
     pop ax
@@ -1248,270 +1248,19 @@ te_derive:
 ; --- te_here - AX = the cursor's CELL index (not its byte offset) -----------
 te_here:
     push dx
-    mov ax, TE_COLS
-    mul word [te_cy]                ; **MUL WRITES DX** (SPEC.md 1)
-    add ax, [te_cx]
+    mov ax, CON_COLS
+    mul word [con_cy]                ; **MUL WRITES DX** (SPEC.md 1)
+    add ax, [con_cx]
     pop dx
     ret
 
 ; --- te_rowbase - AX = the cursor row's first CELL --------------------------
 te_rowbase:
     push dx
-    mov ax, TE_COLS
-    mul word [te_cy]
+    mov ax, CON_COLS
+    mul word [con_cy]
     pop dx
     ret
-
-; -----------------------------------------------------------------------------
-; te_fillcells - AX = the first cell, CX = how many; SPACE + [te_attr]
-; -----------------------------------------------------------------------------
-te_fillcells:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    push es
-    or cx, cx
-    jz .out
-    cmp ax, TE_CELLS
-    jae .out
-    mov bx, ax
-    add bx, cx
-    cmp bx, TE_CELLS
-    jbe .have
-    mov bx, TE_CELLS
-    mov cx, bx
-    sub cx, ax
-.have:
-    dec bx                          ; BX = the last cell touched
-    push ax
-    push cx
-    call te_markcells               ; AX = first, BX = last
-    pop cx
-    pop ax
-    push ds
-    pop es
-    cld
-    mov di, ax
-    shl di, 1
-    add di, te_scr
-    mov al, ' '
-    mov ah, [te_attr]
-    rep stosw
-.out:
-    pop es
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; --- te_markcells - AX = the first cell, BX = the last: mark their rows -----
-te_markcells:
-    push ax
-    push bx
-    push cx
-    push dx
-    push bx
-    xor dx, dx
-    mov cx, TE_COLS
-    div cx                          ; AX = the first row
-    mov bx, ax
-    pop ax
-    xor dx, dx
-    div cx                          ; AX = the last row
-    mov cx, ax
-.mk:
-    call te_mark
-    inc bx
-    cmp bx, cx
-    jbe .mk
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; te_cmove - CX cells within te_scr, from cell AX to cell DX
-; in:  AX = source, DX = destination, CX = how many cells
-;
-; **ONE MOVER FOR ALL SIX EDITS**, and it picks its own direction. IL, SD and
-; ICH open a gap and so copy BACKWARDS; DL, SU and DCH close one and copy
-; forwards; a routine per direction is two chances to get an overlap wrong, and
-; six copies of the address arithmetic is six chances to get the doubling
-; wrong. DF is left CLEAR whichever way it went (SPEC.md 1).
-; -----------------------------------------------------------------------------
-te_cmove:
-    push ax
-    push cx
-    push si
-    push di
-    push es
-    jcxz .out
-    push ds
-    pop es
-    mov si, ax
-    shl si, 1
-    add si, te_scr
-    mov di, dx
-    shl di, 1
-    add di, te_scr
-    cmp di, si
-    jbe .fwd
-    mov ax, cx                      ; the destination is ABOVE the source, so
-    dec ax                          ; the last cell moves first
-    shl ax, 1
-    add si, ax
-    add di, ax
-    std
-    rep movsw
-    cld
-    jmp short .out
-.fwd:
-    cld
-    rep movsw
-.out:
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; te_scrollup - AX = rows, the whole screen up; the vacated rows blanked
-;
-; **ONLY THIS AND `LF` AT THE BOTTOM TAKE [te_scrl]** (SPEC.md 70.9.3), because
-; only they move the screen as a whole in the direction the blit can follow.
-; te_markup carries every existing mark up with the buffer, which is 70.8.1's
-; own rule, and the debt is spent as ONE OSAPI_GFX_SCROLL windowed or ONE
-; `rep movsw` in text mode.
-; -----------------------------------------------------------------------------
-; **THE BUFFER, THE MARKS AND THE DEBT ARE ONE TRANSACTION** (the w3 review's
-; MAJOR 1). This runs on the WORKER and both renderers run on the UI task at the
-; same time - that is what FSXF_KEEPWORKER means (SPEC.md 53.5.1) and why
-; SPEC.md 70.8.8 made the debt a shared word at all. The three steps used to be
-; visible separately: te_cmove moved 2,000 cells, te_markup moved the bitmap,
-; te_fillcells marked the vacated rows, and only THEN did `add [te_scrl], ax`
-; make the debt visible.
-;
-; A renderer that preempted between the move and the add drew a row from a mark
-; set BEFORE the scroll, so it put post-scroll content at a post-scroll position
-; - correct - and the next pass then spent the debt as one `rep movsw` and moved
-; it a row too far. **Only the rows the scroll VACATED are marked**, so nothing
-; repaired the rows above them and a board that scrolls and then sits at a menu
-; left them wrong for the rest of the session. te_takescroll made the COUNTER
-; atomic; this makes the SCROLL atomic, which is the same defect one step out.
-;
-; [te_scrbusy] is that transaction, and the renderers' two takers answer "there
-; is nothing owed" while it is set: one skipped frame against a screen that
-; cannot be repaired. It is one byte in the parser's own bss run, so te_reset
-; covers it for free.
-te_scrollup:
-    push ax
-    push bx
-    push cx
-    push dx
-    or ax, ax
-    jz .out
-    mov byte [te_scrbusy], 1
-    cmp ax, TE_ROWS
-    jae .all
-    push ax                         ; N, for the marks and the debt
-    mov bx, TE_COLS
-    mul bx                          ; AX = n*80 cells, DX = 0 (under 2,000)
-    mov bx, ax                      ; BX = the cells it vacates
-    mov cx, TE_CELLS
-    sub cx, bx                      ; CX = the cells that survive
-    xor dx, dx                      ; ...moved to cell 0 from cell n*80
-    call te_cmove
-    pop ax
-    mov cx, ax
-.up:
-    call te_markup                  ; a mark names a row of the BUFFER, and the
-    loop .up                        ; buffer just moved - so the marks move too,
-                                    ; BEFORE the fill below adds its own
-    push ax
-    mov cx, bx
-    mov ax, TE_CELLS
-    sub ax, bx
-    call te_fillcells               ; ...which marks the vacated rows, and only
-    pop ax                          ; those: the SCROLL DEBT is what redraws the
-    jmp short .debt                 ; rest, as one blit
-.all:
-    push ax
-    xor ax, ax
-    mov cx, TE_CELLS
-    call te_fillcells               ; ...which marks every row it filled
-    pop ax
-.debt:
-    pushf                           ; **THE ADD AND ITS SATURATION ARE ONE
-    cli                             ; OPERATION** (the w3 review's MINOR 5): the
-    add [te_scrl], ax               ; `cmp`/`mov` used to sit outside the atomic
-    cmp word [te_scrl], TE_ROWS     ; add, so te_takescroll zeroing the counter
-    jbe .sat                        ; between them wrote 25 back - a phantom
-    mov word [te_scrl], TE_ROWS     ; full-screen scroll that never happened.
-.sat:                               ; SATURATED, so a board that scrolls a
-    popf                            ; thousand rows while the window is covered
-                                    ; cannot wrap the word; both renderers read
-                                    ; anything at or past TE_ROWS as "repaint
-                                    ; the lot"
-    mov byte [te_scrbusy], 0        ; ...and the transaction closes HERE, with
-                                    ; the buffer, the bitmap and the debt all
-                                    ; agreeing with each other again
-.out:
-    mov byte [te_scrbusy], 0
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; te_scrolldown - AX = rows, the whole screen down. NO SCROLL DEBT: [te_scrl]
-; is "rows the buffer has moved UP", which is the one direction the windowed
-; blit and the text-mode `rep movsw` are both written for, so this marks
-; instead.
-; -----------------------------------------------------------------------------
-te_scrolldown:
-    push ax
-    push bx
-    push cx
-    push dx
-    or ax, ax
-    jz .out
-    cmp ax, TE_ROWS
-    jae .all
-    mov bx, TE_COLS
-    mul bx                          ; AX = n*80 cells
-    mov bx, ax
-    mov cx, TE_CELLS
-    sub cx, bx                      ; CX = the cells that survive
-    mov dx, bx                      ; ...from cell 0 down to cell n*80
-    xor ax, ax
-    call te_cmove
-    xor ax, ax
-    mov cx, bx
-    call te_fillcells
-    call te_markall
-    jmp short .out
-.all:
-    xor ax, ax
-    mov cx, TE_CELLS
-    call te_fillcells
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; te_insline / te_delline - AX = rows, at [te_cy]. The cursor does not move.
-; -----------------------------------------------------------------------------
 te_insline:
     push ax
     push bx
@@ -1520,12 +1269,12 @@ te_insline:
     push si
     or ax, ax
     jz .out
-    mov bx, TE_COLS
+    mov bx, CON_COLS
     mul bx                          ; AX = n*80, the cells the gap opens
     mov si, ax                      ; SI = the gap
     call te_rowbase
     mov bx, ax                      ; BX = the first cell of row cy
-    mov cx, TE_CELLS
+    mov cx, CON_CELLS
     sub cx, bx                      ; CX = cells from there to the bottom
     cmp si, cx
     jae .whole                      ; the gap covers the rest of the screen
@@ -1533,16 +1282,16 @@ te_insline:
     mov ax, bx
     mov dx, bx
     add dx, si
-    call te_cmove
+    call con_cmove
     mov cx, si
 .whole:
     mov ax, bx
-    call te_fillcells               ; CX is the gap, or the whole tail
-    mov bx, [te_cy]
+    call con_fillcells               ; CX is the gap, or the whole tail
+    mov bx, [con_cy]
 .mk:
-    call te_mark                    ; every row the edit MOVED (SPEC.md 70.9.3)
+    call con_mark                    ; every row the edit MOVED (SPEC.md 70.9.3)
     inc bx
-    cmp bx, TE_ROWS
+    cmp bx, CON_ROWS
     jb .mk
 .out:
     pop si
@@ -1560,12 +1309,12 @@ te_delline:
     push si
     or ax, ax
     jz .out
-    mov bx, TE_COLS
+    mov bx, CON_COLS
     mul bx
     mov si, ax                      ; SI = the cells the delete closes
     call te_rowbase
     mov bx, ax
-    mov cx, TE_CELLS
+    mov cx, CON_CELLS
     sub cx, bx
     cmp si, cx
     jae .whole
@@ -1573,21 +1322,21 @@ te_delline:
     mov ax, bx
     add ax, si
     mov dx, bx
-    call te_cmove
-    mov ax, TE_CELLS
+    call con_cmove
+    mov ax, CON_CELLS
     sub ax, si                      ; ...and the blanks arrive at the BOTTOM
     mov cx, si
-    call te_fillcells
+    call con_fillcells
     jmp short .mark
 .whole:
     mov ax, bx
-    call te_fillcells
+    call con_fillcells
 .mark:
-    mov bx, [te_cy]
+    mov bx, [con_cy]
 .mk:
-    call te_mark
+    call con_mark
     inc bx
-    cmp bx, TE_ROWS
+    cmp bx, CON_ROWS
     jb .mk
 .out:
     pop si
@@ -1598,11 +1347,11 @@ te_delline:
     ret
 
 ; -----------------------------------------------------------------------------
-; te_inschar / te_delchar - AX = cells, at [te_cx] in the cursor's row
+; te_inschar / te_delchar - AX = cells, at [con_cx] in the cursor's row
 ;
 ; The same two shapes one region smaller: the region is the cursor's row from
-; [te_cx] to column 79 rather than the screen from [te_cy] to row 24, and
-; te_fillcells marks the one row that changed.
+; [con_cx] to column 79 rather than the screen from [con_cy] to row 24, and
+; con_fillcells marks the one row that changed.
 ; -----------------------------------------------------------------------------
 te_inschar:
     push ax
@@ -1615,19 +1364,19 @@ te_inschar:
     mov si, ax                      ; SI = the gap
     call te_here
     mov bx, ax                      ; BX = lo, the first cell it opens
-    mov cx, TE_COLS
-    sub cx, [te_cx]                 ; CX = the cells from lo to the row's end
+    mov cx, CON_COLS
+    sub cx, [con_cx]                 ; CX = the cells from lo to the row's end
     cmp si, cx
     jae .whole
     sub cx, si                      ; CX = the cells that survive, moved right
     mov ax, bx
     mov dx, bx
     add dx, si
-    call te_cmove
+    call con_cmove
     mov cx, si
 .whole:
     mov ax, bx
-    call te_fillcells
+    call con_fillcells
 .out:
     pop si
     pop dx
@@ -1647,24 +1396,24 @@ te_delchar:
     mov si, ax
     call te_here
     mov bx, ax
-    mov cx, TE_COLS
-    sub cx, [te_cx]
+    mov cx, CON_COLS
+    sub cx, [con_cx]
     cmp si, cx
     jae .whole
     sub cx, si
     mov ax, bx
     add ax, si
     mov dx, bx
-    call te_cmove
+    call con_cmove
     call te_rowbase
-    add ax, TE_COLS
+    add ax, CON_COLS
     sub ax, si                      ; the blanks arrive at the RIGHT
     mov cx, si
-    call te_fillcells
+    call con_fillcells
     jmp short .out
 .whole:
     mov ax, bx
-    call te_fillcells
+    call con_fillcells
 .out:
     pop si
     pop dx

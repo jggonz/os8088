@@ -201,7 +201,7 @@ def main():
     # on a 1bpp adapter. This row then compared a solid canvas against an
     # alternating file and read 20,327 differing pixels of 51,260, which is
     # indistinguishable from the decoder bug it exists to catch and was filed
-    # as a pre-existing failure (docs/plans/HANDOFF-SOAK-FINDINGS.md F1).
+    # as a pre-existing failure.
     #
     # So: the logo itself. It is two colours, 39.4 sends each to a solid
     # class, and the docstring at the top of this file is true again.

@@ -12,7 +12,14 @@ link manages; what matters is that it is uncorrelated with anything the guest
 does, which a host-driven poll is.
 """
 import sys, re, time
-sys.path.insert(0, '/home/user/os8088/tools')
+import os
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, 'tools'))
 from os88marty import Marty
 
 LST = sys.argv[1] if len(sys.argv) > 1 else 'build/tracker.lst'

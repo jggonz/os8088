@@ -1280,12 +1280,16 @@ cmz_pkg:
     mov dx, LD_HDR_SIZE         ; the CLEAR prefix, ld_cpre's own ladder: what
     test al, 1                  ; the mount reads out of the first sector and
     jz .noico                   ; must never have to decompress to get
-    add dx, 64                  ; (SPEC.md 20.13.1). At most 112, and always a
+    add dx, 64                  ; (SPEC.md 20.13.1). At most 128, and always a
 .noico:                         ; multiple of 16 - which is what lets the
     test al, 2                  ; source be a SEGMENT below and the header
     jz .noasc                   ; land on a paragraph in front of the stream
     add dx, 16
 .noasc:
+    test al, LD_HF_GLYPH        ; ...and the document glyph (SPEC.md 54.3.2)
+    jz .nogly
+    add dx, 16
+.nogly:
     mov [cs:cmz_x], dx
     add dx, CMZ_SLACK
     cmp dx, [cs:cmz_u]

@@ -22,6 +22,16 @@
 ; constantly, which is the point: what survives is what was painted after the
 ; last frame that ever finished.
 ;
+; AN IP IS NOT AN OFFSET IN THIS PACKAGE (SPEC.md 88.14.4). It is whatever was
+; interrupted, and while the flight is RUNNING that is regularly somewhere
+; else: `cs_input` polls the keyboard with `int 16h` (SPEC.md 53.1), which is
+; the ROM, and a kernel slot is a far call into KERNEL_SEG. So the CS is
+; banked per slot in cs_dcsr and a reading places each IP rather than assuming
+; it. The painted block 9 stays the NEWEST sample's CS, which is the one a
+; photograph of a FROZEN machine needs; a strip of twelve blocks would not fit
+; above the view (88.14.3's arithmetic: CSD_TOP + 12 * CSD_ROWS = 84 against a
+; Hercules view at 74).
+;
 ; It chains rather than replacing: the kernel's sch_isr is what schedules and
 ; what sends the EOI, and this runs in front of it on the interrupted task's
 ; stack, which is ~20 bytes of one slice for as long as the bracket lasts.
@@ -301,6 +311,12 @@ cs_diag_isr:
     mov [cs_dcseg], cx              ; says whether an IP is ours at all
     mov bx, [cs_dhead]
     mov [cs_dring + bx], ax
+    mov [cs_dcsr + bx], cx          ; ...and banked WITH the slot (SPEC.md
+                                    ; 88.14.4). cs_dcseg is the NEWEST
+                                    ; sample's CS and places only that one;
+                                    ; the other two slots are ordinarily in a
+                                    ; different segment from it and were
+                                    ; unplaceable by anything
     add bx, 2
     cmp bx, CSD_SLOTS * 2
     jb .head

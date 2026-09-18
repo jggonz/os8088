@@ -51,6 +51,26 @@ BUILDS_WITHOUT_MAKE = {
 
 # Not registered, and why. Keep the reason specific and true.
 UNREGISTERED = {
+    # --- the rows of a RETIRED package (SPEC.md 20.16, apps/RETIRED.txt) ---
+    # These two drive PACMAN.O88, which `all` no longer builds (SPEC.md
+    # 89.12), so a registered row would need `wants=("build/pacman.o88",)`
+    # and would spend an emulator boot on a program that ships nowhere. They
+    # are KEPT rather than deleted for the same reason the source and SPEC.md
+    # 89 are: `make pacman` still builds the package, so the record can be
+    # run by whoever wants to look at it - and a retirement that deleted the
+    # only way to check the thing being retired is a claim nobody can audit.
+    # If the decision is ever reversed, these go back in a tier; while it
+    # stands, they are documentation with a shebang.
+    "pacman.py": "drives PACMAN.O88, which is RETIRED - `make pacman` still "
+                 "builds it and this still runs, but no tier spends an "
+                 "emulator boot on a package that ships nowhere",
+    "t_pacman.py": "the Atari maze's reachability and sprite check, for the "
+                   "RETIRED PACMAN.O88. Host-side and 0.1s, so the cost is "
+                   "not the argument - it is that `all` no longer builds the "
+                   "package it is about, and a fast row every contributor "
+                   "pays for may not be about a program that ships nowhere "
+                   "(docs/WRITING-TESTS.md 2.1)",
+
     # --- library and support code, not tests ---
     "dispcells.py": "the CELLS-not-calls counter two gates share (SPEC.md "
                     "11.3.3), not a test",
@@ -63,10 +83,18 @@ UNREGISTERED = {
                  "green row that tests nothing is worse than B4's three rows "
                  "that failed where they meant to skip, because nobody "
                  "investigates a pass",
+    "dosmap.py": "symbol offsets for the DOS box and for a probe running "
+                 "INSIDE it - library, not a test. It exists because "
+                 "dispapps._map's `defines` argument means exactly ONE thing "
+                 "(-DAPP_SMALL, compared against build/smallapp/), and its "
+                 "source path is apps/<app>/<app>.asm, which "
+                 "tests/dostrap/dospkt.asm is not. Both differences fail as a "
+                 "message about the wrong subject. tests/dosxlat.py is the "
+                 "registered row that reads through it",
     "os88qemu.py": "the teardown every QEMU launcher registers, written once "
                    "rather than thirteen times - library, not a test. What "
                    "checks it is `t_qemuown`, which asserts every launcher "
-                   "calls it (docs/plans/HANDOFF-SOAK-FINDINGS.md B9)",
+                   "calls it",
     "benchlib.inc": "a benchmark library, not a test",
     "trklog.inc": "tracker's logging build, %included by apps/tracker",
     "trkscrl.inc": "tracker's scroll-gate build, %included by apps/tracker",
@@ -149,7 +177,18 @@ UNREGISTERED = {
     "rczex_ocr.py": "needs the RunCPM fetch and an OCR dependency",
     "proxytest.py": "drives tools/os88proxy.py against a live network",
     "proxyguitest.py": "drives the proxy GUI, needs a display",
-    "socktest.py": "needs `make socktest` and QEMU networking",
+    "socktest.py": "needs `make socktest`, and it is MINUTES: the cable is "
+                   "stepped a nibble at a time, so a page fetch is ~13 of "
+                   "them. **AND IT DOES NOT NEED QEMU NETWORKING**, which is "
+                   "what this reason said - it runs under MartyPC with "
+                   "tests/lptlink/partner.py as the far end and real host "
+                   "sockets behind that, no NIC anywhere. Measured while "
+                   "tests/doscable.py was being written, which is the same "
+                   "arrangement one layer up and IS registered: socktest "
+                   "fetches its page correctly and then fails its own "
+                   "handle-leak assertion with `8 of 4 handles free after the "
+                   "close`, which reads as a bug in that assertion rather "
+                   "than in the wire. Nobody has been running it to notice",
 
     # --- A/B gates: each needs a SECOND kernel built with a knob, so it is a
     #     two-build session rather than a row (the knob itself is kept alive
@@ -356,6 +395,24 @@ def main():
         # call: under the runner an undeclared target is an error and not a
         # build. A wrong `wants=` therefore fails the row that owns it rather
         # than the run beside it, which is the property this flag is for.
+        # A `wants=` ENTRY IS A PATH, NEVER A MAKE TARGET, and getting that
+        # wrong is a row that SKIPS FOR EVER. tools/os88test.py's prebuild
+        # runs `make <entry>` and then asks `os.path.exists(ROOT/<entry>)`,
+        # so a phony target builds fine, exits 0, and still reports as an
+        # artefact that "would not build" - after which every row wanting it
+        # skips. `btngesture` landed with `wants=("marty",)`, which is the
+        # emulator CAPABILITY and belongs in `needs=`: it never ran once, and
+        # nobody investigates a skip (docs/WRITING-TESTS.md 1). The registry's
+        # own comment on `wants` already says "Paths, not make targets"; this
+        # is that sentence made checkable.
+        for w in r.wants:
+            check("/" in w, "row %s wants `%s`, which is not a path" % (r.name, w),
+                  "the runner builds a wants= entry with `make <it>` and then "
+                  "tests os.path.exists on it, so a phony target can never "
+                  "satisfy the check and the row skips on every run. An "
+                  "emulator or toolchain requirement goes in needs=; a build "
+                  "artefact goes here as the path the row opens",
+                  got=repr(w), want="a build/... path, or needs=(...)")
         if priv and not makes and r.builds:
             check(False, "row %s builds PRIVATELY and is still builds=True"
                   % r.name,
@@ -393,6 +450,55 @@ def main():
                   "writes build/ without a `make`",
                   got="builds=True", want="a `make` in %s"
                        % (", ".join(scripts) or "its command"))
+
+    # ...AND NOT ONE OF THEM MAY NAME AN ABSOLUTE CHECKOUT PATH.
+    #
+    # A script that hard-codes the tree it was written in does not fail in a
+    # git worktree - it SILENTLY TESTS THE OTHER TREE. Measured: run from a
+    # worktree, `tests/dispapp.py` reported "no MartyPC run directory at
+    # /home/user/os8088/build/martypc/run", the MAIN checkout, and on a box
+    # where that tree HAS been built (the normal case) it would have booted
+    # that kernel and those floppies while reporting on the worktree.
+    # `tests/arkpuwipe.py` had already written the consequence down - os88sym
+    # re-assembles ROOT/kernel/kernel.asm and compares it against
+    # ROOT/build/kernel.bin, so a literal ROOT answers about a different
+    # kernel from the image being booted - and fixed itself alone, which is
+    # exactly how one file's note fails to reach the other thirty-seven.
+    #
+    # It went unnoticed because nothing here ran from a worktree until
+    # parallel agents did; the literal is correct in the checkout it was
+    # written in, and every one of these scripts passed there.
+    #
+    # The check is the PATH SHAPE and not one project's directory: any
+    # absolute path into a home or checkout root inside a string literal.
+    # A comment may name one - two files explain the trap in prose.
+    home = re.compile(r"""["'](/(?:home|Users)/[^"'\n]*)["']""")
+    _td = os.path.join(ROOT, "tests")
+    for name in sorted(os.listdir(_td)) + \
+            ["unit/" + n for n in sorted(os.listdir(os.path.join(_td, "unit")))]:
+        if not name.endswith(".py"):
+            continue
+        path = os.path.join(_td, name)
+        try:
+            src = open(path, encoding="utf-8").read()
+        except OSError:
+            continue
+        hits = []
+        for n, line in enumerate(src.split("\n"), 1):
+            if line.lstrip().startswith("#"):
+                continue                                  # prose may name one
+            m = home.search(line)
+            if m:
+                hits.append((n, m.group(1)))
+        for n, lit in hits:
+            check(False,
+                  "tests/%s:%d hard-codes an absolute checkout path" % (name, n),
+                  "a literal root is right in the checkout it was written in "
+                  "and WRONG in a git worktree, where it does not fail - it "
+                  "silently reads the OTHER tree's build/ and kernel. Derive "
+                  "it: `_OS88_ROOT = os.path.dirname(os.path.dirname("
+                  "os.path.abspath(__file__)))`, then os.path.join off that",
+                  got=lit, want="a path derived from __file__")
 
     print("t_registry: %d files in tests/, %d registered, %d exempted, "
           "%d build" % (found, len(reg), len(UNREGISTERED),

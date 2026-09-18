@@ -46,8 +46,8 @@ suite and quietly cost the VGA fifteen of its colours. `paintblank`,
 `paintsize`, `paintshrink`, `paintrz-1bpp`, `paintwipe`, `paintundo`,
 `paintanchor`, `paintdirty`, `paintsu`, `paintbig`, `paintcull`, `paintplan`,
 `paintdraw`, `paintfill` and `paintback` all pass. **`paintrow` fails and did
-so before this work** — A/B'd against a worktree at the preceding commit, and
-recorded as docs/plans/HANDOFF-SOAK-FINDINGS.md A6.
+so before this work** — A/B'd against a worktree at the preceding commit. It
+has since been fixed, and it was upstream's.
 
 **One consequence the design did not anticipate**, and it is worth reading
 before touching the load rule: `build/OS8088.GIF` has a **two-entry colour

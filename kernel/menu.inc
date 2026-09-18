@@ -2347,16 +2347,32 @@ section .text
 ; -----------------------------------------------------------------------------
 menu_hover:
     push cx
-    mov ax, [mouse_x]
-    cmp ax, [menu_x1]
+    pushf                       ; ONE READING OF THE POINTER (SPEC.md 12.4.1).
+    cli                         ; mou_apply stores [mouse_x] and THEN
+    mov cx, [mouse_x]           ; [mouse_y], so a packet decoded between two
+    mov ax, [mouse_y]           ; plain loads hands this routine the OLD x
+    popf                        ; with the NEW y - a position the pointer
+                                ; never occupied. Everywhere else that would
+                                ; be one wrong XOR frame; here menu_drop
+                                ; LATCHES the answer in [menu_sel] and the
+                                ; release RUNS it, and one Microsoft packet
+                                ; carries the deltas and the button level
+                                ; together - so the report that lets go is
+                                ; exactly the one that can tear. Measured: a
+                                ; single (-100, +18, up) packet off a title
+                                ; launched the menu's first item 4 times in
+                                ; 320, from two coordinates neither of which
+                                ; is over it
+    cmp cx, [menu_x1]
     jb .none
-    cmp ax, [menu_x2]
+    cmp cx, [menu_x2]
     ja .none
-    mov cx, [menu_y1]
-    inc cx                      ; the top frame row is not an item cell
-    mov ax, [mouse_y]
-    sub ax, cx                  ; rows above the first cell borrow out
-    jb .none
+    sub ax, [menu_y1]           ; rows above the first cell borrow out, and
+    jbe .none                   ; the frame row ITSELF is not an item cell -
+    dec ax                      ; which is the [menu_y1] + 1 this used to
+                                ; add, spelled so that the y can stay in AX
+                                ; and the routine still clobbers nothing but
+                                ; it
     mov cl, 4
     shr ax, cl                  ; / 16 -> cell index
     cmp ax, [menu_cnt]

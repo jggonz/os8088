@@ -16,6 +16,14 @@
 ; existed: the palace by 30.8 m and the cathedral by 7.9. They moved with the
 ; tower and every collidable base now stands clear (88.6.3).
 ;
+; ISSY'S HANGAR STANDS 40 m BACK FROM THE RUNWAY, at (-2781, -2324), and that
+; is the same move against the other thing a building here can be too close to
+; (88.6.6): the 60x120 m footprint used to clear the runway edge by 1.2 m, so
+; the parked view had it sitting on the edge line and a drift left on the roll
+; hit a CSO_COLLIDE box. It is 41.7 m clear now - forty metres and not the
+; 183 to 313 every other world's hangar keeps, because this is the one
+; building the take-off view has a foreground made of (88.12's "near hangar").
+;
 ; The macros, the face tables, the anonymous filler models and the ribbon
 ; faces this file uses are csworld.inc's, shared with every other world.
 ; =============================================================================
@@ -264,7 +272,7 @@ cs_ot_paris:
     CS_OBJ cs_m_per1,   0,             5576, -2576,   0,  8000,    0, cs_n_seine,  CSO_ROAD
     CS_OBJ cs_m_per2,   0,             -576, -2576,   0,  8000,    0, cs_n_seine,  CSO_ROAD
     CS_OBJ cs_m_per3,   0,             -576,  3576,   0,  8000,    0, cs_n_seine,  CSO_ROAD
-    CS_OBJ cs_m_hangar, 0,            -2750, -2350,   0,  3000,    0, cs_n_bldg,   CSO_COLLIDE
+    CS_OBJ cs_m_hangar, 0,            -2781, -2324,   0,  3000,    0, cs_n_bldg,   CSO_COLLIDE   ; 40 m back (88.6.6)
     CS_OBJ cs_m_shed,   0,            -2300, -2750,   0,  3000,    0, cs_n_bldg,   CSO_COLLIDE
     CS_OBJ cs_m_small,  0,            -2900, -2050,   0,  2500,    0, cs_n_bldg,   CSO_COLLIDE
     CS_OBJ cs_m_block,  0,             1000,  1200,   0,  3000,    0, cs_n_bldg,   CSO_COLLIDE

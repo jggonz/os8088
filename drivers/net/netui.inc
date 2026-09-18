@@ -384,6 +384,16 @@ net_brect:
 ; rule 3: the only test of "is there a partner" is asking, so Connect asks and
 ; the Link row answers.
 ; -----------------------------------------------------------------------------
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; A Control Panel page draws its buttons one at a time, so the record is
+; pointed at whichever rect the caller staged. The GESTURE here is the
+; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
+; release-fired; what changed is that the DRAW goes through the control.
+nu_btlbl: dw 0
+nu_btflg: dw 0
+    OS88UI_BTNREC nu_btrec, 0, nu_btlbl, nu_btflg, 1
+
 net_draw_btn:
     push ax
     push bx
@@ -400,7 +410,16 @@ net_draw_btn:
     je .up                      ; draws this button asks about, so the glass
     mov di, OS88UI_DOWN         ; follows [net_down] on a full pane repaint as
 .up:                            ; much as on an edge (SPEC.md 13.8)
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [nu_btlbl], si          ; label and DI its flags, so the record takes
+    mov [nu_btflg], di          ; all three and the picture is identical
+    mov [nu_btrec+OS88UI_BT_RECTS], bx
+    mov bx, nu_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop bx

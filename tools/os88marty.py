@@ -109,8 +109,8 @@ KERNEL_SEG = 0x0060
 # idle container here and ~2.4 with three other emulators up, so the same line
 # of the same test gives the machine four times less work to do - and the row
 # fails somewhere further on, wearing a symptom that looks like the thing under
-# test.  That is `docs/plans/HANDOFF-SOAK-FINDINGS.md` B5, and it is why fifteen
-# failures in the pass-2 soak each cost somebody a classification run.
+# test.  That is the mechanism, and it is why fifteen failures in the pass-2
+# soak each cost somebody a classification run.
 #
 # Two different questions come off this clock and they want different answers:
 #
@@ -378,8 +378,46 @@ class Marty:
         return self.cmd(cmd="cards")["cards"]
 
     def screen(self, card=None):
-        """The video card's text rows, in text modes."""
-        return self.cmd(cmd="screen", card=card)["rows"]
+        """The video card's text rows, in text modes.
+
+        **ON MARTYPC'S VGA THE SERVER ANSWERS BLANK ROWS**, in a text mode,
+        with no error - so a caller waiting for a prompt to appear waits for
+        ever and then reports the thing it was driving as broken. That is the
+        wrong answer rather than a missing one, which is why there is a
+        fallback here rather than a note somewhere: when the rows come back
+        empty and the card is a VGA standing in a text mode, the text is read
+        out of the framebuffer instead. Mode 3 is odd/even addressed, so
+        char/attr pairs sit at 0xB8000 exactly where a CGA has them, and
+        `read` resolves MMIO - the same route `vram` takes for the 1bpp
+        adapters.
+
+        PAGE 0, and a genuinely blank screen costs one extra read: both are
+        deliberate. A card that answers rows keeps answering them, so nothing
+        that works today changes.
+        """
+        rows = self.cmd(cmd="screen", card=card)["rows"]
+        if any(r.strip() for r in (rows or ())):
+            return rows
+        try:
+            v = self.video(card)
+            if v.get("type") == "vga" and video_is_text(v):
+                return self._vga_text(v)
+        except Exception:
+            pass
+        return rows
+
+    def _vga_text(self, v):
+        """`screen()`'s VGA fallback: page 0's character cells, decoded."""
+        mode = str(v.get("mode") or "")
+        base = 0xB0000 if ("Mda" in mode or "Mono" in mode) else 0xB8000
+        cols = 40 if mode.endswith("40") else 80
+        data = self.read(base, cols * 25 * 2)
+        out = []
+        for y in range(25):
+            line = bytearray(data[(y * cols + x) * 2] for x in range(cols))
+            line = bytearray(b if b >= 32 else 32 for b in line)
+            out.append(line.decode("cp437").rstrip())
+        return out
 
     def video(self, card=None):
         """Which card, its raster geometry, and its display apertures.
@@ -702,8 +740,8 @@ class Marty:
         THE LIMIT IS GUEST TIME, converted at GUEST_BUDGET_RATIO.  This one
         matters more than it looks: `tests/dskwstage.py` reports *"dskw_write_x
         never returned - the machine is still running after 180s"*, and that
-        180 was a HOST bound on a box whose load nobody recorded
-        (docs/plans/HANDOFF-SOAK-FINDINGS.md E2).  Read as guest seconds the same
+        180 was a HOST bound on a box whose load nobody recorded.  Read as
+        guest seconds the same
         number says something about the machine instead, and says the same
         thing twice running.
         """
@@ -918,6 +956,39 @@ class Marty:
                                                              # is a guest
                                                              # nobody can get
                                                              # back
+    def alt(self, name, hold=0.0):
+        """One key with AltLeft HELD across it.
+
+        `ctrl`'s shape and for its reason: the debug server presses with
+        `KeyboardModifiers::default()`, so a modifier is a key that is DOWN
+        exactly as it is on the real 8255, and not a flag on the press.
+
+        THE GUEST MAY SEE NOTHING THROUGH int 16h, and that is not this
+        method's failure - a period XT ROM has no entry for Alt+Enter at all
+        (SPEC.md 9.7.1) and enqueues nothing. What always reaches the guest is
+        the SCANCODES, which is what the kernel's key-state map reads.
+
+        `hold` is SECONDS THE KEY STAYS DOWN, and it is not padding: a guest
+        that reads this combination off the key-state map is asking "are both
+        down" on a POLL (SPEC.md 9.7), so a press and release inside one of
+        its poll intervals is invisible to it - correctly, because no finger
+        can produce one. The default 0.0 is the bare press an EDGE consumer
+        wants; pass a human keystroke, 0.08-0.15s, for a level one.
+        """
+        self.key("AltLeft", down=True, up=False)
+        try:
+            if not hold:
+                self.key(name)
+            else:
+                self.key(name, down=True, up=False)
+                import time as _t
+                _t.sleep(hold)
+                self.key(name, down=False, up=True)
+        finally:
+            self.key("AltLeft", down=False, up=True)     # ...ALWAYS: a stuck
+                                                         # modifier is a guest
+                                                         # nobody can get back
+
     def _shifted(self, name, shift):
         """One key, optionally with ShiftLeft held down across it."""
         if not shift:
@@ -1621,7 +1692,7 @@ def _warn_oversubscribed(about_to_start):
 # pinned build now exits with `ROM set ibm5150_82_v4 not found`, so a bare
 # `launch()` of one fails loudly instead).  Nine rows name a
 # non-GLaBIOS machine, four of them registered, and not one had ever run on
-# the ROM it asked for (docs/plans/HANDOFF-SOAK-FINDINGS.md E3).  A row that quietly
+# the ROM it asked for.  A row that quietly
 # gets a different machine than it named is worth less than a row that skips.
 #
 # THE POLICY, and it is deliberately the strict direction: NAMING THE IBM
@@ -1658,6 +1729,16 @@ IBM_TWIN = {
     "os8088_5150_herc_sb": "os8088_5150_herc_sb_gla",
     "os8088_5150_both": "os8088_5150_both_gla",
     "os8088_5150_sb":   "os8088_5150_sb_gla",
+    # ...and the two HARD-DISK machines, which were missing. `tests/dosram.py`
+    # and `tests/kdnoprog.py` name `os8088_5150_cga_hdd`, so both rows exited
+    # at once on `ROM set ibm5150_82_v4 not found` - and `t_machines` did not
+    # complain, because it took THIS DICT as the list of IBM machines instead
+    # of reading the romset out of the config. It reads the config now, so this
+    # dict is a map of answers rather than the definition of the question, and
+    # an IBM machine with no row here fails that gate the moment a row names
+    # it. `os8088_5150_herc_hdd_gla` already existed and was simply unmapped.
+    "os8088_5150_cga_hdd":  "os8088_5150_cga_hdd_gla",
+    "os8088_5150_herc_hdd": "os8088_5150_herc_hdd_gla",
 }
 
 
@@ -1772,7 +1853,7 @@ def stage_run_dir(tag, fresh=True):
     instance being closed, and the next `launch` on it mounts the same VHD.
 
     THAT IS THE ONE WORKFLOW PER-INSTANCE ISOLATION BROKE, and it broke it
-    without anybody noticing (docs/plans/HANDOFF-SOAK-FINDINGS.md B1).
+    without anybody noticing.
     tests/hdboot.py and tests/knobhd.py INSTALL to a hard disk in one machine
     and then BOOT it in another; before the isolation work both used the shared
     master VHD, and after it the install landed in a private clone that

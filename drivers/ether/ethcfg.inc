@@ -351,6 +351,16 @@ ec_txt:
 
 ; --- ec_btn - one button whose top-left is (AX, BX), label SI ---------------
 ; in:  AX = x, BX = y, SI = the label, CL = the control's id
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; A Control Panel page draws its buttons one at a time, so the record is
+; pointed at whichever rect the caller staged. The GESTURE here is the
+; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
+; release-fired; what changed is that the DRAW goes through the control.
+ec2_btlbl: dw 0
+ec2_btflg: dw 0
+ec2_btrec: dw 0, ec2_btlbl, ec2_btflg, 1, 0, 0, 0, 0
+
 ec_btn:
     push ax
     push bx
@@ -371,7 +381,16 @@ ec_btn:
     or di, OS88UI_DOWN          ; SPEC.md 13.8: the pressed look is DRAWN, not
 .up:                            ; XOR-ed - a repaint between the two edges must
                                 ; agree with the glass
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [ec2_btlbl], si          ; label and DI its flags, so the record takes
+    mov [ec2_btflg], di          ; all three and the picture is identical
+    mov [ec2_btrec+OS88UI_BT_RECTS], bx
+    mov bx, ec2_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop bx

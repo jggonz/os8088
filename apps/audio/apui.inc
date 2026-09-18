@@ -273,15 +273,25 @@ apu_draw:
 
 ; =============================================================================
 ; apu_about_card - the OSAPI_ABOUT_SET card (SPEC.md 86.7): a white panel with
-; a black frame and three lines, centred in the content box, on top of the
+; a black frame and FIVE lines, centred in the content box, on top of the
 ; player. Any click or key takes it down (ap_onclick / ap_onkey). Drawn under
 ; the gfx lock from apu_draw, so it survives a repaint and needs no flag of the
 ; window manager's.
+;
+; THE FIFTH LINE IS THE CREDIT, and it is why the card is 80 px tall where it
+; was 66: this panel is hand-measured rather than os88ui_about's self-measuring
+; one, so a line costs APU_ABLH here and every constant below moves with it.
+; The widest line is the rate set at 32 cells = 256 px, which the credit's 24
+; does not reach, so the WIDTH is unchanged - it is content width less 8 either
+; side, and the window is 300 px wide.
 ; =============================================================================
+APU_ABLH  equ 14                   ; the line pitch this card was drawn at
+APU_ABH   equ 80                   ; ...and its height: 5 lines + the air
 apu_ab1: db 'Audio Player for os8088', 0
 apu_ab2: db 'Version 0.6b', 0
 apu_ab3: db 'Play PCM and ADPCM audio files', 0
 apu_ab4: db 'Rates 8-22 kHz  +24/32/44 SB Pro', 0
+apu_ab5: db 'Contributed by Pentagram', 0
 
 apu_about_card:
     push ax
@@ -298,7 +308,7 @@ apu_about_card:
     add ax, 8
     mov [apab_x1], ax              ; x1
     mov ax, [apu_ch]
-    sub ax, 66
+    sub ax, APU_ABH
     jns .yok
     xor ax, ax
 .yok:
@@ -314,7 +324,7 @@ apu_about_card:
     add cx, [apu_cw]
     sub cx, 9                      ; x2
     mov dx, bx
-    add dx, 65                     ; y2
+    add dx, APU_ABH - 1            ; y2
     call OSAPI_GFX_FILL
     ; --- black frame ---
     mov al, 0
@@ -325,35 +335,42 @@ apu_about_card:
     add cx, [apu_cw]
     sub cx, 9
     mov dx, bx
-    add dx, 65
+    add dx, APU_ABH - 1
     call OSAPI_GFX_FRAME
     ; --- four lines (ink 0 on paper 15) ---
     mov si, apu_ab1
     mov cx, [apab_x1]
     add cx, 8
     mov dx, [apab_y1]
-    add dx, 7
+    add dx, 7 + 0 * APU_ABLH
     mov ax, 0x0F00
     call OSAPI_FONT_RUN
     mov si, apu_ab2
     mov cx, [apab_x1]
     add cx, 8
     mov dx, [apab_y1]
-    add dx, 21
+    add dx, 7 + 1 * APU_ABLH
     mov ax, 0x0F00
     call OSAPI_FONT_RUN
     mov si, apu_ab3
     mov cx, [apab_x1]
     add cx, 8
     mov dx, [apab_y1]
-    add dx, 35
+    add dx, 7 + 2 * APU_ABLH
     mov ax, 0x0F00
     call OSAPI_FONT_RUN
     mov si, apu_ab4
     mov cx, [apab_x1]
     add cx, 8
     mov dx, [apab_y1]
-    add dx, 49
+    add dx, 7 + 3 * APU_ABLH
+    mov ax, 0x0F00
+    call OSAPI_FONT_RUN
+    mov si, apu_ab5                ; the credit (SPEC.md 20.5.1.1, 86.7)
+    mov cx, [apab_x1]
+    add cx, 8
+    mov dx, [apab_y1]
+    add dx, 7 + 4 * APU_ABLH
     mov ax, 0x0F00
     call OSAPI_FONT_RUN
 .out:
@@ -1022,6 +1039,7 @@ apu_draw_buttons:
     push dx
     push si
     push di
+    call apu_baim                  ; the record, and the ABSOLUTE rects
     xor di, di
 .b:
     cmp di, 7
@@ -1031,18 +1049,7 @@ apu_draw_buttons:
     mov cl, 3
     shl bx, cl
     add bx, apu_rects
-    mov ax, [bx+0]
-    add ax, [apu_ox]
-    mov [apu_abr+0], ax
-    mov ax, [bx+2]
-    add ax, [apu_oy]
-    mov [apu_abr+2], ax
-    mov ax, [bx+4]
-    add ax, [apu_ox]
-    mov [apu_abr+4], ax
-    mov ax, [bx+6]
-    add ax, [apu_oy]
-    mov [apu_abr+6], ax
+    mov cl, 3
     ; label + flags
     mov si, di
     add si, si
@@ -1053,18 +1060,22 @@ apu_draw_buttons:
     jne .nsh
     cmp byte [ap_shuffle], 0
     je .nsh
-    mov cx, OS88UI_DOWN
-.nsh:
-    cmp di, AP_B_REP
-    jne .ndr
-    cmp byte [ap_repeat], 0
-    je .ndr
-    mov cx, OS88UI_DOWN
-.ndr:
+    mov cx, OS88UI_LATCH           ; **LATCHED, NOT PRESSED** (SPEC.md
+.nsh:                              ; 20.5.1.4): these two say "this setting is
+    cmp di, AP_B_REP               ; ON", where OS88UI_DOWN now means "a press
+    jne .ndr                       ; is live on this control THIS INSTANT" and
+    cmp byte [ap_repeat], 0        ; belongs to the library. They draw the same
+    je .ndr                        ; picture, which is why one flag served
+    mov cx, OS88UI_LATCH           ; both until the press state stopped being
+.ndr:                              ; the caller's
     push di
-    mov bx, apu_abr
-    mov di, cx
-    call os88ui_btn                ; BX = rect, SI = label, DI = flags
+    mov si, di                     ; the flag into the group's own array, so
+    add si, si                     ; the painter and the record agree
+    mov [apu_bflg+si], cx
+    mov bx, apu_btrec
+    mov ax, di
+    inc ax                         ; the record's indices are one-based
+    call os88ui_btn
     pop di
     inc di
     jmp .b
@@ -1077,6 +1088,7 @@ apu_draw_buttons:
     pop ax
     ret
 
+    OS88UI_BTNREC apu_btrec, apu_arects, apu_blabs, apu_bflg, 7
 apu_blabs:
     dw ap_l_prev, ap_l_play, ap_l_pause, ap_l_stop, ap_l_next, ap_l_shuf, ap_l_rep
 
@@ -1178,6 +1190,58 @@ apu_hit:
     pop bx
     ret
 
+; -----------------------------------------------------------------------------
+; apu_baim - aim the record and build the group's ABSOLUTE rects
+; in:  [apu_ox]/[apu_oy] current; out: nothing, all registers preserved
+;
+; BOTH the painter and ap_onclick run this, which is the whole point: a record
+; aimed only where the painter goes is a record that is not aimed when a press
+; arrives, and rects built only by the painter are stale the moment the window
+; moves. apu_rects is the content-relative description and this is the screen
+; one; apu_hit used to be a THIRD, answering by dividing the row by a pitch.
+; -----------------------------------------------------------------------------
+apu_baim:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    xor di, di
+.r:
+    cmp di, 7
+    jae .done
+    mov bx, di
+    mov cl, 3
+    shl bx, cl
+    mov si, bx
+    add si, apu_arects
+    add bx, apu_rects
+    mov ax, [bx+0]
+    add ax, [apu_ox]
+    mov [si+0], ax
+    mov ax, [bx+2]
+    add ax, [apu_oy]
+    mov [si+2], ax
+    mov ax, [bx+4]
+    add ax, [apu_ox]
+    mov [si+4], ax
+    mov ax, [bx+6]
+    add ax, [apu_oy]
+    mov [si+6], ax
+    inc di
+    jmp short .r
+.done:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+    APBUF apu_arects, 56           ; THE GROUP: seven ABSOLUTE rects, so the
+                                   ; drawn control and the clickable control
+                                   ; are one description (SPEC.md 22's fm_hit)
+    APBUF apu_bflg, 14             ; ...and its seven flag words
     APBUF apu_abr, 8               ; scratch absolute button rect
     APW   apu_bpitch
     APW   apu_ln

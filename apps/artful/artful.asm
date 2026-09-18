@@ -159,6 +159,33 @@ at_entry:
     pop si
     jc .out
     mov [at_win], bx
+    push ax                         ; **THE GESTURE'S TWO SLOTS** (SPEC.md
+    push bx                         ; 20.5.1.3): neither is a template word,
+    push si                         ; which is why this modal's three buttons
+    push di                         ; fired on the press for as long as they
+    push dx                         ; existed
+    mov ax, bx
+    mov bx, at_btrec
+    mov si, at_onup
+    mov di, at_ondrag
+    mov dx, at_onclick                ; OUR own click work; the library
+                                    ; takes the press FIRST and chains
+                                    ; here (SPEC.md 20.5.1.3.3)
+    call os88ui_btninit
+    pop dx
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
+    OS88_ALTENTER_ARM               ; SPEC.md 11.2.1.1: nothing tracks a
+                                    ; scancode until something asks, and the
+                                    ; kernel's Alt+Enter latch rides on that
     push si
     mov si, at_kmenus
     call OSAPI_MENU_SET             ; the WINDOWED bar (flags preserved)
@@ -469,6 +496,25 @@ at_onkey:
     push es
     push ds                         ; ES arrives = KERNEL_SEG (SPEC.md 20.2)
     pop es
+    ; --- ALT+ENTER IS THE FULL SCREEN, BOTH WAYS (SPEC.md 11.2.1.1) ---------
+    ; SPEC.md 11.2.1 exempts this app from `F` because the whole of it is a
+    ; writer - pressing F here writes an `f`, and it must. That exempts the
+    ; LETTER and not the idea: a modified key is free, and the document IS the
+    ; screen, so the splash and the page are the two ends of one toggle. It is
+    ; SPEC.md 11.2's LATCH and not a bracket, so this window keeps taking
+    ; W_ONKEY while it is full screen and one test is both directions.
+    cmp ax, KEY_ALTENTER
+    jne .nofull
+    cmp byte [at_modal], 0          ; ...unless a dialog owns the keyboard, in
+    jne .done                       ; which case it owns this key too
+    cmp byte [at_fs], 0
+    je .gofull
+    call at_fs_exit
+    jmp short .done
+.gofull:
+    call at_fs_enter
+    jmp short .done
+.nofull:
     cmp byte [at_fs], 0
     je .win
     cmp byte [at_modal], 0
@@ -520,6 +566,41 @@ at_onkey:
 ; -----------------------------------------------------------------------------
 ; at_onclick - W_ONCLICK (CX = x, DX = y, absolute screen; lock held)
 ; -----------------------------------------------------------------------------
+; --- at_onup / at_ondrag - the modal's buttons fire and track (13.7/13.8.2) --
+; Only the modal draws standard buttons, so both edges go straight to it; a
+; release with no modal up finds nothing armed and does nothing.
+at_onup:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call at_modal_up
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+at_ondrag:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call at_modal_drag
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 at_onclick:
     push ax
     push bx
@@ -647,6 +728,32 @@ at_fs_enter:
     call OSAPI_TASK_SPAWN           ; the caret-blink worker
     jc .out                         ; transient refusal: retry next entry
     mov byte [at_wspawned], 1
+    ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
+    ; kernel wrote our segment into this worker's frame, so a region
+    ; declaration alone is INERT. It is PERMANENT and not a window
+    ; around OSAPI_TASK_ALIVE - the SDK note's advice for a park-safe
+    ; worker, which fails SILENTLY (REGION-SELF-COMPACT-PLAN 8.2):
+    ; mem_frameless reads [inst_restart] at PLAN time, and this worker
+    ; is outside its own ALIVE for essentially all of a tick, so a
+    ; windowed declaration would make OSAPI_MEM_COMPACT's what-if answer no
+    ; better for a heap the compactor could have emptied.
+    ;
+    ; SO BOTH PARK POINTS ARE ENUMERATED, Tracker's shape. We are
+    ; OSAPI_MEM_PARKSAFE, so the second one is BLOCKED IN
+    ; OSAPI_GFX_LOCK - never HOLDING it (66.5.4 marks the task only
+    ; across the yield inside the wait path).
+    ;   * ALIVE is the top of .loop; .gate above the lock only READS the
+    ;     four suppression flags.
+    ;   * The only worker lock site is the one in .loop - at_caret_on and
+    ;     at_caret_off take none, being called with it held - and
+    ;     [at_cphase] is toggled AFTER the acquire, so it is never half
+    ;     applied at a park. The file's six other lock calls are
+    ;     at_click_text, at_sb_repeat, at_sb_thumb, at_onwake and
+    ;     at_menu_track: all UI task.
+    ; A restart costs one caret phase - and lands on at_worker rather than
+    ; .loop, which is what re-does the `push cs / pop es` the caret path
+    ; needs.
+    OS88_WORKER_RESTARTABLE at_worker
 .out:
     pop bx
     pop ax

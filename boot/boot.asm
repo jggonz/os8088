@@ -308,9 +308,11 @@ entry:
     ; head load/unload, motor timings and gap lengths in it belong to these
     ; drives and are not ours to guess. Stage 2 still does the same thing to
     ; the same address, which is now idempotent rather than necessary.
-    push ds
     xor ax, ax
-    mov es, ax
+    mov es, ax                  ; ES = 0 for the vector, and outside the knob
+                                ; below because the reads that follow want it
+%ifndef DPT_ROM                 ; DPTROM=1: LEAVE THE ROM'S TABLE ALONE (18.92.1)
+    push ds
     lds si, [es:0x0078]         ; DS:SI = the BIOS's table
     mov di, DPT_AT
     mov cx, 11
@@ -320,6 +322,7 @@ entry:
     mov [es:DPT_AT + 4], al     ; EOT = this disk's sectors per track
     mov word [es:0x0078], DPT_AT
     mov [es:0x007A], cx         ; CX is 0: `rep movsb` counted it down
+%endif
 
     ; --- reset the drive before the first read ------------------------------
     xor ah, ah

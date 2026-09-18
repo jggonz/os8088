@@ -478,7 +478,20 @@ class UI:
         # written against the request fails on a window manager doing exactly
         # what the spec says, and that is a false failure this layer exists to
         # stop rather than one to inherit.
-        want = (geom.snapx(x, bool(w.flags & geom.WF_NOSNAP)), y)
+        # **A WINDOW AS WIDE AS THE SCREEN SNAPS DIFFERENTLY** (SPEC.md
+        # 11.95.2): it has no left border, so its content origin is W_X and
+        # the snap is `x & ~7` rather than the +7 form. Without this a drag of
+        # SPEC.md 96.32's DOS window to 0 is predicted to land at 7, the
+        # window correctly lands at 0, and this layer reports the window
+        # manager as broken. Read off the guest's own [vid_w] - one word - and
+        # carrying snapw's caveat: on an extended desktop the window's display
+        # may not be the primary, and a caller that lands elsewhere should
+        # read the record rather than trust this.
+        try:
+            span = w.w >= geom.word(self.m, "vid_w")
+        except Exception:
+            span = False
+        want = (geom.snapx(x, bool(w.flags & geom.WF_NOSNAP), span), y)
         gx = w.x + w.w // 2
         gy = w.y + geom.TITLE_H // 2
         self._grab(w, gx, gy)
@@ -519,11 +532,21 @@ class UI:
         ever happened — which is the one explanation every reading of this
         failure has been talked out of, because the press was "confirmed".
 
-        Measured, and it is why this exists rather than a longer wait:
-        `hdboot` at a lane of four pressed 'Builtins' at x=199 in [160,239],
-        y=10, with the pointer confirmed at (199,10) and the button confirmed
-        down, and no menu dropped in **ten guest seconds** — 182 ticks on a
-        machine that was not busy. Ten more would have changed nothing.
+        A longer wait is still not the answer, which is the part of the
+        original reasoning that survived.
+
+        **THE FAILURE THIS WAS BUILT AGAINST WAS NOT A DROPPED RECORD**, and
+        the record is kept here because the wrong diagnosis is the expensive
+        one. `hdboot` at a lane of four pressed 'Builtins' at x=199 in
+        [160,239] with the pointer and the button both confirmed and nothing
+        dropped in ten guest seconds - and what had happened was that an
+        EARLIER gesture in the same loop released the button over the System
+        menu's item 0 and opened the About window, which took the menu bar.
+        The bar was two cells by then, x=199 was past the last title, and
+        `menu_track` was refusing a press that really had arrived. Three
+        fresh edges could not fix that and neither could ten more seconds:
+        the tell was `menu_cell` == `menu_nbar`, which is the MISS COUNTER
+        and not a resolved cell. `tests/hdboot.py` carries the whole account.
 
         THE RETRY IS A RELEASE AND A SECOND PRESS, never a re-sent packet. A
         Microsoft packet carries the button's LEVEL, so re-sending says what
@@ -969,7 +992,7 @@ class UI:
             "no" from this routine is read as THE END STOP, so a wait cut
             short by a busy box does not fail - it silently decides the list
             has run out, and the click that follows lands on the wrong row.
-            That is docs/plans/HANDOFF-SOAK-FINDINGS.md B5's mechanism exactly, and
+            That is the host-clock mechanism exactly, and
             the version this replaces had a 3.0-second `time.sleep` loop.
 
             Polling the WORD rather than settling on the picture: a settle is

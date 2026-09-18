@@ -110,8 +110,22 @@ def bar_check(m):
     coordinate, so a bar that gains a menu needs no edit.
 
     It is NOT `menu_pick`: picking would RELEASE over an item, which runs a
-    command, and Restart is one of the System menu's. A press and a release
-    back on the bare bar chooses nothing.
+    command, and Restart is one of the System menu's. The release below
+    happens WHERE THE PRESS LANDED, which chooses nothing by construction:
+    a bar menu hangs from `menu_y1` = MBAR_H and `menu_hover` wants
+    `mouse_y` > that, while the press is at MBAR_H // 2.
+
+    **IT USED TO WALK THE POINTER OFF THE TITLE FIRST, AND THAT IS WHAT MADE
+    THIS ROW FLAKE.** `mo.to` carries `l=False` by default, so the FIRST
+    movement packet of that walk released the button at an intermediate
+    position nobody chose - and the destination, a remembered (2, MBAR_H + 8),
+    is not "off every title" at all: the menu hangs BELOW the title and cell
+    0's rect starts at x = 0, so (2, 28) is squarely on the System menu's item
+    0, `About os8088...`. The About window then took the bar, the bar went
+    from three cells to two, and every later press at a coordinate measured
+    off the OLD bar hit-tested past the last cell - which is the shape the
+    failure arrives in, and the reason `menu_cell` is printed with
+    `menu_nbar` below rather than alone.
     """
     m.run()
     ui = os88ui.UI(m, verbose=False)
@@ -163,24 +177,67 @@ def bar_check(m):
                 # (menu_y1 is stamped and never cleared, so menu_dropd is the
                 # only honest one), and what ui_task last decided.
                 cx, cy, btn = ui.mo.where()
+                cell, nbar = ui._byte("menu_cell"), ui._word("menu_nbar")
                 raise SystemExit(
                     "hdboot: FAIL - pressed %r (cell %d of %d) at x=%d in "
                     "[%d,%d], y=%d, and no menu dropped in 10 guest seconds. "
                     "The guest confirmed the button DOWN before this wait, so "
                     "the press reached mou_isr. At the timeout: pointer "
-                    "(%d,%d) btn %#x, menu_dropd %d, menu_cell %d, menu_y1 "
-                    "%d. A pointer that is not at (%d,%d) means the move was "
-                    "undone between the confirm and the press; menu_dropd 0 "
-                    "with the button still down means ui_task saw the edge "
-                    "and menu_track refused the hit test."
+                    "(%d,%d) btn %#x, menu_dropd %d, menu_cell %d of "
+                    "menu_nbar %d, menu_y1 %d. THE LIVE BAR IS NOW %r.\n"
+                    "  menu_cell IS NOT A RESOLVED CELL UNTIL menu_track HAS "
+                    "FOUND ONE: it is zeroed at the top of the find and "
+                    "incremented past every MISS, so menu_cell == menu_nbar "
+                    "means the press landed in the dead zone PAST THE LAST "
+                    "TITLE and menu_track returned 0xFFFF. When that happens "
+                    "with a bar shorter than the %d cells this row measured, "
+                    "the bar CHANGED under the test - some earlier gesture "
+                    "opened a window and it took the menu bar - and the press "
+                    "is aimed at a title that is no longer there. Compare the "
+                    "live bar above with %r.\n"
+                    "  Only if menu_cell < menu_nbar is this the hit test: a "
+                    "pointer that is not at (%d,%d) means the move was undone "
+                    "between the confirm and the press, and menu_dropd 0 with "
+                    "the button still down means ui_task saw the edge and "
+                    "menu_track refused."
                     % (title, i, len(cells), px, x0, x1,
                        os88ui.geom.MBAR_H // 2, cx, cy, btn,
-                       ui._byte("menu_dropd"), ui._byte("menu_cell"),
-                       ui._word("menu_y1"), px, os88ui.geom.MBAR_H // 2))
+                       ui._byte("menu_dropd"), cell, nbar,
+                       ui._word("menu_y1"),
+                       [(c[0], c[1], c[2]) for c in ui.menus()], len(cells),
+                       [(c[0], c[1], c[2]) for c in cells],
+                       px, os88ui.geom.MBAR_H // 2))
             got = ui._byte("menu_cell")
         finally:
-            ui.mo.to(2, os88ui.geom.MBAR_H + 8)     # off every title, so the
-            ui.mo._edge(False)                      # release chooses nothing
+            # RELEASE WHERE THE PRESS IS, AND DO NOT WALK THERE FIRST. The
+            # title row is above `menu_y1`, so `menu_hover` answers 0xFFFF for
+            # it whatever the menu is; and `_edge` sends a (0, 0) packet, so
+            # the pointer does not move at all and there is no intermediate
+            # position for a release to land on. See the docstring for what
+            # the walk this replaces actually did.
+            ui.mo._edge(False)
+        # ...AND IT CHOSE NOTHING - asserted, not assumed. `menu_sel` is what
+        # menu_drop returned (it is set to 0xFFFF at the drop and written only
+        # by menu_hover), so a value here is a COMMAND THAT RAN, and the next
+        # cell's press would then be aimed at a bar that no longer exists.
+        # Catching it here names the gesture that did it instead of leaving a
+        # timeout eleven presses later to be re-diagnosed.
+        M.until(m, lambda mm: not ui._byte("menu_dropd"),
+                "the %r menu to come back up after the release" % title,
+                poll=0.05, guest=10.0)
+        sel = ui._word("menu_sel")
+        if sel != 0xFFFF:
+            raise SystemExit(
+                "hdboot: FAIL - releasing on the %r TITLE chose item %d of "
+                "its menu (%r) and ran the command. The press is at y=%d and "
+                "a bar menu's first item cell starts at menu_y1 + 1 = %d, so "
+                "menu_hover cannot see an item at the pointer - unless it read "
+                "the two halves of the pointer a packet apart (SPEC.md "
+                "12.4.1). The bar is now %r."
+                % (title, sel,
+                   _items[sel][0] if sel < len(_items) else "?",
+                   os88ui.geom.MBAR_H // 2, ui._word("menu_y1") + 1,
+                   [(c[0], c[1], c[2]) for c in ui.menus()]))
         if got != i:
             wrong.append((title, i, got))
     if wrong:
@@ -208,8 +265,7 @@ def main():
     # landed in a directory that went away and the boot opened a fresh clone of
     # the pristine master. It found an empty disk and reported "no desktop from
     # drive C:" - which reads as a broken volume boot record, and cost a bisect
-    # to place on a host-side commit that touched no kernel code at all
-    # (docs/plans/HANDOFF-SOAK-FINDINGS.md B1).
+    # to place on a host-side commit that touched no kernel code at all.
     #
     # `M.stage_run_dir` is a tree the CALLER owns: `launch(run_dir=...)` leaves
     # its media alone, so the VHD survives the first instance closing, and

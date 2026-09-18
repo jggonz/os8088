@@ -968,6 +968,12 @@ eth_pump_i:                     ; STKDEPTH-NOSAVE: ax bx dx si di
                                 ; everything it always did (SPEC.md 72.16.4)
     cmp byte [eth_up], 0
     je  .out
+    cmp byte [eth_raw], 0       ; **THE RAW CONSUMER IS THE STACK NOW**
+    jne .out                    ; (SPEC.md 72.22). Not the drain and not the
+                                ; timers: a DHCP renew mid-bracket would put a
+                                ; frame on a wire somebody else believes they
+                                ; own, and a retransmit would do it for a
+                                ; connection nothing is left to read
     mov bp, ETH_BUDGET
 .f:
     call eth_pump1

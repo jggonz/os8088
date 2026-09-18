@@ -94,7 +94,19 @@ TOAST_MAX   equ 24              ; characters, AND IT IS THE TIGHT ONE (SPEC.md
                                 ; 40 while this borrowed the menus segment's
                                 ; 50, and shortening it is what made the move
                                 ; safe: every message in the tree was revised
-                                ; to fit rather than left to truncate
+                                ; to fit rather than left to truncate.
+                                ;
+                                ; **AND THAT SENTENCE WAS A CLAIM ABOUT A TREE
+                                ; THAT NOTHING HELD** (SPEC.md 59.10). A 286
+                                ; showed `Hibernation file is from` - the cut
+                                ; landing on the word that carries the meaning
+                                ; - and the sweep behind it found TWENTY-ONE
+                                ; over the cap in six files, ten of them in
+                                ; `HIBER.DRV`, which is a MODULE and was never
+                                ; walked. `tests/unit/t_toast.py` is the gate
+                                ; now: it reads this very `equ` rather than
+                                ; carrying a copy, and `tests/toastlong.txt`
+                                ; is the ratchet its false positives live in
 TOAST_TICKS equ 55              ; ~3.0 s at 18.2 Hz: long enough to read eight
                                 ; words on a 4.77MHz machine, short enough
                                 ; that it is gone before it becomes furniture

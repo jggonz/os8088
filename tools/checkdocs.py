@@ -225,6 +225,49 @@ def main() -> int:
              or f == "Makefile"]
 
     bad = []
+    # AN UNRESOLVED MERGE COMMITTED INTO A DOCUMENT, before anything else -
+    # because a file in that state is not a document at all and every check
+    # below it is reading two trees at once.
+    #
+    # IT HAS HAPPENED, and it got past all 45 rows of the fast tier. Merging
+    # origin/main into this fork left conflict markers in CLAUDE.md and in
+    # SPEC.md §45.3: `git merge` NAMED both files, the operator read its output
+    # through `tail`, and the two that scrolled off the top were staged by a
+    # `git add -A` along with the ones that were fixed. Nothing downstream
+    # could see it - nasm never reads a .md, and the markers fell in prose
+    # rather than in a heading or a citation, so headings(), dupes() and the
+    # citation walk below all passed over them without a word. It surfaced
+    # days later because a person happened to scroll past line 402.
+    #
+    # THE SWEEP IS EVERY TRACKED FILE and not just the documents. A marker in
+    # a .asm or .inc is caught by nasm and one in a .py by the import, so the
+    # SILENT cases are exactly the files nothing executes - but the cost of
+    # covering the loud ones too is one comparison each, and "which files can
+    # hide this" is a question that goes stale while a whole-tree sweep does
+    # not.
+    #
+    # The `=======` arm needs the other two beside it: a bare row of equals
+    # signs is legal Markdown (a setext heading rule) and appears in this
+    # tree's own documents, so it is only a finding when a file also carries
+    # the `<<<<<<<` or `>>>>>>>` that cannot be anything else.
+    for path in tracked:
+        try:
+            text = open(path, encoding="utf-8").read()
+        except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
+            continue                                        # binary, or gone
+        lines = text.split("\n")
+        hits = [(n, ln) for n, ln in enumerate(lines, 1)
+                if ln.startswith("<<<<<<< ") or ln.startswith(">>>>>>> ")]
+        if not hits:
+            continue
+        hits += [(n, ln) for n, ln in enumerate(lines, 1) if ln == "======="]
+        bad.append("%s: an UNRESOLVED MERGE is committed here - %s. Resolve "
+                   "it and check the whole tree (`git grep -lE "
+                   "'^(<<<<<<< |=======$|>>>>>>> )'`), not just this file: "
+                   "these arrive in batches, because they are what one "
+                   "`git add -A` over a half-read `git merge` leaves behind" %
+                   (path, ", ".join("line %d" % n for n, _ in sorted(hits))))
+
     # ...before any citation is resolved, because a duplicate makes the
     # resolution meaningless rather than wrong: both headings exist, so every
     # citation of the number passes and points at whichever the reader finds

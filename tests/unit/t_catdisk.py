@@ -54,7 +54,7 @@ from t_image import Vol, read                             # noqa: E402
 # from the format rather than imported, so a change to the writer that
 # breaks the reader shows up here instead of agreeing with itself.
 ASC_MAGIC = b"OS88AC"
-ASC_HDR, ASC_ROW = 16, 80
+ASC_HDR, ASC_ROW = 16, 88          # a VERSION 2 row (SPEC.md 54.3.2)
 
 DISKS = ["office360.img", "network360.img", "games360.img"]
 
@@ -128,6 +128,10 @@ def main():
             check(blob[:6] == ASC_MAGIC, "%s: ASSOC.DAT is one" % img,
                   "the header is read from SPEC.md 54.7's format here rather "
                   "than imported from the writer", got=blob[:6], want=ASC_MAGIC)
+            check(len(blob) > 6 and blob[6] == 2,
+                  "%s: ASSOC.DAT is version 2" % img,
+                  "SPEC.md 54.3.2: the rows carry the glyph column, and the "
+                  "stride below is read against that", got=blob[6:7])
             napp = blob[7]
             check(napp == len(root_pkgs),
                   "%s: ASSOC.DAT caches all %d packages" % (img, len(root_pkgs)),

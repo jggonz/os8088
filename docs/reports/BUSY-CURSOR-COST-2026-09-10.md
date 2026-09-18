@@ -169,8 +169,8 @@ and neither is an argument:
 | `cbd4f0b` — this work | **2 / 6** | the same |
 
   **The base fails more often than the branch.** It is the row's own
-  intermittent, documented at docs/plans/SOAK-PARALLEL.md §8.8 and
-  docs/plans/HANDOFF-SOAK-FINDINGS.md F3, whose control hopes a sample lands
+  intermittent, documented at docs/plans/SOAK-PARALLEL.md §8.8, whose
+  control hopes a sample lands
   instead of provoking the collision. `classify` had already refused to bisect
   it — *INTERMITTENT 1/3 at HEAD, and a rate is not a side*.
 

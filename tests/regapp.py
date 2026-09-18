@@ -65,7 +65,24 @@ APPS = {"word":    ("WORD.O88", "Word"),
         "tank":    ("TANK.O88", "Tank"),
         "ftpd":    ("FTPD.O88", "FTP"),
         "browser": ("BROWSER.O88", "Browser"),
-        "audio":   ("AUDIO.O88", "Audio")}
+        "audio":   ("AUDIO.O88", "Audio"),
+        # ...and the two SHAPES the five above do not carry (SPEC.md
+        # 66.6.1.1). All five hire a worker, so this row proved the RESTART
+        # half five times over and the plain declaration not once - and the
+        # plain one is what 39 of the tree's 41 are. Calc has no worker at
+        # all, so it is movable on I_TASK == 0xFF and asserts MC_RLOC alone;
+        # REGPAIR is the canonical pair, and its worker is hired from the
+        # PAINT rather than the entry, so the ten seconds below is also what
+        # gives it a frame to hire in.
+        #
+        # REGPAIR IS A FIXTURE AND PAC-MAN WAS NOT, which is the whole of why
+        # this line changed. PACMAN.O88 held the slot until it was retired
+        # (SPEC.md 89.12, apps/RETIRED.txt), and a gate resting on a shipping
+        # program can have its case taken away by a decision that was never
+        # about the gate - which is exactly what happened. tests/regpair is
+        # 208 bytes, ships nowhere, and exists for this row alone.
+        "calc":    ("CALC.O88", "Calculator"),
+        "regpair": ("REGPAIR.O88", "Reg Pair")}
 
 
 def main():

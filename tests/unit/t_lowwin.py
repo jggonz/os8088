@@ -3,11 +3,11 @@
 
     python3 tests/unit/t_lowwin.py
 
-`disk_dir`, `disk_icons` and `dsk_secbuf` come alive at `drv_boot`'s first
+`disk_dir`, `dsk_icoix` and `dsk_secbuf` come alive at `drv_boot`'s first
 mount and are untouched before it - the same moment, and the same silence, as
-the FAT window under them.  Adjacent, the two are one contiguous 8,192-byte
-region that is dead for the whole of `kmain`, which is what the boot overlay
-is meant to land in and spill through (docs/plans/completed/BOOT-LADDER-PLAN.md stage B).
+the FAT window under them.  Adjacent, the two are one contiguous region that is
+dead for the whole of `kmain`, which is what the boot overlay is meant to land
+in and spill through (docs/plans/completed/BOOT-LADDER-PLAN.md stage B).
 
 THIS ROW EXISTS BECAUSE NOTHING ELSE WOULD NOTICE.  The placement is bought by
 one line - `kernel/dskwin.inc` being the FIRST file `kernel.asm` includes,
@@ -23,11 +23,14 @@ yet, and the symptom there is the overlay writing over `vid_rowtab`.
 So the invariant is checked where it can still be read: the offsets, off the
 same NASM listing the layout comes from.
 
-BOTH ARMS, and their windows are DIFFERENT SHAPES: kern_small's `disk_icons`
-is SPEC.md 25.8's 16-body pool with a 32-byte index in front of it, and the
-FAT rung under it is SPEC.md 51.0.0's two sectors rather than nine.  The
-tables below are stated per arm for that reason - a single table that fits
-both is a table that has stopped asserting anything about either.
+BOTH ARMS.  Their windows were DIFFERENT SHAPES and are the same one again:
+SPEC.md 25.9 took the icon BODIES out into the machine-wide store, so
+kern_small's 16-body pool and kern_big's 2,048-byte array both went and what
+is left either side is a reference byte per entry.  What still differs is the
+FAT rung UNDER them - SPEC.md 51.0.0's two sectors against nine - so the
+tables below stay stated per arm, which is also what keeps them able to
+disagree: a single table that fits both is a table that has stopped asserting
+anything about either.
 """
 import os
 import re
@@ -39,31 +42,59 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 from harness import check, done                           # noqa: E402
 
-# PER ARM, because kern_small's window is a different shape AND sits over a
-# different FAT rung - SPEC.md 25.8 made `disk_icons` a 16-body pool with a
-# 32-byte index in front of it, and SPEC.md 51.0.0 cut DSK_FAT_SECS to 2.
-# Stated twice rather than derived, for this file's own reason: a table read
-# out of the kernel agrees with the kernel by construction and would have
-# noticed neither change.
+# PER ARM, because the two sit over different FAT rungs - SPEC.md 51.0.0 cut
+# kern_small's DSK_FAT_SECS to 2 against kern_big's 9.  Stated twice rather
+# than derived, for this file's own reason: a table read out of the kernel
+# agrees with the kernel by construction and would have noticed none of the
+# changes below.
+#
+# **AND THE TWO ARMS ARE THE SAME SHAPE AGAIN**, which is the change SPEC.md
+# 25.9 made: `disk_icons` is GONE - the 16x16 bodies are in the machine-wide
+# icon store now, and what the window keeps is `dsk_icoix`, one reference byte
+# per entry. So the 2,048-byte half of kern_big and the 1,024-byte pool of
+# kern_small both went, and both arms are secbuf + listing + index. The other
+# move in the same direction was `DSK_NENT` 32 -> 64 (SPEC.md 22.6's
+# sixty-four-entry listing), which takes `disk_dir` 768 -> 1,536 and
+# `DSK_ICOIX_N` to DSK_VENT's 64. Net: the window is 2,112 where it was 3,328.
+#
+# `dsk_ovlpad` is NOT in this table on purpose: `DSK_OVLPAD` is 0 today
+# (dskwin.inc says "AND IT IS ZERO AGAIN"), so the label emits nothing and
+# never reaches the listing. Give it a row here if it is ever non-zero again.
+#
+# **AND THE ARMS ARE DIFFERENT AGAIN** (SPEC.md 22.6.2): `DSK_NENT` is 64 on
+# kern_big and 32 on kern_small, so `disk_dir` is 1,536 there and 768 here and
+# `dsk_icoix` follows it.  Sixty-four was taken for the DOS box and kern_small
+# has none; what makes the cut LANDABLE is SPEC.md 2.5.3.2, which moved the
+# serial mouse probe and the adapter probe into `.ovl` so that `.ovlw` rounds
+# to 2,048 and fits the smaller region.  The two are one change: the listing
+# cannot shrink under an overlay that needs the room, and the overlay moving
+# on its own moves HEAP_SEG by nothing.
 WANT = {
-    "kern_big":   [("dsk_secbuf", 512), ("disk_dir", 768),
-                   ("disk_icons", 2048)],
+    "kern_big":   [("dsk_secbuf", 512), ("disk_dir", 1536),
+                   ("dsk_icoix", 64)],
     "kern_small": [("dsk_secbuf", 512), ("disk_dir", 768),
-                   ("dsk_icoix", 32), ("disk_icons", 1024)],
+                   ("dsk_icoix", 32)],
 }
 FAT_BYTES = {"kern_big": 4608, "kern_small": 1024}   # DSK_FAT_SECS * 512
 # ...and what the two make between them: the region the boot overlay spills
 # through, and the part of it a whole-sector int 13h read can actually reach.
-REGION = {"kern_big": (7936, 7680), "kern_small": (3360, 3072)}
+REGION = {"kern_big": (6720, 6656), "kern_small": (2336, 2048)}
 SECTOR = 512
 # `disk_dir` is DSK_NENT * DSK_DE_STRIDE and DSK_DE_STRIDE is 24, not
 # DSK_DE_SIZE's 32 (SPEC.md 19.1): a staged listing does not carry the
-# record's zero tail.  It was 1,024 and the region was 8,192, a whole 16
-# sectors; it is 768 and the region is 7,936, of which **7,680 is readable**.
-# That is the cost of those 256 bytes and it is not free - the boot overlay's
-# window half loses them too - so the number is asserted here rather than
-# left to be discovered when `.ovlw` next grows.  `kernel.asm`'s own `%if`
-# rounds OVLW_SIZE UP to a sector for exactly this reason.
+# record's zero tail.  With DSK_NENT at 64 that is 1,536, and the window is
+# 2,112 - so the region is 6,720 on kern_big, of which **6,656 is readable**,
+# and 3,136 on kern_small, of which **3,072 is**.  Neither is a whole number
+# of sectors, and the readable ceiling is what the boot overlay gets, so the
+# numbers are asserted here rather than left to be discovered when `.ovlw`
+# next grows.  `kernel.asm`'s own `%if` rounds OVLW_SIZE UP to a sector for
+# exactly this reason.
+#
+# THE WINDOW GOT SMALLER AND THAT COST THE OVERLAY 1,216 BYTES: 3,328 -> 2,112
+# when 25.9 moved the icon bodies out, against +768 from DSK_NENT.  It is a
+# straight win in RAM - the bodies are shared now instead of copied per
+# listing - and a straight loss to `.ovlw`'s ceiling, which is the trade to
+# know about before that section next needs room.
 
 
 def lowbss(defines=()):

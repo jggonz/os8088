@@ -162,6 +162,54 @@ overlays = [
     irq = 7
     dsp_version = [2, 1]
 
+# THE ONLY MACHINE HERE WITH 720KB DRIVES, and it exists because without one
+# no 720KB or 1.44MB image on this emulator can be read past its first half.
+#
+# Every other profile in this file takes `pcxt_2_360k_floppies`, which is a
+# 40-cylinder drive: 9 sectors, 2 heads, 720 sectors in all. A 720KB image has
+# 1,440, so LBA 720 and up is under a cylinder the head cannot reach. Nothing
+# reports that as a configuration problem - the first half reads perfectly and
+# the second half answers an int 13h error, which a caller that treats a
+# refusal as end-of-file turns into a SHORT FILE. It cost most of a session:
+# Prince of Persia's disk puts nine of its files past cylinder 39, so the game
+# opened DIGISND1.DAT, was told it was empty, and asked for its floppy back -
+# and every layer in between looked innocent because every layer WAS.
+#
+# So a row that mounts a 720KB or 1.44MB image wants this machine, not
+# `os8088_5150_herc_sb_gla`. It is that machine with one overlay changed, which
+# is also what makes it an A/B for the geometry itself.
+[[machine]]
+name = "os8088_5150_herc_sb_720_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_720k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "AdLib"
+    io_base = 0x388
+
+    [[machine.sound]]
+    type = "SoundBlaster"
+    io_base = 0x220
+    irq = 7
+    dsp_version = [2, 1]
+
 # The GLaBIOS twin, for when you want a machine that BOOTS FAST rather than one
 # that boots the way the calibration machine does.
 #
@@ -374,6 +422,48 @@ overlays = [
     type = "VGA"
     clock_mode = "Default"
 
+# ...AND THE SAME VGA XT WITH 1.44MB DRIVES, which exists because of an
+# intersection this tree did not have: a machine with an EGA/VGA *and* a floppy
+# big enough for the software that needs one.
+#
+# Every VGA profile here had 360KB drives and every 720KB/1.44MB profile was a
+# Hercules or a CGA, so a DOS program whose own documentation says `Req.
+# EGA/VGA` and whose payload is 600KB could be hosted on neither. The 40-cylinder
+# trap (docs/DOS-DEBUGGING.md, `reach`) is the other half of it: the 720KB
+# profiles here are 40-cylinder, so a 720KB image's top half answers an int 13h
+# error that our read window turns into END OF FILE. 1.44MB drives are
+# 80-cylinder and have neither problem.
+#
+# It is os8088_xt_vga with one overlay line changed, the way os8088_xt_hdd_720
+# is os8088_xt_hdd with one line changed.
+[[machine]]
+name = "os8088_xt_vga_144"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+        [[machine.fdc.drive]]
+        type = "1.44m"
+        [[machine.fdc.drive]]
+        type = "1.44m"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"
+
 # ...and the same XT with SOUND, which exists to be run with --turbo.
 #
 # THE ONLY FASTER MACHINE MARTYPC HAS IS 7.16MHz, and this is the only way to
@@ -503,6 +593,176 @@ overlays = [
     type = "CGA"
     clock_mode = "Dynamic"
 
+# os8088_5150_cga_hdd_gla - the machine above on GLaBIOS, and THE ONLY REASON
+# IT DID NOT EXIST IS THAT NOTHING CHECKED. `tests/kdnoprog.py` and
+# `tests/dosram.py` both name `os8088_5150_cga_hdd` directly, and the period
+# ROM is not in this tree (CONTRIBUTING.md 6) - so MartyPC's pinned build exits
+# at once with `ROM set ibm5150_82_v4 not found` and both rows died before
+# their first assertion. `tests/unit/t_machines.py` exists to stop exactly
+# that and it PASSED, because its check 2 only looked at machines listed in
+# `os88marty.IBM_TWIN` - five of the thirteen that ask for the IBM romset.
+# That check reads the romset out of THIS FILE now, so a machine added here
+# without a twin is a failure the next `make` reports.
+#
+# It differs from its IBM twin in `rom_set` ALONE, which is what check 3
+# enforces: a twin that has drifted is worse than no twin, because the row
+# runs and the difference it measures is the config's rather than the kernel's.
+[[machine]]
+name = "os8088_5150_cga_hdd_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# os8088_5150_herc_hdd_gla - AN 8088 WITH A HARD DISK AND A **HERCULES**, which
+# is the one combination this tree had never been able to make. Every machine
+# with an `[machine.hdc]` in this file is a CGA or a VGA, so SPEC.md 87.5's
+# staging area - the TEXT FRAMEBUFFER - has always been read back at B800 here
+# and never once at B000, while the fork owner's own 5150 (docs/FIELD-MACHINES.md)
+# is a Hercules with an ST-225 on it and stages at B000 every time.
+#
+# A hibernate needs the fixed disk (`hb_pick` refuses without one) and the
+# adapter decides the segment, so the two have to be on ONE machine before the
+# mono half of that path is exercised at all. It is GLaBIOS because the period
+# ROM is not in this tree; `os8088_5150_herc_hdd` is its IBM twin for a box
+# that has one.
+[[machine]]
+name = "os8088_5150_herc_hdd_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+# ...and the same machine on the period ROM, for a box that has it staged.
+[[machine]]
+name = "os8088_5150_herc_hdd"
+type = "Ibm5150v256K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+# os8088_xt_hdd_720 - THE ONLY MACHINE HERE THAT HAS BOTH A HARD DISK AND AN
+# 80-CYLINDER FLOPPY DRIVE, and it exists because the absence of one cost a
+# whole diagnosis (docs/DOS-DEBUGGING.md, *Traps*). os8088_xt_hdd's drives are
+# 40-cylinder, so a 720KB image's top half is simply unreadable - and apps/dos
+# turns that int 13h refusal into END OF FILE (SPEC.md 96.11.4), so a program
+# is handed a SHORT file and blames the file. Prince of Persia's installer
+# copied 22 of 29 files off a 720KB disk and failed on the 23rd, which read
+# exactly like a defect in the copy engine and was the drive.
+#
+# `python3 tools/os88fat.py reach <image>` is the check, and it names this
+# machine. Anything that puts a 720KB image in B: and needs C: wants this one.
+[[machine]]
+name = "os8088_xt_hdd_720"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_720k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+    "parallel_port",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# ...and the same disk behind a VGA, which until now no machine in this file
+# offered: every hard-disk machine here is CGA, and the loading screen's whole
+# dialog - the frames, the `Welcome to os8088.` caption and the percentage -
+# is VGA-only (SPEC.md 15.3). So the one path that draws chrome from the
+# KERNEL rather than from stage 2 could not be looked at: a hard-disk boot has
+# no loader that ticks, so `spl_step` starts the screen itself (SPEC.md
+# 2.9.9.1) and enters `spl_rechrome` (2.9.9.2). On CGA that path returns before
+# any of it.
+#
+# It matters more since SPEC.md 15.3.2: the caption and the percentage are
+# blitted out of the ROM 8x8 set now, and `spl_kfont` asks the BIOS for that
+# set with an `int 10h` at the first glyph of the boot. On every other machine
+# here the first glyph is stage 2's; on this one it is the kernel's.
 [[machine]]
 name = "os8088_xt_hdd"
 type = "Ibm5160"
@@ -574,6 +834,51 @@ overlays = [
     bus_type = "ISA"
     type = "VGA"
     clock_mode = "Default"
+
+# ...AND ALL THREE AT ONCE, which is the machine the field reports come off:
+# VGA, a fixed disk AND a Sound Blaster. Every other profile here isolates one
+# of them, and the DOS arena is exactly the quantity that does not decompose -
+# the VGA sets KERN_SIZE (112KB, so a 528KB heap), HDD.DRV is an image at the
+# ceiling, and SOUND.DRV is the ~14KB SPEC.md 96.35 unmounts and compacts into.
+# A shortfall measured on any two of the three is a different shortfall.
+[[machine]]
+name = "os8088_xt_vga_hdd_sb"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"
+
+    [[machine.sound]]
+    type = "AdLib"
+    io_base = 0x388
+
+    [[machine.sound]]
+    type = "SoundBlaster"
+    io_base = 0x220
+    irq = 7
+    dsp_version = [2, 1]
 
 # ...and the calibration machine as it ACTUALLY is: a 5150 with a Hercules AND
 # a CGA in it, both permanent, each on its own monitor (docs/FIELD-MACHINES.md).
@@ -1220,6 +1525,64 @@ overlays = [
 # primary is the VGA, which is also the card os8088's probe answers with
 # (vid_detect's AH=1Ah DCC rung is reached before the equipment word) - so
 # nothing here needs --primary and the boot gate watches card 0 by default.
+# HERCULES, A SOUND BLASTER AND 1.44MB DRIVES, WHICH IS TRACKER'S MEMORY
+# SCENARIO AND NOTHING ELSE. os8088_5150_herc_sb_gla is the same machine with
+# 360KB drives and os8088_5150_herc_gla_144 the same drives with no card, and
+# neither can host the question: a ProTracker module big enough to need
+# SPEC.md 66.4.3's posted compaction does not fit on a 360KB floppy, and
+# SOUND.DRV's ATTACH REFUSES on a machine where neither an OPL nor a DSP
+# answers (drivers/sound/sound.asm, "the refusal is only when NEITHER
+# answers") - so a driver mounted mid-session, which is the mid-heap wall the
+# scenario is built out of, cannot be made to exist there at all.
+#
+# 640KB and Hercules because that is the fork owner's own machine
+# (docs/FIELD-MACHINES.md), less the 5.25" drives.
+#
+# AND NO ADLIB, WHICH IS THE WHOLE REASON THIS IS NOT A COPY OF
+# os8088_5150_herc_sb_gla. The boot overlay sniffs 388h for an OPL2 and sets
+# the sound row's DRVR_WANT when one answers (kernel/driver.inc,
+# drvp_sniff), so a machine with an AdLib in it mounts SOUND.DRV BEFORE THE
+# FIRST PAINT - and "boot with the sound driver not mounted, then mount it
+# mid-session" is then not a state the machine can be put in. The DSP alone
+# is not sniffed (SND_SNIFF_SB is a knob, unset by default), so this machine
+# boots with the row un-wanted and the Control Panel is what mounts it -
+# which is os8088_5150_sbonly's reasoning (SPEC.md 51.3.1) applied to a
+# different question.
+[[machine]]
+name = "os8088_5150_herc_sb_gla_144"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+        [[machine.fdc.drive]]
+        type = "1.44m"
+        [[machine.fdc.drive]]
+        type = "1.44m"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "SoundBlaster"
+    io_base = 0x220
+    irq = 7
+    dsp_version = [2, 1]
+
 [[machine]]
 name = "os8088_xt_vga_herc"
 type = "Ibm5160"
@@ -1473,3 +1836,157 @@ overlays = [
     bus_type = "ISA"
     type = "CGA"
     clock_mode = "Dynamic"
+
+# A MIXED FLOPPY PAIR: 360KB IN A:, 1.44MB IN B: (SPEC.md 96.40.5)
+#
+# **EVERY OTHER MACHINE IN THIS FILE HAS TWO DRIVES OF ONE TYPE** - two 360KB
+# or, in os8088_5150_herc_gla_144, two 1.44MB - and the field's machines do
+# not: the 286 this was added for is a 360KB 5.25" A: beside a `35_2hd` B:,
+# which is what anybody who kept a 5.25" drive and added a 3.5" one has. A
+# whole class of configuration that no row here could reach.
+#
+# It was added because a bug report could not be reproduced on any machine in
+# this file, and the reporter's 86box.cfg had the answer in two lines. Take no
+# PERFORMANCE.md number off it for os8088_5150_herc_gla_144's reason - the
+# 5150's own FDC runs 250 kbps and cannot really read 18 spt - and note that
+# what it proves is OUR code's handling of two geometries at once, which is a
+# software question the media does not bear on.
+[[machine]]
+name = "os8088_5150_cga_gla_mix"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+        [[machine.fdc.drive]]
+        type = "360k"
+        [[machine.fdc.drive]]
+        type = "1.44m"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# ...AND THE SAME MIXED PAIR WITH A VGA IN IT (SPEC.md 96.40.5)
+#
+# os8088_5150_cga_gla_mix's drives on an XT with a VGA, which exists because
+# **a DOS game of the period often cannot use a 1983 adapter at all**: Test
+# Drive III offers VGA, EGA or Tandy and nothing else, so on any CGA or
+# Hercules machine in this file its opening question has one answer - Exit to
+# DOS - and the program under test never starts. A 1.44MB B: is the other
+# half: a game disk is megabytes, and every VGA machine here has two 360KB
+# drives.
+#
+# Take no PERFORMANCE.md number off it for its CGA twin's reason, and note
+# that a 5150 could not carry a VGA at all - this is a 5160, which is why the
+# type differs from the machine it is otherwise a copy of.
+[[machine]]
+name = "os8088_xt_vga_mix"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+        [[machine.fdc.drive]]
+        type = "360k"
+        [[machine.fdc.drive]]
+        type = "1.44m"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"
+
+# --- PRINCE OF PERSIA'S THREE, AS THREE MACHINES (SPEC.md 96.44.13.1) --------
+# `os8088_5150_herc_sb_720_gla` is the tree's 720KB machine and it has a Sound
+# Blaster in it. Prince of Persia supports the PC speaker, an AdLib and a
+# Sound Blaster and picks between them at start-up, so the three have to be
+# SEPARABLE - and the reason is not the sound. `BLASTER=` is the only
+# environment row either DOS arm produces, so what is in the sound slot decides
+# whether a program is handed an environment with any variables in it at all,
+# which is what 96.44.13 killed Prince over. These two are therefore the A/B
+# for the ENVIRONMENT and not for the audio: a machine with no card is the one
+# that asks whether a DOS program can still find its own path.
+#
+# Both are GLaBIOS twins of that machine for the usual reason - the IBM ROM is
+# not in this tree (see os8088_5150_cga_hdd above) - and the usual caveat
+# applies to neither of these rows, which take no disk or boot timing.
+
+# ...with NOTHING in the sound slot: a PC SPEAKER machine.
+[[machine]]
+name = "os8088_5150_herc_720_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_720k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+
+# ...and with an ADLIB and no Sound Blaster. An OPL2 at 388h and no DSP
+# anywhere, which is the configuration SPEC.md 51.11.2.1 is about: the driver
+# ATTACHES here, so it is still mounted when the DOS box suspends it and is
+# still asked DRVV_HWINFO - where the speaker machine's sound driver is never
+# loaded at all. The two reach the same empty environment by different routes,
+# which is why both exist rather than just the speaker one.
+[[machine]]
+name = "os8088_5150_herc_adlib_720_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_720k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "AdLib"
+    io_base = 0x388

@@ -45,9 +45,15 @@ import subprocess
 import sys
 import time
 
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
-sys.path.insert(0, "/home/user/os8088")
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
+sys.path.insert(0, _OS88_ROOT)
 import dispcp                                          # noqa: E402
 from ethernet import (Qemu, ether_syms, u16, dotted, S, Mouse,  # noqa: E402
                       type_url)

@@ -532,10 +532,15 @@ gfxe_pput:
 ;
 ; THE BLOCK LAYOUT IS THE KERNEL'S, unchanged (GLS_X, GLS_Y, GLS_ERR, GLS_DX,
 ; GLS_DY, GLS_SX, GLS_SY; GLS_SZ bytes). That is not laziness - a program
-; converting from OSAPI_GFX_LINIT/LSTEP changes the CALL and nothing else, its
-; own arithmetic on the block's x and y keeps working (SPEC.md 48.14 has
-; Missile Command doing exactly that), and gfx_linit is still the slot that
-; sets one up.
+; converting from OSAPI_GFX_LINIT/LSTEP changes the CALL and nothing else, and
+; its own arithmetic on the block's x and y keeps working (SPEC.md 48.14 has
+; Missile Command doing exactly that).
+;
+; **THE SLOT IS GONE NOW, not merely retired**: SPEC.md 18.95.8 reused cell
+; 0x0300 for OSAPI_DSK_CACHE, so `gfxe_winit` below is the ONLY thing that
+; sets one of these blocks up. That is what a retired cell is for - it answers
+; CF=1, every caller of one has to test CF, and so the number can be spent -
+; but it does mean the conversion is no longer optional.
 ;
 ; WHAT IS NOT HERE IS THE INTERESTING PART. The kernel's walk carries a clip
 ; rect, a framebuffer byte and bit, the second display's translation and the
@@ -563,9 +568,9 @@ GLS_SY  equ 12
 ; out: the block; preserves every register
 ;
 ; OSAPI_GFX_LINIT's arithmetic, exactly - it has to be, or a block set up one
-; way and stepped the other walks a different line. The kernel's version is a
-; slot only because the kernel's walk was; there is nothing in it that needs
-; the kernel at all.
+; way and stepped the other walks a different line. The kernel's version was a
+; slot only because the kernel's walk was; there was nothing in it that needed
+; the kernel at all, which is why its cell could be spent on something else.
 ;
 ; THE WALK RUNS IN THE CALLER'S DIRECTION and is not normalised downward the
 ; way gfx_line's pixel set is (SPEC.md 5.6.2), because the caller is drawing

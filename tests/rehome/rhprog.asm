@@ -131,16 +131,23 @@ rp_check:
                                     ; claim of ours, which is what check 4 is
                                     ; the other side of
 .n3:
-    ; --- 4. ...and it may NOT free or unpin its own carve ------------------
+    ; --- 4. ...and it may not free or unpin its carve BY ITS BASE ----------
     ; THE CARVE HAS TWO SHAPES AND ONLY ONE OF THEM IS THIS FEATURE'S. When
     ; op_claim's head slack is zero - which is every 512-byte-cluster volume,
     ; so every 1.44MB disk - the part's segment IS the carve's base, and then
     ; the claim is the program's region in every sense: mem_is_region holds,
-    ; mem_rr_tab would rewrite I_SPTR on a move, and mem_find_own's `MC_SEG ==
-    ; the caller's own segment` arm reaches it exactly as it reaches any
-    ; package's own region (SPEC.md 66.6.1). Freeing it is then the same right
-    ; every package has and says nothing about the re-home, so DO NOT EXERCISE
-    ; IT - a package that frees the region it is running in is not a test.
+    ; mem_rr_tab rewrites I_SPTR on a move, and mem_find_own's `MC_SEG == the
+    ; caller's own segment` arm reaches it exactly as it reaches any package's
+    ; own region (SPEC.md 66.6.1). Freeing it is then the same right every
+    ; package has and says nothing about the re-home, so DO NOT EXERCISE IT -
+    ; a package that frees the region it is running in is not a test.
+    ;
+    ; **WITH A NON-ZERO SLACK THIS IS STILL A REFUSAL, AND THAT IS THE POINT
+    ; OF THE GATE** (SPEC.md 66.6.1.2). The declaration below now takes in
+    ; BOTH shapes - mem_find_own grew a containment arm - but that arm fires
+    ; only when the caller names its OWN SEGMENT. What this check passes is
+    ; the carve's BASE, which is not our segment and never was, so the fence
+    ; answers exactly as it did: widened to a containment, not holed.
     mov dx, [rp_hand + RP_CARVE]
     or dx, dx
     jz .n4
@@ -156,15 +163,16 @@ rp_check:
 .n4ok:
     inc byte [rp_ok]
 .n4:
-    ; --- ...and DECLARE, which only one of the two shapes can accept --------
-    ; SPEC.md 20.12.10.5. With a zero head slack this claim IS our region -
-    ; mem_is_region holds - and mem_find_own's `MC_SEG == the caller's own
-    ; segment` arm reaches it, so the declaration takes and tests/rehomemove.py
-    ; is what then moves it. With a non-zero slack it is refused, exactly as
-    ; check 4 above has just asserted, and a refusal is not worth reporting
-    ; (apps/os88api.inc says so about OS88_REGION_MOVABLE's own): it can only
-    ; mean the claim is not reachable as ours, which is the correct answer for
-    ; that shape and the whole reason mem_reown_x stamps the SLOT.
+    ; --- ...and DECLARE, which BOTH shapes accept now -----------------------
+    ; SPEC.md 20.12.10.5, 66.6.1.2. It used to take only where the head slack
+    ; was zero and the claim was our region in mem_is_region's old sense
+    ; (`MC_SEG == I_SPTR`); with a non-zero slack the program sits INSIDE the
+    ; carve and the declaration was refused - correctly, because four places in
+    ; the compactor would have read the claim's base where they meant the
+    ; segment we run in. All four take the offset now, so this takes either
+    ; way and tests/rehomemove.py moves either way - its `360` arm being the
+    ; shape that was pinned. `mov dx, ds` is load-bearing: naming the carve's
+    ; BASE is still refused, which is what check 4 above asserts.
     push dx
     mov dx, ds                  ; OUR REGION - and `mov dx, cs` would do as
     mov ax, rp_reloc            ; well, this package being org 0 in one segment

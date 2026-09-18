@@ -303,6 +303,16 @@ hd_page_paint:
 ; comes from hd_btn_ok and so does the refusal, so a greyed button can never
 ; be one that would have worked.
 ; -----------------------------------------------------------------------------
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; A Control Panel page draws its buttons one at a time, so the record is
+; pointed at whichever rect the caller staged. The GESTURE here is the
+; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
+; release-fired; what changed is that the DRAW goes through the control.
+hdp_btlbl: dw 0
+hdp_btflg: dw 0
+    OS88UI_BTNREC hdp_btrec, 0, hdp_btlbl, hdp_btflg, 1
+
 hd_page_button:
     push ax
     push bx
@@ -349,7 +359,16 @@ hd_page_button:
                                 ; will fire (SPEC.md 13.8)
     mov bx, hd_pbrect           ; OS88UI_FILL: the ground behind this is the
     or di, OS88UI_FILL          ; pane's white on a full paint and a PRESSED
-    call os88ui_btn             ; button on a release, and only the fill covers
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [hdp_btlbl], si          ; label and DI its flags, so the record takes
+    mov [hdp_btflg], di          ; all three and the picture is identical
+    mov [hdp_btrec+OS88UI_BT_RECTS], bx
+    mov bx, hdp_btrec
+    mov al, 1
+    call os88ui_btn
+    pop bx
+    pop ax
                                 ; the control leaves the pen live by itself,
                                 ; so the clc/GFX_PEN that used to close this
                                 ; routine is gone
@@ -658,7 +677,16 @@ hd_page_pm:
     or di, OS88UI_DOWN
 .nodn:
     mov bx, hd_pbrect
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [hdp_btlbl], si          ; label and DI its flags, so the record takes
+    mov [hdp_btflg], di          ; all three and the picture is identical
+    mov [hdp_btrec+OS88UI_BT_RECTS], bx
+    mov bx, hdp_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop dx
