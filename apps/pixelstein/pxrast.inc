@@ -1,0 +1,686 @@
+; =============================================================================
+; os8088 - apps/pixelstein/pxrast.inc
+;
+; THE BACKENDS (SPEC.md 96.3, 96.4): which foreign mode this adapter gives
+; us, the geometry of each, the per-row device table, the palettes, the ink
+; table the compose reads, the presents, and the bracket's own main loop.
+; NOT ONE kernel drawing slot past OSAPI_FSX_MODE (SPEC.md 53.7); the
+; windowed present is pxwin.inc's and is the one place OSAPI_GFX_BLIT1 is
+; called.
+;
+; ONE STRIDE FOR ALL OF THEM: the shadow is 80 bytes a row, a Mode X plane
+; row is 80 bytes and the C160 attribute row is 80 bytes at stride 2 - so the
+; compose never knows which backend it is on, and only px_present does.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; px_adapter - the raster this machine would give us, and the Mode row
+; in:  [px_win].  out: [px_vkind], [px_caps], px_mode0/px_mode1 (the two Mode
+;      items' backends, PXB_NONE = "no second mode"), [px_mode] the one in
+;      force, [px_fsxm] its FSXM_*, and the two items' captions
+; preserves every register (px_onresize is a callback)
+;
+; Asked of OUR WINDOW so that a two-card machine answers about the display
+; the window is on (SPEC.md 39.18.2), and re-asked on W_ONRESIZE. EVERY
+; BRANCH WRITES BOTH WAYS (apps/tank's rule): a drag from a VGA to a CGA
+; must take Mode X off the row, not merely fail to add it.
+; -----------------------------------------------------------------------------
+px_adapter:
+    push ax
+    push bx
+    push dx
+    mov bx, [px_win]
+    call OSAPI_FSX_CAPS             ; AX = the settable modes, DL = the kind
+    mov [px_caps], ax
+    mov [px_vkind], dl
+    mov byte [px_mode0], PXB_NONE
+    mov byte [px_mode1], PXB_NONE
+    test ax, 1 << FSXM_MODEX
+    jz .nomx
+    mov byte [px_mode0], PXB_MODEX  ; VGA: Mode X first, its CGA mode second
+    test ax, 1 << FSXM_CGA320
+    jz .say
+    mov byte [px_mode1], PXB_CGA4
+    jmp short .say
+.nomx:
+    test ax, 1 << FSXM_CGA320
+    jz .noc4
+    mov byte [px_mode0], PXB_CGA4   ; CGA and EGA: 320x200x4 first...
+    cmp dl, VID_CGA
+    jne .say
+    mov byte [px_mode1], PXB_C160   ; ...and the 160x100x16 retime on a
+    jmp short .say                  ; genuine CGA only (SPEC.md 88.15.7)
+.noc4:
+    test ax, 1 << FSXM_HERC
+    jz .say
+    mov byte [px_mode0], PXB_HERC
+.say:
+    ; the mode in force: keep the player's pick if this adapter still has
+    ; it, else the first item
+    mov al, [px_mode]
+    or al, al
+    jz .pick                        ; NONE is never "kept": on a Hercules or
+    cmp al, [px_mode0]              ; an EGA the second item is NONE too, and
+    je .keep                        ; a compare of the two kept nothing for
+    cmp al, [px_mode1]              ; a whole run of the gate
+    je .keep
+.pick:
+    mov al, [px_mode0]
+    mov [px_mode], al
+.keep:
+    or al, al
+    jz .none
+    mov bl, al
+    xor bh, bh
+    mov al, [px_fsxtab + bx]
+    mov [px_fsxm], al
+.none:
+    ; the captions: the item names what it is, or why it is not
+    mov bl, [px_mode0]
+    xor bh, bh
+    shl bx, 1
+    mov ax, [px_modestr + bx]
+    or bx, bx
+    jnz .m0
+    mov ax, px_s_mnone0             ; NONE in the FIRST slot is not "no
+                                    ; second mode": a display with none of
+                                    ; the three modes (SPEC.md 39.18.2 asks
+                                    ; about THIS window's display) says so
+.m0:
+    mov [px_i_mode + 0], ax
+    mov bl, [px_mode1]
+    xor bh, bh
+    shl bx, 1
+    mov ax, [px_modestr + bx]
+    mov [px_i_mode + 2], ax
+    mov ax, px_s_gofull
+    cmp byte [px_mode0], PXB_NONE
+    jne .go
+    mov ax, px_s_gofulln
+.go:
+    mov [px_i_game + 0], ax
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+px_fsxtab:  db 0, FSXM_CGA320, FSXM_TEXT80, FSXM_HERC, FSXM_MODEX
+px_modestr: dw px_s_mnone, px_s_mcga4, px_s_mc160, px_s_mherc, px_s_mmodex
+px_s_mnone:  db MENU_DIS, 'No second mode', 0  ; greyed: nothing to pick
+px_s_mnone0: db MENU_DIS, 'No full-screen mode here', 0  ; ...in slot 0
+px_s_mcga4:  db 'CGA 320x200', 0
+px_s_mc160:  db 'CGA 160x100x16', 0
+px_s_mherc:  db 'Hercules', 0
+px_s_mmodex: db 'Mode X', 0
+
+; -----------------------------------------------------------------------------
+; px_go_fsx - take the machine (SPEC.md 53.1), from a key or the menu: the
+;             UI task with the lock held, never the worker
+; -----------------------------------------------------------------------------
+px_go_fsx:
+    push ax
+    push bx
+    push cx
+    cmp byte [px_inbr], 0
+    jne .out
+    cmp byte [px_mode], PXB_NONE
+    je .out                         ; the predicate the Game item's caption
+                                    ; was rewritten off ("Full Screen (no
+                                    ; mode)", px_adapter): the item is not
+                                    ; greyed, on apps/tank's precedent, and
+                                    ; the refusal lives here
+    cmp word [px_shseg], 0
+    je .out                         ; no shadow: the window says so already
+    call px_abdismiss               ; a card may not cross into the bracket
+    mov byte [px_fsxq], 0
+    mov byte [px_inbr], 1           ; BEFORE the call: fsx_restore's
+    mov byte [px_fsx], 1            ; wm_paint_all runs INSIDE fsx_run and
+                                    ; re-enters our own W_PAINT
+    ; ...AND THE WORKER MUST BE OUT OF ITS COMPOSE (SPEC.md 96.8): it
+    ; composes lock-free, so OSAPI_FSX_RUN's freeze would otherwise land at
+    ; any instruction of px_cast or px_compose, and px_r_setup then rewrites
+    ; the globals and the patched immediates under it - one corrupt frame
+    ; on entering and one on leaving. It clears px_composing BEFORE it asks
+    ; for the lock this task holds, so the spin cannot deadlock; with
+    ; px_inbr already set it goes to sleep at its loop's top
+.spin:
+    cmp byte [px_composing], 0
+    je .quiet
+    call OSAPI_TASK_YIELD
+    jmp short .spin
+.quiet:
+    mov ax, px_fsx_main
+    mov bx, [px_win]
+    xor cx, cx                      ; no worker kept: this loop IS the game
+    call OSAPI_FSX_RUN
+    mov byte [px_fsx], 0            ; whether it ran or was refused (a
+    mov byte [px_inbr], 0           ; refused run never reached px_fsx_main,
+    mov byte [px_fsxq], 0           ; so the shadow is still the window's)
+    mov byte [px_lined], 1
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; px_fsx_main - the exclusive main (SPEC.md 53.1)
+; in:  SI = our window, ES = KERNEL_SEG, DS = CS = ours, the gfx lock held for
+;      the whole session, every other task frozen
+; out: near ret; the kernel restores the desktop
+; -----------------------------------------------------------------------------
+px_fsx_main:
+    push ds
+    pop es
+    mov di, px_fsi
+    mov al, [px_fsxm]
+    call OSAPI_FSX_MODE
+    jc .out                         ; refused: the desktop is untouched
+    mov al, [px_mode]
+    mov [px_back], al
+    call px_r_setup
+    mov byte [px_quit], 0
+    call px_auto_start              ; the rung for a bracket on this tier
+    call px_force_all
+    call OSAPI_GET_TICKS
+    mov [px_last], ax
+.loop:
+    call px_input                   ; int 16h to empty, through px_key_common
+    cmp byte [px_quit], 0
+    jne .out2
+    call px_steps                   ; CX = the ticks owed, or the wait
+    jcxz .draw
+    call px_keys_read               ; the held keys, once at the first owed
+    cmp byte [px_pause], 0          ; step (96.8)
+    jne .draw
+.sim:
+    push cx
+    call px_step
+    pop cx
+    loop .sim
+.draw:
+    call px_frame_begin
+    jnc .loop
+    call px_present
+    call px_frame_end
+    jmp .loop
+.out2:
+    mov byte [px_fsx], 0            ; cleared INSIDE the bracket, before
+    mov byte [px_inbr], 0           ; fsx_restore's wm_paint_all runs - or
+    mov byte [px_fsxq], 0           ; the thawed worker draws the bracket's
+                                    ; geometry over the desktop
+    call px_r_setup_win             ; ...and the WINDOW'S frame composed here
+    call px_frame_begin             ; too, before that repaint blits the
+                                    ; shadow: it held the bracket's bytes in
+                                    ; the bracket's inks, and W_PAINT would
+                                    ; have shown them for a frame
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; px_r_setup - adopt the bracket's backend for the length of one bracket
+; in:  [px_back] = a PXB_*, [px_fsi] filled by OSAPI_FSX_MODE
+; clobbers everything
+; -----------------------------------------------------------------------------
+px_r_setup:
+    call px_ink_build
+    call px_res_apply
+    mov word [px_pgofs], 0
+    mov byte [px_page], 0
+    mov al, [px_back]
+    cmp al, PXB_MODEX
+    je .modex
+    mov ax, [px_shseg]              ; a shadow backend composes in RAM and
+    mov [px_dseg], ax               ; copies rows
+    mov word [px_dbase], 0
+    call px_shadow_clear
+    call px_devrows
+    mov al, [px_back]
+    cmp al, PXB_C160
+    jne .nc160
+    call px_c160_mode               ; the retime, on top of the plain 80x25
+    ret
+.nc160:
+    cmp al, PXB_CGA4
+    jne .out
+    call px_cga_pal
+.out:
+    ret
+.modex:
+    mov ax, [px_fsi + FSI_SEG]      ; Mode X composes straight into the
+    mov [px_dseg], ax               ; hidden page
+    mov word [px_dbase], PX_MXROW0 * PX_STRIDE
+    mov dx, 0x3C4
+    mov ax, 0x0F02                  ; every plane: a byte store is four pixels
+    out dx, ax
+    mov es, [px_fsi + FSI_SEG]      ; both pages black: the mode set cleared
+    xor di, di                      ; what the card is SHOWING and no more
+    mov cx, 2 * 19200 / 2
+    xor ax, ax
+    cld
+    rep stosw
+    call px_modex_pal
+    ret
+
+; px_r_setup_win - the window's own backend (WIN1): the shadow, the 1bpp inks
+px_r_setup_win:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [px_back], PXB_WIN1
+    call px_ink_build
+    call px_res_apply
+    mov word [px_pgofs], 0
+    mov byte [px_page], 0
+    mov ax, [px_shseg]
+    mov [px_dseg], ax
+    mov word [px_dbase], 0
+    call px_shadow_clear
+    call px_force_all
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; px_shadow_clear - the whole shadow claim to zero (black on every backend)
+px_shadow_clear:
+    cmp word [px_shseg], 0
+    je .out                         ; NO SHADOW: a refused claim leaves the
+    mov es, [px_shseg]              ; word 0, and 8,192 words through ES = 0
+    xor di, di                      ; is the IVT, the BIOS data area and the
+    mov cx, PX_SHKB * 1024 / 2      ; kernel's low 16 KB (caught in review)
+    xor ax, ax
+    cld
+    rep stosw
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; px_res_apply - the resolution's four words (96.1): columns, bytes a column,
+;                the fan, the ladder
+; -----------------------------------------------------------------------------
+px_res_apply:
+    mov byte [px_cols], 64
+    mov byte [px_bpc], 1
+    mov word [px_fanp], px_fan64
+    mov word [px_ladp], px_ladb
+    cmp byte [px_lowres], 0
+    je .out
+    mov byte [px_cols], 32
+    mov byte [px_bpc], 2
+    mov word [px_fanp], px_fan32
+    mov word [px_ladp], px_ladw
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; px_devrows - the device offset of each of the 80 view rows in the mode the
+;              bracket set (apps/skies' cs_devrows, the three banked arms)
+; -----------------------------------------------------------------------------
+px_devrows:
+    mov di, px_devoff
+    xor bx, bx                      ; BX = the view row
+.row:
+    mov ax, bx
+    mov cl, [px_back]
+    cmp cl, PXB_HERC
+    je .herc
+    cmp cl, PXB_C160
+    je .text
+    add ax, PX_CGAROW0              ; CGA: bank = y & 1, 80 bytes a row
+    mov dx, ax
+    and dx, 1
+    shr ax, 1
+    mov cx, PX_STRIDE
+    push dx                         ; the bank, across the mul that writes DX
+    mul cx
+    pop dx
+    jmp short .bank
+.herc:
+    add ax, PX_HERCROW0             ; HERC: bank = y & 3, 90 bytes a row, +5
+    mov dx, ax                      ; for the box's x = 40
+    and dx, 3
+    shr ax, 1
+    shr ax, 1
+    mov cx, 90
+    push dx
+    mul cx
+    pop dx
+    add ax, 5
+    jmp short .bank
+.text:
+    mov cx, 160                     ; C160: 80 words a character row, no
+    mul cx                          ; bank, and the attribute is the odd byte
+    inc ax
+    xor dx, dx
+.bank:
+    mov cl, 13
+    shl dx, cl                      ; bank * 0x2000
+    add ax, dx
+    mov [di], ax
+    inc di
+    inc di
+    inc bx
+    cmp bx, PX_ROWS
+    jb .row
+    ret
+
+; -----------------------------------------------------------------------------
+; px_cga_pal - CGA palette 0 (green, red, brown) over BLACK, through the BIOS:
+;              a VGA or EGA running mode 4 has no port 3D9h (apps/skies'
+;              cs_cga_pal, SPEC.md 88.3)
+; -----------------------------------------------------------------------------
+px_cga_pal:
+    mov ax, 0x0B00
+    mov bx, 0x0100                  ; BH = 1: the palette, BL = 0
+    int 0x10
+    mov ax, 0x0B00
+    mov bx, 0x0000                  ; BH = 0: the background, BL = 0 black
+    int 0x10
+    ret
+
+; -----------------------------------------------------------------------------
+; px_modex_pal - the DAC: 0..15 the sixteen colours as tools/pxssim.py's
+;                PALETTE, 16..31 the same at 60% for a dark face (96.4)
+; -----------------------------------------------------------------------------
+px_modex_pal:
+    cld
+    mov si, px_dactab
+    mov cx, 16
+    xor bl, bl
+.e:
+    mov dx, 0x3C8
+    mov al, bl
+    out dx, al
+    inc dx
+    lodsb
+    out dx, al
+    lodsb
+    out dx, al
+    lodsb
+    out dx, al
+    inc bl
+    loop .e
+    mov si, px_dactab
+    mov cx, 16
+.d:                                 ; ...and the dark set: v * 6 / 10
+    mov dx, 0x3C8
+    mov al, bl
+    out dx, al
+    inc dx
+    push cx
+    mov cx, 3
+.c:
+    lodsb
+    mov bh, 6
+    mul bh                          ; AX = v * 6 (up to 378)
+    mov bh, 10                      ; the divisor OUTSIDE AX: `div ah` after
+    div bh                          ; `mov ah, 10` divides 0x0Axx and
+    out dx, al                      ; overflows into int 0 for ever
+    loop .c
+    pop cx
+    inc bl
+    loop .d
+    ret
+
+px_dactab:                          ; 6-bit, the 16 colours of os88api.inc
+    db  0,  0,  0                   ;  0 black
+    db  0,  0, 42                   ;  1 blue
+    db  0, 42,  0                   ;  2 green
+    db  0, 42, 42                   ;  3 cyan
+    db 42,  0,  0                   ;  4 red
+    db 42,  0, 42                   ;  5 magenta
+    db 42, 21,  0                   ;  6 brown
+    db 42, 42, 42                   ;  7 light grey
+    db 21, 21, 21                   ;  8 dark grey
+    db 21, 21, 63                   ;  9 light blue
+    db 21, 63, 21                   ; 10 light green
+    db 21, 63, 63                   ; 11 light cyan
+    db 63, 21, 21                   ; 12 light red
+    db 63, 21, 63                   ; 13 light magenta
+    db 63, 63, 21                   ; 14 yellow
+    db 63, 63, 63                   ; 15 white
+
+; -----------------------------------------------------------------------------
+; px_c160_mode - the 160x100x16 retime (SPEC.md 88.15.2): six 6845 writes with
+;                the video off, every cell the right half block, video on
+; -----------------------------------------------------------------------------
+px_c160_crtc:
+    db  4, 127
+    db  5,   6
+    db  6, 100
+    db  7, 112
+    db  9,   1
+    db 10, 0x20
+PX_C160_NREG equ ($ - px_c160_crtc) / 2
+
+px_c160_mode:
+    mov dx, 0x3D8
+    mov al, 0x01                    ; 80-column text, blink off, VIDEO OFF
+    out dx, al
+    cld
+    mov si, px_c160_crtc
+    mov cx, PX_C160_NREG
+    mov dx, 0x3D4
+.r:
+    lodsw
+    out dx, al
+    inc dx
+    xchg al, ah
+    out dx, al
+    dec dx
+    loop .r
+    mov dx, 0x3D9
+    xor al, al
+    out dx, al
+    mov es, [px_fsi + FSI_SEG]
+    xor di, di
+    mov ax, 0x00DE                  ; the right half block, black on black
+    mov cx, 160 * 100 / 2
+    rep stosw
+    mov dx, 0x3D8
+    mov al, 0x09                    ; ...and the picture back on
+    out dx, al
+    ret
+
+; -----------------------------------------------------------------------------
+; px_ink_build - the compose's tone table for [px_back] (96.4): px_inkt is a
+;                word per (material, side) - the even-row byte low, the
+;                odd-row byte high - and px_inkc/px_inkf/px_inke the ceiling,
+;                the floor and Wire's edge. THE RULE IS tools/pxssim.py's
+;                ink(), written once more here, and tests/pxssim.py holds the
+;                two to the same bytes.
+; clobbers AX, BX, CX, DX, SI, DI, ES
+; -----------------------------------------------------------------------------
+px_ink_build:
+    push ds
+    pop es
+    cld                             ; lodsw/stosw over our own image and bss
+    mov al, [px_back]
+    cmp al, PXB_MODEX
+    je .modex
+    cmp al, PXB_C160
+    je .c160
+    mov si, px_ink_cga4             ; the two-tone backends: seven words
+    cmp al, PXB_CGA4
+    je .fixed
+    mov si, px_ink_herc             ; Hercules, and WIN1's band is its byte set
+.fixed:
+    lodsw
+    mov [px_inkc], ax
+    lodsw
+    mov [px_inkf], ax
+    lodsw
+    mov bx, ax                      ; wall lit
+    lodsw
+    mov dx, ax                      ; wall dark
+    lodsw
+    mov [px_inkdl], ax              ; the door slab's own (PXM_DOOR)
+    lodsw
+    mov [px_inkdd], ax
+    lodsw
+    mov [px_inke], ax
+    mov di, px_inkt
+    mov cx, 16
+.f:
+    mov ax, bx
+    stosw
+    mov ax, dx
+    stosw
+    loop .f
+    mov ax, [px_inkdl]
+    mov [px_inkt + PXM_DOOR * 4], ax
+    mov ax, [px_inkdd]
+    mov [px_inkt + PXM_DOOR * 4 + 2], ax
+    ret
+.modex:
+    mov word [px_inkc], 0
+    mov word [px_inkf], 0x0808
+    mov word [px_inke], 0x0101      ; material 1, lit
+    mov di, px_inkt
+    xor cx, cx
+.m:
+    mov al, cl                      ; lit: the material's own DAC entry
+    mov ah, al
+    stosw
+    add al, 16                      ; dark: sixteen along
+    mov ah, al
+    stosw
+    inc cx
+    cmp cx, 16
+    jb .m
+    ret
+.c160:
+    mov word [px_inkc], 0
+    mov word [px_inkf], 0x2222      ; green, as CGA4's floor is: dark grey
+                                    ; (8) is the dark twin of the eleven
+                                    ; light-grey materials, and a floor in
+                                    ; it lost the corner between a dark
+                                    ; face and the ground (96.4)
+    mov di, px_inkt
+    xor bx, bx
+    mov cl, 4
+.t:
+    mov al, [px_c160_m + bx]        ; the material's colour...
+    push bx
+    mov bl, al
+    xor bh, bh
+    mov dl, [px_c160_d + bx]        ; ...and its dark, one shade down
+    pop bx
+    mov ah, al                      ; both nibbles: texels u and u+1 of one
+    shl ah, cl                      ; row (SPEC.md 96.4)
+    or al, ah
+    mov ah, al
+    stosw
+    mov al, dl
+    mov ah, al
+    shl ah, cl
+    or al, ah
+    mov ah, al
+    stosw
+    inc bx
+    cmp bx, 16
+    jb .t
+    mov ax, [px_inkt + 1 * 4]       ; Wire's edge: material 1, lit
+    mov [px_inke], ax
+    ret
+
+; the two-tone backends' seven words: ceiling, floor, a lit face, a dark
+; face, the door slab lit and dark, Wire's edge - each the even-row byte low
+; and the odd-row byte high (tools/pxssim.py's ink(), CGA palette 0: 1 green,
+; 2 red, 3 brown; Hercules a 2x2 dither by row parity)
+px_ink_cga4: dw 0x0000, 0x5555, 0xFFFF, 0xAAAA, 0xDDDD, 0x8888, 0xFFFF
+px_ink_herc: dw 0x0000, 0x2288, 0xFFFF, 0xAA55, 0xEEBB, 0x4411, 0xFFFF
+; C160: a material's attribute colour, and a colour's dark twin
+px_c160_m:   db 7, 7, 7, 9, 6, 6, 4, 7, 7, 7, 7, 7, 3, 6, 14, 7
+px_c160_d:   db 8, 8, 8, 3, 8, 8, 8, 8, 8, 1, 8, 8, 8, 8, 6, 8
+
+; -----------------------------------------------------------------------------
+; px_present - the frame onto the glass, bracket backends (SPEC.md 96.5)
+; in:  [px_r0]..[px_r1] the rows the compose wrote
+; clobbers everything but DS
+;
+; Shadow backends copy the band of every dirty row through the device-row
+; table, rep movsw a row; C160 lays each shadow byte at every OTHER address
+; (apps/skies' cs_blit.expand: the attribute is the odd byte and the
+; character bytes were written once by the retime); Mode X shows the page
+; it drew and the next frame takes the other.
+; -----------------------------------------------------------------------------
+px_present:
+    mov al, [px_back]
+    cmp al, PXB_MODEX
+    je .flip
+    mov al, [px_r0]
+    cmp al, [px_r1]
+    ja .out                         ; nothing was written
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    mov si, [px_row80 + bx]
+    add si, PX_X0                   ; DS:SI = the first dirty row's band
+    add bx, px_devoff               ; CS:BX = its device row
+    mov cl, [px_r1]
+    sub cl, al
+    inc cl
+    xor ch, ch
+    mov bp, cx                      ; BP = rows (a counter, never [bp])
+    mov es, [px_fsi + FSI_SEG]
+    push ds
+    mov ds, [cs:px_shseg]
+    cld
+    cmp byte [cs:px_back], PXB_C160
+    je .expand
+.row:
+    mov di, [cs:bx]
+    add di, PX_X0
+    mov cx, PX_BAND / 2
+    rep movsw
+    add si, PX_STRIDE - PX_BAND
+    inc bx
+    inc bx
+    dec bp
+    jnz .row
+    pop ds
+    ret
+.expand:
+    mov di, [cs:bx]
+    add di, PX_X0 * 2
+    mov cx, PX_BAND / 2
+.e:
+    lodsw
+    stosb
+    inc di
+    xchg al, ah
+    stosb
+    inc di
+    loop .e
+    add si, PX_STRIDE - PX_BAND
+    inc bx
+    inc bx
+    dec bp
+    jnz .expand
+    pop ds
+.out:
+    ret
+.flip:
+    call px_wait_begin              ; THE RETRACE IS NOT WORK (96.8): the
+    mov al, [px_page]               ; kernel waits for the field that latches
+    call OSAPI_FSX_PAGE             ; the page (SPEC.md 53.10), and a frame
+    call px_wait_end                ; timed through it reads as whole 16.7 ms
+    xor byte [px_page], 1           ; fields - the selector then judged the
+                                    ; bucket and not the frame
+    mov word [px_dbase], PX_MXROW0 * PX_STRIDE
+    mov word [px_pgofs], 0
+    cmp byte [px_page], 0
+    je .out
+    mov word [px_dbase], 19200 + PX_MXROW0 * PX_STRIDE
+    mov word [px_pgofs], PX_COLMAX
+    ret

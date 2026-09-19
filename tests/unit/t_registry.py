@@ -54,6 +54,13 @@ UNREGISTERED = {
     # --- library and support code, not tests ---
     "dispcells.py": "the CELLS-not-calls counter two gates share (SPEC.md "
                     "11.3.3), not a test",
+    "pxslib.py": "PIXELSTEIN 3D's guest reader (SPEC.md 96.12) - the "
+                 "package's symbols out of nasm's map, its window and part-0 "
+                 "segment, the loader's handoff words, the pinned scenes "
+                 "poked and the arrays and shadow read back - imported by "
+                 "tests/pixelstein.py and tests/pxssim.py, and not a test: "
+                 "dispcp.py's lesson one entry up, a library registered as a "
+                 "row is a row that cannot fail",
     "dispcp.py": "the Control Panel's Display page driven from a script - "
                  "the shared one, imported by 104 files in this directory and "
                  "the most-reused thing in it. It was REGISTERED as a soak "

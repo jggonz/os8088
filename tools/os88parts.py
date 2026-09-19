@@ -146,6 +146,31 @@ def sectors(row):
     return 0 if not row["off"] else (row["len"] + 511) // 512
 
 
+def run_sectors(rows_):
+    """The eager read run in UNPACKED sectors - the figure SPEC.md 20.12.7
+    bounds at 128 (os88partsbody.inc's `cmp dx, 128 / jae .bad`, and on the
+    unpacked side `op_usecs` likewise): every filed row that is not LAZY,
+    at its unpacked `len`, which OP_COMP does not relieve because the CLAIM
+    is cut from the unpacked total. A packed part on the floppy is fewer
+    sectors than this; the bound is not about the floppy."""
+    run = 0
+    for r in rows_:
+        if not r["off"] or r["flags"] & EQU["OP_LAZY"]:
+            continue
+        run += sectors(r)
+    return run
+
+
+def run_of(path):
+    """(run sectors, rows) of a packed .o88 on disk - the parts table decoded
+    out of the IMAGE (os88pkg.image_unwrap: the file is not the image)."""
+    import os88pkg
+    raw = open(path, "rb").read()
+    blob = os88pkg.image_unwrap(raw)
+    rows_ = rows(blob[:_u16(blob, 8)])
+    return run_sectors(rows_), rows_
+
+
 def part_bytes(raw, i):
     """Part `i` of a packed `.o88`, UNPACKED - what the machine will see.
 
@@ -243,7 +268,42 @@ def pkg_copies(root=None):
     return out
 
 
+def main_run(argv):
+    """`os88parts.py --run FILE.o88 [--max-run N]`: print the eager run in
+    unpacked sectors and fail if it is not under N (default 128, SPEC.md
+    20.12.7's bound - a run that reaches it fails at LAUNCH, on the machine,
+    so a package recipe asserts it where the file is made)."""
+    path, limit = None, 128
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--run":
+            path = argv[i + 1]
+            i += 2
+        elif argv[i] == "--max-run":
+            limit = int(argv[i + 1])
+            i += 2
+        else:
+            print("os88parts: unknown argument %r" % argv[i])
+            return 2
+    if path is None:
+        print("os88parts: --run FILE.o88 [--max-run N]")
+        return 2
+    run, rows_ = run_of(path)
+    for k, r in enumerate(rows_):
+        print("  part %d %-5s %s len %6d%s" % (
+            k, "SEG" if r["kind"] == EQU["OP_SEG"] else "ASSET",
+            "scratch" if not r["off"] else "sector %3d" % r["off"], r["len"],
+            " lazy" if r["flags"] & EQU["OP_LAZY"] else ""))
+    ok = run < limit
+    print("os88parts: %s: the eager run is %d unpacked sectors, %s %d (SPEC.md 20.12.7)"
+          % (path, run, "under" if ok else "NOT UNDER", limit))
+    return 0 if ok else 1
+
+
 def main():
+    import sys
+    if len(sys.argv) > 1:
+        return main_run(sys.argv[1:])
     for n in sorted(OFF, key=lambda k: OFF[k]):
         print("  %-12s os88_image_end + %d" % (n, OFF[n]))
     print("  %-12s %d" % ("OP_BSS", OP_BSS))
