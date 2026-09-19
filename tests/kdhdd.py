@@ -107,21 +107,40 @@ def wait_text(m, want, secs, what):
     when the row is not there, and waiting the full timeout out against that
     screen turns a precise sentence into `never appeared`. Reading it is what
     makes the row report the volume table rather than the program.
+
+    **THE BUDGET IS THE GUEST'S OWN CLOCK** (docs/plans/SOAK-PARALLEL.md), and
+    the reason is not the obvious one. The arm this waits on costs **0.8 host
+    seconds and 3.1 guest seconds**, measured, against a budget of 300 - no
+    amount of contention turns that into a timeout, so "a loaded box does less
+    work" is NOT what was failing here. What a host loop cannot do is ask
+    whether the guest is still EXECUTING: `os88marty.until` does, and reports
+    a stopped machine in GUEST_STALL seconds naming its CS:IP, where this
+    spent the full 300 seconds and then blamed the condition.
+
+    That distinction is the whole value. This row has failed twice in soak
+    runs and never once solo in ~20 attempts, always with the same picture -
+    the desktop, decoded as text, after the full budget - and a screen that
+    has stopped changing because nothing is running looks exactly like one
+    that is running and has not got there yet. Only one of those two is worth
+    investigating, and the old form could not tell them apart.
     """
-    end = time.time() + secs
-    while time.time() < end:
-        rs = rows(m)
-        if any(want in r for r in rs):
-            return rs
+    def there(mm):
+        rs = rows(mm)
         for r in rs:
             if "could not mount" in r:
                 fail("%s: %s. THE VOLUME IS NOT IN kern_dos's TABLE - that "
                      "is disk.inc's static dsk_vtab, whose row 2 is DVK_FREE "
                      "and is where SPEC.md 18.7.1 pins the boot partition "
                      "(96.46)" % (what, r.strip()))
-        time.sleep(0.25)
-    fail("%s: %r never reached the text screen; the last one held %r"
-         % (what, want, [r for r in rows(m) if r.strip()][:10]))
+        return any(want in r for r in rs)
+
+    try:
+        M.until(m, there, what, guest=secs, poll=0.25)
+    except M.MartyError as e:
+        fail("%s: %r never reached the text screen. %s  The last screen held "
+             "%r" % (what, want, str(e).split("\n")[0][:300],
+                     [r for r in rows(m) if r.strip()][:10]))
+    return rows(m)
 
 
 def marker(rs):
@@ -132,17 +151,50 @@ def marker(rs):
 
 
 def arm3_run(m, mo):
-    """Set the Memory page's the Shut down the OS arm and press Run.
+    """Set the Memory page's the Shut down the OS arm, press Run, and CONFIRM.
 
     Poked rather than clicked, which `tests/kdreturn.py` does for the same
     reason: the radio is `tests/kdmouse.py`'s and `tests/kdhand.py`'s subject
     and re-driving it here would make this row fail for somebody else's
     defect.
+
+    **THE CONFIRMATION IS NEW AND IT IS WHAT THE ROW WAS MISSING.** This
+    clicked Run and returned, so a press that did not take was
+    indistinguishable from a handover that began and hung: both leave the
+    machine in graphics, and `wait_text` reported the same sentence for
+    either. Waiting for the text screen to carry ANYTHING separates them, and
+    the failure then names the press rather than the program.
+
+    **IT MUST NOT USE `m.video()`, and that is a measurement rather than a
+    preference.** Polling the card's mode is the obvious way to watch for the
+    handover, and on the pristine row - with NOTHING else changed - a
+    `m.video()` every 250 ms across this window makes it fail 3 times in 3,
+    with the exact screen the intermittent produces. `m.screen()` polled 50x
+    harder is clean 3 in 3. The card query wedges the guest somewhere in the
+    fsx mode change, inside MartyPC, which is pinned upstream - so the rule
+    here is to read the SCREEN and leave the card alone.
     """
     dm = dosmap.package()
     pseg = dosmap.instance(m)
     m.write((pseg << 4) + dm["dos_keepc"], bytes([1, 0]))
-    mo.click(*dosmap.centre(m, pseg, dm, "dos_rrect"))
+    pt = dosmap.centre(m, pseg, dm, "dos_rrect")
+    # THE SCREEN AS IT WAS, because "anything on the text screen" is already
+    # TRUE: in graphics mode `screen` decodes the B800 bytes under the
+    # desktop, and that is the garbage every failure here has printed. What
+    # is quiet while the desktop is up is CHANGE - nothing writes text there
+    # - so the handover is the first thing that moves it.
+    was = rows(m)
+    mo.click(*pt)
+    try:
+        M.until(m, lambda mm: rows(mm) != was,
+                "the handover to write to the text screen", guest=60.0,
+                poll=0.25)
+    except M.MartyError as e:
+        fail("Run was pressed at %r and NOTHING reached the text screen. %s  "
+             "The press did not take, or the handover never began - either "
+             "way nothing below this could have run, and the volume table "
+             "this row is about was never consulted"
+             % (pt, str(e).split("\n")[0][:300]))
 
 
 def main():

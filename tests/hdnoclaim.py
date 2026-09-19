@@ -26,8 +26,8 @@ four checks are the inverse of the ones `hdmove` made:
      checking nothing, which is docs/WRITING-TESTS.md 1's whole point;
   2. the driver owns EXACTLY ONE heap record, its own image (`MEM_K_DRV`),
      and no second claim of any size;
-  3. `[dsk_dseg]` is `LOW_SEG` with a hard-disk volume OPEN and listing - the
-     listing is the floor, for a driver-backed volume as for a floppy;
+  3. a hard disk's listing is in THE WINDOW'S OWN CLAIM and `[dsk_dseg]` is
+     0 - the same place a floppy's goes, and the same word at rest;
   4. and the listing WORKS: the volume's root lists entries, so 2 and 3 are
      not green because the mount quietly failed.
 
@@ -43,6 +43,16 @@ having it.** `osapi_vol_add` ignores DX now, so no driver can aim the listing
 at a claim however hard it tries; check 3 is the guard on the KERNEL half -
 `dsk_list_pick`, `DV_SEG` and the `mem_rr_tab` rows coming back - which is a
 change nothing on the driver side can cause and nothing else here would see.
+
+**AND CHECK 3 WAS RE-CUT WHEN THE MECHANISM MOVED UNDER IT.** It read
+`[dsk_dseg] == LOW_SEG`: the listing lived in the `.lowbss` floor, for a
+driver-backed volume exactly as for a floppy. SPEC.md 22.6.3 deleted that
+floor - a mount writes into the store its CALLER supplied - so the old form
+was checking for a buffer that no longer exists, which is a red that says
+nothing about the thing the row is for. The subject and the danger are
+unchanged; what moved is where "the listing is not the driver's" is written
+down. It is now the destination word being 0 AT REST, plus the window's own
+FS_VSEG claim being a record the driver does not own.
 
 IT IS MARTY'S: an 8088 with a hard disk behind an option ROM is what
 `os8088_xt_hdd` is, and nothing here is a time.
@@ -85,6 +95,18 @@ def check(ok, what, why, got=None, want=None):
             print("       want: %s" % (want,))
         print("       why:  %s" % why)
         _fail.append(what)
+
+
+def fs_vseg(m, S):
+    """The ACTING Disk window's own listing store (SPEC.md 22.6.3).
+
+    Off [fm_vp], which is the block every painter and hit-tester reads
+    through - so this is the same word the rows on the glass came out of.
+    """
+    vp = u16(m.read(S("fm_vp"), 2))
+    if not vp:
+        return 0
+    return u16(m.read((os88geom.KERNEL_SEG << 4) + vp + os88geom.FS_VSEG, 2))
 
 
 def claims(m, S):
@@ -192,18 +214,43 @@ def main():
               got=["%04x %dKB" % (c[0], c[1] // 64) for c in extra],
               want="no record but the image")
 
-        # --- 3: ...and the listing is the FLOOR, with that volume open ------
+        # --- 3: ...and the listing is THIS WINDOW'S, with that volume open --
+        # **THIS CHECK WAS `[dsk_dseg] == LOW_SEG` AND THAT IS NOW FALSE**
+        # (docs/plans/LISTING-HOME-PLAN.md 13, SPEC.md 22.6.3). There is no
+        # floor listing at all: a mount writes into the store its CALLER
+        # supplied, so a Disk window on a hard disk lists into its own
+        # FS_VSEG claim exactly as one on a floppy does, and the destination
+        # word is 0 at rest because it is an ARGUMENT rather than a home.
+        #
+        # The row's subject is unchanged and so is its danger - a per-volume
+        # donation coming back silently - but the shape of "the listing is
+        # not the driver's" moved with the mechanism. Checking `LOW_SEG` now
+        # would be checking for a buffer that does not exist, which is a red
+        # that says nothing; checking 0 plus the window's own claim is the
+        # same statement against the kernel we have.
         dseg = u16(m.read(S("dsk_dseg"), 2))
         nmax = u16(m.read(S("dsk_nmax"), 2))
         doff = u16(m.read(S("dsk_doff"), 2))
         print("opened %s:  [dsk_dseg] = %04x  [dsk_doff] = %04x  "
               "[dsk_nmax] = %d" % (letter, dseg, doff, nmax))
-        check(dseg not in (0,) and all(dseg != c[0] for c in claims(m, S)),
-              "[dsk_dseg] names no heap claim while a hard disk is listing",
-              "this is the kernel's half of the same fact: the listing lives "
-              "in `.lowbss` for a driver-backed volume exactly as for a "
-              "floppy. If it names a claim the donation is back",
-              got="%04x" % dseg, want="not a mem_tab base")
+        check(dseg == 0,
+              "[dsk_dseg] is 0 at rest, so no listing has a standing home",
+              "the destination is an argument set for one mount and cleared "
+              "after it (SPEC.md 22.6.3). A non-zero value here is a `.bss` "
+              "word left naming a block across arbitrary time - and this one "
+              "is MOVABLE on kern_big and PURGEABLE on kern_small",
+              got="%04x" % dseg, want="0000")
+
+        vseg = fs_vseg(m, S)
+        print("%s: the window's own listing store is %04x" % (letter, vseg))
+        check(vseg != 0 and all(vseg != c[0] for c in mine),
+              "the hard disk's listing is in THE WINDOW'S claim, not a "
+              "donated one",
+              "this is the kernel's half of the same fact: a driver-backed "
+              "volume lists where a floppy lists, into the Disk window's own "
+              "FS_VSEG. If that store is one of the DRIVER's records the "
+              "donation is back under a new name",
+              got="%04x" % vseg, want="a claim the driver does not own")
         check(nmax > 0, "[dsk_nmax] is a real cap",
               "a zero cap lists nothing, which would make check 4 below read "
               "an empty window as a mount failure",

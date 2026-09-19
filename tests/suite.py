@@ -2870,7 +2870,22 @@ SOAK = [
         "boot partition at row 2, which that initialiser has DVK_FREE - so a "
         "machine with a hard disk handed over an index kern_dos read as no "
         "volume. VERIFIED TO FAIL: with the carry taken out the run under "
-        "kern_dos reports `(open failed)`.",
+        "kern_dos reports `(open failed)`. BOTH WAITS ARE ON THE GUEST'S "
+        "CLOCK and the reason is not the usual one: the arm costs 0.8 host "
+        "seconds against a 300-second budget, so contention was never going "
+        "to time it out - what a host loop cannot do is ask whether the "
+        "guest is still EXECUTING. This row failed twice in soaks and never "
+        "once solo in ~20 attempts, always showing the desktop decoded as "
+        "text after the full budget, and a screen that stopped changing "
+        "because nothing is running looks exactly like one that has not got "
+        "there yet; os88marty.until tells them apart and names the CS:IP. "
+        "Pressing Run is CONFIRMED too, by the text screen CHANGING - "
+        "`anything on the text screen` is already true of the desktop's "
+        "B800 garbage - so a press that did not take reports in 13 seconds "
+        "naming the press instead of 300 naming the program. It must NOT "
+        "confirm with m.video(): polling the card across the fsx mode change "
+        "wedges the guest and fails this row 3 in 3 "
+        "(docs/MARTYPC-DEBUG.md).",
         needs=("marty",), serial=True,
         wants=("build/kdos/DOS.O88", "build/kernel.sys", "build/hiber.drv")),
     Row("kdmouse", "soak", py("tests/kdmouse.py"), 120.0,
