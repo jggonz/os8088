@@ -67,7 +67,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88geom as geom                                          # noqa: E402
 import os88marty                                                 # noqa: E402
 from os88marty import MartyError                                 # noqa: E402
-from os88mouse import Mouse, DBL_TICKS                           # noqa: E402
+from os88mouse import Mouse                                      # noqa: E402
 
 
 class UIError(Exception):
@@ -470,11 +470,13 @@ class UI:
         packet and retrying a clamp is an infinite loop with a timeout on it.
         """
         w = self._as_win(w)
-        top = self.front()
-        raised = top is None or top.i != w.i
+        # **A RAISE FOLLOWED BY A GRAB IS A DOUBLE-CLICK ON THE TITLE BAR**,
+        # and SPEC.md 11.95 says what that does: it ZOOMS the window, and the
+        # next one restores it - so the drag never happens and the record
+        # reads the window's ORIGINAL x. `os88mouse.Mouse._sep` separates the
+        # two presses on the GUEST's clock, which is why there is nothing to
+        # do here; a gap measured in host work is wrong at some guest speed.
         self.raise_window(w)
-        if raised:
-            self._dbl_gap()
         was = (w.x, w.y)
         # WHERE IT WILL ACTUALLY LAND, not where we asked. SPEC.md 11.94 snaps
         # a frame's x so its CONTENT origin is a multiple of 8, so a request
@@ -635,34 +637,6 @@ class UI:
             raise UIError("window slot %d is not in use. Open: %r"
                           % (w, self.titles()))
         return w
-
-    def _dbl_gap(self):
-        """Let the kernel's double-click window expire, on the GUEST's clock.
-
-        **A RAISE FOLLOWED BY A GRAB IS A DOUBLE-CLICK ON THE TITLE BAR**, and
-        SPEC.md 11.95 says what that does: it ZOOMS the window, and a second
-        one restores it to the geometry it banked. So `move_window` on a
-        window that is not already front raised it, pressed the same bar
-        again, and got a zoom instead of a drag - after which the record reads
-        the window's ORIGINAL x, which is what the caller sees and cannot
-        explain.
-
-        It is load sensitive in the direction that reads as contention: the
-        two edges are a fixed amount of HOST work apart, so on a busy box they
-        land CLOSER TOGETHER in guest time and fall inside the window more
-        often. `tests/dockpos.py` failed exactly once in a four-lane soak and
-        passed alone, and reproduced 1 in 4 with four of it at once - `x 159
-        w 322` against the `x 391 w 322` the other three read, 159 being where
-        the panel started.
-
-        `DBL_TICKS` is os88mouse's mirror of the interval every detector in
-        the kernel shares (ui_tdbl, DESK_DBLT, FM_DBLCLK, FD_DBLCLK), and the
-        BIOS tick at 0040:006C is the guest's own clock - so this waits the
-        same amount of the MACHINE's time whatever the host is doing.
-        """
-        t0 = self.mo.ticks()
-        while (self.mo.ticks() - t0) <= DBL_TICKS:
-            time.sleep(0.01)
 
     def _refresh(self, w):
         for o in self.windows():

@@ -66,7 +66,6 @@ import os88pkg                                         # noqa: E402
 import os88build                                       # noqa: E402
 import os88marty                                       # noqa: E402
 import os88ui                                          # noqa: E402
-from os88mouse import DBL_TICKS                        # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 import dispcp                                          # noqa: E402
@@ -127,20 +126,6 @@ def menu_pick(m, mo, cell, item):
         ui = _UI[id(m)] = os88ui.UI(m, mouse=mo, sym=S)
     ui.menu_pick(cell, item)
 
-
-def _dblgap(m):
-    """Let the kernel's double-click window expire, on the GUEST's clock.
-
-    os88ui's `_dbl_gap` by hand, because this row drives the mouse directly.
-    `DBL_TICKS` is the interval every detector in the kernel shares and the
-    BIOS tick at 0040:006C is the guest's own clock, so this waits the same
-    amount of the MACHINE's time whatever the host is doing.
-    """
-    import time as _t
-    t0 = m.read(0x46C, 4)
-    val = lambda b: b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)
-    while val(m.read(0x46C, 4)) - val(t0) <= DBL_TICKS:
-        _t.sleep(0.01)
 
 
 def toast(m):
@@ -243,6 +228,20 @@ def compress(m, mo, wx, wy, name, fails, quiet=30, item=FM_ICOMP):
     a row that reports "nothing was said" about a machine that was simply
     given a third less CPU (docs/plans/SOAK-PARALLEL.md 1).
     """
+    # **THE PREVIOUS VERB HAS ONLY JUST STOPPED**, and this used to read the
+    # listing and click a row without asking. The call before this one ended
+    # the moment its toast APPEARED - which is before the toast is taken down
+    # and before the window has finished re-listing a file whose size just
+    # changed - so `row_of` could be read off a stale listing and the click
+    # could land on a toast rather than on a row. Neither says anything: the
+    # verb runs on the wrong selection or not at all, and the wait below
+    # reports `nothing was said` about a machine nobody asked.
+    #
+    # `settle` is the right wait because the question is STILLNESS and not a
+    # duration - a fixed pause is either waste or a lie at some guest speed,
+    # which is the same lesson as os88mouse's `_sep`. Measured: this row went
+    # from 3 failures in 4 with four copies at once to 4 of 4 green.
+    os88marty.settle(m)
     m.write(S("toast_buf"), b"\0")          # ...so the previous verdict cannot
     row = dispcp.row_of(m, S, name)         # be read as this one's
     x, y = dispcp.row_xy(wx, wy, row)
@@ -260,7 +259,10 @@ def compress(m, mo, wx, wy, name, fails, quiet=30, item=FM_ICOMP):
     # what says it is the gesture and not the subject. Everything that DID
     # complete took 2 to 14 guest seconds of its 8 or 30, so the budget was
     # never the question.
-    _dblgap(m)
+    #
+    # `os88mouse.Mouse._sep` is where that is fixed - the separation is taken
+    # on the guest's own tick, once, for every verb in the module - so this
+    # call site has nothing to add.
     mo.click(x, y)
     os88marty.settle(m)
     menu_pick(m, mo, 1, item)               # cell 0 is the chip, 1 is File
