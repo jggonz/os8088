@@ -2807,18 +2807,32 @@ disk_mount_x:
     ; from, which is why this showed up as a Task Manager that could not find
     ; its file and a Disk window with nothing in it rather than as a failure
     ; to start.
-    mov word [disk_nfiles], 0   ; stays 0 unless the mount fully succeeds
-    mov byte [dsk_mntok], 0     ; the write gate (SPEC.md 18.4) closes for
+    ; **EIGHT IMMEDIATE STORES, THROUGH THE ACCUMULATOR.** `mov word [m], imm`
+    ; is SIX bytes and 20 clocks where `mov [m], ax` is THREE and 14, so this
+    ; is 31 bytes against 46 and faster on the target machine as well - the
+    ; same argument dsk_bpb_check makes for `mov bh, [dsk_vflop]` a page down.
+    ; AX is dead here by CONSTRUCTION and not by inspection: the block above
+    ; ends at `pop bx`, and every path through it - the row lookup, the floppy
+    ; test, the boot partition's geometry - has already spent AX for its own
+    ; reasons. The stores are ordered by what AX has to hold; each keeps the
+    ; comment that says why it is set.
+    xor ax, ax
+    mov [disk_nfiles], ax       ; stays 0 unless the mount fully succeeds
+    mov [dsk_mntok], al         ; the write gate (SPEC.md 18.4) closes for
                                 ; the whole mount: a torn mount leaves it
                                 ; closed, so nothing can write a volume
                                 ; whose layout was never fully validated
-    mov word [dsk_rover], 2     ; allocator hint + FAT dirty range: no
-    mov word [dsk_fatd0], 0xFFFF    ; window state survives a mount, and the
-    mov word [dsk_fatd1], 0     ; window itself is invalid until rule 10 has
-    mov word [dsk_fatw0], 0xFFFF    ; sized it (SPEC.md 18.8)
-    mov word [dsk_fatwn], 1
-    mov byte [ld_pending], 0    ; a queued click indexes the OLD directory;
+    mov [dsk_fatd1], ax         ; no window state survives a mount, and the
+    mov [ld_pending], al        ; a queued click indexes the OLD directory;
                                 ; never let it run against the new one
+    inc ax
+    mov [dsk_fatwn], ax         ; window itself is invalid until rule 10 has
+    inc ax                      ; sized it (SPEC.md 18.8)
+    mov [dsk_rover], ax         ; ...and 2 is the allocator hint's first
+                                ; cluster
+    mov ax, 0xFFFF              ; the FAT dirty range and the window's base,
+    mov [dsk_fatd0], ax         ; both of which mean "nothing"
+    mov [dsk_fatw0], ax
     cmp byte [dsk_keepcwd], 0   ; a remount always lands at the root, and
     jne .cwd_kept               ; dskw_* resolve there until dsk_chdir
     mov word [dsk_cwd], 0       ; moves - EXCEPT when dsk_chdir is the
