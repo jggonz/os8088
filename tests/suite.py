@@ -3477,6 +3477,27 @@ SOAK = [
         "is the IN-FLIGHT state here and a predicate accepting it fires before "
         "the machine has hibernated. VERIFIED red on the shipped kern_dos.",
         needs=("marty",), serial=True),
+    Row("icoshed", "soak", py("tests/icoshed.py"), 75.0,
+        "THE ICON STORE IS SHED AND THE WINDOW GETS IT BACK (SPEC.md "
+        "25.9.5). A DOS box claims the whole arena, which is a full "
+        "compaction, which correctly drops the machine-wide store - it is "
+        "MEM_PG_TRIV so that this IS the cheap thing to give up. What was "
+        "missing is the other half of cheap: a repaint is not a mount, so "
+        "every Disk window on screen went on drawing SPEC.md 25's generic "
+        "icon until the user navigated somewhere else. Reported from the "
+        "field as `the file manager redraws, but does not reload its icon "
+        "cache`. IT ASSERTS THE MIDDLE OF THE ROUND TRIP and that is the "
+        "design: the two ends look identical on a broken kernel, because the "
+        "store is lazily re-claimed by the first lookup either way - what "
+        "tells them apart is [ico_n] cleared and the window owing FSD_ICONS "
+        "WHILE the program runs, and a reference that RESOLVES afterwards. "
+        "That last check is against the live row count and not against "
+        "ICO_R_NONE, because a repair that never runs leaves the byte "
+        "exactly as it was and what moved under it is the store. VERIFIED "
+        "RED both ways - fmv_icostale's call taken out, and [ico_n]'s store "
+        "taken out. MartyPC: the shed is a real DOS program taking the real "
+        "arena, and no other emulator here runs one.",
+        wants=("build/dossnd360.img",), needs=("marty",)),
     Row("kdreturn", "soak", py("tests/kdreturn.py"), 37.0,
         "THE DOS HANDOFF COMES BACK (SPEC.md 96.41, "
         "docs/plans/KERN-DOS-PLAN.md 8). W5 restarted the machine because "

@@ -1123,11 +1123,25 @@ mem_pg_forget:
     sub cx, MEM_P_FATW          ; PROTOCOL CARRIES (SPEC.md 18.8.4): the LIVE
     cmp cx, MEM_P_FATW_N        ; one is also [dsk_fatseg], which every access
     jb .fatw                    ; reads, and [dsk_fatw0], which says what is
+%ifdef DSK_WANT_ICONS
+    cmp bx, MEM_P_ICO           ; ...AND SO DOES THE ICON STORE (SPEC.md
+    je .ico                     ; 25.9.5): [ico_n] beside it says how many rows
+%endif                          ; it holds, and 54.7.4's guard against a stale
+                                ; ASSOC.DAT stamp is a compare on that byte -
+                                ; so leaving it set made the guard inert and
+                                ; the next mount paid a sector per package.
+                                ; MEM_P_ICO_N is 1, so this is one compare and
+                                ; needs no range
     mov word [si], 0            ; resident - and dsk_fat_window believing that
     jmp short .out              ; returns WITHOUT loading, so the reads and
 .fatw:                          ; writes after it land in whatever claim owns
     call dsk_fatw_demote        ; those paragraphs now. So the disk layer is
                                 ; handed the owner and clears the word itself
+%ifdef DSK_WANT_ICONS
+    jmp short .out
+.ico:
+    call ico_demote
+%endif
 %ifdef KERN_SMALL
     jmp short .out
 .view:
