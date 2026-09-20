@@ -1131,6 +1131,41 @@ class UI:
         self._wait(lambda: [r[0] for r in self.listing(win)] != was,
                    "the folder %r to open" % name, lim,
                    snapshot=lambda: "the listing is still %r" % (was,))
+        # **CHANGED IS NOT FINISHED, AND STILL IS NOT EITHER.**
+        #
+        # A mount clears nothing and writes the new entries into the store the
+        # window already holds, and `[di+FS_N]` - the count `listing` decodes
+        # with - is written ONCE, at the END (kernel/files.inc, `.listed`).
+        # So for the whole of the mount the window reports the PREVIOUS
+        # folder's count over the NEW folder's bytes.
+        #
+        # That is not a listing that is still filling, it is a listing that is
+        # WRONG AND STABLE, so neither `!= was` nor any amount of waiting for
+        # it to stop changing can see it: B:\ has four entries and
+        # B:\GAMES has nine, and this verb reported GAMES as
+        # `['..', 'ARKANOID.O88', 'CYCLONE.O88', 'DOTDEL.O88']` - the new
+        # folder's first four - then raised "'TANK.O88' is not in this
+        # folder", naming a file that is on the disk and in the listing
+        # (tests/tanksmall.py, and tests/uilat.py and tests/pathcost.py are
+        # the same fault where the old count was 1).
+        #
+        # So the condition is the MOUNT finishing, and the honest witness for
+        # that is the floppy controller, read from OUTSIDE the guest: while
+        # the mount runs it is issuing `int 13h`, and when it stops it has
+        # written FS_N. `guest=1.0` is deliberately longer than a single
+        # transfer - one is 1-2 disk revolutions, ~400 ms on the target
+        # machine (PERFORMANCE.md) - so a sample pair cannot land inside one
+        # read and call it stillness. It is the guest's own clock, so a
+        # loaded box neither shortens it nor lengthens the run.
+        self._wait(lambda: [r[0] for r in self.listing(win)] != was,
+                   "the folder %r to open" % name, lim,
+                   snapshot=lambda: "the listing is still %r" % (was,))
+        os88marty.quiesce(
+            self.m,
+            lambda: (self.m.disk().get("reads"),
+                     tuple(r[0] for r in self.listing(win))),
+            guest=1.0,
+            what="the mount %r started to finish" % name)
         self._say("open %s -> %d entries" % (name, len(self.listing(win))))
         return self._refresh(win)
 
