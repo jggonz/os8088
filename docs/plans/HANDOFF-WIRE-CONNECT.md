@@ -1,117 +1,158 @@
-# HANDOFF - The Wire's eighth connection never connects
+# HANDOFF - The Wire's eighth transfer never gets off the ground
 
-**Status: DIAGNOSED, NOT FIXED.** `soak -k thewire` is red on this and on
-nothing else; every other assertion in that row passes, including the whole
-archive transfer, byte for byte.
+**Status: DIAGNOSED FURTHER, STILL NOT FIXED.** `soak -k thewire` is red on
+this and on nothing else; every other assertion in that row passes, including
+the whole archive transfer, byte for byte.
 
-Read this before diagnosing `thewire` yourself. The session that found it
-spent most of its time ruling out three things that look like the answer and
-are not, and the evidence for each is below so that nobody takes it again.
+**THIS FILE EXISTS ONLY UNTIL THE BUG IS FIXED, AND IT GOES WITH THE FIX.**
+Its first revision sent a reader to `tcp_syn` and to an ABI change, and both
+were wrong; what follows is measured rather than inferred. `WIRE_SOCKDUMP=1
+python3 tests/thewire.py` re-takes every reading below in one run.
 
 ## 1. What happens
 
 Step 10 of `tests/thewire.py` (SPEC.md 92.14) is **Load Program on the
 archive**: fetch `TREEONE.WPK` again, mount a RAM disk, write the tree into
 it, and hand the last entry - `MSEG.O88`, which carries `WAH_PROGRAM` - to
-`OSAPI_PKG_START` **by name**.
+`OSAPI_PKG_START` by name.
 
-It never starts. The Wire opens a socket, moves to `WS_WAIT`, and stays
-there. Measured: **903 seconds** with `[wr_state]` = 2 (`WS_WAIT`) and
-`[wr_job]` = 1 (`WJ_LOAD`) throughout. It is not slow, it is stopped.
+It never starts. `[wr_state]` sits at `WS_WAIT` (2) with `[wr_job]` = 1
+(`WJ_LOAD`) for as long as anyone waits - 903 seconds in one measurement. It
+is not slow, it is stopped.
 
-`wrhttp.inc`'s `.wait` arm polls `NETV_STATUS`, sees `NSK_CONNECT` and falls
-out to wait again. `NETV_OPEN` **succeeded** - it returned a handle, which is
-the only way `WS_WAIT` is reached at all - and `ip_parse` took the dotted-quad
-path, so `tcp_syn` ran. The socket then sits in `NSK_CONNECT` for ever.
+## 2. WHAT THE FIRST REVISION GOT WRONG
 
-**It is the EIGHTH connection of the session.** The seven before it all
-completed: `catalog.bin`, `HELLO.PIC`, `BIGONE.O88`, `MINES.O88`,
-`HELLO.PIC` again, `HELLO.O88`, and `TREEONE.WPK` for the Add chain.
+Two of its conclusions are refuted, and a reader who follows them loses a
+session.
 
-## 2. The three things it is NOT
+**"The eighth `tcp_syn` puts nothing on the wire."** It does. The socket is
+read straight out of `ETHER.DRV`'s bss at the hang and it is armed correctly:
 
-**Not contention.** The row is red at soak width 4 and red run alone. The
-guest is not being starved: it is halted in a poll loop that never changes
-state, and 903 guest-seconds of it changed nothing.
-
-**Not the host.** `tests/thewire.py`'s `Server` is single-threaded and
-serial, which is the first thing to suspect - and it is idle and ready. The
-session instrumented it: during the whole wait `len(srv.asked)` goes **7 ->
-7** and `srv.is_alive()` is `True`. The server finished request 7, closed it,
-and is back in `accept()`. **No SYN arrives.** That is now asserted rather
-than remembered - the row prints the count and fails on it (see 4 below).
-
-**Not the launch.** This is what the row USED to say, and it is why the
-finding took a session: the wait was a 120-second `time.sleep` loop that fell
-straight through on a timeout, after which every assertion below it ran
-against a machine that had not sent a byte. The reported failure was "Load
-Program on the archive opened no window", which reads as `OSAPI_PKG_START`
-refusing the parted package, and sends the reader through SPEC.md 21.5's four
-`LD_*` codes for a transfer that never happened.
-
-## 3. A REAL defect found on the way, which is NOT this one
-
-`wr_hclose` (`apps/thewire/wrhttp.inc`) treats handle **0** as "no handle":
-
-```asm
-    cmp byte [wr_hnd], 0
-    je .out                     ; nothing to close
+```
+sk[0]  SKO_ST = 01 (NSK_CONNECT)   SKO_TS = 02 (TS_SYNSENT)
+       SKO_RP = 1F9C = 8092        SKO_RIP = 10.0.2.2
+       SKO_TMO = 2063 ticks        SKO_IDX = 0
 ```
 
-and `wr_hnd`'s own comment says `0 = none`. But `sk_alloc`
-(`drivers/ether/tcp.inc`) begins `xor al, al` and hands out **slot 0 as a
-valid handle**, so a socket the Wire is given as 0 is never closed. That is a
-leak, and it is real.
+`TS_SYNSENT` is set by `tcp_syn` AFTER `tcp_out`, so `tcp_syn` ran to the end.
+The connection is not refused, misaddressed or unresolved: `dns_sk` is `FF`
+(no lookup outstanding) and `SKO_RIP` is the dotted quad from `WIRE.CFG`.
 
-**IT IS NOT THE CAUSE, and that was tested rather than assumed**: biasing the
-stored handle by one inside the Wire - so `0` means none and the driver's 0 is
-storable - was built and run, and the hang is **identical**. The change was
-reverted; do not re-derive it.
+**"`sk_alloc` hands out slot 0 as a valid handle", and the ABI should be made
+1-based.** Handles are ALREADY 1-based. `sk_alloc` ends
 
-**IT IS SYSTEMIC, which is why it is written down here rather than fixed in
-one package.** Every net client in the tree makes the same assumption:
+```asm
+    mov [bx+SKO_IDX], al
+    inc al                      ; handles are 1-based: 0 is "no handle"
+```
 
-| package | word |
+and `sk_h2p` opens `or al, al / jz .no` and then `dec al`. So `0` really does
+mean "no handle", `wr_hclose`'s `cmp byte [wr_hnd], 0 / je .out` is correct,
+there is no leak, and there is nothing to change in SPEC.md 72's published
+surface. It also explains why biasing the stored handle by one "changed
+nothing": it was already biased. **The four packages listed in that revision
+are not wrong in the same way; they are right.**
+
+## 3. WHAT IS ACTUALLY WRONG: NOTHING PUMPS THE STACK AGAIN
+
+Measured twice, thirty seconds apart, with the guest running throughout:
+
+```
+pass 0  tick=1188222  TS=02  TMO=2065  (tick-TMO=1186157)  TRY=0  nrx=115
+pass 1  tick=1188768  TS=02  TMO=2065  (tick-TMO=1186703)  TRY=0  nrx=115
+```
+
+Three things in that, and together they are the finding:
+
+* **`TMO` is never re-armed and `TRY` never increments.** `tcp_timers`'
+  `.ctmo` arm must `tcp_abort` a `TS_SYNSENT` socket once `eth_now` passes
+  `SKO_TMO` - `TCP_CONNTMO` is 550 ticks, about 30 seconds - and the deadline
+  here is over a million ticks in the past. So `tcp_timers` never walks this
+  socket.
+* **`eth_nrx` does not move.** No frame is taken off the card in thirty
+  seconds.
+* `eth_pump_i` always reaches `eth_ptimers` once it is entered - the budget
+  loop falls through to `.timers` whether the ring emptied or the budget ran
+  out - so **`eth_pump` is not being called at all**, which means no `NETV_*`
+  verb is being issued by anything on the machine.
+
+That is why there is no retransmit, no connect timeout and no progress. The
+stack is not broken; it is not being run.
+
+## 4. WHAT IT IS NOT - each one read, not reasoned
+
+| suspect | reading at the hang |
 |---|---|
-| The Wire | `wr_hnd` |
-| Browser | `br_hnd` |
-| Telnet | `te_hnd` |
-| FTP server | `fd_dhnd`, `fd_dlhnd`, `fd_lhnd` |
+| the card mutex (SPEC.md 72.2.2) | `eth_busy = 00` - free |
+| the raw consumer (72.22), which skips drain AND timers | `eth_raw = 00` |
+| the link | `eth_up = 1` |
+| a name that never resolved | `dns_sk = FF`, `SKO_RIP` = 10.0.2.2 |
+| a compaction park (66.5.5) | `inst_parkreq = 00`, `sch_parked` all zero |
+| the gfx lock | `gfx_lock_flag = 00`, `own = FF`, `want = 00` |
+| the worker having DIED | it has not - see below |
 
-Four packages independently decided a handle is never 0, and all four rely on
-bss-zero to mean "none". That is strong evidence the **ABI should guarantee
-it** rather than four callers being wrong in the same way - so the fix
-belongs at the driver's verb boundary (return slot+1 from `NETV_OPEN`, take
-handle-1 in every verb that accepts one), not in a package. It cannot be done
-in `sk_ptr`: that routine is used for the internal walks too, with AL
-counting 0..`NET_SOCKS`-1, so making IT 1-based breaks `sk_alloc`.
+And it is **not contention**: the row is red alone and red at soak width 4,
+and the guest is executing throughout.
 
-It is an ABI change to SPEC.md 72's published surface and wants the owner's
-call, which is why this session did not take it.
+## 5. WHERE IT IS: THE WORKER IS READY AND GOING NOWHERE
 
-## 4. What the row says now
+`wr_worker` is `OSAPI_TASK_ALIVE` / `wr_nstep` / `OSAPI_TASK_SLEEP(1)` round a
+loop, and `wr_nstep`'s `.wait` arm calls `wr_qstat` -> `NETV_STATUS`
+unconditionally, which pumps. So a running worker moves `eth_nrx`. It does
+not.
 
-`tests/thewire.py` was changed so the next reader is not sent the same way:
+The task table at the hang:
 
-* the wait records whether it **settled**, and a timeout now fails with the
-  state, the job and **the host's request count during the wait**, saying in
-  as many words that nothing below that line is evidence about
-  `OSAPI_PKG_START`;
-* the "was the host asked for the `.WPK`" check was a **false green** - it
-  searched all of `srv.asked`, and the Add chain a few steps earlier fetched
-  that exact path, so it was satisfied no matter what this step did. It
-  requires a **new** request now, counted from a mark taken before the click.
+```
+tasks: 0:st2/instFF   1:st1/instFF   4:st1/inst00
+the Wire's window 0 is owned by instance 00        wr_hired = 01
+```
 
-## 5. Where to start
+`T_STATE` is 0 free / 1 ready / 2 sleeping. **Task 4 is the Wire's worker -
+`T_INST` = 0 and the Wire's window is instance 0 - and it is READY**: not
+dead, not sleeping, not parked. It is runnable and the UI task is asleep, so
+it is getting the CPU and still not reaching `wr_nstep`.
 
-`drivers/ether/tcp.inc`'s `tcp_syn` and the socket table after seven
-open/close cycles. The question is why the eighth `tcp_syn` puts nothing on
-the wire when `NETV_OPEN` has just succeeded and the record says
-`NSK_CONNECT`. Watch the NE2000's TX path with `make netbench`'s brackets
-(SPEC.md 72.15), and note that `ETHER.DRV` is **QEMU-only to test** -
-MartyPC has no NIC of any kind.
+Its saved frame (`T_SP` = 0CE2, stacks at `LOW_SEG`) carries a far return to
+`90C0:1DDE`, which the package's own map resolves to **`wr_nshow + 8`** -
+`wr_nshow` being three `push`es and then `call OSAPI_GFX_LOCK`, so that is the
+return address from the lock. But the lock is FREE and the anti-starvation
+rule in `gfx_lock.free` cannot hold this task (`gfx_lock_last` = 0, `sch_cur`
+= 4), so it is not stuck there either - which means that word is an OLDER
+frame and the worker is deeper in. Reading it out of a raw stack dump has
+given everything it can.
 
-There is also no **connect timeout** anywhere in `wrhttp.inc`, and SPEC.md 92
-does not specify one, so a socket stuck in `NSK_CONNECT` hangs the Wire for
-the rest of the session with the status cell still saying it is working.
-Whether that wants fixing here or in the stack is part of the same decision.
+**Start here**: `make debug` and gdb on the worker's task, or a counter in
+`wr_nstep`'s head. The question is one line long - where is task 4 spinning? -
+and everything around it is now answered.
+
+One more thing to fix whatever the cause turns out to be: **`[wr_hired]` is a
+latch nothing clears.** `wr_hire` returns at once when it is 1, so a Wire that
+loses its worker never gets another one for the rest of the session, and the
+window stays open and dead.
+
+## 6. What the row says, and the instrument
+
+`tests/thewire.py` records whether the step **settled**, and a timeout fails
+with the state, the job and the host's request count during the wait, saying
+in as many words that nothing below that line is evidence about
+`OSAPI_PKG_START`. The "was the host asked for the `.WPK`" check was a false
+green - it searched all of `srv.asked`, and the Add chain a few steps earlier
+fetched that exact path - and requires a NEW request now, counted from a mark
+taken before the click.
+
+`WIRE_SOCKDUMP=1` is every reading in this file, taken in one run on the
+failure. It costs the green path nothing and `ether_syms` refuses a map that
+is not byte-for-byte `build/ether.bin`, so the offsets are this driver's.
+
+## 7. A real defect found on the way, which is NOT this one
+
+There is a socket state that `tcp_timers` skips entirely. `eth_v_open` sets
+`SKO_ST = NSK_CONNECT` **before** `ip_parse`; on the name path it sets
+`SKF_RES`, arms `SKO_TMO` and returns with `SKO_TS` still 0 - and
+`tcp_timers`' loop opens `cmp byte [bx+SKO_TS], TS_CLOSED / je .next`. So a
+socket waiting on DNS gets no retransmit and no connect deadline from that
+routine; only `dns_timer` can end it, and `dns_timer` only scans for new work
+while `[dns_sk] == 0xFF`. Nothing in this row reaches it - `wr_host` is a
+dotted quad - but a name that never resolves while the resolver is busy would
+hang the same way.
