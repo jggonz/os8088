@@ -84142,6 +84142,68 @@ evidence that a real `FSV_LIST` happened.
 *A verification that cannot say which object it examined, and cannot show that
 the code under test executed, is not a verification.*
 
+##### 62.9.2.2 …and a volume whose reads are MEMORY takes the real harvest
+
+§62.9.2.1 is cache-only because `DRVC_FILE` has **two members with nothing in
+common but an interface**. One is on the other end of a parallel cable, where
+a header peek per package is real traffic and an `ASSOC.DAT` fetch is the one
+thing the pass exists to avoid. The other is the **RAM disk**, where that peek
+is a `rep movsw` between two heap claims — or one `OSAPI_XMEM_COPY` — and is
+**faster than the `int 13h` the floppy beside it is allowed**. So the pass was
+refusing, on the cable's grounds, a read its other member serves better than
+the medium the rule was written to protect.
+
+`DSV_CAPS` is where a driver says which it is. The word is the sound class's
+and a `DRVC_FILE` driver has never used it, so the bit costs **no table, no
+cell and no kernel byte of storage**:
+
+| | |
+|---|---|
+| **`FSCAP_LOCAL`** (bit 0) | *my `FSV_READAT` is a memory read* — no wire, no seek, no motor |
+| set by | `RAMDISK.DRV`, in `rd_svc` |
+| clear on | `NET.DRV`, which keeps §62.9.2.1's pass exactly as it was |
+
+**It is a claim about COST and not about the medium**, which is what makes it
+a driver's to make: the kernel cannot tell a heap claim from a cable by
+looking at a handle, and a future driver backed by something else fast — a
+second machine's RAM over a bus, an emulator's host folder — says so the same
+way.
+
+**What it buys is the HARVEST ITSELF, not a second copy of it.** The mount's
+pass A is one loop and only three of its instructions are FAT's: the entry's
+`@18` word, `dsk_clus2lba` and `dsk_rd1`. On a redirected volume `@18` is the
+driver's own opaque handle (§62.9.1) — `rd_stage` puts it there — which is
+exactly what `FSV_READAT` takes, so the branch is at the READ and the
+classification, the icon store, `assoc_note_app` and §54.6's declarations are
+the same instructions for both. A `LOCAL` volume joins the loop at `.harvloc`,
+which is **below `asc_use_x`**: the peek is free and re-keying the association
+cache to this volume is not — it reads an `ASSOC.DAT` a RAM disk almost never
+has and evicts the rows §62.9.2.1's lookups live on. The harvest fills the
+cache from the headers it is reading anyway.
+
+**The peek is `DSK_PEEK` = 128 bytes at offset 0, and the whole ask or
+nothing.** That is every byte the loop reads out of the buffer — the §20.2
+header at 0..31, the embedded icon at 32..95, the document glyph at
+`LD_H_GLYPH`..+15 — and `loader.inc` asserts the two stay in step, `disk.inc`
+being included first and unable to derive it. A short answer is REFUSED
+rather than used, and that is not fussiness: the buffer would still hold the
+PREVIOUS entry's header, which is a *valid* one, so a 40-byte file would take
+the icon of whatever package sorts above it. The FAT arm reads a whole sector
+and trusts the slack after EOF, but that slack is unrelated bytes the magic
+test throws out; this buffer is not that.
+
+**`kern_small` is out of it by construction** and pays nothing: it can load no
+driver at all (`OS88_DRIVERS` is `kern_big`'s), so no `DRVC_FILE` volume can
+exist there, `drv_svc` is one zeroed class' worth and reading `DRVC_FILE`'s
+would run off the end of it. Both halves are inside `%ifdef OS88_DRIVERS`, and
+a `kern_small` that somehow had such a volume keeps §62.9.2.1's pass.
+
+What the user sees is the difference between *"the RAM disk shows generic
+diamonds"* and *"the RAM disk looks like a disk"*: copy `MINES.O88` onto it
+from a floppy this session or any other, and the icon is there because the
+package is, not because something else warmed a cache first. §62.9.2.1's
+SESSION-STATE caveat still applies to everything this bit is not set on.
+
 #### 62.9.3 The branch sites, and the order to build them in
 
 Each is a test of `DV_KIND` at the top of a routine that already exists, so
