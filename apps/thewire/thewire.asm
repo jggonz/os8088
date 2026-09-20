@@ -2993,9 +2993,23 @@ wr_abandon:
     ret
 
 ; --- wr_freefile - give the transfer claim back ------------------------------
+; **AND [wr_rlen] GOES WITH IT** (SPEC.md 92.14.2). The two words are a PAIR
+; and wr_pkgrun's header is where that is written down: a non-zero length is
+; the IMAGE form (21.5), so a length left behind by an earlier single-file
+; download makes the NEXT launch read [wr_fseg]:0 - a segment this routine has
+; just zeroed - for that many bytes. The archive arm is where it bites,
+; because that arm launches BY NAME and its package has PARTS: the image form
+; cannot run one, so ld_alloc refuses with LD_EBAD and Load Program on an
+; archive opens nothing at all, after a chain that wrote every file perfectly.
+;
+; It is zeroed BEFORE the early-out, and unconditionally, because the length
+; describes the CLAIM: no claim means no length, and the one path that reaches
+; here with [wr_fseg] already zero is exactly the path that must not inherit a
+; stale one. tests/thewire.py asserts the pair.
 wr_freefile:
     push ax
     push dx
+    mov word [wr_rlen], 0
     cmp word [wr_fseg], 0
     je .out
     mov dx, [wr_fseg]

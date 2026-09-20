@@ -2855,10 +2855,19 @@ SOAK = [
         "TO FAIL: `mul` lands its product in DX, which is the y being "
         "answered, so the first draft returned a divide remainder as the y "
         "coordinate - exact on x, nonsense on y, and invisible in any test "
-        "that only looks at one axis.",
+        "that only looks at one axis. AND IT READS A FINISHED LINE NOW: the "
+        "label and the value are two INT 21h calls, so the screen carries "
+        "`RESET ax=` before `RESET ax=FFFF bx=2` (observed directly, polling "
+        "flat out), and the first-sighting read handed the parser an empty "
+        "value and blamed the kernel for it - `answered ax=, not FFFF`. It "
+        "is a sampling race that gets MORE likely under load, because a poll "
+        "a fixed number of HOST ms apart covers less of the GUEST's work on "
+        "a busy box; os88marty.quiesce wants the line unchanged over GUEST "
+        "seconds instead. tests/kdmouse.py had the same read and the same "
+        "defect.",
         needs=("marty",), serial=True,
         wants=("build/dosmou360.img",)),
-    Row("kdhdd", "soak", py("tests/kdhdd.py"), 150.0,
+    Row("kdhdd", "soak", py("tests/kdhdd.py"), 25.0,
         "THE FIXED DISK IS A VOLUME UNDER kern_dos, AND A PROGRAM READS ITS "
         "OWN DRIVE (SPEC.md 96.46). Two defects with one instrument: the "
         "fixture puts a DIFFERENT sixteen-byte marker in KDDATA.TXT on each "
@@ -2879,6 +2888,18 @@ SOAK = [
         "text after the full budget, and a screen that stopped changing "
         "because nothing is running looks exactly like one that has not got "
         "there yet; os88marty.until tells them apart and names the CS:IP. "
+        "AND THAT PICTURE WAS THE ANSWER: the desktop really was back. "
+        "KDHELLO.COM printed every line this row reads and then EXITED, and "
+        "SPEC.md 96.49's live resume took away the `Press any key to "
+        "restart` that used to stand behind it - kd_resume stages its stub "
+        "IN the text framebuffer (87.5), so the evidence was gone "
+        "microseconds later and every poll after that found the desktop. "
+        "Nothing was stuck and nothing was contended. The program holds its "
+        "own screen now (`-DKDHOLD`, tests/doscom/hello.asm's step 5) and "
+        "the caller types the key, so both arms read a page that STANDS - "
+        "which also made the WINDOWED marker readable, and it is printed "
+        "beside the kern_dos one. 21 seconds solo, measured, where this "
+        "declared 150. "
         "Pressing Run is CONFIRMED too, by the text screen CHANGING - "
         "`anything on the text screen` is already true of the desktop's "
         "B800 garbage - so a press that did not take reports in 13 seconds "
@@ -3766,7 +3787,16 @@ SOAK = [
         wants=("build/kdos/DOS.O88", "build/DOSHELLO.COM", "build/kernel.sys",
                "build/boothd.bin", "build/mbr.bin", "build/hiber.drv",
                "build/ctrl.drv", "build/hdd.drv")),
-    Row("dosmem", "soak", py("tests/dosmem.py"), 55.0,
+    # 88.5 s MEASURED, alone on an idle box. It declared 55, which is
+    # `max(60, secs * 4 + 30)` = 250 - and the row TIMED OUT at exactly that
+    # in a four-lane run while passing solo. That is not contention being an
+    # excuse, it is the declaration being wrong: the row's cost is dominated
+    # by host-timed settles (docs/plans/SOAK-PARALLEL.md 11 prices settle at
+    # 48% of a row), so a shared box stretches its WALL CLOCK while the guest
+    # does the same work. A `secs` nobody measured is docs/WRITING-TESTS.md's
+    # first recurring failure and this is it: 90 gives a 390 s ceiling, which
+    # a loaded box cannot reach and a hung emulator still trips.
+    Row("dosmem", "soak", py("tests/dosmem.py"), 90.0,
         "THE MEMORY PAGE'S TWO ARMS (SPEC.md 96.36, 96.25, 47): the choice "
         "of how much of the machine a DOS program gets was a CHECK BOX, which "
         "holds two answers; it became three arms, and it is TWO since "
@@ -4058,6 +4088,31 @@ SOAK = [
         "is why the assertion is a read of drv_tab and not a symptom.",
         needs=("marty",), serial=True,
         wants=("build/dosirq360.img",)),
+    Row("dosnetarena", "soak", py("tests/dosnetarena.py"), 150.0,
+        "THE MEMORY PAGE'S FIGURE IS THE FIGURE THE PROGRAM GETS, WITH A CARD "
+        "IN THE MACHINE (SPEC.md 96.23.7.1, 96.23.7.2). **IT IS ITS OWN ROW "
+        "BECAUSE THE DEFECT IS INVISIBLE WITHOUT A WIRE**: dos_pkt_bufs "
+        "claims nothing at all on a machine with no NIC, so dosram - whose "
+        "fixture is a hard disk and no card - promised 441K and handed over "
+        "441 on the build that shipped the bug, while the same build with one "
+        "NE2000 promised 442 and handed over 400. QEMU'S, for "
+        "tests/ethernet.py's reason: MartyPC has no network card of any kind, "
+        "and a card is the whole quantity under test. Two assertions and the "
+        "drifts are DIFFERENT SIZES on purpose - ~3KB is dos_mem_arena not "
+        "subtracting the packet buffers it is about to spend, ~40 is one of "
+        "them PINNED across dos_run's compaction pass so the arena, which is "
+        "ONE run, cannot reach the floor under it. The second is read out of "
+        "mem_tab itself rather than inferred from the number, because a claim "
+        "is born pinned (SPEC.md 66.2) and this is the half that goes wrong "
+        "by OMISSION: somebody adds a buffer and it is a wall, silently, on a "
+        "busy heap only. It also asserts that clearing the box UNMOUNTS the "
+        "card and that releasing it MOVES the arena, so a sweep that stopped "
+        "honouring the mask (96.36.7.3) is named rather than showing up as a "
+        "figure. VERIFIED red on the build that shipped it: 409/367 with the "
+        "box ticked and 442/400 with it cleared, 42 short in both arms, "
+        "against 405/405 and 441/441 after.",
+        needs=("qemu",), serial=True,
+        wants=("build/ether360.img", "build/dospkt360.img")),
     Row("dospkt", "soak", py("tests/dospkt.py"), 120.0,
         "THE PACKET DRIVER, OVER A REAL CARD (SPEC.md 96.23, 72.22) - wave 4 "
         "of DOS-EXEC-PLAN.md, and the row that says a DOS program can reach "
@@ -6392,9 +6447,25 @@ SOAK = [
         "SPEC.md 22.18: the Disk window's two header buttons fire on the"
         "RELEASE.",
         needs=("marty",), serial=True),
-    Row("fsxdisp", "soak", py("tests/fsxdisp.py", "--dock"), 90.0,
-        "Does an fsx bracket take ONE display and dark the others? (SPEC.md"
-        "39.18)",
+    Row("fsxdisp", "soak", py("tests/fsxdisp.py", "--dock"), 60.0,
+        "Does an fsx bracket take ONE display and dark the others? (SPEC.md "
+        "39.18) BOTH LEGS USED TO ASK THE CGA A QUESTION IT CANNOT ANSWER. "
+        "`dark` was `frames == 0 OR nothing lit`, and a blanked CGA here "
+        "reads ~840 of 128,000 rather than 0 - one run the renderer keeps "
+        "through the gate - so the row went red against a card the kernel "
+        "had darked exactly right: inside the bracket, and after a "
+        "HOST-driven `3D8h <- [vid_cgamode] & ~8` on a bare desktop, `fbuf` "
+        "came back PIXEL FOR PIXEL IDENTICAL. The figure is MEASURED in the "
+        "run now (`dark_lit`), so it cannot go stale again. And the "
+        "same-mode leg asserted `lit == lit` across the bracket, which is a "
+        "coin flip: four captures of ONE STILL DESKTOP a second apart, with "
+        "nothing running, read 43404/43404/43412/43412 and the two pairs "
+        "differ by 1,376 pixels in the same band. What replaces it is what "
+        "39.18.3 is actually about, read out of the guest - `[vid_ndisp]`, "
+        "2 in a same-mode bracket and 1 in a mode bracket - which is exact "
+        "on any renderer. VERIFIED TO FAIL three ways: un-blanking the "
+        "secondary from the host inside the bracket, and forcing either "
+        "ndisp reading to the other value.",
         needs=("marty",), serial=True,
         wants=("build/fsxtest360.img",)),
     Row("knobhd", "soak", py("tests/knobhd.py"), 180.0,

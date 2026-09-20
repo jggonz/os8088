@@ -1821,6 +1821,11 @@ MEM_K_CMPR  equ 0xFF0D          ; the Compress verb's working block (SPEC.md 22.
 ; LEFT UNUSED - a value that meant one thing in a shipped kernel and another
 ; in the next is a collision a debug read cannot see.
 MEM_K_HIB   equ 0xFF0C          ; the resume's extent list (SPEC.md 87.5)
+; 0xFF0E is MEM_K_ICO_UNUSED, the ordinary tag the icon store carried before
+; SPEC.md 25.9 made it the purgeable MEM_P_ICO. It is a TOMBSTONE - nothing
+; claims it - and it is kept unreusable for the reason above, so the dialog's
+; listing below is 0xFF0F.
+MEM_K_FDLG  equ 0xFF0F          ; the Standard File dialog's listing (SPEC.md 38.2)
 
 MEM_PG_TRIV equ 0xFB            ; the purge tiers (SPEC.md 50.6.4), low to
 MEM_PG_LOW  equ 0xFC            ; high: what LOSING the block costs, which is

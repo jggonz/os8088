@@ -396,11 +396,23 @@ are TWO bases here: `LOW_SEG`, a rung base, and `dsk_secbuf`, the one buffer
 in the window that is itself an `int 13h` target — and §2.1.1 holds at both
 only because `dsk_secbuf` is the window's FIRST bytes, which `dskwin.inc`'s
 `%if` against the rung base is what holds (it sat at +2,816 once, 256 into a
-sector, and the build's size decided whether a read straddled a DMA page); the region is 13.125 sectors, so the usable ceiling is **6,656** and not
-6,720. `kernel.asm`'s `%if` therefore rounds `OVLW_SIZE` **up** to a whole
-sector before comparing — the two were the same number while the mount window
-was 7 × 512 exactly, and a guard against 6,720 would pass a 13.125-sector
-overlay whose fourteenth sector lands on `vid_rowtab`.
+sector, and the build's size decided whether a read straddled a DMA page).
+
+**The region is a whole number of sectors AGAIN — 10 of them — so the usable
+ceiling IS 5,120**, and `kernel.asm`'s `%if` still rounds `OVLW_SIZE` **up** to
+a whole sector before comparing. That rounding must not come out because the
+numbers happen to divide today: while the window carried a listing the region
+was 13.125 sectors and the last fraction was unreachable, so a guard against
+the raw figure would have passed an overlay whose final sector lands on
+`vid_rowtab`. What the abolition changed is the HEADROOM, not the rule — the
+shipped `.ovlw` is 4,979, which rounds to exactly 5,120, so a plain kern_big
+fits with **nothing to spare** and any diagnostic that adds one byte costs a
+whole 512 at the rounding. That is what `DSK_OVLPAD` is for, and it is no
+longer kern_small's alone: under `KERN_KNOB` — the Makefile's own name for a
+diagnostic build, which excludes kern_small and kern_emu because those are
+shipped kernels — the pad is 1,024 and the region 6,144. Six knob arms had
+stopped assembling on a kernel that ships perfectly; every shipped kernel is
+byte-identical with the pad in place, because on those the pad is 0.
 
 That is what the boot overlay is meant to land in and spill through
 (`docs/plans/completed/BOOT-LADDER-PLAN.md` stage B). §2.5 put `.ovl` in the FAT window on the
@@ -131332,8 +131344,15 @@ count rather than a flag.
   never notice; a mouselook does. docs/plans/DOS-EXEC-PLAN.md §9.1 prices the
   kernel-side accumulator at about ten resident bytes and leaves it as a
   decision rather than taking it.
-- **Everything else answers AX=0**, which is `INT 33h`'s "not supported" and
-  what a real driver answers for a function it does not have.
+- **Everything else LEAVES `AX` ALONE — see §96.10.6, which supersedes this
+  bullet.** This used to read *"everything else answers AX=0, which is
+  `INT 33h`'s not supported"*, and that convention does not exist: there is no
+  carry flag and no error code, so a function documenting no output comes back
+  with the registers as they went in. Zero is not a refusal, it is an ANSWER,
+  and Microsoft Works asks that question — `mov ax, 8 / int 33h /
+  mov [98CAh], al` is its *mouse present* flag (docs/FIELD-NOTES.md 54). The
+  code was fixed and 96.10.6 written; this bullet was left saying the
+  opposite, and `tests/dosmouse.py` asserted it for as long as it stood.
 
 #### 96.10.3 The mouse histogram, because the ring cannot carry `INT 33h`
 
@@ -134642,6 +134661,77 @@ arrives with whatever was last in it, and `ne_tx` pads a short frame without
 touching the length the caller gave — so a send that staged nothing would have
 put bytes of somebody else's heap onto the network.
 
+#### 96.23.7.1 One reader decides whether the buffers are claimed, and for how much
+
+`dos_pkt_want` answers *will `dos_pkt_bufs` claim, and how many KB*, and it is
+asked by **two** callers: `dos_pkt_bufs`, which takes the claim, and
+`dos_mem_arena`, which has to subtract it from the `For the program: ~NNNNN K`
+row. A figure computed from a second opinion is exactly how §96.36.7 came to
+promise memory the launch never handed over, so the two go through one
+routine, as the driver mask does (§96.36.7.3).
+
+Two things follow from having one reader rather than two.
+
+**The page's figure is short by the buffers, and now says so.** The what-if
+`dos_mem_arena` asks is taken while the box is sitting on its Setup page, long
+before `dos_run` claims anything; `dos_pkt_bufs` then takes 3KB out of the same
+heap. So on any machine with a wire the row promised three kilobytes the
+program could never be handed — under-delivery, measured at 442K promised
+against 400K given, of which 3 were this and the rest is §96.23.7.2.
+
+**A card the launch is about to unmount is not a wire.** The Memory page's
+`Network` box is a request to let `DRVC_NET` go (§96.36.7), and `dos_drv_take`
+grants it *before* `dos_load` — so buffers claimed for a packet driver with no
+card behind it are three kilobytes spent on an interface `dos_pkt_start` can
+never publish. `dos_pkt_want` asks `dos_spmask`, which is the same routine the
+sweep is given, so the box cannot mean one thing to the figure and another to
+the claim. The **cable** is `DRVC_FILE` (§62.9) and has no box, so that route
+is unaffected and still claims `PKB_XLKB`.
+
+#### 96.23.7.2 The buffers are MOVABLE, and pinned again for the handle's life
+
+A heap claim is born pinned (§66.2), and this one is taken **before** the
+floor, before the unmount and before `dos_run`'s posted compaction — so it
+lands on top of whatever purgeable caches happen to be at the heap's floor at
+that instant, and the pass then purges them out from under it. Left pinned it
+is a wall with a hole under it, and the arena is **one run**, so the hole is
+unreachable.
+
+Measured under QEMU on a 530KB heap with an NE2000, `DOSPKT.COM`:
+
+    1B40..2340   32.0K  read-ahead window  bottom-up  movable
+    2340..23C0    2.0K  Disk window store  bottom-up  movable
+    23C0..2D80   39.0K  -- FREE --                              <- stranded
+    2D80..2E40    3.0K  dos_pkt_bufs       bottom-up  PINNED    <- the wall
+    2E40..2E60    0.5K  -- FREE --
+    2E60..9260  400.0K  the arena          top-down   PINNED
+
+The page promised 442K and the program got 400 — `3 + 39.5`, to the kilobyte,
+in both arms of the `Network` box. It reproduces 100% of the time with a card
+mounted and not at all without one, because a machine with no NIC never makes
+the claim: on an XT with a hard disk and no card the same build promised 441K
+and handed over 441.
+
+So the claim declares `OSAPI_MEM_MOVABLE` with `dos_pkt_reloc`, and the
+ascending pass packs it down with the rest. The proc is two instructions
+because **one word names the block**: every reader loads `[dos_pkt_bseg]`
+fresh — the four frame sites, the two translation ones and `dos_pkt_tick`'s
+own — and `PKB_RX`, `PKB_STK` and the `dn_*` rows are *offsets*, which do not
+move with the base.
+
+**It is pinned again for exactly as long as a handle is held, and that is not
+tidiness.** The packet driver's private stack is *in* this claim (§96.23.7),
+and `dos_pkt_tick` switches `SS:SP` into it from inside the `int 08h` chain
+the moment `[dos_pkt_raw]` is set. A compaction runs its `rep movsw` with
+interrupts on, and the DOS back end reaches `mem_claim` on ordinary file I/O
+against a heap the arena has just emptied — so a block that moved with the
+ISR's stack in it would return through a frame the copy had walked past.
+`[dos_pkt_raw]` is the ISR's own test, so it is the right bracket on both
+sides: movable for the whole of `dos_run`'s pass, which is where the 39.5KB
+is, and pinned for the handle's lifetime, which is where the danger is.
+`dos_pkt_rloc` preserves the flags, because both of `dos_pkt_claim`'s arms end
+in a deliberate `clc`/`stc`.
+
 #### 96.23.8 `send_pkt` copies nothing — the client's buffer goes straight down
 
 `NETV_RAWTX` takes the segment (§72.22.4), so `send_pkt` hands the client's
@@ -135275,6 +135365,43 @@ later: its terms are `SK_KERN + SK_HEAP + DOS_LOWKB` less what `kern_dos`
 keeps, and `SK_HEAP` is the *whole arena* — driver claims included. The machine
 that arm describes has no kernel in it at all, so every byte a driver held is
 already counted.
+
+##### 96.36.7.3 …and for a cycle the boxes reached nothing at all
+
+§96.36.7 above has said since it was written that clearing a box *"sets that
+class's bit in `OSAPI_DRV_SUSPEND`'s `BL`"*. **It did not.** `dos_drv_take`
+passed `xor bl, bl` — the sweep's own default, where `DRVC_DISK`, `DRVC_FILE`
+and `DRVC_NET` all stay — under a comment reading *"the skip list as it
+stands … The Memory page's own boxes are what set bits here"*. §51.11.4 built
+the mask, the SDK published it, `hbm_sweep` honoured it, and the one caller
+was never wired to it.
+
+**So an unticked box moved the figure and not the machine.** `dos_mem_arena`
+adds that class's banked KB to the estimate it prints, the launch then swept
+the same set it always had, and the arena came back short by exactly the
+classes the page had promised. Reported from the field as a page that *"will
+claim 469k"* delivering 393.
+
+MEASURED on `os8088_xt_hdd_sb` with `HDD.DRV` mounted from the Control Panel,
+the same program run twice from one box: ticked **441 KB**, unticked **441 KB**
+and the driver's image still standing in `mem_tab`. With the mask built:
+**441 → 446**, and the image is gone. Five kilobytes is what a hard disk is
+worth on that machine; the reporter's has two partitions and an `ETHER.DRV`
+whose image and 14 KB socket pool are both `DRVC_NET`.
+
+**THE MASK IS ARM 0's, AND THAT IS NOT TIDINESS.** The boxes are `DOS_MEM_IN`'s
+controls, and arm 1 shuts the OS down — its way back is a hibernation image on
+a fixed disk (§87.2). Letting `DRVC_DISK` go there would take `hb_pick`'s
+volume out from under the image it is about to write, on exactly the machine
+whose hard disk is driver-backed. Arm 1 needs no mask anyway: it hands the
+program the whole machine, so every driver goes whatever is named here.
+
+The general shape is one this section can afford to state plainly, since it is
+the second defect of it in this chapter: **a slot with one caller is a slot
+with one chance to be wrong, and the prose described the caller rather than
+reading it.** §96.49.5's `cw_clk_snapshot` is the same failure — a routine
+documented as doing the thing, whose body was a bare `retf` — and both were
+invisible because the number they produced was plausible.
 
 #### 96.36.8 Arm 1's box: the pointer is not free on a 4.77 MHz machine
 
@@ -138857,6 +138984,80 @@ The general rule is §87.5's map read the other way: **a quantity two hosts
 both derive is a quantity that can disagree, and the one that will be BELIEVED
 should be the one that is carried.** `HS_KSEG` is already in the staging area
 for exactly this reason, and this is the same finding one cell along.
+
+#### 96.49.7 The image was looked for in a listing that no longer exists
+
+`kd_resume` found `HIBERNAT.IMG` with `dsk_find_name_x` and then staged its
+directory entry with `dsk_get_dir_x`. Both read the **global mount snapshot**
+— the synthesized listing a loud `disk_mount` used to build — and §22.6.3 took
+that snapshot's home away: a listing is written into the store its CALLER
+supplies through `dsk_dest_x`, so `[dsk_dseg]` is 0 by default and a mount
+with nowhere to put a listing is quiet.
+
+**`kern_dos` supplies none and cannot.** It has no window, no file manager and
+no desktop — §96.47 says so in as many words, and that is the whole reason a
+`goto` over here takes the quiet chdir. So every mount in this host is quiet,
+`[disk_nfiles]` is 0, and `dsk_find_name_x` walks zero entries and refuses
+**whatever is actually on the disk**.
+
+The fix is `dskw_stat_x`, which walks the directory and answers `BX` = the
+first cluster and `DX:CX` = the size in registers — the same correction
+`hbm_findimg` took on the kernel's side of this handover, one commit earlier
+and in the same wave. The size read moves from the staged entry's +20 to `CX`
+and the cluster from +18 to `BX`; nothing else in the routine changes.
+
+**WHAT IT COST WAS THE FAST PATH, NEVER THE SESSION.** Every refusal in
+`kd_resume` falls back to `int 19h`, so the machine rebooted, `hb_probe` found
+the pointer, and the session came back through a whole POST and a whole boot —
+which is precisely §96.46.1's symptom with a different cause, and precisely
+why it is reported from the field as *"it reboots, does the full boot, THEN
+restores from hibernation"* rather than as a loss. `tests/kdreturn.py` is the
+row that sees it, and it reads **20.4 guest seconds against 4.0**.
+
+**THE CONSUMER LIST IS THE LESSON.** The wave that moved the listing into the
+Disk window audited the kernel's readers and converted hibernate's four sites
+for exactly this reason — a resume runs with no Disk window in existence — and
+then missed the fifth, because it is in `kerndos/` and not in `kernel/`.
+`kern_dos` `%include`s the kernel's disk layer whole, which is what makes it
+small and is also what makes it an invisible second caller of every kernel
+routine a sweep enumerates out of `kernel/`. A grep that stops at the
+directory the file lives in is a grep that stops one host short.
+
+**AND THERE WERE TWO SITES, NOT ONE.** `kd_gate_entry` (`kerndos/kdgate.inc`,
+behind `KD_GATE`) is W3's mount-and-read gate and read the same snapshot to
+find `GATE.TXT`, printing `[disk_nfiles]` above it. It said so on the glass —
+`entries 0000` and then `FILE NOT FOUND` — and takes the same `dskw_stat_x`;
+the count is deleted rather than fixed, a quiet mount having none to report.
+
+#### 96.49.8 …and the gate's buffer was the cache it was reading through
+
+Converting the gate uncovered a second defect that the first had been hiding,
+and it is the more interesting one. `kd_gate_entry` read the payload into
+`[kd_top]`, under a comment calling that *"the top of the allocator's arena,
+which nothing else has claimed"*. **`[kd_top]` is the most recent claim's own
+base.** `mem_claim_x` in `kerndos/kdshim.inc` hands out `[kd_top] - size` and
+lowers the ceiling to it, so the word names the bottom of what was last handed
+out and never free room — and the mount claims §18.95's read-ahead cache off
+that very ceiling. The gate was reading the file straight onto the cache that
+was serving the read.
+
+It had got away with it for as long as nothing put anything in that cache
+before the chain walk: the old lookup was a string compare against a listing
+already in memory, so the first thing to touch the cache was the walk itself.
+`dskw_stat_x` walks the directory, so the cache is warm now — and the failure
+is exact. **Chunk 0 arrived correctly** (`dest` sectors 0..8, LBA 12..20),
+the destination then overwrote the records behind it, and **chunk 1 came back
+off the wrong LBAs** — three sectors of LBA 27..29 where 21..23 belonged, then
+three of zeros. The right NUMBER of bytes and the wrong ones, which is the one
+failure `tests/kerndos.py`'s checksum exists to catch and which its length
+check cannot see.
+
+The fix is one claim: `KD_GATE_KB` = 16, `mem_claim_x`, and the payload goes
+where nothing else is. **The lesson is the allocator's and not the gate's** —
+a bump allocator's ceiling word is its last hand-out, so *the free room is
+below it*, and every reader of `[kd_top]` that means "spare memory" is off by
+the size of the last claim. §96.44.11 is the same word misread the other way
+round, one caller along.
 
 ### 96.50 The BIOS key buffer's guard, which the handoff took away
 

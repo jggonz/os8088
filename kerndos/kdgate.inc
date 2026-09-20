@@ -14,11 +14,9 @@
 ; It is behind KD_GATE and no shipping path defines it.
 ; =============================================================================
 %ifdef KD_GATE
-; SPEC.md 19.1's staged record, named here because nothing else needs them.
-KDE_NAME    equ 0               ; 16 bytes, NUL-terminated
-KDE_TYPE    equ 16
-KDE_CLUS    equ 18              ; the handle: the first cluster
-KDE_SIZE    equ 20              ; ...and the size, a dword
+; The payload's claim, in KB. GATE.TXT is 9,000 bytes and the build keeps it
+; well under 64KB, so one round number covers it with room to spare.
+KD_GATE_KB  equ 16
 
 section .text
 
@@ -53,37 +51,60 @@ kd_gate_entry:
 .mounted:
     mov si, kd_s_ok
     call kd_puts
-    mov ax, [disk_nfiles]       ; how many entries the mount synthesized
-    call kd_hex16
-    call kd_crlf
 
     ; --- find the file, by the name the gate disk was built with ------------
+    ; **BY NAME OFF THE DIRECTORY, NEVER OUT OF THE GLOBAL LISTING**
+    ; (SPEC.md 96.49.7). This was `dsk_find_name_x` then `dsk_get_dir_x`, and
+    ; the count printed above it was `[disk_nfiles]` - both of them readers of
+    ; a mount snapshot that `kern_dos` cannot have: since SPEC.md 22.6.3 a
+    ; listing goes into the store the CALLER supplies through `dsk_dest_x`,
+    ; and this host has no window to supply one, so every mount here is quiet
+    ; and the count is 0 whatever is on the disk. The gate said so on the
+    ; glass - `entries 0000` then `FILE NOT FOUND` - which is the same defect
+    ; `kd_resume` had and the same fix.
     mov si, kd_wanted
-    call dsk_find_name_x        ; out CF=0 and **AX** = the entry index; the
-                                ; synthesized name is NUL-terminated (SPEC.md
-                                ; 19), not the on-disk 8.3 padding
+    call dskw_stat_x            ; CF=0 with BX = the first cluster and DX:CX =
+                                ; the size, off a directory walk; the name is
+                                ; NUL-terminated (SPEC.md 19), not the on-disk
+                                ; 8.3 padding
     jnc .found
     mov si, kd_s_nofile
     call kd_puts
     jmp kd_halt
+.nomem:
+    mov si, kd_s_nomem
+    call kd_puts
+    jmp kd_halt
 .found:
-    call dsk_get_dir_x          ; SI -> the staged 32-byte entry
-    ; **THE STAGED RECORD IS SPEC.md 19.1's AND NOT THE ON-DISK ONE**: name
-    ; 0..15 NUL-terminated, type 16, handle 18, size dword 20..23. The
-    ; DSK_R_* offsets beside them in disk.inc are the FAT's own layout, and
-    ; reading a size at 28 out of this record answers ZERO - which then reads
-    ; as a chain corruption two calls later, because a length of 0 asks for
-    ; 0 sectors.
-    mov ax, [si+KDE_SIZE]       ; the low word is all a gate file needs; the
-    mov [kd_len], ax            ; build keeps it well under 64KB
-    mov ax, [si+KDE_CLUS]
+    mov [kd_len], cx            ; the low word is all a gate file needs; the
+    mov [kd_clus], bx           ; build keeps it well under 64KB
+
+    ; --- somewhere to put it, AND IT HAS TO BE CLAIMED -----------------------
+    ; This read `[kd_top]`, under a comment saying that was *"the top of the
+    ; allocator's arena, which nothing else has claimed"*. **`[kd_top]` IS the
+    ; most recent claim's own base**: `mem_claim_x` over in kerndos/kdshim.inc
+    ; hands out `[kd_top] - size` and LOWERS the ceiling to it, so the word
+    ; names the bottom of what was last handed out and never free room. The
+    ; mount claims SPEC.md 18.95's read-ahead cache off that very ceiling, so
+    ; the gate was reading the file straight onto the cache serving the read.
+    ; It got away with it while nothing had put anything in that cache before
+    ; the chain walk; a directory walk does, and then chunk 0 arrived, the
+    ; destination overwrote the records behind it, and chunk 1 came back off
+    ; the wrong LBAs - the right NUMBER of bytes and the wrong ones, which is
+    ; the one failure this row's checksum exists to catch.
+    mov ax, KD_GATE_KB
+    xor bx, bx
+    call mem_claim_x
+    jc .nomem
+    mov [kd_buf], dx
+
+    mov ax, [kd_clus]
     mov dx, [kd_len]            ; sectors = ceil(size / 512)
     add dx, 511
     mov cl, 9
     shr dx, cl
     push ds
-    mov bx, [kd_top]            ; ...into the top of the allocator's arena,
-    mov es, bx                  ; which nothing else has claimed
+    mov es, [kd_buf]
     xor bx, bx
     call dsk_read_chain_x
     pop ds
@@ -109,8 +130,7 @@ kd_gate_entry:
     mov si, kd_s_sum
     call kd_puts
     mov cx, [kd_len]
-    mov ax, [kd_top]
-    mov es, ax
+    mov es, [kd_buf]
     xor bx, bx
     xor ax, ax
     jcxz .done
@@ -192,10 +212,11 @@ kd_hex16:
     ret
 
 kd_s_mount:  db 'kern_dos gate: mount B: ', 0
-kd_s_ok:     db 'ok, entries ', 0
+kd_s_ok:     db 'ok', 13, 10, 0
 kd_s_nomount: db 'MOUNT FAILED', 13, 10, 0
 kd_s_nofile: db 'FILE NOT FOUND', 13, 10, 0
 kd_s_noread: db 'CHAIN READ FAILED', 13, 10, 0
+kd_s_nomem:  db 'NO ROOM FOR THE PAYLOAD', 13, 10, 0
 kd_s_len:    db 'len ', 0
 kd_s_sum:    db 'sum ', 0
 kd_s_end:    db 'gate done', 13, 10, 0
@@ -203,5 +224,7 @@ kd_wanted:   db 'GATE.TXT', 0
 
 section .bss
 kd_len:      resw 1
+kd_clus:     resw 1
+kd_buf:      resw 1              ; the payload's own claim, NOT [kd_top]
 section .text
 %endif                          ; KD_GATE

@@ -178,6 +178,30 @@ def centre(m, pseg, dm, name):
     return (x1 + x2) // 2, (y1 + y2) // 2
 
 
+def sdk_const(name, default=None):
+    """One `equ` out of the SDK (`apps/os88api.inc`), by name.
+
+    `kd_const`'s twin and for its reason - SCRAPED rather than mirrored, so a
+    row asserting a published constant asserts the number the SDK actually
+    carries. The two files are different trees, which is the whole point: the
+    kernel's `DRVM_CEIL_DISK` and the SDK's are a MIRRORED PAIR that
+    `t_mirror` keeps level, and a row that wants to know what a package would
+    see must read the package's copy.
+    """
+    pat = re.compile(r"^\s*%s\s+equ\s+([0-9]+)\s*(?:;.*)?$" % re.escape(name),
+                     re.M)
+    m = pat.search(io.open(os.path.join(ROOT, "apps", "os88api.inc"),
+                           encoding="utf-8", errors="replace").read())
+    if m:
+        return int(m.group(1))
+    if default is not None:
+        return default
+    raise RuntimeError("dosmap.sdk_const: apps/os88api.inc has no plain "
+                       "`%s equ <number>` - an %%ifdef or a computed value is "
+                       "out of this reader's reach, and a wrong number is "
+                       "worse than a refusal" % name)
+
+
 def kd_const(name, default=None):
     """One `equ` out of `kerndos/`, by name.
 

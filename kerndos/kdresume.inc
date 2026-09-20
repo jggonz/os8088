@@ -75,12 +75,19 @@ kd_resume:
                                 ; listing on the way
     jc .no
     mov si, kdr_s_img
-    call dsk_find_name_x        ; AX = the index
-    jc .no
-    call dsk_get_dir_x          ; SI -> the staged entry (SPEC.md 19.1)
-    jc .no
-    mov ax, [si + 18]           ; the first cluster is at 18 and NOT at the
-    mov [kdr_clus], ax          ; FAT record's own 26 (SPEC.md 96.37.1 item 4)
+    ; **BY NAME OFF THE DIRECTORY, NEVER OUT OF THE GLOBAL LISTING**
+    ; (SPEC.md 96.49.7). It was `dsk_find_name_x` then `dsk_get_dir_x`, which
+    ; read the snapshot a LOUD mount used to synthesize - and since SPEC.md
+    ; 22.6.3 a listing has no home of its own: it goes into the store the
+    ; caller supplies through `dsk_dest_x`, and `kern_dos` has no window, no
+    ; file manager and no desktop, so it supplies none. `[dsk_dseg]` is 0
+    ; here and EVERY mount is quiet, which makes `[disk_nfiles]` 0 and the
+    ; search refuse whatever is on the disk. `dskw_stat_x` walks the
+    ; directory and answers in registers, which is the same correction
+    ; `hbm_findimg` took on the kernel's side of this file.
+    call dskw_stat_x            ; BX = the first cluster - NOT the FAT
+    jc .no                      ; record's own 26 (SPEC.md 96.37.1 item 4) -
+    mov [kdr_clus], bx          ; and DX:CX = the size
     ; **AND ITS LENGTH, WHICH IS THE FILE'S AND NOT MEMORY'S.** The first
     ; version sized the walk from `[kd_top]` - the box's banked BDA figure -
     ; because that is what `hbm_extents` does with `[mem_top]` over there.
@@ -99,8 +106,7 @@ kd_resume:
     ; entry are DECLARED ZERO, so reading 28 gets a confident nothing - the
     ; walk refused, `kd_leave` fell back to `int 19h`, and the only symptom
     ; was a return that took fifteen guest seconds instead of three.
-    mov ax, [si + 20]
-    mov dx, [si + 22]
+    mov ax, cx                  ; (DX:CX, which dskw_stat_x answered with)
     add ax, 511                 ; ...as whole sectors, rounded up
     adc dx, 0
     mov cl, 9

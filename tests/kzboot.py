@@ -23,7 +23,10 @@ one moment the image is exactly what the file says, and there the whole of it
 can be compared rather than a window somebody had to justify.
 
 **TWO GEOMETRIES, because there are two floppy boot sectors that reach this.**
-The 360KB disk is the tight one and gets the byte comparison; the 1.44MB disk
+The 360KB disk is the tight one and gets the byte comparison - except on the
+`--nokzip` arm, where an unpacked KERNEL.SYS is 209 sectors and simply does
+not fit it any more (356 clusters of 354), so that arm takes the 720KB pair
+and the paragraph below is why nothing is lost by it; the 1.44MB disk
 is a DIFFERENT 512 bytes (`boot.bin`, 18 spt against 9) and gets a boot. The
 720KB disk shares its sector with the 360KB one and differs only in a BPB
 whose spt and heads are identical, so booting it would test nothing this does
@@ -109,9 +112,33 @@ def main():
     # images describing different things, and the row then reads one through
     # another's numbers"): a tree cannot be half a build, so the failure it
     # describes is not available any more.
-    IMGS = ("os8088-360.img", "apps360.img", "os8088.img", "apps.img")
+    # **THE NOKZIP ARM CANNOT USE THE 360KB DISK ANY MORE, AND THAT IS A
+    # FINDING RATHER THAN A WORKAROUND.** An uncompressed KERNEL.SYS is 209
+    # sectors against 164, which is ~20 clusters, and the 360KB system disk
+    # has 18 free: `os88disk: error: packages need 356 clusters; disk holds
+    # 354`. The row did not report that - it died inside os88build with a
+    # make error, which reads as a broken private tree.
+    #
+    # 720KB is the RIGHT substitute and not merely a bigger one: this file's
+    # own head says the 720KB disk "shares its sector with the 360KB one and
+    # differs only in a BPB whose spt and heads are identical", so the arm
+    # still exercises the same 9-spt boot sector reading an unpacked kernel,
+    # and the byte comparison below is about the kernel IMAGE, which no
+    # geometry changes. It carries the identical payload - 356 of 713
+    # clusters, the same 356 that will not fit in 354.
+    #
+    # The packed arm keeps the 360KB disk, so the tight geometry is still
+    # where the SHIPPED configuration is proved.
+    sysimg = "os8088-720.img" if a.nokzip else "os8088-360.img"
+    geom = "720KB" if a.nokzip else "360KB"
+    appimg = "apps720.img" if a.nokzip else "apps360.img"
+    IMGS = (sysimg, appimg, "os8088.img", "apps.img")
     t = (os88build.tree("NOKZIP=1", targets=IMGS) if a.nokzip
          else os88build.plain()).apply()
+    if a.nokzip:
+        say("kzboot: NOKZIP=1 uses the 720KB pair - an unpacked KERNEL.SYS "
+            "no longer fits the 360KB system disk (356 clusters of 354), "
+            "and 720KB is the same boot sector with the same payload")
 
     fails = []
     packed = os.path.getsize(t.img("kernel.sys"))
@@ -136,8 +163,8 @@ def main():
     # PAST THE BLOB: kernel.bin is [ the blob ][ the image ] and only the
     # second half lands at KERNEL_SEG - stage 1 reads the first into BLOB_SEG.
     want = image[blob:]
-    with os88marty.launch(t.img("os8088-360.img"),
-                          apps=t.img("apps360.img"),
+    with os88marty.launch(t.img(sysimg),
+                          apps=t.img(appimg),
                           machine=a.machine, boot=False) as m:
         m.bp_exec(KERNEL_SEG << 4)      # the handoff, and the only moment the
         m.run()                         # image is exactly what the file says
@@ -145,7 +172,8 @@ def main():
             fails.append("stage 2 never reached KERNEL_SEG:0 - the boot did "
                          "not get as far as handing over")
             return report(fails)
-        say("kzboot: 360KB: stage 2 handed over, so the whole image expanded")
+        say("kzboot: %s: stage 2 handed over, so the whole image expanded"
+            % geom)
         got = b""
         while len(got) < len(want):
             k = min(0x8000, len(want) - len(got))
@@ -175,7 +203,7 @@ def main():
         m.bp_exec()                     # ...and let it finish booting, so a
         m.run()                         # kernel that expanded right but cannot
         os88marty.settle(m, gate=os88marty.desktop_up)   # RUN is still a
-        say("kzboot: 360KB: ...and it reaches a desktop")  # failure
+        say("kzboot: %s: ...and it reaches a desktop" % geom)  # failure
 
     # ...AND THE OTHER FLOPPY BOOT SECTOR. build/boot.bin is 18 sectors a
     # track where boot360.bin is 9, so its run arithmetic - which is what the

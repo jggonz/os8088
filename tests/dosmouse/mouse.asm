@@ -106,11 +106,22 @@ start:
     call put_dec16
     call put_crlf
 
-    ; --- 4. an unsupported function, which must answer 0 and not hang ------
+    ; --- 4. an unsupported function, which must LEAVE AX ALONE -------------
+    ; **SPEC.md 96.10.6, and this block used to require the opposite.** It
+    ; read `or ax, ax / jz .nofn` - AX had to come back ZERO - which was the
+    ; box's behaviour until a zero answer cost it the whole mouse cursor:
+    ; Microsoft Works ends its init `mov ax, 8 / int 33h / mov [98CAh], al`
+    ; and reads that byte as `mouse present` (docs/FIELD-NOTES.md 54). INT 33h
+    ; has no not-supported convention at all - no carry flag, no error code -
+    ; so a function documenting no output comes back with the registers as
+    ; they went in. The kernel was fixed and 96.10.6 written; THIS PROBE went
+    ; on demanding the retired answer, and SPEC.md 96.10.2's own bullet still
+    ; said zero, so the row cited a section that contradicted the one the code
+    ; implements.
     mov ax, 0x001F              ; "get driver far address": not here
     int 0x33
-    or ax, ax
-    jz .nofn
+    cmp ax, 0x001F              ; unchanged is the pass
+    je .nofn
     mov ah, 0x09
     mov dx, msg_fnbad
     int 0x21
@@ -248,6 +259,6 @@ msg_y:     db ' y=','$'
 msg_b:     db ' b=','$'
 msg_press: db 'PRESS n=','$'
 msg_rel:   db 'REL n=','$'
-msg_fnok:  db 'FN1F answered 0, as it should be',13,10,'$'
-msg_fnbad: db 'FN1F ANSWERED - the gate has FAILED',13,10,'$'
+msg_fnok:  db 'FN1F left AX alone, as it should be',13,10,'$'
+msg_fnbad: db 'FN1F CHANGED AX - the gate has FAILED',13,10,'$'
 msg_key:   db 13,10,'READY - press a key to exit with code 33',13,10,'$'

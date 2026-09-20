@@ -1202,11 +1202,16 @@ def main():
                "with BIT_RAM - or RDPV_STATE answered a store it could not "
                "make. wr_grey = %d" % b("wr_grey")[0])
         before = dispcp.win_list(m, S)
+        nasked0 = len(srv.asked)        # what the host had been asked BEFORE
+                                        # this step - see the check below
         press("wr_ra")                            # Load Program
+        t0 = time.time()
+        settled = False
         for _ in range(240):
             time.sleep(0.5)
             if (b("wr_job")[0] == 0
                     and b("wr_state")[0] in (WS_DONE, WS_FAIL)):
+                settled = True
                 break
         time.sleep(2.0)
         shot("08-fromram")
@@ -1214,10 +1219,49 @@ def main():
         vols1 = live_vols(m)
         say("live volumes after: %r, windows %d -> %d, wr_state = %d"
             % (vols1, len(before), len(after), b("wr_state")[0]))
-        asked = b"".join(srv.asked).decode("latin1", "replace")
-        if "/wire/pkg/%s.WPK" % ARC_STEM not in asked:
-            no("the host was never asked for /wire/pkg/%s.WPK, so no archive "
-               "transfer started at all" % ARC_STEM)
+        # **A WAIT THAT RAN OUT IS NOT A LAUNCH THAT FAILED**, and saying so
+        # here is what stops every assertion below blaming the loader for a
+        # transfer that never got off the ground. This loop used to fall
+        # STRAIGHT THROUGH on a timeout, so a chain still in WS_WAIT was
+        # reported as "Load Program opened no window" - which reads as the
+        # package refusing, and sent a session through SPEC.md 21.5's four
+        # LD_* codes for a machine that had not yet sent a byte.
+        #
+        # The host's own count is what separates the two halves, and it is
+        # the only witness that can: `srv.asked` growing means the guest
+        # asked and the answer is the problem; `srv.asked` STANDING STILL
+        # with the server thread alive means the guest never asked, so
+        # neither the loader nor the host is in it.
+        if not settled:
+            no("the archive chain never finished: %.0f s after Load Program "
+               "[wr_state] is %d and [wr_job] %d, where this step wants "
+               "WS_DONE (%d) or WS_FAIL (%d) with the job cleared. The host "
+               "was asked %d time(s) during the wait (server thread alive: "
+               "%s), so a count of 0 means THE GUEST NEVER SENT A REQUEST - "
+               "with the socket opened and sitting in the connect (WS_WAIT = "
+               "%d), which is the wire and not the launch. Nothing below "
+               "this line is evidence about OSAPI_PKG_START."
+               % (time.time() - t0, b("wr_state")[0], b("wr_job")[0],
+                  WS_DONE, WS_FAIL, len(srv.asked) - nasked0,
+                  srv.is_alive(), 2))
+        # **A NEW REQUEST, not any request.** This asserted that the path
+        # appeared ANYWHERE in `srv.asked`, and the Add chain a few steps up
+        # fetched the very same `.WPK` - so it was satisfied by that one and
+        # could never fail, whatever this step did. It is the count that has
+        # to move.
+        if len(srv.asked) == nasked0:
+            no("the host was asked for nothing at all during Load Program - "
+               "it had seen %d request(s) before and has seen %d since, so "
+               "no archive transfer started. (The Add chain's own fetch of "
+               "/wire/pkg/%s.WPK is why a plain `is it in srv.asked` check "
+               "passes here no matter what happens.)"
+               % (nasked0, len(srv.asked) - nasked0, ARC_STEM))
+        elif ("/wire/pkg/%s.WPK" % ARC_STEM
+              not in b"".join(srv.asked[nasked0:]).decode("latin1",
+                                                          "replace")):
+            no("the host was asked %d time(s) during Load Program and none "
+               "of them was for /wire/pkg/%s.WPK"
+               % (len(srv.asked) - nasked0, ARC_STEM))
         new_vols = [v for v in vols1 if v not in vols0]
         if not new_vols:
             no("no new volume appeared: RDPV_MOUNT never put a store up, so "
