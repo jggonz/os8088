@@ -3284,10 +3284,24 @@ disk_mount_x:
                                 ; read one out of (62.9.1)
 
     cmp byte [dsk_quiet], 0     ; 2b's gate, and 2b's ANSWER: a caller
-    je .fslist                  ; switching volumes to READ a file never looks
-    jmp .quiet                  ; at the listing, and an EMPTY one is a state
+    jne .fsquiet                ; switching volumes to READ a file never looks
+                                ; at the listing, and an EMPTY one is a state
                                 ; the whole kernel handles where a stale one
                                 ; is not (SPEC.md 18.9)
+    cmp word [dsk_dseg], 0      ; **...AND THE SECOND HALF, WHICH THIS COPY DID
+    jne .fslist                 ; NOT HAVE** (SPEC.md 22.6.3.1). The FAT path's
+.fsquiet:                       ; gate is two tests - no DESTINATION is as quiet
+    jmp .quiet                  ; as a quiet mount - and osapi_vol_mount is
+                                ; named in 22.6.3's own table as a caller that
+                                ; supplies none, which is every driver
+                                ; registering a volume. Without it `.scan_done`
+                                ; below does `mov es, [dsk_dseg]` on a ZERO and
+                                ; the icon blank writes [dsk_nmax] = 64 bytes of
+                                ; 0xFF at 0000:0000 - interrupt vectors 0..15,
+                                ; int 08h among them. The mount COMPLETES and
+                                ; the caller repaints; the machine dies at the
+                                ; next tick, which is why the RAM disk's Mount
+                                ; button read as a freeze rather than a failure
 
 .fslist:
     mov ax, LOW_SEG             ; dsk_synth_up and dsk_put_dir both stage

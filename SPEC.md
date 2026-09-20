@@ -41772,6 +41772,37 @@ listing, and none of them now pays for one. So the resident cost of listing a
 directory is **zero bytes**, and the transient cost is 2KB per open Disk
 window plus 2KB while a dialog is up.
 
+##### 22.6.3.1 BOTH mount paths carry the gate, and one of them did not
+
+`disk_mount` decides **twice** whether a mount is loud, because a redirected
+volume (`DVK_FILE`, §62.9.1) does not read a FAT: it walks its own path from
+`.fsmount`, and everything from the sort down is shared. The gate is
+`[dsk_quiet]` **and** `[dsk_dseg]` — *no destination is as quiet as a quiet
+mount* — and `.fsmount`'s copy tested only the first half, which is the
+shape of the defect rather than an accident of it: the second half was added
+to the FAT path with this section and the redirected path's copy was not
+re-read.
+
+**What that cost was the whole machine.** `RAMDISK.DRV`'s Mount button
+reaches `osapi_vol_mount`, which is named in the table above as a caller that
+supplies no store — so `[dsk_dseg]` is 0 and the gate should have made the
+mount quiet. Instead `.fslist` ran, `.scan_done` did `mov es, [dsk_dseg]`,
+and the icon blank a few instructions later wrote `[dsk_nmax]` = **64 bytes
+of 0xFF at 0000:0000** — interrupt vectors 0..15, `int 08h` among them. The
+mount itself completed and the page repainted `Mounted D:`; the machine died
+at the **next timer tick**, vectoring to `FFFF:FFFF`, which is why the report
+was *"click Mount, the system freezes"* and not *"Mount fails"*. The
+paragraph below already names segment 0 as the thing a reader must never
+read; nothing said it about the WRITER, and the writer is what a loud mount
+is.
+
+Every `DVK_FILE` volume is in that class, so the parallel link (§62) is the
+same defect by the same route. `tests/rdmount.py` is the gate: it mounts the
+RAM disk from the Control Panel and asserts the IVT is byte-for-byte what it
+was, and that the guest is still taking ticks a second later — a frozen
+machine and an idle one are the same screenshot, which is how this survived
+`tests/rdmove.py` clicking the same button.
+
 **The destination is set for a mount and cleared after it.** A `.bss` word
 may not name a heap claim across arbitrary time: the Disk window's claim is
 MOVABLE on `kern_big` and PURGEABLE on `kern_small`, and nothing would fix
