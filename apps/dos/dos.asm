@@ -1196,11 +1196,16 @@ dos_run:
     call dos_pkt_bufs               ; THE PACKET DRIVER'S BUFFERS FIRST (SPEC.md
                                     ; 96.23.7): the sizing below takes
                                     ; everything left, so a claim after it is a
-                                    ; claim that always fails. It is 2KB and it
+                                    ; claim that always fails. It is 3KB and it
                                     ; preserves BX, so it sits in front of the
                                     ; floor rather than inside it - and it asks
-                                    ; at the DEFAULT level, which for two
-                                    ; kilobytes never needs a purge to answer
+                                    ; at the DEFAULT level, which for three
+                                    ; kilobytes never needs a purge to answer.
+                                    ; **IT IS DECLARED MOVABLE** (SPEC.md
+                                    ; 96.23.7.2): everything below runs a
+                                    ; compaction pass over a heap this block is
+                                    ; already standing in, and pinned it
+                                    ; stranded 39.5KB under itself
 %endif
 .floor:
     call dos_mem_fix                ; ...and the ARM is the user's, once this
@@ -7578,6 +7583,23 @@ dos_mem_arena:
                                     ; constant can carry that, so the residual
                                     ; stays under-reported - which is the safe
                                     ; direction, and 48 under became 14
+    ; ...AND THE PACKET DRIVER'S BUFFERS COME OUT OF IT (SPEC.md 96.23.7.1).
+    ; dos_pkt_bufs claims them BEFORE the what-if above was ever asked, out of
+    ; the same heap, so on a machine with a wire the row promised three
+    ; kilobytes the program could never be handed. It is the same reader the
+    ; claim uses, which is what stops the two disagreeing again - and it
+    ; answers 0 on a machine with no wire and on one whose card the Network
+    ; box has just told the launch to let go.
+    push ax
+    call dos_pkt_want               ; CX = the KB, or CF = 1 for none
+    pop ax
+    jc .cap
+    cmp ax, cx                      ; ...and never BELOW zero: `.cap` clamps
+    jbe .none                       ; against the user's ceiling and has no
+    sub ax, cx                      ; floor, so an underflow here would print a
+    jmp short .cap                  ; 65,000K row on a machine too tight to run
+.none:                              ; the box at all
+    xor ax, ax
     jmp short .cap
                                     ; ...and the LIMIT is arm 0's too, which
                                     ; is why the other arm jumps past it:
@@ -14500,8 +14522,15 @@ dos_pkt_claim:
     pop di
     pop si
     pop cx
-    pop ax
     mov byte [dos_pkt_raw], 1
+    xor ax, ax                      ; ...AND THE BUFFERS ARE PINNED FROM HERE
+    call dos_pkt_rloc               ; (96.23.7.2): dos_pkt_tick's stack is in
+                                    ; them from this instruction on. BEFORE the
+                                    ; `pop ax` and not after: this arm restores
+                                    ; the caller's AX on its way out, and a
+                                    ; clobber below the pop is a routine that
+                                    ; has quietly stopped preserving a register
+    pop ax
     clc
     ret
 .real:
@@ -14515,7 +14544,9 @@ dos_pkt_claim:
     call OSAPI_DRV_CALL
     jc .no
     mov byte [dos_pkt_raw], 1
-    pop di
+    xor ax, ax                      ; ...and the buffers are pinned from here
+    call dos_pkt_rloc               ; too - the card route's stack is the same
+    pop di                          ; stack (96.23.7.2)
     pop bx
     pop ax
 .have:
@@ -14581,6 +14612,9 @@ dos_pkt_rawdrop:
     call OSAPI_DRV_CALL
 .letgo:
     mov byte [dos_pkt_raw], 0
+    mov ax, dos_pkt_reloc           ; ...and nothing is standing on the private
+    call dos_pkt_rloc               ; stack any more, so the block may move
+                                    ; again (96.23.7.2)
 .out:
     pop di
     pop cx
@@ -14829,38 +14863,14 @@ dos_pkt_bufs:
     push di
     push es
     mov word [dos_pkt_bseg], 0
-    call net_find                   ; **EITHER WIRE** (SPEC.md 96.26.1): the
-    jc .out                         ; CARD if there is one and the CABLE if
-                                    ; there is not - net_find's own preference
-                                    ; order, for its own reason
     mov byte [dos_pkt_xl], 0
-    ; --- WHICH ROUTE, AND IT IS DECIDED BY WHICH WIRE ----------------------
-    ; A card carries frames, so the packet driver hands the client's frames
-    ; straight to it. The cable carries SOCKETS and no frames at all (SPEC.md
-    ; 72.22.3), so on that wire the frames are TRANSLATED - the endpoint in
-    ; dosnet.inc terminates the client's TCP and re-opens it as a socket
-    ; (96.26.3).
-    mov ax, PKB_CARDKB               ; ...and the two want DIFFERENT amOUNTS
-%ifdef DOSNET_CARD
-    jmp short .xlate                ; ...and this knob forces the translation
-                                    ; where a card is present, which is the
-                                    ; only way it can be DRIVEN until the
-                                    ; harness has a cable partner
-                                    ; (DOS-CABLE-NET-PLAN 7.0)
-%endif
-    cmp byte [net_cls], DRVC_NET    ; **DRVC_NET IS THE CARD.** The cable is
-    je .claim                       ; DRVC_FILE - it moved there when it
-                                    ; started serving a volume (SPEC.md 62.9)
-                                    ; and the comment at the constant's own
-                                    ; definition still says "the parallel
-                                    ; link", which is how this compare got
-                                    ; written the wrong way round once
-.xlate:
-    mov byte [dos_pkt_xl], 1
-    mov ax, PKB_XLKB                ; the translation wants the staging frame
-                                    ; and its own state as well
-.claim:
-    push ax
+    call dos_pkt_want               ; CX = the KB, AL = the translation flag -
+    jc .out                         ; ONE reader for the size and the route, so
+    mov [dos_pkt_xl], al            ; the figure on the Memory page and the
+                                    ; claim taken here cannot disagree
+                                    ; (SPEC.md 96.23.7.1, 47 rule 5)
+    mov ax, cx
+    push cx
     call OSAPI_MEM_CLAIM
     pop cx                          ; (the size, for the zeroing below)
     jc .out                         ; **A REFUSAL IS SURVIVABLE**: the program
@@ -14885,10 +14895,25 @@ dos_pkt_bufs:
     inc di
     loop .z
     cmp byte [dos_pkt_xl], 0
-    je .out
+    je .decl
     call dn_init                    ; ...and THEN the translation's own start,
                                     ; which copies the two MACs in and needs
                                     ; the claim to exist (SPEC.md 96.26.6)
+.decl:
+    ; --- **AND IT MAY MOVE** (SPEC.md 66.2, 96.23.7.2) ---------------------
+    ; A claim is born PINNED, and this one is taken BEFORE the floor, before
+    ; the unmount and before dos_run's posted compaction - so it lands on top
+    ; of whatever purgeable caches happen to be sitting at the heap's floor at
+    ; that instant, and the pass then purges them out from under it. Left
+    ; pinned it is a WALL with a hole under it that the arena - which is ONE
+    ; run - cannot use: measured on a 530KB heap with a card, the page
+    ; promised 442KB and the program got 400, the 42 being this block's own 3
+    ; and 39.5KB of stranded floor.
+    ;
+    ; ONE WORD NAMES IT and every reader loads [dos_pkt_bseg] fresh, which is
+    ; the whole of why the proc is two instructions.
+    mov ax, dos_pkt_reloc
+    call dos_pkt_rloc
 .out:
     pop es
     pop di
@@ -14896,6 +14921,114 @@ dos_pkt_bufs:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dos_pkt_want - WHETHER the buffers will be claimed, and for how much
+; out: CF = 0 and CX = the KB, AL = 1 if this is the translation route;
+;      CF = 1 = nothing will be claimed
+; clobbers: AX, CX (the outputs), flags
+;
+; **ONE READER, because two questions are asked of it** (SPEC.md 96.23.7.1):
+; `dos_pkt_bufs` takes the claim and `dos_mem_arena` has to subtract it from
+; the figure on the glass, and a figure computed from a second opinion is how
+; SPEC.md 96.36.7 came to promise memory the launch never handed over.
+;
+; **A CARD THE LAUNCH IS ABOUT TO UNMOUNT IS NOT A WIRE** (96.36.7.3). The
+; Memory page's `Network` box is a request to let DRVC_NET go, and
+; `dos_drv_take` grants it BEFORE the program is loaded - so buffers claimed
+; for a packet driver with no card behind it are three kilobytes spent on an
+; interface that cannot be published. The cable is DRVC_FILE and has no box,
+; so that route is unaffected.
+; -----------------------------------------------------------------------------
+dos_pkt_want:
+    push bx
+    call net_find                   ; **EITHER WIRE** (SPEC.md 96.26.1): the
+    jc .no                          ; CARD if there is one and the CABLE if
+                                    ; there is not - net_find's own preference
+                                    ; order, for its own reason
+    ; --- WHICH ROUTE, AND IT IS DECIDED BY WHICH WIRE ----------------------
+    ; A card carries frames, so the packet driver hands the client's frames
+    ; straight to it. The cable carries SOCKETS and no frames at all (SPEC.md
+    ; 72.22.3), so on that wire the frames are TRANSLATED - the endpoint in
+    ; dosnet.inc terminates the client's TCP and re-opens it as a socket
+    ; (96.26.3).
+%ifndef DOSNET_CARD                 ; ...and this knob forces the translation
+    cmp byte [net_cls], DRVC_NET    ; where a card is present, which is the
+    jne .xlate                      ; only way it can be DRIVEN until the
+                                    ; harness has a cable partner
+                                    ; (DOS-CABLE-NET-PLAN 7.0).
+                                    ; **DRVC_NET IS THE CARD.** The cable is
+                                    ; DRVC_FILE - it moved there when it
+                                    ; started serving a volume (SPEC.md 62.9)
+                                    ; and the comment at the constant's own
+                                    ; definition still says "the parallel
+                                    ; link", which is how this compare got
+                                    ; written the wrong way round once
+    call dos_spmask                 ; BL = what the launch will really let go
+    test bl, 1 << DRVC_NET
+    jnz .no                         ; ...and the card is one of them
+    mov cx, PKB_CARDKB              ; ...and the two want DIFFERENT amounts
+    xor al, al
+    pop bx
+    clc
+    ret
+%endif
+.xlate:
+    mov cx, PKB_XLKB                ; the translation wants the staging frame
+    mov al, 1                       ; and its own state as well
+    pop bx
+    clc
+    ret
+.no:
+    xor cx, cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; dos_pkt_reloc - the packet buffers have moved (SPEC.md 66.2)
+; in:  BX = the base they WERE at, DX = the one they are at now; DS = CS =
+;      ours, ES = KERNEL_SEG
+; out: nothing
+;
+; Every reader of the claim loads [dos_pkt_bseg] fresh - `mov es,
+; [dos_pkt_bseg]` at the four frame sites, `mov ds, [dos_pkt_bseg]` at the two
+; translation ones, and dos_pkt_tick's own `mov ax, [dos_pkt_bseg]` - so there
+; is exactly one word to write and no derived segment anywhere to recompute.
+; The offsets inside it (PKB_RX, PKB_STK, the dn_* rows) are OFFSETS and do
+; not move with the base.
+; -----------------------------------------------------------------------------
+dos_pkt_reloc:
+    mov [dos_pkt_bseg], dx
+    ret
+
+; -----------------------------------------------------------------------------
+; dos_pkt_rloc - declare the buffers movable (AX = dos_pkt_reloc) or pin them
+;                again (AX = 0)
+; in:  AX; out: nothing; every register AND the flags preserved
+;
+; **THE PIN IS NOT TIDINESS: THE PRIVATE STACK IS IN THIS CLAIM.**
+; `dos_pkt_tick` switches SS:SP into it from inside the `int 08h` chain the
+; moment [dos_pkt_raw] is set, and a compaction runs a `rep movsw` with
+; interrupts on - so a block that moved with the ISR's stack in it would
+; return through a frame the copy had just walked past. [dos_pkt_raw] is
+; exactly the ISR's own test, so it is exactly the right bracket: the buffers
+; are movable for the whole of dos_run's pass, which is where the 39.5KB is,
+; and pinned for the handle's lifetime, which is where the danger is.
+; -----------------------------------------------------------------------------
+dos_pkt_rloc:
+    pushf
+    push ax
+    push dx
+    mov dx, [dos_pkt_bseg]
+    or dx, dx
+    jz .out                         ; refused, or already given back
+    call OSAPI_MEM_MOVABLE
+.out:
+    pop dx
+    pop ax
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
