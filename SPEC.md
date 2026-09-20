@@ -45190,6 +45190,68 @@ answer.
 document of one association is byte-identical - they share a row, and
 `assoc_docslot` is how the slot reaches the key.
 
+#### 25.9.5 A shed empties the store, and NOTHING put the pictures back
+
+§25.9 above says the residual is *"eviction and not reach: a reference whose
+row has gone resolves to the generic icon and the row returns at the next
+mount."* The second clause is true and the first sentence is doing more work
+than it can carry: **a repaint is not a mount**, so a shed left every Disk
+window on screen drawing generic icons and nothing repaired it until the user
+navigated somewhere.
+
+The event is ordinary. A DOS box claims the whole arena (§96.35), which is a
+full compaction, which correctly drops the purgeable store — the store is
+`MEM_PG_TRIV` precisely so that this is the cheap thing to give up. What was
+missing is the other half of *cheap*: getting it back.
+
+**TWO DEFECTS, AND THE FIRST ONE IS THE EXPENSIVE ONE.**
+
+**`[ico_n]` survived the shed.** `mem_pg_forget` carries one naming word per
+owner and zeroes it, so `[ico_seg]` went to 0 and the count beside it did
+not — leaving a store that was gone and still claiming to hold its rows.
+§54.7.4 put a second half on `asc_use`'s re-entry compare *for exactly this
+case*: `cmp byte [ico_n], 0`, so that a stamp still vouching for the volume
+cannot make the next mount skip the three-sector `ASSOC.DAT` re-read. **The
+byte it reads was never cleared, so the guard could not fire.** The mount
+skipped the one read and then paid a sector per package instead — ~400 ms of
+`int 13h` each on the target machine, against one three-sector read for the
+whole volume. `ico_need` does zero it, but not until the first body the
+harvest wants, which is *after* `asc_use` has already declined.
+
+`ico_demote` is the arm, `dsk_fatw_demote`'s twin and `fmv_demote`'s: a claim
+with more naming words than the protocol carries is handed the owner and
+clears them itself.
+
+**And the reference bytes are the other half.** Every listing in the machine
+holds row numbers into the store that just went. `fmv_icostale` marks every
+Disk window that has a cache **`FSD_ICONS`** and raises `[fm_fchk]`, which is
+`fmv_demote`'s shape one claim along — the front window is where a focus
+change is a click that never comes (§22.8).
+
+**`FSD_ICONS` IS ITS OWN DEBT AND THAT IS THE DESIGN.** Neither existing value
+fits: `FSD_PIXELS` would redraw the same dangling references, and `FSD_CACHE`
+would re-scan, re-sort and re-harvest a listing that never went stale. What
+the window actually needs is the two passes of a mount that read no sectors —
+§18.3 step 4a's classification and §54.3's document compose — over entries it
+already holds. So `dsk_icopass` and `dsk_docpass` are factored out of
+`disk_mount` (the redirected-volume arm was already running both), and
+`fmv_icorefs` stands on the folder quietly, absorbs `ASSOC.DAT` once and walks
+them.
+
+**The cost is one three-sector read**, and only when the volume's rows are not
+already back. A re-list is that plus the root directory — 4 sectors at 360KB,
+9 at 1.44MB — plus the sort, plus a first-sector read for every package
+`ASSOC.DAT` does not cover.
+
+**THE ORDER INSIDE `fmv_icorefs` IS THE WHOLE OF THE CARE.** `[dsk_dseg]` may
+not be live across anything that can claim, because a claim compacts on its
+refusal path and the window's listing block moves (§66.5.10.2) — so the quiet
+chdir and `asc_use` happen *before* the destination is aimed, and `FS_VSEG` is
+re-read rather than banked across them. `tools/dsegaudit.py` is what says that
+holds, not this paragraph. A window filled at a different `[dsk_nmax]` shape
+(§22.6.1) is handed back rather than repaired, and falls through to the
+re-list.
+
 #### 25.9.1 Why a WINDOW can now read it, which is what made it possible
 
 A background Disk window holds a listing the global snapshot may have replaced,
