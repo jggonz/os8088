@@ -396,11 +396,23 @@ are TWO bases here: `LOW_SEG`, a rung base, and `dsk_secbuf`, the one buffer
 in the window that is itself an `int 13h` target — and §2.1.1 holds at both
 only because `dsk_secbuf` is the window's FIRST bytes, which `dskwin.inc`'s
 `%if` against the rung base is what holds (it sat at +2,816 once, 256 into a
-sector, and the build's size decided whether a read straddled a DMA page); the region is 13.125 sectors, so the usable ceiling is **6,656** and not
-6,720. `kernel.asm`'s `%if` therefore rounds `OVLW_SIZE` **up** to a whole
-sector before comparing — the two were the same number while the mount window
-was 7 × 512 exactly, and a guard against 6,720 would pass a 13.125-sector
-overlay whose fourteenth sector lands on `vid_rowtab`.
+sector, and the build's size decided whether a read straddled a DMA page).
+
+**The region is a whole number of sectors AGAIN — 10 of them — so the usable
+ceiling IS 5,120**, and `kernel.asm`'s `%if` still rounds `OVLW_SIZE` **up** to
+a whole sector before comparing. That rounding must not come out because the
+numbers happen to divide today: while the window carried a listing the region
+was 13.125 sectors and the last fraction was unreachable, so a guard against
+the raw figure would have passed an overlay whose final sector lands on
+`vid_rowtab`. What the abolition changed is the HEADROOM, not the rule — the
+shipped `.ovlw` is 4,979, which rounds to exactly 5,120, so a plain kern_big
+fits with **nothing to spare** and any diagnostic that adds one byte costs a
+whole 512 at the rounding. That is what `DSK_OVLPAD` is for, and it is no
+longer kern_small's alone: under `KERN_KNOB` — the Makefile's own name for a
+diagnostic build, which excludes kern_small and kern_emu because those are
+shipped kernels — the pad is 1,024 and the region 6,144. Six knob arms had
+stopped assembling on a kernel that ships perfectly; every shipped kernel is
+byte-identical with the pad in place, because on those the pad is 0.
 
 That is what the boot overlay is meant to land in and spill through
 (`docs/plans/completed/BOOT-LADDER-PLAN.md` stage B). §2.5 put `.ovl` in the FAT window on the
@@ -131394,8 +131406,15 @@ count rather than a flag.
   never notice; a mouselook does. docs/plans/DOS-EXEC-PLAN.md §9.1 prices the
   kernel-side accumulator at about ten resident bytes and leaves it as a
   decision rather than taking it.
-- **Everything else answers AX=0**, which is `INT 33h`'s "not supported" and
-  what a real driver answers for a function it does not have.
+- **Everything else LEAVES `AX` ALONE — see §96.10.6, which supersedes this
+  bullet.** This used to read *"everything else answers AX=0, which is
+  `INT 33h`'s not supported"*, and that convention does not exist: there is no
+  carry flag and no error code, so a function documenting no output comes back
+  with the registers as they went in. Zero is not a refusal, it is an ANSWER,
+  and Microsoft Works asks that question — `mov ax, 8 / int 33h /
+  mov [98CAh], al` is its *mouse present* flag (docs/FIELD-NOTES.md 54). The
+  code was fixed and 96.10.6 written; this bullet was left saying the
+  opposite, and `tests/dosmouse.py` asserted it for as long as it stood.
 
 #### 96.10.3 The mouse histogram, because the ring cannot carry `INT 33h`
 
@@ -134703,6 +134722,77 @@ stays open after a run is.
 arrives with whatever was last in it, and `ne_tx` pads a short frame without
 touching the length the caller gave — so a send that staged nothing would have
 put bytes of somebody else's heap onto the network.
+
+#### 96.23.7.1 One reader decides whether the buffers are claimed, and for how much
+
+`dos_pkt_want` answers *will `dos_pkt_bufs` claim, and how many KB*, and it is
+asked by **two** callers: `dos_pkt_bufs`, which takes the claim, and
+`dos_mem_arena`, which has to subtract it from the `For the program: ~NNNNN K`
+row. A figure computed from a second opinion is exactly how §96.36.7 came to
+promise memory the launch never handed over, so the two go through one
+routine, as the driver mask does (§96.36.7.3).
+
+Two things follow from having one reader rather than two.
+
+**The page's figure is short by the buffers, and now says so.** The what-if
+`dos_mem_arena` asks is taken while the box is sitting on its Setup page, long
+before `dos_run` claims anything; `dos_pkt_bufs` then takes 3KB out of the same
+heap. So on any machine with a wire the row promised three kilobytes the
+program could never be handed — under-delivery, measured at 442K promised
+against 400K given, of which 3 were this and the rest is §96.23.7.2.
+
+**A card the launch is about to unmount is not a wire.** The Memory page's
+`Network` box is a request to let `DRVC_NET` go (§96.36.7), and `dos_drv_take`
+grants it *before* `dos_load` — so buffers claimed for a packet driver with no
+card behind it are three kilobytes spent on an interface `dos_pkt_start` can
+never publish. `dos_pkt_want` asks `dos_spmask`, which is the same routine the
+sweep is given, so the box cannot mean one thing to the figure and another to
+the claim. The **cable** is `DRVC_FILE` (§62.9) and has no box, so that route
+is unaffected and still claims `PKB_XLKB`.
+
+#### 96.23.7.2 The buffers are MOVABLE, and pinned again for the handle's life
+
+A heap claim is born pinned (§66.2), and this one is taken **before** the
+floor, before the unmount and before `dos_run`'s posted compaction — so it
+lands on top of whatever purgeable caches happen to be at the heap's floor at
+that instant, and the pass then purges them out from under it. Left pinned it
+is a wall with a hole under it, and the arena is **one run**, so the hole is
+unreachable.
+
+Measured under QEMU on a 530KB heap with an NE2000, `DOSPKT.COM`:
+
+    1B40..2340   32.0K  read-ahead window  bottom-up  movable
+    2340..23C0    2.0K  Disk window store  bottom-up  movable
+    23C0..2D80   39.0K  -- FREE --                              <- stranded
+    2D80..2E40    3.0K  dos_pkt_bufs       bottom-up  PINNED    <- the wall
+    2E40..2E60    0.5K  -- FREE --
+    2E60..9260  400.0K  the arena          top-down   PINNED
+
+The page promised 442K and the program got 400 — `3 + 39.5`, to the kilobyte,
+in both arms of the `Network` box. It reproduces 100% of the time with a card
+mounted and not at all without one, because a machine with no NIC never makes
+the claim: on an XT with a hard disk and no card the same build promised 441K
+and handed over 441.
+
+So the claim declares `OSAPI_MEM_MOVABLE` with `dos_pkt_reloc`, and the
+ascending pass packs it down with the rest. The proc is two instructions
+because **one word names the block**: every reader loads `[dos_pkt_bseg]`
+fresh — the four frame sites, the two translation ones and `dos_pkt_tick`'s
+own — and `PKB_RX`, `PKB_STK` and the `dn_*` rows are *offsets*, which do not
+move with the base.
+
+**It is pinned again for exactly as long as a handle is held, and that is not
+tidiness.** The packet driver's private stack is *in* this claim (§96.23.7),
+and `dos_pkt_tick` switches `SS:SP` into it from inside the `int 08h` chain
+the moment `[dos_pkt_raw]` is set. A compaction runs its `rep movsw` with
+interrupts on, and the DOS back end reaches `mem_claim` on ordinary file I/O
+against a heap the arena has just emptied — so a block that moved with the
+ISR's stack in it would return through a frame the copy had walked past.
+`[dos_pkt_raw]` is the ISR's own test, so it is the right bracket on both
+sides: movable for the whole of `dos_run`'s pass, which is where the 39.5KB
+is, and pinned for the handle's lifetime, which is where the danger is.
+`dos_pkt_rloc` preserves the flags, because both of `dos_pkt_claim`'s arms end
+in a deliberate `clc`/`stc`.
 
 #### 96.23.8 `send_pkt` copies nothing — the client's buffer goes straight down
 

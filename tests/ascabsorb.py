@@ -152,7 +152,35 @@ def main():
         os88marty.settle(m)
         after_rows = rows()
         n = u16("dsk_nmax")
-        refs = list(m.read((V("LOW_SEG") << 4) + V("dsk_icoix"), n))
+        # **OUT OF THE ACTING WINDOW'S OWN CLAIM**
+        # (docs/plans/LISTING-HOME-PLAN.md 13, SPEC.md 22.6.3). A listing has
+        # no home of its own any more: a Disk window's mount writes the
+        # entries AND their reference index straight into the FS_VSEG claim
+        # the window already holds. This read `LOW_SEG:dsk_icoix`, a fixed
+        # `.lowbss` array that no longer exists at all.
+        #
+        # `[dsk_dseg]` is NOT the way in, and that is worth writing down
+        # because it is the obvious-looking one: it is an ARGUMENT to the
+        # next loud mount, set immediately before one and put back to zero
+        # after it ("a `.bss` word may not name a claim across arbitrary
+        # time", kernel/files.inc), so it reads 0 by the time anything has
+        # settled. The window is where the listing still is.
+        #
+        # The index sits immediately past the entries, which is `fmv_iofs`'s
+        # arithmetic and `dsk_dest_x`'s, and `[dsk_nmax]` is the width both
+        # of them use. tests/icostore.py reads it the same way.
+        vp = u16("fm_vp")
+        if not vp:
+            fail("there is no acting Disk window after entering B:/APPS, so "
+                 "there is nowhere for a listing to be (SPEC.md 22.6.3)")
+        vseg = int.from_bytes(m.read((kseg << 4) + vp + V("FS_VSEG"), 2),
+                              "little")
+        if not vseg:
+            fail("the acting Disk window holds no FS_VSEG claim after "
+                 "entering B:/APPS - a window with no store gets a QUIET "
+                 "mount, which harvests no icons at all, and there is no "
+                 "floor listing to fall back to any more (SPEC.md 22.6)")
+        refs = list(m.read((vseg << 4) + n * V("DSK_DE_STRIDE"), n))
         used = [r for r in refs if r not in (ICO_R_FOLDER, ICO_R_NONE)]
         print("ascabsorb: B:/APPS - %d entry/ies iconned, store %d -> %d"
               % (len(used), root_rows, after_rows))

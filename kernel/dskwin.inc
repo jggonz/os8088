@@ -72,7 +72,62 @@ DSK_ICO_SIZE equ 64              ; harvested icon slot stride (SPEC.md 19)
 ; the listing ALTOGETHER, on both kernels: there is one machine-wide store and
 ; a listing owns a reference byte per entry and nothing else. DSK_ICO_SIZE is
 ; still the width of one body, in the store.
-%ifdef KERN_SMALL
+%ifdef KERN_KNOB
+DSK_OVLPAD   equ 1024           ; **AND THE NEXT THING HAS JOINED `.ovlw`: A
+                                 ; DIAGNOSTIC KNOB.**
+                                 ;
+                                 ; This is the case the paragraph below says
+                                 ; the label is kept for, arriving on kern_BIG
+                                 ; rather than kern_small.  SPEC.md 22.6.3
+                                 ; abolished the floor listing, which took
+                                 ; 1,600 bytes off kern_big's window and its
+                                 ; region with them - 6,720 to 5,120 - and the
+                                 ; shipped `.ovlw` is 4,979, which rounds to
+                                 ; 5,120 and fits with NOTHING to spare.  A
+                                 ; diagnostic that adds so much as one byte
+                                 ; then costs a whole 512 at the rounding, and
+                                 ; six knob arms stopped assembling on a
+                                 ; kernel that ships perfectly: BOOTMARK,
+                                 ; BOOTHALT, MOUDIAG, MOUROUND, SNDSNIFF and
+                                 ; FONT (tests/unit/t_buildmatrix.py, and
+                                 ; t_nasm3 is only where it was SEEN first -
+                                 ; nasm 3 has nothing to do with it and both
+                                 ; assemblers refuse it identically).
+                                 ;
+                                 ; TWO RUNGS AND NOT ONE, because the worst
+                                 ; arm is not the obvious one: `FONT=<name>`
+                                 ; bakes a face into the overlay and takes
+                                 ; `.ovlw` to 5,701, where BOOTMARK - the arm
+                                 ; that FAILED first and the one it is
+                                 ; tempting to size this against - takes it to
+                                 ; 5,142. One rung fixes five of the six and
+                                 ; leaves `font` refusing with the identical
+                                 ; message, which is the shape of a fix that
+                                 ; looks finished. Sized on the measurement
+                                 ; instead: 6,144 covers every arm in
+                                 ; tests/unit/t_buildmatrix.py with 443 bytes
+                                 ; to spare.
+                                 ;
+                                 ; `KERN_KNOB` is the Makefile's own answer to
+                                 ; "is this a diagnostic build", already
+                                 ; derived from $(KNOBS) with KERN_SMALL and
+                                 ; KERN_EMU filtered OUT because those are
+                                 ; shipped kernels.  So this reaches no
+                                 ; shipped byte: `make`, `make small` and
+                                 ; `make emu` are byte-identical to what they
+                                 ; were, and the one build that pays 512 bytes
+                                 ; of dead `.lowbss` is a build nobody boots
+                                 ; (kernel.asm guard 1 already excuses it from
+                                 ; KERN_BUDGET for exactly this reason).
+                                 ;
+                                 ; SHRINKING `.ovlw` was the other way out and
+                                 ; is refused HERE rather than left unsaid: it
+                                 ; is the OVBCALL move below, it would reach
+                                 ; every shipped kernel, and it would be spent
+                                 ; buying headroom for a diagnostic.  The room
+                                 ; a knob build needs is room a knob build can
+                                 ; pay for.
+%elifdef KERN_SMALL
 DSK_OVLPAD   equ 0              ; **AND IT IS ZERO AGAIN.**
                                  ;
                                  ; docs/plans/LISTING-HOME-PLAN.md 13 took the
@@ -98,6 +153,14 @@ DSK_OVLPAD   equ 0              ; **AND IT IS ZERO AGAIN.**
                                  ; somewhere to be told about. kernel.asm's
                                  ; `.ovlw` %if is the guard that says whether
                                  ; you are in that case
+%else
+DSK_OVLPAD   equ 0              ; a plain kern_big: the region is 5,120 and
+                                 ; the overlay rounds to exactly that, so
+                                 ; there is nothing to hold back and nothing
+                                 ; spare either. Stated rather than left
+                                 ; undefined so that every arm of this chain
+                                 ; names a number and the `%if` below is the
+                                 ; only place that asks whether it is zero
 %endif
 
 ; **THERE IS NO PER-LISTING POOL ANY MORE** (SPEC.md 25.9). A listing owns one
@@ -214,7 +277,12 @@ dsk_secbuf: resb 512            ; sector scratch: BPB read, root-dir scan,
                                 ; inside a fullscreen game pays nothing at
                                 ; all - and a caller with nowhere for a
                                 ; listing gets a quiet mount instead of one.
-%ifdef KERN_SMALL
+%if DSK_OVLPAD                  ; the PAD decides, not the kernel: it is a
+                                ; diagnostic knob that needs this on kern_big
+                                ; (see DSK_OVLPAD above) and kern_small that
+                                ; needed it first, so keying the block to
+                                ; either build name would be keying it to the
+                                ; wrong question
 dsk_ovlpad: resb DSK_OVLPAD     ; ...AND THE BOOT OVERLAY'S LANDING GROUND,
                                 ; which the icon array was doing as a SECOND
                                 ; JOB nobody had written down. `.ovlw` is read

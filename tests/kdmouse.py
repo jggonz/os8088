@@ -63,16 +63,42 @@ def fail(msg):
 
 
 def wait_line(m, prefix, limit=60.0):
-    end = time.time() + limit
-    rows = []
-    while time.time() < end:
-        rows = m.screen() or []
-        for r in rows:
+    """The text screen's first row starting with `prefix`, FINISHED.
+
+    **`tests/dosmouse.py`'s `wait_line` HAS THE FULL ACCOUNT** - this is the
+    same program printed by the same INT 21h calls and read by the same
+    parser, and it was the same first-sighting read. In one line: the label
+    and the value are two separate calls, so the screen carries `RESET ax=`
+    before it carries `RESET ax=FFFF bx=2` (observed directly), and a poll
+    that lands between them hands `fields` an empty value. That row failed a
+    four-lane soak exactly that way and passes solo.
+
+    Fixed here rather than shared with it, because the shape that would be
+    shared is four small functions and `kdhand.launch_whole`'s note applies:
+    a green row is not somebody else's tidy-up. What it carries is the
+    DEFECT, so the defect is what moves.
+    """
+    def row():
+        for r in (m.screen() or []):
             if r.lstrip().startswith(prefix):
                 return r.strip()
-        time.sleep(0.2)
-    fail("no %r line appeared; the last text screen was %r"
-         % (prefix, [r.rstrip() for r in rows if r.strip()][:10]))
+        return None
+
+    try:
+        os88marty.until(m, lambda _: row() is not None,
+                        "the %s line to appear" % prefix,
+                        guest=limit, poll=0.2)
+    except os88marty.MartyError as e:
+        fail("no %r line appeared: %s  The last text screen was %r"
+             % (prefix, str(e).split("\n")[0][:200],
+                [r.rstrip() for r in (m.screen() or []) if r.strip()][:10]))
+    try:
+        return os88marty.quiesce(m, row, budget=limit,
+                                 what="the %s line to finish printing"
+                                      % prefix)
+    except os88marty.MartyError as e:
+        fail("the %r line never stopped changing: %s  It last read %r"
+             % (prefix, str(e).split("\n")[0][:200], row()))
 
 
 def fields(line):

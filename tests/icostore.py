@@ -103,8 +103,17 @@ def main():
                     m.read((kseg << 4) + vp + V("FS_VSEG"), 2), "little")
             if vseg:
                 return list(m.read((vseg << 4) + n * V("DSK_DE_STRIDE"), n))
-            # no claim: the window listed into the floor, exactly as before
-            return list(m.read((low << 4) + V("dsk_icoix"), n))
+            # **AND THERE IS NO FLOOR TO FALL BACK TO** (SPEC.md 22.6.3).
+            # This arm read `LOW_SEG:dsk_icoix`, and that symbol no longer
+            # exists - so the line it was meant to make readable raises
+            # KeyError instead, at exactly the moment the row has something
+            # to report. A window with no store gets a QUIET mount and
+            # harvests nothing, which is a fact worth naming rather than a
+            # case worth decoding.
+            fail("the acting Disk window holds no FS_VSEG claim, so there is "
+                 "no listing anywhere to read a reference index out of - a "
+                 "window with no store gets a QUIET mount and harvests no "
+                 "icons at all (SPEC.md 22.6)")
 
         if rows() != 0:
             fail("the store already holds %d row(s) before any listing - it is "
