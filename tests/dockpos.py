@@ -255,8 +255,14 @@ def herc(a):
         ui = os88ui.UI(m, mouse=mo, sym=S)
         panel = ui.window("Control Panel")
         panel = ui.move_window(panel, pw - panel.w - 1, 80)
+        # **IT SAYS THE NUMBERS**, because it failed once in a soak and the
+        # bare form left the reader nothing at all to go on: `check` here
+        # prints the sentence and no values, so a one-line FAIL was the whole
+        # of the evidence.
         check(panel.x + panel.w > pw - DOCK_SW,
-              "the panel overlaps the strip that will open")
+              "the panel overlaps the strip (x %d w %d, right edge %d, "
+              "wanted past %d of %d)"
+              % (panel.x, panel.w, panel.x + panel.w, pw - DOCK_SW, pw))
         mo.to(pw // 2, ph - 60)
         os88marty.settle(m)
         w, h, before = frame(m, kind)

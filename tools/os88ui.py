@@ -470,6 +470,12 @@ class UI:
         packet and retrying a clamp is an infinite loop with a timeout on it.
         """
         w = self._as_win(w)
+        # **A RAISE FOLLOWED BY A GRAB IS A DOUBLE-CLICK ON THE TITLE BAR**,
+        # and SPEC.md 11.95 says what that does: it ZOOMS the window, and the
+        # next one restores it - so the drag never happens and the record
+        # reads the window's ORIGINAL x. `os88mouse.Mouse._sep` separates the
+        # two presses on the GUEST's clock, which is why there is nothing to
+        # do here; a gap measured in host work is wrong at some guest speed.
         self.raise_window(w)
         was = (w.x, w.y)
         # WHERE IT WILL ACTUALLY LAND, not where we asked. SPEC.md 11.94 snaps

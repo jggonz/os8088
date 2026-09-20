@@ -1116,8 +1116,8 @@ assoc_run_x:
     mov di, [assoc_pwin]
     or di, di
     jz .curvol
-    mov al, [di+FS_DRV]         ; the poster's OWN folder, read straight off
-    mov dx, [di+FS_CWD]         ; its state block. This was a fmv_sync - a
+    call fmv_here               ; the poster's OWN folder, read straight off
+                                ; its state block. This was a fmv_sync - a
     jmp short .located          ; FULL mount - and all it was ever wanted for
                                 ; was these two words, which fmv_sync itself
                                 ; takes from exactly here (SPEC.md 54.9.1).

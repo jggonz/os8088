@@ -135,13 +135,30 @@ def row_of(m, name):
 
 
 def name_at(m, row):
-    e = m.read(S("disk_dir") + row * DSK_DE_STRIDE, DSK_DE_STRIDE)
-    return e.split(b"\0")[0].decode("latin-1").strip()
+    return dispcp.listing(m, S)[row][0]
 
 
 def last_clickable_row(m, wx, wy, skip=None):
-    """The highest-numbered listing row whose centre is still on the screen."""
-    n = u16(m.read(S("disk_nfiles"), 2))
+    """The highest-numbered listing row whose centre is still on the screen.
+
+    **IT ASKS THE WINDOW, NOT THE GLOBALS**, and both halves of that had gone
+    stale at once. `disk_dir` and `dsk_icoix` are GONE - there is no global
+    listing any more, a listing is written where its CALLER keeps a store
+    (kernel/dskwin.inc, docs/plans/LISTING-HOME-PLAN.md 13) - so `name_at`
+    could only ever raise on a symbol that no longer exists. And
+    `[disk_nfiles]` survives but is the MOUNT SNAPSHOT's count, which SPEC.md
+    18.9's quiet mount deliberately leaves at 0 with `[dsk_lstale]` raised: a
+    perfectly ordinary state after anything that moved the volume without
+    navigating, and the one this row reaches. Reading it here answered "this
+    folder is empty" about a window with seven rows on the glass, and the row
+    died on `no clickable row in this window`.
+
+    `dispcp.listing` is the answer to the only question either of these asks -
+    what is the user looking at - and it prefers the acting Disk window's own
+    FS_VSEG cache for exactly that reason. It is the same move
+    `tests/ascabsorb.py` and `tests/icostore.py` took; this row was missed.
+    """
+    n = len(dispcp.listing(m, S))
     h = u16(m.read(S("vid_h"), 2))
     for r in range(n - 1, -1, -1):
         if r == skip:

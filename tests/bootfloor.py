@@ -109,8 +109,33 @@ def boots(kb, extra):
 
 
 for label, extra in (("kern_big", ()), ("kern_small", ("KERN_SMALL=1",))):
-    # Build this configuration's sector FIRST, then ask it what it wants.
-    kb = floor_kb(tree(*extra).dir)
+    # **THE FLOOR COMES OUT OF THE TREE THIS ROW BOOTS, AND THAT IS THE WHOLE
+    # OF WHAT WAS WRONG WITH IT.** It read `tree(*extra)` - the build with NO
+    # `RAMKB` - and then booted `tree("RAMKB=%d" % kb, *extra)`, and the two
+    # do not carry the same number: measured across ten `ramkb-*` trees and
+    # five plain ones, a RAMKB build's sector is handed a HEAP_PARA 64
+    # paragraphs higher than the plain build's, so its MEMNEED is exactly 1 KB
+    # higher - 7,488 against 7,424 on kern_big, 5,248 against 5,184 on
+    # kern_small. So this handed every sector one kilobyte LESS than its own
+    # arithmetic demands, the sector printed `RAM`, and the row reported that
+    # the kernel does not boot at the floor SPEC.md 2.7.1 computes.
+    #
+    # It reported it in the most alarming words it had, too - "the bound is
+    # too LOW and the arithmetic is wrong in the dangerous direction" - for a
+    # kernel that is correct: bisected by hand, kern_big boots at 117 and
+    # refuses 116, kern_small boots at 82 and refuses 81, which is each knob
+    # build's own floor met exactly.
+    #
+    # The seed value is arbitrary because the knob's cost does not depend on
+    # it (ten trees, n from 116 to 640, all 7,488), and `.want` below asserts
+    # that rather than assuming it - so a build where it DID depend on n fails
+    # naming the two numbers instead of blaming the kernel.
+    kb = floor_kb(tree("RAMKB=%d" % floor_kb(tree(*extra).dir), *extra).dir)
+    plain = floor_kb(tree(*extra).dir)
+    if kb != plain:
+        print("bootfloor: %s: the RAMKB build's floor is %d KB where the "
+              "plain build's is %d - this row tests the one it BOOTS"
+              % (label, kb, plain))
 
     up, text = boots(kb, extra)
     check(up, "%s reaches a desktop at its floor, %d KB" % (label, kb),
@@ -120,6 +145,14 @@ for label, extra in (("kern_big", ()), ("kern_small", ("KERN_SMALL=1",))):
           "means the bound is too LOW and SPEC.md 2.7.1's arithmetic is "
           "wrong in the dangerous direction",
           got=text.strip()[:120] or "(a blank screen)", want="a desktop")
+
+    got = floor_kb(tree("RAMKB=%d" % kb, *extra).dir)
+    check(got == kb, "%s: the build booted at %d KB carries that floor"
+          % (label, kb),
+          "the floor is read from one build and tested on another only if "
+          "this holds - if a RAMKB build's MEMNEED depends on the RAMKB "
+          "value, the check above asked the wrong question and its verdict "
+          "means nothing either way", got="%d KB" % got, want="%d KB" % kb)
 
     up, text = boots(kb - 1, extra)
     check(not up, "%s refuses %d KB, one below it" % (label, kb - 1),

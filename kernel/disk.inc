@@ -2807,18 +2807,32 @@ disk_mount_x:
     ; from, which is why this showed up as a Task Manager that could not find
     ; its file and a Disk window with nothing in it rather than as a failure
     ; to start.
-    mov word [disk_nfiles], 0   ; stays 0 unless the mount fully succeeds
-    mov byte [dsk_mntok], 0     ; the write gate (SPEC.md 18.4) closes for
+    ; **EIGHT IMMEDIATE STORES, THROUGH THE ACCUMULATOR.** `mov word [m], imm`
+    ; is SIX bytes and 20 clocks where `mov [m], ax` is THREE and 14, so this
+    ; is 31 bytes against 46 and faster on the target machine as well - the
+    ; same argument dsk_bpb_check makes for `mov bh, [dsk_vflop]` a page down.
+    ; AX is dead here by CONSTRUCTION and not by inspection: the block above
+    ; ends at `pop bx`, and every path through it - the row lookup, the floppy
+    ; test, the boot partition's geometry - has already spent AX for its own
+    ; reasons. The stores are ordered by what AX has to hold; each keeps the
+    ; comment that says why it is set.
+    xor ax, ax
+    mov [disk_nfiles], ax       ; stays 0 unless the mount fully succeeds
+    mov [dsk_mntok], al         ; the write gate (SPEC.md 18.4) closes for
                                 ; the whole mount: a torn mount leaves it
                                 ; closed, so nothing can write a volume
                                 ; whose layout was never fully validated
-    mov word [dsk_rover], 2     ; allocator hint + FAT dirty range: no
-    mov word [dsk_fatd0], 0xFFFF    ; window state survives a mount, and the
-    mov word [dsk_fatd1], 0     ; window itself is invalid until rule 10 has
-    mov word [dsk_fatw0], 0xFFFF    ; sized it (SPEC.md 18.8)
-    mov word [dsk_fatwn], 1
-    mov byte [ld_pending], 0    ; a queued click indexes the OLD directory;
+    mov [dsk_fatd1], ax         ; no window state survives a mount, and the
+    mov [ld_pending], al        ; a queued click indexes the OLD directory;
                                 ; never let it run against the new one
+    inc ax
+    mov [dsk_fatwn], ax         ; window itself is invalid until rule 10 has
+    inc ax                      ; sized it (SPEC.md 18.8)
+    mov [dsk_rover], ax         ; ...and 2 is the allocator hint's first
+                                ; cluster
+    mov ax, 0xFFFF              ; the FAT dirty range and the window's base,
+    mov [dsk_fatd0], ax         ; both of which mean "nothing"
+    mov [dsk_fatw0], ax
     cmp byte [dsk_keepcwd], 0   ; a remount always lands at the root, and
     jne .cwd_kept               ; dskw_* resolve there until dsk_chdir
     mov word [dsk_cwd], 0       ; moves - EXCEPT when dsk_chdir is the
@@ -3225,13 +3239,7 @@ disk_mount_x:
                                 ; it would leave the stale segment in ES and
                                 ; only make tools/dsegaudit.py go quiet.
                                 ; Overwriting it is what closes the window.
-    xor dx, dx
-.fsico:
-    cmp dx, bp
-    jae .done
-    mov ax, dx
-    call dsk_get_dir_x          ; SI -> dsk_ent
-    call ico_ref_try            ; THE SAME CLASSIFICATION the harvest above
+    call dsk_icopass            ; THE SAME CLASSIFICATION the harvest above
                                 ; makes, which is why it is one routine: a
                                 ; folder takes the built-in body out of
                                 ; `.text`, a package already in the store
@@ -3240,61 +3248,25 @@ disk_mount_x:
                                 ; differently is what it does with a MISS -
                                 ; nothing, there being no sector here to go
                                 ; and read - so `ico_ref_try`'s carry is
-                                ; simply not tested
-.fsico_next:
-    inc dx
-    jmp short .fsico
+                                ; simply not tested. It is a routine rather
+                                ; than a loop here because SPEC.md 25.9.5's
+                                ; repair walks it too, over a WINDOW's listing
+                                ; instead of a mount's
+    jmp short .done             ; **AND STRAIGHT TO .done, which is the flow
+                                ; this arm always had**: the loop that stood
+                                ; here left by `jae .done`, PAST pass 4b. A
+                                ; redirected volume composes no document
+                                ; bodies, and making it start now would be a
+                                ; behaviour change smuggled in under a
+                                ; refactor - SPEC.md 62.9.2.1 is where that
+                                ; belongs if anybody wants it
 
 .harvested:
 %endif                          ; DSK_WANT_ICONS
 
 %ifdef OS88_ASSOC
-    ; --- 4b. document icons (SPEC.md 54.3) ------------------------------
-    ; A SECOND pass, and the order is the whole reason it is one: pass A is
-    ; what teaches assoc_note_app where each program is and what it looks
-    ; like, and the listing is sorted by name (SPEC.md 19.4), so a document
-    ; can perfectly well precede its program - BEACH.BMP before PAINT.O88.
-    ; Composing in pass A would draw the page bare for everything above the
-    ; program in the sort. No I/O here at all: both passes read data already
-    ; in hand.
-    xor dx, dx
-.docs:
-    cmp dx, bp
-    jae .done
-    mov ax, dx
-    call dsk_get_dir_x
-    cmp word [si+16], 0         ; type 0 alone: a package draws its own icon
-    jne .doc_next               ; and a folder has dsk_folder_ico
-    pushf                       ; dsk_ico has FIVE tenants (assoc.inc says
-                                ; which, above assoc_docicon)
-    cli                         ; and this one stages it with the gfx lock
-                                ; FREE, so a tick here could switch to a
-                                ; package worker whose wm_show repaints the
-                                ; dock through inst_icon_ptr - the fifth
-                                ; tenant - and the document would cache 64
-                                ; bytes of that package's icon. A compose
-                                ; and a 64-byte copy, well under one tick
-    call assoc_docicon_x          ; CF=0 and dsk_ico holds the composed body
-    jc .doc_skip
-    mov al, [assoc_docslot]     ; ...keyed by the SLOT it composed from, so
-    call ico_key_doc            ; every document of one association is one row
-    mov ax, dx
-    mov bx, dsk_ico
-    push dx
-    mov dx, KERNEL_SEG          ; ...the kernel segment, named (SPEC.md 2.6
-    call ico_put                ; rule 2: CS is COLD_SEG here)
-    pop dx
-.doc_skip:
-    popf
-.doc_next:
-    inc dx
-    jmp .docs
-%endif                          ; kern_small composes no document icons
-                                ; (SPEC.md 54.0): a type-0 file keeps the
-                                ; all-zero slot, which is the generic-icon
-                                ; sentinel 54.1 already relies on - so no
-                                ; drawing path changes and nothing is left
-                                ; half-composed
+    call dsk_docpass            ; --- 4b. document icons (SPEC.md 54.3) ------
+%endif                          ; kern_small composes none (SPEC.md 54.0)
 .done:
     mov [disk_nfiles], bp       ; publish the count last
     mov byte [dsk_lstale], 0    ; ...the listing is this volume's again...
@@ -3326,10 +3298,24 @@ disk_mount_x:
                                 ; read one out of (62.9.1)
 
     cmp byte [dsk_quiet], 0     ; 2b's gate, and 2b's ANSWER: a caller
-    je .fslist                  ; switching volumes to READ a file never looks
-    jmp .quiet                  ; at the listing, and an EMPTY one is a state
+    jne .fsquiet                ; switching volumes to READ a file never looks
+                                ; at the listing, and an EMPTY one is a state
                                 ; the whole kernel handles where a stale one
                                 ; is not (SPEC.md 18.9)
+    cmp word [dsk_dseg], 0      ; **...AND THE SECOND HALF, WHICH THIS COPY DID
+    jne .fslist                 ; NOT HAVE** (SPEC.md 22.6.3.1). The FAT path's
+.fsquiet:                       ; gate is two tests - no DESTINATION is as quiet
+    jmp .quiet                  ; as a quiet mount - and osapi_vol_mount is
+                                ; named in 22.6.3's own table as a caller that
+                                ; supplies none, which is every driver
+                                ; registering a volume. Without it `.scan_done`
+                                ; below does `mov es, [dsk_dseg]` on a ZERO and
+                                ; the icon blank writes [dsk_nmax] = 64 bytes of
+                                ; 0xFF at 0000:0000 - interrupt vectors 0..15,
+                                ; int 08h among them. The mount COMPLETES and
+                                ; the caller repaints; the machine dies at the
+                                ; next tick, which is why the RAM disk's Mount
+                                ; button read as a freeze rather than a failure
 
 .fslist:
     mov ax, LOW_SEG             ; dsk_synth_up and dsk_put_dir both stage
@@ -6844,6 +6830,106 @@ dsk_ncopy:
     pop ax
     ret
 
+
+%ifdef DSK_WANT_ICONS           ; the store's gate (SPEC.md 25.9): with no icon
+                                ; family there is no reference to settle
+; -----------------------------------------------------------------------------
+; dsk_icopass - settle every entry's icon REFERENCE with no sector read at all
+; in:  BP = the entry count; the listing standing in [dsk_dseg]/[dsk_doff]
+; out: nothing (AX, DX and SI are spent)
+;
+; SPEC.md 18.3 step 4a'. `ico_ref_try` per entry: a folder references the
+; built-in body in `.text`, a package already in the store takes its row, and
+; a document is `dsk_docpass`'s business. A MISS is simply not tested - there
+; is no sector to go and read on either of this routine's two paths.
+;
+; **IT HAS TWO CALLERS AND THEY ARE DIFFERENT KINDS OF THING** (SPEC.md
+; 25.9.5). One is the mount's own pass over a REDIRECTED volume, which has no
+; sectors to peek at; the other is the repair after a shed, walking a WINDOW's
+; own listing to re-resolve reference bytes whose rows went with the store.
+; What makes one body serve both is that the reference index follows the
+; listing into whatever store `dsk_dest_x` was given, so neither caller names
+; a segment and the walk is the same instruction either way.
+; -----------------------------------------------------------------------------
+dsk_icopass:                    ; NO PROLOGUE, and the header above is where
+                                ; that was always written down: AX, DX and SI
+                                ; are SPENT. Both callers are already past
+                                ; needing them - the mount's `.fsicons` arm
+                                ; goes straight to `.done`, which reads BP
+                                ; alone, and `fm_focus_x` banks AX, CX, DX and
+                                ; SI itself before it ever reaches the repair
+    xor dx, dx
+.ip:
+    cmp dx, bp
+    jae .ip_done
+    mov ax, dx
+    call dsk_get_dir_x          ; SI -> dsk_ent
+    call ico_ref_try
+    inc dx
+    jmp short .ip
+.ip_done:
+    ret
+
+%ifdef OS88_ASSOC
+; -----------------------------------------------------------------------------
+; dsk_docpass - compose a document body for every type-0 entry (SPEC.md 54.3)
+; in:  BP = the entry count; the listing standing in [dsk_dseg]/[dsk_doff]
+; out: nothing (AX, BX, DX and SI are spent)
+;
+; The SECOND pass, and the order is the whole reason it is one - see the body.
+; Factored for `dsk_icopass`'s reason: the repair after a shed has to compose
+; these again too, and a document body costs no I/O, so the two passes are
+; exactly what a repair may run and a re-list is exactly what it need not.
+; -----------------------------------------------------------------------------
+dsk_docpass:                    ; `dsk_icopass`'s reason for having no
+                                ; prologue, one register wider: the header
+                                ; says AX, BX, DX and SI are spent and no
+                                ; caller wants them back
+    ; --- 4b. document icons (SPEC.md 54.3) ------------------------------
+    ; A SECOND pass, and the order is the whole reason it is one: pass A is
+    ; what teaches assoc_note_app where each program is and what it looks
+    ; like, and the listing is sorted by name (SPEC.md 19.4), so a document
+    ; can perfectly well precede its program - BEACH.BMP before PAINT.O88.
+    ; Composing in pass A would draw the page bare for everything above the
+    ; program in the sort. No I/O here at all: both passes read data already
+    ; in hand.
+    xor dx, dx
+.dp:
+    cmp dx, bp
+    jae .dp_done
+    mov ax, dx
+    call dsk_get_dir_x
+    cmp word [si+16], 0         ; type 0 alone: a package draws its own icon
+    jne .dp_next               ; and a folder has dsk_folder_ico
+    pushf                       ; dsk_ico has FIVE tenants (assoc.inc says
+                                ; which, above assoc_docicon)
+    cli                         ; and this one stages it with the gfx lock
+                                ; FREE, so a tick here could switch to a
+                                ; package worker whose wm_show repaints the
+                                ; dock through inst_icon_ptr - the fifth
+                                ; tenant - and the document would cache 64
+                                ; bytes of that package's icon. A compose
+                                ; and a 64-byte copy, well under one tick
+    call assoc_docicon_x          ; CF=0 and dsk_ico holds the composed body
+    jc .dp_skip
+    mov al, [assoc_docslot]     ; ...keyed by the SLOT it composed from, so
+    call ico_key_doc            ; every document of one association is one row
+    mov ax, dx
+    mov bx, dsk_ico
+    push dx
+    mov dx, KERNEL_SEG          ; ...the kernel segment, named (SPEC.md 2.6
+    call ico_put                ; rule 2: CS is COLD_SEG here)
+    pop dx
+.dp_skip:
+    popf
+.dp_next:
+    inc dx
+    jmp .dp
+.dp_done:
+    ret
+%endif                          ; OS88_ASSOC
+%endif                          ; DSK_WANT_ICONS
+
 ; -----------------------------------------------------------------------------
 ; dsk_copy_out - copy CX bytes from LOW_SEG:SI into an arbitrary segment
 ;
@@ -7152,6 +7238,45 @@ ico_need:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; ico_demote - the shed took the machine-wide icon store (SPEC.md 25.9.5)
+; out: nothing; DI is spent and so are the flags. **THAT IS THE CALLER'S
+;      CONTRACT AND NOT A RELAXATION OF IT**: the only way in is
+;      `mem_pg_forget`'s `.ico` arm, and that routine brackets every demoter
+;      arm with its own `pushf` and `push ax / bx / cx / si` - so banking any
+;      of those again here restores values its `.out` restores a second time
+;
+; `mem_pg_forget`'s `.ico` arm, `dsk_fatw_demote`'s twin and `fmv_demote`'s:
+; this claim has MORE NAMING WORDS THAN THE PROTOCOL CARRIES, so the holder
+; is handed the owner and clears them itself.
+;
+; **THE COUNT IS THE ONE THAT WAS MISSED.** The protocol zeroes `[ico_seg]`
+; alone, and `[ico_n]` sits beside it saying how many rows the store holds -
+; so after a shed the store was gone and still claiming to hold 28 bodies.
+; That is not cosmetic: SPEC.md 54.7.4 put a second half on `asc_use`'s
+; re-entry compare *for exactly this case* - `cmp byte [ico_n], 0`, so that a
+; stamp still vouching for the volume cannot make the next mount skip the
+; three-sector `ASSOC.DAT` re-read - and the byte it reads was never cleared,
+; so the guard could not fire. The mount skipped the one read and then paid a
+; sector per package instead, ~400 ms of `int 13h` each on the target machine.
+; `ico_need` does zero it, but not until the first body the harvest wants,
+; which is AFTER `asc_use` has already declined.
+;
+; And the reference bytes are the other half: every listing in the machine
+; holds row numbers into what just went, which is `fmv_icostale`'s business.
+; -----------------------------------------------------------------------------
+ico_demote:
+    mov word [ico_seg], 0       ; NEITHER A FRAME NOR A `pushf` HERE - see the
+    mov byte [ico_n], 0         ; header: `mem_pg_forget` has banked the lot
+    jmp fmv_icostale            ; already. And `fmv_icostale` ENDS IN A `ret`
+                                ; whose caller is this routine's caller, so it
+                                ; IS this routine's epilogue and the tail jump
+                                ; is the whole of it. Both are `.cold`, so the
+                                ; jump is near (SPEC.md 2.6); `fmv_icostale`
+                                ; is a plain callable routine and not a
+                                ; continuation, which is what SPEC.md
+                                ; 22.3.0.1 rule 3 makes the difference about
 
 ; -----------------------------------------------------------------------------
 ; ico_find - which row holds ico_keyb's key? (module internal)
