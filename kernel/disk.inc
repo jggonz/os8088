@@ -3269,14 +3269,21 @@ disk_mount_x:
                                 ; than a loop here because SPEC.md 25.9.5's
                                 ; repair walks it too, over a WINDOW's listing
                                 ; instead of a mount's
-    jmp short .done             ; **AND STRAIGHT TO .done, which is the flow
-                                ; this arm always had**: the loop that stood
-                                ; here left by `jae .done`, PAST pass 4b. A
-                                ; redirected volume composes no document
-                                ; bodies, and making it start now would be a
-                                ; behaviour change smuggled in under a
-                                ; refactor - SPEC.md 62.9.2.1 is where that
-                                ; belongs if anybody wants it
+                                ; **AND THEN IT FALLS THROUGH TO PASS 4b**,
+                                ; which is what `jmp short .done` used to skip
+                                ; (SPEC.md 62.9.2.1). The reason given for
+                                ; skipping it was that a redirected volume has
+                                ; no program to have learned an icon from, and
+                                ; that is not what pass 4b reads: it composes
+                                ; from the ASSOCIATION's glyph, which is
+                                ; machine-wide and warm out of the boot
+                                ; volume's ASSOC.DAT, so a `.TXT` on the RAM
+                                ; disk has exactly the same claim on a Note
+                                ; Pad page as a `.TXT` on a floppy. It also
+                                ; costs no I/O at all - which is the property
+                                ; that lets this arm run it - so the two bytes
+                                ; that went were buying a volume with LESS
+                                ; than the machine already knew
 
 .harvested:
 %endif                          ; DSK_WANT_ICONS

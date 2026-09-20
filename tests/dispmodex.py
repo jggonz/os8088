@@ -124,7 +124,20 @@ def move_to(m, mo, win, x, card):
     wx, wy, ww, wh = dispcp.win_rect(m, S, win)
     mo.drag(wx + ww // 2, wy + TITLE_H // 2, x, wy + TITLE_H // 2)
     os88marty.settle(m, card=card)
-    time.sleep(1.5)                 # the worker asks once a frame
+    # **THE APP'S ANSWER, NOT A HOST SLEEP.** This was `time.sleep(1.5)` with
+    # the comment "the worker asks once a frame" - a HOST wait for a GUEST
+    # event, which is wrong at some guest speed by construction. The caps the
+    # caller is about to assert are written by MISSILE's own worker when it
+    # next calls fsx_caps, so the thing to wait for is those words settling:
+    # `quiesce` wants them unchanged over GUEST seconds, which a loaded box
+    # cannot shorten and a fast one cannot outrun.
+    #
+    # It read `mc_caps=0x01EF mono=0` for a window whose centre was already
+    # 236 pixels the far side of the seam - the right answer to the question
+    # asked a moment too early, reported as the kernel failing to move the
+    # caps with the window.
+    os88marty.quiesce(m, lambda: facts(m),
+                      what="MISSILE's caps to settle after the drag")
     return dispcp.win_rect(m, S, win)
 
 

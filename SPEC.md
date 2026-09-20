@@ -84039,15 +84039,30 @@ Three consequences worth stating rather than discovering. It is **session
 state**: a Link listing shows a package's icon if the user has browsed a disk
 that also holds it, and the generic one after a fresh boot. That is inherent
 to "only if it is already in RAM" and nothing here may make it otherwise by
-going to look. The **cache** half of it is **packages only** — §54.3's
-document pass composes a page from the *program's* icon, and on a redirected
-volume there is no such
-program to have learned one from, so a `.TXT` keeps the generic icon. It keeps
-it on a floppy too, so this closes the gap between the two rather than opening
-one. And the pass runs at **mount** time while a Disk window paints from its
+going to look. The **cache** half of it is **packages only** — a `MINES.O88`
+this machine has never seen keeps the generic icon, because there is no row to
+spend. And the pass runs at **mount** time while a Disk window paints from its
 own view cache (§22.1), so a volume opened *before* the cache was warmed keeps
 its generic slots until something re-lists it — a Refresh, or a navigation.
 The cache cannot repaint a listing that was built before it existed.
+
+**§54.3's DOCUMENT pass runs here too, and for a while it did not.** This arm
+ended `jmp short .done`, PAST pass 4b, under the reason *"a redirected volume
+composes no document bodies"* — and that is not what pass 4b reads.
+`assoc_docicon` composes from the **association's own glyph**, which is
+machine-wide and warm out of the boot volume's `ASSOC.DAT`, and it does **no
+I/O at all**; the program it names does not have to be on this volume, or on
+any volume the machine can still reach. So a `.TXT` on a RAM disk has exactly
+the same claim on a Note Pad page as a `.TXT` on a floppy, and the two bytes
+of `jmp short` were buying a volume LESS than the machine already knew. The
+field reported it as *"RAM disks almost never show an assoc icon, even when
+the cache is there and has it populated"*, and the *almost* is the giveaway:
+the folders were right, which is pass 4a', and everything else was not.
+Deleting the jump is **−2 bytes** and the arm falls through to 4b like every
+other. `tests/rdicon.py` is the gate — `RAMSEED=1`'s seeded store, the
+reference byte of a `.TXT` read out of the acting window's own cache, with
+the FOLDER's read beside it as the control that says pass 4a' was working all
+along.
 
 **Measured on a cycle-accurate 5150/CGA**, reading `disk_icons` out of the
 guest rather than judging pixels — cold, then `B:\GAMES` to warm the cache,
