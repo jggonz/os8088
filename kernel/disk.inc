@@ -2336,10 +2336,12 @@ dsk_vol_del:
                                 ; live window back if this volume owned it
     cmp al, [disk_drive]
     jne .out
-    mov byte [disk_drive], 0    ; the mounted volume just went away: fall back
-    mov byte [dsk_mntok], 0     ; to A: with the write gate shut, exactly as a
-    mov word [disk_nfiles], 0   ; failed mount leaves things (SPEC.md 18.3)
-    mov word [dsk_fatw0], 0xFFFF
+    xor ax, ax                  ; the mounted volume just went away: fall back
+    mov [disk_drive], al        ; to A: with the write gate shut, exactly as a
+    mov [dsk_mntok], al         ; failed mount leaves things (SPEC.md 18.3).
+    mov [disk_nfiles], ax       ; AL was the index and the compare above is
+    dec ax                      ; its last reader, so these four are the
+    mov [dsk_fatw0], ax         ; accumulator's: 15 bytes against 22
 .out:
     pop bx
     pop ax
@@ -2748,11 +2750,24 @@ disk_mount_x:
     call dsk_fatw_park          ; the OUTGOING volume's window, banked while
                                 ; [disk_drive] still says which one it is
     mov [disk_drive], dl
-    mov byte [dsk_vkind], DVK_BIOS  ; what the BPB rules are checked against
-    mov word [dsk_vsecs], 0         ; (SPEC.md 18.2/18.7)
-    mov byte [dsk_vflop], 1
-    mov word [disk_spt], 9      ; the geometry for the LBA 0 read, BEFORE the
-    mov word [disk_heads], 2    ; BPB can supply one - see .nofloppy below
+%if DVK_BIOS != 0               ; the block below SPELLS DVK_BIOS as a zeroed
+  %error "DVK_BIOS is no longer 0: dsk_vkind below is stored from AL"
+%endif                          ; AL, so the named constant is asserted here
+                                ; rather than quietly assumed. Five stores
+                                ; through the accumulator are 21 bytes where
+                                ; five immediates are 28, and AX is dead here
+                                ; by construction: dsk_fatw_park above answers
+                                ; in nothing, and dsk_vol_row_x below spends
+                                ; AX for its own reasons whichever way it goes
+    xor ax, ax
+    mov [dsk_vkind], al         ; what the BPB rules are checked against
+    mov [dsk_vsecs], ax         ; (SPEC.md 18.2/18.7)
+    inc ax
+    mov [dsk_vflop], al
+    inc ax
+    mov [disk_heads], ax        ; the geometry for the LBA 0 read, BEFORE the
+    mov al, 9                   ; BPB can supply one - see .nofloppy below
+    mov [disk_spt], ax
     push bx
     mov bl, dl
     call dsk_vol_row_x
@@ -2954,9 +2969,11 @@ disk_mount_x:
                                 ; a driver registering a volume, inst_vol_enter
                                 ; on every package file call - did not want one
 .quiet:                         ; ...and .fsmount's copy of this arrives here
-    mov word [disk_nfiles], 0
-    mov byte [dsk_lstale], 1
-    mov byte [dsk_mntok], 1     ; the volume IS validated - writes are legal
+    xor ax, ax                  ; three stores through the accumulator, which
+    mov [disk_nfiles], ax       ; kretc_es restores: 12 bytes against 16
+    inc ax
+    mov [dsk_lstale], al
+    mov [dsk_mntok], al         ; the volume IS validated - writes are legal
     clc
     jmp .out
 .listing:
@@ -3344,10 +3361,12 @@ disk_mount_x:
 %endif                          ; KD_BUILD
 
 .fail:
-    mov word [disk_spt], 9      ; leave sane fallback geometry behind
-    mov word [disk_heads], 2
-    mov word [dsk_cwd], 0       ; a failed chdir must not leave the volume
-                                ; pointed inside a directory nothing listed
+    xor ax, ax                  ; ...and the same here: 15 bytes against 18
+    mov [dsk_cwd], ax           ; a failed chdir must not leave the volume
+    mov al, 2                   ; pointed inside a directory nothing listed
+    mov [disk_heads], ax        ; ...and sane fallback geometry is left behind
+    mov al, 9
+    mov [disk_spt], ax
     stc
 .out:
     jmp kretc_es

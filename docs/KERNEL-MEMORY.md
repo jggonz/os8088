@@ -147,6 +147,7 @@ whole step if the low rung is full. The rung is a fact about where the next
 $ python3 tools/kernsize.py                 # kern_big, against the blessed baseline
 $ python3 tools/kernsize.py -DKERN_SMALL    # kern_small
 $ python3 tools/kernsize.py --modules       # the per-module attribution
+$ python3 tools/kernsize.py --modules -DKERN_SMALL --build build/smallk
 $ python3 tools/kernsize.py --json          # the raw figures
 $ python3 tools/kernsize.py --bless         # rewrite the baseline and the tables in this file
 ```
@@ -206,6 +207,20 @@ Three things about the tool:
   passed through, and `--bless` refuses it — a baseline should describe a
   binary that exists on a disk. The module and theme tables are the default
   variant's alone.
+- **A rung crossed on one variant is not crossed on the other, and this tool
+  prints ONE variant a run.** `make` prints `kern_big`'s lines and `make
+  small` prints `kern_small`'s; nothing prints both, so *"it fits under the
+  cold rung"* is a claim about whichever kernel was on the screen. The icon
+  store's shed repair fit under `kern_big`'s with 6 bytes to spare and left
+  `kern_small` **35 bytes over its own** — 512 bytes of every 128KB machine's
+  RAM — and that went a whole merge before anybody typed the second command.
+  **And the SECTION has to be the right one before a saving counts against a
+  rung.** The byte hunt that bought it back found its largest single win,
+  **24 bytes**, in `files_init` — which is in `.ovl`, the boot overlay the
+  machine reuses once it is up, so it paid that rung exactly nothing and the
+  rung moved only on the 22 bytes that were really in `.cold`. The section a
+  line is in is whichever `section` directive precedes it, and `--modules`
+  above attributes `.cold` per module for either variant.
 
 **Bless in the same commit as the change**, and paste the report into the
 commit message. `tests/unit/t_kernbudget.py` fails the fast tier when the
