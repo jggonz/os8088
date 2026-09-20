@@ -7290,6 +7290,23 @@ SOAK = [
     Row("rdup", "soak", py("tests/rdup.py"), 60.0,
         "SPEC.md 62.9.11.3: the Ram Disk page acts on the RELEASE.",
         needs=("marty",), serial=True),
+    Row("rdmount", "soak", py("tests/rdmount.py"), 40.0,
+        "SPEC.md 22.6.3.1: MOUNTING the RAM disk must not take the machine "
+        "with it. `disk_mount` decides twice whether a mount is loud and the "
+        "redirected path's copy of the gate tested `[dsk_quiet]` and not "
+        "`[dsk_dseg]`, so a driver registering a volume - which supplies no "
+        "listing store, as 22.6.3's own table says - ran `.scan_done` with "
+        "ES = 0 and blanked 64 bytes of icon index over interrupt vectors "
+        "0..15. WHAT MAKES IT A ROW OF ITS OWN is that the mount SUCCEEDS: "
+        "`rd_mount` returns CF=0 and the page repaints `Mounted D: 64K of "
+        "64K` correctly, and the machine dies at the next TICK - so a row "
+        "ending on a screenshot cannot see it, and `rdup` clicks this exact "
+        "button and passes either way. The assertion is `[ticks]` still "
+        "moving, with the IVT compared byte for byte beside it to say what "
+        "was destroyed. It opens NO Disk window first, which is the whole "
+        "condition: a window aims `[dsk_dseg]` at its own cache, which is "
+        "why `rdmove` clicks Mount and stays green. Measured at 37s",
+        needs=("marty",), serial=True),
     Row("toastbar", "soak", py("tests/toastbar.py"), 30.0,
         "A TOAST OF THE MAXIMUM WIDTH REACHES THE BAR WHOLE, AND TOUCHES NO "
         "MENU (SPEC.md 59.10.2). tests/unit/t_toast.py checks every fixed "
