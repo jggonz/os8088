@@ -1233,13 +1233,28 @@ def main():
         # with the server thread alive means the guest never asked, so
         # neither the loader nor the host is in it.
         if not settled and os.environ.get("WIRE_SOCKDUMP"):
-            # **`WIRE_SOCKDUMP=1` IS THE INSTRUMENT FOR THE OPEN BUG**
-            # (docs/plans/HANDOFF-WIRE-CONNECT.md), and it is kept rather than
-            # thrown away because taking these readings was most of the work:
+            # **`WIRE_SOCKDUMP=1` IS WHY THIS ROW'S LAST FAILURE WAS FOUND**,
+            # and it is kept because taking the readings was most of the work:
             # the socket the Wire is waiting on out of ETHER.DRV's own bss,
             # the stack's four state bytes, the kernel's task table and the
-            # gfx lock. It runs only on a failure and only when asked, so the
-            # green path pays nothing; `ether_syms` refuses a map that is not
+            # gfx lock, all at the moment of the timeout.
+            #
+            # What it settled, when this hung for 903 seconds in WS_WAIT: the
+            # SYN WAS on the wire (SKO_TS = TS_SYNSENT to 10.0.2.2:8092 with
+            # its connect deadline armed and a million ticks past), the stack
+            # was innocent (eth_busy 00, eth_raw 00, eth_up 1, dns_sk FF,
+            # inst_parkreq 00, gfx_lock free) - and the Wire's worker was in
+            # the task table as READY and still never reached `wr_nstep`,
+            # which is a machine whose SCHEDULER has stopped. It had: mounting
+            # the RAM disk this very step mounts was writing 0xFF over
+            # interrupt vectors 0..15, and 8..15 are IRQ0..IRQ7.
+            #
+            # The lesson worth keeping is the shape. Every reading above is a
+            # byte of guest state; the diagnosis before them was inferred, and
+            # named `tcp_syn`, which had run correctly all along.
+            #
+            # It runs only on a failure and only when asked, so the green path
+            # pays nothing; `ether_syms` refuses a map that is not
             # byte-for-byte build/ether.bin, so every offset it names is this
             # driver's.
             try:
