@@ -7334,7 +7334,7 @@ SOAK = [
         "ASSOC.DAT, and does no I/O, so a `.TXT` on the RAM disk had the same "
         "claim on a Note Pad page as a `.TXT` on a floppy and got the generic "
         "diamond. Reported as `RAM disks almost never show an assoc icon, "
-        "even when the cache is there and has it populated`. It reads "
+        "even when the cache is there and has it populated`. ITS FOURTH CHECK IS SPEC.md 62.9.2.2: a PACKAGE on a LOCAL redirected volume is HARVESTED now - `DSV_CAPS` bit `FSCAP_LOCAL` says a driver's FSV_READAT is a memory read, so the mount peeks DSK_PEEK bytes of the header through the driver instead of taking the cache-only pass, and MINES.O88 gets its own icon off a volume no store has ever been warmed from. VERIFIED RED for that one by clearing the bit alone - 0xff, with the other three still green. It reads "
         "REFERENCE BYTES out of the acting window's cache rather than judging "
         "pixels (tests/icoshed.py's instrument): a composed page and a "
         "generic diamond are both ink in a 16x16 cell, and what changed is "

@@ -84142,6 +84142,101 @@ evidence that a real `FSV_LIST` happened.
 *A verification that cannot say which object it examined, and cannot show that
 the code under test executed, is not a verification.*
 
+##### 62.9.2.2 …and a volume whose reads are MEMORY takes the real harvest
+
+§62.9.2.1 is cache-only because `DRVC_FILE` has **two members with nothing in
+common but an interface**. One is on the other end of a parallel cable, where
+a header peek per package is real traffic and an `ASSOC.DAT` fetch is the one
+thing the pass exists to avoid. The other is the **RAM disk**, where that peek
+is a `rep movsw` between two heap claims — or one `OSAPI_XMEM_COPY` — and is
+**faster than the `int 13h` the floppy beside it is allowed**. So the pass was
+refusing, on the cable's grounds, a read its other member serves better than
+the medium the rule was written to protect.
+
+`DSV_CAPS` is where a driver says which it is. The word is the sound class's
+and a `DRVC_FILE` driver has never used it, so the bit costs **no table, no
+cell and no kernel byte of storage**:
+
+| | |
+|---|---|
+| **`FSCAP_LOCAL`** (bit 0) | *my `FSV_READAT` is a memory read* — no wire, no seek, no motor |
+| set by | `RAMDISK.DRV`, in `rd_svc` |
+| clear on | `NET.DRV`, which keeps §62.9.2.1's pass exactly as it was |
+
+**It is a claim about COST and not about the medium**, which is what makes it
+a driver's to make: the kernel cannot tell a heap claim from a cable by
+looking at a handle, and a future driver backed by something else fast — a
+second machine's RAM over a bus, an emulator's host folder — says so the same
+way.
+
+**What it buys is the HARVEST ITSELF, not a second copy of it.** The mount's
+pass A is one loop and only three of its instructions are FAT's: the entry's
+`@18` word, `dsk_clus2lba` and `dsk_rd1`. On a redirected volume `@18` is the
+driver's own opaque handle (§62.9.1) — `rd_stage` puts it there — which is
+exactly what `FSV_READAT` takes, so the branch is at the READ and the
+classification, the icon store, `assoc_note_app` and §54.6's declarations are
+the same instructions for both. A `LOCAL` volume joins the loop at `.harvloc`,
+which is **below `asc_use_x`**: the peek is free and re-keying the association
+cache to this volume is not — it reads an `ASSOC.DAT` a RAM disk almost never
+has and evicts the rows §62.9.2.1's lookups live on. The harvest fills the
+cache from the headers it is reading anyway.
+
+**The peek is `DSK_PEEK` = 128 bytes at offset 0, and the whole ask or
+nothing.** That is every byte the loop reads out of the buffer — the §20.2
+header at 0..31, the embedded icon at 32..95, the document glyph at
+`LD_H_GLYPH`..+15 — and `loader.inc` asserts the two stay in step, `disk.inc`
+being included first and unable to derive it. A short answer is REFUSED
+rather than used, and that is not fussiness: the buffer would still hold the
+PREVIOUS entry's header, which is a *valid* one, so a 40-byte file would take
+the icon of whatever package sorts above it. The FAT arm reads a whole sector
+and trusts the slack after EOF, but that slack is unrelated bytes the magic
+test throws out; this buffer is not that.
+
+**`kern_small` is out of it by construction** and pays nothing: it can load no
+driver at all (`OS88_DRIVERS` is `kern_big`'s), so no `DRVC_FILE` volume can
+exist there, `drv_svc` is one zeroed class' worth and reading `DRVC_FILE`'s
+would run off the end of it. Both halves are inside `%ifdef OS88_DRIVERS`, and
+a `kern_small` that somehow had such a volume keeps §62.9.2.1's pass.
+
+What the user sees is the difference between *"the RAM disk shows generic
+diamonds"* and *"the RAM disk looks like a disk"*: copy `MINES.O88` onto it
+from a floppy this session or any other, and the icon is there because the
+package is, not because something else warmed a cache first. §62.9.2.1's
+SESSION-STATE caveat still applies to everything this bit is not set on.
+##### 62.9.2.3 `kern_small` cannot have one at all, so it carries none of it
+
+The redirector's arms are gated `OS88_REDIR`, defined on `kern_big` alone, and
+that is not a trade between a feature and its bytes — it is the observation
+that **on a kernel with no loadable drivers a redirected volume cannot
+exist**. The chain is three links and every one of them is already in the
+tree:
+
+1. a volume row is stamped `DVK_FILE` only by `dsk_vol_add`;
+2. the only caller that can pass that kind is `osapi_vol_add`, behind
+   `osapi_vol_fence`;
+3. that fence walks the PUBLISHED CLASSES with `drv_cls_fp`, and on a build
+   without `OS88_DRIVERS` its entire body is `xor di, di / stc / ret`.
+
+No class is ever published, because nothing can attach. So `[dsk_vkind]` is
+`DVK_BIOS` for the life of that machine, every `cmp byte [dsk_vkind],
+DVK_FILE` is an answer known at assembly time, and every arm behind one is
+code the instruction pointer cannot reach. It is the same argument §96.44.9
+makes for `kern_dos` one link further forward — there the table has no non-BIOS
+rows; here nothing can write one.
+
+**It is a separate symbol from `OS88_DRIVERS`** for the reason `OS88_SNDCARD`
+is: the two are different claims. That one says *no `.DRV` can be loaded*,
+this one says *no volume can be a redirected one*. A fork that gave
+`kern_small` a built-in redirector — the parallel cable soldered in, the RAM
+disk resident — would turn exactly one of them on, and the sites say which
+they mean.
+
+**What it is worth is room rather than a rung**, which is the honest way to
+bank it: the 128KB machine's `.cold` rung had 11 bytes left in it, and the
+mount's two redirected blocks alone are **115**. That does not uncross
+anything today; it makes the next thing that wants a rung cheaper, and it
+stops a build paying for a feature it is unable to use.
+
 #### 62.9.3 The branch sites, and the order to build them in
 
 Each is a test of `DV_KIND` at the top of a routine that already exists, so
