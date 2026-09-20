@@ -971,6 +971,49 @@ fmv_inext:
     ret
 
 ; -----------------------------------------------------------------------------
+; fmv_here - WHERE THIS WINDOW STANDS, in fmv_load's own convention
+; in:  DI = a window's state block
+; out: AL = the drive, DX = the directory's first cluster
+; clobbers: AL and DX (the outputs) - the flags are NOT touched, a `mov` of
+;           memory into a register setting none and a `call` preserving them
+;
+; Six bytes that were written out eight times in this file and `assoc.inc`,
+; always as this exact pair and always straight into `fmv_load`, `fm_repath`
+; or `dsk_chdir`. It is a routine because those are the two halves of ONE
+; fact - a folder is a volume AND a cluster, and SPEC.md 19.2's root is
+; cluster 0 on whichever drive - so a site that reads one without the other
+; is a bug, and a shared reader is where that gets noticed.
+; -----------------------------------------------------------------------------
+fmv_here:
+    mov al, [di+FS_DRV]
+    mov dx, [di+FS_CWD]
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_owed - THE FRONT WINDOW IS OWED A LOOK, and say so once (SPEC.md 22.8)
+; out: nothing (every register and the flags preserved)
+;
+; The other half of a debt. Marking `FS_DIRTY` says WHAT a window owes; these
+; two bytes are how it gets PAID without waiting for a click that never comes
+; - the window just marked may be the one under the pointer, so `[fm_fchk]`
+; puts the check on the UI task's next pass and `[ui_post]` is SPEC.md 13.13's
+; once-only wake.
+;
+; Four sites wrote the pair out longhand - `fmv_mark`, `fmv_icostale`,
+; `fm_fmt_home` and, on kern_small, `fmv_demote`. They are ONE fact and
+; splitting them is the bug: a mark with no wake is a stale window that heals
+; only on the next click, which is the failure 22.8 exists about.
+;
+; `menu_activate` is deliberately NOT converted: it is `.text`, and a near
+; call from there into `.cold` is a jump into the wrong segment (SPEC.md 2.6)
+; that assembles perfectly and runs somewhere else.
+; -----------------------------------------------------------------------------
+fm_owed:
+    mov byte [fm_fchk], 1
+    mov byte [ui_post], 1
+    ret
+
+; -----------------------------------------------------------------------------
 fmv_winof:
     push si
     call fmv_ifirst
@@ -1223,8 +1266,7 @@ fmv_demote:
     ; not wait for a click - the shed window may be the FRONT one, where a
     ; focus change is a click that never comes (SPEC.md 22.8).
     mov byte [si+FS_DIRTY], FSD_CACHE
-    mov byte [fm_fchk], 1
-    mov byte [ui_post], 1
+    call fm_owed
 
     cmp [fm_vseg], dx
     jne .out
@@ -1239,7 +1281,9 @@ fmv_demote:
 
 ; -----------------------------------------------------------------------------
 ; fmv_icostale - the shed took the icon STORE, so every reference dangles
-; out: nothing (all registers and the flags preserved)
+; out: nothing; AX, CX, SI and the flags are spent (`ico_demote`'s header has
+;      why: `mem_pg_forget` has already banked exactly those). DI, which it
+;      has not, is banked here
 ;
 ; SPEC.md 25.9.5, and `fmv_demote` above is its shape. The difference is WHOSE
 ; claim went: that one is a single window's listing and this is the ONE store
@@ -1257,34 +1301,47 @@ fmv_demote:
 ; and a re-list settles the references on its way past.
 ; -----------------------------------------------------------------------------
 fmv_icostale:
-    pushf
-    push ax
-    push cx
-    push di
-    mov di, fm_pool
-    mov cx, FM_MAXWIN
-.slot:
-    cmp word [di+FS_VSEG], 0    ; no cache of its own: nothing here holds a
-    je .next                    ; reference byte, so nothing is owed
+    push di                     ; **DI ALONE.** The contract above is the one
+                                ; `mem_pg_forget` needs and it already holds:
+                                ; the purge protocol brackets every demoter
+                                ; arm with its own `pushf` and `push ax / bx /
+                                ; cx / si`, so re-banking the flags, CX or SI
+                                ; here would restore values its `.out` is
+                                ; about to restore again. DI is the one this
+                                ; walk spends that the caller did not bank
+    call fmv_ifirst             ; **THE INSTANCE WALK AND NOT A `fm_pool`
+    jc .done                    ; STRIDE**, which is `fmv_mark`'s manner four
+.scan:                          ; routines up and is both smaller and truer:
+    mov di, [si+I_SPTR]         ; the pool is FM_MAXWIN blocks whether or not
+                                ; a window is standing on one, so a stride
+                                ; walk has to ask `FS_VSEG != 0` to tell a
+                                ; live slot from a free one - and that answer
+                                ; is not the question, because a live window
+                                ; whose claim was refused reads 0 there too.
+                                ; fmv_ifirst/fmv_inext answer the question
+                                ; itself: a LIVE instance of KIND_FILES
     cmp byte [di+FS_DIRTY], 0
     jne .next                   ; already owed something at least as strong
     mov byte [di+FS_DIRTY], FSD_ICONS
 .next:
-    add di, FS_SIZE
-    loop .slot
-    mov byte [fm_fchk], 1       ; ...and the front window is where a focus
-    mov byte [ui_post], 1       ; change is a click that never comes (22.8)
+    call fmv_inext
+    jnc .scan
+.done:
+    call fm_owed                ; ...and the front window is where a focus
+                                ; change is a click that never comes (22.8)
     pop di
-    pop cx
-    pop ax
-    popf
     ret
 
 ; -----------------------------------------------------------------------------
 ; fmv_icorefs - re-resolve THIS window's icon references (SPEC.md 25.9.5)
 ; in:  DI = the acting window's state block
 ; out: CF = 0 = done; CF = 1 = could not, and the caller must re-list instead
-; clobbers: flags
+; clobbers: AX, CX, DX, SI and the flags - `fm_focus_x` banks all five at its
+;           head and re-reads the drive and the cluster off the window record
+;           on the `.relist` path a refusal here falls into, so restoring them
+;           would be bytes spent on values nothing reads. BX and BP are banked:
+;           BX is the window handle `.drawn` repaints through and BP belongs to
+;           whoever far-called `fm_focus_x`
 ;
 ; THE REPAIR AFTER A SHED, and what it is NOT is the point: the window's
 ; entries never went stale, only the row numbers beside them, so this re-scans
@@ -1303,10 +1360,18 @@ fmv_icostale:
 ; comment.
 ; -----------------------------------------------------------------------------
 fmv_icorefs:
-    push ax
-    push bx
-    push dx
-    push bp
+    push bx                     ; **ONLY BX AND BP**, because the one caller
+    push bp                     ; banks the rest: `fm_focus_x` pushes AX, CX,
+                                ; DX, SI and DI at its head and re-reads the
+                                ; drive and the cluster out of the window
+                                ; record on the `.relist` path a refusal here
+                                ; falls into - so preserving AX, DX and SI
+                                ; again would be four bytes to restore values
+                                ; nothing reads. BX is the window handle
+                                ; `.drawn` repaints through and is an ARGUMENT
+                                ; rather than a local, and BP is the entry
+                                ; count the two passes take; neither is the
+                                ; caller's to have saved
     cmp word [di+FS_VSEG], 0
     je .no                      ; no cache of its own: it holds no reference
     call fmv_iofs               ; ...AND IT WAS FILLED AT TODAY'S SHAPE
@@ -1347,9 +1412,7 @@ fmv_icorefs:
     stc
 .out:
     pop bp
-    pop dx
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1590,8 +1653,7 @@ fmv_sync_x:
     ; the debt happened to be raised.
     jmp short .out
 .load:
-    mov al, [di+FS_DRV]
-    mov dx, [di+FS_CWD]
+    call fmv_here
     mov bx, [di+FS_SEL]
     push bx
     mov bx, [di+FS_SCRL]
@@ -1671,13 +1733,12 @@ fmv_mark:
                                 ; one moment the operation is stopped and
                                 ; waiting for the user to read the line it
                                 ; is asking about
-    mov byte [fm_fchk], 1       ; and otherwise the UI task owes the FRONT
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
-                                ; window a look: the window a package just
-                                ; wrote into may be the one under the
-                                ; pointer, where waiting for a focus change
-                                ; would mean waiting for a click that never
-                                ; comes
+    call fm_owed                ; and otherwise the UI task owes the FRONT
+                                ; window a look, and says so once (13.13):
+                                ; the window a package just wrote into may be
+                                ; the one under the pointer, where waiting for
+                                ; a focus change would mean waiting for a
+                                ; click that never comes
 .next:
     call fmv_inext
     jnc .scan
@@ -1797,8 +1858,8 @@ fm_focus_x:
     jnc .drawn                  ; ASSOC.DAT read; a refusal falls through to
                                 ; the re-list, which settles them on its way
 .relist:
-    mov al, [di+FS_DRV]         ; it is not, so re-list where we stand -
-    mov dx, [di+FS_CWD]         ; exactly what Refresh costs (SPEC.md 22)
+    call fmv_here               ; it is not, so re-list where we stand -
+                                ; exactly what Refresh costs (SPEC.md 22)
     call fmv_load
 .drawn:
     cmp ch, 0
@@ -1858,8 +1919,7 @@ fmv_bcast:
     or di, di
     jz .done                    ; no acting window: nothing wrote, and there
                                 ; is nothing to hand anybody
-    mov al, [di+FS_DRV]
-    mov dx, [di+FS_CWD]
+    call fmv_here
     call fmv_load               ; ...into ITS store, which is the source below
     call fmv_ifirst
     jc .done
@@ -4079,8 +4139,7 @@ fm_reload:
     push dx
     push di
     mov di, [fm_vp]
-    mov al, [di+FS_DRV]
-    mov dx, [di+FS_CWD]
+    call fmv_here
     call fmv_load
     pop di
     pop dx
@@ -4880,10 +4939,9 @@ fm_fmt_home:
     mov word [di+FS_SEL], 0xFFFF    ; indices into a listing that no longer
     mov word [di+FS_SCRL], 0        ; describes anything
     mov byte [di+FS_DIRTY], FSD_CACHE
-    mov byte [fm_fchk], 1       ; ...and it may be the FRONT window, where
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    call fm_owed                ; ...and it may be the FRONT window, where
                                 ; waiting for a focus change means waiting for
-                                ; a click that never comes (22.8)
+                                ; a click that never comes (22.8, 13.13)
     push cx
     push si
     mov bx, [si+I_WIN]
@@ -5003,8 +5061,7 @@ fm_clone_go:
     ; geometry. It may or may not mount, and both are cloneable: the whole
     ; point of a sector copy is that the file system is never consulted.
     mov di, [fm_vp]
-    mov al, [di+FS_DRV]
-    mov dx, [di+FS_CWD]
+    call fmv_here
     call fmv_load
     mov di, [fm_vp]
     mov al, [di+FS_DRV]
@@ -5442,8 +5499,7 @@ fm_selfold:
 
 fm_c_newwin:                    ; Nav > New Window - a second view of here
     mov di, [fm_vp]
-    mov al, [di+FS_DRV]
-    mov dx, [di+FS_CWD]
+    call fmv_here
     xor si, si                  ; same folder, so the same derived title
     jmp short fm_newwin
 
@@ -6720,8 +6776,7 @@ fmv_reload_all:
     jc .done
 .scan:
     mov di, [si+I_SPTR]
-    mov al, [di+FS_DRV]
-    mov dx, [di+FS_CWD]
+    call fmv_here
     call fmv_load               ; resets FS_SEL/FS_SCRL, which is honest:
     mov byte [di+FS_DIRTY], 0   ; every index into the old listing is
                                 ; meaningless now. The refresh debt (22.8)

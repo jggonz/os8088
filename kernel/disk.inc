@@ -6823,10 +6823,13 @@ dsk_ncopy:
 ; listing into whatever store `dsk_dest_x` was given, so neither caller names
 ; a segment and the walk is the same instruction either way.
 ; -----------------------------------------------------------------------------
-dsk_icopass:
-    push ax
-    push dx
-    push si
+dsk_icopass:                    ; NO PROLOGUE, and the header above is where
+                                ; that was always written down: AX, DX and SI
+                                ; are SPENT. Both callers are already past
+                                ; needing them - the mount's `.fsicons` arm
+                                ; goes straight to `.done`, which reads BP
+                                ; alone, and `fm_focus_x` banks AX, CX, DX and
+                                ; SI itself before it ever reaches the repair
     xor dx, dx
 .ip:
     cmp dx, bp
@@ -6837,9 +6840,6 @@ dsk_icopass:
     inc dx
     jmp short .ip
 .ip_done:
-    pop si
-    pop dx
-    pop ax
     ret
 
 %ifdef OS88_ASSOC
@@ -6853,11 +6853,10 @@ dsk_icopass:
 ; these again too, and a document body costs no I/O, so the two passes are
 ; exactly what a repair may run and a re-list is exactly what it need not.
 ; -----------------------------------------------------------------------------
-dsk_docpass:
-    push ax
-    push bx
-    push dx
-    push si
+dsk_docpass:                    ; `dsk_icopass`'s reason for having no
+                                ; prologue, one register wider: the header
+                                ; says AX, BX, DX and SI are spent and no
+                                ; caller wants them back
     ; --- 4b. document icons (SPEC.md 54.3) ------------------------------
     ; A SECOND pass, and the order is the whole reason it is one: pass A is
     ; what teaches assoc_note_app where each program is and what it looks
@@ -6899,10 +6898,6 @@ dsk_docpass:
     inc dx
     jmp .dp
 .dp_done:
-    pop si
-    pop dx
-    pop bx
-    pop ax
     ret
 %endif                          ; OS88_ASSOC
 %endif                          ; DSK_WANT_ICONS
@@ -7218,7 +7213,11 @@ ico_need:
 
 ; -----------------------------------------------------------------------------
 ; ico_demote - the shed took the machine-wide icon store (SPEC.md 25.9.5)
-; out: nothing (all registers and the flags preserved)
+; out: nothing; DI is spent and so are the flags. **THAT IS THE CALLER'S
+;      CONTRACT AND NOT A RELAXATION OF IT**: the only way in is
+;      `mem_pg_forget`'s `.ico` arm, and that routine brackets every demoter
+;      arm with its own `pushf` and `push ax / bx / cx / si` - so banking any
+;      of those again here restores values its `.out` restores a second time
 ;
 ; `mem_pg_forget`'s `.ico` arm, `dsk_fatw_demote`'s twin and `fmv_demote`'s:
 ; this claim has MORE NAMING WORDS THAN THE PROTOCOL CARRIES, so the holder
@@ -7240,14 +7239,16 @@ ico_need:
 ; holds row numbers into what just went, which is `fmv_icostale`'s business.
 ; -----------------------------------------------------------------------------
 ico_demote:
-    pushf
-    push ax
-    mov word [ico_seg], 0
-    mov byte [ico_n], 0
-    call fmv_icostale
-    pop ax
-    popf
-    ret
+    mov word [ico_seg], 0       ; NEITHER A FRAME NOR A `pushf` HERE - see the
+    mov byte [ico_n], 0         ; header: `mem_pg_forget` has banked the lot
+    jmp fmv_icostale            ; already. And `fmv_icostale` ENDS IN A `ret`
+                                ; whose caller is this routine's caller, so it
+                                ; IS this routine's epilogue and the tail jump
+                                ; is the whole of it. Both are `.cold`, so the
+                                ; jump is near (SPEC.md 2.6); `fmv_icostale`
+                                ; is a plain callable routine and not a
+                                ; continuation, which is what SPEC.md
+                                ; 22.3.0.1 rule 3 makes the difference about
 
 ; -----------------------------------------------------------------------------
 ; ico_find - which row holds ico_keyb's key? (module internal)

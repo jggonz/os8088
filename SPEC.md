@@ -42064,6 +42064,16 @@ CF = 1 when it re-listed, and takes AL to say who is going to draw:
   the pinstripes to the window underneath (§11.91, `menu_check`) without ever
   calling `wm_front`.
 
+**`fm_owed` is the wake, and it is one routine because the mark and the wake
+are one fact.** Setting `FS_DIRTY` says WHAT a window owes; `[fm_fchk]` and
+`[ui_post]` are how it gets paid without waiting for a click that never
+comes. Four sites wrote the pair out longhand — `fmv_mark`, `fmv_icostale`
+(§25.9.5), `fm_fmt_home` and, on `kern_small`, `fmv_demote` — and a mark with
+no wake is exactly the stale window this section is about, so they are one
+call now. `menu_activate` is deliberately NOT converted: it is `.text`, and a
+near call from there into `.cold` is a jump into the wrong segment (§2.6)
+that assembles perfectly and runs somewhere else.
+
 The mount is sometimes skipped. `fmv_take` — the memory half of a re-list,
 factored out of `fmv_bcast` so the two cannot disagree about what a fresh
 cache means — is taken when the globals already are this window's folder,
@@ -45236,9 +45246,18 @@ clears them itself.
 
 **And the reference bytes are the other half.** Every listing in the machine
 holds row numbers into the store that just went. `fmv_icostale` marks every
-Disk window that has a cache **`FSD_ICONS`** and raises `[fm_fchk]`, which is
-`fmv_demote`'s shape one claim along — the front window is where a focus
-change is a click that never comes (§22.8).
+live Disk window **`FSD_ICONS`** and calls `fm_owed`, which is `fmv_demote`'s
+shape one claim along — the front window is where a focus change is a click
+that never comes (§22.8).
+
+**It walks `fmv_ifirst`/`fmv_inext` and not an `fm_pool` stride**, which is
+`fmv_mark`'s manner and is both smaller and truer. A stride walk has to ask
+`FS_VSEG != 0` to tell a live slot from a free one, and **that answer is not
+the question**: a live window whose listing claim was refused reads 0 there
+too, and skipping it leaves the one window that most needs a re-list owing
+nothing. The instance walk answers the question itself — a live record of
+`KIND_FILES` — and `fmv_icorefs` is where a missing claim is then handled, by
+refusing, which falls through to the re-list that re-claims it.
 
 **`FSD_ICONS` IS ITS OWN DEBT AND THAT IS THE DESIGN.** Neither existing value
 fits: `FSD_PIXELS` would redraw the same dangling references, and `FSD_CACHE`
@@ -45254,6 +45273,20 @@ them.
 already back. A re-list is that plus the root directory — 4 sectors at 360KB,
 9 at 1.44MB — plus the sort, plus a first-sector read for every package
 `ASSOC.DAT` does not cover.
+
+**NONE OF THE FOUR ROUTINES BANKS A REGISTER ITS CALLER ALREADY HAS**, and
+that is a contract rather than a shortcut. There is exactly one way into each:
+`mem_pg_forget` brackets every demoter arm with its own `pushf` and
+`push ax / bx / cx / si`, so `ico_demote` and `fmv_icostale` bank DI alone and
+`ico_demote` reaches `fmv_icostale` by a tail `jmp` — a `mov` of an immediate
+to memory touches no register and no flag, so that routine *is* its epilogue.
+`fm_focus_x` banks AX, CX, DX, SI and DI at its head and re-reads the drive
+and the cluster off the window record on the `.relist` path a refusal falls
+into, so `fmv_icorefs` banks BX and BP — the window handle `.drawn` repaints
+through, and the frame of whoever far-called it — and `dsk_icopass` and
+`dsk_docpass` bank nothing at all, which is what their headers said from the
+first commit while their bodies did otherwise. The whole of §25.9.5 is
+**139 bytes of `.cold`** and the cold rung is not crossed.
 
 **THE ORDER INSIDE `fmv_icorefs` IS THE WHOLE OF THE CARE.** `[dsk_dseg]` may
 not be live across anything that can claim, because a claim compacts on its
