@@ -24,6 +24,10 @@
 ; (docs/DOS-DEBUGGING.md's rule), which is what makes every line above a
 ; comparison rather than an assertion about ourselves.
 ;
+; `-DKDHOLD` adds a fifth INT 21h - AH=08h - so the screen stands until a key
+; arrives.  Step 5 below says why that is a define rather than the default and
+; which row needs which arm.
+;
 ; NOTHING HERE IS THIRD-PARTY: it is ours, MIT with the rest of the tree.
 ; =============================================================================
     cpu 8086
@@ -114,6 +118,31 @@ start:
     mov dx, s_ok
     mov ah, 0x09
     int 0x21
+%ifdef KDHOLD
+    ; --- 5: HOLD THE SCREEN, SO A HARNESS CAN READ IT ----------------------
+    ; tests/doscom/hello.asm's step 5, and it is here for the same sentence:
+    ; a program that prints and exits leaves its output on the glass for
+    ; microseconds, which no harness can catch.
+    ;
+    ; **IT USED TO BE kern_dos's JOB AND SPEC.md 96.49 TOOK IT AWAY.**
+    ; `kd_leave` printed `Press any key to restart` and waited, so the last
+    ; screen a DOS program drew stood there until the harness read it. With a
+    ; fixed disk there is now no reboot at all: `kd_resume` puts the session
+    ; back, and it stages its stub IN THE TEXT FRAMEBUFFER (SPEC.md 87.5) - so
+    ; the page this program wrote is gone microseconds after `AH=4Ch`, and a
+    ; poll can only ever find the desktop that replaced it. The wait moves to
+    ; the one place that is true on both routes: the program.
+    ;
+    ; A DEFINE and not the default, because `tests/kdos.py` boots `kern_dos`
+    ; off a floppy with NO fixed disk to come back to - so `kd_leave`'s own
+    ; `Press any key` still holds ITS screen, and a second wait there would be
+    ; a program that never exits for a harness that types nothing.
+    mov ah, 0x08                ; ...and AH=08h rather than AH=07h or int 16h:
+    int 0x21                    ; every line this program draws is an INT 21h
+                                ; that was serviced, which is the whole point
+                                ; of the file, and it is what a real DOS
+                                ; program does
+%endif
     mov ax, 0x4C00 | EXITC
     int 0x21
 

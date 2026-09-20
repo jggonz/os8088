@@ -2858,7 +2858,7 @@ SOAK = [
         "that only looks at one axis.",
         needs=("marty",), serial=True,
         wants=("build/dosmou360.img",)),
-    Row("kdhdd", "soak", py("tests/kdhdd.py"), 150.0,
+    Row("kdhdd", "soak", py("tests/kdhdd.py"), 25.0,
         "THE FIXED DISK IS A VOLUME UNDER kern_dos, AND A PROGRAM READS ITS "
         "OWN DRIVE (SPEC.md 96.46). Two defects with one instrument: the "
         "fixture puts a DIFFERENT sixteen-byte marker in KDDATA.TXT on each "
@@ -2879,6 +2879,18 @@ SOAK = [
         "text after the full budget, and a screen that stopped changing "
         "because nothing is running looks exactly like one that has not got "
         "there yet; os88marty.until tells them apart and names the CS:IP. "
+        "AND THAT PICTURE WAS THE ANSWER: the desktop really was back. "
+        "KDHELLO.COM printed every line this row reads and then EXITED, and "
+        "SPEC.md 96.49's live resume took away the `Press any key to "
+        "restart` that used to stand behind it - kd_resume stages its stub "
+        "IN the text framebuffer (87.5), so the evidence was gone "
+        "microseconds later and every poll after that found the desktop. "
+        "Nothing was stuck and nothing was contended. The program holds its "
+        "own screen now (`-DKDHOLD`, tests/doscom/hello.asm's step 5) and "
+        "the caller types the key, so both arms read a page that STANDS - "
+        "which also made the WINDOWED marker readable, and it is printed "
+        "beside the kern_dos one. 21 seconds solo, measured, where this "
+        "declared 150. "
         "Pressing Run is CONFIRMED too, by the text screen CHANGING - "
         "`anything on the text screen` is already true of the desktop's "
         "B800 garbage - so a press that did not take reports in 13 seconds "
@@ -6426,9 +6438,25 @@ SOAK = [
         "SPEC.md 22.18: the Disk window's two header buttons fire on the"
         "RELEASE.",
         needs=("marty",), serial=True),
-    Row("fsxdisp", "soak", py("tests/fsxdisp.py", "--dock"), 90.0,
-        "Does an fsx bracket take ONE display and dark the others? (SPEC.md"
-        "39.18)",
+    Row("fsxdisp", "soak", py("tests/fsxdisp.py", "--dock"), 60.0,
+        "Does an fsx bracket take ONE display and dark the others? (SPEC.md "
+        "39.18) BOTH LEGS USED TO ASK THE CGA A QUESTION IT CANNOT ANSWER. "
+        "`dark` was `frames == 0 OR nothing lit`, and a blanked CGA here "
+        "reads ~840 of 128,000 rather than 0 - one run the renderer keeps "
+        "through the gate - so the row went red against a card the kernel "
+        "had darked exactly right: inside the bracket, and after a "
+        "HOST-driven `3D8h <- [vid_cgamode] & ~8` on a bare desktop, `fbuf` "
+        "came back PIXEL FOR PIXEL IDENTICAL. The figure is MEASURED in the "
+        "run now (`dark_lit`), so it cannot go stale again. And the "
+        "same-mode leg asserted `lit == lit` across the bracket, which is a "
+        "coin flip: four captures of ONE STILL DESKTOP a second apart, with "
+        "nothing running, read 43404/43404/43412/43412 and the two pairs "
+        "differ by 1,376 pixels in the same band. What replaces it is what "
+        "39.18.3 is actually about, read out of the guest - `[vid_ndisp]`, "
+        "2 in a same-mode bracket and 1 in a mode bracket - which is exact "
+        "on any renderer. VERIFIED TO FAIL three ways: un-blanking the "
+        "secondary from the host inside the bracket, and forcing either "
+        "ndisp reading to the other value.",
         needs=("marty",), serial=True,
         wants=("build/fsxtest360.img",)),
     Row("knobhd", "soak", py("tests/knobhd.py"), 180.0,

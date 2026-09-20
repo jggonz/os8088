@@ -57,6 +57,10 @@ PROG = "KDHELLO.COM"
 # prove nothing more (tests/kdos.py's own reason).
 MARK_C = "fixed-disk-C-yes"
 MARK_B = "floppy-B-notthis"
+DST_RAN = 2                      # apps/dos/dos.asm's, and dosmap has it as an
+                                 # equate - but the two waits below are the
+                                 # only readers and a constant here is one
+                                 # fewer thing to keep in step
 
 
 def fail(msg):
@@ -74,7 +78,17 @@ def fixture():
             fail("%s is missing - `make kdostest` builds the DOS pieces and "
                  "`make marty` the template" % p)
     prog = os.path.join(ROOT, "build", PROG)
-    subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-o", prog,
+    # **`-DKDHOLD`: THE PROGRAM HOLDS ITS OWN SCREEN** (SPEC.md 96.49). Both
+    # arms below read a marker off the text page, and on THIS machine - which
+    # has a fixed disk - nothing else keeps that page up: the windowed run is
+    # an fsx bracket that returns to the desktop the instant `AH=4Ch` lands
+    # (96.14), and the `kern_dos` run comes back through `kd_resume`, which
+    # stages its stub IN the text framebuffer (87.5). `kd_leave`'s old `Press
+    # any key to restart` used to hold it and there is no reboot to hold it
+    # for any more, so the wait moved into the program - exactly what
+    # `tests/doscom/hello.asm` step 5 does and for the same sentence.
+    subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-DKDHOLD",
+                           "-o", prog,
                            os.path.join(ROOT, "tests/dostrap/kdhello.asm")])
     # **THE FLOPPY'S COPY NEEDS THE REAL NAME ON DISK**: os88disk.py takes
     # `[DIR:]FILE` and has no rename, where os88hdd.py's `--file NAME=path`
@@ -123,6 +137,16 @@ def wait_text(m, want, secs, what):
     has stopped changing because nothing is running looks exactly like one
     that is running and has not got there yet. Only one of those two is worth
     investigating, and the old form could not tell them apart.
+
+    **AND THAT PICTURE WAS THE ANSWER ALL ALONG**: the desktop really was
+    back. `KDHELLO.COM` printed every line this row reads, and then exited -
+    and with SPEC.md 96.49's live resume there is no `Press any key to
+    restart` behind it any more, so `kd_resume` staged its stub over the text
+    page microseconds later (87.5) and every poll after that found the
+    desktop. Nothing was stuck and nothing was contended; the evidence was
+    gone before the first read. `-DKDHOLD` in `fixture` is the fix - the
+    program waits on `AH=08h` and the caller types the key - so both waits
+    below are now on a page that STANDS rather than on one being raced for.
     """
     def there(mm):
         rs = rows(mm)
@@ -141,6 +165,24 @@ def wait_text(m, want, secs, what):
              "%r" % (what, want, str(e).split("\n")[0][:300],
                      [r for r in rows(m) if r.strip()][:10]))
     return rows(m)
+
+
+def box_state(m):
+    """[dos_state], with the INSTANCE SEGMENT RESOLVED ON EVERY READ.
+
+    **A BANKED `pseg` IS A STALE ONE HERE, and it read as an intermittent.**
+    The DOS box declares its region movable (SPEC.md 66.6.1.1) and the
+    windowed launch this waits on CLAIMS THE ARENA - so `mem_claim` may
+    compact and move the region while the wait is running. A base taken
+    before `ui.path` returned then names whatever moved into that segment, and
+    the wait sits out its whole budget against a number that is nobody's. It
+    did exactly that once, and passed on the next run with nothing changed,
+    which is the shape every "contention" diagnosis in this suite has worn.
+
+    Resolving each time costs one read of the window table.
+    """
+    dm = dosmap.package()                   # cached after the first call
+    return m.read((dosmap.instance(m) << 4) + dm["dos_state"], 1)[0]
 
 
 def marker(rs):
@@ -175,7 +217,11 @@ def arm3_run(m, mo):
     here is to read the SCREEN and leave the card alone.
     """
     dm = dosmap.package()
-    pseg = dosmap.instance(m)
+    pseg = dosmap.instance(m)   # ...RESOLVED HERE, for box_state's reason: a
+                                # windowed run has just claimed the arena and
+                                # the box's region is movable, so a segment
+                                # banked before it is a segment the compaction
+                                # may have moved
     m.write((pseg << 4) + dm["dos_keepc"], bytes([1, 0]))
     pt = dosmap.centre(m, pseg, dm, "dos_rrect")
     # THE SCREEN AS IT WAS, because "anything on the text screen" is already
@@ -215,13 +261,26 @@ def main():
         # RETURNS TO THE DESKTOP the moment it exits (SPEC.md 96.14), so the
         # text is up for as long as the program takes and no longer - a race
         # this row lost once against a build that could not have changed it.
-        # `kern_dos` holds its screen (`kd_leave` waits on a key), which is
-        # why the arm that matters is reliable. What the association buys
-        # here is the path box already filled, not an assertion.
-        M.settle(m)
-        got = marker(rows(m))
-        if got:
-            print("kdhdd: windowed off C:, the file says %r" % got)
+        # What the association buys here is the path box already filled, not
+        # an assertion.
+        #
+        # **IT IS NO LONGER A RACE, THOUGH, AND THAT IS WHY IT IS READ AT
+        # ALL**: with `-DKDHOLD` the program waits, so this reads the same
+        # marker the arm below reads, off the same disk, through the box's own
+        # back end instead of `kern_dos`'s. Printed rather than asserted,
+        # because a windowed defect is `tests/kdos.py`'s subject and a row
+        # that fails for somebody else's is a row nobody trusts - but having
+        # the two numbers side by side is what makes the one below mean
+        # something.
+        got = marker(wait_text(m, "KDHELLO done", 150, "the windowed run"))
+        print("kdhdd: windowed off C:, the file says %r" % got)
+        # ...AND THE KEY THAT RELEASES IT, which is not tidiness: the fsx
+        # bracket is still up and the box is still DST_READY, so a click on
+        # 'Run' underneath it would be a press the desktop never sees.
+        m.type_text("x")
+        M.until(m, lambda mm: box_state(mm) == DST_RAN,
+                "the windowed run to finish and the desktop to come back",
+                guest=60.0, poll=0.25)
 
         arm3_run(m, mo)
         rs = wait_text(m, "KDHELLO done", 300, "the run under kern_dos off C:")
@@ -242,6 +301,10 @@ def main():
         # reboot, and since SPEC.md 96.49 there is no reboot - `kd_leave`
         # puts the session back itself and that line never appears. What this
         # row is about is the DRIVE; `tests/kdreturn.py` owns the return.
+        #
+        # The key is what `-DKDHOLD`'s `AH=08h` is waiting on, so it is the
+        # thing that lets the run END - not a leftover from the reboot that
+        # used to be here.
         m.type_text("x")
 
     finally:
