@@ -3766,7 +3766,16 @@ SOAK = [
         wants=("build/kdos/DOS.O88", "build/DOSHELLO.COM", "build/kernel.sys",
                "build/boothd.bin", "build/mbr.bin", "build/hiber.drv",
                "build/ctrl.drv", "build/hdd.drv")),
-    Row("dosmem", "soak", py("tests/dosmem.py"), 55.0,
+    # 88.5 s MEASURED, alone on an idle box. It declared 55, which is
+    # `max(60, secs * 4 + 30)` = 250 - and the row TIMED OUT at exactly that
+    # in a four-lane run while passing solo. That is not contention being an
+    # excuse, it is the declaration being wrong: the row's cost is dominated
+    # by host-timed settles (docs/plans/SOAK-PARALLEL.md 11 prices settle at
+    # 48% of a row), so a shared box stretches its WALL CLOCK while the guest
+    # does the same work. A `secs` nobody measured is docs/WRITING-TESTS.md's
+    # first recurring failure and this is it: 90 gives a 390 s ceiling, which
+    # a loaded box cannot reach and a hung emulator still trips.
+    Row("dosmem", "soak", py("tests/dosmem.py"), 90.0,
         "THE MEMORY PAGE'S TWO ARMS (SPEC.md 96.36, 96.25, 47): the choice "
         "of how much of the machine a DOS program gets was a CHECK BOX, which "
         "holds two answers; it became three arms, and it is TWO since "
