@@ -131332,8 +131332,15 @@ count rather than a flag.
   never notice; a mouselook does. docs/plans/DOS-EXEC-PLAN.md §9.1 prices the
   kernel-side accumulator at about ten resident bytes and leaves it as a
   decision rather than taking it.
-- **Everything else answers AX=0**, which is `INT 33h`'s "not supported" and
-  what a real driver answers for a function it does not have.
+- **Everything else LEAVES `AX` ALONE — see §96.10.6, which supersedes this
+  bullet.** This used to read *"everything else answers AX=0, which is
+  `INT 33h`'s not supported"*, and that convention does not exist: there is no
+  carry flag and no error code, so a function documenting no output comes back
+  with the registers as they went in. Zero is not a refusal, it is an ANSWER,
+  and Microsoft Works asks that question — `mov ax, 8 / int 33h /
+  mov [98CAh], al` is its *mouse present* flag (docs/FIELD-NOTES.md 54). The
+  code was fixed and 96.10.6 written; this bullet was left saying the
+  opposite, and `tests/dosmouse.py` asserted it for as long as it stood.
 
 #### 96.10.3 The mouse histogram, because the ring cannot carry `INT 33h`
 

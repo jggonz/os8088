@@ -16,7 +16,7 @@ WHAT IT WOULD CATCH, and three of these were seen failing before it existed:
   - functions 5 and 6 answering a flat 0            -> "PRESS n=0" after a
     (no edge accumulation, SPEC.md 96.10.1)            click that happened
   - an unsupported function falling through         -> "FN1F ANSWERED"
-    into a handler instead of answering AX=0           printed by the program
+    into a handler instead of leaving AX alone         printed by the program
 
 It runs on MartyPC and must: the pointer is moved by driving a real serial
 mouse into a real 8088, which is the whole of what is being translated.
@@ -152,8 +152,10 @@ def run(machine):
 
         line = wait_line(m, "FN1F")
         if "FAILED" in line:
-            fail("INT 33h AX=1Fh answered instead of returning AX=0 "
-                 "(SPEC.md 96.10.2)")
+            fail("INT 33h AX=1Fh CHANGED AX - a function with no "
+                 "documented return value must leave it alone (SPEC.md "
+                 "96.10.6; 96.10.2's bullet used to say the opposite and "
+                 "this row asserted that)")
 
         rows = m.screen() or []
         print("dosmouse: the bracket's text screen:")
