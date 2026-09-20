@@ -21,6 +21,22 @@ an EXTENSION of a measurement, not a second one: a genuinely new measurement —
 a different box, a different `nasm`, a different question — is still a new
 file.
 
+**RE-MEASURED AGAIN 2026-09-20, on the same terms, and the 2026-09-18 figures
+are unedited in their turn.** The branch moved a further 29 commits and they
+were taken onto the PR branch, so a seventh point **G** is added and every
+table carries a column for it. The licence is the same one F used and it was
+paid the same way: **F was re-assembled from a clean worktree on 2026-09-20
+and reproduces to the byte on both kernels** (`.text` 49,982, `.bss` 6,106,
+`.cold` 40,669, `.lowbss` 7,966, `KERN_SIZE` 111,616 big; 37,303 / 4,193 /
+26,442 / 4,436 / 74,752 small), on `nasm` 2.16.01 and a four-core container
+again.
+
+**G is the point at which the headline of this file changes sign.** A→F was
+*"`kern_big` up two rungs, `kern_small` down two"*. A→G is **both kernels
+BELOW the squash** — `kern_big` by one rung and `kern_small` by three — and
+one commit is most of it. That is a different sentence from the one the PR
+description carries, and §22.6.3 is why.
+
 It is the THIRD of its family and the family has two names.
 `docs/reports/KERNEL-BYTES-SINCE-SQUASH-2026-09-07.md` is the first and
 `docs/reports/PR-CYCLE-ACCOUNTING-2026-09-11.md` the second — the same
@@ -36,10 +52,12 @@ Nothing here is an edit of either.
 | **C** | `dfd5796` | `main` at its tip, **+9 commits** over A |
 | **D** | `ba34ab5` | the merge of B and C **plus the five size passes of 2026-09-17** |
 | **E** | `5f20918` | an intermediate point on B's arm, used only to split one module — see *Two lanes* |
-| **F** | `bde3343` | **the tip as this file is updated**, 2026-09-18 — D **+124 commits**: the seven size passes the audit below asked for, the button control, and the soak lane's fixes |
+| **F** | `bde3343` | the tip on 2026-09-18 — D **+124 commits**: the seven size passes the audit below asked for, the button control, and the soak lane's fixes |
+| **G** | `72fdd5c2` | **the tip as this file is updated**, 2026-09-20 — F **+29 commits**, merged onto the PR branch: the global listing retired, the HDD listing claim with it, and `gfx_points` run virtual |
 
-**A→B is the branch's own arm, A→C is everything `main` did, A→F is what the
-tree carries now** — A→D being what it carried on 2026-09-17. B and C are
+**A→B is the branch's own arm, A→C is everything `main` did, A→G is what the
+tree carries now** — A→D being what it carried on 2026-09-17 and A→F on
+2026-09-18. B and C are
 siblings, not ancestors: `main` squash-merges, so A is where the two last
 agreed.
 
@@ -50,29 +68,29 @@ carries, so A→B and A→C both contain it. Its whole diff is one file —
 kernel byte moves in it. Every other commit is on one arm or the other.
 
 **The build number contributes nothing to any delta here.** `BUILD_STR` is the
-commit count as a decimal string (SPEC.md 14.2) and the five counts are 153,
-715, 162, 743 and **867** — three digits at every point, so the About box's
-string is three bytes at every point. A comparison that crossed 999→1000 would
-not be able to say this, and the next one of these reports will not be able to:
-F is 133 commits from the fourth digit.
+commit count as a decimal string (SPEC.md 14.2) and the six counts are 153,
+715, 162, 743, **867** and **898** — three digits at every point, so the About
+box's string is three bytes at every point. A comparison that crossed 999→1000
+would not be able to say this, and the next one of these reports will not be
+able to: **G is 102 commits from the fourth digit**, where F was 133.
 
-**`KERN_BUDGET` is 129,536 at all five points and `KERN_SMALL_BUDGET` 107,520.**
+**`KERN_BUDGET` is 129,536 at all seven points and `KERN_SMALL_BUDGET` 107,520.**
 Nothing below is a budget move; every figure is a size move.
 
 ## Headline — `kern_big`, the shipped default
 
-| section | A base | B ours | C main | D 09-17 | **F now** | **B−A** | **C−A** | **F−A** |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `.text` | 49,539 | 49,416 | 50,146 | 49,891 | 49,982 | **−123** | **+607** | **+443** |
-| `.bss` | 6,016 | 6,006 | 6,151 | 6,092 | 6,106 | **−10** | **+135** | **+90** |
-| `.cold` | 39,265 | 41,166 | 39,356 | 40,899 | 40,669 | **+1,901** | **+91** | **+1,404** |
-| `.ovl` | 1,417 | 1,417 | 1,588 | 1,511 | 1,511 | 0 | **+171** | **+94** |
-| `.ovlw` | 5,052 | 5,084 | 5,052 | 5,084 | 5,084 | +32 | 0 | +32 |
-| `.lowbss` | 9,182 | 7,966 | 9,182 | 7,966 | 7,966 | **−1,216** | 0 | **−1,216** |
-| `.vgabuf` | 848 | 848 | 848 | 848 | 848 | 0 | 0 | 0 |
-| **sum** | | | | | | **+584** | **+1,004** | **+847** |
-| **`KERN_SIZE`** | 110,592 | 111,616 | 111,104 | 111,616 | 111,616 | **+1,024** | **+512** | **+1,024** |
-| spare of `KERN_BUDGET` | 18,944 | 17,920 | 18,432 | 17,920 | 17,920 | | | |
+| section | A base | B ours | C main | D 09-17 | F 09-18 | **G now** | **B−A** | **C−A** | **F−A** | **G−A** |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `.text` | 49,539 | 49,416 | 50,146 | 49,891 | 49,982 | 50,144 | **−123** | **+607** | **+443** | **+605** |
+| `.bss` | 6,016 | 6,006 | 6,151 | 6,092 | 6,106 | 6,113 | **−10** | **+135** | **+90** | **+97** |
+| `.cold` | 39,265 | 41,166 | 39,356 | 40,899 | 40,669 | 40,842 | **+1,901** | **+91** | **+1,404** | **+1,577** |
+| `.ovl` | 1,417 | 1,417 | 1,588 | 1,511 | 1,511 | 1,511 | 0 | **+171** | **+94** | **+94** |
+| `.ovlw` | 5,052 | 5,084 | 5,052 | 5,084 | 5,084 | 5,074 | +32 | 0 | +32 | +22 |
+| `.lowbss` | 9,182 | 7,966 | 9,182 | 7,966 | 7,966 | 6,366 | **−1,216** | 0 | **−1,216** | **−2,816** |
+| `.vgabuf` | 848 | 848 | 848 | 848 | 848 | 848 | 0 | 0 | 0 | 0 |
+| **sum** | | | | | | | **+584** | **+1,004** | **+847** | **−421** |
+| **`KERN_SIZE`** | 110,592 | 111,616 | 111,104 | 111,616 | 111,616 | **110,080** | **+1,024** | **+512** | **+1,024** | **−512** |
+| spare of `KERN_BUDGET` | 18,944 | 17,920 | 18,432 | 17,920 | 17,920 | **19,456** | | | | |
 
 Three rungs were spent between the two arms and **one has been given back**:
 B−A is two rungs, C−A is one, and F−A is two rather than three. That last 512
@@ -86,28 +104,58 @@ nearly cancel, and the section that gave is the one that costs the DOS arena
 byte for byte. Of the A→F total, **+721 is resident** (`.text`, `.bss`, `.cold`,
 `.lowbss`) and +126 is overlay that the machine reuses once it is up.
 
+**F→G took THREE rungs off in one move and put `kern_big` BELOW the squash.**
+`KERN_SIZE` 111,616 → **110,080**, which is 512 under A. The sections it is
+made of are not a general shrink and should not be read as one — `.text` +162,
+`.bss` +7 and `.cold` +173 all went UP across the window — it is **`.lowbss`
+−1,600, and `LOW_PARA` 8,704 → 7,168 with it**. `.lowbss` sits below
+`HEAP_SEG`, so it is the one section whose rung the whole kernel image moves
+with, and §22.6.3 emptied 1,600 bytes of it at a stroke by retiring the global
+directory listing. Of the A→G total, **−537 is resident and +116 is overlay** —
+so the resident kernel is smaller than it was at the squash, not merely the
+image.
+
+**The sign change is worth stating plainly because it reverses this file's own
+headline.** On 2026-09-18 `kern_big` was two rungs ABOVE the squash and the
+honest summary was *"we spent a rung, `main` spent a rung"*. At G it is one
+rung BELOW, having added a DOS box, an icon store, a glyph column, a button
+control and two of `main`'s features on the way. Nothing was reverted to get
+there; one data structure stopped being global.
+
 ## Headline — `kern_small`, the 128KB floor machine
 
-| section | A base | B ours | C main | D 09-17 | **F now** | **B−A** | **C−A** | **F−A** |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `.text` | 37,453 | 37,278 | 37,465 | 37,263 | 37,303 | **−175** | **+12** | **−150** |
-| `.bss` | 4,242 | 4,179 | 4,242 | 4,179 | 4,193 | **−63** | 0 | **−49** |
-| `.cold` | 26,197 | 26,731 | 26,197 | 26,588 | 26,442 | **+534** | 0 | **+245** |
-| `.ovl` | 423 | 423 | 423 | 423 | 1,333 | 0 | 0 | **+910** |
-| `.ovlw` | 2,789 | 2,820 | 2,789 | 2,820 | 1,910 | +31 | 0 | **−879** |
-| `.lowbss` | 5,460 | 5,236 | 5,460 | 5,236 | 4,436 | **−224** | 0 | **−1,024** |
-| **sum** | | | | | | **+103** | **+12** | **−947** |
-| **`KERN_SIZE`** | 75,776 | 75,776 | 75,776 | 75,264 | 74,752 | **0** | **0** | **−1,024** |
-| spare of `KERN_SMALL_BUDGET` | 31,744 | 31,744 | 31,744 | 32,256 | 32,768 | | | |
+| section | A base | B ours | C main | D 09-17 | F 09-18 | **G now** | **B−A** | **C−A** | **F−A** | **G−A** |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `.text` | 37,453 | 37,278 | 37,465 | 37,263 | 37,303 | 37,330 | **−175** | **+12** | **−150** | **−123** |
+| `.bss` | 4,242 | 4,179 | 4,242 | 4,179 | 4,193 | 4,189 | **−63** | 0 | **−49** | **−53** |
+| `.cold` | 26,197 | 26,731 | 26,197 | 26,588 | 26,442 | 26,561 | **+534** | 0 | **+245** | **+364** |
+| `.ovl` | 423 | 423 | 423 | 423 | 1,333 | 1,891 | 0 | 0 | **+910** | **+1,468** |
+| `.ovlw` | 2,789 | 2,820 | 2,789 | 2,820 | 1,910 | 1,342 | +31 | 0 | **−879** | **−1,447** |
+| `.lowbss` | 5,460 | 5,236 | 5,460 | 5,236 | 4,436 | 3,636 | **−224** | 0 | **−1,024** | **−1,824** |
+| **sum** | | | | | | | **+103** | **+12** | **−947** | **−1,615** |
+| **`KERN_SIZE`** | 75,776 | 75,776 | 75,776 | 75,264 | 74,752 | **74,240** | **0** | **0** | **−1,024** | **−1,536** |
+| spare of `KERN_SMALL_BUDGET` | 31,744 | 31,744 | 31,744 | 32,256 | 32,768 | **33,280** | | | | |
 
-**The floor machine is a full KILOBYTE smaller than it was at the squash** —
-two 512-byte rungs — after a cycle that added a DOS box, an icon store and a
-document-glyph column to the tree. It was 512 on 2026-09-17 and the second rung
-came the day after. It is the only line in this document that is unambiguously
-good news, and it is worth saying why it is not luck: `kern_small` gets none of
-`main`'s two big features (`DOCK_OPT` is inside `%ifdef KERN_BIG`), the
-branch's own arm spent only 103 bytes of section there against `kern_big`'s
-584, and the icon store's pass on 2026-09-17 took a whole `.cold` rung back.
+**The floor machine is a full KILOBYTE and a HALF smaller than it was at the
+squash** — three 512-byte rungs — after a cycle that added a DOS box, an icon
+store and a document-glyph column to the tree. It was 512 on 2026-09-17, 1,024
+on 2026-09-18, and **the third rung came with G**: §22.6.3 took 800 bytes of
+`.lowbss` here as it took 1,600 on `kern_big`, and `6c4bff0c` then sent six
+boot bodies to `.ovl` so that `.ovlw` would round down onto the freed region
+and `DSK_OVLPAD` could go back to 0. **The `.ovl` +558 / `.ovlw` −568 pair at
+G is that one move**, exactly as the +910 / −879 pair at F was the previous
+one — the overlay net across A→G is **+21**, and the resident figure is
+**−1,636**.
+
+It was, until G, the only line in this document that was unambiguously good
+news — **at G it is no longer alone**, `kern_big` having gone one rung under
+the squash as well, and the reason the two moved together is that §22.6.3 is
+a `.lowbss` change and `.lowbss` is the section both kernels put below
+`HEAP_SEG`. It is still worth saying why `kern_small`'s three rungs are not
+luck: it gets none of `main`'s two big features (`DOCK_OPT` is inside
+`%ifdef KERN_BIG`), the branch's own arm spent only 103 bytes of section there
+against `kern_big`'s 584, the icon store's pass on 2026-09-17 took a whole
+`.cold` rung back, and the boot-overlay split has now run twice.
 
 **The `.ovl` +910 / `.ovlw` −879 pair is ONE move and not two, and it is the
 second rung.** `3884e6be` sends `mouse.inc`'s serial probe (648 bytes) and
@@ -153,20 +201,28 @@ carries more than one concept it is split at a measured intermediate point, not
 apportioned by source lines — a line is not a byte and this project refuses that
 arithmetic.
 
-### Three lanes
+### Four lanes
 
 One module, `kernel/disk.inc`, carries two unrelated concepts and is +909 code
 across the window to B. It is split at **E = `5f20918`** (*The read-ahead asks
 what the machine HAS as well*), the last commit of the DOS/read-ahead work and
 the one before the icon store's first: A→E is the first lane, E→B the second.
-**D→F is the third**, and it needs no splitting — it is the merge's own
-follow-on, and `kern_big` figures unless a row says otherwise.
+**D→F is the third** and **F→G the fourth**, and neither needs splitting — each
+is a merge's own follow-on, and `kern_big` figures unless a row says otherwise.
 
 | lane | `.text` | `.cold` | `.bss` | `.lowbss` | code |
 |---|---:|---:|---:|---:|---:|
 | **A→E** the DOS box's kernel surface, the read-ahead, the compactor | −216 | +855 | −24 | 0 | **+639** |
 | **E→B** the icon store, the document glyph, the late work | +93 | +1,046 | +14 | −1,216 | **+1,139** |
 | **D→F** the passes this file asked for, the button control, the soak lane | +91 | −230 | +14 | 0 | **−139** |
+| **F→G** the global listing retired, the HDD claim with it, `gfx_points` virtual | +162 | +173 | +7 | **−1,600** | **+335** |
+
+**Lane 4 is the one that breaks the pattern of the other three**, and it is
+worth naming why before the table below is read: its `code` figure is
+**POSITIVE (+335)** and it is the lane that took three rungs off the kernel.
+Every other lane in this file can be read off its code column; this one cannot,
+because what it moved is `.lowbss` and `.lowbss` is not code. A reader who
+skims the `code` column will conclude lane 4 cost bytes. It gave back 1,536.
 
 ### Lane 1 — what the DOS box asked the kernel for (A→E, +639)
 
@@ -260,6 +316,76 @@ would have been 72% of the real one.
 | the dual-screen Herc/CGA mode byte, and `vid_text`'s missing `vid_cga_equip` | 39.18.1.1, 39.19.4.1 | +9 | +6 |
 | a saver session darks every monitor but its own | 79.1.1 | +6 | **0 — byte-identical**, that build having no second display |
 
+### Lane 4 — the global listing goes home (F→G, +335 of code, −1,600 of `.lowbss`)
+
+**This lane is one idea and three of its consequences.** `disk_dir` was the
+current directory as a KERNEL-WIDE snapshot — `disk_mount` built it and every
+window's claim was a COPY of it — and `docs/plans/LISTING-HOME-PLAN.md` asked
+what `DSK_NENT` was buying. The answer was that the listing is not the file
+manager's cache at all, that **no package anywhere reads it**
+(`OSAPI_FILE_FIND` re-walks the directory through the sector cache, SPEC.md
+19.7.1), and that three of the census's scary-looking consumers — `ui.inc`,
+`assoc.inc`, `snd.inc` — name the `dsk_get_dir` idiom while describing staging
+loops of their own. So it is wholly a kernel-internal question, and the answer
+is that a listing is written into the store its CALLER supplied (SPEC.md
+22.6.3): a mount with no destination is QUIET, and the scan, the sort and the
+icon harvest are all skipped.
+
+The module deltas are exact, F→G, from `kernsize --modules` on both trees:
+
+| module | `.text` | `.cold` | `.bss` | `.lowbss` | code | what moved it |
+|---|---:|---:|---:|---:|---:|---|
+| `dskwin.inc` | 0 | 0 | 0 | **−1,600** | **0** | `disk_dir` and `dsk_icoix` are gone (22.6.3) |
+| `vga12.inc` | +166 | 0 | +7 | 0 | **+166** | `gfx_points` runs VIRTUAL — no bounding box, no display-local loop (5.6.9) |
+| `fdlg.inc` | +2 | +80 | 0 | 0 | **+82** | the file dialog claims its own listing store |
+| `files.inc` | 0 | +67 | 0 | 0 | **+67** | the Disk window supplies the destination |
+| `loader.inc` | 0 | +48 | 0 | 0 | **+48** | a launch reads the poster's own cache |
+| `memory.inc` | −8 | 0 | 0 | 0 | **−8** | the retired `mem_rr_tab` rows |
+| `disk.inc` | +2 | −22 | 0 | 0 | **−20** | the mount's destination argument, less what the listing took |
+| **total** | **+162** | **+173** | **+7** | **−1,600** | **+335** | |
+
+**The `.lowbss` row is the whole lane and it costs no code at all.** 1,600
+bytes is `DSK_NENT` 64 × `DSK_DE_STRIDE` 24 = 1,536 for `disk_dir`, plus 64
+bytes of `dsk_icoix`, one reference byte an entry. `LOW_PARA` goes 8,704 →
+7,168 with it — **three 512-byte rungs** — because `.lowbss` sits below
+`HEAP_SEG` and the image is cut from the top of it.
+
+**The hard disk's claim went the same way and for a sharper reason** (SPEC.md
+22.6). `HDD.DRV` donated 6KB per partition so a driver-backed volume could
+list `DSK_VENT` = 64 entries where a floppy got 32, and **two unrelated changes
+had already taken that reason away without anyone looking at it**: the icon
+store (25.9) moved four fifths of the claim's contents out, and 22.6.2 then
+raised `DSK_NENT` to 64 for the DOS box, so the floor became the same cap the
+claim funded. It held 24KB on a four-partition machine with at most one of the
+four ever in use. What went with it: `HDD_LISTKB`, `HDV_LSEG`, `hd_lst_reloc`,
+`DV_SEG`, `dsk_list_pick`, `dsk_list_floor`, both `mem_rr_tab` rows, `DSK_VENT`,
+`DSK_VBYTES`, `DSK_VKB` and `fmv_fit`'s re-size arm. **`tests/hdmove.py` went
+with the claim it measured** — 394 lines proving the claim could move — and
+`tests/hdnoclaim.py` asserts its ABSENCE instead, the inverse of the same four
+checks. None of this is resident kernel, so none of it is in the table above;
+the Control Panel page moving to `HDDTOOL.DRV` took `HDD.DRV` **8,152 → 5,121
+bytes**, and one byte there was worth a kilobyte because `drv_load` claims
+whole KB.
+
+**`gfx_points` is the lane's only real addition and it is the one row that is
+not free** — `.text` +166 and `.bss` +7 on `kern_big`, measured against the
+370 the feature would have cost with the bounding box still in it. Running the
+loop virtual removes both the box and a translating copy of `GFXPT_LOOP` (203
+bytes of 361), and the second display stops being a reason to abandon the loop
+at all: extending the desktop was **4.59x** slower than a single display before
+the gate came out and **1.02x** after, measured on `os8088_5150_both_gla_mono`
+with the window at x 199..520 on a 720-wide primary so the second card never
+saw a pixel of it. **On `kern_small` it comes out 5 bytes SMALLER than before
+the feature existed.**
+
+**`6c4bff0c` is `kern_small`'s half and `kern_big` is BYTE-IDENTICAL across
+it**, which is the property that makes it safe: six boot bodies move to `.ovl`
+on the small build and stay in `.ovlw` on the big one, `mouse_init`'s shape
+exactly. `cpu_detect` was the obvious seventh at 89 bytes and is REFUSED —
+`xmem.inc` needs it — and the `dsk_fdd_probe` family's 484 bytes are refused
+for the near call, being the one place in `.ovlw` with a real internal call
+graph. What is left is 194 bytes of `.ovlw` growth before the next rung.
+
 ### The size passes already inside this window
 
 Our arm is **net negative in `.text` on both kernels** (−123 big, −175 small)
@@ -283,27 +409,43 @@ cells off the API table's tail. The five passes of 2026-09-17 took a further
   On `kern_small`, **+103 bytes and no rung**. The 124 commits from D to F then
   took **139 bytes of `kern_big` back** and a second rung off `kern_small`,
   while adding an API slot and six behaviour fixes.
-- **Together, at F**, the tree stands **+847 bytes of section and two rungs**
-  above the squash on `kern_big` — of which +721 is resident and +126 is
-  overlay the machine reuses — and **a full kilobyte and two rungs BELOW it**
-  on `kern_small`.
+- **Together, at F**, the tree stood **+847 bytes of section and two rungs**
+  above the squash on `kern_big` — of which +721 was resident and +126 overlay
+  the machine reuses — and **a full kilobyte and two rungs BELOW it** on
+  `kern_small`.
+- **The 29 commits from F to G then took three rungs off `kern_big` and a
+  fourth off `kern_small`**, almost all of it one change: SPEC.md 22.6.3
+  retires the global directory listing, which is 1,600 bytes of `kern_big`'s
+  `.lowbss` and 800 of `kern_small`'s, and `.lowbss` is the section below
+  `HEAP_SEG` that the image is cut from. The lane's CODE went up (+335), which
+  is why it cannot be read off the code column.
+- **Together, at G**, the tree stands **−421 bytes of section and one rung
+  BELOW the squash on `kern_big`** — −537 resident against +116 of overlay —
+  and **−1,615 bytes and three rungs below it on `kern_small`**. Both shipped
+  kernels are now smaller than they were at #179, after a cycle that added a
+  DOS box, an icon store, a glyph column, a button control and `main`'s Dock
+  and USB mouse.
 
 ## Where that leaves the two kernels
 
 | | `kern_big` | `kern_small` |
 |---|---:|---:|
-| `KERN_SIZE` | 111,616 | **74,752** |
+| `KERN_SIZE` | **110,080** | **74,240** |
 | budget | 129,536 | 107,520 |
-| **spare** | **17,920** (35 steps of 512) | **32,768** (64 steps) |
-| `.text`+`.bss` of `KERN_CODE_MAX` | 56,088 of 65,536 — **9,448 left** | 41,496 — 24,040 left |
+| **spare** | **19,456** (38 steps of 512) | **33,280** (65 steps) |
+| `.text`+`.bss` of `KERN_CODE_MAX` | 56,257 of 65,536 — **9,279 left** | 41,519 — 24,017 left |
 
 `KERN_CODE_MAX` cannot be raised at all (offsets are 16 bits) and is the
-constraint to watch: 9,448 bytes against `KERN_BUDGET`'s 35 steps. `main`'s arm
-spent 742 of those 9,448 and ours took 28 back — 133 at D, of which lane 3 then
-spent 105 on the vertical cut and the obstruction test. **That is the number to
-watch and not the rungs**: `KERN_CODE_MAX` has moved 105 the wrong way in a
-window that moved `KERN_SIZE` not at all, which is exactly the reading the
-banner in CLAUDE.md exists to force.
+constraint to watch: **9,279 bytes** against `KERN_BUDGET`'s 38 steps. `main`'s
+arm spent 742 of those and ours took 28 back — 133 at D, of which lane 3 then
+spent 105 on the vertical cut and the obstruction test, **and lane 4 a further
+169**, which is `gfx_points`' 173 less 4 the rest of the lane gave back. **That is the number to watch and not the rungs**, and
+G is the sharpest illustration this file has of why: lane 4 took THREE RUNGS
+off `KERN_SIZE` and moved `KERN_CODE_MAX` 169 the WRONG WAY in the same
+commits, because `.lowbss` is not code and `gfx_points` is. A reader who
+tracked only the rungs would record the best window in the cycle and miss that
+the binding constraint tightened. That is exactly the reading the banner in
+CLAUDE.md exists to force.
 
 ## Which of these concepts has had a size optimization pass
 
@@ -313,12 +455,21 @@ cycles, has each kernel-byte-touching concept been through a pass of its own?
 landed — not a measurement of it, and not a size-conscious choice made while
 writing it.
 
-### This cycle (A→F, since #179) — one outstanding, and six too new to have had one
+### This cycle (A→G, since #179) — one outstanding, and seven too new to have had one
 
 **Four of the five rows this table marked NO or PARTIAL on 2026-09-17 were
 passed within the day**, which is lane 3. They are updated in place below with
 the commit that reached them; the one that was not is the mouse wire work, and
-it is the one row here that has now stood through two audits.
+**it has now stood through THREE audits** — `mouse.inc` is untouched by lane 4
+as it was by lane 3, net 0 across F→G. It is the only row in this table that
+has never been reached by anything, and it is the thing to take next.
+
+**Lane 4 adds one row and retires nothing.** `gfx_points` is too new by the
+same rule the six of lane 3 are, which makes seven; and the global listing's
+retirement is not a row here at all, for the reason the previous cycle's GFX
+lines library was not — **it IS the reduction**, and a reduction does not owe
+a pass. The six from lane 3 are one window older and still unpassed, which is
+the pattern this file's foot describes doing exactly what it says it does.
 
 | concept | arm | code | pass |
 |---|---|---:|---|
@@ -345,13 +496,19 @@ it is the one row here that has now stood through two audits.
 | **`font_char`'s vertical cut (11.3.4)** | ours | **+93 big, 0 small** | **too new** |
 | **a resize that changed nothing (11.91.5)** | ours | **+16** | **too new** |
 | **the dual-screen CGA mode byte (39.18.1.1, 39.19.4.1)** | ours | **+9 big, +6 small** | **too new** |
-| **the saver's second monitor (79.1.1)** | ours | **+6 big, 0 small** | **too new** |
+| **the saver's second monitor (79.1.1)** | ours | **+6 big, 0 small** | **too new** — and one window older than that phrase implies; lane 4 did not reach it |
+| **`gfx_points` run virtual (5.6.9)** | ours | **+166 big, −5 small** | **too new** — landed in lane 4, and it is already the cheap arm: 370 was the cost with the bounding box in it |
+| the global directory listing retired (22.6.3), and the HDD claim with it (22.6) | ours | **−1,600 of `.lowbss`** | **n/a — it IS the reduction**, three rungs off `kern_big` and one off `kern_small` |
 
 **"Too new" is a status and not an excuse, and the pattern at the foot of this
 file says what it predicts**: a cycle's additions get audited and then passed
-one cycle late. Those six are 168 bytes of `kern_big` between them — the size
-of one of the rows the passes above just reached — and the next audit is where
-they are owed a column, not this one.
+one cycle late. The six from lane 3 are 168 bytes of `kern_big` between them
+and **lane 4 reached none of them**, which is the first direct evidence in this
+file that the lateness is real rather than an artefact of when the audit was
+written — the 2026-09-18 update caught its own four inside the window and read
+like the pattern was broken; a second window has now passed over these six and
+left them where they were. With `gfx_points` they are **334 bytes**, and the
+next audit is where they are owed a column, not this one.
 
 ### The previous cycle (what #179 carried, #172 → #179) — NOTHING outstanding
 
@@ -409,3 +566,22 @@ so the lateness this section describes is a tendency and not a law, and what
 broke it was writing the list down. What has never been reached by anything is
 **one row**: the mouse wire work. It is named at the top of the table and it is
 the thing to take next.
+
+**Lane 4 is the qualifier on that paragraph, and it was written two days
+later.** F→G reached none of lane 3's six, and did not reach the mouse wire
+work either — so *"writing the list down is what breaks the lateness"* holds
+only while somebody is working the list, and the 29 commits of lane 4 were
+working something else. The honest statement across three audits is that the
+list gets reached when a session takes it as its subject and not otherwise,
+which is a weaker claim than the paragraph above makes and is the one the
+evidence supports. **The mouse wire work is now three audits old**, and lane 4
+is the second window to pass over it.
+
+**The other thing lane 4 is worth remembering for is the shape of the win, not
+its size.** Three rungs came off `kern_big` with `.text`, `.bss` and `.cold`
+all going UP, because the bytes were in `.lowbss` and the thing that freed them
+was deciding a data structure did not need to be global. No pass on this
+file's list would have found it: every row above asks *"can this code be
+smaller"*, and the question that paid was *"does this buffer need to exist at
+all"*. Worth a row of its own in the next audit's method, ahead of the byte
+counting.
