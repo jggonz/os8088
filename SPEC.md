@@ -396,11 +396,23 @@ are TWO bases here: `LOW_SEG`, a rung base, and `dsk_secbuf`, the one buffer
 in the window that is itself an `int 13h` target — and §2.1.1 holds at both
 only because `dsk_secbuf` is the window's FIRST bytes, which `dskwin.inc`'s
 `%if` against the rung base is what holds (it sat at +2,816 once, 256 into a
-sector, and the build's size decided whether a read straddled a DMA page); the region is 13.125 sectors, so the usable ceiling is **6,656** and not
-6,720. `kernel.asm`'s `%if` therefore rounds `OVLW_SIZE` **up** to a whole
-sector before comparing — the two were the same number while the mount window
-was 7 × 512 exactly, and a guard against 6,720 would pass a 13.125-sector
-overlay whose fourteenth sector lands on `vid_rowtab`.
+sector, and the build's size decided whether a read straddled a DMA page).
+
+**The region is a whole number of sectors AGAIN — 10 of them — so the usable
+ceiling IS 5,120**, and `kernel.asm`'s `%if` still rounds `OVLW_SIZE` **up** to
+a whole sector before comparing. That rounding must not come out because the
+numbers happen to divide today: while the window carried a listing the region
+was 13.125 sectors and the last fraction was unreachable, so a guard against
+the raw figure would have passed an overlay whose final sector lands on
+`vid_rowtab`. What the abolition changed is the HEADROOM, not the rule — the
+shipped `.ovlw` is 4,979, which rounds to exactly 5,120, so a plain kern_big
+fits with **nothing to spare** and any diagnostic that adds one byte costs a
+whole 512 at the rounding. That is what `DSK_OVLPAD` is for, and it is no
+longer kern_small's alone: under `KERN_KNOB` — the Makefile's own name for a
+diagnostic build, which excludes kern_small and kern_emu because those are
+shipped kernels — the pad is 1,024 and the region 6,144. Six knob arms had
+stopped assembling on a kernel that ships perfectly; every shipped kernel is
+byte-identical with the pad in place, because on those the pad is 0.
 
 That is what the boot overlay is meant to land in and spill through
 (`docs/plans/completed/BOOT-LADDER-PLAN.md` stage B). §2.5 put `.ovl` in the FAT window on the

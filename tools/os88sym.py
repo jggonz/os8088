@@ -361,15 +361,27 @@ def _load(defines=(), check=True):
     # about a kernel that is perfectly fine. os88kz.py writes them beside the
     # kernel it packed, so they are read from there and never guessed: the
     # json IS the build, and if it is absent this kernel is not packed.
-    defines = kz_defines(bdir, defines)
     # A KNOB KERNEL IS NOT BOUND BY KERN_BUDGET (kernel.asm guard 1), and the
     # Makefile says so with -DKERN_KNOB. A tool re-assembling one for its
     # symbol map has to say the same thing or nasm refuses a kernel that
     # `make` built happily - which reads as "the map is broken" rather than as
     # a missing define. KERN_SMALL and KERN_EMU are not knobs for this
     # purpose: each is a shipped configuration with a budget of its own.
+    #
+    # **DECIDED ON THE CALLER'S DEFINES, BEFORE THE PACKER'S JOIN THEM.** This
+    # test used to run AFTER kz_defines, and KZIP's four numbers are not in
+    # _SHIPPED_DEFS - so every PLAIN build, which is packed by default
+    # (SPEC.md 2.9.13), was re-assembled with a -DKERN_KNOB that `make` never
+    # passed. It was invisible for as long as KERN_KNOB emitted no byte: all
+    # it did was skip guard 1, which is an assertion. The moment the define
+    # reached anything with a SIZE - kernel/dskwin.inc's DSK_OVLPAD, the boot
+    # overlay's landing ground on a diagnostic build - the map stopped
+    # matching build/kernel.bin on an ordinary tree, and the refusal named the
+    # kernel rather than this line. A packing number is a property of the
+    # FILE, not a knob, and this is now the only place that has to know it.
     if any(d.split("=")[0] not in _SHIPPED_DEFS for d in defines):
         defines = tuple(defines) + ("KERN_KNOB",)
+    defines = kz_defines(bdir, defines)
     key = (bdir,) + tuple(defines)   # ...and the DIRECTORY, or two builds
                                      # share one map and the second gets the
                                      # first's addresses

@@ -2161,15 +2161,19 @@ DSK_FAT_SECS equ 2              ; TWO on kern_small: 1,024 bytes of FAT_SEG
                                 ;
                                 ; **AND THIS NUMBER IS THE ONE HALF OF THE
                                 ; REGION THAT CANNOT MOVE.** The other half is
-                                ; DSK_WIN_BYTES, which SPEC.md 22.6.2 has just
-                                ; cut 2,112 -> 1,312; this one is at its floor
-                                ; already, because the SMALLEST geometry this
-                                ; OS boots - a 360KB floppy - declares a
+                                ; DSK_WIN_BYTES, which SPEC.md 22.6.3 has
+                                ; since cut all the way to 512 - the listing
+                                ; left `.lowbss` altogether and what is left
+                                ; is the sector buffer; this one is at its
+                                ; floor already, because the SMALLEST geometry
+                                ; this OS boots - a 360KB floppy - declares a
                                 ; 2-sector FAT, and rule 10 is an ACCEPTANCE
                                 ; threshold rather than a buffer, so 1 would
                                 ; refuse every volume rather than merely list
-                                ; less of one. Region 1,024 + 1,312 = 2,336,
-                                ; and the `.ovlw` guard is what holds it.
+                                ; less of one. Region 1,024 + 512 = 1,536,
+                                ; and the `.ovlw` guard is what holds it -
+                                ; `.ovlw` being 1,342 here, so this kernel has
+                                ; 194 bytes of slack where kern_big has none.
 %else
 DSK_FAT_SECS equ 9              ; resident FAT cap, sectors (4,608 bytes).
                                 ; Exactly what the largest geometry this OS
@@ -7728,8 +7732,13 @@ KERN_KB    equ (KERN_SIZE + 1023) / 1024
 ; was always its label - it just used to be billed to `Disk bufs`, which read
 ; 6 KB for 3.5 KB of buffer.
 SKB_FAT    equ FAT_PARA * 16              ; the mount-time FAT snapshot (18.8)
-SKB_DSK    equ DSK_WIN_BYTES              ; disk_dir + disk_icons + dsk_secbuf,
-                                          ; and NOTHING else (SPEC.md 2.1.2)
+SKB_DSK    equ DSK_WIN_BYTES              ; dsk_secbuf, and NOTHING else
+                                          ; (SPEC.md 2.1.2) - plus dsk_ovlpad
+                                          ; where a build needs the boot
+                                          ; overlay a floor. `disk_dir` and
+                                          ; `disk_icons` were here and are
+                                          ; gone: a listing lives in the store
+                                          ; its caller supplied (22.6.3)
 SKB_STK    equ SCH_STK_TOTAL              ; the background slices
 SKB_STK0   equ STK0_SIZE                  ; ...and task 0's
 SKB_IMG    equ KERN_SIZE - SKB_FAT - SKB_DSK - SKB_STK - SKB_STK0
@@ -8030,14 +8039,16 @@ SK_VGAB_KB equ SK_R(SK_CUM5) - SK_R(SK_CUM5 - VGABUF_PARA * 16)
 ; SECTOR BUFFER. The row is 512 bytes on kern_big, and on kern_small it is
 ; that plus dsk_ovlpad, the boot overlay's landing ground, which is the one
 ; term here that was never about listing anything.
-%ifdef KERN_SMALL
+; ...and the pad is no longer kern_small's alone, so the two arms collapsed
+; into ONE line.  `DSK_OVLPAD` is 0 on every SHIPPED kernel - kern_big,
+; kern_small and kern_emu alike - and 512 only under `KERN_KNOB`, where a
+; diagnostic has joined `.ovlw` and kern_big's region, which the abolished
+; floor listing left fitting to the byte, needs a rung to spill into
+; (kernel/dskwin.inc).  Spelling kern_big's arm as a bare 512 made THIS guard
+; fire on a build whose overlay guard had just been satisfied, which reads as
+; the fix not working rather than as a second place holding the same number.
 %if SKB_DSK != DSK_OVLPAD + 512
-%error "sys_kb: the Disk bufs row is no longer the mount's own scratch (SPEC.md 2.1.2, docs/plans/LISTING-HOME-PLAN.md 13): the sector buffer and dsk_ovlpad - the boot overlay's floor, which only this kernel needs. The ENTRIES are the caller's store now and are not here at all"
-%endif
-%else
-%if SKB_DSK != 512
-%error "sys_kb: the Disk bufs row is no longer the mount's own scratch (SPEC.md 2.1.2, docs/plans/LISTING-HOME-PLAN.md 13): the SECTOR BUFFER and nothing else. The entries and their reference index went into the caller's store, and there are no icon bodies - those are the machine-wide store's"
-%endif
+%error "sys_kb: the Disk bufs row is no longer the mount's own scratch (SPEC.md 2.1.2, docs/plans/LISTING-HOME-PLAN.md 13): the SECTOR BUFFER, plus dsk_ovlpad where the boot overlay needs a floor. The entries and their reference index went into the caller's store, and there are no icon bodies - those are the machine-wide store's"
 %endif
 ;
 ; 6b. ...and so is every claim in it, which is what a package region rides
