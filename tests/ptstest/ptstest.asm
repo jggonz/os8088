@@ -17,7 +17,8 @@
 ;   two bands legitimately differ on a dithered ink and the row would fail on
 ;   the one case it most wants to cover.
 ;
-; THREE CASES, because the draw path branches three ways:
+; FOUR CASES, because the draw path branches four ways - `gfx_ls_ink` answers
+; three classes (SPEC.md 39.4) and the clip is the fourth axis:
 ;
 ;   1. a SOLID ink - the plain read-modify-write;
 ;   2. a DITHER ink - `gfx_ln_ink` = 1, the (x+y) parity arm;
@@ -26,6 +27,12 @@
 ;      is whatever the last caller left in it, so a slot that trusted a stale
 ;      box would draw through a clip nobody set - and every windowed package
 ;      arms one, so this is the normal case rather than the corner.
+;   4. a SOLID PAPER - black ink on a WHITE ground, which is the class an
+;      ERASE is and the one this file went three revisions without drawing.
+;      SPEC.md 5.6.9.3.1: `kern_small` shipped a loop that drew paper AS INK,
+;      so every app-side erase in the tree was a second draw, and all three
+;      cases above stayed green through it because not one of them asks the
+;      slot to put a pixel OUT.
 ;
 ; The pattern is deliberately awkward: it straddles byte columns, and it steps
 ; BACKWARDS half way along so the points are not in address order - a slot that
@@ -48,14 +55,22 @@
 PT_BSS    equ 16
 
 PT_N      equ 24                ; points in the pattern
-PT_DY     equ 40                ; band B is this far below band A - EVEN, see
-                                ; the header
+PT_DY     equ 20                ; band B is this far below band A - EVEN, see
+                                ; the header. It was 40, and came down with the
+                                ; fourth case: a case is PT_DY + PT_H rows, so
+                                ; four of them at the old pitch wanted 242 of
+                                ; the 189 content rows this window has. 20 is
+                                ; still clear of PT_H, so the two bands do not
+                                ; touch, and still even
 PT_W      equ 120               ; the pattern's extent, for the host's crop
 PT_H      equ 18
-PT_STEP   equ 60                ; ...and one case to the next. EVEN as well:
+PT_STEP   equ 40                ; ...and one case to the next. EVEN as well:
                                 ; three cases at PT_DY * 2 put the third below
                                 ; the content and the clip ate it whole, which
-                                ; the row caught as `0 lit`
+                                ; the row caught as `0 lit`. FOUR now reach
+                                ; 4 + 3*40 + 38 = 162 of 189, so the window
+                                ; did not have to grow - which matters because
+                                ; tests/ptsext.py moves it onto a 200-row CGA
 
 pt_entry:
     push si
@@ -66,7 +81,7 @@ pt_entry:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_paint - W_PAINT, the gfx lock HELD. Draws all three cases.
+; pt_paint - W_PAINT, the gfx lock HELD. Draws all four cases.
 ; in:  SI = the window
 ; -----------------------------------------------------------------------------
 pt_paint:
@@ -86,6 +101,7 @@ pt_paint:
     mov [pt_y0], dx
 
     ; --- case 1: a solid ink -------------------------------------------------
+    mov byte [pt_gnd], CBLACK
     mov byte [pt_ink], CWHITE
     xor al, al                  ; unclipped
     call pt_case
@@ -94,6 +110,7 @@ pt_paint:
     mov ax, [pt_y0]
     add ax, PT_STEP
     mov [pt_y0], ax
+    mov byte [pt_gnd], CBLACK
     mov byte [pt_ink], CLGRAY   ; SPEC.md 39.4: grey is the 50% dither on 1bpp
     xor al, al
     call pt_case
@@ -102,8 +119,21 @@ pt_paint:
     mov ax, [pt_y0]
     add ax, PT_STEP
     mov [pt_y0], ax
+    mov byte [pt_gnd], CBLACK
     mov byte [pt_ink], CWHITE
     mov al, 1                   ; ...and this one arms a clip
+    call pt_case
+
+    ; --- case 4: solid PAPER, which is what an ERASE is ----------------------
+    ; The ground and the ink are the other way up here and nowhere else: black
+    ; on white asks the slot to CLEAR a bit, and cases 1 to 3 only ever ask it
+    ; to set one. SPEC.md 5.6.9.3.1 is the defect that went through all three.
+    mov ax, [pt_y0]
+    add ax, PT_STEP
+    mov [pt_y0], ax
+    mov byte [pt_gnd], CWHITE
+    mov byte [pt_ink], CBLACK
+    xor al, al
     call pt_case
 
     pop bp
@@ -129,7 +159,7 @@ pt_case:
     push di
     mov [pt_clip], al
     push ax
-    mov al, CBLACK              ; A BLACK GROUND under BOTH bands, in ONE fill
+    mov al, [pt_gnd]            ; A FLAT GROUND under BOTH bands, in ONE fill
     call OSAPI_SET_COLOR        ; so the two start identical. Without it the
     mov ax, [pt_x0]             ; ink is white on the window's white content,
     mov bx, [pt_y0]             ; every case compares background to background,
@@ -257,3 +287,6 @@ pt_x0      equ os88_image_end + 2    ; word: the pattern's left
 pt_y0      equ os88_image_end + 4    ; word: ...and the current case's top
 pt_clip    equ os88_image_end + 6    ; byte: this case armed a clip
 pt_ink     equ os88_image_end + 7    ; byte: ...and its ink
+pt_gnd     equ os88_image_end + 8    ; byte: ...and the ground under both bands,
+                                     ; which case 4 turns over (SPEC.md
+                                     ; 5.6.9.3.1)

@@ -2720,10 +2720,13 @@ SOAK = [
         "band A through OSAPI_GFX_POINTS and band B PT_DY rows lower one "
         "gfx_pixel a point, and the row requires the two equal. No golden "
         "image and no reference build: the comparison is inside one frame. "
-        "Three cases, because the draw branches three ways - a solid ink, a "
-        "DITHER ink (the (x+y) parity arm), and a solid one with the window's "
-        "clip region ARMED. VERIFIED TO FAIL: drawing every other point takes "
-        "all three red and dropping the dither arm takes case 2 red alone. "
+        "Four cases, because the draw branches four ways - a solid ink, a "
+        "DITHER ink (the (x+y) parity arm), a solid one with the window's "
+        "clip region ARMED, and a solid PAPER, which is the class an ERASE "
+        "is and the one this row went three revisions without asking for "
+        "(SPEC.md 5.6.9.3.1). VERIFIED TO FAIL: drawing every other point "
+        "takes the first three red and dropping the dither arm takes case 2 "
+        "red alone. "
         "VERIFIED NOT TO COVER 5.6.9.1's box invalidation, which is written "
         "in the row's own docstring with what would - a row that claims "
         "coverage it has not got is worse than one that names the gap, and "
@@ -2734,6 +2737,24 @@ SOAK = [
         "asks",
         needs=("marty",), serial=True,
         wants=("build/ptstest360.img",)),
+    Row("gfxptsmall", "soak", py("tests/gfxpoints.py", "--small"), 60.0,
+        "SPEC.md 5.6.9.3.1: the row above, on the OTHER kernel. gfx_points is "
+        "not one routine on both builds - kern_small expands GFXPT_LOOP ONCE "
+        "and asks the ink class per point, kern_big expands it three times "
+        "and dispatches once a call (5.6.9.3) - and NOTHING in this suite ran "
+        "the one-loop expansion at all, which is exactly where the defect "
+        "was: that arm drew PAPER AS INK, so on the 128KB build no app-side "
+        "erase erased and Cyclone's web and Missile's trails doubled instead "
+        "of rubbing out. The determinism hash that 5.6.9.3 cites as gating "
+        "the pixels (mcperf) boots the SHIPPED kernel, so it was green on "
+        "both sides of it. VERIFIED TO FAIL: `mov al, 0xFF` back in place of "
+        "`mov al, [cs:gfx_ln_ink]` takes case 4 red HERE and leaves gfxpoints "
+        "16/16 green, which is the whole reason this is a row of its own. It "
+        "builds nothing: `make small` is what it reads, the same tree "
+        "small128, smallboot and paint1small want",
+        needs=("marty",), serial=True,
+        wants=("build/ptstest360.img", "build/small360.img",
+               "build/smallk/kernel.bin")),
     Row("ptsext", "soak", py("tests/ptsext.py"), 70.0,
         "SPEC.md 5.6.9.4: the row above's claim, on a machine with TWO CARDS. "
         "gfxpoints asks the only question worth asking - does gfx_points draw "

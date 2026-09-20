@@ -1209,7 +1209,12 @@ gfx_ls_zero dw 0                ; .text with a real initialiser: -f bin zeroes
 %if %1 == 0                         ; table's base now and may not be touched
     cmp byte [cs:gfx_ln_ink], 1     ; ONE LOOP: kern_small asks the class per
     je %%solid                      ; POINT and keeps the general commit
-    mov al, 0xFF                    ; ...not a dither: every bit of the mask
+    mov al, [cs:gfx_ln_ink]         ; ...not a dither, so the CLASS ITSELF is
+                                    ; the mask: FF ink, 00 paper. It was
+                                    ; `mov al, 0xFF`, which is right for ink
+                                    ; and draws PAPER AS INK - so on the one
+                                    ; build that takes this loop no app-side
+                                    ; erase erased (SPEC.md 5.6.9.3.1)
 %%solid:
 %endif
     and al, ah

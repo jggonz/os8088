@@ -5057,7 +5057,9 @@ incidentally, keeps the body inside `loop`'s rel8 reach.
 
 **The pixels are unchanged and that is gated, not asserted**: `tests/mcperf.py`
 hashes the screen 400 deterministic frames into a Missile game, and the hash is
-the same before and after.
+the same before and after — **on the kernel it boots, which is `kern_big`**.
+That qualifier is §5.6.9.3.1's, added after the one-loop arm shipped a defect
+this sentence read as covering.
 
 **And it costs its CALLER exactly what it cost before — 26 bytes.** An
 `OSAPI_*` call runs on the caller's slice (§8), and the thinnest in the tree has
@@ -5070,6 +5072,52 @@ so there is nothing to remember — and the miss path sets DS itself out of
 of the caller's stack, twice, which is the right way round. Measured on the
 guest at `gfx_ls_box`'s entry plus its own pushes: **26**, the same as the
 routine this replaced.
+
+###### 5.6.9.3.1 …and the one loop drew PAPER AS INK
+
+`kern_small`'s single expansion — `GFXPT_LOOP 0`, the arm §5.6.9.3 chose
+deliberately — shipped with the solid class **hard-coded to ink**. The loop
+computes the dither parity into AL for every point, because that is the one
+thing the three-way split cannot hoist out, and the `%1 == 0` arm then has to
+put the CLASS back in AL when the ink is not a dither. It did it with
+`mov al, 0xFF`, which is right for `gfx_ln_ink` = FF and wrong for 00: **paper
+drew as ink**, so on that build `gfx_points` could set a pixel and never clear
+one.
+
+**Every app-side erase in the tree lands on that instruction.** §5.12.7 took
+the whole `gfx_line` family out of the kernel, so a figure is drawn by
+`apps/os88gfx.inc` walking the line in the caller's own image and committed
+through this slot; an erase is the identical walk with the paper ink
+(`gfxe_wline`'s own contract). With the class forced to ink the erase pass
+re-drew the figure it was asked to remove — invisible where the figure has not
+moved, and a **second figure** where it has, which is what the field reported
+of Cyclone's web and Missile's trails: *the lines double instead of erasing,
+one pixel along.* The pixel offset is the object's own motion between the two
+frames; the erase itself was never off by anything.
+
+**Three things let it through, and each is worth more than the fix.**
+
+1. **`kern_big` is correct and takes a different expansion.** The three class
+   loops each commit one way and never consult `[gfx_ln_ink]` at all, so the
+   defect cannot exist there. A build-conditional body needs a gate per build,
+   and this one had none: nothing in the suite ran `GFXPT_LOOP 0`.
+2. **The slot's own gate never drew paper.** `tests/ptstest` had a solid ink,
+   a dither ink and a solid ink under a clip — three cases that between them
+   ask the slot to SET a bit and never to clear one. It has a fourth now, and
+   the `gfxptsmall` row is the same package on the `make small` tree.
+3. **`tests/mcperf.py`'s hash was taken on the wrong kernel.** §5.6.9.3 rests
+   on *"the pixels are unchanged and that is gated"* — 400 deterministic frames
+   of Missile, hashed before and after. It runs the shipped kernel, so it
+   compared `kern_big` against `kern_big` and was green on both sides of a
+   defect that only exists on the other build. **A determinism hash is only a
+   gate for the build it is taken on**, which is a claim this document made
+   without the qualifier.
+
+**Cost: `.text` +2 on `kern_small`, measured** — 37,330 with the defect against
+37,332 with the fix. `mov al, 0xFF` is two bytes and `mov al, [cs:gfx_ln_ink]`
+is four, the accumulator's `moffs` form; no rung crossed (the image rung stands
+49 of 512 into its step), and **`kern_big` is byte-identical**, the arm not
+existing there.
 
 ##### 5.6.9.4 A SECOND DISPLAY IS NOT A REASON TO GIVE UP THE LOOP
 
