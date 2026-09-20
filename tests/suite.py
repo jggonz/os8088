@@ -4067,6 +4067,31 @@ SOAK = [
         "is why the assertion is a read of drv_tab and not a symptom.",
         needs=("marty",), serial=True,
         wants=("build/dosirq360.img",)),
+    Row("dosnetarena", "soak", py("tests/dosnetarena.py"), 150.0,
+        "THE MEMORY PAGE'S FIGURE IS THE FIGURE THE PROGRAM GETS, WITH A CARD "
+        "IN THE MACHINE (SPEC.md 96.23.7.1, 96.23.7.2). **IT IS ITS OWN ROW "
+        "BECAUSE THE DEFECT IS INVISIBLE WITHOUT A WIRE**: dos_pkt_bufs "
+        "claims nothing at all on a machine with no NIC, so dosram - whose "
+        "fixture is a hard disk and no card - promised 441K and handed over "
+        "441 on the build that shipped the bug, while the same build with one "
+        "NE2000 promised 442 and handed over 400. QEMU'S, for "
+        "tests/ethernet.py's reason: MartyPC has no network card of any kind, "
+        "and a card is the whole quantity under test. Two assertions and the "
+        "drifts are DIFFERENT SIZES on purpose - ~3KB is dos_mem_arena not "
+        "subtracting the packet buffers it is about to spend, ~40 is one of "
+        "them PINNED across dos_run's compaction pass so the arena, which is "
+        "ONE run, cannot reach the floor under it. The second is read out of "
+        "mem_tab itself rather than inferred from the number, because a claim "
+        "is born pinned (SPEC.md 66.2) and this is the half that goes wrong "
+        "by OMISSION: somebody adds a buffer and it is a wall, silently, on a "
+        "busy heap only. It also asserts that clearing the box UNMOUNTS the "
+        "card and that releasing it MOVES the arena, so a sweep that stopped "
+        "honouring the mask (96.36.7.3) is named rather than showing up as a "
+        "figure. VERIFIED red on the build that shipped it: 409/367 with the "
+        "box ticked and 442/400 with it cleared, 42 short in both arms, "
+        "against 405/405 and 441/441 after.",
+        needs=("qemu",), serial=True,
+        wants=("build/ether360.img", "build/dospkt360.img")),
     Row("dospkt", "soak", py("tests/dospkt.py"), 120.0,
         "THE PACKET DRIVER, OVER A REAL CARD (SPEC.md 96.23, 72.22) - wave 4 "
         "of DOS-EXEC-PLAN.md, and the row that says a DOS program can reach "
