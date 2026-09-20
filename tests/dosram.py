@@ -268,13 +268,29 @@ def main():
             fail("`%s` says %d and the mounted class is HOLDING %d. A ceiling "
                  "below what is held is one of the two forms walking the "
                  "wrong rows (SPEC.md 51.12.1)" % (hddraw, hddkb, hdkb))
-        if hddkb == hdkb:
-            fail("`%s` says %d and the live figure is the same. On this "
-                 "fixture they must DIFFER: the caption is DRVM_HDD's "
-                 "ceiling - the image plus HD_MAXVOL listing claims - and one "
-                 "volume is mounted, so OSAPI_DRV_CLASSK, which weighs the "
-                 "heap, cannot agree with it. Equal means the caption was "
-                 "filled from the call (SPEC.md 51.12.2)" % (hddraw, hddkb))
+        # **THE CAPTION IS CHECKED AGAINST THE CONSTANT, NOT AGAINST THE
+        # LIVE FIGURE.** This used to assert that the two DIFFER, on the
+        # ground that DRVM_HDD counted HD_MAXVOL's listing claims while the
+        # live call weighs the heap - 32 against 14. That gap is GONE:
+        # SPEC.md 52's per-partition listing claim was retired as buying
+        # nothing, so `DRVM_HDD equ DRVM_IMG_HDD` and the ceiling is the image
+        # alone. With one volume mounted and nothing else on the heap the two
+        # are now legitimately EQUAL, and the row failed the kernel for it.
+        #
+        # An inequality was only ever a PROXY for the question, which is
+        # whether the label was filled from the build-time constant or from
+        # OSAPI_DRV_CLASSK. The NET half above already asks that directly - no
+        # card, so a live figure would print 0 - and this is the same question
+        # asked the same way: the caption must BE DRVM_CEIL_DISK, scraped out
+        # of the SDK the package would read it from. That is strictly stronger
+        # than "they differ", and it cannot rot with the fixture.
+        want = dosmap.sdk_const("DRVM_CEIL_DISK")
+        if hddkb != want:
+            fail("`%s` says %d and the SDK's DRVM_CEIL_DISK is %d. The "
+                 "caption is the CLASS's CEILING, a build-time constant "
+                 "(SPEC.md 51.12.1); any other number means the label was "
+                 "filled from OSAPI_DRV_CLASSK's live figure instead "
+                 "(51.12.2)" % (hddraw, hddkb, want))
 
         # --- 1c: ...and the LIMIT moves the figure AS IT IS TYPED ------------
         # dos_mem_arena has clamped to [dos_memkb] since the page was reworked
