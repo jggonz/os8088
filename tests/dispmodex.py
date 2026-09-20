@@ -118,7 +118,36 @@ def game_win(m, disk):
     return w[-1] if w else None
 
 
-def move_to(m, mo, win, x, card):
+def alive(m, win, bad, where):
+    """Is there still a machine, and is MISSILE still on it?
+
+    Both questions, because the row spent a long time reporting neither. A
+    guest that has stopped servicing IRQ0 presents as a pointer that will not
+    move, and `Mouse.to` then RAISES about a target it could not reach - which
+    names the coordinate and says nothing about the machine. A package that
+    has gone away presents as a window record that still reads its last
+    geometry, so the next drag grabs 876,29 where there is no longer a window.
+    """
+    t0 = int.from_bytes(m.read(S("ticks"), 2), "little")
+    c0 = m.status()["cycles"]
+    while (m.status()["cycles"] - c0) / os88marty.GUEST_HZ < 1.0:
+        if int.from_bytes(m.read(S("ticks"), 2), "little") != t0:
+            break
+        time.sleep(0.02)
+    else:
+        print("   %-34s THE GUEST HAS STOPPED: [ticks] stuck at %d for a "
+              "whole GUEST second, so IRQ0 is not being serviced" % (where, t0))
+        bad.append(where + " (guest stopped)")
+        return False
+    if win not in dispcp.win_list(m, S):
+        print("   %-34s MISSILE'S WINDOW IS GONE (windows: %s)"
+              % (where, dispcp.win_list(m, S)))
+        bad.append(where + " (window gone)")
+        return False
+    return True
+
+
+def move_to(m, mo, win, x, card, bad):
     """Drag WIN so its CENTRE lands at x - which is what decides the display
     (wm_disp_of: centre, then origin, then the primary)."""
     wx, wy, ww, wh = dispcp.win_rect(m, S, win)
@@ -136,8 +165,20 @@ def move_to(m, mo, win, x, card):
     # 236 pixels the far side of the seam - the right answer to the question
     # asked a moment too early, reported as the kernel failing to move the
     # caps with the window.
-    os88marty.quiesce(m, lambda: facts(m),
-                      what="MISSILE's caps to settle after the drag")
+    #
+    # **AND THE CAPS ARE NOT THE LAST THING TO SETTLE.** A move onto the
+    # Hercules changes `mc_mono`, and MISSILE then RE-LAYS-OUT: measured here,
+    # the window goes 562 wide to 634 and 435 tall to 303. `mc_caps` is
+    # written the moment the worker next asks `fsx_caps` - well before that
+    # re-layout finishes - so a quiesce on the caps alone returns while the
+    # package is still rebuilding, and the next drag's press lands in the
+    # middle of it. That is measurable rather than theoretical: back-to-back
+    # drags across the seam with no wait between them leave the window where
+    # it was on 13 of 14 round trips and take the guest down on about one run
+    # in four, while the same loop with the geometry settled first did 12 of
+    # 12 and never lost a machine. So the RECT is quiesced with the caps.
+    os88marty.quiesce(m, lambda: (facts(m), dispcp.win_rect(m, S, win)),
+                      what="MISSILE's caps AND its geometry to settle")
     return dispcp.win_rect(m, S, win)
 
 
@@ -167,15 +208,23 @@ def main():
         g = game_win(m, disk)
         if g is None:
             print("   missile did not launch"); return 1
-        r = move_to(m, mo, g, seam + 200, sec)
+        r = move_to(m, mo, g, seam + 200, sec, bad)
         print("   dragged to x %d..%d (centre %d, right of the seam)"
               % (r[0], r[0] + r[2] - 1, r[0] + r[2] // 2))
         report(m, "...its centre on the Hercules", HERC_CAPS, 1, bad)
+        if not alive(m, g, bad, "after the move to the Hercules"):
+            return 1
 
-        r = move_to(m, mo, g, 300, pri)
+        r = move_to(m, mo, g, 300, pri, bad)
         print("   dragged back to x %d..%d (centre %d)"
               % (r[0], r[0] + r[2] - 1, r[0] + r[2] // 2))
+        if r[0] + r[2] // 2 > seam:
+            print("   ...THE WINDOW DID NOT COME BACK: its centre is still "
+                  "%d, right of the seam at %d" % (r[0] + r[2] // 2, seam))
+            bad.append("the drag back was a no-op")
         report(m, "...and back on the VGA", VGA_CAPS, 0, bad)
+        if not alive(m, g, bad, "after the move back to the VGA"):
+            return 1
 
         # --- launched FROM the Hercules: the entry-time answer is corrected -
         gx, gy, gw, gh = dispcp.win_rect(m, S, g)

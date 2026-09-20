@@ -5811,8 +5811,21 @@ SOAK = [
         "does not carry the defect's own input",
         needs=("marty",), serial=True),
     Row("dispmodex", "soak", py("tests/dispmodex.py"), 120.0,
-        "Which display does Missile Command ask about Mode X? (SPEC.md"
-        "39.18.1)",
+        "Which display does Missile Command ask about Mode X? (SPEC.md "
+        "39.18.1). **IT IS RED, AND WHAT IT IS RED FOR IS A GUEST CRASH** - "
+        "docs/reports/SEAM-DRAG-CRASH-2026-09-20.md is the diagnosis: moving "
+        "MISSILE's window onto the Hercules half of an extended desktop takes "
+        "the machine down about three runs in four, measured on the kernel's "
+        "own [ticks] over GUEST seconds so contention is not in it. The row "
+        "used to report the coordinate its pointer could not reach, which is "
+        "a sentence about a coordinate; it now asks after every move whether "
+        "IRQ0 is still being serviced and whether MISSILE's window is still "
+        "in wm_wins, and says which. Four suspects are ELIMINATED there with "
+        "numbers - the mouse ISR's private stack (60 of 128), MISSILE's "
+        "worker slice (188 of 256), task 0's stack (268 of 512) and "
+        "mou_clamp, which crosses the seam deterministically at seven "
+        "heights and correctly refuses at the two below display 1's bottom "
+        "edge",
         needs=("marty",), serial=True),
     Row("dispnp", "soak", py("tests/dispnp.py"), 60.0,
         "Does a WIDE straddling Note Pad letter its whole row? (SPEC.md"
