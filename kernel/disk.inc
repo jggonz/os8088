@@ -2854,7 +2854,12 @@ disk_mount_x:
 .cwd_kept:                      ; caller, which is how navigation reuses
                                 ; this whole validated pipeline (19.2)
 
-%ifndef KD_BUILD
+%ifdef OS88_REDIR                   ; ...and kern_small CANNOT HAVE ONE EITHER
+                                    ; (SPEC.md 62.9.2.3), for a reason one
+                                    ; link further back than 96.44.9's: no
+                                    ; class is ever published there, so
+                                    ; osapi_vol_fence refuses every caller and
+                                    ; no row is ever stamped DVK_FILE
     cmp byte [dsk_vkind], DVK_FILE  ; a REDIRECTED volume (SPEC.md 62.9) has
     jne .bpbread                    ; no boot sector, no BPB, no FAT window
     jmp .fsmount                    ; and no directory to walk: everything
@@ -3088,10 +3093,12 @@ disk_mount_x:
     cld
     rep stosb
 
+%ifdef OS88_REDIR
     cmp byte [dsk_vkind], DVK_FILE  ; ...and a REDIRECTED volume takes the
     jne .harvest0                   ; CACHE-ONLY pass below: it has no sectors
     jmp .fsicons                    ; to peek at, and reading an ASSOC.DAT over
-.harvest0:                          ; a cable is the one thing this may not do
+%endif                              ; a cable is the one thing this may not do
+.harvest0:
 
     mov ax, LOW_SEG             ; **AND [dsk_dseg] MAY NOT BE LIVE ACROSS THE
     mov es, ax                  ; CALL BELOW** (SPEC.md 66.5.10.2). This is not
@@ -3206,6 +3213,7 @@ disk_mount_x:
 .h_next:
     inc dx
     jmp .harvest
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: ...so neither arm
 .fsicons:
     ; --- 4a'. A REDIRECTED VOLUME'S ICONS, FROM RAM ONLY (SPEC.md 62.9.2.1) --
     ; The harvest above is a sector read per package and there are no sectors
@@ -3285,6 +3293,7 @@ disk_mount_x:
                                 ; that went were buying a volume with LESS
                                 ; than the machine already knew
 
+%endif                          ; OS88_REDIR
 .harvested:
 %endif                          ; DSK_WANT_ICONS
 
@@ -3304,6 +3313,7 @@ disk_mount_x:
     ; What replaces the lot is one question: stand in this folder, and say
     ; what is above it.
 %ifndef KD_BUILD                ; ...and the arm itself (SPEC.md 96.44.9)
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: no volume here
 .fsmount:
     mov byte [dsk_spc], 1       ; FSV_DFREE answers BYTES and dsk_free_clus
                                 ; answers CLUSTERS, so a redirected volume's
@@ -3365,6 +3375,7 @@ disk_mount_x:
                                 ; places deciding a listing's order is how a
                                 ; display index stops meaning what the
                                 ; hit-test thinks it means (19.4)
+%endif                          ; OS88_REDIR
 %endif                          ; KD_BUILD
 
 .fail:
@@ -6580,6 +6591,7 @@ dsk_read_chain_x:
     ; first-cluster word IS the driver's handle on such a volume - so it reads
     ; directly and never resolves. fpg_begin above has already taken the
     ; sector count as its scale, which is as true of a cable as of a floppy.
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: the chain reader's
     cmp byte [dsk_vkind], DVK_FILE
     jne .walk
     mov [dsk_chain_end], ax     ; the handle, where .done's own store would
@@ -6624,6 +6636,7 @@ dsk_read_chain_x:
     jmp .fail1                  ; a refusal is LD_EDISK, the same verdict a
                                 ; failed sector read gets - the loader has no
                                 ; finer question to ask about a wire
+%endif                          ; OS88_REDIR
 .walk:
     mov si, ax                  ; SI = current cluster
     xor cx, cx                  ; CX = run_len (0 = no pending run)

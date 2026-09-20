@@ -507,10 +507,12 @@ dskw_mkbody:
     jnc .gated
     ret
 .gated:
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: mkdir's
     cmp byte [dsk_vkind], DVK_FILE
     jne .fatmk
     mov bp, FSV_MKDIR
     jmp dskw_fsop
+%endif                          ; OS88_REDIR
 .fatmk:
     mov di, dskw_n83
     call dskw_name83            ; SI -> the 11-byte raw name field
@@ -728,11 +730,13 @@ dskw_rmbody:
     jnc .gated
     ret
 .gated:
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: rmdir's
     cmp byte [dsk_vkind], DVK_FILE
     jne .fatrm
     mov bp, FSV_RMDIR           ; EMPTINESS is the driver's test, exactly as
     jmp dskw_fsop               ; it is the FAT path's: only the side holding
                                 ; the directory can answer it
+%endif                          ; OS88_REDIR
 .fatrm:
     mov di, dskw_n83
     call dskw_name83            ; '.' and '..' cannot be spelled (18.4), and
@@ -1354,6 +1358,7 @@ dskw_wbody:
     jnc .gated
     ret
 .gated:
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: the write's
     cmp byte [dsk_vkind], DVK_FILE
     jne .fatw
     call dskw_norm              ; the source becomes seg:0..15 + a run, so the
@@ -1371,6 +1376,7 @@ dskw_wbody:
     mov di, [dskw_lenhi]        ; DI:CX = how many
     mov bp, FSV_WRITE
     jmp dskw_fsop
+%endif                          ; OS88_REDIR
 .fatw:
     mov di, dskw_n83
     call dskw_name83            ; SI -> the 11-byte raw name field
@@ -2274,10 +2280,12 @@ dskw_dbody:
     jnc .gated
     ret
 .gated:
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: delete's
     cmp byte [dsk_vkind], DVK_FILE
     jne .fatd
     mov bp, FSV_DELETE
     jmp dskw_fsop
+%endif                          ; OS88_REDIR
 .fatd:
     mov di, dskw_n83
     call dskw_name83
@@ -2341,10 +2349,12 @@ dskw_nbody:
     jnc .gated
     ret
 .gated:
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: rename's
     cmp byte [dsk_vkind], DVK_FILE
     jne .fatn
     mov bp, FSV_RENAME          ; SI = the old name, DI = the new one, which
     jmp dskw_fsop               ; is this cell's own argument order already
+%endif                          ; OS88_REDIR
 .fatn:
     push si
     mov si, di                  ; the new name first: parse it, then prove

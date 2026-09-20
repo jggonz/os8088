@@ -84094,6 +84094,40 @@ evidence that a real `FSV_LIST` happened.
 *A verification that cannot say which object it examined, and cannot show that
 the code under test executed, is not a verification.*
 
+##### 62.9.2.3 `kern_small` cannot have one at all, so it carries none of it
+
+The redirector's arms are gated `OS88_REDIR`, defined on `kern_big` alone, and
+that is not a trade between a feature and its bytes — it is the observation
+that **on a kernel with no loadable drivers a redirected volume cannot
+exist**. The chain is three links and every one of them is already in the
+tree:
+
+1. a volume row is stamped `DVK_FILE` only by `dsk_vol_add`;
+2. the only caller that can pass that kind is `osapi_vol_add`, behind
+   `osapi_vol_fence`;
+3. that fence walks the PUBLISHED CLASSES with `drv_cls_fp`, and on a build
+   without `OS88_DRIVERS` its entire body is `xor di, di / stc / ret`.
+
+No class is ever published, because nothing can attach. So `[dsk_vkind]` is
+`DVK_BIOS` for the life of that machine, every `cmp byte [dsk_vkind],
+DVK_FILE` is an answer known at assembly time, and every arm behind one is
+code the instruction pointer cannot reach. It is the same argument §96.44.9
+makes for `kern_dos` one link further forward — there the table has no non-BIOS
+rows; here nothing can write one.
+
+**It is a separate symbol from `OS88_DRIVERS`** for the reason `OS88_SNDCARD`
+is: the two are different claims. That one says *no `.DRV` can be loaded*,
+this one says *no volume can be a redirected one*. A fork that gave
+`kern_small` a built-in redirector — the parallel cable soldered in, the RAM
+disk resident — would turn exactly one of them on, and the sites say which
+they mean.
+
+**What it is worth is room rather than a rung**, which is the honest way to
+bank it: the 128KB machine's `.cold` rung had 11 bytes left in it, and the
+mount's two redirected blocks alone are **115**. That does not uncross
+anything today; it makes the next thing that wants a rung cheaper, and it
+stops a build paying for a feature it is unable to use.
+
 #### 62.9.3 The branch sites, and the order to build them in
 
 Each is a test of `DV_KIND` at the top of a routine that already exists, so

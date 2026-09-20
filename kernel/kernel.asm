@@ -339,6 +339,29 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
   %define OS88_SNDCARD 1
 %endif
 
+; ...and SPEC.md 62.9's REDIRECTOR - a volume whose files come from a DRIVER
+; rather than from sectors. This one is not a trade at all, which is why it
+; is resolved here with the others rather than argued about at the sites: on
+; a kernel with no loadable drivers such a volume CANNOT EXIST.
+;
+; The chain is short and every link is already in the tree. A row is stamped
+; DVK_FILE only by `dsk_vol_add`; the only caller that can pass that kind is
+; `osapi_vol_add`, behind `osapi_vol_fence`; and that fence walks the
+; PUBLISHED CLASSES with `drv_cls_fp`, whose whole body on this build is
+; `xor di, di / stc / ret` - no class is published, ever, because nothing can
+; attach. So `[dsk_vkind]` is DVK_BIOS for the life of the machine and every
+; redirected arm in `disk.inc`, `diskw.inc` and `loader.inc` is code the
+; instruction pointer cannot reach.
+;
+; A SEPARATE symbol from OS88_DRIVERS for OS88_SNDCARD's reason, and the two
+; are not the same claim: that one says "no .DRV can be loaded", this one says
+; "no volume can be a redirected one". A fork that gave kern_small a BUILT-IN
+; redirector - the parallel cable soldered in, the RAM disk resident - would
+; turn exactly one of them on.
+%ifdef KERN_BIG
+  %define OS88_REDIR 1
+%endif
+
 ; ...and SPEC.md 37.90's RTC LADDER, for a reason that is about the HARDWARE
 ; and not about the bytes (SPEC.md 37.0.1). All four rungs are chips a 128KB
 ; machine cannot have:

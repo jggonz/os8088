@@ -870,6 +870,7 @@ ld_run_body_x:
                                 ; "DS and ES restored"), and ld_check_hdr
                                 ; reads the header where it lands rather than
                                 ; through a staged copy
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: the header peek's
     cmp byte [dsk_vkind], DVK_FILE
     jne .peekfat
 
@@ -894,6 +895,7 @@ ld_run_body_x:
     pop bp
     jc .disk1                   ; a short file simply delivers less, and
     jmp short .hdr              ; ld_check_hdr rejects what is not a package
+%endif                          ; OS88_REDIR
 .peekfat:
     call dsk_clus2lba_x  ; AX: cluster -> its first LBA; the first
     jc ld_take.bad              ; sector of the first cluster IS the file's
