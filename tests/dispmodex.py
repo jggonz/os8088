@@ -149,10 +149,19 @@ def alive(m, win, bad, where):
 
 def move_to(m, mo, win, x, card, bad):
     """Drag WIN so its CENTRE lands at x - which is what decides the display
-    (wm_disp_of: centre, then origin, then the primary)."""
+    (wm_disp_of: centre, then origin, then the primary).
+
+    **NOTHING HERE SETTLES THE SCREEN**, and that is not a shortcut. This used
+    to `settle(card=card)` after the drag, and MISSILE IS A GAME: with a salvo
+    in flight its window never stops changing, so the wait cannot succeed on
+    whichever card the window is on. It read, on the second move,
+    `the screen was still changing after 361 GUEST seconds` - which is a true
+    sentence about an animating playfield and says nothing about the drag.
+    What this function is about to read is the caps and the rect, so those are
+    what it waits for.
+    """
     wx, wy, ww, wh = dispcp.win_rect(m, S, win)
     mo.drag(wx + ww // 2, wy + TITLE_H // 2, x, wy + TITLE_H // 2)
-    os88marty.settle(m, card=card)
     # **THE APP'S ANSWER, NOT A HOST SLEEP.** This was `time.sleep(1.5)` with
     # the comment "the worker asks once a frame" - a HOST wait for a GUEST
     # event, which is wrong at some guest speed by construction. The caps the
@@ -177,7 +186,12 @@ def move_to(m, mo, win, x, card, bad):
     # it was on 13 of 14 round trips and take the guest down on about one run
     # in four, while the same loop with the geometry settled first did 12 of
     # 12 and never lost a machine. So the RECT is quiesced with the caps.
+    # THREE guest seconds of stillness rather than one, because what is
+    # settling here is a whole playfield repaint on a 1bpp adapter with the
+    # window straddling the seam - `mc_full` is what `mc_onresize` sets - and
+    # not a couple of words being stored.
     os88marty.quiesce(m, lambda: (facts(m), dispcp.win_rect(m, S, win)),
+                      guest=1.0, stable=3, budget=90.0,
                       what="MISSILE's caps AND its geometry to settle")
     return dispcp.win_rect(m, S, win)
 
