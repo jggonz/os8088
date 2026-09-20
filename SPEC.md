@@ -138858,6 +138858,80 @@ both derive is a quantity that can disagree, and the one that will be BELIEVED
 should be the one that is carried.** `HS_KSEG` is already in the staging area
 for exactly this reason, and this is the same finding one cell along.
 
+#### 96.49.7 The image was looked for in a listing that no longer exists
+
+`kd_resume` found `HIBERNAT.IMG` with `dsk_find_name_x` and then staged its
+directory entry with `dsk_get_dir_x`. Both read the **global mount snapshot**
+— the synthesized listing a loud `disk_mount` used to build — and §22.6.3 took
+that snapshot's home away: a listing is written into the store its CALLER
+supplies through `dsk_dest_x`, so `[dsk_dseg]` is 0 by default and a mount
+with nowhere to put a listing is quiet.
+
+**`kern_dos` supplies none and cannot.** It has no window, no file manager and
+no desktop — §96.47 says so in as many words, and that is the whole reason a
+`goto` over here takes the quiet chdir. So every mount in this host is quiet,
+`[disk_nfiles]` is 0, and `dsk_find_name_x` walks zero entries and refuses
+**whatever is actually on the disk**.
+
+The fix is `dskw_stat_x`, which walks the directory and answers `BX` = the
+first cluster and `DX:CX` = the size in registers — the same correction
+`hbm_findimg` took on the kernel's side of this handover, one commit earlier
+and in the same wave. The size read moves from the staged entry's +20 to `CX`
+and the cluster from +18 to `BX`; nothing else in the routine changes.
+
+**WHAT IT COST WAS THE FAST PATH, NEVER THE SESSION.** Every refusal in
+`kd_resume` falls back to `int 19h`, so the machine rebooted, `hb_probe` found
+the pointer, and the session came back through a whole POST and a whole boot —
+which is precisely §96.46.1's symptom with a different cause, and precisely
+why it is reported from the field as *"it reboots, does the full boot, THEN
+restores from hibernation"* rather than as a loss. `tests/kdreturn.py` is the
+row that sees it, and it reads **20.4 guest seconds against 4.0**.
+
+**THE CONSUMER LIST IS THE LESSON.** The wave that moved the listing into the
+Disk window audited the kernel's readers and converted hibernate's four sites
+for exactly this reason — a resume runs with no Disk window in existence — and
+then missed the fifth, because it is in `kerndos/` and not in `kernel/`.
+`kern_dos` `%include`s the kernel's disk layer whole, which is what makes it
+small and is also what makes it an invisible second caller of every kernel
+routine a sweep enumerates out of `kernel/`. A grep that stops at the
+directory the file lives in is a grep that stops one host short.
+
+**AND THERE WERE TWO SITES, NOT ONE.** `kd_gate_entry` (`kerndos/kdgate.inc`,
+behind `KD_GATE`) is W3's mount-and-read gate and read the same snapshot to
+find `GATE.TXT`, printing `[disk_nfiles]` above it. It said so on the glass —
+`entries 0000` and then `FILE NOT FOUND` — and takes the same `dskw_stat_x`;
+the count is deleted rather than fixed, a quiet mount having none to report.
+
+#### 96.49.8 …and the gate's buffer was the cache it was reading through
+
+Converting the gate uncovered a second defect that the first had been hiding,
+and it is the more interesting one. `kd_gate_entry` read the payload into
+`[kd_top]`, under a comment calling that *"the top of the allocator's arena,
+which nothing else has claimed"*. **`[kd_top]` is the most recent claim's own
+base.** `mem_claim_x` in `kerndos/kdshim.inc` hands out `[kd_top] - size` and
+lowers the ceiling to it, so the word names the bottom of what was last handed
+out and never free room — and the mount claims §18.95's read-ahead cache off
+that very ceiling. The gate was reading the file straight onto the cache that
+was serving the read.
+
+It had got away with it for as long as nothing put anything in that cache
+before the chain walk: the old lookup was a string compare against a listing
+already in memory, so the first thing to touch the cache was the walk itself.
+`dskw_stat_x` walks the directory, so the cache is warm now — and the failure
+is exact. **Chunk 0 arrived correctly** (`dest` sectors 0..8, LBA 12..20),
+the destination then overwrote the records behind it, and **chunk 1 came back
+off the wrong LBAs** — three sectors of LBA 27..29 where 21..23 belonged, then
+three of zeros. The right NUMBER of bytes and the wrong ones, which is the one
+failure `tests/kerndos.py`'s checksum exists to catch and which its length
+check cannot see.
+
+The fix is one claim: `KD_GATE_KB` = 16, `mem_claim_x`, and the payload goes
+where nothing else is. **The lesson is the allocator's and not the gate's** —
+a bump allocator's ceiling word is its last hand-out, so *the free room is
+below it*, and every reader of `[kd_top]` that means "spare memory" is off by
+the size of the last claim. §96.44.11 is the same word misread the other way
+round, one caller along.
+
 ### 96.50 The BIOS key buffer's guard, which the handoff took away
 
 **Reported off an 86Box 386**: hold a direction key in Prince of Persia under
