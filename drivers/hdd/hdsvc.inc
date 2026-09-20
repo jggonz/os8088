@@ -115,6 +115,13 @@ hd_sync:
     call hd_svc_call
     mov [hd_ndev], al
     mov [hd_sel], ah
+    mov si, hd_req              ; ...and the three bytes that do not fit AX,
+    mov al, HSV_STATE           ; in a verb of their own (hddabi.inc)
+    call hd_svc_call
+    mov al, [hd_req+HRQ_RES]
+    mov [hd_msgc], al           ; the caption the resident last set...
+    mov al, [hd_req+HRQ_VOL]
+    mov [hd_mntmask], al        ; ...and which devices have a volume up
     pop si
     pop ax
     ret
@@ -224,6 +231,103 @@ hd_page_pick:
     mov ah, HDM_PICK
     call hd_svc_call
     pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_say - set the page's caption, both sides (SPEC.md 52.13)
+; in:  AL = an HDM_*
+; out: nothing (all registers preserved)
+;
+; BOTH, and that is the point: this image renders [hd_msgc] so it must hold
+; it, and the resident owns the copy hd_sync will bring back the next time the
+; page acts - so setting only one of them is a caption that survives until the
+; first mount and then silently reverts.
+; -----------------------------------------------------------------------------
+hd_say:
+    push ax
+    push si
+    mov [hd_msgc], al
+    mov ah, al
+    mov si, hd_req
+    mov al, HSV_MSG
+    call hd_svc_call
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_sel_set - move the panel's highlight, both sides
+; in:  AL = the device index
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+hd_sel_set:
+    push ax
+    push si
+    mov [hd_sel], al
+    mov [hd_req+HRQ_DEV], al
+    mov si, hd_req
+    mov al, HSV_SEL
+    call hd_svc_call
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_geom_push - the typed geometry, into the resident's row and the drive
+; in:  DI = a row in OUR copy of hd_devs
+; out: nothing (all registers preserved)
+;
+; The resident's name and the resident's contract, so hd_page_adjust's call
+; site did not move. Over there it is SET PARAMETERS on an IDE drive; here it
+; is that plus the store, because our hd_devs is a COPY and an edit to it
+; reaches the transport through nothing else.
+; -----------------------------------------------------------------------------
+hd_geom_push:
+    push ax
+    push si
+    call hd_dev_ix
+    mov [hd_req+HRQ_DEV], al
+    mov ax, [di+HDD_CYL]
+    mov [hd_req+HRQ_CYL], ax
+    mov ax, [di+HDD_HEADS]
+    mov [hd_req+HRQ_HEADS], ax
+    mov ax, [di+HDD_SPT]
+    mov [hd_req+HRQ_SPT], ax
+    mov al, [di+HDD_FLAGS]
+    mov [hd_req+HRQ_FLAGS], al
+    mov si, hd_req
+    mov al, HSV_GEOM
+    call hd_svc_call
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_mount / hd_unmount - the page's two buttons, on the selected device
+; in:  [hd_sel]; the gfx lock is HELD
+; out: nothing (all registers preserved)
+;
+; The resident's names again. hd_vols is its table and the kernel registered
+; those volume indices from there, so the whole job is its - the page names a
+; DEVICE and reads the answer back on the next hd_sync.
+; -----------------------------------------------------------------------------
+hd_mount:
+    mov al, HSV_MOUNTDEV
+    jmp short hd_mnt_do
+hd_unmount:
+    mov al, HSV_UNMOUNTDEV
+hd_mnt_do:
+    push ax
+    push si
+    mov ah, al                  ; THE VERB, banked in AH and not on the stack:
+    mov al, [hd_sel]            ; a second push of AX inside one proc is what
+    mov [hd_req+HRQ_DEV], al    ; t_asmrules reads as a crossed pop, and it is
+    mov al, ah                  ; right to - the depth is fine either way, so
+    mov si, hd_req              ; getting it wrong returns with two registers
+    call hd_svc_call            ; swapped and nothing faults
+    call hd_sync                ; the mask, the count and the caption are all
+    pop si                      ; the resident's answer (SPEC.md 52.13)
     pop ax
     ret
 

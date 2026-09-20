@@ -30,7 +30,7 @@
 ; to a private interface, for the same reason and not by analogy.
 ; =============================================================================
 
-HD_ABI_VER   equ 2              ; bumped whenever a verb changes meaning
+HD_ABI_VER   equ 3              ; bumped whenever a verb changes meaning
 HD_TOOLFILE  equ 0              ; (the name itself is in the resident: a
                                 ; string is not an ABI number)
 
@@ -72,10 +72,14 @@ HDV_VOL      equ 2              ; db: the kernel's volume index
 HDV_PART     equ 3              ; db: which partition slot (0..3)
 HDV_BASE     equ 4              ; dd: its first LBA on the device
 HDV_SECS     equ 8              ; dw: its length, <= 65,535 by construction
-HDV_LSEG     equ 10             ; dw: the listing claim, 0 = none
-HDV_VOLH     equ 12             ; db: OUR handle for it - the row's own index,
+                                ; HDV_LSEG WAS HERE - the 6KB listing claim
+                                ; this driver funded for the volume, retired
+                                ; with the donation itself (SPEC.md 22.6)
+HDV_VOLH     equ 10             ; db: OUR handle for it - the row's own index,
                                 ; which is what comes back in DSV_BLK's AH
-HDV_SIZE     equ 16
+HDV_SIZE     equ 12             ; ...and the stride follows it down: hd_vol_row
+                                ; reaches a row with `mul ah`, so this has
+                                ; never had to be a power of two
 
 ; --- the partition table's on-disk shape, at LBA 0 --------------------------
 HP_TBL       equ 446            ; where the four entries start
@@ -128,6 +132,16 @@ HDT_SHUT     equ 3              ; close every window, free every claim. Must
                                 ; returns, and a window whose W_SEG names
                                 ; freed memory is a paint into whatever
                                 ; claims it next
+; --- and the four the PAGE is reached through (SPEC.md 52.13) ---------------
+; The page lives in this image now, so DSV_CPPAINT and its three companions
+; arrive as verbs. The kernel's own register contract is carried through
+; UNCHANGED - DI = pane left, DX = pane top, CX/BX = the pane-relative point -
+; because hd_tool_call touches none of them, so a thunk is a verb in AL and
+; nothing else.
+HDT_PAINT    equ 5              ; DSV_CPPAINT
+HDT_CLICK    equ 6              ; DSV_CPCLICK, the press
+HDT_UP       equ 7              ; DSV_CPUP, the release
+HDT_DRAG     equ 8              ; DSV_CPDRAG
 HDT_BUSY     equ 4              ; out: CF = 1 = a window of mine is still
                                 ; VISIBLE, so do not unload me. Visible and not
                                 ; merely allocated: closing one of these is a
@@ -166,6 +180,26 @@ HSV_MSG      equ 5              ; in: AH = an HDM_* -> the page's caption.
                                 ; the RESIDENT, so a string in the tool's
                                 ; segment would render that image's own bytes
 HSV_PAGE     equ 6              ; the Control Panel owes its page a repaint
+; --- what the PAGE pushes back (SPEC.md 52.13) ------------------------------
+; The page edits ITS copy of the device table and the resident owns the real
+; one, so every change it makes crosses as a verb. None of them is a
+; convenience: hd_devs over there is what the transport addresses, hd_vols is
+; the volume table the kernel registered against, and neither may be written
+; from this side.
+HSV_SEL      equ 8              ; in: HRQ_DEV -> the panel's highlight, which
+                                ; hd_mount and hd_cfg_automount read
+HSV_GEOM     equ 9              ; in: HRQ_DEV + HRQ_CYL/HEADS/SPT/FLAGS -> the
+                                ; typed geometry, stored and pushed to the
+                                ; drive with SET PARAMETERS where the rung
+                                ; has one
+HSV_MOUNTDEV equ 10             ; in: HRQ_DEV -> mount every FAT partition on
+                                ; it, which is the page's Mount button
+HSV_UNMOUNTDEV equ 11           ; in: HRQ_DEV -> ...and its Unmount
+HSV_STATE    equ 12             ; out: HRQ_RES = [hd_msgc], HRQ_VOL = a MASK
+                                ; of which devices have a mounted volume.
+                                ; Separate from HSV_SYNC because hd_svc banks
+                                ; BX..ES and AX is spent on that verb's two
+                                ; counts - so a second answer needs the block
 HSV_CTRS     equ 7              ; SPEC.md 52.10.9's DEVICE counters into
                                 ; HRQ_C0..C2. Implemented only in an INSTBENCH
                                 ; build - the number is allocated here
@@ -174,8 +208,31 @@ HSV_CTRS     equ 7              ; SPEC.md 52.10.9's DEVICE counters into
                                 ; existed in one build and not another is
                                 ; exactly the ABI drift this file forbids
 
-; --- HDM_*: the captions the tool may ask the page to show -------------------
-HDM_PICK     equ 0              ; 'Pick a drive, then a button'
+; --- HDM_*: THE PAGE'S CAPTION, AS A CODE ------------------------------------
+; `[hd_msgc]` is one of these and never a pointer, and the reason is the one
+; HSV_MSG already gives one image out: `font_str` reads through DS, so a
+; caption is only ever a pointer in the image that RENDERS it. The resident
+; sets a code from a mount, a config load or a failed tool open; the page - in
+; whichever image it lives - owns the strings and resolves the code against
+; its own. Getting that wrong does not fault: it letters whatever the other
+; image happens to hold at that offset.
+;
+; HDM_MOUNTED is the one that is BUILT rather than looked up ('Mounted 3
+; volumes'), off `[hd_nmnt]`, which the resident keeps for it.
+HDM_PICK      equ 0             ; 'Pick a drive, then a button'
+HDM_NOSYS     equ 1             ; 'Need the system disk'
+HDM_NOTOOL    equ 2             ; 'Tool would not open'
+HDM_TYPED     equ 3             ; 'Geometry set by hand'
+HDM_NOGEOM    equ 4             ; 'Geometry unknown: type it'
+HDM_NODEV     equ 5             ; 'No hard disk found'
+HDM_MNOTAB    equ 6             ; 'No partition table yet'
+HDM_MNOFAT    equ 7             ; 'No FAT partition on it'
+HDM_MHAVE     equ 8             ; 'Already mounted'
+HDM_MBIG      equ 9             ; 'Partition is over 32MB'
+HDM_MFULL     equ 10            ; 'No free volume'
+HDM_UNMOUNTED equ 11            ; 'Unmounted'
+HDM_MOUNTED   equ 12            ; ...and 'Mounted N volume(s)', BUILT
+HDM_N         equ 13            ; the table's length, asserted where it is
 
 ; --- the request block, in the TOOL's segment --------------------------------
 HRQ_DEV      equ 0              ; db: a device index (not a row pointer - the
@@ -200,4 +257,10 @@ HRQ_PAD      equ 15
 HRQ_C0       equ 16             ; dw: HSV_CTRS: device commands issued,
 HRQ_C1       equ 18             ; dw: ...sectors they carried,
 HRQ_C2       equ 20             ; dw: ...and controller resets
-HRQ_SIZE     equ 22
+HRQ_CYL      equ 22             ; dw: HSV_GEOM: the typed geometry, and it
+HRQ_HEADS    equ 24             ; dw: gets THREE fields of its own rather than
+HRQ_SPT      equ 26             ; dw: borrowing HRQ_C0..C2 - those are an
+HRQ_FLAGS    equ 28             ; db: INSTBENCH build's, so sharing the bytes
+                                ; would make this verb's meaning depend on a
+                                ; knob nobody building it would think to check
+HRQ_SIZE     equ 30

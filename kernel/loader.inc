@@ -570,12 +570,13 @@ ld_owed:
 ; out: nothing (all registers preserved); result in [ld_status]; on success
 ;      a new package instance is live in the instance table (SPEC.md 29)
 ;
-; The sync comes first and the index is banked across it, in that order and
+; The stage comes first and the index is banked across it, in that order and
 ; for a hard reason: disk_mount deliberately zeroes [ld_pending] (SPEC.md
-; 18.3), so anything that reads the pending word AFTER a sync reads zero. The
+; 18.3), so anything that reads the pending word AFTER one reads zero. The
 ; index arrives here in AX, already consumed by ui.inc, which is what makes
-; the order safe - and [ld_pwin] is read before the sync too, so this stays
-; true if the drain ever changes.
+; the order safe - and [ld_pwin] is read first too, so this stays true if the
+; drain ever changes. It now binds the QUIET arm as well: a quiet chdir also
+; goes through disk_mount.
 ; -----------------------------------------------------------------------------
 loader_run_x:
     push ax
@@ -587,10 +588,69 @@ loader_run_x:
     push bp
     push es
 
+    mov byte [ld_painted], 0    ; HOISTED above the arms: the refusal below
+                                ; reaches ld_owed too, and it owes the same
+                                ; answer about whether anything was drawn
+
+    ; --- STAGE THE ENTRY, and prefer the POSTER'S OWN CACHE ------------------
+    ; The index means a row in the listing the window that posted it is
+    ; SHOWING, and that window keeps a byte-for-byte copy of it (SPEC.md
+    ; 22.6.1). Reading it there is what this arm is: a QUIET chdir to stand
+    ; where the poster stands - which the sector reads below need and the
+    ; listing is not - and then one 24-byte copy out of its claim.
+    ;
+    ; What it replaces is `fmv_sync_x`, a LOUD mount: the directory scan, the
+    ; sort and ONE int 13h per type-1 file for the icon harvest, on every
+    ; double-click, to rebuild a snapshot that the poster already holds. It
+    ; is the last consumer in the launch path that wanted the global to BE a
+    ; particular window's directory, and both of its neighbours have already
+    ; stopped - ui.inc's Task Manager route goes by name (SPEC.md 21.4) and
+    ; assoc_run_x reads FS_DRV/FS_CWD off the poster's own block (54.9.1).
+    ; docs/plans/LISTING-HOME-PLAN.md wave 1.
     mov di, [ld_pwin]           ; the window whose listing this index means
     or di, di
-    jz .body                    ; no poster (a package's own request): the
+    jz .glob                    ; no poster (a package's own request): the
                                 ; globals are the only listing there is
+    cmp word [di+FS_VSEG], 0    ; ...and so they are for a window whose cache
+    je .loud                    ; was refused or PURGED - that claim is
+                                ; purgeable, so this arm is not exotic
+    ; --- ALREADY STANDING THERE? then there is nothing to mount at all ---
+    ; **AND THIS TEST IS LOAD-BEARING, MEASURED.** fmv_sync_x's own free path
+    ; is these two compares, and on the common case - you act in the window
+    ; you last moved - it takes them and returns having done NO I/O. A quiet
+    ; chdir is not free in its place: dsk_here_ok asks whether the media
+    ; CANNOT have changed, which a floppy's can, so it mounts. Without this
+    ; the launch measured 3 reads / 531 ms against the loud sync's 2 / 306 -
+    ; a change that removes a mount and adds a bigger one.
+    ;
+    ; What is NOT compared is [dsk_lstale], which fmv_sync_x has to test and
+    ; this does not: its free path leaves the caller resolving an INDEX
+    ; against the global snapshot, so an empty one is fatal there (SPEC.md
+    ; 18.9, docs/FIELD-NOTES.md 4). Here the entry comes out of the window's
+    ; own cache, and a quiet mount does not touch that.
+    mov dl, [di+FS_DRV]
+    cmp dl, [disk_drive]
+    jne .move
+    mov dx, [di+FS_CWD]
+    cmp dx, [dsk_cwd]
+    je .stage
+.move:
+    push ax                     ; the index: dsk_chdir_q_x wants AX
+    mov ax, [di+FS_CWD]         ; stand where the poster stands, QUIETLY
+    mov dl, [di+FS_DRV]         ; (assoc_back's shape, SPEC.md 18.9/54.9)
+    call dsk_chdir_q_x
+    pop ax
+    jc .loud                    ; the folder is gone or the disk changed:
+                                ; fmv_sync carries the recovery for that -
+                                ; it re-lists, falls back to the root and
+                                ; retitles (SPEC.md 19.2) - so this arm
+                                ; hands the case to it rather than growing a
+                                ; second copy of it
+.stage:
+    call fmv_ld_ent             ; SI -> the entry, out of the POSTER's claim
+    jnc .body
+    jmp short .badix            ; past FS_N: step 1's own refusal, unchanged
+.loud:
     call fmv_sync_x             ; ...make the globals BE that listing. NO ax
                                 ; bank: files.inc's own banner is "out:
                                 ; nothing (all registers preserved)" and the
@@ -598,15 +658,23 @@ loader_run_x:
                                 ; pop dx/bx/ax on EVERY exit, so the bank is
                                 ; dead by construction and not only by
                                 ; contract
+.glob:
+    cmp ax, [disk_nfiles]       ; step 1's bound, which moved up here with the
+    jae .badix                  ; stage it belongs to
+    call dsk_get_dir_x          ; SI -> the entry, staged out of LOW_SEG into
+                                ; the kernel segment (SPEC.md 2.1)
 .body:
-    mov byte [ld_painted], 0
-    call ld_run_body_x          ; out: AL = LD_* status
+    call ld_run_body_x          ; in: SI -> the staged entry; out: AL = LD_*
+.said:
     call ld_say_status          ; record the verdict and SAY it (SPEC.md 59)
     call ld_owed                ; ...and the repaint, if this load left one
                                 ; owed - the body both far entries share, and
                                 ; its banner is where the reasoning lives
 
     jmp kretfc_es
+.badix:
+    mov al, LD_EBAD             ; ld_take.bad's verdict, reached without it:
+    jmp short .said             ; an index past the end is not a file
 
 ; -----------------------------------------------------------------------------
 ; ld_run_body - the load pipeline (module-internal; loader_run saves regs)
@@ -752,19 +820,13 @@ ld_take:
 
 ld_run_body_x:
     ; --- 1. validate the directory entry --------------------------------------
-    cmp ax, [disk_nfiles]
-    jae ld_take.bad             ; index out of range - and ld_take's own
-                                ; refusal, which is the same AL = LD_EBAD.
-                                ; The only difference is that CF comes out
-                                ; SET, and CF=1 on the way out is already
-                                ; this routine's normal failure: every caller
-                                ; reads AL alone (loader_run_x and assoc_run_x
-                                ; both `call ld_say_status`, ui.inc does
-                                ; `or al, al`), which is why step 1 can now
-                                ; fall straight into .peek instead of jumping
-                                ; over a three-byte stub
-    call dsk_get_dir_x ; SI -> the entry, staged out of LOW_SEG into
-                                ; the kernel segment (SPEC.md 2.1)
+    ; **THE ENTRY IS STAGED BY THE CALLER**, and so is the bound it was
+    ; resolved against. An index is an index into the listing ONE window is
+    ; showing (SPEC.md 22.1), and loader_run_x is where that window is known -
+    ; so `cmp ax, [disk_nfiles]` + dsk_get_dir_x moved up there, where it can
+    ; read the poster's own cache instead of making the global snapshot be
+    ; that folder. What is left of step 1 is the question that is about the
+    ; ENTRY rather than about which listing it came out of.
     cmp word [si+LD_DE_TYPE], 1
     jne ld_take.bad             ; not an application package
 
@@ -1694,13 +1756,11 @@ ld_msrc:    resw 2              ; OSAPI_PKG_START's source image, offset then
 ld_pending: resb 1              ; 0 = none, else directory index + 1
                                 ; (set by files.inc, consumed by ui.inc).
                                 ; A BYTE: the index is bounded by
-                                ; [dsk_nmax], which is DSK_NENT for a FAT
-                                ; volume and DSK_VENT for a driver-backed
-                                ; one, so the stored value is 1..64. The
-                                ; guard is on the larger of the two - and it
-                                ; has to be, because dskwin.inc's DSK_VENT is
-                                ; twice DSK_NENT and it is the one that binds
-%if DSK_NENT > 254 || DSK_VENT > 254
+                                ; [dsk_nmax], which is DSK_NENT for every
+                                ; volume on the machine (SPEC.md 22.6 retired
+                                ; the driver-backed DSK_VENT), so the stored
+                                ; value is 1..64
+%if DSK_NENT > 254
   %error "[ld_pending] is a BYTE holding a directory index + 1, and \
 [dsk_nmax] has outgrown it (kernel/dskwin.inc)"
 %endif

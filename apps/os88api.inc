@@ -2333,7 +2333,7 @@ PKGV_IDENT   equ 0              ; **VERB 0 OF EVERY PACKAGE DOOR IS IDENTIFY**
 ; tests/unit/t_mirror.py holds this copy level with that one. A package copies
 ; the ANSWER here and derives nothing, which is what makes it different from
 ; the per-driver copy 51.12.1 refuses.
-DRVM_CEIL_DISK equ 33          ; DRVC_DISK's ceiling, in KB
+DRVM_CEIL_DISK equ 5           ; DRVC_DISK's ceiling, in KB
 DRVM_CEIL_NET  equ 33          ; ...and DRVC_NET's
 DRVC_SOUND   equ 1
 DRVC_DISK    equ 2              ; block volumes: hard disks (SPEC.md 51.8).

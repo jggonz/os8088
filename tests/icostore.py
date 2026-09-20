@@ -83,7 +83,27 @@ def main():
             return m.read((kseg << 4) + V("ico_n"), 1)[0]
 
         def refs():
+            # **OUT OF THE ACTING WINDOW'S OWN CLAIM**
+            # (docs/plans/LISTING-HOME-PLAN.md 13). A Disk window's mount
+            # writes the entries AND their reference index straight into
+            # FS_VSEG now, and leaves the floor listing honestly empty - so
+            # reading `LOW_SEG:dsk_icoix`, which is what this did, answers
+            # about whatever was listed there LAST. It read sixteen zeroes
+            # and reported them as the shared-body defect, which is the same
+            # picture a real one makes.
+            #
+            # The index sits immediately past the entries, which is
+            # `fmv_iofs`'s arithmetic and `dsk_dest_x`'s, and `[dsk_nmax]` is
+            # the width both of them use.
             n = int.from_bytes(m.read((kseg << 4) + V("dsk_nmax"), 2), "little")
+            vp = int.from_bytes(m.read((kseg << 4) + V("fm_vp"), 2), "little")
+            vseg = 0
+            if vp:
+                vseg = int.from_bytes(
+                    m.read((kseg << 4) + vp + V("FS_VSEG"), 2), "little")
+            if vseg:
+                return list(m.read((vseg << 4) + n * V("DSK_DE_STRIDE"), n))
+            # no claim: the window listed into the floor, exactly as before
             return list(m.read((low << 4) + V("dsk_icoix"), n))
 
         if rows() != 0:

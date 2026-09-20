@@ -385,8 +385,17 @@ entries and adds **zero** rows, for **4 reads of 18 sectors** in total.
   and not a crash, and the row returns at the next mount. Sizing is what keeps
   it rare, and 29 distinct icons across the entire shipped set fit in 32 rows
   with three spare.
-- **The hard disk's 64 entries come out of the DRIVER's 6KB claim**, so shrinking
-  the listing there changes `HDD_LISTKB` and rebuilds a `.DRV`. Wave 5 only.
+- **The hard disk's 64 entries came out of the DRIVER's 6KB claim** — carried
+  here as *"shrinking the listing there changes `HDD_LISTKB` and rebuilds a
+  `.DRV`, wave 5 only"*. **SETTLED, and not by shrinking it: SPEC.md 22.6
+  retired the donation outright.** Wave 1 left 1,536 bytes going into a 6,144
+  byte claim, and the 64-entry pass then raised `DSK_NENT` to the same cap the
+  claim was funding — so it bought a listing the `.lowbss` floor already gave
+  for free, at 6KB per mounted partition and 24KB on a four-partition machine.
+  The argument that closed it is one this plan could not have made: a hard
+  disk's directories and a floppy's are busy for the same reason, so the two
+  caps move together and there was never anything for a second one to buy.
+  `tests/hdnoclaim.py` is the gate; it replaced `hdmove`.
 - **`ASSOC_NAPP` is 12 with five built-ins**, so a machine can know **seven
   learned document appearances at once**. THIS CONSTRAINT IS NOT NEW and it is
   not this work's - it is recorded here because the same measurement pass is

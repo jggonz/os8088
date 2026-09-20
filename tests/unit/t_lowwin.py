@@ -53,9 +53,11 @@ from harness import check, done                           # noqa: E402
 # icon store now, and what the window keeps is `dsk_icoix`, one reference byte
 # per entry. So the 2,048-byte half of kern_big and the 1,024-byte pool of
 # kern_small both went, and both arms are secbuf + listing + index. The other
-# move in the same direction was `DSK_NENT` 32 -> 64 (SPEC.md 22.6's
+# move in the same direction was `DSK_NENT` 32 -> 64 (SPEC.md 22.6.2's
 # sixty-four-entry listing), which takes `disk_dir` 768 -> 1,536 and
-# `DSK_ICOIX_N` to DSK_VENT's 64. Net: the window is 2,112 where it was 3,328.
+# `DSK_ICOIX_N` with it to 64 - that constant was `DSK_VENT` until SPEC.md
+# 22.6 retired the second cap and is `DSK_NENT` on both kernels now. Net: the
+# window is 2,112 where it was 3,328.
 #
 # `dsk_ovlpad` is NOT in this table on purpose: `DSK_OVLPAD` is 0 today
 # (dskwin.inc says "AND IT IS ZERO AGAIN"), so the label emits nothing and

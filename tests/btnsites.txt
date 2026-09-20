@@ -68,7 +68,7 @@
 # package-side W_ONCLICK cannot serve.
 3 drivers/ether/etherui.inc        # Renew, Setup, and the third
 1 drivers/ether/ethcfg.inc
-2 drivers/hdd/page.inc
+2 drivers/hdd/cppage.inc
 1 drivers/hdd/tool.inc
 1 drivers/hdd/inst.inc
 1 drivers/net/netui.inc

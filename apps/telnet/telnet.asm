@@ -637,8 +637,22 @@ te_onclick:
     call te_layout
     call te_abdismiss               ; ...and by the click that dismisses them
     jc .out
-    or ax, ax                       ; mis-aimed press must be cancellable -
-    jnz .out                        ; te_onup has the action
+                                    ; **NO `or ax, ax` HERE.** It tested the
+                                    ; result of a `call os88ui_btnpress` that
+                                    ; stood on the line above until SPEC.md
+                                    ; 20.5.1.3.3 moved the press into the
+                                    ; library; the call went and the test
+                                    ; stayed. AX is then whatever
+                                    ; os88ui_btnclick left - the RECORD
+                                    ; pointer, out of its `xchg ax, bx` - so
+                                    ; the `jnz` was taken every time and this
+                                    ; proc returned before reaching the host
+                                    ; field. The host box stayed EMPTY, the
+                                    ; session had nothing to connect to, and
+                                    ; `telansi` reported twelve failures about
+                                    ; negotiation. There is nothing left to
+                                    ; test: the library chains here ONLY when
+                                    ; the press was not a button's.
 .field:
     push si
     mov si, te_line

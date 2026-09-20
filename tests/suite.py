@@ -2383,6 +2383,60 @@ SOAK = [
     Row("cycweb", "soak", py("tests/cycweb.py"), 40.0,
         "Does the claw eat the web it slides over? (SPEC.md 67.5.3.1)",
         needs=("marty",), serial=True),
+    Row("cycplay", "soak", py("tests/cycplay.py"), 55.0,
+        "SPEC.md 67.23 and 67.25: a kill scores what cy_kindsc SAYS it "
+        "scores, A DEATH DOES NOT RESTART THE WAVE, the "
+        "superzapper is recharged at the top of every level, and firing one "
+        "says something different from earning one. The score half is why the "
+        "row exists: cy_kindsc is a table of WORDS and cy_score_kind indexed "
+        "it by the KIND, so a tanker paid 25,600 where the table says 100 and "
+        "a fuseball 12,800 where it says 250 - which reads as a bonus life "
+        "every few kills and was reported as the 20,000 threshold being too "
+        "low. THE FIRST ENTRY OF SUCH A TABLE IS ALWAYS RIGHT, which is how "
+        "it lived: a glance at a flipper kill says nothing is wrong, and the "
+        "row therefore checks ALL FIVE. The superzapper is the instrument - "
+        "it calls cy_score_kind once per live enemy, so a board holding "
+        "exactly one turns one keystroke into one readable award, with no "
+        "play and no waiting for a wave. VERIFIED TO FAIL: it IS the break - "
+        "taking `shl bx, 1` back out reads the four wrong numbers above. It "
+        "checks the running image against its own re-assembly first, because "
+        "a knob build left in build/ moves every symbol and the row then "
+        "fails ninety seconds later complaining about the warp. 55s is 33.7s "
+        "MEASURED idle. The wave check is the one that was written FIRST and "
+        "watched go red: cy_die_update called cy_wavesize, which puts "
+        "[cy_wleft] back to the full wave for the level, so from level 13 on "
+        "every death put 40 enemies back on the pile and two deaths meant the "
+        "level could not be finished. SOAK: it is ONE package and wants an "
+        "emulator",
+        needs=("marty", "nasm"), serial=True),
+    Row("cycpu", "soak", py("tests/cycpu.py"), 45.0,
+        "SPEC.md 67.24: can a pickup be SWEPT UP? It used to be taken only if "
+        "the claw was on its EXACT lane on the ONE frame it reached the lip, "
+        "which on this window is very nearly impossible. Twelve cases: on the "
+        "lane, one either side, three away, swept on inside the grace window, "
+        "swept on too late, taken a step BEFORE the lip (67.24.2 - asserted "
+        "by reading [cy_u_dp] back after the take, which is what separates "
+        "'early' from 'eventually') and NOT taken from deep in the tube - and "
+        "swept ACROSS it both ways and the short way round a wrap (67.24.4 - the "
+        "claw SKIPS lanes, cy_aim_mouse putting it on the lane nearest the "
+        "pointer, so the test is the ARC since pickups were last looked at), "
+        "and then the WEB'S TOPOLOGY, which is why "
+        "cy_pu_near asks cy_wrap instead of doing arithmetic on the index: "
+        "lane 0's neighbour is the LAST lane on a closed web and lane 0 "
+        "itself on an open one, so the same pair of positions must answer "
+        "differently on the circle and on the flat ribbon, and the row runs "
+        "both. It places a pickup one drift short of the lip rather than "
+        "waiting for a drop (a drop needs a kill and a one-in-eight roll) and "
+        "reads [cy_pw_jump], which the JUMP pickup increments and nothing "
+        "else does. THREE HARNESS TRAPS are written into it, all three found "
+        "the hard way: advance() ends STOPPED so a sleep after it runs no "
+        "guest time, a stubbed spawner empties the wave and the game leaves "
+        "CYS_PLAY (asserted per case, so it cannot masquerade as the feature "
+        "failing), and a fixed wait cannot bound a frame that is repainting "
+        "the whole web - the row waits for [cy_u_act] to leave 1, which is "
+        "the event itself. 45s is 28.1s MEASURED idle, over two runs. SOAK: "
+        "it is ONE package and wants an emulator",
+        needs=("marty", "nasm"), serial=True),
     Row("cycfire", "soak", py("tests/cycfire.py"), 50.0,
         "Does holding the mouse button repeat the gun, and does a press on "
         "somebody else's window leave it alone? (SPEC.md 67.11.3)",
@@ -2680,6 +2734,33 @@ SOAK = [
         "asks",
         needs=("marty",), serial=True,
         wants=("build/ptstest360.img",)),
+    Row("ptsext", "soak", py("tests/ptsext.py"), 70.0,
+        "SPEC.md 5.6.9.4: the row above's claim, on a machine with TWO CARDS. "
+        "gfxpoints asks the only question worth asking - does gfx_points draw "
+        "what a gfx_pixel loop draws - and asks it on one display, where the "
+        "slot has one path. An extended desktop gives it three more, and the "
+        "one that fixed the field's report (the array fits one display, so it "
+        "is HOOKED to that display and drawn by the same inline loop) had no "
+        "gate at all. Four arms on one boot, on os8088_5150_both_gla_mono - "
+        "Hercules primary, CGA second, which is the pair the report came off: "
+        "single, then the window on the primary (the hooked arm), on the "
+        "secondary (the TRANSLATED arm, GFXPT_LOOP's second expansion) and "
+        "across the seam (per point, which is what shipped before). VERIFIED "
+        "TO FAIL AND TARGETED: replacing the two translating instructions "
+        "with nops takes the SECONDARY arm red on all three cases - 0 lit "
+        "against 24, 12 and 24 - and leaves the other three green, while "
+        "`make test-fast` stays 46/46 against that same broken kernel, which "
+        "is the whole reason this row exists. The straddling arm reads the "
+        "two cards STITCHED into the virtual desktop and not one of them: "
+        "each band is cut by the seam, so neither framebuffer holds a whole "
+        "one, and comparing per card reads half of A against half of B and "
+        "then indexes the other card at a negative x, which Python slices "
+        "silently. 70s is 41.6s MEASURED on an idle container, with the "
+        "~1.6x this suite allows for its slowest box. SOAK and not fast or "
+        "full, for gfxpoints' own reasons - one kernel slot, an emulator, "
+        "and 'did you obviously break the OS' is not what it asks",
+        needs=("marty",), serial=True,
+        wants=("build/ptstest360.img",)),
     Row("regmove", "soak", py("tests/regmove.py"), 130.0,
         "A package's REGION moves and the package keeps working (SPEC.md "
         "66.6.1). 66.6 said since it was written that a region can never move "
@@ -2789,7 +2870,22 @@ SOAK = [
         "boot partition at row 2, which that initialiser has DVK_FREE - so a "
         "machine with a hard disk handed over an index kern_dos read as no "
         "volume. VERIFIED TO FAIL: with the carry taken out the run under "
-        "kern_dos reports `(open failed)`.",
+        "kern_dos reports `(open failed)`. BOTH WAITS ARE ON THE GUEST'S "
+        "CLOCK and the reason is not the usual one: the arm costs 0.8 host "
+        "seconds against a 300-second budget, so contention was never going "
+        "to time it out - what a host loop cannot do is ask whether the "
+        "guest is still EXECUTING. This row failed twice in soaks and never "
+        "once solo in ~20 attempts, always showing the desktop decoded as "
+        "text after the full budget, and a screen that stopped changing "
+        "because nothing is running looks exactly like one that has not got "
+        "there yet; os88marty.until tells them apart and names the CS:IP. "
+        "Pressing Run is CONFIRMED too, by the text screen CHANGING - "
+        "`anything on the text screen` is already true of the desktop's "
+        "B800 garbage - so a press that did not take reports in 13 seconds "
+        "naming the press instead of 300 naming the program. It must NOT "
+        "confirm with m.video(): polling the card across the fsx mode change "
+        "wedges the guest and fails this row 3 in 3 "
+        "(docs/MARTYPC-DEBUG.md).",
         needs=("marty",), serial=True,
         wants=("build/kdos/DOS.O88", "build/kernel.sys", "build/hiber.drv")),
     Row("kdmouse", "soak", py("tests/kdmouse.py"), 120.0,
@@ -4061,6 +4157,58 @@ SOAK = [
         "no I/O at all' measured rather than quoted. Reads 3/0/0 here.",
         needs=("marty",), serial=True,
         wants=("build/pathtest360.img",)),
+    Row("fdlgstore", "soak", py("tests/fdlgstore.py"), 90.0,
+        "THE FILE DIALOG LISTS INTO ITS OWN STORE "
+        "(docs/plans/LISTING-HOME-PLAN.md 13). A listing has no home of its "
+        "own any more - a mount writes where its CALLER keeps a store - and "
+        "the Standard File dialog claims one at fdlg_open and frees it at "
+        "fdlg_close, which is what lets disk_dir leave `.lowbss` entirely. "
+        "THE FAILURE IS SILENT AND THAT IS THE WHOLE REASON FOR THE ROW: "
+        "fdlg_vclaim falls back to the floor listing when the claim is "
+        "refused, and a dialog reading the floor looks EXACTLY like one "
+        "reading its own store - same rows, same icons, same pixels - so "
+        "every other fdlg* row stays green with the feature doing nothing, "
+        "and stays green after the floor is deleted and the fallback "
+        "becomes a blank list. Four things, none visible on the glass: "
+        "[fdlg_vseg] is 0 with no dialog up, because the store is TRANSIENT "
+        "and a desktop pays nothing for it; with one up it names a real "
+        "claim and [dsk_dseg] IS that claim, so the mount was aimed at it "
+        "and not at LOW_SEG; entry 0 read straight out of the claim is a "
+        "real name, so something actually wrote there; and after Cancel "
+        "both words are back, because a .bss word left naming a freed block "
+        "is the next loud mount writing a listing into whatever took its "
+        "place - and this one is MOVABLE on kern_big and PURGEABLE on "
+        "kern_small. VERIFIED TO FAIL by forcing fdlg_vclaim down its "
+        "`.floor` arm: it reads `fdlg_vseg=0000 dsk_dseg=1940` and names "
+        "the refusal.",
+        needs=("marty",), serial=True,
+        wants=("build/muptest.img",)),
+    Row("ldcost", "soak", py("tests/ldcost.py"), 120.0,
+        "A LAUNCH READS THE POSTER'S OWN CACHE, AND THE COST IS THE "
+        "ASSERTION (docs/plans/LISTING-HOME-PLAN.md wave 1). loader_run_x is "
+        "handed a directory INDEX plus [ld_pwin], the Disk window that "
+        "posted it, and SPEC.md 22.1 says that window 'may not be the one "
+        "currently mounted' - so it used to make the GLOBAL snapshot be that "
+        "folder with a LOUD mount (scan, sort, icon harvest) to resolve an "
+        "index against a listing the poster already holds a copy of. NOTHING "
+        "INSIDE THE GUEST CAN SEE THIS: both spellings open the same package "
+        "into the same window and a screenshot of either is the same "
+        "picture, so it counts at the CONTROLLER with os88marty.disk(), "
+        "pathcost's and dosmedia's reason. TWO ARMS AND NEITHER IS WORTH "
+        "HAVING ALONE. Arm A acts in the window it last moved, which is the "
+        "common case and where fmv_sync_x's free path was already two "
+        "compares and a ret - so the bar is PARITY, and that arm exists "
+        "because the first build of the wave FAILED it: a quiet chdir is not "
+        "free in a free path's place, dsk_here_ok asking whether the media "
+        "CANNOT have changed and a floppy's always can, measured 3 reads / "
+        "531 ms against 2 / 306. Arm B is the case the wave is for - a "
+        "second Disk window on the other drive makes the standing folder not "
+        "the poster's - and reads 4 / 13 / 2 against the loud sync's 10 / 58 "
+        "/ 7, which is six int 13h at ~400 ms apiece on a 4.77 MHz XT. "
+        "VERIFIED TO FAIL BOTH WAYS: fmv_sync_x put back takes B to 10 "
+        "reads, and the 'already standing there' test taken out takes A "
+        "to 3.",
+        needs=("marty",), serial=True),
     Row("dosargs", "soak", py("tests/dosargs.py"), 90.0,
         "CAN A DOS PROGRAM BE GIVEN ARGUMENTS? (SPEC.md 96.19). Half the DOS "
         "software worth running is configured by its command line and the box "
@@ -7009,14 +7157,16 @@ SOAK = [
         "66.5.10).",
         needs=("marty",), serial=True,
         wants=("build/heapfrag360.img",)),
-    Row("hdmove", "soak", py("tests/hdmove.py"), 120.0,
-        "Compact the heap out from under a DONATED listing claim (SPEC.md "
-        "66.5.10.2) - the only claim in the tree with three holders, two of "
-        "them the kernel's and on the far side of the ABI from the callback. "
-        "A declaration is not a mechanism: check 1 is that the block MOVED, "
-        "and check 4b that no word anywhere still holds the old base",
-        needs=("marty", "nasm"), serial=True, timeout=900,
-        wants=("build/heapfrag360.img",)),
+    Row("hdnoclaim", "soak", py("tests/hdnoclaim.py"), 75.0,
+        "A mounted hard-disk partition costs NO HEAP (SPEC.md 22.6). It "
+        "REPLACES `hdmove`, which compacted the heap out from under the 6KB "
+        "listing claim HDD.DRV used to donate per partition; the donation is "
+        "retired, so the gate is its inverse - the driver owns its image and "
+        "nothing else, [dsk_dseg] names no claim with a hard disk listing, "
+        "and the volume still lists. Nothing REFUSES a claim that comes "
+        "back: osapi_vol_add ignores DX now, so it would leak 6KB a mount "
+        "in silence",
+        needs=("marty",), serial=True, timeout=600),
     Row("heaphi", "soak", py("tests/heaphi.py"), 90.0,
         "A driver's second image goes at the TOP of the heap (SPEC.md "
         "50.3.2.1). The user's sequence - tick Hard Drive, tick Ram Disk, "

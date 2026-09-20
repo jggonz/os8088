@@ -716,6 +716,41 @@ the limit and blames the guest (an install driven that way sat for 40
 minutes with the install long finished). `settle` samples the cycle counter
 first and refuses a window it can prove cannot close, naming `until`.
 
+### `m.video()` WEDGES A GUEST THAT IS CHANGING MODE — read the screen instead
+
+**Measured, and it is the strongest instrument effect in this document.**
+`tests/kdhdd.py` presses Run on the DOS box's *Shut down the OS* arm and the
+machine leaves graphics for `kern_dos`'s text screen. Polling `m.video()`
+every 250 ms across that window — on the otherwise untouched row, with
+nothing else changed — makes it fail **3 times in 3**. Polling `m.screen()`
+fifty times harder, every 5 ms, is clean **3 in 3**. Both were run solo on an
+idle box.
+
+The failure does not look like an instrument effect, which is what makes it
+worth a section: the machine sits on the desktop until the wait gives up, and
+the row reports the program it was waiting for rather than the card query it
+was making. The exact screen it prints is the one this row's real
+intermittent prints, so the two are indistinguishable from the output.
+
+`video()` is a plain debug command and takes no lock on our side — the wedge
+is inside MartyPC, which is pinned upstream, so **the rule is the workaround**:
+
+* to watch for a MODE CHANGE, watch the **screen** and not the card. What is
+  quiet while a graphics desktop is up is CHANGE: `screen` decodes the B800
+  bytes underneath it and nothing writes there, so the first thing to move
+  them is the handover. `any(r.strip() …)` is already true of that garbage
+  and is not a test; `rows(mm) != was` is.
+* one `m.video()["type"]` at startup, to pick a mono or colour route, is
+  fine and is what most rows do. It is POLLING ACROSS THE CHANGE that bites.
+
+**Three rows poll it across a mode change and have not been measured**:
+`tests/hibernate.py:292` (`until(… video_is_text(mm.video()) …)`, the closest
+match to what was measured), `tests/kdhand.py:207` and
+`tests/kdreturn.py:257`. They pass today. They are named here rather than
+changed because the wedge was measured on ONE path and a rewrite of a green
+row on a theory is how a working gate gets broken — but a flake in any of
+them should start here.
+
 ### Driving the UI with breakpoints armed: `os88marty.bp_trace`
 
 **A breakpoint and a UI verb cannot simply be spelled one after the other**,

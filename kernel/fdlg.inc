@@ -215,6 +215,15 @@ fdlg_s_drv:    db 'A:', 0        ; the letter is STAMPED per paint (SPEC.md
 ; -----------------------------------------------------------------------------
 fdlg_win:   dw 0
 
+; fdlg_vseg - the dialog's LISTING STORE, 0 = it has none and the floor
+; listing is being used instead (docs/plans/LISTING-HOME-PLAN.md 13).
+;
+; RESIDENT, beside the gate above and for the same reason: on kern_small this
+; module is FDLG.DRV and its image comes and goes, but a claim outlives any
+; one entry into it and something has to remember to free it. It is two bytes
+; either way, against the 1,600 the floor listing cost every machine.
+fdlg_vseg:  dw 0
+
 %ifdef FDLG_MOD
 FD_NENT     equ 7               ; entries FDLG.DRV publishes (SPEC.md 2.8).
 FDE_OPEN    equ 0               ; SEVEN and not nine: fdlg_onup and fdlg_ondrag
@@ -355,6 +364,82 @@ fdkf_dx:    pop dx
 ; has had its region freed, and its near callback pointer stops meaning
 ; anything. The window pointer alone would not do - window slots are reused.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; fdlg_vclaim - take the dialog's listing store and point the mount at it
+; in:  nothing
+; out: nothing (all registers preserved); [fdlg_vseg] and the destination set
+;
+; docs/plans/LISTING-HOME-PLAN.md 13. This module's own header said it needed
+; "NO cache of its own" because it read the mount snapshot directly - and
+; there is no snapshot to read now: a mount writes where its caller keeps a
+; store. What modality still buys is that the dialog can hold ONE claim for
+; as long as it is up, because nothing else can be listing while it is.
+;
+; A REFUSED CLAIM FALLS BACK TO THE FLOOR, which is still there. Commit 3 of
+; 13.5 deletes the floor and makes that a refusal on the glass instead - the
+; dialog's list area saying so, with the name box still usable, because a
+; Save the user can still type a name into is worth more than a dialog that
+; will not open.
+; -----------------------------------------------------------------------------
+fdlg_vclaim:
+    push ax
+    push bx
+    push dx
+    mov word [fdlg_vseg], 0
+    mov bx, MEM_K_FDLG
+    mov ax, VIEW_KB             ; the Disk window's size: a store is one shape
+    FDX mem_claim_x             ; (13.2), so the two cannot disagree
+    jc .none
+    mov [fdlg_vseg], dx
+    jmp short .aim
+.none:
+    xor dx, dx                  ; **EXPLICITLY**, and not on the assumption
+                                ; that a refused mem_claim answers 0: its
+                                ; banner documents DX on SUCCESS and nothing
+                                ; on the failure arm, so aiming the mount at
+                                ; whatever it happened to leave would write a
+                                ; listing into a segment nobody owns. Zero
+                                ; makes the dialog's mounts quiet and its
+                                ; list area empty, which is the honest answer
+                                ; - there is no floor listing to fall back to
+                                ; any more (13.1)
+.aim:
+    xor bx, bx
+    FDX dsk_dest_x
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_vfree - give it back, and put the destination back with it
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; Reached from fdlg_close AND from fdlg_open's own refusal path, because the
+; claim is taken before wm_create and wm_create can still fail. Idempotent:
+; [fdlg_vseg] = 0 is "nothing to give back", which is also the state a
+; refused claim left.
+; -----------------------------------------------------------------------------
+fdlg_vfree:
+    push ax
+    push bx
+    push dx
+    xor dx, dx                  ; the destination goes back FIRST, so no path
+    xor bx, bx                  ; out of here leaves a `.bss` word naming a
+    FDX dsk_dest_x              ; block that is about to be freed
+    mov dx, [fdlg_vseg]
+    or dx, dx
+    jz .out
+    mov word [fdlg_vseg], 0
+    mov bx, MEM_K_FDLG
+    FDX mem_free_x
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 FDBODY fdlg_open_x
     push ax
     push bx
@@ -393,6 +478,10 @@ FDBODY fdlg_open_x
 .fresh:
     call fdlg_nosel             ; ...and AX comes back 0 for the third word
     mov [fdlg_clkt], ax
+
+    call fdlg_vclaim            ; ...AND SOMEWHERE FOR THE LISTING TO GO,
+                                ; before the first mount rather than after it
+                                ; (13.1): fdlg_home_go below IS a mount
 
     call fdlg_home_go           ; open on THIS application's folder, not on
                                 ; wherever the GLOBAL volume was last left by
@@ -449,9 +538,13 @@ FDBODY fdlg_open_x
     clc
     jmp short .out
 .refuse:
-    stc
-.out:
-    jmp fdk_di
+    call fdlg_vfree             ; BEFORE the `stc`, not after: fdlg_vfree ends
+    stc                         ; in an `or dx, dx` and three pops, so it does
+.out:                           ; not give the flags back. It is reached from
+    jmp fdk_di                  ; both refusals - the three above the claim,
+                                ; where it is a no-op, and wm_create's below
+                                ; it, where it is the only thing that gives
+                                ; the claim back
 
 ; -----------------------------------------------------------------------------
 ; fdlg_hidx - the requesting instance's file-home row (internal, SPEC.md 38.10)
@@ -842,6 +935,12 @@ fdlg_close:
     mov word [fdlg_win], 0      ; drop the gate FIRST: wm_destroy repaints,
     call KERNEL_SEG:apic_wm_destroy ; and nothing may observe a gate pointing at
                                 ; a freed record
+    call fdlg_vfree             ; ...and the listing store goes with the
+                                ; dialog (13.1): it is TRANSIENT, which is the
+                                ; whole of why it costs no resident byte.
+                                ; AFTER wm_destroy, because that repaints and
+                                ; a repaint of what was underneath must not
+                                ; find the destination already moved
     mov bx, [fdlg_rqwin]
     call KERNEL_SEG:cw_menu_activate
     call KERNEL_SEG:cw_menu_draw_bar
@@ -3412,11 +3511,14 @@ fdlg_top_x:
 %endif
     FDXF fm_ultoa_x
     FDXF dsk_chdir_x
+    FDXF dsk_dest_x
     FDXF dsk_find_name_x
     FDXF dsk_get_dir_x
     FDXF dsk_get_icon_x
     FDXF dsk_ncopy
     FDXF dsk_vol_slot_x
+    FDXF mem_claim_x
+    FDXF mem_free_x
     FDXF dskw_char_x
     FDXF dskw_mkdir_x
     FDXF os88ui_kbtn            ; the loose-register staging and NOT

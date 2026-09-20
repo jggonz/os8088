@@ -18,7 +18,7 @@ wrong.  Both of its terms drift on their own:
     number and touches nothing in the kernel.  There is no linker here
     (SPEC.md 1), so nothing notices.
 
-  * THE CLAIMS.  `SBL_POOLKB`, `SK_RXMAX`, `HDD_LISTKB` and the rest live in
+  * THE CLAIMS.  `SBL_POOLKB`, `SK_RXMAX`, `RD_TABMAXKB` and the rest live in
     the drivers' own sources, which the kernel cannot `%include` - they are
     assembled into separate flat binaries.  So the kernel's arithmetic is a
     COPY of theirs, which is t_mirror's failure mode with the two halves too
@@ -219,8 +219,12 @@ def main():
         "DRVM_SND": s["DRVM_IMG_SND"]                       # its image...
                     + s["SBL_DMASZ"] // 1024                # sbl_dma_map
                     + s["SBL_POOLKB"],                      # sbl_pool_get, top rung
-        "DRVM_HDD": s["DRVM_IMG_HDD"]
-                    + s["HD_MAXVOL"] * s["HDD_LISTKB"],     # one per mounted volume
+        # NO CLAIM AT ALL. This was `+ HD_MAXVOL * HDD_LISTKB`, a 6KB listing
+        # buffer per mounted volume, and SPEC.md 22.6 retired the donation -
+        # the kernel lists every volume into its own `.lowbss` now. HD_MAXVOL
+        # must NOT come back here: a mounted partition is a row of the
+        # driver's bss, which ships inside the image and is already counted.
+        "DRVM_HDD": s["DRVM_IMG_HDD"],
         # **THE POOL, NOT ONE RING A SLOT** (SPEC.md 72.21). This was
         # NET_SOCKS * (rx + tx), which is exactly the arithmetic the ring pool
         # exists to break: a slot is 128 bytes of bss and a ring pair is 9,216

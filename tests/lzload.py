@@ -11,10 +11,22 @@ one that needed a file to exist before it could be made at all:
     WHOLE image is the point: a decoder that got the last run wrong would still
     open a window;
   * ...and it does that for EITHER FORMAT. CALC and MINES are LZ4 and PIANO
-    is LZB, and the shipped kernel carries both (SPEC.md 20.13.6), so all
-    three open and all three are compared whole - which is the only thing in
-    the tree that ever runs LZB's arm on a PACKAGE, nothing on a shipped disk
-    being LZB.
+    is LZB, and the shipped kernel carries both (SPEC.md 20.13.6) - which is
+    the only thing in the tree that ever runs LZB's arm on a PACKAGE, nothing
+    on a shipped disk being LZB.
+
+**WHICH ONE IS COMPARED WHOLE IS A PROPERTY OF THE PACKAGE, NOT OF THE
+DECODER, AND IT IS MINES.** A package that has OPENED has also RUN, and a
+running program writes to its own image - so the byte-exact arm only ever
+worked on programs that had not yet got that far, which this file said out
+loud about Piano and then rested on for Calc. SPEC.md 20.5.1.3's button
+record made Calc one of them: a painter stages its rects and labels into the
+record, and `cal_btlbl` at 0x568 is the "first at 1384" this row reported.
+Both formats produced the SAME four bytes, which is the proof it was never
+the decoder. Where a decoder IS proved exactly is `lzmod` - 116,085 bytes of
+BEVERLY.MOD, a subject that is not also a program. Do not re-add a whole-image
+comparison here for a package with controls in it; add the package to lzmod's
+shape instead.
 
 `--lz4only` is the other half and a build of its own: a kernel built
 `COMPRESS=lz4`, on which PIANO is REFUSED rather than run. SPEC.md 20.13.3
@@ -104,7 +116,24 @@ def main():
         # both are lz4 of the same .bin, so the two UNWRAP to the same image.
         # On --lz4only the tree has no `calc.o88` at its root at all and the
         # row died on FileNotFoundError, which read as a broken private tree.
-        for name, src in (("CALC.O88", t.img("lzc/calc.o88")),
+        #
+        # **ONLY MINES IS COMPARED, AND CALC IS NOT** - which is the Piano
+        # arm's reason below, arriving at a second package. That comment has
+        # always said a RUNNING package writes to its own image and that
+        # "CALC and MINES happen not to have got that far": the check rested
+        # on an accident, and it was written down as one. SPEC.md 20.5.1.3's
+        # button RECORD ended it - a package stages its rects and labels into
+        # the record at run time, and Calc's `cal_btlbl` is at 0x568, which is
+        # the 1384 this row reported as `expanded WRONG: 4 of 6761 bytes
+        # differ, first at 1384`. Four bytes, in the two words a painter had
+        # just filled in.
+        #
+        # It is NOT a decoder defect, and the pair of arms is what says so:
+        # lz4 and LZB are different code and produced the SAME four bytes.
+        # Nothing is lost by dropping it either, because the byte-exact proof
+        # of both decoders is `lzmod`, where the subject is not also a
+        # program: 116,085 bytes of BEVERLY.MOD, every one compared.
+        for name, src in (("CALC.O88", None),
                           ("MINES.O88", t.img("lzc/mines.o88"))):
             before = dispcp.win_list(m, S)
             dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, name)
@@ -122,6 +151,11 @@ def main():
             # the guest holds is an IMAGE. Unwrapping is not the same as the
             # flags mask below - that one exists because the EXPANDED image
             # keeps saying it came from a compressed file.
+            if src is None:                 # opened, RUNNABLE, not compared
+                say("  %-10s opened at %04X, ld_status=%d - runnable; not "
+                    "byte-compared, it writes its own button record"
+                    % (name, pseg, st))
+                continue
             want = os88pkg.image_unwrap(open(src, "rb").read())
             got = bytes(m.readseg(pseg, 0, len(want)))
             # the flags byte is the ONE difference: bit 3 (and 4) say the file

@@ -610,19 +610,53 @@ IAC, WILL, WONT, DO, DONT = 255, 251, 252, 253, 254
 
 
 class MirrorServer(threading.Thread):
-    def __init__(self, port):
+    # **THE BIND WAITS, AND THAT IS ABOUT REPORTING RATHER THAN ABOUT TIMING.**
+    # Every server in this row uses the one PORT in turn, because the guest was
+    # told one HOSTLINE and cannot be retold between checks. A previous
+    # BBSServer's listener is closed by `stop()` - but `close()` on a socket
+    # another thread is sitting in `accept()` on does not release the port at
+    # the instant it returns, and the fixture loop's own teardown already had a
+    # `time.sleep(0.6)` commented "before the port is bound again" for exactly
+    # that.
+    #
+    # An unguarded bind here does not fail the row honestly, it CRASHES it: the
+    # OSError comes out of __init__ as a traceback and the whole `fails` list -
+    # everything the row has actually learned - is never printed. That is how
+    # this row spent a soak reporting `Address already in use` when what it had
+    # FOUND was `the session never reached TS_UP` for the `cursor` fixture, one
+    # check earlier. The retry is not a tolerance on the mechanism under test;
+    # it is what lets the mechanism under test have its say.
+    def __init__(self, port, wait=10.0):
         threading.Thread.__init__(self, daemon=True)
         self.rx = bytearray()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(("0.0.0.0", port))
+        end = time.time() + wait
+        while True:
+            try:
+                self.sock.bind(("0.0.0.0", port))
+                break
+            except OSError:
+                if time.time() >= end:
+                    raise
+                time.sleep(0.25)
         self.sock.listen(2)
+        self.sock.settimeout(0.5)   # ...and the SAME reason as os88bbs's: a
+        self._halt = False          # blocked accept() pins the port through
+                                    # close(), so the next server on this PORT
+                                    # cannot bind
 
     def run(self):
-        try:
-            conn, _peer = self.sock.accept()
-        except OSError:
-            return
+        while True:
+            try:
+                conn, _peer = self.sock.accept()
+                break
+            except socket.timeout:
+                if self._halt:
+                    return
+            except OSError:
+                return
+        conn.settimeout(None)
         try:
             conn.sendall(bytes([IAC, DO, OPT_LINEMODE,
                                 IAC, WILL, OPT_XDISPLOC]))
@@ -645,10 +679,20 @@ class MirrorServer(threading.Thread):
                 pass
 
     def stop(self):
-        try:
-            self.sock.close()
+        # **AND IT JOINS.** Closing the listener is not the same as releasing
+        # the port: while `run()` is inside `accept()` the descriptor is still
+        # referenced, so the socket outlives close() until that call returns.
+        # os88bbs's BBSServer already gets this right by waiting on `done`;
+        # this one closed and returned, and the NEXT server on this PORT -
+        # check_fullscreen's, one line later - bound into a listener that was
+        # still there. `_stop` plus the 0.5s accept timeout bounds the wait.
+        self._halt = True           # NOT `_stop`: that is
+        try:                        # threading.Thread's own method, and
+            self.sock.close()       # shadowing it breaks join()
         except OSError:
             pass
+        if self.is_alive():
+            self.join(3.0)
 
 
 def check_mirror(press_connect, connected, fails):

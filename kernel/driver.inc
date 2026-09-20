@@ -1162,7 +1162,7 @@ DRVM_PLUS    equ 0x8000         ; "...and the store you size on its own page",
                                 ; would be arithmetic rather than advice
 
 DRVM_IMG_SND equ 6              ; ceil(build/sound.drv   / 1024) - t_drvmem
-DRVM_IMG_HDD equ 9              ; ceil(build/hdd.drv     / 1024)   checks
+DRVM_IMG_HDD equ 5              ; ceil(build/hdd.drv     / 1024)   checks
 DRVM_IMG_ETH equ 19             ; ceil(build/ether.drv   / 1024)   every one
 DRVM_IMG_RAM equ 9              ; ceil(build/ramdisk.drv / 1024)   of these
 DRVM_IMG_NET equ 7              ; ceil(build/net.drv     / 1024) - SEVEN
@@ -1177,9 +1177,12 @@ DRVM_SND     equ DRVM_IMG_SND + 8 + 20    ; SBL_DMASZ (the DMA-visible double
                                 ; staging pool, taken on the first grant). The
                                 ; pool walks DOWN by SBL_POOLSTEP when the heap
                                 ; will not fund it; 20 is the top rung
-DRVM_HDD     equ DRVM_IMG_HDD + 4 * 6     ; HD_MAXVOL listing claims of
-                                ; HDD_LISTKB - one per mounted volume, and four
-                                ; is what the driver will mount at once
+DRVM_HDD     equ DRVM_IMG_HDD ; the hard disk claims NOTHING while doing its
+                                ; job. It was `+ 4 * 6` - HD_MAXVOL listing
+                                ; claims of HDD_LISTKB, one per mounted volume
+                                ; - and SPEC.md 22.6 retired the donation, so
+                                ; a mounted partition costs this driver a row
+                                ; of its own bss and not a byte of heap
 DRVM_ETH     equ DRVM_IMG_ETH + 14        ; THE RING POOL at its top rung, not
                                 ; one ring per socket (SPEC.md 72.21): the bulk
                                 ; pair plus three lean ones is 13,824 bytes
@@ -1241,7 +1244,7 @@ drv_memk:                       ; one word per drv_tab row, in the same order
 ; A LITERAL and not `equ DRVM_HDD`, because t_mirror compares the text when it
 ; is not a number and the SDK cannot see DRVM_HDD. The %if is what makes the
 ; literal safe, and it is the half a package could never have had.
-DRVM_CEIL_DISK equ 33           ; MIRRORED in apps/os88api.inc - t_mirror
+DRVM_CEIL_DISK equ 5            ; MIRRORED in apps/os88api.inc - t_mirror
 DRVM_CEIL_NET  equ 33           ; ...ditto
 %if DRVM_CEIL_DISK != DRVM_HDD || DRVM_CEIL_NET != DRVM_ETH
   %error "a class ceiling has drifted from drv_memk - apps/os88api.inc too"

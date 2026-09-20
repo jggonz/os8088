@@ -806,7 +806,15 @@ sv_stepp:   dw sv_cube_step, sv_star_step, sv_shape_step, sv_fish_step
 sv_inks:
     db CBLACK, CLCYAN,   CBLUE,     CWHITE      ; cube: a lit edge and a dim one
     db CBLACK, CWHITE,   CLGRAY,    CWHITE
-    db CBLACK, CWHITE,   CLGRAY,    CYELLOW     ; stars: far ones grey, near white
+    db CBLACK, CWHITE,   CLGRAY,    CWHITE      ; stars: far ones grey, the rest
+                                                ; white. SV_HOT WAS CYELLOW and
+                                                ; is not any more (SPEC.md
+                                                ; 79.5.11) - an owner's look
+                                                ; decision, taken while the
+                                                ; mode was open. It also makes
+                                                ; SV_HOT and SV_MAIN one ink,
+                                                ; so the near band is ONE
+                                                ; arrival rather than two
     db CBLACK, CWHITE,   CWHITE,    CWHITE      ; ...but NOT grey on 1bpp: see
                                                 ; svstars.inc's header, a
                                                 ; dithered one-pixel star is

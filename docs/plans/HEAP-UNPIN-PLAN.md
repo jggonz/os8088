@@ -2,8 +2,9 @@
 
 **Status: BUILT, except §12's open questions.** The unpinning this document
 plans has shipped — regions, driver images, overlays and `SOUND.DRV`'s ring all
-move, and `tests/suite.py`'s `reg*`, `drvmove`, `sndmove` and `hdmove` rows are
-its gates. The byte figures below are the ESTIMATES the plan was written
+move, and `tests/suite.py`'s `reg*`, `drvmove` and `sndmove` rows are
+its gates. (`hdmove` was a fourth, for the HDD's donated listing claim;
+SPEC.md 22.6 retired that claim and `hdnoclaim` asserts its absence instead.) The byte figures below are the ESTIMATES the plan was written
 against, not what it cost; `docs/reports/` carries the measurement. SPEC.md 66.6 is the door this
 document costs and SPEC.md 66.9 is the register it works through.
 
@@ -1607,7 +1608,7 @@ came in by — before anything can be unpinned against it.
 | `make test-full` | **61 passed, 0 failed, 2 skipped** | the pre-merge gate — the knob kernels, **kern_small**, `kernresident`, `small128`, a boot on both 1bpp adapters |
 | `heapcheck` | **ok, 31.6s** | SPEC.md 66.8's own gate: a comb of claims, every other one freed, then a claim only compaction can satisfy — and **the contents of every survivor** checked against a per-block pattern |
 | `heapmap` | **ok** | reads `mem_tab` out of a running guest at the new 11-byte stride |
-| `paintmove`, `trackmove`, `rdmove`, `hdmove` | **ok** | live relocations through `pt_reloc`, `trk_reloc`, `rd_reloc` and the donated HDD listing |
+| `paintmove`, `trackmove`, `rdmove`, `hdmove` | **ok** | live relocations through `pt_reloc`, `trk_reloc`, `rd_reloc` and the donated HDD listing — `hdmove` has since been retired with the claim it measured (SPEC.md 22.6) |
 | `fatwpin`, `msegnomem`, `mseglazy` | **ok** | the FAT window's pin, and the multiseg claim paths |
 | `editmove` | **skipped** | wants `build/zmove360.img`; the Frotz stories are never committed |
 
@@ -2201,7 +2202,8 @@ at int C1h and int C3h, one of them read `0x8000`, a package claim moved off
 probed as **"No hardware found"**. A machine with no C: drive, out of a heap
 compaction, with nothing in the log. `tests/hdmove.py` caught it, which is the
 argument for running the whole family after a `mem_can_move` change and not
-only the row you wrote.
+only the row you wrote. (That row is retired — SPEC.md 22.6 took away the
+claim it exercised — so the family is one row shorter and the argument is not.)
 
 `mem_iv_patch` is cut to **sixteen** slots - int 08h..0Fh and int 70h..77h, the
 hardware IRQ vectors - which is what a driver can legitimately own and is a

@@ -68,64 +68,62 @@ DSK_ICO_SIZE equ 64              ; harvested icon slot stride (SPEC.md 19)
 ; and 0xFF in the index is the "no icon" the generic-icon sentinel already
 ; meant.
 ;
-; `kern_big` KEEPS ONE BODY PER ENTRY and is byte-identical. That is not
-; timidity: a `DVK_DRV` volume gets DSK_VENT = 64 entries out of a claim its
-; driver funds, and a pool sized for a floppy would degrade the 17th icon on a
-; hard disk. `kern_small` can have no such volume at all - SPEC.md 51.0 took
-; the driver mechanism out - so there the pool only ever serves these arrays,
-; which is what makes the simpler code correct rather than merely smaller.
+; That was the shape for one cycle. SPEC.md 25.9 then took the bodies out of
+; the listing ALTOGETHER, on both kernels: there is one machine-wide store and
+; a listing owns a reference byte per entry and nothing else. DSK_ICO_SIZE is
+; still the width of one body, in the store.
 %ifdef KERN_SMALL
-DSK_OVLPAD   equ 0               ; **AND IT IS ZERO AGAIN, AND IT STAYED ZERO
-                                 ; THROUGH THE CUT.** This was 768 while a
-                                 ; listing held 32 entries: `.ovlw` is read
-                                 ; onto the FAT window and the mount buffers
-                                 ; (SPEC.md 2.5.3), and taking the icon bodies
-                                 ; out left the overlay short. Doubling
-                                 ; DSK_NENT put 768 bytes of ENTRIES back in
-                                 ; the same region, which is room the overlay
-                                 ; can use and the listing also wants - so the
-                                 ; pad was not needed and the bytes did a job.
+DSK_OVLPAD   equ 0              ; **AND IT IS ZERO AGAIN.**
                                  ;
-                                 ; SPEC.md 22.6.2 then took DSK_NENT back to
-                                 ; 32 and the pad did NOT come back with it,
-                                 ; which is the whole point of the order that
-                                 ; change was made in: SPEC.md 2.5.3.2 moved
-                                 ; 910 bytes of `.ovlw` into the blob FIRST,
-                                 ; so the overlay rounds to 2,048 and still
-                                 ; lands inside a 2,336-byte region. Cut the
-                                 ; listing without cutting `.ovlw` and this
-                                 ; constant is what has to absorb it - 736
-                                 ; bytes of DEAD `.lowbss`, and a shrink that
-                                 ; buys nothing. kernel.asm's `.ovlw` %if is
-                                 ; the guard that says which case you are in
+                                 ; docs/plans/LISTING-HOME-PLAN.md 13 took the
+                                 ; ENTRIES and their reference index out of
+                                 ; `.lowbss` entirely - 800 bytes here - and
+                                 ; `.ovlw` is read onto this region (SPEC.md
+                                 ; 2.5.3), so for one commit 512 of those 800
+                                 ; were held back here rather than given to
+                                 ; the heap: the overlay had nowhere else to
+                                 ; land. Six boot-only bodies then moved into
+                                 ; the BLOB half instead - sched_init,
+                                 ; mem_init, font_init, wm_init, files_init
+                                 ; and snd_init, through the OVBCALL set that
+                                 ; SPEC.md 2.5.3.2 built for exactly this -
+                                 ; and `.ovlw` fell 1,900 to 1,342, which
+                                 ; rounds to 1,536 and fits the region with
+                                 ; the pad at nothing.
+                                 ;
+                                 ; So this build takes the whole 800 after
+                                 ; all, and the label is kept for the third
+                                 ; time for the reason it was kept the first:
+                                 ; the NEXT thing that joins `.ovlw` needs
+                                 ; somewhere to be told about. kernel.asm's
+                                 ; `.ovlw` %if is the guard that says whether
+                                 ; you are in that case
 %endif
 
 ; **THERE IS NO PER-LISTING POOL ANY MORE** (SPEC.md 25.9). A listing owns one
 ; reference byte per entry and no bodies at all; ICO_NROW in disk.inc is the
 ; machine-wide store's size and is the only body count left. DSK_ICO_SIZE is
 ; still the width of one.
-%ifdef KERN_SMALL
-DSK_ICOIX_N  equ DSK_NENT        ; one REFERENCE byte per entry. DSK_NENT and
-                                 ; not DSK_VENT because SPEC.md 51.0 leaves
-                                 ; this kernel no driver-backed volume to list
-                                 ; sixty-four entries from - 32 bytes it would
-                                 ; never address
-%else
-DSK_ICOIX_N  equ DSK_VENT        ; ...and DSK_VENT here because the references
-                                 ; stay in `.lowbss` even when the LISTING is
-                                 ; in a driver's claim: dsk_ico_at reads them
-                                 ; through SS whatever [dsk_dseg] says, so the
-                                 ; array has to be wide enough for the biggest
-                                 ; listing there is. 64 bytes, against the
-                                 ; 4,096 of bodies it replaces
-%endif
+DSK_ICOIX_N  equ DSK_NENT        ; one REFERENCE byte per entry, and DSK_NENT
+                                 ; on BOTH kernels because there is one
+                                 ; listing size now: SPEC.md 22.6 retired the
+                                 ; donated claim, so a volume lists into the
+                                 ; `.lowbss` floor whatever mounted it. It was
+                                 ; DSK_VENT here while a hard disk could list
+                                 ; more than a floppy. 64 bytes on kern_big,
+                                 ; against the 4,096 of bodies it replaces
 
-; How many entries a listing holds. DSK_NENT is the FLOOR - the .lowbss pair
-; every floppy uses, and the fallback for a driver-backed volume whose driver
-; could not fund a bigger one. DSK_VENT is what a hard disk gets: 96 bytes an
-; entry (32 of directory + 64 of icon), so 64 entries is a 6KB claim, made by
-; the driver at mount and mirrored per open Disk window by the file manager
-; (SPEC.md 22.6). Both numbers are here so nothing can disagree about them.
+; How many entries a listing holds - ONE NUMBER, for every volume on the
+; machine. There was a second, DSK_VENT, for a volume whose driver donated a
+; 6KB claim to list out of; SPEC.md 22.6 retired it, and the retirement is
+; worth one paragraph because the mechanism looked live right up to the end.
+; It could only ever buy DSK_VENT > DSK_NENT - a hard disk listing more than a
+; floppy out of heap the driver owns, charging a floppy-only machine nothing -
+; and the 64-entry pass (SPEC.md 25.9.1) raised the floor to the same 64,
+; after which the claim funded a listing the floor already gave for free. What
+; settled it is that the two move TOGETHER: a hard disk's directories and a
+; floppy's are busy for the same reason - a DOS install is busy wherever it
+; sits - so the next raise raises this number and there is nothing to split.
 ;
 ; **AND IT IS PER-BUILD SINCE SPEC.md 22.6.2**: 64 on kern_big, 32 on
 ; kern_small. Sixty-four was taken for the DOS box - "DOS directories are
@@ -153,23 +151,6 @@ DSK_ICOIX_N  equ DSK_VENT        ; ...and DSK_VENT here because the references
 DSK_NENT     equ 64
 %else
 DSK_NENT     equ 32
-%endif
-DSK_VENT     equ 64
-DSK_VBYTES   equ DSK_VENT * DSK_DE_STRIDE + DSK_ICOIX_N   ; 1,600
-DSK_VKB      equ 2              ; ...and the WINDOW CACHE for one is 2KB where
-                                ; it was 6: SPEC.md 25.9 took the icon bodies
-                                ; out, so a driver-backed listing is its
-                                ; entries and a reference byte apiece.
-                                ;
-                                ; **THE DRIVER'S OWN DONATION IS A DIFFERENT
-                                ; NUMBER AND DOES NOT MOVE HERE**
-                                ; (drivers/os88drv.inc's HDD_LISTKB): this is
-                                ; what fmv_fit CLAIMS for a window, and the
-                                ; driver funds the GLOBAL listing separately.
-                                ; Lowering it costs no .DRV rebuild and gives
-                                ; 4KB of heap back per driver-backed window
-%if DSK_VBYTES > DSK_VKB * 1024
-  %error "the driver-backed listing no longer fits the claim its driver funds: DSK_VKB is what is asked for and DSK_VBYTES is what disk_mount then writes into it, so the overflow lands on whatever the heap handed out next"
 %endif
 %if DSK_DE_SIZE != 32
   %error "DSK_DE_SIZE is the ON-DISK FAT directory stride, 32 by FAT12, and it is PUBLISHED to packages (apps/os88api.inc's OSAPI_FS_ENT). It is not free to change: a staged entry that wants a different width needs a stride of its own, leaving this one at 32"
@@ -215,23 +196,24 @@ dsk_secbuf: resb 512            ; sector scratch: BPB read, root-dir scan,
                                 ; aligns it - at +2,816 it was 256 into a
                                 ; sector and the build's own size decided
                                 ; whether the first mount failed with 09h
-disk_dir:   resb DSK_NENT*DSK_DE_STRIDE    ; DSK_NENT SYNTHESIZED entries,
-                                ; DSK_DE_STRIDE apiece and not DSK_DE_SIZE:
-                                ; 19.1's bytes 24..31 are zero and no reader
-                                ; in the tree looks at them,
-                                ; built by disk_mount from the FAT directory
-                                ; (SPEC.md 19) - never a raw on-disk image.
-                                ; The FLOOR listing: a driver-backed volume
-                                ; lists into its driver's claim instead, and
-                                ; [dsk_dseg]/[dsk_doff] say which is in use
-dsk_icoix:  resb DSK_ICOIX_N    ; entry i's POOL SLOT, or 0xFF for no icon
-                                ; (SPEC.md 25.8). Blanked every mount, which
-                                ; is 64 bytes of `rep stosb` where the array
-                                ; below took 2,048 of `rep stosw`
-                                ; **AND NO `disk_icons`** (SPEC.md 25.9): the
-                                ; bodies are in the machine-wide store, so the
-                                ; window that was 2,816 bytes is 832 - the
-                                ; entries and one reference byte apiece
+                                ; **AND NO `disk_dir` AND NO `dsk_icoix`**
+                                ; (docs/plans/LISTING-HOME-PLAN.md 13). The
+                                ; floor listing was DSK_NENT synthesized
+                                ; entries and one icon-reference byte each -
+                                ; 1,600 bytes on kern_big and 800 on
+                                ; kern_small, in `.lowbss`, which sits BELOW
+                                ; HEAP_SEG and so costs the heap and the DOS
+                                ; arena byte for byte, on every machine, for
+                                ; ever, whether or not anything was listing.
+                                ;
+                                ; A listing is written where its CALLER keeps
+                                ; a store now: a Disk window's FS_VSEG claim,
+                                ; which it already held, or one the Standard
+                                ; File dialog takes while it is up. Both are
+                                ; TRANSIENT, so a machine on the desktop or
+                                ; inside a fullscreen game pays nothing at
+                                ; all - and a caller with nowhere for a
+                                ; listing gets a quiet mount instead of one.
 %ifdef KERN_SMALL
 dsk_ovlpad: resb DSK_OVLPAD     ; ...AND THE BOOT OVERLAY'S LANDING GROUND,
                                 ; which the icon array was doing as a SECOND

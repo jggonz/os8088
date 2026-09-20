@@ -1015,6 +1015,33 @@ def fragment(data, seed, maxlen=48):
 ANSWER_RE = re.compile(rb"\x1b\[[0-9;?]*[Rnc]")
 
 
+_TCPST = {"01": "ESTABLISHED", "02": "SYN_SENT", "03": "SYN_RECV",
+          "04": "FIN_WAIT1", "05": "FIN_WAIT2", "06": "TIME_WAIT",
+          "07": "CLOSE", "08": "CLOSE_WAIT", "09": "LAST_ACK",
+          "0A": "LISTEN", "0B": "CLOSING"}
+
+
+def _who_holds(port):
+    """Every socket with `port` as its LOCAL port, by state. Linux only; the
+    diagnostic degrades to nothing anywhere else."""
+    out = []
+    # **BOTH FAMILIES.** A dual-stack listener on [::]:N blocks an AF_INET
+    # bind to 0.0.0.0:N and appears in /proc/net/tcp6 ALONE, so an IPv4-only
+    # reader reports "nothing" for a port that is demonstrably taken - which
+    # is worse than no diagnostic, because it sends the reader looking
+    # somewhere else entirely.
+    for path, fam in (("/proc/net/tcp", "v4"), ("/proc/net/tcp6", "v6")):
+        try:
+            with open(path) as fh:
+                for line in fh.readlines()[1:]:
+                    f = line.split()
+                    if int(f[1].split(":")[1], 16) == port:
+                        out.append("%s/%s" % (_TCPST.get(f[3], f[3]), fam))
+        except OSError:
+            continue
+    return ", ".join(sorted(out))
+
+
 class BBSServer(threading.Thread):
     """One connection at a time, on purpose: a test wants one client and a
     log it can read afterwards, and a second connection would make the log
@@ -1049,8 +1076,28 @@ class BBSServer(threading.Thread):
         self._stop = False
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind((host, port))
+        # ...and if it IS in use, say by WHAT. `Address already in use` with
+        # no state behind it sends the reader looking for another test, or for
+        # TIME_WAIT, when the answer is usually a socket this very process
+        # still holds.
+        try:
+            self.sock.bind((host, port))
+        except OSError as e:
+            raise OSError("%s - port %d is held by: %s"
+                          % (e, port, _who_holds(port) or "nothing visible"))
         self.sock.listen(2)
+        # **ACCEPT MUST NOT BLOCK FOREVER, OR stop() CANNOT FREE THE PORT.**
+        # `close()` on a socket another thread is sitting in `accept()` on does
+        # NOT release it: the blocked call holds the descriptor, so the listener
+        # survives the close and the port stays bound until the process ends.
+        # `stop()` then spends its whole `done.wait` and returns having freed
+        # nothing. A row that binds one PORT for several servers in turn - which
+        # every telnet row does, the guest having been told one host line it
+        # cannot be retold - gets `Address already in use` on the NEXT server,
+        # and the traceback throws away everything the row had actually found.
+        # That is what `telansi` and `telzm` spent a soak reporting.
+        # A timeout makes accept() come back, notice `_stop` and leave.
+        self.sock.settimeout(0.5)
         self.port = self.sock.getsockname()[1]
         self.t0 = time.time()
 
@@ -1103,8 +1150,11 @@ class BBSServer(threading.Thread):
             while not self._stop:
                 try:
                     conn, peer = self.sock.accept()
-                except OSError:
+                except socket.timeout:      # nothing yet: re-test _stop
+                    continue
+                except OSError:             # the socket is gone: we are done
                     return
+                conn.settimeout(None)       # the SESSION blocks as it always did
                 self._ev(kind="connect", peer="%s:%d" % peer)
                 try:
                     self._session(conn)

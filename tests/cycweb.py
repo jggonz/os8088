@@ -64,8 +64,14 @@ def pkg_syms(src="apps/cyclone/cyclone.asm", incs=("apps/",), defines=()):
     with tempfile.TemporaryDirectory() as d:
         cp, mp = os.path.join(d, "p.asm"), os.path.join(d, "p.map")
         open(cp, "w").write(open(src).read() + "\n[map symbols %s]\n" % mp)
+        # ...AND THE DEFINES, which this took as an argument and DROPPED. A
+        # knob build (CYPROF=1, DROIDNOW=1) moves every symbol in the image, so
+        # a caller that asked for one got a map of a different package and read
+        # plausible rubbish - which is the failure the `Pkg` check below exists
+        # to catch and cannot, the image it compares against being wrong too.
         subprocess.run(["nasm", "-f", "bin", "-w+error"]
                        + sum([["-I", i] for i in incs], [])
+                       + ["-D" + x for x in defines]
                        + ["-o", os.path.join(d, "p.bin"), cp], check=True)
         out = {}
         for line in open(mp):

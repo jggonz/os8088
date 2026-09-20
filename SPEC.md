@@ -352,33 +352,43 @@ BMP hit it immediately, a Note Pad text file never would.
 
 ### 2.1.2 The mount-owned buffers are the FIRST bytes of `.lowbss`
 
-`disk_dir`, `dsk_icoix` and `dsk_secbuf` are 2,112 bytes with one property
-nothing else in `.lowbss` has: **they and the FAT window come alive at the
-same moment** — `drv_boot`'s first mount — and neither is touched before it.
-Put them at the bottom of the rung and the two are one contiguous region that
-is dead for the whole of `kmain`:
+`dsk_secbuf` has one property nothing else in `.lowbss` has: **it and the FAT
+window come alive at the same moment** — `drv_boot`'s first mount — and
+neither is touched before it. Put it at the bottom of the rung and the two are
+one contiguous region that is dead for the whole of `kmain`:
 
 ```
   FAT_SEG   4,608   the FAT snapshot, filled at mount
-  +           512   dsk_secbuf   FIRST: the one int 13h TARGET here, so it
-                                 takes the rung's 512-aligned base
-  +         1,536   disk_dir     "ALWAYS exactly a mount snapshot", DSK_NENT
-                                 entries of DSK_DE_STRIDE
-  +            64   dsk_icoix    one reference byte per entry (§25.8)
-  =         6,720   of which 6,656 is READABLE (see below)
+  +           512   dsk_secbuf   the one int 13h TARGET here, so it takes the
+                                 rung's 512-aligned base
+  =         5,120   of which 5,120 is READABLE (see below)
 ```
 
-**The region was 8,192, then 7,936, and is 6,720** — three moves, and only
-the first was a narrowing of the same thing. `disk_dir` holds `DSK_NENT`
-entries at `DSK_DE_STRIDE`, and that stride narrowed from 32 to 24 when the
-staged listing stopped carrying the record's declared-zero tail — 256 bytes of
-`.lowbss` back to the heap. Then **`disk_icons` left this window entirely**
-(§25.9): its 2,048 bytes were a 16x16 body per entry, and the bodies are one
-machine-wide store now, referenced by the single byte per entry that
-`dsk_icoix` holds. And `DSK_NENT` went 32 → 64 in the other direction, which
-is the +768 on `disk_dir`. It is worth saying which way each trade runs: the
-heap gains all of it and the boot overlay's window half loses all of it, which
-is 1,216 bytes of ceiling that §2.5.3's guard no longer has.
+**The region was 8,192, then 7,936, then 6,720, and is 5,120** — and the last
+move is different in kind from the three before it. Those were narrowings of a
+shared listing; this one is its ABOLITION.
+
+`DSK_DE_STRIDE` narrowed from 32 to 24 when the staged listing stopped
+carrying the record's declared-zero tail. Then **`disk_icons` left this window
+entirely** (§25.9): its 2,048 bytes were a 16x16 body per entry, and the
+bodies are one machine-wide store now, referenced by a single byte per entry.
+And `DSK_NENT` went 32 → 64 in the other direction, +768.
+
+**Then `disk_dir` and `dsk_icoix` left too, and there is no floor listing at
+all** (§22.6.3). A listing is written into the store its CALLER supplied, so
+what used to be 1,600 bytes of every machine's `.lowbss` — below `HEAP_SEG`,
+so heap and DOS arena byte for byte, present whether or not anything was
+listing — is a Disk window's own claim or the Standard File dialog's, and both
+are transient. A machine on the desktop, or inside a fullscreen game, carries
+no listing anywhere.
+
+On `kern_small` `.ovlw` is read onto this region, so there the OVERLAY sizes
+it and not the listing — and for one commit `DSK_OVLPAD` held 512 of those
+bytes back for want of anywhere else for the overlay to land. Six boot-only
+bodies then moved into the BLOB half through §2.5.3.2's `OVBCALL` set
+(`sched_init`, `mem_init`, `font_init`, `wm_init`, `files_init`, `snd_init`),
+`.ovlw` fell 1,900 → 1,342, and the pad is 0 again: that build takes the
+whole 800 too.
 
 **The bases are 512-aligned and the SIZE is no longer a multiple of 512**, which
 matters because the overlay arrives on the kernel's own `int 13h` read. There
@@ -2827,7 +2837,7 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | file                | owns                                                    |
 |---------------------|---------------------------------------------------------|
 | `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, **os8088 API jump table at 0x0010** (§20.3) + osapi helper routines, **boot splash entry at 0x0008** (§15) |
-| `kernel/dskwin.inc` | the mount-owned window (§2.1.2): `disk_dir`, `disk_icons`, `dsk_secbuf` and the four constants that size them (`DSK_DE_SIZE`, `DSK_ICO_SIZE`, `DSK_NENT`, `DSK_VENT`). Everything else about a listing is `disk.inc`'s — these are here only because their ADDRESS is load-bearing and a reservation is placed by the order its file is included, so this is the **first file `kernel.asm` includes**. Prefix `dsk_`/`disk_`, reached through SS with the rest of `.lowbss` |
+| `kernel/dskwin.inc` | the mount-owned window (§2.1.2): `dsk_secbuf`, `dsk_ovlpad` and the constants that size a LISTING — which no longer lives here at all (§22.6.3) (`DSK_DE_SIZE`, `DSK_DE_STRIDE`, `DSK_ICO_SIZE`, `DSK_NENT`, `DSK_ICOIX_N` — `DSK_VENT` was a fifth until §22.6). Everything else about a listing is `disk.inc`'s — these are here only because their ADDRESS is load-bearing and a reservation is placed by the order its file is included, so this is the **first file `kernel.asm` includes**. Prefix `dsk_`/`disk_`, reached through SS with the rest of `.lowbss` |
 | `kernel/viddet.inc` | video adapters (§39): the boot probe, the live geometry block, mode set/teardown (`vid_setmode`/`vid_text`/`vid_init`), the shared addressing helpers `gfx_rowbase`/`gfx_nextrow`, the 1bpp colour map `gfx_ink` — prefix `vid_`; included **before** `splash.inc`, and all its data lives in `.text` |
 | `kernel/splash.inc` | boot-time loading screen (§15): the first adapter probe and mode set, welcome dialog, pixel progress bar, spinning vector "8088" — on a 1bpp adapter the progress bar alone (§39.6); far-ticked by the boot sector per sector read; self-contained, no .bss |
 | `kernel/vga12.inc`  | mode 12h planar primitives, save/restore, gfx lock, `gfx_scroll` (§5.5); the coordinate core `vga_rect_setup` that both renderers share (§39.3) — the mode set left for `viddet.inc`; and `gfx_rect_isect`/`gfx_rect_isectcf`, the **four-edge rect intersect the whole kernel shares** (§5.11), hosted in the lowest layer so `wm.inc`'s five sites are backward references |
@@ -5048,6 +5058,180 @@ so there is nothing to remember — and the miss path sets DS itself out of
 of the caller's stack, twice, which is the right way round. Measured on the
 guest at `gfx_ls_box`'s entry plus its own pushes: **26**, the same as the
 routine this replaced.
+
+##### 5.6.9.4 A SECOND DISPLAY IS NOT A REASON TO GIVE UP THE LOOP
+
+§5.6.9.2 above sent a two-display machine to the `gfx_pixel` fallback on the
+strength of one compare — `cmp byte [vid_ndisp], 1 / ja .slow`, with **no test
+of where the points actually are** — and called it *"exactly what the caller
+would have paid without this slot"*. That sentence is the defect. It is true of
+an array that STRADDLES the seam and false of every other one, and almost every
+array is every other one: a window is normally over one card entirely.
+
+**This is §39.14.7.1's gate one routine along, and it was priced the same way —
+by the field.** Reported as *"Cyclone runs very slowly with the extended
+desktop on, with the window fully on the primary"* (Hercules primary, CGA
+secondary). Measured on `os8088_5150_both_gla_mono`, the window at x 199..520
+on a 720-wide primary so that the second card never saw a pixel of it, forcing
+`cy_full` — Cyclone's whole-web repaint, which is the biggest `gfx_points` load
+the game has:
+
+| desktop | frames/tick | fps |
+|---|---|---|
+| Single | 0.150 | **2.72** |
+| Extend (Right) | 0.033 | **0.59** |
+| Single again | 0.150 | **2.72** |
+
+**4.59x**, and the third row is the control: the same Control Panel round-trip
+with the mode put back, which is what rules out focus and drift. It has to be
+there, because Cyclone PAUSES when it loses focus and the pause is sticky
+(§67), so the first shape of this measurement read **0 frames** in both arms
+after the panel opened and would have been written up as a hang.
+
+**Why it is that large, and why nobody saw it under light load.** A point on
+the fallback is a `gfx_pixel`, and a `gfx_pixel` is a whole `gfx_fill` of a
+1x1 rect — §5.7's ~756 µs arrival — with `gfx_disp_run`'s walk over both
+displays on top of it, against an inline loop of ~26 instructions. But
+`cy_worker` sleeps to a DEADLINE, so a frame that still fits its tick costs the
+same whatever it drew: the claw sweeping over a stopped wave measured **0.997
+against 0.981**, 1.6%, because the tick absorbed it. The cost is only visible
+in frames that MISS their tick, which is why the load has to be the repaint.
+
+**The gate.** The array's BOUNDING BOX, then `vid_span_one` — the same routine
+`gfx_blit4` and `font_run` ask — and, when it fits, `gfx_disp_enter` on the
+box's top-left. `vid_span_one` catches the DEAD ZONE itself, so the anchor is
+safe. A straddling array still goes per point, and that is now the only case
+that does.
+
+**The box is a SCAN, and the scan is the price of the gate**: ~14 instructions
+a point against the ~3,000 cycles a point it buys back. It sits inside the
+`[vid_ndisp]` short-circuit, so a one-card machine — every machine but one —
+does not execute an instruction of it. **The clip region's own bounding box
+would have been O(rects) rather than O(points) and is REFUSED**: a window
+callback normally has no region armed at all (§39.14.9), so the answer would be
+*the whole virtual screen*, which straddles by construction and hands the gate
+straight back to `.slow` in the one case it exists for.
+
+**The hooked display's ORIGIN is what decides which loop runs, and on display 0
+it is (0,0) in both layouts (§39.19.3).** So virtual IS local there, the three
+class loops of §5.6.9.3 draw the array untranslated, and the case the report is
+about costs **not one instruction in the loop** — it is the one-card speed
+exactly. Any other display needs the points brought down by the origin, and
+that is two instructions confined to a FOURTH expansion of `GFXPT_LOOP`, in its
+general one-loop form rather than three more class copies: kern_small's own
+decision (§5.6.9.3) for its own reason, the cheapest third of the win given up
+for four fifths of the bytes, and here the bytes would buy it on the second
+card alone.
+
+**`gfx_ls_box` needed nothing.** §39.14.9 already made it scan `wm_clip_tab` in
+virtual space and hand the survivor back translated and clamped to the active
+display, for the walk that no longer exists — so the one piece of machinery a
+hooked `gfx_points` depends on was built, and gated, three cycles before there
+was a caller for it.
+
+**It was never scoped to Cyclone.** `gfx_points` is the whole of §5.6's family
+since §5.12.7, so every app-side walker in the tree commits through it:
+`apps/cyclone`, `apps/missile`, `apps/mines`, `apps/tank`, `drivers/saver` and
+any C package reaching `os88_gfx_points`. Cyclone is merely the loudest, being
+the one whose entire render is points.
+
+
+##### 5.6.9.5 …and the BOUNDING BOX was the wrong instrument
+
+§5.6.9.4's gate scanned the array for its bounding box, asked `vid_span_one`,
+and hooked the display when it fitted. It works, and it cost two things that
+did not have to be paid.
+
+**The scan is O(points) and it showed.** With the window entirely on the
+primary, Cyclone's repaint measured **2.72 fps single against 2.34 extend —
+1.16x** for a second card it never drew a pixel on. Replacing the scan with
+"the box is the first point" (wrong, but a fair price probe) read **1.03x**, so
+eleven of those sixteen points were the scan itself.
+
+**And it needed a second copy of the loop.** A hooked display means
+display-local coordinates, and the array is virtual, so any display whose
+origin is not (0,0) wanted a translating expansion of `GFXPT_LOOP`. That was
+**203 bytes of the 361** — 56% of the fix, to serve the second card alone.
+
+**Both go away if the loop stops being display-local.** §39.14.9 made
+`gfx_ls_box` scan `wm_clip_tab` in virtual space and translate the survivor
+BACK, because the walk it served ran in the display's coordinates. That walk no
+longer exists (§5.12.7). Run the loop in **virtual** coordinates instead and the
+translation is not moved, it is deleted: `gfx_ls_vx`/`gfx_ls_vy`, the two adds,
+`gfx_ls_lx`/`gfx_ls_ly` and both conversions all go, and the box comes back
+virtual, intersected with the display's own virtual rect — which is the one
+thing the clamp was ever for.
+
+**The loop pays nothing for it, and that is measured in instructions rather
+than claimed.** §5.6.9.3's currency is instructions removed, at 17.15 cycles
+each. The display's origin enters in two places and each is paid for out of a
+saving already in hand:
+
+- **y is free.** `BX` holds `vid_rowtab - 2*oy`, resolved once a pass, so
+  `mov di, [ss:bx+di]` indexes the display's own table with a VIRTUAL y. It is
+  also **two bytes shorter** than the `disp16` it replaces.
+- **BX is free because SI is dead.** `mov bx, si / and bx, 7 /
+  mov bl, [cs:bx+gfx_bitset]` becomes `and si, 7 / mov al, [cs:si+gfx_bitset]`
+  — the point's x is not read again after the byte is computed, so it indexes
+  the bit table itself. That is **one instruction removed**, and it is what the
+  x term is then spent on.
+- **x costs that one instruction**: `sub ax, [cs:gfx_pt_kx]`, where `kx` is
+  `ox >> 3`. Exact, because a display origin is a multiple of 8 (§39.19.3 puts
+  it at the primary's own width).
+
+So the inner loop is **26 instructions before and 26 after**, and a one-card
+machine — which never has a non-zero origin — runs the same count on the same
+bytes. On `kern_small` the origin terms are not in the assembly at all: there
+is no second display and no `[vid_ox]`, so the names are `%define`d onto the
+words that already hold the answer and that build keeps the SI saving as a
+straight win.
+
+##### 5.6.9.5.1 The pass REPORTS, instead of the call measuring
+
+With the loop virtual, no bounding box is needed to decide anything. Hook the
+display the **first point** is on and run. `gfx_ls_box` already resolves every
+point that leaves the current rect; when the point it is asked about lies
+outside the active display **rather than merely outside the clip**, it sets
+`PT_OOB`. A point that is only clipped away must not set it, or an ordinary
+damage repaint would pay a whole extra pass.
+
+So an array that fits one display — very nearly all of them — runs **once**,
+on the inline loop, and **paid nothing to find that out**. A straddling array
+runs **twice**, once per card, each pass on the inline loop, drawing the points
+that card holds and skipping the rest. `VID_NDISP_MAX` is 2, so `xor dl, 1` is
+the other card and one extra pass is all there can ever be.
+
+Measured, same disk and same window as §5.6.9.4: **2.72 fps single against 2.63
+extend, 1.03x** — and what is left is not this slot at all, it is every other
+primitive in the frame paying `gfx_disp_run`'s walk over both displays.
+
+**`[gfx_dnest]` is what says whether this call hooked**, so no flag records it:
+the gate refuses to hook unless it found that byte zero, so a non-zero one at
+the tail is this call's own and nobody else's.
+
+**Cost:** `.text` +166, `.bss` +7 on `kern_big` — against §5.6.9.4's 370, and
+no rung crossed. **`kern_small` comes out 5 bytes SMALLER than before the
+feature existed** (`.text` -1, `.bss` -4): it has one display, so it takes the
+SI saving and the deleted `gfx_ls_vx`/`gfx_ls_vy` as a straight win and pays
+for none of the rest — every origin term is `%define`d onto a word that
+already holds the answer.
+
+**Where the 166 goes, and why it is the floor for this shape.** `gfx_pt_resolve`
+59 (five derived words — the biased row-table base, the biased row bound, the
+byte-column offset and the display's virtual right and bottom); the gate 48;
+the pass tail 49; `gfx_ls_box`'s off-display report 36 and its four clamps 50;
+`gfx_pt_row` +8 — less the deletions §5.6.9.5 names. Two levers go lower and
+both are the owner's call rather than this section's:
+
+- **Collapsing §5.6.9.3's three-class split** frees **257 bytes**, which is
+  more than this feature costs — and spends **92 cycles a point** everywhere to
+  do it. That is the only route under 50, and it gives back more speed than
+  §5.6.9.5 won.
+- **Dropping the second card to `gfx_pixel`** — primary fast, secondary and
+  straddle per point — is about 75 bytes all in, because the loop then needs no
+  origin at all. It is the §5.6.9.4 shape with the scan replaced by the report,
+  and it gives up what the field asked for.
+
 
 ### 5.7 The per-call floor — what a small drawing call spends
 
@@ -28113,10 +28297,10 @@ never diverge between the two directions.
 |--------------|----------------------------------------------------------------|
 | `disk_read`  | in: AX=LBA, CX=sector count, ES:BX → dest (advances BX by 512 per sector; caller's ES:BX budget must cover count×512). Issues as few int 13h calls as the track, the 64KB DMA page and the buffer allow (§18.91) — the contract is unchanged, only the call count. Drive from `[disk_drive]`. Out: CF=1 on unrecoverable error. Preserves registers per §1. FS-agnostic — it knows nothing of §19. |
 | `disk_write` | identical contract, source instead of destination: in: AX=LBA, CX=sector count, ES:BX → source. Out: CF=1 on unrecoverable error, and `[dsk_ioerr]` = the last int 13h status byte (AH), which is how §18.4 tells write-protected media (03h) from a real failure. Preserves registers per §1, and is likewise FS-agnostic. **No LBA gate of its own beyond `dsk_xfer`'s cyl<80 rule** — every caller is §18.4, which computes LBAs only from the validated §18.1 layout. |
-| `disk_mount` | in: DL=drive (0=A, 1=B). Sets `[disk_drive]`, restores the fallback geometry 9/2 with `disk_nfiles`=0, reads LBA 0 with that *fallback* geometry (CHS 0/0/1 — identical under any real floppy geometry) into `dsk_secbuf`, then runs the §18.3 mount sequence: BPB validation (§18.2), FAT snapshot into `FAT_SEG`, root-directory scan into the synthesized `disk_dir` cache, icon harvest into `disk_icons`. Out: CF=0 with `disk_spt`/`disk_heads`/`disk_nfiles`, the §18.1 variables and both caches filled; CF=1 with `disk_nfiles`=0 and fallback 9/2 (unreadable, unformatted, or any §18.2 rule failed). Clobbers CF only. A torn mount is a failed mount; **no cross-mount state survives** — every open/refresh fully remounts, never stale. |
+| `disk_mount` | in: DL=drive (0=A, 1=B). Sets `[disk_drive]`, restores the fallback geometry 9/2 with `disk_nfiles`=0, reads LBA 0 with that *fallback* geometry (CHS 0/0/1 — identical under any real floppy geometry) into `dsk_secbuf`, then runs the §18.3 mount sequence: BPB validation (§18.2), FAT snapshot into `FAT_SEG`, root-directory scan into the synthesized listing **at `[dsk_dseg]:[dsk_doff]`, which the caller supplied** (§22.6.3) — and a mount with no destination is QUIET, so the scan, the sort and the icon harvest are all skipped. Out: CF=0 with `disk_spt`/`disk_heads`/`disk_nfiles`, the §18.1 variables and the caller's store filled; CF=1 with `disk_nfiles`=0 and fallback 9/2 (unreadable, unformatted, or any §18.2 rule failed). Clobbers CF only. A torn mount is a failed mount; **no cross-mount state survives** — every open/refresh fully remounts, never stale. |
 | `disk_drive`  | byte variable, current drive (init 1 = B:)                   |
 | `disk_nfiles` | word, valid after a successful mount (else 0)                |
-| `disk_dir`    | 1024-byte **`.lowbss`** buffer (§2.1): the **synthesized directory cache** — 32 × 32-byte entries in the §19 staged layout, built by `disk_mount` from the FAT root directory (never a raw on-disk image). Written through ES at mount; read only via `dsk_get_dir` |
+| `disk_dir`    | **RETIRED** (§22.6.3). It was a `.lowbss` buffer holding the synthesized directory cache in the §19 staged layout. A listing is written into the store its CALLER supplied through `dsk_dest`, so there is no buffer here and a mount with no destination is quiet. Still written through ES at mount and still read only via `dsk_get_dir` — what changed is which segment those name |
 | `disk_icons`  | 2048-byte **`.lowbss`** buffer (§2.1): 32 × 64-byte **harvested** icon bodies (§19); entry i belongs to directory entry i, all-zero = no icon. Fully rewritten every mount (the §29.1 I_ICON rule rests on that). Read only via `dsk_get_icon` |
 | `dsk_get_dir` | in: AX = entry index. Stages that entry's 32 bytes from `LOW_SEG` into the kernel-segment buffer `dsk_ent`; out: SI = `dsk_ent`. Consumers keep an ordinary DS:SI pointer and never see a segment |
 | `dsk_get_icon`| in: AX = entry index. Same, 64 bytes into `dsk_ico`; out: SI = `dsk_ico` |
@@ -29108,8 +29292,9 @@ DV_UNIT   db  the int 13h DL, or the driver's handle
 DV_FLAGS  db  bit 0 = show a desktop zone (§26.1)
 DV_CLASS  db  which DRVC_* serves it, when DV_KIND is 1 (§18.7.3)
 DV_SECS   dw  sectors in the volume (rule 13's replacement)
-DV_SEG    dw  the listing claim its driver donated, 0 = the floor (§22.6)
-DV_LBL    db[8]  the desktop label, NUL-terminated and INLINE
+DV_LBL    db[6]  the desktop label, NUL-terminated and INLINE
+          ..13    (DV_SEG was at 6, retired with the donation - §22.6)
+          14..15  SPARE: DV_SIZE stays 16 so a row is a shift
 DV_SIZE   16
 ```
 
@@ -33672,9 +33857,12 @@ donated claim, and a window's view cache. The table below is why: the record
 is meaningful to offset 23 and bytes 24..31 are declared zero, so a listing
 that stored them stored eight zero bytes per entry for the life of the
 machine — **256 bytes of `.lowbss` on a floppy**, which is the tightest rung
-in the kernel. Nothing published moved and no `.DRV` rebuilds: a driver still
-stages 32 bytes, `HDD_LISTKB` is still 6 (5,632 rounds up to 6KB), and the
-kernel simply stops carrying the zeroes forward.
+in the kernel. Nothing published moved and no `.DRV` rebuilt: a driver still
+stages 32 bytes, `HDD_LISTKB` was still 6 (5,632 rounding up to 6KB), and the
+kernel simply stopped carrying the zeroes forward. That last clause is what
+made the claim four times bigger than what went in it once §25.9 took the icon
+bodies out as well, which is how §22.6 came to retire the donation entirely —
+a ceiling nobody re-reads is a ceiling that stops describing anything.
 
 The two are not interchangeable and three places prove it. `dsk_ent` keeps
 `DSK_DE_SIZE`, because `osapi_fs_ent` copies a driver's whole record into it
@@ -41474,36 +41662,131 @@ and it is checked rather than assumed, because everything read off the disk
 is hostile. Without it the folder still lists and still opens, but going up
 out of it lands in the folder it used to live in.
 
-### 22.6 The listing has a home, not an address
+### 22.6 The listing has ONE home, and the donated claim is retired
 
-`disk_dir` and `disk_icons` were two fixed `.lowbss` labels and a hard 32-entry (as it then was)
-cap. They are now **four words** — `[dsk_dseg]`, `[dsk_doff]`, `[dsk_ioff]`,
-`[dsk_nmax]` — so there is one code path with two configurations:
+`disk_dir` and `disk_icons` were two fixed `.lowbss` labels and a hard 32-entry
+(as it then was) cap. They became **four words** — `[dsk_dseg]`, `[dsk_doff]`,
+`[dsk_ioff]`, `[dsk_nmax]` — so that one code path could serve two
+configurations: the `.lowbss` floor, and a **6KB claim donated by the driver**
+of a `DVK_DRV` volume, handed to `osapi_vol_add` in DX and giving a hard disk
+`DSK_VENT` = 64 entries where a floppy then got 32.
 
-| | segment | entries | icons | cap |
-|---|---|---|---|---|
-| a BIOS floppy | `LOW_SEG` | `disk_dir` | (references only, SPEC.md 25.9) | `DSK_NENT` = 64 on `kern_big`, **32** on `kern_small` (§22.6.2) |
-| a driver-backed volume | its driver's claim | 0 | `DSK_VENT × 32` | `DSK_VENT` = 64 |
+**The donation is GONE and there is one configuration** — and §22.6.3 has
+since given the four words a different job, so the paragraph below is the
+history rather than the contract: `dsk_list_pick` and `dsk_list_floor` are
+deleted and `mem_rr_tab`'s two rows with them, but the words are WRITTEN
+again, by `dsk_dest_x`, and by the caller of every loud mount.
 
-The claim is **6KB** — 64 × (32 bytes of entry + 64 bytes of icon) — made by
-the driver before it calls `osapi_vol_add` and handed over with the volume
-(§18.7). A driver that cannot fund it passes 0 and the volume lists into the
-kernel's own floor, which works and shows fewer files: refusal is a normal
-path (§50.3), and a hard disk's root is the one place a floppy's cap starts to
-hurt.
+**Two changes took the claim's reason away and neither was looking at it.**
+§25.9 moved the icon bodies out of a listing and into one machine-wide store,
+which was **four fifths of the 6KB** — what a donated claim then held was 64
+entries × `DSK_DE_STRIDE` 24 = **1,536 bytes of 6,144**, the reference bytes
+staying in `.lowbss` where `dsk_ico_at` reads them through SS. Then §22.6.2
+raised `DSK_NENT` to **64** for the DOS box, and the floor became the same cap
+the claim was funding. After that the mechanism cost 6KB per mounted partition
+— 24KB on a four-partition machine, of which at most one was ever the live
+listing — to deliver what `disk_dir` was already delivering for free.
 
-Nothing downstream learned anything. `dsk_get_dir` and `dsk_get_icon` already
-staged one entry into the kernel segment for every consumer (§18); they now
-take their segment from a word instead of a constant, and the mount writes
-through the same pair.
+**It is not coming back per-driver, and that is the finding rather than the
+arithmetic.** The only thing the mechanism could ever buy is `DSK_VENT` >
+`DSK_NENT`: a hard disk listing more than a floppy, out of heap its driver
+owns, charging a floppy-only machine nothing. But the two are busy for the
+same reason — a DOS install is busy wherever it sits, and LEMMINGS' 67 files
+in one folder are 67 on either medium — so the next raise raises `DSK_NENT`
+and every volume gets it. A second cap buys a ~768-byte `.lowbss` deferral on
+a machine with no hard disk, against a permanent second code path, a per-row
+word, a relocation proc, two `mem_rr_tab` rows and a per-window re-size.
+
+`osapi_vol_add`'s DX is **reserved and must be 0**. `DV_SEG` is out of the
+volume row; `DV_SIZE` stays **16**, because that is what makes a row a shift
+rather than a multiply, so what the word bought is two spare bytes at 14..15.
+
+What this cost the tree: `kern_big` **−129 resident bytes**, `kern_small`
+**−121**, `HDD.DRV`'s image **8,664 → 8,152** (`DRVM_IMG_HDD` 9 → 8, and
+`DRVM_CEIL_DISK` **33 → 8**, which is the `Hard drives (Up to NNK)` caption
+§51.12.1 quotes). What it gives the user is **6KB of low heap per mounted
+partition**.
+
+Nothing downstream learned anything, then or now. `dsk_get_dir` and
+`dsk_get_icon` already staged one entry into the kernel segment for every
+consumer (§18); they take their segment from a word rather than a constant,
+and that word now only ever holds the one value.
 
 **The per-window view cache follows the volume, not the launch** (§22.1).
 `fmv_fit` re-claims a Disk window's cache when the window moves to a volume
 whose listing is bigger, and a refused claim clears `FS_VSEG` — which is the
 documented fallback and not an error: the window then paints from the global
-snapshot at the cost of the floppy I/O it would otherwise have avoided. A
-machine with only floppies never pays for the bigger cache, because nothing
-ever asks for it.
+snapshot at the cost of the floppy I/O it would otherwise have avoided.
+
+**`fmv_fit` IS A RETRY NOW, NOT A RE-SIZE.** With one listing size there is
+one cache size, so `fm_kinit`'s `VIEW_KB` claim covers every volume the window
+will ever visit and nothing is ever given back and re-taken. What is left for
+`fmv_fit` to decide is whether the window has a cache **at all**: a claim
+refused at `fm_kinit` gets another chance at each `fmv_store` rather than
+condemning the window to paint from the global snapshot for its whole life.
+
+#### 22.6.3 A LISTING HAS NO HOME: the destination is an argument
+
+`disk_dir` and `dsk_icoix` do not exist. There is no floor listing, no global
+mount snapshot, and no buffer anywhere that a listing lands in by default.
+**A mount writes where its CALLER told it to**, and a caller that told it
+nowhere gets a quiet mount (§18.9) instead of one.
+
+`dsk_dest` is that argument:
+
+| | |
+|---|---|
+| **in** | `DX` = the store's segment, **0 = there is nowhere**; `BX` = entry 0's offset in it |
+| **out** | nothing (all registers preserved) |
+| **sets** | `[dsk_dseg]`, `[dsk_doff]`, and `[dsk_ioff]` **derived** — the reference index sits immediately past `[dsk_nmax]` entries of `DSK_DE_STRIDE`, and deriving it here rather than passing it is what gives a store ONE shape |
+
+A store is `DSK_NENT × DSK_DE_STRIDE` entries then `DSK_ICOIX_N` reference
+bytes — 1,600 bytes on `kern_big`, 800 on `kern_small` — which is exactly the
+layout a Disk window's cache already had, so `fmv_iofs`'s arithmetic and the
+harvest's are the same arithmetic.
+
+**Who supplies one, and for how long:**
+
+| consumer | store | lifetime |
+|---|---|---|
+| a Disk window | its own `FS_VSEG` claim, taken at `fm_kinit` | the window's |
+| the Standard File dialog | `MEM_K_FDLG`, `VIEW_KB`, taken at `fdlg_open` | the dialog's |
+| anything else | **none** | — |
+
+That last row is most of the machine and is the point. `inst_vol_enter` on
+every package file call, `drv_vol_back`, `assoc_back`, the boot mount, a
+driver registering a volume, `osapi_vol_mount` — none of them wants a
+listing, and none of them now pays for one. So the resident cost of listing a
+directory is **zero bytes**, and the transient cost is 2KB per open Disk
+window plus 2KB while a dialog is up.
+
+**The destination is set for a mount and cleared after it.** A `.bss` word
+may not name a heap claim across arbitrary time: the Disk window's claim is
+MOVABLE on `kern_big` and PURGEABLE on `kern_small`, and nothing would fix
+the word if the block moved. `fmv_load` aims it, mounts, and aims it back at
+0 before it returns; the dialog holds it for as long as it is up, which is
+also as long as it holds the claim.
+
+**What makes that span safe is measured, not argued.** `tools/dsegaudit.py`
+asks whether anything holding this block can reach a `mem_claim`, which
+COMPACTS on its refusal path (§50.6.2). Every routine in the write window —
+`dsk_synth`, `dsk_put_dir`, `dsk_sortdir`, `dsk_ent_ofs`, `dsk_rd1` — reaches
+**no claim**. The one claimer in the whole mount is `asc_use`, in the icon
+harvest, after the listing is written and sorted, with `ES` already forced to
+`LOW_SEG` across it for this exact reason (§66.5.10.2). `dsegaudit` is a
+registered row, and it understands a `pop es` as ending a live window — a
+`push es` / load / read / `pop es` / call is the SAFE idiom and used to be
+reported as live to the end of the routine.
+
+**A consumer with no store lists NOTHING, and that is deliberate.** There is
+nothing to fall back to, so `fmv_copy_in` answers an all-zero entry and
+`dsk_get_icon` answers `ICO_R_NONE` rather than reading the segment
+`[dsk_dseg]` holds when there is no destination — which is 0, the interrupt
+vector table, drawn as file names. In practice no painter asks: a storeless
+consumer got a QUIET mount, so `[disk_nfiles]` is 0, `FS_N` is 0, and there
+are no rows. On `kern_small`, where the cache is purgeable, a shed leaves the
+window owing an `FSD_CACHE` debt and raises `[fm_fchk]`, so it re-claims and
+re-lists rather than going quietly blank.
 
 #### 22.6.1 …and a window's cache keeps the shape it was FILLED with
 
@@ -41512,10 +41795,16 @@ ever asks for it.
 fact about **the cache being painted**. Those are the same word on a machine
 with one kind of volume and two different words on every other:
 
-  * a floppy's cache is `VIEW_KB` = 3KB — 32 entries at 0, 32 icon slots at
+  * a floppy's cache was `VIEW_KB` = 3KB — 32 entries at 0, 32 icon slots at
     **1024**;
-  * a hard disk's is `DSK_VKB` = 6KB — 64 entries at 0, 64 icon slots at
+  * a hard disk's was `DSK_VKB` = 6KB — 64 entries at 0, 64 icon slots at
     **2048**.
+
+**Both halves of that disagreement have since dissolved** — §25.9 took the
+icon bodies out of every cache and §22.6 retired the second listing size — so
+there is one shape and `[dsk_nmax]` cannot name the wrong one. The section
+stays because `FS_IOFH` is still in the record and the reasoning below is why
+it is where it is; read it as the account of a defect, not of today's layout.
 
 `fmv_reload_all` (§22.3) mounts **every** Disk window's volume in turn and
 `fmv_repaint_all` then repaints **all of them**, so after any Cut/Copy/Paste —
@@ -41546,12 +41835,14 @@ the two callers that mean the global: `fmv_store`, which is copying it, and
 cache of its own stores `FS_IOFH` = 0 and `fmv_viofs` defers to `fmv_iofs`,
 so the two halves of that fallback cannot disagree about a base.
 
-**It cannot be derived from `FS_VKB`**, which was the first fix tried and is
-worth writing down because it looks right: `fmv_fit` only ever GROWS the
-claim, so a window that has visited a hard disk keeps its 6KB cache when it
-goes back to a floppy and then holds a 32-entry listing in a 64-entry claim —
+**It could not be derived from `FS_VKB`**, which was the first fix tried and
+is worth writing down because it looks right: `fmv_fit` only ever GREW the
+claim, so a window that had visited a hard disk kept its 6KB cache when it
+went back to a floppy and then held a 32-entry listing in a 64-entry claim —
 which is precisely the disagreement this section is about, moved one field
-along. The byte costs nothing: it is `+15`, the second of the two `FS_FERR` /
+along. (There is one cache size now, so that particular trap is closed by
+there being nothing to grow to; the field stays, and so does the rule that a
+window records the shape it was filled with rather than reading a global.) The byte costs nothing: it is `+15`, the second of the two `FS_FERR` /
 `FS_LDST` holes §59.5 left behind, and `FS_SIZE` does not move.
 
 #### 22.6.2 `DSK_NENT` is 64 on `kern_big` and 32 on `kern_small`
@@ -41602,12 +41893,12 @@ holds a listing's icon base in ONE byte, so `DSK_NENT × DSK_DE_STRIDE` must be
 a multiple of 256 — at a stride of 24 that makes 32 the only legal value below
 64, and 0 the only one below 32. The value is therefore not a dial.
 
-**Nothing on `kern_small` can want 64.** `[dsk_nmax]` is only ever raised to
+**Nothing on `kern_small` can want 64.** `[dsk_nmax]` was only ever raised to
 `DSK_VENT` by `dsk_list_pick`, for a `DVK_DRV` volume, and §51.0 takes the
 loadable-driver mechanism out of that build entirely — `DVOL_MAX` is 4 there
-for the same reason, every volume it will ever have being a BIOS floppy.
-`fmv_fit`'s `cmp word [dsk_nmax], DSK_NENT` therefore always takes the
-`VIEW_KB` arm.
+for the same reason, every volume it will ever have being a BIOS floppy. §22.6
+has since retired the second cap on BOTH kernels, so `[dsk_nmax]` is
+`DSK_NENT` everywhere and `fmv_fit` has no arm left to choose between.
 
 **And the host side reads the number rather than mirroring it.**
 `tools/os88disk.py` refuses a disk with more listed entries in a directory
@@ -44311,9 +44602,10 @@ project ships, which is deliberate on the arm whose whole purpose is a 128KB
 machine.
 
 **It does not follow that `kern_big` should take it, and it should not.**
-`kern_big`'s index has to be `DSK_VENT` = 64 bytes rather than 32, because a
-`DVK_DRV` volume lists sixty-four entries through the same array; the
-allocator is the same `.cold` +152 either way. Built and measured on that arm:
+`kern_big`'s index has to be 64 bytes rather than 32, because its listing is
+sixty-four entries (it was `DSK_VENT`'s 64 for a `DVK_DRV` volume, and is
+`DSK_NENT`'s own 64 since §22.6 and §22.6.2); the allocator is the same
+`.cold` +152 either way. Built and measured on that arm:
 
 | pool | sum saved | headroom over the worst shipped folder |
 |---|---|---|
@@ -52033,7 +52325,7 @@ function*:
 | row | KB | = image + what it holds to work |
 |---|---|---|
 | Sound | ~34 | 6 image + 8 DMA ring (`SBL_DMASZ`) + 20 staging pool (`SBL_POOLKB`) |
-| Hard Drive | ~32 | 8 image + 4 × 6 listing claims (`HDD_LISTKB`, `HD_MAXVOL`) |
+| Hard Drive | ~5 | 5 image, and no heap claim at all — §22.6 retired the 4 × 6KB listing claims, and §52.13 took the Control Panel page out of the image |
 | Ethernet | ~52 | 16 image + 36 socket rings (`NET_SOCKS` × (`SK_RXMAX`+`SK_TXMAX`)) |
 | Ram Disk | ~21+ | 9 image + 4 chain table (`RD_TABMAXKB`) + 8 bounce (`RD_EXTMAXKB`) |
 | os88net | ~6 | 6 image, and no heap claim at all |
@@ -77977,6 +78269,132 @@ instead of coming out solid black next to a dotted frame. That is exactly what
 §46.10.1 found ArtfulType *not* doing, and §6.1.12 now carries it through the
 run's own mask at no cost.
 
+### 52.13 The Control Panel page is in `HDDTOOL.DRV`, not in the driver
+
+**`HDD.DRV`'s image was 8,152 bytes and 2,893 of them were a page nobody was
+looking at.** A hard-disk machine carries this driver from boot to power-off;
+what it does between the Control Panel being closed and the next time it is
+opened is serve sectors, and the page is not part of that. So the page moved
+into the image that already existed for the two windows it opens.
+
+**IT IS `rdpage.inc`'s SPLIT, arrived at from the other side.** The RAM disk's
+own header says *"it is `hdtool.inc` with two differences"*, the first being
+that its trigger is a **paint** rather than a click. That difference is now
+gone: the hard disk used to keep its page resident and load a second image
+when the user pressed Format, so the load happened on a button; the page IS
+that second image now, so it loads at `DSV_CPPAINT`, and the two windows that
+used to be the only reason to load are already in memory when it is up.
+
+**What the resident keeps** is `DSV_CPNAME`'s string — `cp_list` letters it and
+the kernel stages it at attach, so it cannot move — four thunks, the load, and
+**one line of drawing**: `hd_cp_paint` letters `Need the system disk` when the
+image will not come in. The other three cells may do nothing on that path; a
+paint may not, because the kernel has white-filled the pane and will not come
+back, and a blank rectangle with no explanation in it is §47 rule 5's failure.
+
+**What crosses, and each because it must:**
+
+| | how |
+|---|---|
+| the device table, `[hd_ndev]`, `[hd_sel]` | `hd_sync`, which the tool has always done before it ACTS |
+| the caption | an `HDM_*` **code**, never a pointer — `font_str` reads through DS |
+| *has this device a volume?* | `HSV_STATE`'s one-bit-per-device mask |
+| a selection, a typed geometry, a mount, an unmount | `HSV_SEL` / `HSV_GEOM` / `HSV_MOUNTDEV` / `HSV_UNMOUNTDEV` |
+
+`hd_vols` and the real `hd_devs` never cross. The page edits its **copy** and
+the resident owns the original, which is why every change is a verb: the table
+over there is what the transport addresses and the volume indices were
+registered to the kernel out of `hd_vols`.
+
+#### 52.13.1 `HSV_STATE` is a verb of its own, and `hd_svc`'s prologue is why
+
+`hd_svc` does `push bx`…`push es` on entry and `hd_svc_out` pops them, so **AX
+is the only register that can carry an answer out** — and `HSV_SYNC` already
+spends both halves of it on the count and the selection. Returning the caption
+and the mount mask in `BX` assembles, runs, and loses them at the epilogue.
+
+Writing them past the device table instead is what `HSV_SYNC`'s own comment
+refuses: it would make `hdcom.inc`'s declaration order an unwritten part of the
+ABI. So they go in the request block, under a verb of their own, and `hd_sync`
+makes two far calls where it made one — 46.7 µs on a click, against a class of
+bug that does not announce itself.
+
+#### 52.13.2 What it cost, measured
+
+| | before | after |
+|---|---|---|
+| `HDD.DRV` image | 8,152 | **5,633** |
+| …of which `os88ui.inc` | 983 | **deleted, not moved** |
+
+**−2,519 bytes, 31%,** and the single largest item is the one that was never
+copied anywhere: `HDDTOOL.DRV` already included `os88ui.inc` for its two
+windows, so the page's controls found their library waiting. `HDTOOL_KB` is
+derived from the tool's built size by the Makefile, so the claim follows it
+without a constant to remember.
+
+The page's heap cost changes from **nothing** to `HDTOOL_KB` **while the panel
+is open**, freed at `DSV_CPCLOSE` by `hd_tool_reap`, which already existed.
+That is the trade §2.8 asks for stated plainly: a resident byte for a
+transient one. The system disk is no new requirement — the Control Panel is
+`CTRL.DRV`, an on-demand module, so it is already needed to reach this page.
+
+#### 52.13.3 `hd_idbuf` and `hd_mbr` are the same 512 bytes
+
+Two 512-byte scratch buffers, 1,024 resident bytes, and **their lifetimes
+cannot overlap**:
+
+| buffer | filled by | when |
+|---|---|---|
+| `hd_idbuf` | `hd_ide_ident`, inside `hd_probe` | `DRVV_ATTACH` |
+| `hd_mbr` | `hd_part_load`, whose only resident caller is `hd_mount` | `DRVV_READY`'s automount, or a page click — a verb later at the earliest |
+
+`hd_probe` has exactly one caller and the IDE rung spends `hd_idbuf` before it
+returns; nothing re-probes while the driver is loaded, because unticking it is
+an unload and the next tick reads a fresh image.
+
+**What makes it safe rather than clever is that the resident never WRITES a
+partition table.** `hd_part_write` is `partw.inc`'s and that file is in the
+tool image alone, so the worst a crossed lifetime could do is fail a mount —
+it cannot commit IDENTIFY's 256 words to sector 0. The tool has no `hd_idbuf`
+at all, never probing, so the union is `%ifndef HD_TOOL` and the two images
+disagree about nothing.
+
+**A heap claim was the other way and it is REFUSED**, which is worth recording
+because it is the obvious one. `hd_mbr` is reached as a near offset by
+`hdcom.inc` — one source compiled into both images — and by the partition
+editor, the formatter and the installer, which index it as a structure. Moving
+it into a claim means routing all of those through `ES`, and the code it would
+touch is the code that writes partition tables. 512 bytes is not worth
+reaching into that, and the union gets the same 512 for a lifetime argument
+and no instruction.
+
+**`HDD.DRV`'s image: 5,633 → 5,121**, and 8,152 → 5,121 across §52.13 entire —
+**−3,031 bytes, 37%**, for a machine that carries this driver from boot to
+power-off.
+
+#### 52.13.4 One byte was worth a kilobyte, and `drv_load` is why
+
+`hd_mbrok` is **one byte**, and it sat after a 512-aligned 512-byte buffer at
+the end of the image. That put the resident at **5,121** — one byte past 5KB —
+and `drv_load` rounds an image UP to whole KB and claims that, so a
+hard-disk machine held **six**.
+
+Moved in front of `hdsec.inc`'s `align 512` it is absorbed by padding that was
+already there. The image is **5,120**, `DRVM_IMG_HDD` is **5**, and
+`DRVM_CEIL_DISK` — the `Hard drives (Up to NNK)` caption §51.12.1 quotes — is
+5 as well. **No code changed and no byte was saved**: 5,121 bytes of content
+became 5,120 bytes of content, and what moved is which side of a rounding
+boundary the total fell on.
+
+**This does not licence designing against the rounding** — §1's banner is
+unchanged and a byte is still worth a byte. It is the narrower case that
+banner names as the real one: the allocator's granularity here is not a
+reporting step but **the actual claim**, so the KB a driver crosses is memory
+the machine genuinely holds. The next kilobyte therefore needs the image under
+**4,096**, which no amount of data shuffling reaches — it wants the mount-only
+code out — the probe, the IDE rung, the partition-table read and the
+config load are ~1.7KB between them, and 1,025 of that is the threshold.
+
 ## 53. fsx.inc — fullscreen exclusive
 
 §11.2's fullscreen surface is a real window: the desktop's mode, the
@@ -88754,9 +89172,18 @@ cannot be a barrier for longer than it exists.**
 
 #### 66.5.10.1 A donated claim has holders the callback cannot reach
 
-**The HDD's per-partition listing claim (§22.6) is the one block in the tree
-that is structurally unmovable for a reason no declaration can fix**, and it
-is worth writing down because it is the first claim with more than one owner.
+> **THE CLAIM THIS SUBSECTION AND §66.5.10.2 ARE ABOUT NO LONGER EXISTS.**
+> §22.6 retired the HDD's donated listing claim outright — §25.9 had taken
+> four fifths of it away and §22.6.2 raised the `.lowbss` floor to the same
+> cap it funded, so it bought nothing. Both subsections are kept as the design
+> record, because the PROBLEM they solve is general and will recur the next
+> time one component claims a block and hands it to another: the two rows they
+> put in `mem_rr_tab` are gone, the argument for putting them there is not.
+> `tests/hdmove.py` went with the claim and `tests/hdnoclaim.py` replaced it.
+
+**The HDD's per-partition listing claim (§22.6) was the one block in the tree
+that was structurally unmovable for a reason no declaration can fix**, and it
+is worth writing down because it was the first claim with more than one owner.
 
 The driver claims 6KB and **hands it over** with `osapi_vol_add`. Afterwards
 the same segment is written down in three places:
@@ -88879,7 +89306,7 @@ top now has **no barrier in it at all** — every claim there is movable or
 purgeable — so a compaction can actually deliver what the Task Manager has
 been reporting.
 
-`tests/hdmove.py` is the gate, and it is `rdmove`'s shape: heapfrag combs the
+`tests/hdmove.py` **was** the gate, and it was `rdmove`'s shape: heapfrag combs the
 arena, the hard disk is ticked in above it, heapfrag dies to open the ground,
 and heapfrag again forces the compaction. **The claim moved `6FC0 -> 3EE0`** —
 199KB down — with `HDV_LSEG`, `DV_SEG` and the block's own bytes all following
@@ -89383,7 +89810,9 @@ and third parties use them as such. On `os8088_xt_hdd` the XT-IDE option ROM
 keeps two words at int C1h and int C3h; one of them read `0x8000`, a package
 claim moved off `0x8000`, the sweep rewrote the ROM's word to `0x6000`, and the
 hard disk then probed as **"No hardware found"** — a machine with no C: drive,
-produced by a heap compaction, silently. `tests/hdmove.py` is what caught it.
+produced by a heap compaction, silently. `tests/hdmove.py` is what caught it —
+the row is retired with §22.6's claim, and docs/WRITING-TESTS.md §13 incident
+31 is where that catch is recorded now.
 
 So the vector rows are cut to the slots a driver can legitimately own: the
 hardware IRQ vectors, int 08h–0Fh and int 70h–77h. That is a fact rather than
@@ -91364,6 +91793,324 @@ gfx lock held — §59.7's hang, a machine that looks alive and never draws agai
 than a name-and-score line could be read, 6 was right for six lines, and
 nineteen more arrived. A row every 660 ms, a line on the glass for 2.6 s of its
 four-row crossing, and a whole cycle about 16 s.
+
+### 67.23 A play pass: the score, the lives, the zapper and the churn
+
+Four things found by playing it, of which the first is a defect and the last
+is the one that made levels 11+ crawl.
+
+#### 67.23.1 A WORD TABLE INDEXED BY A BYTE — where the lives were coming from
+
+Reported as *"I am getting a spare life every few kills"*, and the reporter's
+own diagnosis was that the 20,000-point bonus threshold was too low. It was
+not. `cy_score_kind` read
+
+```
+    mov bl, al                      ; AL = the kind that died, 0..4
+    mov bh, 0
+    mov ax, [cy_kindsc + bx]        ; ...and cy_kindsc is `dw`
+```
+
+`cy_kindsc` is a table of WORDS and `bx` is the kind, so three of the five
+kinds read a word straddling two entries:
+
+| kind | table says | actually paid |
+|---|---|---|
+| flipper | 150 | 150 |
+| tanker | 100 | **25,600** |
+| spiker | 50 | 100 |
+| fuseball | 250 | **12,800** |
+| pulsar | 200 | 50 |
+
+At level 3 the multiplier is 2, so one tanker was **51,200 points** — and the
+screenshot that came with the report reads `0237400 LV03 x9`, a score of
+237,400 on level 3 with the life counter pinned at its cap of nine. Four
+tankers.
+
+`shl bx, 1` is the whole fix. **`cy_ekext` beside it is the same shape and
+always had the shift**, and `cy_ekcol` is `db` and rightly has none, which is
+why nothing else in the file was wrong and why this one survived: it is the
+only `dw` table in the app indexed straight off a kind.
+
+**The 20,000 threshold is left alone deliberately.** With the tables reading
+what they say, a level at the multiplier cap scores about 36,000, so a bonus
+life is roughly one every level and a half — worth re-judging by playing it,
+not by arithmetic against numbers that were wrong.
+
+#### 67.23.2 CYP_LIFE — the deliberate source
+
+A spare life should come from somewhere a player can see. `CYP_LIFE` is a
+fifth powerup kind, taking an equal slice of the drop table from level 6 where
+the AI droid unlocks (so the divisor there goes 4 → 5), and it caps at
+`CY_LIVEMAX` = 9 where the HUD's single digit does. `CY_ZAPMAX` is named for
+the same reason — both caps were bare literals in one arm each.
+
+#### 67.23.3 The superzapper: a free charge a level, and TWO lines
+
+`cy_startlevel` grants one charge through `cy_zap_recharge`, so every level
+opens with a zapper whether or not the player earned one, and `cy_newgame`
+stops seeding `[cy_zap]` itself — level 1 is told about its charge exactly as
+every later level is. The grant is **silent at the cap**, because a
+'SUPERZAPPER RECHARGE' that recharged nothing is a message that lies, and the
+cap is reachable: the powerup grants charges too.
+
+And the two events say different things. `cy_s_superzap` —
+*SUPERZAPPER RECHARGE* — is the level's grant; firing one says
+`cy_s_zapfired`, *SUPERZAPPER!*. The game had one line for both, on the FIRING,
+which is the one event that is not a recharge.
+
+#### 67.23.4 THE MARK IS OWED BY AN ERASE, NOT BY EXISTING
+
+Reported as *"on later levels there is a lot of slowdown… things that collect
+in the lower half that never move and never go away, but seem to cause a bunch
+of churn"*, with the suggested fix being to batch arrivals the way §79.5.11
+did for the screen saver. **The diagnosis was right and the fix is not
+batching.**
+
+`cy_spk_draw` redraws a spike as a CHAIN — one `gfx_fill` per depth step, up to
+sixteen — because a lane is not axis-aligned and one rect cannot follow it
+(§67.19). That is fine; what was wrong is how often it ran. `cy_play_render`
+called `cy_spk_mark` for **every live enemy on every frame**, above the draw
+and unconditionally, so a stationary enemy over a spiked lane dirtied it every
+frame and spent the whole chain repairing undamaged pixels. §67.1's own header
+says *"a mover that did not move is not drawn… at low depth this is most
+frames and most enemies"* — so the mark fired for precisely the movers that
+had erased nothing.
+
+The mark moves below `cy_obj_show` and behind its carry: **CF = 1 means the
+rect did not change, so nothing was erased and the spike and the web under it
+are still whole.** The dead branch keeps its unconditional mark, `cy_obj_hide`
+really does erase. It is about twenty instructions.
+
+Measured with `CYPROF` (§67.22) on a Hercules 5150, ten movers on a fixed
+board so both arms carry the same load, spikes poked to depth 14 on every lane
+rather than grinding to level 11:
+
+| | no spikes | every lane spiked | the spikes' own cost |
+|---|---|---|---|
+| before | 5.0 fills/frame | 8.0 | **3.0** |
+| after | 2.3 | 3.0 | **0.7** |
+
+**Arrivals a frame fall 54% with no spikes on the board and 63% with them**,
+and the frame rate goes 0.84–0.86 to 0.91 of a tick. The no-spike column moves
+because `cy_spk_mark` calls `cy_web_mark` on the way in — the web repair was
+churning on the same stationary movers.
+
+**BATCHING IS REFUSED, and the arithmetic is why**: a spike step is a 3x3
+block, so a whole 16-step spike is 16 `gfx_fill` arrivals at ~756 µs = 12.1 ms,
+against 144 points through `OSAPI_GFX_POINTS` at ~614 µs of arrival plus ~126
+µs a point = 18.8 ms. Batching wins where the unit is a PIXEL — the starfield,
+and Cyclone's own vectors, which already commit that way (§5.12.5). For a
+block, a fill is already the cheap form.
+
+##### 67.23.4.1 …and it is why dying was slow, too
+
+Reported separately as *"when I die with a lot of stuff on the screen it slows
+down a ton — we don't need to be redrawing movers during the death animation
+at all, they are all still during that time"*. They are still, and they were
+not being redrawn: `cy_obj_show` took its did-not-move exit for every one of
+them. What was not still was the **repair they triggered on the way past**, and
+that is the same defect one state along. With the mark behind the carry, a
+`CYS_DIE` window measures **0.0 fills a tick** from the mover loops — the
+throe's only drawing is its own debris.
+
+**Repairing a DEPTH RANGE rather than the whole chain was considered and is
+not taken.** It would cut the remaining 0.7, at the price of a second per-lane
+array, two draw modes and a widening rule whose failure is a spike with a hole
+eaten in it — and §67.19 is exactly the class of bug that costs this app days.
+0.7 fills a frame is not what is slow.
+
+
+### 67.24 A pickup can be SWEPT UP, not just stood under
+
+Reported as *"powerups currently require us to be in the exact lane at the
+exact moment the powerup arrives, which is hard to see because the viewport is
+so small… my goal is to be able to sweep by a powerup and collect it like the
+actual Tempest lets you, which currently is basically impossible."*
+
+It was literally that. `cy_pu_update` drifted a pickup outward and, on the ONE
+frame it crossed `CY_TOPD`, took it only if `[cy_u_lane]` equalled `[cy_plane]`
+exactly — one lane, one frame, on a window a few hundred pixels wide.
+
+**Two widenings, and the LOOK is untouched.** The pickup still leaves the glass
+on the same frame at the same place; nothing about the drawing changes.
+
+- **`CY_PUNEAR` lanes either side.** `cy_pu_near` answers whether the claw is
+  close enough. **It is 0 today — the exact lane only (§67.24.3).**
+- **`CY_PUGRACE` = 4 frames of grace.** A pickup that reached the lip with the
+  claw elsewhere files a record — lane, kind, timer — and `cy_pu_grace` re-tests
+  it once a frame until the timer runs out. Sweeping onto its lane just after
+  it landed still collects it.
+- **`CY_PUREACH` = 1 depth step of reach** *below* the lip — §67.24.2.
+
+**The neighbours come from `cy_wrap` (§67.16), not from arithmetic on the
+index**, and that is the whole reason the routine exists rather than being two
+compares inline: on a CLOSED web lane 0's left neighbour is the last lane, and
+on an OPEN one — the flat ribbon, the vee — it is lane 0 itself, so the ends of
+an open web must not wrap round the back. Asking `cy_wrap` is how that stays
+true when a shape is added. `tests/cycpu.py` asserts both, on the circle and on
+the flat, in the same run.
+
+The grace record is filed **under the slot the pickup is leaving**, which
+bounds the table at `CY_MAXPU` for free. Two drops landing in the same slot
+inside 15 frames would lose the older window; at one drop per eight kills that
+is rare, and what is lost is the grace rather than the pickup — the behaviour
+this section replaces.
+
+**Cost: +155 bytes of `CYCLONE.O88`** and nine bytes of its state. It is a
+package image, so none of it is resident.
+
+#### 67.24.2 The window is an AREA, not an instant with a timer bolted to it
+
+The first shape of this was grace alone, at 15 frames, and it was reported back
+as *"still a little off balance-wise — this allows them to sweep clear from the
+other side, and I'm more looking for sweeping by the general area."* Both halves
+of that are one mistake: **0.8 s is long enough to cross the web**, so the
+window was generous in TIME to make up for being a single point in SPACE.
+
+So the trade goes the other way. The grace drops to **6 frames, about a third
+of a second** — long enough to cover the frame a sweep actually lands on and
+not long enough to walk anywhere — and the collect point gains **one drawing
+position of reach below the lip**: `cy_pu_update` now runs the same
+`cy_pu_near` test on every frame the pickup is within `CY_PUREACH` steps of
+`CY_TOPD`, and takes it there.
+
+That is where a sweeping claw and a rising pickup actually meet. It also
+changes the feedback in the right direction: the pickup leaves the glass **when
+it is collected** rather than at a fixed depth, so an early take looks like one.
+
+Net, the window is about nine frames wide — roughly 2.8 of reach plus 6 of
+grace — and **centred on the lip instead of starting at it**, where before it
+was one frame plus fifteen of afterthought.
+
+#### 67.24.3 …and the adjacency came back OUT
+
+Played again: *"the lower + grace is giving me what I wanted without the
+adjacency — my fault for trying too many things at once to fix the same
+problem."* Three knobs went in together for one complaint, so the credit could
+not be assigned until they were separated; the reach below the lip is the one
+that did the work, and the lane either side is what made a sweep feel loose on
+top of it.
+
+`CY_PUNEAR` is **0** and `CY_PUGRACE` is **4** (0.22 s). The neighbour test is
+`%if CY_PUNEAR`'d rather than deleted, so it costs nothing while it is off and
+comes back by moving one constant — which is the point, this being a feel
+judgement that may be re-made at the next play.
+
+**`tests/cycpu.py` READS BOTH CONSTANTS out of `cyclone.asm` and derives what
+each case should do.** A row that wrote down "one lane either side counts"
+would stop being a gate and start being a lie the first time the owner turned
+a knob — `tests/unit/t_mirror.py`'s rule applied to a number this file would
+otherwise be the second copy of. Verified both ways: at `CY_PUNEAR` = 1 the
+adjacency and wrap cases expect and get a take, at 0 they expect and get none,
+and the row is 14/14 on each.
+
+#### 67.24.1 …and what the row had to learn to measure it
+
+`tests/cycpu.py` places a pickup one drift short of the lip rather than waiting
+for a drop — a drop needs a kill and a one-in-eight roll — and reads
+`[cy_pw_jump]`, which the JUMP pickup increments and nothing else does. Three
+things had to be got right and each was wrong first, all three in the HARNESS
+rather than in the game:
+
+- **`os88marty.advance` ends STOPPED.** A `time.sleep` after it runs no guest
+  time at all, so every case below the shape change was measuring a paused
+  machine. Every wait in the row is guest CYCLES now.
+- **A stubbed spawner empties the wave.** With `cy_wleft` and `cy_left` both
+  zero the level is CLEARED, the game warps out, and `cy_pu_update` does not
+  run in those states — which reads exactly like the pickup never being taken.
+  The row pins the counters and asserts `CYS_PLAY` per case, so that failure
+  names itself instead of looking like a broken feature.
+- **A fixed wait cannot bound a frame that repaints.** A shape change sets
+  `[cy_full]` and `cy_draw_all` is ~200 ms — three or four ticks inside ONE
+  frame — so a fixed wait after it lands mid-repaint. Tuning it made the
+  failures MOVE between runs, which is the tell. The row waits for
+  `[cy_u_act]` to leave 1, which is the event itself.
+
+
+#### 67.24.4 THE CLAW SKIPS LANES — sweeping is an ARC, not a sample
+
+Played again with the timing right: *"I think I figured out the sweep issue —
+we're not actually present in each lane during a sweep on some boards, because
+we can entirely skip a lane. Maybe what needs to happen is to run the pickup
+routine as each lane is passed, not just on the actual draw frame."*
+
+That is exactly it, and it is the MOUSE. The keyboard moves one lane a frame
+(`add ax, [cy_dir]`, §67.16), so it cannot skip; `cy_aim_mouse` puts the claw
+on the lane **nearest the pointer**, so one flick moves it several lanes in a
+single frame and every lane in between is never `[cy_plane]` on any frame
+boundary. Testing that word alone therefore misses a pickup the claw
+demonstrably went over — and it explains *"on some boards"*: the more lanes a
+shape has, the more of them one flick steps across.
+
+**`[cy_psweep0]` is where the claw was when pickups were last tested**, and
+with `[cy_plane]` it is the ARC swept since. `cy_pu_near` asks whether the
+pickup's lane is anywhere on that arc. The capture is at the **end** of
+`cy_pu_update` and not the top of the frame, deliberately: *"since we last
+looked"* covers the motion whatever caused it, and `cy_aim_mouse` is not the
+only mover.
+
+**The arc is the SHORT way round on a closed web**, which is the part that
+would be wrong if it were skipped: 15 → 2 on a sixteen-lane web is three lanes
+forward, not thirteen backward, and reading it the long way would make every
+pickup on the board collectable on any flick. On an open web the claw cannot
+wrap at all, so the arc is simply the range between the two.
+
+This is what the adjacency of §67.24 was standing in for, badly: ±1 lane widens
+the target everywhere, all the time, including when the claw is standing still.
+The arc widens it **only along the path the claw actually travelled**, which is
+what "sweep by" means. `CY_PUNEAR` stays 0.
+
+##### 67.24.4.1 …and it makes a teleporting claw a sweep, which the row had to learn
+
+The fourth harness trap, after §67.24.1's three, and the same shape: the row
+sets the claw and then places a pickup, so **every case inherited an arc
+reaching back to the previous case's lane** and collected things it should not.
+Nine of twenty cases failed that way while the six new sweep cases — the ones
+actually under test — passed. `Game.arm` parks the claw and spends two ticks
+letting `[cy_psweep0]` catch up before anything is placed.
+
+The behaviour it exposed is correct and worth keeping in mind anywhere else the
+claw is moved by fiat: a jump IS a sweep, because nothing downstream can tell
+the difference.
+
+
+### 67.25 A death does not restart the wave
+
+Reported as *"once I get above level 13ish it feels like I can die, play for a
+long time, then die, and never progress — is it resetting the number of enemies
+needed to complete the wave?"* It was.
+
+`cy_die_update` called `cy_wavesize` on the way back to `CYS_WARPIN`, and that
+routine sets `[cy_wleft]` — the still-to-spawn count — to the FULL wave for the
+level. `cy_wavesize`'s ramp is `(level - 1) * 3 + 8` capped at 40, so **from
+level 13 on every death put 40 enemies back on the pile**, and two deaths in a
+level meant the level could not be finished at all. Below that the reset was
+smaller and read as difficulty rather than as a defect, which is why it took
+until 13 to feel wrong.
+
+**The call is simply gone.** The only other things `cy_wavesize` sets are
+`[cy_kinds]` and `[cy_espd]`, which are written nowhere else in the app and are
+functions of `[cy_level]` alone — so at a death they are already right, and
+re-deriving them was the whole of what the call legitimately did.
+`cy_clearboard` beside it zeroes `[cy_left]` and does not touch `[cy_wleft]`,
+so the scene still clears exactly as it did.
+
+**What was on the web is FORGIVEN, not put back on the to-spawn pile.** The
+alternative — `cy_wleft += cy_left` before clearing — keeps the level's total
+honest to the enemy, and is the wrong call for the same reason the report
+exists: the enemies that killed the player should not have to be killed again.
+It is a small mercy on a death and it points the same way the fix does.
+
+**`[cy_towave]` is write-only** and was already: `cy_wavesize` stores it and
+nothing in the tree reads it, in the app or out of it. It is left alone here
+rather than swept up with the fix, and named so the next reader of this code
+does not take it for the wave's live total.
+
+`tests/cycplay.py` gates it, and the row was written before the fix and watched
+go red: `wleft 8` against 7 on a level-1 board, which is `cy_wavesize`'s ramp
+answering for the level instead of the counter being left alone.
+
 
 ### 67.13 What is deliberately not here
 
@@ -105818,6 +106565,120 @@ against. What it costs the machine is one compare per frame on a screen with
 no strip, and on Hercules six instructions per band plus a clamp per bubble
 blot — far inside §79.5.8's budget, which the pass still fits with the same
 margin.
+
+#### 79.5.11 The starfield draws in THREE arrivals, not fifty-six
+
+The starfield was the last mode in the driver still plotting one star at a
+time: `OSAPI_GFX_PIXEL` for a far one, a 2x2 `OSAPI_GFX_FILL` for a near one,
+and `sv_star_step` called both a **draw and an erase per star**. At
+`SV_NSTAR` = 28 that is **56 `gfx_*` arrivals a frame** — about **42 ms** of
+§5.7's ~756 µs fixed part on a 4.77 MHz 8088, against a 54.9 ms tick. The cube
+and sea life had been composed bands for cycles and the shapes mode had gone
+to `OSAPI_GFX_POINTS` at §5.12.5; this one was simply never swept.
+
+It is a list now. `sv_star_plot` projects and **records** where each star
+lands and touches the screen not at all; `sv_star_emit` then walks the field
+once per DEPTH BAND, appending through `gfxe_padd`, and commits each band in
+one `OSAPI_GFX_POINTS`. **Three arrivals a frame** — near band, far band,
+erase — against fifty-six.
+
+**The 2x2 near star is four points and not a fill**, which is the one
+judgement that reverses `sv_star_blot`'s. That routine was right that a fill
+and a pixel are the same single arrival, so brightness by depth was free; the
+conversion removes the arrival it was equal to, and four entries in an array
+that is going up anyway beat a second ~756 µs call.
+
+##### 79.5.11.1 The draw order the header insists on is UNCHANGED
+
+§79.5's *"the new star is drawn before the old one is taken off"* is what stops
+the field strobing, and it survives batching exactly: **every band is drawn
+before one old pixel comes off.** That needs the whole field's previous blot
+to outlive pass 1, where the per-star order needed only one at a time, so
+`sv_sex`/`sv_sey`/`sv_sew` become the arrays `sv_opx`/`sv_opy`/`sv_ow`.
+
+`sv_star_erase` keeps `sv_star_off`'s test verbatim — a far star can project to
+the same pixel two frames running, and without it the field would lose exactly
+the stars that move least. It compares the ORIGIN only, as it always did, which
+is safe because a blot never shrinks at a fixed origin: z only falls, so a size
+goes 1 → 2x2 and back only at a rebirth, which moves the star.
+
+**Erase-all-then-draw-all is still the wrong order, but for a reason that has
+now nearly expired** — §79.5 priced it at *"the whole field absent for 21 ms of
+a 55 ms frame"*, and 21 ms was 28 arrivals. Batched it would be under one. The
+order is kept anyway: it costs three arrays in an overlay and nothing on the
+clock, and the invariant is cheaper to keep than to re-argue.
+
+##### 79.5.11.2 What it actually bought, which was NOT the frame rate
+
+`tests/saverate.py`, CGA, four modes:
+
+| | before | after |
+|---|---|---|
+| starfield | 18.08 fps, **5.1% halted** | 17.88 fps, **42.7% halted** |
+
+**It was already keeping up, and that is the finding.** §79.5's own header said
+the divides took it *"a little past one frame a tick"*; it made the tick, with
+almost nothing to spare. So the win is not frames, it is the **37.6 points of
+machine** the mode stops eating — 95% of a 4.77 MHz 8088 down to 57%. That
+matters in the two places a thin margin does: an adapter or a second display
+that makes each arrival dearer used to push the mode over §8.1.2.4's step and
+halve it to 9.1 fps outright, and there is now room for it not to.
+
+**Cost: +241 bytes of `SAVER.DRV`'s image** (+64 on the floppy, lz4), of which
+168 is the three arrays. An overlay, so it is disk and a heap claim while the
+saver runs and **nothing resident**.
+
+##### 79.5.11.3 SV_HOT is white
+
+The near band was `CYELLOW`. It is `CWHITE` now — an owner's look decision,
+taken while the mode was open rather than left for a cycle when it would cost
+a second pass over this file. It has a side effect worth naming: `SV_HOT` and
+`SV_MAIN` become one ink, so the two nearest depth bands commit in **one**
+arrival rather than two, which is why the frame is three and not four. The
+1bpp column is untouched — it was already all white, for §79.5's dither reason.
+
+
+##### 79.5.11.4 …and the field is 40 stars, because the margin is what it bought
+
+§79.5.11.2's win was headroom rather than frames, and headroom is only worth
+having if something spends it. `SV_NSTAR` is what spends it: the frame is
+three arrivals **whatever the count is** now, so a star costs its own
+projection — two `imul`/`idiv` pairs and a handful of stores — and nothing
+else. Raising it used to buy two more arrivals a star.
+
+**Swept with `tests/saverate.py`, one frame a tick throughout**, on the two
+1bpp adapters that matter (the second display is BLANKED during a session —
+§79.1.1 — so this is all the primary):
+
+| `SV_NSTAR` | CGA halted | Hercules halted | fps |
+|---|---|---|---|
+| 28 (before) | 42.1% | 39.8% | 18.08 |
+| 36 | 28.6% | — | 18.21 |
+| **40** | **21.0%** | **18.7%** | **18.08** |
+| 44 | 15.7% | — | 18.08 |
+| 48 | — | 4.4% | 17.88 |
+| 56 | 0.0% | — | 17.21 |
+| 84 | 0.0% | — | 16.24 |
+
+**40**, for a field 43% denser than before with about a fifth of the machine
+still idle. Hercules is consistently the dearer of the two and is what the
+number is cut from: it is nearly twice the area, so fewer stars project off
+screen and are reborn unseen, and more of the field is drawn every frame.
+
+**The curve does not fall off a cliff, and that is worth knowing before anyone
+raises it further.** Past 48 the mode simply stops halting and then starts
+dropping frames gracefully — 17.21 at 56, 16.24 at 84 — rather than taking
+§8.1.2.4's step down to 9.1. What it costs instead is the whole machine: 0%
+halted is a saver that leaves nothing for a `SOUND.DRV` tick, a NIC poll or
+anything else the field machine has in it, which is why the number is chosen
+against idle time and not against the frame rate.
+
+`SV_PTMAX` goes 40 → 64 with it. Overflowing the point list is not a defect —
+`gfxe_padd` commits the full list and carries on — so it is a tuning number,
+worth one ~756 µs arrival when it is wrong. The `%if` beside it IS a bound: the
+shapes mode's own need is exact, and an edit that sized the buffer for the
+stars alone would silently cost that mode an arrival an edge.
+
 
 ### 79.6 Waking, the cursor, and the repaint
 
@@ -137397,7 +138258,7 @@ heads and fails honestly, which is what a hard disk did here before this.
 
 **Only three fields of sixteen come over**, and the rest are not an oversight:
 `DV_FLAGS` bit 0 is a desktop zone and there is no desktop, `DV_CLASS` is 0 on
-every BIOS row, `DV_SECS` and `DV_SEG` are what a MOUNT fills — writing them
+every BIOS row, `DV_SECS` is what a MOUNT fills — writing it
 here would be staler than not — and `DV_LBL` is a label nothing draws. A
 `DVK_DRV` or `DVK_FILE` row could not come at all, its transport being a
 loadable driver that does not exist on the other side, so the gather wrote

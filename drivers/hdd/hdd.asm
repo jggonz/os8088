@@ -75,7 +75,7 @@ IDE_C_INITP  equ 0x91
 %include "hdcom.inc"
 %include "cfg.inc"
 %include "hdtool.inc"
-%include "page.inc"
+%include "mount.inc"
 
 ; =============================================================================
 ; The entry proc: attach, detach, and the service table they publish
@@ -90,9 +90,9 @@ IDE_C_INITP  equ 0x91
 ; ATTACH IS ALL-OR-NOTHING and this one has an easy time of it: the probe
 ; writes no port that is not a read-back of a drive's own task file, claims
 ; no memory, and hooks no interrupt. A window still costs a Control Panel
-; click; a mounted volume and its listing claim do NOT any more - they are
-; hd_ready's, one verb later, for every drive the probe found (SPEC.md
-; 52.6.1). Detach gives all of it back either way.
+; click; a mounted volume does NOT any more - it is hd_ready's, one verb
+; later, for every drive the probe found (SPEC.md 52.6.1). Detach gives all of
+; it back either way.
 ; -----------------------------------------------------------------------------
 hd_entry:
     cmp al, DRVV_DETACH
@@ -162,11 +162,6 @@ hd_detach:
     je .next
     mov al, [bx+HDV_VOL]
     call OSAPI_VOL_DEL
-    mov dx, [bx+HDV_LSEG]
-    or dx, dx
-    jz .noseg
-    call OSAPI_MEM_FREE
-.noseg:
     mov byte [bx+HDV_USED], 0
 .next:
     add bx, HDV_SIZE
@@ -202,10 +197,9 @@ hd_state_init:
     mov cx, HD_MAXVOL * HDV_SIZE
     rep stosb
     mov byte [hd_ndev], 0
-    mov byte [hd_sel], 0
-    mov byte [hd_field], 0
-    mov byte [hd_wantmnt], 0
-    mov word [hd_msg], hd_s_pick
+    mov byte [hd_sel], 0        ; hd_field is the PAGE's and initialises in
+    mov byte [hd_wantmnt], 0    ; the image that owns it (cppage.inc)
+    mov byte [hd_msgc], HDM_PICK
     pop es
     pop di
     pop cx
@@ -513,79 +507,11 @@ hd_geom_store:
 .out:
     ret
 
-; -----------------------------------------------------------------------------
-; hd_geom_ok - is a row's geometry usable? (module internal)
-; in:  DI = the row
-; out: CF = 0 usable
-; clobbers: flags
-; -----------------------------------------------------------------------------
-hd_geom_ok:
-    push ax
-    mov ax, [di+HDD_CYL]
-    test ax, ax
-    jz .no
-    cmp ax, 1024
-    ja .no
-    mov ax, [di+HDD_HEADS]
-    test ax, ax
-    jz .no
-    cmp ax, 255
-    ja .no
-    cmp byte [di+HDD_KIND], HDK_IDE
-    jne .spt
-    cmp ax, 16                  ; the task file has four bits of head, so an
-    ja .no                      ; IDE row carrying more is not a drive we can
-.spt:                           ; address at all - refuse the GEOMETRY rather
-                                ; than truncate it at the port (SPEC.md 52.1)
-    mov ax, [di+HDD_SPT]
-    test ax, ax
-    jz .no
-    cmp ax, 63
-    ja .no
-    pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_dev_mb - a device's size in whole MB
-; in:  DI = the row
-; out: AX = megabytes (0 if the geometry is unknown)
-; clobbers: AX (the output), flags
-;
-; cyl * heads * spt sectors, and 2,048 sectors is a megabyte - so the answer
-; is (cyl*heads*spt) >> 11, computed as a 32-bit product because 1024 x 16 x
-; 63 is 1,032,192 and does not fit a word.
-; -----------------------------------------------------------------------------
-hd_dev_mb:
-    push bx
-    push cx
-    push dx
-    call hd_geom_ok
-    jc .none
-    mov ax, [di+HDD_HEADS]
-    mul word [di+HDD_SPT]       ; DX:AX = heads*spt (<= 16,065)
-    mul word [di+HDD_CYL]       ; ...times cylinders: a true 32-bit product
-                                ; only because the first fits a word
-    mov bx, ax                  ; DX:BX = total sectors
-    mov cl, 11
-.shift:                         ; >> 11, a bit at a time: the 8086 has no
-    shr dx, 1                   ; 32-bit shift and this runs once a repaint
-    rcr bx, 1
-    dec cl
-    jnz .shift
-    mov ax, bx
-    jmp short .out
-.none:
-    xor ax, ax
-.out:
-    pop dx
-    pop cx
-    pop bx
-    ret
+                                ; hd_geom_ok and hd_dev_mb MOVED to
+                                ; hdcom.inc - both are pure functions
+                                ; of a device row and the PAGE needs
+                                ; them, so they belong in the file
+                                ; both images compile (SPEC.md 52.11)
 
 ; =============================================================================
 ; The block transport (SPEC.md 51.8) - what the kernel calls for every sector
@@ -1334,15 +1260,15 @@ hd_services:
     dw 0                        ; DSV_TIERS
     dw hd_blk                   ; DSV_BLK
     dw hd_s_page                ; DSV_CPNAME  - and so the page exists
-    dw hd_page_paint            ; DSV_CPPAINT
-    dw hd_page_click            ; DSV_CPCLICK
+    dw hd_cp_paint              ; DSV_CPPAINT - a THUNK now (SPEC.md 52.13):
+    dw hd_cp_click              ; DSV_CPCLICK   the page is in HDDTOOL.DRV
     dw hd_tool_reap             ; DSV_CPCLOSE - the panel has gone, so the disk
                                 ; tool's 11KB goes with it (SPEC.md 52.11.7)
     dw 0                        ; DSV_FS      - a file redirector's, not ours
     dw 0                        ; DSV_CPKEY   - this page takes no keys: its
                                 ; geometry is typed with - and + (SPEC.md 52.4)
-    dw hd_page_up               ; DSV_CPUP    - the page acts on the RELEASE
-    dw hd_page_drag             ; DSV_CPDRAG  - ...and follows the pointer
+    dw hd_cp_up                 ; DSV_CPUP    - the page acts on the RELEASE
+    dw hd_cp_drag               ; DSV_CPDRAG  - ...and follows the pointer
                                 ;               between the edges (13.8.4)
     dw 0                        ; DSV_PKGCALL - no package reaches a raw sector
     times DSV_SIZE - ($ - hd_services) db 0
@@ -1361,8 +1287,10 @@ hd_s_page:   db 'Hard Drive', 0
 ; (SPEC.md 51.1), which is what lets the kernel make exactly one claim, at
 ; the size the directory entry already reported, before a byte is read.
 ; =============================================================================
-hd_field:    db 0               ; the C/H/S field the page has selected
-hd_msg:      dw 0               ; -> the page's caption, always something
+                                ; hd_field, hd_rowdev, hd_fldi, hd_fldx,
+                                ; hd_clx and hd_cly all MOVED to cppage.inc
+                                ; with the page that is the only thing that
+                                ; ever reads them (SPEC.md 52.13)
 
 hd_vols:     times HD_MAXVOL * HDV_SIZE db 0
 
@@ -1388,9 +1316,9 @@ hd_bn_cal:   dw 0               ; ...in how many commands
 hd_bn_rst:   dw 0               ; ...and controller resets, which are retries
 %endif
 
-hd_idbuf:    times 512 db 0     ; IDENTIFY's 256 words (PIO, never DMA)
+                                ; hd_idbuf is hdsec.inc's now, and it is the
+                                ; SAME 512 BYTES as hd_mbr (SPEC.md 52.13.3)
 
-hd_rowdev:   db 0
 hd_pslot:    db 0               ; the partition hd_mount is working on
 hd_wantmnt:  db 0               ; bit n = mount device n at DRVV_READY: it
                                 ; was mounted last session, or the probe
@@ -1401,20 +1329,18 @@ hd_cdrv:     db 0               ; ...and must put back
 hd_cfgi:     db 0               ; hd_cfg_build's loop index and record count
 hd_cfgn:     db 0
 hd_cfgbuf:   times HDC_FBUF db 0     ; the blob, staged for OSAPI_DRV_CFG
-hd_nmnt:     db 0               ; ...and how many it has mounted this click
-hd_cap:      times 32 db 0      ; the page's caption, when it is BUILT rather
-                                ; than pointed at a literal. Its own buffer:
-                                ; hd_line is rewritten by every device row on
-                                ; the way past, and a caption outlives the
-                                ; paint that put it up
-hd_fldi:     db 0               ; the C/H/S editor's loop index
-hd_fldx:     dw 0
-hd_clx:      dw 0               ; the click being dispatched
-hd_cly:      dw 0
+                                ; hd_cap MOVED to page.inc, beside the strings
+                                ; it is composed from: a built caption belongs
+                                ; to the image that letters it, exactly as a
+                                ; constant one does (hddabi.inc's HDM_*)
 
 %include "hdsec.inc"
 
-; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
-%include "os88ui.inc"
+; **NO os88ui.inc.** It was here for the PAGE and the page is in HDDTOOL.DRV
+; now (SPEC.md 52.13), which was already carrying its own copy for the two
+; tool windows - so those bytes are DELETED rather than moved, and they are
+; the largest single item this driver gave back. Nothing else in the resident
+; draws a control: what is left of its drawing is one line of refusal text in
+; hd_cp_paint, lettered with OSAPI_FONT_RUN.
 
     OS88_DRV_END

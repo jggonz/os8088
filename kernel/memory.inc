@@ -202,6 +202,26 @@ MEM_K_CMPR equ 0xFF0D           ; the Compress verb's working block (SPEC.md
                                 ; 0xFF0B is skipped (it was MEM_K_OVL and is
                                 ; retired above) and so is 0xFF0C, which is
                                 ; MEM_K_HIB's
+MEM_K_FDLG equ 0xFF0F           ; the Standard File dialog's LISTING (SPEC.md
+                                ; 38.2, docs/plans/LISTING-HOME-PLAN.md 13):
+                                ; claimed at fdlg_open, handed to dsk_dest_x
+                                ; so every mount the dialog makes writes
+                                ; straight into it, and freed at fdlg_close.
+                                ; Transient with the dialog, which is the
+                                ; whole of why it costs no resident byte.
+                                ;
+                                ; It exists because a listing no longer has a
+                                ; home of its own. The module's own header
+                                ; said it needed "NO cache of its own" and
+                                ; read the mount snapshot directly; there is
+                                ; no snapshot to read now, so modality buys
+                                ; something different - not that the dialog
+                                ; can share one buffer, but that it can hold
+                                ; ONE claim while it is up and nobody else is
+                                ; listing.
+                                ;
+                                ; 0xFF0E is MEM_K_ICO_UNUSED above, kept as a
+                                ; tombstone, so this is 0xFF0F
 MEM_K_CLIP equ 0xFF07           ; the system clipboard's text (SPEC.md 55) -
                                 ; sized to what is in it, freed when it is
                                 ; emptied, and deliberately NOT an instance's,
@@ -383,7 +403,27 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; Runs on task 0 before any other task exists, so it needs no critical
 ; section (SPEC.md 7's only-the-UI-task-calls-BIOS rule holds here).
 ; -----------------------------------------------------------------------------
-section .ovlw                  ; THE BOOT OVERLAY (SPEC.md 2.5.2,
+%ifndef KERN_SMALL
+section .ovlw                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
+                                ; whose window has room to spare
+%else
+section .ovl                    ; ...and kern_small: the BLOB half instead
+                                ; (SPEC.md 2.5.3.2, mouse_init's shape). The
+                                ; deadline is the same either way - kmain runs
+                                ; this long before drv_boot - so the choice is
+                                ; only about WHOSE bytes. On that kernel
+                                ; `.ovlw` is read onto the FAT window and the
+                                ; mount buffers, and SPEC.md 22.6.3 has just
+                                ; taken the LISTING out of that region: the
+                                ; 800 bytes it gave back are only 288 of heap
+                                ; while the overlay still needs the rest, so
+                                ; every body moved here turns one more of them
+                                ; into heap. `.ovl` is written LAST on
+                                ; purpose: tools/os88ovlchk.py reads SOURCE
+                                ; and cannot evaluate the %ifdef, so it files
+                                ; this block by the arm below - which is the
+                                ; build the check exists to protect
+%endif
                                 ; docs/plans/LAST-DROP-BYTES.md row 11): kmain sizes
                                 ; the heap once. mem_unblob_x, which runs LATER
                                 ; and gives the blob back, is a different body
@@ -2728,15 +2768,9 @@ mem_rr_tab:
     MEM_RR_ROW drv_fseg,           5,       4   ; the five published class fast
 %endif                                          ; paths, contiguous BY DESIGN
                                                 ; (driver.inc:841)
-    ; A DONATED listing claim (SPEC.md 66.5.10.2): the driver owns it, so the
-    ; owner's own proc reaches one of its three naming words and these are the
-    ; other two. BY VALUE and over free rows too - a compaction can fire while
-    ; a different volume is current, and a free row's DV_SEG is stale rather
-    ; than meaningless (SPEC.md 6.1's clear leaves it alone).
-    MEM_RR_ROW dsk_vtab + DV_SEG, DVOL_MAX, DV_SIZE
-    MEM_RR_ONE dsk_dseg         ; ...and where the listing is READ FROM, which
-                                ; equals the row only while that volume is the
-                                ; one mounted
+    ; A DONATED listing claim had two rows here - dsk_vtab's DV_SEG and the
+    ; live [dsk_dseg] - and SPEC.md 22.6 retired the donation, so a listing is
+    ; never in a claim and neither word can name one.
     ; TWO ADJACENT WORDS ARE ONE ROW, and each pair carries a %error beside its
     ; own declaration to keep it that way: a row is four bytes whether it names
     ; one word or twelve, so a neighbour rides free - and an edit that puts
@@ -2830,18 +2864,19 @@ mem_reloc_call:
                                 ; COLD_SEG and would be quietly wrong
 
     ; THE KERNEL IS A HOLDER OF CLAIMS IT DOES NOT OWN (SPEC.md 66.5.10.2).
-    ; osapi_vol_add's DX is a DONATED listing claim: the driver owns it, so the
-    ; dispatch below reaches the driver - and dsk_vtab's DV_SEG and [dsk_dseg]
-    ; name the same block on this side of the ABI, where that proc cannot go.
-    ; So the kernel's half runs FIRST, unconditionally, for every move: a
-    ; record that is not a donation matches no row and the walk costs eight
-    ; compares against a rep movsb of up to 64KB. Unconditional is the design -
-    ; the next driver to donate one is movable the day it declares a proc, with
-    ; no kernel change and nothing to remember. BX and DX are the parameters
-    ; for the owner's call below and mem_region_reloc preserves both. It is
-    ; ONE call and not two: dsk_dseg_reloc was a walk of dsk_vtab's DV_SEG and
-    ; the live [dsk_dseg], which are two rows of mem_rr_tab like every other
-    ; kernel word that can name a claim.
+    ; A package's region, a driver's image and an overlay are all named by
+    ; KERNEL words on this side of the ABI, where the owner's own proc cannot
+    ; go. So the kernel's half runs FIRST, unconditionally, for every move: a
+    ; record that no row names costs a handful of compares against a rep movsb
+    ; of up to 64KB. Unconditional is the design - the next holder is covered
+    ; the day it gets a row, with nothing to remember at the call site. BX and
+    ; DX are the parameters for the owner's call below and mem_region_reloc
+    ; preserves both.
+    ;
+    ; **A DONATED LISTING CLAIM WAS THE WORKED EXAMPLE HERE AND IS GONE**
+    ; (SPEC.md 22.6): osapi_vol_add's DX took one, dsk_vtab's DV_SEG and
+    ; [dsk_dseg] were its two rows, and no volume donates now. The argument is
+    ; unchanged and the rows it was made about are not the only ones.
     mov word [ss:mem_fptr], cw_mem_disp
     mov [ss:mem_fptr+2], ax     ; AX is KERNEL_SEG from the ES load above
     mov ds, ax                  ; DS = KERNEL_SEG: a kernel proc's own

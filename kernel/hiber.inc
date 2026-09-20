@@ -1160,20 +1160,28 @@ hbm_root:
     ret
 
 ; -----------------------------------------------------------------------------
-; hbm_findimg - find HIBERNAT.IMG in the volume standing now, and stage its
-;               directory entry
-; out: CF = 0 and SI = the staged entry; CF = 1 there is no such file
+; hbm_findimg - find HIBERNAT.IMG in the volume standing now
+; out: CF = 0 with BX = its first cluster and DX:CX = its size;
+;      CF = 1 = there is no such file
+; clobbers: AX, BX, CX, DX (the outputs)
+;
+; **BY NAME OFF THE DIRECTORY, not out of the global listing** (SPEC.md 18.4).
+; It was `dsk_find_name_x` then `dsk_get_dir_x` - two thunked far calls to
+; reach a staged entry from which its three callers took exactly two things,
+; the first cluster at +18 and the size at +20. `dskw_stat_x` answers both in
+; REGISTERS off a directory walk, so this is one far call instead of two and
+; the entry is never staged at all.
+;
+; It is also what takes hibernate out of the global snapshot's consumer list
+; (docs/plans/LISTING-HOME-PLAN.md): a resume runs with no Disk window in
+; existence, so it was the reader that no window's cache could ever serve.
+; The walk it pays for instead is noise beside writing a whole memory image.
 ; -----------------------------------------------------------------------------
 hbm_findimg:
     call hbm_nimg               ; SI = the name - this build has ONE, and the
-    mov bp, dsk_find_name_x     ; extension is stamped on (SPEC.md 87.3)
+    mov bp, dskw_stat_x         ; extension is stamped on (SPEC.md 87.3)
     call COLD_SEG:hbk_bp
-    jc .no
-    mov bp, dsk_get_dir_x
-    call COLD_SEG:hbk_bp
-    clc                         ; dsk_get_dir's documented clobber is the
-.no:                            ; FLAGS - the three sites this replaces each
-    ret                         ; set their own before looking at CF
+    ret                         ; CF, BX and DX:CX are all its answer
 
 ; -----------------------------------------------------------------------------
 ; hbm_forget - delete the pointer and the image (SPEC.md 87.6 step 5, and
@@ -1344,12 +1352,13 @@ hbm_arm:
     push dx
     push si
     call hbm_findimg            ; ...plus what replacing an old image frees
-    jc .noold                   ; SI = the staged entry, its size at 20
-    pop bx
-    pop dx
-    pop ax
-    add ax, [si+20]
-    adc dx, [si+22]
+    jc .noold                   ; DX:CX = the old image's size
+    pop bx                      ; BX = the window, banked
+    mov si, dx                  ; ...and SI is free the instant it is: the
+    pop dx                      ; size's high half has to outlive the two
+    pop ax                      ; pops that are about to land in DX:AX
+    add ax, cx
+    adc dx, si
     push ax
     push dx
     push bx
@@ -1813,11 +1822,12 @@ hbm_ask:
     pop ds
     jne .stale
     call hbm_findimg            ; ...which is mounted: the pointer came from it
-    jc .lost                    ; SI = the staged entry
-    call hbm_imgsize            ; DX:AX = what the image must be
-    cmp [si+20], ax
+    jc .lost                    ; DX:CX = the image's size on the disk
+    mov bx, dx                  ; ...banked, because hbm_imgsize answers in
+    call hbm_imgsize            ; DX:AX and is documented to preserve CX
+    cmp cx, ax
     jne .lost
-    cmp [si+22], dx
+    cmp bx, dx
     jne .lost
     mov al, [hb_vol]
     call hbm_geom
@@ -1937,10 +1947,9 @@ hbm_imgsize:
 hbm_res:
     call hbm_enter              ; where the user stands, for a refusal
     jc .fail
-    call hbm_findimg            ; SI = the entry: [si+18] its first cluster
+    call hbm_findimg            ; BX = its first cluster
     jc .fail
-    mov ax, [si+18]
-    push ax
+    push bx
     call hbm_xcap               ; 2. sized for THIS volume, not the worst one
     mov bx, MEM_K_HIB
     mov bp, mem_claim_x
@@ -2101,13 +2110,11 @@ hbm_dosrun:
     inc di                      ; loses the prefix to an interrupt on an 8086
     loop .nm
     mov si, api_name
-    mov bp, dsk_find_name_x
-    call COLD_SEG:hbk_bp                ; AX = the index
-    jc .b3
-    mov bp, dsk_get_dir_x       ; SI -> the staged entry (SPEC.md 19.1): the
-    call COLD_SEG:hbk_bp        ; first cluster is at 18 and NOT at the FAT
-    mov ax, [si + 18]           ; record's own 26 (SPEC.md 96.37.1 item 4)
-    mov [cs:hbm_dosclus], ax
+    mov bp, dskw_stat_x         ; ...and BY NAME off the directory (SPEC.md
+    call COLD_SEG:hbk_bp        ; 18.4), not out of the global listing: one
+    jc .b3                      ; far call where find-then-stage was two, and
+    mov [cs:hbm_dosclus], bx    ; BX is the entry's first cluster - NOT the
+                                ; FAT record's own 26 (SPEC.md 96.37.1 item 4)
 
     ; --- 3. the transport facts, and the extents ----------------------------
     mov al, [cs:hbm_dosrec + KDH_VOL]

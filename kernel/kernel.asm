@@ -5285,7 +5285,7 @@ kmain:
                                 ; multi-sector read past it silently returns
                                 ; the OTHER HEAD's sectors
     MARK 4
-    OVWCALL  sched_init         ; pre-emption live from here on. IN THE BLOB
+    OVBCALL  sched_init         ; pre-emption live from here on. IN THE BLOB
                                 ; (docs/plans/LAST-DROP-BYTES.md row 3) - one
                                 ; caller, and this is it
     MARK 5
@@ -5345,7 +5345,7 @@ kmain:
                                 ; up scanning our raster and black
 %endif
     MARK 11
-    OVWCALL  mem_init_x         ; the claim heap (SPEC.md 50): int 12h, the
+    OVBCALL  mem_init_x         ; the claim heap (SPEC.md 50): int 12h, the
                                 ; empty map. FIRST of the memory users -
                                 ; every claim below goes through it
     MARK 12
@@ -5402,11 +5402,11 @@ kmain:
                                 ; int 10h and no F000:FA6E, and the machine's
                                 ; own ROM font is not consulted at all
 %else
-    OVWCALL  font_init          ; needs int 10h, so after the mode is set
+    OVBCALL  font_init          ; needs int 10h, so after the mode is set
 %endif
     MARK 14
     BPMARK 3                    ; ...the typeface
-    OVWCALL  wm_init
+    OVBCALL  wm_init
     MARK 15
 %ifdef BANDCOMP
     call band_init              ; SPEC.md 5.9.2: the composer's 2KB, before the
@@ -5461,7 +5461,7 @@ kmain:
     MARK 21
     OVWCALL  dock_init          ; dock strip scratch (SPEC.md 30)
     MARK 22
-    OVWCALL  files_init_x       ; Disk module state (no window at boot)
+    OVBCALL  files_init_x       ; Disk module state (no window at boot)
     MARK 23
                                 ; NO loader_init: all four of the loader's
                                 ; resting values ARE zero (LD_OK is 0) and
@@ -5484,7 +5484,7 @@ kmain:
                                 ; because the overlay this lives in is dead by
                                 ; then: drv_boot's own mount writes over it
     MARK 26
-    OVWCALL  snd_init   ; sound layer (SPEC.md 34.7): saves the 61h
+    OVBCALL  snd_init   ; sound layer (SPEC.md 34.7): saves the 61h
                                 ; boot bits, stores its .bss state, publishes
                                 ; snd_live LAST - snd_tick has been running
                                 ; gated since sched_init hooked int 08h
@@ -8023,13 +8023,20 @@ SK_VGAB_KB equ SK_R(SK_CUM5) - SK_R(SK_CUM5 - VGABUF_PARA * 16)
 ; still holds one body per entry. Written per arm rather than in terms of
 ; DSK_ICO_N alone, because the point of this guard is that both sides are
 ; spelled out independently and have to agree.
+; ...and docs/plans/LISTING-HOME-PLAN.md 13 took the ENTRIES and their
+; reference index out of it altogether: a listing is written into the store
+; its caller keeps - a Disk window's own claim, or the Standard File dialog's
+; - so the only thing left in `.lowbss` that belongs to the mount is the
+; SECTOR BUFFER. The row is 512 bytes on kern_big, and on kern_small it is
+; that plus dsk_ovlpad, the boot overlay's landing ground, which is the one
+; term here that was never about listing anything.
 %ifdef KERN_SMALL
-%if SKB_DSK != DSK_ICOIX_N + DSK_NENT*DSK_DE_STRIDE + DSK_OVLPAD + 512
-%error "sys_kb: the Disk bufs row is no longer the mount-owned window (SPEC.md 2.1.2/25.9): the sector buffer, the entries, one reference byte per entry, and dsk_ovlpad - the boot overlay's floor, which only this kernel needs"
+%if SKB_DSK != DSK_OVLPAD + 512
+%error "sys_kb: the Disk bufs row is no longer the mount's own scratch (SPEC.md 2.1.2, docs/plans/LISTING-HOME-PLAN.md 13): the sector buffer and dsk_ovlpad - the boot overlay's floor, which only this kernel needs. The ENTRIES are the caller's store now and are not here at all"
 %endif
 %else
-%if SKB_DSK != DSK_ICOIX_N + DSK_NENT*DSK_DE_STRIDE + 512
-%error "sys_kb: the Disk bufs row is no longer the mount-owned window (SPEC.md 2.1.2/25.9): the sector buffer, the entries and one reference byte per entry, and NO icon bodies - those are the machine-wide store's"
+%if SKB_DSK != 512
+%error "sys_kb: the Disk bufs row is no longer the mount's own scratch (SPEC.md 2.1.2, docs/plans/LISTING-HOME-PLAN.md 13): the SECTOR BUFFER and nothing else. The entries and their reference index went into the caller's store, and there are no icon bodies - those are the machine-wide store's"
 %endif
 %endif
 ;
