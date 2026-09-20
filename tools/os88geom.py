@@ -241,6 +241,14 @@ _MIRROR = {
     "FS_N": ("kernel/files.inc", 6),
     "FS_VIEW": ("kernel/files.inc", 12),
     "FS_VSEG": ("kernel/files.inc", 16),
+    # ...and the pair that locates the ICON REFERENCE INDEX inside that view
+    # cache, which is how a host script asks "does this entry name a row in
+    # the store, or the 0xFF blank?" without judging pixels. Two rows read it
+    # - tests/icoshed.py and tests/rdicon.py - which is the second copy
+    # t_mirror exists to catch. FS_IOFH is a HIGH byte, so the offset is
+    # `(FS_IOFH << 8) + FV_ICOIX + entry`.
+    "FS_IOFH": ("kernel/files.inc", 15),
+    "FV_ICOIX": ("kernel/files.inc", 0),
     # kernel/kernel.asm - the chrome
     "MBAR_H": ("kernel/kernel.asm", 20),
     "TITLE_H": ("kernel/kernel.asm", 18),

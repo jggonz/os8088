@@ -7290,6 +7290,29 @@ SOAK = [
     Row("rdup", "soak", py("tests/rdup.py"), 60.0,
         "SPEC.md 62.9.11.3: the Ram Disk page acts on the RELEASE.",
         needs=("marty",), serial=True),
+    Row("rdicon", "soak", py("tests/rdicon.py"), 75.0,
+        "SPEC.md 62.9.2.1: a DOCUMENT on a redirected volume gets its "
+        "association icon. The mount's redirected tail ran pass 4a' and then "
+        "`jmp short .done`, PAST SPEC.md 54.3's pass 4b, on the ground that "
+        "such a volume has no program to have learned an icon from - which is "
+        "not what pass 4b reads. `assoc_docicon` composes from the "
+        "ASSOCIATION's glyph, machine-wide and warm out of the boot volume's "
+        "ASSOC.DAT, and does no I/O, so a `.TXT` on the RAM disk had the same "
+        "claim on a Note Pad page as a `.TXT` on a floppy and got the generic "
+        "diamond. Reported as `RAM disks almost never show an assoc icon, "
+        "even when the cache is there and has it populated`. It reads "
+        "REFERENCE BYTES out of the acting window's cache rather than judging "
+        "pixels (tests/icoshed.py's instrument): a composed page and a "
+        "generic diamond are both ink in a 16x16 cell, and what changed is "
+        "whether the entry names a row in the store. THE FOLDER'S REFERENCE "
+        "IS READ BESIDE IT as the control - pass 4a' was never broken, so it "
+        "says the listing, the store and the index all work before the third "
+        "check blames 4b. Uses RAMSEED=1's seeded store in a PRIVATE TREE "
+        "(the kernel is byte-identical - the knob reaches RAMDISK.DRV alone), "
+        "so there is no copy to drive and no dialog in the way. VERIFIED RED "
+        "with the two bytes put back: reference 0xff, the blank the icon "
+        "index is filled with. Measured at 67s",
+        needs=("marty",), serial=True),
     Row("rdmount", "soak", py("tests/rdmount.py"), 40.0,
         "SPEC.md 22.6.3.1: MOUNTING the RAM disk must not take the machine "
         "with it. `disk_mount` decides twice whether a mount is loud and the "
