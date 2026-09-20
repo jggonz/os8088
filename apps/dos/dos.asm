@@ -1094,6 +1094,17 @@ dos_wake:
     ; rest of the session, with `[dos_drvout]` stuck at 1 so the NEXT launch's
     ; `dos_drv_take` early-returned and handed `kern_dos` a stale BLASTER=.
     call dos_drv_back
+    ; ...AND THE CACHE DIAL IS THE SAME BRACKET AND WAS NOT PAID HERE EITHER
+    ; (SPEC.md 18.95.8). `dos_cache_arm` commands the kernel's read-ahead width
+    ; before the handoff and `dos_run`'s `.out` is the only place that gives it
+    ; back - which this path does not reach, exactly as it does not reach
+    ; `dos_drv_back` above. On this arm the machine went away and came back
+    ; from a hibernation image, so the commanded cap is IN the image: a session
+    ; that ran one `.LNK` with the dial off Auto keeps that width for the rest
+    ; of its life, on every volume, with nothing on the glass to say so.
+    ; A resume with nothing commanded is free, the same way one with nothing
+    ; suspended is.
+    call dos_cache_free
     ; ...and the console says so HERE, which is where the run really ended.
     ; `dos_run`'s own `.out` cannot: the post is spent long before the program
     ; starts, so a line written there is about a launch that has not happened
@@ -7529,15 +7540,23 @@ dos_mem_arena:
                                     ; the dial is about to narrow it. Auto
                                     ; answers 0 here, which is right - it
                                     ; commands nothing
-    mov cx, [dos_mhkb]              ; ...and an UNTICKED box is a driver that
-    cmp byte [dos_mhdd+OS88UI_CK_ON], 0     ; will not be there (96.36.7). A
-    jne .nohdd                      ; greyed box is forced ON by dos_mck_di, so
-    add ax, cx                      ; a class nothing has mounted adds nothing
+    ; ...AND AN UNTICKED BOX IS A DRIVER THAT WILL NOT BE THERE (96.36.7) -
+    ; **ASKED OF THE ROUTINE THE LAUNCH ITSELF ASKS** (SPEC.md 96.36.7.3).
+    ; This used to read the two check boxes directly, which is the same
+    ; question one step short of the answer: `dos_drv_take` passed a mask of
+    ; ZERO for a cycle, so every term added here was a promise nothing kept.
+    ; One reader means the figure and the sweep cannot disagree again, and it
+    ; carries the guard with it - a class the launch will keep adds nothing,
+    ; whatever its box says. A class nothing has mounted reports 0 KB either
+    ; way (96.36.7.1).
+    call dos_spmask                 ; BL = what the launch will really let go
+    test bl, 1 << DRVC_DISK
+    jz .nohdd
+    add ax, [dos_mhkb]
 .nohdd:
-    mov cx, [dos_mnkb]
-    cmp byte [dos_mnet+OS88UI_CK_ON], 0
-    jne .snd
-    add ax, cx
+    test bl, 1 << DRVC_NET
+    jz .snd
+    add ax, [dos_mnkb]
 .snd:
     add ax, [dos_msnk]              ; ...AND THE SOUND DRIVER, UNCONDITIONALLY
                                     ; (SPEC.md 96.36.7.2). It has no box
@@ -15097,6 +15116,58 @@ dos_pkt_tick:
 ; in:  inside the bracket, on the exclusive task
 ; out: nothing; [dos_blaster] is a string or an empty one
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; dos_spmask - OSAPI_DRV_SUSPEND's mask, out of the Memory page's check boxes
+; out: BL = the bitmap; every other register preserved
+;
+; SPEC.md 51.11.4: BL names the classes this call lets go of ANYWAY, bit
+; `1 << class`, and 0 is the sweep's own default - `DRVC_DISK`, `DRVC_FILE` and
+; `DRVC_NET` left standing because a fullscreen program normally wants them.
+; An UNTICKED box is the user saying this program does not, which is the whole
+; reason the slot takes a mask (SPEC.md 96.36.7): `dos_mem_arena` already adds
+; that class's KB to the figure it prints, and without this the figure was a
+; promise the launch did not keep.
+;
+; **ARM 0 ONLY, AND THAT IS NOT TIDINESS.** The boxes are `DOS_MEM_IN`'s
+; controls and are greyed on the other arm - but arm 1 SHUTS THE OS DOWN, and
+; the way back is a hibernation image on a fixed disk (SPEC.md 87.2). Letting
+; `DRVC_DISK` go there takes `hb_pick`'s volume out from under the image it is
+; about to write, on the machine whose hard disk is driver-backed. The other
+; arm needs no mask anyway: it gives the program the whole machine, so every
+; driver goes regardless of what is named here.
+; -----------------------------------------------------------------------------
+dos_spmask:
+    push ax
+    xor bl, bl
+    cmp byte [dos_keepc], DOS_MEM_IN
+    jne .out
+    cmp byte [dos_mhdd + OS88UI_CK_ON], 0
+    jne .net
+    ; **...UNLESS THE PROGRAM ITSELF IS ON ONE** (SPEC.md 96.36.7.3).
+    ; `dos_run` takes the drivers out BEFORE `dos_load`, so letting `DRVC_DISK`
+    ; go when the box is standing on a driver-backed volume unmounts the disk
+    ; the program is about to be read off. The box would then refuse its own
+    ; launch with DER_READ, for a request it could simply not grant - and
+    ; SPEC.md 96.36.7.1 is explicit that the tick is a REQUEST rather than a
+    ; report, so one that cannot be met is not met. A BIOS-reached hard disk
+    ; (VT_BIOS, VK_FIXED) is not this class's at all and is unaffected.
+    mov al, [dos_vol]
+    call OSAPI_VOL_KIND         ; AH = VT_BIOS / VT_DRIVER / VT_FILE
+    jc .hdd                     ; no such volume: nothing to protect
+    cmp ah, VT_DRIVER
+    je .net                     ; ours - keep the class, and say nothing: the
+                                ; figure below asks THIS routine, so the page
+                                ; cannot promise what the launch will not do
+.hdd:
+    or bl, 1 << DRVC_DISK
+.net:
+    cmp byte [dos_mnet + OS88UI_CK_ON], 0
+    jne .out
+    or bl, 1 << DRVC_NET
+.out:
+    pop ax
+    ret
+
 dos_drv_take:
     push ax
     push bx
@@ -15118,10 +15189,17 @@ dos_drv_take:
     pop es
     mov di, dos_dqbuf
     mov al, 1
-    xor bl, bl                      ; ...and the skip list as it stands
-                                    ; (SPEC.md 51.11.4): the hard disk, the RAM
-                                    ; disk and the card stay. The Memory page's
-                                    ; own boxes are what set bits here
+    call dos_spmask                 ; ...and the skip list, WHICH IS THE PAGE'S
+                                    ; OWN BOXES (SPEC.md 51.11.4, 96.36.7.3).
+                                    ; It was `xor bl, bl` - the default list,
+                                    ; where the hard disk, the RAM disk and the
+                                    ; card all stay - under a comment saying
+                                    ; the boxes were what set bits here. They
+                                    ; never did: the slot shipped and the
+                                    ; caller was never wired to it, so an
+                                    ; unticked box added its class's KB to the
+                                    ; figure on the glass and changed nothing
+                                    ; about the launch
     call OSAPI_DRV_SUSPEND          ; CX = records
     jc .out                         ; nothing moved: HIBER.DRV could not be
                                     ; read (SPEC.md 51.11), and there is

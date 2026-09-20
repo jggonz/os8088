@@ -135276,6 +135276,43 @@ keeps, and `SK_HEAP` is the *whole arena* — driver claims included. The machin
 that arm describes has no kernel in it at all, so every byte a driver held is
 already counted.
 
+##### 96.36.7.3 …and for a cycle the boxes reached nothing at all
+
+§96.36.7 above has said since it was written that clearing a box *"sets that
+class's bit in `OSAPI_DRV_SUSPEND`'s `BL`"*. **It did not.** `dos_drv_take`
+passed `xor bl, bl` — the sweep's own default, where `DRVC_DISK`, `DRVC_FILE`
+and `DRVC_NET` all stay — under a comment reading *"the skip list as it
+stands … The Memory page's own boxes are what set bits here"*. §51.11.4 built
+the mask, the SDK published it, `hbm_sweep` honoured it, and the one caller
+was never wired to it.
+
+**So an unticked box moved the figure and not the machine.** `dos_mem_arena`
+adds that class's banked KB to the estimate it prints, the launch then swept
+the same set it always had, and the arena came back short by exactly the
+classes the page had promised. Reported from the field as a page that *"will
+claim 469k"* delivering 393.
+
+MEASURED on `os8088_xt_hdd_sb` with `HDD.DRV` mounted from the Control Panel,
+the same program run twice from one box: ticked **441 KB**, unticked **441 KB**
+and the driver's image still standing in `mem_tab`. With the mask built:
+**441 → 446**, and the image is gone. Five kilobytes is what a hard disk is
+worth on that machine; the reporter's has two partitions and an `ETHER.DRV`
+whose image and 14 KB socket pool are both `DRVC_NET`.
+
+**THE MASK IS ARM 0's, AND THAT IS NOT TIDINESS.** The boxes are `DOS_MEM_IN`'s
+controls, and arm 1 shuts the OS down — its way back is a hibernation image on
+a fixed disk (§87.2). Letting `DRVC_DISK` go there would take `hb_pick`'s
+volume out from under the image it is about to write, on exactly the machine
+whose hard disk is driver-backed. Arm 1 needs no mask anyway: it hands the
+program the whole machine, so every driver goes whatever is named here.
+
+The general shape is one this section can afford to state plainly, since it is
+the second defect of it in this chapter: **a slot with one caller is a slot
+with one chance to be wrong, and the prose described the caller rather than
+reading it.** §96.49.5's `cw_clk_snapshot` is the same failure — a routine
+documented as doing the thing, whose body was a bare `retf` — and both were
+invisible because the number they produced was plausible.
+
 #### 96.36.8 Arm 1's box: the pointer is not free on a 4.77 MHz machine
 
 `Disable the mouse` is the first option under **Shut down the OS**, and it is
