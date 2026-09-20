@@ -437,22 +437,30 @@ files_init_x:
     push es
     push ds
     pop es
-    xor al, al                  ; every block reads as a window that never
-    mov di, fm_pool             ; existed until fm_kinit fills one
-    mov cx, FM_MAXWIN * FS_SIZE
-    cld
-    rep stosb
-    mov byte [fm_elen], 0       ; nothing is being typed anywhere, nothing is
-    mov byte [fm_ebuf], 0       ; awaiting a confirmation, and no window has
-    mov byte [fm_onam], 0       ; asked how much room is left
-    mov byte [fm_odir], 0
-    mov word [fm_tdirty], 0
-    mov word [fm_vp], fm_pool   ; no acting window yet: point the three
-    mov word [fm_vseg], 0           ; published words at slot 0, and at the
-    mov word [fm_vinst], 0          ; global snapshot rather than a cache
-    mov byte [fm_seed_drv], 1   ; the seed the first launch would consume
-    mov word [fm_seed_cwd], 0
-    mov word [fm_seed_nam], 0
+    xor ax, ax                  ; every block reads as a window that never
+    mov di, fm_pool             ; existed until fm_kinit fills one.
+    mov cx, FM_MAXWIN * FS_SIZE ; **AX AND NOT AL**, which is the same two
+    cld                         ; bytes: `stosb` does not touch the
+    rep stosb                   ; accumulator, so it arrives at the eleven
+                                ; stores below still zero and they are 37
+                                ; bytes rather than 61 - `mov word [m], imm`
+                                ; being six bytes and 20 clocks where
+                                ; `mov [m], ax` is three and 14. They are
+                                ; ordered by what AX has to hold and each
+                                ; keeps the comment that says why it is set
+    mov [fm_elen], al           ; nothing is being typed anywhere, nothing is
+    mov [fm_ebuf], al           ; awaiting a confirmation, and no window has
+    mov [fm_onam], al           ; asked how much room is left
+    mov [fm_odir], al
+    mov [fm_tdirty], ax
+    mov [fm_vseg], ax           ; no acting window yet: two of the three
+    mov [fm_vinst], ax          ; published words are 0 - the global snapshot
+    mov [fm_seed_cwd], ax       ; rather than a cache - and the third is slot
+    mov [fm_seed_nam], ax       ; 0, below
+    inc ax
+    mov [fm_seed_drv], al       ; the seed the first launch would consume
+    mov ax, fm_pool
+    mov [fm_vp], ax             ; ...and the acting window is slot 0
     pop es
     pop di
     pop cx

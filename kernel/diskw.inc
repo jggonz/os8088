@@ -568,10 +568,12 @@ dskw_mkbody:
     call dskw_flush_x           ; the FAT, THEN the entry (SPEC.md 18.4)
     jc .rollax
 
-    mov word [dskw_len], 0      ; a directory's size field is zero by spec -
-    mov word [dskw_lenhi], 0    ; both words of it, since SPEC.md 18.4.1
-    mov byte [dskw_new], 1
-    mov byte [dskw_isdir], 1
+    xor ax, ax                  ; a directory's size field is zero by spec -
+    mov [dskw_len], ax          ; both words of it, since SPEC.md 18.4.1.
+    mov [dskw_lenhi], ax        ; dskw_commit takes its arguments in MEMORY,
+    inc ax                      ; so the accumulator is free across it: 15
+    mov [dskw_new], al          ; bytes against 22
+    mov [dskw_isdir], al
     call dskw_commit            ; the one-sector commit
     mov byte [dskw_isdir], 0
     jc .rollax
@@ -1505,11 +1507,13 @@ dskw_wbody:
 ; written needs unwriting.
 ; -----------------------------------------------------------------------------
 dskw_wdata:
-    mov byte [dskw_fop], 1      ; the direction, set ONCE for the body rather
+    xor ax, ax                  ; AX is this routine's OUTPUT and never its
+    mov [dskw_first], ax        ; input - the contract above says so - so the
+    mov [dskw_prev], ax         ; four stores are the accumulator's: 15 bytes
+    mov [dskw_rlen], ax         ; against 23, and no data run is pending
+    inc ax
+    mov [dskw_fop], al          ; the direction, set ONCE for the body rather
                                 ; than three bytes ahead of every flush
-    mov word [dskw_first], 0
-    mov word [dskw_prev], 0
-    mov word [dskw_rlen], 0     ; no data run pending
     mov ax, [dskw_seg]
     mov [dskw_wseg], ax         ; the ADVANCING source segment
     cmp word [dskw_rem], 0

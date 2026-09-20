@@ -1232,6 +1232,95 @@ def main():
         # asked and the answer is the problem; `srv.asked` STANDING STILL
         # with the server thread alive means the guest never asked, so
         # neither the loader nor the host is in it.
+        if not settled and os.environ.get("WIRE_SOCKDUMP"):
+            # **`WIRE_SOCKDUMP=1` IS WHY THIS ROW'S LAST FAILURE WAS FOUND**,
+            # and it is kept because taking the readings was most of the work:
+            # the socket the Wire is waiting on out of ETHER.DRV's own bss,
+            # the stack's four state bytes, the kernel's task table and the
+            # gfx lock, all at the moment of the timeout.
+            #
+            # What it settled, when this hung for 903 seconds in WS_WAIT: the
+            # SYN WAS on the wire (SKO_TS = TS_SYNSENT to 10.0.2.2:8092 with
+            # its connect deadline armed and a million ticks past), the stack
+            # was innocent (eth_busy 00, eth_raw 00, eth_up 1, dns_sk FF,
+            # inst_parkreq 00, gfx_lock free) - and the Wire's worker was in
+            # the task table as READY and still never reached `wr_nstep`,
+            # which is a machine whose SCHEDULER has stopped. It had: mounting
+            # the RAM disk this very step mounts was writing 0xFF over
+            # interrupt vectors 0..15, and 8..15 are IRQ0..IRQ7.
+            #
+            # The lesson worth keeping is the shape. Every reading above is a
+            # byte of guest state; the diagnosis before them was inferred, and
+            # named `tcp_syn`, which had run correctly all along.
+            #
+            # It runs only on a failure and only when asked, so the green path
+            # pays nothing; `ether_syms` refuses a map that is not
+            # byte-for-byte build/ether.bin, so every offset it names is this
+            # driver's.
+            try:
+                import ethernet as _eth
+                es = _eth.ether_syms()
+                NETROW = 2
+                dseg = u16(m.read(S("drv_tab") + NETROW * 16 + 2, 2))
+                say("   ETHER.DRV at %04X  wr_hnd=%d"
+                    % (dseg, b("wr_hnd")[0]))
+                say("   dns_sk=%02X  eth_lasterr=%02X  eth_up=%d  "
+                    "eth_raw=%02X  eth_nrx=%d"
+                    % (m.readseg(dseg, es["dns_sk"], 1)[0],
+                       m.readseg(dseg, es["eth_lasterr"], 1)[0],
+                       m.readseg(dseg, es["eth_up"], 1)[0],
+                       m.readseg(dseg, es["eth_raw"], 1)[0],
+                       u16(m.readseg(dseg, es["eth_nrx"], 2))))
+                SK_SZ = 128
+
+                def _tick():
+                    q = m.read(0x46C, 4)
+                    return q[0] | (q[1] << 8) | (q[2] << 16) | (q[3] << 24)
+
+                # **IS THE WORKER IN THE TASK TABLE AT ALL?** T_STATE is
+                # 0 free / 1 ready / 2 sleeping and T_INST names the owning
+                # instance - so a worker that DIED and one that is parked
+                # for ever look different here, which is the whole question.
+                T_SIZE = 8
+                tt = m.read(S("sch_tasks"), T_SIZE * 12)
+                rows = []
+                for i in range(12):
+                    st, inst = tt[i * T_SIZE], tt[i * T_SIZE + 6]
+                    if st:
+                        rows.append("%d:st%d/inst%02X" % (i, st, inst))
+                say("   tasks: %s" % " ".join(rows))
+                # WHERE is the ready-but-idle worker? T_SP is its saved SP and
+                # task stacks live at LOW_SEG, so its frame names the routine.
+                sp4 = tt[4 * T_SIZE + 2] | (tt[4 * T_SIZE + 3] << 8)
+                say("   task4 T_SP=%04X frame=%s"
+                    % (sp4, m.read((0x1940 << 4) + sp4, 32).hex()))
+                say("   gfx_lock_flag=%02X own=%02X want=%02X last=%02X"
+                    % (m.read(S("gfx_lock_flag"), 1)[0],
+                       m.read(S("gfx_lock_own"), 1)[0],
+                       m.read(S("gfx_lock_want"), 1)[0],
+                       m.read(S("gfx_lock_last"), 1)[0]))
+                say("   eth_busy=%02X  inst_parkreq=%02X  sch_parked=%s"
+                    % (m.readseg(dseg, es["eth_busy"], 1)[0],
+                       m.read(S("inst_parkreq"), 1)[0],
+                       m.read(S("sch_parked"), 12).hex()))
+                own = m.read(S("wm_owner") + ww, 1)[0]
+                say("   wr_hired=%02X wr_gen=%02X wr_gen0=%02X  "
+                    "the Wire's window %d is owned by instance %02X"
+                    % (b("wr_hired")[0], b("wr_gen")[0], b("wr_gen0")[0],
+                       ww, own))
+                for pas in (0, 1):
+                    if pas:
+                        time.sleep(30)
+                    r = m.readseg(dseg, es["sk_tab"], 48)
+                    tmo = r[34] | (r[35] << 8)
+                    suna = r[10] | (r[11] << 8) | (r[12] << 16) | (r[13] << 24)
+                    say("   pass %d tick=%d  ST=%02X TS=%02X TMO=%d "
+                        "(tick-TMO=%d) TRY=%d FL=%02X ISN=%08X nrx=%d"
+                        % (pas, _tick(), r[0], r[1], tmo, _tick() - tmo,
+                           r[36], r[37], suna,
+                           u16(m.readseg(dseg, es["eth_nrx"], 2))))
+            except Exception as _e:          # noqa: BLE001
+                say("   (socket dump failed: %r)" % (_e,))
         if not settled:
             no("the archive chain never finished: %.0f s after Load Program "
                "[wr_state] is %d and [wr_job] %d, where this step wants "
