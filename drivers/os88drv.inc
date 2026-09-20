@@ -373,6 +373,13 @@ FSV_WRITE    equ 8              ; KERNEL_SEG on entry to everything the kernel
                                 ; buffer's segment - DSV_BLK's rule, SPEC.md
                                 ; 51.8, and `mov es, dx` is yours to do)
 FSV_APPEND   equ 10             ; the chunked pair (18.4.4), so a copy streams
+; A DRVC_FILE driver's own DSV_CAPS bit (SPEC.md 62.9.2.2). Set it when your
+; FSV_READAT is a MEMORY read - no wire, no seek, no motor - and the mount
+; will HARVEST package icons off your volume instead of taking SPEC.md
+; 62.9.2.1's cache-only pass. Leave it clear and you get exactly the
+; behaviour every DRVC_FILE driver had before the bit existed.
+FSCAP_LOCAL  equ 1              ; my reads cost what a memcpy costs
+
 FSV_READAT   equ 12             ; ...and its read half
 FSV_DELETE   equ 14             ; SI = name
 FSV_RENAME   equ 16             ; SI = old, DI = new

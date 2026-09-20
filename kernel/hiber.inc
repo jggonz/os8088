@@ -310,12 +310,24 @@ hb_probe_x:
     push ax
     push dx
     push si
-    mov byte [hb_mode], HB_M_GONE   ; .bss is whatever the LAST kernel left
-    mov word [hb_resumes], 0    ; (a warm boot clears nothing), and three of
-    mov word [hb_xseg], 0       ; these are read before anything writes them
-    mov word [hb_dosakb], 0
-    mov word [hb_doscode], KDH_NOCODE   ; ...and this one means "no DOS program
-                                ; ran", which is every resume but one
+    xor ax, ax                  ; .bss is whatever the LAST kernel left
+    mov [hb_resumes], ax        ; (a warm boot clears nothing), and three of
+    mov [hb_xseg], ax           ; these are read before anything writes them.
+    mov [hb_dosakb], ax         ; FIVE STORES THROUGH THE ACCUMULATOR, which
+    dec ax                      ; this routine has already pushed: 20 bytes
+    mov [hb_doscode], ax        ; against 29, and `mov [m], ax` is 14 clocks
+                                ; where `mov word [m], imm` is 20. KDH_NOCODE
+                                ; is 0xFFFF and means "no DOS program ran",
+                                ; which is every resume but one - SO THE `dec`
+                                ; GOES HERE, off the zero, and not after the
+                                ; mode below: from HB_M_GONE it makes 2, which
+                                ; is a DOS exit code the machine never had and
+                                ; which tests/hibernate.py reads back as one
+    mov al, HB_M_GONE           ; ...and AH is left 0xFF, which nothing reads:
+    mov [hb_mode], al           ; the mode is a byte
+%if KDH_NOCODE != 0xFFFF
+  %error "hb_probe spells KDH_NOCODE as a decremented zero"
+%endif
     call COLD_SEG:hb_pick_x     ; AL = the volume
     jc .out
     mov [hb_vol], al

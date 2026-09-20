@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""A DOCUMENT on a redirected volume gets its association icon (SPEC.md
-62.9.2.1).
+"""Icons on a redirected volume: the document pass AND the harvest (SPEC.md
+62.9.2.1, 62.9.2.2).
 
     python3 tests/rdicon.py [machine]
 
@@ -21,13 +21,18 @@ to drive and no file dialog in the way. The kernel is byte-identical to the
 shipped one - RAMSEED reaches `RAMDISK.DRV` alone - so this is a private tree
 for the DISK's sake and `os88sym` resolves against the same map either way.
 
-THE THREE CHECKS, and the middle one is what makes the third mean anything:
+THE FOUR CHECKS, and the second is what makes the other two mean anything:
 
   L  the volume listed at all - four entries, which is the seed
   F  the FOLDER's reference byte is live. That is pass 4a', which was never
      broken, so it says the listing, the store and the reference index are
-     all working before the third check blames pass 4b for anything
-  D  the DOCUMENT's reference byte is live - the defect
+     all working before anything else is blamed on a pass
+  D  the DOCUMENT's reference byte is live - SPEC.md 62.9.2.1's missing 4b
+  P  the PACKAGE's is live - SPEC.md 62.9.2.2's harvest. `MINES.O88` is in
+     the seed and in no store this machine has warmed, so the only way to its
+     icon is reading the header off the volume, which is what `FSCAP_LOCAL`
+     tells the mount it may do. Before the bit it was the generic diamond
+     however long you browsed
 
 It reads REFERENCE BYTES out of the acting window's own cache rather than
 judging pixels, which is `tests/icoshed.py`'s instrument and for its reason: a
@@ -62,7 +67,8 @@ TITLE_H = 18
 FS_SIZE = 57
 
 # the seed's root, in the order SPEC.md 19.4 sorts it
-ROW_FOLDER, ROW_DOC = 0, 2      # DOCS, MINES.O88, NOTES.TXT, README.TXT
+ROW_FOLDER, ROW_PKG, ROW_DOC = 0, 1, 2   # DOCS, MINES.O88,
+                                         # NOTES.TXT, README.TXT
 SEED_N = 4
 
 fails = []
@@ -153,6 +159,11 @@ with os88ui.boot(t.img("os8088-360.img"), apps=t.img("apps360.img"),
           and dref != ICO_R_NONE,
           "(reference %s - 0xFF is the blank the icon index is filled with)"
           % ("none" if dref is None else "%#04x" % dref))
+    pref = refbyte(m, ROW_PKG)
+    check("the harvest resolved the PACKAGE", pref is not None
+          and pref != ICO_R_NONE,
+          "(reference %s - FSCAP_LOCAL is what lets the mount read the "
+          "header)" % ("none" if pref is None else "%#04x" % pref))
 
 print()
 if fails:

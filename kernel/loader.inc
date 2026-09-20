@@ -72,6 +72,11 @@ LD_HF_GLYPH equ 0x20            ; ...its bit 5: a 16-byte DOCUMENT-GLYPH block
 LD_H_GLYPH  equ 112             ; ...and where it sits: header 32 + icon 64 +
                                 ; association block 16 (the tool requires all
                                 ; three in front of it)
+%if DSK_PEEK < LD_H_GLYPH + 16  ; ...AND THE HEADER PEEK HAS TO REACH IT
+  %error "DSK_PEEK no longer covers LD_H_GLYPH: a redirected volume's harvest would compose a glyph out of the last entry's bytes"
+%endif                          ; (SPEC.md 62.9.2.2). disk.inc is included
+                                ; FIRST, so it cannot derive DSK_PEEK from
+                                ; this - the two are kept in step here instead
 LD_H_LINK   equ 4               ; word: link base, must be 0 (org 0 - a v3
                                 ; package is position-independent because it
                                 ; owns its segment, SPEC.md 20.1)

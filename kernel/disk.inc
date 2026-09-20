@@ -209,6 +209,17 @@ DVK_FILE     equ 2               ; a REDIRECTED volume (SPEC.md 62.9): its
                                  ; that reaches it is a bug
 DVK_FREE     equ 0xFF
 
+; How much of a package a HEADER PEEK has to bring back (SPEC.md 62.9.2.2).
+; It is not a sector and must not become one: it is every byte the harvest
+; below reads out of the buffer - the SPEC.md 20.2 header at 0..31, the
+; embedded icon at 32..95 and the document glyph at LD_H_GLYPH..+15 - rounded
+; to the 128 that covers the last of them. The FAT arm still reads a whole
+; sector, because that is what int 13h moves; the redirected arm asks for
+; exactly this and refuses a short answer.
+DSK_PEEK     equ 128             ; ...and loader.inc ASSERTS it against
+                                 ; LD_H_GLYPH, because disk.inc is included
+                                 ; first and cannot name it here
+
 ; --- and what a PACKAGE is told about a volume (SPEC.md 18.7.2) -------------
 ; Deliberately NOT the DVK_* values: those are the transport and are kernel
 ; internals, and a package asking OSAPI_VOL_KIND is nearly always asking about
@@ -3090,8 +3101,14 @@ disk_mount_x:
 
     cmp byte [dsk_vkind], DVK_FILE  ; ...and a REDIRECTED volume takes the
     jne .harvest0                   ; CACHE-ONLY pass below: it has no sectors
-    jmp .fsicons                    ; to peek at, and reading an ASSOC.DAT over
-.harvest0:                          ; a cable is the one thing this may not do
+%ifdef OS88_DRIVERS                 ; to peek at, and reading an ASSOC.DAT over
+    test byte [drv_svc + (DRVC_FILE-2)*DSV_SIZE + DSV_CAPS], FSCAP_LOCAL
+    jnz .harvloc                ; ...UNLESS ITS READS ARE MEMORY (SPEC.md
+%endif                          ; 62.9.2.2), in which case it takes the real
+    jmp .fsicons                ; harvest below - the peek is a `rep movsw`
+.harvest0:                      ; and the pass was refusing, on the CABLE's
+                                ; grounds, a read the RAM disk serves faster
+                                ; than the floppy it is being denied
 
     mov ax, LOW_SEG             ; **AND [dsk_dseg] MAY NOT BE LIVE ACROSS THE
     mov es, ax                  ; CALL BELOW** (SPEC.md 66.5.10.2). This is not
@@ -3120,6 +3137,15 @@ disk_mount_x:
                                 ; reads without doing them
 %endif                          ; ...and kern_small has none (SPEC.md 54.0):
                                 ; every icon below is read the slow way
+%ifdef OS88_DRIVERS
+.harvloc:                       ; **AND asc_use_x IS ABOVE THIS LABEL** (SPEC.md
+                                ; 62.9.2.2): the peek is free and re-keying the
+                                ; association cache to this volume is not - it
+                                ; reads an ASSOC.DAT the RAM disk almost never
+                                ; has and EVICTS the rows 62.9.2.1's own
+                                ; lookups live on. The harvest below fills the
+                                ; cache from the headers it reads anyway
+%endif
     push ss                     ; asc_use reads the disk: put ES back. OUTSIDE
     pop es                      ; the gate - it is the loop's guarantee about
                                 ; ES and not asc_use's own cleanup, so it must
@@ -3133,11 +3159,48 @@ disk_mount_x:
     call ico_ref_try            ; a folder, or a body the store already has?
     jnc .h_next                 ; then this entry costs no sector read at all
 .h_read:
-    mov ax, [si+18]             ; first cluster (validated at synthesis)
+    mov ax, [si+18]             ; first cluster - or, on a redirected volume,
+                                ; THE DRIVER'S OPAQUE HANDLE, which is what
+                                ; rd_stage puts at @18 and what FSV_READAT
+                                ; takes (SPEC.md 62.9.1)
+%ifdef OS88_DRIVERS
+    cmp byte [dsk_vkind], DVK_FILE
+    je .h_fsread                ; SPEC.md 62.9.2.2: a LOCAL redirected volume
+%endif                          ; peeks the header through its driver instead
     call dsk_clus2lba_x
     jc .h_zero
     call dsk_rd1_x                ; ES = LOW_SEG
     jc .h_zero
+%ifdef OS88_DRIVERS
+    jmp short .h_got
+.h_fsread:                      ; DSK_PEEK bytes at offset 0, which is every
+                                ; byte below reads: the header is 32, the
+                                ; embedded icon 32..95 and the document glyph
+                                ; LD_H_GLYPH..+15. **THE WHOLE ASK OR
+                                ; NOTHING** - a short answer would leave the
+                                ; PREVIOUS entry's header sitting in the
+                                ; buffer, and that one is VALID, so a 40-byte
+                                ; file would take the icon of the package
+                                ; above it in the sort. The FAT path reads a
+                                ; whole sector and trusts the slack after EOF,
+                                ; which is unrelated bytes the magic test
+                                ; throws out; this buffer is not that
+    push bp                     ; the entry COUNT, which drv_fs_call spends
+    push dx                     ; ...and the entry INDEX, which is its output
+    mov dx, LOW_SEG             ; DX:BX and never ES:BX - ES is KERNEL_SEG on
+    mov bx, dsk_secbuf          ; entry to a verb (SPEC.md 51.8)
+    mov cx, DSK_PEEK
+    xor si, si                  ; DI:SI = offset 0, in 32 bits
+    xor di, di
+    mov bp, FSV_READAT
+    call drv_fs_call
+    pop dx
+    pop bp
+    jc .h_zero
+    cmp ax, DSK_PEEK            ; DX is 0 by construction: a DSK_PEEK ask
+    jne .h_zero                 ; cannot deliver more than DSK_PEEK
+.h_got:
+%endif
     mov si, dsk_secbuf          ; stage the 32 header bytes; dsk_ent's
     mov di, dsk_ent             ; directory copy is done with above.
     mov cx, DSK_DE_SIZE         ; A PACKAGE HEADER, not a 19.1 entry - so
