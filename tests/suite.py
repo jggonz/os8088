@@ -2855,7 +2855,16 @@ SOAK = [
         "TO FAIL: `mul` lands its product in DX, which is the y being "
         "answered, so the first draft returned a divide remainder as the y "
         "coordinate - exact on x, nonsense on y, and invisible in any test "
-        "that only looks at one axis.",
+        "that only looks at one axis. AND IT READS A FINISHED LINE NOW: the "
+        "label and the value are two INT 21h calls, so the screen carries "
+        "`RESET ax=` before `RESET ax=FFFF bx=2` (observed directly, polling "
+        "flat out), and the first-sighting read handed the parser an empty "
+        "value and blamed the kernel for it - `answered ax=, not FFFF`. It "
+        "is a sampling race that gets MORE likely under load, because a poll "
+        "a fixed number of HOST ms apart covers less of the GUEST's work on "
+        "a busy box; os88marty.quiesce wants the line unchanged over GUEST "
+        "seconds instead. tests/kdmouse.py had the same read and the same "
+        "defect.",
         needs=("marty",), serial=True,
         wants=("build/dosmou360.img",)),
     Row("kdhdd", "soak", py("tests/kdhdd.py"), 25.0,

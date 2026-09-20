@@ -53,17 +53,53 @@ def fail(msg):
 
 
 def wait_line(m, prefix, limit=40.0):
-    """The text screen's first row starting with `prefix`, stripped."""
-    end = time.time() + limit
-    rows = []
-    while time.time() < end:
-        rows = m.screen() or []
-        for r in rows:
+    """The text screen's first row starting with `prefix`, FINISHED.
+
+    **A LINE THAT IS ON THE SCREEN IS NOT A LINE THAT HAS BEEN WRITTEN**, and
+    this used to return the first sighting. Observed directly, polling as fast
+    as the debug socket allows while DOSMOUSE.COM ran, the screen carries
+
+        |RESET ax=|
+        |RESET ax=FFFF bx=2|
+
+    in that order - the label is one INT 21h and the value is the next - so
+    `fields` on the first of them gives `ax` = '' and the row fails with
+    `INT 33h AX=0 answered ax=, not FFFF`, which is a sentence about the
+    kernel for a sampling accident. It is a TIMING race and therefore load
+    sensitive in the direction that makes it look like contention: a poll a
+    fixed number of HOST milliseconds apart covers less of the GUEST's work on
+    a busy box, so the half-written state is sampled more often there. This
+    row failed in a four-lane soak and passes solo, which is the shape every
+    wrong diagnosis in this suite has worn.
+
+    So the line has to have STOPPED CHANGING, and on the guest's own clock:
+    `quiesce` wants the same text twice a fixed number of GUEST seconds apart,
+    which a loaded box cannot shorten. It costs a few screen reads and it is
+    exact - the program writes each line in one burst of INT 21h calls and
+    then either blocks on a key or starts the next label, so a line that is
+    the same half a guest second later is a line that is done.
+    """
+    def row():
+        for r in (m.screen() or []):
             if r.lstrip().startswith(prefix):
                 return r.strip()
-        time.sleep(0.2)
-    fail("no %r line appeared; the last text screen was %r"
-         % (prefix, [r.rstrip() for r in rows if r.strip()][:10]))
+        return None
+
+    try:
+        os88marty.until(m, lambda _: row() is not None,
+                        "the %s line to appear" % prefix,
+                        guest=limit, poll=0.2)
+    except os88marty.MartyError as e:
+        fail("no %r line appeared: %s  The last text screen was %r"
+             % (prefix, str(e).split("\n")[0][:200],
+                [r.rstrip() for r in (m.screen() or []) if r.strip()][:10]))
+    try:
+        return os88marty.quiesce(m, row, budget=limit,
+                                 what="the %s line to finish printing"
+                                      % prefix)
+    except os88marty.MartyError as e:
+        fail("the %r line never stopped changing: %s  It last read %r"
+             % (prefix, str(e).split("\n")[0][:200], row()))
 
 
 def fields(line):
