@@ -65,6 +65,8 @@ import os88lz                                          # noqa: E402
 import os88pkg                                         # noqa: E402
 import os88build                                       # noqa: E402
 import os88marty                                       # noqa: E402
+import os88ui                                          # noqa: E402
+from os88mouse import DBL_TICKS                        # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 import dispcp                                          # noqa: E402
@@ -91,13 +93,54 @@ def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
 
+_UI = {}
+
+
 def menu_pick(m, mo, cell, item):
-    """Drop menu-bar cell `cell` and pick item `item` - dispcalc's helper, and
-    the x comes out of the kernel's own `menu_bar` for its reason: the bar is
-    rebuilt whenever the owner changes, so its cells are a runtime fact."""
-    t = m.read(S("menu_bar") + cell * MB_ENTSZ, MB_ENTSZ)
-    x = u16(t, MB_XL) + 6
-    mo.menu(x, 8, x, MBAR_H + 1 + item * MENU_ITEM_H + 8)
+    """Drop menu-bar cell `cell` and pick item `item`, CONFIRMED.
+
+    **IT WAS FOUR NUMBERS AND A DRAG**, and that is what made this row
+    intermittent. A menu cannot be opened with a click - `menu_track` draws
+    the pull-down and then polls a LEVEL - so the gesture is press, move,
+    release, and a release over the wrong item activates it while a release
+    over no item activates nothing. Neither says anything afterwards: the
+    verb simply never runs, and this row reports `nothing was said in 30
+    guest seconds` about a machine that was never asked.
+
+    That is how it failed a four-lane soak on `PACKED.TXT`, and it reproduces
+    1 in 4 with four copies of this row at once - `lz4tolzb BAD ''`, an EMPTY
+    toast, on a file still 6,945 bytes.
+
+    `os88ui.UI.menu_pick` is the same gesture with the two confirmations in
+    the middle of it, both off the guest's own tables: `menu_y1` that the
+    pull-down is on the screen after the press, and `menu_sel` that the item
+    we meant is the highlighted one BEFORE the release. A slow box cannot
+    then release into a menu that has not been drawn yet, and a mis-aimed
+    pick raises here instead of running the wrong command somewhere else.
+
+    The signature is unchanged because ten call sites use it; what changes is
+    that the coordinates come from the library that resolves them by name
+    (CLAUDE.md, Testing: start at tools/os88ui.py, not at the mouse).
+    """
+    ui = _UI.get(id(m))
+    if ui is None:
+        ui = _UI[id(m)] = os88ui.UI(m, mouse=mo, sym=S)
+    ui.menu_pick(cell, item)
+
+
+def _dblgap(m):
+    """Let the kernel's double-click window expire, on the GUEST's clock.
+
+    os88ui's `_dbl_gap` by hand, because this row drives the mouse directly.
+    `DBL_TICKS` is the interval every detector in the kernel shares and the
+    BIOS tick at 0040:006C is the guest's own clock, so this waits the same
+    amount of the MACHINE's time whatever the host is doing.
+    """
+    import time as _t
+    t0 = m.read(0x46C, 4)
+    val = lambda b: b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)
+    while val(m.read(0x46C, 4)) - val(t0) <= DBL_TICKS:
+        _t.sleep(0.01)
 
 
 def toast(m):
@@ -203,15 +246,34 @@ def compress(m, mo, wx, wy, name, fails, quiet=30, item=FM_ICOMP):
     m.write(S("toast_buf"), b"\0")          # ...so the previous verdict cannot
     row = dispcp.row_of(m, S, name)         # be read as this one's
     x, y = dispcp.row_xy(wx, wy, row)
+    # **AND THE PREVIOUS CALL ALSO CLICKED IN THIS WINDOW.** Two selections
+    # inside the kernel's double-click window are a DOUBLE-CLICK, which opens
+    # the file instead of selecting it - after which the menu bar belongs to
+    # whatever opened and `File > Compress` is a different menu's item. The
+    # verb never runs, nothing is said, and this row reports `nothing was said
+    # in 30 guest seconds` about a machine nobody asked.
+    #
+    # Load sensitive in the usual direction: the gap between the two clicks is
+    # a fixed amount of HOST work, so on a busy box it is less GUEST time and
+    # falls inside the window more often. Four of this row at once failed 3 in
+    # 4 on `PACKED.TXT` and `CALC.O88` - different files each time, which is
+    # what says it is the gesture and not the subject. Everything that DID
+    # complete took 2 to 14 guest seconds of its 8 or 30, so the budget was
+    # never the question.
+    _dblgap(m)
     mo.click(x, y)
     os88marty.settle(m)
     menu_pick(m, mo, 1, item)               # cell 0 is the chip, 1 is File
+    c0 = int(m.status()["cycles"])
     try:
         os88marty.until(m, lambda mm: toast(mm),
                         "File > %s on %s to say something"
                         % ("Uncompress" if item == FM_IUNCOMP else "Compress",
                            name),
                         poll=0.1, guest=float(quiet))
+        if os.environ.get("LZCOMP_TIME"):
+            say("   [%s took %.1f guest s of %d]"
+                % (name, (int(m.status()["cycles"]) - c0) / 4772727.0, quiet))
         return toast(m)
     except os88marty.MartyError:
         pass
@@ -229,7 +291,26 @@ def main():
         if not os.path.exists(os88build.at(f)):
             sys.exit("lzcomp: %s is missing - run `make` first" % f)
 
-    disk, plain, packed, calc, telnet = build_disk("/tmp/lzcomp360.img")
+    # **A ROW THAT WRITES ITS DISK MAY NOT SHARE A CACHED ONE.**
+    # `scratch_disk` keeps an image and rebuilds it only when an INPUT moves,
+    # which is sound for a row that READS: the image is a pure function of
+    # its inputs. This row COMPRESSES files on it, so what it leaves behind
+    # is not what it was given - and the next run with the same inputs gets
+    # the MUTATED one, where PACKED.TXT is already LZB and the verb under
+    # test answers `Already compressed` instead of doing the work.
+    #
+    # That is a false green, and it hid this row's real failure completely:
+    # it failed a soak on `PACKED.TXT: nothing was said in 30 guest seconds`
+    # and every re-run afterwards passed - not because the failure was
+    # contention, but because the re-runs never attempted the step that
+    # failed. Deleting the image by hand made it fail again on demand
+    # (docs/WRITING-TESTS.md 1: a green row that tests nothing is worse than
+    # no row).
+    #
+    # Per-run and removed on the way out, so two of this row at once do not
+    # meet either.
+    img = "/tmp/lzcomp360-%d.img" % os.getpid()
+    disk, plain, packed, calc, telnet = build_disk(img)
     want = cz(os88lz.lzb_compress_machine(plain), len(plain))
     pwant = pkg_want(calc)
     say("lzcomp: %d bytes of prose -> %d expected (%.1f%%), LZ4 on the disk "
@@ -480,6 +561,10 @@ def main():
                          "index out by one dispatches the wrong command"
                          % (t, len(back), len(plain)))
 
+    try:
+        os.remove(img)                  # per-run, so nothing inherits it
+    except OSError:
+        pass
     for f in fails:
         say("  FAIL: " + f)
     say("lzcomp: %s" % ("FAILED" if fails else "ok"))
