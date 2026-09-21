@@ -467,9 +467,55 @@ A probe that samples cheaply does not reproduce the bug at all. **Any future
 measurement here has to state its per-sample cost**, and two runs with
 different probes are not comparable.
 
+## ...AND `[gfx_dnest]` IS SETTLED, NEGATIVELY
+
+Written the same day, an hour after the section above, because the section
+above is wrong and leaving it standing would cost the next person a session.
+
+`[gfx_dnest]` was measured again with an instrument that costs the HOST
+nothing and therefore does not suppress the defect: a **DNESTLOG=1 knob** that
+rings the SITE of every touch into 128 bytes of `.text`. It is ~30 lines and
+takes ten minutes to put back:
+
+* a `DNMARK n` macro next to `gfx_dnest`'s own declaration in `kernel/vga12.inc`
+  - `pushf` / `push bx` / `mov bx, [cs:gfx_dn_rp]` /
+  `mov byte [cs:bx+gfx_dn_ring], n` / `inc bx` / `and bx, DN_RING-1` /
+  `mov [cs:gfx_dn_rp], bx` / `pop bx` / `popf`, with `DN_RING equ 128`, and an
+  empty `%macro DNMARK 1` on the other arm;
+* one `DNMARK` above each of the seven `inc`/`dec byte [gfx_dnest]`, the id's
+  high bit set for an increment. **Not the one in `gfx_blit1_x`**: that routine
+  is in `COLD_SEG`, so `cs:` there addresses the wrong segment - and it is
+  never called in this scenario anyway;
+* `GFXDLEAVEI` becomes `%macro GFXDLEAVEI 0-1 <default>` so its two expansions
+  (`font_char.done`, `font_run_x.out`) ring different ids;
+* `DNESTLOG` into the Makefile's `VIDDEF`, `$(VIDSTAMP)` and `$(KNOBS)`;
+* build with `python3 tools/os88build.py build DNESTLOG=1`, and drive it with
+  `OS88_BUILD=<abs tree>` and `OS88_DEFINES="KERN_BIG DNESTLOG KERN_KNOB"`.
+  (`ls -d build/trees/dnestlog-*` matches the `.lock` directory too - name the
+  real one or every symbol lookup dies on a missing `associco.inc`.)
+
+**The ring says the pairing is EXACT.** Read at the first value outside 0..1,
+the last 48 touches alternate without a single exception:
+
+```
+gfx_disp_enter INC / font_char.done dec (GFXDLEAVEI)
+gfx_disp_enter INC / font_char.done dec
+gfx_disp_enter INC / gfx_dleave     dec
+gfx_disp_enter_n INC / gfx_dleave   dec        ... 24 pairs, no gap
+```
+
+And the count at the moment of death, four lanes: **0, 1, 1, and 255 - and the
+255 lane had `SS = 0000` and `CS = 3B07`**, i.e. was already executing garbage.
+So `[gfx_dnest]` is sane in three deaths out of four, and the 106 / 250 / 255
+readings are the wreck scribbling on that byte after all. The second session's
+"984 against 984" conclusion was right for the wrong reason, and the reading
+that overturned it here - "IF=1, SP legal, every other word sane, therefore
+alive" - **is not a test of aliveness**: a wild CPU executes kernel code with
+IF set and a legal SP for a good while before it hits anything that shows.
+
 ## What to do next
 
-`[gfx_dnest]`, and nothing else on this list until it is settled. It is the
+Not `[gfx_dnest]` - see above. It is the
 only invariant known to break while the machine is still alive, and it breaks
 inside the drag outline, which is the one thing that is drawn on every mouse
 packet of the gesture that reproduces.
