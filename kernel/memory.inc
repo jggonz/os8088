@@ -2783,8 +2783,18 @@ mem_rr_tab:
 %endif                                          ; paths, contiguous BY DESIGN
                                                 ; (driver.inc:841)
     ; A DONATED listing claim had two rows here - dsk_vtab's DV_SEG and the
-    ; live [dsk_dseg] - and SPEC.md 22.6 retired the donation, so a listing is
-    ; never in a claim and neither word can name one.
+    ; live [dsk_dseg] - and SPEC.md 22.6 retired the donation, so DV_SEG can
+    ; no longer name one.
+    MEM_RR_ONE dsk_dseg         ; ...but [dsk_dseg] STILL CAN, and after 22.6.3
+                                ; it always does: fmv_load aims dsk_dest_x at
+                                ; the window's own FS_VSEG (files.inc), which
+                                ; is MOVABLE on kern_big, and the mount then
+                                ; reaches mem_claim through ico_need - so a
+                                ; compaction inside the harvest moves the
+                                ; cache while fm_reloc patches FS_VSEG and
+                                ; [fm_vseg] and NOT this word. The sort and
+                                ; every ico_ref_set below it write through
+                                ; `mov es, [dsk_dseg]`
     ; TWO ADJACENT WORDS ARE ONE ROW, and each pair carries a %error beside its
     ; own declaration to keep it that way: a row is four bytes whether it names
     ; one word or twelve, so a neighbour rides free - and an edit that puts
@@ -4138,12 +4148,20 @@ osapi_mem_movable_x:
 osapi_mem_compact_x:
     or ah, ah
     jnz .post
+    pushf                       ; [mem_cp_self] is MACHINE-WIDE and mem_can_move
+    cli                         ; reads it from mem_cp_walk - the REAL move, not
+                                ; only the plan - so a tick between the store
+                                ; and the clear would let ANOTHER task's
+                                ; compaction excuse this region's frames and
+                                ; move a running package out from under its own
+                                ; CS. The inner pushf/cli nests harmlessly
     push es                     ; THE WHAT-IF: the caller's segment is the one
     pop word [mem_cp_self]      ; the walk excuses...
     call mem_avail_lvl_x        ; ...AT THE CALLER'S LEVEL (SPEC.md 66.4.3.2):
                                 ; the what-if and the claim beside it must be
                                 ; answers to the same question
     mov word [mem_cp_self], 0   ; ...and for this walk alone
+    popf
     retf
 .post:
     cmp word [mem_cpq], 0

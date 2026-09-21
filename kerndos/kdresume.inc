@@ -313,8 +313,15 @@ kd_resume:
     in al, 0x21
     mov [es:HS_MASKM], al
     mov byte [es:HS_SLAVE], 0   ; an XT's port 0xA0 is the NMI mask register
-    mov al, 0xFF                ; and not a second 8259 (SPEC.md 9.9.2), so
-    out 0x21, al                ; the stub must not write it back
+                                ; and not a second 8259 (SPEC.md 9.9.2), so
+                                ; the stub must not write it back
+    or al, 0x1A                 ; IRQ 1, 3, 4 - the keyboard and the mice, and
+    out 0x21, al                ; NOT the whole master: hbm_handover masks this
+                                ; same set because the stub `sti`s and calls
+                                ; int 13h ("the ROM wants its interrupts on an
+                                ; AT"). Masking all of it takes IRQ0's tick,
+                                ; IRQ6, and IRQ2 - the cascade an AT's fixed
+                                ; disk answers on - so the read cannot complete
     call kd_mou_stop            ; ...and OUR mouse goes quiet before the
                                 ; machine stops being ours (96.45.1)
 %ifdef DOSR_MARK

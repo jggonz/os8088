@@ -43,9 +43,16 @@ HM_NXCOL    equ 72              ; ...with the extent COUNT beside it, once.
                                 ; It is on the row and not in the teletype
                                 ; line because the walk that produces it now
                                 ; runs AFTER the last print (SPEC.md 96.49.4)
-HM_CUR      equ 0x0448          ; dw the trace's next byte offset within the
-                                ; row. Above HS_DOSAKB (0x0444, two bytes) and
-                                ; below HS_IVT, in the gap the map leaves
+HM_CUR      equ 0x044A          ; dw the trace's next byte offset within the
+                                ; row. Above HS_TICK0, which is a **dd** at
+                                ; 0x0446 and so owns 0x0446..0x0449 - this was
+                                ; 0x0448 and aliased its high word, so the stub
+                                ; wrote 2 into the staged tick on every resume
+                                ; and hb_wake woke the clock ~22 hours out.
+                                ; Below HS_IVT, in the gap the map leaves
+%if HM_CUR < HS_TICK0 + 4
+  %error "hbmark: HM_CUR overlaps HS_TICK0 - the instrument would corrupt the tick it watches"
+%endif
 
 ; --- HBMARK - one character, appended -----------------------------------
 %macro HBMARK 1

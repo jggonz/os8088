@@ -200,6 +200,14 @@ hbs_stub:
     mov ds, ax                  ; ...and NOT SS:SP - hbm_wake builds its own
     jmp far [cs:HS_WAKE]        ; out of the memory it has just put back
 .fail:
+    mov al, [HS_MASKM]          ; THE MASKS GO BACK FIRST, and this arm is the
+    out 0x21, al                ; reason: both hosts mask IRQ1 on the way in
+    cmp byte [HS_SLAVE], 0      ; (hbm_handover's `or al, 0x1A`, kd_resume's
+    je .noslavef                ; 0xFF), so the ROM's int 09h never runs and
+    mov al, [HS_MASKS]          ; the int 16h below would wait for a key that
+    out 0xA1, al                ; cannot arrive - under a message that says
+.noslavef:                      ; "Press any key to restart". SPEC.md 96.49's
+                                ; promise is that EVERY refusal reaches int 19h
     mov ah, 0x02                ; the cursor to row 8 first: rows 0-2 of this
     xor bh, bh                  ; page ARE the stub, and the ROM's teletype
     mov dx, 0x0800              ; writes at the cursor the mode set homed. Row

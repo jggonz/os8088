@@ -45559,7 +45559,13 @@ not be live across anything that can claim, because a claim compacts on its
 refusal path and the window's listing block moves (§66.5.10.2) — so the quiet
 chdir and `asc_use` happen *before* the destination is aimed, and `FS_VSEG` is
 re-read rather than banked across them. `tools/dsegaudit.py` is what says that
-holds, not this paragraph. A window filled at a different `[dsk_nmax]` shape
+holds, not this paragraph — **but it can only say it of a segment held in a
+REGISTER**, and `[dsk_dseg]` is a variable the mount reloads. It is not the
+whole of the care for that reason: the harvest inside `disk_mount` reaches
+`ico_need`, which claims the icon store lazily, with the destination already
+aimed — so `mem_rr_tab` carries a `MEM_RR_ONE dsk_dseg` row that makes the
+word survive a move whatever the ordering does. The row is the backstop and
+the ordering is still the design. A window filled at a different `[dsk_nmax]` shape
 (§22.6.1) is handed back rather than repaired, and falls through to the
 re-list.
 
