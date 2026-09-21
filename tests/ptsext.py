@@ -44,7 +44,7 @@ _R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_R, "tools"))
 sys.path.insert(0, os.path.join(_R, "tests"))
 import os88marty, os88ui, os88mouse, os88sym, os88geom, dispcp
-from gfxpoints import band, PT_DY, PT_W, PT_H, PT_STEP, CASES
+from gfxpoints import band, density, PAPER, PT_DY, PT_W, PT_H, PT_STEP, CASES
 
 SYS = os.path.join(_R, "build/os8088-360.img")
 APP = os.path.join(_R, "build/ptstest360.img")
@@ -82,7 +82,7 @@ def vrows(m, S):
 
 
 def check(m, ui, label, card=None):
-    """The three cases, on whichever card the window is on."""
+    """The four cases, on whichever card the window is on."""
     ui.settle()
     w = ui.window("PtsTest")
     cx, cy = w.content[0], w.content[1]
@@ -109,14 +109,19 @@ def check(m, ui, label, card=None):
             print("  FAIL %-10s case %d: off the captured framebuffer" % (label, n + 1))
             bad += 1
             continue
-        lit = sum(1 for r in A for v in r if v)
+        # the MINORITY pixels, which for case 4 are the dark ones: it draws
+        # paper on a lit ground (SPEC.md 5.6.9.3.1), so counting lit ones
+        # would read 2,136 of 2,160 and trip the "that is not a PATTERN" bound
+        lit = density(A, PAPER[n])
+        kind = "dark" if PAPER[n] else "lit"
         if A == B and 8 <= lit <= PT_W * PT_H // 4:
-            print("  ok   %-10s case %d (%-22s) %4d lit agree" % (label, n + 1, name, lit))
+            print("  ok   %-10s case %d (%-22s) %4d %s agree"
+                  % (label, n + 1, name, lit, kind))
         else:
             bad += 1
             d = sum(1 for ra, rb in zip(A, B) for va, vb in zip(ra, rb) if va != vb)
-            print("  FAIL %-10s case %d (%-22s) %4d lit, %d differ"
-                  % (label, n + 1, name, lit, d))
+            print("  FAIL %-10s case %d (%-22s) %4d %s, %d differ"
+                  % (label, n + 1, name, lit, kind, d))
     print("       (%s: vid_ndisp=%d card=%s origin=(%d,%d) window x=%d y=%d)"
           % (label, nd, card, ox, oy, w.x, w.y))
     return bad
@@ -153,10 +158,10 @@ def main():
         bad += check(m, ui, "straddle", card="virtual")
 
     if bad:
-        print("\nptsext: %d of 12 cases FAILED" % bad)
+        print("\nptsext: %d of %d cases FAILED" % (bad, 4 * len(CASES)))
         return 1
-    print("\nptsext: 12 cases - gfx_points == a gfx_pixel loop on BOTH cards,"
-          " hooked, translated and straddling")
+    print("\nptsext: %d cases - gfx_points == a gfx_pixel loop on BOTH cards,"
+          " hooked, translated and straddling" % (4 * len(CASES)))
     return 0
 
 

@@ -5057,7 +5057,9 @@ incidentally, keeps the body inside `loop`'s rel8 reach.
 
 **The pixels are unchanged and that is gated, not asserted**: `tests/mcperf.py`
 hashes the screen 400 deterministic frames into a Missile game, and the hash is
-the same before and after.
+the same before and after — **on the kernel it boots, which is `kern_big`**.
+That qualifier is §5.6.9.3.1's, added after the one-loop arm shipped a defect
+this sentence read as covering.
 
 **And it costs its CALLER exactly what it cost before — 26 bytes.** An
 `OSAPI_*` call runs on the caller's slice (§8), and the thinnest in the tree has
@@ -5070,6 +5072,52 @@ so there is nothing to remember — and the miss path sets DS itself out of
 of the caller's stack, twice, which is the right way round. Measured on the
 guest at `gfx_ls_box`'s entry plus its own pushes: **26**, the same as the
 routine this replaced.
+
+###### 5.6.9.3.1 …and the one loop drew PAPER AS INK
+
+`kern_small`'s single expansion — `GFXPT_LOOP 0`, the arm §5.6.9.3 chose
+deliberately — shipped with the solid class **hard-coded to ink**. The loop
+computes the dither parity into AL for every point, because that is the one
+thing the three-way split cannot hoist out, and the `%1 == 0` arm then has to
+put the CLASS back in AL when the ink is not a dither. It did it with
+`mov al, 0xFF`, which is right for `gfx_ln_ink` = FF and wrong for 00: **paper
+drew as ink**, so on that build `gfx_points` could set a pixel and never clear
+one.
+
+**Every app-side erase in the tree lands on that instruction.** §5.12.7 took
+the whole `gfx_line` family out of the kernel, so a figure is drawn by
+`apps/os88gfx.inc` walking the line in the caller's own image and committed
+through this slot; an erase is the identical walk with the paper ink
+(`gfxe_wline`'s own contract). With the class forced to ink the erase pass
+re-drew the figure it was asked to remove — invisible where the figure has not
+moved, and a **second figure** where it has, which is what the field reported
+of Cyclone's web and Missile's trails: *the lines double instead of erasing,
+one pixel along.* The pixel offset is the object's own motion between the two
+frames; the erase itself was never off by anything.
+
+**Three things let it through, and each is worth more than the fix.**
+
+1. **`kern_big` is correct and takes a different expansion.** The three class
+   loops each commit one way and never consult `[gfx_ln_ink]` at all, so the
+   defect cannot exist there. A build-conditional body needs a gate per build,
+   and this one had none: nothing in the suite ran `GFXPT_LOOP 0`.
+2. **The slot's own gate never drew paper.** `tests/ptstest` had a solid ink,
+   a dither ink and a solid ink under a clip — three cases that between them
+   ask the slot to SET a bit and never to clear one. It has a fourth now, and
+   the `gfxptsmall` row is the same package on the `make small` tree.
+3. **`tests/mcperf.py`'s hash was taken on the wrong kernel.** §5.6.9.3 rests
+   on *"the pixels are unchanged and that is gated"* — 400 deterministic frames
+   of Missile, hashed before and after. It runs the shipped kernel, so it
+   compared `kern_big` against `kern_big` and was green on both sides of a
+   defect that only exists on the other build. **A determinism hash is only a
+   gate for the build it is taken on**, which is a claim this document made
+   without the qualifier.
+
+**Cost: `.text` +2 on `kern_small`, measured** — 37,330 with the defect against
+37,332 with the fix. `mov al, 0xFF` is two bytes and `mov al, [cs:gfx_ln_ink]`
+is four, the accumulator's `moffs` form; no rung crossed (the image rung stands
+49 of 512 into its step), and **`kern_big` is byte-identical**, the arm not
+existing there.
 
 ##### 5.6.9.4 A SECOND DISPLAY IS NOT A REASON TO GIVE UP THE LOOP
 
@@ -5243,6 +5291,59 @@ both are the owner's call rather than this section's:
   straddle per point — is about 75 bytes all in, because the loop then needs no
   origin at all. It is the §5.6.9.4 shape with the scan replaced by the report,
   and it gives up what the field asked for.
+
+##### 5.6.9.5.2 THE ADAPTER IS ASKED AFTER THE HOOK, NOT BEFORE IT
+
+§5.6.9.5.1's hook is what made the two tests at the door wrong, and the way it
+is wrong is §39.14.6's, one routine along.
+
+`gfx_points` opens with
+
+```
+    cmp byte [vid_mono], 0
+    je .slow
+    cmp byte [vid_planes], 1
+    jne .slow
+```
+
+and those ran BEFORE `vid_disp_of` had been called, so they described whatever
+display the last primitive happened to leave current — §39.14.3 restores none
+on purpose. `.hook` then enters the display the FIRST POINT is on, and
+`.done`'s second pass enters the OTHER card outright with no test at all; and
+`.pass` loads `ES` from the entered display's `[vid_rseg]` and runs the
+ONE-BIT inline loop on it regardless.
+
+**On a mixed desktop that is a wild write into segment 0.** `[vid_rseg]` is 0
+on a planar primary, so a hook onto the VGA while the Hercules was current
+gives the loop `ES = 0x0000`, and its `and ah,[es:di] / or ah,al /
+mov [es:di],ah` lands on the IVT, the BIOS data area and this kernel's own
+`.text` from 0x0600. §39.14.6's banner is the same defect in `sw_col` and ends
+the same way — *the machine rebooted or froze*.
+
+**So the two tests move BELOW the hook**, and a display the loop cannot serve
+gives the hook back (`gfx_dleave`) and takes `.slow`, which is what a
+two-display call did before §5.6.9.4 existed. `gfx_pixel` is a 1x1 `gfx_fill`,
+which clips and adapter-dispatches itself, so the fallback is correct on any
+pair of cards. A second pass that falls back redraws the first card's points in
+the same `[gfx_color]`: the cost is real and the picture is identical.
+
+**IT TAKES A MIXED PAIR TO SEE IT, AND THAT IS WHY THE GATE DID NOT.**
+`tests/ptsext.py` drives all three new paths and self-compares band against
+band, and it boots `os8088_5150_both_gla_mono` — Hercules primary, CGA second.
+BOTH displays are 1bpp there, so the two tests are true of either one, the hook
+can never enter a card the loop cannot write, and the defect cannot be
+expressed at all. A planar primary with a 1bpp second — `os8088_xt_vga_herc` —
+is the machine that shows it, and `tests/ptsmix.py` is the row that does:
+it breaks at `.pass` and asserts the display the loop is about to write to is
+one it can serve, which fires BEFORE the damage rather than reporting the
+reboot it causes twenty frames later.
+
+**15 bytes of `.text`** (50,144 → 50,159), nothing in `.bss`, `.cold` or
+`.lowbss`, no rung crossed, and `kern_small` **+0** — the whole of it is
+inside `%ifdef GFX_VGA`. The fallback costs a straddling second pass its
+points a second time, on `gfx_pixel`, in the same `[gfx_color]`, so the
+picture is identical and the cost is paid only by an array that crosses the
+seam.
 
 
 ### 5.7 The per-call floor — what a small drawing call spends
@@ -38815,6 +38916,140 @@ routine both arms share, and a 32-bit remaining counter in place of a 16-bit
 end compare. The crossing itself is a byte loop: it is one symbol per 64KB of
 output, so a few hundred cycles once per segment against sixty bytes of
 kernel for ever.
+##### 20.14.6 The hint is a CACHE, so the read path has a MISS path now
+
+§20.14 has said since it was written that a foreign tool may drop those four
+directory bytes, that a missing hint reads as *"not compressed"*, and that
+trusting it would hand an application compressed bytes — *"so the read path
+checks the file's own `'CZ'` header too"*. **It did not.** `dskw_czexp`
+compares the file's own magic, but it is only *reached* once the hint has
+already said so: it **validates** the hint, it never **discovers**
+compression. Two things followed, and both were reported from the field:
+
+- a file copied onto one of our volumes by DOS, Windows or anything else
+  carries no hint, so `BROWSER.HTM` and every other packed file opened as
+  packed bytes;
+- a **redirected volume has no directory entry at all** to carry one, so
+  `README.TXT` copied to the RAM disk did the same — and that path was worse,
+  because `.fsread` never looked at a hint in the first place.
+
+`.o88` files kept working throughout, which is the tell: the LOADER has a peek
+of its own (`ld_run_body`'s `.peek`) and reads the file's own header, so
+packages were the one kind of file that never depended on the cache being
+warm.
+
+**`dskw_czsniff` is the miss path**, and `dskw_czhdr` — factored out of
+`dskw_czstamp` — is the judgement both ends now share: the writer has the
+bytes in hand, the reader has to go and get them, and what they do with them
+once they have them is the same six stores.
+
+**It costs no extra `int 13h` on a file that has a hint**, because it is not
+called for one: our own disks pay one byte compare. On a file that has not, it
+costs none either — the peek is a one-sector `disk_read`, §18.95's cache fills
+the slot to the end of the track, and `dskw_rdata`'s first sector comes
+straight back out of it. The single case that pays is a hintless file opened
+while `MEM_P_DIRW` has been shed *and stayed shed*: one sector, once, on OPEN
+and never on a listing. Two edge cases at once and the machine still works, a
+little slower.
+
+##### 20.14.6.1 …and the redirected arm joined the one flow to get it
+
+`.fsread` was a second implementation of the read: its own 32-bit capacity
+test, its own `FERR_BIG`, its own `fpg_begin`. **None of that is about the
+transport.** It writes `FSV_STAT`'s size where the FAT arm reads it, banks the
+handle in `[dskw_raw+DSK_R_CLUS]` — the cell the chain walk keeps its first
+cluster in, which this arm has no directory entry to fill — sniffs, and jumps
+into the shared flow. Putting the handle *there* rather than in a cell of its
+own is what lets §20.14.6.2 below be told the transport by `[dsk_vkind]`
+alone, so neither the sniff nor the peek takes an argument saying which. What
+is
+left that differs is one branch at the read itself, `.fsdata` against
+`dskw_rdata`, and the compressed placement, the capacity refusal and the
+expansion are had for nothing.
+
+So the RAM disk did not gain a *copy* of the decompressor's plumbing; it
+stopped carrying a copy of everything else. `tests/rdcz.py` is the gate and
+drives both halves on one boot: a packed file copied to the RAM disk, and the
+same file with its hint struck out of the FAT directory by hand.
+
+##### 20.14.6.2 `dsk_peek_x` — the head of a file, whichever transport
+
+The sniff wanted a file's first eight bytes and had to ask two different
+transports for them. So did the loader's header peek (§21 step 2) and the icon
+harvest's (§62.9.2.2), and **all three had written the same nine instructions
+out**: set `ES` to `LOW_SEG`, test `[dsk_vkind]`, and either turn a cluster
+into an LBA and read a sector or hand `FSV_READAT` a 32-bit offset of zero.
+
+`dsk_peek_x` is that, once. It takes the first cluster *or the driver's opaque
+handle* in `AX` — the same register either way, because §20.14.6.1 above banks
+the handle in the cell the cluster lives in — and a byte count in `CX`, and it
+answers `ES:BX` = `dsk_secbuf` with `AX` = **how many bytes actually
+arrived**, `CX` still holding what was asked for.
+
+**The count is an output and the strictness stays at the call site**, which is
+the one thing the three callers did not agree about:
+
+| caller | asks | on a short answer |
+|---|---|---|
+| `ld_run_body.peek` (§21) | 512 | **takes it.** `build/filler.o88` is 370 bytes, so a package shorter than the ask is an ordinary thing and `ld_check_hdr` is what judges it |
+| `.h_read` (§62.9.2.2) | `DSK_PEEK` (128) | **refuses.** A short answer leaves the *previous* entry's header in the tail of the buffer, and that one is VALID — so a 40-byte file would take the icon of the package above it in the sort |
+| `dskw_czsniff` (§20.14.6) | `DSK_CZ_HDR` (8) | **refuses.** A file shorter than the header is not one |
+
+Making the routine itself strict would have been smaller and is wrong: it
+would refuse to launch a sub-512-byte package off a RAM disk with *Disk
+error*. Making it lax would have cost the harvest its correctness.
+
+**The FAT arm answers the whole ask whatever it was asked for**, because it
+reads a sector and gets the slack past EOF for free — unrelated bytes that
+every caller's own magic test throws out. A redirected volume has no sectors
+and delivers exactly what is there, so the two compares above only ever bite
+one kind of volume.
+
+One behaviour moved with the factoring, deliberately: a cluster out of range
+on the loader's path now reads as `LD_EDISK` where it read as `LD_EBAD`. That
+is the honest verdict on a directory entry naming a cluster this volume has
+not got, and it is the only difference.
+
+**It paid for the feature.** The sniff arrived at **+110 bytes of `.cold`**,
+which crossed the 80-step rung the branch had seven bytes of room under.
+Collapsing the three copies into one primitive, and the shaves that fell out
+of having a contract to shave against — `mov si, bx` where the buffer's
+address was being re-materialised, `cmp ax, cx` where the asked count was
+being re-materialised, and the accumulator through `dskw_czstamp`'s clear —
+took `.cold` to **40,959**, one byte under. The feature is 6 bytes of resident
+RAM, not 110.
+
+
+##### 20.14.6.2.1 …and `OSAPI_FILE_FIND` deliberately does NOT sniff
+
+`dsk_find_x` reads the same four bytes (§20.14.3): the size it reports for a
+compressed file is the **unpacked** one, because an application sizes its
+claim off what it was told. With the hint gone it reports the **packed** size,
+and the sniff does not fix that — on purpose.
+
+The reason is the one the whole feature rests on. The sniff costs no extra
+`int 13h` because it runs **once, on open**, and the sector it peeks is the
+one `dskw_rdata` is about to read anyway (§18.95). A sniff inside FIND would
+run **once per directory entry**, on a path that today costs exactly what an
+uncompressed listing costs, and that is the *"ton of upfront disk I/O"* this
+was explicitly not to become.
+
+So a hintless compressed file is **under-reported by FIND and read correctly
+by READ**, and what that means for an application depends on how it sized its
+buffer:
+
+- one that claims a **fixed** capacity is unaffected. Note Pad claims
+  `NP_MAXKB` = 16,384 whatever FIND said, so `README.TXT` with its hint struck
+  opens as the 14,427 bytes it is — measured, `tests/rdcz.py`;
+- one that claims **exactly what FIND reported** gets `FERR_BIG` from the
+  read, because the capacity check at `.sizes` compares the file's real `U`
+  against it. It refuses, visibly, and the destination is untouched.
+
+**That is the right way round to fail** and it is why the asymmetry is
+tolerable: the alternative before the sniff was that the same application
+received packed bytes and displayed them as content. A refusal is a bug
+report; garbage is not.
+
 ### 20.15 `compress.inc` — the one thing on the machine that COMPRESSES
 
 Everything else in this system decodes. The loader expands a package, the file
@@ -84093,6 +84328,101 @@ evidence that a real `FSV_LIST` happened.
 
 *A verification that cannot say which object it examined, and cannot show that
 the code under test executed, is not a verification.*
+
+##### 62.9.2.2 …and a volume whose reads are MEMORY takes the real harvest
+
+§62.9.2.1 is cache-only because `DRVC_FILE` has **two members with nothing in
+common but an interface**. One is on the other end of a parallel cable, where
+a header peek per package is real traffic and an `ASSOC.DAT` fetch is the one
+thing the pass exists to avoid. The other is the **RAM disk**, where that peek
+is a `rep movsw` between two heap claims — or one `OSAPI_XMEM_COPY` — and is
+**faster than the `int 13h` the floppy beside it is allowed**. So the pass was
+refusing, on the cable's grounds, a read its other member serves better than
+the medium the rule was written to protect.
+
+`DSV_CAPS` is where a driver says which it is. The word is the sound class's
+and a `DRVC_FILE` driver has never used it, so the bit costs **no table, no
+cell and no kernel byte of storage**:
+
+| | |
+|---|---|
+| **`FSCAP_LOCAL`** (bit 0) | *my `FSV_READAT` is a memory read* — no wire, no seek, no motor |
+| set by | `RAMDISK.DRV`, in `rd_svc` |
+| clear on | `NET.DRV`, which keeps §62.9.2.1's pass exactly as it was |
+
+**It is a claim about COST and not about the medium**, which is what makes it
+a driver's to make: the kernel cannot tell a heap claim from a cable by
+looking at a handle, and a future driver backed by something else fast — a
+second machine's RAM over a bus, an emulator's host folder — says so the same
+way.
+
+**What it buys is the HARVEST ITSELF, not a second copy of it.** The mount's
+pass A is one loop and only three of its instructions are FAT's: the entry's
+`@18` word, `dsk_clus2lba` and `dsk_rd1`. On a redirected volume `@18` is the
+driver's own opaque handle (§62.9.1) — `rd_stage` puts it there — which is
+exactly what `FSV_READAT` takes, so the branch is at the READ and the
+classification, the icon store, `assoc_note_app` and §54.6's declarations are
+the same instructions for both. A `LOCAL` volume joins the loop at `.harvloc`,
+which is **below `asc_use_x`**: the peek is free and re-keying the association
+cache to this volume is not — it reads an `ASSOC.DAT` a RAM disk almost never
+has and evicts the rows §62.9.2.1's lookups live on. The harvest fills the
+cache from the headers it is reading anyway.
+
+**The peek is `DSK_PEEK` = 128 bytes at offset 0, and the whole ask or
+nothing.** That is every byte the loop reads out of the buffer — the §20.2
+header at 0..31, the embedded icon at 32..95, the document glyph at
+`LD_H_GLYPH`..+15 — and `loader.inc` asserts the two stay in step, `disk.inc`
+being included first and unable to derive it. A short answer is REFUSED
+rather than used, and that is not fussiness: the buffer would still hold the
+PREVIOUS entry's header, which is a *valid* one, so a 40-byte file would take
+the icon of whatever package sorts above it. The FAT arm reads a whole sector
+and trusts the slack after EOF, but that slack is unrelated bytes the magic
+test throws out; this buffer is not that.
+
+**`kern_small` is out of it by construction** and pays nothing: it can load no
+driver at all (`OS88_DRIVERS` is `kern_big`'s), so no `DRVC_FILE` volume can
+exist there, `drv_svc` is one zeroed class' worth and reading `DRVC_FILE`'s
+would run off the end of it. Both halves are inside `%ifdef OS88_DRIVERS`, and
+a `kern_small` that somehow had such a volume keeps §62.9.2.1's pass.
+
+What the user sees is the difference between *"the RAM disk shows generic
+diamonds"* and *"the RAM disk looks like a disk"*: copy `MINES.O88` onto it
+from a floppy this session or any other, and the icon is there because the
+package is, not because something else warmed a cache first. §62.9.2.1's
+SESSION-STATE caveat still applies to everything this bit is not set on.
+##### 62.9.2.3 `kern_small` cannot have one at all, so it carries none of it
+
+The redirector's arms are gated `OS88_REDIR`, defined on `kern_big` alone, and
+that is not a trade between a feature and its bytes — it is the observation
+that **on a kernel with no loadable drivers a redirected volume cannot
+exist**. The chain is three links and every one of them is already in the
+tree:
+
+1. a volume row is stamped `DVK_FILE` only by `dsk_vol_add`;
+2. the only caller that can pass that kind is `osapi_vol_add`, behind
+   `osapi_vol_fence`;
+3. that fence walks the PUBLISHED CLASSES with `drv_cls_fp`, and on a build
+   without `OS88_DRIVERS` its entire body is `xor di, di / stc / ret`.
+
+No class is ever published, because nothing can attach. So `[dsk_vkind]` is
+`DVK_BIOS` for the life of that machine, every `cmp byte [dsk_vkind],
+DVK_FILE` is an answer known at assembly time, and every arm behind one is
+code the instruction pointer cannot reach. It is the same argument §96.44.9
+makes for `kern_dos` one link further forward — there the table has no non-BIOS
+rows; here nothing can write one.
+
+**It is a separate symbol from `OS88_DRIVERS`** for the reason `OS88_SNDCARD`
+is: the two are different claims. That one says *no `.DRV` can be loaded*,
+this one says *no volume can be a redirected one*. A fork that gave
+`kern_small` a built-in redirector — the parallel cable soldered in, the RAM
+disk resident — would turn exactly one of them on, and the sites say which
+they mean.
+
+**What it is worth is room rather than a rung**, which is the honest way to
+bank it: the 128KB machine's `.cold` rung had 11 bytes left in it, and the
+mount's two redirected blocks alone are **115**. That does not uncross
+anything today; it makes the next thing that wants a rung cheaper, and it
+stops a build paying for a feature it is unable to use.
 
 #### 62.9.3 The branch sites, and the order to build them in
 

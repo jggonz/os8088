@@ -262,6 +262,24 @@ def main():
         time.sleep(22)
         os88marty.settle(m)
 
+        # **PAINT'S OWN SEGMENT IS RE-RESOLVED, because the compaction this
+        # row just forced is exactly the thing that moves it.** `pt_seg` was
+        # banked before the second HEAPFRAG opened, and `mine()` matches a
+        # claim's OWNER against it - so a Paint whose region moved owns
+        # nothing as far as that banked number is concerned, and the row
+        # printed `Paint now holds []` and failed check 1 with
+        # `[pt_base] names no claim Paint holds`.
+        #
+        # It is the sharpest possible false alarm here: checks 2 to 5 all
+        # PASSED in the same run - the canvas moved 5600 -> 3880, the
+        # contents survived to the md5, the row table followed, the undo
+        # delta was right and the repaint was identical - so the feature
+        # worked perfectly and the row said it had not. tests/kdhdd.py's
+        # box_state is the same correction one package along.
+        pt_seg2, _ = pkg_seg(m, S, "Paint")
+        if pt_seg2 is not None and pt_seg2 != pt_seg:
+            print("Paint's own region moved %04x -> %04x" % (pt_seg, pt_seg2))
+            pt_seg = pt_seg2
         after = mine(claims(m, S), pt_seg)
         print("Paint now holds %s"
               % ["%04x/%dKB" % (b, p // 64) for b, p, _, r in after])

@@ -356,6 +356,9 @@ DRVV_TIER   equ 2               ; in AH = SND_RT_*: how much of itself the
 ; publishes; the kernel takes a copy at attach so every later dispatch is a
 ; near read plus one far call.
 DSV_CAPS    equ 0               ; dw: capability bits it ADDS (SND_CAP_*)
+                                ; ...OR, on a DRVC_FILE driver, FSCAP_* below:
+                                ; one word, read per class, and the two
+                                ; classes can never both own it
 DSV_FM      equ 2               ; dw: near proc behind slot 0x00F8, 0 = none
 DSV_STREAM  equ 4               ; dw: near proc behind slot 0x0100, 0 = none
 DSV_TICK    equ 6               ; dw: near proc called from snd_tick, 0 = none
@@ -481,6 +484,19 @@ FSV_READ    equ 6               ; AX = a handle, DX:BX = buffer (DSV_BLK's
                                 ; out CF=0 and DX:AX = bytes read
 FSV_WRITE   equ 8               ; SI = name, DX:BX = bytes
 FSV_APPEND  equ 10              ; the chunked pair (SPEC.md 18.4.4)
+; --- what a DRVC_FILE driver says about ITSELF, in DSV_CAPS (SPEC.md 62.9.2.2)
+; ONE BIT, and it is about the COST of a read rather than about the medium.
+; SPEC.md 62.9.2.1's pass is cache-only because the class contains a volume on
+; the other end of a PARALLEL CABLE, where a header peek per package is real
+; traffic. It also contains the RAM disk, where the same peek is a `rep movsw`
+; between two heap claims - so the pass was refusing, on one member's grounds,
+; a read the other can serve faster than the FAT path it is being denied.
+;
+; A driver sets it when its FSV_READAT is a MEMORY read: no wire, no seek, no
+; motor. Nothing else in the kernel branches on it, and a driver that leaves
+; it clear gets exactly the behaviour every DRVC_FILE driver had before it.
+FSCAP_LOCAL equ 1               ; ...my reads cost what a memcpy costs
+
 FSV_READAT  equ 12              ; AX = a handle, DX:BX = buffer, CX = capacity,
                                 ; DI:SI = the 32-bit offset. out DX:AX =
                                 ; delivered, 0 = at or past the end

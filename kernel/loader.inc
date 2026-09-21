@@ -72,6 +72,11 @@ LD_HF_GLYPH equ 0x20            ; ...its bit 5: a 16-byte DOCUMENT-GLYPH block
 LD_H_GLYPH  equ 112             ; ...and where it sits: header 32 + icon 64 +
                                 ; association block 16 (the tool requires all
                                 ; three in front of it)
+%if DSK_PEEK < LD_H_GLYPH + 16  ; ...AND THE HEADER PEEK HAS TO REACH IT
+  %error "DSK_PEEK no longer covers LD_H_GLYPH: a redirected volume's harvest would compose a glyph out of the last entry's bytes"
+%endif                          ; (SPEC.md 62.9.2.2). disk.inc is included
+                                ; FIRST, so it cannot derive DSK_PEEK from
+                                ; this - the two are kept in step here instead
 LD_H_LINK   equ 4               ; word: link base, must be 0 (org 0 - a v3
                                 ; package is position-independent because it
                                 ; owns its segment, SPEC.md 20.1)
@@ -863,48 +868,30 @@ ld_run_body_x:
     ; LOW_SEG, so the sector lands there and only the 32 header bytes are
     ; staged back into the kernel segment for ld_check_hdr to read.
 .peek:
-    push ss                     ; ES = LOW_SEG, ONCE for both arms and for
-    pop es                      ; step 3 below (SPEC.md 2.1). The FAT arm
-                                ; wants it for disk_read_x's ES:BX, the
-                                ; DVK_FILE arm leaves it alone (drv_fs_call:
-                                ; "DS and ES restored"), and ld_check_hdr
-                                ; reads the header where it lands rather than
-                                ; through a staged copy
-    cmp byte [dsk_vkind], DVK_FILE
-    jne .peekfat
-
-    ; --- a REDIRECTED volume: the first 512 bytes, by handle (SPEC.md 62.9) --
-    ; The FAT path below turns a cluster into an LBA and reads a SECTOR, and
-    ; there are none here - dsk_xfer refuses such a volume outright, so
-    ; without this the peek fails and every package on a redirected volume is
-    ; "Bad package". FSV_READAT at offset 0 is exactly the same 512 bytes, and
-    ; it lands in the same dsk_secbuf so step 3 below is untouched.
-    push bp
-    mov dx, ss                  ; DX:BX, not ES:BX (SPEC.md 51.8) - AX is
-    mov bx, dsk_secbuf          ; still the handle and nothing here spends it.
-                                ; SS names LOW_SEG for the life of the session
-                                ; (SPEC.md 2.1) and this site wants the value
-                                ; in a general register, so it is `mov dx, ss`
-                                ; rather than the `push ss / pop es` form
-    mov cx, 512
-    xor si, si                  ; DI:SI = offset 0: the head of the file
-    xor di, di
-    mov bp, FSV_READAT
-    call drv_fs_call
-    pop bp
-    jc .disk1                   ; a short file simply delivers less, and
-    jmp short .hdr              ; ld_check_hdr rejects what is not a package
-.peekfat:
-    call dsk_clus2lba_x  ; AX: cluster -> its first LBA; the first
-    jc ld_take.bad              ; sector of the first cluster IS the file's
-                                ; first 512 bytes, so peek semantics are
-                                ; exact (SPEC.md 21 step 2)
-    call dsk_rd1_x                ; in: AX=LBA; ES set at .peek
-    jc .disk1
+    mov cx, 512                 ; ...whichever transport (SPEC.md 20.14.6.2).
+    call dsk_peek_x             ; A redirected volume has no sectors at all -
+    jc .disk1                   ; dsk_xfer refuses one outright - so without
+                                ; the arm inside dsk_peek_x every package on
+                                ; one is "Bad package"; FSV_READAT at offset 0
+                                ; is exactly the same 512 bytes and lands in
+                                ; the same dsk_secbuf, so step 3 below is
+                                ; untouched.
+                                ;
+                                ; **AND THE COUNT IS NOT CHECKED**, which is
+                                ; this site's difference from the other two:
+                                ; build/filler.o88 is 370 bytes, so a package
+                                ; shorter than the ask is an ordinary thing
+                                ; and ld_check_hdr is what judges it. A
+                                ; cluster out of range now reads as LD_EDISK
+                                ; where it read as LD_EBAD - the honest
+                                ; verdict on a directory entry naming a
+                                ; cluster this volume has not got, and the
+                                ; only behaviour this factoring moved
 .hdr:
 
     ; --- 3. validate the peeked header -----------------------------------------
-    mov si, dsk_secbuf          ; ...WHERE IT LANDED. ES is LOW_SEG from
+    mov si, bx                  ; ...WHERE IT LANDED, which is where
+                                ; dsk_peek_x left BX. ES is LOW_SEG from
     call ld_check_hdr           ; .peek and ld_check_hdr reads through it, so
     jc .ret1                    ; there is no staged copy to make and none to
                                 ; go stale. AL = LD_EBAD / LD_EBIG on failure

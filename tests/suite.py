@@ -2720,10 +2720,13 @@ SOAK = [
         "band A through OSAPI_GFX_POINTS and band B PT_DY rows lower one "
         "gfx_pixel a point, and the row requires the two equal. No golden "
         "image and no reference build: the comparison is inside one frame. "
-        "Three cases, because the draw branches three ways - a solid ink, a "
-        "DITHER ink (the (x+y) parity arm), and a solid one with the window's "
-        "clip region ARMED. VERIFIED TO FAIL: drawing every other point takes "
-        "all three red and dropping the dither arm takes case 2 red alone. "
+        "Four cases, because the draw branches four ways - a solid ink, a "
+        "DITHER ink (the (x+y) parity arm), a solid one with the window's "
+        "clip region ARMED, and a solid PAPER, which is the class an ERASE "
+        "is and the one this row went three revisions without asking for "
+        "(SPEC.md 5.6.9.3.1). VERIFIED TO FAIL: drawing every other point "
+        "takes the first three red and dropping the dither arm takes case 2 "
+        "red alone. "
         "VERIFIED NOT TO COVER 5.6.9.1's box invalidation, which is written "
         "in the row's own docstring with what would - a row that claims "
         "coverage it has not got is worse than one that names the gap, and "
@@ -2734,6 +2737,24 @@ SOAK = [
         "asks",
         needs=("marty",), serial=True,
         wants=("build/ptstest360.img",)),
+    Row("gfxptsmall", "soak", py("tests/gfxpoints.py", "--small"), 60.0,
+        "SPEC.md 5.6.9.3.1: the row above, on the OTHER kernel. gfx_points is "
+        "not one routine on both builds - kern_small expands GFXPT_LOOP ONCE "
+        "and asks the ink class per point, kern_big expands it three times "
+        "and dispatches once a call (5.6.9.3) - and NOTHING in this suite ran "
+        "the one-loop expansion at all, which is exactly where the defect "
+        "was: that arm drew PAPER AS INK, so on the 128KB build no app-side "
+        "erase erased and Cyclone's web and Missile's trails doubled instead "
+        "of rubbing out. The determinism hash that 5.6.9.3 cites as gating "
+        "the pixels (mcperf) boots the SHIPPED kernel, so it was green on "
+        "both sides of it. VERIFIED TO FAIL: `mov al, 0xFF` back in place of "
+        "`mov al, [cs:gfx_ln_ink]` takes case 4 red HERE and leaves gfxpoints "
+        "16/16 green, which is the whole reason this is a row of its own. It "
+        "builds nothing: `make small` is what it reads, the same tree "
+        "small128, smallboot and paint1small want",
+        needs=("marty",), serial=True,
+        wants=("build/ptstest360.img", "build/small360.img",
+               "build/smallk/kernel.bin")),
     Row("ptsext", "soak", py("tests/ptsext.py"), 70.0,
         "SPEC.md 5.6.9.4: the row above's claim, on a machine with TWO CARDS. "
         "gfxpoints asks the only question worth asking - does gfx_points draw "
@@ -2759,6 +2780,43 @@ SOAK = [
         "~1.6x this suite allows for its slowest box. SOAK and not fast or "
         "full, for gfxpoints' own reasons - one kernel slot, an emulator, "
         "and 'did you obviously break the OS' is not what it asks",
+        needs=("marty",), serial=True,
+        wants=("build/ptstest360.img",)),
+    Row("ptsmix", "soak", py("tests/ptsmix.py"), 95.0,
+        "SPEC.md 5.6.9.5.2: the row above's claim on a MIXED pair of cards - "
+        "os8088_xt_vga_herc, a VGA primary with a Hercules beside it. ptsext "
+        "boots os8088_5150_both_gla_mono, where BOTH displays are 1bpp, so "
+        "gfx_points' two tests at the door - [vid_mono] and [vid_planes] - "
+        "are true of either card and the defect below cannot be EXPRESSED on "
+        "that machine whatever the kernel does. Those tests ran BEFORE "
+        "vid_disp_of, so they described whichever display the last primitive "
+        "left current (39.14.3 restores none on purpose) and not the one "
+        ".hook was about to enter: a call made while the Hercules was current "
+        "on an array whose first point is on the VGA reached the ONE-BIT "
+        "inline loop with ES = [vid_rseg] = 0 and wrote the IVT, the BIOS "
+        "data area and the kernel's own .text - and .done's second pass "
+        "entered the OTHER card with no test at all, so EVERY straddling "
+        "array did it. WHAT IS ASSERTED IS THE INVARIANT AND NOT THE CRASH: "
+        "an exec breakpoint at gfx_points.pass - the instruction before "
+        "`mov es, bx` - reads the display the loop is about to write to, and "
+        "every sampled pass must have [vid_mono] set, [vid_planes] 1 and "
+        "[vid_rseg] non-zero. That fires BEFORE the damage, so the row names "
+        "the defect rather than reporting the reboot it causes twenty frames "
+        "later, and it is exact where the field's own scenario is ~75% a "
+        "drag. VERIFIED TO FAIL: against the kernel at e36b16ae it reports "
+        "`.pass on display 0: mono=0 planes=4 rseg=0000` at the FIRST "
+        "straddle and exits 1, with `make test-fast` 46/46 and `ptsext` "
+        "green against that same kernel - which is the whole reason this row "
+        "exists beside that one. Two traps, because the first shape of it was "
+        "GREEN against the broken kernel: the WINDOW straddling the seam is "
+        "not the point ARRAY straddling it (PtsTest's bands are 120px inside "
+        "a 176px frame, so a frame across the seam leaves every point on one "
+        "card, PT_OOB is never set and the second pass never runs), and the "
+        "drag target is in WINDOW coordinates where the grab is the title "
+        "bar's midpoint - half a window out, which does the same thing. 95s "
+        "is 57.0s MEASURED on an idle container with the ~1.6x this suite "
+        "allows for its slowest box. docs/reports/SEAM-DRAG-CRASH-2026-09-20"
+        ".md is the diagnosis behind all of it",
         needs=("marty",), serial=True,
         wants=("build/ptstest360.img",)),
     Row("regmove", "soak", py("tests/regmove.py"), 130.0,
@@ -5790,8 +5848,30 @@ SOAK = [
         "does not carry the defect's own input",
         needs=("marty",), serial=True),
     Row("dispmodex", "soak", py("tests/dispmodex.py"), 120.0,
-        "Which display does Missile Command ask about Mode X? (SPEC.md"
-        "39.18.1)",
+        "Which display does Missile Command ask about Mode X? (SPEC.md "
+        "39.18.1). **IT WAS RED FOR A GUEST CRASH AND THAT CRASH IS FIXED** - "
+        "gfx_points ran its one-bit inline loop on a PLANAR display with "
+        "ES = 0 (SPEC.md 5.6.9.5.2), so moving MISSILE's window onto the "
+        "Hercules half of an extended desktop wrote the IVT, the BIOS data "
+        "area and the kernel's own .text, and took the machine down about "
+        "three runs in four. docs/reports/SEAM-DRAG-CRASH-2026-09-20.md is "
+        "the diagnosis and `ptsmix` is the gate that keeps it out. It is "
+        "GREEN as of 4a1dc3d5, on the run its whole shape was written for - "
+        "launched on the VGA with Mode X live, dragged onto the Hercules and "
+        "greyed, dragged back and live again, then launched from the other "
+        "display and corrected. What is below is what this row learned while "
+        "it was red, and it stands either way. "
+        "The rate was measured on the kernel's "
+        "own [ticks] over GUEST seconds so contention is not in it. The row "
+        "used to report the coordinate its pointer could not reach, which is "
+        "a sentence about a coordinate; it now asks after every move whether "
+        "IRQ0 is still being serviced and whether MISSILE's window is still "
+        "in wm_wins, and says which. Four suspects are ELIMINATED there with "
+        "numbers - the mouse ISR's private stack (60 of 128), MISSILE's "
+        "worker slice (188 of 256), task 0's stack (268 of 512) and "
+        "mou_clamp, which crosses the seam deterministically at seven "
+        "heights and correctly refuses at the two below display 1's bottom "
+        "edge",
         needs=("marty",), serial=True),
     Row("dispnp", "soak", py("tests/dispnp.py"), 60.0,
         "Does a WIDE straddling Note Pad letter its whole row? (SPEC.md"
@@ -7290,6 +7370,35 @@ SOAK = [
     Row("rdup", "soak", py("tests/rdup.py"), 60.0,
         "SPEC.md 62.9.11.3: the Ram Disk page acts on the RELEASE.",
         needs=("marty",), serial=True),
+    Row("rdcz", "soak", py("tests/rdcz.py"), 70.0,
+        "SPEC.md 20.14.6: a compressed file with NO HINT is still read as a "
+        "compressed file. The hint is a CACHE and SPEC.md 20.14 has said "
+        "since it was written that the read path checks the file's own 'CZ' "
+        "header too - and it did not: `dskw_czexp` VALIDATES the hint, it "
+        "never DISCOVERS compression, so a file that lost those four "
+        "directory bytes reached the application as PACKED BYTES. Reported "
+        "from the field twice, and this row is both halves on one boot. FAT: "
+        "README.TXT on the shipped system disk with its hint struck out of "
+        "the directory HERE ON THE HOST, which is what a copy by DOS, "
+        "Windows or a Linux mount leaves behind - 8,088 packed bytes that "
+        "must reach Note Pad as 14,427. RAM: the same file COPIED to a "
+        "mounted RAM disk, which has no directory entry to carry a hint AT "
+        "ALL (SPEC.md 62.9) - the worse half, `.fsread` never having looked "
+        "at one. It asserts `np_len` and NOT pixels, tests/lzfile.py's "
+        "instrument: a window with a title and an empty note looks identical "
+        "to a window with the file in it, at every zoom. VERIFIED RED at "
+        "`elendilon`, the commit before the sniff - BOTH halves read 4,185, "
+        "which is neither the folded 14,427 nor the packed 8,088 because "
+        "np_load folds CRLF and stops at what a compressed stream is full "
+        "of, so what the field saw was a SHORT NOTE OF NONSENSE and no "
+        "length carried in the script would have predicted it. It strikes a "
+        "SCRATCH COPY, never the shipped image every other row boots. "
+        "Deliberately silent about OSAPI_FILE_FIND, which reports such a "
+        "file's PACKED size (SPEC.md 20.14.6.2.1) - sniffing there would "
+        "cost a peek per directory entry, and the whole point is that this "
+        "costs no extra int 13h. Measured at 55s",
+        needs=("marty",), serial=True),
+
     Row("rdicon", "soak", py("tests/rdicon.py"), 75.0,
         "SPEC.md 62.9.2.1: a DOCUMENT on a redirected volume gets its "
         "association icon. The mount's redirected tail ran pass 4a' and then "
@@ -7300,7 +7409,7 @@ SOAK = [
         "ASSOC.DAT, and does no I/O, so a `.TXT` on the RAM disk had the same "
         "claim on a Note Pad page as a `.TXT` on a floppy and got the generic "
         "diamond. Reported as `RAM disks almost never show an assoc icon, "
-        "even when the cache is there and has it populated`. It reads "
+        "even when the cache is there and has it populated`. ITS FOURTH CHECK IS SPEC.md 62.9.2.2: a PACKAGE on a LOCAL redirected volume is HARVESTED now - `DSV_CAPS` bit `FSCAP_LOCAL` says a driver's FSV_READAT is a memory read, so the mount peeks DSK_PEEK bytes of the header through the driver instead of taking the cache-only pass, and MINES.O88 gets its own icon off a volume no store has ever been warmed from. VERIFIED RED for that one by clearing the bit alone - 0xff, with the other three still green. It reads "
         "REFERENCE BYTES out of the acting window's cache rather than judging "
         "pixels (tests/icoshed.py's instrument): a composed page and a "
         "generic diamond are both ink in a 16x16 cell, and what changed is "
