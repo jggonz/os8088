@@ -155,3 +155,113 @@ reach. It now:
   a no-op in those words.
 
 None of that fixes the defect. It makes the row name it.
+
+---
+
+# Second session, 2026-09-21: six more eliminations and where the earliest signal is
+
+Same tree, same box, same machine. Everything below is measured; the defect is
+still not root-caused and this section exists so the next person does not
+re-derive any of it.
+
+## The instrument, first, because two of its properties are not obvious
+
+* **A MartyPC `mem` breakpoint does NOT fire on an instruction fetch.**
+  Measured: a wire on `gfx_fill+4`, executed constantly on a live desktop,
+  never fires; a wire on `[ticks]` fires at once. So **every byte of kernel
+  code is a usable tripwire** - it is touched by nothing unless something
+  writes where it should not.
+* **A quietness probe has to run with the machine BUSY.** An `int` READS its
+  vector, so a live vector is a data access to the IVT - and a probe taken on
+  an idle machine called `int 0Ch`'s vector dead because no mouse packet
+  arrived inside the window. Four lanes then tripped on the first packet of
+  the drag, at `mou_isr`'s first instruction, which is the gate reading
+  0x0030 and not a wild write at all. Each probe window now carries a mouse
+  packet and spans two timer ticks.
+* **It is a Heisenbug and the threshold is measurable.** 42 wires reproduce
+  the crash 2 runs in 4; **287 wires suppress it outright** (40 round trips,
+  0 deaths, and the window came back every time). Keep a wire set small.
+* A full `.text` read is **16 ms for 110 KB**, so snapshot-diffing the whole
+  kernel faster than the guest runs a frame is free. (An earlier attempt
+  "timed out" for a reason that was in the script, not the socket: a poll
+  loop bounded by `m.status()["cycles"]` never terminates on a guest that has
+  stopped executing.)
+
+## Six more things it is NOT
+
+7. **Not a wild write to the IVT.** `vid_rseg` is 0 on a VGA primary, which is
+   legal, and `viddet.inc` warns that a 1bpp path through a `vid_rseg` of 0
+   writes to the IVT - so that was the obvious next suspect. It is not
+   happening: `int 08h`, `int 0Ch` and `int 0Bh` read `c5486000`, `913c6000`
+   and `a73c6000` in **every** post-mortem, including the machine whose whole
+   kernel state read 0xD2 and the one that had rebooted.
+8. **Not a wild write to the window table.** 52 tripwires through the unused
+   `wm_wins` slots, 12 round trips, four lanes: `wm_wins` is never touched.
+   Three of those lanes died anyway.
+9. **Not a bad display index.** One exec breakpoint on `vid_ctx_act` (the only
+   writer of `[vid_cur]`), four lanes, ~6,000 calls: **every one passed AL of
+   0 or 1**. The `vid_cur` = 116 seen earlier is therefore a wild write to
+   that byte, not a caller's mistake.
+10. **Not a leaked `cli`.** A busy machine holds IF=0 for at most 7-10
+    consecutive samples; an alarm at 3x that never fired across 40 round
+    trips. When IF *does* stick it is total - 300 of 300 samples - and by then
+    the CPU is already executing garbage.
+11. **Not an unbalanced display nest.** The image contains exactly **five**
+    `dec byte [gfx_dnest]` and **three** `inc byte [gfx_dnest]` (found by
+    scanning for `FE 0E`/`FE 06` against the symbol's own offset), and a
+    breakpoint on all eight logs both directions. One lane: **984 increments
+    against 984 decrements, exactly balanced**, over eight round trips. The
+    250 / 253 / 254 readings earlier in this file are the wrecked machine
+    scribbling on that byte, not an accounting error. `gfx_blit1_x.nopen`'s
+    decrement was caught *at* 0 once - with `CS=0000`, every register zero and
+    a callstack of garbage, i.e. the wild CPU wandering onto that address.
+12. **Not the seam-cut paths, on inspection.** `font_ch_drop` reaches
+    `font_char.done`; `font_ch_spill` rejoins `.edgeok`; `gfx_blit1_x`'s
+    `.percol` and `.okquiet` take no hook and run no leave; `gfx_blit4` and
+    `gfx_blitp` each guard their leave with a per-call flag
+    (`[gfx_blit_hk]`, `[gfx_bp_hk]`) added for exactly this hazard -
+    vga12.inc:2695 describes it and what it looked like.
+
+## Where the earliest signal is: THE STACK POINTER LEAVES ITS STACK
+
+This is the lead to pick up. Every legal stack is known
+(`STK0` 18DE..1AE0, the slices 0AD6..15DE, `mou_pstack` 09D6..0A5E,
+`sch_chstack` 0A56..0ADE, all `SS = LOW_SEG`), a baseline of ~540 samples is
+inside one of them 100% of the time, and the alarm is the first sample that is
+not. Two catches, and **both had IF still 1** - so this precedes the interrupt
+death, the smashed memory and the stuck pointer:
+
+```
+wm_hit.next     IF=1 ss:sp=1940:1AC8 ds=0060 es=0060   ok
+MISSILE+2AFA    IF=1 ss:sp=1940:11A8 ds=9C00 es=0060   ok
+gfx_ls_box+1    IF=1 ss:sp=1940:005C ds=0060 es=0060   BAD   <- 4,428 bytes in one sample
+                gfx_dnest = 250, lock free, sch_cur = 10 (MISSILE's worker)
+```
+
+```
+gfx_ls_box.x2ok+3  IF=1 ss:sp=1940:1A36 ds=0060 es=0000   ok
+gfx_ls_box.x1ok+10 IF=1 ss:sp=1940:1A36 ds=0060 es=B000   ok
+vid_span_one.out   IF=1 ss:sp=1940:25A8 ds=0060 es=9C00   BAD   <- above STK0 entirely
+                   gfx_dnest = 0, lock held by 0, sch_cur = 0 (the UI task)
+```
+
+SP runs **down** out of a worker slice in one and **up** out of STK0 in the
+other, and both land in `gfx_points`' helpers - `gfx_ls_box` and
+`vid_span_one` - on a machine drawing on the second display. A third ring,
+caught on the IF alarm, shows SP climbing **+80 bytes per sample** through
+`font_char.row` / `font_char.chok` / `vid_ctx_act`, which is a net pop per
+glyph cell.
+
+Beside it, one more register fact worth keeping: `gfx_fill_pat_raw.irow` was
+caught running with **`ES` = MISSILE's own segment** and `SI` = 8,482 rows
+left to fill, and `gfx_points.paper` with **`CX` = 0xFEF7 points** and `BP`
+walking MISSILE's *code* rather than `mc_pts`. A fill whose `ES` is a package
+region instead of a framebuffer is a wild writer by itself.
+
+## What to do next
+
+Put a tripwire on the bytes just **below** each stack (`sch_stacks - 16`, and
+below `mou_pstack`), which a stack running down writes before anything else
+notices, and an exec breakpoint on `gfx_ls_box` that reads SP and stops on the
+first entry outside the legal set. Both are small wire sets, which matters:
+287 wires make the bug go away.
