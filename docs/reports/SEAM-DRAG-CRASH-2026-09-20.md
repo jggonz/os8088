@@ -258,10 +258,59 @@ left to fill, and `gfx_points.paper` with **`CX` = 0xFEF7 points** and `BP`
 walking MISSILE's *code* rather than `mc_pts`. A fill whose `ES` is a package
 region instead of a framebuffer is a wild writer by itself.
 
+## Two more eliminations, from following that lead
+
+13. **The bytes below the stacks are not free, and wiring them is a false
+    positive.** `.lowbss` there is font scratch, not slack:
+
+    ```
+    09BE  font_zero      8
+    09C6  font_seam_a    8      SPEC.md 39.14.11's two half-cells
+    09CE  font_seam_b    8
+    09D6  mou_pstack   128      the mouse ISR's private stack
+    0A56  sch_chstack
+    0AD6  sch_stacks
+    ```
+
+    All four lanes tripped identically at `font_run_x.rmpx+7` with
+    `SS:SP = 1940:1A3C` - **inside STK0, so no stack had moved at all**. The
+    wire was on the scratch that loop reads through `ss:bx`, and the quietness
+    probe had missed it because it never ran while text was drawn on the mono
+    display. Anything wired in `.lowbss` has to be probed with the machine
+    doing the thing under test, not merely busy.
+
+14. **The seam scratch does not overrun into the mouse ISR's stack**, which
+    the layout above makes the obvious suspect: `font_seam_b` ends at `09D6`
+    and `mou_pstack` begins there, with no gap, so any overrun of the seam
+    halves lands on the stack whose corruption produces exactly the observed
+    "wild CPU with IF=0". The ISR's measured high water is 60 of 128, so its
+    bottom ~68 bytes are dead space and can be wired: ten wires through
+    `mou_pstack + 0..36`, twelve round trips, four lanes. **Never fired.**
+    Two of those lanes died in the usual way while the wires stayed quiet.
+
+    And the count-of-zero hazard that reading `font_ch_cut` suggests is NOT
+    real - checked before writing it down. `.byz` does `mov cx, bp` and a
+    `loop`, which would run 65,536 times at `bp = 0` and write 64KB starting
+    at `mou_pstack`; but `bp = [vid_ch] - dx` and `.live` has already refused
+    `dx >= [vid_ch]`, so `bp` is 1..8 and `bx` is 1..8 for the same reason.
+    The comment there ("Both are 1..8") is right, and what proves it is the
+    ANCHOR test at `.live`, not the `jae .part` the loop comments cite.
+
 ## What to do next
 
-Put a tripwire on the bytes just **below** each stack (`sch_stacks - 16`, and
-below `mou_pstack`), which a stack running down writes before anything else
-notices, and an exec breakpoint on `gfx_ls_box` that reads SP and stops on the
-first entry outside the legal set. Both are small wire sets, which matters:
-287 wires make the bug go away.
+Not the stack floors - 13 and 14 above spent that idea. What is left of the
+SP finding is that SP is seen outside every legal stack **while IF is still
+1**, twice, in `gfx_points`' helpers, and no wire catches the write that
+does it. The next instrument is therefore the one that does not need to guess
+an address: **an exec breakpoint on `gfx_ls_box`** (or `vid_span_one`) that
+reads SP at entry and stops on the first value outside the legal set. It is
+one breakpoint, so it is under the suppression threshold, and it names the
+call that arrives already broken rather than the write that broke it - which
+is the step this investigation has not been able to take any other way.
+
+Worth pairing with it: the two register facts that no hypothesis here has
+accounted for - `gfx_fill_pat_raw.irow` running with **ES = a package's own
+segment** instead of a framebuffer, and `gfx_points.paper` walking with
+**CX = 0xFEF7** and BP inside MISSILE's code rather than `mc_pts`. Either one
+is a wild writer on its own, and neither is explained by anything eliminated
+above.
