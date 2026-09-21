@@ -1979,11 +1979,18 @@ dskw_rbody:
     ; the 32-bit capacity refusal and the expansion are had for nothing.
     mov [dskw_raw+DSK_R_SIZE], cx
     mov [dskw_raw+DSK_R_SIZE+2], dx
-    mov [dskw_cur], ax          ; the handle, where the chain walk keeps its
-                                ; cluster: this arm never reads that cell and
-                                ; the redirected read needs one word banked
-    mov word [dskw_raw+DSK_R_CZM], 0    ; NO DIRECTORY ENTRY HERE, so there is
-    mov word [dskw_raw+DSK_R_CZL], 0    ; no hint to inherit and no stale one
+    mov [dskw_raw+DSK_R_CLUS], ax   ; the handle, IN THE CELL THE FAT ARM
+                                ; keeps its first cluster in - dskw_raw is
+                                ; this arm's to fill (there is no directory
+                                ; entry here to overwrite), and putting it
+                                ; there is what lets dskw_czsniff and
+                                ; dsk_peek_x below be told the transport by
+                                ; [dsk_vkind] alone rather than by an argument
+    xor ax, ax                          ; NO DIRECTORY ENTRY HERE, so there is
+    mov [dskw_raw+DSK_R_CZM], ax        ; no hint to inherit and no stale one
+    mov [dskw_raw+DSK_R_CZL], ax        ; to trust - and through the
+                                        ; accumulator, which is 8 bytes where
+                                        ; two `mov word [m], 0` are 12
     call dskw_czsniff                   ; to trust: the file's own header is
     jmp .sniffed                        ; the only thing that can say
 .fsprot:
@@ -2004,7 +2011,7 @@ dskw_rbody:
                                 ; here, it is one far call deep and blind
                                 ; until the verb returns
     push bp
-    mov ax, [dskw_cur]          ; the handle FSV_STAT answered
+    mov ax, [dskw_raw+DSK_R_CLUS]   ; the handle FSV_STAT answered, banked
     mov bx, [dskw_src]          ; ...and the destination the placement above
     mov dx, [dskw_seg]          ; has already moved up by R when the file is
     mov cx, [dskw_len]          ; compressed, which is the whole point of
@@ -3149,11 +3156,17 @@ dskw_commit:
 ; -----------------------------------------------------------------------------
 dskw_czstamp:
     push es
-    mov word [dskw_raw+DSK_R_CZM], 0    ; cleared on every path, first: the
-    mov word [dskw_raw+DSK_R_CZL], 0    ; mark and the high byte are one word
-    cmp byte [dskw_isdir], 0
+    xor ax, ax                  ; cleared on every path, first: the mark and
+    mov [dskw_raw+DSK_R_CZM], ax    ; the high byte are one word, and the
+    mov [dskw_raw+DSK_R_CZL], ax    ; accumulator is 8 bytes where two
+                                ; `mov word [m], 0` are 12 - AND it goes on
+                                ; paying below, `cmp [m], al` being 4 bytes
+                                ; where `cmp byte [m], 0` is 5. The zero has
+                                ; to survive as far as `.look`, which is why
+                                ; nothing between here and there spends AX
+    cmp [dskw_isdir], al
     jne .out                    ; a folder has no bytes to look at
-    cmp word [dskw_lenhi], 0
+    cmp [dskw_lenhi], ax
     jne .look                   ; a file over 64KB is still a candidate: it is
     cmp word [dskw_len], DSK_CZ_HDR ; only this kernel's READ path that caps
     jbe .out                    ; there (SPEC.md 20.14.2), and a hint written
@@ -3164,6 +3177,47 @@ dskw_czstamp:
 .out:
     pop es
     ret
+
+; -----------------------------------------------------------------------------
+; dskw_czsniff - ask the FILE, when the directory did not say (SPEC.md 20.14.6)
+; in:  dskw_raw's entry, with the hint already read as ABSENT, and
+;      DSK_R_CLUS holding its first cluster or its driver handle
+; out: nothing; the hint in dskw_raw when the file's own header says 'CZ'
+; clobbers: AX, BX, CX, DX, ES, flags - both call sites reload everything
+;           they want from memory at `.sniffed`, so there is nothing to save
+;
+; THE HINT IS A CACHE AND THIS IS THE MISS PATH. `disk.inc` has said since it
+; was written that a foreign tool may drop those four bytes and that the read
+; path checks the file's own header too - and it did not: `dskw_czexp`
+; VALIDATES the hint, it never DISCOVERS compression, so a file copied in by
+; DOS, or onto a volume with no directory entry to carry a hint at all,
+; reached the application as packed bytes.
+;
+; **IT COSTS NO EXTRA `int 13h` ON A FILE THAT HAS A HINT**, because it is not
+; called for one - and on a file that has not, it costs none either: the peek
+; is a one-sector `disk_read`, SPEC.md 18.95's cache fills the slot to the end
+; of the track, and `dskw_rdata`'s first sector comes straight back out of it.
+; The one case that pays is a hintless file opened while `MEM_P_DIRW` has been
+; shed and stayed shed, and that is one sector, once, on OPEN and not on a
+; listing.
+;
+; A redirected volume has no directory entry at all, so this is the ONLY thing
+; that can tell it - and neither transport is spelled here: dsk_peek_x
+; (SPEC.md 20.14.6.2) is that, shared with the loader's header peek and the
+; icon harvest's. It FALLS THROUGH into the judgement below rather than
+; calling it, which is what the two halves being adjacent is for.
+; -----------------------------------------------------------------------------
+dskw_czsniff:
+    mov ax, [dskw_raw+DSK_R_CLUS]   ; the first cluster - or, on a redirected
+                                    ; volume, THE HANDLE, which .fsread banks
+                                    ; in the same cell precisely so that this
+                                    ; routine never learns the difference
+    mov cx, DSK_CZ_HDR
+    call dsk_peek_x             ; ES:BX = the bytes, AX = how many arrived
+    jc dskw_czhdr.no            ; ...and CX the count that was asked for, so
+    cmp ax, cx                  ; the compare costs 2 bytes and not 3
+    jne dskw_czhdr.no           ; a file shorter than the header is not one
+                                ; ...and falls through
 
 ; -----------------------------------------------------------------------------
 ; dskw_czhdr - a file's first bytes -> the hint (SPEC.md 20.14.6)
@@ -3198,81 +3252,6 @@ dskw_czhdr:
     add al, DSK_CZ_MARK             ; ...and the FORMAT rides in the mark
     mov [dskw_raw+DSK_R_CZM], al    ; (SPEC.md 20.14.1)
 .no:
-    ret
-
-; -----------------------------------------------------------------------------
-; dskw_czsniff - ask the FILE, when the directory did not say (SPEC.md 20.14.6)
-; in:  dskw_raw's entry, with the hint already read as ABSENT; [dskw_cur] =
-;      the driver's handle on a redirected volume
-; out: nothing; the hint in dskw_raw when the file's own header says 'CZ'
-; clobbers: flags
-;
-; THE HINT IS A CACHE AND THIS IS THE MISS PATH. `disk.inc` has said since it
-; was written that a foreign tool may drop those four bytes and that the read
-; path checks the file's own header too - and it did not: `dskw_czexp`
-; VALIDATES the hint, it never DISCOVERS compression, so a file copied in by
-; DOS, or onto a volume with no directory entry to carry a hint at all,
-; reached the application as packed bytes.
-;
-; **IT COSTS NO EXTRA `int 13h` ON A FILE THAT HAS A HINT**, because it is not
-; called for one - and on a file that has not, it costs none either: the peek
-; is a one-sector `disk_read`, SPEC.md 18.95's cache fills the slot to the end
-; of the track, and `dskw_rdata`'s first sector comes straight back out of it.
-; The one case that pays is a hintless file opened while `MEM_P_DIRW` has been
-; shed and stayed shed, and that is one sector, once, on OPEN and not on a
-; listing.
-;
-; A redirected volume reads its eight bytes through FSV_READAT instead, which
-; on the RAM disk is a memory copy - and it has no directory entry, so this is
-; the ONLY thing that can tell it.
-; -----------------------------------------------------------------------------
-dskw_czsniff:
-    push ax
-    push bx
-    push cx
-    push dx
-    push es
-    push ss
-    pop es                      ; ES = LOW_SEG: dsk_secbuf is disk.inc's mount
-    mov bx, dsk_secbuf          ; scratch and this runs on the UI task too
-%ifdef OS88_REDIR
-    cmp byte [dsk_vkind], DVK_FILE
-    jne .fat
-    push bp
-    push si
-    push di
-    mov ax, [dskw_cur]          ; the handle FSV_STAT answered, banked where
-    mov dx, ss                  ; the FAT arm keeps its first cluster
-    mov cx, DSK_CZ_HDR          ; DX:BX and never ES:BX (SPEC.md 51.8)
-    xor si, si                  ; DI:SI = offset 0, in 32 bits
-    xor di, di
-    mov bp, FSV_READAT
-    call drv_fs_call
-    pop di
-    pop si
-    pop bp
-    jc .out
-    cmp ax, DSK_CZ_HDR
-    jne .out                    ; a file shorter than the header is not one
-    push ss                     ; drv_fs_call restores ES, but say so rather
-    pop es                      ; than rely on it across a far call
-    mov bx, dsk_secbuf
-    jmp short .hdr
-.fat:
-%endif
-    mov ax, [dskw_raw+DSK_R_CLUS]
-    call dsk_clus2lba_x
-    jc .out
-    call dsk_rd1_x              ; ES:BX, through SPEC.md 18.95's cache - which
-    jc .out                     ; is what makes the read below free
-.hdr:
-    call dskw_czhdr
-.out:
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

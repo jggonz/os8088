@@ -38904,8 +38904,12 @@ little slower.
 `.fsread` was a second implementation of the read: its own 32-bit capacity
 test, its own `FERR_BIG`, its own `fpg_begin`. **None of that is about the
 transport.** It writes `FSV_STAT`'s size where the FAT arm reads it, banks the
-handle in `[dskw_cur]` — the cell the chain walk keeps its first cluster in,
-which this arm never used — sniffs, and jumps into the shared flow. What is
+handle in `[dskw_raw+DSK_R_CLUS]` — the cell the chain walk keeps its first
+cluster in, which this arm has no directory entry to fill — sniffs, and jumps
+into the shared flow. Putting the handle *there* rather than in a cell of its
+own is what lets §20.14.6.2 below be told the transport by `[dsk_vkind]`
+alone, so neither the sniff nor the peek takes an argument saying which. What
+is
 left that differs is one branch at the read itself, `.fsdata` against
 `dskw_rdata`, and the compressed placement, the capacity refusal and the
 expansion are had for nothing.
@@ -38914,6 +38918,53 @@ So the RAM disk did not gain a *copy* of the decompressor's plumbing; it
 stopped carrying a copy of everything else. `tests/rdcz.py` is the gate and
 drives both halves on one boot: a packed file copied to the RAM disk, and the
 same file with its hint struck out of the FAT directory by hand.
+
+##### 20.14.6.2 `dsk_peek_x` — the head of a file, whichever transport
+
+The sniff wanted a file's first eight bytes and had to ask two different
+transports for them. So did the loader's header peek (§21 step 2) and the icon
+harvest's (§62.9.2.2), and **all three had written the same nine instructions
+out**: set `ES` to `LOW_SEG`, test `[dsk_vkind]`, and either turn a cluster
+into an LBA and read a sector or hand `FSV_READAT` a 32-bit offset of zero.
+
+`dsk_peek_x` is that, once. It takes the first cluster *or the driver's opaque
+handle* in `AX` — the same register either way, because §20.14.6.1 above banks
+the handle in the cell the cluster lives in — and a byte count in `CX`, and it
+answers `ES:BX` = `dsk_secbuf` with `AX` = **how many bytes actually
+arrived**, `CX` still holding what was asked for.
+
+**The count is an output and the strictness stays at the call site**, which is
+the one thing the three callers did not agree about:
+
+| caller | asks | on a short answer |
+|---|---|---|
+| `ld_run_body.peek` (§21) | 512 | **takes it.** `build/filler.o88` is 370 bytes, so a package shorter than the ask is an ordinary thing and `ld_check_hdr` is what judges it |
+| `.h_read` (§62.9.2.2) | `DSK_PEEK` (128) | **refuses.** A short answer leaves the *previous* entry's header in the tail of the buffer, and that one is VALID — so a 40-byte file would take the icon of the package above it in the sort |
+| `dskw_czsniff` (§20.14.6) | `DSK_CZ_HDR` (8) | **refuses.** A file shorter than the header is not one |
+
+Making the routine itself strict would have been smaller and is wrong: it
+would refuse to launch a sub-512-byte package off a RAM disk with *Disk
+error*. Making it lax would have cost the harvest its correctness.
+
+**The FAT arm answers the whole ask whatever it was asked for**, because it
+reads a sector and gets the slack past EOF for free — unrelated bytes that
+every caller's own magic test throws out. A redirected volume has no sectors
+and delivers exactly what is there, so the two compares above only ever bite
+one kind of volume.
+
+One behaviour moved with the factoring, deliberately: a cluster out of range
+on the loader's path now reads as `LD_EDISK` where it read as `LD_EBAD`. That
+is the honest verdict on a directory entry naming a cluster this volume has
+not got, and it is the only difference.
+
+**It paid for the feature.** The sniff arrived at **+110 bytes of `.cold`**,
+which crossed the 80-step rung the branch had seven bytes of room under.
+Collapsing the three copies into one primitive, and the shaves that fell out
+of having a contract to shave against — `mov si, bx` where the buffer's
+address was being re-materialised, `cmp ax, cx` where the asked count was
+being re-materialised, and the accumulator through `dskw_czstamp`'s clear —
+took `.cold` to **40,959**, one byte under. The feature is 6 bytes of resident
+RAM, not 110.
 
 ### 20.15 `compress.inc` — the one thing on the machine that COMPRESSES
 
