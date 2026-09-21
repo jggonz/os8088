@@ -1826,6 +1826,13 @@ dskw_rbody:
 .out:
     ret
 .isfile:
+    mov al, [dskw_raw+DSK_R_CZM]    ; **AND IF THE DIRECTORY DID NOT SAY, ASK
+    sub al, DSK_CZ_MARK             ; THE FILE** (SPEC.md 20.14.6). The hint is
+    cmp al, LZ_LZB                  ; a CACHE and a foreign tool drops it: a
+    jbe .sniffed                    ; file copied in by DOS reached the
+    call dskw_czsniff               ; application packed. A file that HAS one
+.sniffed:                           ; never gets here, so our own disks pay a
+                                    ; compare and no I/O at all
     ; --- ONE PLACEMENT FOR BOTH KINDS OF FILE (SPEC.md 20.14.2) -------------
     ; A compressed file's packed bytes are read HIGH in the caller's buffer,
     ; R = U - P above its base, and expanded downwards onto themselves - no
@@ -1916,9 +1923,14 @@ dskw_rbody:
     mov cx, [dskw_len]          ; the widget's scale, in BYTES (SPEC.md
     mov dx, [dskw_lenhi]        ; 12.8.1) - a 116KB module is a minute of
     call KERNEL_SEG:fpg_begin       ; frozen screen; dskw_read_x ends it
-    mov ax, [dskw_raw+DSK_R_CLUS]
-    mov [dskw_cur], ax
+%ifdef OS88_REDIR
+    cmp byte [dsk_vkind], DVK_FILE
+    je .fsdata                  ; **THE ONE THING THE TRANSPORT DECIDES**
+%endif                          ; (SPEC.md 20.14.6): who moves the bytes.
+    mov ax, [dskw_raw+DSK_R_CLUS]   ; Everything either side of this - the
+    mov [dskw_cur], ax              ; capacity refusal, the compressed
     call dskw_rdata             ; walk the chain into the caller's buffer
+.read_done:
     jc .out
     mov al, [dskw_raw+DSK_R_CZM]    ; ...and if it arrived COMPRESSED, expand
     sub al, DSK_CZ_MARK             ; it before anyone is told it is there.
@@ -1954,43 +1966,54 @@ dskw_rbody:
     push bp
     mov bp, FSV_STAT
     call drv_fs_call              ; SI = the name -> AX = the handle,
-    jc .fsfail                  ; DX:CX = size, BL = attributes
+    pop bp                      ; DX:CX = size, BL = attributes
+    jc .fsfail
     test bl, 0x18
     jnz .fsprot                 ; a folder or a volume label, as .isfile says
-    cmp dx, [dskw_caphi]        ; the 32-bit size against the 32-bit capacity
-    jb .fsfits                  ; BEFORE any data I/O, so FERR_BIG always
-    ja .fsbig                   ; leaves the destination untouched
-    cmp cx, [dskw_cap]
-    jbe .fsfits
-.fsbig:
-    mov ax, FERR_BIG
-    jmp short .fsfail
+    ; **AND THEN IT JOINS THE ONE FLOW** (SPEC.md 20.14.6). What stood here
+    ; was this arm's own copy of the capacity test, its own FERR_BIG and its
+    ; own fpg_begin - and none of that is about the TRANSPORT. Writing the
+    ; size where the FAT arm reads it, and the handle where the FAT arm keeps
+    ; its first cluster, leaves exactly one thing that differs: who moves the
+    ; bytes, which is the branch at the read below. The compressed placement,
+    ; the 32-bit capacity refusal and the expansion are had for nothing.
+    mov [dskw_raw+DSK_R_SIZE], cx
+    mov [dskw_raw+DSK_R_SIZE+2], dx
+    mov [dskw_cur], ax          ; the handle, where the chain walk keeps its
+                                ; cluster: this arm never reads that cell and
+                                ; the redirected read needs one word banked
+    mov word [dskw_raw+DSK_R_CZM], 0    ; NO DIRECTORY ENTRY HERE, so there is
+    mov word [dskw_raw+DSK_R_CZL], 0    ; no hint to inherit and no stale one
+    call dskw_czsniff                   ; to trust: the file's own header is
+    jmp .sniffed                        ; the only thing that can say
 .fsprot:
     mov ax, FERR_PROT
 .fsfail:
-    pop bp
     stc
     ret
-.fsfits:
-    call KERNEL_SEG:fpg_begin       ; DX:CX IS ALREADY THE SIZE - the reason
-                                ; the widget's scale is BYTES (SPEC.md 12.8.1):
-                                ; a redirected volume has no sectors to give
-                                ; it, so before this the one file operation
-                                ; that can take a MINUTE over a cable was the
-                                ; only one in the machine that reported
-                                ; nothing at all. The driver steps it from
-                                ; inside FSV_READ through OSAPI_FS_PROG, which
-                                ; is the other half: the kernel is not
-                                ; standing in a loop here, it is one far call
-                                ; deep and blind until the verb returns
-    mov bx, [dskw_src]          ; AX IS STILL THE HANDLE, which is the whole
-    mov dx, [dskw_seg]          ; reason the size test came first: every
-    mov cx, [dskw_cap]          ; register this loads is one the test needed,
-    mov di, [dskw_caphi]        ; and none of them is AX
-    mov bp, FSV_READ
+%ifdef OS88_REDIR
+.fsdata:                        ; the widget's scale is BYTES (SPEC.md 12.8.1)
+                                ; and fpg_begin above was handed them: a
+                                ; redirected volume has no sectors to give it,
+                                ; so before that the one file operation that
+                                ; can take a MINUTE over a cable was the only
+                                ; one in the machine reporting nothing at all.
+                                ; The driver steps it from inside FSV_READ
+                                ; through OSAPI_FS_PROG, which is the other
+                                ; half: the kernel is not standing in a loop
+                                ; here, it is one far call deep and blind
+                                ; until the verb returns
+    push bp
+    mov ax, [dskw_cur]          ; the handle FSV_STAT answered
+    mov bx, [dskw_src]          ; ...and the destination the placement above
+    mov dx, [dskw_seg]          ; has already moved up by R when the file is
+    mov cx, [dskw_len]          ; compressed, which is the whole point of
+    mov di, [dskw_lenhi]        ; joining: P bytes, where P is what the FILE
+    mov bp, FSV_READ            ; occupies and never what it becomes
     call drv_fs_call              ; -> DX:AX = bytes read
     pop bp
-    ret                         ; CF and DX:AX are already the answer
+    jmp short .read_done        ; ...and the expansion below is shared
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dskw_rdata - read [dskw_rem] sectors along the chain at [dskw_cur]
@@ -3137,11 +3160,30 @@ dskw_czstamp:
 .look:                          ; now outlives the cap
     mov es, [dskw_seg]
     mov bx, [dskw_src]
+    call dskw_czhdr
+.out:
+    pop es
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_czhdr - a file's first bytes -> the hint (SPEC.md 20.14.6)
+; in:  ES:BX = at least DSK_CZ_HDR bytes of the file, from its byte 0
+; out: nothing; the hint in dskw_raw is written only when the bytes say 'CZ'
+; clobbers: AX, CX, flags
+;
+; FACTORED OUT OF dskw_czstamp because the READ path needs the same judgement
+; from a different place (SPEC.md 20.14.6): the writer has the bytes in hand
+; and the reader has to go and get them, and what they do with them once they
+; have them is the same six stores. The CLEARING stays in the stamper - that
+; is the writer's half, and a reader that cleared would erase a hint it is
+; about to want.
+; -----------------------------------------------------------------------------
+dskw_czhdr:
     cmp word [es:bx], DSK_CZ_MAG
-    jne .out
+    jne .no
     mov al, [es:bx+2]
     cmp al, LZ_LZB
-    ja .out                     ; a format no decoder in this kernel has
+    ja .no                      ; a format no decoder in this kernel has
     mov cx, [es:bx+6]           ; the unpacked size, high word - of which the
                                 ; hint holds a BYTE, 16MB being past any
                                 ; volume here. A size that does not fit, or is
@@ -3155,8 +3197,82 @@ dskw_czstamp:
     mov [dskw_raw+DSK_R_CZL], cx
     add al, DSK_CZ_MARK             ; ...and the FORMAT rides in the mark
     mov [dskw_raw+DSK_R_CZM], al    ; (SPEC.md 20.14.1)
+.no:
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_czsniff - ask the FILE, when the directory did not say (SPEC.md 20.14.6)
+; in:  dskw_raw's entry, with the hint already read as ABSENT; [dskw_cur] =
+;      the driver's handle on a redirected volume
+; out: nothing; the hint in dskw_raw when the file's own header says 'CZ'
+; clobbers: flags
+;
+; THE HINT IS A CACHE AND THIS IS THE MISS PATH. `disk.inc` has said since it
+; was written that a foreign tool may drop those four bytes and that the read
+; path checks the file's own header too - and it did not: `dskw_czexp`
+; VALIDATES the hint, it never DISCOVERS compression, so a file copied in by
+; DOS, or onto a volume with no directory entry to carry a hint at all,
+; reached the application as packed bytes.
+;
+; **IT COSTS NO EXTRA `int 13h` ON A FILE THAT HAS A HINT**, because it is not
+; called for one - and on a file that has not, it costs none either: the peek
+; is a one-sector `disk_read`, SPEC.md 18.95's cache fills the slot to the end
+; of the track, and `dskw_rdata`'s first sector comes straight back out of it.
+; The one case that pays is a hintless file opened while `MEM_P_DIRW` has been
+; shed and stayed shed, and that is one sector, once, on OPEN and not on a
+; listing.
+;
+; A redirected volume reads its eight bytes through FSV_READAT instead, which
+; on the RAM disk is a memory copy - and it has no directory entry, so this is
+; the ONLY thing that can tell it.
+; -----------------------------------------------------------------------------
+dskw_czsniff:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    push ss
+    pop es                      ; ES = LOW_SEG: dsk_secbuf is disk.inc's mount
+    mov bx, dsk_secbuf          ; scratch and this runs on the UI task too
+%ifdef OS88_REDIR
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fat
+    push bp
+    push si
+    push di
+    mov ax, [dskw_cur]          ; the handle FSV_STAT answered, banked where
+    mov dx, ss                  ; the FAT arm keeps its first cluster
+    mov cx, DSK_CZ_HDR          ; DX:BX and never ES:BX (SPEC.md 51.8)
+    xor si, si                  ; DI:SI = offset 0, in 32 bits
+    xor di, di
+    mov bp, FSV_READAT
+    call drv_fs_call
+    pop di
+    pop si
+    pop bp
+    jc .out
+    cmp ax, DSK_CZ_HDR
+    jne .out                    ; a file shorter than the header is not one
+    push ss                     ; drv_fs_call restores ES, but say so rather
+    pop es                      ; than rely on it across a far call
+    mov bx, dsk_secbuf
+    jmp short .hdr
+.fat:
+%endif
+    mov ax, [dskw_raw+DSK_R_CLUS]
+    call dsk_clus2lba_x
+    jc .out
+    call dsk_rd1_x              ; ES:BX, through SPEC.md 18.95's cache - which
+    jc .out                     ; is what makes the read below free
+.hdr:
+    call dskw_czhdr
 .out:
     pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

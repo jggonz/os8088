@@ -38863,6 +38863,58 @@ routine both arms share, and a 32-bit remaining counter in place of a 16-bit
 end compare. The crossing itself is a byte loop: it is one symbol per 64KB of
 output, so a few hundred cycles once per segment against sixty bytes of
 kernel for ever.
+##### 20.14.6 The hint is a CACHE, so the read path has a MISS path now
+
+§20.14 has said since it was written that a foreign tool may drop those four
+directory bytes, that a missing hint reads as *"not compressed"*, and that
+trusting it would hand an application compressed bytes — *"so the read path
+checks the file's own `'CZ'` header too"*. **It did not.** `dskw_czexp`
+compares the file's own magic, but it is only *reached* once the hint has
+already said so: it **validates** the hint, it never **discovers**
+compression. Two things followed, and both were reported from the field:
+
+- a file copied onto one of our volumes by DOS, Windows or anything else
+  carries no hint, so `BROWSER.HTM` and every other packed file opened as
+  packed bytes;
+- a **redirected volume has no directory entry at all** to carry one, so
+  `README.TXT` copied to the RAM disk did the same — and that path was worse,
+  because `.fsread` never looked at a hint in the first place.
+
+`.o88` files kept working throughout, which is the tell: the LOADER has a peek
+of its own (`ld_run_body`'s `.peek`) and reads the file's own header, so
+packages were the one kind of file that never depended on the cache being
+warm.
+
+**`dskw_czsniff` is the miss path**, and `dskw_czhdr` — factored out of
+`dskw_czstamp` — is the judgement both ends now share: the writer has the
+bytes in hand, the reader has to go and get them, and what they do with them
+once they have them is the same six stores.
+
+**It costs no extra `int 13h` on a file that has a hint**, because it is not
+called for one: our own disks pay one byte compare. On a file that has not, it
+costs none either — the peek is a one-sector `disk_read`, §18.95's cache fills
+the slot to the end of the track, and `dskw_rdata`'s first sector comes
+straight back out of it. The single case that pays is a hintless file opened
+while `MEM_P_DIRW` has been shed *and stayed shed*: one sector, once, on OPEN
+and never on a listing. Two edge cases at once and the machine still works, a
+little slower.
+
+##### 20.14.6.1 …and the redirected arm joined the one flow to get it
+
+`.fsread` was a second implementation of the read: its own 32-bit capacity
+test, its own `FERR_BIG`, its own `fpg_begin`. **None of that is about the
+transport.** It writes `FSV_STAT`'s size where the FAT arm reads it, banks the
+handle in `[dskw_cur]` — the cell the chain walk keeps its first cluster in,
+which this arm never used — sniffs, and jumps into the shared flow. What is
+left that differs is one branch at the read itself, `.fsdata` against
+`dskw_rdata`, and the compressed placement, the capacity refusal and the
+expansion are had for nothing.
+
+So the RAM disk did not gain a *copy* of the decompressor's plumbing; it
+stopped carrying a copy of everything else. `tests/rdcz.py` is the gate and
+drives both halves on one boot: a packed file copied to the RAM disk, and the
+same file with its hint struck out of the FAT directory by hand.
+
 ### 20.15 `compress.inc` — the one thing on the machine that COMPRESSES
 
 Everything else in this system decodes. The loader expands a package, the file
