@@ -686,6 +686,21 @@ px_cast:
     mov bx, di
     shl bx, 1
     mov [px_wallh + bx], ax         ; the sprite z-buffer, unclipped
+    cmp byte [px_rung], PXR_TEX
+    jne .noq
+    ; TEXTURED: h is QUANTISED to the scaler set's heights (96.3) - over
+    ; 120 clamps to the tallest scaler, and every h aliases DOWN through
+    ; px_hq to the generated height the compose will call - so top/bot and
+    ; the rows the scaler stores are one arithmetic (tools/pxssim.py's
+    ; project() does the same under the Textured rung)
+    cmp ax, PXG_HMAX
+    jbe .hq
+    mov ax, PXG_HMAX
+.hq:
+    mov bx, ax
+    mov al, [px_hq + bx]            ; AH is 0: h <= 120
+    mov [px_h + di], al
+.noq:
     cmp ax, PX_ROWS
     jb .part
     mov byte [px_top + di], 0       ; taller than the view: all of it

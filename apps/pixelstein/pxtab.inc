@@ -209,10 +209,26 @@ PX_TAN_N    equ 1025
 ; --- px_fanN: column c's angle from the heading, signed, left negative -----
 ; A flat plane PX_FOCAL pixels away; column c of W at k pixels a column sits
 ; (c + 0.5) * k - W * k / 2 pixels from the axis.
+px_fan24:                          ; 24 columns at 8 px: 46.8 degrees
+    dw -256, -236, -215, -194, -172, -150, -128, -105, -82, -59, -35, -12
+    dw 12, 35, 59, 82, 105, 128, 150, 172, 194, 215, 236, 256
+px_fan28:                          ; 28 columns at 8 px: 53.8 degrees
+    dw -296, -276, -256, -236, -215, -194, -172, -150, -128, -105, -82, -59
+    dw -35, -12, 12, 35, 59, 82, 105, 128, 150, 172, 194, 215
+    dw 236, 256, 276, 296
 px_fan32:                          ; 32 columns at 8 px: 59.9 degrees
     dw -332, -314, -296, -276, -256, -236, -215, -194, -172, -150, -128, -105
     dw -82, -59, -35, -12, 12, 35, 59, 82, 105, 128, 150, 172
     dw 194, 215, 236, 256, 276, 296, 314, 332
+px_fan36:                          ; 36 columns at 8 px: 66.0 degrees
+    dw -367, -350, -332, -314, -296, -276, -256, -236, -215, -194, -172, -150
+    dw -128, -105, -82, -59, -35, -12, 12, 35, 59, 82, 105, 128
+    dw 150, 172, 194, 215, 236, 256, 276, 296, 314, 332, 350, 367
+px_fan40:                          ; 40 columns at 8 px: 71.7 degrees
+    dw -400, -384, -367, -350, -332, -314, -296, -276, -256, -236, -215, -194
+    dw -172, -150, -128, -105, -82, -59, -35, -12, 12, 35, 59, 82
+    dw 105, 128, 150, 172, 194, 215, 236, 256, 276, 296, 314, 332
+    dw 350, 367, 384, 400
 px_fan48:                          ; 48 columns at 4 px: 46.8 degrees
     dw -261, -251, -241, -231, -221, -210, -199, -189, -178, -167, -156, -145
     dw -133, -122, -111, -99, -88, -76, -64, -53, -41, -29, -18, -6
@@ -290,10 +306,14 @@ px_fan320:                          ; 320 columns at 1 px: 71.7 degrees
     dw 368, 370, 372, 374, 377, 379, 381, 383, 385, 387, 389, 391
     dw 393, 395, 397, 399, 401, 403, 405, 407
 
-PX_FAN_RUNGS equ 8
+PX_FAN_RUNGS equ 12
 px_fantab:                          ; the Size/Detail rows index this:
                                     ; word columns, word table, per rung
+    dw 24, px_fan24
+    dw 28, px_fan28
     dw 32, px_fan32
+    dw 36, px_fan36
+    dw 40, px_fan40
     dw 48, px_fan48
     dw 56, px_fan56
     dw 64, px_fan64

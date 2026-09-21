@@ -24,8 +24,9 @@ neighbours', while turning: a frame under 70% of them is a picture taken
 apart on the glass (the FLOOR against the MEDIAN, not a mean).
 
 **The frame.** Both pinned scenes - A the spawn's corridor, B the doorway
-turn - at the default (Flat Low res), at Flat Full 64 x 80 (FILED against
-96.1's 8.1 / 7.5 as a calibration of the table) and at Wire, each the
+turn - at the default (Textured Low res 64 x 80, wave 2), at Textured Full
+64 x 80 and the 48 x 80 Low res fallback beside it (96.1's fork), at the two
+Flat rungs and at Wire, each the
 median of --frames consecutive frames, MartyPC's cycle counter between two
 entries to px_frame_begin (tests/tankperf.py's method; the package's own
 px_ftime - cast, compose and present alone - is printed beside it), and
@@ -57,9 +58,15 @@ FLOOR = 70
 SAMPLES = 40
 PROMISE = {"a": 8.0, "b": 7.0}
 GATED = ("os8088_5150_cga_gla", "os8088_5150_herc_gla")
-RUNGS = (("flat", True, "Flat Low res (the default)"),
-         ("flat", False, "Flat Full 64x80 (filed vs 8.1 / 7.5)"),
-         ("wire", True, "Wire Low res"))
+# (rung, low res, Size, label): the default first, then what SPEC.md 96.1
+# reports beside it - Textured Full 64 x 80, the 48 x 80 Low res fallback
+# the fork names, the two Flat rungs and Wire
+RUNGS = (("tex", True, 64, "Textured Low res 64x80 (the default)"),
+         ("tex", False, 64, "Textured Full 64x80"),
+         ("tex", True, 48, "Textured Low res 48x80 (the fallback)"),
+         ("flat", True, 64, "Flat Low res 64x80"),
+         ("flat", False, 64, "Flat Full 64x80"),
+         ("wire", True, 64, "Wire Low res 64x80"))
 MODES = (("full", "full repaint"), ("turn", "turn"))
 WALK_FRAMES = 45                    # MartyPC video frames Up is held: ~13 ticks
 FAIL = []
@@ -213,8 +220,13 @@ def main():
 
         # --- the frame, both scenes, three rungs, two modes --------------------
         results = []
-        for rung, lowres, label in RUNGS:
-            g.pin(rung=rung, lowres=lowres)
+        texok = g.state()["texok"]
+        check(texok == 1, "every part the Textured rung needs was carved (px_texok %d)"
+              % texok)
+        for rung, lowres, size, label in RUNGS:
+            if rung == "tex" and not texok:
+                continue
+            g.pin(rung=rung, lowres=lowres, size=size)
             for scene in ("a", "b"):
                 for mode, mlabel in MODES:
                     m.advance(frames=30)        # let the loop drain what the
@@ -260,10 +272,10 @@ def main():
                           "%s, the host's model of 96.5's range says %d"
                           % (mlabel, rows, scene.upper(), want))
                     if a.shots and mode == "full":
-                        shot(m, os.path.join(a.shots, "wave1-%s-%s-%s-%s-%s.png"
+                        shot(m, os.path.join(a.shots, "wave2-%s-%s-%s-%s%d-%s.png"
                              % (a.machine, world, rung,
-                                "low" if lowres else "full", scene)))
-                    if gated and rung == "flat" and lowres and mode == "full":
+                                "low" if lowres else "full", size, scene)))
+                    if gated and rung == "tex" and lowres and size == 64 and mode == "full":
                         check(fps >= PROMISE[scene],
                               "the default reads %.2f fps on scene %s (full "
                               "repaint), >= %.1f (96.1's promise)"
@@ -271,9 +283,10 @@ def main():
         # --- the stages (--stages, fullscreen): where the residual lives -------
         stages = []
         if a.stages and not a.windowed:
-            for rung, lowres, label in RUNGS:       # Wire too: its compose is
-                                                    # the stage that differs
-                g.pin(rung=rung, lowres=lowres)
+            for rung, lowres, size, label in RUNGS:  # Wire too: its compose is
+                if rung == "tex" and not texok:      # the stage that differs
+                    continue
+                g.pin(rung=rung, lowres=lowres, size=size)
                 for mode, mlabel in MODES:
                     m.advance(frames=30)
                     m.run()

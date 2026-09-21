@@ -5293,17 +5293,20 @@ $(BUILD)/dotdel.o88: $(BUILD)/dotdel.bin tools/os88pkg.py $(PKGZSTAMP)
 # inside it. tools/os88index.py keys on the .bin rules below, so it lists
 # both, as it lists SKIES' two. Every %included file is a prerequisite, or
 # an edit to it is a stale build.
-PXSTEIN_GEN := apps/pixelstein/pxtab.inc apps/pixelstein/pxlev.inc
+PXSTEIN_GEN := apps/pixelstein/pxtab.inc apps/pixelstein/pxlev.inc \
+               apps/pixelstein/pxart.inc
 PXSTEIN_SRC := apps/pixelstein/pxstein.asm apps/pixelstein/pxicon.inc \
-               apps/pixelstein/pxlev.inc apps/os88api.inc \
-               apps/os88parts.inc apps/os88partsbody.inc
+               apps/pixelstein/pxlev.inc apps/pixelstein/pxart.inc \
+               apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc
 PXGAME_SRC  := apps/pixelstein/pxgame.asm apps/pixelstein/pxicon.inc \
                apps/pixelstein/pxcast.inc apps/pixelstein/pxgen.inc \
                apps/pixelstein/pxcomp.inc apps/pixelstein/pxrast.inc \
                apps/pixelstein/pxwin.inc apps/pixelstein/pxgame.inc \
+               apps/pixelstein/pxset.inc \
                $(PXSTEIN_GEN) apps/os88api.inc apps/os88ui.inc \
                apps/os88pit.inc
 PXSLEVELS   := $(wildcard apps/pixelstein/levels/*.txt)
+PXSART      := $(wildcard apps/pixelstein/art/*.png)
 
 $(BUILD)/pxstein.bin: $(PXSTEIN_SRC) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/pixelstein/ -o $@ apps/pixelstein/pxstein.asm
@@ -5326,14 +5329,24 @@ $(BUILD)/pxgame.bin: $(PXGAME_SRC) | $(BUILD)
 # 0, and the only other check was a soak row nothing in `make` runs. A
 # recipe that lets the run reach 128 ships a package that fails at LAUNCH.
 PXSTEIN_MAXZ := 57344
-$(BUILD)/pxstein.o88: $(BUILD)/pxstein.bin $(BUILD)/pxgame.bin $(BUILD)/pxslev.bin \
-                      tools/os88pkg.py tools/os88parts.py $(PKGZSTAMP)
+$(BUILD)/pxstein.o88: $(BUILD)/pxstein.bin $(BUILD)/pxgame.bin $(BUILD)/pxsart.bin \
+                      $(BUILD)/pxslev.bin tools/os88pkg.py tools/os88parts.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/pxstein.bin -o $@ \
-		--part $(BUILD)/pxgame.bin --part $(BUILD)/pxslev.bin
+		--part $(BUILD)/pxgame.bin --part $(BUILD)/pxslev.bin --part $(BUILD)/pxsart.bin
 	@test $(call FILESIZE,$@) -le $(PXSTEIN_MAXZ) || { \
 	    echo "pxstein: $@ is $(call FILESIZE,$@) bytes, over the $(PXSTEIN_MAXZ) SPEC.md 96.9 allows the disks"; \
 	    rm -f $@; exit 1; }
 	@python3 tools/os88parts.py --run $@ --max-run 128 || { rm -f $@; exit 1; }
+
+# the ART STREAM the lazy art part carries (SPEC.md 96.4): the fifteen wall
+# masters under apps/pixelstein/art/, two texels a byte, LZ4 - tools/pxsart.py
+# reads the committed PNGs with the stdlib and refuses a bad one in words
+# (--check: the sixteen colours only, no key, no alpha, and the losable
+# criterion). The include beside it (pxart.inc) is committed text held by
+# the pxs-gen fast row; the stream is built here because its bytes are the
+# masters' and nothing else
+$(BUILD)/pxsart.bin: tools/pxsart.py tools/os88lz.py tools/pxslevel.py $(PXSART) | $(BUILD)
+	python3 tools/pxsart.py --check --stream $@
 
 # the level STREAM the lazy level part carries (SPEC.md 96.9): one record a
 # level, run-length coded, with every level rule checked on the way - a
@@ -5353,8 +5366,9 @@ $(BUILD)/pxslev.bin: tools/pxslevel.py tools/pxssim.py tools/pxstab.py $(PXSLEVE
 pxsgen:
 	python3 tools/pxstab.py
 	python3 tools/pxslevel.py
-	rm -f $(BUILD)/pxslev.bin
-	$(MAKE) $(BUILD)/pxslev.bin
+	python3 tools/pxsart.py --check -o apps/pixelstein/pxart.inc
+	rm -f $(BUILD)/pxslev.bin $(BUILD)/pxsart.bin
+	$(MAKE) $(BUILD)/pxslev.bin $(BUILD)/pxsart.bin
 
 $(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/arkanoid/arkanoid.asm

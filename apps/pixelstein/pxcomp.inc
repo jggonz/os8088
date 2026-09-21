@@ -46,6 +46,25 @@
 px_compose:
     mov byte [px_r0], 0xFF
     mov byte [px_r1], 0
+    mov word [px_qp], PXG_Q         ; the draw queue, empty (96.3)
+%ifdef PXPROBE
+    mov word [px_pr_lad], 0         ; tests/pxsperf.py --probe's counters:
+    mov word [px_pr_skip], 0        ; ladder entries and columns skipped
+%endif                              ; this frame (the queue's length is
+                                    ; readable off px_qp in every build)
+    mov es, [px_hand + PXH_GEN]     ; ES = part 2 for the queue's entries
+    mov ax, [px_dbase]              ; the frame's column base, summed ONCE:
+    add ax, [px_cbias]              ; the page's base (Mode X alternates it)
+    mov [px_cbase], ax              ; and px_x0 - 256 - the band's first byte
+                                    ; (the Size in force, px_res_apply) and
+                                    ; the ladder's bias (pxgen.inc). THE
+                                    ; VARIABLE, not a constant: the presents
+                                    ; read px_x0 and the first cut wrote
+                                    ; every column at 8, so Size 48 drew 8
+                                    ; bytes left of where it was shown and
+                                    ; Size 80 spilled its last 8 columns into
+                                    ; the next row. Two cs: adds a column
+                                    ; were ~700 clk a frame (review, wave 2)
     push ds
     push bp
     mov ds, [px_dseg]
@@ -57,13 +76,15 @@ px_compose:
     je .b1
     shl di, 1                       ; two bytes a column at Low res
 .b1:
-    add di, [cs:px_dbase]
-    add di, PX_X0 - 256             ; the ladder's bias (pxgen.inc)
+    add di, [cs:px_cbase]
     mov [cs:px_cdi], di
     mov si, bx
     add si, [cs:px_pgofs]           ; this page's memory of the column
-    cmp byte [cs:px_rung], PXR_WIRE
-    je .wire
+    cmp byte [cs:px_rung], PXR_TEX  ; THE DEFAULT RUNG IS ASKED FIRST: one
+    je .tex                         ; 5-byte cs: compare a column for it,
+    cmp byte [cs:px_rung], PXR_WIRE ; ~1,300 clk a frame off the Textured
+    je .wire                        ; compose (review, wave 2); Flat pays the
+                                    ; two it paid, Wire one more
     ; --- FLAT --------------------------------------------------------------
     mov al, [cs:px_top + bx]        ; t
     mov ah, [cs:px_bot + bx]        ; b
@@ -85,6 +106,9 @@ px_compose:
     mov dl, [cs:px_side + bx]
     cmp dl, [cs:px_lside + si]
     jne .fchg
+%ifdef PXPROBE
+    inc word [cs:px_pr_skip]
+%endif
     jmp .next
 .fchg:
     mov [cs:px_ltop + si], al
@@ -284,7 +308,7 @@ px_compose:
     jne .wchg2
     cmp dh, [cs:px_ll1 + si]
     jne .wchg2
-    jmp short .next
+    jmp .next
 .wchg2:
     push si
     push dx
@@ -309,6 +333,154 @@ px_compose:
     mov [cs:px_ll1 + si], dh
     call px_wrun
     pop si
+    jmp .next                       ; (the first cut fell into the Textured
+                                    ; arm here and queued a wall per Wire
+                                    ; column)
+    ; --- TEXTURED (wave 2, 96.3) ------------------------------------------
+    ; The same memory as Flat's plus the texture column px_lu AND the
+    ; quantised height px_lh: a column whose six bytes stood is skipped
+    ; whole; one that moved has the ceiling and the floor put back over
+    ; what the wall gave up (the ladders, as Flat) and its wall QUEUED -
+    ; (scaler, SI, DI) into part 2 - for the driver, which the end of this
+    ; routine enters with ONE far call. A textured wall whose height moved
+    ; must be redrawn whole (its texels shift), so there is no two-ends arm
+    ; here. THE HEIGHT IS ITS OWN BYTE: top and bot clip to 0..79 for every
+    ; h >= 80, so eight scalers (80..120) share one (top, bot) and draw
+    ; eight different pictures - the five-byte skip of the first cut froze
+    ; the centre columns of a wall walked straight at, where mat, side and
+    ; u stand by construction, at whichever scaler they crossed 80 on
+.tex:
+    mov dl, [cs:px_u + bx]
+    mov cl, [cs:px_ush]             ; the texture column: u >> 3, or u >> 4
+    shr dl, cl                      ; on C160 (a column is a texel pair) -
+                                    ; the count is the backend's, set once
+    mov al, [cs:px_top + bx]        ; t
+    mov ah, [cs:px_bot + bx]        ; b
+    mov cl, [cs:px_ltop + si]       ; lt
+    mov ch, [cs:px_lbot + si]       ; lb
+    cmp al, cl
+    jne .tchg
+    cmp ah, ch
+    jne .tchg
+    mov dh, [cs:px_h + bx]
+    cmp dh, [cs:px_lh + si]
+    jne .tchg
+    mov dh, [cs:px_mat + bx]
+    cmp dh, [cs:px_lmat + si]
+    jne .tchg
+    mov dh, [cs:px_side + bx]
+    cmp dh, [cs:px_lside + si]
+    jne .tchg
+    cmp dl, [cs:px_lu + si]
+    jne .tchg
+%ifdef PXPROBE
+    inc word [cs:px_pr_skip]
+%endif
+    jmp .next
+.tchg:
+    mov [cs:px_ltop + si], al
+    mov [cs:px_lbot + si], ah
+    mov [cs:px_lu + si], dl
+    mov dl, [cs:px_h + bx]
+    mov [cs:px_lh + si], dl
+    mov dl, [cs:px_mat + bx]
+    mov [cs:px_lmat + si], dl
+    mov dl, [cs:px_side + bx]
+    mov [cs:px_lside + si], dl
+    mov bl, al                      ; the dirty rows: min(t, lt)..max(b, lb)
+    cmp bl, cl
+    jbe .t1
+    mov bl, cl
+.t1:
+    cmp bl, [cs:px_r0]
+    jae .t2
+    mov [cs:px_r0], bl
+.t2:
+    mov bl, ah
+    cmp bl, ch
+    jae .t3
+    mov bl, ch
+.t3:
+    cmp bl, [cs:px_r1]
+    jbe .t4
+    mov [cs:px_r1], bl
+.t4:
+    ; THE ONE-ROW END TAKES px_pix, NOT THE LADDER (px_wrun's idiom, 96.5):
+    ; the generated heights step by 2 up to 80, so top = (80 - h) >> 1
+    ; moves by exactly ONE row for the smallest change in h, and a column
+    ; whose wall moved without crossing the clip has an end of one row at
+    ; either side - the MODAL end of a turn under Textured, not the rare one.
+    ; A ladder entry is ~280 clk before its first store and px_pix ~150 with
+    ; the store in it: ~158 an end, two ends x 32 columns = ~10,000 clk =
+    ; 2.1 ms of the 88.6 ms turn frame (review, wave 2)
+    cmp al, cl                      ; the wall shrank from the top: the
+    jbe .tnoceil                    ; ceiling back over [lt, t)
+    push ax
+    push cx
+    sub al, cl
+    xchg al, cl                     ; AL = lt, CL = t - lt
+    mov bx, [cs:px_inkc]
+    cmp cl, 1
+    je .tc1
+    xor ch, ch
+    call px_lad
+    jmp short .tc0
+.tc1:
+    call px_pix                     ; one row: no ladder entry
+.tc0:
+    pop cx
+    pop ax
+.tnoceil:
+    cmp ah, ch                      ; ...and from the bottom: the floor
+    jae .tnofloor                   ; back over (b, lb]
+    mov cl, ch
+    sub cl, ah
+    mov al, ah
+    inc al
+    mov bx, [cs:px_inkf]
+    cmp cl, 1
+    je .tf1
+    xor ch, ch
+    call px_lad
+    jmp short .tnofloor
+.tf1:
+    call px_pix                     ; one row: no ladder entry
+.tnofloor:
+    ; the wall: a queue entry - the scaler of this column's quantised
+    ; height in this resolution's directory, SI = (mat - 1) * 2048 + side *
+    ; 1024 + column * 32 into part 3 (96.4's layout), DI = the column's
+    ; base byte (px_cdi is biased by -256 for the ladders)
+    mov bl, [cs:px_h + bp]
+    xor bh, bh
+    shl bx, 1
+    add bx, [cs:px_gsc]
+    mov ax, [cs:bx]
+    mov di, [cs:px_qp]
+    mov [es:di], ax
+    mov al, [cs:px_mat + bp]
+    dec al                          ; material 1 is slot 0
+    mov ah, al
+    shl ah, 1
+    shl ah, 1
+    shl ah, 1                       ; (mat - 1) << 11
+    mov al, [cs:px_side + bp]
+    shl al, 1
+    shl al, 1
+    or ah, al                       ; + side << 10
+    xor al, al
+    mov si, bp                      ; SI AGAIN: px_lad clobbered it, and the
+    add si, [cs:px_pgofs]           ; first cut read another column's texture
+    mov bl, [cs:px_lu + si]         ; the column, banked above
+    xor bh, bh
+    mov cl, 5
+    shl bx, cl                      ; column * 32 (per COLUMN, not per pixel)
+    add ax, bx
+    mov [es:di + 2], ax
+    mov ax, [cs:px_cdi]
+    add ax, 256
+    mov [es:di + 4], ax
+    add di, PXG_QSZ
+    mov [cs:px_qp], di
 .next:
     mov bx, bp
     inc bx
@@ -316,6 +488,14 @@ px_compose:
     jae .done
     jmp .col
 .done:
+    ; THE ONE FAR CALL (96.3): every queued wall drawn by the driver in part
+    ; 2, DS still the destination, ES the textures once it is in there
+    mov di, [cs:px_qp]
+    cmp di, PXG_Q
+    je .noq
+    mov [es:PXG_QEND], di
+    call far [cs:px_drvp]
+.noq:
     pop bp
     pop ds
     ret
@@ -521,8 +701,9 @@ px_ground:
 ;                predicate: the next frame then composes against an
 ;                unchanged memory and writes what MOVED - nothing, on a
 ;                still eye. The gates poke these SEVEN arrays (pxslib's
-;                force_all; not px_lside, which the Flat skip never reaches
-;                once lmat mismatches) when they want a full repaint measured
+;                force_all; not px_lside, px_lu or px_lh, which neither
+;                skip reaches once lmat mismatches) when they want a full
+;                repaint measured
 ; preserves every register
 ; -----------------------------------------------------------------------------
 px_force_all:

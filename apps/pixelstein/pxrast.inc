@@ -153,10 +153,18 @@ px_go_fsx:
     mov bx, [px_win]
     xor cx, cx                      ; no worker kept: this loop IS the game
     call OSAPI_FSX_RUN
+    inc word [px_brn]               ; brackets left: the gates wait on this
+                                    ; word, because px_inbr clears at the
+                                    ; TOP of the exit path and 0.9 s of
+                                    ; regeneration and a composed frame
+                                    ; follow it (pxslib.leave_fsx)
     mov byte [px_fsx], 0            ; whether it ran or was refused (a
     mov byte [px_inbr], 0           ; refused run never reached px_fsx_main,
     mov byte [px_fsxq], 0           ; so the shadow is still the window's)
     mov byte [px_lined], 1
+    cmp byte [px_cfgdirty], 0       ; a V key inside the bracket: the file
+    je .out                         ; is written now, on the desktop
+    call px_set_save
 .out:
     pop cx
     pop bx
@@ -210,6 +218,10 @@ px_fsx_main:
     mov byte [px_fsxq], 0           ; the thawed worker draws the bracket's
                                     ; geometry over the desktop
     call px_r_setup_win             ; ...and the WINDOW'S frame composed here
+    call px_auto_start              ; (Auto re-seated at the window's start:
+                                    ; a window is one rung under the bracket
+                                    ; on an 8086, 96.8; a pinned Detail is
+                                    ; untouched by it)
     call px_frame_begin             ; too, before that repaint blits the
                                     ; shadow: it held the bracket's bytes in
                                     ; the bracket's inks, and W_PAINT would
@@ -223,8 +235,19 @@ px_fsx_main:
 ; clobbers everything
 ; -----------------------------------------------------------------------------
 px_r_setup:
+    mov byte [px_lastx0], 0xFF      ; a new backend: px_apply clears and
+                                    ; blanks for whatever band it applies
     call px_ink_build
-    call px_res_apply
+    call px_res_apply               ; ...which builds the device-row table
+                                    ; too, biased by the band's first byte
+                                    ; (px_devrows). THE SCALER SET AND THE
+                                    ; BYTE SET ARE NOT BUILT HERE: px_apply
+                                    ; builds them when the rung in force is
+                                    ; Textured (pxgen.inc's px_tex_setup) -
+                                    ; behind the black in a bracket, on the
+                                    ; worker's first Textured frame in a
+                                    ; window, and never for a rung that has
+                                    ; no use for them
     mov word [px_pgofs], 0
     mov byte [px_page], 0
     mov al, [px_back]
@@ -234,7 +257,6 @@ px_r_setup:
     mov [px_dseg], ax               ; copies rows
     mov word [px_dbase], 0
     call px_shadow_clear
-    call px_devrows
     mov al, [px_back]
     cmp al, PXB_C160
     jne .nc160
@@ -272,8 +294,10 @@ px_r_setup_win:
     push di
     push es
     mov byte [px_back], PXB_WIN1
+    mov byte [px_lastx0], 0xFF      ; (px_r_setup's reason)
     call px_ink_build
-    call px_res_apply
+    call px_res_apply               ; (the sets, if the window's rung wants
+                                    ; them, are px_apply's - above)
     mov word [px_pgofs], 0
     mov byte [px_page], 0
     mov ax, [px_shseg]
@@ -290,13 +314,23 @@ px_r_setup_win:
     pop ax
     ret
 
-; px_shadow_clear - the whole shadow claim to zero (black on every backend)
+; px_shadow_clear - THE PICTURE's bytes of the shadow to zero (black on every
+;                   backend): PX_ROWS x PX_STRIDE = 6,400 of the 16 KB
+;                   claim, which is every byte a compose writes or a present
+;                   reads today (the rest is reserved for Rows 100 and wave
+;                   5's WIN4 strips and holds nothing, 96.9); the first cut
+;                   cleared the claim, 8,192 words for 3,200 of picture, ~26
+;                   ms of it dead inside a keypress (review, wave 2). Nothing
+;                   on Mode X, which composes into its pages and has
+;                   px_band_blank for the margins
 px_shadow_clear:
     cmp word [px_shseg], 0
     je .out                         ; NO SHADOW: a refused claim leaves the
-    mov es, [px_shseg]              ; word 0, and 8,192 words through ES = 0
-    xor di, di                      ; is the IVT, the BIOS data area and the
-    mov cx, PX_SHKB * 1024 / 2      ; kernel's low 16 KB (caught in review)
+    cmp byte [px_back], PXB_MODEX   ; word 0, and 3,200 words through ES = 0
+    je .out                         ; is the IVT, the BIOS data area and the
+    mov es, [px_shseg]              ; kernel's low bytes (caught in review)
+    xor di, di
+    mov cx, PX_ROWS * PX_STRIDE / 2
     xor ax, ax
     cld
     rep stosw
@@ -304,28 +338,193 @@ px_shadow_clear:
     ret
 
 ; -----------------------------------------------------------------------------
-; px_res_apply - the resolution's four words (96.1): columns, bytes a column,
-;                the fan, the ladder
+; px_res_apply - the Size and the Resolution to the frame's words (96.1,
+;                96.3): the band's bytes and its first byte, the compose's
+;                column bias, the columns, the bytes a column, u's shift to
+;                a texture column, the fan, the ladder, the scaler
+;                directory - and in a bracket the device-row table, which
+;                carries the band's first byte in every entry
+; in:  [px_sizeix] the Size row's pick, [px_lowres], [px_back], [px_inbr]
+; clobbers AX, BX, CX, DX, SI, DI
+;
+; WINDOWED THE BAND IS 64 BYTES AT MOST: the window's frame is fixed at
+; PX_WINW (96.3), so Size 72 and 80 are the bracket's and a window shows 64
+; and says so on its text line. The picture is centred in the 80-byte row
+; on every byte backend, so x0 = (80 - Size) / 2 - ONE word for the writer
+; and the readers alike: px_cbias is what px_compose adds to every column's
+; base (x0 less the ladders' 256), px_x0 what the windowed blit reads, and
+; px_devoff carries x0 (2 x0 on C160) in every device row so the bracket's
+; present loop reads nothing of it (the first cut's present re-read x0, Size
+; and the advance from memory on every row: +5,800 clk a frame over wave 1's)
 ; -----------------------------------------------------------------------------
 px_res_apply:
-    mov byte [px_cols], 64
+    mov bl, [px_sizeix]
+    xor bh, bh
+    mov al, [px_sizes + bx]
+    cmp byte [px_back], PXB_WIN1
+    jne .sz
+    cmp al, PX_BAND
+    jbe .sz
+    mov al, PX_BAND
+.sz:
+    mov [px_size], al
+    mov ah, PX_STRIDE
+    sub ah, al
+    mov [px_sadv], ah               ; the present's row advance past the band
+    shr ah, 1
+    mov [px_x0], ah
+    mov bl, ah
+    xor bh, bh
+    sub bx, 256
+    mov [px_cbias], bx              ; x0 - 256, the compose's bias (pxcomp.inc)
+    mov byte [px_ush], 3            ; a texture column is u >> 3...
+    cmp byte [px_back], PXB_C160
+    jne .ush
+    mov byte [px_ush], 4            ; ...u >> 4 on C160: a column is a pair
+.ush:
     mov byte [px_bpc], 1
-    mov word [px_fanp], px_fan64
     mov word [px_ladp], px_ladb
+    mov word [px_gsc], px_sctab
     cmp byte [px_lowres], 0
-    je .out
-    mov byte [px_cols], 32
+    je .cols
+    shr al, 1                       ; Low res: half the rays, two bytes each
     mov byte [px_bpc], 2
-    mov word [px_fanp], px_fan32
     mov word [px_ladp], px_ladw
+    mov word [px_gsc], px_sctab + PXG_DIRSZ
+.cols:
+    mov [px_cols], al
+    ; the fan of that many columns, off px_fantab (pxtab.inc): word columns,
+    ; word table, PX_FAN_RUNGS rows
+    xor ah, ah
+    mov si, px_fantab
+    mov cx, PX_FAN_RUNGS
+.fan:
+    cmp [si], ax
+    je .found
+    add si, 4
+    loop .fan
+    mov si, px_fantab + 4 * 2       ; (unreachable: every size has a fan;
+                                    ; 32 columns if one did not)
+.found:
+    mov ax, [si + 2]
+    mov [px_fanp], ax
+    cmp byte [px_inbr], 0           ; in a bracket the device rows carry x0:
+    je .out                         ; rebuilt with the Size (px_devrows) on
+    cmp byte [px_back], PXB_MODEX   ; the shadow backends - Mode X composes
+    je .out                         ; into its pages and has no row table
+    call px_devrows
 .out:
+    ret
+
+px_sizes:   db 48, 56, 64, 72, 80   ; the Size row, PX_NSIZES rungs
+PX_NSIZES   equ 5
+PX_NSIZEW   equ 3                   ; ...of which a WINDOW cycles the first
+                                    ; three (48, 56, 64): 72 and 80 are the
+                                    ; bracket's, the items say so (96.3)
+
+; -----------------------------------------------------------------------------
+; px_band_blank - in a bracket, the 80 device rows OUTSIDE the band to black:
+;                 the mode set's clear was the whole screen's, so a Size
+;                 picked narrower inside the bracket would leave the wider
+;                 band's edges lit for the rest of the session (the present
+;                 copies Size bytes at x0 and nothing else). Once per Size
+;                 pick (px_apply), ~80 x 2 rep stores: cold. Both Mode X
+;                 pages, since the compose alternates them; the C160 cell
+;                 outside the band is put back to the retime's own black
+;                 (the half block over attribute 0, px_c160_mode)
+; clobbers AX, BX, CX, DX, SI, DI, ES
+; -----------------------------------------------------------------------------
+px_band_blank:
+    cmp byte [px_inbr], 0
+    je .out
+    mov es, [px_fsi + FSI_SEG]
+    cld
+    mov dl, [px_x0]                 ; DL = the left margin's bytes
+    mov dh, [px_sadv]
+    sub dh, dl                      ; DH = the right's (80 - x0 - Size)
+    mov al, [px_back]
+    cmp al, PXB_MODEX
+    je .modex
+    cmp al, PXB_C160
+    je .c160
+    mov bx, px_devoff               ; CGA4 / Hercules: the row table, each
+    mov si, PX_ROWS                 ; entry the band's first byte
+.row:
+    mov di, [bx]
+    mov cl, dl
+    xor ch, ch
+    sub di, cx                      ; the row's byte 0
+    xor ax, ax
+    rep stosb                       ; [0, x0)
+    mov cl, [px_size]
+    add di, cx                      ; past the band
+    mov cl, dh
+    rep stosb                       ; [x0 + Size, 80)
+    inc bx
+    inc bx
+    dec si
+    jnz .row
+.out:
+    ret
+.c160:
+    mov bx, px_devoff               ; the entry is the band's ATTRIBUTE byte,
+    mov si, PX_ROWS                 ; two device bytes a cell
+.trow:
+    mov di, [bx]
+    mov cl, dl
+    xor ch, ch
+    sub di, cx
+    sub di, cx
+    dec di                          ; cell 0's character byte
+    mov ax, 0x00DE                  ; the half block, black on black
+    rep stosw
+    mov cl, [px_size]
+    add di, cx
+    add di, cx
+    mov cl, dh
+    rep stosw
+    inc bx
+    inc bx
+    dec si
+    jnz .trow
+    ret
+.modex:
+    mov di, PX_MXROW0 * PX_STRIDE   ; both pages: the view rows, 80 a row,
+    mov bx, 2                       ; map mask 0Fh (px_r_setup)
+.page:
+    mov si, PX_ROWS
+.mrow:
+    mov cl, dl
+    xor ch, ch
+    xor ax, ax
+    rep stosb
+    mov cl, [px_size]
+    add di, cx
+    mov cl, dh
+    rep stosb                       ; ...and DI is the next row's byte 0
+    dec si
+    jnz .mrow
+    add di, 19200 - PX_ROWS * PX_STRIDE
+    dec bx
+    jnz .page
     ret
 
 ; -----------------------------------------------------------------------------
 ; px_devrows - the device offset of each of the 80 view rows in the mode the
-;              bracket set (apps/skies' cs_devrows, the three banked arms)
+;              bracket set (apps/skies' cs_devrows, the three banked arms),
+;              PLUS THE BAND'S FIRST BYTE - x0, or 2 x0 on C160, whose cell
+;              is two device bytes - so the present's row loop reads the
+;              table and nothing else (px_res_apply rebuilds it with the
+;              Size). clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 px_devrows:
+    mov cl, [px_x0]
+    xor ch, ch
+    mov si, cx                      ; SI = x0, the bias of every entry
+    cmp byte [px_back], PXB_C160
+    jne .bias
+    shl si, 1                       ; two device bytes a cell
+.bias:
     mov di, px_devoff
     xor bx, bx                      ; BX = the view row
 .row:
@@ -365,6 +564,7 @@ px_devrows:
     mov cl, 13
     shl dx, cl                      ; bank * 0x2000
     add ax, dx
+    add ax, si                      ; + the band's first byte
     mov [di], ax
     inc di
     inc di
@@ -613,6 +813,19 @@ px_c160_d:   db 8, 8, 8, 3, 8, 8, 8, 8, 8, 1, 8, 8, 8, 8, 6, 8
 ; (apps/skies' cs_blit.expand: the attribute is the odd byte and the
 ; character bytes were written once by the retime); Mode X shows the page
 ; it drew and the next frame takes the other.
+;
+; THE ROW LOOP READS THE TABLE AND NOTHING ELSE: the band's first byte is in
+; every px_devoff entry (px_devrows), the words a row are in AX and the
+; advance past the band in DX, loaded once - the first cut of the Size row
+; re-read x0, Size and the advance from memory on every row, five
+; cs:-prefixed instructions that cost 5,800 clk a frame (107,026 against
+; wave 1's 101,200 on the same 64 x 80 band, review). MEASURED 99,24x clk =
+; 20.8 ms on every rung and scene of the 64-byte band (docs/reports/PXS-
+; FRAME-2026-09-21.md): the same 5,120 bytes every frame, and a row whose
+; median frame caught IRQ0 inside this stage reads ~6,000 more - the tick's
+; own cost, which px_frame_end never subtracts (only px_twait's waits are) -
+; not a property of the copy. The first take of this comment called that
+; band "the CGA's wait states at the scan phase" (review, wave 2)
 ; -----------------------------------------------------------------------------
 px_present:
     mov al, [px_back]
@@ -625,13 +838,20 @@ px_present:
     mov bx, ax
     shl bx, 1
     mov si, [px_row80 + bx]
-    add si, PX_X0                   ; DS:SI = the first dirty row's band
-    add bx, px_devoff               ; CS:BX = its device row
+    mov cl, [px_x0]
+    xor ch, ch
+    add si, cx                      ; DS:SI = the first dirty row's band
+    add bx, px_devoff               ; CS:BX = its device row (band-biased)
     mov cl, [px_r1]
     sub cl, al
     inc cl
     xor ch, ch
     mov bp, cx                      ; BP = rows (a counter, never [bp])
+    mov dl, [px_sadv]
+    xor dh, dh                      ; DX = the advance to the next row's band
+    mov al, [px_size]
+    xor ah, ah
+    shr ax, 1                       ; AX = the band's words
     mov es, [px_fsi + FSI_SEG]
     push ds
     mov ds, [cs:px_shseg]
@@ -640,10 +860,9 @@ px_present:
     je .expand
 .row:
     mov di, [cs:bx]
-    add di, PX_X0
-    mov cx, PX_BAND / 2
-    rep movsw
-    add si, PX_STRIDE - PX_BAND
+    mov cx, ax
+    rep movsw                       ; Size bytes: the band (96.3)
+    add si, dx                      ; ...to the next row's band
     inc bx
     inc bx
     dec bp
@@ -651,18 +870,20 @@ px_present:
     pop ds
     ret
 .expand:
-    mov di, [cs:bx]
-    add di, PX_X0 * 2
-    mov cx, PX_BAND / 2
+    mov di, [cs:bx]                 ; (two device bytes a shadow byte, and
+    mov cl, [cs:px_size]            ; the table carries 2 x0)
+    xor ch, ch
+    shr cx, 1
 .e:
-    lodsw
-    stosb
-    inc di
+    lodsw                           ; (AX is the data here, so the count is
+    stosb                           ; re-read a row: ~35 clk A ROW, ~2,800 a
+    inc di                          ; frame, against the 220,000 the expand
+                                    ; itself costs)
     xchg al, ah
     stosb
     inc di
     loop .e
-    add si, PX_STRIDE - PX_BAND
+    add si, dx
     inc bx
     inc bx
     dec bp

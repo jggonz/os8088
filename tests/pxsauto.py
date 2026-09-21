@@ -13,17 +13,17 @@ BEFORE THE FIRST WAIT, because a still window composes nothing by
 construction (96.8's idle predicate) and the first cut waited for a frame
 that could never come. The legs, in the order that proves each on its own:
 
-  (a) Auto on the 8086 STARTS at position 1 - Flat Low res, wave 1's floor -
-      and the line says "Detail: Flat  Low res";
+  (a) Auto on the 8086 STARTS a WINDOW at position 2 - Flat Full, one rung
+      under the bracket's Textured Low res (PLAN 15; the ladder since wave
+      2 is Textured Full, Textured Low res, Flat Full, Flat Low res) - and
+      the line says "Detail: Flat  Size 64  Full res";
   (c) seventy frames poked FAST (1,000 units, far under half the budget) do
       not climb: px_apos stays at the tier's start. The first cut climbed
       to Flat Full on the 64th, a rung whose full repaint is 6.86 fps
       (the review's blocker);
-  (r) Detail > Full res under Auto RE-SEATS the ladder at position 0, Flat
-      Full, and banks it as the new ceiling (px_oncmd's arm, 96.8) - the
-      only way an 8086 gets a rung to step down FROM in wave 1, since its
-      start is the floor; seventy fast frames at 0 stay there (the ceiling
-      again, and a step up from 0 would read 255);
+  (r) Detail > Full res under Auto RE-SEATS the ladder within its rung -
+      position (apos & ~1) | res, so 2 here - and banks it as the ceiling
+      (px_oncmd's arm, 96.8); seventy fast frames at 2 stay there;
   (b0) THE NEGATIVE CONTROL: the turn key released and px_force poked at
       every stop instead - the machine's OWN frame on a still eye, the cast
       and a compose that writes nothing, ~65 ms at Flat Full - nine of them
@@ -36,7 +36,7 @@ that could never come. The legs, in the order that proves each on its own:
       the poke. The frames from here on are these forced still-eye frames;
       px_ftime is what is judged, so what the frame drew no longer matters;
   (b) eight frames poked SLOW (200,000 units, over the 149,165 budget) step
-      DOWN exactly once, to position 1 - Flat Low res, the floor; the step
+      DOWN exactly once, to position 3 - Flat Low res, the floor; the step
       banked a hold-down of PX_AHOLD ticks (read back against the tick);
       the line reads "Detail: Flat  Low res" on the next drawn frame and is
       not redrawn after (announced ONCE); twelve more slow frames leave the
@@ -47,7 +47,7 @@ that could never come. The legs, in the order that proves each on its own:
       sixty-fifth - the one whose compare rolls px_ahit over at 64 with the
       hold live - do NOT step up; then COLLAPSED to a tick ago, the step up
       comes at the next rollover (within 65 more fast frames), lands at
-      position 0 and nowhere else; and seventy more fast frames stay there.
+      position 2 and nowhere else; and seventy more fast frames stay there.
       The clock is the KERNEL's tick word (pxslib.kticks: what
       OSAPI_GET_TICKS answers and px_ahold is written in), ~200 ticks
       behind the BIOS count; a first cut read the BIOS one and saw a hold
@@ -74,8 +74,12 @@ FAST = 1000                     # 0.8 ms: under half the budget by any margin
 SLOW = 200000                   # 167.6 ms: over the 125.0 ms budget
 BUDGET = 149165                 # PX_BUDGET (pxgame.asm), 838 ns units
 AHOLD = 182                     # PX_AHOLD: ticks of hold-down after a step down
-POS_TOP, POS_FLOOR = 0, 1       # wave 1's ladder: Flat Full, Flat Low res
-POS_START = 1                   # ...and where the 8086 starts: the floor
+# the ladder since wave 2 (SPEC.md 96.8): 0 Textured Full, 1 Textured Low res,
+# 2 Flat Full, 3 Flat Low res. An 8086 WINDOW starts at 2 (PLAN 15: one rung
+# under the bracket's Textured Low res), which is the ceiling a step up may
+# reach, and 3 is the floor
+POS_TOP, POS_FLOOR = 2, 3
+POS_START = 2
 FAIL = []
 
 
@@ -158,15 +162,15 @@ def main():
         # --- (a) the start ----------------------------------------------------
         st = g.state()
         check(st["detail"] == pxslib.PXD["auto"], "Detail is Auto (%d)" % st["detail"])
-        check(st["apos"] == POS_START and st["rung"] == pxslib.PXR["flat"] and st["lowres"] == 1,
-              "Auto starts the 8086 at position 1, Flat Low res (pos %d, rung %d, lowres %d)"
+        check(st["apos"] == POS_START and st["rung"] == pxslib.PXR["flat"] and st["lowres"] == 0,
+              "Auto starts the 8086's window at position 2, Flat Full (pos %d, rung %d, lowres %d)"
               % (st["apos"], st["rung"], st["lowres"]))
         check(g.byte("px_astart") == POS_START, "px_astart banks the start (%d)" % g.byte("px_astart"))
         m.pause()
         t = line(g)
         m.run()
         print("   the line: %r" % t)
-        check(t.startswith("Detail: Flat  Low res"), "the text line says Flat Low res")
+        check(t.startswith("Detail: Flat  Size 64  Full res"), "the text line says Flat Full res")
 
         m.bp_exec(g.addr("px_auto_frame"))
 
@@ -174,7 +178,7 @@ def main():
         moved = []
         frames(g, 70, FAST, watch=lambda gg: moved.append(gg.byte("px_apos")) or True)
         check(all(p == POS_START for p in moved),
-              "70 fast frames never left position 1 (saw %s)" % sorted(set(moved)))
+              "70 fast frames never left position 2 (saw %s)" % sorted(set(moved)))
         check(g.byte("px_ahit") < 64, "px_ahit rolled over at 64 without a step (%d)" % g.byte("px_ahit"))
 
         # --- (r) Detail > Full res under Auto re-seats the ladder at the top ------
@@ -186,16 +190,16 @@ def main():
         st = g.state()
         check(st["apos"] == POS_TOP and st["rung"] == pxslib.PXR["flat"] and st["lowres"] == 0
               and st["cols"] == 64 and st["detail"] == pxslib.PXD["auto"],
-              "Detail > Full res under Auto re-seated position 0, Flat Full, 64 cols "
+              "Detail > Full res under Auto re-seated position 2, Flat Full, 64 cols "
               "(pos %d, rung %d, lowres %d, cols %d)" % (st["apos"], st["rung"], st["lowres"], st["cols"]))
         check(g.byte("px_astart") == POS_TOP, "...and banked it as the ceiling (%d)" % g.byte("px_astart"))
         t = line(g)
         print("   the line: %r" % t)
-        check(t.startswith("Detail: Flat  Full res"), "the text line says Flat Full res")
+        check(t.startswith("Detail: Flat  Size 64  Full res"), "the text line says Flat Full res")
         top0 = []
         frames(g, 70, FAST, watch=lambda gg: top0.append(gg.byte("px_apos")) or True)
         check(all(p == POS_TOP for p in top0),
-              "70 fast frames at the top stay at position 0 (saw %s)" % sorted(set(top0)))
+              "70 fast frames at the top stay at position 2 (saw %s)" % sorted(set(top0)))
 
         # --- (b0) the negative control: a still eye, nothing poked, nothing steps
         # the key up, the eye still: from here every frame is owed by a poked
@@ -233,12 +237,12 @@ def main():
         frames(g, 1, slow, force=True)
         t = line(g)
         print("   the line: %r" % t)
-        check(t.startswith("Detail: Flat  Low res"), "the line announced Flat Low res")
+        check(t.startswith("Detail: Flat  Size 64  Low res"), "the line announced Flat Low res")
         relit = []
         frames(g, 12, slow, watch=lambda gg: relit.append(gg.byte("px_lined")) or True, force=True)
         check(not any(relit), "the announcement was made once (px_lined %s)" % relit)
         check(g.byte("px_apos") == POS_FLOOR, "twelve more slow frames stay on the floor (%d) "
-              "- no Wire under it" % g.byte("px_apos"))
+              "- the floor, no Wire under it" % g.byte("px_apos"))
 
         # --- (d) the hold-down, both edges; the step back; the ceiling again ------
         # a stop costs the guest clock (78 stops spent 321 ticks in the first
@@ -268,7 +272,7 @@ def main():
         top = []
         frames(g, 70, FAST, watch=lambda gg: top.append(gg.byte("px_apos")) or True, force=True)
         check(all(p == POS_TOP for p in top),
-              "70 more fast frames stay at position 0 (saw %s)" % sorted(set(top)))
+              "70 more fast frames stay at position 2 (saw %s)" % sorted(set(top)))
         m.bp_exec()
         m.run()
 

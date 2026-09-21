@@ -39,7 +39,10 @@ THE CELL BYTE (96.1): high nibble = material 1..15 (0 = open), low nibble =
 flags - bit 0 SOLID, bit 1 DOOR, bit 2 DOOR_EW (the slab runs east-west, so
 the corridor through it runs north-south), bit 3 SPECIAL (the elevator switch
 on a solid cell; a secret door on a door cell). Material 15 is the jamb and is
-never written in a level: the engine paints it on the two cells beside a door.
+never written in a level: the engine decides it AT HIT TIME (96.2.4) - a
+solid face reached through a door cell takes it, and nothing beside the
+door is painted with it (the "two cells beside a door" rule of the first
+draft is withdrawn, PIXELSTEIN-PLAN 13's fifth graft).
 """
 import argparse
 import os

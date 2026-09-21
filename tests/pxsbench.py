@@ -277,7 +277,7 @@ def main():
           "phase, one instruction; D 20)"
           % (us[22][0] * HZ / 1e6 / ROWS, (us[22][0] - us[6][0]) * HZ / 1e6 / ROWS))
     print("     ...dual-phase word load%6.1f cyc   (+%.1f a texel: the named fallback "
-          "from the rotate, part 4 doubled)"
+          "from the rotate, part 3 doubled)"
           % (us[19][0] * HZ / 1e6 / ROWS, (us[19][0] - us[6][0]) * HZ / 1e6 / ROWS))
     # THE LOW RES ROW: load + `mov ah, al` + the word store. The duplication
     # is what is left after the word store's own delta over the byte store

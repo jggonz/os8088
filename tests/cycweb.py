@@ -60,6 +60,7 @@ def pkg_syms(src="apps/cyclone/cyclone.asm", incs=("apps/",), defines=()):
         open(cp, "w").write(open(src).read() + "\n[map symbols %s]\n" % mp)
         subprocess.run(["nasm", "-f", "bin", "-w+error"]
                        + sum([["-I", i] for i in incs], [])
+                       + ["-D" + x for x in defines]
                        + ["-o", os.path.join(d, "p.bin"), cp], check=True)
         out = {}
         for line in open(mp):

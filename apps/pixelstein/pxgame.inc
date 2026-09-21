@@ -66,6 +66,10 @@ px_key_common:
     je .pause
     cmp al, 'P'
     je .pause
+    cmp al, 'v'
+    je .size
+    cmp al, 'V'
+    je .size
     or al, al                       ; an extended key: AL = 0, AH = the scan
     jnz .out                        ; (the arrows reach int 16h this way)
     cmp ah, KSC_LEFT
@@ -81,6 +85,30 @@ px_key_common:
 .pause:
     xor byte [px_pause], 1
     mov byte [px_lined], 1
+    ret
+.size:
+    ; THE V KEY cycles the Size row (SPEC.md 96.3): 48, 56, 64, 72, 80 and
+    ; round, applied between frames like a menu pick. Saved from the UI task
+    ; only - in the bracket the pick is banked and written when the bracket
+    ; is left (px_go_fsx)
+    mov al, [px_sizeix]
+    inc al
+    cmp al, PX_NSIZES
+    jb .szw
+    xor al, al
+.szw:
+    cmp byte [px_inbr], 0
+    jne .sz
+    cmp al, PX_NSIZEW               ; windowed: 48, 56, 64 and round - 72
+    jb .sz                          ; and 80 are the bracket's, and their
+    xor al, al                      ; items say so (96.3)
+.sz:
+    mov [px_sizeix], al
+    mov byte [px_pend], 1
+    mov byte [px_cfgdirty], 1
+    cmp byte [px_inbr], 0
+    jne .out
+    call px_set_save
     ret
 .full:
     cmp byte [px_inbr], 0
@@ -524,10 +552,12 @@ px_lev_wall:
 ; The detail selector (SPEC.md 96.8): the ladder's positions in wave 1, Auto
 ; by tier and by the measured frame, a pinned rung that never moves
 ; -----------------------------------------------------------------------------
-PX_APOS_N   equ 2
+PX_APOS_N   equ 4
 px_apos_tab:                        ; (rung, low res) per position, top first
-    db PXR_FLAT, 0                  ; 0 Flat Full
-    db PXR_FLAT, 1                  ; 1 Flat Low res - the floor
+    db PXR_TEX, 0                   ; 0 Textured Full
+    db PXR_TEX, 1                   ; 1 Textured Low res - the 8086's default
+    db PXR_FLAT, 0                  ; 2 Flat Full - where an 8086's WINDOW starts
+    db PXR_FLAT, 1                  ; 3 Flat Low res - the floor
 ; WIRE IS OFF THE LADDER (SPEC.md 96.8, the user's decision on the wave-1
 ; measurement): on the 5150 its turning draw is 76.4 ms against Flat Low
 ; res's 68.7 and its full repaint 106.4 against 85.5 (76.5 against 66.7
@@ -557,6 +587,8 @@ px_apos_tab:                        ; (rung, low res) per position, top first
 px_auto_init:
     mov byte [px_detail], PXD_AUTO
     mov byte [px_res], 0
+    mov byte [px_sizeix], 2         ; Size 64 (px_sizes), 96.1's default
+    mov byte [px_rowsix], 0         ; Rows 80
     cmp byte [px_tier], CPU_8086
     jne .out
     mov byte [px_res], 1
@@ -579,7 +611,12 @@ px_auto_start:
     xor al, al                      ; 286 and up: the top
     cmp byte [px_tier], CPU_8086
     jne .pos
-    mov al, 1                       ; the 8086: Flat Low res
+    mov al, 1                       ; the 8086: Textured Low res in a bracket
+    cmp byte [px_inbr], 0           ; (96.1's default)...
+    jne .pos
+    mov al, 2                       ; ...and Flat Full in a window (PLAN 15:
+                                    ; one rung lower, the windowed tax being
+                                    ; the OS's)
 .pos:
     mov [px_apos], al
     mov [px_astart], al             ; ...and no step up passes it
@@ -593,11 +630,24 @@ px_auto_start:
 
 ; px_apply - [px_rung] and [px_lowres] from the Detail row's two axes (the
 ;            rung and the resolution, px_detail / px_res), or from Auto's
-;            position; the resolution's words follow, and the
-;            text line is owed
+;            position; a Textured rung's sets built if they are not (96.3,
+;            px_tex_setup - so a window that never picks Textured never
+;            pays the 0.9 s, and a bracket pays it behind its black); the
+;            resolution's words follow, and - ONLY WHEN THE BAND MOVED
+;            (px_lastx0) - the shadow is cleared and the glass outside a
+;            bracket's band blacked; the text line is owed
+; preserves every register (BP included: px_gen_one keeps a run's first row
+; in it - the first cut pushed all but BP and said "clobbers nothing", and
+; px_frame_end reaches here through px_auto_frame; review, wave 2)
 px_apply:
     push ax
     push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
     mov al, [px_detail]
     cmp al, PXD_AUTO
     jne .pinned
@@ -612,15 +662,59 @@ px_apply:
 .pinned:
     mov byte [px_rung], PXR_FLAT
     cmp al, PXD_WIRE
-    jne .res
+    jne .ntex
     mov byte [px_rung], PXR_WIRE
+.ntex:
+    cmp al, PXD_TEX
+    jne .res
+    mov byte [px_rung], PXR_TEX
 .res:
     mov al, [px_res]
     mov [px_lowres], al
 .words:
+    cmp byte [px_rung], PXR_TEX
+    jne .have
+    call px_tex_setup               ; the sets for this backend, if not built
+    jnc .have                       ; TEXTURED NEEDS ITS PARTS (96.9): a rung
+    mov byte [px_rung], PXR_FLAT    ; the loader could not carve for - or the
+                                    ; generator could not fit on this
+                                    ; backend - lands on Flat, the item
+                                    ; having said why
+.have:
     call px_res_apply
+    mov al, [px_x0]
+    cmp al, [px_lastx0]
+    je .band                        ; THE BAND STANDS: a rung or resolution
+    mov [px_lastx0], al             ; change leaves nothing outside it, and
+                                    ; the full repaint below rewrites every
+                                    ; byte inside it in either resolution -
+                                    ; the first cut cleared and blanked on
+                                    ; EVERY pick, 43 ms an Auto step, charged
+                                    ; to no frame (review, wave 2)
+    call px_shadow_clear            ; THE SHADOW IS THE PICTURE (96.3): a
+                                    ; narrower Size leaves the wider band's
+                                    ; edges in it otherwise - never shown
+                                    ; (the presents send Size bytes at x0)
+                                    ; but not the frame either, and
+                                    ; tests/pxssim.py diffs the whole 80 x
+                                    ; 80. 3.2 K words, once a Size
+    cmp byte [px_inbr], 0
+    je .win
+    call px_band_blank              ; the bracket: the glass outside the band
+    jmp short .band                 ; (a narrower Size leaves the wider
+                                    ; band's edges lit otherwise, pxrast.inc)
+.win:
+    mov byte [px_repaint], 1        ; windowed: the black around a narrower
+                                    ; band is owed (pxwin.inc)
+.band:
     call px_force_all
     mov byte [px_lined], 1
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret

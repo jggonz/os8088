@@ -130,6 +130,10 @@ px_render_win:
     cmp byte [px_abon], 0           ; ...and the card, under the lock (above)
     jne .card
     call px_geom_win                ; where are we? asked every frame
+    cmp byte [px_repaint], 0
+    je .noblack
+    call px_black_around            ; the Size shrank: the glass beside the
+.noblack:                           ; band keeps the old picture otherwise
     call px_blit_win
     cmp byte [px_lined], 0
     je .nol
@@ -249,14 +253,20 @@ px_blit_win:
     mov bx, ax
     shl bx, 1
     mov si, [px_row80 + bx]
-    add si, PX_X0
+    mov bl, [px_x0]
+    xor bh, bh
+    add si, bx
     inc cl
     xor ch, ch
     mov dx, cx                      ; DX = rows
     mov bx, [px_by]
     add bx, ax                      ; BX = y
     mov ax, [px_bx]                 ; AX = x
-    mov cx, PX_BAND * 8             ; 512 pixels
+    mov cl, [px_size]               ; Size x 8 pixels (64 at most in a
+    xor ch, ch                      ; window, px_res_apply)
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
     mov bp, PX_STRIDE
     mov es, [px_shseg]
     call OSAPI_GFX_BLIT1
@@ -276,9 +286,21 @@ px_line_draw:
     mov si, px_s_lwire
     cmp byte [px_rung], PXR_WIRE
     je .r
+    mov si, px_s_ltex
+    cmp byte [px_rung], PXR_TEX
+    je .r
     mov si, px_s_lflat
 .r:
     call px_strcat
+    mov si, px_s_lsize              ; "  Size 64" - the size IN FORCE, which
+    call px_strcat                  ; a window caps at 64 (px_res_apply)
+    mov al, [px_size]
+    aam                             ; AH = tens, AL = units
+    add ax, '00'
+    mov [di], ah
+    mov [di + 1], al
+    inc di
+    inc di
     mov si, px_s_lfull
     cmp byte [px_lowres], 0
     je .q
@@ -335,6 +357,8 @@ px_strcat:
 px_s_ldet:   db 'Detail: ', 0
 px_s_lwire:  db 'Wire', 0
 px_s_lflat:  db 'Flat', 0
+px_s_ltex:   db 'Textured', 0
+px_s_lsize:  db '  Size ', 0
 px_s_lfull:  db '  Full res', 0
 px_s_llow:   db '  Low res', 0
 px_s_lhint:  db '  Press F for full screen', 0

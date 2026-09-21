@@ -40,11 +40,22 @@ assert hasattr(pxssim, "render"), "pxslib: `pxssim` resolved to tests/, not tool
 
 TITLE = "Pixelstein 3D"
 FILE = "PXSTEIN.O88"
-ROWS, STRIDE, X0, BAND = 80, 80, 8, 64
+ROWS, STRIDE = 80, 80                   # the band's first byte is (80 - Size)
+                                        # / 2 and lives in the package's
+                                        # px_x0 - there is no constant (96.3)
 PXB = {0: "none", 1: "cga4", 2: "cga16", 3: "herc", 4: "modex", 5: "win1"}
-PXR = {"wire": 0, "flat": 1}
-PXD = {"auto": 0, "wire": 1, "flat": 2}
-PXH = dict(magic=0, lev=2, gen=4, cold=6, nlev=8, levlen=10)   # pxstein.asm's PXH_*
+PXR = {"wire": 0, "flat": 1, "tex": 2}
+PXD = {"auto": 0, "wire": 1, "flat": 2, "tex": 3}
+PXH = dict(magic=0, lev=2, gen=4, cold=6, nlev=8, levlen=10, art=12, bt=14,
+           genlen=16)                   # pxstein.asm's PXH_*, PXH_SIZE = 18
+PXH_SIZE = 18
+SIZES = (48, 56, 64, 72, 80)            # px_sizes: the Size row (96.3)
+WIN_SIZES = (48, 56, 64)                # ...of which a window shows these
+# part 2's layout - the scratch, in os88pkg's indices (pxgen.inc's PXG_*):
+# the three literals here are held to the source by tests/unit/
+# t_pxsscale.py; the rest is derived from labels in layout(), because
+# nasm's map carries labels and not equates
+PXG_DRVMAX, PXG_QN, PXG_QSZ = 64, 512, 6
 # the two pinned scenes (96.10): A is the spawn, B the doorway turn - pinned
 # in tools/pxssim.py's scenes() and read from there, one source
 COLMAX, HORIZON = 80, 40                # PX_COLMAX, PX_HORIZON (pxgame.asm)
@@ -58,6 +69,8 @@ FORCE_ALL = (("px_ltop", 0), ("px_lbot", 79), ("px_lmat", 0xFF),
              ("px_ll1", 79))
 
 _SYMS = None
+DEFINES = ()                    # tests/pxsperf.py --probe: ("PXPROBE",) and
+PKG = None                      # the .o88 it built, in place of build/'s
 
 
 def syms():
@@ -78,9 +91,10 @@ def syms():
     if _SYMS is None:
         s, image = pkg_syms(os.path.join(ROOT, "apps", "pixelstein", "pxgame.asm"),
                             (os.path.join(ROOT, "apps") + os.sep,
-                             os.path.join(ROOT, "apps", "pixelstein") + os.sep))
+                             os.path.join(ROOT, "apps", "pixelstein") + os.sep),
+                            DEFINES)
         try:
-            raw = open(os88build.at("build/pxstein.o88"), "rb").read()
+            raw = open(PKG or os88build.at("build/pxstein.o88"), "rb").read()
         except OSError:
             sys.exit("pxslib: no build/pxstein.o88 - run `make`")
         built = os88parts.part_bytes(raw, 0)
@@ -90,6 +104,19 @@ def syms():
                      "Run `make`." % (len(built), len(image)))
         _SYMS = s
     return _SYMS
+
+
+def layout():
+    """pxgen.inc's layout of part 2 (the scratch) as a dict: BODIES, DRV,
+    DRVSZ, QTEX, QEND, Q, SCAL - from the labels the map carries."""
+    s = syms()
+    ball = s["px_vadj"] - s["px_bodies"]                # PXB_ALL
+    drvsz = s["px_drv_end"] - s["px_drv_tpl"]
+    assert drvsz <= PXG_DRVMAX, "the driver outgrew PXG_DRVMAX"
+    drv = ball
+    qtex = drv + PXG_DRVMAX
+    return dict(BODIES=0, BALL=ball, DRV=drv, DRVSZ=drvsz, QTEX=qtex, QEND=qtex + 2,
+                Q=qtex + 4, SCAL=qtex + 4 + PXG_QN * PXG_QSZ)
 
 
 def find(m, S=None, limit=120.0):
@@ -142,8 +169,23 @@ class Game:
         self.poke(name, [v & 255])
 
     def handoff(self):
-        h = self.bytes_("px_hand", 12)                  # PXH_SIZE
+        h = self.bytes_("px_hand", PXH_SIZE)
         return {k: u16(h, v) for k, v in PXH.items()}
+
+    def part_gen(self, n):
+        """n bytes of the scratch part (96.9's part 2: the bodies, the
+        driver, the queue and the generated sets) from its start."""
+        seg = self.handoff()["gen"]
+        if not seg:
+            return None
+        return self.m.read(seg << 4, n)
+
+    def part_bt(self, n=30720):
+        """The byte-texture set (96.9's part 3)."""
+        seg = self.handoff()["bt"]
+        if not seg:
+            return None
+        return self.m.read(seg << 4, n)
 
     def eye(self):
         return self.word("px_px"), self.word("px_py"), self.word("px_head")
@@ -198,22 +240,50 @@ class Game:
         self.m.run()
         return px, py, head
 
-    def pin(self, rung="flat", lowres=True):
-        """A Detail and Resolution pick, applied by the package between frames
-        (px_pend, SPEC.md 96.8) exactly as the menu's is."""
+    def pin(self, rung="flat", lowres=True, size=None):
+        """A Detail and Resolution pick (and a Size, 48..80), applied by the
+        package between frames (px_pend, SPEC.md 96.8) exactly as the menu's
+        is."""
         self.m.pause()
         self._mark()
         self.poke_byte("px_detail", PXD[rung])
         self.poke_byte("px_res", 1 if lowres else 0)
+        if size is not None:
+            self.poke_byte("px_sizeix", SIZES.index(size))
         self.poke_byte("px_pend", 1)
         self.m.run()
+
+    def margins(self):
+        """The bytes of every device row of the view OUTSIDE the band, read
+        off the framebuffer in the bracket (CGA 320x200x4's two banks from
+        row 28, the Hercules box's four from row 134 at x = 40): what a Size
+        picked narrower inside the bracket must have blacked (px_band_blank,
+        SPEC.md 96.3). None on a backend this does not model."""
+        back = PXB.get(self.byte("px_back"))
+        size, x0 = self.byte("px_size"), self.byte("px_x0")
+        out = bytearray()
+        for r in range(ROWS):
+            if back == "cga4":
+                y = 28 + r
+                off = 0xB8000 + (y & 1) * 0x2000 + (y >> 1) * 80
+            elif back == "herc":
+                y = 134 + r
+                off = 0xB0000 + (y & 3) * 0x2000 + (y >> 2) * 90 + 5
+            else:
+                return None
+            row = self.m.read(off, STRIDE)
+            out += row[:x0] + row[x0 + size:]
+        return bytes(out)
 
     def turn(self, px, py, head):
         """One TURN frame the way frame_times' "turn" mode makes one: the
         heading poked with px_dirty set and NOTHING forced, so the compose
         writes what moved against its memory of the last frame - the skip,
         the two-ends arm and px_wrun's paths (SPEC.md 96.5), which a forced
-        frame never takes. Paused around the pokes; the caller waits."""
+        frame never takes. Paused around the pokes; the caller waits. A
+        STEP is the same poke with px/py moved and the heading kept - the
+        motion that holds u still while h grows, which the Textured skip
+        must see through px_lh (tests/pxssim.py's --steps)."""
         self.m.pause()
         self._mark()
         self.eye_poke(px, py, head)
@@ -256,8 +326,17 @@ class Game:
                         limit=limit)
 
     def leave_fsx(self, limit=60.0):
+        """Esc, then PAST the exit path: px_inbr clears at the top of it, and
+        what follows - the window's set regenerated and re-transposed when
+        the window's rung is Textured (96.3, ~0.9 s on the 5150; nothing
+        when it is Flat), Auto re-seated, the window's frame composed -
+        consumes a px_force poked meanwhile (a first cut poked and waited
+        for a frame that the exit path had already spent; a second waited
+        on px_back = WIN1, which flips at the TOP of that path). px_brn is
+        incremented where OSAPI_FSX_RUN returns, after all of it."""
+        n = self.word("px_brn")
         self.m.key("Escape")
-        os88marty.until(self.m, lambda mm: self.byte("px_inbr") == 0,
+        os88marty.until(self.m, lambda mm: self.word("px_brn") != n,
                         "the desktop", poll=0.3, limit=limit)
 
     # --- reading the frame back ---------------------------------------------
@@ -292,7 +371,8 @@ class Game:
                     lowres=self.byte("px_lowres"), cols=self.byte("px_cols"),
                     detail=self.byte("px_detail"), apos=self.byte("px_apos"),
                     frames=self.word("px_frames"), inbr=self.byte("px_inbr"),
-                    gen=self.byte("px_gen"), tier=self.byte("px_tier"))
+                    gen=self.byte("px_gen"), tier=self.byte("px_tier"),
+                    size=self.byte("px_size"), texok=self.byte("px_texok"))
 
     def stage_times(self, n, mode="full"):
         """n consecutive DRAWN frames in the BRACKET, split by stage: cycles
@@ -400,6 +480,14 @@ def scene_at(which):
     return pxssim.scenes(level())[which]
 
 
+def _key(col, rung):
+    """What a change is, per rung (pxcomp.inc's skips): Flat and Wire the
+    four bytes, Textured those plus the quantised height and the texture
+    column u >> 3 (the six bytes of 96.3's memory)."""
+    k = (col["top"], col["bot"], col["mat"], col["side"])
+    return k + (col["hq"], col["u"] >> 3) if rung == "tex" else k
+
+
 def turn_stores(which, cols=32):
     """What the Flat delta-fill WRITES when scene `which` turns by PX_TURN,
     on the host (SPEC.md 96.10): (stores, columns changed). The wall rows of
@@ -475,10 +563,9 @@ def present_rows(prev, new, rung="flat"):
     one min/max over ALL columns, and a column nearer than 2.5 tiles spans
     rows 0..79."""
     r0, r1 = 0xFF, 0
-    if rung == "flat":
+    if rung in ("flat", "tex"):
         for x, y in zip(prev, new):
-            if (x["top"], x["bot"], x["mat"], x["side"]) == \
-               (y["top"], y["bot"], y["mat"], y["side"]):
+            if _key(x, rung) == _key(y, rung):
                 continue
             r0 = min(r0, y["top"], x["top"])
             r1 = max(r1, y["bot"], x["bot"])
@@ -500,9 +587,9 @@ def turn_present_rows(which, cols, rung, k, pages=1):
     page)."""
     lv = level()
     px, py, head = scene_at(which)
-    new = pxssim.cast_view(lv.cells, px, py, (head + k * PX_TURN) & 0xFFF, cols)
+    new = pxssim.cast_view(lv.cells, px, py, (head + k * PX_TURN) & 0xFFF, cols, rung)
     prev = pxssim.cast_view(lv.cells, px, py, (head + (k - pages) * PX_TURN) & 0xFFF,
-                            cols)
+                            cols, rung)
     return present_rows(prev, new, rung)
 
 

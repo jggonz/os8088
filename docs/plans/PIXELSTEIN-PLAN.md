@@ -164,7 +164,7 @@ Against the tree: TANK 72–123 ms (8.1–13.9 fps), CLEAR SKIES 164 ms (6.1), b
 | | bytes |
 |---|---:|
 | code: cast + the DDA template, generator, static ladders (1.3 KB), Δ-fill, sprites, doors, actors, player, HUD, presents + glyph writers, window/worker/bracket, menus, About, settings, scores, loader glue | ~34,000 |
-| tables: `pxtab.inc` 5,796 (M: sin 2,050, tan 2,050, eight fans 1,664, `px_fantab` 32), five 32-byte ink tables, strings | ~6,300 |
+| tables: `pxtab.inc` 5,796 (M: sin 2,050, tan 2,050, eight fans 1,664, `px_fantab` 32), five 32-byte ink tables, strings — SUPERSEDED by SPEC.md 96.1's `px_fan*` row: wave 2's four Low-res fans made it twelve fans, 1,968 bytes of fans and selector, 6,068 for the include | ~6,300 |
 | bss: **map 4,096 × 2 and spotvis 4,096 × 2** (§96.2's two layouts — the single-layout 8,192 this row first carried was priced against them and lost), column arrays 80 × 4 words, per-page extents 2 × 80 × 2 words, actors 32 × 24, doors 64 × 6, statics 96 × 4, player/HUD/settings/scores | ~19,700 |
 | **image + bss (SKIES' game part is 51,776 for comparison)** | **~60,000 of 61,440 — ~1,400 spare** (this row read ~51,000 before wave 0's review repriced it; the 8,192 is the second map and the second `spotvis`) |
 

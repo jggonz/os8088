@@ -424,7 +424,7 @@ FAST = [
         "about the band's three sizes, which is a constant written down in "
         "two files with no linker here to notice. The byte-for-byte "
         "reproduction row SKIPS, naming the pin, without $PACMANC_SRC"),
-    Row("pxs-gen", "fast", py("tests/unit/t_pxsgen.py"), 0.3,
+    Row("pxs-gen", "fast", py("tests/unit/t_pxsgen.py"), 0.5,
         "PIXELSTEIN 3D's generated includes are what their generators produce "
         "(SPEC.md 96.12): apps/pixelstein/pxtab.inc - the sine, tangent and "
         "fan tables the package, the reference renderer and the level tool "
@@ -4488,6 +4488,68 @@ SOAK = [
         "overflows its 354 clusters on main already (446 needed at 2237d1ba, "
         "this package dropped)",
         wants=("build/smallapps360.img",)),
+    Row("t_pxsart", "soak", py("tests/unit/t_pxsart.py"), 2.0,
+        "SPEC.md 96.4: the art pipeline holds its rules - fifteen 32x32 "
+        "masters in the sixteen colours, no key (index 5), no alpha; the "
+        "losable criterion (brick against grey stone distinguishable on the "
+        "CGA4 and Hercules sets); the byte-texture set's size and layout as "
+        "px_bt_build writes it (C160's column pair, the odd-row phase); no "
+        "non-black colour maps to an all-black texel byte (the blue-stone "
+        "wall that vanished on the first CGA screendump); and two negative "
+        "controls refused in words. Host-side; soak because the fast tier "
+        "has no room (96.10) - `soak -k 'pxs*'` beside a change to the "
+        "package"),
+    Row("t_pxsscale", "soak", py("tests/unit/t_pxsscale.py"), 6.0,
+        "SPEC.md 96.3: tools/pxsgen.py's model of part 2 (the scratch) fits PX_GENKB on "
+        "every backend past the bodies, driver and queue; every scaler ends "
+        "in a near ret with one store per covered view row; the directory "
+        "aliases every height DOWN and px_hq in the assembled part 0 is the "
+        "same table; px_hts is HEIGHTS; col2tex widths are >= 1 (the "
+        "generator hung on a zero once); tests/pxslib.py's layout literals "
+        "are pxgen.inc's; and build/pxstein.o88's part 0 is the tree's. "
+        "Named so because t_pxsgen is the fast digest row. Host-side, soak"),
+    Row("pxsscale", "soak", py("tests/pxsscale.py"), 300.0,
+        "SPEC.md 96.3, 96.10: the generated part read back off MartyPC's "
+        "5150 between frames and diffed BYTE FOR BYTE against tools/"
+        "pxsgen.py - the bodies against the image's, the driver against its "
+        "template, both scaler sets and the col2tex tables against the "
+        "model for the phase in force (WIN1's `ror al, cl` in the window, "
+        "CGA4's two `ror al, 1` in the bracket), and the two directories in "
+        "part 0 - on the window's first Textured frame (the sets are built "
+        "when the rung first wants them, 96.3), after a second, in the "
+        "bracket and back in the window. A differing byte is a wrong "
+        "instruction in "
+        "code the frame calls 64 times",
+        needs=("marty", "nasm"), serial=True),
+    Row("pxs160", "soak", py("tests/pxs160.py"), 400.0,
+        "SPEC.md 96.5, 96.10: the delta-fill GHOST gate on the glass - a "
+        "textured scene composed whole, turned three times incrementally, "
+        "then the framebuffer at B800 (the C160 expanding present, the CGA "
+        "320x200x4 two-bank copy) and the rendered desktop (the WIN1 blit) "
+        "each read and compared with the same pose redrawn whole: "
+        "identical, or a writer bypassed the row range / the skip left a "
+        "column stale / the present sent too few rows. tests/pxssim.py "
+        "holds the shadow; this holds the device",
+        needs=("marty", "nasm"), serial=True),
+    Row("pxsfsx", "soak", py("tests/pxsfsx.py"), 600.0,
+        "SPEC.md 53, 96.3, 96.10: restore equality - every Mode item x "
+        "every Detail rung x both resolutions x three Sizes, each entered "
+        "as a bracket with a forced frame drawn and left; the original "
+        "settings pinned again and the rendered desktop below the menu bar "
+        "compared with the one before the first bracket: identical, and "
+        "the window's state back. 48 brackets on the CGA 5150 (the retime "
+        "and 320x200x4), the regeneration and the transpose each time",
+        needs=("marty", "nasm"), serial=True),
+    Row("pxsperf", "soak", py("tests/pxsperf.py"), 400.0,
+        "SPEC.md 96.10: THE STAGED FRAME, an instrument (skiesperf's shape: "
+        "asserts only that every stage produced a number). Textured Low res "
+        "64x80, Textured Full, the 48x80 Low res fallback and Flat Low res "
+        "on both pinned scenes and both frames, split cast / compose / "
+        "present / loop by five breakpoints, with the draw queue's length "
+        "beside each; --probe builds -DPXPROBE into a scratch disk and reads "
+        "its ladder-entry and skipped-column counters. The report is "
+        "docs/reports/PXS-FRAME-<date>.md",
+        needs=("marty", "nasm"), serial=True),
     Row("pxsbench", "soak", py("tests/pxsbench.py"), 150.0,
         "SPEC.md 96.10: PIXELSTEIN 3D's unit costs, MEASURED. Every figure "
         "the frame table of 96.1 is built from - the compiled store, the "

@@ -34,9 +34,24 @@ and C160 pay - 16 solid colours or a DAC, no dither); 'ror' the rotate AS
 THE 1992 ENGINE TURNS IT (WL_SCALE.C's dithershift): `ror al, 1` x 2 on CGA
 320x200x4 (one 2-bit pixel), one `ror al, cl` with CL = 3 on Hercules and
 WIN1 - the arm 96.3 TAKES; 'word' the dual-phase word load, the named
-FALLBACK (part 4 doubled, no rotate). Every number SPEC.md 96.1's frame
+FALLBACK (part 3 doubled, no rotate). Every number SPEC.md 96.1's frame
 paragraph quotes is a line of this script's output.
+
+THE TEXEL TERMS ARE THE GENERATOR'S, NOT A ROW COUNT (review, wave 2): a
+compiled scaler pays a load PER TEXEL RUN that covers a view row, a store
+per row, the phase only for a run holding an ODD row, and at Low res one
+`mov ah, al` per PARITY the run covers - so scene A's mean wall (h = 32, one
+row a run) is 32 loads, 32 stores, 16 phases and 32 `mov ah, al`, where the
+first cut of this file charged a phase and two `mov ah, al` per run (~595
+clk a column high) and its whole-game branch charged all three PER ROW
+(~3,700 a column high at h = 80). scaler_terms() walks tools/pxsgen.py's
+texel_rows() and counts what the emitted code holds.
 """
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pxsgen                      # noqa: E402  (the scaler's row walk)
+
 HZ = 4772727.0                     # the 5150's 8088
 TICK = HZ / 18.2065                # one PIT tick, 262,150 clk = 54.925 ms
 CAP = 3                            # tk_steps' cap
@@ -126,6 +141,56 @@ FLAT_RESID = 1400.0                # a COLUMN of the Flat rung: px_compose's
                                    # of stores + entries. The generated
                                    # driver of wave 2 replaces this shape, so
                                    # it is the Flat rung's and not the design's
+# THE TEXTURED COLUMN'S RESIDUAL, FITTED from the measured compose of the
+# review round's tree (docs/reports/PXS-FRAME-2026-09-21.md 3: 198,365 clk
+# over 32 columns at Low res, 345,029 over 64 at Full, scene A's full repaint)
+# less what scaler_terms(32) + the ground + the queue entry price: the
+# six-byte skip and its banking, the queue entry's shifts and adds, the
+# column prologue and, at Low res, px_lad's word-path pair setup - the ~180
+# between the two. The first take of this file charged FLAT_RESID here and
+# read "0.8% under", which was this residual ~470 low and the texel terms
+# ~595 high, cancelling (review, wave 2). Refit when the compose changes
+TEX_RESID = {True: 1916.0, False: 1735.0}          # by lowres
+TEX_QUEUE = 170.0                  # the queue entry (~120) + the driver's
+                                   # near call and ret (~50), a column
+TEX_MEANH = 32                     # scene A's mean wall, rows (the plan's 3)
+
+
+def scaler_terms(h, lowres, backend):
+    """One column of a wall h rows tall through the compiled scaler of that
+    height, clk: what the emitted code holds (tools/pxsgen.py's texel_rows,
+    pxgen.inc's px_gen_one) - a load per texel run on the view, a store per
+    row, the phase per run with an odd row, and at Low res a `mov ah, al`
+    per parity a run covers."""
+    n = ROR[backend]
+    loads = stores = phases = ahal = 0
+    for rows in pxsgen.texel_rows(pxsgen.quantise(h)):
+        if not rows:
+            continue
+        loads += 1
+        stores += len(rows)
+        odd = any(r & 1 for r in rows)
+        even = any(not (r & 1) for r in rows)
+        phases += odd
+        if lowres:
+            ahal += even + odd
+    return (loads * (TEXEL - STORE) + stores * (WSTORE if lowres else STORE)
+            + phases * n + ahal * MOVAHAL)
+
+
+def texel_run_cost(rows, lowres, backend, phase):
+    """`rows` texel ROWS drawn at scene A's mean-wall shape - one row a run
+    (h = 32 is 32 runs of one row): a load, a store, a `mov ah, al` at Low
+    res and the phase on the odd half. What the sprites' and weapon's
+    texels are priced at until wave 3 measures them (a taller post has
+    FEWER loads a row, so this is their ceiling)."""
+    n = ROR[backend]
+    per = (TEXEL - STORE) + (WSTORE if lowres else STORE) + (MOVAHAL if lowres else 0)
+    if phase == "ror" and n:
+        per += n / 2.0
+    elif phase == "word" and n:
+        per += WORD                                # a word load a run, no rotate
+    return rows * per
 
 
 def stages(cols=64, rows=80, crossings=10, dfill=700, lowres=False,
@@ -138,27 +203,18 @@ def stages(cols=64, rows=80, crossings=10, dfill=700, lowres=False,
     walk = 11000.0                                 # candidates + graft 4
     wall, spr, wpn = 2048 * k * r, 1800 * k * r, 384 * k   # BYTES stored
     stores = wall + spr + wpn
-    n = ROR[backend]
     if flat:
         if lowres:                                 # the ladder in word stores
             tex = rays * LADDER_ENTRY + stores / 2 * (LADDER - STORE + WSTORE)
         else:
             tex = cols * LADDER_ENTRY + stores * LADDER
         tex += rays * FLAT_RESID
-    elif lowres:
-        loads = stores / 2                         # one texel, two bytes
-        tex = loads * LOWTEX
-        if phase == "ror" and n:
-            tex += loads * (n + MOVAHAL)           # the rotate, then AH again
-        elif phase == "word" and n:
-            tex += loads * (WORD + 2 * MOVAHAL)    # AL/AH kept apart, then each
-                                                   # duplicated in turn
     else:
-        tex = stores * TEXEL
-        if phase == "ror":
-            tex += stores * n
-        elif phase == "word" and n:
-            tex += stores * WORD
+        # every texel row at the mean-wall shape (one run a row), the
+        # bytes halved to rows at Low res (a word store a row)
+        trows = stores / 2 if lowres else stores
+        tex = texel_run_cost(trows, lowres, backend, phase)
+        tex += rays * (TEX_RESID[lowres] + TEX_QUEUE)   # the column's own
     # the delta-fill writes the same BYTES at either resolution: word stores
     # at Low res, half as many
     dfl = dfill * k * r * (WSTORE / 2 if lowres else STORE)
@@ -291,17 +347,93 @@ def main():
     # history seeded to the whole column makes the first Wire frame lay 80
     # rows of ground, and the review priced it to 0.6%). A model row for a
     # measured rung is a second number for one fact.
-    print("--- wave 1's FULL REPAINT of the Flat rung, no sim (what the gate asserts on):")
-    print("    the whole view a column - 80 rows, three ladder entries - and the loop's")
-    print("    10 key reads; measured 88.3 ms Low res / 145.8 ms Full on _cga_gla")
+    print("--- the FULL REPAINT with no sim, no sprites, no HUD (what the gates measure):")
+    print("    the whole view a column - 80 rows - and the loop's 10 key reads; the row")
+    print("    to read tests/pixelstein.py's full-repaint figure AGAINST, because the")
+    print("    rows above charge a whole game (the sprite walk, 91 posts, the HUD, the")
+    print("    sim tick) that no measured frame draws yet. Wave 1's Flat measured 88.3")
+    print("    ms Low res / 145.8 Full on _cga_gla; wave 2's Textured 100.3 Low res /")
+    print("    165.0 Full (docs/reports/PXS-FRAME-2026-09-21.md)")
+    loop = 10 * KEY + 2000 + 10 * 223
     for lowres, cols_, label in ((True, 32, "CGA4 Flat 64x80 Low res A, full repaint"),
                                  (False, 64, "CGA4 Flat 64x80 Full A, full repaint")):
         c = stages(lowres=lowres, flat=True)["cast"]
         st = WSTORE if lowres else STORE
         comp = cols_ * (80 * st + 3 * LADDER_CALL + FLAT_RESID)
-        n = c + comp + present("cga4") + 10 * KEY + 2000 + 10 * 223
+        n = c + comp + present("cga4") + loop
         print("%-42s cast %7.0f  compose %7.0f  present %7.0f  loop %5.0f  = %7.0f clk = %6.1f ms"
-              % (label, c, comp, present("cga4"), 10 * KEY + 2000 + 10 * 223, n, n / HZ * 1e3))
+              % (label, c, comp, present("cga4"), loop, n, n / HZ * 1e3))
+    # THE TEXTURED ARMS, walls only: every column a wall of scene A's mean 32
+    # rows through the compiled scaler of that height - scaler_terms(): what
+    # the emitted code holds, a load a texel RUN, a store a row, the phase
+    # per run with an odd row, the Low-res `mov ah, al` per parity a run
+    # covers - the queue entry and the driver's near call (TEX_QUEUE), and the
+    # column's bookkeeping (TEX_RESID, FITTED from the Low res 64 A and Full
+    # 64 A rows below, so those two rows are the fit and the other two are
+    # the check). The ground: a forced frame seeds every column to the whole
+    # view (px_force_all), so what the wall does not cover is put back by the
+    # ladders - on scene A ~48 rows x 32 columns: 2 ladder entries + the
+    # stores. MEASURED (PXS-FRAME-2026-09-21.md 3, the review round's tree)
+    # beside each row where there is a measurement
+    measured = {"CGA4 Textured 64x80 Low res A, full repaint": (164895, 198365, 99249, 7945, 653),
+                "CGA4 Textured 64x80 Full A, full repaint": (326607, 345029, 99249, 8150, 653),
+                "CGA4 Textured 48x80 Low res A, full repaint": (128998, 146702, 76206, 7732, 653),
+                "Herc Textured 64x80 Low res A, full repaint": None}   # (cast, compose,
+                                                    # present, loop, prologue)
+    frames = {}
+    for lowres, cols_, be, label in (
+            (True, 32, "cga4", "CGA4 Textured 64x80 Low res A, full repaint"),
+            (False, 64, "cga4", "CGA4 Textured 64x80 Full A, full repaint"),
+            (True, 32, "herc", "Herc Textured 64x80 Low res A, full repaint"),
+            (True, 24, "cga4", "CGA4 Textured 48x80 Low res A, full repaint")):
+        k = cols_ * (2 if lowres else 1) / 64.0
+        c = stages(lowres=lowres, cols=int(64 * k))["cast"]
+        wall = scaler_terms(TEX_MEANH, lowres, be)
+        ground = (80 - TEX_MEANH) * (WSTORE if lowres else STORE) + 2 * LADDER_CALL
+        col = wall + ground + TEX_QUEUE + TEX_RESID[lowres]
+        comp = cols_ * col
+        pres = present(be, int(64 * k))
+        n = c + comp + pres + loop
+        frames[label] = n
+        print("%-42s cast %7.0f  compose %7.0f  present %7.0f  loop %5.0f  = %7.0f clk = %6.1f ms"
+              % (label, c, comp, pres, loop, n, n / HZ * 1e3))
+        print("%-42s   a column: scaler %5.0f (h=%d) + ground %5.0f + queue %3.0f + resid %5.0f = %5.0f"
+              % ("", wall, TEX_MEANH, ground, TEX_QUEUE, TEX_RESID[lowres], col))
+        m = measured.get(label)
+        if m:
+            mn = sum(m)
+            print("%-42s   measured: cast %7.0f  compose %7.0f  present %7.0f  loop %5.0f +%3.0f = %7.0f clk = %6.1f ms"
+                  "  (model %+.1f%%: cast %+.1f%%, compose %+.1f%%)"
+                  % ("", m[0], m[1], m[2], m[3], m[4], mn, mn / HZ * 1e3, (n - mn) / mn * 100,
+                     (c - m[0]) / m[0] * 100, (comp - m[1]) / m[1] * 100))
+    # THE PROJECTION (SPEC.md 96.1's fork): the MEASURED walls-only frame plus
+    # what this frame does not draw yet, priced on the plan's 3 counts -
+    # the candidate walk, the sprites' and weapon's texel rows at the
+    # mean-wall shape (texel_run_cost), the posts and transforms (the plan's
+    # per-post 350 and per-sprite 1,000; the rays x 240 of `over` is
+    # bookkeeping the measured column already carries), the HUD - then the
+    # sim tick as the fixed point. NOT a measurement: wave 3's own row
+    # replaces it
+    print("--- the PROJECTION of the finished frame: the measured walls-only frame plus")
+    print("    the sprite walk, the sprites' and weapon's texels, the posts and the HUD on")
+    print("    the plan's counts, then E1M1's tick - the number SPEC.md 96.1's fork is read")
+    print("    against, and the reason its 64x80 default is PROVISIONAL until wave 3 measures")
+    for label, k, meas in (("CGA4 Textured 64x80 Low res A", 1.0, 471107),
+                           ("CGA4 Textured 64x80 Low res B", 1.0, 474409),
+                           ("Herc Textured 64x80 Low res A", 1.0, 477750),
+                           ("CGA4 Textured 48x80 Low res A", 0.75, 354136)):
+        be = "herc" if label.startswith("Herc") else "cga4"
+        rays = int(32 * k)
+        spr_rows = (1800 * k + 384 * k) / 2
+        missing = (11000.0 + texel_run_cost(spr_rows, True, be, "ror")
+                   + (75 * k + 16) * 350 / 2 + 8 * 1000 + 50 + 5000.0)
+        n = meas + missing
+        f = converge(n, SIM["level"])
+        fc = converge(n, SIM["cap"])
+        print("%-34s measured %7.0f + missing %6.0f = %7.0f clk = %6.1f ms = %5.2f fps pre-sim;"
+              " at E1M1's tick %7.0f = %6.1f ms = %5.2f fps (caps %5.2f)  [%d rays]"
+              % (label, meas, missing, n, n / HZ * 1e3, HZ / n, f, f / HZ * 1e3, HZ / f,
+                 HZ / fc, rays))
     print("tick %.0f clk; the cap binds at %.1f ms = %.2f fps; s = %.2f ms "
           "(E1M1) / %.2f ms (caps): dF/ds at the default = %.2f"
           % (TICK, 3 * TICK / HZ * 1e3, HZ / (3 * TICK), SIM["level"] / HZ * 1e3,

@@ -57,10 +57,13 @@ TAN_CLAMP = 0x7FFF              # 127.996: past it the walker is parked
 FOV_PX = 256                    # device pixels that span PX_FOV degrees...
 FOV_DEG = 60.0                  # ...at the 64-column, 4-pixel rung
 FOCAL = (FOV_PX / 2.0) / math.tan(math.radians(FOV_DEG / 2.0))
-FANS = ((32, 8), (48, 4), (56, 4), (64, 4), (72, 4), (80, 4), (160, 2), (320, 1))
-#      ^ Resolution: Low res - one ray per TWO shadow bytes, 32 rays across the
-#        same 256-px view (docs/plans/PIXELSTEIN-PLAN.md 16), eight device
-#        pixels a column at the same focal length
+FANS = ((24, 8), (28, 8), (32, 8), (36, 8), (40, 8),
+        (48, 4), (56, 4), (64, 4), (72, 4), (80, 4), (160, 2), (320, 1))
+#      ^ Resolution: Low res - one ray per TWO shadow bytes, Size / 2 rays
+#        across the same Size x 4 px view (docs/plans/PIXELSTEIN-PLAN.md 16),
+#        eight device pixels a column at the same focal length: 32 rays at
+#        Size 64, and 24/28/36/40 for the Size row's other four rungs (wave
+#        2 - the 48 x 80 Low res fallback of SPEC.md 96.1 is the 24-ray fan)
 
 
 def sin_table():
