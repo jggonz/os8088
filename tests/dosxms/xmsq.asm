@@ -71,7 +71,7 @@ start:
     mov word [mv+0], BUFN           ; the length, 32 bits
     mov word [mv+2], 0
     mov word [mv+4], 0              ; source handle 0 = conventional...
-    mov [mv+6], word buf            ; ...so its "offset" is a FAR POINTER
+    mov word [mv+6], buf            ; ...so its "offset" is a FAR POINTER
     mov [mv+8], ds
     mov ax, [handle]
     mov [mv+10], ax                 ; ...and the destination is the block
@@ -89,7 +89,7 @@ start:
     mov word [mv+6], 0
     mov word [mv+8], 0
     mov word [mv+10], 0
-    mov [mv+12], word buf
+    mov word [mv+12], buf
     mov [mv+14], ds
     mov ah, 0x0B
     mov si, mv
