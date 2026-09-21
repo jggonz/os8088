@@ -88,9 +88,19 @@ EXEMPT_DIRS = {
 # apps/<dir> -> the 8.3 name its package lands under. The rule is mechanical -
 # uppercase, first eight characters - and `solitaire` is the only directory in
 # the tree that the truncation actually moves. Spelt as a function rather than
-# a table so a ninth-character name cannot be added without it holding.
+# a table so a ninth-character name cannot be added without it holding. The
+# one table is for a package whose FILE is not its folder's name: a row here
+# needs the Makefile rule that says so, or the gate would be checking a name
+# nothing builds.
+PKG_FILE = {
+    "pixelstein": "PXSTEIN.O88",   # SPEC.md 96.9: $(BUILD)/pxstein.o88 out of
+                                   # apps/pixelstein/ - the folder carries the
+                                   # game's name, the file its 8.3 one
+}
+
+
 def pkg_name(d):
-    return d[:8].upper() + ".O88"
+    return PKG_FILE.get(d) or d[:8].upper() + ".O88"
 
 
 _PAYLOAD = None
