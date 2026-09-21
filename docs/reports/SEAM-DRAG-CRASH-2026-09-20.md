@@ -322,3 +322,168 @@ segment** instead of a framebuffer, and `gfx_points.paper` walking with
 **CX = 0xFEF7** and BP inside MISSILE's code rather than `mc_pts`. Either one
 is a wild writer on its own, and neither is explained by anything eliminated
 above.
+
+---
+
+# Third session, 2026-09-21: the stack is a CONSEQUENCE, and the live lead is `[gfx_dnest]`
+
+Same tree, same box, same machine (`os8088_xt_vga_herc`, build 950). The
+second session left "the stack pointer leaves its stack" as the lead to pick
+up. **It is picked up and it is spent**: SP going wild is downstream of the
+wreck, not upstream of it, and this section is the measurement that closes it
+plus the one thing that is now known to break while the machine is still
+alive.
+
+## The machine, so nothing below has to be re-derived
+
+Three tasks exist for this scenario and no more, read off `sch_stkbase` /
+`sch_stksize` / `sch_tasks` on the running guest:
+
+| slot | task | slice | where |
+|---|---|---|---|
+| 0 | the UI task | 512 | `STK0` 18DE..1ADD, top SP **1ADC** |
+| 1 | the idle task | 128 | 0AD6..0B55 |
+| 10 | MISSILE's worker | 256 | 10D6..11D5 |
+
+Slots 2-9 and 11-13 are unspawned, and an unspawned slot has **neither a
+`SCH_MAGIC` canary nor a 0xCC fill** - both read 0000. A probe that checks
+every slot rather than every *live* slot reports twelve smashed canaries on a
+perfectly healthy desktop, which cost one run here.
+
+The two private stacks sit immediately below the slices and are exactly
+adjacent: `mou_pstack` 09D6..0A55 (top SP **0A56**), `sch_chstack`
+0A56..0AD5 (top SP **0AD6**) - and `sch_chstack + SCH_CHSTK` **is**
+`sch_stacks`, so the chain stack's top word is slot 1's canary.
+
+## Five more things it is NOT
+
+16. **Not a stack overflow, in any slice.** Every live canary reads 5A57 in
+    every dump taken here, including the dumps of wrecked machines, and the
+    0xCC fill at the deep end of each slice is untouched. A downward runaway
+    cannot leave a canary it passed through intact, so there is no runaway.
+17. **Not a pop off the TOP of a stack either.** `LOW_PARA` rounds
+    `.lowbss + STK0` up to a 512-byte rung, which leaves LOW_SEG:1ADE..1BFF -
+    **290 bytes belonging to nothing at all**, directly above the UI task's
+    stack top. Six `mem` wires there (and a `mem` breakpoint fires on a READ,
+    which is what an over-pop does): **40 round trips across four lanes, not
+    one hit**, and one of those lanes died in the usual way with the wires
+    quiet.
+18. **`gfx_blit1_x`'s `mov sp, bp` / `add sp, 18` is innocent** - the only
+    instruction in the kernel that can move SP by an arbitrary amount in one
+    step (every other SP write is `mov sp, imm16` or a restore from a slot
+    whose value is checked below). An exec wire on it took **0 hits in 16
+    round trips**: `gfx_blit1` is not called in this scenario at all.
+19. **The cursor's display bracket is safe.** `CUR_DBEGIN` and
+    `cur_move_multi` both bank the outgoing display in ONE static byte,
+    `[cur_dprev]`, and `cur_get` is reached from the deferred hide *and* from
+    the mouse ISR - which reads like a re-entrancy hole, and is not: all three
+    task-side entries (`kbm_paint`, `cur_lazyend`, `mou_apply`) are inside
+    their own `pushf`/`cli`, so the ISR cannot nest inside one.
+20. **The chain stack and the mouse ISR's stack are clean, and their contents
+    decode exactly as designed.** `[sch_chsave]` and `[mou_psave]` hold legal
+    values in every live dump. A chain stack caught mid-tick reads, top down:
+    `[0AD4]` = **F002**, the `pushf`'d FLAGS with IF=0; `[0AD0..0AD3]` =
+    `0060:4920`, which resolves to **`sch_isr.full+30`** - the return address
+    of `call far [sch_old08]`; and below that an interrupt frame taken at
+    **F000:FEC7 with FLAGS=F207 (IF=1)**, which is the ROM's own `sti` window
+    with something nesting harmlessly inside it, exactly as SPEC.md 8.5.1
+    says.
+
+## So where the wild SP comes from
+
+It is the wreck, seen later. The wire at STK0's deep end (`STK0+16`, 18EE)
+did eventually fire - and when it did the CPU was at **0000:0726**, the
+kernel's own `.bss` already read 0xFF (`vid_cur` 255, `vid_ndisp` 255,
+`gfx_lock_flag` 255) and 420 bytes of STK0 held one repeated word. The
+SP values this investigation has been chasing - **0210, 01F4, FF20, 18EE,
+25A8, 005C** - are all of that kind: a CPU already executing garbage,
+pushing and popping wherever it lands. `SP = FF20` is not a 7,100-byte fall,
+it is a wild `push`/`pop` pair in wild code.
+
+One reading is worth keeping because it looked like a smoking gun and is not:
+`vid_span_one.out+3` (`pop ax`) caught with **SI = 5A57 and BX = CCCC** - the
+canary and the fill - on a machine whose every other word was sane. That is
+`.out` popping off the top of `sch_chstack` into slot 1's untouched fill.
+It is real, it is downstream, and it is what a wild CPU landing on a pop run
+looks like.
+
+## THE LIVE LEAD: `[gfx_dnest]` = 106
+
+Caught by a LOW_SEG snapshot differ - no breakpoints, so nothing suppressed -
+with the machine **alive**:
+
+```
+CPU 0060:1F5D vga_solid_rect.lcol   IF=1  SS:SP=1940:1AAE  DS=0060 ES=A000
+gfx_dnest = 106          <-- legally 0 or 1 on this machine
+vid_cur 0   vid_mono 0   vid_planes 4   vid_ndisp 2
+gfx_lock_flag 1  gfx_lock_own 0  sch_cur 0
+| ui_task.drag -> ui_drag -> task_yield
+| ui_drag.no_evt+53 -> ui_drag_xor
+| gfx_xor_rect_d+11 -> gfx_xor_strips
+| gfx_xor_strips+37 -> gfx_xor_fill_raw
+```
+
+IF is 1, SP is inside STK0, the lock is held by the task that is drawing, and
+every other word reads correctly. This is not the wrecked machine scribbling
+on that byte - **it is 105 unmatched `gfx_disp_enter`s**, and the CPU is
+inside the DRAG OUTLINE when it is seen.
+
+**It does not contradict the second session's "984 increments against 984
+decrements, exactly balanced".** That measurement armed eight breakpoints, and
+eight breakpoints are enough to change the pacing: the same run's lanes did
+not die either. A balanced count on a machine that did not fail is a
+measurement of the healthy path.
+
+What `[gfx_dnest]` at 106 does to the machine is not a memory smash by itself,
+and that is why it has to be chased rather than assumed: above 1,
+`gfx_disp_enter` **stops translating and stops selecting a display**
+(`inc` / `cmp 1` / `jne .out`), `gfx_points` takes `.slow` for ever,
+`font_ch_cut` refuses every seam cut, and every primitive draws on whatever
+display happens to be current with the OUTER hook's translation assumed.
+vga12.inc's own banner at `vga_xor_rect_vram` describes what that costs when
+it goes the other way: a rect dispatched on the wrong `[vid_mono]` wrote
+through `ES:DI = 0960:8FC1`, which is `COLD_SEG:45C1` - **the file manager's
+own code** - and the machine rebooted or froze.
+
+Also seen once, on a dead machine: `sch_tasks[0].T_SP` = **1119**, inside slot
+10's slice. The UI task and MISSILE's worker parked on one stack.
+
+## A methodological finding, because it invalidates comparisons
+
+**The reproduction rate depends on the HOST probe's pacing**, and this is not
+contention. Mouse packets are injected over the debug socket, so the host
+loop's period decides how much guest time passes between them - and the
+defect lives in that window. Measured here, same tree, same scenario, four
+lanes each:
+
+| probe, per sample | rounds | deaths |
+|---|---|---|
+| 110 KB `.text` read | 12 | 2 of 4 |
+| 7 KB LOW_SEG read | 14 | 3 of 4 |
+| `regs` + 290-byte read | 14 | 2 of 4 |
+| one 1-byte read | 14 | **0 of 4** |
+
+A probe that samples cheaply does not reproduce the bug at all. **Any future
+measurement here has to state its per-sample cost**, and two runs with
+different probes are not comparable.
+
+## What to do next
+
+`[gfx_dnest]`, and nothing else on this list until it is settled. It is the
+only invariant known to break while the machine is still alive, and it breaks
+inside the drag outline, which is the one thing that is drawn on every mouse
+packet of the gesture that reproduces.
+
+The instrument has to reproduce, so it must be expensive per sample (see
+above) - a 1-byte poll for `[gfx_dnest] >= 3` ran 56 round trips without a
+single sighting. Pair the LOW_SEG differ's pacing with the `[gfx_dnest]`
+alarm, and take the call chain at the FIRST value above 1.
+
+Two sub-questions worth having ready when it fires:
+
+* the climb to 106 was not seen at any intermediate value by a 200 Hz poll,
+  so it is a **burst** rather than a drift - look for a loop that enters per
+  iteration and leaves once, not for one missing `GFXDLEAVE`;
+* `[gfx_dnest]` is a byte and `gfx_dleave` decrements unconditionally, so a
+  count that has run up will eventually come back down past 0 to 255 - which
+  is where the earlier 250 / 253 / 254 readings come from.
