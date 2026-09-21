@@ -296,6 +296,14 @@ region instead of a framebuffer is a wild writer by itself.
     The comment there ("Both are 1..8") is right, and what proves it is the
     ANCHOR test at `.live`, not the `jae .part` the loop comments cite.
 
+15. **`vid_span_one` is not where SP breaks.** Breakpoints on its entry and
+    its exit, comparing SP across the call: **83 entries, 83 exits, SP legal
+    at every one** over ten round trips - including the rounds after the
+    window had stuck on the Hercules. That also measures something useful
+    about the other symptom: once the drag back is a no-op, `vid_span_one`
+    stops being called AT ALL (its count freezes at 5, and at 83), because
+    nothing re-lays-out. So the no-op drag is upstream of any drawing.
+
 ## What to do next
 
 Not the stack floors - 13 and 14 above spent that idea. What is left of the
