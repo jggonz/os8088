@@ -1357,7 +1357,29 @@ gfx_points:
     mov dl, al                  ; straddling array is the only one that pays
 .hook:
     call gfx_disp_enter_n       ; DL names it, so the DEAD ZONE cannot send
-    jmp short .pass             ; this to the primary by mistake (39.14.7.2)
+                                ; this to the primary by mistake (39.14.7.2)
+
+    ; --- SPEC.md 39.14.6: AND NOW ASK THE DISPLAY WE ACTUALLY ENTERED -------
+    ; The two tests at the gate ran before `vid_disp_of` was called, so they
+    ; describe whichever display the LAST primitive left current (39.14.3
+    ; restores none on purpose). The hook above enters the display the first
+    ; point is on, and `.done`'s second pass enters the OTHER card outright -
+    ; neither of which need be 1bpp. `.pass` then loads ES from THAT display's
+    ; [vid_rseg], which on a VGA primary is 0, and runs the one-bit inline
+    ; loop into segment 0: the IVT, the BIOS data area and this kernel's own
+    ; .text from 0x0600. vga_xor_rect_vram's banner is the same defect in
+    ; sw_col, with the same ending - "the machine rebooted or froze".
+    cmp byte [vid_mono], 0
+    je .unhook
+    cmp byte [vid_planes], 1
+    je .pass
+.unhook:
+    call gfx_dleave             ; give the hook back and draw it a point at a
+                                ; time - gfx_pixel resolves each point's own
+                                ; display, which is what this call wanted
+                                ; anyway. A second pass re-draws the first
+                                ; card's points, in the same [gfx_color]: the
+                                ; cost is real and the picture is identical
 
     ; SPEC.md 5.6.9.2: one gfx_pixel a point - it clips, resolves the display
     ; and draws on a planar adapter itself. It sits HERE, between the gates and

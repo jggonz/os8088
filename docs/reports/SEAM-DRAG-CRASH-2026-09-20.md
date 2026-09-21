@@ -11,6 +11,16 @@ not. It is not maintained against a later tree.
 It is the diagnosis behind `tests/dispmodex.py` being red, and behind the two
 things that row now says instead of what it used to say.
 
+> **SOLVED — read the FOURTH session first.** The defect is `gfx_points`
+> running its one-bit inline loop on a PLANAR display with `ES = 0`
+> (SPEC.md §5.6.9.5.2), introduced by `782f6b6c` and fixed in 15 bytes of
+> `.text`. Every *"what to do next"* in the first three sessions below is
+> spent, and two of them point somewhere the fourth session disproves — read
+> them for the eliminations, which stand and were all correctly measured, and
+> not for the leads. The single sentence that explains why three sessions of
+> instruments saw nothing: **they all watched `LOW_SEG`, and the write is to
+> `KERNEL_SEG` and to segment 0.**
+
 ## The finding, in one line
 
 **Dragging MISSILE's window onto the Hercules half of an extended desktop
@@ -513,23 +523,160 @@ that overturned it here - "IF=1, SP legal, every other word sane, therefore
 alive" - **is not a test of aliveness**: a wild CPU executes kernel code with
 IF set and a legal SP for a good while before it hits anything that shows.
 
-## What to do next
+## Where this went
 
-Not `[gfx_dnest]` - see above. It is the
-only invariant known to break while the machine is still alive, and it breaks
-inside the drag outline, which is the one thing that is drawn on every mouse
-packet of the gesture that reproduces.
+Not `[gfx_dnest]`, and not the stack. The answer is the fourth session below,
+and the lead this section proposed — pair the `LOW_SEG` differ's pacing with a
+`[gfx_dnest]` alarm — was never run, because the lead itself was wrong twice
+over. Kept as written so the negative result stays legible; do not work it.
 
-The instrument has to reproduce, so it must be expensive per sample (see
-above) - a 1-byte poll for `[gfx_dnest] >= 3` ran 56 round trips without a
-single sighting. Pair the LOW_SEG differ's pacing with the `[gfx_dnest]`
-alarm, and take the call chain at the FIRST value above 1.
+# Fourth session, 2026-09-21: FOUND — `gfx_points` asks the ADAPTER before it asks the HOOK
 
-Two sub-questions worth having ready when it fires:
+**`gfx_points` runs a ONE-BIT inline loop on a PLANAR display, with
+`ES = 0`.** The store is `mov [es:di], ah` and `di` is a row base, so on this
+machine it walks the IVT, the BIOS data area and the kernel's own `.text`
+from `0x0600`. That is the wild write every previous session was downstream
+of: the stack going wild, the `0xD2` fill, the masked IRQ0, the `[gfx_dnest]`
+of 106 are all the wreck, and none of them is the defect.
 
-* the climb to 106 was not seen at any intermediate value by a 200 Hz poll,
-  so it is a **burst** rather than a drift - look for a loop that enters per
-  iteration and leaves once, not for one missing `GFXDLEAVE`;
-* `[gfx_dnest]` is a byte and `gfx_dleave` decrements unconditionally, so a
-  count that has run up will eventually come back down past 0 to 255 - which
-  is where the earlier 250 / 253 / 254 readings come from.
+It is SPEC.md §39.14.6's documented failure class one routine along. That
+banner is about `sw_col` and ends *"the machine rebooted or froze."*
+
+## The mechanism, in the order the instructions run
+
+```nasm
+    cmp byte [vid_mono], 0      ; (1) the ADAPTER, asked of whatever display
+    je .slow                    ;     the LAST primitive left current
+    cmp byte [vid_planes], 1
+    jne .slow
+    ...
+    mov ax, [es:si]             ; (2) the FIRST POINT's display
+    mov bx, [es:si+2]
+    call vid_disp_of
+    mov dl, al
+.hook:
+    call gfx_disp_enter_n       ; (3) ...which is ENTERED here
+    jmp short .pass             ; (4) and the one-bit loop runs on it
+```
+
+Step 1 and step 3 are about **different displays**. §39.14.3 restores none on
+purpose — the last display drawn on stays current — so step 1 describes the
+Hercules whenever the Hercules was drawn on last, and step 3 enters the VGA
+whenever the array's first point is on the VGA. `.pass` then loads
+`ES` from *that* display's `[vid_rseg]`, which is **0** on a planar primary,
+and runs `and ah, [es:di] / or ah, al / mov [es:di], ah`.
+
+`.done`'s second pass is worse, because it has no test at all:
+
+```nasm
+    or byte [gfx_pt_f], PT_2ND
+    mov dl, [vid_cur]
+    xor dl, 1                   ; the OTHER card, whatever it is
+    jmp .hook
+```
+
+so **every array that straddles the seam** enters the other card
+unconditionally. That is why the reproduction is a window DRAG onto the second
+display and nothing else: it is the one gesture that splits a point array.
+
+## The bisect
+
+`782f6b6c` — *"Merge cyclone-extdesk-perf: `gfx_points` on the extended
+desktop"*. It removed the `cmp byte [vid_ndisp], 1 / ja .slow` that had sent
+every two-display call down the per-point path, added the hook and the
+`xor dl, 1` second pass, and **reordered the two adapter tests above the
+`[vid_ndisp]` test** on the way.
+
+Four lanes, eight round trips each, GOOD requiring 0 of 8 dead:
+
+| position | commit | verdict |
+|---|---|---|
+| 0 | `c045f472` | GOOD 0/8 |
+| — | `924eedb3` | GOOD |
+| 10 | `5d7e8d43` | GOOD 0/8 |
+| 15 | `bf118e46` | GOOD 0/8 |
+| 17 | `7483e388` | GOOD 0/8 |
+| **18** | **`782f6b6c`** | **BROKEN 1/4** |
+| 20 | `47efde8d` | BROKEN 1/4 |
+| 40 | `6c4bff0c` | BROKEN 3/4 |
+
+Last good and first broken are adjacent, and the first broken is the merge's
+own content — `7483e388` is its first parent. The user's warning about a
+squash did not bite: the branch merged rather than squashed, so the commit
+that carries the change is in the history.
+
+Three rules made the search answer at all, and `tools/os88bisect.py` states
+all three: **never take a side from one run** (this defect is ~75% per round,
+so N=1 names a random commit), **parse legs** and **check ancestry first**.
+Point 18's first batch read 0/4 and was **contaminated** — the on-machine
+proof was running beside it, six emulators on four cores — and the clean
+re-run read 1/4. A bisect point that reads GOOD under load is the failure mode
+to watch for here.
+
+## The proof, on the machine
+
+An exec breakpoint at `gfx_points.pass`, on `os8088_xt_vga_herc` with the
+window dragged across the seam:
+
+```
+vid_cur=0  vid_mono=0  vid_planes=4  vid_rseg=0000   =>  ES = 0000
+```
+
+and at `.hook` with `[gfx_pt_f] = 0x03` (`PT_OOB | PT_2ND`) — the straddling
+second pass, entering the other card.
+
+## Why three sessions of instruments did not find it
+
+**Every probe watched `LOW_SEG`.** The task table, the slice canaries, the
+dead-space tripwire in the 290-byte rung gap, the `.lowbss` differ — all of
+them. The write is to `KERNEL_SEG` and to segment 0, so there was nothing for
+any of them to see, and the stack only goes wild *after* the kernel's own code
+has been drawn on. Three sessions of eliminations were all true and all
+downstream.
+
+## Why the suite stayed green
+
+`tests/ptsext.py` drives all three of §5.6.9.4's extended-desktop paths and
+self-compares band against band — and it boots `os8088_5150_both_gla_mono`,
+**Hercules primary, CGA second**. Both displays are 1bpp there, so the two
+tests at the door are true of either card, the hook can never enter one the
+loop cannot write, and the defect cannot be expressed at all. The row was
+written against the pair the original field report came off; the defect needs
+a MIXED pair.
+
+## The fix, and what it cost
+
+The two tests move BELOW the hook, and a display the loop cannot serve gives
+the hook back and takes `.slow` — which is what a two-display call did before
+§5.6.9.4 existed. SPEC.md §5.6.9.5.2 is the contract.
+
+**15 bytes of `.text`**, measured as the difference between two assemblies of
+the same tree: `.text` 50,144 → 50,159, `.bss` +0, `.cold` +0, `.lowbss` +0,
+`KERN_SIZE` unmoved, no rung crossed. `kern_small` is **+0** — the whole block
+is inside `%ifdef GFX_VGA`, which is `KERN_BIG`-only.
+
+Verification, the same instrument the bisect used: **four lanes × eight round
+trips, twice — 64 round trips, 64 crossings, zero deaths**, with the window
+returning cleanly to `(7, 20, 562, 435)` each time. HEAD before the fix was
+3/4 dead in round 0.
+
+## The gate
+
+`tests/ptsmix.py`, on `os8088_xt_vga_herc`. It asserts the INVARIANT and not
+the crash: an exec breakpoint at `gfx_points.pass` — the instruction before
+`mov es, bx` — reads the display the loop is about to write to, and every
+sampled pass must have `[vid_mono]` set, `[vid_planes]` 1 and `[vid_rseg]`
+non-zero. That fires before the damage, so the row names the defect rather
+than reporting the reboot it causes twenty frames later.
+
+Two things about it are worth keeping, because the first shape of the row was
+**green against the broken kernel**:
+
+* **the WINDOW straddling the seam is not the point ARRAY straddling it.**
+  PtsTest's bands are 120px wide inside a 176px window, so a frame placed
+  across the seam leaves every point on the primary, `PT_OOB` is never set,
+  the second pass never runs and the row sees a healthy kernel. The straddle
+  target is computed from the band, not the frame;
+* **`drag(…, tgt)` was in POINTER coordinates** where the row meant window
+  ones. The grab is the title bar's midpoint, so the window landed half its
+  own width short — which is exactly far enough to do the same thing.

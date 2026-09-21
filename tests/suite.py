@@ -2782,6 +2782,43 @@ SOAK = [
         "and 'did you obviously break the OS' is not what it asks",
         needs=("marty",), serial=True,
         wants=("build/ptstest360.img",)),
+    Row("ptsmix", "soak", py("tests/ptsmix.py"), 95.0,
+        "SPEC.md 5.6.9.5.2: the row above's claim on a MIXED pair of cards - "
+        "os8088_xt_vga_herc, a VGA primary with a Hercules beside it. ptsext "
+        "boots os8088_5150_both_gla_mono, where BOTH displays are 1bpp, so "
+        "gfx_points' two tests at the door - [vid_mono] and [vid_planes] - "
+        "are true of either card and the defect below cannot be EXPRESSED on "
+        "that machine whatever the kernel does. Those tests ran BEFORE "
+        "vid_disp_of, so they described whichever display the last primitive "
+        "left current (39.14.3 restores none on purpose) and not the one "
+        ".hook was about to enter: a call made while the Hercules was current "
+        "on an array whose first point is on the VGA reached the ONE-BIT "
+        "inline loop with ES = [vid_rseg] = 0 and wrote the IVT, the BIOS "
+        "data area and the kernel's own .text - and .done's second pass "
+        "entered the OTHER card with no test at all, so EVERY straddling "
+        "array did it. WHAT IS ASSERTED IS THE INVARIANT AND NOT THE CRASH: "
+        "an exec breakpoint at gfx_points.pass - the instruction before "
+        "`mov es, bx` - reads the display the loop is about to write to, and "
+        "every sampled pass must have [vid_mono] set, [vid_planes] 1 and "
+        "[vid_rseg] non-zero. That fires BEFORE the damage, so the row names "
+        "the defect rather than reporting the reboot it causes twenty frames "
+        "later, and it is exact where the field's own scenario is ~75% a "
+        "drag. VERIFIED TO FAIL: against the kernel at e36b16ae it reports "
+        "`.pass on display 0: mono=0 planes=4 rseg=0000` at the FIRST "
+        "straddle and exits 1, with `make test-fast` 46/46 and `ptsext` "
+        "green against that same kernel - which is the whole reason this row "
+        "exists beside that one. Two traps, because the first shape of it was "
+        "GREEN against the broken kernel: the WINDOW straddling the seam is "
+        "not the point ARRAY straddling it (PtsTest's bands are 120px inside "
+        "a 176px frame, so a frame across the seam leaves every point on one "
+        "card, PT_OOB is never set and the second pass never runs), and the "
+        "drag target is in WINDOW coordinates where the grab is the title "
+        "bar's midpoint - half a window out, which does the same thing. 95s "
+        "is 57.0s MEASURED on an idle container with the ~1.6x this suite "
+        "allows for its slowest box. docs/reports/SEAM-DRAG-CRASH-2026-09-20"
+        ".md is the diagnosis behind all of it",
+        needs=("marty",), serial=True,
+        wants=("build/ptstest360.img",)),
     Row("regmove", "soak", py("tests/regmove.py"), 130.0,
         "A package's REGION moves and the package keeps working (SPEC.md "
         "66.6.1). 66.6 said since it was written that a region can never move "
@@ -5812,10 +5849,15 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("dispmodex", "soak", py("tests/dispmodex.py"), 120.0,
         "Which display does Missile Command ask about Mode X? (SPEC.md "
-        "39.18.1). **IT IS RED, AND WHAT IT IS RED FOR IS A GUEST CRASH** - "
-        "docs/reports/SEAM-DRAG-CRASH-2026-09-20.md is the diagnosis: moving "
-        "MISSILE's window onto the Hercules half of an extended desktop takes "
-        "the machine down about three runs in four, measured on the kernel's "
+        "39.18.1). **IT WAS RED FOR A GUEST CRASH AND THAT CRASH IS FIXED** - "
+        "gfx_points ran its one-bit inline loop on a PLANAR display with "
+        "ES = 0 (SPEC.md 5.6.9.5.2), so moving MISSILE's window onto the "
+        "Hercules half of an extended desktop wrote the IVT, the BIOS data "
+        "area and the kernel's own .text, and took the machine down about "
+        "three runs in four. docs/reports/SEAM-DRAG-CRASH-2026-09-20.md is "
+        "the diagnosis and `ptsmix` is the gate that keeps it out; what is "
+        "below is what this row learned on the way and stands either way. "
+        "The rate was measured on the kernel's "
         "own [ticks] over GUEST seconds so contention is not in it. The row "
         "used to report the coordinate its pointer could not reach, which is "
         "a sentence about a coordinate; it now asks after every move whether "

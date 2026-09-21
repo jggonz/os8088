@@ -5292,6 +5292,59 @@ both are the owner's call rather than this section's:
   origin at all. It is the §5.6.9.4 shape with the scan replaced by the report,
   and it gives up what the field asked for.
 
+##### 5.6.9.5.2 THE ADAPTER IS ASKED AFTER THE HOOK, NOT BEFORE IT
+
+§5.6.9.5.1's hook is what made the two tests at the door wrong, and the way it
+is wrong is §39.14.6's, one routine along.
+
+`gfx_points` opens with
+
+```
+    cmp byte [vid_mono], 0
+    je .slow
+    cmp byte [vid_planes], 1
+    jne .slow
+```
+
+and those ran BEFORE `vid_disp_of` had been called, so they described whatever
+display the last primitive happened to leave current — §39.14.3 restores none
+on purpose. `.hook` then enters the display the FIRST POINT is on, and
+`.done`'s second pass enters the OTHER card outright with no test at all; and
+`.pass` loads `ES` from the entered display's `[vid_rseg]` and runs the
+ONE-BIT inline loop on it regardless.
+
+**On a mixed desktop that is a wild write into segment 0.** `[vid_rseg]` is 0
+on a planar primary, so a hook onto the VGA while the Hercules was current
+gives the loop `ES = 0x0000`, and its `and ah,[es:di] / or ah,al /
+mov [es:di],ah` lands on the IVT, the BIOS data area and this kernel's own
+`.text` from 0x0600. §39.14.6's banner is the same defect in `sw_col` and ends
+the same way — *the machine rebooted or froze*.
+
+**So the two tests move BELOW the hook**, and a display the loop cannot serve
+gives the hook back (`gfx_dleave`) and takes `.slow`, which is what a
+two-display call did before §5.6.9.4 existed. `gfx_pixel` is a 1x1 `gfx_fill`,
+which clips and adapter-dispatches itself, so the fallback is correct on any
+pair of cards. A second pass that falls back redraws the first card's points in
+the same `[gfx_color]`: the cost is real and the picture is identical.
+
+**IT TAKES A MIXED PAIR TO SEE IT, AND THAT IS WHY THE GATE DID NOT.**
+`tests/ptsext.py` drives all three new paths and self-compares band against
+band, and it boots `os8088_5150_both_gla_mono` — Hercules primary, CGA second.
+BOTH displays are 1bpp there, so the two tests are true of either one, the hook
+can never enter a card the loop cannot write, and the defect cannot be
+expressed at all. A planar primary with a 1bpp second — `os8088_xt_vga_herc` —
+is the machine that shows it, and `tests/ptsmix.py` is the row that does:
+it breaks at `.pass` and asserts the display the loop is about to write to is
+one it can serve, which fires BEFORE the damage rather than reporting the
+reboot it causes twenty frames later.
+
+**15 bytes of `.text`** (50,144 → 50,159), nothing in `.bss`, `.cold` or
+`.lowbss`, no rung crossed, and `kern_small` **+0** — the whole of it is
+inside `%ifdef GFX_VGA`. The fallback costs a straddling second pass its
+points a second time, on `gfx_pixel`, in the same `[gfx_color]`, so the
+picture is identical and the cost is paid only by an array that crosses the
+seam.
+
 
 ### 5.7 The per-call floor — what a small drawing call spends
 
