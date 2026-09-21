@@ -38863,6 +38863,140 @@ routine both arms share, and a 32-bit remaining counter in place of a 16-bit
 end compare. The crossing itself is a byte loop: it is one symbol per 64KB of
 output, so a few hundred cycles once per segment against sixty bytes of
 kernel for ever.
+##### 20.14.6 The hint is a CACHE, so the read path has a MISS path now
+
+§20.14 has said since it was written that a foreign tool may drop those four
+directory bytes, that a missing hint reads as *"not compressed"*, and that
+trusting it would hand an application compressed bytes — *"so the read path
+checks the file's own `'CZ'` header too"*. **It did not.** `dskw_czexp`
+compares the file's own magic, but it is only *reached* once the hint has
+already said so: it **validates** the hint, it never **discovers**
+compression. Two things followed, and both were reported from the field:
+
+- a file copied onto one of our volumes by DOS, Windows or anything else
+  carries no hint, so `BROWSER.HTM` and every other packed file opened as
+  packed bytes;
+- a **redirected volume has no directory entry at all** to carry one, so
+  `README.TXT` copied to the RAM disk did the same — and that path was worse,
+  because `.fsread` never looked at a hint in the first place.
+
+`.o88` files kept working throughout, which is the tell: the LOADER has a peek
+of its own (`ld_run_body`'s `.peek`) and reads the file's own header, so
+packages were the one kind of file that never depended on the cache being
+warm.
+
+**`dskw_czsniff` is the miss path**, and `dskw_czhdr` — factored out of
+`dskw_czstamp` — is the judgement both ends now share: the writer has the
+bytes in hand, the reader has to go and get them, and what they do with them
+once they have them is the same six stores.
+
+**It costs no extra `int 13h` on a file that has a hint**, because it is not
+called for one: our own disks pay one byte compare. On a file that has not, it
+costs none either — the peek is a one-sector `disk_read`, §18.95's cache fills
+the slot to the end of the track, and `dskw_rdata`'s first sector comes
+straight back out of it. The single case that pays is a hintless file opened
+while `MEM_P_DIRW` has been shed *and stayed shed*: one sector, once, on OPEN
+and never on a listing. Two edge cases at once and the machine still works, a
+little slower.
+
+##### 20.14.6.1 …and the redirected arm joined the one flow to get it
+
+`.fsread` was a second implementation of the read: its own 32-bit capacity
+test, its own `FERR_BIG`, its own `fpg_begin`. **None of that is about the
+transport.** It writes `FSV_STAT`'s size where the FAT arm reads it, banks the
+handle in `[dskw_raw+DSK_R_CLUS]` — the cell the chain walk keeps its first
+cluster in, which this arm has no directory entry to fill — sniffs, and jumps
+into the shared flow. Putting the handle *there* rather than in a cell of its
+own is what lets §20.14.6.2 below be told the transport by `[dsk_vkind]`
+alone, so neither the sniff nor the peek takes an argument saying which. What
+is
+left that differs is one branch at the read itself, `.fsdata` against
+`dskw_rdata`, and the compressed placement, the capacity refusal and the
+expansion are had for nothing.
+
+So the RAM disk did not gain a *copy* of the decompressor's plumbing; it
+stopped carrying a copy of everything else. `tests/rdcz.py` is the gate and
+drives both halves on one boot: a packed file copied to the RAM disk, and the
+same file with its hint struck out of the FAT directory by hand.
+
+##### 20.14.6.2 `dsk_peek_x` — the head of a file, whichever transport
+
+The sniff wanted a file's first eight bytes and had to ask two different
+transports for them. So did the loader's header peek (§21 step 2) and the icon
+harvest's (§62.9.2.2), and **all three had written the same nine instructions
+out**: set `ES` to `LOW_SEG`, test `[dsk_vkind]`, and either turn a cluster
+into an LBA and read a sector or hand `FSV_READAT` a 32-bit offset of zero.
+
+`dsk_peek_x` is that, once. It takes the first cluster *or the driver's opaque
+handle* in `AX` — the same register either way, because §20.14.6.1 above banks
+the handle in the cell the cluster lives in — and a byte count in `CX`, and it
+answers `ES:BX` = `dsk_secbuf` with `AX` = **how many bytes actually
+arrived**, `CX` still holding what was asked for.
+
+**The count is an output and the strictness stays at the call site**, which is
+the one thing the three callers did not agree about:
+
+| caller | asks | on a short answer |
+|---|---|---|
+| `ld_run_body.peek` (§21) | 512 | **takes it.** `build/filler.o88` is 370 bytes, so a package shorter than the ask is an ordinary thing and `ld_check_hdr` is what judges it |
+| `.h_read` (§62.9.2.2) | `DSK_PEEK` (128) | **refuses.** A short answer leaves the *previous* entry's header in the tail of the buffer, and that one is VALID — so a 40-byte file would take the icon of the package above it in the sort |
+| `dskw_czsniff` (§20.14.6) | `DSK_CZ_HDR` (8) | **refuses.** A file shorter than the header is not one |
+
+Making the routine itself strict would have been smaller and is wrong: it
+would refuse to launch a sub-512-byte package off a RAM disk with *Disk
+error*. Making it lax would have cost the harvest its correctness.
+
+**The FAT arm answers the whole ask whatever it was asked for**, because it
+reads a sector and gets the slack past EOF for free — unrelated bytes that
+every caller's own magic test throws out. A redirected volume has no sectors
+and delivers exactly what is there, so the two compares above only ever bite
+one kind of volume.
+
+One behaviour moved with the factoring, deliberately: a cluster out of range
+on the loader's path now reads as `LD_EDISK` where it read as `LD_EBAD`. That
+is the honest verdict on a directory entry naming a cluster this volume has
+not got, and it is the only difference.
+
+**It paid for the feature.** The sniff arrived at **+110 bytes of `.cold`**,
+which crossed the 80-step rung the branch had seven bytes of room under.
+Collapsing the three copies into one primitive, and the shaves that fell out
+of having a contract to shave against — `mov si, bx` where the buffer's
+address was being re-materialised, `cmp ax, cx` where the asked count was
+being re-materialised, and the accumulator through `dskw_czstamp`'s clear —
+took `.cold` to **40,959**, one byte under. The feature is 6 bytes of resident
+RAM, not 110.
+
+
+##### 20.14.6.2.1 …and `OSAPI_FILE_FIND` deliberately does NOT sniff
+
+`dsk_find_x` reads the same four bytes (§20.14.3): the size it reports for a
+compressed file is the **unpacked** one, because an application sizes its
+claim off what it was told. With the hint gone it reports the **packed** size,
+and the sniff does not fix that — on purpose.
+
+The reason is the one the whole feature rests on. The sniff costs no extra
+`int 13h` because it runs **once, on open**, and the sector it peeks is the
+one `dskw_rdata` is about to read anyway (§18.95). A sniff inside FIND would
+run **once per directory entry**, on a path that today costs exactly what an
+uncompressed listing costs, and that is the *"ton of upfront disk I/O"* this
+was explicitly not to become.
+
+So a hintless compressed file is **under-reported by FIND and read correctly
+by READ**, and what that means for an application depends on how it sized its
+buffer:
+
+- one that claims a **fixed** capacity is unaffected. Note Pad claims
+  `NP_MAXKB` = 16,384 whatever FIND said, so `README.TXT` with its hint struck
+  opens as the 14,427 bytes it is — measured, `tests/rdcz.py`;
+- one that claims **exactly what FIND reported** gets `FERR_BIG` from the
+  read, because the capacity check at `.sizes` compares the file's real `U`
+  against it. It refuses, visibly, and the destination is untouched.
+
+**That is the right way round to fail** and it is why the asymmetry is
+tolerable: the alternative before the sniff was that the same application
+received packed bytes and displayed them as content. A refusal is a bug
+report; garbage is not.
+
 ### 20.15 `compress.inc` — the one thing on the machine that COMPRESSES
 
 Everything else in this system decodes. The loader expands a package, the file

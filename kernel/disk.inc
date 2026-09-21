@@ -3175,45 +3175,22 @@ disk_mount_x:
                                 ; THE DRIVER'S OPAQUE HANDLE, which is what
                                 ; rd_stage puts at @18 and what FSV_READAT
                                 ; takes (SPEC.md 62.9.1)
-%ifdef OS88_REDIR
-    cmp byte [dsk_vkind], DVK_FILE
-    je .h_fsread                ; SPEC.md 62.9.2.2: a LOCAL redirected volume
-%endif                          ; peeks the header through its driver instead
-    call dsk_clus2lba_x
-    jc .h_zero
-    call dsk_rd1_x                ; ES = LOW_SEG
-    jc .h_zero
-%ifdef OS88_REDIR
-    jmp short .h_got
-.h_fsread:                      ; DSK_PEEK bytes at offset 0, which is every
-                                ; byte below reads: the header is 32, the
-                                ; embedded icon 32..95 and the document glyph
-                                ; LD_H_GLYPH..+15. **THE WHOLE ASK OR
+    mov cx, DSK_PEEK            ; ...and DSK_PEEK bytes is every byte below
+    call dsk_peek_x             ; reads: the header is 32, the embedded icon
+    jc .h_zero                  ; 32..95 and the document glyph
+    cmp ax, cx                  ; LD_H_GLYPH..+15. dsk_peek_x hands the asked
+    jne .h_zero                 ; count back in CX, so this compare is 2 bytes
+                                ; and not 3. **THE WHOLE ASK OR
                                 ; NOTHING** - a short answer would leave the
                                 ; PREVIOUS entry's header sitting in the
                                 ; buffer, and that one is VALID, so a 40-byte
                                 ; file would take the icon of the package
-                                ; above it in the sort. The FAT path reads a
-                                ; whole sector and trusts the slack after EOF,
-                                ; which is unrelated bytes the magic test
-                                ; throws out; this buffer is not that
-    push bp                     ; the entry COUNT, which drv_fs_call spends
-    push dx                     ; ...and the entry INDEX, which is its output
-    mov dx, LOW_SEG             ; DX:BX and never ES:BX - ES is KERNEL_SEG on
-    mov bx, dsk_secbuf          ; entry to a verb (SPEC.md 51.8)
-    mov cx, DSK_PEEK
-    xor si, si                  ; DI:SI = offset 0, in 32 bits
-    xor di, di
-    mov bp, FSV_READAT
-    call drv_fs_call
-    pop dx
-    pop bp
-    jc .h_zero
-    cmp ax, DSK_PEEK            ; DX is 0 by construction: a DSK_PEEK ask
-    jne .h_zero                 ; cannot deliver more than DSK_PEEK
-.h_got:
-%endif                          ; OS88_REDIR
-    mov si, dsk_secbuf          ; stage the 32 header bytes; dsk_ent's
+                                ; above it in the sort (SPEC.md 62.9.2.2).
+                                ; The FAT arm answers the whole ask off one
+                                ; sector, so this compare only ever bites a
+                                ; redirected volume
+    mov si, bx                  ; stage the 32 header bytes, from where
+                                ; dsk_peek_x left BX pointing; dsk_ent's
     mov di, dsk_ent             ; directory copy is done with above.
     mov cx, DSK_DE_SIZE         ; A PACKAGE HEADER, not a 19.1 entry - so
                                 ; DSK_DE_SIZE (dsk_ent's own width) and never
@@ -4170,6 +4147,79 @@ dsk_swapent:
     pop si
     pop cx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_peek_x - the head of a file, whichever transport (SPEC.md 20.14.6.2)
+; in:  AX = its first cluster on a FAT volume, or THE DRIVER'S OPAQUE HANDLE
+;      on a redirected one (SPEC.md 62.9.1); CX = how many bytes, <= 512
+; out: CF=0 - AX bytes of the file, from its byte 0, at LOW_SEG:dsk_secbuf,
+;      with ES = LOW_SEG and BX = dsk_secbuf. AX is what ARRIVED and may be
+;      less than CX. CF=1 - the transport refused.
+; clobbers: AX (the output), BX, CX, ES, CF - DX, SI, DI and BP are all
+;           preserved, which the icon harvest's entry index depends on
+;
+; THREE PLACES WANTED THE SAME NINE INSTRUCTIONS and each had written them
+; out: the loader's header peek (SPEC.md 21 step 2), the icon harvest's
+; (62.9.2.2) and the compression sniff's (20.14.6). They differ in ONE thing
+; and it is not the transport - it is how much of a short answer each will
+; take, so THE COUNT IS AN OUTPUT and the strictness stays at the call site.
+;
+; **THE FAT ARM READS A WHOLE SECTOR WHATEVER IT WAS ASKED FOR**, so it
+; answers CX and the slack past EOF comes free - unrelated bytes that every
+; caller's own magic test throws out. A redirected volume has no sectors and
+; delivers exactly what is there, which is why the harvest and the sniff
+; compare: a short answer would leave the PREVIOUS entry's bytes in the tail
+; of the buffer, and those are VALID, so a 40-byte file would take the icon
+; of the package above it in the sort. The LOADER deliberately does not
+; compare - build/filler.o88 is 370 bytes, so a package shorter than the 512
+; it asks for is an ordinary thing and `ld_check_hdr` is what judges it.
+;
+; It costs no extra `int 13h` on the FAT arm: the peek is a one-sector
+; `disk_read`, SPEC.md 18.95's cache fills the slot to the end of the track,
+; and the data read that follows comes straight back out of it.
+; -----------------------------------------------------------------------------
+dsk_peek_x:
+%ifdef OS88_REDIR               ; DX, SI, DI and BP are preserved on BOTH
+    push dx                     ; builds and only ONE has to work at it: the
+    push si                     ; FAT arm below spends none of them
+    push di                     ; (dsk_clus2lba_x and dsk_xfer both push what
+    push bp                     ; they touch), so the four saves are the
+%endif                          ; REDIRECTED arm's - DX is the segment it
+                                ; hands the verb, DI:SI the 32-bit offset and
+                                ; BP the verb itself. The contract is the same
+                                ; sentence either way; it is 8 bytes of
+                                ; kern_small that is not
+    push cx                     ; ...and the asked count, which is the
+                                ; driver's to spend and which both arms answer
+    push ss                     ; ES = LOW_SEG, for BOTH arms and for the way
+    pop es                      ; out (SPEC.md 2.1)
+%ifdef OS88_REDIR
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fat
+    mov dx, ss                  ; DX:BX and never ES:BX (SPEC.md 51.8) - this
+    mov bx, dsk_secbuf          ; site wants LOW_SEG in a general register
+    xor si, si                  ; DI:SI = offset 0, in 32 bits: the head of
+    xor di, di                  ; the file
+    mov bp, FSV_READAT
+    call drv_fs_call            ; ...and it restores ES, so the way out below
+    jmp short .out              ; needs only BX. AX is the count it delivered
+.fat:
+%endif
+    call dsk_clus2lba_x         ; the first sector of the first cluster IS the
+    jc .out                     ; file's first 512 bytes, so peek semantics
+    call dsk_rd1_x              ; are exact (SPEC.md 21 step 2)
+    pop ax                      ; ...and a whole sector arrived, so the answer
+    push ax                     ; is the whole ask. CF is dsk_rd1_x's still
+.out:
+    mov bx, dsk_secbuf          ; the contract's other half, and neither this
+    pop cx                      ; nor the pops touch a flag
+%ifdef OS88_REDIR
+    pop bp
+    pop di
+    pop si
+    pop dx
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
