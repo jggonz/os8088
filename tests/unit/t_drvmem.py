@@ -75,6 +75,9 @@ ROWS = [
     # SYSTEM.CFG bit and the Drivers page prices it, so it is in drv_memk and
     # therefore here
     ("Absolute mouse", "DRVM_VMM", "DRVM_IMG_VMM", "vmmouse.drv"),
+    # SPEC.md 9.12's CH375 USB mouse: DRVC_POINT, last on kern_big and after
+    # the absolute mouse on kern_emu
+    ("USB Mouse", "DRVM_USBM", "DRVM_IMG_USBM", "usbmouse.drv"),
 ]
 
 EQU = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s+equ\s+(.+?)\s*(?:;.*)?$", re.M)

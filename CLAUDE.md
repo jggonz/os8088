@@ -159,9 +159,11 @@ make pmcbandbench #   the COMMITTED pmc_rom.c, the four ghosts, the attract
                   #   BLIT4 10% high)
 make cpmsw      # the CP/M games and applications the RUNCPM floppies carry
                 #   beside RunCPM's master disk (§74.6) - LADDER, CATCHUM,
-                #   Nemesis, GAINA, WordStar, Turbo Pascal - fetched by
-                #   tools/getcpmsw.py from the public RunCPM software
-                #   collection, every file pinned, nothing committed;
+                #   Nemesis, GAINA, WordStar, Turbo Pascal - extracted by
+                #   tools/getcpmsw.py from apps/runcpm/cache/cpmcache.zip, a
+                #   COMMITTED copy of the public RunCPM software collection
+                #   (§74.6.1: Drive a file at a time was minutes), every
+                #   file pinned;
                 #   CPMSW='A/5:FILE' adds your own. The 1.44MB disk carries
                 #   the lot, the 720KB one the arcade area, the 360KB one
                 #   none (GAMES.TXT on each says which and why)
@@ -169,7 +171,7 @@ make runcpm     # RUNCPM (§74), the second C application: RunCPM 6.9 as a
 make runcpmdisk #   windowed CP/M 2.2 emulator — the host checks, then the
                 #   package; then the three floppies, from RunCPM's CCP and
                 #   master disk that `tools/getruncpm.py` fetches at a pinned
-                #   commit (`make runcpm-src`; never committed). `make rczex`
+                #   commit (`make runcpm-src`; out of the committed cache zip). `make rczex`
                 #   / `make rcz80test` are the Z80 core's ZEXDOC gates (in the
                 #   OS / in raw QEMU), `make rcmemtest` the movers',
                 #   `make rcbandbench` the row composer's bench
@@ -259,6 +261,15 @@ make vmmousetest # THE ABSOLUTE POINTER'S DISK (§9.11.6): a SYSTEM.CFG with
                 #   `make vmmousetest && python3 tests/vmmouse.py`. QEMU by
                 #   name: its `pc` machine carries the backdoor and MartyPC
                 #   has none, and `make run VMPORT=on` is the interactive form
+make usbmousetest # THE CH375 USB MOUSE'S GATE DISKS (§9.12.6): no emulator
+                #   carries a CH375, so USBMOUSE.DRV is built a second time
+                #   with -DCH375SIM - a model of the chip under its four port
+                #   primitives - onto two 360KB disks with SYSTEM.CFG bit 6
+                #   set: usbmsim.img (nothing plugged; tests/usbmouse.py
+                #   plugs, moves, clicks and unplugs through the model's
+                #   mailbox on MartyPC) and usbmbusy.img (a flash drive the
+                #   BIOS configured, which attach must refuse). The shipped
+                #   driver never contains the model
 make thewiretest # THE WIRE'S GATE DISKS (§92.12): ethertest's shape plus one
                 #   file - a SYSTEM/APPDATA/WIRE.CFG naming 10.0.2.2:8092
                 #   instead of os8088.com, so the machine fetches a fixture
@@ -367,11 +378,40 @@ make live     #   plus the allapps payload on one FAT16 partition that the
               #   kernel adopts as C:. Written raw to a stick it boots a
               #   legacy-BIOS machine; `iso` wraps the SAME image in an El
               #   Torito hard-disk-emulation CD, `live` builds both. On
-              #   demand for allapps' reason and needing the same fetch
-              #   (`make runcpm-src` once, first). A CD cannot write, and
-              #   §80.3 says what that costs; QEMU boots them with
+              #   demand for allapps' reason. It acquires its THREE fetches
+              #   itself now (RunCPM's master disk, the CP/M software
+              #   collection and the Frotz stories - `make runcpm-src cpmsw
+              #   stories` is the same thing by hand). A CD cannot
+              #   write, and §80.3 says what that costs; QEMU boots them with
               #   `-drive file=build/os8088-usb.img,format=raw -boot c` /
               #   `-cdrom build/os8088.iso -boot d`
+              #
+              #   **IT IS THE ONE IMAGE WHOSE PREMISE IS COMPLETENESS**
+              #   (§80.6), and it carries MORE than the everything-floppy:
+              #   THEWIRE.O88 in SYSTEM/ (a SYSAPPS package the desktop zone
+              #   launches out of the BOOT volume, and this IS that volume -
+              #   its absence made the Wire zone open nothing on every live
+              #   image ever cut), the four packages that ride no floppy
+              #   (RECORDER, HELLO, PACMAN, SCRIBE), the WHOLE Frotz story
+              #   library beside a FROTZ.O88 that had nothing to play, the
+              #   WHOLE RunCPM master disk and all nine areas of the CP/M
+              #   software collection - both fills were priced in 1.44MB
+              #   clusters on a 32MB partition, so the volume carried 62 of
+              #   77 master-disk files and no CP/M software at all - and the
+              #   category disks' documents in MEDIA/. 420 files, 3,216 of
+              #   16,324 clusters, 26MB still free.
+              #
+              #   `tests/unit/t_livefull.py` ENFORCES it and is in the FAST
+              #   tier. PART A reads build/livepayload.txt (which `all`
+              #   emits from $(LIVEARGS) itself) and sweeps apps/: **a new
+              #   package directory FAILS `make` until it is on the live
+              #   media or written into that file's EXEMPT_DIRS with a
+              #   reason.** PART B walks the built image when there is one.
+              #   The four packages are LIVE-ONLY and deliberately not on
+              #   build/apps-all.img: §19.10.1 is the arithmetic - that
+              #   disk's 1.2MB geometry pays for a package out of RunCPM's
+              #   drive A, and thirteen kilobytes took A\0 from 21 files to
+              #   one
 make burn     # the macOS guide onto REAL media (§80.4, tools/os88burn.py):
               #   lists the attached USB flash drives (USB + external +
               #   never the boot disk), typed-identifier confirmation,
@@ -510,7 +550,8 @@ worddisk` the Word disk, `make cworddisk` the CWORD disk — which carries
 adapted to what cword's RTF can actually say (§73.12.3) — and `make
 runcpmdisk` the RUNCPM disks (`tools/getruncpm.py` fetches RunCPM's CCP and
 master disk at a pinned commit and `tools/getcpmsw.py` the CP/M games and
-applications that ride beside it, §74.6 — never committed, either of them;
+applications that ride beside it, §74.6 — both out of the COMMITTED
+`apps/runcpm/cache/cpmcache.zip` (§74.6.1), the network only for a moved pin;
 `make rczex` and `make rcz80test` are the Z80 core's ZEXDOC gates, in the OS
 and in raw QEMU), `make c64disk` the C64 disks, `make paccmandisk` the PaccMan
 disks, `make apple2disk` the Apple II+ disks (`make apple2rom` fetches their

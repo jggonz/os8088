@@ -320,7 +320,7 @@ ico_core:
     mov [ico_x], cx
     mov [ico_y], dx
 
-    cmp word [wm_clip_n], 0     ; whole-icon against a background task's clip
+    CLIPQ                        ; whole-icon against a background task's clip
     je .noclip                  ; region, the font_char rule (SPEC.md 11.3):
     mov ax, cx                  ; an icon is one shape or none
     mov bx, dx

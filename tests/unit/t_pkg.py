@@ -55,7 +55,7 @@ DRV_MAX = 40 * 1024                  # DRV_MAX_KB in kernel/driver.inc
 # driver's own loadable half (OS88_OVERLAY, SPEC.md 52.11), which the kernel
 # never loads - its OWNER does - and which is stamped here because the header,
 # the dispatcher and the one-claim load discipline are identical.
-DRV_CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "net", 5: "file",
+DRV_CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "net", 5: "file", 6: "point",
                0x40: "overlay"}
 MAP_MAGIC = b"O8MM"
 MOD_H_IMG, MOD_H_NENT = 8, 10

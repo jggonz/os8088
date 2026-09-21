@@ -34,11 +34,36 @@ make live             # build/os8088-usb.img + build/os8088.iso
 ```
 
 `make usb` and `make iso` build the two singly. The first run also fetches
-RunCPM's command processor and master disk (`make runcpm-src`) and the CP/M
-software collection (`make cpmsw`, from Google Drive) — the RUNCPM package's
-prerequisites, though only the master disk goes on the live image. Nothing
-fetched is committed, and a tree behind a proxy that blocks either fetch
-stops there.
+three payloads, all of them pinned by SHA-256 and none of them committed:
+RunCPM's command processor and master disk (`make runcpm-src`), the CP/M
+software collection (`make cpmsw`, from Google Drive) and the Z-machine story
+library Frotz plays (`make stories`). **All three go on the live image in
+full** — it is the one image here whose premise is completeness, so it carries
+every one of RunCPM's 77 master-disk files, all nine areas of the CP/M
+collection and all fifteen stories, where a floppy takes a subset chosen to
+fit. A tree behind a proxy that blocks any of the three stops there.
+
+## What is on it
+
+One 32MB FAT16 partition the kernel adopts as **C:** — 420 files using about
+6MB, so **26MB is free for your own documents** (a stick remembers what you
+save; a CD does not, §80.3).
+
+| where | what |
+|---|---|
+| `APPS/` `GAMES/` | every application and game this project builds |
+| `MEDIA/` | the documents those programs open — the module, the two `.TEX` papers, the browser's manual page, a spreadsheet, a Markdown file and a bitmap |
+| `WORD/` `SCRIBE/` `CWORD/` | the three word processors, each whole in its own folder |
+| `C64/` `APPLE2/` `RUNCPM/` `PACCMAN/` | the emulators and the C arcade port |
+| `RUNCPM/A/` | CP/M drive A: RunCPM's whole master disk, plus LADDER, CATCHUM, Nemesis, GAINA, WordStar, Turbo Pascal, ZDE, BBC BASIC and the rest |
+| `STORIES/` | all fifteen Z-machine stories, in the three folders the Frotz disk uses, with `CATALOG.TXT` |
+| `WEAVE/` `LOOM/` | the Weave runtime with its demo bundles, and the IDE with their sources |
+| `SYSTEM/` | the Task Manager, The Wire, the ten typefaces, the DOS end of the parallel link |
+| the root | the drivers and `README.TXT` |
+
+Everything this project builds is here by rule rather than by anyone
+remembering: `tests/unit/t_livefull.py` fails the build when a program is
+added and does not reach this image (§80.6).
 
 The build is deterministic: the same source produces byte-identical images,
 so a checksum comparison against a release is meaningful.
@@ -180,7 +205,19 @@ system, and UEFI-only machines cannot start it.
   mouse, and that is QEMU's way of attaching one.
 - **86Box:** add `os8088-usb.img` as an existing hard-disk image; when it
   asks for a geometry, the image is **65 cylinders, 16 heads, 63 sectors**
-  (§80.1). **VirtualBox** does not take a raw image directly — convert it
+  (§80.1).
+- **An XT with an XTIDE card and a CompactFlash card, or a Book8088:** the
+  ROM reports the card's own geometry rather than reading it off the
+  partition table (a 256MB SanDisk is 16 heads × 32 sectors), so
+  the image has to be written *for that geometry* (§80.5). `make imager`
+  asks for it when the target is a USB-bus card reader, suggests what
+  XTIDE's Auto mode reports for a card of that size, and rewrites the ten
+  geometry bytes as it writes; by hand it is
+  `python3 tools/os88disk.py --retarget os8088-usb.img --geometry 64/63 -o cf.img`
+  and then `dd` of `cf.img`. Only the first 32MB of the card is used — the
+  volume ceiling is the kernel's (§52.10.3). Alternatively set the card to
+  16 heads × 63 sectors in XTIDECFG's *User specified CHS* and write the
+  stock image. **VirtualBox** does not take a raw image directly — convert it
   first (`VBoxManage convertfromraw os8088-usb.img os8088.vdi`) — or attach
   `os8088.iso` as a CD and boot from that.
 

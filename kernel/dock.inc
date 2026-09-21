@@ -58,13 +58,32 @@ DOCK_H      equ 24              ; strip height: 1px black rule + 23 white
                                 ; rows, pinned to the BOTTOM of whatever
                                 ; screen the adapter gave us. The top row and
                                 ; the tile top row therefore move with it and
-                                ; live in [vid_dock_y0] / [vid_dock_ty0]
+                                ; live in [vid_dock_y0] / [dock_c0]
                                 ; (SPEC.md 39.2) - 456/459 on VGA, 324/327 on
                                 ; Hercules, 176/179 on CGA.
 DOCK_TILE_W equ 24
 DOCK_TILE_H equ 20
 DOCK_X0     equ 8               ; first tile's left edge
 DOCK_STEP   equ 28              ; tile + 4px gap; 8 + 12*28 = 344 < 640
+
+; --- ...and on a SIDE of the screen (SPEC.md 30.5) ----------------------------
+; The bottom numbers above were the whole geometry until the strip could stand
+; on an edge; dock_geom turns [dock_cfg] into words, and it is the only reader
+; of any of these.
+DOCK_SW     equ 32              ; a side strip's width: a 24px tile, a 4px
+                                ; margin either side, the rule and a column
+DOCK_SX     equ 4               ; tile left, in from the strip's own left
+DOCK_SY0    equ 4               ; first tile's top, down from MBAR_H
+DOCK_SSTEP  equ 24              ; tile + 4px gap, top to bottom
+
+DOCK_P_BOTTOM equ 0             ; [dock_cfg] bits 0..1: the edge
+DOCK_P_LEFT   equ 1
+DOCK_P_RIGHT  equ 2
+DOCK_P_MASK   equ 3
+DOCK_F_AUTO   equ 4             ; ...and bit 2: the strip hides (SPEC.md 30.6)
+
+DOCK_HOVER_T  equ 5             ; ticks on the line before it opens: 0.27 s
+DOCK_LEAVE_T  equ 14            ; ticks off the strip before it closes: 0.77 s
 
 ; --- the tile key's low three bits (SPEC.md 30.3) ----------------------------
 ; The MARKS live here and nothing else does, so old XOR new says exactly what
@@ -76,6 +95,9 @@ DOCK_K_ACT  equ 4               ; the border doubles
 DOCK_K_MARKS equ DOCK_K_MINI | DOCK_K_ACT
 DOCK_K_ID   equ 0FFFFh & ~DOCK_K_MARKS  ; everything that is NOT a mark
 
+DOCK_CTX_W  equ 56              ; ...and its WIDTH, for a right-hand strip:
+                                ; menu_widest('Close') + 16. The same cheap
+                                ; copy as DOCK_CTX_H below and for its reason
 DOCK_CTX_N  equ 1               ; items in dock_ctx_items (SPEC.md 30.2)
 DOCK_CTX_H  equ DOCK_CTX_N * MENU_ITEM_H + 2
                                 ; ...and the height menu_popup will give them:
@@ -89,6 +111,15 @@ DOCK_CTX_H  equ DOCK_CTX_N * MENU_ITEM_H + 2
                                 ; at the press point instead would drop the
                                 ; menu ON the strip, over the very tile it is
                                 ; asking about
+
+; THE SETTING (SPEC.md 30.5): the edge in bits 0..1, Auto-hide in bit 2.
+; Initialised .text data and not .bss: SYSTEM.CFG's 'DK' record is stored
+; straight into it by drv_cfg_unpack, and its default has to be right on a
+; machine with no settings file at all - and across a warm boot, which keeps
+; the old kernel's .bss. dock_geom is its one reader.
+%ifdef DOCK_OPT
+dock_cfg:   db DOCK_P_BOTTOM
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dock_init - reset module scratch
@@ -118,9 +149,16 @@ DOCK_CTX_H  equ DOCK_CTX_N * MENU_ITEM_H + 2
 section .ovlw
 dock_init:
     push ax
+%ifdef DOCK_OPT
+    mov ax, [dock_la1]          ; THE WHOLE STRIP is owed - dock_force's own
+    mov [dock_dx1], ax          ; answer, written here rather than called for.
+    mov ax, [dock_la2]          ; dock_geom ran inside vid_init (MARK 7), so
+    mov [dock_dx2], ax          ; the along range is live
+%else
     mov word [dock_dx1], 0      ; THE WHOLE STRIP is owed - dock_force's own
     mov ax, [vid_pwm1]          ; answer, written here rather than called for
     mov [dock_dx2], ax
+%endif
     mov ax, 07FFFh              ; ...and nothing has been PAINTED yet (SPEC.md
     mov [dock_px1], ax          ; 30.3.3) - the empty bounding box, which is
     inc ax                      ; 07FFFh..08000h and refuses every rect
@@ -129,48 +167,292 @@ dock_init:
     retf                        ; FAR: kmain reaches this through OVLGATE1
 section .text
 
+%ifdef DOCK_OPT
+; Optional advanced operations have one private dispatch entry. The basic
+; renderer below stays callable with no disk and no module allocation.
+; A near caller keeps its own register contract. BP is private to dispatch
+; and restored before returning, including through re-entrant repaint calls.
+; Every operation is a six-byte stub: BP = its index, then dock_route. The
+; stub names the whole DKI_* constant: a bare BAND is `make BAND=1`'s %define. The
+; first DKB_N have a basic body in dock_btab; the rest are reached only while
+; the module is loaded (a hidden strip, an open hole), so need no basic row.
+; DOCK.DRV's dkx_tab lists the same operations in the same order.
+DKI_GEOM      equ 0
+DKI_BAND      equ 2
+DKI_FORCE     equ 4
+DKI_PAINT     equ 6
+DKI_PX_HIT    equ 8
+DKI_CLICK     equ 10
+DKI_RCLICK    equ 12
+DKI_SLOT_RECT equ 14
+DKI_FORCE_R   equ 16
+DKI_DROP      equ 18
+DKB_N         equ 10
+DKI_PASS      equ 20
+DKI_HOLE_ARM  equ 22
+DKI_HOLE_SUB  equ 24
+DKI_HOLE_WIN  equ 26
+DKI_N         equ 14
+
+%macro DKCALL 1
+    push bp
+    mov bp, %1
+    jmp short dock_route
+%endmacro
+
+DKFP equ mod_fp + MOD_DOCK * MODFP_STRIDE
+
+dkb_geom:
+    cmp word [spl_fseg], COLD_SEG
+    jbe .panel
+    OVLGATE1 ovl_dock_geom
+    ret
+.panel:
+    call far [CPFP + CPE_DOCK_GEOM*4]
+    ret
+
+; Basic setup is disposable, just like the settings decoder. No Dock module
+; is required. The hidden/live geometry is identical in this configuration.
+%macro DOCK_GEOM 1
+%1 %+ _geom:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    xor ax, ax
+    mov [dock_side], al
+    mov [dock_auto], al
+    mov [dock_up], al
+    mov [dock_hidden], al
+    mov [gfx_hole], ax
+    mov [wm_clip_n], ax
+    mov [dock_timer_on], al
+    mov [dock_sx1], ax
+    mov [dock_la1], ax
+    mov byte [dock_cap], INST_MAX
+    mov bx, ax
+%%map:
+    mov [dock_pos+bx], bl
+    inc bx
+    cmp bx, INST_MAX
+    jb %%map
+    mov ax, [vid_pwm1]
+    mov [dock_sx2], ax
+    mov [dock_la2], ax
+    mov ax, [vid_phm1]
+    mov [dock_sy2], ax
+    mov [dock_ffc2], ax
+    mov [dock_ffar], ax
+    mov [dock_lc2], ax
+    sub ax, DOCK_H-1
+    mov [dock_sy1], ax
+    mov [dock_frc], ax
+    mov [dock_lc1], ax
+    inc ax
+    mov [dock_ffc1], ax
+    add ax, 2
+    mov [dock_c0], ax
+    mov word [dock_a0], DOCK_X0
+    mov word [dock_astep], DOCK_STEP
+    mov word [dock_alen], DOCK_TILE_W
+    mov word [dock_thk], DOCK_H
+    push ds
+    pop es
+    mov si, dock_sx1
+    mov di, dock_lx1
+    mov cx, 7
+    cld
+    rep movsw
+    call KERNEL_SEG:cw_dock_band
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endmacro
+section .ovl
+ovl_dock_geom:
+    call ovd_geom
+    retf
+DOCK_GEOM ovd
+section .text
+
+; Fullscreen return has no settings module and never reads a disk.
+dkb_band:
+    push ax
+    mov word [vid_band_x0], 0
+    mov ax, [vid_pw]
+    mov [vid_band_xe], ax
+    sub ax, 56
+    mov [vid_desk_zx], ax
+    mov ax, [vid_ph]
+    sub ax, DOCK_H
+    mov [vid_dock_y0], ax
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
-; dock_force   - the WHOLE strip was painted over
-; dock_force_x - ...only x AX..CX of it was (inclusive)
-; in:  nothing / AX = x1, CX = x2
-; out: nothing (all registers preserved)
+; dock_apply - the SETTING moved: geometry, drive column, windows, strip
+; in:  [dock_cfg] already written; gfx lock held by the caller, or at boot
+; out: CF = 1 advanced module unavailable, basic fallback applied; registers
+;      preserved. THE CALLER OWES THE REPAINT, which
+;      is vid_switch's own contract: the Control Panel posts [cp_dirty]
 ;
-; Called by whoever is about to draw, or has just drawn, over the strip. The
-; per-tile keys go with it: a tile whose pixels were painted over is not
-; "unchanged" however much its state still matches - but only the tiles the
-; damage actually REACHED, and only that span of rule and white field.
-;
-; The span exists because wm_paint_dmg (SPEC.md 11.91) forced the whole strip
-; for any damage that touched it: a window closing at x 300 repainted 640px of
-; rule and field and rebuilt every tile, nearly all of it white over white
-; with a tile flashing wherever it was not. wm_paint_all still asks for the
-; whole width and means it - its dither runs from MBAR_H to the last row, so
-; the strip really is gone.
-;
-; Repeated calls UNION, because several things can damage the strip between
-; two dock_paints - and THE SPAN IS ITS OWN FLAG. An EMPTY span is
-; 07FFFh..08000h, the empty bounding box dock_px_add already uses on the other
-; pair (SPEC.md 30.3.3, wm_dmg_bands before it): the compares below are SIGNED,
-; so a union onto the sentinel gives back exactly the caller's span and an
-; untouched pair refuses every paint. That is what deleted [dock_full] - a
-; boolean saying "the span is non-empty" beside a span that can say so itself.
+; SPEC.md 30.5. wm_refit moves every window back inside the new band, and the
+; raise caches go because a window that did not move can have had the strip
+; stand up or lie down behind it.
 ; -----------------------------------------------------------------------------
-dock_force:
-    push ax                     ; THE WHOLE STRIP is dock_force_x's span with
+dock_apply:
+    call COLD_SEG:dkf_apply
+    ret
+section .cold
+dkf_apply:
+    push ax
+    mov al, MOD_DOCK
+    test byte [dock_cfg], DOCK_P_MASK | DOCK_F_AUTO
+    jz .basic
+    call mod_need
+    jnc .apply
+    mov byte [dock_cfg], DOCK_P_BOTTOM ; live controls describe the fallback
+    jmp short .apply
+.basic:
+    call KERNEL_SEG:cw_dock_drop
+    call mod_drop              ; no callback executing: settings owns gfx lock
+    clc
+.apply:
+    pushf                     ; retain failure for CP; boot gets basic fallback
+    call KERNEL_SEG:dock_reflow
+    popf
+    pop ax
+    retf
+section .text
+dock_reflow:                    ; dkf_apply's far half: one entry, not five shims
+    call dock_geom
+    call desk_rowcalc
+    call wm_refit
+    call wm_su_drop_all
+    call dock_force
+    retf
+
+
+dock_geom:      DKCALL DKI_GEOM
+dock_band:      DKCALL DKI_BAND
+dock_force:     DKCALL DKI_FORCE
+dock_paint:     DKCALL DKI_PAINT
+dock_px_hit:    DKCALL DKI_PX_HIT
+dock_click:     DKCALL DKI_CLICK
+dock_rclick:    DKCALL DKI_RCLICK
+dock_slot_rect: DKCALL DKI_SLOT_RECT
+dock_force_r:   DKCALL DKI_FORCE_R
+dock_drop:      DKCALL DKI_DROP
+gfx_hole_arm:   DKCALL DKI_HOLE_ARM
+
+; the module-only operations test their own condition first
+dock_pass:
+    cmp byte [dock_auto], 0
+    je dkb_ret
+    DKCALL DKI_PASS
+
+dock_hole_win:
+    cmp word [gfx_hole], 0
+    je dkb_clc
+    DKCALL DKI_HOLE_WIN
+
+dock_hole_sub:
+    cmp word [gfx_hole], 0
+    je dkb_clc
+    DKCALL DKI_HOLE_SUB
+
+; BP = DKI_*, the caller's BP on the stack. The operation sees every register
+; the stub was entered with but BP, and returns straight to that caller.
+dock_route:
+    ; STKBALANCE-OK: BP is banked by the stub; .basic swaps that slot for the target and RETs into it
+    cmp word [mod_r_dock], 0
+    je .basic
+    call far [DKFP]
+    pop bp
+    ret
+.basic:                         ; a TAIL jump, so the basic Dock runs at
+    push ax                     ; exactly the stack depth it always had
+    mov ax, [ds:bp+dock_btab]
+    mov bp, sp
+    xchg ax, [bp+2]             ; the banked BP's slot becomes the target
+    mov bp, ax
+    pop ax
+    ret
+
+dock_btab:
+    dw dkb_geom, dkb_band, db_force, db_paint, db_px_hit
+    dw db_click, db_rclick, db_tile_rect, dkb_force_r, dkb_ret
+%if ($ - dock_btab) != DKB_N * 2 || DKI_N * 2 != DKI_HOLE_WIN + 2
+  %error "dock_btab and the DKI_* indices disagree"
+%endif
+
+dkb_clc:
+    clc
+dkb_ret:
+    ret
+
+dkb_force_r:
+    call dock_live_hit
+    jc db_force_x
+    ret
+
+; Shared rectangle queries need only the published geometry, even in basic mode.
+dock_live_hit:                  ; dock_lx1..ly2 IS a WCR_* x1,y1,x2,y2 block
+    push si
+    mov si, dock_lx1
+    call gfx_rect_hit
+    pop si
+    ret
+
+dock_px_rect:
+    mov ax, [dock_px1]
+    mov cx, [dock_px2]
+    mov bx, [dock_lc1]
+    mov dx, [dock_lc2]
+dock_swap_side:
+    cmp byte [dock_side], DOCK_P_BOTTOM
+    je .out
+    xchg ax, bx
+    xchg cx, dx
+.out:
+    ret
+
+
+%else
+; kern_small: no placement, no auto-hide and no DOCK.DRV (SPEC.md 30.5), so
+; the basic renderer IS the Dock and its entry points are these names.
+dock_force     equ db_force
+dock_force_x   equ db_force_x
+dock_paint     equ db_paint
+dock_px_hit    equ db_px_hit
+dock_click     equ db_click
+dock_rclick    equ db_rclick
+dock_tile_rect equ db_tile_rect
+%endif
+
+; Basic bottom Dock: independent of DOCK.DRV.
+db_force:
+    push ax                     ; THE WHOLE STRIP is db_force_x's span with
     push cx                     ; AX = 0 and CX = the last column, so this
     xor ax, ax                  ; enters that routine BELOW its own prologue
     mov cx, [vid_pwm1]          ; and lets its `.out` pop the pair we pushed.
-    jmp dock_force_x.body       ; A REAL COUPLING: an instruction added between
-                                ; `dock_force_x:` and `.body` is one this path
+    jmp db_force_x.body       ; A REAL COUPLING: an instruction added between
+                                ; `db_force_x:` and `.body` is one this path
                                 ; silently skips. Written `jmp` and never
                                 ; `jmp short`, so a prologue that outgrows 128
                                 ; bytes gets a longer encoding instead of an
                                 ; assembly error.
 
-dock_force_x:
+db_force_x:
     push ax
     push cx
-.body:                          ; dock_force enters HERE - see there
+.body:                          ; db_force enters HERE - see there
 %ifdef REDRAWFULL
     xor ax, ax                  ; REFERENCE BUILD: every damage is the whole
     mov cx, [vid_pwm1]           ; strip, the behaviour this replaced
@@ -179,10 +461,10 @@ dock_force_x:
     ; --- THE STRIP IS THE PRIMARY'S, AND SO IS ITS DAMAGE (SPEC.md 39.19.5) -
     ; The span comes from a CALLER - wm_paint_dmg hands over the damage a drag
     ; made - and that damage is in VIRTUAL coordinates, so on an extended
-    ; desktop it runs straight past the primary's last column. dock_paint then
+    ; desktop it runs straight past the primary's last column. db_paint then
     ; drew its rule and white field at [vid_dock_y0] across it, and the
     ; primary's dock ROW is inside the secondary's extent, so a full-width
-    ; white band appeared across the second monitor on every drag. dock_force
+    ; white band appeared across the second monitor on every drag. db_force
     ; already clamped; this is the entry that did not, and clamping HERE is
     ; what makes it true of every caller rather than of the ones that
     ; remembered. The second monitor carries no menu bar (39.19.3) and it
@@ -200,7 +482,7 @@ dock_force_x:
                                 ; for a test it cannot fail
 %endif
     cmp ax, [dock_dx1]          ; SIGNED, because empty is 07FFFh..08000h -
-    jge .u2                     ; dock_px_add's own compares, on the other span
+    jge .u2                     ; db_px_add's own compares, on the other span
     mov [dock_dx1], ax
 .u2:
     cmp cx, [dock_dx2]
@@ -212,20 +494,20 @@ dock_force_x:
     ret
 
 ; -----------------------------------------------------------------------------
-; dock_paint - bring the strip up to date: the rule and white field when the
+; db_paint - bring the strip up to date: the rule and white field when the
 ;              damage span says they are owed, then every tile whose key moved
 ; in:  nothing (caller holds the gfx lock)
 ; out: CF = 1 if any pixel was drawn, CF = 0 if the strip was already right.
 ;      All registers preserved; [gfx_color] restored.
 ; -----------------------------------------------------------------------------
-dock_paint:
+db_paint:
     call wm_fs_vis              ; a visible fullscreen window is OVER the strip
     jnc .go                     ; (SPEC.md 11.2). Same reasoning as
-    call dock_force             ; menu_draw_bar's guard: whether the dock is on
+    call db_force             ; menu_draw_bar's guard: whether the dock is on
     clc                         ; screen is a fact about the screen - and while
     ret                         ; one is up our pixels are being destroyed, so
                                 ; the whole strip is owed when it goes. That is
-                                ; how wm_paint_all stopped needing dock_force:
+                                ; how wm_paint_all stopped needing db_force:
                                 ; its dither no longer reaches us (SPEC 30.3.2)
                                 ; and this is the only other thing that can.
                                 ; CF = 0, "nothing was drawn", which is what
@@ -242,12 +524,12 @@ dock_paint:
 
     mov al, [gfx_color]         ; byte-only read: gfx_lock_flag lives next
     push ax                     ; door. ON THE STACK, not in .bss, and that
-                                ; rests on dock_paint having EXACTLY ONE EXIT
+                                ; rests on db_paint having EXACTLY ONE EXIT
                                 ; below `.go` - the five pops at the bottom.
                                 ; The wm_fs_vis refusal returns ABOVE this, and
                                 ; the CF answer is after the pops. A second
                                 ; early return added below here leaks a word
-                                ; onto the UI task's stack on every dock_paint,
+                                ; onto the UI task's stack on every db_paint,
                                 ; which is a slow death nothing in the tree
                                 ; would report. See the matching `pop ax`.
     mov byte [dock_drew], 0
@@ -255,10 +537,10 @@ dock_paint:
     mov word [dock_px2], 08000h ; (SPEC.md 30.3.3): [dock_px1]/[dock_px2] are
                                 ; this pass's answer, not the last one's, and
                                 ; EMPTY is the inverted bounding box 07FFFh..
-                                ; 08000h so that dock_px_hit's signed compares
+                                ; 08000h so that db_px_hit's signed compares
                                 ; refuse every rect rather than accepting all
                                 ; of them - the same idiom wm_dmg_bands uses.
-                                ; Inlined: dock_px_add and dock_px_tile grow
+                                ; Inlined: db_px_add and db_px_tile grow
                                 ; this pair and had one caller each, but this
                                 ; had ONE caller in the whole tree
 
@@ -275,7 +557,7 @@ dock_paint:
 .full:                          ; somebody drew over us: the rule and field
                                 ; they covered, and the tiles they reached.
                                 ; THE SPAN IS SPENT HERE, at the top, where
-                                ; [dock_full]'s clear used to be - a dock_force
+                                ; [dock_full]'s clear used to be - a db_force
                                 ; arriving mid-paint then unions onto the fresh
                                 ; sentinel and re-arms the NEXT pass, where a
                                 ; reset at the BOTTOM would union into the live
@@ -306,7 +588,7 @@ dock_paint:
                                 ; the top of every pass and reaches at most
                                 ; 1 + INST_MAX = 13, while the test below is
                                 ; `cmp x,1 / cmc`, which is exact for all 256
-    call dock_px_add            ; ...over exactly this span, and it is the
+    call db_px_add            ; ...over exactly this span, and it is the
                                 ; span a window has to overlap to be damaged
                                 ; by it (SPEC.md 30.3.3)
 
@@ -315,18 +597,18 @@ dock_paint:
     ; drawing bug rather than as what it is. AX and CX still hold
     ; [dock_dx1]/[dock_dx2] from the call above; DX comes back from gfx_hline
     ; still holding [vid_dock_y0]. The four:
-    ;   dock_px_add   "every register preserved"          (its header above)
+    ;   db_px_add   "every register preserved"          (its header above)
     ;   thm_ink/thm_bg "clobbers: nothing (flags preserved)" (vga12.inc)
     ;   gfx_hline     "clobbers: flags"                   (vga12.inc)
     ;   gfx_fill      "clobbers: flags"                   (vga12.inc)
     ; Four memory reads off this path, and it is the [dock_full] path - the
     ; one somebody drawing over the strip takes.
-    call thm_ink                
+    call thm_ink
     mov bx, cx                  ; the rule, over the damaged span only
     mov dx, [vid_dock_y0]
     call gfx_hline
 
-    call thm_bg                
+    call thm_bg
     mov bx, dx                  ; ...and the white field under it, down to
     inc bx                      ; the last row. DX is gfx_hline's own y, given
     mov dx, [vid_phm1]          ; back untouched
@@ -338,7 +620,7 @@ dock_paint:
                                 ; DX/SI = the SPAN, in registers, because the
                                 ; xchg above has already put the sentinel back
                                 ; in [dock_dx1]/[dock_dx2] - AX and CX have
-                                ; carried it since `.full` (dock_px_add is
+                                ; carried it since `.full` (db_px_add is
                                 ; "every register preserved", gfx_hline and
                                 ; gfx_fill are "clobbers: flags"). Net zero
                                 ; bytes and two register compares an iteration
@@ -371,22 +653,22 @@ dock_paint:
     mov bx, dock_ck             ; ...and ITS KEY BESIDE IT: BX walks the side
                                 ; table rather than indexing it, which spends
                                 ; no shift and no 16-bit displacement per
-                                ; iteration. BX costs no new push (dock_paint
+                                ; iteration. BX costs no new push (db_paint
                                 ; already banks it) and every callee in this
-                                ; loop preserves it - dock_key touches only AX,
-                                ; and dock_px_tile, dock_xor_ring,
-                                ; dock_xor_body, dock_erase_tile and
-                                ; dock_draw_tile all `push bx` and leave
+                                ; loop preserves it - db_key touches only AX,
+                                ; and db_px_tile, db_xor_ring,
+                                ; db_xor_body, db_erase_tile and
+                                ; db_draw_tile all `push bx` and leave
                                 ; through kret_dx / kret_si
     xor cx, cx                  ; CX = instance index
 .tile:
-    call dock_key               ; AX = what this tile should look like, or 0
+    call db_key               ; AX = what this tile should look like, or 0
     mov dx, [bx]                ; for no tile at all (SPEC.md 29.2 rule 3)
     cmp ax, dx
     je .next                    ; already drawn that way
     mov [bx], ax
     inc byte [dock_drew]        ; ...and cannot wrap - see `.full`
-    call dock_px_tile           ; ...and this tile's columns join the painted
+    call db_px_tile           ; ...and this tile's columns join the painted
                                 ; span, wherever it stands - a tile outside the
                                 ; forced span still puts pixels down, so the
                                 ; span is the UNION of the two (SPEC.md 30.3.3)
@@ -405,22 +687,22 @@ dock_paint:
 
     test al, DOCK_K_ACT         ; --- only the marks moved: the ICON IS NOT
     jz .mini                    ; TOUCHED, and neither is the frame or the
-    call dock_xor_ring          ; white around them. Both marks are their own
+    call db_xor_ring          ; white around them. Both marks are their own
 .mini:                          ; inverse, so putting one on and taking it off
     test al, DOCK_K_MINI        ; are the same operation - which is the whole
     jz .next                    ; reason the erase existed
-    call dock_xor_body
+    call db_xor_body
     jmp short .next
 
 .rebuild:
-    call dock_erase_tile        ; a new icon is not a superset of the old one,
+    call db_erase_tile        ; a new icon is not a superset of the old one,
                                 ; so this one does start from white. It
                                 ; preserves AX itself (push ax .. kret_dx), so
                                 ; the bracket that used to be here was dead
     cmp ax, dx                  ; new == diff XOR old, so "new == 0" is
     je .next                    ; "diff == old": the tile went away, and
                                 ; erased is all it needed
-    call dock_draw_tile         ; in: CX = index, DI = record
+    call db_draw_tile         ; in: CX = index, DI = record
 .next:
     add di, I_RECSZ
     inc bx
@@ -444,24 +726,24 @@ dock_paint:
     jmp kret_di                 ; pops di, si, dx, cx, bx, ax: `.go`'s push run
 
 ; -----------------------------------------------------------------------------
-; dock_px_add  - grow the painted span to cover x AX..CX as well (inclusive)
-; dock_px_tile - ...and to cover tile CX's own columns
-; out: nothing; every register preserved (dock_px_add spends flags, which no
+; db_px_add  - grow the painted span to cover x AX..CX as well (inclusive)
+; db_px_tile - ...and to cover tile CX's own columns
+; out: nothing; every register preserved (db_px_add spends flags, which no
 ;      caller of it needs)
 ;
-; SPEC.md 30.3.3. [dock_px1]/[dock_px2] is what dock_paint PUT PIXELS ON in
+; SPEC.md 30.3.3. [dock_px1]/[dock_px2] is what db_paint PUT PIXELS ON in
 ; the pass that has just run, which is not [dock_dx1]/[dock_dx2]: that pair is
 ; what somebody drew OVER US and is only half the answer, because a tile whose
 ; key moved is repainted wherever it stands, damage or no damage.
 ;
 ; **Empty is 0x7FFF..0x8000**, so an untouched span refuses every rect through
-; dock_px_hit's signed compares rather than accepting all of them - the same
+; db_px_hit's signed compares rather than accepting all of them - the same
 ; empty-bounding-box idiom wm_dmg_bands uses, and now the damage span's too
-; (see dock_force_x). There is no dock_px_none: emptying the span is two
+; (see db_force_x). There is no dock_px_none: emptying the span is two
 ; immediate stores and it had exactly ONE caller in the tree, so it is written
-; out at the top of dock_paint where the reason for it is.
+; out at the top of db_paint where the reason for it is.
 ; -----------------------------------------------------------------------------
-dock_px_add:
+db_px_add:
     cmp ax, [dock_px1]
     jge .x2
     mov [dock_px1], ax
@@ -472,20 +754,20 @@ dock_px_add:
 .out:
     ret
 
-dock_px_tile:
+db_px_tile:
     push ax
-    push bx                     ; dock_tile_rect eats BX and DX where
-    push cx                     ; dock_tile_x ate only BX - and DX IS LIVE in
-    push dx                     ; dock_paint's tile loop (it carries the old
+    push bx                     ; db_tile_rect eats BX and DX where
+    push cx                     ; db_tile_x ate only BX - and DX IS LIVE in
+    push dx                     ; db_paint's tile loop (it carries the old
                                 ; key across the `xor dx, ax`), so this push
                                 ; is not tidiness. CX is the instance index
                                 ; and AX a key.
-    call dock_tile_rect         ; AX = its left edge, CX its right
-    call dock_px_add            ; (which reads AX and CX only)
+    call db_tile_rect         ; AX = its left edge, CX its right
+    call db_px_add            ; (which reads AX and CX only)
     jmp kret_dx
 
 ; -----------------------------------------------------------------------------
-; dock_px_hit - does this rect overlap the strip dock_paint just painted?
+; db_px_hit - does this rect overlap the strip db_paint just painted?
 ; in:  AX = x1, BX = y1, CX = x2, DX = y2 - inclusive, VIRTUAL coordinates
 ; out: CF = 1 = the strip was drawn under it, so it owes a redraw;
 ;      all registers preserved
@@ -508,7 +790,7 @@ dock_px_tile:
 ; at the virtual origin by construction (39.16). A one-display machine reads
 ; [vid_phm1] = [vid_hm1] and the y half is exactly what it always was.
 ; -----------------------------------------------------------------------------
-dock_px_hit:
+db_px_hit:
 %ifdef REDRAWFULL
     cmp dx, [vid_dock_y0]       ; THE REFERENCE BUILD (SPEC.md 30.3.3): every
     jge .yes                    ; window whose rect reaches the strip's rows,
@@ -544,14 +826,14 @@ dock_px_hit:
 %endif
 
 ; -----------------------------------------------------------------------------
-; dock_key - what tile i should look like, in one word
+; db_key - what tile i should look like, in one word
 ; in:  CX = instance index, DI = its record
 ; out: AX = the key, 0 = this slot has no tile
 ; clobbers: AX (the output) and flags - which is strictly LESS than it used to
 ;           (it banked BX and CX for two scratch values it no longer needs), so
 ;           no caller can be surprised. There is one caller.
 ;
-; Everything dock_draw_tile reads: the icon it blits, and the two bits that
+; Everything db_draw_tile reads: the icon it blits, and the two bits that
 ; decide the marks around it. The icon pointer is rotated rather than added so
 ; that its high bits reach the low end of the word, which spreads the identity
 ; over the whole word instead of leaving it in the high bits alone.
@@ -561,7 +843,7 @@ dock_px_hit:
 ; I_ICO_PKG (loader.inc:265) or 0 (:261), so two different PACKAGES in one slot
 ; key identically whatever the rotation does. What actually protects the case
 ; is SPEC.md 30's own guarantee - every dock-state transition rides a wm_show,
-; wm_front, wm_hide or wm_destroy repaint and all four call dock_paint
+; wm_front, wm_hide or wm_destroy repaint and all four call db_paint
 ; unconditionally, so the slot goes to key 0 and back, and the intermediate
 ; paint is the redraw.
 ;
@@ -573,7 +855,7 @@ dock_px_hit:
 ; now names the difference, and a key of 0 means 'no tile' by construction
 ; rather than by the bump this used to need.
 ; -----------------------------------------------------------------------------
-dock_key:
+db_key:
     xor ax, ax
     cmp byte [di+I_STATE], 1    ; live only - dying and free records have no
     jne .out                    ; tile (SPEC.md 29.2 rule 3)
@@ -607,12 +889,12 @@ dock_key:
     ret
 
 ; -----------------------------------------------------------------------------
-; dock_tile_x - tile i's left edge
+; db_tile_x - tile i's left edge
 ; in:  CX = instance index
 ; out: AX = x
 ; clobbers: BX (flags)
 ; -----------------------------------------------------------------------------
-dock_tile_x:
+db_tile_x:
     mov ax, cx                  ; tile left = DOCK_X0 + index*DOCK_STEP
     mov bl, DOCK_STEP           ; (28 is not a power of two: multiply)
     mul bl                      ; AX = AL*BL - index <= 11, fits AL
@@ -620,25 +902,25 @@ dock_tile_x:
     ret
 
 ; -----------------------------------------------------------------------------
-; dock_tile_rect - tile i's rect: dock_erase_tile's own fill, dock_px_tile's
+; db_tile_rect - tile i's rect: db_erase_tile's own fill, db_px_tile's
 ;                  span, and SPEC.md 11.99's minimize zoom
 ; in:  CX = instance index
 ; out: AX/BX/CX/DX = x1,y1,x2,y2 inclusive
 ; clobbers: the outputs and flags
 ;
-; Lifted out of dock_erase_tile rather than open-coded a second time, for
-; dock_hit's reason (SPEC.md 30.2): where a tile IS has one answer here, not
+; Lifted out of db_erase_tile rather than open-coded a second time, for
+; db_hit's reason (SPEC.md 30.2): where a tile IS has one answer here, not
 ; one per caller that can drift from the others.  It was `%ifdef WM_ANIM`
-; while the zoom was its only caller and dock_erase_tile kept the copy it had
+; while the zoom was its only caller and db_erase_tile kept the copy it had
 ; been lifted from - so the file carried the routine AND the thing it
 ; replaced.  It is unconditional now: kern_small pays 4 bytes for a routine
 ; its zoom never calls, and kern_big saves 14.
 ; -----------------------------------------------------------------------------
-dock_tile_rect:
-    call dock_tile_x            ; AX = tile left
-dock_rect_ax:                   ; ...and the arithmetic ALONE, for a caller
+db_tile_rect:
+    call db_tile_x            ; AX = tile left
+db_rect_ax:                   ; ...and the arithmetic ALONE, for a caller
                                 ; that already holds the left edge in AX -
-                                ; dock_draw_tile's frame, and dock_mark_ax
+                                ; db_draw_tile's frame, and db_mark_ax
                                 ; below. desk.inc's desk_zone_rect /
                                 ; desk_rect_ax is the same shape one module
                                 ; along (a different section, so nothing
@@ -648,13 +930,17 @@ dock_rect_ax:                   ; ...and the arithmetic ALONE, for a caller
                                 ; local for this label to re-parent
     mov cx, ax
     add cx, DOCK_TILE_W-1
+%ifdef DOCK_OPT
+    mov bx, [dock_c0]
+%else
     mov bx, [vid_dock_ty0]
+%endif
     mov dx, bx
     add dx, DOCK_TILE_H-1
     ret
 
 ; -----------------------------------------------------------------------------
-; dock_erase_tile - white out tile i's rect
+; db_erase_tile - white out tile i's rect
 ; in:  CX = instance index; gfx lock held by the caller
 ; out: nothing (all registers preserved)
 ;
@@ -663,23 +949,23 @@ dock_rect_ax:                   ; ...and the arithmetic ALONE, for a caller
 ; plain has to un-invert an interior that a second XOR would only re-invert
 ; if the tile had not also been redrawn underneath it.
 ; -----------------------------------------------------------------------------
-dock_erase_tile:
+db_erase_tile:
     push ax
     push bx
     push cx
     push dx
-    call dock_tile_rect         ; AX/BX/CX/DX = the whole tile
+    call db_tile_rect         ; AX/BX/CX/DX = the whole tile
     call thm_bg                 ; ("clobbers: nothing", so the rect survives)
     call gfx_fill
     jmp kret_dx
 
 ; -----------------------------------------------------------------------------
-; dock_xor_ring - toggle tile CX's ACTIVE mark   (the inner frame)
-; dock_xor_body - toggle tile CX's MINIMIZED mark (the whole interior)
+; db_xor_ring - toggle tile CX's ACTIVE mark   (the inner frame)
+; db_xor_body - toggle tile CX's MINIMIZED mark (the whole interior)
 ; in:  CX = instance index; gfx lock held by the caller
 ; out: nothing (all registers preserved)
 ;
-; Both are exactly the rect dock_draw_tile draws that mark in, and both are
+; Both are exactly the rect db_draw_tile draws that mark in, and both are
 ; XOR, so they compose in either order and each undoes itself (SPEC.md 30.3).
 ;
 ; The ring is sound because the inner frame's four edges never touch the icon
@@ -688,36 +974,36 @@ dock_erase_tile:
 ; black under an inverted interior. XOR is right in both cases, which is why
 ; the minimized state needs no branch here.
 ; -----------------------------------------------------------------------------
-dock_xor_ring:
+db_xor_ring:
     push ax
     push bx
     push cx
     push dx
-    call dock_mark_rect
+    call db_mark_rect
     call gfx_xor_rect
-    jmp short dock_xor_pop
+    jmp short db_xor_pop
 
-dock_xor_body:
+db_xor_body:
     push ax
     push bx
     push cx
     push dx
-    call dock_mark_rect
+    call db_mark_rect
     call gfx_xor_fill
-dock_xor_pop:                   ; ONE epilogue: the two routines differ in a
+db_xor_pop:                   ; ONE epilogue: the two routines differ in a
     jmp kret_dx
 
-; dock_mark_rect - the tile interior both marks live in
+; db_mark_rect - the tile interior both marks live in
 ; in:  CX = instance index
 ; out: AX = x1, BX = y1, CX = x2, DX = y2
-dock_mark_rect:
-    call dock_tile_x            ; AX = tile left (clobbers BX)
-dock_mark_ax:                   ; ...and the same rect from a caller ALREADY
+db_mark_rect:
+    call db_tile_x            ; AX = tile left (clobbers BX)
+db_mark_ax:                   ; ...and the same rect from a caller ALREADY
                                 ; holding the tile's left edge in AX, which is
-                                ; dock_draw_tile's two inner rects. No NASM
+                                ; db_draw_tile's two inner rects. No NASM
                                 ; local in the body below, so nothing is
                                 ; re-parented by the label.
-    call dock_rect_ax           ; THE MARK RECT IS THE TILE RECT INSET 1px on
+    call db_rect_ax           ; THE MARK RECT IS THE TILE RECT INSET 1px on
     inc ax                      ; every side: (L+1, T+1, L+22, T+18) either
     inc bx                      ; way, and it was written out from scratch
     dec cx                      ; here rather than derived
@@ -725,23 +1011,23 @@ dock_mark_ax:                   ; ...and the same rect from a caller ALREADY
     ret
 
 ; -----------------------------------------------------------------------------
-; dock_draw_tile - one tile: frame + icon (+ XOR invert when minimized)
+; db_draw_tile - one tile: frame + icon (+ XOR invert when minimized)
 ; in:  CX = instance index, DI = instance record (I_STATE = 1); gfx lock
 ;      held by the caller
 ; out: nothing (all registers preserved; module internal)
 ; -----------------------------------------------------------------------------
-dock_draw_tile:
+db_draw_tile:
     push ax
     push bx
     push cx
     push dx
     push si
 
-    call dock_tile_x
+    call db_tile_x
     mov si, ax                  ; SI = tile left for the duration
 
     call thm_ink                ; "clobbers: nothing (flags preserved)", so AX
-    call dock_rect_ax           ; is STILL the tile left here: the 1px tile
+    call db_rect_ax           ; is STILL the tile left here: the 1px tile
     call gfx_frame              ; frame IS the tile rect, and gfx_frame is
                                 ; "clobbers: flags", so the rect survives it
 
@@ -762,21 +1048,21 @@ dock_draw_tile:
     jne .mini                   ; first, which reads as a heavier border and
     call thm_ink                ; costs no colour (SPEC.md 39.4). The icon
     mov ax, si                  ; body is at +4,+2 and 16x16, so it clears
-    call dock_mark_ax           ; both new edges by 2px and 1px
+    call db_mark_ax           ; both new edges by 2px and 1px
     call gfx_frame
 
 .mini:
     test byte [di+I_FLAGS], 1   ; minimized: invert the tile interior
     jz .done
     mov ax, si
-    call dock_mark_ax
+    call db_mark_ax
     call gfx_xor_fill
 
 .done:
     jmp kret_si
 
 ; -----------------------------------------------------------------------------
-; dock_hit - which tile is under a point? (SPEC.md 30/30.2)
+; db_hit - which tile is under a point? (SPEC.md 30/30.2)
 ; in:  CX = x, DX = y (absolute)
 ; out: CF = 1 the point is not in the strip at all;
 ;      CF = 0 the strip owns it, and DI = the LIVE instance record under the
@@ -784,21 +1070,23 @@ dock_draw_tile:
 ;      between two tiles, a slot past the last, and an empty or dying one.
 ; clobbers: AX, DI (the outputs)
 ;
-; Lifted whole out of dock_click when the right button wanted the same find
+; Lifted whole out of db_click when the right button wanted the same find
 ; (SPEC.md 30.2). Factored rather than copied because "which records have a
 ; tile" is one question - SPEC.md 29.2 rule 3 - and a second copy of the
 ; answer is a second place for a dying record to be offered a menu.
 ; -----------------------------------------------------------------------------
-dock_hit:
+db_hit:
     push bx
-    cmp dx, [vid_dock_y0]       ; above the rule: not ours at all. UNSIGNED,
-    jb .out                     ; and that is what makes the two exits ONE - a
-                                ; y out of the event queue is mou_clamp's,
-                                ; 0..[vid_hm1] with an explicit `or bx,bx /
-                                ; jns` on the negative side, so `jb` and `jl`
-                                ; name the same rows and `jb` leaves CF = 1,
-                                ; which IS the miss answer. `pop` spends no
-                                ; flag, so it survives to the `ret`
+    cmp dx, [vid_dock_y0]
+%ifdef DOCK_OPT
+    jb .miss
+    cmp dx, [vid_phm1]
+    ja .miss
+    cmp cx, [vid_pwm1]
+    ja .miss                   ; another display never owns a Dock tile
+%else
+    jb .out                    ; kern_small has one display (SPEC.md 39.19)
+%endif
 
     xor di, di                  ; in the strip, no tile yet
     cmp cx, DOCK_X0             ; left of the first tile (unsigned for the
@@ -820,9 +1108,15 @@ dock_hit:
 .out:
     pop bx
     ret
+%ifdef DOCK_OPT
+.miss:
+    stc
+    pop bx
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
-; dock_click - hit-test a click against the strip (SPEC.md 30)
+; db_click - hit-test a click against the strip (SPEC.md 30)
 ; in:  CX = x, DX = y (absolute); NO lock held (takes it internally)
 ; out: CF = 1 the click was consumed (anywhere in the strip, tile or not),
 ;      CF = 0 not in the dock. All registers preserved.
@@ -836,9 +1130,9 @@ dock_hit:
 ; and did nothing.
 ;
 ; Two things about the active test. It asks wm_top HERE rather than reading
-; [dock_act], which is dock_paint's scratch and valid only inside the paint
+; [dock_act], which is db_paint's scratch and valid only inside the paint
 ; that resolved it - fdlg_sel_bar's rule about [fdlg_shown] (SPEC.md 38.3) in
-; another module. And it compares WINDOWS where dock_key compares records:
+; another module. And it compares WINDOWS where db_key compares records:
 ; inst_bind_win is the only writer of I_WIN and of wm_owner and writes both
 ; together, so wm_top == [di+I_WIN] and inst_win_owner(wm_top) == di cannot
 ; disagree - this is the same predicate the tile's own mark is drawn from,
@@ -848,15 +1142,15 @@ dock_hit:
 ; visible windows only), so it still takes the wm_front path exactly as
 ; before.
 ; -----------------------------------------------------------------------------
-dock_click:
+db_click:
     push ax
     push bx
     push cx
     push dx                     ; DX IS NOT SPENT HERE - it is pushed so that
-    push di                     ; dock_rclick can share the tail below, whose
+    push di                     ; db_rclick can share the tail below, whose
                                 ; pop run is ax,bx,cx,dx,di for both
 
-    call dock_hit               ; DI = the live instance under the pointer
+    call db_hit               ; DI = the live instance under the pointer
     jc .miss
     or di, di
     jz .consumed                ; bare strip, gap or dead slot: consumed no-op
@@ -890,7 +1184,7 @@ dock_click:
 .fdone:
     call gfx_unlock
 
-.consumed:                      ; --- THE SHARED TAIL. dock_rclick jumps in
+.consumed:                      ; --- THE SHARED TAIL. db_rclick jumps in
     stc                         ; HERE and at `.miss`, and both push
     jmp .out                    ; ax,bx,cx,dx,di in that order - which is now
 .miss:                          ; this label's CONTRACT, enforced by nothing
@@ -904,7 +1198,7 @@ dock_click:
     ret
 
 ; -----------------------------------------------------------------------------
-; dock_rclick - right-press on the strip: a tile's context menu (SPEC.md 30.2)
+; db_rclick - right-press on the strip: a tile's context menu (SPEC.md 30.2)
 ; in:  CX = x, DX = y (absolute); NO lock held (takes it internally)
 ; out: CF = 1 the press was consumed (anywhere in the strip, tile or not),
 ;      CF = 0 not in the dock. All registers preserved.
@@ -933,17 +1227,17 @@ dock_click:
 ; button's dwell time is nobody's CPU cost, and the command that follows
 ; destroys the very record it would be charged to.
 ; -----------------------------------------------------------------------------
-dock_rclick:
-    push ax                     ; the same push run dock_click has, in the same
+db_rclick:
+    push ax                     ; the same push run db_click has, in the same
     push bx                     ; order, because this routine ENDS IN ITS TAIL
     push cx
     push dx
     push di
 
-    call dock_hit               ; DI = the live instance under the pointer
-    jc dock_click.miss
+    call db_hit               ; DI = the live instance under the pointer
+    jc db_click.miss
     or di, di
-    jz dock_click.consumed      ; bare strip: consumed, and no menu
+    jz db_click.consumed      ; bare strip: consumed, and no menu
 
     push ax                     ; AL = the SLOT - see above. menu_popup is
     call gfx_lock               ; "clobbers: AX (the result); everything else
@@ -966,7 +1260,7 @@ dock_rclick:
     call app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4)
 .rdone:
     call gfx_unlock
-    jmp dock_click.consumed     ; ...and out through dock_click's tail, whose
+    jmp db_click.consumed     ; ...and out through db_click's tail, whose
                                 ; five pops are this routine's five pushes
 
 ; The whole descriptor (SPEC.md 12.4/30.2): one near pointer to a NUL string,
@@ -996,5 +1290,48 @@ dock_act:   resw 1              ; the instance record owning the frontmost
                                 ; visible window, 0 = none. Read per tile, so
                                 ; it is resolved once per dock_paint
 dock_ck:    resw INST_MAX       ; what each tile was last DRAWN as (dock_key)
+
+%ifdef DOCK_OPT
+; --- SPEC.md 30.5/30.6: where the strip stands, written by dock_geom and
+; dock_live_set alone. .bss, because vid_apply writes every one of them before
+; anything reads it.
+dock_side:  resb 1              ; the EDGE in use: DOCK_P_*, [dock_cfg]'s or
+                                ; the bottom when a side cannot hold the tiles
+dock_auto:  resb 1              ; non-0: the strip hides
+dock_up:    resb 1              ; ...and is open right now (dock_open)
+dock_cap:   resb 1              ; tiles the strip holds (SPEC.md 30.5.1)
+dock_pos:   resb INST_MAX       ; which slot each position shows (dock_map)
+dock_hidden: resb 1             ; auto and not open: the line is live
+dock_sx1:   resw 1              ; the strip's whole rect
+dock_sy1:   resw 1
+dock_sx2:   resw 1
+dock_sy2:   resw 1
+dock_frc:   resw 1              ; ...its rule, ACROSS the long axis
+dock_ffc1:  resw 1              ; ...its field, across
+dock_ffc2:  resw 1
+dock_ffar:  resw 1              ; ...and its outer edge, where the line is
+dock_la1:   resw 1              ; the long axis's extent: x on the bottom
+dock_la2:   resw 1              ; strip, y on a side
+dock_a0:    resw 1              ; tile 0's along coordinate
+dock_c0:    resw 1              ; ...and every tile's across one
+dock_astep: resw 1              ; along pitch
+dock_alen:  resw 1              ; along length of one tile
+dock_thk:   resw 1              ; what the strip RESERVES of the band
+dock_lx1:   resw 1              ; the LIVE rect: the line while hidden
+dock_ly1:   resw 1
+dock_lx2:   resw 1
+dock_ly2:   resw 1
+dock_rc:    resw 1              ; ...its rule, across
+dock_fc1:   resw 1              ; ...its field, across (fc1 > fc2: none)
+dock_fc2:   resw 1
+%if dock_ffc2 - dock_sx1 != 12 || dock_fc2 - dock_lx1 != 12
+  %error "dock_live_set copies seven consecutive geometry words"
+%endif
+dock_lc1:   resw 1              ; ...and its across extent
+dock_lc2:   resw 1
+dock_timer_on:   resb 1        ; hover while hidden, linger while open
+dock_timer_tick: resw 1        ; modular start tick; survives cancellation
+
+%endif
 
 section .text

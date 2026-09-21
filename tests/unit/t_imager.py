@@ -3,6 +3,7 @@
 import contextlib
 import hashlib
 import io
+import json
 from pathlib import Path
 import struct
 import sys
@@ -12,6 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools'))
 import os88imager as imager
+import os88disk
 
 
 def disk(**changes):
@@ -21,6 +23,24 @@ def disk(**changes):
                 DeviceTreePath='IOService/USB/stick', MediaUUID='medium-1')
     data.update(changes)
     return data
+
+
+def hdd(path, nsec=200):
+    """A --hdd image as image_kind and os88disk.hdd_retarget both read it:
+    one active type-04 entry at LBA 63 whose CHS columns agree with the
+    boot record's 16 x 63 BPB there."""
+    img = bytearray(nsec * 512)
+    ent = bytearray(16)
+    ent[0], ent[4] = 0x80, 0x04
+    ent[1:4] = os88disk.hdd_chs(63)
+    ent[5:8] = os88disk.hdd_chs(nsec - 1)
+    struct.pack_into('<II', ent, 8, 63, nsec - 63)
+    img[446:462] = ent
+    img[510:512] = b'\x55\xaa'
+    struct.pack_into('<HHI', img, 63 * 512 + 24, 63, 16, 63)
+    img[63 * 512 + 510:63 * 512 + 512] = b'\x55\xaa'
+    path.write_bytes(img)
+    return path
 
 
 def floppy(path, size=1440 * 1024):
@@ -254,6 +274,89 @@ class ImagerTests(unittest.TestCase):
                 patch.object(imager.subprocess, 'call') as call, contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(imager.main(['--scan', '--images', str(self.root)]), 0)
             call.assert_not_called()
+
+    # --- SPEC.md 80.5: the geometry a period ROM reports ---------------------
+
+    def test_xtide_geometry_by_capacity(self):
+        MiB = 1024 ** 2
+        self.assertIsNone(imager.xtide_geometry(256 * MiB))          # NORMAL: the card's own
+        self.assertIsNone(imager.xtide_geometry(504 * MiB))          # 1024 cylinders exactly
+        self.assertEqual(imager.xtide_geometry(505 * MiB), (32, 63, 'LARGE'))
+        self.assertEqual(imager.xtide_geometry(1000 * MiB), (32, 63, 'LARGE'))
+        self.assertEqual(imager.xtide_geometry(1953 * MiB), (64, 63, 'LARGE'))   # a "2GB" card
+        self.assertEqual(imager.xtide_geometry(2048 * MiB), (128, 63, 'LARGE'))  # just past 2016
+        self.assertEqual(imager.xtide_geometry(4032 * MiB), (128, 63, 'LARGE'))  # 8192 cylinders
+        self.assertEqual(imager.xtide_geometry(4096 * MiB), (255, 63, 'LBA'))
+        self.assertEqual(imager.xtide_geometry(16 * 1024 * MiB), (255, 63, 'LBA'))
+
+    def test_ask_geometry_only_for_a_partitioned_image_on_a_usb_device(self):
+        usb = {'kind': 'usb', 'size': 1000 * 1024 ** 2}
+        image = {'kind': 'usb'}
+        with patch('builtins.input') as ask:
+            self.assertIsNone(imager.ask_geometry({'kind': 'floppy', 'size': 0}, {'kind': 'floppy'}))
+            self.assertIsNone(imager.ask_geometry({'kind': 'cd', 'size': 0}, {'kind': 'cd'}))
+            ask.assert_not_called()
+        with patch('builtins.input', side_effect=['', '16/63', 'q', 'junk', '16/64', '64/63',
+                                                  '1985/16/63', '10/16/63', '100/16/63']), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertIsNone(imager.ask_geometry(usb, image))
+            self.assertIsNone(imager.ask_geometry(usb, image))       # the stock shape typed
+            self.assertEqual(imager.ask_geometry(usb, image), 'q')
+            self.assertEqual(imager.ask_geometry(usb, image), (64, 63))   # after two refusals
+            self.assertIsNone(imager.ask_geometry(usb, image))       # a whole C/H/S line, stock
+            # a C/H/S line is checked against the image: 10 cylinders of 16x63 are
+            # 10,080 sectors and cannot hold 20,000; 100 can, and 16/63 is stock
+            self.assertIsNone(imager.ask_geometry(usb, dict(image, size=20000 * 512)))
+        self.assertIn('cannot hold it', out.getvalue())
+        self.assertIn('LARGE mode, which reports 32/63', out.getvalue())
+        with patch('builtins.input', return_value=''), contextlib.redirect_stdout(io.StringIO()) as out:
+            imager.ask_geometry({'kind': 'usb', 'size': 256 * 1024 ** 2}, image)
+        self.assertIn('NORMAL mode', out.getvalue())
+
+    def test_retargeted_stream_is_what_is_hashed_and_written(self):
+        path = hdd(self.root / 'os8088-usb.img')
+        stock = path.read_bytes()
+        src, size, digest = imager.retargeted(path, None)
+        self.assertEqual((src.read(), size, digest), (stock, len(stock), hashlib.sha256(stock).hexdigest()))
+        src, size, digest = imager.retargeted(path, (64, 63))
+        want = os88disk.hdd_retarget(stock, 64, 63)
+        self.assertNotEqual(want, stock)
+        self.assertEqual(digest, hashlib.sha256(want).hexdigest())
+        target_path = self.root / 'card'
+        target_path.write_bytes(b'X' * (size + 512))
+        with target_path.open('r+b', buffering=0) as target, contextlib.redirect_stdout(io.StringIO()):
+            imager.stream_and_verify(src, target, size, digest)
+        self.assertEqual(target_path.read_bytes(), want + b'X' * 512)
+        self.assertEqual(path.read_bytes(), stock)                   # the file is never touched
+        with self.assertRaisesRegex(imager.ImagerError, 'Cannot retarget'):
+            imager.retargeted(hdd(self.root / 'big.img', nsec=1200), (1, 1))   # cylinder 1199
+
+    def test_perform_hands_the_geometry_to_the_escalated_write(self):
+        path = hdd(self.root / 'os8088-usb.img')
+        device = imager.disk_device(disk(), {'disk0'})
+        image = {'path': str(path), 'kind': 'usb', 'size': path.stat().st_size}
+        for answers, tail in ((['64/63', 'disk4'], '64/63'), (['', 'disk4'], '-')):
+            with self.subTest(answers=answers), patch('builtins.input', side_effect=answers), \
+                    patch.object(imager, 'revalidate'), \
+                    patch.object(imager.subprocess, 'call', return_value=0) as call, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                imager.perform(device, image)
+            self.assertEqual(call.call_args.args[0][-1], tail)
+            self.assertEqual(call.call_args.args[0][-4:-1], [str(path), json.dumps(device), imager.digest_file(path)])
+        with patch('builtins.input', side_effect=['q']), patch.object(imager.subprocess, 'call') as call, \
+                contextlib.redirect_stdout(io.StringIO()):
+            imager.perform(device, image)
+            call.assert_not_called()
+
+    def test_write_mode_parses_the_geometry(self):
+        path = hdd(self.root / 'os8088-usb.img')
+        device = imager.disk_device(disk(), {'disk0'})
+        with patch.object(imager.sys, 'platform', 'darwin'), patch.object(imager, 'write_disk') as write:
+            imager.main(['--_write', str(path), json.dumps(device), 'digest', '64/63'])
+            write.assert_called_once_with(path, device, 'digest', (64, 63))
+            write.reset_mock()
+            imager.main(['--_write', str(path), json.dumps(device), 'digest', '-'])
+            write.assert_called_once_with(path, device, 'digest', None)
 
 
 if __name__ == '__main__':

@@ -774,13 +774,14 @@ BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 # gives it back: with one length the band is seven sectors wide and reaches
 # memory 6,656.
 #
-# 6656 is memory sector 13, file sector **13 + BOOT2_SECS** = 21. It is a LONE
+# Dock setup uses a nine-sector blob (SPEC.md 30.5), so the canary moves
+# to 6144: memory sector 12, file sector **12 + BOOT2_SECS** = 21. It is a LONE
 # sector rather than a run of five, which is what the old value's paragraph
 # preferred - a lone sector was not legal at all while there were two blob
 # lengths - and the trade is deliberate: margin against a BPB that moves is
 # worth less than margin against `.text`, because a geometry change is a
 # decision somebody takes and `.text` shrinks whenever anyone tidies anything.
-# `.text` may now fall to **6,658** before this constant needs looking at
+# `.text` may now fall to **6,146** before this constant needs looking at
 # again, against 50,178 before; it is 50,607 today. It is inside the first
 # 64KB, so the compare still reuses the ES the handoff already loads, and the
 # word is still the same for every geometry because KERNEL.SYS is one file.
@@ -798,7 +799,7 @@ BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 # runtime fence one line down, and it is enough on its own: a payload shorter
 # than this offset gets no -DKSIG, boot/boot.asm's `%define KSIG 0` applies,
 # and stage 2's `cmp word [b2_ksig], 0` skips the compare.
-KSIG_OFF := 6656
+KSIG_OFF := 6144
 #
 # A PAYLOAD SHORTER THAN THE OFFSET DEFINES NO KSIG AT ALL, and that is the
 # whole of this line's second job. It used to answer 0, and a fabricated zero is
@@ -1803,6 +1804,7 @@ $(shell mkdir -p $(BUILD); \
                                       $(BUILD)/boothd.bin \
                                       $(BUILD)/ctrl.drv $(BUILD)/format.drv \
                                       $(BUILD)/clone.drv $(BUILD)/hiber.drv \
+                                      $(BUILD)/dock.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
                                       $(BUILD)/boot120.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
@@ -1924,7 +1926,7 @@ WEAVEDEMOS := apps/weave/demos
 WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(SHIPIMGS) $(BUILD)/wire.o88 $(BUILD)/recorder.o88 \
      $(BUILD)/hello.o88 $(BUILD)/pacman.o88 \
-     $(BUILD)/imgtest.o88 $(BUILD)/scribe.o88 \
+     $(BUILD)/imgtest.o88 $(BUILD)/scribe.o88 $(BUILD)/livepayload.txt \
      $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
      cc-note test-fast
 # wire.o88 is named here and NOWHERE else in `all`, because WIREFRAME is built
@@ -2153,10 +2155,12 @@ KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/clone.drv
 # .../hiber.drv`. `make small` cannot see it: those disks come from
 # $(SMALLDRIVERS), which is $(KMODS) and never held this. tests/bootfloor.py
 # builds exactly that combination and is how it surfaced.
+# DOCK.DRV (SPEC.md 30.5) is kern_big's for hibernate's reason: kern_small has
+# no Dock placement or auto-hide, so no MOD_DOCK row and no file to cut.
 ifneq ($(KERN_SMALL),)
 BIGMODS =
 else
-BIGMODS = $(KMODDIR)/hiber.drv
+BIGMODS = $(KMODDIR)/hiber.drv $(KMODDIR)/dock.drv
 endif
 KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
            -m 2=$(BUILD)/clone.drv
@@ -2176,7 +2180,7 @@ ifneq ($(KERN_SMALL),)
 KMODARGS += -m 3=$(BUILD)/filecp.drv
 KMODARGS += -m 4=$(BUILD)/fdlg.drv
 else
-KMODARGS += -m 3=$(BUILD)/hiber.drv
+KMODARGS += -m 3=$(BUILD)/hiber.drv -m 4=$(BUILD)/dock.drv
 endif
 # ...AND THE MODULES ARE 'CZ' FILES ON THE DISK (SPEC.md 2.8, 20.13.5), by
 # the route a driver took: mod_need sizes its claim from the directory hint
@@ -2782,6 +2786,12 @@ DRIVERS += $(BUILD)/xmem.drv
 # back out ($(SMALLDRIVERS) below): drv_load_at, its only loader, is inside
 # %ifdef KERN_BIG and nothing on that kernel can name the file
 DRIVERS += $(BUILD)/saver.drv
+# ...and SPEC.md 9.12's CH375 USB mouse, the Book8088's. A drv_tab row with a
+# SYSTEM.CFG bit (6) and not wanted by default, so a disk that carries it
+# costs a machine without the chip one directory slot and nothing read. On
+# every kern_big disk, and kern_small's $(SMALLDRIVERS) is a restatement that
+# never held it
+DRIVERS += $(BUILD)/usbmouse.drv
 # ...and SPEC.md 9.11's absolute pointer is NOT HERE, which is the one entry
 # in this list that is an absence. Its code is 386 instructions and the target
 # machine is an 8088, so it is the one file in the tree that MUST NOT BE
@@ -3585,6 +3595,16 @@ $(BUILD)/vmmouse.bin: drivers/vmmouse/vmmouse.asm kernel/vmmabi.inc \
 $(BUILD)/vmmouse.drv: $(BUILD)/vmmouse.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/vmmouse.bin -o $@
 
+# USBMOUSE.DRV - the CH375 USB mouse (SPEC.md 9.12). `-I drivers/usbmouse/`
+# is for ch375sim.inc, which only the gate builds below include
+$(BUILD)/usbmouse.bin: drivers/usbmouse/usbmouse.asm drivers/usbmouse/ch375sim.inc \
+                       drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I drivers/usbmouse/ -I apps/ -o $@ $<
+	@echo "usbmouse: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/usbmouse.drv: $(BUILD)/usbmouse.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/usbmouse.bin -o $@
+
 # RAMDISK.DRV - a DRVC_FILE volume with no hardware behind it (SPEC.md 62.9),
 # and the FILE REDIRECTOR'S HARNESS: every branch site the redirector added to
 # the kernel runs on a cycle-accurate 8088 in a container, which is the one
@@ -3911,6 +3931,53 @@ $(BUILD)/vmmouse.img: $(KERNEL_SRC) $(KERNEL_INC) $(EMUDRIVERS) $(SYSAPPS) $(COR
 vmmousetest: $(BUILD)/vmmouse.img
 	@echo "vmmousetest: build/vmmouse.img - VMMOUSE.DRV already wanted."
 	@echo "             Run it with: python3 tests/vmmouse.py"
+
+# USBMOUSETEST - SPEC.md 9.12.6's gate disks. No emulator here carries a CH375,
+# so USBMOUSE.DRV is assembled a second time with -DCH375SIM: the same driver
+# with drivers/usbmouse/ch375sim.inc - a model of the chip and one device -
+# under its four port primitives. Two disks, because what is on the bus AT
+# POWER-ON is fixed before the test can write to the model's mailbox:
+#   usbmsim.img   nothing plugged; the test plugs, moves, clicks, unplugs
+#   usbmbusy.img  a flash drive the BIOS already configured, so attach must
+#                 refuse with DRVE_BUSY and never reset the bus
+# 360KB, the geometry MartyPC's 5150 boots - an 8088, the CPU the driver ships
+# for. Each file in a directory of its own for vmmcfg's reason: os88disk.py
+# names a file on the volume by its basename, and all three are USBMOUSE.DRV
+# or SYSTEM.CFG. The shipped build/usbmouse.drv is filtered out of the list
+# rather than overwritten, so the product disks never see the model.
+USBMSIMS = $(filter-out $(BUILD)/usbmouse.drv,$(DRIVERS))
+
+$(BUILD)/usbmsim/usbmouse.bin: drivers/usbmouse/usbmouse.asm drivers/usbmouse/ch375sim.inc \
+                               drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	@mkdir -p $(BUILD)/usbmsim
+	$(NASM) -f bin -w+error -I drivers/ -I drivers/usbmouse/ -I apps/ -DCH375SIM -o $@ $<
+
+$(BUILD)/usbmbusy/usbmouse.bin: drivers/usbmouse/usbmouse.asm drivers/usbmouse/ch375sim.inc \
+                                drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	@mkdir -p $(BUILD)/usbmbusy
+	$(NASM) -f bin -w+error -I drivers/ -I drivers/usbmouse/ -I apps/ -DCH375SIM -DSIMBOOT=2 -o $@ $<
+
+$(BUILD)/usbmsim/usbmouse.drv $(BUILD)/usbmbusy/usbmouse.drv: %.drv: %.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $< -o $@
+
+$(BUILD)/usbmcfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/usbmcfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 6).to_bytes(2,'little') + b'\0\0')" > $@
+
+$(BUILD)/usbmsim.img $(BUILD)/usbmbusy.img: $(BUILD)/usbm%.img: $(BUILD)/boot360.bin $(KERNFILE) $(USBMSIMS) \
+            $(BUILD)/usbm%/usbmouse.drv $(SYSAPPS) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) \
+            $(BUILD)/usbmcfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(USBMSIMS) $(BUILD)/usbm$*/usbmouse.drv $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG360) $(BUILD)/usbmcfg/system.cfg $(APPDATAFOLDER)
+
+.PHONY: usbmousetest
+usbmousetest: $(BUILD)/usbmsim.img $(BUILD)/usbmbusy.img
+	@echo "usbmousetest: build/usbmsim.img + build/usbmbusy.img - USBMOUSE.DRV"
+	@echo "              wanted, over a CH375 model. Run: python3 tests/usbmouse.py"
 
 # THEWIRETEST: the Wire's gate disks (SPEC.md 92.12), ethertest's shape and
 # for ethertest's reason - the driver is asked for by a SYSTEM.CFG that is ON
@@ -6363,16 +6430,18 @@ $(BUILD)/.runcpm-hostchecks: apps/runcpm/runcpm.c $(RUNCPMSRC) $(RUNCPMHOST) | $
 
 runcpm: $(BUILD)/runcpm.o88
 
-# THE MASTER DISK AND THE CCP ARE FETCHED, NEVER COMMITTED (CONTRIBUTING.md 6,
-# SPEC.md 74.5): tools/getruncpm.py takes RunCPM's CCP-DR.60K, LICENSE,
-# 1STREAD.ME and DISK/A0.zip at the pinned commit (the same hash the banner's
-# 'Built' line names), verifies every SHA-256, and unpacks the master disk
+# THE MASTER DISK AND THE CCP ARE PINNED (SPEC.md 74.5): tools/getruncpm.py
+# takes RunCPM's CCP-DR.60K, LICENSE, 1STREAD.ME and DISK/A0.zip at the pinned
+# commit (the same hash the banner's 'Built' line names) out of the COMMITTED
+# apps/runcpm/cache/cpmcache.zip (tools/cpmcache.py; GitHub only for a file
+# the zip lacks), verifies every SHA-256, and unpacks the master disk
 # into build/runcpm-disk/A/0 minus the three files above 65,535 bytes (which
 # A/0/LEFT-OFF.TXT names). A stamp rather than a directory, as the story cache
 # is: make cannot depend on eighty files, and the script is idempotent -
 # nothing is downloaded twice. `make runcpm-src` alone fetches.
 RUNCPMDIR := $(BUILD)/runcpm-disk
-$(BUILD)/runcpm-src.stamp: tools/getruncpm.py | $(BUILD)
+CPMCACHE := apps/runcpm/cache/cpmcache.zip
+$(BUILD)/runcpm-src.stamp: tools/getruncpm.py tools/cpmcache.py $(CPMCACHE) | $(BUILD)
 	python3 tools/getruncpm.py -o $(RUNCPMDIR)
 	@touch $@
 
@@ -6383,18 +6452,20 @@ $(RUNCPMDIR)/CCP-DR.60K $(RUNCPMDIR)/LICENSE $(RUNCPMDIR)/1STREAD.ME: $(BUILD)/r
 
 runcpm-src: $(BUILD)/runcpm-src.stamp
 
-# THE GAMES ARE FETCHED TOO, AND PINNED THE SAME WAY (SPEC.md 74.6):
-# tools/getcpmsw.py takes three user areas of the public RunCPM software
+# THE GAMES ARE PINNED THE SAME WAY, AND COME OUT OF THE SAME ZIP (SPEC.md
+# 74.6): tools/getcpmsw.py takes nine user areas of the public RunCPM software
 # collection - A/5 (LADDER, CATCHUM, PM), N/0 (Nemesis, Dungeon Master,
-# Castle) and G/4 (GAINA) - each file by its own id and SHA-256, and lands
-# them in build/cpmsw/<DRIVE>/<USER>/ under the collection's own coordinates,
-# so a file here is the file there. Nothing is committed (CONTRIBUTING.md 6),
-# every file is checked against the 65,535-byte whole-file limit on the way
+# Castle), G/4 (GAINA) and the rest its AREAS names - each file by its own
+# SHA-256, and lands them in build/cpmsw/<DRIVE>/<USER>/ under the
+# collection's own coordinates, so a file here is the file there. They are
+# read out of $(CPMCACHE), not off Google Drive a file at a time, which was
+# minutes of a clean `make live` (a user-decided departure from
+# CONTRIBUTING.md 6, apps/runcpm/cache/README.md); every file is checked against the 65,535-byte whole-file limit on the way
 # in (SPEC.md 74.3 - which is why Zork, Hitchhiker and Colossal Cave are not
 # among them: their data files are 76KB, 113KB and 68KB), and a stamp stands
 # in for the eighty files exactly as the master disk's does.
 CPMSWDIR := $(BUILD)/cpmsw
-$(BUILD)/cpmsw.stamp: tools/getcpmsw.py | $(BUILD)
+$(BUILD)/cpmsw.stamp: tools/getcpmsw.py tools/cpmcache.py $(CPMCACHE) | $(BUILD)
 	python3 tools/getcpmsw.py -o $(CPMSWDIR)
 	@touch $@
 
@@ -10063,6 +10134,28 @@ $(ZDATA)/SAMPLE.BMP: $(BUILD)/SAMPLE.BMP tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
 	@mkdir -p $(ZDATA)
 	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
 
+# THE OFFICE DISK'S DOCUMENTS THAT MEDIA/ DOES NOT ALREADY HAVE (SPEC.md
+# 24.6.2 -> 19.10). $(APPS_DATA) is the four files every apps disk carries in
+# MEDIA/, and it is TeXPad's pair, the browser's page and the module - so
+# Sheet, Chart, ArtfulType and Paint all ship on the everything disk and the
+# live media with NOTHING IN THE FOLDER THEIR OPEN DIALOG STARTS ON (SPEC.md
+# 38.10). The category disks fixed that at 360KB and the fix never reached
+# the two images that are supposed to carry everything.
+#
+# Derived rather than listed, in both PKGZ arms at once: the filter drops the
+# two .TEX files $(APPS_DATA) already names and the welcome document, which
+# is in WORD/ beside the program that opens it and would be a second copy
+# here. What is left is SALES.SLK (Sheet's, and CHART'S ONLY LAUNCH PATH -
+# it declares no association and File > Open is all it has), WRITING.MD and
+# SAMPLE.BMP. The %WELCOME.DOC pattern matches $(BUILD)/ and $(ZDATA)/ alike,
+# so this line is right in the plain arm and the packed one without being
+# written twice - which is the defect the PKGZ block above carries a whole
+# paragraph about.
+MEDIA_EXTRA := $(filter-out $(APPS_DATA) %WELCOME.DOC,$(OFFICE_DATA))
+$(if $(MEDIA_EXTRA),,$(error MEDIA_EXTRA is empty - the filter above no \
+     longer matches $(OFFICE_DATA), so the everything disk and the live \
+     media have lost Sheet's, Chart's, ArtfulType's and Paint's documents))
+
 # Paint's sample is DRAWN rather than committed (tools/os88sample.py's own
 # header carries the argument, which is os88logo.py's): a bitmap's defects
 # are entirely visual and a blob in the tree is one nobody can review. The
@@ -10463,7 +10556,7 @@ zset:
 # RUNCPM\, because it too has an .OVL resolved in the launching instance's
 # folder, and the CCP it loads and the CP/M drive A\0 below it are found the
 # same way - and, unlike FROTZ, WITH its disk: the master disk is fetched by
-# tools/getruncpm.py (never committed, the same rule as the stories) and this
+# tools/getruncpm.py (out of the committed CP/M cache zip) and this
 # target acquires the fetch as a prerequisite, which it can because it already
 # needs the C toolchain. The A\0 selection is the 1.44MB one - the whole
 # master disk minus the three files above 65,535 bytes, its LEFT-OFF.TXT
@@ -10501,6 +10594,39 @@ ALLAPPSIMG120 := $(BUILD)/apps-all-120.img
 # indistinguishable from broken" exactly. The apps floppies are the case that
 # does NOT need it, because a machine reading one has the system disk in the
 # other drive.
+#
+# THE FOUR PACKAGES THAT RIDE NO FLOPPY DO NOT RIDE THIS ONE EITHER, AND THAT
+# IS ARITHMETIC RATHER THAN TASTE (SPEC.md 19.10.1). RECORDER (SPEC.md 35.1),
+# HELLO (27.0), PACMAN (89) and SCRIBE (95) are built by `all` and carried by
+# no shipped disk. Completeness IS this disk's premise, so they were put on it
+# - and THE SECOND GEOMETRY IS THE BINDING ONE. build/apps-all-120.img is
+# 2,371 clusters against 1.44MB's 2,847, and its RunCPM drive A is whatever is
+# left after everything else: 43 clusters, 21 of the master disk's 77 files.
+#
+#   the three small ones   12,844 bytes with $(MEDIA_EXTRA) -> A/0 budget 43
+#                          clusters down to 14, and the fill chooses ONE FILE:
+#                          its own LEFT-OFF.TXT. Twenty-one programs to none.
+#   SCRIBE                 56,048 more -> the budget goes NEGATIVE, -104.
+#
+# A negative budget is answered by choosing nothing, the image verifies clean,
+# and what ships is a CP/M emulator with no CP/M on its drive A. So thirteen
+# kilobytes of package would have cost that disk RunCPM, which is not a trade
+# anybody asked for - and the two geometries share ONE payload list on purpose
+# ("two hand-maintained everything-lists is exactly how they drift", above),
+# so a 1.44MB-only entry here is not the answer either.
+#
+# THEY RIDE THE LIVE MEDIA INSTEAD ($(LIVEPKGARGS), SPEC.md 80.6), where the
+# whole of it is 0.2% of a 32MB partition and the four cluster arguments that
+# took them off the floppies are arguments about 354 clusters. This list and
+# both everything-floppies are BYTE-IDENTICAL to what they were.
+#
+# THE "THEY WOULD COLLIDE" CLAIM ABOUT SCRIBE WAS STALE, and it is worth
+# recording because it is what kept it off the LIVE media too:
+# apps/scribe/scribe.asm:148 declares NO association block at all, and says in
+# twenty lines why - assoc_ext_new ends in `mov [bx+3], dl`, which OVERWRITES
+# rather than refuses, so a second claimant on .DOC would win or lose by
+# directory order. Scribe designed the collision out at the source; the disk
+# list went on believing in it.
 ALLAPPSFILES := $(APPS) $(CORE_SYSONLY) $(BUILD)/frotz.o88 \
                 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC \
                 $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF \
@@ -10622,22 +10748,134 @@ $(ALLAPPSIMG120): $(ALLAPPS) tools/os88disk.py
 USBIMG := $(BUILD)/os8088-usb.img
 LIVEISO := $(BUILD)/os8088.iso
 
-LIVEARGS := $(DRIVERS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) $(ALLAPPSARGS)
+# --- WHAT THE LIVE VOLUME CARRIES THAT THE EVERYTHING-FLOPPY CANNOT ---------
+# SPEC.md 80.6. The paragraph above is still the rule - the payload is
+# DERIVED from the shipped lists and never re-typed here - and this is the
+# part of it the rule could not express, because three of these payloads do
+# not fit 1.44MB and one of them is wrong on a floppy by definition.
+#
+# THE WIRE (SPEC.md 92.11) is the one that was a BUG rather than a gap. It is
+# a SYSAPPS package: the desktop zone launches it BY NAME out of the BOOT
+# volume's SYSTEM/ (SPEC.md 26.7), so a copy on an apps floppy is never the
+# one that runs and $(APPSYS) rightly leaves it off. But the live media is ONE
+# VOLUME - it is the boot volume - so taking $(ALLAPPSARGS)' SYSTEM/ payload
+# wholesale took the apps FLOPPY's answer to a question the floppy was the
+# only reason for, and every live USB and CD this project has cut booted to a
+# desktop whose Wire zone opened nothing. Derived as the difference between
+# the two lists, so a second SYSAPPS package lands here the day it lands
+# there and neither list is edited twice.
+LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS)))
+# THE FOUR PACKAGES THAT RIDE NO FLOPPY, AND THE DOCUMENTS MEDIA/ LACKED.
+# RECORDER (SPEC.md 35.1), HELLO (27.0), PACMAN (89) and SCRIBE (95) are built
+# by `all` and shipped nowhere, and every one of those decisions is an argument
+# about 354 clusters - DOT DELIRIUM wanted PACMAN's six of them, two word
+# processors are 49KB of one apps disk, HELLO is a worked example rather than a
+# program. Here they are 0.2% of the partition.
+#
+# HERE AND NOT ON $(ALLAPPSARGS), which was the first shape and is wrong: the
+# everything-FLOPPY is 2,371 clusters at its binding geometry and its RunCPM
+# drive A is the fill that absorbs everything else, so thirteen kilobytes of
+# package took A/0 from 21 master-disk files to its own LEFT-OFF.TXT and
+# SCRIBE took the budget NEGATIVE. The note over $(ALLAPPSFILES) has the
+# arithmetic. A live volume with 26MB free has no such trade in it.
+#
+# SCRIBE GETS A FOLDER rather than a second .O88 in APPS/: SCRIBE.OVL is
+# resolved in the launching instance's directory (SPEC.md 19.2.1), the same
+# requirement that gives each Word one - and its WELCOME.DOC is a second copy
+# of the name WORD/ already carries, which only separate folders allow.
+#
+# $(MEDIA_EXTRA) is the category disks' documents (SPEC.md 24.6.2): SALES.SLK,
+# WRITING.MD and SAMPLE.BMP, so that Sheet, Chart, ArtfulType and Paint do not
+# open their File dialog on a folder with nothing they can read (SPEC.md
+# 38.10). Chart is the sharp case - it declares no association, so File > Open
+# is its ONLY launch path and a spreadsheet on the volume is the one thing it
+# must have.
+LIVEPKGDEPS := $(BUILD)/recorder.o88 $(BUILD)/hello.o88 $(BUILD)/pacman.o88 \
+               $(SCRIBEDISK) $(MEDIA_EXTRA)
+LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
+               GAMES:$(BUILD)/pacman.o88 \
+               $(addprefix SCRIBE:,$(SCRIBEDISK)) \
+               $(addprefix MEDIA:,$(MEDIA_EXTRA))
+$(if $(LIVESYSARGS),,$(error LIVESYSARGS is empty - $(SYSAPPS) and $(APPSYS) \
+     no longer differ, so THEWIRE.O88 is either on every apps disk or on \
+     none; SPEC.md 92.11 says it is on neither))
+
+# THE WHOLE STORY LIBRARY (SPEC.md 61, 80.6). FROTZ.O88 rides APPS/ on this
+# volume and has ridden it since the everything disk was built - WITH NOTHING
+# TO PLAY. The stories are fetched and never committed, which is why they were
+# skipped; it is not a reason, because this target already acquires two other
+# fetches. All fifteen are 2,519KB, more than any floppy holds, which is why
+# the Makefile has a cut per geometry - and a cut on a volume with 30MB free
+# is a decision nobody took. The list is read out of the MANIFEST at recipe
+# time (--disk-args), so a sixteenth story is on the live media without a
+# sixteenth list, and BRONZE.PIX rides ART/ exactly as it does on the story
+# disk (SPEC.md 61.7).
+LIVESTORYDIRS := --folder STORIES/SAVES
+LIVESTORYARGS := STORIES:$(BUILD)/zcat/live/CATALOG.TXT \
+                 STORIES/ART:$(BUILD)/BRONZE.PIX
+
+$(BUILD)/zcat/live/CATALOG.TXT: tools/getstories.py
+	@mkdir -p $(dir $@)
+	python3 tools/getstories.py --catalog $@
+
+LIVEARGS := $(DRIVERS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) $(ALLAPPSARGS) \
+            $(LIVESYSARGS) $(LIVEPKGARGS) $(LIVESTORYARGS)
+
+# ...and the live volume's own FOLDER COUNT, which is NOT $(ALLAPPSFOLDERS).
+# getruncpm.py --folders prices every folder directory at a cluster, and the
+# live tree has folders the everything-floppy does not: SCRIBE/, STORIES/ and
+# its four, and getcpmsw.py's nine areas under RUNCPM/A instead of none. At
+# 26MB free the under-pricing changes nothing today, which is exactly why it
+# would sit there being wrong - so it is DERIVED the way $(ALLAPPSDIRS) is,
+# off $(LIVEARGS) itself plus the --folder flags the recipe passes, and one
+# parent level (the tree nests one deep; RUNCPM/A/0 is why STORIES/ART needs
+# no third).
+LIVEDIRS := $(sort $(foreach a,$(LIVEARGS), \
+                     $(if $(findstring :,$a),$(firstword $(subst :, ,$a)))) \
+                   DOCS RUNCPM/A SYSTEM/APPDATA STORIES/SAVES \
+                   $(foreach d,$(shell python3 tools/getcpmsw.py --slots hdd 2>/dev/null), \
+                     $(if $(findstring /,$d),RUNCPM/$(firstword $(subst =, ,$d)))) \
+                   $(sort $(foreach a,$(shell python3 tools/getstories.py \
+                                        --disk-args STORIES/ 2>/dev/null), \
+                             $(firstword $(subst :, ,$a)))))
+LIVEDIRS := $(sort $(LIVEDIRS) \
+                   $(patsubst %/,%,$(filter-out ./,$(dir $(LIVEDIRS)))))
+LIVEFOLDERS := $(words $(LIVEDIRS))
 
 usb: $(USBIMG)
 iso: $(LIVEISO)
 live: $(USBIMG) $(LIVEISO)
 
+# THE SELECTIONS ARE "hdd" AND NOT 1440 (SPEC.md 80.6). Both fetch tools
+# price their fill in the target geometry's clusters, and this volume is
+# 16,324 of 2,048 bytes against a 1.44MB floppy's 2,847 of 512 - so asking
+# them for a floppy's answer truncated both: the live image carried 62 of the
+# master disk's 77 files, with a LEFT-OFF.TXT on it naming the other fifteen,
+# on a partition with 30MB spare; and it carried NO CP/M software at all,
+# because the games are a separate fetch this target had never acquired. The
+# "hdd" arm of each tool carries everything and leaves a megabyte to save
+# into. The GAMES are priced first and the master disk fills what is left,
+# which is RUNCPMIMG's order and is here for its reason.
 $(USBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
            $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
+           $(SYSAPPS) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
+           $(BUILD)/zcat/live/CATALOG.TXT $(BUILD)/cpmsw.stamp \
+           tools/getcpmsw.py tools/getstories.py \
            $(ALLAPPS) tools/os88disk.py
-	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select 1440 --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve-clusters $(ALLAPPSEXTRA) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
-	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select 1440 chose nothing"; exit 1; }; \
+	gsel="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --select hdd | sed 's,^,RUNCPM/,')"; \
+	gcost="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --cost hdd)"; \
+	gslot="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --slots hdd | sed 's,--dir-slots ,--dir-slots RUNCPM/,g')"; \
+	[ -n "$$gsel" ] || { echo "usb: getcpmsw.py --select hdd chose nothing"; exit 1; }; \
+	zsel="$$(python3 tools/getstories.py -o $(STORYDIR) --disk-args STORIES/)"; \
+	[ -n "$$zsel" ] || { echo "usb: getstories.py --disk-args printed nothing"; exit 1; }; \
+	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select hdd --dir-slots $(RUNCPMSLOTS) --folders $(LIVEFOLDERS) --reserve-clusters $$gcost --reserve $(ALLAPPSFILES) $(LIVEPKGDEPS) $(SYSAPPS) | sed 's,^,RUNCPM/A/0:,')"; \
+	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select hdd chose nothing"; exit 1; }; \
 	python3 tools/os88disk.py -o $@ --hdd \
 		--mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
 		--kernel $(KERNFILE) \
-		--deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) \
-		--folder DOCS $(APPDATAFOLDER) $(LIVEARGS) $$sel
+		--deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) $$gslot \
+		--folder DOCS $(APPDATAFOLDER) $(LIVESTORYDIRS) \
+		$(LIVEARGS) $$sel $$gsel $$zsel $(CPMSW) $(STORIES)
 	@python3 tools/os88disk.py --verify-hdd $@
 	@echo "usb:    $@ - the live USB image (SPEC.md 80.1). Write it raw"
 	@echo "        to a stick and boot a legacy-BIOS machine from it; the"
@@ -10659,6 +10897,42 @@ $(LIVEISO): $(USBIMG) $(SYSDOCRAW) tools/os88iso.py
 # so and takes a path (an unpacked release zip has the same files).
 burn:
 	@python3 tools/os88burn.py
+
+# `make print-ALLAPPSARGS` - one variable's expansion, on stdout, and nothing
+# else. FOR A PERSON AT A PROMPT, and deliberately not for a test: `make` with
+# any knob in the environment re-evaluates $(VIDSTAMP), whose rule DELETES
+# $(BUILD)/kernel.bin and every boot sector when the knob set differs (see the
+# BUILD= note at the top of this file), so a gate that shelled out to make
+# could rewrite build/ under any row running beside it. tests/unit/t_registry
+# refuses such a row by name, which is how this was caught.
+#
+# @-prefixed and with no prerequisites, so it builds nothing and prints one
+# line. An undefined variable prints an empty line rather than failing.
+.PHONY: print-%
+print-%:
+	@echo '$($*)'
+
+# --- build/livepayload.txt: THE LIVE MEDIA'S PAYLOAD, WRITTEN DOWN -----------
+# SPEC.md 80.6. tests/unit/t_livefull.py's PART A needs to know what
+# $(LIVEARGS) says without running make, for the reason one paragraph up - so
+# the BUILD emits it, as an ordinary artefact with the Makefile as its only
+# prerequisite. That is the derived answer rather than a second list: editing
+# any variable that feeds $(LIVEARGS) rewrites this file in the same `make`,
+# and the gate reads what the build actually computed.
+#
+# One `KEY value` line per entry, which is what lets a reader diff two of them
+# and what keeps the parse in the gate down to a split. It is in `all` and
+# costs a printf, so a tree that has never built a live image still has the
+# list the live image would be built from - which is the whole point: PART A
+# is the half that must fail on the day a package is added, and `make usb`
+# needs the C toolchain and three fetches that a plain clone has none of.
+$(BUILD)/livepayload.txt: Makefile | $(BUILD)
+	@{ printf 'LIVEARGS %s\n' $(LIVEARGS); \
+	   printf 'ALLAPPSARGS %s\n' $(ALLAPPSARGS); \
+	   printf 'LIVESYSARGS %s\n' $(LIVESYSARGS); \
+	   printf 'LIVEPKGARGS %s\n' $(LIVEPKGARGS); \
+	   printf 'MEDIA_EXTRA %s\n' $(MEDIA_EXTRA); } > $@.tmp
+	@mv -f $@.tmp $@
 
 # Discover built images and attached floppy/USB/CD media without building.
 .PHONY: imager

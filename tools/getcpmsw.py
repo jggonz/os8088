@@ -17,14 +17,17 @@ beside RunCPM's master disk (SPEC.md §74.6).
     python3 tools/getcpmsw.py --refresh -o build/cpmsw     # re-read the
                               # collection and print a new PINNED table
 
-**Nothing this script downloads is committed** (CONTRIBUTING.md §6, and the
-same decision `tools/getstories.py` and `tools/getruncpm.py` took): the games
-are their own authors' work, a git repository is not a distribution channel
-for them, and the bytes land in `build/`, which is ignored outright. What IS
-committed is the PIN — a Google Drive file id, a SHA-256 and a size per file —
-so the floppies rebuild byte-for-byte (`tools/os88disk.py` pins the volume
-serial and every FAT timestamp; this pins the input) and a collection that
-moved under us is a hard failure rather than a silent difference.
+**THE BYTES COME OUT OF A COMMITTED ZIP, NOT OFF DRIVE** (SPEC.md §74.6.1):
+`apps/runcpm/cache/cpmcache.zip`, read by `tools/cpmcache.py`, because Drive
+answers one request and one virus-scan form a file and eighty of them were
+minutes of every clean `make live`. That is a user-decided departure from
+CONTRIBUTING.md §6 (`apps/runcpm/cache/README.md` records it). The PIN - a
+Google Drive file id, a SHA-256 and a size per file - is still the authority:
+every byte out of the zip is checked against it exactly as a download is, so
+the floppies rebuild byte-for-byte (`tools/os88disk.py` pins the volume serial
+and every FAT timestamp; this pins the input). Drive is reached only for a
+file the zip lacks - a moved pin - and `tools/cpmcache.py --pack` then brings
+the zip up to date.
 
 WHERE THEY COME FROM: the public **RunCPM software collection** on Google
 Drive — the A..P/0..F drive tree RunCPM users share, the same shape RunCPM
@@ -121,10 +124,20 @@ SPARE_SLOTS = 16
 # at all - 297 clusters cannot hold 206KB of arcade AND the programs, and a
 # disk that dropped the programs for games would not be RunCPM's disk any
 # more. GAMES.TXT says so on the disk itself.
+#
+# ...AND "hdd", WHICH CARRIES EVERY AREA (SPEC.md 80.6). The live USB/CD is
+# one FAT16 partition of 16,324 clusters of 2,048 bytes against the 1.44MB
+# disk's 2,847 of 512, so the whole collection - 1.9MB, nine areas - is 6% of
+# it. It is spelt as a POLICY entry and not as "everything when the volume is
+# big" because every other geometry here is a DECISION written down, and the
+# live volume's decision is the only one that needed no arithmetic: there is
+# nothing to leave off. A tenth area added to AREAS lands here the moment it
+# lands there, which is the one row in this table that must never be a list.
 POLICY = {1440: ["A/5", "N/0", "G/4", "D/0", "H/3"],
           1200: ["A/5", "N/0", "G/4", "D/0"],
           720: ["A/5"],
-          360: []}
+          360: [],
+          "hdd": None}        # None: every area in AREAS, resolved in select()
 
 # The public RunCPM software collection on Google Drive: the folder that holds
 # the A..P drive tree. Only --refresh reads it as a FOLDER; an ordinary fetch
@@ -673,6 +686,20 @@ SKIP = {
 }
 
 
+def geometry_arg(text):
+    """--select/--cost/--slots' value: a floppy's KB, or the word "hdd" for
+    the live volume (SPEC.md 80.6), which carries every area."""
+    if text == "hdd":
+        return "hdd"
+    try:
+        return int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "want one of " + ", ".join(str(g) for g in sorted(POLICY, key=str)
+                                       if g != "hdd") + ' or "hdd", '
+            f"not {text!r}")
+
+
 def fail(msg):
     print(f"getcpmsw: error: {msg}", file=sys.stderr)
     sys.exit(1)
@@ -745,8 +772,8 @@ def write_if_changed(path, data):
 
 def get_file(area, name, out, check, src):
     """The bytes of one pinned file, from the output directory itself (it is
-    the cache), a local copy of the collection (--from) or Drive, verified
-    whichever way it arrived."""
+    the cache), a local copy of the collection (--from), the committed zip
+    or Drive, verified whichever way it arrived."""
     fid, want_sha, want_size = PINNED[area][name]
     dest = os.path.join(out, *area.split("/"), name)
     data = None
@@ -762,9 +789,16 @@ def get_file(area, name, out, check, src):
         with open(p, "rb") as fh:
             data = fh.read()
     if data is None:
+        # the committed copy (tools/cpmcache.py) before the network: Drive is
+        # one request and one scan-warning form a file, and that is minutes
+        import cpmcache
+        data = cpmcache.member(f"cpmsw/{area}/{name}")
+    if data is None:
         if check:
             fail(f"{area}/{name} is not cached in {out} (--check does not fetch)")
-        print(f"getcpmsw: fetching {area}/{name}")
+        print(f"getcpmsw: fetching {area}/{name} (not in "
+              f"apps/runcpm/cache/cpmcache.zip - `tools/cpmcache.py --pack` "
+              f"once it is fetched)")
         data = drive_get(fid)
     if len(data) != want_size or sha256(data) != want_sha:
         fail(f"{area}/{name}: SHA-256/size mismatch against the pin\n"
@@ -807,10 +841,11 @@ def area_cost(sizes, cbytes):
 def select(out, geometry):
     """The areas a geometry carries (POLICY), and what they cost in its own
     clusters. Answers (chosen, dropped, used, sizes)."""
-    cbytes = {360: 1024, 720: 1024, 1200: 512, 1440: 512}.get(geometry)
+    cbytes = {360: 1024, 720: 1024, 1200: 512, 1440: 512,
+              "hdd": 2048}.get(geometry)
     if cbytes is None:
         fail("--select wants one of "
-             + ", ".join(str(g) for g in sorted(POLICY))
+             + ", ".join(str(g) for g in sorted(POLICY, key=str))
              + f", not {geometry}")
     sizes = {}
     for area, _, _, _, _ in AREAS:
@@ -819,8 +854,12 @@ def select(out, geometry):
             fail(f"no {d}: run tools/getcpmsw.py -o {out} first (or make cpmsw)")
         sizes[area] = {n: os.path.getsize(os.path.join(d, n))
                        for n in sorted(os.listdir(d))}
-    chosen = [a for a, _, _, _, _ in AREAS if a in POLICY[geometry]]
-    dropped = [a for a, _, _, _, _ in AREAS if a not in POLICY[geometry]]
+    # POLICY[geometry] is None for the live volume: every area, nothing dropped
+    carry = POLICY[geometry]
+    if carry is None:
+        carry = [a for a, _, _, _, _ in AREAS]
+    chosen = [a for a, _, _, _, _ in AREAS if a in carry]
+    dropped = [a for a, _, _, _, _ in AREAS if a not in carry]
     used = sum(area_cost(sizes[a], cbytes) for a in chosen)
     # GAMES.TXT rides A/0 beside the master disk, not in a game area: it is
     # what a session reads BEFORE it knows a game area exists, and it is
@@ -920,12 +959,12 @@ def main():
     ap.add_argument("--check", action="store_true",
                     help="verify what is cached; never download")
     ap.add_argument("--list", action="store_true", help="print what is shipped and exit")
-    ap.add_argument("--select", type=int, metavar="KB",
+    ap.add_argument("--select", type=geometry_arg, metavar="KB",
                     help="print the files a 360/720/1200/1440 disk carries, "
                          "'<DRIVE>/<USER>:<path>' a line")
-    ap.add_argument("--cost", type=int, metavar="KB",
+    ap.add_argument("--cost", type=geometry_arg, metavar="KB",
                     help="print what --select would spend, in that geometry's clusters")
-    ap.add_argument("--slots", type=int, metavar="KB",
+    ap.add_argument("--slots", type=geometry_arg, metavar="KB",
                     help="print the os88disk.py --dir-slots flags --select's areas "
                          "need, so a game that saves has a slot to save into")
     ap.add_argument("--from", dest="src", metavar="DIR",
@@ -967,7 +1006,8 @@ def main():
             for name in sizes[area]:
                 print(f"{disk[area]}:"
                       f"{os.path.join(args.output, *area.split('/'), name)}")
-        print(f"getcpmsw: {geometry}KB: {' '.join(chosen) if chosen else 'no games'}"
+        label = "live volume" if geometry == "hdd" else f"{geometry}KB"
+        print(f"getcpmsw: {label}: {' '.join(chosen) if chosen else 'no games'}"
               f"{' (left off ' + ' '.join(dropped) + ')' if dropped else ''}, "
               f"{used} clusters", file=sys.stderr)
         return

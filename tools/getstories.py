@@ -327,9 +327,25 @@ def main():
     ap.add_argument("--catalog", metavar="FILE",
                     help="write the disk's CATALOG.TXT (CRLF, 28 columns) and "
                          "exit; no network, no story files needed")
+    ap.add_argument("--disk-args", metavar="PREFIX", nargs="?", const="",
+                    help="print every story in the manifest as an "
+                         "os88disk.py [PREFIX]FOLDER:path argument, one a "
+                         "line, and exit. What the LIVE media carries "
+                         "(SPEC.md 80.6): the whole library is 2,519KB and no "
+                         "floppy holds it, so the Makefile's per-geometry "
+                         "lists are a cut - and the live volume has 30MB "
+                         "free, where a cut would be a decision nobody took. "
+                         "DERIVED FROM THE MANIFEST, so a story added above "
+                         "is on the live media without a list to remember")
     ap.add_argument("only", nargs="*", metavar="NAME",
                     help="fetch only these 8.3 names (default: all of them)")
     args = ap.parse_args()
+
+    if args.disk_args is not None:
+        for st in MANIFEST:
+            print(f"{args.disk_args}{st.folder}:"
+                  f"{os.path.join(args.output, st.name)}")
+        return
 
     if args.list:
         w = max(len(s.name) for s in MANIFEST)

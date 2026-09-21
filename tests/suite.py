@@ -687,9 +687,36 @@ FAST = [
     Row("imager", "fast", py("tests/unit/t_imager.py"), 0.1,
         "host media detection, image compatibility, confirmation and read-back "
         "verification without writing physical devices"),
+    Row("hddgeom", "fast", py("tests/unit/t_hddgeom.py"), 0.3,
+        "SPEC.md 80.5: retargeting the live image to the geometry a period "
+        "ROM reports moves exactly ten bytes, round-trips, refuses a foreign "
+        "disk, and --verify-hdd fails the CHS/BPB disagreement note 33 was"),
     Row("image", "fast", py("tests/unit/t_image.py"), 0.1,
         "the shipped floppies read by an independent FAT12 walker: contiguity, "
         "the standard BPB, SPEC.md 19.6's attributes"),
+    Row("cpmcache", "fast", py("tests/unit/t_cpmcache.py"), 0.2,
+        "SPEC.md 74.6.1: apps/runcpm/cache/cpmcache.zip holds every file "
+        "getruncpm.py and getcpmsw.py pin, and nothing else. The scripts fall "
+        "back to the network for a file the zip lacks, so a pin moved without "
+        "a repack is a clean `make live` downloading from Google Drive a file "
+        "at a time again with nothing saying why"),
+    Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
+        "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
+        "completeness, and until this row nothing in the tree had ever read "
+        "it. Four things were missing from every live image ever cut - "
+        "THEWIRE.O88 (a SYSAPPS package the desktop zone launches out of the "
+        "BOOT volume's SYSTEM/, and the live media IS the boot volume), the "
+        "four packages that ride no floppy, the whole Frotz story library "
+        "beside a FROTZ.O88 with nothing to play, and both CP/M fills, priced "
+        "in 1.44MB clusters on a 32MB partition. TWO HALVES that are not "
+        "interchangeable: PART A reads build/livepayload.txt - the "
+        "payload list `all` emits from $(LIVEARGS) itself - so a new apps/ "
+        "directory fails the build on the day it is added, which is the "
+        "enforcement this row exists for; PART B walks build/os8088-usb.img "
+        "when `make usb` has built one, because a list can name a file that "
+        "never lands. It reads that artefact rather than running `make "
+        "print-`, which registry refuses and rightly: a knob in the "
+        "environment makes $(VIDSTAMP) delete build/kernel.bin"),
     Row("catdisk", "fast", py("tests/unit/t_catdisk.py"), 0.1,
         "SPEC.md 24.6's three category disks, checked for the one thing they "
         "ARE: packages at the ROOT with no folder to click into, MEDIA/ and "
@@ -2274,6 +2301,25 @@ SOAK = [
         "covered on the kernel that ships",
         needs=("qemu", "nasm"), serial=True, timeout=420,
         wants=("build/os8088.img", "build/apps.img", "build/vmmouse.img")),
+    Row("usbmouse", "soak", py("tests/usbmouse.py"), 35.0,
+        "The CH375 USB mouse (SPEC.md 9.12), the Book8088's. NO EMULATOR HERE "
+        "CARRIES A CH375, so `make usbmousetest` builds USBMOUSE.DRV a second "
+        "time with -DCH375SIM - a model of the chip and one device under the "
+        "driver's four port primitives - onto two 360KB system disks whose "
+        "SYSTEM.CFG has bit 6 set. Everything above the primitives is the "
+        "shipped code, on MartyPC's 8088. Drives the model's mailbox: plug a "
+        "boot mouse (US_RUN, INT# proven, SET_PROTOCOL boot), reports that "
+        "move the pointer by HALF with the remainder carried, a press and "
+        "release through the menu bar (the tracker's spin loop keeps being "
+        "fed), an unplug with the button held (the driver feeds the release), "
+        "a flash drive left unconfigured, poll mode with INT# unwired, and a "
+        "Restart that detaches the worker and resets the chip, read at "
+        "dsk_rb_go. The second disk boots a flash drive the BIOS already "
+        "configured and wants DRVE_BUSY - which is also the row that found "
+        "drv_attach dropping every attach's refusal reason. What it cannot "
+        "see is the datasheet read wrong in both halves at once",
+        needs=("marty", "nasm"), serial=True, timeout=300,
+        wants=("build/usbmsim.img", "build/usbmbusy.img", "build/apps360.img")),
     Row("wirezone", "soak", py("tests/wirezone.py"), 50.0,
         "Does the desktop SERVICE zone arrive with its driver and LEAVE with "
         "it? (SPEC.md 26.7) The kernel's half of the Wire is a generic zone a "
@@ -2333,6 +2379,20 @@ SOAK = [
     Row("dockmark", "soak", py("tests/dockmark.py"), 90.0,
         "Does the dock strip mark windows it did not draw under? (SPEC.md"
         "30.3.3)",
+        needs=("marty",), serial=True),
+    Row("dockmodule", "soak", py("tests/dockmodule.py"), 120.0,
+        "Optional Dock module: missing/corrupt file refusal and saved-setting "
+        "boot fallback, with no live callback into an unloaded claim",
+        needs=("marty",), serial=True),
+    Row("dockpos", "soak", py("tests/dockpos.py", "--cga"), 300.0,
+        "Does the dock stand on every edge and hide? (SPEC.md 30.5, 30.6,"
+        "31.13) The Dock page drives Left, Right and Auto-hide on a 5150/"
+        "Hercules: the band the kernel published, the rule on its edge and the"
+        "glass against a forced repaint for each, then a rest on the hidden"
+        "line opens the strip over a window, the 0.75 s linger, a screen put"
+        "back pixel for pixel, a press outside the open strip reaching the"
+        "window under it, the gfx lock free while it is open - and a 5150/CGA"
+        "standing it on the left with seven tiles",
         needs=("marty",), serial=True),
     Row("dualcheck", "soak", py("tests/dualcheck.py"), 10.0,
         "Can this MartyPC drive TWO video cards at once?"
@@ -3514,6 +3574,23 @@ SOAK = [
         "shows the title, and still plays - it plays a click",
         needs=("marty",), serial=True,
         wants=("build/lzmod360.img",)),
+    Row("lzmod-dialog", "soak", py("tests/lzmod.py", "--dialog"), 30.0,
+        "SPEC.md 38.6.1: THE SAME MODULE THROUGH THE FILE DIALOG, which is a "
+        "different kernel size surface and was the WRONG one. fdlg_sizeof "
+        "answered out of the staged listing entry, whose size is deliberately "
+        "the ON-DISK one (19.1), so every app that funds a claim from 38.6's "
+        "DX:CX claimed a third of what the read was about to deliver - and "
+        "BEVERLY.MOD, the one shipped file this actually breaks, opened by "
+        "double-click and refused with 'File too big' from File > Open in "
+        "BOTH MOD players, on any machine. NOTHING SAW IT: `lzmod` above "
+        "drives the association, which goes through OSAPI_FILE_FIND and "
+        "decodes the hint, and the two fixtures that do drive a dialog "
+        "(trackmove360, mppmove360) ship the module UNCOMPRESSED, where the "
+        "two sizes are the same number. So this row is the route rather than "
+        "a new assertion: same disk, same bytes, same byte-for-byte compare, "
+        "reached through Tracker's own Open",
+        needs=("marty",), serial=True,
+        wants=("build/lzmod360.img",)),
     Row("lzmod-lzb", "soak", py("tests/lzmod.py", "--fmt", "lzb"), 30.0,
         "...and the same module through the OTHER decoder, on the SHIPPED "
         "kernel - which carries both now (SPEC.md 20.13.6), so this row no "
@@ -3863,7 +3940,7 @@ SOAK = [
         "SPEC.md 22.18: the Disk window's two header buttons fire on the"
         "RELEASE.",
         needs=("marty",), serial=True),
-    Row("fsxdisp", "soak", py("tests/fsxdisp.py"), 60.0,
+    Row("fsxdisp", "soak", py("tests/fsxdisp.py", "--dock"), 90.0,
         "Does an fsx bracket take ONE display and dark the others? (SPEC.md"
         "39.18)",
         needs=("marty",), serial=True,

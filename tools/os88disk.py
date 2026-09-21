@@ -7,6 +7,7 @@
                              --boot BOOTHD.bin --kernel KERNEL.bin [...]
     python3 tools/os88disk.py --verify IMG
     python3 tools/os88disk.py --verify-hdd HDD.img
+    python3 tools/os88disk.py --retarget HDD.img --geometry [C/]H/S -o OUT.img
 
 The image is a canonical DOS FAT floppy (SPEC.md section 19): boot sector
 with a full BPB (OEM "MSDOS5.0", boot signature 0x29, fixed serial
@@ -550,14 +551,143 @@ def hdd_layout(tot: int) -> Layout:
     fail(f"no FAT16 layout fits {tot} sectors")
 
 
-def hdd_chs(lba: int) -> bytes:
-    """LBA as the 3-byte CHS field of a partition entry, under the fixed
-    --hdd geometry. Never clamped: 65 cylinders is far inside CHS range,
-    and the two columns agreeing IS the contract (SPEC.md 80.1) - a BIOS
-    booting this image derives its virtual geometry from these fields."""
-    c, r = divmod(lba, HDD_SPT * HDD_HEADS)
-    h, s = divmod(r, HDD_SPT)
+def hdd_chs(lba: int, heads: int = HDD_HEADS, spt: int = HDD_SPT) -> bytes:
+    """LBA as the 3-byte CHS field of a partition entry, under a geometry -
+    the fixed --hdd one unless --retarget says otherwise. Never clamped: the
+    build's 65 cylinders is far inside CHS range and hdd_retarget refuses a
+    cylinder past 1023 before calling this. The two columns agreeing IS the
+    contract (SPEC.md 80.1) - a BIOS booting this image derives its virtual
+    geometry from these fields."""
+    c, r = divmod(lba, spt * heads)
+    h, s = divmod(r, spt)
     return bytes([h, ((s + 1) & 0x3F) | ((c >> 2) & 0xC0), c & 0xFF])
+
+
+def chs_lba(field: bytes, heads: int, spt: int) -> int:
+    """The inverse: a partition entry's 3-byte CHS field as an LBA under a
+    geometry, for --verify-hdd's agreement test."""
+    h = field[0]
+    s = field[1] & 0x3F
+    c = ((field[1] & 0xC0) << 2) | field[2]
+    return (c * heads + h) * spt + (s - 1)
+
+
+def parse_geometry(text: str):
+    """'HEADS/SPT' or 'CYLS/HEADS/SPT' -> (cyls or None, heads, spt).
+    ValueError, never sys.exit: the imager catches this and goes back to
+    its prompt."""
+    parts = text.strip().replace("x", "/").replace("X", "/").split("/")
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        raise ValueError(f"geometry {text!r}: want HEADS/SPT, digits only")
+    if len(nums) == 2:
+        cyls, (heads, spt) = None, nums
+    elif len(nums) == 3:
+        cyls, heads, spt = nums
+    else:
+        raise ValueError(f"geometry {text!r}: want HEADS/SPT or C/H/S")
+    if not 1 <= heads <= 255:
+        raise ValueError(f"heads {heads}: int 13h carries 1..255")
+    if not 1 <= spt <= 63:
+        raise ValueError(f"sectors per track {spt}: int 13h carries 1..63")
+    if cyls is not None and not 1 <= cyls <= 65535:
+        raise ValueError(f"cylinders {cyls}: a drive's own count is a word")
+    return cyls, heads, spt
+
+
+def hdd_retarget(img: bytes, heads: int, spt: int) -> bytes:
+    """SPEC.md 80.5: rewrite the ten bytes of a --hdd image that name a
+    geometry - each partition entry's two CHS columns and the volume's
+    BPB_SecPerTrk/BPB_NumHeads - to `heads` x `spt`, and nothing else. The
+    LBA layout does not move: a ROM that reports this geometry (an XTIDE
+    card, say) then divides every LBA the same way the writer did, which is
+    field note 33's invariant with the imager as the writer.
+
+    ValueError on anything but a well-formed --hdd image whose table and
+    volumes already agree: this is for images this tool built, and a
+    foreign disk is refused rather than quietly rewritten. Cylinders are
+    never clamped - a partition whose last sector needs cylinder 1024 or
+    more under the new shape is refused, since the field cannot carry it."""
+    parse_geometry(f"{heads}/{spt}")             # the same range rules
+    if len(img) < 2 * SECTOR or len(img) % SECTOR:
+        raise ValueError("not a sector-multiple image of at least 2 sectors")
+    if img[510:512] != b"\x55\xaa":
+        raise ValueError("sector 0 carries no boot signature: not an MBR")
+    out = bytearray(img)
+    nsec = len(img) // SECTOR
+    touched = 0
+    for i in range(4):
+        o = HP_TBL + i * 16
+        ent = img[o:o + 16]
+        typ = ent[4]
+        lba, cnt = struct.unpack("<II", ent[8:16])
+        if not typ and not cnt:
+            continue
+        if not cnt or lba + cnt > nsec:
+            raise ValueError(f"partition {i}: {cnt} sectors at LBA {lba} "
+                             f"does not lie inside the {nsec}-sector image")
+        v = lba * SECTOR
+        bs = img[v:v + SECTOR]
+        if bs[510:512] != b"\x55\xaa":
+            raise ValueError(f"partition {i}: no boot record at LBA {lba}")
+        hid, = struct.unpack_from("<I", bs, 28)
+        bspt, bheads = struct.unpack_from("<HH", bs, 24)
+        if hid != lba:
+            raise ValueError(f"partition {i}: the volume says it starts at "
+                             f"LBA {hid} and the table at {lba}")
+        if not bspt or not bheads:
+            raise ValueError(f"partition {i}: the volume's BPB has no "
+                             "geometry to retarget")
+        for name, field, want in (("start", ent[1:4], lba),
+                                  ("end", ent[5:8], lba + cnt - 1)):
+            if chs_lba(field, bheads, bspt) != want:
+                raise ValueError(f"partition {i}: the {name} CHS column and "
+                                 f"the LBA column disagree under the "
+                                 f"volume's own {bheads}x{bspt}; not an "
+                                 "image this tool built")
+        last = lba + cnt - 1
+        if last // (heads * spt) > 1023:
+            raise ValueError(f"partition {i}: its last sector, LBA {last}, "
+                             f"needs cylinder {last // (heads * spt)} under "
+                             f"{heads}x{spt} and the CHS field stops at 1023")
+        out[o + 1:o + 4] = hdd_chs(lba, heads, spt)
+        out[o + 5:o + 8] = hdd_chs(last, heads, spt)
+        struct.pack_into("<HH", out, v + 24, spt, heads)
+        touched += 1
+    if not touched:
+        raise ValueError("no partition in the table")
+    return bytes(out)
+
+
+def retarget(args) -> int:
+    """`--retarget IMG --geometry HEADS/SPT -o OUT`: the dd user's form of
+    what the imager does in memory (SPEC.md 80.5). A leading cylinder count
+    is accepted so a C/H/S line can be pasted whole; it is checked against
+    the image - the card must HOLD the image under that geometry - and not
+    written anywhere, because nothing on the disk names a cylinder count."""
+    try:
+        with open(args.retarget, "rb") as f:
+            img = f.read()
+    except OSError as e:
+        fail(f"cannot read {args.retarget}: {e}")
+    try:
+        cyls, heads, spt = parse_geometry(args.geometry)
+        if cyls is not None and cyls * heads * spt < len(img) // SECTOR:
+            raise ValueError(f"{cyls}/{heads}/{spt} is {cyls * heads * spt} "
+                             f"sectors and the image is {len(img) // SECTOR}")
+        out = hdd_retarget(img, heads, spt)
+    except ValueError as e:
+        fail(f"retarget {args.retarget}: {e}")
+    try:
+        with open(args.output, "wb") as f:
+            f.write(out)
+    except OSError as e:
+        fail(f"cannot write {args.output}: {e}")
+    print(f"os88disk: {args.output}: {args.retarget} retargeted to "
+          f"{heads} heads x {spt} sectors per track"
+          + (f" ({cyls} cylinders)" if cyls else ""))
+    return 0
 
 
 def read_data_file(path: str) -> bytes:
@@ -1052,6 +1182,29 @@ def verify_hdd(path: str) -> int:
             errors.append(f"partition {idx}: BPB_BytsPerSec {bps} != 512")
             continue
 
+        # SPEC.md 80.5: the entry's CHS columns must describe the sectors the
+        # volume's own BPB geometry says they are - the MBR reads by the
+        # column and the boot record divides by the BPB, and a disk on which
+        # the two disagree is field note 33's. An entry whose end is past
+        # cylinder 1023 cannot say, and is skipped rather than failed.
+        bspt, bheads = struct.unpack_from("<HH", bs, 24)
+        ent = img[(base * SECTOR) + 446 + idx * 16:(base * SECTOR) + 446 + idx * 16 + 16]
+        if bspt and bheads:
+            for name, field, want in (("start", ent[1:4], plba),
+                                      ("end", ent[5:8], plba + pcnt - 1)):
+                if want // (bheads * bspt) > 1023:
+                    continue
+                got = chs_lba(field, bheads, bspt)
+                if got != want:
+                    errors.append(f"partition {idx}: {name} CHS column is "
+                                  f"LBA {got} under the volume's own "
+                                  f"{bheads}x{bspt}, the LBA column says "
+                                  f"{want}")
+        else:
+            errors.append(f"partition {idx}: BPB_SecPerTrk/BPB_NumHeads "
+                          f"{bspt}/{bheads} - the boot record divides by "
+                          "these (SPEC.md 52.10.2)")
+
         def psec(n, count=1):
             a = o + n * SECTOR
             return img[a:a + SECTOR * count]
@@ -1385,6 +1538,17 @@ def main() -> int:
                          "cannot")
     ap.add_argument("--verify", metavar="IMG",
                     help="structural fsck of an existing image (no build)")
+    ap.add_argument("--retarget", metavar="IMG",
+                    help="rewrite a --hdd image's partition-entry CHS "
+                         "columns and BPB heads/spt to --geometry, into "
+                         "-o (SPEC.md 80.5): the LBA layout does not move. "
+                         "For a card whose ROM reports its OWN geometry "
+                         "(an XTIDE CompactFlash) rather than deriving one "
+                         "from the table. Needs --geometry and -o")
+    ap.add_argument("--geometry", metavar="[C/]H/S",
+                    help="with --retarget: heads/sectors-per-track, or a "
+                         "whole C/H/S line - the cylinders are checked "
+                         "against the image's size and written nowhere")
     ap.add_argument("--boot", metavar="BOOT.bin",
                     help="os8088's own 512-byte boot sector: makes this a "
                          "bootable SYSTEM disk (needs --kernel)")
@@ -1415,6 +1579,14 @@ def main() -> int:
                          "folder above it too")
     args = ap.parse_args()
 
+    if args.retarget or args.geometry:
+        if not (args.retarget and args.geometry and args.output):
+            ap.error("--retarget needs --geometry and -o")
+        if args.size or args.scramble or args.packages or args.folder \
+                or args.dir_slots or args.verify or args.verify_hdd \
+                or args.hdd:
+            ap.error("--retarget takes only --geometry and -o")
+        return retarget(args)
     if args.verify_hdd:
         if args.output or args.size or args.scramble or args.packages \
                 or args.folder or args.dir_slots or args.verify or args.hdd:

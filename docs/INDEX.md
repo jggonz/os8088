@@ -130,6 +130,7 @@ Read first: [§9 mouse.inc — the pointer: serial and PS/2 mice, and the cursor
 | `0x00C8` | `OSAPI_MOUSE` | out CX=mouse_x, DX=mouse_y, AL=mouse_btn |
 | `0x03F0` | `OSAPI_KEY_DOWN` | AL = a make scancode (KSC_*). out CF=1 down, CF=0 up; every register kept |
 | `0x0540` | `OSAPI_CUR_BUSY` | I AM ABOUT TO GO QUIET FOR A WHILE (SPEC.md 7.5). NO ARGUMENT. The pointer becomes an HOURGLASS for the rest of the gfx-lock hold you are inside, and... |
+| `0x0550` | `OSAPI_MOUSE_FEED` | AX = dx, BX = dy (signed; POSITIVE dy IS DOWN), CL = buttons in mouse_btn's bits (1 left, 2 right)... |
 | `0x0338` | `OSAPI_EVQ_PENDING` | out AX = events still queued behind the one being dispatched (SPEC.md 13.4)... |
 
 ### Files and volumes

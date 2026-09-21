@@ -1052,6 +1052,11 @@ vid_switch:
                                 ; 39.13/39.16). Before desk_rowcalc and
                                 ; wm_refit, which read what it publishes
 %endif
+%ifdef DOCK_OPT
+    call dock_geom              ; ...and the strip on its edge, which on this
+                                ; adapter may not be the edge it was on
+                                ; (SPEC.md 30.5.1)
+%endif
     call desk_rowcalc           ; 4. the two things vid_apply does not own
     call wm_refit
 %ifdef KERN_BIG
@@ -1738,6 +1743,9 @@ vid_fsx_leave:
     mov [vid_ndisp], al
     mov byte [vid_cur], 0
     call vid_desk_union
+%ifdef DOCK_OPT
+    call dock_band              ; ...and the strip where the user put it (30.5)
+%endif
     pop ax
 .out:
     ret
@@ -2255,6 +2263,10 @@ vid_disp_init:
     mov byte [vid_ndisp], 2
     call vid_desk_union         ; ...and the DESKTOP is both of them now
 .out:
+%ifdef DOCK_OPT
+    call dock_geom              ; vid_apply put the BOTTOM strip's band back
+                                ; on every arm above (SPEC.md 30.5)
+%endif
     pop di
     pop ax
     ret

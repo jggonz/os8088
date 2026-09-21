@@ -117,6 +117,8 @@ def main(argv):
                     default="auto",
                     help="which card the KERNEL drives; anything but auto "
                          "means a VIDEO= build, and picks the boot gate's card")
+    ap.add_argument("--dock", action="store_true",
+                    help="restore an auto-hidden side dock with CTRL.DRV unloaded")
     a = ap.parse_args(argv)
 
     if a.apps == ap.get_default("apps"):
@@ -151,7 +153,24 @@ def main(argv):
         mo0 = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo0, S, os88marty.settle, card=gate_card)
         dispcp.set_mode(m, mo0, S, os88marty.settle, "right", card=gate_card)
+        if a.dock:
+            import dockpos
+            wx, wy = dispcp._cp_win(m, S)
+            row = m.read(S("cp_nst"), 1)[0] - 1
+            mo0.click(wx + 37, wy + 19 + 6 + row * 14 + 7, settle=0)
+            os88marty.settle(m, card=gate_card)
+            dockpos.click_row(m, mo0, dockpos.CPK_R0Y + 2 * dockpos.CPK_ROWH)
+            dockpos.click_row(m, mo0, dockpos.CPK_AY)
+            if m.read(S("dock_cfg"), 1)[0] != 6:
+                raise RuntimeError("fsxdisp: could not enable right auto-hide")
+            dock_bounds = {n: m.read(S(n), 2) for n in
+                           ("vid_band_x0", "vid_band_xe", "vid_dock_y0",
+                            "vid_desk_zx", "dock_sx1", "dock_sy1",
+                            "dock_sx2", "dock_sy2")}
         dispcp.close_panel(m, mo0, S, os88marty.settle, card=gate_card)
+
+        if a.dock and m.read(S("mod_tab"), 2) != b"\x00\x00":
+            raise RuntimeError("fsxdisp: CTRL.DRV is still loaded before fullscreen")
 
         kind = m.read(S("vid_kind"), 1)[0]
         ndisp = m.read(S("vid_ndisp"), 1)[0]
@@ -285,6 +304,13 @@ def main(argv):
             fail.append("the primary differs by %d px after the bracket - "
                         "SPEC.md 53.9 says the restore repaint erases what "
                         "the bracket drew" % d)
+        if a.dock:
+            if m.read(S("mod_tab"), 2) != b"\x00\x00":
+                fail.append("fullscreen return loaded CTRL.DRV")
+            for name, expected in dock_bounds.items():
+                if m.read(S(name), 2) != expected:
+                    fail.append("fullscreen return changed " + name)
+            say("side-dock geometry restored with CTRL.DRV unloaded")
 
     print()
     for f in fail:

@@ -76,6 +76,19 @@ CP_ITDY   equ 2                 ; label baseline offset (8px font in 12px bar)
 CP_IBX1   equ 2                 ; selection bar left edge
 CP_IBX2   equ CP_DIVX - 3       ; 85: selection bar right edge
 
+%ifdef DOCK_OPT
+; --- THE LIST SCROLLS (SPEC.md 31.1.5) ----------------------------------------
+; Nine rows fit the pane. A list that is longer shows EIGHT and puts two arrows
+; in the ninth row's place, the Drivers page's own (31.1.1) - so a machine with
+; nine rows or fewer sees exactly the list it always did.
+CP_LALL   equ (CP_CH - CP_I0Y) / CP_IROWH   ; 9: rows shown with no arrows
+CP_LVIS   equ CP_LALL - 1                   ; 8: ...and while it scrolls
+CP_LAY    equ CP_I0Y + CP_LVIS * CP_IROWH   ; 118: the arrows' top row
+CP_LAH    equ 12                            ; ...and their height
+CP_LAX0   equ 22                            ; up arrow's left edge
+CP_LAX1   equ 52                            ; down arrow's left edge
+
+%endif
 ; --- right pane: the selected item's page -----------------------------------
 CP_RX     equ 96                ; pane left edge (pane top = content top)
 CP_PRGT   equ CP_CW - CP_RX - 1 ; ...and its LAST COLUMN, as an offset from
@@ -299,6 +312,13 @@ cp_dsave:   db 0                ; the last SYSTEM.CFG write: 0 = fine, 1 =
 ; another one is not being shown. Inline .text data for the same reason as the
 ; rest; 0 = Scheduler is the boot selection, so the panel opens on it.
 cp_sel:     db 0
+%ifdef DOCK_OPT
+cp_ltop:    db 0                ; the first LIST ordinal shown (SPEC.md 31.1.5)
+cp_lsel:    db 0FFh             ; ...and the selection the list last showed,
+                                ; so a [cp_sel] set from OUTSIDE the panel
+                                ; (the clock, drv_notice) scrolls into view
+                                ; and a user's own scroll is never undone
+%endif
 cp_dtop:    db 0                ; the FIRST DRIVER ROW SHOWN (SPEC.md 31.1.1).
                                 ; The Drivers pane fits CP_DVIS rows and
                                 ; drv_tab has more, so the list scrolls; this
@@ -378,8 +398,15 @@ cp_items:
 %ifdef OS88_THEME
     dw cp_s_thm,   cp_thm_paint,   cp_thm_click,   0
 %endif
+%ifdef DOCK_OPT
+    dw cp_s_dock,  cp_dock_paint,  cp_dock_click,  0   ; SPEC.md 31.13 - LAST,
+                                ; so no record index above it moves
+%endif
 cp_items_end:
 CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
+%ifdef DOCK_OPT
+CP_IDOCK  equ CP_ITEMS - 1      ; the Dock item: the last row on every build
+%endif
 CP_ITIME  equ 1                 ; the Date/Time item: ui.inc selects it by
                                 ; name when the menu bar clock is clicked
                                 ; (SPEC.md 12.1/31.5)
@@ -434,7 +461,7 @@ cp_nst:   db CP_ITEMS
 ; [cp_nst], by the same single writer.
 cp_hide:  db 0
 
-; THE LIST HAS ROOM FOR NINE ROWS AND NO MORE: row i's bar runs
+; THE PANE HAS ROOM FOR NINE ROWS: row i's bar runs
 ; CP_I0Y + i*CP_IROWH .. + CP_IBH - 1, so row 8 ends at 129 inside a content
 ; box 132 tall and row 9 would run through the bottom border onto the
 ; desktop. Six static items plus the THREE drivers that publish a page
@@ -445,10 +472,19 @@ cp_hide:  db 0
 ; added without the window being made to hold it. CP_ITEMS and not [cp_nst],
 ; because the guard has to hold on the machine that shows every row.
 ;
+%ifdef DOCK_OPT
+; ...AND IT SCROLLS NOW (SPEC.md 31.1.5), which is the answer this guard was
+; always pointing at: the Dock row made the count ten.
+%if CP_LVIS < 1 || CP_LAY + CP_LAH > CP_CH
+%error "ctrl: the item list's arrows do not fit the pane (SPEC.md 31.1.5)"
+%endif
+%else
 ; A FOURTH page does not fit CGA (see CP_CH), so the answer then is a
-; scrolling list rather than another 14 rows of window.
+; scrolling list rather than another 14 rows of window. kern_small has no
+; Dock page (SPEC.md 30.5), so its list still fits unscrolled.
 %if CP_ITEMS + 3 > (CP_CH - CP_I0Y) / CP_IROWH
 %error "ctrl: the item list can overflow its pane - grow CP_CH (SPEC.md 31.1)"
+%endif
 %endif
 
 ; List names are at most 9 characters (72px): the selection bar ends at
@@ -467,6 +503,25 @@ cp_s_thm:   db 'Theme', 0       ; list name AND the page heading, so RESIDENT
 %endif
 
 cp_s_sched: db 'Scheduler', 0   ; list name AND the page heading, so RESIDENT
+%ifdef DOCK_OPT
+cp_s_dock:  db 'Dock', 0        ; ...and the Dock page's (SPEC.md 31.13)
+
+; --- Dock page (SPEC.md 31.13), PANE-relative --------------------------------
+; The Theme page's pitch and shape: a radio group, then a check box, then one
+; caption line. On BOTH builds - the strip moves and hides on kern_small too,
+; it only forgets at a reboot there, SYSTEM.CFG not being read (SPEC.md 51.0).
+CPK_ROWH  equ 16
+CPK_R0Y   equ 18                ; Bottom glyph top
+CPK_R1Y   equ CPK_R0Y + CPK_ROWH        ; 34: Left
+CPK_R2Y   equ CPK_R1Y + CPK_ROWH        ; 50: Right
+CPK_AY    equ 74                ; Auto-hide check box glyph top
+CPK_B0Y1  equ CPK_R0Y - 4               ; 14: the group's first band top
+CPK_B0Y2  equ CPK_R0Y + CP_GW + 1       ; 31
+CPK_B1Y2  equ CPK_R1Y + CP_GW + 1       ; 47
+CPK_B2Y2  equ CPK_R2Y + CP_GW + 1       ; 63
+CPK_AY1   equ CPK_AY - 4                ; 70: the check box's band - and the
+CPK_AY2   equ CPK_AY + CP_GW + 3        ; 89  gap above it is dead (76.4's rule)
+%endif
 
 ; --- Display page (SPEC.md 31.10/39.11) --------------------------------------
 ; One radio row per adapter the machine actually HAS, and a button that moves
@@ -808,6 +863,19 @@ CPE_PAINT   equ 0
 CPE_ONCLICK equ 1
 CPE_FLUSH   equ 2
 CPE_TICK    equ 3
+%ifdef DOCK_OPT
+CPE_ONUP    equ 4               ; release exists on both kernels
+%ifdef KERN_BIG
+CPE_ONDRAG  equ 5               ; drag exists only on kern_big
+CPE_DOCK_GEOM equ 6
+CP_NENT     equ 7
+%else
+CPE_DOCK_GEOM equ 5
+CP_NENT     equ 6
+%endif
+; Layout setup uses the next free entry without growing MOD_NENT or mod_fp.
+; MOD_H_NENT and the layout stamp reject a module from another build.
+%else
 CPE_ONUP    equ 4               ; SPEC.md 13.8.3's two edges. The RELEASE is on
 %ifdef KERN_BIG                 ; both kernels - a driver's page acts on it
 CPE_ONDRAG  equ 5               ; (SPEC.md 13.8.4) - and the drag is kern_big's
@@ -817,6 +885,7 @@ CP_NENT     equ 5               ; header and mod_check compares it against the
 %endif                          ; file it just read, so a CTRL.DRV with the
                                 ; wrong count is refused rather than
                                 ; dispatched into
+%endif
 CPFP        equ mod_fp + MOD_CTRL * MODFP_STRIDE
 
 section .modc                   ; the on-demand image starts HERE, at its own
@@ -843,6 +912,9 @@ modc_hdr:
     dw modc_e_onup              ; CPE_ONUP
 %ifdef KERN_BIG
     dw modc_e_ondrag            ; CPE_ONDRAG
+%endif
+%ifdef DOCK_OPT
+    dw modc_e_dock_geom         ; CPE_DOCK_GEOM: Dock and Display settings
 %endif
     times MOD_NENT - CP_NENT dw 0   ; the table is a FIXED MOD_NENT words, so
                                 ; MOD_HDR_SZ is a constant and mod_check can
@@ -877,6 +949,12 @@ modc_e_ondrag:  call cp_ondrag_x
             retf
 %endif
 
+%ifdef DOCK_OPT
+modc_e_dock_geom: call cpd_geom
+    retf
+DOCK_GEOM cpd
+
+%endif
 section .cold                   ; ...and the two that stay resident
 
 ; -----------------------------------------------------------------------------
@@ -1091,6 +1169,40 @@ cp_onclick_x:
     cmp cx, CP_DIVX
     jge .page
 
+%ifdef DOCK_OPT
+    call cp_lscroll             ; --- left pane: the list's arrows? (31.1.5)
+    jc .done
+    call cp_pick                ; ...which row? ---
+    jc .done                    ; below the last row: nothing
+    mov ah, al                  ; AH = the ORDINAL, banked: cp_v2r clobbers AL
+    call cp_v2r                 ; ...and which RECORD that row names
+    cmp al, [cp_sel]
+    je .done                    ; already showing: change nothing
+
+    ; --- THE BAR MOVES AND THE PANE DOES NOT (SPEC.md 31.1.4) --------------
+    ; cp_list used to be the redraw path here, and it erases the whole left
+    ; pane: moving one highlight blanked every row on it and re-lettered them
+    ; all, on every click, which is SPEC.md 13.14.6 rule 1 exactly. Two rows
+    ; change, so two rows are drawn - and cp_listrow draws an unselected bar
+    ; in the GROUND, so the row that loses the highlight clears it by drawing
+    ; its replacement rather than by being blanked.
+    ;
+    ; THE OLD ORDINAL IS TAKEN BEFORE [cp_sel] MOVES and the drawing AFTER,
+    ; because cp_listrow reads [cp_sel] itself to decide which way round a row
+    ; goes: resolve while it still says where the bar is, draw once it says
+    ; where the bar will be.
+    push ax                     ; AL = the new record, AH = the new ordinal
+    mov al, [cp_sel]
+    call cp_r2v                 ; AL = the ordinal the bar is LEAVING
+    mov bl, al
+    mov bh, 1
+    jnc .haveold
+    mov bh, 0                   ; hidden and so on no row: cannot happen while
+.haveold:                       ; [cp_sel] is what is being SHOWN, and costs
+    pop ax                      ; two bytes to not depend on that
+    mov [cp_sel], al
+    mov [cp_lsel], al           ; ...chosen ON the list, so already in view
+%else
     call cp_pick                ; --- left pane: which row? ---
     jc .done                    ; below the last row: nothing
     mov ah, al                  ; AH = the ORDINAL, banked: cp_v2r clobbers AL
@@ -1120,6 +1232,7 @@ cp_onclick_x:
 .haveold:                       ; [cp_sel] is what is being SHOWN, and costs
     pop ax                      ; two bytes to not depend on that
     mov [cp_sel], al
+%endif
     push ax
     or bh, bh
     jz .newbar
@@ -1378,6 +1491,9 @@ cp_ctlgroup:
     cmp al, CP_ITHM
     je .thm
 %endif
+%ifdef DOCK_OPT
+    cmp al, CP_IDOCK
+    je .dock
     jmp short .out              ; a DRIVER's page (SPEC.md 31.9) draws its own
                                 ; controls and knows nothing about this
 .sched:
@@ -1399,6 +1515,32 @@ cp_ctlgroup:
     call cp_vid_mode            ; ...and the three arrangement radios (which
                                 ; refuses itself on a one-display machine)
     jmp short .out
+.dock:
+    call cp_dock_ctls           ; three radios and the check box
+    jmp short .out
+%else
+    jmp short .out              ; a DRIVER's page (SPEC.md 31.9) draws its own
+                                ; controls and knows nothing about this
+.sched:
+    call cp_radios
+    jmp short .out
+.time:
+    call cp_timechk             ; the two checks...
+    xor al, al
+    call cp_timebtn             ; ...and the two buttons
+    mov al, 1
+    call cp_timebtn
+    jmp short .out
+.snd:
+    call cp_snd_radios          ; the three tiers...
+    call cp_snd_test            ; ...and the Test button
+    jmp short .out
+.vid:
+    call cp_vid_btn             ; Activate...
+    call cp_vid_mode            ; ...and the three arrangement radios (which
+                                ; refuses itself on a one-display machine)
+    jmp short .out
+%endif
 %ifdef OS88_THEME
 .thm:
     call cp_thm_radios          ; the whole group: a radio glyph is one
@@ -1967,6 +2109,233 @@ cp_skipset:
 ; the click is in the left pane, and the whole pane width selects.
 ; -----------------------------------------------------------------------------
 cp_pick:
+%ifdef DOCK_OPT
+    push bx
+    push dx
+    sub dx, CP_I0Y
+    jl .miss                    ; signed: above the first row
+    mov ax, dx
+    mov bl, CP_IROWH
+    div bl                      ; AL = the ROW on screen
+    mov bh, al
+    call cp_lvis                ; AL = how many rows are shown (31.1.5)
+    cmp bh, al
+    jae .miss                   ; below the last one: no item
+    mov al, bh
+    add al, [cp_ltop]           ; ...and the ORDINAL that row shows
+    clc
+    jmp short .done
+.miss:
+    stc
+.done:
+    pop dx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_lvis - how many list rows are SHOWN (SPEC.md 31.1.5)
+; out: AL = the count; CF = 1 the list scrolls (and AL = CP_LVIS)
+; clobbers: AL (the output), flags
+; -----------------------------------------------------------------------------
+cp_lvis:
+    call cp_nitems
+    cmp al, CP_LALL
+    ja .scroll
+    clc
+    ret
+.scroll:
+    mov al, CP_LVIS
+    stc
+    ret
+
+; cp_lrow - list ORDINAL AL -> the ROW it is drawn on; CF = 1 off the screen.
+; clobbers: AL (the output), flags
+cp_lrow:
+    push bx
+    sub al, [cp_ltop]
+    jb .off
+    mov bl, al
+    call cp_lvis
+    cmp bl, al
+    mov al, bl                  ; (a mov writes no flags)
+    jae .off
+    clc
+    pop bx
+    ret
+.off:
+    stc
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_lfix - keep [cp_ltop] inside the list, and a selection made from outside
+;           the panel in view (SPEC.md 31.1.5)
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+cp_lfix:
+    push ax
+    push bx
+    call cp_nitems
+    cmp al, CP_LALL
+    ja .scroll
+    mov byte [cp_ltop], 0       ; it fits: nothing is scrolled
+    jmp short .sel
+.scroll:
+    sub al, CP_LVIS             ; AL = the largest top there can be
+    cmp [cp_ltop], al
+    jbe .sel
+    mov [cp_ltop], al           ; a driver went away under the scroll
+.sel:
+    mov al, [cp_sel]
+    cmp al, [cp_lsel]
+    je .out                     ; the list has shown this selection already
+    mov [cp_lsel], al
+    call cp_r2v                 ; AL = its ordinal
+    jc .out
+    cmp al, [cp_ltop]
+    jb .top                     ; above the rows shown: it becomes the top
+    mov bh, al
+    call cp_lvis
+    add al, [cp_ltop]
+    cmp bh, al
+    jb .out                     ; already shown
+    mov al, bh                  ; below them: it becomes the bottom row
+    sub al, CP_LVIS - 1
+.top:
+    mov [cp_ltop], al
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_lscroll - a left-pane press on the arrows' row, while the list scrolls
+; in:  CX/DX = content-relative press, DI/BP = content origin; lock held
+; out: CF = 1 the press was the arrows' (acted on or refused), CF = 0 not
+;
+; ONE ROW A PRESS, and the pane is repainted whole: every row moved, which is
+; the one whole-pane repaint a scroll honestly owes (SPEC.md 31.1.1). A greyed
+; arrow refuses through the predicate that greyed it (SPEC.md 47 rule 2).
+; -----------------------------------------------------------------------------
+cp_lscroll:
+    push ax
+    call cp_lvis
+    jnc .no                     ; nothing scrolls: the row is a list row
+    cmp dx, CP_LAY
+    jl .no
+    xor al, al                  ; the up arrow's cell...
+    cmp cx, CP_LAX0
+    jl .yes
+    cmp cx, CP_LAX0 + CP_DSW - 1
+    jle .go
+    inc al                      ; ...or the down one's
+    cmp cx, CP_LAX1
+    jl .yes
+    cmp cx, CP_LAX1 + CP_DSW - 1
+    jg .yes
+.go:
+    call cp_larrowok
+    jc .yes                     ; greyed: nothing to scroll to
+    or al, al
+    jnz .dn
+    dec byte [cp_ltop]
+    jmp short .draw
+.dn:
+    inc byte [cp_ltop]
+.draw:
+    call cp_list
+.yes:
+    pop ax
+    stc
+    ret
+.no:
+    pop ax
+    clc
+    ret
+
+; cp_larrowok - may list arrow AL (0 up / 1 down) be used? CF = 1 no.
+; Every register preserved. gfx_pen_cf's convention (see cp_drv_arrowok).
+cp_larrowok:
+    push ax
+    push bx
+    or al, al
+    jnz .dn
+    cmp byte [cp_ltop], 0
+    je .no                      ; at the top
+    jmp short .yes
+.dn:
+    call cp_nitems
+    mov bl, [cp_ltop]
+    add bl, CP_LVIS
+    cmp bl, al
+    jae .no                     ; the last row is already shown
+.yes:
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_larrows - the list's two arrows, each greyed at its own end
+; in:  DI = content left, BP = content top; gfx lock held
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+;
+; The Drivers page's cell (SPEC.md 31.1.1): cp_drv_arrfill's interior, a
+; frame and cp_drv_tri's triangle, in a CP_DSW-wide cell so the triangle
+; centres. No pressed look: the list acts on the PRESS, as its rows do.
+; -----------------------------------------------------------------------------
+cp_larrows:
+    push ax
+    xor al, al
+    call cp_larrow
+    inc al
+    call cp_larrow
+    mov byte [gfx_color], CBLACK
+    pop ax
+    ret
+
+cp_larrow:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call cp_larrowok            ; CF = the pen's argument...
+    pushf                       ; ...spent below by the direction test
+    mov si, cp_drv_triu
+    or al, al                   ; the direction BEFORE AX is the cell's x
+    mov ax, CP_LAX0
+    jz .have                    ; (a mov writes no flags)
+    mov si, cp_drv_trid
+    mov ax, CP_LAX1
+.have:
+    add ax, di
+    mov cx, ax
+    add cx, CP_DSW - 1
+    mov bx, bp
+    add bx, CP_LAY
+    mov dx, bx
+    add dx, CP_LAH - 1
+%ifdef KERN_BIG
+    mov byte [cp_darr_dn], 0    ; never drawn held (see above)
+%endif
+    call cp_drv_arrfill
+    popf
+    call KERNEL_SEG:cw_gfx_pen_cf
+    call KERNEL_SEG:cw_gfx_frame
+    call cp_drv_tri
+    call KERNEL_SEG:cw_gfx_pen_live
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+%else
     push dx
     sub dx, CP_I0Y
     jl .miss                    ; signed: above the first row
@@ -1990,6 +2359,7 @@ cp_pick:
     clc
 .done:
     pop dx
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2019,6 +2389,9 @@ cp_listrow:
     push si
 
     mov bl, al                  ; BL = the ordinal, wanted after the multiply
+%ifdef DOCK_OPT
+    call cp_lrow                ; AL = the ROW it is on (SPEC.md 31.1.5)...
+    jc .skip                    ; ...if it is on the screen at all
     mov cl, CP_IROWH
     mul cl                      ; AX = ordinal * pitch (8086: mul r/m8)
     add ax, bp
@@ -2070,6 +2443,60 @@ cp_listrow:
     pop ax                      ; It clobbers SI and nothing else, which is
     call KERNEL_SEG:cw_font_run ; why the row top could live there until now
 
+.skip:
+%else
+    mov cl, CP_IROWH
+    mul cl                      ; AX = ordinal * pitch (8086: mul r/m8)
+    add ax, bp
+    add ax, CP_I0Y
+    mov si, ax                  ; SI = this row's top, and it has to be SI:
+                                ; cw_gfx_fill's four arguments are AX, BX, CX
+                                ; and DX, DI is the content left and BP the
+                                ; content top, so SI is the only register a
+                                ; position can sit in across the call
+
+    mov al, bl
+    call cp_v2r                 ; AL = the RECORD this ordinal names
+    mov bh, al
+    cmp al, [cp_sel]
+    je .sel
+    mov byte [gfx_color], CWHITE    ; --- not selected: the bar rect in the
+    mov ah, CWHITE                  ; GROUND, which is what takes a bar off
+    mov al, CBLACK                  ; a row that used to have one - one write,
+    cmp byte [cp_lfull], 0          ; where the pane erase was thousands...
+    jne .name                       ; ...unless cp_list laid that ground a
+    jmp short .bar                  ; moment ago, and this would be the second
+.sel:                               ; write of every white pixel in the rect
+    mov byte [gfx_color], CBLACK    ; --- selected: black bar, white name
+    mov ah, CBLACK
+    mov al, CWHITE
+.bar:
+    push ax                     ; the text pair, and the record in BH: both
+    push bx                     ; live in registers cw_gfx_fill takes as
+                                ; arguments. On the STACK rather than in a
+                                ; byte of .text, which is what [cp_ipap] was
+    mov ax, di
+    add ax, CP_IBX1
+    mov cx, di
+    add cx, CP_IBX2
+    mov bx, si
+    mov dx, si
+    add dx, CP_IBH - 1
+    call KERNEL_SEG:cw_gfx_fill
+    pop bx
+    pop ax
+.name:
+    mov cx, di                  ; --- the name, OPAQUE, on the paper the bar
+    add cx, CP_IX               ; just laid (SPEC.md 6.1): font_run carries
+    mov dx, si                  ; both in one pass, so there is no ground for
+    add dx, CP_ITDY             ; anything else to lay and no interval in
+    push ax                     ; which the row is blank
+    mov al, bh
+    call cp_item_name           ; SI -> it, static or staged (SPEC.md 31.9).
+    pop ax                      ; It clobbers SI and nothing else, which is
+    call KERNEL_SEG:cw_font_run ; why the row top could live there until now
+
+%endif
     pop si
     pop dx
     pop cx
@@ -2092,6 +2519,51 @@ cp_listrow:
 ; a list whose membership changed - a driver that came up owns a page - calls
 ; this, because then every row really has moved.
 ; -----------------------------------------------------------------------------
+%ifdef DOCK_OPT
+cp_list:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push bp
+
+    mov byte [gfx_color], CWHITE ; the pane's ground, laid once
+    mov ax, di
+    mov bx, bp
+    mov cx, di
+    add cx, CP_DIVX - 1
+    mov dx, bp
+    add dx, CP_CH - 1
+    call KERNEL_SEG:cw_gfx_fill
+
+    call cp_lfix                ; the scroll inside the list (SPEC.md 31.1.5)
+    call cp_lvis                ; AL = rows shown, CF = it scrolls
+    pushf
+    mov cl, al
+    xor ch, ch                  ; CX = how many rows are drawn
+    jcxz .arrows
+    mov byte [cp_lfull], 1      ; ...each on the ground laid above, so no
+    mov bl, [cp_ltop]           ; BL = the ORDINAL being drawn
+.row:
+    mov al, bl
+    call cp_listrow
+    inc bl
+    loop .row
+    mov byte [cp_lfull], 0      ; row is written twice (SPEC.md 31.1.4)
+.arrows:
+    popf
+    jnc .out
+    call cp_larrows             ; ...and the arrows, when it scrolls
+.out:
+    pop bp
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%else
 cp_list:
     push ax
     push bx
@@ -2129,6 +2601,7 @@ cp_list:
     pop bx
     pop ax
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cp_divider - the 1px rule between the two panes
@@ -2749,6 +3222,224 @@ cp_thm_radios:
 
 %endif
 
+%ifdef DOCK_OPT
+; -----------------------------------------------------------------------------
+; cp_dock_paint - the Dock page (SPEC.md 31.13)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; No row greys: a side strip on a screen too short for every tile holds fewer
+; and packs them (SPEC.md 30.5.1), so every edge is available on every adapter.
+; -----------------------------------------------------------------------------
+cp_dock_paint:
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CBLACK ; the pane is content: the ordinary pens
+
+    mov si, cp_s_dock           ; heading, same string as the list row
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PHY
+    call cp_run
+
+    CPSTAGE cp_s_kbot           ; row 0
+    mov dx, bp
+    add dx, CPK_R0Y + CP_PLDY
+    call cp_dock_lbl
+    CPSTAGE cp_s_kleft          ; row 1
+    mov dx, bp
+    add dx, CPK_R1Y + CP_PLDY
+    call cp_dock_lbl
+    CPSTAGE cp_s_kright         ; row 2
+    mov dx, bp
+    add dx, CPK_R2Y + CP_PLDY
+    call cp_dock_lbl
+
+    CPSTAGE cp_s_kauto          ; the check box's label
+    mov dx, bp
+    add dx, CPK_AY + CP_PLDY
+    call cp_dock_lbl
+
+    call cp_dock_ctls
+
+    pop si
+    pop dx
+    pop cx
+    ret
+
+; cp_dock_lbl - one row label at the controls' text x (internal)
+; in:  SI -> string, DX = text y, DI = pane left; out: nothing, CX clobbered
+cp_dock_lbl:
+    mov cx, di
+    add cx, CP_PLX
+    jmp cp_run
+
+; -----------------------------------------------------------------------------
+; cp_dock_ctls - the three radios and the check box
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; The dot is on the edge the strip STANDS on ([dock_side]), which is the
+; setting's own edge (a byte from a future version stands at the bottom).
+; -----------------------------------------------------------------------------
+cp_dock_ctls:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov cx, di
+    add cx, CP_PGX              ; CX = glyph left x (every row)
+    mov bl, [dock_side]
+
+    mov dx, bp                  ; --- row 0: Bottom
+    add dx, CPK_R0Y
+    mov ax, OS88UI_GRADIO
+    or bl, bl
+    jnz .r0
+    mov al, OS88UI_GRADIO | OS88UI_GON
+.r0:
+%ifdef KERN_BIG
+    mov bh, 1
+    call cp_dngly
+%endif
+    call cp_gemit
+
+    mov dx, bp                  ; --- row 1: Left
+    add dx, CPK_R1Y
+    mov ax, OS88UI_GRADIO
+    cmp bl, DOCK_P_LEFT
+    jne .r1
+    mov al, OS88UI_GRADIO | OS88UI_GON
+.r1:
+%ifdef KERN_BIG
+    mov bh, 2
+    call cp_dngly
+%endif
+    call cp_gemit
+
+    mov dx, bp                  ; --- row 2: Right
+    add dx, CPK_R2Y
+    mov ax, OS88UI_GRADIO
+    cmp bl, DOCK_P_RIGHT
+    jne .r2
+    mov al, OS88UI_GRADIO | OS88UI_GON
+.r2:
+%ifdef KERN_BIG
+    mov bh, 3
+    call cp_dngly
+%endif
+    call cp_gemit
+
+    mov dx, bp                  ; --- the check box: Auto-hide
+    add dx, CPK_AY
+    mov ax, OS88UI_GCHECK
+    test byte [dock_cfg], DOCK_F_AUTO
+    jz .a
+    mov al, OS88UI_GCHECK | OS88UI_GON
+.a:
+%ifdef KERN_BIG
+    mov bh, 4
+    call cp_dngly
+%endif
+    call cp_gemit
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_dock_click - a click inside the Dock page
+; in:  DI = pane left, BP = pane top, CX = pane-relative x (ignored),
+;      DX = pane-relative y; gfx lock held by the caller
+; out: nothing (flags only)
+;
+; A click that changes [dock_cfg] applies it on the spot (cw_dock_apply: the
+; geometry, the drive column, every window refitted), is remembered at the
+; close (SPEC.md 31.8) and posts [cp_dirty], whose wm_paint_all puts the strip
+; up where it now stands and lays the desktop over where it stood. It does NOT
+; redraw its own glyphs first: dock_apply's wm_refit can have moved this very
+; window, so DI/BP may describe where the pane WAS, and the repaint the flag
+; buys draws them in the right place anyway.
+; -----------------------------------------------------------------------------
+cp_dock_click:
+    push ax
+
+    cmp dx, CPK_B0Y1
+    jl .done
+    cmp dx, CPK_B2Y2
+    jg .auto                    ; below the group: the check box, or nothing
+
+    mov al, DOCK_P_BOTTOM
+    cmp dx, CPK_B0Y2
+    jle .pset
+    mov al, DOCK_P_LEFT
+    cmp dx, CPK_B1Y2
+    jle .pset
+    mov al, DOCK_P_RIGHT
+.pset:
+    mov ah, al
+%ifdef KERN_BIG
+    inc al                      ; ...and it IS the control: id 1, 2 or 3
+    call cp_ctl                 ; (SPEC.md 13.8.3)
+    jc .done
+%endif
+    mov al, [dock_cfg]          ; the new byte: this edge, Auto-hide kept
+    and al, ~DOCK_P_MASK & 0FFh
+    or al, ah
+    jmp short .change
+
+.auto:
+    cmp dx, CPK_AY1
+    jl .done
+    cmp dx, CPK_AY2
+    jg .done
+%ifdef KERN_BIG
+    mov al, 4                   ; id 4
+    call cp_ctl
+    jc .done
+%endif
+    mov al, [dock_cfg]
+    xor al, DOCK_F_AUTO
+
+.change:
+    cmp al, [dock_cfg]
+    je .done                    ; already the setting: change nothing
+    mov ah, [dock_cfg]
+    mov [dock_cfg], al
+    call KERNEL_SEG:cw_dock_apply
+    jnc .changed
+    mov [dock_cfg], ah          ; failed enable: keep the working preference
+    push cx
+    push si
+    push es
+    CPSTAGE cp_dock_fail
+    push ds
+    pop es
+    xor cx, cx
+    call KERNEL_SEG:cw_toast_show
+    pop es
+    pop si
+    pop cx
+    jmp short .done
+.changed:
+    mov byte [cp_wdirty], 1     ; remembered on close (SPEC.md 31.8)
+    mov byte [cp_dirty], 1      ; ui_task repaints the world (SPEC.md 13)
+    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+.done:
+    pop ax
+    ret
+
+cp_dock_fail: db 'Dock Module Unavailable', 0
+
+%endif
 ; -----------------------------------------------------------------------------
 ; cp_sched_click - a click inside the Scheduler page
 ;
@@ -5878,6 +6569,13 @@ CPS cp_s_tsave, 'Screen Saver'  ; the button, SPEC.md 79.7. The settings
 %endif
 %endif
 
+%ifdef DOCK_OPT
+CPS cp_s_kbot,  'Bottom'        ; the Dock page (SPEC.md 31.13)
+CPS cp_s_kleft, 'Left'
+CPS cp_s_kright, 'Right'
+CPS cp_s_kauto, 'Auto-hide'
+
+%endif
 CPS cp_s_pre,   'Pre-emptive'
 CPS cp_s_coop,  'Cooperative'
 CPS cp_s_cap,   'Takes effect immediately'

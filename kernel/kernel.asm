@@ -405,6 +405,16 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
   %define FDLG_MOD 1
 %endif
 
+; SPEC.md 30.5-30.6's Dock PLACEMENT and AUTO-HIDE - the left and right
+; edges, the hidden strip, the Control Panel's Dock page, SYSTEM.CFG's 'DK'
+; key and the DOCK.DRV module that carries the advanced half - are kern_big's
+; alone. kern_small keeps the bottom Dock exactly as it was before the
+; feature: every site the feature touched is `%ifdef DOCK_OPT` over the new
+; code with the old code in its `%else`, so the 128KB floor pays nothing.
+%ifdef KERN_BIG
+  %define DOCK_OPT 1
+%endif
+
 ; SPEC.md 13.10.5's thumb DRAG is kern_big's and SHIPS - `make SBDRAGOFF=1`
 ; compiles it out, which is WM_ANIM's shape one section up and exists to be
 ; diffed against rather than because anybody should build it.
@@ -2425,7 +2435,11 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; reaches memory 6,656. A second blob length pinned the canary to the part of
 ; `.text` a size pass eats first, which is how it came to have thirty bytes of
 ; headroom left. The Makefile's KSIG_OFF block is the other end of this.
-BOOT2_SECS  equ 8               ; sectors stage 1 reads before it jumps - the
+; The ninth sector holds the boot copy of Dock layout setup (SPEC.md 30.5).
+; The whole blob is freed before the desktop; KERN_BUDGET is unchanged. It is
+; nine on kern_small too, which has no such copy: KSIG_OFF (the Makefile) is
+; one constant for every kernel, and it names file sector 21 only at nine.
+BOOT2_SECS  equ 9               ; sectors stage 1 reads before it jumps - the
                                 ; loader and its screen up to OVL_AT, then the
                                 ; boot overlay from there to BOOT2_PAD. THE
                                 ; SPLIT IS OVL_AT AND THE TOTAL IS THIS, so
@@ -2562,6 +2576,9 @@ section .modp    start=MODP_START vstart=0
 %endif
 %ifdef FDLG_MOD
 section .modd    start=MODD_START vstart=0
+%endif
+%ifdef DOCK_OPT
+section .modk    start=MODK_START vstart=0
 %endif
 section .modmap  start=MODMAP_START vstart=0
 section .text
@@ -3978,7 +3995,19 @@ osapi_table:
                                   ;          fullscreen first, and neither zoom
                                   ;          is drawn (SPEC.md 11.99.5).
                                   ;          Preserves every register
-osapi_table_end:                  ; 0x0550
+    OSAPI_XCELL osapi_mouse_feed  ; 0x0550 - X: ONE RELATIVE REPORT from a
+                                  ;          pointing device the kernel does
+                                  ;          not drive itself (SPEC.md 9.12):
+                                  ;          AX = dx, BX = dy (positive is
+                                  ;          down), CL = buttons. DRIVERS ONLY
+                                  ;          - the fence is ES == the segment
+                                  ;          published in DRVC_POINT, which is
+                                  ;          why it is an X cell. out CF=1
+                                  ;          refused. THE CELL IS IN BOTH
+                                  ;          KERNELS (SPEC.md 20.8 rule 4); on
+                                  ;          kern_small the body refuses.
+                                  ;          Preserves every register
+osapi_table_end:                  ; 0x0558
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -3986,8 +4015,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 168 * 8
-%error "os8088 API jump table must be exactly 168 8-byte slots"
+%if OSAPI_TABLE_LEN != 169 * 8
+%error "os8088 API jump table must be exactly 169 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -5813,6 +5842,7 @@ section .text
 %include "icons.inc"
 %include "desk.inc"
 %include "dock.inc"
+%include "dockmod.inc"            ; empty unless DOCK_OPT (kern_big)
 %include "ctrl.inc"
 %include "hiber.inc"            ; hibernate and resume (SPEC.md 87): the
                                 ; resident thunks, the probe, and HIBER.DRV.
@@ -6324,6 +6354,17 @@ cw_thm_desk:            call thm_desk
 %ifdef OS88_THEME
 cw_thm_set:             call thm_set
                     retf
+%endif
+%ifdef DOCK_OPT
+cw_dock_band:           call dock_band
+                       retf
+cw_dock_drop: call dock_drop
+    retf
+cw_dock_apply:          call dock_apply     ; the Dock page and the settings
+cw_kretf:           retf                    ; reader (SPEC.md 30.5). DOCK.DRV's
+                                            ; dkk_* stubs return through this
+cw_gfx_clip_query:      call gfx_clip_query ; CLIPQF: shared region query
+                    retf                    ; from .cold (SPEC.md 30.6.1)
 %endif
 ; THE SCREEN SAVER'S WAY BACK (SPEC.md 79.6), and it is THREE calls behind one
 ; shim rather than three shims, because the image rung it comes out of has
@@ -7169,15 +7210,28 @@ MODF_START   equ MODC_START + MODC_SIZE
 MODL_START   equ MODF_START + MODF_SIZE
 %ifdef KERN_BIG
 MODH_START   equ MODL_START + MODL_SIZE   ; hibernate, kern_big's alone
-MODMAP_START equ MODH_START + MODH_SIZE
+MODK_START   equ MODH_START + MODH_SIZE
 %else
 MODP_START   equ MODL_START + MODL_SIZE   ; Cut/Copy/Paste, kern_small's alone
 MODD_START   equ MODP_START + MODP_SIZE   ; ...and the file dialog after it
-MODMAP_START equ MODD_START + MODD_SIZE
+MODMAP_START equ MODD_START + MODD_SIZE   ; no Dock module (SPEC.md 30.5)
 %endif                                    ; The
                                           ; compressor has no image of its
                                           ; own: it rides in the cloner's
                                           ; (SPEC.md 20.15.3)
+
+%ifdef DOCK_OPT
+MODMAP_START equ MODK_START + MODK_SIZE
+%endif
+
+%ifdef DOCK_OPT
+section .modk
+modk_end:
+MODK_SIZE equ modk_end - $$
+%if MODK_SIZE > MOD_MAX_KB*1024
+  %error "Dock module exceeds its maximum claim"
+%endif
+%endif
 
 section .modc
 modc_end:
@@ -7266,6 +7320,9 @@ mod_map:
 %else
     dd MODP_START, MODP_SIZE    ; ...or kern_small's fourth (SPEC.md 22.3)
     dd MODD_START, MODD_SIZE    ; ...and its fifth (SPEC.md 38.0)
+%endif
+%ifdef DOCK_OPT
+    dd MODK_START, MODK_SIZE    ; optional advanced Dock (kern_big)
 %endif
     dd MODMAP_START             ; ...where the table began, and
     dw 0x384F                   ; the last two bytes of the file
@@ -7794,6 +7851,12 @@ section .modl
 section .modh
 %if ($ - $$) != MODH_SIZE
   %error "something landed in .modh below modh_end - os88mod.py would CUT the hibernate module short of it"
+%endif
+%endif
+%ifdef DOCK_OPT
+section .modk
+%if $ != modk_end
+  %error "something landed in .modk after modk_end"
 %endif
 %endif
 section .modmap

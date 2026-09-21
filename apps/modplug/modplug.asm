@@ -1038,6 +1038,23 @@ mpp_load_name:
                                     ; worker's in-flight feed pass, so no
                                     ; mpm_mixch is mid-fetch from the old
                                     ; claim past this line ([mpp_mixing])
+    ; --- PAST THIS LINE THE PLAYING MODULE IS GONE (SPEC.md 56.14.1) -------
+    ; AND HERE THAT IS BEFORE THE SIZE IS EVEN LOOKED AT, which is the one
+    ; place this player is weaker than Tracker: .alloc below reads the figure
+    ; and .toobig/.nofit refuse on it, and by then the old blob has been
+    ; freed. SPEC.md 56.14 recorded that when the refusals were ported over -
+    ; .toobig's "nothing is playing that this interrupted" has been wrong
+    ; since - and rested on the sized path being unreachable for any file a
+    ; real heap could hold.
+    ;
+    ; THAT PREMISE WAS FALSE FOR A YEAR: fdlg_sizeof reported the PACKED size
+    ; (SPEC.md 20.14.3), so a compressed module reached .nofit on a third of
+    ; its real figure with the previous module already gone. The figure is
+    ; right now and the premise holds again - but it is a premise and not a
+    ; guarantee, where Tracker's ordering is the guarantee. The free cannot
+    ; simply move below the read (that holds both blobs and doubles the peak
+    ; on a 640KB machine); the fix would be to hoist the .alloc sizing ABOVE
+    ; the stop-and-free, which is Tracker's shape and is not attempted here.
     mov byte [mpm_loaded], 0        ; the old blob is about to be freed: no
                                     ; reader may trust it past this line
     cmp word [mpp_modseg], 0
@@ -1086,7 +1103,7 @@ mpp_load_name:
     mov cx, ax
     call OSAPI_MEM_AVAIL            ; AX = the LARGEST contiguous run, in KB
     cmp cx, ax
-    ja .toobig                      ; it will not fit this heap: say so NOW,
+    ja .nofit                       ; it will not fit this heap: say so NOW,
     mov ax, cx                      ; with the drive still stopped
     jmp short .sized
 
@@ -1154,6 +1171,22 @@ mpp_load_name:
     mov si, mpp_s_toobig            ; refused on the SIZE, before any claim was
     jmp .fail                       ; made - so there is nothing to free, and
                                     ; nothing is playing that this interrupted
+.nofit:
+    mov si, mpp_s_nofit             ; ...AND THIS IS A DIFFERENT REFUSAL, which
+    jmp .fail                       ; said 'File too big' until SPEC.md 56.14.1.
+                                    ; The module is a perfectly ordinary size
+                                    ; and THIS MACHINE has nowhere to put it,
+                                    ; which is a fact about the heap and about
+                                    ; today - close a window and it loads. The
+                                    ; other message sends the reader to look at
+                                    ; the file, which is the one thing that is
+                                    ; not the matter. Tracker has said
+                                    ; 'Too big for free memory' here all along
+                                    ; (SPEC.md 45.3.1, trk_s_nofit); this is
+                                    ; that string, borrowed, so the two players
+                                    ; answer the same question the same way.
+                                    ; SPEC.md 47: grey - and refuse - a FACT,
+                                    ; never a guess
 .rderr:
     cmp ax, FERR_BIG
     je .big
@@ -2189,6 +2222,7 @@ mpp_s_noload:  db 'No module loaded - L loads one', 0
 mpp_s_nosb:    db 'No Sound Blaster: the interface only', 0
 mpp_s_nomem:   db 'Out of memory', 0
 mpp_s_toobig:  db 'File too big', 0
+mpp_s_nofit:   db 'Too big for free memory', 0
 mpp_s_noent:   db 'File not found', 0
 mpp_s_ioerr:   db 'Disk error', 0
 mpp_s_snderr:  db 'Sound open failed', 0

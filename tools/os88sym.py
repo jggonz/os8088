@@ -87,7 +87,7 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                # own row says where the claim went (tests/xmcheck.py does
                # exactly that for XMEM.DRV, SPEC.md 41.12).
                ".modc": None, ".modf": None, ".modl": None, ".modh": None,
-               ".modp": None, ".modd": None, ".modmap": None}
+               ".modp": None, ".modd": None, ".modk": None, ".modmap": None}
 # Every section either kernel emits, and the list is the UNION of both builds:
 # `.modh` is hibernate's (SPEC.md 87) and `.modp`/`.modd` are kern_small's
 # (SPEC.md 22.3.0, 38.0), so no kernel emits all six module sections and each

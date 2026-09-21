@@ -1151,6 +1151,27 @@ trk_fdone:
     jb .nomem2                      ; not fundable: say so and touch nothing
 .sizeok:
 
+    ; --- PAST THIS LINE THE PLAYING MODULE IS GONE (SPEC.md 45.3.1.1) -------
+    ; Everything above refuses without touching anything; everything below
+    ; frees the old blob before it claims the new one, so a failure after this
+    ; point leaves the machine with NO module - the one that was playing
+    ; included. THE GATE ABOVE IS THE GUARANTEE, and it is the whole of it.
+    ;
+    ; That guarantee was broken and this is where it showed: fdlg_sizeof
+    ; handed over the PACKED on-disk size (SPEC.md 20.14.3), so a compressed
+    ; module sailed through the .nomem2 test on a third of its real figure,
+    ; got here, freed a playing module and then failed the read with
+    ; FERR_BIG. The screenshot was a Tracker playing Beverly Hills Cop turned
+    ; into 'No module loaded' by a load that never happened.
+    ;
+    ; DO NOT "FIX" THAT BY MOVING THE FREE BELOW THE READ. It is here because
+    ; the new claim comes out of the space the old blob is sitting in: on the
+    ; 640KB machine this project is calibrated for, holding both is twice the
+    ; peak and is what makes a large module unloadable rather than merely
+    ; slow. The refusals that CANNOT be pre-checked - .nomem (the heap
+    ; fragmented under a figure OSAPI_MEM_AVAIL had just answered), .noring,
+    ; a genuine FERR_IO - are the residue, and they are the price of the
+    ; single-copy peak rather than an oversight.
     call trk_play_stop              ; silence + close + DRAIN before the blob
                                     ; moves: trk_stream_close spins out the
                                     ; worker's in-flight feed pass, so no

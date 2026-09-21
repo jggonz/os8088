@@ -39,9 +39,12 @@
 ; =============================================================================
 
 %ifdef FCP_MOD
-MOD_MAX     equ 5               ; rows in mod_tab - FIVE on kern_small, which
-%else                           ; alone carries Cut/Copy/Paste and the file
-MOD_MAX     equ 4               ; dialog as modules, and no hibernate at all
+MOD_MAX     equ 5               ; SMALL: file operations, no hibernate, and
+                                ; no Dock module (SPEC.md 30.5)
+%else
+MOD_DOCK    equ 4
+MOD_MAX     equ 5               ; BIG: hibernate, resident file operations,
+                                ; and the optional Dock
 %endif
 MOD_CTRL    equ 0               ; the Control Panel (SPEC.md 31)
 MOD_FMT     equ 1               ; the floppy formatter (SPEC.md 18.96)
@@ -215,6 +218,9 @@ section .text
 ; the same segment and reach it with a NEAR call, so the pair of cw_* shims
 ; the first draft needed does not exist.
 
+%ifdef DOCK_OPT
+mod_f_dock: db 'DOCK.DRV', 0
+%endif
 mod_f_ctrl: db 'CTRL.DRV', 0    ; .DRV for the attributes and nothing else
 mod_f_fmt:  db 'FORMAT.DRV', 0  ; (SPEC.md 19.6): os88disk.py stamps anything
 mod_f_clon: db 'CLONE.DRV', 0   ; ...and a third of them (SPEC.md 18.99)
@@ -256,6 +262,11 @@ mod_r_fdlg:                     ; ...and this one is NAMED, because SPEC.md
                                 ; together by KERN_SMALL, and decoupling them
                                 ; is an undefined symbol rather than a silent
 %endif                          ; read of the wrong word
+
+%ifdef DOCK_OPT
+mod_r_dock:
+    dw 0, mod_f_dock            ; MOD_DOCK, kern_big's alone (SPEC.md 30.5)
+%endif
 
 MOD_TAB_OFF equ mod_tab - $$    ; mod_tab AS A NUMBER. .text has vstart=0
                                 ; (kernel.asm), so this IS the address every
