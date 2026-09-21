@@ -7311,6 +7311,35 @@ SOAK = [
     Row("rdup", "soak", py("tests/rdup.py"), 60.0,
         "SPEC.md 62.9.11.3: the Ram Disk page acts on the RELEASE.",
         needs=("marty",), serial=True),
+    Row("rdcz", "soak", py("tests/rdcz.py"), 70.0,
+        "SPEC.md 20.14.6: a compressed file with NO HINT is still read as a "
+        "compressed file. The hint is a CACHE and SPEC.md 20.14 has said "
+        "since it was written that the read path checks the file's own 'CZ' "
+        "header too - and it did not: `dskw_czexp` VALIDATES the hint, it "
+        "never DISCOVERS compression, so a file that lost those four "
+        "directory bytes reached the application as PACKED BYTES. Reported "
+        "from the field twice, and this row is both halves on one boot. FAT: "
+        "README.TXT on the shipped system disk with its hint struck out of "
+        "the directory HERE ON THE HOST, which is what a copy by DOS, "
+        "Windows or a Linux mount leaves behind - 8,088 packed bytes that "
+        "must reach Note Pad as 14,427. RAM: the same file COPIED to a "
+        "mounted RAM disk, which has no directory entry to carry a hint AT "
+        "ALL (SPEC.md 62.9) - the worse half, `.fsread` never having looked "
+        "at one. It asserts `np_len` and NOT pixels, tests/lzfile.py's "
+        "instrument: a window with a title and an empty note looks identical "
+        "to a window with the file in it, at every zoom. VERIFIED RED at "
+        "`elendilon`, the commit before the sniff - BOTH halves read 4,185, "
+        "which is neither the folded 14,427 nor the packed 8,088 because "
+        "np_load folds CRLF and stops at what a compressed stream is full "
+        "of, so what the field saw was a SHORT NOTE OF NONSENSE and no "
+        "length carried in the script would have predicted it. It strikes a "
+        "SCRATCH COPY, never the shipped image every other row boots. "
+        "Deliberately silent about OSAPI_FILE_FIND, which reports such a "
+        "file's PACKED size (SPEC.md 20.14.6.2.1) - sniffing there would "
+        "cost a peek per directory entry, and the whole point is that this "
+        "costs no extra int 13h. Measured at 55s",
+        needs=("marty",), serial=True),
+
     Row("rdicon", "soak", py("tests/rdicon.py"), 75.0,
         "SPEC.md 62.9.2.1: a DOCUMENT on a redirected volume gets its "
         "association icon. The mount's redirected tail ran pass 4a' and then "

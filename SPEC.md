@@ -38966,6 +38966,37 @@ being re-materialised, and the accumulator through `dskw_czstamp`'s clear —
 took `.cold` to **40,959**, one byte under. The feature is 6 bytes of resident
 RAM, not 110.
 
+
+##### 20.14.6.2.1 …and `OSAPI_FILE_FIND` deliberately does NOT sniff
+
+`dsk_find_x` reads the same four bytes (§20.14.3): the size it reports for a
+compressed file is the **unpacked** one, because an application sizes its
+claim off what it was told. With the hint gone it reports the **packed** size,
+and the sniff does not fix that — on purpose.
+
+The reason is the one the whole feature rests on. The sniff costs no extra
+`int 13h` because it runs **once, on open**, and the sector it peeks is the
+one `dskw_rdata` is about to read anyway (§18.95). A sniff inside FIND would
+run **once per directory entry**, on a path that today costs exactly what an
+uncompressed listing costs, and that is the *"ton of upfront disk I/O"* this
+was explicitly not to become.
+
+So a hintless compressed file is **under-reported by FIND and read correctly
+by READ**, and what that means for an application depends on how it sized its
+buffer:
+
+- one that claims a **fixed** capacity is unaffected. Note Pad claims
+  `NP_MAXKB` = 16,384 whatever FIND said, so `README.TXT` with its hint struck
+  opens as the 14,427 bytes it is — measured, `tests/rdcz.py`;
+- one that claims **exactly what FIND reported** gets `FERR_BIG` from the
+  read, because the capacity check at `.sizes` compares the file's real `U`
+  against it. It refuses, visibly, and the destination is untouched.
+
+**That is the right way round to fail** and it is why the asymmetry is
+tolerable: the alternative before the sniff was that the same application
+received packed bytes and displayed them as content. A refusal is a bug
+report; garbage is not.
+
 ### 20.15 `compress.inc` — the one thing on the machine that COMPRESSES
 
 Everything else in this system decodes. The loader expands a package, the file
