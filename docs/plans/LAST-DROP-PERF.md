@@ -425,6 +425,81 @@ second has no VGA.
 
 ---
 
+## 5. The vertical cut, on `kern_small` — **BUILT, and gated OUT of the floor machine**
+
+**Not a cycle count, which is why it needs saying at the top.** Every other row
+in this file is time; this one is *what the machine looks like*. It is here
+because the file is a register of "built, measured, priced too high for now"
+and that is exactly what this is, and because a second document with one row in
+it is a document nobody reads.
+
+### What it does
+
+SPEC.md §11.3.4 — `font_char` draws the visible COLUMNS of a glyph cell the
+clip region cuts vertically, instead of dropping the cell whole, which is what
+lets §11.97.4 keep the region armed across the whole title bar. On `kern_big`
+it ships. On `kern_small` it is `%ifdef`'d out and the floor machine keeps
+§11.97.1's behaviour: full-width-or-nothing, and the region disarmed before
+`wm_draw_title`.
+
+### The patch
+
+Five `%ifdef KERN_BIG` sites, and that is the whole of it:
+
+- `wm_clip_rows`' fragment test — OVERLAP against the cell's full width;
+- `mov [wm_clip_wf], si`, the winner bank, inside the walk;
+- the mask block after the walk (the two shifts);
+- `[wm_clip_cm]`'s two writers — `wm_clip_rows`' `.all` arm and `font_char`'s
+  `.noclip`;
+- the four `and ah, [wm_clip_cm]` in the renderer row loops;
+- plus `wm_draw_win`'s disarm moving from before `wm_draw_title` to after it,
+  and `wm_clip_wf`/`wm_clip_cm` themselves.
+
+### Measured
+
+| | |
+|---|---|
+| `kern_big` | **+93 bytes** of `.text`, no rung crossed |
+| `kern_small`, if taken | **+78 bytes**, and **one 512-byte rung** — 65 steps of `KERN_BUDGET` spare down to 64 |
+| `kern_small`, gated | **byte-for-byte identical** to the kernel before §11.3.4 (verified by `cmp`, not asserted) |
+| cost per glyph | **3,024 → 3,164 guest cycles a `font_char` cell**, +140, +4.6% — ~29 µs on the target, so an eight-cell caption is 232 µs dearer. `font_run` is untouched, so every listing, menu and label is unaffected |
+| what it buys | the title-bar flash. Medians **2,779 → 1,803** transient px on a drag release with the mover landing on the lower window's title (n=5, n=6, ranges 2,700–3,666 and 1,377–3,616 — **overlapping**, and three samples of one build read 1,002/1,259/1,007, which is how this was briefly reported as 2.8x) |
+
+### The price
+
+**512 bytes of a 128KB machine's RAM**, for ever, billed the moment the rung
+crosses. The floor machine had 73 bytes of that rung left and the cut wants 78 —
+so it is not a near miss that a five-byte shave fixes, and CLAUDE.md's rule
+applies exactly as written: the rung is not the design input, the 512 bytes are.
+
+### Why it is shelved
+
+Because the floor machine has better uses for 512 bytes, and because what it
+gives up is the *smaller* half of the artifact. §11.97.4's veto — a title strip
+that is **wholly** covered is not drawn at all — is still in `kern_small`, costs
+nothing there, and is where most of the field report was. What the floor machine
+keeps is the case §11.97.1 already documented as still flashing: a strip the
+region cuts rather than covers.
+
+### What would flip the answer
+
+One of three, and the first is the likely one:
+
+1. **`kern_small` gets its rung back.** docs/plans/KERN-SMALL-CUT-PLAN.md quotes
+   58.5 KB as what can be taken with nothing on the small floppies breaking; any
+   row of it that lands puts this well inside the slack. It is 78 bytes against
+   a plan measured in kilobytes.
+2. **The cost comes down.** The 93 bytes are already a size pass — 175 before
+   it — but the four `and reg, mem` in the renderer loops are 16 of them and
+   ~112 of the 140 cycles, and a spare register would take both. `font_char_bb`
+   has one (`BL`, free since the plane loop went); `font_char`'s VGA arm does
+   not, `DX` being the GC index port. A per-renderer split is not obviously
+   worth its own complexity, which is why it was not done.
+3. **§11.97's deferred CONTENT work lands.** That needs per-fragment drawing
+   anyway, and a column cut is a piece of the same machinery rather than a
+   separate spend — at which point gating one and not the other stops making
+   sense.
+
 ## The apparatus, so it is not rebuilt
 
 Everything Set 29 needed already exists in the tree:

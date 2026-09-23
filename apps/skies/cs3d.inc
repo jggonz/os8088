@@ -110,6 +110,25 @@ cs_matrix:
     call cs_cos
     mov [cs_cosr], ax
 
+    ; --- THE GROUND TRACK'S FACING (SPEC.md 88.7.8.2). The forward vector is
+    ;     (sh cp, sp, ch cp), so its horizontal part is the heading SCALED BY
+    ;     cos(pitch) - and past the vertical that is negative and the
+    ;     aeroplane is pointed the other way. Everything that works in the
+    ;     heading's frame rather than through the matrix - the cull's `along`
+    ;     and `across`, the occluder's, and which runway threshold is ahead -
+    ;     wants THIS pair and not [cs_sinh]/[cs_cosh]. 88.7.8.1's sign, one
+    ;     layer out: the magnitude is the matrix's business, the direction is
+    ;     everyone's ------------------------------------------------------
+    mov ax, [cs_sinh]
+    mov bx, [cs_cosh]
+    cmp word [cs_cosp], 0
+    jns .face
+    neg ax
+    neg bx
+.face:
+    mov [cs_fsinh], ax
+    mov [cs_fcosh], bx
+
     mov al, [cs_conebase]             ; the cull's cone: the backend's
     mov [cs_cone], al                 ; factor, or all of the depth past 15
     mov ax, [cs_pitch]                ; degrees of pitch or roll
@@ -697,6 +716,14 @@ cs_drawpass:
     cmp al, [cs_pass]
     jne .next
     call cs_drawobj
+    call cs_sound_step              ; ...AND THE ENGINE, between objects
+                                    ; (SPEC.md 88.8.2.1.2): cs_scene is 78% of
+                                    ; a frame, so this is where the ticks
+                                    ; actually elapse. It is one far call to
+                                    ; OSAPI_GET_TICKS on the object that has
+                                    ; not crossed one - 46.7 us against a
+                                    ; scene of 128 ms - and CX and SI are the
+                                    ; loop's own, saved either side of here
 .next:
     pop si
     pop cx
@@ -760,9 +787,9 @@ cs_occlude:
     test word [bx + CSA_FLAGS], CSA_OCC
     jz .out                         ; ...and a location that did not ask pays
     mov ax, [cs_sinh]               ;    two compares and the clear, no more
-    or ax, ax
-    jns .sp
-    neg ax
+    or ax, ax                       ; (|sh| and |ch| are a box's WIDTH, so
+    jns .sp                         ;  the facing pair would read the same:
+    neg ax                          ;  88.7.8.2 is about direction)
 .sp:
     mov [cs_asinh], ax
     mov ax, [cs_cosh]
@@ -852,14 +879,14 @@ cs_occbox:
     mov [cs_ob_y0], ax
     add ax, [si + 2]                ; ...plus the top level's height
     mov [cs_ob_y1], ax
-    mov ax, [di + CSO_X]            ; across, in the heading's frame
-    sub ax, [cs_ex]
-    mov bx, [cs_cosh]
+    mov ax, [di + CSO_X]            ; across, in the FACING's frame - the
+    sub ax, [cs_ex]                 ; same one cs_vkey's `along` is in, which
+    mov bx, [cs_fcosh]              ; is what cs_occlev multiplies it against
     MUL14
     mov cx, ax
     mov ax, [di + CSO_Z]
     sub ax, [cs_ez]
-    mov bx, [cs_sinh]
+    mov bx, [cs_fsinh]
     MUL14
     sub cx, ax
     mov [cs_ob_c], cx
@@ -1132,16 +1159,17 @@ cs_consider:
     jz .cone
     and byte [si + CSO_FLAGS + 1], ~(CSO_SEEN >> 8)
     mov ax, [cs_ddx]
-    mov bx, [cs_sinh]
+    mov bx, [cs_fsinh]
     MUL14
     mov cx, ax
     mov ax, [cs_ddz]
-    mov bx, [cs_cosh]
+    mov bx, [cs_fcosh]
     MUL14
     add cx, ax                      ; CX = along, the sort key
     jmp .file
 .cone:
-    ; --- the cheap cone first: along the heading and across it, two
+    ; --- the cheap cone first: along the FACING and across it (88.7.8.2 -
+    ;     the heading is only the facing while cos(pitch) is positive), two
     ;     multiplies each, so an object behind the aeroplane costs no
     ;     rotation. |across| <= 0.75 along + r + |dy| is the frustum's own
     ;     x test with the height folded into the margin; past 15 degrees of
@@ -1151,11 +1179,11 @@ cs_consider:
     ;     which write DX: the cone read twice its angle and every frame
     ;     rotated six objects it then refused - 88.5.1.)
     mov ax, [cs_ddx]
-    mov bx, [cs_sinh]
+    mov bx, [cs_fsinh]
     MUL14
     mov cx, ax
     mov ax, [cs_ddz]
-    mov bx, [cs_cosh]
+    mov bx, [cs_fcosh]
     MUL14
     add cx, ax                      ; CX = along
     mov si, [cs_obj]
@@ -1184,11 +1212,11 @@ cs_consider:
 .f:
     add si, dx                      ; ...+ r + |dy|
     mov ax, [cs_ddx]
-    mov bx, [cs_cosh]
+    mov bx, [cs_fcosh]
     MUL14
     mov di, ax
     mov ax, [cs_ddz]
-    mov bx, [cs_sinh]
+    mov bx, [cs_fsinh]
     MUL14
     sub di, ax                      ; DI = across
     jns .ac
@@ -1198,7 +1226,8 @@ cs_consider:
     jg .out
     ; --- file it, far to near: the record in filing order, and a KEY
     ;     (along, record) inserted into cs_vkey by `along`, which is the
-    ;     depth before pitch and roll and orders the same objects the same
+    ;     depth before pitch and roll - the facing's SIGN is in it, its
+    ;     magnitude is not - and orders the same objects the same
     ;     way. A key is four bytes, so the insertion shifts four and not
     ;     the record's six. The record is the object, its REACH - the
     ;     offset's Manhattan length, which is what cs_scale wants of it and
@@ -1369,11 +1398,15 @@ cs_drawobj:
     mov bx, ax
     pop cx
     pop si
-    mov ax, [cs_ocz]
-    cmp ax, bx                      ; the far model stands in beyond it
-    jl .mdl                         ; (BX is dead past here: cs_sizepx below
-    mov si, cx                      ; clobbers it anyway)
-.mdl:
+    cmp bx, [si + CSM_RAD]          ; ...AND NEVER INSIDE THE NEAR MODEL
+    jge .thr                        ; (88.6.1.1): Near scales the threshold
+    mov bx, [si + CSM_RAD]          ; to 0.6 and four of the water strips are
+.thr:                               ; inside a river wider than that, so the
+    mov ax, [cs_ocz]                ; A5 sat on the bay and saw the horizon
+    cmp ax, bx                      ; band's ground with a line across it.
+    jl .mdl                         ; The far model stands in beyond BX (dead
+    mov si, cx                      ; past here: cs_sizepx below clobbers it
+.mdl:                               ; anyway)
     mov [cs_mdl], si
     call cs_sizepx                  ; under two pixels across: not drawn -
     mov cx, [cs_ocz]                ; the far model's radius, and the true
@@ -3626,13 +3659,15 @@ cs_rwline:
     ;     runway behind it. Land from the far side and roll back, and the old
     ;     code drew the whole line BEHIND the aeroplane - measured at 300 m
     ;     inside the strip, 11 pixels against 571 the other way round.
-    ;     cos(hdg - runway) is the whole of the test, and both sines and
+    ;     cos(facing - runway) is the whole of the test, and both sines and
     ;     cosines are already computed for the frame; cs_rwsegu mirrors each
-    ;     segment back into the model's own u at the end.
-    mov ax, [cs_sinh]
+    ;     segment back into the model's own u at the end. THE FACING AND NOT
+    ;     THE HEADING (88.7.8.2): past the vertical they are opposite, and
+    ;     this read the heading until a loop showed it up.
+    mov ax, [cs_fsinh]
     imul word [cs_rwsin]
     mov cx, dx
-    mov ax, [cs_cosh]
+    mov ax, [cs_fcosh]
     imul word [cs_rwcos]
     add dx, cx
     mov byte [cs_rwrev], 0

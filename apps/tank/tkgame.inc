@@ -41,6 +41,10 @@ tk_fsx_main:
     call OSAPI_FSX_MODE
     jc .out                         ; refused: the desktop is untouched and
                                     ; the bracket ends without drawing
+    OS88_ALTENTER_SEED              ; the Alt+Enter (or Enter) that got us here
+                                    ; is still held, and .keys' read is a
+                                    ; LEVEL one: without this the first poll
+                                    ; takes that hold as the press that leaves
     mov al, [tk_want]
     mov [tk_back], al
     call tk_bindraster
@@ -263,6 +267,15 @@ tk_input:
     push cx
     push dx
 .keys:
+    call os88alt_edge               ; ALT+ENTER LEAVES, exactly as F does
+    jc .quit                        ; (SPEC.md 11.2.1.1). It cannot arrive
+                                    ; through the int 16h below - no XT BIOS
+                                    ; enqueues the combination (9.7.1) - and a
+                                    ; bracket dispatches no events (53.1), so
+                                    ; the key-state map is what carries it.
+                                    ; ABOVE tk_ient_key deliberately, unlike
+                                    ; Esc and F: a chord is not a character a
+                                    ; name prompt can ever want
     mov ah, 1
     int 0x16
     jz .held

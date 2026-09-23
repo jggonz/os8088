@@ -49,6 +49,30 @@
 ; =============================================================================
 
 %include "os88api.inc"
+
+; THE LIST BAR'S THUMB RATES (SPEC.md 13.10.5.4.1), and they are AT THE TOP
+; for 13.10.7.4's reason: a %ifdef is answered in file order and the bar
+; ladder that names them is two thousand lines above the include.
+;
+; THIS PACKAGE IS THE CALIBRATION and the pair says so by being EQUAL. Every
+; other bar in the system waited for the release on every machine; this one
+; has followed the hand at 2 ticks since it was written, on the target as
+; well, and the field reading that a 286 scrolls it correctly is what sized
+; the rest of 13.10.5.4.1's table. So there is nothing here to pick between -
+; what the call buys is that the tree has ONE description of a bar's rate.
+%ifndef WR_SBRATE
+%define WR_SBRATE 2                 ; ticks between commits on an 8086/8088
+%endif
+%ifndef WR_SBRATE286
+%define WR_SBRATE286 2              ; ...and on a 286 or better
+%endif
+; ...AND THE PAUSE COMMIT (13.10.5.4.2), which this bar gets like every other
+; even though its rate already follows: a hand that stops is owed the row it
+; stopped on, and the throttle may still be holding one.
+%ifndef WR_SBIDLE
+%define WR_SBIDLE 9
+%endif
+
 %include "netpkg.inc"               ; THE DRIVER'S OWN HEADER, the same file
                                     ; drivers/ether/ether.asm includes, so the
                                     ; two ends cannot drift (SPEC.md 20.11)
@@ -62,7 +86,7 @@
                                     ; RAM-disk answers Load Program needs
                                     ; before it moves a byte (SPEC.md 62.9.16)
 
-; OSAPI_PKG_RUN is apps/os88api.inc's (SPEC.md 21.5). While the two halves of
+; OSAPI_PKG_START is apps/os88api.inc's (SPEC.md 21.5). While the two halves of
 ; this feature were being built on separate branches there was an %ifndef here
 ; that defined the slot and four LD_* codes locally, so the package half could
 ; assemble and be reviewed before the kernel half landed. It is gone with the
@@ -295,7 +319,31 @@ wr_entry:
     call OSAPI_WM_CREATE                ; BX = window ptr, CF on table full
     jc .out
     mov [wr_win], bx
+    push ax                             ; **THE GESTURE'S TWO SLOTS** (SPEC.md
+    push bx                             ; 20.5.1.3): neither is a template word
+    push si
+    push di
+    push dx
+    mov ax, bx
+    mov bx, wr_btrec
+    mov si, wr_onup
+    mov di, wr_ondrag
+    mov dx, wr_onclick                ; OUR own click work; the library
+                                    ; takes the press FIRST and chains
+                                    ; here (SPEC.md 20.5.1.3.3)
+    call os88ui_btninit
+    pop dx
+    pop di
+    pop si
+    pop bx
+    pop ax
     mov word [wr_sel], 0xFFFF
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     mov si, wr_sizes
     call OSAPI_WM_PREFER                ; ...registers AND applies, and
                                         ; preserves the flags (SPEC.md 11.100.1)
@@ -319,6 +367,8 @@ wr_entry:
     mov ax, wr_onup
     call OSAPI_WM_ONMOUSEUP             ; the thumb's release...
     mov bx, [wr_win]
+    mov ax, wr_ontimer              ; 13.10.5.4.2's PAUSE commit, the gesture's
+    call OSAPI_WM_ONTIMER           ; third edge
     mov ax, wr_ondrag
     call OSAPI_WM_ONDRAG                ; ...and its movement. CF = 1 on the
                                         ; 128KB kernel, which has no W_ONDRAG
@@ -1235,6 +1285,12 @@ wr_ddesc:
 ; draw's solid one and a disabled label comes out pixel-identical to a live
 ; one (os88ui.inc's own note).
 ; -----------------------------------------------------------------------------
+; The button group's arrays (SPEC.md 20.5.1.3). The FLAGS are rewritten every
+; pass because wr_may decides each button's greying from the state.
+wr_btlbl: dw wr_s_run, wr_s_add
+wr_btflg: dw OS88UI_FILL, OS88UI_FILL
+    OS88UI_BTNREC wr_btrec, wr_ra, wr_btlbl, wr_btflg, 2
+
 wr_dbtns:
     push ax
     push bx
@@ -1260,6 +1316,8 @@ wr_dbtns:
                                         ; assertable by a gate at all
                                         ; (tests/thewire.py), where the pixels
                                         ; of a checkerboard caption are not
+    mov bx, wr_btrec                    ; the record describes the pair once
+
     xor al, al                          ; Load Program
     call wr_may
     mov di, OS88UI_FILL
@@ -1267,11 +1325,13 @@ wr_dbtns:
     or di, OS88UI_DIS
     or byte [wr_grey], 1
 .a:
+    mov [wr_btflg], di
     mov bx, wr_ra
     call wr_btnok                       ; THE STATE IS RECORDED WHETHER OR NOT
     jc .a2                              ; THE BUTTON IS DRAWN: a covered button
-    mov si, wr_s_run                    ; still answers a click and the gate
-    call os88ui_btn                     ; still reads [wr_grey]
+    mov bx, wr_btrec                    ; still answers a click and the gate
+    mov al, 1                           ; still reads [wr_grey]
+    call os88ui_btn
 .a2:
     mov al, 1                           ; Add to Disk...
     call wr_may
@@ -1280,10 +1340,12 @@ wr_dbtns:
     or di, OS88UI_DIS
     or byte [wr_grey], 2
 .b:
+    mov [wr_btflg+2], di
     mov bx, wr_rb
     call wr_btnok
     jc .b2
-    mov si, wr_s_add
+    mov bx, wr_btrec
+    mov al, 2
     call os88ui_btn
 .b2:
     pop di
@@ -2061,20 +2123,9 @@ wr_onclick:
     jb .out
     add cx, [wr_ox]                     ; the buttons want absolute again
     add dx, [wr_oy]
-    mov bx, wr_ra
-    call os88ui_bhit
-    jnc .runbtn
-    mov bx, wr_rb
-    call os88ui_bhit
-    jnc .addbtn
-    jmp short .out
-.runbtn:
-    xor al, al
-    call wr_do
-    jmp short .out
-.addbtn:
-    mov al, 1
-    call wr_do
+    jmp short .out                      ; Disk WRITES a floppy, so neither may
+                                        ; fire on a press the user can still
+                                        ; take back. wr_onup has the action
 .out:
     pop di
     pop si
@@ -2221,7 +2272,8 @@ wr_sbclick:
     cmp al, OS88UI_SBTHUMB
     jne .out
     mov bx, wr_sb
-    mov al, 2                           ; the view follows every 2 ticks: a
+    mov ax, WR_SBRATE | (WR_SBRATE286 << 8)
+    call os88ui_sbrate                  ; the view follows every 2 ticks: a
     call os88ui_sbgrab                  ; 12-row repaint is 36 drawing calls
     jmp short .out                      ; and the field machine cannot do that
 .up:                                    ; per mouse report (SPEC.md 13.10.5.4)
@@ -2276,15 +2328,28 @@ wr_scroll:
     pop ax
     ret
 
-; --- wr_ondrag / wr_onup - the thumb (SPEC.md 13.10.5) -----------------------
+; --- wr_ondrag / wr_onup - the thumb (SPEC.md 13.10.5) AND THE BUTTONS -------
+; Both edges serve two controls now. The buttons go FIRST and the scroll bar
+; keeps everything else: a gesture is armed on exactly one of them (os88ui.inc
+; keeps ONE arm word per package), so the two cannot both be live.
 wr_ondrag:
     push ax
     push bx
     push cx
     push dx
+    push si
+    mov bx, wr_btrec
+    call os88ui_btndrag             ; the held button follows the pointer
+    pop si
     call wr_geom
     jc .out
     call wr_dscroll
+    call os88ui_sbdragging          ; 13.10.5.4.2: only a LIVE drag may arm the
+    jc .notimer                     ; pause timer, and the window is in SI
+    mov bx, si
+    mov ax, WR_SBIDLE
+    call OSAPI_WM_TIMER
+.notimer:
     mov bx, wr_sb
     call os88ui_sbtrack
     jc .out
@@ -2299,14 +2364,50 @@ wr_ondrag:
     pop ax
     ret
 
+wr_ontimer:                         ; the thumb has been STILL for WR_SBIDLE
+    push ax                         ; ticks; 13.9 disarms before this runs and
+    push bx                         ; this does not re-arm, so a pause is ONE
+    push cx                         ; commit however long it lasts
+    push dx
+    call wr_geom
+    jc .tout
+    call wr_dscroll
+    mov bx, wr_sb
+    call os88ui_sbowed              ; ...and NOT os88ui_sbdrop: a pause is not
+    jc .tout                        ; the end of the gesture
+    cmp ax, [wr_top]
+    je .tout
+    mov [wr_top], ax
+    call wr_dlist
+.tout:                              ; ITS OWN epilogue, and not a jump into
+    pop dx                          ; wr_onup's: a local label belongs to
+    pop cx                          ; whichever non-local one preceded it, so
+    pop bx                          ; `.out` here and `.out` there are two
+    pop ax                          ; different symbols (SPEC.md 13.10.7.4)
+    ret
+
+
 wr_onup:
     push ax
     push bx
     push cx
     push dx
+    push si
+    mov bx, wr_btrec
+    call os88ui_btnup               ; AX = the button that FIRED, 0 = none
+    pop si
+    or ax, ax
+    jz .nobtn
+    dec ax                          ; wr_do takes 0 = Load, 1 = Add to Disk
+    call wr_do
+    jmp .out
+.nobtn:
     call wr_geom
     jc .out
     call wr_dscroll
+    mov bx, si                      ; the pause timer must not outlive the
+    xor ax, ax                      ; gesture it belongs to (13.10.5.4.2)
+    call OSAPI_WM_TIMER
     mov bx, wr_sb
     call os88ui_sbdrop
     jc .out
@@ -2613,7 +2714,7 @@ wr_do:
                                         ; is a store that went away between
                                         ; the paint and the click
     xor dx, dx                          ; ...and the store's ROOT, which the
-    call OSAPI_FILE_GOTO_QM             ; instance MOVES to: OSAPI_PKG_RUN's
+    call OSAPI_FILE_GOTO_QM             ; instance MOVES to: OSAPI_PKG_START's
     jc .nordo                           ; new instance inherits our directory
                                         ; (SPEC.md 19.2.1), and the whole point
                                         ; of unpacking a tree is that the
@@ -2892,9 +2993,23 @@ wr_abandon:
     ret
 
 ; --- wr_freefile - give the transfer claim back ------------------------------
+; **AND [wr_rlen] GOES WITH IT** (SPEC.md 92.14.2). The two words are a PAIR
+; and wr_pkgrun's header is where that is written down: a non-zero length is
+; the IMAGE form (21.5), so a length left behind by an earlier single-file
+; download makes the NEXT launch read [wr_fseg]:0 - a segment this routine has
+; just zeroed - for that many bytes. The archive arm is where it bites,
+; because that arm launches BY NAME and its package has PARTS: the image form
+; cannot run one, so ld_alloc refuses with LD_EBAD and Load Program on an
+; archive opens nothing at all, after a chain that wrote every file perfectly.
+;
+; It is zeroed BEFORE the early-out, and unconditionally, because the length
+; describes the CLAIM: no claim means no length, and the one path that reaches
+; here with [wr_fseg] already zero is exactly the path that must not inherit a
+; stale one. tests/thewire.py asserts the pair.
 wr_freefile:
     push ax
     push dx
+    mov word [wr_rlen], 0
     cmp word [wr_fseg], 0
     je .out
     mov dx, [wr_fseg]
@@ -3351,14 +3466,26 @@ wr_addprog:
 ; wr_pkgrun - the image in the claim, into a running instance
 ; in:  [wr_fseg], [wr_rlen], [wr_fname]; the UI task, NO LOCK
 ;
-; [wr_rlen] IS THE LENGTH AND IT IS A WORD THE CALLER WRITES: for a plain Load
-; Program it is [wr_got], what arrived (see wr_write's reason); for an archive
-; it is the last entry's unpacked size, and the claim holding it is the same
-; claim the whole tree was decoded through (SPEC.md 92.14).
+; [wr_rlen] IS THE LENGTH AND IT PICKS THE FORM (SPEC.md 21.5), which is why
+; it is a word the CALLER writes and not one this routine derives:
+;
+;   non-zero - the IMAGE form, [wr_fseg]:0 for [wr_rlen] bytes. Plain Load
+;              Program writes [wr_got], what arrived (see wr_write's reason).
+;              It is the only caller of that form in the tree, because it is
+;              the only one holding bytes that were never a file (21.5.1.1).
+;   zero     - BY NAME, [wr_fname] in the instance's own folder, and ES:DI is
+;              then a DOCUMENT to open it with (SPEC.md 21.5.3) - which we do
+;              not want, so ES must be ZERO. It is: the ARCHIVE arm writes
+;              this form (92.14.2) and the decode claim has already gone back
+;              by the time this is called, and giving it back is what zeroes
+;              [wr_fseg]. So the two words are zero TOGETHER, which is the
+;              pairing the call site restates.
 ;
 ; SPEC.md 21.x. The new instance's current directory is OURS (SPEC.md 19.2.1),
 ; which is why a WF_DISK record is refused by the predicate rather than
-; launched into a folder where its overlay is not.
+; launched into a folder where its overlay is not - and, on the archive arm,
+; how the by-name resolve finds anything: the chain ends standing in the last
+; entry's folder (92.14.1) and the last entry is the program.
 ; -----------------------------------------------------------------------------
 wr_pkgrun:
     push ax
@@ -3368,12 +3495,22 @@ wr_pkgrun:
     push si
     push di
     push es
-    mov es, [wr_fseg]
-    xor si, si
-    mov cx, [wr_rlen]
-    xor dx, dx
-    mov di, wr_fname
-    call OSAPI_PKG_RUN
+    mov es, [wr_fseg]                   ; **ZERO ON THE ARCHIVE ARM, AND THAT
+    xor di, di                          ; IS NOW LOAD-BEARING** rather than
+    mov cx, [wr_rlen]                   ; incidental: it used to be true that
+    xor dx, dx                          ; ES was never READ on the by-name
+                                        ; path, and 21.5.3 made ES:DI a
+                                        ; DOCUMENT there - so ES = 0 is what
+                                        ; says "nothing through ES:DI", on
+                                        ; both arms and in one sentence. This
+                                        ; call already satisfies it, because
+                                        ; the arm that leaves [wr_rlen] zero
+                                        ; is the arm that leaves [wr_fseg]
+                                        ; zero; the pairing is written down
+                                        ; here so it stays that way
+    mov si, wr_fname                    ; ES:DI = the image, DS:SI the name -
+    call OSAPI_PKG_START                ; the canonical pairing, where the two
+                                        ; used to be the other way round
     jc .bad
     push ds
     pop es
@@ -3904,7 +4041,7 @@ wr_rxn      equ os88_image_end + WR_B7 + 30         ; word: ...and what is left
 wr_pnum     equ os88_image_end + WR_B7 + 32         ; word: 'N of M', the N...
 wr_ptot     equ os88_image_end + WR_B7 + 34         ; word: ...and the M
 wr_rlen     equ os88_image_end + WR_B7 + 36         ; word: the bytes handed to
-                                                    ; OSAPI_PKG_RUN
+                                                    ; OSAPI_PKG_START
 wr_needkb   equ os88_image_end + WR_B7 + 38         ; word: WC_NEEDKB, banked
                                                     ; because OSAPI_DRV_CALL
                                                     ; owns every register

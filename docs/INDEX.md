@@ -42,6 +42,7 @@ Read first: [§11 wm.inc — windows](../SPEC.md#11-wminc--windows); [§20 Loada
 | `0x03B0` | `OSAPI_WM_DAMAGE` | BX = your window ptr, called from inside your own W_PAINT... |
 | `0x03A8` | `OSAPI_WM_OWNBG` | BX = window ptr, AL = 0 clear / non-0 set. "I paint EVERY PIXEL of my content myself", so the kernel's white fill in front of W_PAINT is skipped... |
 | `0x0378` | `OSAPI_WM_SAVEU` | BX = window ptr, AL = 0 clear / OSAPI_SAVEU_* set. A PROMISE: this window's content does not change while it is not drawing, so a raise may put its... |
+| `0x05A0` | `OSAPI_WM_ONCLICK` | BX = win ptr, AX = a near proc in YOUR segment (0 clears): the PRESS half of a content click... |
 | `0x01F0` | `OSAPI_WM_ONMOUSEUP` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): the RELEASE half of a content click (SPEC.md 13.7)... |
 | `0x0490` | `OSAPI_WM_ONRCLICK` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): the RIGHT button, pressed in your content (SPEC.md 13.11)... |
 | `0x03D8` | `OSAPI_WM_ONRESIZE` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): "your content box CHANGED, and you did not ask" (SPEC.md 11.98)... |
@@ -60,7 +61,7 @@ Read first: [§21 loader.inc](../SPEC.md#21-loaderinc); [§26 desk.inc — deskt
 
 | slot | call | takes |
 |---|---|---|
-| `0x0520` | `OSAPI_PKG_RUN` | ES:SI = a package image, byte for byte what the .O88 file holds, in a claim of YOURS... |
+| `0x0520` | `OSAPI_PKG_START` | SI = a NUL-terminated 8.3 name, at most 12 characters, in YOUR segment... |
 | `0x0528` | `OSAPI_DESK_SVC` | AL = 1 add / 0 withdraw; ES:SI = a 65-byte record in YOUR segment (add only): +0 12 the caption, NUL (<= 11 chars) +12 13 the 8.3 file the zone... |
 | `0x0530` | `OSAPI_PKG_REHOME` | DX = the segment your program part's IMAGE starts at (op_seg answers it), AX = the bytes available there... |
 
@@ -103,7 +104,6 @@ Read first: [§5 vga12.inc](../SPEC.md#5-vga12inc); [§25 icons.inc — icon for
 | `0x0418` | `OSAPI_GFX_BLIT1` | ES:SI = a 1bpp BAND in the framebuffer's own bit order (row-major, bit 7 leftmost, 1 = a LIT pixel), BP = its stride in BYTES per row, AX =... |
 | `0x02B0` | `OSAPI_GFX_FILL_PAT` | AX/BX/CX/DX = the rect, SI = 8 pattern bytes in YOUR segment: row y takes byte [SI + (y & 7)], a set bit is WHITE and bit 7 is the leftmost pixel of... |
 | `0x02E0` | `OSAPI_GFX_LINE` | RETIRED (SPEC.md 5.12.7): the cell stays because a slot number is a published constant, and it answers CF = 1... |
-| `0x0300` | `OSAPI_GFX_LINIT` | RETIRED (SPEC.md 5.12.7): the cell stays because a slot number is a published constant, and it answers CF = 1... |
 | `0x0308` | `OSAPI_GFX_LSTEP` | RETIRED (SPEC.md 5.12.7): the cell stays because a slot number is a published constant, and it answers CF = 1... |
 | `0x0318` | `OSAPI_GFX_LSTEPV` | RETIRED (SPEC.md 5.12.7): the cell stays because a slot number is a published constant, and it answers CF = 1... |
 | `0x0538` | `OSAPI_GFX_POINTS` | ES:SI = CX records of two words each, x then y (screen px); CX = how many, 0 legal and does nothing. [gfx_color] is the ink; hold the lock... |
@@ -129,8 +129,8 @@ Read first: [§9 mouse.inc — the pointer: serial and PS/2 mice, and the cursor
 |---|---|---|
 | `0x00C8` | `OSAPI_MOUSE` | out CX=mouse_x, DX=mouse_y, AL=mouse_btn |
 | `0x03F0` | `OSAPI_KEY_DOWN` | AL = a make scancode (KSC_*). out CF=1 down, CF=0 up; every register kept |
-| `0x0540` | `OSAPI_CUR_BUSY` | I AM ABOUT TO GO QUIET FOR A WHILE (SPEC.md 7.5). NO ARGUMENT. The pointer becomes an HOURGLASS for the rest of the gfx-lock hold you are inside, and... |
-| `0x0550` | `OSAPI_MOUSE_FEED` | AX = dx, BX = dy (signed; POSITIVE dy IS DOWN), CL = buttons in mouse_btn's bits (1 left, 2 right)... |
+| `0x0540` | `OSAPI_CUR_BUSY` | I AM ABOUT TO GO QUIET FOR A WHILE (SPEC.md 7.5). NO ARGUMENT. The pointer becomes a CLOCK for the rest of the gfx-lock hold you are inside, and... |
+| `0x0598` | `OSAPI_MOUSE_FEED` | AX = dx, BX = dy (signed; POSITIVE dy IS DOWN), CL = buttons in mouse_btn's bits (1 left, 2 right)... |
 | `0x0338` | `OSAPI_EVQ_PENDING` | out AX = events still queued behind the one being dispatched (SPEC.md 13.4)... |
 
 ### Files and volumes
@@ -144,7 +144,10 @@ Read first: [§18 disk.inc — floppy I/O (BIOS int 13h) + the FAT driver](../SP
 | `0x0128` | `OSAPI_FILE_READ` | SI = name, ES:BX = buffer, DX:CX = its capacity; out CF=0 and DX:AX = bytes read (the file's 32-bit size), else AX = FERR_*... |
 | `0x0130` | `OSAPI_FILE_DELETE` | SI = name; out CF=0 AX=0, else FERR_* |
 | `0x0138` | `OSAPI_FILE_RENAME` | SI = old name, DI = new name; out as above |
+| `0x0578` | `OSAPI_FILE_COPY` | COPY OR MOVE ONE ENTRY, source folder to destination (SPEC.md 22.24)... |
+| `0x0588` | `OSAPI_FILE_WRITE_AT` | SI = a NUL 8.3 name, ES:BX = the bytes, CX = how many (>= 1), DX:AX = the byte offset (a multiple of the volume's CLUSTER)... |
 | `0x0140` | `OSAPI_FILE_DFREE` | out CF=0, DX:AX = free bytes, BX = SECTORS per cluster. NO DISK I/O - AND THAT IS NOT THE SAME AS CHEAP (SPEC.md 18.4.5)... |
+| `0x0570` | `OSAPI_VOL_STAT` | THE VOLUME YOU ARE STANDING ON, in four registers (SPEC.md 18.4.6): out CF=0 with AX = sectors per cluster, BX = free clusters, CX = bytes per sector... |
 | `0x0150` | `OSAPI_FILE_DLG` | AL = 0 Open / 1 Save, BX = your window ptr, DI = completion proc, SI = default name (NUL, <= 12) or 0... |
 | `0x01E8` | `OSAPI_VOL_KIND` | AL = a volume index (0 = A:). CF=1 = there is no such volume... |
 | `0x0270` | `OSAPI_VOL_ADD` | AL = the driver's own volume handle, CX = the volume's sector count, DX = a listing claim's segment (0 = the kernel's 32-entry floor), SI = a NUL... |
@@ -159,6 +162,8 @@ Read first: [§18 disk.inc — floppy I/O (BIOS int 13h) + the FAT driver](../SP
 | `0x0230` | `OSAPI_FILE_GOTO` | in DX = a cluster from OSAPI_FILE_HERE, BL = its drive; moves YOUR instance there... |
 | `0x02E8` | `OSAPI_ARG_FILE` | the document this instance was launched to open (SPEC.md 54.5). No inputs; out CF=1 = launched empty, the ordinary case... |
 | `0x02F0` | `OSAPI_ASSOC_SET` | claim an extension for a program (SPEC.md 54.5). ES:SI -> 3 extension bytes then 8 stem bytes, both space-padded... |
+| `0x0300` | `OSAPI_DSK_CACHE` | **COMMAND THE READ-AHEAD CACHE'S WIDTH** (SPEC.md 18.95.8), for a program that is about to take the arena... |
+| `0x0558` | `OSAPI_FILE_PATH` | ES:DI = your buffer, CX = its size in bytes (>= 2); out CF=0, a NUL `\DIR\DIR` written there and CX = its length not counting the NUL, DI unchanged... |
 | `0x0388` | `OSAPI_BATCH_BEGIN` | no arguments, no answer |
 | `0x0390` | `OSAPI_BATCH_END` | ...and the other end |
 | `0x0350` | `OSAPI_FILE_APPEND` | SI = NUL 8.3 name, ES:BX = bytes, CX = count (>= 1); out CF=0 AX=0, else AX = FERR_*... |
@@ -183,7 +188,9 @@ Read first: [§2 Memory map](../SPEC.md#2-memory-map); [§41 xmem.inc — memory
 | `0x04C8` | `OSAPI_MEM_CLAIM_HI` | AX = KB; out CF, DX = segment |
 | `0x04D0` | `OSAPI_MEM_CLAIM_DMA_HI` | ...and CX = the page-safe HEAD |
 | `0x0208` | `OSAPI_MEM_FREE` | DX = the segment you were given; out CF=0 released, CF=1 not yours |
+| `0x0590` | `OSAPI_MEM_COMPACT` | AH = MEMC_WHATIF: AL = a purge level, out AX/BX as OSAPI_MEM_AVAIL_LVL planned as if YOUR OWN REGION could move... |
 | `0x0210` | `OSAPI_MEM_AVAIL` | out AX = largest free run in KB, BX = total free KB... |
+| `0x0560` | `OSAPI_MEM_FLOOR` | AL = the level; preserves every register and the flags... |
 | `0x02A0` | `OSAPI_CLAIM_SNAPSHOT` | ES:DI = a CLAIM_SNAPSHOT_SIZE buffer; out AX = MEM_MAX... |
 | `0x02A8` | `OSAPI_SYS_KB` | ES:DI = a SYSKB_SIZE buffer; every register preserved... |
 | `0x0190` | `OSAPI_XMEM_CAPS` | no inputs; out AX = extended- memory KB the pool can still hand out (0 = none, and the three below will all refuse), DX:CX = the pool's 32-bit linear... |
@@ -233,6 +240,8 @@ Read first: [§31 ctrl.inc — the Control Panel window](../SPEC.md#31-ctrlinc--
 | `0x0298` | `OSAPI_SYS_SNAPSHOT` | ES:DI = a SYS_SNAPSHOT_SIZE buffer; out AX = MAX_TASKS, BX = INST_MAX... |
 | `0x0188` | `OSAPI_CPU_INFO` | no inputs; out AL = CPU_8086 / CPU_286 / CPU_386, AH = feature bits (the CPU_F_* below): bit 0 A20 verified open, bit 1 HMA claimed, bit 2 unreal... |
 | `0x04A0` | `OSAPI_DRV_CALL_AT` | OSAPI_DRV_CALL, EXCEPT ES IS YOURS (SPEC.md 20.11.2)... |
+| `0x0550` | `OSAPI_DRV_SUSPEND` | AL = 1 suspend / 0 resume / 2 handoff (above). ES:DI = a buffer of DQ_SIZE records or DI = 0 (suspend), ES:SI = a KDH_* record (handoff). out CF=0... |
+| `0x0580` | `OSAPI_DRV_CLASSK` | **WHAT ONE CLASS IS HOLDING** (SPEC.md 51.12). in AL = a DRVC_* class... |
 | `0x0448` | `OSAPI_DRV_CALL` | in BH = a DRVC_* class, BL = a verb THAT DRIVER defines; AX, CX, DX, SI and DI are the driver's to define too... |
 | `0x0320` | `OSAPI_CLIP_PUT` | ES:SI = the text, CX = its length. CX = 0 EMPTIES the clipboard and is not an error. Out CF=1 = refused (over CLIP_MAXKB, or the heap could not fund... |
 | `0x0328` | `OSAPI_CLIP_GET` | ES:DI = your buffer, CX = its capacity. Out CF=1 = empty (AX = CX = 0)... |
@@ -268,6 +277,12 @@ Read first: [§84 Software floating point (`apps/os88fp.inc`)](../SPEC.md#84-sof
 | `0x00D0` | `OSAPI_SRAND` | AX -> [osapi_seed] |
 | `0x00D8` | `OSAPI_RAND` | out AX = next pseudo-random word |
 
+### Running a DOS program
+
+Read first: [§96 DOS — running `.COM` and `.EXE` programs (`apps/dos/`)](../SPEC.md#96-dos--running-com-and-exe-programs-appsdos).
+
+*(no dedicated slots - see the sections above)*
+
 ## Shared includes
 
 A package `%include`s these itself; they are not kernel calls. Include them at the END of the package, before `OS88_BSS`.
@@ -275,6 +290,7 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 | include | SPEC | what it gives you |
 |---|---|---|
 | `apps/os88ui.inc` | §13, 75 | Buttons, check boxes, radio dots, scroll bars, group boxes, the standard alert, the standard About card and the drop-down. Opt into the alert with `%define OS88UI_ALERT`, the About card with `%define OS88UI_ABOUT`, the scroll bar with `%define OS88UI_SCROLL` and its thumb-drag half with `%define OS88UI_SBDRAG`, and the drop-down - one pick out of a short list, a Macintosh popup's gesture - with `%define OS88UI_DROP` (SPEC.md 13.14). |
+| `apps/os88alt.inc` | §11.2.1.1 | Alt+Enter, the full-screen key, for a package on SPEC.md 53's BRACKET - where no event is dispatched, so the kernel's synthesised keystroke cannot reach you and your own int 16h poll cannot see the key either. `os88alt_edge` asks the key-state map and finds the edge in it. A package on SPEC.md 11.2's LATCH needs none of this file: one `cmp ax, KEY_ALTENTER` in its W_ONKEY is both directions. Both want `OS88_ALTENTER_ARM` (apps/os88api.inc) in the entry proc, without which the chord is silently dead. |
 | `apps/os88line.inc` | §83 | A one-line text field: caret, horizontal scroll, focus, click-to-position and the editing keys. The caller owns a 20-byte block. |
 | `apps/os88text.inc` | §83 | The multi-line sibling of os88line.inc. Enter inserts a newline; no wrap, no selection, no undo. |
 | `apps/os88chart.inc` | §82 | A 4bpp offscreen canvas and all seven chart types - area, bar, column, line, pie, scatter, combination - plus a BMP writer. Shared by CHART.O88 and Sheet's chart window. |
@@ -285,11 +301,13 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 | `apps/os88pit.inc` | §72.15.1 | `pit_now`: a 32-bit clock in 838ns units off the 8253 and the BIOS tick, good for an hour before it wraps. Sub-tick timing for a profiler. |
 | `apps/os88type.inc` | §6.3, 6.5 | Proportional type: composes a row of glyphs from an `.F88` face into a 1bpp band in your own RAM and puts it up with one `OSAPI_GFX_BLIT1`. |
 | `apps/os88parts.inc` | §20.12 | Package parts: named, sized parts inside one `.O88` - claimed, loaded on demand, optionally into XMS, and refused with an arithmetic the package states itself. A package over 64KB is still a package. |
+| `apps/os88con.inc` | §70.8, 96.32 | An 80x25 TEXT CONSOLE: a fixed buffer of (character, IBM attribute) pairs - text VRAM's own layout - a dirty-ROW bitmap, and a composer that writes eight bytes a cell and calls nothing. `con_putc`, `con_clear`, the two scrolls, and `con_rows_owed` to draw what is owed. The CARRIER owes it the geometry at every paint - the 8-aligned text pen, the content top, the first text row below it, the visible columns and rows and [con_mono] - and nothing else: not the window's left edge, its width or its height, so a carrier may centre or inset the band freely. It carries the CP437 face and declares its own bss off `CON_BSS_AT`. |
+| `apps/os88cp437.inc` | §70.8.6 | The 160 CP437 glyphs a machine cannot be asked for - 0x00..0x1F and 0x80..0xFF, eight bytes each. GENERATED by `tools/cp437font.py` and committed, the way docs/INDEX.md is. `os88con.inc` includes it, so a carrier never names it. |
 | `apps/os88partsbody.inc` | §20.12.9 | The parts standard's CODE, and you do not include it: OS88_PARTS_END emits it after your table, gated on the OP_HAS_* flags the table itself derived. One plain part carries 1,018 bytes of it where every consumer used to carry 2,536. |
 
 ## Packages, and what to read them for
 
-The tree's own worked examples. When a convention is unclear, the shortest package that uses it is usually the fastest answer. *ships* is whether a shipped floppy carries it (the `make allapps` payload, SPEC.md 19.10); a `no` is built by its own target only.
+The tree's own worked examples. When a convention is unclear, the shortest package that uses it is usually the fastest answer. *ships* is **retired** for a package apps/RETIRED.txt retires (SPEC.md 20.16), and otherwise whether a shipped floppy carries it (the `make allapps` payload, SPEC.md 19.10); a `no` is built by its own target only.
 
 | package | source | SPEC | ships |
 |---|---|---|---|
@@ -303,6 +321,8 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | CHART | `apps/chart/chart.asm` | §82 | yes |
 | CWORD | `apps/cword/cword.asm` | §73.12 | yes |
 | CYCLONE 88 | `apps/cyclone/cyclone.asm` | §67 | yes |
+| DOS | `apps/dos/dos.asm` | §96 | no |
+| DOS | `apps/dos/dosload.asm` | §96 | no |
 | DOTDEL | `apps/dotdel/dotdel.asm` | §93 | yes |
 | FONT VIEWER | `apps/fontview/fontview.asm` | §90 | yes |
 | FPTEST | `apps/fptest/fptest.asm` |  | no |
@@ -317,7 +337,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | MODPLUG | `apps/modplug/modplug.asm` | §56 | yes |
 | NOTEPAD | `apps/notepad/notepad.asm` | §27 | yes |
 | PACCMAN | `apps/paccman/paccman.asm` | §91 | yes |
-| PACMAN | `apps/pacman/pacman.asm` | §89 | no |
+| PACMAN | `apps/pacman/pacman.asm` | §89 | **retired** |
 | PAINT | `apps/paint/paint.asm` | §42 | yes |
 | PIANO | `apps/piano/piano.asm` | §36 | yes |
 | Pixelstein 3D | `apps/pixelstein/pxgame.asm` | §97 | no |
@@ -433,26 +453,27 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 86 | AUDIO PLAYER — background music from a streamed WAV (`apps/audio/`) |
 | 87 | Hibernate — the machine to a file on the hard disk, and back (`kernel/hiber.inc`, `HIBER.DRV`) |
 | 88 | CLEAR SKIES — a filled-polygon flight simulator in a foreign mode (`apps/skies/`) |
-| 89 | Pac-Man (`apps/pacman/pacman.asm`) |
+| 89 | Pac-Man (`apps/pacman/pacman.asm`) — **RETIRED** |
 | 90 | FONT VIEWER — the system face browser (`apps/fontview/fontview.asm`) |
 | 91 | PACCMAN — pacman.c, written in C (`apps/paccman/`) |
 | 92 | THE WIRE — the online software library (`apps/thewire/thewire.asm`) |
 | 93 | DOT DELIRIUM — a maze chase, sized from the surface (`apps/dotdel/`) |
 | 94 | Picture decoders (`apps/os88img.inc`) |
 | 95 | SCRIBE (`apps/scribe/`) — the fork of WORD |
+| 96 | DOS — running `.COM` and `.EXE` programs (`apps/dos/`) |
 | 97 | PIXELSTEIN 3D — a raycast shooter in a foreign mode (`apps/pixelstein/`) |
 
 ## docs/
 
 **The DIRECTORY says what a document is, and the filename does not.** `docs/` describes how the system works today - instructions, contracts and maintained reference. Everything under `docs/plans/` is a design record: what was considered, including the options that were rejected, and it is never a description of what shipped - SPEC.md is the current state and these are how it got there. `docs/plans/completed/` is the subset whose work has landed; what stays directly in `docs/plans/` still has work open. `docs/history/` is superseded or closed - a record of a moment that has passed, and true of no tree you can check out. `docs/reports/` is a MEASUREMENT taken at a point in time: true of the tree it was taken on, quotable with its date and its box, and never to be read as a description of today.
 
-*How it works today - `docs/` (21):* `APPLE2-PORT-PLAN.md`, `APPLE2-SPEC.md`, `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `IMAGER.md`, `KERNEL-MEMORY.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `PACCMAN-PORT-PLAN.md`, `README.md`, `TELNET-PLAN.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WIRE-PLAN.md`, `WRITING-TESTS.md`
+*How it works today - `docs/` (22):* `APPLE2-PORT-PLAN.md`, `APPLE2-SPEC.md`, `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `DOS-DEBUGGING.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `IMAGER.md`, `KERNEL-MEMORY.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `PACCMAN-PORT-PLAN.md`, `README.md`, `TELNET-PLAN.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WIRE-PLAN.md`, `WRITING-TESTS.md`
 
-*Plans with work still open - `docs/plans/` (17):* `ARTFUL-PERF-PLAN.md`, `HANDOFF-SOAK-FINDINGS.md`, `HANDOFF-STOP-DETECTION.md`, `HEAP-UNPIN-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SMALL-NOCOMPACT.md`, `KERNEL-BYTE-QUEUE.md`, `LAST-DROP-BYTES.md`, `LAST-DROP-PERF.md`, `MONO-RECLAIM-PLAN.md`, `MOUSE-BOOT-FREEZE-PLAN.md`, `O88-COMPRESSION-PLAN.md`, `PARTS-REHOME-PLAN.md`, `PIXELSTEIN-PLAN.md`, `SKIES-FRAME-PLAN.md`, `SOAK-PARALLEL.md`, `UI-MENU-ELEMENT.md`
+*Plans with work still open - `docs/plans/` (31):* `ARTFUL-PERF-PLAN.md`, `BUTTON-GESTURE-PLAN.md`, `CGA-SNOW-PLAN.md`, `DISK-CPU-PLAN.md`, `DOS-CABLE-NET-PLAN.md`, `DOS-EXEC-PLAN.md`, `HANDOFF-STOP-DETECTION.md`, `HDD-RESIDENT-PLAN.md`, `HEAP-UNPIN-PLAN.md`, `ICON-IDENTITY-PLAN.md`, `KERN-DOS-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SMALL-NOCOMPACT.md`, `KERNEL-BYTE-QUEUE.md`, `LAST-DROP-BYTES.md`, `LAST-DROP-PERF.md`, `LISTING-HOME-PLAN.md`, `MODULE-SELFCONTAIN-PLAN.md`, `MONO-RECLAIM-PLAN.md`, `MOUSE-BOOT-FREEZE-PLAN.md`, `NAV-COST-PLAN.md`, `O88-COMPRESSION-PLAN.md`, `PARTS-REHOME-PLAN.md`, `PATH-WAVE-PLAN.md`, `PIXELSTEIN-PLAN.md`, `REGION-SELF-COMPACT-PLAN.md`, `SCRIBE-OVL-PLAN.md`, `SKIES-FRAME-PLAN.md`, `SOAK-PARALLEL.md`, `UI-MENU-ELEMENT.md`, `UI-TEXTFIELD-PLAN.md`
 
-*Design records for what shipped - `docs/plans/completed/` (69):* `ASSOC-PLAN.md`, `AUDIO-PLAN.md`, `BOOT-LADDER-PLAN.md`, `BOOT-PERF-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CTRL-GLYPH-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DISK-PERF-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `DUAL-DISPLAY-VGA.md`, `EGA-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `FTP-PERF.md`, `GFX-EMBEDDABLE-PLAN.md`, `GFX-FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HANDOFF-DISK-IO.md`, `HANDOFF-DOTDEL-TEXT.md`, `HANDOFF-FONTCHAR-SEAM.md`, `HANDOFF-KERNEL-SIZE-P2.md`, `HANDOFF-KERNEL-SIZE-P3.md`, `HANDOFF-KERNEL-SIZE-P4.md`, `HANDOFF-KERNEL-SIZE.md`, `HANDOFF-PAINT-BLANK-LOAD.md`, `HANDOFF-REDRAW.md`, `HANDOFF-SOUND-MEMORY.md`, `HANDOFF.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `KERN-SMALL-CUT-BUILT.md`, `KERN-SMALL-MODULE-SPLIT.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `NOTEPAD-NOTES.md`, `O88-MULTISEG-PLAN.md`, `ONDEMAND-PLAN.md`, `PAINT-1BPP-PLAN.md`, `PAINT-NOTES.md`, `PAINT-STROKE-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SAVEUNDER-LIVE-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SDK-INCLUDE-SIZE.md`, `SETTINGS-COST.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `STACK-SLOTS-PLAN.md`, `STKBALANCE-KERNEL.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `UI-FREEZE-PLAN.md`, `UIHELPERS-PLAN.md`, `VMMOUSE-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
+*Design records for what shipped - `docs/plans/completed/` (72):* `ASSOC-PLAN.md`, `AUDIO-PLAN.md`, `BOOT-LADDER-PLAN.md`, `BOOT-PERF-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CTRL-GLYPH-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DISK-PERF-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `DUAL-DISPLAY-VGA.md`, `EGA-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `FTP-PERF.md`, `GFX-EMBEDDABLE-PLAN.md`, `GFX-FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HANDOFF-CARVE-COMPACT.md`, `HANDOFF-DISK-IO.md`, `HANDOFF-DOTDEL-TEXT.md`, `HANDOFF-FONTCHAR-SEAM.md`, `HANDOFF-ICOSHED-DOSGLYPH.md`, `HANDOFF-KERNEL-SIZE-P2.md`, `HANDOFF-KERNEL-SIZE-P3.md`, `HANDOFF-KERNEL-SIZE-P4.md`, `HANDOFF-KERNEL-SIZE.md`, `HANDOFF-PAINT-BLANK-LOAD.md`, `HANDOFF-REDRAW.md`, `HANDOFF-SOUND-MEMORY.md`, `HANDOFF.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `KERN-SMALL-CUT-BUILT.md`, `KERN-SMALL-MODULE-SPLIT.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `NOTEPAD-NOTES.md`, `O88-MULTISEG-PLAN.md`, `ONDEMAND-PLAN.md`, `PAINT-1BPP-PLAN.md`, `PAINT-NOTES.md`, `PAINT-STROKE-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SAVEUNDER-LIVE-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SDK-INCLUDE-SIZE.md`, `SETTINGS-COST.md`, `SKIES-ENGINE-SOUND.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `STACK-SLOTS-PLAN.md`, `STKBALANCE-KERNEL.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `UI-FREEZE-PLAN.md`, `UIHELPERS-PLAN.md`, `VMMOUSE-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
 
 *Superseded and closed - `docs/history/` (9):* `DUAL-DISPLAY-BUG2.md`, `HANDOFF-TESTS-A-STRADDLE.md`, `HANDOFF-TESTS-B-LAUNCH.md`, `HANDOFF-TESTS-C-FRESH.md`, `HANDOFF-TESTS.md`, `KERN-SPLIT-PLAN.md`, `SOUND-PLAN.md`, `TRACKER-PLAN.md`, `WM-ARTIFACTS.md`
 
-*Measurements, each true of the tree it was taken on - `docs/reports/` (13):* `BUSY-CURSOR-COST-2026-09-10.md`, `CYCLONE-STACK-2026-09-10.md`, `DOTDEL-FRAME-PROFILE-2026-09-09.md`, `GLYPH-AND-LINE-COST-2026-09-10.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-07.md`, `PR-CYCLE-ACCOUNTING-2026-09-11.md`, `PXS-FRAME-2026-09-13.md`, `PXS-FRAME-2026-09-14.md`, `PXS-FRAME-2026-09-21.md`, `PXS-FRAME-2026-09-22.md`, `SKIES-FRAME-DELTA-2026-09-10.md`, `STKDIAG-PC5150-2026-09-10.md`, `TIER-TIMINGS-2026-09-07.md`
+*Measurements, each true of the tree it was taken on - `docs/reports/` (23):* `BUSY-CURSOR-COST-2026-09-10.md`, `CYCLONE-STACK-2026-09-10.md`, `DOCK-RESIDENT-COST-2026-09-17.md`, `DOS-GAMES-2026-09-16.md`, `DOS-INT21-REGISTERS-2026-09-15.md`, `DOTDEL-FRAME-PROFILE-2026-09-09.md`, `GFXBENCH-SIZE-PASS-2026-09-16.md`, `GLYPH-AND-LINE-COST-2026-09-10.md`, `KERN-DOS-BUDGET-2026-09-13.md`, `KERN-DOS-PART-COST-2026-09-14.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-07.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-17.md`, `MODULE-RESIDENT-DATA-2026-09-12.md`, `PR-CYCLE-ACCOUNTING-2026-09-11.md`, `PXS-FRAME-2026-09-13.md`, `PXS-FRAME-2026-09-14.md`, `PXS-FRAME-2026-09-21.md`, `PXS-FRAME-2026-09-22.md`, `SBRATE-COMMIT-COST-2026-09-11.md`, `SEAM-DRAG-CRASH-2026-09-20.md`, `SKIES-FRAME-DELTA-2026-09-10.md`, `STKDIAG-PC5150-2026-09-10.md`, `TIER-TIMINGS-2026-09-07.md`
 

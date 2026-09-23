@@ -45,7 +45,7 @@ Four facts decided the shape (the exploration reports are the evidence):
 2. **There is no way to launch a package image already in memory.** The
    loader (`kernel/loader.inc`, SPEC §21) is a disk pipeline end to end, and no
    `OSAPI_*` slot launches anything. "Load Program" needs one new slot,
-   `OSAPI_PKG_RUN`, which is the loader's back half with the disk read
+   `OSAPI_PKG_START`, which is the loader's back half with the disk read
    replaced by a copy.
 3. **The site already serves plain HTTP/1.0** with `Content-Length` and
    `Connection: close` on port 80 with no redirect to TLS (verified with
@@ -74,7 +74,7 @@ this was written, so a rung may still be crossed; the number is reported.
 ```
  kernel/desk.inc            kernel/loader.inc          apps/thewire/            ../os8088-web
  ┌──────────────────┐       ┌──────────────────┐       ┌──────────────────┐     ┌──────────────────┐
- │ the Wire zone    │ dbl-  │ OSAPI_PKG_RUN    │       │ THEWIRE.O88      │ HTTP│ /wire/catalog.bin│
+ │ the Wire zone    │ dbl-  │ OSAPI_PKG_START    │       │ THEWIRE.O88      │ HTTP│ /wire/catalog.bin│
  │ (paint, hit,     │ click │ (image in memory │◄──────│  catalog, list,  │◄────│ /wire/pic/*.PIC  │
  │  double-click)   │──────►│  → running       │ WM_   │  picture, filter,│     │ /wire/pkg/*.O88  │
  │                  │ launch│  instance)       │ONWAKE │  Load / Add      │     │ /wire/  (page)   │
@@ -88,7 +88,7 @@ this was written, so a rung may still be crossed; the number is reported.
 - **P** is an ordinary shipped package, on the SYSTEM disks (all four
   geometries) in `SYSTEM/` beside `TASKMGR.O88`; not on `kern_small` (no
   NIC there, `SMALLOMIT`'s reason). It is the only reader of the catalog
-  format on the machine and the only caller of `OSAPI_PKG_RUN` today.
+  format on the machine and the only caller of `OSAPI_PKG_START` today.
 - **W** publishes the catalog, the pictures and the packages as static
   assets, and replaces the site's Applications page with a `Wire` page.
 - The catalog format (§4) is the contract between P and W. The OS repo owns
@@ -157,7 +157,7 @@ and the launch name are the driver's, in RAM only on a machine that loaded it.
   with the driver loaded (`make ethertest`'s disk) — and confirm a plain
   `os8088.img` boot shows NO zone and the kernel's bytes are the only cost.
 
-## 3. K2 — `OSAPI_PKG_RUN`, slot `KERNEL_SEG:0x04F8` (SPEC §21.x)
+## 3. K2 — `OSAPI_PKG_START`, slot `KERNEL_SEG:0x04F8` (SPEC §21.x)
 
 The 158th slot; `osapi_table_end` moves down one and `OSAPI_TABLE_LEN`'s
 assertion with it; `tests/unit/t_api_abi.py` decodes the table out of
@@ -165,7 +165,7 @@ assertion with it; `tests/unit/t_api_abi.py` decodes the table out of
 together.
 
 ```
-OSAPI_PKG_RUN   KERNEL_SEG:0x04F8
+OSAPI_PKG_START   KERNEL_SEG:0x04F8
   in   ES:SI  = a package image, byte for byte what the .O88 file holds,
                 in a claim of YOURS (any segment; it is COPIED, never adopted)
        DX:CX  = its length in bytes (DX = high word)
@@ -203,7 +203,7 @@ OSAPI_PKG_RUN   KERNEL_SEG:0x04F8
   Wire-shaped byte a cardless machine carries in RAM.
 - **Capability gate `tests/pkgrun/`** (`make pkgrun`, the `mseg`/`covl`
   shape): a test package that reads `HELLO.O88` from beside itself into a
-  claim, calls `OSAPI_PKG_RUN`, and reports on its own window what came back;
+  claim, calls `OSAPI_PKG_START`, and reports on its own window what came back;
   then corrupts the magic and asserts `CF=1, AL=LD_EBAD`; then a flags-bit-2
   image and asserts the same. `tests/pkgrun.py` drives it under QEMU and
   asserts a `HELLO` instance exists via `OSAPI_SYS_SNAPSHOT`'s record or the
@@ -345,7 +345,7 @@ granted, `OS88_STACK_192`) opens, polls `NETV_STATUS`, sends, drains into the
 staging buffer and copies to the claim, and paints the status cell and the
 picture under the lock with the obscured/clip tests of §20.6 rule 5. Done or
 failed → `OSAPI_WM_WAKE`; the `OSAPI_WM_ONWAKE` handler (UI task, no lock) is
-the only place that calls `OSAPI_PKG_RUN`, `OSAPI_FILE_WRITE` or
+the only place that calls `OSAPI_PKG_START`, `OSAPI_FILE_WRITE` or
 `OSAPI_MEM_FREE`. The handshake is `apps/ftpd`'s one byte — every argument
 written before the flag, the flag cleared last — and a generation counter
 checked INSIDE the store loop (SPEC §71.11's lesson), so a selection change
@@ -398,7 +398,7 @@ it fits the CGA's 200 rows with at least 6 list rows and takes 12 on VGA:
   free on the disk` (checked in the Save completion, where §38's DX:CX and
   `OSAPI_FILE_DFREE` make it knowable before the first byte moves).
 - **Load Program:** claim → fetch `/wire/pkg/<STEM>.O88` → ONWAKE →
-  `OSAPI_PKG_RUN` with `DI = '<STEM>.O88'` → free → status `Loaded <title>
+  `OSAPI_PKG_START` with `DI = '<STEM>.O88'` → free → status `Loaded <title>
   from the Wire` (toast too, `OSAPI_TOAST`). An `LD_*` refusal is said in
   the status cell in words.
 - **Add to Disk...:** `OSAPI_FILE_DLG` Save, default name `<STEM>.O88`
@@ -497,7 +497,7 @@ prose and flagged as reviewable in the PR:
 | row | tier | what |
 |---|---|---|
 | `tests/unit/t_wire.py` | fast | pack → verify → dump round trip; `WC_*` equs mirrored; the writer's refusals |
-| `tests/pkgrun.py` (+ `tests/pkgrun/`, `make pkgrun`) | soak | `OSAPI_PKG_RUN` runs HELLO from memory; refuses a bad magic and a parts image |
+| `tests/pkgrun.py` (+ `tests/pkgrun/`, `make pkgrun`) | soak | `OSAPI_PKG_START` runs HELLO from memory; refuses a bad magic and a parts image |
 | `tests/thewire.py` (`make thewiretest`, `ethertest`'s shape: SYSTEM.CFG asking for `ETHER.DRV`, `SYSTEM/APPDATA/WIRE.CFG` naming `10.0.2.2:PORT/wire/`) | full if the 10-minute budget holds, else soak, and say which | QEMU + a host HTTP server serving a fixture catalog packed by `os88wire.py` from `build/hello.o88`, `build/mines.o88` and a tier-3 `WF_DISK` entry with one sidecar. Double-click the desktop zone; catalog loaded and 3 rows; filter `8088/8086` → 2 rows; select HELLO, Load Program → a `HELLO` instance; select the tier-3 entry → Load Program greyed, Add to Disk → Save → both files on B: byte-identical, read back on the host with the suite's independent FAT12 reader |
 | the zone's look | functional check, not a row | screenshots on VGA, Hercules and CGA with the Wire icon selected and unselected (ETHER.DRV loaded), a plain boot showing no zone, and the Wire window on all three |
 
@@ -558,7 +558,7 @@ decided the shape:
    whether a store exists or could, mounting one, and standing on it before
    the same chain Add to Disk runs. Two driver verbs and no kernel byte.
 3. **The program entry is last** so the launch is free: the claim still
-   holds the `.O88` when the tree has landed and `OSAPI_PKG_RUN` takes it from
+   holds the `.O88` when the tree has landed and `OSAPI_PKG_START` takes it from
    there. A half-written tree therefore never has a runnable package in it.
 4. **`home` lives in the archive**, not in the catalog's spare word: a CP/M
    game archive names `RUNCPM` and paths under `A/1/`, and lands beside a

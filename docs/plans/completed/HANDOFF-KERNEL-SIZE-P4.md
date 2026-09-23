@@ -14,7 +14,6 @@ Its companions, and this file repeats none of them:
 * **`docs/plans/completed/HANDOFF-KERNEL-SIZE-P3.md`** — the brief this pass ran from. **Its §1
   scope was WRONG and is corrected in place**; its §2 (the MartyPC/`make`/commit
   lock) and §3 (how to run the parallel soak) are unchanged and still the how-to.
-* **`docs/plans/HANDOFF-SOAK-FINDINGS.md`** — open before diagnosing any test failure.
 * **`docs/KERNEL-MEMORY.md`** — where the budgets stand, and the guard rules.
 * **`docs/plans/LAST-DROP-BYTES.md`** — the live register of `.ovl`-eligible bodies
   and of merges that look available and are not. Its §7.2 is updated by this
@@ -583,14 +582,14 @@ container could not answer, with the ones it can now answer marked.
 
 | row / claim | why it could not run here |
 |---|---|
-| `dskwstage` | its default machine's ROM set was **absent from this container** (`Error loading ROM set`, before a guest instruction). Pointed at a machine that IS available it **hangs — and hangs identically on the stashed baseline, same command, same machine**. Out of reach in both directions; `docs/plans/HANDOFF-SOAK-FINDINGS.md`'s "FAIL where it means SKIP" class. **It is the row that covers `dskw_wdata.stg`, one of the sites a cross-cutting finding converted** — re-run it if you have the 5150 CGA ROM set. **ANSWERED — the ROM arrived and the answer is that the hang is NOT this pass's.** Four runs: `dskw_write_x never returned after 180s` at `8626120` on the real IBM 5150 27OCT82 ROM (in its soak chunk, and again on its own), at `8626120` on GLaBIOS, and at **`f8af49e` — elendilon before the pass merged** — on the IBM ROM. So the ROM is not the variable and neither is the pass. The 180 is a HOST wall-clock bound in `m.wait_stop`, which made load the first suspect and it is ruled out: the second failure had two other emulators up, not four. The hang itself is still open and still covers `dskw_wdata.stg`; what is closed is the question this row was parked on |
+| `dskwstage` | its default machine's ROM set was **absent from this container** (`Error loading ROM set`, before a guest instruction). Pointed at a machine that IS available it **hangs — and hangs identically on the stashed baseline, same command, same machine**. Out of reach in both directions; the "FAIL where it means SKIP" class. **It is the row that covers `dskw_wdata.stg`, one of the sites a cross-cutting finding converted** — re-run it if you have the 5150 CGA ROM set. **ANSWERED — the ROM arrived and the answer is that the hang is NOT this pass's.** Four runs: `dskw_write_x never returned after 180s` at `8626120` on the real IBM 5150 27OCT82 ROM (in its soak chunk, and again on its own), at `8626120` on GLaBIOS, and at **`f8af49e` — elendilon before the pass merged** — on the IBM ROM. So the ROM is not the variable and neither is the pass. The 180 is a HOST wall-clock bound in `m.wait_stop`, which made load the first suspect and it is ruled out: the second failure had two other emulators up, not four. The hang itself is still open and still covers `dskw_wdata.stg`; what is closed is the question this row was parked on |
 | the AT clock rung (rung 1, MC146818) | **QEMU only** — a 5150 has no RTC and MartyPC models no XT clock card, so `[clk_tier]` is 0 on both. This container had no `qemu-system-i386`. **IT HAS ONE NOW** (8.2.2, installed for the closing soak), so this rung and rung 2's refusal arm are REACHABLE here — but **still unrun, and the reason is a gap in the SUITE rather than in this container**: no registered row covers rung 1. `dtwrite` is the row that writes the clock and it declares `marty`, where `[clk_tier]` is 0, so it passes *without exercising a chip*. A row that means rung 1 needs QEMU in its `needs` and a reboot in its body (CLAUDE.md's recipe: set the clock, close the panel, `system_reset`, read the bar). Worth writing before the next pass leans on it |
 | `xmcheck` / `tests/xmtest` | the one gate in the tree *verified* to fail when the XMS release calls go missing, and a RUNTIME check rather than a grep. Needs QEMU **and** a machine with memory above 1MB; MartyPC is an 8088 and `xm_sniff` returns at its first compare. **OVERTAKEN — it RAN and PASSED, 41.9 s** (§9). QEMU 8.2.2 was installed for the closing soak, so this row is no longer out of reach here and the XMS teardown is checked rather than argued. `heapmap` and `msegxms` came with it |
 | clock rung 2 (MM58167) | the **refusal arm only** is reachable, via `make test RTC=ns` → `tier 0, stop 01, reg 00 = FF`, which proves the code assembles and refuses and nothing more. Not run — no QEMU |
 | clock rung 3 (RP5C01) | **nothing anywhere.** No emulator in this tree has one. Field-only |
 | `F-cpudet3-01` | **nothing.** A `word [ds:bp+0]` "fix" assembles, passes every gate, and reports an 8087 that exists as absent. The comment at `mov bp, sp` is the whole guard |
 | B1's `xm_boot_x` table staging | no test in this container exercises the path. Verified by assembly, listing and segment reasoning — **said plainly rather than left implied**. The filed form used `push cs / pop es`, which would have copied the XMS service table **into the blob** on any machine with `XMS.DRV`, because the body is `.ovl` and far-called so CS is the blob's segment |
-| `dispcheck` | fails **identically on both trees at the same line** — pre-existing, `docs/plans/HANDOFF-SOAK-FINDINGS.md`. Up to that point the two kernels produce byte-identical framebuffers on **both** cards of the extended desktop. **OVERTAKEN, and it was THIS PASS'S after all**: the closing soak found a *second*, unrelated defect in the row — it indexed word 11 of a run this pass shortened to 16 words — and fixing that (`662b429`, `docs/plans/HANDOFF-SOAK-FINDINGS.md` E4) makes it **pass**. The pre-existing timeout above and the stale index are two different things in one file; do not read this row's history as one story |
+| `dispcheck` | fails **identically on both trees at the same line** — pre-existing. Up to that point the two kernels produce byte-identical framebuffers on **both** cards of the extended desktop. **OVERTAKEN, and it was THIS PASS'S after all**: the closing soak found a *second*, unrelated defect in the row — it indexed word 11 of a run this pass shortened to 16 words — and fixing that (`662b429`) makes it **pass**. The pre-existing timeout above and the stale index are two different things in one file; do not read this row's history as one story |
 
 **What WAS run on a machine**, and is worth knowing exists:
 
@@ -835,7 +834,7 @@ time, because `ctoolchain`, `weavesmoke` and `ps2mouse` could finally run.
 
 ### 9.1 The four failures, each classified against evidence
 
-Full write-ups are `docs/plans/HANDOFF-SOAK-FINDINGS.md` E1–E5. In one line each:
+In one line each:
 
 | row | disposition |
 |---|---|
@@ -845,8 +844,7 @@ Full write-ups are `docs/plans/HANDOFF-SOAK-FINDINGS.md` E1–E5. In one line ea
 | `weavepack` | 18 of 23 checks, **identical on a loaded box and an idle one** (E6) |
 
 **The two Weave rows are the same story twice**: neither had ever produced a
-verdict here, because there was no C toolchain, and `docs/plans/HANDOFF-SOAK-FINDINGS.md`
-B4/D2 record what was seen instead. Installing one did not break them — it
+verdict here, because there was no C toolchain. Installing one did not break them — it
 made them legible.
 
 ### 9.2 One mistake, and it is the reusable output

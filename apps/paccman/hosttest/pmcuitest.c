@@ -386,12 +386,14 @@ int  os88_key_down(int scan)
  * only records that it was asked for. The harness drives pmc_frame() itself,
  * which is the worker's whole body, and hg_ticks is the clock it advances. */
 static int hg_spawned, hg_spawn_refuse;
+static int hg_restartable = -1;         /* -1 = never asked; SPEC.md 66.6.2 */
 static unsigned hg_ticks_v;
 
 void *os88_wm_top(void)        { return hg_topwin; }
 int   os88_task_spawn(void *w) { (void) w; if (hg_spawn_refuse) return -1;
                                  hg_spawned++; return 0; }
 void  os88_task_alive(void *w) { (void) w; }
+int   os88_task_restartable(int on) { hg_restartable = on; return 0; }
 void  os88_task_sleep(int t)   { (void) t; }
 /* hg_on_yield - WHAT THE UI TASK DOES while the worker has let go of the gfx
  * lock. The worker's chunked flush unlocks, yields and re-locks, and the whole

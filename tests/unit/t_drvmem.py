@@ -18,7 +18,7 @@ wrong.  Both of its terms drift on their own:
     number and touches nothing in the kernel.  There is no linker here
     (SPEC.md 1), so nothing notices.
 
-  * THE CLAIMS.  `SBL_POOLKB`, `SK_RXMAX`, `HDD_LISTKB` and the rest live in
+  * THE CLAIMS.  `SBL_POOLKB`, `SK_RXMAX`, `RD_TABMAXKB` and the rest live in
     the drivers' own sources, which the kernel cannot `%include` - they are
     assembled into separate flat binaries.  So the kernel's arithmetic is a
     COPY of theirs, which is t_mirror's failure mode with the two halves too
@@ -219,8 +219,12 @@ def main():
         "DRVM_SND": s["DRVM_IMG_SND"]                       # its image...
                     + s["SBL_DMASZ"] // 1024                # sbl_dma_map
                     + s["SBL_POOLKB"],                      # sbl_pool_get, top rung
-        "DRVM_HDD": s["DRVM_IMG_HDD"]
-                    + s["HD_MAXVOL"] * s["HDD_LISTKB"],     # one per mounted volume
+        # NO CLAIM AT ALL. This was `+ HD_MAXVOL * HDD_LISTKB`, a 6KB listing
+        # buffer per mounted volume, and SPEC.md 22.6 retired the donation -
+        # the kernel lists every volume into its own `.lowbss` now. HD_MAXVOL
+        # must NOT come back here: a mounted partition is a row of the
+        # driver's bss, which ships inside the image and is already counted.
+        "DRVM_HDD": s["DRVM_IMG_HDD"],
         # **THE POOL, NOT ONE RING A SLOT** (SPEC.md 72.21). This was
         # NET_SOCKS * (rx + tx), which is exactly the arithmetic the ring pool
         # exists to break: a slot is 128 bytes of bss and a ring pair is 9,216
@@ -238,6 +242,16 @@ def main():
         # ...and nor does the absolute mouse: it hooks no vector, owns no port
         # and keeps no buffer, so the image IS the whole footprint
         "DRVM_VMM": s["DRVM_IMG_VMM"],
+        # ...nor does the CH375 USB mouse (SPEC.md 9.12): its one buffer is
+        # the 64-byte descriptor, which is in the image, and its worker runs
+        # on SCH_DRV_STK of the KERNEL's stack rather than on a claim.
+        #
+        # THE ROW ARRIVED WITHOUT THIS LINE and every run of this file died on
+        # a KeyError before reaching section 4 - a gate that does not fail, it
+        # CRASHES, so nothing after it was checked at all.  `ROWS` is derived
+        # from drv_memk and this table is written by hand, so a new driver
+        # takes the file out until somebody adds its term.
+        "DRVM_USBM": s["DRVM_IMG_USBM"],
     }
     for title, total, _img, _drv in ROWS:
         eq(s.get(total), want[total],
@@ -268,6 +282,66 @@ def main():
               "row's largest claim is bounded by the driver or the machine, so "
               "a '+' here would be telling the user the number is open-ended "
               "when it is not")
+
+    # --- 5. a CLASS total, which is what the caption QUOTES -----------------
+    # SPEC.md 51.12.1: the ceiling a caption prints - `Hard drives (Up to
+    # 32K)` - is the sum of drv_memk over the rows of that class, and every
+    # term of it is fixed at assembly time.  So it is not a call any more; it
+    # is DRVM_CEIL_DISK / DRVM_CEIL_NET, an `equ` in kernel/driver.inc
+    # mirrored into apps/os88api.inc.  This file is the one that can check the
+    # SUM, which nasm cannot: a %if in driver.inc pins each constant to its
+    # one drv_memk row, and what it CANNOT see is a SECOND row of the same
+    # class being added - which would move the real ceiling and leave both the
+    # kernel's constant and the SDK's agreeing with each other and wrong.
+    #
+    # ...and the same sum still has to fit the caption's fixed TWO-character
+    # hole.  dos_mem_numn writes the digits backwards and stops when the field
+    # is full, so a three-digit total does not overflow the label, it prints
+    # the LOW TWO DIGITS: 132 reads as 32.  A wrong number that looks right,
+    # on the one page whose whole job is telling the user how much memory they
+    # will get.
+    #
+    # The field was three wide for exactly this fear, which cost a blank
+    # column on every machine against a driver that has not been written.  A
+    # bound is better than padding, and this is the file that can state it:
+    # the sum is over the same terms re-derived above, so it moves when a
+    # driver moves.  ONLY the two classes the page captions - DRVC_FILE is not
+    # on it, and asserting a class nobody prints would be a rule about nothing.
+    # ...re-read, because `src` was re-bound to a path inside section 2's loop
+    dsrc = open(os.path.join(ROOT, "kernel/driver.inc"), errors="replace").read()
+    rows = re.search(r"^drv_tab:(.*?)^drv_memk:", dsrc, re.M | re.S)
+    klass = re.findall(r"^\s*db\s+(DRVC_\w+)\b", rows.group(1), re.M) \
+        if rows else []
+    eq(len(klass), len(ROWS), "every drv_tab row names a class",
+       "the sum below is per CLASS, so a row whose class this cannot see is a "
+       "row silently left out of it")
+    api = os.path.join(ROOT, "apps/os88api.inc")
+    asrc = open(api, errors="replace").read()
+    for want_cls, width, ceil in (("DRVC_DISK", 2, "DRVM_CEIL_DISK"),
+                                  ("DRVC_NET", 2, "DRVM_CEIL_NET")):
+        total = 0
+        for (title, memk, _img, _drv), cls in zip(ROWS, klass):
+            if cls == want_cls:
+                total += s.get(memk, 0) & ~plus
+        for where, src in (("kernel/driver.inc", dsrc),
+                           ("apps/os88api.inc", asrc)):
+            m = re.search(r"^%s\s+equ\s+(\d+)" % ceil, src, re.M)
+            eq(int(m.group(1)) if m else -1, total,
+               "%s in %s is %s's ceiling" % (ceil, where, want_cls),
+               "SPEC.md 51.12.1: the caption quotes this constant instead of "
+               "walking drv_memk at run time, so it has to BE the sum. "
+               "driver.inc's own %if pins it to one row and t_mirror keeps "
+               "the two files level; this is the check that sees a SECOND "
+               "row of the class, which neither of those can")
+        check(0 < total < 10 ** width,
+              "%s sums to %d KB, which fits the caption's %d digits"
+              % (want_cls, total, width),
+              "apps/dos/dos.asm draws this into a %d-wide hole and "
+              "dos_mem_numn DROPS the high digits rather than refusing - widen "
+              "dos_mhddk/dos_mnetk, DOS_MCKW and dos_mem_num%d together, or the "
+              "page quotes a number that is wrong and looks fine (SPEC.md "
+              "96.36.7.1)" % (width, width),
+              got=total, want="1..%d" % (10 ** width - 1))
 
     print("t_drvmem: %d rows, %d images re-measured, %d constants resolved"
           % (len(ROWS), seen, len(s)))

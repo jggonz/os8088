@@ -6,7 +6,7 @@ mistakes that made the last bisect void.
     python3 tools/os88bisect.py sample dispsize --at HEAD --at f8af49e
     python3 tools/os88bisect.py search dispsize --good f8af49e --bad HEAD
 
-WHY THIS EXISTS.  `docs/plans/HANDOFF-SOAK-FINDINGS.md` E1 is a bisect that was
+WHY THIS EXISTS.  The pass-3 soak ran a bisect that was
 published-adjacent and wrong.  It named a commit whose entire diff to shipped
 code is four comment lines.  Three errors stacked, and every one of them is
 cheap to repeat by hand and impossible to repeat through this file:

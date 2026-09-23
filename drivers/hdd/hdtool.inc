@@ -162,10 +162,13 @@ hd_tool_need:
     jc .fail                    ; it even if we never get to free it - and
     mov [hd_tseg], dx           ; FROM THE TOP (SPEC.md 50.3.2.1): [hd_tfar]
                                 ; is PKG_DISP:[hd_tseg], so this image's base
-                                ; is its CS and it can never move. 13KB of
-                                ; pinned claim in the middle of the arena is
+                                ; is its CS and it can never move. HDTOOL_KB
+                                ; of pinned claim in the middle of the arena is
                                 ; also the largest single thing this driver
-                                ; ever puts there
+                                ; ever puts there - and the figure is DERIVED
+                                ; from the tool image by the Makefile, so it is
+                                ; not written out here: it said 13 while the
+                                ; constant was 14 (SPEC.md 52.10.14)
 
     mov es, dx
     xor bx, bx
@@ -330,17 +333,120 @@ hd_tool_open:
     clc
     jmp short .out
 .nofile:
-    mov word [hd_msg], hd_s_nosys
+    mov byte [hd_msgc], HDM_NOSYS
     stc
     jmp short .out
 .norun:
-    mov word [hd_msg], hd_s_notool
+    mov byte [hd_msgc], HDM_NOTOOL
     stc
 .out:
     pop bp
     pop bx
     pop ax
     ret
+
+; =============================================================================
+; The Control Panel page, which is in the OTHER image (SPEC.md 52.13)
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; hd_cp_thunk - one page callback, forwarded (module internal)
+; in:  AL = an HDT_*, and DI/DX/CX/BX exactly as the kernel passed them
+; out: whatever the page answered
+; clobbers: it is a callback's callback
+;
+; THE LOAD IS THE ONLY NEW FAILURE and the arguments are the only new problem.
+; hd_tool_need reads a file and claims memory, so it spends every register the
+; page was handed - which is why they are banked ACROSS the load and restored
+; before the call, rather than trusted through it.
+;
+; Nothing here is a repaint trigger: a page that is already up stays up, and
+; hd_tool_need returns at its first compare once the image is in.
+; -----------------------------------------------------------------------------
+hd_cp_thunk:
+    push bx
+    push cx
+    push dx
+    push di
+    push ax                     ; the verb, across a load entitled to spend it
+    call hd_tool_need
+    pop ax
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    jc .nofile
+    call hd_tool_call
+    ret
+.nofile:
+    mov byte [hd_msgc], HDM_NOSYS
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_cp_paint - DSV_CPPAINT, and the ONE that must draw when the load fails
+; in:  DI = pane left, DX = pane top; the pane is white-filled, gfx lock HELD
+; out: nothing
+;
+; The other three may simply do nothing when the image will not come in - a
+; click that lands on nothing is a click that lands on nothing. A PAINT may
+; not: the kernel has just white-filled the pane and will not come back, so a
+; page that draws nothing is a blank rectangle with no explanation in it,
+; which is SPEC.md 47 rule 5's failure exactly. So the resident keeps ONE
+; string and one line of text - the only part of the page that did not move.
+; -----------------------------------------------------------------------------
+hd_cp_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov al, HDT_PAINT
+    call hd_cp_thunk
+    jnc .out
+    mov si, hd_s_nosys          ; the refusal, lettered where the page would
+    mov cx, di                  ; have put its caption
+    add cx, HDP_LX
+    add dx, HDP_CAPY
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+hd_cp_click:
+    push ax
+    mov al, HDT_CLICK
+    call hd_cp_thunk
+    pop ax
+    ret
+
+hd_cp_up:
+    push ax
+    mov al, HDT_UP
+    call hd_cp_thunk
+    pop ax
+    ret
+
+hd_cp_drag:
+    push ax
+    mov al, HDT_DRAG
+    call hd_cp_thunk
+    pop ax
+    ret
+
+hd_s_nosys:  db 'Need the system disk', 0   ; THE ONE STRING THE RESIDENT
+                                ; KEEPS, and hd_cp_paint above is why: a
+                                ; refused paint has to say so in the pane the
+                                ; kernel just cleared
+HDP_LX       equ 2              ; ...and the two coordinates that refusal
+HDP_CAPY     equ 120            ; needs, which are cppage.inc's own
 
 ; -----------------------------------------------------------------------------
 ; hd_tool_reap - give the tool's memory back (DSV_CPCLOSE, SPEC.md 31.9.1)
@@ -443,6 +549,16 @@ hd_svc:
     je hd_svc_cfgmark
     cmp al, HSV_MSG
     je hd_svc_msg
+    cmp al, HSV_STATE
+    je hd_svc_state
+    cmp al, HSV_SEL
+    je hd_svc_sel
+    cmp al, HSV_GEOM
+    je hd_svc_geom
+    cmp al, HSV_MOUNTDEV
+    je hd_svc_mountdev
+    cmp al, HSV_UNMOUNTDEV
+    je hd_svc_unmountdev
 %ifdef INSTBENCH
     cmp al, HSV_CTRS
     je hd_svc_ctrs
@@ -467,7 +583,7 @@ hd_svc_raw:
     mov es, [es:si+HRQ_SEG]     ; the buffer is in the TOOL's image
     call hd_raw
     pop es
-    jmp short hd_svc_out
+    jmp hd_svc_out
 
 ; --- HSV_SYNC: our device table into the tool's copy of it -------------------
 ; Not a snapshot the tool keeps for ever: it asks again whenever it is about
@@ -488,7 +604,41 @@ hd_svc_sync:
     mov al, [hd_ndev]           ; ...and the two counts in AX, not after the
     mov ah, [hd_sel]            ; copy: see HSV_SYNC in hddabi.inc
     clc
-    jmp short hd_svc_out
+    jmp hd_svc_out
+
+; --- HSV_STATE: the three bytes the PAGE reads and this image owns ----------
+; A VERB OF ITS OWN and not two more registers out of HSV_SYNC, because
+; hd_svc pushes BX..ES on entry and hd_svc_out pops them: AX is the only
+; register that can carry an answer, and HSV_SYNC already spends both halves
+; of it. Writing them past the device table instead is what HSV_SYNC's own
+; comment refuses - it would make hdcom.inc's declaration order an unwritten
+; part of the ABI.
+hd_svc_state:
+    mov al, [hd_msgc]
+    mov [es:si+HRQ_RES], al     ; the caption the resident last set: a mount,
+                                ; a config load, or a tool that would not open
+    push cx
+    push di
+    xor ah, ah                  ; ...and which devices have a volume up, as a
+    mov cx, HD_MAXVOL           ; MASK. The page asked hd_vols exactly one
+    mov di, hd_vols             ; question and a byte answers it, so the table
+.mnt:                           ; stays wholly on this side (SPEC.md 52.13)
+    cmp byte [di+HDV_USED], 0
+    je .mnext
+    push cx
+    mov cl, [di+HDV_DEV]
+    mov al, 1
+    shl al, cl                  ; HD_MAXDEV is 4, so a byte holds them all
+    or ah, al
+    pop cx
+.mnext:
+    add di, HDV_SIZE
+    loop .mnt
+    mov [es:si+HRQ_VOL], ah
+    pop di
+    pop cx
+    clc
+    jmp hd_svc_out
 
 ; --- HSV_MOUNT / HSV_UNMOUNT -------------------------------------------------
 ; The volume table is OURS and stays ours: the tool names a partition and we
@@ -522,7 +672,7 @@ hd_svc_mount:
     mov ah, [es:si+HRQ_SLOT]    ; hd_mount_one filled says, and finding it here
     call hd_vol_of              ; is what spares the tool a sight of hd_vols
     mov [es:si+HRQ_RES], al
-    jmp short hd_svc_out
+    jmp hd_svc_out
 
 hd_svc_unmount:
     mov al, [es:si+HRQ_DEV]
@@ -531,18 +681,81 @@ hd_svc_unmount:
     mov [es:si+HRQ_RES], al     ; did anything go...
     mov [es:si+HRQ_VOL], ah     ; ...and WHICH volume, for SPEC.md 52.10.8
     clc
-    jmp short hd_svc_out
+    jmp hd_svc_out
 
 hd_svc_cfgmark:
     call hd_cfg_mark
     clc
-    jmp short hd_svc_out
+    jmp hd_svc_out
 
 hd_svc_msg:
-    mov word [hd_msg], hd_s_pick    ; HDM_PICK is the only one so far, and a
-    clc                             ; CODE is still the right shape: a string
-                                    ; in the tool's segment would render this
-                                    ; image's own bytes (SPEC.md 31.9)
+    cmp ah, HDM_N               ; ANY code now, and RANGE-CHECKED: it arrives
+    jae .bad                    ; from the other image, so it is input
+    mov [hd_msgc], ah
+    clc
+    jmp hd_svc_out
+.bad:
+    mov byte [hd_msgc], HDM_PICK
+    clc
+    jmp hd_svc_out
+
+; --- HSV_PAGE / HSV_SEL / HSV_GEOM / HSV_MOUNTDEV / HSV_UNMOUNTDEV ----------
+; The page's own writes, every one of them a thing this image owns: the
+; highlight hd_mount reads, the device table the transport addresses, and the
+; volume table the kernel registered against.
+; (HSV_PAGE is still allocated and still unimplemented: hd_page_repaint clears
+; the pane and redraws it through OSAPI itself, so there is nothing to ask.)
+hd_svc_sel:
+    mov al, [es:si+HRQ_DEV]
+    cmp al, [hd_ndev]           ; RANGE-CHECKED for hd_dev_row_ck's reason:
+    jae .bad                    ; the index crosses an image boundary
+    mov [hd_sel], al
+    clc
+    jmp hd_svc_out
+.bad:
+    stc
+    jmp hd_svc_out
+
+hd_svc_geom:
+    mov al, [es:si+HRQ_DEV]
+    call hd_dev_row_ck          ; DI = the row, CF = 1 = no such device
+    jc hd_svc_out
+    push ax
+    mov ax, [es:si+HRQ_CYL]
+    mov [di+HDD_CYL], ax
+    mov ax, [es:si+HRQ_HEADS]
+    mov [di+HDD_HEADS], ax
+    mov ax, [es:si+HRQ_SPT]
+    mov [di+HDD_SPT], ax
+    mov al, [es:si+HRQ_FLAGS]
+    mov [di+HDD_FLAGS], al
+    pop ax
+    call hd_geom_push           ; ...and the DRIVE is told, or it keeps
+    clc                         ; translating with what the probe left
+    jmp hd_svc_out
+
+hd_svc_mountdev:
+    mov al, [es:si+HRQ_DEV]
+    cmp al, [hd_ndev]
+    jae .bad
+    mov [hd_sel], al            ; hd_mount reads the highlight, and the page
+    call hd_mount               ; has just told us what it is
+    clc
+    jmp hd_svc_out
+.bad:
+    stc
+    jmp hd_svc_out
+
+hd_svc_unmountdev:
+    mov al, [es:si+HRQ_DEV]
+    cmp al, [hd_ndev]
+    jae .bad
+    mov [hd_sel], al
+    call hd_unmount
+    clc
+    jmp hd_svc_out
+.bad:
+    stc
 hd_svc_out:
     pop es
     pop di
@@ -565,5 +778,5 @@ hd_svc_ctrs:
     mov ax, [hd_bn_rst]
     mov [es:si+HRQ_C2], ax
     clc
-    jmp short hd_svc_out
+    jmp hd_svc_out
 %endif

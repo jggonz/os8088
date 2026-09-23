@@ -54,7 +54,15 @@
 ; and the kernel stages it at attach.
 ; -----------------------------------------------------------------------------
 rd_svc:
-    dw 0                        ; DSV_CAPS    - sound's, not ours
+    dw FSCAP_LOCAL              ; DSV_CAPS    - sound's word, and on a
+                                ; DRVC_FILE driver it is ours: OUR READS ARE
+                                ; MEMORY (SPEC.md 62.9.2.2). A store claim and
+                                ; a `rep movsw`, or an XMS block move - no
+                                ; wire, no seek, no motor - so the mount
+                                ; HARVESTS package icons off this volume
+                                ; instead of taking 62.9.2.1's cache-only
+                                ; pass. NET.DRV leaves it clear and keeps that
+                                ; pass, which is what it was written for
     dw 0                        ; DSV_FM
     dw 0                        ; DSV_STREAM
     dw 0                        ; DSV_TICK

@@ -46,6 +46,8 @@
 %include "fmt.inc"
 %include "tool.inc"
 %include "inst.inc"
+%include "cppage.inc"
+%include "iassoc.inc"
 
 ; -----------------------------------------------------------------------------
 ; hd_tentry - the dispatcher's landing site
@@ -68,6 +70,14 @@ hd_tentry:
     je hd_tshut
     cmp al, HDT_BUSY
     je hd_tbusy
+    cmp al, HDT_PAINT
+    je hd_page_paint            ; the page is ours now (SPEC.md 52.13), and
+    cmp al, HDT_CLICK           ; the kernel's own registers came through
+    je hd_page_click            ; hd_tool_call untouched - so these are the
+    cmp al, HDT_UP              ; kernel's cells reached one image further
+    je hd_page_up               ; out, with a verb in front of them
+    cmp al, HDT_DRAG
+    je hd_page_drag
     stc                         ; a verb from a newer resident than this image
     ret                         ; - refuse it rather than run another one
 

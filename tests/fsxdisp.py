@@ -55,17 +55,41 @@ directly, by writing the ports from the host on this machine:
                                    SHOW THIS, which is why the default machine
                                    is os8088_5150_both_gla_mono - the mono DIP
                                    makes the CGA the secondary.
-  a CGA keeps scanning nothing.    3D8h bit 3 clear -> 64,000 lit becomes 0 and
-                                   the counter holds at ~187 frames/s. That is
+  a CGA keeps scanning nothing.    3D8h bit 3 clear gates the video output and
+                                   the counter holds at ~215 frames/s. That is
                                    the card too, not the model: the CRTC still
                                    drives sync, the video output is gated off.
 
-So a dark monitor here is `frames == 0 OR nothing lit`, and the disjunction is
-still a real gate in both directions - an unblanked card is scanning AND lit,
-whichever it is. The CGA half then owes one thing more: SPEC.md 39.18.1 says
-blanking gates the SIGNAL and not memory, so while that card is dark its VRAM
-must still hold the desktop it was blanked on, which is read straight out of
-the guest (`vram`) rather than off the card.
+**BUT `nothing lit` IS NOT WHAT A DARK CGA READS HERE, AND THAT LINE COST THIS
+ROW A RED FOR NOTHING.** It used to say `3D8h bit 3 clear -> 64,000 lit
+becomes 0`, and on this tree the same write leaves **~840 of 128,000** - one
+horizontal run the renderer keeps through the gate. The desktop is gone (42,612
+pixels of 43,436 differ) and the card is as dark as the host can make it: with
+the machine inside the bracket, `fbuf` there and `fbuf` after a HOST-driven
+`3D8h <- [vid_cgamode] & ~8` on a bare desktop came back **pixel for pixel
+identical**. So the figure is MEASURED IN THE RUN now (`dark_lit` below) rather
+than remembered, and the gate is still 50x wide: dark is ~840 and a desktop is
+~43,400.
+
+**AND A CGA CAPTURE IS NOT REPEATABLE TO THE PIXEL, WHICH IS THE OTHER HALF.**
+Four `fbuf` captures of ONE STILL DESKTOP, one second apart, with no bracket,
+no key and nothing running, read `43404, 43404, 43412, 43412` - and the two
+pairs differ from each other by **1,376 pixels**, in the same band (x 216..359)
+every time. The picture sits in one of two rasterisations and moves between
+them on its own. So any pixel-exact comparison of two CGA captures is a coin
+flip, and the same-mode leg below - which asserted `lit == lit` across the
+bracket - was that coin flip with a kernel's name on it.
+
+What replaces it is the thing SPEC.md 39.18.3 is actually about, read out of
+the guest: **`[vid_ndisp]`**. A same-mode bracket must leave it at 2 and a mode
+bracket must collapse it to 1, and that is exact at any emulator speed and on
+any renderer. The pixels then only have to answer the coarse question they can
+answer - is the other monitor carrying a desktop, or is it dark?
+
+The CGA half owes one thing more: SPEC.md 39.18.1 says blanking gates the
+SIGNAL and not memory, so while that card is dark its VRAM must still hold the
+desktop it was blanked on, which is read straight out of the guest (`vram`)
+rather than off the card.
 """
 import argparse
 import os
@@ -106,6 +130,39 @@ def vlit(m, kind):
     """Lit pixels in the card's own MEMORY, which blanking must not touch."""
     w, h, rows = m.vram(kind)
     return sum(sum(r) for r in rows), w * h
+
+
+def dark_lit(m, S, sec, say):
+    """What THIS card reads when it is dark - MEASURED, in this run.
+
+    The host writes the very byte `vid_blank_kind` writes (SPEC.md 39.18.1:
+    the card's own mode shadow with the video-enable bit clear), reads the
+    card, and puts the byte back. It is one port write and it is undone before
+    anything else happens; the kernel's `[vid_cgamode]` shadow is never
+    touched, so the next blank or unblank it does is unaffected.
+
+    **IT IS MEASURED BECAUSE THE REMEMBERED FIGURE WAS WRONG.** The header's
+    `becomes 0` was taken on an older tree, and a dark CGA here reads ~840 of
+    128,000 - a renderer artifact rather than a kernel one, since the kernel's
+    own blank and this one come back PIXEL FOR PIXEL IDENTICAL. A row that
+    re-takes the number cannot go stale that way again.
+
+    Returns None where the dark is unobservable - a mono secondary, whose
+    3B8h bit 3 MartyPC does not model (header). The caller then asserts
+    nothing about it, which is what this row already did.
+    """
+    if sec["type"] != "cga":
+        return None
+    cm = m.read(S("vid_cgamode"), 1)[0]
+    m.outb(0x3D8, cm & ~8)
+    time.sleep(0.5)
+    n = lit(m.fbuf(card=sec["idx"])[2])
+    m.outb(0x3D8, cm)
+    time.sleep(0.5)
+    back = lit(m.fbuf(card=sec["idx"])[2])
+    say("a DARK %s reads %d lit (measured here: 3D8h <- %02X and back); "
+        "the desktop is %d" % (sec["type"], n, cm & ~8, back))
+    return n, back
 
 
 def main(argv):
@@ -163,10 +220,15 @@ def main(argv):
             dockpos.click_row(m, mo0, dockpos.CPK_AY)
             if m.read(S("dock_cfg"), 1)[0] != 6:
                 raise RuntimeError("fsxdisp: could not enable right auto-hide")
+            # The LIVE rect rather than the whole-strip one: the strip's
+            # own rect is DOCK.DRV's private geometry and lives in the module
+            # image (SPEC.md 30.5), while the live rect is what every painter
+            # in the kernel reads - so this is the stronger of the two to
+            # find unchanged after the bracket.
             dock_bounds = {n: m.read(S(n), 2) for n in
                            ("vid_band_x0", "vid_band_xe", "vid_dock_y0",
-                            "vid_desk_zx", "dock_sx1", "dock_sy1",
-                            "dock_sx2", "dock_sy2")}
+                            "vid_desk_zx", "dock_lx1", "dock_ly1",
+                            "dock_lx2", "dock_ly2", "dock_thk")}
         dispcp.close_panel(m, mo0, S, os88marty.settle, card=gate_card)
 
         if a.dock and m.read(S("mod_tab"), 2) != b"\x00\x00":
@@ -218,22 +280,62 @@ def main(argv):
             fail.append("the secondary is not carrying a desktop before the "
                         "bracket")
 
+        # THE DARK FIGURE FOR THIS CARD, TAKEN NOW, so the two legs below are
+        # measured against this run rather than against a number in a comment.
+        dark = dark_lit(m, S, sec, say)
+        if dark is not None:
+            n_dark, n_back = dark
+            if n_back < 0.30 * w * h:
+                sys.exit("fsxdisp: the host's own blank did not come back "
+                         "(%d lit) - the machine has been perturbed and "
+                         "nothing below would mean anything" % n_back)
+            # The slack is a fraction of THE DESKTOP and not of the dark
+            # figure, because what this ceiling has to separate is those two:
+            # ~840 against ~43,400, so 2% of the desktop puts it an order of
+            # magnitude clear of both.
+            dark_ceiling = n_dark + 0.02 * n_before
+        else:
+            dark_ceiling = None
+
         # --- §39.18.3's guard: a SAME-MODE bracket changes NOTHING about
         # displays. This used to be the leg the dark was asserted on, and it
         # was right until §39.18.3 moved the collapse into fsx_mode on two
         # field reports. Asserting it the other way round is what keeps those
         # reports fixed.
+        #
+        # **THE ASSERTION IS `[vid_ndisp]` AND NOT THE PIXELS**, which is a
+        # correction: this compared `lit` across the bracket for equality, and
+        # a CGA capture is not repeatable to the pixel - four captures of one
+        # STILL desktop, a second apart with nothing running, sit in two
+        # rasterisations 1,376 pixels apart (header). So the leg failed or
+        # passed on which one the emulator happened to be in, for a kernel
+        # that had done nothing either way. §39.18.3's subject is exactly the
+        # byte read here: `vid_fsx_enter` used to set it to 1 for every
+        # bracket, and a bracket that sets no mode must leave the machine two
+        # displays wide. The pixels still answer the coarse question, which is
+        # the one they can answer: the other monitor is still lit and still
+        # scanning, rather than dark.
         m.key("KeyX")
         time.sleep(2.5)
+        nd_same = m.read(S("vid_ndisp"), 1)[0]
         f_same = fps(m, sec["idx"])
         n_same = lit(m.fbuf(card=sec["idx"])[2])
-        say("secondary in a SAME-MODE bracket: %d frames/s, %d lit" % (f_same,
-                                                                       n_same))
-        if not f_same or n_same != n_before:
-            fail.append("a SAME-MODE bracket changed the secondary (%d fps, "
-                        "%d lit against %d) - §39.18.3 moved the collapse into "
-                        "fsx_mode, so a bracket that sets no mode must change "
-                        "nothing about displays" % (f_same, n_same, n_before))
+        say("secondary in a SAME-MODE bracket: %d frames/s, %d lit, "
+            "[vid_ndisp] = %d" % (f_same, n_same, nd_same))
+        if nd_same != 2:
+            fail.append("a SAME-MODE bracket collapsed the machine to "
+                        "[vid_ndisp] = %d - §39.18.3 moved the collapse into "
+                        "fsx_mode, so a bracket that sets no mode must leave "
+                        "every virtual coordinate on the machine working"
+                        % nd_same)
+        if not f_same:
+            fail.append("a SAME-MODE bracket stopped the secondary scanning "
+                        "- it should not have been touched at all (§39.18.3)")
+        if n_same < 0.30 * w * h:
+            fail.append("a SAME-MODE bracket took the secondary from %d lit "
+                        "to %d - it darked a monitor the app did not ask for "
+                        "(§39.18.3: the app took the machine, not the "
+                        "monitors)" % (n_before, n_same))
         m.key("Enter")
         os88marty.settle(m, card=pri["idx"])
 
@@ -247,10 +349,28 @@ def main(argv):
         say("mode bracket via %s (primary is %s)" % (mode_key, pri["type"]))
         m.key(mode_key)
         time.sleep(2.5)
+        nd_mode = m.read(S("vid_ndisp"), 1)[0]
         f_during = fps(m, sec["idx"])
         n_during = lit(m.fbuf(card=sec["idx"])[2])
-        say("secondary inside the bracket:  %d frames/s, %d lit" % (f_during,
-                                                                    n_during))
+        say("secondary inside the bracket:  %d frames/s, %d lit, "
+            "[vid_ndisp] = %d" % (f_during, n_during, nd_mode))
+        # ...and the COLLAPSE, which is the same-mode leg's assertion the
+        # other way up and is what makes that one mean something: a mode set
+        # is the one thing that makes the other displays' geometry
+        # meaningless, so it is the one thing that may take them (§39.18.3).
+        if nd_mode != 1:
+            fail.append("a MODE bracket left [vid_ndisp] at %d - fsx_mode is "
+                        "where the collapse lives now, and without it the "
+                        "app is drawing into a framebuffer of one display "
+                        "with the machine still claiming two (§39.18.3)"
+                        % nd_mode)
+        # **DARK IS `dark_ceiling` AND NOT ZERO** (header): a blanked CGA
+        # here reads ~840 of 128,000 rather than 0, the kernel's blank and a
+        # host-driven one being pixel for pixel identical, so `nothing lit`
+        # failed this row against a card that really was as dark as the port
+        # can make it.
+        if dark_ceiling is not None and 0 < n_during <= dark_ceiling:
+            n_during = 0        # dark, by this run's own measurement of dark
         if sec["type"] == "mda" and f_during and n_during:
             # NOT a failure, and not a kernel question: MartyPC does not model
             # 3B8h bit 3. Measured from the host on this machine with the
@@ -268,7 +388,10 @@ def main(argv):
             fail.append("the secondary is still scanning at %d frames/s with "
                         "%d pixels lit inside an fsx bracket - nothing "
                         "maintains it, so what it is showing is frozen "
-                        "(SPEC.md 39.18)" % (f_during, n_during))
+                        "(SPEC.md 39.18). A card this run measured DARK at "
+                        "%s lit, so this is a picture and not the renderer's "
+                        "residue" % (f_during, n_during,
+                                     dark[0] if dark else "?"))
         elif f_during:
             # A card gated off rather than stopped - the CGA's way. Its memory
             # is then still readable and must be untouched: 39.18.1 blanks the

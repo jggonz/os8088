@@ -470,12 +470,22 @@ cs_step:
     mov byte [cs_msg], CSG_NONE
 .warned:
     ; --- the turn: TURNK sin(roll) a tick, and the rudder ------------------
+    ;     THE SIGN IS cos(pitch)'s (SPEC.md 88.7.8.3). Lift is along the body's
+    ;     up axis and the track is sign(cos pitch) x the heading, so the lift's
+    ;     component to the track's RIGHT works out at exactly sign(cp) sin(roll)
+    ;     - ch^2 + sh^2 cancels the rest - and past the vertical a right bank
+    ;     turned LEFT. 88.7.8.1's four instructions on the same test
     mov ax, [cs_roll]
     push di
     call cs_sin
     pop di
     mov bx, [di + CSP_TURNK]
     MUL14
+    mov bx, [cs_pitch]
+    add bx, 16384
+    jns .bank
+    neg ax
+.bank:
     add [cs_hdg], ax
     mov al, [cs_kyaw]
     cbw
@@ -1818,6 +1828,43 @@ cs_crash:
 ;                 (SPEC.md 88.8). Once a tick.
 ; -----------------------------------------------------------------------------
 cs_sound_step:
+    ; --- ONCE PER WALL-CLOCK TICK, WHEREVER THE PROGRAM HAPPENS TO BE --------
+    ;     (SPEC.md 88.8.2.1.2). This used to run once per SIM tick, which is
+    ;     not the same thing: cs_steps owes a frame up to CS_MAXSTEP of them
+    ;     and the .sim loop runs them BACK TO BACK at the top, so the note
+    ;     moved three times in a burst and then stood still for the 130-280 ms
+    ;     the frame takes to draw. What the ear got was one change a FRAME -
+    ;     4 to 8 a second on a 4.77 MHz machine - and the steps had to be that
+    ;     much bigger to cover the ground.
+    ;
+    ;     So the tick is the gate and the call is free when it has not moved:
+    ;     the burst collapses to one step, which is RIGHT (a burst is catching
+    ;     up on SIMULATION, not on time), and cs_scene calls this per object
+    ;     so the ticks that elapse during the draw are serviced where they
+    ;     fall. The stall's cadence gets the same correction for nothing -
+    ;     [cs_stallt] counted CALLS and now counts ticks.
+    ;     AND IT HAS TO TEST THE PAUSE ITSELF NOW (SPEC.md 88.8.1). That
+    ;     section put the release on the KEY precisely so the frame would not
+    ;     have to carry a compare - which was sound while the only caller was
+    ;     the sim loop, and a pause is exactly the thing that skips it. The
+    ;     RENDER reaches here now and a render runs while paused, so P
+    ;     released the tone and the very next object put it back.
+    cmp byte [cs_pause], 0
+    jne .out                        ; ...and before the far call, so a paused
+                                    ; frame costs a compare an object
+    call OSAPI_GET_TICKS
+    cmp ax, [cs_sndtk]
+    je .out
+    mov [cs_sndtk], ax
+.tick:                              ; A SERVICED TICK, and the label is for
+                                    ; tests/skiessound.py - it emits nothing.
+                                    ; A breakpoint on cs_step stopped being
+                                    ; one-per-tick the moment the gate above
+                                    ; went in, so a row that wants to watch
+                                    ; the note needs the tick and not the
+                                    ; call. LOCAL on purpose: a global here
+                                    ; would re-open nasm's local scope and
+                                    ; every `.x` below would belong to it
     xor ax, ax                      ; AX = the tone wanted
     cmp byte [cs_sound], 0
     je .want
@@ -1839,15 +1886,106 @@ cs_sound_step:
     jg .swup
     neg ax                          ; sink: down from the top
     add ax, CS_SWOOPHI
-    jmp short .want
+    jmp .want                       ; NEAR: the engine block below is past a
+                                    ; rel8 now (SPEC.md 88.8.2.1)
 .swup:
     add ax, CS_SWOOPLO              ; lift: up from the bottom
-    jmp short .want
+    jmp .want
 .noswoop:
-    mov ax, [cs_thr]
-    or ax, ax
-    jz .st
-    add ax, 50
+    ; --- THE ENGINE, OFF ITS OWN RECORD (SPEC.md 88.8.2) --------------------
+    ;     Every aeroplane used to be `[cs_thr] + 50`, so a Fouga Magister and
+    ;     an Icon A5 were the same note at the same lever. An aeroplane with
+    ;     no engine has no record and is silent, which is the one case the
+    ;     old `or ax, ax` was really catching - and with a record, a SHUT
+    ;     throttle is an IDLE and not silence, because an engine that is
+    ;     running is never silent.
+    mov di, [cs_plane]
+    mov di, [di + CSP_SND]
+    or di, di
+    jz .quiet                       ; no engine: the sailplane, and not a
+                                    ; throttle number played as hertz
+    mov ax, [cs_thr]                ; the LEVER, 0..100 - fifty whole steps...
+    test byte [di + CSS_FLAGS], CSSF_SPOOL
+    jz .lever
+    mov bx, [cs_plane]              ; ...or, on a jet, the thrust the engine
+    mov bx, [bx + CSP_THRUST]       ; HAS: 88.7.5's spool, made audible - and
+    or bx, bx                       ; scaled off cs_thracc's 8.8 DIRECTLY,
+    jz .lever                       ; because rounding it through a percentage
+    mov cl, 8                       ; first would throw away the one source on
+    shl bx, cl                      ; this aeroplane with resolution to spare
+    mov ax, [cs_thracc]             ; and put the steps back (88.8.2.1)
+    mul word [di + CSS_SPAN]
+    div bx
+    jmp short .add
+.lever:
+    mul word [di + CSS_SPAN]
+    mov bx, 100
+    div bx
+.add:
+    add ax, [di + CSS_IDLE]
+    ; --- AND THE NOTE HAS INERTIA, AND A PITCH CEILING (SPEC.md 88.8.2.1) ---
+    ;     [cs_eng] is the engine's own note and it CLOSES on what the engine
+    ;     wants rather than arriving there, by the LOWER of two steps:
+    ;
+    ;       CSS_LAG - a share of the GAP, which is the engine responding
+    ;       CSS_CAP - a share of the NOTE, which is a constant INTERVAL
+    ;
+    ;     and never less than one hertz, or a small gap would stand for ever.
+    ;     The first alone was what shipped and the field heard what it misses:
+    ;     a share of the gap is constant in hertz and wild in interval, so the
+    ;     Magister's first step out of idle was 65 Hz at 180 - a musical
+    ;     FOURTH - and it "still plays notes as it goes up or down". A share
+    ;     of the note glides the bottom of a range at the same rate as the top.
+    mov bx, [cs_eng]
+    or bx, bx
+    jz .prime                       ; ENTERING: start AT the note (88.8.2.1),
+    push ax                         ; because a ramp up to idle is a sound the
+    sub ax, bx                      ; aeroplane never makes
+    jz .same
+    jns .mag
+    neg ax
+.mag:                               ; AX = how far there is to go
+    mov cl, [di + CSS_LAG]
+    shr ax, cl
+    jnz .cap
+    inc ax
+.cap:
+    mov dx, bx
+    mov cl, [di + CSS_CAP]
+    shr dx, cl                      ; ...against a share of the note itself
+    jnz .pick
+    inc dx
+.pick:
+    cmp ax, dx
+    jbe .step
+    mov ax, dx                      ; the ceiling is the lower of the two
+.step:
+    pop dx                          ; what the engine wants, back
+    cmp bx, dx
+    jb .up
+    sub bx, ax                      ; ...and never PAST it, either way
+    cmp bx, dx
+    jae .put
+    jmp short .land
+.up:
+    add bx, ax
+    cmp bx, dx
+    jbe .put
+.land:
+    mov bx, dx
+.put:
+    mov [cs_eng], bx
+    mov ax, bx
+    jmp short .st
+.same:
+    pop ax                          ; the gap was nothing: the note stands
+    jmp short .st
+.prime:
+    mov [cs_eng], ax
+    jmp short .st
+.quiet:
+    xor ax, ax
+    mov [cs_eng], ax
 .st:
     cmp byte [cs_stall], 0
     je .want

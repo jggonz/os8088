@@ -23,7 +23,7 @@ be run side by side; a bound port is a gate reading the other one's answers.
 the machine asks the host for it and every byte under test is a byte this file
 chose.
 
-ELEVEN ASSERTIONS.
+TWELVE ASSERTIONS.
 
 1. THE CATALOG ARRIVES AND IS UNDERSTOOD. `wr_n` is 4, `wr_state` is WS_DONE
    and `wr_nodrv` is 0 - which is the whole stack under it (ARP, a handshake,
@@ -51,7 +51,7 @@ ELEVEN ASSERTIONS.
    sent.
 
 8. LOAD PROGRAM RUNS ONE OUT OF MEMORY. HELLO is selected and the button
-   clicked; `OSAPI_PKG_RUN` (SPEC.md 21.5) copies the fetched image into a
+   clicked; `OSAPI_PKG_START` (SPEC.md 21.5) copies the fetched image into a
    region of the kernel's own and a window titled HELLO appears. Nothing was
    written to a disk and nothing was read from one - the bytes came off the
    host's socket, through a claim, into a running instance.
@@ -59,8 +59,9 @@ ELEVEN ASSERTIONS.
 9. AN ARCHIVE, ADDED TO DISK (SPEC.md 92.13, 92.14). The fourth record is a
    `.WPK` this file packs with `tools/os88wire.py --archive` out of a tree
    with a `home`, three folders, entries at depths 0, 1 and 2, a STORED
-   entry, an LZSS entry of ~40KB, an EMPTY file and `build/hello.o88` last
-   with WAH_PROGRAM. Add to Disk, walked to B: exactly as assertion 7 walks
+   entry, an LZSS entry of ~40KB, an EMPTY file, `build/hello.o88` and
+   `build/mseg.o88` last with WAH_PROGRAM. Add to Disk, walked to B: exactly
+   as assertion 7 walks
    it, and after `quit` every file under `TREE/` on the B: image is compared
    byte for byte with the source it was packed from - folders included, by
    the FAT12 reader in this file. That is the LZSS decoder, the folder
@@ -69,11 +70,21 @@ ELEVEN ASSERTIONS.
 
 10. AN ARCHIVE, RUN FROM RAM (SPEC.md 92.14). Load Program on the same
    record. `RDPV_MOUNT` puts a store up, the instance stands on its root, the
-   tree lands there and the last entry - still in the claim - goes to
-   `OSAPI_PKG_RUN`. Asserted: a THIRD live volume appears in `dsk_vtab` and
-   it is `DVK_FILE` - RAMDISK.DRV serves FILES and not sectors (SPEC.md
-   62.9), and nothing else on this machine registers a volume - the status
-   cell says `Loaded`, and a HELLO window opens.
+   tree lands there and the last entry - the file this chain has just written
+   - is handed to `OSAPI_PKG_START` BY NAME (92.14.2). Asserted: a THIRD live
+   volume appears in `dsk_vtab` and it is `DVK_FILE` - RAMDISK.DRV serves
+   FILES and not sectors (SPEC.md 62.9), and nothing else on this machine
+   registers a volume - the status cell says `Loaded`, and a window titled
+   `MSEG n/n OK` opens, which is the PARTED program's own verdict on its
+   parts having read every one of them back out of its file on the store.
+
+12. THE FORM THE LAUNCH TOOK (SPEC.md 92.14.2), read off the Wire's own bss
+   at the same moment. `[wr_rlen]` is 0 and `[wr_fseg]` is 0: the first says
+   the by-name arm was taken rather than the image one - which refuses a
+   parted package outright (21.5.1) - and the second says the decode claim
+   went back BEFORE `ld_alloc` asked for a region rather than after it, which
+   is what stops the package being in the heap twice at the one moment it
+   must not be. Assertion 10's title cannot see the ordering and this can.
 
 11. THE CLIP ASSERTION (SPEC.md 92.6.1). The Wire's two buttons are drawn at
    absolute coordinates from the WAKE handler, and Load Program has just put
@@ -123,6 +134,7 @@ import os88qemu                                            # noqa: E402
 import os88geom                                            # noqa: E402
 import os88wire                                            # noqa: E402
 import os88build                                       # noqa: E402
+import os88parts                                       # noqa: E402
 
 S = os88sym.linear
 SOCK = "build/qmp.sock"
@@ -168,6 +180,10 @@ FIXTURE = {
 ARC_STEM = "TREEONE"
 ARC_HOME = "TREE"                       # the folder the whole tree lands under
 ARC_ROW = 3                             # ...and its row in the unfiltered list
+ARC_PROG = "MSEG.O88"                   # ...and the entry that carries
+                                        # WAH_PROGRAM: a package with PARTS,
+                                        # which is what SPEC.md 92.14.2 is
+                                        # about (see fixture_tree)
 SIDECAR = "MINES.O88"                   # what BIGONE's second file is called
                                         # in /wire/pkg/ and on the disk
 PICX, PICY = 208, 21                    # WR_PICX and the picture's y in the
@@ -210,7 +226,18 @@ def fixture_tree(root):
                         over 65,536 bytes, so the dword Content-Length and
                         the 32-bit byte count are read with a non-zero high
                         word
-    plus build/hello.o88 at depth 0, last and WAH_PROGRAM.
+    plus build/hello.o88 at depth 0 as a plain file, and build/mseg.o88 at
+    depth 0 LAST and WAH_PROGRAM.
+
+    **THE PROGRAM ENTRY IS THE PARTED PACKAGE ON PURPOSE** (SPEC.md 92.14.2).
+    An archive's launch used to be handed the decode claim as an IMAGE, and
+    the image arm refuses a package with parts for want of a file to read them
+    out of (21.5.1) - so this fixture is what an `LD_EBAD` at the very last
+    step of a chain that worked looks like. MSEG rewrites its own window title
+    to `MSEG n/n OK` once it has checked every part three ways, so assertion
+    10 reads the difference between `a window appeared` and `the parts came
+    off the RAM disk` out of the window record. HELLO.O88 stays in the tree as
+    an ordinary depth-0 file: the read-back at the bottom still wants one.
     """
     want = {}
 
@@ -258,6 +285,7 @@ def fixture_tree(root):
     put("A/1/EMPTY.DAT", b"")
     hello = open(os88build.at("build/hello.o88"), "rb").read()
     put("HELLO.O88", hello)
+    put(ARC_PROG, open(os88build.at("build/mseg.o88"), "rb").read())
     return want
 
 
@@ -308,7 +336,8 @@ def bss_offsets():
                 pass
     for want in ("wr_n", "wr_state", "wr_nodrv", "wr_filter", "wr_sel",
                  "wr_grey", "wr_ox", "wr_oy", "wr_sb", "wr_catseg",
-                 "wr_adone", "wr_an", "wr_aph", "wr_ramjob", "wr_msg"):
+                 "wr_adone", "wr_an", "wr_aph", "wr_ramjob", "wr_msg",
+                 "wr_fseg", "wr_rlen"):
         if want not in out:
             sys.exit("thewire: %s is not in apps/thewire/thewire.asm's bss "
                      "block - the block moved and every offset this file "
@@ -727,7 +756,7 @@ def main():
     os.makedirs(src, exist_ok=True)
     tree = fixture_tree(src)
     try:
-        wpk = os88wire.archive(src, home=ARC_HOME, program="HELLO.O88")
+        wpk = os88wire.archive(src, home=ARC_HOME, program=ARC_PROG)
     except os88wire.Refused as e:
         sys.exit("thewire: the fixture tree will not pack: %s" % e)
     open(os.path.join("build", ARC_STEM + ".WPK"), "wb").write(wpk)
@@ -916,7 +945,7 @@ def main():
             the four words the painter used - os88ui.inc's own "GEOMETRY IS A
             POINTER" discipline, from the outside. A y derived here instead
             missed the Load Program button by nothing visible and reported
-            OSAPI_PKG_RUN as broken.
+            OSAPI_PKG_START as broken.
             """
             return [u16(m.readseg(pseg, img + off[name] + i * 2, 2))
                     for i in range(4)]
@@ -992,7 +1021,7 @@ def main():
             no("wr_sel is %d after clicking the third row" % sel)
         if not grey & 1:
             no("Load Program is NOT greyed on a WF_DISK record: SPEC.md 92.7 "
-               "refuses it because OSAPI_PKG_RUN would run it with its "
+               "refuses it because OSAPI_PKG_START would run it with its "
                "overlay nowhere (wr_grey = %d)" % grey)
         if grey & 2:
             no("Add to Disk is greyed on a WF_DISK record, and Add to Disk is "
@@ -1090,13 +1119,13 @@ def main():
             after = dispcp.win_list(m, S)
             # **AND SAY WHICH SIDE FAILED.** [wr_job] still WJ_LOAD with the
             # transfer settled and the claim still held means the UI task went
-            # into OSAPI_PKG_RUN and did not come out - the Wire has done its
+            # into OSAPI_PKG_START and did not come out - the Wire has done its
             # whole half and the loader has the machine. Reported as that,
             # with the CPU's own registers, rather than as "no window
             # appeared", which reads as the package's fault.
             if (b("wr_job")[0] == 1 and b("wr_fseg", 2) != b"\0\0"
                     and b("wr_state")[0] in (WS_DONE, WS_FAIL)):
-                say("WEDGED INSIDE OSAPI_PKG_RUN - wr_job is still WJ_LOAD, "
+                say("WEDGED INSIDE OSAPI_PKG_START - wr_job is still WJ_LOAD, "
                     "the transfer settled at state %d and the claim %04X is "
                     "still held, so wr_pkgrun never returned."
                     % (b("wr_state")[0], w("wr_fseg")))
@@ -1117,7 +1146,7 @@ def main():
                 no("the host was never asked for /wire/pkg/HELLO.O88, so "
                    "Load Program never started a transfer at all")
             if len(after) <= len(before):
-                no("Load Program opened no window: OSAPI_PKG_RUN refused, or "
+                no("Load Program opened no window: OSAPI_PKG_START refused, or "
                    "the wake never ran the image")
             elif "HELLO" not in [t.upper() for t in titles]:
                 no("Load Program opened a window and it is not HELLO's: %r"
@@ -1125,7 +1154,7 @@ def main():
             else:
                 say("HELLO is running, and nothing it needs was ever on a "
                     "disk: the image came off the host's socket, through a "
-                    "claim, into OSAPI_PKG_RUN")
+                    "claim, into OSAPI_PKG_START")
                 # --- 11: THE CLIP ASSERTION (SPEC.md 92.6.1) ---------------
                 # HERE rather than after the archive's launch, and it is the
                 # same code path: what 92.6.1 is about is `wr_onwake` drawing
@@ -1135,7 +1164,7 @@ def main():
                 # the archive's own launch cannot run.
                 clip_check(m, mo, after[-1], shot, no, say)
         else:
-            no("apps/os88api.inc carries no OSAPI_PKG_RUN, so this build has "
+            no("apps/os88api.inc carries no OSAPI_PKG_START, so this build has "
                "no kernel half - the assertion above cannot run and its "
                "absence must not read as a pass")
 
@@ -1173,11 +1202,16 @@ def main():
                "with BIT_RAM - or RDPV_STATE answered a store it could not "
                "make. wr_grey = %d" % b("wr_grey")[0])
         before = dispcp.win_list(m, S)
+        nasked0 = len(srv.asked)        # what the host had been asked BEFORE
+                                        # this step - see the check below
         press("wr_ra")                            # Load Program
+        t0 = time.time()
+        settled = False
         for _ in range(240):
             time.sleep(0.5)
             if (b("wr_job")[0] == 0
                     and b("wr_state")[0] in (WS_DONE, WS_FAIL)):
+                settled = True
                 break
         time.sleep(2.0)
         shot("08-fromram")
@@ -1185,10 +1219,138 @@ def main():
         vols1 = live_vols(m)
         say("live volumes after: %r, windows %d -> %d, wr_state = %d"
             % (vols1, len(before), len(after), b("wr_state")[0]))
-        asked = b"".join(srv.asked).decode("latin1", "replace")
-        if "/wire/pkg/%s.WPK" % ARC_STEM not in asked:
-            no("the host was never asked for /wire/pkg/%s.WPK, so no archive "
-               "transfer started at all" % ARC_STEM)
+        # **A WAIT THAT RAN OUT IS NOT A LAUNCH THAT FAILED**, and saying so
+        # here is what stops every assertion below blaming the loader for a
+        # transfer that never got off the ground. This loop used to fall
+        # STRAIGHT THROUGH on a timeout, so a chain still in WS_WAIT was
+        # reported as "Load Program opened no window" - which reads as the
+        # package refusing, and sent a session through SPEC.md 21.5's four
+        # LD_* codes for a machine that had not yet sent a byte.
+        #
+        # The host's own count is what separates the two halves, and it is
+        # the only witness that can: `srv.asked` growing means the guest
+        # asked and the answer is the problem; `srv.asked` STANDING STILL
+        # with the server thread alive means the guest never asked, so
+        # neither the loader nor the host is in it.
+        if not settled and os.environ.get("WIRE_SOCKDUMP"):
+            # **`WIRE_SOCKDUMP=1` IS WHY THIS ROW'S LAST FAILURE WAS FOUND**,
+            # and it is kept because taking the readings was most of the work:
+            # the socket the Wire is waiting on out of ETHER.DRV's own bss,
+            # the stack's four state bytes, the kernel's task table and the
+            # gfx lock, all at the moment of the timeout.
+            #
+            # What it settled, when this hung for 903 seconds in WS_WAIT: the
+            # SYN WAS on the wire (SKO_TS = TS_SYNSENT to 10.0.2.2:8092 with
+            # its connect deadline armed and a million ticks past), the stack
+            # was innocent (eth_busy 00, eth_raw 00, eth_up 1, dns_sk FF,
+            # inst_parkreq 00, gfx_lock free) - and the Wire's worker was in
+            # the task table as READY and still never reached `wr_nstep`,
+            # which is a machine whose SCHEDULER has stopped. It had: mounting
+            # the RAM disk this very step mounts was writing 0xFF over
+            # interrupt vectors 0..15, and 8..15 are IRQ0..IRQ7.
+            #
+            # The lesson worth keeping is the shape. Every reading above is a
+            # byte of guest state; the diagnosis before them was inferred, and
+            # named `tcp_syn`, which had run correctly all along.
+            #
+            # It runs only on a failure and only when asked, so the green path
+            # pays nothing; `ether_syms` refuses a map that is not
+            # byte-for-byte build/ether.bin, so every offset it names is this
+            # driver's.
+            try:
+                import ethernet as _eth
+                es = _eth.ether_syms()
+                NETROW = 2
+                dseg = u16(m.read(S("drv_tab") + NETROW * 16 + 2, 2))
+                say("   ETHER.DRV at %04X  wr_hnd=%d"
+                    % (dseg, b("wr_hnd")[0]))
+                say("   dns_sk=%02X  eth_lasterr=%02X  eth_up=%d  "
+                    "eth_raw=%02X  eth_nrx=%d"
+                    % (m.readseg(dseg, es["dns_sk"], 1)[0],
+                       m.readseg(dseg, es["eth_lasterr"], 1)[0],
+                       m.readseg(dseg, es["eth_up"], 1)[0],
+                       m.readseg(dseg, es["eth_raw"], 1)[0],
+                       u16(m.readseg(dseg, es["eth_nrx"], 2))))
+                SK_SZ = 128
+
+                def _tick():
+                    q = m.read(0x46C, 4)
+                    return q[0] | (q[1] << 8) | (q[2] << 16) | (q[3] << 24)
+
+                # **IS THE WORKER IN THE TASK TABLE AT ALL?** T_STATE is
+                # 0 free / 1 ready / 2 sleeping and T_INST names the owning
+                # instance - so a worker that DIED and one that is parked
+                # for ever look different here, which is the whole question.
+                T_SIZE = 8
+                tt = m.read(S("sch_tasks"), T_SIZE * 12)
+                rows = []
+                for i in range(12):
+                    st, inst = tt[i * T_SIZE], tt[i * T_SIZE + 6]
+                    if st:
+                        rows.append("%d:st%d/inst%02X" % (i, st, inst))
+                say("   tasks: %s" % " ".join(rows))
+                # WHERE is the ready-but-idle worker? T_SP is its saved SP and
+                # task stacks live at LOW_SEG, so its frame names the routine.
+                sp4 = tt[4 * T_SIZE + 2] | (tt[4 * T_SIZE + 3] << 8)
+                say("   task4 T_SP=%04X frame=%s"
+                    % (sp4, m.read((0x1940 << 4) + sp4, 32).hex()))
+                say("   gfx_lock_flag=%02X own=%02X want=%02X last=%02X"
+                    % (m.read(S("gfx_lock_flag"), 1)[0],
+                       m.read(S("gfx_lock_own"), 1)[0],
+                       m.read(S("gfx_lock_want"), 1)[0],
+                       m.read(S("gfx_lock_last"), 1)[0]))
+                say("   eth_busy=%02X  inst_parkreq=%02X  sch_parked=%s"
+                    % (m.readseg(dseg, es["eth_busy"], 1)[0],
+                       m.read(S("inst_parkreq"), 1)[0],
+                       m.read(S("sch_parked"), 12).hex()))
+                own = m.read(S("wm_owner") + ww, 1)[0]
+                say("   wr_hired=%02X wr_gen=%02X wr_gen0=%02X  "
+                    "the Wire's window %d is owned by instance %02X"
+                    % (b("wr_hired")[0], b("wr_gen")[0], b("wr_gen0")[0],
+                       ww, own))
+                for pas in (0, 1):
+                    if pas:
+                        time.sleep(30)
+                    r = m.readseg(dseg, es["sk_tab"], 48)
+                    tmo = r[34] | (r[35] << 8)
+                    suna = r[10] | (r[11] << 8) | (r[12] << 16) | (r[13] << 24)
+                    say("   pass %d tick=%d  ST=%02X TS=%02X TMO=%d "
+                        "(tick-TMO=%d) TRY=%d FL=%02X ISN=%08X nrx=%d"
+                        % (pas, _tick(), r[0], r[1], tmo, _tick() - tmo,
+                           r[36], r[37], suna,
+                           u16(m.readseg(dseg, es["eth_nrx"], 2))))
+            except Exception as _e:          # noqa: BLE001
+                say("   (socket dump failed: %r)" % (_e,))
+        if not settled:
+            no("the archive chain never finished: %.0f s after Load Program "
+               "[wr_state] is %d and [wr_job] %d, where this step wants "
+               "WS_DONE (%d) or WS_FAIL (%d) with the job cleared. The host "
+               "was asked %d time(s) during the wait (server thread alive: "
+               "%s), so a count of 0 means THE GUEST NEVER SENT A REQUEST - "
+               "with the socket opened and sitting in the connect (WS_WAIT = "
+               "%d), which is the wire and not the launch. Nothing below "
+               "this line is evidence about OSAPI_PKG_START."
+               % (time.time() - t0, b("wr_state")[0], b("wr_job")[0],
+                  WS_DONE, WS_FAIL, len(srv.asked) - nasked0,
+                  srv.is_alive(), 2))
+        # **A NEW REQUEST, not any request.** This asserted that the path
+        # appeared ANYWHERE in `srv.asked`, and the Add chain a few steps up
+        # fetched the very same `.WPK` - so it was satisfied by that one and
+        # could never fail, whatever this step did. It is the count that has
+        # to move.
+        if len(srv.asked) == nasked0:
+            no("the host was asked for nothing at all during Load Program - "
+               "it had seen %d request(s) before and has seen %d since, so "
+               "no archive transfer started. (The Add chain's own fetch of "
+               "/wire/pkg/%s.WPK is why a plain `is it in srv.asked` check "
+               "passes here no matter what happens.)"
+               % (nasked0, len(srv.asked) - nasked0, ARC_STEM))
+        elif ("/wire/pkg/%s.WPK" % ARC_STEM
+              not in b"".join(srv.asked[nasked0:]).decode("latin1",
+                                                          "replace")):
+            no("the host was asked %d time(s) during Load Program and none "
+               "of them was for /wire/pkg/%s.WPK"
+               % (len(srv.asked) - nasked0, ARC_STEM))
         new_vols = [v for v in vols1 if v not in vols0]
         if not new_vols:
             no("no new volume appeared: RDPV_MOUNT never put a store up, so "
@@ -1199,17 +1361,70 @@ def main():
                % (new_vols[0][1], DVK_FILE))
         else:
             say("a store is mounted: volume %d, DVK_FILE" % new_vols[0][0])
+        # --- 12: THE FORM THE LAUNCH TOOK (SPEC.md 92.14.2) ----------------
+        # Read BEFORE the window, because it says which of the two failures
+        # below to expect. [wr_rlen] picks the form (21.5) and the archive arm
+        # writes ZERO into it - so a non-zero here is the image form, which
+        # refuses a parted package outright and holds the decode claim across
+        # ld_alloc while it does. [wr_fseg] is the claim itself, and it is
+        # zero because the arm gives it back BEFORE the launch rather than
+        # after: that ordering is the whole of what 92.14.2 buys on a 640KB
+        # machine, and it is the one thing here that a passing window title
+        # would otherwise hide.
+        say("after the launch: wr_rlen = %d, wr_fseg = %04X"
+            % (w("wr_rlen"), w("wr_fseg")))
+        if w("wr_rlen") != 0:
+            no("wr_rlen is %d after the archive's launch and SPEC.md 92.14.2 "
+               "writes 0 - a non-zero length is the IMAGE form (21.5), which "
+               "cannot run a package with parts and holds the decode claim "
+               "across ld_alloc" % w("wr_rlen"))
+        if w("wr_fseg") != 0:
+            no("wr_fseg is %04X after the archive's launch: the decode claim "
+               "was still held when OSAPI_PKG_START asked for a region, which "
+               "puts the package in the heap TWICE at the one moment it must "
+               "not be (SPEC.md 92.14.2)" % w("wr_fseg"))
+
+        # THE STATUS CELL IS READ ON BOTH ARMS, and the failing one needs it
+        # more: wr_pkgrun writes the LD_* code into it in words, because `it
+        # did not start` with no number is a bug report nobody can act on.
+        msg = m.readseg(pseg, w("wr_msg"), 48).split(b"\0")[0]
+        say("the status cell says %r" % msg.decode("latin1", "replace"))
         if len(after) <= len(before):
             no("Load Program on the archive opened no window, and the tree "
-               "carries HELLO.O88 last with WAH_PROGRAM (SPEC.md 92.14)")
+               "carries %s last with WAH_PROGRAM (SPEC.md 92.14). A chain "
+               "that wrote every file and then opened nothing is the LAUNCH "
+               "and not the transfer, and the status cell above carries the "
+               "LD_* code (kernel/loader.inc): 1 is LD_EDISK - the name did "
+               "not resolve on the store - 2 is LD_EBAD, which is the IMAGE "
+               "form refusing a parted package (SPEC.md 92.14.2), 4 is "
+               "LD_EABORT, the package's own entry proc refusing, and 5 is "
+               "LD_ENOMEM, no room for the region" % ARC_PROG)
         else:
             ttl = win_title(m, after[-1])
             say("the launched window is %r, wr_msg = %04X" % (ttl, w("wr_msg")))
-            if ttl.upper() != "HELLO":
-                no("the archive launched %r and its program entry is "
-                   "HELLO.O88" % ttl)
-            msg = m.readseg(pseg, w("wr_msg"), 48).split(b"\0")[0]
-            say("the status cell says %r" % msg.decode("latin1", "replace"))
+            # **THE TITLE IS MSEG'S OWN VERDICT ON ITS PARTS**, rewritten in
+            # its entry proc before OSAPI_WM_CREATE - so it is final the
+            # moment the window exists, and it is the difference between `a
+            # window appeared` and `the parts came off the RAM disk`. The
+            # count comes out of the package's own part table rather than
+            # being typed here, so adding a part to the fixture cannot leave
+            # this reading an old number (tests/pkgrun.py does the same walk).
+            blob = open(os88build.at("build/mseg.o88"), "rb").read()
+            nparts = len(os88parts.rows(blob[:blob[8] | (blob[9] << 8)]))
+            wantttl = "MSEG %d/%d OK" % (nparts, nparts)
+            if ttl != wantttl:
+                no("the archive launched %r and its program entry is %s, "
+                   "whose own verdict on its %d parts should read %r. A "
+                   "window that is not MSEG's at all is the wrong entry "
+                   "launched; an `MSEG n/%d` short of %d is the package "
+                   "running with its parts NOT read back out of the file on "
+                   "the store, which is the only thing the by-name form is "
+                   "for here (SPEC.md 92.14.2, 20.12)"
+                   % (ttl, ARC_PROG, nparts, wantttl, nparts, nparts))
+            else:
+                say("the parted program came up off the RAM disk with all "
+                    "%d parts read back out of its own file - the file this "
+                    "chain wrote seconds ago" % nparts)
             if not msg.startswith(b"Loaded"):
                 no("the status cell says %r and SPEC.md 92.14 says `Loaded "
                    "<title> from the Wire`" % msg)
@@ -1292,7 +1507,7 @@ def main():
 def have_pkg_run():
     """Has the kernel half landed? The SDK is the one place that says so."""
     src = open(os.path.join(ROOT, "apps", "os88api.inc")).read()
-    return "%define OSAPI_PKG_RUN" in src
+    return "%define OSAPI_PKG_START" in src
 
 
 if __name__ == "__main__":

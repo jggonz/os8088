@@ -65,7 +65,7 @@ belong in `os88test.py` - that runs rows, and these are about the RUN:
      not by running rows beside it.
 
 WHAT IT DOES NOT DO.  It does not decide whether a failure is real.  That is
-`docs/plans/HANDOFF-SOAK-FINDINGS.md`'s protocol - re-run alone on HEAD, then at the
+the classification protocol - re-run alone on HEAD, then at the
 base, and bisect only where those two disagree - and the first step is
 `os88test.py soak -k <row>` by hand.
 """
@@ -74,6 +74,7 @@ import errno
 import json
 import os
 import re
+import stat
 import shutil
 import signal
 import subprocess
@@ -139,6 +140,25 @@ def requirements():
     B = lambda *p: os.path.join(ROOT, "build", *p)
     req = []
 
+    # **/dev/null ITSELF**, because a container can get this wrong and the
+    # failures do not name it. It was a REGULAR FILE on this box for half of
+    # one soak: autoconf's ./configure dies on a spliced config.status, a
+    # `>/dev/null 2>&1` that a long-lived process holds O_RDWR GROWS THE FILE
+    # instead of discarding (measured: 1 MB written is 1 MB on disk, and a
+    # shell truncate under the holder does not reclaim it), `diff`, `cmp` and
+    # `test -s` against it answer wrongly, and at mode 0644 a non-root writer
+    # gets EACCES. A two-hour run is a long way to carry a question that
+    # costs one stat, so it is asked with the assembler rather than found.
+    req.append(("/dev/null", os.path.exists("/dev/null")
+                and stat.S_ISCHR(os.stat("/dev/null").st_mode),
+                "EVERYTHING - it is not a soak dependency so much as a "
+                "working box. A regular file here breaks ./configure, grows "
+                "without bound where output should vanish, and makes diff "
+                "and cmp against it lie.",
+                "mknod /dev/null.new c 1 3 && chmod 666 /dev/null.new \\\n"
+                "                     && mv -f /dev/null.new /dev/null"
+                "        (as root)"))
+
     req.append(("nasm", bool(shutil.which("nasm")),
                 "every build. Without it nothing under build/ can be made.",
                 _apt("nasm")))
@@ -154,13 +174,17 @@ def requirements():
                 "the `nasm3` row - the only thing that assembles this tree "
                 "with an nasm 3, which is what Homebrew installs and what "
                 "half the people building it have.",
-                "brew install nasm       (macOS: it is 3.x)\n"
-                "                  ...or build one and export "
-                "OS88_NASM3=<path>/nasm:\n"
-                "                     git clone --depth 1 -b nasm-3.02 "
-                "https://github.com/netwide-assembler/nasm.git\n"
-                "                     cd nasm && sh autogen.sh && "
-                "./configure && make"))
+                "tools/setup-nasm3.sh\n"
+                "                  (probes first, so it is instant on macOS "
+                "where brew's nasm\n"
+                "                   is already 3.x; on Linux it clones, "
+                "builds and prints the\n"
+                "                   `export OS88_NASM3=` line. The manual "
+                "route has three\n"
+                "                   traps that each report as something "
+                "else - the script\n"
+                "                   checks all three, and "
+                "docs/MARTYPC-DEBUG.md has the account)"))
 
     # The shipped artefacts. `all` builds these and the fast tier reads them;
     # a soak against a half-built tree fails rows for the tree's reason.
@@ -233,6 +257,18 @@ def requirements():
     # `os88test`'s prebuild now costs only the rows that DECLARED a failing
     # artefact: this one missing tool took a five-hour soak down at 37
     # minutes with 0 of 267 rows reported.
+    # Shell reserved words and no-binary builtins. `shutil.which` cannot find
+    # any of them, so without this list every recipe carrying a loop or a
+    # conditional reports its keyword as a missing tool.
+    _SHELL_WORDS = frozenset((
+        "for", "while", "until", "do", "done", "if", "then", "elif", "else",
+        "fi", "case", "esac", "in", "function", "select", "time",
+        "{", "}", "!", "[[", "]]", "(", ")",
+        "cd", "export", "local", "set", "shift", "source", "eval", "exec",
+        "trap", "unset", "alias", "declare", "readonly", "return", "exit",
+        ":", ".", "break", "continue", "wait", "umask",
+    ))
+
     try:
         sys.path.insert(0, os.path.join(ROOT, "tests"))
         import suite as _suite
@@ -253,9 +289,15 @@ def requirements():
                 cmd = w[0] if w else ""
                 # A leading `-` is an argument that got to the front of a line
                 # some other way; `/` and `$` are paths and make variables,
-                # neither of which this can answer for.
+                # neither of which this can answer for. And a SHELL KEYWORD is
+                # not a command at all - `which` cannot find one by
+                # construction, so a recipe with a loop in it reported the
+                # loop. `dirsw360`'s is `@for i in 01 02 ... done`, and the
+                # preflight named `for` as the tool it was missing, which is
+                # a fix nobody can apply.
                 if (cmd and not cmd.startswith("-") and "/" not in cmd
-                        and "$" not in cmd and not shutil.which(cmd)):
+                        and "$" not in cmd and cmd not in _SHELL_WORDS
+                        and not shutil.which(cmd)):
                     if f not in tools.setdefault(cmd, []):
                         tools[cmd].append(f)
         req.append(("declared artefacts", not tools,
@@ -401,8 +443,8 @@ def _stale_emulators():
     """Emulators already up that nobody in this run owns.
 
     A stale QEMU from an earlier row holds build/os8088.img for hours and the
-    next row fails wearing a message about the wrong subject
-    (docs/plans/HANDOFF-SOAK-FINDINGS.md B9); a MartyPC orphan is cheaper but still
+    next row fails wearing a message about the wrong subject; a MartyPC
+    orphan is cheaper but still
     eats a core the width arithmetic below has already promised to somebody.
 
     Reported, never killed from here.  `os88marty.py reap` kills ORPHANS only
@@ -500,7 +542,7 @@ def would_skip():
 #     to answer. `check` reports these; `start` now builds them.
 #   * `build/muptest.img` is built by ANOTHER ROW OF THE SAME SUITE, so
 #     whether `fdlggrey` passes depends on the ORDER rows ran in - and with
-#     `--marty-jobs` that order is not fixed. docs/plans/HANDOFF-SOAK-FINDINGS.md B4
+#     `--marty-jobs` that order is not fixed. The pass-2 soak
 #     records that as unfixed and says "either the artefact gets its own build
 #     step, or the dependency gets stated". This is the build step.
 #
@@ -511,29 +553,61 @@ PREWARM = [
     ("build/weave.img", "weavedisk"),
     ("build/loom.img", "loomdisk"),
     ("build/c64360.img", "c64disk"),
-    ("build/skiesdiag/apps360.img", "skiesdiag"),      # ...and ALWAYS, below
+    ("build/skiesdiag/apps360.img", "skiesdiag"),      # ...a PRIVATE tree, and
+                                                       # the case the old guard
+                                                       # got wrong every time
     ("build/muptest.img", "build/muptest.img"),
     ("build/spantest.img", "spantest"),
 ]
 
 
-# **EXISTENCE IS NOT FRESHNESS** (docs/WRITING-TESTS.md 13 row 33). A PRIVATE
-# TREE is built by a recursive make into a directory of its own, and nothing
-# in the shipped graph depends on it - so an edit to apps/skies/ leaves
-# build/skiesdiag/ sitting there, existing, describing a package the guest has
-# not got. `skiesdiag` checks its own tree and FAILS naming it, which is the
-# behaviour row 33 asks for; this is what stops it having to. A no-op
-# `make skiesdiag` is 0.9s, so it is cheaper to always run than to reason
-# about.
-ALWAYS = {"skiesdiag"}
+# **EXISTENCE IS NOT FRESHNESS** (docs/WRITING-TESTS.md 13 row 33), and this
+# used to be an EXCEPTION LIST of one name against a guard that skipped any
+# target whose file was already there. The guard is gone: `make` is the tool
+# that knows whether a target is out of date, and an `os.path.exists` in front
+# of it is an optimisation that defeats the only thing being asked for.
+#
+# IT COST TWO WRONG DIAGNOSES IN ONE RUN. `ddsmall` FAILED with *"the map
+# describes a DIFFERENT kernel from build/smallk/kernel.bin ... the file was
+# written 7442.3 s ago"* - build/small360.img existed, so its `wants=` was
+# skipped, so the kern_small tree behind it stayed two hours old against a
+# kernel that had moved. The message says *"run make"* about a build that WAS
+# current, which is the sharpest shape this failure has: only the private tree
+# was stale. `fcpapi` was the same thing four days deep. Both passed at once
+# when the artefact was deleted and rebuilt by hand.
+#
+# WHAT IT COSTS IS ONE SECOND, measured, and the first measurement was the fix
+# WORKING rather than its price. The pass taken straight after the guard came
+# out ran **50.4s for seven targets** - every one of them EXISTED and was out
+# of date, which is exactly what the old code skipped and exactly what a run
+# would otherwise have tested against. On a tree nothing has moved under, the
+# same seven are **1.0s** (0.1-0.2s each) against an emulator row's 30 to 100.
+#
+# Read that against what prewarm already spent: the plain `make -s` above is
+# **21.3s** on a current tree, most of it the fast tier. So always asking is
+# under 5% of a cost this function was already paying, and 2% of one row.
 
 
-def prewarm(verbose=True):
+def prewarm(verbose=True, a=None):
     """Build the on-demand artefacts, once, before any row runs.
 
     Serially and never under `-j`: `make -j4 weavedisk loomdisk c64disk` races
     on build/WEAVE.OVL and dies with "No rule to make target", which is a
     Makefile bug this is not the place to fix and a five-second cost to avoid.
+
+    **AND THE SELECTED ROWS' OWN `wants=` TOO**, which is what `a` is for.
+    `PREWARM` is a hand-kept list and `wants` is the machine-readable one, and
+    a row whose fixture is in the second and not the first FAILS HERE while
+    passing under `os88test soak` - which builds every declared artefact of
+    the rows it was given. The FROZEN path already takes that union
+    (`_tree_targets`), so this is the same union in the case where no
+    `builds=True` row forced a tree; without it the two runners disagree about
+    a row, and the disagreement reads as a defect in the row.
+
+    Measured: `dosmcb` and `dosvec` reported `build/dosmcb360.img is missing`
+    0.1s into a 45-row run and passed at once under `os88test soak`. That is
+    the `FAIL where it means SKIP` failure with a
+    cause, and the cause is here.
     """
     # **A PLAIN `make` FIRST, ALWAYS, AND BEFORE ANY ROW RUNS.** Not for the
     # artefacts - for `build/buildnum.inc`. Every `make` in the tree rewrites
@@ -550,10 +624,18 @@ def prewarm(verbose=True):
     elif verbose:
         print("os88soak: build/ is current")
 
+    todo = list(PREWARM)
+    if a is not None:
+        todo += [(art, art) for art in _declared(a)]     # the path IS the
+                                                        # target: every one is
+                                                        # a build/ artefact
+                                                        # with a rule
     made, failed = [], []
-    for art, target in PREWARM:
-        if os.path.exists(os.path.join(ROOT, art)) and target not in ALWAYS:
-            continue
+    seen = set()
+    for art, target in todo:
+        if target in seen:              # `wants=` repeats across rows, and a
+            continue                    # second `make` of one target is pure
+        seen.add(target)                # cost now that none of them is skipped
         r = subprocess.run(["make", "-s", target], cwd=ROOT,
                            capture_output=True, text=True)
         (made if r.returncode == 0 else failed).append(target)
@@ -619,6 +701,24 @@ def widths(cores, mj=None, hj=None):
     """
     return (mj if mj else max(1, cores),
             hj if hj else max(2, cores))
+
+
+def _declared(a):
+    """Every `wants=` artefact of the rows THIS invocation selected.
+
+    The same union `_tree_targets` takes for a frozen run and `os88test`'s
+    prebuild takes for a plain one - computed here so the non-frozen path
+    does not quietly have a shorter list than either.
+    """
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "tests"))
+        import suite
+        names = set(_selected(a))
+        return sorted({f for r in suite.rows() if r.name in names
+                       for f in getattr(r, "wants", ())
+                       if f.startswith("build/")})
+    except Exception:                                       # noqa: BLE001
+        return []
 
 
 def _selected(a):
@@ -796,7 +896,7 @@ def start(a):
     for w in _stale_emulators():
         print("%sos88soak: %s%s" % (YELLOW, w, OFF))
     if not a.no_prewarm:
-        prewarm()
+        prewarm(a=a)
     if advisory and not a.anyway:
         print()
         print("Re-run with --anyway to soak with those gaps, or fix them "
@@ -1123,7 +1223,7 @@ def stop(a):
     # kills ORPHANS and only orphans - an instance whose owner is gone - so it
     # cannot reach another session's live work. That is what makes this worth
     # doing here rather than printing advice about it
-    # (docs/plans/HANDOFF-SOAK-FINDINGS.md B9 is the same leak from the QEMU side,
+    # (is the same leak from the QEMU side,
     # where the bill landed on an unrelated row five hours later).
     time.sleep(2.0)                      # let the rows go before judging them
     try:
@@ -1197,8 +1297,7 @@ def main():
                     help="do not build the on-demand artefacts first. They "
                          "are what four rows SKIP without and what makes "
                          "`build/muptest.img` exist before the row that reads "
-                         "it rather than after (docs/plans/HANDOFF-SOAK-FINDINGS.md "
-                         "B4)")
+                         "it rather than after")
     ap.add_argument("--shared-build", action="store_true",
                     dest="shared_build",
                     help="read build/ instead of a tree of the run's own - "

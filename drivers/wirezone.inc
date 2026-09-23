@@ -32,7 +32,7 @@
 ; =============================================================================
 
 WZV_PAINT   equ 0x40            ; the verb the kernel calls to paint the icon.
-                                ; WELL CLEAR OF NETV_MAX (14) on purpose: it
+                                ; WELL CLEAR OF NETV_MAX (17) on purpose: it
                                 ; shares a dispatcher with the socket verbs
                                 ; and must never collide with one
 

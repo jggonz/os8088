@@ -27,14 +27,27 @@ can simply be decoded:
 
     OSAPI_SLOT   1E 0E 1F  E8 lo hi  1F CB     push ds/push cs/pop ds/
                                                call near/pop ds/retf
+    OSAPI_CSLOT  1E E8 lo hi  1F CB  tt tt     push ds/call api_sc/pop ds/
+                                               retf/dw <cold target>
     OSAPI_JSLOT  E9 lo hi  00 00 00 00 00      jmp near <stub>
-    OSAPI_X/NCELL 55 BD lo hi  E9 lo hi  00    push bp/mov bp,<target>/
-                                               jmp near api_x|api_n
+    OSAPI_X/CX/NCELL 55 BD tt tt E9 lo hi 00   push bp/mov bp,<target>/
+                                               jmp near api_x|api_xc|api_n
+    OSAPI_FARCELL 9A tt tt ss ss  CB  00 00    call COLD_SEG:<target>/retf
 
-THE THIRD SHAPE'S TARGET IS THE `BD` IMMEDIATE, NOT THE `E9` DISPLACEMENT.
+THE BP FAMILY'S TARGET IS THE `BD` IMMEDIATE, NOT THE `E9` DISPLACEMENT.
 The jump goes to the family's ONE shared body, which is the same address for
-all forty cells; decoding it instead would make check 6 fail on every one of
-them and check 4 pass for the wrong reason.
+every cell of it; decoding it as the target would make check 6 fail on every
+one of them and check 4 pass for the wrong reason.  What the `E9` DOES say
+is WHICH body, and that decides the segment the target lives in: `api_x`
+near-calls a `.text` routine, `api_xc` and `api_n` far-call a `.cold` one
+through `api_far` (SPEC.md 20.3.2).  A CSLOT's word and a FARCELL's offset
+are `.cold` by construction, and a FARCELL's segment word must BE COLD_SEG -
+a cell that far-calls anywhere else is a cell somebody has mistyped.
+
+So a target is resolved in the section its shape names, never "somewhere in
+the kernel": a `.cold` offset is a perfectly good `.text` offset too, and
+resolving it against the wrong table gives a plausible wrong name, which is
+the trap docs/plans/DISK-CPU-PLAN.md 1 records for the profiler.
 
 The `call`'s displacement is resolved against `tools/os88sym.py`'s map, which
 asserts byte-identity with the kernel this tree just built - so a symbol here
@@ -67,6 +80,16 @@ SIX THINGS ARE CHECKED, and the last is the one worth the file.
      What was bought is that check 4 lands on the BODY rather than on a stub
      that trivially exists.  A real gain, and a small one against thirteen
      new exemptions.
+
+     A cell that names a COLD body (SPEC.md 20.3.2) names the far ENTRY,
+     which carries a module tag and a suffix the resident thunk it replaced
+     did not: `dwf_dskw_read` where the thunk was `dskw_read`,
+     `osapi_vol_at_x` where it was `osapi_vol_at`.  Those decorations say
+     where the routine lives and nothing about what it is, so for a `.cold`
+     target the comparison is ALSO made on the stem - the label with one
+     leading `<tag>f_`/`<tag>z_` and one trailing `_x` removed - and every
+     ALIAS row that named the thunk still holds.  The two whose stem is a
+     different word (`ldf_ld_pkg_start`, `fcpf_fcp_door`) are rows below.
 """
 import os
 import re
@@ -93,7 +116,14 @@ CELL = 8
 # new code uses the KB slots at 0x0200+. They are not a free list.
 COMPAT = {0x01B8: "main's OSAPI_MEM_ALLOC (paragraphs)",
           0x01C0: "main's OSAPI_MEM_FREE (paragraphs)",
-          0x01C8: "main's OSAPI_MEM_AVAIL (paragraphs)"}
+          0x01C8: "main's OSAPI_MEM_AVAIL (paragraphs)",
+          # SPEC.md 20.3.1's free list: it was OSAPI_FILE_MOVE, folded into
+          # 0x0578's verb byte (22.25). stc/ret, no SDK name.
+          0x0580: "RETIRED OSAPI_FILE_MOVE (SPEC.md 22.25)",
+          # SPEC.md 50.6.6.1: OSAPI_MEM_CLAIM_LVL, a claim carrying the purge
+          # floor as an argument, retired the day the floor became a thing a
+          # task SETS (OSAPI_MEM_FLOOR, 0x0560). stc/ret, not published.
+          0x0568: "OSAPI_MEM_CLAIM_LVL, retired (SPEC.md 50.6.6.1)"}
 
 # Slots whose published name is not its routine's name. Every entry is a
 # deliberate ABI decision; adding one means the SDK and the kernel have
@@ -121,6 +151,10 @@ ALIAS = {
     "OSAPI_WM_GROW":      "wm_grow_paint",
     "OSAPI_MENU_SET":     "menu_win_set",
     "OSAPI_FILE_DLG":     "api_fdlg_open",   # still a hand-written JSLOT stub
+    # SPEC.md 20.3.2: the cell names the cold far entry, and these two entries
+    # are named for the ROUTINE they front rather than for the slot.
+    "OSAPI_PKG_START":    "ldf_ld_pkg_start",   # loader.inc's ld_pkg_start_x
+    "OSAPI_FILE_COPY":    "fcpf_fcp_door",      # filecp.inc's one door, AL = the verb
     # SPEC.md 20.3's X and N cells name their target directly since the two
     # families became one body each, so a slot whose SDK spelling differs from
     # its routine's needs a row here. Fifteen of them do; these thirteen are
@@ -142,6 +176,7 @@ ALIAS = {
     "OSAPI_FILE_DELETE":  "dskw_delete",
     "OSAPI_FILE_APPEND":  "dskw_append",
     "OSAPI_FILE_READ_AT": "dskw_read_at",
+    "OSAPI_FILE_WRITE_AT": "dskw_write_at",   # ...and its other half (18.4.7)
     "OSAPI_FILE_MKDIR":   "dskw_mkdir",
     "OSAPI_FILE_RMDIR":   "dskw_rmany",
     "OSAPI_TASK_SPAWN":   "inst_pkg_spawn",
@@ -184,21 +219,64 @@ def slots():
     return out
 
 
-def decode(blob, addr):
-    """(kind, target) for the cell at `addr`, or (None, None) if it is neither."""
+SHAPES = "1E0E1F E8.. 1FCB | 1E E8.. 1FCB tttt | E9.. 0000000000 | 55BD.. E9.. 00 | 9A.. ssss CB 0000"
+
+# The stem of a cold far entry: `dwf_dskw_read` -> `dskw_read`,
+# `osapi_vol_at_x` -> `osapi_vol_at`, `lzf_decomp` -> `decomp`.  One tag,
+# one suffix, and only for a target the shape says is `.cold`.
+COLD_TAG = re.compile(r"^[a-z]{2,4}[fz]_(?=[a-z])")
+
+
+def stem(name):
+    name = COLD_TAG.sub("", name, count=1)
+    return name[:-2] if name.endswith("_x") else name
+
+
+def decode(blob, addr, bodies, cold_seg):
+    """(kind, target, section) for the cell at `addr`, or (None, why, None).
+
+    `bodies` maps the shared bodies' names (api_x, api_xc, api_n, api_sc) to
+    their .text offsets; `cold_seg` is COLD_SEG's value.  The section is the
+    one the shape says the target lives in - see the header.
+    """
     c = blob[addr:addr + CELL]
     if len(c) < CELL:
-        return None, None
+        return None, None, None
+
+    def rel(at, i):                       # a near displacement at c[i], from `at`
+        return (at + struct.unpack_from("<h", c, i)[0]) & 0xFFFF
+
+    def imm(i):
+        return struct.unpack_from("<H", c, i)[0]
+
     if c[0:3] == b"\x1e\x0e\x1f" and c[3] == 0xE8 and c[6:8] == b"\x1f\xcb":
-        return "SLOT", (addr + 6 + struct.unpack_from("<h", c, 4)[0]) & 0xFFFF
+        return "SLOT", rel(addr + 6, 4), ".text"
+    if c[0] == 0x1E and c[1] == 0xE8 and c[4:6] == b"\x1f\xcb":
+        # CSLOT: the call must reach api_sc, which reads the word at 6..7
+        body = rel(addr + 4, 2)
+        if body != bodies.get("api_sc"):
+            return None, "CSLOT shape calling 0x%04X, which is not api_sc" % body, None
+        return "CSLOT", imm(6), ".cold"
     if c[0] == 0x55 and c[1] == 0xBD and c[4] == 0xE9 and c[7] == 0x00:
-        # X/N cell: the target rides in BP, so it is the immediate at 2..3.
-        return "XCELL", struct.unpack_from("<H", c, 2)[0]
+        # the BP family: the target is the immediate at 2..3 and the jump
+        # says which body, which says which segment the target is in
+        body = rel(addr + 7, 5)
+        kind = {bodies.get("api_x"): ("XCELL", ".text"),
+                bodies.get("api_xc"): ("CXCELL", ".cold"),
+                bodies.get("api_n"): ("NCELL", ".cold")}.get(body)
+        if kind is None:
+            return None, "BP-family shape jumping to 0x%04X, which is none of api_x/api_xc/api_n" % body, None
+        return kind[0], imm(2), kind[1]
+    if c[0] == 0x9A and c[5] == 0xCB and c[6:8] == b"\x00\x00":
+        seg = imm(3)
+        if seg != cold_seg:
+            return None, "FARCELL to segment 0x%04X, which is not COLD_SEG (0x%04X)" % (seg, cold_seg), None
+        return "FARCELL", imm(1), ".cold"
     if c[0] == 0xE9 and c[3:8] == b"\x00" * 5:
-        # ...and the JSLOT shape stays: five cells still reach a hand-written
+        # ...and the JSLOT shape stays: four cells still reach a hand-written
         # stub (rename, the file dialog, the two fenced SYS writes, file_find).
-        return "JSLOT", (addr + 3 + struct.unpack_from("<h", c, 1)[0]) & 0xFFFF
-    return None, c.hex()
+        return "JSLOT", rel(addr + 3, 1), ".text"
+    return None, c.hex(), None
 
 
 def main():
@@ -207,12 +285,15 @@ def main():
     # exactly as it was before SPEC.md 2.9 (tools/os88layout.py)
     blob = blob[os88layout.boot2_pad(ROOT):]
     off, sect = os88sym.syms(), os88sym.sections()
-    # offset -> the .text labels there. Several labels can share an offset
-    # (an entry point and its fallthrough alias), so this is a list.
-    text_at = {}
+    cold_seg = os88sym.equates()["COLD_SEG"]
+    # (section, offset) -> the labels there, for the two sections a cell can
+    # name. Several labels can share an offset (an entry point and its
+    # fallthrough alias), so this is a list.
+    label_at = {}
     for n, o in off.items():
-        if sect.get(n) == ".text":
-            text_at.setdefault(o, []).append(n)
+        if sect.get(n) in (".text", ".cold"):
+            label_at.setdefault((sect[n], o), []).append(n)
+    bodies = {b: off[b] for b in ("api_x", "api_xc", "api_n", "api_sc")}
 
     pub = slots()
 
@@ -243,24 +324,28 @@ def main():
 
     # 3/4/6. shape, target, and the name/routine agreement
     for addr, (name, src) in sorted(by_addr.items()):
-        kind, tgt = decode(blob, addr)
+        kind, tgt, where = decode(blob, addr, bodies, cold_seg)
         if not check(kind is not None,
                      "%s (0x%04X) is not a slot cell" % (name, addr),
-                     "the cell is neither the SLOT nor the JSLOT shape - the "
-                     "table has been overwritten or the address is past its end",
-                     got=tgt,
-                     want="1E0E1F E8.. 1FCB | E9.. 0000000000 | 55BD.. E9.. 00"):
+                     "the cell is none of the five shapes - the table has "
+                     "been overwritten, a cell reaches the wrong body, or "
+                     "the address is past the table's end",
+                     got=tgt, want=SHAPES):
             continue
-        names = text_at.get(tgt, [])
+        names = label_at.get((where, tgt), [])
         if not check(bool(names),
-                     "%s (0x%04X) calls 0x%04X, which is not a .text label"
-                     % (name, addr, tgt),
+                     "%s (0x%04X, %s) reaches %s:0x%04X, which is not a label there"
+                     % (name, addr, kind, where, tgt),
                      "a displacement into the middle of a routine assembles "
-                     "cleanly and runs wrong"):
+                     "cleanly and runs wrong - and a .cold offset resolved "
+                     "against .text is a plausible wrong name"):
             continue
-        stem = name[len("OSAPI_"):].lower()
-        want = {ALIAS[name]} if name in ALIAS else {stem, "osapi_" + stem, "api_" + stem}
-        check(any(n in want for n in names),
+        s = name[len("OSAPI_"):].lower()
+        want = {ALIAS[name]} if name in ALIAS else {s, "osapi_" + s, "api_" + s}
+        seen = set(names)
+        if where == ".cold":
+            seen |= {stem(n) for n in names}
+        check(bool(seen & want),
               "%s (0x%04X) reaches %s" % (name, addr, "/".join(names)),
               "the SDK name and the kernel routine have parted. If this is "
               "deliberate, add it to ALIAS in this file so a reviewer sees it",
@@ -270,8 +355,8 @@ def main():
     for addr in range(TABLE_BASE, top + 1, CELL):
         if addr in by_addr or addr in COMPAT:
             continue
-        kind, tgt = decode(blob, addr)
-        names = text_at.get(tgt, []) if kind else []
+        kind, tgt, where = decode(blob, addr, bodies, cold_seg)
+        names = label_at.get((where, tgt), []) if kind else []
         check(False, "cell 0x%04X is in the table and published nowhere" % addr,
               "either it is a new slot whose %define was forgotten - packages "
               "cannot reach it - or a retired one that needs a COMPAT entry here",

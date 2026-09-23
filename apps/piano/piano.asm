@@ -147,6 +147,12 @@ pn_entry:
     mov si, pn_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out                         ; no window: nothing to attach menus to
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     mov ax, pn_onresize             ; the keyboard's depth follows the box, and
     call OSAPI_WM_ONRESIZE          ; the box is the kernel's (SPEC.md 11.98)
     mov ax, pn_onup                 ; SPEC.md 13.7/13.8.1: the five buttons
@@ -1349,6 +1355,14 @@ pn_draw_msg:
 ; control since it existed: one edit, and the file dialog, the Control
 ; Panel, the Timer and every package can have a coloured caption.
 ; -----------------------------------------------------------------------------
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; One button at a time: this package's rects are not one contiguous group,
+; so the record is pointed at whichever rect the caller staged.
+pn_btlbl: dw 0
+pn_btflg: dw 0
+    OS88UI_BTNREC pn_btrec, 0, pn_btlbl, pn_btflg, 1
+
 pn_btn:
     push ax
     push bx
@@ -1372,7 +1386,16 @@ pn_btn:
     or di, dx                       ; (os88ui.inc)
 .go:
     mov bx, pn_brect
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [pn_btlbl], si          ; label and DI its flags, so the record takes
+    mov [pn_btflg], di          ; all three and the picture is identical
+    mov [pn_btrec+OS88UI_BT_RECTS], bx
+    mov bx, pn_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop dx

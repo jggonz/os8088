@@ -1,25 +1,34 @@
 ; =============================================================================
-; os8088 - HDD.DRV / page.inc
+; os8088 - HDDTOOL.DRV / cppage.inc
 ;
-; The Control Panel's Hard Drive page (SPEC.md 52.4), and the small helpers
-; the rest of the driver shares.
+; THE CONTROL PANEL'S `Drives` PAGE, and it is in the TOOL's image rather than
+; the driver's (SPEC.md 52.13). What the resident keeps is the NAME - cp_list
+; letters it and the kernel stages it at attach - five thunks, and the ability
+; to bring this image in.
 ;
-; The page exists exactly while this driver is attached, which is not arranged
-; anywhere: it falls out of the kernel clearing the DISK class's publication
-; slot at detach (SPEC.md 31.9/51.2.1).
+; **THE TRIGGER IS A PAINT, NOT A CLICK**, which is rdpage.inc's difference
+; from hdtool.inc stated the other way round: the hard disk used to keep its
+; page resident and load a second image when the user pressed Format, so the
+; load happened on a button. The page IS that second image now, so the load
+; happens at DSV_CPPAINT, the first time the page is selected - and the two
+; windows that used to be the only reason to load are already here when it is.
 ;
-; The pane is 221 x 132 px - 27 characters by 14 rows - and the panel is not
-; resizable, so this page is a list, an editor and three buttons, and anything
-; that needs more room is a window of its own. Format opens the disk tool
-; (tool.inc), which is partitioning and formatting in one window because they
-; are one operation to the user.
+; It cost the resident 2,893 bytes: 1,910 of page and the whole of os88ui.inc,
+; which this image was already carrying for the tool windows. The page is
+; therefore the cheapest thing in the driver to move and was the largest thing
+; left in it.
 ;
-;   Hard Drive
-;    IDE0  980x 10x 17   81M      <- one row per probed device, the selected
-;    BIOS  615x  4x 17   20M         one drawn as a black bar
-;   C[ 980] H[ 10] S[ 17]  - +    <- the geometry, editable when the probe
-;   [Format] [Install] [Mount]       could not determine it
-;   Mounted as C:                 <- and the caption is where the truth goes
+; WHAT CROSSES, and each of them because it must:
+;   - the device table, [hd_ndev] and [hd_sel] come over on hd_sync, which the
+;     tool has always done before it ACTS - the panel stays clickable under a
+;     tool window and a geometry can be retyped between one open and the next;
+;   - the caption is an HDM_* CODE and never a pointer (hddabi.inc), because
+;     font_str reads through DS;
+;   - a selection, a typed geometry, a mount and an unmount go BACK as verbs,
+;     because hd_vols and the real device table are the resident's and stay
+;     the resident's.
+; =============================================================================
+
 ;
 ; **EVERY STRING HERE FITS ITS BOX, and that is a rule and not a habit.** The
 ; caption column is 27 characters (221px of pane, text at x=2) and a row is
@@ -61,6 +70,7 @@ HDP_B1X      equ 146            ; 'Mount' / 'Unmount' - LAST on the row
 HDP_B2X      equ 74             ; 'Install' (SPEC.md 52.10.4) - in the middle
 HDP_BW0      equ 64
 HDP_BW1      equ 72
+
 ; --- control ids (SPEC.md 13.8.4) -------------------------------------------
 ; 1-based so 0 can mean "nothing is down", and per PAGE, exactly as ctrl.inc's
 ; are: changing the page needs a click in the item list and the button is
@@ -91,6 +101,18 @@ hd_page_paint:
     push si
     push di
     push bp
+    call hd_sync                ; **THE FIRST THING, AND IT IS NOT A NICETY.**
+                                ; hd_devs, [hd_ndev], [hd_sel], [hd_msgc] and
+                                ; [hd_mntmask] are all THIS image's copies and
+                                ; are zero until the resident fills them - so
+                                ; a page that painted before syncing drew
+                                ; `No hard disk found` on a machine with one,
+                                ; with every button greyed by hd_btn_ok's
+                                ; first compare. It is also the RIGHT place
+                                ; rather than a load-time fill: the panel is
+                                ; repainted after every click, and the tool
+                                ; windows can change the table under it
+                                ; (SPEC.md 52.13)
     mov bp, dx                  ; BP = pane top for the rest of the routine
 
     mov si, hd_s_page               ; NO PEN: font_run takes the pair in AX and
@@ -276,8 +298,8 @@ hd_page_paint:
     call hd_page_button
 
     ; --- and the caption, which is where the truth goes ----------------------
-    mov si, [hd_msg]
-    mov cx, di
+    call hd_msg_str             ; SI = the string for [hd_msgc], resolved
+    mov cx, di                  ; against THIS image's own (hddabi.inc)
     add cx, HDP_LX
     mov dx, bp
     add dx, HDP_CAPY
@@ -303,6 +325,16 @@ hd_page_paint:
 ; comes from hd_btn_ok and so does the refusal, so a greyed button can never
 ; be one that would have worked.
 ; -----------------------------------------------------------------------------
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; A Control Panel page draws its buttons one at a time, so the record is
+; pointed at whichever rect the caller staged. The GESTURE here is the
+; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
+; release-fired; what changed is that the DRAW goes through the control.
+hdp_btlbl: dw 0
+hdp_btflg: dw 0
+    OS88UI_BTNREC hdp_btrec, 0, hdp_btlbl, hdp_btflg, 1
+
 hd_page_button:
     push ax
     push bx
@@ -349,7 +381,16 @@ hd_page_button:
                                 ; will fire (SPEC.md 13.8)
     mov bx, hd_pbrect           ; OS88UI_FILL: the ground behind this is the
     or di, OS88UI_FILL          ; pane's white on a full paint and a PRESSED
-    call os88ui_btn             ; button on a release, and only the fill covers
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [hdp_btlbl], si          ; label and DI its flags, so the record takes
+    mov [hdp_btflg], di          ; all three and the picture is identical
+    mov [hdp_btrec+OS88UI_BT_RECTS], bx
+    mov bx, hdp_btrec
+    mov al, 1
+    call os88ui_btn
+    pop bx
+    pop ax
                                 ; the control leaves the pen live by itself,
                                 ; so the clc/GFX_PEN that used to close this
                                 ; routine is gone
@@ -658,7 +699,16 @@ hd_page_pm:
     or di, OS88UI_DOWN
 .nodn:
     mov bx, hd_pbrect
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [hdp_btlbl], si          ; label and DI its flags, so the record takes
+    mov [hdp_btflg], di          ; all three and the picture is identical
+    mov [hdp_btrec+OS88UI_BT_RECTS], bx
+    mov bx, hdp_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop dx
@@ -710,33 +760,33 @@ hd_btn_ok:
 
 ; -----------------------------------------------------------------------------
 ; hd_mounted - does the selected device already have a mounted volume?
-; in:  nothing
-; out: CF = 1 no, CF = 0 and BX = the hd_vols row
-; clobbers: BX (the output), flags
+; in:  [hd_sel], [hd_mntmask]
+; out: CF = 1 no, CF = 0 yes
+; clobbers: flags
+;
+; IT WALKED hd_vols AND IT CANNOT: that table is the resident's, the kernel
+; registered those volume indices out of it, and this image never sees it
+; (SPEC.md 52.13). HSV_STATE answers the one question the page ever asked it
+; as a bit per device, so the walk happens where the table is. It also stops
+; ANSWERING a row - all three callers only ever read CF, which is why a mask
+; is enough rather than a compromise.
 ; -----------------------------------------------------------------------------
 hd_mounted:
     push ax
     push cx
-    mov cx, HD_MAXVOL
-    mov bx, hd_vols
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_DEV]
-    cmp al, [hd_sel]
-    je .yes
-.next:
-    add bx, HDV_SIZE
-    loop .scan
-    xor bx, bx
-    pop cx
-    pop ax
-    stc
-    ret
-.yes:
+    mov cl, [hd_sel]
+    mov al, 1
+    shl al, cl                  ; HD_MAXDEV is 4, so the mask is a byte
+    test al, [hd_mntmask]
+    jz .no
     pop cx
     pop ax
     clc
+    ret
+.no:
+    pop cx
+    pop ax
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -846,7 +896,7 @@ hd_page_adjust:
     call hd_geom_ok                 ; whole point of the editor. Bit 1 says
     jc .mark                        ; the USER set it, which is what makes it
     or byte [di+HDD_FLAGS], 1       ; worth a record in the blob (SPEC.md 52.6)
-    mov word [hd_msg], hd_s_typed
+    mov byte [hd_msgc], HDM_TYPED
     call hd_geom_push               ; ...and the DRIVE is told, or it keeps
                                     ; translating with the one the probe left
 .mark:
@@ -967,7 +1017,7 @@ hd_page_ladder:
     cmp al, [hd_ndev]
     jae .done
     mov [hd_sel], al
-    mov word [hd_msg], hd_s_pick
+    mov byte [hd_msgc], HDM_PICK
     jmp .repaint
 
 .editor:
@@ -1088,10 +1138,10 @@ hd_page_ladder:
 .refused:
     ; A greyed control explains itself (SPEC.md 47 rule 5), so the refusal
     ; says nothing new - it just makes sure the reason is on screen.
-    mov word [hd_msg], hd_s_nogeom
+    mov byte [hd_msgc], HDM_NOGEOM
     cmp byte [hd_ndev], 0
     jne .repaint
-    mov word [hd_msg], hd_s_nodev
+    mov byte [hd_msgc], HDM_NODEV
 .repaint:
     call hd_page_repaint
 .done:
@@ -1134,272 +1184,93 @@ hd_page_repaint:
     pop ax
     ret
 
-; =============================================================================
-; Mounting (SPEC.md 52.4)
-; =============================================================================
-
 ; -----------------------------------------------------------------------------
-; hd_mount - mount the selected device's first FAT partition
-; in:  nothing; the gfx lock is HELD (a page click)
-; out: nothing; [hd_msg] says what happened
+; hd_msg_str - [hd_msgc] as a string in THIS image (module internal)
+; in:  [hd_msgc], and [hd_nmnt] for the one that is built
+; out: SI -> a NUL string in the rendering image's own segment
+; clobbers: SI (the output), flags
+;
+; HDM_MOUNTED is composed rather than looked up, which is why the table has a
+; 0 in that slot and not a pointer: a caption carrying a NUMBER cannot be a
+; constant, and building it HERE is what lets the resident forget it entirely
+; (hddabi.inc). Its buffer is its own and not hd_line, which every device row
+; rewrites on the way past - a caption outlives the paint that put it up.
+;
+; An out-of-range code answers HDM_PICK rather than reading past the table:
+; the byte crosses an image boundary, so it is INPUT and is treated as such.
+; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; hd_tool_open - open one of the two windows (module internal)
+; in:  AL = HDT_FORMAT or HDT_INSTALL
+; out: CF = 0 a window is up; CF = 1 nothing opened and [hd_msgc] says why
 ; clobbers: flags
 ;
-; The listing claim comes FIRST and is handed to the kernel with the volume,
-; because a mounted volume with no listing buffer lists 32 entries instead of
-; DSK_VENT and there is no second chance to say so (SPEC.md 22.6). A refused
-; claim is not an error - the volume mounts with the kernel's own floor.
+; THE RESIDENT'S NAME AND THE RESIDENT'S CONTRACT, so hd_page_click's two call
+; sites did not move - and over here it is not a load at all. The resident's
+; version brought this image in and called a verb; the page is IN this image,
+; so the windows are a near call away and the only thing that can fail is the
+; window itself. That is the whole of what moving the page bought the two
+; buttons: the file is already here by the time either can be pressed.
 ; -----------------------------------------------------------------------------
-hd_mount:
+hd_tool_open:
     push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
-    mov byte [hd_nmnt], 0
-    mov word [hd_msg], hd_s_mnotab
-    mov al, [hd_sel]
-    call hd_dev_row
-    call hd_part_load
-    jc .out                     ; no readable table: nothing to mount
-
-    mov word [hd_msg], hd_s_mnofat
-    mov byte [hd_pslot], 0
-.slot:
-    mov al, [hd_pslot]
-    call hd_part_ent
-    call hd_part_isfat
-    jc .next                    ; free, or a type that is not a FAT volume:
-                                ; SKIPPED, which is the whole of "and if it
-                                ; is not FAT, do not" (SPEC.md 52.4)
-    cmp word [si+HP_SECS+2], 0
-    jne .big                    ; over 65,535 sectors: not a volume this
-                                ; kernel can carry (SPEC.md 18.7)
-    call hd_already
-    jnc .have                   ; this one is already mounted - by us...
-    mov al, [hd_sel]            ; ...or by the KERNEL, which adopted the
-    call hd_kvol                ; partition it booted from before we were
-    jnc .have                   ; loaded at all (SPEC.md 52.10.3). Mounting it
-                                ; again is a second icon on the same sectors.
-                                ; It is hdcom.inc's and takes the DEVICE as an
-                                ; argument, because the installer asks the
-                                ; same question of a device of its own
-                                ; (SPEC.md 52.10.4.1)
-    call hd_mount_one
-    jmp short .next
-.have:
-    mov word [hd_msg], hd_s_mhave   ; and SAY so: the caption was still
-                                    ; 'No FAT partition on it' from the top of
-                                    ; the loop, which about a partition that is
-                                    ; mounted and on the desktop is the one
-                                    ; answer that is not true
-    jmp short .next
-.big:
-    mov word [hd_msg], hd_s_mbig    ; the tool calls this slot Unmountable and
-                                    ; so does the page, rather than reporting
-                                    ; 'no FAT partition' about a partition that
-                                    ; plainly is one (SPEC.md 52.2.2)
-.next:
-    inc byte [hd_pslot]
-    cmp byte [hd_pslot], 4
-    jb .slot
-
-    cmp byte [hd_nmnt], 0
-    je .out                     ; the caption is whichever refusal got here
-    call hd_mount_says          ; 'Mounted n volume(s)'
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_mount_one - mount the partition [hd_pslot] names (module internal)
-; in:  SI = its entry, [hd_sel] = the device; the gfx lock is HELD
-; out: [hd_nmnt] incremented on success; [hd_msg] set on a failure
-; clobbers: flags
-;
-; The listing claim comes FIRST and is handed to the kernel with the volume,
-; because a mounted volume with no listing buffer lists 32 entries instead of
-; DSK_VENT and there is no second chance to say so (SPEC.md 22.6). A refused
-; claim is not an error - the volume mounts with the kernel's own floor.
-;
-; A partition whose TYPE says FAT and whose CONTENT does not is dropped here:
-; osapi_vol_mount answers CF=1, the row goes back, and the loop carries on to
-; the next slot. That is the second half of "and if it is not FAT, do not".
-; -----------------------------------------------------------------------------
-hd_mount_one:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call hd_vol_new             ; BX = a free hd_vols row
-    jc .full
-    mov al, [hd_sel]
-    mov [bx+HDV_DEV], al
-    mov al, [hd_pslot]
-    mov [bx+HDV_PART], al
-    mov ax, [si+HP_LBA]
-    mov [bx+HDV_BASE], ax
-    mov ax, [si+HP_LBA+2]
-    mov [bx+HDV_BASE+2], ax
-    mov ax, [si+HP_SECS]
-    mov [bx+HDV_SECS], ax
-
-    mov ax, HDD_LISTKB          ; the listing claim (SPEC.md 22.6), and it
-    call OSAPI_MEM_CLAIM        ; STAYS LOW - measured, not assumed (SPEC.md
-    jnc .claimed                ; 50.3.2.1): sent high it cost 9KB, because a
-                                ; pinned claim BELOW every movable one is
-                                ; packed past and costs the big run nothing
-    xor dx, dx                  ; refused: the kernel's 32-entry floor, which
-.claimed:                       ; works and shows fewer files
-    mov [bx+HDV_LSEG], dx       ; ...and PINNED for a moment longer: DX is
-                                ; still this base and OSAPI_VOL_ADD below is
-                                ; about to write it down as the kernel's own
-                                ; DV_SEG (SPEC.md 18.7). Declared movable up
-                                ; here, a compaction between the two calls
-                                ; moved the block, hd_lst_reloc corrected
-                                ; HDV_LSEG - and the STALE DX went into DV_SEG
-                                ; anyway, from where dsk_list_pick copies it
-                                ; into [dsk_dseg]. Nothing here holds sch_lock,
-                                ; and hd_mount_one runs under the gfx lock,
-                                ; which yields
-
-    mov al, [bx+HDV_VOLH]       ; our own handle IS the row index
-    mov cx, [bx+HDV_SECS]
-    xor si, si                  ; no label: the KERNEL derives 'HDD C'..'HDD F'
-    call OSAPI_VOL_ADD          ; from the volume index, which is the only
-    jc .novol                   ; place that knows it (SPEC.md 26.1)
-    mov [bx+HDV_VOL], al
-    mov byte [bx+HDV_USED], 1
-
-    mov dx, [bx+HDV_LSEG]       ; ...AND NOW IT MOVES (SPEC.md 66.5.10.2).
-    or dx, dx                   ; Where it lands is a property of the SESSION
-    jz .nolist                  ; and not of the code - on a desktop that has
-    push bx                     ; been used, the gap under 18.95's read-ahead
-    mov ax, hd_lst_reloc        ; is taken and this first-fits ABOVE that cache
-    call OSAPI_MEM_MOVABLE      ; instead, where pinned it costs the whole
-    pop bx                      ; 63KB. TWO words, not one: HDV_LSEG here and
-.nolist:                        ; the kernel's DV_SEG, which dsk_dseg_reloc
-                                ; already scans BY VALUE for every move - and
-                                ; that is exactly why the ORDER matters. BX is
-                                ; the hd_vols row and is needed below
-
-    mov al, [bx+HDV_VOL]        ; reloaded: hd_lst_reloc's address went through
-    call OSAPI_VOL_MOUNT        ; AX, so the volume index is no longer in it
-    jc .badvol
-    inc byte [hd_nmnt]
-    jmp short .out
-.badvol:
-    call hd_unmount_row         ; typed FAT, is not FAT: give it all back and
-    jmp short .out              ; leave the loop to try the next slot
-.novol:
-    mov dx, [bx+HDV_LSEG]
-    or dx, dx
-    jz .nofree
-    call OSAPI_MEM_FREE
-.nofree:
-    mov byte [bx+HDV_USED], 0
-.full:
-    mov word [hd_msg], hd_s_mfull
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_lst_reloc - the listing claim moved (SPEC.md 66.5.10.2)
-; in:  BX = the base it WAS at, DX = the base it is at now; DS = CS = ours,
-;      ES = KERNEL_SEG
-; out: nothing (every register preserved)
-;
-; ONE WORD. HDV_LSEG is the only place this driver writes the segment down, and
-; it writes it for exactly one purpose - to free the block - so there is no
-; derived pointer, no offset banked off it and nothing paragraph-aligned to
-; recompute. The kernel's own two naming words (dsk_vtab's DV_SEG and
-; [dsk_dseg]) are fixed by dsk_dseg_reloc before this is reached, which is what
-; makes a DONATED claim movable at all: the callback reaches the owner, and the
-; owner is only one of the three holders (SPEC.md 66.5.10.1).
-;
-; BY VALUE and not by [hd_sel]'s row, because a compaction can fire while a
-; different partition is the selected one - and because a driver's proc is
-; handed the old base and nothing else.
-; -----------------------------------------------------------------------------
-hd_lst_reloc:
-    push ax
-    push cx
-    push si
-    mov si, hd_vols
-    mov cx, HD_MAXVOL
-.scan:
-    cmp [si+HDV_LSEG], bx
-    jne .next
-    mov [si+HDV_LSEG], dx
-.next:
-    add si, HDV_SIZE
-    loop .scan
-    pop si
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_already - is [hd_sel]'s partition [hd_pslot] mounted already?
-; in:  nothing
-; out: CF = 0 yes, CF = 1 no
-; clobbers: flags
-; -----------------------------------------------------------------------------
-hd_already:
-    push ax
-    push bx
-    push cx
-    mov cx, HD_MAXVOL
-    mov bx, hd_vols
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_DEV]
-    cmp al, [hd_sel]
-    jne .next
-    mov al, [bx+HDV_PART]
-    cmp al, [hd_pslot]
-    je .yes
-.next:
-    add bx, HDV_SIZE
-    loop .scan
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
+    call hd_sync                ; the geometry as the panel last left it -
+    cmp al, HDT_FORMAT          ; hddtool.asm's own verbs do this first too
+    jne .inst
+    call hd_tw_open
+    cmp word [hd_twin], 0
+    je .no
+    jmp short .yes
+.inst:
+    call hd_iw_open
+    cmp word [hd_iwin], 0
+    je .no
 .yes:
-    pop cx
-    pop bx
     pop ax
     clc
     ret
+.no:
+    mov al, HDM_NOTOOL
+    call hd_say
+    pop ax
+    stc
+    ret
 
-; -----------------------------------------------------------------------------
-; hd_mount_says - 'Mounted n volume(s)', into the caption buffer (internal)
-; in:  [hd_nmnt]
-; out: [hd_msg] points at it
-; clobbers: flags
-;
-; Its OWN buffer and not hd_line, which every device row rewrites on the way
-; past: a caption outlives the paint that put it up.
-; -----------------------------------------------------------------------------
-hd_mount_says:
+hd_s_page:   db 'Hard Drive', 0 ; THE PAGE'S HEADING, and the resident keeps
+                                ; its own copy for DSV_CPNAME - cp_list
+                                ; letters that one through the kernel's own
+                                ; staging (SPEC.md 31.9), so the two are the
+                                ; same eleven bytes in two images on purpose
+
+; --- the page's OWN state, which came over with it (SPEC.md 52.13) ---------
+; Every one of these was in the resident's bss and had exactly one reader:
+; this file. hd_ndev, hd_sel, hd_rowslot and hd_pair are NOT here - they are
+; hdcom.inc's and so exist in both images already, which is what makes
+; hd_sync a copy rather than an ABI.
+hd_field:    db 0               ; the C/H/S field the page has selected
+hd_rowdev:   db 0               ; the device a row painter is on
+hd_fldi:     db 0               ; the C/H/S editor's loop index
+hd_fldx:     dw 0
+hd_clx:      dw 0               ; the click being dispatched
+hd_cly:      dw 0
+
+hd_msg_str:
     push ax
-    push si
+    push bx
     push di
+    mov al, [hd_msgc]
+    cmp al, HDM_N
+    jb .known
+    xor al, al                  ; HDM_PICK: a code we do not have a string for
+.known:
+    cmp al, HDM_MOUNTED
+    je .built
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    mov si, [hd_msg_tab+bx]
+    jmp short .out
+.built:
     mov di, hd_cap
     mov si, hd_s_mounted
     call hd_scat
@@ -1413,232 +1284,33 @@ hd_mount_says:
 .plural:
     call hd_scat
     mov byte [di], 0
-    mov word [hd_msg], hd_cap
+    mov si, hd_cap
+.out:
     pop di
-    pop si
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_vol_new - the first free hd_vols row (module internal)
-; in:  nothing
-; out: CF = 0 and BX = the row, with HDV_VOLH set to its own index;
-;      CF = 1 = all of them are in use
-; clobbers: BX (the output), flags
-; -----------------------------------------------------------------------------
-hd_vol_new:
-    push ax
-    push cx
-    mov bx, hd_vols
-    xor al, al
-    mov cx, HD_MAXVOL
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .free
-    add bx, HDV_SIZE
-    inc al
-    loop .scan
-    xor bx, bx
-    pop cx
-    pop ax
-    stc
-    ret
-.free:
-    mov [bx+HDV_VOLH], al
-    pop cx
-    pop ax
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_unmount - take the selected device's volume away
-; in:  nothing; the lock is HELD
-; out: nothing
-; -----------------------------------------------------------------------------
-hd_unmount:
-    push ax
-    push bx
-    push cx
-    mov cx, HD_MAXVOL
-    mov bx, hd_vols
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_DEV]
-    cmp al, [hd_sel]
-    jne .next
-    call hd_unmount_row         ; EVERY volume this device has, not the first:
-.next:                          ; Mount put up one icon per FAT partition and
-    add bx, HDV_SIZE            ; Unmount is the other half of that
-    loop .scan
-    mov word [hd_msg], hd_s_unmounted
-    pop cx
     pop bx
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; hd_unmount_row - drop one volume and its claim (module internal)
-; in:  BX = the hd_vols row
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-hd_unmount_row:
-    push ax
-    push dx
-    cmp byte [bx+HDV_USED], 0
-    je .out
-    mov al, [bx+HDV_VOL]
-    call OSAPI_VOL_DEL
-    mov dx, [bx+HDV_LSEG]
-    or dx, dx
-    jz .noseg
-    call OSAPI_MEM_FREE
-.noseg:
-    mov byte [bx+HDV_USED], 0
-    mov word [bx+HDV_LSEG], 0
-.out:
-    pop dx
-    pop ax
-    ret
+hd_msg_tab:
+    dw hd_s_pick                ; HDM_PICK
+    dw hd_s_nosys               ; HDM_NOSYS
+    dw hd_s_notool              ; HDM_NOTOOL
+    dw hd_s_typed               ; HDM_TYPED
+    dw hd_s_nogeom              ; HDM_NOGEOM
+    dw hd_s_nodev               ; HDM_NODEV
+    dw hd_s_mnotab              ; HDM_MNOTAB
+    dw hd_s_mnofat              ; HDM_MNOFAT
+    dw hd_s_mhave               ; HDM_MHAVE
+    dw hd_s_mbig                ; HDM_MBIG
+    dw hd_s_mfull               ; HDM_MFULL
+    dw hd_s_unmounted           ; HDM_UNMOUNTED
+    dw 0                        ; HDM_MOUNTED is BUILT, never looked up
+%if ($ - hd_msg_tab) / 2 != HDM_N
+  %error "hd_msg_tab has drifted from hddabi.inc's HDM_* - one word per code, in order"
+%endif
 
-; -----------------------------------------------------------------------------
-; hd_vol_of - which kernel volume is mounted on one partition (SPEC.md 52.12)
-; in:  AL = the device index, AH = the partition slot
-; out: AL = the kernel's volume index, or 0FFh if nothing is mounted there
-; clobbers: AX (the output), flags
-;
-; hd_mount_one publishes its result by filling a row rather than by answering,
-; so somebody has to go and look; the installer used to, and this is that walk
-; moved to the side of the boundary the volume table is on.
-; -----------------------------------------------------------------------------
-hd_vol_of:
-    push bx
-    push cx
-    push dx
-    mov dx, ax                  ; DL = device, DH = slot
-    mov cx, HD_MAXVOL
-    mov bx, hd_vols
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_DEV]
-    cmp al, dl
-    jne .next
-    mov al, [bx+HDV_PART]
-    cmp al, dh
-    jne .next
-    mov al, [bx+HDV_VOL]
-    jmp short .out
-.next:
-    add bx, HDV_SIZE
-    loop .scan
-    mov al, 0xFF
-.out:
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_unmount_part - drop every volume mounted on one partition (SPEC.md 52.12)
-; in:  AL = the device index, AH = the partition slot
-; out: AL = 1 if anything was unmounted, 0 if not
-; clobbers: AX (the output), flags
-;
-; The disk tool's, until the split moved the volume table out of its reach.
-; It is the right place for it either way: hd_vols is the RESIDENT's - the
-; kernel's volume indices are registered from here and given back from here -
-; so the tool naming a partition and this doing the whole job is one crossing
-; instead of a shared table.
-;
-; EVERY row and not the first, for hd_unmount's own reason: one partition is
-; one volume today, and a scan that stops early is the kind of thing that
-; stops being true quietly.
-; -----------------------------------------------------------------------------
-hd_unmount_part:
-    push bx
-    push cx
-    push dx
-    mov dx, ax                  ; DL = device, DH = slot
-    xor al, al
-    mov ah, 0xFF                ; ...and AH = the last volume index dropped,
-    push ax                     ; 0xFF = none. The answer, built on the stack
-    mov cx, HD_MAXVOL
-    mov bx, hd_vols
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_DEV]
-    cmp al, dl
-    jne .next
-    mov al, [bx+HDV_PART]
-    cmp al, dh
-    jne .next
-    pop ax                      ; the answer FIRST, because the pop would
-    mov al, 1                   ; clobber AH, and the row is still live here:
-    mov ah, [bx+HDV_VOL]        ; SPEC.md 52.10.8 needs WHICH volume went and
-    push ax                     ; not only that one did
-    call hd_unmount_row
-.next:
-    add bx, HDV_SIZE
-    loop .scan
-    pop ax
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_win_close_all - hide the tool window (detach's obligation)
-; in:  nothing
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-hd_win_close_all:
-    call hd_tool_drop           ; HDT_SHUT and then the free, in that order. A
-    ret                         ; window of the TOOL's left on screen is a paint
-                                ; through freed memory twice over - the kernel
-                                ; releases this image the moment we return, and
-                                ; we release the tool's before that
-
-; =============================================================================
-; Shared helpers
-; =============================================================================
-
-; -----------------------------------------------------------------------------
-; hd_raw - one raw transfer to a DEVICE, outside any volume
-; in:  [hd_rawop] = 0 read / 1 write, DX:AX = the LBA, ES:BX = the buffer,
-;      CX = sectors, DI = the device row
-; out: CF = 0 done; CF = 1 failed
-; clobbers: flags
-;
-; The op is in MEMORY rather than a register because the LBA needs DX:AX and
-; the buffer needs ES:BX - the same reason DSV_BLK takes its own buffer in
-; DX:BX (SPEC.md 51.8).
-; -----------------------------------------------------------------------------
-hd_raw:
-    mov [hd_lba], ax
-    mov [hd_lba+2], dx
-    mov [hd_bofs], bx
-    mov [hd_bcnt], cx
-    push ax
-    mov ax, es
-    mov [hd_bseg], ax
-    pop ax
-    push ax
-    mov al, [hd_rawop]
-    mov [hd_bop], al
-    pop ax
-hd_raw_op:
-    push ax
-    cmp byte [di+HDD_KIND], HDK_IDE
-    je .ide
-    call hd_bios_xfer
-    jmp short .out
-.ide:
-    call hd_ide_xfer
-.out:
-    pop ax
-    ret
+hd_cap:      times 32 db 0      ; ...and HDM_MOUNTED's buffer, which belongs
+                                ; with the strings it is composed from
 
 hd_s_install: db 'Install', 0
 hd_s_bios:    db 'BIOS', 0
@@ -1668,3 +1340,4 @@ hd_s_mfull:   db 'No free volume', 0
 hd_s_mbig:    db 'Partition is over 32MB', 0
 hd_s_nosys:   db 'Need the system disk', 0
 hd_s_notool:  db 'Tool would not open', 0
+

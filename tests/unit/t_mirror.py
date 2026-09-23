@@ -130,6 +130,17 @@ ASM = ["boot/boot.asm", "boot/boothd.asm",
        # two entries, and the kernel's answer to every xmem failure is to
        # carry on with no store and tell nobody.
        "drivers/xmem/xmem.asm",
+       # ASSOC.DAT's format (SPEC.md 54.7), which kernel/assoc.inc READS and
+       # the hard-disk installer WRITES: an installed volume gets its own
+       # cache built from its own packages (SPEC.md 52.10.14), so the row
+       # stride, the cap and the two field offsets are typed out in
+       # drivers/hdd/iassoc.inc as well. Same shape as drivers/saver and
+       # drivers/xmem above - a driver cannot %include a kernel header - and
+       # it fails the same silent way: a drifted ASC_ROW writes rows the
+       # kernel then parses at the wrong stride, which is a cache that reads
+       # as garbage rather than an error. tools/os88disk.py is the THIRD
+       # writer of this format and is covered by os88geom's Python sweep.
+       "drivers/hdd/iassoc.inc",
        # apps/c64 is a C package whose assembly half and C half type the same
        # constants out twice (docs/C64-SPEC.md, its memory and screen
        # sections): the core's scratch offsets, the composer's band stride.
@@ -227,6 +238,14 @@ ALIAS = [
     # stride to prove one does not overlap the next, which is the very defect
     # a stale size causes.
     ("apps/os88ui.inc", "OS88UI_DR_SIZE", "tests/skiesui.py", "DR_SIZE"),
+    # SPEC.md 96.13.1. The DOS box has no slot to ask the kernel what day it
+    # is - there is no date or time cell in the SDK at all - so on a machine
+    # with no clock chip it answers the kernel's OWN fallback, spelled again
+    # in the package. A drift does not fail a build: it stamps a file with one
+    # date and lists it under another.
+    ("kernel/clock.inc", "CLK_DEF_Y", "apps/dos/dos.asm", "CLK_DEF_Y"),
+    ("kernel/clock.inc", "CLK_DEF_M", "apps/dos/dos.asm", "CLK_DEF_M"),
+    ("kernel/clock.inc", "CLK_DEF_D", "apps/dos/dos.asm", "CLK_DEF_D"),
 ]
 DEFINE = re.compile(r"^%define\s+([A-Z][A-Z0-9_]*)\s+([^\s;]+)", re.M)
 

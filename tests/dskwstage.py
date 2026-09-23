@@ -132,7 +132,7 @@ class Caller(object):
         self.lock = os88sym.linear("sch_lock")
         # **ON TASK 0's STACK, NOT ON THE INTERRUPTED TASK'S**, and this is
         # what the row was failing on - `dskw_write_x never returned`, 2 runs
-        # in 3, at both ends of the pass (docs/plans/HANDOFF-SOAK-FINDINGS.md E2,
+        # in 3, at both ends of the pass (
         # which got as far as ruling out the ROM and the box's load).
         #
         # It used to take the paused machine's own SS:SP and drop 96 bytes,
@@ -272,7 +272,7 @@ def _where(m, limit):
     """WHERE the guest is, for a call that never came back.
 
     `wait_stop`'s budget is GUEST seconds now (os88marty, and
-    docs/plans/HANDOFF-SOAK-FINDINGS.md E2 is the entry that made it so), so a
+    the pass-3 soak is what made it so), so a
     timeout here means the machine really did run that long inside the call -
     it is not the box being loaded. What it does NOT say is where, and "the
     machine is still running" was the whole of the old message: E2 spent four
@@ -661,7 +661,7 @@ def main():
                                                   "os8088-360.img"))
     ap.add_argument("--apps", default=os.path.join(ROOT, "build",
                                                    "apps360.img"))
-    # The twin: docs/plans/HANDOFF-SOAK-FINDINGS.md E2 ran this row on the IBM ROM
+    # The twin: the pass-3 soak ran this row on the IBM ROM
     # and on GLaBIOS and got the identical hang, so the ROM is measured NOT
     # to be the variable here.
     ap.add_argument("--machine",

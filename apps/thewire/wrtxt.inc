@@ -134,10 +134,17 @@ wr_s_wrote:  db 'Could not write ', 0
 wr_s_ldfail: db 'That program would not start (', 0
 
 ; --- the About card (SPEC.md 12.2, 20.5.1) -----------------------------------
-; FIVE lines: the name, the description, the tagline, the catalog's own date
-; and where it comes from.
-wr_ablines:  dw wr_ttl, wr_s_desc, wr_s_tag, wr_abdate, wr_ab5, 0
+; SIX lines: the name, the description, the tagline, the catalog's own date,
+; where it comes from, and WHO WROTE IT - which is the whole reason
+; SPEC.md 20.5.1.1 made the card a shared control rather than leaving every
+; package to grow one (SPEC.md 92.8).
+;
+; The credit is ONE line and not the two Arkanoid and Hello split it into: it
+; is 29 cells, and this window's content is WR_CW = 384 px = 48 cells on every
+; adapter, so the widget's clamp is nowhere near it.
+wr_ablines:  dw wr_ttl, wr_s_desc, wr_s_tag, wr_abdate, wr_ab5, wr_ab6, 0
 wr_ab5:      db 'os8088.com', 0
+wr_ab6:      db 'Contributed by Jorge Gonzalez', 0
 ; ...and the one string in this file that is WRITTEN. The eight question marks
 ; are overwritten in place by wr_catck with WC_DATE's eight digits, so the card
 ; names the catalog on the glass rather than the build under it. It is in the

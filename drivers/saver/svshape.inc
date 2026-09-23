@@ -877,5 +877,16 @@ sv_hdsc:    times SV_HACT * 2 dw 0
 ; SV_HPX pixels each is the exact bound, so this list is never forced to commit
 ; itself early (gfxe_pflush stays 0) - which is the one place in the tree where
 ; the buffer can be sized by arithmetic rather than by measurement.
-SV_PTMAX    equ SV_HACT * SV_HPX
+; THE POINT LIST IS SHARED WITH THE STARFIELD (SPEC.md 79.5.11), which since
+; it went to OSAPI_GFX_POINTS is the bigger of the two askers: a band is up to
+; ~1.5 points a star at SV_NSTAR = 40. Overflowing it is not a defect - the
+; library's gfxe_padd commits the full list and carries on - it is one extra
+; ~756us arrival, so this is a tuning number and not a bound. The %if is the
+; half that IS a bound: this mode's own need is exact, and a later edit that
+; sized the buffer for the stars alone would silently cost the shapes an
+; arrival an edge.
+SV_PTMAX    equ 64
+%if SV_PTMAX < SV_HACT * SV_HPX
+ %error "SV_PTMAX is under the shapes mode's own need (SV_HACT * SV_HPX)"
+%endif
 sv_pts:     times SV_PTMAX * 2 dw 0

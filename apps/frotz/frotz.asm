@@ -60,6 +60,20 @@
 %define SB_RATE 0               ; RATE 0 (13.10.5.4): a scrollback step
 %endif                          ; re-letters rows out of the ring
 ZF_SBRATE   equ SB_RATE
+; ...AND A 286 GETS 2 (13.10.5.4.1): the ring's rows are re-lettered, and a
+; machine three to four times the target's can afford them nine times a
+; second where the target cannot afford them at all.
+%ifndef SB_RATE286
+%define SB_RATE286 2
+%endif
+ZF_SBRATE286 equ SB_RATE286
+; ...AND THE PAUSE COMMIT (13.10.5.4.2): a one-shot re-armed on every movement
+; fires only after this many ticks of stillness, which reaches a bar the RATE
+; cannot. No tier pair - half a second is half a second on any machine.
+%ifndef SB_IDLE
+%define SB_IDLE 9
+%endif
+ZF_SBIDLE   equ SB_IDLE
 %endif
 
     OS88_HEADER 'FROTZ', zf_entry, 3, OS88_STACK_384    ; bit0 = icon, bit1 = association block
@@ -214,6 +228,12 @@ zf_entry:
     call OSAPI_WM_CREATE            ; BX = window ptr, CF=1 = window table full
     jc .out
     mov [zf_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
 
     mov si, zf_menus
     call OSAPI_MENU_SET             ; preserves every register AND the flags
@@ -233,6 +253,9 @@ zf_entry:
 %ifdef OS88UI_SBDRAG
     pushf                           ; the entry still owes the loader
     push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
+    mov ax, zf_ontimer              ; 13.10.5.4.2's PAUSE commit - FIRST of the
+    call OSAPI_WM_ONTIMER           ; three, because the `sbb al, al` below
+                                    ; captures OSAPI_WM_ONDRAG's OWN CF
     mov ax, zf_onup                 ; SPEC.md 13.10.6.4: the THUMB's alone.
     call OSAPI_WM_ONMOUSEUP         ; zwin6.inc's v6 input poll owns a gesture
     mov ax, zf_ondrag               ; that cannot be live at the same time as a
@@ -575,7 +598,21 @@ zf_ondrag:
     push dx
     cmp byte [zf_state], ZFS_RUN
     jne zf_sbd_out
+    call os88ui_sbdragging          ; 13.10.5.4.2: asked HERE as well as inside
+    jc zf_sbd_out                   ; zw_sbtrack, because the timer wants the
+    mov bx, si                      ; window and only a LIVE drag may arm one
+    mov ax, ZF_SBIDLE               ; - every movement pushes the one-shot out,
+    call OSAPI_WM_TIMER             ; which is what makes it an idle detector
     call zw_sbtrack                 ; DX is still the pointer's y
+    jmp short zf_sbd_out
+zf_ontimer:                         ; the thumb has been STILL for ZF_SBIDLE
+    push ax                         ; ticks; 13.9 disarms before this runs and
+    push bx                         ; this does not re-arm, so a pause is ONE
+    push cx                         ; commit however long it lasts
+    push dx
+    cmp byte [zf_state], ZFS_RUN
+    jne zf_sbd_out
+    call zw_sbpause
     jmp short zf_sbd_out
 zf_onup:
     push ax
@@ -584,6 +621,9 @@ zf_onup:
     push dx
     cmp byte [zf_state], ZFS_RUN
     jne zf_sbd_out
+    mov bx, si                      ; the pause timer must not outlive the
+    xor ax, ax                      ; gesture it belongs to (13.10.5.4.2)
+    call OSAPI_WM_TIMER
     call zw_sbcommit                ; the release COMMITS, unconditionally
 zf_sbd_out:
     pop dx

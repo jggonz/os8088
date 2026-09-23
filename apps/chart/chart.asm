@@ -117,6 +117,12 @@ ct_entry:
     mov si, ct_tpl
     call OSAPI_WM_CREATE                ; BX = window ptr, CF on table full
     jc .fail
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     mov si, ct_menus
     call OSAPI_MENU_SET                 ; preserves CF (SPEC.md 20.3)
     mov si, ct_about                    ; ...and 'About Chart' above its Close
@@ -1642,7 +1648,7 @@ ct_s_chartbmp: db 'CHART.BMP', 0
 ct_s_noexp:    db 'No chart to export.', 0
 ct_s_experr:   db 'Chart export failed.', 0
 ct_s_exported: db 'Chart exported.', 0
-ct_s_readerr:  db 'Could not read that file.', 0
+ct_s_readerr:  db 'Could not read that file', 0
 ct_s_noval:    db 'No numeric data found.', 0
 ct_s_ext_dif:  db '.DIF', 0
 ct_s_ext_biff: db '.BIF', 0

@@ -12,17 +12,37 @@ OSAPI_GFX_POINTS and band B, PT_DY rows lower, one gfx_pixel a point.  This
 reads the two bands off the framebuffer and requires them equal.  No golden
 image and no reference build: the comparison is inside one frame.
 
-Three cases, stacked down the window - a solid ink, a DITHER ink (the (x+y)
-parity arm), and a solid ink with the window's own clip region ARMED.  The
-third is SPEC.md 5.6.9.1's: gfx_ls_bx1..by2 still holds the box case 2 left at
-case 2's y, and a slot that trusted it would draw outside the clip.
+Four cases, stacked down the window - a solid ink, a DITHER ink (the (x+y)
+parity arm), a solid ink with the window's own clip region ARMED, and a solid
+PAPER.  The third is SPEC.md 5.6.9.1's: gfx_ls_bx1..by2 still holds the box
+case 2 left at case 2's y, and a slot that trusted it would draw outside the
+clip.
 
-BREAK IT ON PURPOSE (docs/WRITING-TESTS.md 1) - all three were run:
+THE FOURTH IS THE ONE THIS ROW WENT THREE REVISIONS WITHOUT, and SPEC.md
+5.6.9.3.1 is what that cost: `gfx_ls_ink` answers THREE classes and the first
+three cases only ever ask the slot to SET a bit, so a build that drew paper as
+ink passed all of them.  Every app-side erase in the tree goes through this
+slot (SPEC.md 5.12.7), so that is a figure that is drawn and never rubbed out.
+
+AND IT RUNS ON BOTH KERNELS.  `--small` boots the `make small` tree, because
+the commit loop is not one routine on both builds: kern_small expands
+GFXPT_LOOP once and asks the class per point, kern_big expands it three times
+and dispatches once a call (SPEC.md 5.6.9.3).  Nothing in the suite ran the
+one-loop expansion at all until the `gfxptsmall` row, which is exactly where
+5.6.9.3.1 lived.
+
+BREAK IT ON PURPOSE (docs/WRITING-TESTS.md 1) - all four were run:
 
   * draw every OTHER point:      cases 1, 2 and 3 all red.  RED.
   * drop the dither arm:         case 2 red, 1 and 3 green.  RED, and targeted.
+  * draw paper as ink
+    (SPEC.md 5.6.9.3.1):         case 4 red, 1 to 3 green, and on `--small`
+                                 ALONE - which is the defect itself, so this
+                                 one was run backwards: the row was written
+                                 against the broken kernel and went green on
+                                 the fix.  RED, and targeted.
   * remove the box invalidation
-    (SPEC.md 5.6.9.1):           ALL THREE STAY GREEN.
+    (SPEC.md 5.6.9.1):           ALL FOUR STAY GREEN.
 
 THE THIRD ONE IS THE HONEST LIMIT OF THIS ROW, and it is written here rather
 than discovered later.  The invalidation guards against a stale box that is too
@@ -32,7 +52,7 @@ region DISARMED (box = the whole screen) followed by one with it ARMED whose
 points fall outside the armed region.  Every point here is inside the window's
 content, so the stale box and the correct one give the same pixels.
 
-Covering it wants a fourth case whose pattern reaches PAST the content's right
+Covering it wants a FIFTH case whose pattern reaches PAST the content's right
 edge with the clip armed: band B goes through gfx_pixel and is clipped
 properly, band A with a stale whole-screen box would draw the overflow, and the
 two would differ.  It also wants a wider crop than PT_W to see the overflow.
@@ -50,19 +70,43 @@ THE FIRST VERSION OF THIS ROW WAS A FALSE GREEN, twice over, which is why the
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+
+# --- WHICH KERNEL, decided BEFORE os88sym is imported anywhere -------------
+# os88sym resolves against build/kernel.bin unless told otherwise, and the two
+# kernels differ by far more than the build number - so on `--small` without
+# this the row dies at its first symbol saying the map describes a DIFFERENT
+# kernel, which points at the kernel rather than at the row.  It is
+# tests/paint1small.py's pattern, and it has to run at IMPORT time because
+# tests/ptsext.py imports this module for its own constants.
+SMALL = "--small" in sys.argv
+if SMALL:
+    import os88build as _B                              # noqa: E402
+    _B.use_build("build/smallk")
+    os.environ.setdefault("OS88_DEFINES", "KERN_SMALL")
 
 import os88marty                                        # noqa: E402
 import os88ui                                           # noqa: E402
 
-SYS = "build/os8088-360.img"
+SYS = "build/small360.img" if SMALL else "build/os8088-360.img"
 APP = "build/ptstest360.img"
 
-PT_DY   = 40        # all four must match tests/ptstest/ptstest.asm
+PT_DY   = 20        # all four must match tests/ptstest/ptstest.asm
 PT_W    = 120
 PT_H    = 18
-PT_STEP = 60
-CASES = ("solid ink", "dither ink", "solid ink, clip ARMED")
+PT_STEP = 40
+CASES = ("solid ink", "dither ink", "solid ink, clip ARMED", "solid PAPER")
+
+# ...and which way up each one is.  A PAPER case is a dark pattern on a lit
+# ground, so "is this a pattern at all" is the same question asked of the
+# pixels that are OUT (SPEC.md 5.6.9.3.1).
+PAPER = (False, False, False, True)
+
+
+def density(A, paper):
+    """The minority pixels in band A - lit for an ink case, dark for paper."""
+    return sum(1 for row in A for v in row if bool(v) != paper)
 
 
 def band(rows, x0, y0, w, h):
@@ -94,9 +138,10 @@ def main():
             yb = ya + PT_DY
             A = band(rows, x0, ya, PT_W, PT_H)
             B = band(rows, x0, yb, PT_W, PT_H)
-            lit = sum(1 for row in A for v in row if v)
+            lit = density(A, PAPER[n])
             if A == B:
-                print("  ok   case %d (%-22s) %4d lit pixels agree" % (n + 1, name, lit))
+                print("  ok   case %d (%-22s) %4d %s pixels agree"
+                      % (n + 1, name, lit, "dark" if PAPER[n] else "lit"))
             else:
                 bad += 1
                 diff = sum(1 for ra, rb in zip(A, B)
@@ -115,14 +160,16 @@ def main():
             # real pattern is a small minority of lit pixels.
             if not (8 <= lit <= PT_W * PT_H // 4):
                 bad += 1
-                print("  FAIL case %d: %d lit of %d - that is not a PATTERN, so"
+                print("  FAIL case %d: %d %s of %d - that is not a PATTERN, so"
                       " equal bands prove nothing"
-                      % (n + 1, lit, PT_W * PT_H))
+                      % (n + 1, lit, "dark" if PAPER[n] else "lit",
+                         PT_W * PT_H))
 
         if bad:
             print("gfxpoints: %d of %d cases FAILED" % (bad, len(CASES)))
             return 1
-        print("gfxpoints: %d cases, gfx_points == a gfx_pixel loop" % len(CASES))
+        print("gfxpoints: %d cases, gfx_points == a gfx_pixel loop on %s"
+              % (len(CASES), "kern_small" if SMALL else "kern_big"))
         return 0
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Does the pointer wear the HOURGLASS while the machine is frozen, and is it
+"""Does the pointer wear the CLOCK while the machine is frozen, and is it
 the arrow again afterwards?
 
     make && python3 tests/curbusy.py
@@ -18,13 +18,13 @@ feature looked finished, assembled clean, passed the whole fast tier, and put
 nothing on the screen. **Only driving it says whether it works**, so these are
 the three assertions that were false the first time round:
 
-  * the shape becomes the hourglass while SPEC.md 12.8's widget is armed
+  * the shape becomes the clock while SPEC.md 12.8's widget is armed
   * ...and it is DRAWN, not merely set - `[cur_level]` = 0 in the same sample.
     That one is not decoration: the picture may only change off the glass
     (SPEC.md 7.2.2), so a lit pointer has to be hidden first, and a version
     that let `cur_shape_set`'s own `cur_unlazy` hide it a SECOND time settled
     the refcount at -2 and left the pointer GONE for the whole freeze with the
-    shape byte saying hourglass
+    shape byte saying busy
   * ...and it is the ARROW again once the machine is idle
   * ...and a PACKAGE gets it by asking (Paint, decoding a picture: SPEC.md
     7.5.4, 42.6), with the lock its callback is already inside
@@ -44,7 +44,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 import os88ui                                               # noqa: E402
 
 CUR_ARROWSH, CUR_BUSYSH = 0, 2
-NAME = {0: "arrow", 1: "CROSS", 2: "HOURGLASS"}
+NAME = {0: "arrow", 1: "CROSS", 2: "CLOCK"}
 
 
 class Watch(object):
@@ -114,9 +114,9 @@ def main(argv):
             ui.path("B:/PAINT.O88")
         say("during a launch      %s" % fmt(w.seen))
         if not (w.seen.get((CUR_BUSYSH, True)) or w.seen.get((CUR_BUSYSH, False))):
-            bad.append("the hourglass never went up for the file work")
+            bad.append("the clock never went up for the file work")
         elif not w.seen.get((CUR_BUSYSH, True)):
-            bad.append("the hourglass was SET but never DRAWN - [cur_level] "
+            bad.append("the clock was SET but never DRAWN - [cur_level] "
                        "was negative in every sample (SPEC.md 7.5.3)")
 
         # --- 2. ...AND IT COMES OFF. gfx_unlock is what does it, so the wait
@@ -128,7 +128,7 @@ def main(argv):
         got = m.read(shape, 1)[0]
         say("once idle again      cur_shape = %d %s" % (got, NAME.get(got, "?")))
         if got != CUR_ARROWSH:
-            bad.append("the hourglass survived the hold: cur_shape = %d" % got)
+            bad.append("the clock survived the hold: cur_shape = %d" % got)
 
         # --- 3. THE PACKAGE'S HALF (SPEC.md 7.5.4). Paint asks for it around
         #        its picture decode, which is seconds on the target machine.
@@ -156,7 +156,7 @@ def main(argv):
         if not reached:
             bad.append("Paint never reached OSAPI_CUR_BUSY")
         elif not held:
-            bad.append("Paint asked for the hourglass with no lock held, so "
+            bad.append("Paint asked for the clock with no lock held, so "
                        "the kernel refused it (SPEC.md 7.5.4)")
         m.breakpoints([])
         m.run()
@@ -164,13 +164,13 @@ def main(argv):
             th.join(timeout=180)
         say("across the decode    %s" % fmt(w.seen))
         if not (w.seen.get((CUR_BUSYSH, True)) or w.seen.get((CUR_BUSYSH, False))):
-            bad.append("the pointer was not the hourglass during the decode")
+            bad.append("the pointer was not the clock during the decode")
 
     for b in bad:
         say("FAIL " + b)
     print("curbusy: %s" % ("the pointer says the machine is busy, and stops "
                            "saying it - PASS" if not bad
-                           else "the hourglass does NOT track the freeze"))
+                           else "the clock does NOT track the freeze"))
     return 1 if bad else 0
 
 

@@ -117,15 +117,28 @@ static struct os88_menuset pmc_mset = {
  * clamp is `widest * 8 + 2 * OS88UI_ABPADX` against the live content box, which
  * on the 224-pixel arcade field is 25 cells; the row asserts 24 so that one
  * cell of slack survives a font or padding change in somebody else's file. */
+/* TEN LINES, AND TEN IS THE CEILING - the porter's credit was paid for by a
+ * MERGE and not by an eleventh line (SPEC.md 91.14). CGA's content box is 144
+ * rows and the widget measures n * 12 + 14, so ten is 134 and eleven is 146:
+ * over, clamped, and the last line cut off. The gate at the bottom of
+ * hosttest/pmcuitest.c is the one that says so, and it refused exactly this
+ * card once already.
+ *
+ * So the three lines that carried the reference - its name, its commit and
+ * its repo-and-licence - became two, and every fact SPEC.md 91 requires the
+ * card to carry is still on it: the reference by name, the commit, the repo
+ * owner, the licence, the author's copyright, the ROM credit and the Dossier.
+ * What was gained is the line the shared control exists for (SPEC.md
+ * 20.5.1.1) - who brought it to this machine. */
 static const char *pmc_about_lines[] = {
     "PaccMan for os8088",
-    "A C port of pacman.c,",
-    "commit 0f5ec5a",
+    "A C port of pacman.c",
+    "0f5ec5a, floooh, MIT",
     "(c) 2020 Andre Weissflog",
-    "MIT. floooh/pacman.c",
     "Tiles/sprites: Pac-Man",
     "arcade ROMs (Namco)",
     "Rules: Pac-Man Dossier",
+    "Ported by Jorge Gonzalez",
     "Arrows/WASD move. N new.",
     "F full. P/Space pause.",
     0

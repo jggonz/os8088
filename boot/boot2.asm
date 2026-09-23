@@ -238,6 +238,7 @@ boot2_entry:
     ;
     ; No guard on the vector, deliberately: the BIOS read the BOOT SECTOR
     ; through it, so a machine that could not use it never got here.
+%ifndef DPT_ROM                 ; DPTROM=1: LEAVE THE ROM'S TABLE ALONE (18.92.1)
     push ds
     push es
     xor ax, ax
@@ -259,6 +260,7 @@ boot2_entry:
     stosw
     pop es
     pop ds
+%endif                          ; DPT_ROM
 
 %ifndef TRACK_RUN
     ; --- may this machine's FDC cross a head? (SPEC.md 18.93.2) -------------

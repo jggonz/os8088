@@ -8,13 +8,20 @@ tests/rehome.py proves the re-home. This proves the block it leaves behind is
 an ordinary movable region afterwards - and that the ONE THING no other
 package in the tree has to fix, gets fixed.
 
-WHY 1.44MB IS THE EXPERIMENT AND NOT A CONVENIENCE. `op_claim`'s head slack is
-the gap between a part's 512-byte file boundary and the CLUSTER boundary a read
-may start on. On a 512-byte-cluster volume it is ZERO, so the program sits AT
-the carve's base - and only then is the carve its region in `mem_is_region`'s
-sense (`MC_SEG == I_SPTR`), only then does `mem_find_own` reach it, and only
-then does `OSAPI_MEM_MOVABLE` take. At 360KB the same package is REFUSED the
-declaration, correctly, and there is nothing here to move.
+**TWO GEOMETRIES, AND THE SECOND ONE IS THE EXPERIMENT.** `op_claim`'s head
+slack is the gap between a part's 512-byte file boundary and the CLUSTER
+boundary a read may start on. On a 512-byte-cluster volume it is ZERO, so the
+program sits AT the carve's base and the carve is its region in the obvious
+sense. At 360KB the slack is non-zero and the program sits INSIDE the carve -
+and that shape was REFUSED the declaration until SPEC.md 66.6.1.2, on FOUR
+separate readings of *the claim's base* that meant *the segment the package
+runs in*: `mem_is_region`'s equality, `mem_frameless` asking `mem_in_nest`
+about the wrong segment, `mem_rr_walk` matching the base alone, and
+`mem_reloc_call` dispatching `PKG_DISP` into the carve's head slack.
+
+So `python3 tests/rehomemove.py` is the easy shape and `... 360` is the shape
+that was pinned. **The 360 arm is the gate**: every one of those four failures
+is silent, and three of them would corrupt rather than refuse.
 
 WHY THE RELOCATION PROC IS NOT A `ret`, which is what makes this row worth
 having. `apps/os88api.inc`'s `OS88_REGION_MOVABLE` ships a bare `ret` because
@@ -51,10 +58,20 @@ import os88geom
 import heapmap
 import dispcp
 
+# **`360` PICKS THE GEOMETRY OF THE APPS FLOPPY, which is what decides the head
+# slack** - not the system disk's, because the slack is a property of the
+# volume the PACKAGE is read from (tests/rehome.py takes the same word for the
+# same reason). A machine name may follow it.
 argv = sys.argv[1:]
-MACHINE = argv[0] if argv else "os8088_5150_herc_gla_144"
+GEOM = "360" if argv and argv[0] == "360" else "1440"
+argv = argv[1:] if GEOM == "360" else argv
+if GEOM == "360":
+    MACHINE = argv[0] if argv else "os8088_5150_cga_gla"
+    APPS_IMG = "build/rehomemove360.img"
+else:
+    MACHINE = argv[0] if argv else "os8088_5150_herc_gla_144"
+    APPS_IMG = "build/rehomemove.img"
 SYS_IMG = argv[1] if len(argv) > 1 else "build/os8088-360.img"
-APPS_IMG = "build/rehomemove.img"
 
 # rhprog.asm's bss, which is the package's own layout and not the format's.
 RP_HAND, RP_ASSET, RP_CARVE = 0, 2, 4
@@ -103,16 +120,22 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
         sys.exit("rehomemove: %d claims on slot %d, want 1" % (len(carve), slot))
     say("program at %04X (slot %d), asset at %04X, carve %04X..%04X rloc=%d"
         % (seg0, slot, asset0, carve[0].seg, carve[0].end, carve[0].rloc))
-    if carve[0].seg != seg0:
-        sys.exit("rehomemove: the program is at %04X and its carve is based at "
-                 "%04X, so this volume left a NON-ZERO head slack and the "
-                 "declaration cannot be taken. This row needs a 512-byte-"
-                 "cluster volume (SPEC.md 20.12.10.5)" % (seg0, carve[0].seg))
+    # **THE HEAD SLACK IS THE SUBJECT AND NOT A PRECONDITION** (SPEC.md
+    # 66.6.1.2). This used to `sys.exit` when the program sat INSIDE the carve
+    # rather than at its base, on the ground that the declaration could not be
+    # taken there - which was true, and was the defect: four separate places in
+    # the compactor read *the claim's base* where they meant *the segment the
+    # package runs in*, so the one shape that most needs to move was the one
+    # that could not. The `360` arm exists to be in that shape.
+    inside = carve[0].seg != seg0
+    say("head slack %d paragraph(s), so the program sits %s"
+        % (seg0 - carve[0].seg, "INSIDE the carve" if inside else "AT its base"))
     if carve[0].rloc == 0:
         sys.exit("rehomemove: the carve is PINNED (MC_RLOC 0), so nothing "
                  "below can move it. rhprog.asm declares itself movable and "
-                 "OSAPI_MEM_MOVABLE refused - which at a zero head slack is "
-                 "the defect, not the design (SPEC.md 66.6.1)")
+                 "OSAPI_MEM_MOVABLE refused%s (SPEC.md 66.6.1, 66.6.1.2)"
+                 % (" - and the program is INSIDE the carve, which is "
+                    "mem_find_own's containment arm gone" if inside else ""))
 
     # --- the forcing asks, tests/regmove.py's own idiom ----------------------
     # FILLER takes the arena down to a few tens of KB and then asks for one KB
@@ -230,4 +253,4 @@ if fails:
 print("\nrehomemove: a re-homed program's carve is an ordinary movable region "
       "- it packed down under the compactor, the kernel's words followed, and "
       "the package's OWN vector into the part beside it followed too. PASS "
-      "(%s)" % MACHINE)
+      "(%s, apps %s)" % (MACHINE, GEOM))

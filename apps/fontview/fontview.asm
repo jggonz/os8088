@@ -65,10 +65,18 @@ fv_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [fv_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     mov al, 1
     call OSAPI_WM_SNAP              ; makes fv_x + FV_TEXTX byte-aligned
     mov ax, fv_onwake
     call OSAPI_WM_ONWAKE
+    mov si, fv_about                ; 'About Font Viewer...' under our name in
+    call OSAPI_ABOUT_SET            ; the bar (SPEC.md 12.2, 90.9)
     call OSAPI_WM_WAKE              ; ordinary launch needs the same first load
     clc
 .out:
@@ -185,6 +193,42 @@ fv_onwake:
     ret
 
 ; -----------------------------------------------------------------------------
+; fv_about / fv_abdismiss - the standard About card (SPEC.md 20.5.1.1, 90.9)
+;
+; This package shipped with NO handler at all, which is the case that section
+; was written about: the cheapest thing an author can do is nothing, and what
+; goes missing when they do it is the credit.
+;
+; fv_about is the HANDLER, so it is os88ui_about and not the _d entry -
+; ui_dispatch arms no clip region before it far-calls us.
+; -----------------------------------------------------------------------------
+fv_about:
+    push bx
+    push si
+    mov byte [fv_abon], 1
+    mov bx, si                      ; SI = our window on entry
+    mov si, fv_ablines
+    call os88ui_about
+    pop si
+    pop bx
+    ret
+
+; Any key or click takes it down. The repaint is the WHOLE window and not the
+; card's rect: what the card covered is a specimen row, a catalogue row or the
+; divider, and fv_redraw is the one routine that knows how to put all three
+; back (SPEC.md 90.9).
+fv_abdismiss:
+    cmp byte [fv_abon], 0
+    je .none
+    mov byte [fv_abon], 0
+    call fv_redraw
+    stc                             ; CF = 1: the event was OURS, and the
+    ret                             ; caller must not act on it as well
+.none:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; Keyboard: arrows walk the catalogue; printable ASCII and Backspace edit the
 ; specimen.  The right pane alone is repainted for ordinary typing.
 ; -----------------------------------------------------------------------------
@@ -196,6 +240,8 @@ fv_onkey:
     push si
     push di
     push es
+    call fv_abdismiss               ; the card eats the keystroke that takes it
+    jc .out                         ; down, so a specimen edit is not also made
     cmp ah, KSC_UP
     je .prev
     cmp ah, KSC_LEFT
@@ -269,6 +315,8 @@ fv_onclick:
     push si
     push di
     push bp
+    call fv_abdismiss               ; ...and the click likewise: dismissing is
+    jc .out                         ; not also a selection (SPEC.md 90.9)
     mov di, cx
     mov bp, dx
     mov bx, si
@@ -323,6 +371,12 @@ fv_paint:
     mov [fv_x], ax
     mov [fv_y], dx
     call fv_draw
+    cmp byte [fv_abon], 0           ; ...and the About card LAST, over the lot
+    je .noab                        ; (SPEC.md 20.5.1.1): the kernel's region
+    mov bx, si                      ; is armed here, so it is the _d entry and
+    mov si, fv_ablines              ; NOT os88ui_about, which would re-arm and
+    call os88ui_about_d             ; throw this paint's damage rect away
+.noab:
     pop si
     pop dx
     pop cx
@@ -644,7 +698,32 @@ fv_text:
 FV_INITLEN equ $ - fv_text
     times FV_TEXTMAX + 1 - FV_INITLEN db 0
 
-FV_BSS_OWN equ 2 + 2 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + TY_NAMSZ + 24
+; --- the About card's lines (SPEC.md 20.5.1.1, 90.9) -------------------------
+; FIVE lines. The content box is FV_CW = 618 px = 77 cells on every adapter -
+; this window is one size everywhere (FV_W/FV_H, and FV_H is the whole CGA
+; band) - so the widest line here, 29 cells, is nowhere near the widget's
+; clamp and nothing is split across two lines the way Mines and Hello had to.
+fv_ablines:
+    dw fv_ab1, fv_ab2, fv_ab3, fv_ab4, fv_ab5, 0
+fv_ab1:     db 'Font Viewer for os8088', 0
+fv_ab2:     db 'The system face browser', 0
+fv_ab3:     db 0
+fv_ab4:     db 'Contributed by Jorge Gonzalez', 0
+fv_ab5:     db 'Any key or click closes', 0
+
+; --- the shared controls (SPEC.md 20.5.1) ------------------------------------
+; AT THE END OF THE CODE, which is os88ui.inc's own rule: the header and the
+; OS88_ICON16 block are at fixed offsets in the image (SPEC.md 20.2) and code
+; emitted between them fails the icon macro's offset assertion.
+;
+; NOBTN because this card draws no button and no scroll bar - the card IS the
+; only control this package takes, and without the opt-out every package
+; carrying the include pays 116 bytes for a glyph nothing calls.
+%define OS88UI_ABOUT
+%define OS88UI_NOBTN
+%include "os88ui.inc"
+
+FV_BSS_OWN equ 2 + 2 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + TY_NAMSZ + 24
     OS88_BSS FV_BSS_OWN + TY_BSS_SIZE
     OS88_IMAGE_END
 
@@ -660,5 +739,6 @@ fv_arghave   equ os88_image_end + 11
 fv_textlen   equ os88_image_end + 12
 fv_arg       equ os88_image_end + 13    ; TY_NAMSZ bytes
 fv_line      equ fv_arg + TY_NAMSZ      ; 24-byte composed label
+fv_abon      equ fv_line + 24           ; the About card is up (SPEC.md 90.9)
 
     TY_BSS os88_image_end + FV_BSS_OWN

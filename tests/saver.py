@@ -63,7 +63,7 @@ def wait(m, addr, want, limit=20.0):
     TICKS, so "28 ticks after the last keypress" is 1.5 seconds of the 8088
     and whatever the box makes of it. In a three-wide emulator lane that is a
     different amount of host wall clock, which is
-    docs/plans/HANDOFF-SOAK-FINDINGS.md B5 exactly - and this row
+    the contention mechanism exactly - and this row
     took 110.7s there against 52.3s alone.
     """
     try:

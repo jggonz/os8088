@@ -109,6 +109,14 @@ static int  ch_py = -1;
 static unsigned ch_seg;                 /* 0 = the claim was refused */
 static unsigned ch_moves;               /* how many times we have been told */
 static unsigned ch_was, ch_now;         /* ...and what we were told last */
+/* ...AND WHAT WE WERE TOLD FIRST, which is a different question once a
+ * compaction can move one claim MORE THAN ONCE. SPEC.md 66.4.3's self-
+ * compaction walk does exactly that - tests/cmemmove.py measured 4ca0 ->
+ * 3d60 -> 2be0 in a single pass - so `ch_was` is then the INTERMEDIATE base
+ * and comparing it against the base the host recorded before the pass fails
+ * while every handler call was correct. The first `was` is the one that is
+ * still comparable, so it is kept beside it and the row asserts on this. */
+static unsigned ch_was0;
 
 static char ch_line[48];                /* STATIC: os88_strcpy() and            */
 static char ch_num[8];                  /* os88_utoa() take their addresses     */
@@ -330,6 +338,10 @@ static void ch_fill(void)
 void os88_onmove(unsigned was, unsigned now)
 {
     if (ch_seg != 0 && ch_seg == was) {
+        if (ch_moves == 0)              /* before the ++ below: the FIRST call's
+                                         * `was` is the only one the host's
+                                         * pre-pass reading can be compared to */
+            ch_was0 = was;
         ch_seg = now;
         ch_was = was;
         ch_now = now;

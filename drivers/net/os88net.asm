@@ -115,6 +115,12 @@ PKGV_IDENT  equ 0               ; apps/os88api.inc's, which a .COM does not
                                 ; include - netpkg.inc names it
 %include "ethprof.inc"          ; ...which under ETH_NOEMIT emits NOTHING and
                                 ; only aliases the renamed bodies (72.15)
+%define ETH_NORAW 1            ; **THE RAW VERBS ARE NOT REACHABLE HERE.**
+                                ; SPEC.md 72.22's three go through eth_vtab,
+                                ; which is ether.asm's; this host serves the
+                                ; socket commands off the wire (nwslv.inc) and
+                                ; has no table they appear in. 215 bytes of a
+                                ; packed .COM that nothing can call
 %include "ethsock.inc"
 %include "ethusr.inc"
 %include "pktdrv.inc"           ; ...where ne2000.inc would be

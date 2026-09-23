@@ -145,7 +145,7 @@ def main():
     # one, so the install went into a directory that vanished and each
     # boot opened a fresh clone of the pristine master. Both adapters then
     # reported "the loading screen never came up", which reads as a knob
-    # kernel that will not boot (docs/plans/HANDOFF-SOAK-FINDINGS.md B1).
+    # kernel that will not boot.
     #
     # In-process rather than a subprocess, so the knob DEFINES set above
     # are the ones the installer resolves symbols with - that is what the

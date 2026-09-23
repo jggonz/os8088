@@ -138,8 +138,7 @@ def run(image, apps, machine, defines, tree=None):
         # this one sits still for 240 HOST seconds waiting for a straddling
         # blit to arrive - which at 3.4x is over thirteen guest minutes with
         # no input. What the saver would then do is not fail this row, it is
-        # make it wait out the whole 240 and report that the blit never came
-        # (docs/plans/HANDOFF-SOAK-FINDINGS.md B7).
+        # make it wait out the whole 240 and report that the blit never came.
         os88marty.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, settle)

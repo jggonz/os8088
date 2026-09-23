@@ -69,6 +69,21 @@ OPEN and not at attach (`sbl_f_irqdisc`), and it stays hooked until
 the image and 5b would be vacuous. `SBTEST.O88` rides on the disk to open and
 close one stream, AFTER the driver shuffle, an unmount being what unhooks.
 
+WHAT FORCES THE MOVE CHANGED UNDER THIS ROW, and the row is written for the
+new one. It used to be the 'S' presses: the filler's fill took the low arena
+down, the ceiling hole stayed open, and the ask was what packed the ring and
+image up into it. Since SPEC.md 66.4.3.1 the FILL itself is the forcing event -
+`fl_fill` claims `OSAPI_MEM_AVAIL`, `mem_avail` plans BOTH passes now, and
+`mem_claim` delivers both - so the pack has already happened by the time the
+first key is pressed. That is the kernel telling the truth rather than a
+defect, and it cost this row one line: `vec0` was read after the filler
+launched, which named a segment nothing pointed into any more, and 5b reported
+"nothing pointed into the image, so this proves nothing" while every other
+check passed. It is read beside `sndseg` now, which was the pre-move base all
+along. RE-READING `sndseg` INSTEAD is the fix that looks right and is not - it
+fixes 5b and moves the failure to 4b, because the image has then already
+reached its packed position and does not move again.
+
 WHAT IT DOES NOT COVER, said plainly: the refusal arm - that the ring does NOT
 move while a stream is playing - needs a playing stream, which is Tracker's
 harness (`tests/trkrate.py`) and not this one's.
@@ -229,8 +244,25 @@ def main():
         if not sndseg:                          # have moved the image already
             print("FAIL: the sound driver is gone after SBTEST")
             return 1
+        # THE VECTORS, BEFORE - AND HERE, not after the filler launches.
+        # SOUND.DRV is the only driver in the tree that hooks one and it hooks
+        # up to five (SPEC.md 66.6.3.1), so the count is read rather than
+        # assumed, and a zero makes 5b vacuous.
+        #
+        # IT USED TO BE READ AFTER THE FILLER AND THAT STOPPED WORKING, for a
+        # reason that is the kernel telling the truth rather than a defect
+        # (SPEC.md 66.4.3.1): fl_fill claims OSAPI_MEM_AVAIL, mem_avail plans
+        # BOTH passes now, and mem_claim delivers both - so the filler's own
+        # fill is what packs the ceiling and moves the image, before this row
+        # ever presses a key. A vec0 taken after it names a segment nothing
+        # points into any more and 5b reported "nothing pointed into the
+        # image" while every other check passed. Taking it here keeps it
+        # paired with `sndseg`, which has been the pre-move base all along -
+        # re-reading THAT instead is the fix that looks right and is not, and
+        # it moves the failure to 4b.
+        vec0 = ivt_names(sndseg)
         print("a stream has been opened and closed: %d vector(s) into %04x"
-              % (len(ivt_names(sndseg)), sndseg))
+              % (len(vec0), sndseg))
 
         bad = 0
         # sheetmove.claims() gives (base, para, own, rloc) and the DMA head is
@@ -324,11 +356,12 @@ def main():
             if top > at:
                 print("      %6.1fK HOLE (top)" % ((top - at) / 64.0))
 
-        # THE VECTORS, BEFORE. SOUND.DRV is the only driver in the tree that
-        # hooks one and it hooks up to five (SPEC.md 66.6.3.1), so the count is
-        # read rather than assumed - and a zero here would make 5b vacuous.
-        vec0 = ivt_names(sndseg)
-        dump("before the forcing asks")
+        dump("after the filler's fill, which is now the forcing event")
+        # ...AND THE KEYS ARE A FOLLOW-UP rather than the force. The filler's
+        # own fill asks for mem_avail and mem_avail plans both passes, so the
+        # pack has usually happened by the time this loop starts; the loop
+        # stays because it costs one read when it has, and because a machine
+        # whose fill did NOT reach the ceiling still gets its force.
         for _ in range(6):
             # 'S' AND NOT 'A': ask, do not fill. The fill is first fit
             # ascending and the hole this row opened above the image is the

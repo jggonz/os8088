@@ -35,10 +35,15 @@ minutes rather than an afternoon.
 > in `kernel/` cite these bodies by their row number and would otherwise point at
 > nothing:
 >
+> **READ `.ovl` IN THIS TABLE AS "THE BOOT OVERLAY"**: SPEC.md 2.5.3 split it
+> into `.ovl` (the blob, dead at `spl_finish`) and `.ovlw` (the FAT window,
+> dead at the first mount) long after these rows landed, and most of them are
+> in the window half today. Where the two builds now disagree the row says so.
+>
 > | row | body | where it is now |
 > |---:|---|---|
 > | 1 | `drv_boot_x` | `.ovl` |
-> | 2 | `vid_probe_avail` + `vid_memchk` + `vid_cga_alias` | `.ovl` |
+> | 2 | `vid_probe_avail` + `vid_memchk` + `vid_cga_alias` | `.ovlw` on `kern_big`, **`.ovl` on `kern_small`** — SPEC.md 2.5.3.2 |
 > | 3 | `sched_init` | `.ovl` |
 > | 4 | `dsk_boot_from_x` + `dsk_bootltr` | `.ovl` |
 > | 5 | `xm_boot_x` | `.ovl` |
@@ -93,24 +98,43 @@ this tree that gives a `KERN_BUDGET` rung back.
 `kernel/kernel.asm` sets the constants and asserts the two bounds at its own foot:
 
 ```
-BOOT2_SECS  equ 19            ; SPEC.md 2.9.12
-OVL_AT      equ 2560          ; where `.ovl` starts inside the blob
-BOOT2_PAD   equ BOOT2_SECS * 512                       =  9,728
+BOOT2_SECS  equ 9             ; SPEC.md 2.5.3 split the overlay; 15.3.8.5.1 and
+OVL_AT      equ 2624          ; 2.9.13 then took the blob to NINE sectors
+BOOT2_PAD   equ BOOT2_SECS * 512                       =  4,608
 
 %if BOOT2_SIZE > OVL_AT            -> "the loader has outgrown its share"
 %if OVL_AT + OVL_SIZE > BOOT2_PAD  -> "the boot overlay does not fit"
 ```
 
-Measured on this tree, `nasm -DKERNSIZE` reading `kernel.asm`'s own `ks:` line:
+**THIS SECTION READ `BOOT2_SECS 19` / `OVL_AT 2560` FOR A LONG TIME AND BOTH
+WERE WRONG.** §2.5.3 split the overlay by deadline and sent eleven sectors of
+it back into the kernel's own read, §15.3.8.5.1's splash size pass took the
+loader's half to one `OVL_AT`, and §2.9.13 packed the kernel — so what this
+paragraph called load-bearing, *"nineteen sectors, and at 17 it does not fit
+at all"*, describes a blob that has not existed for a long time. Re-measure
+before quoting; that is what the paragraph below the table has always said and
+it is the only part of the old text that survived.
+
+Measured on this tree, `nasm -DKERNSIZE` reading `kernel.asm`'s own `ks:` line
+— **and it is per-build now**, §2.5.3.2 having made the `.ovl`/`.ovlw` split a
+build choice on `kern_small`:
 
 ```
-blob      BOOT2_SECS 19 sectors = 9,728 bytes
-  .boot2  2,457                                       of OVL_AT 2,560   ->   103 free
-  .ovl    6,688                                       of 7,168          ->   480 free
-                                                      TOTAL BLOB SLACK      583 bytes
-  ...and on the tightest single-knob arm, BOOTMARK=1:                       420 bytes
-  ...BOOTMARK=1 MOUDIAG=1 together (not a requirement, §5):                 348 bytes
+blob      BOOT2_SECS 9 sectors = 4,608 bytes
+  .boot2  2,250                              of OVL_AT 2,624   ->   374 free (both)
+  .ovl    1,511  kern_big                    of 1,984          ->   473 free
+  .ovl    1,333  kern_small                  of 1,984          ->   651 free
+                                             TOTAL BLOB SLACK      847 / 1,025 bytes
+  ...BOOTMARK=1:                                                   847 / 953
+  ...BOOTMARK=1 MOUDIAG=1 together (not a requirement, §5):         841 / 922
 ```
+
+**`kern_big` is what binds the blob, and keeping it that way is a rule.**
+`kern_small`'s `.ovl` grew 910 bytes when §2.5.3.2 moved the mouse and adapter
+probes into it, and it was left with more room than `kern_big` has on purpose:
+the day the small build has less, a body added to `.ovl` breaks one kernel and
+not the other, and the cheap answer — move an `.ovlw` body across — stops
+being available in the direction it is needed.
 
 **Those bytes are ONE POOL.** `OVL_AT` is a byte offset with no alignment
 requirement — the only constraints are the two `%if`s above — and moving it costs
@@ -119,11 +143,20 @@ BOOT2_SECS sectors either way, so no image byte, no RAM and no extra int 13h
 changes — only the split."* Quote the single figure, and re-derive it after any
 change to either side rather than trusting a number in prose.
 
-**Nineteen sectors is now LOAD-BEARING, which it was not when this file was
-written.** The pass spent the pool: at 18 sectors the same build has **71 bytes**
-left and at 17 it **does not fit at all** (441 short). The blob cannot be given
-back, and a change that grows `.boot2` or `.ovl` by more than §1's figure is a
-`BOOT2_SECS` conversation (§4), not a build fix.
+**Nine sectors is LOAD-BEARING** — a change that grows `.boot2` or `.ovl` by
+more than the figure above is a `BOOT2_SECS` conversation (§4), not a build
+fix, and `BOOT2_SECS` is in `MIN_RAM_KB`'s guard 5 (SPEC.md 2.5.1.1) as well
+as in every boot's read. `SPLSTARS=1` is the worked example of running out:
+the twinkle and the kernel decompressor are 2,748 bytes of a 2,624-byte
+`.boot2`, so that knob requires `NOKZIP=1` (SPEC.md 15.3.8.5.2).
+
+**On `kern_small` there is a second, cheaper pool beside it**: `.ovlw` has 138
+bytes before it rounds up a sector, and a body moved the other way (from
+`.ovl` back to `.ovlw`) costs the blob nothing. The two headrooms are ONE
+number — move a byte across and one grows as the other shrinks — and on that
+build it currently stands at **789 bytes**, split 651 blob / 138 window. That
+invariance is why the split point is a judgement about which side is more
+likely to grow rather than an optimisation.
 
 `.boot2`'s share is not freely tradable *down* either: its fifth sector is
 SPEC.md §15.3.4's row composer, which ships, so `OVL_AT` cannot go to 2,048.
@@ -463,10 +496,18 @@ a "module-private" claim made after grepping four directories and not `tests/`.
 
 ---
 
-## 7. Priced and refused — do not re-derive these
+## 7. Priced and not taken — do not re-derive these
 
-Two classes: bodies that look boot-only and are not (§7.1–§7.5), and changes that
-are correct, were BUILT, and cost more than they save (§7.6).
+Three classes now: bodies that look boot-only and are not (§7.1–§7.5); changes
+that are correct, were BUILT, and cost more than they save (§7.6); and — since
+§7.9 — a row that is **priced, sound and simply not done yet**.
+
+**Read the row before assuming which kind it is.** Everything from §7.1 to
+§7.8 is a REFUSAL and the arithmetic is there to stop you spending an
+afternoon rediscovering it. §7.9 is the opposite: it is a deferral, the case
+for it stands, and whoever picks it up starts from *yes, probably*. A register
+that files both under one word is a register that loses the difference, which
+is the whole value of writing either down.
 
 ### 7.1 Reached after the blob is retired
 
@@ -626,7 +667,7 @@ size sweep will find them again.
 
 `docs/plans/completed/HANDOFF-KERNEL-SIZE-P4.md` is the pass's record; these are the rows that
 belong here, because each is a move or a merge that **looks available and is
-not**. Two are still OPEN and are the owner's to take.
+not**. Four are still OPEN and are the owner's to take.
 
 #### 7.7.1 Two byte-identical routines that may not be merged — the canonical shape
 
@@ -699,6 +740,82 @@ finding's own refusal note did not know that, which is worth recording: the gate
 was the cheapest check available and nobody ran it before writing the
 justification.
 
+#### 7.7.7 OPEN — the SIXTEEN refusal cells `kern_small` carries for features it does not have (128 bytes of table, plus their bodies)
+
+**SPEC.md §20.8 rule 4 says a slot's cell exists in BOTH kernels and the small
+one refuses**, so that a package built against `kern_big`'s SDK gets a refusal
+rather than a wrong routine. That rule has a standing price nobody had
+counted, and on the kernel with **four bytes left in its image rung** it is
+the largest single figure in this file:
+
+| | |
+|---|---|
+| cells whose `kern_small` body is a bare refusal | **16** |
+| the cells alone | **16 × 8 = 128 bytes of `.text`** |
+| their refusal bodies | 2–3 bytes each, several already sharing one `stc`/`retf` |
+
+`gfx_line`, `gfx_lstep`, `gfx_lstepv`, `gfx_spans`, `gfx_blitp`, `wm_band`,
+`xm_alloc`, `xm_free`, `osapi_snd_fm_x`, `osapi_drv_cfg_x`, `osapi_drv_dlg_x`,
+`osapi_desk_svc_x`, `osapi_pkg_rehome_x`, `osapi_vol_stat`, `drv_pkg_call_x`
+and `osapi_mouse_feed`.
+
+**Two constraints make it hard, and the second is the one that is not obvious.**
+
+1. **Only a TAIL cell can be retired without holing the table.** Retiring one
+   in the middle leaves a hole that SPEC.md §20.3.1's free list has to carry;
+   retiring the last one SHRINKS the table and the free list stays empty. This
+   tree has shrunk the tail three times — `OSAPI_MEM_COMPACT_WAKE` became
+   `0x0590`'s `MEMC_POST` verb, the DOS handoff became `OSAPI_DRV_SUSPEND`'s
+   `AL = 2`, and `0x0598` was freed and immediately re-spent on
+   `OSAPI_MOUSE_FEED`. So the set cannot be deleted; it can only be retired
+   one tail cell at a time, and bringing the other fifteen TO the tail is a
+   renumber — mechanical in-tree, since `apps/os88api.inc` is the one source
+   of every offset and `tests/unit/t_api_abi.py` decodes the table out of
+   `kernel.bin` to check it, but it invalidates every `.o88` already written
+   to a floppy, and this project ships images.
+2. **A retired cell needs a DOOR, and every door costs 6–9 bytes to open** —
+   SPEC.md §9.12.5.3 is that arithmetic done in full for one slot. A door
+   needs a selector test it does not already make, plus a register shuffle,
+   because a slot's arguments collide with whatever registers the door already
+   uses. On the kernel that HAS the feature the eight bytes come straight back
+   out of the door; `kern_small` keeps all eight only because there is nothing
+   there to open a door for. **So the whole of this row's value is on
+   `kern_small`, which is where it is worth most anyway.**
+
+Re-derive it with a listing walk rather than by reading source: assemble
+`kernel.asm` with `-DKERN_SMALL -l`, take every `OSAPI_*CELL`/`*SLOT` target
+out of the table, and keep the ones whose body is `stc`/`ret`, `stc`/`retf` or
+`xor ax, ax`/`stc`/`ret`. Measured on `5ca2de18`.
+
+#### 7.7.8 OPEN — the `drv_cls_svc_x` CF gate: a CHECK, worth more than the 38 bytes that motivated it
+
+Not a saving — a **gate**, and it is filed here because it is what stands
+between this file and 38 bytes of `.bss` that are dead by construction.
+
+`drv_cls_svc_x` publishes *"`CF = 1` and `DI = 0` if the class is out of
+range"*, and **`DI = 0` is `drv_svc + 0`, which is the SOUND driver's published
+service table.** A caller that misses the `CF` test therefore does not crash —
+it writes one class's services over another's, which is exactly the silent
+cross-class disconnection SPEC.md §51.2.1 exists to prevent, arriving through
+the routine that implements it. There are **ten callers**. `drv_cls_fp_x`
+publishes the identical refusal and has the same hazard.
+
+**The gate:** a source walk in `tools/os88ovlchk.py`'s shape — find every
+`call drv_cls_svc_x`, `call drv_cls_fp_x` and their `COLD_SEG:drvf_*` far
+forms, and fail the build unless a `jc`/`jnc` appears within the next few
+instructions. About forty lines of host Python and a `fast`-tier row. NASM
+cannot do this itself (it has no control flow) and neither can a `.bss` canary
+(the bad write lands at the *start* of the table, not past its end).
+
+**What it unlocks, once it is green:** `DRVC_POINT` (SPEC.md §9.12) needs no
+`drv_svc` slot at all. `USBMOUSE.DRV` publishes only `DSV_NAME`, and
+`DSV_NAME` is read **nowhere** in `kernel/` — three matches, all of them
+comments — so the class's 36-byte slot plus its `drv_owner` word is dead the
+day it is allocated. Size `drv_svc` at `DSV_SIZE * (DRVC_MAX - 2)` and have
+`drv_cls_svc_x` refuse the class the way it already refuses class 3.
+**Gate first, size change second**: the 38 bytes are what pays for writing the
+gate, not the reason to skip it.
+
 #### 7.7.6 `.lowbss` is not on this menu at all, and it is now PROVED so
 
 `dskwin.inc`'s 3,328, `viddet.inc`'s 696-byte row table and `events.inc`'s
@@ -759,6 +876,88 @@ python3 tests/unit/t_blobruns.py --sectors 19
 python3 tools/os88ovlchk.py                    # from a tree root; 11 checks
 ```
 
+### 7.8 The Dock's routing is at its floor at 112 bytes — three cheaper schemes, all refused
+
+SPEC.md 30.5's fourteen Dock operations cost `kern_big` **112 resident bytes**:
+fourteen four-byte `jmp far [dkv + 4i]` entry points and a fourteen-slot far
+pointer table. Twenty-eight of those bytes are a repeated `KERNEL_SEG`, which
+looks like the obvious thing to take, and it is not takeable. Priced on
+`6bfcffb7`, where the scheme it replaced was **155 bytes** and **227 guest
+cycles** an operation:
+
+| scheme | resident bytes | basic-path cycles | why not |
+|---|---:|---:|---|
+| **built** — `jmp far [dkv+4i]` + a 14-slot far table | **112** | **42** (measured) | — |
+| near vector + one shared far dispatcher | 56 + 28 + 84 + 6 = **174** | ~120 | a NEAR vector cannot name the module's segment, so the mounted arm needs a six-byte trampoline per operation to carry an index. The trampolines are what the far table buys its way out of |
+| `call near [dkv+2i]` at the CALL SITE, no entry points | 33 + 28 + 84 + 6 = **151** | ~30 | same trampolines, plus the basic bodies would need a second `retf` entry (they are near-called from inside `dock.inc` too, and are `kern_small`'s whole Dock), plus `hiber.inc` takes `dock_force`'s address and `cw_mem_disp` near-calls it |
+| **`jmp far KERNEL_SEG:<body>` PATCHED in place at mount** | 14 × 5 = **70** | ~22 | **the only scheme that beats the built one**, on both axes. It is not refused on arithmetic and it has its own row: **§7.8.1** |
+
+#### 7.8.1 The patched far jump — a row to say yes or no to, not a refusal to re-derive
+
+**Not built, deliberately.** It wins on both axes and the whole of the
+question is whether this project wants self-modifying `.text`.
+
+**The shape.** Each of the fourteen entry points becomes a five-byte
+`jmp far KERNEL_SEG:<basic body>` — an `EA` whose offset and segment are
+IMMEDIATES. `DOCK.DRV`'s `dkx_hook` rewrites those four bytes to its own
+`<modseg>:<landing pad>` and `dkx_unhook` writes the kernel's back, which is
+exactly what both already do to `dkv` today — the module carries both tables
+either way, so **the module side does not change at all**. `dkv` disappears.
+
+| | built (`jmp far [dkv+4i]`) | patched (`jmp far imm`) | delta |
+|---|---:|---:|---:|
+| entry points | 14 × 4 = 56 | 14 × 5 = **70** | +14 |
+| the table | 14 × 4 = **56** | none | **−56** |
+| **resident** | **112** | **70** | **−42** |
+| basic-path cost | **42 cycles**, MEASURED | ~22 cycles, PREDICTED | ~−20 |
+| the whole Dock feature | 486 | **444** | −42 |
+
+The 42 is measured — `dock_paint` → `db_paint` under MartyPC at 4.77 MHz, six
+identical samples. The 22 is `jmp far imm`'s 15 clocks against the 8088's
+`max(clocks, 4.34 × 5 bytes)` fetch floor and is **predicted, not measured**.
+
+**What it costs, and it is not a safety argument.** The write happens inside
+`dkx_hook`/`dkx_unhook`, in the module's own segment, under the graphics lock
+SPEC.md 30.5 already requires for a settings change — so no operation can be
+executing, and the 8088's four-byte prefetch queue is nowhere near the bytes
+being written. The price is the one
+`docs/plans/completed/SCHED-IDLE-PLAN.md` §8 already names for its own
+self-modifying option: **`os88marty verify` has to be taught the patch
+table**, or it reports fourteen five-byte runs differing from
+`build/kernel.bin` on any machine with a non-default Dock setting. `verify` is
+a REPORT and exits 0, so no tier goes red — which is the reason to teach it
+rather than a reason to leave it.
+
+**The knob shape, if it is taken.** SCHED-IDLE-PLAN §8's `NOSMC=1` — *"the
+only one that costs literally zero when off"* — is the precedent and the right
+spelling here: `%ifdef NOSMC` keeps `dkv` and the indirect entries, so the A/B
+is one define, the un-patched arm stays assembling, and the decision is
+reversible per build rather than per commit. That is this tree's standing
+pattern for a change somebody may want to look at twice (`NOCURDISK=1`,
+`NOMOUPRIV=1`, `NOSEAMCUT=1`).
+
+**What is NOT claimed:** that it reaches 400. It does not — 444 is 44 short,
+and `docs/reports/DOCK-RESIDENT-COST-2026-09-17.md` §6.4 says what would.
+
+**Two operation counts were also tried and are not worth having.** Folding
+`DKI_FORCE` away by letting the resident `db_force` read `[dock_la1]`/
+`[dock_la2]` is −8 +1 = **−7** and is DEAD: those two words are now in the
+module image (SPEC.md 30.5), so no resident body can read them. Moving the four
+module-only operations onto `mod_fp`'s already-allocated spare slots — which
+cost the kernel nothing, `MOD_NENT` being 7 and the Dock using 2 — is **+8**
+rather than −16, because `mod_disarm` rests a slot on `mod_gone`'s `retf` and a
+far JUMP to it would pop a near frame as CS:IP, so each would have to buy back
+the six- to eight-byte guard the table's own `dkb_ret`/`dkb_clc` slot replaced.
+Only `gfx_hole_arm` qualifies (its call site tests `[gfx_hole]` already) and it
+is **4 bytes** for a hole in an otherwise uniform table.
+
+**And the rung it would take to uncross is not in this feature.** `kern_big`'s
+image rung wants `.text + .bss` at 55,808 and the tree stands at 56,074; the
+whole Dock placement feature's `.text + .bss` is 441. Uncrossing means taking
+**266 of those 441**, which is 60% of a feature whose mechanism is already at
+its floor and whose remaining bytes are one `%ifdef` at a time across nine
+files.
+
 ---
 
 ## 9. Evidence owed by whoever takes a row
@@ -782,3 +981,60 @@ Nothing static substitutes for these, and this file does not claim otherwise.
 5. **A 360KB boot** if any `int 13h` step is bought (§4). **MartyPC cannot host a
    720KB drive with the ROM sets in this tree**, which is precisely how
    SPEC.md §15.3.8.5's boundary was missed the first time. 86Box, or the field 5150.
+
+### 7.9 `HDD.DRV` and `NET.DRV` carry `os88ui`'s glyph family and never call it — 309 bytes, DEFERRED FOR TIME
+
+**This row is NOT a refusal.** It was priced on 2026-09-17 during the file
+dialog's size pass, found sound, and left undone because the cycle ran out of
+time. Nothing about it has been argued against; whoever picks it up is
+starting from "yes, probably", not from "here is why not".
+
+`apps/os88ui.inc`'s default block is `%ifndef OS88UI_NOBTN`, and that block is
+**all-or-nothing**: it carries `os88ui_btn` and `os88ui_bhit` **and**
+`os88ui_glyph` + `os88ui_gring` + `os88ui_gdot` + `os88ui_gdn` as one unit
+(`os88ui.inc:329-848`). Five standalone drivers include the library and **none
+of them defines any `OS88UI_*` region macro**, so all five take the whole
+block. What each actually calls, counted over its own directory:
+
+| driver | `os88ui_btn` | `os88ui_glyph` |
+|---|---:|---:|
+| `ether` | 5 | 2 |
+| `saver` | 1 | 3 |
+| `ramdisk` | 1 | 1 |
+| **`hdd`** | **5** | **0** |
+| **`net`** | **5** | **0** |
+
+So `HDD.DRV` and `NET.DRV` each carry the glyph family for nothing. **309
+bytes in the kernel's copy of those four routines** (`glyph` 144, `gring` 79,
+`gdot` 66, `gdn` 20) and more in a package-arm copy, which is what a driver
+image is. The change is a `%ifndef OS88UI_NOGLYPH` sub-gate inside the
+`NOBTN` block, so a driver can decline the glyph without losing the button —
+which `OS88UI_NOBTN` would take with it today, and is why neither driver can
+opt out now.
+
+**WHAT THE ROW IS WORTH DEPENDS ON A FACT NOBODY HAS MEASURED**, and it is the
+first thing to settle rather than the last. The bytes are a driver IMAGE's,
+not the kernel's — resident only while the driver is loaded — and **a driver
+whose display elements are the point tends to be loaded only while the user is
+configuring it**, which would make 309 bytes of a transient image nearly
+worthless. But `hdd` and `net` are not obviously that kind of driver: `hdd` is
+`DRVC_DISK` and `net` is `DRVC_FILE`, and a driver serving a mounted volume is
+plausibly up for the whole session, in which case the 309 is resident in the
+ordinary sense. **Measure the residency before spending the effort**;
+`tools/heapmap.py` reads what is claimed on a running machine and
+`[drv_wcnt]` is the kernel's own liveness word.
+
+Two things already established, so they need not be re-derived:
+
+- **Neither driver is missing the glyph by accident.** Both draw buttons and
+  neither draws a checkbox, radio or disclosure mark; `os88ui_glyph` is the
+  mark renderer (`docs/plans/completed/CTRL-GLYPH-PLAN.md`), and a driver with
+  no mark to draw has no call to make.
+- **The kernel is not affected either way.** `os88ui.inc` is `%include`d
+  exactly once in the kernel (`kernel/fdlg.inc:3128`), every `os88ui_*` body
+  lands in `.cold`, and **not one is in a `.mod*` section** — so no kernel
+  module carries a second copy. This row is about the five standalone driver
+  images and nothing else.
+
+`tools/incsize.py` is the instrument for the per-driver figure and **will not
+build a driver as-is**: it hard-codes `-I apps/`.

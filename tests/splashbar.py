@@ -106,16 +106,45 @@ def main():
                 if live != 1 or m.read(lin_entry, 1)[0] != 0xE9:
                     continue
                 started = True
+            # **THE READS COME AFTER THE LIVE TEST, NOT BEFORE IT.** The
+            # note below is right that the blob is handed back (SPEC.md 2.9.5)
+            # and that its words are then somebody else's memory - but it
+            # guarded only `total`, with the max() that is still here. `bar`
+            # got `if bar:`, which rejects ZERO and not the arbitrary non-zero
+            # word that teardown leaves: `bar_width(m, bar + 8)` then indexes a
+            # framebuffer row that does not exist and the row dies on
+            # `IndexError: list index out of range` with nothing said about the
+            # bar. Breaking first means no sample is ever taken off a blob that
+            # has stopped being ours, which retires the whole class.
+            # splashspin.py had the identical defect at the identical line.
+            # **THE LAST NOTCH AND THE TEARDOWN ARE THE SAME FRAME.**
+            # `spl_finish` forces [spl_done] to [spl_total] and THEN clears
+            # [spl_live] (SPEC.md 15.3), so a loop that breaks the moment
+            # `live` reads 0 never sees the value the whole check below is
+            # about: it reported `the bar ended at 179 of 180 - spl_finish
+            # forces the last notch, so this is not a rounding question`
+            # about a kernel that had forced it.
+            #
+            # So the counters get ONE more reading on that frame and the
+            # LAYOUT does not. That asymmetry is the point: `off_done` and
+            # `off_total` are two words of a blob the kernel has finished
+            # with but has not handed back yet - `mem_unblob` is at the end
+            # of `kmain` - while `bar` is a pointer this would follow into
+            # `bar_width`, which is what used to die on `IndexError` off a
+            # blob that had stopped being ours. Reading two words is safe
+            # where dereferencing one is not.
+            last = live == 0
             d = int.from_bytes(m.readseg(blob, off_done, 2), "little")
             t = int.from_bytes(m.readseg(blob, off_total, 2), "little")
-            total = max(total, t)       # the LAST sample is taken as the blob
-                                        # is handed back (SPEC.md 2.9.5), so
-                                        # these words are already somebody
-                                        # else's memory by then
+            total = max(total, t)       # kept: harmless, and it is what the
+                                        # half-guarded version used
             if not done or done[-1] != d:
                 if done and d < done[-1]:
                     backwards += 1
                 done.append(d)
+            if last:
+                break                   # the counters are read, the layout is
+                                        # not: see above
             bar = int.from_bytes(m.readseg(blob, off_bar, 2), "little")
             if bar:             # spl_tick raises [spl_live] and THEN calls
                                 # spl_chrome, so there is a window where the
@@ -123,8 +152,6 @@ def main():
                 wpx = bar_width(m, bar + 8)
                 if not widths or widths[-1] != wpx:
                     widths.append(wpx)
-            if live == 0:
-                break
         else:
             raise SystemExit("splashbar: the splash never handed the screen "
                              "over - this machine did not finish booting, so "

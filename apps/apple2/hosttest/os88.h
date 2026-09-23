@@ -146,6 +146,10 @@ unsigned os88_ticks(void);
  * always answers 0 (APPLE2-SPEC section 6.4's rule: it is asked once, from
  * os88_main). Advice, not an oracle. The harness models both. */
 int  os88_key_down(int scan);
+
+/* SPEC.md 11.2.1.1's full-screen chord, mirrored from apps/cc/os88.h */
+#define OS88_SCAN_ENTER 0x1C
+#define OS88_SCAN_ALT   0x38
 int  os88_snd_caps(void);
 int  os88_snd_tone(int hz, int ticks, int prio);
 

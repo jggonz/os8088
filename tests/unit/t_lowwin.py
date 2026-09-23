@@ -3,11 +3,11 @@
 
     python3 tests/unit/t_lowwin.py
 
-`disk_dir`, `disk_icons` and `dsk_secbuf` come alive at `drv_boot`'s first
-mount and are untouched before it - the same moment, and the same silence, as
-the FAT window under them.  Adjacent, the two are one contiguous 8,192-byte
-region that is dead for the whole of `kmain`, which is what the boot overlay
-is meant to land in and spill through (docs/plans/completed/BOOT-LADDER-PLAN.md stage B).
+`dsk_secbuf` comes alive at `drv_boot`'s first mount and is untouched before
+it - the same moment, and the same silence, as the FAT window under it.
+Adjacent, the two are one contiguous region that is dead for the whole of
+`kmain`, which is what the boot overlay is meant to land in and spill through
+(docs/plans/completed/BOOT-LADDER-PLAN.md stage B).
 
 THIS ROW EXISTS BECAUSE NOTHING ELSE WOULD NOTICE.  The placement is bought by
 one line - `kernel/dskwin.inc` being the FIRST file `kernel.asm` includes,
@@ -23,11 +23,26 @@ yet, and the symptom there is the overlay writing over `vid_rowtab`.
 So the invariant is checked where it can still be read: the offsets, off the
 same NASM listing the layout comes from.
 
-BOTH ARMS, and their windows are DIFFERENT SHAPES: kern_small's `disk_icons`
-is SPEC.md 25.8's 16-body pool with a 32-byte index in front of it, and the
-FAT rung under it is SPEC.md 51.0.0's two sectors rather than nine.  The
-tables below are stated per arm for that reason - a single table that fits
-both is a table that has stopped asserting anything about either.
+**THE WINDOW IS ONE BUFFER NOW** (SPEC.md 22.6.3).  It was three, then two;
+`disk_icons` left for the machine-wide icon store (SPEC.md 25.9), and then
+`disk_dir` and `dsk_icoix` left with the floor listing itself - a listing is
+written into the store its CALLER supplied, so there is no shared snapshot to
+have a home.  What is left either side is `dsk_secbuf`, and the arms are the
+same shape again: 512 bytes, the one `int 13h` TARGET here, taking the rung's
+512-aligned base because it is the rung's first bytes.
+
+WHAT STILL DIFFERS IS THE FAT RUNG UNDER IT - SPEC.md 51.0.0's two sectors
+against nine - so the tables below stay stated per arm, which is also what
+keeps them able to disagree: a single table that fits both is a table that has
+stopped asserting anything about either.
+
+**AND THE REGION IS DERIVED FROM THE MEASURED WINDOW, not from `WANT`.**  It
+used to be summed out of `WANT` and compared with a second hand-written
+table, so the two agreed with each other and read nothing out of the kernel at
+all: both arms' region checks PASSED on the build where `disk_dir` had been
+deleted and the window was a quarter of the size this file claimed.  A check
+that compares two constants in the same file is the green row that tests
+nothing (docs/WRITING-TESTS.md 1).
 """
 import os
 import re
@@ -39,32 +54,34 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 from harness import check, done                           # noqa: E402
 
-# PER ARM, because kern_small's window is a different shape AND sits over a
-# different FAT rung - SPEC.md 25.8 made `disk_icons` a 16-body pool with a
-# 32-byte index in front of it, and SPEC.md 51.0.0 cut DSK_FAT_SECS to 2.
-# Stated twice rather than derived, for this file's own reason: a table read
-# out of the kernel agrees with the kernel by construction and would have
-# noticed neither change.
+# PER ARM, because the two sit over different FAT rungs - SPEC.md 51.0.0 cut
+# kern_small's DSK_FAT_SECS to 2 against kern_big's 9.  Stated rather than
+# derived, for this file's own reason: a table read out of the kernel agrees
+# with the kernel by construction and would have noticed none of the changes
+# below.
+#
+# The window is `dsk_secbuf` and nothing else on BOTH arms (SPEC.md 22.6.3).
+# `dsk_ovlpad` is NOT a row here on purpose: `DSK_OVLPAD` is 0 today - six
+# boot-only bodies moved into the blob half through SPEC.md 2.5.3.2's OVBCALL
+# set and `.ovlw` fell 1,900 -> 1,342 - so the label emits nothing and never
+# reaches the listing.  Give it a row here if it is ever non-zero again.
 WANT = {
-    "kern_big":   [("dsk_secbuf", 512), ("disk_dir", 768),
-                   ("disk_icons", 2048)],
-    "kern_small": [("dsk_secbuf", 512), ("disk_dir", 768),
-                   ("dsk_icoix", 32), ("disk_icons", 1024)],
+    "kern_big":   [("dsk_secbuf", 512)],
+    "kern_small": [("dsk_secbuf", 512)],
 }
 FAT_BYTES = {"kern_big": 4608, "kern_small": 1024}   # DSK_FAT_SECS * 512
 # ...and what the two make between them: the region the boot overlay spills
 # through, and the part of it a whole-sector int 13h read can actually reach.
-REGION = {"kern_big": (7936, 7680), "kern_small": (3360, 3072)}
+#
+# BOTH ARE WHOLE SECTORS AGAIN, which they had stopped being: 4,608 + 512 is
+# 5,120 exactly and 1,024 + 512 is 1,536, so the readable ceiling IS the
+# region on both arms.  While the window carried a listing the region was
+# 13.125 sectors and the last fraction of a sector was unreachable, which is
+# why `kernel.asm`'s `%if` rounds `OVLW_SIZE` UP before comparing.  That
+# rounding is still what makes the guard correct and must not be taken out
+# because the numbers happen to divide today.
+REGION = {"kern_big": (5120, 5120), "kern_small": (1536, 1536)}
 SECTOR = 512
-# `disk_dir` is DSK_NENT * DSK_DE_STRIDE and DSK_DE_STRIDE is 24, not
-# DSK_DE_SIZE's 32 (SPEC.md 19.1): a staged listing does not carry the
-# record's zero tail.  It was 1,024 and the region was 8,192, a whole 16
-# sectors; it is 768 and the region is 7,936, of which **7,680 is readable**.
-# That is the cost of those 256 bytes and it is not free - the boot overlay's
-# window half loses them too - so the number is asserted here rather than
-# left to be discovered when `.ovlw` next grows.  `kernel.asm`'s own `%if`
-# rounds OVLW_SIZE UP to a sector for exactly this reason.
-
 
 def lowbss(defines=()):
     """[(offset, size, label)] for `.lowbss`, in address order."""
@@ -96,6 +113,26 @@ def lowbss(defines=()):
             os.remove(p)
     rows.sort()
     return rows
+
+
+def window_bytes(rows, names):
+    """How many bytes of the rung the window actually occupies.
+
+    `dsk_win_base` and `dsk_win_end` are bare labels that emit nothing, so
+    they carry no address column in the listing and cannot be read off it.
+    The window is defined as the rung's FIRST bytes, so the number is the
+    offset of the first labelled `.lowbss` row the window does not own.
+
+    That is an independent measurement rather than `sum(WANT)` restated, and
+    it catches two things the per-label loop above cannot: a foreign block
+    landing INSIDE the window (the offset comes back short) and the whole
+    window sliding down the rung (it comes back 0, because the foreign label
+    is now first).
+    """
+    for a, _sz, l in rows:
+        if l and l not in names:
+            return a
+    return -1
 
 
 for label, defines in (("kern_big", ("-DKERN_BIG",)),
@@ -134,8 +171,21 @@ for label, defines in (("kern_big", ("-DKERN_BIG",)),
           % (label, total),
           "a gap between them is a gap in the region the overlay spills "
           "through", got=want_off, want=total)
+
+    # THE MEASURED WINDOW, off the listing - dsk_win_base..dsk_win_end as the
+    # kernel actually laid it out, and NOT `sum(WANT)`.  Summing the table
+    # made the two checks below compare two constants written in this file,
+    # so they agreed with each other while disagreeing with the kernel by
+    # 1,600 bytes.
+    measured = window_bytes(rows, {n for n, _ in want})
+    check(measured == total,
+          "%s: dsk_win_base..dsk_win_end measures %d" % (label, total),
+          "the region below is computed from THIS number, so if it is not "
+          "the window the table describes, everything after it is arithmetic "
+          "about a kernel that does not exist",
+          got=measured, want=total)
     w_region, w_read = REGION[label]
-    region = FAT_BYTES[label] + total
+    region = FAT_BYTES[label] + measured
     check(region == w_region, "%s: the overlay's window half is %d bytes"
           % (label, w_region),
           "SPEC.md 2.1.2 and 2.5.3 both quote this number and kernel.asm's "

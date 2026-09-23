@@ -8,7 +8,7 @@ checked against it rather than against somebody's memory of the design.
 
 What this models, exactly and byte for byte:
 
-  * the 80x25 CHAR + ATTRIBUTE buffer the terminal keeps (`te_scr`): 2,000
+  * the 80x25 CHAR + ATTRIBUTE buffer the terminal keeps (`con_scr`): 2,000
     cells of (character, IBM attribute), 4,000 bytes, row-major. `raw()`
     returns those 4,000 bytes in the order the guest holds them, which is
     what a test compares against guest memory;

@@ -78,6 +78,8 @@ snd_entry:
     je snd_detach
     cmp al, DRVV_TIER
     je snd_tier
+    cmp al, DRVV_HWINFO
+    je snd_hwinfo
     cmp al, DRVV_READY
     je .nosb                    ; nothing to do: this driver keeps no settings
                                 ; blob (SPEC.md 51.9) and the probe already
@@ -256,6 +258,46 @@ snd_tier:
 ; in:  nothing
 ; out: nothing. Cannot fail (SPEC.md 51.2).
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; snd_hwinfo - DRVV_HWINFO: where this machine's Sound Blaster is (SPEC.md
+;              51.11.2)
+; out: CF=0 with AX = the DSP base port, BL = its IRQ, BH = its DMA channel,
+;      CX = the DSP version (major in CH, minor in CL); CF=1 if there is none
+;
+; ASKED ON THE WAY PAST, by a drv_suspend that is about to unload this driver
+; so a fullscreen program can have the card - and this is the last moment
+; anything knows the answer. What a DOS program does with it is BLASTER=.
+;
+; AN ADLIB-ONLY MACHINE ANSWERS CF=1 and not a base of 0: there is an OPL at
+; 388h and no DSP at all, and a BLASTER= naming a card that is not there sends
+; a program to reset a DSP that will never answer - which is a hang where "no
+; XMS" would have been a fallback (the shape SPEC.md 96.15.1 argues at one
+; level down).
+;
+; **AND THAT SENTENCE WAS A CLAIM AND NOT A FACT UNTIL SPEC.md 51.11.2.1**:
+; `[sbl_base]` is the scan's CURSOR as well as its answer, and a scan that
+; found nothing used to leave `0x220` in it from its own slow retry - so this
+; routine read a base, answered CF=0, and an AdLib machine published
+; `BLASTER=A220 D1 T1`. It is `[sbl_base]` and not `[sbl_up]` on purpose: a
+; card that is really there but whose DMA claim failed is still a card a DOS
+; program can have, and `.nomem` must not hide it.
+; -----------------------------------------------------------------------------
+snd_hwinfo:
+    mov ax, [sbl_base]
+    or ax, ax
+    jz .none
+    mov bl, [sbl_irq]
+    mov bh, 1                   ; this driver drives DMA channel 1 and only
+                                ; ever channel 1 - sbl_halt's own mask is the
+                                ; statement of it
+    mov ch, [sbl_verhi]
+    mov cl, [sbl_verlo]
+    clc
+    ret
+.none:
+    stc
+    ret
+
 snd_detach:
     push ax
     push cx

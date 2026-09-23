@@ -723,7 +723,7 @@ wr_apathn:
 ;
 ; **THE PROGRAM ENTRY IS LAST SO THAT THE LAUNCH COSTS NOTHING**: the claim
 ; still holds it, byte for byte what the file on the tree now holds, and
-; OSAPI_PKG_RUN takes it from there with the instance's directory already ON
+; OSAPI_PKG_START takes it from there with the instance's directory already ON
 ; the tree - so the overlay and the sidecars are where the launched package
 ; will look for them (SPEC.md 73.14, 92.8).
 ;
@@ -746,11 +746,18 @@ wr_arcend:
     je .noprog
     test byte [wr_aflags], WAH_PROGRAM
     jz .noprog
-    mov ax, [wr_asize]              ; --- the tree carries a program, and
-    mov [wr_rlen], ax               ; wr_fname is already its name
+    mov byte [wr_job], WJ_NONE      ; --- the tree carries a program, and
+    mov word [wr_rlen], 0           ; wr_fname is already its name. BY NAME
+    call wr_freefile                ; (92.14.2): the decode claim goes back
+                                    ; BEFORE ld_alloc asks for a region -
+                                    ; otherwise the package is in the heap
+                                    ; TWICE at the one moment it must not be -
+                                    ; and a zero length is what says so
+                                    ; (21.5). It also takes a program with
+                                    ; PARTS, which the image arm refuses for
+                                    ; want of a file, and the file is the one
+                                    ; thing this chain has just made
     call wr_pkgrun                  ; NO LOCK: it opens a window (92.5)
-    mov byte [wr_job], WJ_NONE
-    call wr_freefile
     call OSAPI_GFX_LOCK
     call wr_clip                    ; ...and the launched window is now ON TOP
     call wr_geom                    ; of ours, which is what 92.6.1 is about

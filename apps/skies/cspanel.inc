@@ -1081,8 +1081,26 @@ cs_d_adi:
     cmp word [cs_adry], 0           ; ...nor is it redrawn on the gate
     je .nadi
     call cs_adwin                   ; the window over the last line
-    ; --- the offset: nose up moves the horizon DOWN, a row per 1.4 degrees --
+    ; --- THE ATTITUDE AND NOT THE EULER TRIPLE (SPEC.md 88.9.2.6). A triple
+    ;     names each attitude twice and the panel wants the other one: past
+    ;     the vertical the horizon comes BACK, and pitch 180 with the wings
+    ;     rolled level is an aeroplane straight and level. Raw, its top byte
+    ;     is 0x80 and the offset is -128 rows on a glass ten rows high, so
+    ;     88.9.6.2's chord finds d >= R and .none draws nothing - which is
+    ;     the field's "the attitude line is completely gone". The fold is
+    ;     (180 - pitch, roll + 180) and it is EXACT, sin(180 - p) being
+    ;     sin(p): the representation moves and the aeroplane does not
     mov ax, [cs_pitch]
+    mov bx, [cs_roll]
+    mov cx, ax
+    add cx, 16384
+    jns .att                        ; 88.7.8.1's test: cos(pitch) < 0
+    neg ax
+    add ax, 0x8000                  ; 180 - pitch, wrapping for free
+    xor bh, 0x80                    ; ...and the aeroplane is upside down
+.att:
+    mov [cs_adroll], bx
+    ; --- the offset: nose up moves the horizon DOWN, a row per 1.4 degrees --
     mov al, ah
     cbw
     mov [cs_adoff], ax
@@ -1092,13 +1110,13 @@ cs_d_adi:
     mov al, ah
     mov ah, dl                      ; AX = t, rows for a slope of one
     push ax
-    mov ax, [cs_roll]               ; ...the SINE first, and the cosine LAST,
+    mov ax, [cs_adroll]             ; ...the SINE first, and the cosine LAST,
     call cs_sin                     ; straight into the divisor (88.9.2.4):
     pop bx                          ; BX = t              this line used to
     imul bx                         ; DX:AX = t sin       hold cos in CX
     push dx                                             ; across cs_sin, which
     push ax                                             ; is documented to
-    mov ax, [cs_roll]                                   ; clobber it
+    mov ax, [cs_adroll]                                 ; clobber it
     call cs_cos
     mov bx, ax                      ; BX = cos, and nothing runs before the
     pop ax                          ; divide that could touch it

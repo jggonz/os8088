@@ -116,6 +116,12 @@ def sites(lst):
     s = {}
     s["skyground"] = nop(*find(r"call cs_skyground$", within="cs_render"))
     s["scene"] = nop(*find(r"call cs_scene$", within="cs_render"))
+    # THE ENGINE SOUND, per drawn object (SPEC.md 88.8.2.1.2). It is the only
+    # stage here that is not drawing, and it is measured for exactly that
+    # reason: a sound paced off the wall clock has to be called from inside
+    # cs_scene to be paced at all, and what that costs is a question the
+    # pinned scene answers and arithmetic over a far call does not.
+    s["sound (per object)"] = nop(*find(r"call cs_sound_step$", within="cs_drawpass"))
     s["  faces"] = nop(*find(r"call cs_faces$", within="cs_drawobj"))
     s["  edges"] = nop(*find(r"call cs_edges$", within="cs_drawobj"))
     s["  verts (stack)"] = nop(*find(r"call cs_stackverts$", within="cs_drawobj"))

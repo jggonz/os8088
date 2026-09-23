@@ -423,6 +423,16 @@ hd_tw_paint:
 ; is visible: the labels were the only ones in the system not centred in their
 ; buttons.
 ; -----------------------------------------------------------------------------
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; A Control Panel page draws its buttons one at a time, so the record is
+; pointed at whichever rect the caller staged. The GESTURE here is the
+; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
+; release-fired; what changed is that the DRAW goes through the control.
+hdt_btlbl: dw 0
+hdt_btflg: dw 0
+    OS88UI_BTNREC hdt_btrec, 0, hdt_btlbl, hdt_btflg, 1
+
 hd_tw_button:
     push ax
     push bx
@@ -450,7 +460,16 @@ hd_tw_button:
 .nodn:                          ; greyed button never says it will fire
     mov bx, hd_tbrect           ; OS88UI_FILL because a RELEASE redraws this
     or di, OS88UI_FILL          ; button over a pressed one; on a full repaint
-    call os88ui_btn             ; hd_win_erase has already whited the ground
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [hdt_btlbl], si          ; label and DI its flags, so the record takes
+    mov [hdt_btflg], di          ; all three and the picture is identical
+    mov [hdt_btrec+OS88UI_BT_RECTS], bx
+    mov bx, hdt_btrec
+    mov al, 1
+    call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop dx

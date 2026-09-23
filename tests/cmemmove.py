@@ -204,8 +204,10 @@ def main():
         os88marty.settle(m)
 
         base1, moves, was = cword("_ch_seg"), cword("_ch_moves"), cword("_ch_was")
-        print("  claim %04x -> %04x, os88_onmove called %d time(s), was=%04x"
-              % (base0, base1, moves, was))
+        was0 = cword("_ch_was0")
+        print("  claim %04x -> %04x, os88_onmove called %d time(s), "
+              "was=%04x first=%04x"
+              % (base0, base1, moves, was, was0))
 
         moved = base1 != base0
         print("  2 moved, and C followed  %s"
@@ -214,10 +216,19 @@ def main():
                  "NO  <-- the run proves nothing"))
         bad += not (moved and moves)
 
-        ok3 = was == base0 and base1 != was
+        # **THE FIRST `was`, NOT THE LAST**, because SPEC.md 66.4.3's self-
+        # compaction can move one claim more than once in a single pass:
+        # measured here at 4ca0 -> 3d60 -> 2be0, three bases and two calls.
+        # `_ch_was` is what the handler was told LAST (chello.c says so), so
+        # against `base0` it reads WRONG while every call was right - which
+        # is what this check reported before it asked for `_ch_was0`. The
+        # chain is still pinned at both ends: the first `was` is the base the
+        # host read before the pass, and the last `now` is where it ended up.
+        ok3 = was0 == base0 and base1 != was0 and was != base1
         print("  3 (was, now) not swapped %s"
               % ("OK" if ok3 else
-                 "WRONG: was=%04x, old base was %04x" % (was, base0)))
+                 "WRONG: first was=%04x, last was=%04x, old base was %04x, "
+                 "now %04x" % (was0, was, base0, base1)))
         bad += not ok3
 
         if moved:

@@ -131,13 +131,30 @@ def main():
                 # defect this file exists to catch.
                 last = cos
                 continue
+            # **THE SPLASH IS OVER BEFORE IT IS RECORDED, NOT AFTER**, which
+            # is the seeding trap above at the other end of the run. This test
+            # used to append and THEN notice, so the frame the loading screen
+            # was torn down on contributed a sample - read out of a blob whose
+            # `spl_done` had already been zeroed. That sample lands at
+            # `done` = 0, `cut` is max(done) // 2, and 0 <= cut, so the EARLY
+            # group acquired a member ~80 ticks past the end of the early
+            # stretch. Its `span` runs from the group's first tick to that one,
+            # so the early rate was 19 positions over 137 ticks instead of over
+            # 57: 0.1387 against SPL_SPINSH's 0.2500, reported as "the notch
+            # rate changed and the animation followed it".
+            #
+            # It is a QUANTISED failure and that is why it appeared out of
+            # nowhere: whether the last frame catches a changed angle depends
+            # on where the teardown falls between two 4-tick samples, so the
+            # row passed for as long as the boot happened to end just after one
+            # and went red when the kernel grew 2,752 bytes and moved it.
+            if live == 0:
+                break
             if cos != last:
                 tick = int.from_bytes(m.read(BDA_TICK, 2), "little")
                 done = int.from_bytes(m.readseg(blob, off_done, 2), "little")
                 samples.append((tick, cos, done))
                 last = cos
-            if live == 0:
-                break
         else:
             raise SystemExit("splashspin: the splash never handed the screen "
                              "over - this machine did not finish booting, so "

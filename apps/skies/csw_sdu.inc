@@ -388,6 +388,15 @@ cs_n_sdu_bot:  db 'BOTAFOGO', 0
 ; south-east: Sugarloaf is 2,249 m off the departure threshold and Corcovado
 ; with the statue is over the tail.
 ;
+; THE WATER STRIP (88.7.7.5) is laid the same way for the same reason: 122
+; down the bay from (-2500, 1550), 1,800 m of it, so the A5 spawns at the
+; north-west end with Sugarloaf 3,781 m dead ahead and Morro da Urca two
+; degrees right of it. It was 075 across the bay, which put the rock 40
+; degrees off the nose - outside both adapters' fields - and the bridge's
+; first span 600 m into the take-off run; the span now crosses the strip's
+; line 350 m behind the spawn. The south-east end is 171 m off the quay
+; shore and the north-west end 570.
+;
 ; The runway rectangle runs from (-2114, 768) to (-3336, 1212) and is 40 m
 ; wide. Every collidable base clears it by more than the 150 m the brief for
 ; this world asks: the terminal apron's hangar is the closest at 223 m from
@@ -403,10 +412,17 @@ cs_a_sdu:
     dw cs_s_rwy_sdu                 ; CSA_RWY
     dw -590                         ; CSA_SPAWN    60 m in from the threshold
     dw cs_ot_sdu, CS_N_SDU          ; CSA_OBJS, CSA_NOBJ
-    dw -3312, 2175                 ; CSA_WX, CSA_WZ: THE WATER STRIP
-    dw 13653                        ; CSA_WHDG    (88.7.7) - GUANABARA BAY
-    dw 1000                          ; CSA_WLEN    half its length...
-    dw 100                           ; CSA_WWID    ...and half its width
+    dw -2500, 1550                  ; CSA_WX, CSA_WZ: THE WATER STRIP
+    dw 22209                        ; CSA_WHDG    (88.7.7.5) - GUANABARA BAY,
+                                    ;             laid on 122 DOWN THE BAY AT
+                                    ;             SUGARLOAF: the A5 spawns at
+                                    ;             the north-west end with the
+                                    ;             rock and Morro da Urca 3.8 km
+                                    ;             dead ahead. It was 075 across
+                                    ;             the bay with the rock 40 off
+                                    ;             the nose, outside both fields
+    dw 900                          ; CSA_WLEN    half its length...
+    dw 100                          ; CSA_WWID    ...and half its width
     dw cs_n_sdu_bay              ; CSA_WNAME
     dw 0                        ; CSA_FLAGS
 cs_s_sdu: db 'RIO-SDU', 0

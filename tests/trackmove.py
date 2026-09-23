@@ -16,23 +16,45 @@ handshake (SPEC.md 66.5) doing the only job it exists for. The mixer walks
 `MP_SEG` with no lock of any kind; if the park did not work, the module would
 move under a running mixer and what came out would be noise, not silence.
 
-Six assertions. The last is the one no memory dump can make:
+SINCE SPEC.md 66.4.3 IT IS ALSO TRACKER'S OWN REGION, and check 1 is the one
+that makes the seven under it mean what they say: every word read out of
+Tracker below is read THROUGH its segment, so a region that moved and a test
+that did not follow it decodes a live machine as a corrupt one. It is two
+declarations and they are tested separately because they fail separately -
+`MC_RLOC` on the region's own claim is `OS88_REGION_MOVABLE`, and a non-zero
+`inst_restart` for its slot is `OS88_WORKER_RESTARTABLE`. Without the second
+the first buys nothing at all: the kernel wrote Tracker's segment into its
+worker's frame before the mixer's first instruction, so `mem_frameless` pins
+a region whose worker never declared a way back (SPEC.md 66.6.2).
 
-  1. `[trk_modseg]` CHANGED ADDRESS. Without it the rest is vacuous.
-  2. The 116KB of module survived, hashed at the two addresses.
-  3. `[mp_blobseg]` followed the claim.
-  4. All 31 `MS_SEG` sample bases followed, checked as deltas.
-  5. All 4 channel `MP_SEG` followed.
-  6. The replayer is STILL RUNNING afterwards - `mp_row` advances - which is
+Nine assertions. Check 7 is the one no memory dump can make:
+
+  1. Tracker's REGION is declared movable AND its worker restartable, and
+     where the layout allows it, the region actually MOVED.
+  2. `[trk_modseg]` CHANGED ADDRESS. Without it the rest is vacuous.
+  3. The 116KB of module survived, hashed at the two addresses.
+  4. `[mp_blobseg]` followed the claim.
+  5. All 31 `MS_SEG` sample bases followed, checked as deltas.
+  6. All 4 channel `MP_SEG` followed.
+  7. The replayer is STILL RUNNING afterwards - `mp_row` advances - which is
      the only check that says the worker came back from its park.
+  8/9. The sound driver's staging pool, where the machine has a card.
 """
 import sys, os, time, hashlib, argparse, subprocess, tempfile
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import os88fixture                                       # noqa: E402
 import os88marty, os88mouse, os88sym, os88geom, dispcp
 
 MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
+INST_MAX, I_RECSZ, I_SPTR = (os88geom.INST_MAX, os88geom.I_RECSZ,
+                             os88geom.I_SPTR)
 PKG_MOD, PKG_HEAPFRAG = "BEVERLY.MOD", "HEAPFRAG.O88"
 MS_SZ, MS_SEG = 12, 0
 MP_CHSZ, MP_SEG = 40, 6
@@ -80,6 +102,20 @@ def uncovered(m, S, win, prefer_title=False):
         for x in range(win.x + 4, win.x + win.w - 18):
             if not any(o.covers(x, y) for o in above):
                 return x, y
+    return None
+
+
+def inst_restart(m, S, seg):
+    """The near offset this package's worker is re-entered at, 0 = none.
+
+    inst_restart is a WORD side table indexed by instance slot, so the slot
+    has to come from inst_tab's own I_SPTR - the one place a segment is tied
+    to a record (SPEC.md 66.6.2).
+    """
+    tab = m.read(S("inst_tab"), INST_MAX * I_RECSZ)
+    for i in range(INST_MAX):
+        if u16(tab, i * I_RECSZ + I_SPTR) == seg:
+            return u16(m.read(S("inst_restart") + i * 2, 2))
     return None
 
 
@@ -244,29 +280,51 @@ def main():
             print("        %5d KB HOLE (to the top)" % ((top_p - fill) // 64))
 
         bad = 0
+
+        # --- 1: THE REGION ITSELF, and it is read BEFORE anything else ------
+        # tword() closes over tk_seg late, so rebinding it here is what makes
+        # every check below read the live Tracker rather than the hole it used
+        # to be in.
+        tk_new, _ = find_win(m, S, "Tracker")
+        if tk_new is None:
+            print("FAIL: Tracker's window vanished across the compaction")
+            return 1
+        rgn = [c for c in claims(m, S) if c[0] == tk_new]
+        rdecl = bool(rgn and rgn[0][3])
+        rst = inst_restart(m, S, tk_new)
+        rmoved = tk_new != tk_seg
+        print("  1 region movable      %s / restart %s%s"
+              % ("DECLARED" if rdecl else "PINNED",
+                 "%04x" % rst if rst else "NONE",
+                 ("   MOVED %04x -> %04x" % (tk_seg, tk_new)) if rmoved
+                 else "   (not exercised: nothing was free above it)"))
+        bad += not rdecl
+        bad += not rst
+        tk_seg = tk_new
+
         nb = tword("trk_modseg")
         moved = nb != base
         # heapfrag holds the gfx lock across its triggering claim on purpose,
         # so WITHOUT SPEC.md 66.5.4's declaration this cannot move: the worker
         # is blocked in gfx_lock and never reaches its ALIVE park point
-        print("  1 module moved        %s"
+        print("  2 module moved        %s"
               % ("%04x -> %04x" % (base, nb) if moved
                  else "NO" if a.expect_nolk else "NO  <-- proves nothing"))
         bad += moved if a.expect_nolk else not moved
 
         h1 = hashlib.md5(m.read(nb * 16, para * 16)).hexdigest()
-        print("  2 contents survived   %s  (%s)"
+        print("  3 contents survived   %s  (%s)"
               % ("OK" if h1 == h0 else "CORRUPT", h1[:12]))
         bad += h1 != h0
 
         ok3 = tword("mp_blobseg") == nb
-        print("  3 blobseg followed    %s" % ("OK" if ok3 else "STALE"))
+        print("  4 blobseg followed    %s" % ("OK" if ok3 else "STALE"))
         bad += not ok3
 
         smp1 = m.read(tk_seg * 16 + P["mp_smptab"], MS_SZ * 31)
         ch1 = m.read(tk_seg * 16 + P["mp_chans"], MP_CHSZ * 4)
         ds1 = [(u16(smp1, i * MS_SZ + MS_SEG) - nb) & 0xFFFF for i in range(31)]
-        print("  4 31 sample bases     %s" % ("OK" if ds0 == ds1 else "STALE"))
+        print("  5 31 sample bases     %s" % ("OK" if ds0 == ds1 else "STALE"))
         bad += ds0 != ds1
 
         # MP_SEG is LIVE STATE, not a constant: a playing module rewrites it
@@ -277,7 +335,7 @@ def main():
         inb = [i for i in range(4)
                if u16(ch1, i * MP_CHSZ + MP_SEG)
                and not (nb <= u16(ch1, i * MP_CHSZ + MP_SEG) < nb + para)]
-        print("  5 channels inside it  %s" % ("OK" if not inb else
+        print("  6 channels inside it  %s" % ("OK" if not inb else
                                               "OUTSIDE: %s" % inb))
         bad += bool(inb)
 
@@ -289,7 +347,7 @@ def main():
         time.sleep(4)
         r2 = tword("mp_row")
         alive = tword("mp_loaded") != 0
-        print("  6 replayer alive      %s  (row %d -> %d -> %d, loaded=%s)"
+        print("  7 replayer alive      %s  (row %d -> %d -> %d, loaded=%s)"
               % ("OK" if alive else "GONE", row0, r1, r2, alive))
         bad += not alive
         if pool0:
@@ -304,18 +362,18 @@ def main():
             # does not manufacture a pass. (Closing Tracker to open a hole is
             # self-defeating: it stops the stream, and [sbl_poolseg] goes to 0.)
             if not pnew:
-                print("  7 pool moved          SKIP (the stream closed, so the"
+                print("  8 pool moved          SKIP (the stream closed, so the"
                       " pool was freed)")
             elif pnew != pool0:
-                print("  7 pool moved          %04x -> %04x" % (pool0, pnew))
+                print("  8 pool moved          %04x -> %04x" % (pool0, pnew))
             else:
-                print("  7 pool moved          NOT EXERCISED (declared=%s;"
+                print("  8 pool moved          NOT EXERCISED (declared=%s;"
                       " nothing was free beneath it)" % bool(prloc))
             if not prloc:
                 print("      the pool was never DECLARED movable")
                 bad += 1
             ok8 = (not pnew) or (pnew in live)
-            print("  8 pool base is a claim %s" % ("OK" if ok8 else "STALE"))
+            print("  9 pool base is a claim %s" % ("OK" if ok8 else "STALE"))
             bad += not ok8
         print("VERDICT:", "OK" if not bad else "%d PROBLEM(S)" % bad)
         return 1 if bad else 0

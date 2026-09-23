@@ -44,6 +44,17 @@
                                     ; file's whole argument applied to
                                     ; something bigger than a button.
                                     ;
+%define OS88UI_NOGEST               ; ...but NOT the install side (SPEC.md
+                                    ; 20.5.1.3.4). os88ui_btninit's three slot
+                                    ; hooks and the four bodies behind them are
+                                    ; 226 bytes this package never reaches: it
+                                    ; finds the press with os88ui_bfind and
+                                    ; holds it with arm/fire itself. The gate
+                                    ; deletes the SYMBOLS, so the day that
+                                    ; stops being true this file does not
+                                    ; assemble - which is the only reason it is
+                                    ; safe to opt out of a gesture at all
+                                    ;
                                     ; NOT %define OS88UI_SBDRAG: nothing drags
                                     ; a thumb yet, and the state it declares is
                                     ; six bytes of bss and a body. Add it here,

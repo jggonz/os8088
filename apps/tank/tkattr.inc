@@ -4,9 +4,11 @@
 ; THE ATTRACT WINDOW (SPEC.md 85.10). This is the WINDOWED half of the game
 ; and the only part of it that draws with the kernel's own slots - the game
 ; itself is past SPEC.md 53.7's fence and owns every pixel. So it is also
-; where OSAPI_GFX_LINIT and OSAPI_GFX_LSTEP (SPEC.md 5.6.7) finally get a
-; consumer in this package: the logo's gleam is two resumable walks chasing
-; each other along a stroke that never lifts.
+; where SPEC.md 5.6.7's resumable walk finally gets a consumer in this
+; package: the logo's gleam is two resumable walks chasing each other along a
+; stroke that never lifts. It reached it as OSAPI_GFX_LINIT/LSTEP and reaches
+; it as apps/os88gfx.inc's `gfxe_winit`/`gfxe_wstep` now (SPEC.md 5.12.7) -
+; the same arithmetic over the same block, in this package's own image.
 ;
 ; ONE CLOSED LOOP A GLYPH (SPEC.md 85.10.1). The lettering is an OUTLINED
 ; heavy geometric face - the letters drawn as their own edges with empty
@@ -448,7 +450,7 @@ tk_lgarm:
 ; tk_lgpair - arm the forward cursor SI and the backward cursor DI
 ;
 ; DI IS BANKED IN MEMORY and not in the register, because tk_cur_init ends in
-; OSAPI_GFX_LINIT and hands it the block in ES:DI - so the first init below
+; `gfxe_winit` and hands it the block in DI - so the first init below
 ; leaves DI pointing at the FORWARD cursor. The backward one then never got a
 ; length or a step, and only one gap ever moved.
 tk_lgpair:

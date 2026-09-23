@@ -136,7 +136,13 @@ def main(argv=None):
             return int.from_bytes(m.read(S(name), 2), "little")
         bounds = (word("vid_band_x0"), word("vid_band_xe"), word("vid_dock_y0"))
         expected = (0, word("vid_pw") - 1, word("vid_ph"))
-        if bounds != expected or m.read(S("dock_hidden"), 1) != b"\x01":
+        # HIDDEN, asked of the kernel's own words: [dock_hidden] is
+        # DOCK.DRV's private byte (SPEC.md 30.5) and lives in the module
+        # image. What the kernel keeps is the LIVE rect, and a hidden strip's
+        # is the one-pixel line - here a right-hand one, so its two columns
+        # are the same column and it reserves 1.
+        if (bounds != expected or word("dock_thk") != 1
+                or word("dock_lx1") != word("dock_lx2")):
             fail.append("saved right auto-hide did not rebuild geometry: %r" % (bounds,))
         if not word("mod_r_dock"):
             fail.append("saved advanced Dock did not load DOCK.DRV")

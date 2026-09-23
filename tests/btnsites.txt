@@ -1,0 +1,104 @@
+# tests/btnsites.txt - the BUTTON registry (SPEC.md 20.5.1.3)
+#
+# `os88ui_btn` IS the standard button and there is no second way to draw one.
+# It takes a RECORD and an index, resolves the pressed look from
+# OS88UI_BT_DOWN, ORs the erase in itself, and its siblings - os88ui_btninit,
+# btnpress, btndrag, btnup - are the SPEC.md 13.7 gesture. btninit installs
+# all THREE edges, the press included (OSAPI_WM_ONCLICK, 20.5.1.3.3), so a
+# package cannot have a click path that skips the buttons.
+#
+# `os88ui_btnraw` IS GONE. It was the loose-register painter - a button with
+# no gesture - kept reachable while the tree converted one caller at a time.
+# Twenty-five call sites were on it and every one is converted; the body is
+# private now (os88ui_bdraw, reached by falling through os88ui_btn) and
+# t_btnrules fails the build if the name comes back. A scaffold that outlives
+# its conversion is the thing the next author finds and copies.
+#
+# ONE LINE PER FILE: <count> <path>  # <reason>
+#
+# A file NOT in this list may not draw a button at all - that is the case that
+# matters, because it is what a new package hits. A file in it must match its
+# count exactly, so the numbers cannot rot in either direction.
+#
+# WHY A GATE AND NOT A SURVEY: docs/plans/completed/UIHELPERS-PLAN.md 15.4 is a
+# survey table of this defect and SEVEN of the ten carriers landed AFTER it
+# was written. SPEC.md 13.8.4 predicted that in as many words. A survey cannot
+# fail a build.
+#
+# WHAT THIS CANNOT SEE, and tests/btnall.py can: a caller that draws through
+# the record and is wired up wrong. Five shipped that way - a record aimed in
+# the click path, one declared on top of the package's own state, a count
+# written after the draws, a press hit-tested in the wrong coordinate space,
+# and a whole click handler left unconverted. Every one was found by a person
+# looking at a screen, because a press-fired button and a release-fired one
+# are THE SAME PIXELS in every still.
+
+# --- the library's own ------------------------------------------------------
+7 apps/os88ui.inc                  # os88ui_btn's own dispatch, the About
+                                   # card's row, the alert's, and os88ui_kbtn
+
+# --- packages ---------------------------------------------------------------
+10 apps/sheet/sheet.asm            # five dialog pairs, a record each
+4 apps/dos/dos.asm                 # the bar's two and the Setup page's two,
+                                   # one record repointed per page
+3 apps/ftpd/ftpd.asm               # Stop, Setup, Done
+2 apps/word/word.asm               # staged N=1: entries in its own WDD list
+2 apps/scribe/scribe.asm           # Word's shape, same lineage
+2 apps/thewire/thewire.asm         # Load Program, Add to Disk
+2 apps/skies/skies.asm             # Fly, Done
+1 apps/browser/browser.asm         # one call, three toolbar buttons
+1 apps/telnet/telnet.asm           # Connect, with a dynamic caption
+1 apps/notepad/notepad.asm         # the find panel's four
+1 apps/artful/atui.inc             # the splash's two and the modal's three
+1 apps/audio/apui.inc              # the seven transports, and OS88UI_LATCH's
+                                   # first consumer (SPEC.md 20.5.1.4)
+1 apps/calc/calc.asm               # the keypad, staged one key at a time
+1 apps/paint/paint.asm             # Apply
+1 apps/piano/piano.asm             # its two buttons. The KEYS keep the press
+                                   # and must - a note is SPEC.md 13.6's safe
+                                   # prefix action
+1 apps/recorder/recorder.asm       # the transport
+1 apps/texpad/texpad.asm           # the top row, staged one at a time
+1 apps/weave/wdraw.inc             # correct through the C SDK's
+                                   # os88_wm_onmouseup
+
+# --- drivers: the gesture is the Control Panel's probe (SPEC.md 13.8.4) -----
+# cp_ctl/cp_pgprobe is already release-fired, so what converted here is the
+# DRAW; the press half stays the panel's, which is the one mechanism a
+# package-side W_ONCLICK cannot serve.
+3 drivers/ether/etherui.inc        # Renew, Setup, and the third
+1 drivers/ether/ethcfg.inc
+2 drivers/hdd/cppage.inc
+1 drivers/hdd/tool.inc
+1 drivers/hdd/inst.inc
+1 drivers/net/netui.inc
+1 drivers/ramdisk/page.inc
+1 drivers/saver/svcfg.inc
+
+# --- the kernel: its own arm (SPEC.md 13.8.3), through os88ui_kbtn ----------
+1 kernel/apps.inc                  # the Timer's Start/Stop (SPEC.md 13.8.5)
+1 kernel/files.inc                 # the Disk window's (SPEC.md 22.18)
+2 kernel/fdlg.inc                  # the Standard File dialog's column
+                                   # (SPEC.md 38) - the FDX call site and the
+                                   # FDXF thunk that serves it on kern_small.
+                                   # IT WAS IN NEITHER LIST UNTIL IT BROKE:
+                                   # `FDX <name>` is `call <name>` on kern_big
+                                   # and `call COLD_SEG:xd_<name>` on
+                                   # kern_small, so no spelling of this call
+                                   # contains `call os88ui_btn` and the grep
+                                   # walked straight past the file. It named
+                                   # os88ui_btn where it meant os88ui_kbtn and
+                                   # every button of the dialog disappeared -
+                                   # the third carrier of the far entry's own
+                                   # defect, after Date/Time and the alert
+                                   # card. t_btnrules matches the MACRO now
+
+# --- and the FAR entry, for the on-demand modules (SPEC.md 2.6) -------------
+# ctrl.inc and hiber.inc run from a heap claim with a CS of their own and
+# reach the control by `call COLD_SEG:os88ui_btn_f`, which os88ui_kbtn serves.
+# A far call is invisible to a grep for `call os88ui_btn` and that is how the
+# WHOLE Control Panel was missed: the far entry went on pointing at an
+# os88ui_btn that had started taking a record, so every panel button read its
+# live count out of a rectangle's coordinates and Date/Time went white.
+1 kernel/ctrl.inc                  # every Control Panel page's buttons
+1 kernel/hiber.inc                 # the hibernate prompt's

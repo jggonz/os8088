@@ -73,14 +73,53 @@ drive folder on the RUNCPM disk holds 78 (SPEC.md 71.3).
 """
 import argparse
 import os
+import hashlib
 import struct
 import sys
 
 SECTOR = 512
-MAX_FILES = 32                # kernel listing cap (SPEC.md section 19)
+def _listing_cap():
+    """DSK_NENT, READ OUT OF THE KERNEL rather than restated here.
+
+    It was `MAX_FILES = 32` with a comment pointing at SPEC.md section 19, and
+    that is a MIRROR of a kernel constant in a host tool - the class of bug
+    `tests/unit/t_mirror.py` exists for.  When DSK_NENT doubled, this file went
+    on refusing a 60-file disk the kernel would have listed perfectly well, and
+    the message it refused with named a number that was no longer true.
+
+    Parsed rather than imported, because this tool must keep working on a tree
+    with no assembler: the fallback is the value the kernel shipped with, which
+    is wrong in the SAFE direction (it refuses a disk that would have worked
+    rather than building one the kernel cannot list).
+
+    **AND IT IS PER-KERNEL SINCE SPEC.md 22.6.2** - 64 on kern_big, 32 on
+    kern_small, which has no DOS box to list a DOS directory for.  So the
+    file holds two `DSK_NENT equ` lines behind a `%ifndef KERN_SMALL` and
+    this returns BOTH, kern_big's first, because that is the default every
+    caller wants and `--kern-small` is what selects the other.  Returning
+    the smaller for every disk would refuse a 40-file kern_big folder the
+    kernel lists perfectly well, which is the exact bug the paragraph above
+    is about.
+    """
+    import re as _re
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "..", "kernel", "dskwin.inc")
+    try:
+        with open(src) as f:
+            m = _re.findall(r"^DSK_NENT\s+equ\s+(\d+)", f.read(), _re.M)
+        if m:
+            return int(m[0]), int(m[-1])
+    except OSError:
+        pass
+    return 32, 32
+
+
+MAX_FILES, SMALL_FILES = _listing_cap()   # kernel listing cap, big and small
+                                          # (SPEC.md section 19, 25.8.1)
 VOL_LABEL = b"OS8088APPS "    # 11 bytes, BS_VolLab == root label entry
 SYS_LABEL = b"OS8088SYS  "    # ...and what a --boot/--kernel disk is called
-VOL_ID = 0x88000888           # fixed serial -> deterministic images
+VOL_ID = 0x88000888           # the FALLBACK serial, and the value every
+                              # os8088 volume used to carry. See vol_id().
 FIXED_DATE = 0x5C21           # 2026-01-01 in FAT date encoding
 FIXED_TIME = 0x0000
 NAME_CHARS = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
@@ -312,10 +351,17 @@ A_LOCKED = A_RDONLY | A_ARCH                # visible, but not yours to delete
 
 ASC_NAME  = b"ASSOC   DAT"   # SPEC.md 54.7: the volume's icon + assoc cache
 ASC_MAGIC = b"OS88AC"
-ASC_VER   = 1
+ASC_VER   = 2                # rows carry the glyph column (SPEC.md 54.3.2);
+                             # the kernel reads version 1 too, nothing
+                             # writes it any more
 ASC_HDR   = 16
-ASC_ROW   = 80               # stem 8 + size 2 + cluster 2 + 4 rsvd + icon 64
+ASC_ROW   = 88               # stem 8 + size 2 + cluster 2 + 4 rsvd + icon 64
+                             # + document glyph 8
 ASC_ROWICO  = 16             # the icon's offset inside a row
+ASC_ROWGLY  = 80             # ...and the glyph's: the eight bytes the package
+                             # SHIPS (flags bit 5, at 112 in its file), or
+                             # all zero = it ships none and the kernel
+                             # reduces the icon (SPEC.md 54.3)
 ASC_ROWCLUS = 10             # the folder the program lives in (0 = root),
                              # patched in after cluster assignment (SPEC.md
                              # 54.7.1) - it costs the file nothing, the row
@@ -328,7 +374,7 @@ ASC_NEXT  = 24
 # icon row that is lost and never an association. Being out of date costs a
 # cached icon, never correctness - which is why it is a plain list and not a
 # generated one.
-ASC_DEFAULT_STEMS = (b"PAINT", b"NOTEPAD", b"TRACKER", b"ARTFUL")
+ASC_DEFAULT_STEMS = (b"PAINT", b"NOTEPAD", b"TRACKER", b"ARTFUL", b"DOS")
 
 
 def build_assoc(groups):
@@ -351,7 +397,10 @@ def build_assoc(groups):
 
     An iconless package still gets a row, holding 64 zero bytes - the all-zero
     "no icon" sentinel the kernel already understands, so caching the ABSENCE
-    saves that read too.
+    saves that read too. The glyph column is the same shape one field along
+    (SPEC.md 54.3.2): a package that SHIPS its document glyph (flags bit 5)
+    has it copied here so a cache HIT still wears it, and one that does not
+    carries eight zero bytes, which the kernel reads as "reduce the icon".
     """
     cand, exts = [], []
     for key in groups:
@@ -362,6 +411,8 @@ def build_assoc(groups):
                 continue
             flags = body[3]
             icon = body[32:96] if flags & 1 and len(body) >= 96 else bytes(64)
+            glyph = (body[112:120] if flags & 0x20 and flags & 3 == 3
+                     and len(body) >= 128 else bytes(8))
             decl = []
             if flags & 2:                       # a header declaration (54.6)
                 base = 96 if flags & 1 else 32
@@ -373,7 +424,7 @@ def build_assoc(groups):
             stem = name11[0:8]
             known = stem.rstrip() in ASC_DEFAULT_STEMS
             cand.append((not (decl or known), stem, len(body) & 0xFFFF,
-                         icon, decl, key))
+                         icon, glyph, decl, key))
     # stable: the ordering key is only the association flag, so argument order
     # survives inside each half and a rebuild is byte-identical
     cand.sort(key=lambda c: c[0])
@@ -391,9 +442,9 @@ def build_assoc(groups):
               file=sys.stderr)
         cand = cand[:ASC_NAPP]
     apps, rowdirs = [], []
-    for _, stem, size, icon, decl, key in cand:
+    for _, stem, size, icon, glyph, decl, key in cand:
         idx = len(apps)
-        apps.append((stem, size, icon))
+        apps.append((stem, size, icon, glyph))
         rowdirs.append(key)
         for e in decl:
             if len(exts) < ASC_NEXT:
@@ -403,11 +454,12 @@ def build_assoc(groups):
     buf = bytearray(ASC_HDR + ASC_ROW * len(apps) + 4 * len(exts))
     buf[0:6] = ASC_MAGIC
     buf[6], buf[7], buf[8] = ASC_VER, len(apps), len(exts)
-    for i, (stem, size, icon) in enumerate(apps):
+    for i, (stem, size, icon, glyph) in enumerate(apps):
         o = ASC_HDR + i * ASC_ROW
         buf[o:o + 8] = stem
         struct.pack_into("<H", buf, o + 8, size)
         buf[o + ASC_ROWICO:o + ASC_ROWICO + 64] = icon
+        buf[o + ASC_ROWGLY:o + ASC_ROWGLY + 8] = glyph
     eo = ASC_HDR + ASC_ROW * len(apps)
     for i, (e, ix) in enumerate(exts):
         buf[eo + 4 * i:eo + 4 * i + 3] = e
@@ -482,9 +534,46 @@ def dirent(name11: bytes, attr: int, clus: int, size: int,
     return bytes(e)
 
 
+def vol_id(content: bytes) -> int:
+    """BS_VolID for a volume holding `content` - DERIVED, not pinned.
+
+    **THIS IS THE ONLY THING THAT TELLS TWO os8088 DISKS APART.** SPEC.md
+    18.8.2's `dsk_bpb_sig` signs LBA 0 and nothing else, and SPEC.md 18.95's
+    sector cache and SPEC.md 18.8's FAT window are both keyed on that
+    signature - so two volumes whose boot sectors are byte-identical are one
+    volume as far as the running machine is concerned. Swap one for the other
+    and every cached sector, the FAT window included, stays valid against a
+    platter it did not come from: the listing is the old disk's, a file
+    "cannot be read", and a write puts the old disk's FAT onto the new one.
+
+    A fixed serial made every non-bootable disk of a geometry identical -
+    MEASURED, 23 of them signing 0x2D68 - which on a 360KB machine is every
+    data floppy the project ships. 18.8.2 called that residual "accepted
+    deliberately" on the grounds that "a full mount re-validates"; the full
+    mount does re-read LBA 0 and does bypass the cache, and it re-reads 512
+    bytes that are the same 512 bytes, so the re-validation could never have
+    caught it. The ground was wrong when it was written, not made wrong later.
+
+    Deriving it from the volume's own bytes keeps the property the pin was
+    for - the same inputs build the same image, byte for byte - and drops the
+    one it never should have had. The digest is over the FAT, the root
+    directory and the data area, which is the whole volume EXCEPT this sector,
+    so there is no circularity to resolve.
+
+    Two volumes with identical content get the same serial, which is correct:
+    they are the same disk, and nothing on the machine could act on a
+    difference that does not exist.
+    """
+    d = hashlib.sha256(content).digest()
+    v = struct.unpack("<I", d[:4])[0]
+    return v or VOL_ID                           # 0 is a legal serial but
+                                                 # reads as "unset" to tools
+
+
 def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
                 lay: Layout, code: bytes = None, label: bytes = None,
-                hidden: int = 0, drvnum: int = 0, ksecs: int = 0) -> bytes:
+                hidden: int = 0, drvnum: int = 0, ksecs: int = 0,
+                volid: int = None) -> bytes:
     """One BPB, three uses. `code` is os8088's own 512-byte boot sector -
     boot/boot.asm's on a floppy, boot/boothd.asm's under --hdd: either way
     its first three bytes are already EB 3C 90 and bytes 62.. are its
@@ -519,7 +608,8 @@ def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
     struct.pack_into("<I", bs, 28, hidden)      # BPB_HiddSec
     bs[36] = drvnum                             # BS_DrvNum
     bs[38] = 0x29                               # BS_BootSig
-    struct.pack_into("<I", bs, 39, VOL_ID)      # BS_VolID
+    struct.pack_into("<I", bs, 39,
+                     VOL_ID if volid is None else volid)   # BS_VolID
     bs[43:54] = label or VOL_LABEL              # BS_VolLab
     bs[54:62] = b"FAT12   " if lay.fat12 else b"FAT16   "
     if not code:
@@ -886,13 +976,21 @@ def build(args) -> int:
                      f"{key or 'the root'}")
             taken[n] = None
 
+    # ...and WHICH kernel is asked, since SPEC.md 22.6.2 made DSK_NENT
+    # per-build: a disk written for kern_small is listed by a 32-entry
+    # listing and one written for kern_big by a 64-entry one. The cap is the
+    # kernel's number either way - neither is restated here - and the four
+    # recipes that pass `--kern-small` are exactly the four that pass
+    # `--fatcap 2`, which is the same build saying the same thing about its
+    # other disk constant.
+    cap = SMALL_FILES if args.kern_small else MAX_FILES
     for key in dirs:
         shown = len(kids[key]) + sum(
             1 for n, _, _ in groups[key]
             if not sys_attr(n, bool(boot)) & A_HIDDEN)
-        if shown > MAX_FILES and not args.deep_folders:
+        if shown > cap and not args.deep_folders:
             fail(f"{shown} listed entries in folder {key}; the kernel "
-                 f"lists at most {MAX_FILES} per directory (--deep-folders "
+                 f"lists at most {cap} per directory (--deep-folders "
                  f"if this folder is a data store the file API walks, not "
                  f"one the Disk window shows)")
     # MAX_FILES is a DISPLAY cap, so only what the kernel would list counts
@@ -900,9 +998,9 @@ def build(args) -> int:
     # slot. It still takes a directory slot, which is the second check.
     shown = len(root_dirs) + sum(1 for n, _, _ in root_files
                                  if not sys_attr(n, bool(boot)) & A_HIDDEN)
-    if shown > MAX_FILES:
+    if shown > cap:
         fail(f"{shown} listed root entries; the kernel lists "
-             f"at most {MAX_FILES} per directory")
+             f"at most {cap} per directory")
 
     # A folder's own directory is a cluster chain like any other file: two
     # link entries ('.', '..'), one entry per subfolder, and its files,
@@ -1036,14 +1134,17 @@ def build(args) -> int:
             name11, sys_attr(name11, boot), chain[0], len(body), body)
         slot += 1
 
+    # THE SERIAL IS DERIVED FROM WHAT IS ON THE VOLUME (vol_id): it is the
+    # only field that tells two os8088 disks of one geometry apart, and the
+    # machine's whole swap detector is a signature over this sector.
+    body = bytes(fat.buf + fat.buf + root + data_area)
     image = bytearray(boot_sector(spt, heads, tot, spc, fatsz, root_ent,
                                   media, lay, boot, label,
                                   hidden=HDD_BASE if args.hdd else 0,
                                   drvnum=0x80 if args.hdd else 0,
-                                  ksecs=ksecs if args.hdd else 0))
-    image += fat.buf + fat.buf                   # FAT2 = FAT1
-    image += root
-    image += data_area
+                                  ksecs=ksecs if args.hdd else 0,
+                                  volid=vol_id(body)))
+    image += body
     assert len(image) == tot * SECTOR
 
     if args.hdd:
@@ -1559,6 +1660,10 @@ def main() -> int:
                     help="create this folder even if no file names it "
                          "(repeatable); each component an 8.3 stem with no "
                          "extension, '/' between them for a nested one")
+    ap.add_argument("--kern-small", action="store_true",
+                    help="this disk is for kern_small, whose listing holds "
+                         "DSK_NENT = 32 entries rather than kern_big's 64 "
+                         "(SPEC.md 22.6.2). Goes with --fatcap 2")
     ap.add_argument("--deep-folders", action="store_true",
                     help="allow more than the kernel's 32-entry LISTING cap "
                          "in a subfolder (never the root): the Disk window "

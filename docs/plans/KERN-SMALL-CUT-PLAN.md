@@ -81,11 +81,15 @@ Seven findings, of which the first four are new at this reading.
    gate returns, not an estimate of it, wherever the row's symbols are
    contiguous.
 
-3. **§7's cap is 288 bytes now, not 2,816 — D2 spent it.** The FAT window is
-   already at two sectors, so the boot overlay very nearly fills the region it
-   lands in. This is not arithmetic on this page: `DSK_NENT 32→16` **fails to
-   assemble**, on `kernel.asm:7090`, *"the boot overlay's window half has
-   outgrown the FAT window plus the mount buffers"*.
+3. **§7 IS BUILT, and the cap it reported was the wrong quantity.** It read
+   *"288 bytes now, not 2,816 — D2 spent it"*, off an arithmetic that still
+   had `disk_icons` in the region. The real slack was **64 bytes**, and the
+   more important half is that the *cap* is not a property of the region at
+   all: it is one end of a guard whose other end is `.ovlw`. Move 910 bytes of
+   the overlay into the blob (SPEC.md 2.5.3.2) and the listing is free to shed
+   800 (SPEC.md 22.6.2) — **1,024 bytes of heap, `HEAP_SEG` 0x12c0 → 0x1280**.
+   The `%error` is still real and still fires if the listing is cut alone,
+   which is what makes the two halves one change.
 
 4. **D3 is not capped, it is IMPOSSIBLE**, and it should be struck rather than
    deferred. `files.inc:662` requires `DSK_NENT * DSK_DE_STRIDE` to be a
@@ -183,10 +187,13 @@ free heap = int 12h  -  (KERNEL_SEG*16 + KERN_SIZE)
           = 131,072  -  (1,536 + 78,336)  =  51,200 bytes  =  50.0 KB
 ```
 
-**`.ovl` (423) and `.ovlw` (2,789) are NOT in that sum and buy nothing when
+**`.ovl` (1,333) and `.ovlw` (1,910) are NOT in that sum and buy nothing when
 cut.** They are boot-overlay code loaded onto memory the machine reuses once
 it is up. They matter here for one reason only, and it is §7's: `.ovlw` lands
-on the FAT window, so it is what *caps* the FAT and mount-buffer rows.
+on the FAT window, so it is what *caps* the FAT and mount-buffer rows —
+which is not the same as buying nothing, because a byte MOVED from `.ovlw`
+into `.ovl` raises that cap for free. §7 is that done once; the figures here
+are after it.
 
 **Two things that are not levers.** The rungs waste 682 bytes in rounding —
 that is noise, not headroom, and CLAUDE.md's rung rule refuses it as an
@@ -319,7 +326,7 @@ path*, and §3.1's three are the second thing.**
 |---|---|---:|---|
 | B1 | **Raise cache / save-under** SPEC.md 11.96 (`wm_su*`) | **2,451** | raising a covered window goes from ~10 ms back to the **1,026 ms** SPEC.md 11.96 was written to fix. The buffer is a purgeable claim, so the saving is code only |
 | B2 | **Drag cache** SPEC.md 11.96.12 (`wm_dc*`, `wm_cov*`) | **484** | a window drag repaints what it uncovers |
-| B3 | **Icon renderer** SPEC.md 10 (`icons.inc`) | *1,060* | **BLOCKED — §10.** `OSAPI_ICON_DRAW`/`_PEN` are called untested by `os88ui.inc`, Paint and Solitaire. `disk_icons` is a further 1,024 of `.lowbss` and is **capped — §7** |
+| B3 | **Icon renderer** SPEC.md 10 (`icons.inc`) | *1,060* | **BLOCKED — §10.** `OSAPI_ICON_DRAW`/`_PEN` are called untested by `os88ui.inc`, Paint and Solitaire. `disk_icons` is GONE (SPEC.md 25.9) and what stood in its place, 800 bytes of listing, has been taken — §7 |
 | B4 | ~~**`gfx_line` family**~~ | ~~1,503~~ | **DEAD — §10.1.** Paint's stroke and the menu checkmark are both `OSAPI_GFX_LINE`, neither tests CF. The 1,503 is still the honest *size*; it is simply not available |
 | B5 | **Toast** SPEC.md 59 (`toast.inc`) | **458** | SPEC.md 47 rule 3 wants every refusal to say something the user can act on, and SPEC.md 59 is where three of them say it |
 | B6 | **Progress widget** SPEC.md 12.8 (`fprog.inc`) | **725** | long file operations go silent |
@@ -597,7 +604,15 @@ than one that does not exist.
 
 ---
 
-## 7. The floor: `.ovlw` sits on the FAT window — and it is nearly full
+## 7. The floor: `.ovlw` sits on the FAT window — and the region under it is the LISTING
+
+> **BUILT, and the section is rewritten on the measurement rather than
+> amended.** What was here priced the *shrink available* at **288 bytes** off
+> an arithmetic that still had `disk_icons` in the region (SPEC.md 25.9 took
+> the icon bodies out) and had not noticed that the region and the overlay are
+> two ENDS of one guard. Both have since moved, in the same change: SPEC.md
+> 2.5.3.2 cut `.ovlw` by 910 bytes and SPEC.md 22.6.2 spent the room on the
+> listing. The row is closed and the arithmetic below is what it came to.
 
 The boot overlay's window half (`.ovlw`, SPEC.md 2.5.3) is loaded onto
 `FAT_SEG` and spills through the mount-owned buffers immediately above it —
@@ -610,45 +625,116 @@ it:
 %endif
 ```
 
-On this tree:
+### 7.1 What it was, and why the old figure read like a dead end
+
+At the top of this work the guard stood like this:
 
 ```
-.ovlw            2,789  ->  3,072  rounded up to whole sectors
-FAT window       1,024   (DSK_FAT_SECS = 2)
-disk_dir           768
-disk_icons       1,024
-dsk_icoix           32
-dsk_win_base       512
-region           3,360
+.ovlw            2,820  ->  3,072  rounded up to whole sectors
+FAT window       1,024   (DSK_FAT_SECS = 2, and AT ITS FLOOR - see below)
+dsk_secbuf         512
+disk_dir         1,536   (DSK_NENT 64 x DSK_DE_STRIDE 24)
+dsk_icoix           64
+DSK_OVLPAD           0
+region           3,136
                  -----
-shrink available   288   before the overlay has nowhere to land
+slack               64
 ```
 
-**288 bytes, not the 2,816 this section used to report.** D2 took the FAT
-window from 9 sectors to 2 and spent nearly all of it, which is the completed
-companion's §3 lesson arriving a second time: *in a kernel with overlays a
-byte's value depends on where it is.* The consequence is that **B3's
-`disk_icons` (1,024) is capped to 288**, and D3 is refused by this guard as
-well as by §5.1's.
+**Sixty-four bytes, and `DSK_OVLPAD` at zero.** Those two facts together are
+what made the row look like nothing: no byte of the region was dead padding,
+so the arithmetic reads as if the listing were sized by the listing. It was
+not. `.ovlw` occupied 3,072 of the 3,136, so the listing was **not free to
+shrink** — cut `DSK_NENT` to 32 and the region falls to 2,336, the rounded
+overlay no longer fits, and `DSK_OVLPAD` has to come back at ~736 bytes of
+dead `.lowbss` to hold the overlay up. That is a shrink that buys nothing, and
+it is exactly the wall an earlier session hit and reported as *"kern_small
+doesn't get smaller because I can't shrink the icon space, `.ovlw` is
+there."*
 
-**The route out is to cut `.ovlw`, and it is worth 512 bytes a sector.** The
-rounding is what binds, so the useful cuts are the ones that cross a sector:
+**The FAT window is not the half that moves.** `DSK_FAT_SECS` is 2, and 2 is a
+floor rather than a trim: the smallest geometry this OS boots is a 360KB
+floppy, which declares a 2-sector FAT, and SPEC.md 18.2 rule 10 is an
+ACCEPTANCE threshold — a value of 1 would refuse every volume the kernel can
+mount rather than merely list less of one. So the whole of the region that can
+move is `DSK_WIN_BYTES`.
 
-| cut from `.ovlw` | rounds to | region may fall to | frees |
-|---:|---:|---:|---:|
-| 0 | 3,072 | 3,072 | 288 |
-| **229** | 2,560 | 2,560 | **800** |
-| **741** | 2,048 | 2,048 | **1,312** |
+### 7.2 What it came to
 
-The largest owners of `.ovlw` are `disk.inc` 762, `mouse.inc` 646,
-`vidsel.inc` 262, `sched.inc` 225 and `clock.inc` 205 — and **`clock.inc`'s
-205 are the probes for a ladder SPEC.md 37.0.1 says is unreachable on this
-machine**, which makes A2r and this row the same work done once.
+```
+.ovlw            1,910  ->  2,048  rounded up to whole sectors   (SPEC.md 2.5.3.2)
+FAT window       1,024   (unchanged, and at its floor)
+dsk_secbuf         512
+disk_dir           768   (DSK_NENT 32 x DSK_DE_STRIDE 24)        (SPEC.md 22.6.2)
+dsk_icoix           32
+DSK_OVLPAD           0   (and it STAYED zero, which is the point)
+region           2,336
+                 -----
+slack              288
+```
 
-**Note the order.** `.ovlw` carries the boot halves of the very features §3
-and §4 propose gating, so a build that takes those cuts has a smaller overlay
-and a lower floor. Features first, buffers second, and re-measure `OVLW_SIZE`
-in between.
+| | before | after |
+|---|---:|---:|
+| `.ovlw` | 2,820 | **1,910** |
+| `.ovl` | 423 | **1,333** (of 1,984 — 651 free) |
+| `.text` | 37,263 | 37,271 (**+8**, two `OVBCALL` sites) |
+| `.lowbss` | 5,236 | **4,436** (−800) |
+| `LOW_PARA` | 384 para | **320** |
+| `KERN_SIZE` | 75,264 | **74,240** |
+| `HEAP_SEG` | `0x12c0` = 75.0 KB | **`0x1280` = 74.0 KB** |
+
+**1,024 bytes of heap on every `kern_small` machine**, for 8 resident bytes of
+`.text`. The 800 bytes of `.lowbss` are what the change is worth; the 1,024 is
+the rung falling, and it fell two steps of 512 rather than one because
+`LOW_PARA` is `((KLOW_SIZE + STK0_SIZE + 511) / 512) * 32` and 5,748 was 116
+bytes over a step.
+
+### 7.3 THE ORDER IS THE WHOLE LESSON, and neither half can land alone
+
+- **`.ovlw` → `.ovl` on its own moves `HEAP_SEG` by ZERO.** Neither half of
+  the overlay is on the memory ladder: `.ovl` rides inside a blob that is
+  `BOOT2_SECS` sectors whatever it contains, and `.ovlw` lands on a window the
+  ladder reserved anyway. This is
+  docs/plans/completed/KERN-SMALL-CUT-BUILT.md's *SECTIONS ARE NOT HEAP*
+  arriving a third time, and it is the trap a reader of this row will fall
+  into: the section totals move 910 bytes and the scoreboard does not twitch.
+- **`DSK_NENT` on its own is a `%error`.** Verified by building it: with the
+  listing cut and the probes left in `.ovlw`, `nasm` stops at
+  `kernel/kernel.asm` with *"the boot overlay's window half has outgrown the
+  FAT window plus the mount buffers"*.
+- So the pair is the change, and the overlay goes first.
+
+**What it cost the blob is nothing**, which is the part that makes this a
+better trade than it was proposed as. `.ovl` is at `OVL_AT` inside a
+9-sector blob, and on `kern_small` 1,561 of those bytes were zero padding
+stage 1 was already reading. The move spends 910 of them. `.ovlw`, by
+contrast, is real file bytes at the end of the kernel image, so
+`KERNEL.SYS` went **122 sectors to 120** and `build/small360.img` 250
+clusters to 249.
+
+### 7.4 What is left, and which side of the guard to spend it on
+
+`.ovlw` has **138 bytes** before it rounds up a sector and `.ovl` has **651**
+before the blob is full — but they are ONE pool of **789 bytes**, because
+moving a body across grows one by exactly what it takes from the other. The
+split point is therefore a judgement about which side is more likely to grow,
+not an optimisation:
+
+- **`.ovl` is shared with `kern_big`**, which has 473 bytes free there. Keep
+  `kern_small` above that and `kern_big` stays the build that binds the blob;
+  let it fall below and an `.ovl` addition starts breaking one kernel and not
+  the other, with no cheap way back.
+- **`.ovlw` growing is the self-correcting direction**: the fix is to move
+  another body across, and SPEC.md 2.5.3.2's `OVBCALL` is what makes that a
+  two-line change. The candidates are sized there; the next-best pair is
+  `desk.inc`'s 137 and `disk.inc`'s floppy probe at 472, which travel together
+  because `desk_init` near-calls it.
+
+**And 32 is the floor of the listing, not a dial.** `files.inc`'s `FS_IOFH`
+holds a listing's icon base in one byte, so `DSK_NENT × DSK_DE_STRIDE` must be
+a multiple of 256 — at stride 24 the only legal value below 64 is 32, and the
+only one below 32 is zero. Whatever the guard's slack becomes, there is no
+further heap on this row.
 
 ---
 

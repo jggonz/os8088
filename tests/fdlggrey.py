@@ -111,8 +111,7 @@ def repaint(m, mo):
 # tenth of a second - an ABSENT gate that reads as a failing one, which
 # is worse than either. fdlgup and mouseup, which want the same disk,
 # have asked for it since it was written; these two never did, and it
-# was WHICH ROW RAN FIRST that decided whether they passed
-# (docs/plans/HANDOFF-SOAK-FINDINGS.md B4).
+# was WHICH ROW RAN FIRST that decided whether they passed.
 need("build/muptest.img")
 
 # The system image is overridable so this row can be pointed at kern_small,

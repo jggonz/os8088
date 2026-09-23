@@ -2,8 +2,9 @@
 
 **Status: BUILT, except §12's open questions.** The unpinning this document
 plans has shipped — regions, driver images, overlays and `SOUND.DRV`'s ring all
-move, and `tests/suite.py`'s `reg*`, `drvmove`, `sndmove` and `hdmove` rows are
-its gates. The byte figures below are the ESTIMATES the plan was written
+move, and `tests/suite.py`'s `reg*`, `drvmove` and `sndmove` rows are
+its gates. (`hdmove` was a fourth, for the HDD's donated listing claim;
+SPEC.md 22.6 retired that claim and `hdnoclaim` asserts its absence instead.) The byte figures below are the ESTIMATES the plan was written
 against, not what it cost; `docs/reports/` carries the measurement. SPEC.md 66.6 is the door this
 document costs and SPEC.md 66.9 is the register it works through.
 
@@ -927,6 +928,73 @@ between them show that three of the four `MC_DMA` claims in the tree have no bus
 master on them at all, and that the fourth already has both halves of its quiesce
 built.
 
+### 4.6.1 …AND A SECOND LIMIT, MEASURED AND THEN FIXED: a RE-HOMED package was pinned whatever its worker did
+
+`OSAPI_PKG_REHOME` (SPEC.md 20.12.10) hands a loader's identity to one of its
+parts, and what the program then runs in is **the loader's CARVE re-stamped to
+the instance SLOT**. `mem_find_own` matched `MC_OWN` or `MC_SEG` against the
+caller's segment and a slot is neither, so the program was refused
+`OSAPI_MEM_FREE` and `OSAPI_MEM_MOVABLE` on its own region — the first of
+those is still right and the second is what this section is about.
+`kernel/loader.inc`'s `.rehome` arm was explicit that it was deliberate:
+
+> IT MUST STAY PINNED: `mem_rr_tab` rewrites `inst_tab + I_SPTR` by matching
+> the OLD BASE, and `I_SPTR` is the part's segment where the claim's base is
+> the carve's, so a move would leave `I_SPTR` naming where the program used to
+> be (SPEC.md 66.6.1).
+
+**MEASURED, and the premise holds on a real package** (`os8088_5150_herc_sb_gla`,
+the shipped four-piece `DOS.O88`, the box open and idle): the carve is at
+**0x8FC0** and `I_SPTR` is **0x8FE0**, 512 bytes apart — the loader's own image
+sitting at the head of the carve. The two are not the same word and the
+base-match cannot find the second.
+
+**WHAT IT COSTS IS NOT HYPOTHETICAL EITHER** and it is this file's §2.0 with a
+different cause: `SOUND.DRV`'s 6,144-byte image and 8,192-byte ring are claimed
+top-down ABOVE the DOS box, the box unmounts them so a DOS program can have the
+card (SPEC.md 96.35), and the hole is above a region nothing can move.
+**426 KB against 440** on the same machine with no card — and the one-image
+build of the same package gets the full 440, because there its region really is
+`cs` and `OS88_REGION_MOVABLE` takes. The declaration is still in
+`apps/dos/dos.asm`; it is simply refused.
+
+**BUILT — SPEC.md 66.6.1.2, and it was FOUR readings and not one.** The
+estimate above ("one line of arithmetic") was right about `mem_rr_tab` and
+wrong about the scope: `mem_is_region`'s equality, `mem_frameless` asking
+`mem_in_nest` about the claim's base, the walk's exact match, and
+`mem_reloc_call` far-calling `PKG_DISP` into the carve's head slack were all
+the same mistake, and three of them CORRUPT rather than refuse. **The pin was
+load-bearing**: unpinning it alone would not have been a smaller bug than the
+one it fixed.
+
+What shipped is one number computed once — `[mem_rgoff]`, the program's
+paragraph offset into the moving claim — plus `mem_reg_seg`, which takes the
+claim's base as an INPUT because `mem_reloc_call` asks about a record whose
+base has already been rewritten. **+155 bytes** (`.text` +41, `.cold` +110,
+`.bss` +2, `.lowbss` +2), A/B'd at ONE commit and no rung crossed — and
+`kern_small` is byte-identical, `OS88_COMPACT` being `KERN_BIG` only.
+Measured: the DOS box's arena goes
+**426 KB to 445** on a Sound Blaster machine, equal to the machine with no
+card; `soak -k rehomemove360` is the gate, and `rehome`/`rehomemove` at a zero
+head slack cannot be one — all four questions have the same answer there.
+
+**AND THEN SUPERSEDED, AT A FIFTH OF THE BYTES.** The offset, the second
+name, `mem_reg_seg`, the containment arm and SPEC.md 50.3.4's two arms in
+`mem_own` were all the compactor remembering one fact — *the program sits a
+head slack up its carve* — in six places. The fact is created by `op_claim`'s
+read and needed by nothing after it, so `mem_reown_x` now moves the carve's
+base up to the program in the walk that re-stamps the owner (SPEC.md
+20.12.10.5), the slack is heap again, and every one of the six went back to
+the equality that held for every other package. −175 resident bytes on
+kern_big against that +155, and kern_small gave up 74 it had been paying for
+the arms, the sweep and `inst_of_seg`. SPEC.md 66.6.1.2 is the record.
+
+**It is not only the DOS box.** Every package that re-homes is a permanent wall
+at whatever depth the heap had when it launched: `apps/c64` and Clear Skies
+re-home too (SPEC.md 88.10.4 is Clear Skies' own encounter with this arm), and
+the wall does not heal — which is exactly §2.0's complaint about a
+mid-session driver, arriving by a second route.
+
 ### 4.7 Past the limit: tell the package, and let it give its worker back
 
 The limit above is *"the worker's stack holds the segment at depths nothing can
@@ -1540,7 +1608,7 @@ came in by — before anything can be unpinned against it.
 | `make test-full` | **61 passed, 0 failed, 2 skipped** | the pre-merge gate — the knob kernels, **kern_small**, `kernresident`, `small128`, a boot on both 1bpp adapters |
 | `heapcheck` | **ok, 31.6s** | SPEC.md 66.8's own gate: a comb of claims, every other one freed, then a claim only compaction can satisfy — and **the contents of every survivor** checked against a per-block pattern |
 | `heapmap` | **ok** | reads `mem_tab` out of a running guest at the new 11-byte stride |
-| `paintmove`, `trackmove`, `rdmove`, `hdmove` | **ok** | live relocations through `pt_reloc`, `trk_reloc`, `rd_reloc` and the donated HDD listing |
+| `paintmove`, `trackmove`, `rdmove`, `hdmove` | **ok** | live relocations through `pt_reloc`, `trk_reloc`, `rd_reloc` and the donated HDD listing — `hdmove` has since been retired with the claim it measured (SPEC.md 22.6) |
 | `fatwpin`, `msegnomem`, `mseglazy` | **ok** | the FAT window's pin, and the multiseg claim paths |
 | `editmove` | **skipped** | wants `build/zmove360.img`; the Frotz stories are never committed |
 
@@ -2134,7 +2202,8 @@ at int C1h and int C3h, one of them read `0x8000`, a package claim moved off
 probed as **"No hardware found"**. A machine with no C: drive, out of a heap
 compaction, with nothing in the log. `tests/hdmove.py` caught it, which is the
 argument for running the whole family after a `mem_can_move` change and not
-only the row you wrote.
+only the row you wrote. (That row is retired — SPEC.md 22.6 took away the
+claim it exercised — so the family is one row shorter and the argument is not.)
 
 `mem_iv_patch` is cut to **sixteen** slots - int 08h..0Fh and int 70h..77h, the
 hardware IRQ vectors - which is what a driver can legitimately own and is a

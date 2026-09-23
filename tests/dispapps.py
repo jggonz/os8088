@@ -295,7 +295,7 @@ def colour_gif(src="build/OS8088.GIF", dst="/tmp/OS88COL.GIF"):
     # the canvas is solid where the file alternates. `tests/blitpair.py` was
     # pointed here and read 20,327 differing pixels of 51,260 - which looks
     # exactly like the decoder bug it exists to catch, and was filed as a
-    # pre-existing failure (docs/plans/HANDOFF-SOAK-FINDINGS.md F1). It takes
+    # pre-existing failure. It takes
     # build/OS8088.GIF itself now, and says why.
     d[13:13] = bytes([0xAA, 0x00, 0x00,     # ...two of them unused by the
                       0x00, 0x00, 0xAA])    # image, and genuinely colours

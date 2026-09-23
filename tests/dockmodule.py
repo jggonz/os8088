@@ -30,7 +30,7 @@ def word(m, name):
 def check_basic(m, cfg):
     assert m.read(S("dock_cfg"), 1) == bytes([cfg]), "preference changed"
     assert word(m, "mod_r_dock") == 0, "failed load retained a module"
-    assert m.read(S("dock_auto"), 1) == b"\0", "fallback still auto-hides"
+    assert word(m, "dock_thk") == 24, "fallback does not reserve a whole strip"
     assert m.read(S("dock_up"), 1) == b"\0", "fallback still open"
     assert word(m, "gfx_hole") == 0, "fallback retained a clipping hole"
     assert word(m, "vid_band_x0") == 0
@@ -42,6 +42,15 @@ def check_basic(m, cfg):
     base = S("mod_fp") + eq["MOD_DOCK"] * eq["MODFP_STRIDE"]
     assert m.read(base, eq["MODFP_STRIDE"]) == expected * eq["MOD_NENT"], \
         "an unloaded callback still points into module memory"
+    # ...and the same question about the OPERATIONS (SPEC.md 30.5): every
+    # slot of dkv must rest on this kernel's own body. A fallback that left
+    # one naming the image would far-jump into freed memory, which is the one
+    # failure the mechanism has to be unable to produce - and it would not
+    # fault, because the claim is still readable.
+    dkv = m.read(S("dkv"), eq["DKI_N"] * 4)
+    ks = eq["KERNEL_SEG"].to_bytes(2, "little")
+    assert all(dkv[i + 2:i + 4] == ks for i in range(0, len(dkv), 4)), \
+        "an unloaded Dock operation still points into module memory"
 
 
 def fixture(folder, fault, saved):

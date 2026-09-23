@@ -76,12 +76,23 @@ MOD_NENT = _mod_nent()
 
 def app(blob, nm, flags, entry, image, bss):
     """SPEC.md 20.2 - a v3 application package."""
-    check(not (flags & 0xE0), "%s: no reserved flag bits" % nm, got=hex(flags),
+    check(not (flags & 0xC0), "%s: no reserved flag bits" % nm, got=hex(flags),
           why="bit 0 is an embedded icon, bit 1 an association block (SPEC.md "
               "54.6), bit 2 says the FILE is longer than the image on purpose "
-              "(SPEC.md 20.12) and bits 3-4 say it is SHORTER because the "
-              "image is compressed and in which format (SPEC.md 20.13). Bits "
-              "5-7 are nobody's yet")
+              "(SPEC.md 20.12), bits 3-4 say it is SHORTER because the "
+              "image is compressed and in which format (SPEC.md 20.13), and "
+              "bit 5 says a shipped document glyph follows the association "
+              "block (SPEC.md 54.3.2). Bits 6-7 are nobody's yet")
+    if flags & 0x20:
+        check(flags & 3 == 3, "%s: the shipped glyph has an icon and a "
+              "declaration in front of it" % nm, got=hex(flags),
+              why="SPEC.md 54.3.2: the block sits at 112, after both")
+        check(entry >= 128, "%s: entry is past the document-glyph block" % nm,
+              got=hex(entry), want=">= 0x80")
+        check(any(blob[112:120]), "%s: the shipped glyph is not blank" % nm,
+              why="all-zero is the UNRESOLVED sentinel (SPEC.md 54.2), so the "
+                  "kernel would reduce the icon after all")
+        check(not any(blob[120:128]), "%s: the glyph block's reserved bytes are 0" % nm)
     check(not (flags & 8) or not (flags & 4),
           "%s: not both compressed and carrying parts" % nm, got=hex(flags),
           why="a part's offset is measured from the start of the FILE and its "
@@ -269,6 +280,28 @@ def main():
             if os.path.isfile(p):
                 arts[f.upper()] = read(p)
 
+    # ...and DOS.O88 is TWO artifacts with one name (SPEC.md 96.40).  The APPS
+    # disks carry build/dos.o88, the plain compressed package; the SYSTEM
+    # disks carry build/kdos/DOS.O88, the same package with kern_dos as a
+    # PART, which is what makes the Memory page's third arm live rather than
+    # greyed.  A parted image cannot be compressed, so the two differ in every
+    # byte from offset 3 - which is exactly what this row said, about a build
+    # that was current, until it was taught that the SYSTEM disk's copy has a
+    # source of its own.
+    # WHICH ONE THE SYSTEM DISK CARRIES IS THE MAKEFILE'S ANSWER and not this
+    # row's guess: $(SYSROOTARG) names it, and it has been both.  Reading the
+    # variable keeps the row right on either setting, where a hard-coded
+    # preference would report a current build stale the day it is flipped -
+    # which is the one failure mode this row exists to catch.
+    parted = os.path.join(build, "kdos", "DOS.O88")
+    sysarts = dict(arts)
+    mk = os.path.join(ROOT, "Makefile")
+    if os.path.exists(parted) and os.path.exists(mk):
+        for ln in open(mk):
+            if ln.startswith("SYSROOT :=") and "kdos/DOS.O88" in ln:
+                sysarts["DOS.O88"] = read(parted)
+                break
+
     # ...and every file on every image must BE one of them.
     compared = 0
     for img in SYSTEM_IMAGES + DATA_IMAGES:
@@ -281,9 +314,10 @@ def main():
                 continue
             stem, ext = name11[:8].strip().decode(), name11[8:].strip().decode()
             fname = ("%s.%s" % (stem, ext)) if ext else stem
-            if fname.upper() not in arts:
+            table = sysarts if img in SYSTEM_IMAGES else arts
+            if fname.upper() not in table:
                 continue                            # generated on the volume
-            want = arts[fname.upper()]
+            want = table[fname.upper()]
             chain, _ = v.chain(clus) if clus else ([], 0)
             got = b"".join(v.blob[v.cluster_lba(c) * v.byts:
                                   v.cluster_lba(c) * v.byts + v.spc * v.byts]

@@ -234,8 +234,14 @@ THEMES = (
     # so it weighs nothing on kern_big or kern_small and its bytes appear on
     # the emu variant's row alone.
     ("hardware: drivers, clock, mouse, sound, CPU, XMS",
-     ("mouse.inc", "moudiag.inc", "vmmouse.inc", "clock.inc", "driver.inc",
-      "hiber.inc", "snd.inc", "cpudet.inc", "xmem.inc")),
+     ("mouse.inc", "mouproto.inc", "moudiag.inc", "vmmouse.inc", "clock.inc",
+      "driver.inc", "hiber.inc", "snd.inc", "cpudet.inc", "xmem.inc")),
+    # mouproto.inc (SPEC.md 9.5) goes beside mouse.inc, and it always MEASURES
+    # ZERO: it is the serial packet's arithmetic as a macro, so its bytes are
+    # charged to the expansion site inside mou_byte. It is listed anyway
+    # because render_themes DROPS what it cannot place, so a module missing
+    # from this table makes the theme total stop agreeing with the module
+    # table - which is what tests/unit/t_kernmods.py's last check is for.
     # blank.inc (SPEC.md 64) is here and not under hardware, although all it
     # does is write a video port: what it owns is whether the SIGNAL is on,
     # which is a property of the adapter the rest of this group programs.
@@ -272,7 +278,12 @@ def measure(nasm_args=()):
     out_fd, out_path = tempfile.mkstemp(suffix=".bin")
     os.close(out_fd)
     try:
-        cmd = ["nasm", "-f", "bin", "-w+error", "-w-error=user", "-DKERNSIZE",
+        # $NASM, not `nasm`: this re-assembles the kernel to MEASURE it, and
+        # a measurement taken with a different assembler than built the
+        # image is a measurement of something else (tools/os88sym.py has
+        # the worked example - two assemblers, two bytes apart).
+        cmd = [os.environ.get("NASM", "nasm"), "-f", "bin", "-w+error",
+               "-w-error=user", "-DKERNSIZE",
                "-I", os.path.join(ROOT, "kernel") + os.sep,
                "-I", os.path.join(ROOT, "apps") + os.sep,
                "-I", BUILDDIR + os.sep,
@@ -383,7 +394,7 @@ def instrument(src):
 
 def _nasm(path, out_path, nasm_args=()):
     return subprocess.run(
-        ["nasm", "-f", "bin", "-w+error", "-w-error=user",
+        [os.environ.get("NASM", "nasm"), "-f", "bin", "-w+error", "-w-error=user",
          "-I", os.path.join(ROOT, "kernel") + os.sep,
          "-I", os.path.join(ROOT, "apps") + os.sep,
          "-I", BUILDDIR + os.sep,

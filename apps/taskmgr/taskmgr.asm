@@ -1083,6 +1083,12 @@ tm_entry:
     call OSAPI_ABOUT_SET        ; (SPEC.md 12.2) - BX is still the window and
     pop si                      ; the slot preserves the flags
     call tm_kinit               ; preserves the flags, so the CF our ret owes
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
 .out:                           ; the loader is wm_create's
     pop si                      ; POP leaves the flags alone
     ret
@@ -1107,6 +1113,15 @@ tm_hire:
     call OSAPI_TASK_SPAWN       ; CF=1 refused: nothing was created
     jc .norun
     mov byte [tm_spawned], 1
+    ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
+    ; kernel wrote our segment into this worker's frame before its
+    ; first instruction, so mem_frameless pins a region with an
+    ; undeclared worker however that region is declared. What a restart
+    ; costs is one pass of the loop - the park is inside
+    ; OSAPI_TASK_ALIVE and nowhere else (this package is not
+    ; OSAPI_MEM_PARKSAFE), which is the TOP of the loop, and every byte
+    ; that outlives a pass is a static and moves with us.
+    OS88_WORKER_RESTARTABLE tm_worker
 .norun:
     pop bx
     pop ax
@@ -1304,6 +1319,14 @@ tm_s_tregn: db 'Region', 0      ; owner = the slot, base = I_SPTR (SPEC.md 20.1)
 tm_s_tdata: db 'Data', 0        ; ...anything else that instance holds (50.3)
 tm_s_tsave: db 'MenuSav', 0
 tm_s_tdrv:  db 'DrvImg', 0
+tm_s_tdrvb: db 'DrvBuf', 0      ; ...and what that driver CLAIMED (SPEC.md
+                                ; 28.4.6): a ring, a pool, a listing buffer.
+                                ; It is NOT in tm_ktab and cannot be - a
+                                ; driver's claim carries the driver's own
+                                ; IMAGE SEGMENT as its owner word (mem_own),
+                                ; which is a different number on every boot,
+                                ; so tm_hdrv decides this one by walking the
+                                ; snapshot rather than by matching a constant
 tm_s_tcopy: db 'CopyBuf', 0
 tm_s_tfatw: db 'FATwin', 0
 tm_s_tview: db 'DirView', 0     ; kern_small's listing cache (SPEC.md 50.6.5)
@@ -1311,6 +1334,13 @@ tm_s_tasc:  db 'Assoc', 0
 tm_s_tclip: db 'Clipbrd', 0
 tm_s_twsav: db 'WinSave', 0
 tm_s_tdirw: db 'DirRead', 0
+tm_s_tico:  db 'Icons', 0        ; the machine-wide icon store (SPEC.md 25.9),
+                                ; one row per DISTINCT body. It is claimed at
+                                ; the first mount that harvests one and lives
+                                ; until it is purged, so leaving it out of this
+                                ; table put a permanent hex row on the heap
+                                ; page of every machine - MEM_K_BAND's own
+                                ; lesson, one tag along
 ; ...and the three that were MISSING, every one of which this page had been
 ; printing as a bare owner word (SPEC.md 28.4.3). The hex fallback below is
 ; the table's honesty rule about a tag this build has never SEEN, and not a
@@ -1328,6 +1358,12 @@ tm_s_thib:  db 'Resume', 0      ; the resume's extent list (SPEC.md 87.5), alive
                                 ; only on the way into the stub
 
 tm_s_tcmpr: db 'Compress', 0
+tm_s_tfdlg: db 'FileDlg', 0     ; the Standard File dialog's listing (SPEC.md
+                                ; 38.2). It is the FOURTH the prose above
+                                ; warned about: the dialog claimed its own
+                                ; store the moment SPEC.md 22.6.3 abolished
+                                ; the floor listing, and 'FF0F' was on this
+                                ; page for as long as any Save or Open was up
 ; (owner word, name) pairs, ended by a 0 owner. MEM_P_WSAVE is NOT here: it is
 ; a RANGE (SPEC.md 11.96.3), one cache per window slot, and tm_htype tests it
 ; before it walks this.
@@ -1352,7 +1388,9 @@ tm_ktab:
     dw MEM_K_BAND,  tm_s_tband
     dw MEM_K_HIB,   tm_s_thib
     dw MEM_K_CMPR,  tm_s_tcmpr
+    dw MEM_K_FDLG,  tm_s_tfdlg
     dw MEM_P_DIRW,  tm_s_tdirw
+    dw MEM_P_ICO,   tm_s_tico
     dw 0
 
 ; TIER names, four columns, indexed by the owner's high byte - MEM_PG_TRIV
@@ -3850,12 +3888,23 @@ tm_hmatch:
     jmp short .no
 .sys:
     cmp ah, MEM_PG_MIN          ; 0xFB..0xFF is a kernel tag, purgeable or not.
-    jb .no                      ; A SEGMENT can never reach that: conventional
-                                ; memory tops out at 0xA000
+    jb .drv                     ; A SEGMENT can never reach that: conventional
+                                ; memory tops out at 0xA000 - so what is left
+                                ; here is a segment, and one of them is a
+                                ; DRIVER's (SPEC.md 28.4.6)
     call tm_wsown               ; ...but a raise cache is only System's if the
     jc .yes                     ; window is (KERNEL_SEG). Anybody else's has
     cmp dx, KERNEL_SEG          ; just been claimed by the arm above, and a
     jne .no                     ; claim counted twice is a total that lies
+    jmp short .yes
+.drv:                           ; a driver's own claim is System's, beside the
+    call tm_hdrv                ; DrvImg that is already here: a driver has no
+    jmp short .out              ; instance and no other group it could be in,
+                                ; and tm_hdrv's CF is already the answer in
+                                ; this routine's polarity. It is reached only
+                                ; from HERE - the instance arms above refuse a
+                                ; driver claim on their own terms, so no claim
+                                ; can be counted twice
 .yes:
     clc
     jmp short .out
@@ -3891,6 +3940,80 @@ tm_wsown:
 .no:
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_hdrv - is the owner word in AX a DRIVER's image segment?
+; in:  AX = a claim's CLS_OWN
+; out: CF = 0 the owner is a driver image, so the claim is that driver's
+;      buffer; CF = 1 it is not
+; clobbers: nothing else (flags)
+;
+; SPEC.md 28.4.6, and it is drv_owns_seg (kernel/driver.inc) read off the
+; snapshot. A driver is neither of the two things this page groups by: it has
+; no instance, and the claims it takes carry no kernel tag - mem_own stamps a
+; claim with the CALLING SEGMENT (SPEC.md 50.3), which for a driver is the
+; segment its image was loaded into. So SOUND.DRV's 8KB ring carries a plain
+; conventional segment as its owner - not 0xFB..0xFF, and matching no tm_ispt -
+; and every arm of tm_hmatch said no to it. The ring was in tm_hsplit's HELD
+; total on the caption line and on no row of the list under it.
+;
+; THE KERNEL ALREADY MADE THIS DECISION and SPEC.md 51.3 states it: a driver's
+; bulk buffers belong under System, where its image already is. mem_sum_kb
+; asks drv_owns_seg for exactly this and fixed the TOTALS; this page groups
+; per claim through its own two tests and got neither, which is why the ring
+; was counted and not shown.
+;
+; THE SNAPSHOT ALREADY CARRIES THE ANSWER, so this needs no API cell - the
+; property SPEC.md 28.4 was built around. A driver's image is itself a record
+; in this table tagged MEM_K_DRV, so "is this segment a driver image" is "is
+; there a MEM_K_DRV record based there": the same set drv_tab names, off the
+; copy the page has already taken.
+;
+; TWO HOPS, and they are the kernel's two. drv_owns_seg walks drv_tab, then
+; for a segment not in it asks who owns the claim based there and walks
+; drv_tab again - ONE level, like mem_own_drv's (SPEC.md 52.11.6) - for a
+; driver's SECOND image (52.11.7). Hop 2 here is literally that: the claim
+; based at the owner word is owned by a MEM_K_DRV record. The walk stopping at
+; a record that does not exist is what bounds it, so a package's data claim
+; finds its region, reads an instance SLOT as that region's owner, and finds
+; nothing based at 0..11 - two passes and a no.
+; -----------------------------------------------------------------------------
+tm_hdrv:
+    push ax
+    push bx
+    push cx
+    push si
+    mov cx, 2                   ; the image, then a second image and no further
+.hop:
+    mov si, tm_claims
+.rec:
+    mov bx, [si+CLS_SEG]
+    or bx, bx
+    jz .next                    ; a free record
+    cmp bx, ax
+    je .found
+.next:
+    add si, CLS_RECSZ
+    cmp si, tm_claims + CLAIM_SNAPSHOT_SIZE
+    jb .rec
+    jmp short .no               ; nothing is based there, so it is no claim of
+                                ; ours and cannot be an image
+.found:
+    mov ax, [si+CLS_OWN]
+    cmp ax, MEM_K_DRV
+    je .yes
+    loop .hop                   ; ...or whoever owns IT is the image
+.no:
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop si                      ; pop leaves the flags alone
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4059,7 +4182,8 @@ tm_htype:
     cmp ah, MEM_PG_MIN
     jae .kern
     cmp ax, INST_MAX
-    jae .data                   ; a package's own segment: one of its claims
+    jae .seg                    ; a plain SEGMENT: a package's own claim, or a
+                                ; DRIVER's buffer (SPEC.md 28.4.6)
     mov si, ax                  ; an instance slot: its region, or a built-in's
     shl si, 1                   ; claim. SI, not DX: an 8086 indexes through
     cmp word [tm_isz+si], 0     ; BX/BP/SI/DI only (SPEC.md 1)
@@ -4068,6 +4192,12 @@ tm_htype:
     jne .data
     mov si, tm_s_tregn
     jmp short .put
+.seg:
+    call tm_hdrv                ; only the claim table tells the two apart: a
+    jc .data                    ; driver's ring and a package's data claim both
+    mov si, tm_s_tdrvb          ; carry a bare segment, and labelling the ring
+    jmp short .put              ; 'Data' is 28.4.3's rule failing the one way
+                                ; that leaves nothing on screen to notice
 .data:
     mov si, tm_s_tdata
     jmp short .put

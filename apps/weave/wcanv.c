@@ -135,6 +135,40 @@ static int w_chire(void)
     if (os88_task_spawn(w_win) != 0)
         return 0;
     w_cworker = 1;
+    /* ...AND OUR REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2). crt0.asm
+     * declared it movable before os88_main returned and the spawn above just
+     * pinned it again: a region declaration without this one is INERT.
+     *
+     * THE WORKER'S BODY IS NOT IN THIS SEGMENT, which is what made this look
+     * like a canvas-VM question rather than a declaration. It is: os88_worker
+     * is a trampoline into wcv_run, which far-calls WSMV_WORKER in WEAVE.WSM
+     * (WEAVE-SPEC 1.2.2). Three facts settle it, and none of them is about
+     * the VM's semantics.
+     *
+     * THE MODULE NEVER HOLDS OUR SEGMENT. Its ABI passes claim segments and a
+     * kernel window pointer - WSMV_BIND takes the canvas and bundle claims,
+     * WSMV_START the window - and the one word naming the module, wcv_vec,
+     * lives in OUR region and names the MODULE, so a region move carries it
+     * and leaves what it points at alone. The module switches its own DS and
+     * puts the caller's back, so it does not bank that either.
+     *
+     * THE RESTART REBUILDS THE WHOLE CHAIN. os88_task_restartable names
+     * crt0's cc_worker, which re-banks its stack top and re-pushes cc_win,
+     * and wsm_v_worker re-reads wsm_win out of the dispatcher's wsm_ab. The
+     * module's own state is in the MODULE's bss, which a region move does not
+     * touch, so the canvas resumes rather than restarts.
+     *
+     * AND wsm_ack IS 1 AT THE PARK POINT, which is the one thing that could
+     * have made this unsafe. wsm_v_unbind SPINS on that byte for up to 40
+     * ticks before freeing the canvas claim, so a worker restarted while it
+     * read 0 would strand the unbind - but this package does NOT declare
+     * os88_mem_parksafe(), so the only park is OSAPI_TASK_ALIVE at .park,
+     * which is past wsm_doframe's exit where the byte is 1 again. (Even under
+     * parksafe it would hold: wwork.inc raises it BEFORE the lock, on
+     * purpose, and says so.)
+     *
+     * A restart costs one frame. */
+    os88_task_restartable(1);
     return 1;
 }
 

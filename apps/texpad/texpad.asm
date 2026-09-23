@@ -17,6 +17,20 @@
 %define SB_RATE 0               ; RATE 0 (13.10.5.4): both panes repaint whole
 %endif
 TP_SBRATE   equ SB_RATE
+; ...AND A 286 GETS 2 (13.10.5.4.1). Two panes repainting whole is the
+; heaviest commit any package here makes, and BOTH bars share one gesture
+; record (13.10.7.2), so one number serves them.
+%ifndef SB_RATE286
+%define SB_RATE286 2
+%endif
+TP_SBRATE286 equ SB_RATE286
+; ...AND THE PAUSE COMMIT (13.10.5.4.2): a one-shot re-armed on every movement
+; fires only after this many ticks of stillness. No tier pair - half a second
+; is half a second on an 8088 and on a 286 alike.
+%ifndef SB_IDLE
+%define SB_IDLE 9
+%endif
+TP_SBIDLE   equ SB_IDLE
 %endif
 
     OS88_HEADER 'TEXPAD', tp_entry, 3
@@ -118,11 +132,23 @@ tp_entry:
     call OSAPI_MENU_SET
     pop si
     mov [tp_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     push ax                     ; SPEC.md 13.7/13.8.1: the bar's seven fire on
     mov ax, tp_onup             ; the RELEASE and follow the pointer between
     call OSAPI_WM_ONMOUSEUP     ; the edges. Not template words, so they are
     mov ax, tp_ondrag           ; set after wm_create like MENU_SET above
     call OSAPI_WM_ONDRAG
+%ifdef OS88UI_SBDRAG
+    push ax                     ; 13.10.5.4.2's PAUSE commit. The push is the
+    mov ax, tp_ontimer          ; `sbb al, al` below: it reads OSAPI_WM_ONDRAG's
+    call OSAPI_WM_ONTIMER       ; own CF, so this install may not sit between
+    pop ax                      ; the two - and AX carries the flags out
+%endif
 %ifdef OS88UI_SBDRAG
     sbb al, al                  ; CF = 1 on kern_small (SPEC.md 13.10.7.1): no
     mov [tp_nodrag], al         ; tracking edge, so no thumb gesture either
@@ -1151,6 +1177,14 @@ tp_btab:    dw tp_r_set, tp_r_cls, tp_r_mar, tp_r_gut, tp_r_pad
             dw tp_r_prev, tp_r_next
 TP_NBTN     equ 7
 
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; One button at a time: this package's rects are not one contiguous group,
+; so the record is pointed at whichever rect the caller staged.
+tp_btlbl: dw 0
+tp_btflg: dw 0
+    OS88UI_BTNREC tp_btrec, 0, tp_btlbl, tp_btflg, 1
+
 tp_btn1:
     push ax
     push bx
@@ -1237,7 +1271,16 @@ tp_btn1:
     or di, OS88UI_DIS           ; ...and DISABLED wins over DOWN inside
                                 ; os88ui_btn, so there is nothing to clear
 .draw:
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [tp_btlbl], si          ; label and DI its flags, so the record takes
+    mov [tp_btflg], di          ; all three and the picture is identical
+    mov [tp_btrec+OS88UI_BT_RECTS], bx
+    mov bx, tp_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop dx
@@ -4222,6 +4265,29 @@ tp_bact:
 ; tp_onup - W_ONMOUSEUP (SPEC.md 13.7): a bar button fires HERE
 ; in:  CX = x, DX = y (SCREEN), SI = the window; gfx lock held
 ; -----------------------------------------------------------------------------
+%ifdef OS88UI_SBDRAG
+tp_ontimer:                     ; the thumb has been STILL for TP_SBIDLE ticks
+    push ax                     ; (13.9 disarms before this runs and this does
+    push bx                     ; not re-arm, so a pause is ONE commit)
+    push cx
+    push dx
+    push si
+    push di
+    call tp_sbd_which           ; WHICH bar, same as the other two edges
+    jc .tout
+    call os88ui_sbowed          ; ...and NOT os88ui_sbdrop: a pause is not the
+    jc .tout                    ; end of the gesture
+    call tp_sbd_commit
+.tout:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
+
 tp_onup:
     push ax
     push bx
@@ -4233,6 +4299,11 @@ tp_onup:
 %ifdef OS88UI_SBDRAG
     call tp_sbd_which           ; SPEC.md 13.10.5: the release COMMITS, and
     jc .btn                     ; unconditionally
+    push bx                     ; the pause timer must not outlive the gesture
+    mov bx, [tp_win]            ; it belongs to (13.10.5.4.2)
+    xor ax, ax
+    call OSAPI_WM_TIMER
+    pop bx
     call os88ui_sbdrop
     jc .btn
     call tp_sbd_commit
@@ -4301,6 +4372,11 @@ tp_ondrag:
 %ifdef OS88UI_SBDRAG
     call tp_sbd_which           ; SPEC.md 13.10.5: a live thumb drag owns this
     jc .btn                     ; movement whole
+    push bx                     ; 13.10.5.4.2: every movement pushes the
+    mov bx, [tp_win]            ; one-shot out. BX is the BLOCK here and the
+    mov ax, TP_SBIDLE           ; timer wants the WINDOW, so it is banked -
+    call OSAPI_WM_TIMER         ; tp_sbd_which chose which of the two bars and
+    pop bx                      ; that answer must survive
     call os88ui_sbtrack         ; CF = 1: nothing owed - the rate, or the same
     jc .out                     ; step
     call tp_sbd_commit
@@ -5735,8 +5811,9 @@ tp_psb_click:
     jne .o                      ; pixels - the element does not care (13.10.7.2)
     cmp byte [tp_nodrag], 0
     jne .o
-    mov al, TP_SBRATE
-    call os88ui_sbgrab
+    mov ax, TP_SBRATE | (TP_SBRATE286 << 8)
+    call os88ui_sbrate          ; the rate THIS machine can afford
+    call os88ui_sbgrab          ; (SPEC.md 13.10.5.4.1)
 %endif
     jmp short .o
 .up:
@@ -5784,8 +5861,9 @@ tp_ssb_click:
     jne .o
     cmp byte [tp_nodrag], 0
     jne .o
-    mov al, TP_SBRATE
-    call os88ui_sbgrab
+    mov ax, TP_SBRATE | (TP_SBRATE286 << 8)
+    call os88ui_sbrate          ; the rate THIS machine can afford
+    call os88ui_sbgrab          ; (SPEC.md 13.10.5.4.1)
     jmp short .o
 %endif
     jmp short .o
@@ -6100,7 +6178,7 @@ tp_s_noset:     db 'F5 typesets the preview', 0
 tp_s_loaded:    db 'Loaded', 0
 tp_s_saved:     db 'Saved', 0
 tp_s_copied:    db 'Copied', 0
-tp_s_err:       db 'Read error - new document', 0
+tp_s_err:       db 'Read error: new document', 0
 tp_s_werr:      db 'Write error', 0
 tp_s_nomem:     db 'Need more RAM', 0
 tp_s_full:      db 'Document full (8K)', 0

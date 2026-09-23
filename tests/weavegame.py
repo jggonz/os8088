@@ -117,26 +117,49 @@ def find_modules(m, img):
     "loaded" and "bound" are different questions and it asks both.
     """
     so = int.from_bytes(img[6:8], "little")     # WSM_H_STATE, from the FILE
-    out = []
-    for seg in range(0x0800, 0xA000, 0x40):     # a claim base is KB-aligned
-        b = m.readseg(seg, 0, 8)
-        # The magic, the ABI and the size, taken FROM THE IMAGE rather than
-        # spelled here: this used to hard-code ABI 1 (`b[2] == 1`), and
+
+    # **ONE BULK READ, SEARCHED ON THE HOST - AND NOT A STRIDE.** This walked
+    # `range(0x0800, 0xA000, 0x40)` on the stated assumption that "a claim
+    # base is KB-aligned", and that assumption is FALSE: measured on
+    # `os8088_5150_cga_gla`, the live module sits at segment **0x28a0**, which
+    # is 0x20 past a KB boundary, so a 0x40 stride steps straight over it. The
+    # row then found nothing at all and reported "0 bound of 0 INTACT
+    # image(s)" about a module that had loaded perfectly - the SAME sentence
+    # the ABI-2 bug above produced, from a different cause, which is why this
+    # comment names the reading rather than the conclusion.
+    #
+    # Scanning every PARAGRAPH instead would be right and unusably slow: it is
+    # ~38,900 candidates and two debugger reads apiece. Dumping the arena once
+    # and searching it here is a few seconds, finds a claim at ANY alignment,
+    # and cannot go stale the next time the allocator's granularity changes -
+    # which is the failure this replaces.
+    base, end, step = 0x8000, 0xA0000, 0x8000
+    blob, a = bytearray(), base
+    while a < end:
+        n = min(step, end - a)
+        blob += m.read(a, n)
+        a += n
+
+    out, i = [], blob.find(img[0:6])
+    while i >= 0:
+        lin, j = base + i, i
+        i = blob.find(img[0:6], i + 1)
+        # The magic, the ABI and the size all come FROM THE IMAGE rather than
+        # being spelled here: this used to hard-code ABI 1 (`b[2] == 1`), and
         # WEAVE-SPEC 6.10.7's palette bumped WSM_ABI to 2 - so the scan
-        # matched nothing, found "0 bound of 0 image(s)", and reported a
-        # module that had loaded perfectly as one that never loaded at all.
-        # A number that is pinned in wsmabi.inc and copied into a test is a
-        # number that goes stale on the one wave that changes it; reading it
-        # out of the file the test already opened cannot.
-        if bytes(b[0:6]) != img[0:6]:
+        # matched nothing and reported a module that had loaded as one that
+        # never had. A number pinned in wsmabi.inc and copied into a test is a
+        # number that goes stale on the one wave that changes it.
+        if lin & 15:
+            continue                            # no segment can name it, so
+                                                # it is not a claim base
+        if bytes(blob[j + len(img) - 16:j + len(img)]) != img[-16:]:
             continue
-        if bytes(m.readseg(seg, len(img) - 16, 16)) != img[-16:]:
-            continue
-        mem = b"".join(bytes(m.readseg(seg, o, min(1024, so - o)))
-                       for o in range(0, so, 1024))
-        if mem != img[:so]:                     # ...and the code is intact
-            continue
-        out.append((seg, so))
+        if bytes(blob[j:j + so]) != img[:so]:   # ...and the code is intact,
+            continue                            # which is what tells a live
+                                                # module from the floppy
+                                                # cache's copy (see above)
+        out.append((lin >> 4, so))
     return out
 
 

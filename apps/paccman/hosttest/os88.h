@@ -78,12 +78,17 @@ void  os88_about_card(void *win, const char **lines);
 void  os88_about_card_d(void *win, const char **lines);
 int   os88_fullscreen(void *win, int enter);
 int   os88_key_down(int scan);
+
+/* SPEC.md 11.2.1.1's full-screen chord, mirrored from apps/cc/os88.h */
+#define OS88_SCAN_ENTER 0x1C
+#define OS88_SCAN_ALT   0x38
 void  os88_video(struct os88_video *v);
 int   os88_toast(const char *text, int ticks);
 int   os88_snd_tone(int hz, int ticks, int prio);
 
 void *os88_wm_top(void);
 int   os88_task_spawn(void *win);
+int   os88_task_restartable(int on);
 void  os88_task_alive(void *win);
 void  os88_task_sleep(int ticks);
 void  os88_task_yield(void);

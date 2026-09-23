@@ -28,8 +28,14 @@ Three assertions, and the third is the one a memory dump cannot make:
      crash.
 """
 import sys, os, time, hashlib, argparse, subprocess, tempfile
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import os88fixture                                       # noqa: E402
 import os88marty, os88mouse, os88sym, os88geom, dispcp
 
@@ -256,6 +262,24 @@ def main():
         time.sleep(22)
         os88marty.settle(m)
 
+        # **PAINT'S OWN SEGMENT IS RE-RESOLVED, because the compaction this
+        # row just forced is exactly the thing that moves it.** `pt_seg` was
+        # banked before the second HEAPFRAG opened, and `mine()` matches a
+        # claim's OWNER against it - so a Paint whose region moved owns
+        # nothing as far as that banked number is concerned, and the row
+        # printed `Paint now holds []` and failed check 1 with
+        # `[pt_base] names no claim Paint holds`.
+        #
+        # It is the sharpest possible false alarm here: checks 2 to 5 all
+        # PASSED in the same run - the canvas moved 5600 -> 3880, the
+        # contents survived to the md5, the row table followed, the undo
+        # delta was right and the repaint was identical - so the feature
+        # worked perfectly and the row said it had not. tests/kdhdd.py's
+        # box_state is the same correction one package along.
+        pt_seg2, _ = pkg_seg(m, S, "Paint")
+        if pt_seg2 is not None and pt_seg2 != pt_seg:
+            print("Paint's own region moved %04x -> %04x" % (pt_seg, pt_seg2))
+            pt_seg = pt_seg2
         after = mine(claims(m, S), pt_seg)
         print("Paint now holds %s"
               % ["%04x/%dKB" % (b, p // 64) for b, p, _, r in after])

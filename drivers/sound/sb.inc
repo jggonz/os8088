@@ -2923,6 +2923,21 @@ sbl_f_probe:
     mov al, 1
     jmp .out
 .no:
+    mov word [sbl_base], 0      ; **AND THE SCAN'S OWN SCRATCH WITH IT** (SPEC.md
+                                ; 51.11.2.1). This cell is the scan's cursor as
+                                ; well as its answer - `.retry` above writes
+                                ; 0x220 into it to make one slow attempt at the
+                                ; head of the list - so a machine with no DSP
+                                ; anywhere left this routine having REFUSED and
+                                ; still naming a base. `sbl_attach` reads AL and
+                                ; is not fooled; `snd_hwinfo` reads this WORD and
+                                ; was, so an AdLib-only machine - where the OPL
+                                ; attaches, the driver stays mounted and the
+                                ; suspend therefore asks - published
+                                ; `BLASTER=A220 D1 T1`: a Sound Blaster at 220h,
+                                ; on DMA 1, that is not in the machine.
+                                ; `sbl_state_init` cannot cover this, running
+                                ; BEFORE the probe rather than after it
     xor al, al
 .out:
     pop si

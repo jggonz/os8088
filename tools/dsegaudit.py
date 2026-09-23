@@ -103,6 +103,13 @@ def windows(bodies, word):
     """Every stretch where `word` is live in ES or DS, with the calls in it."""
     load = re.compile(r"^\s+mov\s+(es|ds)\s*,\s*\[%s\]" % re.escape(word))
     other = re.compile(r"^\s+mov\s+(es|ds)\s*,\s*(?!\[%s\])" % re.escape(word))
+    # A `pop es` RELOADS the register and so ends the window exactly as a `mov`
+    # does. Without this the only way to close one was to name another segment,
+    # which pushed the `push es / mov es, [word] / read / pop es` idiom - the
+    # SAFE one, because the pop is before the call - into being reported as
+    # live to the end of the routine. It stays pessimistic in the direction
+    # that matters: a pop AFTER a call leaves that call inside the window.
+    popped = re.compile(r"^\s+pop\s+(es|ds)\b")
     out = []
     for name, body in sorted(bodies.items()):
         reg, calls, fname = None, [], None
@@ -115,7 +122,7 @@ def windows(bodies, word):
                 continue
             if reg is None:
                 continue
-            r = other.match(line)
+            r = other.match(line) or popped.match(line)
             if r and r.group(1) == reg:
                 out.append((name, fname, reg, calls, False))
                 reg, calls = None, []

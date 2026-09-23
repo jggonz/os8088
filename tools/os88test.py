@@ -686,7 +686,7 @@ def main():
             # ...and the OTHER direction, which had no report at all and is
             # the worse one. A row finishing in a few percent of its
             # declaration did not do what it says: it is an ABSENT gate, not a
-            # fast one. docs/plans/HANDOFF-SOAK-FINDINGS.md B4 records three rows
+            # fast one. The pass-2 soak recorded three rows
             # that FAILED in 0.1s where they meant to skip, and those got
             # investigated because they were red - `dispcp` was a LIBRARY
             # registered as a row, reporting `ok` in 0.1s against 60 declared,

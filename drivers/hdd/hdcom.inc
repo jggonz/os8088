@@ -36,6 +36,23 @@ hd_ndev:     db 0
 hd_sel:      db 0               ; the device row the page (or the tool) shows
 hd_devs:     times HD_MAXDEV * HDD_SIZE db 0
 
+; --- THE THREE THE PAGE READS AND THE RESIDENT OWNS (SPEC.md 52.13) --------
+; They are here for hd_ndev's and hd_sel's reason: the page is in the tool's
+; image and hd_sync copies the resident's values into this image's copies, so
+; a word that BOTH sides name has to exist in both. The page never writes
+; them back by hand - a caption goes out through HSV_MSG and a mount through
+; HSV_MOUNTDEV, because the resident's are the real ones.
+hd_msgc:     db HDM_PICK        ; the page's caption, as an HDM_* code and
+                                ; never a pointer (hddabi.inc): font_str reads
+                                ; through DS, so a string only means anything
+                                ; in the image that letters it
+hd_nmnt:     db 0               ; ...how many volumes the last mount click
+                                ; mounted, which is what HDM_MOUNTED counts
+hd_mntmask:  db 0               ; ...and bit n = device n has a mounted volume.
+                                ; It replaces a walk of hd_vols, which is the
+                                ; resident's table and stays there: the page
+                                ; asked it ONE question and a byte answers it
+
 hd_rowslot:  db 0               ; a row painter's loop index
 ; The pair every label on this driver's two surfaces is lettered in (SPEC.md
 ; 52.12): AL = ink, AH = the ground under it. A driver cannot read [gfx_color]
@@ -512,6 +529,80 @@ hd_utoa_body:
     pop cx
     ret
 
+
+; -----------------------------------------------------------------------------
+; hd_geom_ok - is a row's geometry usable? (module internal)
+; in:  DI = the row
+; out: CF = 0 usable
+; clobbers: flags
+; -----------------------------------------------------------------------------
+hd_geom_ok:
+    push ax
+    mov ax, [di+HDD_CYL]
+    test ax, ax
+    jz .no
+    cmp ax, 1024
+    ja .no
+    mov ax, [di+HDD_HEADS]
+    test ax, ax
+    jz .no
+    cmp ax, 255
+    ja .no
+    cmp byte [di+HDD_KIND], HDK_IDE
+    jne .spt
+    cmp ax, 16                  ; the task file has four bits of head, so an
+    ja .no                      ; IDE row carrying more is not a drive we can
+.spt:                           ; address at all - refuse the GEOMETRY rather
+                                ; than truncate it at the port (SPEC.md 52.1)
+    mov ax, [di+HDD_SPT]
+    test ax, ax
+    jz .no
+    cmp ax, 63
+    ja .no
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_dev_mb - a device's size in whole MB
+; in:  DI = the row
+; out: AX = megabytes (0 if the geometry is unknown)
+; clobbers: AX (the output), flags
+;
+; cyl * heads * spt sectors, and 2,048 sectors is a megabyte - so the answer
+; is (cyl*heads*spt) >> 11, computed as a 32-bit product because 1024 x 16 x
+; 63 is 1,032,192 and does not fit a word.
+; -----------------------------------------------------------------------------
+hd_dev_mb:
+    push bx
+    push cx
+    push dx
+    call hd_geom_ok
+    jc .none
+    mov ax, [di+HDD_HEADS]
+    mul word [di+HDD_SPT]       ; DX:AX = heads*spt (<= 16,065)
+    mul word [di+HDD_CYL]       ; ...times cylinders: a true 32-bit product
+                                ; only because the first fits a word
+    mov bx, ax                  ; DX:BX = total sectors
+    mov cl, 11
+.shift:                         ; >> 11, a bit at a time: the 8086 has no
+    shr dx, 1                   ; 32-bit shift and this runs once a repaint
+    rcr bx, 1
+    dec cl
+    jnz .shift
+    mov ax, bx
+    jmp short .out
+.none:
+    xor ax, ax
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
 
 ; --- strings both images letter ---------------------------------------------
 hd_s_mb:     db 'M', 0

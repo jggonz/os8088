@@ -505,7 +505,7 @@ hd_cfg_automount:
     mov dx, [hd_cwd]            ; the boot goes on with the system disk as
     mov bl, [hd_cdrv]           ; the current volume, exactly as it would
     call OSAPI_FILE_GOTO        ; have without us
-    mov word [hd_msg], hd_s_pick
+    mov byte [hd_msgc], HDM_PICK
 .out:
     pop dx
     pop cx

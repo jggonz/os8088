@@ -169,6 +169,21 @@ nsk_tab:
                                 ; a package that treated NETE_VERB as fatal
                                 ; would stop working over the cable for
                                 ; asking a question about performance
+    dw nsk_everb                ; NETV_RAW   - **THE WIRE CARRIES SOCKETS, NOT
+    dw nsk_everb                ; NETV_RAWTX   FRAMES** (SPEC.md 72.22.3). NOT
+    dw nsk_everb                ; NETV_RAWRX   because the far end has no
+                                ; frames - it is on a real NIC through a real
+                                ; packet driver (pktdrv.inc) and has MACs and
+                                ; ethertypes in abundance - but because
+                                ; nwire.inc has no raw command, and because
+                                ; relaying frames over 3,741 B/s (PERFORMANCE
+                                ; Set 39) is ~2.5 frames a second with every
+                                ; ack and every ARP crossing the cable. The
+                                ; socket wire keeps that chatter on the DOS
+                                ; side and sends only payload. A refusal is
+                                ; honest rather than an empty success: a packet
+                                ; driver built on a silent no would look
+                                ; mounted and never receive
 %if ($ - nsk_tab) / 2 != NETV_MAX + 1
   %error "net: nsk_tab does not cover NETV_0..NETV_MAX"
 %endif

@@ -621,7 +621,7 @@ def _scroll_to_blind(m, mo, S, settle, entry, card):
     bound the per-key wait in GUEST time, because a QEMU object has no cycle
     counter - so this one keeps the host-clock loop, and that is a real
     difference: on a loaded box a step can be judged an END STOP when the
-    guest simply had not got there (docs/plans/HANDOFF-SOAK-FINDINGS.md B5). Six
+    guest simply had not got there. Six
     rows take this path and every one of them is on docs/TESTING.md's closed
     list, so there is nowhere better for them to go.
     """

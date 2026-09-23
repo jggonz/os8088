@@ -763,6 +763,18 @@ void os88_onkey(int ascii, int scan, void *win)
         return;
     }
 
+    /* ...AND SO IS ALT+ENTER, which is the same door under the name every
+     * other emulator on every other machine uses (SPEC.md 11.2.1.1). It costs
+     * the C64 nothing that Alt+D does not already cost: Alt is not a key the
+     * emulated machine has, so no chord built on it can be taken away from
+     * it, which is exactly why §9.8 reached for Alt+D in the first place. The
+     * map it rides on is armed once in os88_main, beside the one Alt+Shift+P
+     * already needs. */
+    if (ascii == 0 && scan == OS88_SCAN_ENTER) {
+        c64_fullscreen_toggle(win);
+        return;
+    }
+
     /* AND EVERY OTHER CHORD THIS MENU ADVERTISES IS DISPATCHED HERE, BECAUSE
      * A CAPTION IS NOT AN ACCELERATOR IN THIS KERNEL. c64menu.c prints
      * VICE's own `.vhk` bindings beside the items - Alt+A, Alt+F9, Alt+Q,

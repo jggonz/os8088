@@ -27,7 +27,16 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SRC = os.path.join(ROOT, "apps", "skies", "csworld.inc")
 FIELDS = ("NAME VSTALL VROT VMAX THRUST DRAGK FRICT BRAKE ROLLR ROLLL PITCHR "
           "PITCHT TURNK EYE MAXROLL MAXPITCH COCKPIT ATT SPOOL LAUNCH FLAGS "
-          "ART INDK").split()
+          "ART INDK SND").split()
+# CSP_SND is SPEC.md 88.8.2's engine voice, and it is the LAST row of every
+# record (apps/skies/csworld.inc). It was added without this list, and the cost
+# is worth stating because it is the opposite of a loud failure: the order
+# check below fails and then `continue`s, so EVERY arithmetic check in this
+# file - the DRAGK/THRUST balance at VMAX, the 3/4-VMAX acceleration, the
+# induced term at the stall - was SKIPPED for all five records while the row
+# reported five failures about field order. A row that stops testing its own
+# subject is the shape docs/WRITING-TESTS.md 1 is about, so a new field wants
+# appending here in the same commit that adds it.
 bad = []
 
 

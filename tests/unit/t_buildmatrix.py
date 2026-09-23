@@ -18,7 +18,8 @@ somebody types the knob by hand:
     `RAMKB=`, `FLOPPY1=`, `DISKCNT=`, `DIRTYRAM=`, `FSNOSTAMP=`, `DISKAL=`,
     `BOOTDIAG=`,
     `REDRAWFULL=`, `HEAPCOMPACT=`, `FDDPROBE=`, `SNAPAUDIT=`, `BOOTPROF=`,
-    `MOUIDSLOW=`, `TRACKRUN=`, `QUANTUM=`, `SBDRAGOFF=`/`SBRATE=`,
+    `MOUIDSLOW=`, `TRACKRUN=`, `QUANTUM=`,
+    `SBDRAGOFF=`/`SBRATE=`/`SBRATE286=`/`SBIDLE=`,
     `DIRW1=`, `PICOMEM=`, `BOOTMARK=`/`BOOTHALT=`/`BOOTSTOP=`, `NOPS2=`,
     `BAND=`, `TITLESNAP=`, `SPLSTARS=`, `NOUNAL=`,
     `NOFLUSHR=`, `FATWGATE=`, `FDDSLOW=`.
@@ -214,8 +215,47 @@ KNOBS = [
     # SPEC.md 13.10.5's thumb drag SHIPS, so what needs keeping alive is the
     # configuration nobody builds: the reference kernel WITHOUT it, and the
     # rate constant, which only the second of these reaches.
+    #
+    # SINCE 13.10.5.4.1 THE RATE IS A PAIR, so there are two constants and
+    # each knob reaches one: SBRATE= is the 8086 half (0 in every shipped
+    # build) and SBRATE286= the 286 half (2 in every shipped build). The
+    # reference arm is therefore `SBRATE286=0` and NOT `SBRATE=0` - that
+    # second spelling builds what already ships and would report a pass for
+    # a path nothing assembled, which is the failure the NOBAND row below
+    # records at length.
     ("sbdragoff",   ["SBDRAGOFF=1"]),
     ("sbrate",      ["SBRATE=2"]),
+    ("sbrate286",   ["SBRATE286=0"]),
+    # ...and 13.10.5.4.2's PAUSE commit off, which is a third TRIGGER and not a
+    # third value: SBIDLE=0 is the only build in which a hand that stops draws
+    # nothing, so it is the only one that keeps that arm assembling.
+    ("sbidle",      ["SBIDLE=0"]),
+    # --- the four this table had no row for, which the soak found -----------
+    # `MOUROUND=1` is MOUDIAG=1 plus SPEC.md 9.4.6.5's ROUND: the mouse's wire
+    # counters go round a lap instead of saturating, so it is the kernel's and
+    # the default target is right.
+    ("mouround",    ["MOUROUND=1"]),
+    # `DPTROM=1` (SPEC.md 18.92) TAKES BOTH ARMS, for BOOTSTOP's reason: it
+    # appends -DDPT_ROM to $(VIDDEF) *and* to $(BOOTDEF), so one target
+    # assembles half of it. The kernel arm is the default and the sector arm
+    # is boot360.bin, exactly as `trackrun` above.
+    ("dptrom",      ["DPTROM=1"]),
+    ("dptrom-boot", ["DPTROM=1"], "boot360.bin"),
+    # ...and the two that reach **kern_dos** rather than the kernel, so their
+    # target is `kerndos.bin` - the default would build a kernel the knob
+    # never touched and report a pass for an arm nothing assembled, which is
+    # PICOMEM's lesson above, one image along.
+    # `NOKDKBD=1` is $(KDKBDDEF) = -DKD_NO_KBGUARD (SPEC.md 9.8): kern_dos's
+    # int 09h left exactly as DOS leaves it.
+    ("nokdkbd",     ["NOKDKBD=1"], "kerndos.bin"),
+    # `DOSRMARK=1` (SPEC.md 96.49) reaches BOTH assemblies and the Makefile
+    # says so in capitals: kernel/hbstub.inc is staged once by
+    # kernel/hiber.inc and once by kerndos/kdresume.inc, and neither host can
+    # reach the other's copy - so -DDOSR_MARK goes into $(VIDDEF) at
+    # Makefile:555 and into $(KDSTKDIAGDEF) at 4939. Two rows, one per
+    # assembly, or half the trace goes unassembled.
+    ("dosrmark",    ["DOSRMARK=1"]),
+    ("dosrmark-kd", ["DOSRMARK=1"], "kerndos.bin"),
     # The LOOK/measurement knobs, which nothing else builds at all. Each
     # switches a whole path in or out - and BAND is now the only thing that
     # assembles the COMPOSED title bar at all, because SPEC.md 5.9.6 sent it

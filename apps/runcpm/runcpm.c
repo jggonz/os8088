@@ -1091,8 +1091,14 @@ void os88_onkey(int ascii, int scan, void *win)
         ovl_dbg_counters();
         return;
     }
-    if (ascii == 0 && scan == RC_SCAN_ALT_F) {
-        /* OSAPI_FULLSCREEN paints SYNCHRONOUSLY inside the slot (kernel/
+    if (ascii == 0 && (scan == RC_SCAN_ALT_F || scan == OS88_SCAN_ENTER)) {
+        /* ...AND ALT+ENTER IS THE SAME DOOR (SPEC.md 11.2.1.1), under the
+         * name every other console window on every other machine uses. It
+         * costs nothing that Alt+F does not: `ascii == 0` is what separates
+         * it from the plain Enter the CP/M console below wants, and CP/M
+         * cannot see an Alt chord at all.
+         *
+         * OSAPI_FULLSCREEN paints SYNCHRONOUSLY inside the slot (kernel/
          * wm.inc wm_fullscreen: wm_raise whole on enter, wm_paint_all on
          * exit), so os88_paint has ALREADY run nested here, whole, for the
          * new geometry, and the shadow describes the new glass when this
@@ -1184,6 +1190,14 @@ void os88_about(void *win)
 void *os88_main(void)
 {
     void *win;
+
+    /* ARM THE KEY-STATE MAP, once, and throw the answer away (SPEC.md 9.7).
+     * The kernel does not latch Alt+Enter until something has asked for that
+     * map, so without this the chord os88_onkey tests for above is silently
+     * dead - no XT BIOS enqueues the combination for int 16h to carry
+     * (SPEC.md 9.7.1). Here rather than in a callback: arming CLEARS the map,
+     * which from a callback would erase a make os88_onkey has already seen. */
+    os88_key_down(OS88_SCAN_ALT);
 
     rc_zseg = os88_mem_claim(64);
     if (rc_zseg == 0) {

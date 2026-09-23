@@ -19,7 +19,7 @@ Two rules the entries exist to serve:
   audio report sat here for months as a 5150 report and had come off PCem;
   the 5150 has no sound card.
 
-**Still open:** 3 (mechanism D), 10, 14, 19, 24.2, 28, 32, and one residual
+**Still open:** 3 (mechanism D), 10, 14, 19, 24.2, 28, 32, 43, and one residual
 each in 33 and 37.
 
 ---
@@ -1538,3 +1538,1005 @@ not of the kernel**, and `DSV_TICK` alone moves it 16.
 `tools/stkwater.py` measures what a slice actually reached, and
 `tools/cyunwind` is Cyclone's own unwinder from the first investigation —
 neither needs an emulator run to be set up specially.
+
+---
+
+## 43. Prince of Persia will not start under the WHOLE-MACHINE arm (CLOSED — three causes, and the third was `kern_dos` crossing a head on a ROM that cannot: SPEC.md §96.44.14)
+
+Reported off an 86Box 286 with an OTI-067 VGA, three floppies and a 128MB VHD
+(so the third floppy lands on D:, §18.7.1): *"Prince, when run from a
+subdirectory, goes back to `Please Insert Disk in Drive D:`. The drive is
+right — but I think the CWD being given to it probably doesn't have the
+subdirectory."*  And separately: *"I'm also unable to launch it through our
+console, it just prints `Bad command or file name`. I tried it from B: and
+D:."*
+
+**THE SUBDIRECTORY IS NOT THE VARIABLE, and that is measured four ways.** The
+report's shape points straight at the folder and the folder is innocent:
+
+| | windowed | whole machine |
+|---|---|---|
+| launched from the volume ROOT | runs | **"Unable to find necessary files"**, exit 1 |
+| launched from a SUBDIRECTORY | runs | **"Please insert Prince of Persia Disk 1"** |
+
+What made it look like the folder is the `.LNK`: a shortcut records the arm,
+so double-clicking it takes the third one while opening `PRINCE.EXE` directly
+fits windowed and takes the first. On the reporter's machine the game is in a
+subdirectory AND has a shortcut, so the two moved together.
+
+**TWO CAUSES FOUND AND FIXED.** Both are §96.44 seam defects and each is
+reproduced by a registered row now:
+
+1. **§96.44.2.1** — the core and the window laid the shared bss out four bytes
+   apart, because `DBSS DOS_B_DVCWD, 2 * DVOL_MAX` sized a core table from a
+   per-host constant. That is the console half of the report, entirely: every
+   program typed at the parted box's prompt answered `Bad command or file
+   name`, root or subdirectory. `tests/unit/t_dosbss.py` rule 4.
+2. **§96.44.10** — `OSAPI_FILE_PATH` is an X cell, so `api_x` puts the
+   caller's DS in ES; `kern_dos` bound the door with a far call straight at
+   `dsk_path_x`, which writes to ES:DI and never reloads ES. The program's own
+   path in the environment came out as `B:` — the drive and nothing after it.
+   `tests/kdcwd.py`. With it fixed, Prince opens `B:\PRINCE\prince.dat`
+   correctly and still fails.
+
+**WHAT IS RULED OUT for the third**, each on a measurement rather than on
+reasoning, all taken on one machine with one disk and the two arms as the only
+variable (`os8088_5150_herc_sb_720_gla`, `build/os8088-720.img`):
+
+- **the file's BYTES** — `RDSUM.COM` reads `PRINCE.DAT` whole in 512-byte
+  chunks and answers `len=00000CCE sum=BB77` under both arms, which is what
+  the host computes off the image;
+- **the SMALL read Prince actually makes** — `tests/dostrap/rdsmall.asm` reads
+  six bytes at offset 0, six more, six after a rewind and 512 after a rewind,
+  and prints every one: `DC 0A 00 00 F2 01` under both arms, identical;
+- **the current directory, the drive, a bare-name open and the program's own
+  path** — `tests/kdcwd.py`, all four identical since fix 2;
+- **the command tail, the environment and its count word** — `DOSARGS.COM`
+  under both arms: `COUNT 0 / ARGS (none) / TERM 0 / SET BLASTER=… / MYPATH
+  B:\DOSARGS.COM`;
+- **the registers a program is handed** — `cs:ds`, `ss:sp` and `PSP:0002`
+  printed at entry: a `.COM` gets `DS:FFFC` on both, and the only difference
+  is the block top, which is memory it has more of;
+- **the amount of memory** — capping the arena to 200 KB on the Memory page
+  (`dos_memkb`, which rides the handover) changes nothing;
+- **the drive's CYLINDERS** — `os88fat.py reach` says the machine reaches the
+  whole image, and `PRINCE.DAT` is at cylinder 16 either way.
+
+**WHERE IT DIVERGES, to the instruction.** Both arms make the same fourteen
+calls and then part company on the fifteenth. Prince opens `prince.dat`, reads
+six bytes — `DC 0A 00 00 F2 01`, which is the words `0x0ADC`, `0x0000`,
+`0x01F2` — and then:
+
+| | windowed | whole machine |
+|---|---|---|
+| `AH=48h` paragraphs | `0x0026` (38) | `0x0179` (377) |
+| `AH=42h` seek to | `0x0ADC` = 2780 | `0x1733` = 5939 |
+| `AH=3Fh` read | `0x01F2` = 498 | `0x1728` = 5928 |
+
+2780 + 498 is **3278, the file's exact length** — the windowed arm takes the
+two words straight out of the header and reads the index off the tail. The
+whole-machine arm's two numbers are **nowhere in the file**, and 5939 is past
+the end of it. So the six bytes are right and what is computed from them is
+not.
+
+**THE INSTRUMENT WAS WRONG, AND FIXING IT IS MOST OF WHAT THIS ROUND ADDED.**
+`os88intmon`'s `--time` computed the return site as `CS:IP + 2` — but
+MartyPC's INT breakpoint stops INSIDE the handler with the vector already
+fetched, so `cs:ip` is the handler's entry (the same `05C9` for every call in
+both arms, which is the tell) and `+2` is two bytes into the handler. Every
+`--time` figure it ever printed was ~20 cycles, and the TD3 run that reported
+`0.0 ms in-BIOS` was the same defect on `int 13h`. The return site is the
+three words the CPU pushed at `SS:SP`. With that right, the stop is already
+being made, so the ANSWER costs one `regs` call — and an entry-only trace
+cannot see this family of failure at all, which is the point: the answers were
+what needed comparing.
+
+**AND THE ANSWERS ARE IDENTICAL THROUGH THE SIX-BYTE READ.** Fourteen calls,
+both arms, every return register and flag:
+
+    AH=30h 1E03 · 4Ah 4A5A · 30h 1E03 · 35h/25h · 44h A0C0 80C0 80D3 80D3 80D3
+    19h 1901 (drive B) · 47h AX=0100 CX=0001 CF=0 · 3Dh AX=0005 (the handle)
+    3Fh six bytes, AX=0006, CF=0
+
+Then `AH=48h` asks for 38 paragraphs on one arm and 377 on the other, with no
+call in between. **The ruled-out list above is now exhaustive over everything
+`int 21h` can say**, and what is left is not a DOS answer.
+
+**THE THREAD IS `SP`, AND IT IS NOW EXACT.** Single-stepping the program
+itself — stop at an `INT 21h`'s return, which `do_time` already runs to, then
+`step` — puts a number on what was a shape. At the open's return, before the
+six-byte read:
+
+    windowed   SP=756E  BP=75C0   and every buffer at 75B8, 7574, 75DA
+    kern_dos   SP=757A  BP=75CC   ...and at 75C4, 7580, 75E6
+
+**`SP` differs by exactly 12** — six words — and every "twelve-byte pointer
+shift" in this entry is that one fact seen through `BP`. Prince's data
+pointers are `[bp-n]` locals, so they move with it and nothing is corrupt:
+the program is simply **six pushes deeper** under `kern_dos` than under the
+window by the time it opens its data file, and the numbers it then computes
+come out of different locals.
+
+`dos_exe_setup` takes `SS` and `SP` straight from the MZ header with no clamp,
+so the loader hands both arms the same stack. Six words is a CALL DEPTH, not a
+loader difference: somewhere between the program's first instruction and its
+`AH=3Dh`, one arm takes a branch the other does not — three nested calls, or a
+retry.
+
+**So the next step is bounded and mechanical**: step from the program's entry
+(a breakpoint at the `CS:IP` in its own MZ header) and find the FIRST
+instruction where `SP` parts. Every `INT 21h` answer before that point is
+already known identical, so whatever the branch tests is something the program
+read without a call — and §96.21.4 is the list of those.
+
+**What it is NOT**, and this cost a run each to establish: not the PSP (all 256
+bytes diffed, and the eight fields §96.21.4 fills are correct on both arms —
+`[PSP:0002]` is `PSP + 0x2B13` on both after the program's own resize, and
+`[PSP:0008]`'s far-call segment lands on `PSP:0050` on both, by 8086
+wraparound on the low one); not the BDA (9 of 128 bytes differ and they are
+the tick count, the floppy motor state, the cursor and `MEM KB`); not the
+environment, the command tail or the program's own path; and not the file
+layer — `tests/dostrap/rdsmall.asm` reads the same six bytes into a POISONED
+buffer and reports the span actually written, which is 6 on both arms, from
+the real disk at LBA 300.
+
+**A THIRD instance of §96.44.10's CLASS was found looking for this and is
+fixed** (§96.44.12), though it is not this bug: `dos_k_find` binds
+`dsk_find_x` directly and so passed it **whatever `AL` the core was holding**,
+where `AL` is §19.6.1's fence between a package and a driver — a stray 1 shows
+a DOS program `SYSTEM.CFG` and the kernel's own files — and left
+`[dsk_fdraw]` at whatever `api_file_find_raw` last set, which reports a
+compressed file's PACKED size where the program will be handed its expanded
+one. The Prince disk has neither a hidden file nor a compressed one, so it
+changes nothing here; it is in the tree because the CLASS is what keeps
+costing this program, and §96.44.12 is the class written down with the gate
+that would catch the fourth.
+
+**To reproduce**: `make kdostest`, then `build/os8088-720.img` in A: and a
+720KB Prince disk in B: on `os8088_5150_herc_sb_720_gla`; open the box, Setup
+→ Memory → the third arm, Return, type `B:\PRINCE.EXE` in the path box, Run,
+Proceed. `tools/os88intmon.py` armed right after Proceed catches the whole
+startup in 114 calls.
+
+### 43.1 …and the cause on the reporter's own machine is the BIOS, not the disk (SPEC.md §96.44.14)
+
+**The reporter narrowed it, and the narrowing is the finding.** A photograph
+of the screen settled what the message was — `Please insert / Prince of Persia
+Disk 1 / into Drive B: / and press <ENTER>`, which names **the right drive**
+and is that program's *retryable* prompt rather than its `Unable to find
+necessary files` bail-out. So it is an open or a read failing while Prince is
+standing exactly where it should be. Then, one variable at a time on the same
+286:
+
+| changed | result |
+|---|---|
+| ENTER at the prompt | comes straight back — **consistent**, not a transient |
+| `PRINCE.EXE stdsnd` (PC speaker instead of the Sound Blaster) | same prompt |
+| the same disks and program on an **IBM 5150**, three floppies and the disk | **works** |
+| 286, one 360KB + one 720KB drive, no third floppy | same prompt |
+| 286, **both drives 720KB** — media and drive matched | same prompt |
+| 286, hard disk removed | same prompt |
+
+That leaves the CPU and the ROM, and this file already knew which: **note 31
+measured MR BIOS 286 (86Box `mr286`) as a ROM that will not cross a head** —
+it answers `CF = 0` for the whole request and transfers the first half only.
+
+`kern_dos` was crossing one on every machine, with nothing behind it:
+`boot_cylrun` is a WORD the loader writes after §18.93.1's canary, and in
+`kerndos/kdshim.inc` it was declared **`resb 1`** with `kd_top` — the bump
+allocator's ceiling — declared next, so `dsk_geom_check`'s `cmp word` read the
+byte plus `kd_top`'s low byte. Measured inside a live `kern_dos`: `kd_top` =
+`9DC0`, the word = `C000`, `[dsk_cylrun]` = **1**. Fixed as `resw 1`, with
+§96.44.14.1 carrying the kernel's own verdict across in `KDL_CYLRUN` so the
+machines that earned §18.91.1's cylinder run keep it; `soak -k kdcylrun` is
+the gate and it goes red both ways.
+
+**CONFIRMED ON THE MACHINE**: *"That was it - confirmed loading prince on the
+286 mrbios machine works!"* No emulator here can show the symptom — GLaBIOS,
+SeaBIOS and MartyPC all cross a head correctly — so the row reads the CELL
+rather than looking for corruption, and the 286 is what closed it.
+
+**What is worth keeping either way**: `PRINCE.EXE` carries a 25-entry table
+mapping each data file to a disk number, so *"Disk 1"* is exactly
+`PRINCE.DAT`, `DIGISND1.DAT`, `DIGISND3.DAT`, `IBM_SND1.DAT` and
+`MIDISND1.DAT` and nothing else — every video set is Disk 2. And it takes
+command-line switches, which is what made the sound arm above a one-word test:
+video `vga mcga tga ega hga herc cga`, sound `stdsnd adlib covox gblast ibmg
+sblast tandy`, plus `bypass` and `megahit`.
+
+## 44. A WHEEL mouse can never win the packet contest — its fourth byte broke the run (FIXED: SPEC.md 9.5.4, and `MOU_IDMAX` on the way: SPEC.md 9.4.1.1)
+
+Reported on a **100 MHz Pentium**. The mouse is a PS/2 part with a passive
+PS/2-to-serial adapter on it — a "combo" or "hybrid" mouse, which chooses its
+protocol at power-up. os8088 does not find it. A plain serial mouse on the
+same machine is found and works.
+
+**The reporter's own workaround is the finding, and it is worth more than the
+symptom:**
+
+> "If I plug in that [plain serial] mouse first and then plug in the hybrid
+> mouse later, the hybrid mouse does work in that case."
+
+So the part is not broken, the adapter is not miswired, and the port is fine.
+What differs is the STATE OF THE PORT the mouse is plugged into. A port the
+kernel has settled — `mou_lockon` has run, `[mou_seen]` = 1, `[mou_hpst]` = 2 —
+differs from a port it is still hunting on in exactly three ways (SPEC.md
+9.4.6.5 enumerates them and the round below does each in turn):
+
+1. **DTR/RTS are up and STAY up.** Until a packet arrives, `mou_hotplug`
+   power-cycles every port every `MOU_REPOLL` — §9.4.1's own arithmetic is
+   **12 ticks of every 58 with the mouse dead**, for ever. A part that needs
+   more than the ~2.85 s of stable power each cycle leaves it to finish
+   powering up and choosing a protocol is reset before it can ever speak.
+   **This is the candidate the report fits best**, because the workaround
+   removes it completely.
+2. **The low hold is `MOU_RSTLOW`, ~165 ms** — a constant sized for the period
+   parts §9.4 names, not for a part that makes a mode decision at power-up.
+3. **The contest is over.** A settled port needs no packets; an unsettled one
+   on a two-port machine owes `MOU_LOCKN` = 8 clean ones in a row, and every
+   reset edge calls `mou_newround` and throws the run away.
+
+**Not yet ruled out, and only the machine can say**: that the part chooses
+**PS/2 mode** and drives the serial RX line not at all. Nothing on a UART can
+tell that from a dead mouse — SPEC.md 9.4.6.5's `msr` column is the only hint,
+and it is a hint.
+
+### 44.1 What was built for it, and why the old table could not answer
+
+`make MOUDIAG=1` was the obvious instrument and **it would have said nothing
+loudly**: every row of it is about the identify window, which is 1.2 s into a
+boot and never runs again, and `idn 00 / b0 00 / ident 0` on both ports is
+exactly what it prints for a machine with no mouse plugged in at all.
+
+SPEC.md 9.4.6.5 adds the half that is about the WIRE and the rest of the
+session — `rx`, `err`, `msr`/`mcr` read live, the last four bytes and `dt`,
+the ticks from our own rising edge to the port's first byte — plus a **round**
+that removes the three differences above one at a time, 15 s each, and freezes
+the moment a packet arrives so the phase left on the glass is the verdict.
+
+**`rx` is the fork the whole report turns on.** 0000 on both ports after a
+full round says the mouse has never put a byte on the wire and the fault is
+electrical or is the part's own mode choice; anything else says it talks and
+this kernel does not believe it, which is a different investigation with a
+different fix.
+
+### 44.2 The trap this must not fall into
+
+`mdb_pin` raises DTR/RTS through the poller's own state 3 and arms the drain
+exactly as `.low` does, so **a phase change can never strand DTR low**. That is
+§9.4's trap in the one shape that would leave the reporter worse off than the
+bug they reported: a mouse unpowered for the session rather than merely
+unfound.
+
+### 44.3 DIAGNOSED — one photograph, and it is the documented degradation
+
+`MOUROUND=1`'s panel came back off the reporter's machine and named the cause
+outright. **SPEC.md 9.4.1.1 is the reading**; the short form is that the mouse
+is on **COM2**, it answers our rising edge with **`'M'`**, and it then sends
+**69 bytes** where `MOU_IDMAX` was **8** — so `mou_idjudge` threw out a mouse
+that had already passed rule 2, `[mou_idany]` stayed 0, and `mou_hotplug`
+power-cycled it every `MOU_REPOLL` for the whole session (`cyc 000A` — ten
+edges by the time of the photograph).
+
+**It was written down as acceptable before it was a bug.** SPEC.md 9.4.1 said
+in as many words: *"a mouse whose burst is longer than `MOU_IDMAX` (a verbose
+PnP ID) fails rule 3 and gets exactly today's behaviour — no stand-down, no
+threshold drop."* The degradation had a name, a mechanism and a predicted
+symptom, and none of that made it visible until a panel printed `idn 45`.
+
+**What made the photograph conclusive was that its numbers check each other.**
+69 bytes at 1200 7N1 is 9.42 ticks of line time, and the panel's own `last`
+column independently put the final byte at tick 10 — so the count is real
+bytes at the programmed rate, which `err 00` over all 667 then confirms from
+the UART's own error bits. Neither figure alone would have carried it.
+
+**And the instrument found a defect nobody was hunting**: `MOU_DRAINT` was 9
+ticks against that 9.42-tick burst, so the drain ceiling expired before the ID
+finished and its last ~3 bytes reached the packet decoder as fake motion.
+Both constants are now cut from one quantity - the line time of `MOU_IDMAX`
+bytes - so they cannot drift apart again.
+
+**Still open**: whether this part streams at all once the resets stop. The
+round pinned DTR/RTS for 138 seconds with `[mou_need]` at 1 and saw no byte
+(`dt FFFF`, cursor still homed), but it is not known whether the mouse was
+moved in that window. `rx` on row 2 answers it in one number.
+
+### 44.4 …and the SECOND photograph, which is the actual defect
+
+The `MOU_IDMAX` build went back and the reporter moved the mouse. **It still
+did not work — and the panel said why in one column.**
+
+```
+row  base  idn  b0   last   idt  nd  run      row   rx   err msr mcr   b0 b1 b2 b3    dt
+  0  03F8   00  00   FFFF    0    8   0         0  0000   00  00  0B   00 00 00 00  FFFF
+  2  02F8   45  4D   000A    1    8   0         2  00A9   00  20  0B   00 00 3F 43  0000
+idany 1  port 0  seen 0  hpst 0   cyc 0000      win open 0003  used 000E of 0013
+```
+
+**9.4.1.1's fix worked exactly as designed** — `idt 1`, `idany 1`, `hpst 0`,
+`cyc 0000`: the port identified, the poller never fired once, and the window
+closed early at 14 ticks against the ceiling's 19. **And the mouse was never
+the problem**: `rx 00A9` is 169 bytes against the boot burst's 69, so **100
+bytes arrived while the reporter moved it**. It streams perfectly.
+
+**The last four bytes are the whole answer.** Newest first they read
+`00 00 3F 43`, so in arrival order: `43 3F 00 00`.
+
+| byte | | |
+|---|---|---|
+| `43` | `0100 0011` | bit 6 **set** — a packet header. Buttons up, Y high 00, X high 11 |
+| `3F` | `0011 1111` | bit 6 clear — X low = 63. With the header, **dx = -1** |
+| `00` | | bit 6 clear — Y low = 0, **dy = 0**. A complete, perfect Microsoft packet |
+| `00` | | bit 6 clear — **A FOURTH BYTE.** Wheel delta 0, middle button up |
+
+It is an **IntelliMouse-compatible wheel mouse**: four bytes to a packet, the
+fourth with bit 6 clear like the two before it. `mou_byte` returned to phase 0
+at the third byte, so the fourth fell through `.chk2` to *"a byte with bit 6
+clear arriving between packets is a thing the protocol cannot produce"* and
+**zeroed `[mou_run]`. Every packet.** The run could never exceed 1, `[mou_need]`
+was `MOU_LOCKN` = 8 on this two-port machine, and **the contest was unwinnable
+by construction** — 100 bytes of flawless mouse data discarded as fast as it
+arrived. `run 0` is in *both* photographs and neither time did it mean
+"nothing arrived".
+
+**And it is exactly why the hot-plug workaround works.** With the port already
+settled `mou_claim` returns at its first compare, the run is never read again,
+and the fourth byte costs nothing. Nothing about the wheel mouse changes when
+you swap it in — what changes is whether the run still matters.
+
+**SPEC.md 9.5.4 is the fix**: a fourth phase, so the byte is recognised by
+position and consumed without breaking the run. Verified by injecting the
+reporter's own four bytes into `mou_byte` **in the guest** — five packets take
+`[mou_run]` to 5 where the kernel before it capped at 1; a plain three-byte
+mouse is unchanged at 5; and a genuine stray byte after the wheel byte still
+zeroes the run, so the rule it relaxes survives.
+
+**The near miss worth recording**: raising `MOU_IDSTRICT` was considered and
+declined in 9.4.1.1 on the grounds that the reporter needed nothing from it.
+That reasoning was wrong — it assumed the run could accumulate — but the
+*decision* was right for a reason it did not know: dropping `[mou_need]` to 1
+makes one packet enough, so it would have **masked this defect rather than
+fixed it**, and left every one-port machine with a wheel mouse still broken.
+
+## 45. A live DOS hibernate restore freezes for ever on an 8088 (FIXED — `kd_stageseg` could never answer B000: SPEC.md §96.49.2)
+
+**Reported off the fork owner's own 86Box `pc5150` profile** — an IBM PC 5150,
+4.77 MHz 8088, 256KB + a 384KB SixPakPlus, **Hercules**, serial mouse, an
+ST-225 on a real ST11M. Boot clean, mount the hard disk, run Prince of Persia
+off a 720KB floppy under §96's whole-machine arm, quit with Ctrl-Q. The
+machine stops on
+
+```
+os8088: putting the session back...
+```
+
+and never moves again. It is not frozen in the ordinary sense on the way in —
+the reporter could type in the DOS window throughout the session — and normal
+hibernation, on the same machine, resumed fine.
+
+**THE FIX IS ONE LINE MOVED AND IT COSTS NOTHING.** `kd_stageseg` reads the
+BDA's video mode into AL and then loaded `AX` with 0xB800 *before* testing it,
+so `cmp al, 7` compared the constant's own low byte, was never equal, and the
+`mov ax, 0xB000` under it was unreachable code. Every mono machine staged
+§87.5's resume stub into B800 — which on a Hercules primary is not decoded at
+all — and then far-jumped into it. SPEC.md §96.49.2 is the entry.
+
+### 45.1 The photograph was the diagnosis, and the blank rows were the finding
+
+One screenshot came back: the message on row 2 of an otherwise **clean**
+screen. That is the whole answer and it took a while to read. `kd_resume`
+`rep movsb`'s ~440 bytes of stub to **offset 0** of the staging segment
+immediately after printing that line, so rows 0 and 1 of the visible page
+*must* be garbled if the copy landed where the machine can see it. They were
+empty. The copy went somewhere that is not the screen.
+
+The message itself renders because `kd_puts` is the ROM's teletype and the ROM
+resolves the segment from the same BDA byte — correctly. So the two readers of
+one byte disagreed, and only one of them was wrong.
+
+### 45.2 Three things were suspected and none of them was it
+
+The reporter's own framing was *"no idea if it was this change, or the size
+changes, or a merge or something older"*, and a two-point bisect settled it
+before any of it was read: **build 576** (both of §9.4.1.1/§9.5.4's mouse
+fixes, no size pass) and **build 574** (neither, no size pass) **both froze**.
+Prince of Persia is not in it either — `tests/kdreturn.py` reproduces the
+freeze with `DOSHELLO.COM`, a 40-line `.COM` that prints and exits.
+
+What made it look new is that it is not: the reporter had been testing the
+286 and 386 profiles for a cycle, and **both are colour machines**, where
+B800 is the right answer by accident.
+
+### 45.3 It was a hole in the MACHINE LIST, not in the rows
+
+A hibernation needs a fixed disk (`hb_pick` is the predicate on both sides)
+and the adapter picks the staging segment — so the two have to be on **one**
+machine before that line runs at all. Every MartyPC profile in this tree with
+an `[machine.hdc]` was a CGA or a VGA. `kdreturn`, `kdreturnf`, `hibernate`
+and `mouresume` all drive this exact path, all four were green, and all four
+were staging at B800 where B800 is right.
+
+`os8088_5150_herc_hdd_gla` (and its IBM twin `os8088_5150_herc_hdd`) is that
+hole closed. It went red on its first run, with the reporter's screen.
+
+### 45.4 `DOSRMARK=1` is what should have been reachable for
+
+The resume is the one path here that nothing can watch — no kernel, no task,
+no debugger hook — so every stage of it looks the same from outside and the
+investigation was arithmetic against a still photograph. SPEC.md §96.49.3 is
+the knob that ends that: an info line with every number the far jump depends
+on, `stg` first, and then one character per stage of the stub onto row 7 of
+whatever page it is standing in. On this defect the first field of the first
+line is the answer.
+
+### 45.5 The other half of the hole, measured rather than argued
+
+The ORDINARY resume had never run on a mono machine either, for the same
+reason: `tests/hibernate.py` was `os8088_xt_hdd`. That route is the one that
+*cannot* have this defect — `hbm_stageseg` compares a byte in memory
+(`[vid_kind]`) where `kd_stageseg` held its answer in AL — but that is a claim
+about the source, and the point of the machine list is that claims about the
+source were what everyone had. It is green: **29 checks on
+`os8088_5150_herc_hdd_gla`, the same 29 its CGA twin passes**, and `hibernatem`
+keeps it that way.
+
+## 46. Microsoft Works: `Too many files open`, with one file open (FIXED — `CON` was resolved through the directory: SPEC.md §96.11.7)
+
+**The first program anyone ran on this box from outside the project**, and the
+first report from upstream. An IBM PC 5150 on the fork owner's `pc5150`
+profile — 4.77 MHz 8088, Hercules, Sound Blaster — with Microsoft Works 1.00
+(`WORKS.EXE`, 313,702 bytes) on a 360KB floppy in B:. Works **launches and
+draws its splash screen**, then puts up
+
+```
+                          FILE ERROR
+                         B:\WORKS.INI
+                     Too many files open.
+                            <  OK  >
+```
+
+The handle table had **one slot of eight in use** at that moment — `WORKS.EXE`
+itself — and **the box never returns error 4 at all** on that path: `.fmany`
+is reachable only from `dos_fh_new` refusing a full table. So the message was
+about a condition nothing had reported, and `DOS_NFH` was never the question.
+
+**Only a reference trace could have found it** (docs/DOS-DEBUGGING.md's whole
+premise: our side looked right, and it was right). Traced under this box and
+under a real IBM DOS 3.30 on the same disk, one call site diverges:
+
+| | | |
+|---|---|---|
+| `os8088 43` | `AH=3D AL=02 → 0002 CF` | `@+0BD1:082A` |
+| `dos 41` | `AH=3D AL=02 → 0007 ok` | the same site |
+| `dos 42` | `AH=3D AL=02 → 0008 ok` | …and again |
+| `dos 43` | `AH=3D AL=02 → 0009 ok` | …and again |
+| `dos 44` | `AH=3D AL=02 → 0004 CF` | **DOS itself answers 4** |
+| `dos 45` | `AH=3E close BX=0007` | and Works hands them all back |
+
+The name is **`CON`**. Works opens the console over and over at one site until
+DOS refuses, to count how many handles it has left, then closes them. Under
+DOS it counts three. Under us the first open answered *file not found* —
+because the box resolves every name through the directory and `CON` is not a
+file — so it counted **zero**, and every open it wanted after that it refused
+by itself. The error text is Works being right about what we told it.
+
+**THE FIX IS THAT A DEVICE IS NOT A FILE NAME** (SPEC.md §96.11.7). `AH=3Dh`
+tests `CON`/`NUL`/`PRN`/`AUX` before the directory and hands out a real slot
+marked `FHF_DEV`; reads answer end of file, `CON` writes take the teletype,
+and the other three accept their bytes and write none. **A real slot is the
+requirement and not a detail**: answering with one of the five standard
+handles would give the counting loop the same number for ever and it would
+never end.
+
+The same trace named two more, both refusals DOS does not make: **`AH=44h
+AL=08h`** — is this drive removable — which is the *first* differing answer
+of the run (§96.22.2), and **`AH=0Dh`**, disk reset (§96.11.8).
+
+**What it cost was a kilobyte of the DOS core**, on the owner's call —
+*"raise the image by a kb for now, and we will optimize afterwards. Working
+at all is most important."* `CORE_MAX` had 30 bytes of slack and the device
+path is 192; `KD_IMG_KB` goes with it, so it is also a kilobyte off the DOS
+program on the shut-down arm. Task #27 is where both come back.
+`tests/dostrap/condev.asm` and the `dosdev` row are the gate, and they assert
+the property the loop rests on — **two opens, two different handles** — and
+not merely that `CON` opens.
+
+## 47. Microsoft Works: `Cannot write file`, on a floppy with 42 free clusters (FIXED — two defects, and the second one shipped the day before: SPEC.md §96.11.6.3, §96.11.10)
+
+The same 5150, the same Works 1.00, one error behind the last. With §96.11.7's
+`CON` fix in, Works reaches its New dialog and its word processor. Type
+something, `Alt`, `File`, `Save As`, take the default name, and:
+
+```
+                          FILE ERROR
+                          B:\WORD1.WPS
+                      Cannot write file.
+                            <  OK  >
+```
+
+Choosing another drive fails the same way. The disk has **42 free clusters**.
+
+**IT IS TWO DEFECTS AND ONE MASKS THE OTHER.** Works's Save As is one shape,
+and it is the shape of every format whose header depends on its body:
+
+```
+3C02 create WORD1.WPS      -> handle 6
+4202 seek END              -> 0
+4200 seek to 0180          -> 0180      the file is still EMPTY
+40   write 011D bytes      -> ax=0005 CF=1     <-- the error the user saw
+4200 seek to 0             -> 0
+40   write 0180 bytes      -> 0180              the header it left room for
+3E   close                 -> 0
+```
+
+**One**: `.fwrite`'s append-only guard was `jne .fhacc` twice, which is not an
+ordering test at all — it refused a write *past* the end in exactly the same
+breath as one *behind* it, and those are opposite cases. Behind is §96.11.2's
+real refusal; past is a **gap**, which `dos_fh_wiloop`'s `.ihole` already lays.
+Three answers now, on an unsigned 32-bit compare.
+
+**Two**: with that fixed, the save *succeeded* — `write 011D -> 011D`,
+`write 0180 -> 0180`, `close -> 0`, no dialog — and `WORD1.WPS` came off the
+floppy **669 bytes with the right body and a header of 384 zeroes**. Works was
+told it wrote 384 bytes and nothing was written. That is §96.11.10: `FHF_DEV`
+had been given bit 5, which `FHF_WROTE` already owned, so the **first `AH=40h`
+on any handle** made that handle read as a character device for ever after —
+every later read answering end of file, every later write accepted and
+discarded with its full count reported. It went in with entry 46's `CON` work
+the day before, seven `equ` lines from the value it collided with, with four
+unrelated `DOS_DEV_*` codes sitting in the gap.
+
+**Three things are worth more than the fixes.**
+
+`tests/unit/t_bits.py` (fast tier) now derives every flag family from the
+**code that uses it** — a `test`/`or`/`and`/`xor` against a memory field
+enrols its constant in that field — so nothing enumerates the 43 families in
+this tree and a flag added tomorrow is covered tomorrow. Grouping by name
+*prefix* was tried first and reports **81 false positives**.
+
+`os88dosdbg trace --flush-disk` writes B: back before the machine closes. The
+instance runs on a private clone and nothing persists it, so a successful save
+and a silent no-op look identical on the host — which cost a wrong conclusion
+about a fix that worked.
+
+And `tests/dostrap/wrgap.asm`'s step **C2** is what placed the second defect:
+it reads the header back on the same handle *before* the close. The source had
+been read three times by then and said the write could not be lost.
+
+## 48. Microsoft Works has a mouse and it does nothing (FIXED — it installs an EVENT HANDLER and never polls: SPEC.md §96.10.4)
+
+Reported with entry 47 and in the same sentence — *"works is supposed to have
+a mouse, and there is none"*. Functions 3, 5, 6 and `0Bh` were all exact
+throughout, which is why reading the code found nothing: the box's `INT 33h`
+answers the position and the buttons correctly and always did.
+
+**The `DOSTRACE` histogram (§96.10.3) answered it in one line.** The ring
+cannot carry `INT 33h` — every host-side decoder in `tools/os88dosdbg.py`
+reads an entry as an `INT 21h` call — so a program that never calls the mouse
+and one whose calls are answered wrongly both come back as a trace with no
+mouse in it. Thirty-two saturating bytes, one per function, and Works reads:
+
+```
+INT 33h: 00h reset/installed? x1, 08h set y range x1,
+         0Ah set text cursor x1, 0Ch SET EVENT HANDLER x1
+```
+
+Four calls, then nothing. **It never polls function 3.** A box that answers
+`0Ch` with `not supported` and makes no callbacks has told a program a mouse
+exists and then never mentions it again, which a program cannot tell from no
+mouse at all.
+
+§96.10.4 is what it takes to make that real on a machine whose kernel owns
+both mouse ISRs: chain IRQ0, because every other moment the box gets control
+is the program calling *us* and a program with a handler installed has stopped
+calling. 18.2 Hz against a serial mouse's ~40, 398 bytes, and `dosmouevt`
+reads `events 000F move 000D press 0001 release 0001`.
+
+**The debugging cost four A/B builds and none of them was the bug.**
+`os88mouserel.Rel` paces by FRAMES by default and `m.advance(frames=)` leaves
+the emulator **paused**; a test that moves the mouse and does not resume stops
+the guest, freezes the BIOS tick at `0040:006C`, and reads exactly like
+*moving the mouse hangs the machine*. The callback was removed, then the host
+read, then the IRQ0 hook — each one **keeping** the symptom, which is what
+should have named the cause several builds sooner. The row uses `pace="wall"`
+and its docstring carries the corpse.
+
+## 49. Dual-screen Herc/CGA: leaving the DOS box's full screen turns the CGA GREEN and flickering (FIXED — the kernel was reading the ROM's ONE mode shadow for a machine with two cards: SPEC.md §39.18.1.1)
+
+Reported off 86Box, an `ibmxt` with a CGA and a Hercules Plus in it and the
+**Hercules made primary** in the Control Panel, the dock on bottom/auto and
+only `SOUND.DRV` mounted: *"opening dos.o88, pressing alt-enter to go
+fullscreen, then exiting fullscreen, with the dos window on the herc primary
+display caused the second cga display to turn green and flicker and have
+corrupted gfx."*
+
+**Reproduced first try on `os8088_5150_both_gla_mono`**, which is that machine
+— a Hercules primary with a CGA beside it — and the mechanism is one byte.
+`vid_unblank_kind`'s CGA arm sourced 3D8h from **40:65h, the BIOS's shadow of
+the CRT mode register**, and a BIOS keeps exactly one of those: it describes
+whichever card the ROM last set a mode on. `fsx_mode(FSXM_TEXT80)` on a
+Hercules display is `int 10h AX=0007h`, so the byte the CGA was handed on the
+way out was **mode 7's `0x29`** — 80x25 text, video on, **blink on** — written
+to a card whose 6845 still carried mode 6's timings.
+
+The three symptoms are three bits of that one byte. The desktop ground is
+§39.4's 50% dither, so decoded as character cells every other attribute byte
+is `0xAA`: background green, foreground light green, blinking. **66.0% of the
+card measured RGB (0,170,0)** and `video(card=1)` read `Mode3TextCo80` where it
+had read `Mode6HiResGraphics`. Nothing was wrong with the pixels the kernel
+wrote — §53.6's `wm_paint_all` repaints both displays correctly, and after the
+fix all 128,000 of them are identical across the round trip.
+
+**Three things it is NOT**, each of which was on the table before the trace:
+not the dock (the report mentions it and `fsx_run` drops an open one anyway),
+not `SOUND.DRV`, and **not Alt+Enter or the DOS box** — any BIOS mode set on
+any other card of a two-card machine does it, and the blank direction had the
+same defect with §64.3's idle blanker as its trigger. So the fix is at the
+source of the byte: `[vid_cgamode]`, banked by `vid_setmode` right after the
+CGA's own `int 10h AX=0006h`, which is the one instant 40:65h is known to
+describe that card. It came out **12 bytes on kern_big and 5 on kern_small**,
+because reading a kernel byte needs no `ES`.
+
+`tests/dispfsxcga.py` is the gate and it was **verified to fail** against the
+kernel before the fix — leg 3 reads `Mode3TextCo80`, leg 4 counts 115,010 of
+128,000 pixels changed — while its leg 2 asserts that the ROM really does move
+40:65h, so the row cannot pass vacuously on a BIOS that does not.
+
+## 50. ...and the REVERSE: the DOS box full screen on the CGA corrupts the HERCULES (FIXED — `vid_text` never got §39.19.4's `vid_cga_equip`: SPEC.md §39.19.4.1)
+
+Entry 49's mirror, same machine, reported the next morning: *"Move the dos
+window over to cga (it won't fully fit because of wm_snap). Go fullscreen.
+Return. The herc screen is corrupted, the CGA screen is fine."* The photograph
+is the desktop sheared — the menu bar squeezed along the top, the dither
+repeating — which is a framebuffer scanned on the wrong timings and not
+anything drawn wrongly.
+
+**It is the EQUIPMENT FLAG, where 49 was the mode shadow.** §39.19.4 already
+knows that the PC/XT ROM's mode set is equipment-driven: with `40:10` bits 5:4
+saying `11b` it forces mode 7 and the 3B4h CRTC *whatever mode was asked for*.
+`vid_setmode` was fixed by moving `vid_cga_equip` above its `VID_CGA` test.
+**`vid_text` has the identical arm and never got the call** — and an fsx
+bracket is what reaches it, because `fsx_mode` on the second display sets
+`[vid_kind] = VID_CGA` while the desktop's primary, and so `40:10`, is still
+the Hercules. So `int 10h AX=0003h` retimed the **Hercules** for 80x25 MDA
+text over its own graphics framebuffer, and the CGA was never touched.
+
+Nothing puts it back, and every step on the way out is individually correct:
+`fsx_restore`'s `vid_setmode` runs before `vid_fsx_leave`, so it sets the
+*bracket's* display's mode; `vid_fsx_leave` republishes geometry and sets no
+mode by design (§39.18.1); and `vid_unblank_kind` writes 3B8h = 0x0A, which
+puts the graphics bit back over a 6845 still timed for text.
+
+**THE BYTE EVERYONE WOULD HAVE WATCHED CANNOT SEE THIS.** IBM's mode-register
+table gives **mode 3 and mode 7 the same value, `0x29`**, so 40:65h reads
+identically whether the ROM honoured the request or forced it — and entry 49's
+gate watches exactly that byte. The mono card's own RASTER is the
+discriminator: 912 wide with its graphics timings, **882** once the ROM has
+retimed it. Measured on `os8088_5150_both_gla_mono`, which is this machine.
+
+**Three things were broken and the report names one.** The Hercules was 134,951
+of 252,000 pixels wrong afterwards (1,322 now, and those are the clock, the
+pointer and the straddling window's own console). **The FULL SCREEN was also
+broken, on the monitor the app was on** — the CGA kept its 640x200 bitmap while
+§96.33's teletype wrote character cells into `B8000`, so it showed 20,320
+coloured pixels where an 80x25 text screen belongs; it is black-and-white text
+now. And `40:10` was left claiming a colour primary for the rest of the
+session, which is the flag §39.20's Restart reads.
+
+**The flag must NOT be restored by `vid_text`**: the DOS box writes through the
+ROM's own teletype while it is full screen and the ROM picks the card off that
+same flag, so putting it back early would send the program's output to the
+monitor it is not on. `vid_fsx_leave` is where it belongs — `vid_disp_init`'s
+extend arm already writes that exact `vid_kind` / `vid_apply` / `vid_equip`
+sequence.
+
+**A THIRD SITE had the same missing line**: `fsx_setbios`, the `int 10h AH=00h`
+behind `fsx_mode`'s plain-BIOS rows, so TANK's `FSXM_CGA320` (§85.3) and Mode
+X carry this defect on the same machine. It is fixed by inspection against the
+mechanism measured twice here — the ROM forces before it looks at which mode
+was asked for, which is why §39.19.4 caught mode 12h and this caught mode 3 —
+and what would exercise it is TANK launched from a Disk window already on the
+second display.
+
+**3 bytes each, 9 on kern_big and 6 on kern_small**, no rung crossed.
+`tests/dispfsxherc.py` is the gate and goes red on four of its five legs
+without the fix.
+
+**And it cost two INSTRUMENT findings, both now in docs/MARTYPC-DEBUG.md.**
+MartyPC's `fbuf` on a SECONDARY card in a graphics mode is not faithful — the
+CGA's memory here is a perfect 50% dither, 8,000 bytes of `0xAA` and 8,000 of
+`0x55`, and the rendered frame has black bands and a solid blue block in it —
+so entry 49's gate reads the framebuffer BYTES and this one reads the
+rasterisation, because this defect never touches a byte and that one leaves
+every byte perfect. And a `settle` after a bracket returns **mid-repaint**:
+`[fsx_cur]` is cleared before `wm_paint_all` runs and the cards are lit after
+it, so the first capture differed from the next by ~4,500 pixels on an idle
+box. Both rows converge now instead of trusting one settle.
+
+## 51. CLEAR SKIES: San Francisco will not fly — the Fly button does nothing at all (FIXED — the LAST stream in the file can never fill a cluster-rounded read: SPEC.md §88.10.5.4.1)
+
+*"I'm unable to fly in san fran - clicking the fly button does nothing (no
+error, but also, no flying)."* Reported off a 286 with a VGA, and **the machine
+is incidental**: San Francisco is the last world in the package file, and that
+is the whole of it. Reproduced on the first attempt and on the first shot,
+under MartyPC — nine locations poked one at a time, eight fly, SFO reports
+`cs_wldnow = FF` with nothing loaded at all.
+
+**A CAPACITY IS WHAT YOU ASK FOR AND A STREAM IS WHAT YOU NEED.** `cs_wldget`
+asks `OSAPI_FILE_READ_AT` for the head slack plus the stream **rounded up to
+whole clusters**, because §20.14.3 wants a cluster multiple for the capacity as
+well as the offset — and then it checked the *delivered* count against that
+same rounded number. Every stream but the last has more file behind it, so the
+read fills the capacity and the check passes by accident. The last one ends at
+EOF and never can.
+
+Measured on the shipped package, 45,255 bytes, the ninth stream at sector 86
+and 1,223 bytes long — `44,032 + 1,223` is **exactly** the file's length:
+
+| stream | needs | capacity asked | file has after the base | |
+|---|---:|---:|---:|---|
+| `csw7` Rio | 1,247 | 1,536 | 2,759 | ok |
+| **`csw8` San Francisco** | **1,223** | **1,536** | **1,223** | **refused** |
+
+At a 1,024-byte cluster the capacity is 2,048 and the shortfall is larger, so
+**every geometry this ships on fails identically** and no other location does.
+`cs_wldpick` returns `CF=1`, `[cs_wldnow]` stays `0FFh`, and `cs_cmd_fly`'s
+`jc .out` makes the button a no-op — which is §88.10.5.4's symptom exactly,
+reached through the *other* check in the same routine. Both are one mistake in
+one shape: **a size handed to a kernel call that verifies it, taken from the
+room rather than from the thing.**
+
+**`apps/os88partsbody.inc` already had it right.** `op_load`'s chunk loop
+carries `[op_want]` — *"how much of what MUST arrive just did"* — and refuses
+on that, so the shared parts reader was never wrong and this is what the
+package's own hand-rolled copy of that read lost. Six bytes of the package
+image, nothing resident, and `build/skies.o88` is the same 45,255 bytes.
+
+**WHY IT SHIPPED IS THE PART WORTH KEEPING: no row ever flew it.**
+`skieswater` visits LBG, LCY and JFK, `skiesgeom` both Paris runways, and every
+other skies row takes the default location — so of nine places the suite flew
+five, and the one it never picked is the one that was broken.
+`tests/skiesworlds.py` flies **all nine** now, one independent full load each
+(`[cs_wldnow]` forced to `0FFh` first, so nothing passes on its predecessor's
+world), and asserts the world that ARRIVED rather than that the screen changed
+— because a silent load failure takes no mode, so there are no pixels to ask
+about. Verified to fail on SFO alone against the package before the fix.
+
+## 52. Microsoft Works: `Directory not found` when you pick another drive in Save As (FIXED — `AH=43h` was a FILE lookup, and a root parses to no file name at all: SPEC.md §96.12.4)
+
+Reported the same day as 47 and 48 and, like them, described from the glass:
+*"switching to another drive (Directory not Found)"*, then, asked how:
+*"I tabbed over to the directory browser and tried to select A: or D:. It
+correctly lists the drives we gave it, but trying to switch to one is what
+gives the error."*
+
+**The drive switch works and always did.** The trace shows `AH=0Eh` select
+A:, `AH=19h` answering `AL=00`, and `AH=0Eh` back to B: — all of it before
+anything fails. The refusal is the call *after* them: `AH=43h AL=00h`, which
+Works uses to ask *"is this directory there?"* before it writes, answering
+`CF=1 AX=0002`.
+
+`.att_get` resolved every name through `dos_fh_stat` — the **file** lookup
+`AH=3Dh` opens through (§96.11) — so a name that is a folder found nothing.
+Not just the drive's root: **every directory on every disk read as missing**,
+which nothing had noticed because nothing else in the tree had asked.
+
+**The root is the sharper half and is why the name recorder had to be
+widened.** `A:\` parses to a drive and *no 8.3 name at all*, so the lookup
+was for the empty string — and the twelve-slot recorder §96.11.7 had left in
+place was full of `CON` long before the interesting name arrived (a program
+opens `CON` eight times). At 48 slots the name came back **empty**, which is
+the whole diagnosis in one field.
+
+`dos_att_isdir` is `dos_cd_go`'s own `.named` scan with the walk taken out,
+and the root needs no scan at all — an empty name *is* the directory we
+stand in.
+
+**IBM DOS 3.30 is the specification and `tests/dostrap/attrdir.asm` runs
+under both machines unchanged** (docs/DOS-DEBUGGING.md): it answers `\` and
+`A:\` with `CF=0 CX=0074`, a subdirectory `0010`, a file `0020`, and only a
+missing name `CF=1 AX=0002`. We answer `0010` for the two roots deliberately
+— `0074` is bits DOS never set, a root having no directory entry to read them
+from, and what every caller tests is `CF` and bit 4. **The probe prints
+`ATTRDIR PASS` on both machines**, which is what says the assertion is not
+one only this box could satisfy.
+
+**The gate's own first version was the near-miss worth keeping.** `ask`
+pushed `AX` and `CX` and then did `or bl, bl` between the `int 21h` and the
+`jc` — so the judgement read *its own* flag, not DOS's. It printed `FAIL`
+beside five correct answers, and the same defect would later have printed
+`PASS` beside five wrong ones. The carry is banked into a byte by a `mov`
+now, `mov` being the one instruction there that writes no flags.
+
+## 53. Microsoft Works has a mouse, it works, and there is nothing to see (FIXED — in DOS the DRIVER draws the pointer: SPEC.md §96.10.5)
+
+The third of the Works reports and the only one where **the reporter brought
+the diagnosis**: *"Apparently we are expected to draw the cursor — including
+in text mode, which we never had to do before in our os — unless the program
+tells us somehow that it is taking over drawing the cursor itself."* That is
+exactly right, and it is the one part of `INT 33h` this box had answered with
+a shrug: `01h` and `02h` were both `.none`, on the reasoning that the kernel
+owns the pointer.
+
+**The reasoning is right in the windowed host and wrong under `kern_dos`**,
+where the program owns every pixel and the kernel is not running at all.
+There is no compositor and no arrow the machine keeps: `01h` means *put a
+cursor on the screen and keep it under the mouse*, and if the driver does not,
+nothing does.
+
+It is also the report that came with its own **correction**, and the
+correction is the more useful half: *"I went fully into a document and it DOES
+work — still no visible cursor of course cause we don't draw one, but if I
+push it up to the top and click I can open menus with it."* §96.10.4's event
+handler was working the whole time; what was missing was only the drawing.
+
+**The reference is what specified it.** Works under IBM DOS 3.30 with CTMOUSE
+loaded (docs/DOS-DEBUGGING.md), read off §96.10.3's histogram:
+
+```
+00 0A 0C 08 0A 0A 01 03 02 01 03 02 01 03 02 ...   (x25)
+0Ah x3: kind=0000, first 77FF/7700, last 80FF/F000
+```
+
+Three things fall out and each decided something. `kind=0` is the **software**
+cursor, so the whole drawing rule is `(cell AND screen_mask) XOR cursor_mask`
+and there is no shape to draw. The masks are asked for **three times with two
+different values**, so they are *state* — a hard-coded `77FF`/`7700` would
+draw the wrong cursor for most of a session. And `01 03 02` is show / ask /
+hide: **Works takes the cursor off before it draws its own screen**, which is
+what a well-behaved DOS application does and is why §96.10.5.3's guard is a
+guard rather than the main mechanism.
+
+**`DHK_TXT` is how "`kern_dos` only" is spelled.** The core is assembled once
+and joined to either host, so it cannot be an `%ifdef`: `kdentry.inc` fills
+the hook and `dos_hk_bind` does not, and in the window the cell stays the zero
+a `.bss` arrives as. `tests/kdmcur.py` asserts **both** arms, because a row
+that only ran arm 3 would pass just as happily with a box that scribbled on
+the desktop.
+
+Measured: `doscore.bin` **15,475 → 15,759** (+284, 113 bytes of `CORE_MAX`
+left), `kerndos.bin` +52, `DOS.O88` +254 packed. Nothing resident on a machine
+that is not running a DOS program.
+
+**The debugging cost one wasted arm and it was the harness's own.** The first
+gate ran only `ui.path("B:/MCURSOR.COM")` — which is the *windowed* box — and
+reported the cursor absent, correctly and uselessly. Reaching arm 3 is
+`tests/kdmouse.py`'s sequence: open `DOS.O88` itself, pick the Memory arm,
+then name the program. And the probe's own labels had no trailing space, so
+`C remasked0741` split as one token and the harness read the label as the
+cell — a parse that says *the cursor was drawn* about a machine where it was
+not.
+
+## 54. Microsoft Works has a mouse, the buttons work, and the cursor is invisible (FIXED — we answered `08h` with a zero and Works reads that as `no mouse`: SPEC.md §96.10.6)
+
+The fourth Works report and the one that took three attempts, so the failures
+are worth as much as the fix.
+
+*"Mouse: Still no cursor. I can still open the menus with it, its just still
+invisible."* — and then, asked which arm: *"I tested BOTH under kern dos, and
+inside the OS. No cursor in either."*
+
+**It is one instruction of Works's, and it is not a drawing bug at all.**
+Disassembled out of `WORKS.EXE` (the mouse module is at file offset
+`0x4BE90`, found by `mov ah,35h / mov al,33h` at `0x4C00C`):
+
+```
+0004C00C  mov ah,0x35 ; mov al,0x33 ; int 0x21   ; get the INT 33h vector
+0004C012  mov ax,es ; or ax,bx ; jz 0xc051       ; 0000:0000 -> no mouse
+0004C018  xor ax,ax ; int 0x33                   ; fn 00h reset
+0004C01C  or ax,ax  ; jz 0xc051                  ; AX=0 -> no mouse
+          ... fn 0Ah 77FF/7700, fn 0Ch handler 0E7:0CEA mask 1F ...
+0004C04C  mov ax,0x8 ; int 0x33                  ; fn 08h SET Y RANGE
+0004C051  mov [0x98ca],al                        ; *** mouse-present flag ***
+```
+
+**Works stores `AL` after function `08h`, which documents no return value.**
+A real driver never writes `AX` there, so CTMOUSE comes back with `AX = 8`.
+Our dispatcher had no `08h` arm, so the call fell through to an exit that did
+`xor ax, ax` under a comment reading *"INT 33h's not supported"* — and `INT
+33h` has no such convention. We handed Works a zero at the end of an init
+sequence every call of which we had answered correctly.
+
+**It presents as HALF a working mouse**, which is why two rounds of looking at
+the drawing code found nothing: the handler installed at `0Ch` is still hooked
+and still called, so the buttons work and the menus open, while the program
+never asks for a cursor (`01h`) and never polls the position (`03h`).
+
+**Three method failures, and each cost a round.**
+
+1. **The gate was written to the mechanism and not to the application.**
+   `MCURSOR.COM` calls `01h` and then holds still — the two things Works does
+   not do — so it proved the drawing and could not see the ABI. A probe the
+   author writes to exercise their own feature agrees with it by
+   construction.
+2. **A negative control can encode the wrong premise as a requirement.**
+   §96.10.5.1 first refused `DHK_TXT` to the windowed host, and
+   `tests/kdmcur.py`'s window arm *asserted* that nothing is drawn there. It
+   passed for the same wrong reason the code was wrong. That refusal is
+   corrected in the same commit: `dos_fsx_main` puts every DOS program inside
+   an `FSXM_TEXT80` bracket, so the window has a text screen for the whole of
+   a program's life — and the BDA would have been the wrong source for it,
+   `OSAPI_FSX_CAPS` answering the display's own kind off the primary
+   (§53.7.1).
+3. **`os88dosdbg diff` could not align these two runs at all**, and its
+   premise is why: Works executes from dynamically-placed overlays, so
+   `CS − PSP` is not stable between machines the way docs/DOS-DEBUGGING.md
+   assumes. The IPs matched exactly (`0398`, `0404`, `063C`, `0610`) while the
+   segment bases differed (`636F` against `8D7E`). Aligning on `(function,
+   IP)` alone found the divergence in one pass.
+
+**And two red herrings, both plausible and both wrong**, recorded because the
+next reader will find them too. The reference makes a `SET vector 0Ch` that we
+do not — `IRQ4`, the serial mouse's line — but its `CS` is *below* the
+program's PSP, so it is CTMOUSE re-hooking its own IRQ inside the `00h` reset,
+not a decision of Works's. And the two sides disagree about how many file
+handles a program may have (ours grants five more before error 4, DOS two),
+which is real and is not this.
+
+The vector's ADDRESS was the other suspect and is also not it: ours is at
+575.0 KB where a TSR sits at 52.5 KB, below the program — a genuine
+difference, and Works never looks at it beyond the `or ax,bx` test for
+`0000:0000`.
+
+## 55. Microsoft Works: the cursor is there, but not over the startup dialog, and not after a redraw (NOT OURS — CuteMouse answers identically: SPEC.md §96.10.5.4)
+
+The fifth Works report and the one with no fix in it, which is the finding.
+
+*"I have a cursor in works! Same issue ctmouse has — which means its probably
+a works itself issue — the cursor does not invert or display at all over open
+'dialogs' like the one that opens when you first open the program. Also, I
+cannot replicate the stationary cursor issue, so likely works does not redraw
+in this condition? You might have to make a custom program to test that."*
+
+Two observations, and **the reporter had already done the hard half of both**
+by running CTMOUSE beside our box on the same machine. That is the control
+this whole section of the tree is built on (docs/DOS-DEBUGGING.md), and it is
+worth saying plainly: *two independent drivers behaving identically is an
+observation about the application, not about either driver.*
+
+### The dialog
+
+Works sets 77FF/7700 and then 80FF/F000 twice more (§96.10.5, measured off
+`WORKS.EXE`). The second pair is `(cell AND 80FF) XOR F000`: it keeps the
+character and the blink bit, clears every colour bit and forces background
+`F`. Over ordinary grey-on-black text that is a bright block and obvious; over
+a dialog already drawn black-on-white (`70`) it produces `F0` — the same
+black on white, one intensity bit brighter. On a CGA that is close to
+invisible, and it is Works's own choice of mask, applied faithfully. CTMOUSE
+draws the same nothing for the same reason.
+
+### The redraw, which was investigated as OURS and is not
+
+The second half looked like a real defect of ours and was written up as one: a
+software text cursor is an attribute flipped into a cell the driver does not
+own, and it gets **no notification** when the application stores over that
+cell. `dos_m33_paint` returns early whenever the pointer has not changed
+cell, so a program that redraws under a hand holding still takes the cursor
+with it and does not get it back until the pointer moves.
+
+`tests/dostrap/mredraw.asm` was written to prove exactly that, and it did:
+
+```
+A drawn     7041 want 7041 ok
+B redrawn   1E2A want 612A BAD          <- the predicted defect
+C restored  1E2A want 1E2A ok
+D unmoved   0000 want 0000 ok
+```
+
+**Then the same `.COM` was run under IBM DOS 3.30 with CuteMouse 1.9.1 on the
+same machine, and it answered all four identically.** A serial mouse that is
+not moving raises no interrupt, so a driver whose repaint hangs off its own
+IRQ has nothing to repaint from, and neither driver hooks the tick for it.
+
+So there is no fix and the early return stays. `tests/kdmredraw.py` asserts
+the **parity** instead — a compatibility ratchet, red if this box ever starts
+repainting where CuteMouse does not. It was verified to fail by building the
+seventeen-byte guarded re-save that would have been the fix, which takes B to
+`612A` and leaves C green: a correct cursor, and a worse DOS.
+
+**The lesson is the order of the two runs.** Our own answer was wrong-looking,
+reproducible and fully explained by our own code, and every one of those is
+true of the reference too. Four earlier Works defects were found by putting
+the same program in front of a real DOS and diffing; this is the first time
+that method has said *stop, there is nothing here* — which is worth as much,
+and cost about fifteen minutes against the day a "fix" would have taken.

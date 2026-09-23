@@ -311,6 +311,12 @@ fr_entry:
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out                         ; no window: nothing to attach menus to
     mov [fr_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     mov si, fr_menus
     call OSAPI_MENU_SET             ; BX = the window, SI = our set
     mov si, fr_about                ; ...and 'About Fractal' above the Close
@@ -636,6 +642,31 @@ fr_hire:
     call OSAPI_TASK_SPAWN           ; CF=1 refused, nothing was created
     jc .none
     mov byte [fr_spawned], 1
+    ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
+    ; kernel wrote our segment into this worker's frame, so a region
+    ; declaration alone is INERT. It is PERMANENT and not a window
+    ; around OSAPI_TASK_ALIVE - the SDK note's advice for a park-safe
+    ; worker, which fails SILENTLY (REGION-SELF-COMPACT-PLAN 8.2):
+    ; mem_frameless reads [inst_restart] at PLAN time, and this worker
+    ; is outside its own ALIVE for essentially all of a tick, so a
+    ; windowed declaration would make OSAPI_MEM_COMPACT's what-if answer no
+    ; better for a heap the compactor could have emptied.
+    ;
+    ; SO BOTH PARK POINTS ARE ENUMERATED, Tracker's shape. We are
+    ; OSAPI_MEM_PARKSAFE, so the second one is BLOCKED IN
+    ; OSAPI_GFX_LOCK - never HOLDING it (66.5.4 marks the task only
+    ; across the yield inside the wait path).
+    ;   * ALIVE is the top of .loop, above the xchg that consumes
+    ;     [fr_restart] - so a park there has not eaten the request.
+    ;   * The only lock site is fr_emit's, and it is fr_emit's FIRST
+    ;     instruction. Everything that means `this row was consumed` -
+    ;     the cache append, the progress count, fr_advance - is inside
+    ;     fr_emit_body, past that lock, which is the routine's own stated
+    ;     reason for existing. So a restart discards a computed fr_line
+    ;     and [fr_row] has NOT stepped: the next pass recomputes the same
+    ;     row rather than leaving a gap no later pass paints.
+    ; A restart costs one row.
+    OS88_WORKER_RESTARTABLE fr_worker
     jmp short .out
 .none:
     call fr_nowork                  ; the canvas would otherwise stay blank

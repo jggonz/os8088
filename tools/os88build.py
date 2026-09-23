@@ -582,7 +582,15 @@ def nasm3():
     packaged nasm 3 runs it at all.
     """
     named = os.environ.get("OS88_NASM3")
-    cands = [named] if named else [shutil.which(n) for n in NASM3_NAMES]
+    if named:
+        cands = [named]
+    else:
+        cands = [shutil.which(n) for n in NASM3_NAMES]
+        # ...and the one `tools/setup-nasm3.sh` builds, so that script's work
+        # counts without an export. It prints the export line anyway, because
+        # a shell that already has one pointing elsewhere must still win - so
+        # this is the LAST candidate and never overrides $OS88_NASM3.
+        cands.append(os.path.join(ROOT, "build", "nasm3", "nasm", "nasm"))
     for p in cands:
         if not p:
             continue

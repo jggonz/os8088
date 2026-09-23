@@ -519,3 +519,167 @@ eth_v_accept:
     stc
     ret
 
+
+; =============================================================================
+; THE RAW VERBS - whole frames, for a consumer that IS a stack (SPEC.md 72.22)
+; =============================================================================
+; netpkg.inc carries the contract and the reasoning. These three are short
+; because every hard part of them is already written: ne_tx and ne_rx are the
+; link layer the socket half sits on, and usr_read/usr_write are the caller's
+; segment. What is new is only WHO the frames belong to.
+;
+; **ETH_NORAW, BECAUSE THIS FILE HAS TWO HOSTS** (SPEC.md 72.22.5). ether.asm
+; is one and drivers/net/os88net.asm is the other - the DOS end of the cable
+; runs the SAME stack (SPEC.md 62.11.1), and it reaches these verbs through no
+; table at all: eth_vtab lives in ether.asm. So on that host they are 215
+; bytes of a shipped .COM that nothing can call. The gate is ETH_NOEMIT's
+; shape and sits beside it in the same includer, for the same reason.
+%ifndef ETH_NORAW
+
+; --- NETV_RAW ----------------------------------------------------------------
+; in AL = 1 claim / 0 release.
+;
+; **THE CLAIM STOPS eth_pump, WHICH IS WHY IT IS A CLAIM AND NOT A FLAG.**
+; A second consumer would not corrupt anything - ne_rx is one frame at a time
+; and the card mutex is above us - it would simply make frames vanish, one
+; stack getting the ones the other was waiting for. That is the failure this
+; project keeps writing down as the expensive kind: nothing reports an error
+; and the symptom is a protocol that stalls.
+eth_v_raw:
+    or  al, al
+    je  .release
+    cmp byte [eth_raw], 0
+    jne .held
+    mov byte [eth_raw], 1
+    mov word [eth_nraw], 0      ; the counters are per CLAIM, so a probe can
+    mov word [eth_nrawtx], 0    ; read them without knowing what ran before it
+    or  di, di                  ; ...AND THE STATION ADDRESS, because a
+    jz  .nomac                  ; consumer that is the stack now cannot build
+    push cx                     ; one frame without it (netpkg.inc)
+    push si
+    mov si, eth_mac
+    mov cx, 6
+    call usr_write              ; SI ours, DI theirs
+    pop si
+    pop cx
+.nomac:
+    clc
+    ret
+.release:
+    mov byte [eth_raw], 0       ; **A RELEASE ALWAYS SUCCEEDS** (netpkg.inc):
+    clc                         ; the DOS box calls it on every exit path it
+    ret                         ; has, including the ones that never claimed
+.held:
+    mov ax, NETE_BUSY
+    stc
+    ret
+
+; --- NETV_RAWTX --------------------------------------------------------------
+; in SI = the frame, CX = its length, DX = the segment it is in (0 = the
+;    caller's own).
+eth_v_rawtx:
+    push bx
+    push cx
+    push si
+    push di
+    push word [eth_useg]            ; **DX NAMES THE SEGMENT** (SPEC.md
+    call eth_rawseg                 ; 72.22.4): a consumer moving 1.5KB a frame
+    cmp byte [eth_raw], 0           ; should not have to keep the buffer in its
+    je  .noclaim                    ; own image, and OSAPI_DRV_CALL can only
+                                    ; put the CALLER's segment in [eth_useg]
+    cmp cx, EH_SIZE             ; shorter than an Ethernet header is not a
+    jb  .bad                    ; short frame, it is a wrong one - ne_tx pads
+    cmp cx, NE_FRAME            ; to the 60-byte minimum itself
+    ja  .bad                    ; ...and too long is REFUSED, never truncated:
+                                ; a silently shortened frame is a checksum
+                                ; failure at the far end and a bug hunt here
+    mov di, eth_txb
+    call usr_read               ; SI theirs, DI ours, CX bytes
+    call ne_tx
+    jc  .gone
+    inc word [eth_ntx]          ; the same counter the stack's own frames use:
+    inc word [eth_nrawtx]       ; the Control Panel page is about the CARD
+    pop word [eth_useg]
+    pop di
+    pop si
+    pop cx
+    pop bx
+    clc
+    ret
+.gone:
+    mov ax, NETE_NOLINK         ; the card never finished the previous transmit
+    jmp short .err
+.bad:
+    mov ax, NETE_ARG
+    jmp short .err
+.noclaim:
+    mov ax, NETE_NOLINK         ; **NOT NETE_ARG**: a caller that never claimed
+                                ; the wire is not making a malformed call, it
+                                ; is making one there is no wire for - and the
+                                ; frame it wanted to send would have gone out
+                                ; under a MAC our own stack is still using
+.err:
+    pop word [eth_useg]
+    pop di
+    pop si
+    pop cx
+    pop bx
+    stc
+    ret
+
+; --- NETV_RAWRX --------------------------------------------------------------
+; in DI = a buffer, CX = its capacity, DX = the segment it is in (0 = the
+;    caller's own).
+; out CF=0 with CX = the frame's TRUE length; CF=1 = nothing there.
+eth_v_rawrx:
+    push ax
+    push bx
+    push si
+    push di
+    push word [eth_useg]
+    call eth_rawseg             ; DX, as above
+    mov bx, cx                  ; **THE CAPACITY, BANKED BEFORE ne_rx**, which
+                                ; returns the frame's length in the same
+                                ; register the caller passed the capacity in
+    cmp byte [eth_raw], 0
+    je  .none                   ; no claim, no frames - and it reads as an
+                                ; empty ring rather than an error, because a
+                                ; poll loop is the only thing that calls this
+    call ne_rx                  ; CF=1 = empty; CX = the length in eth_rxb
+    jc  .none
+    inc word [eth_nrx]
+    inc word [eth_nraw]
+    push cx                     ; **THE TRUE LENGTH IS THE ANSWER** and the
+    cmp cx, bx                  ; COPY is what the capacity bounds. A caller
+    jbe .fits                   ; told "1514" by a 64-byte buffer knows it lost
+    mov cx, bx                  ; bytes; one told "64" would think that was the
+.fits:                          ; frame and read a truncated header as a whole
+    mov si, eth_rxb
+    call usr_write              ; SI ours, DI theirs, CX bytes
+    pop cx
+    pop word [eth_useg]
+    pop di
+    pop si
+    pop bx
+    pop ax
+    clc
+    ret
+.none:
+    pop word [eth_useg]
+    pop di
+    pop si
+    pop bx
+    pop ax
+    stc
+    ret
+
+; --- eth_rawseg - DX names the buffer's segment, 0 = the caller's own --------
+; The two raw verbs both want it and both have banked [eth_useg] already.
+eth_rawseg:
+    or  dx, dx
+    jz  .keep
+    mov [eth_useg], dx
+.keep:
+    ret
+
+%endif                          ; ETH_NORAW

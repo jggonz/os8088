@@ -381,7 +381,27 @@ wm_pkgcall:
 ; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/plans/LAST-DROP-BYTES.md row 14). One
 ; caller, kmain:4291, and zero outbound: it is four `rep stos` runs over `.bss`
 ; through ES = DS = KERNEL_SEG, which `.ovl` supplies unchanged.
-section .ovlw
+%ifndef KERN_SMALL
+section .ovlw                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
+                                ; whose window has room to spare
+%else
+section .ovl                    ; ...and kern_small: the BLOB half instead
+                                ; (SPEC.md 2.5.3.2, mouse_init's shape). The
+                                ; deadline is the same either way - kmain runs
+                                ; this long before drv_boot - so the choice is
+                                ; only about WHOSE bytes. On that kernel
+                                ; `.ovlw` is read onto the FAT window and the
+                                ; mount buffers, and SPEC.md 22.6.3 has just
+                                ; taken the LISTING out of that region: the
+                                ; 800 bytes it gave back are only 288 of heap
+                                ; while the overlay still needs the rest, so
+                                ; every body moved here turns one more of them
+                                ; into heap. `.ovl` is written LAST on
+                                ; purpose: tools/os88ovlchk.py reads SOURCE
+                                ; and cannot evaluate the %ifdef, so it files
+                                ; this block by the arm below - which is the
+                                ; build the check exists to protect
+%endif
 wm_init:
     push ax
     push cx
@@ -2685,6 +2705,29 @@ wm_onmouseup:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_onclick - install (or clear) a window's CONTENT CLICK handler
+; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
+; out: nothing (all registers preserved)
+;
+; W_ONCLICK is a TEMPLATE word (SPEC.md 20.4) and was settable only at
+; wm_create until this cell existed. That was enough while a package owned its
+; own press handling; it stopped being enough when os88ui.inc's button grew a
+; gesture, because the library then had to be able to see the press BEFORE the
+; package does - and could install the release half (W_ONMOUSEUP) and the
+; tracking half (W_ONDRAG) and not the press. A package that forgot to route
+; one of its click paths into os88ui_btnpress got buttons that DREW pressed
+; and still ACTED on the press, which is invisible to every static check and
+; shipped exactly that way (SPEC.md 20.5.1.3.3).
+;
+; Five bytes, because the word is already there and already dispatched: this
+; only lets it be written late, which is what W_ONMOUSEUP and W_ONDRAG already
+; allow for their own halves.
+; -----------------------------------------------------------------------------
+wm_onclick:
+    mov [bx+W_ONCLICK], ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_ondrag - install (or clear) a window's tracking handler (SPEC.md 13.8.2)
 ; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
 ; out: nothing (all registers preserved)
@@ -4274,6 +4317,16 @@ wm_raise:
                                 ; AL = 2 is downgraded here as well and a
                                 ; re-listed window is drawn whole
     push ax
+    mov word [wm_dmg_mine], 0   ; **THE PROMISE, AND ONLY AL = 1 MAKES IT**
+    cmp al, 1                   ; (SPEC.md 30.3.4): this routine will draw DI
+    jne .nomine                 ; WHOLE before it returns, so a damage pass
+    mov [wm_dmg_mine], di       ; reached between here and the tail call - the
+.nomine:                        ; dock strip's, on every launch - must not draw
+                                ; it first. AL = 2 is 11.96.10's PARTIAL raise
+                                ; and puts back only what was covered, which is
+                                ; exactly not the part standing on the strip,
+                                ; so it may not arm this; AL = 0 draws no
+                                ; content at all
 %ifndef REDRAWFULL
     cmp al, 2                   ; AL = 2: put back only what was COVERED
     jne .nocov                  ; (SPEC.md 11.96.10). Computed HERE, because
@@ -4353,6 +4406,12 @@ wm_raise:
     pop bx
 .whole:
 %endif
+    mov word [wm_dmg_mine], 0   ; SPENT BY THE DRAW THAT KEEPS IT (30.3.4).
+                                ; Cleared HERE and not in wm_dmg_wins, where
+                                ; [wm_dmg_stwin]'s one-shot is: that one is
+                                ; armed by callers that may draw no strip at
+                                ; all, and this one by a routine that always
+                                ; reaches this instruction
     jmp wm_draw_win             ; tail call
 .titleonly:
     call wm_draw_title          ; DI == BP, so it gains its stripes...
@@ -5314,7 +5373,7 @@ wm_cursor:
                                 ; in cur_shape_set: a bad byte written into
                                 ; the record would be re-read every pass.
                                 ; CUR_NWSHAPE AND NOT CUR_NSHAPE, and the same
-                                ; instruction either way: the hourglass belongs
+                                ; instruction either way: the clock belongs
                                 ; to a gfx-lock HOLD and not to a window
                                 ; (SPEC.md 7.5), so a record that could carry
                                 ; it would be a program declaring the machine
@@ -6043,6 +6102,12 @@ wm_dmg_wins:
     call wm_idx2ptr             ; BX = window ptr (AX and CX survive)
     test byte [bx+W_FLAGS], 2
     jz .mnext
+    cmp bx, [wm_dmg_mine]       ; ...and the window our CALLER is about to draw
+    je .mnext                   ; WHOLE is not marked by anything: not the
+                                ; damage, not the dock strip, not a marked
+                                ; window below it (SPEC.md 30.3.4). Unarmed the
+                                ; word is 0 and no window record lives there,
+                                ; so the test is inert
     mov si, bx                  ; SI = our window for the rest of the pass
     call wm_win_rect            ; AX,BX,CX,DX = our rect, shadow included
     call wm_dmg_hit
@@ -6145,9 +6210,16 @@ wm_dmg_wins:
     push si
     mov di, bx
     call wm_chrome_clip         ; confined exactly as wm_draw_win confines its
-    call thm_ink                ; own chrome (SPEC.md 11.97) - a window above
-    call wm_draw_shadow         ; may be sitting on this shadow, and an
-    mov word [wm_clip_n], 0     ; unmarked one will not redraw over us
+    jc .dshx                    ; own chrome (SPEC.md 11.97) - a window above
+    call thm_ink                ; may be sitting on this shadow, and an
+    call wm_draw_shadow         ; unmarked one will not redraw over us.
+.dshx:                          ; WHOLLY covered, and this path is where that
+    mov word [wm_clip_n], 0     ; shipped (SPEC.md 11.97.3): every wm_draw_win
+                                ; caller guards on wm_covered or has proved the
+                                ; window frontmost, and this one has neither -
+                                ; it exists to put back two lines, where a
+                                ; region pass of its own would cost more than
+                                ; it saves. It already had the answer.
     pop si
     jmp short .dnext
 .dfull:
@@ -6626,6 +6698,8 @@ wm_dmg_j    dw 0                ; the marking pass's inner index
 ; the whole damage rect as this pass always did, and a wasted repaint is the
 ; safe error.
 wm_dmg_stwin dw 0               ; the window that moved, 0 = not armed
+wm_dmg_mine dw 0                ; ...and the one wm_raise is about to draw
+                                ; WHOLE itself, 0 = not armed (SPEC.md 30.3.4)
 wm_dmg_rzwin dw 0               ; SPEC.md 11.90.3: ...and the one ui_grow just
                                 ; SHRANK without moving, which owes its content
                                 ; nothing. A one-shot across wm_paint_dmg
@@ -6665,6 +6739,12 @@ wm_dmg_cull db 0                ; ...and wm_draw_win turns it on around W_PAINT
                                 ; alone, which is what keeps wm_su_try's own
                                 ; region arming out of it. Two bytes and not
                                 ; one: the request outlives the state
+%ifdef KERN_BIG
+wm_clip_wf  dw 0                ; SPEC.md 11.3.4: which fragment won the row
+                                ; range, so its COLUMNS can be asked once
+wm_clip_cm  db 0FFh             ; ...and they are, as a mask on the glyph row
+                                ; byte: bit 7 the leftmost pixel, 0FFh all eight
+%endif
 wm_clip_r0  db 0                ; wm_clip_rows' answer (SPEC.md 11.3.2): the
 wm_clip_rn  db 8                ; first drawable row of the cell it was last
                                 ; asked about, and how many from there. Valid
@@ -7534,6 +7614,46 @@ wm_clip_free:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_ttl_seen - is ANY pixel of this window's TITLE STRIP ours to draw?
+; in:  DI = the window; the clip list EXACTLY as wm_chrome_clip left it
+; out: CF = 1 = not one pixel of the strip is visible - draw NONE of it;
+;      CF = 0 = draw it. Every register preserved.
+;
+; SPEC.md 11.97.4, and it is NOT 11.97.1 being re-litigated: that one refused
+; to CLIP the title bar. Its stated reason - a cell the region cuts is a cell
+; font_char drops whole - is now only HALF true, and 11.97.4 says which half:
+; font_char asks wm_clip_rows (11.3.2), so a HORIZONTAL cut draws the rows on
+; our side, and a display SEAM is cut rather than dropped (39.14.11); what is
+; still dropped is a VERTICAL cut, which is what a window overlapping from the
+; side makes, so the conclusion stands and the reason has to be requoted.
+; NONE OF IT REACHES A VETO. This cuts nothing, in either axis. It is the
+; all-or-nothing question wm_title_set has always asked of its own strip -
+; "wholly covered: not one pixel of it is ours".
+;
+; IT COSTS NO SECOND OCCLUSION WALK. wm_chrome_clip has just built the frame's
+; visible region and the strip is a sub-rect of the frame, so the answer is a
+; walk of at most 16 rects that are already in hand. A disarmed list is the
+; two cases that mean DRAW - nothing above us overlaps, or the region
+; overflowed and degraded - and both are one compare away.
+; -----------------------------------------------------------------------------
+wm_ttl_seen:
+    cmp word [wm_clip_n], 0
+    je wm_clip_free             ; disarmed: draw it, and that `clc`/`ret` is
+    push ax                     ; already written one label up
+    push bx
+    push cx
+    push dx
+    call wm_ttl_rect            ; AX,BX,CX,DX = the strip, inclusive
+    xchg ax, cx                 ; containment with the corners exchanged IS
+    xchg bx, dx                 ; overlap - 11.3.3's own idiom, and the walk
+    call wm_clip_walk           ; is the RAW one: wm_draw_win is in virtual
+    pop dx                      ; coordinates and wm_clip_tab is virtual, so
+    pop cx                      ; wm_clip_t1's display translation would be a
+    pop bx                      ; second one. (`pop` writes no flags, so the
+    pop ax                      ; answer survives to the caller's branch)
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_clip_rows - which ROWS of a cell may be drawn? (SPEC.md 11.3.2)
 ; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive; at most 255 rows tall)
 ; out: CF = 0 and [wm_clip_r0] = the first drawable row as an offset from y1,
@@ -7572,14 +7692,26 @@ wm_clip_rows:
     push bp
     mov byte [wm_clip_r0], 0
     CLIPQ
-    je .all                     ; disarmed: every row, the same answer
+%ifdef KERN_BIG
+    je .allj                    ; disarmed: every row, the same answer
                                 ; wm_clip_free gives for the whole shape
     cmp byte [wm_dmg_cull], 0
     je .norows                  ; SPEC.md 11.3.3: under the cull a cell that
     call wm_clip_test           ; overlaps at all is drawn WHOLE, so the row
-    jc .none                    ; range is every row or none - the partial
-    jmp short .all              ; answer this routine exists to give is what
-.norows:                        ; the cull is defined not to need
+    jc .nonej                   ; range is every row or none - the partial
+.allj:                          ; answer this routine exists to give is what
+    jmp .all                    ; the cull is defined not to need. (The two
+.nonej:                         ; trampolines are 11.3.4's alone: an 8086 has
+    jmp .none                   ; no near conditional jump and the mask block
+%else                           ; below puts both targets out of a short one's
+    je .all                     ; reach - on kern_small it is not there, so
+    cmp byte [wm_dmg_cull], 0   ; this arm is what shipped before 11.3.4 and
+    je .norows                  ; assembles byte for byte as it did)
+    call wm_clip_test
+    jc .none
+    jmp short .all
+%endif
+.norows:
 %ifdef KERN_BIG
     cmp byte [gfx_dnest], 0     ; SPEC.md 39.14.4, exactly as wm_clip_test:
     je .armed                   ; inside a whole-shape hook the caller's rect
@@ -7591,12 +7723,21 @@ wm_clip_rows:
 %endif
     mov si, wm_clip_tab
     mov di, [wm_clip_n]
-    xor bp, bp                  ; BP = the best row count found so far
+    xor bp, bp                  ; BP = the best row count found so far (and
+                                ; [wm_clip_wf] needs no init: the block below
+                                ; reads it only when BP says one was found)
 .frag:
-    cmp ax, [si+WCR_X1]         ; the cell's full width, or nothing: a
-    jl .next                    ; part-width row is what cannot be drawn
-    cmp cx, [si+WCR_X2]
-    jg .next
+%ifdef KERN_BIG
+    cmp cx, [si+WCR_X1]         ; OVERLAP, where this used to demand the cell's
+    jl .next                    ; full width - "a part-width row is what cannot
+    cmp ax, [si+WCR_X2]         ; be drawn" was a fact about the RENDERERS and
+    jg .next                    ; is not one now (SPEC.md 11.3.4)
+%else
+    cmp ax, [si+WCR_X1]         ; ...and on kern_small it still is: 11.3.4 is
+    jl .next                    ; KERN_BIG's, so the floor machine keeps the
+    cmp cx, [si+WCR_X2]         ; whole-cell drop and this is the test that
+    jg .next                    ; makes it (11.3.4.1)
+%endif
     push ax
     push cx
     mov ax, bx                  ; AX = max(y1, frag y1)
@@ -7617,6 +7758,13 @@ wm_clip_rows:
     mov bp, cx
     sub ax, bx                  ; ...and where they start, from y1
     mov [wm_clip_r0], al
+%ifdef KERN_BIG
+    mov [wm_clip_wf], si        ; THE WINNER IS BANKED AND NOT MEASURED: its
+                                ; COLUMNS are wanted once, after the walk, and
+                                ; working them out per fragment cost 60 bytes
+                                ; to answer a question about fragments that
+                                ; lose (SPEC.md 11.3.4)
+%endif
 .frag_no:
     pop cx
     pop ax
@@ -7626,6 +7774,40 @@ wm_clip_rows:
     jnz .frag
     or bp, bp
     jz .none
+
+%ifdef KERN_BIG
+    ; --- the winning fragment's COLUMNS, as a mask (SPEC.md 11.3.4) --------
+    ; ONCE, here, and not per fragment: only the winner is ever asked, and
+    ; working it out inside the walk cost 60 bytes to answer a question about
+    ; fragments that lose. INLINE and clobbering freely - `.ok` below is four
+    ; pops and a `ret`, so AX, BX, CX and DX are all dead from here.
+    ;
+    ; The cell is 8 wide, so the two distances ARE the mask:
+    ;   d0 = frag.x1 - x1   clamped at 0 ...the columns cut off the LEFT
+    ;   d1 = x2 - frag.x2   clamped at 0 ...and off the RIGHT
+    ;   mask = (0FFh >> d0) & (0FFh << d1)
+    ; A fragment covering the cell gives 0 and 0, so 0FFh falls out with no
+    ; branch of its own - two shifts where a 9-byte table plus two
+    ; `[cs:tab+bx]` lookups and a `not` used to be.
+    mov bx, [wm_clip_wf]
+    mov dx, [bx+WCR_X1]
+    sub dx, ax
+    jns .c0                     ; negative: it starts left of the cell and
+    xor dx, dx                  ; cuts nothing
+.c0:
+    sub cx, [bx+WCR_X2]
+    jns .c1
+    xor cx, cx
+.c1:
+    mov ax, 0FFFFh
+    xchg cx, dx                 ; CL = d0 - the shifts want it there
+    shr al, cl
+    mov cl, dl
+    shl ah, cl
+    and al, ah
+    mov [wm_clip_cm], al
+%endif
+
     mov ax, bp                  ; a BYTE store: [wm_clip_rn] is a db, and
     mov [wm_clip_rn], al        ; `mov [wm_clip_rn], bp` writes a WORD - it
                                 ; put BP's zero high byte over the first
@@ -7634,6 +7816,9 @@ wm_clip_rows:
                                 ; restored from the stack four lines down
     jmp short .ok
 .all:
+%ifdef KERN_BIG
+    mov byte [wm_clip_cm], 0FFh ; every column (SPEC.md 11.3.4)
+%endif
     mov ax, dx
     sub ax, bx
     inc ax
@@ -9325,9 +9510,12 @@ wm_su_owed:
 ; -----------------------------------------------------------------------------
 ; wm_chrome_clip - the region a window's CHROME may draw in (SPEC.md 11.97)
 ; in:  DI = the window wm_draw_win is about to draw; gfx lock held
-; out: nothing; every register and the flags preserved. The clip list is armed,
-;      or left DISARMED - which means "draw the lot" and is what every caller
-;      did before this existed.
+; out: CF = 1 = NOT ONE PIXEL of this chrome is ours: draw none of it, and the
+;      list is disarmed because there is nothing to arm (SPEC.md 11.97.3).
+;      CF = 0 = draw it - with the list armed to the visible region, or left
+;      DISARMED, which means "draw the lot" and is what every caller did before
+;      this existed. Every register preserved; the FLAGS are not, and no caller
+;      ever read one across this (both overwrite CF before they test one).
 ;
 ; wm_draw_win writes the outline, the drop shadow and the title bar WHOLE,
 ; whether the raise cache hit or not (11.96.6), and a damage pass draws back to
@@ -9352,9 +9540,20 @@ wm_su_owed:
 ; wm_obscured first, because on the frontmost window - every wm_raise, every
 ; wm_show - the answer is "all of it", and an armed region costs gfx_clip_run a
 ; pass per primitive to arrive at the rect it was handed.
+;
+; AN EMPTY LIST IS THE OPPOSITE OF AN OVERFLOW and this used to answer both the
+; same way (SPEC.md 11.97.3). wm_clip_occlf's own header sets the pair out: CF
+; = 1 is "nothing about the list is valid", which degrades to DRAW IT because a
+; pixel dropped then is one this pass owes - and CF = 0 with [wm_clip_n] = 0 is
+; "the seed is entirely covered", which is this feature's strongest possible
+; answer. [wm_clip_n] = 0 is DISARMED, so falling into the same branch drew the
+; whole outline and drop shadow unclipped in exactly the case where not one
+; pixel of either was ours. wm_title_set has always read it right - `je .clear`,
+; "wholly covered: not one pixel of it is ours" - and its own next paragraph
+; names this trap: an empty list reads as "draw freely" downstream, so the
+; covered case has to be answered HERE.
 ; -----------------------------------------------------------------------------
 wm_chrome_clip:
-    pushf
     push ax
     push bx
     push cx
@@ -9363,7 +9562,7 @@ wm_chrome_clip:
     mov word [wm_clip_n], 0
     mov bx, di
     call wm_obscured
-    jnc .out                    ; nothing above us overlaps: draw the lot
+    jnc .all                    ; nothing above us overlaps: draw the lot
     call cur_unlazy              ; SPEND THE DEFERRED HIDE (7.1.4). An armed
                                 ; region stops the clipped primitives taking it
                                 ; themselves, and the cursor is not confined to
@@ -9397,21 +9596,25 @@ wm_chrome_clip:
                                 ; - lost its shadow pixel wherever an upper
                                 ; window's (x, y+h) or (x+w, y) landed on it,
                                 ; and nothing put it back
-    jc .none                    ; overflowed: nothing about the list is valid
+    jc .over                    ; overflowed: nothing about the list is valid
     cmp word [wm_clip_n], 0
-    jne .out
-.none:
+    je .none                    ; ...or every pixel of it is somebody else's
+    jmp short .out              ; armed - and CF = 0 out of that compare
+.over:
     mov word [wm_clip_n], 0     ; OVERFLOW DEGRADES TO "DRAW IT", wm_covered's
-                                ; way and not wm_clip_set's: a dropped pixel
-                                ; here is one a background painter would have
-                                ; skipped, and here it is one this pass owes
+.all:                           ; way and not wm_clip_set's: a dropped pixel
+    clc                         ; here is one a background painter would have
+    jmp short .out              ; skipped, and here it is one this pass owes
+.none:
+    stc                         ; ...where an EMPTY REGION degrades the other
+                                ; way: it is the region SUCCEEDING, and what it
+                                ; proved is that the caller owes nothing at all
 .out:
-    pop si
-    pop dx
+    pop si                      ; (`pop` writes no flags, so the answer above
+    pop dx                      ; survives to the caller's branch)
     pop cx
     pop bx
     pop ax
-    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -11440,16 +11643,28 @@ wm_draw_win:
                                 ; (SPEC.md 11.91.4)
 
 %ifndef REDRAWFULL
-    mov word [wm_clip_n], 0     ; ...AND THE REGION DIES BEFORE THE TITLE BAR,
-%endif                          ; not after it (SPEC.md 11.97.1). font_char
-                                ; clips per whole CELL, so a glyph the region
-                                ; cuts is dropped ENTIRELY - including the rows
-                                ; of it this window can still see. Measured: a
-                                ; window whose title bar was covered from its
-                                ; 10th row down lost its caption's top 5 rows
-                                ; as well. 11.3's granularity rule, in the one
-                                ; place the plan for this said it could not bite
-    call wm_draw_title          ; the title bar, active or not (BP decides)
+    call wm_ttl_seen            ; ...BUT A STRIP WHOLLY COVERED IS NOT DRAWN AT
+                                ; ALL (SPEC.md 11.97.4), which saves the bar's
+                                ; fifteen primitive CALLS where an armed region
+                                ; would only make each of them draw nothing
+ %ifndef KERN_BIG
+    mov word [wm_clip_n], 0     ; ...AND ON kern_small THE REGION DIES HERE, as
+                                ; 11.97.1 left it: there is no column mask on
+                                ; that build, so a cut caption cell is still
+                                ; dropped whole (SPEC.md 11.3.4.1). BEFORE the
+                                ; `jc`, which skips the draw and would skip
+                                ; this with it - and `mov` writes no flags, so
+                                ; the veto's answer survives it
+ %endif
+    jc .notitle
+%endif
+    call wm_draw_title          ; ...where on KERN_BIG the region STAYS ARMED
+.notitle:                       ; across the bar (11.3.4): the fifteen fills
+%ifdef KERN_BIG                 ; clip per pixel as they always could, and the
+ %ifndef REDRAWFULL             ; caption clips per COLUMN
+    mov word [wm_clip_n], 0
+ %endif
+%endif
 
     call wm_su_try              ; THE RAISE CACHE (SPEC.md 11.96): if the
     jc .content                 ; content was banked when this window was

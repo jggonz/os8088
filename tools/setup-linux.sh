@@ -88,6 +88,14 @@ missing_list() {
     have_libudev                               || echo libudev-dev
     command -v qemu-system-i386 >/dev/null 2>&1 \
         || command -v qemu-system-x86_64 >/dev/null 2>&1 || echo qemu-system-x86
+    # The Z-machine compiler. `build/zt/ZOPS.Z5` is built with it, and it is
+    # a prerequisite of `zmove360.img` and `editmove360.img` one edge up - so
+    # without it those rows have no disk and `os88soak.py check` reports the
+    # gap. It is small and it is packaged, which is why it is installed here
+    # rather than merely reported: the soak preflight once took a five-hour
+    # run down to 37 minutes with 0 of 267 rows reported over exactly this.
+    command -v inform6 >/dev/null 2>&1 \
+        || command -v inform >/dev/null 2>&1 || echo inform6-compiler
 }
 
 report() {
@@ -114,6 +122,29 @@ status() {
     command -v python3 >/dev/null 2>&1 \
         && report python3 "$(python3 -V 2>&1)" \
         || report python3 "MISSING - every tool in tools/"
+    if command -v inform6 >/dev/null 2>&1; then
+        report inform6 "$(inform6 -h 2>&1 \
+            | sed -n 's/.*Inform \([0-9][0-9.]*\).*/\1/p' | head -1)"
+    elif command -v inform >/dev/null 2>&1; then
+        report inform6 "present (inform)"
+    else
+        report inform6 "MISSING - build/zt/ZOPS.Z5, so the zmove and
+                     editmove rows have no disk to boot"
+    fi
+    # nasm 3 is a PROBED CAPABILITY and not a dependency - nothing in any
+    # tier needs one to build, and the `nasm3` row SKIPs without it. So it is
+    # reported and never installed, and no distribution packages one anyway:
+    # tools/setup-nasm3.sh is the command, and it is instant when there is
+    # already a 3.x (which on macOS there always is).
+    if command -v nasm >/dev/null 2>&1 \
+       && nasm -v 2>/dev/null | grep -q 'NASM version [3-9]'; then
+        report nasm3 "$(nasm -v 2>/dev/null | head -1) (plain nasm is 3.x)"
+    elif [ -n "${OS88_NASM3:-}" ] || [ -x "$HERE/../build/nasm3/nasm/nasm" ]; then
+        report nasm3 "present"
+    else
+        report nasm3 "absent - the \`nasm3\` soak row SKIPs. Not a build
+                     dependency; tools/setup-nasm3.sh builds one"
+    fi
 }
 
 MISSING=$(missing_list || true)

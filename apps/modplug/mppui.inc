@@ -2883,6 +2883,37 @@ mppu_frame:
     cmp byte [mpm_playing], 0       ; animated WHILE PLAYING - those cycles
     jne .poll                       ; are what the audio needs. Stopped, it
 .viz:                               ; animates like anywhere else.
+    ; --- ...AND AN EMPTY WELL IS NOT ANIMATION (SPEC.md 56.12.1) -------------
+    ; mppu_draw_viz bevels and fills the pane and THEN asks whether there is a
+    ; level to draw, so with no module loaded this invalidation bought a
+    ; 220x35 repaint of a pane that CANNOT CHANGE - about five primitive calls
+    ; ~18 times a second, for ever, on a machine where the fixed part of a gfx
+    ; call is 756 us (PERFORMANCE.md). That is rule 1 and rule 2 at once, and
+    ; it is a two-pixel flicker on the well's corners at 18 Hz - a double-draw
+    ; flash, which `m.flicker` MEASURES (PERFORMANCE.md Part 3.1) rather than
+    ; something only the desk can see. tests/dispsize.py leg C is where it
+    ; surfaced: one differing pixel at the well's right edge, in two runs of
+    ; three; after this the window reads `settled` with no transient pixels.
+    ;
+    ; THE EDGE IS WHY THIS IS A LATCH AND NOT A `cmp`/`je`. There is no eject
+    ; here - both writers of [mpm_loaded] = 0 are inside loading a NEW module
+    ; (mpm_load's own head, and the free of the old blob) - so the case that
+    ; needs a repaint is a load that FAILED: the flag stays 0 while the bars
+    ; still hold the module that is gone, and mppu_viz_reset is on the SUCCESS
+    ; path only. So the 1 -> 0 edge clears them and paints ONCE, which is the
+    ; picture today reaches by decaying and then repainting it for ever.
+    mov al, [mpm_loaded]
+    cmp al, [mppu_vizld]
+    mov [mppu_vizld], al        ; mov leaves the flags alone, so the compare
+    je .vizsame                 ; above is still what decides
+    or al, al
+    jnz .vizdo                  ; 0 -> 1: the load path resets and repaints
+    call mppu_viz_reset         ; 1 -> 0: the bars outlived their module
+    jmp .vizdo
+.vizsame:
+    or al, al
+    jz .poll                    ; nothing loaded and nothing changed
+.vizdo:
     call mppu_viz_step
     mov ax, MPPI_VIZ
     call mppu_inval
@@ -3227,6 +3258,10 @@ mppu_hit:
     MPPB mppu_lvl                   ; mppu_viz_step's banked channel level
     MPPB mppu_qdis                  ; the option label's greyed answer, banked
                                     ; between mppu_opt_state and the run
+    MPPB mppu_vizld                 ; [mpm_loaded] as mppu_frame last saw
+                                    ; it - the ONE bit that says whether
+                                    ; the well owes a repaint (SPEC.md
+                                    ; 56.12.1)
 
 ; --- the invalidation mask and the check words (SPEC.md 56.12) ----------------
 ; mppu_dirty is the update region; the rest are one element's last-drawn state

@@ -584,6 +584,17 @@ pt_entry:
     jc .out                         ; no window: nothing to flag, nothing to
                                     ; claim - the region stays untouched
     mov [pt_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
+%ifdef PTF_FSX
+    OS88_ALTENTER_ARM               ; SPEC.md 11.2.1.1: nothing tracks a
+                                    ; scancode until something asks, and both
+                                    ; halves of the chord ride on that map
+%endif
     push ax
     mov ax, pt_onup                 ; SPEC.md 13.7/13.8.1: Apply fires on the
     call OSAPI_WM_ONMOUSEUP         ; RELEASE and follows the pointer between
@@ -5089,6 +5100,14 @@ pt_szdraw:
 ; in:  [pt_ox]/[pt_oy]; the gfx lock is held
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; One button at a time: this package's rects are not one contiguous group,
+; so the record is pointed at whichever rect the caller staged.
+pt_btlbl: dw 0
+pt_btflg: dw 0
+    OS88UI_BTNREC pt_btrec, 0, pt_btlbl, pt_btflg, 1
+
 pt_szdraw_apply:
     push ax
     push bx
@@ -5133,7 +5152,16 @@ pt_szdraw_apply:
     je .nodn
     or di, OS88UI_DOWN
 .nodn:
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [pt_btlbl], si          ; label and DI its flags, so the record takes
+    mov [pt_btflg], di          ; all three and the picture is identical
+    mov [pt_btrec+OS88UI_BT_RECTS], bx
+    mov bx, pt_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     mov byte [pt_pen], CBLACK       ; os88ui_btn leaves the KERNEL's pen live;
                                     ; [pt_pen] is this module's own and the
                                     ; two are not the same variable
@@ -6513,8 +6541,19 @@ pt_fsx_main:
     mov [pt_pbtn], al               ; the click or key that got us here must
     mov [pt_ptrx], cx               ; not read as a fresh press on the first
     mov [pt_ptry], dx               ; pass
+    OS88_ALTENTER_SEED              ; ...and the Alt+Enter that got us here is
+                                    ; the same thought: still held, and a
+                                    ; level read cannot tell it from the press
+                                    ; that would take us out again
     call pt_ptr_on
 .loop:
+    call os88alt_edge               ; ALT+ENTER LEAVES TOO (SPEC.md 11.2.1.1),
+    jc .done                        ; and it cannot come through the int 16h
+                                    ; below: no XT BIOS enqueues the
+                                    ; combination at all (9.7.1) and a bracket
+                                    ; dispatches no events (53.1), so the
+                                    ; key-state map is the only thing that
+                                    ; carries it. Free in a loop already
     mov ah, 1                       ; the bracket's input model: poll int 16h
     int 0x16                        ; (this IS the UI task, SPEC.md 53.1)
     jz .nokey
@@ -10617,6 +10656,11 @@ pt_onkey:
     je .paste
 %endif
 %ifdef PTF_FSX
+    cmp ax, KEY_ALTENTER            ; Alt+Enter, the other unconditional door
+    je .full                        ; (SPEC.md 11.2.1.1). Beside Ctrl+F and
+                                    ; above the bare letter for the same
+                                    ; reason: a chord is not a keystroke the
+                                    ; text tool can ever want
     cmp al, 0x06                    ; Ctrl+F
     je .full
     cmp byte [pt_txton], 0          ; ...and the bare F, the tree's fullscreen
@@ -13739,7 +13783,7 @@ pt_load:
                                     ; rather than after it (SPEC.md 59.4)
     call OSAPI_CUR_BUSY             ; ...AND THE POINTER SAYS IT TOO (SPEC.md
                                     ; 7.5.4). The message names the operation
-                                    ; ONCE and then sits there; the hourglass
+                                    ; ONCE and then sits there; the clock
                                     ; is what a hand moving over a dead machine
                                     ; asks and gets an answer to. No teardown:
                                     ; the kernel took the lock around this
@@ -17140,6 +17184,9 @@ pt_ic_text:
                                 ; the way out. A windowed dialog has a floor of
                                 ; ~800 bytes wherever it lives and Paint is a
                                 ; heap claim, not the kernel
+%ifdef PTF_FSX
+%include "os88alt.inc"              ; SPEC.md 11.2.1.1's edge, for the bracket
+%endif
 %include "os88ui.inc"
 
     OS88_BSS PT_BSS

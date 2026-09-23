@@ -2540,8 +2540,9 @@ zw_click:
     jne .out                        ; now. BX is still the block and DX still
     cmp byte [zw_nodrag], 0         ; the press, absolute
     jne .out
-    mov al, ZF_SBRATE
-    call os88ui_sbgrab
+    mov ax, ZF_SBRATE | (ZF_SBRATE286 << 8)
+    call os88ui_sbrate          ; the rate THIS machine can afford
+    call os88ui_sbgrab          ; (SPEC.md 13.10.5.4.1)
 %endif
     jmp short .out                  ; the thumb itself, or an inert track
 .lineup:
@@ -2581,6 +2582,30 @@ zw_click:
 ; zw_scrollto does the clamp and the paint, so the tier 61.15 built is what a
 ; dragged thumb rides on: a blit and |d| rows, not a whole window.
 ; -----------------------------------------------------------------------------
+; zw_sbpause - SPEC.md 13.10.5.4.2: the thumb has been STILL long enough, so
+;              the view goes where the hand is. zw_sbtrack's shape with
+;              os88ui_sbowed in place of os88ui_sbtrack - a pause is not the
+;              end of the gesture, so the record must survive it.
+zw_sbpause:
+    push ax
+    push bx
+    push cx
+    push dx
+    call os88ui_sbdragging
+    jc .pout
+    call zw_bounds
+    jc .pout
+    call zw_sbset
+    call os88ui_sbowed
+    jc .pout
+    call zw_scrollto
+.pout:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 zw_sbtrack:
     push ax
     push bx

@@ -48,6 +48,11 @@ UI_RBQ_FLUSH   equ 1            ; flush the Control Panel on the way out
 UI_RBQ_NOFLUSH equ 2            ; ...and do not go near a disk at all
 UI_RBQ_HIBER   equ 3            ; SPEC.md 87: write the image and stop
 UI_RBQ_RESUME  equ 4            ; ...put an image back
+UI_RBQ_DOSRUN  equ 6            ; SPEC.md 96.40: hand the machine to kern_dos.
+                                ; It needs no arm of its own in ui_task - the
+                                ; `cmp al, UI_RBQ_HIBER / jb` below already
+                                ; routes everything above it to hbf_perform,
+                                ; which is where the module is
 UI_RBQ_ASK     equ 5            ; ...and ask whether to, at boot. All three
                                 ; are spent by the same top-of-pass site as
                                 ; a restart, for the same reason (20.10):
@@ -94,29 +99,87 @@ ui_task:
     sub al, UI_RBQ_FLUSH        ; 0 = flush the panel first, non-0 = do not
     call ui_cmd_reboot
 .keys:
+%ifdef OS88_COMPACT
+    ; --- 0a. …and a posted COMPACTION, for the same reason (SPEC.md 66.4.3) --
+    ; A package may not compact its own region from inside its own callback -
+    ; a frame is standing in it, which is exactly what mem_in_nest reports - so
+    ; OSAPI_MEM_COMPACT's post records the wish and this is where it is spent.
+    ; HERE and not in wm_pkgcall's return path: mem_compact's park request
+    ; drops [sch_lock] for up to INST_PARKW ticks, which from inside a repaint
+    ; holding the gfx lock is a deadlock against OSAPI_MEM_PARKSAFE and not a
+    ; slow path. At the top of this loop nothing is held and [wm_pkgd] is 0,
+    ; so mem_frameless answers "movable" for the asker's region with no
+    ; predicate changed - the feature is WHERE this runs, not new code to let
+    ; it run. Not through [ui_rebootq]: hbf_perform LOADS the hibernate module
+    ; before it dispatches, and a compaction is not worth a disk read.
+    ; kern_small's door refuses every post (SPEC.md 66.0), so there is nothing
+    ; to test for there.
+    cmp word [mem_cpq], 0
+    je .keys2
+    call COLD_SEG:mem_cpq_run_x ; spends AX and BX, both dead here
+.keys2:
+%endif
     ; --- 1. keyboard: poll, and feed the front window's key handler ----------
     mov ah, 0x01                ; any key pending?
     int 0x16
-    jz .events
+    jnz .typed
+    ; --- ...and the one combination no BIOS here enqueues (SPEC.md 9.7.1) ----
+    ; Alt+Enter. A period XT ROM has no entry for it at all - measured, the
+    ; buffer tail does not move - so int 16h above can never report it and the
+    ; scancode is what carries it, exactly as 9.6.4's keypad 5 is carried.
+    ; kbd_track latched it; this is the spend, and it goes down the SAME
+    ; dispatch a typed key does, so it reaches the front window and nothing
+    ; else. Four instructions on a pass with no key, which is most of them.
+.altenter:                      ; ...AND THE DELIVERING-BIOS ARM BELOW REJOINS
+    xor ax, ax                  ; HERE, which is what makes one latch answer
+    xchg ah, [kbd_ae]           ; both. READ-AND-CLEAR IN ONE - kbm_p5spend's
+                                ; own idiom, a byte along, and race-free where
+                                ; a test and a separate store are not - and the
+                                ; latch holds the SCANCODE, so AX is now exactly
+                                ; the 0x1C00 an ENHANCED ROM would have given
+                                ; us, SPENT whatever happens below
+    or ah, ah                   ; ...or 0, which is the ordinary pass with
+    jz .events                  ; nothing latched and is most of them
+    jmp short .kwake            ; the ONE thing this arm still needs is the
+                                ; wake, and .typed's is just below
+.typed:
     KFZ 1                       ; 1: a key is pending
+    mov ah, 0x00                ; fetch it: AL = ascii, AH = scan. AHEAD OF
+    int 0x16                    ; blk_wake NOW, which is what lets the latch's
+                                ; arm above share the call - and it DELETES the
+                                ; pushf/popf that used to carry blk_wake's
+                                ; verdict across this int 16h, because there is
+                                ; no longer a verdict to carry
+    KFZ 2                       ; 2: the key is out of the BIOS buffer
+.kwake:
     call blk_wake               ; a key is USER INPUT whatever it turns out to
                                 ; be, so the idle clock restarts here (SPEC.md
                                 ; 64.2) and CF says whether this keystroke is
-                                ; the one that lit the screen
-    KFZ 2                       ; 2: blk_wake returned (SPEC.md 64)
-    mov ah, 0x00                ; fetch it: AL = ascii, AH = scan - the wake
-    pushf                       ; case still has to take the key OUT of the
-    int 0x16                    ; BIOS buffer, so only the DELIVERY differs.
-    popf                        ; The verdict is banked across the call: int
-                                ; 16h is a BIOS service and the flags it
-                                ; returns are its own business, not ours
-    KFZ 3                       ; 3: the key is out of the BIOS buffer
+                                ; the one that lit the screen. It banks AX
+                                ; (blank.inc), so the keystroke survives it
+    KFZ 3                       ; 3: blk_wake returned (SPEC.md 64)
     jc .events                  ; the screen was dark, so the user never saw
                                 ; the window this would have gone to: drop it
+    cmp ah, [kbd_ae]            ; A BIOS THAT DOES DELIVER ALT+ENTER (SPEC.md
+    jne .notae                  ; 9.7.1) - SeaBIOS says 1CF0, an enhanced ROM
+    or ah, ah                   ; 1C00 - has just handed us the key the ISR
+    jnz .altenter               ; ALSO latched, and the SCANCODE IT LATCHED IS
+                                ; THE TEST: the two agree only when this typed
+                                ; key is that press. So the typed copy is
+                                ; dropped and the latch is spent in its place -
+                                ; one press, one dispatch, and the AX a package
+                                ; sees is 0x1C00 on every BIOS without the
+                                ; kernel knowing which spelling this ROM chose.
+                                ; The or is the one case the compare cannot
+                                ; judge: a BIOS reports an Alt+numpad character
+                                ; with AH = 0, which equals an empty latch
+.notae:
     call kbm_key                ; with no mouse on the machine, the arrows ARE
     jc .events                  ; the mouse (SPEC.md 9.6) and this key is not
                                 ; the application's. One compare per keystroke
-                                ; on a machine that has one
+                                ; on a machine that has one. 0x1C is not in
+                                ; kbm_tab and AL = 0 is not Space, so the
+                                ; synthesised key passes through untouched
     KFZ 4                       ; 4: kbm_key passed it through (SPEC.md 9.6)
     call gfx_lock               ; handler draws; it runs under the lock
     KFZ 5                       ; 5: WE HAVE THE GFX LOCK. A bar that stops at
@@ -2082,11 +2145,21 @@ ui_grow:
     cmp ax, [ui_rzy]
     jne .norz
     mov ax, [bx + W_W]
-    cmp ax, [ui_rzw]
-    ja .norz                    ; wider: the new columns were never drawn
-    mov ax, [bx + W_H]
-    cmp ax, [ui_rzh]
+    sub ax, [ui_rzw]            ; `sub` sets the flags `cmp` would, and keeps
+    ja .norz                    ; the difference: wider means the new columns
+    mov cx, ax                  ; were never drawn, and ZERO means this axis
+    mov ax, [bx + W_H]          ; did not move at all. CX is dead here - the
+    sub ax, [ui_rzh]            ; union below reloads it
     ja .norz
+    or cx, ax                   ; ...AND A RESIZE THAT CHANGED NOTHING VACATES
+    jz .nodmg                   ; NOTHING (SPEC.md 11.91.5): all four words as
+                                ; [ui_rz*] banked them, so the release uncovered
+                                ; no ground and drew nothing new and there is no
+                                ; damage rect to paint at all. Judged HERE and
+                                ; not off the size wm_ask_size answered, because
+                                ; wm_dock_snap, wm_land_fit and wm_snap_win each
+                                ; move the ORIGIN while the size stands still -
+                                ; and every one of those DOES vacate ground
     mov [wm_dmg_rzwin], bx
 .norz:
     pop ax
@@ -2123,6 +2196,20 @@ ui_grow:
     call wm_paint_dmg           ; caller-held lock, per the wm contract
     mov word [wm_dmg_rzwin], 0  ; a one-shot, and its life is that one call
     jmp gfx_unlock              ; NO second gfx_lock here - already held (§7)
+
+.nodmg:                         ; nothing moved and nothing changed size, so
+    pop ax                      ; no window owes a pixel - this one included,
+                                ; which wm_dmg_wins would have marked by
+                                ; POINTER whatever the rect said (11.91.2).
+                                ; The AX the rz block pushed is still owed
+    mov word [wm_dmg_stwin], 0  ; ...and the vacated rect is a one-shot whose
+                                ; keeper is wm_dmg_wins, which this path is the
+                                ; first to arm and never reach: left set it
+                                ; would describe a window to the NEXT damage
+                                ; rect in the system. [wm_dmg_rzwin] needs no
+                                ; clearing - the block above zeroes it first
+                                ; and this arm never set it
+    jmp gfx_unlock
 
 ; -----------------------------------------------------------------------------
 ; ui_dispatch - route one menu selection (SPEC.md 13)

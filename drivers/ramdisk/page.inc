@@ -476,6 +476,16 @@ rp_rect_abs:
 ; one and a greyed label comes out pixel-identical to a live one, which reads
 ; as SPEC.md 47 rule 1 being broken when the mechanism is fine.
 ; -----------------------------------------------------------------------------
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; A Control Panel page draws its buttons one at a time, so the record is
+; pointed at whichever rect the caller staged. The GESTURE here is the
+; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
+; release-fired; what changed is that the DRAW goes through the control.
+rdp_btlbl: dw 0
+rdp_btflg: dw 0
+    OS88UI_BTNREC rdp_btrec, 0, rdp_btlbl, rdp_btflg, 1
+
 rp_btn:
     push ax
     push bx
@@ -495,7 +505,16 @@ rp_btn:
                                 ; button never says it will fire
     call rp_rect_abs
     mov bx, rp_rect
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [rdp_btlbl], si          ; label and DI its flags, so the record takes
+    mov [rdp_btflg], di          ; all three and the picture is identical
+    mov [rdp_btrec+OS88UI_BT_RECTS], bx
+    mov bx, rdp_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop dx
     pop cx

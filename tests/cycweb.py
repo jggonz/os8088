@@ -34,8 +34,14 @@ Measured on a cycle-accurate 5150/CGA: before 67.5.3.1, 221 pixels for the
 claw and 125 for the climber; after, 0 and 0, on CGA and on Hercules.
 """
 import sys, os, time, argparse, subprocess, tempfile
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import os88marty, os88mouse, os88sym, os88geom, dispcp
 
 CYS_TITLE = 0
@@ -58,6 +64,11 @@ def pkg_syms(src="apps/cyclone/cyclone.asm", incs=("apps/",), defines=()):
     with tempfile.TemporaryDirectory() as d:
         cp, mp = os.path.join(d, "p.asm"), os.path.join(d, "p.map")
         open(cp, "w").write(open(src).read() + "\n[map symbols %s]\n" % mp)
+        # ...AND THE DEFINES, which this took as an argument and DROPPED. A
+        # knob build (CYPROF=1, DROIDNOW=1) moves every symbol in the image, so
+        # a caller that asked for one got a map of a different package and read
+        # plausible rubbish - which is the failure the `Pkg` check below exists
+        # to catch and cannot, the image it compares against being wrong too.
         subprocess.run(["nasm", "-f", "bin", "-w+error"]
                        + sum([["-I", i] for i in incs], [])
                        + ["-D" + x for x in defines]

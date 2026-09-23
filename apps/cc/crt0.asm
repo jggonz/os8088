@@ -218,6 +218,9 @@ section .modc   follows=.data   align=1 vstart=0
 %ifdef CC_ASSOC
   %assign CC_FLAGS CC_FLAGS | 2
 %endif
+%ifdef CC_DOCGLYPH
+  %assign CC_FLAGS CC_FLAGS | 32    ; bit 5: a shipped document glyph
+%endif                              ; (SPEC.md 54.3.2)
 %ifdef CC_HAS_PARTS
   %assign CC_FLAGS CC_FLAGS | 4     ; bit 2: the FILE is longer than the image
 %endif                              ; on purpose (SPEC.md 20.12.1)
@@ -318,6 +321,20 @@ section .text
     OS88_ASSOC16                    ; asserts offset 96 (icon) or 32 (none)
 %include CC_ASSOC                   ; the count byte, then OS88_ASSOC_EXT xN
     OS88_ASSOC16_END                ; asserts <= 5 and pads to exactly 16
+%endif
+
+%ifdef CC_DOCGLYPH
+; The optional shipped DOCUMENT GLYPH (SPEC.md 54.3.2): the 8x8 a document of
+; this program wears inside its page, shipped rather than reduced out of the
+; icon - for an icon that is a line drawing, which the 2x2 majority reduction
+; empties. It needs BOTH an icon and an association block in front of it, and
+; the SDK's bracket asserts that. The shim names the file, as it names the
+; icon:
+;     %define CC_DOCGLYPH "myapp/myglyph.inc"
+; and that file is eight db bytes, one a row, bit 7 = leftmost, 1 = ink.
+    OS88_DOCGLYPH8                  ; asserts offset 112
+%include CC_DOCGLYPH
+    OS88_DOCGLYPH8_END              ; asserts eight bytes and pads to 16
 %endif
 
 ; =============================================================================

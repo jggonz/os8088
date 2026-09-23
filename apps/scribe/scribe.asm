@@ -52,6 +52,21 @@
 %define SB_RATE 0               ; RATE 0 (13.10.5.4): a scroll here ends in
 %endif                          ; sc_redraw, and this window is the widest in
 SC_SBRATE   equ SB_RATE         ; the system
+; ...AND A 286 GETS 2 (13.10.5.4.1): sc_redraw on a 286, nine times a
+; second, against the whole gesture's worth of nothing on an 8088.
+%ifndef SB_RATE286
+%define SB_RATE286 2
+%endif
+SC_SBRATE286 equ SB_RATE286
+; ...AND THE PAUSE COMMIT (13.10.5.4.2): a one-shot timer re-armed on every
+; movement fires only after this many ticks in which the thumb did not move,
+; which reaches the bars the RATE cannot - 13.10.5.4.3 measured a commit here
+; slower than any window the rate can name. No tier pair: half a second is
+; half a second on an 8088 and on a 286 alike.
+%ifndef SB_IDLE
+%define SB_IDLE 9               ; ticks of stillness before the view arrives;
+%endif                          ; 9 = 494 ms. 0 = no pause commit
+SC_SBIDLE   equ SB_IDLE
 %endif
 
 ; =============================================================================
@@ -903,6 +918,11 @@ sc_entry:
 %ifdef OS88UI_SBDRAG
     pushf                           ; the entry still owes the loader
     push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
+    mov ax, sc_ontimer          ; 13.10.5.4.2's PAUSE commit - FIRST of
+    call OSAPI_WM_ONTIMER       ; the three, because the `sbb al, al`
+                                ; below captures OSAPI_WM_ONDRAG's OWN
+                                ; CF and a third install after it would
+                                ; answer for the wrong slot
     mov ax, sc_onup                 ; SPEC.md 13.10.6.4: these two are the
     call OSAPI_WM_ONMOUSEUP         ; THUMB's alone. sc_mtrack's poll loop
     mov ax, sc_ondrag               ; (27.8.1) owns a gesture that cannot be
@@ -1219,18 +1239,38 @@ sc_ondrag:
     push dx
     call os88ui_sbdragging
     jc sc_sbd_out
+    mov bx, si                  ; 13.10.5.4.2: EVERY movement pushes the
+    mov ax, SC_SBIDLE           ; one-shot out, which is what makes it an
+    call OSAPI_WM_TIMER         ; IDLE detector and not a cadence. 0 needs no
+                                ; test - the slot takes it as CANCEL
     call sc_bounds
     call sc_sbset               ; BX = the block; DX is still the pointer's y
     call os88ui_sbtrack         ; CF = 1: nothing owed - the rate, or the same
     jc sc_sbd_out               ; row
     jmp short sc_sbd_go
+sc_ontimer:                     ; the thumb has been STILL for SC_SBIDLE
+    push ax                     ; ticks (SPEC.md 13.9 disarms before this
+    push bx                     ; runs, and this does not re-arm: a pause is
+    push cx                     ; ONE commit however long it lasts)
+    push dx
+    call sc_bounds
+    call sc_sbset
+    call os88ui_sbowed          ; ...and NOT os88ui_sbdrop: a pause is not
+    jc sc_sbd_out                 ; the end of the gesture, so the record
+    jmp short sc_sbd_go          ; survives it
 sc_onup:
     push ax
     push bx
     push cx
     push dx
+    call sc_dgfire                  ; A DIALOG'S BUTTON FIRES HERE (SPEC.md
+    jc sc_sbd_out                   ; 13.7): it is app-modal, so when one is
+                                    ; armed nothing else may have this release
     call os88ui_sbdragging
     jc sc_sbd_out
+    mov bx, si                  ; the pause timer must not outlive the
+    xor ax, ax                  ; gesture it belongs to (13.10.5.4.2)
+    call OSAPI_WM_TIMER
     call sc_bounds
     call sc_sbset
     call os88ui_sbdrop
@@ -1311,8 +1351,9 @@ sc_sbclick:
     jne .yes                        ; now. BX is still the block and DX still
     cmp byte [sc_nodrag], 0         ; the press, absolute
     jne .yes
-    mov al, SC_SBRATE
-    call os88ui_sbgrab
+    mov ax, SC_SBRATE | (SC_SBRATE286 << 8)
+    call os88ui_sbrate          ; the rate THIS machine can afford
+    call os88ui_sbgrab          ; (SPEC.md 13.10.5.4.1)
 %endif
     jmp short .yes                  ; the thumb itself, or an inert track
 .lineup:
@@ -17659,8 +17700,8 @@ sc_abopen:
     cmp ax, 360                     ; name line as a toast instead - refusal
     jb .toast                       ; with the reason (SPEC.md 47)
     mov ax, [sc_ch]
-    cmp ax, 96
-    jb .toast
+    cmp ax, 128                     ; ...and 32 taller since the two credit
+    jb .toast                       ; lines (SPEC.md 95.12)
     mov ax, [sc_cw]
     sub ax, 344
     shr ax, 1
@@ -17670,7 +17711,7 @@ sc_abopen:
     add ax, 343
     mov [sc_abrect+4], ax
     mov ax, [sc_ch]
-    sub ax, 72
+    sub ax, 104
     shr ax, 1
     add ax, [sc_ct]
     mov dx, [sc_ct]
@@ -17680,7 +17721,7 @@ sc_abopen:
     mov ax, dx
 .yok:
     mov [sc_abrect+2], ax
-    add ax, 71
+    add ax, 103
     mov [sc_abrect+6], ax
     ; panel, frame, shadow - the dropdown's dress
     mov al, CWHITE
@@ -17709,8 +17750,12 @@ sc_abopen:
     inc cx
     mov dx, bx
     call OSAPI_GFX_FILL_GRAY
-    ; the three lines (SPEC.md 68.2): the name, the version, and where the
-    ; authentic UI came from - the Computer History Museum's Opus release
+    ; the FIVE lines (SPEC.md 95.12): the name, the version, where the authentic
+    ; UI came from - the Computer History Museum's Opus release - and then the
+    ; two credits. The fork INHERITED the first of them: Word's card carries
+    ; 'Ported by Jorge Gonzalez' and this box was cut from that one with the
+    ; line dropped, which is how a fork loses an attribution silently
+    ; (SPEC.md 20.5.1.1). The second names who took it on afterwards.
     mov cx, [sc_abrect]
     add cx, 8
     mov dx, [sc_abrect+2]
@@ -17726,6 +17771,14 @@ sc_abopen:
     mov si, sc_s_abou3
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
+    add dx, 12
+    mov si, sc_s_abou4
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    add dx, 12
+    mov si, sc_s_abou5
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
     ; the OK button
     mov ax, [sc_abrect]
     add ax, 148
@@ -17733,15 +17786,21 @@ sc_abopen:
     add ax, 47
     mov [sc_abok+4], ax
     mov ax, [sc_abrect+2]
-    add ax, 50
+    add ax, 82                      ; 50 + the two credit lines (SPEC.md 95.12)
     mov [sc_abok+2], ax
     add ax, 13
     mov [sc_abok+6], ax
     push si
-    mov bx, sc_abok
-    mov si, sc_s_ok
-    mov di, OS88UI_FILL | OS88UI_DEF
-    call os88ui_btn
+    mov word [sc_btlbl], sc_s_ok    ; the About card's OK, through the one
+    mov word [sc_btflg], OS88UI_FILL | OS88UI_DEF
+    mov bx, sc_btrec                ; control (SPEC.md 20.5.1.3), staged N=1:
+    mov word [bx+OS88UI_BT_RECTS], sc_abok
+    mov word [bx+OS88UI_BT_LABELS], sc_btlbl
+    mov word [bx+OS88UI_BT_FLAGS], sc_btflg
+    mov word [bx+OS88UI_BT_N], 1    ; Scribe's buttons are entries in its OWN
+    mov word [bx+OS88UI_BT_DOWN], 0 ; control list rather than a contiguous
+    mov al, 1                       ; group, so the LIST stays the single
+    call os88ui_btn                 ; description and this is the vehicle
     pop si
     mov byte [sc_about], 1
     jmp short .out
@@ -18141,8 +18200,22 @@ sc_dgctl:
     jz .nbdis                       ; os88ui's own flag (SPEC.md 47)
     or ax, OS88UI_DIS
 .nbdis:
-    mov di, ax
-    mov bx, sc_dgr
+    mov [sc_btflg], ax
+    mov [sc_btlbl], si
+    mov bx, sc_btrec
+    mov word [bx+OS88UI_BT_RECTS], sc_dgr
+    mov word [bx+OS88UI_BT_LABELS], sc_btlbl
+    mov word [bx+OS88UI_BT_FLAGS], sc_btflg
+    mov word [bx+OS88UI_BT_N], 1
+    xor ax, ax                      ; ...and the PRESSED look, from Scribe's
+    pop di                          ; own "which control is down": the
+    push di                         ; identity is the caller's (SPEC.md 13.7)
+    cmp di, [sc_dgdown]
+    jne .nbdn
+    inc ax
+.nbdn:
+    mov [bx+OS88UI_BT_DOWN], ax
+    mov al, 1
     call os88ui_btn
     pop di
 .done:
@@ -18270,21 +18343,57 @@ sc_dgclick:
 .edit:
     call sc_dgfocus
     jmp short .out
-.btn:
+.btn:                               ; **IT ONLY ARMS** (SPEC.md 13.6): OK,
+    mov [sc_dgdown], di             ; Cancel and No all decide the document's
+    call sc_dgpaint                 ; fate, so a mis-aimed press must be
+.out:                               ; cancellable; sc_dgfire has the action
+    pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sc_dgfire - the armed dialog button, released (SPEC.md 13.7)
+; out: CF = 1 this release was the dialog's and is spent
+; -----------------------------------------------------------------------------
+sc_dgfire:
+    push ax
+    push bx
+    push di
+    mov bx, [sc_dgdown]             ; BX banks it across the clear below
+    or bx, bx
+    jz .none
+    mov word [sc_dgdown], 0
+    call sc_dgpaint                 ; upright FIRST, and by redrawing (13.8)
+    cmp word [sc_dlg], 0
+    je .spent
+    call sc_dghit
+    jc .spent
+    cmp al, SCD_BTN
+    jne .spent
+    cmp di, bx                      ; pressed and released on the SAME one
+    jne .spent
     cmp word [di+10], 1
     je .ok
     cmp word [di+10], 3             ; the prompt's third verb (SPEC.md 68.4)
     je .no
     call sc_dgcancel                ; Cancel: discard
-    jmp short .out
+    jmp short .spent
 .no:
     call sc_dgno
-    jmp short .out
+    jmp short .spent
 .ok:
     call sc_dgok
-.out:
+.spent:
     pop di
+    pop bx
     pop ax
+    stc
+    ret
+.none:
+    pop di
+    pop bx
+    pop ax
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -19903,10 +20012,12 @@ sc_s_ovr:   db 'OVR', 0
 sc_s_sp4:   db '    ', 0
 sc_s_sp3:   db '   ', 0
 sc_s_about: db 'Scribe', 0
-sc_s_abou2: db 'A word processor for os8088', 0
+sc_s_abou2: db 'os8088 word processor', 0
 sc_s_abou3: db 'Forked from WORD (SPEC.md 86)', 0
+sc_s_abou4: db 'Ported by Jorge Gonzalez', 0
+sc_s_abou5: db 'Updated by Koriban', 0
 sc_s_ok:    db 'OK', 0
-sc_m_noclose: db 'Close refused - try again', 0
+sc_m_noclose: db 'Close refused, try again', 0
 
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
 ; A word processor's frame, not a note pad's: 600x440 at the 640x480
@@ -20043,8 +20154,8 @@ sc_m_nopat:   db 'No search text', 0
 sc_m_repld:   db ' changes', 0       ; sc_saycnt's suffix: 'n changes' is the
                                      ; sweep's answer (SPEC.md 68.7)
 sc_m_noundo:  db 'Nothing to undo', 0
-sc_m_papfull: db 'Too many paragraph formats', 0
-sc_m_toobig:  db 'Document too complex to save', 0
+sc_m_papfull: db 'Too many formats', 0
+sc_m_toobig:  db 'Too complex to save', 0
 sc_m_noclip:  db 'The clipboard is empty', 0        ; ^c with nothing in it
 sc_m_replong: db 'Replacement too long', 0          ; ...and ^m/^c past
                                      ; SC_FRXMAX (SPEC.md 68.7)
@@ -20506,6 +20617,13 @@ section .text
 ; which is exactly what every line of code referencing these fields already
 ; relies on.
 %assign SCB 508 + SC_MAXROWS*2      ; where the original block ends
+; The button record's size, a MIRROR of os88ui.inc's OS88UI_BT_SIZE
+; because this bss chain is laid out ABOVE that include and the symbol
+; is not defined yet. DOS_BTREC_SZ in apps/dos/dos.asm is the same
+; mirror for the same reason; the %if below the include is what stops
+; either copy drifting.
+SC_BTREC_SZ equ 16
+
 %macro SCVAR 2                      ; name, size in bytes
     %1 equ os88_image_end + SCB
     %assign SCB SCB + %2
@@ -20943,6 +21061,27 @@ section .text
     SCVAR sc_dck,   1       ; byte: the attr byte the check boxes are editing
     SCVAR sc_dpad,  1       ; byte: keeps the words below even
     SCVAR sc_dgr,   8       ; 4 words: a button rect being drawn/hit
+    SCVAR sc_btlbl, 2       ; the one control's staging (SPEC.md 20.5.1.3)
+    SCVAR sc_btflg, 2
+    SCVAR sc_btrec, SC_BTREC_SZ      ; the record itself - SC_BTREC_SZ and
+                            ; NOT 12, which is what it said and is
+                            ; FOUR SHORT of OS88UI_BT_SIZE: the
+                            ; record's OS88UI_BT_ONCLK (+12) and
+                            ; OS88UI_BT_NEXT (+14) landed on
+                            ; `sc_dgdown` just below and on the
+                            ; first word of `sc_dgrp`. Nothing
+                            ; writes those two offsets TODAY -
+                            ; this package drives the gesture off
+                            ; its own WDD list, not through
+                            ; os88ui_btninit - but btninit is
+                            ; exactly what a conversion adds, and
+                            ; what it would overwrite is this
+                            ; package's own "which control is a
+                            ; press live on". SHEET had the same
+                            ; shortfall and DOES call btninit, so
+                            ; there it was live: five records, four
+                            ; bytes each, every dialog open
+    SCVAR sc_dgdown, 2      ; WHICH control a press is live on, 0 for none
 
 ; --- the real .DOC format (scdoc.inc, SPEC.md 68.4) --------------------------
     SCVAR sc_dgrp,  24      ; a grpprl under construction. Six paragraph
@@ -21151,6 +21290,10 @@ section .text
                                 ; app had the SEVENTH private implementation
                                 ; of it (13.10.6), and its own header said so
 %include "os88ui.inc"
+%if SC_BTREC_SZ != OS88UI_BT_SIZE
+ %error "SC_BTREC_SZ mirrors OS88UI_BT_SIZE and they have drifted - the bss chain is laid out before this include, so the size must be written twice; fix the literal"
+%endif
+
 %include "os88type.inc"         ; SPEC.md 6.5: proportional type, and the band
                                 ; it is composed into. AFTER os88ui.inc for no
                                 ; reason but tidiness - it depends on nothing

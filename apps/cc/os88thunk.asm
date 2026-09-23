@@ -1489,6 +1489,46 @@ _os88_file_rename:
     pop bp
     ret
 
+; int os88_file_copy(const char *name, const struct os88_place *from,
+;                    const struct os88_place *to)
+; int os88_file_move(const char *name, const struct os88_place *from,
+;                    const struct os88_place *to)
+; ONE thunk over one cell (SPEC.md 22.24): the two C names differ in the verb
+; byte and nothing else. The file manager's own engine, which is why this is
+; a thunk and not a loop: it streams through a buffer it claims, it DELETES A
+; PARTIAL DESTINATION if anything fails - the half a hand-rolled copy in C
+; gets wrong - and a move on one volume rewrites the directory entry and
+; reads no data. A struct os88_place is exactly what os88_file_here() fills.
+; Two answers, like every other file call: 0, or -1 with os88_ferr() set. The
+; kernel's success answer is AX = 0 with CF clear, so one store serves both.
+_os88_file_move:
+    mov ah, OSAPI_FCP_MOVE          ; the verb, parked in AH until AL is free
+    jmp short _os88_fcp
+_os88_file_copy:
+    mov ah, OSAPI_FCP_COPY
+_os88_fcp:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov si, [bp+6]                  ; the source place...
+    mov dx, [si]                    ; ...its folder's first cluster...
+    mov bl, [si+2]                  ; ...and its drive
+    mov si, [bp+8]                  ; the destination's
+    mov cx, [si]
+    mov bh, [si+2]
+    mov si, [bp+4]                  ; the name LAST: SI carried the places
+    mov al, ah
+    call OSAPI_FILE_COPY
+    mov [cc_ferr], ax               ; 0 on success, the FERR_* otherwise - and
+    jnc .out                        ; `mov` leaves CF alone
+    mov ax, -1
+.out:
+    pop di
+    pop si
+    pop bp
+    ret
+
 ; int os88_file_find(int ordinal, struct os88_find *f) - SPEC.md 19.7.1.
 ; CX = the ordinal, ES:DI = an OSAPI_FIND_SZ buffer of ours. Returns the NEXT
 ; ordinal, or -1 at the end. By ordinal and not by cursor on purpose: every

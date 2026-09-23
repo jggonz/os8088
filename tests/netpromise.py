@@ -258,8 +258,8 @@ def owe_telnet(m, seg):
 
     The dirty RANGE became a 25-bit BITMAP with SPEC.md 70.8.1 - cursor
     addressing is exactly what a contiguous range cannot describe - so row 0
-    is bit 0 of the first of te_drb's four bytes."""
-    m.write(bss(m, seg, "telnet", "te_drb"), b"\x01\x00\x00\x00")
+    is bit 0 of the first of con_drb's four bytes."""
+    m.write(bss(m, seg, "telnet", "con_drb"), b"\x01\x00\x00\x00")
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",

@@ -65,6 +65,18 @@ LD_DE_SIZE  equ 20              ; the LOW word of a DWORD size (SPEC.md 19.1
 LD_H_MAGIC  equ 0               ; word: 0x384F ('O','8')
 LD_H_VER    equ 2               ; byte: format version = 3
 LD_H_FLAGS  equ 3               ; byte: bit 0 = embedded 16x16 icon
+LD_HF_GLYPH equ 0x20            ; ...its bit 5: a 16-byte DOCUMENT-GLYPH block
+                                ; follows the association block (SPEC.md
+                                ; 54.3.2). Read by assoc.inc and by the two
+                                ; clear-prefix ladders, and by nothing else
+LD_H_GLYPH  equ 112             ; ...and where it sits: header 32 + icon 64 +
+                                ; association block 16 (the tool requires all
+                                ; three in front of it)
+%if DSK_PEEK < LD_H_GLYPH + 16  ; ...AND THE HEADER PEEK HAS TO REACH IT
+  %error "DSK_PEEK no longer covers LD_H_GLYPH: a redirected volume's harvest would compose a glyph out of the last entry's bytes"
+%endif                          ; (SPEC.md 62.9.2.2). disk.inc is included
+                                ; FIRST, so it cannot derive DSK_PEEK from
+                                ; this - the two are kept in step here instead
 LD_H_LINK   equ 4               ; word: link base, must be 0 (org 0 - a v3
                                 ; package is position-independent because it
                                 ; owns its segment, SPEC.md 20.1)
@@ -124,6 +136,55 @@ ld_slot:
                                 ; AX being untouched as well, so this is NOT
                                 ; loader-private and must not be deleted with
                                 ; the loader.
+
+; -----------------------------------------------------------------------------
+; ld_lname_cp - bank THE LAUNCHING FILE'S NAME (SPEC.md 21 step 1b)
+; in:  SI -> the name in the kernel's own DS, NUL-terminated or NUL-padded
+; out: [ld_lname] = at most LD_NAMELEN of it and then a NUL; ES = DS
+; clobbers: ES (an output) and the flags - AX, CX, SI and DI are banked
+;
+; THE SAME THIRTEEN BYTES, WRITTEN THREE TIMES. Step 1b had it out of a staged
+; directory entry, ld_run_name_x out of the caller's 8.3 name and
+; ld_pkg_start_x out of the N stub's staged copy - three copies of one loop,
+; and they had already drifted to three different terminator spellings
+; (`mov byte [di], 0`, the same with an ES override, and a `rep movsb` that
+; wrote all twelve and terminated at +12).
+;
+; SI IS BANKED, and that is what let step 1b join: it used to lean on
+; `rep movsb` leaving SI advanced by exactly LD_NAMELEN, so its three reads of
+; the entry were written as `- LD_NAMELEN` subtractions. With SI put back they
+; are the fields' own offsets, which assemble to the same disp8 - so the one
+; site that was not a character loop pays nothing to become one.
+;
+; The NUL is the whole difference from a fixed-length copy and it is not one:
+; SPEC.md 19.1's display name is a NUL-PADDED field of at most twelve
+; characters, [ld_lname] is thirteen bytes, and its one reader (step 8's
+; `mov si, ld_lname`) is the entry contract's NUL-terminated pointer - so what
+; lay past the terminator was never read on any of the three paths.
+; -----------------------------------------------------------------------------
+ld_lname_cp:
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    pop es                      ; ES = KERNEL for the destination
+    mov di, ld_lname
+    mov cx, LD_NAMELEN
+    cld
+.cp:
+    lodsb
+    stosb
+    or al, al
+    jz .done
+    loop .cp
+    mov byte [di], 0            ; twelve characters and no terminator: end it.
+.done:                          ; ES == DS, so no override is needed
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ld_unreserve - give back a region, and anything the entry proc claimed
@@ -237,12 +298,16 @@ ld_expand:
     mov bx, LD_HDR_SIZE         ; carries at R: what the mount reads out of
     test al, 1                  ; the first sector and must never have to
     jz .noico                   ; decompress to get (SPEC.md 20.13.1) - the
-    add bx, 64                  ; header, the icon, the association block.
-.noico:                         ; At most 112, and ALWAYS a multiple of 16,
-    test al, 2                  ; which is what lets the body's destination
-    jz .noasc                   ; be a SEGMENT below
+    add bx, 64                  ; header, the icon, the association block,
+.noico:                         ; the document glyph. At most 128, and ALWAYS
+    test al, 2                  ; a multiple of 16, which is what lets the
+    jz .noasc                   ; body's destination be a SEGMENT below
     add bx, 16
 .noasc:
+    test al, LD_HF_GLYPH        ; ...and the document glyph (SPEC.md 54.3.2),
+    jz .nogly                   ; sixteen bytes for eight of glyph for the
+    add bx, 16                  ; multiple-of-16 reason above
+.nogly:
     test al, 0x10               ; bit 4 says which format (SPEC.md 20.13): the
     mov al, LZ_LZ4              ; decoder wants 0 or 1, and CX - the file's
     jz .fmt                     ; length - is not a register to shift by
@@ -282,6 +347,60 @@ ld_expand:
     ret
 
 ; -----------------------------------------------------------------------------
+; ld_hdr_size - the IMAGE, BSS and ENTRY a .o88 header declares, bounded
+;               (module-internal; SPEC.md 20.2, 20.12.10.4)
+; in:  ES:SI -> the header
+; out: CF = 0 with [ld_img], [ld_bss] and [ld_ent] filled and DX = image + bss;
+;      CF = 1 with AL = LD_EBAD / LD_EBIG
+; clobbers: AX, DX, flags
+;
+; TWO PATHS VALIDATE A HEADER and this is everything they agree about.
+; ld_check_hdr is about the FILE - the 32-bit size ladder and the flags-bit
+; arithmetic above belong to the container and a PART has no file to be
+; compared against (SPEC.md 20.12.10.4) - but the three fields, and every
+; bound on them, are the same question in both places. They were written out
+; twice, and the second copy had already lost the entry test.
+;
+; THE CARRY IS THE WHOLE FENCE on `image + bss`: each operand is separately a
+; 16-bit header field and the sum is 17 bits, so `img = 0xF000, bss = 0x1001`
+; wraps to 1, sizes a ONE KILOBYTE claim at step 4 and reads 61,440 bytes into
+; it at step 6 - 60,416 of them through whatever mem_claim_hi placed under it,
+; top-down, which is a resident package's CODE. Every byte off a disk is
+; hostile (SPEC.md 19) and os88pkg.py is not a gate on a foreign .O88. The
+; bss-alone test that used to sit beside it is implied: image >= LD_HDR_SIZE,
+; so bss < APP_MAX_SIZE follows.
+;
+; [ld_bss] is stored BEFORE the fence and that is free: both of its readers
+; (step 4's `add ax` and step 7's `mov cx`) sit downstream of a `jc` on this,
+; so a refused value is never read.
+; -----------------------------------------------------------------------------
+ld_hdr_size:
+    mov ax, [es:si+LD_H_IMG]
+    mov [ld_img], ax
+    mov dx, [es:si+LD_H_BSS]
+    mov [ld_bss], dx
+    add dx, ax
+    jc .toobig
+    cmp dx, APP_MAX_SIZE
+    ja .toobig
+    mov ax, [es:si+LD_H_ENTRY]  ; ...and the entry is INSIDE the image, which
+    cmp ax, LD_HDR_SIZE         ; the re-home arm did not ask before this body
+    jb .bad                     ; was shared and now does
+    cmp ax, [ld_img]
+    jae .bad
+    mov [ld_ent], ax
+    clc
+    ret
+.bad:                           ; ...and BOTH REFUSALS ARE ld_check_hdr's TOO:
+    mov al, LD_EBAD             ; its own ladder above jumps here rather than
+    stc                         ; carrying a second pair four bytes long
+    ret
+.toobig:
+    mov al, LD_EBIG
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; ld_check_hdr - validate a .o88 v3 header (module-internal)
 ; in:  ES:SI -> 32 readable header bytes; [ld_fsz] = the file's byte count
 ; out: CF = 0 and [ld_img]/[ld_bss]/[ld_ent] filled, or CF = 1 and
@@ -307,12 +426,12 @@ ld_expand:
 ld_check_hdr:
     mov al, 3                   ; magic, version, link and the dispatcher, in
     call ld_hdr_ok              ; the body the driver loader shares. v1/v2
-    jc .bad                     ; files fail on the version: "Bad package"
+    jc ld_hdr_size.bad                     ; files fail on the version: "Bad package"
     mov ax, [es:si+LD_H_IMG]
     cmp ax, LD_HDR_SIZE
-    jb .bad                                 ; image smaller than the header
+    jb ld_hdr_size.bad                                 ; image smaller than the header
     cmp ax, APP_MAX_SIZE
-    ja .toobig
+    ja ld_hdr_size.toobig
     ; THE SIZE IS 32 BITS (SPEC.md 19.1) and which test bounds it is the
     ; flags byte's to say. Decided on the HIGH WORD first - "is this file
     ; bigger than a segment?" - and only then on the comparison:
@@ -334,17 +453,17 @@ ld_check_hdr:
     or dx, dx
     jz .lowword                             ; under 64KB: compare exactly
     test byte [es:si+LD_H_FLAGS], 4
-    jz .toobig
+    jz ld_hdr_size.toobig
     jmp short .notover
 .lowword:
     cmp ax, [ld_fsz]
     je .notover                             ; exact
     ja .over                                ; the image runs PAST the file
     test byte [es:si+LD_H_FLAGS], 4         ; short of it: parts, or truncated
-    jz .bad
+    jz ld_hdr_size.bad
 .notover:                                   ; ...AND THE COMPRESSION BITS ARE
     test byte [es:si+LD_H_FLAGS], 0x18      ; A LIE ON EVERY ARM BUT .over
-    jnz .bad                                ; (SPEC.md 20.13.2). Step 6 reads a
+    jnz ld_hdr_size.bad                                ; (SPEC.md 20.13.2). Step 6 reads a
     jmp short .imgok                        ; compressed file at R =
                                             ; roundup512(image - file), a plain
                                             ; 16-bit subtract: with the file at
@@ -359,52 +478,15 @@ ld_check_hdr:
                                             ; takes that same path
 .over:                                      ; ...which is COMPRESSION (SPEC.md
     test byte [es:si+LD_H_FLAGS], 8         ; 20.13.2): `image` keeps meaning
-    jz .bad                                 ; the UNPACKED bytes, so the file
+    jz ld_hdr_size.bad                                 ; the UNPACKED bytes, so the file
                                             ; is legitimately shorter. Without
                                             ; the bit it is a truncated file
                                             ; and the guard is unchanged
 .imgok:
-    mov [ld_img], ax
-    mov dx, [es:si+LD_H_BSS]
-    mov [ld_bss], dx                        ; stored BEFORE the fence, which is
-                                            ; free: both readers of [ld_bss]
-                                            ; (step 4's `add ax` and step 7's
-                                            ; `mov cx`) sit downstream of a
-                                            ; `jc` on this routine, so a
-                                            ; refused value is never read
-    add dx, ax                              ; THE CARRY IS THE WHOLE FENCE.
-    jc .toobig                              ; Each operand is separately <=
-                                            ; APP_MAX_SIZE = 0xF000, so the sum
-                                            ; reaches 0x1E000 and that is 17
-                                            ; BITS: this line used to read
-                                            ; `img+bss <= 0x1E000: no wrap`,
-                                            ; which is the bug written down as
-                                            ; its own proof. img = 0xF000 with
-                                            ; bss = 0x1001 wraps to 1, passes
-                                            ; the compare below, sizes a ONE
-                                            ; KILOBYTE claim at step 4 and then
-                                            ; reads 61,440 bytes into it at
-                                            ; step 6 - 60,416 bytes through
-                                            ; whatever mem_claim_hi placed
-                                            ; under it, which is a resident
-                                            ; package's CODE, top-down. Every
-                                            ; byte off a disk is hostile
-                                            ; (SPEC.md 19) and os88pkg.py is
-                                            ; not a gate on a foreign .O88.
-                                            ; SPEC.md 21 states this bound as
-                                            ; an invariant twice ("never a
-                                            ; neighbour's region") and the
-                                            ; carry is what makes it true.
-    cmp dx, APP_MAX_SIZE                    ; ...and the bss-alone test that
-    ja .toobig                              ; used to sit above is implied by
-                                            ; this one: image >= LD_HDR_SIZE,
-                                            ; so bss < APP_MAX_SIZE follows
-    mov ax, [es:si+LD_H_ENTRY]
-    cmp ax, LD_HDR_SIZE
-    jb .bad
-    cmp ax, [ld_img]
-    jae .bad
-    mov [ld_ent], ax
+    call ld_hdr_size            ; ...and the three fields every .o88 header
+    jc .out                     ; carries, bounded - the body the RE-HOME arm
+                                ; shares (see it above). AL is already
+                                ; LD_EBAD / LD_EBIG on the refusal
 
     ; ...and SPEC.md 20.13's two facts about compression, captured here because
     ; this is where the flags byte is already in hand and both callers of this
@@ -421,14 +503,7 @@ ld_check_hdr:
                                             ; which is a refusal by the right
                                             ; route
     clc
-    ret
-.bad:
-    mov al, LD_EBAD
-    stc
-    ret
-.toobig:
-    mov al, LD_EBIG
-    stc
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -464,6 +539,35 @@ ld_say_status:
     ret
 
 ; -----------------------------------------------------------------------------
+; ld_owed - WHAT DOES THE SCREEN STILL OWE THIS LOAD? (SPEC.md 22.17)
+; in:  AL = the LD_* status the pipeline answered with
+; out: nothing (AX and every other register preserved)
+;
+; The two far entries below - loader_run_x's and ldf_ld_pkg_start's - asked the
+; same two questions in the same order and called the same routine on the same
+; answer, and the second copy had grown its own `push ax` / `pop ax` around
+; files_refresh_x where the first leant on its own eight-deep prologue. One
+; body, banking AX itself, so neither caller has to.
+;
+; The success path drew the new window ITSELF (SPEC.md 11.90), so [ld_painted]
+; being set means nothing is owed; and a FAILED load drew nothing and the
+; poster's window never said a word about it (22.17). The ONE exception is a
+; package the loader REFUSED after running its entry proc, which may have put
+; pixels anywhere before it said no - and that is a whole-screen repaint,
+; because there is no telling where.
+; -----------------------------------------------------------------------------
+ld_owed:
+    cmp byte [ld_painted], 0
+    jne .no
+    cmp al, LD_EABORT
+    jne .no
+    push ax
+    call files_refresh_x
+    pop ax
+.no:
+    ret
+
+; -----------------------------------------------------------------------------
 ; loader_run - load, relocate and launch the package at a directory index
 ; in:  AX = directory index (0-based), into the listing of the file-manager
 ;      window named by [ld_pwin] (SPEC.md 22.1) - which may not be the one
@@ -471,12 +575,13 @@ ld_say_status:
 ; out: nothing (all registers preserved); result in [ld_status]; on success
 ;      a new package instance is live in the instance table (SPEC.md 29)
 ;
-; The sync comes first and the index is banked across it, in that order and
+; The stage comes first and the index is banked across it, in that order and
 ; for a hard reason: disk_mount deliberately zeroes [ld_pending] (SPEC.md
-; 18.3), so anything that reads the pending word AFTER a sync reads zero. The
+; 18.3), so anything that reads the pending word AFTER one reads zero. The
 ; index arrives here in AX, already consumed by ui.inc, which is what makes
-; the order safe - and [ld_pwin] is read before the sync too, so this stays
-; true if the drain ever changes.
+; the order safe - and [ld_pwin] is read first too, so this stays true if the
+; drain ever changes. It now binds the QUIET arm as well: a quiet chdir also
+; goes through disk_mount.
 ; -----------------------------------------------------------------------------
 loader_run_x:
     push ax
@@ -488,10 +593,69 @@ loader_run_x:
     push bp
     push es
 
+    mov byte [ld_painted], 0    ; HOISTED above the arms: the refusal below
+                                ; reaches ld_owed too, and it owes the same
+                                ; answer about whether anything was drawn
+
+    ; --- STAGE THE ENTRY, and prefer the POSTER'S OWN CACHE ------------------
+    ; The index means a row in the listing the window that posted it is
+    ; SHOWING, and that window keeps a byte-for-byte copy of it (SPEC.md
+    ; 22.6.1). Reading it there is what this arm is: a QUIET chdir to stand
+    ; where the poster stands - which the sector reads below need and the
+    ; listing is not - and then one 24-byte copy out of its claim.
+    ;
+    ; What it replaces is `fmv_sync_x`, a LOUD mount: the directory scan, the
+    ; sort and ONE int 13h per type-1 file for the icon harvest, on every
+    ; double-click, to rebuild a snapshot that the poster already holds. It
+    ; is the last consumer in the launch path that wanted the global to BE a
+    ; particular window's directory, and both of its neighbours have already
+    ; stopped - ui.inc's Task Manager route goes by name (SPEC.md 21.4) and
+    ; assoc_run_x reads FS_DRV/FS_CWD off the poster's own block (54.9.1).
+    ; docs/plans/LISTING-HOME-PLAN.md wave 1.
     mov di, [ld_pwin]           ; the window whose listing this index means
     or di, di
-    jz .body                    ; no poster (a package's own request): the
+    jz .glob                    ; no poster (a package's own request): the
                                 ; globals are the only listing there is
+    cmp word [di+FS_VSEG], 0    ; ...and so they are for a window whose cache
+    je .loud                    ; was refused or PURGED - that claim is
+                                ; purgeable, so this arm is not exotic
+    ; --- ALREADY STANDING THERE? then there is nothing to mount at all ---
+    ; **AND THIS TEST IS LOAD-BEARING, MEASURED.** fmv_sync_x's own free path
+    ; is these two compares, and on the common case - you act in the window
+    ; you last moved - it takes them and returns having done NO I/O. A quiet
+    ; chdir is not free in its place: dsk_here_ok asks whether the media
+    ; CANNOT have changed, which a floppy's can, so it mounts. Without this
+    ; the launch measured 3 reads / 531 ms against the loud sync's 2 / 306 -
+    ; a change that removes a mount and adds a bigger one.
+    ;
+    ; What is NOT compared is [dsk_lstale], which fmv_sync_x has to test and
+    ; this does not: its free path leaves the caller resolving an INDEX
+    ; against the global snapshot, so an empty one is fatal there (SPEC.md
+    ; 18.9, docs/FIELD-NOTES.md 4). Here the entry comes out of the window's
+    ; own cache, and a quiet mount does not touch that.
+    mov dl, [di+FS_DRV]
+    cmp dl, [disk_drive]
+    jne .move
+    mov dx, [di+FS_CWD]
+    cmp dx, [dsk_cwd]
+    je .stage
+.move:
+    push ax                     ; the index: dsk_chdir_q_x wants AX
+    mov ax, [di+FS_CWD]         ; stand where the poster stands, QUIETLY
+    mov dl, [di+FS_DRV]         ; (assoc_back's shape, SPEC.md 18.9/54.9)
+    call dsk_chdir_q_x
+    pop ax
+    jc .loud                    ; the folder is gone or the disk changed:
+                                ; fmv_sync carries the recovery for that -
+                                ; it re-lists, falls back to the root and
+                                ; retitles (SPEC.md 19.2) - so this arm
+                                ; hands the case to it rather than growing a
+                                ; second copy of it
+.stage:
+    call fmv_ld_ent             ; SI -> the entry, out of the POSTER's claim
+    jnc .body
+    jmp short .badix            ; past FS_N: step 1's own refusal, unchanged
+.loud:
     call fmv_sync_x             ; ...make the globals BE that listing. NO ax
                                 ; bank: files.inc's own banner is "out:
                                 ; nothing (all registers preserved)" and the
@@ -499,29 +663,23 @@ loader_run_x:
                                 ; pop dx/bx/ax on EVERY exit, so the bank is
                                 ; dead by construction and not only by
                                 ; contract
+.glob:
+    cmp ax, [disk_nfiles]       ; step 1's bound, which moved up here with the
+    jae .badix                  ; stage it belongs to
+    call dsk_get_dir_x          ; SI -> the entry, staged out of LOW_SEG into
+                                ; the kernel segment (SPEC.md 2.1)
 .body:
-    mov byte [ld_painted], 0
-    call ld_run_body_x          ; out: AL = LD_* status
+    call ld_run_body_x          ; in: SI -> the staged entry; out: AL = LD_*
+.said:
     call ld_say_status          ; record the verdict and SAY it (SPEC.md 59)
-    cmp byte [ld_painted], 0
-    jne .done                   ; the success path drew the new window itself
-                                ; (SPEC.md 11.90), so nothing is owed here
-    cmp al, LD_EABORT           ; ...and a FAILED load owes nothing either: it
-    jne .done                   ; drew nothing, and the poster's window never
-                                ; said a word about this load in the first
-                                ; place (SPEC.md 22.17 - it used to hold
-                                ; 'Loading...', and this path existed to take
-                                ; that back). The verdict went out as a toast
-                                ; above, which belongs to no window at all.
-                                ; The ONE exception is a package the loader
-                                ; REFUSED after running its entry proc, which
-                                ; may have put pixels anywhere before it said
-                                ; no - and that is a whole-screen repaint,
-                                ; because there is no telling where
-    call files_refresh_x
-.done:
+    call ld_owed                ; ...and the repaint, if this load left one
+                                ; owed - the body both far entries share, and
+                                ; its banner is where the reasoning lives
 
     jmp kretfc_es
+.badix:
+    mov al, LD_EBAD             ; ld_take.bad's verdict, reached without it:
+    jmp short .said             ; an index past the end is not a file
 
 ; -----------------------------------------------------------------------------
 ; ld_run_body - the load pipeline (module-internal; loader_run saves regs)
@@ -578,21 +736,8 @@ ld_run_name_x:
     ; (SPEC.md 21 step 1b). SI is the caller's NUL-terminated 8.3 name and
     ; dskw_stat_x/ld_take left it alone. At most LD_NAMELEN characters, then
     ; the terminator: the same shape 1b writes.
-    push ax                     ; the cluster .peek takes from AX
-    push ds
-    pop es
-    mov di, ld_lname
-    mov cx, LD_NAMELEN
-    cld
-.cp:
-    lodsb
-    stosb
-    or al, al
-    jz .named
-    loop .cp
-    mov byte [di], 0            ; ES == DS: no override needed
-.named:
-    pop ax
+    call ld_lname_cp            ; ...and AX - the cluster `.peek` takes from
+                                ; the register - is one of the four it banks
     jmp ld_run_body_x.peek      ; joins the pipeline exactly where the index
 .fail:                          ; resolver leaves it - [ld_fsz] and [ld_clus]
     ret                         ; are the rest of what step 1 produces
@@ -680,19 +825,13 @@ ld_take:
 
 ld_run_body_x:
     ; --- 1. validate the directory entry --------------------------------------
-    cmp ax, [disk_nfiles]
-    jae ld_take.bad             ; index out of range - and ld_take's own
-                                ; refusal, which is the same AL = LD_EBAD.
-                                ; The only difference is that CF comes out
-                                ; SET, and CF=1 on the way out is already
-                                ; this routine's normal failure: every caller
-                                ; reads AL alone (loader_run_x and assoc_run_x
-                                ; both `call ld_say_status`, ui.inc does
-                                ; `or al, al`), which is why step 1 can now
-                                ; fall straight into .peek instead of jumping
-                                ; over a three-byte stub
-    call dsk_get_dir_x ; SI -> the entry, staged out of LOW_SEG into
-                                ; the kernel segment (SPEC.md 2.1)
+    ; **THE ENTRY IS STAGED BY THE CALLER**, and so is the bound it was
+    ; resolved against. An index is an index into the listing ONE window is
+    ; showing (SPEC.md 22.1), and loader_run_x is where that window is known -
+    ; so `cmp ax, [disk_nfiles]` + dsk_get_dir_x moved up there, where it can
+    ; read the poster's own cache instead of making the global snapshot be
+    ; that folder. What is left of step 1 is the question that is about the
+    ; ENTRY rather than about which listing it came out of.
     cmp word [si+LD_DE_TYPE], 1
     jne ld_take.bad             ; not an application package
 
@@ -703,24 +842,18 @@ ld_run_body_x:
     ; remember where an instance came from - it says so once, at the only
     ; moment a package needs telling, and the package copies it (SPEC.md
     ; 20.2, 20.12.1). That is the whole of the third fact this design adds.
-    push ds                     ; ...and NOT DI, CX or ES. DI's next write is
-    pop es                      ; step 5's cw_inst_alloc, CX's is the
-    mov di, ld_lname            ; `mov cx, [si+...]` three instructions down,
-    mov cx, LD_NAMELEN          ; and ES is set by .peek before its next
-    cld                         ; reader - so all three are provably dead
-    rep movsb                   ; between here and there, and loader_run_x
-    mov byte [di], 0            ; banks all eight anyway. ES == DS two lines
-                                ; up, so the terminator needs no override
-                                ; either. SI IS NOT BANKED: rep movsb with
-                                ; CX = LD_NAMELEN and DF = 0 advances it by
-                                ; exactly that, so the three reads below name
-                                ; the same three fields with the copy's own
-                                ; length subtracted - which is why it is a
-                                ; NAMED constant and written as a subtraction
-    mov dx, [si+LD_DE_SIZE+2-LD_NAMELEN]  ; the size and the cluster, in
-    mov cx, [si+LD_DE_SIZE-LD_NAMELEN]    ; dskw_stat_x's own registers,
-    mov bx, [si+LD_DE_CLUS-LD_NAMELEN]    ; because ld_take answers for both
-                                ; entries and that is its input shape.
+    call ld_lname_cp            ; SI -> the 16-byte NUL-padded display name.
+                                ; **SI COMES BACK**, which is what lets the
+                                ; three reads below name their own offsets: the
+                                ; copy used to be an inline `rep movsb` leaning
+                                ; on SI being advanced by exactly LD_NAMELEN,
+                                ; so they were written as subtractions from it.
+                                ; Both spellings assemble to the same disp8 and
+                                ; the shared body is one loop instead of three
+                                ; (see it above)
+    mov dx, [si+LD_DE_SIZE+2]   ; the size and the cluster, in dskw_stat_x's
+    mov cx, [si+LD_DE_SIZE]     ; own registers, because ld_take answers for
+    mov bx, [si+LD_DE_CLUS]     ; both entries and that is its input shape.
     call ld_take                ; BX, CX and DX are loader_run_x's to bank and
     jc .ret1                    ; it does. On the error arm ld_take answers
                                 ; with CF=1 as well as AL, and CF=1 on the way
@@ -735,53 +868,35 @@ ld_run_body_x:
     ; LOW_SEG, so the sector lands there and only the 32 header bytes are
     ; staged back into the kernel segment for ld_check_hdr to read.
 .peek:
-    push ss                     ; ES = LOW_SEG, ONCE for both arms and for
-    pop es                      ; step 3 below (SPEC.md 2.1). The FAT arm
-                                ; wants it for disk_read_x's ES:BX, the
-                                ; DVK_FILE arm leaves it alone (drv_fs_call:
-                                ; "DS and ES restored"), and ld_check_hdr
-                                ; reads the header where it lands rather than
-                                ; through a staged copy
-    cmp byte [dsk_vkind], DVK_FILE
-    jne .peekfat
-
-    ; --- a REDIRECTED volume: the first 512 bytes, by handle (SPEC.md 62.9) --
-    ; The FAT path below turns a cluster into an LBA and reads a SECTOR, and
-    ; there are none here - dsk_xfer refuses such a volume outright, so
-    ; without this the peek fails and every package on a redirected volume is
-    ; "Bad package". FSV_READAT at offset 0 is exactly the same 512 bytes, and
-    ; it lands in the same dsk_secbuf so step 3 below is untouched.
-    push bp
-    mov dx, ss                  ; DX:BX, not ES:BX (SPEC.md 51.8) - AX is
-    mov bx, dsk_secbuf          ; still the handle and nothing here spends it.
-                                ; SS names LOW_SEG for the life of the session
-                                ; (SPEC.md 2.1) and this site wants the value
-                                ; in a general register, so it is `mov dx, ss`
-                                ; rather than the `push ss / pop es` form
-    mov cx, 512
-    xor si, si                  ; DI:SI = offset 0: the head of the file
-    xor di, di
-    mov bp, FSV_READAT
-    call drv_fs_call
-    pop bp
-    jc .disk1                   ; a short file simply delivers less, and
-    jmp short .hdr              ; ld_check_hdr rejects what is not a package
-.peekfat:
-    call dsk_clus2lba_x  ; AX: cluster -> its first LBA; the first
-    jc ld_take.bad              ; sector of the first cluster IS the file's
-                                ; first 512 bytes, so peek semantics are
-                                ; exact (SPEC.md 21 step 2)
-    call dsk_rd1_x                ; in: AX=LBA; ES set at .peek
-    jc .disk1
+    mov cx, 512                 ; ...whichever transport (SPEC.md 20.14.6.2).
+    call dsk_peek_x             ; A redirected volume has no sectors at all -
+    jc .disk1                   ; dsk_xfer refuses one outright - so without
+                                ; the arm inside dsk_peek_x every package on
+                                ; one is "Bad package"; FSV_READAT at offset 0
+                                ; is exactly the same 512 bytes and lands in
+                                ; the same dsk_secbuf, so step 3 below is
+                                ; untouched.
+                                ;
+                                ; **AND THE COUNT IS NOT CHECKED**, which is
+                                ; this site's difference from the other two:
+                                ; build/filler.o88 is 370 bytes, so a package
+                                ; shorter than the ask is an ordinary thing
+                                ; and ld_check_hdr is what judges it. A
+                                ; cluster out of range now reads as LD_EDISK
+                                ; where it read as LD_EBAD - the honest
+                                ; verdict on a directory entry naming a
+                                ; cluster this volume has not got, and the
+                                ; only behaviour this factoring moved
 .hdr:
 
     ; --- 3. validate the peeked header -----------------------------------------
-    mov si, dsk_secbuf          ; ...WHERE IT LANDED. ES is LOW_SEG from
+    mov si, bx                  ; ...WHERE IT LANDED, which is where
+                                ; dsk_peek_x left BX. ES is LOW_SEG from
     call ld_check_hdr           ; .peek and ld_check_hdr reads through it, so
     jc .ret1                    ; there is no staged copy to make and none to
                                 ; go stale. AL = LD_EBAD / LD_EBIG on failure
 
-    call ld_alloc               ; --- 4 and 5, shared with OSAPI_PKG_RUN
+    call ld_alloc               ; --- 4 and 5, shared with OSAPI_PKG_START
     jc .ret1                    ; (SPEC.md 21.5): AL = LD_ENOMEM, and no
                                 ; region was left claimed
     jmp short .read
@@ -790,8 +905,8 @@ ld_run_body_x:
 .ret1:
     ret
 .ret2:                          ; step 6 or 6a failed with a region already
-    call ld_unreserve           ; (AL is the status): give it back, or a
-    ret                         ; failed load would hold heap for the session.
+    jmp ld_unreserve            ; (AL is the status): give it back, or a
+                                ; failed load would hold heap for the session.
                                 ; The record itself is unpublished, so it
                                 ; needs nothing - and AL is NOT banked:
                                 ; ld_unreserve preserves AX (its banner, and
@@ -855,7 +970,7 @@ ld_run_body_x:
                                 ; push ds/pop ds and a rep movsb, purely
                                 ; because ld_check_hdr read through DS
 
-    jmp ld_start                ; --- 7, 8 and 9, shared with OSAPI_PKG_RUN
+    jmp ld_start                ; --- 7, 8 and 9, shared with OSAPI_PKG_START
                                 ; (SPEC.md 21.5). A TAIL jump: ld_start
                                 ; answers in AL exactly as this routine does,
                                 ; frees the region itself when the entry proc
@@ -868,7 +983,7 @@ ld_run_body_x:
 ; out: CF = 0 with [ld_rec], [ld_base] and [ld_need] filled;
 ;      CF = 1 with AL = LD_ENOMEM - no instance record, or no region
 ;
-; SPLIT OUT FOR OSAPI_PKG_RUN (SPEC.md 21.5), which has no directory entry, no
+; SPLIT OUT FOR OSAPI_PKG_START (SPEC.md 21.5), which has no directory entry, no
 ; cluster and no disk, and needs every one of these three words before it can
 ; copy an image anywhere. Nothing about the arithmetic moved.
 ; -----------------------------------------------------------------------------
@@ -961,7 +1076,7 @@ ld_alloc:
 ; out: AL = LD_OK, or LD_EABORT with the region and everything the entry proc
 ;      claimed given back
 ;
-; The other half of the split OSAPI_PKG_RUN needed: from here down the loader
+; The other half of the split OSAPI_PKG_START needed: from here down the loader
 ; does not care whether the image arrived off a disk or out of a caller's
 ; claim, which is exactly why the slot is 100-odd bytes rather than a second
 ; pipeline.
@@ -1093,11 +1208,12 @@ ld_start:
     ; any path that does not draw (SPEC.md 20.2/25). So there is nothing here
     ; but a flag test, and no reason for it to be a routine that sets up the
     ; ES the line above already has.
-    mov word [di+I_ICON], 0
-    test byte [es:LD_H_FLAGS], 1
-    jz .noico
-    mov word [di+I_ICON], I_ICO_PKG
-.noico:
+    xor ax, ax                  ; ...decided in AX and stored ONCE: the pair of
+    test byte [es:LD_H_FLAGS], 1 ; `mov word [di+I_ICON], imm` this replaces
+    jz .noico                   ; wrote the field twice on the arm that has an
+    mov ax, I_ICO_PKG           ; icon, and AX is free here (its last reader was
+.noico:                         ; I_SIZE, four instructions up)
+    mov [di+I_ICON], ax
     pop es
     mov bp, inst_bind_win
     call KERNEL_SEG:cw_mem_disp ; DI = record, BX = window (from the entry)
@@ -1162,11 +1278,7 @@ ld_start:
     ; (SPEC.md 20.12.10.6): a package's word about its windows is never what
     ; protects a free. Here, before ld_hdr_ok, so a re-home that goes on to
     ; abort is not swept twice.
-    call KERNEL_SEG:cw_gfx_lock
-    mov ax, [ld_base]
-    mov bp, wm_destroy_seg
-    call KERNEL_SEG:cw_mem_disp
-    call KERNEL_SEG:cw_gfx_unlock
+    call .sweep
     mov es, [ld_rehome]
     xor si, si
     mov al, 3                   ; ...and it is a PACKAGE header or it is not a
@@ -1176,27 +1288,26 @@ ld_start:
                                 ; ld_check_hdr itself - that one is about the
                                 ; FILE, and a part has no file size to be
                                 ; compared against
-    mov ax, [es:si+LD_H_IMG]
-    mov [ld_img], ax
-    mov dx, [es:si+LD_H_BSS]
-    mov [ld_bss], dx
-    add ax, dx                  ; THE HEADER IS A FILE and a foreign tool may
+    call ld_hdr_size            ; THE HEADER IS A FILE and a foreign tool may
     jc .abort                   ; write any LD_H_BSS it likes (SPEC.md 51.1.2's
-                                ; own warning, one format along). The carry is
-                                ; the first half of the fence: each operand is
-                                ; a 16-bit header field and the sum is 17 bits
-    cmp ax, APP_MAX_SIZE        ; ...AND THE SAME CEILING EVERY OTHER PACKAGE
-    ja .abort                   ; HAS. ld_check_hdr applies this to a file and
-                                ; this path never goes near it, so without the
-                                ; line a re-homed program would be bounded by
-                                ; the 16-bit word below and nothing else - a
-                                ; silent divergence between two ways of
-                                ; starting the same kind of program, and the
-                                ; wrong direction to diverge in
-    cmp ax, [ld_rehsz]          ; ...and the LOADER's word for what it actually
-    ja .abort                   ; put there, which is the bound the part's own
-                                ; header cannot be trusted for
-    mov [ld_need], ax           ; **I_SIZE, AND IT IS NOT OPTIONAL.** Step 9
+                                ; own warning, one format along), so the image,
+                                ; the bss and the entry go through the bounds
+                                ; every other package's do, in the same body
+                                ; (SPEC.md 20.12.10.4). The carry on image + bss
+                                ; is the first half of the fence and
+                                ; APP_MAX_SIZE the second: ld_check_hdr applies
+                                ; that ceiling to a FILE and this path never
+                                ; goes near it, so without a shared body a
+                                ; re-homed program would be bounded by a 16-bit
+                                ; word and nothing else - a silent divergence
+                                ; between two ways of starting the same kind of
+                                ; program, and the wrong direction to diverge in
+    cmp dx, [ld_rehsz]          ; ...and the third bound, which is this arm's
+    ja .abort                   ; alone: the LOADER's word for what it actually
+                                ; put there, where the part's own header cannot
+                                ; be trusted. DX is image + bss, as ld_hdr_size
+                                ; leaves it
+    mov [ld_need], dx           ; **I_SIZE, AND IT IS NOT OPTIONAL.** Step 9
                                 ; publishes this word and ld_alloc left the
                                 ; LOADER's region size in it - so without this
                                 ; line a re-homed program's I_SIZE is ~2KB
@@ -1211,21 +1322,37 @@ ld_start:
                                 ; The value is the PROGRAM's image + bss, which
                                 ; is what the fence means by "its own", not the
                                 ; carve's extent: the carve holds the other
-                                ; parts too and they are not the region
-    mov ax, [es:si+LD_H_ENTRY]
-    mov [ld_ent], ax
+                                ; parts too and they are not the region.
+                                ; [ld_ent] is ld_hdr_size's and already stored
 
     ; --- the carve, and every other claim the loader made, RE-OWNED ---------
     ; The parts carve is claimed BY THE LOADER, whose segment is about to stop
     ; existing, and it is the block the program is now running in. Re-stamped
-    ; to the instance SLOT, which is how ld_alloc owns a region (step 5) and
-    ; is what makes it unreachable to the program: mem_find_own matches
-    ; MC_OWN == the caller's segment or MC_SEG == it, and a slot is neither -
-    ; so OSAPI_MEM_FREE and OSAPI_MEM_MOVABLE both refuse the program its own
-    ; carve, which is exactly right. IT MUST STAY PINNED: mem_rr_tab rewrites
-    ; inst_tab + I_SPTR by matching the OLD BASE, and I_SPTR is the part's
-    ; segment where the claim's base is the carve's, so a move would leave
-    ; I_SPTR naming where the program used to be (SPEC.md 66.6.1).
+    ; to the instance SLOT, which is how ld_alloc owns a region (step 5).
+    ;
+    ; **AND TRIMMED TO THE PROGRAM** (SPEC.md 20.12.10.5). op_claim reads the
+    ; run from the cluster boundary at or below it, so the program sits a HEAD
+    ; SLACK up the carve - 512 bytes on the shipped DOS.O88, up to a cluster
+    ; less 512 in general, and zero on a 512-byte-cluster volume. That slack
+    ; is alignment the read needed and nothing needs afterwards, and while it
+    ; stayed inside the claim the region's base was not the program's segment
+    ; - which is the one thing every rule in the compactor assumes. For a
+    ; cycle the region was PINNED over it, at 14KB of every DOS program on a
+    ; Sound Blaster machine (96.35.4.1); then unpinned with an offset, a second
+    ; name and a containment arm that followed the slack through four
+    ; routines (66.6.1.2, +155 bytes). mem_reown_x moves the claim's base up
+    ; to [ld_rehome] instead, and the slack is heap again: the base IS the
+    ; segment, mem_own finds the program by the ordinary claim-base test from
+    ; its entry proc onwards, and a re-homed region is a region in every sense
+    ; the compactor already had.
+    ;
+    ; What the slot fence is NOT is a fence against the program itself, and it
+    ; never was for anybody else: mem_find_own's `cmp dx, bx` arm (SPEC.md
+    ; 66.6.1) has always let a package name its own region with `mov dx, cs`
+    ; and free, regrow or unpin it, which is a package shooting itself and not
+    ; a thing the kernel undertakes to prevent. Re-homed or not, a package
+    ; sees ONE story; what stays refused is the carve's OLD base, which after
+    ; the trim names no claim at all (tests/rehome/rhprog.asm's check 4).
     mov di, [ld_rec]            ; **ld_slot READS DI**, and this is where it
                                 ; comes from. Nothing else on this path sets
                                 ; it: step 8 above loaded it for
@@ -1246,15 +1373,25 @@ ld_start:
     call ld_slot                ; BX = this record's slot
     mov dx, bx                  ; DX = the owner to write...
     mov bx, [ld_base]           ; ...and BX the one to match: the loader's
-    call mem_reown_x            ; segment, which every claim it made carries
+    mov ax, [ld_rehome]         ; segment, which every claim it made carries -
+    call mem_reown_x            ; and AX where the program RUNS, which is
+                                ; where the carve's base goes (below)
 
     ; --- and the LOADER'S OWN REGION, freed ---------------------------------
-    mov di, [ld_rec]            ; ...and again, mem_reown_x having no reason to
-    call ld_slot                ; preserve DI. Owned by the slot since step 5,
-    mov dx, [ld_base]           ; so this is one claim BY BASE and not a sweep
-    call mem_free_x             ; - the re-owned carve is on the same owner
-                                ; word now and must not go with it
-    mov ax, [ld_rehome]
+    xchg bx, dx                 ; ...AND BOTH WORDS ARE ALREADY IN HAND, the
+                                ; other way round. mem_reown_x is "all
+                                ; registers preserved", so BX is still
+                                ; [ld_base] and DX still the slot - and
+                                ; mem_free_x wants DX = the base and BX = the
+                                ; owner. Two bytes of `xchg` against the
+                                ; `mov di, [ld_rec] / call ld_slot /
+                                ; mov dx, [ld_base]` that recomputed both.
+                                ; Owned by the slot since step 5, so this is
+                                ; one claim BY BASE and not a sweep - the
+                                ; re-owned carve is on the same owner word now
+                                ; and must not go with it. AX is still
+                                ; [ld_rehome]: both calls preserve it
+    call mem_free_x
     mov word [ld_rehome], 0     ; ONCE, AND THIS IS THE INSTRUCTION THAT SAYS
                                 ; SO. The cell's own "already asked" test only
                                 ; stops a second CALL; without this the test
@@ -1279,11 +1416,7 @@ ld_start:
     ; stamped itself. BEFORE ld_unreserve, so no window outlives the region
     ; its procs live in - a survivor's repaint would far-call a freed claim.
     ; The reserved instance record was never published, so it needs nothing.
-    call KERNEL_SEG:cw_gfx_lock
-    mov ax, [ld_base]
-    mov bp, wm_destroy_seg
-    call KERNEL_SEG:cw_mem_disp
-    call KERNEL_SEG:cw_gfx_unlock
+    call .sweep
     ; ...but NOT its toast (SPEC.md 20.12.4). A refusal the entry proc SAID -
     ; os88parts.inc's four, a C package's - carries the reserved slot as its
     ; raiser, because step 8's stamp is in force for the whole of the call
@@ -1294,11 +1427,16 @@ ld_start:
     ; ld_say_status to record the verdict without saying it. A toast raised
     ; by anybody else during the launch is not ours and is overwritten as
     ; before.
-    mov ax, [ld_rec]            ; AL = the reserved slot's index - inst_idx's
-    sub ax, inst_tab            ; own arithmetic (32-byte records), inline
-    mov cl, 5                   ; because that routine is .text and this is
-    shr ax, cl                  ; .cold (SPEC.md 2.6): a shim costs 5 .text
-    cmp al, [toast_inst]
+    mov di, [ld_rec]            ; BL = the reserved slot's index. ld_slot is
+    call ld_slot                ; that arithmetic, near and `.cold` like this
+                                ; - inst_idx is the same body in `.text` and a
+                                ; shim to it would cost 5 of those; a third
+                                ; inline copy costs 3 bytes more than the call
+                                ; and drifts. BX is dead here (the entry's
+                                ; window, on a launch that is being abandoned)
+                                ; and ld_unreserve banks it anyway; AX and CX
+                                ; survive, ld_slot banking CX itself
+    cmp bl, [toast_inst]
     jne .unsaid
     cmp word [toast_on], 0      ; toast_kill's own test: on OR staged
     je .unsaid
@@ -1310,21 +1448,33 @@ ld_start:
     mov al, LD_EABORT
     ret
 
+.sweep:
+    ; Every window whose W_SEG is the region being launched, destroyed - the
+    ; five instructions .abort and .rehome share, once. A re-home that goes on
+    ; to abort runs it twice and the second pass finds nothing, which is
+    ; cheaper than the twenty bytes a second copy cost
+    call KERNEL_SEG:cw_gfx_lock
+    mov ax, [ld_base]
+    mov bp, wm_destroy_seg
+    call KERNEL_SEG:cw_mem_disp
+    call KERNEL_SEG:cw_gfx_unlock
+    ret
+
 ; -----------------------------------------------------------------------------
-; ld_pkg_run - OSAPI_PKG_RUN: run a package image that is ALREADY IN MEMORY
-;              (SPEC.md 21.5), slot KERNEL_SEG:0x0520
+; ld_pkg_start - OSAPI_PKG_START: START THE PACKAGE CALLED NAME
+;                (SPEC.md 21.5), slot KERNEL_SEG:0x0520, an N cell
 ;
-; in:  ES:SI = the image, byte for byte what the .O88 file holds, in a claim
-;              of the caller's. ANY segment: it is COPIED, never adopted, so
-;              the caller may free it the moment this returns
-;      DX:CX = its length in bytes, DX the high word
-;      DI    = a NUL-terminated 8.3 name, at most 12 characters, in the
-;              CALLING INSTANCE's own segment (inst_caller, SPEC.md 19.2.1) -
-;              what the new instance is told it was launched from, which is
-;              step 1b's [ld_lname] and the SI of the entry contract (20.2)
-; out: CF = 0, AX = 0: the instance is registered, published and its window
-;              shown, exactly as a Disk-window double-click leaves one
-;      CF = 1, AL = LD_* (SPEC.md 21.4)
+; in:  SI    = the staged 8.3 name, in the kernel's own DS, standing in the
+;              CALLING INSTANCE's folder - both of which api_n has already
+;              done (SPEC.md 20.3). It is the file to start AND what the new
+;              instance is told it was launched from, which is step 1b's
+;              [ld_lname] and the SI of the entry contract (20.2)
+;      DX:CX = the length of an image the CALLER IS HOLDING, or ZERO meaning
+;              it holds none and the file is to be read
+;      ES:DI = that image when DX:CX is non-zero, byte for byte what the .O88
+;              file holds. ANY segment: it is COPIED, never adopted, so the
+;              caller may free it the moment this returns
+; out: AL = LD_* (SPEC.md 21.4); the far entry below turns it into a carry
 ;
 ; UI TASK ONLY, GFX LOCK NOT HELD - the same context loader_run runs in, and
 ; for its reasons: step 9 takes the lock itself around wm_show, and step 8
@@ -1333,64 +1483,72 @@ ld_start:
 ; is reachable only from a window callback or an OSAPI_WM_ONWAKE handler, both
 ; of which the UI task runs with the lock released.
 ;
+; **ONE CELL, AND IT WAS BRIEFLY TWO** (SPEC.md 21.5.1). The by-name form
+; shipped beside this one as OSAPI_PKG_START at 0x05A0, which is the failure
+; SPEC.md 20.8 rule 4 names outright - a successor slot beside a permanent
+; no-consumer path. Two published cells that both mean `run a package` is a
+; question at every call site with no good answer, so 0x05A0 is withdrawn and
+; the merged contract takes this number.
+;
 ; WHAT IT IS NOT: a second loader. Every check, the region claim, the entry
 ; call and the publish are ld_check_hdr, ld_alloc and ld_start - the same
-; bodies the disk path enters. What is here is the three things a memory image
-; needs that a file does not: a length that arrives in registers rather than
-; out of a directory entry, a NAME out of the caller's segment, and a `rep
-; movsb` where step 6 has an int 13h.
+; bodies the disk path enters - and the by-name arm IS the disk path, tail
+; jumping into ld_run_name (21.4), which is what ui.inc launches the Task
+; Manager through. What is here is the two things a memory image needs that a
+; file does not: a length that arrives in registers rather than out of a
+; directory entry, and a `rep movsb` where step 6 has an int 13h.
 ;
-; A PACKAGE WITH PARTS IS REFUSED (header flags bit 2, SPEC.md 20.12): parts
-; are read by the package from its OWN FILE, and there is no file here. That
-; is LD_EBAD and it is asked BEFORE ld_check_hdr, which would allow the bit.
+; A PACKAGE WITH PARTS IS REFUSED ON THE IMAGE ARM ALONE (header flags bit 2,
+; SPEC.md 20.12): parts are read by the package from its OWN FILE, and on that
+; arm there is no file. It is LD_EBAD, asked BEFORE ld_check_hdr, which would
+; allow the bit - and the by-name arm takes parts like any double-click,
+; because there the file is exactly what was named.
 ; -----------------------------------------------------------------------------
-ld_pkg_run_x:
+ld_pkg_start_x:
+    mov ax, cx                  ; **NO IMAGE MEANS READ THE FILE** (SPEC.md
+    or ax, dx                   ; 21.5): the length is the argument that only
+    mov ax, es                  ; exists in the image form, so zero is its
+                                ; absence - and SI is already the staged name
+                                ; in the kernel's own DS, which is exactly
+                                ; ld_run_name's input.
+                                ; **`mov` WRITES NO FLAG**, so the ZF the `or`
+                                ; above answered rides through this read and
+                                ; the branch below is still the image test -
+                                ; which is what lets ONE `mov ax, es` serve
+                                ; BOTH arms. The by-name arm's first act is to
+                                ; test ES for 21.5's "nothing through ES:DI",
+                                ; and it is HANDED that read rather than
+                                ; making it again (SPEC.md 21.5.3.3)
+    jz ld_pkg_byname            ; ...with AX = ES
+    or ax, ax
+    jz .bad                     ; an image at segment 0 is the interrupt
+                                ; vector table, which is the fence against
+                                ; HALF the image arguments being set by a
+                                ; caller that meant the by-name form
+    mov [ld_msrc], di           ; the source, banked: ld_alloc's chain reaches
+    mov [ld_msrc+2], ax         ; mem_compact and a package relocation proc,
+                                ; and ES is nobody's to promise across that
     mov [ld_fsz], cx            ; the size, in the two words ld_check_hdr
     mov [ld_fsz+2], dx          ; bounds the image against
+    push si                     ; the staged name, across the header check
+    mov si, di                  ; ES:SI = the image, ld_check_hdr's own shape
     test byte [es:si+LD_H_FLAGS], 4
-    jnz .bad                    ; parts, and no file to read them out of
+    jnz .badpop                 ; parts, and no file to read them out of -
+                                ; asked BEFORE ld_check_hdr, which allows the
+                                ; bit, and true of THIS ARM rather than of the
+                                ; slot (SPEC.md 21.5.1)
     call ld_check_hdr           ; ES:SI IS where it reads - the same call the
-    jc .fail                    ; disk path makes against dsk_secbuf in
-                                ; LOW_SEG. AL = LD_EBAD / LD_EBIG
+    pop si                      ; disk path makes against dsk_secbuf in
+    jc .fail                    ; LOW_SEG. `pop` writes no flag, so the carry
+                                ; it answered rides through
 
-    mov [ld_msrc], si           ; the source, banked: ld_alloc's chain reaches
-    mov ax, es                  ; mem_compact and a package relocation proc,
-    mov [ld_msrc+2], ax         ; and ES is nobody's to promise across that
-
-    ; --- the NAME, out of the caller's segment (SPEC.md 21 step 1b) ---------
-    ; DI is an offset in the CALLING INSTANCE's segment and not in ES: the
-    ; image is in a claim and the name is in the package's own data, which are
-    ; two different segments by construction. inst_caller is the published way
-    ; to ask which instance is calling (SPEC.md 19.2.1); a call from kernel
-    ; context answers 0xFF and the name is then read through KERNEL_SEG, which
-    ; is the only segment there is to read it through.
-    push ds
-    pop es                      ; ES = KERNEL for the copy's destination
-    call KERNEL_SEG:cw_inst_caller ; DH = the slot, 0xFF = the kernel itself
-    push ds                     ; DS is restored below whichever arm runs
-    mov ax, ds                  ; the fallback: our own segment
-    cmp dh, 0xFF
-    je .nseg
-    mov bl, dh
-    xor bh, bh
-    mov cl, 5                   ; inst_idx's arithmetic, 32-byte records -
-    shl bx, cl                  ; inline because instance.inc is .text and
-    mov ax, [bx+inst_tab+I_SPTR] ; this is .cold (SPEC.md 2.6)
-.nseg:
-    mov si, di                  ; DS:SI -> the caller's name, ES:DI -> ours
-    mov di, ld_lname
-    mov cx, LD_NAMELEN
-    mov ds, ax
-    cld
-.ncp:
-    lodsb
-    stosb
-    or al, al
-    jz .named
-    loop .ncp
-    mov byte [es:di], 0         ; twelve characters and no terminator: end it
-.named:
-    pop ds                      ; ...and DS is the kernel's again
+    ; --- step 1b: the launching file's NAME, out of the STAGED copy ---------
+    ; It used to be lifted out of the CALLING INSTANCE's segment here, through
+    ; inst_caller and a hand-rolled inst_idx - thirty-odd bytes and a special
+    ; case for a call from kernel context. The N stub does it (SPEC.md 20.3),
+    ; so SI is a kernel offset and this is a plain copy - the one the other two
+    ; entries make, shared (see ld_lname_cp above).
+    call ld_lname_cp
 
     call ld_alloc               ; steps 4 and 5: the record and the region
     jc .fail                    ; AL = LD_ENOMEM
@@ -1431,6 +1589,8 @@ ld_pkg_run_x:
 .bad_out:                       ; what that routine's step 7 wants. It answers
     ret                         ; in AL and frees the region itself when the
                                 ; entry proc aborts
+.badpop:
+    pop si
 .bad:
     mov al, LD_EBAD
 .fail:
@@ -1444,8 +1604,126 @@ ld_pkg_run_x:
 ; ...and the answer, which ld_start cannot give: it is the DISK path's body
 ; too, and that one reports through [ld_status] rather than through a flag.
 ; -----------------------------------------------------------------------------
-ldf_ld_pkg_run:
-    call ld_pkg_run_x
+; -----------------------------------------------------------------------------
+; ld_pkg_byname - the by-name arm, and the DOCUMENT that may ride with it
+; in:  SI -> the staged NUL 8.3 name (EMPTY = the document names the program);
+;      ES:DI -> the document's locator, or ES = 0 for none; AX = ES, which
+;      ld_pkg_start_x has already read (21.5.3.3)
+; out: AL = LD_*, as ld_pkg_start_x's other arm
+;
+; **ES = 0 IS "I AM PASSING YOU NOTHING THROUGH ES:DI"** (SPEC.md 21.5), which
+; is the rule the image arm one branch up already enforces - so ONE sentence
+; covers both arms, and a caller meaning the plain form zeroes ES either way.
+;
+; The locator is 13 NUL name bytes, the directory WORD, the volume BYTE: the
+; shape OSAPI_ARG_FILE answers with, in the order it answers it - so a package
+; cannot tell this launch from a double-click, which is the point (21.5.3).
+;
+; **AND THAT SHAPE IS assoc_doc/assoc_dclus/assoc_ddrv's OWN** (21.5.3.3), so
+; the copy is ONE assoc_stage of 16 and not a staged name plus two field reads
+; by hand. assoc.inc declares the three as a single block for that reason -
+; assoc_fnb used to sit in the middle of them.
+;
+; **BOTH NAMES ARRIVE UPPER CASE AND THIS ARM DOES NOT FOLD** (21.5.3.2): the
+; association tables are uppercase-exact because they are built from FAT
+; names, and folding here was 44 resident bytes of every machine spent on
+; behalf of ONE caller, which is ours. The DOS box folds in dos_pgname - the
+; copy that fills both launch cells, and which was three copies - so it costs
+; the box nothing it was not already walking; tests/dosopen.py is the gate and
+; types three lower- and mixed-case spellings.
+;
+; **A DOCUMENT TAKES THE ASSOCIATION ROUTE AND NOT ld_run_name's.** That is
+; the whole of what it buys: ld_run_name resolves the program in the folder
+; the caller stands in, and assoc_locate finds it by the hint cache wherever
+; it lives on the volume. `NOTEPAD README.TXT` typed on A:\ is exactly the
+; case those differ on - the program is in A:\APPS\.
+; -----------------------------------------------------------------------------
+ld_pkg_byname:
+%ifdef OS88_ASSOC
+    or ax, ax                   ; **AX IS ES**, read by ld_pkg_start_x on the
+    jz ld_run_name_x            ; way in (21.5.3.3). There is exactly one
+                                ; entry to this routine and that jz is it, so
+                                ; the register costs nothing to promise.
+                                ; No document: today's tail jump, unchanged,
+                                ; so nothing that does not ask for this pays
+                                ; an instruction for it
+    push si                     ; the staged NAME, across the document's copy
+    mov si, di
+    mov di, assoc_doc
+    mov cx, 16                  ; **THE WHOLE LOCATOR, ONE WALK** (21.5.3.3):
+    call assoc_stage            ; name, directory word and volume byte land in
+    pop si                      ; the three cells that are already in that
+                                ; order. It was a 13-byte stage and then
+                                ; `mov ax, [es:si]` / `mov al, [es:si+2]`
+                                ; against the two fields SI had been left on
+
+    ; --- THE CACHE IS SEEDED HERE, because no caller's path does it ---------
+    ; (SPEC.md 21.5.3.1) assoc_app_of and assoc_find read an IN-RAM table that
+    ; the mount HARVEST fills - and every path a program reaches this slot by
+    ; is a QUIET mount, which skips the harvest entirely. assoc_locate seeds
+    ; the volume that answers, but that runs AFTER the lookup that decides
+    ; whether to call it, so the seed has to go in front of both.
+    ; Stamped by [asc_vol]: a volume already loaded costs ONE COMPARE.
+    call asc_use_x
+
+    cmp byte [si], 0
+    je .byext
+    call assoc_stem_of          ; a NAME was given: its STEM names the slot,
+                                ; space-padded, which is the shape the table
+                                ; holds and assoc_app_of compares - and that
+                                ; is SPEC.md 54.2's own walk, which this
+                                ; routine had written out again, pad loop and
+                                ; `.` stop and all. It answers DI =
+                                ; assoc_stemb and leaves SI alone
+    mov si, di
+    call assoc_app_of
+    jmp short .have
+.byext:
+    mov si, assoc_doc           ; ...or none was: the double-click's own
+    call assoc_slot_of          ; question, asked by a program instead of by
+                                ; a mouse - and assoc_ext_of-then-assoc_find
+                                ; is a walk assoc.inc owns (SPEC.md 54.2.1),
+                                ; written out here for one cycle
+.have:
+    jc .nodoc
+    mov [assoc_dapp], al
+    xor ax, ax
+    mov [assoc_pwin], ax        ; NO POSTER, so assoc_run reads [dsk_cwd] for
+                                ; the document's home - which is where the
+                                ; caller stands, and the caller is the one who
+                                ; told us the document's own dir and volume
+                                ; anyway (both are banked above)
+    call COLD_SEG:assoc_run_x   ; **CALLED, NOT POSTED**: this slot already
+                                ; requires the UI task with the gfx lock FREE
+                                ; (21.5), which is the context assoc_run
+                                ; wants - so there is nothing to defer to.
+                                ; FAR, because assoc_run far-returns, being
+                                ; ui.inc's own callee
+    xor al, al                  ; it reported its own verdict to the user
+    ret                         ; (ld_say_status) - 21.5.3's thinner answer
+.nodoc:
+    mov al, LD_EBAD             ; the one thing the caller could not know:
+    ret                         ; nothing on this machine opens it
+%else
+    jmp ld_run_name_x           ; kern_small has no associations at all
+%endif                          ; (SPEC.md 54.0), so a document is silently
+                                ; nothing and the name still runs
+
+ldf_ld_pkg_start:
+    ; [ld_pwin] is NOT zeroed here, and that is a cut rather than an omission
+    ; (SPEC.md 21.5.2): loader_run_x is its only reader, the PKG_START path
+    ; never enters loader_run_x, and every caller of loader_run sets [ld_pwin]
+    ; itself before the read (ui.inc and files.inc, at the seam this used to
+    ; mirror). A store nothing on either arm reads is dead weight.
+    mov byte [ld_painted], 0
+    call ld_pkg_start_x         ; AL = LD_*
+    push ds
+    pop es                      ; ld_run_body's failure exits leave ES aimed
+                                ; at LOW_SEG or a freed region, and nothing
+                                ; below may inherit that (ui.inc's note)
+    call ld_owed                ; the repaint this load still owes, if any -
+                                ; and it banks AX itself, which is what the
+                                ; `push ax` / `pop ax` around this used to be
     or al, al
     jnz .fail                   ; every LD_* but LD_OK, ld_start's own
     xor ax, ax                  ; LD_EABORT included: AX = 0 and CF = 0 on the
@@ -1457,7 +1735,7 @@ ldf_ld_pkg_run:
 ; -----------------------------------------------------------------------------
 section .bss
 
-ld_msrc:    resw 2              ; OSAPI_PKG_RUN's source image, offset then
+ld_msrc:    resw 2              ; OSAPI_PKG_START's source image, offset then
                                 ; segment (SPEC.md 21.5): banked because
                                 ; ld_alloc's chain runs mem_compact and a
                                 ; package's relocation procs, and no register
@@ -1465,13 +1743,11 @@ ld_msrc:    resw 2              ; OSAPI_PKG_RUN's source image, offset then
 ld_pending: resb 1              ; 0 = none, else directory index + 1
                                 ; (set by files.inc, consumed by ui.inc).
                                 ; A BYTE: the index is bounded by
-                                ; [dsk_nmax], which is DSK_NENT for a FAT
-                                ; volume and DSK_VENT for a driver-backed
-                                ; one, so the stored value is 1..64. The
-                                ; guard is on the larger of the two - and it
-                                ; has to be, because dskwin.inc's DSK_VENT is
-                                ; twice DSK_NENT and it is the one that binds
-%if DSK_NENT > 254 || DSK_VENT > 254
+                                ; [dsk_nmax], which is DSK_NENT for every
+                                ; volume on the machine (SPEC.md 22.6 retired
+                                ; the driver-backed DSK_VENT), so the stored
+                                ; value is 1..64
+%if DSK_NENT > 254
   %error "[ld_pending] is a BYTE holding a directory index + 1, and \
 [dsk_nmax] has outgrown it (kernel/dskwin.inc)"
 %endif
@@ -1550,6 +1826,7 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
 ldf_ld_run_name:        call ld_run_name_x
                     retf
 
+
 ; -----------------------------------------------------------------------------
 ; osapi_pkg_rehome - API slot 0x0530: "the program is at DX, not at me"
 ;                    (SPEC.md 20.12.10)
@@ -1570,6 +1847,7 @@ ldf_ld_run_name:        call ld_run_name_x
 ; can have. It needs no mem_own: that fence answers for any live package, and
 ; any OTHER package calling this would be re-homing somebody else's launch.
 ; -----------------------------------------------------------------------------
+%ifndef KERN_SMALL
 osapi_pkg_rehome_x:
     push bx
     mov bx, es
@@ -1589,5 +1867,17 @@ osapi_pkg_rehome_x:
     pop bx                      ; `pop` writes no flag, so the refusal survives
     stc
     retf
+%else
+; No re-homing loader ships on kern_small: the only two callers of the slot -
+; the DOS box (SPEC.md 18.4.7.4) and Skies ($(SMALLOMIT_GAMES)) - are both off
+; the small disks, and no small package hands its identity to one of its parts
+; (SPEC.md 20.12.10). ld_alloc zeroes [ld_rehome] on every load (see it above),
+; so ld_start's step 8a never fires without this, and CF=1 is the refusal the
+; body itself gives when it declines. Cell-only, so a bare retf is the whole of
+; it (SPEC.md 20.3.2).
+osapi_pkg_rehome_x:
+    stc
+    retf
+%endif
 
 section .text

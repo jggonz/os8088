@@ -79,6 +79,16 @@ eth_busy:   db 0                ; THE CARD'S MUTEX (SPEC.md 72.2.2). One byte,
 eth_lasterr: db 0
 eth_lport:  dw 49152            ; the next ephemeral port
 
+; --- RAW MODE (SPEC.md 72.22) ------------------------------------------------
+; Set by NETV_RAW while somebody else is the stack. It gates eth_pump rather
+; than eth_frame, so our own stack cannot take a frame off the ring the raw
+; consumer is waiting for - see eth_v_raw for why that is the safe end to gate.
+eth_raw:    db 0                ; 1 = the wire belongs to the raw consumer
+eth_nraw:   dw 0                ; frames handed to it, for the same reason
+                                ; eth_ncall exists: "answered wrongly" and
+                                ; "never asked" look identical from the guest
+eth_nrawtx: dw 0
+
 ; --- counters, for the Control Panel page ------------------------------------
 eth_nrx:    dw 0
 eth_ntx:    dw 0

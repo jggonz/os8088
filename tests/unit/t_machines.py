@@ -14,7 +14,7 @@ So a test naming `os8088_5150_cga` on a box without that ROM runs on a
 DIFFERENT MACHINE than it named, passes, and reports a pass about a machine it
 never booted.  Nine rows were in that state and four of them were registered;
 none had ever run on the ROM it asked for, and nothing anywhere said so
-(docs/plans/HANDOFF-SOAK-FINDINGS.md E3, `tests/int0sweep.py`'s own description).
+(`tests/int0sweep.py`'s own description).
 
 THIS GATE IS HOST-SIDE AND FREE.  It reads the machine table and the test
 sources; it boots nothing.  Three checks:
@@ -128,6 +128,28 @@ def named_by_tests():
 RESOLVERS = ("os88ui.boot(", "ui.boot(")
 
 
+IBM_ROMSET = "ibm5150_82_v4"
+
+
+def ibm_romset(block):
+    """The block's `rom_set` if it is the IBM one, else None.
+
+    Line by line and not a substring search over the block: `re.split` on
+    `[[machine]]` carries the NEXT machine's comment preamble along with the
+    current one, so a prose mention of the romset in a comment - and this file
+    has several - reads as a machine asking for it. Counted that way the
+    config has 16 IBM machines; counted properly it has 13.
+    """
+    for line in block.splitlines():
+        t = line.strip()
+        if t.startswith("#"):
+            continue
+        m = re.match(r'rom_set\s*=\s*"([^"]+)"', t)
+        if m:
+            return m.group(1) if m.group(1) == IBM_ROMSET else None
+    return None
+
+
 def main():
     bad = []
     table = machines()
@@ -142,12 +164,36 @@ def main():
                        % (name, ", ".join(sorted(files)),
                           os.path.relpath(TOML, ROOT)))
 
-    # 2. no test may name an IBM-romset machine directly
+    # 2. no test may name an IBM-romset machine directly.
+    #
+    # **THE ROMSET DECIDES THIS, NOT `IBM_TWIN`.** This read
+    # `if name not in os88marty.IBM_TWIN: continue`, which made a
+    # hand-maintained five-entry dict the definition of "an IBM machine"
+    # while the config had THIRTEEN asking for `ibm5150_82_v4` - so a row
+    # naming one of the other eight was waved straight through. That is not
+    # hypothetical: `tests/dosram.py` and `tests/kdnoprog.py` both named
+    # `os8088_5150_cga_hdd`, this gate passed in 0.4s, and both rows died in
+    # the soak with `ROM set ibm5150_82_v4 not found in ROM set map`. The
+    # question comes out of the TOML now and `IBM_TWIN` only answers it, so a
+    # machine added to the config without a twin fails HERE - naming the
+    # machine and the missing twin - instead of at a launch months later.
     for name, files in sorted(used.items()):
-        if name not in os88marty.IBM_TWIN:
+        if ibm_romset(table.get(name, "")) is None:
             continue
+        twin = os88marty.IBM_TWIN.get(name)
         for f in sorted(files):
             if ALLOWED_IBM.get(f) or f.endswith("t_machines.py"):
+                continue
+            if twin is None:
+                bad.append(
+                    "%s names %s, which asks for the IBM romset and has NO "
+                    "entry in os88marty.IBM_TWIN - so os88marty.machine() "
+                    "cannot resolve it and MartyPC exits at once on a box "
+                    "without the ROM.\n"
+                    "        Add a `<name>_gla` twin to %s differing in "
+                    "rom_set ALONE, map it in IBM_TWIN, and call "
+                    "os88marty.machine(%r)."
+                    % (f, name, os.path.relpath(TOML, ROOT), name))
                 continue
             bad.append(
                 "%s names %s, whose ROM cannot be in this tree - so on a box "
@@ -155,7 +201,7 @@ def main():
                 "        Use os88marty.machine(%r), which resolves to the "
                 "twin; or, if this row genuinely needs the period ROM, pass "
                 "why_ibm=<the reason> and add it to ALLOWED_IBM here."
-                % (f, name, os88marty.IBM_TWIN[name], name))
+                % (f, name, twin, name))
 
     # 3. every twin must exist, and differ in rom_set alone
     for ibm, twin in sorted(os88marty.IBM_TWIN.items()):

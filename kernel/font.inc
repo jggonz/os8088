@@ -160,7 +160,27 @@ SNAP_NCALL   equ 24             ; SPEC.md 11.94.2: off-grid callers logged per
 ; 8086 loses one when a string op restarts after an interrupt, and this runs
 ; with interrupts on.
 ; -----------------------------------------------------------------------------
-section .ovlw
+%ifndef KERN_SMALL
+section .ovlw                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
+                                ; whose window has room to spare
+%else
+section .ovl                    ; ...and kern_small: the BLOB half instead
+                                ; (SPEC.md 2.5.3.2, mouse_init's shape). The
+                                ; deadline is the same either way - kmain runs
+                                ; this long before drv_boot - so the choice is
+                                ; only about WHOSE bytes. On that kernel
+                                ; `.ovlw` is read onto the FAT window and the
+                                ; mount buffers, and SPEC.md 22.6.3 has just
+                                ; taken the LISTING out of that region: the
+                                ; 800 bytes it gave back are only 288 of heap
+                                ; while the overlay still needs the rest, so
+                                ; every body moved here turns one more of them
+                                ; into heap. `.ovl` is written LAST on
+                                ; purpose: tools/os88ovlchk.py reads SOURCE
+                                ; and cannot evaluate the %ifdef, so it files
+                                ; this block by the arm below - which is the
+                                ; build the check exists to protect
+%endif
 font_init:
     push ax
     push bx
@@ -360,6 +380,9 @@ font_char:
     ; the machine's. The two bytes are adjacent by assertion, not by hope
     ; - see wm_clip_r0.
     mov word [wm_clip_r0], (8 << 8) | 0
+%ifdef KERN_BIG
+    mov byte [wm_clip_cm], 0xFF ; every column (SPEC.md 11.3.4)
+%endif
 .rows:
 
     sub al, FONT_FIRST          ; SI = glyph row data. The arithmetic stays in
@@ -374,6 +397,7 @@ font_char:
     add si, ax                  ; costs no register: start at the glyph's row
                                 ; r0 - [wm_clip_r0] is 0..7, so `cbw` again
     add dx, ax                  ; ...and at the screen row it belongs on
+
 
 %ifdef GFX_VGA
     cmp byte [vid_mono], 0      ; 1bpp? the software renderer IS the direct
@@ -409,6 +433,10 @@ font_char:
     mov ch, [wm_clip_rn]        ; row counter: the rows the region allows,
 .row:                           ; 8 whenever it is not cutting this cell
     mov ah, [ss:si]             ; glyph row in the high byte of the window
+%ifdef KERN_BIG
+    and ah, [wm_clip_cm]        ; the region's column mask (SPEC.md 11.3.4) -
+%endif                          ; KERN_BIG only, so the floor machine's glyph
+                                ; loops are byte-identical (11.3.4.1)
     inc si
     xor al, al
     shr ax, cl                  ; AH = first-byte mask, AL = second-byte mask
@@ -705,6 +733,10 @@ font_char_bb:
     jmp .crow
 .srow:
     mov ah, [ss:si]             ; glyph row in the window's high byte
+%ifdef KERN_BIG
+    and ah, [wm_clip_cm]        ; the region's column mask (SPEC.md 11.3.4) -
+%endif                          ; KERN_BIG only, so the floor machine's glyph
+                                ; loops are byte-identical (11.3.4.1)
     inc si
     or ah, ah                   ; a blank row ors in nothing, whatever the
     jz .snext                   ; shift does to it
@@ -725,6 +757,10 @@ font_char_bb:
     ret                         ; one plane, so the cell is finished
 .crow:
     mov ah, [ss:si]
+%ifdef KERN_BIG
+    and ah, [wm_clip_cm]        ; the region's column mask (SPEC.md 11.3.4) -
+%endif                          ; KERN_BIG only, so the floor machine's glyph
+                                ; loops are byte-identical (11.3.4.1)
     inc si
     or ah, ah                   ; a blank row masks nothing out either
     jz .cnext
@@ -766,6 +802,10 @@ font_char_bb:
     mov [font_dmask], al
 .drow:
     mov ah, [ss:si]
+%ifdef KERN_BIG
+    and ah, [wm_clip_cm]        ; the region's column mask (SPEC.md 11.3.4) -
+%endif                          ; KERN_BIG only, so the floor machine's glyph
+                                ; loops are byte-identical (11.3.4.1)
     inc si
     or ah, ah                   ; a blank row masks nothing out...
     jz .dnext
@@ -2045,7 +2085,6 @@ font_seam_b:    resb 8          ; cell a display seam crosses - the part on
   %error "font_seam_a/b are not the two cells after font_zero - see 39.14.11"
 %endif
 %endif
-
 section .bss
 %ifdef SEAMCUT
 font_ch_on:     resb 1          ; SPEC.md 39.14.11: non-zero while font_ch_cut

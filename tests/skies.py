@@ -176,9 +176,28 @@ def until(m, pred, frames, step=15, what="the condition"):
     spent = 0
     while spent < frames:
         m.advance(frames=step)
+        # **THE PREDICATE IS READ WHILE THE GUEST IS PAUSED**, at the frame
+        # boundary `advance` stopped on, and that is the fix for the surplus
+        # the paragraph above describes rather than a tidy-up. Reading after
+        # `m.run()` reads a machine that has been EXECUTING for however long
+        # the host took to get here - +6.0-6.4% of the declared frames on an
+        # idle box and more on a loaded one - so a field that moves on its
+        # own is sampled at a moment the host chose.
+        #
+        # `tests/skies.py`'s crash reset is where that bit: the aeroplane's
+        # POSITION and HEADING come back exact and the THROTTLE does not,
+        # because the throttle starts climbing the instant the aeroplane is
+        # flying again. It read 6 for 0 once, was "fixed" by reading inside
+        # the predicate, and read 2 for 0 in the next soak - the predicate
+        # was always the right PLACE and never the right MOMENT.
+        #
+        # The `m.run()` stays, below the read, because it is load-bearing for
+        # key delivery (above); what moves is only which side of it the
+        # question is asked.
+        got = pred()
         m.run()
         spent += step
-        if pred():
+        if got:
             return True
     return False
 

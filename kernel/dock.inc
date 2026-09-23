@@ -149,16 +149,12 @@ dock_cfg:   db DOCK_P_BOTTOM
 section .ovlw
 dock_init:
     push ax
-%ifdef DOCK_OPT
-    mov ax, [dock_la1]          ; THE WHOLE STRIP is owed - dock_force's own
-    mov [dock_dx1], ax          ; answer, written here rather than called for.
-    mov ax, [dock_la2]          ; dock_geom ran inside vid_init (MARK 7), so
-    mov [dock_dx2], ax          ; the along range is live
-%else
     mov word [dock_dx1], 0      ; THE WHOLE STRIP is owed - dock_force's own
-    mov ax, [vid_pwm1]          ; answer, written here rather than called for
-    mov [dock_dx2], ax
-%endif
+    mov ax, [vid_pwm1]          ; answer, written here rather than called for.
+    mov [dock_dx2], ax          ; The BOTTOM strip's span on both kernels: a
+                                ; saved placement asks for DOCK.DRV only once
+                                ; the system volume is mounted (SPEC.md 30.5),
+                                ; which is after this
     mov ax, 07FFFh              ; ...and nothing has been PAINTED yet (SPEC.md
     mov [dock_px1], ax          ; 30.3.3) - the empty bounding box, which is
     inc ax                      ; 07FFFh..08000h and refuses every rect
@@ -168,39 +164,51 @@ dock_init:
 section .text
 
 %ifdef DOCK_OPT
-; Optional advanced operations have one private dispatch entry. The basic
-; renderer below stays callable with no disk and no module allocation.
-; A near caller keeps its own register contract. BP is private to dispatch
-; and restored before returning, including through re-entrant repaint calls.
-; Every operation is a six-byte stub: BP = its index, then dock_route. The
-; stub names the whole DKI_* constant: a bare BAND is `make BAND=1`'s %define. The
-; first DKB_N have a basic body in dock_btab; the rest are reached only while
-; the module is loaded (a hidden strip, an open hole), so need no basic row.
-; DOCK.DRV's dkx_tab lists the same operations in the same order.
-DKI_GEOM      equ 0
-DKI_BAND      equ 2
-DKI_FORCE     equ 4
-DKI_PAINT     equ 6
-DKI_PX_HIT    equ 8
-DKI_CLICK     equ 10
-DKI_RCLICK    equ 12
-DKI_SLOT_RECT equ 14
-DKI_FORCE_R   equ 16
-DKI_DROP      equ 18
-DKB_N         equ 10
-DKI_PASS      equ 20
-DKI_HOLE_ARM  equ 22
-DKI_HOLE_SUB  equ 24
-DKI_HOLE_WIN  equ 26
+; Optional advanced operations are reached through ONE TABLE AND NO
+; DISPATCHER. Each operation is a four-byte far indirect jump through its own
+; slot of dkv: KERNEL_SEG:<basic body> on a machine with no DOCK.DRV, this
+; image's segment and body while one is mounted. It is a JUMP, so the
+; caller's own near return address is never touched, no register is banked
+; and nothing is pushed - the basic Dock runs at the stack depth it always
+; had, and the whole mechanism costs it one indirect far jump.
+;
+; **THE MODULE OWNS BOTH HALVES OF THE TABLE.** It writes its own offsets in
+; on the way (dkx_hook) and the kernel's back out on the way out
+; (dkx_unhook), because it is assembled with this kernel and knows them. That
+; is what deletes the two things the index-in-BP router cost: a resident
+; second copy of the basic addresses, and a per-operation trampoline to carry
+; an index the module no longer needs.
+;
+; A SLOT'S BASIC BODY IS THE WHOLE GUARD. Four operations exist only while a
+; module is mounted (a hidden strip's tick, an open hole); their slots rest on
+; dkb_ret/dkb_clc, so the kernel-side `cmp [dock_auto]` / `cmp [gfx_hole]`
+; tests that used to stand in front of them - and which dkx_pass, dkx_hole_sub
+; and dkx_hole_win each make again for themselves - are gone.
+DKI_GEOM      equ 0             ; ...and the DKI_* are BYTE OFFSETS into dkv
+DKI_BAND      equ 4
+DKI_FORCE     equ 8
+DKI_PAINT     equ 12
+DKI_PX_HIT    equ 16
+DKI_CLICK     equ 20
+DKI_RCLICK    equ 24
+DKI_SLOT_RECT equ 28
+DKI_FORCE_R   equ 32
+DKI_DROP      equ 36
+DKI_PASS      equ 40
+DKI_HOLE_ARM  equ 44
+DKI_HOLE_SUB  equ 48
+DKI_HOLE_WIN  equ 52
 DKI_N         equ 14
 
 %macro DKCALL 1
-    push bp
-    mov bp, %1
-    jmp short dock_route
+    jmp far [dkv + %1]
 %endmacro
 
 DKFP equ mod_fp + MOD_DOCK * MODFP_STRIDE
+                                ; entry 0 is dkx_hook and entry 1 dkx_unhook
+                                ; (SPEC.md 30.5), and dkf_apply is their only
+                                ; caller - mod_disarm rests both on mod_gone,
+                                ; so calling one with nothing mounted refuses
 
 dkb_geom:
     cmp word [spl_fseg], COLD_SEG
@@ -212,65 +220,38 @@ dkb_geom:
     ret
 
 ; Basic setup is disposable, just like the settings decoder. No Dock module
-; is required. The hidden/live geometry is identical in this configuration.
+; is required. The hidden/live geometry is identical in this configuration, so
+; this writes the LIVE block directly and there is no whole-strip block to
+; copy it from: the strip's own rect, the along axis, the tile pitch, the cap
+; and the packing table are all DOCK.DRV's and are not in this kernel at all
+; (SPEC.md 30.5). That is what took this body from six pushes and a rep movsw
+; to one push, and it is instantiated TWICE - the boot overlay's copy and the
+; Control Panel's - so each byte here is two.
 %macro DOCK_GEOM 1
 %1 %+ _geom:
     push ax
-    push bx
-    push cx
-    push si
-    push di
-    push es
     xor ax, ax
     mov [dock_side], al
-    mov [dock_auto], al
     mov [dock_up], al
-    mov [dock_hidden], al
     mov [gfx_hole], ax
     mov [wm_clip_n], ax
-    mov [dock_timer_on], al
-    mov [dock_sx1], ax
-    mov [dock_la1], ax
-    mov byte [dock_cap], INST_MAX
-    mov bx, ax
-%%map:
-    mov [dock_pos+bx], bl
-    inc bx
-    cmp bx, INST_MAX
-    jb %%map
+    mov [dock_lx1], ax
     mov ax, [vid_pwm1]
-    mov [dock_sx2], ax
-    mov [dock_la2], ax
+    mov [dock_lx2], ax
     mov ax, [vid_phm1]
-    mov [dock_sy2], ax
-    mov [dock_ffc2], ax
-    mov [dock_ffar], ax
+    mov [dock_ly2], ax
+    mov [dock_fc2], ax
     mov [dock_lc2], ax
     sub ax, DOCK_H-1
-    mov [dock_sy1], ax
-    mov [dock_frc], ax
+    mov [dock_ly1], ax
+    mov [dock_rc], ax
     mov [dock_lc1], ax
     inc ax
-    mov [dock_ffc1], ax
+    mov [dock_fc1], ax
     add ax, 2
     mov [dock_c0], ax
-    mov word [dock_a0], DOCK_X0
-    mov word [dock_astep], DOCK_STEP
-    mov word [dock_alen], DOCK_TILE_W
     mov word [dock_thk], DOCK_H
-    push ds
-    pop es
-    mov si, dock_sx1
-    mov di, dock_lx1
-    mov cx, 7
-    cld
-    rep movsw
     call KERNEL_SEG:cw_dock_band
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop bx
     pop ax
     ret
 %endmacro
@@ -284,7 +265,8 @@ section .text
 ; Fullscreen return has no settings module and never reads a disk.
 dkb_band:
     push ax
-    mov word [vid_band_x0], 0
+    xor ax, ax                  ; a register store is a byte shorter than the
+    mov [vid_band_x0], ax       ; immediate one, and AX is about to be reloaded
     mov ax, [vid_pw]
     mov [vid_band_xe], ax
     sub ax, 56
@@ -316,11 +298,19 @@ dkf_apply:
     test byte [dock_cfg], DOCK_P_MASK | DOCK_F_AUTO
     jz .basic
     call mod_need
-    jnc .apply
-    mov byte [dock_cfg], DOCK_P_BOTTOM ; live controls describe the fallback
+    jc .fell
+    call far [DKFP]            ; dkx_hook: the image takes dkv over, and CF=0
     jmp short .apply
+.fell:
+    mov byte [dock_cfg], DOCK_P_BOTTOM ; live controls describe the fallback
+    jmp short .apply           ; ...carrying mod_need's CF = 1 to the caller
 .basic:
-    call KERNEL_SEG:cw_dock_drop
+    call far [DKFP+4]          ; dkx_unhook: forget an open strip, then dkv
+                               ; back to the kernel's own bodies, BEFORE the
+                               ; claim goes. With nothing mounted this is
+                               ; mod_gone's refusal, which is exactly right
+                               ; and is why it needs no test - and is what
+                               ; deleted the cw_dock_drop shim with it
     call mod_drop              ; no callback executing: settings owns gfx lock
     clc
 .apply:
@@ -351,45 +341,33 @@ dock_force_r:   DKCALL DKI_FORCE_R
 dock_drop:      DKCALL DKI_DROP
 gfx_hole_arm:   DKCALL DKI_HOLE_ARM
 
-; the module-only operations test their own condition first
-dock_pass:
-    cmp byte [dock_auto], 0
-    je dkb_ret
-    DKCALL DKI_PASS
+dock_pass:      DKCALL DKI_PASS
+dock_hole_win:  DKCALL DKI_HOLE_WIN
+dock_hole_sub:  DKCALL DKI_HOLE_SUB
 
-dock_hole_win:
-    cmp word [gfx_hole], 0
-    je dkb_clc
-    DKCALL DKI_HOLE_WIN
-
-dock_hole_sub:
-    cmp word [gfx_hole], 0
-    je dkb_clc
-    DKCALL DKI_HOLE_SUB
-
-; BP = DKI_*, the caller's BP on the stack. The operation sees every register
-; the stub was entered with but BP, and returns straight to that caller.
-dock_route:
-    ; STKBALANCE-OK: BP is banked by the stub; .basic swaps that slot for the target and RETs into it
-    cmp word [mod_r_dock], 0
-    je .basic
-    call far [DKFP]
-    pop bp
-    ret
-.basic:                         ; a TAIL jump, so the basic Dock runs at
-    push ax                     ; exactly the stack depth it always had
-    mov ax, [ds:bp+dock_btab]
-    mov bp, sp
-    xchg ax, [bp+2]             ; the banked BP's slot becomes the target
-    mov bp, ax
-    pop ax
-    ret
-
-dock_btab:
-    dw dkb_geom, dkb_band, db_force, db_paint, db_px_hit
-    dw db_click, db_rclick, db_tile_rect, dkb_force_r, dkb_ret
-%if ($ - dock_btab) != DKB_N * 2 || DKI_N * 2 != DKI_HOLE_WIN + 2
-  %error "dock_btab and the DKI_* indices disagree"
+; THE TABLE, at rest: every slot the kernel's own body, in this segment.
+; dkx_unhook carries this same list and writes it back, so the only copy of
+; it that is RESIDENT is the one being used. A far pointer rather than a near
+; one because the mounted half is in another segment and `jmp far [mem]` is
+; the one instruction that reaches either without a register, a push or a
+; test - the 28 bytes of repeated KERNEL_SEG are what that buys.
+dkv:
+    dw dkb_geom,     KERNEL_SEG ; DKI_GEOM
+    dw dkb_band,     KERNEL_SEG ; DKI_BAND
+    dw db_force,     KERNEL_SEG ; DKI_FORCE
+    dw db_paint,     KERNEL_SEG ; DKI_PAINT
+    dw db_px_hit,    KERNEL_SEG ; DKI_PX_HIT
+    dw db_click,     KERNEL_SEG ; DKI_CLICK
+    dw db_rclick,    KERNEL_SEG ; DKI_RCLICK
+    dw db_tile_rect, KERNEL_SEG ; DKI_SLOT_RECT
+    dw dkb_force_r,  KERNEL_SEG ; DKI_FORCE_R
+    dw dkb_ret,      KERNEL_SEG ; DKI_DROP - nothing to forget with no module
+    dw dkb_ret,      KERNEL_SEG ; DKI_PASS - no strip hides without one
+    dw dkb_ret,      KERNEL_SEG ; DKI_HOLE_ARM
+    dw dkb_clc,      KERNEL_SEG ; DKI_HOLE_SUB - CF = 0: no hole, no overflow
+    dw dkb_clc,      KERNEL_SEG ; DKI_HOLE_WIN - CF = 0: no window is under it
+%if ($ - dkv) != DKI_N * 4 || DKI_HOLE_WIN + 4 != DKI_N * 4
+  %error "dkv and the DKI_* offsets disagree"
 %endif
 
 dkb_clc:
@@ -1292,45 +1270,28 @@ dock_act:   resw 1              ; the instance record owning the frontmost
 dock_ck:    resw INST_MAX       ; what each tile was last DRAWN as (dock_key)
 
 %ifdef DOCK_OPT
-; --- SPEC.md 30.5/30.6: where the strip stands, written by dock_geom and
-; dock_live_set alone. .bss, because vid_apply writes every one of them before
-; anything reads it.
+; --- SPEC.md 30.5/30.6: what the KERNEL reads about where the strip stands.
+; The rest of the advanced geometry - the whole-strip rect, the along axis,
+; the tile pitch, the cap, the packing table and the hover timer - is
+; DOCK.DRV's own and lives in DOCK.DRV's image, because nothing outside that
+; image ever reads one. A machine with no module mounted carries none of it.
 dock_side:  resb 1              ; the EDGE in use: DOCK_P_*, [dock_cfg]'s or
                                 ; the bottom when a side cannot hold the tiles
-dock_auto:  resb 1              ; non-0: the strip hides
-dock_up:    resb 1              ; ...and is open right now (dock_open)
-dock_cap:   resb 1              ; tiles the strip holds (SPEC.md 30.5.1)
-dock_pos:   resb INST_MAX       ; which slot each position shows (dock_map)
-dock_hidden: resb 1             ; auto and not open: the line is live
-dock_sx1:   resw 1              ; the strip's whole rect
-dock_sy1:   resw 1
-dock_sx2:   resw 1
-dock_sy2:   resw 1
-dock_frc:   resw 1              ; ...its rule, ACROSS the long axis
-dock_ffc1:  resw 1              ; ...its field, across
-dock_ffc2:  resw 1
-dock_ffar:  resw 1              ; ...and its outer edge, where the line is
-dock_la1:   resw 1              ; the long axis's extent: x on the bottom
-dock_la2:   resw 1              ; strip, y on a side
-dock_a0:    resw 1              ; tile 0's along coordinate
-dock_c0:    resw 1              ; ...and every tile's across one
-dock_astep: resw 1              ; along pitch
-dock_alen:  resw 1              ; along length of one tile
-dock_thk:   resw 1              ; what the strip RESERVES of the band
-dock_lx1:   resw 1              ; the LIVE rect: the line while hidden
-dock_ly1:   resw 1
-dock_lx2:   resw 1
+dock_up:    resb 1              ; the strip is open right now (dkx_open)
+dock_c0:    resw 1              ; every tile's ACROSS coordinate - db_rect_ax
+dock_thk:   resw 1              ; what the strip RESERVES - wm_dock_snap
+dock_lx1:   resw 1              ; the LIVE rect: the line while hidden, and
+dock_ly1:   resw 1              ; what wm_dock_clear, wm_su_owed and
+dock_lx2:   resw 1              ; dock_live_hit all ask about
 dock_ly2:   resw 1
 dock_rc:    resw 1              ; ...its rule, across
 dock_fc1:   resw 1              ; ...its field, across (fc1 > fc2: none)
 dock_fc2:   resw 1
-%if dock_ffc2 - dock_sx1 != 12 || dock_fc2 - dock_lx1 != 12
-  %error "dock_live_set copies seven consecutive geometry words"
+%if dock_fc2 - dock_lx1 != 12
+  %error "dkx_live_set copies seven consecutive geometry words"
 %endif
-dock_lc1:   resw 1              ; ...and its across extent
-dock_lc2:   resw 1
-dock_timer_on:   resb 1        ; hover while hidden, linger while open
-dock_timer_tick: resw 1        ; modular start tick; survives cancellation
+dock_lc1:   resw 1              ; ...and its across extent, which dock_px_rect
+dock_lc2:   resw 1              ; turns the painted span into a rect with
 
 %endif
 

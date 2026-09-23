@@ -14,11 +14,8 @@ Read it before starting; read `docs/plans/completed/HANDOFF-KERNEL-SIZE.md` for 
 **method** and `docs/plans/completed/HANDOFF-KERNEL-SIZE-P2.md` for pass 2's **record** — this
 file does not repeat either, it says what is LEFT and how to run it.
 
-Two companions matter as much as those:
+One companion matters as much as those:
 
-* **`docs/plans/HANDOFF-SOAK-FINDINGS.md`** — thirteen open defects the pass-2 soak
-  found, none of them a kernel regression. Open it BEFORE diagnosing any test
-  failure of your own, because most of them are already in it.
 * **`docs/KERNEL-MEMORY.md`**, and specifically "Size pass 2 gave five rungs
   back" — where both budgets stand, and the one decision this pass inherits.
 
@@ -256,7 +253,7 @@ gate. It runs in **three passes**, and the split is not optional.
 
 ```sh
 # prerequisites - the suite SKIPS what a box cannot answer, but only if the
-# artefact exists to be found (docs/plans/HANDOFF-SOAK-FINDINGS.md B4)
+# artefact exists to be found
 tools/setup-cc.sh            # once; nothing in `all` needs it
 make wiredisk                # `all` deliberately does not build it (§78.9)
 make                         # AFTER any commit - see the lock above
@@ -301,9 +298,8 @@ against a real 4.77MHz 8088: 3.4x at one instance, 13.1x at four, 13.9x at six,
 throughput, it slows the other eight. Going wider is slower, not broken: guest
 cycle counts, `disk()` counts and pixel comparisons stay exact at any
 oversubscription because they are counted rather than timed. What loses slack is
-host wall-clock — `settle`, `until`, a row's timeout — which is
-`docs/plans/HANDOFF-SOAK-FINDINGS.md` **B5**, and B5 is why `dispmine` and `tmowner`
-fail in the wide lane and pass alone.
+host wall-clock — `settle`, `until`, a row's timeout — which is why `dispmine`
+and `tmowner` failed in the wide lane and passed alone.
 
 ### Expect it to take about 2.8 hours
 
@@ -341,7 +337,7 @@ and a shared writable DISK is what contaminated pass 2's first bisect.**
 
 * **A stale QEMU from an earlier row holds `build/os8088.img` for hours** and
   the next row fails wearing a message about the wrong subject
-  (`HANDOFF-SOAK-FINDINGS.md` B9). `ps -o pid,etime -C qemu-system-i386` before
+. `ps -o pid,etime -C qemu-system-i386` before
   believing a lock error, and **kill by PID** — `pkill -f` matches the killing
   shell's own command line and exits 144 having killed nothing.
 * **`os88marty.py reap` kills ORPHANS only** and leaves live work alone. Use
@@ -470,15 +466,15 @@ machine has started.**
 
 ## 7. Work that does not collide, if a second session is free
 
-1. **The soak findings queue** — `docs/plans/HANDOFF-SOAK-FINDINGS.md`, thirteen
-   items. B1 (install-then-boot in one instance), B3 (`cold_span`'s `.ovlw`
-   bound, one line), B5/B6 (the host-timing waits) and B9 (the leaked QEMU) all
-   make this pass's own soak cheaper and none of them touches kernel bytes.
+1. **The harness defects the pass-2 soak turned up** — install-then-boot in one
+   instance, `cold_span`'s `.ovlw` bound (one line), the host-timing waits and
+   the leaked QEMU all make this pass's own soak cheaper and none of them
+   touches kernel bytes.
 2. **A field run on real hardware.** `docs/FIELD-MACHINES.md` says who has the
    iron. Nothing in this pass can measure a real 8088, and **the Hercules
    reading `docs/plans/MONO-RECLAIM-PLAN.md` needs has never been taken.**
 3. **Re-measure PERFORMANCE.md's Hercules VRAM rows at N ≥ 48**
-   (`HANDOFF-SOAK-FINDINGS.md` C1). The documented write ratio of 1.36 is really
+. The documented write ratio of 1.36 is really
    **1.671** — the published figure is an N=8 reading of a bimodal quantity —
    and `docs/plans/MONO-RECLAIM-PLAN.md`'s whole case reasons from it.
 4. **`tests/int0sweep.py` on the IBM ROM.** Pass 1's worst bug hard-locks an IBM

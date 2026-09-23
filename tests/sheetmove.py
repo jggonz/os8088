@@ -35,6 +35,19 @@ FOUR ASSERTIONS:
      through `sh_cellseg`, so a stale word here draws a plausible wrong sheet
      rather than crashing - which is the whole reason assertion 2 is not
      enough.
+
+**AND THE ROW'S OWN TRAP, WHICH COST IT ITS POINT: SHEET'S REGION MOVES TOO.**
+Every read of the package's words is `sh_seg * 16 + offset`, and Sheet declares
+its region movable (SPEC.md 66.6.1), so the pass this row FORCES can relocate
+the region as well as the claims under it.  Reading through the base captured
+before the compaction neither crashes nor answers empty - a move COPIES and
+does not erase, so the old base still holds the PRE-MOVE bytes - and the row
+then reports "a declared claim moved NO <-- the run proves nothing" about a
+pass that moved three of them.  Measured on the kernel that made the compaction
+reach further (SPEC.md 66.10.4): region 7c60 -> 92c0, with cellseg 5060 ->
+4b20, txtseg 5860 -> 5320 and bordseg 4da0 -> 4a20, while this row printed all
+six words unchanged and `Sheet now holds []`.  So Sheet is re-found after the
+launch and every read below uses the base it is at NOW.
 """
 import argparse
 import hashlib
@@ -265,9 +278,26 @@ def main():
         time.sleep(22)
         os88marty.settle(m)
 
-        after = mine(claims(m, S), sh_seg)
+        # **RE-FIND SHEET FIRST: THE REGION MOVES TOO** (SPEC.md 66.6.1).
+        # Sheet declares its region movable, so the pass this row forces can
+        # relocate the region as well as the claims under it - and every read
+        # below is `sh_seg * 16 + offset`.  Reading through the base captured
+        # before the compaction is not a crash and not an empty answer: a move
+        # COPIES and does not erase, so the old base still holds the pre-move
+        # bytes and the row reports "nothing moved" about a pass that moved
+        # three claims.  Measured: region 7c60 -> 92c0 with cellseg 5060 ->
+        # 4b20, txtseg 5860 -> 5320 and bordseg 4da0 -> 4a20, while this row
+        # printed all six unchanged and `Sheet now holds []`.
+        sh_seg1, _ = pkg_seg(m, S, "Sheet")
+        if sh_seg1 != sh_seg:
+            print("  0 Sheet's REGION moved     %04x -> %04x" % (sh_seg, sh_seg1))
+
+        def sword1(name):
+            return u16(m.read(sh_seg1 * 16 + SH[name], 2))
+
+        after = mine(claims(m, S), sh_seg1)
         live = set(c[0] for c in after)
-        w1 = dict((n, sword(n)) for n in MOVABLE + [PINNED])
+        w1 = dict((n, sword1(n)) for n in MOVABLE + [PINNED])
         print("Sheet now holds %s"
               % ["%04x/%dKB" % (b, p // 64) for b, p, _, _ in after])
         print("  " + "  ".join("%s=%04x" % (n[3:], w1[n])

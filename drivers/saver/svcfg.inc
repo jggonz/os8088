@@ -347,6 +347,16 @@ sc_btns:
     ret
 
 ; in: AX = its left edge (screen), SI = the label, CL = its control id
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; A Control Panel page draws its buttons one at a time, so the record is
+; pointed at whichever rect the caller staged. The GESTURE here is the
+; panel's own cp_ctl/cp_pgprobe probe (SPEC.md 13.8.4), which is already
+; release-fired; what changed is that the DRAW goes through the control.
+sv_btlbl: dw 0
+sv_btflg: dw 0
+sv_btrec: dw 0, sv_btlbl, sv_btflg, 1, 0, 0, 0, 0
+
 sc_btn1:
     push ax
     push bx
@@ -366,7 +376,16 @@ sc_btn1:
     jne .up                     ; content has already been whited
     or di, OS88UI_DOWN          ; SPEC.md 13.8: the pressed look is DRAWN, not
 .up:                            ; XOR-ed - a repaint between the two edges must
-    call os88ui_btn             ; agree with the glass
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [sv_btlbl], si          ; label and DI its flags, so the record takes
+    mov [sv_btflg], di          ; all three and the picture is identical
+    mov [sv_btrec+OS88UI_BT_RECTS], bx
+    mov bx, sv_btrec
+    mov al, 1
+    call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop dx
     pop bx

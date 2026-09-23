@@ -13,7 +13,7 @@
 ; **THE BUFFER MAPS 1:1 ONTO TEXT VRAM** (SPEC.md 70.8.7). 80 columns by 25
 ; rows against 80 by 25, all of it, no centring and NO STATUS LINE: a board
 ; uses row 25, and a terminal that reserved it would cut the bottom off every
-; menu. TET_X0 and TET_Y0 are gone; a row is at FSI_SEG:(r*160). And te_scr's
+; menu. TET_X0 and TET_Y0 are gone; a row is at FSI_SEG:(r*160). And con_scr's
 ; cell IS the cell in VRAM - a character byte then an attribute byte - so a
 ; colour row is a `rep movsw` and not a translation. That is the whole
 ; argument for the bracket, one size smaller than SPEC.md 70.6 made it.
@@ -40,12 +40,10 @@
 ; worker that owns the socket.
 ; =============================================================================
 
-TET_COLS   equ 80                   ; FSXM_TEXT80, on all three adapters
-TET_ROWS   equ 25
-TET_ATTR   equ 0x07                 ; grey on black: a terminal's own colours,
-                                    ; and the desktop's black-on-white would
-                                    ; be a white screen with a hole in it
-TET_SATTR  equ 0x70                 ; ...and the leave hint, inverse
+; TET_COLS, TET_ROWS, TET_ATTR and TET_SATTR are os88con.inc's now
+; (CON_COLS, CON_ROWS, CON_TATTR, CON_TSATTR - SPEC.md 70.8.13), with the
+; renderer they belong to. What is left here is the BRACKET, which is the half
+; two carriers do not agree about.
 TET_ESC    equ 0x1D                 ; **CTRL+], AND IT IS NOT AN ARBITRARY
                                     ; CHOICE**: it is the escape character
                                     ; every telnet client since 4.2BSD uses to
@@ -57,9 +55,6 @@ TET_ESC    equ 0x1D                 ; **CTRL+], AND IT IS NOT AN ARBITRARY
                                     ; typed text, which a terminal is as
                                     ; completely as anything here: every
                                     ; printable key belongs to the host
-%if TET_COLS != TE_COLS || TET_ROWS != TE_ROWS
-  %error "the buffer maps 1:1 onto text VRAM (SPEC.md 70.8.7): the two sizes ARE one size"
-%endif
 
 ; -----------------------------------------------------------------------------
 ; te_fsx - Session > Full Screen, and Ctrl+] while windowed
@@ -76,7 +71,7 @@ te_fsx:
     test ax, 1 << FSXM_TEXT80       ; the DISPLAY's own kind (SPEC.md 53.7.1),
     jz .out                         ; which osapi_video cannot answer for a
                                     ; window that is not on the primary
-    mov [te_tkind], dl
+    mov [con_tkind], dl
     mov byte [te_txm], 1            ; ...BEFORE the bracket: the kept worker
                                     ; must not draw one glyph into it
     mov ax, te_fsx_main
@@ -110,14 +105,18 @@ te_fsx_main:
     call OSAPI_FSX_MODE
     jc .done
     mov ax, [te_fsi + FSI_SEG]      ; the ONE thing that is not a constant:
-    mov [te_tseg], ax               ; B000 on Hercules and B800 on the rest
+    mov [con_tseg], ax               ; B000 on Hercules and B800 on the rest
     mov ax, 0x0100                  ; park the CRTC cursor - it is ours now,
     mov cx, 0x2000                  ; and the mode set left it blinking at 0,0
     int 0x10                        ; (SPEC.md 53.4)
-    call te_tx_ice                  ; ...and the blink bit, which is a per-
+    call con_tx_ice                  ; ...and the blink bit, which is a per-
                                     ; adapter question (SPEC.md 70.8.9)
-    mov byte [te_thint], 0xFF
-    call te_markall
+    mov byte [con_thint], 0xFF
+    OS88_ALTENTER_SEED              ; the Alt+Enter that got us here is still
+                                    ; held, and te_tx_keys' read is a LEVEL
+                                    ; one: without this the first poll takes
+                                    ; that same hold as the press that leaves
+    call con_markall
     call te_tx_owed
     call te_tx_hint                 ; ONCE, on entry, and the host is allowed
 .loop:                              ; to overwrite it (SPEC.md 70.8.7)
@@ -144,7 +143,7 @@ te_fsx_main:
     jmp short .loop
 .done:
     mov byte [te_txm], 0            ; ...INSIDE the bracket, so fsx_restore's
-    call te_markall                 ; repaint finds the app windowed and the
+    call con_markall                 ; repaint finds the app windowed and the
     pop es                          ; whole screen owed
     pop di
     pop si
@@ -163,6 +162,12 @@ te_fsx_main:
 ; -----------------------------------------------------------------------------
 te_tx_keys:
     push ax
+    call os88alt_edge               ; ALT+ENTER LEAVES TOO (SPEC.md 11.2.1.1),
+    jc .quit                        ; beside ^]. It cannot arrive through the
+                                    ; int 16h below - no XT BIOS enqueues the
+                                    ; combination (9.7.1) - and a bracket
+                                    ; dispatches no events (53.1), so the
+                                    ; key-state map is what carries it
 .next:
     mov ah, 1
     int 0x16
@@ -186,7 +191,7 @@ te_tx_keys:
 ; te_tx_owed - the scroll, then the rows the bitmap names, then the cursor
 ; in:  nothing; out: nothing, all registers preserved
 ;
-; THE SAME MARKS THE WINDOWED PATH USES (SPEC.md 70.8.1). te_putc runs on the
+; THE SAME MARKS THE WINDOWED PATH USES (SPEC.md 70.8.1). con_putc runs on the
 ; kept worker and marks the row it wrote whichever screen is up, so the two
 ; renderers share one answer to "what changed" and cannot drift about it.
 ;
@@ -207,15 +212,15 @@ te_tx_owed:
     push di
     push es
     cld
-    call te_tx_scroll               ; ...FIRST: the rows below are lettered on
+    call con_tx_scroll               ; ...FIRST: the rows below are lettered on
     xor bx, bx                      ; top of the pixels this moves
 .row:
-    call te_takerow
+    call con_takerow
     jnc .next
-    call te_tx_row
+    call con_tx_row
 .next:
     inc bx
-    cmp bx, TE_ROWS
+    cmp bx, CON_ROWS
     jb .row
     cmp byte [tz_pan], 0
     je .nop
@@ -225,7 +230,7 @@ te_tx_owed:
                                     ; tz_end marks it and the loop above
                                     ; re-emits it from the buffer
 .nop:
-    call te_tx_cursor
+    call con_tx_cursor
     pop es
     pop di
     pop si
@@ -235,283 +240,15 @@ te_tx_owed:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; te_tx_scroll - spend [te_scrl] as ONE VRAM move (SPEC.md 70.8.8)
-;
-; **THIS RENDERER DID NOT SCROLL AT ALL.** te_tx_owed used to end with
-; `mov word [te_scrl], 0` under the comment "a text row change IS the scroll
-; here: the rows are re-emitted, so there is nothing for te_scrollpaint to
-; spend". Only the rows in the dirty range were re-emitted, and te_scrollck
-; marked exactly one - the row it opened. So after a scroll the buffer had
-; moved every row up and the screen had been told about the last one: rows
-; 0..N-2 kept showing pre-scroll text for the rest of the session, and the
-; bottom row was overwritten again and again. A board's output, which is one
-; long scroll, was legible on one line.
-;
-; The debt is spent the way it was always for: ONE `rep movsw` of (25-N)*160
-; bytes inside VRAM, and the N rows it vacates are marked so the loop above
-; re-emits them from the buffer.
-; -----------------------------------------------------------------------------
-te_tx_scroll:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    call te_takescroll              ; ...read and zeroed together, because the
-    or ax, ax                       ; WORKER adds to that counter while this
-    jz .out                         ; runs (SPEC.md 70.8.8)
-    cmp ax, TET_ROWS
-    jae .all                        ; the whole screen scrolled away: there is
-                                    ; nothing under it worth moving
-    mov [te_rr], ax                 ; N, out of the registers' way while DS is
-                                    ; pointed at VRAM. te_rr is te_compose's
-                                    ; scratch and the two renderers are never
-                                    ; up at once - [te_txm] is what says so
-    mov bx, TET_COLS * 2
-    mul bx                          ; **MUL WRITES DX** (SPEC.md 1). AX = the
-    mov si, ax                      ; source row's offset, N*160
-    xor di, di
-    mov ax, TET_ROWS
-    sub ax, [te_rr]
-    mov bx, TET_COLS
-    mul bx                          ; AX = (25-N)*80 WORDS
-    mov cx, ax
-    mov ax, [te_tseg]
-    mov es, ax
-    push ds
-    mov ds, ax                      ; VRAM to VRAM, and DS comes straight back
-    cld
-    rep movsw
-    pop ds                          ; ...before te_mark reads one of our words
-    mov bx, TET_ROWS
-    sub bx, [te_rr]
-.mk:
-    call te_mark                    ; the rows it VACATED are owed, and the
-    inc bx                          ; loop above re-emits them from the buffer
-    cmp bx, TET_ROWS
-    jb .mk
-    ; --- AND THE ROW THE LEAVE HINT LANDED ON ------------------------------
-    ; The move carried it up with everything else, and the row it arrived on
-    ; is not one of the vacated ones - so without this it drifts a row up the
-    ; screen per scroll and stays there wherever the board is not drawing. It
-    ; is marked instead, and the buffer erases it: "gone the moment the board
-    ; draws" (SPEC.md 70.8.7) is then true of a board that scrolls as well as
-    ; of one that prints over it.
-    mov al, [te_thint]
-    cmp al, 0xFF
-    je .out                         ; already off the top
-    mov bl, [te_rr]
-    sub al, bl
-    jc .hgone
-    mov [te_thint], al
-    mov bl, al
-    xor bh, bh
-    call te_mark
-    jmp short .out
-.hgone:
-    mov byte [te_thint], 0xFF
-    jmp short .out                  ; (the CRTC cursor needs no mark: it is
-                                    ; hardware, and te_tx_cursor places it
-                                    ; from [te_cx]/[te_cy] on every pass)
-.all:
-    mov byte [te_thint], 0xFF       ; ...AND THE HINT IS GONE WITH IT. Without
-                                    ; this the next scroll subtracts from a row
-                                    ; number that no longer means anything and
-                                    ; marks an unrelated row - one redundant
-                                    ; redraw, never wrong pixels, and one line
-                                    ; to stop it
-    call te_markall
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; --- te_tx_row - BX = a buffer row, onto the text screen ---------------------
-; A COLOUR ROW IS A MOVE: te_scr's cell is character then attribute and so is
-; VRAM's, so eighty words go straight across. An MDA row is eighty cells each
-; MAPPED first (SPEC.md 70.8.9), because mode 7 has no background colour.
-te_tx_row:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov ax, TE_COLS * 2
-    mul bx                          ; **MUL WRITES DX** (SPEC.md 1)
-    mov si, te_scr
-    add si, ax
-    mov di, ax                      ; ...and the VRAM offset is the SAME
-    mov es, [te_tseg]               ; number: one cell, one layout
-    mov cx, TET_COLS
-    cld
-    cmp byte [te_tkind], VID_HERC
-    je .mda
-    rep movsw
-    jmp short .out
-.mda:
-    lodsw                           ; AL = the character, AH = the attribute
-    call te_tx_mattr                ; ...which mode 7 cannot say in colour
-    stosw
-    loop .mda
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; --- te_tx_mattr - AH = an IBM attribute -> the MDA byte (SPEC.md 70.8.9) ----
-; The INVERSE predicate is 70.8.4's, to the bit: it is the same question the
-; 1bpp windowed renderer asks about polarity, so the two 1bpp paths cannot
-; disagree about which cells are reversed.
-;
-; **THREE CASES AND THE BLINK BIT, AND NO FOURTH.** An earlier draft mapped
-; SGR 4 to MDA's 0x01 underline off a [te_ul] byte; SPEC.md 70.8.9 dropped it,
-; because SGR 4 does not reach the attribute at all - the parser keeps
-; underline out of the cell, so there is no third byte per cell and nothing
-; for this to read. **THE INPUT HERE IS THE DERIVED IBM BYTE** - bits 0-3
-; foreground, 4-6 background, 7 blink - and this renderer never sees the
-; logical state it came from.
-te_tx_mattr:
-    push bx
-    mov bl, ah
-    and bl, 0x80                    ; blink is kept in every case
-    test ah, 0x07
-    jnz .bright                     ; a foreground that is not 0 or 8 reads
-    test ah, 0x70                   ; as text whatever the paper is
-    jz .plain
-    or bl, 0x70                     ; INVERSE: lit paper, dark glyph
-    jmp short .set
-.bright:
-    test ah, 0x08
-    jz .plain
-    or bl, 0x0F                     ; ...intensity is all MDA has of colour
-    jmp short .set
-.plain:
-    or bl, 0x07
-.set:
-    mov ah, bl
-    pop bx
-    ret
-
-; --- te_tx_cursor - the hardware cursor, positioned by the BRACKET -----------
-; SPEC.md 53.7's forbidden list has exactly one int 10h on it - a MODE SET
-; outside fsx_mode - and 53.4 names AH=02h and AH=01h as calls the bracket may
-; already make. Both existing consumers, this file and trktxt.inc, already do
-; the AH=01h park, byte for byte the same three instructions.
-te_tx_cursor:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov al, [te_cvis]
-    cmp al, [te_tcur]
-    je .place                       ; the SHAPE is only issued on a change: it
-    mov [te_tcur], al               ; is what the mode set already chose, and a
-    or al, al                       ; BIOS call a frame for a byte that does
-    jz .park                        ; not move is a frame the worker wanted
-    mov ax, 0x0106                  ; ...an underline in an 8-row cell
-    mov cx, 0x0607
-    int 0x10
-    jmp short .place
-.park:
-    mov ax, 0x0100                  ; SPEC.md 53.4's park, byte for byte what
-    mov cx, 0x2000                  ; trktxt.inc does
-    int 0x10
-    jmp short .out
-.place:
-    cmp byte [te_cvis], 0
-    je .out
-    mov ah, 2
-    xor bh, bh
-    mov dh, [te_cy]
-    mov dl, [te_cx]
-    int 0x10
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; --- te_tx_ice - blink or a bright background, per adapter (SPEC.md 70.8.9) --
-; 53.4 gives the app the blink toggle explicitly, "through the BIOS the
-; bracket may already call (... AX=1003h blink) or the CRTC ports directly",
-; and 53.7 says the video hardware inside a foreign mode is otherwise the
-; app's - so port 3D8h is the app's to write. Hercules has neither, and the
-; menu item is greyed there rather than doing nothing.
-te_tx_ice:
-    push ax
-    push bx
-    push dx
-    mov bl, 1
-    cmp byte [te_ice], 0
-    je .have
-    xor bl, bl                      ; iCE ON is BLINK OFF
-.have:
-    cmp byte [te_tkind], VID_CGA
-    je .cga
-    cmp byte [te_tkind], VID_HERC
-    je .out                         ; MDA text is monochrome: nothing to do
-    mov ax, 0x1003
-    int 0x10
-    jmp short .out
-.cga:
-    mov al, 0x29                    ; 80x25 text, video on, blink on
-    or bl, bl
-    jnz .cw
-    mov al, 0x09                    ; ...bit 5 clear = a bright background
-.cw:
-    mov dx, 0x3D8
-    out dx, al
-.out:
-    pop dx
-    pop bx
-    pop ax
-    ret
-
-; --- te_tx_hint - the way out, drawn ONCE on the bottom row ------------------
-; **AND THE HOST IS ALLOWED TO OVERWRITE IT** (SPEC.md 70.8.7). A hint that
-; survives is a hint that fights the board for the row it needs; a hint that
-; is gone the moment the board draws is a hint that did its job.
+; --- te_tx_hint - OUR string, on os88con.inc's bottom row (SPEC.md 70.8.13) --
+; The PROC is the library's and the STRING is ours, which is the seam that
+; matters: the key that leaves a bracket is the carrier's decision, so the
+; sentence naming it cannot be the library's.
 te_tx_hint:
-    push ax
-    push cx
     push si
-    push di
-    push es
-    mov es, [te_tseg]
-    mov di, ((TET_ROWS - 1) * TET_COLS + TET_COLS - 12) * 2
     mov si, te_s_leave
-    mov ah, TET_SATTR               ; ...inverse, which mode 7 spells the same
-    mov byte [te_thint], TET_ROWS - 1   ; the row it is on, so a scroll can
-                                        ; erase it where it lands
-.h:
-    mov al, [si]
-    or al, al
-    jz .out
-    inc si
-    stosw
-    jmp short .h
-.out:
-    pop es
-    pop di
+    call con_tx_hint
     pop si
-    pop cx
-    pop ax
     ret
 
 te_s_leave: db ' ^] to leave', 0

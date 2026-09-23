@@ -63,7 +63,7 @@ A C port would be a `§73` package, and the four rules are not stylistic:
   not respect.
 
 And the decisive one is not on that list: **the package already exists**, in
-assembly, and its two renderers share `te_scr` with the parser. A C parser
+assembly, and its two renderers share `con_scr` with the parser. A C parser
 would be a third language boundary inside one package, reached across
 `§73.14`'s overlay contract, to replace a routine that fits on a screen.
 
@@ -297,7 +297,7 @@ which is the correct behaviour for a sequence this does not implement.
 with no way to reach it. A scrollbar would need: a control (about 300 bytes
 with `os88ui`), a `[te_vleft]` word, a second term in every blit's x, and a
 second term in the About panel's fill and the scroll blit's rect — both of
-which `te_wpx` exists to keep to one opinion. **The reason it is not worth it
+which `con_wpx` exists to keep to one opinion. **The reason it is not worth it
 is not the bytes**: full screen shows all eighty columns, it is one keystroke
 away, and it is where a board is used. A scrollbar would be the affordance for
 a mode nobody should be in.
@@ -319,10 +319,10 @@ TELNET-PLAN §3.8 and §3.9.
 Both are in `apps/telnet/tetxt.inc` and both are recorded in §70.8.8 with the
 fix. What was actually checked, in the code:
 
-**1. Full screen did not scroll.** `te_tx_owed` ends `mov word [te_scrl], 0`
+**1. Full screen did not scroll.** `te_tx_owed` ends `mov word [con_scrl], 0`
 under the comment *"a text row change IS the scroll here: the rows are
 re-emitted."* Only rows in the dirty range are re-emitted, and `te_scrollck`
-marks exactly one — `mov bx, TE_ROWS - 1`, the row it opened. So the buffer
+marks exactly one — `mov bx, CON_ROWS - 1`, the row it opened. So the buffer
 scrolled and VRAM was told about the last row: **rows 0..16 kept pre-scroll
 text for the rest of the session** and the bottom row was overwritten again and
 again. A board's output is one long scroll, so the whole feature was legible on
@@ -361,12 +361,12 @@ measurement**; the real numbers come off `os88pkg`'s line when the code exists.
 | item | image | bss |
 |---|---|---|
 | today | 4,719 | 1,935 |
-| `te_scr` 80×25×2, replacing 64×18+1 | | +2,847 |
-| `te_glyf`, the 256-glyph runtime table | | +2,048 |
-| `te_band`, one composed row | | +640 |
+| `con_scr` 80×25×2, replacing 64×18+1 | | +2,847 |
+| `con_glyf`, the 256-glyph runtime table | | +2,048 |
+| `con_band`, one composed row | | +640 |
 | Zmodem staging, two 4 KB halves | | +8,192 |
 | `te_txb` 64 → 256, plus `te_pnd` 32 | | +224 |
-| `te_drb` and the new state bytes | | ~+40 |
+| `con_drb` and the new state bytes | | ~+40 |
 | `tecp437.inc`, 160 shipped glyphs | +1,280 | |
 | `teansi.inc` | ~+1,500 | |
 | `tezm.inc` | ~+1,800 | |
@@ -488,7 +488,7 @@ worker waits for every commit instead of filling the other half through it
 9. **A byte no renderer reads is a byte that goes stale in silence.** Two of
    them were declared before any code existed — `te_ul` for SGR 4 and `te_satr`
    for the attribute `ESC 7` saves — and both are gone (§70.9.4, §70.9.3). The
-   design's own contract is the 4,000 bytes of `te_scr`; a flag published
+   design's own contract is the 4,000 bytes of `con_scr`; a flag published
    beside it bought the gate nothing and would have been believed by whoever
    next added a rule about underline.
 

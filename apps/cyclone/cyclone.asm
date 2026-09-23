@@ -192,6 +192,24 @@ CY_MAXENEM  equ 10                  ; live enemies. The arcade's on-screen cap
 CY_MAXSHOT  equ 6                   ; player shots in flight
 CY_MAXESHOT equ 6                   ; enemy shots
 CY_MAXPU    equ 3                   ; powerup pickups on the web at once
+CY_PUGRACE  equ 4                   ; SPEC.md 67.24: frames a pickup stays
+                                    ; collectable after it has left the glass -
+                                    ; under a quarter second at 18fps. It was
+                                    ; 15, and 0.8s is long enough to cross the
+                                    ; web and collect from the far side, which
+                                    ; is not sweeping by (67.24.2)
+CY_PUNEAR   equ 0                   ; ...and how many lanes either side count.
+                                    ; ZERO: the exact lane only (67.24.3). The
+                                    ; reach below the lip turned out to be the
+                                    ; half that was wanted, and this one was
+                                    ; the half that made a sweep feel loose.
+                                    ; Set it to 1 to have it back - the code is
+                                    ; %if'd rather than deleted, so it costs
+                                    ; nothing while it is off
+CY_PUREACH  equ 1                   ; ...and how many DEPTH STEPS short of the
+                                    ; lip it can already be taken, so the
+                                    ; window is an AREA and not an instant
+                                    ; with a timer bolted to it
 CY_RIMSTEP  equ 14                  ; frames between rim steps: slow enough
                                     ; to be shootable, fast enough to matter
 CY_MAXDBR   equ 8                   ; debris particles in the game-over burst
@@ -285,7 +303,10 @@ CYP_LASER   equ 0                   ; particle laser: shots pierce
 CYP_DROID   equ 1                   ; AI droid: an autonomous second gun
 CYP_JUMP    equ 2                   ; jump: hop over what is on your lane
 CYP_ZAP     equ 3                   ; an extra superzapper charge
-CYP_KINDS   equ 4
+CYP_LIFE    equ 4                   ; a spare life (SPEC.md 67.23.2)
+CYP_KINDS   equ 5
+CY_ZAPMAX   equ 3                   ; superzapper charges the HUD can show
+CY_LIVEMAX  equ 9                   ; ...and lives, which is one HUD digit
 
 ; game states
 CYS_TITLE   equ 0                   ; attract screen, animating
@@ -562,14 +583,16 @@ cy_s_small      db 'Window too small', 0
 cy_s_paused     db 'PAUSED', 0
 cy_s_avoid      db 'AVOID THE SPIKES', 0
 cy_s_superzap   db 'SUPERZAPPER RECHARGE', 0
+cy_s_zapfired   db 'SUPERZAPPER!', 0
 
 ; the powerup names, indexed by CYP_*
 cy_pu_names:
-    dw cy_pn_laser, cy_pn_droid, cy_pn_jump, cy_pn_zap
+    dw cy_pn_laser, cy_pn_droid, cy_pn_jump, cy_pn_zap, cy_pn_life
 cy_pn_laser     db 'PARTICLE LASER', 0
 cy_pn_droid     db 'AI DROID', 0
 cy_pn_jump      db 'JUMP', 0
 cy_pn_zap       db 'ZAPPER CHARGE', 0
+cy_pn_life      db 'SPARE LIFE', 0
 
 ; The attract screen's scrolling text. One line per row, an empty string is a
 ; blank line, and the list ends with 0FFh.
@@ -809,6 +832,12 @@ cy_entry:
     call OSAPI_WM_CREATE
     jc .fail
     mov [cy_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
 
     ; We paint every pixel of our content ourselves - the field is black and
     ; the kernel's white fill before W_PAINT would be a full-content flash on
@@ -1090,6 +1119,15 @@ cy_hire:
     call OSAPI_TASK_SPAWN
     jc .nope                        ; transient - try again next paint
     mov byte [cy_hired], 1
+    ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
+    ; kernel wrote our segment into this worker's frame before its
+    ; first instruction, so mem_frameless pins a region with an
+    ; undeclared worker however that region is declared. What a restart
+    ; costs is one pass of the loop - the park is inside
+    ; OSAPI_TASK_ALIVE and nowhere else (this package is not
+    ; OSAPI_MEM_PARKSAFE), which is the TOP of the loop, and every byte
+    ; that outlives a pass is a static and moves with us.
+    OS88_WORKER_RESTARTABLE cy_worker
 .nope:
     pop bx
     pop ax
@@ -1106,9 +1144,25 @@ cy_hire:
 ; =============================================================================
 cy_onkey:
     push si
+    ; --- ALT+ENTER IS AHEAD OF THE PANEL, AND OF cy_pn_dismiss (11.2.1.1) ---
+    ; TWO reasons, and the second is a defect this found rather than a
+    ; preference: SPEC.md 11.2.1.1's door is unconditional, which is where
+    ; apps/paint and apps/apple2 put theirs - a panel that swallowed it would
+    ; be a full screen with no way back and one more step in front of it. And
+    ; cy_pn_dismiss does NOT preserve AH: it ends in cy_pn_off and
+    ; cy_full_repaint, so every test in cy_key_common that reads the SCAN code
+    ; is reading whatever those left behind. The letters below survive because
+    ; they test AL; this chord is ascii 0 and has nothing but the scan code.
+    cmp ax, KEY_ALTENTER
+    je .fs
     call cy_pn_dismiss              ; any key takes a panel down, and is spent
     jc .spent                       ; doing it
     call cy_key_common
+    jmp short .spent
+.fs:
+    call cy_key_common.fs           ; ...the SAME body `f` reaches, by its
+                                    ; qualified name: one door, and no second
+                                    ; copy of the enter/leave decision
 .spent:
     call cy_kbdrain                 ; the UI task takes ONE key per pass, so
     pop si                          ; this is the second drain point and the
@@ -1355,7 +1409,7 @@ cy_layout:
 
     ; The vanishing point, in CONTENT coordinates - which is the space the
     ; whole app works in, because cy_fillc is what adds the origin. The one
-    ; exception is cy_walk_one: OSAPI_GFX_LINIT takes ABSOLUTE screen
+    ; exception is cy_walk_one: the walk takes ABSOLUTE screen
     ; coordinates, so it adds the origin itself.
     mov ax, [cy_cwid]
     shr ax, 1
@@ -3770,7 +3824,9 @@ cy_newgame:
     mov word [cy_bonus], 0
     mov byte [cy_lives], 3
     mov word [cy_level], 1
-    mov byte [cy_zap], 1
+    mov byte [cy_zap], 0            ; ...and cy_startlevel's recharge below is
+                                    ; what makes it 1, so level 1 is told about
+                                    ; its charge exactly as every later one is
     mov word [cy_pw_laser], 0
     mov word [cy_pw_droid], 0
 %ifdef DROIDNOW
@@ -3810,6 +3866,8 @@ cy_startlevel:
     mov byte [cy_full], 1
     mov byte [cy_huddirty], 1
     mov word [cy_spawnt], 0
+    call cy_zap_recharge            ; SPEC.md 67.23.3: one charge on the house,
+                                    ; every level, and the line that says so
     call cy_wavesize
     pop di
     pop dx
@@ -3939,6 +3997,9 @@ cy_clearboard:
     mov di, cy_u_act
     mov cx, CY_MAXPU
     rep stosb
+    mov di, cy_g_t                  ; ...and the grace windows with them, or a
+    mov cx, CY_MAXPU                ; pickup filed on the last level is taken
+    rep stosb                       ; on the first frame of the next one
     mov di, cy_d_act
     mov cx, CY_MAXDBR
     rep stosb
@@ -4817,13 +4878,35 @@ cy_superzap:
     mov al, CYSFX_ZAP
     call cy_sfx
     mov byte [cy_huddirty], 1
-    mov si, cy_s_superzap
+    mov si, cy_s_zapfired           ; SPEC.md 67.23.3: what a zapper FIRING
+                                    ; says. 'SUPERZAPPER RECHARGE' is what a
+                                    ; level start says, and using one to
+                                    ; announce a charge being SPENT was the
+                                    ; one line the game had for both
     call cy_msg_set
 .out:
     pop si
     pop cx
     pop bx
     pop ax
+    ret
+
+; --- cy_zap_recharge ----------------------------------------------------------
+; SPEC.md 67.23.3: one free charge at the top of every level, and the line that
+; announces it. It is SILENT when the player is already at the cap, because a
+; 'SUPERZAPPER RECHARGE' that recharged nothing is a message that lies - and
+; the cap is reachable, the powerup granting charges too.
+; -----------------------------------------------------------------------------
+cy_zap_recharge:
+    push si
+    cmp byte [cy_zap], CY_ZAPMAX
+    jae .out
+    inc byte [cy_zap]
+    mov byte [cy_huddirty], 1
+    mov si, cy_s_superzap
+    call cy_msg_set
+.out:
+    pop si
     ret
 
 ; --- cy_do_jump ---------------------------------------------------------------
@@ -5422,6 +5505,15 @@ cy_score_kind:
     push dx
     mov bl, al
     mov bh, 0
+    shl bx, 1                       ; **cy_kindsc IS A WORD TABLE** (SPEC.md
+                                    ; 67.23). Without this the kind is a BYTE
+                                    ; offset into it, so three of the five
+                                    ; kinds read a word straddling two entries:
+                                    ; a tanker paid 25,600 where the table says
+                                    ; 100 and a fuseball 12,800 where it says
+                                    ; 250. cy_ekext beside it is the same shape
+                                    ; and always had the shift; cy_ekcol is
+                                    ; `db` and rightly has none
     mov ax, [cy_kindsc + bx]
     mov bx, [cy_level]
     inc bx
@@ -5620,7 +5712,9 @@ cy_maybe_drop:
     mov bl, 3                       ; + the particle laser
     cmp word [cy_level], 6
     jb .k
-    mov bl, 4                       ; + the AI droid
+    mov bl, 5                       ; + the AI droid and the SPARE LIFE, which
+                                    ; takes an equal slice like every other
+                                    ; kind (SPEC.md 67.23.2)
 .k:
     mov bh, 0
     xor dx, dx
@@ -5636,6 +5730,9 @@ cy_maybe_drop:
     cmp dl, 2
     je .have
     mov al, CYP_DROID
+    cmp dl, 3
+    je .have
+    mov al, CYP_LIFE
 .have:
     mov [cy_u_kind + si], al
     mov byte [cy_u_act + si], 1
@@ -5657,10 +5754,20 @@ cy_maybe_drop:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; cy_pu_update - drift every pickup, and take the ones the claw reached
+;
+; SPEC.md 67.24.4: it brackets itself with [cy_psweep0], so the take tests
+; below see the ARC the claw swept since the last time pickups were looked at
+; rather than the single lane it happens to be on now. The capture is at the
+; END and not the top of the frame on purpose - "since we last looked" covers
+; the motion whatever caused it, and cy_aim_mouse is not the only mover.
+; -----------------------------------------------------------------------------
 cy_pu_update:
     push ax
     push bx
     push si
+    call cy_pu_grace                ; SPEC.md 67.24, and BEFORE the drift loop
     xor si, si
 .each:
     cmp si, CY_MAXPU
@@ -5675,19 +5782,175 @@ cy_pu_update:
     jb .live
     mov byte [cy_u_act + si], 2     ; reached the rim
     mov al, [cy_u_lane + si]
-    cmp al, [cy_plane]
-    jne .next
+    call cy_pu_near                 ; SPEC.md 67.24: the claw's lane OR either
+    jc .miss                        ; neighbour, not the one exact lane
     mov al, [cy_u_kind + si]
     call cy_pu_take
     jmp short .next
+.miss:
+    ; ...and it is not gone yet. The claw may still sweep onto it, which is
+    ; what the arcade lets you do and what one frame on one lane does not.
+    mov al, [cy_u_lane + si]
+    mov [cy_g_lane + si], al
+    mov al, [cy_u_kind + si]
+    mov [cy_g_kind + si], al
+    mov byte [cy_g_t + si], CY_PUGRACE
+    jmp short .next
 .live:
     mov [cy_u_dp + bx], ax
+    ; --- SPEC.md 67.24.2: IT IS TAKEABLE A STEP BEFORE THE LIP --------------
+    ; The grace window alone makes the collect point an INSTANT with a timer
+    ; after it; this makes it an AREA. One drawing position short of the lip is
+    ; where a sweeping claw and a rising pickup actually meet, and taking it
+    ; there is what "sweep by" means - the pickup leaves the glass when it is
+    ; collected, which is the feedback, rather than at a fixed depth.
+    cmp ax, (CY_TOPD - CY_PUREACH) * 256
+    jb .next
+    mov al, [cy_u_lane + si]
+    call cy_pu_near
+    jc .next
+    mov byte [cy_u_act + si], 2
+    mov al, [cy_u_kind + si]
+    call cy_pu_take
+.next:
+    inc si
+    jmp short .each
+.out:
+    mov ax, [cy_plane]              ; ...and the arc starts again HERE
+    mov [cy_psweep0], ax
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cy_pu_near - is the claw close enough to take a pickup on lane AL?
+; in:   AL = the pickup's lane
+; out:  CF = 0 close enough, CF = 1 not. Preserves every register.
+;
+; THE NEIGHBOURS COME FROM cy_wrap (SPEC.md 67.16), which is the web's own
+; topology and not arithmetic on the index: on a CLOSED web lane 0's left
+; neighbour is the last lane, and on an OPEN one - the flat ribbon, the vee -
+; it is lane 0 itself, so the ends of an open web do not wrap round the back.
+; Asking cy_wrap is how that stays true when a shape is added.
+; -----------------------------------------------------------------------------
+cy_pu_near:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bl, al
+    mov bh, 0                       ; BX = the pickup's lane
+    mov cx, [cy_plane]              ; CX = where the claw is NOW
+    cmp bx, cx
+    je .yes
+%if CY_PUNEAR
+    mov ax, bx
+    sub ax, CY_PUNEAR
+    call cy_wrap
+    cmp ax, cx
+    je .yes
+    mov ax, bx
+    add ax, CY_PUNEAR
+    call cy_wrap
+    cmp ax, cx
+    je .yes
+%endif
+    ; --- SPEC.md 67.24.4: THE ARC, not the sample -------------------------
+    ; cy_aim_mouse puts the claw on the lane NEAREST the pointer, so a sweep
+    ; moves it several lanes in one frame and every lane in between is never
+    ; [cy_plane] on any frame boundary. Testing that word alone therefore
+    ; misses a pickup the claw demonstrably went over, which is why sweeping
+    ; worked on some boards and not others: the more lanes a shape has, the
+    ; more of them one flick of the pointer steps across.
+    mov dx, [cy_psweep0]
+    cmp dx, cx
+    je .no                          ; it has not moved since we last looked
+    cmp word [cy_closed], 0
+    je .open
+    ; CLOSED: it went the SHORT way round, so the arc is measured that way -
+    ; 15 -> 2 on a sixteen-lane web is three lanes forward and not thirteen
+    ; backward, and taking the long reading would make every pickup on the
+    ; board collectable on any flick.
+    mov ax, cx
+    sub ax, dx
+    jns .fwd
+    add ax, [cy_nlane]
+.fwd:                               ; AX = the forward distance
+    mov si, [cy_nlane]
+    shr si, 1
+    cmp ax, si
+    jbe .arc                        ; forward IS the short way
+    xchg cx, dx                     ; ...otherwise the arc runs the other way,
+    mov ax, cx                      ; so start it at where the claw ended up
+    sub ax, dx
+    jns .arc
+    add ax, [cy_nlane]
+.arc:                               ; DX = the arc's start, AX = its length
+    mov si, bx
+    sub si, dx
+    jns .arcc
+    add si, [cy_nlane]
+.arcc:
+    cmp si, ax
+    jbe .yes
+    jmp short .no
+.open:
+    ; OPEN: the claw cannot wrap, so the arc is simply the range between them
+    cmp dx, cx
+    jb .olo
+    xchg dx, cx
+.olo:                               ; DX <= CX now
+    cmp bx, dx
+    jb .no
+    cmp bx, cx
+    jbe .yes
+.no:
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop si                          ; `pop` touches no flag on an 8086, so the
+    pop dx                          ; answer above survives all five
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cy_pu_grace - spend the windows SPEC.md 67.24 opened
+;
+; A pickup that reached the lip with the claw elsewhere left the glass on that
+; frame - the look is unchanged - but stays TAKEABLE for CY_PUGRACE frames, so
+; sweeping onto its lane just after it landed collects it. Called once a frame
+; from cy_pu_update, above the drift loop, so a window filed this frame is
+; first tested on the next one rather than twice on this one.
+; -----------------------------------------------------------------------------
+cy_pu_grace:
+    push ax
+    push si
+    xor si, si
+.each:
+    cmp si, CY_MAXPU
+    jae .out
+    cmp byte [cy_g_t + si], 0
+    je .next
+    mov al, [cy_g_lane + si]
+    call cy_pu_near
+    jc .tick
+    mov byte [cy_g_t + si], 0
+    mov al, [cy_g_kind + si]
+    call cy_pu_take
+    jmp short .next
+.tick:
+    dec byte [cy_g_t + si]
 .next:
     inc si
     jmp short .each
 .out:
     pop si
-    pop bx
     pop ax
     ret
 
@@ -5727,9 +5990,19 @@ cy_pu_take:
     inc byte [cy_pw_jump]
     jmp short .say
 .z:
-    cmp byte [cy_zap], 3
+    cmp al, CYP_ZAP
+    jne .life
+    cmp byte [cy_zap], CY_ZAPMAX
     jae .say
     inc byte [cy_zap]
+    jmp short .say
+.life:
+    ; SPEC.md 67.23.2: the SPARE LIFE. It is the only deliberate source of one
+    ; now - 67.23.1 took the accidental source away - and it caps where the HUD
+    ; does, the counter being a single digit.
+    cmp byte [cy_lives], CY_LIVEMAX
+    jae .say
+    inc byte [cy_lives]
 .say:
     shl bx, 1
     mov si, [cy_pu_names + bx]
@@ -6028,8 +6301,18 @@ cy_die_update:
     je .over
     dec byte [cy_lives]
     mov byte [cy_huddirty], 1
-    call cy_clearboard
-    call cy_wavesize
+    call cy_clearboard              ; ...which zeroes cy_left: the scene goes
+    ; --- SPEC.md 67.25: AND cy_wavesize IS NOT CALLED HERE -------------------
+    ; It was, and it sets [cy_wleft] to the FULL wave for the level - so every
+    ; death put the still-to-spawn count back to 40 from level 13 on, and a
+    ; player who died twice could play for a long time and never reach the end
+    ; of the level. The only other things it sets are [cy_kinds] and [cy_espd],
+    ; which are LEVEL constants written nowhere else, so they are already right
+    ; and re-deriving them was the whole of what the call legitimately did.
+    ;
+    ; What cy_clearboard took off the web is FORGIVEN rather than put back on
+    ; the to-spawn pile: the scene clears as it always did, and the enemies
+    ; that killed the player do not have to be killed again.
     mov byte [cy_state], CYS_WARPIN
     mov byte [cy_wpha], CY_WARP_SPOKE
     mov byte [cy_wstarted], 0
@@ -6129,11 +6412,7 @@ cy_play_render:
     shl cx, 1
     mov di, cx
     mov ah, [cy_e_dp + di + 1]
-    push ax
-    mov al, [cy_e_lane + si]
-    call cy_spk_mark                ; the spike wants the REAL depth
-    pop ax
-    call cy_dmap                    ; ...the drawing wants the mapped one
+    call cy_dmap                    ; the drawing wants the MAPPED depth
     call cy_setrect
     mov ax, si
     add ax, CY_OB_E
@@ -6142,6 +6421,21 @@ cy_play_render:
     mov bh, 0
     mov al, [cy_ekcol + bx]
     call cy_obj_show
+    ; --- SPEC.md 67.23.4: THE MARK IS OWED BY AN ERASE, NOT BY EXISTING -----
+    ; This stood ABOVE the draw and fired for every live enemy every frame,
+    ; which is exactly the enemies that did not move - the header's own "most
+    ; enemies most frames" and the single biggest saving in the game loop. A
+    ; mover that did not move erased nothing, so the spike under it and the web
+    ; around it are still whole and marking them dirty spends cy_spk_draw's
+    ; whole chain - one gfx_fill a depth step, up to sixteen - on a repair of
+    ; undamaged pixels. The dead branch above keeps its mark: cy_obj_hide
+    ; really does erase.
+    jc .enext
+    mov al, [cy_e_lane + si]        ; ...and the spike wants the REAL depth,
+    mov bx, si                      ; which is why it is re-read here rather
+    shl bx, 1                       ; than banked across the draw
+    mov ah, [cy_e_dp + bx + 1]
+    call cy_spk_mark
 .enext:
     inc si
     jmp short .eloop
@@ -7056,7 +7350,7 @@ cy_hs_submit:
     ret
 
 ; =============================================================================
-; INITIALS AND THE SCORE FILE (SPEC.md 67.20)
+; INITIALS AND THE SCORE FILE (SPEC.md 67.23)
 ; =============================================================================
 
 cy_hs_file: db 'CYCLONE.HS', 0
@@ -7361,7 +7655,7 @@ cy_bcopy:
 ; --- cy_init_begin ------------------------------------------------------------
 ; The score made the table: take three initials for it.
 ;
-; It is a MODE rather than a state (SPEC.md 67.20): CYS_OVER already draws the
+; It is a MODE rather than a state (SPEC.md 67.23): CYS_OVER already draws the
 ; debris and the banner, and a sixth state would have to be added to the render
 ; dispatch, cy_draw_all's list and cy_track's layout branch for the sake of one
 ; text line.
@@ -8147,11 +8441,22 @@ cy_fsx_main:
     mov byte [cy_full], 1           ; the monitor we were not on
 .nosurf:                            ; (CF=1 is impossible here - we ARE the
                                     ; bracket - and leaves what cy_entry banked)
+    OS88_ALTENTER_SEED              ; ...and the Alt+Enter that got us here is
+                                    ; the same thought one key along: still
+                                    ; held, and a level read cannot tell that
+                                    ; hold from the press that would leave
     call OSAPI_MOUSE
     mov [cy_pbtn], al               ; seed the button, or the click that got
     mov byte [cy_mheld], 0          ; us here fires the moment we arrive
 .loop:
 .keys:
+    call os88alt_edge               ; ...and in HERE it arrives by neither
+    jnc .k16                        ; route int 16h below serves: no XT BIOS
+    mov byte [cy_fsxq], 1           ; enqueues the combination (SPEC.md 9.7.1)
+                                    ; and a bracket dispatches no events
+                                    ; (53.1). The SAME byte cy_key_common's
+                                    ; .fs sets, so the two worlds leave by one
+.k16:                               ; path
     mov ah, 1                       ; no events are dispatched in a bracket:
     int 0x16                        ; this IS the UI task, so poll int 16h
     jz .nokey
@@ -8522,6 +8827,16 @@ CY_TWORDS equ 14
     CBUF  cy_u_kind, CY_MAXPU
     CBUF  cy_u_lane, CY_MAXPU
     CBUF  cy_u_dp, CY_MAXPU * 2
+    ; SPEC.md 67.24: a pickup that reached the lip while the claw was somewhere
+    ; else stays COLLECTABLE for a while. These three are that window, one
+    ; record per slot - the record is filed under the slot the pickup was
+    ; leaving, which bounds the table for free
+    CBUF  cy_g_lane, CY_MAXPU
+    CBUF  cy_g_kind, CY_MAXPU
+    CBUF  cy_g_t, CY_MAXPU
+    CWORD cy_psweep0                ; SPEC.md 67.24.4: where the claw was when
+                                    ; pickups were last tested, which with
+                                    ; [cy_plane] is the ARC it swept since
 
     CBUF  cy_d_act, CY_MAXDBR
     CBUF  cy_d_x, CY_MAXDBR * 2
@@ -8568,6 +8883,7 @@ CY_TWORDS equ 14
 %define GFXE_PT_BUF cy_pts
 %define GFXE_PT_MAX CY_PTMAX
 %include "os88gfx.inc"
+%include "os88alt.inc"              ; SPEC.md 11.2.1.1's edge, for the bracket
 
     OS88_BSS CY_BSS
     OS88_IMAGE_END

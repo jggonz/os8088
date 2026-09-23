@@ -255,11 +255,11 @@ tz_end:
     mov byte [te_zon], 0
     mov byte [tz_st], ZR_OFF
     mov byte [tz_ps], ZP_IDLE
-    mov bx, TE_ROWS - 1
-    call te_mark                    ; ...and the row the FULL-SCREEN progress
+    mov bx, CON_ROWS - 1
+    call con_mark                    ; ...and the row the FULL-SCREEN progress
                                     ; line was written over, so it is re-emitted
                                     ; from the buffer (SPEC.md 70.11.5)
-    call te_markall
+    call con_markall
     cmp byte [tz_req], TZ_NONE
     jne .nopost                     ; **AND THERE IS NO NEXT PASS.** [te_zon] is
                                     ; already clear above, and te_step only
@@ -281,7 +281,7 @@ tz_end:
     jmp short .out
 .nopost:
     mov byte [tz_pan], 0
-    call te_markall
+    call con_markall
 .out:
     mov byte [te_dirty], 1
     pop bx
@@ -317,10 +317,10 @@ tz_fail:
     mov byte [tz_st], ZR_DRAIN
     mov byte [tz_ps], ZP_IDLE
     mov byte [tz_pan], 0            ; the panel comes off NOW: the reason is on
-    call te_markall                 ; the status line and the terminal is what
+    call con_markall                 ; the status line and the terminal is what
                                     ; the user wants back (SPEC.md 70.11.5)
-    mov bx, TE_ROWS - 1
-    call te_mark
+    mov bx, CON_ROWS - 1
+    call con_mark
     call tz_touchq
     mov byte [te_dirty], 1
     pop bx
@@ -2012,7 +2012,7 @@ tz_wake:
     jmp short .backstop
 .done:
     mov byte [tz_pan], 0            ; the takeover comes off and the terminal is
-    call te_markall                 ; back, which is the repaint it already owed
+    call con_markall                 ; back, which is the repaint it already owed
     mov byte [tz_req], TZ_NONE
 .backstop:
     ; --- THE CANCEL, AND IT IS NOT A PAINT (SPEC.md 70.11.4) ----------------
@@ -2629,30 +2629,30 @@ tz_panel:
     call tz_text
     mov al, CWHITE
     call OSAPI_SET_COLOR
-    call te_wpx
-    mov cx, [te_px]
+    call con_wpx
+    mov cx, [con_px]
     add cx, ax
     dec cx
-    mov ax, [te_px]
-    mov bx, [te_oy]
+    mov ax, [con_px]
+    mov bx, [con_oy]
     add bx, TE_TOPY
-    mov dx, [te_oy]
+    mov dx, [con_oy]
     add dx, [te_chh]
     sub dx, TE_STATH + 1            ; ...and NOT over the status line, which
     call OSAPI_GFX_FILL             ; carries the same figures
     mov al, CBLACK
     call OSAPI_SET_COLOR
     mov si, tz_s_hdr
-    mov dx, [te_oy]
+    mov dx, [con_oy]
     add dx, TE_TOPY + 12
-    mov cx, [te_px]
+    mov cx, [con_px]
     add cx, 16
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
     mov si, tz_msg
-    mov dx, [te_oy]
+    mov dx, [con_oy]
     add dx, TE_TOPY + 28
-    mov cx, [te_px]
+    mov cx, [con_px]
     add cx, 16
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
@@ -2671,15 +2671,15 @@ tz_bar:
     push bx
     push cx
     push dx
-    call te_wpx
+    call con_wpx
     sub ax, 32
     jbe .out                        ; a window too narrow for a bar draws none
     mov [tz_bw], ax
     mov al, CBLACK
     call OSAPI_SET_COLOR
-    mov ax, [te_px]
+    mov ax, [con_px]
     add ax, 16
-    mov bx, [te_oy]
+    mov bx, [con_oy]
     add bx, TE_TOPY + 48
     mov cx, ax
     add cx, [tz_bw]
@@ -2692,9 +2692,9 @@ tz_bar:
     mov [tz_bf], ax
     mov al, CBLACK
     call OSAPI_SET_COLOR
-    mov ax, [te_px]
+    mov ax, [con_px]
     add ax, 18
-    mov bx, [te_oy]
+    mov bx, [con_oy]
     add bx, TE_TOPY + 50
     mov cx, ax
     add cx, [tz_bf]
@@ -2786,11 +2786,11 @@ te_tx_prog:
     push di
     push es
     call tz_text
-    mov es, [te_tseg]
-    mov di, (TET_ROWS - 1) * TET_COLS * 2
+    mov es, [con_tseg]
+    mov di, (CON_ROWS - 1) * CON_COLS * 2
     mov si, tz_msg
-    mov ah, TET_SATTR
-    mov cx, TET_COLS - 12           ; ...and never over the leave hint's own
+    mov ah, CON_TSATTR
+    mov cx, CON_COLS - 12           ; ...and never over the leave hint's own
     cld                             ; twelve cells at the end of the row
 .h:
     mov al, [si]

@@ -594,6 +594,14 @@ _wd_xor:
 ; answer 1, or a greyed caption ORs on top of the live one it is replacing and
 ; comes out pixel-identical to it.
 ; -----------------------------------------------------------------------------
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; One button at a time: this package's rects are not one contiguous group,
+; so the record is pointed at whichever rect the caller staged.
+wv_btlbl: dw 0
+wv_btflg: dw 0
+    OS88UI_BTNREC wv_btrec, 0, wv_btlbl, wv_btflg, 1
+
 _wd_button:
     push bp
     mov bp, sp
@@ -617,7 +625,16 @@ _wd_button:
 .nofill:
     mov bx, [bp+4]                  ; the rect: OURS, so DS-relative, which is
     mov si, [bp+6]                  ; what os88ui_btn's own ds: overrides want
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [wv_btlbl], si          ; label and DI its flags, so the record takes
+    mov [wv_btflg], di          ; all three and the picture is identical
+    mov [wv_btrec+OS88UI_BT_RECTS], bx
+    mov bx, wv_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop dx

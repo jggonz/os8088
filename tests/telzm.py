@@ -99,8 +99,8 @@ PORT = 8095                     # NOT 8090 (ethernet), 8092 (thewire) or 8094
                                 # and a bound port is a gate reading the OTHER
                                 # one's answers
 HOSTLINE = "10.0.2.2:%d" % PORT
-TE_SCRSZ = 80 * 25 * 2          # ...the screen this gate reads back, which is
-                                # telansi's TE_COLS x TE_ROWS x 2 (SPEC.md 70.8)
+CON_SCRSZ = 80 * 25 * 2          # ...the screen this gate reads back, which is
+                                # telansi's CON_COLS x CON_ROWS x 2 (SPEC.md 70.8)
 
 # The rows of os88bbs.MANGLE83_CASES that a REAL SENDER can carry. The four
 # left out are named in the report rather than dropped in silence.
@@ -294,7 +294,7 @@ def main():
 
     sy = telansi.te_syms()
     for n in ("te_zon", "te_state", "tz_st", "tz_dlg", "tz_name", "tz_pan",
-              "tz_req", "tz_pos", "tz_rcv", "tz_fsz", "tz_diag", "te_scr",
+              "tz_req", "tz_pos", "tz_rcv", "tz_fsz", "tz_diag", "con_scr",
               "tz_why", "tz_ferr",
               "te_btn", "te_line", "te_hbuf"):
         if n not in sy:
@@ -539,8 +539,8 @@ def main():
             # byte of it may reach the ANSI parser - and ending on the FIRST of
             # those two `O`s left the second to be printed, so every completed
             # batch used to leave a stray `O` on the screen.
-            scr = m.readseg(pseg, sy["te_scr"], TE_SCRSZ)
-            lit = [i // 2 for i in range(0, TE_SCRSZ, 2) if scr[i] != 0x20]
+            scr = m.readseg(pseg, sy["con_scr"], CON_SCRSZ)
+            lit = [i // 2 for i in range(0, CON_SCRSZ, 2) if scr[i] != 0x20]
             got = bytes(scr[2 * c] for c in lit)
             say("screen  %d cell(s) hold a glyph after the batch: %r"
                 % (len(lit), got))

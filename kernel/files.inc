@@ -96,17 +96,40 @@ FM_SB_W     equ 14              ; scroll bar width
 ; it are the WINDOW's rather than the element's - which is 13.10.1's rule
 ; still holding.
 ;
-; **THE RATE DEFAULTS TO 0 AND THAT IS NOT A COP-OUT.** A scroll here is
+; **THE 8086 RATE IS 0 AND THAT IS NOT A COP-OUT.** A scroll here is
 ; fm_scroll_by - a gfx_scroll blit plus a relettering of every newly exposed
 ; row - and PERFORMANCE.md prices one 78-cell row at ~71 ms on a 4.77 MHz
 ; 8088. A thumb dragged the length of a 200-file listing with the view
 ; following would be seconds of repaint behind a hand that had already
 ; stopped: PERFORMANCE.md Part 1's VISIBLE REDRAW, which is invisible in an
 ; emulator and is exactly why the rate is a number rather than a cadence.
-; `make SBRATE=2` is the one to try on a fast machine.
+;
+; **A 286 IS A DIFFERENT MACHINE AND GETS A DIFFERENT NUMBER** (13.10.5.4.1).
+; The drag's commit here is `fm_scroll_by` past its blit tier - the whole
+; window - and it is the CHEAPEST of the bars measured for that section:
+; **116.9 ms** on a 4.77 MHz 8088 with a CGA, against Note Pad's 383.8 and
+; TeXPad's 417.3 (docs/reports/SBRATE-COMMIT-COST-2026-09-11.md). It takes
+; the shared number anyway, because 2 has headroom for all three and the
+; difference between 6 and 9 commits a second is not one anybody can see.
+; os88ui_sbrate picks between the two on [cpu_tier] - a FACT, not a guess
+; about speed (PERFORMANCE.md rule 7). `make SBRATE=n SBRATE286=n` sweeps it.
 %ifndef FM_SBRATE
-%define FM_SBRATE 0             ; ticks between commits; 0 = the release
+%define FM_SBRATE 1             ; ticks between commits; 0 = the release
 %endif                          ; commits and nothing before it
+%ifndef FM_SBRATE286
+%define FM_SBRATE286 1          ; ...and what a 286 or better is given. EQUAL
+%endif                          ; to the above because 1 is the FLOOR - the
+                                ; rate is counted in ticks and there is nothing
+                                ; faster to hand a 286 (13.10.5.4.1)
+;
+; ...AND THE PAUSE COMMIT (13.10.5.4.2), which is a different trigger and not
+; another value of the one above: a one-shot timer re-armed on every W_ONDRAG
+; fires only after this many ticks in which the thumb did not move. It takes NO
+; tier pair, because it is how long a PERSON pauses when they mean "show me"
+; and that is the same half second on every machine.
+%ifndef FM_SBIDLE
+%define FM_SBIDLE 9             ; ticks of stillness before the view arrives;
+%endif                          ; 9 = 494 ms. 0 = no pause commit at all
 %endif
 ; --- the band under the rows: the edge, then the status line (SPEC.md 22.20)
 ; The row area is UNCHANGED by all three of these - [fm_listb] is still
@@ -245,17 +268,50 @@ FS_VSEG     equ 16              ; word: this window's listing-cache claim
                                 ; VIEW_KB and the instance's teardown frees
                                 ; it, so nothing here has a close hook
 FS_VKB      equ 18              ; byte: how many KB that claim actually is.
-                                ; A driver-backed volume lists DSK_VENT
-                                ; entries and needs DSK_VKB (SPEC.md 22.6),
-                                ; so the cache is RE-claimed when the window
-                                ; moves to one - and a refusal just clears
-                                ; FS_VSEG, which is the documented fallback
-FS_DIRTY    equ 19              ; byte: 1 = a file operation has changed the
-                                ; folder this window is showing since its
-                                ; cache was built, so neither the cache nor
-                                ; the pixels are a picture of it any more
-                                ; (SPEC.md 22.8). Spent by fm_focus when the
-                                ; window next comes to the front
+                                ; ONE SIZE NOW - every volume lists DSK_NENT
+                                ; entries, so fm_kinit's VIEW_KB covers the
+                                ; machine and no window is ever re-claimed
+                                ; (SPEC.md 22.6). It was two while a
+                                ; driver-backed volume could list more. The
+                                ; byte stays: a refusal clears FS_VSEG and
+                                ; this says so, which is the documented
+                                ; fallback rather than an error
+FS_DIRTY    equ 19              ; byte: the refresh debt (SPEC.md 22.8), spent
+                                ; by fm_focus when the window next comes to
+                                ; the front. THREE VALUES, because a listing
+                                ; has no shared home any more
+                                ; (docs/plans/LISTING-HOME-PLAN.md 13):
+                                ;   0  nothing owed
+                                ;   1  CACHE AND PIXELS are both stale - a
+                                ;      file operation changed this folder
+                                ;      since the cache was built, so coming
+                                ;      to the front costs a re-list
+                                ;   2  the CACHE IS FRESH and only the pixels
+                                ;      are old. fmv_bcast hands a sibling the
+                                ;      new listing but does not redraw it, so
+                                ;      what that window owes is a REPAINT and
+                                ;      nothing more
+                                ;
+                                ; The split exists because the global snapshot
+                                ; is gone: fm_focus used to spend a 1 by
+                                ; copying that snapshot, which was free, and
+                                ; the only thing left to copy it from now is
+                                ; a MOUNT. Telling the two debts apart is what
+                                ; keeps the sibling case cheaper than it was
+                                ; rather than dearer - it pays nothing at all
+                                ;   3  the CACHE'S ENTRIES ARE FRESH and its
+                                ;      ICON REFERENCES are not - the shed took
+                                ;      the machine-wide store (SPEC.md 25.9.5),
+                                ;      so every reference names a row that no
+                                ;      longer exists. It is its own value
+                                ;      because the repair is neither of the
+                                ;      other two: a re-list would re-scan, re-
+                                ;      sort and re-harvest a listing that is
+                                ;      perfectly good, and a repaint would draw
+                                ;      the same dangling references again
+FSD_CACHE   equ 1               ; ...the three values, named
+FSD_PIXELS  equ 2
+FSD_ICONS   equ 3
 FS_FREE     equ 20              ; word: KB free on the volume this window is
                                 ; showing, 0xFFFF = not known. Read ONCE per
                                 ; mount, in fmv_load, because counting it
@@ -304,17 +360,33 @@ FM_MAXWIN   equ VIEW_SLOTS      ; = KD_CAP: one cache slot per window
 FV_ICONS    equ DSK_NENT*DSK_DE_STRIDE  ; icon images start here inside a
                                 ; FLOPPY-sized slot; a driver-backed volume's
                                 ; is [dsk_ioff], and fmv_iofs answers both
-%ifdef KERN_SMALL
-FV_ICOIX    equ DSK_ICO_N*DSK_ICO_SIZE  ; ...and SPEC.md 25.8.5's index sits
-                                ; ABOVE the pool, not below it, so that
-                                ; fmv_iofs's answer stays a multiple of 256.
-                                ; FS_IOFH holds that answer in ONE BYTE
-                                ; (fmv_viofs asserts it), and putting the
-                                ; 32-byte index in front would have made the
-                                ; pool base 800 and the assertion false
-%if DSK_NENT*DSK_DE_STRIDE + DSK_ICO_N*DSK_ICO_SIZE + DSK_ICOIX_N > VIEW_KB*1024
-  %error "the pooled view cache no longer fits VIEW_KB: entries, then DSK_ICO_N bodies, then one index byte per entry. fmv_fit claims VIEW_KB and fmv_store then writes this much into it, so the overflow lands on whatever the heap handed out next"
-%endif
+FV_ICOIX    equ 0               ; SPEC.md 25.8.5's index, and it is the FIRST
+                                ; thing in the icon REGION rather than the
+                                ; last. It sat above the pool so that
+                                ; fmv_iofs's answer stayed a multiple of 256 -
+                                ; FS_IOFH holds that answer in ONE BYTE - and
+                                ; the objection recorded there was to putting
+                                ; it BETWEEN the entries and the region, which
+                                ; would make the region base 800. Inside the
+                                ; region at offset 0 the base is still 768,
+                                ; and the BODY base below is computed rather
+                                ; than stored, so it is free to be 832.
+                                ;
+                                ; WHY IT HAD TO MOVE: the pool's size was
+                                ; per-volume - 16 on a floppy, DSK_VENT out of
+                                ; a driver's own claim - so an index ABOVE the
+                                ; pool sat at an offset that MOVED WITH THE
+                                ; VOLUME KIND, and nothing recorded which kind
+                                ; a slot was filled with. Below the pool it is
+                                ; at a fixed offset, and no window gains a
+                                ; byte of state. SPEC.md 25.9 then took the
+                                ; bodies out entirely and 22.6 the donated
+                                ; claim, so neither half of that can recur -
+                                ; the reasoning is kept because the FIELD's
+                                ; position is what it bought
+FV_ICOBODY  equ DSK_ICOIX_N     ; ...so the bodies start after it
+%if DSK_NENT*DSK_DE_STRIDE + DSK_ICOIX_N > VIEW_KB*1024
+  %error "the view cache no longer fits VIEW_KB: entries, then one REFERENCE byte per entry (DSK_ICOIX_N). fm_kinit claims VIEW_KB and fmv_store then writes this much into it, so the overflow lands on whatever the heap handed out next"
 %endif
 FM_HDRMAX   equ 48              ; fm_hdrbuf's size: the header and the status
                                 ; line are both staged whole and truncated
@@ -334,7 +406,27 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; clobbers: nothing (flags only)
 ; .bss is not zeroed by the loader: every state variable is set here.
 ; -----------------------------------------------------------------------------
-section .ovlw                  ; THE BOOT OVERLAY (SPEC.md 2.5.2,
+%ifndef KERN_SMALL
+section .ovlw                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
+                                ; whose window has room to spare
+%else
+section .ovl                    ; ...and kern_small: the BLOB half instead
+                                ; (SPEC.md 2.5.3.2, mouse_init's shape). The
+                                ; deadline is the same either way - kmain runs
+                                ; this long before drv_boot - so the choice is
+                                ; only about WHOSE bytes. On that kernel
+                                ; `.ovlw` is read onto the FAT window and the
+                                ; mount buffers, and SPEC.md 22.6.3 has just
+                                ; taken the LISTING out of that region: the
+                                ; 800 bytes it gave back are only 288 of heap
+                                ; while the overlay still needs the rest, so
+                                ; every body moved here turns one more of them
+                                ; into heap. `.ovl` is written LAST on
+                                ; purpose: tools/os88ovlchk.py reads SOURCE
+                                ; and cannot evaluate the %ifdef, so it files
+                                ; this block by the arm below - which is the
+                                ; build the check exists to protect
+%endif
                                 ; docs/plans/LAST-DROP-BYTES.md row 6): kmain runs
                                 ; this once and no window exists yet to want
                                 ; it again. Zero outbound calls
@@ -345,22 +437,30 @@ files_init_x:
     push es
     push ds
     pop es
-    xor al, al                  ; every block reads as a window that never
-    mov di, fm_pool             ; existed until fm_kinit fills one
-    mov cx, FM_MAXWIN * FS_SIZE
-    cld
-    rep stosb
-    mov byte [fm_elen], 0       ; nothing is being typed anywhere, nothing is
-    mov byte [fm_ebuf], 0       ; awaiting a confirmation, and no window has
-    mov byte [fm_onam], 0       ; asked how much room is left
-    mov byte [fm_odir], 0
-    mov word [fm_tdirty], 0
-    mov word [fm_vp], fm_pool   ; no acting window yet: point the three
-    mov word [fm_vseg], 0           ; published words at slot 0, and at the
-    mov word [fm_vinst], 0          ; global snapshot rather than a cache
-    mov byte [fm_seed_drv], 1   ; the seed the first launch would consume
-    mov word [fm_seed_cwd], 0
-    mov word [fm_seed_nam], 0
+    xor ax, ax                  ; every block reads as a window that never
+    mov di, fm_pool             ; existed until fm_kinit fills one.
+    mov cx, FM_MAXWIN * FS_SIZE ; **AX AND NOT AL**, which is the same two
+    cld                         ; bytes: `stosb` does not touch the
+    rep stosb                   ; accumulator, so it arrives at the eleven
+                                ; stores below still zero and they are 37
+                                ; bytes rather than 61 - `mov word [m], imm`
+                                ; being six bytes and 20 clocks where
+                                ; `mov [m], ax` is three and 14. They are
+                                ; ordered by what AX has to hold and each
+                                ; keeps the comment that says why it is set
+    mov [fm_elen], al           ; nothing is being typed anywhere, nothing is
+    mov [fm_ebuf], al           ; awaiting a confirmation, and no window has
+    mov [fm_onam], al           ; asked how much room is left
+    mov [fm_odir], al
+    mov [fm_tdirty], ax
+    mov [fm_vseg], ax           ; no acting window yet: two of the three
+    mov [fm_vinst], ax          ; published words are 0 - the global snapshot
+    mov [fm_seed_cwd], ax       ; rather than a cache - and the third is slot
+    mov [fm_seed_nam], ax       ; 0, below
+    inc ax
+    mov [fm_seed_drv], al       ; the seed the first launch would consume
+    mov ax, fm_pool
+    mov [fm_vp], ax             ; ...and the acting window is slot 0
     pop es
     pop di
     pop cx
@@ -408,16 +508,16 @@ fm_kinit_x:
     mov byte [di+FS_VKB], 0     ; owned by THIS instance so its teardown
     mov byte [di+FS_IOFH], 0    ; ...and NOTHING in it yet, whatever the last
                                 ; tenant of this KD_POOL block left (22.6.1)
-    push bx                     ; frees it (SPEC.md 50.2/50.4). fmv_fit
-    push dx                     ; RE-claims it at DSK_VKB the moment this
+    push bx                     ; frees it (SPEC.md 50.2/50.4). ONE SIZE
+    push dx                     ; covers every volume, so this is the only
 %ifdef KERN_SMALL
     call fmv_owner              ; MEM_P_VIEW + the slot, off DI (SPEC.md 50.6)
 %else
-    mov ax, si                  ; window lists a driver-backed volume (22.6)
-    sub ax, inst_tab
-    mov cl, 5
-    shr ax, cl
-    mov bx, ax
+    push di                     ; claim a window's cache ever needs (22.6).
+    mov di, si                  ; `(record - inst_tab) >> 5` is ld_slot, which
+    call ld_slot                ; is `.cold` like this and is where that
+    pop di                      ; arithmetic lives - it reads DI, and DI is the
+                                ; state block here and still owed below
 %endif
     mov ax, VIEW_KB
     call mem_claim_x
@@ -493,6 +593,16 @@ fm_kinit_x:
 %ifdef KERN_BIG
     mov ax, fm_onup             ; SPEC.md 13.7/13.8.1: the two edges the two
     call KERNEL_SEG:cw_wm_onmouseup ; header buttons fire and track on. Not
+%ifdef OS88UI_SBDRAG
+    mov [bx + W_ONTIMER], ax    ; ...AND THE SAME PROC IS THE PAUSE COMMIT'S
+                                ; (SPEC.md 13.10.5.4.2): a timer that fires
+                                ; mid-drag is a release with the hand still
+                                ; down, and os88ui_sbdrop tells the two apart
+                                ; off [ui_armw]. A plain store, because
+                                ; wm_ontimer is one; nothing ARMS it here -
+                                ; fm_ondrag does, on movement - so a window
+                                ; merely open has no timer
+%endif
     mov ax, fm_ondrag           ; template words - the template is eight and
     call KERNEL_SEG:cw_wm_ondrag ; growing it would read one past every
                                 ; existing package's - so a KD_INIT is where
@@ -600,20 +710,32 @@ fmv_copy_in:
     push si
     mov dx, [fm_vseg]
     or dx, dx
-    jnz .have                   ; no cache (the claim was refused): read the
-    mov dx, [dsk_dseg]          ; GLOBAL snapshot at the matching offset. A
-    call fmv_iofs               ; slot offset is 0-based and the snapshot's
-    cmp si, bx                  ; is not, so the two bases have to be swapped
-    jb .dir                     ; over - which is all this arithmetic is
-    sub si, bx
-    add si, [dsk_ioff]
-    jmp short .have
-.dir:
-    add si, [dsk_doff]
+    jnz .have
+
+    ; --- NO STORE, AND NO FLOOR TO FALL BACK TO (13.1) ---------------------
+    ; This read the GLOBAL snapshot at the matching offset, and there is no
+    ; global snapshot: a window with no claim was given a QUIET mount, so it
+    ; has FS_N = 0 and its painter asks for no rows at all. The zero below is
+    ; belt and braces rather than a path - and it is worth the six bytes,
+    ; because the value [dsk_dseg] holds when there is no destination is 0,
+    ; and a copy from segment 0 reads the INTERRUPT VECTOR TABLE and draws it
+    ; as file names.
+    push es
+    mov ax, ds
+    mov es, ax
+    push di
+    shr cx, 1
+    xor ax, ax
+    cld
+    rep stosw                   ; an all-zero entry: no name, type 0
+    pop di
+    pop es
+    jmp short .out
 .have:
     mov ax, ds                  ; the kernel segment, out of DS: this module
                                 ; is .cold, so CS is COLD_SEG (SPEC.md 2.6)
     call dsk_copy_seg_x
+.out:
     pop si
     pop dx
     pop bx
@@ -658,8 +780,8 @@ fmv_iofs:
 ; out and the base fmv_copy_in subtracts from it would be two different
 ; volumes' arithmetic.
 ; -----------------------------------------------------------------------------
-%if ((DSK_NENT * DSK_DE_STRIDE) & 0xFF) || ((DSK_VENT * DSK_DE_STRIDE) & 0xFF)
-%error "FS_IOFH holds an icon base in ONE byte: nmax*DSK_DE_STRIDE must be a multiple of 256. It is 768 and 1,536 at a stride of 24 and was 1,024 and 2,048 at 32 - a stride that is not a multiple of 8 breaks this for BOTH caps at once"
+%if ((DSK_NENT * DSK_DE_STRIDE) & 0xFF)
+%error "FS_IOFH holds an icon base in ONE byte: DSK_NENT*DSK_DE_STRIDE must be a multiple of 256. It is 1,536 at a stride of 24 and was 2,048 at 32 - a stride that is not a multiple of 8 breaks it"
 %endif
 fmv_viofs:
     push si
@@ -687,7 +809,7 @@ fmv_get_dir:
     push di
     push dx                     ; index * DSK_DE_STRIDE. A MULTIPLY, because
     mov cx, DSK_DE_STRIDE       ; the stride is no longer a power of two;
-    mul cx                      ; index <= DSK_VENT so DX is 0, and it is
+    mul cx                      ; index <= DSK_NENT so DX is 0, and it is
     pop dx                      ; banked because this routine's contract is
     mov si, ax                  ; "clobbers SI"
     mov di, dsk_ent
@@ -700,81 +822,115 @@ fmv_get_dir:
     ret
 
 ; -----------------------------------------------------------------------------
+; fmv_ld_ent - stage the entry at AX out of A NAMED window's own cache
+; in:  AX = entry index, DI = that window's state block. Its FS_VSEG must not
+;      be 0 - the caller has looked, because with no cache fmv_copy_in falls
+;      back to the GLOBAL snapshot and the whole point of this entry is that
+;      the global is not this window's directory
+; out: CF=0 with SI -> dsk_ent, holding DSK_DE_STRIDE meaningful bytes;
+;      CF=1 = AX is past FS_N and nothing is staged
+; clobbers: SI (the output), CF
+;
+; fmv_get_dir reads the ACTING view, which [fm_vp]/[fm_vseg] name and which
+; fm_vp_set is the only writer of. The loader is not a painter and has no
+; acting window: what it has is [ld_pwin], the state block of whoever POSTED
+; the index, and SPEC.md 22.1 is explicit that this "may not be the one
+; currently mounted". So this banks the acting view, borrows it and puts it
+; back - two words rather than a second writer of a pair whose whole rule is
+; that they have exactly one (SPEC.md 22.6.1). [fm_vinst] is untouched
+; because nothing on the loader's path reads it.
+;
+; docs/plans/LISTING-HOME-PLAN.md wave 1 is what this is for: the launch path
+; was the last consumer that needed the GLOBAL snapshot to BE a particular
+; window's directory, and making it so is a loud mount - the scan, the sort
+; and one int 13h per type-1 file - on every double-click.
+; -----------------------------------------------------------------------------
+fmv_ld_ent:
+    cmp ax, [di+FS_N]           ; the window's OWN count, which fmv_load and
+    jb fmv_dient                ; fmv_take both write whether or not the
+    stc                         ; claim stood (SPEC.md 22.6.1)
+    ret
+
+; -----------------------------------------------------------------------------
+; fmv_dient - stage entry AX out of the view A STATE BLOCK names
+; in:  AX = entry index, DI = the state block
+; out: SI -> dsk_ent; CF = 0 always
+; clobbers: SI (the output), CF
+;
+; The borrow, without the bound - `fmv_ld_ent` above is this with `FS_N` in
+; front of it, and `fm_measure` is the other caller, walking its own `FS_N`
+; for a window that need not be the acting one (`fmv_reload_all` calls
+; `fmv_load` for every window there is).
+;
+; It defers to `fmv_get_dir`, so a state block whose `FS_VSEG` is 0 reads the
+; FLOOR listing exactly as that routine does - which is right for as long as
+; there is one, because `fmv_load` retires the destination only for a window
+; that HAD a claim (docs/plans/LISTING-HOME-PLAN.md 13.5 commit 1).
+; -----------------------------------------------------------------------------
+fmv_dient:
+    push bx
+    push dx
+    mov bx, [fm_vp]             ; the acting view, banked...
+    mov dx, [fm_vseg]
+    push bx
+    push dx
+    mov [fm_vp], di             ; ...borrowed...
+    mov bx, [di+FS_VSEG]
+    mov [fm_vseg], bx
+    call fmv_get_dir            ; SI -> dsk_ent
+    pop dx                      ; ...and put back. A pop does not touch CF,
+    pop bx                      ; and neither does a mov, so the clc below is
+    mov [fm_vseg], dx           ; the only thing that writes it
+    mov [fm_vp], bx
+    pop dx
+    pop bx
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; fmv_get_icon - stage one icon slot out of THIS window's cache
 ; in:  AX = entry index (0..31)
 ; out: SI -> dsk_ico, holding 64 bytes (all-zero = no icon)
 ; clobbers: SI (the output), flags
 ; -----------------------------------------------------------------------------
 fmv_get_icon:
-%ifdef KERN_SMALL
-    cmp word [fm_vseg], 0       ; SPEC.md 25.8: with no cache of its own the
-    je dsk_get_icon_x           ; painter reads the GLOBAL icons, which here
-                                ; are a pool - and dsk_get_icon_x is that
-                                ; indirection, landing in the same dsk_ico
-                                ; with the same "all-zero = none". Taken
-                                ; ahead of fmv_copy_in's own fallback, whose
-                                ; [dsk_ioff] + index*64 is the arithmetic the
-                                ; pool invalidates
+    cmp word [fm_vseg], 0       ; SPEC.md 25.9: with no cache of its own the
+    je dsk_get_icon_x           ; painter reads the GLOBAL reference bytes,
+                                ; and dsk_get_icon_x is that indirection,
+                                ; landing in the same dsk_ico with the same
+                                ; "all-zero = none"
     push ax
     push bx
     push cx
+    push dx
+    push si
     push di
-    call fmv_viofs              ; THIS WINDOW'S pool base, not the global's -
-                                ; the one place the two can differ (22.6.1)
-    add ax, bx                  ; ...and the entry's INDEX BYTE above it
-    add ax, FV_ICOIX
+    call fmv_viofs              ; THIS WINDOW'S index, not the global's - the
+    add ax, bx                  ; one place the two can differ (22.6.1), and
+    add ax, FV_ICOIX            ; the whole of its icon region now
     mov si, ax
     mov di, dsk_ico             ; TWO bytes, because fmv_copy_in moves words.
-    mov cx, 2                   ; The second is the next entry's index, or the
-    call fmv_copy_in            ; first byte past the array and still inside
-                                ; the claim (FV_ICOIX's %if bounds it); it is
-                                ; overwritten below either way
+    mov cx, 2                   ; The second is the next entry's reference, or
+    call fmv_copy_in            ; the first byte past the array and still
+                                ; inside the claim; it is overwritten below
     mov al, [dsk_ico]
-    cmp al, 0xFF
-    je .none                    ; SPEC.md 25.8.5: THIS WINDOW'S answer and not
-                                ; the global's - a cache may still hold a
-                                ; listing the global has since replaced, so
-                                ; falling through to dsk_get_icon_x here would
-                                ; paint another volume's icon
-    xor ah, ah                  ; ...AX was the entry; now it is the BODY
-    mov cl, 6
-    shl ax, cl
-    add ax, bx
-    mov si, ax
-    mov di, dsk_ico
-    mov cx, DSK_ICO_SIZE
-    call fmv_copy_in
-    jmp short .out
-.none:
-    call dsk_ico_blank
-.out:
+    call dsk_ico_stage          ; ...and THE BODY COMES OUT OF THE ONE STORE
+                                ; (SPEC.md 25.9). The window used to carry its
+                                ; own copy of every body - 64 bytes an entry -
+                                ; which is what a volume-independent key makes
+                                ; unnecessary: the reference resolves whatever
+                                ; is mounted now. Staging it - the resolve,
+                                ; the 64-byte copy and the all-zero fallback -
+                                ; is disk.inc's routine and was written out a
+                                ; second time here
     pop di
+    pop si
+    pop dx
     pop cx
     pop bx
     pop ax
     mov si, dsk_ico
     ret
-%else
-    push ax
-    push bx
-    push cx
-    push di
-    mov cl, 6                   ; index * 64, past the entry images
-    shl ax, cl
-    call fmv_viofs              ; THIS WINDOW'S base, not the global's - the
-    add ax, bx                  ; one place the two can differ (SPEC.md 22.6.1)
-    mov si, ax
-    mov di, dsk_ico
-    mov cx, DSK_ICO_SIZE
-    call fmv_copy_in
-    pop di
-    pop cx
-    pop bx
-    pop ax
-    mov si, dsk_ico
-    ret
-%endif
-
 ; -----------------------------------------------------------------------------
 ; fmv_winof - which window owns the state block in DI? (the inst_tab walk)
 ; in:  DI = state block
@@ -796,6 +952,15 @@ fmv_get_icon:
 ; Seven routines in this file carried this eight-instruction scaffold. It is
 ; NOT fm_count's: that one asks I_STATE != 0, live OR dying, which is a
 ; different question about a different set.
+;
+; IT IS instance.inc's inst_next (SPEC.md 29.1.1) WITH TWO FILTERS FOLDED IN,
+; and the two were written independently to the same design - same
+; `inst_tab - I_RECSZ` start, same pointer bound, same CF contract. They stay
+; separate because THIS one is `.cold` and that one is `.text`, which are
+; different address spaces (SPEC.md 2.6): a near call between them is a jump
+; into the wrong segment and a thunk costs more than either body. fm_reloc,
+; the one walker in this file that is `.text`, calls inst_next instead - and
+; says so where it stands.
 ; -----------------------------------------------------------------------------
 fmv_ifirst:
     mov si, inst_tab-I_RECSZ
@@ -811,6 +976,49 @@ fmv_inext:
     ret
 .eot:
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fmv_here - WHERE THIS WINDOW STANDS, in fmv_load's own convention
+; in:  DI = a window's state block
+; out: AL = the drive, DX = the directory's first cluster
+; clobbers: AL and DX (the outputs) - the flags are NOT touched, a `mov` of
+;           memory into a register setting none and a `call` preserving them
+;
+; Six bytes that were written out eight times in this file and `assoc.inc`,
+; always as this exact pair and always straight into `fmv_load`, `fm_repath`
+; or `dsk_chdir`. It is a routine because those are the two halves of ONE
+; fact - a folder is a volume AND a cluster, and SPEC.md 19.2's root is
+; cluster 0 on whichever drive - so a site that reads one without the other
+; is a bug, and a shared reader is where that gets noticed.
+; -----------------------------------------------------------------------------
+fmv_here:
+    mov al, [di+FS_DRV]
+    mov dx, [di+FS_CWD]
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_owed - THE FRONT WINDOW IS OWED A LOOK, and say so once (SPEC.md 22.8)
+; out: nothing (every register and the flags preserved)
+;
+; The other half of a debt. Marking `FS_DIRTY` says WHAT a window owes; these
+; two bytes are how it gets PAID without waiting for a click that never comes
+; - the window just marked may be the one under the pointer, so `[fm_fchk]`
+; puts the check on the UI task's next pass and `[ui_post]` is SPEC.md 13.13's
+; once-only wake.
+;
+; Four sites wrote the pair out longhand - `fmv_mark`, `fmv_icostale`,
+; `fm_fmt_home` and, on kern_small, `fmv_demote`. They are ONE fact and
+; splitting them is the bug: a mark with no wake is a stale window that heals
+; only on the next click, which is the failure 22.8 exists about.
+;
+; `menu_activate` is deliberately NOT converted: it is `.text`, and a near
+; call from there into `.cold` is a jump into the wrong segment (SPEC.md 2.6)
+; that assembles perfectly and runs somewhere else.
+; -----------------------------------------------------------------------------
+fm_owed:
+    mov byte [fm_fchk], 1
+    mov byte [ui_post], 1
     ret
 
 ; -----------------------------------------------------------------------------
@@ -862,8 +1070,8 @@ fmv_store:
                                 ; SIBLING in exactly that state on purpose,
                                 ; so nothing may bank them until it is redrawn
 .nowin:
-    call fmv_fit                ; the claim has to be big enough for THIS
-    mov byte [di+FS_IOFH], 0    ; volume's listing before anything is copied
+    call fmv_fit                ; a window whose fm_kinit claim was refused
+    mov byte [di+FS_IOFH], 0    ; gets another chance before anything is copied
     mov ax, [di+FS_VSEG]
     or ax, ax
     jz .none                    ; no cache: nothing to write it into, and
@@ -871,40 +1079,39 @@ fmv_store:
                                 ; back with (SPEC.md 22.6.1)
     push di
     call fmv_iofs               ; BX = where the icons start in a slot
+
+    ; **THE COPY IS SKIPPED WHEN THE MOUNT ALREADY WROTE HERE**
+    ; (docs/plans/LISTING-HOME-PLAN.md 13). fmv_load hands this window's own
+    ; claim to dsk_dest_x, so the entries and the reference index below were
+    ; written straight into it and the two block copies would be 1,600 bytes
+    ; of a block onto itself.
+    ;
+    ; IT IS A TEST AND NOT A SECOND ENTRY POINT, because fmv_store has the
+    ; other caller too: fmv_take, which fm_focus and fmv_bcast reach with the
+    ; FLOOR listing live and a different window's claim to fill. One routine,
+    ; and the condition is the thing that is actually true.
+    cmp ax, [dsk_dseg]
+    je .shape
     mov si, [dsk_doff]
     xor di, di
     mov cx, bx
     call fmv_copy_out
-%ifdef KERN_SMALL
-    ; SPEC.md 25.8.5: the cache MIRRORS the global - DSK_ICO_N bodies and one
-    ; index byte per entry - so both halves are block copies and the window
-    ; holds the same 1,056 bytes the global does instead of expanding them
-    ; back to one body per entry. The first version of this DID expand, to
-    ; keep fmv_get_icon's contract; carrying the pool through instead deletes
-    ; that loop AND a whole KB of every window's claim.
-    mov si, [dsk_ioff]
-    mov di, bx
-    mov cx, DSK_ICO_N*DSK_ICO_SIZE
-    call fmv_copy_out
-    mov si, dsk_icoix           ; the INDEX, which lives in `.lowbss` -
-    mov di, bx                  ; fmv_copy_out reads [dsk_dseg], and that IS
-    add di, FV_ICOIX            ; LOW_SEG on this kernel because SPEC.md 51.0
-    mov cx, DSK_ICOIX_N         ; leaves it no DVK_DRV volume to list from
-    call fmv_copy_out           ; anywhere else
-%else
-    mov si, [dsk_ioff]
-    mov di, bx
-    mov cx, [dsk_nmax]
-    mov dx, DSK_ICO_SIZE
-    push ax
-    mov ax, cx
-    mul dx
-    mov cx, ax
-    pop ax
-    call fmv_copy_out
-%endif
-    pop di
-    mov [di+FS_IOFH], bh        ; ...AND THE SHAPE IT WAS FILLED WITH, which
+    ; SPEC.md 25.8.5: the cache MIRRORS the listing - one index byte per entry
+    ; - so both halves are block copies and the window holds what the listing
+    ; holds instead of expanding it back to one body per entry. The first
+    ; version of this DID expand, to keep fmv_get_icon's contract; carrying
+    ; the pool through instead deletes that loop AND a whole KB of every
+    ; window's claim.
+    mov si, [dsk_ioff]          ; ...AND THE INDEX, WHICH IS ALL THERE IS NOW
+    mov di, bx                  ; (SPEC.md 25.9). The bodies used to follow it
+    add di, FV_ICOIX            ; and are in the machine-wide store instead, so
+    mov cx, DSK_ICOIX_N         ; a window carries one byte an entry rather
+    call fmv_copy_out           ; than 64. IT IS fmv_copy_out NOW and not a
+.shape:                         ; hand-rolled LOW_SEG copy: the index follows
+    pop di                      ; the entries into whatever store the mount
+    mov [di+FS_IOFH], bh        ; was given, so the two halves can no longer
+                                ; name different segments
+                                ; ...AND THE SHAPE IT WAS FILLED WITH, which
                                 ; is this mount's and not whichever one paints
                                 ; it next (SPEC.md 22.6.1). BL is 0 by the
                                 ; assertion at fmv_viofs
@@ -925,47 +1132,41 @@ fmv_copy_out:
     ret
 
 ; -----------------------------------------------------------------------------
-; fmv_fit - make this window's cache big enough for the volume being listed
+; fmv_fit - make sure this window HAS a cache before the listing is copied
 ; in:  DI = state block
 ; out: nothing (all registers preserved)
 ;
-; A floppy's listing is 3KB and a driver-backed volume's is DSK_VKB (SPEC.md
-; 22.6), and a window moves between the two by clicking a desktop icon - so
-; the claim is re-made when the shape changes rather than sized once at
-; launch, and a machine with only floppies never pays for the bigger one.
+; **IT WAS A RE-SIZE AND IT IS A RETRY** (SPEC.md 22.6). There were two listing
+; sizes - a floppy's and the bigger one a driver-backed volume listed out of
+; its driver's donated claim - so a window that clicked from one desktop icon
+; to the other had to give its claim back and take a larger one. The donation
+; is retired and there is one size, so the only thing left to decide is
+; whether this window has a cache at all: fm_kinit claims one, and a window
+; whose claim was REFUSED there gets another chance here rather than painting
+; from the global snapshot for the rest of its life.
 ;
-; A refused claim clears FS_VSEG, which is the documented fallback and not an
+; A refused claim leaves FS_VSEG 0, which is the documented fallback and not an
 ; error: the window then paints from the global snapshot (SPEC.md 22.1) and
 ; costs floppy I/O it would otherwise have avoided.
+;
+; FS_VKB and FS_VSEG are set and cleared TOGETHER - here and at fm_kinit, the
+; only two places either moves - so the one test covers both and there is no
+; old block to give back first.
 ; -----------------------------------------------------------------------------
 fmv_fit:
     push ax
     push bx
     push cx
     push dx
-    mov al, VIEW_KB             ; how many KB THIS listing needs
-    cmp word [dsk_nmax], DSK_NENT
-    jbe .want
-    mov al, DSK_VKB
-.want:
-    cmp al, [di+FS_VKB]
-    jbe .out                    ; what we hold already covers it
-    mov cl, al
-    mov dx, [di+FS_VSEG]        ; give the old one back FIRST: claiming the
-    or dx, dx                   ; new one while holding it can refuse on a
-    jz .claim                   ; machine that had the room all along (50.3)
-    call fmv_owner
-    call mem_free_x
-    mov word [di+FS_VSEG], 0
-    mov byte [di+FS_VKB], 0
-.claim:
+    cmp byte [di+FS_VKB], VIEW_KB
+    jae .out                    ; we already hold one, and there is only one
+                                ; size it could be
     call fmv_owner              ; BX = the owning instance slot
-    mov al, cl
-    xor ah, ah
+    mov ax, VIEW_KB
     call mem_claim_x
     jc .out                     ; refused: no cache, and that is a normal
     mov [di+FS_VSEG], dx        ; path (SPEC.md 50.3)
-    mov [di+FS_VKB], cl
+    mov byte [di+FS_VKB], VIEW_KB
 %ifndef KERN_SMALL
     call fmv_movable            ; purgeable on kern_small, so never movable
 %endif
@@ -1023,12 +1224,10 @@ fmv_owner:
     pop ax                      ; before anything reaches here
     ret
 .have:
-    sub ax, inst_tab
-    push cx
-    mov cl, 5
-    shr ax, cl
-    pop cx
-    mov bx, ax
+    push di                     ; ...and the same arithmetic, said in the same
+    mov di, ax                  ; one place (ld_slot, `.cold` like this and
+    call ld_slot                ; banking CX itself)
+    pop di
     pop ax
     ret
 %endif
@@ -1063,6 +1262,20 @@ fmv_demote:
     mov dx, [si+FS_VSEG]
     mov word [si+FS_VSEG], 0
     mov byte [si+FS_VKB], 0
+
+    ; **AND THE WINDOW IS OWED A RE-LIST** (13.1). Shedding this used to cost
+    ; the window its fast path and nothing else: it fell back to the GLOBAL
+    ; snapshot and kept drawing. There is no global snapshot, so a shed
+    ; window has no listing at all - and would simply go blank, silently,
+    ; under memory pressure, which is the one condition nobody is watching.
+    ;
+    ; The debt is what heals it: fmv_fit re-claims at the next store, and
+    ; fm_focus spends an FSD_CACHE by re-listing. [fm_fchk] is why it does
+    ; not wait for a click - the shed window may be the FRONT one, where a
+    ; focus change is a click that never comes (SPEC.md 22.8).
+    mov byte [si+FS_DIRTY], FSD_CACHE
+    call fm_owed
+
     cmp [fm_vseg], dx
     jne .out
     mov word [fm_vseg], 0
@@ -1073,6 +1286,142 @@ fmv_demote:
     popf
     ret
 %endif
+
+; -----------------------------------------------------------------------------
+; fmv_icostale - the shed took the icon STORE, so every reference dangles
+; out: nothing; AX, CX, SI and the flags are spent (`ico_demote`'s header has
+;      why: `mem_pg_forget` has already banked exactly those). DI, which it
+;      has not, is banked here
+;
+; SPEC.md 25.9.5, and `fmv_demote` above is its shape. The difference is WHOSE
+; claim went: that one is a single window's listing and this is the ONE store
+; every window's reference bytes resolve against, so there is no owner to
+; decode - the debt is every Disk window's at once.
+;
+; **IT IS FSD_ICONS AND NOT FSD_CACHE, WHICH IS THE WHOLE POINT.** The entries
+; are untouched; it is the row numbers beside them that stopped meaning
+; anything. A re-list would re-scan the directory, re-sort it and re-harvest
+; it to rebuild a listing that never went stale - on the target machine that
+; is the root directory's sectors plus an `int 13h` per package, where the
+; repair is one `ASSOC.DAT` read and two walks of memory we already hold.
+;
+; A window that already owes the STRONGER debt keeps it: FSD_CACHE re-lists,
+; and a re-list settles the references on its way past.
+; -----------------------------------------------------------------------------
+fmv_icostale:
+    push di                     ; **DI ALONE.** The contract above is the one
+                                ; `mem_pg_forget` needs and it already holds:
+                                ; the purge protocol brackets every demoter
+                                ; arm with its own `pushf` and `push ax / bx /
+                                ; cx / si`, so re-banking the flags, CX or SI
+                                ; here would restore values its `.out` is
+                                ; about to restore again. DI is the one this
+                                ; walk spends that the caller did not bank
+    call fmv_ifirst             ; **THE INSTANCE WALK AND NOT A `fm_pool`
+    jc .done                    ; STRIDE**, which is `fmv_mark`'s manner four
+.scan:                          ; routines up and is both smaller and truer:
+    mov di, [si+I_SPTR]         ; the pool is FM_MAXWIN blocks whether or not
+                                ; a window is standing on one, so a stride
+                                ; walk has to ask `FS_VSEG != 0` to tell a
+                                ; live slot from a free one - and that answer
+                                ; is not the question, because a live window
+                                ; whose claim was refused reads 0 there too.
+                                ; fmv_ifirst/fmv_inext answer the question
+                                ; itself: a LIVE instance of KIND_FILES
+    cmp byte [di+FS_DIRTY], 0
+    jne .next                   ; already owed something at least as strong
+    mov byte [di+FS_DIRTY], FSD_ICONS
+.next:
+    call fmv_inext
+    jnc .scan
+.done:
+    call fm_owed                ; ...and the front window is where a focus
+                                ; change is a click that never comes (22.8)
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; fmv_icorefs - re-resolve THIS window's icon references (SPEC.md 25.9.5)
+; in:  DI = the acting window's state block
+; out: CF = 0 = done; CF = 1 = could not, and the caller must re-list instead
+; clobbers: AX, CX, DX, SI and the flags - `fm_focus_x` banks all five at its
+;           head and re-reads the drive and the cluster off the window record
+;           on the `.relist` path a refusal here falls into, so restoring them
+;           would be bytes spent on values nothing reads. BX and BP are banked:
+;           BX is the window handle `.drawn` repaints through and BP belongs to
+;           whoever far-called `fm_focus_x`
+;
+; THE REPAIR AFTER A SHED, and what it is NOT is the point: the window's
+; entries never went stale, only the row numbers beside them, so this re-scans
+; nothing, re-sorts nothing and reads no package's first sector. It stands on
+; the folder quietly, absorbs the volume's `ASSOC.DAT` once, and walks the
+; two passes a mount runs with no I/O in them at all. On the target machine
+; that is ONE three-sector read against a re-list's root directory plus an
+; `int 13h` per package.
+;
+; **THE ORDER IS THE WHOLE OF THE CARE HERE.** `[dsk_dseg]` may not be live
+; across anything that can claim, because a claim compacts on its refusal
+; path and this window's listing block MOVES (SPEC.md 66.5.10.2) - so the
+; quiet chdir and `asc_use_x`, which both reach `mem_claim_x`, happen BEFORE
+; the destination is aimed, and `FS_VSEG` is re-read afterwards rather than
+; banked across them. `tools/dsegaudit.py` is what says so rather than this
+; comment.
+; -----------------------------------------------------------------------------
+fmv_icorefs:
+    push bx                     ; **ONLY BX AND BP**, because the one caller
+    push bp                     ; banks the rest: `fm_focus_x` pushes AX, CX,
+                                ; DX, SI and DI at its head and re-reads the
+                                ; drive and the cluster out of the window
+                                ; record on the `.relist` path a refusal here
+                                ; falls into - so preserving AX, DX and SI
+                                ; again would be four bytes to restore values
+                                ; nothing reads. BX is the window handle
+                                ; `.drawn` repaints through and is an ARGUMENT
+                                ; rather than a local, and BP is the entry
+                                ; count the two passes take; neither is the
+                                ; caller's to have saved
+    cmp word [di+FS_VSEG], 0
+    je .no                      ; no cache of its own: it holds no reference
+    call fmv_iofs               ; ...AND IT WAS FILLED AT TODAY'S SHAPE
+    cmp bh, [di+FS_IOFH]        ; (SPEC.md 22.6.1). A slot filled at another
+    jne .no                     ; one puts its reference bytes somewhere this
+                                ; walk would not write them, and the two
+                                ; halves would be two volumes' arithmetic -
+                                ; so hand it back and let a re-list settle it
+
+    mov dl, [di+FS_DRV]         ; stand where the window stands, QUIETLY: no
+    mov ax, [di+FS_CWD]         ; scan, no sort, no harvest - and free when we
+    call dsk_chdir_q_x          ; are already there (SPEC.md 18.9.1)
+    jc .no
+%ifdef OS88_ASSOC
+    call asc_use_x              ; THE ONE READ, and it is the whole repair's
+                                ; cost: the bodies come back into the store
+                                ; from this volume's own ASSOC.DAT, so the
+                                ; walk below finds them without a sector
+                                ; apiece. It re-reads rather than skipping,
+                                ; because ico_demote cleared [ico_n] and
+                                ; SPEC.md 54.7.4's guard is a compare on it
+%endif
+    mov dx, [di+FS_VSEG]        ; ...and ONLY NOW, re-read (see the header)
+    xor bx, bx
+    call dsk_dest_x
+    mov bp, [di+FS_N]
+    call dsk_icopass
+%ifdef OS88_ASSOC
+    call dsk_docpass
+%endif
+    xor dx, dx                  ; ...and retire it with the walk, which is
+    call dsk_dest_x             ; fmv_load's own manner (NOWHERE is the
+                                ; default): the destination is an argument and
+                                ; belongs to one caller at a time
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop bp
+    pop bx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; fmv_load - mount a directory and fill ONE window's cache (SPEC.md 22.1)
@@ -1098,6 +1447,28 @@ fmv_load:
     mov bl, al                  ; dsk_chdir wants the drive in DL and the
     mov ax, dx                  ; cluster in AX
     mov dl, bl
+
+    ; --- WHERE THE LISTING GOES (docs/plans/LISTING-HOME-PLAN.md 13) --------
+    ; This window's own claim, which it has held since fm_kinit. The mount
+    ; writes the entries and their reference index straight into it, so what
+    ; used to follow - two block copies out of a `.lowbss` buffer, 1,600
+    ; bytes a navigation - is not a faster copy, it is no copy.
+    ;
+    ; A window whose claim was refused passes the floor listing instead and
+    ; is exactly as it was. That arm is what 13.5's third commit removes,
+    ; along with the floor.
+    push ax
+    push dx
+    push bx
+    mov dx, [di+FS_VSEG]        ; 0 = this window has NO store, and there is
+    xor bx, bx                  ; no floor to fall back to any more: the
+    call dsk_dest_x             ; mount goes quiet and the window paints
+                                ; SPEC.md 22's refusal in its row area
+                                ; instead of a listing (13.5 commit 3)
+    pop bx
+    pop dx
+    pop ax
+
     call dsk_chdir_x              ; a remount with [dsk_keepcwd] raised
 
     mov al, [disk_drive]        ; ...and now record what really happened
@@ -1117,14 +1488,48 @@ fmv_load:
     je .listed                  ; unlike CF it survives the stores above
     mov byte [di+FS_MOK], 1
 .listed:
-    mov ax, [disk_nfiles]
-    mov [di+FS_N], ax
+    mov ax, [disk_nfiles]       ; the count FIRST: the destination is retired
+    mov [di+FS_N], ax           ; two lines down and takes it with it
+
+    ; --- AND THE DESTINATION IS RETIRED WITH THE MOUNT (13.1) --------------
+    ; The listing is this window's now, read through [fm_vseg], and the
+    ; floor buffer holds whichever folder was listed there LAST. So the
+    ; global is left saying what it honestly holds - nothing - which is the
+    ; state a quiet mount already leaves and which every consumer in the
+    ; kernel is already gated on (`disk_nfiles != 0`, disk.inc).
+    ;
+    ; **[dsk_lstale] IS NOT RAISED.** The debt means somebody is OWED a
+    ; listing, and after this nobody is: the window that wanted one has it.
+    ; Raising it would put dsk_relist's loud remount in front of the next
+    ; file operation, for a buffer with no reader.
+    cmp word [di+FS_VSEG], 0    ; ...and ONLY for a window that had one: with
+    je .kept                    ; no claim the listing IS the floor buffer and
+    mov word [disk_nfiles], 0   ; the global honestly describes it, which is
+    mov byte [dsk_lstale], 0    ; what commit 3 removes along with the floor
+.kept:
+
     mov word [di+FS_SEL], 0xFFFF    ; every index into the old listing is
     mov word [di+FS_SCRL], 0        ; meaningless now
     call fmv_store
     call fm_measure             ; the free/size line is about the listing we
                                 ; just took, so it is read here and nowhere
                                 ; else (SPEC.md 22.7)
+
+    ; --- AND THE DESTINATION GOES BACK TO THE FLOOR ------------------------
+    ; A `.bss` word may not name a heap claim across arbitrary time: this one
+    ; is MOVABLE on kern_big and PURGEABLE on kern_small, and nothing would
+    ; fix it. It names a claim for exactly the length of this routine, which
+    ; is one mount plus two memory passes, and tools/dsegaudit.py is the
+    ; standing proof that nothing in that span can reach a claim - fmv_fit
+    ; above being the one exception, and it claims only for a window that had
+    ; none, where this word is naming the floor.
+    push bx
+    push dx
+    xor dx, dx                  ; NOWHERE, which is now the default: the
+    call dsk_dest_x             ; floor listing is gone and a mount with no
+                                ; store is quiet (13.1)
+    pop dx
+    pop bx
 
     jmp kretc_di
 
@@ -1178,7 +1583,14 @@ fm_measure:
     xor ax, ax                  ; AX = entry index
 .sum:
     push ax
-    call dsk_get_dir_x ; SI -> the staged entry, in our own segment
+    call fmv_dient              ; SI -> the staged entry, out of THIS window's
+                                ; cache (22.6.1) and not the global: fmv_load
+                                ; has just retired the destination, so the
+                                ; floor buffer holds another folder and
+                                ; `disk_nfiles` says 0 about it. THE BORROW
+                                ; AND NOT fmv_get_dir, because fmv_reload_all
+                                ; calls fmv_load for every window and [fm_vp]
+                                ; names whichever one acted last
     mov ax, [si+20]             ; size lo...
     add cx, ax
     mov ax, [si+22]             ; ...and hi, with the carry out of the low
@@ -1231,22 +1643,25 @@ fmv_sync_x:
     mov dx, [di+FS_CWD]
     cmp dx, [dsk_cwd]
     jne .load
-    cmp byte [dsk_lstale], 0    ; RIGHT FOLDER, NO LISTING. A quiet mount and
-    je .out                     ; a deferred write both leave the globals
-                                ; naming this very folder with disk_nfiles = 0
-                                ; and the rebuild owed (SPEC.md 18.9/18.4), so
-                                ; the (drive, cwd) compare above says "already
-                                ; synced" about an EMPTY snapshot. The caller
-                                ; is about to resolve a directory INDEX
-                                ; against it - that is what a sync is for -
-                                ; and index-against-nothing is the silent
-                                ; half of docs/FIELD-NOTES.md 4: measured, a
-                                ; double-click after a Control Panel close
-                                ; launched nothing at all and cost no I/O
-                                ; doing it. Fall through and re-list.
+    ; **AND NOT [dsk_lstale]** (docs/plans/LISTING-HOME-PLAN.md 13.4). That
+    ; test was here because a caller was about to resolve a directory INDEX
+    ; against the global snapshot, so an EMPTY one - which a quiet mount and
+    ; a deferred write both leave - had to be rebuilt first; index-against-
+    ; nothing is the silent half of docs/FIELD-NOTES.md 4, measured as a
+    ; double-click that launched nothing and cost no I/O doing it.
+    ;
+    ; **NO CALLER RESOLVES AN INDEX HERE ANY MORE.** All six were read: five
+    ; of them act BY NAME in the folder they are standing in - format,
+    ; compress, uncompress, mkdir/rename, rmtree - `fm_c_up` reads the
+    ; WINDOW'S OWN cache through fmv_get_dir, and loader_run_x stages out of
+    ; the poster's claim. So what this routine is for is STANDING, and a
+    ; listing nobody reads is a mount nobody needs: keeping the test put a
+    ; loud remount - the scan, the sort and one int 13h per type-1 file - in
+    ; front of every delete, rename, New Folder, compress and format whenever
+    ; the debt happened to be raised.
+    jmp short .out
 .load:
-    mov al, [di+FS_DRV]
-    mov dx, [di+FS_CWD]
+    call fmv_here
     mov bx, [di+FS_SEL]
     push bx
     mov bx, [di+FS_SCRL]
@@ -1316,7 +1731,7 @@ fmv_mark:
     mov dx, [di+FS_CWD]
     cmp dx, [dsk_cwd]
     jne .next
-    mov byte [di+FS_DIRTY], 1
+    mov byte [di+FS_DIRTY], FSD_CACHE
     cmp byte [dskw_batch], 0    ; a multi-file operation owes its own
                                 ; coherence pass and pays it at the END
     jne .next                   ; (fmv_reload_all + fmv_repaint_all, 22.3),
@@ -1326,13 +1741,12 @@ fmv_mark:
                                 ; one moment the operation is stopped and
                                 ; waiting for the user to read the line it
                                 ; is asking about
-    mov byte [fm_fchk], 1       ; and otherwise the UI task owes the FRONT
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
-                                ; window a look: the window a package just
-                                ; wrote into may be the one under the
-                                ; pointer, where waiting for a focus change
-                                ; would mean waiting for a click that never
-                                ; comes
+    call fm_owed                ; and otherwise the UI task owes the FRONT
+                                ; window a look, and says so once (13.13):
+                                ; the window a package just wrote into may be
+                                ; the one under the pointer, where waiting for
+                                ; a focus change would mean waiting for a
+                                ; click that never comes
 .next:
     call fmv_inext
     jnc .scan
@@ -1425,26 +1839,35 @@ fm_focus_x:
                                 ; window in the system, and it is two
                                 ; compares
     mov di, [di+I_SPTR]
-    cmp byte [di+FS_DIRTY], 0
-    je .clean
+    mov al, [di+FS_DIRTY]
+    or al, al
+    jz .clean
     mov byte [di+FS_DIRTY], 0
     call fm_vp_set              ; BX = the window: everything below reads the
     mov di, [fm_vp]             ; acting window through the published block
-    mov al, [di+FS_DRV]
-    cmp al, [disk_drive]
-    jne .load
-    mov dx, [di+FS_CWD]
-    cmp dx, [dsk_cwd]
-    jne .load
-    cmp byte [dsk_lstale], 0    ; a quiet mount leaves the globals empty and
-    jne .load                   ; owed (SPEC.md 18.9) - not a listing to take
-    cmp byte [dsk_mntok], 0     ; and they have to have come from a mount
-    je .load                    ; that actually worked
-    call fmv_take               ; the globals ARE this folder: pure memory
-    jmp short .drawn
-.load:
-    mov al, [di+FS_DRV]         ; they are not, so re-list where we stand -
-    mov dx, [di+FS_CWD]         ; exactly what Refresh costs (SPEC.md 22)
+
+    ; --- WHICH DEBT? (docs/plans/LISTING-HOME-PLAN.md 13) ------------------
+    ; This used to ask whether the GLOBAL snapshot happened to be this
+    ; window's folder, and take it by memory copy if it was. There is no
+    ; global snapshot: a mount writes into the caller's own store, so the
+    ; only thing left to copy one from is another mount.
+    ;
+    ; So the question moved to where the answer already is. fmv_bcast hands
+    ; every window on a written folder the new listing and redraws only the
+    ; acting one, and it now says so - FSD_PIXELS on the siblings it filled,
+    ; FSD_CACHE everywhere a listing really did go stale. A sibling coming to
+    ; the front then pays NOTHING, where it used to pay a copy; only a
+    ; genuinely stale cache pays the mount.
+    cmp al, FSD_PIXELS
+    je .drawn                   ; the cache is already this folder's
+    cmp al, FSD_ICONS           ; ...and its ENTRIES are, with only the icon
+    jne .relist                 ; references dangling after a shed (SPEC.md
+    call fmv_icorefs            ; 25.9.5). That is repaired in place for one
+    jnc .drawn                  ; ASSOC.DAT read; a refusal falls through to
+                                ; the re-list, which settles them on its way
+.relist:
+    call fmv_here               ; it is not, so re-list where we stand -
+                                ; exactly what Refresh costs (SPEC.md 22)
     call fmv_load
 .drawn:
     cmp ch, 0
@@ -1487,35 +1910,48 @@ fmv_bcast:
     push dx
     push si
     push di
-    call dsk_relist_x   ; PAY THE DEBT BEFORE ADOPTING ANYTHING.
-                                ; Every window below takes the global snapshot
-                                ; by memory copy (fmv_take), so if the write
-                                ; that got us here DEFERRED its rebuild
-                                ; (SPEC.md 18.4) the thing being broadcast is
-                                ; disk_nfiles = 0 - and it lands in the cache
-                                ; of every window on this folder, the acting
-                                ; one included, which its caller then repaints
-                                ; from. Measured: deleting one file out of a
-                                ; Disk window redrew it as 'Drive B: 0 files'.
-                                ; dsk_relist is idempotent and costs nothing
-                                ; when nothing is owed.
+    ; --- THE ACTING WINDOW RE-LISTS FIRST, and the rest copy from IT ------
+    ; (docs/plans/LISTING-HOME-PLAN.md 13.) This was `dsk_relist_x`: pay the
+    ; floor listing's debt so the snapshot every window below adopts is a
+    ; real one. There is no floor and no snapshot - a mount writes into the
+    ; caller's own store - so the one listing that can be broadcast is the
+    ; one the window that DID the write is about to hold.
+    ;
+    ; Its own reasoning survives the change word for word: if the write
+    ; deferred its rebuild (SPEC.md 18.4) the thing being broadcast is an
+    ; EMPTY listing, and it lands in the cache of every window on this folder
+    ; including the acting one, which its caller then repaints from.
+    ; Measured, before that was understood: deleting one file out of a Disk
+    ; window redrew it as 'Drive B: 0 files'.
+    mov di, [fm_vp]
+    or di, di
+    jz .done                    ; no acting window: nothing wrote, and there
+                                ; is nothing to hand anybody
+    call fmv_here
+    call fmv_load               ; ...into ITS store, which is the source below
     call fmv_ifirst
     jc .done
 .scan:
     mov di, [si+I_SPTR]
+    cmp di, [fm_vp]             ; the source itself: it has the listing, and
+    je .next                    ; fm_edit_commit's caller is about to repaint
+                                ; it, so its debt was settled by the fmv_load
+                                ; above rather than here
     mov al, [di+FS_DRV]
     cmp al, [disk_drive]
     jne .next
     mov dx, [di+FS_CWD]
     cmp dx, [dsk_cwd]
     jne .next
-    call fmv_take               ; adopt the snapshot: pure memory
-    cmp di, [fm_vp]             ; the ACTING window - and only it - is about
-    jne .next                   ; to be repainted by the caller that reached
-    mov byte [di+FS_DIRTY], 0   ; fm_edit_commit, so its refresh debt (22.8)
-                                ; is settled here. A sibling gets its cache
-                                ; and keeps the debt: nothing redraws it, so
-                                ; its pixels are still the folder as it was
+    call fmv_take               ; adopt the acting window's listing: still
+                                ; pure memory, one claim to another
+    mov byte [di+FS_DIRTY], FSD_PIXELS  ; ...AND SAY WHICH DEBT IS LEFT. This
+                                ; sibling's CACHE is now the folder and only
+                                ; its pixels are old, so fm_focus owes it a
+                                ; repaint and not a mount (22.8). It used to
+                                ; keep an undifferentiated 1 and pay a copy
+                                ; for it; there is nothing left to copy from,
+                                ; so without this it would pay a MOUNT
 .next:
     call fmv_inext
     jnc .scan
@@ -1528,31 +1964,58 @@ fmv_bcast:
     ret
 
 ; -----------------------------------------------------------------------------
-; fmv_take - make one window's cache BE the current global snapshot (22.1)
-; in:  DI = state block; the globals are already the new truth and are this
-;      window's own (drive, folder) - the caller has compared them
+; fmv_take - make one window's cache BE THE ACTING WINDOW'S (SPEC.md 22.1)
+; in:  DI = the destination state block, showing the same (drive, folder) as
+;      [fm_vp] - the caller has compared them, and [fm_vp] has just been
+;      re-listed
 ; out: nothing (all registers preserved)
 ;
-; The memory half of a re-list, with no mount in it: fmv_load does the same
-; four stores around a dsk_chdir. Factored out because fmv_bcast and
-; fm_focus (SPEC.md 22.8) both need exactly this and a second copy of it is
-; a second place that can disagree about what a fresh cache means.
+; The memory half of a re-list, with no mount in it. **THE SOURCE MOVED**
+; (docs/plans/LISTING-HOME-PLAN.md 13): it was the global mount snapshot, and
+; that is gone - a mount writes into the caller's own store - so the listing
+; a sibling adopts is the one the window that did the write is holding.
+;
+; It is still pure memory and the copy is still fmv_store's, unchanged: this
+; aims `dsk_dest_x` at the SOURCE window's claim, so what fmv_store reads
+; through [dsk_dseg]/[dsk_ioff] is that claim instead of the floor. One
+; copier, two kinds of source, and no second opinion about what a fresh cache
+; means.
 ; -----------------------------------------------------------------------------
 fmv_take:
     push ax
-    mov ax, [disk_nfiles]
+    push bx
+    push dx
+    push si
+    mov si, [fm_vp]             ; the SOURCE: whoever fmv_bcast just re-listed
+    or si, si
+    jz .out
+    cmp si, di
+    je .out                     ; itself - nothing to copy, and fmv_store's
+                                ; own identity test would skip it anyway
+    mov dx, [si+FS_VSEG]
+    or dx, dx
+    jz .out                     ; the source has no store, so there is no
+                                ; listing anywhere to hand over
+    mov ax, [si+FS_N]
     mov [di+FS_N], ax
-    mov byte [di+FS_MOK], 0     ; the mount's own verdict, which is what
-    cmp byte [dsk_mntok], 0     ; fmv_load records too - after a successful
-    je .listed                  ; write it is always 1 (SPEC.md 18.4)
-    mov byte [di+FS_MOK], 1
-.listed:
+    mov al, [si+FS_MOK]         ; the mount's verdict travels with the listing
+    mov [di+FS_MOK], al         ; it describes, and that mount was the
+                                ; source's (SPEC.md 18.4)
     mov word [di+FS_SEL], 0xFFFF    ; the listing was rebuilt: indices into
     mov word [di+FS_SCRL], 0        ; the old one mean nothing
-    call fmv_store
+    xor bx, bx                  ; entry 0 at the base of the source's claim
+    call dsk_dest_x
+    call fmv_store              ; ...which copies it into DI's own
+    xor dx, dx                  ; and the destination goes back to NOWHERE,
+    call dsk_dest_x             ; for fmv_load's reason: a `.bss` word may not
+                                ; name a claim across arbitrary time
     call fm_measure             ; a write moved both figures: the file that
                                 ; arrived is in the folder AND off the free
                                 ; list, so neither survives the copy
+.out:
+    pop si
+    pop dx
+    pop bx
     pop ax
     ret
 section .text                   ; DATA, so back to the kernel segment: cold code
@@ -2585,7 +3048,7 @@ fm_btn1:
     or di, OS88UI_DOWN
 .draw:
     mov bx, os88ui_krect
-    call os88ui_btn
+    call os88ui_kbtn
 .out:
     jmp kretc_di
 
@@ -2903,7 +3366,8 @@ fm_onclick_x:
 %ifdef OS88UI_SBDRAG
     cmp al, OS88UI_SBTHUMB      ; SPEC.md 13.10.5: the thumb is DRAGGED here
     jne .nograb                 ; now, where it used to page down. BX is still
-    mov al, FM_SBRATE           ; the block and DX still the press, absolute
+    mov ax, FM_SBRATE | (FM_SBRATE286 << 8)
+    call os88ui_sbrate          ; the block and DX still the press, absolute;
     call os88ui_sbgrab          ; CF = 1: no thumb to take after all, so the
     mov al, OS88UI_SBTHUMB      ; ladder below pages exactly as it did
     jc .nograb
@@ -3058,10 +3522,22 @@ fm_onup_x:
     call os88ui_sbdragging      ; SPEC.md 13.10.5: the release COMMITS, and it
     jc .btn                     ; commits unconditionally - a position the rate
     mov bx, si                  ; refused mid-drag is never lost, and a release
-    call fm_layout              ; that landed off the screen entirely still
+    mov word [bx+W_TIMER], 0    ; that landed off the screen entirely still
+                                ; ends the gesture (13.7's second rule).
+                                ; 13.10.5.4.2's timer is cancelled FIRST: it
+                                ; must not outlive the gesture it belongs to,
+                                ; because THIS proc is its handler and a
+                                ; release-then-press inside SB_IDLE would
+                                ; otherwise fire a header button early. A
+                                ; store of wm_timer's own sentinel, which is
+                                ; all its cancel arm is
+    call fm_layout
     call fm_sbset               ; ends the gesture (13.7's second rule).
     call os88ui_sbdrop          ; fm_sbset FIRST: the overlay's erase reads the
     jc .btn                     ; block's geometry. CF = 1 = the gesture was
+                                ; the DIALOG's bar (13.10.5.10). FROM THE TIMER
+                                ; TOO (13.10.5.4.2): the hand paused, so this
+                                ; answers the pos and keeps the record
     sub ax, [fm_lscr]           ; the DIALOG's bar (13.10.5.10) - spent by the
     call fm_scroll_by           ; call above, and this release is the button
     jc .paint                   ; arm's
@@ -3122,7 +3598,15 @@ fm_ondrag_x:
     call os88ui_sbdragging      ; SPEC.md 13.10.5: a live thumb drag owns this
     jc .btn                     ; movement whole - a header button cannot also
     mov bx, si                  ; be armed, but asking costs one compare and
-    call fm_layout              ; says so
+    mov ax, FM_SBIDLE           ; says so.
+    call KERNEL_SEG:cw_wm_timer ; 13.10.5.4.2: EVERY movement pushes the
+                                ; one-shot out, which is what makes it an IDLE
+                                ; detector and not a cadence - and what it
+                                ; fires is fm_onup, which reads the pause off
+                                ; [ui_armw]. FM_SBIDLE = 0 needs no test of
+                                ; its own - wm_timer takes 0 as CANCEL, so
+                                ; that build arms nothing
+    call fm_layout
     call fm_sbset               ; BX = the block; DX is still the pointer's y
     call os88ui_sbtrack         ; CF = 1: the thumb moved and the view is not
     jc .out                     ; owed a thing yet (the rate, or the same row)
@@ -3663,8 +4147,7 @@ fm_reload:
     push dx
     push di
     mov di, [fm_vp]
-    mov al, [di+FS_DRV]
-    mov dx, [di+FS_CWD]
+    call fmv_here
     call fmv_load
     pop di
     pop dx
@@ -4463,11 +4946,10 @@ fm_fmt_home:
     mov word [di+FS_CWD], 0
     mov word [di+FS_SEL], 0xFFFF    ; indices into a listing that no longer
     mov word [di+FS_SCRL], 0        ; describes anything
-    mov byte [di+FS_DIRTY], 1
-    mov byte [fm_fchk], 1       ; ...and it may be the FRONT window, where
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    mov byte [di+FS_DIRTY], FSD_CACHE
+    call fm_owed                ; ...and it may be the FRONT window, where
                                 ; waiting for a focus change means waiting for
-                                ; a click that never comes (22.8)
+                                ; a click that never comes (22.8, 13.13)
     push cx
     push si
     mov bx, [si+I_WIN]
@@ -4587,8 +5069,7 @@ fm_clone_go:
     ; geometry. It may or may not mount, and both are cloneable: the whole
     ; point of a sector copy is that the file system is never consulted.
     mov di, [fm_vp]
-    mov al, [di+FS_DRV]
-    mov dx, [di+FS_CWD]
+    call fmv_here
     call fmv_load
     mov di, [fm_vp]
     mov al, [di+FS_DRV]
@@ -5026,8 +5507,7 @@ fm_selfold:
 
 fm_c_newwin:                    ; Nav > New Window - a second view of here
     mov di, [fm_vp]
-    mov al, [di+FS_DRV]
-    mov dx, [di+FS_CWD]
+    call fmv_here
     xor si, si                  ; same folder, so the same derived title
     jmp short fm_newwin
 
@@ -6093,9 +6573,9 @@ fm_dgdrop:
     mov bx, [si+18]             ; a folder (or '..'): into THAT one
 .have:
     mov al, [fm_dgdrv]
-    cmp al, [fcp_drv]           ; the same folder it came from? then the
+    cmp al, [fcp_cbdrv]           ; the same folder it came from? then the
     jne .go                     ; drag went nowhere and there is nothing
-    cmp bx, [fcp_cwd]           ; to do - not a copy of it into itself
+    cmp bx, [fcp_cbcwd]           ; to do - not a copy of it into itself
     je .out
 .go:
     push ax
@@ -6304,8 +6784,7 @@ fmv_reload_all:
     jc .done
 .scan:
     mov di, [si+I_SPTR]
-    mov al, [di+FS_DRV]
-    mov dx, [di+FS_CWD]
+    call fmv_here
     call fmv_load               ; resets FS_SEL/FS_SCRL, which is honest:
     mov byte [di+FS_DIRTY], 0   ; every index into the old listing is
                                 ; meaningless now. The refresh debt (22.8)
@@ -8413,7 +8892,9 @@ fmf_fm_onclick:         call fm_onclick_x
                     retf
 %ifdef KERN_BIG
 fmf_fm_ondrag:          call fm_ondrag_x
-                    retf
+                    retf                    ; ...and 13.10.5.4.2's PAUSE commit
+                                            ; is fmf_fm_onup, above: one proc
+                                            ; for both edges
 %endif
 
 section .text
@@ -8435,32 +8916,32 @@ section .text
 ; -----------------------------------------------------------------------------
 %ifndef KERN_SMALL              ; purgeable there, so it is shed and never moved
 fm_reloc:
-    push ax
-    push cx
     push si
     push di
-    mov si, inst_tab            ; ITS OWN WALK, and it stays that way: this
-    mov cx, INST_MAX            ; routine is `.text` and fmv_ifirst is `.cold`,
-.scan:                          ; so the near call the other six make is a
-    cmp byte [si+I_STATE], 1    ; jump into another address space
-    jne .next
-    cmp byte [si+I_KIND], KIND_FILES
-    jne .next
-    mov di, [si+I_SPTR]
-    cmp [di+FS_VSEG], bx
-    jne .next
-    mov [di+FS_VSEG], dx
-.next:
-    add si, I_RECSZ
-    loop .scan
+    mov di, inst_tab - I_RECSZ  ; NOT fmv_ifirst, and that has not changed: that
+.scan:                          ; one is `.cold` and this routine is `.text`, so
+    call inst_next              ; the near call the other six make is a jump
+    jc .done                    ; into another address space. What it CAN reach
+                                ; is instance.inc's own walk (SPEC.md 29.1.1),
+                                ; which is `.text` like this - so the record
+                                ; cursor moves to DI and the state block to SI,
+                                ; and CX stops being a counter at all
+    cmp byte [di+I_STATE], 1
+    jne .scan
+    cmp byte [di+I_KIND], KIND_FILES
+    jne .scan
+    mov si, [di+I_SPTR]
+    cmp [si+FS_VSEG], bx
+    jne .scan
+    mov [si+FS_VSEG], dx
+    jmp short .scan
+.done:
     cmp [fm_vseg], bx           ; ...and the mirror, which is the half a word
     jne .out                    ; poke would have missed
     mov [fm_vseg], dx
 .out:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
+    pop di                      ; ...and NEITHER AX NOR CX IS BANKED: CX was the
+    pop si                      ; count `inst_next` does not need, and AX was
+    ret                         ; never written on any arm of this routine
 %endif                          ; KERN_SMALL - fm_reloc is kern_big's
 

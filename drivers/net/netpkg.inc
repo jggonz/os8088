@@ -276,7 +276,82 @@ TS_CLOSEW   equ 10              ; ...and the TOP of the range, published so a
 ; Asking twice, or asking for something already held, is a no-op.
 NETV_BULK    equ 14
 
-NETV_MAX     equ 14             ; ...and anything above it is refused. A verb
+; -----------------------------------------------------------------------------
+; THE RAW VERBS - whole Ethernet frames, for a consumer that IS a stack
+; (SPEC.md 72.22)
+;
+; Every verb above this point is a SOCKET: the driver owns ARP, IP and TCP and
+; the package owns a byte stream. These three are the other shape - the caller
+; has a stack of its own and wants the wire. The DOS box's packet driver
+; (SPEC.md 96.23) is the first consumer and the Crynwr interface is why they
+; are shaped as they are.
+;
+; **THEY ARE A PULL, NOT AN UP-CALL**, and that follows from the driver rather
+; than from taste: ETHER.DRV hooks no interrupt and polls the card's ring
+; (SPEC.md 72.2.1), so there is no context in which the driver could call a
+; consumer back. A consumer that wants frames asks for them.
+;
+; **A RAW CLAIM IS EXCLUSIVE AND IT STOPS OUR OWN STACK.** While it is held
+; eth_pump does nothing at all - no drain, no timers - so the one consumer of
+; the ring is NETV_RAWRX. Gating the pump rather than the frame dispatcher is
+; the safe end: ne_rx has already taken the frame OFF the ring by the time a
+; dispatcher could refuse it, so a gate there would drop what the raw consumer
+; was waiting for.
+; -----------------------------------------------------------------------------
+
+; NETV_RAW - the wire is mine / the wire is yours again
+; in  AL = 1 claim, 0 release; DI = a SIX-byte buffer in the caller's segment
+;     for the station address, or DI = 0 for none (drv_suspend_x's idiom).
+; out: CF=0. CF=1 with AX = NETE_BUSY = somebody else holds it.
+;
+; **THE CLAIM HANDS BACK THE MAC**, and that is a coupling rather than a
+; convenience: a consumer that is now the stack cannot build a single frame
+; without its own source address, so a claim that did not answer it would be
+; followed by a second verb every caller had to make. NETV_ADDR is NOT that
+; verb - it answers the IPv4 address, which is OUR stack's and is precisely
+; what a raw consumer has stopped using.
+;
+; A release by a caller that does not hold it is a no-op, which is what lets a
+; bracket call it on every exit path the way SPEC.md 96.17's resume does.
+NETV_RAW     equ 15
+
+; NETV_RAWTX - put ONE frame on the wire, exactly as given
+; in  SI = the frame, DX = the segment holding it (0 = the caller's own),
+; CX = its length (14..1514: a
+; runt is padded by the card layer, and anything longer is refused rather than
+; truncated). out: CF=0. CF=1 with AX = NETE_* - NETE_NOLINK if no raw claim
+; is held, which is the error a caller that forgot NETV_RAW gets rather than a
+; frame going out under our own MAC by accident.
+NETV_RAWTX   equ 16
+
+; --- what a frame IS, for a consumer that has to build one -------------------
+; A raw consumer needs both of these before it can send anything, and neither
+; was reachable from a package: they lived in the card layer (ne2000.inc) and
+; the stack (inet.inc), which are the driver's own files. ether.asm asserts
+; its own constants against these, so one number cannot drift from the other.
+NET_EHSIZE   equ 14             ; destination, source, ethertype
+NET_FRAME    equ 1514           ; ...and the largest frame without the FCS
+NET_ETY_IP   equ 0x0800         ; ...and the two ethertypes anything looking
+NET_ETY_ARP  equ 0x0806         ; at a frame has to tell apart
+
+; NETV_RAWRX - take ONE frame off the ring
+; in  DI = a buffer, DX = the segment holding it (0 = the caller's own),
+; CX = its capacity
+; out CF=0 and CX = the frame's length, which may EXCEED the capacity given:
+;     that many bytes were there and CX-capacity of them were not copied. A
+;     caller with a 1514-byte buffer never sees it and one with less can tell
+;     a truncation from a short frame. CF=1 = the ring is empty.
+NETV_RAWRX   equ 17
+
+; **WHY BOTH TAKE A SEGMENT** (SPEC.md 72.22.4). Every other buffer in this
+; ABI is in the caller's own segment, because OSAPI_DRV_CALL is an X stub and
+; the only segment it can put in [eth_useg] is the caller's. That is right for
+; a socket, whose buffers are a few hundred bytes of a package's own bss. A
+; raw consumer moves a 1514-byte frame EACH WAY and would have to carry 3KB of
+; image for ever, on every machine, including the ones with no card - so these
+; two take the segment explicitly and a heap claim can hold the pair.
+
+NETV_MAX     equ 17             ; ...and anything above it is refused. A verb
                                 ; table indexed by an unchecked verb is a wild
                                 ; near call inside the driver
 
@@ -320,6 +395,14 @@ NETE_REFUSED equ 6              ; the far side said no: a name that does not
                                 ; resolve, a port nothing is listening on, a
                                 ; partner too old for the socket verbs
 NETE_VERB    equ 7              ; a verb this driver does not have
+NETE_ARG     equ 8              ; the CALL is malformed rather than the state:
+                                ; a raw frame shorter than an Ethernet header
+                                ; or longer than the wire allows (SPEC.md
+                                ; 72.22). It is its own code because every
+                                ; other refusal here is about the machine and
+                                ; this one is about the caller - a packet
+                                ; driver that got NETE_NOLINK for a bad length
+                                ; would go looking for a cable
 
 ; --- who to ask, and how to know you reached them ----------------------------
 ; **THE CLASS IS DRVC_FILE AND NOT DRVC_NET**, which is the one thing here

@@ -127,11 +127,18 @@
  *     function that obeys them lives (docs/APPLE2-SPEC.md section 13.3).
  *     (OSAPI_FULLSCREEN, the WINDOW latch of SPEC.md 11.2, is a different
  *     thing again and is os88_fullscreen() below.)
- *   OSAPI_GFX_LINIT / LSTEP / LSTEPV      RETIRED - a stock kernel carries the
- *     three cells and no body and answers CF=1 (SPEC.md 5.12.6). The
- *     resumable walk is apps/os88gfx.inc's `GFXE_WALK` now, which is NASM and
- *     so out of C's reach; a C package that wants one writes the recurrence
- *     itself and commits with os88_gfx_points().
+ *   OSAPI_GFX_LSTEP / LSTEPV              RETIRED - a stock kernel carries the
+ *     cells and no body and answers CF=1 (SPEC.md 5.12.6). The resumable walk
+ *     is apps/os88gfx.inc's `GFXE_WALK` now, which is NASM and so out of C's
+ *     reach; a C package that wants one writes the recurrence itself and
+ *     commits with os88_gfx_points(). OSAPI_GFX_LINIT was the third and its
+ *     CELL HAS BEEN REUSED - 0x0300 is OSAPI_DSK_CACHE now (SPEC.md 18.95.8),
+ *     which is safe precisely because a retired cell answers CF=1 and every
+ *     caller of one has to test CF.
+ *   OSAPI_DSK_CACHE                       commands the kernel's directory
+ *     read-ahead window to a width, for a program about to claim the whole
+ *     arena. No C package does that - the DOS box is NASM - so it is listed
+ *     rather than wrapped; adding it is a thunk of a dozen lines.
  *   OSAPI_SYS_SNAPSHOT / CLAIM_SNAPSHOT / SYS_KB   buffer layouts that the
  *     kernel renumbers; for the Task Manager, not for applications.
  *   OSAPI_VOL_* / OSAPI_FS_* / OSAPI_DRV_CFG / OSAPI_FILE_*_SYS   fenced on
@@ -926,6 +933,20 @@ void os88_mouse(struct os88_mouse *m);
  * reading down until it is pressed again. Bound what a "yes" makes you do. */
 int  os88_key_down(int scan);
 
+/* ALT+ENTER, THE FULL-SCREEN KEY (SPEC.md 11.2.1.1). os88_onkey is handed
+ * ascii 0 with OS88_SCAN_ENTER for it - the code an enhanced ROM gives, and
+ * the code the kernel SYNTHESISES on every ROM that does not, which is most
+ * of them: no XT BIOS enqueues this combination at all (SPEC.md 9.7.1).
+ * Two things it needs from you:
+ *   - ask os88_key_down(OS88_SCAN_ALT) ONCE from os88_main(), because the
+ *     kernel's latch rides on the key-state map and the map does not exist
+ *     until something asks. Without it the chord is silently dead.
+ *   - test it ABOVE any ascii handling, since ascii is 0.
+ * A window on SPEC.md 11.2's latch keeps taking os88_onkey while it is full
+ * screen, so one test is both directions. */
+#define OS88_SCAN_ENTER 0x1C
+#define OS88_SCAN_ALT   0x38
+
 int  os88_evq_pending(void);                     /* events queued BEHIND the
                                                   * one being dispatched (13.4)
                                                   * - "am I about to be asked
@@ -1002,6 +1023,37 @@ unsigned os88_file_read_at(const char *name, void *buf, unsigned cap,
 int os88_file_delete(const char *name);
 int os88_file_rename(const char *oldname, const char *newname);
 int os88_file_mkdir(const char *name);
+
+/* os88_file_copy / os88_file_move - ONE ENTRY from one folder to another, by
+ * the kernel's own engine (SPEC.md 22.24) - one cell, two verbs, and these
+ * are its two names. A struct os88_place is what os88_file_here() fills and
+ * os88_file_goto() takes, so "copy this to where I was standing" needs no
+ * vocabulary of its own. It lands under the SAME NAME; a copy that renames is
+ * a copy and then os88_file_rename().
+ *
+ * Reach for the copy rather than writing the loop. It streams through a
+ * buffer it claims and gives back, takes the redirector's own fast path when
+ * both ends are on one remote volume, and DELETES A PARTIAL DESTINATION when
+ * anything fails - and that last one is the half a hand-rolled copy in C gets
+ * wrong, because it is the path you cannot easily test.
+ *
+ * os88_file_move() is the file manager's Cut. On one volume it REWRITES THE
+ * DIRECTORY ENTRY and moves no data at all, so a 100KB file costs a directory
+ * write instead of 100KB out through a buffer and 100KB back; where that
+ * declines - two volumes, a destination that already holds the name, a
+ * folder with no free slot - it copies and then deletes the source, so there
+ * is no "not attempted" answer to handle any more. A folder moves with
+ * everything under it. Either verb REPLACES a file of that name at the
+ * destination, as a paste answered "replace all" would.
+ *
+ * Both return 0, or -1 with os88_ferr() set: FERR_EXIST when the destination
+ * is the folder the entry is already in (nothing was written), FERR_FULL
+ * when the engine cannot claim its buffer - a same-volume move needs none -
+ * and FERR_NODISK while the user's own Cut/Copy/Paste is running. */
+int os88_file_copy(const char *name, const struct os88_place *from,
+                   const struct os88_place *to);
+int os88_file_move(const char *name, const struct os88_place *from,
+                   const struct os88_place *to);
 
 /* os88_ferr - the FERR_* of the last file call, 0 if it succeeded. It is one
  * word of the runtime's bss and every file thunk writes it, so read it before

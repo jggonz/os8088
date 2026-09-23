@@ -247,15 +247,23 @@ def main():
         # driver or module on this volume reads as PLAIN and its loader
         # refuses the 'CZ' magic - which is what the hibernate row saw the
         # day the drivers became containers and this tool did not follow.
+        # **`un` AND NOT `n`.** This used to spell the unpacked size `n`,
+        # which is the CLUSTER COUNT three lines down - so `nextc` advanced by
+        # a BYTE COUNT after every 'CZ' file and the next one landed thousands
+        # of clusters along. Nothing caught it because the volume stayed
+        # SELF-CONSISTENT: the FAT chain, the directory entry and the data all
+        # used the same wrong number, so a four-file fixture was merely very
+        # sparse and booted perfectly. It surfaced as `DOS.O88 does not fit the
+        # volume` on a 32MB disk holding 173 KB.
         if len(blob) >= 8 and blob[:2] == b"CZ" and blob[3] == 0 \
                 and blob[2] in (0, 1):
-            n = int.from_bytes(blob[4:8], "little")
-            if n >= (1 << 24):
+            un = int.from_bytes(blob[4:8], "little")
+            if un >= (1 << 24):
                 fail("%s: expands to %d bytes and the hint carries 24 bits"
-                     % (name, n))
+                     % (name, un))
             e[CZ_H_MARK] = CZ_HINT + blob[2]
-            e[CZ_H_HI] = n >> 16
-            struct.pack_into("<H", e, CZ_H_LO, n & 0xFFFF)
+            e[CZ_H_HI] = un >> 16
+            struct.pack_into("<H", e, CZ_H_LO, un & 0xFFFF)
         root[nent * 32:nent * 32 + 32] = e
         laid.append((nextc, blob))
         nextc += n

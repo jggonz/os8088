@@ -981,6 +981,14 @@ fd_draw_all:
 .fdone:                             ; it waits on the glass for the NEXT line
     ret
 
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; One button at a time: this package's rects are not one contiguous group,
+; so the record is pointed at whichever rect the caller staged.
+fd_btlbl: dw 0
+fd_btflg: dw 0
+    OS88UI_BTNREC fd_btrec, 0, fd_btlbl, fd_btflg, 1
+
 fd_draw_btn:
     push ax
     push bx
@@ -1013,7 +1021,16 @@ fd_draw_btn:
     jne .draw                       ; VARIABLE, so a W_PAINT arriving mid-
     or di, OS88UI_DOWN              ; gesture draws it the way it really is
 .draw:                              ; (SPEC.md 13.8.2)
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [fd_btlbl], si          ; label and DI its flags, so the record takes
+    mov [fd_btflg], di          ; all three and the picture is identical
+    mov [fd_btrec+OS88UI_BT_RECTS], bx
+    mov bx, fd_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop bx
@@ -1036,7 +1053,16 @@ fd_draw_setb:
     jne .draw
     or di, OS88UI_DOWN
 .draw:
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [fd_btlbl], si          ; label and DI its flags, so the record takes
+    mov [fd_btflg], di          ; all three and the picture is identical
+    mov [fd_btrec+OS88UI_BT_RECTS], bx
+    mov bx, fd_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop bx
@@ -1099,7 +1125,16 @@ fd_draw_done:
     jne .draw
     or di, OS88UI_DOWN
 .draw:
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [fd_btlbl], si          ; label and DI its flags, so the record takes
+    mov [fd_btflg], di          ; all three and the picture is identical
+    mov [fd_btrec+OS88UI_BT_RECTS], bx
+    mov bx, fd_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop bx
@@ -5412,9 +5447,22 @@ fd_upcase:
 ; fd_enter - SI = one component; step into it. out CF=1 = there is no such folder
 ;
 ; A folder's first cluster comes out of OSAPI_FILE_FIND's +16, which is what
-; OSAPI_FILE_GOTO_QM takes. '..' is a REAL ROW here (type OSAPI_FT_UP, SPEC.md
-; 19.5) carrying the parent's cluster, so stepping up needs no special case -
-; the walk finds it like any other entry.
+; OSAPI_FILE_GOTO_QM takes.
+;
+; **'..' NEVER ARRIVES HERE, AND THIS COMMENT USED TO SAY IT DID.** It claimed
+; the up-entry was a real row (type OSAPI_FT_UP) that the walk found like any
+; other, so stepping up needed no special case. It is not and it does not:
+; dsk_find_x drops every on-disk dot link outright (`cmp al, '.' / je .skip`),
+; and the synthesized type-3 parent row belongs to disk_mount's LISTING (SPEC.md
+; 19.5), which is a different thing a package cannot reach. FD_CDMAX's comment
+; at the top of this file has said so correctly all along, and fd_walk handles
+; '..' BEFORE it ever reaches here (see its `cmp ax, '..'`), which is why the
+; wrong comment never became a wrong program.
+;
+; The OSAPI_FT_UP compare below is therefore defensive and unreachable. It is
+; left in place because it costs four bytes and is right if the fence ever
+; moves; what was costing was the sentence above it, which sent a reader
+; looking for an up-row that the kernel does not hand out.
 ; -----------------------------------------------------------------------------
 fd_enter:
     push ax

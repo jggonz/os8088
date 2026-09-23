@@ -244,10 +244,12 @@ ss_row:
 blk_wake:
     push ax                     ; ONE bank, and ONE exit. AX is banked because
     mov ax, [ticks]             ; this routine's contract is flags and nothing
-    mov [blk_t0], ax            ; else: ui.inc calls it mid-keystroke, between
-    xor al, al                  ; int 16h's peek and its fetch, and fsx_restore
-    cmp [blk_on], al            ; from inside its own saved frame. The idle
-    je .out                     ; period restarts here, lit or dark - this is
+    mov [blk_t0], ax            ; else: ui.inc calls it HOLDING THE KEYSTROKE -
+    xor al, al                  ; int 16h has already fetched it (SPEC.md 9.7.1
+    cmp [blk_on], al            ; moved the fetch above this call so the latch's
+    je .out                     ; arm could share it) - and fsx_restore from
+                                ; inside its own saved frame. The idle period
+                                ; restarts here, lit or dark - this is
                                 ; the only place it is set outside boot.
                                 ;
                                 ; AL = 0 IS THREE THINGS AT ONCE: blk_set's
@@ -391,10 +393,20 @@ blk_pass:
 ; THE ANIMATION IS TRIED FIRST AND THE BLANKER IS WHAT HAPPENS WHEN IT CANNOT
 ; RUN (SPEC.md 79.1). Every refusal ss_start_x can answer - no mode ticked, no
 ; system disk, no heap, a missing or malformed SAVER.DRV - arrives here as
-; CF = 1 and falls through to the walk below, which is what this file did
-; before there was an overlay. Nothing is said to the user, because nothing
-; here is the user's to fix and a toast on a machine nobody is sitting at is a
-; message nobody reads (SPEC.md 79.8).
+; CF = 1 and walks from display 0, which is what this file did before there
+; was an overlay. Nothing is said to the user, because nothing here is the
+; user's to fix and a toast on a machine nobody is sitting at is a message
+; nobody reads (SPEC.md 79.8).
+;
+; **AND A SESSION STILL WALKS - IT JUST STARTS AT DISPLAY 1** (SPEC.md
+; 79.1.1). CF = 0 used to return without gating anything, which is right on
+; the one-display machine it was written for and leaves a two-monitor machine
+; with one tube saved and the other showing a frozen desktop until morning -
+; the precise failure the header below this one says the walk exists to
+; prevent. The saver draws on the PRIMARY and only there (it sizes itself from
+; OSAPI_VIDEO, which answers the primary and says so, SPEC.md 39.2.1), so the
+; primary is the one display whose signal has to stay on and every other one
+; is gated exactly as the blanker gates it.
 ;
 ; THE ARROW COMES OFF THE GLASS FOR A SESSION AND NOT FOR A BLANK, and that
 ; asymmetry is the whole difference between the two answers. A gated signal
@@ -417,35 +429,60 @@ blk_pass:
 ; -----------------------------------------------------------------------------
 blk_set:
     mov [blk_on], al
-%ifdef KERN_BIG
-    call COLD_SEG:ssf_set       ; the ANIMATION first (SPEC.md 79.1). CF = 0
-    jnc .done                   ; means the overlay has the glass, so the
-%endif                          ; video signal must stay ON
     push ax
 %ifdef KERN_BIG                 ; CX is the loop's and the loop is KERN_BIG's:
     push cx                     ; the %else arm below names no CX, and blk_one
                                 ; tail-jumps into vid_bk, which banks ax/es/dx
                                 ; and never writes it
-    mov cl, [vid_ndisp]         ; NO `push di`: this routine's body never names
-    xor ch, ch                  ; DI either, and the bank was a leftover from
-.d:                             ; before 25448be converted this site off
-    mov al, ch                  ; vid_ctx_ptr (whose DI IS an output).
+    xor ch, ch                  ; NO `push di`: this routine's body never names
+                                ; DI either, and the bank was a leftover from
+                                ; before 25448be converted this site off
+                                ; vid_ctx_ptr (whose DI IS an output).
+    call COLD_SEG:ssf_set       ; the ANIMATION first (SPEC.md 79.1). CF = 1
+    jc .walk                    ; is every refusal, and gates every card from
+                                ; display 0 exactly as this file always did.
+    inc ch                      ; CF = 0 IS NOT "NOTHING TO GATE" (SPEC.md
+                                ; 79.1.1). The overlay has the PRIMARY and is
+                                ; drawing on it, so display 0's signal must
+                                ; stay on - but the saver sizes itself from
+                                ; OSAPI_VIDEO, which answers the primary and
+                                ; says so (39.2.1), so on an EXTENDED desktop
+                                ; every other tube keeps the frozen desktop it
+                                ; had, lit, all night. That is the exact thing
+                                ; this file's header says the walk exists to
+                                ; prevent, and the animation arm was skipping
+                                ; the walk outright. So the saver's own
+                                ; display is the ONE that stays lit, and this
+                                ; is vid_fsx_enter's "every card but the
+                                ; bracket's" (39.18) reached from the other
+                                ; end. Display 0 BY NAME and not a search:
+                                ; the primary is at the virtual origin and is
+                                ; banked as display 0 by construction
+                                ; (vid_disp_init, 39.19.2)
+.walk:
+    mov cl, [vid_ndisp]
+    cmp ch, cl                  ; A WHILE, WHERE THIS WAS A DO-WHILE. The
+    jae .pop                    ; old form rested on [vid_ndisp] never being
+                                ; 0; the animation arm above starts at 1, so
+                                ; a ONE-display machine running the saver
+                                ; must do nothing at all rather than hand
+                                ; vid_kind_of an out-of-range display
+.d:
+    mov al, ch
     call vid_kind_of            ; vid_kind_of banks its own (`push di / call
     call blk_one                ; vid_ctx_ptr / ... / pop di`), and blk_one
     inc ch                      ; reaches only vid_bk and vid_ac_pal,
     cmp ch, cl                  ; neither of which writes DI
-    jb .d                       ; a do-while: [vid_ndisp] is never 0, and a
-                                ; kernel that made it 0 would still do one -
-                                ; which is why this counts UP and not down: a
+    jb .d                       ; ...and it counts UP and not down: a
                                 ; `dec cl` from 0 would run 255 more passes
                                 ; handing vid_kind_of an out-of-range display
+.pop:
     pop cx
 %else
     mov al, [vid_kind]          ; kern_small is single-display by construction
     call blk_one                ; - vidsel.inc's whole multi-display half is
 %endif                          ; inside one %ifdef KERN_BIG
     pop ax
-.done:
     ret
 
 ; in: AL = VID_* kind. [blk_on] has already been written, and says which way.

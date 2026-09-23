@@ -110,7 +110,7 @@ BUSY = 6.0                      # ...and how long a repaint may hold the guest
 # against 5.9s, up to -37% per script.  The row does not get slower (measured: 1.06x
 # wall across twelve rows), it gets LESS THOROUGH, and then fails somewhere
 # further on looking like the thing under test.  That is the mechanism behind
-# docs/plans/HANDOFF-SOAK-FINDINGS.md B5, and it is why "it passed alone" has been
+# the host-clock trap, and it is why "it passed alone" has been
 # such an unsatisfying diagnosis: the wall times never showed anything.
 #
 # `OS88_GUEST_PACE=<ratio>` spends the same wait in GUEST seconds instead -
@@ -254,6 +254,8 @@ class Mouse:
         self.m = marty
         self.verbose = verbose
         self._cur = None
+        self._last_edge = None          # guest tick of the last button edge,
+                                        # for _sep's double-click separation
 
     # --- finding the cursor ------------------------------------------------
     def _rd(self, off, n):
@@ -413,7 +415,8 @@ class Mouse:
         self.to(x, y)
         if self.where()[2] & 1:         # a button left down by something else
             self._edge(False)           # would make this press no edge at all
-        self._edge(True)
+        self._sep()                     # ...and not the second half of a
+        self._edge(True)                # double-click either (see _sep)
         self._edge(False)
         _wait(self.m, settle, "click")
 
@@ -422,6 +425,37 @@ class Mouse:
         """The guest's own 18.2 Hz tick count (0040:006C)."""
         b = self._raw(BIOS_TICKS, 4)
         return b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)
+
+    def _sep(self):
+        """Separate this press from the LAST one on the GUEST's clock.
+
+        **A GAP MEASURED IN HOST WORK IS WRONG AT SOME GUEST SPEED**, and that
+        is the whole reason this exists rather than a sleep at a call site.
+        Two of this module's verbs in a row put two button edges a fixed
+        amount of HOST work apart - a `settle`, a screen read, a couple of
+        round trips - and the guest sees that interval in GUEST time, which
+        shrinks as the box gets busier and grows as it gets quieter. The
+        kernel's double-click detectors measure the same interval in TICKS
+        (`DBL_TICKS`, shared by ui_tdbl, DESK_DBLT, FM_DBLCLK and FD_DBLCLK),
+        so on a loaded box two ordinary clicks slide inside the window and
+        become a DOUBLE-CLICK: a title bar zooms instead of dragging
+        (SPEC.md 11.95), a file opens instead of being selected.
+
+        Nothing about that looks like what it is. The verb that follows acts
+        on the wrong window or never runs, and the row reports the feature.
+        It failed dockpos once in a four-lane soak and lzcomp three times in
+        four with four copies at once, and both passed alone - which is how
+        it kept being written off as contention.
+
+        So the separation is taken on 0040:006C, the guest's own tick, and is
+        the same amount of the MACHINE's time whatever the host is doing.
+        `dblclick` is the one verb that WANTS to be inside the window and
+        skips it between its own two presses - never before the first.
+        """
+        if self._last_edge is None:
+            return
+        while self.ticks() - self._last_edge <= DBL_TICKS:
+            time.sleep(0.01)
 
     def _edge(self, down, tries=60, resend=20, btn=1):
         """One button edge, PROVEN: send the packet, then wait until the
@@ -448,6 +482,7 @@ class Mouse:
             if i % resend == 0:
                 self.m.mouse(0, 0, l=down and btn == 1, r=down and btn == 2)
             if (self.where()[2] & btn) == want:
+                self._last_edge = self.ticks()   # ...for _sep above
                 return
             # ...and the raise below blames the UART, which is the wrong
             # answer for a guest that is not executing at all.
@@ -469,8 +504,9 @@ class Mouse:
         self.to(x, y)
         if self.where()[2] & 1:         # a button left down by something else
             self._edge(False)           # would make the first press no edge
-        self._edge(True)
-        t1 = self.ticks()
+        self._sep()                     # ...the FIRST press is separated from
+        self._edge(True)                # whatever came before; the second is
+        t1 = self.ticks()               # deliberately not (see _sep)
         self._edge(False)
         self._edge(True)
         t2 = self.ticks()
@@ -540,7 +576,8 @@ class Mouse:
         self.to(x0, y0)
         if self.where()[2] & btn:
             self._edge(False, btn=btn)
-        self._edge(True, btn=btn)
+        self._sep()                     # a drag OPENS with a press, and two
+        self._edge(True, btn=btn)       # of them in a row are a double-click
         self.to(x1, y1, l=btn == 1, r=btn == 2)
         self._edge(False, btn=btn)
         _wait(self.m, settle, "drag/menu")

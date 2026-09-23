@@ -362,7 +362,74 @@ CSP_INDK   equ 44               ; INDUCED DRAG, the wing's own share
                                 ; tests/skiesbody.py and tests/skiesfleet.py
                                 ; carry these offsets as literals and an
                                 ; insertion moves every field after it
-CSP_SIZE   equ 46
+CSP_SND    equ 46               ; word: ITS ENGINE (88.8.2) - the sound record
+                                ; below, or 0 for an aeroplane that has none.
+                                ; APPENDED for CSP_INDK's reason: tests carry
+                                ; the offsets before it as literals
+CSP_SIZE   equ 48
+
+; --- an ENGINE (SPEC.md 88.8.2): what ONE aeroplane sounds like ---------------
+; The tone tier is a single square wave - AX = Hz and nothing else - so a
+; per-aeroplane engine can only ever be a FREQUENCY LAW, and this is it:
+;
+;     Hz = CSS_IDLE + source x CSS_SPAN / full scale
+;
+; where the source is the throttle LEVER, or the thrust the engine actually HAS
+; when CSSF_SPOOL is set. A CSS_IDLE of 0 IS silence at a shut throttle, which
+; is what every aeroplane did before this, so the field is the switch as well as
+; the number and no code tests for it.
+;
+; THERE IS NO BEAT FIELD, and there was one (88.8.2.1). A tone that dropped a
+; few hertz on a fixed share of the ticks was meant to be a piston's roughness
+; and the field heard "a periodic dip that does sound like a bug, rather than
+; an engine" on the trainer and "a much more frequent bug" on the biplane -
+; with its RATE moving as the frame rate moved, which is the sim-tick drop this
+; project predicted and could not hear. The verdict was constant, so what is
+; left is steady notes and the slew below.
+CSS_IDLE  equ 0                 ; word: Hz with the throttle SHUT and the
+                                ; engine turning. An aeroplane with an engine
+                                ; running is NOT SILENT, and the idle is where
+                                ; most of one aeroplane's character against
+                                ; another is actually heard
+CSS_SPAN  equ 2                 ; word: Hz added between shut and full power
+CSS_LAG   equ 4                 ; THE ENGINE'S RESPONSE (88.8.2.1), a shift:
+                                ; the note closes this fraction of the GAP to
+                                ; what the engine wants, each tick. A throttle
+                                ; that moves in one step GLIDES instead of
+                                ; snapping, which is what an engine does and
+                                ; what a note does not
+CSS_CAP   equ 5                 ; ...AND THE NOTE'S PITCH CEILING, a second
+                                ; shift (and see SPEC.md 34.1.1, which is the
+                                ; OTHER half of what a glide sounds like: the
+                                ; kernel used to restart the square wave on
+                                ; every change, so a sweep wobbled however
+                                ; smooth the numbers were),
+                                ; on the NOTE rather than on the gap:
+                                ; the step may not exceed this share of where
+                                ; the note already is. A share of the gap is a
+                                ; constant fraction in HERTZ and a wildly
+                                ; varying one in INTERVAL - the Magister's
+                                ; first step out of idle was 65 Hz at 180,
+                                ; which is a musical FOURTH, and the field
+                                ; heard it as exactly that: "this one still
+                                ; plays notes as it goes up or down". A share
+                                ; of the note is a constant interval, so a
+                                ; wide range glides at the same rate at the
+                                ; bottom as at the top. The lower of the two
+                                ; wins, and neither may be less than one hertz
+CSS_FLAGS equ 6                 ; CSSF_*
+CSS_SIZE  equ 7
+
+CSSF_SPOOL equ 0x01             ; follow the SPOOLED thrust and not the lever
+                                ; (88.7.5) - a jet, and the one aeroplane here
+                                ; whose note lags the hand. CSP_SPOOL has
+                                ; modelled a 5.3-second spool since the Fouga
+                                ; shipped and nothing has ever been able to
+                                ; HEAR it. It is also the one source with
+                                ; RESOLUTION to spare - cs_thracc is 8.8 where
+                                ; the lever is fifty whole steps - so the jet
+                                ; scales straight off it and never rounds
+                                ; through a percentage
 
 CSPF_AMPHIB equ 0x0001          ; it may touch down on water, and where the
                                 ; location has some it STARTS there (88.7.7)
@@ -568,6 +635,18 @@ cs_entry:
     call OSAPI_WM_CREATE
     jc .full
     mov [cs_win], bx
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1), and the macro's bare `ret` IS the
+    ; proc - because every word that names this region is the kernel's. It
+    ; named a cs_reloc for a cycle, on the belief that [cs_artseg] pointed
+    ; INSIDE our carve and had to follow it. It does not: csl_art expands the
+    ; title bands into a claim of their OWN (OSAPI_MEM_CLAIM, CS_ART_KB) and
+    ; hands us THAT segment, the packed stream in the carve being op_dropped
+    ; before the handoff. After mem_reown_x that claim is slot-owned with no
+    ; proc, so it never moves - and a proc that added the region's delta to
+    ; [cs_artseg] would have pointed the title page at 11KB of whatever the
+    ; compactor packed there the first time this region moved. Nothing
+    ; exercised it; SPEC.md 66.6.1.1 records the correction.
+    OS88_REGION_MOVABLE
     mov [cs_drplane + OS88UI_DR_WIN], bx    ; the drop-downs arm their clips
     mov [cs_drport + OS88UI_DR_WIN], bx     ; off it (os88ui.inc)
     mov si, cs_setdrops             ; ...AND THE SETTINGS PAGE'S FOUR, off the
@@ -662,6 +741,9 @@ cs_artload:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; (cs_reloc used to stand here: SPEC.md 66.6.1.1 is why it was wrong and why
+; the declaration above takes the macro's bare `ret` instead.)
 ; -----------------------------------------------------------------------------
 ; cs_wldpick - put location AL's world in the overlay and make it current
 ;              (SPEC.md 88.10.5)
@@ -811,8 +893,26 @@ cs_wldget:
     jc .free
     or dx, dx                       ; a short read is a stream that is not all
     jnz .got                        ; here, and expanding half of one writes
-    cmp ax, [cs_wgcap]              ; rubbish into the overlay rather than
-    jb .free                        ; refusing
+                                    ; rubbish into the overlay rather than
+                                    ; refusing. **AGAINST WHAT THE STREAM
+                                    ; NEEDS AND NOT WHAT THE READ ASKED FOR**
+                                    ; (SPEC.md 88.10.5.4.1): [cs_wgcap] is
+                                    ; rounded UP to whole clusters because
+                                    ; that is what OSAPI_FILE_READ_AT wants
+                                    ; for a capacity, so checking against it
+                                    ; demands bytes past the end of the LAST
+                                    ; stream in the file - which is San
+                                    ; Francisco's world, ending exactly at
+                                    ; EOF, on every geometry. Every other
+                                    ; stream has more file behind it and
+                                    ; filled the capacity by accident.
+                                    ; op_load's [op_want] is the same
+                                    ; predicate in os88partsbody.inc, which
+                                    ; is where this read was copied from
+    mov bx, [cs_wgslk]
+    add bx, [cs_wglen]              ; ...the bytes the expansion consumes
+    cmp ax, bx                      ; (BX is dead here - the destination one
+    jb .free                        ; below is loaded fresh past .got)
 .got:
     ; --- and the expansion, ES:0 by contract (SPEC.md 20.13.3) --------------
     ; EVERY WORD IS FETCHED BEFORE DS MOVES. The stream is in the buffer and
@@ -1508,6 +1608,14 @@ cs_setclick:
 
 ; cs_flybtn - the Fly button as it stands: greyed with no mode to fly in
 ;             (SPEC.md 47), down while pressed. in: [cs_flyrect] current
+
+; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
+; One button at a time: this package's rects are not one contiguous group,
+; so the record is pointed at whichever rect the caller staged.
+cs_btlbl: dw 0
+cs_btflg: dw 0
+    OS88UI_BTNREC cs_btrec, 0, cs_btlbl, cs_btflg, 1
+
 cs_flybtn:
     push bx
     push si
@@ -1523,7 +1631,16 @@ cs_flybtn:
     je .draw
     or di, OS88UI_DOWN
 .draw:
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [cs_btlbl], si          ; label and DI its flags, so the record takes
+    mov [cs_btflg], di          ; all three and the picture is identical
+    mov [cs_btrec+OS88UI_BT_RECTS], bx
+    mov bx, cs_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop bx
@@ -1542,7 +1659,16 @@ cs_donebtn:
     je .draw
     or di, OS88UI_DOWN
 .draw:
+    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
+    push bx                     ; already holds this button's rect, SI its
+    mov [cs_btlbl], si          ; label and DI its flags, so the record takes
+    mov [cs_btflg], di          ; all three and the picture is identical
+    mov [cs_btrec+OS88UI_BT_RECTS], bx
+    mov bx, cs_btrec
+    mov al, 1
     call os88ui_btn
+    pop bx
+    pop ax
     pop di
     pop si
     pop bx
@@ -2055,6 +2181,11 @@ cs_onkey:
     call cs_drcloseall              ; Esc: an open list down
     jmp short .out
 .notesc:
+    cmp ax, KEY_ALTENTER            ; Alt+Enter is the same door (SPEC.md
+    je .go                          ; 11.2.1.1), and a plain Enter already
+                                    ; opens it four lines down - so this is
+                                    ; the chord agreeing with the key rather
+                                    ; than a new action
     cmp al, 'f'
     je .go
     cmp al, 'F'
@@ -2673,6 +2804,9 @@ CS_DBGSCR equ 112               ; ...and the copy A/B's scratch is 112 rows,
     ZWORD cs_cosp
     ZWORD cs_sinr
     ZWORD cs_cosr
+    ZWORD cs_fsinh                  ; ...and the GROUND TRACK'S FACING, which
+    ZWORD cs_fcosh                  ; is the heading turned round past the
+                                    ; vertical (88.7.8.2)
     ZWORD cs_t1
     ZWORD cs_t2
     ZWORD cs_nx                     ; the world's up vector in camera space:
@@ -2839,6 +2973,13 @@ CS_DBGSCR equ 112               ; ...and the copy A/B's scratch is 112 rows,
     ZBYTE cs_msg
     ZBYTE cs_sound
     ZWORD cs_tone                   ; the engine tone being played, or 0
+    ZWORD cs_sndtk                  ; the tick cs_sound_step last serviced: the
+                                    ; note moves once per WALL-CLOCK tick and
+                                    ; not once per call (SPEC.md 88.8.2.1.2)
+    ZWORD cs_eng                    ; ...and the ENGINE's own note, which the
+                                    ; stall beep and the crash blast stand in
+                                    ; front of without disturbing (88.8.2.1).
+                                    ; It is what CSS_LAG slews
     ZWORD cs_last                   ; the tick the last frame was stepped at
     ZWORD cs_frames                 ; frames rendered; the only instrument
     ZWORD cs_rwsin                  ; the runway heading's sine and cosine
@@ -2950,6 +3091,13 @@ CS_SWOOPHI equ 900              ; DOWN from the top in sink
     ZWORD cs_dcseg                  ; the interrupted CS, so an IP is placed
                                     ; in a segment rather than assumed to be
                                     ; ours
+    ZBUF  cs_dcsr, CSD_SLOTS * 2    ; ...one PER SLOT (SPEC.md 88.14.4). The
+                                    ; three IPs are three different ticks, so
+                                    ; one CS places the NEWEST and leaves the
+                                    ; other two unplaceable - and ordinarily
+                                    ; they are not all in one segment, the
+                                    ; flight's own int 16h poll (SPEC.md 53.1)
+                                    ; putting a tick in the ROM
     ZWORD cs_dbtick                 ; again, so the photograph is of the
     ZBUF  cs_dcan, CSD_CANB         ; MOMENT and not of the wreckage
     ZBUF  cs_doff, CSD_BLKS * CSD_ROWS * 2  ; ...and the device offset of every
@@ -2966,6 +3114,8 @@ CS_SWOOPHI equ 900              ; DOWN from the top in sink
     ZWORD cs_adry
     ZWORD cs_adhw
     ZWORD cs_adhh
+    ZWORD cs_adroll                 ; ...the FOLDED roll it is drawn from
+                                    ; (88.9.2.6), and
     ZWORD cs_adoff                  ; ...its horizon: the pitch offset, the
     ZWORD cs_addy                   ; slope's rise over the half-width, and
     ZWORD cs_adx1                   ; the two ends
@@ -3028,6 +3178,7 @@ CS_SWOOPHI equ 900              ; DOWN from the top in sink
 %define OS88UI_DROP             ; button, the drop-down (SPEC.md 13.14) and
 %define OS88UI_CHK              ; the check box (13.15), which the Settings
                                 ; page is the first user of,
+%include "os88alt.inc"          ; SPEC.md 11.2.1.1's edge, for the bracket
 %include "os88ui.inc"           ; of which this is the first user
 
 ; --- and the OVERLAY, at an address the worlds were assembled against ---------
@@ -3060,8 +3211,53 @@ CS_SWOOPHI equ 900              ; DOWN from the top in sink
 ;
 ; There is no %if to write here and there could not be: CS_BSS is a
 ; preprocessor %assign and `os88_image_end - $$` is not one, so the two can
-; only meet at assembly time. The gap is 1,444 bytes today, and it is the
-; growth headroom for the image and the ZWORD chain TOGETHER.
+; only meet at assembly time. The gap is the growth headroom for the image and
+; the ZWORD chain TOGETHER - 9,872 bytes today, and NOT A NUMBER TO QUOTE FROM
+; HERE: this comment said 1,444 for long enough to be stale by 1,236, and a
+; costing believed it. Read it off the listing (`nasm -l`, the middle `times`),
+; or off CS_VOCAB_AT less the image and CS_BSS.
+;
+; WHAT SETS IT IS NOT THIS FILE (SPEC.md 88.10.6). `CS_VOCAB_AT` is derived in
+; tools/csworlds.py FROM THIS PROGRAM'S OWN SIZE - the image plus the ZWORD
+; chain, rounded up to a paragraph - so the gap below the overlay is ZERO and
+; the claim is what the program actually needs.
+;
+; IT WAS DERIVED FROM THE CEILING FOR ONE CYCLE and that is the mistake this
+; replaces: APP_MAX_SIZE less the overlay is staleness-proof, like this is, but
+; it maximises the gap BY CONSTRUCTION - and the gap is not free. The claim is
+; CS_VOCAB_AT plus the overlay whatever the image does (88.4.5.5), so every
+; byte the address is raised by is a byte of claimed RAM no instruction reads,
+; on every instance, for the life of the program. At the ceiling that was 9,614
+; bytes. Derived from the program it is under 16.
+;
+; GROWING STILL COSTS NOTHING TO GET WRONG, which is the property the ceiling
+; was bought for and this keeps: add a routine or a ZWORD and the address
+; MOVES, because build/cswidx.inc is regenerated from the size the program
+; actually assembled to. There is no number for anyone to tune, get right, or
+; leave behind - what changes is that the claim tracks the program DOWN as well
+; as up.
+;
+; THE GAP IS STILL THE ASSERTION. It is a separate `times` for the reason the
+; paragraph above gives - written as its own subtraction it goes NEGATIVE, and
+; nasm refuses the file, if the derivation is ever stale - and that is now the
+; backstop rather than the mechanism: a stale cswidx.inc means the two-pass
+; build did not run, not that somebody forgot to raise an address.
+%ifdef CS_SIZEPROBE
+; --- PASS 1 (SPEC.md 88.10.6.1) ----------------------------------------------
+; The overlay's address is derived from a size only nasm knows, and the bss
+; that size is part of cannot be laid out until the address is known. That is
+; a real circularity and this is the cut: with -DCS_SIZEPROBE the three fills
+; below become two bytes, so the object is the IMAGE and then CS_BSS, and
+; csworlds.py reads `image_end = len - 2` and `CS_BSS = the last word` off it.
+; No listing is parsed and no symbol table is needed.
+;
+; The probe assembles against whatever cswidx.inc is already there, and does
+; not care whether its address is right: every cs_* symbol in it is an
+; immediate or an absolute disp16, so its VALUE cannot change an encoding's
+; length, and the fills that WOULD care are the ones this replaces.
+    dw CS_BSS
+%else
     times CS_BSS db 0                       ; the declared bss...
     times (CS_VOCAB_AT - (os88_image_end - $$)) - CS_BSS db 0    ; ...the gap...
     times CS_VOCAB_MAX + CS_WLD_MAX db 0    ; ...and the overlay
+%endif

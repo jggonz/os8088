@@ -281,7 +281,7 @@ squashed, and that shapes what to write:
     118. **The API table collided in the same round and merged CLEANLY**:
     both sides appended to the same tail, so `apps/os88api.inc` came out with
     no conflict marker and two names at each of 0x04F8 and 0x0500 —
-    `OSAPI_DECOMP`/`OSAPI_PKG_RUN` and `OSAPI_FILE_FIND_RAW`/`OSAPI_DESK_SVC`.
+    `OSAPI_DECOMP`/`OSAPI_PKG_START` and `OSAPI_FILE_FIND_RAW`/`OSAPI_DESK_SVC`.
     The branch kept 0x04F8–0x0518 and `main`'s two moved to 0x0520 and 0x0528.
     This is the failure the collision check above exists for, and it is the
     check that found it.
