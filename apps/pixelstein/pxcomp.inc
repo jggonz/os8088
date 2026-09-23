@@ -847,17 +847,19 @@ px_frame_begin:
     je .bar
     dec byte [px_cardd]
     call px_card_draw
-    jmp short .bar
+    mov byte [px_scard], 1          ; the band holds a card's BITS (97.14:
+    jmp short .bar                  ; WIN4 blits it as WIN1 does)
 .fade:
     call px_vcur_lost
     cmp byte [px_fdo], 0
     je .bar
     call px_fade_draw               ; THE DIE WASH (97.8): no cast, no
-    jmp short .bar                  ; compose - the band in the wash's tone
-                                    ; once, and nothing until the restart
+    mov byte [px_scard], 0          ; compose - the band in the wash's tone
+    jmp short .bar                  ; once, and nothing until the restart
 .world:
     cmp byte [px_fdo], 0
     je .bar
+    mov byte [px_scard], 0          ; ...and the band the world's bytes
     mov byte [px_fworld], 1         ; the selector judges THIS kind of frame
     call px_cast                    ; alone (px_frame_end)
     call px_spr_gather              ; the candidates, and the erase of what

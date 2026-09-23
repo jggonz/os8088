@@ -301,12 +301,15 @@ px_phase:   db 0, 0, 0, 0, 0                        ; PXB_NONE
             db PXPH_HERC, 0xD2, 0xC8, 0, 0          ; PXB_HERC: ror al, cl
             db 0, 0, 0, 0, 0                        ; PXB_MODEX: a DAC
             db PXPH_HERC, 0xD2, 0xC8, 0, 0          ; PXB_WIN1: the Hercules form
+            db 0, 0, 0, 0, 0                        ; PXB_WIN4: Mode X's DAC bytes
 ; ...and which backends share a scaler set and a byte set: the phase class
 ; and the ink class, so a Mode change or the F toggle rebuilds only what
-; differs (Hercules and WIN1 share both)
-px_phcls:   db 0, 1, 0, 2, 0, 2
-px_inkcls:  db 0, 1, 2, 3, 4, 3
+; differs (Hercules and WIN1 share both; Mode X and WIN4 share both, 97.14 -
+; so F from a colour window into Mode X rebuilds nothing)
+px_phcls:   db 0, 1, 0, 2, 0, 2, 0
+px_inkcls:  db 0, 1, 2, 3, 4, 3, 4
 px_inktab:  dw 0, px_it_cga4, px_it_c160, px_it_herc, px_it_modex, px_it_herc
+            dw px_it_modex
 
 ; -----------------------------------------------------------------------------
 ; px_gen_init - where the bodies live for this instance, once at entry

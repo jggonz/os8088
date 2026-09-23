@@ -99,9 +99,49 @@ px_adapter:
     mov ax, px_s_gofulln
 .go:
     mov [px_i_game + 0], ax
+    ; THE COLOUR ITEM (97.14): the depth of THIS window's display, never
+    ; OSAPI_VIDEO's (the primary's, SPEC.md 39.16.4) - and the worker asks
+    ; px_w4want of it at its next frame, so a drag across a seam that fired
+    ; this notice takes the other byte set there
+    push cx
+    push si
+    mov bx, [px_win]
+    call OSAPI_WM_DISPLAY           ; DH = bits a pixel
+    mov [px_bpp], dh
+    pop si
+    pop cx
+    mov ax, px_s_colmono            ; a 1bpp display FIRST: greyed with the
+    cmp byte [px_bpp], 1            ; display's own fact - an 8086 on a CGA
+    jbe .col                        ; or a Hercules (the calibration machines)
+    mov ax, px_s_colxt              ; cannot show WIN4 at any speed, so a price
+    cmp byte [px_tier], CPU_8086    ; there would be a guess (SPEC.md 47;
+    je .col                         ; review, wave 5). Then the 8086: greyed
+                                    ; with its MEASURED price
+    mov ax, px_s_colon
+    cmp byte [px_colour], 0
+    jne .col
+    mov ax, px_s_coloff
+.col:
+    mov [px_i_det + PXD_COLOUR * 2], ax
     pop dx
     pop bx
     pop ax
+    ret
+
+; px_w4want - AL = the window's backend (97.14): PXB_WIN4 when the player
+;             wants colour, the CPU is past the 8086 and THIS window's
+;             display is a 16-colour one ([px_bpp], asked of the window);
+;             PXB_WIN1 otherwise. clobbers nothing else
+px_w4want:
+    mov al, PXB_WIN1
+    cmp byte [px_colour], 0
+    je .out
+    cmp byte [px_tier], CPU_8086
+    je .out
+    cmp byte [px_bpp], 1
+    jbe .out
+    mov al, PXB_WIN4
+.out:
     ret
 
 px_fsxtab:  db 0, FSXM_CGA320, FSXM_TEXT80, FSXM_HERC, FSXM_MODEX
@@ -339,7 +379,9 @@ px_spr_class:
     pop ax
     ret
 
-; px_r_setup_win - the window's own backend (WIN1): the shadow, the 1bpp inks
+; px_r_setup_win - the window's own backend - WIN1, or WIN4 where px_w4want
+;                  says (97.14): the shadow, the inks, the bar; on WIN4 the
+;                  32 -> 16 table put into the shadow claim beside its strip
 px_r_setup_win:
     push ax
     push bx
@@ -348,7 +390,8 @@ px_r_setup_win:
     push si
     push di
     push es
-    mov byte [px_back], PXB_WIN1
+    call px_w4want
+    mov [px_back], al
     mov byte [px_lastx0], 0xFF      ; (px_r_setup's reason)
     call px_spr_class
     call px_ink_build
@@ -364,6 +407,10 @@ px_r_setup_win:
     mov word [px_dbase], 0
     call px_shadow_clear
     call px_force_all
+    cmp byte [px_back], PXB_WIN4
+    jne .n4
+    call px_w4tab_put
+.n4:
     pop es
     pop di
     pop si
@@ -396,6 +443,28 @@ px_shadow_clear:
 .out:
     ret
 
+; px_w4tab_put - WIN4's 32 -> 16 table (97.14) into the shadow claim at
+;                PX_W4TAB, beside the strip it expands into, so the present's
+;                inner loop has its source, its table and its destination in
+;                ONE segment: entry i is the colour of Mode X's byte i with
+;                both nibbles set - 0..15 the sixteen themselves, 16..31 the
+;                dark face's twin, which is C160's (px_it_c160's dark half,
+;                tools/pxsart.py's _darker_index: the nearest darker colour,
+;                never black but black's own). clobbers AX, CX, SI, DI, ES
+px_w4tab_put:
+    mov es, [px_shseg]
+    mov di, PX_W4TAB
+    mov si, px_it_c160
+    mov cx, 32
+    cld
+.e:
+    lodsb
+    mov ah, 0x11
+    mul ah                          ; the colour in both nibbles
+    stosb
+    loop .e
+    ret
+
 ; -----------------------------------------------------------------------------
 ; px_res_apply - the Size and the Resolution to the frame's words (97.1,
 ;                97.3): the band's bytes and its first byte, the compose's
@@ -421,7 +490,7 @@ px_res_apply:
     xor bh, bh
     mov al, [px_sizes + bx]
     cmp byte [px_back], PXB_WIN1
-    jne .sz
+    jb .sz                          ; (WIN1 and WIN4, the two windowed ones)
     cmp al, PX_BAND
     jbe .sz
     mov al, PX_BAND
@@ -774,6 +843,8 @@ px_ink_build:
     cld                             ; lodsw/stosw over our own image and bss
     mov al, [px_back]
     cmp al, PXB_MODEX
+    je .modex
+    cmp al, PXB_WIN4                ; WIN4 composes Mode X's bytes (97.14)
     je .modex
     cmp al, PXB_C160
     je .c160

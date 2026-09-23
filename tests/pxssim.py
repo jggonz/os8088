@@ -53,7 +53,7 @@ assert hasattr(pxssim, "render"), "tests/pxssim.py: `pxssim` resolved to this fi
 
 FAIL = []
 BACKEND = {"win1": "herc", "cga4": "cga4", "herc": "herc", "modex": "modex",
-           "cga16": "cga16"}
+           "cga16": "cga16", "win4": "modex"}   # (WIN4: Mode X's bytes, 97.14)
 
 
 def check(ok, what):

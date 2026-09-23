@@ -381,8 +381,11 @@ def main():
                   "...and a shot with Sound off (a round spent, %d -> %d) plays nothing"
                   % (a0, g.byte("px_ammo")))
             cfg = cfg_bytes(m)
-            check(len(cfg) == 11 and cfg[:4] == b"PXC\x01" and cfg[9] == 0 and cfg[10] == 1,
-                  "PXSTEIN.CFG on the floppy says sound 0, mouse 1 (%r)" % cfg)
+            col = 1 if g.byte("px_tier") >= 1 else 0    # Colour defaults on
+            check(len(cfg) == 12 and cfg[:4] == b"PXC\x02" and cfg[9] == 0 and cfg[10] == 1
+                  and cfg[11] == col,                     # from the 286 (97.14)
+                  "PXSTEIN.CFG on the floppy says sound 0, mouse 1, colour %d (%r) - eight "
+                  "bytes since wave 5 (SPEC.md 97.14)" % (col, cfg))
             g.poke_byte("px_mouse", 1)              # (as the file has it)
             ui.menu_pick("Game", "Sound")
             ticks(g, 6)
@@ -390,7 +393,7 @@ def main():
             ticks(g, 6)
             mo.to(4, 4)
             cfg = cfg_bytes(m)
-            check(g.byte("px_sound") == 1 and g.byte("px_mouse") == 0 and len(cfg) == 11
+            check(g.byte("px_sound") == 1 and g.byte("px_mouse") == 0 and len(cfg) == 12
                   and cfg[9] == 1 and cfg[10] == 0,
                   "both picked back: the game and the file follow (%r)" % cfg)
             # --- (c4) the sticky auto-pause ----------------------------------------

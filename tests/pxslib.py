@@ -48,7 +48,9 @@ FILE = "PXSTEIN.O88"
 ROWS, STRIDE = 80, 80                   # the band's first byte is (80 - Size)
                                         # / 2 and lives in the package's
                                         # px_x0 - there is no constant (97.3)
-PXB = {0: "none", 1: "cga4", 2: "cga16", 3: "herc", 4: "modex", 5: "win1"}
+PXB = {0: "none", 1: "cga4", 2: "cga16", 3: "herc", 4: "modex", 5: "win1",
+       6: "win4"}                       # (win4: the 16-colour window, 97.14)
+WINDOWED = (5, 6)                       # the two window backends' PXB_*
 PXR = {"wire": 0, "flat": 1, "tex": 2}
 PXD = {"auto": 0, "wire": 1, "flat": 2, "tex": 3}
 PXH = dict(magic=0, lev=2, gen=4, cold=6, nlev=8, levlen=10, art=12, bt=14,
@@ -457,8 +459,8 @@ class Game:
     def enter_fsx(self, limit=60.0):
         self.m.type_text("f")
         os88marty.until(self.m, lambda mm: self.byte("px_inbr") == 1 and
-                        self.byte("px_back") != 5, "the bracket", poll=0.3,
-                        limit=limit)
+                        self.byte("px_back") not in WINDOWED, "the bracket",
+                        poll=0.3, limit=limit)
 
     def leave_fsx(self, limit=60.0):
         """Esc, then PAST the exit path: px_inbr clears at the top of it, and
@@ -750,6 +752,78 @@ PXST = dict(play=0, dying=1, attract=2, ready=3, done=4, over=5, enter=6,
             demo=7)                     # pxgame.asm's PXST_* (97.13)
 
 
+def _disk_reads(m):
+    """The floppy controller's read count, read from OUTSIDE the guest -
+    os88ui.open's witness that a mount (or here, a launch) is under way."""
+    try:
+        return m.disk().get("reads")
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
+def _launch(m, mo, S, x, y, look=6.0):
+    """Double-click PXSTEIN.O88's row, and again if nothing happened.
+
+    Wave 4's verifier measured 6 launches in ~20 lost this way: the row
+    selected and nothing opened - the two presses landed as a SINGLE click
+    that tools/os88mouse.py's 9-tick check (DBL_TICKS, the kernel's own
+    window) could not see, because the ticks it compares are the guest's and
+    the kernel's own double-click test is a different read of the same edge.
+    find() then waited its 120 host seconds and the row failed after 137.
+
+    When the check DOES see it (os88mouse raises: the presses were 9 ticks
+    apart), that is usually the same single click said out loud - a row died
+    on it here after the first fix - but not always, because the check runs
+    after both edges went out; so it is WATCHED exactly like the quiet case
+    below and clicked again only when nothing moved - up to TRIES times.
+
+    So after the double-click this waits `look` GUEST seconds for either a
+    window or the LOAD - the floppy controller's read count moving, read
+    from outside the guest (os88ui.open's witness for a mount): a launch in
+    progress is reading the disk, a single click is not. Nothing moving is
+    the single click, and the double-click is sent again (TRIES in all). A launch that
+    DID start is never clicked twice - a second instance would take the
+    contiguous parts run from the first (SPEC.md 97.9) and refuse in words,
+    which is a different row's failure."""
+    for attempt in range(TRIES):
+        r0 = _disk_reads(m)
+        try:
+            mo.dblclick(x, y)
+        except os88marty.MartyError as e:   # the 9-tick check raised - but
+            print("   pxslib: %s - watching before clicking again" % e)
+            # it raises only AFTER both presses and both releases went out
+            # (tools/os88mouse.py), and so does an _edge failure: a double-
+            # click near the 9-tick boundary may already be LAUNCHING. So it
+            # is not clicked again blind (review, wave 5 - that was a second
+            # instance, or a click on the new window): it falls through to
+            # the same two witnesses as the quiet case
+        t0 = time.time()
+        g0 = int.from_bytes(m.read(0x46C, 4), "little")
+        while True:
+            got = find(m, S, limit=0.5)
+            if got is not None:
+                return got
+            r1 = _disk_reads(m)
+            if r0 is not None and r1 is not None and r1 != r0:
+                return find(m, S)           # it is loading: wait for it
+            g1 = int.from_bytes(m.read(0x46C, 4), "little")
+            if (g1 - g0) & 0xFFFFFFFF >= int(look * 18.2) or time.time() - t0 > 60.0:
+                break
+            time.sleep(0.2)
+        if attempt + 1 < TRIES:
+            print("   pxslib: no window and no disk read %.0f guest seconds after the "
+                  "double-click - a single click; clicking again (%d of %d)"
+                  % (look, attempt + 2, TRIES))
+    return find(m, S, limit=5.0)
+
+
+TRIES = 3       # a double-click and TWO re-clicks, each watched: wave 5's
+                # review run saw the re-click's own presses land 10 ticks apart
+                # straight after the first's 9 (w5r1/pixelstein-cga.log), on a
+                # quiet host - and a re-click is only ever sent when neither
+                # witness moved, so a third costs nothing a launch could lose
+
+
 def open_game(m, apps_root=True, S=None, play=True):
     """Boot to the desktop, open B:, launch PXSTEIN.O88 and answer a Game.
 
@@ -769,7 +843,11 @@ def open_game(m, apps_root=True, S=None, play=True):
                                     # empty clip, the frame counter still)
                                     # once tests/pxssim.py grew a third scene
     mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    try:                                    # THE SAME SINGLE CLICK, one step
+        dispcp.open_drive(m, mo, S, os88marty.settle, "B")  # earlier: the B:
+    except os88marty.MartyError as e:       # icon's double-click seen as two
+        print("   pxslib: %s - opening B: again, once" % e)   # first clicks
+        dispcp.open_drive(m, mo, S, os88marty.settle, "B")  # (pxsmove, wave 5)
     disk = dispcp.win_list(m, S)[-1]
     wx, wy = dispcp.win_rect(m, S, disk)[:2]
     if not apps_root:
@@ -780,9 +858,8 @@ def open_game(m, apps_root=True, S=None, play=True):
         sys.exit("pxslib: %s is not on the apps disk (%s)" % (FILE, rows))
     row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, rows.index(FILE))
     x, y = dispcp.row_xy(wx, wy, row)
-    mo.dblclick(x, y)                       # NOT open_named: a running game
-    got = find(m, S)                        # never settles again
-    if got is None:
+    got = _launch(m, mo, S, x, y)           # NOT open_named: a running game
+    if got is None:                         # never settles again
         sys.exit("pxslib: %s did not open a '%s' window" % (FILE, TITLE))
     win, seg = got
     g = Game(m, win, seg)

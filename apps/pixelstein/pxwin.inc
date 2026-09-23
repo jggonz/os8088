@@ -107,6 +107,7 @@ px_render_win:
                                     ; off the glass with the byte still up;
                                     ; px_abdismiss repaints (97.8)
     mov byte [px_composing], 1
+    call px_back_ck                 ; the backend THIS display wants (97.14)
     call px_frame_begin
     mov byte [px_composing], 0
     jc .frame
@@ -152,6 +153,8 @@ px_render_win:
     call px_black_around            ; the Size shrank: the glass beside the
 .noblack:                           ; band keeps the old picture otherwise
     call px_blit_win
+.blitted:                           ; (tests/pxswin.py --price brackets the
+                                    ; present from .noblack to here)
     call px_hud_blit                ; the bar's rectangle, if it moved (97.13)
     call px_line_ck
     call OSAPI_GFX_UNLOCK
@@ -168,6 +171,23 @@ px_render_win:
     call OSAPI_GFX_UNLOCK           ; the card owns the glass: nothing blitted,
     ret                             ; and px_abdismiss's px_paint puts the band
                                     ; back whole (px_whole) when it comes down
+
+; px_back_ck - the window's backend follows its DISPLAY (97.14): WIN4 where
+;              px_w4want says, WIN1 where it does not. Asked by the worker at
+;              the top of every pass, inside px_composing (so a paint that
+;              lands meanwhile owes the whole band rather than blitting half
+;              a switch), and nothing but a compare when nothing moved. A
+;              drag across a seam re-asks the depth in px_onresize's
+;              px_adapter, and the pick is taken HERE, between frames - the
+;              sets of the new class then built by px_apply (px_pend)
+px_back_ck:
+    call px_w4want
+    cmp al, [px_back]
+    je .out
+    call px_r_setup_win
+    mov byte [px_pend], 1
+.out:
+    ret
 
 ; px_lock_clip - the lock, then the two questions (apps/dotdel's dd_render):
 ;                out CF = 1 not a pixel of us is showing, the lock still held
@@ -228,9 +248,10 @@ px_geom_win:
 ; px_blit_win - the dirty rows of the band onto the glass (SPEC.md 5.4.2)
 ; in:  the lock held, the clip armed, px_geom_win done, [px_r0]..[px_r1] -
 ;      or [px_whole] = 1, which sends rows 0..79 and is consumed here
-; clobbers AX, BX, CX, DX, SI, BP, ES
+; clobbers AX, BX, CX, DX, SI, DI, BP, ES (DI: px_blit_w4's strip)
 ;
-; ONE call a frame at most. ES:SI is the shadow's first dirty row at the
+; ONE BLIT1 a frame at most; on WIN4 one BLIT4 or BLITP per 25-row strip
+; (px_blit_w4, up to four). ES:SI is the shadow's first dirty row at the
 ; band's byte, BP the shadow stride, the width 512 pixels and the height the
 ; row range - WHICH IS THE WHOLE BAND ON EVERY FRAME A PLAYER SEES (97.5):
 ; the range is one min/max over all columns, any column nearer than 2.5
@@ -244,6 +265,19 @@ px_geom_win:
 ; and px_r0/px_r1 stay the worker's own bytes, never a paint's
 ; -----------------------------------------------------------------------------
 px_blit_win:
+    call px_w4want                  ; THE BACKEND IN FORCE IS NOT THE ONE THIS
+    cmp al, [px_back]               ; DISPLAY WANTS (97.14): a seam drag onto
+    je .ok                          ; a 1bpp display, or Colour toggled, since
+    mov byte [px_force], 1          ; the worker's last px_back_ck. The shadow
+    ret                             ; holds the OTHER class's bytes - WIN4's
+                                    ; colour indices would go out through
+                                    ; BLIT4 on a Hercules as a thresholded
+                                    ; picture and be drawn over at the next
+                                    ; frame (review, wave 5) - so nothing is
+                                    ; blitted and px_whole is KEPT: the
+                                    ; worker's switch composes a whole frame
+                                    ; (px_force) and its blit sends the band
+.ok:
     mov al, [px_r0]
     mov ah, [px_r1]
     cmp byte [px_whole], 0
@@ -254,6 +288,12 @@ px_blit_win:
 .range:
     cmp al, ah
     ja .out
+    cmp byte [px_back], PXB_WIN4    ; THE 16-COLOUR WINDOW (97.14): the
+    jne .one                        ; world's bytes in strips - and a card,
+    cmp byte [px_scard], 0          ; which is BITS, as WIN1 sends it
+    jne .one
+    jmp px_blit_w4
+.one:
     push ax
     cmp byte [px_bpp], 1
     jbe .mono
@@ -286,6 +326,228 @@ px_blit_win:
     mov es, [px_shseg]
     call OSAPI_GFX_BLIT1
 .out:
+    ret
+
+; -----------------------------------------------------------------------------
+; px_blit_w4 - WIN4's present (97.14): rows AL..AH of the band, in strips of
+;              PX_W4ROWS, each EXPANDED from the shadow's Mode X bytes (0..31)
+;              through the 32 -> 16 table into the strip at PX_W4BUF and put
+;              on the glass - by ONE OF TWO PRIMITIVES, chosen once a frame:
+;
+;              PLANAR (the usual case): the window is unobscured
+;              (OSAPI_WM_OBSCURED) and OSAPI_GFX_BLITP's probe (SPEC.md
+;              5.4.3.2) says yes for the band. The clip px_lock_clip armed is
+;              disarmed (an armed region is one of BLITP's refusals, and an
+;              unobscured window has nothing to cut against), each strip is
+;              expanded into FOUR PLANES - a WIN4 byte is eight pixels of one
+;              colour at an 8-aligned x, so every plane byte is 0x00 or 0xFF
+;              - and goes out with ONE OSAPI_GFX_BLITP: the bytes and nothing
+;              else, where BLIT4 sent a textured row whole to the 106.9-clk
+;              plane decoder (97.14's table). The strip's row is 256 bytes,
+;              plane p at +64p (plane step 64, row stride 256), so the four
+;              stores of a pair reach their planes on 8-bit displacements.
+;              The clip is re-armed after the last strip, for the bar and
+;              the line.
+;
+;              PACKED (the fallback: covered, a straddle, a probe that says
+;              no, or a BLITP that refuses after it said yes): four bytes of
+;              packed 4bpp a shadow byte - eight pixels, the colour in both
+;              nibbles - and ONE OSAPI_GFX_BLIT4 (SPEC.md 5.4.1) a strip,
+;              which honours the clip. A refused BLITP re-arms the clip and
+;              sends the SAME strip again this way, and the rest of the frame
+;              follows it.
+;
+;              Four strips for the whole band (25 + 25 + 25 + 5 rows), one
+;              for a range of 25 or fewer. The source, the table and the strip
+;              are one segment - the shadow claim - so no inner-loop byte
+;              carries an override. The lock held, the clip armed,
+;              px_geom_win done.
+; clobbers AX, BX, CX, DX, SI, DI, BP, ES
+; -----------------------------------------------------------------------------
+px_blit_w4:
+    mov [px_w4r], al
+    mov [px_w4e], ah
+    mov byte [px_w4pl], 0           ; ONE CHOICE A FRAME, under the lock:
+    mov bx, [px_win]                ; nothing can move the window between
+    call OSAPI_WM_OBSCURED          ; here and the last strip
+    jc .strip                       ; covered: BLIT4 through the clip
+    call OSAPI_WM_CLIP_CLEAR        ; (BLITP refuses an armed region)
+    mov ax, [px_bx]
+    mov bx, [px_by]
+    call px_w4_wid                  ; CX = Size x 8 pixels
+    mov dx, PX_ROWS
+    mov di, 0x8000                  ; DI BIT 15: THE PROBE - nothing drawn
+    call OSAPI_GFX_BLITP
+    jc .rearm                       ; no (a straddle, off the screen's side)
+    mov byte [px_w4pl], 1
+    jmp .strip
+.rearm:
+    call px_w4_clip                 ; the clip back for BLIT4
+.strip:
+    mov al, [px_w4r]
+    mov ah, [px_w4e]
+    sub ah, al
+    inc ah                          ; the rows left
+    cmp ah, PX_W4ROWS
+    jbe .n
+    mov ah, PX_W4ROWS
+.n:
+    push ax                         ; AL = the strip's first row, AH its rows
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    mov si, [px_row80 + bx]
+    mov bl, [px_x0]
+    xor bh, bh
+    add si, bx                      ; SI = the first row's band
+    mov cl, ah                      ; CL = rows
+    mov dl, [px_size]               ; DL = bytes a row
+    mov dh, [px_sadv]               ; DH = the advance past the band
+    mov bx, PX_W4TAB
+    cmp byte [px_w4pl], 0
+    jne .planes
+    mov di, PX_W4BUF
+    mov es, [px_shseg]
+    push ds
+    mov ds, [px_shseg]              ; ONE segment from here to the pop
+    cld
+.row:
+    mov ch, dl
+    shr ch, 1                       ; TWO BYTES A PASS: every Size is even
+.b:                                 ; (48..64 in a window, px_sizes)
+    lodsb                           ; NO MASK: every byte a compose writes is
+    xlat                            ; 0..31 (Mode X's byte set, 97.14), and
+    mov ah, al                      ; tests/pxswin.py --qemu holds the band
+    stosw                           ; to it - the mask was 4 clk and 2 fetched
+    stosw                           ; bytes a shadow byte, ~9 ms a frame on
+    lodsb                           ; the 8088 (review, wave 5)
+    xlat
+    mov ah, al
+    stosw
+    stosw
+    dec ch
+    jnz .b
+    mov al, dh
+    xor ah, ah
+    add si, ax
+    dec cl
+    jnz .row
+    pop ds
+.xdone:                             ; (--price: the strip expanded; the
+    pop ax                          ; blit is from here to .bdone)
+    add [px_w4r], ah                ; the next strip's first row
+    mov dl, ah
+    xor dh, dh                      ; DX = rows
+    mov bl, al
+    xor bh, bh
+    add bx, [px_by]                 ; BX = y
+    call px_w4_wid                  ; CX = Size x 8 pixels
+    mov bp, cx
+    shr bp, 1                       ; BP = the strip's stride: Size x 4 bytes
+    mov ax, [px_bx]
+    mov si, PX_W4BUF
+    call OSAPI_GFX_BLIT4            ; ES:SI = the strip
+.bdone:
+    inc word [px_nb4]
+.next:
+    mov al, [px_w4r]
+    cmp al, [px_w4e]
+    jbe .strip
+    cmp byte [px_w4pl], 0           ; the planar path took the clip away:
+    je .out                         ; the bar and the line get it back
+    call px_w4_clip
+.out:
+    ret
+
+; THE PLANAR EXPAND: a shadow byte through the table is its colour in both
+; nibbles, so bit 7 is plane 3's bit - `cbw` makes that bit a whole byte in
+; AH (1 byte, 2 clk), and each `shl al, 1` brings the next plane's bit up
+; to it. Four byte stores a shadow byte, no word to assemble (a word store
+; is two bus cycles on the 8088 all the same). DI is plane 2's byte, so
+; planes 0..3 are [di-128], [di-64], [di], [di+64] - 8-bit displacements.
+; Two shadow bytes a pass (every Size is even). 97.14 has the price.
+.planes:
+    mov bp, dx                      ; BP = advance:size
+    mov di, PX_W4BUF + 128
+    push ds
+    mov ds, [px_shseg]              ; ONE segment from here to the pop
+    cld
+.prow:
+    push di
+    mov ax, bp
+    shr al, 1
+    mov ch, al                      ; CH = pairs
+.p:
+%rep 2
+    lodsb
+    xlat                            ; AL = the colour, both nibbles
+    cbw
+    mov [di + 64], ah               ; plane 3
+    shl al, 1
+    cbw
+    mov [di], ah                    ; plane 2
+    shl al, 1
+    cbw
+    mov [di - 64], ah               ; plane 1
+    shl al, 1
+    cbw
+    mov [di - 128], ah              ; plane 0
+    inc di
+%endrep
+    dec ch
+    jnz .p
+    pop di
+    add di, 256                     ; the strip's next row
+    mov ax, bp
+    mov al, ah
+    xor ah, ah
+    add si, ax
+    dec cl
+    jnz .prow
+    pop ds
+.pxdone:                            ; (--price: the planes expanded; the
+    pop ax                          ; blit is from here to .pbdone)
+    mov dl, ah
+    xor dh, dh                      ; DX = rows
+    mov bl, al
+    xor bh, bh
+    add bx, [px_by]                 ; BX = y
+    call px_w4_wid                  ; CX = Size x 8 pixels
+    push dx
+    mov ax, [px_bx]
+    mov es, [px_shseg]
+    mov si, PX_W4BUF                ; ES:SI = plane 0's first row
+    mov di, 64                      ; the plane step
+    mov bp, 256                     ; the row stride inside a plane
+    call OSAPI_GFX_BLITP
+    pop dx
+    jc .refused
+.pbdone:
+    add [px_w4r], dl                ; the next strip's first row
+    inc word [px_nbp]
+    jmp .next
+.refused:                           ; REFUSED AFTER THE PROBE SAID YES (apps/
+    mov byte [px_w4pl], 0           ; paccman's pmc_blit_band): the clip back
+    call px_w4_clip                 ; and the SAME strip again, packed - and
+    jmp .strip                      ; the rest of the frame with it
+
+; px_w4_wid - CX = Size x 8, the band's width in pixels
+px_w4_wid:
+    mov cl, [px_size]
+    xor ch, ch
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    ret
+
+; px_w4_clip - re-arm the clip region px_lock_clip armed (the lock is still
+;              held; CF is not read - the window was unobscured under this
+;              same hold). clobbers BX, ES
+px_w4_clip:
+    mov bx, KERNEL_SEG
+    mov es, bx
+    mov bx, [px_win]
+    call OSAPI_WM_CLIP_SET
     ret
 
 ; px_line_ck - the line, if it is owed (px_lined). The lock held,

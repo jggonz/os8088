@@ -95,7 +95,7 @@ px_s_labr:  db 'HEALTH AMMO', 0
 px_s_mpause: db 'PAUSED', 0
 px_s_msize: db 'SIZE ', 0
 
-; per backend (px_back 0..5): the writer, the cell's bytes, the bar's first
+; per backend (px_back 0..6): the writer, the cell's bytes, the bar's first
 ; byte, its layout, its rows, and the four inks as the byte a lit full cell
 ; is (CGA4 palette 0: 3 brown for text and the face and the gold key, 1
 ; green for the silver; C160 the attribute nibble twice; Mode X the DAC
@@ -113,6 +113,9 @@ px_hbk:
     db 2, 0, 24, 0, 14, 15, 14, 7               ; MODEX
     dw px_gput_1, px_hlay_m
     db 1, 20, 24, 0, 0xFF, 0xFF, 0xFF, 0xFF     ; WIN1: 320 of the band's 512
+    dw px_gput_1, px_hlay_m
+    db 1, 20, 24, 0, 0xFF, 0xFF, 0xFF, 0xFF     ; WIN4: WIN1's bar and cards,
+                                                ; bits the pen colours (97.14)
 PXHB_SIZE   equ 12
 
 ; the doubling table: a nibble of glyph bits to a byte of bit PAIRS (CGA4's

@@ -1,9 +1,9 @@
 ; =============================================================================
 ; os8088 - apps/pixelstein/pxset.inc
 ;
-; THE SETTINGS, KEPT (SPEC.md 97.8): the seven bytes the menus edit -
+; THE SETTINGS, KEPT (SPEC.md 97.8): the eight bytes the menus edit -
 ; Detail, Resolution, Size, Rows, the Mode item, Sound and Mouse (the last two
-; wave 4's) - a file in SYSTEM\APPDATA, read once in the ENTRY PROC and
+; wave 4's) and Colour (wave 5's, 97.14) - a file in SYSTEM\APPDATA, read once in the ENTRY PROC and
 ; written when a menu pick or the V key changes one.
 ;
 ; The shape is apps/skies/csset.inc (SPEC.md 88.13.9), which is apps/tank's
@@ -36,17 +36,21 @@
 ; early-out, and the file was never written again that session.
 ; =============================================================================
 
-PX_SETFSZ  equ 4 + 7                ; the magic and the seven bytes
+PX_SETFSZ  equ 4 + 8                ; the magic and the eight bytes
 px_set_file:  db 'PXSTEIN.CFG', 0
-px_set_magic: db 'PXC', 1           ; so a stale or foreign file is refused
+px_set_magic: db 'PXC', 2           ; so a stale or foreign file is refused
+                                    ; (2: wave 5's eighth byte, Colour - a
+                                    ; seven-byte file of 1 is refused whole
+                                    ; and the defaults stand, once)
                                     ; rather than decoded
 px_sd_system: db 'SYSTEM', 0
 px_sd_appdat: db 'APPDATA', 0
 
 ; What each byte is, and the largest value it may hold.
 px_set_at:  dw px_detail, px_res, px_sizeix, px_rowsix, px_modepick, px_sound, px_mouse
-px_set_max: db PXD_TEX, 1, PX_NSIZES - 1, 0, 1, 1, 1
-PX_SETN     equ 7
+            dw px_colour
+px_set_max: db PXD_TEX, 1, PX_NSIZES - 1, 0, 1, 1, 1, 1
+PX_SETN     equ 8
 
 ; -----------------------------------------------------------------------------
 ; px_set_enter / px_set_leave - stand in SYSTEM\APPDATA on our own volume, and
@@ -186,7 +190,7 @@ px_set_same:
     ret
 
 ; -----------------------------------------------------------------------------
-; px_set_load - read the seven bytes once. Anything wrong with the file leaves
+; px_set_load - read the eight bytes once. Anything wrong with the file leaves
 ;               the built-in defaults standing (px_auto_init's): a settings
 ;               file is not worth an error box, and the first run has no
 ;               file at all. UI TASK ONLY - the entry proc. The Mode item is

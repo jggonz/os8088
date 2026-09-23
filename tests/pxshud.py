@@ -32,7 +32,24 @@ glass:
       rewritten both times (the field's value carries the post's serial);
   (h) AFTER THE BRACKET, A QUIET SECOND IN PLAY DRAWS NO FRAME: px_cardd is
       0 (a card is owed only in a card state) and px_frames does not move
-      - the premise every "a still player costs nothing" number rests on.
+      - the premise every "a still player costs nothing" number rests on;
+  (i) ON MODE X A SHOT LEAVES THE WEAPON ON BOTH PAGES (wave 5, the defect
+      wave 4's verifier found - present since wave 3): the pistol fired
+      once, then forty ticks with the eye still, and the weapon's rect
+      (plane 0 of rows 56..79 over its sixteen byte columns) is BYTE FOR
+      BYTE what it was before the shot ON EACH PAGE; at rest the two pages
+      agree and the 154 cells the pistol's frame 0 writes are the reference
+      renderer's (tools/pxssim.py draw_weapon). The count printed is the
+      rect's non-floor bytes, walls included: the unfixed code reads page 0
+      259 -> 219 on the XT-VGA, the fixed 259 -> 259 on both: two defects. px_weapon_touch's
+      ground arm re-lays a column whose wall ends above row 56 WITHOUT
+      marking px_cwrote, and px_weapon_draw drew only over a column it found
+      marked - so a frame change over a hall floor erased the weapon and
+      drew nothing (the verifier's "gone until the eye moves"); and a shot's
+      three frames land on the two pages in turn, so the page not drawn
+      last kept the fire or recoil frame for the next flip to show. Fixed:
+      the check's erase owes the draw (px_wtouch), and a draw that leaves
+      the other page on another frame owes one frame more (97.6).
 """
 import argparse
 import os
@@ -78,6 +95,44 @@ def glass_bar_cga(g):
 def modex_bar(g, page):
     seg = pxslib.u16(g.bytes_("px_fsi", 2))
     return g.m.read((seg << 4) + page * 19200 + (48 + HUDROW0) * STRIDE, HUDROWS * STRIDE)
+
+
+def modex_weapon(g, page):
+    """(the weapon's lit bytes, the rect) on one Mode X page: plane 0 of view
+    rows 56..79 over the weapon's sixteen byte columns at the band's middle
+    (px_weapon_cols), counting the bytes that are not the floor's DAC entry
+    (px_inkf = 0x0808 on Mode X) - with the eye still and nothing in view
+    there, that is the weapon."""
+    seg = pxslib.u16(g.bytes_("px_fsi", 2))
+    size, x0 = g.byte("px_size"), g.byte("px_x0")
+    c0 = x0 + size // 2 - 8
+    out = bytearray()
+    for r in range(56, 80):
+        out += g.m.read((seg << 4) + page * 19200 + (48 + r) * STRIDE + c0, 16)
+    return sum(1 for b in out if b != 0x08), bytes(out)
+
+
+def rest_weapon(g):
+    """{offset in modex_weapon's rect: byte} for the cells the pistol's REST
+    frame writes, off the reference renderer (tools/pxssim.py draw_weapon,
+    Mode X, the rung and resolution in force). A cell is 'written' when two
+    grounds give the same byte there."""
+    import pxssim                                           # noqa: E402
+    low = bool(g.byte("px_lowres"))
+    rung = {0: "wire", 1: "flat", 2: "tex"}[g.byte("px_rung")]
+    size = g.byte("px_size")
+    cols = size // 2 if low else size
+    a = pxssim.draw_weapon(bytearray([0x08]) * 6400, "modex", cols, low, rung)
+    b = pxssim.draw_weapon(bytearray([0x77]) * 6400, "modex", cols, low, rung)
+    bpc, x0 = pxssim.geometry("modex", cols, low)
+    c0 = x0 + size // 2 - 8
+    out = {}
+    for r in range(56, 80):
+        for k in range(16):
+            o = r * 80 + c0 + k
+            if a[o] == b[o]:
+                out[(r - 56) * 16 + k] = a[o]
+    return out
 
 
 def quiet(g, what):
@@ -188,6 +243,54 @@ def main():
                   "(g) SIZE posted over SIZE rewrites the label row again")
             g.pin(rung="tex", lowres=True, size=64)
             g.wait_frames(1)
+        if back == "modex":
+            # --- (i) a shot leaves the weapon on BOTH pages --------------------
+            g.m.pause()
+            g.poke_byte("px_nact", 0)       # nothing walks into the rect
+            g.poke_byte("px_ammo", 20)
+            g.poke_byte("px_weapon", 1)
+            g.m.run()
+            g.sim(True)                     # the weapon's frames are the sim's
+            g.force()                       # a whole frame on one page...
+            g.wait_frames(1)
+            ticks(g, 6)
+            g.force()                       # ...and on the OTHER: both show
+            g.wait_frames(1)                # the weapon at rest
+            ticks(g, 6)
+            before = [modex_weapon(g, p) for p in (0, 1)]
+            g.m.key("ControlLeft", down=True, up=False)
+            ticks(g, 3)
+            g.m.key("ControlLeft", down=False, up=True)
+            ticks(g, 40)
+            after = [modex_weapon(g, p) for p in (0, 1)]
+            print("   Mode X, a shot then 40 still ticks: the weapon's lit bytes page 0 "
+                  "%d -> %d, page 1 %d -> %d (ammo %d)" % (before[0][0], after[0][0],
+                                                        before[1][0], after[1][0],
+                                                        g.byte("px_ammo")))
+            check(g.byte("px_ammo") == 19, "(i) the shot was fired (ammo 20 -> %d)"
+                  % g.byte("px_ammo"))
+            check(before[0][0] > 50 and before[1][0] > 50,
+                  "(i) the weapon stands on both pages before the shot")
+            # BYTES, not counts (review, wave 5): the rest frame is the
+            # REFERENCE RENDERER's - tools/pxssim.py's draw_weapon, frame 0 of
+            # the pistol at this rung and resolution, over the cells it writes
+            # - on both pages, the two pages agree, and a shot then forty
+            # still ticks leaves each page's bytes exactly as they were
+            want = rest_weapon(g)
+            for p in (0, 1):
+                off = [(i, before[p][1][i], v) for i, v in want.items()
+                       if before[p][1][i] != v]
+                print("   page %d at rest: %d weapon cell(s), %d off the reference%s"
+                      % (p, len(want), len(off), (" - first %s" % off[:4]) if off else ""))
+                check(not off, "(i) page %d's rest frame is tools/pxssim.py's pistol frame 0"
+                      % p)
+            check(before[0][1] == before[1][1],
+                  "(i) ...and the two pages agree at rest, byte for byte")
+            check(after[0][0] == before[0][0] and after[1][0] == before[1][0],
+                  "(i) ...and on BOTH pages after it, unchanged, the eye still (counts)")
+            check(after[0][1] == before[0][1] and after[1][1] == before[1][1],
+                  "(i) ...byte for byte")
+            g.sim(False)
         g.leave_fsx()
         # --- (h) back in the window: a quiet second draws nothing ------------------
         ticks(g, 60)                        # (the window's own settling frames)

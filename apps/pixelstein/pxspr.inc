@@ -1343,6 +1343,7 @@ px_spr_lad:
 ; never ended when entered on Mode X's second page (review, wave 3)
 ; -----------------------------------------------------------------------------
 px_weapon_check:
+    mov byte [px_wtouch], 0         ; (97.6, wave 5: nothing erased yet)
     mov al, 0xFF
     cmp byte [px_sprok], 0
     je .set
@@ -1368,8 +1369,9 @@ px_weapon_check:
     je .out                         ; nothing of it on this page's glass
     cmp al, ah
     je .out                         ; the same frame stands
-    call px_weapon_touch            ; another: erased, re-laid, drawn over
-.out:
+    mov byte [px_wtouch], 1         ; another: erased, re-laid, drawn over -
+    call px_weapon_touch            ; and DRAWN whatever the compose re-laid
+.out:                               ; (px_weapon_draw)
     ret
 
 ; px_weapon_cols - BX = the weapon's first RAY column, AX = one past its last
@@ -1458,6 +1460,17 @@ px_weapon_draw:
     xor bh, bh
     cmp byte [px_wdrawn + bx], 0xFF
     je .draw                        ; nothing on this page yet: drawn
+    cmp byte [px_wtouch], 0         ; THE CHECK ERASED ANOTHER FRAME (wave 5,
+    jne .draw                       ; the defect wave 4's verifier found on
+                                    ; Mode X): px_weapon_touch lays the
+                                    ; ground back itself over a column whose
+                                    ; wall ends above row 56 and does NOT
+                                    ; mark px_cwrote - so with every column
+                                    ; that shape (a still eye in a hall) the
+                                    ; test below found nothing re-laid and
+                                    ; the new frame was never drawn: the
+                                    ; weapon erased, and gone until the eye
+                                    ; moved
     cmp byte [px_wpnhit], 0         ; a sprite drawn over its rows this
     jne .draw                       ; frame (px_spr_stamp; review r1)
     call px_weapon_cols             ; else only over a column re-laid
@@ -1474,6 +1487,17 @@ px_weapon_draw:
     mov bl, [px_spg]
     xor bh, bh
     mov [px_wdrawn + bx], al
+    cmp byte [px_back], PXB_MODEX   ; ...AND THE OTHER PAGE CATCHES UP (wave
+    jne .one                        ; 5): a shot's three frames land on the
+    cmp al, [px_wdrawn + 1]         ; two pages in turn, so when the eye
+    jne .owe                        ; stops the page not drawn last keeps
+    cmp al, [px_wdrawn]             ; the fire or the recoil frame - shown
+    je .one                         ; by the next flip, which a bar change
+.owe:                               ; brings without the eye moving. One
+    mov byte [px_dirty], 1          ; frame more is owed, on the other page:
+.one:                               ; its check erases, this draws, and the
+                                    ; pages agree (px_dirty alone, not
+                                    ; px_vcatch: the pose may move before it)
     xor ah, ah                      ; the frame's base in the set
     mov bx, PXS_WFRSZ
     mul bx

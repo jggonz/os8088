@@ -7311,8 +7311,71 @@ SOAK = [
         "and THE BAR IS PER PAGE: a change rewrites each field once on EACH "
         "page (the present flips, so a page shown with a stale bar is a "
         "flicker), the two pages' px_hudv agree afterwards and their bar "
-        "rows read the same bytes.",
+        "rows read the same bytes; and (wave 5) A SHOT LEAVES THE WEAPON ON "
+        "BOTH PAGES: fired once, forty still ticks, and each page's weapon "
+        "bytes are what they were - 259 -> 219 on page 0 before the fix, "
+        "259 -> 259 on both after, the 154 weapon cells held to pxssim's "
+        "draw_weapon (97.6: the check's erase never drew, and the page not "
+        "drawn last kept the recoil).",
         needs=("marty",), serial=True),
+    Row("pxswin", "soak", py("tests/pxswin.py"), 400.0,
+        "SPEC.md 97.14 (wave 5): PIXELSTEIN's two windows on a two-card XT "
+        "(os8088_xt_vga_herc, extended right): on an 8086 the window is "
+        "WIN1 and Detail > Colour is GREYED WITH ITS PRICE, and EVERY menu "
+        "caption fits MENU_MAXCH; the band lands "
+        "8-aligned; the PEN path's glass on the VGA and the 1bpp path's on "
+        "the Hercules are the shadow's bits, the SAME bits, and the 8086 on "
+        "the Hercules greys Colour with the display's fact, not a price; a "
+        "window MOVE "
+        "composes no frame and takes no W_PAINT; and with the tier poked to "
+        "a 286 a drag across the seam takes the right byte set each way - "
+        "WIN4 with Mode X's inks and set on the VGA (its glass the shadow "
+        "through the 32->16 table), WIN1 with the Hercules' on the "
+        "Hercules, the item greyed 'needs 16 colours' there; and Detail > "
+        "Colour picked through the menu both ways (WIN1 and the pen on the "
+        "VGA, PXSTEIN.CFG's byte 0; WIN4 again, the byte 1). MartyPC because "
+        "only it hosts two displays AND reads both back (docs/TESTING.md).",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/games360.img")),
+    Row("pxswin-qemu", "soak", py("tests/pxswin.py", "--qemu"), 120.0,
+        "SPEC.md 97.14 (wave 5): WIN4 is the DEFAULT on QEMU's 386 VGA - no "
+        "poke - and its glass is the shadow through the 32->16 table pixel "
+        "for pixel (the palette read off the dump, one colour an index); the "
+        "band 8-aligned; a turn on the unobscured window is PLANAR - one to "
+        "four OSAPI_GFX_BLITPs a frame and no BLIT4 - and its glass the "
+        "table's; covered by the GAMES window a forced frame takes the "
+        "BLIT4 fallback through the clip, its uncovered glass the table's; a "
+        "move composes nothing and takes no W_PAINT; scene C poked through "
+        "the gdb stub HMP's `gdbserver` opens, and its three sprites are "
+        "drawn; every shadow byte 0..31, the expand having no mask. Writes "
+        "the wave's screendumps to build/pxs-shots/.",
+        needs=("qemu",), serial=True,
+        wants=("build/os8088.img", "build/apps.img")),
+    Row("pxswin-price", "soak", py("tests/pxswin.py", "--price"), 400.0,
+        "SPEC.md 97.14, 47 (wave 5): THE 8086'S PRICE IS MEASURED at every "
+        "rung a window can be put on - Flat Full, Textured Low res and "
+        "Textured Full, Size 64, scene A turning on the XT-VGA, WIN1 and WIN4 "
+        "(tier poked) - the frame, the present, and WIN4's expand and blits "
+        "apart, by MartyPC's cycle counter; the greyed caption's seconds must "
+        "be the DEAREST WIN4 frame's within 15% (Textured Full, 438.4 ms "
+        "against WIN1's 164.2 when it was written - 952.0 through BLIT4 "
+        "before the second review), and every WIN4 strip must have gone out "
+        "PLANAR (OSAPI_GFX_BLITP). ALONE: its answer is a rate.",
+        needs=("marty",), serial=True, alone=True,
+        wants=("build/os8088-360.img", "build/games360.img")),
+    Row("pxsmd", "soak", py("tests/pxsmd.py"), 400.0,
+        "SPEC.md 97.14, 53.7.1, 39.18 (wave 5): a PIXELSTEIN bracket changes "
+        "its OWN card only, on a two-card XT (os8088_xt_vga_herc, extended "
+        "right): OSAPI_VIDEO asked once, in px_entry, and every "
+        "OSAPI_FSX_CAPS with this window (read off the source); on the VGA "
+        "the Mode row is Mode X's and the bracket leaves the Hercules' mode "
+        "and every framebuffer byte alone; dragged onto the Hercules the "
+        "row follows (the W_ONRESIZE the seam fires) and the Hercules "
+        "bracket leaves the VGA's mode the desktop's; both round trips come "
+        "back to the window. MartyPC and not QEMU, which hosts one display "
+        "(docs/TESTING.md).",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/games360.img")),
     Row("t_pxsmap", "soak", py("tests/unit/t_pxsmap.py"), 3.0,
         "SPEC.md 97.6, 97.7 (waves 3-4): every level passes the rules WITH the "
         "DDA sweep in both door states, the episode's eight floors e1m1..e1m8 by "

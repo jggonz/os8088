@@ -59,8 +59,22 @@ PX_SHKB     equ 16                  ; the shadow claim: 16 KB CLAIMED, of
                                     ; bytes (every backend but Mode X, which
                                     ; composes into VRAM). The rest is
                                     ; reserved for wave 2's Rows 100 (8,000)
-                                    ; and wave 5's WIN4 - four 25-row 4bpp
-                                    ; strips in the spare 6,400 (97.9)
+                                    ; and wave 5's WIN4 - one 25-row strip
+                                    ; of 256-byte rows in the spare 6,400,
+                                    ; reused per 25 rows (PX_W4BUF, 97.14)
+PX_W4ROWS   equ 25                  ; WIN4's strip (97.14): 25 rows...
+PX_W4BUF    equ 9920                ; ...of 256 bytes, at the byte Rows 100's
+                                    ; bar would end (100 + 24 rows x 80) - the
+                                    ; plan's reservation, kept, so Rows 100
+                                    ; needs no move...
+PX_W4TAB    equ PX_W4BUF + PX_W4ROWS * PX_BAND * 4   ; ...and the 32 -> 16
+                                    ; table after it: 16,320..16,351 of 16,384
+%if PX_W4BUF < (PX_ROWS + 20 + PX_HUDROWS) * PX_STRIDE
+%error "WIN4's strip overlaps the rows Rows 100 and its bar would take (97.14)"
+%endif
+%if PX_W4TAB + 32 > PX_SHKB * 1024
+%error "WIN4's strip and table outgrew the shadow claim (97.14)"
+%endif
 PX_MINDIST  equ 23                  ; nx clamped at 0.09 tiles (Q8.8)
 PX_HEIGHTK  equ 51200               ; h = PX_HEIGHTK / nx rows
 PX_SPOTD    equ 4096                ; a walker's mark is this far past its cell
@@ -226,6 +240,7 @@ PXB_C160    equ 2                   ; FSXM_TEXT80 retimed (SPEC.md 88.15)
 PXB_HERC    equ 3                   ; FSXM_HERC, TANK's box
 PXB_MODEX   equ 4                   ; FSXM_MODEX, two pages
 PXB_WIN1    equ 5                   ; the window's 1bpp band
+PXB_WIN4    equ 6                   ; ...and its 16-colour one (97.14, wave 5)
 PXR_WIRE    equ 0                   ; the detail ladder's rungs (97.1)
 PXR_FLAT    equ 1
 PXR_TEX     equ 2                   ; the compiled scalers (97.3, wave 2)
@@ -235,6 +250,7 @@ PXD_FLAT    equ 2
 PXD_TEX     equ 3
 PXD_RFULL   equ 4                   ; ...and the resolution axis under it
 PXD_RLOW    equ 5                   ; (SPEC.md 97.8: one menu, two axes)
+PXD_COLOUR  equ 6                   ; ...and the window's colour (97.14)
 PXV_ROWS0   equ 5                   ; the View row: Size 48..80 are items
                                     ; 0..4, Rows 80/100 items 5 and 6
 
@@ -287,6 +303,14 @@ px_entry:
     mov byte [px_codep], 0xFF       ; first floor loaded behind it for the
     mov byte [px_sound], 1          ; timedemo; sound ON unless PXSTEIN.CFG
     call px_hs_init                 ; says otherwise; the built-in table
+    xor al, al                      ; THE WINDOW'S COLOUR DEFAULTS ON FROM THE
+    cmp byte [px_tier], CPU_286     ; 286 UP (97.14): the planar present is
+    jb .col0                        ; MEASURED at 297.6 ms of 8088 time at
+    inc ax                          ; Textured Full (tests/pxswin.py --price),
+.col0:                              ; ~50 ms on a 286 at 6x (~74 at 4x) - the
+    mov [px_colour], al             ; frame ~74 ms (~110), under Auto's 125.
+                                    ; An 8086 has the item greyed with its
+                                    ; price; PXSTEIN.CFG's byte wins over both
     call px_font_init               ; until PXSTEIN.HS is read (below)
     xor al, al
     call px_level_load              ; E1M1 into the two map layouts and
@@ -466,6 +490,7 @@ px_paint:
     push bp
     push es
     mov [px_win], si
+    inc word [px_npaint]            ; (tests/pxswin.py: a MOVE costs none)
     mov byte [px_hidden], 0         ; a paint proves the window can be seen
     call px_geom_win
     cmp word [px_shseg], 0
@@ -667,10 +692,17 @@ px_oncmd:
     jne .dok
     cmp byte [px_texok], 0
     je .out                         ; greyed (MENU_DIS: "Textured (needs
-                                    ; 111 KB free)") - the kernel never
+                                    ; 111 KB)") - the kernel never
                                     ; dispatches it, and this return is for
                                     ; a shortcut, which goes near no menu
 .dok:
+    cmp al, PXD_COLOUR
+    jne .dnc
+    xor byte [px_colour], 1         ; THE WINDOW'S COLOUR (97.14): the worker
+    call px_adapter                 ; takes the backend at its next frame
+    mov byte [px_force], 1          ; (px_back_ck), and the item says what
+    jmp short .save                 ; is in force now
+.dnc:
     cmp al, PXD_RFULL
     jae .res
     mov [px_detail], al
@@ -725,7 +757,7 @@ px_oncmd:
     OS88_MENUSET px_menus, px_name, px_oncmd
         OS88_MENU px_m_game, px_i_game, 4
         OS88_MENU px_m_mode, px_i_mode, 2
-        OS88_MENU px_m_det, px_i_det, 6
+        OS88_MENU px_m_det, px_i_det, 7
         OS88_MENU px_m_view, px_i_view, 7
     OS88_MENUSET_END px_menus
 
@@ -746,18 +778,19 @@ px_m_mode:   db 'Mode', 0
 px_i_mode:   dw px_s_mnone, px_s_mnone      ; both rewritten by px_adapter
 px_m_det:    db 'Detail', 0
 px_i_det:    dw px_s_dauto, px_s_dwire, px_s_dflat, px_s_dtex, px_s_rfull, px_s_rlow
+             dw px_s_colon          ; rewritten by px_adapter (97.14)
 px_s_dauto:  db 'Auto', 0
 px_s_dwire:  db 'Wire', 0
 px_s_dflat:  db 'Flat', 0
 px_s_dtex:   db 'Textured', 0
-px_s_dtexs:  db 'Textured (sprites need 62 KB)', 0 ; the walls textured and
+px_s_dtexs:  db 'Textured (sprites 62 KB)', 0 ; the walls textured and
                                             ; the sprites BOXES: the loader
                                             ; found the 111 KB but not the
                                             ; sprite set's claim after it
                                             ; (97.9: PXS_KB + the shadow) -
                                             ; live, and it says so (SPEC.md
                                             ; 47; review r1: it said nothing)
-px_s_dtexn:  db MENU_DIS, 'Textured (needs 111 KB free)', 0 ; SPEC.md 47:
+px_s_dtexn:  db MENU_DIS, 'Textured (needs 111 KB)', 0 ; SPEC.md 47:
                                             ; greyed, and the caption says
                                             ; why - the scratch, the byte
                                             ; set and the art claim (97.9),
@@ -765,16 +798,45 @@ px_s_dtexn:  db MENU_DIS, 'Textured (needs 111 KB free)', 0 ; SPEC.md 47:
                                             ; constants it is the sum of
                                             ; (the first cut said 82 with
                                             ; the sum at 111; review, wave 3)
-                                            ; - the %if is after pxart.inc
+                                            ; - the %if is after pxart.inc.
+                                            ; EVERY caption of the four
+                                            ; menus fits MENU_MAXCH = 24
+                                            ; glyphs, which a pull-down clips
+                                            ; at: this one and the sprites'
+                                            ; were 28 and 29 until wave 5's
+                                            ; review, the Size items' 26 -
+                                            ; tests/pxswin.py counts them all
 px_s_rfull:  db 'Full res', 0
 px_s_rlow:   db 'Low res', 0
+px_s_colon:  db 'Colour: On', 0     ; THE WINDOW'S 16 COLOURS (97.14): what
+px_s_coloff: db 'Colour: Off', 0    ; is in force, or why it is not (SPEC.md
+px_s_colxt:  db MENU_DIS, 'Colour: 0.4 s a frame', 0   ; 47) - the
+px_s_colmono: db MENU_DIS, 'Colour: needs 16 colours', 0  ; 8086's price
+                                            ; MEASURED on MartyPC's XT-VGA at
+                                            ; the DEAREST rung a window can
+                                            ; be put on, Textured Full - a
+                                            ; fact about the item, not about
+                                            ; its cheapest rung (review, wave
+                                            ; 5), and on the PLANAR present
+                                            ; (OSAPI_GFX_BLITP) an unobscured
+                                            ; window takes: 438.4 ms (it was
+                                            ; 952.0 through BLIT4)
+                                            ; - and tests/pxswin.py --price
+                                            ; holds it within 15% (952 ms
+                                            ; against WIN1's 164),
+                                            ; the other the display's own
+                                            ; fact. BOTH UNDER MENU_MAXCH = 24
+                                            ; glyphs: a pull-down clips past
+                                            ; that, and the plan's "... on
+                                            ; this CPU" was 33 (the gate
+                                            ; counts them)
 px_m_view:   db 'View', 0
 px_i_view:   dw px_s_v48, px_s_v56, px_s_v64, px_s_v72, px_s_v80, px_s_r80, px_s_r100
 px_s_v48:    db 'Size 48', 0
 px_s_v56:    db 'Size 56', 0
 px_s_v64:    db 'Size 64', 0
-px_s_v72:    db MENU_DIS, 'Size 72 (full screen only)', 0  ; GREYED (SPEC.md
-px_s_v80:    db MENU_DIS, 'Size 80 (full screen only)', 0  ; 47): the menu is
+px_s_v72:    db MENU_DIS, 'Size 72 (full screen)', 0  ; GREYED (SPEC.md
+px_s_v80:    db MENU_DIS, 'Size 80 (full screen)', 0  ; 47): the menu is
                                             ; the window's and a window shows
                                             ; 64 at most (97.3) - the first
                                             ; cut offered them live, and a
@@ -1203,6 +1265,7 @@ px_ab10:     db 'walks a frozen world at 10.1-10.2.', 0  ; quoted a frozen
                                     ; (0xFF: none yet), so a still one is
                                     ; not redrawn (97.6)
     ZBYTE px_wnext                  ; ...and the frame this frame shows
+    ZBYTE px_wtouch                 ; ...and the check erased another (wave 5)
     ZBYTE px_spg                    ; the page this frame is on (0, 1)
     ZBYTE px_firek                  ; Ctrl was down last tick (one shot a
                                     ; press for the pistol and the knife)
@@ -1359,6 +1422,16 @@ px_ab10:     db 'walks a frozen world at 10.1-10.2.', 0  ; quoted a frozen
     ZBUF  px_demosv, 3              ; Detail, Res, Size in force before a run
     ZBYTE px_demosvd                ; ...kept (px_demo_restore owes them back)
     ZBUF  px_demorg, 3              ; the rung, resolution and Size it drew at
+; --- the 16-colour window (97.14; wave 5) ---------------------------------------
+    ZBYTE px_colour                 ; Detail > Colour: the player's pick
+    ZBYTE px_scard                  ; the shadow's band holds a CARD's bits
+                                    ; (WIN4 blits it as WIN1 does, 97.14)
+    ZBYTE px_w4r                    ; the WIN4 present's next strip row...
+    ZBYTE px_w4e                    ; ...and its last
+    ZWORD px_nb4                    ; OSAPI_GFX_BLIT4 calls made (the gates')
+    ZWORD px_nbp                    ; ...and OSAPI_GFX_BLITP calls drawn
+    ZBYTE px_w4pl                   ; this frame's WIN4 present is PLANAR
+    ZWORD px_npaint                 ; W_PAINTs taken (the gates')
 %ifdef PXPROBE
     ZWORD px_pr_lad                 ; tests/pxsperf.py --probe: the frame's
     ZWORD px_pr_skip                ; ladder entries and skipped columns. A
