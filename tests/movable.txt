@@ -75,6 +75,32 @@ region apps/dos/dosload.asm      # THE SAME SHAPE, one package along: the
                                  # missing. Retired by nothing; correct as it
                                  # stands.
 
+region apps/pixelstein/pxstein.asm  # csload's shape exactly: the launch image
+                                 # only, which reads the parts, hands off
+                                 # through OSAPI_PKG_REHOME and has its region
+                                 # freed inside that call (SPEC.md 97.9).
+                                 # Retired by nothing; correct as it stands.
+
+region apps/pixelstein/pxgame.asm   # PART 0 OF A PARTS PACKAGE THAT FAR-CALLS
+                                 # GENERATED CODE. Every frame enters part 3's
+                                 # column driver by far call, so part 0's own
+                                 # segment sits on the worker's stack as a
+                                 # far-return for the whole of a compose, and
+                                 # the bracket's frame (task 0, SPEC.md 53)
+                                 # holds it the same way for the whole of a
+                                 # fullscreen session; the parts carve is one
+                                 # contiguous claim addressed by the segment
+                                 # words the loader left (97.9). A bare `ret`
+                                 # proc is not enough and nobody has yet
+                                 # written down which words are ours to fix.
+                                 # RETIRED BY wave 4 of docs/plans/
+                                 # PIXELSTEIN-PLAN.md: enumerate the segment
+                                 # words part 0 owns (the parts table's, the
+                                 # shadow's, the sprite set's), write the
+                                 # relocation proc, and declare - together
+                                 # with the worker line below, since half a
+                                 # declaration is inert (66.6.2).
+
 # --- worker -------------------------------------------------------------------
 #
 # THE FOUR PARK-SAFE PACKAGES ARE GONE FROM THIS LIST and the reason they were
@@ -120,3 +146,17 @@ worker apps/scribe/scribe.asm    # its region cannot move at all yet - see the
                                  # it: sc_worker is an ordinary poll and the
                                  # declaration is one line once the region
                                  # can move.
+
+worker apps/pixelstein/pxgame.asm   # ITS PARK POINT IS NOT ESTABLISHED. The
+                                 # worker takes OSAPI_GFX_LOCK as its first
+                                 # action like the four park-safe packages,
+                                 # but a restart mid-compose would leave the
+                                 # shadow half-written and the per-column
+                                 # extents (97.5) describing a frame that was
+                                 # never presented, and the region line above
+                                 # blocks it anyway. RETIRED WITH the region
+                                 # line: wave 4 establishes the restart at the
+                                 # worker's top of frame (nothing set before
+                                 # the lock; the extents re-armed by the
+                                 # forced-frame path the gate already pokes)
+                                 # and declares both.

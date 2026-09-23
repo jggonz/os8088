@@ -58,6 +58,7 @@ from t_image import Vol, read                             # noqa: E402
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "..", ".."))
 REGISTRY = os.path.join(ROOT, "apps", "RETIRED.txt")
+PKG_STEM = {"pixelstein": "pxstein"}     # apps/<dir> -> build/<stem>.o88 when they differ
 BUILD = os.path.join(ROOT, "build")
 MAKEFILE = os.path.join(ROOT, "Makefile")
 LIVEPAYLOAD = os.path.join(BUILD, "livepayload.txt")
@@ -178,12 +179,18 @@ def main():
             imgs[name] = image_names(p)
 
     for pkg in packages():
-        o88 = "/%s.o88" % pkg
+        # A package whose FILE is not its folder's name: apps/pixelstein/
+        # builds pxstein.o88 (SPEC.md 97.9 - the folder carries the game's
+        # name, the file its 8.3 one). tests/unit/t_livefull.py keeps the
+        # same table for the same reason; a row here needs the Makefile
+        # rule that says so.
+        stem = PKG_STEM.get(pkg, pkg)
+        o88 = "/%s.o88" % stem
         in_live = o88 in live
         # The WHOLE name, and the 8.3 truncation the packer writes: `wire`
         # is WIRE.O88 and must not match THEWIRE.O88, `solitaire` is
         # SOLITAIR.O88 and would match nothing if it were not truncated here.
-        want = pkg.upper()[:8] + ".O88"
+        want = stem.upper()[:8] + ".O88"
         on_img = [n for n, names in imgs.items() if names and want in names]
         ships = in_live or bool(on_img)
         kind = known.get(pkg)
