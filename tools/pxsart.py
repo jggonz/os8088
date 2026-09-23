@@ -1467,7 +1467,7 @@ def generate(ms, sp=None, wp=None):
     w("; is the Hercules set); never pixels. The masters go to the machine as")
     w("; the lazy art part's LZ4 stream (build/pxsart.bin, part 4 of 97.9),")
     w("; which the loader expands into PXA_SIZE bytes, and px_bt_build")
-    w("; transposes them through these tables into part 3 (pxgen.inc).")
+    w("; transposes them through these tables into part 2 (pxgen.inc).")
     w("")
     w("PXA_NWALL   equ %d             ; wall masters, material 1 first" % NWALL)
     w("PXA_TEX     equ %d             ; texels a side" % TEX)
@@ -1480,7 +1480,7 @@ def generate(ms, sp=None, wp=None):
     w("PXA_KB      equ %d             ; ...as OSAPI_MEM_CLAIM wants it" % ((total + 1023) // 1024))
     w("PXA_SHADES  equ %d              ; lit, dark" % SHADES)
     w("PXA_MATSZ   equ %d           ; a material's bytes in the byte-texture set" % MATSZ)
-    w("PXA_BTSIZE  equ %d          ; ...and the whole set (part 3, 97.9)" % BT_SIZE)
+    w("PXA_BTSIZE  equ %d          ; ...and the whole set (part 2, 97.9)" % BT_SIZE)
     w("PXA_BTKB    equ %d" % ((BT_SIZE + 1023) // 1024))
     w("")
     w("; THE SPRITE MASTERS in the claim (97.4, 97.6): %d frames of 32 x 32 after" % NSPR)
@@ -1543,6 +1543,298 @@ def stream(ms, sp=None, wp=None):
     return z
 
 
+# --- the HUD masters (wave 4, SPEC.md 97.4, 97.13) -----------------------------
+#
+# ONE BIT DEEP: a pixel is INK when its alpha is >= 128 and its Rec.601
+# luminance >= 64, ground otherwise - the machine draws ink in the bar's own
+# colour for the backend in force, so the file's colours are a mask and
+# nothing more. They go to the machine as pxhuda.inc (--hud), IN PART 0's
+# IMAGE and not the lazy stream: the bar is drawn on every rung, and a Flat
+# launch never fetches the stream. A row is w / 8 bytes, bit 7 leftmost.
+
+HUD_INK = 64                        # ink: alpha >= 128 and luminance >= 64/255
+                                    # (luma() is ALREADY 0..255 - review r2
+                                    # found `luma * 255`, which made any
+                                    # pixel not pure black ink)
+HUD_DIGIT = (8, 16)
+HUD_FACE = (16, 24)
+HUD_KEY = (8, 8)
+HUD_WPN = (24, 16)
+HUD_NFACE = 6
+HUD_SPECS = ([("h_digit%d" % d, HUD_DIGIT) for d in range(10)]
+             + [("h_face%d" % f, HUD_FACE) for f in range(HUD_NFACE)]
+             + [("h_goldkey", HUD_KEY), ("h_silverkey", HUD_KEY)]
+             + [("h_%s" % n, HUD_WPN) for n in WEAPON_NAMES])
+DEFAULT_HUD = os.path.join(ROOT, "apps", "pixelstein", "pxhuda.inc")
+
+
+def hud_path(stem):
+    return os.path.join(ART_DIR, stem + ".png")
+
+
+def load_hud(stem, size):
+    """A HUD master as h rows of w bits (1 ink, 0 ground), or raises."""
+    path = hud_path(stem)
+    w, h, rows = read_png(path)
+    if (w, h) != size:
+        raise ValueError("%s: %dx%d, a %s master is %dx%d (SPEC.md 97.4)"
+                         % (path, w, h, stem.rstrip("0123456789"), size[0], size[1]))
+    bits = [[1 if (a >= 128 and luma((r, g, b)) >= HUD_INK) else 0
+             for (r, g, b, a) in row] for row in rows]
+    if stem.startswith("h_digit"):
+        # THE GAP IS THE MASTER'S (97.4): digits sit on adjacent cells, so
+        # the rightmost column and the bottom row are GROUND - a digit that
+        # fills its cell fuses with the next ("100" read as two blobs)
+        if any(row[size[0] - 1] for row in bits):
+            raise ValueError("%s: ink in the rightmost column - a digit's column %d is "
+                             "ground, the gap to the next digit (SPEC.md 97.4)"
+                             % (path, size[0] - 1))
+        if any(bits[size[1] - 1]):
+            raise ValueError("%s: ink in the bottom row - a digit's row %d is ground "
+                             "(SPEC.md 97.4)" % (path, size[1] - 1))
+    return bits
+
+
+def huds():
+    return [(stem, size, load_hud(stem, size)) for stem, size in HUD_SPECS]
+
+
+def hud_bytes(bits):
+    out = bytearray()
+    for row in bits:
+        for x in range(0, len(row), 8):
+            v = 0
+            for k in range(8):
+                v = (v << 1) | row[x + k]
+            out.append(v)
+    return bytes(out)
+
+
+# the placeholder digits: a bold seven-segment face in 7 x 15 of the 8 x 16
+# cell (column 7 and row 15 are the gap, 97.4) - segments a (top) b (upper
+# right) c (lower right) d (bottom) e (lower left) f (upper left) g (middle)
+_SEG = {0: "abcdef", 1: "bc", 2: "abged", 3: "abgcd", 4: "fgbc", 5: "afgcd",
+        6: "afgedc", 7: "abc", 8: "abcdefg", 9: "abcfgd"}
+
+
+def _hud_digit(d):
+    im = [[0] * 8 for _ in range(16)]
+    segs = _SEG[d]
+
+    def box(x0, y0, x1, y1):
+        for y in range(y0, y1 + 1):
+            for x in range(x0, x1 + 1):
+                im[y][x] = 1
+    if "a" in segs:
+        box(1, 1, 5, 2)
+    if "g" in segs:
+        box(1, 7, 5, 8)
+    if "d" in segs:
+        box(1, 13, 5, 14)
+    if "f" in segs:
+        box(0, 1, 1, 8)
+    if "b" in segs:
+        box(5, 1, 6, 8)
+    if "e" in segs:
+        box(0, 7, 1, 14)
+    if "c" in segs:
+        box(5, 7, 6, 14)
+    return im
+
+
+def _hud_face(f):
+    """An oval head under a helmet's brim: eyes and mouth follow the frame."""
+    im = [[0] * 16 for _ in range(24)]
+    for y in range(24):
+        for x in range(16):
+            dx, dy = (x - 7.5) / 7.0, (y - 12.5) / 11.0
+            if dx * dx + dy * dy <= 1.0:
+                im[y][x] = 1
+    for y in range(2, 6):                   # the helmet: a solid cap, its
+        for x in range(1, 15):              # brim a hole's width off the brow
+            if (x - 7.5) ** 2 / 49.0 + (y - 12.5) ** 2 / 121.0 <= 1.0:
+                im[y][x] = 1
+    for x in range(1, 15):
+        im[6][x] = 0
+    # eyes (ground holes in the ink)
+    ey = 9 + (1 if f == 3 else 0)
+    if f == 5:                              # dead: crosses
+        for (x0, y0) in ((3, 8), (9, 8)):
+            for k in range(3):
+                im[y0 + k][x0 + k] = 0
+                im[y0 + 2 - k][x0 + k] = 0
+    else:
+        for x0 in (4, 10):
+            im[ey][x0] = im[ey][x0 + 1] = 0
+            if f != 2:
+                im[ey + 1][x0] = im[ey + 1][x0 + 1] = 0
+    # mouth
+    my = 17
+    if f == 4:                              # the grin
+        for x in range(4, 12):
+            im[my][x] = 0
+        for x in range(5, 11):
+            im[my + 1][x] = 0
+    elif f == 5:
+        for x in range(5, 11):
+            im[my + 1][x] = 0
+    else:
+        w = (4, 3, 3, 2)[f]
+        for x in range(8 - w, 8 + w):
+            im[my + (1 if f >= 2 else 0)][x] = 0
+    if f in (2, 3):                         # a bruise, a cut
+        im[13][3] = im[14][3] = im[13][12] = 0
+    return im
+
+
+def _hud_key(silver):
+    im = [[0] * 8 for _ in range(8)]
+    for y in range(1, 4):
+        for x in range(0, 3):
+            im[y][x] = 1
+    im[2][1] = 0                            # the bow's hole
+    for x in range(3, 8):
+        im[2][x] = 1                        # the shank
+    im[3][6] = im[4][6] = im[3][4] = 1      # the bit
+    if silver:
+        im[4][4] = 1
+    return im
+
+
+def _hud_wpn(name):
+    im = [[0] * 24 for _ in range(16)]
+
+    def box(x0, y0, x1, y1):
+        for y in range(y0, y1 + 1):
+            for x in range(x0, x1 + 1):
+                im[y][x] = 1
+    if name == "knife":
+        box(2, 7, 7, 9)                     # the grip
+        box(8, 6, 8, 10)                    # the guard
+        for x in range(9, 22):              # the blade, tapering
+            box(x, 7, x, 9 if x < 18 else 8)
+    elif name == "pistol":
+        box(4, 4, 19, 7)                    # the slide
+        box(4, 8, 8, 13)                    # the grip
+        box(10, 8, 12, 9)                   # the trigger guard
+    else:
+        box(1, 5, 22, 8)                    # the receiver and barrel
+        box(3, 9, 6, 13)                    # the grip
+        box(12, 9, 14, 14)                  # the magazine
+        box(0, 4, 3, 9)                     # the stock
+    return im
+
+
+def hud_placeholder(stem):
+    if stem.startswith("h_digit"):
+        return _hud_digit(int(stem[7:]))
+    if stem.startswith("h_face"):
+        return _hud_face(int(stem[6:]))
+    if stem == "h_goldkey":
+        return _hud_key(False)
+    if stem == "h_silverkey":
+        return _hud_key(True)
+    return _hud_wpn(stem[2:])
+
+
+def write_hud_placeholders(force=False):
+    n = 0
+    os.makedirs(ART_DIR, exist_ok=True)
+    for stem, (w, h) in HUD_SPECS:
+        p = hud_path(stem)
+        if os.path.exists(p) and not force:
+            continue
+        bits = hud_placeholder(stem)
+        assert len(bits) == h and all(len(r) == w for r in bits), stem
+        write_png_indexed(p, w, h, [[15 if b else 0 for b in row] for row in bits])
+        n += 1
+    return n
+
+
+# the HUD at each backend's aspect (--preview): a master's bit is ONE pixel
+# of the destination on CGA4, Mode X, WIN1 and C160 (px_x2 / px_x4 expand a
+# bit to the pixel's bits) and TWO dots on Hercules (doubled, pxhud.inc) -
+# drawn here in 640 x 400 units, so the image model sees a digit as it ships
+HUD_ASPECT = {"cga4": (2, 2), "herc": (2, 1), "c160": (4, 4), "modex": (2, 2), "win1": (1, 1)}
+HUD_INKRGB = {"cga4": (0xAA, 0x55, 0x00), "herc": (0xFF, 0xFF, 0xFF),
+              "c160": (0xFF, 0xFF, 0x55), "modex": (0xFF, 0xFF, 0x55), "win1": (0xFF, 0xFF, 0xFF)}
+
+
+def hud_preview(hs, out_dir):
+    """One PNG a backend: the ten digits side by side as the bar lays them
+    (adjacent cells), then the faces, the keys and the weapons."""
+    os.makedirs(out_dir, exist_ok=True)
+    by = {stem: bits for stem, _z, bits in hs}
+    rows_of = [["h_digit%d" % d for d in range(10)],
+               ["h_face%d" % f for f in range(HUD_NFACE)] + ["h_goldkey", "h_silverkey"],
+               ["h_%s" % n for n in WEAPON_NAMES]]
+    written = []
+    for be, (zx, zy) in HUD_ASPECT.items():
+        ink = HUD_INKRGB[be]
+        band = []
+        for names in rows_of:
+            h = max(len(by[n]) for n in names)
+            for y in range(h + 2):
+                line = []
+                for n in names:
+                    b = by[n]
+                    for x in range(len(b[0])):
+                        v = b[y][x] if y < len(b) else 0
+                        line += [ink if v else (0, 0, 0)] * zx
+                    if not n.startswith("h_digit"):
+                        line += [(0, 0, 0x55)] * (4 * zx)   # a spacer, not a gap
+                band.append(line)
+        w = max(len(r) for r in band)
+        big = []
+        for r in band:
+            r = r + [(0, 0, 0)] * (w - len(r))
+            for _ in range(zy):
+                big.append(r)
+        p = os.path.join(out_dir, "hud-%s.png" % be)
+        write_png_rgb(p, w, len(big), big)
+        written.append(p)
+    return written
+
+
+def hud_generate(hs):
+    """pxhuda.inc: the HUD masters' bits, in part 0's image (97.13)."""
+    L = []
+    w = L.append
+    w("; apps/pixelstein/pxhuda.inc - GENERATED by tools/pxsart.py --hud, DO NOT")
+    w("; EDIT (SPEC.md 97.4, 97.13). THE STATUS BAR'S MASTERS, ONE BIT DEEP: the")
+    w("; one art the package carries in part 0's image rather than the lazy")
+    w("; stream, because the bar is drawn on every rung and a launch on Flat never")
+    w("; fetches the stream. A row is width / 8 bytes, bit 7 the leftmost pixel;")
+    w("; a set bit is INK, drawn in the bar's own colour for the backend (pxhud.inc).")
+    w("")
+    w("PXU_DIGW    equ %d               ; a digit: cells (8 px) wide..." % (HUD_DIGIT[0] // 8))
+    w("PXU_DIGH    equ %d              ; ...rows tall" % HUD_DIGIT[1])
+    w("PXU_DIGSZ   equ %d              ; ...bytes" % (HUD_DIGIT[0] * HUD_DIGIT[1] // 8))
+    w("PXU_FACEW   equ %d" % (HUD_FACE[0] // 8))
+    w("PXU_FACEH   equ %d" % HUD_FACE[1])
+    w("PXU_FACESZ  equ %d" % (HUD_FACE[0] * HUD_FACE[1] // 8))
+    w("PXU_NFACE   equ %d" % HUD_NFACE)
+    w("PXU_KEYH    equ %d" % HUD_KEY[1])
+    w("PXU_KEYSZ   equ %d" % (HUD_KEY[0] * HUD_KEY[1] // 8))
+    w("PXU_WPNW    equ %d" % (HUD_WPN[0] // 8))
+    w("PXU_WPNH    equ %d" % HUD_WPN[1])
+    w("PXU_WPNSZ   equ %d" % (HUD_WPN[0] * HUD_WPN[1] // 8))
+    w("")
+    groups = (("px_hud_dig", "h_digit"), ("px_hud_face", "h_face"),
+              ("px_hud_key", "h_goldkey h_silverkey"), ("px_hud_wpn", "h_knife h_pistol h_mgun"))
+    by = {stem: bits for stem, _size, bits in hs}
+    for label, stems in groups:
+        names = stems.split() if " " in stems else [s for s, _z in HUD_SPECS if s.startswith(stems)]
+        w("%s:" % label)
+        for stem in names:
+            b = hud_bytes(by[stem])
+            w("    ; %s" % stem)
+            for i in range(0, len(b), 16):
+                w("    db " + ", ".join("0x%02X" % v for v in b[i:i + 16]))
+    w("")
+    return "\n".join(L)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out", help="write the include here (default: nothing)")
@@ -1560,11 +1852,25 @@ def main():
     ap.add_argument("--preview", metavar="DIR",
                     help="render every master through every ink table into DIR")
     ap.add_argument("--inks", action="store_true", help="print the ink tables")
+    ap.add_argument("--hud", metavar="INC",
+                    help="write the HUD masters' include (pxhuda.inc, 97.13) here")
     a = ap.parse_args()
     if a.placeholder:
         n = write_placeholders(a.force and a.walls)
         n += write_sprite_placeholders(a.force)
+        n += write_hud_placeholders(a.force)
         print("pxsart: wrote %d placeholder master(s) under %s" % (n, ART_DIR))
+    if a.hud and not (a.out or a.stream or a.check or a.preview or a.inks):
+        # THE HUD ALONE, and nothing else loaded: the pxs-gen fast row runs
+        # this inside every `make`, and the walls' and sprites' criteria are
+        # ~0.6 s the include does not depend on
+        try:
+            hs = huds()
+        except (ValueError, OSError) as e:
+            sys.exit("pxsart: %s" % e)
+        with open(a.hud, "w") as f:
+            f.write(hud_generate(hs))
+        return
     try:
         ms = masters()
         sp, wp = sprites(), weapons()
@@ -1580,8 +1886,14 @@ def main():
                 frame_runs(alpha, WPN_W, True)
             except ValueError as e:
                 raise ValueError("%s: %s" % (sprite_path(weapon_names()[i]), e))
+        hs = huds()
     except (ValueError, OSError) as e:
         sys.exit("pxsart: %s" % e)
+    if a.hud:
+        text = hud_generate(hs)
+        with open(a.hud, "w") as f:
+            f.write(text)
+        print("pxsart: wrote %s (%d HUD masters)" % (a.hud, len(hs)))
     if a.inks:
         for be, (lit, dark) in ink_tables().items():
             print("%-6s lit  %s" % (be, " ".join("%02X" % v for v in lit)))
@@ -1592,6 +1904,7 @@ def main():
     if a.preview:
         files = preview(ms, a.preview)
         files += spr_preview(sp, wp, a.preview)
+        files += hud_preview(hs, a.preview)
         print("pxsart: wrote %d previews under %s" % (len(files), a.preview))
     if a.check or a.preview:
         for ln in lines + rlines + slines:

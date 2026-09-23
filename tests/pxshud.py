@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""PIXELSTEIN 3D's status bar is CHANGE-ONLY (SPEC.md 97.13; wave 4).
+
+    python3 tests/pxshud.py [--machine os8088_5150_cga_gla]
+
+The bar - floor, score, lives, the face, health, ammo, the keys, the weapon
+- keeps every field's value as last drawn ON EACH PAGE (px_hudv) and a
+frame redraws a field only where the value differs. What that promises,
+read off the package's own counter of field rewrites (px_hudn) and off the
+glass:
+
+  (a) A QUIET SECOND REWRITES NOTHING - in a window, the turn key held for
+      a second so frames ARE drawn (px_frames climbs), and px_hudn does not
+      move: the bar is not a per-frame cost (tests/pixelstein.py's numbers
+      are the other half of that claim);
+  (b) the window's bar is in the shadow's rows 80..103 at bytes 20..59 -
+      320 of the band's 512 dots - and nothing of it outside them;
+  (c) ONE CHANGE IS ONE FIELD: the rounds poked 8 -> 5 and exactly one
+      field is rewritten, and the shadow's bar differs only inside the
+      ammo field's two cells;
+  (d) the same quiet second in the BRACKET rewrites nothing, and the bar
+      ON THE GLASS is the shadow's byte for byte (CGA 320x200: the device
+      rows 108..131 through px_hudoff, the present's rectangle copy);
+  (e) health poked 100 -> 55 rewrites TWO fields - the digits and the face,
+      whose frame follows the health (97.4) - and the glass follows again;
+  (f) ON MODE X (--machine os8088_xt_vga) THE BAR IS PER PAGE: the same
+      change rewrites each field ONCE ON EACH PAGE (px_hudn +2 a field),
+      the two pages' px_hudv agree afterwards, and the two pages' bar rows
+      read the same bytes (plane 0);
+  (g) A MESSAGE OVER THE SAME MESSAGE IS A REWRITE: V twice inside the
+      message's two seconds posts SIZE over SIZE, and the label row is
+      rewritten both times (the field's value carries the post's serial);
+  (h) AFTER THE BRACKET, A QUIET SECOND IN PLAY DRAWS NO FRAME: px_cardd is
+      0 (a card is owed only in a card state) and px_frames does not move
+      - the premise every "a still player costs nothing" number rests on.
+"""
+import argparse
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(ROOT, "tools"))     # LAST, so it wins (pxslib)
+import os88marty                                                # noqa: E402
+import pxslib                                                   # noqa: E402
+
+FAIL = []
+HUDROW0, HUDROWS, STRIDE = 80, 24, 80
+PXF_N = 10
+
+
+def check(ok, what):
+    print("   %-70s %s" % (what, "ok" if ok else "FAIL"))
+    if not ok:
+        FAIL.append(what)
+
+
+def ticks(g, n, limit=120.0):
+    t0 = g.ticks()
+    os88marty.until(g.m, lambda mm: (g.ticks() - t0) & 0xFFFFFF >= n,
+                    "%d ticks" % n, poll=0.1, limit=limit)
+
+
+def shadow_bar(g):
+    seg = g.word("px_shseg")
+    return g.m.read((seg << 4) + HUDROW0 * STRIDE, HUDROWS * STRIDE)
+
+
+def glass_bar_cga(g):
+    out = bytearray()
+    for r in range(HUDROWS):
+        y = 28 + HUDROW0 + r
+        out += g.m.read(0xB8000 + (y & 1) * 0x2000 + (y >> 1) * 80, STRIDE)
+    return bytes(out)
+
+
+def modex_bar(g, page):
+    seg = pxslib.u16(g.bytes_("px_fsi", 2))
+    return g.m.read((seg << 4) + page * 19200 + (48 + HUDROW0) * STRIDE, HUDROWS * STRIDE)
+
+
+def quiet(g, what):
+    """Hold the turn key for a second of guest time: frames drawn, the bar
+    untouched."""
+    n0, f0 = g.word("px_hudn"), g.word("px_frames")
+    g.m.key("ArrowRight", down=True, up=False)
+    ticks(g, 18)
+    g.m.key("ArrowRight", down=False, up=True)
+    ticks(g, 3)
+    n1, f1 = g.word("px_hudn"), g.word("px_frames")
+    print("   %s: %d frames drawn over a second, %d bar field(s) rewritten"
+          % (what, (f1 - f0) & 0xFFFF, (n1 - n0) & 0xFFFF))
+    check((f1 - f0) & 0xFFFF >= 3, "(%s) frames WERE drawn in the quiet second (%d)"
+          % (what, (f1 - f0) & 0xFFFF))
+    check(n1 == n0, "(%s) and NO bar field was rewritten (px_hudn %d -> %d)" % (what, n0, n1))
+
+
+def poke_and_count(g, name, value, frames=2):
+    g.m.pause()
+    n0 = g.word("px_hudn")
+    g.poke_byte(name, value)
+    g.m.run()
+    ticks(g, 6 * frames)
+    return (g.word("px_hudn") - n0) & 0xFFFF
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--machine", default="os8088_5150_cga_gla")
+    ap.add_argument("--image", default="build/os8088-360.img")
+    ap.add_argument("--apps", default="build/games360.img")
+    a = ap.parse_args()
+    os.chdir(ROOT)
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+        g = pxslib.open_game(m)
+        g.sim(False)
+        g.god(True)
+        g.scene("a")
+        g.wait_frames(1)
+        ticks(g, 6)
+        # --- (a) a quiet second in the window ---------------------------------
+        quiet(g, "window")
+        # --- (b) where the window's bar is -------------------------------------
+        bar = shadow_bar(g)
+        inside = sum(1 for r in range(HUDROWS) for x in range(20, 60) if bar[r * STRIDE + x])
+        outside = sum(1 for r in range(HUDROWS) for x in list(range(0, 20)) + list(range(60, 80))
+                      if bar[r * STRIDE + x])
+        check(inside > 100 and outside == 0, "the window's bar is drawn at bytes 20..59 of shadow "
+              "rows 80..103 and nowhere else (%d lit bytes in, %d out)" % (inside, outside))
+        # --- (c) one change, one field -----------------------------------------
+        before = shadow_bar(g)
+        d = poke_and_count(g, "px_ammo", 5)
+        after = shadow_bar(g)
+        cols = sorted(set(i % STRIDE for i in range(len(after)) if after[i] != before[i]))
+        rows = sorted(set(i // STRIDE for i in range(len(after)) if after[i] != before[i]))
+        print("   the rounds 8 -> 5: %d field(s) rewritten, bytes %s changed on rows %s..%s"
+              % (d, cols, rows[:1], rows[-1:]))
+        check(d == 1, "ONE change is ONE field rewritten (%d)" % d)
+        check(cols and set(cols) <= {20 + 28, 20 + 29},
+              "...and the bar changed inside the ammo field's two cells alone (bytes %s)" % cols)
+        # --- (d) the bracket ------------------------------------------------------
+        g.enter_fsx()
+        g.pin(rung="tex", lowres=True, size=64)
+        g.wait_frames(1, limit=180.0)       # (the sets built behind the black)
+        g.scene("a")
+        g.wait_frames(1)
+        ticks(g, 6)
+        back = pxslib.PXB.get(g.byte("px_back"))
+        print("   the bracket's backend: %s" % back)
+        quiet(g, "bracket")
+        if back == "cga4":
+            sh, gl = shadow_bar(g), glass_bar_cga(g)
+            diff = sum(1 for x, y in zip(sh, gl) if x != y)
+            check(diff == 0 and any(sh), "the bar ON THE GLASS is the shadow's, byte for byte "
+                  "(%d of %d differ)" % (diff, len(sh)))
+        # --- (e) health: two fields, and the glass follows -------------------------
+        d = poke_and_count(g, "px_health", 55, frames=3)
+        if back == "modex":
+            # --- (f) per page: each field once on EACH page ----------------------
+            hv = g.bytes_("px_hudv", 2 * PXF_N * 2)
+            p0, p1 = hv[:PXF_N * 2], hv[PXF_N * 2:]
+            print("   Mode X: health 100 -> 55: %d field rewrite(s) over both pages" % d)
+            check(d == 4, "per page: the digits and the face rewritten ONCE ON EACH PAGE (%d)" % d)
+            check(p0 == p1, "...and the two pages' px_hudv agree afterwards")
+            b0, b1 = modex_bar(g, 0), modex_bar(g, 1)
+            diff = sum(1 for x, y in zip(b0, b1) if x != y)
+            check(diff == 0 and any(b0), "...and the two pages' bar rows read the same bytes "
+                  "(%d differ)" % diff)
+        else:
+            print("   health 100 -> 55: %d field(s) rewritten" % d)
+            check(d == 2, "health 100 -> 55 rewrites TWO fields: the digits and the face (%d)" % d)
+            if back == "cga4":
+                sh, gl = shadow_bar(g), glass_bar_cga(g)
+                diff = sum(1 for x, y in zip(sh, gl) if x != y)
+                check(diff == 0, "...and the glass follows the shadow (%d differ)" % diff)
+        # --- (g) SIZE over SIZE ----------------------------------------------------
+        if back != "c160":                  # (C160's bar has no label row)
+            g.m.type_text("v")
+            ticks(g, 4)
+            n1 = g.word("px_hudn")
+            g.m.type_text("v")
+            ticks(g, 4)
+            n2 = g.word("px_hudn")
+            print("   V, V: %d field rewrite(s) on the second press (px_hmsg %d)"
+                  % ((n2 - n1) & 0xFFFF, g.byte("px_hmsg")))
+            check((n2 - n1) & 0xFFFF >= 1 and g.byte("px_hmsg") == 3,
+                  "(g) SIZE posted over SIZE rewrites the label row again")
+            g.pin(rung="tex", lowres=True, size=64)
+            g.wait_frames(1)
+        g.leave_fsx()
+        # --- (h) back in the window: a quiet second draws nothing ------------------
+        ticks(g, 60)                        # (the window's own settling frames)
+        f0 = g.word("px_frames")
+        ticks(g, 18)
+        f1 = g.word("px_frames")
+        print("   after the bracket, PLAY, a quiet second: %d frame(s), px_cardd %d"
+              % ((f1 - f0) & 0xFFFF, g.byte("px_cardd")))
+        check(f1 == f0 and g.byte("px_cardd") == 0 and g.gstate() == pxslib.PXST["play"],
+              "(h) back from the bracket, a still player in PLAY costs no frame")
+    if FAIL:
+        print("pxshud: FAIL (%d)" % len(FAIL))
+        for f in FAIL:
+            print("  -", f)
+        return 1
+    print("pxshud: ok")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

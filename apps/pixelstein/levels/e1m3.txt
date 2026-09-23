@@ -6,6 +6,7 @@
 # the stores, and the gold door on the long way round to the elevator - with
 # the brick hall's guards spread so that no cell has more than two of them
 # within melee reach (97.6's rule, tests/unit/t_pxsmap.py).
+# code: CELL
 ############################################
 #%%%%%%%%%%%#cccccccc#######################
 #%.........%#c......c#######################

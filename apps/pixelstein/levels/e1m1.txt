@@ -13,6 +13,7 @@
 # DDA sweep refuses a level with a ray of more than 26 crossings: the
 # frame table (97.1) is priced at ten, and a diagonal across an open hall
 # is thirty.
+# code: KEEP
 #####################################BBBBBBB
 #.....F..F...#...#........###########B.....B
 #............#...#........###########B.....B

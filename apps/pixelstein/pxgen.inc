@@ -14,7 +14,7 @@
 ; bench priced (rows 0 and 1 would otherwise assemble short).
 ;
 ; THE GENERATOR (wave 2) writes the scratch part the loader carved (97.9's
-; PART 2 - the indices here are os88pkg's, the ones the loader's table and
+; PART 1 - the indices here are os88pkg's, the ones the loader's table and
 ; PXH_GEN name; the plan's "part 3" is this one) - and tools/pxsgen.py is
 ; its model, byte for byte, which tests/pxsscale.py reads back off the guest
 ; and diffs:
@@ -24,13 +24,13 @@
 ;               ONE far call into the part, which walks the DRAW QUEUE and
 ;               near-calls each entry's scaler with SI = its texture column
 ;               and DI = its column base;
-;   PXG_QTEX    the queue's header - ES for the driver's wall pass (part 3,
+;   PXG_QTEX    the queue's header - ES for the driver's wall pass (part 2,
 ;               the byte textures), ES for its SPRITE pass (PXG_QSPR: part
 ;               4, the sprite set, wave 3) and the queue's end - and PXG_Q
 ;               the queue itself, PXG_QN entries of (scaler, SI, DI, patch),
 ;               written by px_compose (pxcomp.inc) for the walls and by
 ;               px_sprites (pxspr.inc) for the posts and the weapon. THE
-;               PATCH WORD is the one patch site in part 2 (97.3, 97.6): a
+;               PATCH WORD is the one patch site in part 1 (97.3, 97.6): a
 ;               sprite post enters a scaler at texel v0's load and must
 ;               stop at texel v1's, so the driver writes a near `ret`
 ;               (0xC3) over the first byte of that load - the `es:` prefix,
@@ -50,7 +50,7 @@
 ;               scaler, and every height 1..120 aliases DOWN to the nearest
 ;               generated one through px_sctab and the cast's px_hq.
 ;               EVERY SCALER IS PRECEDED BY ITS codeofs TABLE (wave 3, graft
-;               2's companion): 33 words, codeofs[v] = the offset in part 2
+;               2's companion): 33 words, codeofs[v] = the offset in part 1
 ;               of the load of the first EMITTED texel at or after v, or 0
 ;               when no texel from v on emits (the post walk enters at
 ;               codeofs[v0] and patches codeofs[v1]; a 0 entry means "draw
@@ -168,8 +168,8 @@ px_lad:
 PXG_BODIES  equ 0                   ; the four bodies, PXB_ALL bytes
 PXG_DRV     equ PXB_ALL             ; the driver, PXG_DRVMAX reserved
 PXG_DRVMAX  equ 96
-PXG_QTEX    equ PXG_DRV + PXG_DRVMAX    ; word: the wall pass's ES (part 3)
-PXG_QSPR    equ PXG_QTEX + 2        ; word: the sprite pass's ES (part 4)
+PXG_QTEX    equ PXG_DRV + PXG_DRVMAX    ; word: the wall pass's ES (part 2)
+PXG_QSPR    equ PXG_QTEX + 2        ; word: the sprite pass's ES (PXH_SPR)
 PXG_QEND    equ PXG_QSPR + 2        ; word: one past the queue's last entry
 PXG_Q       equ PXG_QEND + 2        ; the draw queue
 PXG_QN      equ 512                 ; ...entries: 80 walls, or the posts and
@@ -199,12 +199,12 @@ PXG_EMITMAX equ 768                 ; the most ONE emission can be: the
                                     ; same fence
 
 ; -----------------------------------------------------------------------------
-; px_drv_tpl - THE COLUMN DRIVER, copied into part 2 at PXG_DRV and entered
+; px_drv_tpl - THE COLUMN DRIVER, copied into part 1 at PXG_DRV and entered
 ;              by ONE far call a pass from px_compose (the walls, ES = part
-;              3) and px_sprites (the posts and the weapon, through the
-;              second entry PXG_DRV2, ES = part 4 - pxspr.inc), DS = the
+;              2) and px_sprites (the posts and the weapon, through the
+;              second entry PXG_DRV2, ES = the sprite claim - pxspr.inc), DS = the
 ;              destination both times. Every reference here is either
-;              relative (the jumps) or an absolute offset in PART 2 (the cs:
+;              relative (the jumps) or an absolute offset in PART 1 (the cs:
 ;              words), so the copy runs where it lands. No register
 ;              preserved (SPEC.md 85.3.4). CL = 3 is the Hercules/WIN1
 ;              phase's rotate count and costs nothing elsewhere; the queue's
@@ -252,7 +252,7 @@ px_drv_end:
 PXG_DRVSZ   equ px_drv_end - px_drv_tpl
 PXG_DRV2    equ PXG_DRV + (px_drv_tpl.spr - px_drv_tpl)  ; the sprite pass's entry
 %if PXG_DRVSZ > PXG_DRVMAX
-%error "the column driver outgrew the room reserved for it in part 2"
+%error "the column driver outgrew the room reserved for it in part 1"
 %endif
 
 ; the 47 generated heights (tools/pxsgen.py's HEIGHTS): 2..80 by two, then
@@ -325,7 +325,7 @@ px_gen_init:
     or ax, ax
     jz .image
     mov es, ax                      ; the copy: the four bodies at offset 0
-                                    ; of part 2 (the scratch)
+                                    ; of part 1 (the scratch)
     mov di, PXG_BODIES
     mov si, px_bodies
     mov cx, PXB_ALL
@@ -423,7 +423,7 @@ px_tex_setup:
     call px_bt_build
 .spr:
     cmp al, [px_sprback]            ; ...and the sprite set for the same ink
-    je .out                         ; class (97.6), when part 4 was carved -
+    je .out                         ; class (97.6), when the sprite claim was made -
     call px_spr_build               ; its own class word, since a Flat frame
                                     ; may have built it first (px_sprites)
 .out:
@@ -432,7 +432,7 @@ px_tex_setup:
     ret
 
 ; -----------------------------------------------------------------------------
-; px_gen_build - emit both scaler sets and the col2tex tables into part 2 for
+; px_gen_build - emit both scaler sets and the col2tex tables into part 1 for
 ;                [px_back], and fill the four directories (tools/pxsgen.py);
 ;                under the part's length (PXH_GENLEN), or CF = 1 with the
 ;                class banked in px_genbad
@@ -574,7 +574,7 @@ px_gen_one:
     push cx                         ; IN OUR OWN SEGMENT: ES is the part
     push es                         ; being emitted into here, and the first
     push ds                         ; cut's `rep stosw` zeroed 66 bytes of
-    pop es                          ; part 2 at the scratch's OFFSET, inside
+    pop es                          ; part 1 at the scratch's OFFSET, inside
     mov di, px_gcotv                ; an earlier scaler, on every height
     mov cx, PXA_TEX + 1             ; generated (tests/pxssim.py's scene B
     xor ax, ax                      ; at Size 72 read a wall with nine rows
@@ -748,7 +748,7 @@ px_gen_c2t:
     ret
 
 ; -----------------------------------------------------------------------------
-; px_bt_build - the byte-texture set for [px_back] into part 3 (97.4): the 15
+; px_bt_build - the byte-texture set for [px_back] into part 2 (97.4): the 15
 ;               masters, two shades, column-major, one byte a texel through
 ;               the backend's ink table - a C160 column holding the nibbles
 ;               of texels u and u+1 of one row. Each master is STAGED into
@@ -853,7 +853,7 @@ px_bt_build:
     ret
 
 ; -----------------------------------------------------------------------------
-; px_spr_build - THE SPRITE SET for [px_back] into part 4 (97.6): every frame
+; px_spr_build - THE SPRITE SET for [px_back] into the sprite claim (PXH_SPR, 97.6): every frame
 ;                of the masters (PXA_NSPR of 32 x 32, then PXA_NWPN weapon
 ;                frames of 16 x 32) transposed column-major through the LIT
 ;                ink table - a C160 column holding the nibbles of texels u

@@ -6153,7 +6153,7 @@ $(BUILD)/dotdel.o88: $(BUILD)/dotdel.bin tools/os88pkg.py $(PKGZSTAMP)
 # both, as it lists SKIES' two. Every %included file is a prerequisite, or
 # an edit to it is a stale build.
 PXSTEIN_GEN := apps/pixelstein/pxtab.inc apps/pixelstein/pxlev.inc \
-               apps/pixelstein/pxart.inc
+               apps/pixelstein/pxart.inc apps/pixelstein/pxhuda.inc
 PXSTEIN_SRC := apps/pixelstein/pxstein.asm apps/pixelstein/pxicon.inc \
                apps/pixelstein/pxlev.inc apps/pixelstein/pxart.inc \
                apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc
@@ -6162,7 +6162,8 @@ PXGAME_SRC  := apps/pixelstein/pxgame.asm apps/pixelstein/pxicon.inc \
                apps/pixelstein/pxcomp.inc apps/pixelstein/pxrast.inc \
                apps/pixelstein/pxwin.inc apps/pixelstein/pxgame.inc \
                apps/pixelstein/pxset.inc apps/pixelstein/pxspr.inc \
-               apps/pixelstein/pxact.inc \
+               apps/pixelstein/pxact.inc apps/pixelstein/pxhud.inc \
+               apps/pixelstein/pxhs.inc \
                $(PXSTEIN_GEN) apps/os88api.inc apps/os88ui.inc \
                apps/os88pit.inc
 PXSLEVELS   := $(wildcard apps/pixelstein/levels/*.txt)
@@ -6177,16 +6178,19 @@ $(BUILD)/pxgame.bin: $(PXGAME_SRC) | $(BUILD)
 	@echo "pxgame (part 0): $(call FILESIZE,$@) bytes, bss inside"
 
 # The package: the loader's image with the program (part 0, OP_COMP), the
-# level stream (part 1), the two scratch parts (2 and 3: the scalers and
-# the byte textures - no file) and the lazy art stream (4) behind it; the
+# two scratch parts (1 and 2: the scalers and the byte textures - no file)
+# and the two lazy streams behind them, the levels (3, lazy since wave 4)
+# and the art (4); the
 # sprite set is a CLAIM the loader makes, not a part (SPEC.md 97.9). PACKED <= 56KB IS A HARD ERROR HERE (SPEC.md 97.9): apps-all.img had
 # 127 spare clusters when this package was planned and wave 6's art lands
 # after the disk arithmetic was checked, so the ceiling is asserted where
 # the file is made and not discovered on the 1.44MB disk. AND SO IS THE
 # READ RUN: SPEC.md 20.12.7 bounds the eager parts at 128 UNPACKED sectors
 # (op_load refuses the launch at 128, and OP_COMP does not relieve it - the
-# claim is cut from the unpacked total), the run is 101 after wave 3 (68
-# after wave 1, 79 after wave 2), and the only other check was a soak row
+# claim is cut from the unpacked total), the run is 111 after wave 4 - part
+# 0 alone, the level stream having gone lazy: eager, its 20 sectors would
+# make it 131 (101 after wave 3 with it eager, 68 after wave 1, 79 after
+# wave 2), and the only other check was a soak row
 # nothing in `make` runs. A recipe that lets the run reach 128 ships a
 # package that fails at LAUNCH.
 PXSTEIN_MAXZ := 57344
@@ -6198,6 +6202,20 @@ $(BUILD)/pxstein.o88: $(BUILD)/pxstein.bin $(BUILD)/pxgame.bin $(BUILD)/pxsart.b
 	    echo "pxstein: $@ is $(call FILESIZE,$@) bytes, over the $(PXSTEIN_MAXZ) SPEC.md 97.9 allows the disks"; \
 	    rm -f $@; exit 1; }
 	@python3 tools/os88parts.py --run $@ --max-run 128 || { rm -f $@; exit 1; }
+
+# THE COMPACTION GATE'S DISK (SPEC.md 97.9, 66.6.1.2; tests/pxsmove.py): the
+# package and tests/filler, nothing else, at 360KB - the geometry whose head
+# slack puts part 0 INSIDE its carve, the shape rehomemove360 is the gate on.
+# PXSTEIN opens first and runs its worker, FILLER opens under it and takes
+# the arena down, and FILLER's asks force the compaction that has to move
+# the carve - and with it the two parts the handoff named by segment
+.PHONY: pxsmove
+pxsmove: $(BUILD)/pxsmove360.img
+$(BUILD)/pxsmove360.img: $(BUILD)/pxstein.o88 $(BUILD)/filler.o88 \
+                         tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 360 \
+		$(BUILD)/pxstein.o88 $(BUILD)/filler.o88
+	@python3 tools/os88disk.py --verify $@
 
 # the ART STREAM the lazy art part carries (SPEC.md 97.4): the fifteen wall
 # masters under apps/pixelstein/art/, two texels a byte, and since wave 3
@@ -6212,7 +6230,8 @@ $(BUILD)/pxstein.o88: $(BUILD)/pxstein.bin $(BUILD)/pxgame.bin $(BUILD)/pxsart.b
 $(BUILD)/pxsart.bin: tools/pxsart.py tools/os88lz.py tools/pxslevel.py $(PXSART) | $(BUILD)
 	python3 tools/pxsart.py --check --stream $@
 
-# the level STREAM the lazy level part carries (SPEC.md 97.9): one record a
+# the level STREAM the lazy level part carries (SPEC.md 97.9; lazy since
+# wave 4 - eight floors are 20 sectors the eager run had no room for): one record a
 # level, run-length coded, with every level rule checked on the way - a
 # refused level fails this rule, in words, on the host. `make pxsgen` reaches
 # it (below) and wave 1's package rule will; the same command is also the
@@ -6231,6 +6250,7 @@ pxsgen:
 	python3 tools/pxstab.py
 	python3 tools/pxslevel.py
 	python3 tools/pxsart.py --check -o apps/pixelstein/pxart.inc
+	python3 tools/pxsart.py --hud apps/pixelstein/pxhuda.inc
 	rm -f $(BUILD)/pxslev.bin $(BUILD)/pxsart.bin
 	$(MAKE) $(BUILD)/pxslev.bin $(BUILD)/pxsart.bin
 

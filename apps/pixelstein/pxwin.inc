@@ -18,7 +18,21 @@
 ; -----------------------------------------------------------------------------
 ; px_worker - the windowed game loop (apps/dotdel's dd_worker, SPEC.md 93.6)
 ; -----------------------------------------------------------------------------
-px_worker:
+; px_worker_rs - THE RESTART POINT (SPEC.md 66.6.2): the kernel re-enters the
+;                worker HERE, DS = CS = the new segment, when it moved our
+;                region with the worker parked - which it is only inside
+;                OSAPI_TASK_ALIVE at the top of the loop below (no
+;                OSAPI_MEM_PARKSAFE is declared, so a worker blocked in
+;                OSAPI_GFX_LOCK is never frameless). Standing there it holds
+;                no lock, px_composing is 0 and its stack holds nothing of
+;                ours; the column memory (97.5) moved with the bss and the
+;                shadow is a claim of its own, so nothing is stale - but the
+;                frame is forced whole anyway, the path the gates poke, so a
+;                restart can never leave a glass the memory does not describe
+px_worker_rs:
+    inc byte [px_wrs]               ; the gate reads it (tests/pxsmove.py leg
+    mov byte [px_force], 1          ; 2b): a restart that never ran would
+px_worker:                          ; pass a gate that only counted frames
     call OSAPI_GET_TICKS
     mov [px_last], ax
 .loop:
@@ -38,9 +52,12 @@ px_worker:
 .have:                              ; to walk through a wall
     mov [px_last], ax
     mov cx, bx
-    call px_keys_read               ; the held keys, once at the first owed
-    call px_kbdrain                 ; step; the steering scancodes eaten so
-    cmp byte [px_pause], 0          ; a typed command keeps its place
+    cmp byte [px_state], PXST_PLAY  ; THE HELD KEYS ARE PLAY'S (97.13): a card
+    jne .nokeys                     ; reads none, and the drain would eat the
+    call px_keys_read               ; A, D, W and S of a name or a code typed
+    call px_kbdrain                 ; on one. The held keys, once at the
+.nokeys:                            ; first owed step; the steering scancodes
+    cmp byte [px_pause], 0          ; eaten so a typed command keeps its place
     jne .paused
     cmp byte [px_abon], 0           ; SUSPENDED behind the About card (apps/
     jne .paused                     ; dotdel's dd_step): nothing under it moves
@@ -96,11 +113,12 @@ px_render_win:
     cmp byte [px_whole], 0          ; nothing changed - but a W_PAINT that
     jne .whole                      ; landed mid-compose blackened the glass:
     mov al, [px_lined]              ; the band goes back whole, NO cast (the
-    or al, [px_statd]               ; first cut owed a whole frame, 34 ms of
+    or al, [px_hudw]                ; first cut owed a whole frame, 34 ms of
     jz .out                         ; cast for a compose that then wrote
     call px_lock_clip               ; nothing) - or the text line alone (a
-    jc .lskip                       ; pause, 97.8), or its stat cells (a
-    call px_geom_win                ; round spent, a hit taken)
+    jc .lskip                       ; pause, 97.8), or the bar a paint
+    call px_geom_win                ; blackened (97.13)
+    call px_hud_blit
     call px_line_ck
     call OSAPI_GFX_UNLOCK
     ret
@@ -117,6 +135,7 @@ px_render_win:
                                     ; nobody can see
     call px_geom_win
     call px_blit_win                ; consumes px_whole: rows 0..79
+    call px_hud_blit
     call px_line_ck
     call OSAPI_GFX_UNLOCK
     ret
@@ -133,6 +152,7 @@ px_render_win:
     call px_black_around            ; the Size shrank: the glass beside the
 .noblack:                           ; band keeps the old picture otherwise
     call px_blit_win
+    call px_hud_blit                ; the bar's rectangle, if it moved (97.13)
     call px_line_ck
     call OSAPI_GFX_UNLOCK
     call px_frame_end
@@ -268,13 +288,12 @@ px_blit_win:
 .out:
     ret
 
-; px_line_ck - the line, if it is owed: whole (px_lined), or its eight stat
-;              cells alone (px_statd). The lock held, px_geom_win done
+; px_line_ck - the line, if it is owed (px_lined). The lock held,
+;              px_geom_win done. (Wave 3's eight stat cells are gone: the
+;              bar carries the health and the ammo since wave 4, 97.13)
 px_line_ck:
     cmp byte [px_lined], 0
     jne px_line_draw
-    cmp byte [px_statd], 0
-    jne px_stat_draw
     ret
 
 ; -----------------------------------------------------------------------------
@@ -284,7 +303,6 @@ px_line_ck:
 ; -----------------------------------------------------------------------------
 px_line_draw:
     mov byte [px_lined], 0
-    mov byte [px_statd], 0
     mov di, px_lbuf
     mov si, px_s_ldet
     call px_strcat
@@ -312,12 +330,14 @@ px_line_draw:
     mov si, px_s_llow
 .q:
     call px_strcat
-    mov si, px_s_lhp                ; "  " then the eight FIXED-WIDTH stat
-    call px_strcat                  ; cells "H100 A 8" (wave 3: the window's
-    mov ax, di                      ; health and ammo until wave 4's bar),
-    sub ax, px_lbuf                 ; their cell offset banked so a round
-    mov [px_lhx], al                ; spent redraws eight cells and not 65
-    call px_stat_fmt                ; (px_stat_draw; review, wave 3)
+    mov al, [px_lrefuse]            ; a refusal, once - the next line is
+    mov byte [px_lrefuse], 0        ; the usual one:
+    mov si, px_s_lnomode            ; 1 F or T with no mode (px_go_fsx),
+    cmp al, 1
+    je .h
+    mov si, px_s_lnopause           ; 2 Game > Pause outside PLAY (px_oncmd)
+    cmp al, 2
+    je .h
     mov si, px_s_lpause
     cmp byte [px_pause], 0
     jne .h
@@ -358,72 +378,6 @@ px_line_draw:
     mov cx, [px_bx]
     mov dx, [px_ly]
     mov si, px_lbuf
-    mov al, CWHITE
-    mov ah, CBLACK
-    call OSAPI_FONT_RUN
-    ret
-
-; px_stat_fmt - the eight stat cells at DI: 'H', the health in three cells
-;               right-aligned, ' A', the ammo in two - fixed width, so the
-;               cells to their right never move. clobbers AX, CX; DI + 8
-px_stat_fmt:
-    mov byte [di], 'H'
-    inc di
-    mov al, [px_health]
-    xor ah, ah
-    mov cl, 100
-    div cl                          ; AL = hundreds, AH = the rest
-    add al, '0'
-    cmp al, '0'
-    jne .h1
-    mov al, ' '
-.h1:
-    mov [di], al
-    mov al, ah
-    aam                             ; AH = tens, AL = units
-    add ax, '00'
-    cmp byte [di], ' '
-    jne .h2
-    cmp ah, '0'
-    jne .h2
-    mov ah, ' '
-.h2:
-    mov [di + 1], ah
-    mov [di + 2], al
-    mov byte [di + 3], ' '
-    mov byte [di + 4], 'A'
-    mov al, [px_ammo]
-    aam
-    add ax, '00'
-    cmp ah, '0'
-    jne .a1
-    mov ah, ' '
-.a1:
-    mov [di + 5], ah
-    mov [di + 6], al
-    add di, 7
-    ret
-
-; px_stat_draw - the eight stat cells alone, in place: one OSAPI_FONT_RUN of
-;                8 cells (~7 ms on the 5150) where the whole line is 65
-;                (~59 ms) - and the whole line when it was never drawn.
-;                The lock held, px_geom_win done. clobbers AX, CX, DX, SI, DI
-px_stat_draw:
-    cmp byte [px_lhx], 0xFF
-    je px_line_draw
-    mov byte [px_statd], 0
-    mov di, px_sbuf
-    call px_stat_fmt
-    mov byte [di], 0
-    mov al, [px_lhx]
-    xor ah, ah
-    shl ax, 1
-    shl ax, 1
-    shl ax, 1                       ; cells to pixels
-    add ax, [px_bx]
-    mov cx, ax
-    mov dx, [px_ly]
-    mov si, px_sbuf
     mov al, CWHITE
     mov ah, CBLACK
     call OSAPI_FONT_RUN
@@ -474,6 +428,32 @@ px_strcat:
 .out:
     ret
 
+; px_detail_str - the rung and the resolution in force at DI, "Textured  Low
+;                 res": the bar's message when Auto steps in a bracket
+;                 (97.13) - the same words the line uses. DI past it;
+;                 clobbers AX, SI
+px_detail_str:
+    mov al, [px_rung]
+    mov ah, [px_lowres]
+; px_detail_stra - the same for AL = a rung, AH = a resolution (the timedemo
+;                  card's, kept at the run's end). clobbers AX, SI
+px_detail_stra:
+    mov si, px_s_lwire
+    cmp al, PXR_WIRE
+    je .r
+    mov si, px_s_ltex
+    cmp al, PXR_TEX
+    je .r
+    mov si, px_s_lflat
+.r:
+    call px_strcat
+    mov si, px_s_lfull
+    or ah, ah
+    je .q
+    mov si, px_s_llow
+.q:
+    jmp px_strcat
+
 px_s_ldet:   db 'Detail: ', 0
 px_s_lwire:  db 'Wire', 0
 px_s_lflat:  db 'Flat', 0
@@ -481,10 +461,11 @@ px_s_ltex:   db 'Textured', 0
 px_s_lsize:  db '  Size ', 0
 px_s_lfull:  db '  Full res', 0
 px_s_llow:   db '  Low res', 0
-px_s_lhp:    db '  ', 0
 px_s_lhint:  db '  F: full screen', 0   ; (16 cells: the line stays under PX_LINEMAX with the health and ammo on it)
 px_s_lpause: db '  PAUSED (P)', 0
 px_s_lnone:  db 0
+px_s_lnomode: db '  No full-screen mode', 0
+px_s_lnopause: db '  Pause is for play', 0  ; (no longer than the line above)
 
 ; -----------------------------------------------------------------------------
 ; px_focus_ck - told when we gain the front, never when we lose it (SPEC.md
@@ -507,9 +488,12 @@ px_focus_ck:
     mov byte [px_hasfoc], 0
     cmp byte [px_pause], 0
     jne .out
+    cmp byte [px_state], PXST_PLAY  ; (a card is still already)
+    jne .out
     mov byte [px_pause], 1          ; sticky: a game that restarts the instant
     mov byte [px_lined], 1          ; a window is raised is one nobody was
-.out:                               ; watching yet
+    call px_pause_msg               ; watching yet - and the bar says so
+.out:
     pop bx
     pop ax
     ret
@@ -530,6 +514,9 @@ px_spawn_ck:
     call OSAPI_TASK_SPAWN
     jc .no
     mov byte [px_spawned], 1
+    OS88_WORKER_RESTARTABLE px_worker_rs    ; the other half (SPEC.md
+                                    ; 66.6.2): without it task_spawn's frame
+                                    ; pins the region however it is declared
 .no:
     pop bx
     pop ax

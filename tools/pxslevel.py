@@ -47,6 +47,7 @@ draft is withdrawn, PIXELSTEIN-PLAN 13's fifth graft).
 """
 import argparse
 import os
+import re
 import struct
 import sys
 
@@ -112,6 +113,13 @@ class LevelError(Exception):
     pass
 
 
+# THE FLOOR'S PASSWORD (wave 4, SPEC.md 97.13): a comment line
+# `# code: ABCD` in the level file - four capital letters, one per floor,
+# no two alike - which the LEVELDONE card shows for the NEXT floor and the
+# attract page's C key takes, instead of a save file (PIXELSTEIN-PLAN 12.5)
+CODE_RE = re.compile(r"^# code: ([A-Z]{4})\s*$")
+
+
 class Level:
     def __init__(self, name):
         self.name = name
@@ -120,6 +128,7 @@ class Level:
         self.doors = []             # (x, y, flags, lock)
         self.actors = []            # (x, y, kind, facing)
         self.statics = []           # (x, y, kind, blocking)
+        self.code = None            # the floor's password (97.13)
 
     def at(self, x, y):
         return self.cells[y * MAP_W + x]
@@ -140,6 +149,12 @@ def parse(path):
     rows = []
     for ln in open(path):
         ln = ln.rstrip("\n")
+        m = CODE_RE.match(ln)
+        if m:
+            if lv.code:
+                raise LevelError("%s: two codes, %s and %s" % (name, lv.code, m.group(1)))
+            lv.code = m.group(1)
+            continue
         if ln.startswith("# ") or ln == "#" or not ln.strip():
             continue
         rows.append(ln)
@@ -524,6 +539,12 @@ def generate(levels):
              len(lv.actors), len(lv.statics)))
     w("PXL_DIRSZ   equ 8")
     w("")
+    w("px_levpw:                        ; the floors' passwords, four letters each")
+    w("                                ; (97.13: the LEVELDONE card shows the next")
+    w("                                ; floor's, the attract page's C key takes one)")
+    for lv in levels:
+        w("    db '%s'                     ; %s" % (lv.code, lv.name))
+    w("")
     return "\n".join(L) + "\n", bytes(stream)
 
 
@@ -564,6 +585,17 @@ def main():
             print("pxslevel:   %s: %s" % (lv.name, b))
             failed = True
         levels.append(lv)
+    codes = {}
+    for lv in levels:
+        if not lv.code:
+            print("pxslevel: %s has no `# code: ABCD` line - every floor has a "
+                  "four-letter password (97.13)" % lv.name)
+            failed = True
+        elif lv.code in codes:
+            print("pxslevel: %s and %s share the code %s" % (codes[lv.code], lv.name, lv.code))
+            failed = True
+        else:
+            codes[lv.code] = lv.name
     if failed:
         sys.exit(1)
     text, stream = generate(levels)

@@ -35,6 +35,11 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88mouse, os88sym, os88geom, os88build, dispcp   # noqa: E402
 import os88parts                                                 # noqa: E402
 from cycweb import pkg_syms, u16                                # noqa: E402
+# ...AND AGAIN, because cycweb inserts tests/ at sys.path[0] on import (main's
+# #197 made it do so), which put this row's own tests/pxssim.py ahead of the
+# renderer and failed every PIXELSTEIN emulator row at its first import - the
+# reason the first cut's order "worked only through a side effect" above
+sys.path.insert(0, os.path.join(ROOT, "tools"))
 import pxssim                                                    # noqa: E402
 assert hasattr(pxssim, "render"), "pxslib: `pxssim` resolved to tests/, not tools/"
 
@@ -280,6 +285,27 @@ class Game:
 
     def eye(self):
         return self.word("px_px"), self.word("px_py"), self.word("px_head")
+
+    # --- the states (wave 4, 97.13) ------------------------------------------
+    def gstate(self):
+        return self.byte("px_state")
+
+    def wait_state(self, name, limit=60.0):
+        """Poll FAST: READY stands 27 ticks, 1.5 s of the guest's and ~0.2 s
+        of the host's at MartyPC's pace - the first cut polled every 0.2 s
+        and missed it whole."""
+        want = PXST[name]
+        os88marty.until(self.m, lambda mm: self.byte("px_state") == want,
+                        "the %s state" % name.upper(), poll=0.01, limit=limit)
+
+    def start(self, limit=90.0):
+        """Space on the attract page: a new game, READY, then PLAY on
+        READY's own clock (27 ticks). No second Space: one arriving in PLAY
+        is a held key px_keys_tick reads as Use."""
+        if self.byte("px_state") == PXST["play"]:
+            return
+        self.m.key("Space")
+        self.wait_state("play", limit=limit)
 
     # --- driving it ---------------------------------------------------------
     def _mark(self):
@@ -720,11 +746,21 @@ def turn_present_rows(which, cols, rung, k, pages=1):
     return present_rows(prev, new, rung)
 
 
-def open_game(m, apps_root=True, S=None):
+PXST = dict(play=0, dying=1, attract=2, ready=3, done=4, over=5, enter=6,
+            demo=7)                     # pxgame.asm's PXST_* (97.13)
+
+
+def open_game(m, apps_root=True, S=None, play=True):
     """Boot to the desktop, open B:, launch PXSTEIN.O88 and answer a Game.
 
     `apps_root`: the file is at the ROOT of games360.img (SPEC.md 24.6) and in
-    GAMES/ on the general apps disks."""
+    GAMES/ on the general apps disks.
+
+    `play`: SINCE WAVE 4 THE GAME OPENS ON THE ATTRACT PAGE (97.13), so every
+    row that measures or drives the world presses Space here and waits past
+    READY to PLAY - the first floor loaded afresh, which is what the rows
+    were written against. tests/pxsstate.py passes play=False: the states
+    are its subject."""
     S = S or os88sym.linear
     os88marty.settle(m)
     os88marty.no_saver(m)           # every PIXELSTEIN row drives for guest
@@ -753,6 +789,8 @@ def open_game(m, apps_root=True, S=None):
     os88marty.until(m, lambda mm: g.word("px_frames") >= 1, "the first frame",
                     poll=0.3, limit=120.0)
     mo.to(4, 4)                             # the pointer parked off the window
+    if play:
+        g.start()
     return g
 
 

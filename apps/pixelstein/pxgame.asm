@@ -20,8 +20,10 @@
 ; pxcomp.inc), the View row and PXSTEIN.CFG (pxset.inc). WAVE 3: the
 ; sprites and the weapon (pxspr.inc), the guards (pxact.inc), the doors
 ; that slide, the keys, the pickups, the hitscan and the player's health
-; (pxgame.inc), three floors. The HUD, the states and the scores are wave
-; 4's; the HUD band is black until it letters it.
+; (pxgame.inc), three floors. WAVE 4: the status bar and the cards
+; (pxhud.inc), the seven states, the timedemo, the sound and the mouse
+; (pxgame.inc), the high scores and the floor passwords (pxhs.inc), eight
+; floors; the region declared movable and the worker restartable.
 ; =============================================================================
 
 %include "os88api.inc"
@@ -122,6 +124,8 @@ PXD_POS     equ 4                   ; word: how far the slab has slid, 0..256
 PXD_STATE   equ 6                   ; byte: PXDS_*
 PXD_TIMER   equ 7                   ; byte: ticks held open
 PXD_SIZE    equ 8
+PXD_FOUND   equ 0x80                ; PXD_FLAGS: a secret door already opened
+                                    ; (counted once toward the card's ratio)
 PXDS_SHUT   equ 0
 PXDS_OPENING equ 1
 PXDS_OPEN   equ 2
@@ -190,7 +194,13 @@ PXW_MGUN    equ 2
 PX_FADE     equ 12                  ; ticks the DIE wash stands before the
                                     ; floor restarts
 PXST_PLAY   equ 0                   ; px_state: playing...
-PXST_DYING  equ 1                   ; ...the wash is up
+PXST_DYING  equ 1                   ; ...the wash is up (DIE)
+PXST_ATTRACT equ 2                  ; ...the attract page (the launch's)
+PXST_READY  equ 3                   ; ..."FLOOR n" before a floor
+PXST_DONE   equ 4                   ; ...LEVELDONE: the ratios card
+PXST_OVER   equ 5                   ; ...GAME OVER (or the episode won)
+PXST_ENTER  equ 6                   ; ...the initials of a high score
+PXST_DEMO   equ 7                   ; ...the timedemo running (97.13)
 ; a sprite candidate (PXS_C_*): 12 bytes, up to PX_MAXSPR of them a frame,
 ; sorted far to near (97.6)
 PXS_C_H     equ 0                   ; word: the true height K / nx
@@ -272,8 +282,12 @@ px_entry:
     mov byte [px_lives], PX_LIVES0
     mov byte [px_weapon], PXW_PISTOL
     mov word [px_wdrawn], 0xFFFF    ; nothing on either page's glass
-    mov byte [px_lhx], 0xFF         ; ...nor the line's stat cells
     mov byte [px_aim], 0xFF
+    mov byte [px_state], PXST_ATTRACT   ; THE ATTRACT PAGE FIRST (97.13): the
+    mov byte [px_codep], 0xFF       ; first floor loaded behind it for the
+    mov byte [px_sound], 1          ; timedemo; sound ON unless PXSTEIN.CFG
+    call px_hs_init                 ; says otherwise; the built-in table
+    call px_font_init               ; until PXSTEIN.HS is read (below)
     xor al, al
     call px_level_load              ; E1M1 into the two map layouts and
     jc .refuse                      ; the tables
@@ -301,6 +315,12 @@ px_entry:
     call OSAPI_WM_CREATE
     jc .full
     mov [px_win], bx
+    OS88_REGION_MOVABLE px_reloc    ; THE CARVE MAY MOVE (SPEC.md 66.6.1.2,
+                                    ; 97.9): part 0 is a re-homed program and
+                                    ; the other parts are INSIDE its region,
+                                    ; so the proc is not a `ret` - it moves
+                                    ; the segment words the loader left and
+                                    ; the ones px_gen_init derived from them
     mov al, 1                       ; THE LAYOUT IS FIXED (SPEC.md 11.93): 80
     call OSAPI_WM_KEEPH             ; band rows + 24 HUD + 16 line = 120
                                     ; content rows under an 18-row title, and
@@ -327,6 +347,8 @@ px_entry:
                                     ; clamped (pxset.inc) - after the adapter
                                     ; so the Mode pick can be checked against
                                     ; what this display offers
+    call px_hs_load                 ; PXSTEIN.HS (pxhs.inc): the UI task, here
+    call px_toggle_captions         ; "Sound: On" / "Mouse: Off" (97.13)
     call px_tex_caption             ; "Textured" says whether it can be had
     cmp word [px_shseg], 0
     je .noraster                    ; no shadow: no backend to set up either
@@ -335,6 +357,8 @@ px_entry:
     call px_auto_start              ; ...and the rung a window starts at on
                                     ; this tier (97.8): px_apply runs here,
                                     ; and a zeroed rung byte is Wire
+    mov byte [px_cardl], 0          ; ...and the attract card owed on the
+    call px_card_owe                ; first frame
     mov bx, [px_win]
     mov si, px_menus
     call OSAPI_MENU_SET
@@ -351,6 +375,79 @@ px_entry:
     pop di
     pop si
     ret
+
+; -----------------------------------------------------------------------------
+; px_reloc - our region moved (SPEC.md 66.6.1, 66.6.1.2): BX = the segment it
+;            WAS at, DX = where it is now, DS = the new one. Preserves every
+;            register.
+;
+; NOT A `ret`, for tests/rehome's reason (rp_reloc is the model): this is a
+; RE-HOMED program, its region is the parts carve, and the carve holds the
+; scratch the scalers are generated into (part 1) and the byte textures
+; (part 2) beside part 0 - so the loader's handoff named two segments that
+; MOVE WITH US, and nothing in the kernel knows
+; those words exist. EVERY WORD THAT NAMES OUR OWN REGION, enumerated
+; (97.9's table), each moved by the delta when it is not 0 (a refused part
+; is 0, and a delta added to 0 is a wild segment - 66.6.1's "a proc guards
+; its zeros"):
+;   px_hand + PXH_GEN / PXH_BT                the loader's two
+;   px_bseg, and the segment half of px_qcur / px_qcurv / px_qcurh
+;                                             the bodies: part 1, or part 0
+;                                             itself when part 1 was refused
+;   px_drvp + 2, px_drv2p + 2                 the driver's two far entries
+;   [PXG_QTEX] INSIDE part 1                  the wall pass's ES: the byte
+;                                             textures' segment, copied there
+;                                             by px_gen_init - rewritten from
+;                                             the fixed PXH_BT
+; and NOT: PXH_LEV (the level stream is a lazy part since wave 4, fetched
+; into a claim of its own), PXH_ART and PXH_SPR (the masters and the sprite set are claims of
+; their OWN, slot-owned data claims the compactor never moves - the same
+; rule tests/rehome's rp_cseg follows), px_shseg (a pinned claim), px_dseg
+; (the shadow or the framebuffer), [PXG_QSPR] (the sprite set's). The
+; far-call return part 0 leaves on a stack during a compose is the other
+; half, and it is never there when this runs: the region moves only while
+; the worker is PARKED in OSAPI_TASK_ALIVE, where its stack is empty, and
+; the kernel then re-enters it at px_worker_rs (OS88_WORKER_RESTARTABLE,
+; 66.6.2); a callback or a bracket names us in [wm_pkgs], which pins us
+; -----------------------------------------------------------------------------
+px_reloc:
+    push ax
+    push bx
+    push cx
+    push si
+    push es
+    mov ax, dx
+    sub ax, bx                      ; AX = the delta, in paragraphs
+    mov si, px_rltab
+    mov cx, PX_RLN
+.w:
+    mov bx, [si]
+    cmp word [bx], 0
+    je .n                           ; a refused part: 0, and it stays 0
+    add [bx], ax
+.n:
+    inc si
+    inc si
+    loop .w
+    mov ax, [px_hand + PXH_GEN]     ; ...and part 1's own copy of the byte
+    or ax, ax                       ; textures' segment, from the word just
+    jz .out                         ; fixed
+    mov es, ax
+    mov ax, [px_hand + PXH_BT]
+    mov [es:PXG_QTEX], ax
+.out:
+    inc byte [px_moved]             ; the gate reads this: a proc declared and
+    pop es                          ; never called is 66.2's own failure
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+px_rltab:   dw px_hand + PXH_GEN, px_hand + PXH_BT
+            dw px_bseg, px_qcur + 2, px_qcurv + 2, px_qcurh + 2
+            dw px_drvp + 2, px_drv2p + 2
+PX_RLN      equ ($ - px_rltab) / 2
 
 ; =============================================================================
 ; THE WINDOW CALLBACKS - near procs, ES = KERNEL_SEG, the gfx lock held
@@ -396,10 +493,12 @@ px_paint:
     call px_black_around
     call px_spawn_ck                ; the worker starts here, not at entry
     mov byte [px_whole], 1          ; the whole band, whatever the worker's
-    cmp byte [px_composing], 0      ; own dirty rows say (97.5)
+    mov byte [px_hudw], 1           ; own dirty rows say (97.5) - and the
+    cmp byte [px_composing], 0      ; whole bar, which the black just took
     jne .line                       ; mid-compose: the worker's next pass
                                     ; blits it (px_render_win's .whole exit -
     call px_blit_win                ; no cast is owed for a blackened glass)
+    call px_hud_blit
 .line:                              ; ...else now, off the shadow as it stands
     call px_line_draw
 .card:
@@ -430,6 +529,12 @@ px_paint:
 ; clobbers AX, BX, CX, DX
 px_black_around:
     mov byte [px_repaint], 0
+    mov byte [px_hudw], 1           ; THE BAR IS UNDER THE BAND: the black
+                                    ; below it takes the bar too, so the bar
+                                    ; is owed whole (px_hud_blit) - the first
+                                    ; cut set this in px_paint alone, and a
+                                    ; Size change's black left the window's
+                                    ; bar blank (tests/pxsfsx.py, 97.13)
     mov al, CBLACK
     call OSAPI_SET_COLOR
     mov ax, [px_cx]
@@ -520,11 +625,31 @@ px_oncmd:
     or al, al
     jnz .pause
     call px_go_fsx
-    jmp short .out
+    jmp .out
 .pause:
+    cmp al, 1
+    jne .snd
+    cmp byte [px_state], PXST_PLAY  ; a pause is PLAY's (px_key_common)
+    jne .pref
     xor byte [px_pause], 1
     mov byte [px_lined], 1
-    jmp short .out
+    call px_pause_msg
+.gout:
+    jmp .out
+.pref:                              ; ...and outside it the item SAYS SO on
+    mov byte [px_lrefuse], 2        ; the window's line (SPEC.md 47; review
+    mov byte [px_lined], 1          ; r2) rather than changing nothing
+    jmp .out
+.snd:
+    cmp al, 2
+    jne .mouse
+    xor byte [px_sound], 1          ; Sound (97.13): the effects through
+    jmp short .tog                  ; OSAPI_SND_TONE, on or off
+.mouse:
+    xor byte [px_mouse], 1          ; Mouse: steering by the pointer's offset
+.tog:
+    call px_toggle_captions
+    jmp .save
 .mode:
     mov bl, [px_mode0]
     or al, al
@@ -598,7 +723,7 @@ px_oncmd:
 ; wave 2). The first cut spent a fourth cell on "Resolution" and promised
 ; four more rows beside it, which nasm would have refused at wave 2
     OS88_MENUSET px_menus, px_name, px_oncmd
-        OS88_MENU px_m_game, px_i_game, 2
+        OS88_MENU px_m_game, px_i_game, 4
         OS88_MENU px_m_mode, px_i_mode, 2
         OS88_MENU px_m_det, px_i_det, 6
         OS88_MENU px_m_view, px_i_view, 7
@@ -606,8 +731,13 @@ px_oncmd:
 
 px_name:     db 'Pixelstein 3D', 0
 px_m_game:   db 'Game', 0
-px_i_game:   dw px_s_gofull, px_s_pause     ; item 0's caption is rewritten by
+px_i_game:   dw px_s_gofull, px_s_pause, px_s_sndon, px_s_mouoff
+                                            ; item 0's caption is rewritten by
 px_s_gofull: db 'Full Screen', 0            ; px_adapter when no mode can be had
+px_s_sndon:  db 'Sound: On', 0              ; items 2 and 3 name their state
+px_s_sndoff: db 'Sound: Off', 0             ; (an app menu has no check mark,
+px_s_mouon:  db 'Mouse: On', 0              ; SPEC.md 12.2 - apps/dotdel's
+px_s_mouoff: db 'Mouse: Off', 0             ; reasoning), px_toggle_captions
 px_s_gofulln: db 'Full Screen (no mode)', 0 ; (not MENU_DIS: apps/tank's
                                             ; precedent, SPEC.md 97.8 - the
                                             ; item still says why)
@@ -665,6 +795,20 @@ px_tpl:
     dw px_ttl, px_paint, px_onkey, px_onclick
 
     OS88_PREFER px_pref, PX_WINW, PX_WINH, PX_WINW, PX_WINH, PX_WINW, PX_WINH
+
+; px_toggle_captions - the Game menu's Sound and Mouse items say what is ON
+px_toggle_captions:
+    mov word [px_i_game + 4], px_s_sndon
+    cmp byte [px_sound], 0
+    jne .m
+    mov word [px_i_game + 4], px_s_sndoff
+.m:
+    mov word [px_i_game + 6], px_s_mouoff
+    cmp byte [px_mouse], 0
+    je .out
+    mov word [px_i_game + 6], px_s_mouon
+.out:
+    ret
 
 ; px_tex_caption - the Detail row's Textured item names what it is, or why
 ;                  it is not (SPEC.md 47): the parts that arrived decide,
@@ -730,12 +874,25 @@ px_abdismiss:
     ret
 
 px_ablines:
-    dw px_ab1, px_ab2, px_ab3, px_ab4, px_ab5, 0
-px_ab1:      db 'Pixelstein 3D for os8088', 0
-px_ab2:      db 0
-px_ab3:      db 'A raycast shooter in the shape of', 0
-px_ab4:      db 'the 1992 one, priced for the 8088.', 0
-px_ab5:      db 'Textured, flat and wireframe walls.', 0
+    dw px_ab1, px_ab2, px_ab3, px_ab4, px_ab5, px_ab6, px_ab7, px_ab8, px_ab9
+    dw px_ab10, 0                   ; (TEN lines: the CGA desktop's content
+                                    ; box clips an eleventh - review r2's
+                                    ; screendump of the first eleven)
+px_ab1:      db 'Pixelstein 3D  version 0.4', 0     ; THE NUMBERS ARE MEASURED
+px_ab2:      db 'A raycast shooter in the shape of', 0   ; (SPEC.md 97.13):
+px_ab3:      db 'the 1992 one: eight floors, guards,', 0 ; MartyPC's cycle-
+px_ab4:      db 'doors, keys - priced for the 8088.', 0  ; exact 5150 CGA. The
+px_ab5:      db 0                                        ; FINISHED frame on
+px_ab6:      db 'A 4.77 MHz 5150 with CGA plays 8.7', 0  ; scene A (the sim
+px_ab7:      db 'fps at Textured Low res 64x80 (the', 0  ; running - what a
+px_ab8:      db 'finished frame, the world running);', 0 ; player sees; review
+px_ab9:      db 'the timedemo (T on the title page)', 0  ; r2: the first cut
+px_ab10:     db 'walks a frozen world at 10.1-10.2.', 0  ; quoted a frozen
+                                                         ; repaint), and the
+                                                         ; timedemo's card -
+                                                         ; the one a field
+                                                         ; owner compares
+                                                         ; against
 
 ; =============================================================================
 ; the modules
@@ -751,6 +908,9 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
 %include "pxgame.inc"
 %include "pxact.inc"
 %include "pxset.inc"
+%include "pxhuda.inc"
+%include "pxhud.inc"
+%include "pxhs.inc"
 %include "pxart.inc"
 ; THE GREYED CAPTION IS A FACT (SPEC.md 47): held to the three constants it
 ; is the sum of, here because two of them are pxart.inc's
@@ -771,7 +931,7 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
 ; a fence while that sum stays under it. Here, after pxart.inc, because
 ; PXA_TEX is its
 %if PXA_TEX * 4 + PX_ROWS * 4 + PXA_TEX * PXG_PHMAX + 2 * PXA_TEX * 2 + 1 > PXG_EMITMAX
-%error "PXG_EMITMAX is under the tallest Low-res scaler: the generator's fence would let one emission end past part 2"
+%error "PXG_EMITMAX is under the tallest Low-res scaler: the generator's fence would let one emission end past part 1"
 %endif
 %include "os88pit.inc"
 
@@ -894,7 +1054,7 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
                                     ; class's, and a Mode change to another
                                     ; retries (px_tex_setup)
     ZBYTE px_btback                 ; the ink class the byte set was made for
-    ZBUF  px_drvp, 4                ; (PXG_DRV, part 2): the driver's far entry
+    ZBUF  px_drvp, 4                ; (PXG_DRV, part 1): the driver's far entry
     ZBUF  px_drv2p, 4               ; ...and the sprite pass's (PXG_DRV2)
     ZWORD px_qp                     ; the draw queue's write pointer
     ZWORD px_gcot                   ; the codeofs table being reserved (97.3)
@@ -948,6 +1108,8 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
     ZWORD px_inkw                   ; the DIE wash's (97.8)
     ZBUF  px_fsi, FSI_SIZE
     ZBUF  px_devoff, PX_ROWS * 2
+    ZBUF  px_hudoff, PX_HUDROWS * 2 ; ...and the bar's rows after them: ONE
+                                    ; table px_devrows walks on into (97.13)
     ZWORD px_shseg
 ; --- the window --------------------------------------------------------------
     ZWORD px_win
@@ -1042,10 +1204,6 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
                                     ; not redrawn (97.6)
     ZBYTE px_wnext                  ; ...and the frame this frame shows
     ZBYTE px_spg                    ; the page this frame is on (0, 1)
-    ZBYTE px_statd                  ; the line's health and ammo cells are
-                                    ; owed (pxwin.inc's px_stat_draw)
-    ZBYTE px_lhx                    ; ...their cell offset in the line
-                                    ; (0xFF: the line was never drawn)
     ZBYTE px_firek                  ; Ctrl was down last tick (one shot a
                                     ; press for the pistol and the knife)
     ZBYTE px_usek                   ; Space was down last tick
@@ -1064,7 +1222,7 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
     ZBUF  px_sc, PX_MAXSPR * PXS_C_SIZE
     ZBUF  px_scn, PXS_C_SIZE        ; the candidate being built
     ZWORD px_sfr                    ; the post walk: the frame's base in
-                                    ; part 4...
+                                    ; the sprite claim (PXH_SPR)...
     ZWORD px_scot                   ; ...the scaler's codeofs table
     ZWORD px_sc2t                   ; ...its col2tex block (the width byte)
     ZWORD px_sdi                    ; ...the column's DI
@@ -1111,6 +1269,96 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
     ZBYTE px_ady
     ZBYTE px_adist
     ZBYTE px_hitdmg                 ; a hit's damage, banked across a call
+    ZBYTE px_moved                  ; px_reloc has run this many times: the
+                                    ; compaction gate's proof (tests/pxsmove.py)
+; --- the bar and the cards (97.13; pxhud.inc) ---------------------------------
+    ZWORD px_gputp                  ; the backend's writer...
+    ZWORD px_hlay                   ; ...the bar's layout
+    ZBYTE px_gcb                    ; ...a cell's bytes
+    ZBYTE px_hx0                    ; ...the bar's first byte
+    ZBYTE px_hrows                  ; ...its rows (24; 20 on C160)
+    ZBUF  px_hinks, 4               ; ...its four inks
+    ZBYTE px_gink                   ; the writer's ink this call
+    ZBYTE px_gdim                   ; ...Mode X's bytes a row
+    ZBUF  px_glyb, 8                ; a glyph, staged out of the kernel's face
+    ZWORD px_gtab                   ; OSAPI_FONT_GLYPHS: the table...
+    ZWORD px_gseg
+    ZBYTE px_gfirst                 ; ...and its range (one word store:
+    ZBYTE px_glast                  ; adjacent, px_font_init)
+    ZBUF  px_hudv, 2 * PXF_N * 2    ; each field as last drawn, per PAGE
+    ZBUF  px_hsnap, 2 * PXF_SNAP    ; ...the inputs they were drawn from
+    ZBUF  px_hsnow, PXF_SNAP        ; ...and the inputs now
+    ZBYTE px_hudd                   ; the bar owes a look (px_hud_poll)
+    ZBYTE px_hudw                   ; a paint blackened it: blit it whole
+    ZWORD px_hudn                   ; field rewrites (tests/pxshud.py reads)
+    ZBYTE px_hr0                    ; this frame's bar rectangle: rows...
+    ZBYTE px_hr1
+    ZBYTE px_hb0                    ; ...and bytes
+    ZBYTE px_hb1
+    ZBUF  px_hrq, 4 * PXF_N          ; ...and each field's own, for the shadow
+    ZBYTE px_hrqn                   ;    presents (0xFF: overflowed, the union)
+    ZBUF  px_hnum, 6                ; a number's digits, right to left
+    ZBUF  px_hcell, 2 * 14          ; each number's cells as last put, per
+                                    ; PAGE (PX_HCELLS, rounded to words:
+                                    ; px_hud_setup fills it a word at a time)
+    ZWORD px_hcp                    ; px_hf_num's walk through it
+    ZBUF  px_hmbuf, 24              ; a message, built
+    ZBYTE px_hmsg                   ; the left label row's message (PXM_*)
+    ZBYTE px_hmsgt                  ; ...ticks it stands (0: sticky)
+    ZBYTE px_hmsgn                  ; ...its post's serial, in steps of 4
+    ZBYTE px_wrs                    ; worker restarts at px_worker_rs (66.6.2)
+    ZWORD px_sfxn                   ; OSAPI_SND_TONE effects played (px_sfx)
+    ZBYTE px_sfxl                   ; ...the last one's PXSFX_*
+    ZBYTE px_hmsgw                  ; ...one owed, posted by px_timers
+    ZBYTE px_grin                   ; ticks of the face's grin
+    ZBYTE px_cardd                  ; the card is owed (2: both Mode X pages)
+    ZBYTE px_cardl                  ; ...one line of it alone (line + 1)
+    ZBUF  px_cbuf, PXCD_LINES * PXCD_LW
+; --- the states (97.13; pxgame.inc) ------------------------------------------
+    ZBYTE px_stimer                 ; READY's and OVER's clock
+    ZBYTE px_cardhold               ; ticks a new card ignores its keys
+    ZBYTE px_newgame                ; the floor that loads next starts a game
+    ZBYTE px_victory                ; the last floor was left: YOU ESCAPED
+    ZBYTE px_fworld                 ; this frame composed the world
+    ZBYTE px_vcur                   ; Mode X: bit p set, page p shows the pose
+    ZBYTE px_vcatch                 ; ...a catch-up owed (px_modex_hud)
+    ZBYTE px_fcatch                 ; ...and taken by this frame
+    ZBYTE px_fown                   ; ...a force was owed at its start
+    ZBYTE px_fdo                    ; ...a force or a dirty was
+    ZBYTE px_ckill                  ; the floor's ratios: found...
+    ZBYTE px_nkill                  ; ...of
+    ZBYTE px_csec
+    ZBYTE px_nsec
+    ZBYTE px_ctreas
+    ZBYTE px_ntreas
+    ZWORD px_ltick0                 ; the floor's first tick (px_dtick)
+    ZWORD px_ltime                  ; ...and its length, at the switch
+; --- the scores and the codes (97.13; pxhs.inc) -------------------------------
+    ZBUF  px_hs, PX_NHS * 2         ; the scores, best first...
+    ZBUF  px_hsn, PX_NHS * 3        ; ...and the initials (adjacent: one copy)
+    ZBUF  px_hsbuf, PX_HSFSZ        ; the file, staged
+    ZBUF  px_ini, 4                 ; the initials being typed...
+    ZBYTE px_inip                   ; ...and how many
+    ZBUF  px_code, 4                ; a code being typed...
+    ZBYTE px_codep                  ; ...how many (0xFF not taking one,
+                                    ; 0xFE the last one was bad)
+; --- the timedemo (97.13) ------------------------------------------------------
+    ZBYTE px_demoreq                ; start one between frames
+    ZBYTE px_lrefuse                ; the line says a refusal once: 1 'No
+                                    ; full-screen mode', 2 'Pause is for play'
+    ZBYTE px_demoab                 ; ...end this one, a key was pressed
+    ZBYTE px_demodone               ; the attract card shows its numbers
+    ZBYTE px_demon                  ; steps left in this run
+    ZWORD px_demokt                 ; ...its turn (low) and walk (high)
+    ZWORD px_demoi                  ; the script's next run
+    ZWORD px_demof0                 ; px_frames and the ticks at the start
+    ZWORD px_demot0
+    ZWORD px_demof                  ; ...and the numbers: frames, ticks,
+    ZWORD px_demot
+    ZWORD px_demofps                ; fps in tenths
+    ZBUF  px_demosv, 3              ; Detail, Res, Size in force before a run
+    ZBYTE px_demosvd                ; ...kept (px_demo_restore owes them back)
+    ZBUF  px_demorg, 3              ; the rung, resolution and Size it drew at
 %ifdef PXPROBE
     ZWORD px_pr_lad                 ; tests/pxsperf.py --probe: the frame's
     ZWORD px_pr_skip                ; ladder entries and skipped columns. A
@@ -1130,6 +1378,19 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
 ; pass, the wrong way in two quadrants - must never cross that range in the
 ; 63 passes the solid border allows. This is also 97.2.3's "256 bytes from
 ; either end of the segment", asserted
+; px_devrows WALKS ON from the view's rows into the bar's (97.13)
+%if px_hudoff - px_devoff != PX_ROWS * 2
+%error "px_hudoff must follow px_devoff: px_devrows fills them as one table"
+%endif
+%if px_glast - px_gfirst != 1
+%error "px_glast must follow px_gfirst: px_font_init stores them as one word"
+%endif
+%if px_hr1 - px_hr0 != 1 || px_hb1 - px_hb0 != 1
+%error "px_hr1/px_hb1 must follow px_hr0/px_hb0: px_hud_draw and px_hrq_add move each pair as one word"
+%endif
+%if px_hsn - px_hs != PX_NHS * 2
+%error "px_hsn must follow px_hs: pxhs.inc copies them as one run"
+%endif
 %if OS88_IMAGE_SIZE + PX_MAPT_AT < PX_FARJA + 64 * 63 + 256
 %error "px_mapT is under the ja far key's band: the cast's parked-walker keys are wrong"
 %endif

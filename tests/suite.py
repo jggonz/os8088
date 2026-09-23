@@ -462,7 +462,7 @@ FAST = [
         "about the band's three sizes, which is a constant written down in "
         "two files with no linker here to notice. The byte-for-byte "
         "reproduction row SKIPS, naming the pin, without $PACMANC_SRC"),
-    Row("pxs-gen", "fast", py("tests/unit/t_pxsgen.py"), 0.8,
+    Row("pxs-gen", "fast", py("tests/unit/t_pxsgen.py"), 0.9,
         "PIXELSTEIN 3D's generated includes are what their generators produce "
         "(SPEC.md 97.12): apps/pixelstein/pxtab.inc - the sine, tangent and "
         "fan tables the package, the reference renderer and the level tool "
@@ -471,7 +471,9 @@ FAST = [
         "t_paccman's mould. A stale one is a package assembled against "
         "numbers tools/pxssim.py does not share, which fails as a wrong wall "
         "on a 5150 three boots later rather than here. pxart.inc joins the "
-        "list when wave 2 writes it. FAST and not soak, and the EXCEPTION to "
+        "list when wave 2 writes it, and pxhuda.inc - the status bar's "
+        "one-bit masters, tools/pxsart.py --hud, which runs the HUD alone so "
+        "the row stays ~0.05s dearer - in wave 4. FAST and not soak, and the EXCEPTION to "
         "the one-package rule pxs-level below obeys (suite.py's 'ONE package, "
         "beside a change to it'): these includes are a BUILD INPUT - a "
         "Makefile recipe assembles the bench against pxtab.inc and two host "
@@ -7247,9 +7249,74 @@ SOAK = [
         "RUNNING and REPORTED (PLAN 10's risk 8). --shots writes the "
         "done-when screendumps. SOAK: the fast tier has no room (97.10)",
         needs=("marty", "nasm"), serial=True, alone=True),
+    Row("pxsmove", "soak", py("tests/pxsmove.py"), 120.0,
+        "SPEC.md 97.13, 66.6.1.2, 66.6.2: PIXELSTEIN's REGION MOVES and the "
+        "game is still playing. Part 0 is a RE-HOMED program whose carve holds "
+        "the scalers' scratch and the byte textures beside it, named by "
+        "absolute segment in the loader's handoff - so its px_reloc is not a "
+        "`ret` - and it hires a worker, handed back by OS88_WORKER_RESTARTABLE "
+        "px_worker_rs. tests/rehomemove.py's shape: PXSTEIN opens on the 5150 "
+        "with Textured pinned (so the frame goes through px_drvp, px_bseg and "
+        "part 1's PXG_QTEX), tests/filler takes the arena down and forces the "
+        "compaction. Asserts the carve moved, px_reloc RAN, PXH_GEN and PXH_BT "
+        "moved by the delta into the carve's new extent while PXH_LEV, PXH_ART "
+        "and PXH_SPR (claims of their own) did not, the derived words "
+        "followed, the level stream reads through PXH_LEV, and pose A forced "
+        "whole after the move composes THE SAME SHADOW byte for byte, the "
+        "worker alive AND RE-ENTERED at px_worker_rs (px_wrs, 0 before the "
+        "compaction and more after: a frame count alone passes a worker that "
+        "was never parked). Broken on purpose with the proc's table cut to one row "
+        "the worker far-calls the old driver and no frame is ever drawn. "
+        "Needs `make pxsmove`.",
+        needs=("marty",), serial=True, wants=("build/pxsmove360.img",)),
+    Row("pxsstate", "soak", py("tests/pxsstate.py"), 700.0,
+        "SPEC.md 97.13: PIXELSTEIN's seven states in BOTH worlds, walked by "
+        "the keys a player presses and the world's own clocks (a guard's "
+        "shots, the DIE wash, READY's and OVER's timers), and the score file "
+        "READ BACK AFTER A RESTART. Windowed: ATTRACT at launch, a floor's "
+        "code, Esc abandoning a game, READY, PLAY, a death with a life left, "
+        "the last death's GAME OVER and ENTER with the initials typed through "
+        "W_ONKEY - the UI task's commit (SPEC.md 20.6 rule 7) - and "
+        "PXSTEIN.HS read off the live floppy by tools/os88flush.py's own "
+        "FAT12 walker. In the bracket: F from ATTRACT starting a NEW game, "
+        "LEVELDONE, the next floor, the last death again with the initials "
+        "typed through the bracket's own int 16h loop, and the TIMEDEMO's "
+        "numbers - pinned to Textured Low res Size 64 whatever was in force, "
+        "the bar a new game's, what was in force restored. Since review r1 "
+        "also: a wrong floor code's BAD CODE; a shot's OSAPI_SND_TONE effect "
+        "(px_sfxn); the Sound and Mouse menu items picked by name and "
+        "PXSTEIN.CFG read back off the floppy both ways; the sticky auto-pause "
+        "on a lost focus, held until P; the eighth floor's elevator ending "
+        "the episode (YOU ESCAPED); and T with no full-screen mode leaving no "
+        "timedemo request behind. Then the floppy flushed and a second machine booted on it: "
+        "the table the package reads at entry is the one the first "
+        "committed. Only what a player cannot do quickly is poked.",
+        needs=("marty",), serial=True),
+    Row("pxshud", "soak", py("tests/pxshud.py"), 300.0,
+        "SPEC.md 97.13: PIXELSTEIN's status bar is CHANGE-ONLY - a quiet "
+        "second with frames drawn rewrites no field (px_hudn), windowed and "
+        "in the bracket; the window's bar sits at bytes 20..59 of the "
+        "shadow's rows 80..103 and nowhere else; one change is one field, "
+        "inside its own cells; the bar on the CGA glass is the shadow's byte "
+        "for byte after the present's rectangle copy; health 100 -> 55 is "
+        "two fields (the digits and the face); V twice posts SIZE over SIZE "
+        "and the label row is rewritten again (the message's serial); and "
+        "back from the bracket a still player in PLAY draws NO frame in a "
+        "quiet second (px_cardd 0 - review r1's empty-frame loop, 33 a "
+        "second with the fix taken out).",
+        needs=("marty",), serial=True),
+    Row("pxshud-vga", "soak",
+        py("tests/pxshud.py", "--machine", "os8088_xt_vga"), 300.0,
+        "SPEC.md 97.13: pxshud on the XT-VGA, where the bracket is Mode X "
+        "and THE BAR IS PER PAGE: a change rewrites each field once on EACH "
+        "page (the present flips, so a page shown with a stale bar is a "
+        "flicker), the two pages' px_hudv agree afterwards and their bar "
+        "rows read the same bytes.",
+        needs=("marty",), serial=True),
     Row("t_pxsmap", "soak", py("tests/unit/t_pxsmap.py"), 3.0,
-        "SPEC.md 97.6, 97.7 (wave 3): every level passes the rules WITH the "
-        "DDA sweep in both door states, at least three floors, the doors in "
+        "SPEC.md 97.6, 97.7 (waves 3-4): every level passes the rules WITH the "
+        "DDA sweep in both door states, the episode's eight floors e1m1..e1m8 by "
+        "name, the doors in "
         "cell order (px_door_of's row table), a patroller on E1M2, and THE "
         "MELEE INVARIANT by name - no open cell with more than two guards "
         "within 1.5 tiles, the bound the sprite cap rests on - with a "

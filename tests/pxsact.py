@@ -66,11 +66,23 @@ sim would, then lets the sim run (px_simoff 0) and reads what it did:
       vulnerable, a guard a tile off in CHASE - the hit puts px_state at
       DYING, and PX_FADE ticks later the floor restarts: health 100, a life
       fewer, PLAY.
+  (n) THE SECRET DOOR (wave 4's gate for wave 3's ungated SPECIAL-on-a-door
+      cell, 97.8): E1M1's `s` - a door in the wall's own material - opens
+      to Space like any door, its cell byte keeps the wall's material, and
+      its first opening counts one of the floor's secrets (px_csec, 97.13).
+  (p) THE KNIFE AT 0 AMMO: the rounds poked to 0 with the pistol chosen,
+      a guard a tile ahead under the crosshair; Ctrl stabs - the rounds stay
+      0, the frame drawn is the knife's (px_wnext 0..2) and the guard is
+      hurt.
   (j) THE ELEVATOR SWITCH, inside the running bracket: Space at (2,22)'s
-      switch names the next floor, the next frame loads E1M2 (px_floor 1)
-      between frames with the sprite list and the aim live, and frames go
-      on being drawn on it. LAST, because the floor is a different one
-      after it.
+      switch ends the floor - the LEVELDONE card (97.13) - and THE CELL
+      BYTE READS 13 IN BOTH LAYOUTS (material 14 -> 13, 0xD1 in px_map and
+      px_mapT: wave 3 changed the byte and nothing read it back); Space on
+      the card loads E1M2 (px_floor 1) between frames, READY, then PLAY, and
+      frames go on being drawn on it.
+  (o) THE SILVER LOCK, on E1M2: Space at its silver door with the GOLD key
+      alone leaves it SHUT; with the silver key it opens. LAST, because the
+      floor is a different one after (j).
 
 --shots DIR writes the done-when screendumps off the final binary, on
 whichever machine this runs on: door 0 OPEN with its jambs, the second
@@ -191,21 +203,31 @@ def main():
               % (a1["ang"], a1["dir"]))
 
         # --- (b) it shoots ------------------------------------------------------
+        # THE HEALTH AT 255 FIRST: a hit is up to 63 under two tiles, two can
+        # land inside the six ticks a sample spans, and a death here restarts
+        # the floor under every leg after it (wave 4's first run did exactly
+        # that: 100 -> 16, then DYING, then guard 0 back at its spawn)
+        m.pause()
+        g.poke_byte("px_health", 255)
+        m.run()
         g.god(False)
         h0 = g.player()["health"]
         attacked = False
-        for _ in range(20):
-            ticks(g, 6)
+        for _ in range(120):
+            ticks(g, 1)
             if g.actor(0)["state"] == ATTACK:
                 attacked = True
             if g.player()["health"] < h0:
                 break
+        g.god(True)
         h1 = g.player()["health"]
         print("   health %d -> %d; the ATTACK state %s" % (h0, h1, "seen" if attacked else "not seen"))
         check(h1 < h0, "the guard SHOT the player: health fell (%d -> %d)" % (h0, h1))
         check(g.player()["state"] == 0, "...and the player is still alive (state %d)"
               % g.player()["state"])
-        g.god(True)
+        m.pause()
+        g.poke_byte("px_health", 100)
+        m.run()
 
         # --- (c) it dies ------------------------------------------------------
         m.pause()
@@ -220,6 +242,15 @@ def main():
         g.force_all_poke()
         m.run()
         g.wait_frames(1)
+        # A FRAME IN FLIGHT when the pokes landed completes first and counts
+        # (its pose the old one, its aim 255); the poked pose's frame follows
+        # it - the force is kept since wave 4 (97.13) - so the aim is waited
+        # for rather than read at the first frame
+        try:
+            os88marty.until(m, lambda mm: g.byte("px_aim") == 0, "the aim", poll=0.05,
+                            limit=30.0)
+        except os88marty.MartyError:
+            pass
         aim = g.byte("px_aim")
         check(aim == 0, "the sprite pass aims at the guard under the crosshair (px_aim %d)" % aim)
         dead = False
@@ -392,6 +423,75 @@ def main():
               % (sc, g.player()["ammo"]))
         check(kind == 0xFF, "...and the static reads taken (kind %02x)" % kind)
 
+        # --- (n) THE SECRET DOOR (SPECIAL on a door cell, 97.8, 97.13) ---------
+        sec = [i for i, d in enumerate(g.doors()) if d["flags"] & 8]
+        check(len(sec) >= 1, "E1M1 has a secret door (%d)" % len(sec))
+        if sec:
+            ds = g.door(sec[0])
+            scell = ds["cell"]
+            sbyte = cell_byte(g, scell)
+            if ds["flags"] & 4:                     # DOOR_EW: the passage runs N-S
+                ex, ey, eh = (scell & 63) * 256 + 128, (scell >> 6) * 256 + 128 - 256, 1024
+            else:
+                ex, ey, eh = (scell & 63) * 256 + 128 - 256, (scell >> 6) * 256 + 128, 0
+            if g.m.read(g.base + g.s["px_map"] + ((ey >> 8) << 6 | (ex >> 8)), 1)[0] & 1:
+                ex, ey, eh = ((ex + 512, ey, 2048) if eh == 0 else (ex, ey + 512, 3072))
+            m.pause()
+            g.eye_poke(ex, ey, eh)
+            g.pcell_poke(ex, ey)
+            csec0 = g.byte("px_csec")
+            g.force_all_poke()
+            m.run()
+            g.wait_frames(1)
+            tap(m, "Space", 3, g)
+            ticks(g, 12)
+            d = g.door(sec[0])
+            print("   the secret door %d at (%d,%d): byte %02x, state %d, pos %d, secrets %d -> %d of %d"
+                  % (sec[0], scell & 63, scell >> 6, sbyte, d["state"], d["pos"], csec0,
+                     g.byte("px_csec"), g.byte("px_nsec")))
+            check(sbyte >> 4 not in (0, 12) and sbyte & 8,
+                  "its cell is a door in the WALL'S material with SPECIAL (%02x)" % sbyte)
+            check(d["state"] in (OPENING, OPEN) and d["pos"] > 0,
+                  "Space opens the secret door (state %d, pos %d)" % (d["state"], d["pos"]))
+            check(g.byte("px_csec") == csec0 + 1, "...and it counts one secret (%d -> %d)"
+                  % (csec0, g.byte("px_csec")))
+            check(cell_byte(g, scell) & 0xF0 == sbyte & 0xF0,
+                  "...its material nibble unchanged (%02x)" % cell_byte(g, scell))
+
+        # --- (p) THE KNIFE AT 0 AMMO (97.8: the knife is drawn and used) ------
+        m.pause()
+        px, py, head = pxslib.scene_at("a")
+        g.eye_poke(px, py, head)
+        g.pcell_poke(px, py)
+        sp2 = g.actor(2)
+        g.actor_poke(2, x=px + 256, y=py, state=STAND, hp=25, ang=2048, dir=2, flags=0)
+        g.poke_byte("px_ammo", 0)
+        g.poke_byte("px_weapon", 1)
+        g.force_all_poke()
+        m.run()
+        g.wait_frames(1)
+        aim = g.byte("px_aim")
+        check(aim == 2, "the guard a tile ahead is under the crosshair (px_aim %d)" % aim)
+        wn = []
+        for _ in range(8):
+            tap(m, "ControlLeft", 3, g)
+            ticks(g, 4)
+            wn.append(g.byte("px_wnext"))
+            if g.actor(2)["hp"] < 25:
+                break
+        a2 = g.actor(2)
+        print("   the knife: hp 25 -> %d, ammo %d, weapon frames seen %s"
+              % (a2["hp"], g.byte("px_ammo"), wn))
+        check(g.byte("px_ammo") == 0, "stabbing spends no rounds (ammo %d)" % g.byte("px_ammo"))
+        check(all(f < 3 for f in wn), "the frame drawn is the KNIFE's, not the pistol's (%s)" % wn)
+        check(a2["hp"] < 25 or a2["state"] in (PAIN, DIE, DEAD),
+              "...and the knife hurts the guard (hp %d, state %d)" % (a2["hp"], a2["state"]))
+        m.pause()
+        g.actor_poke(2, x=sp2["x"], y=sp2["y"], state=STAND, hp=25, dir=sp2["dir"], ang=sp2["ang"],
+                     flags=0)
+        g.poke_byte("px_ammo", 8)
+        m.run()
+
         # --- (m) A STILL EYE OWES NO FRAME FOR WHAT IT CANNOT SEE (review r1) ----
         # the eye at the spawn looking east, nothing pressed; the third guard
         # poked into the W room (5,9) as a PATROLLER walking east - behind
@@ -474,6 +574,11 @@ def main():
         g.wait_frames(1)
         times = g.frame_times(a.frames, mode="sim")
         ms7 = pxslib.ms(pxslib.median([t[0] for t in times]))
+        v7 = [pxslib.ms(t[0]) for t in times]       # BIMODAL (review r2): a
+        # chaser step is ~10.3 ms and a ~135 ms frame carries two steps or
+        # three by where the tick edges fall, so the frames sit near 132 and
+        # near 143 and the MEDIAN picks a mode - wave 3's 133.2 and wave 4's
+        # 143.3 are the same two modes (docs/reports/PXS-FRAME-2026-09-23.md)
         for i in range(g.byte("px_nact")):
             g.m.pause()
             g.actor_poke(i, state=STAND)
@@ -485,6 +590,8 @@ def main():
         print("   SEVEN CHASERS, scene A finished (the sim running): %6.1f ms = %5.2f fps against "
               "%6.1f ms = %5.2f fps with every guard standing (+%.1f ms: seven LOS walks a tick)"
               % (ms7, 1000.0 / ms7, ms0, 1000.0 / ms0, ms7 - ms0))
+        print("   ...the seven-chaser frames: mean %.1f ms, %.1f..%.1f (%s)"
+              % (sum(v7) / len(v7), min(v7), max(v7), " ".join("%.1f" % x for x in v7)))
 
         # --- the done-when screendumps (--shots), the sim frozen ------------------
         if a.shots:
@@ -522,6 +629,8 @@ def main():
             g.sim(True)
 
         # --- (k) the DIE wash and the restart --------------------------------------
+        # (wave 4: the wash ends in READY - "FLOOR 1", 27 ticks - and then
+        # PLAY; the row reads PLAY with 100 health, which is after both)
         m.pause()
         g._mark()
         g.eye_poke(px, py, head)
@@ -541,7 +650,7 @@ def main():
         check(dying, "a hit at health 1 puts the player in the DIE wash (state %d, health %d)"
               % (g.player()["state"], g.player()["health"]))
         restarted = False
-        for _ in range(20):
+        for _ in range(30):
             ticks(g, 3)
             pl = g.player()
             if pl["state"] == 0 and pl["health"] == 100:
@@ -565,14 +674,26 @@ def main():
         g.wait_frames(1)
         f0 = g.word("px_frames")
         tap(m, "Space", 3, g)
+        g.wait_state("done", limit=30.0)            # the LEVELDONE card (97.13)
+        sw = 22 * 64 + 2
+        b1 = cell_byte(g, sw)
+        b2 = g.m.read(g.base + g.s["px_mapT"] + 2 * 64 + 22, 1)[0]
+        check(b1 == 0xD1 and b2 == 0xD1, "the switch's cell reads material 13 (0xD1) in BOTH "
+              "layouts after the throw (px_map %02x, px_mapT %02x)" % (b1, b2))
+        check(g.player()["floor"] == 0, "...and the floor stands under the card (px_floor %d)"
+              % g.player()["floor"])
+        shot(m, a, "leveldone")
+        ticks(g, 12)                                # (the card's hold, 97.13)
+        m.key("Space")                              # the card moves on: E1M2
         loaded = False
-        for _ in range(10):
+        for _ in range(20):
             ticks(g, 3)
             if g.player()["floor"] == 1:
                 loaded = True
                 break
-        check(loaded, "Space at the elevator switch loaded the next floor (px_floor %d)"
+        check(loaded, "Space on the LEVELDONE card loaded the next floor (px_floor %d)"
               % g.player()["floor"])
+        g.wait_state("play", limit=30.0)            # READY's own clock
         g.force()
         g.wait_frames(1)
         f1 = g.word("px_frames")
@@ -580,6 +701,42 @@ def main():
         check(g.byte("px_nact") == 5 and g.byte("px_ndoors") == 17,
               "E1M2's tables are in force (%d actors, %d doors)" % (g.byte("px_nact"),
                                                                     g.byte("px_ndoors")))
+
+        # --- (o) THE SILVER LOCK (E1M2's) ---------------------------------------
+        sil = [i for i, d in enumerate(g.doors()) if d["lock"] == 2]
+        check(len(sil) >= 1, "E1M2 has a silver door (%d)" % len(sil))
+        if sil:
+            d0 = g.door(sil[0])
+            c = d0["cell"]
+            if d0["flags"] & 4:
+                cand = [((c & 63) * 256 + 128, (c >> 6) * 256 + 128 - 256, 1024),
+                        ((c & 63) * 256 + 128, (c >> 6) * 256 + 128 + 256, 3072)]
+            else:
+                cand = [((c & 63) * 256 + 128 - 256, (c >> 6) * 256 + 128, 0),
+                        ((c & 63) * 256 + 128 + 256, (c >> 6) * 256 + 128, 2048)]
+            ex, ey, eh = [p for p in cand
+                          if not g.m.read(g.base + g.s["px_map"] + ((p[1] >> 8) << 6 | (p[0] >> 8)), 1)[0] & 3][0]
+            m.pause()
+            g._mark()
+            g.eye_poke(ex, ey, eh)
+            g.pcell_poke(ex, ey)
+            g.poke_byte("px_keys", 1)               # the GOLD key alone
+            g.force_all_poke()
+            m.run()
+            g.wait_frames(1)
+            tap(m, "Space", 3, g)
+            ticks(g, 12)
+            d = g.door(sil[0])
+            check(d["state"] == SHUT and d["pos"] == 0, "Space at the silver door %d with the GOLD "
+                  "key alone leaves it SHUT (state %d, pos %d)" % (sil[0], d["state"], d["pos"]))
+            m.pause()
+            g.poke_byte("px_keys", 2)
+            m.run()
+            tap(m, "Space", 3, g)
+            ticks(g, 12)
+            d = g.door(sil[0])
+            check(d["state"] in (OPENING, OPEN) and d["pos"] > 0, "...and with the silver key it "
+                  "opens (state %d, pos %d)" % (d["state"], d["pos"]))
         g.leave_fsx()
         check(g.byte("px_inbr") == 0, "Esc left the bracket")
     if FAIL:

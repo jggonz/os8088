@@ -41,14 +41,31 @@ PXL_MAXACTORS equ 32
 PXL_MAXSTATIC equ 96
 PXL_PATROL    equ 128            ; the actor kind byte's bit 7: a patroller
 
-PXL_NLEV    equ 3
-PXL_STREAM  equ 2732             ; bytes in the whole stream
-PXL_MAXREC  equ 1054             ; ...and its longest record: the claim
+PXL_NLEV    equ 8
+PXL_STREAM  equ 9771             ; bytes in the whole stream
+PXL_MAXREC  equ 1851             ; ...and its longest record: the claim
 
 px_levdir:                       ; per level: word offset, word length,
                                 ; word spawn cell, word spawn heading
     dw 0, 1054, 195, 0        ; E1M1: 22 doors, 7 actors, 27 statics
     dw 1054, 796, 1351, 3072        ; E1M2: 17 doors, 5 actors, 17 statics
     dw 1850, 882, 326, 0        ; E1M3: 16 doors, 5 actors, 17 statics
+    dw 2732, 949, 454, 1024        ; E1M4: 20 doors, 8 actors, 17 statics
+    dw 3681, 1263, 456, 1024        ; E1M5: 28 doors, 14 actors, 28 statics
+    dw 4944, 1302, 519, 1024        ; E1M6: 26 doors, 15 actors, 33 statics
+    dw 6246, 1674, 456, 1024        ; E1M7: 36 doors, 23 actors, 33 statics
+    dw 7920, 1851, 456, 1024        ; E1M8: 38 doors, 30 actors, 37 statics
 PXL_DIRSZ   equ 8
+
+px_levpw:                        ; the floors' passwords, four letters each
+                                ; (97.13: the LEVELDONE card shows the next
+                                ; floor's, the attract page's C key takes one)
+    db 'KEEP'                     ; E1M1
+    db 'WARD'                     ; E1M2
+    db 'CELL'                     ; E1M3
+    db 'HALL'                     ; E1M4
+    db 'IRON'                     ; E1M5
+    db 'BELL'                     ; E1M6
+    db 'GOLD'                     ; E1M7
+    db 'PEAK'                     ; E1M8
 

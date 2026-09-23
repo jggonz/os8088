@@ -280,8 +280,10 @@ multi-instance:
   first-person shooter in the shape of the 1992 one, priced for the 4.77 MHz
   8088 before a line of it was shaped - fullscreen in CGA 320x200x4, the
   160x100x16 text retime, the Hercules box or Mode X, and windowed as a 1bpp
-  band; the flat-shaded corridors of its first wave, textures and guards to
-  follow).
+  band: eight floors with textured walls, guards, sliding doors, keys and
+  secret doors, a status bar, floor passwords instead of saves, a high-score
+  table, and a timedemo - T on the title page - that prints the machine's
+  own frame rate).
 - ...plus the Task Manager itself, and HELLO, a minimal package that exists to
   be the smallest thing the SDK can build.
 

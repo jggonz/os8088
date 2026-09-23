@@ -33,19 +33,22 @@ from harness import check, eq, done                         # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PXS = os.path.join(ROOT, "apps", "pixelstein")
 
-# include, generator, the generator's extra arguments
+# include, generator, the generator's extra arguments - and the option that
+# names the output, "-o" but for pxhuda.inc (wave 4, SPEC.md 97.13: the HUD
+# masters' bits, which pxsart.py writes beside pxart.inc from the same run)
 GENERATED = (
     ("pxtab.inc", "tools/pxstab.py", ()),
     ("pxlev.inc", "tools/pxslevel.py", ("--no-sweep",)),
     ("pxart.inc", "tools/pxsart.py", ()),
+    ("pxhuda.inc", "tools/pxsart.py", (), "--hud"),
 )
 
 
-def regenerate(tool, args):
+def regenerate(tool, args, flag="-o"):
     fd, tmp = tempfile.mkstemp(prefix="pxsgen_", suffix=".inc")
     os.close(fd)
     try:
-        r = subprocess.run([sys.executable, os.path.join(ROOT, tool), "-o", tmp]
+        r = subprocess.run([sys.executable, os.path.join(ROOT, tool), flag, tmp]
                            + list(args), capture_output=True, text=True, cwd=ROOT)
         if r.returncode:
             return None, (r.stdout + r.stderr).strip()[-600:]
@@ -56,7 +59,9 @@ def regenerate(tool, args):
 
 def main():
     seen = 0
-    for inc, tool, args in GENERATED:
+    for row in GENERATED:
+        inc, tool, args = row[:3]
+        flag = row[3] if len(row) > 3 else "-o"
         path = os.path.join(PXS, inc)
         if not os.path.exists(os.path.join(ROOT, tool)):
             print("t_pxsgen: %s has no generator yet (%s) - a later wave's" % (inc, tool))
@@ -64,7 +69,7 @@ def main():
         if not os.path.exists(path):
             print("t_pxsgen: %s is not written yet - a later wave's" % inc)
             continue
-        want, err = regenerate(tool, args)
+        want, err = regenerate(tool, args, flag)
         if not check(want is not None, "%s runs" % tool, why=err):
             continue
         have = open(path).read()

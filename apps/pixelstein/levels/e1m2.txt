@@ -8,6 +8,7 @@
 # the silver door guards the elevator. Every room is small and every corridor
 # kinks, for the DDA sweep's reason (97.7: mean <= 12 crossings a ray, worst
 # <= 26, doors open or shut).
+# code: WARD
 ##########################################
 #WWWWWWWWW#######bbbbbbbbbbbbb############
 #W.......W#######b...........b############

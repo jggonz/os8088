@@ -1347,8 +1347,11 @@ px_weapon_check:
     cmp byte [px_sprok], 0
     je .set
     cmp byte [px_state], PXST_PLAY
-    jne .set
-    mov al, [px_weapon]
+    je .play
+    cmp byte [px_state], PXST_DEMO  ; THE TIMEDEMO DRAWS IT TOO (review r2):
+    jne .set                        ; without it the demo's turn frame was
+.play:                              ; 5 ms of compose lighter than the one a
+    mov al, [px_weapon]             ; player sees, and its fps flattered
     cmp byte [px_ammo], 0
     jne .have
     xor al, al                      ; no rounds: the knife

@@ -3,7 +3,7 @@
 ; is the Hercules set); never pixels. The masters go to the machine as
 ; the lazy art part's LZ4 stream (build/pxsart.bin, part 4 of 97.9),
 ; which the loader expands into PXA_SIZE bytes, and px_bt_build
-; transposes them through these tables into part 3 (pxgen.inc).
+; transposes them through these tables into part 2 (pxgen.inc).
 
 PXA_NWALL   equ 15             ; wall masters, material 1 first
 PXA_TEX     equ 32             ; texels a side
@@ -15,7 +15,7 @@ PXA_SIZE    equ 30400          ; the expanded claim, bytes: the walls, then
 PXA_KB      equ 30             ; ...as OSAPI_MEM_CLAIM wants it
 PXA_SHADES  equ 2              ; lit, dark
 PXA_MATSZ   equ 2048           ; a material's bytes in the byte-texture set
-PXA_BTSIZE  equ 30720          ; ...and the whole set (part 3, 97.9)
+PXA_BTSIZE  equ 30720          ; ...and the whole set (part 2, 97.9)
 PXA_BTKB    equ 30
 
 ; THE SPRITE MASTERS in the claim (97.4, 97.6): 31 frames of 32 x 32 after

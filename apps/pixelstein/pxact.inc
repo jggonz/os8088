@@ -913,6 +913,7 @@ px_act_hurt:
     mov bx, [si + PXAC_CELL]
     call px_act_unmark              ; a body blocks nothing
     add word [px_score], 100
+    inc byte [px_ckill]             ; the LEVELDONE card's kills (97.13)
     call px_act_dirty
 .out:
     ret

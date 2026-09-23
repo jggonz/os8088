@@ -52,7 +52,7 @@ px_compose:
     mov word [px_pr_skip], 0        ; ladder entries and columns skipped
 %endif                              ; this frame (the queue's length is
                                     ; readable off px_qp in every build)
-    mov es, [px_hand + PXH_GEN]     ; ES = part 2 for the queue's entries
+    mov es, [px_hand + PXH_GEN]     ; ES = part 1 for the queue's entries
     mov ax, [px_dbase]              ; the frame's column base, summed ONCE:
     add ax, [px_cbias]              ; the page's base (Mode X alternates it)
     mov [px_cbase], ax              ; and px_x0 - 256 - the band's first byte
@@ -346,7 +346,7 @@ px_compose:
     ; quantised height px_lh: a column whose six bytes stood is skipped
     ; whole; one that moved has the ceiling and the floor put back over
     ; what the wall gave up (the ladders, as Flat) and its wall QUEUED -
-    ; (scaler, SI, DI) into part 2 - for the driver, which the end of this
+    ; (scaler, SI, DI) into part 1 - for the driver, which the end of this
     ; routine enters with ONE far call. A textured wall whose height moved
     ; must be redrawn whole (its texels shift), so there is no two-ends arm
     ; here. THE HEIGHT IS ITS OWN BYTE: top and bot clip to 0..79 for every
@@ -455,7 +455,7 @@ px_compose:
 .tnofloor:
     ; the wall: a queue entry - the scaler of this column's quantised
     ; height in this resolution's directory, SI = (mat - 1) * 2048 + side *
-    ; 1024 + column * 32 into part 3 (97.4's layout), DI = the column's
+    ; 1024 + column * 32 into part 2 (97.4's layout), DI = the column's
     ; base byte (px_cdi is biased by -256 for the ladders)
     mov bl, [cs:px_h + bp]
     xor bh, bh
@@ -778,14 +778,21 @@ px_frame_begin:
     mov byte [px_pend], 0           ; the menu handler is the UI task and
     call px_apply                   ; the compose may be the worker's
 .nopend:
+    cmp byte [px_demoreq], 0        ; the timedemo's start (97.13): a floor
+    je .nodemo                      ; loads, so between frames too - and only
+    cmp byte [px_inbr], 0           ; in a bracket, whose promise it measures
+    je .nodemo
+    call px_demo_start
+.nodemo:
     cmp byte [px_levnext], 0xFF     ; a floor to load - the switch, or the
     je .nolev                       ; DIE restart - likewise between frames
     call px_level_next              ; (97.7, 97.8; wave 3)
 .nolev:
-    cmp byte [px_force], 0
-    jne .go
-    cmp byte [px_dirty], 0
-    jne .go
+    mov al, [px_force]
+    or al, [px_dirty]
+    or al, [px_cardd]
+    or al, [px_hudd]                ; ...and the bar and the cards (97.13):
+    jnz .go                         ; nothing owed, nothing drawn
     clc
     ret
 .go:
@@ -795,21 +802,120 @@ px_frame_begin:
     xor ax, ax
     mov [px_twait], ax              ; no wait charged yet (px_wait_*)
     mov [px_twait + 2], ax
+    mov byte [px_fworld], 0
+    mov byte [px_r0], 0xFF          ; no view row written yet: a frame that
+    mov byte [px_r1], 0             ; draws only the bar presents only it
+    call px_modex_hud               ; (Mode X: the bar alone may not flip)
+    ; THE OWED WORK IS TAKEN, AND ITS FLAGS CLEARED, HERE - before the frame
+    ; draws a pixel, as wave 1 cleared them: a force poked or a resize taken
+    ; WHILE this frame composes (the UI task's px_onresize, a gate's poke)
+    ; is the NEXT frame's, and wave 4's first cut cleared them after the
+    ; compose and lost it - the frame drew the pose from before the poke
+    ; and none followed (tests/pxsact.py's leg a). The read and the clear
+    ; are ONE critical section (review r2): the UI task writes both bytes
+    ; (px_onresize's force, px_key_common's weapon key), and an IRQ0 switch
+    ; between the read and the clear would lose that write
+    pushf
+    cli
+    mov al, [px_force]
+    mov ah, [px_dirty]
     mov byte [px_force], 0
     mov byte [px_dirty], 0
-    cmp byte [px_state], PXST_DYING ; THE DIE WASH (97.8): no cast, no
-    jne .world                      ; compose - the band in the wash's tone
-    call px_fade_draw               ; once, and nothing until the restart
-    stc
-    ret
+    popf
+    mov [px_fown], al               ; a force (a new backend, a paint)...
+    or al, ah
+    mov [px_fdo], al                ; ...or anything, owed for the view
+    mov ah, [px_vcatch]             ; (px_modex_hud's catch-up, taken too)
+    mov byte [px_vcatch], 0
+    mov [px_fcatch], ah
+    mov al, [px_state]
+    cmp al, PXST_PLAY
+    je .world
+    cmp al, PXST_DEMO
+    je .world
+    cmp al, PXST_DYING
+    je .fade
+    ; --- A CARD (97.13): drawn when owed - once, or on both Mode X pages -
+    ;     and a force (a new backend, a paint) owes it whole again
+    cmp byte [px_fown], 0
+    je .card
+    mov byte [px_cardl], 0
+    call px_card_owe
+.card:
+    call px_vcur_lost
+    cmp byte [px_cardd], 0
+    je .bar
+    dec byte [px_cardd]
+    call px_card_draw
+    jmp short .bar
+.fade:
+    call px_vcur_lost
+    cmp byte [px_fdo], 0
+    je .bar
+    call px_fade_draw               ; THE DIE WASH (97.8): no cast, no
+    jmp short .bar                  ; compose - the band in the wash's tone
+                                    ; once, and nothing until the restart
 .world:
-    call px_cast
+    cmp byte [px_fdo], 0
+    je .bar
+    mov byte [px_fworld], 1         ; the selector judges THIS kind of frame
+    call px_cast                    ; alone (px_frame_end)
     call px_spr_gather              ; the candidates, and the erase of what
                                     ; no longer stands - BEFORE the compose,
                                     ; which re-lays under it (97.6)
     call px_compose
     call px_spr_draw                ; the posts and the weapon over it
-    stc
+    mov al, 1                       ; THIS page shows the pose now - and a
+    cmp byte [px_page], 0           ; pose that MOVED is shown by it alone
+    je .vp
+    mov al, 2
+.vp:
+    cmp byte [px_fcatch], 0
+    jne .vc
+    mov byte [px_vcur], 0
+.vc:
+    or [px_vcur], al
+.bar:
+    call px_hud_draw                ; THE BAR, CHANGE-ONLY (97.13): what
+    stc                             ; differs from this page's, and nothing
+    ret                             ; else
+
+; px_modex_hud - ON MODE X THE BAR ALONE IS NOT A FRAME (97.13): the present
+;                flips, and a page shown with only its bar redrawn would show
+;                a view the other page moved on from - so a bar owed there
+;                owes this page's view too (the compose writes what differs
+;                from THIS page's memory, 97.5, which is exactly the catch-up)
+; ...UNLESS THIS PAGE'S VIEW IS ALREADY CURRENT (px_vcur, a bit a page;
+; review, wave 4): a grin expiring or a key picked up while the player
+; stands was two whole world frames, where a page that already shows the
+; pose needs only its bar
+px_modex_hud:
+    cmp byte [px_hudd], 0
+    je .out
+    cmp byte [px_back], PXB_MODEX
+    jne .out
+    mov al, [px_dirty]
+    or al, [px_force]
+    jnz .out                        ; the view is owed anyway
+    mov al, 1
+    cmp byte [px_page], 0
+    je .p
+    mov al, 2
+.p:
+    test [px_vcur], al
+    jnz .out                        ; this page shows the pose: the bar alone
+    mov byte [px_dirty], 1          ; a catch-up: the pose did not move
+    mov byte [px_vcatch], 1
+.out:
+    ret
+
+; px_vcur_lost - a card or the wash owed this frame: no page's view is the
+;                pose's any more. clobbers nothing
+px_vcur_lost:
+    cmp byte [px_fdo], 0
+    je .out
+    mov byte [px_vcur], 0
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -905,9 +1011,10 @@ px_fade_draw:
     jb .col
     pop bp
     pop ds
+    mov al, [px_force]              ; a force owed meanwhile stays owed
     call px_force_all
-    mov byte [px_force], 0          ; ...but not another frame yet: the
-    ret                             ; restart owes one
+    mov [px_force], al              ; ...but not another frame for the wash's
+    ret                             ; own: the restart owes one
 
 ; -----------------------------------------------------------------------------
 ; px_frame_end - the frame is on the glass: count it, time it, let the
@@ -923,7 +1030,10 @@ px_frame_end:
     sbb dx, [px_twait + 2]          ; retrace OSAPI_FSX_PAGE waits for on
     mov [px_ftime], ax              ; Mode X and another task's hold on the
     mov [px_ftime + 2], dx          ; gfx lock are bracketed out, or the
-    call px_auto_frame              ; selector steps on a 16.7 ms bucket
+    cmp byte [px_fworld], 0         ; selector steps on a 16.7 ms bucket -
+    je .out                         ; and it judges the WORLD's frames alone:
+    call px_auto_frame              ; a card or a bar alone is a few ms, and
+.out:                               ; 64 of them would climb a rung (97.13)
     ret
 
 ; px_wait_begin / px_wait_end - bracket an idle wait inside a timed frame so

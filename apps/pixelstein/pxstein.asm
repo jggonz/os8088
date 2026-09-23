@@ -13,20 +13,23 @@
 ;   0  the program, a whole .o88 image with its bss shipped inside it,
 ;      OP_COMP so the disk pays for the zeros of two 4KB maps and two
 ;      spotvis arrays as a run of nothing;
-;   1  the level stream tools/pxslevel.py writes (97.7) - EAGER and plain:
-;      ~1KB, three sectors of the run. The plan carried it lazy, but the
-;      parts table dies with this image, so a lazy part needs a directory
-;      the program reads back through OSAPI_FILE_READ_AT (what SKIES does
-;      for a world) - worth it for the art, not for this;
-;   2  PX_GENKB of scratch the program generates into (97.3): the four DDA
+;   1  PX_GENKB of scratch the program generates into (97.3): the four DDA
 ;      bodies and the column driver copied in, then BOTH resolution sets of
 ;      compiled scalers for the backend in force and their col2tex tables
 ;      (tools/pxsgen.py is the model; 40,087 bytes on CGA4, the widest
 ;      phase, plus 232 of bodies, 64 of driver and a 3KB draw queue).
 ;      OP_OPT: a machine that cannot spare it runs the bodies out of the
 ;      image and plays Flat;
-;   3  PXA_BTKB for the byte-texture set px_bt_build transposes (97.4) -
+;   2  PXA_BTKB for the byte-texture set px_bt_build transposes (97.4) -
 ;      15 materials x 2 shades x 1,024 texels. OP_OPT likewise;
+;   3  the level stream tools/pxslevel.py writes (97.7) - LAZY and plain
+;      since wave 4, as the plan first had it: eight floors are 9.8 KB, 20
+;      sectors, and with the HUD, the states and the scores in part 0 the
+;      eager run would have been 111 + 20 = 131 unpacked sectors, past
+;      the 128 20.12.7 allows (97.9). pxl_lev fetches it into a claim of its own and hands
+;      that segment over - no directory is needed, because the loader does
+;      the fetch while its table still exists (the reason wave 1 gave for
+;      keeping it eager was a program-side lazy fetch, which this is not);
 ;   4  the ART MASTERS as an LZ4 stream tools/pxsart.py packed (97.4) -
 ;      LAZY, because a lazy row is not in the eager run that 20.12.7 bounds
 ;      at 128 unpacked sectors, and NOT OP_COMP because a lazy row cannot be
@@ -58,13 +61,13 @@
                                     ; art's numbers, read by both halves
 
 PX_PART_BODY equ 0                  ; the program - a whole .o88 image
-PX_PART_LEV  equ 1                  ; the level stream (97.7)
-PX_PART_GEN  equ 2                  ; the scalers' scratch (97.3), optional
-PX_PART_BT   equ 3                  ; the byte-texture set (97.4), optional
-PX_PART_ART  equ 4                  ; the art stream (97.4), LAZY - and so
-                                    ; LAST: a lazy row comes after every part
-                                    ; of the carve (os88pkg.py's rule, SPEC.md
-                                    ; 20.12.4)
+PX_PART_GEN  equ 1                  ; the scalers' scratch (97.3), optional
+PX_PART_BT   equ 2                  ; the byte-texture set (97.4), optional
+PX_PART_LEV  equ 3                  ; the level stream (97.7), LAZY since wave 4
+PX_PART_ART  equ 4                  ; the art stream (97.4), LAZY - and the two
+                                    ; lazy rows LAST: a lazy row comes after
+                                    ; every part of the carve (os88pkg.py's
+                                    ; rule, SPEC.md 20.12.4)
 PX_NPARTS    equ 5
 ; THE SPRITE SET IS A CLAIM OF ITS OWN, NOT A PART (97.6, 97.9): PXS_KB
 ; claimed below once the art has arrived, handed over as PXH_SPR. The first
@@ -77,7 +80,7 @@ PX_NPARTS    equ 5
 PXL_SHKB     equ 16                 ; the program's shadow (pxgame.asm's
                                     ; PX_SHKB), claimed after this in its
                                     ; entry proc: this claim must leave it
-PX_GENKB     equ 51                 ; part 2: tools/pxsgen.py --sizes reads
+PX_GENKB     equ 51                 ; part 1: tools/pxsgen.py --sizes reads
                                     ; 46,291 for the widest phase (CGA4) -
                                     ; both scaler sets, each scaler behind
                                     ; its 66-byte codeofs table (wave 3),
@@ -95,7 +98,8 @@ PX_GENKB     equ 51                 ; part 2: tools/pxsgen.py --sizes reads
 ; file is the other end of them. The kernel is not involved: it does not zero
 ; a part, which is the whole of what makes this work.
 PXH_MAGIC  equ 0                    ; word: 'PX' - the loader ran
-PXH_LEV    equ 2                    ; word: the level stream's segment
+PXH_LEV    equ 2                    ; word: the level stream's segment (its
+                                    ; own claim since wave 4, not the carve)
 PXH_GEN    equ 4                    ; word: the scratch part's segment, 0 = refused
 PXH_COLD   equ 6                    ; word: the cold part's segment (97.9), 0 = none
 PXH_NLEV   equ 8                    ; word: levels in the stream
@@ -171,6 +175,28 @@ pxl_art:
     ret
 
 ; -----------------------------------------------------------------------------
+; pxl_lev - fetch the level stream (SPEC.md 97.9, wave 4): the lazy row read
+;           into a claim op_fetch makes, KEPT - the stream is plain, so the
+;           claim is what the program reads, and it becomes the slot's at
+;           the re-home like the masters' claim. A refusal refuses the
+;           launch: a game with no floors is not a plainer game
+; out: AX = the segment, CF = 1 refused (op_fetch has said why)
+; -----------------------------------------------------------------------------
+pxl_lev:
+    mov al, PX_PART_LEV
+    call op_fetch
+    jc .no
+    mov al, PX_PART_LEV
+    call op_seg
+    or ax, ax
+    jz .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; pxl_entry - the loader's entry proc (SPEC.md 20.2)
 ; in:  DS = CS = our segment, ES = KERNEL_SEG, SI = the name of the file we
 ;      came out of, gfx lock NOT held
@@ -182,6 +208,9 @@ pxl_entry:
                                     ; buffer the loader reuses on the next
                                     ; launch. A refusal is fatal: a body that
                                     ; did not arrive is not a plainer game
+    call pxl_lev                    ; THE FLOORS FIRST: every launch needs
+    jc .no                          ; them, the masters only a Textured one
+    mov [pxl_lseg], ax
     xor ax, ax                      ; THE MASTERS ONLY FOR A LAUNCH THAT CAN
     mov [pxl_aseg], ax              ; USE THEM: px_texok is the AND of the
     mov [pxl_sseg], ax              ; (and no sprite set without them)
@@ -213,8 +242,7 @@ pxl_entry:
     mov di, [es:LD_H_IMG]           ; its bss begins here, which the part's
                                     ; own header says
     mov word [es:di+PXH_MAGIC], 'PX'
-    mov al, PX_PART_LEV
-    call op_seg
+    mov ax, [pxl_lseg]
     mov [es:di+PXH_LEV], ax
     mov al, PX_PART_LEV
     call op_row                     ; SI -> the level row (csload.asm's use):
@@ -254,9 +282,9 @@ pxl_entry:
 ; --- the table, and the standard's own code after it (SPEC.md 20.12.3) ------
     OS88_PARTS_BEGIN PX_NPARTS
       OS88_PART OP_SEG,   OP_COMP   ; 0 THE PROGRAM
-      OS88_PART OP_ASSET            ; 1 the level stream, eager and plain
-      OS88_PART OP_SEG,   OP_ZERO | OP_OPT, PX_GENKB   ; 2 the scalers' scratch
-      OS88_PART OP_ASSET, OP_ZERO | OP_OPT, PXA_BTKB   ; 3 the byte-texture set
+      OS88_PART OP_SEG,   OP_ZERO | OP_OPT, PX_GENKB   ; 1 the scalers' scratch
+      OS88_PART OP_ASSET, OP_ZERO | OP_OPT, PXA_BTKB   ; 2 the byte-texture set
+      OS88_PART OP_ASSET, OP_LAZY   ; 3 the level stream: lazy, kept (pxl_lev)
       OS88_PART OP_ASSET, OP_LAZY   ; 4 the art stream: lazy, expanded above
     OS88_PARTS_END
 
@@ -267,7 +295,8 @@ pxl_zseg equ os88_image_end + OP_BSS + 0   ; the stream's claim, while it lasts
 pxl_aseg equ os88_image_end + OP_BSS + 2   ; ...and the masters', handed over
 pxl_zlen equ os88_image_end + OP_BSS + 4   ; the stream's packed length
 pxl_sseg equ os88_image_end + OP_BSS + 6   ; the sprite set's claim, or 0
-PXL_BSS  equ 8
+pxl_lseg equ os88_image_end + OP_BSS + 8   ; the level stream's claim
+PXL_BSS  equ 10
 
 ; the program's greyed Textured caption is the sum of these three, held
 ; there by an %if on a restated PX_GENKB - and the restatement is held here

@@ -51,7 +51,11 @@ DOORWALL = """\
 
 def main():
     paths = pxslevel.level_paths([])
-    check(len(paths) >= 3, "at least three floors are authored (%d)" % len(paths))
+    # THE EPISODE IS EIGHT FLOORS (wave 4, SPEC.md 97.13): e1m1..e1m8 by name
+    # and nothing else - deleting a floor, or adding a ninth the engine's
+    # PXL_NLEV does not know, fails here
+    names = sorted(os.path.splitext(os.path.basename(p))[0] for p in paths)
+    eq(names, ["e1m%d" % i for i in range(1, 9)], "the episode is e1m1..e1m8, exactly eight floors")
     for p in paths:
         lv = pxslevel.parse(p)
         bad, sight, dda = pxslevel.check(lv, sweep=True)

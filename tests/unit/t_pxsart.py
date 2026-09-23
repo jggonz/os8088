@@ -15,6 +15,9 @@ C160 one round later - the first assertion here checked the lit shade
 alone); no dark shade is its lit one; the odd-row phase is the generator's;
 and the three NEGATIVE CONTROLS - a master with the key in it, one of the
 wrong size, and an RGB master with a tRNS colour - are refused in words.
+Since wave 4, the HUD's twenty-one one-bit masters too (97.4's contract):
+their sizes, their rows as the include packs them, ink in every one, and a
+wrong-sized one refused naming the size it must be.
 """
 import os
 import sys
@@ -242,6 +245,57 @@ def main():
                       "a column of sixteen spans is refused in words, naming the column")
         finally:
             pxsart.sprite_path = real
+    # THE HUD MASTERS (wave 4, 97.4's contract, 97.13): twenty-one one-bit
+    # masks at their sizes, the include's bytes their rows, and a wrong-sized
+    # master refused in words naming the size it must be
+    hs = pxsart.huds()
+    eq(len(hs), 21, "twenty-one HUD masters: ten digits, six faces, two keys, three weapons")
+    for stem, (w, h), bits in hs:
+        eq((len(bits[0]), len(bits)), (w, h), "%s is %dx%d" % (stem, w, h))
+    dig = dict((stem, b) for stem, _z, b in hs)
+    eq(pxsart.hud_bytes(dig["h_digit8"])[:2], bytes(
+        [int("".join(str(v) for v in dig["h_digit8"][r]), 2) for r in range(2)]),
+       "a HUD row is w / 8 bytes, bit 7 the leftmost pixel")
+    check(all(any(any(r) for r in b) for _s, _z, b in hs), "every HUD master has ink in it")
+    with tempfile.TemporaryDirectory() as d:
+        real = pxsart.hud_path
+        try:
+            p = os.path.join(d, "wide.png")
+            pxsart.write_png_indexed(p, 9, 16, [[15] * 9 for _ in range(16)])
+            pxsart.hud_path = lambda stem: p
+            try:
+                pxsart.load_hud("h_digit0", pxsart.HUD_DIGIT)
+                check(False, "a 9 x 16 digit is refused")
+            except ValueError as e:
+                check("8x16" in str(e), "a 9 x 16 digit is refused in words, naming 8x16")
+            # THE GAP (97.4): a digit that fills its cell fuses with the next
+            pxsart.write_png_indexed(p, 8, 16, [[15] * 8 for _ in range(16)])
+            try:
+                pxsart.load_hud("h_digit0", pxsart.HUD_DIGIT)
+                check(False, "a digit with ink in its gap column is refused")
+            except ValueError as e:
+                check("rightmost column" in str(e),
+                      "a digit inked in column 7 is refused in words, naming the gap")
+            pxsart.write_png_indexed(p, 8, 16, [[15] * 7 + [0] for _ in range(16)])
+            try:
+                pxsart.load_hud("h_digit0", pxsart.HUD_DIGIT)
+                check(False, "a digit with ink in its bottom row is refused")
+            except ValueError as e:
+                check("bottom row" in str(e), "a digit inked in row 15 is refused in words")
+            pxsart.write_png_indexed(p, 8, 16, [[15] * 7 + [0] for _ in range(15)] + [[0] * 8])
+            check(len(pxsart.load_hud("h_digit0", pxsart.HUD_DIGIT)) == 16,
+                  "a digit whose column 7 and row 15 are ground loads")
+            # THE THRESHOLD (97.4: luminance >= 64 of 255): a near-black
+            # ground is ground and a mid grey is ink - review r2 found the
+            # threshold scaled by 255 twice, so (32,32,32) read as 64 of 64 ink
+            pxsart.write_png_rgb(p, 8, 16, [[(32, 32, 32)] * 8 for _ in range(16)])
+            eq(sum(map(sum, pxsart.load_hud("h_face0", pxsart.HUD_DIGIT))), 0,
+               "an opaque (32,32,32) master is all ground (luminance 32 < 64)")
+            pxsart.write_png_rgb(p, 8, 16, [[(80, 80, 80)] * 8 for _ in range(16)])
+            eq(sum(map(sum, pxsart.load_hud("h_face0", pxsart.HUD_DIGIT))), 128,
+               "an opaque (80,80,80) master is all ink (luminance 80 >= 64)")
+        finally:
+            pxsart.hud_path = real
     done("t_pxsart")
 
 

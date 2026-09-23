@@ -124,13 +124,13 @@ px_go_fsx:
     cmp byte [px_inbr], 0
     jne .out
     cmp byte [px_mode], PXB_NONE
-    je .out                         ; the predicate the Game item's caption
+    je .nomode                      ; the predicate the Game item's caption
                                     ; was rewritten off ("Full Screen (no
                                     ; mode)", px_adapter): the item is not
                                     ; greyed, on apps/tank's precedent, and
                                     ; the refusal lives here
     cmp word [px_shseg], 0
-    je .out                         ; no shadow: the window says so already
+    je .nobr                        ; no shadow: the window says so already
     call px_abdismiss               ; a card may not cross into the bracket
     mov byte [px_fsxq], 0
     mov byte [px_inbr], 1           ; BEFORE the call: fsx_restore's
@@ -161,10 +161,17 @@ px_go_fsx:
     mov byte [px_fsx], 0            ; whether it ran or was refused (a
     mov byte [px_inbr], 0           ; refused run never reached px_fsx_main,
     mov byte [px_fsxq], 0           ; so the shadow is still the window's)
-    mov byte [px_lined], 1
-    cmp byte [px_cfgdirty], 0       ; a V key inside the bracket: the file
-    je .out                         ; is written now, on the desktop
-    call px_set_save
+    mov byte [px_demoreq], 0        ; ...and a T's request is spent either
+    mov byte [px_lined], 1          ; way (a refused FSX_MODE left it set,
+    cmp byte [px_cfgdirty], 0       ; and the next F ran the timedemo)
+    je .out                         ; a V key inside the bracket: the file
+    call px_set_save                ; is written now, on the desktop
+    jmp short .out
+.nomode:
+    mov byte [px_lrefuse], 1        ; SAY SO (SPEC.md 47): F or T on a
+    mov byte [px_lined], 1          ; machine with no mode names the reason
+.nobr:                              ; on the window's line
+    mov byte [px_demoreq], 0        ; no bracket ran: no timedemo is owed
 .out:
     pop cx
     pop bx
@@ -190,6 +197,17 @@ px_fsx_main:
     mov byte [px_quit], 0
     call px_auto_start              ; the rung for a bracket on this tier
     call px_force_all
+    cmp byte [px_demoreq], 0        ; A FINISHED GAME STARTS A NEW ONE at the
+    jne .kept                       ; bracket's entry (97.13, apps/tank's rule):
+    mov al, [px_state]              ; the attract page or GAME OVER is where
+    cmp al, PXST_ATTRACT            ; F from a window leaves off, and the
+    je .newg                        ; machine is taken to play on it - unless
+    cmp al, PXST_OVER               ; it was taken for the timedemo
+    jne .kept
+.newg:
+    xor al, al
+    call px_new_game
+.kept:
     call OSAPI_GET_TICKS
     mov [px_last], ax
 .loop:
@@ -198,8 +216,11 @@ px_fsx_main:
     jne .out2
     call px_steps                   ; CX = the ticks owed, or the wait
     jcxz .draw
-    call px_keys_read               ; the held keys, once at the first owed
-    cmp byte [px_pause], 0          ; step (97.8)
+    cmp byte [px_state], PXST_PLAY  ; the held keys are PLAY's (97.13): a
+    jne .nokeys                     ; card reads none, and the timedemo's
+    call px_keys_read               ; script owns the step's turn and walk
+.nokeys:                            ; (the held keys, once at the first owed
+    cmp byte [px_pause], 0          ; step, 97.8)
     jne .draw
 .sim:
     push cx
@@ -217,6 +238,19 @@ px_fsx_main:
     mov byte [px_inbr], 0           ; fsx_restore's wm_paint_all runs - or
     mov byte [px_fsxq], 0           ; the thawed worker draws the bracket's
                                     ; geometry over the desktop
+    mov byte [px_demoreq], 0        ; a timedemo left half run is over: the
+    cmp byte [px_state], PXST_DEMO  ; attract page, and no numbers (97.13)
+    jne .nodemo
+    mov byte [px_demodone], 0
+    call px_demo_restore            ; ...and the Detail and Size it pinned
+    call px_to_attract
+.nodemo:
+    mov byte [px_hmsgw], PXM_NONE   ; the bracket's messages end with it -
+    cmp byte [px_hmsg], PXM_PAUSED  ; one owed too - and the window's line
+    je .msgok                       ; says the rest
+    mov byte [px_hmsg], PXM_NONE
+    mov byte [px_hmsgt], 0
+.msgok:
     call px_r_setup_win             ; ...and the WINDOW'S frame composed here
     call px_auto_start              ; (Auto re-seated at the window's start:
                                     ; a window is one rung under the bracket
@@ -239,6 +273,7 @@ px_r_setup:
                                     ; blanks for whatever band it applies
     call px_spr_class               ; the sprite set follows the ink class
     call px_ink_build
+    call px_hud_setup               ; the bar's writer, cells and inks (97.13)
     call px_res_apply               ; ...which builds the device-row table
                                     ; too, biased by the band's first byte
                                     ; (px_devrows). THE SCALER SET AND THE
@@ -317,6 +352,9 @@ px_r_setup_win:
     mov byte [px_lastx0], 0xFF      ; (px_r_setup's reason)
     call px_spr_class
     call px_ink_build
+    call px_hud_setup
+    mov byte [px_hudw], 1           ; ...and all of it blitted (97.13)
+    call px_card_owe                ; a card standing is the window's now
     call px_res_apply               ; (the sets, if the window's rung wants
                                     ; them, are px_apply's - above)
     mov word [px_pgofs], 0
@@ -592,8 +630,15 @@ px_devrows:
     inc di
     inc di
     inc bx
-    cmp bx, PX_ROWS
-    jb .row
+    cmp bx, PX_ROWS + PX_HUDROWS    ; THE BAR'S ROWS FOLLOW (97.13): the
+    jb .row                         ; table runs on past the view into
+    mov di, px_hudoff               ; px_hudoff's slot of it...
+    mov cx, PX_HUDROWS
+.hb:
+    sub [di], si                    ; ...which is NOT biased by the band's
+    inc di                          ; first byte: the bar is the whole row
+    inc di                          ; wide, and px_hud_present adds its own
+    loop .hb
     ret
 
 ; -----------------------------------------------------------------------------
@@ -865,7 +910,7 @@ px_present:
     je .flip
     mov al, [px_r0]
     cmp al, [px_r1]
-    ja .out                         ; nothing was written
+    ja .out                         ; nothing of the view was written
     xor ah, ah
     mov bx, ax
     shl bx, 1
@@ -900,7 +945,7 @@ px_present:
     dec bp
     jnz .row
     pop ds
-    ret
+    jmp px_hud_present              ; ...and the bar's rectangle (97.13)
 .expand:
     mov di, [cs:bx]                 ; (two device bytes a shadow byte, and
     mov cl, [cs:px_size]            ; the table carries 2 x0)
@@ -922,6 +967,10 @@ px_present:
     jnz .expand
     pop ds
 .out:
+    cmp byte [px_back], PXB_MODEX   ; (nothing of the view written: the bar
+    je .ret                         ; may still be owed on a shadow backend)
+    jmp px_hud_present
+.ret:
     ret
 .flip:
     call px_wait_begin              ; THE RETRACE IS NOT WORK (97.8): the
