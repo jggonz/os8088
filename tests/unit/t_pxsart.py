@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PIXELSTEIN 3D's art pipeline holds its rules (SPEC.md 96.4).
+"""PIXELSTEIN 3D's art pipeline holds its rules (SPEC.md 97.4).
 
     python3 tests/unit/t_pxsart.py
 
@@ -49,12 +49,12 @@ def main():
         eq((len(lit), len(dark)), (16, 16), "%s: sixteen inks a shade" % be)
         check(lit[0] == 0 and dark[0] == 0, "%s: black is black" % be)
         check(all(v != 0 for v in lit[1:]), "%s: no lit colour maps to all-black" % be)
-        # ...AND NO DARK ONE (96.4): the first cut of the rule below stepped
+        # ...AND NO DARK ONE (97.4): the first cut of the rule below stepped
         # the dark shade down "the all-black one included", and blue stone -
         # 79% index 1 over black mortar - was a 97% black silhouette in
         # shadow on Hercules and C160 (review, wave 2)
         check(all(v != 0 for v in dark[1:]), "%s: no dark shade maps to all-black" % be)
-        # THE DARK SHADE IS NEVER THE LIT ONE (96.4): a colour the palette
+        # THE DARK SHADE IS NEVER THE LIT ONE (97.4): a colour the palette
         # has not got (blue on CGA palette 0) matched the same sparse
         # pattern at 100% and at 55%, so a corner between two faces of it
         # carried no shading cue - the dark steps one pattern or level
@@ -161,6 +161,87 @@ def main():
                       % str(e)[-60:])
         finally:
             pxsart.master_path = real
+    # --- the sprites (wave 3, 97.4, 97.6) ------------------------------------
+    sp = pxsart.sprites()
+    wp = pxsart.weapons()
+    eq(len(sp), pxsart.NSPR, "31 sprite frames: 17 of the guard, 6 decorations, 8 pickups")
+    eq(len(wp), pxsart.NWPN, "nine weapon frames: three weapons x three")
+    eq(len(pxsart.sprite_names()), 31, "one file stem a frame")
+    for i, (idx, alpha) in enumerate(sp):
+        flat = [v for row in idx for v in row]
+        check(pxsart.KEY not in [v for row, ar in zip(idx, alpha) for v, a in zip(row, ar) if a],
+              "frame %d holds no key inside an opaque texel" % i) if i % 5 == 0 else None
+        runs = pxsart.frame_runs(alpha)
+        check(all(len(r) <= pxsart.MAXRUNS for r in runs),
+              "frame %d has at most %d spans a column" % (i, pxsart.MAXRUNS)) if i % 5 == 0 else None
+    idx, alpha = sp[pxsart.PICK0]
+    check(all(alpha[v][c] == 0 for v in range(16) for c in range(32)),
+          "a pickup sits in the frame's lower half (rows 16..31)")
+    idx, alpha = wp[3]
+    eq(len(idx), 32, "a weapon frame is padded to 32 texel rows")
+    sok, slines = pxsart.spr_criterion(sp)
+    for ln in slines:
+        print("  t_pxsart: " + ln)
+    check(sok, "the guard's front and side are distinguishable at twelve columns (CGA4, Hercules)")
+    for be in ("cga4", "herc", "c160", "modex"):
+        st = pxsart.spr_set(sp, wp, be)
+        eq(len(st), pxsart.NSPR * pxsart.FRSZ + pxsart.NWPN * pxsart.WFRSZ,
+           "%s: the sprite set is %d bytes (part 4)" % (be, len(st)))
+    fr = pxsart.spr_frame(sp[0][0], sp[0][1], "cga4")
+    runs = pxsart.frame_runs(sp[0][1])
+    c = 16
+    eq(fr[pxsart.SPR * pxsart.SPR + c * pxsart.RUNSZ], len(runs[c]),
+       "a column's run table begins with its count")
+    if runs[c]:
+        eq((fr[pxsart.SPR * pxsart.SPR + c * pxsart.RUNSZ + 1], fr[pxsart.SPR * pxsart.SPR + c * pxsart.RUNSZ + 2]),
+           runs[c][0], "...then (v0, v1), v1 exclusive")
+    lit = pxsart.ink_tables()["cga4"][0]
+    v = runs[c][0][0] if runs[c] else 0
+    eq(fr[c * 32 + v], lit[sp[0][0][v][c]], "a frame's texel bytes are column-major through the LIT table")
+    frc = pxsart.spr_frame(sp[0][0], sp[0][1], "c160")
+    eq(frc[(c // 2) * 32 + v] >> 4, pxsart.ink_tables()["c160"][0][sp[0][0][v][c & ~1]],
+       "c160: a column holds a texel pair, the left in the high nibble")
+    # the sprite negative controls: a half-alpha pixel, and the key in an opaque one
+    with tempfile.TemporaryDirectory() as d:
+        real = pxsart.sprite_path
+        try:
+            fi, fa = [[7] * 32 for _ in range(32)], [[1] * 32 for _ in range(32)]
+            p = os.path.join(d, "half.png")
+            raw = b"".join(b"\x00" + b"".join(bytes(pxsart.PALETTE[7]) + (b"\x80" if (x, y) == (3, 4) else b"\xff")
+                                              for x in range(32)) for y in range(32))
+            with open(p, "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\n")
+                f.write(pxsart._chunk(b"IHDR", pxsart.struct.pack(">IIBBBBB", 32, 32, 8, 6, 0, 0, 0)))
+                f.write(pxsart._chunk(b"IDAT", pxsart.zlib.compress(raw, 9)))
+                f.write(pxsart._chunk(b"IEND", b""))
+            pxsart.sprite_path = lambda stem: p
+            try:
+                pxsart.load_sprite("x", 32, 32)
+                check(False, "a sprite with alpha 128 is refused")
+            except ValueError as e:
+                check("alpha 128" in str(e) and "(3,4)" in str(e),
+                      "a sprite with alpha 128 is refused in words, at the pixel")
+            fi[5][6] = pxsart.KEY
+            p2 = os.path.join(d, "key.png")
+            pxsart.write_png_rgba(p2, 32, 32, fi, fa)
+            pxsart.sprite_path = lambda stem: p2
+            try:
+                pxsart.load_sprite("x", 32, 32)
+                check(False, "a sprite with the key inside an opaque pixel is refused")
+            except ValueError as e:
+                check("KEY" in str(e), "a sprite with the key inside an opaque pixel is refused in words")
+            fa2 = [[0] * 32 for _ in range(32)]
+            for v in range(32):
+                fa2[v][8] = v & 1               # sixteen one-texel spans
+            fi2 = [[7] * 32 for _ in range(32)]
+            try:
+                pxsart.frame_runs(fa2)
+                check(False, "a column of sixteen spans is refused")
+            except ValueError as e:
+                check("spans" in str(e) and "column 8" in str(e),
+                      "a column of sixteen spans is refused in words, naming the column")
+        finally:
+            pxsart.sprite_path = real
     done("t_pxsart")
 
 

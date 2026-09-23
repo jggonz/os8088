@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PIXELSTEIN 3D's levels (SPEC.md 96.7): text in, a checked stream out.
+"""PIXELSTEIN 3D's levels (SPEC.md 97.7): text in, a checked stream out.
 
     python3 tools/pxslevel.py [-o apps/pixelstein/pxlev.inc] [--stream build/pxslev.bin]
                               [--check] [--sweep] [levels/*.txt ...]
@@ -15,31 +15,32 @@ that would show one is a 4.77 MHz 8088 four boots away.
                  never clears (apps/dotdel's t_ddmaze made the same argument
                  about a stranded dot)
   the counts     <= 64 doors, <= 32 actors, <= 96 statics: the engine's
-                 tables (96.9)
+                 tables (97.9)
   sight lines    no axial run of open cells longer than 24: a longer one is
                  a DDA walk the frame table was not priced for, and a
                  present that copies the whole view
   the DDA budget every open cell x 16 headings, one ray each, through the
                  SAME walker tools/pxssim.py renders with: mean <= 12
-                 crossings, worst <= 26 (96.1's table is priced at 10) -
+                 crossings, worst <= 26 (97.1's table is priced at 10) -
                  cast TWICE, with every door shut and with every door open,
                  and held to the worse state (a door in front of the player
                  is open more often than not, and that ray is the long one)
   melee          no open cell has more than two guards within 1.5 tiles of it
                  at spawn: a third at melee is the frame the sprite cap
-                 exists for (96.6)
+                 exists for (97.6). tests/unit/t_pxsmap.py is the row that
+                 holds it (wave 3), with a three-guard level as its control
 
-The STREAM (--stream) is what the package's lazy level part carries (96.9):
+The STREAM (--stream) is what the package's lazy level part carries (97.9):
 one record a level, run-length coded, and pxlev.inc is only the DIRECTORY -
 offsets, lengths, counts - so the include holds no level bytes and stays a
 text file a diff can read. Both are functions of the text files alone;
 tests/unit/t_pxsgen.py regenerates the include on every `make`.
 
-THE CELL BYTE (96.1): high nibble = material 1..15 (0 = open), low nibble =
+THE CELL BYTE (97.1): high nibble = material 1..15 (0 = open), low nibble =
 flags - bit 0 SOLID, bit 1 DOOR, bit 2 DOOR_EW (the slab runs east-west, so
 the corridor through it runs north-south), bit 3 SPECIAL (the elevator switch
 on a solid cell; a secret door on a door cell). Material 15 is the jamb and is
-never written in a level: the engine decides it AT HIT TIME (96.2.4) - a
+never written in a level: the engine decides it AT HIT TIME (97.2.4) - a
 solid face reached through a door cell takes it, and nothing beside the
 door is painted with it (the "two cells beside a door" rule of the first
 draft is withdrawn, PIXELSTEIN-PLAN 13's fifth graft).
@@ -93,7 +94,12 @@ SECRET = "s"                    # a secret door: SPECIAL on a door cell, the
                                 # wall's own material either side
 DOORS = {"D": 0, "1": 1, "2": 2}    # unlocked, gold lock, silver lock
 SPAWNS = {"@": 0, ">": 0, "v": 1024, "<": 2048, "^": 3072}
-ACTORS = {"g": 0, "h": 1}           # guard, hound (dog)
+ACTORS = {"g": 0, "h": 1,           # guard, hound (dog) - STANDING until
+          "G": 0x80, "H": 0x81}     # they see the player; the capitals PATROL
+                                    # (bit 7 of the kind byte, wave 3: a
+                                    # patroller walks its facing and turns at
+                                    # a wall; the engine's px_act_patrol)
+PATROL = 0x80
 PICKUPS = {"a": 0, "m": 1, "f": 2, "k": 3, "K": 4, "t": 5, "T": 6, "e": 7}
 #   ammo, medkit, food, GOLD key, SILVER key, treasure, chalice, extra life
 DECOR = {"*": (8, True), "&": (9, True), "$": (10, True),
@@ -195,6 +201,13 @@ def parse(path):
         if ns == ew:
             raise LevelError("%s: the door at (%d,%d) does not sit in a wall "
                              "(solid on exactly one axis)" % (name, x, y))
+        # ...and opens onto open cells BOTH ways along its passage axis
+        # (review r1: E1M1 had three doors, its only locked one among them,
+        # whose far side was a wall - a double wall the door could not pass)
+        for px, py in (((x - 1, y), (x + 1, y)) if ns else ((x, y - 1), (x, y + 1))):
+            if lv.solid(px, py):
+                raise LevelError("%s: the door at (%d,%d) opens into a wall at (%d,%d)"
+                                 % (name, x, y, px, py))
         flags = DOOR | (DOOR_EW if ew else 0)
         if ch == SECRET:
             # the wall's own material, taken from the solid neighbour
@@ -314,7 +327,12 @@ def check_sight(lv, bad):
 
 
 def check_melee(lv, bad):
-    guards = [(a[0] + 0.5, a[1] + 0.5) for a in lv.actors if a[2] == 0]
+    """No open cell with more than two GUARDS within 1.5 tiles at spawn -
+    standing or patrolling (the kind byte's low bits name the guard, bit 7
+    the patrol). The dog is not counted: it is wave 6's and melee is its
+    whole attack, so a level with three dogs at one cell is a level with a
+    rule of its own to write then."""
+    guards = [(a[0] + 0.5, a[1] + 0.5) for a in lv.actors if (a[2] & ~PATROL) == 0]
     for y in range(MAP_H):
         for x in range(MAP_W):
             if not lv.open_(x, y):
@@ -351,7 +369,7 @@ def sweep_dda(cells):
 def check_dda(lv, bad, full=False):
     """The DDA budget in BOTH door states, and the worse of the two counts.
 
-    A closed door stops the walker (cell & DOOR is a hit, 96.2.4); an open
+    A closed door stops the walker (cell & DOOR is a hit, 97.2.4); an open
     one is walked through, so the ray that crosses a doorway into the next
     room is the long one, and the game spends most of its frames with the
     door in front of the player OPEN - that is what a door is for. The first
@@ -372,7 +390,7 @@ def check_dda(lv, bad, full=False):
                                  ((opened[1], opened[2]), "open"))
     if mean > DDA_MEAN:
         bad.append("the DDA sweep averages %.1f crossings a ray with the doors "
-                   "%s; the budget is %.0f (96.1)" % (mean, mstate, DDA_MEAN))
+                   "%s; the budget is %.0f (97.1)" % (mean, mstate, DDA_MEAN))
     if worst > DDA_WORST:
         bad.append("the worst ray is %d crossings, from (%d,%d) at %d with the "
                    "doors %s; the budget is %d"
@@ -424,6 +442,13 @@ def record(lv):
                                      sy * 256 + 128, sa, len(lv.doors),
                                      len(lv.actors), len(lv.statics))
     body = bytearray(m)
+    # THE DOORS ARE WRITTEN SORTED BY CELL (wave 3, 97.7): the engine's
+    # cell-to-door lookup (px_door_of) walks a per-row start table built at
+    # load from this order and refuses a stream whose doors are not sorted,
+    # so the parser's row-major walk is a contract and this is where it is
+    # asserted rather than believed
+    cells = [y * MAP_W + x for x, y, _f, _l in lv.doors]
+    assert cells == sorted(cells), "the doors are not in cell order"
     for x, y, flags, lock in lv.doors:
         body += struct.pack("<HBB", y * MAP_W + x, flags, lock)
     for x, y, kind, facing in lv.actors:
@@ -447,13 +472,13 @@ def generate(levels):
     w("; os8088 - apps/pixelstein/pxlev.inc")
     w(";")
     w("; GENERATED by tools/pxslevel.py from apps/pixelstein/levels/*.txt - do not")
-    w("; edit by hand (SPEC.md 96.12). tests/unit/t_pxsgen.py regenerates it on")
+    w("; edit by hand (SPEC.md 97.12). tests/unit/t_pxsgen.py regenerates it on")
     w("; every `make`. THE LEVELS ARE NOT IN THIS FILE: they are the run-length")
     w("; stream the same tool writes with --stream, which the package carries as a")
-    w("; lazy part (96.9) - this is the DIRECTORY into it, offsets and lengths and")
+    w("; lazy part (97.9) - this is the DIRECTORY into it, offsets and lengths and")
     w("; counts, so that a level edit is a diff a person can read.")
     w(";")
-    w("; The cell byte (96.1): high nibble = material 1..15, 0 open; low nibble")
+    w("; The cell byte (97.1): high nibble = material 1..15, 0 open; low nibble")
     w("; bit 0 SOLID, bit 1 DOOR, bit 2 DOOR_EW, bit 3 SPECIAL.")
     w("; =============================================================================")
     w("")
@@ -484,6 +509,7 @@ def generate(levels):
     w("PXL_MAXDOORS  equ %d" % MAX_DOORS)
     w("PXL_MAXACTORS equ %d" % MAX_ACTORS)
     w("PXL_MAXSTATIC equ %d" % MAX_STATICS)
+    w("PXL_PATROL    equ %d            ; the actor kind byte's bit 7: a patroller" % PATROL)
     w("")
     w("PXL_NLEV    equ %d" % len(levels))
     w("PXL_STREAM  equ %d             ; bytes in the whole stream" % len(stream))

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The glass after incremental frames against a forced full redraw of the
-same pose - the delta-fill ghost gate (SPEC.md 96.5, 96.10).
+same pose - the delta-fill ghost gate (SPEC.md 97.5, 97.10).
 
     python3 tests/pxs160.py [--machine os8088_5150_cga_gla] [--turns 3]
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PIXELSTEIN 3D's compiled scalers, modelled on the host (SPEC.md 96.3, 96.12):
+"""PIXELSTEIN 3D's compiled scalers, modelled on the host (SPEC.md 97.3, 97.12):
 the byte image of the generated half of part 2 - the scratch, in the indices
 os88pkg prints - for a backend.
 
@@ -7,7 +7,7 @@ os88pkg prints - for a backend.
                             [--dump OUT.bin]
 
 WHAT THE PACKAGE GENERATES on the first Textured frame and on a Mode change
-(pxgen.inc's px_gen_build, into the scratch part the loader carved - 96.9's
+(pxgen.inc's px_gen_build, into the scratch part the loader carved - 97.9's
 part 2) is modelled here instruction for instruction, so that tests/pxsscale.py can read
 the part back off MartyPC and diff it, and tests/unit/t_pxsscale.py can hold
 the image to the size the loader claims for it. Two scaler SETS, one per
@@ -24,7 +24,7 @@ resolution, then a col2tex table per scaler per set:
 
       mov al, [es:si + v]          26 8A 44 vv
       mov [di + r*80], al          88 85 lo hi     the EVEN rows first
-      <the odd-row phase>          the pixel format's (96.3): `ror al, 1`
+      <the odd-row phase>          the pixel format's (97.3): `ror al, 1`
                                    twice on CGA4 (D0 C8 D0 C8), one `ror
                                    al, cl` with CL = 3 on Hercules and WIN1
                                    (D2 C8), nothing on C160 and Mode X
@@ -40,6 +40,13 @@ resolution, then a col2tex table per scaler per set:
   directory (px_sctab, part 0's bss) and by the cast's px_hq, which
   quantises a column's h the same way when the rung is Textured so that
   top/bot and the drawn rows agree.
+
+  EVERY SCALER IS PRECEDED BY ITS codeofs TABLE (wave 3, 97.3, 97.6): 33
+  words at px_sctab[h] - 66, codeofs[v] = the part offset of the load of
+  the first EMITTED texel at or after v, or 0 when none from v on emits.
+  The post walk enters a scaler at codeofs[v0] and the driver patches a
+  near ret over codeofs[v1]'s load (the one patch site); a 0 entry draws
+  nothing / patches nothing.
 
   col2tex[w(h)] (graft 2): for the sprite walk, per scaler height and set,
   the source column each of the w(h) screen columns a 1-tile-wide object of
@@ -97,12 +104,22 @@ def texel_rows(h):
     return out
 
 
-def scaler(h, backend, word):
+COTSZ = (TEX + 1) * 2           # a codeofs table: 33 words
+
+
+def scaler(h, backend, word, loads=None):
+    """The scaler's bytes; `loads`, when given, collects per texel the
+    offset of its load WITHIN the scaler (None for a texel that emits
+    nothing)."""
     code = bytearray()
     st = STORE_W if word else STORE_B
     for v, rows in enumerate(texel_rows(h)):
         if not rows:
+            if loads is not None:
+                loads.append(None)
             continue
+        if loads is not None:
+            loads.append(len(code))
         code += LOAD + bytes([v])
         evens = [r for r in rows if r & 1 == 0]
         odds = [r for r in rows if r & 1]
@@ -119,6 +136,20 @@ def scaler(h, backend, word):
                 code += st + (r * ROWS).to_bytes(2, "little")
     code += RET
     return bytes(code)
+
+
+def codeofs(h, backend, word, base):
+    """The 33-word table of the scaler at part offset `base`: codeofs[v] =
+    base + the load of the first emitted texel >= v, or 0."""
+    loads = []
+    scaler(h, backend, word, loads)
+    out = [0] * (TEX + 1)
+    nxt = 0
+    for v in range(TEX - 1, -1, -1):
+        if loads[v] is not None:
+            nxt = base + loads[v]
+        out[v] = nxt
+    return b"".join(o.to_bytes(2, "little") for o in out)
 
 
 def width(h, word):
@@ -145,7 +176,9 @@ def image(backend, base=0):
     for s in SETS:
         ent = {}
         for h in HEIGHTS:
-            ent[h] = base + len(out)
+            here = base + len(out) + COTSZ          # the scaler, after its table
+            out += codeofs(h, backend, s == "low", here)
+            ent[h] = here
             out += scaler(h, backend, s == "low")
         for h in range(HMAX + 1):
             sctab[s][h] = ent[quantise(h)]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PIXELSTEIN 3D's level rules, the EXPENSIVE one included (SPEC.md 96.7).
+"""PIXELSTEIN 3D's level rules, the EXPENSIVE one included (SPEC.md 97.7).
 
     python3 tests/unit/t_pxslevel.py
 
@@ -7,8 +7,8 @@ SOAK, beside a change to the package: `soak -k 'pxs*'`. The fast row
 (t_pxsgen) regenerates pxlev.inc with --no-sweep, which runs the cheap rules
 - reachability with keys before doors, the counts, the sight line, the
 melee rule - and skips the DDA sweep: every open cell x 16 headings, one ray
-each through 96.2's walker, mean <= 12 crossings and worst <= 26. That sweep
-is THE rule the frame table of 96.1 rests on (it is priced at ten crossings
+each through 97.2's walker, mean <= 12 crossings and worst <= 26. That sweep
+is THE rule the frame table of 97.1 rests on (it is priced at ten crossings
 a column), it is the rule E1M1 was re-carved for, and before this row it ran
 only when a person typed `make pxsgen`: `$(BUILD)/pxslev.bin` is the only
 Makefile rule that passes --check with the sweep and nothing in `all` or

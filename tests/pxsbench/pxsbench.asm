@@ -2,10 +2,10 @@
 ; os8088 - tests/pxsbench/pxsbench.asm
 ;
 ; PXSBENCH: the unit costs PIXELSTEIN 3D's frame table is built from (SPEC.md
-; 96.1, 96.10), measured on the machine in front of you. Nothing here ships:
+; 97.1, 97.10), measured on the machine in front of you. Nothing here ships:
 ; `make bench` builds it onto build/bench.img, `all` does not, and
 ; tests/pxsbench.py reads the rows back out of this package's bss on MartyPC's
-; cycle-exact 5150 so the numbers in 96.1 are MEASURED and not derived.
+; cycle-exact 5150 so the numbers in 97.1 are MEASURED and not derived.
 ;
 ; WHY THESE ROWS. docs/plans/PIXELSTEIN-PLAN.md 3 prices a frame from six
 ; units - a compiled store, a texel load, a DDA crossing, a span copy, a text
@@ -16,18 +16,18 @@
 ; disagreed by 23% about the same primitive).
 ;
 ;   (a) STORE     the 4-byte compiled store, `mov [di + r*80], al`, eighty of
-;                 them - the scaler's row store (96.3) - into RAM, and into the
+;                 them - the scaler's row store (97.3) - into RAM, and into the
 ;                 framebuffer in the mode the game will use on this adapter;
 ;                 and the WORD store `mov [di + r*80], ax` of the Resolution:
 ;                 Low res set (docs/plans/PIXELSTEIN-PLAN.md 16), two columns
 ;                 a row
 ;   (b) LADDER    the STATIC flat-column ladder, `mov [di + r*80], bl` entered
 ;                 at an index (a Duff ladder) - the Flat rung's whole column
-;   (c) DDA       the patched-immediate quadrant body of 96.2, one column's
+;   (c) DDA       the patched-immediate quadrant body of 97.2, one column's
 ;                 walk to a wall 10 and 20 crossings away, and a near-axial
 ;                 walk where one walker does nearly all the work. The
 ;                 difference of the first two is what a crossing costs. Each
-;                 column carries 96.2.1's WHOLE setup - the angle off the fan,
+;                 column carries 97.2.1's WHOLE setup - the angle off the fan,
 ;                 the quadrant dispatch, the two px_tan reads, the four
 ;                 patches, the two muls, the pointers and keys - and a fourth
 ;                 row runs the harness's own scaffolding alone (push/pop bp,
@@ -51,10 +51,10 @@
 ;                 solid - which is what graft 1's rotate costs a texel; the
 ;                 DUAL-PHASE word load `mov ax, [es:si + 2v]` - AL the even
 ;                 rows' byte, AH the odd rows' - the named FALLBACK from the
-;                 rotate (96.3: part 4 doubled, no scaler rotates); and the
+;                 rotate (97.3: part 4 doubled, no scaler rotates); and the
 ;                 Resolution: Low res row - the load, `mov ah, al` and the
 ;                 WORD store, two columns a row from one texel
-;   (i) HIT       96.2.5 once a column: the hit point off the walker's
+;   (i) HIT       97.2.5 once a column: the hit point off the walker's
 ;                 pointer, u, the jamb test, nx by two MUL14, the clamp,
 ;                 the div, px_sctab[h], top and bot, and the seven column-
 ;                 array stores - the third term of the cast, which the
@@ -65,7 +65,7 @@
 ;                 the player's step with per-axis collision, 32 actors, 64
 ;                 doors, the line-of-sight walks - the shape wave 3 writes,
 ;                 written the straightforward way it would first be written.
-;                 The frame table's s term (96.1) was DOT DELIRIUM's five-dot
+;                 The frame table's s term (97.1) was DOT DELIRIUM's five-dot
 ;                 step until this row, and s is the one term the fixed point
 ;                 GEARS: dF/ds = F / (T - s), 2.6x at the default rung
 ;   (g) KEY_DOWN  eight OSAPI_KEY_DOWN calls, the input pass
@@ -81,7 +81,7 @@
 ; bracket owns the raster, so nothing is drawn on the desktop by mistake and
 ; the kernel's exit repaint puts the report back. THE STORE ROWS SET DS = THE
 ; FRAMEBUFFER and store with no segment override, because that is the
-; instruction the generator emits (96.3: DS = the destination) - an `es:`
+; instruction the generator emits (97.3: DS = the destination) - an `es:`
 ; prefix is a fifth byte, and on a bus-bound 8088 a fifth byte is ~5 clk,
 ; which is the whole of the RAM/VRAM difference on a card with no wait
 ; states. The first cut of this bench measured the prefixed form and
@@ -98,7 +98,7 @@
     OS88_HEADER 'PXSBENCH', pb_entry
 
 PB_ROWS     equ 80                ; the view: 80 rows...
-PB_STRIDE   equ 80                ; ...of 80 bytes, on every backend (96.3)
+PB_STRIDE   equ 80                ; ...of 80 bytes, on every backend (97.3)
 PB_VIEWB    equ 64                ; ...of which the picture is 64 bytes wide
 PB_N        equ 8                 ; iterations of a method-P row
 PB_NDDA     equ 64                ; ...and of a DDA row: one frame's columns
@@ -110,13 +110,13 @@ PB_CLAIMKB  equ 59                ; the heap claim: the four map arrays, the
                                   ; arrays (the package's own tables in the
                                   ; image left no room for them in bss
                                   ; beside benchlib's arena)
-PB_MINDIST  equ 23                ; 96.1: nx clamped at 0.09 tiles (Q8.8)
-PB_HEIGHTK  equ 51200             ; 96.1: h = PB_HEIGHTK / nx rows
+PB_MINDIST  equ 23                ; 97.1: nx clamped at 0.09 tiles (Q8.8)
+PB_HEIGHTK  equ 51200             ; 97.1: h = PB_HEIGHTK / nx rows
 PB_HMAX     equ 120               ; ...and the tallest scaler, 1.5 x the view
 PB_MAPOFS   equ 512               ; the maps start here in the claim: a walker
                                   ; pointer may run 191 bytes past either end
                                   ; of its array before the compare parks it
-                                  ; (96.2.3), and an offset under that would
+                                  ; (97.2.3), and an offset under that would
                                   ; wrap the compare
 PB_MAPT     equ PB_MAPOFS         ; mapT[x*64 + y]   - the V walker's
 PB_SPOTT    equ PB_MAPT + 4096    ; spotvisT         - ...and its marks
@@ -131,7 +131,7 @@ PB_GENSZ    equ PB_BTSZ           ; ...which is larger than the scaler set
 ; THE SETUP'S TABLES, copied into the claim past the generated region, so
 ; that the DDA rows read px_tan and the fan with the instructions the package
 ; runs - no segment override, because the package keeps its maps AND its
-; tables in its own segment (96.9) and only this bench has them apart
+; tables in its own segment (97.9) and only this bench has them apart
 PB_T_TAN    equ PB_GENOFS + PB_GENSZ            ; px_tan, PX_TAN_N words
 PB_T_FAN    equ PB_T_TAN + PX_TAN_N * 2         ; px_fan64, 64 words
 PB_T_QTAB   equ PB_T_FAN + 64 * 2               ; the four quadrant bodies
@@ -139,14 +139,14 @@ PB_W_HEAD   equ PB_T_QTAB + 4 * 2               ; the heading
 PB_W_COL    equ PB_W_HEAD + 2                   ; the column index, x2
 PB_W_COS    equ PB_W_COL + 2                    ; cos(heading), sin(heading)
 PB_W_SIN    equ PB_W_COS + 2                    ; in Q14: the hit's frame
-                                                ; constants (96.2.5)
+                                                ; constants (97.2.5)
 PB_C_MAST   equ PB_W_SIN + 2                    ; the transpose's masters,
                                                 ; read through ES the way
                                                 ; bt_build reads the art part
-; THE HIT'S OUTPUTS (96.2.5): the column arrays, a word a column each, and
+; THE HIT'S OUTPUTS (97.2.5): the column arrays, a word a column each, and
 ; px_sctab (the scaler entry per height, 0..PB_HMAX) - in the claim beside
 ; the maps because the package keeps its column arrays in the segment its
-; maps are in (96.9), and the hit row writes them with the instruction the
+; maps are in (97.9), and the hit row writes them with the instruction the
 ; driver will
 PB_T_COLS   equ PB_C_MAST + PB_MASTERS * 512
 PB_C_MAT    equ 0                               ; mat[c]
@@ -200,13 +200,13 @@ PB_PS_Y     equ 2                 ; and the row's two counts
 PB_PS_GEN   equ 4
 PB_PS_NACT  equ 6
 PB_PS_NDOOR equ 8
-PB_NACT1    equ 7                 ; ...E1M1's own (96.7), the second row
+PB_NACT1    equ 7                 ; ...E1M1's own (97.7), the second row
 PB_NDOOR1   equ 22
-PB_RADIUS   equ 64                ; 0.25 tile: the collision radius (96.8)
+PB_RADIUS   equ 64                ; 0.25 tile: the collision radius (97.8)
 PB_ASTEP    equ 16                ; an actor's step a tick, 1/16 tile
 PB_LOSN     equ 32                ; the line-of-sight walk's steps
 
-; the DDA rows' eye and headings (96.2): x = 8.25, y = 8.5; the angle is
+; the DDA rows' eye and headings (97.2): x = 8.25, y = 8.5; the angle is
 ; heading + px_fan64[c] with c fixed at 32 (px_fan64[32] = 6), so every
 ; column of a row walks the same ray. 45 degrees (tan = 1.0, an H-then-V
 ; alternation with no ties) and 100 units (8.8 degrees: tan 0.155, cot 6.47
@@ -406,7 +406,7 @@ pb_repaint:
 ; (a) the compiled store ladder, and (b) the static Duff ladder
 ; =============================================================================
 
-; The row store a generated scaler emits (96.3): `mov [di + r*80], al` with
+; The row store a generated scaler emits (97.3): `mov [di + r*80], al` with
 ; a 16-bit displacement, four bytes each, eighty of them. Rows 0 and 1 would
 ; assemble to the 2- and 3-byte forms; the ladder is offset by 256 so every
 ; store is the 4-byte one the generator emits for every row past the first
@@ -426,7 +426,7 @@ pb_b_st_ram:                        ; DS:DI = the shadow, in our own segment
     ret
 
 pb_b_st_vram:                       ; DS = the framebuffer (bracket only): the
-    push ds                         ; scaler's own segment discipline (96.3),
+    push ds                         ; scaler's own segment discipline (97.3),
     mov ds, [pb_fsi + FSI_SEG]      ; and the SAME four-byte instruction as
     xor di, di                      ; the RAM row above
     sub di, 256
@@ -456,7 +456,7 @@ pb_b_stw_vram:
     pop ds
     ret
 
-; the STATIC ladder (96.3): `mov [di + r*80], bl`, entered at row index N
+; the STATIC ladder (97.3): `mov [di + r*80], bl`, entered at row index N
 ; through a table of entry points, so a flat column of N rows is one jump
 ; and N stores. Written top-down from row 79 to row 0 so that entering at
 ; entry[N] draws rows 0..N-1... i.e. the last N stores are rows N-1 down to
@@ -491,7 +491,7 @@ pb_b_lad40:
     ret
 
 ; =============================================================================
-; (c) the DDA - the quadrant body of SPEC.md 96.2, q0 (dx > 0, dy > 0)
+; (c) the DDA - the quadrant body of SPEC.md 97.2, q0 (dx > 0, dy > 0)
 ; =============================================================================
 
 ; THE BODY. Two walkers, each a pointer and a fraction; the four immediates
@@ -548,7 +548,7 @@ pb_dda_q0:
 
 PB_DDA_BYTES equ $ - pb_dda_q0
 
-; pb_dda_col - one column's cast: 96.2.1's setup instruction for instruction,
+; pb_dda_col - one column's cast: 97.2.1's setup instruction for instruction,
 ;              then the body. The angle from the heading and the fan, the
 ;              quadrant off its top two bits, the two steps off px_tan (one of
 ;              them the tan[1024 - i] form), the four patches, the two muls
@@ -657,7 +657,7 @@ pb_b_ddasc:
     pop bp
     ret
 
-; PB_MUL14 - apps/tank/tk3d.inc:31's MUL14, the Q14 multiply of 96.2.5:
+; PB_MUL14 - apps/tank/tk3d.inc:31's MUL14, the Q14 multiply of 97.2.5:
 ;            AX = (AX x BX) >> 14, signed - imul, two shift/rotate pairs on
 ;            the 32-bit product, the high word
 %macro PB_MUL14 0
@@ -669,7 +669,7 @@ pb_b_ddasc:
     mov ax, dx
 %endmacro
 
-; pb_b_hit - 96.2.5's hit, once a column: from the walker's state to the
+; pb_b_hit - 97.2.5's hit, once a column: from the walker's state to the
 ;            column arrays. The V side of quadrant 0 (dxs > 0, dys > 0); the
 ;            H side is the same arithmetic with the axes swapped, and the
 ;            mirror of u (255 - frac from the east and the north) is the
@@ -688,7 +688,7 @@ pb_b_hit:
     mov si, PB_MAPT + 13 * 64 + 12  ; the cell (13, 12)...
     mov dx, 0x8000                  ; ...at y = 12.5
     mov di, [PB_W_COL]              ; c * 2, the column arrays' index
-    ; --- the material, and the jamb (96.2.4): DOOR in the cell the ray
+    ; --- the material, and the jamb (97.2.4): DOOR in the cell the ray
     ;     came from - the un-stepped pointer's, one row of mapT back ------
     mov al, [si]
     shr al, 1
@@ -715,7 +715,7 @@ pb_b_hit:
     and bx, 63                      ; vrow
     mov cl, 6
     shr ax, cl                      ; xt (a shift by CL: per column, not per
-                                    ; pixel, which 96.1's rule allows)
+                                    ; pixel, which 97.1's rule allows)
     mov ch, bl
     mov cl, dh                      ; CX = vrow.frac
     sub cx, PB_EYEY                 ; dy
@@ -1101,7 +1101,7 @@ pb_c160_mode:
 ; (f) the textured row: a texel load and a store, eighty rows
 ; =============================================================================
 
-; The generated scaler's row (96.3): `mov al, [es:si + v]` then the store,
+; The generated scaler's row (97.3): `mov al, [es:si + v]` then the store,
 ; ES = the byte-texture set, DS = the destination. v is the texel the row
 ; reads, 0..31 here; the generator writes the real v per row.
 pb_b_tx:
@@ -1138,7 +1138,7 @@ pb_b_txx:
     ret
 
 ; ...and with the odd-row dither phase turned by `ror al, 1` x 2 - CGA
-; 320x200x4's N, one 2-bit pixel (96.3): the rotate graft 1 puts after the
+; 320x200x4's N, one 2-bit pixel (97.3): the rotate graft 1 puts after the
 ; even rows' stores, priced per texel. Hercules and WIN1 turn three, C160
 ; four; the row's delta over pb_b_tx is one rotate's cost times two
 pb_b_txr2:
@@ -1159,7 +1159,7 @@ pb_b_txr2:
     ret
 
 ; ...and the DUAL-PHASE texel: `mov ax, [es:si + 2v]` with AL the even rows'
-; byte and AH the odd rows' (part 4 holds two bytes a texel, 96.4), the store
+; byte and AH the odd rows' (part 4 holds two bytes a texel, 97.4), the store
 ; from AL or AH by the row's parity - no rotate on any row. The word load is
 ; the byte load plus one bus cycle on the 8088; the delta over pb_b_tx is
 ; what the escape from the rotate costs a texel
@@ -1204,7 +1204,7 @@ pb_b_txr3:
     pop es
     ret
 
-; ...and the Resolution: Low res scaler's row (96.3): the byte load, `mov
+; ...and the Resolution: Low res scaler's row (97.3): the byte load, `mov
 ; ah, al` so the two shadow bytes of a column carry one texel, and the WORD
 ; store. The delta over pb_b_tx less the word store's delta over the byte
 ; store (rows 16 and 0) is what the duplication costs; the odd-row phase
@@ -1275,7 +1275,7 @@ pb_sim_solid2x:
     ret
 
 ; pb_sim_solid4 - AX = x, DX = y: the four corners of the radius - the
-;                 player's per-axis test (96.8: radius 0.25), two pairs
+;                 player's per-axis test (97.8: radius 0.25), two pairs
 pb_sim_solid4:
     push ax
     sub ax, PB_RADIUS
@@ -1287,7 +1287,7 @@ pb_sim_solid4:
 .out:
     ret
 
-; pb_b_sim - one tick of the simulation (96.8, docs/plans/PIXELSTEIN-PLAN.md
+; pb_b_sim - one tick of the simulation (97.8, docs/plans/PIXELSTEIN-PLAN.md
 ;            1.5-1.7), written the straightforward way wave 3 would first
 ;            write it. A SHAPE, measured, and not the package's code - the
 ;            plan's counts with a plausible body each:
@@ -1662,17 +1662,17 @@ pb_b_keys:
 ; (h) one scaler-set generation, and one byte-texture transpose
 ; =============================================================================
 
-; pb_b_gen - emit the textured scaler set (96.3) into the claim: heights 2
+; pb_b_gen - emit the textured scaler set (97.3) into the claim: heights 2
 ;            to 60 by two, 63 to 78 by three and 84 to 120 by six - 43
 ;            scalers, PIXELSTEIN-PLAN 13's ninth graft; each row
 ;            `mov al, [es:si + v]` (4 bytes) + `mov [di + r*80], al` (4), the
 ;            texel v stepped by a Bresenham over 32 texels, then a NEAR
 ;            `ret` (0xC3): the column driver lives in the same part and
 ;            near-calls every scaler, and the frame's one far call is into
-;            the driver (96.3). The first cut emitted 0xCB, the 1992
+;            the driver (97.3). The first cut emitted 0xCB, the 1992
 ;            engine's far return, which a near call would have popped a
 ;            segment for. The shape and the count are the generator's (the
-;            dual-phase word load of 96.3 is the same 4 bytes as the byte
+;            dual-phase word load of 97.3 is the same 4 bytes as the byte
 ;            load, so the set's size is this set's); the bytes are
 ;            pxsgen.py's business in wave 2.
 pb_b_gen:
@@ -1738,7 +1738,7 @@ pb_b_gen:
 
 ; pb_b_bt - the transpose: 15 masters x 2 shades, 32x32 4bpp row-major
 ;           masters to byte-a-texel column-major sets through an ink table
-;           (96.4's bt_build). ONE master load serves TWO texels - the byte
+;           (97.4's bt_build). ONE master load serves TWO texels - the byte
 ;           holds columns u and u+1 of one row, and the pair of output
 ;           columns is written together, [di] and [di + 32] - so nothing
 ;           branches on a column's parity and the ink table's BX is set once
@@ -2281,7 +2281,7 @@ pb_run:
 ; data
 ; =============================================================================
 
-; the package's own tables (96.1), so the DDA setup reads the real px_tan
+; the package's own tables (97.1), so the DDA setup reads the real px_tan
 ; and the real fan: copied into the claim by pb_tables
 %include "pixelstein/pxtab.inc"
 %if PB_CLAIMEND > PB_CLAIMKB * 1024
@@ -2294,7 +2294,7 @@ pb_tpl:
 
 pb_ttl:     db 'Pixelstein Bench', 0
 
-pb_s_title: db 'PXSBENCH - the units of a PIXELSTEIN frame (96.10)', 0
+pb_s_title: db 'PXSBENCH - the units of a PIXELSTEIN frame (97.10)', 0
 pb_s_hint:  db 'Click, or press R, to run. The VRAM rows go fullscreen.', 0
 pb_s_hdra:  db '-- (a)(b) the compiled store, 80 rows; the Duff ladder --', 0
 pb_s_hdrc:  db '-- (c) the DDA: one column, 45 deg and near-axial --', 0
@@ -2326,7 +2326,7 @@ pb_r_txr3:    db 'TEXEL 80 rows ror cl3', 0
 pb_r_txl:     db 'TEXEL 80 rows lowres', 0
 pb_r_sim:     db 'SIM tick 32a 64d cap', 0
 pb_r_sim1:    db 'SIM tick 7a 22d E1M1', 0
-pb_r_hit:     db 'HIT col (96.2.5)', 0
+pb_r_hit:     db 'HIT col (97.2.5)', 0
 pb_r_hith:    db 'HIT h (rows)', 0
 pb_r_keys:    db 'KEY_DOWN x8', 0
 pb_r_blit1:   db 'BLIT1 512x80 desktop', 0

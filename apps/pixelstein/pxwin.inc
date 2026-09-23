@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/pixelstein/pxwin.inc
 ;
-; THE WINDOWED HALF (SPEC.md 96.3's WIN1, 96.8): the worker that is the game
+; THE WINDOWED HALF (SPEC.md 97.3's WIN1, 97.8): the worker that is the game
 ; loop on the desktop, the geometry asked EVERY FRAME (nothing tells a package
 ; its window moved - apps/dotdel/ddrend.inc), the one OSAPI_GFX_BLIT1 that
 ; puts the band on the glass with a pen on VGA, the focus check, and the
@@ -12,7 +12,7 @@
 ; lock is taken for the blit and the line and given back. The bracket is the
 ; UI task's (pxrast.inc) and never the worker's: while it runs the worker is
 ; frozen with everything else (SPEC.md 53.2) - and px_go_fsx waits for the
-; compose to finish before it asks for the freeze (96.8).
+; compose to finish before it asks for the freeze (97.8).
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -74,7 +74,7 @@ px_worker:
 ; px_render_win - one windowed frame: compose lock-free, then the burst
 ; clobbers everything
 ;
-; A WINDOW NOBODY CAN SEE COSTS NOTHING (SPEC.md 96.8): once a frame ends at
+; A WINDOW NOBODY CAN SEE COSTS NOTHING (SPEC.md 97.8): once a frame ends at
 ; .skip - hidden, or not a pixel of it showing - px_hidden is set and every
 ; pass returns here until a W_PAINT or W_ONRESIZE clears it, which any
 ; re-exposure brings. The first cut cast and composed a whole frame every
@@ -88,19 +88,20 @@ px_render_win:
     cmp byte [px_abon], 0           ; the About card is over the band (apps/
     jne .out                        ; dotdel's dd_abon): a blit would take it
                                     ; off the glass with the byte still up;
-                                    ; px_abdismiss repaints (96.8)
+                                    ; px_abdismiss repaints (97.8)
     mov byte [px_composing], 1
     call px_frame_begin
     mov byte [px_composing], 0
     jc .frame
     cmp byte [px_whole], 0          ; nothing changed - but a W_PAINT that
     jne .whole                      ; landed mid-compose blackened the glass:
-    cmp byte [px_lined], 0          ; the band goes back whole, NO cast (the
-    je .out                         ; first cut owed a whole frame, 34 ms of
-    call px_lock_clip               ; cast for a compose that then wrote
-    jc .lskip                       ; nothing) - or the text line alone (a
-    call px_geom_win                ; pause, 96.8)
-    call px_line_draw
+    mov al, [px_lined]              ; the band goes back whole, NO cast (the
+    or al, [px_statd]               ; first cut owed a whole frame, 34 ms of
+    jz .out                         ; cast for a compose that then wrote
+    call px_lock_clip               ; nothing) - or the text line alone (a
+    jc .lskip                       ; pause, 97.8), or its stat cells (a
+    call px_geom_win                ; round spent, a hit taken)
+    call px_line_ck
     call OSAPI_GFX_UNLOCK
     ret
 .whole:
@@ -116,10 +117,7 @@ px_render_win:
                                     ; nobody can see
     call px_geom_win
     call px_blit_win                ; consumes px_whole: rows 0..79
-    cmp byte [px_lined], 0
-    je .wnol
-    call px_line_draw
-.wnol:
+    call px_line_ck
     call OSAPI_GFX_UNLOCK
     ret
 .frame:
@@ -135,10 +133,7 @@ px_render_win:
     call px_black_around            ; the Size shrank: the glass beside the
 .noblack:                           ; band keeps the old picture otherwise
     call px_blit_win
-    cmp byte [px_lined], 0
-    je .nol
-    call px_line_draw
-.nol:
+    call px_line_ck
     call OSAPI_GFX_UNLOCK
     call px_frame_end
     ret
@@ -158,7 +153,7 @@ px_render_win:
 ;                out CF = 1 not a pixel of us is showing, the lock still held
 px_lock_clip:
     call px_wait_begin              ; another task's hold on the lock is not
-    call OSAPI_GFX_LOCK             ; this frame's work (96.8): what the
+    call OSAPI_GFX_LOCK             ; this frame's work (97.8): what the
     call px_wait_end                ; selector judges is the draw
     mov ax, KERNEL_SEG              ; A WORKER MUST LOAD ES ITSELF - only a
     mov es, ax                      ; callback arrives with ES = KERNEL_SEG
@@ -217,14 +212,14 @@ px_geom_win:
 ;
 ; ONE call a frame at most. ES:SI is the shadow's first dirty row at the
 ; band's byte, BP the shadow stride, the width 512 pixels and the height the
-; row range - WHICH IS THE WHOLE BAND ON EVERY FRAME A PLAYER SEES (96.5):
+; row range - WHICH IS THE WHOLE BAND ON EVERY FRAME A PLAYER SEES (97.5):
 ; the range is one min/max over all columns, any column nearer than 2.5
 ; tiles spans rows 0..79, and a turn moves one of those in every scene, so
 ; the measured blit is 80 rows and 24.7 ms on the 5150 whatever moved. The
 ; range collapses only on a frame in which no near column changed. The pen
 ; is light grey on black on a 4bpp display; on a 1bpp one it is ignored and
 ; the band's bits are the picture (SPEC.md 5.4.2.2). px_whole is a W_PAINT's
-; word (96.5): the GLASS was blackened, the shadow is still the whole
+; word (97.5): the GLASS was blackened, the shadow is still the whole
 ; picture, so the next blit sends all of it whatever the compose wrote -
 ; and px_r0/px_r1 stay the worker's own bytes, never a paint's
 ; -----------------------------------------------------------------------------
@@ -273,6 +268,15 @@ px_blit_win:
 .out:
     ret
 
+; px_line_ck - the line, if it is owed: whole (px_lined), or its eight stat
+;              cells alone (px_statd). The lock held, px_geom_win done
+px_line_ck:
+    cmp byte [px_lined], 0
+    jne px_line_draw
+    cmp byte [px_statd], 0
+    jne px_stat_draw
+    ret
+
 ; -----------------------------------------------------------------------------
 ; px_line_draw - the text line: the rung, the resolution and the hint, one
 ;                OSAPI_FONT_RUN (SPEC.md 6.1) in white on black
@@ -280,6 +284,7 @@ px_blit_win:
 ; -----------------------------------------------------------------------------
 px_line_draw:
     mov byte [px_lined], 0
+    mov byte [px_statd], 0
     mov di, px_lbuf
     mov si, px_s_ldet
     call px_strcat
@@ -307,6 +312,12 @@ px_line_draw:
     mov si, px_s_llow
 .q:
     call px_strcat
+    mov si, px_s_lhp                ; "  " then the eight FIXED-WIDTH stat
+    call px_strcat                  ; cells "H100 A 8" (wave 3: the window's
+    mov ax, di                      ; health and ammo until wave 4's bar),
+    sub ax, px_lbuf                 ; their cell offset banked so a round
+    mov [px_lhx], al                ; spent redraws eight cells and not 65
+    call px_stat_fmt                ; (px_stat_draw; review, wave 3)
     mov si, px_s_lpause
     cmp byte [px_pause], 0
     jne .h
@@ -320,8 +331,19 @@ px_line_draw:
     ; the erase, one pass): "Full res" to "Low res" left an 's' on the
     ; glass, and unpausing left "PAUSED (P)" standing, because font_run
     ; paints only under its string
+    ; ...AND HELD TO THE CONTENT'S WIDTH: the frame is PX_WINW = 528 px, 65
+    ; cells of 8 with the border, and a line past that is drawn onto the
+    ; desktop beside the window, where no pad of ours ever erases it -
+    ; wave 3's health and ammo took "Textured  Size 64  Full res  Press F
+    ; for full screen" to 69 cells and tests/pxsfsx.py found three cells of
+    ; "een" standing right of the window after a Textured bracket
     mov ax, di
     sub ax, px_lbuf                 ; AX = this line's length
+    cmp ax, PX_LINEMAX
+    jbe .fits
+    mov ax, PX_LINEMAX
+    lea di, [px_lbuf + PX_LINEMAX]
+.fits:
     mov cl, [px_llen]
     mov [px_llen], al
     xor ch, ch
@@ -339,6 +361,104 @@ px_line_draw:
     mov al, CWHITE
     mov ah, CBLACK
     call OSAPI_FONT_RUN
+    ret
+
+; px_stat_fmt - the eight stat cells at DI: 'H', the health in three cells
+;               right-aligned, ' A', the ammo in two - fixed width, so the
+;               cells to their right never move. clobbers AX, CX; DI + 8
+px_stat_fmt:
+    mov byte [di], 'H'
+    inc di
+    mov al, [px_health]
+    xor ah, ah
+    mov cl, 100
+    div cl                          ; AL = hundreds, AH = the rest
+    add al, '0'
+    cmp al, '0'
+    jne .h1
+    mov al, ' '
+.h1:
+    mov [di], al
+    mov al, ah
+    aam                             ; AH = tens, AL = units
+    add ax, '00'
+    cmp byte [di], ' '
+    jne .h2
+    cmp ah, '0'
+    jne .h2
+    mov ah, ' '
+.h2:
+    mov [di + 1], ah
+    mov [di + 2], al
+    mov byte [di + 3], ' '
+    mov byte [di + 4], 'A'
+    mov al, [px_ammo]
+    aam
+    add ax, '00'
+    cmp ah, '0'
+    jne .a1
+    mov ah, ' '
+.a1:
+    mov [di + 5], ah
+    mov [di + 6], al
+    add di, 7
+    ret
+
+; px_stat_draw - the eight stat cells alone, in place: one OSAPI_FONT_RUN of
+;                8 cells (~7 ms on the 5150) where the whole line is 65
+;                (~59 ms) - and the whole line when it was never drawn.
+;                The lock held, px_geom_win done. clobbers AX, CX, DX, SI, DI
+px_stat_draw:
+    cmp byte [px_lhx], 0xFF
+    je px_line_draw
+    mov byte [px_statd], 0
+    mov di, px_sbuf
+    call px_stat_fmt
+    mov byte [di], 0
+    mov al, [px_lhx]
+    xor ah, ah
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                       ; cells to pixels
+    add ax, [px_bx]
+    mov cx, ax
+    mov dx, [px_ly]
+    mov si, px_sbuf
+    mov al, CWHITE
+    mov ah, CBLACK
+    call OSAPI_FONT_RUN
+    ret
+
+; px_dec3 - AL (0..255) in decimal at DI, no leading zeros. clobbers AX, CX
+px_dec3:
+    xor ah, ah
+    mov cl, 100
+    div cl                          ; AL = hundreds, AH = the rest
+    or al, al
+    jz .tens
+    add al, '0'
+    mov [di], al
+    inc di
+    mov al, ah
+    aam
+    add ax, '00'
+    mov [di], ah
+    mov [di + 1], al
+    inc di
+    inc di
+    ret
+.tens:
+    mov al, ah
+    aam                             ; AH = tens, AL = units
+    or ah, ah
+    jz .units
+    add ah, '0'
+    mov [di], ah
+    inc di
+.units:
+    add al, '0'
+    mov [di], al
+    inc di
     ret
 
 ; px_strcat - append the NUL string at SI to DI (no NUL written)
@@ -361,7 +481,8 @@ px_s_ltex:   db 'Textured', 0
 px_s_lsize:  db '  Size ', 0
 px_s_lfull:  db '  Full res', 0
 px_s_llow:   db '  Low res', 0
-px_s_lhint:  db '  Press F for full screen', 0
+px_s_lhp:    db '  ', 0
+px_s_lhint:  db '  F: full screen', 0   ; (16 cells: the line stays under PX_LINEMAX with the health and ammo on it)
 px_s_lpause: db '  PAUSED (P)', 0
 px_s_lnone:  db 0
 

@@ -93,7 +93,7 @@ EXEMPT_DIRS = {
 # needs the Makefile rule that says so, or the gate would be checking a name
 # nothing builds.
 PKG_FILE = {
-    "pixelstein": "PXSTEIN.O88",   # SPEC.md 96.9: $(BUILD)/pxstein.o88 out of
+    "pixelstein": "PXSTEIN.O88",   # SPEC.md 97.9: $(BUILD)/pxstein.o88 out of
                                    # apps/pixelstein/ - the folder carries the
                                    # game's name, the file its 8.3 one
 }

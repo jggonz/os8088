@@ -1,11 +1,13 @@
 ; =============================================================================
 ; os8088 - apps/pixelstein/pxgame.inc
 ;
-; THE SESSION (SPEC.md 96.8): the clock, the two readers of the keyboard, the
+; THE SESSION (SPEC.md 97.8): the clock, the two readers of the keyboard, the
 ; player's step with per-axis collision, the level's expansion into the two
-; map layouts, the detail selector and one key handler for both worlds.
-; Wave 1 is PLAY from the first paint; the states, the doors that slide,
-; the guards and the scores are later waves'.
+; map layouts and its tables, the detail selector and one key handler for
+; both worlds. WAVE 3: the doors that slide (97.2.4, 97.8), the keys, the
+; pickups, the Use and Fire keys, the hitscan, the player's health and the
+; DIE wash, the world's tick (px_sim_tick: the doors, the guards of
+; pxact.inc, the weapon). The states and the scores are wave 4's.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -70,6 +72,15 @@ px_key_common:
     je .size
     cmp al, 'V'
     je .size
+    cmp al, '1'                     ; 1, 2, 3: the knife, the pistol, the gun
+    jb .notw                        ; (97.8; the first cut defined the scans
+    cmp al, '3'                     ; and read none of them - review, wave 3)
+    ja .notw
+    sub al, '1'
+    mov [px_weapon], al
+    mov byte [px_dirty], 1          ; the frame changed: the draw rule erases
+    ret                             ; the old and draws the new (97.6)
+.notw:
     or al, al                       ; an extended key: AL = 0, AH = the scan
     jnz .out                        ; (the arrows reach int 16h this way)
     cmp ah, KSC_LEFT
@@ -87,7 +98,7 @@ px_key_common:
     mov byte [px_lined], 1
     ret
 .size:
-    ; THE V KEY cycles the Size row (SPEC.md 96.3): 48, 56, 64, 72, 80 and
+    ; THE V KEY cycles the Size row (SPEC.md 97.3): 48, 56, 64, 72, 80 and
     ; round, applied between frames like a menu pick. Saved from the UI task
     ; only - in the bracket the pick is banked and written when the bracket
     ; is left (px_go_fsx)
@@ -101,7 +112,7 @@ px_key_common:
     jne .sz
     cmp al, PX_NSIZEW               ; windowed: 48, 56, 64 and round - 72
     jb .sz                          ; and 80 are the bracket's, and their
-    xor al, al                      ; items say so (96.3)
+    xor al, al                      ; items say so (97.3)
 .sz:
     mov [px_sizeix], al
     mov byte [px_pend], 1
@@ -124,7 +135,7 @@ px_key_common:
 
 ; -----------------------------------------------------------------------------
 ; px_keys_read - the held keys, latched into what a step spends (SPEC.md
-;                96.8, apps/tank's latch-and-spend): OSAPI_KEY_DOWN once a
+;                97.8, apps/tank's latch-and-spend): OSAPI_KEY_DOWN once a
 ;                frame when a step is owed
 ; clobbers AX
 ; -----------------------------------------------------------------------------
@@ -290,10 +301,17 @@ px_sin_of:
     ret
 
 ; -----------------------------------------------------------------------------
-; px_step - one simulation step: spend what px_keys_read latched (96.8)
+; px_step - one simulation step: spend what px_keys_read latched (97.8)
 ; clobbers AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
 px_step:
+    call px_step_move
+    call px_pmark                   ; the player's cell mark, and what it
+                                    ; picked up (wave 3)
+    jmp px_sim_tick                 ; ...and the world's tick: its ret is ours
+
+; px_step_move - the player's own step
+px_step_move:
     mov al, [px_kturn]
     or al, al
     jz .noturn
@@ -327,7 +345,7 @@ px_step:
     mov bx, [px_hcos]
     PX_MUL14
     add cx, ax                      ; + str * cos
-    ; x first, against the four corner cells at the OLD y (SPEC.md 96.8)
+    ; x first, against the four corner cells at the OLD y (SPEC.md 97.8)
     mov ax, [px_px]
     add ax, si
     mov dx, [px_py]
@@ -375,13 +393,50 @@ px_solid2:
     push ax
     sub dx, PX_RADIUS
     call px_cell
-    mov cl, [px_map + bx]
+    call px_pblk
     pop ax
-    add dx, PX_RADIUS * 2
-    call px_cell
-    or cl, [px_map + bx]
     pop dx
-    test cl, PXC_SOLID | PXC_DOOR   ; a shut door blocks (the slide is wave 3)
+    jnz .out
+    push dx
+    push ax
+    add dx, PX_RADIUS
+    call px_cell
+    call px_pblk
+    pop ax
+    pop dx
+.out:
+    ret
+
+; px_pblk - does cell BX block the PLAYER? ZF clear if so: a wall, a blocking
+;           static, an actor, or a door that has not slid past
+;           PX_DOORPASS (97.8) - or, past that, a live actor in the doorway.
+;           A DOOR cell is asked FIRST: its high nibble is a material, never
+;           a mark (a secret door in wall material 1 is 0x1A, and the first
+;           cut's mark test read its PXC_BLOCK and blocked the player for
+;           good, open or shut; review, wave 3). Clobbers AX, BX, CX
+px_pblk:
+    mov cl, [px_map + bx]
+    test cl, PXC_DOOR
+    jnz .door
+    test cl, PXC_SOLID | PXC_BLOCK | PXC_ACTOR
+    ret                             ; (the test's ZF)
+.door:
+    mov ax, bx
+    push ax                         ; the cell
+    call px_door_of
+    jc .shutp
+    mov bx, ax
+    cmp word [bx + PXD_POS], PX_DOORPASS
+    jb .shutp
+    pop ax
+    push di
+    mov di, 0xFFFF                  ; the player asking: a guard in the
+    call px_body_in                 ; doorway blocks, its own cell does not
+    pop di
+    ret
+.shutp:
+    pop ax
+    or cl, cl                       ; (the DOOR bit: ZF clear)
     ret
 
 ; px_solid4 - AX = x, DX = y: the four corners of the radius. ZF clear if
@@ -398,48 +453,93 @@ px_solid4:
     ret
 
 ; -----------------------------------------------------------------------------
-; px_level_load - the level stream's first record into the two map layouts
-;                 and the eye (SPEC.md 96.7, 96.2)
-; in:  [px_hand + PXH_LEV] = the stream's segment.  out: CF=1 refused
+; px_level_load - level AL of the stream into the two map layouts, the eye,
+;                 the doors, the actors and the statics (SPEC.md 97.7, 97.2)
+; in:  AL = the level, [px_hand + PXH_LEV] = the stream's segment.
+; out: CF=1 refused
 ; clobbers AX, BX, CX, DX, SI, DI, ES
 ; -----------------------------------------------------------------------------
 px_level_load:
+    cmp al, PXL_NLEV
+    jae .bad
+    mov [px_floor], al
     mov ax, [px_hand + PXH_LEV]
     or ax, ax
     jz .bad
     mov es, ax
-    cmp word [es:0], 'PX'           ; 'PXL', 1
+    ; THE DIRECTORY (pxlev.inc): the record's offset and length, both held
+    ; to the part's own length (PXH_LEVLEN) before a byte of it is read
+    mov bl, [px_floor]
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    mov si, [px_levdir + bx]        ; the record
+    mov dx, [px_levdir + bx + 2]    ; ...and its length
+    mov ax, si
+    add ax, dx
+    jc .bad
+    cmp ax, [px_hand + PXH_LEVLEN]
+    ja .bad
+    cmp dx, PXL_HDR
+    jb .bad
+    cmp word [es:si], 'PX'          ; 'PXL', 1
     jne .bad
-    cmp word [es:2], 'L' | (1 << 8)
+    cmp word [es:si + 2], 'L' | (1 << 8)
     jne .bad
-    mov ax, [es:PXL_SPAWNX]
+    mov ax, [es:si + PXL_SPAWNX]
     mov [px_px], ax
-    mov ax, [es:PXL_SPAWNY]
+    mov ax, [es:si + PXL_SPAWNY]
     mov [px_py], ax                 ; ...both checked against the map below
-    mov ax, [es:PXL_SPAWNA]
+    mov ax, [es:si + PXL_SPAWNA]
     and ax, PX_ANG - 1
     mov [px_head], ax
+    mov al, [es:si + PXL_NDOORS]    ; the three counts, each under its table
+    cmp al, PX_MAXDOORS
+    ja .bad
+    mov [px_ndoors], al
+    mov al, [es:si + PXL_NACTORS]
+    cmp al, PX_MAXACT
+    ja .bad
+    mov [px_nact], al
+    mov al, [es:si + PXL_NSTATIC]
+    cmp al, PX_MAXSTAT
+    ja .bad
+    mov [px_nstat], al
     ; the run-length map, row-major, into px_map. EVERY BYTE READ OFF THE
-    ; FLOPPY IS HOSTILE (CLAUDE.md; 96.7): this is the one place a file byte
+    ; FLOPPY IS HOSTILE (CLAUDE.md; 97.7): this is the one place a file byte
     ; becomes a length, so a zero run, a run past the map's end and an odd
     ; pair length each refuse the stream BEFORE a write - the first cut
     ; checked the total after the writes, and a count of 0 had by then
     ; stored 65,536 bytes from px_map through the rest of the carve.
-    ; THE SOURCE IS BOUNDED TOO: PXL_MAPLEN is a file word, and the loader
-    ; handed over the part's own length (PXH_LEVLEN, the row's OP_R_LEN), so
-    ; a record shorter than its header or a pair length past the part's end
-    ; is refused before SI walks into the next part of the carve - the
-    ; second cut bounded the destination alone and read up to 8 KB past a
-    ; 1 KB part
-    mov ax, [px_hand + PXH_LEVLEN]
-    cmp ax, PXL_HDR
-    jb .bad
+    ; THE SOURCE IS BOUNDED TOO: PXL_MAPLEN is a file word, and the record's
+    ; length (the directory's, held to the part's above) is what bounds
+    ; every length READ OUT OF the stream - the pairs, then the three
+    ; tables behind them
+    mov ax, dx
     sub ax, PXL_HDR                 ; AX = the bytes the record can hold
-    mov si, PXL_HDR
-    mov di, px_map
-    mov dx, [es:PXL_MAPLEN]         ; bytes of pairs...
+    mov dx, [es:si + PXL_MAPLEN]    ; bytes of pairs...
     cmp dx, ax
-    ja .bad                         ; ...not more than the part holds
+    ja .bad                         ; ...not more than the record holds
+    sub ax, dx                      ; ...and past them the three tables
+    push ax
+    mov al, [px_ndoors]
+    mov ah, PXL_DOORSZ
+    mul ah
+    mov cx, ax
+    mov al, [px_nact]
+    mov ah, PXL_ACTSZ
+    mul ah
+    add cx, ax
+    mov al, [px_nstat]
+    mov ah, PXL_STATSZ
+    mul ah
+    add cx, ax
+    pop ax
+    cmp cx, ax
+    ja .bad
+    add si, PXL_HDR
+    mov di, px_map
 .rle:
     cmp dx, 2
     jb .expanded                    ; 0: done; 1: an odd length, refused below
@@ -455,19 +555,19 @@ px_level_load:
     mov bx, px_map + 4096
     sub bx, di                      ; BX = the cells left
     cmp bx, cx
-    jb .bad                         ; ...and this run would overrun them
+    jb .badj                        ; ...and this run would overrun them
 .fill:
     mov [di], al
     inc di
     loop .fill
-    jmp short .rle
+    jmp .rle
 .expanded:
     or dx, dx
     jnz .bad                        ; an odd pair length
     cmp di, px_map + 4096
     jne .bad                        ; a stream that is not a whole map
     ; THE PERIMETER IS SOLID AND HOLDS NO DOOR, AND THE SPAWN IS INSIDE IT
-    ; (96.7): the walkers of 96.2 have no crossing counter - they stop on a
+    ; (97.7): the walkers of 97.2 have no crossing counter - they stop on a
     ; SOLID|DOOR bit and nothing else - so one border cell with its bit
     ; clear (a rotted floppy, an edited part 1) walks them out of px_mapT
     ; and px_map for ever, marking spotvis at wrapping offsets through the
@@ -475,27 +575,29 @@ px_level_load:
     ; same level on the host; this is the machine refusing the FILE. 256
     ; byte tests once at load, against a walk that cannot be bounded
     ; cheaply inside the body
+    push si
     mov si, px_map                  ; the top row
     mov cx, 64
     call px_lev_wall
-    jc .bad
+    jc .badpop
     mov si, px_map + 63 * 64        ; the bottom row
     mov cx, 64
     call px_lev_wall
-    jc .bad
+    jc .badpop
     mov si, px_map + 64             ; the two side columns, rows 1..62
     mov cx, 62
 .sides:
     mov al, [si]
     and al, PXC_SOLID | PXC_DOOR
     cmp al, PXC_SOLID
-    jne .bad
+    jne .badpop
     mov al, [si + 63]
     and al, PXC_SOLID | PXC_DOOR
     cmp al, PXC_SOLID
-    jne .bad
+    jne .badpop
     add si, 64
     loop .sides
+    pop si
     mov ax, [px_px]                 ; the spawn: tiles 1..62 on both axes
     mov dx, [px_py]                 ; (a tile past 63 would fold px_cell's
     cmp ah, 1                       ; `or` into the y field, and one under
@@ -509,7 +611,10 @@ px_level_load:
     call px_cell
     test byte [px_map + bx], PXC_SOLID | PXC_DOOR
     jnz .bad
-    ; ...and transposed, mapT[x*64 + y] = map[y*64 + x] (96.2)
+    mov [px_pcell], bx
+    ; ...and transposed, mapT[x*64 + y] = map[y*64 + x] (97.2) - BEFORE the
+    ; marks below, which are the plain map's alone
+    push si
     cld
     mov si, px_map
     xor bx, bx                      ; BX = y
@@ -525,11 +630,801 @@ px_level_load:
     inc bx
     cmp bx, 64
     jb .ty
+    pop si
+    ; --- THE DOORS (97.7): cell, flags, lock - the cell a DOOR cell of the
+    ;     map, in ascending order (px_door_of's row table wants it), the
+    ;     lock 0..2; the slab shut
+    mov di, px_doors
+    mov cl, [px_ndoors]
+    xor ch, ch
+    mov dx, 0xFFFF                  ; the last cell, for the order
+    jcxz .doors_done_j
+    jmp short .door
+.doors_done_j:
+    jmp .doors_done
+.door:
+    mov ax, [es:si]
+    cmp ax, 4096
+    jae .bad
+    mov bx, ax
+    test byte [px_map + bx], PXC_DOOR
+    jz .bad
+    cmp dx, 0xFFFF
+    je .d1
+    cmp ax, dx
+    jbe .bad                        ; not ascending
+.d1:
+    mov dx, ax
+    mov [di + PXD_CELL], ax
+    mov al, [px_map + bx]
+    and al, 15
+    mov [di + PXD_FLAGS], al        ; the map's own flags, not the file's
+    mov al, [es:si + 3]
+    cmp al, 2
+    ja .bad
+    mov [di + PXD_LOCK], al
+    mov word [di + PXD_POS], 0
+    mov byte [di + PXD_STATE], PXDS_SHUT
+    mov byte [di + PXD_TIMER], 0
+    add si, PXL_DOORSZ
+    add di, PXD_SIZE
+    loop .door
+.doors_done:
+    ; the row table: px_drow[y] = the first door in row y or after - the
+    ; walk past the doors of the rows UNDER y comes first and the store
+    ; after it (the first cut stored, then walked, so every entry lagged a
+    ; row and px_door_of found no door from its own cell: Space in front of
+    ; a door did nothing, and the cast, the movers and the line of sight
+    ; read every door as shut)
+    xor bx, bx                      ; BX = y
+    xor cx, cx                      ; CL = the door index
+.dwalk:
+    cmp cl, [px_ndoors]
+    jae .drow
+    mov al, cl
+    mov ah, PXD_SIZE
+    mul ah
+    mov di, ax
+    mov ax, [px_doors + di + PXD_CELL]
+    push cx
+    mov cl, 6
+    shr ax, cl
+    pop cx
+    cmp ax, bx                      ; its row under y? then it is behind
+    jae .drow
+    inc cl
+    jmp short .dwalk
+.drow:
+    mov [px_drow + bx], cl
+    inc bx
+    cmp bx, 65
+    jb .dwalk
+    ; --- THE ACTORS: cell, kind, facing -----------------------------------------
+    mov di, px_act
+    mov cl, [px_nact]
+    xor ch, ch
+    jcxz .act_done_j
+    jmp short .actor
+.act_done_j:
+    jmp .act_done
+.actor:
+    mov ax, [es:si]
+    cmp ax, 4096
+    jae .bad
+    mov bx, ax
+    test byte [px_map + bx], PXC_SOLID | PXC_DOOR
+    jnz .bad
+    mov [di + PXAC_CELL], ax
+    or byte [px_map + bx], PXC_ACTOR
+    mov ah, al                      ; the tile's centre
+    and ah, 63
+    mov al, 128
+    mov [di + PXAC_X], ax
+    mov ax, bx
+    push cx
+    mov cl, 6
+    shr ax, cl
+    pop cx
+    mov ah, al
+    mov al, 128
+    mov [di + PXAC_Y], ax
+    mov al, [es:si + 2]
+    mov ah, al
+    and al, 0x7F
+    cmp al, 1
+    ja .bad
+    mov [di + PXAC_KIND], al
+    mov byte [di + PXAC_STATE], PXAS_STAND
+    mov byte [di + PXAC_FLAGS], 0
+    test ah, PXL_PATROL
+    jz .stands
+    mov byte [di + PXAC_STATE], PXAS_PATROL
+    mov byte [di + PXAC_FLAGS], PXAF_PATROL
+.stands:
+    mov ax, [es:si + 3]
+    and ax, PX_ANG - 1
+    mov [di + PXAC_ANG], ax
+    push cx
+    mov cl, 10
+    shr ax, cl
+    pop cx
+    mov [di + PXAC_DIR], al
+    mov byte [di + PXAC_TIMER], 0
+    mov byte [di + PXAC_HP], PX_GUARDHP
+    mov byte [di + PXAC_FRAME], 0
+    add si, PXL_ACTSZ
+    add di, PXAC_SIZE
+    dec cx
+    jz .act_done
+    jmp .actor
+.act_done:
+    ; --- THE STATICS: cell, kind, blocking ----------------------------------------
+    mov di, px_stat
+    mov cl, [px_nstat]
+    xor ch, ch
+    jcxz .stat_done_j
+    jmp short .static
+.stat_done_j:
+    jmp .stat_done
+.static:
+    mov ax, [es:si]
+    cmp ax, 4096
+    jae .bad
+    mov bx, ax
+    test byte [px_map + bx], PXC_SOLID | PXC_DOOR
+    jnz .bad
+    mov [di + PXT_CELL], ax
+    mov al, [es:si + 2]
+    cmp al, PXK_DECO0 + 6
+    jae .bad
+    mov [di + PXT_KIND], al
+    mov al, [es:si + 3]
+    and al, 1
+    mov [di + PXT_FLAGS], al
+    jz .free
+    or byte [px_map + bx], PXC_BLOCK
+.free:
+    PX_TIDX                         ; its cell in the transposed layout, once
+    mov bx, di                      ; (the gather's probe reads it; 97.6)
+    sub bx, px_stat
+    shr bx, 1
+    mov [px_statT + bx], ax
+    add si, PXL_STATSZ
+    add di, PXT_SIZE
+    loop .static
+.stat_done:
+    mov bx, [px_pcell]              ; the player's own mark
+    or byte [px_map + bx], PXC_PLAYER
+    mov byte [px_aim], 0xFF
     call px_sincos
     clc
     ret
+.badpop:
+    pop si
+.badj:
 .bad:
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; px_level_next - the floor [px_levnext] between frames (px_frame_begin):
+;                 the switch's next floor, or the DIE restart of this one
+; clobbers everything but DS
+; -----------------------------------------------------------------------------
+px_level_next:
+    mov al, [px_levnext]
+    mov byte [px_levnext], 0xFF
+    mov ah, [px_floor]              ; the floor in force, for a refusal
+    push ax
+    call px_level_load
+    pop ax
+    jnc .loaded
+    ; REFUSED (a rotten floppy: every floor in the stream passed the host's
+    ; rules). px_level_load stores the counts and expands the map BEFORE it
+    ; can refuse a record or the perimeter, so the floor that was in force
+    ; is loaded AGAIN over the half-written one - it loaded once, the
+    ; stream in memory is what it was, so it loads whole - and the restart
+    ; below starts it afresh. The first cut's comment said a refusal
+    ; "leaves the last one", which it did not (review, wave 3)
+    mov al, ah
+    call px_level_load
+    jc .out                         ; (cannot: see above)
+.loaded:
+    call px_spot_clear
+    mov byte [px_keys], 0
+    mov byte [px_state], PXST_PLAY
+    mov byte [px_fade], 0
+    mov byte [px_wframe], 0
+    mov byte [px_wtimer], 0
+    cmp byte [px_restart], 0
+    je .fresh
+    mov byte [px_restart], 0
+    mov byte [px_health], PX_HEALTH0
+    mov byte [px_ammo], PX_AMMO0
+    mov byte [px_weapon], PXW_PISTOL
+    cmp byte [px_lives], 0
+    je .fresh
+    dec byte [px_lives]
+.fresh:
+    call px_force_all
+    mov byte [px_lined], 1
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; px_door_of - AX = a cell -> AX = its door's record, or CF = 1 (97.7's row
+;              table: the doors of the cell's row, a few compares)
+; preserves every other register
+; -----------------------------------------------------------------------------
+px_door_of:
+    push bx
+    push cx
+    push si
+    mov bx, ax
+    mov cl, 6
+    shr bx, cl                      ; the row
+    mov cl, [px_drow + bx]          ; its doors: [cl, ch)
+    mov ch, [px_drow + bx + 1]
+    cmp cl, ch
+    jae .none
+    push ax
+    mov al, cl
+    mov ah, PXD_SIZE
+    mul ah
+    mov si, ax
+    add si, px_doors
+    pop ax
+.d:
+    cmp [si + PXD_CELL], ax
+    je .found
+    add si, PXD_SIZE
+    inc cl
+    cmp cl, ch
+    jb .d
+.none:
+    pop si
+    pop cx
+    pop bx
+    stc
+    ret
+.found:
+    mov ax, si
+    pop si
+    pop cx
+    pop bx
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; px_pmark - the player's cell mark follows the eye (pxact.inc's movers test
+;            it), and a cell entered is searched for a pickup
+; clobbers AX, BX, CX, DX, SI
+; -----------------------------------------------------------------------------
+px_pmark:
+    mov ax, [px_px]
+    mov dx, [px_py]
+    call px_cell
+    cmp bx, [px_pcell]
+    je .out
+    mov si, [px_pcell]
+    test byte [px_map + si], PXC_DOOR   ; NEVER ON A DOOR CELL (97.8): its
+    jnz .left                       ; high nibble is the material, and the
+    and byte [px_map + si], ~PXC_PLAYER ; first cut's `and` turned a steel
+.left:                              ; door walked through into material 8
+    mov [px_pcell], bx              ; for good (review, wave 3)
+    test byte [px_map + bx], PXC_DOOR
+    jnz .marked
+    or byte [px_map + bx], PXC_PLAYER
+.marked:
+    ; a pickup here? (97.8): the statics with a pickup kind
+    mov cl, [px_nstat]
+    or cl, cl
+    jz .out
+    mov si, px_stat
+.st:
+    cmp byte [si + PXT_KIND], PXK_DECO0
+    jae .stn
+    cmp [si + PXT_CELL], bx
+    jne .stn
+    call px_pickup
+.stn:
+    add si, PXT_SIZE
+    dec cl
+    jnz .st
+.out:
+    ret
+
+; px_pickup - the static at SI, a pickup on the player's cell, is taken
+;             (the 1992 engine's table): ammo 8 to 99, a medkit 25 and food
+;             10 to 100, the two keys, treasure 100 and the chalice 500,
+;             the extra life a life, full health and 25 rounds. Full
+;             health or ammo leaves the one that would give it lying
+; clobbers AX
+px_pickup:
+    mov al, [si + PXT_KIND]
+    cmp al, PXK_AMMO
+    je .ammo
+    cmp al, PXK_MEDKIT
+    je .med
+    cmp al, PXK_FOOD
+    je .food
+    cmp al, PXK_GOLDKEY
+    je .gold
+    cmp al, PXK_SILVKEY
+    je .silver
+    cmp al, PXK_TREAS
+    je .treas
+    cmp al, PXK_CHALICE
+    je .chal
+    ; the extra life
+    inc byte [px_lives]
+    mov byte [px_health], PX_HEALTH0
+    mov al, 25
+    call px_give_ammo
+    jmp short .taken
+.ammo:
+    cmp byte [px_ammo], PX_AMMOMAX
+    jae .out
+    mov al, 8
+    call px_give_ammo
+    jmp short .taken
+.med:
+    cmp byte [px_health], PX_HEALTH0
+    jae .out
+    mov al, 25
+    call px_heal
+    jmp short .taken
+.food:
+    cmp byte [px_health], PX_HEALTH0
+    jae .out
+    mov al, 10
+    call px_heal
+    jmp short .taken
+.gold:
+    or byte [px_keys], 1
+    jmp short .taken
+.silver:
+    or byte [px_keys], 2
+    jmp short .taken
+.treas:
+    add word [px_score], 100
+    jmp short .taken
+.chal:
+    add word [px_score], 500
+.taken:
+    mov byte [si + PXT_KIND], 0xFF
+    mov byte [px_dirty], 1
+    mov byte [px_statd], 1
+.out:
+    ret
+
+px_give_ammo:
+    add al, [px_ammo]
+    cmp al, PX_AMMOMAX
+    jbe .ok
+    mov al, PX_AMMOMAX
+.ok:
+    mov [px_ammo], al
+    ret
+
+px_heal:
+    add al, [px_health]
+    cmp al, PX_HEALTH0
+    jbe .ok
+    mov al, PX_HEALTH0
+.ok:
+    mov [px_health], al
+    ret
+
+; -----------------------------------------------------------------------------
+; px_sim_tick - the world, once a simulation step after the player's (97.8):
+;               the DIE wash's clock; then, unless the gates froze it, the
+;               doors, the guards, the Use key, the weapon
+; clobbers everything but DS
+; -----------------------------------------------------------------------------
+px_sim_tick:
+    inc word [px_dtick]
+    cmp byte [px_state], PXST_DYING
+    jne .play
+    dec byte [px_fade]
+    jnz .out
+    mov al, [px_floor]              ; the wash is over: this floor again
+    mov [px_levnext], al
+    mov byte [px_restart], 1
+.out:
+    ret
+.play:
+    cmp byte [px_simoff], 0
+    jne .out
+    call px_doors_tick
+    call px_act_tick
+    call px_keys_tick
+    ret
+
+; -----------------------------------------------------------------------------
+; px_doors_tick - every door a tick (97.8): opening slides PX_DOORSTEP a tick
+;                 to 256, open holds PX_DOORHOLD ticks and closes unless a
+;                 body is in it, closing slides back and reopens if a body
+;                 steps in
+; clobbers AX, BX, CX, SI
+; -----------------------------------------------------------------------------
+px_doors_tick:
+    mov cl, [px_ndoors]
+    or cl, cl
+    jz .out
+    mov si, px_doors
+.d:
+    mov al, [si + PXD_STATE]
+    cmp al, PXDS_OPENING
+    je .opening
+    cmp al, PXDS_OPEN
+    je .open
+    cmp al, PXDS_CLOSING
+    je .closing
+.next:
+    add si, PXD_SIZE
+    dec cl
+    jnz .d
+.out:
+    ret
+.opening:
+    mov ax, [si + PXD_POS]
+    add ax, PX_DOORSTEP
+    cmp ax, 256
+    jb .slid
+    mov ax, 256
+    mov byte [si + PXD_STATE], PXDS_OPEN
+    mov byte [si + PXD_TIMER], 0
+.slid:
+    mov [si + PXD_POS], ax
+    call px_door_dirty
+    jmp short .next
+.open:
+    inc byte [si + PXD_TIMER]
+    cmp byte [si + PXD_TIMER], PX_DOORHOLD
+    jb .next
+    mov byte [si + PXD_TIMER], 0    ; (a body in it: asked again later)
+    call px_door_close
+    jmp short .next
+.closing:
+    call px_door_body
+    jnc .slide
+    mov byte [si + PXD_STATE], PXDS_OPENING   ; something stepped in
+    jmp short .next
+.slide:
+    mov ax, [si + PXD_POS]
+    sub ax, PX_DOORSTEP
+    ja .slid2
+    xor ax, ax
+    mov byte [si + PXD_STATE], PXDS_SHUT
+.slid2:
+    mov [si + PXD_POS], ax
+    call px_door_dirty
+    jmp short .next
+
+; px_door_dirty - the door at SI moved: a frame is owed only if a ray of the
+;                 last cast crossed its cell (px_spot_seen) - a ray that
+;                 reaches a door enters its cell to test the slab, so a
+;                 door no ray reached changed no pixel (review r1: every
+;                 sliding door set px_dirty, and a still eye then paid a
+;                 cast and a gather a tick for a door behind a wall).
+;                 preserves every register
+px_door_dirty:
+    push bx
+    mov bx, [si + PXD_CELL]
+    call px_spot_seen
+    pop bx
+    jnc .out
+    mov byte [px_dirty], 1
+.out:
+    ret
+
+; px_door_close - the door at SI starts closing, unless a body is in it
+;                 (px_door_body). clobbers AX, BX
+px_door_close:
+    call px_door_body
+    jc .out
+    mov byte [si + PXD_STATE], PXDS_CLOSING
+.out:
+    ret
+
+; px_door_body - is a body in the door at SI? CF = 1 yes: the player's cell,
+;                or any actor's - alive or dead - whose centre is in it
+;                (97.8: a body keeps a door open). clobbers AX, BX
+px_door_body:
+    push cx
+    push si
+    mov ax, [si + PXD_CELL]
+    cmp ax, [px_pcell]
+    je .yes
+    mov cl, [px_nact]
+    or cl, cl
+    jz .no
+    mov si, px_act
+.a:
+    cmp byte [si + PXAC_STATE], PXAS_NONE
+    je .an
+    cmp [si + PXAC_CELL], ax
+    je .yes
+.an:
+    add si, PXAC_SIZE
+    dec cl
+    jnz .a
+.no:
+    pop si
+    pop cx
+    clc
+    ret
+.yes:
+    pop si
+    pop cx
+    stc
+    ret
+
+; px_door_use - the player operates the door at BX (97.8): a lock it has
+;               no key for refuses; shut or closing opens; open or opening
+;               closes (unless a body is in it). clobbers AX, SI
+px_door_use:
+    mov al, [bx + PXD_LOCK]
+    or al, al
+    jz .free
+    mov ah, [px_keys]               ; lock 1 wants bit 0, lock 2 bit 1
+    cmp al, 1
+    jne .k2
+    test ah, 1
+    jz .out
+    jmp short .free
+.k2:
+    test ah, 2
+    jz .out
+.free:
+    mov al, [bx + PXD_STATE]
+    cmp al, PXDS_SHUT
+    je .open
+    cmp al, PXDS_CLOSING
+    je .open
+    mov si, bx
+    call px_door_close
+    ret
+.open:
+    mov byte [bx + PXD_STATE], PXDS_OPENING
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; px_keys_tick - the Use key and the Fire key, once a step (97.8): Space
+;                operates the door or the switch in the cell ahead, on its
+;                press; Ctrl fires - one shot a press for the knife and the
+;                pistol, held for the gun - and the weapon's frames run
+; clobbers everything but DS
+; -----------------------------------------------------------------------------
+px_keys_tick:
+    cmp byte [px_inbr], 0
+    jne .keys
+    cmp byte [px_hasfoc], 0
+    je .anim                        ; somebody else has the keyboard
+.keys:
+    mov al, KSC_SPACE
+    call OSAPI_KEY_DOWN
+    jnc .nouse
+    cmp byte [px_usek], 0
+    jne .used
+    mov byte [px_usek], 1
+    call px_use
+    jmp short .used
+.nouse:
+    mov byte [px_usek], 0
+.used:
+    mov al, PX_KCTRL
+    call OSAPI_KEY_DOWN
+    jnc .nofire
+    cmp byte [px_wframe], 0
+    jne .fired                      ; still in the last shot
+    cmp byte [px_firek], 0
+    je .shoot                       ; a fresh press: always
+    mov al, [px_weapon]             ; held: the gun alone repeats
+    cmp al, PXW_MGUN
+    jne .fired
+    cmp byte [px_ammo], 0
+    je .fired
+.shoot:
+    call px_fire
+.fired:
+    mov byte [px_firek], 1
+    jmp short .anim
+.nofire:
+    mov byte [px_firek], 0
+.anim:
+    cmp byte [px_wtimer], 0
+    je .out
+    dec byte [px_wtimer]
+    jnz .out
+    mov al, [px_wframe]
+    cmp al, 1
+    jne .rest
+    mov byte [px_wframe], 2         ; the recoil
+    mov byte [px_wtimer], 2
+    mov byte [px_dirty], 1
+    ret
+.rest:
+    mov byte [px_wframe], 0         ; ready again
+    mov byte [px_dirty], 1
+.out:
+    ret
+
+; px_fire - one shot with the weapon in hand (the knife when the ammo is
+;           out): the frames start, a round is spent, and the hitscan lands
+;           on the actor under the crosshair (97.6's px_aim), if the line
+;           to it is clear, by the 1992 engine's table
+px_fire:
+    mov byte [px_wframe], 1
+    mov byte [px_wtimer], 3
+    mov byte [px_dirty], 1
+    mov al, [px_weapon]
+    cmp byte [px_ammo], 0
+    jne .have
+    xor al, al                      ; no rounds: the knife
+.have:
+    or al, al
+    jz .knife
+    dec byte [px_ammo]
+    mov byte [px_statd], 1          ; the line's health and ammo cells alone
+    cmp al, PXW_MGUN                ; (pxwin.inc: 8 cells, not 65)
+    jne .aimed
+    mov byte [px_wtimer], 2
+.aimed:
+    call px_target
+    jc .out
+    call px_act_deltas              ; the line from it to the eye
+    call px_act_los
+    jnc .out
+    mov al, [px_adist]
+    call OSAPI_RAND
+    mov bl, [px_adist]
+    cmp bl, 2
+    jb .near
+    cmp bl, 4
+    jb .mid
+    push ax
+    mov ah, 12
+    xor ah, ah
+    mov cl, 12                      ; (rnd / 12) < dist: missed
+    div cl
+    cmp al, bl
+    pop ax
+    jb .out
+.mid:
+    xor ah, ah
+    mov cl, 6
+    div cl                          ; rnd / 6
+    jmp short .hit
+.near:
+    shr al, 1                       ; rnd / 4
+    shr al, 1
+.hit:
+    call px_act_hurt
+    ret
+.knife:
+    call px_target
+    jc .out
+    cmp word [px_aimh], PX_HEIGHTK / PX_MELEE   ; within 1.5 tiles: at
+    jb .out                         ; least this tall
+    call OSAPI_RAND
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1                       ; rnd >> 4
+    call px_act_hurt
+.out:
+    ret
+
+; px_target - SI = the actor under the crosshair, alive, or CF = 1
+px_target:
+    mov al, [px_aim]
+    cmp al, 0xFF
+    je .none
+    cmp al, [px_nact]
+    jae .none
+    mov ah, PXAC_SIZE
+    mul ah
+    mov si, ax
+    add si, px_act
+    cmp byte [si + PXAC_STATE], PXAS_DIE
+    jae .none
+    cmp byte [si + PXAC_STATE], PXAS_NONE
+    je .none
+    clc
+    ret
+.none:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; px_use - the cell the player faces (the heading's quarter): a door is
+;          operated, the elevator switch thrown - its face becomes the used
+;          one (material 13 in both layouts) and the next floor loads
+;          between frames (97.7, 97.8)
+; clobbers AX, BX, CX, SI
+; -----------------------------------------------------------------------------
+px_use:
+    mov ax, [px_head]
+    add ax, PX_ANG / 8              ; the quarter: E from -512 to 512...
+    and ax, PX_ANG - 1
+    mov cl, 10
+    shr ax, cl                      ; 0 E, 1 S, 2 W, 3 N
+    mov bx, ax
+    shl bx, 1
+    mov ax, [px_use_step + bx]
+    add ax, [px_pcell]
+    mov bx, ax
+    mov al, [px_map + bx]
+    test al, PXC_DOOR
+    jz .nodoor
+    mov ax, bx
+    call px_door_of
+    jc .out
+    mov bx, ax
+    call px_door_use
+    mov byte [px_dirty], 1
+    ret
+.nodoor:
+    test al, PXC_SPECIAL
+    jz .out
+    test al, PXC_SOLID
+    jz .out
+    mov ah, al
+    mov cl, 4
+    shr ah, cl
+    cmp ah, PXM_SWITCH
+    jne .out
+    mov byte [px_map + bx], (PXM_USED << 4) | PXC_SOLID
+    mov ax, bx
+    call px_cellP2T
+    mov bx, ax
+    mov byte [px_mapT + bx], (PXM_USED << 4) | PXC_SOLID
+    mov al, [px_floor]              ; the floor ends: the next one, and the
+    inc al                          ; first again after the last (the
+    cmp al, PXL_NLEV                ; states and the cards are wave 4's)
+    jb .lev
+    xor al, al
+.lev:
+    mov [px_levnext], al
+    mov byte [px_restart], 0
+    add word [px_score], 1000
+    mov byte [px_dirty], 1
+.out:
+    ret
+
+px_use_step: dw 1, 64, -1, -64      ; E S W N: the cell ahead
+
+; px_cellP2T - AX = a plain cell (y*64 + x) -> AX = its mapT index (x*64 + y)
+;              - the same swap as px_cellT2P, which is its own inverse
+px_cellP2T:
+    jmp px_cellT2P
+
+; -----------------------------------------------------------------------------
+; px_player_hurt - AL damage to the player (97.8): none under the gates'
+;                  px_god; at 0 the DIE wash starts and the floor restarts
+;                  when it ends
+; clobbers AX
+; -----------------------------------------------------------------------------
+px_player_hurt:
+    cmp byte [px_god], 0
+    jne .out
+    cmp byte [px_state], PXST_PLAY
+    jne .out
+    mov byte [px_statd], 1
+    mov ah, [px_health]
+    sub ah, al
+    jbe .dead
+    mov [px_health], ah
+.out:
+    ret
+.dead:
+    mov byte [px_health], 0
+    mov byte [px_state], PXST_DYING
+    mov byte [px_fade], PX_FADE
+    mov byte [px_dirty], 1
     ret
 
 ; px_lev_wall - CX cells from SI are every one SOLID and none a DOOR: CF=1
@@ -549,7 +1444,7 @@ px_lev_wall:
     ret
 
 ; -----------------------------------------------------------------------------
-; The detail selector (SPEC.md 96.8): the ladder's positions in wave 1, Auto
+; The detail selector (SPEC.md 97.8): the ladder's positions in wave 1, Auto
 ; by tier and by the measured frame, a pinned rung that never moves
 ; -----------------------------------------------------------------------------
 PX_APOS_N   equ 4
@@ -558,10 +1453,10 @@ px_apos_tab:                        ; (rung, low res) per position, top first
     db PXR_TEX, 1                   ; 1 Textured Low res - the 8086's default
     db PXR_FLAT, 0                  ; 2 Flat Full - where an 8086's WINDOW starts
     db PXR_FLAT, 1                  ; 3 Flat Low res - the floor
-; WIRE IS OFF THE LADDER (SPEC.md 96.8, the user's decision on the wave-1
+; WIRE IS OFF THE LADDER (SPEC.md 97.8, the user's decision on the wave-1
 ; measurement): on the 5150 its turning draw is 76.4 ms against Flat Low
 ; res's 68.7 and its full repaint 106.4 against 85.5 (76.5 against 66.7
-; and 87.0 after the Flat two-ends arm of 96.5, which Wire has no use
+; and 87.0 after the Flat two-ends arm of 97.5, which Wire has no use
 ; for), and the stage split
 ; says WHERE - the cast and the present are identical between the two rungs
 ; (the same 32 rays, the same 80-row band: 31.1 and 21.2 ms on both), and
@@ -587,7 +1482,11 @@ px_apos_tab:                        ; (rung, low res) per position, top first
 px_auto_init:
     mov byte [px_detail], PXD_AUTO
     mov byte [px_res], 0
-    mov byte [px_sizeix], 2         ; Size 64 (px_sizes), 96.1's default
+    mov byte [px_sizeix], 2         ; Size 64 (px_sizes): 97.1's default,
+                                    ; the user's "full width" direction -
+                                    ; wave 3's review put it back after the
+                                    ; first cut moved it to 48 on a scene
+                                    ; the plan did not pin (97.1's fork)
     mov byte [px_rowsix], 0         ; Rows 80
     cmp byte [px_tier], CPU_8086
     jne .out
@@ -598,7 +1497,7 @@ px_auto_init:
 ; px_auto_start - the position a bracket ([px_inbr] = 1) or a window starts
 ;                 at on this tier, then the rung and resolution in force
 ;
-; THE 8086 STARTS AT FLAT LOW RES IN BOTH WORLDS (SPEC.md 96.8), which in
+; THE 8086 STARTS AT FLAT LOW RES IN BOTH WORLDS (SPEC.md 97.8), which in
 ; wave 1 is also the ladder's floor: PLAN 15's "one rung lower in a window"
 ; is a rule about Textured being the top, and there is nothing under Flat
 ; Low res for Auto to hand a window - Wire is off the ladder (px_apos_tab
@@ -612,7 +1511,7 @@ px_auto_start:
     cmp byte [px_tier], CPU_8086
     jne .pos
     mov al, 1                       ; the 8086: Textured Low res in a bracket
-    cmp byte [px_inbr], 0           ; (96.1's default)...
+    cmp byte [px_inbr], 0           ; (97.1's default)...
     jne .pos
     mov al, 2                       ; ...and Flat Full in a window (PLAN 15:
                                     ; one rung lower, the windowed tax being
@@ -630,7 +1529,7 @@ px_auto_start:
 
 ; px_apply - [px_rung] and [px_lowres] from the Detail row's two axes (the
 ;            rung and the resolution, px_detail / px_res), or from Auto's
-;            position; a Textured rung's sets built if they are not (96.3,
+;            position; a Textured rung's sets built if they are not (97.3,
 ;            px_tex_setup - so a window that never picks Textured never
 ;            pays the 0.9 s, and a bracket pays it behind its black); the
 ;            resolution's words follow, and - ONLY WHEN THE BAND MOVED
@@ -675,7 +1574,7 @@ px_apply:
     cmp byte [px_rung], PXR_TEX
     jne .have
     call px_tex_setup               ; the sets for this backend, if not built
-    jnc .have                       ; TEXTURED NEEDS ITS PARTS (96.9): a rung
+    jnc .have                       ; TEXTURED NEEDS ITS PARTS (97.9): a rung
     mov byte [px_rung], PXR_FLAT    ; the loader could not carve for - or the
                                     ; generator could not fit on this
                                     ; backend - lands on Flat, the item
@@ -691,7 +1590,7 @@ px_apply:
                                     ; the first cut cleared and blanked on
                                     ; EVERY pick, 43 ms an Auto step, charged
                                     ; to no frame (review, wave 2)
-    call px_shadow_clear            ; THE SHADOW IS THE PICTURE (96.3): a
+    call px_shadow_clear            ; THE SHADOW IS THE PICTURE (97.3): a
                                     ; narrower Size leaves the wider band's
                                     ; edges in it otherwise - never shown
                                     ; (the presents send Size bytes at x0)
@@ -722,7 +1621,7 @@ px_apply:
 ; px_auto_frame - one drawn frame took [px_ftime] (838ns units): eight over
 ;                 the budget step down, sixty-four under HALF of it step up -
 ;                 never above the tier's start, never inside the hold-down a
-;                 step down began (SPEC.md 96.8)
+;                 step down began (SPEC.md 97.8)
 ;
 ; THE THRESHOLD ALONE IS NOT HYSTERESIS. The first cut stepped up at 60% of
 ; the budget, and the rung above measures 1.46-1.92x this one's draw (Mode

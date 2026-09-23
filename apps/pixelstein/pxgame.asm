@@ -1,12 +1,12 @@
 ; =============================================================================
 ; os8088 - apps/pixelstein/pxgame.asm
 ;
-; PIXELSTEIN 3D (SPEC.md 96): a raycast first-person shooter in the shape of
+; PIXELSTEIN 3D (SPEC.md 97): a raycast first-person shooter in the shape of
 ; the 1992 one, on the 8088 this project is calibrated against - fullscreen
 ; in a foreign mode on every adapter (CGA 320x200x4, the 160x100x16 retime
 ; on a genuine CGA, the Hercules box, Mode X) and windowed as a 1bpp band.
 ;
-; THIS IS PART 0 OF PXSTEIN.O88 (96.9, 20.12.10): a whole .o88 image, its
+; THIS IS PART 0 OF PXSTEIN.O88 (97.9, 20.12.10): a whole .o88 image, its
 ; bss shipped inside it, that apps/pixelstein/pxstein.asm - the loader, and
 ; the image the kernel launches - re-homes the instance onto after reading
 ; the parts. What the loader learned that this program cannot ask for
@@ -17,9 +17,11 @@
 ; backends' geometry and presents (pxrast.inc), the window and its worker
 ; (pxwin.inc), the clock, the keys and the player (pxgame.inc). WAVE 2: the
 ; textures - the generator, the transpose and the Textured arm (pxgen.inc,
-; pxcomp.inc), the View row and PXSTEIN.CFG (pxset.inc). Sprites, doors
-; that slide, the HUD, the states and the scores are later waves'; the HUD
-; band is black until wave 4 letters it.
+; pxcomp.inc), the View row and PXSTEIN.CFG (pxset.inc). WAVE 3: the
+; sprites and the weapon (pxspr.inc), the guards (pxact.inc), the doors
+; that slide, the keys, the pickups, the hitscan and the player's health
+; (pxgame.inc), three floors. The HUD, the states and the scores are wave
+; 4's; the HUD band is black until it letters it.
 ; =============================================================================
 
 %include "os88api.inc"
@@ -30,12 +32,12 @@
 %include "pxicon.inc"
     OS88_ICON16_END
 
-; --- the picture (SPEC.md 96.1, 96.3) ----------------------------------------
+; --- the picture (SPEC.md 97.1, 97.3) ----------------------------------------
 PX_STRIDE   equ 80                  ; bytes a shadow row, every backend
 PX_ROWS     equ 80                  ; view rows
 PX_HUDROWS  equ 24                  ; the HUD band under the view (wave 4)
 PX_BAND     equ 64                  ; the band's bytes at Size 64, a window's
-                                    ; most (96.3). THERE IS NO PX_X0: the
+                                    ; most (97.3). THERE IS NO PX_X0: the
                                     ; band's first byte is (80 - Size) / 2
                                     ; and lives in px_x0 / px_cbias, set by
                                     ; px_res_apply - the first cut composed
@@ -46,7 +48,7 @@ PX_BAND     equ 64                  ; the band's bytes at Size 64, a window's
 PX_HORIZON  equ 40                  ; where Wire's ground changes tone
 PX_GEOMIN   equ 12                  ; a Flat wall this many rows tall or more
                                     ; whose tone stood writes its two ENDS
-                                    ; only (pxcomp.inc's .fgeo, 96.5): the
+                                    ; only (pxcomp.inc's .fgeo, 97.5): the
                                     ; second ladder entry (~280 clk) is paid
                                     ; back by ~11 stores it does not make
 PX_COLMAX   equ 80                  ; the column arrays' length (Size 80)
@@ -56,7 +58,7 @@ PX_SHKB     equ 16                  ; the shadow claim: 16 KB CLAIMED, of
                                     ; composes into VRAM). The rest is
                                     ; reserved for wave 2's Rows 100 (8,000)
                                     ; and wave 5's WIN4 - four 25-row 4bpp
-                                    ; strips in the spare 6,400 (96.9)
+                                    ; strips in the spare 6,400 (97.9)
 PX_MINDIST  equ 23                  ; nx clamped at 0.09 tiles (Q8.8)
 PX_HEIGHTK  equ 51200               ; h = PX_HEIGHTK / nx rows
 PX_SPOTD    equ 4096                ; a walker's mark is this far past its cell
@@ -64,9 +66,11 @@ PX_CGAROW0  equ 28                  ; the view's first device row, CGA 320x200
 PX_HERCROW0 equ 134                 ; ...in the Hercules box (74 + 60)
 PX_MXROW0   equ 48                  ; ...on a Mode X page
 PX_WINW     equ 528                 ; the window's frame
+PX_LINEMAX  equ 65                  ; the text line's cells: what 528 - the
+                                    ; border holds, and never past it (pxwin.inc)
 PX_WINH     equ 150
 
-; --- the session (96.8) ------------------------------------------------------
+; --- the session (97.8) ------------------------------------------------------
 PX_MAXSTEP  equ 3                   ; the catch-up cap
 PX_TURN     equ 64                  ; angle units a tick: a turn in 3.5 s
 PX_SPEED    equ 24                  ; Q8.8 a tick: 0.094 tile
@@ -79,11 +83,11 @@ PX_BUDGET   equ 149165              ; 1/8 s in 838ns units: Auto's budget -
                                     ; two promises without the ladder moving
                                     ; only while it is a pose passed through,
                                     ; and eight frames over the line IS the
-                                    ; machine playing there (96.8)
+                                    ; machine playing there (97.8)
 PX_BUDGET50 equ 74582               ; ...and HALF of it, the step-up line: the
                                     ; rung above measures up to 1.92x this
                                     ; one (Mode X's work), so 60% (1.67x)
-                                    ; walked the 8086 off its default (96.8)
+                                    ; walked the 8086 off its default (97.8)
 PX_AHOLD    equ 182                 ; ticks (10 s) no step up follows a step
                                     ; down: the hysteresis the threshold is not
 PX_KA       equ 0x1E                ; A - strafe left
@@ -92,6 +96,118 @@ PX_KW       equ 0x11                ; W - forward
 PX_KS       equ 0x1F                ; S - back
 PX_KLSH     equ 0x2A                ; the two shifts: run
 PX_KRSH     equ 0x36
+PX_KCTRL    equ 0x1D                ; Ctrl: fire (97.8, wave 3)
+PX_K1       equ 0x02                ; 1, 2, 3: the knife, the pistol, the gun
+PX_K2       equ 0x03
+PX_K3       equ 0x04
+
+; --- the world (97.6, 97.7, 97.8; wave 3) -----------------------------------
+PXC_BLOCK   equ 0x10                ; an OPEN cell's high nibble, which the
+                                    ; walkers never read (they stop on bits
+                                    ; 0-1 alone): a blocking static is here
+PXC_ACTOR   equ 0x20                ; ...an actor's centre is here
+PXC_PLAYER  equ 0x40                ; ...the player's
+PX_GENKB_CAP equ 51                 ; pxstein.asm's PX_GENKB, restated for
+                                    ; the greyed caption's guard below and
+                                    ; held to the loader's by the loader
+                                    ; (pxstein.asm's own %if)
+PX_MAXDOORS equ 64
+PX_MAXACT   equ 32
+PX_MAXSTAT  equ 96
+; a door (PXD_*): 8 bytes
+PXD_CELL    equ 0                   ; word: the plain map's cell
+PXD_FLAGS   equ 2                   ; byte: the cell's flags (PXC_DOOREW)
+PXD_LOCK    equ 3                   ; byte: 0 none, 1 gold, 2 silver
+PXD_POS     equ 4                   ; word: how far the slab has slid, 0..256
+PXD_STATE   equ 6                   ; byte: PXDS_*
+PXD_TIMER   equ 7                   ; byte: ticks held open
+PXD_SIZE    equ 8
+PXDS_SHUT   equ 0
+PXDS_OPENING equ 1
+PXDS_OPEN   equ 2
+PXDS_CLOSING equ 3
+PX_DOORSTEP equ 16                  ; units a tick: shut to open in 16 ticks
+PX_DOORPASS equ 128                 ; ...and a body passes from here
+PX_DOORHOLD equ 91                  ; ticks a door stays open: 5 s
+; an actor (PXA_*): 16 bytes
+PXAC_X       equ 0                   ; word, Q8.8
+PXAC_Y       equ 2
+PXAC_KIND    equ 4                   ; byte: 0 guard, 1 dog (wave 6)
+PXAC_STATE   equ 5                   ; byte: PXAS_*
+PXAC_DIR     equ 6                   ; byte: 0 E, 1 S, 2 W, 3 N - the way it
+                                    ; moves; 0xFF none
+PXAC_TIMER   equ 7                   ; byte: ticks left in this state
+PXAC_HP      equ 8                   ; byte
+PXAC_FRAME   equ 9                   ; byte: the walk phase counter / the
+                                    ; attack phase / the die frame
+PXAC_FLAGS   equ 10                  ; byte: PXAF_*
+PXAC_PAD     equ 11
+PXAC_CELL    equ 12                  ; word: the cell its centre is in
+PXAC_ANG     equ 14                  ; word: the way it FACES, 12 bits
+PXAC_SIZE    equ 16
+PXAS_NONE   equ 0
+PXAS_STAND  equ 1
+PXAS_PATROL equ 2
+PXAS_ALERT  equ 3                   ; it saw the player: the reaction delay
+PXAS_CHASE  equ 4
+PXAS_ATTACK equ 5
+PXAS_PAIN   equ 6
+PXAS_DIE    equ 7
+PXAS_DEAD   equ 8
+PXAF_PATROL equ 1                   ; it patrols (the level's capital letter)
+PXAF_ATTACK equ 2                   ; attack mode: it has seen the player
+PXAF_SEEN   equ 4                   ; it was drawn last frame (the hit
+                                    ; chance: the player can see it to dodge)
+PX_GUARDHP  equ 25                  ; the 1992 engine's guard at "bring 'em on"
+PX_ACTWALK  equ 8                   ; Q8.8 a tick, patrolling (0.57 tile/s)
+PX_ACTRUN   equ 24                  ; ...chasing (1.7 tile/s)
+PX_ACTRAD   equ 64                  ; an actor's collision radius, 0.25
+PX_LOSMAX   equ 24                  ; no line of sight past this many tiles
+PX_MELEE    equ 384                 ; the knife reaches 1.5 tiles (Q8.8)
+; a static (PXT_*): 4 bytes
+PXT_CELL    equ 0                   ; word
+PXT_KIND    equ 2                   ; byte: pickup 0..7, decoration 8..13,
+                                    ; 0xFF taken
+PXT_FLAGS   equ 3                   ; byte: bit 0 blocking
+PXT_SIZE    equ 4
+PXK_AMMO    equ 0                   ; the pickup kinds (tools/pxslevel.py)
+PXK_MEDKIT  equ 1
+PXK_FOOD    equ 2
+PXK_GOLDKEY equ 3
+PXK_SILVKEY equ 4
+PXK_TREAS   equ 5
+PXK_CHALICE equ 6
+PXK_LIFE    equ 7
+PXK_DECO0   equ 8
+; the player (97.8)
+PX_HEALTH0  equ 100
+PX_AMMO0    equ 8
+PX_AMMOMAX  equ 99
+PX_LIVES0   equ 3
+PXW_KNIFE   equ 0
+PXW_PISTOL  equ 1
+PXW_MGUN    equ 2
+PX_FADE     equ 12                  ; ticks the DIE wash stands before the
+                                    ; floor restarts
+PXST_PLAY   equ 0                   ; px_state: playing...
+PXST_DYING  equ 1                   ; ...the wash is up
+; a sprite candidate (PXS_C_*): 12 bytes, up to PX_MAXSPR of them a frame,
+; sorted far to near (97.6)
+PXS_C_H     equ 0                   ; word: the true height K / nx
+PXS_C_C     equ 2                   ; word: the centre column, signed
+PXS_C_COST  equ 4                   ; word: the stores it would make
+PXS_C_C0    equ 6                   ; word: its first column, signed
+PXS_C_W     equ 8                   ; byte: its width in columns
+PXS_C_FR    equ 9                   ; byte: the frame
+PXS_C_FL    equ 10                  ; byte: bit 0 mirrored, bit 1 every
+                                    ; second column (the cap)
+PXS_C_ACT   equ 11                  ; byte: the actor, 0xFF a static
+PXS_C_SIZE  equ 12
+PX_MAXSPR   equ 8
+PX_SPRCAP   equ 8000                ; stores a frame the sprites may make
+PX_WPNCOLS  equ 16                  ; the weapon: 16 bytes wide...
+PX_WPNH     equ 24                  ; ...through the 24-row scaler...
+PX_WPNROW0  equ 56                  ; ...on rows 56..79
 
 ; --- the backends and the rungs ----------------------------------------------
 PXB_NONE    equ 0
@@ -100,30 +216,31 @@ PXB_C160    equ 2                   ; FSXM_TEXT80 retimed (SPEC.md 88.15)
 PXB_HERC    equ 3                   ; FSXM_HERC, TANK's box
 PXB_MODEX   equ 4                   ; FSXM_MODEX, two pages
 PXB_WIN1    equ 5                   ; the window's 1bpp band
-PXR_WIRE    equ 0                   ; the detail ladder's rungs (96.1)
+PXR_WIRE    equ 0                   ; the detail ladder's rungs (97.1)
 PXR_FLAT    equ 1
-PXR_TEX     equ 2                   ; the compiled scalers (96.3, wave 2)
+PXR_TEX     equ 2                   ; the compiled scalers (97.3, wave 2)
 PXD_AUTO    equ 0                   ; the Detail row's items: the rung axis...
 PXD_WIRE    equ 1
 PXD_FLAT    equ 2
 PXD_TEX     equ 3
 PXD_RFULL   equ 4                   ; ...and the resolution axis under it
-PXD_RLOW    equ 5                   ; (SPEC.md 96.8: one menu, two axes)
+PXD_RLOW    equ 5                   ; (SPEC.md 97.8: one menu, two axes)
 PXV_ROWS0   equ 5                   ; the View row: Size 48..80 are items
                                     ; 0..4, Rows 80/100 items 5 and 6
 
-; --- the handoff (96.9): one package, two sources - pxstein.asm writes these -
+; --- the handoff (97.9): one package, two sources - pxstein.asm writes these -
 PXH_MAGIC   equ 0
 PXH_LEV     equ 2
 PXH_GEN     equ 4
 PXH_COLD    equ 6
 PXH_NLEV    equ 8
 PXH_LEVLEN  equ 10
-PXH_ART     equ 12                  ; the expanded art masters (96.4), 0 = none
+PXH_ART     equ 12                  ; the expanded art masters (97.4), 0 = none
 PXH_BT      equ 14                  ; the byte-texture part, 0 = refused
 PXH_GENLEN  equ 16                  ; the scratch part's bytes (PX_GENKB * 1024):
                                     ; the bound px_gen_build emits under
-PXH_SIZE    equ 18
+PXH_SPR     equ 18                  ; the sprite set (97.6), 0 = refused
+PXH_SIZE    equ 20
 
 ; =============================================================================
 ; px_entry - the program's entry proc, called once the loader has re-homed
@@ -144,14 +261,23 @@ px_entry:
     call OSAPI_SRAND
     call OSAPI_CPU_INFO
     mov [px_tier], al
-    mov ax, PX_SHKB                 ; THE SHADOW, BEFORE THE WINDOW (96.9): a
+    mov ax, PX_SHKB                 ; THE SHADOW, BEFORE THE WINDOW (97.9): a
     call OSAPI_MEM_CLAIM            ; refusal is a sentence in the window and
     jc .noshadow                    ; never a black bounce
     mov [px_shseg], dx
 .noshadow:
-    call px_level_load              ; E1M1 into the two map layouts
-    jc .refuse
-    call px_gen_init                ; where the bodies run (96.2.1)
+    mov byte [px_levnext], 0xFF     ; the player, before the first floor
+    mov byte [px_health], PX_HEALTH0
+    mov byte [px_ammo], PX_AMMO0
+    mov byte [px_lives], PX_LIVES0
+    mov byte [px_weapon], PXW_PISTOL
+    mov word [px_wdrawn], 0xFFFF    ; nothing on either page's glass
+    mov byte [px_lhx], 0xFF         ; ...nor the line's stat cells
+    mov byte [px_aim], 0xFF
+    xor al, al
+    call px_level_load              ; E1M1 into the two map layouts and
+    jc .refuse                      ; the tables
+    call px_gen_init                ; where the bodies run (97.2.1)
     call px_auto_init
     mov byte [px_mode], PXB_NONE
     ; centre the window in the desktop band
@@ -185,7 +311,7 @@ px_entry:
                                     ; band go on drawing through the cut, and
                                     ; the rows below it take no clicks (apps/
                                     ; mines' worked example). Flags preserved,
-                                    ; so the loader's CF survives it (96.3)
+                                    ; so the loader's CF survives it (97.3)
     mov al, 1                       ; an 8-aligned content origin: the band
     call OSAPI_WM_SNAP              ; blit wants x on the byte grid
     mov si, px_pref
@@ -207,7 +333,7 @@ px_entry:
     call px_r_setup_win             ; the window's own backend, from the start
 .noraster:
     call px_auto_start              ; ...and the rung a window starts at on
-                                    ; this tier (96.8): px_apply runs here,
+                                    ; this tier (97.8): px_apply runs here,
                                     ; and a zeroed rung byte is Wire
     mov bx, [px_win]
     mov si, px_menus
@@ -270,7 +396,7 @@ px_paint:
     call px_black_around
     call px_spawn_ck                ; the worker starts here, not at entry
     mov byte [px_whole], 1          ; the whole band, whatever the worker's
-    cmp byte [px_composing], 0      ; own dirty rows say (96.5)
+    cmp byte [px_composing], 0      ; own dirty rows say (97.5)
     jne .line                       ; mid-compose: the worker's next pass
                                     ; blits it (px_render_win's .whole exit -
     call px_blit_win                ; no cast is owed for a blackened glass)
@@ -415,8 +541,8 @@ px_oncmd:
     cmp al, PXD_TEX
     jne .dok
     cmp byte [px_texok], 0
-    je .out                         ; greyed (MENU_DIS: "Textured (needs 82
-                                    ; KB free)") - the kernel never
+    je .out                         ; greyed (MENU_DIS: "Textured (needs
+                                    ; 111 KB free)") - the kernel never
                                     ; dispatches it, and this return is for
                                     ; a shortcut, which goes near no menu
 .dok:
@@ -431,7 +557,7 @@ px_oncmd:
     mov [px_res], al
     cmp byte [px_detail], PXD_AUTO
     jne .rpend
-    ; under Auto the pick RE-SEATS the position (SPEC.md 96.8) within the
+    ; under Auto the pick RE-SEATS the position (SPEC.md 97.8) within the
     ; rung Auto is at: the ladder is (Textured Full, Textured Low res, Flat
     ; Full, Flat Low res), so the position's low bit IS the resolution.
     ; Otherwise the item changed nothing and said nothing, which SPEC.md 47
@@ -440,7 +566,7 @@ px_oncmd:
     and bl, 0xFE
     or bl, al
     mov [px_apos], bl
-    mov [px_astart], bl             ; ...and it is the new ceiling (96.8)
+    mov [px_astart], bl             ; ...and it is the new ceiling (97.8)
     mov byte [px_amiss], 0
     mov byte [px_ahit], 0
 .rpend:
@@ -464,7 +590,7 @@ px_oncmd:
 ; Menus, strings, the template, the preference
 ; =============================================================================
 ; THE BAR IS FOUR CELLS WHEN IT IS FINISHED, AND THREE OF THEM SHIP HERE
-; (SPEC.md 96.8): MENU_APPMAX is 5 and the bar drops every cell from the
+; (SPEC.md 97.8): MENU_APPMAX is 5 and the bar drops every cell from the
 ; first that reaches the clock band, so the row set is decided ONCE - Game
 ; (Full Screen, Pause; Sound and Mouse land in wave 4) . Mode (the adapter's
 ; two items) . Detail (the rung axis Auto / Wire / Flat / Textured AND the
@@ -483,7 +609,7 @@ px_m_game:   db 'Game', 0
 px_i_game:   dw px_s_gofull, px_s_pause     ; item 0's caption is rewritten by
 px_s_gofull: db 'Full Screen', 0            ; px_adapter when no mode can be had
 px_s_gofulln: db 'Full Screen (no mode)', 0 ; (not MENU_DIS: apps/tank's
-                                            ; precedent, SPEC.md 96.8 - the
+                                            ; precedent, SPEC.md 97.8 - the
                                             ; item still says why)
 px_s_pause:  db 'Pause', 0
 px_m_mode:   db 'Mode', 0
@@ -494,10 +620,22 @@ px_s_dauto:  db 'Auto', 0
 px_s_dwire:  db 'Wire', 0
 px_s_dflat:  db 'Flat', 0
 px_s_dtex:   db 'Textured', 0
-px_s_dtexn:  db MENU_DIS, 'Textured (needs 82 KB free)', 0  ; SPEC.md 47:
+px_s_dtexs:  db 'Textured (sprites need 62 KB)', 0 ; the walls textured and
+                                            ; the sprites BOXES: the loader
+                                            ; found the 111 KB but not the
+                                            ; sprite set's claim after it
+                                            ; (97.9: PXS_KB + the shadow) -
+                                            ; live, and it says so (SPEC.md
+                                            ; 47; review r1: it said nothing)
+px_s_dtexn:  db MENU_DIS, 'Textured (needs 111 KB free)', 0 ; SPEC.md 47:
                                             ; greyed, and the caption says
                                             ; why - the scratch, the byte
-                                            ; set and the art claim (96.9)
+                                            ; set and the art claim (97.9),
+                                            ; a FACT held below to the
+                                            ; constants it is the sum of
+                                            ; (the first cut said 82 with
+                                            ; the sum at 111; review, wave 3)
+                                            ; - the %if is after pxart.inc
 px_s_rfull:  db 'Full res', 0
 px_s_rlow:   db 'Low res', 0
 px_m_view:   db 'View', 0
@@ -508,7 +646,7 @@ px_s_v64:    db 'Size 64', 0
 px_s_v72:    db MENU_DIS, 'Size 72 (full screen only)', 0  ; GREYED (SPEC.md
 px_s_v80:    db MENU_DIS, 'Size 80 (full screen only)', 0  ; 47): the menu is
                                             ; the window's and a window shows
-                                            ; 64 at most (96.3) - the first
+                                            ; 64 at most (97.3) - the first
                                             ; cut offered them live, and a
                                             ; pick changed the file and not
                                             ; the picture. The V key cycles
@@ -518,7 +656,7 @@ px_s_r80:    db 'Rows 80', 0
 px_s_r100:   db MENU_DIS, 'Rows 100 (later)', 0   ; greyed: not built yet - a
                                             ; fact about the software, the
                                             ; only one there is until it
-                                            ; exists (96.3)
+                                            ; exists (97.3)
 px_s_nomem:  db 'Not enough memory for the picture (16 KB)', 0
 px_ttl:      db 'Pixelstein 3D', 0
 
@@ -544,6 +682,9 @@ px_tex_caption:
     xor bh, bh
     mov bl, [px_phcls + bx]
     cmp bl, [px_genbad]
+    je .say
+    mov ax, px_s_dtexs              ; the sprite set refused: the item is
+    cmp word [px_hand + PXH_SPR], 0 ; live and names the boxes' price
     je .say
     mov ax, px_s_dtex
 .say:
@@ -604,11 +745,26 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
 %include "pxcast.inc"
 %include "pxgen.inc"
 %include "pxcomp.inc"
+%include "pxspr.inc"
 %include "pxrast.inc"
 %include "pxwin.inc"
 %include "pxgame.inc"
+%include "pxact.inc"
 %include "pxset.inc"
 %include "pxart.inc"
+; THE GREYED CAPTION IS A FACT (SPEC.md 47): held to the three constants it
+; is the sum of, here because two of them are pxart.inc's
+%if PX_GENKB_CAP + PXA_BTKB + PXA_KB != 111
+%error "the greyed Textured caption names a number that is not PX_GENKB + PXA_BTKB + PXA_KB: fix px_s_dtexn"
+%endif
+%if PXS_KB + PX_SHKB != 62
+%error "the sprites' caption names a number that is not PXS_KB + PX_SHKB: fix px_s_dtexs"
+%endif
+; THE LOADER RESTATES PX_SHKB as PXL_SHKB (pxstein.asm's sprite claim leaves
+; room for the shadow after it); held here as PX_GENKB is held above
+%if PX_SHKB != 16
+%error "restate pxstein.asm's PXL_SHKB: PX_SHKB moved"
+%endif
 ; THE EMISSION FENCE TRACKS THE PHASE (pxgen.inc's PXG_EMITMAX; review, wave
 ; 2): the tallest Low-res scaler is a load a texel, a store a row, a phase a
 ; texel run and two `mov ah, al` a run, plus its ret - and the fence is only
@@ -621,7 +777,7 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
 
 ; =============================================================================
 ; .bss (SPEC.md 20.5): an equ chain from os88_image_end, THE HANDOFF FIRST
-; (96.9: pxstein.asm writes it at the head of this bss by the header's own
+; (97.9: pxstein.asm writes it at the head of this bss by the header's own
 ; image size, so it must be the first thing here)
 ; =============================================================================
 %assign PX_BSS 0
@@ -639,7 +795,7 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
 %endmacro
 
     ZBUF  px_hand, PXH_SIZE
-; --- the two map layouts and their marks (96.2): mapT then its spotvis, map
+; --- the two map layouts and their marks (97.2): mapT then its spotvis, map
 ;     then its spotvis, so a walker's mark is its cell + PX_SPOTD ----------
 %assign PX_MAPT_AT PX_BSS          ; ...and where they fall, for the guard below
     ZBUF  px_mapT, 4096
@@ -647,7 +803,7 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
     ZBUF  px_map, 4096
 %assign PX_SPOT_AT PX_BSS
     ZBUF  px_spot, 4096
-; --- the column arrays (96.2.5) ---------------------------------------------
+; --- the column arrays (97.2.5) ---------------------------------------------
     ZBUF  px_top, PX_COLMAX
     ZBUF  px_bot, PX_COLMAX
     ZBUF  px_mat, PX_COLMAX
@@ -655,8 +811,8 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
     ZBUF  px_u, PX_COLMAX
     ZBUF  px_wallh, PX_COLMAX * 2
     ZBUF  px_h, PX_COLMAX           ; the QUANTISED height under Textured
-                                    ; (96.3): the scaler the compose calls
-; --- last frame's memory, a set per page (96.5) ------------------------------
+                                    ; (97.3): the scaler the compose calls
+; --- last frame's memory, a set per page (97.5) ------------------------------
     ZBUF  px_lu, PX_COLMAX * 2      ; ...and the texture column, Textured's
     ZBUF  px_lh, PX_COLMAX * 2      ; ...and its quantised height: eight of
                                     ; the 47 scalers clip to the same top/bot
@@ -691,7 +847,6 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
     ZBYTE px_hu
     ZBYTE px_hmat
     ZBYTE px_hside
-    ZBYTE px_hdoor
     ZBYTE px_q
     ZBYTE px_gen
 ; --- the eye ----------------------------------------------------------------
@@ -731,7 +886,7 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
     ZWORD px_cbase                  ; px_dbase + px_cbias, summed once a
                                     ; compose (the page's base and the band's
                                     ; first byte less the ladders' 256)
-; --- the generator and the transpose (96.3, 96.4; pxgen.inc) ----------------
+; --- the generator and the transpose (97.3, 97.4; pxgen.inc) ----------------
     ZBYTE px_texok                  ; every part the Textured rung needs came
     ZBYTE px_genback                ; the phase class the scalers were made for
     ZBYTE px_genbad                 ; ...and the phase class the part could
@@ -740,7 +895,10 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
                                     ; retries (px_tex_setup)
     ZBYTE px_btback                 ; the ink class the byte set was made for
     ZBUF  px_drvp, 4                ; (PXG_DRV, part 2): the driver's far entry
+    ZBUF  px_drv2p, 4               ; ...and the sprite pass's (PXG_DRV2)
     ZWORD px_qp                     ; the draw queue's write pointer
+    ZWORD px_gcot                   ; the codeofs table being reserved (97.3)
+    ZBUF  px_gcotv, (PXA_TEX + 1) * 2   ; ...and the loads it is built from
     ZBYTE px_gphn                   ; the phase's byte count...
     ZBUF  px_gph, 4                 ; ...and bytes
     ZBYTE px_gword                  ; the set being emitted: 0 byte, 1 word
@@ -767,7 +925,15 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
                                     ; the write says it landed (pxset.inc)
     ZWORD px_bink                   ; the transpose's ink table
     ZWORD px_bmat                   ; ...and the master it is on
-    ZBUF  px_bstage, PXA_WALLSZ     ; ...staged here (one master)
+    ZBUF  px_bstage, PXA_SPRMSZ     ; ...staged here (one master: a wall's
+                                    ; 512 bytes or a sprite's 640)
+    ZBYTE px_bcnt                   ; the sprite transpose: frames left...
+    ZBYTE px_bcols                  ; ...a frame's columns
+    ZWORD px_bmsz                   ; ...its master's bytes
+    ZWORD px_balpha                 ; ...where its alpha bits begin
+    ZWORD px_brtab                  ; ...and the run table being filled
+    ZBYTE px_sprok                  ; the sprite set stands for this ink class
+    ZBYTE px_sprback                ; ...the class it was built for (0xFF none)
     ZBYTE px_r0
     ZBYTE px_r1
     ZBYTE px_page
@@ -778,6 +944,8 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
     ZWORD px_inke
     ZWORD px_inkdl
     ZWORD px_inkdd
+    ZWORD px_inks                   ; a sprite's silhouette tone (97.6)
+    ZWORD px_inkw                   ; the DIE wash's (97.8)
     ZBUF  px_fsi, FSI_SIZE
     ZBUF  px_devoff, PX_ROWS * 2
     ZWORD px_shseg
@@ -809,14 +977,17 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
     ZBYTE px_hidden                 ; not a pixel showing: no frame until a
                                     ; paint or a resize says otherwise
     ZBYTE px_whole                  ; a paint blackened the glass: the next
-                                    ; blit sends the whole band (96.5)
+                                    ; blit sends the whole band (97.5)
     ZBYTE px_llen                   ; the text line's last length: the pad
-    ZBUF  px_lbuf, 64
+    ZBUF  px_sbuf, 9                ; the eight stat cells and a NUL
+    ZBUF  px_lbuf, 96               ; (69 with wave 3's health and ammo on
+                                    ; it: the 64 of wave 2 overflowed into
+                                    ; px_last and px_frames)
 ; --- the session --------------------------------------------------------------
     ZWORD px_last
     ZWORD px_frames
     ZBUF  px_t0, 4
-    ZBUF  px_ftime, 4               ; the frame's WORK (96.8): cast, compose
+    ZBUF  px_ftime, 4               ; the frame's WORK (97.8): cast, compose
     ZBUF  px_twait, 4               ; and present, less the waits px_wait_*
     ZBUF  px_tw0, 4                 ; bracketed inside it (a retrace, a lock)
     ZBYTE px_inbr
@@ -838,11 +1009,108 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
     ZBYTE px_res
     ZBYTE px_apos
     ZBYTE px_astart                 ; the position the tier started at: a
-                                    ; step up never passes it (96.8)
+                                    ; step up never passes it (97.8)
     ZBYTE px_amiss
     ZBYTE px_ahit
     ZWORD px_ahold                  ; the tick a step up is allowed from
     ZBYTE px_pend                   ; a Detail/Resolution pick awaiting a frame
+; --- the world (97.6, 97.7, 97.8; wave 3) -----------------------------------
+    ZBUF  px_doors, PX_MAXDOORS * PXD_SIZE
+    ZBUF  px_drow, 65               ; the doors of map row y are px_drow[y]
+                                    ; .. px_drow[y + 1] - 1 (97.7's sorted
+                                    ; stream; px_door_of)
+    ZBUF  px_act, PX_MAXACT * PXAC_SIZE
+    ZBUF  px_stat, PX_MAXSTAT * PXT_SIZE
+    ZBYTE px_ndoors
+    ZBYTE px_nact
+    ZBYTE px_nstat
+    ZBYTE px_floor                  ; the level in force (0-based)
+    ZBYTE px_levnext                ; a floor to load between frames (0xFF:
+                                    ; none; the switch, or the DIE restart)
+    ZBYTE px_simoff                 ; the gates' word: no door, actor or
+                                    ; weapon moves (the sim's steps still
+                                    ; walk the player)
+    ZBYTE px_god                    ; ...and no damage to the player
+    ZBYTE px_health
+    ZBYTE px_ammo
+    ZBYTE px_keys                   ; bit 0 gold, bit 1 silver
+    ZBYTE px_weapon                 ; the weapon chosen (PXW_*)
+    ZBYTE px_wframe                 ; its frame (0 ready, 1 fire, 2 recoil)
+    ZBYTE px_wtimer                 ; ticks left in that frame
+    ZBUF  px_wdrawn, 2              ; the weapon frame on each PAGE's glass
+                                    ; (0xFF: none yet), so a still one is
+                                    ; not redrawn (97.6)
+    ZBYTE px_wnext                  ; ...and the frame this frame shows
+    ZBYTE px_spg                    ; the page this frame is on (0, 1)
+    ZBYTE px_statd                  ; the line's health and ammo cells are
+                                    ; owed (pxwin.inc's px_stat_draw)
+    ZBYTE px_lhx                    ; ...their cell offset in the line
+                                    ; (0xFF: the line was never drawn)
+    ZBYTE px_firek                  ; Ctrl was down last tick (one shot a
+                                    ; press for the pistol and the knife)
+    ZBYTE px_usek                   ; Space was down last tick
+    ZBYTE px_lives
+    ZBYTE px_state                  ; PXST_*
+    ZBYTE px_fade                   ; ticks of the DIE wash left
+    ZBYTE px_fadedrawn              ; ...and whether the wash is on the glass
+    ZWORD px_score
+    ZWORD px_pcell                  ; the player's cell (its PXC_PLAYER mark)
+    ZWORD px_dtick                  ; the world's tick count (the frame
+                                    ; counter's twin, for the rows)
+    ZBYTE px_aim                    ; the actor under the crosshair after the
+                                    ; last sprite pass: 0xFF none (97.6)
+    ZWORD px_aimh                   ; ...and its height (the knife's reach)
+    ZBYTE px_nsc                    ; sprite candidates this frame
+    ZBUF  px_sc, PX_MAXSPR * PXS_C_SIZE
+    ZBUF  px_scn, PXS_C_SIZE        ; the candidate being built
+    ZWORD px_sfr                    ; the post walk: the frame's base in
+                                    ; part 4...
+    ZWORD px_scot                   ; ...the scaler's codeofs table
+    ZWORD px_sc2t                   ; ...its col2tex block (the width byte)
+    ZWORD px_sdi                    ; ...the column's DI
+    ZWORD px_stop                   ; ...the scaler's top row, signed
+    ZBYTE px_shq                    ; ...the quantised height
+    ZBYTE px_sflags                 ; ...the candidate's flags
+    ZBYTE px_scol                   ; ...the screen column
+    ZBYTE px_ssrc                   ; ...the source column
+    ZWORD px_sdx                    ; the transform's deltas and nx
+    ZWORD px_sdy
+    ZWORD px_snx
+    ZWORD px_ssi                    ; ...its texel column's base in the set
+    ZBUF  px_sruns, PXS_RUNSZ + 1   ; a column's run table, copied in
+    ZBUF  px_cwrote, PX_COLMAX          ; the compose wrote column c this frame:
+                                    ; px_cwrote[c] == px_gen (97.6)
+    ZBUF  px_swrote, PX_COLMAX          ; ...and a sprite DREW on it this frame
+                                    ; (px_spr_stamp; review r1)
+    ZWORD px_ccen                   ; the centre column (the aim's)
+    ZWORD px_wc0                    ; the weapon's ray columns, [wc0, wc1)
+    ZWORD px_wc1
+    ZBYTE px_wpnhit                 ; a sprite drew over the weapon's rows on
+                                    ; one of its columns this frame
+    ZBYTE px_swpn                   ; the sprite set up reaches the weapon's rows
+    ZBUF  px_statT, PX_MAXSTAT * 2  ; every static's cell in the TRANSPOSED
+                                    ; layout, computed at load (the gather's
+                                    ; probe; review r1)
+    ZBUF  px_lsc, 2 * PX_MAXSPR * PXS_C_SIZE   ; the sprites on each page's
+                                    ; glass, as last drawn (97.6)
+    ZBUF  px_lnsc, 2                ; ...how many, per page
+    ZBYTE px_srow0                  ; a silhouette's first and last row
+    ZBYTE px_srow1
+    ZWORD px_gc2t                   ; this resolution's col2tex directory
+    ZWORD px_slos                   ; the LOS walk's scratch: the slope...
+    ZWORD px_sfrac                  ; ...and the fraction
+    ZWORD px_lx2                    ; ...the target
+    ZWORD px_ly2
+    ZBYTE px_asdx                   ; the signed tile deltas to the player
+    ZBYTE px_asdy
+    ZBYTE px_aspeed                 ; the mover's step this tick
+    ZBYTE px_restart                ; the floor loads for a death (1) or the
+                                    ; switch (0)
+    ZWORD px_acur                   ; the actor being stepped (pxact.inc)
+    ZBYTE px_adx                    ; ...and the tile deltas to the player
+    ZBYTE px_ady
+    ZBYTE px_adist
+    ZBYTE px_hitdmg                 ; a hit's damage, banked across a call
 %ifdef PXPROBE
     ZWORD px_pr_lad                 ; tests/pxsperf.py --probe: the frame's
     ZWORD px_pr_skip                ; ladder entries and skipped columns. A
@@ -856,11 +1124,11 @@ px_ab5:      db 'Textured, flat and wireframe walls.', 0
     OS88_BSS PX_BSS
     OS88_IMAGE_END
 
-; THE FOUR MAP ARRAYS SIT INSIDE THE FAR KEYS' BAND (SPEC.md 96.2.3): a live
+; THE FOUR MAP ARRAYS SIT INSIDE THE FAR KEYS' BAND (SPEC.md 97.2.3): a live
 ; walker's pointer runs from its array's base less the 191-byte overrun to its
 ; end plus it, and its key - parked at PX_FARJA or PX_FARJB and moved 64 a
 ; pass, the wrong way in two quadrants - must never cross that range in the
-; 63 passes the solid border allows. This is also 96.2.3's "256 bytes from
+; 63 passes the solid border allows. This is also 97.2.3's "256 bytes from
 ; either end of the segment", asserted
 %if OS88_IMAGE_SIZE + PX_MAPT_AT < PX_FARJA + 64 * 63 + 256
 %error "px_mapT is under the ja far key's band: the cast's parked-walker keys are wrong"

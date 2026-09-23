@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Where PXSTEIN.O88 rides, and how big it is (SPEC.md 96.9, 96.10).
+"""Where PXSTEIN.O88 rides, and how big it is (SPEC.md 97.9, 97.10).
 
     make && python3 tests/pxsdisk.py
 
@@ -10,7 +10,7 @@ walker - never out of the Makefile's variables, which is the trap SPEC.md
   * it is on games360.img (the games category disk, at the volume's root -
     SPEC.md 24.6) and on apps.img (in GAMES/);
   * it is NOT on apps360.img (24.6.1's dated decision), nor on the small
-    disks' games (24.5's omission, with 96.9's ground - ASSERTED, since the
+    disks' games (24.5's omission, with 97.9's ground - ASSERTED, since the
     registry's wants= builds build/smallapps360.img for this row), nor on
     combo.img (COMBO_DROP: the 360KB field disk, wants= as well); and
     apps-all.img, which needs the C toolchain, is checked when it exists;
@@ -70,7 +70,7 @@ def main():
     # asserts is exactly the "filter-out matching nothing is silent" shape
     small = "build/smallapps360.img"
     if os.path.exists(small):
-        check(not has(vol(small)), "smallapps360.img does NOT carry it (24.5, 96.9)")
+        check(not has(vol(small)), "smallapps360.img does NOT carry it (24.5, 97.9)")
     else:
         check(False, "%s is not built (`make smallapps`; the registry's wants= does)"
               % small)

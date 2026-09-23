@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PIXELSTEIN 3D's frame, staged, on MartyPC (SPEC.md 96.10) - AN INSTRUMENT.
+"""PIXELSTEIN 3D's frame, staged, on MartyPC (SPEC.md 97.10) - AN INSTRUMENT.
 
     python3 tests/pxsperf.py [--machine os8088_5150_cga_gla] [--frames 8]
                              [--windowed] [--c160] [--probe]
@@ -9,7 +9,7 @@ produced a number. In the bracket (or --windowed), at Textured Low res 64 x
 80 (the default), Textured Full 64 x 80, Textured Low res 48 x 80 (the
 fallback) and Flat Low res, on both pinned scenes and on both frames (a
 FULL REPAINT and a TURN), five exec breakpoints split the frame into cast /
-compose / present / loop (pxslib.stage_times) and the draw queue's length
+gather / compose / present / loop (pxslib.stage_times) and the draw queue's length
 is read off px_qp - the walls the driver drew that frame. `--probe` builds
 the package with -DPXPROBE into a scratch 360 KB disk and reads its two
 counters beside the stages (ladder entries, columns skipped); the shipped
@@ -129,9 +129,10 @@ def main():
                     line = "   %-24s %s %-5s %2d cols: frame %6.1f ms" % (
                         label, scene.upper(), mode, cols, pxslib.ms(med["frame"]))
                     if "cast" in med:
-                        line += "  cast %5.1f  compose %5.1f  present %5.1f  loop %4.1f" % (
-                            pxslib.ms(med["cast"]), pxslib.ms(med["compose"]),
-                            pxslib.ms(med["present"]), pxslib.ms(med["loop"]))
+                        line += "  cast %5.1f  gather %4.1f  compose %5.1f  present %5.1f  loop %4.1f" % (
+                            pxslib.ms(med["cast"]), pxslib.ms(med["gather"]),
+                            pxslib.ms(med["compose"]), pxslib.ms(med["present"]),
+                            pxslib.ms(med["loop"]))
                     line += "  queue %2d" % q
                     if pr:
                         line += "  ladder %3d  skipped %2d" % pr
@@ -144,10 +145,10 @@ def main():
           "it applies)" % (a.machine, world, a.frames))
     for label, scene, mode, cols, med, q, pr in rows:
         if "cast" in med:
-            print("     %-24s %s %-5s %2d cols  cast %7d (%5.0f/ray)  compose %7d (%5.0f/col)  "
-                  "present %7d (min %7d)  loop %5d  = %6.1f ms  queue %d%s"
+            print("     %-24s %s %-5s %2d cols  cast %7d (%5.0f/ray)  gather %6d  compose %7d "
+                  "(%5.0f/col)  present %7d (min %7d)  loop %5d  = %6.1f ms  queue %d%s"
                   % (label, scene.upper(), mode, cols, med["cast"], med["cast"] / cols,
-                     med["compose"], med["compose"] / cols, med["present"],
+                     med["gather"], med["compose"], med["compose"] / cols, med["present"],
                      med["present_min"], med["loop"], pxslib.ms(med["frame"]), q,
                      "  ladder %d skipped %d" % pr if pr else ""))
         else:

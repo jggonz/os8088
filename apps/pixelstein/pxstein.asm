@@ -2,32 +2,32 @@
 ; os8088 - apps/pixelstein/pxstein.asm
 ;
 ; PIXELSTEIN 3D's LOADER - the IMAGE of PXSTEIN.O88, and the whole of what the
-; kernel launches (SPEC.md 96.9, 20.12.10; apps/skies/csload.asm's shape).
+; kernel launches (SPEC.md 97.9, 20.12.10; apps/skies/csload.asm's shape).
 ;
 ; It reads the parts, tells the program what it cannot ask for itself, and
 ; asks the kernel to treat the program as the program. Then its region is
 ; freed and it is gone: what runs is apps/pixelstein/pxgame.asm, at PART 0,
 ; in the parts carve, with an instance and a window and a name of its own.
 ;
-; FIVE PARTS (96.9):
+; FIVE PARTS (97.9):
 ;   0  the program, a whole .o88 image with its bss shipped inside it,
 ;      OP_COMP so the disk pays for the zeros of two 4KB maps and two
 ;      spotvis arrays as a run of nothing;
-;   1  the level stream tools/pxslevel.py writes (96.7) - EAGER and plain:
+;   1  the level stream tools/pxslevel.py writes (97.7) - EAGER and plain:
 ;      ~1KB, three sectors of the run. The plan carried it lazy, but the
 ;      parts table dies with this image, so a lazy part needs a directory
 ;      the program reads back through OSAPI_FILE_READ_AT (what SKIES does
 ;      for a world) - worth it for the art, not for this;
-;   2  PX_GENKB of scratch the program generates into (96.3): the four DDA
+;   2  PX_GENKB of scratch the program generates into (97.3): the four DDA
 ;      bodies and the column driver copied in, then BOTH resolution sets of
 ;      compiled scalers for the backend in force and their col2tex tables
 ;      (tools/pxsgen.py is the model; 40,087 bytes on CGA4, the widest
 ;      phase, plus 232 of bodies, 64 of driver and a 3KB draw queue).
 ;      OP_OPT: a machine that cannot spare it runs the bodies out of the
 ;      image and plays Flat;
-;   3  PXA_BTKB for the byte-texture set px_bt_build transposes (96.4) -
+;   3  PXA_BTKB for the byte-texture set px_bt_build transposes (97.4) -
 ;      15 materials x 2 shades x 1,024 texels. OP_OPT likewise;
-;   4  the ART MASTERS as an LZ4 stream tools/pxsart.py packed (96.4) -
+;   4  the ART MASTERS as an LZ4 stream tools/pxsart.py packed (97.4) -
 ;      LAZY, because a lazy row is not in the eager run that 20.12.7 bounds
 ;      at 128 unpacked sectors, and NOT OP_COMP because a lazy row cannot be
 ;      (the two want the same zkb word): pxl_art below fetches it and expands
@@ -58,50 +58,65 @@
                                     ; art's numbers, read by both halves
 
 PX_PART_BODY equ 0                  ; the program - a whole .o88 image
-PX_PART_LEV  equ 1                  ; the level stream (96.7)
-PX_PART_GEN  equ 2                  ; the scalers' scratch (96.3), optional
-PX_PART_BT   equ 3                  ; the byte-texture set (96.4), optional
-PX_PART_ART  equ 4                  ; the art stream (96.4), LAZY - and so
+PX_PART_LEV  equ 1                  ; the level stream (97.7)
+PX_PART_GEN  equ 2                  ; the scalers' scratch (97.3), optional
+PX_PART_BT   equ 3                  ; the byte-texture set (97.4), optional
+PX_PART_ART  equ 4                  ; the art stream (97.4), LAZY - and so
                                     ; LAST: a lazy row comes after every part
                                     ; of the carve (os88pkg.py's rule, SPEC.md
                                     ; 20.12.4)
 PX_NPARTS    equ 5
-PX_GENKB     equ 44                 ; part 2: tools/pxsgen.py --sizes reads
-                                    ; 40,087 for the widest phase (CGA4) and
-                                    ; pxgen.inc puts PXG_SCAL - 3,372 of
-                                    ; bodies (232), driver (64), header (4)
-                                    ; and queue (3,072) - in front of it:
-                                    ; 43,459 of 45,056, 1,597 spare;
-                                    ; tests/unit/t_pxsscale.py holds the
-                                    ; model to this number and PXH_GENLEN
-                                    ; below is the machine's own fence
-                                    ; (px_gen_build)
+; THE SPRITE SET IS A CLAIM OF ITS OWN, NOT A PART (97.6, 97.9): PXS_KB
+; claimed below once the art has arrived, handed over as PXH_SPR. The first
+; cut of wave 3 carried it as a fourth OP_OPT part - and OP_OPT is ALL OR
+; NONE (SPEC.md 20.12), so 46 KB of sprites joined the 81 KB the Textured
+; walls need, a machine with 90-150 KB free lost its textured walls to the
+; sprites, and "the sprites on boxes, the walls textured" was a state the
+; loader could not produce (review, wave 3). Claimed only when the largest
+; free run would still hold the program's own 16 KB shadow after it
+PXL_SHKB     equ 16                 ; the program's shadow (pxgame.asm's
+                                    ; PX_SHKB), claimed after this in its
+                                    ; entry proc: this claim must leave it
+PX_GENKB     equ 51                 ; part 2: tools/pxsgen.py --sizes reads
+                                    ; 46,291 for the widest phase (CGA4) -
+                                    ; both scaler sets, each scaler behind
+                                    ; its 66-byte codeofs table (wave 3),
+                                    ; and the col2tex blocks - and pxgen.inc
+                                    ; puts PXG_SCAL - 4,430 of bodies (232),
+                                    ; driver (96), header (6) and queue
+                                    ; (4,096) - in front of it: 50,721 of
+                                    ; 52,224, 1,503 spare; tests/unit/
+                                    ; t_pxsscale.py holds the model to this
+                                    ; number and PXH_GENLEN below is the
+                                    ; machine's own fence (px_gen_build)
 
-; --- the handoff, at the head of the PROGRAM's bss (SPEC.md 96.9) -----------
+; --- the handoff, at the head of the PROGRAM's bss (SPEC.md 97.9) -----------
 ; ONE PACKAGE, TWO SOURCES: apps/pixelstein/pxgame.asm declares these and this
 ; file is the other end of them. The kernel is not involved: it does not zero
 ; a part, which is the whole of what makes this work.
 PXH_MAGIC  equ 0                    ; word: 'PX' - the loader ran
 PXH_LEV    equ 2                    ; word: the level stream's segment
 PXH_GEN    equ 4                    ; word: the scratch part's segment, 0 = refused
-PXH_COLD   equ 6                    ; word: the cold part's segment (96.9), 0 = none
+PXH_COLD   equ 6                    ; word: the cold part's segment (97.9), 0 = none
 PXH_NLEV   equ 8                    ; word: levels in the stream
 PXH_LEVLEN equ 10                   ; word: the level stream's length in bytes
                                     ; (the row's OP_R_LEN): the bound the
                                     ; program holds the stream's own lengths
-                                    ; to (96.7)
+                                    ; to (97.7)
 PXH_ART    equ 12                   ; word: the expanded art masters' claim, 0 = none
 PXH_BT     equ 14                   ; word: the byte-texture part's segment, 0 = refused
 PXH_GENLEN equ 16                   ; word: the scratch part's length in bytes
                                     ; (PX_GENKB * 1024): the bound the
-                                    ; program generates under (96.3)
-PXH_SIZE   equ 18
+                                    ; program generates under (97.3)
+PXH_SPR    equ 18                   ; word: the sprite set's segment (97.6),
+                                    ; 0 = refused
+PXH_SIZE   equ 20
 
 LD_H_IMG   equ 8                    ; ...and the two header fields it reads
 LD_H_BSS   equ 10                   ; them at, which are the FORMAT's
 
 ; -----------------------------------------------------------------------------
-; pxl_art - fetch the art stream and expand it (SPEC.md 96.4; csload's csl_art)
+; pxl_art - fetch the art stream and expand it (SPEC.md 97.4; csload's csl_art)
 ; out: AX = the segment holding PXA_SIZE bytes of masters, or 0
 ; clobbers: BX, CX, DX, SI, DI, ES, flags
 ;
@@ -169,6 +184,7 @@ pxl_entry:
                                     ; did not arrive is not a plainer game
     xor ax, ax                      ; THE MASTERS ONLY FOR A LAUNCH THAT CAN
     mov [pxl_aseg], ax              ; USE THEM: px_texok is the AND of the
+    mov [pxl_sseg], ax              ; (and no sprite set without them)
     mov al, PX_PART_GEN             ; scratch, the byte set and the art, so
     call op_seg                     ; with either optional part refused an
     or ax, ax                       ; 8 KB claim would be held all session
@@ -179,6 +195,15 @@ pxl_entry:
     jz .noart                       ; nothing
     call pxl_art                    ; AX = the expanded masters, or 0
     mov [pxl_aseg], ax
+    or ax, ax
+    jz .noart                       ; no masters: nothing to transpose
+    call OSAPI_MEM_AVAIL            ; AX = the largest free run in KB
+    cmp ax, PXS_KB + PXL_SHKB       ; the set AND the shadow after it, or
+    jb .noart                       ; the sprites are boxes (97.6)
+    mov ax, PXS_KB
+    call OSAPI_MEM_CLAIM
+    jc .noart
+    mov [pxl_sseg], dx
 .noart:
     mov al, PX_PART_BODY
     call op_seg
@@ -194,18 +219,20 @@ pxl_entry:
     mov al, PX_PART_LEV
     call op_row                     ; SI -> the level row (csload.asm's use):
     mov ax, [si+OP_R_LEN]           ; its length is what bounds every length
-    mov [es:di+PXH_LEVLEN], ax      ; READ OUT OF the stream (96.7)
+    mov [es:di+PXH_LEVLEN], ax      ; READ OUT OF the stream (97.7)
     mov al, PX_PART_GEN             ; 0 when the optional row was refused:
     call op_seg                     ; op_seg answers 0 for a part that is not
     mov [es:di+PXH_GEN], ax         ; there, and the program falls back to
-                                    ; its own copy of the bodies (96.2.1)
+                                    ; its own copy of the bodies (97.2.1)
     mov al, PX_PART_BT
     call op_seg
     mov [es:di+PXH_BT], ax          ; ...and to the Flat rung without this
+    mov ax, [pxl_sseg]
+    mov [es:di+PXH_SPR], ax         ; ...and to boxes for sprites without this
     mov word [es:di+PXH_GENLEN], PX_GENKB * 1024
     mov ax, [pxl_aseg]
     mov [es:di+PXH_ART], ax
-    mov word [es:di+PXH_COLD], 0    ; no cold part yet (96.9)
+    mov word [es:di+PXH_COLD], 0    ; no cold part yet (97.9)
     mov word [es:di+PXH_NLEV], PXL_NLEV
 
     ; --- the hand-over -------------------------------------------------------
@@ -239,4 +266,11 @@ pxl_entry:
 pxl_zseg equ os88_image_end + OP_BSS + 0   ; the stream's claim, while it lasts
 pxl_aseg equ os88_image_end + OP_BSS + 2   ; ...and the masters', handed over
 pxl_zlen equ os88_image_end + OP_BSS + 4   ; the stream's packed length
-PXL_BSS  equ 6
+pxl_sseg equ os88_image_end + OP_BSS + 6   ; the sprite set's claim, or 0
+PXL_BSS  equ 8
+
+; the program's greyed Textured caption is the sum of these three, held
+; there by an %if on a restated PX_GENKB - and the restatement is held here
+%if PX_GENKB != 51
+%error "PX_GENKB moved: restate pxgame.asm's PX_GENKB_CAP and the greyed Textured caption"
+%endif

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PIXELSTEIN 3D's frame table, re-derived from the MEASURED units and solved
-as a FIXED POINT (SPEC.md 96.1; docs/reports/PXS-FRAME-2026-09-13.md 2).
+as a FIXED POINT (SPEC.md 97.1; docs/reports/PXS-FRAME-2026-09-13.md 2).
 
     python3 tools/pxsframe.py
 
@@ -10,7 +10,7 @@ rows, 10 crossings a column, 3 sprites, the weapon, ~700 delta-fill stores at
 are tests/pxsbench.py's off MartyPC's cycle-exact 5150, copied here by hand
 from the report with the date. WHY A SCRIPT: the first take of the table was
 evaluated once with the simulation at "1.3 ticks" - DOT DELIRIUM's own frame
-/ tick, i.e. the quantity being solved for. tk_steps (96.8) returns ELAPSED
+/ tick, i.e. the quantity being solved for. tk_steps (97.8) returns ELAPSED
 TICKS capped at 3, so the simulation is a function of the frame it is part
 of:
 
@@ -33,8 +33,8 @@ are priced per backend: 'bare' charges no odd-row phase at all (what Mode X
 and C160 pay - 16 solid colours or a DAC, no dither); 'ror' the rotate AS
 THE 1992 ENGINE TURNS IT (WL_SCALE.C's dithershift): `ror al, 1` x 2 on CGA
 320x200x4 (one 2-bit pixel), one `ror al, cl` with CL = 3 on Hercules and
-WIN1 - the arm 96.3 TAKES; 'word' the dual-phase word load, the named
-FALLBACK (part 3 doubled, no rotate). Every number SPEC.md 96.1's frame
+WIN1 - the arm 97.3 TAKES; 'word' the dual-phase word load, the named
+FALLBACK (part 3 doubled, no rotate). Every number SPEC.md 97.1's frame
 paragraph quotes is a line of this script's output.
 
 THE TEXEL TERMS ARE THE GENERATOR'S, NOT A ROW COUNT (review, wave 2): a
@@ -57,9 +57,9 @@ TICK = HZ / 18.2065                # one PIT tick, 262,150 clk = 54.925 ms
 CAP = 3                            # tk_steps' cap
 
 # --- the units, M (tests/pxsbench.py, 2026-09-13, r5) -------------------------
-CROSS = 128.2                      # a DDA crossing, the body of 96.2.2
-SETUP = 1094.0                     # 96.2.1 whole, net of the bench's scaffold
-HIT = 1294.5                       # 96.2.5 whole, net of the scaffold (its
+CROSS = 128.2                      # a DDA crossing, the body of 97.2.2
+SETUP = 1094.0                     # 97.2.1 whole, net of the bench's scaffold
+HIT = 1294.5                       # 97.2.5 whole, net of the scaffold (its
                                    # own multiplies, divide and stores are
                                    # ~800: the FLOOR a hit can reach, not 630)
 STORE = 24.3                       # mov [di + r*80], al into RAM
@@ -83,7 +83,7 @@ LADDER_CALL = LADDER_ENTRY + 168.0 # THE WHOLE px_lad CALL, prologue to first
                                    # the parity swap, the count-to-entry shifts
                                    # and the byte/word fork (~20 instructions
                                    # at the 8088's fetch floor). 280 is the one
-                                   # figure pxcomp.inc, SPEC.md 96.5/96.8 and
+                                   # figure pxcomp.inc, SPEC.md 97.5/97.8 and
                                    # the frame report quote for "a ladder
                                    # entry"; 112 alone is the bench's row
 ROR = {"cga4": 18.0,               # `ror al, 1` x 2 after the load: +18.0 a
@@ -230,7 +230,7 @@ def stages(cols=64, rows=80, crossings=10, dfill=700, lowres=False,
 
 
 def present(backend, cols=64, rows=80):
-    """The band is Size bytes wide at either resolution (96.3)."""
+    """The band is Size bytes wide at either resolution (97.3)."""
     if backend in ("cga4", "herc"):
         return cols * rows * COPY[backend]
     if backend == "cga16":
@@ -406,7 +406,7 @@ def main():
                   "  (model %+.1f%%: cast %+.1f%%, compose %+.1f%%)"
                   % ("", m[0], m[1], m[2], m[3], m[4], mn, mn / HZ * 1e3, (n - mn) / mn * 100,
                      (c - m[0]) / m[0] * 100, (comp - m[1]) / m[1] * 100))
-    # THE PROJECTION (SPEC.md 96.1's fork): the MEASURED walls-only frame plus
+    # THE PROJECTION (SPEC.md 97.1's fork): the MEASURED walls-only frame plus
     # what this frame does not draw yet, priced on the plan's 3 counts -
     # the candidate walk, the sprites' and weapon's texel rows at the
     # mean-wall shape (texel_run_cost), the posts and transforms (the plan's
@@ -416,7 +416,7 @@ def main():
     # replaces it
     print("--- the PROJECTION of the finished frame: the measured walls-only frame plus")
     print("    the sprite walk, the sprites' and weapon's texels, the posts and the HUD on")
-    print("    the plan's counts, then E1M1's tick - the number SPEC.md 96.1's fork is read")
+    print("    the plan's counts, then E1M1's tick - the number SPEC.md 97.1's fork is read")
     print("    against, and the reason its 64x80 default is PROVISIONAL until wave 3 measures")
     for label, k, meas in (("CGA4 Textured 64x80 Low res A", 1.0, 471107),
                            ("CGA4 Textured 64x80 Low res B", 1.0, 474409),

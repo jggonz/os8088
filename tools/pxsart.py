@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PIXELSTEIN 3D's art pipeline (SPEC.md 96.4): the wall masters, the five ink
+"""PIXELSTEIN 3D's art pipeline (SPEC.md 97.4): the wall masters, the five ink
 tables, the lazy art part and the byte-texture set the package transposes.
 
     python3 tools/pxsart.py [-o apps/pixelstein/pxart.inc] [--stream build/pxsart.bin]
@@ -24,7 +24,7 @@ is the one thing this file emits into the include beside the counts:
                   1.5, against the 21 four-pixel patterns WolfensteinCGA's
                   cgaify.cpp carries (read for technique, PIXELSTEIN-PLAN
                   13's sixth graft); the byte is the EVEN row's four pixels
-                  and the odd row is the scaler's `ror al, 1` x 2 (96.3)
+                  and the odd row is the scaler's `ror al, 1` x 2 (97.3)
   Hercules, WIN1  a density ladder - seeded from the nine 8-bit levels of
                   the same source (ff 7f 77 57 55 15 11 01 00, 8..0 dots of
                   eight) and CULLED by --preview: the three dense levels
@@ -33,7 +33,7 @@ is the one thing this file emits into the include beside the counts:
                   luminance; the odd row is `ror al, cl`, CL = 3
   C160            the attribute nibble: the colour itself, and a darker
                   twin for the dark face - the byte holds texels u and u+1
-                  of ONE ROW (96.4), so the set is built from column pairs
+                  of ONE ROW (97.4), so the set is built from column pairs
   Mode X          the DAC entry: the index lit, the index + 16 dark
 
 A DARK FACE IS THE SAME COLOUR AT 55% and matched again, never "one pattern
@@ -55,6 +55,47 @@ renders every master through every ink table at each adapter's pixel aspect
 against grey stone, distinguishable at 64 columns on the CGA4 and Hercules
 sets - which `--check` (and tests/unit/t_pxsart.py) asserts. stdlib only:
 `make` runs this to pack the stream.
+
+THE SPRITES (wave 3, SPEC.md 97.4, 97.6) ride the same stream after the
+walls, and THE KEY IS ALPHA: a sprite master is an RGBA PNG whose alpha is
+0 (transparent) or 255 (opaque) at every pixel and nothing between; an
+opaque pixel is one of the sixteen colours, and index 5 (magenta) is refused
+inside one exactly as it is inside a wall - the key never comes from a
+colour. Three sizes, one contract each (the names are SPRITES', PICKUPS'
+and WEAPONS' below, under apps/pixelstein/art/):
+
+  the guard and the decorations   32 x 32     g_f<0..4>_w<0|1>.png (five
+                                              facings x two walk phases),
+                                              g_shoot0/1, g_pain, g_die0..2,
+                                              g_dead; d_<name>.png x 6
+  the pickups                     16 x 16     p_<name>.png x 8, PLACED by
+                                              the tool in the lower middle
+                                              of a 32 x 32 frame (rows
+                                              16..31, columns 8..23) so a
+                                              pickup sits on the floor at
+                                              half a wall's height
+  the weapon                      16 x 24     wp_<knife|pistol|mgun>_<0..2>
+                                              .png: 16 columns, 24 rows -
+                                              the tool pads each frame to
+                                              32 texel rows so the Full-res
+                                              24-row scaler reproduces the
+                                              24 authored rows exactly
+
+The five guard facings are what the eight the engine draws are made from
+(97.6): f0 faces the viewer, f1 is turned so its RIGHT side comes toward the
+viewer (a three-quarter view), f2 shows its right side, f3 its right side
+from behind, f4 its back; the engine mirrors f3, f2 and f1 for the left
+side. Every frame goes to the machine as 512 packed texel nibbles (row
+major, the even column in the high nibble, a transparent texel 0) and 128
+alpha bytes (row major, bit 7 the leftmost column), and px_spr_build
+(pxgen.inc) transposes it into part 4's column-major texels and a RUN TABLE
+per column - the opaque spans, at most PXS_MAXRUNS = 4 a column, which
+`--check` refuses past (a column with five spans is a sprite the post walk
+cannot draw in four patched calls; simplify the art). The losable criterion
+for the guard: the front (f0) and the right side (f2) must be
+distinguishable at TWELVE columns - the width a guard has at two tiles -
+on the CGA4 and Hercules sets, which `--preview` writes side by side
+(spr-<backend>-front-side.png) and `--check` asserts.
 """
 import argparse
 import os
@@ -71,9 +112,33 @@ ART_DIR = os.path.join(ROOT, "apps", "pixelstein", "art")
 DEFAULT_OUT = os.path.join(ROOT, "apps", "pixelstein", "pxart.inc")
 DEFAULT_STREAM = os.path.join(ROOT, "build", "pxsart.bin")
 TEX = 32                        # texels a side
-NWALL = 15                      # materials 1..15 (0 is open; 96.1)
+NWALL = 15                      # materials 1..15 (0 is open; 97.1)
 WALLSZ = TEX * TEX // 2         # 512: 32 rows of 16 bytes, two texels a byte
 KEY = 5                         # magenta: the sprite key, never inside art
+SPR = 32                        # a sprite frame's texels a side (the guard, the
+                                # decorations, and the frame a pickup sits in)
+PICK = 16                       # a pickup master's side, placed at the frame's
+                                # lower middle: rows PICK..31, columns 8..23
+WPN_W, WPN_H = 16, 24           # a weapon master: 16 columns x 24 rows, padded
+                                # to 32 texel rows for the 24-row scaler
+SPRMSZ = SPR * SPR // 2 + SPR * SPR // 8      # 640: a frame in the stream
+WPNMSZ = WPN_W * SPR // 2 + WPN_W * SPR // 8  # 320: a weapon frame in it
+MAXRUNS = 4                     # opaque spans a column, at most (97.6)
+RUNSZ = 1 + 2 * MAXRUNS         # a column's run table in part 4: count, pairs
+FRSZ = SPR * SPR + SPR * RUNSZ  # 1,312: a transposed frame in part 4
+WFRSZ = WPN_W * SPR + WPN_W * RUNSZ           # 656: a transposed weapon frame
+# the guard's frames, in part 4's order (97.6): facing f (0..4) x walk phase
+# (0, 1) at f * 2 + phase, then the two shoot frames, the pain frame, three
+# die frames and the corpse
+G_WALK0, G_SHOOT, G_PAIN, G_DIE, G_DEAD, NGUARD = 0, 10, 12, 13, 16, 17
+DECO_NAMES = ("pillar", "barrel", "table", "bones", "puddle", "plant")  # kinds 8..13
+PICKUP_NAMES = ("ammo", "medkit", "food", "goldkey", "silverkey", "treasure",
+                "chalice", "life")                                       # kinds 0..7
+WEAPON_NAMES = ("knife", "pistol", "mgun")
+DECO0 = NGUARD                  # frame index of decoration kind 8
+PICK0 = DECO0 + len(DECO_NAMES)  # ...and of pickup kind 0
+NSPR = PICK0 + len(PICKUP_NAMES)  # 31 frames
+NWPN = len(WEAPON_NAMES) * 3    # nine weapon frames
 BACKENDS = ("cga4", "herc", "c160", "modex")     # WIN1 takes herc's
 DARK = 0.55                     # a dark face's brightness
 GAMMA = 1.5                     # cgaify's match gamma
@@ -86,8 +151,11 @@ PALETTE = [
     (0xFF, 0x55, 0x55), (0xFF, 0x55, 0xFF), (0xFF, 0xFF, 0x55), (0xFF, 0xFF, 0xFF)]
 CGA_PAL0 = [(0, 0, 0), (0, 0xAA, 0), (0xAA, 0, 0), (0xAA, 0x55, 0)]
 
-# cgaify.cpp's 21 four-pixel patterns (read for technique): each is the four
-# 2-bit pixels of one CGA byte, left to right
+# cgaify.cpp's four-pixel patterns (read for technique): each is the four
+# 2-bit pixels of one CGA byte, left to right. THE SOURCE LISTS 21 AND THIS
+# IS 20: its USE_ALL_DITHERS table carries (0,0,0,0) twice, so twenty distinct
+# patterns is the whole of the seed (the plan's graft 13.6 counts the list's
+# rows, not its members; review, wave 2)
 CGA_PATTERNS = [
     (0, 0, 0, 0), (0, 1, 0, 0), (0, 1, 0, 1), (1, 1, 0, 1), (1, 1, 1, 1),
     (1, 1, 3, 1), (3, 1, 3, 1), (3, 1, 3, 3), (0, 2, 0, 0), (0, 2, 0, 2),
@@ -407,7 +475,7 @@ def ink_tables():
     """{backend: (lit[16], dark[16])} - the texel byte (or nibble) of each of
     the sixteen indices, even-row phase.
 
-    THREE RULES the dither and colour backends' tables obey (96.4): a colour
+    THREE RULES the dither and colour backends' tables obey (97.4): a colour
     that is not black never LIGHTS as all-black (blue stone vanished into
     the ceiling on the first CGA screendump); a colour's DARK shade is never
     its lit one - the 55% match steps one pattern or level DOWN when it
@@ -470,7 +538,7 @@ def ink_rules():
     return ok, lines
 
 
-# --- the byte-texture set (px_bt_build's layout, 96.4) ----------------------------
+# --- the byte-texture set (px_bt_build's layout, 97.4) ----------------------------
 
 SHADES = 2
 MATSZ = SHADES * TEX * TEX      # 2,048 bytes a material
@@ -498,7 +566,7 @@ def bt_set(ms, backend):
 
 
 def phase(backend, byte, row):
-    """The texel byte as the scaler stores it on `row` (96.3): even rows the
+    """The texel byte as the scaler stores it on `row` (97.3): even rows the
     byte itself, odd rows rotated as the pixel format wants."""
     if row & 1 == 0:
         return byte
@@ -516,7 +584,7 @@ def texel(bt, backend, mat, side, u, v, row):
     return phase(backend, bt[(mat - 1) * MATSZ + side * TEX * TEX + col * TEX + v], row)
 
 
-# --- the losable criterion (96.4) ---------------------------------------------------
+# --- the losable criterion (97.4) ---------------------------------------------------
 
 def distinct(ms, backend, a=6, b=1):
     """Brick (6) against grey stone (1) on this backend's lit set: the share
@@ -748,17 +816,656 @@ def preview(ms, out_dir):
     return written
 
 
+# --- the sprites (wave 3, 97.4, 97.6) -----------------------------------------------
+
+def sprite_names():
+    """The 31 sprite frames' file stems, in part 4's frame order."""
+    out = []
+    for f in range(5):
+        for ph in range(2):
+            out.append("g_f%d_w%d" % (f, ph))
+    out += ["g_shoot0", "g_shoot1", "g_pain", "g_die0", "g_die1", "g_die2", "g_dead"]
+    out += ["d_" + n for n in DECO_NAMES]
+    out += ["p_" + n for n in PICKUP_NAMES]
+    assert len(out) == NSPR
+    return out
+
+
+def weapon_names():
+    return ["wp_%s_%d" % (w, k) for w in WEAPON_NAMES for k in range(3)]
+
+
+def sprite_path(stem):
+    return os.path.join(ART_DIR, stem + ".png")
+
+
+def load_sprite(stem, w, h):
+    """One RGBA master as (rows of indices, rows of alpha 0/1), w x h, or
+    raises with the reason: the size, an alpha that is not 0 or 255, a
+    colour off the sixteen, the key inside an opaque pixel."""
+    path = sprite_path(stem)
+    pw, ph, rows = read_png(path)
+    if (pw, ph) != (w, h):
+        raise ValueError("%s: %dx%d, this master is %dx%d" % (path, pw, ph, w, h))
+    idx, alpha = [], []
+    for y, row in enumerate(rows):
+        li, la = [], []
+        for x, (r, g, b, a) in enumerate(row):
+            if a not in (0, 255):
+                raise ValueError("%s: pixel (%d,%d) has alpha %d - a sprite's alpha is 0 "
+                                 "or 255, THE KEY, and nothing between" % (path, x, y, a))
+            if a == 0:
+                li.append(0)
+                la.append(0)
+                continue
+            i = nearest_index((r, g, b), tol=8)
+            if i is None:
+                raise ValueError("%s: pixel (%d,%d) is (%d,%d,%d), not one of the sixteen "
+                                 "colours - snap it first" % (path, x, y, r, g, b))
+            if i == KEY:
+                raise ValueError("%s: pixel (%d,%d) is index %d, THE KEY, inside an opaque "
+                                 "pixel - the key is alpha, never a colour" % (path, x, y, KEY))
+            li.append(i)
+            la.append(1)
+        idx.append(li)
+        alpha.append(la)
+    return idx, alpha
+
+
+def place_pickup(idx, alpha):
+    """A 16 x 16 pickup into the lower middle of a 32 x 32 frame."""
+    fi = [[0] * SPR for _ in range(SPR)]
+    fa = [[0] * SPR for _ in range(SPR)]
+    x0, y0 = (SPR - PICK) // 2, SPR - PICK
+    for y in range(PICK):
+        for x in range(PICK):
+            fi[y0 + y][x0 + x] = idx[y][x]
+            fa[y0 + y][x0 + x] = alpha[y][x]
+    return fi, fa
+
+
+def pad_weapon(idx, alpha):
+    """A 16 x 24 weapon frame into 16 x 32 texel rows so that the 24-row
+    scaler - texel v covers rows [(v*24)>>5, ((v+1)*24)>>5) - draws the 24
+    authored rows exactly: texel 4k covers NO row and texels 4k+1, 4k+2,
+    4k+3 land on rows 3k, 3k+1, 3k+2, so texels 4k and 4k+1 both carry
+    row 3k (the first cut's docstring had the two the other way round;
+    the code was right - review, wave 3)."""
+    fi, fa = [], []
+    for k in range(8):
+        r0, r1, r2 = idx[3 * k], idx[3 * k + 1], idx[3 * k + 2]
+        a0, a1, a2 = alpha[3 * k], alpha[3 * k + 1], alpha[3 * k + 2]
+        fi += [r0, r0, r1, r2]
+        fa += [a0, a0, a1, a2]
+    assert all(((v * WPN_H) >> 5) == r for v, r in
+               ((4 * k + j, 3 * k + (0, 0, 1, 2)[j]) for k in range(8) for j in range(4)))
+    return fi, fa
+
+
+def pack_sprite(idx, alpha, w=SPR):
+    """w x 32 texels: the packed nibbles (row major, even column high), then
+    the alpha bits (row major, bit 7 = column 0)."""
+    out = bytearray()
+    for row in idx:
+        for p in range(w // 2):
+            out.append((row[2 * p] << 4) | row[2 * p + 1])
+    for row in alpha:
+        for p in range(w // 8):
+            b = 0
+            for k in range(8):
+                b = (b << 1) | (1 if row[8 * p + k] else 0)
+            out.append(b)
+    return bytes(out)
+
+
+def column_runs(col):
+    """The opaque spans of one column of alpha bits: [(v0, v1)] with v1
+    exclusive."""
+    runs, v = [], 0
+    n = len(col)
+    while v < n:
+        if not col[v]:
+            v += 1
+            continue
+        v0 = v
+        while v < n and col[v]:
+            v += 1
+        runs.append((v0, v))
+    return runs
+
+
+def frame_runs(alpha, w=SPR, pairs=False):
+    """Per column (per column PAIR on C160) the run list, checked against
+    MAXRUNS; raises naming the column."""
+    out = []
+    ncol = w // 2 if pairs else w
+    for c in range(ncol):
+        if pairs:
+            col = [alpha[v][2 * c] | alpha[v][2 * c + 1] for v in range(SPR)]
+        else:
+            col = [alpha[v][c] for v in range(SPR)]
+        r = column_runs(col)
+        if len(r) > MAXRUNS:
+            raise ValueError("column %d has %d opaque spans; the post walk draws %d at most "
+                             "(97.6) - simplify the art" % (c, len(r), MAXRUNS))
+        out.append(r)
+    return out
+
+
+def sprites(strict=True):
+    """All 31 frames as (idx, alpha) 32 x 32, in part 4's order."""
+    out = []
+    for stem in sprite_names():
+        if stem.startswith("p_"):
+            idx, alpha = load_sprite(stem, PICK, PICK)
+            out.append(place_pickup(idx, alpha))
+        else:
+            out.append(load_sprite(stem, SPR, SPR))
+    return out
+
+
+def weapons():
+    """The nine weapon frames as (idx, alpha) 16 x 32."""
+    return [pad_weapon(*load_sprite(stem, WPN_W, WPN_H)) for stem in weapon_names()]
+
+
+def sprite_blob(sp, wp):
+    return b"".join(pack_sprite(i, a) for i, a in sp) + \
+        b"".join(pack_sprite(i, a, WPN_W) for i, a in wp)
+
+
+def spr_frame(idx, alpha, backend, w=SPR):
+    """One frame as px_spr_build lays it in part 4: w columns of 32 texel
+    bytes through the LIT ink table (C160: column pairs, both nibbles), then
+    w run tables of RUNSZ bytes (count, then (v0, v1) pairs, v1 exclusive;
+    C160's are the pairs')."""
+    it = ink_tables()[backend if backend != "win1" else "herc"][0]
+    pairs = backend == "c160"
+    out = bytearray(w * SPR)
+    if pairs:
+        for c in range(w // 2):
+            for v in range(SPR):
+                out[c * SPR + v] = (it[idx[v][2 * c]] << 4) | it[idx[v][2 * c + 1]]
+    else:
+        for c in range(w):
+            for v in range(SPR):
+                out[c * SPR + v] = it[idx[v][c]]
+    runs = frame_runs(alpha, w, pairs)
+    tab = bytearray(w * RUNSZ)
+    for c, r in enumerate(runs):
+        tab[c * RUNSZ] = len(r)
+        for k, (v0, v1) in enumerate(r):
+            tab[c * RUNSZ + 1 + 2 * k] = v0
+            tab[c * RUNSZ + 2 + 2 * k] = v1
+    return bytes(out + tab)
+
+
+def spr_set(sp, wp, backend):
+    """The whole of part 4 for a backend: NSPR frames then NWPN weapon frames."""
+    out = b"".join(spr_frame(i, a, backend) for i, a in sp)
+    out += b"".join(spr_frame(i, a, backend, WPN_W) for i, a in wp)
+    assert len(out) == NSPR * FRSZ + NWPN * WFRSZ
+    return out
+
+
+def spr_at12(frame, backend, w=12):
+    """A frame drawn twelve columns wide the way the post walk draws it:
+    column j takes source column (j * 32) // w (tools/pxsgen.py's col2tex),
+    every texel row - the bytes a guard two tiles off puts on the glass."""
+    fr = spr_frame(frame[0], frame[1], backend)
+    cols = []
+    for j in range(w):
+        src = (j * SPR) // w
+        if backend == "c160":
+            src >>= 1
+        cols.append(fr[src * SPR:(src + 1) * SPR])
+    return cols
+
+
+# THE FACING PAIRS THE CRITERION HOLDS APART (97.6): the front against the
+# side is what a four-facing set has too; the odd facings f1 (the
+# three-quarter view) and f3 (the side from behind) are what an EIGHT-facing
+# set earns, so each is held against both of its neighbours - the pair that
+# fails names the master to redraw. Every pair at twelve columns, the width
+# a guard has at two tiles (review, wave 3: the first cut compared f0 and
+# f2 alone, and "8 vs 4 facings" was decided by nothing)
+SPR_PAIRS = ((0, 2, "front vs its side"), (1, 0, "three-quarter vs its front"),
+             (1, 2, "three-quarter vs its side"), (3, 2, "side-from-behind vs its side"),
+             (3, 4, "side-from-behind vs its back"))
+
+
+OUTLINE_MAX = 0.25              # a sprite's outline, lit bits over its bytes
+
+
+def spr_outline(idx, alpha, w=SPR):
+    """(x, y) of every OPAQUE texel with a transparent 4-neighbour inside
+    the frame - the figure's edge against the key. The frame's own border
+    is not an edge (a weapon's grip runs off the view's bottom, a body's
+    feet stand on the floor)."""
+    h = len(idx)
+    out = []
+    for y in range(h):
+        for x in range(w):
+            if not alpha[y][x]:
+                continue
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < w and 0 <= ny < h and not alpha[ny][nx]:
+                    out.append((x, y))
+                    break
+    return out
+
+
+def outline_density(idx, alpha, backend, w=SPR):
+    """The share of lit bits over the outline's texel bytes through this
+    backend's lit ink table: 0 is a black line round the figure."""
+    it = ink_tables()[backend][0]
+    pts = spr_outline(idx, alpha, w)
+    if not pts:
+        return 0.0
+    return sum(bin(it[idx[y][x]]).count("1") for x, y in pts) / float(len(pts) * 8)
+
+
+def opaque_density(idx, alpha, backend, w=SPR):
+    it = ink_tables()[backend][0]
+    op = [it[idx[y][x]] for y in range(len(idx)) for x in range(w) if alpha[y][x]]
+    if not op:
+        return 0.0
+    return sum(bin(b).count("1") for b in op) / float(len(op) * 8)
+
+
+def spr_criterion(sp, wp=None, ms=None):
+    """(ok, lines): the guard's facings (w0) against each other at twelve
+    columns on CGA4 and Hercules, every pair of SPR_PAIRS - distinguishable
+    when >= 20% of the texel bytes differ, the opaque ones counted against
+    each other and a transparent texel against an opaque one counting as a
+    difference. And FIGURE AGAINST GROUND on the two 1bpp sets (review r1:
+    the placeholder guard's body dithered to the brick's own density on
+    Hercules and only its head read, and the pistol not at all): every
+    sprite and weapon frame's OUTLINE - its opaque texels bordering the key
+    - renders at most OUTLINE_MAX lit through the backend's ink table, a
+    dark line round the figure whatever wall is behind it; the body's
+    density against the walls' mean is reported beside it."""
+    ok, lines = True, []
+    for fa_, fb_, what in SPR_PAIRS:
+        front, side = sp[G_WALK0 + 2 * fa_], sp[G_WALK0 + 2 * fb_]
+        for be in ("cga4", "herc"):
+            a, b = spr_at12(front, be), spr_at12(side, be)
+            diff = tot = 0
+            for j in range(12):
+                srcf = (j * SPR) // 12
+                for v in range(SPR):
+                    oa = front[1][v][srcf]
+                    ob = side[1][v][srcf]
+                    if not oa and not ob:
+                        continue
+                    tot += 1
+                    if oa != ob or a[j][v] != b[j][v]:
+                        diff += 1
+            share = diff / float(tot) if tot else 0.0
+            good = share >= DIFF_MIN
+            ok = ok and good
+            lines.append("%s: the guard's %s at 12 columns - %.0f%% of the "
+                         "texels differ (want >= %.0f%%): %s"
+                         % (be, what, share * 100, DIFF_MIN * 100,
+                            "distinguishable" if good else "NOT DISTINGUISHABLE"))
+    names, wnames = sprite_names(), weapon_names()
+    for be in ("cga4", "herc"):
+        bad = []
+        for i, (idx, alpha) in enumerate(sp):
+            d = outline_density(idx, alpha, be)
+            if d > OUTLINE_MAX:
+                bad.append("%s %.2f" % (names[i], d))
+        for i, (idx, alpha) in enumerate(wp or ()):
+            d = outline_density(idx, alpha, be, WPN_W)
+            if d > OUTLINE_MAX:
+                bad.append("%s %.2f" % (wnames[i], d))
+        good = not bad
+        ok = ok and good
+        lines.append("%s: every sprite's OUTLINE renders dark (<= %.2f lit): %s"
+                     % (be, OUTLINE_MAX, "yes" if good else "NO - " + ", ".join(bad)))
+        if ms is not None:
+            bt = bt_set(ms, be)
+            walls = [sum(bin(x).count("1") for x in bt[k * MATSZ:k * MATSZ + TEX * TEX])
+                     / float(TEX * TEX * 8) for k in range(NWALL)]
+            lines.append("%s: figure against ground - the guard's front %.2f lit, the "
+                         "pistol %.2f, the walls' mean %.2f (min %.2f, max %.2f); the "
+                         "outline is what holds them apart"
+                         % (be, opaque_density(sp[G_WALK0][0], sp[G_WALK0][1], be),
+                            opaque_density(wp[3][0], wp[3][1], be, WPN_W) if wp else 0,
+                            sum(walls) / len(walls), min(walls), max(walls)))
+    return ok, lines
+
+
+def _outline_dark(fr):
+    """The placeholder's outline to black (index 0), so it holds 97.4's
+    figure/ground rule on the 1bpp sets."""
+    idx, alpha = fr
+    for x, y in spr_outline(idx, alpha, len(idx[0])):
+        idx[y][x] = 0
+    return fr
+
+
+# --- sprite placeholders: a helmeted guard, six decorations, eight pickups, the
+#     weapon - procedural and deterministic, to be replaced by the image
+#     model's on the same contract -----------------------------------------------------
+
+def _sblank(w=SPR, h=SPR):
+    return [[0] * w for _ in range(h)], [[0] * w for _ in range(h)]
+
+
+def _sfill(fr, x0, y0, x1, y1, v):
+    idx, alpha = fr
+    for y in range(max(0, y0), min(len(idx), y1)):
+        for x in range(max(0, x0), min(len(idx[0]), x1)):
+            idx[y][x] = v
+            alpha[y][x] = 1
+
+
+def _sdisc(fr, cx, cy, r, v):
+    idx, alpha = fr
+    for y in range(len(idx)):
+        for x in range(len(idx[0])):
+            if (x - cx) ** 2 + (y - cy) ** 2 <= r * r:
+                idx[y][x] = v
+                alpha[y][x] = 1
+
+
+def _guard(facing, phase, pose):
+    """A helmeted guard in a blue coat, 32 x 32, facing 0..4 (front to
+    back), walk phase 0/1, pose 'walk' / 'shoot0' / 'shoot1' / 'pain' /
+    'die0..2' / 'dead'. Blocky on purpose: it is what the losable criterion
+    is measured on until the real art lands, and every feature is a solid
+    rectangle a 2x2 dither can still show."""
+    fr = _sblank()
+    coat, helm, face, boot, gun = 9, 8, 14, 0, 7
+    if pose == "dead":
+        _sfill(fr, 3, 24, 29, 31, coat)
+        _sfill(fr, 3, 22, 9, 26, helm)
+        _sfill(fr, 26, 25, 29, 29, boot)
+        return fr
+    if pose.startswith("die"):
+        k = int(pose[3])
+        top = 6 + 6 * k
+        _sfill(fr, 10 + k, top, 22 - k, 28, coat)
+        _sfill(fr, 11 + k, top - 4, 21 - k, top + 1, helm)
+        _sfill(fr, 10, 28, 22, 31, boot)
+        return fr
+    # the body: head, coat, legs; the facing moves the face and the arms
+    _sfill(fr, 11, 2, 21, 7, helm)                     # the helmet
+    if facing == 0:
+        _sfill(fr, 12, 7, 20, 11, face)
+    elif facing == 1:
+        _sfill(fr, 14, 7, 21, 11, face)
+        _sfill(fr, 11, 7, 14, 11, helm)
+    elif facing == 2:
+        _sfill(fr, 17, 7, 21, 11, face)
+        _sfill(fr, 11, 7, 17, 11, helm)
+    elif facing == 3:
+        _sfill(fr, 19, 7, 21, 11, face)
+        _sfill(fr, 11, 7, 19, 11, helm)
+    else:
+        _sfill(fr, 11, 7, 21, 11, helm)
+    _sfill(fr, 10, 11, 22, 24, coat)                   # the coat
+    if facing == 2:                                    # the profile: narrow
+        for y in range(11, 24):
+            for x in (10, 11, 20, 21):
+                fr[0][y][x] = 0
+                fr[1][y][x] = 0
+    elif facing in (1, 3):                             # the three-quarters:
+        for y in range(11, 24):                        # between the two
+            for x in ((10,) if facing == 1 else (10, 21)):
+                fr[0][y][x] = 0
+                fr[1][y][x] = 0
+    if facing == 1:                                    # ...the near arm out,
+        _sfill(fr, 22, 12, 27, 23, coat)               # the gun hand below it
+        _sfill(fr, 24, 22, 29, 25, gun)
+    if facing == 3:                                    # ...and from behind,
+        _sfill(fr, 5, 12, 11, 22, 8)                   # the pack on its far side
+    belt = 4
+    _sfill(fr, 11, 17, 21, 19, belt)
+    if pose == "pain":
+        _sfill(fr, 12, 7, 20, 11, 12)                  # the face reddens
+    if pose in ("shoot0", "shoot1"):
+        _sfill(fr, 20, 12, 28, 15, gun)                # the pistol out
+        if pose == "shoot1":
+            _sfill(fr, 27, 10, 31, 17, 14)             # the flash
+    elif facing == 0 or facing == 4:
+        _sfill(fr, 7, 12, 10, 21, coat)                # arms
+        _sfill(fr, 22, 12, 25, 21, coat)
+        if facing == 0:
+            _sfill(fr, 20, 15, 27, 18, gun)            # the gun in hand
+    else:
+        _sfill(fr, 20, 12, 26, 15, gun)
+    # legs, the walk phase swapping which is forward
+    if phase == 0:
+        _sfill(fr, 11, 24, 15, 31, boot)
+        _sfill(fr, 17, 24, 21, 30, boot)
+    else:
+        _sfill(fr, 11, 24, 15, 30, boot)
+        _sfill(fr, 17, 24, 21, 31, boot)
+    _sfill(fr, 11, 24, 21, 26, coat)
+    return fr
+
+
+def _deco(name):
+    fr = _sblank()
+    if name == "pillar":
+        _sfill(fr, 11, 0, 21, 32, 7)
+        _sfill(fr, 9, 0, 23, 3, 8)
+        _sfill(fr, 9, 29, 23, 32, 8)
+        for y in range(3, 29, 4):
+            _sfill(fr, 13, y, 14, y + 2, 15)
+    elif name == "barrel":
+        _sfill(fr, 9, 12, 23, 32, 6)
+        _sfill(fr, 9, 14, 23, 16, 8)
+        _sfill(fr, 9, 22, 23, 24, 8)
+        _sfill(fr, 9, 29, 23, 31, 8)
+    elif name == "table":
+        _sfill(fr, 3, 18, 29, 21, 6)
+        _sfill(fr, 4, 21, 7, 32, 4)
+        _sfill(fr, 25, 21, 28, 32, 4)
+        _sfill(fr, 12, 14, 20, 18, 7)
+    elif name == "bones":
+        _sfill(fr, 4, 27, 12, 30, 15)
+        _sfill(fr, 16, 26, 28, 28, 15)
+        _sdisc(fr, 22, 23, 3, 15)
+        _sfill(fr, 20, 22, 22, 24, 0)
+    elif name == "puddle":
+        _sfill(fr, 6, 28, 26, 31, 4)
+        _sfill(fr, 9, 27, 22, 28, 12)
+    else:                                               # plant
+        _sfill(fr, 12, 24, 20, 32, 6)
+        _sfill(fr, 8, 12, 24, 24, 2)
+        _sfill(fr, 13, 6, 19, 12, 10)
+        _sfill(fr, 6, 16, 9, 19, 10)
+        _sfill(fr, 23, 15, 26, 18, 10)
+    return fr
+
+
+def _pickup(name):
+    fr = _sblank(PICK, PICK)
+    if name == "ammo":
+        _sfill(fr, 4, 8, 12, 15, 8)
+        _sfill(fr, 5, 5, 11, 8, 14)
+    elif name == "medkit":
+        _sfill(fr, 2, 6, 14, 15, 15)
+        _sfill(fr, 7, 7, 9, 14, 4)
+        _sfill(fr, 4, 9, 12, 12, 4)
+    elif name == "food":
+        _sfill(fr, 3, 10, 13, 15, 7)
+        _sfill(fr, 5, 6, 11, 10, 6)
+    elif name == "goldkey":
+        _sfill(fr, 3, 7, 13, 9, 14)
+        _sdisc(fr, 4, 8, 3, 14)
+        _sfill(fr, 11, 9, 13, 12, 14)
+    elif name == "silverkey":
+        _sfill(fr, 3, 7, 13, 9, 7)
+        _sdisc(fr, 4, 8, 3, 7)
+        _sfill(fr, 11, 9, 13, 12, 7)
+    elif name == "treasure":
+        _sfill(fr, 4, 9, 12, 15, 6)
+        _sfill(fr, 4, 6, 12, 9, 14)
+        _sfill(fr, 7, 4, 9, 6, 14)
+    elif name == "chalice":
+        _sfill(fr, 5, 3, 11, 8, 14)
+        _sfill(fr, 7, 8, 9, 13, 14)
+        _sfill(fr, 4, 13, 12, 15, 14)
+    else:                                               # life
+        _sdisc(fr, 8, 8, 6, 12)
+        _sfill(fr, 7, 4, 9, 12, 15)
+        _sfill(fr, 4, 7, 12, 9, 15)
+    return fr
+
+
+def _weapon(name, k):
+    fr = _sblank(WPN_W, WPN_H)
+    if name == "knife":
+        _sfill(fr, 6 + k, 4 - k, 9 + k, 16 - k, 7)
+        _sfill(fr, 5 + k, 15 - k, 11 + k, 24, 6)
+    elif name == "pistol":
+        _sfill(fr, 5, 10 + k, 10, 24, 6)        # brown: index 8 IS Mode X's
+                                                # floor grey, and the grip
+                                                # vanished into it (review,
+                                                # wave 3)
+        _sfill(fr, 6, 4 + k, 9, 10 + k, 7)
+        if k == 1:
+            _sfill(fr, 4, 0, 11, 5, 14)
+    else:
+        _sfill(fr, 4, 8 + k, 12, 24, 6)         # (brown, as the pistol's)
+        _sfill(fr, 6, 2 + k, 10, 8 + k, 7)
+        _sfill(fr, 3, 14, 5, 22, 8)
+        if k == 1:
+            _sfill(fr, 3, 0, 13, 4, 14)
+    return fr
+
+
+def write_sprite_placeholders(force=False):
+    n = 0
+    stems = sprite_names()
+    for i, stem in enumerate(stems):
+        p = sprite_path(stem)
+        if os.path.exists(p) and not force:
+            continue
+        if stem.startswith("g_"):
+            if i < G_SHOOT:
+                fr = _guard(i // 2, i & 1, "walk")
+            elif i < G_PAIN:
+                fr = _guard(0, 0, "shoot%d" % (i - G_SHOOT))
+            elif i < G_DIE:
+                fr = _guard(0, 0, "pain")
+            elif i < G_DEAD:
+                fr = _guard(0, 0, "die%d" % (i - G_DIE))
+            else:
+                fr = _guard(0, 0, "dead")
+            _outline_dark(fr)
+            write_png_rgba(p, SPR, SPR, fr[0], fr[1])
+        elif stem.startswith("d_"):
+            fr = _outline_dark(_deco(stem[2:]))
+            write_png_rgba(p, SPR, SPR, fr[0], fr[1])
+        else:
+            fr = _outline_dark(_pickup(stem[2:]))
+            write_png_rgba(p, PICK, PICK, fr[0], fr[1])
+        n += 1
+    for stem in weapon_names():
+        p = sprite_path(stem)
+        if os.path.exists(p) and not force:
+            continue
+        _, name, k = stem.split("_")
+        fr = _outline_dark(_weapon(name, int(k)))
+        write_png_rgba(p, WPN_W, WPN_H, fr[0], fr[1])
+        n += 1
+    return n
+
+
+def write_png_rgba(path, w, h, idx, alpha):
+    """An RGBA PNG of the sixteen colours: alpha 255 where `alpha` is set."""
+    raw = b"".join(b"\x00" + b"".join(bytes(PALETTE[idx[y][x]]) + (b"\xff" if alpha[y][x] else b"\x00")
+                                        for x in range(w)) for y in range(h))
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n")
+        f.write(_chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)))
+        f.write(_chunk(b"IDAT", zlib.compress(raw, 9)))
+        f.write(_chunk(b"IEND", b""))
+
+
+def spr_preview(sp, wp, out_dir):
+    """Every frame through every backend's lit table at the adapter's aspect
+    (a transparent texel drawn dark blue), and the twelve-column front/side
+    pair the criterion is read from."""
+    written = []
+    for be in BACKENDS:
+        zx, zy = ASPECT[be]
+        for i, (idx, alpha) in enumerate(sp + wp):
+            fr = spr_frame(idx, alpha, be, SPR if i < NSPR else WPN_W)
+            w = SPR if i < NSPR else WPN_W
+            ncol = w // 2 if be == "c160" else w
+            rows = []
+            for v in range(SPR):
+                line = []
+                for c in range(ncol):
+                    if be == "c160":
+                        op = alpha[v][2 * c] or alpha[v][2 * c + 1]
+                    else:
+                        op = alpha[v][c]
+                    if op:
+                        line += _rgb_of(be, fr[c * SPR + v], v)
+                    else:
+                        line += [(0, 0, 0x40)] * len(_rgb_of(be, 0, v))
+                rows.append(line)
+            big = []
+            for r in rows:
+                line = []
+                for px in r:
+                    line += [px] * zx
+                for _ in range(zy):
+                    big.append(line)
+            stem = (sprite_names() + weapon_names())[i]
+            p = os.path.join(out_dir, "spr-%s-%s.png" % (be, stem))
+            write_png_rgb(p, len(big[0]), len(big), big)
+            written.append(p)
+        if be in ("cga4", "herc"):
+            rows = []
+            pair = [spr_at12(sp[G_WALK0], be), spr_at12(sp[G_WALK0 + 4], be)]
+            al = [sp[G_WALK0][1], sp[G_WALK0 + 4][1]]
+            for v in range(SPR):
+                line = []
+                for k in range(2):
+                    for j in range(12):
+                        src = (j * SPR) // 12
+                        if al[k][v][src]:
+                            line += _rgb_of(be, pair[k][j][v], v)
+                        else:
+                            line += [(0, 0, 0x40)] * len(_rgb_of(be, 0, v))
+                    line += [(0x40, 0x40, 0x40)] * 4
+                rows.append(line)
+            big = []
+            for r in rows:
+                line = []
+                for px in r:
+                    line += [px] * zx
+                for _ in range(zy):
+                    big.append(line)
+            p = os.path.join(out_dir, "spr-%s-front-side.png" % be)
+            write_png_rgb(p, len(big[0]), len(big), big)
+            written.append(p)
+    return written
+
+
 # --- the include and the stream ------------------------------------------------------
 
-def generate(ms):
+def generate(ms, sp=None, wp=None):
     it = ink_tables()
     blob = art_blob(ms)
+    if sp is None:
+        sp, wp = sprites(), weapons()
+    sblob = sprite_blob(sp, wp)
     L = []
     w = L.append
     w("; apps/pixelstein/pxart.inc - GENERATED by tools/pxsart.py, DO NOT EDIT")
-    w("; (SPEC.md 96.4). The art's numbers and the four ink tables (WIN1's band")
+    w("; (SPEC.md 97.4). The art's numbers and the four ink tables (WIN1's band")
     w("; is the Hercules set); never pixels. The masters go to the machine as")
-    w("; the lazy art part's LZ4 stream (build/pxsart.bin, part 4 of 96.9),")
+    w("; the lazy art part's LZ4 stream (build/pxsart.bin, part 4 of 97.9),")
     w("; which the loader expands into PXA_SIZE bytes, and px_bt_build")
     w("; transposes them through these tables into part 3 (pxgen.inc).")
     w("")
@@ -767,17 +1474,57 @@ def generate(ms):
     w("PXA_WALLSZ  equ %d            ; 32 rows x 16 bytes: two texels a byte, the" % WALLSZ)
     w("                                ; even column in the high nibble")
     w("PXA_WALL0   equ 0               ; ...from the head of the claim")
-    w("PXA_SIZE    equ %d           ; the expanded claim, bytes" % len(blob))
-    w("PXA_KB      equ %d              ; ...as OSAPI_MEM_CLAIM wants it" % ((len(blob) + 1023) // 1024))
+    total = len(blob) + len(sblob)
+    w("PXA_SIZE    equ %d          ; the expanded claim, bytes: the walls, then" % total)
+    w("                                ; the sprite masters (97.4, wave 3)")
+    w("PXA_KB      equ %d             ; ...as OSAPI_MEM_CLAIM wants it" % ((total + 1023) // 1024))
     w("PXA_SHADES  equ %d              ; lit, dark" % SHADES)
     w("PXA_MATSZ   equ %d           ; a material's bytes in the byte-texture set" % MATSZ)
-    w("PXA_BTSIZE  equ %d          ; ...and the whole set (part 3, 96.9)" % BT_SIZE)
+    w("PXA_BTSIZE  equ %d          ; ...and the whole set (part 3, 97.9)" % BT_SIZE)
     w("PXA_BTKB    equ %d" % ((BT_SIZE + 1023) // 1024))
+    w("")
+    w("; THE SPRITE MASTERS in the claim (97.4, 97.6): %d frames of 32 x 32 after" % NSPR)
+    w("; the walls - 512 packed nibbles (row major, even column high, a")
+    w("; transparent texel 0) then 128 alpha bytes (row major, bit 7 the left")
+    w("; column) - and %d weapon frames of 16 x 32 (256 + 64) after them" % NWPN)
+    w("PXA_SPR0    equ %d           ; the first sprite frame's offset" % len(blob))
+    w("PXA_NSPR    equ %d" % NSPR)
+    w("PXA_SPRMSZ  equ %d            ; a frame in the claim" % SPRMSZ)
+    w("PXA_SPRALPHA equ %d           ; ...its alpha bytes begin here" % (SPR * SPR // 2))
+    w("PXA_WPN0    equ %d          ; the first weapon frame's offset" % (len(blob) + NSPR * SPRMSZ))
+    w("PXA_NWPN    equ %d" % NWPN)
+    w("PXA_WPNMSZ  equ %d            ; a weapon frame in the claim" % WPNMSZ)
+    w("PXA_WPNALPHA equ %d           ; ...its alpha bytes begin here" % (WPN_W * SPR // 2))
+    w("PXA_WPNW    equ %d             ; a weapon frame's columns" % WPN_W)
+    w("")
+    w("; THE SPRITE SET, a claim of its own (97.6, 97.9; PXS_*): what px_spr_build transposes the")
+    w("; masters into - a frame is 32 columns of 32 texel bytes through the lit")
+    w("; ink table (C160: 16 column pairs, both nibbles), then 32 run tables of")
+    w("; PXS_RUNSZ bytes (count, then up to PXS_MAXRUNS (v0, v1) pairs, v1")
+    w("; exclusive); a weapon frame the same at 16 columns. The frame order:")
+    w("; the guard's walk (facing * 2 + phase), shoot, pain, die, dead, six")
+    w("; decorations (static kind 8 first), eight pickups (kind 0 first)")
+    w("PXS_MAXRUNS equ %d" % MAXRUNS)
+    w("PXS_RUNSZ   equ %d" % RUNSZ)
+    w("PXS_RUNOFS  equ %d           ; a frame's run tables begin here" % (SPR * SPR))
+    w("PXS_FRSZ    equ %d           ; a frame in the set" % FRSZ)
+    w("PXS_WFRSZ   equ %d            ; a weapon frame in the set" % WFRSZ)
+    w("PXS_WRUNOFS equ %d            ; ...its run tables" % (WPN_W * SPR))
+    w("PXS_WPN0    equ %d          ; the first weapon frame" % (NSPR * FRSZ))
+    w("PXS_SIZE    equ %d          ; the whole set" % (NSPR * FRSZ + NWPN * WFRSZ))
+    w("PXS_KB      equ %d" % ((NSPR * FRSZ + NWPN * WFRSZ + 1023) // 1024))
+    w("PXS_G_WALK0 equ %d              ; the guard's frames: facing * 2 + walk phase" % G_WALK0)
+    w("PXS_G_SHOOT equ %d" % G_SHOOT)
+    w("PXS_G_PAIN  equ %d" % G_PAIN)
+    w("PXS_G_DIE   equ %d" % G_DIE)
+    w("PXS_G_DEAD  equ %d" % G_DEAD)
+    w("PXS_DECO0   equ %d             ; decoration kind 8's frame" % DECO0)
+    w("PXS_PICK0   equ %d             ; pickup kind 0's frame" % PICK0)
     w("")
     w("; the ink tables: the texel byte (C160: the attribute nibble, both nibbles")
     w("; built by the transpose) of each of the sixteen colour indices, sixteen")
     w("; lit then sixteen dark, even-row phase (the odd row is the scaler's")
-    w("; rotate, 96.3). WIN1's band is the Hercules set")
+    w("; rotate, 97.3). WIN1's band is the Hercules set")
     for be in BACKENDS:
         lit, dark = it[be]
         w("px_it_%s:" % be)
@@ -787,8 +1534,10 @@ def generate(ms):
     return "\n".join(L) + "\n"
 
 
-def stream(ms):
-    blob = art_blob(ms)
+def stream(ms, sp=None, wp=None):
+    if sp is None:
+        sp, wp = sprites(), weapons()
+    blob = art_blob(ms) + sprite_blob(sp, wp)
     z = os88lz.compress(blob, os88lz.LZ4)
     assert os88lz.decompress(z, os88lz.LZ4, len(blob)) == blob, "the LZ4 round trip"
     return z
@@ -800,7 +1549,12 @@ def main():
     ap.add_argument("--stream", help="write the LZ4 art stream here")
     ap.add_argument("--placeholder", action="store_true",
                     help="write the procedural masters that are missing")
-    ap.add_argument("--force", action="store_true", help="...overwriting those that exist")
+    ap.add_argument("--force", action="store_true", help="...overwriting the SPRITE placeholders "
+                    "that exist (the wall masters only with --walls: they are the image model's)")
+    ap.add_argument("--walls", action="store_true",
+                    help="with --force: overwrite the WALL masters too - which are the image "
+                         "model's since wave 2, so this is never what a sprite rewrite wants "
+                         "(a review-round --force wrote fifteen placeholders over them)")
     ap.add_argument("--check", action="store_true",
                     help="refuse a bad master in words, and assert the losable criterion")
     ap.add_argument("--preview", metavar="DIR",
@@ -808,10 +1562,24 @@ def main():
     ap.add_argument("--inks", action="store_true", help="print the ink tables")
     a = ap.parse_args()
     if a.placeholder:
-        n = write_placeholders(a.force)
+        n = write_placeholders(a.force and a.walls)
+        n += write_sprite_placeholders(a.force)
         print("pxsart: wrote %d placeholder master(s) under %s" % (n, ART_DIR))
     try:
         ms = masters()
+        sp, wp = sprites(), weapons()
+        for i, (idx, alpha) in enumerate(sp):
+            try:
+                frame_runs(alpha)
+                frame_runs(alpha, SPR, True)
+            except ValueError as e:
+                raise ValueError("%s: %s" % (sprite_path(sprite_names()[i]), e))
+        for i, (idx, alpha) in enumerate(wp):
+            try:
+                frame_runs(alpha, WPN_W)
+                frame_runs(alpha, WPN_W, True)
+            except ValueError as e:
+                raise ValueError("%s: %s" % (sprite_path(weapon_names()[i]), e))
     except (ValueError, OSError) as e:
         sys.exit("pxsart: %s" % e)
     if a.inks:
@@ -820,28 +1588,36 @@ def main():
             print("%-6s dark %s" % ("", " ".join("%02X" % v for v in dark)))
     ok, lines = criterion(ms)
     rok, rlines = ink_rules()
+    sok, slines = spr_criterion(sp, wp, ms)
     if a.preview:
         files = preview(ms, a.preview)
+        files += spr_preview(sp, wp, a.preview)
         print("pxsart: wrote %d previews under %s" % (len(files), a.preview))
     if a.check or a.preview:
-        for ln in lines + rlines:
+        for ln in lines + rlines + slines:
             print("pxsart: " + ln)
         if a.check and not ok:
             sys.exit("pxsart: the losable criterion FAILED - re-choose the materials "
-                     "(SPEC.md 96.4)")
+                     "(SPEC.md 97.4)")
         if a.check and not rok:
-            sys.exit("pxsart: an ink table breaks 96.4's rules (above)")
+            sys.exit("pxsart: an ink table breaks 97.4's rules (above)")
+        if a.check and not sok:
+            sys.exit("pxsart: the sprite criterion FAILED (above) - a facing pair "
+                     "indistinguishable at 12 columns, or an outline that is not dark "
+                     "on a 1bpp set - re-draw the master (SPEC.md 97.4)")
     if a.out:
-        text = generate(ms)
+        text = generate(ms, sp, wp)
         with open(a.out, "w") as f:
             f.write(text)
         print("pxsart: wrote %s (%d lines)" % (a.out, text.count("\n")))
     if a.stream:
-        z = stream(ms)
+        z = stream(ms, sp, wp)
         os.makedirs(os.path.dirname(os.path.abspath(a.stream)), exist_ok=True)
         with open(a.stream, "wb") as f:
             f.write(z)
-        print("pxsart: wrote %s (%d bytes packed of %d)" % (a.stream, len(z), NWALL * WALLSZ))
+        print("pxsart: wrote %s (%d bytes packed of %d: %d of walls, %d of sprites)"
+              % (a.stream, len(z), NWALL * WALLSZ + NSPR * SPRMSZ + NWPN * WPNMSZ,
+                 NWALL * WALLSZ, NSPR * SPRMSZ + NWPN * WPNMSZ))
 
 
 if __name__ == "__main__":

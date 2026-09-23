@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PIXELSTEIN 3D's generated includes are what their generators produce
-(SPEC.md 96.12).
+(SPEC.md 97.12).
 
     python3 tests/unit/t_pxsgen.py
 

@@ -1,11 +1,11 @@
 ; =============================================================================
 ; os8088 - apps/pixelstein/pxcast.inc
 ;
-; THE CAST (SPEC.md 96.2): one ray a column from the eye to its wall, through
-; the two pointer walkers of 96.2.2, and the hit of 96.2.5 into the column
+; THE CAST (SPEC.md 97.2): one ray a column from the eye to its wall, through
+; the two pointer walkers of 97.2.2, and the hit of 97.2.5 into the column
 ; arrays. The four quadrant bodies are here as a template, PX_BODY, stamped
 ; four times; pxgen.inc copies them into the scratch part when there is one
-; and the frame far-calls whichever segment they live in (96.2.1).
+; and the frame far-calls whichever segment they live in (97.2.1).
 ;
 ; Register discipline inside px_cast is the walker's: SI/DX the V walker,
 ; DI/BX the H walker, CX/BP the two keys, AL the generation, ES the body
@@ -28,7 +28,7 @@
 %endmacro
 
 ; -----------------------------------------------------------------------------
-; PX_BODY dxs, dys - one quadrant's walker (96.2.2), instruction for
+; PX_BODY dxs, dys - one quadrant's walker (97.2.2), instruction for
 ;                    instruction the body tests/pxsbench/pxsbench.asm measured
 ;                    at 128.2 clk a crossing, with the signs of the four steps
 ;                    and the direction of the two compares the quadrant's.
@@ -36,7 +36,7 @@
 ; A V pass steps x by one row of mapT (64 bytes, the sign of dxs) and y by
 ; the tangent's integer part plus the fraction's carry - one adc (dys > 0) or
 ; one sbb (dys < 0) whose immediate is PATCHED once a column: int + 64*dxs
-; for the adc, int - 64*dxs for the sbb (96.2.1). The keys follow both
+; for the adc, int - 64*dxs for the sbb (97.2.1). The keys follow both
 ; walkers. It ends in retf with CF = the side (V clear, H set): the one
 ; answer that costs no memory operand, and what lets a copy of these bytes
 ; run from another segment untouched.
@@ -65,7 +65,7 @@ PXB_HPASS   equ 32
 %%ventry:
     test byte [si], PXC_SOLID | PXC_DOOR
     jnz %%vhit
-%%vpass:                            ; +7: the pass tail, 96.2.4's re-entry
+%%vpass:                            ; +7: the pass tail, 97.2.4's re-entry
 %if (%%vpass - %%body) != PXB_VPASS
 %error "PX_BODY's V pass tail moved: PXB_VPASS is stale"
 %endif
@@ -168,14 +168,14 @@ PXB_ALL     equ $ - px_bodies
 ; --- the per-quadrant constants, indexed by q*2 ------------------------------
 px_vadj:    dw 64, -64, 64, -64     ; what the V patch adds to the integer step
 px_hadj:    dw 64, -64, 64, -64     ; ...and the H patch
-px_vpark:   dw 0xFF00, 0xFF00, 0, 0 ; a parked V walker's pointer (96.2.3):
+px_vpark:   dw 0xFF00, 0xFF00, 0, 0 ; a parked V walker's pointer (97.2.3):
                                     ; past every key for jb, under every key
                                     ; for ja - what the body's FIRST compare
                                     ; sees, so that H is entered instead
 px_hpark:   dw 0xFF00, 0, 0, 0xFF00 ; ...and H's, which no compare ever
                                     ; reaches (the far keys below); kept so
                                     ; the register is a value and not a leftover
-; THE LIVE WALKER NEVER YIELDS TO A PARKED ONE (96.2.3): its key is put where
+; THE LIVE WALKER NEVER YIELDS TO A PARKED ONE (97.2.3): its key is put where
 ; its compare cannot fail for the 63 crossings the solid border bounds it to.
 ; The keys move 64 a pass, the wrong way for the compare in two quadrants of
 ; four, so the far key sits 64 * 63 clear of the wrap and of every pointer
@@ -198,7 +198,7 @@ px_dyneg:   dw 0, 0, 1, 1           ; dys < 0 in q2 and q3
 ; px_frame_tabs - the per-frame constants the column setup indexes by q
 ; in:  [px_px], [px_py] the eye.  clobbers AX, BX, CX, DX, SI
 ;
-; xpartial and ypartial (the distance to the first grid line, 96.2.1), the
+; xpartial and ypartial (the distance to the first grid line, 97.2.1), the
 ; two pointer bases, the two keys - each four words, one per quadrant, so a
 ; column's setup is a table read where a branch would be.
 ; -----------------------------------------------------------------------------
@@ -286,7 +286,7 @@ px_frame_tabs:
     ret
 
 ; -----------------------------------------------------------------------------
-; px_spot_clear - both spotvis arrays to "never crossed" (96.1)
+; px_spot_clear - both spotvis arrays to "never crossed" (97.1)
 ; clobbers AX, CX, DI, ES
 ; -----------------------------------------------------------------------------
 px_spot_clear:
@@ -300,6 +300,21 @@ px_spot_clear:
     mov di, px_spot
     mov cx, 2048
     rep stosw
+    ret
+
+; px_cellT2P - AX = a mapT index (x*64 + y) -> AX = the plain cell (y*64 + x).
+;              Preserves every other register
+px_cellT2P:
+    push cx
+    mov cl, 6
+    mov ch, al                      ; CH = (x & 3) << 6 | y
+    and ch, 63                      ; CH = y
+    shr ax, cl                      ; AX = x
+    xchg al, ch                     ; AL = y, CH = x
+    xor ah, ah
+    shl ax, cl                      ; AX = y * 64
+    or al, ch                       ; ...| x
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -322,7 +337,7 @@ px_cast:
     mov es, [px_bseg]               ; ES = the bodies, for the frame
     mov word [px_col], 0
 .col:
-    ; --- the angle, its quadrant, the two steps (96.2.1) -----------------
+    ; --- the angle, its quadrant, the two steps (97.2.1) -----------------
     mov bx, [px_col]
     shl bx, 1
     add bx, [px_fanp]
@@ -394,7 +409,7 @@ px_cast:
     mov ax, [px_vpark + si]
     xor dx, dx
     mov bp, [px_bfar + si]          ; ...or the far one: H never yields to
-                                    ; a parked V (96.2.3)
+                                    ; a parked V (97.2.3)
 .vok:
     push ax
     push dx
@@ -425,7 +440,7 @@ px_cast:
     xor bx, bx
     mov cx, [px_cfar + si]          ; ...or the far one: V never yields to
                                     ; a parked H. Both parked cannot happen
-                                    ; with the eye in tiles 1..62 (96.2.3)
+                                    ; with the eye in tiles 1..62 (97.2.3)
 .hok:
     ; --- the generation, the walk -------------------------------------------
     mov al, [px_gen]
@@ -442,7 +457,7 @@ px_cast:
     jz .vsolid
     test ah, PXC_DOOREW
     jnz .vother
-    ; a door across this walker's line (96.2.4): the slab at x = xt + 0.5.
+    ; a door across this walker's line (97.2.4): the slab at x = xt + 0.5.
     ; Registers stay the walker's until the slab is known to be struck.
     push ax
     push cx
@@ -463,6 +478,7 @@ px_cast:
     add cx, ax                      ; CX = where the ray is at the slab
     cmp ch, ah                      ; still inside the cell?
     je .vslab
+.vthru:
     pop cx                          ; no: it left before the slab, into the
     pop ax                          ; jamb the H walker finds - walk on
     mov ax, [px_qcur]
@@ -471,9 +487,43 @@ px_cast:
     mov al, [px_gen]
     call far [px_qcurv]
     jmp short .side
-.vslab:                             ; struck: the walk is over, registers free
+.vslab:
+    ; THE SLAB HAS SLID (97.2.4, wave 3): the door's position is how far
+    ; its leading edge has moved along the slab, so a ray whose u is under
+    ; it passes through the gap and one that strikes the door reads the
+    ; texture from that edge - u less the position, BEFORE the mirror
+    ; (tools/pxssim.py's doorpos, the same arithmetic). The walker's
+    ; registers are still live here: only AX (pushed) and the stack are
+    ; spent on the lookup
+    push bx
+    mov ax, si
+    sub ax, px_mapT
+    call px_cellT2P                 ; AX = the plain cell of this mapT index
+    call px_door_of                 ; AX = its door record (CF: none - a
+    jc .vshut                       ; DOOR cell the load did not list reads
+    mov bx, ax                      ; as shut)
+    mov ax, [bx + PXD_POS]
+    jmp short .vpos
+.vshut:
+    xor ax, ax
+.vpos:
+    pop bx
+    push cx
+    xor ch, ch                      ; CX = u
+    cmp ax, cx
+    pop cx
+    ja .vthru                       ; the edge is past this ray: the gap
+    ; struck: the walk is over, registers free
+    mov [px_hy], cx                 ; hy = the slab's y - BEFORE the edge
+                                    ; comes off u: CL is that coordinate's
+                                    ; fraction, and the first cut stored CX
+                                    ; after the sub, so a half-open door's
+                                    ; hit slid along the slab by its
+                                    ; position, and the distance, wallh and
+                                    ; the sprite z-test with it (review,
+                                    ; wave 3; tests/pxssim.py's door sweep)
+    sub cl, al                      ; the slab's own texel, from its edge
     mov [px_hu], cl                 ; u, raw
-    mov [px_hy], cx                 ; hy = the slab's y
     mov ax, si
     sub ax, px_mapT
     mov cl, 6
@@ -485,7 +535,6 @@ px_cast:
     mov cl, 4
     shr al, cl
     mov [px_hmat], al
-    mov byte [px_hdoor], 1
     add sp, 4                       ; the two pushes above
     jmp .vproj
 .vother:                            ; a door of the other orientation
@@ -494,7 +543,7 @@ px_cast:
 .vsolid:
     ; the hit point off the pointer: x = xt (from the west) or xt + 1 (from
     ; the east), y = vrow + the fraction; the jamb from the cell the ray
-    ; came through, one row of mapT back (96.2.4)
+    ; came through, one row of mapT back (97.2.4)
     mov ax, si
     sub ax, px_mapT
     mov cx, ax
@@ -527,7 +576,6 @@ px_cast:
     mov al, PXM_JAMB
 .vmat:
     mov [px_hmat], al
-    mov byte [px_hdoor], 0
     jmp short .vproj
 .vthrough:                          ; DOOR of the other axis, not solid: pass
     mov ax, [px_qcur]
@@ -567,6 +615,7 @@ px_cast:
     add cx, ax
     cmp ch, ah
     je .hslab
+.hthru:
     pop cx
     pop ax
     mov ax, [px_qcur]
@@ -576,8 +625,26 @@ px_cast:
     call far [px_qcurh]
     jmp .side
 .hslab:
+    push bx                         ; the slide, the V arm's way: the plain
+    mov ax, di                      ; map index IS the cell
+    sub ax, px_map
+    call px_door_of
+    jc .hshut
+    mov bx, ax
+    mov ax, [bx + PXD_POS]
+    jmp short .hpos
+.hshut:
+    xor ax, ax
+.hpos:
+    pop bx
+    push cx
+    xor ch, ch
+    cmp ax, cx
+    pop cx
+    ja .hthru
+    mov [px_hx], cx                 ; hx = the slab's x, before the edge
+    sub cl, al                      ; comes off u (as the V arm)
     mov [px_hu], cl
-    mov [px_hx], cx                 ; hx = the slab's x
     mov ax, di
     sub ax, px_map
     mov cl, 6
@@ -589,7 +656,6 @@ px_cast:
     mov cl, 4
     shr al, cl
     mov [px_hmat], al
-    mov byte [px_hdoor], 1
     add sp, 4
     jmp short .hproj
 .hother:
@@ -628,7 +694,6 @@ px_cast:
     mov al, PXM_JAMB
 .hmat:
     mov [px_hmat], al
-    mov byte [px_hdoor], 0
     jmp short .hproj
 .hthrough:
     mov ax, [px_qcur]
@@ -640,7 +705,7 @@ px_cast:
 .hproj:
     mov byte [px_hside], 1
     ; =====================================================================
-    ; the hit (96.2.5): the mirror of u, nx, h, top and bot, the arrays
+    ; the hit (97.2.5): the mirror of u, nx, h, top and bot, the arrays
     ; =====================================================================
 .project:
     mov di, [px_col]                ; the column arrays' index
@@ -688,7 +753,7 @@ px_cast:
     mov [px_wallh + bx], ax         ; the sprite z-buffer, unclipped
     cmp byte [px_rung], PXR_TEX
     jne .noq
-    ; TEXTURED: h is QUANTISED to the scaler set's heights (96.3) - over
+    ; TEXTURED: h is QUANTISED to the scaler set's heights (97.3) - over
     ; 120 clamps to the tallest scaler, and every h aliases DOWN through
     ; px_hq to the generated height the compose will call - so top/bot and
     ; the rows the scaler stores are one arithmetic (tools/pxssim.py's

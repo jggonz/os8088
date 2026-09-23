@@ -5275,7 +5275,7 @@ $(BUILD)/dotdel.bin: $(DOTDEL_SRC) | $(BUILD)
 $(BUILD)/dotdel.o88: $(BUILD)/dotdel.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/dotdel.bin -o $@
 
-# PIXELSTEIN 3D (SPEC.md 96): a raycast first-person shooter, fullscreen in
+# PIXELSTEIN 3D (SPEC.md 97): a raycast first-person shooter, fullscreen in
 # a foreign mode on every adapter and windowed as a 1bpp band. The package
 # arrives in wave 1 (docs/plans/PIXELSTEIN-PLAN.md 7); what is here now is
 # what every wave rests on - the generated tables and the level directory,
@@ -5286,7 +5286,7 @@ $(BUILD)/dotdel.o88: $(BUILD)/dotdel.bin tools/os88pkg.py $(PKGZSTAMP)
 #   make pxsgen                    # regenerate pxtab.inc, pxlev.inc, pxslev.bin
 #                                  # after editing a level or a table constant
 #
-# TWO IMAGES, ONE PACKAGE (SPEC.md 96.9, csload's shape): pxstein.asm is the
+# TWO IMAGES, ONE PACKAGE (SPEC.md 97.9, csload's shape): pxstein.asm is the
 # LOADER and the image of PXSTEIN.O88 - it reads the parts, hands the
 # program what it cannot ask for itself and re-homes the instance - and
 # pxgame.asm is PART 0, the game, a whole .o88 image with its bss shipped
@@ -5302,7 +5302,8 @@ PXGAME_SRC  := apps/pixelstein/pxgame.asm apps/pixelstein/pxicon.inc \
                apps/pixelstein/pxcast.inc apps/pixelstein/pxgen.inc \
                apps/pixelstein/pxcomp.inc apps/pixelstein/pxrast.inc \
                apps/pixelstein/pxwin.inc apps/pixelstein/pxgame.inc \
-               apps/pixelstein/pxset.inc \
+               apps/pixelstein/pxset.inc apps/pixelstein/pxspr.inc \
+               apps/pixelstein/pxact.inc \
                $(PXSTEIN_GEN) apps/os88api.inc apps/os88ui.inc \
                apps/os88pit.inc
 PXSLEVELS   := $(wildcard apps/pixelstein/levels/*.txt)
@@ -5317,38 +5318,42 @@ $(BUILD)/pxgame.bin: $(PXGAME_SRC) | $(BUILD)
 	@echo "pxgame (part 0): $(call FILESIZE,$@) bytes, bss inside"
 
 # The package: the loader's image with the program (part 0, OP_COMP), the
-# level stream (part 1) and the bodies' scratch (part 2, no file) behind
-# it. PACKED <= 56KB IS A HARD ERROR HERE (SPEC.md 96.9): apps-all.img had
+# level stream (part 1), the two scratch parts (2 and 3: the scalers and
+# the byte textures - no file) and the lazy art stream (4) behind it; the
+# sprite set is a CLAIM the loader makes, not a part (SPEC.md 97.9). PACKED <= 56KB IS A HARD ERROR HERE (SPEC.md 97.9): apps-all.img had
 # 127 spare clusters when this package was planned and wave 6's art lands
 # after the disk arithmetic was checked, so the ceiling is asserted where
 # the file is made and not discovered on the 1.44MB disk. AND SO IS THE
 # READ RUN: SPEC.md 20.12.7 bounds the eager parts at 128 UNPACKED sectors
 # (op_load refuses the launch at 128, and OP_COMP does not relieve it - the
-# claim is cut from the unpacked total), the run is 68 today with wave 2's
-# generator template, col2tex and phase instructions still to land in part
-# 0, and the only other check was a soak row nothing in `make` runs. A
-# recipe that lets the run reach 128 ships a package that fails at LAUNCH.
+# claim is cut from the unpacked total), the run is 101 after wave 3 (68
+# after wave 1, 79 after wave 2), and the only other check was a soak row
+# nothing in `make` runs. A recipe that lets the run reach 128 ships a
+# package that fails at LAUNCH.
 PXSTEIN_MAXZ := 57344
 $(BUILD)/pxstein.o88: $(BUILD)/pxstein.bin $(BUILD)/pxgame.bin $(BUILD)/pxsart.bin \
                       $(BUILD)/pxslev.bin tools/os88pkg.py tools/os88parts.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/pxstein.bin -o $@ \
 		--part $(BUILD)/pxgame.bin --part $(BUILD)/pxslev.bin --part $(BUILD)/pxsart.bin
 	@test $(call FILESIZE,$@) -le $(PXSTEIN_MAXZ) || { \
-	    echo "pxstein: $@ is $(call FILESIZE,$@) bytes, over the $(PXSTEIN_MAXZ) SPEC.md 96.9 allows the disks"; \
+	    echo "pxstein: $@ is $(call FILESIZE,$@) bytes, over the $(PXSTEIN_MAXZ) SPEC.md 97.9 allows the disks"; \
 	    rm -f $@; exit 1; }
 	@python3 tools/os88parts.py --run $@ --max-run 128 || { rm -f $@; exit 1; }
 
-# the ART STREAM the lazy art part carries (SPEC.md 96.4): the fifteen wall
-# masters under apps/pixelstein/art/, two texels a byte, LZ4 - tools/pxsart.py
-# reads the committed PNGs with the stdlib and refuses a bad one in words
-# (--check: the sixteen colours only, no key, no alpha, and the losable
-# criterion). The include beside it (pxart.inc) is committed text held by
+# the ART STREAM the lazy art part carries (SPEC.md 97.4): the fifteen wall
+# masters under apps/pixelstein/art/, two texels a byte, and since wave 3
+# the forty ALPHA-KEYED sprite masters after them (the guard's 17, six
+# decorations, eight pickups, the weapon's nine: 22,720 of the stream's
+# 30,400 bytes), LZ4 - tools/pxsart.py reads the committed PNGs with the
+# stdlib and refuses a bad one in words (--check: the sixteen colours only,
+# no key and no alpha on a wall, alpha 0 or 255 on a sprite, and the two
+# losable criteria). The include beside it (pxart.inc) is committed text held by
 # the pxs-gen fast row; the stream is built here because its bytes are the
 # masters' and nothing else
 $(BUILD)/pxsart.bin: tools/pxsart.py tools/os88lz.py tools/pxslevel.py $(PXSART) | $(BUILD)
 	python3 tools/pxsart.py --check --stream $@
 
-# the level STREAM the lazy level part carries (SPEC.md 96.9): one record a
+# the level STREAM the lazy level part carries (SPEC.md 97.9): one record a
 # level, run-length coded, with every level rule checked on the way - a
 # refused level fails this rule, in words, on the host. `make pxsgen` reaches
 # it (below) and wave 1's package rule will; the same command is also the
@@ -8493,10 +8498,10 @@ $(BUILD)/bandbnch.bin: tests/bandbench/bandbench.asm tests/benchlib.inc apps/os8
 $(BUILD)/bandbnch.o88: $(BUILD)/bandbnch.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/bandbnch.bin -o $@
 
-# ...and PIXELSTEIN 3D's unit costs (SPEC.md 96.10): the compiled store, the
+# ...and PIXELSTEIN 3D's unit costs (SPEC.md 97.10): the compiled store, the
 # static ladder, the patched DDA body, the two presents, the C160 expand, the
 # texel row, the key read, and one scaler-set generation - every figure the
-# frame table of 96.1 is built from, taken in one run on one adapter. The
+# frame table of 97.1 is built from, taken in one run on one adapter. The
 # VRAM rows run inside a fullscreen bracket in the mode the game takes there.
 # tests/pxsbench.py reads the rows back off MartyPC's cycle-exact 5150.
 $(BUILD)/pxsbench.bin: tests/pxsbench/pxsbench.asm tests/benchlib.inc apps/os88api.inc apps/pixelstein/pxtab.inc tools/benchlint.py | $(BUILD)
@@ -8901,7 +8906,7 @@ SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
 # 19KB fullscreen - so 19 is the deepest kern_small can ever be asked for.
 # `soak -k 'ddsmall'` is that measurement kept runnable (SPEC.md 24.5.5).
 SMALLOMIT_GAMES := $(BUILD)/skies.o88 $(BUILD)/pxstein.o88
-#   pxstein                 PIXELSTEIN 3D (SPEC.md 96.9, 24.5): a REQUIREMENT
+#   pxstein                 PIXELSTEIN 3D (SPEC.md 97.9, 24.5): a REQUIREMENT
 #                           the arena cannot meet. Its program part is a
 #                           ~33KB image with two 4KB map layouts and two
 #                           4KB spotvis arrays inside it, in ONE contiguous
@@ -9919,7 +9924,7 @@ APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88 \
               $(BUILD)/pxstein.o88
 
-# PIXELSTEIN 3D IS NOT ON apps360.img (SPEC.md 96.9, 24.6.1's dated
+# PIXELSTEIN 3D IS NOT ON apps360.img (SPEC.md 97.9, 24.6.1's dated
 # decision, taken 2026-09-13): that geometry sat at 313 of 354 clusters and
 # is remade every time it runs out, the games category disk (games360.img,
 # GAMES360 below) carries every game unfiltered, and that is where a 360KB
@@ -11052,7 +11057,7 @@ imager:
 # is the largest package on the disk, and neither is a field-calibration
 # tool - Calc stays for the arithmetic a field run needs.
 #
-# PIXELSTEIN 3D (SPEC.md 96.9) goes with them: 16 clusters at 360 KB (the
+# PIXELSTEIN 3D (SPEC.md 97.9) goes with them: 16 clusters at 360 KB (the
 # byte count is what `make` prints and nobody updates - the cluster count
 # is the fact the drop rests on), it is a game and not a calibration
 # instrument, and the 5150 this disk is

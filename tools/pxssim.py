@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PIXELSTEIN 3D's reference renderer (SPEC.md 96.12): the frame, on the host.
+"""PIXELSTEIN 3D's reference renderer (SPEC.md 97.12): the frame, on the host.
 
     python3 tools/pxssim.py [--level apps/pixelstein/levels/e1m1.txt]
                             [--scene a|b | --at X Y HEADING]
@@ -16,7 +16,7 @@ tests/pxssim.py (wave 1) reads the package's arrays out of MartyPC and holds
 them to this; tools/pxslevel.py's DDA sweep runs the walker here.
 
 THE WALKER IS THE GENERATED BODY'S, INSTRUCTION FOR INSTRUCTION (SPEC.md
-96.2). Two walkers, one per grid-line family, each a POINTER into a map
+97.2). Two walkers, one per grid-line family, each a POINTER into a map
 laid out along its own stepping axis plus a 16-bit fraction:
 
   V  crosses vertical lines (x = integer), walks the TRANSPOSED map
@@ -36,9 +36,9 @@ a tie (the same cell) goes to the other walker, which is what makes the cell
 a hit is tested by the walker that entered it. A walker whose step is clamped
 (tan > 127.996: it crosses no line of its family inside a 64-tile map) or
 whose first intercept lands off the map is PARKED - its pointer set where the
-compare can never choose it (96.2.3).
+compare can never choose it (97.2.3).
 
-A closed door is a slab across the cell's middle (96.2.4): the walker that
+A closed door is a slab across the cell's middle (97.2.4): the walker that
 entered the door cell half-steps its intercept, and if the ray is still in
 the cell there it hits the slab with u = that fraction; else it left the cell
 before the slab (into the jamb, which the other walker will find) and the walk
@@ -48,7 +48,7 @@ mirror, so a ray striking the visible part of a half-open door reads the
 texture from its leading edge; nothing passes it yet, and the default None
 is a shut door.
 
-The hit (96.2.5): nx = the perpendicular distance, dx*cos + dy*sin through
+The hit (97.2.5): nx = the perpendicular distance, dx*cos + dy*sin through
 MUL14 (apps/tank/tk3d.inc's shift-left-two of the 32-bit product), clamped
 at PX_MINDIST; h = PX_HEIGHTK / nx rows, one div a column; u = the hit
 fraction, mirrored per side so a texture reads left to right from wherever it
@@ -59,8 +59,8 @@ the floor, a door slab in its own ink; WIRE - the edges; and TEXTURED (wave
 2, `--rung tex`) - the column's height quantised to the scaler set's, texel
 rows as tools/pxsgen.py gives them, bytes off tools/pxsart.py's byte-texture
 set with the odd-row phase - into the 80-byte-stride, byte-a-column shadow
-every backend shares (96.3): Size bytes of every row, centred - at the
-shipped rung, Size 64 x Resolution Low res, 32 rays two bytes wide (96.1;
+every backend shares (97.3): Size bytes of every row, centred - at the
+shipped rung, Size 64 x Resolution Low res, 32 rays two bytes wide (97.1;
 --size 64 --res low is the default for that reason) - expanded to device
 pixels per backend only for the PNG. THE RESOLUTION IS AN ARGUMENT, never
 inferred from the column count: Size 48 at Full and a 96-byte band at Low
@@ -87,22 +87,22 @@ SIN = pxstab.sin_table()
 TAN = pxstab.tan_table()
 CLAMP = pxstab.TAN_CLAMP
 MAP_W = pxslevel.MAP_W
-VIEW_H = 80                     # rows of the view (96.1)
-STRIDE = 80                     # bytes a shadow row (96.3)
+VIEW_H = 80                     # rows of the view (97.1)
+STRIDE = 80                     # bytes a shadow row (97.3)
 HEIGHTK = 51200                 # h = HEIGHTK / nx: a wall fills 80 rows at 2.5
-                                # tiles, which is square on CGA 320x200 (96.1)
+                                # tiles, which is square on CGA 320x200 (97.1)
 MINDIST = 23                    # 0.09 tiles in Q8.8: the near clamp
-MAXH = 120                      # 1.5 x the view: the tallest scaler (96.3)
+MAXH = 120                      # 1.5 x the view: the tallest scaler (97.3)
 SOLID, DOOR, DOOR_EW = pxslevel.SOLID, pxslevel.DOOR, pxslevel.DOOR_EW
 
-# the backends with a BYTE shadow (96.3): one byte a column a row, 80 bytes
+# the backends with a BYTE shadow (97.3): one byte a column a row, 80 bytes
 # a row, the picture centred in the row - Size x 4 device pixels on CGA320
 # and Mode X, Size x 8 in the 640-px Hercules box, Size x 2 in C160's 160.
 # Mode X's 160 and 320 rays (rungs 4 and 5) have no byte shadow at all and
-# are not rendered here; geometry() refuses them with 96.3's sentence.
+# are not rendered here; geometry() refuses them with 97.3's sentence.
 BACKENDS = ("cga4", "herc", "modex", "cga16")
 ART_OF = {"cga16": "c160"}      # tools/pxsart.py's name for the retime's set
-SIZES = (48, 56, 64, 72, 80)    # the Size row (96.3)
+SIZES = (48, 56, 64, 72, 80)    # the Size row (97.3)
 # every column count the two rows can make: Size at Full, Size / 2 at Low res
 SHADOW_COLS = tuple(sorted(set(SIZES) | set(s // 2 for s in SIZES)))
 FANS = {c: pxstab.fan_table(c, k) for c, k in pxstab.FANS}
@@ -124,12 +124,15 @@ def mul14(a, b):
     return (a * b) >> 14
 
 
-def cast_ray(cells, px, py, a, doorpos=None):
+def cast_ray(cells, px, py, a, doorpos=None, seen=None):
     """One ray from (px, py) in Q8.8 at 12-bit angle a. Returns the hit.
 
     The dict carries what the package's column arrays carry plus what the
     tests want to see: crossings (the walker passes, the hit's included),
-    which walker hit, the hit point in Q8.8, the cell and its byte.
+    which walker hit, the hit point in Q8.8, the cell and its byte. `seen`,
+    a set, collects the cells the walkers PASSED - what the package marks
+    with the frame's spotvis generation (97.1: the pass tail's store, never
+    the hit cell) - for the sprite candidates of 97.6.
     """
     a &= ANG - 1
     q, i = a >> 10, a & 1023
@@ -171,7 +174,7 @@ def cast_ray(cells, px, py, a, doorpos=None):
     v_int, v_frc = tan_v >> 8, (tan_v & 255) << 8
     h_int, h_frc = tan_h >> 8, (tan_h & 255) << 8
 
-    # THE CONTROL FLOW IS THE GENERATED BODY'S (96.2.2), and it has no
+    # THE CONTROL FLOW IS THE GENERATED BODY'S (97.2.2), and it has no
     # "neither" state:
     #
     #         jmp vcheck
@@ -223,11 +226,13 @@ def cast_ray(cells, px, py, a, doorpos=None):
                     slab = y88 + dys * (tan_v >> 1)
                     if slab >> 8 == vrow:
                         u = slab & 255
-                        if doorpos is not None and u < doorpos:
+                        dp = doorpos.get(vrow * MAP_W + vx) if isinstance(doorpos, dict) \
+                            else doorpos          # (a dict is per door, wave 3)
+                        if dp is not None and u < dp:
                             pass                  # the door has slid past: through
                         else:
-                            if doorpos is not None:
-                                u -= doorpos      # the slid slab's own texel,
+                            if dp is not None:
+                                u -= dp           # the slid slab's own texel,
                             return dict(side=0, cell=(vx, vrow), byte=cell,
                                         hx=vx * 256 + 128, hy=slab,
                                         u=u if dxs > 0 else 255 - u,
@@ -237,7 +242,7 @@ def cast_ray(cells, px, py, a, doorpos=None):
                     hx = vx * 256 if dxs > 0 else (vx + 1) * 256
                     hy_ = vrow * 256 + (vfrac >> 8)
                     u = hy_ & 255
-                    # THE JAMB IS DECIDED HERE (96.2.5): the face the ray
+                    # THE JAMB IS DECIDED HERE (97.2.5): the face the ray
                     # came through a DOOR cell to reach takes material 15.
                     # The cell across the line is the un-stepped walker's,
                     # (vx - dxs, vrow), which the body still has in SI.
@@ -247,6 +252,8 @@ def cast_ray(cells, px, py, a, doorpos=None):
                                 hx=hx, hy=hy_, u=u if dxs > 0 else 255 - u,
                                 crossings=crossings, door=False)
             # pass: spotvisT[vx*64 + vrow] = gen; step
+            if seen is not None:
+                seen.add(vrow * MAP_W + vx)
             if dys > 0:
                 s = vfrac + v_frc
                 vfrac = s & 0xFFFF
@@ -273,11 +280,13 @@ def cast_ray(cells, px, py, a, doorpos=None):
                     slab = x88 + dxs * (tan_h >> 1)
                     if slab >> 8 == hcol:
                         u = slab & 255
-                        if doorpos is not None and u < doorpos:
+                        dp = doorpos.get(hy * MAP_W + hcol) if isinstance(doorpos, dict) \
+                            else doorpos
+                        if dp is not None and u < dp:
                             pass
                         else:
-                            if doorpos is not None:
-                                u -= doorpos      # ...before the mirror, both sides
+                            if dp is not None:
+                                u -= dp           # ...before the mirror, both sides
                             return dict(side=1, cell=(hcol, hy), byte=cell,
                                         hx=slab, hy=hy * 256 + 128,
                                         u=255 - u if dys > 0 else u,
@@ -291,6 +300,8 @@ def cast_ray(cells, px, py, a, doorpos=None):
                                 byte=(pxslevel.JAMB << 4) | (cell & 15) if jamb else cell,
                                 hx=hx_, hy=hyy, u=255 - u if dys > 0 else u,
                                 crossings=crossings, door=False)
+            if seen is not None:
+                seen.add(hy * MAP_W + hcol)
             if dxs > 0:
                 s = hfrac + h_frc
                 hfrac = s & 0xFFFF
@@ -309,8 +320,8 @@ def cast_ray(cells, px, py, a, doorpos=None):
 
 
 def project(px, py, heading, hit, rung="flat"):
-    """nx, h, top, bot, hq from a hit, the package's way (96.2.5). Under the
-    TEXTURED rung h is QUANTISED to the scaler set's heights (96.3: over 120
+    """nx, h, top, bot, hq from a hit, the package's way (97.2.5). Under the
+    TEXTURED rung h is QUANTISED to the scaler set's heights (97.3: over 120
     clamps, every height aliases down through px_hq) before top and bot, so
     the rows the scaler stores are the rows the column claims; wallh keeps
     the true h for the sprite z-test."""
@@ -330,12 +341,15 @@ def project(px, py, heading, hit, rung="flat"):
     return nx, wallh, top, bot, hq
 
 
-def cast_view(cells, px, py, heading, cols=64, rung="flat"):
+def cast_view(cells, px, py, heading, cols=64, rung="flat", seen=None, doors=None):
+    """...`doors`: {cell index: position 0..256} of the doors that have slid
+    (wave 3; tests/pxssim.py reads the guest's door table into it), so a
+    half-open door's gap and its slab's texel are the package's."""
     fan = FANS[cols]
     out = []
     for c in range(cols):
         a = (heading + fan[c]) & (ANG - 1)
-        hit = cast_ray(cells, px, py, a)
+        hit = cast_ray(cells, px, py, a, doorpos=doors, seen=seen)
         nx, wallh, top, bot, hq = project(px, py, heading, hit, rung)
         out.append(dict(c=c, angle=a, nx=nx, wallh=wallh, top=top, bot=bot, hq=hq,
                         side=hit["side"], u=hit["u"], mat=hit["byte"] >> 4,
@@ -391,16 +405,16 @@ def geometry(backend, cols, lowres=False):
     which it is comes from the caller (the package's px_lowres), because a
     count alone does not say (48 columns is Size 48 Full or a 96-byte band
     at Low res). The picture is centred in the 80-byte row on EVERY byte
-    backend (96.3) - the Hercules band is the box's 80 bytes, not 64, so
+    backend (97.3) - the Hercules band is the box's 80 bytes, not 64, so
     Size 72 and 80 fit there as they do on CGA. A count the row cannot
     hold, and Mode X's 160/320 rays, which have no byte shadow, are REFUSED
     rather than wrapped: the first cut of this centred a negative x0 and
     wrote into the end of the bytearray."""
     if backend not in BACKENDS:
-        raise ValueError("%s: not a byte-shadow backend (96.3)" % backend)
+        raise ValueError("%s: not a byte-shadow backend (97.3)" % backend)
     if cols not in SHADOW_COLS:
         raise ValueError("%d columns: Mode X's 160/320 rays write the planes "
-                         "directly and have no byte shadow (96.3); the "
+                         "directly and have no byte shadow (97.3); the "
                          "reference renderer models them in the wave that "
                          "builds rungs 4 and 5" % cols)
     bpc = 2 if lowres else 1
@@ -428,9 +442,25 @@ def bt_set(backend):
     return _BT[art]
 
 
-def render(view, backend, cols=64, rung="flat", lowres=False):
+def render(view, backend, cols=64, rung="flat", lowres=False, world=None,
+           seen=None, weapon=(1, 0)):
+    """...and, since wave 3, the sprites of `world` (a Level: its statics and
+    actors at their spawn cells, the sim frozen) whose cells `seen` holds,
+    then the weapon (weapon, frame) - or no weapon at all when `weapon` is
+    None (the rungs before the sprite set: a refused part 4)."""
+    sh = bytearray(render_walls(view, backend, cols, rung, lowres))
+    if world is not None and seen is not None:
+        recs = candidates(world, seen, world.eye[0], world.eye[1], world.eye[2],
+                          cols, lowres)
+        draw_sprites(sh, view, recs, backend, cols, lowres, rung, weapon is None)
+    if weapon is not None:
+        draw_weapon(sh, backend, cols, lowres, rung, weapon[0], weapon[1])
+    return bytes(sh)
+
+
+def render_walls(view, backend, cols=64, rung="flat", lowres=False):
     """A full frame of the Flat rung, of the Wire rung (PIXELSTEIN-PLAN 14's
-    rung 0) or of the TEXTURED rung (96.3: the scaler of the column's
+    rung 0) or of the TEXTURED rung (97.3: the scaler of the column's
     quantised height, texel v over the rows pxsgen.texel_rows gives it,
     the byte off the byte-texture set with the odd-row phase - tools/
     pxsart.py's texel(), the same rule the transpose and the generator
@@ -506,6 +536,196 @@ def render(view, backend, cols=64, rung="flat", lowres=False):
     return bytes(sh)
 
 
+# --- the sprites and the weapon (wave 3, 97.6) --------------------------------------
+
+MAXSPR, SPRCAP = 8, 8000
+FOCAL = int(round(pxstab.FOCAL))    # PX_FOCAL as pxtab.inc carries it, 222
+WPNCOLS, WPNH, WPNROW0 = 16, 24, 56
+SPR_INK = {"cga4": (0x88, 0x88), "herc": (0x88, 0x22), "modex": (0x18, 0x18),
+           "cga16": (0x88, 0x88)}   # a silhouette's (even, odd) tone (pxrast.inc)
+G_WALK0, G_SHOOT, G_PAIN, G_DIE, G_DEAD = 0, 10, 12, 13, 16
+DECO0, PICK0 = 17, 23
+
+
+def _pxsart():
+    import pxsart
+    return pxsart
+
+
+def cdiv(a, b):
+    """idiv: the quotient truncated toward zero."""
+    q = abs(a) // abs(b)
+    return q if (a < 0) == (b < 0) else -q
+
+
+def transform(px, py, heading, sx, sy, cols, lowres):
+    """px_spr_xform: (h, column) of the point (sx, sy) seen from the eye, or
+    None when it is too near, or wider of the axis than 45 degrees."""
+    dx, dy = sx - px, sy - py
+    c, s_ = cos_q14(heading), sin_q14(heading)
+    nx = mul14(dx, c) + mul14(dy, s_)
+    if nx < MINDIST:
+        return None
+    ny = mul14(dy, c) - mul14(dx, s_)
+    if abs(ny) >= nx:
+        return None
+    h = HEIGHTK // nx
+    devpx = cdiv(ny * FOCAL, nx)
+    col = cols // 2 + (devpx >> (3 if lowres else 2))
+    return h, col
+
+
+def actor_frame(a, col, heading, cols):
+    """px_act_frame for a STANDING actor (the sim frozen): the walk frame
+    of the facing the viewer sees, and whether it is mirrored."""
+    fan = FANS[cols]
+    c = min(max(col, 0), cols - 1)
+    rel = ((fan[c] + heading + ANG // 2) - a[3] + ANG // 16) & (ANG - 1)
+    f8 = rel >> 9
+    if f8 <= 4:
+        return G_WALK0 + f8 * 2, False
+    return G_WALK0 + (8 - f8) * 2, True
+
+
+def candidates(world, seen, px, py, heading, cols, lowres):
+    """The sprite list of 97.6 - statics whose cell was passed, actors whose
+    cell or an open neighbour was - transformed, sorted far to near (a tie
+    keeps the insertion order: statics first, then actors, as the package
+    walks its tables), at most MAXSPR with the farthest dropped."""
+    import bisect
+    cells = world.cells
+    out = []                        # (h, order, rec)
+    order = 0
+    hq_of = pxsgen.quantise
+
+    def add(h, col, frame, mirror):
+        nonlocal order
+        hq = hq_of(min(h, MAXH))
+        w = pxsgen.width(hq, lowres)
+        c0 = col - w // 2
+        vis = min(c0 + w, cols) - max(c0, 0)
+        if vis <= 0:
+            return
+        cost = vis * min(hq, VIEW_H)
+        rec = dict(h=h, hq=hq, col=col, w=w, c0=c0, cost=cost, frame=frame,
+                   mirror=mirror, half=False)
+        keys = [o[0] for o in out]
+        if len(out) >= MAXSPR:
+            if h <= out[0][0]:
+                return
+            out.pop(0)
+            keys = keys[1:]
+        i = bisect.bisect_right(keys, h)
+        out.insert(i, (h, order, rec))
+        order += 1
+
+    for x, y, kind, blocking in world.statics:
+        cell = y * MAP_W + x
+        if cell not in seen:
+            continue
+        t = transform(px, py, heading, x * 256 + 128, y * 256 + 128, cols, lowres)
+        if t is None:
+            continue
+        frame = PICK0 + kind if kind < 8 else DECO0 + kind - 8
+        add(t[0], t[1], frame, False)
+    for a in world.actors:
+        cell = a[1] * MAP_W + a[0]
+        ok = False
+        for d in (0, -1, 1, -64, 64, -65, -63, 63, 65):
+            if cells[cell + d] & (SOLID | DOOR):
+                continue
+            if cell + d in seen:
+                ok = True
+                break
+        if not ok:
+            continue
+        t = transform(px, py, heading, a[0] * 256 + 128, a[1] * 256 + 128, cols, lowres)
+        if t is None:
+            continue
+        frame, mirror = actor_frame(a, t[1], heading, cols)
+        add(t[0], t[1], frame, mirror)
+    recs = [o[2] for o in out]
+    total = sum(r["cost"] for r in recs)
+    for r in recs:                  # the cap: the farthest halve first
+        if total <= SPRCAP:
+            break
+        r["half"] = True
+        total -= r["cost"] >> 1
+    return recs
+
+
+def draw_sprites(sh, view, recs, backend, cols, lowres, rung, boxes=False):
+    """The posts (Textured) or the silhouettes (Flat, Wire) of the sorted
+    candidates into the shadow, far to near, z-tested per column against
+    wallh - or, with `boxes` (no sprite set: part 4 refused), the frame's
+    whole extent in the silhouette tone."""
+    pxsart = _pxsart()
+    art = ART_OF.get(backend, backend)
+    bpc, x0 = geometry(backend, cols, lowres)
+    frames = pxsart.sprites()
+    ink = SPR_INK[backend]
+    for r in recs:
+        hq = r["hq"]
+        idx, alpha = frames[r["frame"]]
+        fr = pxsart.spr_frame(idx, alpha, art)
+        runs = pxsart.frame_runs(alpha, pxsart.SPR, art == "c160")
+        c2t = pxsgen.col2tex(hq, lowres)
+        trows = pxsgen.texel_rows(hq)
+        top = (VIEW_H - hq) >> 1
+        for c in range(max(r["c0"], 0), min(r["c0"] + r["w"], cols)):
+            if r["half"] and ((c - r["c0"]) & 1):
+                continue
+            if view[c]["wallh"] >= r["h"]:
+                continue
+            if boxes:
+                for row in range(max(top, 0), min(top + hq, VIEW_H)):
+                    for k in range(bpc):
+                        sh[row * STRIDE + x0 + c * bpc + k] = ink[row & 1]
+                continue
+            src = c2t[1 + c - r["c0"]]
+            if r["mirror"]:
+                src = 31 - src
+            if art == "c160":
+                src >>= 1
+            for v0, v1 in runs[src]:
+                for v in range(v0, v1):
+                    for row in trows[v]:
+                        if rung == "tex":
+                            b = pxsart.phase(art, fr[src * 32 + v], row)
+                        else:
+                            b = ink[row & 1]
+                        for k in range(bpc):
+                            sh[row * STRIDE + x0 + c * bpc + k] = b
+    return sh
+
+
+def draw_weapon(sh, backend, cols, lowres, rung, weapon=1, wframe=0):
+    """The weapon's frame: sixteen byte columns at the band's middle, rows
+    56..79 through the 24-row scaler's texel rows (Full's byte store,
+    whatever the resolution)."""
+    pxsart = _pxsart()
+    art = ART_OF.get(backend, backend)
+    bpc, x0 = geometry(backend, cols, lowres)
+    size = cols * bpc
+    idx, alpha = pxsart.weapons()[weapon * 3 + wframe]
+    fr = pxsart.spr_frame(idx, alpha, art, pxsart.WPN_W)
+    runs = pxsart.frame_runs(alpha, pxsart.WPN_W, art == "c160")
+    trows = pxsgen.texel_rows(WPNH)
+    ink = SPR_INK[backend]
+    for k in range(WPNCOLS):
+        src = k >> 1 if art == "c160" else k
+        for v0, v1 in runs[src]:
+            for v in range(v0, v1):
+                for row in trows[v]:
+                    row += WPNROW0 - (VIEW_H - WPNH) // 2
+                    if rung == "tex":
+                        b = pxsart.phase(art, fr[src * 32 + v], row)
+                    else:
+                        b = ink[row & 1]
+                    sh[row * STRIDE + x0 + size // 2 - WPNCOLS // 2 + k] = b
+    return sh
+
+
 # --- the PNG: shadow bytes to device pixels ------------------------------------
 
 CGA_PAL0 = [(0, 0, 0), (0, 0xAA, 0), (0xAA, 0, 0), (0xAA, 0x55, 0)]
@@ -556,7 +776,7 @@ def write_png(path, sh, backend, zoom=2):
     return w * zx, h * zy
 
 
-# --- the pinned scenes (96.10) --------------------------------------------------
+# --- the pinned scenes (97.10) --------------------------------------------------
 
 def scenes(lv):
     sx, sy, sa = lv.spawn
@@ -567,12 +787,18 @@ def scenes(lv):
         # of the hall's door at (13,3), half way through a turn from the
         # corridor's axis to south, the jamb at the view's left edge and
         # the far wall foreshortening across it. THE DELTA-FILL-HEAVY
-        # FRAME (96.10): a PX_TURN turn here rewrites all 32 columns for
+        # FRAME (97.10): a PX_TURN turn here rewrites all 32 columns for
         # 1,706 Flat stores against scene A's 1,082 - the first B, at
         # (14,3), read 1,486 and was cheaper than A on every frame
         # measured; no scene in E1M1 is dearer than A on a FULL repaint,
         # where the cast dominates, so A binds the promise and B the turn
         "b": (14 * 256 + 128, 4 * 256 + 128, 512),
+        # C: THE SPRITE SCENE (wave 3, 97.6, 97.10): the brick room's north-
+        # west corner at (28,8) looking south-east - the gold key at
+        # (30,10), the barrel at (33,12) and the guard at (31,13) in view,
+        # three sprites over textured walls, the plan's scene-A sprite
+        # count on a pose the level actually holds
+        "c": (28 * 256 + 128, 8 * 256 + 128, 512),
     }
 
 
@@ -583,10 +809,10 @@ def main():
     ap.add_argument("--at", nargs=3, type=int, metavar=("X", "Y", "HEADING"),
                     help="Q8.8 x, y and a 12-bit heading instead of a scene")
     ap.add_argument("--size", type=int, default=64, choices=SIZES,
-                    help="the Size row's band, bytes (96.3); 64 is the default")
+                    help="the Size row's band, bytes (97.3); 64 is the default")
     ap.add_argument("--res", default="low", choices=("low", "full"),
                     help="Low res = Size / 2 rays two bytes wide - the shipped "
-                         "XT rung (96.1) and so the default; Full = Size rays "
+                         "XT rung (97.1) and so the default; Full = Size rays "
                          "(Mode X's 160/320 rays have no byte shadow and are a "
                          "later wave's)")
     ap.add_argument("--backend", default="cga4", choices=BACKENDS)
@@ -603,7 +829,9 @@ def main():
         px, py, heading = scenes(lv)[a.scene]
     lowres = a.res == "low"
     cols = a.size // 2 if lowres else a.size
-    view = cast_view(lv.cells, px, py, heading, cols, a.rung)
+    seen = set()
+    view = cast_view(lv.cells, px, py, heading, cols, a.rung, seen)
+    lv.eye = (px, py, heading)
     cr = [c["crossings"] for c in view]
     hs = [c["wallh"] for c in view]
     print("pxssim: %s at (%d.%02d, %d.%02d) heading %d, Size %d %s (%d columns): "
@@ -618,7 +846,7 @@ def main():
                   open(a.dump, "w"), indent=1)
         print("pxssim: wrote %s" % a.dump)
     if a.png:
-        sh = render(view, a.backend, cols, a.rung, lowres)
+        sh = render(view, a.backend, cols, a.rung, lowres, lv, seen)
         w, h = write_png(a.png, sh, a.backend, a.zoom)
         print("pxssim: wrote %s (%dx%d, %s, %s)" % (a.png, w, h, a.backend, a.rung))
 

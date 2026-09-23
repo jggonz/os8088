@@ -54,7 +54,7 @@ UNREGISTERED = {
     # --- library and support code, not tests ---
     "dispcells.py": "the CELLS-not-calls counter two gates share (SPEC.md "
                     "11.3.3), not a test",
-    "pxslib.py": "PIXELSTEIN 3D's guest reader (SPEC.md 96.12) - the "
+    "pxslib.py": "PIXELSTEIN 3D's guest reader (SPEC.md 97.12) - the "
                  "package's symbols out of nasm's map, its window and part-0 "
                  "segment, the loader's handoff words, the pinned scenes "
                  "poked and the arrays and shadow read back - imported by "

@@ -1,12 +1,12 @@
 ; =============================================================================
 ; os8088 - apps/pixelstein/pxcomp.inc
 ;
-; THE COMPOSE (SPEC.md 96.5): the column arrays px_cast filled, into the
+; THE COMPOSE (SPEC.md 97.5): the column arrays px_cast filled, into the
 ; destination's 80-byte rows, writing only what changed since the last frame
 ; that landed on this page.
 ;
 ; DS IS THE DESTINATION for the whole of px_compose - the ladders store with
-; no segment override, which is the instruction the bench priced (96.3: DS =
+; no segment override, which is the instruction the bench priced (97.3: DS =
 ; the destination) - so everything of this package's own is read through CS,
 ; which is the same segment as its DS (SPEC.md 20.1). A `[bp]` operand would
 ; address SS; every one below carries the `cs:` that puts it right.
@@ -26,7 +26,7 @@
 ; edge on), and only a run with a vertical part is written as the UNION of
 ; its old and new rows - ground, edge, ground - through the ladder. The
 ; rows any column wrote are px_r0..px_r1, which is what the present sends
-; (96.5) - AND THAT RANGE IS THE WHOLE BAND ON EVERY FRAME A PLAYER SEES,
+; (97.5) - AND THAT RANGE IS THE WHOLE BAND ON EVERY FRAME A PLAYER SEES,
 ; on both rungs: it is one min/max over ALL columns, a column nearer than
 ; 2.5 tiles clips to rows 0..79 (h = 51200 / nx >= 80 at nx <= 640,
 ; pxcast.inc), and every scene has one that a turn moves. Measured on the
@@ -34,7 +34,7 @@
 ; tests/pixelstein.py asserts the range against tools/pxssim.py's model of
 ; this rule rather than reporting it. What the two skips above buy is the
 ; COMPOSE (30.4 -> 18.8 ms at the default), not the present; a present that
-; collapses needs a per-column range, which is 96.5's wave-2 question.
+; collapses needs a per-column range, which is 97.5's wave-2 question.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -46,7 +46,7 @@
 px_compose:
     mov byte [px_r0], 0xFF
     mov byte [px_r1], 0
-    mov word [px_qp], PXG_Q         ; the draw queue, empty (96.3)
+    mov word [px_qp], PXG_Q         ; the draw queue, empty (97.3)
 %ifdef PXPROBE
     mov word [px_pr_lad], 0         ; tests/pxsperf.py --probe's counters:
     mov word [px_pr_skip], 0        ; ladder entries and columns skipped
@@ -90,7 +90,7 @@ px_compose:
     mov ah, [cs:px_bot + bx]        ; b
     mov cl, [cs:px_ltop + si]       ; lt
     mov ch, [cs:px_lbot + si]       ; lb
-    ; A COLUMN THAT DID NOT CHANGE IS SKIPPED WHOLE (96.5): a flat tone that
+    ; A COLUMN THAT DID NOT CHANGE IS SKIPPED WHOLE (97.5): a flat tone that
     ; has not moved is already on the destination, so neither the ladder
     ; nor the dirty rows see it - four compares against the ~100,000 clk a
     ; frame of writing and presenting every wall that stood still. A forced
@@ -113,6 +113,9 @@ px_compose:
 .fchg:
     mov [cs:px_ltop + si], al
     mov [cs:px_lbot + si], ah
+    mov dl, [cs:px_gen]             ; THE COLUMN WAS WRITTEN THIS FRAME
+    mov [cs:px_cwrote + bp], dl         ; (97.6: a standing sprite's post and
+                                    ; the weapon are redrawn over it)
     mov bl, al                      ; the dirty rows: min(t, lt)..max(b, lb)
     cmp bl, cl                      ; (BX is free until .next: BP holds the
     jbe .f1                         ; column)
@@ -133,7 +136,7 @@ px_compose:
 .f4:
     mov dl, [cs:px_mat + bp]
     mov dh, [cs:px_side + bp]
-    ; THE TONE STOOD AND ONLY THE GEOMETRY MOVED (96.5): the destination
+    ; THE TONE STOOD AND ONLY THE GEOMETRY MOVED (97.5): the destination
     ; holds this tone over [lt, lb] in this parity - px_ltop/px_lbot/px_lmat/
     ; px_lside are the memory of exactly that, per page on Mode X, and a
     ; forced frame writes 0xFF into lmat so it never lands here - so the
@@ -298,7 +301,7 @@ px_compose:
     mov dh, al
 .w4:
 .wruns:
-    ; THE SKIP (96.5): four run ends against last frame's, and a column
+    ; THE SKIP (97.5): four run ends against last frame's, and a column
     ; whose edges did not move is left alone - no store, no dirty rows
     cmp cl, [cs:px_lu0 + si]
     jne .wchg2
@@ -313,6 +316,8 @@ px_compose:
     push si
     push dx
     push cx
+    mov al, [cs:px_gen]             ; the column was written (97.6)
+    mov [cs:px_cwrote + bp], al
     mov al, [cs:px_lu0 + si]        ; the upper run against last frame's
     mov ah, [cs:px_lu1 + si]
     mov [cs:px_lu0 + si], cl
@@ -327,7 +332,7 @@ px_compose:
     mov al, ch                      ; the lower run, clipped past the upper's
     inc al                          ; end: those rows are the upper's this
     mov [cs:px_wclip], al           ; frame (the horizon keeps the two apart
-    mov al, [cs:px_ll0 + si]        ; everywhere else - 96.3)
+    mov al, [cs:px_ll0 + si]        ; everywhere else - 97.3)
     mov ah, [cs:px_ll1 + si]
     mov [cs:px_ll0 + si], dl
     mov [cs:px_ll1 + si], dh
@@ -336,7 +341,7 @@ px_compose:
     jmp .next                       ; (the first cut fell into the Textured
                                     ; arm here and queued a wall per Wire
                                     ; column)
-    ; --- TEXTURED (wave 2, 96.3) ------------------------------------------
+    ; --- TEXTURED (wave 2, 97.3) ------------------------------------------
     ; The same memory as Flat's plus the texture column px_lu AND the
     ; quantised height px_lh: a column whose six bytes stood is skipped
     ; whole; one that moved has the ceiling and the floor put back over
@@ -381,6 +386,8 @@ px_compose:
     mov [cs:px_ltop + si], al
     mov [cs:px_lbot + si], ah
     mov [cs:px_lu + si], dl
+    mov dl, [cs:px_gen]             ; the column was written (97.6)
+    mov [cs:px_cwrote + bp], dl
     mov dl, [cs:px_h + bx]
     mov [cs:px_lh + si], dl
     mov dl, [cs:px_mat + bx]
@@ -405,7 +412,7 @@ px_compose:
     jbe .t4
     mov [cs:px_r1], bl
 .t4:
-    ; THE ONE-ROW END TAKES px_pix, NOT THE LADDER (px_wrun's idiom, 96.5):
+    ; THE ONE-ROW END TAKES px_pix, NOT THE LADDER (px_wrun's idiom, 97.5):
     ; the generated heights step by 2 up to 80, so top = (80 - h) >> 1
     ; moves by exactly ONE row for the smallest change in h, and a column
     ; whose wall moved without crossing the clip has an end of one row at
@@ -448,7 +455,7 @@ px_compose:
 .tnofloor:
     ; the wall: a queue entry - the scaler of this column's quantised
     ; height in this resolution's directory, SI = (mat - 1) * 2048 + side *
-    ; 1024 + column * 32 into part 3 (96.4's layout), DI = the column's
+    ; 1024 + column * 32 into part 3 (97.4's layout), DI = the column's
     ; base byte (px_cdi is biased by -256 for the ladders)
     mov bl, [cs:px_h + bp]
     xor bh, bh
@@ -479,6 +486,7 @@ px_compose:
     mov ax, [cs:px_cdi]
     add ax, 256
     mov [es:di + 4], ax
+    mov word [es:di + 6], 0         ; a wall never patches (97.3)
     add di, PXG_QSZ
     mov [cs:px_qp], di
 .next:
@@ -488,7 +496,7 @@ px_compose:
     jae .done
     jmp .col
 .done:
-    ; THE ONE FAR CALL (96.3): every queued wall drawn by the driver in part
+    ; THE ONE FAR CALL (97.3): every queued wall drawn by the driver in part
     ; 2, DS still the destination, ES the textures once it is in there
     mov di, [cs:px_qp]
     cmp di, PXG_Q
@@ -537,7 +545,7 @@ px_wrun:
     jb .union
     ; ONE ROW MOVED TO ONE ROW: the ground back over the old, the edge on
     ; the new - two px_pix stores and no ladder entry, the common column of
-    ; a turn (96.5)
+    ; a turn (97.5)
     mov bl, al                      ; the dirty rows: both of them
     mov bh, dl
     cmp bl, bh
@@ -696,7 +704,7 @@ px_ground:
 
 ; -----------------------------------------------------------------------------
 ; px_force_all - every column's memory to "the whole view was drawn", so the
-;                next frame writes and presents all of it (96.5). NOT the
+;                next frame writes and presents all of it (97.5). NOT the
 ;                same as [px_force] = 1 alone, which only bypasses the idle
 ;                predicate: the next frame then composes against an
 ;                unchanged memory and writes what MOVED - nothing, on a
@@ -723,7 +731,7 @@ px_force_all:
     mov al, PX_ROWS - 1
     rep stosb
     mov di, px_lmat                 ; a material no level can hold, so no
-    mov cx, 2 * PX_COLMAX           ; Flat column reads as unchanged (96.5)
+    mov cx, 2 * PX_COLMAX           ; Flat column reads as unchanged (97.5)
     mov al, 0xFF
     rep stosb
     mov di, px_lu0
@@ -743,6 +751,10 @@ px_force_all:
     mov al, PX_ROWS - 1
     rep stosb
     mov byte [px_force], 1
+    mov word [px_lnsc], 0           ; ...and no sprite stands on either
+    mov word [px_wdrawn], 0xFFFF    ; page's glass, nor the weapon (97.6):
+                                    ; the frame writes every column, so
+                                    ; nothing is owed an erase
     pop es
     pop di
     pop cx
@@ -756,7 +768,7 @@ px_force_all:
 ;      the caller presents it and calls px_frame_end
 ; clobbers everything
 ;
-; NOTHING DIRTY, NOTHING COMPOSED (96.5): a still player costs the machine
+; NOTHING DIRTY, NOTHING COMPOSED (97.5): a still player costs the machine
 ; nothing but the wait. The clock starts here and stops in px_frame_end, so
 ; the selector times cast + compose + present and never the wait.
 ; -----------------------------------------------------------------------------
@@ -766,6 +778,10 @@ px_frame_begin:
     mov byte [px_pend], 0           ; the menu handler is the UI task and
     call px_apply                   ; the compose may be the worker's
 .nopend:
+    cmp byte [px_levnext], 0xFF     ; a floor to load - the switch, or the
+    je .nolev                       ; DIE restart - likewise between frames
+    call px_level_next              ; (97.7, 97.8; wave 3)
+.nolev:
     cmp byte [px_force], 0
     jne .go
     cmp byte [px_dirty], 0
@@ -781,14 +797,121 @@ px_frame_begin:
     mov [px_twait + 2], ax
     mov byte [px_force], 0
     mov byte [px_dirty], 0
+    cmp byte [px_state], PXST_DYING ; THE DIE WASH (97.8): no cast, no
+    jne .world                      ; compose - the band in the wash's tone
+    call px_fade_draw               ; once, and nothing until the restart
+    stc
+    ret
+.world:
     call px_cast
+    call px_spr_gather              ; the candidates, and the erase of what
+                                    ; no longer stands - BEFORE the compose,
+                                    ; which re-lays under it (97.6)
     call px_compose
+    call px_spr_draw                ; the posts and the weapon over it
     stc
     ret
 
 ; -----------------------------------------------------------------------------
+; px_touch - a writer other than the compose put rows AL..AH on column BX
+;            (97.5, 97.6): the column's memory is widened to cover them and
+;            its tone forgotten, so the next frame re-lays the wall AND the
+;            ground under where the sprite was - the Flat and Textured
+;            skips read lmat, the Wire skip its four run ends, and all of
+;            them are put at "the whole view" for this page as px_force_all
+;            puts them - and the frame's dirty rows are widened, so the
+;            present sends them. DS = ours
+; clobbers nothing
+; -----------------------------------------------------------------------------
+px_touch:
+    push si
+    mov si, bx
+    add si, [px_pgofs]              ; this page's memory
+    cmp al, [px_ltop + si]
+    jae .t1
+    mov [px_ltop + si], al
+.t1:
+    cmp ah, [px_lbot + si]
+    jbe .t2
+    mov [px_lbot + si], ah
+.t2:
+    mov byte [px_lmat + si], 0xFF
+    mov byte [px_lu0 + si], 0
+    mov byte [px_lu1 + si], PX_HORIZON - 1
+    mov byte [px_ll0 + si], PX_HORIZON
+    mov byte [px_ll1 + si], PX_ROWS - 1
+    cmp al, [px_r0]
+    jae .t3
+    mov [px_r0], al
+.t3:
+    cmp ah, [px_r1]
+    jbe .t4
+    mov [px_r1], ah
+.t4:
+    pop si
+    ret
+
+; px_rows_widen - a writer other than the compose put rows AL..AH on the
+;                 destination this frame: the frame's dirty rows widen so
+;                 the present sends them; the columns' memory is left alone
+;                 (97.6: the pixels are OVER what the memory describes).
+;                 clobbers nothing
+px_rows_widen:
+    cmp al, [px_r0]
+    jae .w1
+    mov [px_r0], al
+.w1:
+    cmp ah, [px_r1]
+    jbe .w2
+    mov [px_r1], ah
+.w2:
+    ret
+
+; -----------------------------------------------------------------------------
+; px_fade_draw - the DIE wash (97.8): every column of the band in the wash
+;                tone through the ladder, once; the memory put at "the whole
+;                view" so the restart's first frame re-lays everything.
+;                Nothing on Mode X's other page: a wash that alternates
+;                pages for twelve ticks is drawn on both (the present flips
+;                once a frame, and this frame's page is the one shown next)
+; clobbers everything but DS
+; -----------------------------------------------------------------------------
+px_fade_draw:
+    mov byte [px_r0], 0
+    mov byte [px_r1], PX_ROWS - 1
+    mov ax, [px_dbase]
+    add ax, [px_cbias]
+    mov [px_cbase], ax
+    push ds
+    push bp
+    mov ds, [px_dseg]
+    xor bp, bp                      ; BP = the column
+.col:
+    mov di, bp
+    cmp byte [cs:px_bpc], 1
+    je .b1
+    shl di, 1
+.b1:
+    add di, [cs:px_cbase]
+    mov [cs:px_cdi], di
+    xor al, al
+    mov cx, PX_ROWS
+    mov bx, [cs:px_inkw]
+    call px_lad
+    inc bp
+    mov al, [cs:px_cols]
+    xor ah, ah
+    cmp bp, ax
+    jb .col
+    pop bp
+    pop ds
+    call px_force_all
+    mov byte [px_force], 0          ; ...but not another frame yet: the
+    ret                             ; restart owes one
+
+; -----------------------------------------------------------------------------
 ; px_frame_end - the frame is on the glass: count it, time it, let the
-;                selector see it (96.8)
+;                selector see it (97.8)
 ; clobbers AX, DX
 ; -----------------------------------------------------------------------------
 px_frame_end:
@@ -796,7 +919,7 @@ px_frame_end:
     call pit_now
     sub ax, [px_t0]
     sbb dx, [px_t0 + 2]
-    sub ax, [px_twait]              ; THE WORK, NOT THE WAIT (96.8): the
+    sub ax, [px_twait]              ; THE WORK, NOT THE WAIT (97.8): the
     sbb dx, [px_twait + 2]          ; retrace OSAPI_FSX_PAGE waits for on
     mov [px_ftime], ax              ; Mode X and another task's hold on the
     mov [px_ftime + 2], dx          ; gfx lock are bracketed out, or the

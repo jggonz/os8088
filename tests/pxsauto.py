@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PIXELSTEIN 3D's detail selector, every movement (SPEC.md 96.8, 96.10;
+"""PIXELSTEIN 3D's detail selector, every movement (SPEC.md 97.8, 97.10;
 docs/plans/PIXELSTEIN-PLAN.md 14's row).
 
     python3 tests/pxsauto.py [--machine os8088_5150_cga_gla] [--no-slow]
@@ -10,7 +10,7 @@ breakpoint on px_auto_frame, and px_ftime (the frame the selector is about
 to judge, 838 ns units) written at every stop before the compare reads it.
 Windowed, with the turn key held so a frame is drawn every tick - HELD
 BEFORE THE FIRST WAIT, because a still window composes nothing by
-construction (96.8's idle predicate) and the first cut waited for a frame
+construction (97.8's idle predicate) and the first cut waited for a frame
 that could never come. The legs, in the order that proves each on its own:
 
   (a) Auto on the 8086 STARTS a WINDOW at position 2 - Flat Full, one rung
@@ -23,15 +23,16 @@ that could never come. The legs, in the order that proves each on its own:
       (the review's blocker);
   (r) Detail > Full res under Auto RE-SEATS the ladder within its rung -
       position (apos & ~1) | res, so 2 here - and banks it as the ceiling
-      (px_oncmd's arm, 96.8); seventy fast frames at 2 stay there;
+      (px_oncmd's arm, 97.8); seventy fast frames at 2 stay there;
   (b0) THE NEGATIVE CONTROL: the turn key released and px_force poked at
       every stop instead - the machine's OWN frame on a still eye, the cast
       and a compose that writes nothing, ~65 ms at Flat Full - nine of them
       with NOTHING poked into px_ftime do not step down, and every one
       reads under the budget (printed against it). It is a still eye and
       not the turning frame because the 5150's own windowed Flat Full turn
-      reads 120-137 ms across the 125.0 ms line - a control that the
-      machine can fail on its own is no control. Without this leg the step
+      at Size 64 reads 120-137 ms across the 125.0 ms line (116.4 / 112.9
+      at the default of 48 since wave 3's review, 97.8) - a control that
+      the machine can fail on its own is no control. Without this leg the step
       down below could be passing on the 5150's own frame rather than on
       the poke. The frames from here on are these forced still-eye frames;
       px_ftime is what is judged, so what the frame drew no longer matters;
@@ -40,7 +41,7 @@ that could never come. The legs, in the order that proves each on its own:
       banked a hold-down of PX_AHOLD ticks (read back against the tick);
       the line reads "Detail: Flat  Low res" on the next drawn frame and is
       not redrawn after (announced ONCE); twelve more slow frames leave the
-      ladder on its floor - there is no Wire under it (96.8);
+      ladder on its floor - there is no Wire under it (97.8);
   (d) the hold-down, both edges, with px_ahold poked so that neither what
       a frame costs the guest clock nor what a stop does decides it:
       STRETCHED to 600 ticks ahead, sixty-four fast frames and a
@@ -74,7 +75,7 @@ FAST = 1000                     # 0.8 ms: under half the budget by any margin
 SLOW = 200000                   # 167.6 ms: over the 125.0 ms budget
 BUDGET = 149165                 # PX_BUDGET (pxgame.asm), 838 ns units
 AHOLD = 182                     # PX_AHOLD: ticks of hold-down after a step down
-# the ladder since wave 2 (SPEC.md 96.8): 0 Textured Full, 1 Textured Low res,
+# the ladder since wave 2 (SPEC.md 97.8): 0 Textured Full, 1 Textured Low res,
 # 2 Flat Full, 3 Flat Low res. An 8086 WINDOW starts at 2 (PLAN 15: one rung
 # under the bracket's Textured Low res), which is the ceiling a step up may
 # reach, and 3 is the floor
@@ -94,7 +95,7 @@ def us(ftime):
 
 
 def line(g):
-    b = g.bytes_("px_lbuf", 64)
+    b = g.bytes_("px_lbuf", 96)
     return b.split(b"\0", 1)[0].decode("ascii", "replace").rstrip()
 
 
@@ -124,7 +125,7 @@ def frames(g, n, ftime, watch=None, real=None, force=False):
 
 def reseat_full(g):
     """Detail > Full res under Auto: px_oncmd's arm, poked the way
-    pxslib.pin pokes a Detail pick (96.8: applied between frames through
+    pxslib.pin pokes a Detail pick (97.8: applied between frames through
     px_pend) - the row's byte, the position, the ceiling, the counters."""
     g.m.pause()
     g.poke_byte("px_res", 0)
@@ -148,19 +149,19 @@ def main():
     slow = None if a.no_slow else SLOW
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
         g = pxslib.open_game(m)
+        g.sim(False)                    # the world frozen and the player safe
+        g.god(True)                     # (wave 3): the selector is what is
+                                        # under test, not a guard's tick
         st = g.state()
         print("   PXSTEIN.O88: window %d, part 0 at %04x, tier %d" % (g.win, g.seg, st["tier"]))
         check(st["tier"] == 0, "the guest is an 8086 (tier %d)" % st["tier"])
 
-        # a frame every tick from here: the turn key held FIRST, then the wait
-        m.key("ArrowRight", down=True, up=False)
-        m.advance(frames=20)
-        m.run()
-        f0 = g.word("px_frames")
-        g.wait_frames(2, f0=f0)
-
-        # --- (a) the start ----------------------------------------------------
-        st = g.state()
+        # --- (a) the start: read BEFORE any frame is driven ------------------
+        # the start is a launch-time fact (px_astart, the tier); the turn
+        # frames the legs below drive read 120-140 ms in this window on the
+        # 5150 (97.1's reported number), across the 125 ms line, and wave 3's
+        # weapon put them over it often enough for Auto to have stepped once
+        # before the first cut of this leg looked
         check(st["detail"] == pxslib.PXD["auto"], "Detail is Auto (%d)" % st["detail"])
         check(st["apos"] == POS_START and st["rung"] == pxslib.PXR["flat"] and st["lowres"] == 0,
               "Auto starts the 8086's window at position 2, Flat Full (pos %d, rung %d, lowres %d)"
@@ -172,7 +173,18 @@ def main():
         print("   the line: %r" % t)
         check(t.startswith("Detail: Flat  Size 64  Full res"), "the text line says Flat Full res")
 
+        # a frame every tick from here: the breakpoint ARMED, then the turn
+        # key held, so every frame from the first is judged on a POKED clock
+        # - the machine's own windowed Flat Full turn frame on the 5150 at
+        # Size 64 is 120-140 ms (97.1), across the 125 ms line, and wave 3's
+        # weapon and sprite pass put every one of them over it: eight
+        # unpoked frames here stepped Auto down before leg (c) looked (the
+        # first cut of this wave; wave 2's frames straddled the line and
+        # never made eight). 97.8 records the fact, and the ordering here
+        # stays a convenience
         m.bp_exec(g.addr("px_auto_frame"))
+        m.key("ArrowRight", down=True, up=False)
+        frames(g, 3, FAST)
 
         # --- (c) the ceiling: fast frames do not climb past the start -----------
         moved = []

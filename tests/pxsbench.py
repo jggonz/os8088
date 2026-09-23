@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PIXELSTEIN 3D's unit costs, read off a cycle-exact 5150 (SPEC.md 96.10).
+"""PIXELSTEIN 3D's unit costs, read off a cycle-exact 5150 (SPEC.md 97.10).
 
     make bench && python3 tests/pxsbench.py [--machine os8088_5150_cga_gla]
                                             [--shot build/pxs-shots/bench.png]
@@ -12,7 +12,7 @@ launches PXSBENCH.O88 off the Disk window, presses R, waits for the run to
 finish on the GUEST's clock and reads the two arrays back. What it prints is
 the row table with the unit each row is priced in - cycles a store, a
 crossing, a byte - and the derived figures docs/plans/PIXELSTEIN-PLAN.md 3
-used as DERIVED, so that SPEC.md 96.1 can carry them as MEASURED.
+used as DERIVED, so that SPEC.md 97.1 can carry them as MEASURED.
 
 What it asserts is that EVERY ROW THIS ADAPTER OWES PRODUCED A NUMBER: not
 lapped, not refused, not skipped, not zero. The numbers themselves are
@@ -24,8 +24,8 @@ The bench measures the same package on every machine; `--machine` picks the
 adapter, and the VRAM rows run in that adapter's game mode (CGA 320x200x4,
 Hercules, Mode X), the two C160 rows on a genuine CGA only. The VRAM store
 rows set DS = the framebuffer and store with NO segment override - the
-instruction the generator emits (96.3) - so their delta against the RAM row
-is the card's wait states and nothing else. The DDA rows carry 96.2.1's
+instruction the generator emits (97.3) - so their delta against the RAM row
+is the card's wait states and nothing else. The DDA rows carry 97.2.1's
 whole setup and a fourth row runs only the harness's scaffolding, so the
 setup figure below is net of it.
 """
@@ -48,7 +48,7 @@ ROWS = 80                       # PB_ROWS
 # crossing counts the DDA rows are divided by are CAST on the host through
 # tools/pxssim.py's walker and asserted, rather than derived by hand once
 # and trusted: a wall moved by a tile makes the divisor 9 or 11 and moves
-# every consumer of 96.1's crossing figure by 10% without a word said.
+# every consumer of 97.1's crossing figure by 10% without a word said.
 EYEX, EYEY = 8 * 256 + 64, 8 * 256 + 128
 COL = 32
 HEAD45, HEADA = 512 - 6, 100 - 6
@@ -66,7 +66,7 @@ TABLE = [
     (3, "DDA col 10 crossings", 1, "column"),
     (4, "DDA col 20 crossings", 1, "column"),
     (5, "DDA col 10 near-axial", 1, "column"),
-    (21, "HIT col (96.2.5)", 1, "column"),
+    (21, "HIT col (97.2.5)", 1, "column"),
     (6, "TEXEL 80 rows plain", ROWS, "texel"),
     (7, "TEXEL 80 rows xlat", ROWS, "texel"),
     (20, "TEXEL 80 rows ror x2", ROWS, "texel"),
@@ -225,7 +225,7 @@ def main():
     # --- the derived units, which are what the plan priced as D ------------
     d10, d20, d10a, scaf = us[3][0], us[4][0], us[5][0], us[18][0]
     # THE DIVISORS ARE CAST, NOT ASSUMED: the host walks the bench's own map
-    # and eye through tools/pxssim.py (the same walker 96.2.2 pins) and the
+    # and eye through tools/pxssim.py (the same walker 97.2.2 pins) and the
     # two 45-degree rows must come to exactly 10 and 20 crossings, else the
     # headline crossing figure is (d20 - d10) / something-else. The near-
     # axial row takes the sim's count as its divisor.
@@ -234,14 +234,14 @@ def main():
     # THE SETUP IS REPORTED NET OF THE HARNESS: pb_b_ddasc runs the push/pop
     # bp, the DS switch and the row's own call that a DDA row carries and the
     # package's column driver does not (it holds DS and BP for the frame),
-    # and nothing else. What is left is 96.2.1's setup - the angle, the
+    # and nothing else. What is left is 97.2.1's setup - the angle, the
     # quadrant, the two px_tan reads, the four patches, the two muls, the
     # pointers and keys - which is what wave 1 shapes the driver around.
     setup = d10 - 10 * cross - scaf
     # ...and the hit row carries the same scaffold (push/pop bp, the DS
-    # switch, the call), so 96.2.5's figure is net of it too
+    # switch, the call), so 97.2.5's figure is net of it too
     hit = us[21][0] - scaf
-    print("   DERIVED (the units SPEC.md 96.1 carries as M):")
+    print("   DERIVED (the units SPEC.md 97.1 carries as M):")
     print("     store, RAM             %6.1f cyc   (plan D: 25)"
           % (us[0][0] * HZ / 1e6 / ROWS))
     if us[12][1] not in "-x":
@@ -255,14 +255,14 @@ def main():
           % (us[1][0] * HZ / 1e6 / ROWS))
     print("     DDA crossing, 45 deg   %6.1f cyc   (plan D: 130, anchor 155)"
           % (cross * HZ / 1e6))
-    print("     DDA column setup       %6.1f cyc   (96.2.1 whole: fan, quadrant, "
+    print("     DDA column setup       %6.1f cyc   (97.2.1 whole: fan, quadrant, "
           "2 tan, 4 patches, 2 mul, keys; NET of the scaffold's %.0f; hit "
           "side 10:%d 20:%d; plan D: 516)"
           % (setup * HZ / 1e6, scaf * HZ / 1e6, side10, side20))
     print("     DDA crossing, axial    %6.1f cyc   (the same walker nine of %d; "
           "the sim's count)" % ((d10a - setup - scaf) / na * HZ / 1e6, na))
     if us[21][1] not in "-x":
-        print("     hit, 96.2.5 whole      %6.1f cyc   (NET of the scaffold; h = %d "
+        print("     hit, 97.2.5 whole      %6.1f cyc   (NET of the scaffold; h = %d "
               "rows; two MUL14, the clamp, the div, sctab, top/bot, seven "
               "stores; first take D: 630)" % (hit * HZ / 1e6, hith))
     print("     texel load + store     %6.1f cyc   (plan D: 23 + 25)"

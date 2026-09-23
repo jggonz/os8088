@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The desktop comes back identical after a bracket in every setting (SPEC.md
-53, 96.3, 96.10).
+53, 97.3, 97.10).
 
     python3 tests/pxsfsx.py [--machine os8088_5150_cga_gla]
 
@@ -15,7 +15,7 @@ or the row names how many pixels are not. The window's own state is checked
 back too (rung, resolution, Size, Auto's position).
 
 AND A SIZE PICKED NARROWER INSIDE THE BRACKET blacks the glass the wider
-band gave up (px_band_blank, 96.3): Size 80 entered, a forced frame drawn,
+band gave up (px_band_blank, 97.3): Size 80 entered, a forced frame drawn,
 Size 48 pinned in the bracket and drawn, and every device-row byte outside
 the new band read off the framebuffer (pxslib.margins: CGA 320x200x4's two
 banks, the Hercules box's four) must be zero - the mode set's clear was the
@@ -62,6 +62,9 @@ def main():
     sizes = [int(v) for v in a.sizes.split(",")]
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
         g = pxslib.open_game(m)
+        g.sim(False)                    # the world frozen and the player safe
+        g.god(True)                     # (wave 3): 48 brackets of guest time
+                                        # are minutes a guard could use
         st0 = g.state()
         print("   PXSTEIN.O88: window %d, part 0 at %04x, %s" % (g.win, g.seg, st0))
         modes = [g.byte("px_mode0")]
@@ -133,8 +136,8 @@ def main():
         g.poke_byte("px_mode", modes[0])
         g.poke_byte("px_fsxm", fsxtab[modes[0]])
         m.run()
-        g.pin(rung="auto", lowres=False, size=64)
-        g.scene("a")
+        g.pin(rung="auto", lowres=False, size=st0["size"])    # (48 since the fork
+        g.scene("a")                                            # moved, 97.1)
         g.wait_frames(1)
         m.advance(frames=40)
         m.run()

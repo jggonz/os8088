@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PIXELSTEIN 3D's guest reader (SPEC.md 96.12): what every emulator row of the
+"""PIXELSTEIN 3D's guest reader (SPEC.md 97.12): what every emulator row of the
 package imports rather than rewrites.
 
 The package's variables are read out of its own bss - never inferred from the
@@ -9,7 +9,7 @@ locating the program's segment through the window it opened: the window's
 W_SEG names PART 0 after the loader's re-home (SPEC.md 20.12.10), which is
 the segment every equate below is relative to. The loader's part table is
 gone by then, so the scratch part and the level part are found through the
-handoff words the loader left at the head of the bss (96.9's PXH_*).
+handoff words the loader left at the head of the bss (97.9's PXH_*).
 
     import pxslib
     with os88marty.launch(...) as m:
@@ -42,24 +42,24 @@ TITLE = "Pixelstein 3D"
 FILE = "PXSTEIN.O88"
 ROWS, STRIDE = 80, 80                   # the band's first byte is (80 - Size)
                                         # / 2 and lives in the package's
-                                        # px_x0 - there is no constant (96.3)
+                                        # px_x0 - there is no constant (97.3)
 PXB = {0: "none", 1: "cga4", 2: "cga16", 3: "herc", 4: "modex", 5: "win1"}
 PXR = {"wire": 0, "flat": 1, "tex": 2}
 PXD = {"auto": 0, "wire": 1, "flat": 2, "tex": 3}
 PXH = dict(magic=0, lev=2, gen=4, cold=6, nlev=8, levlen=10, art=12, bt=14,
-           genlen=16)                   # pxstein.asm's PXH_*, PXH_SIZE = 18
-PXH_SIZE = 18
-SIZES = (48, 56, 64, 72, 80)            # px_sizes: the Size row (96.3)
+           genlen=16, spr=18)           # pxstein.asm's PXH_*, PXH_SIZE = 20
+PXH_SIZE = 20
+SIZES = (48, 56, 64, 72, 80)            # px_sizes: the Size row (97.3)
 WIN_SIZES = (48, 56, 64)                # ...of which a window shows these
 # part 2's layout - the scratch, in os88pkg's indices (pxgen.inc's PXG_*):
 # the three literals here are held to the source by tests/unit/
 # t_pxsscale.py; the rest is derived from labels in layout(), because
 # nasm's map carries labels and not equates
-PXG_DRVMAX, PXG_QN, PXG_QSZ = 64, 512, 6
-# the two pinned scenes (96.10): A is the spawn, B the doorway turn - pinned
+PXG_DRVMAX, PXG_QN, PXG_QSZ = 96, 512, 8
+# the two pinned scenes (97.10): A is the spawn, B the doorway turn - pinned
 # in tools/pxssim.py's scenes() and read from there, one source
 COLMAX, HORIZON = 80, 40                # PX_COLMAX, PX_HORIZON (pxgame.asm)
-PX_TURN, PX_SPEED = 64, 24              # a step's turn and walk (96.8)
+PX_TURN, PX_SPEED = 64, 24              # a step's turn and walk (97.8)
 # px_force_all's SEVEN arrays and their fills (pxcomp.inc): the memory of
 # "the whole view was drawn", so the next frame writes and presents all of
 # it. Not px_lside: the Flat skip's lmat compare fires first, and Wire has
@@ -115,8 +115,8 @@ def layout():
     assert drvsz <= PXG_DRVMAX, "the driver outgrew PXG_DRVMAX"
     drv = ball
     qtex = drv + PXG_DRVMAX
-    return dict(BODIES=0, BALL=ball, DRV=drv, DRVSZ=drvsz, QTEX=qtex, QEND=qtex + 2,
-                Q=qtex + 4, SCAL=qtex + 4 + PXG_QN * PXG_QSZ)
+    return dict(BODIES=0, BALL=ball, DRV=drv, DRVSZ=drvsz, QTEX=qtex, QSPR=qtex + 2,
+                QEND=qtex + 4, Q=qtex + 6, SCAL=qtex + 6 + PXG_QN * PXG_QSZ)
 
 
 def find(m, S=None, limit=120.0):
@@ -173,7 +173,7 @@ class Game:
         return {k: u16(h, v) for k, v in PXH.items()}
 
     def part_gen(self, n):
-        """n bytes of the scratch part (96.9's part 2: the bodies, the
+        """n bytes of the scratch part (97.9's part 2: the bodies, the
         driver, the queue and the generated sets) from its start."""
         seg = self.handoff()["gen"]
         if not seg:
@@ -181,11 +181,102 @@ class Game:
         return self.m.read(seg << 4, n)
 
     def part_bt(self, n=30720):
-        """The byte-texture set (96.9's part 3)."""
+        """The byte-texture set (97.9's part 3)."""
         seg = self.handoff()["bt"]
         if not seg:
             return None
         return self.m.read(seg << 4, n)
+
+    def part_spr(self, n):
+        """The sprite set (97.9's part 4)."""
+        seg = self.handoff()["spr"]
+        if not seg:
+            return None
+        return self.m.read(seg << 4, n)
+
+    # --- the world (wave 3) --------------------------------------------------
+    def sim(self, on):
+        """The world's sim - the doors, the guards, the weapon - running
+        (on=True) or frozen (px_simoff, 97.8): a row that diffs a pose
+        against the host wants nothing moving; a row that measures the
+        finished frame wants it all. Paused around the poke."""
+        self.m.pause()
+        self.poke_byte("px_simoff", 0 if on else 1)
+        self.m.run()
+
+    def god(self, on):
+        """No damage to the player (px_god): a measurement leg cannot have
+        the floor restart under it. Paused around the poke."""
+        self.m.pause()
+        self.poke_byte("px_god", 1 if on else 0)
+        self.m.run()
+
+    def actor(self, i):
+        """Actor i's record as a dict (pxgame.asm's PXAC_*)."""
+        b = self.bytes_("px_act", 16 * (i + 1))[16 * i:]
+        return dict(x=u16(b, 0), y=u16(b, 2), kind=b[4], state=b[5], dir=b[6],
+                    timer=b[7], hp=b[8], frame=b[9], flags=b[10], cell=u16(b, 12),
+                    ang=u16(b, 14))
+
+    def actor_poke(self, i, x=None, y=None, state=None, ang=None, dir=None,
+                   hp=None, flags=None):
+        """Move or re-state actor i (paused): the cell and its PXC_ACTOR
+        mark follow the position, as px_act_move keeps them."""
+        base = self.s["px_act"] + 16 * i
+        a = self.actor(i)
+        mapb = self.s["px_map"]
+        if x is not None or y is not None:
+            old = a["cell"]
+            v = self.m.read(self.base + mapb + old, 1)[0]
+            if not v & 2:                       # never a mark on a DOOR cell
+                self.m.write(self.base + mapb + old, bytes([v & ~0x20]))
+            nx = a["x"] if x is None else x
+            ny = a["y"] if y is None else y
+            cell = ((ny >> 8) << 6) | (nx >> 8)
+            self.m.write(self.base + base + 0, bytes([nx & 255, nx >> 8, ny & 255, ny >> 8]))
+            self.m.write(self.base + base + 12, bytes([cell & 255, cell >> 8]))
+            if (state if state is not None else a["state"]) not in (0, 7, 8):
+                v = self.m.read(self.base + mapb + cell, 1)[0]
+                if not v & 2:                   # (97.8: its nibble is a material)
+                    self.m.write(self.base + mapb + cell, bytes([v | 0x20]))
+        if state is not None:
+            self.m.write(self.base + base + 5, bytes([state]))
+        if dir is not None:
+            self.m.write(self.base + base + 6, bytes([dir]))
+        if hp is not None:
+            self.m.write(self.base + base + 8, bytes([hp]))
+        if flags is not None:
+            self.m.write(self.base + base + 10, bytes([flags]))
+        if ang is not None:
+            self.m.write(self.base + base + 14, bytes([ang & 255, ang >> 8]))
+
+    def door(self, i):
+        """Door i's record (PXD_*)."""
+        b = self.bytes_("px_doors", 8 * (i + 1))[8 * i:]
+        return dict(cell=u16(b, 0), flags=b[2], lock=b[3], pos=u16(b, 4), state=b[6],
+                    timer=b[7])
+
+    def door_poke(self, i, pos=None, state=None, timer=None):
+        base = self.s["px_doors"] + 8 * i
+        if pos is not None:
+            self.m.write(self.base + base + 4, bytes([pos & 255, pos >> 8]))
+        if state is not None:
+            self.m.write(self.base + base + 6, bytes([state]))
+        if timer is not None:
+            self.m.write(self.base + base + 7, bytes([timer]))
+
+    def doors(self):
+        return [self.door(i) for i in range(self.byte("px_ndoors"))]
+
+    def actors(self):
+        return [self.actor(i) for i in range(self.byte("px_nact"))]
+
+    def player(self):
+        return dict(health=self.byte("px_health"), ammo=self.byte("px_ammo"),
+                    keys=self.byte("px_keys"), weapon=self.byte("px_weapon"),
+                    lives=self.byte("px_lives"), state=self.byte("px_state"),
+                    score=self.word("px_score"), floor=self.byte("px_floor"),
+                    cell=self.word("px_pcell"), aim=self.byte("px_aim"))
 
     def eye(self):
         return self.word("px_px"), self.word("px_py"), self.word("px_head")
@@ -209,8 +300,22 @@ class Game:
         self.poke_word("px_hcos", pxssim.cos_q14(head) & 0xFFFF)
         self.poke_word("px_hsin", pxssim.sin_q14(head) & 0xFFFF)
 
+    def pcell_poke(self, px, py):
+        """The player's cell and its PXC_PLAYER mark to (px, py): what
+        px_pmark does when the step moves the eye."""
+        mapb = self.s["px_map"]
+        old = self.word("px_pcell")
+        v = self.m.read(self.base + mapb + old, 1)[0]
+        if not v & 2:                           # never a mark on a DOOR cell
+            self.m.write(self.base + mapb + old, bytes([v & ~0x40]))
+        cell = ((py >> 8) << 6) | (px >> 8)
+        self.poke_word("px_pcell", cell)
+        v = self.m.read(self.base + mapb + cell, 1)[0]
+        if not v & 2:                           # (97.8: its nibble is a material)
+            self.m.write(self.base + mapb + cell, bytes([v | 0x40]))
+
     def force_all_poke(self):
-        """px_force_all, done by the gate (SPEC.md 96.5): the seven history
+        """px_force_all, done by the gate (SPEC.md 97.5): the seven history
         arrays to 'the whole view was drawn' and px_force set, so the next
         frame WRITES and presents every row of every column. px_force alone
         only bypasses the idle predicate - the frame then composes against
@@ -223,14 +328,17 @@ class Game:
 
     def scene(self, which, force=True):
         """Put the eye at a pinned scene and owe a WHOLE frame (a full
-        repaint, force_all_poke). Paused around the pokes."""
+        repaint, force_all_poke). Paused around the pokes. The player's
+        cell mark follows the eye (px_pmark reads px_pcell), so the mark is
+        moved here as the step would move it."""
         px, py, head = scene_at(which)
         self.m.pause()
         self._mark()
         self.eye_poke(px, py, head)
+        self.pcell_poke(px, py)
         # ...and NOTHING LATCHED that would move it: a typematic arrow still
         # in the BIOS buffer from a leg that turned the player becomes a tap
-        # (SPEC.md 96.8) spent on the next step, and the scene measured is
+        # (SPEC.md 97.8) spent on the next step, and the scene measured is
         # 64 units off the one poked. One run read scene A 4 ms faster than
         # three others that way.
         for k in ("px_tap", "px_kturn", "px_kfwd", "px_kstr"):
@@ -242,7 +350,7 @@ class Game:
 
     def pin(self, rung="flat", lowres=True, size=None):
         """A Detail and Resolution pick (and a Size, 48..80), applied by the
-        package between frames (px_pend, SPEC.md 96.8) exactly as the menu's
+        package between frames (px_pend, SPEC.md 97.8) exactly as the menu's
         is."""
         self.m.pause()
         self._mark()
@@ -258,7 +366,7 @@ class Game:
         off the framebuffer in the bracket (CGA 320x200x4's two banks from
         row 28, the Hercules box's four from row 134 at x = 40): what a Size
         picked narrower inside the bracket must have blacked (px_band_blank,
-        SPEC.md 96.3). None on a backend this does not model."""
+        SPEC.md 97.3). None on a backend this does not model."""
         back = PXB.get(self.byte("px_back"))
         size, x0 = self.byte("px_size"), self.byte("px_x0")
         out = bytearray()
@@ -279,7 +387,7 @@ class Game:
         """One TURN frame the way frame_times' "turn" mode makes one: the
         heading poked with px_dirty set and NOTHING forced, so the compose
         writes what moved against its memory of the last frame - the skip,
-        the two-ends arm and px_wrun's paths (SPEC.md 96.5), which a forced
+        the two-ends arm and px_wrun's paths (SPEC.md 97.5), which a forced
         frame never takes. Paused around the pokes; the caller waits. A
         STEP is the same poke with px/py moved and the heading kept - the
         motion that holds u still while h grows, which the Textured skip
@@ -287,6 +395,7 @@ class Game:
         self.m.pause()
         self._mark()
         self.eye_poke(px, py, head)
+        self.pcell_poke(px, py)
         self.poke_byte("px_dirty", 1)
         self.m.run()
 
@@ -303,7 +412,7 @@ class Game:
 
     def kticks(self):
         """The KERNEL's tick word - what OSAPI_GET_TICKS answers, and so the
-        clock px_ahold (96.8's hold-down) is written in. It runs ~200 ticks
+        clock px_ahold (97.8's hold-down) is written in. It runs ~200 ticks
         behind the BIOS count (it starts at the kernel's boot, not the
         ROM's), which a first cut of tests/pxsauto.py read as a hold-down
         that had already passed."""
@@ -328,7 +437,7 @@ class Game:
     def leave_fsx(self, limit=60.0):
         """Esc, then PAST the exit path: px_inbr clears at the top of it, and
         what follows - the window's set regenerated and re-transposed when
-        the window's rung is Textured (96.3, ~0.9 s on the 5150; nothing
+        the window's rung is Textured (97.3, ~0.9 s on the 5150; nothing
         when it is Flat), Auto re-seated, the window's frame composed -
         consumes a px_force poked meanwhile (a first cut poked and waited
         for a frame that the exit path had already spent; a second waited
@@ -354,7 +463,7 @@ class Game:
     def shadow(self):
         """The 80 x 80 bytes the last frame composed: the shadow claim on
         every backend but Mode X, which composes straight into the hidden
-        page (SPEC.md 96.3) - the page SHOWN after the flip is px_page ^ 1,
+        page (SPEC.md 97.3) - the page SHOWN after the flip is px_page ^ 1,
         its view rows at 48 * 80 into it, and with the map mask at 0Fh all
         four planes hold the byte, so plane 0 (what a linear read of A000
         answers) is the picture."""
@@ -377,17 +486,20 @@ class Game:
     def stage_times(self, n, mode="full"):
         """n consecutive DRAWN frames in the BRACKET, split by stage: cycles
         from px_frame_begin to px_cast (the prologue: pit_now, a pending
-        apply), px_cast to px_compose (THE CAST), px_compose to px_present
-        (THE COMPOSE), px_present to px_frame_end (THE PRESENT) and
-        px_frame_end round to the next px_frame_begin (the loop: the frame's
-        epilogue, the selector, int 16h, px_steps, the keys). Five exec
-        breakpoints, the stops taken in that order because a forced frame
-        never returns clean; the same two modes as frame_times. The first
-        frame is dropped. This is what turns 'the units-derived frame is 30%
-        light' into a stage the residual belongs to."""
+        apply), px_cast to px_spr_gather (THE CAST), px_spr_gather to
+        px_compose (THE GATHER: the sprite candidates, the match and the
+        erase - its own bracket since review r1, which found 9.2 ms of it
+        booked as cast), px_compose to px_present (THE COMPOSE, and the
+        sprite posts and the weapon after it), px_present to px_frame_end
+        (THE PRESENT) and px_frame_end round to the next px_frame_begin (the
+        loop: the frame's epilogue, the selector, int 16h, px_steps, the
+        keys). Six exec breakpoints, the stops taken in that order because a
+        forced frame never returns clean; the same two modes as frame_times.
+        The first frame is dropped. This is what turns 'the units-derived
+        frame is 30% light' into a stage the residual belongs to."""
         m = self.m
-        names = ("px_frame_begin", "px_cast", "px_compose", "px_present",
-                 "px_frame_end")
+        names = ("px_frame_begin", "px_cast", "px_spr_gather", "px_compose",
+                 "px_present", "px_frame_end")
         m.bp_exec(*[self.addr(x) for x in names])
         m.run()
         # get to a px_frame_begin stop, whatever stop came first
@@ -409,27 +521,37 @@ class Game:
                 head = (head + PX_TURN) & 0xFFF
                 self.eye_poke(self.word("px_px"), self.word("px_py"), head)
                 self.poke_byte("px_dirty", 1)
+            elif mode == "sim":
+                # the FINISHED frame (wave 3, 97.1's fork): a full repaint
+                # with the world's sim running - every stop also forces the
+                # doors' and guards' clocks on by not freezing them
+                self.force_all_poke()
             c = [m.status()["cycles"]]
-            for _ in range(5):              # cast, compose, present, end, begin
+            for _ in range(6):              # cast, gather, compose, present, end, begin
                 m.run()
                 m.wait_stop(30)
                 c.append(m.status()["cycles"])
-            d = [c[k + 1] - c[k] for k in range(5)]
+            d = [c[k + 1] - c[k] for k in range(6)]
             if i:
-                out.append(dict(prologue=d[0], cast=d[1], compose=d[2],
-                                present=d[3], loop=d[4], frame=c[5] - c[0]))
+                out.append(dict(prologue=d[0], cast=d[1], gather=d[2], compose=d[3],
+                                present=d[4], loop=d[5], frame=c[6] - c[0]))
         m.bp_exec()
         m.run()
         return out
 
-    def frame_times(self, n, mode="full"):
+    def frame_times(self, n, mode="full", pose=None):
         """n consecutive DRAWN frames, each as (cycles between two entries to
         px_frame_begin, the package's own px_ftime in 838ns units). The
         breakpoint is on px_frame_begin, and at every stop the frame is made
         to draw (tests/tankperf.py's method; the delta of MartyPC's cycle
         counter between stops is the whole loop - input, the owed steps,
         cast, compose, present). The first delta is dropped: it spans the
-        poke. Two modes (SPEC.md 96.10):
+        poke. `pose`, if given, is called at every stop (the guest paused at
+        the breakpoint) to put the world back - the "sim" mode's guards see
+        the player and walk, and a measurement of "three sprites in view"
+        that lets them leave the view measures something else (review r1:
+        scene C's 64 x 80 finished frame was read with two). Two modes
+        (SPEC.md 97.10):
 
           "full"  a FULL REPAINT: force_all_poke at every stop, so every
                   column writes every row and the present sends all 80 -
@@ -438,7 +560,7 @@ class Game:
                   set and nothing forced: the delta-fill writes what a turn
                   changes and the present sends the rows it touched - the
                   frame a player sees (and its rows are asserted against
-                  present_rows: 80 on both pinned scenes, SPEC.md 96.5).
+                  present_rows: 80 on both pinned scenes, SPEC.md 97.5).
 
         px_force alone, which the first cut poked, is neither: on a still
         eye it composes against an unchanged memory and writes nothing."""
@@ -456,8 +578,12 @@ class Game:
                 head = (head + PX_TURN) & 0xFFF
                 self.eye_poke(self.word("px_px"), self.word("px_py"), head)
                 self.poke_byte("px_dirty", 1)
+            elif mode == "sim":
+                self.force_all_poke()
             else:
                 raise ValueError(mode)
+            if pose:
+                pose()
             m.run()
             m.wait_stop(30)
             c1 = m.status()["cycles"]
@@ -476,21 +602,22 @@ def level():
 
 
 def scene_at(which):
-    """(px, py, head) of pinned scene 'a' or 'b' (tools/pxssim.py's scenes)."""
+    """(px, py, head) of pinned scene 'a', 'b' or 'c' (tools/pxssim.py's
+    scenes; C is wave 3's sprite scene)."""
     return pxssim.scenes(level())[which]
 
 
 def _key(col, rung):
     """What a change is, per rung (pxcomp.inc's skips): Flat and Wire the
     four bytes, Textured those plus the quantised height and the texture
-    column u >> 3 (the six bytes of 96.3's memory)."""
+    column u >> 3 (the six bytes of 97.3's memory)."""
     k = (col["top"], col["bot"], col["mat"], col["side"])
     return k + (col["hq"], col["u"] >> 3) if rung == "tex" else k
 
 
 def turn_stores(which, cols=32):
     """What the Flat delta-fill WRITES when scene `which` turns by PX_TURN,
-    on the host (SPEC.md 96.10): (stores, columns changed). The wall rows of
+    on the host (SPEC.md 97.10): (stores, columns changed). The wall rows of
     every column whose (top, bot, mat, side) moved, plus the ceiling or
     floor put back where it shrank - tools/pxssim.py's arithmetic, the
     package's rule (pxcomp.inc's Flat arm). Scene B is pinned to be the
@@ -552,7 +679,7 @@ def _wrun_rows(new, old, clip):
 def present_rows(prev, new, rung="flat"):
     """How many rows the present sends after composing `new` over `prev`
     (two cast_view lists of the same column count): the LEAST and GREATEST
-    row any column wrote, as pxcomp.inc computes px_r0..px_r1 (SPEC.md 96.5)
+    row any column wrote, as pxcomp.inc computes px_r0..px_r1 (SPEC.md 97.5)
     - a Flat column that changed dirties min(t, lt)..max(b, lb); a Wire
     column whose runs moved dirties what px_wrun writes. 0 if nothing was
     written.
@@ -600,6 +727,11 @@ def open_game(m, apps_root=True, S=None):
     GAMES/ on the general apps disks."""
     S = S or os88sym.linear
     os88marty.settle(m)
+    os88marty.no_saver(m)           # every PIXELSTEIN row drives for guest
+                                    # MINUTES with no key: the idle saver
+                                    # came up mid-row (px_hidden set by an
+                                    # empty clip, the frame counter still)
+                                    # once tests/pxssim.py grew a third scene
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     disk = dispcp.win_list(m, S)[-1]

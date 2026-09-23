@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/pixelstein/pxrast.inc
 ;
-; THE BACKENDS (SPEC.md 96.3, 96.4): which foreign mode this adapter gives
+; THE BACKENDS (SPEC.md 97.3, 97.4): which foreign mode this adapter gives
 ; us, the geometry of each, the per-row device table, the palettes, the ink
 ; table the compose reads, the presents, and the bracket's own main loop.
 ; NOT ONE kernel drawing slot past OSAPI_FSX_MODE (SPEC.md 53.7); the
@@ -136,7 +136,7 @@ px_go_fsx:
     mov byte [px_inbr], 1           ; BEFORE the call: fsx_restore's
     mov byte [px_fsx], 1            ; wm_paint_all runs INSIDE fsx_run and
                                     ; re-enters our own W_PAINT
-    ; ...AND THE WORKER MUST BE OUT OF ITS COMPOSE (SPEC.md 96.8): it
+    ; ...AND THE WORKER MUST BE OUT OF ITS COMPOSE (SPEC.md 97.8): it
     ; composes lock-free, so OSAPI_FSX_RUN's freeze would otherwise land at
     ; any instruction of px_cast or px_compose, and px_r_setup then rewrites
     ; the globals and the patched immediates under it - one corrupt frame
@@ -199,7 +199,7 @@ px_fsx_main:
     call px_steps                   ; CX = the ticks owed, or the wait
     jcxz .draw
     call px_keys_read               ; the held keys, once at the first owed
-    cmp byte [px_pause], 0          ; step (96.8)
+    cmp byte [px_pause], 0          ; step (97.8)
     jne .draw
 .sim:
     push cx
@@ -220,7 +220,7 @@ px_fsx_main:
     call px_r_setup_win             ; ...and the WINDOW'S frame composed here
     call px_auto_start              ; (Auto re-seated at the window's start:
                                     ; a window is one rung under the bracket
-                                    ; on an 8086, 96.8; a pinned Detail is
+                                    ; on an 8086, 97.8; a pinned Detail is
                                     ; untouched by it)
     call px_frame_begin             ; too, before that repaint blits the
                                     ; shadow: it held the bracket's bytes in
@@ -237,6 +237,7 @@ px_fsx_main:
 px_r_setup:
     mov byte [px_lastx0], 0xFF      ; a new backend: px_apply clears and
                                     ; blanks for whatever band it applies
+    call px_spr_class               ; the sprite set follows the ink class
     call px_ink_build
     call px_res_apply               ; ...which builds the device-row table
                                     ; too, biased by the band's first byte
@@ -284,6 +285,25 @@ px_r_setup:
     call px_modex_pal
     ret
 
+; px_spr_class - the sprite set stands only for the ink class it was built
+;                for (97.6): a backend of another class clears px_sprok, and
+;                the next pass that wants it rebuilds (px_sprites,
+;                px_tex_setup). preserves every register
+px_spr_class:
+    push ax
+    push bx
+    mov bl, [px_back]
+    xor bh, bh
+    mov al, [px_inkcls + bx]
+    cmp al, [px_sprback]
+    je .same
+    mov byte [px_sprok], 0
+    mov byte [px_sprback], 0xFF
+.same:
+    pop bx
+    pop ax
+    ret
+
 ; px_r_setup_win - the window's own backend (WIN1): the shadow, the 1bpp inks
 px_r_setup_win:
     push ax
@@ -295,6 +315,7 @@ px_r_setup_win:
     push es
     mov byte [px_back], PXB_WIN1
     mov byte [px_lastx0], 0xFF      ; (px_r_setup's reason)
+    call px_spr_class
     call px_ink_build
     call px_res_apply               ; (the sets, if the window's rung wants
                                     ; them, are px_apply's - above)
@@ -318,7 +339,7 @@ px_r_setup_win:
 ;                   backend): PX_ROWS x PX_STRIDE = 6,400 of the 16 KB
 ;                   claim, which is every byte a compose writes or a present
 ;                   reads today (the rest is reserved for Rows 100 and wave
-;                   5's WIN4 strips and holds nothing, 96.9); the first cut
+;                   5's WIN4 strips and holds nothing, 97.9); the first cut
 ;                   cleared the claim, 8,192 words for 3,200 of picture, ~26
 ;                   ms of it dead inside a keypress (review, wave 2). Nothing
 ;                   on Mode X, which composes into its pages and has
@@ -338,8 +359,8 @@ px_shadow_clear:
     ret
 
 ; -----------------------------------------------------------------------------
-; px_res_apply - the Size and the Resolution to the frame's words (96.1,
-;                96.3): the band's bytes and its first byte, the compose's
+; px_res_apply - the Size and the Resolution to the frame's words (97.1,
+;                97.3): the band's bytes and its first byte, the compose's
 ;                column bias, the columns, the bytes a column, u's shift to
 ;                a texture column, the fan, the ladder, the scaler
 ;                directory - and in a bracket the device-row table, which
@@ -348,7 +369,7 @@ px_shadow_clear:
 ; clobbers AX, BX, CX, DX, SI, DI
 ;
 ; WINDOWED THE BAND IS 64 BYTES AT MOST: the window's frame is fixed at
-; PX_WINW (96.3), so Size 72 and 80 are the bracket's and a window shows 64
+; PX_WINW (97.3), so Size 72 and 80 are the bracket's and a window shows 64
 ; and says so on its text line. The picture is centred in the 80-byte row
 ; on every byte backend, so x0 = (80 - Size) / 2 - ONE word for the writer
 ; and the readers alike: px_cbias is what px_compose adds to every column's
@@ -385,12 +406,14 @@ px_res_apply:
     mov byte [px_bpc], 1
     mov word [px_ladp], px_ladb
     mov word [px_gsc], px_sctab
+    mov word [px_gc2t], px_c2t
     cmp byte [px_lowres], 0
     je .cols
     shr al, 1                       ; Low res: half the rays, two bytes each
     mov byte [px_bpc], 2
     mov word [px_ladp], px_ladw
     mov word [px_gsc], px_sctab + PXG_DIRSZ
+    mov word [px_gc2t], px_c2t + PXG_DIRSZ
 .cols:
     mov [px_cols], al
     ; the fan of that many columns, off px_fantab (pxtab.inc): word columns,
@@ -420,7 +443,7 @@ px_sizes:   db 48, 56, 64, 72, 80   ; the Size row, PX_NSIZES rungs
 PX_NSIZES   equ 5
 PX_NSIZEW   equ 3                   ; ...of which a WINDOW cycles the first
                                     ; three (48, 56, 64): 72 and 80 are the
-                                    ; bracket's, the items say so (96.3)
+                                    ; bracket's, the items say so (97.3)
 
 ; -----------------------------------------------------------------------------
 ; px_band_blank - in a bracket, the 80 device rows OUTSIDE the band to black:
@@ -589,7 +612,7 @@ px_cga_pal:
 
 ; -----------------------------------------------------------------------------
 ; px_modex_pal - the DAC: 0..15 the sixteen colours as tools/pxssim.py's
-;                PALETTE, 16..31 the same at 60% for a dark face (96.4)
+;                PALETTE, 16..31 the same at 60% for a dark face (97.4)
 ; -----------------------------------------------------------------------------
 px_modex_pal:
     cld
@@ -692,7 +715,7 @@ px_c160_mode:
     ret
 
 ; -----------------------------------------------------------------------------
-; px_ink_build - the compose's tone table for [px_back] (96.4): px_inkt is a
+; px_ink_build - the compose's tone table for [px_back] (97.4): px_inkt is a
 ;                word per (material, side) - the even-row byte low, the
 ;                odd-row byte high - and px_inkc/px_inkf/px_inke the ceiling,
 ;                the floor and Wire's edge. THE RULE IS tools/pxssim.py's
@@ -728,6 +751,10 @@ px_ink_build:
     mov [px_inkdd], ax
     lodsw
     mov [px_inke], ax
+    lodsw
+    mov [px_inks], ax               ; a sprite's silhouette (97.6)
+    lodsw
+    mov [px_inkw], ax               ; the DIE wash (97.8)
     mov di, px_inkt
     mov cx, 16
 .f:
@@ -745,6 +772,8 @@ px_ink_build:
     mov word [px_inkc], 0
     mov word [px_inkf], 0x0808
     mov word [px_inke], 0x0101      ; material 1, lit
+    mov word [px_inks], 0x1818      ; a silhouette: dark grey, dark
+    mov word [px_inkw], 0x0404      ; the wash: red
     mov di, px_inkt
     xor cx, cx
 .m:
@@ -760,11 +789,13 @@ px_ink_build:
     ret
 .c160:
     mov word [px_inkc], 0
+    mov word [px_inks], 0x8888      ; a silhouette: dark grey
+    mov word [px_inkw], 0x4444      ; the wash: red
     mov word [px_inkf], 0x2222      ; green, as CGA4's floor is: dark grey
                                     ; (8) is the dark twin of the eleven
                                     ; light-grey materials, and a floor in
                                     ; it lost the corner between a dark
-                                    ; face and the ground (96.4)
+                                    ; face and the ground (97.4)
     mov di, px_inkt
     xor bx, bx
     mov cl, 4
@@ -776,7 +807,7 @@ px_ink_build:
     mov dl, [px_c160_d + bx]        ; ...and its dark, one shade down
     pop bx
     mov ah, al                      ; both nibbles: texels u and u+1 of one
-    shl ah, cl                      ; row (SPEC.md 96.4)
+    shl ah, cl                      ; row (SPEC.md 97.4)
     or al, ah
     mov ah, al
     stosw
@@ -793,18 +824,19 @@ px_ink_build:
     mov [px_inke], ax
     ret
 
-; the two-tone backends' seven words: ceiling, floor, a lit face, a dark
-; face, the door slab lit and dark, Wire's edge - each the even-row byte low
-; and the odd-row byte high (tools/pxssim.py's ink(), CGA palette 0: 1 green,
-; 2 red, 3 brown; Hercules a 2x2 dither by row parity)
-px_ink_cga4: dw 0x0000, 0x5555, 0xFFFF, 0xAAAA, 0xDDDD, 0x8888, 0xFFFF
-px_ink_herc: dw 0x0000, 0x2288, 0xFFFF, 0xAA55, 0xEEBB, 0x4411, 0xFFFF
+; the two-tone backends' nine words: ceiling, floor, a lit face, a dark
+; face, the door slab lit and dark, Wire's edge, a sprite's silhouette, the
+; DIE wash - each the even-row byte low and the odd-row byte high
+; (tools/pxssim.py's ink(), CGA palette 0: 1 green, 2 red, 3 brown; Hercules
+; a 2x2 dither by row parity)
+px_ink_cga4: dw 0x0000, 0x5555, 0xFFFF, 0xAAAA, 0xDDDD, 0x8888, 0xFFFF, 0x8888, 0xAAAA
+px_ink_herc: dw 0x0000, 0x2288, 0xFFFF, 0xAA55, 0xEEBB, 0x4411, 0xFFFF, 0x2288, 0x4411
 ; C160: a material's attribute colour, and a colour's dark twin
 px_c160_m:   db 7, 7, 7, 9, 6, 6, 4, 7, 7, 7, 7, 7, 3, 6, 14, 7
 px_c160_d:   db 8, 8, 8, 3, 8, 8, 8, 8, 8, 1, 8, 8, 8, 8, 6, 8
 
 ; -----------------------------------------------------------------------------
-; px_present - the frame onto the glass, bracket backends (SPEC.md 96.5)
+; px_present - the frame onto the glass, bracket backends (SPEC.md 97.5)
 ; in:  [px_r0]..[px_r1] the rows the compose wrote
 ; clobbers everything but DS
 ;
@@ -861,7 +893,7 @@ px_present:
 .row:
     mov di, [cs:bx]
     mov cx, ax
-    rep movsw                       ; Size bytes: the band (96.3)
+    rep movsw                       ; Size bytes: the band (97.3)
     add si, dx                      ; ...to the next row's band
     inc bx
     inc bx
@@ -892,7 +924,7 @@ px_present:
 .out:
     ret
 .flip:
-    call px_wait_begin              ; THE RETRACE IS NOT WORK (96.8): the
+    call px_wait_begin              ; THE RETRACE IS NOT WORK (97.8): the
     mov al, [px_page]               ; kernel waits for the field that latches
     call OSAPI_FSX_PAGE             ; the page (SPEC.md 53.10), and a frame
     call px_wait_end                ; timed through it reads as whole 16.7 ms

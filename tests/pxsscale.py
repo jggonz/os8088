@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""The generated part against tools/pxsgen.py, byte for byte (SPEC.md 96.3,
-96.10).
+"""The generated part against tools/pxsgen.py, byte for byte (SPEC.md 97.3,
+97.10).
 
     python3 tests/pxsscale.py [--machine os8088_5150_cga_gla] [--c160]
 
-Part 2 (the scratch, 96.9) is what px_gen_build wrote on the window's first
+Part 2 (the scratch, 97.9) is what px_gen_build wrote on the window's first
 TEXTURED frame for the window's backend (WIN1, the Hercules phase - the
 sets are built when the rung in force first wants them, px_apply, and an
 8086's window starts at Flat, so the row pins Textured before it looks)
@@ -61,9 +61,14 @@ def compare(g, label):
     bodies = bytearray(image[s["px_bodies"]:s["px_bodies"] + L["BALL"]])
     got_b = bytearray(part[:L["BALL"]])
     for q in range(4):                  # the four patched immediates a body
-        for off in (13, 17, 38, 42):    # (PXB_VFRAC/VINT/HFRAC/HINT, 96.2.1)
+        for off in (13, 17, 38, 42):    # (PXB_VFRAC/VINT/HFRAC/HINT, 97.2.1)
             for k in (0, 1):
                 bodies[q * 58 + off + k] = got_b[q * 58 + off + k] = 0
+    # ...and NOT the sprite posts' patch: the driver puts the es: prefix back
+    # before it returns (97.6's one patch site), so between frames every
+    # texel load of every scaler still begins 0x26 - which the generated-half
+    # compare below asserts byte for byte, a ret left standing being the
+    # 0xC3 that would differ
     check(got_b == bodies, "%s: the four bodies are the image's %d bytes but the "
           "eight patched ones each" % (label, L["BALL"]))
     drv = image[s["px_drv_tpl"]:s["px_drv_end"]]
@@ -71,6 +76,8 @@ def compare(g, label):
           % (label, len(drv)))
     qtex = int.from_bytes(part[L["QTEX"]:L["QTEX"] + 2], "little")
     check(qtex == g.handoff()["bt"], "%s: the driver's ES is part 3 (%04x)" % (label, qtex))
+    qspr = int.from_bytes(part[L["QSPR"]:L["QSPR"] + 2], "little")
+    check(qspr == g.handoff()["spr"], "%s: the sprite pass's ES is part 4 (%04x)" % (label, qspr))
     got = part[L["SCAL"]:]
     diff = [i for i in range(len(img)) if got[i] != img[i]]
     check(not diff, "%s: the generated half (%s) is the model's, all %d bytes (%s)"

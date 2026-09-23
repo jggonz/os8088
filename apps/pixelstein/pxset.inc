@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/pixelstein/pxset.inc
 ;
-; THE SETTINGS, KEPT (SPEC.md 96.8): the seven bytes the menus edit -
+; THE SETTINGS, KEPT (SPEC.md 97.8): the seven bytes the menus edit -
 ; Detail, Resolution, Size, Rows, the Mode item, Sound and Mouse (the last two
 ; wave 4's) - a file in SYSTEM\APPDATA, read once in the ENTRY PROC and
 ; written when a menu pick or the V key changes one.

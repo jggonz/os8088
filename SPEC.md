@@ -39845,7 +39845,7 @@ turned that refusal into the whole point of Paint's small build. A package
 that cannot reach its **driver** can say nothing at all; it is a name in a
 list that does nothing when you double-click it.
 
-Nine packages fail that test (eight, and PIXELSTEIN 3D as of §96; RECORDER
+Nine packages fail that test (eight, and PIXELSTEIN 3D as of §97; RECORDER
 was a row once and is not, below):
 
 | omitted | requirement `kern_small` cannot meet |
@@ -39854,7 +39854,7 @@ was a row once and is not, below):
 | `MODPLUG`, `TRACKER`, `AUDIO` | `SOUND.DRV`, which a 128–256KB machine has nothing to spare for — the judgement that already took `RAMDISK.DRV` and `RAMPAGE.DRV` out of the small driver set |
 | `SKIES` | a **32KB heap claim** for its frame shadow (§88), against the 17.5KB largest run a claimant can have on the floor machine once `mem_claim` has shed the purgeable caches (§50.6.2). Unlike PAINT it cannot refuse in its own words: the claim is made INSIDE the fsx bracket, after the mode is set, so what a player gets is a mode switch, a black screen and a bounce back to the desktop |
 | `SHEET` | **more RAM than the machine has**, which §24.5.2 below argues at length is a requirement and not a size. It is the one row here whose ground was PUBLISHED AND NEVER WIRED: §24.5.2 has said this since the branch that wrote it, `$(SMALLOMIT)` did not carry the name, and 36,696 bytes of spreadsheet shipped on both small apps floppies until §24.5.3's audit went looking |
-| `PXSTEIN` | **one contiguous parts claim of ~48 KB** (§96.9: part 0 is 32,861 bytes of image and bss holding two 4 KB map layouts and two 4 KB `spotvis` arrays, plus the level part and the bodies' scratch, in ONE carve — and a shadow CLAIM of 16 KB beside it, of which wave 1 composes 6.4 KB; the claim is what the arena has to fund) against a 52.5 KB arena whose largest run is 17.5–20 KB. The carve is made by the loader before the program exists, so, like SKIES, it cannot refuse in the program's words; `tests/unit/t_smallreq.py` carries the row and `tests/pxsdisk.py` reads the built floppy |
+| `PXSTEIN` | **one contiguous parts claim of ~51 KB** (§97.9: part 0 is 48,250 bytes of image and bss after wave 3 — 32,861 after wave 1 — holding two 4 KB map layouts and two 4 KB `spotvis` arrays, plus the 2.7 KB level part, in ONE carve — and a shadow CLAIM of 16 KB beside it, of which the game composes 6.4 KB; the claim is what the arena has to fund) against a 52.5 KB arena whose largest run is 17.5–20 KB. The carve is made by the loader before the program exists, so, like SKIES, it cannot refuse in the program's words; `tests/unit/t_smallreq.py` carries the row and `tests/pxsdisk.py` reads the built floppy |
 
 `RECORDER` was a fourth row of the sound group and is **not a row at all now**:
 it fails the same test and would still be omitted, but it is off the shipped
@@ -73621,7 +73621,7 @@ The back buffer is gone (§32's own opening: *"It was written for a back
 buffer, and the back buffer is gone"*), and with it `gfx_flush` and
 `[bb_dbl]` — neither symbol exists in `kernel/` — so `fsx_wait` flushes
 nothing and a same-mode renderer must not draw into a buffer expecting
-this slot to put it on the glass. Withdrawn while §96 was written, when its
+this slot to put it on the glass. Withdrawn while §97 was written, when its
 scout read the clause against the kernel and found no such routine.
 
 #### 53.5.1 `FSXW_FRAME` — the clock that does not spend the worker's machine
@@ -119527,7 +119527,7 @@ change. It is not made here because it moves every caret, hit-test and
 alignment decision in the package at once, and that is a change to look at
 rather than to infer.
 
-## 96. PIXELSTEIN 3D — a raycast shooter in a foreign mode (`apps/pixelstein/`)
+## 97. PIXELSTEIN 3D — a raycast shooter in a foreign mode (`apps/pixelstein/`)
 
 A first-person shooter in the shape of the 1992 one: a 64×64 grid of cells,
 textured walls seen through a fan of rays, doors that slide, guards and dogs
@@ -119543,31 +119543,33 @@ names or iconography; committed PNG masters; no kernel change; assembly, not
 C; the XT default rung; `games360.img` only at 360 KB).
 
 **It arrives in waves, and this section says which wave a thing belongs to.**
-What exists today is waves 0, 1 and 2: the instrument (`tests/pxsbench/`),
-the tables (`pxtab.inc`), the level tool and the first level (`pxlev.inc`,
-`levels/e1m1.txt`), the reference renderer (`tools/pxssim.py`), and **the
+What exists today is waves 0 to 3: the instrument (`tests/pxsbench/`),
+the tables (`pxtab.inc`), the level tool and three floors (`pxlev.inc`,
+`levels/e1m1..e1m3.txt`), the reference renderer (`tools/pxssim.py`), and **the
 package `PXSTEIN.O88`** — header name `'Pixelstein 3D'`, label prefix `px_`,
 loader `pxl_` (`apps/pixelstein/pxstein.asm`, the loader and the image;
-`pxgame.asm` part 0, the program) — with the cast of 96.2, the Textured,
-Flat and Wire rungs of 96.3 on every backend of 96.3's geometry, WIN1, the
-art and ink of 96.4, the Δ-fill of 96.5, the session and the settings file
-of 96.8 and the gates of 96.10. Sprites, doors that slide, the HUD, the
-states and the scores are waves 3–6's, and each subsection below says so
+`pxgame.asm` part 0, the program) — with the cast of 97.2, the Textured,
+Flat and Wire rungs of 97.3 on every backend of 97.3's geometry, WIN1, the
+art and ink of 97.4, the Δ-fill of 97.5, **the sprites and the weapon of
+97.6, the doors that slide, the guards, the keys, the pickups and the
+hitscan of 97.8 (wave 3, `pxspr.inc`, `pxact.inc`)**, the session and the
+settings file of 97.8 and the gates of 97.10. The HUD, the states, the
+scores and the dog are waves 4–6's, and each subsection below says so
 where it applies.
 
-### 96.1 The engine's numbers: fixed point, the view, the rungs
+### 97.1 The engine's numbers: fixed point, the view, the rungs
 
 | quantity | format | note |
 |---|---|---|
-| the map | 64×64 bytes, `[y<<6 \| x]`; high nibble the **material 1–15** (0 = open), low nibble the flags: bit 0 SOLID, bit 1 DOOR, bit 2 DOOR_EW (the slab runs east–west, so the corridor through it runs north–south), bit 3 SPECIAL (the elevator switch on a solid cell, a secret door on a door cell) | 4 KB **× 2** — written twice, once per walker's layout (96.2); material 15 is the jamb, never in a level (96.7) |
+| the map | 64×64 bytes, `[y<<6 \| x]`; high nibble the **material 1–15** (0 = open), low nibble the flags: bit 0 SOLID, bit 1 DOOR, bit 2 DOOR_EW (the slab runs east–west, so the corridor through it runs north–south), bit 3 SPECIAL (the elevator switch on a solid cell, a secret door on a door cell) | 4 KB **× 2** — written twice, once per walker's layout (97.2); material 15 is the jamb, never in a level (97.7) |
 | a position | Q8.8 unsigned per axis; the tile is the high byte | no shift anywhere |
 | an angle | 12 bits, 4,096 to the turn, the quadrant in the top two bits; 0 is east (+x), 1,024 south (+y, down on the map as drawn), so a growing angle is a turn to the right | `and ax, 0FFFh` |
 | `px_sin` | a quarter turn plus one — 1,025 words — in Q14; `cos(a) = sin(a + 1024)`; the fold is two tests (`pxtab.inc`'s header) | 2,050 bytes |
-| `px_tan` | the same quarter in Q8.8, **clamped at 0x7FFF (127.996)**: the DDA's two steps, and a clamped one parks its walker (96.2.3) | 2,050 bytes |
+| `px_tan` | the same quarter in Q8.8, **clamped at 0x7FFF (127.996)**: the DDA's two steps, and a clamped one parks its walker (97.2.3) | 2,050 bytes |
 | `px_fan24…40`, `px_fan48…80`, `px_fan160`, `px_fan320`, `px_fantab` | column c's angle from the heading on a flat plane 222 device pixels away — 256 px span 60° — for every column count the Size and Resolution rows offer: eight device pixels a column at 24…40 (Resolution: Low res — Size / 2 rays, so five fans for the five Sizes), four at 48…80, Mode X's two and one; `px_fantab` is the selector the Size row indexes, `PX_FAN_RUNGS` = 12 (wave 2 added the four Low-res fans beside 32) | 1,920 bytes of fans + 48 of `px_fantab` = 1,968 (the whole include assembles to 6,068); 10.7 units a column at 64 |
-| the view | **Size 64 × Rows 80 × Resolution: Low res** on the XT — the user's direction (*"rely on lower resolution full screen"*, `docs/plans/PIXELSTEIN-PLAN.md` §15, §16): **32 rays across the full 256-px view, each two shadow bytes wide, its scaler a WORD store a row** (`px_fan32`, eight device pixels a column at the same focal length), so the whole width of the picture is kept and the rays are halved. **Full** — one ray a byte — at 48, 56, 64, 72 and 80 columns is on the Size and Resolution rows (wave 2's View row and V key, 96.3), **offered and reported, never promised** (the table below carries every one with its honest phase charge). The shadow is 80 rows of an 80-byte stride, **the band Size bytes wide at either resolution, centred in the row** (96.3) | 6,400 bytes of a 16 KB claim |
-| height | `h = PX_HEIGHTK / nx`, one `div` a column; `PX_HEIGHTK` = 51,200 puts a wall's full height at 2.5 tiles, which is square on CGA 320×200 (D — a **look** constant; 96.4 revisits it per backend with `--preview`); `nx` clamped at `PX_MINDIST` 23 (0.09 tiles); the tallest scaler is 1.5 × the view, 120 rows | |
-| `spotvis` | **a generation byte per cell, written by every crossing** (`mov [si + 4096], al`), tested by the sprite candidate walk against the frame's generation. **Generation 0 is reserved for "never crossed"** — the arrays are zero at load and the counter runs 1…255 — and **both arrays are cleared when it wraps**, two `rep stosw` of 2,048 words each (~85,000 clk once every 255 frames — a `rep` store is not a compiled store — ~0.06% of the frame amortised). The failure a clear-less design has is a **false positive, never a false negative**: a cell marked *g* and not crossed since compares EQUAL when *g* comes round, so a sprite in a cell no ray entered becomes a candidate — a transform spent for nothing at best, a post from an unseen cell with only the `wallh` z-test between it and the glass at worst — and with 0 in use every never-visited cell would match it for a frame | two 4 KB arrays, one per map layout (96.2) |
+| the view | **Size 64 × Rows 80 × Resolution: Low res** on the XT — the user's direction (*"rely on lower resolution full screen"*, `docs/plans/PIXELSTEIN-PLAN.md` §15, §16 — **32 rays across the full 256-px view, each two shadow bytes wide, its scaler a WORD store a row**, `px_fan32`, eight device pixels a column at the same focal length, the whole width kept and the rays halved), with the plan's rule that a finished frame under 8.0 on scene A moves it to 48 × 80 Low res — the fork below: wave 3's first cut moved it to 48 on scene C, which the plan did not pin, and the review put 64 back and measured the trigger on the plan's own pose, where it FIRES (6.98 finished with three guards in the corridor) — **so the default stands at the user's width until the user reads that number** (question 1 of wave 3's r2 report). Size 48 Low res is **24 rays across a 192-px band centred in the view** (`px_fan24`, the same eight device pixels a column); 64 is one V press away and every table below carries both. **Full** — one ray a byte — at 48, 56, 64, 72 and 80 columns is on the Size and Resolution rows (wave 2's View row and V key, 97.3), **offered and reported, never promised** (the table below carries every one with its honest phase charge). The shadow is 80 rows of an 80-byte stride, **the band Size bytes wide at either resolution, centred in the row** (97.3) | 6,400 bytes of a 16 KB claim |
+| height | `h = PX_HEIGHTK / nx`, one `div` a column; `PX_HEIGHTK` = 51,200 puts a wall's full height at 2.5 tiles, which is square on CGA 320×200 (D — a **look** constant; 97.4 revisits it per backend with `--preview`); `nx` clamped at `PX_MINDIST` 23 (0.09 tiles); the tallest scaler is 1.5 × the view, 120 rows | |
+| `spotvis` | **a generation byte per cell, written by every crossing** (`mov [si + 4096], al`), tested by the sprite candidate walk against the frame's generation. **Generation 0 is reserved for "never crossed"** — the arrays are zero at load and the counter runs 1…255 — and **both arrays are cleared when it wraps**, two `rep stosw` of 2,048 words each (~85,000 clk once every 255 frames — a `rep` store is not a compiled store — ~0.06% of the frame amortised). The failure a clear-less design has is a **false positive, never a false negative**: a cell marked *g* and not crossed since compares EQUAL when *g* comes round, so a sprite in a cell no ray entered becomes a candidate — a transform spent for nothing at best, a post from an unseen cell with only the `wallh` z-test between it and the glass at worst — and with 0 in use every never-visited cell would match it for a frame | two 4 KB arrays, one per map layout (97.2) |
 
 No `mul`, `div` or `shl reg, cl` in any per-pixel loop; the column's one `div`
 and its four multiplies are per column.
@@ -119583,18 +119585,18 @@ and its four multiplies are per column.
 | the Low-res set's WORD store `mov [di + r*80], ax`, RAM / framebuffer | ~29 | **28.3** / 40.7 | 28.3 / 40.0 | 28.3 / (29.1) |
 | the static ladder's row, entered at an index — **24.1 a STORE + 112 the entry**, derived from the two measured rows (80 × 25.5 = 2,040; 40 × 26.9 = 1,076): 25.5 is the 80-row reading with the entry amortised in it, and a frame that charged 25.5 a store *and* the entry counted the entry twice | ~27 | **25.5** (80 rows) / 26.9 (40) | 25.5 / 26.9 | 25.5 / 26.9 |
 | a texel `mov al, [es:si + v]` + the store (+ an `xlat`) | 48 | **46.0** (+9.3) | 46.0 | 46.0 |
-| …with the odd-row dither phase turned **as the 1992 engine turns it** (96.3): `ror al, 1` × 2 on CGA 320×200×4 (one 2-bit pixel) | 17.4 (2 × 8.7) | **+18.0** a texel | +18.0 | +18.0 |
+| …with the odd-row dither phase turned **as the 1992 engine turns it** (97.3): `ror al, 1` × 2 on CGA 320×200×4 (one 2-bit pixel) | 17.4 (2 × 8.7) | **+18.0** a texel | +18.0 | +18.0 |
 | …one `ror al, cl` with CL = 3, the Hercules / WIN1 form (three bits, one instruction); **none on C160 or Mode X**, whose colours are solid | 20 (8 + 4 × 3) | **+15.2** a texel | +15.2 | +15.2 |
-| …the DUAL-PHASE word load `mov ax, [es:si + 2v]` instead — AL the even rows' byte, AH the odd rows', no rotate: **the named fallback** (96.3), part 3 doubled | — | **+4.8** a texel | +4.8 | +4.8 |
+| …the DUAL-PHASE word load `mov ax, [es:si + 2v]` instead — AL the even rows' byte, AH the odd rows', no rotate: **the named fallback** (97.3), part 3 doubled | — | **+4.8** a texel | +4.8 | +4.8 |
 | the Low-res scaler's row: the load, `mov ah, al`, the WORD store (one texel to the column's two bytes) | — | **59.5** a texel, of which the `mov ah, al` is **9.6** | 59.5 | 59.5 |
-| a DDA crossing, the patched body of 96.2.2 — the bench's two rows are CAST on the host through `tools/pxssim.py` and asserted at exactly 10 and 20 crossings before the difference is divided | 130 (anchor 155) | **128.2** | 128.2 | 128.2 |
-| **the column's setup, 96.2.1 whole** — the angle off the fan, the quadrant dispatch, the two `px_tan` reads, four patches, two `mul`, the pointers and keys — NET of the bench's own scaffolding (89 clk, measured as a row of its own) | 516 | **1,094** | 1,093 | 1,094 |
-| **the hit, 96.2.5 whole** — the hit point off the walker's pointer, `u`, the jamb test, `nx` by two `MUL14`, the clamp, the `div`, `px_sctab[h]`, top and bot, seven column-array stores — net of the same scaffold; the mirror of `u` is the quadrant's and costs no test | 630 (the plan's; **~800 is the FLOOR** its own two multiplies, divide and seven stores add to, and what the micro-options of §13 can approach) | **1,294.5** | 1,294.5 | 1,294.3 |
+| a DDA crossing, the patched body of 97.2.2 — the bench's two rows are CAST on the host through `tools/pxssim.py` and asserted at exactly 10 and 20 crossings before the difference is divided | 130 (anchor 155) | **128.2** | 128.2 | 128.2 |
+| **the column's setup, 97.2.1 whole** — the angle off the fan, the quadrant dispatch, the two `px_tan` reads, four patches, two `mul`, the pointers and keys — NET of the bench's own scaffolding (89 clk, measured as a row of its own) | 516 | **1,094** | 1,093 | 1,094 |
+| **the hit, 97.2.5 whole** — the hit point off the walker's pointer, `u`, the jamb test, `nx` by two `MUL14`, the clamp, the `div`, `px_sctab[h]`, top and bot, seven column-array stores — net of the same scaffold; the mirror of `u` is the quadrant's and costs no test | 630 (the plan's; **~800 is the FLOOR** its own two multiplies, divide and seven stores add to, and what the micro-options of §13 can approach) | **1,294.5** | 1,294.5 | 1,294.3 |
 | a span copy, `rep movsw` to the framebuffer | 18.6 clk/B | **19.4** | 19.3 | 14.4 |
 | the C160 expand (§88.15), 3,840 B / a store at the attribute stride | 48 clk/B | **43.3** / 29.9 | n/a | n/a |
 | `OSAPI_KEY_DOWN` | ~232 µs | **113 µs** | 113 | 113 |
 | `OSAPI_GFX_BLIT1`, 512 × 80 on the desktop | 20.4 ms | **24.7 ms** | 24.5 | (19.2) |
-| **one tick of the simulation** (96.8; the bench's rows (j): the player's step with per-axis collision, a state dispatch, the distance, a timer, a step with two leading-edge cells an axis for the movers, a line-of-sight walk in the 1992 engine's `CheckLine` shape — a slope divide an axis, a tile a step, ≤ 32 — for the chasers and the marked standers, the doors' timers and slides), **at E1M1's own counts** — 7 actors, 22 doors, 4 movers, 4 walks | 6.8 ms (DOT DELIRIUM's five dots) | **4.60 ms** = 21,975 clk | 4.60 | 4.60 |
+| **one tick of the simulation** (97.8; the bench's rows (j): the player's step with per-axis collision, a state dispatch, the distance, a timer, a step with two leading-edge cells an axis for the movers, a line-of-sight walk in the 1992 engine's `CheckLine` shape — a slope divide an axis, a tile a step, ≤ 32 — for the chasers and the marked standers, the doors' timers and slides), **at E1M1's own counts** — 7 actors, 22 doors, 4 movers, 4 walks | 6.8 ms (DOT DELIRIUM's five dots) | **4.60 ms** = 21,975 clk | 4.60 | 4.60 |
 | …the same tick **at the plan's caps** — 32 actors, 64 doors, 16 movers, 12 walks: the worst tick a level can cost, not a scene | — | **16.98 ms** = 81,039 clk | 16.98 | 16.98 |
 | one scaler-set generation (43 scalers, 16,579 B) — **an upper bound**: the bench emits a load and a store a ROW, the shipped generator shares a load across the rows of one texel run, so over the same 43 heights its set is **12,855 D** (4 × 1,136 loads + 4 × 2,067 stores + 43 returns), 22% smaller, and the phase instructions add 4 bytes a texel run on CGA4 and 2 on the 1bpp backends (≤ 4.5 KB). The dual-phase word load is the same four bytes as the byte load | ~150 ms | **130 ms** | 137 | 137 |
 | one `bt_build` transpose, 30,720 texels, both nibbles a master load — **a floor**: the bench keeps the masters and the output in ONE claim through `ES` with the ink table in `DS` for `xlat`; the package reads the art claim and writes part 3, two segments, and banks one of them per column pair. Wave 2's `pxsperf.py` measures the real one | ~300 ms | **604 ms** (94 clk a texel) | 604 | 604 |
@@ -119613,15 +119615,23 @@ was run for — the Mode X bracket's device-row table, the planar mask, the
 mode set — and its RAM rows agree with the 5150's to 0.1 clk.
 
 **The first Textured frame pays the transpose and BOTH resolution sets'
-generation**: 604 ms (a floor) + 2 × 130–137 ms ≈ **0.9 s** — behind the
+generation**: 604 ms (a floor) + 2 × 130–137 ms ≈ **0.9 s** as priced — and
+**measured at a bracket's entry on the 5150 by wave 3** (breakpoints on
+`px_gen_build`, `px_bt_build`, `px_spr_build`, `px_tex_caption` and
+`px_frame_end`): **the two sets with their codeofs tables 1,045 ms, the
+wall transpose 615 ms, the sprite set 1,741 ms** (97.6: 40 frames
+transposed column-major with a run table a column; 4,272 ms before its
+alpha walk was rewritten), the first frame 189 ms — **3.6 s from the F
+key to the picture**, of which the sprite set is the half a host-side run
+table would take off (97.11) — behind the
 black of a mode set in a bracket, on the worker's own time in a window
 (the UI task stays live), and never at all for a rung that has no use for
 them: the sets are built by `px_apply` when the rung in force is Textured
-(96.3), so the 8086's window, which starts at Flat Full, launches without
+(97.3), so the 8086's window, which starts at Flat Full, launches without
 it, and the first cut's 0.9 s of unresponsive UI between `OSAPI_WM_CREATE`
 and the menus is gone (a 286's window starts at Textured Full and pays
 ~0.3 s at entry). The F toggle and a Mode change pay the same again when
-the backend's class differs, because the set is the backend's (96.3). If
+the backend's class differs, because the set is the backend's (97.3). If
 that is too long the change is to the byte-texture set (transposed at
 build time into the art part), not to the loop.
 
@@ -119633,7 +119643,7 @@ IS ~5 clk — Mode X's whole "penalty" was the prefix (25.2 against 24.3 once
 `DS` = the destination), and CGA 320×200's true figure is 30.1, the plan's
 D of 31. **The column setup's first figure (969) carried the bench's
 scaffolding and omitted the angle, the quadrant and the tangent reads**; the
-1,094 above is the whole of 96.2.1 and nothing else — 2.1× the plan's 516.
+1,094 above is the whole of 97.2.1 and nothing else — 2.1× the plan's 516.
 And **the hit was a bare D of 630 through two takes of this table** — a
 round number, not a derivation — while its two multiplies and its divide
 alone are ~500 and its seven stores ~170; measured whole it is **1,294.5,
@@ -119654,7 +119664,7 @@ driver loads them from the words it computed once a frame.
 
 **The frame, re-derived on those units — and CONVERGED** (every line
 below is `tools/pxsframe.py`'s output; `docs/reports/PXS-FRAME-2026-09-13.md`
-carries every stage). `tk_steps` (96.8) returns ELAPSED TICKS capped at 3,
+carries every stage). `tk_steps` (97.8) returns ELAPSED TICKS capped at 3,
 so the simulation is not a constant a frame: **steps a frame = frame ÷
 54.925 ms, capped at 3**, and the frame is the fixed point `F = N + s × F /
 T` = `N / (1 − s / T)` with `s` one tick of the simulation and `T` the tick.
@@ -119674,7 +119684,7 @@ copies is Size bytes wide at either resolution and the Δ-fill is Size/64 of
 the count** (the third take charged a 48-column view the whole 64-byte
 band). The dither phase is charged per backend **as the 1992 engine turns
 it**: +18.0 a texel on CGA4 (two `ror al, 1`), +15.2 on Hercules and WIN1
-(one `ror al, cl`), nothing on C160 and Mode X — the arm 96.3 takes — with
+(one `ror al, cl`), nothing on C160 and Mode X — the arm 97.3 takes — with
 the dual-phase word load (+4.8, part 3 doubled) beside it as the fallback.
 
 **The XT default — Size 64 × Rows 80 × Resolution: Low res, 32 rays** (the
@@ -119738,7 +119748,7 @@ forced — the frame a player sees; nothing of what the table charges for
 sprites, the weapon, the HUD or the sim tick is drawn yet). Fullscreen on
 `os8088_5150_cga_gla`, **Flat Low res — the default — 11.32 fps on scene A
 and 11.62 on B on the full repaint** (88.3 / 86.1 ms; **14.63 / 14.60
-turning, 68.3 / 68.5 ms** after 96.5's two-ends arm — 14.21 / 14.01, 70.4
+turning, 68.3 / 68.5 ms** after 97.5's two-ends arm — 14.21 / 14.01, 70.4
 / 71.4 before it, the full repaint 0.3 ms dearer for the arm's compares),
 against the promise of ≥ 8.0 / ≥ 7.0, which is
 asserted on the full repaint; the Hercules box reads the same to 0.1 ms on
@@ -119754,16 +119764,16 @@ line and measures before it believes. **Wire Low res 9.25 / 9.43 full,
 / 104.4 full, 76.4 / 78.1 turning) — dearer than Flat Low res on both
 frames and both scenes, and the stage split says where: the cast and the
 present are identical between the two rungs (the same 32 rays, the same
-80-row band — 96.5), and Wire's COMPOSE is the dearer one — not for what
+80-row band — 97.5), and Wire's COMPOSE is the dearer one — not for what
 it draws (counted, its entries and stores are the cheaper half) but for
 the bookkeeping around them, `px_wrun`, `px_ground` and the neighbour
-test (96.8 has the measured split and the counts); that is why it is off
-Auto's ladder today (96.8), a decision contingent on that routine's cost.
+test (97.8 has the measured split and the counts); that is why it is off
+Auto's ladder today (97.8), a decision contingent on that routine's cost.
 *The first take of this paragraph read 14.30 / 13.69 with `px_force` alone
 poked and called it a full repaint; that frame wrote every wall and no
 ceiling or floor, and is the turn frame to 0.4 ms — the promise's margin
 moved, the machine did not. Its second take measured scene B one tile
-north of where 96.10 now pins it, and the Wire rung before 96.5's skip;
+north of where 97.10 now pins it, and the Wire rung before 97.5's skip;
 every figure here is the final run's, `docs/reports/PXS-FRAME-2026-09-14.md`.*
 **The stages, measured** (`--stages`: five breakpoints, cast / compose /
 present / loop): the cast costs **4,830 clk a ray** on scene A against the
@@ -119786,7 +119796,7 @@ above and in the report). So the fork below
 stands where it stood, with 0.6 fps in hand on scene A instead of 1.4:
 wave 2 measures it. The other machines are in the report (Mode X on the
 XT-VGA quantised to its retrace — 67.0 ms delivered at the default over a
-draw of 64.5 / 62.2 ms of WORK, 96.8 — windowed on the Hercules desktop as
+draw of 64.5 / 62.2 ms of WORK, 97.8 — windowed on the Hercules desktop as
 PLAN 15's reported number — 10.21 / 10.45 full at the default, Auto
 starting there at Flat Low res — the C160 retime on a genuine CGA, 8.80 /
 8.98).
@@ -119801,7 +119811,7 @@ turn frame, the promise asserted on the full repaint; the figures are the
 second fix round's, taken after the compose's column base, the present's
 row loop, the skip's sixth byte, the one-row ends and the column prologue
 were put right — the first table's 48 × 80 rows were measured on a picture
-drawn beside where it was shown, 96.3). Fullscreen on
+drawn beside where it was shown, 97.3). Fullscreen on
 `os8088_5150_cga_gla`, **Textured Low res 64 × 80 — the default — reads
 98.7 ms = 10.13 fps on scene A and 99.4 ms = 10.06 on B on the full
 repaint** (draw 97.0 / 97.7 ms; **88.0 / 87.3 ms = 11.36 / 11.45
@@ -119849,7 +119859,7 @@ a phase and two `mov ah, al` per run, the residual `FLAT_RESID` ~470 low
 14–21%" against a frame drawing neither sprites nor sim (review, wave 2,
 twice). **Textured Full 64 × 80, reported and never promised: 163.4 /
 162.5 ms = 6.12 / 6.15 on the full repaint, 143.0 / 143.2 = 6.99 / 6.98
-turning** — it sits on the sim cap's line as 96.1 said Full would. The
+turning** — it sits on the sim cap's line as 97.1 said Full would. The
 static rungs held where wave 1 left them, less the present's 1.2 ms (Flat
 Low res 11.23 / 11.52 full, 14.50 / 14.53 turning; Flat Full 6.78 / 7.00;
 Wire Low res 9.23 / 9.41), so the Textured default costs **9.6 ms a frame
@@ -119866,17 +119876,17 @@ width and the row advance from memory on every row (the review's find:
 five `cs:`-prefixed loads, 97 clk a row); **a row that reads ~105,250
 caught the timer tick inside the stage** (`tests/pxsperf.py` reads the
 default's scene A present as a median of 105,286 over a minimum of 99,247
-— the same 5,120 bytes, 6,007 apart, the tick's own ~6,000; 96.5), which
+— the same 5,120 bytes, 6,007 apart, the tick's own ~6,000; 97.5), which
 the first take of this sentence recorded as "the CGA's own wait states at
 the scan phase". The Textured compose over Flat's is **+43,400 clk on the
 full repaint at Low res (+1,356 a column: 32 rows of word store, load and
 phase per column against the ladder's, plus the queue entry and the
 driver's near call) and +75,000 turning** (Flat's two-ends arm has no
-Textured twin — a wall whose height moved is redrawn whole, 96.3 — but a
+Textured twin — a wall whose height moved is redrawn whole, 97.3 — but a
 one-row end takes `px_pix` rather than a ladder entry, the modal end of a
 turn under Textured since the generated heights step by 2; the second
 review's find, ~10,700 clk off the turn frame's compose). Every row
-presented 80 rows, as 96.5's model says. `tests/pxssim.py` read **0 / 0** with textures on
+presented 80 rows, as 97.5's model says. `tests/pxssim.py` read **0 / 0** with textures on
 both scenes, both resolutions, every Size, windowed and in the bracket,
 after three turn frames and three forward steps (753 checks on the CGA
 5150, the same on the Hercules); `tests/pxsscale.py` read **0 differing
@@ -119904,6 +119914,60 @@ starts an 8086's window at Flat Full, 160.7 / 156.1 full — PLAN §15's
 reported number), and on the XT-VGA desktop (`--windowed`, D for its
 blit) 103.4 / 103.7 = 9.67 / 9.65 full, 92.9 / 92.3 turning.
 
+**Wave 3 measured the FINISHED frame** (`tests/pixelstein.py`'s third
+mode, `"sim"`: a full repaint at every stop with the world's simulation
+RUNNING — the doors' and guards' ticks, the keys, the pickups — the
+player invulnerable (`px_god`), the weapon drawn and the sprites of the
+pose posted, THE POSE PUT BACK AT EVERY STOP and the candidate count
+asserted; `docs/reports/PXS-FRAME-2026-09-22.md`, the same method as the
+two waves before it), **and the fork is the user's to take.** The first
+cut read the trigger on scene C (97.10: E1M1's brick room, a guard, a
+pickup and a barrel over textured walls — the plan's scene-A sprite
+COUNT on a pose the level holds) and moved the default to 48 × 80; the
+review (r1) found that C is not the pinned scene, that its miss is its
+WALLS' (its sprite-free gate frame reads 7.91 at 64 × 80), that the
+64 × 80 number it quoted was read with two sprites of the three (the
+guard had walked out of the view: the sim was running and nothing put
+it back), and that the user's direction was the width — so 64 × 80 is
+the default again and the trigger is measured on THE PLAN'S OWN POSE,
+"A3": scene A with three guards standing in the corridor two, four and
+six tiles ahead (PLAN §3's table, 1,800 sprite stores). **At the default,
+fullscreen on `os8088_5150_cga_gla`, review r2's binary: the gate's
+frame (walls, ground, weapon, no sim) A 110.1 ms = 9.09 fps, B 111.6 =
+8.96, C 126.4 = 7.91** (99.5 / 99.0 / 105.8 = 10.05 / 10.11 / 9.45
+turning), **the FINISHED frame A 113.7 = 8.79, B 115.2 = 8.68, C 132.6 =
+7.54 — and A3 143.3 = 6.98, UNDER the 8.0 line the plan's rule names.**
+The promise (8.0 / 7.0 on A / B, gated on the full repaint and on the
+finished frame) holds with 0.79 / 1.68 fps in hand; the trigger fires on
+the frame the plan priced. The 48 × 80 Low res rung, one V press away,
+reads 86.7 / 87.5 / 103.1 = 11.54 / 11.43 / 9.70 on the gate's frame and
+90.3 / 91.1 / 108.0 = 11.08 / 10.97 / 9.26 finished, **A3 118.2 = 8.46**;
+Flat Low res 64 × 80 99.8 / 98.4 = 10.02 / 10.16 full (12.20 / 12.64
+turning), 9.66 / 9.80 / 8.35 / 7.80 finished; Flat Low res 48 12.75 /
+13.16; Textured Full 64 × 80 5.67 / 5.66 (6.40 / 6.41 turning); Flat Full
+64 6.29 / 6.42, 48 8.06 / 8.42; Wire Low res 8.38 / 8.46. What the two
+defaults are, then, on this machine: **64 × 80 is 8.8 with the corridor
+empty and 7.0 with three guards in it; 48 × 80 is 11.1 and 8.5, at
+three quarters of the width** — and which of those the player should
+see first is the question the r2 report returns. **The two guards at
+melee** of `tests/pxsact.py` (a tile and two tiles ahead, 25 posts
+queued, THE SIM RUNNING) read **149.0 ms = 6.71 fps** at 64 × 80 (the
+plan's "~6 before the cap", measured; 126.6 = 7.90 at 48), and **seven
+chasers** cost scene A's finished frame 19.9 ms at 64 × 80 (97.8: a
+frame of 2.4 ticks runs the sim's tick two or three times, the LOS
+walks and, since r1, `px_act_dirty`'s nine probes in each). The stages
+at the default (`--stages`, scene A): cast 33.6 ms (5,004 a ray; 5,429
+at 48 — the reviewer's "~5,200 at both Sizes", where the first cut had
+booked the gather as cast and read 7,251 against 6,559), **the gather
+4.7 ms (22,634 clk; 9.2 ms before r1 inlined its probes)**, compose 47.7
+ms (7,113 a column: the walls' 6,200, the sprite posts, the weapon's
+sixteen and the second far call), present 22.1, loop 1.9, prologue 0.2.
+The other machines are in the report: the Hercules box, Mode X on the
+XT-VGA (a correctness machine), windowed on the Hercules desktop (PLAN
+15's reported number) and the C160 retime. **What a bracket costs to
+enter** is measured above (3.6 s), and 97.6 says what the sprite set's
+share is.
+
 **The detail ladder** (`docs/plans/PIXELSTEIN-PLAN.md` §14, §16): rungs 0
 Wire (edges only — the wall's top and bottom pixel a column, a vertical run
 where the height changes; the rung a refused part falls to and the one the
@@ -119913,18 +119977,18 @@ Resolution axis beside it, **Full or Low res**. **Auto** picks the rung from
 `OSAPI_CPU_INFO`'s tier — **8086: Textured Low res**, the default above —
 and steps DOWN one position — Textured Full → Textured Low res → Flat Full
 → Flat Low res, **and stops there: Wire is a pinnable Detail item and not
-a rung Auto reaches** (96.8 carries the measurement — its turning draw is
+a rung Auto reaches** (97.8 carries the measurement — its turning draw is
 76.5 ms against Flat Low res's 66.7, its full repaint 106.4 against 87.0)
 — when eight consecutive frames miss the rung's budget, back UP after 64
-under HALF of it (96.8), announced once on the window's text line — and
+under HALF of it (97.8), announced once on the window's text line — and
 **silent in a bracket until wave 4's HUD band carries it**, because a
-bracket has no glyph writer before then (96.8); the pinned rung
+bracket has no glyph writer before then (97.8); the pinned rung
 and resolution persist in `PXSTEIN.CFG`. In wave 1 an 8086 starts at Flat
-Low res in a window as in a bracket — the floor (96.8). Wave 1 builds
+Low res in a window as in a bracket — the floor (97.8). Wave 1 builds
 rungs 0 and 1, the selector and the Resolution row for the static ladders; `tools/pxssim.py --rung wire` renders
 rung 0 and `--cols 32` — its default — the Low-res view.
 
-### 96.2 The trace — two pointer walkers, patched immediates
+### 97.2 The trace — two pointer walkers, patched immediates
 
 A ray from the eye at `a = heading + px_fan[c]` is walked to its wall by
 two walkers, one per family of grid line, each a **pointer into a map laid
@@ -119952,7 +120016,7 @@ same cell twice, and that is what the machine does.
 
 **Two maps, four arrays.** The V walker's layout is the H walker's transposed,
 so the level loader writes the map twice (16 KB with the two `spotvis`
-arrays: 96.9), and the sprite candidate walk reads a cell's generation from
+arrays: 97.9), and the sprite candidate walk reads a cell's generation from
 whichever array the walker that entered it marked — two compares a
 candidate. The 8 KB a single layout would cost was priced against this and
 lost: a single-layout V walker needs its row stepped by 64 × the tangent's
@@ -119960,7 +120024,7 @@ integer part *and* by 64 on the fraction's carry, which no `adc` does, and
 the six-shift `xspot` recomputation the 1992 engine does instead is 52 of the
 crossing's clocks.
 
-#### 96.2.1 The column setup
+#### 97.2.1 The column setup
 
 Per column: the angle's quadrant from its top two bits, `i = a & 1023`; the
 two steps off `px_tan` — `|tan| = tan[i]` and `|cot| = tan[1024 − i]` in the
@@ -119977,7 +120041,7 @@ macro instantiated four times in the image, 58 bytes each and byte-for-byte
 the same layout, so the four patch offsets are constants (`PXB_VFRAC` 13,
 `PXB_VINT` 17, `PXB_HFRAC` 38, `PXB_HINT` 42, asserted against body 0's
 own labels). At entry `px_gen_init` copies the four into the scratch part
-(96.9's part 2, `OP_SEG, OP_ZERO | OP_OPT`) when the loader got it, and
+(97.9's part 2, `OP_SEG, OP_ZERO | OP_OPT`) when the loader got it, and
 runs them in the image when it did not — one implementation with two homes,
 which is what "the generic body as the image-side fallback" came to: the
 copy IS the generation in this wave, and wave 2's generator writes the
@@ -119989,14 +120053,14 @@ the body's base — and it ends in `retf` with **CF = the side** (clear: the V
 walker hit, `SI`/`DX` live; set: the H walker, `DI`/`BX` live), which is the
 one answer a body has that costs no memory operand. Two more pairs,
 `px_qcurv` / `px_qcurh`, name the V and H pass TAILS of this column's body
-(the mark and the step, offsets `PXB_VPASS` 7 and `PXB_HPASS` 32): 96.2.4's
+(the mark and the step, offsets `PXB_VPASS` 7 and `PXB_HPASS` 32): 97.2.4's
 door pass-through re-enters there and the walk carries on to its next hit.
 The far call and its `retf` are ~90 clk a column on the 8088 (the ~50 the
 first cut of this sentence charged was the call alone), ~5,800 a frame at
 Full 64, paid again for every pass-through re-entry, and go when the driver
 moves in beside the bodies.
 
-#### 96.2.2 The body
+#### 97.2.2 The body
 
 This is the body `tests/pxsbench/pxsbench.asm` measures, quadrant 0
 (dx > 0, dy > 0), instruction for instruction — 25 bytes a V pass, 25 an H
@@ -120035,12 +120099,12 @@ unconditionally, an H that is not first jumps to V. `tools/pxssim.py`'s
 walker is this control flow in Python and `tools/pxslevel.py`'s sweep runs it
 over every open cell. Budget **≤ 130 clk a crossing (D; 155 the pessimistic
 anchor, 159 TANK's measured line walk the ceiling)**; the bench's two DDA
-rows differ by ten crossings and their difference is the M figure in 96.1 —
+rows differ by ten crossings and their difference is the M figure in 97.1 —
 and "ten" is not a hand derivation: `tests/pxsbench.py` casts the bench's
 own two rays through `tools/pxssim.py`'s walker on the bench's own map and
 asserts 10 and 20 before it divides.
 
-#### 96.2.3 Parking, the clamp, and the pointer's headroom
+#### 97.2.3 Parking, the clamp, and the pointer's headroom
 
 A walker whose step is clamped (`px_tan` = 0x7FFF: tan > 127.996, within
 0.44° of the other axis) crosses no line of its family inside a 64-tile map
@@ -120055,7 +120119,7 @@ crossings the solid border bounds it to whichever way its 64-a-pass key
 movement runs, and `pxgame.asm` asserts the four arrays lie inside that
 band (which is also the "256 bytes from either end" below, asserted at
 last). Both parked cannot happen with the eye in tiles 1..62, which
-96.7's spawn check and the collision radius keep it in: neither tangent
+97.7's spawn check and the collision radius keep it in: neither tangent
 clamped means both ≥ 1 for both intercepts to leave the map, i.e. a 45°
 ray from a border tile. *Wave 1's first cut relied on the parked POINTER
 alone* — "a parked walker is never entered, because the border is solid
@@ -120082,16 +120146,32 @@ least 256 bytes from either end of their segment. `tests/pxsbench/` puts them
 at offset 512 of its claim; wave 1 asserts the same of wherever the package
 puts them.
 
-#### 96.2.4 Doors in the walk
+#### 97.2.4 Doors in the walk
 
 A door is a slab across the middle of its cell, and the walker that entered
 the cell tests it: a V pass on a door whose slab runs north–south
 (DOOR_EW clear) half-steps its intercept — `y + tan/2` in Q8.8 — and hits the
-slab if that y is still inside the cell, with `u` = that fraction (less
-`doorpos` once doors slide, wave 3: a fraction under `doorpos` passes
-through); otherwise the ray left the cell before the slab, into the jamb the
-other walker will find, and the walk resumes at the mark. An H pass handles
-DOOR_EW the same way with x. A walker meeting a door of the other
+slab if that y is still inside the cell, with `u` = that fraction **less
+the door's position** (wave 3, `PXD_POS`, 0..256: how far the slab's
+leading edge has slid along its own axis; a fraction UNDER it is the gap
+and the ray passes through, re-entering the walker at its pass tail as a
+door of the other orientation does; a fraction at or past it strikes the
+door and reads the texture from the edge, `u − pos` before the mirror —
+`tools/pxssim.py`'s `doorpos`, the same arithmetic — **and the hit point
+stays on the slab**: the slab's coordinate is banked BEFORE the position
+comes off the fraction, because the fraction is that coordinate's low
+byte (the first cut subtracted first and stored the word after, so a
+half-open door's hit slid along the slab by its position and the
+distance, `wallh` and the sprite z-test with it — a height of 80 against
+the host's 79 at E1M1's door poked to 64; `tests/pxssim.py`'s door sweep
+holds the three positions now, review, wave 3); otherwise the ray left
+the cell before the slab, into the jamb the other walker will find, and the
+walk resumes at the mark. An H pass handles DOOR_EW the same way with x.
+The lookup from the cell to its door is `px_door_of` (97.7's row table: the
+doors of the cell's map row, a few compares), spent only on the columns
+that strike a door; the V walker's `mapT` index is turned back into a plain
+cell first (`px_cellT2P`, a swap of two six-bit fields). A DOOR cell the
+level did not list — a floppy's byte — reads as shut. A walker meeting a door of the other
 orientation treats it as solid, which `pxslevel.py` makes unreachable: a door
 sits in a wall, solid on exactly one axis, so a ray can only enter it from
 the corridor. **The jamb is decided at hit time, not authored**
@@ -120107,14 +120187,14 @@ the door keeps its own material.
 a body returns on any cell with SOLID or DOOR set, and the hit code sorts
 the cases in the sim's order — a DOOR of this walker's orientation takes
 the slab test and either hits it or re-enters the body at the pass tail
-(96.2.1's `px_qcurv` / `px_qcurh`)
+(97.2.1's `px_qcurv` / `px_qcurh`)
 and the walk carries on; a cell with SOLID set is a solid hit; a DOOR of the
 other orientation with SOLID clear is passed through the same way, which is
 the byte the sim reads and the case `pxslevel.py` makes unreachable. The
 slab test wants the walker's own step, so the column setup banks `|tan|`
 and `|cot|` in two words beside the patches.
 
-#### 96.2.5 The hit
+#### 97.2.5 The hit
 
 `nx` = the perpendicular distance, `dx·cos(h) + dy·sin(h)` through
 `MUL14` (apps/tank/tk3d.inc's shift-left-two of the 32-bit product), clamped
@@ -120125,7 +120205,7 @@ wherever it is seen; side = V lit, H dark. The outputs are the column arrays
 `wallh[c]` (the sprite z-buffer, unclipped), `top[c]`/`bot[c]` (the drawn
 rows: `(80 − h) >> 1` and `top + h − 1`, or 0..79 past the view), `u[c]`,
 `mat[c]`, `side[c]`, and the scaler entry `px_sctab[h]`. **Measured whole
-at 1,294.5 clk** (96.1's table; `tests/pxsbench/pxsbench.asm`'s `pb_b_hit`
+at 1,294.5 clk** (97.1's table; `tests/pxsbench/pxsbench.asm`'s `pb_b_hit`
 is the V side of quadrant 0 instruction for instruction, the mirror of `u`
 being the quadrant's and so no test) against the 630 two takes of the
 frame table carried as a bare D — a figure below the **~800 floor** its own
@@ -120136,19 +120216,19 @@ straight-line code. The `px_h[]` reciprocal table and the `1/cos` table
 comes down, ~10,000 clk a frame each at 64 columns, toward that floor and
 not below it.
 
-### 96.3 The scalers, the static ladders, and the one stride
+### 97.3 The scalers, the static ladders, and the one stride
 
 **Every byte backend's shadow is 80 bytes a row, a column is one byte a
 row at Full resolution and two at Low res, and the picture is centred in
 the row** — CGA 320×200×4 packs four 2-bit pixels in a byte, Hercules eight
 bits of a 640-wide box, Mode X writes it through map mask 0Fh to four
 planes, the C160 text mode holds the attribute nibbles of two adjacent
-screen columns (96.4) — so `mov [di + r*80], al` (`ax` at Low res) is **the
+screen columns (97.4) — so `mov [di + r*80], al` (`ax` at Low res) is **the
 row store on all of them, the same instruction at the same stride**. What
 is NOT the same is the texel run's odd-row PHASE (below), which is the
 pixel format's, so **the set is generated for the current backend** —
 regenerated on a Mode change as on a Detail one, 130–137 ms M — and part 2
-(the scratch, in os88pkg's indices — 96.9; the plan's "part 3") holds that
+(the scratch, in os88pkg's indices — 97.9; the plan's "part 3") holds that
 backend's Full and Low-res sets. The rule that follows, and every
 off-centre writer obeys: *rows are 80 apart, and the generator is the only
 thing allowed to know otherwise.* The picture's first byte is `(80 − Size)
@@ -120166,7 +120246,7 @@ was shown, 56 and 72 four bytes off, and Size 80 spilled each row's last
 eight columns into the next row — invisible at the default and in a
 window, which caps at 64, and caught only when the review read the writer
 against the readers (the 48 × 80 figures of the first frame table were
-taken on that picture; the ones in 96.1 are not). Windowed the Size rung
+taken on that picture; the ones in 97.1 are not). Windowed the Size rung
 is 64 at most (below); Rows is what `WM_GEOM` allows (`docs/plans/
 PIXELSTEIN-PLAN.md` §0, tree-4). **Mode X's 160 and 320 rays — rungs 4
 and 5 — have no byte shadow**: they write the two pages' planes directly
@@ -120179,12 +120259,12 @@ model in the wave that builds those rungs — **which is not wave 2's**: the
 plan's wave-2 list carried "the Mode X Detail row, 80/160/320 rays by
 tier", and wave 2 built neither the item nor the rungs; `px_fan160` and
 `px_fan320` are in the table and nothing selects them. They belong to the
-wave that gives Mode X its own present (rungs 4–5 of the ladder, 96.1),
+wave that gives Mode X its own present (rungs 4–5 of the ladder, 97.1),
 recorded here so the omission is a decision and not a gap. The sliding
 door — the DDA's `doorpos` subtracted from the fraction before the mirror,
-`tools/pxssim.py` already carrying it — is likewise wave 3's (the plan's
-wave-2 "doors in the DDA with the sliding u" is the SHUT door's slab,
-which wave 0 built).
+`tools/pxssim.py` already carrying it — was likewise wave 3's, and is
+built (97.2.4; the plan's wave-2 "doors in the DDA with the sliding u" is
+the SHUT door's slab, which wave 0 built).
 
 **What the one stride COSTS, written down before the pressure** (wave 1's
 review): on four backends of five every view pixel is written twice — the
@@ -120260,13 +120340,13 @@ five rows are arithmetic here, not a measurement.
   column's base byte minus 256 in **`[px_cdi]`**, written once a column by
   `px_compose`; `DI` is computed by `px_lad` from the row table and is a
   CLOBBER, never an input, and the word ladder's `AX`/`DX` are built inside
-  `px_lad` from `BX` — 24.1 a store + ~112 the Duff entry (96.1), and ~280
+  `px_lad` from `BX` — 24.1 a store + ~112 the Duff entry (97.1), and ~280
   the whole entry with the row-table read, the parity swap and the
   resolution dispatch around it (wave 1's measurement, the Flat rung's own
   term). The tones come from `px_inkt`, a 16 × 2 table of (even, odd) words
   built once a bracket per backend from the same rule `tools/pxssim.py`'s
   `ink()` states, so a guest shadow and a host one are bytes of one rule.
-  **These are the Flat rung** (rung 1 of the detail ladder, 96.1): the
+  **These are the Flat rung** (rung 1 of the detail ladder, 97.1): the
   Detail item "Flat", the fallback when a scratch part is refused, and what
   wave 1 draws with. ("Low res" is the RESOLUTION axis — 32 rays — and never
   a rung's name.) **The Wire rung** (rung 0) is the same two ladders drawing
@@ -120275,7 +120355,7 @@ five rows are arithmetic here, not a measurement.
   pixel each where the neighbour's height is the same, in the lit tone of
   material 1; the rest of the column is the ground — the ceiling tone above
   row 40 and the floor tone below it — written once and repaired only where
-  a run moved (96.5).
+  a run moved (97.5).
 - **Generated into part 2 (wave 2)**: one textured scaler per height — 2-row
   steps to 60, 3-row to 78, **6-row above** (43 scalers; graft 9 of the
   plan's §13), a taller height clamping to the last — each texel run one
@@ -120294,20 +120374,20 @@ five rows are arithmetic here, not a measurement.
   phase, which a bare word store of a dual-phase `AX` would not. **The
   dual-phase word load is the named fallback**: `mov ax, [es:si + 2v]` with
   `AL` the even rows' byte and `AH` the odd rows', no rotate, +4.8 a texel
-  against the rotate's 15.2–18.0, for part 3 doubled to 60 KB (96.4, 96.9)
+  against the rotate's 15.2–18.0, for part 3 doubled to 60 KB (97.4, 97.9)
   — one sentence here and one in the generator, if wave 2's measured frame
   wants what it buys back: **56,000 clk a frame at Full 64 × 80 and only
   ~7,600 at the Low-res default** (0.16 fps), where the split `AX` costs
   two duplications before the word stores.
-  `DS` = the destination and `ES` = the byte-texture set (96.4), and every
+  `DS` = the destination and `ES` = the byte-texture set (97.4), and every
   scaler ends in a NEAR **`ret`** (`0xC3`): the column driver lives in the
   same part and
   near-calls every scaler, and **the frame's ONE far call into the part
   for its walls is part 0 → the driver's entry**, which is the only routine
   in part 3 that `retf`s. (The four quadrant bodies are still far-called by
-  the cast, one call a column as 96.2.1 says — the cast stayed in part 0
+  the cast, one call a column as 97.2.1 says — the cast stayed in part 0
   in wave 2 and moving it beside the bodies is the ~90 clk a column
-  96.2.1 prices, 2,900 a frame at the default, a later wave's.) (The 1992 engine's `retf` per scaler is right there because
+  97.2.1 prices, 2,900 a frame at the default, a later wave's.) (The 1992 engine's `retf` per scaler is right there because
   its C driver far-calls each column from another segment; here the driver
   moved in beside them, and a `retf` under a near call would pop the
   driver's return address as a segment on the first column of the first
@@ -120316,13 +120396,13 @@ five rows are arithmetic here, not a measurement.
   store, so **a wall never patches** (graft 3) and the clipped-wall patch of
   the first draft is withdrawn. `codeofs[33]` per scaler, a `col2tex[w(h)]`
   table per height for the sprite walk (graft 2), the four quadrant bodies
-  of 96.2, the column driver, and **both resolution sets** — Full's
+  of 97.2, the column driver, and **both resolution sets** — Full's
   byte-store scalers and Low res's word-store ones — so a resolution switch
   regenerates nothing. Pinned (never
   `OSAPI_MEM_MOVABLE`), no register preserved (§85.3.4's discipline). **Two
   patch sites**, each owned by one routine: the `ret` a sprite post patches
-  over a row store and restores before any `jc` (96.6), and the four step
-  immediates of 96.2.1. `tests/pxsscale.py` diffs the part against
+  over a row store and restores before any `jc` (97.6), and the four step
+  immediates of 97.2.1. `tests/pxsscale.py` diffs the part against
   `tools/pxsgen.py` between frames.
 
   **As wave 2 built it** (`pxgen.inc`, `tools/pxsgen.py` the model): the
@@ -120333,7 +120413,7 @@ five rows are arithmetic here, not a measurement.
   (a word per height per set, part 0's bss, filled after each set) and by
   **`px_hq`, which the cast applies to a Textured column's h BEFORE top
   and bot** (`pxcast.inc`, `px_h[c]` the quantised height), so the rows a
-  column claims are the rows its scaler stores and the Δ-fill of 96.5
+  column claims are the rows its scaler stores and the Δ-fill of 97.5
   reads the same geometry as the driver draws; a height over 120 clamps
   first, `wallh` keeps the true h. `tools/pxssim.py`'s `project()` does
   the same under the Textured rung. Texel v covers rows `[(v·h)>>5,
@@ -120347,27 +120427,54 @@ five rows are arithmetic here, not a measurement.
   ladders as Flat does, and at the end of the column loop calls
   `px_drvp` once: the driver sets `ES` = part 3 from the queue's header,
   `CL` = 3, reads the queue's end ONCE into `DX`, and near-calls each
-  entry. The queue holds 512 entries (3 KB) for the 80 walls of a Size-80
-  frame and wave 3's sprite posts. Part 2 is laid out bodies (232), driver
-  (64 reserved), the two header words, the queue, then the generated half
-  at `PXG_SCAL` = 3,372 — **40,087 bytes on CGA4, 36,235 on Hercules and
-  WIN1, 32,383 on C160 and Mode X** (`tools/pxsgen.py --sizes`; the odd
+  entry. **Wave 3 made the entry EIGHT bytes — (scaler, SI, DI, patch) —
+  and gave the driver a second entry** (`PXG_DRV2`, `px_drv2p`) that takes
+  `ES` from a second header word, the sprite set's segment (`PXG_QSPR`,
+  part 4), so the frame makes TWO far calls: the walls' with the queue
+  the compose filled, then — the queue emptied and refilled by
+  `px_sprites` (97.6) — the posts' and the weapon's. An entry whose patch
+  word is not 0 names the load of the texel a post must STOP at, and the
+  driver writes a near `ret` (0xC3) over its first byte — the `es:`
+  prefix, 0x26, which every texel load begins with — for the length of
+  the call and **puts the prefix back before its next compare**; a wall's
+  patch word is 0 and takes the plain call. That is the ONE patch site
+  in part 2 beside the walkers' immediates. **Every scaler is preceded by
+  its `codeofs` table** (`PXG_COTSZ` = 66 bytes: 33 words at
+  `px_sctab[h] − 66`, so no third directory), `codeofs[v]` = the part
+  offset of the load of the first EMITTED texel at or after v, or 0 when
+  none from v on emits — a post enters at `codeofs[v0]` and patches
+  `codeofs[v1]`, and a 0 means "draw nothing" and "no patch" (the
+  scaler's own ret ends it). The queue holds 512 entries (4 KB) for the
+  80 walls of a Size-80 frame, or the posts and the weapon — `px_spr_post`
+  stops at the last entry rather than write past it. Part 2 is laid out
+  bodies (232), driver (96 reserved), the three header words, the queue,
+  then the generated half at `PXG_SCAL` = 4,430 — **46,291 bytes on CGA4,
+  42,439 on Hercules and WIN1, 38,587 on C160 and Mode X**
+  (`tools/pxsgen.py --sizes`: 6,204 of them the 94 codeofs tables; the odd
   byte is the `max(1, w)` guard on the 2-row Low-res col2tex block) — so
-  the loader carves **`PX_GENKB` = 44** (43,459 of 45,056 on CGA4, 1,597
-  spare), `tests/unit/t_pxsscale.py` holds every backend's image under it
-  on the host, **and the machine has a fence of its own**: the loader
-  hands the part's length over (`PXH_GENLEN`) and `px_gen_build` refuses
-  to START a scaler or a col2tex block within `PXG_EMITMAX` = 768 of it —
-  the largest single emission is the tallest Low-res scaler at 705 bytes
-  — so a phase two bytes longer than today's (~6 KB over 47 × 2 × 32 runs)
-  withdraws the Textured rung in words (`px_texok` = 0, the item greyed,
-  `px_apply` landing on Flat) instead of walking a `rep stosb` off the end
-  of a heap claim on the target alone, which is what the first cut would
-  have done. A column's texture column is `u >> 3` (`u >> 4` on C160,
-  whose column is a texel pair, 96.4 — the shift count is `px_ush`, set
+  the loader carves **`PX_GENKB` = 51** (50,721 of 52,224 on CGA4, 1,503
+  spare; 44 before wave 3), `tests/unit/t_pxsscale.py` holds every
+  backend's image under it on the host, **and the machine has a fence of
+  its own**: the loader hands the part's length over (`PXH_GENLEN`) and
+  `px_gen_build` refuses to START a scaler, a codeofs table or a col2tex
+  block within `PXG_EMITMAX` = 768 of it — the largest single emission is
+  the tallest Low-res scaler at 705 bytes — so a phase two bytes longer
+  than today's (~6 KB over 47 × 2 × 32 runs) withdraws the Textured rung
+  in words (`px_texok` = 0, the item greyed, `px_apply` landing on Flat)
+  instead of walking a `rep stosb` off the end of a heap claim on the
+  target alone, which is what the first cut would have done. The codeofs
+  scratch (`px_gcotv`, the 33 load offsets a scaler's table is built from)
+  is cleared in the PROGRAM's segment before each scaler: wave 3's first
+  cut cleared it with a `rep stosw` while `ES` was the part being emitted
+  into, which zeroed 66 bytes of an EARLIER scaler at the scratch's own
+  offset on every height generated - `tests/pxssim.py` read it as nine
+  rows missing from a Size-72 wall on scene B and a byte written off the
+  band, and `tests/pxsscale.py` is the row that names the part itself. A
+  column's texture column is `u >> 3` (`u >> 4` on C160,
+  whose column is a texel pair, 97.4 — the shift count is `px_ush`, set
   once by `px_res_apply`, not a compare a column), banked in `px_lu[c]`
   **and its quantised height in `px_lh[c]`** beside the four bytes of
-  96.5's memory, so that a wall whose geometry stood but whose texel
+  97.5's memory, so that a wall whose geometry stood but whose texel
   column moved is redrawn — and so is one whose CLIPPED geometry stood
   while its scaler changed: every h ≥ 80 clips to `top = 0, bot = 79`, so
   the eight scalers 80..120 are one (top, bot) and eight pictures (texel 0
@@ -120378,7 +120485,7 @@ five rows are arithmetic here, not a measurement.
   stripe that stopped zooming while its neighbours zoomed; `tests/
   pxssim.py`'s `--steps` leg is the walk that shows it. A Textured wall
   whose height moved is redrawn WHOLE (its texels shift), so the two-ends
-  arm of 96.5 is Flat's alone. **The set does not depend on Size** — a
+  arm of 97.5 is Flat's alone. **The set does not depend on Size** — a
   column is drawn wherever its `DI` says — so a Size change regenerates
   nothing; a Mode change or the F toggle regenerates only when the PHASE
   CLASS differs (`px_phcls`: CGA4 / Hercules-and-WIN1 / none), and
@@ -120388,7 +120495,7 @@ five rows are arithmetic here, not a measurement.
   the rung it settled on is Textured, and nothing else does — in a
   bracket that is behind the mode set's black (before the first frame),
   in a window it is the worker's first Textured frame, lock-free, and a
-  window that never picks Textured never pays it (96.1's launch
+  window that never picks Textured never pays it (97.1's launch
   paragraph). The 47 heights, the phase bytes and the two class tables
   are the assembler's (`px_hts`, `px_hq`, `px_phase`), and `t_pxsscale`
   holds `px_hts` and `px_hq` in the assembled part 0 to the model's.
@@ -120406,7 +120513,12 @@ five rows are arithmetic here, not a measurement.
   72 or 80 by the file or by a bracket draws 64 and writes the size in
   force on its text line ("Size 64"); the black beside a band that shrank
   is repainted by the worker under its lock (`px_repaint`,
-  `px_black_around`). In a bracket `v` / `V` cycles all five, applied
+  `px_black_around`) — the band sits at the window's LEFT and the black
+  fills the rest of the content's 512 pixels (`px_blit_win` copies Size
+  × 8 pixels from the band's first byte; a look, and the review of wave
+  3 read it as a quarter of the picture lost at Size 48, which is what
+  a narrower Size is in a window whose frame does not shrink). In a
+  bracket `v` / `V` cycles all five, applied
   between frames like a menu pick, and **the glass outside the new band
   is blacked once by `px_band_blank`** on every `px_apply` there — the
   mode set's clear was the whole screen's and the present copies Size
@@ -120423,17 +120535,22 @@ five rows are arithmetic here, not a measurement.
   them for a rung only a 286 was ever given — not taken in wave 2,
   recorded here with the list.
 
-### 96.4 Art and ink
+### 97.4 Art and ink
 
-Wave 2's. Art is authored in **material indices**, fifteen 32×32 wall masters
-and the sprite masters as 16-colour PNGs under `apps/pixelstein/art/`
-(committed — the C64-ROM class of decision, `docs/plans/PIXELSTEIN-PLAN.md`
-§12.1), and `px_bt_build` transposes them at launch into **one resident
-byte-texture set for the current backend** (part 3 in `os88pkg.py`'s indices, the plan's "part 4": column-major, lit and
-dark; far-dark on Mode X) through a per-backend ink table; the F toggle
-rebuilds it, and 96.10's bench row (h) is what that costs. **A texel is
+Wave 2's, the sprites wave 3's. Art is authored in **material indices**,
+fifteen 32×32 wall masters and the sprite masters as 16-colour PNGs under
+`apps/pixelstein/art/` (committed — the C64-ROM class of decision, the
+plan's §12.1), and `px_bt_build` transposes the
+walls **on the first Textured frame** (`px_tex_setup`, called by
+`px_apply` when the rung in force is Textured — never at launch, 97.1's
+launch paragraph) into **one resident byte-texture set for the current
+backend** (part 3 in `os88pkg.py`'s indices, the plan's "part 4":
+column-major, lit and dark — two shades on every backend, the plan's
+third Mode X shade not taken, below) through a per-backend ink table; the
+F toggle rebuilds it when the ink class changes, and 97.10's bench row (h)
+is what that costs. **A texel is
 ONE byte on every backend** — the even-row phase of its 2×2 dither on CGA4,
-Hercules and WIN1, the odd-row phase being the scaler's rotate (96.3). **On
+Hercules and WIN1, the odd-row phase being the scaler's rotate (97.3). **On
 C160 that byte holds the attribute nibbles of texels u and u+1 OF THE SAME
 ROW** — two horizontally adjacent screen columns, so a C160 "column" is two
 texels wide and its set is built from column pairs; 16 solid colours, no
@@ -120442,35 +120559,38 @@ this sentence are one reading of that byte). On Mode X, which has no dither
 either, the plan gave a third shade the room instead. So part 3 is 15
 materials × 2 shades × 1,024 texels = **30 KB** on every backend — the
 plan's Mode X third shade would have made it 45 KB there, and wave 2 did
-not take it (below); the word-load fallback of 96.3 would double the
+not take it (below); the word-load fallback of 97.3 would double the
 dither backends' to 60 KB with a second phase byte a texel. The
 transpose writes one byte a texel from one master read of two. §39.4's UI
 reduction is never on the art path. The Hercules ink is a
 density ladder (0/25/50/75/100%) from a Rec.601 luminance, its dither phase
 chosen from `tools/pxsart.py --preview` and recorded here when it is; CGA4 is
 palette 0 through `int 10h AH=0Bh` (§88.3's reason: a VGA running mode 4 has
-no port 3D9h); Mode X programs the DAC, 0–15 lit, 16–31 dark, 32–47 far-dark,
-48–63 sprites and HUD. `PX_HEIGHTK` (96.1) is revisited per backend at the
+no port 3D9h); Mode X programs the DAC, 0–15 lit, 16–31 dark (32–47 were
+the far-dark shade's, deferred below and left unprogrammed), 48–63 sprites
+and HUD. `PX_HEIGHTK` (97.1) is revisited per backend at the
 same time: the same 64 × 80 shadow is 2.67:1 on CGA 320×200 and 4.1:1 on
 the Hercules box, and a square wall on one is a wide one on the other.
 
 **As wave 2 built it** (`tools/pxsart.py`, `apps/pixelstein/art/`,
 `pxart.inc`, `pxgen.inc`'s `px_bt_build`): fifteen 32×32 PNG masters in
 material indices, `w01_grey_stone.png` … `w15_jamb.png`, named by
-`tools/pxslevel.py`'s `MAT_NAMES` — **procedural placeholders in this
-wave** (`--placeholder`, deterministic: stone courses, planks, brick, a
-banner, a portrait, an emblem, bars, riveted steel, the two lever
-switches, the jamb's edge), to be replaced by the image model's on the
-same pipeline; `--check` refuses a master that is not 32×32, not in the
-sixteen colours, carries alpha, or holds index 5 (the key, in words). The
-masters reach the machine as the LZ4 art stream (part 4, lazy, 96.9:
-7,680 bytes packed to 1,124) that the loader expands into an 8 KB claim
-and hands over (`PXH_ART`), and `px_bt_build` transposes them at launch
-into **part 3's 30,720 bytes on EVERY backend** — 15 × 2 shades × 1,024 —
-one master at a time through a 512-byte staging copy in part 0 (so the
-loop has the master and the ink table in `DS` for `xlat` and the set in
-`ES`; the bench's one-claim shape needs three segments the 8086 has not
-got). **Mode X takes two shades too**: the far-dark third shade the plan
+`tools/pxslevel.py`'s `MAT_NAMES` — the image model's set since wave 3's
+intake (the raw renders and the quantiser's recipe — Lab-nearest colour,
+a mode-filter downsample — are the orchestrator's, beside the tree);
+`--placeholder` writes a procedural set (deterministic: stone courses,
+planks, brick, a banner, a portrait, an emblem, bars, riveted steel, the
+two lever switches, the jamb's edge) for a tree without them; `--check`
+refuses a master that is not 32×32, not in the sixteen colours, carries
+alpha, or holds index 5 (the key, in words). The masters reach the
+machine as the LZ4 art stream (part 5 since wave 3, lazy, 97.9: 7,680
+bytes of walls, then the sprites) that the loader expands into a claim
+of `PXA_KB` and hands over (`PXH_ART`), and `px_bt_build` transposes the
+walls on the first Textured frame into **part 3's 30,720 bytes on EVERY
+backend** — 15 × 2 shades × 1,024 — one master at a time through a
+staging copy in part 0 (so the loop has the master and the ink table in
+`DS` for `xlat` and the set in `ES`; the bench's one-claim shape needs
+three segments the 8086 has not got). **Mode X takes two shades too**: the far-dark third shade the plan
 gives it is a distance test in the cast nobody has priced, and a part
 whose size differs per adapter cannot be declared by a loader that has no
 window to ask; deferred, the DAC entries 32–47 unused. The ink tables
@@ -120484,9 +120604,9 @@ nine levels CULLED by `--preview`** — 0x7F, 0x77 and 0x57 each leave a
 column lit on both rows under the `ror al, cl` phase (vertical stripes),
 so the dot-complements of the sparse levels (0xFE, 0xEE, 0xEA) took their
 places: `ff fe ee ea 55 15 11 01 00` (the cull is of LEVELS under the one
-phase arm 96.3 takes; the two phase arms of the plan's graft 1 were not
+phase arm 97.3 takes; the two phase arms of the plan's graft 1 were not
 previewed side by side — `--preview` renders the rotate arm alone, and the
-dual-phase word load stays 96.3's named fallback, priced and unbuilt).
+dual-phase word load stays 97.3's named fallback, priced and unbuilt).
 **And a third rule the review added: a colour's DARK shade is never its
 lit one** — the 55% match steps one pattern or level DOWN when it lands
 on the same entry. Without it blue (index 1) read 0x10 lit and 0x10 dark
@@ -120528,7 +120648,98 @@ and `tests/unit/t_pxsart.py`; `--preview DIR` writes every master through
 every table at each adapter's aspect. `PX_HEIGHTK` stands at 51,200 on
 every backend in this wave: the screendumps read as a corridor on all
 five, and a per-backend look constant is a change with a picture
-attached, not a number.
+attached, not a number. **The CGA4 seed is twenty patterns where the
+plan's graft 13.6 says twenty-one**: cgaify's `USE_ALL_DITHERS` table has
+21 rows of which `(0,0,0,0)` appears twice, so twenty distinct patterns
+IS the whole of the seed (the review of wave 2, `tools/pxsart.py`'s
+comment on the table).
+
+**The sprite masters (wave 3, `tools/pxsart.py`'s sprite side): the
+contract the art is made to.** Three sizes, RGBA PNGs, **the key is
+ALPHA** — 0 transparent or 255 opaque at every pixel and nothing between
+(`--check` names the pixel of an alpha in between) — an opaque pixel one
+of the sixteen colours, and **index 5 (magenta) refused inside an opaque
+pixel exactly as inside a wall**: an image model puts near-magenta inside
+a sprite, and the key never comes from a colour. **The sixteen colours
+are the CGA/EGA palette, and `load_master` matches a pixel to the nearest
+of them within ±8 on every channel (`nearest_index(tol=8)`) and REFUSES
+a pixel farther than that, naming it — the tool quantises nothing**, so a
+render that comes back as RGB with anti-aliased edges is made into a
+master by two steps the tool does not do: the quantiser under
+`docs/reports`' art-raw recipe (Lab-nearest colour, the wall masters'
+own path) and an alpha threshold (a pixel's alpha ≥ 128 → 255, else 0,
+its colour then one of the sixteen). The table, index: (R, G, B) —
+0 (0,0,0) black · 1 (0,0,170) blue · 2 (0,170,0) green · 3 (0,170,170)
+cyan · 4 (170,0,0) red · 5 (170,0,170) magenta, REFUSED · 6 (170,85,0)
+brown · 7 (170,170,170) light grey · 8 (85,85,85) dark grey · 9
+(85,85,255) light blue · 10 (85,255,85) light green · 11 (85,255,255)
+light cyan · 12 (255,85,85) light red · 13 (255,85,255) light magenta ·
+14 (255,255,85) yellow · 15 (255,255,255) white. (Index 8, dark grey, is
+Mode X's floor: a sprite in it sinks into the ground there, which the
+placeholder pistol's grip did until it was made brown — review, wave 3.)
+Under `apps/pixelstein/art/`:
+
+| what | size | files |
+|---|---|---|
+| the guard | 32 × 32 | `g_f<0..4>_w<0\|1>.png` — five facings × two walk phases — then `g_shoot0.png`, `g_shoot1.png` (the pistol out, then the flash), `g_pain.png`, `g_die0..2.png`, `g_dead.png`: 17 frames |
+| the decorations | 32 × 32 | `d_pillar.png`, `d_barrel.png`, `d_table.png` (blocking), `d_bones.png`, `d_puddle.png`, `d_plant.png` — static kinds 8..13 in that order |
+| the pickups | **16 × 16** | `p_ammo.png`, `p_medkit.png`, `p_food.png`, `p_goldkey.png`, `p_silverkey.png`, `p_treasure.png`, `p_chalice.png`, `p_life.png` — kinds 0..7; the tool PLACES each in the lower middle of a 32 × 32 frame (rows 16..31, columns 8..23), so a pickup sits on the floor at half a wall's height |
+| the weapon | **16 × 24** | `wp_knife_<0..2>.png`, `wp_pistol_<0..2>.png`, `wp_mgun_<0..2>.png` — ready, fire, recoil; 16 columns, 24 rows, which the tool pads to 32 texel rows so the Full set's 24-row scaler reproduces the 24 authored rows exactly (texel 4k covers no row and texels 4k+1, 4k+2, 4k+3 land on rows 3k, 3k+1, 3k+2, so 4k and 4k+1 both carry row 3k) |
+
+**Figure against ground on the 1bpp adapters (review r1)**: a sprite's
+body dithers to a density, and the placeholder guard's body came out at
+the brick's own on Hercules (0.39 against the walls' mean 0.40), so only
+its white head read and the pistol not at all — so **every opaque texel
+bordering the key (the outline, `spr_outline`: a transparent 4-neighbour
+inside the frame; the frame's own border is not an edge) must render
+DARK through the CGA4 and Hercules lit ink tables, ≤ 0.25 lit over the
+outline's bytes (`OUTLINE_MAX`), on every sprite and weapon frame** —
+a dark line round the figure whatever wall stands behind it, which is
+what the 1992 engine's own sprites carry; `--check` asserts it naming
+the frame, prints the body's density against the walls' mean beside it
+(the placeholders: guard 0.30 / walls 0.40 on Hercules, 0.40 / 0.60 on
+CGA4 after the outline pass), and the placeholders take a black outline
+at write time (`_outline_dark`). An image-model sprite is made to it by
+the same two steps as above and then a one-texel dark outline where it
+lacks one.
+
+**The five facings** are what the eight the engine draws are made from
+(97.6): `f0` faces the viewer, `f1` is turned so that its RIGHT side comes
+toward the viewer (a three-quarter view), `f2` shows its right side, `f3`
+its right side from behind, `f4` its back; the engine mirrors `f3`,
+`f2` and `f1` for the left side (the mirrored post list is the columns
+reversed, no second copy). **A column may hold at most `PXS_MAXRUNS` = 4
+opaque spans** — the post walk draws a span as one patched call — and
+`--check` refuses a master past that, naming the column ("simplify the
+art"). The losable criterion for the guard, **five pairs at TWELVE
+columns** — the width a guard has at two tiles — on the CGA4 and Hercules
+sets, each ≥ 20% of the texels differing (transparent against opaque
+counting): the front (`f0_w0`) against its side (`f2_w0`), which a
+four-facing set has too, and then what an EIGHT-facing set has to earn —
+the three-quarter view `f1` against BOTH its neighbours `f0` and `f2`, and
+the side-from-behind `f3` against `f2` and `f4` (`SPR_PAIRS`; the first
+cut compared `f0` and `f2` alone, and the plan's "8 vs 4 facings" was
+decided by nothing — review, wave 3). `--preview` writes the pairs side
+by side, `--check` and `tests/unit/t_pxsart.py` assert them; **the
+placeholders read 43 / 39 / 31 / 29 / 26% on CGA4 and the same on
+Hercules** — the three-quarter placeholder carries its near arm out and
+the side-from-behind one a pack on its far side, which is what earned
+the odd facings their 20% at twelve columns. **Eight facings stand,
+provisionally**: five masters is the plan's count, the criterion is what
+decides, and the masters the image model delivers are what it decides
+on — a delivered set whose `f1` or `f3` fails a pair is the four-facing
+fork, taken then by mapping the odd facings onto their even neighbours
+in `px_act_frame` (one table) and dropping four masters. Every frame goes to the machine in the art stream as 512
+packed texel nibbles (row major, the even column in the high nibble, a
+transparent texel 0) and 128 alpha bytes (row major, bit 7 the leftmost
+column), a weapon frame as 256 + 64; `pxart.inc` carries the offsets
+(`PXA_SPR0`, `PXA_WPN0`, the frame sizes, the alpha offsets) and the
+frame indices (`PXS_G_WALK0` 0 — facing × 2 + phase — `PXS_G_SHOOT` 10,
+`PXS_G_PAIN` 12, `PXS_G_DIE` 13, `PXS_G_DEAD` 16, `PXS_DECO0` 17,
+`PXS_PICK0` 23), so a level's kinds, the tool's names and the engine's
+frame arithmetic are one list. The sprites take the LIT ink table alone —
+no dark shade, as the 1992 engine draws them — and on C160 a column is a
+texel pair as a wall's is.
 
 Wave 0's `tools/pxssim.py` renders with placeholder inks — flat lit and dark
 faces, a door slab in its own tone — so that the geometry can be looked at
@@ -120541,7 +120752,7 @@ and the ground — the one backend of five where the wave-1 picture dropped a
 wall. Wave 2's `pxsart.py --preview` re-derives every ink table from the
 art, and this rule goes with them.
 
-### 96.5 Δ-fill, the row range, the idle predicate
+### 97.5 Δ-fill, the row range, the idle predicate
 
 Wave 1's, in `pxcomp.inc`. **As built**: per column the last frame's
 extent `px_ltop[c]`, `px_lbot[c]` **and its tone `px_lmat[c]`,
@@ -120570,9 +120781,15 @@ shorter than `PX_GEOMIN` = 12 rows keeps the whole-wall write, where one
 entry (~280 clk) beats the second one the two-ends write would cost it,
 and the projection's horizon invariant (every wall holds rows 38..40)
 guarantees the old and new walls overlap, which two compares keep honest
-against any later writer of the memory — wave 3's `px_touch` must put a
-sprite-covered column back through the whole-wall arm (an `lmat` of 0xFF
-does it). Otherwise the
+against any later writer of the memory — **wave 3's `px_touch` puts a
+sprite-covered column back through the whole-wall arm**: a post, a
+silhouette or the weapon on column c over rows a..b widens that column's
+memory (`ltop` = min, `lbot` = max, **`lmat` = 0xFF**, and the four Wire
+run ends at their "whole view" values, per page on Mode X) and the
+frame's dirty rows, so the next frame re-lays the wall AND the ground
+under where the sprite was and the present sends those rows; a sprite
+that stands still is therefore re-laid under and redrawn every frame it
+is on the glass, which is the "~10 of 32 columns" a guard costs. Otherwise the
 Flat column writes the ceiling `[ltop, top)`
 only when `top > ltop`, the wall `[top, bot]`, the floor `(bot, lbot]`
 only when `bot < lbot`, so a wall that grew is covered by its own write and
@@ -120599,7 +120816,7 @@ rungs.** It is one min/max over all columns, and any column nearer than
 so the present is a constant **20.8 ms on the 5150 whatever moved
 (99,24x clk on every rung and every scene** — 21.2 turning against 22.5
 on a full repaint in wave 1's loop, 22.4–23.7 in wave 2's first cut,
-which re-read three words a row and was put back in the review, 96.1;
+which re-read three words a row and was put back in the review, 97.1;
 24.7 windowed, 5,120 bytes through `OSAPI_GFX_BLIT1`), 21% of the default
 frame. **A row that reads ~105,250 caught IRQ0 inside the stage**: the
 copy is the same 5,120 bytes every frame, the 6,007 between the two
@@ -120650,7 +120867,7 @@ as its x and width, both 8-aligned by construction). It buys nothing on a
 turn — 30 of 32 columns change on scene A — but on this section's own
 wave-3 frame, "a door opens or a guard walks changes ~10 of 32 columns",
 the present falls from 5,120 bytes to ~1,600, **21.2 ms to ~6.6**, with no
-change to what is drawn; that is the shape to take. Or 96.3's
+change to what is drawn; that is the shape to take. Or 97.3's
 device-stride compose, which removes the present entirely. None of the
 three is a wording change.
 **Two force bytes, because they answer two different questions.**
@@ -120665,7 +120882,7 @@ the byte). `px_force` alone only bypasses the idle
 predicate — the next frame is composed against an unchanged memory and
 writes what moved, which with the skip above is NOTHING on a still eye —
 and wave 1's first measurement poked that byte alone and called the result
-a full repaint; 96.10 says what the gate pokes now. Windowed, a `W_PAINT`
+a full repaint; 97.10 says what the gate pokes now. Windowed, a `W_PAINT`
 that lands mid-compose cannot reset the memory (the worker is reading it
 lock-free), so it sets **`px_whole`** instead, a byte `px_blit_win`
 consumes: the next blit sends rows 0..79 of the shadow whatever the compose
@@ -120683,54 +120900,298 @@ present copies the row range `[min(top, lasttop) .. max(bot, lastbot)]`;
 a forced full redraw writes, and `tests/pxssim.py` (wave 1) diffs the guest's
 shadow against it on both pinned scenes.
 
-### 96.6 Sprites and the weapon
+### 97.6 Sprites and the weapon
 
-Wave 3's, in `pxspr.inc`: candidates are the statics whose own cell, and
-the actors whose own cell **or any of its eight neighbours** (graft 4: a
-guard beside a corner sits in a cell no ray crossed while half its sprite
-hangs into the visible one), carries the frame's `spotvis` generation (read
-from both arrays, 96.2) and is open; ≤ 8 transformed and sorted far to near,
-one word compare against `wallh[c]` a
-column, a post per column through a patched-`ret` scaler entry (near: the
-driver is in the part, 96.3), eight
-facings from five masters by a mirror table, an 8,000-store cap past which
-the farther sprite draws every second column; the weapon 16 columns × 24
-rows over the bottom of the view. `tools/pxslevel.py`'s melee rule — no open
-cell with more than two guards within 1.5 tiles at spawn — is what bounds the
-frame the cap exists for.
+Wave 3's, in `pxspr.inc`, called by `px_frame_begin` after `px_compose`:
+candidates are the statics whose own cell, and the actors whose own cell
+**or any of its eight neighbours** (graft 4: a guard beside a corner sits
+in a cell no ray crossed while half its sprite hangs into the visible one;
+`px_spot_seen9`, an open neighbour only — the own cell WHATEVER it is,
+since review r1: the first cut put it through the wall-or-door test too,
+and a guard standing in a doorway was never a candidate), carries the
+frame's `spotvis` generation (read from both arrays, 97.2 — the plain one
+and then the transposed; THE GATHER PROBES INLINE since review r1, a
+static's transposed index computed once at load into `px_statT` and an
+actor's once a frame by `PX_TIDX` — twelve one-bit shifts — with its
+neighbours' by a second offset table `px_spr_nbrT`; the first cut called
+`px_spot_seen` a probe, three push/pop pairs and two shifts by CL = 6,
+and scene A with nothing in view paid ~44,000 clk = 9.2 ms a frame for
+it, booked as "cast" by the stage bracket that has a `gather` row of its
+own now) and is open; ≤ `PX_MAXSPR` = 8 transformed
+and sorted far to near, one word compare against `wallh[c]` a column, a
+post per opaque span through a patched-`ret` scaler entry (near: the
+driver is in the part, 97.3), eight facings from five masters by a mirror
+— kept at eight, provisionally, on 97.4's five-pair criterion, which is
+where the decision and its numbers are —
+at draw time, a `PX_SPRCAP` = 8,000-store cap past which the farthest
+sprites draw every second column; the weapon 16 columns × 24 rows over
+the bottom of the view. `tools/pxslevel.py`'s melee rule — no open cell
+with more than two guards within 1.5 tiles at spawn — is what bounds the
+frame the cap exists for (`tests/unit/t_pxsmap.py` holds it).
 
-### 96.7 Levels: the text, the rules, the stream
+**As wave 3 built it.** THE TRANSFORM (`px_spr_xform`): from the
+candidate's point (a static at its cell's centre, an actor at its own
+Q8.8 position) less the eye, `nx = dx·cos + dy·sin` forward and `ny =
+dy·cos − dx·sin` to the right, both by `PX_MUL14`; dropped when `nx <
+PX_MINDIST` or `|ny| ≥ nx` — wider of the axis than 45°, outside any
+Size's field and the bound that keeps the `idiv` below in range; `h =
+PX_HEIGHTK / nx` is its height in the wall's own units (the `wallh` the
+z-test compares it with, unquantised on both sides), and its centre
+column is `cols / 2 + (ny × PX_FOCAL / nx) >> 2` (Full) or `>> 3` (Low
+res: eight device pixels a column) — one `div`, one `imul`, one `idiv`
+and four `PX_MUL14` a candidate, ~1,100 clk. Its scaler is the one for
+`px_hq[min(h, 120)]` in the resolution's directory, its width `w` the
+col2tex formula's (`(hq·71 + 128) >> 8` at Full, `>> 9` with 256 added at
+Low res, at least 1 — the same as `tools/pxsgen.py`'s, computed rather
+than read so the Flat rung, which may never have built the tables, has
+it too), its first column `c − w / 2`, and its cost the visible columns ×
+`min(hq, 80)`. THE LIST (`px_sc`, twelve bytes a record — h, the column,
+the cost, the first column, the width, the frame, the flags, the actor —
+`PXS_C_*`) is kept sorted far to near as each is inserted: a ninth that
+is farther than the farthest is dropped, one that is nearer pushes the
+farthest out, and a tie keeps the insertion order (statics first, then
+actors, as the tables are walked). THE CAP: the costs summed, and from
+the far end each sprite over the sum is marked to draw every second
+column (`PXS_C_FL` bit 1, halving its cost) until the sum fits 8,000.
+AN ACTOR'S FRAME (`px_act_frame`, pxact.inc) is decided once its column
+is known: the direction from the actor toward the eye is the ray through
+its column plus a half turn — `heading + fan[c] + 2048`, the fan clamped
+to the view (the 1992 engine's `CalcRotate` shape, an eighth of a turn
+at most off the true bearing at the view's edge) — and the facing index
+is `((that − PXAC_ANG + 256) >> 9) & 7`: 0 the front, 2 its right side, 4
+its back, 6 its left (the mirror of 2), the odd ones the quarters;
+masters 0..4, and 5..7 mirror 3..1 (flag bit 0). The walk frames alternate
+by `PXAC_FRAME >> 2` while it patrols or chases; the attack, pain, die
+and dead frames face nowhere. An actor that became a candidate carries
+`PXAF_SEEN` for the tick (the hit table reads it: the player can see it
+to dodge).
+
+THE POSTS (`px_spr_posts`, the Textured rung with part 4 built): per
+visible column, the z-test, then col2tex[j] of the frame (31 − that when
+mirrored, the pair `>> 1` on C160), the column's RUN TABLE read out of
+part 4 into `px_sruns` (the count clamped to `PXS_MAXRUNS`, a floppy's
+byte), and one queue entry per span — the scaler at `codeofs[v0]`, `SI`
+= the frame's column base in part 4 (`frame × PXS_FRSZ + src × 32`), `DI`
+= the column's base byte, the patch `codeofs[v1]` or 0 for a span that
+runs to texel 32 (**the first cut stored the 32 itself, and the driver
+wrote a ret over offset 32 of part 2 — body 0's H pass tail, 97.2.1 — and
+the next cast ran off into segment 0; a v1 of 32 is "no patch"**); a
+`codeofs[v0]` of 0 (no texel from v0 on has a row at this height) draws
+nothing. The frame's dirty rows are widened from the first span's top
+row to the last span's bottom (`top + (v·hq) >> 5`, clipped;
+`px_rows_widen`) so the present sends them — **and the column's memory
+is left alone** — and the sprite whose span covers the CENTRE column is
+banked as the aim (`px_aim` its actor, `px_aimh` its height) — the last
+one there is the nearest, and 97.8's hitscan reads it. The sprites stop
+queueing at `PXS_QLAST`, 64 entries short of the queue's end, so the
+weapon's sixteen columns always have theirs; a column cut off there
+still widens the rows (the first cut returned without, a smear).
+
+**A SPRITE THAT STANDS IS NOT REDRAWN** (review, wave 3): the first cut
+`px_touch`ed every drawn column — the column's memory forgotten, so the
+next frame re-laid it whole, drew the sprite again and touched it again,
+for as long as anything was in view and whatever moved: a still windowed
+frame with a static in view read 85–88 ms against wave 2's 67–70 (the
+weapon's defect of the first cut, one writer over). The pass is TWO
+HALVES around the compose now (`px_spr_gather` after the cast,
+`px_spr_draw` after the compose; `px_frame_begin`). Each page keeps THE
+RECORD of the sprites on its glass (`px_lsc`, `PX_MAXSPR` twelve-byte
+records a page, `px_lnsc` their count: h, first column, width, frame,
+mirror and cap, actor, and the frame's whole row extent in the cost
+word's place). At the gather every candidate is matched against the
+page's records — the same h, `c0`, w, frame, actor, mirror and cap — and
+one that matches STANDS (`PXS_CF_STAND`; the record `PXS_CF_KEPT`); a
+record no candidate matched is ERASED, its columns `px_touch`ed over its
+rows BEFORE the compose, so the compose re-lays the wall and ground where
+it was. After the compose a standing sprite's column is drawn only where
+the compose WROTE this frame — `px_cwrote[c]` = the frame's spotvis
+generation, set by the three change arms (`.fchg`, `.tchg`, `.wchg2`;
+~50 clk on a column that costs 6,200 to re-lay, nothing on a skipped
+one) — a door slid behind it, a wall moved under it — **or where a
+FARTHER sprite drew this frame** (`px_swrote[c]`, stamped by
+`px_spr_stamp` on every column a post or a silhouette lands on; review
+r1: without it a sprite that moved painted over a nearer standing one,
+which then skipped the column, and a guard walking behind a barrel
+showed through it); every other sprite is drawn whole. A standing
+sprite's column that nothing wrote is skipped BEFORE its source column
+and run table are looked up (an 8-bit `mul` and a nine-byte copy a
+column, ~1.2 ms on a twenty-column sprite; review r1) — all but the
+centre column, whose runs the aim reads whatever stands — and the aim
+(97.8) is taken only from a column with a run in it, under every rung
+(review r1: the Flat and Wire path aimed before it read the runs, so a
+nearer static whose centre column was empty took a guard's aim and the
+shot missed under Flat and hit under Textured). A sprite cut short by a
+full queue is recorded `PXS_CF_PART`, which no candidate matches, so the
+next frame erases and redraws it whole (review r1: recorded whole, it
+stood with a hole in it). A sprite that moved is both, the old record
+erased and the new place drawn; one whose every column lost the z-test
+is not recorded (`PXS_CF_GLASS` marks a column that passed), so a guard
+walking behind a wall erases nothing. The far-to-near order holds on a
+re-laid column because the pass walks the sorted list. `px_force_all`
+empties both pages' records: a forced frame writes every column and
+owes no erase. What it buys: a still eye with anything in view composes
+nothing again; a still eye with a guard walking pays that guard's old
+and new columns and nothing else. `tests/pxssim.py`'s turns and steps
+hold the shadow to the host's whole picture through the standing,
+erased and redrawn cases, and its door sweep through a wall re-laid
+under a standing sprite. THE SILHOUETTES (`px_spr_flat`,
+the Flat and Wire rungs): the same columns and spans through the static
+ladder (`px_spr_lad`: `px_lad` with `DS` = the destination) in one tone
+(`px_inks`: the two-tone backends' 0x88/0x22 or 0x88/0x88 pair, dark
+grey on C160 and Mode X), the source column `(j·32) / w` by a `mul` and
+a `div` — a rung without the col2tex tables — and, WITH NO RUN TABLE (part
+4 refused, or the art with it), a BOX: the frame's whole extent in that
+tone, the fallback the plan's "flat silhouettes" came to. **The sprite
+set is built when a frame first wants it for the backend's ink class**
+(`px_spr_build`, pxgen.inc): beside the wall set by `px_tex_setup` when
+the rung is Textured, and by `px_sprites` itself — once per class,
+`px_sprback` — under Flat and Wire, which never call `px_tex_setup`; a
+backend of another class clears it (`px_spr_class`) and the next pass
+rebuilds. It transposes every frame column-major through the LIT table
+(C160: pairs, both nibbles) and builds each column's run table from the
+alpha bits, walking a run's open/close as the bits change and dropping a
+fifth span (the tool refuses the master; this is the machine bounding a
+floppy's bytes). A column's alpha bit is ONE mask over ONE byte a row (a
+C160 pair's the two adjacent bits, which the even left column keeps in
+one byte), the pointer stepping the row pitch: a `test` a texel. **The
+first cut rebuilt the byte index and rotated the byte into place for every
+one of the 40,960 texels and took 4.3 s on the 5150** — measured with
+breakpoints either side of it at a bracket's entry (`px_gen_build` →
+`px_bt_build` 1,045 ms, `px_bt_build` → `px_spr_build` 615 ms,
+`px_spr_build` → `px_tex_caption` 4,272 ms, the first frame 193 ms), so a
+bracket opened on a black screen for six seconds and `tests/pixelstein.py`'s
+turning leg, which held a key for two guest seconds after the entry, read
+no frame at all; the loop above is what replaced it (the build's measured
+cost is in 97.1's launch paragraph).
+
+PART 4's LAYOUT (`PXS_*`, pxart.inc): a frame is 32 columns × 32 texel
+bytes then 32 run tables of `PXS_RUNSZ` = 9 bytes — the count, then up to
+four (v0, v1) pairs, v1 exclusive — 1,312 bytes; the 31 frames (the
+guard's 17, six decorations, eight pickups) then nine weapon frames of 16
+columns (656 bytes each) at `PXS_WPN0` = 40,672: **46,576 bytes, `PXS_KB`
+= 46** — against the plan's ~21 KB, because a frame keeps every column's
+32 texels whether opaque or not (the scaler reads `[es:si + v]` and wants
+the column contiguous), and 31 frames rather than 22 (the pickups sit in
+whole frames; a second, half-size path was not worth the code). **It is
+a CLAIM the loader makes, not a part** (`pxl_entry`: once the art
+masters have arrived, `OSAPI_MEM_AVAIL`'s largest run ≥ `PXS_KB` +
+`PXL_SHKB` = 62 KB — the set AND the program's own 16 KB shadow after
+it, or the sprites are boxes and the game still has its picture — then
+`OSAPI_MEM_CLAIM PXS_KB`, handed over as `PXH_SPR`): the first cut of
+the wave carried it as a fourth `OP_OPT` part, and `OP_OPT` is ALL OR
+NONE (20.12), so 46 KB of sprites had joined the 81 KB the Textured
+walls need, a machine with 90–150 KB free lost its textured WALLS to the
+sprites, and "the sprites on boxes, the walls textured" was a state the
+loader could not produce (review, wave 3). Refused alone, the sprites
+are boxes (`px_sprok` 0) and nothing else changes.
+
+THE WEAPON (`px_weapon_draw`): the frame `weapon × 3 + px_wframe` — the
+weapon in hand, or the knife's when the ammo is out — as sixteen posts
+through the FULL set's 24-row scaler whatever the resolution (a byte a
+column: `px_sctab[24]`, the Full directory), `DI` = the band's middle
+byte less eight plus the column, biased by `(PX_WPNROW0 − 28) × 80` so the
+scaler's rows 28..51 land on the view's 56..79; no depth test. **When it
+is drawn — the standing sprites' rule, per page** (`px_wdrawn[page]`,
+the frame on each page's glass, 0xFF none): at the gather
+`px_weapon_check` names the frame this page is to show (`px_wnext`:
+weapon × 3 + `px_wframe`, the knife's when the ammo is out, 0xFF for no
+weapon) and, when the page holds ANOTHER frame, erases the sixteen
+columns over rows 56..79 on THIS page (`px_weapon_touch`): a column
+whose remembered wall ends above row 56 (`px_lbot`, this page's) has
+only ground under the weapon, so the floor tone is laid back over those
+rows through the ladder and the rows widened, its memory left alone; a
+column whose wall reaches the weapon's rows, and every column under
+Wire, goes through `px_touch` and the compose re-lays it (review r1:
+`px_touch` on all sixteen forgot the wall's tone, and the Textured arm
+then re-scaled eight unchanged walls and presented the rows from their
+tops, ~5–6 ms a weapon frame). After the compose `px_weapon_draw` draws
+it when the page holds none yet, when any of its columns was written
+this frame (`px_cwrote` over the weapon's ray columns, `px_weapon_cols`:
+the sixteen byte columns are eight ray columns at Low res) — which the
+erase guarantees for a change and a wall moving under it asks for on its
+own — or when a sprite drew over its rows on one of its columns this
+frame (`px_wpnhit`, set by `px_spr_stamp` for a sprite whose last row
+reaches 56; a far sprite crossing the centre above that touched none of
+the weapon's pixels and costs it nothing; review r1: a guard within ~2.5
+tiles stepping over the gun on a still eye painted over it and the gun
+stayed hidden) — and widens the dirty rows to the view's bottom. The
+columns' memory is left alone. Mode X's other page is drawn nothing until a frame lands on
+it, and its own rule runs then. Three cuts came before this one (review,
+wave 3): the first touched the sixteen columns on every drawn frame —
+re-laid whole, wall and ground, every frame — and `tests/pxsauto.py`'s
+control (a still windowed Flat Full frame with `px_force` poked,
+67.6–70.3 ms in wave 2) read 124.0–126.6 ms, across Auto's 125 ms budget,
+for a 16 × 24 picture; the second drew on the whole frame's `px_r1`
+(a sprite at the view's edge redrew it, and a frame change over columns
+nobody re-laid ghosted the old frame under the new); and its touch
+walked both pages with a loop that never ended when entered on Mode X's
+second page — the first shot fired on a still eye there hung the task.
+Under Flat and Wire its spans go through the BYTE ladder in the
+silhouette tone (`px_ladp`/`px_bpc` set to the byte ladder for the call,
+whatever the resolution; the byte saved through a register, not a word
+push that carries `px_size` with it); without the sprite set, nothing.
+The three typed keys `1`, `2`, `3` pick the weapon (97.8) and set
+`px_dirty`: the frame change is what the rule above erases and redraws.
+
+`tools/pxssim.py` models all of it — the candidates from the cells its
+own cast passed (`seen`), the transform's integer arithmetic (`cdiv` for
+the `idiv`'s truncation), the sort, the cap, the posts' bytes through
+`tools/pxsart.py`'s `spr_frame` and the phase, the silhouettes, the
+boxes when the guest says the set is not built, and the weapon — and
+`tests/pxssim.py` holds the guest to it on a third pinned scene, **C**:
+E1M1's brick room from (28.5, 8.5) looking south-east, the gold key, the
+barrel and the guard in view (97.10).
+
+### 97.7 Levels: the text, the rules, the stream
 
 A level is a text file under `apps/pixelstein/levels/`, one character a cell,
 up to 64 × 64 and padded with grey stone; the legend is `tools/pxslevel.py`'s
 (walls by material letter, `D`/`1`/`2` an unlocked/gold/silver door with its
-orientation inferred from the solid pair either side, `s` a secret door in
+orientation inferred from the solid pair either side **and both cells on
+its passage axis open** — refused in words naming the cell otherwise;
+review r1 found three doors in E1M1 opening into a double wall, the gold
+door among them, which the sweep could not see — `s` a secret door in
 the wall's own material, `@ > < ^ v` the spawn and its heading, `g`/`h` a
-guard/hound facing the longest open run, eight pickups, six decorations of
-which three block). **The tool refuses a level**, in words, on the host:
+guard/hound facing the longest open run **and standing until it sees the
+player, `G`/`H` the same PATROLLING — bit 7 of the stream's kind byte,
+`PXL_PATROL` (wave 3)** — eight pickups, six decorations of which three
+block). **The tool refuses a level**, in words, on the host:
 every open cell reachable from the spawn with a key found before the door it
 opens; ≤ 64 doors, 32 actors, 96 statics; **no axial run of open cells over
 24** (doors counted open); the DDA sweep — every open cell × 16 headings, one
-ray each through 96.2's walker, **cast twice, with every door closed and
+ray each through 97.2's walker, **cast twice, with every door closed and
 with every door open, and the worse count of the two is the level's** —
 **mean ≤ 12 crossings, worst ≤ 26**, which is what holds a diagonal across
-an open hall to what 96.1 priced; and the melee rule of 96.6. The sweep's
+an open hall to what 97.1 priced; and the melee rule of 97.6. The sweep's
 first cut cast with the doors shut only, which is the state a level spends
 the fewest of its frames in — a closed door stops the walker, an open one
 lets the ray through into the next room, and the room beyond the door the
 player just opened is the long ray — and E1M1 read worst 23 shut and 26
 open, on the budget exactly. E1M1 is re-carved and reads 22 doors, 7
 actors, 27 statics, sight 20, DDA mean 4.9 and worst 23 with the doors open
-(4.6 / 23 shut).
+(4.6 / 23 shut). **Wave 3 added two floors**: E1M2, the guardroom wing (17
+doors, 5 actors of which one patrols, 17 statics, sight 22, DDA mean 3.9 /
+worst 22 open, 3.6 / 16 shut) — the gold key in the brick hall, its gold
+door a shortcut, the silver key in the cell block under the spawn, the
+silver door on the elevator — and E1M3, the lower cells (16 doors, 5
+actors, 2 patrolling, 17 statics, sight 24, mean 4.5 / worst 24 open, 4.3
+/ 17 shut) — the silver key first, the silver door into the stores, the
+gold key there, the gold door on the long way round. **The doors are
+written to the stream SORTED BY CELL** (the parser's row-major walk,
+asserted in `record()`): the engine builds a 65-entry row table from the
+order at load (`px_drow[y]` = the first door in row y or after) and
+`px_door_of` walks the row's few doors, so a cell-to-door lookup — the
+cast's slab, the collision, the guards' walk, the line of sight, Use —
+costs no 4 KB map and no search of 64.
 
-The stream (`build/pxslev.bin`, wave 1's level part — EAGER, 96.9 says
+The stream (`build/pxslev.bin`, wave 1's level part — EAGER, 97.9 says
 why) is one record a
 level: `'PXL',1`, the run-length map's length, the spawn (Q8.8 tile centres
 and a heading), three counts, the map as (count, cell) pairs, then the doors
 (cell, flags, lock), actors (cell, kind, facing) and statics (cell, kind,
 blocking). `pxlev.inc` is only the **directory** — offsets, lengths, the
 spawn cell — so a level edit is a diff a person can read. The loader expands
-the map into the two layouts of 96.2. **The expansion is bounded on every
+the map into the two layouts of 97.2. **The expansion is bounded on every
 byte it reads** (CLAUDE.md's rule: a byte off a floppy is hostile, and this
 is the one place in the package where a file byte becomes a length): a
 count of 0 refuses the stream, a run that would carry the write past
@@ -120747,7 +121208,7 @@ and a stream's pair length was a file word walking `SI` up to 8 KB past a
 1 KB part into the next part of the carve (a read, and one the perimeter
 walk would most likely have refused, but the paragraph above claimed
 "every byte" and the code did not).
-**And the CELLS are checked, not only the lengths**: the walkers of 96.2
+**And the CELLS are checked, not only the lengths**: the walkers of 97.2
 have no crossing counter — they stop on a `SOLID|DOOR` bit and on nothing
 else — so a border cell with that bit clear (a rotted floppy, an edited
 part 1) would walk them out of `px_mapT` and `px_map` for ever, writing the
@@ -120759,8 +121220,26 @@ axis (a tile at 63 would fold `px_cell`'s `or` into the y field; one under
 the radius indexes `px_map − 64`) or stands on a SOLID or DOOR cell — 256
 byte tests once at load, the machine refusing the FILE where the tool
 refused the level; the reviewer's finding, and the review found it.
+**Wave 3 loads a level BY INDEX** (`px_level_load` with `AL`, the
+directory's offset and length held to `PXH_LEVLEN` before a byte is read,
+the record's three table counts held to their tables, and the bytes the
+three tables need held to what the record has past its pairs), and reads
+the three tables behind the map, each cell of them checked: a door's cell
+must carry the DOOR bit and come after the last (the sorted order the row
+table wants), its lock 0..2, its flags taken from the map's own byte and
+not the file's; an actor's or a static's cell must be open, the kind 0..1
+/ 0..13. An actor's centre cell takes `PXC_ACTOR` in the plain map, a
+blocking static's `PXC_BLOCK`, the player's `PXC_PLAYER` — **the high
+nibble of an OPEN cell, which the walkers never read** (they stop on
+bits 0–1 alone and read a material only off a solid or door cell), so a
+mover's collision is the same one-byte cell test the player's is and no
+actor table is searched (97.8); the transposed layout is written BEFORE
+the marks and carries none. The switch (`X`, material 14 with SPECIAL)
+loads the next floor when used, the first again after the last (the
+cards are wave 4's); the DIE wash reloads the one in force
+(`px_levnext`, applied between frames like a Detail pick).
 
-### 96.8 The clock, the input, the states, the session
+### 97.8 The clock, the input, the states, the session
 
 **Wave 1's part, as built** (`pxgame.inc`, `pxwin.inc`): the held keys are
 Up/W forward, Down/S back, Left/Right turn, A/D strafe, either Shift run —
@@ -120806,12 +121285,12 @@ window**, which in wave 1 is also the floor: `docs/plans/PIXELSTEIN-PLAN.md`
 and there is nothing under Flat Low res for Auto to hand a window — Wire is
 off the ladder (below). **Wave 2 prepended Textured** (`px_apos_tab`: 0 Textured Full,
 1 Textured Low res, 2 Flat Full, 3 Flat Low res), so an 8086 starts a
-BRACKET at position 1 — 96.1's default — and a WINDOW at position 2, Flat
+BRACKET at position 1 — 97.1's default — and a WINDOW at position 2, Flat
 Full (`px_auto_start` reads `px_inbr`; `docs/plans/PIXELSTEIN-PLAN.md`
 §15's one rung lower), and a 286 or better starts at 0; leaving the
 bracket re-seats the window's start (`px_fsx_main`'s exit calls
 `px_auto_start` again, a pinned Detail untouched by it), and a Textured
-position with no parts behind it (`px_texok` = 0, 96.9) applies as Flat
+position with no parts behind it (`px_texok` = 0, 97.9) applies as Flat
 at the same resolution, the item having said why. **A Resolution pick
 under Auto RE-SEATS Auto's position within its rung** (`px_oncmd`):
 position `(apos & ~1) | res`, banked as the new ceiling with the
@@ -120862,8 +121341,8 @@ text line ("Detail: Flat  Size 64  Low res" — the size in force sits
 between the rung and the resolution since wave 2) — **and in a bracket the step is
 SILENT**: `px_auto_frame` is called from `px_frame_end` in both worlds,
 but the only reader of `px_lined` is the windowed text line, and a
-bracket has no glyph writer until wave 4's HUD band letters it (96.3), so
-96.1's "announced once" is the window's promise and the bracket's from
+bracket has no glyph writer until wave 4's HUD band letters it (97.3), so
+97.1's "announced once" is the window's promise and the bracket's from
 wave 4; `tests/pxsauto.py` runs windowed for the same reason, a dated
 omission its registry row names. A pinned Detail never moves. **Which
 promise the budget is**: `PX_BUDGET` = 125.0 ms is the SCENE-A promise
@@ -120877,7 +121356,7 @@ is what the ladder exists to give a cheaper picture to; the promise is
 what the rung delivers on the pinned scenes, the budget is when Auto
 stops insisting on it. On the
 5150 the default's turning frame draws in 66.7 ms and its full repaint in
-87.0 (96.1; 68.7 / 85.5 before 96.5's two-ends arm), against the 62.5 /
+87.0 (97.1; 68.7 / 85.5 before 97.5's two-ends arm), against the 62.5 /
 125.0 lines: Auto neither climbs (66.7 >
 62.5 — and could not, position 1 being the 8086's start) nor falls there.
 **`px_ftime` is the frame's WORK, not the time to the next field.** The
@@ -120895,19 +121374,19 @@ quantisation. So the two idle waits inside a timed frame are bracketed by
 where another task's hold on the lock was being charged to our frame and
 fed the eight-miss counter. The budget is therefore a budget on the DRAW,
 and the delivered rate on Mode X is that draw rounded up to the next field
-— the cost of a waited flip, 96.11's arithmetic, seen on the other card.
+— the cost of a waited flip, 97.11's arithmetic, seen on the other card.
 **Wire is OFF Auto's ladder** (`px_apos_tab`; the user's decision on wave
 1's measurement, 2026-09-14): Auto steps Textured Full → Textured Low res
 → Flat Full → Flat Low res and stops there, and Wire stays a pinnable
 Detail item — a picture trade, edges only, one menu pick away. Measured on
-the 5150 after 96.5's skip, Wire's turning draw is **76.4 ms against Flat
+the 5150 after 97.5's skip, Wire's turning draw is **76.4 ms against Flat
 Low res's 68.7** and its full repaint **106.4 against 85.5** (76.5 against
-**66.7** and 106.4 against 87.0 after 96.5's two-ends arm, which Wire does
+**66.7** and 106.4 against 87.0 after 97.5's two-ends arm, which Wire does
 not take; windowed on
 the Hercules desktop 83.0 against 76.6, 114.6 against 94.9; the same order
 on the C160 retime and on Mode X), and **the stage split says where the
 7.7 ms went**: the cast and the present are IDENTICAL between the two rungs
-— the same 32 rays, the same 80-row band (96.5): 31.1 and 21.2 ms on both
+— the same 32 rays, the same 80-row band (97.5): 31.1 and 21.2 ms on both
 — and Wire's COMPOSE is **24.6 ms against Flat's 18.4 on the turn frame,
 51.4 against 31.7 on a full repaint** (the `--stages` run on `_cga_gla`,
 the median of twelve, `docs/reports/PXS-FRAME-2026-09-14.md` §3). **The
@@ -120944,9 +121423,19 @@ announcement, both edges of the hold and the step back — by poking
 can make a 5150 read slow or fast at will; the turn key is held BEFORE the
 first wait, because a still window composes nothing and the first cut
 waited for a frame that could never come. Two facts the row had to learn:
-the 5150's own windowed Flat Full turn reads 120–137 ms across the 125.0
-line, so the control is a STILL eye's forced frame (67.6–70.3 ms, the cast
-and a compose that writes nothing) and not the turning one; and `px_ahold`
+the 5150's own windowed Flat Full turn at Size 64 reads 120–137 ms across
+the 125.0 line (131–140 with wave 3's weapon and sprite pass in it — so
+**Auto's start for an 8086 WINDOW, Flat Full at the Size in force, was a
+position the machine stepped down from at launch while the default was
+64**, a fact the first cut of wave 3 routed around by arming the row's
+breakpoint before the turn key; at the default of 48 the same turn frame
+reads 116.4 / 112.9 ms on A / B, under the line, so the start stands as
+PLAN 15 derived it and the row's ordering is a convenience, not a cover —
+review, wave 3), so the control is a STILL eye's forced frame (63.9–66.4
+ms at 48 after the review — 67.6–70.3 in wave 2 at 64, and 85.5–88.2 in
+wave 3's first cut, whose sprite pass re-laid a sprite's columns on every
+frame; the cast and a compose that writes nothing) and not the turning
+one; and `px_ahold`
 is written in `OSAPI_GET_TICKS`'s clock — the kernel's `[ticks]`, ~200
 ticks behind the BIOS count — so a row that reads 0040:006C sees a hold
 that has "already passed" while the package is honouring it. **The menu
@@ -120956,7 +121445,7 @@ the first that reaches the clock band, so the row set is not something to
 grow a wave at a time — wave 1's first cut spent a fourth cell on
 "Resolution" and promised four more rows beside it, which nasm would have
 refused at wave 2): *Game* (Full Screen, Pause; Sound and Mouse join it in
-wave 4), *Mode* (the two adapter items, 96.3), *Detail* (ONE pull-down,
+wave 4), *Mode* (the two adapter items, 97.3), *Detail* (ONE pull-down,
 two axes: the rung — Auto, Wire, Flat, Textured — and under it the
 resolution — Full res, Low res; `px_oncmd` reads items 4 and 5 as the
 resolution axis), and *View* (Size, Rows — wave 2). Measured on the
@@ -121014,6 +121503,189 @@ row's byte and a pending flag and the next frame's prologue calls
 `px_apply` — which is also how a gate changes the rung (`pxslib.pin`) and
 why it sees exactly what the menu would.
 
+**The world, as wave 3 built it** (`pxgame.inc`'s `px_sim_tick`, called
+once per owed step after the player's `px_step_move`; `pxact.inc`). THE
+DOORS (`px_doors_tick`, a record of eight bytes each — `PXD_CELL`,
+`PXD_FLAGS`, `PXD_LOCK`, `PXD_POS`, `PXD_STATE`, `PXD_TIMER`): opening
+slides `PX_DOORSTEP` = 16 units a tick from 0 to 256 (shut to open in 16
+ticks, 0.9 s), open holds `PX_DOORHOLD` = 91 ticks (5 s) and then asks to
+close, which a BODY in the door cell refuses — the player's cell, or any
+actor's whose centre is in it, alive or dead (`px_door_body`; a corpse in a
+doorway keeps it open, `tests/pxsact.py`'s leg d) — and asks again 91 ticks
+on; closing slides back and reopens if a body steps in; **collision passes
+a door at `PXD_POS` ≥ `PX_DOORPASS` = 128** (`px_pblk`, the player's rule:
+a wall, a blocking static, an actor, or a door not yet half open blocks; a
+DOOR cell without a record, a floppy's byte, is shut). **THE MARKS NEVER
+MEET A MATERIAL** (review, wave 3): `PXC_BLOCK`, `PXC_ACTOR` and
+`PXC_PLAYER` (0x10, 0x20, 0x40) live in the high nibble of an OPEN cell,
+whose material is 0 (`tests/unit/t_pxsmap.py` holds every level to
+that), and a DOOR cell — passable, but its nibble the door's material,
+0xC2 for steel, the wall's own for a secret door — is asked FIRST by
+both collision rules and written by NO mark: `px_pmark`, `px_act_move`
+(`px_act_mark` / `px_act_unmark`) and a body's death test the DOOR bit
+before they touch the byte, and "is a body in the doorway" is answered
+from the tables instead (`px_body_in`: the player's cell, or a LIVE
+actor's centre — a corpse blocks nothing — other than the asker's own).
+The first cut tested the marks first and every steel door read as
+`PXC_PLAYER` (0xC2 & 0x40), so no guard ever opened one and
+`px_act_cell`'s door arm was unreachable; a secret door in wall material
+1 (0x1A) read as `PXC_BLOCK` and blocked the player for good; and the
+player leaving a door cell cleared bit 6 of its material, so every
+east–west door walked through was drawn in material 8 from then on
+(`tests/pxsact.py`'s legs f and g read the door cell's byte back). Use (`px_use`,
+Space on its press) takes the cell the heading's quarter names ahead —
+E for a heading within 512 of 0, then S, W, N — and operates a door
+there (`px_door_use`: a gold or silver lock the player has no key for
+refuses; shut or closing opens; open or opening closes unless a body is in
+it), or throws THE ELEVATOR SWITCH — a SOLID cell with SPECIAL and material
+14, which becomes 13 in both layouts and ends the floor: the next one
+loads between frames (`px_level_next`), the first again after the last,
++1,000 points. **A refused floor reloads the one that was in force**:
+`px_level_load` stores the counts and expands the map before it can
+refuse a record or the perimeter (97.7), so a refusal — a rotten floppy;
+every floor in the stream passed the host's rules — would leave the new
+counts over the old tables beside a half-written map with no perimeter,
+the unbounded-walker state 97.7 exists to prevent; the floor that was in
+force loads again, whole (it loaded once and the stream in memory is
+what it was), and the restart's bookkeeping treats it as fresh (the
+first cut's comment said a refusal "leaves the last one", which it did
+not; review, wave 3). `tests/pxsact.py`'s leg j throws the switch inside
+a running bracket and reads E1M2's tables on the next frame. The
+secret door of the plan (SPECIAL on a door cell) is a door in the wall's
+own material, which the legend's `s` already makes; nothing else marks
+it yet, and the secrets count is wave 4's. THE GUARDS (`px_act_tick`,
+one thinker a tick per actor, sixteen bytes a record — `PXAC_X/Y` Q8.8,
+the kind, the state, `PXAC_DIR` 0..3 the way it moves, a timer, `PXAC_HP`,
+`PXAC_FRAME`, the flags, `PXAC_CELL`, `PXAC_ANG` the way it faces): STAND
+or PATROL until it SEES the player (`px_act_sight`: its own cell carries
+this frame's spotvis generation — the cheap gate, a ray crossed it — the
+player is not behind it on its DIR's axis, and `px_act_los` finds the line
+clear), then ALERT for 1 + (rnd & 3) ticks facing the player, then CHASE
+with `PXAF_ATTACK` set. A patroller walks its DIR at `PX_ACTWALK` = 8 a
+tick (0.57 tile/s) and turns right, left, then back where it is blocked
+(dir + 1, dir + 3, dir + 2 — the first cut's third try was dir + 4, the
+blocked way again, and a patroller at a dead end stood for ever; review,
+wave 3). **The plan's "waypoints" are not built, recorded** (review r1):
+a patroller has no route, it walks its facing and turns at what blocks
+it — the level author places it in a corridor or a room's edge and the
+turn rule makes the round; a waypoint table would be a stream record,
+a level-tool legend and a thinker state for a behaviour the three
+floors do not need, and it is deferred to the wave that authors a floor
+that does. **A thinker owes a frame only for what the eye can see**
+(`px_act_dirty`, `px_door_dirty`; review r1: every thinker and every
+sliding door set `px_dirty`, and a still eye with a patroller behind a
+wall paid a cast and a gather every tick, ~36 ms of every 55): an actor
+that stepped, changed frame or state sets `px_dirty` if it was a
+candidate at the last gather (`PXAF_SEEN` — the marks still hold that
+cast's generation while the eye is still, so the record it left on the
+glass is erased by the frame this owes) or its cell or an open
+neighbour was crossed by that cast (`px_spot_seen9`: it stepped into
+view); a door that slid sets it only if a ray crossed its cell
+(`px_spot_seen` — a ray that reaches a door enters its cell to test the
+slab, so a door no ray reached changed no pixel). `tests/pxsact.py` leg
+(m) is the row: a still eye, an unseen patroller and an unseen door,
+91 ticks, `px_frames` unmoved;
+a chaser moves four-way toward the player at `PX_ACTRUN` = 24 (1.7
+tile/s), the larger tile delta's axis first, the other when that is
+blocked, standing when both are; a mover's step (`px_act_move`; its two
+axis multiplies are `imul r16`, which writes `DX:AX`, so the y step is
+banked before the x step is taken - the first cut multiplied y over the
+x step it had just put in `DX`, and no guard ever closed) tests the
+two corner cells of its leading edge at radius `PX_ACTRAD` = 0.25 with the
+player's rule plus `PXC_PLAYER`, its own `PXC_ACTOR` mark set aside for
+the test and moved with it, and a shut UNLOCKED door in its way it starts
+opening and waits for (a locked one turns it). Every tick a chaser with
+a clear line has a chance to ATTACK of 255 in 256 at a tile or less and
+64 / dist in 256 beyond (the 1992 engine's `(tics << 4) / dist` at 70 Hz
+is that at 18.2; the quotient is a byte divide of 64 alone - the first cut
+divided `AX` = 0x0340 by the distance, a divide overflow on every chase
+tick, and the guard attacked from where it stood and never closed): five ticks aiming, the shot with its flash frame for
+three, five recovering, then CHASE again. THE SHOT (`px_act_shoot`): the
+line clear, the chance `256 − 16 × dist` when the guard was drawn last
+frame (`PXAF_SEEN`: the player can see it to dodge), `256 − 8 × dist` when
+not, `160 − …` when the player is running (`|px_kfwd|` ≥ `PX_RUN`); a
+hit's damage is a random byte `>> 2` under two tiles, `>> 3` under four,
+`>> 4` beyond. THE LINE OF SIGHT (`px_act_los`, the `CheckLine` shape read
+for technique): nothing past `PX_LOSMAX` = 24 tiles on either axis; an x
+pass over the vertical grid lines between the two — the FIRST crossing's
+y exact, `(dy × partial) / |dx|` in 32 bits (the partial is at most
+|dx|, so the quotient is at most |dy| and nothing overflows), the rest
+by a slope (`(dy << 8) / |dx|`, `px_los_slope`; under `PX_LOSDMIN` = 64
+of |dx| the quotient could pass 32,767 — |dy| reaches
+(`PX_LOSMAX` + 1) × 256 − 1 = 6,399, a tile's fraction each end, and
+6,399 × 256 / 48 = 34,132, so the first cut's bound of 48, derived from
+6,144, could fault the 8086's `idiv` (INT 0, which the kernel does not
+catch; review r1) — and under 256 there is exactly ONE line to cross,
+so the slope answers 0 and is never stepped; two `%if`s hold the bound
+to `PX_LOSMAX` and to 256, and `tests/unit/t_pxsmap.py` checks the
+quotient both ways — the first cut before that clamped it to ±0x7FFF,
+stepped it, and read a tile up to 128 away, past the map; review, wave
+3) — then a y pass; a SOLID cell stops it, a DOOR
+cell stops it where the crossing's fraction (the y at the line less half
+a step, the cell's middle) is at or past the door's position. **A
+deviation from the plan, recorded**: the plan's "spotvis + a ≤ 32-step
+tile walk once a tick" became a walk of at most `PX_LOSMAX` cells an
+axis — 48 a chaser at the worst — on EVERY tick a chaser or a marked
+stander spends (`px_act_sight`, the chase's attack roll, the shot), not
+once a tick per level. Priced by `tests/pxsact.py`: scene A's finished
+frame with every E1M1 guard poked CHASE — seven walks a tick — reads
+105.6 ms against 93.4 with them standing, **+12.2 ms for seven
+chasers** (the unit cost of 97.1's table put a walk at ~1,600 clk). Damage TO a
+guard (`px_act_hurt`) is doubled while it has not seen the player, takes
+`PX_GUARDHP` = 25 to kill, and puts it in PAIN for four ticks (then CHASE)
+or DIE (three frames of four ticks, then DEAD; its mark cleared — a body
+blocks nothing — and +100 points). THE PLAYER: `px_health` 100, `px_ammo`
+8 (99 at most), `px_keys` (bit 0 gold, bit 1 silver), `px_weapon` (`1`,
+`2`, `3` typed pick the knife, the pistol, the gun — `px_key_common`, both
+worlds, setting `px_dirty` so 97.6's rule erases and redraws the weapon;
+the first cut defined the three scancodes and read none of them, so the
+gun was unreachable, review, wave 3; the knife is drawn and used when
+the ammo is out), `px_lives` 3, `px_score`. Ctrl FIRES
+(`px_keys_tick`, `OSAPI_KEY_DOWN` once a step; one shot a press for the
+knife and the pistol, held for the gun, `px_firek`): the frames run 1
+(the flash, three ticks; two for the gun) then 2 (the recoil, two ticks)
+then 0, a round is spent, and `px_fire`'s hitscan lands on THE ACTOR UNDER
+THE CROSSHAIR — 97.6's `px_aim`, the nearest sprite whose span covered
+the centre column on the last frame — if the line from it to the eye is
+clear, by the 1992 engine's table: under two tiles a random byte / 4,
+under four / 6, beyond that `rnd / 12 < dist` misses and a hit is `rnd /
+6`; the knife reaches 1.5 tiles (`px_aimh` ≥ `PX_HEIGHTK / PX_MELEE`) for
+`rnd >> 4`. A pickup is taken when the player's cell becomes its cell
+(`px_pmark`, on every cell change — the same routine moves the
+`PXC_PLAYER` mark): ammo 8, a medkit 25 and food 10 (left lying at full),
+the two keys, treasure 100 and the chalice 500, the extra life a life,
+full health and 25 rounds. DAMAGE to the player (`px_player_hurt`) lowers
+the health; **at 0 the DIE wash** (`PXST_DYING`): one frame paints the
+whole band in the wash tone (`px_inkw` — red on CGA4, C160 and Mode X, a
+dim dither on Hercules and WIN1; `px_fade_draw`, the memory then put at
+"the whole view" and nothing composed until the restart), `PX_FADE` = 12
+ticks stand, and the floor in force reloads with 100 health, 8 rounds,
+the pistol, no keys and a life fewer — the plan's "shade-table swap" came
+to a wash in one tone, the scalers reading their sets straight and a
+darker set being a second 30 KB. TWO BYTES ARE THE GATES' (`px_simoff`:
+no door, guard or weapon moves, the steps still walk the player, so a
+pose is the same pose at every stop — every row that diffs a pose
+against the host sets it; `px_god`: no damage, so a measurement cannot
+have the floor restart under it). THE WINDOW'S TEXT LINE carries the
+health and ammo after the resolution until wave 4's bar — **eight
+FIXED-WIDTH cells, "H100 A 8"** (`px_stat_fmt`: `H`, three cells
+right-aligned, ` A`, two), whose cell offset in the line is banked
+(`px_lhx`) so that a round spent or a hit taken redraws THOSE EIGHT
+CELLS ALONE (`px_statd`, `px_stat_draw`: one `OSAPI_FONT_RUN` of 8 cells,
+~7 ms on the 5150) and not the whole 65-cell line (`px_lined`,
+`px_line_draw`, ~59 ms — the first cut set `px_lined` on every shot and
+every hit, +45% on a combat frame with the gun firing; review, wave 3;
+a variable-width "A8" → "A10" would have moved every cell to its right).
+The line's buffer grew to 96 bytes — the 64 of wave 2 overflowed into
+`px_last` and `px_frames` on "Detail: Textured  Size 56  Full res  H100
+A8  Press F for full screen", 69 bytes, which read as the frame counter
+standing still. **And the line is held to `PX_LINEMAX` = 65 cells**, the content
+width of the 528-px frame: a longer one is drawn past the window's edge
+onto the desktop, where the pad that erases the last line never reaches
+— `tests/pxsfsx.py` found three cells of "een" standing right of the
+window after a Textured bracket — so the 8086's hint reads "F: full
+screen" (16 cells) and the longest line is 61. The world's own tick count is `px_dtick`.
+
 Wave 1's and 4's, DOT DELIRIUM's shape (§93): `tk_steps` verbatim — the
 simulation once per elapsed tick, capped at 3, the drawing as fast as the
 machine can; a step ≤ 1/4 tile with per-axis collision at radius 0.25
@@ -121035,10 +121707,10 @@ tics a frame, so its field figures are kinder than real play and
 unthrottled from ATTRACT and print frames / ticks / fps on the card) is what
 lets a 5150 owner report the About card's number without MartyPC.
 
-### 96.9 Memory, parts, disks, and the 128 KB floor
+### 97.9 Memory, parts, disks, and the 128 KB floor
 
 **Part 0 against the 61,440-byte ceiling** (`APP_MAX_SIZE`: image + bss
-in one segment), re-derived after 96.2 doubled the map: code ~34,000 D
+in one segment), re-derived after 97.2 doubled the map: code ~34,000 D
 (cast, the walker template, the generator, the static ladders, Δ-fill,
 sprites, doors, actors, player, HUD, presents, window/worker/bracket, loader
 glue — and, in the plan's first carve, menus, About, settings and scores);
@@ -121060,38 +121732,59 @@ it), carrying menus, About, the two cards, the score file and settings —
 ~6 KB D — so part 0's resident code is ~28 KB and image + bss ≈ **54 KB of
 61,440, ~7 KB spare**.
 `os88pkg.py`'s size assert is the gate either way, and the four map arrays
-sit at ≥ 256 bytes from the segment's ends (96.2.3) wherever the carve puts
+sit at ≥ 256 bytes from the segment's ends (97.2.3) wherever the carve puts
 them.
 
-**The part table as wave 2 declares it** (`apps/pixelstein/pxstein.asm`,
+**The part table as wave 3 declares it** (`apps/pixelstein/pxstein.asm`,
 the loader; `PXSTEIN.O88` is the loader's image with the parts appended —
 csload's shape, 20.12.10): **part 0** the program, `apps/pixelstein/
 pxgame.asm` as a whole `.o88` image with its bss shipped inside it
 (`OP_SEG, OP_COMP`); **part 1** the level stream `build/pxslev.bin`
-(`OP_ASSET`, plain, EAGER — 96.7's "lazy" is withdrawn for it: the parts
+(`OP_ASSET`, plain, EAGER — 97.7's "lazy" is withdrawn for it: the parts
 table dies with the loader, so a lazy part needs a directory the program
 reads back through `OSAPI_FILE_READ_AT` the way SKIES reads a world, which
-is worth the art part and not a 1 KB level stream; three sectors of the
-run, eight levels are ~16); **part 2** the scalers' scratch, `OP_SEG,
-OP_ZERO | OP_OPT, 44` KB — 96.2.1's four bodies, the driver, the queue and
-both generated sets (96.3; the plan's "part 3"); **part 3** the
-byte-texture set, `OP_ASSET, OP_ZERO | OP_OPT, 30` KB (96.4; the plan's
+is worth the art part and not a 3 KB level stream; six sectors of the
+run for three floors, eight levels are ~16); **part 2** the scalers'
+scratch, `OP_SEG, OP_ZERO | OP_OPT, 51` KB — 97.2.1's four bodies, the
+driver, the queue and both generated sets with their codeofs tables
+(97.3; the plan's "part 3"; 44 KB before wave 3); **part 3** the
+byte-texture set, `OP_ASSET, OP_ZERO | OP_OPT, 30` KB (97.4; the plan's
 "part 4"); **part 4** the art stream `build/pxsart.bin`, `OP_ASSET,
 OP_LAZY` — **last, because `os88pkg.py` puts every lazy row after the
-carve** (20.12.4; the first cut had it second and was refused in words) —
-fetched by the loader's `pxl_art` (csload's `csl_art` instruction for
-instruction), expanded through `OSAPI_DECOMP` into an 8 KB claim of its
-own and dropped. The loader hands the program what it cannot ask for
-itself, at the head of the program's bss, one package in two sources
-(csload's `CSH_*`): `PXH_MAGIC` 'PX', `PXH_LEV` the level part's segment,
-`PXH_GEN` the scratch part's segment or 0 when `op_optok` was refused,
-`PXH_COLD` 0 — reserved for the cold part below — `PXH_NLEV`,
-`PXH_LEVLEN`, and wave 2's **`PXH_ART`** (the masters' claim or 0) and
-**`PXH_BT`** (the byte-texture part or 0) and **`PXH_GENLEN`** (the scratch
-part's length in bytes, `PX_GENKB` × 1024 — the fence `px_gen_build`
-emits under, 96.3); `px_texok` is the AND of the three segments, and a
-launch with any of them 0 plays Flat with the Textured item greyed
-"(needs 82 KB free)" — as does a generation the part could not hold. **The program's region is NOT declared movable**
+carve** (20.12.4; the first cut had it second and was refused in words)
+— fetched by the loader's `pxl_art` (csload's `csl_art` instruction for
+instruction), expanded through `OSAPI_DECOMP` into a claim of its own
+(`PXA_KB` = 30 with the sprite masters, 8 before them) and dropped; and
+**the SPRITE SET is a CLAIM the loader makes after that, not a part**
+(`PXS_KB` = 46; 97.6: the plan's "part 5" — a fourth `OP_OPT` part in
+the first cut of wave 3, and `OP_OPT` is all or none, so it was refusing
+the textured walls with itself; claimed only when `OSAPI_MEM_AVAIL`'s
+largest run holds it AND the program's 16 KB shadow after it, `PXL_SHKB`).
+The loader hands the program what
+it cannot ask for itself, at the head of the program's bss, one package
+in two sources (csload's `CSH_*`): `PXH_MAGIC` 'PX', `PXH_LEV` the level
+part's segment, `PXH_GEN` the scratch part's segment or 0 when
+`op_optok` was refused, `PXH_COLD` 0 — reserved for the cold part below
+— `PXH_NLEV`, `PXH_LEVLEN`, wave 2's **`PXH_ART`** (the masters' claim
+or 0) and **`PXH_BT`** (the byte-texture part or 0) and **`PXH_GENLEN`**
+(the scratch part's length in bytes, `PX_GENKB` × 1024 — the fence
+`px_gen_build` emits under, 97.3), and wave 3's **`PXH_SPR`** (the sprite
+set's claim or 0; `PXH_SIZE` 20); `px_texok` is the AND of the first three
+segments, and a launch with any of them 0 plays Flat with the Textured
+item greyed **"(needs 111 KB free)"** — `PX_GENKB` + `PXA_BTKB` + `PXA_KB`,
+51 + 30 + 30, a FACT the assembler holds the string to (an `%if` in
+`pxgame.asm` on a restated `PX_GENKB`, which the loader's own `%if` holds
+to its; the first cut said 82 — §47 greys a fact, and this one had drifted
+by 29 KB; review, wave 3) — as does a generation the part could not hold;
+a launch with the three but `PXH_SPR` 0 — the 111 KB found and not the
+**62 KB** the sprite set's claim wants after them (`PXS_KB` 46 + the 16
+KB shadow the loader leaves room for, `PXL_SHKB`; **111 + 62 = 173 KB
+for Textured walls AND sprites**) — plays Textured with the sprites as
+boxes, and the item stays LIVE and says so, **"Textured (sprites need 62
+KB)"** (`px_s_dtexs`, held by its own `%if` to `PXS_KB` + `PX_SHKB`, and
+`PX_SHKB` to the loader's restatement by another; review r1: the boxes
+were silent);
+`px_sprok` is the sprite set's word, and 0 draws sprites as boxes (97.6). **The program's region is NOT declared movable**
 (no `OS88_REGION_MOVABLE`, unlike TANK and DOT DELIRIUM): the carve is one
 claim holding the program, the levels and the bodies, and the program
 banks two of its segments in its own words (`PXH_LEV`, `PXH_GEN`) plus the
@@ -121109,7 +121802,7 @@ and 0 greys every verb behind it. Nothing in wave 1 fits the size test
 the first round, 32,676 after the second — the selector's three bytes,
 `px_pix`, the Wire skip and the paint's third exit — 32,663 with Wire
 off the ladder (one table row and one branch fewer), and 32,861 after the
-third round: 96.7's perimeter and spawn checks, the wait bracket of 96.8,
+third round: 97.7's perimeter and spawn checks, the wait bracket of 97.8,
 the About re-test under the lock and the two-axis Detail menu — and the "41 KB" the
 first cut of this sentence carried was 10 KB high; §24.5's row and
 `tests/unit/t_smallreq.py` quote the same figure, and this is what wave
@@ -121119,8 +121812,15 @@ fixes — the band blank, the generator's fence, the sixth skip byte, the
 settings' scratch record, the present's hoist): the generator, the
 transpose, the textured arm, the settings file, the View row and 2.1 KB
 of bss for the two directories, the staging master and the column
-arrays' fifth and sixth bytes, with 22,964 spare before the ceiling; the
-cold part stays designed and unpopulated), so no
+arrays' fifth and sixth bytes, with 22,964 spare before the ceiling;
+**wave 3 took it to 48,250** (47,273 before its review: the standing
+sprites' records and the written-column marks, 274 bytes of bss, the
+gather/draw split, `px_body_in`, the stat cells and the weapon's per-page
+rule) — the sprite pass, the guards, the doors, the keys and the hitscan
+(~7.5 KB of code) and ~2.3 KB of bss for the doors (512), the actors
+(512), the statics (384), the door row table, the candidate list, the
+two pages' records and the transpose's larger staging master — with
+13,190 spare; the cold part stays designed and unpopulated), so no
 thunk is emitted — a
 routine nothing calls fails `tests/unit/t_asmrules.py` — and this
 paragraph is the design. **`OSAPI_WM_ONWAKE` is not registered either**,
@@ -121142,38 +121842,47 @@ Five claims (D) as wave 1 planned them, **in the part table's numbering
 above** (the second review found this paragraph still counting the plan's
 way, fifteen lines under the table that renumbers it): the loader's own
 region (freed after `OSAPI_PKG_REHOME`); **one contiguous parts claim** —
-part 0 (38,570 bytes image + bss, `OP_SEG | OP_COMP`; the cold part
-carved out of it stays designed and empty, ~6 KB `OP_SEG` when it is
-populated), **part 2** the scalers, bodies and driver (the plan's "part
-3"; `OP_SEG, OP_ZERO | OP_OPT`, **44 KB**: **both resolution sets for the
-current backend, MEASURED by `tools/pxsgen.py --sizes` — 40,087 bytes on
-CGA4, 36,235 on Hercules and WIN1, 32,383 on C160 and Mode X, both sets
-and their `col2tex` blocks** — behind 3,372 of bodies, driver, header and
-queue, 43,459 of 45,056 on the widest phase; the plan's §16 priced this at
+part 0 (47,273 bytes image + bss after wave 3, `OP_SEG | OP_COMP`; the
+cold part carved out of it stays designed and empty, ~6 KB `OP_SEG` when
+it is populated), **part 2** the scalers, bodies and driver (the plan's
+"part 3"; `OP_SEG, OP_ZERO | OP_OPT`, **51 KB** since wave 3: **both
+resolution sets for the current backend with their codeofs tables,
+MEASURED by `tools/pxsgen.py --sizes` — 46,291 bytes on CGA4, 42,439 on
+Hercules and WIN1, 38,587 on C160 and Mode X, both sets, their `codeofs`
+and `col2tex` blocks** — behind 4,430 of bodies, driver, header and
+queue, 50,721 of 52,224 on the widest phase; the plan's §16 priced this at
 ~30 + ~30 and wave 1's row (h) at 16,579 M an upper bound / 12,855 D for
 one 43-scaler set, both superseded by the generated image, which
 `tests/unit/t_pxsscale.py` holds to the byte), **part 3** the byte-texture
 set (the plan's "part 4"; **30 KB** — one byte a texel, two shades, on
-EVERY backend, 96.4: the plan's third Mode X shade was not taken; 60 on
-the dither backends only if 96.3's word-load fallback is taken;
-`OP_ASSET, OP_ZERO | OP_OPT`), and wave 3's sprite set (the plan's "part
-5", ~21 KB, `OP_ASSET, OP_ZERO | OP_OPT`; it takes the next index when it
-exists) — **about 113 KB on every adapter** (134 with the sprite set; 164
-with the fallback as well); the 16 KB shadow, claimed **at entry before
-`OSAPI_WM_CREATE`** so a refusal is §42.6's sentence in the window; the
-art masters (part 4, `OP_LAZY`, expanded through `OSAPI_DECOMP` into an
-8 KB claim — **fetched only when parts 2 and 3 both arrived**, since
-`px_texok` is the AND of the three and a launch on Flat by construction
-would otherwise hold 8 KB all session for nothing, and claim it before the
-program's own shadow; review, wave 2) — the level stream rides the run,
-eager, as the table above says. **Part 2 or part 3 refused, or the art
-claim, puts the game on the Flat rung** (96.3) — and so does a generation
-the part cannot hold, for that backend's phase class alone (`px_genbad`;
-a Mode change to a class that fits retries). **The read run is part 0
-plus the eager level stream — 79 of the 128 UNPACKED sectors the carve
-allows after wave 2 (68 before it) (§20.12.7; `OP_COMP` does not relieve
-it, the claim being cut from the unpacked total) — and the recipe asserts
-it** where the file is made: `tools/os88parts.py --run --max-run 128`
+EVERY backend, 97.4: the plan's third Mode X shade was not taken; 60 on
+the dither backends only if 97.3's word-load fallback is taken;
+`OP_ASSET, OP_ZERO | OP_OPT`) — **about 132 KB on every adapter** (162
+with the fallback as well; 113 before wave 3's part 0); the 16 KB shadow,
+claimed **at entry before `OSAPI_WM_CREATE`** so a refusal is §42.6's
+sentence in the window; the art masters (part 4, `OP_LAZY`, expanded
+through `OSAPI_DECOMP` into a 30 KB claim — **fetched only when parts 2
+and 3 both arrived**, since `px_texok` is the AND of the three and a
+launch on Flat by construction would otherwise hold it all session for
+nothing, and claim it before the program's own shadow; review, wave 2);
+and **the sprite set, a 46 KB claim of its own** made by the loader once
+the masters are in (97.6: `OSAPI_MEM_AVAIL`'s largest run ≥ 62 KB, the
+set and the shadow after it) — the level stream rides the run, eager, as
+the table above says. A 640 KB XT has ~500 KB free (a 5150 at 640 KB is
+the gate's machine); on 256 KB the optional parts are refused whole and
+the game plays Flat with boxes for sprites. **Part 2 or part 3 refused,
+or the art claim, puts the game on the Flat rung** (97.3) — and so does a
+generation the part cannot hold, for that backend's phase class alone
+(`px_genbad`; a Mode change to a class that fits retries); **the sprite
+claim refused alone puts the sprites on boxes** (97.6) — a state the
+first cut of wave 3 could not reach, its sprite set being a fourth
+`OP_OPT` part in an all-or-none carve (20.12) that took the textured
+walls down with it on a machine with 90–150 KB free. **The read run is
+part 0 plus the eager level stream — 102 of the 128 UNPACKED sectors the
+carve allows after wave 3's review (99 at its first cut, 79 after wave
+2, 68 before it) (§20.12.7; `OP_COMP` does not relieve it, the claim being cut
+from the unpacked total) — and the recipe asserts it** where the file is
+made: `tools/os88parts.py --run --max-run 128`
 runs after `os88pkg.py` in `$(BUILD)/pxstein.o88`'s rule and deletes the
 file on a miss, so wave 2's generator template, `col2tex` and the phase
 instructions cannot grow part 0 past a launch-time refusal in silence
@@ -121193,45 +121902,54 @@ a 32 KB image may not load at all against a 20 KB run. The ground is a claim
 about the arena; a 32×32-level, 48×64 arm measured on `os8088_5150_cga_128k`
 would be a substitution, and nobody has measured one.
 
-### 96.10 Tests and instruments
+### 97.10 Tests and instruments
 
 | row | tier | asserts |
 |---|---|---|
-| `pxs-gen` (`tests/unit/t_pxsgen.py`) | **fast, 0.5 s** (0.44 measured with `pxart.inc` on the list; 0.3 declared before it) | `pxtab.inc`, `pxlev.inc` and `pxart.inc` are what their generators produce, byte for byte — `t_paccman`'s mould. `pxlev.inc` is regenerated with `--no-sweep`: the cheap rules run here, the sweep is the soak row below |
-| `pxs-level` (`tests/unit/t_pxslevel.py`) | soak, 3 s | every level passes every rule of 96.7 **with the DDA sweep**, the stream is well-formed, and a 40 × 40 open hall is refused by the sweep in words (the negative control). The sweep is 0.2 s a level today; it is soak because the fast tier has no room, not because it is slow |
-| `pxsbench` (`tests/pxsbench.py`, `tests/pxsbench/pxsbench.asm`) | soak, an INSTRUMENT | every unit of 96.1's table produced a number on the adapter it ran on; the two 45° DDA rows count exactly 10 and 20 crossings when cast on the host through `tools/pxssim.py`, so the crossing figure's divisor is a measurement; the hit row's h is 32; and `pb_devrows` banked every view row in BOTH the game mode's table and the last mode's (the present's device-row table, read back off the guest — the CGA 320×200 two-bank arm the promise is made on included); the numbers are reported, never gated |
-| `pixelstein` (`tests/pixelstein.py`) — **five rows**: `pixelstein` (`_cga_gla`, gated), `pixelstein-herc` (`_herc_gla`, gated), `pixelstein-vga` (`_xt_vga`, reported), `pixelstein-win` (`_herc_gla --windowed`, reported), `pixelstein-c160` (`_cga_gla --c160`, reported) | soak, MartyPC, one machine a row | **wave 1's gate**, `tests/tank.py`'s three questions and then the numbers: `px_frames` climbs (it draws); the glass differs a second apart (it advances — a TURN); **it walks**: the eye poked to face south and Up held, `px_py` moves between `PX_SPEED` × (ticks − 3) and × (ticks + 1) with `px_px` still (the bug this catches walked south at 0 and north at 256 a tick); the ink per displayed frame never falls under 70% of its neighbours' (it does not flash, 40 frames); then the FRAME on both pinned scenes at the default (Flat Low res), at Flat Full 64 × 80 (filed against 8.1) and at Wire, **two frames each**: a **FULL REPAINT** — `pxslib.force_all` poked at every stop, a breakpoint on `px_frame_begin`, the median of twelve cycle deltas — and a **TURN** frame, the heading stepped by `PX_TURN` at every stop with `px_dirty` set and nothing forced, so the Δ-fill writes what a turn changes and the present sends the rows it touched (the frame a player sees). **The rows presented are ASSERTED on every frame**, never noted: 80 on a full repaint, and on the turn frame what `pxslib.present_rows` — the host's model of 96.5's `px_r0..px_r1` rule over `tools/pxssim.py`'s two casts — says it is, which on both pinned scenes is also 80 (96.5: a column nearer than 2.5 tiles spans the band; a frame in which the range collapsed would fail the row until the model agrees). Fullscreen on `_cga_gla` and `_herc_gla` **≥ 8.0 (A) / ≥ 7.0 (B) at the default is asserted on the FULL REPAINT**, the dearer of the two; everything else is reported (Mode X on the XT-VGA, `--windowed` on an 8086 per §15, the C160 retime) |
-| `pxssim` (`tests/pxssim.py`) — two rows: `pxssim` (`_cga_gla`) and `pxssim-herc` (`_herc_gla`, the only run of the 4-bank device-row arm) | soak, MartyPC | the guest's column arrays (`top`, `bot`, `wallh`, `mat`, `side`, `u`) and its whole shadow against `tools/pxssim.py` on both scenes, Textured (with the quantised height `hq` beside them), Flat and Wire, Low res and Full — after a FORCED frame, again after three TURN frames composed incrementally against it with nothing forced (`--turns`, default 3), so the bytes the skip, the two-ends arm and `px_wrun`'s paths LEFT are held to the host's whole picture of the last pose, **and again after three forward STEPS** (`--steps`, default 3: the eye walked along its heading by `PX_SPEED` a step, the host refusing a step that lands in a wall) — the motion that holds a wall's `u` still while its height grows, which only the sixth skip byte `px_lh` sees (96.3; the first cut's five-byte skip passed every turn and froze a wall walked at); **and the Size row swept**: every Size at both resolutions in the bracket and the window's three, Textured, scene B, a forced frame and one turn each, the resolution PASSED to the renderer — `tests/pxssim.py`'s first cut ran Size 64 alone and 401 checks passed a compose that placed every other Size 8 bytes from where the present read it: **0 differing heights, 0 differing bytes** — the reference renderer and the package are one arithmetic or the row says which column disagrees. `tests/pxssim.py` shadows `tools/pxssim.py` by name, so every PIXELSTEIN row inserts `tools/` on `sys.path` LAST (so it wins) — the first cut's order worked only through an import's side effect |
-| `pxsdisk` (`tests/pxsdisk.py`) | soak, host, `wants=("build/smallapps360.img",)` | `PXSTEIN.O88` is on `games360.img` and `apps.img`, on neither `apps360.img` nor `smallapps360.img` (§24.5's omission, 96.9 — and `tests/unit/t_smallreq.py`'s `FORBIDDEN` carries the row, so the omission is ratcheted where every other §24.5 omission is), nor on `combo.img` (`COMBO_DROP`: the machine the 360 KB field disk is for is the one §24.5 argues cannot hold this — and that disk does not build on `main` at 2237d1ba with or without it, `os88disk` refusing at 446 clusters against 354, so the row asserts the omission only when the image exists and the Makefile's `COMBO_DROP` paragraph says whose decision the overflow is), and the packed file is ≤ 56 KB — read out of the built floppies through `tests/unit/t_image.py`'s FAT12 walker. `apps-all.img` needs the C toolchain to build and is checked when it exists |
-| `pxsauto` (`tests/pxsauto.py`) | soak, MartyPC (`_cga_gla`, windowed) | **the detail selector, every movement** (96.8, `docs/plans/PIXELSTEIN-PLAN.md` §14's row): a breakpoint on `px_auto_frame` and `px_ftime` poked at each stop — the one way a MartyPC 5150 can be made to read slow or fast at will, since the cycle-exact machine's own frame is what it is. The turn key is held BEFORE the first wait (a still window composes nothing, 96.8, and the first cut waited for a frame that never came), so a frame is drawn every tick. The legs, on wave 2's ladder (0 Textured Full, 1 Textured Low res, 2 Flat Full, 3 Flat Low res — 96.8): **(a)** Auto on the 8086 starts a WINDOW at position 2, Flat Full — one rung under the bracket's Textured Low res (PLAN §15) — and the text line says "Detail: Flat  Size 64  Full res"; **(c)** 70 frames poked FAST (1,000 units) do not climb past the tier's start — `px_apos` stays 2 (the regression test for the review's blocker: the first cut climbed a rung on the 64th); **(r)** Resolution ▸ Full under Auto (`px_oncmd`'s arm, poked as `pxslib.pin` pokes a Detail pick) re-seats position `(apos & ~1) | 0` = 2, Flat Full, 64 columns, banks it as the ceiling and the line says so, and 70 fast frames at 2 stay there; **(b0)** THE NEGATIVE CONTROL — the key released and `px_force` poked at every stop from here on, so each frame is the machine's own on a still eye (the cast and a compose that writes nothing, 67.6–70.3 ms at Flat Full): nine of them with nothing poked into `px_ftime` do not step down and every one reads under the budget, printed against it — so the step below is the poke's and not the 5150's (its windowed Flat Full TURN reads 120–137 ms across the 125.0 line, which is why the control is not the turning frame); **(b)** 8 frames poked SLOW (200,000 units, over the budget) step DOWN exactly once to position 3, Flat Low res — the floor —, `px_amiss` back at 0, `px_ahold` read back `PX_AHOLD` ticks ahead of the kernel's clock (`pxslib.kticks`, what `OSAPI_GET_TICKS` answers — ~200 ticks behind 0040:006C, which a first cut read instead), the line reads "Detail: Flat  Low res" on the next drawn frame and stays drawn (announced once: `px_lined` 0 on the frames after), and 12 more slow frames leave `px_apos` on the floor — there is no Wire under it; **(d)** both edges of the hold-down, `px_ahold` poked so that neither a frame's nor a stop's cost to the guest clock decides it: stretched 600 ticks ahead, 64 fast frames and the 65th — whose compare rolls `px_ahit` over at 64 with the hold live — do NOT step up; collapsed to a tick ago, the step up comes at the next rollover (64 more fast frames), lands at position 2 and touches nothing outside the ladder, and 70 more fast frames stay there. `--no-slow` skips the SLOW pokes and the row must FAIL at (b): the by-hand proof that the leg bites. Every leg reads the bss through `pxslib`, never the glass |
-| `t_pxsart` (`tests/unit/t_pxsart.py`) | soak, host, 2 s | 96.4's rules: fifteen 32×32 masters in the sixteen colours, no key, no alpha; the losable criterion on the CGA4 and Hercules sets; the byte-texture set's size and layout as `px_bt_build` writes it (C160's column pair, the odd-row phases); no non-black colour LIGHTS as an all-black texel byte and no colour's dark shade is its lit one (`ink_rules()`, the two rules of 96.4 — blue's 0x10 / 0x10 was the review's find); a master with the key in it and a 33×32 one refused in words (the negative controls) |
-| `t_pxsscale` (`tests/unit/t_pxsscale.py`) | soak, host, 6 s | 96.3's model against the package's own numbers: every backend's generated image fits `PX_GENKB` past the bodies, driver and queue; every scaler ends in a near `ret` with one store per covered view row; the directory aliases every height DOWN and `px_hq` in the assembled part 0 is the model's table; `px_hts` is `HEIGHTS`; every col2tex width ≥ 1; `tests/pxslib.py`'s three layout literals are `pxgen.inc`'s; `build/pxstein.o88`'s part 0 is the tree's. Named so because `t_pxsgen` is TAKEN — the fast digest row above |
-| `pxsscale` (`tests/pxsscale.py`) | soak, MartyPC | **the generated part, byte for byte** (96.3): read back off the 5150 between frames and diffed against `tools/pxsgen.py` — the bodies against the image's bytes, the driver against its template, both scaler sets and the col2tex tables against the model for the phase in force, the two directories in part 0 against the model's — on the window's first Textured frame (WIN1's `ror al, cl`; nothing is generated at launch, the window's rung being Flat — the row asserts `px_genback` = FFh before it pins), after a second Textured frame (regenerating nothing), in the bracket (CGA4's two `ror al, 1`; `--c160` the C160 set) and back in the window. A differing byte is a wrong instruction in code the frame calls 64 times: the first cut's row displacements were stack words (`[bp]` addresses SS), which is exactly what this row is for |
-| `pxs160` (`tests/pxs160.py`) | soak, MartyPC | **the Δ-fill ghost gate on the GLASS** (96.5): a textured scene composed whole, turned three times with nothing forced, then the framebuffer at B800 (the C160 expanding present, the CGA 320×200×4 two-bank copy) and the rendered desktop (the WIN1 blit) read and compared with the same pose redrawn whole — identical bytes, or a writer bypassed the row range, a column's skip left it stale, or a present sent too few rows. `pxssim` holds the shadow; this holds the device |
-| `pxsfsx` (`tests/pxsfsx.py`) | soak, MartyPC | **restore equality**: every Mode item × every Detail rung × both resolutions × Size 48/64/80, each a bracket entered with a forced frame drawn and left; the original settings pinned again and the rendered desktop below the menu bar (whose clock moves) compared with the one before the first bracket, and the window's state (rung, resolution, Size, Auto's position, backend) back. 48 brackets on the CGA 5150, a regeneration and a transpose in each Textured one; **then the shrink**: a 49th bracket entered at Size 80, Size 48 pinned INSIDE it, and every device-row byte outside the new band read off the framebuffer (`pxslib.margins`: CGA 320×200×4's two banks from row 28, the Hercules box's four from row 134) — all black, or `px_band_blank` (96.3) left the wider band's edges lit |
+| `pxs-gen` (`tests/unit/t_pxsgen.py`) | **fast, 0.8 s** (declared; 0.5 before the sprite masters joined `pxart.inc`'s regeneration, 0.3 before `pxart.inc` was on the list) | `pxtab.inc`, `pxlev.inc` and `pxart.inc` are what their generators produce, byte for byte — `t_paccman`'s mould. `pxlev.inc` is regenerated with `--no-sweep`: the cheap rules run here, the sweep is the soak row below |
+| `pxs-level` (`tests/unit/t_pxslevel.py`) | soak, 3 s | every level passes every rule of 97.7 **with the DDA sweep**, the stream is well-formed, and a 40 × 40 open hall is refused by the sweep in words (the negative control). The sweep is 0.2 s a level today; it is soak because the fast tier has no room, not because it is slow |
+| `pxsbench` (`tests/pxsbench.py`, `tests/pxsbench/pxsbench.asm`) | soak, an INSTRUMENT | every unit of 97.1's table produced a number on the adapter it ran on; the two 45° DDA rows count exactly 10 and 20 crossings when cast on the host through `tools/pxssim.py`, so the crossing figure's divisor is a measurement; the hit row's h is 32; and `pb_devrows` banked every view row in BOTH the game mode's table and the last mode's (the present's device-row table, read back off the guest — the CGA 320×200 two-bank arm the promise is made on included); the numbers are reported, never gated |
+| `pixelstein` (`tests/pixelstein.py`) — **five rows**: `pixelstein` (`_cga_gla`, gated), `pixelstein-herc` (`_herc_gla`, gated), `pixelstein-vga` (`_xt_vga`, reported), `pixelstein-win` (`_herc_gla --windowed`, reported), `pixelstein-c160` (`_cga_gla --c160`, reported) | soak, MartyPC, one machine a row | **wave 1's gate**, `tests/tank.py`'s three questions and then the numbers (since wave 3 the row FREEZES the world — `px_simoff`, `px_god` — for every leg but the finished frame's, and WAITS FOR THE BRACKET'S FIRST FRAME before it holds a key: the entry builds three sets first, 3.6 s on the 5150, 97.1): `px_frames` climbs (it draws); the glass differs a second apart (it advances — a TURN); **it walks**: the eye poked to face south and Up held, `px_py` moves between `PX_SPEED` × (ticks − 3) and × (ticks + 1) with `px_px` still (the bug this catches walked south at 0 and north at 256 a tick); the ink per displayed frame never falls under 70% of its neighbours' (it does not flash, 40 frames); then the FRAME on the two pinned scenes and, under Textured Low res, on scene C — at the default (**Textured Low res 64 × 80**, 97.1), at 48 × 80 (the fallback rung) and Textured Full 64 × 80, at Flat Low res 64 and 48 × 80, at Flat Full 64 and 48 × 80 (filed against 8.1) and at Wire, **two frames each**: a **FULL REPAINT** — `pxslib.force_all` poked at every stop, a breakpoint on `px_frame_begin`, the median of twelve cycle deltas — and a **TURN** frame, the heading stepped by `PX_TURN` at every stop with `px_dirty` set and nothing forced, so the Δ-fill writes what a turn changes and the present sends the rows it touched (the frame a player sees). **The rows presented are ASSERTED on every frame**, never noted: 80 on a full repaint, and on the turn frame what `pxslib.present_rows` — the host's model of 97.5's `px_r0..px_r1` rule over `tools/pxssim.py`'s two casts — says it is, which on both pinned scenes is also 80 (97.5: a column nearer than 2.5 tiles spans the band; a frame in which the range collapsed would fail the row until the model agrees). Fullscreen on `_cga_gla` and `_herc_gla` **≥ 8.0 (A) / ≥ 7.0 (B) at the default is asserted on the FULL REPAINT**, the dearer of the two, **and again on the FINISHED frame** (the third mode, `"sim"`: the world's simulation running, the player invulnerable, the weapon and the sprites drawn, THE POSE PUT BACK AT EVERY STOP through `frame_times`'s hook and the candidate count asserted — 0 on A and B, 3 on C and on A3, since r1 found C's 64 × 80 number read with two; the fork's own quantity, 97.1) — C (the sprite scene) and **A3, scene A with three guards standing in the corridor** (the plan's own pose, the fork's trigger) are reported with A3's verdict against the 8.0 line printed; everything else is reported (Mode X on the XT-VGA, `--windowed` on an 8086 per §15, the C160 retime) |
+| `pxssim` (`tests/pxssim.py`) — two rows: `pxssim` (`_cga_gla`) and `pxssim-herc` (`_herc_gla`, the only run of the 4-bank device-row arm) | soak, MartyPC | the guest's column arrays (`top`, `bot`, `wallh`, `mat`, `side`, `u`) and its whole shadow against `tools/pxssim.py` on both scenes **and wave 3's scene C — the posts, the silhouettes, the boxes and the weapon, the world frozen at its spawn (`px_simoff`) and the host drawing the same candidates from the cells its own cast passed**, Textured (with the quantised height `hq` beside them), Flat and Wire, Low res and Full — after a FORCED frame, again after three TURN frames composed incrementally against it with nothing forced (`--turns`, default 3), so the bytes the skip, the two-ends arm and `px_wrun`'s paths LEFT are held to the host's whole picture of the last pose, **and again after three forward STEPS** (`--steps`, default 3: the eye walked along its heading by `PX_SPEED` a step, the host refusing a step that lands in a wall) — the motion that holds a wall's `u` still while its height grows, which only the sixth skip byte `px_lh` sees (97.3; the first cut's five-byte skip passed every turn and froze a wall walked at); **and the Size row swept**: every Size at both resolutions in the bracket and the window's three, Textured, scene B, a forced frame and one turn each, the resolution PASSED to the renderer — `tests/pxssim.py`'s first cut ran Size 64 alone and 401 checks passed a compose that placed every other Size 8 bytes from where the present read it; **and the DOOR SWEEP** (wave 3's review): the hall's door a tile ahead of the eye poked a quarter, half and three quarters open, both resolutions, the guest's door table read into the host cast (`cast_view`'s `doors`), so a half-open door's gap, its slab's texel and its hit point — which the first cut slid along the slab by the position, 97.2.4 — are held, and the standing sprites' rule (97.6) is exercised by every turn and step: **0 differing heights, 0 differing bytes** — the reference renderer and the package are one arithmetic or the row says which column disagrees. `tests/pxssim.py` shadows `tools/pxssim.py` by name, so every PIXELSTEIN row inserts `tools/` on `sys.path` LAST (so it wins) — the first cut's order worked only through an import's side effect |
+| `pxsdisk` (`tests/pxsdisk.py`) | soak, host, `wants=("build/smallapps360.img",)` | `PXSTEIN.O88` is on `games360.img` and `apps.img`, on neither `apps360.img` nor `smallapps360.img` (§24.5's omission, 97.9 — and `tests/unit/t_smallreq.py`'s `FORBIDDEN` carries the row, so the omission is ratcheted where every other §24.5 omission is), nor on `combo.img` (`COMBO_DROP`: the machine the 360 KB field disk is for is the one §24.5 argues cannot hold this — and that disk does not build on `main` at 2237d1ba with or without it, `os88disk` refusing at 446 clusters against 354, so the row asserts the omission only when the image exists and the Makefile's `COMBO_DROP` paragraph says whose decision the overflow is), and the packed file is ≤ 56 KB — read out of the built floppies through `tests/unit/t_image.py`'s FAT12 walker. `apps-all.img` needs the C toolchain to build and is checked when it exists |
+| `pxsauto` (`tests/pxsauto.py`) | soak, MartyPC (`_cga_gla`, windowed) | **the detail selector, every movement** (97.8, `docs/plans/PIXELSTEIN-PLAN.md` §14's row): a breakpoint on `px_auto_frame` and `px_ftime` poked at each stop — the one way a MartyPC 5150 can be made to read slow or fast at will, since the cycle-exact machine's own frame is what it is. The turn key is held BEFORE the first wait (a still window composes nothing, 97.8, and the first cut waited for a frame that never came), so a frame is drawn every tick. The legs, on wave 2's ladder (0 Textured Full, 1 Textured Low res, 2 Flat Full, 3 Flat Low res — 97.8): **(a)** Auto on the 8086 starts a WINDOW at position 2, Flat Full — one rung under the bracket's Textured Low res (PLAN §15) — and the text line says "Detail: Flat  Size 48  Full res" (Size 48 since the fork moved, 97.1); **(c)** 70 frames poked FAST (1,000 units) do not climb past the tier's start — `px_apos` stays 2 (the regression test for the review's blocker: the first cut climbed a rung on the 64th); **(r)** Resolution ▸ Full under Auto (`px_oncmd`'s arm, poked as `pxslib.pin` pokes a Detail pick) re-seats position `(apos & ~1) | 0` = 2, Flat Full, 64 columns, banks it as the ceiling and the line says so, and 70 fast frames at 2 stay there; **(b0)** THE NEGATIVE CONTROL — the key released and `px_force` poked at every stop from here on, so each frame is the machine's own on a still eye (the cast and a compose that writes nothing, 67.6–70.3 ms at Flat Full): nine of them with nothing poked into `px_ftime` do not step down and every one reads under the budget, printed against it — so the step below is the poke's and not the 5150's (its windowed Flat Full TURN reads 120–137 ms across the 125.0 line, which is why the control is not the turning frame); **(b)** 8 frames poked SLOW (200,000 units, over the budget) step DOWN exactly once to position 3, Flat Low res — the floor —, `px_amiss` back at 0, `px_ahold` read back `PX_AHOLD` ticks ahead of the kernel's clock (`pxslib.kticks`, what `OSAPI_GET_TICKS` answers — ~200 ticks behind 0040:006C, which a first cut read instead), the line reads "Detail: Flat  Low res" on the next drawn frame and stays drawn (announced once: `px_lined` 0 on the frames after), and 12 more slow frames leave `px_apos` on the floor — there is no Wire under it; **(d)** both edges of the hold-down, `px_ahold` poked so that neither a frame's nor a stop's cost to the guest clock decides it: stretched 600 ticks ahead, 64 fast frames and the 65th — whose compare rolls `px_ahit` over at 64 with the hold live — do NOT step up; collapsed to a tick ago, the step up comes at the next rollover (64 more fast frames), lands at position 2 and touches nothing outside the ladder, and 70 more fast frames stay there. `--no-slow` skips the SLOW pokes and the row must FAIL at (b): the by-hand proof that the leg bites. Every leg reads the bss through `pxslib`, never the glass |
+| `t_pxsart` (`tests/unit/t_pxsart.py`) | soak, host, 2 s | 97.4's rules: fifteen 32×32 masters in the sixteen colours, no key, no alpha, and the forty alpha-keyed sprite masters; the losable criterion on the CGA4 and Hercules sets, and the guard's FIVE facing pairs at twelve columns (`SPR_PAIRS`, 97.4); the byte-texture set's size and layout as `px_bt_build` writes it (C160's column pair, the odd-row phases); no non-black colour LIGHTS as an all-black texel byte and no colour's dark shade is its lit one (`ink_rules()`, the two rules of 97.4 — blue's 0x10 / 0x10 was the review's find); a master with the key in it and a 33×32 one refused in words (the negative controls) |
+| `t_pxsscale` (`tests/unit/t_pxsscale.py`) | soak, host, 6 s | 97.3's model against the package's own numbers: every backend's generated image fits `PX_GENKB` past the bodies, driver and queue; every scaler ends in a near `ret` with one store per covered view row; the directory aliases every height DOWN and `px_hq` in the assembled part 0 is the model's table; `px_hts` is `HEIGHTS`; every col2tex width ≥ 1; `tests/pxslib.py`'s three layout literals are `pxgen.inc`'s; `build/pxstein.o88`'s part 0 is the tree's. Named so because `t_pxsgen` is TAKEN — the fast digest row above |
+| `pxsscale` (`tests/pxsscale.py`) | soak, MartyPC | **the generated part, byte for byte** (97.3): read back off the 5150 between frames and diffed against `tools/pxsgen.py` — the bodies against the image's bytes, the driver against its template, both scaler sets and the col2tex tables against the model for the phase in force, the two directories in part 0 against the model's — on the window's first Textured frame (WIN1's `ror al, cl`; nothing is generated at launch, the window's rung being Flat — the row asserts `px_genback` = FFh before it pins), after a second Textured frame (regenerating nothing), in the bracket (CGA4's two `ror al, 1`; `--c160` the C160 set) and back in the window. A differing byte is a wrong instruction in code the frame calls 64 times: the first cut's row displacements were stack words (`[bp]` addresses SS), which is exactly what this row is for |
+| `pxs160` (`tests/pxs160.py`) | soak, MartyPC | **the Δ-fill ghost gate on the GLASS** (97.5): a textured scene composed whole, turned three times with nothing forced, then the framebuffer at B800 (the C160 expanding present, the CGA 320×200×4 two-bank copy) and the rendered desktop (the WIN1 blit) read and compared with the same pose redrawn whole — identical bytes, or a writer bypassed the row range, a column's skip left it stale, or a present sent too few rows. `pxssim` holds the shadow; this holds the device |
+| `pxsfsx` (`tests/pxsfsx.py`) | soak, MartyPC | **restore equality**: every Mode item × every Detail rung × both resolutions × Size 48/64/80, each a bracket entered with a forced frame drawn and left; the original settings pinned again and the rendered desktop below the menu bar (whose clock moves) compared with the one before the first bracket, and the window's state (rung, resolution, Size, Auto's position, backend) back. 48 brackets on the CGA 5150, a regeneration and a transpose in each Textured one; **then the shrink**: a 49th bracket entered at Size 80, Size 48 pinned INSIDE it, and every device-row byte outside the new band read off the framebuffer (`pxslib.margins`: CGA 320×200×4's two banks from row 28, the Hercules box's four from row 134) — all black, or `px_band_blank` (97.3) left the wider band's edges lit |
 | `pxsperf` (`tests/pxsperf.py`) | soak, an INSTRUMENT | **the staged frame**: Textured Low res 64 × 80, Textured Full 64 × 80, the 48 × 80 Low res fallback and Flat Low res, both pinned scenes, both frames, split cast / compose / present / loop by the five breakpoints of `pxslib.stage_times`, the draw queue's length beside each (off `px_qp`); `--probe` assembles `-DPXPROBE` into a scratch 360 KB disk and reads the two counters that build carries (ladder entries, columns skipped; `px_pr_*` — the define adds the two words of bss AND the instructions that count into them, in `px_compose` and `px_lad`, so the probe build is a different image; what is shipped is the plain assembly because nothing shipped defines it, and `t_pxsscale` holds `build/pxstein.o88`'s part 0 to the tree's plain assembly). `docs/reports/PXS-FRAME-<date>.md` is where its table goes |
-| `pxsact`, `pxsstate`, `pxshud`, `pxswin`, `pxsmd`; `t_pxsmap` (soak) | later waves | as `docs/plans/PIXELSTEIN-PLAN.md` §8 and §14 |
+| `pxsact` (`tests/pxsact.py`) | soak, MartyPC (`_cga_gla`; `--shots DIR` writes the done-when screendumps on any machine) | **wave 3's guards, doors and combat** (97.6, 97.8), the world moved by POKES through `pxslib` and read back out of the bss: (a) E1M1's first guard faced NORTH at an eye three tiles to its west SEES it — STAND to ALERT to CHASE within 60 ticks — TURNS to it (`PXAC_ANG` 3072 → 2048) and moves toward it; (b) it SHOOTS: the player vulnerable, 120 ticks land a shot (health under 100 — "or the ATTACK state seen" passed a shot that landed nothing, review); (c) it DIES: hp poked to 2, the eye turned to it so `px_aim` names it, Ctrl through the keyboard one press a shot until DIE/DEAD, hp 0, the `PXC_ACTOR` mark gone, the die frames ending in DEAD; (d) A BODY KEEPS A DOOR OPEN: door 0 poked OPEN and the corpse into its cell stays OPEN past `PX_DOORHOLD`, and closes once the corpse is two tiles off; (f) Space opens the door ahead, Up walks into it, the player's body keeps it open, and the door cell's byte is what it was; (g) A CHASING GUARD OPENS A SHUT DOOR AND COMES THROUGH IT — the second guard two tiles east of it, the eye two tiles west, CHASE poked and nothing else: within 150 ticks the door has left SHUT, the guard's cell is at or past the door's and the door cell's byte is unchanged (no mark on a material nibble; the first cut's guards never opened a door); (h) a locked door: Space at the gold door without the key leaves it SHUT, with `px_keys` poked it opens; (i) a pickup: the eye moved onto the ammo with its cell mark a tile behind, the next step's `px_pmark` takes it — `px_ammo` 8 → 16, the static taken; (m) A STILL EYE OWES NO FRAME FOR WHAT IT CANNOT SEE (review r1): the eye still at the spawn, a guard poked PATROL into the W room behind the corridor's wall and a door out of view poked OPENING — 91 ticks of the sim walk the one and open the other and `px_frames` does not move; the same patroller in the corridor ahead owes frames; (e) THE TWO-GUARDS-AT-MELEE FRAME, reported — in the bracket at the default, THE SIM RUNNING, two guards a tile and two tiles ahead of the spawn's eye, a full repaint's median of eight — and SEVEN CHASERS beside it, every guard poked CHASE on scene A's finished frame against them standing (97.8's price of the line-of-sight walks); (k) the DIE wash: health 1, the player vulnerable, a guard a tile off — DYING, then after `PX_FADE` ticks the floor restarted, health 100, a life fewer; (j) the elevator switch, LAST: Space at (2,22) inside the running bracket loads E1M2 (`px_floor` 1, its 5 actors and 17 doors) and frames go on |
+| `t_pxsmap` (`tests/unit/t_pxsmap.py`) | soak, host, 3 s | every level passes every rule of 97.7 with the sweep in both door states, at least three floors, the doors in cell order, a patroller on E1M2, THE MELEE INVARIANT by name — no open cell with more than two guards within 1.5 tiles — with a three-guard level refused in words as the control, and (wave 3's review) every open cell at material 0 with the three marks clear of the flag nibble: the invariant 97.8's "no mark meets a material" rests on; and (review r1) a door whose far side is a wall refused naming the cell, and `px_los_slope`'s divisor `PX_LOSDMIN` shown to keep (`PX_LOSMAX` + 1) × 256 − 1 << 8 in a signed word both ways |
+| `pxsstate`, `pxshud`, `pxswin`, `pxsmd` | later waves | as `docs/plans/PIXELSTEIN-PLAN.md` §8 and §14 |
 
-**The fast tier's standing, so that "fast, 0.3 s" is not read as room**:
-with `pxs-gen` the tier DECLARES 32.4 s against `BUDGET["fast"]` = 30 s
-(`tools/os88test.py`), 31.9 before this package — the overrun is
-pre-existing and not this package's to fix, the runner enforces the
-MEASURED wall (17.9–25.8 s here, load-dependent; docs/TESTING.md's
-ceiling-under-load note), and the fix, when somebody takes it, is a row
-moved down a tier as a change of its own. **Every later PIXELSTEIN row is
-soak**, `t_pxsmap` and `t_pxsart` included; `pxs-gen` is the package's one
-fast row and stays its only one.
+**The fast tier's standing, so that "fast, 0.8 s" is not read as room**:
+with `pxs-gen` the tier DECLARES **33.4 s** against `BUDGET["fast"]` = 30 s
+(`tools/os88test.py`'s own line, "41 rows, 33s declared"), 32.6 before
+this package (the 32.4 / 31.9 the first cut of this paragraph carried
+were 0.7 s low; the review of wave 2) — the overrun is pre-existing and
+not this package's to fix, the runner enforces the MEASURED wall
+(17.9–25.8 s here, load-dependent; docs/TESTING.md's ceiling-under-load
+note), and the fix, when somebody takes it, is a row moved down a tier as
+a change of its own. **Every later PIXELSTEIN row is soak**, `t_pxsmap`,
+`t_pxsart` and `pxsact` included; `pxs-gen` is the package's one fast row
+and stays its only one. **Every PIXELSTEIN emulator row turns the idle
+saver off** (`os88marty.no_saver` in `pxslib.open_game`): a row drives
+for guest minutes with no key, and the saver came up in the middle of
+`tests/pxssim.py` once it grew a third scene — the window's clip empty,
+`px_hidden` set, the frame counter still, and nothing in the symptom named
+the saver.
 
 **`pxsbench`** rides `build/bench360.img` — the disk the registered row
 opens and `tests/pxsbench.py`'s default, because the MartyPC guests are
 XT-class — and `build/bench.img` for a look under QEMU (`make bench` builds
 both), beside the other harnesses, on `tests/benchlib.inc`'s PIT-bracketed
-method, and its rows are 96.1's units: (a) the compiled store, eighty rows,
+method, and its rows are 97.1's units: (a) the compiled store, eighty rows,
 into RAM and — inside a fullscreen bracket, in the mode the game takes on
 that adapter, `DS` = the framebuffer and no segment override — into the
 framebuffer, and the Low-res set's word store likewise; (b) the static ladder
-entered at an index; (c) the body of 96.2.2 walked to a wall 10 and 20
-crossings away at 45° with 96.2.1's whole setup in front of it, a
+entered at an index; (c) the body of 97.2.2 walked to a wall 10 and 20
+crossings away at 45° with 97.2.1's whole setup in front of it, a
 near-axial walk, and a row of the bench's own scaffolding so the setup is
 reported net; (d) the 5,120-byte row copy to the framebuffer and a 512 × 80
 `OSAPI_GFX_BLIT1` on the desktop; (e) on a genuine CGA, the 160×100×16
@@ -121241,8 +121959,8 @@ at the attribute stride; (f) the texel row, plain, with an `xlat`, with
 backends' phase), with the dual-phase word load (the fallback), and the
 Low-res row (the load, `mov ah, al`, the word store); (g) eight
 `OSAPI_KEY_DOWN`s; (h) one scaler-set generation and one transpose, method
-T; (i) the hit of 96.2.5, once a column; (j) **one tick of the simulation**
-in the shape of 96.8, twice — at E1M1's own counts and at the plan's caps —
+T; (i) the hit of 97.2.5, once a column; (j) **one tick of the simulation**
+in the shape of 97.8, twice — at E1M1's own counts and at the plan's caps —
 so the term the fixed point gears is a measurement. The results are
 left in the package's bss (`pb_res`, `pb_resf`) and `tests/pxsbench.py`
 reads them off MartyPC; the report is `docs/reports/PXS-FRAME-<date>.md`.
@@ -121265,11 +121983,11 @@ writes 1,706 stores in all 32 columns on a `PX_TURN` turn, and
 `tests/pixelstein.py` asserts that ratio (≥ 1.3× A's) on the host through
 `tools/pxssim.py` before it boots anything, so a level edit that quietly
 makes B the easy scene fails the row in words. No scene in E1M1 makes a
-turn dearer than 255,000 clk (`cast + Δ-fill`, the units of 96.1) against
-A's 233,600: the level's rooms are small by 96.7's sweep rule, and that
+turn dearer than 255,000 clk (`cast + Δ-fill`, the units of 97.1) against
+A's 233,600: the level's rooms are small by 97.7's sweep rule, and that
 bounds the Δ-fill as much as the cast.
 
-### 96.11 What was not taken, with the arithmetic
+### 97.11 What was not taken, with the arithmetic
 
 - **The Hercules page flip.** `OSAPI_FSX_PAGE` waits for the retrace (§53.10),
   so a 128 ms frame quantises to 140 (7.1 fps D) against the shadow arm's 126
@@ -121297,19 +122015,32 @@ bounds the Δ-fill as much as the cast.
   `FDIV` 193–203 before the transfers through memory every operand pays on an
   8-bit bus, so the coprocessor is slower per operation than the integer unit
   it would replace, and there is nothing in a per-pixel loop for it to touch.
-- **A single map layout for the walk** — see 96.2.
+- **A single map layout for the walk** — see 97.2.
 
-### 96.12 The host tools and the generated includes
+- **The sprite set's run tables, built on the host** (wave 3). `px_spr_build`
+  walks every frame's alpha bits on the machine to write a run table a
+  column (97.6) — 1,741 ms of a bracket's 3.6 s entry on the 5150 as it
+  stands (4,272 before its walk was rewritten), and about half of that is
+  the walk. The stream could carry each column's run table ready-made: 9
+  bytes a column, 31 × 32 + 9 × 16 = 1,136 columns = 10,224 bytes more in
+  the art claim (PXA_KB 30 → 40; the alpha bytes could go, −4,544), with the
+  C160 pairs either a second set (+10 KB) or merged on the machine from
+  the single columns. Priced at −2.5M clk, ~−0.5 s a bracket entry;
+  measured for the rewrite would be 97.1's breakpoint pair. Not taken this
+  wave: a format change to the stream and `pxart.inc` with three waves
+  still to land art on it.
+
+### 97.12 The host tools and the generated includes
 
 | tool | writes | held by |
 |---|---|---|
 | `tools/pxstab.py` | `apps/pixelstein/pxtab.inc` — `px_sin`, `px_tan`, the eight fans and `px_fantab`, `PX_TANPARK`, `PX_FOCAL` | `pxs-gen` (fast); `--check`; `tests/pxsbench/` includes it so the bench's setup reads the real tables |
-| `tools/pxslevel.py` | `apps/pixelstein/pxlev.inc` (the directory) and `build/pxslev.bin` (the stream), with every rule of 96.7 checked — the DDA sweep in both door states | `pxs-gen` (fast, `--no-sweep`: the cheap rules); **`pxs-level` (soak: every rule, the sweep included, and the negative control)**; `make pxsgen` regenerates the includes and then builds the stream THROUGH `$(BUILD)/pxslev.bin`'s rule, which runs `--check` with the sweep — one command line, not two. `$(BUILD)/pxstein.o88`'s rule reaches it (wave 1): the stream is the package's part 1 |
-| `tools/pxssim.py` | a scene's column arrays (`--dump`) and its shadow as a PNG per byte backend (`--png --backend cga4\|herc\|modex\|cga16`; `--rung flat\|wire\|tex` the three rungs — `tex` renders through `tools/pxsart.py`'s byte-texture set with the odd-row phase and quantises the height as the cast does (96.3); `--size 48..80 --res low\|full` the View row and the Resolution axis — `--size 64 --res low` is the shipped rung, and so the DEFAULT, so that the wave-1 diff and the wave-0 evidence are one picture; **the resolution is an argument to `geometry()` and `render()`, never inferred from the column count** (48 columns is Size 48 Full or a 96-byte band, and the first cut's `bpc = 2 if cols == 32` could model one Size — the hole the compose's constant column base came through); 160/320 refused, 96.3). A sliding door's `doorpos` is subtracted from the fraction before the side's mirror in both walkers, so wave 3 inherits a walker that is already right | `tests/pxssim.py` (wave 1) diffs the guest against it; `tests/pxsbench.py` casts the bench's rays through its walker |
-| `tools/pxsframe.py` | nothing — it PRINTS 96.1's frame table: the plan's §3 counts, scaled to the rung, priced on the bench's M units (copied in by hand, with the date) and solved as the fixed point `F = N / (1 − s/T)` with `s` the measured tick — every row at E1M1's tick with the caps' fps beside it — three dither arms a backend, every rung and both resolutions. Every fps in 96.1's frame paragraph is a line of its output, so a re-measurement is a constant edited here and the paragraph re-read, not re-typed | `docs/reports/PXS-FRAME-<date>.md` §2 |
-| `tools/pxsart.py` | `apps/pixelstein/pxart.inc` (the counts, the claim sizes, the four ink tables — never pixels) and `build/pxsart.bin` (the LZ4 art stream `make` packs from the committed PNG masters, 96.4); `--placeholder` the procedural set, `--check` the rules and the losable criterion, `--preview DIR` every master through every table at each aspect, `--inks` the tables printed; `masters()`, `ink_tables()`, `bt_set()` and `texel()` are what `tools/pxssim.py` renders textures with. **The fifteen masters under `apps/pixelstein/art/` are COMMITTED PNGs** (CONTRIBUTING §6's binary rule taken the way `apps/apple2/rom/` took it, PLAN §12.1): `tests/unit/t_pxsgen.py` is a FAST row that regenerates `pxart.inc` from them inside every `make`, so a clone without them fails the fast tier pointing at the tool. stdlib only — the plan's `--pil` authoring arm was not needed (the masters are procedural placeholders, and the image model's arrive as PNGs on the same pipeline; `read_png` reads indexed, RGB, RGBA and grey at 8 bits, a `tRNS` chunk included, and refuses the rest in words) and its `--dither` was not built (96.4: the two phase arms were not previewed side by side) | `pxs-gen` (fast: the include); `t_pxsart` (soak: the rules); `$(BUILD)/pxsart.bin`'s recipe (`--check --stream`) |
-| `tools/pxsgen.py` | nothing — it MODELS the generated half of part 3 for a backend, byte for byte (`image()`, `scaler()`, `col2tex()`, the directories, `quantise()` and `hq_table()`), and `--sizes` prints what `PX_GENKB` is sized from | `t_pxsscale` (soak, host), `pxsscale` (soak, the guest's part diffed against it), `tools/pxssim.py` (the quantised height and the texel rows) |
-| `tests/pxslib.py` | nothing — it is the GUEST READER every PIXELSTEIN emulator row imports (wave 1): `syms()` re-assembles `pxgame.asm` with `[map symbols]` for every equate (tests/cycweb.py's `pkg_syms`, never a remembered offset); `find(m)` the game's window and its part-0 segment out of `W_SEG` (`tools/os88geom.py`'s `winptr`); `handoff(m)` the `PXH_*` block — which is how a row locates the scratch part (`PXH_GEN`) and the level part, the loader's table being gone; `word()`/`byte()`/`poke()` on the program's bss; `scene(m, which)` pokes a pinned scene and `px_force`; `columns(m)` and `shadow(m)` read the arrays and the shadow claim back | `tests/pixelstein.py`, `tests/pxssim.py` |
+| `tools/pxslevel.py` | `apps/pixelstein/pxlev.inc` (the directory) and `build/pxslev.bin` (the stream), with every rule of 97.7 checked — the DDA sweep in both door states, the melee rule over standing and patrolling guards alike, the doors written in cell order (wave 3: `G`/`H` patrol, `PXL_PATROL` in the include) | `pxs-gen` (fast, `--no-sweep`: the cheap rules); **`pxs-level` (soak: every rule, the sweep included, and the negative control)**; `t_pxsmap` (soak: the melee invariant by name, wave 3); `make pxsgen` regenerates the includes and then builds the stream THROUGH `$(BUILD)/pxslev.bin`'s rule, which runs `--check` with the sweep — one command line, not two. `$(BUILD)/pxstein.o88`'s rule reaches it (wave 1): the stream is the package's part 1 |
+| `tools/pxssim.py` | a scene's column arrays (`--dump`) and its shadow as a PNG per byte backend (`--png --backend cga4\|herc\|modex\|cga16`; `--rung flat\|wire\|tex` the three rungs — `tex` renders through `tools/pxsart.py`'s byte-texture set with the odd-row phase and quantises the height as the cast does (97.3); `--size 48..80 --res low\|full` the View row and the Resolution axis — `--size 64 --res low` is the shipped rung, and so the DEFAULT, so that the wave-1 diff and the wave-0 evidence are one picture; **the resolution is an argument to `geometry()` and `render()`, never inferred from the column count** (48 columns is Size 48 Full or a 96-byte band, and the first cut's `bpc = 2 if cols == 32` could model one Size — the hole the compose's constant column base came through); 160/320 refused, 97.3). A sliding door's `doorpos` is subtracted from the fraction before the side's mirror in both walkers, so wave 3 inherited a walker that was already right. **Since wave 3 it renders the sprites and the weapon too** (97.6): `cast_ray` collects the cells the walkers passed (`seen`, the spotvis marks), `candidates()` is the sprite list — the transform in the package's integer arithmetic, the far-to-near insert, the cap — `draw_sprites()` the posts (or the silhouettes, or boxes when the guest's set is not built) and `draw_weapon()` the sixteen columns over rows 56..79; `render()` takes the world (a `Level` at its spawn, the sim frozen) and the weapon in hand, and `--scene c` is the sprite scene | `tests/pxssim.py` (wave 1) diffs the guest against it; `tests/pxsbench.py` casts the bench's rays through its walker |
+| `tools/pxsframe.py` | nothing — it PRINTS 97.1's frame table: the plan's §3 counts, scaled to the rung, priced on the bench's M units (copied in by hand, with the date) and solved as the fixed point `F = N / (1 − s/T)` with `s` the measured tick — every row at E1M1's tick with the caps' fps beside it — three dither arms a backend, every rung and both resolutions. Every fps in 97.1's frame paragraph is a line of its output, so a re-measurement is a constant edited here and the paragraph re-read, not re-typed | `docs/reports/PXS-FRAME-<date>.md` §2 |
+| `tools/pxsart.py` | `apps/pixelstein/pxart.inc` (the counts, the claim sizes, the four ink tables, the sprite directory and part 4's layout — never pixels) and `build/pxsart.bin` (the LZ4 art stream `make` packs from the committed PNG masters, 97.4: the walls, then the sprite frames and the weapon's); `--placeholder` the procedural set (the walls and, since wave 3, a helmeted guard in five facings, six decorations, eight pickups and the weapon's nine frames), `--check` the rules and the two losable criteria (brick against stone; the guard's front against its side at twelve columns), the alpha key, the span count, `--preview DIR` every master and every sprite frame through every table at each aspect plus the twelve-column front/side pair, `--inks` the tables printed; `masters()`, `ink_tables()`, `bt_set()` and `texel()` are what `tools/pxssim.py` renders textures with, `sprites()`, `weapons()`, `spr_frame()` and `frame_runs()` its sprites. **The fifteen masters under `apps/pixelstein/art/` are COMMITTED PNGs** (CONTRIBUTING §6's binary rule taken the way `apps/apple2/rom/` took it, PLAN §12.1): `tests/unit/t_pxsgen.py` is a FAST row that regenerates `pxart.inc` from them inside every `make`, so a clone without them fails the fast tier pointing at the tool. stdlib only — the plan's `--pil` authoring arm was not needed (the masters are procedural placeholders, and the image model's arrive as PNGs on the same pipeline; `read_png` reads indexed, RGB, RGBA and grey at 8 bits, a `tRNS` chunk included, and refuses the rest in words) and its `--dither` was not built (97.4: the two phase arms were not previewed side by side) | `pxs-gen` (fast: the include); `t_pxsart` (soak: the rules); `$(BUILD)/pxsart.bin`'s recipe (`--check --stream`) |
+| `tools/pxsgen.py` | nothing — it MODELS the generated half of part 2 for a backend, byte for byte (`image()`, `scaler()`, `codeofs()` — the 33-word table before each scaler since wave 3 — `col2tex()`, the directories, `quantise()` and `hq_table()`), and `--sizes` prints what `PX_GENKB` is sized from | `t_pxsscale` (soak, host), `pxsscale` (soak, the guest's part diffed against it), `tools/pxssim.py` (the quantised height and the texel rows) |
+| `tests/pxslib.py` | nothing — it is the GUEST READER every PIXELSTEIN emulator row imports (wave 1): `syms()` re-assembles `pxgame.asm` with `[map symbols]` for every equate (tests/cycweb.py's `pkg_syms`, never a remembered offset); `find(m)` the game's window and its part-0 segment out of `W_SEG` (`tools/os88geom.py`'s `winptr`); `handoff(m)` the `PXH_*` block — which is how a row locates the scratch part (`PXH_GEN`) and the level part, the loader's table being gone; `word()`/`byte()`/`poke()` on the program's bss; `scene(m, which)` pokes a pinned scene and `px_force` (and, since wave 3, the player's cell mark); `columns(m)` and `shadow(m)` read the arrays and the shadow claim back; **wave 3's world readers and pokes** — `sim()`, `god()`, `actor()`/`actor_poke()` (the position with its `PXC_ACTOR` mark), `door()`/`door_poke()`, `player()`, `pcell_poke()` — and a third `frame_times` mode, `"sim"`, the full repaint with the world running | `tests/pixelstein.py`, `tests/pxssim.py`, `tests/pxsact.py` |
 
 The includes are **committed text, never regenerated by `make`**: a plain
 build reads them, `make pxsgen` rewrites them after a level or a constant
