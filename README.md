@@ -100,6 +100,11 @@ make paccmandisk # build the PaccMan floppy - a second Pac-Man, in C: the
 make xt-paccman # 86Box: the 4.77MHz XT with the 720KB PaccMan disk in B: -
               # the machine the "more performant on XTs" question was about
 make 386-paccman # 86Box: the 386DX/25 with the 1.44MB disk in B: - full speed
+make xt-pixelstein # 86Box: the 4.77MHz 640KB XT on CGA with games360.img in
+              # B: - Pixelstein 3D (double-click PXSTEIN.O88), whose F is
+              # the CGA 320x200x4 bracket and whose Mode row's second item
+              # the 160x100x16 retime (SPEC.md 97.15)
+make xt-pixelstein-herc # ...the same XT on a Hercules: F takes the box
 make pmcbandbench # its band composer's benchmark, under QEMU -icount shift=3
 make c64disk  # build the C64 floppy - a Commodore 64: the package, its
               # overlay; the KERNAL/BASIC/CHARGEN ROM rides INSIDE the
@@ -280,12 +285,44 @@ multi-instance:
   first-person shooter in the shape of the 1992 one, priced for the 4.77 MHz
   8088 before a line of it was shaped - fullscreen in CGA 320x200x4, the
   160x100x16 text retime, the Hercules box or Mode X, and windowed as a 1bpp
-  band: eight floors with textured walls, guards, sliding doors, keys and
-  secret doors, a status bar, floor passwords instead of saves, a high-score
-  table, and a timedemo - T on the title page - that prints the machine's
-  own frame rate).
+  band: eight floors with textured walls, guards and dogs, sliding doors,
+  keys and secret doors, a status bar, a Tab map of what you have seen,
+  floor passwords instead of saves, a high-score table, and a timedemo - T
+  on the title page - that prints the machine's own frame rate).
 - ...plus the Task Manager itself, and HELLO, a minimal package that exists to
   be the smallest thing the SDK can build.
+
+**Pixelstein 3D on period hardware.** Which backend a machine shows is the
+adapter's: on a CGA, F takes the game full screen in 320x200x4 and the Mode
+menu's second item is the 160x100x16 text retime (a genuine CGA only); on a
+Hercules, F takes the 720x348 box; on a VGA, Mode X; and windowed it is a
+1bpp band on any desktop, or 16 colours on a VGA from a 286 up. `make
+xt-pixelstein` (CGA) and `make xt-pixelstein-herc` (Hercules) are the two
+86Box XTs to look at it on: 4.77MHz, 640KB on the `ibmxt86` board
+(86Box's `ibmxt` caps at 256KB and rewrites 640 back) - the one change from
+the tree's `xt-cga` and `xt-hercules` besides the disk in B:, because at 256KB
+the game plays its flat-shaded rung with boxes for sprites and no gun (the
+textured walls and the sprite set want ~262KB in all; MartyPC's 256KB 5150
+shows that). Both boot to the desktop with the games disk in B:, and a
+human double-clicks `PXSTEIN.O88` from there - 86Box takes no scripted
+input, so these machines are for looking, and every frame number is
+MartyPC's cycle-exact 640KB 5150's (`os8088_5150_cga_gla`, the gate's
+machine). The Detail menu is a LADDER - textures at full rays, textures at
+half (Low res), flat at full, flat at half - and Auto starts an 8086 full
+screen at textures with half the rays at the full width and a window at
+flat with half the rays, steps down when eight frames in a row miss 1/8 s,
+and steps back up after a 10 s hold-down and 64 frames in a row under the
+position above's own line: 111 ms onto textured half-rays, the budget over
+the largest cost ratio measured between the two (1.125). On an 8086 the
+ladder skips flat full-rays both ways - it is SLOWER than textured half-rays
+there (164 ms against 114 on the CGA) - so a fight with two guards in the
+face steps a 5150 from textured to flat half-rays, and the empty corridor
+after it steps it back (SPEC.md 97.8). Wire (edges only) is one menu pick
+away. **T on the title page is the timedemo**: it replays the two pinned
+scenes unthrottled and prints frames, ticks and fps on the card, which is
+how a 5150 owner reports the machine's number without an emulator. Tab is
+the map, the arrows or WASD move, Ctrl fires, Space opens doors, 1/2/3 pick
+the weapon.
 
 **TeXPad** is the newest of them and a contributed one: a two-pane pad for a
 small, paper-oriented subset of TeX — source on the left, the typeset page on

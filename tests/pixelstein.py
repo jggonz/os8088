@@ -62,6 +62,17 @@ plan's scene-A sprite count on the plan's scene A (PLAN 3's table) - the
 frame the fork's trigger names, REPORTED with its verdict against the 8.0
 line and never gated: the default is the user's decision (97.1). C and
 the 48 x 80 and Flat Low res rungs are reported beside it.
+
+**The table is SPEC.md 97.15's (wave 6's close review).** Every cell this run
+measures is looked up in 97.15's table for the same machine and world - READ
+OUT OF SPEC.md, so the document and the gate cannot hold two copies - and
+must be within 5% of it (PIXELSTEIN-PLAN 7, wave 6's done-when: "the numbers
+matching 97 within 5%"). ASSERTED on the two gated machines fullscreen,
+REPORTED elsewhere: Mode X lands on whole 16.75 ms retraces, so one retrace
+either way is 11-25% of a cell and a band cannot hold it, and C160 and
+windowed are reported tables in the first place. A cell 97.15 leaves blank
+or writes as a range is skipped and counted. A table that moves 5% is a
+SPEC.md change before it is a code change (SPEC.md is updated FIRST).
 """
 import argparse
 import os
@@ -99,6 +110,41 @@ SPRITES = {"a": 0, "b": 0, "c": 3, "a3": 3}  # candidates a pose must show
 STAND, PXAF_SEEN = 1, 4
 WALK_FRAMES = 45                    # MartyPC video frames Up is held: ~13 ticks
 FAIL = []
+SPEC_TOL = 0.05                     # the done-when's "within 5%"
+SPEC_COLS = {"full repaint": 0, "turn": 1, "finished": 2}
+
+
+def spec_table(machine, world):
+    """SPEC.md 97.15's frame table for (machine, world), as
+    {(label, scene, column): ms}. The header is `**`<machine>`, ...` for
+    fullscreen and `**`<machine> --c160`` / `--windowed` for the others;
+    a blank cell or a range (Mode X's retrace either way) is left out."""
+    tag = machine + {"fullscreen": "", "c160": " --c160",
+                     "windowed": " --windowed"}[world]
+    text = open(os.path.join(ROOT, "SPEC.md")).read()
+    at = text.find("### 97.15 ")
+    end = text.find("\n### ", at + 1)
+    sec = text[at:end if end > 0 else len(text)].splitlines()
+    cells, on, label = {}, False, None
+    for ln in sec:
+        if ln.startswith("**`"):
+            on = ln.startswith("**`%s`" % tag)
+            continue
+        if not on or not ln.startswith("|") or ln.startswith("|---") \
+                or ln.startswith("| rung"):
+            continue
+        f = [c.strip() for c in ln.strip().strip("|").split("|")]
+        if len(f) < 5:
+            continue
+        if f[0]:
+            label = f[0]
+        for col, cell in zip(("full repaint", "turn", "finished"), f[2:5]):
+            ms = cell.split("=")[0].strip()
+            try:
+                cells[(label, f[1].lower(), col)] = float(ms)
+            except ValueError:
+                pass                    # blank, or a range: not a cell
+    return cells
 
 
 def check(ok, what):
@@ -121,6 +167,20 @@ def shot(m, path):
     w, h, px = m.fbuf(0)
     os88marty.write_png_rgb(path, w, h, px)
     m.run()
+
+
+STEER = ("ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown")
+
+
+def steer_released(m):
+    """Every steering key UP in the kernel's own key map before a
+    measurement (pxslib.release_held, which every row shares since wave 6's
+    close). Review, wave 6 r2: one c160 run measured every pose with the
+    heading spinning ("the eye stayed at scene A ... (896, 896, 3968)", 0
+    rows presented), and the re-run was green. A pose is POKED, so only a
+    key the kernel still believes is held can turn it: a break code the
+    guest never saw."""
+    return pxslib.release_held(m, STEER, "steering")
 
 
 def restore(g, spawn):
@@ -304,6 +364,7 @@ def main():
                 for mode, mlabel in MODES:
                     m.advance(frames=30)        # let the loop drain what the
                     m.run()                     # last leg's keys left behind
+                    steer_released(m)
                     px, py, head = g.scene(scene)
                     g.wait_frames(1)
                     times = g.frame_times(a.frames, mode=mode)
@@ -470,6 +531,35 @@ def main():
         for label, scene, ms, fps, draw, cols, nsc in finished:
             print("     %-38s %-2s finished     %6.1f ms %5.2f fps  draw %6.1f ms  %d cols  "
                   "%s sprites" % (label, scene.upper(), ms, fps, draw, cols, nsc))
+    # --- SPEC.md 97.15's table, cell for cell (the done-when's 5%) ---------
+    table = spec_table(a.machine, world)
+    meas = [(l, sc, ml, ms) for l, sc, ml, ms, _, _, _, _ in results] + \
+           [(l, sc, "finished", ms) for l, sc, ms, _, _, _, _ in finished]
+    hit = worst = 0
+    worstat = ""
+    far = []
+    for label, scene, col, ms in meas:
+        want = table.get((label, scene, col))
+        if want is None or not ms:
+            continue
+        hit += 1
+        d = abs(ms - want) / want
+        if d > worst:
+            worst, worstat = d, "%s %s %s %.1f against %.1f" % (label, scene.upper(),
+                                                                 col, ms, want)
+        if d > SPEC_TOL:
+            far.append("%s %s %s: %.1f ms, 97.15 says %.1f (%+.1f%%)"
+                       % (label, scene.upper(), col, ms, want, 100.0 * (ms - want) / want))
+    print("   SPEC.md 97.15 (%s %s): %d of %d measured cells have a cell there; "
+          "the worst is %.1f%% off (%s)" % (a.machine, world, hit, len(meas),
+                                            100.0 * worst, worstat or "-"))
+    for f in far:
+        print("     over 5%%: %s" % f)
+    if gated:
+        check(hit >= len(meas) - 2, "97.15 carries a cell for every measured one "
+              "(%d of %d)" % (hit, len(meas)))
+        check(not far, "every measured cell is within 5%% of SPEC.md 97.15 "
+              "(%d over)" % len(far))
     if FAIL:
         print("pixelstein: FAIL (%d)" % len(FAIL))
         for f in FAIL:

@@ -582,6 +582,10 @@ def actor_frame(a, col, heading, cols):
     c = min(max(col, 0), cols - 1)
     rel = ((fan[c] + heading + ANG // 2) - a[3] + ANG // 16) & (ANG - 1)
     f8 = rel >> 9
+    if (a[2] & 0x7F) == 1:          # THE DOG (wave 6): four masters make
+        pxsart = _pxsart()          # its eight (pxact.inc's px_dogfac)
+        master, mirror = pxsart.D_FACING[f8]
+        return pxsart.D_WALK0 + master * 2, bool(mirror)
     if f8 <= 4:
         return G_WALK0 + f8 * 2, False
     return G_WALK0 + (8 - f8) * 2, True

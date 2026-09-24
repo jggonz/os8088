@@ -3,7 +3,7 @@
 
     python3 tests/unit/t_pxslevel.py
 
-SOAK, beside a change to the package: `soak -k 'pxs*'`. The fast row
+SOAK, beside a change to the package: `soak -k 'pxs*' -k 't_pxs*' -k 'pixelstein*'`. The fast row
 (t_pxsgen) regenerates pxlev.inc with --no-sweep, which runs the cheap rules
 - reachability with keys before doors, the counts, the sight line, the
 melee rule - and skips the DDA sweep: every open cell x 16 headings, one ray

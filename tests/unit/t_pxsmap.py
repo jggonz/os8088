@@ -3,7 +3,7 @@
 
     python3 tests/unit/t_pxsmap.py
 
-Host-side, soak (`soak -k 'pxs*'`). Every level under apps/pixelstein/levels/
+Host-side, soak (`soak -k 't_pxs*'`). Every level under apps/pixelstein/levels/
 passes tools/pxslevel.py's check() WITH the DDA sweep in both door states
 (the `pxs-level` row runs the tool as a process; this one calls the rules
 and reads their numbers), and the two rules wave 3 leans on are asserted by
@@ -69,7 +69,9 @@ def main():
         cells = [y * pxslevel.MAP_W + x for x, y, _f, _l in lv.doors]
         eq(cells, sorted(cells), "%s: the doors are in cell order (px_door_of's table)" % lv.name)
         # the melee invariant, counted here as the engine's cap needs it
-        guards = [(a[0] + 0.5, a[1] + 0.5) for a in lv.actors if (a[2] & ~pxslevel.PATROL) == 0]
+        guards = [(a[0] + 0.5, a[1] + 0.5) for a in lv.actors]   # guards AND
+                                    # dogs (wave 6: a dog at melee is a sprite
+                                    # as tall as a guard's)
         worst_n = 0
         for y in range(pxslevel.MAP_H):
             for x in range(pxslevel.MAP_W):
@@ -78,7 +80,7 @@ def main():
                 n = sum(1 for gx, gy in guards
                         if (gx - x - 0.5) ** 2 + (gy - y - 0.5) ** 2 <= pxslevel.MELEE_R2)
                 worst_n = max(worst_n, n)
-        check(worst_n <= 2, "%s: no open cell has more than two guards at melee (worst %d)"
+        check(worst_n <= 2, "%s: no open cell has more than two actors at melee (worst %d)"
               % (lv.name, worst_n))
         # THE MARKS NEVER MEET A MATERIAL (97.8; review, wave 3): the engine
         # keeps PXC_BLOCK / PXC_ACTOR / PXC_PLAYER (0x10 / 0x20 / 0x40) in
@@ -98,6 +100,12 @@ def main():
                  sum(1 for a in lv.actors if a[2] & pxslevel.PATROL), len(lv.statics), worst_n))
     lv2 = pxslevel.parse(os.path.join(pxslevel.DEFAULT_DIR, "e1m2.txt"))
     check(any(a[2] & pxslevel.PATROL for a in lv2.actors), "E1M2 carries a patrolling guard (G)")
+    # THE DOG (wave 6): kind 1, standing (h) or patrolling (H), on floors 3..8
+    ndogs = 0
+    for n in range(3, 9):
+        lvn = pxslevel.parse(os.path.join(pxslevel.DEFAULT_DIR, "e1m%d.txt" % n))
+        ndogs += sum(1 for a in lvn.actors if (a[2] & ~pxslevel.PATROL) == 1)
+    check(ndogs >= 6, "floors 3..8 carry dogs (%d)" % ndogs)
     # --- the negative control: three guards within one cell's melee reach ------
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "melee.txt")
@@ -107,7 +115,7 @@ def main():
         pxslevel.check_melee(lv, bad)
         check(bad and "melee" in bad[0], "three guards at one cell's melee reach are REFUSED (%s)"
               % (bad[0] if bad else "accepted"))
-        check(bad and "3 guards" in bad[0], "...in words naming the count")
+        check(bad and "3 actors" in bad[0], "...in words naming the count")
         p = os.path.join(d, "doorwall.txt")
         open(p, "w").write(DOORWALL)
         try:

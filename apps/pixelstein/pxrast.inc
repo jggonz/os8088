@@ -231,6 +231,16 @@ px_fsx_main:
     mov al, [px_fsxm]
     call OSAPI_FSX_MODE
     jc .out                         ; refused: the desktop is untouched
+    call OSAPI_FSX_SURF             ; THE MOUSE'S MIDDLE IS THIS BRACKET'S
+    jc .nosurf                      ; (SPEC.md 53.7.1, wave 6): OSAPI_VIDEO
+    shr cx, 1                       ; answers about the PRIMARY, and on a
+    add ax, cx                      ; two-card desktop a bracket on the other
+    jmp short .surf                 ; card is that card's width - 720 on a
+.nosurf:                            ; Hercules beside a 640 VGA, and the
+    mov ax, [px_scrw]               ; mouse turned from 320 there, 40 dots
+    shr ax, 1                       ; left of the middle. Asked once, after
+.surf:                              ; the mode set's collapse (a bracket-only
+    mov [px_fmid], ax               ; slot, px_mouse_turn reads the word)
     mov al, [px_mode]
     mov [px_back], al
     call px_r_setup
@@ -287,7 +297,9 @@ px_fsx_main:
 .nodemo:
     mov byte [px_hmsgw], PXM_NONE   ; the bracket's messages end with it -
     cmp byte [px_hmsg], PXM_PAUSED  ; one owed too - and the window's line
-    je .msgok                       ; says the rest
+    je .msgok                       ; says the rest (the Tab map's line too:
+    cmp byte [px_hmsg], PXM_MAP     ; the map stays up across the exit, so
+    je .msgok                       ; its line does - review, wave 6)
     mov byte [px_hmsg], PXM_NONE
     mov byte [px_hmsgt], 0
 .msgok:
@@ -443,26 +455,25 @@ px_shadow_clear:
 .out:
     ret
 
-; px_w4tab_put - WIN4's 32 -> 16 table (97.14) into the shadow claim at
-;                PX_W4TAB, beside the strip it expands into, so the present's
+; px_w4tab_put - WIN4's two 32 -> 16 tables (97.14) into the shadow claim at
+;                PX_W4TAB, beside the strip they expand into, so the present's
 ;                inner loop has its source, its table and its destination in
 ;                ONE segment: entry i is the colour of Mode X's byte i with
-;                both nibbles set - 0..15 the sixteen themselves, 16..31 the
-;                dark face's twin, which is C160's (px_it_c160's dark half,
-;                tools/pxsart.py's _darker_index: the nearest darker colour,
-;                never black but black's own). clobbers AX, CX, SI, DI, ES
+;                both nibbles set, for the EVEN rows and then the ODD -
+;                0..15 the sixteen themselves on both, 16..31 the dark face:
+;                its LIT colour on the even rows and black on the odd, a
+;                line dither that keeps the material's hue (wave 6; the first
+;                cut's C160 twin made brown red and red blue). The tables are
+;                tools/pxsart.py's win4_tables(), px_it_win4 in pxart.inc,
+;                and px_blit_w4 swaps them a row (`xor bl, 0x20`).
+;                clobbers CX, SI, DI, ES
 px_w4tab_put:
     mov es, [px_shseg]
     mov di, PX_W4TAB
-    mov si, px_it_c160
+    mov si, px_it_win4
     mov cx, 32
     cld
-.e:
-    lodsb
-    mov ah, 0x11
-    mul ah                          ; the colour in both nibbles
-    stosb
-    loop .e
+    rep movsw
     ret
 
 ; -----------------------------------------------------------------------------

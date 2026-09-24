@@ -55,6 +55,7 @@ PXM_NONE    equ 0                   ; the left label row's message: none...
 PXM_PAUSED  equ 1                   ; ...PAUSED (the bracket's pause)
 PXM_DETAIL  equ 2                   ; ...the rung and resolution (Auto's step)
 PXM_SIZE    equ 3                   ; ...the Size (the V key)
+PXM_MAP     equ 4                   ; ...the Tab map is up (wave 6)
 PX_MSGT     equ 36                  ; ticks a message stands (2 s)
 PX_GRINT    equ 36                  ; ...and the grin
 PXCD_LINES   equ 8                   ; a card's lines...
@@ -94,6 +95,7 @@ px_s_labl:  db 'FLOOR SCORE LIVES', 0
 px_s_labr:  db 'HEALTH AMMO', 0
 px_s_mpause: db 'PAUSED', 0
 px_s_msize: db 'SIZE ', 0
+px_s_mmap:  db 'MAP - TAB TO PLAY', 0
 
 ; per backend (px_back 0..6): the writer, the cell's bytes, the bar's first
 ; byte, its layout, its rows, and the four inks as the byte a lit full cell
@@ -374,7 +376,8 @@ px_hud_snap:
 .g:
     stosb
     mov al, [px_hmsg]               ; the message plus its serial (a
-    add al, [px_hmsgn]              ; multiple of 4 over a PXM_* of 0..3)
+    add al, [px_hmsgn]              ; multiple of 8 over a PXM_* of 0..7:
+                                    ; wave 6's PXM_MAP is the fifth)
     stosb
     ret
 
@@ -700,9 +703,13 @@ px_hf_msg:
     jmp px_htext
 .msg:
     mov di, px_hmbuf                ; a message, built and padded
-    cmp al, PXM_PAUSED
-    jne .det
     mov si, px_s_mpause
+    cmp al, PXM_PAUSED
+    je .cat
+    mov si, px_s_mmap
+    cmp al, PXM_MAP
+    jne .det
+.cat:
     call px_strcat
     jmp short .say
 .det:

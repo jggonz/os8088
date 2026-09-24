@@ -126,7 +126,15 @@ BL_MAXROWS  equ 380             ; report lines. Sized for the longest suite,
                                 ; time at 300 when SPEC.md 18.4's write block
                                 ; landed. 380 for 305, and 337 after Set 35's
                                 ; seek and spin-up blocks.
+%ifdef BL_ARENA_BYTES              ; A BENCH WHOSE REPORT IS SHORT MAY ASK
+BL_ARENA    equ BL_ARENA_BYTES      ; FOR LESS, before it includes this file:
+%else                               ; tests/pxsbench's report is ~40 lines,
+                                    ; and its image + bss ran 52 bytes past
+                                    ; APP_MAX_SIZE at 16,000 (PIXELSTEIN wave
+                                    ; 6). Every bench that defines nothing
+                                    ; assembles byte for byte as before
 BL_ARENA    equ 16000           ; bytes of packed NUL-terminated line text.
+%endif
                                 ; **THIS CEILING IS INVISIBLE UNTIL IT IS
                                 ; HIT, AND IT CANNOT SIMPLY BE RAISED**, which
                                 ; together are why it needs a paragraph. The

@@ -2275,6 +2275,16 @@ pb_run:
     pop ax
     ret
 
+%define BL_ARENA_BYTES 6000        ; THE REPORT ARENA, TRIMMED (wave 6):
+                                    ; benchlib's 16,000 is sized for
+                                    ; sysbench's 337 lines, this report is
+                                    ; ~40 of at most 78 bytes (~3.1 KB), and
+                                    ; at 16,000 the bench's image + bss read
+                                    ; 61,492 against APP_MAX_SIZE's 61,440 -
+                                    ; the image had grown past a 512-byte
+                                    ; step since wave 3, so bench360.img did
+                                    ; not build and the row SKIPped (SPEC.md
+                                    ; 97.10). Every byte here is two (bl_out)
 %include "benchlib.inc"
 
 ; =============================================================================

@@ -499,7 +499,7 @@ controller, so no XT profile can host one),
 `386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
 `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,
-`xt-weave`, `386-weave`, `xt-weave-256`;
+`xt-weave`, `386-weave`, `xt-weave-256`, `xt-pixelstein`, `xt-pixelstein-herc`;
 plus `marty` (MartyPC). **`386-ps2` is the only machine here with a PS/2
 mouse** — every other config is `mouse_type = msserial`, which is why §9.9
 shipped and went untested on anything but QEMU for months; it is a Packard
@@ -538,7 +538,8 @@ reaches the `]` prompt and answers a keystroke and is a machine to look at,
 which is why the Wire record is tier 3; it was 0.41% until APPLE2-SPEC
 section 4.3.1 made the wall slice a duty-cycle controller), and
 `xt-weave`/`386-weave`/`xt-weave-256` the Weave family's
-(WEAVE-SPEC §13.1) — the eighteen that put a dedicated
+(WEAVE-SPEC §13.1), and `xt-pixelstein`/`xt-pixelstein-herc` PIXELSTEIN 3D's
+(§97.15) — the twenty that put a dedicated
 floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
 disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
 family on one floppy — so it is where that geometry of it is booted at all,
@@ -547,7 +548,18 @@ which is WEAVE-SPEC §1.4's floor machine: it holds exactly ONE Weave app and
 the second launch refuses before any I/O with the arithmetic on the glass.
 That machine is for LOOKING at the refusal — 86Box cannot assert anything
 (docs/TESTING.md) — and `tests/weaveone.py` asserts the same sentence under
-MartyPC. `make zdisk` builds the story disk
+MartyPC. **`xt-pixelstein` / `xt-pixelstein-herc` are PIXELSTEIN 3D's
+(§97.15)** — `vm/xt-cga` and `vm/xt-hercules` with `games360.img` in B:,
+the uuid changed, and **640KB on an `ibmxt86` board** in place of the
+copies' 256KB `ibmxt`: the one bend of the copy rule, so the machines show
+the TEXTURED game a 640KB XT gets rather than the 256KB Flat rung with
+boxes and no gun (§97.9) — 86Box's `ibmxt` board tops out at 256KB and
+rewrote 640 back on the first launch, which is why the board key moved
+with it. Both boot to the desktop with B: in ~90 s; reaching the game is a
+human's double-click on `PXSTEIN.O88` — this host cannot send one into
+86Box — so they are where a human LOOKS at the CGA 320x200x4 bracket, the
+160x100x16 retime and the Hercules box. Every number is MartyPC's
+(`tests/pixelstein.py`, a 640KB 5150). `make zdisk` builds the story disk
 (`tools/getstories.py` fetches the stories, which are never committed), `make
 worddisk` the Word disk, `make cworddisk` the CWORD disk — which carries
 `WELCOME.RTF`, the same welcome document the Word disk carries as a `.DOC`,

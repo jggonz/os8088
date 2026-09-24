@@ -34,7 +34,7 @@ THREE LEGS ON THREE MACHINES, because no one emulator has all three facts:
       one leg pokes through the gdb stub HMP's `gdbserver` opens (qpoke);
       every other leg only READS (QMP's pmemsave) and drives the keys and
       the mouse. The screendumps are
-      (build/pxs-shots/wave5-qemu-win4-*.png).
+      (build/pxs-shots/win4-qemu-*.png).
 
   default, MartyPC os8088_xt_vga_herc (a 4.77 MHz XT, a VGA and a Hercules,
       extended RIGHT): (m1) on an 8086 the window is WIN1 and the Colour
@@ -163,7 +163,9 @@ def colour_check(w, px, x0, y0, band, table, what, col0=0):
         for c, b in enumerate(row):
             if c < col0:
                 continue
-            ci = table[b & 31] & 15
+            ci = table[(r & 1) * 32 + (b & 31)] & 15   # the row's table:
+                                    # a dark face is its lit colour on the
+                                    # even rows, black on the odd (wave 6)
             for k in range(8):
                 o = base + (c * 8 + k) * 3
                 rgb = px[o:o + 3]
@@ -287,13 +289,33 @@ def qemu_leg(a):
           % b("px_back"))
     cap = pxslib.u16(rd("px_i_det", 14), 12)
     check(cap == s["px_s_colon"], "(q0) ...and Detail > Colour is live and says On")
-    png("wave5-qemu-win4-attract.png")
+    png("win4-qemu-attract.png")
     keys("sendkey spc")                     # the attract page's Space: PLAY
     t0 = time.time()
     while b("px_state") != pxslib.PXST["play"] and time.time() - t0 < 30:
         time.sleep(0.2)
-    # a little left, so the two pickups at (6,1) and (9,1) are in the view
-    keys("sendkey left 120")
+    # THE POSE IS POKED, not held (review, wave 6 r2): the first cut held
+    # `sendkey left 120` "so the two pickups at (6,1) and (9,1) are in the
+    # view" - a hold QEMU's host times, onto a floor whose pickups have
+    # since moved: tools/pxssim.py through pxsart.win4_tables() counts 7
+    # WIN4 colours at scene A's own heading, 5 from -12 to -40 degrees and 4
+    # further round, so the hold passed when it turned little and failed
+    # (5 colours, twice in two soaks) when it turned more. Scene A's eye and
+    # heading, poked with a whole frame owed so the pose is drawn
+    import pxssim                                           # noqa: E402
+    ax_, ay_, _h = pxslib.scene_at("a")
+    hd = _h
+    base = seg << 4
+    writes = [(base + s["px_px"], ax_.to_bytes(2, "little")),
+              (base + s["px_py"], ay_.to_bytes(2, "little")),
+              (base + s["px_head"], hd.to_bytes(2, "little")),
+              (base + s["px_hcos"], (pxssim.cos_q14(hd) & 0xFFFF).to_bytes(2, "little")),
+              (base + s["px_hsin"], (pxssim.sin_q14(hd) & 0xFFFF).to_bytes(2, "little")),
+              (base + s["px_pcell"], (((ay_ >> 8) << 6) | (ax_ >> 8)).to_bytes(2, "little")),
+              (base + s["px_force"], b"\x01")]
+    for name, fill in pxslib.FORCE_ALL:
+        writes.append((base + s[name], bytes([fill]) * (2 * pxslib.COLMAX)))
+    qpoke(q, writes)
     mouse("to", 630, 30)                    # the arrow off the band: it is the
     time.sleep(2.0)                         # desktop's, drawn over the glass
     f0 = w("px_frames")
@@ -302,11 +324,13 @@ def qemu_leg(a):
     bx, by, cx = w("px_bx"), w("px_by"), w("px_cx")
     print("   the band at (%d,%d), the content box's left %d" % (bx, by, cx))
     check(bx % 8 == 0 and bx == cx, "(q1) the band lands 8-ALIGNED, at the content's own left")
-    table = q.read((w("px_shseg") << 4) + W4TAB, 32)
+    table = q.read((w("px_shseg") << 4) + W4TAB, 64)
     import pxsart                                           # noqa: E402
-    lit, dark = pxsart.ink_tables()["c160"]
-    want = bytes(((v & 15) * 0x11) for v in list(lit) + list(dark))
-    check(table == want, "(q2) the 32 -> 16 table is 0..15 and tools/pxsart.py's C160 dark twin")
+    even, odd = pxsart.win4_tables()
+    want = bytes(even + odd)
+    check(table == want, "(q2) the two 32 -> 16 tables are tools/pxsart.py's win4_tables(): "
+          "0..15 themselves, a dark face its LIT colour on the even rows and black on the "
+          "odd (wave 6's line dither - the C160 twin it replaced turned brown to red)")
 
     class G:                                # band_bytes' reader, over QEMU
         def word(self, n):
@@ -322,8 +346,8 @@ def qemu_leg(a):
     n, bad = colour_check(ww, px, bx, by, band, table, "(q2) the glass")
     check(size == BAND and n >= 6 and bad == 0,
           "(q2) the glass is the shadow through the table, pixel for pixel (%d colours)" % n)
-    png("wave5-qemu-win4-play.png")
-    png("wave5-qemu-win4-play-crop.png", crop=(bx - 8, by - 20, 528, 150), zoom=2)
+    png("win4-qemu-play.png")
+    png("win4-qemu-play-crop.png", crop=(bx - 8, by - 20, 528, 150), zoom=2)
     # --- (q3) a turn: PLANAR, one BLITP a strip, four a frame at most ------
     n0, p0, f0 = w("px_nb4"), w("px_nbp"), w("px_frames")
     keys("sendkey right 600")
@@ -339,7 +363,7 @@ def qemu_leg(a):
     n, bad = colour_check(ww, px, bx, by, band, table, "(q3) the planar glass")
     check(bad == 0 and n >= 4, "(q3) ...and its glass is the shadow through the table, "
           "pixel for pixel")
-    png("wave5-qemu-win4-turn-crop.png", crop=(bx - 8, by - 20, 528, 150), zoom=2)
+    png("win4-qemu-turn-crop.png", crop=(bx - 8, by - 20, 528, 150), zoom=2)
     time.sleep(1.0)
     # --- (q3b) the FALLBACK: a window with another over it is BLIT4's -------
     # Up 40 px, under the GAMES window's bottom edge, and GAMES raised by a
@@ -376,7 +400,7 @@ def qemu_leg(a):
     n, bad = colour_check(ww, px, nbx, w("px_by"), band, table,
                           "(q3b) the fallback's glass right of the cover", col0=c0)
     check(bad == 0 and n >= 2, "(q3b) ...and its uncovered glass is the table's too")
-    png("wave5-qemu-win4-covered.png")
+    png("win4-qemu-covered.png")
     tx = GAMES_RIGHT + 40                   # our title, right of GAMES:
     mouse("click", tx, y1 + 9)              # ours on top again...
     mouse("down", tx, y1 + 9)               # ...and back where it was
@@ -407,7 +431,7 @@ def qemu_leg(a):
     nbx, nby = bx + (x1 - x), by + (y1 - y)
     n, bad = colour_check(ww, px, nbx, nby, band, table, "(q4) the glass after the move")
     check(bad == 0 and n >= 4, "(q4) ...and the glass at the new place is still the shadow's")
-    png("wave5-qemu-win4-moved.png")
+    png("win4-qemu-moved.png")
     # --- (q5) the sprites: down the hall, the door opened, the guard beyond --
     # --- (q5) the sprites: scene C, poked (the gdb stub, qpoke) ---------------
     px_, py_, hd = pxslib.scene_at("c")     # the brick room's corner: the key,
@@ -435,7 +459,7 @@ def qemu_leg(a):
     hi = max(max(r) for r in band)
     check(hi < 32, "(q5) ...and with sprites and the weapon, every shadow byte is 0..31 "
           "(max %d)" % hi)
-    png("wave5-qemu-win4-sprites-crop.png", crop=(x, y, 528, 150), zoom=2)
+    png("win4-qemu-sprites-crop.png", crop=(x, y, 528, 150), zoom=2)
     q.quit()
 
 
@@ -603,7 +627,7 @@ def marty_leg(a):
         w, h, px = m.fbuf(0)
         os88marty.write_png_rgb(os.path.join(SHOTS, "wave5-xtvgaherc-win4.png"), w, h, px)
         band, size = band_bytes(m, g)
-        table = m.read((g.word("px_shseg") << 4) + W4TAB, 32)
+        table = m.read((g.word("px_shseg") << 4) + W4TAB, 64)
         m.run()
         bx, by = g.word("px_bx"), g.word("px_by")
         n, bad = colour_check(w, px, bx, by, band, table, "(m5) the VGA's glass")

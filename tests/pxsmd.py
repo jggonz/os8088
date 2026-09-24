@@ -33,6 +33,10 @@ SURF would name - and the gate asserts the consequence rather than the call.
       the desktop's 640 x 480 still - the kernel darks it (vid_fsx_enter),
       it never programs it; Esc, and the Hercules is the desktop again and
       the VGA's mode unchanged.
+  (c) (wave 6) in that Hercules bracket the MOUSE steers from the card's own
+      middle: px_fmid is OSAPI_FSX_SURF's 720 / 2 = 360 and not OSAPI_VIDEO's
+      640 / 2, a pointer resting there turns nothing for a second, and one
+      120 dots right of it turns the view (the control).
 
 QEMU cannot host this: it has one display (docs/TESTING.md's two-displays
 row, "QEMU: no"), so the row is MartyPC's - the plan's "QEMU two-card" was
@@ -191,6 +195,36 @@ def main():
               "(b) the bracket is the Hercules', on the Hercules (its bytes are the game)")
         check(vm1 == vm0, "(b) ...and the VGA is not programmed: its mode is the desktop's")
         shot(m, 1, "wave5-pxsmd-herc-bracket.png")
+        # --- (c) THE MOUSE STEERS FROM THIS BRACKET'S MIDDLE (wave 6) --------
+        # px_mouse_turn took the middle from OSAPI_VIDEO's width, which names
+        # the PRIMARY: 640 / 2 = 320 here, 40 dots left of the Hercules' own
+        # middle, so a pointer resting at the middle of the card the game is
+        # on turned the view. The rect is OSAPI_FSX_SURF's (53.7.1), asked
+        # once after the mode set (px_fmid)
+        fm, sw = g.word("px_fmid"), g.word("px_scrw")
+        print("   (c) px_fmid %d (the bracket's middle), OSAPI_VIDEO's width %d" % (fm, sw))
+        check(fm == 360 and fm != sw // 2,
+              "(c) the Hercules bracket's mouse middle is ITS card's: 720 / 2 = 360, "
+              "not the primary's %d / 2" % sw)
+        g.poke_byte("px_mouse", 1)
+        mo.to(fm, 150)
+        h0, t0 = g.word("px_head"), g.kticks()
+        os88marty.until(m, lambda mm: (g.kticks() - t0) & 0xFFFF >= 18, "a second",
+                        poll=0.2, limit=60.0)
+        h1 = g.word("px_head")
+        print("   (c) the pointer at x = %d for a second: heading %d -> %d" % (fm, h0, h1))
+        check(h1 == h0, "(c) ...and a pointer resting there turns nothing (the "
+              "unfixed middle read it 40 dots right: 10 units a tick)")
+        mo.to(fm + 120, 150)
+        h0, t0 = g.word("px_head"), g.kticks()
+        os88marty.until(m, lambda mm: (g.kticks() - t0) & 0xFFFF >= 9, "half a second",
+                        poll=0.2, limit=60.0)
+        h1 = g.word("px_head")
+        print("   (c) the pointer 120 dots right: heading %d -> %d" % (h0, h1))
+        check(h1 != h0, "(c) ...while one 120 dots right of it turns the view (the "
+              "negative control: the mouse IS steering)")
+        mo.to(fm, 150)
+        g.poke_byte("px_mouse", 0)
         g.leave_fsx()
         os88marty.settle(m, card=1)
         vm2 = mode_of(m, 0)

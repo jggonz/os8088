@@ -137,7 +137,23 @@ PICKUP_NAMES = ("ammo", "medkit", "food", "goldkey", "silverkey", "treasure",
 WEAPON_NAMES = ("knife", "pistol", "mgun")
 DECO0 = NGUARD                  # frame index of decoration kind 8
 PICK0 = DECO0 + len(DECO_NAMES)  # ...and of pickup kind 0
-NSPR = PICK0 + len(PICKUP_NAMES)  # 31 frames
+# THE DOG'S frames (wave 6, 97.4): FOUR facings - 0 its front, 1 the
+# three-quarter (its right side toward the viewer), 2 its right side, 3 its
+# back - x walk phase at D_WALK0 + f * 2 + phase, then the bite, the fall
+# and the corpse. After the pickups, so every index before them stands
+D_WALK0 = PICK0 + len(PICKUP_NAMES)
+D_NFACE = 4
+D_BITE = D_WALK0 + 2 * D_NFACE
+D_DIE = D_BITE + 1
+D_DEAD = D_DIE + 1
+NSPR = D_DEAD + 1               # 42 frames
+# the eight facings the engine draws, from the dog's four: (master, mirrored)
+# by the facing index of 97.6 (0 its front, 2 its right side, 4 its back, 6
+# its left); the two quarters BEHIND take the side, which is what a dog seen
+# from three-quarters behind mostly is - px_act_frame's px_dogfac table
+D_FACING = ((0, 0), (1, 0), (2, 0), (2, 0), (3, 0), (2, 1), (2, 1), (1, 1))
+DOG_TOP = 16                    # a dog is LOW (97.4): no opaque texel above
+                                # this row on any of its frames - --check
 NWPN = len(WEAPON_NAMES) * 3    # nine weapon frames
 BACKENDS = ("cga4", "herc", "c160", "modex")     # WIN1 takes herc's
 DARK = 0.55                     # a dark face's brightness
@@ -514,6 +530,19 @@ def ink_tables():
     return {"cga4": cga, "herc": herc, "c160": c160, "modex": modex}
 
 
+def win4_tables():
+    """WIN4's two 32 -> 16 tables (97.14), (even rows, odd rows): Mode X's
+    byte i to the packed-4bpp byte of its colour in both nibbles - the lit
+    sixteen themselves on every row, the dark face (16 + i) its LIT colour
+    on the even rows and BLACK on the odd. A line dither, not a checker:
+    the planar present makes each plane byte whole from ONE bit of the
+    entry (`cbw`, 97.14), so a pattern inside a byte would cost the inner
+    loop a mask a byte; a pattern ACROSS rows costs a table swap a row"""
+    even = [i * 0x11 for i in range(16)] * 2
+    odd = [i * 0x11 for i in range(16)] + [0] * 16
+    return even, odd
+
+
 RULED = ("cga4", "herc", "c160")    # the backends the three rules bind (Mode X
                                     # is a DAC: 16 + i is dark by construction)
 
@@ -819,7 +848,7 @@ def preview(ms, out_dir):
 # --- the sprites (wave 3, 97.4, 97.6) -----------------------------------------------
 
 def sprite_names():
-    """The 31 sprite frames' file stems, in part 4's frame order."""
+    """The 42 sprite frames' file stems, in part 4's frame order."""
     out = []
     for f in range(5):
         for ph in range(2):
@@ -827,6 +856,10 @@ def sprite_names():
     out += ["g_shoot0", "g_shoot1", "g_pain", "g_die0", "g_die1", "g_die2", "g_dead"]
     out += ["d_" + n for n in DECO_NAMES]
     out += ["p_" + n for n in PICKUP_NAMES]
+    for f in range(D_NFACE):
+        for ph in range(2):
+            out.append("dog_f%d_w%d" % (f, ph))
+    out += ["dog_bite", "dog_die", "dog_dead"]
     assert len(out) == NSPR
     return out
 
@@ -953,7 +986,7 @@ def frame_runs(alpha, w=SPR, pairs=False):
 
 
 def sprites(strict=True):
-    """All 31 frames as (idx, alpha) 32 x 32, in part 4's order."""
+    """All 42 frames as (idx, alpha) 32 x 32, in part 4's order."""
     out = []
     for stem in sprite_names():
         if stem.startswith("p_"):
@@ -1034,6 +1067,12 @@ SPR_PAIRS = ((0, 2, "front vs its side"), (1, 0, "three-quarter vs its front"),
              (3, 4, "side-from-behind vs its back"))
 
 
+# ...and THE DOG's, on its four (wave 6): the front against its side and
+# the three-quarter against both - its back is the side's quarters' stand-in
+# (D_FACING), so it has only to differ from the side
+DOG_PAIRS = ((0, 2, "front vs its side"), (1, 0, "three-quarter vs its front"),
+             (1, 2, "three-quarter vs its side"), (3, 2, "back vs its side"))
+
 OUTLINE_MAX = 0.25              # a sprite's outline, lit bits over its bytes
 
 
@@ -1087,8 +1126,10 @@ def spr_criterion(sp, wp=None, ms=None):
     dark line round the figure whatever wall is behind it; the body's
     density against the walls' mean is reported beside it."""
     ok, lines = True, []
-    for fa_, fb_, what in SPR_PAIRS:
-        front, side = sp[G_WALK0 + 2 * fa_], sp[G_WALK0 + 2 * fb_]
+    pairs = [(G_WALK0, fa_, fb_, "guard", what) for fa_, fb_, what in SPR_PAIRS]
+    pairs += [(D_WALK0, fa_, fb_, "dog", what) for fa_, fb_, what in DOG_PAIRS]
+    for w0, fa_, fb_, who, what in pairs:
+        front, side = sp[w0 + 2 * fa_], sp[w0 + 2 * fb_]
         for be in ("cga4", "herc"):
             a, b = spr_at12(front, be), spr_at12(side, be)
             diff = tot = 0
@@ -1105,11 +1146,16 @@ def spr_criterion(sp, wp=None, ms=None):
             share = diff / float(tot) if tot else 0.0
             good = share >= DIFF_MIN
             ok = ok and good
-            lines.append("%s: the guard's %s at 12 columns - %.0f%% of the "
+            lines.append("%s: the %s's %s at 12 columns - %.0f%% of the "
                          "texels differ (want >= %.0f%%): %s"
-                         % (be, what, share * 100, DIFF_MIN * 100,
+                         % (be, who, what, share * 100, DIFF_MIN * 100,
                             "distinguishable" if good else "NOT DISTINGUISHABLE"))
     names, wnames = sprite_names(), weapon_names()
+    high = [names[i] for i in range(D_WALK0, D_DEAD + 1)
+            if any(sp[i][1][y][x] for y in range(DOG_TOP) for x in range(SPR))]
+    ok = ok and not high
+    lines.append("the dog is LOW - every frame in rows %d..31 (97.4): %s"
+                 % (DOG_TOP, "yes" if not high else "NO - " + ", ".join(high)))
     for be in ("cga4", "herc"):
         bad = []
         for i, (idx, alpha) in enumerate(sp):
@@ -1248,6 +1294,81 @@ def _guard(facing, phase, pose):
     return fr
 
 
+def _dog(facing, phase, pose):
+    """A brown dog, 32 x 32 (wave 6): facing 0..3 (its front, the
+    three-quarter with its right side toward the viewer, its right side,
+    its back), walk phase 0/1, pose 'walk' / 'bite' / 'die' / 'dead'. LOW -
+    every frame in rows DOG_TOP..31, the frame's lower half, standing on the
+    frame's floor (97.4; the first placeholder reached row 3, a guard-height
+    dog taller than the door, and the frame costs were measured on it -
+    review, wave 6 r2) - and blocky, as the guard is, until the image
+    model's lands on the same contract."""
+    fr = _sblank()
+    coat, snout, nose, tooth, tongue = 6, 7, 0, 15, 12
+    if pose == "dead":
+        _sfill(fr, 4, 26, 26, 31, coat)
+        _sfill(fr, 24, 25, 30, 30, coat)
+        _sfill(fr, 8, 30, 20, 32, 4)                   # the pool
+        return fr
+    if pose == "die":
+        _sfill(fr, 5, 21, 25, 27, coat)                # keeling over
+        _sfill(fr, 22, 18, 29, 24, coat)
+        _sfill(fr, 7, 27, 10, 31, coat)
+        _sfill(fr, 19, 27, 22, 31, coat)
+        return fr
+    if pose == "bite":                                 # the jaws, open, at the
+        _sfill(fr, 9, 16, 12, 18, coat)                # viewer: the ears
+        _sfill(fr, 20, 16, 23, 18, coat)
+        _sfill(fr, 9, 17, 23, 21, coat)                # the head
+        _sfill(fr, 10, 21, 22, 22, snout)              # the upper jaw
+        _sfill(fr, 11, 22, 21, 23, tooth)
+        _sfill(fr, 11, 23, 21, 24, tongue)
+        _sfill(fr, 11, 24, 21, 25, tooth)
+        _sfill(fr, 10, 25, 22, 26, snout)              # the lower jaw
+        _sfill(fr, 10, 26, 22, 29, coat)               # the chest
+        _sfill(fr, 11, 29, 14, 32, coat)
+        _sfill(fr, 18, 29, 21, 32, coat)
+        return fr
+    front, back = (32, 31) if phase == 0 else (31, 32)
+    if facing == 0:                                    # its front
+        _sfill(fr, 10, 16, 13, 19, coat)               # the ears
+        _sfill(fr, 19, 16, 22, 19, coat)
+        _sfill(fr, 11, 17, 21, 23, coat)               # the head
+        _sfill(fr, 13, 21, 19, 24, snout)              # the muzzle
+        _sfill(fr, 15, 21, 17, 22, nose)
+        _sfill(fr, 10, 23, 22, 27, coat)               # the chest
+        _sfill(fr, 11, 27, 14, front, coat)            # the forelegs
+        _sfill(fr, 18, 27, 21, back, coat)
+    elif facing == 1:                                  # three-quarter
+        _sfill(fr, 6, 22, 21, 28, coat)                # the body, going away
+        _sfill(fr, 18, 16, 21, 18, coat)               # the ear
+        _sfill(fr, 17, 17, 26, 24, coat)               # the head, near
+        _sfill(fr, 23, 20, 29, 24, snout)              # the muzzle
+        _sfill(fr, 27, 20, 29, 21, nose)
+        _sfill(fr, 3, 20, 7, 23, coat)                 # the tail
+        _sfill(fr, 8, 28, 11, back, coat)
+        _sfill(fr, 17, 28, 20, front, coat)
+    elif facing == 2:                                  # its right side
+        _sfill(fr, 6, 21, 24, 27, coat)                # the body, long
+        _sfill(fr, 22, 16, 25, 18, coat)               # the ear
+        _sfill(fr, 21, 17, 28, 24, coat)               # the head
+        _sfill(fr, 26, 20, 31, 23, snout)              # the muzzle
+        _sfill(fr, 29, 20, 31, 21, nose)
+        _sfill(fr, 2, 19, 7, 22, coat)                 # the tail
+        _sfill(fr, 7, 27, 10, front, coat)             # the legs, the walk
+        _sfill(fr, 11, 27, 14, back, coat)             # swapping which pair
+        _sfill(fr, 17, 27, 20, back, coat)             # reaches
+        _sfill(fr, 21, 27, 24, front, coat)
+    else:                                              # its back
+        _sfill(fr, 15, 16, 17, 20, snout)              # the tail, up
+        _sfill(fr, 11, 17, 14, 20, coat)               # the ears over it
+        _sfill(fr, 18, 17, 21, 20, coat)
+        _sfill(fr, 10, 19, 22, 28, coat)               # the rump
+        _sfill(fr, 11, 28, 14, front, coat)
+        _sfill(fr, 18, 28, 21, back, coat)
+    return fr
+
+
 def _deco(name):
     fr = _sblank()
     if name == "pillar":
@@ -1358,6 +1479,13 @@ def write_sprite_placeholders(force=False):
                 fr = _guard(0, 0, "die%d" % (i - G_DIE))
             else:
                 fr = _guard(0, 0, "dead")
+            _outline_dark(fr)
+            write_png_rgba(p, SPR, SPR, fr[0], fr[1])
+        elif stem.startswith("dog_"):
+            if i < D_BITE:
+                fr = _dog((i - D_WALK0) // 2, (i - D_WALK0) & 1, "walk")
+            else:
+                fr = _dog(0, 0, stem[4:])
             _outline_dark(fr)
             write_png_rgba(p, SPR, SPR, fr[0], fr[1])
         elif stem.startswith("d_"):
@@ -1503,7 +1631,8 @@ def generate(ms, sp=None, wp=None):
     w("; PXS_RUNSZ bytes (count, then up to PXS_MAXRUNS (v0, v1) pairs, v1")
     w("; exclusive); a weapon frame the same at 16 columns. The frame order:")
     w("; the guard's walk (facing * 2 + phase), shoot, pain, die, dead, six")
-    w("; decorations (static kind 8 first), eight pickups (kind 0 first)")
+    w("; decorations (static kind 8 first), eight pickups (kind 0 first), the")
+    w("; dog's walk (four facings * 2 + phase), bite, die, dead (wave 6)")
     w("PXS_MAXRUNS equ %d" % MAXRUNS)
     w("PXS_RUNSZ   equ %d" % RUNSZ)
     w("PXS_RUNOFS  equ %d           ; a frame's run tables begin here" % (SPR * SPR))
@@ -1520,6 +1649,10 @@ def generate(ms, sp=None, wp=None):
     w("PXS_G_DEAD  equ %d" % G_DEAD)
     w("PXS_DECO0   equ %d             ; decoration kind 8's frame" % DECO0)
     w("PXS_PICK0   equ %d             ; pickup kind 0's frame" % PICK0)
+    w("PXS_D_WALK0 equ %d             ; the dog's frames: facing * 2 + walk phase" % D_WALK0)
+    w("PXS_D_BITE  equ %d" % D_BITE)
+    w("PXS_D_DIE   equ %d" % D_DIE)
+    w("PXS_D_DEAD  equ %d" % D_DEAD)
     w("")
     w("; the ink tables: the texel byte (C160: the attribute nibble, both nibbles")
     w("; built by the transpose) of each of the sixteen colour indices, sixteen")
@@ -1530,6 +1663,16 @@ def generate(ms, sp=None, wp=None):
         w("px_it_%s:" % be)
         w("    db " + ", ".join("0x%02X" % v for v in lit) + "    ; lit")
         w("    db " + ", ".join("0x%02X" % v for v in dark) + "    ; dark")
+    w("")
+    w("; WIN4's 32 -> 16 tables (97.14, wave 6): Mode X's byte, 0..15 lit and")
+    w("; 16..31 dark, to its colour in BOTH nibbles, for the EVEN rows and then")
+    w("; the ODD ones - a dark face is its LIT colour on the even rows and black")
+    w("; on the odd, a line dither that keeps the material's hue (the first")
+    w("; cut's C160 twin turned brown to red and red to blue)")
+    w("px_it_win4:")
+    for par, tab in enumerate(win4_tables()):
+        w("    db " + ", ".join("0x%02X" % v for v in tab[:16]) + "    ; %s, lit" % ("even", "odd")[par])
+        w("    db " + ", ".join("0x%02X" % v for v in tab[16:]) + "    ; %s, dark" % ("even", "odd")[par])
     w("")
     return "\n".join(L) + "\n"
 

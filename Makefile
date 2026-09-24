@@ -254,6 +254,14 @@ VM386CWORD := $(CURDIR)/vm/386-c-word
 # substitutes a default and rewrites the config on the way out.
 VMXTPACCMAN := $(CURDIR)/vm/xt-paccman
 VM386PACCMAN := $(CURDIR)/vm/386-paccman
+# The PIXELSTEIN 3D machines (SPEC.md 97): vm/xt-cga and vm/xt-hercules with
+# B: = build/games360.img - the 360KB disk the game ships on (97.9, the plan's
+# fourth decision) - and the uuid changed, and 640KB on the ibmxt86 board;
+# the recipe comment at the `xt-pixelstein` target says why that one key
+# (and the board it needs) is bent. The 256KB case is MartyPC's to show
+# (tests/pxs256.py, SPEC.md 97.9)
+VMXTPXS := $(CURDIR)/vm/xt-pixelstein
+VMXTPXSHERC := $(CURDIR)/vm/xt-pixelstein-herc
 
 # The RUNCPM machines (SPEC.md 74.5, 74.6): one per FLOPPY GEOMETRY, because
 # the three RUNCPM disks do not carry the same software and the machines that
@@ -1997,6 +2005,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         scribe scribedisk \
         cc-note chello covl pkgrun pkgbig cword cworddisk 386-c-word runcpm runcpmdisk \
         paccman paccmandisk pmcbandbench xt-paccman 386-paccman \
+        xt-pixelstein xt-pixelstein-herc \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb iso live burn rcbandbench \
@@ -6187,9 +6196,10 @@ $(BUILD)/pxgame.bin: $(PXGAME_SRC) | $(BUILD)
 # the file is made and not discovered on the 1.44MB disk. AND SO IS THE
 # READ RUN: SPEC.md 20.12.7 bounds the eager parts at 128 UNPACKED sectors
 # (op_load refuses the launch at 128, and OP_COMP does not relieve it - the
-# claim is cut from the unpacked total), the run is 111 after wave 4 - part
-# 0 alone, the level stream having gone lazy: eager, its 20 sectors would
-# make it 131 (101 after wave 3 with it eager, 68 after wave 1, 79 after
+# claim is cut from the unpacked total), the run is 116 on the shipped build
+# (part 0 59,378 bytes, SPEC.md 97.15; 111 after wave 4) - part 0 alone, the
+# level stream having gone lazy: eager, its 20 sectors would have made it
+# 131 after wave 4 and 136 now (101 after wave 3 with it eager, 68 after wave 1, 79 after
 # wave 2), and the only other check was a soak row
 # nothing in `make` runs. A recipe that lets the run reach 128 ships a
 # package that fails at LAUNCH.
@@ -6219,9 +6229,11 @@ $(BUILD)/pxsmove360.img: $(BUILD)/pxstein.o88 $(BUILD)/filler.o88 \
 
 # the ART STREAM the lazy art part carries (SPEC.md 97.4): the fifteen wall
 # masters under apps/pixelstein/art/, two texels a byte, and since wave 3
-# the forty ALPHA-KEYED sprite masters after them (the guard's 17, six
-# decorations, eight pickups, the weapon's nine: 22,720 of the stream's
-# 30,400 bytes), LZ4 - tools/pxsart.py reads the committed PNGs with the
+# the ALPHA-KEYED sprite masters after them - 42 frames of 32x32 (the
+# guard's 17, six decorations, eight pickups and, since wave 6, the dog's
+# eleven: 4 facings x 2 walk, bite, die, dead) and the weapon's nine of
+# 16x32, 29,760 of the stream's 37,440 bytes (PXA_NSPR, PXA_SIZE in
+# pxart.inc) - LZ4 - tools/pxsart.py reads the committed PNGs with the
 # stdlib and refuses a bad one in words (--check: the sixteen colours only,
 # no key and no alpha on a wall, alpha 0 or 255 on a sprite, and the two
 # losable criteria). The include beside it (pxart.inc) is committed text held by
@@ -12901,6 +12913,29 @@ xt-word: $(IMG360) $(BUILD)/word720.img
 xt-paccman: $(IMG360) $(BUILD)/paccman720.img
 	@$(UNPROTECT) $(VMXTPACCMAN)/86box.cfg
 	$(BOX) -P $(VMXTPACCMAN) -N
+
+# PIXELSTEIN 3D on period hardware (SPEC.md 97): a 4.77MHz IBM XT with 640KB,
+# the 360KB system floppy and build/games360.img in B: - `xt-pixelstein` on the
+# CGA (F takes the CGA 320x200x4 bracket, the Mode row's second item the
+# 160x100x16 retime) and `xt-pixelstein-herc` on the Hercules (the box at
+# 720x348). Copies of vm/xt-cga and vm/xt-hercules with fdd_02_fn and the
+# uuid changed - AND mem_size 640 on the ibmxt86 board (86Box's ibmxt caps
+# at 256KB and rewrites 640 back), the one change the copy rule bends for:
+# those two are 256KB, where the game plays Flat with boxes and no gun (SPEC
+# 97.9), and these machines exist to show the textured game period hardware
+# can show (SPEC.md 97.15; 86Box keeps no comments, so the reason lives there
+# and in README.md). 86Box cannot ASSERT anything (docs/TESTING.md) -
+# tests/pixelstein.py on MartyPC is the gate, and every number is its - so
+# these are where a human LOOKS, and DOUBLE-CLICKS PXSTEIN.O88 to get there:
+# the attract page, T's timedemo, the Tab map. $(UNPROTECT) for the standing
+# reason: the game writes PXSTEIN.CFG and PXSTEIN.HS to B:
+xt-pixelstein: $(IMG360) $(GAMESIMG360)
+	@$(UNPROTECT) $(VMXTPXS)/86box.cfg
+	$(BOX) -P $(VMXTPXS) -N
+
+xt-pixelstein-herc: $(IMG360) $(GAMESIMG360)
+	@$(UNPROTECT) $(VMXTPXSHERC)/86box.cfg
+	$(BOX) -P $(VMXTPXSHERC) -N
 
 # ...and the fast one: vm/386-c-word's 386DX/25 with two 1.44MB drives and
 # build/paccman.img in B: - the machine to PLAY it on, where the game runs at

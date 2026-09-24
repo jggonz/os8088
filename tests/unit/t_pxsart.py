@@ -3,7 +3,7 @@
 
     python3 tests/unit/t_pxsart.py
 
-Host-side, soak (`soak -k 'pxs*'`, one package beside a change to it): the
+Host-side, soak (`soak -k 't_pxs*'`, one package beside a change to it): the
 fifteen committed masters read back as 32 x 32 of the sixteen colours with
 no key and no alpha; the losable criterion passes on the CGA4 and Hercules
 sets (brick against grey stone); the byte-texture set is the 30,720 bytes
@@ -115,8 +115,10 @@ def main():
     eq(blob[0] >> 4, ms[0][0][0], "the master's first byte: texel 0 in the high nibble")
     eq(blob[0] & 15, ms[0][0][1], "...and texel 1 in the low")
     z = pxsart.stream(ms)
-    check(0 < len(z) < len(blob), "the LZ4 stream is smaller than the masters (%d < %d)"
-          % (len(z), len(blob)))
+    whole = len(blob) + len(pxsart.sprite_blob(pxsart.sprites(), pxsart.weapons()))
+    check(0 < len(z) < whole, "the LZ4 stream is smaller than the masters it carries - the "
+          "walls AND the sprites (%d < %d; wave 6's dog took the stream past the walls "
+          "alone, which the first cut compared it with)" % (len(z), whole))
 
     # the negative controls
     with tempfile.TemporaryDirectory() as d:
@@ -167,9 +169,29 @@ def main():
     # --- the sprites (wave 3, 97.4, 97.6) ------------------------------------
     sp = pxsart.sprites()
     wp = pxsart.weapons()
-    eq(len(sp), pxsart.NSPR, "31 sprite frames: 17 of the guard, 6 decorations, 8 pickups")
+    eq(len(sp), pxsart.NSPR, "42 sprite frames: 17 of the guard, 6 decorations, 8 pickups, "
+       "11 of the dog (wave 6)")
+    eq(pxsart.NSPR, 42, "...forty-two")
+    eq((pxsart.D_WALK0, pxsart.D_BITE, pxsart.D_DIE, pxsart.D_DEAD), (31, 39, 40, 41),
+       "the dog's frames after the pickups: four facings x two walk phases, the bite, the "
+       "fall, the corpse")
+    eq(len(pxsart.D_FACING), 8, "the dog's eight facings map onto its four masters")
+    check(all(0 <= mm < pxsart.D_NFACE for mm, _ in pxsart.D_FACING),
+          "...every facing names one of the four")
+    # ...and the ENGINE's copy agrees (review, wave 6): pxact.inc's px_dogfac
+    # is the same table by hand, master | 0x80 when mirrored, and nothing else
+    # compared them - a regenerated dog with a new D_FACING would disagree
+    # with the engine silently
+    import re
+    src = open(os.path.join(ROOT, "apps", "pixelstein", "pxact.inc")).read()
+    mm = re.search(r"^px_dogfac:\s*db\s+([^;\n]+)", src, re.M)
+    check(mm is not None, "pxact.inc carries px_dogfac")
+    if mm:
+        eng = [int(v.strip(), 0) for v in mm.group(1).split(",")]
+        eq(eng, [m | (0x80 if f else 0) for m, f in pxsart.D_FACING],
+           "px_dogfac (pxact.inc) is D_FACING (pxsart.py), master | 0x80 mirrored")
     eq(len(wp), pxsart.NWPN, "nine weapon frames: three weapons x three")
-    eq(len(pxsart.sprite_names()), 31, "one file stem a frame")
+    eq(len(pxsart.sprite_names()), 42, "one file stem a frame")
     for i, (idx, alpha) in enumerate(sp):
         flat = [v for row in idx for v in row]
         check(pxsart.KEY not in [v for row, ar in zip(idx, alpha) for v, a in zip(row, ar) if a],

@@ -42,19 +42,19 @@ PXL_MAXSTATIC equ 96
 PXL_PATROL    equ 128            ; the actor kind byte's bit 7: a patroller
 
 PXL_NLEV    equ 8
-PXL_STREAM  equ 9771             ; bytes in the whole stream
-PXL_MAXREC  equ 1851             ; ...and its longest record: the claim
+PXL_STREAM  equ 9831             ; bytes in the whole stream
+PXL_MAXREC  equ 1861             ; ...and its longest record: the claim
 
 px_levdir:                       ; per level: word offset, word length,
                                 ; word spawn cell, word spawn heading
     dw 0, 1054, 195, 0        ; E1M1: 22 doors, 7 actors, 27 statics
     dw 1054, 796, 1351, 3072        ; E1M2: 17 doors, 5 actors, 17 statics
-    dw 1850, 882, 326, 0        ; E1M3: 16 doors, 5 actors, 17 statics
-    dw 2732, 949, 454, 1024        ; E1M4: 20 doors, 8 actors, 17 statics
-    dw 3681, 1263, 456, 1024        ; E1M5: 28 doors, 14 actors, 28 statics
-    dw 4944, 1302, 519, 1024        ; E1M6: 26 doors, 15 actors, 33 statics
-    dw 6246, 1674, 456, 1024        ; E1M7: 36 doors, 23 actors, 33 statics
-    dw 7920, 1851, 456, 1024        ; E1M8: 38 doors, 30 actors, 37 statics
+    dw 1850, 892, 326, 0        ; E1M3: 16 doors, 7 actors, 17 statics
+    dw 2742, 959, 454, 1024        ; E1M4: 20 doors, 10 actors, 17 statics
+    dw 3701, 1273, 456, 1024        ; E1M5: 28 doors, 16 actors, 28 statics
+    dw 4974, 1312, 519, 1024        ; E1M6: 26 doors, 17 actors, 33 statics
+    dw 6286, 1684, 456, 1024        ; E1M7: 36 doors, 25 actors, 33 statics
+    dw 7970, 1861, 456, 1024        ; E1M8: 38 doors, 32 actors, 37 statics
 PXL_DIRSZ   equ 8
 
 px_levpw:                        ; the floors' passwords, four letters each

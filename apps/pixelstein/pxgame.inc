@@ -152,6 +152,8 @@ px_key_common:
     je .size
     cmp al, 'V'
     je .size
+    cmp al, 9                       ; Tab: the map (97.6, wave 6)
+    je .map
     cmp al, '1'                     ; 1, 2, 3: the knife, the pistol, the gun
     jb .notw                        ; (97.8; the first cut defined the scans
     cmp al, '3'                     ; and read none of them - review, wave 3)
@@ -173,7 +175,25 @@ px_key_common:
     mov byte [px_tap], -1
 .out:
     ret
+.map:
+    cmp byte [px_state], PXST_PLAY  ; the map is PLAY's...
+    jne .out
+    cmp byte [px_mapon], 0
+    jne .mapoff
+    cmp byte [px_pause], 0          ; ...and not over a pause the player took
+    jne .out
+    mov byte [px_mapon], 1
+    mov byte [px_pause], 1          ; THE WORLD STOPS UNDER IT: one picture,
+    call px_map_owe                 ; drawn once (twice on Mode X)
+    mov byte [px_hmsg], PXM_MAP     ; ...and the bar says how to leave it
+    mov byte [px_hmsgt], 0
+    mov byte [px_hudd], 1
+    ret
+.mapoff:
+    jmp px_map_off
 .pause:
+    cmp byte [px_mapon], 0          ; P over the map takes it down, as Tab
+    jne .mapoff                     ; does
     cmp byte [px_state], PXST_PLAY  ; a pause is PLAY's: a card is still
     jne .out                        ; already
     xor byte [px_pause], 1
@@ -855,6 +875,10 @@ px_level_load:
     mov [di + PXAC_DIR], al
     mov byte [di + PXAC_TIMER], 0
     mov byte [di + PXAC_HP], PX_GUARDHP
+    cmp byte [di + PXAC_KIND], PXK_DOG
+    jne .guardhp
+    mov byte [di + PXAC_HP], PX_DOGHP   ; the dog: one hit (wave 6)
+.guardhp:
     mov byte [di + PXAC_FRAME], 0
     add si, PXL_ACTSZ
     add di, PXAC_SIZE
@@ -934,7 +958,8 @@ px_level_next:
     call px_level_load
     jc .out                         ; (cannot: see above)
 .loaded:
-    call px_spot_clear
+    call px_map_off                 ; a floor loads with no map up (review,
+    call px_spot_clear              ; wave 6: a stale map across a restart)
     mov byte [px_keys], 0
     mov byte [px_fade], 0
     mov byte [px_wframe], 0
@@ -1604,8 +1629,25 @@ PX_APOS_N   equ 4
 px_apos_tab:                        ; (rung, low res) per position, top first
     db PXR_TEX, 0                   ; 0 Textured Full
     db PXR_TEX, 1                   ; 1 Textured Low res - the 8086's default
-    db PXR_FLAT, 0                  ; 2 Flat Full - where an 8086's WINDOW starts
-    db PXR_FLAT, 1                  ; 3 Flat Low res - the floor
+    db PXR_FLAT, 0                  ; 2 Flat Full - an 8086 steps past it
+    db PXR_FLAT, 1                  ; 3 Flat Low res - the floor, and where
+                                    ; an 8086's WINDOW starts (97.8)
+; THE 8086's STEP-UP LINES, by the position a step up LANDS on (SPEC.md
+; 97.8; decided at wave 6's close): the budget over
+; the largest ratio measured between that rung and the one under it, full
+; repaint and finished frame, on the 5150's CGA and Hercules brackets and
+; the Hercules window (97.15) - so a frame under the line lands under the
+; budget on the rung above. Half the budget (a 286's line, PX_BUDGET50) is
+; under every frame an 8086 draws at any position, which made a step down
+; permanent for the session. px_ftime's unit, split into two word tables
+px_auplo:                           ; ...the low words, by the landing position
+    dw PX_AUPF & 0xFFFF             ; 0 Textured Full over Textured Low res
+    dw PX_AUP1 & 0xFFFF             ; 1 Textured Low res over Flat Low res
+    dw PX_AUPF & 0xFFFF             ; 2 Flat Full over Flat Low res
+px_auphi:                           ; ...and the high words
+    dw PX_AUPF >> 16
+    dw PX_AUP1 >> 16
+    dw PX_AUPF >> 16
 ; WIRE IS OFF THE LADDER (SPEC.md 97.8, the user's decision on the wave-1
 ; measurement): on the 5150 its turning draw is 76.4 ms against Flat Low
 ; res's 68.7 and its full repaint 106.4 against 85.5 (76.5 against 66.7
@@ -1650,14 +1692,13 @@ px_auto_init:
 ; px_auto_start - the position a bracket ([px_inbr] = 1) or a window starts
 ;                 at on this tier, then the rung and resolution in force
 ;
-; THE 8086 STARTS AT FLAT LOW RES IN BOTH WORLDS (SPEC.md 97.8), which in
-; wave 1 is also the ladder's floor: PLAN 15's "one rung lower in a window"
-; is a rule about Textured being the top, and there is nothing under Flat
-; Low res for Auto to hand a window - Wire is off the ladder (px_apos_tab
-; above: its turning draw reads 76.5 ms against 66.7 fullscreen, 83.0
-; against 74.8 windowed on the Hercules desktop, and a full repaint 106.4
-; against 87.0). Wave 2 prepends Textured and the window then starts one
-; position under the bracket.
+; THE 8086 STARTS A BRACKET AT TEXTURED LOW RES (position 1, 97.1's
+; default) AND A WINDOW AT FLAT LOW RES (position 3: PLAN 15's "one rung
+; lower in a window" - and Flat Full, the position between, is DEARER than
+; Textured Low res on an 8086, 164.4 against 113.9 ms, so it is no rung
+; lower at all; wave 6's close) - SPEC.md 97.8. Wire is off the ladder
+; (px_apos_tab above). A step down on an 8086 climbs back over the rung
+; above's own line (px_auplo)
 px_auto_start:
     push ax
     xor al, al                      ; 286 and up: the top
@@ -1666,9 +1707,9 @@ px_auto_start:
     mov al, 1                       ; the 8086: Textured Low res in a bracket
     cmp byte [px_inbr], 0           ; (97.1's default)...
     jne .pos
-    mov al, 2                       ; ...and Flat Full in a window (PLAN 15:
-                                    ; one rung lower, the windowed tax being
-                                    ; the OS's)
+    mov al, 3                       ; ...and Flat Low res in a window
+                                    ; (PLAN 15: one rung lower, the windowed
+                                    ; tax being the OS's)
 .pos:
     mov [px_apos], al
     mov [px_astart], al             ; ...and no step up passes it
@@ -1772,9 +1813,12 @@ px_apply:
     ret
 
 ; px_auto_frame - one drawn frame took [px_ftime] (838ns units): eight over
-;                 the budget step down, sixty-four under HALF of it step up -
-;                 never above the tier's start, never inside the hold-down a
-;                 step down began (SPEC.md 97.8)
+;                 the budget step down, sixty-four under the step-up line
+;                 step up - HALF the budget on a 286 or better, the rung
+;                 above's own line on an 8086 (px_auplo), whose ladder is
+;                 Textured Full, Textured Low res, Flat Low res with Flat
+;                 Full skipped both ways - never above the tier's start,
+;                 never inside the hold-down a step down began (SPEC.md 97.8)
 ;
 ; THE THRESHOLD ALONE IS NOT HYSTERESIS. The first cut stepped up at 60% of
 ; the budget, and the rung above measures 1.46-1.92x this one's draw (Mode
@@ -1782,11 +1826,15 @@ px_apply:
 ; read 1.46-1.69), so the
 ; 8086's default climbed to Flat Full after 64 turning frames (68.7 ms <
 ; 75.0) and, on Hercules, flipped back and forth across a doorway. Half the
-; budget clears every measured ratio up to 2.0; the start position is the
+; budget clears every measured ratio up to 2.0 - and on an 8086 it is under
+; every frame any position draws, so a step down there never came back
+; (wave 6's close gave the 8086 the rung above's own line instead:
+; px_auplo, 111.1 ms onto Textured Low res); the start position is the
 ; ceiling because Auto steps BACK up and was never given the rung above;
 ; and PX_AHOLD ticks must pass after a step down before any step up.
 px_auto_frame:
     push ax
+    push bx
     push dx
     cmp byte [px_detail], PXD_AUTO
     jne .out
@@ -1799,6 +1847,29 @@ px_auto_frame:
     ja .miss
 .under:
     mov byte [px_amiss], 0
+    xor bx, bx
+    mov bl, [px_apos]
+    cmp bl, [px_astart]
+    jbe .mid                        ; at the start, or above it: the ceiling
+    dec bx                          ; the position above...
+    cmp byte [px_tier], CPU_8086
+    jne .l50                        ; (a 286 or better: half the budget,
+                                    ; the rung above being 1.5-1.9x)
+    cmp bl, 2                       ; ...but an 8086 climbs from Flat Low
+    jne .ltab                       ; res past Flat Full to Textured Low
+    cmp [px_astart], bl             ; res (Flat Full is DEARER than it,
+    je .ltab                        ; 97.8), unless Flat Full is where a
+    dec bx                          ; Resolution pick seated its ceiling
+.ltab:
+    shl bx, 1                       ; THE LINE IS THE RUNG ABOVE'S (97.8):
+    cmp dx, [px_auphi + bx]         ; the budget over the largest ratio
+    jb .hit                         ; measured between the two rungs
+    ja .mid
+    cmp ax, [px_auplo + bx]
+    ja .mid
+    jmp short .hit
+.l50:
+    shl bx, 1
     cmp dx, PX_BUDGET50 >> 16
     jb .hit
     ja .mid
@@ -1809,9 +1880,6 @@ px_auto_frame:
     cmp byte [px_ahit], 64
     jb .out
     mov byte [px_ahit], 0
-    mov al, [px_apos]
-    cmp al, [px_astart]
-    jbe .out                        ; at the start, or above it: the ceiling
     call OSAPI_GET_TICKS
     mov dx, ax
     sub ax, [px_ahold]
@@ -1823,10 +1891,9 @@ px_auto_frame:
                                     ; it passed and refuse every step up for
                                     ; the next 30 (CLAUDE.md's rule 3;
                                     ; px_worker's resync is the same idiom)
-    dec byte [px_apos]              ; A step UP
-    call px_apply
-    call px_auto_say
-    jmp short .out
+    shr bx, 1
+    mov [px_apos], bl               ; A step UP, to the position judged
+    jmp short .step
 .mid:
     mov byte [px_ahit], 0
     jmp short .out
@@ -1836,16 +1903,26 @@ px_auto_frame:
     cmp byte [px_amiss], 8
     jb .out
     mov byte [px_amiss], 0
-    cmp byte [px_apos], PX_APOS_N - 1
+    mov al, [px_apos]
+    cmp al, PX_APOS_N - 1
     jae .out
-    inc byte [px_apos]              ; a step DOWN...
+    inc ax                          ; a step DOWN...
+    cmp byte [px_tier], CPU_8086
+    jne .down
+    cmp al, 2                       ; ...and an 8086 falls from Textured Low
+    jne .down                       ; res straight to Flat Low res (97.8)
+    inc ax
+.down:
+    mov [px_apos], al
     call OSAPI_GET_TICKS
     add ax, PX_AHOLD                ; ...and the tick a step up may follow
     mov [px_ahold], ax
+.step:
     call px_apply
     call px_auto_say
 .out:
     pop dx
+    pop bx
     pop ax
     ret
 
@@ -1908,7 +1985,9 @@ px_timers:
     jz .t
     mov byte [px_hmsgw], 0
     mov [px_hmsg], al
-    add byte [px_hmsgn], 4          ; a new post, even of the same message
+    add byte [px_hmsgn], 8          ; a new post, even of the same message
+                                    ; (8: the snapshot sums it with a PXM_*
+                                    ; of 0..7, px_hud_snap)
     mov byte [px_hmsgt], PX_MSGT
     ret
 .t:
@@ -1939,6 +2018,7 @@ px_pause_msg:
 ; px_new_game - AL = the floor: a game from scratch there, loaded between
 ;               frames (px_level_next's px_newgame arm). Any task
 px_new_game:
+    call px_map_off                 ; (a game from scratch: no map up)
     mov [px_levnext], al
     mov byte [px_newgame], 1
     mov byte [px_restart], 0
@@ -1960,6 +2040,7 @@ px_play_begin:
 
 ; px_game_over - the last life's wash is over, or the last floor was left
 px_game_over:
+    call px_map_off
     mov byte [px_cardhold], PX_CARDHOLD
     mov byte [px_state], PXST_OVER
     mov byte [px_stimer], PX_OVERT
@@ -1983,6 +2064,7 @@ px_over_end:
 
 ; px_to_attract - the attract page (the end of a game, Esc in a window)
 px_to_attract:
+    call px_map_off                 ; (Esc in a window over the map)
     mov byte [px_cardhold], PX_CARDHOLD
     mov byte [px_state], PXST_ATTRACT
     mov byte [px_codep], 0xFF
@@ -2073,17 +2155,19 @@ px_floor_stats:
 ; px_mouse_turn - the pointer's offset from the view's middle, a quarter of
 ;                 it and clamped to PX_TURN, added to BL (the step's turn;
 ;                 97.13). The middle is the band's in a window and the
-;                 screen's in a bracket; a dead zone of 8 dots each way.
+;                 BRACKET'S in a bracket - OSAPI_FSX_SURF's rect, banked in
+;                 px_fmid (SPEC.md 53.7.1: on a two-card desktop the
+;                 screen OSAPI_VIDEO names is the primary, not the card
+;                 the bracket is on); a dead zone of 8 dots each way.
 ;                 clobbers AX; BL in, BL out
 ; -----------------------------------------------------------------------------
 px_mouse_turn:
     push cx
     push dx
     call OSAPI_MOUSE                ; CX = x
-    mov ax, [px_scrw]
-    shr ax, 1
-    cmp byte [px_inbr], 0
-    jne .c
+    mov ax, [px_fmid]               ; the bracket's own middle, off
+    cmp byte [px_inbr], 0           ; OSAPI_FSX_SURF (px_fsx_main; wave 6 -
+    jne .c                          ; OSAPI_VIDEO's width named the primary)
     mov al, [px_size]               ; the band is px_bx-anchored and Size x 8
     xor ah, ah                      ; dots wide (px_blit_win), so its middle
     shl ax, 1                       ; is px_bx + Size x 4 - not px_bx + 256,
@@ -2299,10 +2383,15 @@ px_demo_step:
     sub ax, [px_demot0]
     mov [px_demot], ax
     mov cx, ax
-    mov ax, [px_demof]              ; fps in tenths: frames x 182 / ticks
-    mov dx, 182
-    mul dx
-    jcxz .zero
+    mov ax, [px_demof]              ; fps in tenths: frames x 182 / ticks,
+    mov dx, 182                     ; ROUNDED - half the divisor added first,
+    mul dx                          ; so the card reads what 97.15 quotes
+    jcxz .zero                      ; (81 in 149 ticks is 9.90: truncated,
+    push cx                         ; the card said 9.8; review, wave 6 r2)
+    shr cx, 1
+    add ax, cx
+    adc dx, 0
+    pop cx
     cmp dx, cx
     jae .zero                       ; (a quotient past a word: not a clock)
     div cx

@@ -25,7 +25,8 @@ that would show one is a 4.77 MHz 8088 four boots away.
                  cast TWICE, with every door shut and with every door open,
                  and held to the worse state (a door in front of the player
                  is open more often than not, and that ray is the long one)
-  melee          no open cell has more than two guards within 1.5 tiles of it
+  melee          no open cell has more than two actors (guards and, since
+                 wave 6, dogs) within 1.5 tiles of it
                  at spawn: a third at melee is the frame the sprite cap
                  exists for (97.6). tests/unit/t_pxsmap.py is the row that
                  holds it (wave 3), with a three-guard level as its control
@@ -342,12 +343,13 @@ def check_sight(lv, bad):
 
 
 def check_melee(lv, bad):
-    """No open cell with more than two GUARDS within 1.5 tiles at spawn -
-    standing or patrolling (the kind byte's low bits name the guard, bit 7
-    the patrol). The dog is not counted: it is wave 6's and melee is its
-    whole attack, so a level with three dogs at one cell is a level with a
-    rule of its own to write then."""
-    guards = [(a[0] + 0.5, a[1] + 0.5) for a in lv.actors if (a[2] & ~PATROL) == 0]
+    """No open cell with more than two ACTORS within 1.5 tiles at spawn -
+    guards and dogs, standing or patrolling (the kind byte's low bits name
+    the guard or the dog, bit 7 the patrol). What the rule bounds is the
+    frame the sprite cap exists for (97.6): three sprites at melee, and a
+    dog at the player's elbow is as tall a sprite as a guard is - so the
+    dog counts (wave 6: wave 3's rule left it out until it existed)."""
+    guards = [(a[0] + 0.5, a[1] + 0.5) for a in lv.actors]
     for y in range(MAP_H):
         for x in range(MAP_W):
             if not lv.open_(x, y):
@@ -355,7 +357,7 @@ def check_melee(lv, bad):
             cx, cy = x + 0.5, y + 0.5
             n = sum(1 for gx, gy in guards if (gx - cx) ** 2 + (gy - cy) ** 2 <= MELEE_R2)
             if n > 2:
-                bad.append("(%d,%d) has %d guards within melee reach; the sprite "
+                bad.append("(%d,%d) has %d actors within melee reach; the sprite "
                            "cap allows two" % (x, y, n))
                 return
 

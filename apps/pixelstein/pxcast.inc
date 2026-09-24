@@ -286,10 +286,29 @@ px_frame_tabs:
     ret
 
 ; -----------------------------------------------------------------------------
-; px_spot_clear - both spotvis arrays to "never crossed" (97.1)
-; clobbers AX, CX, DI, ES
+; px_spot_clear - both spotvis arrays to "never crossed" (97.1) - a new
+;                 floor, so the Tab map's memory too (px_seen, wave 6),
+;                 and px_gen back to 0;
+;                 px_spot_wrap - the generation wrapped: the marks FOLDED
+;                 into the map's memory first (px_seen_fold), then cleared
+; clobbers AX, CX, DI, ES (px_spot_wrap: and BX, DX, SI)
 ; -----------------------------------------------------------------------------
 px_spot_clear:
+    push ds
+    pop es
+    mov di, px_seen
+    mov cx, 256
+    xor ax, ax
+    cld
+    rep stosw
+    mov byte [px_gen], 0            ; ...and the generation restarts: the
+    jmp short px_spot_zero          ; wrap falls 255 frames into a floor, so
+                                    ; the timedemo's 81 never hold it and
+                                    ; every owner times the same frames
+                                    ; (review, wave 6 r2)
+px_spot_wrap:
+    call px_seen_fold
+px_spot_zero:
     push ds
     pop es
     mov di, px_spotT
@@ -329,7 +348,8 @@ px_cast:
     mov al, [px_gen]
     inc al
     jnz .gen
-    call px_spot_clear              ; 255 frames on: both arrays back to 0
+    call px_spot_wrap               ; 255 frames on: both arrays back to 0,
+                                    ; folded into the Tab map's bits first
     mov al, 1
 .gen:
     mov [px_gen], al

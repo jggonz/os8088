@@ -1673,3 +1673,390 @@ px_weapon_draw:
     call px_rows_widen
 .out:
     ret
+
+; =============================================================================
+; THE TAB MAP (wave 6, SPEC.md 97.6): the cells the player has SEEN, from
+; above, drawn into the view band as a frame of its own - and the world
+; stops under it (px_pause), so it is one picture drawn once (twice on Mode
+; X, a page each) and nothing after it until Tab, P or the state moves on.
+; Leaving it is TOUCHED OFF: px_force_all puts every column's memory at "the
+; whole view", so the next world frame re-lays everything the map covered.
+;
+; SEEN is what a ray has crossed: the walkers mark every open or door cell
+; they pass with the frame's generation (97.2.2), and the generation wraps
+; every 255 frames - so at the wrap both arrays are FOLDED into px_seen, a
+; bit a cell (px_seen_fold, before px_spot_clear zeroes them), and a cell is
+; seen when its bit, its plain mark or its transposed mark says so. A WALL is
+; never marked (a walker stops at it), so a wall is drawn when one of its
+; four neighbours was seen. A new floor clears the bits with the marks. The
+; draw walks three rows of SEEN FLAGS (px_mrows, the row above, this one and
+; the one below, 66 bytes each), each map row's worked out ONCE from its
+; three sources (px_map_row) - the first cut asked all three for every
+; cell and again for a wall's four neighbours, and read 4.28M clk = 896 ms
+; on the 5150 for one map; this one is priced in SPEC.md 97.6.
+;
+; A cell is a byte wide and TWO ROWS tall (its tone word: the even row's
+; byte, then the odd's, the ladders' own pair), so the 80-row band holds 40
+; cells of the 64 down, the player's row centred and clamped, and Size
+; across, the player's column centred and clamped (the 64 centred, black
+; either side, at Size 72 and 80). The tones are the Flat rung's own
+; (px_inkt: a wall's lit tone, a door's slab - a secret door is its wall's
+; material, so it is not given away - px_inkf the floor), black unseen, and
+; the player's cell a marker (red on CGA 320x200, white elsewhere).
+; =============================================================================
+PX_MAPCELLS equ PX_ROWS / 2         ; cells down: two rows a cell
+PX_MRW      equ 66                  ; a row of seen flags: the map's 64 and
+                                    ; a 0 either side (px_map_row)
+
+; px_seen_fold - both spotvis arrays OR'd into px_seen (the generation is
+;                about to wrap). The plain array is 8 cells a bitmap byte in
+;                order, eight at a look; the transposed one is walked a map
+;                COLUMN at a time (its index is x * 64 + y), one bit mask a
+;                column and a bitmap byte every 8, two cells at a look -
+;                the usual cell was never crossed, and costs a share of one
+;                load and one jz. Priced in SPEC.md 97.6 (the first cut's
+;                byte-at-a-time loops read 450,000 clk on the 5150).
+;                clobbers AX, BX, CX, DX, SI, DI
+%macro PX_FOLDW 1                  ; two transposed cells (rows y, y + 1 of
+    lodsw                           ; one column): their bits OR'd in when
+    or ax, ax                       ; crossed - the usual pair is not, and
+    jz %%n                          ; falls through the first jz
+    or al, al
+    jz %%h
+    or [di + %1], ch
+%%h:
+    or ah, ah
+    jz %%n
+    or [di + %1 + 8], ch
+%%n:
+%endmacro
+px_seen_fold:
+    mov si, px_spot
+    mov di, px_seen
+    mov cx, 512
+    cld
+.p:
+    lodsw                           ; eight cells at a look: the usual eight
+    mov dx, ax                      ; were not crossed, and cost four word
+    lodsw                           ; loads and a jz
+    or dx, ax
+    lodsw
+    or dx, ax
+    lodsw
+    or dx, ax
+    jz .pz
+    sub si, 8
+%rep 8
+    lodsb
+    neg al                          ; CF = the cell was crossed
+    rcl ah, 1
+%endrep
+    or [di], ah
+.pz:
+    inc di
+    loop .p
+    mov si, px_spotT
+    xor dx, dx                      ; DX = x
+.t:
+    mov bx, dx
+    and bx, 7
+    mov ch, [px_bitm + bx]          ; the column's bit
+    mov di, dx
+    shr di, 1
+    shr di, 1
+    shr di, 1
+    add di, px_seen                 ; ...and its byte in row 0
+    mov cl, 4                       ; 64 rows, sixteen at a pass (the bitmap
+.ty:                                ; bytes 8 apart: displacements, no add)
+%assign PX_K 0
+%rep 8
+    PX_FOLDW PX_K
+%assign PX_K PX_K + 16
+%endrep
+    add di, 128
+    dec cl
+    jnz .ty
+    inc dx
+    cmp dx, 64
+    jb .t
+    ret
+
+px_bitm:    db 0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01
+
+; px_map_owe - the map is owed: once, or on both Mode X pages
+px_map_owe:
+    mov byte [px_mapd], 1
+    cmp byte [px_back], PXB_MODEX
+    jne .out
+    mov byte [px_mapd], 2
+.out:
+    ret
+
+; px_map_off - the map down (Tab or P again, or the state moved on): the
+;              world runs again and the next frame re-lays the whole view -
+;              px_force_all owed BETWEEN frames (px_mapfa, px_frame_begin),
+;              since this may be the UI task while the worker composes.
+;              preserves every register
+px_map_off:
+    cmp byte [px_mapon], 0
+    je .out
+    mov byte [px_mapon], 0
+    mov byte [px_mapd], 0
+    mov byte [px_pause], 0
+    mov byte [px_mapfa], 1
+    mov byte [px_hmsg], PXM_NONE
+    mov byte [px_hudd], 1
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; px_map_row - one map row's SEEN flags into 66 bytes at DS:DI: [0] and [65]
+;              0 (the map's sides), [1 + x] nonzero when cell (x, AL) was
+;              seen - its plain mark, its transposed one (x * 64 + y) or its
+;              px_seen bit. AL = y; a y off the map (0xFF, 64) is all 0.
+;              ~120 clk a cell at the 8088's fetch floor (the first cut of this
+;              comment said 60, counting execution alone - review, wave 6),
+;              the three reads walked, no shift by CL. The whole map frame
+;              is measured in SPEC 97.6 (the draw, the Tab frame, and the
+;              Mode X price of drawing it once a page).
+;              clobbers AX, BX, CX, DX, SI, DI
+; -----------------------------------------------------------------------------
+px_map_row:
+    push bp
+    mov byte [di], 0
+    mov byte [di + PX_MRW - 1], 0
+    inc di
+    cmp al, 63
+    ja .zero
+    xor ah, ah
+    mov si, ax                      ; SI = y: (0, y) in the transposed layout
+    mov bh, al
+    xor bl, bl
+    shr bx, 1
+    shr bx, 1                       ; BX = y * 64: (0, y) in the plain one
+    mov bp, ax
+    shl bp, 1
+    shl bp, 1
+    shl bp, 1
+    add bp, px_seen                 ; BP = the row's first px_seen byte (a
+    mov ch, 8                       ; value: xchg'd into BX to be read)
+.grp:
+    xchg bx, bp
+    mov dl, [bx]                    ; eight cells' bits, the leftmost high
+    xchg bx, bp
+    inc bp
+    mov cl, 8
+.x:
+    mov al, [px_spot + bx]
+    or al, [px_spotT + si]
+    shl dl, 1
+    sbb ah, ah                      ; the bit, as a byte
+    or al, ah
+    mov [di], al
+    inc di
+    inc bx
+    add si, 64
+    dec cl
+    jnz .x
+    dec ch
+    jnz .grp
+    pop bp
+    ret
+.zero:
+    mov cx, 64
+.z:
+    mov byte [di], 0
+    inc di
+    loop .z
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; px_map_draw - the map into this frame's destination, the whole band
+;               (px_r0..px_r1 = the view). DS = ours; the destination
+;               through ES. clobbers everything but DS
+; -----------------------------------------------------------------------------
+px_map_draw:
+    mov byte [px_r0], 0
+    mov byte [px_r1], PX_ROWS - 1
+    mov es, [px_dseg]
+    mov bp, [px_dbase]              ; BP = the cell row's first byte (a
+    mov al, [px_x0]                 ; value, never an address: SS is not DS)
+    xor ah, ah
+    add bp, ax
+    mov ax, [px_pcell]              ; the origin: the player's column...
+    and al, 63
+    mov ah, [px_size]
+    cmp ah, 64
+    ja .wide
+    shr ah, 1
+    sub al, ah
+    jnc .ox1
+    xor al, al
+.ox1:
+    mov ah, 64
+    sub ah, [px_size]
+    cmp al, ah
+    jbe .ox
+    mov al, ah
+    jmp short .ox
+.wide:
+    mov al, 64                      ; Size 72 / 80: the 64 centred
+    sub al, ah
+    sar al, 1
+.ox:
+    mov [px_mox], al
+    mov ah, 64                      ; the band bytes that are on the map end
+    sub ah, al                      ; at 64 - ox, or at Size
+    cmp ah, [px_size]
+    jbe .hi
+    mov ah, [px_size]
+.hi:
+    mov [px_mhi], ah
+    mov ax, [px_pcell]              ; ...and its row
+    mov cl, 6
+    shr ax, cl
+    sub al, PX_MAPCELLS / 2
+    jnc .oy1
+    xor al, al
+.oy1:
+    cmp al, 64 - PX_MAPCELLS
+    jbe .oy
+    mov al, 64 - PX_MAPCELLS
+.oy:
+    mov [px_moy], al
+    mov si, 0xAAAA                  ; the player's marker: RED on CGA
+    cmp byte [px_back], PXB_CGA4    ; 320x200 (palette 0's brown is the
+    je .mk1                         ; walls', its green the floor), WHITE
+    mov si, 0x040F                  ; over RED where the byte is a colour
+    cmp byte [px_back], PXB_MODEX   ; (Mode X, WIN4: every map tone is one
+    je .mk1                         ; colour in both rows, so a two-colour
+    cmp byte [px_back], PXB_WIN4    ; cell is none of them - 0x0F0F was
+    je .mk1                         ; material 15's lit tone), WHITE on C160
+    mov si, 0xFFFF                  ; (no material is 15 there) and on the
+    cmp byte [px_back], PXB_C160    ; 1bpp two the FLOOR'S DITHER INVERTED:
+    je .mk1                         ; 0xFFFF there is every wall's lit tone,
+    mov si, 0xDD77                  ; a wall cell in the corridor (review,
+.mk1:                               ; wave 6 r2)
+    mov [px_mmark], si
+    push bp                         ; THE THREE ROWS OF FLAGS: the one above
+    mov al, [px_moy]                ; the first cell row, and the first
+    dec al
+    mov di, px_mrows
+    call px_map_row
+    mov al, [px_moy]
+    mov di, px_mrows + PX_MRW
+    call px_map_row
+    pop bp
+    xor dh, dh                      ; DH = the cell row
+.row:
+    push bp
+    push dx
+    mov al, [px_moy]                ; ...and the one below it
+    add al, dh
+    inc al
+    mov di, px_mrows + 2 * PX_MRW
+    call px_map_row
+    pop dx
+    pop bp
+    mov es, [px_dseg]
+    mov di, bp
+    mov al, [px_moy]
+    add al, dh
+    mov bh, al
+    xor bl, bl
+    shr bx, 1
+    shr bx, 1                       ; BX = y * 64
+    mov ch, 0xFF                    ; CH = the player's band byte on this
+    mov ax, [px_pcell]              ; row, or none
+    sub ax, bx
+    cmp ax, 64
+    jae .nop
+    sub al, [px_mox]
+    mov ch, al
+.nop:
+    mov al, [px_mox]
+    cbw
+    add bx, ax                      ; BX = band byte 0's cell...
+    mov si, ax
+    add si, px_mrows + PX_MRW + 1   ; ...SI its flag
+    xor dl, dl                      ; DL = the band byte
+    or al, al
+    jns .cell                       ; the wide Sizes' margins, black: left
+    neg al
+    mov cl, al
+    xor ax, ax
+.ml:
+    mov [es:di], al
+    mov [es:di + PX_STRIDE], ah
+    inc di
+    inc bx
+    inc si
+    inc dl
+    dec cl
+    jnz .ml
+.cell:
+    cmp dl, ch
+    je .me
+    mov cl, [px_map + bx]
+    test cl, PXC_SOLID | PXC_DOOR   ; a door takes the wall's path: a ray
+    jnz .wall                       ; that strikes a SHUT slab marks only
+    cmp byte [si], 0                ; the pass before it, so a door looked
+    je .black                       ; at is seen through its neighbours -
+    mov ax, [px_inkf]               ; and a secret one shows its wall's
+    jmp short .put                  ; material, never a hole (review, r2)
+.wall:                              ; seen when it or a neighbour was: a
+    mov al, [si]                    ; walker never marks the wall it stops
+    or al, [si - 1]                 ; at
+    or al, [si + 1]
+    or al, [si - PX_MRW]
+    or al, [si + PX_MRW]
+    jz .black
+.tone:
+    push bx
+    mov bl, cl
+    and bl, 0xF0
+    xor bh, bh
+    shr bx, 1
+    shr bx, 1                       ; material * 4: its (lit, dark) words
+    mov ax, [px_inkt + bx]
+    pop bx
+    jmp short .put
+.me:
+    mov ax, [px_mmark]
+    jmp short .put
+.black:
+    xor ax, ax
+.put:
+    mov [es:di], al                 ; the cell's two rows
+    mov [es:di + PX_STRIDE], ah
+    inc di
+    inc bx
+    inc si
+    inc dl
+    cmp dl, [px_mhi]
+    jb .cell
+    xor ax, ax                      ; ...and the right margin
+.rm:
+    cmp dl, [px_size]
+    jae .rowend
+    mov [es:di], al
+    mov [es:di + PX_STRIDE], ah
+    inc di
+    inc dl
+    jmp short .rm
+.rowend:
+    push ds                         ; the rows move up one: the row above is
+    pop es                          ; the one drawn, the one drawn the one
+    mov si, px_mrows + PX_MRW       ; below (132 bytes; ~1,650 clk a row
+                                    ; on the 8088, ~25 a word: ~66k clk,
+                                    ; ~14 ms of the map's draw)
+    mov di, px_mrows
+    mov cx, PX_MRW
+    cld
+    rep movsw
+    add bp, 2 * PX_STRIDE
+    inc dh
+    cmp dh, PX_MAPCELLS
+    jb .row
+    ret

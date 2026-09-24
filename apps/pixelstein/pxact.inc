@@ -16,7 +16,15 @@
 ; player is running; the damage a random byte >> 2, 3 or 4 by distance).
 ; Damage to it is doubled while it has not seen the player; PX_GUARDHP is
 ; its life. A dead guard is a sprite that blocks nothing and keeps a door
-; open; the dog is wave 6's.
+; open.
+;
+; THE DOG (wave 6, PXK_DOG): the same thinker and the same states, with
+; three differences - it runs at PX_DOGRUN (1.67x a guard, faster than the
+; player walks), it has NO GUN: from a tile away with the line clear it
+; LEAPS (ATTACK, PX_DOGLUNGE ticks on its bite frame) and bites for
+; PX_DOGBITE in 256, a random byte >> 4, then PX_DOGBACK ticks before the
+; next step; and ONE hit kills it (PX_DOGHP), 200 points. Four facing
+; masters make its eight (px_dogfac), and it has no pain frame.
 ;
 ; Every actor's centre cell carries PXC_ACTOR in the plain map (pxgame.asm),
 ; cleared and set as it moves, so a mover's collision is the same cell test
@@ -35,12 +43,15 @@ px_act_diry: dw 0, 1, 0, -1
 ;                0 the front, 2 its right side, 4 its back, 6 its left side
 ;                (the mirror of 2), 1, 3, 5, 7 the quarters - masters 0..4,
 ;                5..7 mirrors of 3..1; the attack, pain, die and dead frames
-;                face nowhere
+;                face nowhere. THE DOG (wave 6) takes its four masters
+;                through px_dogfac, and its leap, fall and corpse
 ; out: px_scn's frame and flags. clobbers AX, BX, CX
 ; -----------------------------------------------------------------------------
 px_act_frame:
     mov byte [px_scn + PXS_C_FL], 0
     mov al, [si + PXAC_STATE]
+    cmp byte [si + PXAC_KIND], PXK_DOG
+    je .dog
     cmp al, PXAS_ATTACK
     je .attack
     cmp al, PXAS_PAIN
@@ -49,39 +60,7 @@ px_act_frame:
     je .die
     cmp al, PXAS_DEAD
     je .dead
-    mov bx, [px_scn + PXS_C_C]      ; the column, clamped to the fan
-    or bx, bx
-    jns .c0
-    xor bx, bx
-.c0:
-    mov al, [px_cols]
-    xor ah, ah
-    dec ax
-    cmp bx, ax
-    jle .c1
-    mov bx, ax
-.c1:
-    shl bx, 1
-    add bx, [px_fanp]
-    mov ax, [bx]
-    add ax, [px_head]
-    add ax, PX_ANG / 2              ; from the actor toward the eye
-    sub ax, [si + PXAC_ANG]
-    add ax, PX_ANG / 16
-    mov cl, 9
-    shr ax, cl
-    and al, 7                       ; the facing index
-    mov cl, [si + PXAC_FRAME]        ; the walk phase, while it walks
-    shr cl, 1
-    shr cl, 1
-    and cl, 1
-    mov ah, [si + PXAC_STATE]
-    cmp ah, PXAS_PATROL
-    je .walk
-    cmp ah, PXAS_CHASE
-    je .walk
-    xor cl, cl
-.walk:
+    call .facing
     cmp al, 4
     jbe .master
     neg al
@@ -110,6 +89,79 @@ px_act_frame:
 .set:
     mov [px_scn + PXS_C_FR], al
     ret
+    ; --- THE DOG (wave 6): four masters, the leap, the fall ------------------
+.dog:
+    mov ah, PXS_D_BITE
+    cmp al, PXAS_ATTACK
+    jne .dg1
+    cmp byte [si + PXAC_FRAME], 0
+    je .dset                        ; the leap; the recovery stands
+.dg1:
+    mov ah, PXS_D_DIE
+    cmp al, PXAS_DIE
+    je .dset
+    mov ah, PXS_D_DEAD
+    cmp al, PXAS_DEAD
+    je .dset
+    call .facing                    ; AL = the facing, CL = the walk phase
+    mov bl, al
+    xor bh, bh
+    mov al, [px_dogfac + bx]        ; the master, bit 7 mirrored
+    or al, al
+    jns .dm
+    mov byte [px_scn + PXS_C_FL], 1
+    and al, 3
+.dm:
+    shl al, 1
+    add al, cl
+    add al, PXS_D_WALK0
+    jmp short .set
+.dset:
+    mov al, ah
+    jmp short .set
+    ; .facing - AL = the facing index 0..7 the viewer sees, CL = the walk
+    ; phase (0 unless it patrols or chases). clobbers BX
+.facing:
+    mov bx, [px_scn + PXS_C_C]      ; the column, clamped to the fan
+    or bx, bx
+    jns .c0
+    xor bx, bx
+.c0:
+    mov al, [px_cols]
+    xor ah, ah
+    dec ax
+    cmp bx, ax
+    jle .c1
+    mov bx, ax
+.c1:
+    shl bx, 1
+    add bx, [px_fanp]
+    mov ax, [bx]
+    add ax, [px_head]
+    add ax, PX_ANG / 2              ; from the actor toward the eye
+    sub ax, [si + PXAC_ANG]
+    add ax, PX_ANG / 16
+    mov cl, 9
+    shr ax, cl
+    and al, 7                       ; the facing index
+    mov cl, [si + PXAC_FRAME]        ; the walk phase, while it walks
+    shr cl, 1
+    shr cl, 1
+    and cl, 1
+    mov ah, [si + PXAC_STATE]
+    cmp ah, PXAS_PATROL
+    je .fw
+    cmp ah, PXAS_CHASE
+    je .fw
+    xor cl, cl
+.fw:
+    ret
+
+; the dog's eight facings from its four masters (tools/pxsart.py's
+; D_FACING): the master, bit 7 mirrored - its front, the three-quarter, its
+; side, and the side again for the two quarters BEHIND it, its back, then
+; the left half mirrored
+px_dogfac:  db 0, 1, 2, 2, 3, 0x82, 0x82, 0x81
 
 ; -----------------------------------------------------------------------------
 ; px_act_tick - every actor's thinker, once a simulation step (97.8)
@@ -159,6 +211,10 @@ px_act_one:
     call px_act_sight
     jc .seen
     mov byte [px_aspeed], PX_ACTWALK
+    cmp byte [si + PXAC_KIND], PXK_DOG
+    jne .pwalk
+    mov byte [px_aspeed], PX_DOGWALK
+.pwalk:
     mov al, [si + PXAC_DIR]
     call px_act_move
     jnc .walked
@@ -200,6 +256,8 @@ px_act_one:
     ret
 .chase:
     call px_act_deltas
+    cmp byte [si + PXAC_KIND], PXK_DOG
+    je .dchase
     call px_act_los
     jnc .move
     ; a shot at the player: the chance falls with the distance (the 1992
@@ -222,8 +280,24 @@ px_act_one:
     call px_act_face
     call px_act_dirty
     ret
+.dchase:                            ; THE DOG: no gun - a tile away with the
+    cmp byte [px_adist], 1          ; line clear it LEAPS, else it runs
+    ja .dmove
+    call px_act_los
+    jnc .dmove
+    mov byte [si + PXAC_STATE], PXAS_ATTACK
+    mov byte [si + PXAC_FRAME], 0
+    mov byte [si + PXAC_TIMER], PX_DOGLUNGE
+    call px_act_toward
+    call px_act_face
+    call px_act_dirty
+    ret
+.dmove:
+    mov byte [px_aspeed], PX_DOGRUN
+    jmp short .moveat
 .move:
     mov byte [px_aspeed], PX_ACTRUN
+.moveat:
     call px_act_toward              ; AL = the main axis's direction, AH
     push ax                         ; the other's (0xFF: none)
     call px_act_move
@@ -243,6 +317,8 @@ px_act_one:
     dec byte [si + PXAC_TIMER]
     jnz .out
     mov al, [si + PXAC_FRAME]
+    cmp byte [si + PXAC_KIND], PXK_DOG
+    je .dbite
     or al, al
     jnz .ph1
     mov byte [si + PXAC_FRAME], 1    ; the shot
@@ -260,6 +336,14 @@ px_act_one:
 .ph2:
     mov byte [si + PXAC_STATE], PXAS_CHASE
     mov byte [si + PXAC_FRAME], 0
+    call px_act_dirty
+    ret
+.dbite:                             ; the dog: the leap lands (the bite),
+    or al, al                       ; then it gathers itself
+    jnz .ph2
+    mov byte [si + PXAC_FRAME], 1
+    mov byte [si + PXAC_TIMER], PX_DOGBACK
+    call px_dog_bite
     call px_act_dirty
     ret
 .pain:
@@ -885,6 +969,29 @@ px_act_shoot:
     ret
 
 ; -----------------------------------------------------------------------------
+; px_dog_bite - the dog at SI's leap lands (wave 6): the player still within a
+;               tile and the line clear, PX_DOGBITE in 256 bites for a random
+;               byte >> 4 (the 1992 engine's T_Bite); a player who stepped
+;               away is missed
+; clobbers AX, BX, CX, DX, DI
+; -----------------------------------------------------------------------------
+px_dog_bite:
+    call px_act_deltas
+    cmp byte [px_adist], 1
+    ja .out
+    call px_act_los
+    jnc .out
+    call OSAPI_RAND
+    cmp al, PX_DOGBITE
+    jae .out
+    call OSAPI_RAND
+    mov cl, 4
+    shr al, cl
+    call px_player_hurt
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; px_act_hurt - AL damage to the actor at SI (97.8): doubled while it has
 ;               not seen the player, then pain or death
 ; clobbers AX, BX
@@ -892,6 +999,9 @@ px_act_shoot:
 px_act_hurt:
     cmp byte [si + PXAC_STATE], PXAS_DIE
     jae .out
+    cmp byte [si + PXAC_KIND], PXK_DOG
+    je .dies                        ; the dog: any hit, even a 0 (a knife's
+                                    ; rnd >> 4 can be), kills it (PX_DOGHP)
     test byte [si + PXAC_FLAGS], PXAF_ATTACK
     jnz .once
     shl al, 1
@@ -912,7 +1022,12 @@ px_act_hurt:
     mov byte [si + PXAC_TIMER], 4
     mov bx, [si + PXAC_CELL]
     call px_act_unmark              ; a body blocks nothing
-    add word [px_score], 100
+    mov ax, 100
+    cmp byte [si + PXAC_KIND], PXK_DOG
+    jne .pts
+    add ax, ax                      ; the dog: 200
+.pts:
+    add [px_score], ax
     inc byte [px_ckill]             ; the LEVELDONE card's kills (97.13)
     call px_act_dirty
 .out:

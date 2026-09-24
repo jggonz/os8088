@@ -146,10 +146,10 @@ def main():
     for label, scene, mode, cols, med, q, pr in rows:
         if "cast" in med:
             print("     %-24s %s %-5s %2d cols  cast %7d (%5.0f/ray)  gather %6d  compose %7d "
-                  "(%5.0f/col)  present %7d (min %7d)  loop %5d  = %6.1f ms  queue %d%s"
+                  "(%5.0f/col)  present %7d (min %7d; of it waited %6d)  loop %5d  = %6.1f ms  queue %d%s"
                   % (label, scene.upper(), mode, cols, med["cast"], med["cast"] / cols,
                      med["gather"], med["compose"], med["compose"] / cols, med["present"],
-                     med["present_min"], med["loop"], pxslib.ms(med["frame"]), q,
+                     med["present_min"], med["wait"], med["loop"], pxslib.ms(med["frame"]), q,
                      "  ladder %d skipped %d" % pr if pr else ""))
         else:
             print("     %-24s %s %-5s %2d cols  = %6.1f ms  queue %d" % (

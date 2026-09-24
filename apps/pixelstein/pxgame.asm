@@ -23,7 +23,9 @@
 ; (pxgame.inc), three floors. WAVE 4: the status bar and the cards
 ; (pxhud.inc), the seven states, the timedemo, the sound and the mouse
 ; (pxgame.inc), the high scores and the floor passwords (pxhs.inc), eight
-; floors; the region declared movable and the worker restartable.
+; floors; the region declared movable and the worker restartable. WAVE 6:
+; the dog, a second actor kind through the same sprite path (pxact.inc),
+; the Tab map of seen cells (pxspr.inc) and the WIN4 dither (pxwin.inc).
 ; =============================================================================
 
 %include "os88api.inc"
@@ -67,13 +69,18 @@ PX_W4BUF    equ 9920                ; ...of 256 bytes, at the byte Rows 100's
                                     ; bar would end (100 + 24 rows x 80) - the
                                     ; plan's reservation, kept, so Rows 100
                                     ; needs no move...
-PX_W4TAB    equ PX_W4BUF + PX_W4ROWS * PX_BAND * 4   ; ...and the 32 -> 16
-                                    ; table after it: 16,320..16,351 of 16,384
+PX_W4TAB    equ PX_W4BUF + PX_W4ROWS * PX_BAND * 4   ; ...and the two 32 ->
+                                    ; 16 tables after it, the even rows' and
+                                    ; the odd rows' (wave 6's dither):
+                                    ; 16,320..16,383 - the claim's last byte
 %if PX_W4BUF < (PX_ROWS + 20 + PX_HUDROWS) * PX_STRIDE
 %error "WIN4's strip overlaps the rows Rows 100 and its bar would take (97.14)"
 %endif
-%if PX_W4TAB + 32 > PX_SHKB * 1024
-%error "WIN4's strip and table outgrew the shadow claim (97.14)"
+%if PX_W4TAB + 64 > PX_SHKB * 1024
+%error "WIN4's strip and tables outgrew the shadow claim (97.14)"
+%endif
+%if PX_W4TAB & 63
+%error "WIN4's two tables must sit 64-aligned: px_blit_w4 swaps them with xor bl, 0x20"
 %endif
 PX_MINDIST  equ 23                  ; nx clamped at 0.09 tiles (Q8.8)
 PX_HEIGHTK  equ 51200               ; h = PX_HEIGHTK / nx rows
@@ -100,10 +107,25 @@ PX_BUDGET   equ 149165              ; 1/8 s in 838ns units: Auto's budget -
                                     ; only while it is a pose passed through,
                                     ; and eight frames over the line IS the
                                     ; machine playing there (97.8)
-PX_BUDGET50 equ 74582               ; ...and HALF of it, the step-up line: the
-                                    ; rung above measures up to 1.92x this
-                                    ; one (Mode X's work), so 60% (1.67x)
-                                    ; walked the 8086 off its default (97.8)
+PX_BUDGET50 equ 74582               ; ...and HALF of it, a 286's step-up
+                                    ; line: the rung above measures up to
+                                    ; 1.92x this one (Mode X's work), so 60%
+                                    ; (1.67x) walked the 8086 off its default
+                                    ; - and on an 8086 half is under every
+                                    ; frame, so it has PX_AUP1/PX_AUPF (97.8)
+PX_AUP1     equ 132591              ; an 8086's step-up line onto Textured
+                                    ; Low res: 111.1 ms, PX_BUDGET / 1.125,
+                                    ; the largest Textured Low res / Flat Low
+                                    ; res ratio measured (97.8, 97.15)
+PX_AUPF     equ 92419               ; ...and onto a Full res position: 77.4
+                                    ; ms, PX_BUDGET / 1.614 (Textured Full /
+                                    ; Textured Low res; Flat Full / Flat Low
+                                    ; res reads up to 1.599) - the FULL
+                                    ; REPAINT's and the turn's ratio only:
+                                    ; the Full rungs' finished frames were
+                                    ; never measured, and with sprites the
+                                    ; ratio is likely ~1.63 (97.8 says what
+                                    ; bounds it: Size 48 under a Full ceiling)
 PX_AHOLD    equ 182                 ; ticks (10 s) no step up follows a step
                                     ; down: the hysteresis the threshold is not
 PX_KA       equ 0x1E                ; A - strafe left
@@ -150,7 +172,7 @@ PX_DOORHOLD equ 91                  ; ticks a door stays open: 5 s
 ; an actor (PXA_*): 16 bytes
 PXAC_X       equ 0                   ; word, Q8.8
 PXAC_Y       equ 2
-PXAC_KIND    equ 4                   ; byte: 0 guard, 1 dog (wave 6)
+PXAC_KIND    equ 4                   ; byte: 0 guard, 1 dog (PXK_DOG, wave 6)
 PXAC_STATE   equ 5                   ; byte: PXAS_*
 PXAC_DIR     equ 6                   ; byte: 0 E, 1 S, 2 W, 3 N - the way it
                                     ; moves; 0xFF none
@@ -177,6 +199,17 @@ PXAF_ATTACK equ 2                   ; attack mode: it has seen the player
 PXAF_SEEN   equ 4                   ; it was drawn last frame (the hit
                                     ; chance: the player can see it to dodge)
 PX_GUARDHP  equ 25                  ; the 1992 engine's guard at "bring 'em on"
+PXK_DOG     equ 1                   ; PXAC_KIND: the dog (wave 6, 97.8) -
+PX_DOGHP    equ 1                   ; one hit kills it, as the 1992 engine's
+PX_DOGWALK  equ 16                  ; patrolling, Q8.8 a tick (1.1 tile/s)
+PX_DOGRUN   equ 40                  ; chasing (2.8 tile/s): FAST - 1.67x a
+                                    ; guard's run, and a guard's own run is
+                                    ; the player's walk (24)
+PX_DOGBITE  equ 180                 ; a bite's chance in 256 at a tile (the
+                                    ; 1992 engine's T_Bite)
+PX_DOGLUNGE equ 8                   ; ticks from the leap to the bite...
+PX_DOGBACK  equ 5                   ; ...and from the bite to the next chase
+                                    ; step: a bite every ~0.7 s at the elbow
 PX_ACTWALK  equ 8                   ; Q8.8 a tick, patrolling (0.57 tile/s)
 PX_ACTRUN   equ 24                  ; ...chasing (1.7 tile/s)
 PX_ACTRAD   equ 64                  ; an actor's collision radius, 0.25
@@ -656,6 +689,11 @@ px_oncmd:
     jne .snd
     cmp byte [px_state], PXST_PLAY  ; a pause is PLAY's (px_key_common)
     jne .pref
+    cmp byte [px_mapon], 0          ; OVER THE TAB MAP the pick takes the map
+    je .pz                          ; down, as P does (px_key_common) - a
+    call px_map_off                 ; bare toggle would clear the map's own
+    jmp short .gout                 ; pause and run the world behind it
+.pz:                                ; (review, wave 6)
     xor byte [px_pause], 1
     mov byte [px_lined], 1
     call px_pause_msg
@@ -692,7 +730,7 @@ px_oncmd:
     jne .dok
     cmp byte [px_texok], 0
     je .out                         ; greyed (MENU_DIS: "Textured (needs
-                                    ; 111 KB)") - the kernel never
+                                    ; 118 KB)") - the kernel never
                                     ; dispatches it, and this return is for
                                     ; a shortcut, which goes near no menu
 .dok:
@@ -783,21 +821,23 @@ px_s_dauto:  db 'Auto', 0
 px_s_dwire:  db 'Wire', 0
 px_s_dflat:  db 'Flat', 0
 px_s_dtex:   db 'Textured', 0
-px_s_dtexs:  db 'Textured (sprites 62 KB)', 0 ; the walls textured and
+px_s_dtexs:  db 'Textured (sprites 76 KB)', 0 ; the walls textured and
                                             ; the sprites BOXES: the loader
-                                            ; found the 111 KB but not the
+                                            ; found the 118 KB but not the
                                             ; sprite set's claim after it
                                             ; (97.9: PXS_KB + the shadow) -
                                             ; live, and it says so (SPEC.md
                                             ; 47; review r1: it said nothing)
-px_s_dtexn:  db MENU_DIS, 'Textured (needs 111 KB)', 0 ; SPEC.md 47:
+px_s_dtexn:  db MENU_DIS, 'Textured (needs 118 KB)', 0 ; SPEC.md 47:
                                             ; greyed, and the caption says
                                             ; why - the scratch, the byte
                                             ; set and the art claim (97.9),
                                             ; a FACT held below to the
                                             ; constants it is the sum of
                                             ; (the first cut said 82 with
-                                            ; the sum at 111; review, wave 3)
+                                            ; the sum at 111; review, wave 3 -
+                                            ; 118 since wave 6's dog: the
+                                            ; art claim 30 -> 37 KB)
                                             ; - the %if is after pxart.inc.
                                             ; EVERY caption of the four
                                             ; menus fits MENU_MAXCH = 24
@@ -845,7 +885,7 @@ px_s_v80:    db MENU_DIS, 'Size 80 (full screen)', 0  ; 47): the menu is
                                             ; them in the bracket, where there
                                             ; is no menu
 px_s_r80:    db 'Rows 80', 0
-px_s_r100:   db MENU_DIS, 'Rows 100 (later)', 0   ; greyed: not built yet - a
+px_s_r100:   db MENU_DIS, 'Rows 100 (not built)', 0 ; greyed: not built - a
                                             ; fact about the software, the
                                             ; only one there is until it
                                             ; exists (97.3)
@@ -940,21 +980,24 @@ px_ablines:
     dw px_ab10, 0                   ; (TEN lines: the CGA desktop's content
                                     ; box clips an eleventh - review r2's
                                     ; screendump of the first eleven)
-px_ab1:      db 'Pixelstein 3D  version 0.4', 0     ; THE NUMBERS ARE MEASURED
+px_ab1:      db 'Pixelstein 3D  version 1.0', 0     ; THE NUMBERS ARE MEASURED
 px_ab2:      db 'A raycast shooter in the shape of', 0   ; (SPEC.md 97.13):
 px_ab3:      db 'the 1992 one: eight floors, guards,', 0 ; MartyPC's cycle-
-px_ab4:      db 'doors, keys - priced for the 8088.', 0  ; exact 5150 CGA. The
+px_ab4:      db 'dogs, doors and keys, for the 8088.', 0 ; exact 5150 CGA. The
 px_ab5:      db 0                                        ; FINISHED frame on
-px_ab6:      db 'A 4.77 MHz 5150 with CGA plays 8.7', 0  ; scene A (the sim
+px_ab6:      db 'A 4.77 MHz 5150 with CGA plays 8.5', 0  ; scene A (the sim
 px_ab7:      db 'fps at Textured Low res 64x80 (the', 0  ; running - what a
 px_ab8:      db 'finished frame, the world running);', 0 ; player sees; review
 px_ab9:      db 'the timedemo (T on the title page)', 0  ; r2: the first cut
-px_ab10:     db 'walks a frozen world at 10.1-10.2.', 0  ; quoted a frozen
+px_ab10:     db 'walks a frozen world at 9.9 fps.', 0  ; quoted a frozen
                                                          ; repaint), and the
                                                          ; timedemo's card -
                                                          ; the one a field
                                                          ; owner compares
-                                                         ; against
+                                                         ; against. Wave 6
+                                                         ; re-measured both
+                                                         ; on the last build
+                                                         ; (SPEC.md 97.15)
 
 ; =============================================================================
 ; the modules
@@ -976,10 +1019,10 @@ px_ab10:     db 'walks a frozen world at 10.1-10.2.', 0  ; quoted a frozen
 %include "pxart.inc"
 ; THE GREYED CAPTION IS A FACT (SPEC.md 47): held to the three constants it
 ; is the sum of, here because two of them are pxart.inc's
-%if PX_GENKB_CAP + PXA_BTKB + PXA_KB != 111
+%if PX_GENKB_CAP + PXA_BTKB + PXA_KB != 118
 %error "the greyed Textured caption names a number that is not PX_GENKB + PXA_BTKB + PXA_KB: fix px_s_dtexn"
 %endif
-%if PXS_KB + PX_SHKB != 62
+%if PXS_KB + PX_SHKB != 76
 %error "the sprites' caption names a number that is not PXS_KB + PX_SHKB: fix px_s_dtexs"
 %endif
 ; THE LOADER RESTATES PX_SHKB as PXL_SHKB (pxstein.asm's sprite claim leaves
@@ -1176,6 +1219,8 @@ px_ab10:     db 'walks a frozen world at 10.1-10.2.', 0  ; quoted a frozen
 ; --- the window --------------------------------------------------------------
     ZWORD px_win
     ZWORD px_scrw
+    ZWORD px_fmid                   ; the bracket's middle x, OSAPI_FSX_SURF's
+                                    ; (px_fsx_main): the mouse steers from it
     ZWORD px_dock
     ZWORD px_cx
     ZWORD px_cy
@@ -1368,7 +1413,8 @@ px_ab10:     db 'walks a frozen world at 10.1-10.2.', 0  ; quoted a frozen
     ZBUF  px_hmbuf, 24              ; a message, built
     ZBYTE px_hmsg                   ; the left label row's message (PXM_*)
     ZBYTE px_hmsgt                  ; ...ticks it stands (0: sticky)
-    ZBYTE px_hmsgn                  ; ...its post's serial, in steps of 4
+    ZBYTE px_hmsgn                  ; ...its post's serial, in steps of 8
+                                    ; (over a PXM_* of 0..7)
     ZBYTE px_wrs                    ; worker restarts at px_worker_rs (66.6.2)
     ZWORD px_sfxn                   ; OSAPI_SND_TONE effects played (px_sfx)
     ZBYTE px_sfxl                   ; ...the last one's PXSFX_*
@@ -1432,6 +1478,17 @@ px_ab10:     db 'walks a frozen world at 10.1-10.2.', 0  ; quoted a frozen
     ZWORD px_nbp                    ; ...and OSAPI_GFX_BLITP calls drawn
     ZBYTE px_w4pl                   ; this frame's WIN4 present is PLANAR
     ZWORD px_npaint                 ; W_PAINTs taken (the gates')
+; --- the Tab map (97.6; wave 6) -----------------------------------------------
+    ZBUF  px_seen, 512              ; a bit a cell: crossed by a ray this
+                                    ; floor (px_seen_fold, at every wrap)
+    ZBYTE px_mapon                  ; the map is up
+    ZBYTE px_mapd                   ; ...and owed (2: both Mode X pages)
+    ZBYTE px_mapfa                  ; ...and taken down: px_force_all owed
+    ZBYTE px_mox                    ; its origin cell, x (signed) and y
+    ZBYTE px_moy
+    ZBYTE px_mhi                    ; ...and the band byte its map columns end at
+    ZWORD px_mmark                  ; ...and the player's marker tone
+    ZBUF  px_mrows, 3 * PX_MRW      ; ...and three rows of seen flags
 %ifdef PXPROBE
     ZWORD px_pr_lad                 ; tests/pxsperf.py --probe: the frame's
     ZWORD px_pr_skip                ; ladder entries and skipped columns. A
@@ -1477,3 +1534,15 @@ px_ab10:     db 'walks a frozen world at 10.1-10.2.', 0  ; quoted a frozen
 ; its head alive. The row is OP_COMP and most of what follows is a run of
 ; zeros, which LZ4 packs to almost nothing.
     times OS88_BSS_SIZE db 0
+
+; --- THE COLD PART'S TRIGGER, ENFORCED (SPEC.md 97.9) ------------------------
+; The cold part is populated by whichever wave's build would leave part 0 with
+; less than 2 KB of APP_MAX_SIZE's 61,440 spare - 59,392 bytes, image and bss
+; together. It was a sentence until wave 6's close ended 14 bytes under it, so
+; it is an assembly error now: the next growth fails HERE and moves 97.9's
+; natural movers (pxhs.inc, px_card_text, the timedemo's script) behind the
+; one far call, rather than trimming a feature to squeeze under.
+PX_PART0_TRIGGER equ 61440 - 2048
+%if OS88_IMAGE_SIZE + OS88_BSS_SIZE > PX_PART0_TRIGGER
+%error "part 0 is past 97.9's cold-part trigger (59,392): populate the far-called cold part, do not trim a feature"
+%endif

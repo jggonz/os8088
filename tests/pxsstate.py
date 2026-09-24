@@ -56,9 +56,9 @@ IN THE BRACKET:
       px_victory set and "YOU ESCAPED" on the card;
   (i) T: the TIMEDEMO - DEMO, then ATTRACT with its numbers: frames = 81
       (the script's 80 steps and the start's forced frame), ticks > 0, fps
-      = frames x 182 / ticks in tenths; the run PINNED to Textured Low res
-      Size 64 whatever was in force (px_demorg), what was in force back
-      after it, and the bar a new game's (health 100) not the last game's;
+      = frames x 182 / ticks in tenths, rounded (review, wave 6 r2); the
+      run PINNED to Textured Low res Size 64 whatever was in force
+      (px_demorg), what was in force back after it, and the bar a new game's (health 100) not the last game's;
   (j) Esc leaves the bracket;
   (j2) T on a machine with NO full-screen mode (px_mode poked to 0): no
       bracket, and no timedemo request left standing for the next F;
@@ -586,9 +586,10 @@ def main():
             rg = g.bytes_("px_demorg", 3)
             print("   TIMEDEMO: %d frames in %d ticks = %d.%d fps at rung %d lowres %d size %d"
                   % (fr, tk, fps // 10, fps % 10, rg[0], rg[1], rg[2]))
-            check(g.byte("px_demodone") == 1 and fr == 81 and tk > 0 and fps == fr * 182 // tk,
+            check(g.byte("px_demodone") == 1 and fr == 81 and tk > 0
+                  and fps == (fr * 182 + tk // 2) // tk,
                   "the timedemo ran its script (81 frames) and the card's numbers are "
-                  "frames x 182 / ticks")
+                  "frames x 182 / ticks, rounded")
             check(tuple(rg) == (2, 1, 64), "...PINNED to Textured Low res Size 64 though Auto "
                   "and Size 48 were in force (%r)" % (tuple(rg),))
             check(g.byte("px_detail") == 0 and g.byte("px_sizeix") == 0,

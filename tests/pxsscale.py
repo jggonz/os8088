@@ -114,6 +114,15 @@ def main():
         g.pin(rung="tex", lowres=True)          # the first Textured frame
         g.scene("a")                            # builds the sets (px_apply)
         g.wait_frames(1)
+        # A FRAME IN FLIGHT when the pokes landed (READY's own force, a
+        # Flat Full window frame of ~140 ms) completes first and counts,
+        # before the frame whose prologue applies the pick and generates
+        # (wave 6's soak read the part as zeros exactly so, once): the
+        # generation is waited for, then one more frame drawn after it
+        os88marty.until(m, lambda mm: g.byte("px_genback") != 0xFF,
+                        "the window's generation", poll=0.2, limit=120.0)
+        g.force()
+        g.wait_frames(1)
         compare(g, "window, Textured pinned")
         g.scene("b")                            # ...and a second frame
         g.wait_frames(1)                        # regenerates nothing

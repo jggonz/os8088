@@ -403,7 +403,11 @@ px_blit_w4:
     mov cl, ah                      ; CL = rows
     mov dl, [px_size]               ; DL = bytes a row
     mov dh, [px_sadv]               ; DH = the advance past the band
-    mov bx, PX_W4TAB
+    mov bx, PX_W4TAB                ; THE ROW'S TABLE (wave 6): the even
+    test al, 1                      ; rows' at PX_W4TAB, the odd rows' 32
+    jz .ev                          ; on - a dark face is its lit colour on
+    mov bl, (PX_W4TAB + 32) & 0xFF  ; one and black on the other, and each
+.ev:                                ; row swaps them with one `xor`
     cmp byte [px_w4pl], 0
     jne .planes
     mov di, PX_W4BUF
@@ -430,6 +434,7 @@ px_blit_w4:
     mov al, dh
     xor ah, ah
     add si, ax
+    xor bl, 0x20                    ; the next row's table
     dec cl
     jnz .row
     pop ds
@@ -502,6 +507,7 @@ px_blit_w4:
     mov al, ah
     xor ah, ah
     add si, ax
+    xor bl, 0x20                    ; the next row's table
     dec cl
     jnz .prow
     pop ds

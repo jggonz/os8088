@@ -61,7 +61,9 @@ sim would, then lets the sim run (px_simoff 0) and reads what it did:
       for, expected ~6 fps before the cap. Reported, never gated. Beside it
       SEVEN CHASERS: every E1M1 guard poked CHASE at its spawn, scene A's
       finished frame - the sim tick with seven line-of-sight walks in it,
-      priced against the finished frame with them standing (97.8).
+      priced against the finished frame with them standing (97.8). And
+      (review, wave 6) ONE DOG and then TWO DOGS at the elbow, the same
+      frame - the dog is the one new thing wave 6 draws in the world.
   (k) THE DIE WASH AND THE RESTART: health poked to 1, the player
       vulnerable, a guard a tile off in CHASE - the hit puts px_state at
       DYING, and PX_FADE ticks later the floor restarts: health 100, a life
@@ -80,6 +82,31 @@ sim would, then lets the sim run (px_simoff 0) and reads what it did:
       px_mapT: wave 3 changed the byte and nothing read it back); Space on
       the card loads E1M2 (px_floor 1) between frames, READY, then PLAY, and
       frames go on being drawn on it.
+  (q) THE DOG (wave 6): the fourth guard made a dog, four tiles down scene
+      A's hall and chasing, the rest of the floor's actors out of the
+      world for the leg - it closes FASTER than a guard runs (in the world's
+      own steps, px_dtick - a window's frame caps them), it is drawn
+      from the dog's frames alone (the bite among them), it BITES (the
+      health falls), and ONE pistol round kills it for 200 points.
+  (e2) A MELEE UNDER AUTO (review, wave 6 r2; reported): two guards at the
+      elbow, the sim running, Auto at the 8086 bracket's start, 3 s of
+      Delta-filled frames, and where Auto ends - the measurement the ladder
+      question (SPEC.md 97.8, 97.15) waits on.
+  (r) THE TAB MAP (wave 6): Tab in the window draws the seen cells from
+      above - the player's cell the marker, a seen cell the floor's tone -
+      and the world stops under it (px_dtick still); Tab takes it down and
+      the world is drawn again; Game > Pause picked from the MENU over the
+      map takes it down as P does and never runs the world behind it (the
+      first cut toggled px_pause alone - review, wave 6); the generation
+      wrapped by a poke, the marks FOLDED into px_seen keep the cell on the
+      map. The player's marker is none of the backend's map tones (the
+      first cut's 1bpp marker was every wall's lit tone - review, wave 6
+      r2). (r3) A DOOR SEEN THROUGH ITS NEIGHBOURS IS ON THE MAP: door 0
+      and then the secret door faced from their corridors, a frame cast,
+      the door cell's own marks zeroed (a door walked past and never looked
+      into) - its band bytes must be its material's lit tone, never unseen
+      black: a black cell in a seen wall line gives a secret door away
+      (review, wave 6 r2; the unfixed map drew it black).
   (o) THE SILVER LOCK, on E1M2: Space at its silver door with the GOLD key
       alone leaves it SHUT; with the silver key it opens. LAST, because the
       floor is a different one after (j).
@@ -98,12 +125,17 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))     # LAST, so it wins (pxslib)
 import os88marty                                                # noqa: E402
+import os88mouse                                                # noqa: E402
+import os88ui                                                   # noqa: E402
 import pxslib                                                    # noqa: E402
 
 STAND, PATROL, ALERT, CHASE, ATTACK, PAIN, DIE, DEAD = 1, 2, 3, 4, 5, 6, 7, 8
+DOG = 1                         # PXAC_KIND (wave 6)
+DOG_F0 = 31                     # PXS_D_WALK0: the dog's first frame (pxart.inc)
 SHUT, OPENING, OPEN, CLOSING = 0, 1, 2, 3
 DOORHOLD = 91
 PXAF_ATTACK = 2
+PXM_MAP = 4                     # pxhud.inc: the bar's "MAP - TAB TO PLAY"
 FAIL = []
 
 
@@ -133,19 +165,39 @@ def watch(g, n, key, want, step=6, actor=0):
     return False, seen
 
 
+def aim_seen(m, g, want, frames=600):
+    """px_aim sampled EVERY VIDEO FRAME of guest time (review, wave 6 r2):
+    a chasing guard and a leaping dog move in and out of the crosshair, and
+    the first cut polled from the host - ~6 of the guest's frames between
+    reads - so a target the crosshair held for a frame or two was missed
+    (it failed twice in review r2's runs, and the shot after it killed the
+    target at once). Returns `want` once seen, else the last value; the
+    guest is left running."""
+    m.pause()
+    v = g.byte("px_aim")
+    for _ in range(frames):
+        if v == want:
+            break
+        m.advance(frames=1)
+        v = g.byte("px_aim")
+    m.run()
+    return v
+
+
 def tap(m, key, hold=3, g=None):
     m.key(key, down=True, up=False)
     ticks(g, hold)
     m.key(key, down=False, up=True)
 
 
-def shot(m, a, name):
+def shot(m, a, name, wave=3):
     if not a.shots:
         return
     os.makedirs(a.shots, exist_ok=True)
     m.pause()
     w, h, pxl = m.fbuf(0)
-    os88marty.write_png_rgb(os.path.join(a.shots, "wave3-%s-%s.png" % (a.machine, name)), w, h, pxl)
+    os88marty.write_png_rgb(os.path.join(a.shots, "wave%d-%s-%s.png" % (wave, a.machine, name)),
+                            w, h, pxl)
     m.run()
 
 
@@ -246,12 +298,7 @@ def main():
         # (its pose the old one, its aim 255); the poked pose's frame follows
         # it - the force is kept since wave 4 (97.13) - so the aim is waited
         # for rather than read at the first frame
-        try:
-            os88marty.until(m, lambda mm: g.byte("px_aim") == 0, "the aim", poll=0.05,
-                            limit=30.0)
-        except os88marty.MartyError:
-            pass
-        aim = g.byte("px_aim")
+        aim = aim_seen(m, g, 0)
         check(aim == 0, "the sprite pass aims at the guard under the crosshair (px_aim %d)" % aim)
         dead = False
         for k in range(10):
@@ -540,6 +587,289 @@ def main():
         g.actor_poke(2, x=sp2["x"], y=sp2["y"], state=STAND, dir=sp2["dir"], ang=sp2["ang"], flags=0)
         m.run()
 
+        # --- (q) THE DOG (wave 6, 97.8): fast, melee, one hit -------------------
+        # the fourth guard made a DOG (kind 1, hp 1) four tiles ahead of the
+        # eye down scene A's hall, CHASING; every other actor put out of the
+        # world for the leg (PXAS_NONE, restored after) so nothing else can
+        # hurt the player. It must CLOSE at its own speed - four tiles to the
+        # elbow in fewer ticks than a guard's run (24) could - be DRAWN from
+        # the dog's frames (PXS_D_*: 31..41, the bite 39), LEAP and BITE (the
+        # health falls, the player vulnerable), and die to ONE pistol shot
+        # (+200)
+        import pxsart                                   # noqa: E402
+        check(pxsart.D_WALK0 == DOG_F0, "the dog's frames start at %d (tools/pxsart.py's "
+              "D_WALK0 %d, pxart.inc's PXS_D_WALK0)" % (DOG_F0, pxsart.D_WALK0))
+        m.pause()
+        g._mark()
+        px, py, head = pxslib.scene_at("a")
+        g.eye_poke(px, py, head)
+        g.pcell_poke(px, py)
+        keep = [g.actor(i) for i in range(g.byte("px_nact"))]
+        for i in range(g.byte("px_nact")):
+            if i != 3:
+                g.actor_poke(i, state=0)
+        g.actor_poke(3, x=px + 4 * 256, y=py, kind=DOG, state=CHASE, hp=1, ang=2048, dir=2,
+                     flags=PXAF_ATTACK, frame=0, timer=0)
+        g.poke_byte("px_health", 255)
+        g.poke_byte("px_weapon", 1)
+        g.poke_byte("px_ammo", 99)
+        g.force_all_poke()
+        g.poke_byte("px_god", 0)                    # vulnerable, and the clock
+        dt0, x0 = g.word("px_dtick"), px + 4 * 256  # read PAUSED at the poke: the
+                                                    # first cut read it after a
+                                                    # host-timed frame wait, the
+                                                    # dog already closing (it
+                                                    # read 680 "a step")
+        frames, bit, speed = set(), False, None
+        # SAMPLED IN GUEST TIME (review, wave 6 r2): the first cut polled from
+        # the host, whose gap is a different number of the world's steps on
+        # every run (it read 40, 80 and 680 units a step), and one soak's
+        # first sample already found the dog at melee - "no sample". Two
+        # video frames a sample (~0.6 of a world step), paused between, and
+        # the speed taken from the first sample the dog has MOVED in, while
+        # it is still closing (x0 - x under the three tiles to the elbow)
+        for _ in range(600):
+            m.advance(frames=2)
+            for fr, fl, act in g.candidates():
+                if act == 3:
+                    frames.add(fr)
+            d = g.actor(3)
+            dt = (g.word("px_dtick") - dt0) & 0xFFFF
+            if speed is None and dt and x0 - 3 * 256 < d["x"] < x0:
+                speed = (x0 - d["x"]) / float(dt)
+            if g.player()["health"] < 255:
+                bit = True
+            if bit and DOG_F0 + 8 in frames:
+                break
+        m.run()
+        g.god(True)
+        d = g.actor(3)
+        print("   the dog: %s units a step closing (a guard runs %d, the player walks %d); "
+              "state %d at x %d; frames drawn %s; health 255 -> %d"
+              % ("%.1f" % speed if speed else "-", 24, 24, d["state"], d["x"], sorted(frames),
+                 g.player()["health"]))
+        check(speed is not None and speed > 24, "the dog is FAST: it closes at more than a "
+              "guard's run a step (%s)" % ("%.1f" % speed if speed else "no sample"))
+        check(frames and all(DOG_F0 <= f <= DOG_F0 + 10 for f in frames),
+              "...drawn from the dog's frames alone (%s)" % sorted(frames))
+        check(bit, "...and it BIT the player: health 255 -> %d" % g.player()["health"])
+        check(DOG_F0 + 8 in frames, "...the leap's bite frame was drawn (%d)" % (DOG_F0 + 8))
+        shot(m, a, "dog", wave=6)
+        m.pause()
+        g.poke_byte("px_health", 100)
+        s0 = g.word("px_score")
+        m.run()
+        aim = aim_seen(m, g, 3)
+        check(aim == 3, "the dog at the elbow is under the crosshair (px_aim %d)" % aim)
+        am0 = g.byte("px_ammo")
+        tap(m, "ControlLeft", 3, g)
+        ticks(g, 6)
+        d = g.actor(3)
+        print("   one shot (ammo %d -> %d): the dog's state %d, hp %d, score %d -> %d"
+              % (am0, g.byte("px_ammo"), d["state"], d["hp"], s0, g.word("px_score")))
+        check(g.byte("px_ammo") == am0 - 1 and d["state"] in (DIE, DEAD),
+              "ONE pistol round kills the dog (state %d, ammo %d -> %d)"
+              % (d["state"], am0, g.byte("px_ammo")))
+        check(g.word("px_score") == s0 + 200, "...for 200 points (%d -> %d)"
+              % (s0, g.word("px_score")))
+        ok, seen = watch(g, 30, "state", (DEAD,), actor=3)
+        check(ok and DOG_F0 + 10 in [c[0] for c in g.candidates() if c[2] == 3],
+              "...and it falls to its corpse frame (%s; candidates %s)" % (seen, g.candidates()))
+        m.pause()
+        for i, k in enumerate(keep):
+            g.actor_poke(i, x=k["x"], y=k["y"], kind=k["kind"], state=k["state"], hp=k["hp"],
+                         dir=k["dir"], ang=k["ang"], flags=k["flags"], frame=0, timer=0)
+        m.run()
+
+        # --- (r) THE TAB MAP (wave 6, 97.6): the seen cells from above --------
+        # the window at scene A, the eye looking round once so the hall is
+        # SEEN; Tab: the map is drawn once, the world stops under it (no
+        # sim tick is spent), the player's cell carries the marker and the
+        # cell ahead of it the floor's tone; Tab again takes it down and a
+        # frame re-lays the world. Then THE FOLD: px_gen poked to 255, so
+        # the next cast wraps the generation and the marks are cleared -
+        # the cell ahead survives in px_seen's bits and the map shows it
+        m.pause()
+        g._mark()
+        px, py, head = pxslib.scene_at("a")
+        g.eye_poke(px, py, head)
+        g.pcell_poke(px, py)
+        g.force_all_poke()
+        m.run()
+        g.wait_frames(1)
+
+        def map_open():
+            f0 = g.word("px_frames")
+            m.type_text("\t")
+            os88marty.until(m, lambda mm: g.byte("px_mapon") == 1 and g.byte("px_mapd") == 0
+                            and g.word("px_frames") != f0, "the map", poll=0.1, limit=60.0)
+            ticks(g, 3)
+
+        def map_cells():
+            sh = g.shadow()
+            ox = g.byte("px_mox")
+            ox = ox - 256 if ox > 127 else ox
+            oy, x0 = g.byte("px_moy"), g.byte("px_x0")
+            k, b = (py >> 8) - oy, (px >> 8) - ox
+            at = lambda kk, bb: (sh[2 * kk * 80 + x0 + bb], sh[(2 * kk + 1) * 80 + x0 + bb])
+            return at(k, b), at(k, b + 1), g.word("px_mmark"), g.word("px_inkf")
+
+        map_open()
+        me, ahead, mark, floor = map_cells()
+        dt0 = g.word("px_dtick")
+        ticks(g, 20)
+        print("   the map: the player's cell %s (marker %04x), the cell ahead %s (floor %04x); "
+              "px_dtick %d -> %d over 20 ticks" % (me, mark, ahead, floor, dt0, g.word("px_dtick")))
+        check(g.byte("px_pause") == 1 and g.word("px_dtick") == dt0,
+              "Tab: the MAP is up and the world stops under it (px_dtick still)")
+        check(me == (mark & 255, mark >> 8), "...the player's cell carries the marker %s" % (me,))
+        check(ahead == (floor & 255, floor >> 8), "...and the SEEN cell ahead the floor's tone %s"
+              % (ahead,))
+        f0 = g.word("px_frames")
+        m.type_text("\t")
+        os88marty.until(m, lambda mm: g.byte("px_mapon") == 0 and g.word("px_frames") != f0,
+                        "the world again", poll=0.1, limit=60.0)
+        check(g.byte("px_pause") == 0, "Tab again: the map is down, the world runs, a frame drawn")
+        # (r2) GAME > PAUSE OVER THE MAP (review, wave 6): the menu's Pause
+        # takes the map down as P does. The first cut toggled px_pause alone,
+        # so the world ran (guards shooting) behind a frozen map whose bar
+        # still read MAP - TAB TO PLAY
+        map_open()
+        ui = os88ui.UI(m, mouse=os88mouse.Mouse(marty=m), verbose=False)
+        ui.menu_pick("Game", "Pause")
+        ticks(g, 6)
+        mo, pz, hm = g.byte("px_mapon"), g.byte("px_pause"), g.byte("px_hmsg")
+        print("   Game > Pause over the map: px_mapon %d, px_pause %d, px_hmsg %d" % (mo, pz, hm))
+        check(mo == 1 and pz == 1 or mo == 0,
+              "Game > Pause over the map never runs the world behind it (px_mapon %d, px_pause %d)"
+              % (mo, pz))
+        check(mo == 0 and pz == 0 and hm != PXM_MAP,
+              "...it takes the map down, as P does (px_mapon %d, px_pause %d, px_hmsg %d)"
+              % (mo, pz, hm))
+        os88marty.until(m, lambda mm: g.byte("px_mapfa") == 0, "the map's force taken",
+                        poll=0.1, limit=60.0)
+        m.pause()
+        g._mark()
+        g.poke_byte("px_gen", 255)
+        g.force_all_poke()
+        m.run()
+        g.wait_frames(1)
+        c = (py >> 8) * 64 + (px >> 8) + 1
+        bit = g.bytes_("px_seen", 512)[c >> 3] & (0x80 >> (c & 7))
+        check(g.byte("px_gen") < 8 and bit and g.bytes_("px_spot", 4096)[c] in (0, g.byte("px_gen")),
+              "THE FOLD: the generation wrapped (px_gen %d) and the cell ahead is in px_seen's bits"
+              % g.byte("px_gen"))
+        map_open()
+        me, ahead, mark, floor = map_cells()
+        check(ahead == (floor & 255, floor >> 8), "...so the map still shows it after the wrap %s"
+              % (ahead,))
+        inkt = g.bytes_("px_inkt", 64)
+        tones = set([floor]) | set(inkt[4 * i] | inkt[4 * i + 1] << 8 for i in range(16))
+        check(mark not in tones, "...and the marker %04x is none of this backend's map tones %s"
+              % (mark, sorted("%04x" % t for t in tones)))
+        shot(m, a, "map", wave=6)
+        m.type_text("\t")
+        os88marty.until(m, lambda mm: g.byte("px_mapon") == 0, "the map down", poll=0.1, limit=60.0)
+
+        # (r3) A DOOR SEEN ONLY THROUGH ITS NEIGHBOURS IS ON THE MAP (review,
+        # wave 6 r2). The review's premise - "a ray that strikes a shut slab
+        # never marks the door" - is FALSE here, and the first cut of this
+        # leg proved it: the slab stands at the cell's middle, so the ray
+        # ENTERS the door cell and its transposed walker marks it (px_spotT
+        # read 3 and 5 on the two doors below, and the unfixed map drew both
+        # in their tone - w6r2/pxsact-negctl-oldcell.log). What IS a hole is
+        # a door whose OWN marks are 0 while its corridor is seen - a secret
+        # door in a side wall walked past: every wall around it drawn by the
+        # neighbour rule and the door cell black, which gives it away (97.6).
+        # So the leg makes exactly that state: the door faced, a frame cast,
+        # then the door cell's three marks ZEROED (the sim frozen, so no
+        # frame re-marks it before Tab) and a neighbour's asserted set
+        def door_on_map(i, what):
+            dd = g.door(i)
+            dc = dd["cell"]
+            # the eye TWO tiles out, so the cell between it and the slab is
+            # one the walkers pass (the eye's own cell is not marked)
+            cx_, cy_ = (dc & 63) * 256 + 128, (dc >> 6) * 256 + 128
+            mp = g.bytes_("px_map", 4096)
+            if dd["flags"] & 4:                     # DOOR_EW: the passage runs N-S
+                sides = ((0, -1, 1024), (0, 1, 3072))
+            else:
+                sides = ((-1, 0, 0), (1, 0, 2048))
+            for sx, sy, eh in sides:
+                c1 = ((cy_ >> 8) + sy) * 64 + (cx_ >> 8) + sx
+                c2 = ((cy_ >> 8) + 2 * sy) * 64 + (cx_ >> 8) + 2 * sx
+                if not (mp[c1] & 3) and not (mp[c2] & 3):
+                    break
+            ex, ey = cx_ + 512 * sx, cy_ + 512 * sy
+            g.sim(False)
+            m.pause()
+            for nm, n in (("px_spot", 4096), ("px_spotT", 4096), ("px_seen", 512)):
+                g.m.write(g.base + g.s[nm], bytes(n))
+            g.door_poke(i, pos=0, state=SHUT, timer=0)
+            g._mark()
+            g.eye_poke(ex, ey, eh)
+            g.pcell_poke(ex, ey)
+            g.force_all_poke()
+            m.run()
+            g.wait_frames(1)
+            m.pause()
+            tx = (dc & 63) * 64 + (dc >> 6)
+            spot, spotT = g.bytes_("px_spot", 4096), g.bytes_("px_spotT", 4096)
+            own = (spot[dc], spotT[tx])
+            ecell = c1                              # the cell between
+            etx = (ecell & 63) * 64 + (ecell >> 6)
+            nb = spot[ecell] or spotT[etx]
+            g.m.write(g.base + g.s["px_spot"] + dc, b"\0")
+            g.m.write(g.base + g.s["px_spotT"] + tx, b"\0")
+            sb = g.bytes_("px_seen", 512)[dc >> 3] & ~(0x80 >> (dc & 7)) & 255
+            g.m.write(g.base + g.s["px_seen"] + (dc >> 3), bytes([sb]))
+            m.run()
+            map_open()
+            sh = g.shadow()
+            ox = g.byte("px_mox")
+            ox = ox - 256 if ox > 127 else ox
+            oy, x0 = g.byte("px_moy"), g.byte("px_x0")
+            k, b = (dc >> 6) - oy, (dc & 63) - ox
+            got = (sh[2 * k * 80 + x0 + b], sh[(2 * k + 1) * 80 + x0 + b])
+            mat = cell_byte(g, dc) >> 4
+            it = g.bytes_("px_inkt", 64)
+            want = (it[4 * mat], it[4 * mat + 1])
+            st = g.door(i)["state"]
+            print("   %s %d at (%d,%d), SHUT and faced: its own marks after the cast %s "
+                  "(then zeroed), the cell between %s, material %d, map cell %s (lit tone %s), "
+                  "state %d" % (what, i, dc & 63, dc >> 6, own, nb, mat, got, want, st))
+            check(nb != 0, "...the corridor cell beside the %s is SEEN (%d)" % (what, nb))
+            check(st == SHUT and got == want and got != (0, 0),
+                  "Tab draws the %s whose own marks are 0 in its material's lit tone %s, "
+                  "not unseen black (%s)" % (what, want, got))
+            m.type_text("\t")
+            os88marty.until(m, lambda mm: g.byte("px_mapon") == 0, "the map down", poll=0.1,
+                            limit=60.0)
+            g.sim(True)
+
+        door_on_map(0, "door")
+        if sec:
+            door_on_map(sec[0], "SECRET door")
+
+        # (r4) THE MAP ACROSS THE BRACKET'S EXIT (review, wave 6's close): Tab
+        # in the bracket, then Esc. The map stays up in the window (px_mapon,
+        # the world paused) and so must its bar line - the first cut's exit
+        # kept only PXM_PAUSED and blanked MAP - TAB TO PLAY over a map that
+        # was still showing
+        g.enter_fsx()
+        map_open()
+        g.leave_fsx()
+        ticks(g, 6)
+        mo, pz, hm = g.byte("px_mapon"), g.byte("px_pause"), g.byte("px_hmsg")
+        print("   Tab in the bracket, then Esc: px_mapon %d, px_pause %d, px_hmsg %d"
+              % (mo, pz, hm))
+        check(mo == 1 and pz == 1 and hm == PXM_MAP,
+              "(r4) the map survives the bracket's exit WITH its bar line (px_mapon %d, "
+              "px_pause %d, px_hmsg %d, want %d)" % (mo, pz, hm, PXM_MAP))
+        m.type_text("\t")
+        os88marty.until(m, lambda mm: g.byte("px_mapon") == 0, "the map down", poll=0.1,
+                        limit=60.0)
+
         # --- (e) the frames, reported: melee (the sim RUNNING), seven chasers -----
         g.enter_fsx()
         g.pin(rung="tex", lowres=True, size=64)
@@ -564,9 +894,74 @@ def main():
         print("   TWO GUARDS AT MELEE, full repaint, the sim running, the default rung: %6.1f ms "
               "= %5.2f fps (%d posts queued, %d sprites) - reported" % (ms, fps, qp, nsc))
         shot(m, a, "melee")
+        # ...and THE DOG AT MELEE (review, wave 6): the one new thing drawn in
+        # the world had no frame price. One dog at the elbow (the second
+        # guard out of the world), then two - the melee rule admits two
+        # actors at spawn, and a dog closes at 40 (god on: they bite, the
+        # health stays)
+        for nd in (1, 2):
+            m.pause()
+            g.actor_poke(0, x=px + 256, y=py, kind=DOG, state=CHASE, hp=1, ang=2048, dir=2,
+                         flags=PXAF_ATTACK, frame=0, timer=0)
+            if nd == 2:
+                g.actor_poke(1, x=px + 512, y=py + 64, kind=DOG, state=CHASE, hp=1, ang=2048,
+                             dir=2, flags=PXAF_ATTACK, frame=0, timer=0)
+            else:
+                g.actor_poke(1, state=0)
+            g.force_all_poke()
+            m.run()
+            g.wait_frames(1)
+            times = g.frame_times(a.frames, mode="sim")
+            msd = pxslib.ms(pxslib.median([t[0] for t in times]))
+            print("   %s AT MELEE, full repaint, the sim running, the default rung: %6.1f ms "
+                  "= %5.2f fps (against two guards %.1f) - reported"
+                  % ("ONE DOG" if nd == 1 else "TWO DOGS", msd, 1000.0 / msd if msd else 0, ms))
+            if nd == 2:
+                shot(m, a, "melee-dogs", wave=6)
+        # ...and (e2) A MELEE UNDER AUTO (review, wave 6 r2) - REPORTED: two
+        # guards at the elbow, the sim running, Detail Auto at the bracket's
+        # 8086 start (position 1, Textured Low res) and NOTHING forced after
+        # the first frame - the frames are the Delta-filled ones a fight
+        # draws - for 180 video frames (3 s), then where Auto stands. Eight
+        # consecutive frames over PX_BUDGET step it down - on an 8086 straight
+        # to Flat Low res (3), past Flat Full - and the step back up is
+        # tests/pxsauto.py's leg (f): the 10 s hold-down outlasts this leg,
+        # so a path here ends where it fell (SPEC.md 97.8, wave 6's close)
         m.pause()
-        g.actor_poke(0, x=22 * 256 + 128, y=3 * 256 + 128, state=CHASE, hp=25, flags=PXAF_ATTACK)
-        g.actor_poke(1, x=31 * 256 + 128, y=13 * 256 + 128, state=CHASE, hp=25, flags=PXAF_ATTACK)
+        g.actor_poke(0, x=px + 256, y=py, kind=0, state=CHASE, hp=25, ang=2048, dir=2,
+                     flags=PXAF_ATTACK, frame=0, timer=0)
+        g.actor_poke(1, x=px + 512, y=py + 64, kind=0, state=CHASE, hp=25, ang=2048, dir=2,
+                     flags=PXAF_ATTACK, frame=0, timer=0)
+        g._mark()
+        g.poke_byte("px_detail", pxslib.PXD["auto"])
+        g.poke_byte("px_apos", 1)
+        g.poke_byte("px_astart", 1)
+        g.poke_byte("px_amiss", 0)
+        g.poke_byte("px_ahit", 0)
+        g.poke_byte("px_pend", 1)
+        m.run()
+        g.wait_frames(1)
+        fa0, ap0 = g.word("px_frames"), 1           # the poked start: the first
+        path = [ap0]                                # frame may already be a miss
+        if g.byte("px_apos") != ap0:
+            path.append(g.byte("px_apos"))
+        for _ in range(12):
+            m.advance(frames=15)
+            m.run()
+            ap = g.byte("px_apos")
+            if ap != path[-1]:
+                path.append(ap)
+        fa1, ap1 = g.word("px_frames"), g.byte("px_apos")
+        print("   A MELEE UNDER AUTO, 3 s on the 8086 bracket: Auto position %d -> %d (path %s; "
+              "0 Tex Full, 1 Tex Low, 2 Flat Full, 3 Flat Low), %d frames drawn - reported"
+              % (ap0, ap1, path, (fa1 - fa0) & 0xFFFF))
+        g.pin(rung="tex", lowres=True, size=64)
+        g.wait_frames(1)
+        m.pause()
+        g.actor_poke(0, x=22 * 256 + 128, y=3 * 256 + 128, kind=0, state=CHASE, hp=25,
+                     flags=PXAF_ATTACK)
+        g.actor_poke(1, x=31 * 256 + 128, y=13 * 256 + 128, kind=0, state=CHASE, hp=25,
+                     flags=PXAF_ATTACK)
         for i in range(2, g.byte("px_nact")):
             g.actor_poke(i, state=CHASE, hp=25, flags=PXAF_ATTACK)
         m.run()
@@ -641,14 +1036,22 @@ def main():
         lives0 = g.byte("px_lives")
         g.force_all_poke()
         m.run()
-        dying = False
+        dying = passed = False
         for _ in range(40):
             ticks(g, 3)
             if g.player()["state"] == 1:
                 dying = True
                 break
-        check(dying, "a hit at health 1 puts the player in the DIE wash (state %d, health %d)"
-              % (g.player()["state"], g.player()["health"]))
+            if g.byte("px_lives") != lives0:        # THE WASH PASSED BETWEEN TWO
+                passed = True                       # POLLS (review, wave 6 r2: a
+                break                               # loaded host's poll took
+                                                    # longer than the wash and
+                                                    # READY together; a life is
+                                                    # taken only on the way out
+                                                    # of DYING, so it is proof)
+        check(dying or passed, "a hit at health 1 puts the player in the DIE wash (state %d, "
+              "health %d%s)" % (g.player()["state"], g.player()["health"],
+                                ", seen by the life it took" if passed else ""))
         restarted = False
         for _ in range(30):
             ticks(g, 3)
@@ -683,7 +1086,30 @@ def main():
         check(g.player()["floor"] == 0, "...and the floor stands under the card (px_floor %d)"
               % g.player()["floor"])
         shot(m, a, "leveldone")
-        ticks(g, 12)                                # (the card's hold, 97.13)
+        # THE CARD'S HOLD IS COUNTED IN WORLD STEPS, not BIOS ticks
+        # (px_timers, 97.13): the first cut waited 12 ticks for a 9-step
+        # hold, and in one run of review r2 the steps lagged the ticks and
+        # the Space landed inside the hold - eaten, as the hold means it to
+        # be. So the wait is on px_cardhold itself - AND THE HOLD RE-ARMS at
+        # 1 every step while OSAPI_KEY_DOWN reads Space or Enter held
+        # (px_timers' .still), so a Space break code the guest never saw
+        # held it for ever: wave 6's verification soak waited 180 guest
+        # seconds here. pxslib.release_held reads the kernel's key map and
+        # releases again, NAMING the key when it fires, and is asked again
+        # every ten polls while the hold stands (wave 6's close)
+        hk = [0, 0]
+
+        def hold_clear(mm):
+            if g.byte("px_cardhold") == 0:
+                return True
+            hk[0] += 1
+            if hk[0] % 10 == 1:
+                hk[1] += len(pxslib.release_held(m, ("Space", "Enter"), "the card's hold"))
+            return False
+        os88marty.until(m, hold_clear, "the card's hold", poll=0.1, limit=60.0)
+        print("   the LEVELDONE card's hold cleared (%d polls; %d lost break code(s) "
+              "released again)" % (hk[0], hk[1]))
+        ticks(g, 2)
         m.key("Space")                              # the card moves on: E1M2
         loaded = False
         for _ in range(20):
@@ -724,6 +1150,14 @@ def main():
             g.force_all_poke()
             m.run()
             g.wait_frames(1)
+            # IN PLAY FIRST (review, wave 6 r2): E1M2 has just loaded, and a
+            # Space pressed while READY stands is READY's own (it starts the
+            # floor) - the gold check would pass on a Space that never
+            # reached the door, and the silver one failed once in a soak
+            # with the door never asked (state 0, pos 0)
+            os88marty.until(m, lambda mm: g.byte("px_state") == pxslib.PXST["play"],
+                            "PLAY on E1M2", poll=0.1, limit=60.0)
+            ticks(g, 12)                            # past the card's hold
             tap(m, "Space", 3, g)
             ticks(g, 12)
             d = g.door(sil[0])
@@ -732,6 +1166,7 @@ def main():
             m.pause()
             g.poke_byte("px_keys", 2)
             m.run()
+            ticks(g, 6)                             # the first tap's release seen
             tap(m, "Space", 3, g)
             ticks(g, 12)
             d = g.door(sil[0])

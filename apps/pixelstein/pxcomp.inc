@@ -788,9 +788,25 @@ px_frame_begin:
     je .nolev                       ; DIE restart - likewise between frames
     call px_level_next              ; (97.7, 97.8; wave 3)
 .nolev:
+    pushf                           ; THE TAB MAP WAS TAKEN DOWN (wave 6):
+    cli                             ; touched off, between frames - every
+    mov al, [px_mapfa]              ; column's memory at "the whole view".
+    mov byte [px_mapfa], 0          ; Under cli, and a map owed by a frame
+    or al, al                       ; that raced px_map_off (the UI task) is
+    jz .nmz                         ; no longer owed once the map is down
+    cmp byte [px_mapon], 0          ; (review, wave 6)
+    jne .nmz
+    mov byte [px_mapd], 0
+.nmz:
+    popf
+    or al, al
+    jz .nomap
+    call px_force_all
+.nomap:
     mov al, [px_force]
     or al, [px_dirty]
     or al, [px_cardd]
+    or al, [px_mapd]
     or al, [px_hudd]                ; ...and the bar and the cards (97.13):
     jnz .go                         ; nothing owed, nothing drawn
     clc
@@ -857,6 +873,8 @@ px_frame_begin:
     mov byte [px_scard], 0          ; compose - the band in the wash's tone
     jmp short .bar                  ; once, and nothing until the restart
 .world:
+    cmp byte [px_mapon], 0          ; THE TAB MAP (97.6, wave 6): the world
+    jne .map                        ; stands still under it
     cmp byte [px_fdo], 0
     je .bar
     mov byte [px_scard], 0          ; ...and the band the world's bytes
@@ -881,6 +899,25 @@ px_frame_begin:
     call px_hud_draw                ; THE BAR, CHANGE-ONLY (97.13): what
     stc                             ; differs from this page's, and nothing
     ret                             ; else
+.map:
+    call px_vcur_lost
+    cmp byte [px_fown], 0           ; a force (a paint, a new backend, a
+    je .mp                          ; bracket's entry) owes it whole again
+    call px_map_owe
+.mp:
+    pushf                           ; TEST AND DECREMENT, ONE SECTION (review,
+    cli                             ; wave 6 r2): px_map_off (the UI task)
+    mov al, [px_mapd]               ; writes 0 between a bare cmp and dec,
+    or al, al                       ; and the dec would wrap it to 0xFF and
+    jz .mpz                         ; draw one stale map over the world
+    dec byte [px_mapd]
+.mpz:
+    popf
+    or al, al
+    jz .bar
+    call px_map_draw
+    mov byte [px_scard], 0          ; (the band holds colour bytes: WIN4
+    jmp short .bar                  ; blits them as the world's)
 
 ; px_modex_hud - ON MODE X THE BAR ALONE IS NOT A FRAME (97.13): the present
 ;                flips, and a page shown with only its bar redrawn would show

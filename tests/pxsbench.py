@@ -32,14 +32,21 @@ setup figure below is net of it.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
-import os88marty, os88mouse, os88sym, os88geom, os88build, dispcp   # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "tools"))   # LAST, so it wins: tests/
+                                    # has a pxssim.py of its own (the gate),
+                                    # and tools/pxssim.py is the renderer the
+                                    # crossings are cast through (SPEC.md
+                                    # 97.10; this row broke on it while the
+                                    # bench could not build, wave 6)
+import pxssim, pxstab           # noqa: E402 - BEFORE cycweb, which puts
+                                # tests/ back at the head of sys.path
+import os88marty, os88mouse, os88sym, os88build, dispcp   # noqa: E402
 from cycweb import pkg_syms, u16                               # noqa: E402
+import pxslib                   # noqa: E402 - B: and the watched launch, shared
 
 HZ = 4772727.0                  # the 5150's 8088, PERFORMANCE.md Part 2
 NRES = 26                       # PB_NRES
@@ -107,7 +114,6 @@ def bench_map(*walls):
 def host_crossings():
     """The three DDA rows' crossing counts, cast through tools/pxssim.py on
     the bench's own map and eye: (10-row, 20-row, near-axial row)."""
-    import pxssim, pxstab
     fan = pxssim.FANS[64]
     out = []
     for walls, head in ((WALL10,), HEAD45), ((WALL20,), HEAD45), (WALLA, HEADA):
@@ -118,21 +124,23 @@ def host_crossings():
 
 
 def open_bench(m, mo, S):
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    """B: and PXSBENCH.O88 through tests/pxslib.py - its open_b (the B:
+    icon's double-click retried once) and its watched launch (clicked again
+    only when neither a window appeared nor the floppy controller read a
+    sector). The first cut hand-rolled both and died in wave 6's
+    verification soak on the B: icon's double-click ("the two presses were
+    10 ticks apart and the window is 9"), which pxslib had already survived
+    since wave 5 (wave 6's close)."""
+    pxslib.open_b(m, mo, S)
     disk = dispcp.win_list(m, S)[-1]
     bx, by = dispcp.win_rect(m, S, disk)[:2]
     row = dispcp.scroll_to(m, mo, S, os88marty.settle, bx, by,
                            dispcp.row_of(m, S, "PXSBENCH.O88"))
     rx, ry = dispcp.row_xy(bx, by, row)
-    mo.dblclick(rx, ry)
-    t0 = time.time()
-    while time.time() - t0 < 180:
-        for w in os88geom.windows(m, S):
-            if w.title.startswith("Pixelstein Bench"):
-                seg = u16(m.read(os88geom.winptr(m, w.i, S) + os88geom.W_SEG, 2))
-                return seg
-        time.sleep(0.3)
-    sys.exit("pxsbench: PXSBENCH.O88 did not open")
+    got = pxslib.launch_row(m, mo, S, rx, ry, "Pixelstein Bench")
+    if got is None:
+        sys.exit("pxsbench: PXSBENCH.O88 did not open")
+    return got[1]
 
 
 def main():

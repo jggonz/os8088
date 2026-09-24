@@ -10,23 +10,23 @@ PXA_TEX     equ 32             ; texels a side
 PXA_WALLSZ  equ 512            ; 32 rows x 16 bytes: two texels a byte, the
                                 ; even column in the high nibble
 PXA_WALL0   equ 0               ; ...from the head of the claim
-PXA_SIZE    equ 30400          ; the expanded claim, bytes: the walls, then
+PXA_SIZE    equ 37440          ; the expanded claim, bytes: the walls, then
                                 ; the sprite masters (97.4, wave 3)
-PXA_KB      equ 30             ; ...as OSAPI_MEM_CLAIM wants it
+PXA_KB      equ 37             ; ...as OSAPI_MEM_CLAIM wants it
 PXA_SHADES  equ 2              ; lit, dark
 PXA_MATSZ   equ 2048           ; a material's bytes in the byte-texture set
 PXA_BTSIZE  equ 30720          ; ...and the whole set (part 2, 97.9)
 PXA_BTKB    equ 30
 
-; THE SPRITE MASTERS in the claim (97.4, 97.6): 31 frames of 32 x 32 after
+; THE SPRITE MASTERS in the claim (97.4, 97.6): 42 frames of 32 x 32 after
 ; the walls - 512 packed nibbles (row major, even column high, a
 ; transparent texel 0) then 128 alpha bytes (row major, bit 7 the left
 ; column) - and 9 weapon frames of 16 x 32 (256 + 64) after them
 PXA_SPR0    equ 7680           ; the first sprite frame's offset
-PXA_NSPR    equ 31
+PXA_NSPR    equ 42
 PXA_SPRMSZ  equ 640            ; a frame in the claim
 PXA_SPRALPHA equ 512           ; ...its alpha bytes begin here
-PXA_WPN0    equ 27520          ; the first weapon frame's offset
+PXA_WPN0    equ 34560          ; the first weapon frame's offset
 PXA_NWPN    equ 9
 PXA_WPNMSZ  equ 320            ; a weapon frame in the claim
 PXA_WPNALPHA equ 256           ; ...its alpha bytes begin here
@@ -38,16 +38,17 @@ PXA_WPNW    equ 16             ; a weapon frame's columns
 ; PXS_RUNSZ bytes (count, then up to PXS_MAXRUNS (v0, v1) pairs, v1
 ; exclusive); a weapon frame the same at 16 columns. The frame order:
 ; the guard's walk (facing * 2 + phase), shoot, pain, die, dead, six
-; decorations (static kind 8 first), eight pickups (kind 0 first)
+; decorations (static kind 8 first), eight pickups (kind 0 first), the
+; dog's walk (four facings * 2 + phase), bite, die, dead (wave 6)
 PXS_MAXRUNS equ 4
 PXS_RUNSZ   equ 9
 PXS_RUNOFS  equ 1024           ; a frame's run tables begin here
 PXS_FRSZ    equ 1312           ; a frame in the set
 PXS_WFRSZ   equ 656            ; a weapon frame in the set
 PXS_WRUNOFS equ 512            ; ...its run tables
-PXS_WPN0    equ 40672          ; the first weapon frame
-PXS_SIZE    equ 46576          ; the whole set
-PXS_KB      equ 46
+PXS_WPN0    equ 55104          ; the first weapon frame
+PXS_SIZE    equ 61008          ; the whole set
+PXS_KB      equ 60
 PXS_G_WALK0 equ 0              ; the guard's frames: facing * 2 + walk phase
 PXS_G_SHOOT equ 10
 PXS_G_PAIN  equ 12
@@ -55,6 +56,10 @@ PXS_G_DIE   equ 13
 PXS_G_DEAD  equ 16
 PXS_DECO0   equ 17             ; decoration kind 8's frame
 PXS_PICK0   equ 23             ; pickup kind 0's frame
+PXS_D_WALK0 equ 31             ; the dog's frames: facing * 2 + walk phase
+PXS_D_BITE  equ 39
+PXS_D_DIE   equ 40
+PXS_D_DEAD  equ 41
 
 ; the ink tables: the texel byte (C160: the attribute nibble, both nibbles
 ; built by the transpose) of each of the sixteen colour indices, sixteen
@@ -72,4 +77,15 @@ px_it_c160:
 px_it_modex:
     db 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F    ; lit
     db 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F    ; dark
+
+; WIN4's 32 -> 16 tables (97.14, wave 6): Mode X's byte, 0..15 lit and
+; 16..31 dark, to its colour in BOTH nibbles, for the EVEN rows and then
+; the ODD ones - a dark face is its LIT colour on the even rows and black
+; on the odd, a line dither that keeps the material's hue (the first
+; cut's C160 twin turned brown to red and red to blue)
+px_it_win4:
+    db 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF    ; even, lit
+    db 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF    ; even, dark
+    db 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF    ; odd, lit
+    db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00    ; odd, dark
 

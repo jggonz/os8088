@@ -80,6 +80,15 @@ PX_NPARTS    equ 5
 PXL_SHKB     equ 16                 ; the program's shadow (pxgame.asm's
                                     ; PX_SHKB), claimed after this in its
                                     ; entry proc: this claim must leave it
+PXL_RESKB    equ (PXL_STREAM + 1023) / 1024 + 2 + PXL_SHKB
+                                    ; THE RESERVE held across op_load: the
+                                    ; level stream's fetch (PXL_STREAM,
+                                    ; pxlev.inc's generated count, rounded
+                                    ; up, plus a cluster of slack and
+                                    ; op_fetch's transient KB - 2) and the
+                                    ; shadow. DERIVED, so a ninth floor
+                                    ; grows it (review, wave 6 r2; 28 KB
+                                    ; today: 10 + 2 + 16)
 PX_GENKB     equ 51                 ; part 1: tools/pxsgen.py --sizes reads
                                     ; 46,291 for the widest phase (CGA4) -
                                     ; both scaler sets, each scaler behind
@@ -203,11 +212,33 @@ pxl_lev:
 ; out: BX = 0, CF clear - and the kernel re-homes instead of publishing us
 ; -----------------------------------------------------------------------------
 pxl_entry:
-    call op_load                    ; FIRST, for SPEC.md 20.2's reason: SI is
-    jc .no                          ; an offset into the KERNEL's segment at a
-                                    ; buffer the loader reuses on the next
-                                    ; launch. A refusal is fatal: a body that
-                                    ; did not arrive is not a plainer game
+    ; THE RESERVE (97.9; review, wave 6): op_load's optional parts are ALL OR
+    ; NONE against the largest free run AS IT STANDS, and it knows nothing of
+    ; the two claims a launch still has to make after it - the level stream
+    ; (pxl_lev, which refuses the launch) and the program's 16 KB shadow. On
+    ; a 256 KB 5150 the carve took all 140 KB, optional parts and all, and
+    ; the level stream's fetch then answered "Not enough memory": the game
+    ; did not open at all, where 97.9 promised it Flat. So those two are held
+    ; in a claim of their own ACROSS op_load and handed back after it - the
+    ; carve then gives up the optional parts on such a machine, and the
+    ; bottom-up hole the reserve leaves is where the two claims land. No
+    ; launch path touches SI's buffer in between (SPEC.md 20.2's reason is
+    ; the NEXT launch), and every OSAPI slot preserves SI
+    mov ax, PXL_RESKB
+    call OSAPI_MEM_CLAIM            ; DX = the reserve, or nothing held (a
+    jnc .res                        ; machine that small is op_load's to
+    xor dx, dx                      ; refuse in its own words)
+.res:
+    push dx
+    call op_load                    ; FIRST of the parts, for SPEC.md 20.2's
+    pop dx                          ; reason: SI is an offset into the
+    pushf                           ; KERNEL's segment at a buffer the loader
+    or dx, dx                       ; reuses on the next launch. A refusal is
+    jz .nores                       ; fatal: a body that did not arrive is not
+    call OSAPI_MEM_FREE             ; a plainer game
+.nores:
+    popf
+    jc .no
     call pxl_lev                    ; THE FLOORS FIRST: every launch needs
     jc .no                          ; them, the masters only a Textured one
     mov [pxl_lseg], ax
@@ -222,6 +253,17 @@ pxl_entry:
     call op_seg                     ; program's own 16 KB shadow (review,
     or ax, ax                       ; wave 2). A lazy row never fetched costs
     jz .noart                       ; nothing
+    mov al, PX_PART_ART             ; ...AND ONLY WHEN THE MASTERS, THE PACKED
+    call op_row                     ; STREAM BESIDE THEM AND THE PROGRAM'S
+    mov ax, [si+OP_R_LEN]           ; SHADOW AFTER THEM all fit the largest
+    add ax, 2047                    ; run (review, wave 6): the masters kept
+    mov cl, 10                      ; and the shadow refused would be a game
+    shr ax, cl                      ; that cannot open, for the sake of
+    add ax, PXA_KB + PXL_SHKB       ; textures (the stream's KB with a KB of
+    mov dx, ax                      ; cluster slack and its rounding; DX,
+    call OSAPI_MEM_AVAIL            ; since the answer is AX and BX)
+    cmp ax, dx
+    jb .noart
     call pxl_art                    ; AX = the expanded masters, or 0
     mov [pxl_aseg], ax
     or ax, ax

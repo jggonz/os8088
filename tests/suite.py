@@ -7118,7 +7118,7 @@ SOAK = [
         "lazy level part carries is well-formed; and a 40 x 40 open hall is "
         "refused by the sweep in words (the negative control). SOAK and not "
         "fast for the registry's own reason (a tier at its budget), beside a "
-        "change to the package: `soak -k 'pxs*'`. Declared here in the SOAK "
+        "change to the package: `soak -k 'pxs*' -k 't_pxs*' -k 'pixelstein*'` (the -k is an fnmatch on the ROW NAME, so 'pxs*' alone misses the t_pxs* and pixelstein* rows - review, wave 6). Declared here in the SOAK "
         "list, where it runs - its first cut sat in FAST and read as fast to "
         "anyone scanning the list, though membership is by the tier field"),
     Row("pixelstein", "soak", py("tests/pixelstein.py"), 500.0,
@@ -7127,11 +7127,9 @@ SOAK = [
         "the check that catches a clobbered step) and does not flash "
         "(tests/tank.py's three questions, read out of the package's bss and "
         "off the glass), and then THE PROMISE: >= 8.0 fps on scene A and "
-        ">= 7.0 on scene B and >= 8.0 on scene C (the sprite scene: the plan's "
-        "scene-A count), fullscreen in CGA 320x200x4 at the default - Size "
-        "48 x Rows 80 x Resolution: Low res, where 97.1's fork put it when "
-        "wave 3 read the FINISHED frame with sprites in view under the "
-        "line at 64 - on MartyPC's cycle-exact 5150, "
+        ">= 7.0 on scene B, fullscreen in CGA 320x200x4 at the default - Size "
+        "64 x Rows 80 x Resolution: Low res (97.1, confirmed at wave 6's "
+        "close) - on MartyPC's cycle-exact 5150, "
         "the frame the median of consecutive entries to px_frame_begin with "
         "a FULL REPAINT poked at every stop (pxslib.force_all: the seven "
         "history arrays, not px_force alone, which composes nothing on a "
@@ -7141,7 +7139,11 @@ SOAK = [
         "Flat Full 64x80 (FILED against 97.1's 8.1 / 7.5 as a calibration "
         "of the frame table) and Wire; and THE FINISHED FRAME - the sim "
         "running, the weapon and the sprites drawn - is gated on the same "
-        "three scenes at the default, the fork's own quantity. One machine "
+        "two pinned scenes at the default, the fork's own quantity. And "
+        "EVERY measured cell against SPEC.md 97.15's table for the same "
+        "machine, read out of SPEC.md itself, within 5% (wave 6's done-when) "
+        "- asserted here and on the Hercules row, reported on the other "
+        "three. One machine "
         "a row, because a rate wants the box to itself: this is the CGA "
         "5150; the four rows below are the other machines",
         needs=("marty", "nasm"), serial=True, alone=True),
@@ -7207,27 +7209,25 @@ SOAK = [
         needs=("marty", "nasm"), serial=True),
     Row("pxsauto", "soak", py("tests/pxsauto.py"), 400.0,
         "SPEC.md 97.8, 97.10, PLAN 14: the DETAIL SELECTOR, every movement, "
-        "windowed on the CGA 5150 with the turn key held - a breakpoint on "
-        "px_auto_frame and px_ftime poked at each stop, the one way a "
-        "cycle-exact machine can be made to read slow or fast - the key "
-        "held BEFORE the first wait, since a still window composes nothing. "
-        "Auto starts the 8086 at Flat Low res (wave 1's floor) and the line "
-        "says so; 70 FAST frames do not climb past the tier's start (the "
-        "review's blocker: the first cut climbed to Flat Full on the 64th, "
-        "a 6.86 fps rung); Detail > Full res under Auto re-seats position 0 "
-        "and 70 fast frames stay there; NINE UNPOKED frames do not step "
-        "down (the negative control: the step is the poke's, not the "
-        "5150's); 8 SLOW frames step DOWN once to Flat Low res - Wire is "
-        "off the ladder (97.8) - announced once on the line and not again, "
-        "12 more stay on the floor; 64 fast frames inside the 10 s "
-        "hold-down do not step up, the step up then lands at position 0, "
-        "and 70 more fast frames stay there. --no-slow must FAIL at the "
-        "step down. The bss through pxslib, never the glass. WINDOWED ONLY: "
-        "the bracket arm of the selector - the same px_auto_frame, called "
-        "from px_frame_end in both worlds - is exercised by nothing until "
-        "wave 4's HUD band gives the bracket a glyph writer to announce a "
-        "step on (97.8); in a bracket a step is silent today, and that is a "
-        "dated omission and not a gap (2026-09-14)",
+        "on the CGA 5150 - windowed with a breakpoint on px_auto_frame and "
+        "px_ftime poked at each stop (the one way a cycle-exact machine can "
+        "be made to read slow or fast), then in the BRACKET on the machine's "
+        "own clock. The 8086's step-up lines read out of part 0 (77.4 / "
+        "111.1 / 77.4 ms by landing position, the budget over the largest "
+        "measured ratio - wave 6's close); Auto starts an 8086 WINDOW at "
+        "Flat Low res and the line says so; 70 FAST frames do not climb past "
+        "the start (the review's blocker: the first cut climbed on the 64th); "
+        "Detail > Full res under Auto re-seats Flat Full as the ceiling; NINE "
+        "UNPOKED frames do not step down (the negative control); 8 SLOW "
+        "frames step DOWN once, announced once; 64 fast frames inside the "
+        "10 s hold-down do not step up; 65 frames one unit over the Full res "
+        "line do not step up and 65 on it do. THEN THE BRACKET: two guards "
+        "at the elbow, the whole view repainted every frame, step Auto from "
+        "Textured Low res STRAIGHT to Flat Low res (never Flat Full), and "
+        "the empty hall steps it back UP once the hold-down has passed - "
+        "every floor frame over a 286's 62.5 ms line, which never climbed "
+        "back. --no-slow must FAIL at the step down. The bss through pxslib, "
+        "never the glass",
         needs=("marty", "nasm"), serial=True),
     Row("pxsact", "soak", py("tests/pxsact.py"), 500.0,
         "SPEC.md 97.6, 97.8, 97.10 (wave 3): the guards, the doors and the "
@@ -7246,8 +7246,14 @@ SOAK = [
         "the DIE wash restarts the floor a life down; the elevator switch "
         "loads E1M2 inside the running bracket; and THE TWO-GUARDS-AT-MELEE "
         "and SEVEN-CHASERS frames are measured in the bracket with the sim "
-        "RUNNING and REPORTED (PLAN 10's risk 8). --shots writes the "
-        "done-when screendumps. SOAK: the fast tier has no room (97.10)",
+        "RUNNING and REPORTED (PLAN 10's risk 8). WAVE 6's TWO: the DOG (a "
+        "guard poked kind 1 closes at 40 units a step against a guard's 24, "
+        "is drawn from the dog's frames with the bite among them, bites, and "
+        "dies to one pistol round for 200) and the TAB MAP (the marker on the "
+        "player's cell, a seen cell in the floor's tone, the world stopped "
+        "under it, and a cell still on the map after a poked spotvis wrap - "
+        "the fold). --shots writes the done-when screendumps. SOAK: the fast "
+        "tier has no room (97.10)",
         needs=("marty", "nasm"), serial=True, alone=True),
     Row("pxsmove", "soak", py("tests/pxsmove.py"), 120.0,
         "SPEC.md 97.13, 66.6.1.2, 66.6.2: PIXELSTEIN's REGION MOVES and the "
@@ -7372,8 +7378,24 @@ SOAK = [
         "and every framebuffer byte alone; dragged onto the Hercules the "
         "row follows (the W_ONRESIZE the seam fires) and the Hercules "
         "bracket leaves the VGA's mode the desktop's; both round trips come "
-        "back to the window. MartyPC and not QEMU, which hosts one display "
-        "(docs/TESTING.md).",
+        "back to the window; and (wave 6) in the Hercules bracket the MOUSE "
+        "steers from THAT card's middle, OSAPI_FSX_SURF's 360 and not "
+        "OSAPI_VIDEO's 320 - a pointer resting there turns nothing, one 120 "
+        "dots right turns the view. MartyPC and not QEMU, which hosts one "
+        "display (docs/TESTING.md).",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/games360.img")),
+    Row("pxs256", "soak", py("tests/pxs256.py"), 300.0,
+        "SPEC.md 97.9 (review, wave 6): PIXELSTEIN on a 256 KB 5150 "
+        "(os8088_5150_cga_gla_256k) OPENS - a window and a frame, on the "
+        "Flat rung with the sprite set refused (the sprites as boxes, no "
+        "weapon drawn), a "
+        "poked dog a candidate, and F's CGA bracket drawing on Flat. 97.9 "
+        "promised this and nothing had launched the game on 256 KB: the "
+        "first launch opened NOTHING (the parts carve took 140 KB of a 147 "
+        "KB heap and the level stream's fetch refused), which the loader's "
+        "reserve across op_load fixed. This is the 256 KB evidence: the two "
+        "86Box XTs of 97.15 are 640 KB machines, and 86Box asserts nothing",
         needs=("marty",), serial=True,
         wants=("build/os8088-360.img", "build/games360.img")),
     Row("t_pxsmap", "soak", py("tests/unit/t_pxsmap.py"), 3.0,
@@ -7381,13 +7403,13 @@ SOAK = [
         "DDA sweep in both door states, the episode's eight floors e1m1..e1m8 by "
         "name, the doors in "
         "cell order (px_door_of's row table), a patroller on E1M2, and THE "
-        "MELEE INVARIANT by name - no open cell with more than two guards "
-        "within 1.5 tiles, the bound the sprite cap rests on - with a "
+        "MELEE INVARIANT by name - no open cell with more than two actors "
+        "(guards and, since wave 6, dogs) within 1.5 tiles, dogs on floors 3-8, the bound the sprite cap rests on - with a "
         "three-guard level refused in words as the negative control; and "
         "every open cell carries material 0, the nibble the engine's marks "
         "live in (97.8). Host-side; soak because the fast tier has no room "
         "(97.10)"),
-    Row("pxsdisk", "soak", py("tests/pxsdisk.py"), 5.0,
+    Row("pxsdisk", "soak", py("tests/pxsdisk.py"), 1.0,
         "SPEC.md 97.9: PXSTEIN.O88 is on games360.img (at the root) and on "
         "apps.img (in GAMES/), on NEITHER apps360.img (24.6.1's dated "
         "decision) nor smallapps360.img (24.5's omission, its ground in "
@@ -7412,7 +7434,7 @@ SOAK = [
         "non-black colour maps to an all-black texel byte (the blue-stone "
         "wall that vanished on the first CGA screendump); and two negative "
         "controls refused in words. Host-side; soak because the fast tier "
-        "has no room (97.10) - `soak -k 'pxs*'` beside a change to the "
+        "has no room (97.10) - `soak -k 'pxs*' -k 't_pxs*' -k 'pixelstein*'` beside a change to the "
         "package"),
     Row("t_pxsscale", "soak", py("tests/unit/t_pxsscale.py"), 6.0,
         "SPEC.md 97.3: tools/pxsgen.py's model of part 2 (the scratch) fits PX_GENKB on "
@@ -7465,6 +7487,19 @@ SOAK = [
         "its ladder-entry and skipped-column counters. The report is "
         "docs/reports/PXS-FRAME-<date>.md",
         needs=("marty", "nasm"), serial=True),
+    Row("pxsshots", "soak", py("tests/pxsshots.py"), 400.0,
+        "SPEC.md 97.6, 97.15: PIXELSTEIN 3D's PHOTOGRAPHS, an instrument - the "
+        "two montages SPEC.md 97.15 and PIXELSTEIN-PLAN 17.2 cite as wave 6's "
+        "evidence (build/pxs-shots/wave6f-montage-corridor-dog.png: scene A's "
+        "corridor and the dog two tiles ahead on all seven backends under "
+        "pxssim's reference; wave6f-montage-map.png: Tab in each bracket, and "
+        "the window after Esc keeping the map and its bar line). build/ is "
+        "untracked and `make clean` empties it, so the script that takes them "
+        "is a row and not a report's. Asserts only each photograph's own "
+        "preconditions (the dog a sprite candidate and its frame not the "
+        "corridor's; the map up, and still up with PXM_MAP after Esc) - it "
+        "judges no picture: LOOK at the PNGs. Three MartyPC launches in one row",
+        needs=("marty",), serial=True, alone=True),
     Row("pxsbench", "soak", py("tests/pxsbench.py"), 150.0,
         "SPEC.md 97.10: PIXELSTEIN 3D's unit costs, MEASURED. Every figure "
         "the frame table of 97.1 is built from - the compiled store, the "

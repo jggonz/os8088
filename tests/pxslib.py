@@ -126,13 +126,14 @@ def layout():
                 QEND=qtex + 4, Q=qtex + 6, SCAL=qtex + 6 + PXG_QN * PXG_QSZ)
 
 
-def find(m, S=None, limit=120.0):
-    """(window index, part 0's segment) of the game's window, or None."""
+def find(m, S=None, limit=120.0, title=TITLE):
+    """(window index, part 0's segment) of the game's window - or of the
+    window whose caption starts `title` (tests/pxsbench.py's) - or None."""
     S = S or os88sym.linear
     t0 = time.time()
     while time.time() - t0 < limit:
         for w in os88geom.windows(m, S):
-            if w.title.startswith(TITLE):
+            if w.title.startswith(title):
                 seg = u16(m.read(os88geom.winptr(m, w.i, S) + os88geom.W_SEG, 2))
                 if seg:
                     return w.i, seg
@@ -226,7 +227,7 @@ class Game:
                     ang=u16(b, 14))
 
     def actor_poke(self, i, x=None, y=None, state=None, ang=None, dir=None,
-                   hp=None, flags=None):
+                   hp=None, flags=None, kind=None, frame=None, timer=None):
         """Move or re-state actor i (paused): the cell and its PXC_ACTOR
         mark follow the position, as px_act_move keeps them."""
         base = self.s["px_act"] + 16 * i
@@ -256,6 +257,19 @@ class Game:
             self.m.write(self.base + base + 10, bytes([flags]))
         if ang is not None:
             self.m.write(self.base + base + 14, bytes([ang & 255, ang >> 8]))
+        if kind is not None:                    # 0 a guard, 1 a dog (wave 6)
+            self.m.write(self.base + base + 4, bytes([kind]))
+        if frame is not None:
+            self.m.write(self.base + base + 9, bytes([frame]))
+        if timer is not None:
+            self.m.write(self.base + base + 7, bytes([timer]))
+
+    def candidates(self):
+        """This frame's sprite list (px_sc, px_nsc): [(frame, flags, actor)]
+        - PXS_C_FR, PXS_C_FL and PXS_C_ACT of each twelve-byte record."""
+        n = self.byte("px_nsc")
+        b = self.bytes_("px_sc", 12 * 8)
+        return [(b[12 * k + 9], b[12 * k + 10], b[12 * k + 11]) for k in range(min(n, 8))]
 
     def door(self, i):
         """Door i's record (PXD_*)."""
@@ -308,6 +322,8 @@ class Game:
             return
         self.m.key("Space")
         self.wait_state("play", limit=limit)
+        release_held(self.m, ("Space",), "the start")   # (a lost break here
+        # is a Space held into PLAY, px_keys_tick's Use, every step)
 
     # --- driving it ---------------------------------------------------------
     def _mark(self):
@@ -555,14 +571,22 @@ class Game:
                 # doors' and guards' clocks on by not freezing them
                 self.force_all_poke()
             c = [m.status()["cycles"]]
+            tw = 0
             for _ in range(6):              # cast, gather, compose, present, end, begin
                 m.run()
                 m.wait_stop(30)
                 c.append(m.status()["cycles"])
+                if len(c) == 6:
+                    # at px_frame_end: the waits px_wait_* bracketed OUT of
+                    # px_ftime this frame (Mode X's OSAPI_FSX_PAGE retrace,
+                    # another task's gfx lock), 838 ns units = 4 clk each.
+                    # The present stage INCLUDES them; this splits it
+                    # (review, wave 6's close)
+                    tw = 4 * self.dword("px_twait")
             d = [c[k + 1] - c[k] for k in range(6)]
             if i:
                 out.append(dict(prologue=d[0], cast=d[1], gather=d[2], compose=d[3],
-                                present=d[4], loop=d[5], frame=c[6] - c[0]))
+                                present=d[4], loop=d[5], frame=c[6] - c[0], wait=tw))
         m.bp_exec()
         m.run()
         return out
@@ -761,7 +785,7 @@ def _disk_reads(m):
         return None
 
 
-def _launch(m, mo, S, x, y, look=6.0):
+def _launch(m, mo, S, x, y, look=6.0, title=TITLE):
     """Double-click PXSTEIN.O88's row, and again if nothing happened.
 
     Wave 4's verifier measured 6 launches in ~20 lost this way: the row
@@ -800,12 +824,12 @@ def _launch(m, mo, S, x, y, look=6.0):
         t0 = time.time()
         g0 = int.from_bytes(m.read(0x46C, 4), "little")
         while True:
-            got = find(m, S, limit=0.5)
+            got = find(m, S, limit=0.5, title=title)
             if got is not None:
                 return got
             r1 = _disk_reads(m)
             if r0 is not None and r1 is not None and r1 != r0:
-                return find(m, S)           # it is loading: wait for it
+                return find(m, S, title=title)  # it is loading: wait for it
             g1 = int.from_bytes(m.read(0x46C, 4), "little")
             if (g1 - g0) & 0xFFFFFFFF >= int(look * 18.2) or time.time() - t0 > 60.0:
                 break
@@ -814,7 +838,7 @@ def _launch(m, mo, S, x, y, look=6.0):
             print("   pxslib: no window and no disk read %.0f guest seconds after the "
                   "double-click - a single click; clicking again (%d of %d)"
                   % (look, attempt + 2, TRIES))
-    return find(m, S, limit=5.0)
+    return find(m, S, limit=5.0, title=title)
 
 
 TRIES = 3       # a double-click and TWO re-clicks, each watched: wave 5's
@@ -822,6 +846,65 @@ TRIES = 3       # a double-click and TWO re-clicks, each watched: wave 5's
                 # straight after the first's 9 (w5r1/pixelstein-cga.log), on a
                 # quiet host - and a re-click is only ever sent when neither
                 # witness moved, so a third costs nothing a launch could lose
+
+
+def open_b(m, mo, S=None):
+    """Open B:'s Disk window, once more if the icon's double-click was lost.
+    Every PIXELSTEIN row opens B: through here - tests/pxsbench.py too,
+    which hand-rolled its own and died on exactly this in wave 6's
+    verification soak ("the two presses were 10 ticks apart and the window
+    is 9"; wave 6's close)."""
+    S = S or os88sym.linear
+    try:                                    # THE SAME SINGLE CLICK, one step
+        dispcp.open_drive(m, mo, S, os88marty.settle, "B")  # earlier: the B:
+    except (os88marty.MartyError, RuntimeError) as e:   # icon's double-click
+        # seen as two first clicks (pxsmove, wave 5). RuntimeError TOO:
+        # tests/dispcp.py's open_drive re-raises os88ui's UIError as one, so
+        # the retry above caught nothing on that path - pxsfsx died on it in
+        # wave 6's review soak ("a Disk window showing B: ... every window:
+        # []"), and a screendump script twice
+        print("   pxslib: %s - opening B: again, once" % str(e).split("\n")[0])
+        dispcp.open_drive(m, mo, S, os88marty.settle, "B")  # (pxsmove, wave 5)
+
+
+def launch_row(m, mo, S, x, y, title):
+    """The watched double-click of _launch, for a package other than the
+    game (tests/pxsbench.py's PXSBENCH.O88): (window, segment) or None."""
+    return _launch(m, mo, S, x, y, title=title)
+
+
+# the kernel's key map (kbd_dnmap, the bitmap OSAPI_KEY_DOWN reads, SPEC.md
+# 9.7) - scancodes by the names os88marty.key takes
+SCAN = {"ArrowLeft": 0x4B, "ArrowRight": 0x4D, "ArrowUp": 0x48, "ArrowDown": 0x50,
+        "Space": 0x39, "Enter": 0x1C}
+
+
+def release_held(m, names, why=""):
+    """Every key in `names` UP in the kernel's own key map before a row relies
+    on it - and each one read down is released AGAIN and named.
+
+    A break code the guest never saw leaves the kernel believing the key is
+    held, and the package reads OSAPI_KEY_DOWN: tests/pixelstein.py's c160
+    run spun the heading through every pose while it was POKED (review, wave
+    6 r2), and tests/pxsact.py's leg (j) waited 180 guest seconds on a card's
+    hold that re-arms every step while Space or Enter reads down (px_timers,
+    97.13; wave 6's verification). One guard, here, for every row."""
+    base = os88sym.linear("kbd_dnmap")
+    held = []
+    for name in names:
+        sc = SCAN[name]
+        m.pause()
+        bit = m.read(base + (sc >> 3), 1)[0] & (1 << (sc & 7))
+        m.run()
+        if bit:
+            held.append(name)
+            m.key(name, down=False, up=True)
+    if held:
+        m.advance(frames=10)
+        m.run()
+        print("   A KEY READ DOWN after its release%s: %s - the guest lost the break "
+              "code; released again" % (" (" + why + ")" if why else "", ", ".join(held)))
+    return held
 
 
 def open_game(m, apps_root=True, S=None, play=True):
@@ -843,11 +926,7 @@ def open_game(m, apps_root=True, S=None, play=True):
                                     # empty clip, the frame counter still)
                                     # once tests/pxssim.py grew a third scene
     mo = os88mouse.Mouse(marty=m)
-    try:                                    # THE SAME SINGLE CLICK, one step
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")  # earlier: the B:
-    except os88marty.MartyError as e:       # icon's double-click seen as two
-        print("   pxslib: %s - opening B: again, once" % e)   # first clicks
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")  # (pxsmove, wave 5)
+    open_b(m, mo, S)
     disk = dispcp.win_list(m, S)[-1]
     wx, wy = dispcp.win_rect(m, S, disk)[:2]
     if not apps_root:
