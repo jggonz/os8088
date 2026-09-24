@@ -1090,6 +1090,59 @@ unclassified and still not judged, which is what keeps `wm_ondrag_c` and
 `wm_timer_c` — three labels sharing one refusing body in `kern_small` — out of
 the report.
 
+#### 2.6.1.1 A SHARED EPILOGUE BELONGS TO THE ROUTINE THAT JUMPS TO IT
+
+The rule above is about the return a body *contains*. The other way to end is
+to **jump out of the extent** — and an epilogue reached that way is part of
+every routine that reaches it, so it has to return the way **all** of them
+were entered. Mix a far-entered body and a near-called one on one tail and the
+tail can only be right for one of them.
+
+`drv_svc_call_x` shipped that way. Its own path ends in `retf`, because
+`drv_svc_call` far-calls it out of `.text` (§2.6); its two **refusal** paths —
+`or bp, bp / jz` for "nothing publishes this verb" and `cmp word [drv_fseg], 0
+/ je` for "no driver of this class" — jumped to `drv_svc_none`, the three
+instructions `xor ax, ax / stc / ret` that `drv_fs_call` and `drv_blk_call_x`
+also end on. Those two are **near**-called (`disk.inc`, `diskw.inc`,
+`loader.inc`, `hiber.inc`), so the tail is a near `ret`, so a refusal popped
+two bytes of a four-byte far frame and resumed at the caller's offset **with
+`CS` still `COLD_SEG`** — a wild jump into cold code with SP two bytes out.
+
+What it cost, and it is the whole of §47 in one machine: `osapi_snd_fm` is the
+one sound slot with no zero test in front of it (`osapi_snd_stream` has one
+for a different reason — §34.5 — and the tone tier asks `snd_rt_card` first),
+so **any** `OSAPI_SND_FM` call on a machine with no sound driver reached it.
+Window procs run with the graphics lock held (§11), so what the user saw was
+not a crash: the desktop stopped, with `gfx_lock_flag` = 1 and nothing able to
+take it back. The reported route was Control Panel → Drivers → unmount Sound
+with a sound application still polling, which is the same call arriving one
+tick after the table was cleared. Packages that ask `OSAPI_SND_CAPS` first
+never reach it, which is why it survived.
+
+So the refusal is `drv_svc_call_x`'s own, four bytes of `.cold`
+(`xor ax, ax / stc / retf`), and `drv_svc_none` stays what it was for the near
+callers that share it. **The exit is the contract, not the entry**: a body may
+have as many of them as it likes and every one owes the same kind of return.
+
+`tools/os88ovlchk.py` cannot see this and is not being asked to. It classifies
+a routine by the return instructions **inside its extent**, so both routines
+here were classified correctly and separately — the defect is the edge between
+them. The one shape it does follow is the shared epilogue ladder (`kret_*`,
+`kretc_*`, `kretfc_*`), and only because the rung's *name* says which kind it
+is; a general version would have to resolve a jump graph across `%ifdef` arms,
+which is the same arm-pairing problem §2.6.1 already documents as unsolved.
+`tests/fmrefuse.py` is the behaviour gate instead, and it is a gate rather
+than a size check because the failure is a hung desktop.
+
+**`kern_small` does not carry the fix and does not need it.** §51.0's stub
+block answers `drv_svc_call_x`, `drv_blk_call_x`, `drv_fs_call` and
+`drv_svc_none` with one near `ret`, and `drv_svc` there is a constant-zero
+table that nothing publishes into — so every remaining call site takes its own
+`cmp word [drv_svc+DSV_*], 0` guard and the far thunk is never entered at all.
+Four bytes of the 128KB kernel for a path that cannot execute is the wrong
+trade; this paragraph is here so that the next reader closing the gap "for
+consistency" knows it was priced.
+
 ### 2.7 The boot sector goes to the top of RAM, not to a fixed address
 
 `boot/boot.asm` has to move out of the kernel's landing zone before it reads
