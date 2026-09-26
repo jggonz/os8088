@@ -2406,6 +2406,27 @@ SOAK = [
         "it. In soak and not fast for docs/WRITING-TESTS.md 2.1's reason: it "
         "is about one package",
         needs=("nasm",)),
+    Row("gorillas", "soak", py("tests/gorillas.py"), 100.0,
+        "Native Gorillas (SPEC.md 98), measured 97.3s on three adapters: "
+        "keyboard angle/velocity editing, persistent terrain damage, pause, "
+        "five self-hit rounds to a first-to-three match, actual fullscreen "
+        "throws, repeated mode restoration and close. Checks VGA's original "
+        "palette, CGA's blue/green/red/yellow and readable monochrome HUD. "
+        "Alt+Enter must release Alt before the BIOS mode switch. The input assertion caught a "
+        "layout call destroying AX before key dispatch; no scores or game "
+        "states are injected by the test. Saves screenshots of each adapter",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
+    Row("gorillasinput", "soak",
+        py("tests/gorillasinput.py", "--check-repaint"), 200.0,
+        "Gorillas XT input (SPEC.md 98.2): 189s measured for the three-adapter "
+        "input/repaint checks, plus a buffered-key check. Real keyboard "
+        "handlers must stay under 20 ms; six buffered fullscreen aiming keys "
+        "must complete within one BIOS tick. Compares the scene to OS glyphs "
+        "and incremental VRAM to a full repaint after each edit, including "
+        "all four VGA planes, numeric bounds, erased digits and paused edits",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/gorillas.o88", "build/os8088-360.img")),
     Row("dotdel", "soak", py("tests/dotdel.py"), 150.0,
         "DOT DELIRIUM on the glass, on all three adapters (SPEC.md 93): the "
         "title screen's four compositors, the blink, Enter starting a game "
