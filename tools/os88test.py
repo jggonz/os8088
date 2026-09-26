@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""os88test - the regression suite, in two tiers with a WALL-CLOCK BUDGET.
+"""os88test - the regression suite, in two tiers with an ENFORCED BUDGET.
 
     python3 tools/os88test.py fast        # a commit you keep. Budget 30s.
     python3 tools/os88test.py full        # major work reaching the integration
@@ -56,8 +56,10 @@ THE BUDGET IS THE FEATURE, and it is why this is a runner rather than a
 shell script that calls everything.  A suite with no ceiling grows until it
 is too slow to run, and a suite too slow to run is not run - which is the
 state this repo was already in with zero seconds on the clock.  So each tier
-declares a wall-clock budget and THE RUNNER FAILS WHEN THE TIER OVERRUNS IT,
-green tests or not.  Adding a test that does not fit is therefore a visible,
+declares a budget in seconds and THE RUNNER FAILS WHEN THE TIER OVERRUNS IT,
+green tests or not. The seconds are CHARGED IN CPU (see `charge`): each row's
+own user+sys laid out over the runner's lanes, which is the wall clock of an
+idle box, so a loaded one cannot fail the tier for being loaded.  Adding a test that does not fit is therefore a visible,
 failing decision about what to take out or move down a tier, made by the
 author who added it, rather than a slow drift discovered by whoever finally
 gives up on the suite.
@@ -261,11 +263,185 @@ def capabilities():
 
 
 class Result:
-    __slots__ = ("row", "ok", "skipped", "secs", "output", "reason")
+    __slots__ = ("row", "ok", "skipped", "secs", "output", "reason", "cpu")
 
-    def __init__(self, row, ok, skipped, secs, output, reason=""):
+    def __init__(self, row, ok, skipped, secs, output, reason="", cpu=None):
         self.row, self.ok, self.skipped = row, ok, skipped
         self.secs, self.output, self.reason = secs, output, reason
+        # CPU seconds the row and everything it waited on consumed (user +
+        # sys, from wait4). None when it was never reaped here - a skip, or a
+        # row that could not start. See `charge` for why it is kept.
+        self.cpu = cpu
+
+
+# A ROW'S TIMEOUT IS CHARGED LIKE THE BUDGET: in the CPU its process tree
+# spends, with the wall clock only a backstop this many times wider. The
+# timeout is there to stop a hung emulator eating the tier, and a hung emulator
+# SPINS - it is caught on CPU exactly as fast as before. What the wall clock
+# alone also caught was a row that was merely QUEUED: `mirror` (4.5s declared,
+# 60s timeout) timed out at 60 wall seconds with seven agents and their
+# emulators on four cores, having done no more work than it does in four. A
+# row that hangs WITHOUT spinning - a socket nobody answers - still ends, at the
+# backstop.
+#
+# ONLY WHERE THE CPU CAN BE SEEN. With no /proc (macOS) `_tree_cpu` answers
+# None, and every QEMU launcher in tests/ runs `-daemonize`, which reparents
+# the emulator to init and out of the row's tree - so a hung QEMU row is a
+# Python asleep on QMP that never trips the CPU limit. Either way the declared
+# timeout is the WALL limit again, as it was before any of this: a backstop
+# five times wider made a wedged 470s row run for thirty-nine minutes.
+WALL_BACKSTOP = 5.0
+
+
+def _tree_cpu(root):
+    """CPU seconds (user + sys) of `root` and every live descendant, plus what
+    they have already reaped - or None where /proc cannot answer (not Linux),
+    in which case the wall backstop is all that bounds the row."""
+    try:
+        hz = os.sysconf("SC_CLK_TCK")
+        kids, stat = {}, {}
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            try:
+                raw = open("/proc/%s/stat" % d).read()
+            except OSError:
+                continue
+            f = raw[raw.rindex(")") + 2:].split()
+            pid, ppid = int(d), int(f[1])
+            kids.setdefault(ppid, []).append(pid)
+            stat[pid] = sum(int(x) for x in f[11:15])   # utime stime cutime cstime
+        if root not in stat:
+            return None
+        total, todo = 0, [root]
+        while todo:
+            q = todo.pop()
+            total += stat.get(q, 0)
+            todo.extend(kids.get(q, ()))
+        return total / float(hz)
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _communicate(p, timeout, cpus=1, cpu_seen=True):
+    """Popen.communicate, but REAPED WITH wait4 so the row's CPU is kept.
+
+    communicate() waits for the child itself and the kernel's rusage for it
+    is thrown away with the status. The pipes are drained on two threads -
+    one blocked reader would deadlock the other - and the child is reaped
+    here, which answers (stdout, stderr, cpu seconds, timed out).
+
+    A TIMEOUT IS SIGTERM FIRST, NOT SIGKILL. A killed Python runs no atexit -
+    which is where every QEMU launcher's teardown lives (tests/os88qemu.py) -
+    so a row killed outright left its emulator running, holding
+    build/qmp.sock, and the next row drove THAT machine. terminate() lets the
+    row exit normally and take its guest with it; only a row that will not go
+    inside ten seconds is killed.
+
+    `cpu_seen` False - a QEMU row, whose emulator daemonizes out of the tree -
+    bounds the row by `timeout` in wall seconds alone (see WALL_BACKSTOP).
+    """
+    import threading
+    bufs = {"o": [], "e": []}
+
+    def drain(f, key):
+        for chunk in iter(lambda: f.read(8192), ""):
+            bufs[key].append(chunk)
+
+    ts = [threading.Thread(target=drain, args=(p.stdout, "o"), daemon=True),
+          threading.Thread(target=drain, args=(p.stderr, "e"), daemon=True)]
+    for t in ts:
+        t.start()
+
+    def reap(limit, cpu=False, wall=None, blind=None):
+        """Reap the row, or None once `limit` is spent. With `cpu`, `limit`
+        is charged in the row's CPU (see `_tree_cpu`), with the wall clock
+        only a backstop WALL_BACKSTOP times wider - or `blind`, the declared
+        timeout, from the first time the tree's CPU cannot be read."""
+        t0 = time.time()
+        if wall is None:
+            wall = None if limit is None else \
+                limit * (WALL_BACKSTOP if cpu else 1)
+        n = 0
+        while True:
+            pid, status, ru = os.wait4(p.pid, os.WNOHANG)
+            if pid:
+                return status, ru
+            if wall is not None and time.time() - t0 > wall:
+                return None
+            n += 1
+            if cpu and limit is not None and n % 50 == 0:
+                spent = _tree_cpu(p.pid)
+                if spent is None:
+                    cpu, wall = False, blind    # unmeasurable: wall it is
+                elif spent > limit:
+                    return None
+            time.sleep(0.02)
+
+    timed_out = False
+    # A row that is parallel BY DESIGN (Row.cpus) spends CPU that many
+    # times faster than wall, so its CPU limit is scaled by it; the wall
+    # backstop stays the declared timeout's.
+    if timeout is not None and not cpu_seen:
+        got = reap(timeout)
+    else:
+        got = reap(timeout if timeout is None else timeout * cpus, cpu=True,
+                   wall=None if timeout is None else timeout * WALL_BACKSTOP,
+                   blind=timeout)
+    if got is None:
+        timed_out = True
+        p.terminate()
+        got = reap(10)
+        if got is None:
+            p.kill()
+            got = reap(None)
+    status, ru = got
+    p.returncode = os.waitstatus_to_exitcode(status)
+    for t in ts:
+        t.join()
+    p.stdout.close()
+    p.stderr.close()
+    return ("".join(bufs["o"]), "".join(bufs["e"]),
+            ru.ru_utime + ru.ru_stime, timed_out)
+
+
+def charge(results, par, ser, conc, j, mj):
+    """What the tier COST, in the seconds an idle box would have taken.
+
+    THE BUDGET IS CHARGED IN CPU AND NOT IN WALL, because wall is a property
+    of the box and the budget is a property of the suite. It used to compare
+    the tier's wall clock with the ceiling, so a `make` on a machine that was
+    also running a soak failed with every row green - 46 passed, OVER BUDGET
+    by 2.6s, on a tier that takes 18s on the same box idle. Contention does
+    not make a row do more work; it makes the work take longer to be
+    scheduled, and a gate that fails for that teaches everyone to ignore it.
+
+    Each row's cost is its own CPU - user + sys, from wait4, which includes
+    every descendant it reaped (an emulator a row launches and tears down is
+    in it) - or its wall where none was recorded. The tier is then laid out
+    over the runner's own lanes exactly as the runner lays it out: the
+    host-side rows greedily across `j`, the one-at-a-time rows end to end, the
+    emulator lane across `mj`. On an idle box that IS the wall, near enough,
+    and a row that really got more expensive moves it on any box.
+    """
+    by = dict((id(r.row), r) for r in results)
+
+    def cost(row):
+        res = by.get(id(row))
+        if res is None or res.skipped:
+            return 0.0
+        if res.cpu is None:
+            return res.secs
+        return res.cpu / max(1, getattr(row, "cpus", 1))
+
+    def lanes(rows, n):
+        free = [0.0] * n
+        for row in rows:
+            i = free.index(min(free))
+            free[i] += cost(row)
+        return max(free) if rows else 0.0
+
+    return lanes(par, j) + sum(cost(r) for r in ser) + lanes(conc, mj)
 
 
 def run_row(row, caps, strict, verbose, unbuilt=()):
@@ -291,30 +467,17 @@ def run_row(row, caps, strict, verbose, unbuilt=()):
                              stderr=subprocess.PIPE, text=True)
     except OSError as e:
         return Result(row, False, False, time.time() - t0, str(e), "could not run")
-    try:
-        so, se = p.communicate(timeout=row.timeout)
-        out = so + se
-        ok = p.returncode == 0
-        reason = "" if ok else "exit %d" % p.returncode
-    except subprocess.TimeoutExpired:
-        # SIGTERM, NOT SIGKILL. subprocess.run(timeout=) kills the row
-        # outright, and a killed Python runs no atexit - which is where every
-        # QEMU launcher's teardown lives (tests/os88qemu.py). So a row that
-        # timed out left its emulator running, holding build/qmp.sock, and
-        # the next row drove THAT machine. terminate() lets the row exit
-        # normally and take its guest with it; only a row that will not go
-        # inside ten seconds is killed.
-        p.terminate()
-        try:
-            so, se = p.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
-            p.kill()
-            so, se = p.communicate()
-        out = (so or "") + (se or "")
+    so, se, cpu, timed_out = _communicate(p, row.timeout,
+                                          getattr(row, "cpus", 1),
+                                          "qemu" not in row.needs)
+    out = so + se
+    ok = p.returncode == 0 and not timed_out
+    reason = "" if ok else "exit %d" % p.returncode
+    if timed_out:
         ok, reason = False, "TIMEOUT after %ds" % row.timeout
         if "qemu" in row.needs:
             out += _sweep_qemu()
-    return Result(row, ok, False, time.time() - t0, out, reason)
+    return Result(row, ok, False, time.time() - t0, out, reason, cpu)
 
 
 def _sweep_qemu():
@@ -681,7 +844,12 @@ def main():
         if res.skipped:
             print("%sSKIP%s %-28s %s(%s)%s" % (YELLOW, OFF, res.row.name, DIM, res.reason, OFF))
         elif res.ok:
-            slip = "" if res.secs <= res.row.secs * SLIP + 1 else \
+            # CHARGED LIKE THE BUDGET (see `charge`): a row that overran its
+            # declaration on the CPU did more work, and one that overran it
+            # only on the wall clock was queued behind somebody else's.
+            spent = (res.secs if res.cpu is None else
+                     res.cpu / max(1, getattr(res.row, "cpus", 1)))
+            slip = "" if spent <= res.row.secs * SLIP + 1 else \
                 "  %s(declared %.0fs)%s" % (YELLOW, res.row.secs, OFF)
             # ...and the OTHER direction, which had no report at all and is
             # the worse one. A row finishing in a few percent of its
@@ -732,16 +900,18 @@ def main():
     wall = time.time() - t0
     failed = [r for r in results if not r.ok]
     skipped = [r for r in results if r.skipped]
+    cost = charge(results, par, ser, conc, max(1, a.j), mj)
     print()
-    print("os88test: %d passed, %d failed, %d skipped in %.1fs (budget %s)"
+    print("os88test: %d passed, %d failed, %d skipped in %.1fs, %.1fs charged "
+          "(budget %s)"
           % (len(results) - len(failed) - len(skipped), len(failed), len(skipped),
-             wall, ("%ds" % cap) if cap else "none"))
+             wall, cost, ("%ds" % cap) if cap else "none"))
 
-    over = cap is not None and wall > cap
+    over = cap is not None and cost > cap
     if over:
         print("%sos88test: OVER BUDGET by %.1fs.%s The tier ceiling is not advisory - "
               "move a row down a tier or make it cheaper before adding another."
-              % (RED, wall - cap, OFF))
+              % (RED, cost - cap, OFF))
     if failed:
         print("%sfailed:%s %s" % (RED, OFF, " ".join(r.row.name for r in failed)))
     return 1 if failed or (over and not a.no_budget) else 0

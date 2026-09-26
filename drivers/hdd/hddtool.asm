@@ -136,7 +136,7 @@ hd_tinst:
 ; in:  nothing
 ; out: CF = 0
 ;
-; DESTROY AND NOT HIDE, which is what OSAPI_WM_DESTROY (slot 0x0398) was added
+; DESTROY AND NOT HIDE, which is what OSAPI_WM_DESTROY (slot 0x02BC) was added
 ; for. Hiding takes the pixels down and leaves the RECORD, holding a W_SEG that
 ; names this image - inert while nothing re-shows it, and a loaded gun once the
 ; image is freed and something else claims the memory. It also costs a window

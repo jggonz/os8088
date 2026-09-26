@@ -5,8 +5,9 @@
 ; assembles into the KERNEL's own dialogs and into any package that wants it,
 ; from the same text. Define OS88UI_KERNEL before including it and every
 ; primitive call below becomes the kernel's own (`KERNEL_SEG:cw_*`, the
-; cold-to-text shims of SPEC.md 2.6); leave it undefined and they become
-; `OSAPI_*` far calls. Nothing else differs.
+; cold-to-text shims of SPEC.md 2.6, or the `ct_*` cold trampoline in front
+; of one when the kernel has one - SPEC.md 2.6.2); leave it undefined and they
+; become `OSAPI_*` far calls. Nothing else differs.
 ;
 ; THAT IS THE WHOLE POINT OF THE FILE. Saving bytes was never the argument -
 ; measured, consolidating the kernel's private helpers was worth twelve
@@ -94,25 +95,22 @@
 
 %ifdef OS88UI_KERNEL
   %macro UI_FRAME 0
-    call KERNEL_SEG:cw_gfx_frame
+    call ct_cw_gfx_frame
   %endmacro
   %macro UI_FILL 0
-    call KERNEL_SEG:cw_gfx_fill
+    call ct_cw_gfx_fill
   %endmacro
   %macro UI_STR 0
     call KERNEL_SEG:font_str
   %endmacro
   %macro UI_RUN 0                   ; ...and the OPAQUE one (SPEC.md 6.1)
-    call KERNEL_SEG:cw_font_run
+    call ct_cw_font_run
   %endmacro
   %macro UI_WIDTH 0
-    call KERNEL_SEG:font_width
+    call ct_font_width
   %endmacro
   %macro UI_PEN 0
-    call KERNEL_SEG:cw_gfx_pen_cf
-  %endmacro
-  %macro UI_PIXEL 0
-    call KERNEL_SEG:cw_gfx_pixel
+    call ct_cw_gfx_pen_cf
   %endmacro
   %macro UI_ICON 0                  ; SPEC.md 25.6: the masked 1bpp sprite
     call KERNEL_SEG:cw_icon_draw    ; pass - CX = x, DX = y, SI -> record
@@ -136,7 +134,7 @@
     mov [gfx_color], al
   %endmacro
   %macro UI_HLINE 0
-    call KERNEL_SEG:cw_gfx_hline
+    call ct_cw_gfx_hline
   %endmacro
   %macro UI_GRAY 0
     call KERNEL_SEG:cw_gfx_fill_gray
@@ -317,6 +315,32 @@ OS88UI_LATCH equ 32             ; THE SAME PICTURE, A DIFFERENT CAUSE (SPEC.md
                                 ; latched button is an ordinary thing to want
                                 ; and ModPlug, Tracker and Paint each draw one
                                 ; by hand today.
+OS88UI_IMG equ 64               ; THE LABEL IS A PICTURE, not a string (SPEC.md
+                                ; 13.8.9). The labels-array entry points at an
+                                ; OSAPI_ICON_DRAW record - `db 1, rows` then
+                                ; `rows` MASK words then `rows` DATA words, bit
+                                ; 15 leftmost - centred in the button exactly
+                                ; as a caption is. Give it a FULL mask (0xFFFF
+                                ; every row): the picture is then opaque over
+                                ; its own 16 x rows cell, ground and ink in one
+                                ; pass, which is what lets the button never
+                                ; write a pixel twice. Pressed, the pair
+                                ; inverts like a caption does.
+                                ;
+                                ; ONLY UNDER `%define OS88UI_BIMG`, and that
+                                ; define changes the drawing body for the
+                                ; package's text buttons too - see
+                                ; os88ui_bdraw1. A package that does not set it
+                                ; assembles byte-identical: the flag is an equ
+                                ; and costs nothing unset.
+%ifdef OS88UI_BIMG
+ %ifdef OS88UI_KERNEL
+  %error "OS88UI_BIMG is a PACKAGE's: the kernel's dialogs draw text buttons"
+ %endif
+ %ifdef OS88UI_NOBTN
+  %error "OS88UI_BIMG draws buttons, and OS88UI_NOBTN/BARONLY has taken them out"
+ %endif
+%endif
 
 ; --- THE RECORD (SPEC.md 20.5.1.3) -------------------------------------------
 ; One per button GROUP, in the CALLER's data, because that is the shape the
@@ -511,7 +535,11 @@ os88ui_btn:
                                 ; was converted, and a routine only this one
                                 ; reaches does not need a name. There is one
                                 ; way to draw a button now.
+%ifdef OS88UI_BIMG
+    call os88ui_bdraw1          ; ...or the one-write body, for a package
+%else                           ; that opted into it (SPEC.md 13.8.9)
     call os88ui_bdraw
+%endif
 .out:
     pop di
     pop si
@@ -520,6 +548,7 @@ os88ui_btn:
     pop ax
     ret
 
+%ifndef OS88UI_BIMG
 ; -----------------------------------------------------------------------------
 ; os88ui_bdraw - the drawing body (PRIVATE: os88ui_btn is the only caller)
 ; in:  BX = rect {x1,y1,x2,y2} inclusive, SI = NUL label, DI = OS88UI_* flags
@@ -732,6 +761,254 @@ os88ui_bdraw:
     pop bx
     pop ax
     ret
+%else
+; -----------------------------------------------------------------------------
+; os88ui_bdraw1 - the ONE-WRITE drawing body (SPEC.md 13.8.9), OS88UI_BIMG only
+; in:  BX = rect {x1,y1,x2,y2} inclusive, SI = the label - a NUL string, or an
+;      OSAPI_ICON_DRAW record when DI has OS88UI_IMG - DI = OS88UI_* flags;
+;      caller holds the gfx lock
+; out: nothing; all registers preserved
+;
+; os88ui_bdraw's picture, reached by a different road: NO PIXEL IS WRITTEN
+; TWICE. The plain body fills the whole interior and then letters the caption
+; over it, so every cell the caption covers goes to the ground colour and then
+; to its final colour - the fill-then-letter pair SPEC.md 6.1 exists to remove,
+; and the one DRAWING RULE 1 at the top of this file names. It is invisible in
+; a screenshot and it is a flash on a 4.77 MHz machine, and a button that is
+; PRESSED goes through it on both edges.
+;
+; So the interior is cut in two: the caption's (or picture's) own rect, which
+; is drawn OPAQUE - font_run lays ground and glyph in one pass, and a picture
+; with a full mask does the same through the sprite pass - and the RING around
+; it, filled in the ground colour in at most four strips. The frame is outside
+; both. Every pixel of the button is written exactly once, in its final colour.
+;
+; What it costs is calls: up to four fills where there was one, so ~2 ms more
+; per button on the field machine (PERFORMANCE.md's ~756 us floor), on an
+; event a human generates. That is why it is an OPT-IN and not os88ui_bdraw's
+; replacement - the owner's rule for this library is that a package which does
+; not ask for a capability does not carry it.
+;
+; A PICTURE THE CLIP CUTS draws its ground and not its ink: the sprite pass
+; clips a shape WHOLE (SPEC.md 25.6), so a half-covered picture would leave
+; its rect holding whatever was there. Filling it in the ground colour keeps
+; the button a button; uncovering it is a W_PAINT, which draws the picture.
+; -----------------------------------------------------------------------------
+os88ui_bdraw1:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov bp, bx                  ; BP = the rect, read through ds: (SS != DS)
+
+    ; --- the pair: AL = ink, AH = ground -----------------------------------
+    mov ax, CBLACK | (CWHITE << 8)
+    test di, OS88UI_INK
+    jz .down
+    mov bx, di
+    mov al, bh                  ; the caller's ink, out of DI's high byte
+.down:
+    test di, OS88UI_DIS         ; DISABLED WINS over both (47 rule 1): a greyed
+    jz .dn                      ; control is never drawn pressed, and its ink
+    mov al, CDGRAY              ; is the grey
+    jmp short .pair
+.dn:
+    test di, OS88UI_DOWN
+    jz .pair
+    mov ax, CWHITE | (CBLACK << 8)
+.pair:
+    mov [os88ui_bk], ax
+
+    ; --- the inner rect: the caption's or the picture's, centred ------------
+    test di, OS88UI_IMG
+    jz .txt
+    mov al, [si+1]              ; rows
+    xor ah, ah
+    mov cx, 16                  ; one word a row: 16 wide
+    jmp short .cent
+.txt:
+    UI_WIDTH                    ; AX = the caption's width; SI intact
+    mov cx, ax
+    mov ax, 8                   ; ...and a cell is 8 rows
+.cent:                          ; CX = w, AX = h
+    mov dx, [ds:bp+4]
+    sub dx, [ds:bp+0]
+    inc dx
+    sub dx, cx
+    jns .xp
+    xor dx, dx                  ; wider than the button: flush left
+.xp:
+    shr dx, 1
+    add dx, [ds:bp+0]
+    mov [os88ui_ir+0], dx
+    add dx, cx
+    dec dx
+    mov [os88ui_ir+4], dx
+    mov dx, [ds:bp+6]
+    sub dx, [ds:bp+2]
+    inc dx
+    sub dx, ax
+    jns .yp
+    xor dx, dx
+.yp:
+    shr dx, 1
+    add dx, [ds:bp+2]
+    mov [os88ui_ir+2], dx
+    add dx, ax
+    dec dx
+    mov [os88ui_ir+6], dx
+    ; clamped INTO the interior, so the ring below can never be asked for a
+    ; strip of negative size - a caption wider than its button is the caller's
+    ; error and is drawn flush left, as os88ui_bdraw draws it
+    mov ax, [ds:bp+0]
+    inc ax
+    cmp [os88ui_ir+0], ax
+    jge .c1
+    mov [os88ui_ir+0], ax
+.c1:
+    mov ax, [ds:bp+2]
+    inc ax
+    cmp [os88ui_ir+2], ax
+    jge .c2
+    mov [os88ui_ir+2], ax
+.c2:
+    mov ax, [ds:bp+4]
+    dec ax
+    cmp [os88ui_ir+4], ax
+    jle .c3
+    mov [os88ui_ir+4], ax
+.c3:
+    mov ax, [ds:bp+6]
+    dec ax
+    cmp [os88ui_ir+6], ax
+    jle .c4
+    mov [os88ui_ir+6], ax
+.c4:
+
+    ; --- the ring, in the ground colour --------------------------------------
+    mov al, [os88ui_bk+1]
+    UI_INK
+    mov ax, [ds:bp+0]           ; top strip: the full interior width, above
+    inc ax                      ; the inner rect
+    mov bx, [ds:bp+2]
+    inc bx
+    mov cx, [ds:bp+4]
+    dec cx
+    mov dx, [os88ui_ir+2]
+    dec dx
+    cmp dx, bx
+    jl .nt
+    UI_FILL
+.nt:
+    mov bx, [os88ui_ir+6]       ; bottom strip
+    inc bx
+    mov dx, [ds:bp+6]
+    dec dx
+    cmp dx, bx
+    jl .nb
+    UI_FILL
+.nb:
+    mov bx, [os88ui_ir+2]       ; left and right: the inner rect's own rows
+    mov dx, [os88ui_ir+6]
+    mov cx, [os88ui_ir+0]
+    dec cx
+    cmp cx, ax
+    jl .nl
+    UI_FILL
+.nl:
+    mov ax, [os88ui_ir+4]
+    inc ax
+    mov cx, [ds:bp+4]
+    dec cx
+    cmp cx, ax
+    jl .nr
+    UI_FILL
+.nr:
+
+    ; --- the frame, and the default ring: os88ui_bdraw's own pen rules -------
+    test di, OS88UI_DIS
+    jz .live
+    stc
+    jmp short .set
+.live:
+    clc
+.set:
+    UI_PEN
+    test di, OS88UI_DIS
+    jnz .rect
+    test di, OS88UI_INK
+    jz .rect
+    mov ax, di
+    mov al, ah
+    UI_INK
+.rect:
+    mov ax, [ds:bp+0]
+    mov bx, [ds:bp+2]
+    mov cx, [ds:bp+4]
+    mov dx, [ds:bp+6]
+    UI_FRAME
+    test di, OS88UI_DEF
+    jz .inner
+    dec ax
+    dec ax
+    dec bx
+    dec bx
+    inc cx
+    inc cx
+    inc dx
+    inc dx
+    UI_FRAME
+
+    ; --- the inner rect, opaque ---------------------------------------------
+.inner:
+    test di, OS88UI_IMG
+    jnz .img
+    mov cx, [os88ui_ir+0]
+    mov dx, [os88ui_ir+2]
+    mov ax, [os88ui_bk]         ; AL = ink, AH = ground; a greyed caption has
+    UI_RUN                      ; the disabled pen set and font_run screens it
+    jmp short .lpen
+.img:
+    clc
+    UI_PEN                      ; a picture's pair is its own, never the grey
+    mov ax, [os88ui_ir+0]       ; pen's
+    mov bx, [os88ui_ir+2]
+    mov cx, [os88ui_ir+4]
+    mov dx, [os88ui_ir+6]
+    UI_CLIPT
+    jnc .whole
+    mov al, [os88ui_bk+1]       ; cut by the clip: its ground, not its ink
+    UI_INK
+    mov ax, [os88ui_ir+0]
+    UI_FILL
+    jmp short .lpen
+.whole:
+    mov ax, [os88ui_bk]
+    xchg al, ah                 ; AL = the MASK pass (ground), AH = the DATA
+    UI_IPEN                     ; pass (ink) - SPEC.md 25.6's pair
+    mov cx, [os88ui_ir+0]
+    mov dx, [os88ui_ir+2]
+    UI_ICON                     ; CF = 1 is a record wider than a word or
+                                ; taller than 16: the caller's error, drawn as
+                                ; nothing
+.lpen:
+    clc
+    UI_PEN
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+os88ui_ir: dw 0, 0, 0, 0        ; the inner rect, and the pair - DATA, inline,
+os88ui_bk: dw 0                 ; for os88ui_armw's reason
+%endif                          ; OS88UI_BIMG
 
 ; -----------------------------------------------------------------------------
 ; os88ui_bhit - is the point inside this button?
@@ -758,6 +1035,23 @@ os88ui_bhit:
     stc
     ret
 
+; --- OS88UI_NOGLYPH - the button WITHOUT the check-box/radio glyph ----------
+; An OPT-OUT, OS88UI_BARONLY's shape one control along: the glyph's body and
+; its three shape routines are ~300 bytes every button user carries, and a
+; package that draws no check box and no radio carries them for nothing -
+; Tracker, whose buttons are pictures and captions only (SPEC.md 13.8.9).
+; Unset, every consumer is byte-identical.
+%ifdef OS88UI_NOGLYPH
+ %ifdef OS88UI_CHK
+  %error "OS88UI_CHK draws os88ui_glyph, which OS88UI_NOGLYPH takes out"
+ %endif
+ %ifdef OS88UI_RAD
+  %error "OS88UI_RAD draws os88ui_gring/os88ui_gdot, which OS88UI_NOGLYPH takes out"
+ %endif
+ %ifdef OS88UI_KERNEL
+  %error "OS88UI_NOGLYPH is a PACKAGE's: the Control Panel draws both glyphs"
+ %endif
+%else
 ; =============================================================================
 ; The CHECK BOX and the RADIO BUTTON (SPEC.md 31.2)
 ;
@@ -1048,6 +1342,7 @@ os88ui_glyph:
     pop ax
     ret
 
+%endif                          ; OS88UI_NOGLYPH
 %endif                          ; OS88UI_NOBTN
 %ifdef OS88UI_KERNEL
 section .cold
@@ -1084,6 +1379,7 @@ section .cold
 ; word (SPEC.md 2.6 rule 1), which is the trap os88ui_krect's own comment
 ; records costing eight bytes through the middle of sch_isr.
 
+%ifndef OS88UI_KERNEL              ; the kernel walks its own rects (fdlg_bhit, fm_bhit)
 ; -----------------------------------------------------------------------------
 ; os88ui_bfind - which button of a table is the point in?
 ; in:  BX = an array of 4-word rects, AX = how many, CX = x, DX = y
@@ -1139,6 +1435,7 @@ os88ui_bfind:
 ; equ offsets (OS88_BSS), and a shared include cannot reserve part of that
 ; without the package agreeing about where. Two bytes of image is cheaper
 ; than a convention.
+%endif                          ; OS88UI_KERNEL: os88ui_bfind is a package's
 ; -----------------------------------------------------------------------------
 os88ui_arm:
     mov [os88ui_armw], ax
@@ -1325,6 +1622,7 @@ os88ui_btlist: dw 0             ; the head of this package's record list -
 ; paint could have moved the window.
 ; -----------------------------------------------------------------------------
 %ifndef OS88UI_NOGEST
+%ifndef OS88UI_KERNEL          ; os88ui_btnclick is their only caller, and it is a package's
 os88ui_btnpress:
     push bx
     push si
@@ -1441,6 +1739,7 @@ os88ui_btnup:
     pop si
     pop bx
     ret
+%endif                          ; OS88UI_KERNEL
 %endif                          ; OS88UI_NOGEST
 %endif                          ; OS88UI_ARM
 

@@ -39,7 +39,6 @@ side, so Left is accepted and the strip holds seven.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -113,11 +112,10 @@ def frame(m, kind):
 def full_repaint(m):
     """Make the GUEST repaint the whole screen ([cp_dirty] is exactly that)."""
     m.write(S("cp_dirty"), b"\x01")
-    for _ in range(400):
-        time.sleep(0.05)
-        if byte(m, "cp_dirty") == 0:
-            break
-    else:
+    try:
+        os88marty.until(m, lambda _: byte(m, "cp_dirty") == 0,
+                        "[cp_dirty] to drain", poll=0.05, limit=20)
+    except os88marty.MartyError:
         raise RuntimeError("ui_task never drained [cp_dirty]")
     os88marty.settle(m)
 
@@ -217,12 +215,12 @@ def setting(m, mo, kind, cfg, want_cfg=None):
 
 
 def wait_for(m, name, value, secs):
-    end = time.time() + secs
-    while time.time() < end:
-        if byte(m, name) == value:
-            return True
-        time.sleep(0.1)
-    return False
+    try:                                # `secs` is GUEST time
+        os88marty.until(m, lambda _: byte(m, name) == value,
+                        "[%s] = %d" % (name, value), poll=0.1, limit=secs)
+    except os88marty.MartyError:
+        return False
+    return True
 
 
 def herc(a):
@@ -273,10 +271,10 @@ def herc(a):
             free = 0
             for _ in range(20):
                 free += byte(m, "gfx_lock_flag") == 0
-                time.sleep(0.05)
+                os88marty.pace(m, 0.05)
             check(free > 0, "the gfx lock is free while the strip is open "
                   "(%d of 20 reads)" % free)
-            time.sleep(1.0)
+            os88marty.pace(m, 1.0)
             _, _, open_px = frame(m, kind)
             rule = w - DOCK_SW
             check(all(open_px[y * w + rule] == 0 for y in range(MBAR_H, h)),

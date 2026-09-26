@@ -587,7 +587,7 @@ def walk(image, machine, defines, lad, cons, limit=240.0, verbose=True,
 
         # --- kmain, one row per call, os88boot's own list -------------------
         for addr, name, n in sites:
-            m.bp_exec(KERNEL_SEG * 16 + addr)
+            m.bp_exec(addr)             # FLAT: kmain_o's are in the blob
             m.run()
             if m.wait_stop(limit) is None:
                 raise Stale("kmain never returned from %s" % name,
@@ -867,12 +867,12 @@ def owner_tags():
 
 
 def _claim_name(tag):
-    """MEM_K_SAVE -> "Menu save-under". A tag is an internal name; the map is
+    """MEM_P_MSAVE -> "Menu save-under". A tag is an internal name; the map is
     not the place for one, and the reader only needs to know what the block is
     for."""
     if not tag:
         return "In use"
-    nice = {"SAVE": "Menu backing store", "DRV": "Loaded driver",
+    nice = {"MSAVE": "Menu backing store", "DRV": "Loaded driver",
             "COPY": "Copy buffer", "ASC": "File-association cache",
             "CLIP": "Clipboard", "MOD": "Loaded module",
             "CLONE": "Disk copier buffer", "BAND": "Title-bar composer",

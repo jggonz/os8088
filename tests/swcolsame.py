@@ -46,7 +46,6 @@ import argparse
 import hashlib
 import os
 import sys
-import time
 
 sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
@@ -70,14 +69,17 @@ def still(m, card, tries=40, pause=0.25):
     So this settles on exactly the pixels the comparison is made of, which is
     the only region either build is being judged on.
     """
-    prev = None
-    for _ in range(tries):
+    def below_bar():
         rows = m.vram(card)[2][os88geom.MBAR_H:]
-        cur = b"".join(bytes(r) for r in rows)
-        if cur == prev:
-            return
-        prev = cur
-        time.sleep(pause)
+        return b"".join(bytes(r) for r in rows)
+    # Two identical captures `pause` apart, on the GUEST's clock; giving up
+    # quietly after `tries` of them, as the host loop did.
+    try:
+        os88marty.quiesce(m, below_bar, guest=pause * os88marty.GUEST_PACE,
+                          stable=1, budget=tries * pause * os88marty.GUEST_PACE,
+                          what="the screen below the menu bar to settle")
+    except os88marty.MartyError:
+        pass
 
 
 def main():

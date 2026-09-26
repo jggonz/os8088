@@ -31,7 +31,9 @@
 ;
 ; This module is included BEFORE splash.inc because the boot splash calls
 ; vid_detect/vid_apply/vid_setmode on its first tick, while the rest of the
-; kernel is still coming off the floppy. Everything here therefore obeys the
+; kernel is still coming off the floppy. (vid_detect itself is in the BLOB now,
+; SPEC.md 2.5.3.3 - which is aboard before stage 2 jumps - so the first tick
+; reaches it with no `.text` on the path at all.) Everything here therefore obeys the
 ; splash's rules: it must be resident inside the first SPL_RESIDENT sectors,
 ; and ALL its data lives in .text - never .bss, which is not yet cleared and
 ; holds whatever the machine left there (SPEC.md 15).
@@ -428,7 +430,8 @@ section .text                   ; AND spend KERN_CODE_MAX, which is the guard
 ; escape hatch. The target is period XT hardware, where a real EGA is the
 ; common case this trades for.
 ; -----------------------------------------------------------------------------
-vid_detect:
+section .ovl                    ; IN THE BLOB (SPEC.md 2.5.3.3): BOTH callers are
+vid_detect:                     ; in it - the splash's first tick, and vid_init
     push ax
     push bx
     push cx
@@ -491,8 +494,17 @@ vid_detect:
 %endif
 .set:
     mov [vid_kind], al
-    jmp vid_pop8                ; the shared epilogue - and so this routine's
-                                ; push list is vid_setmode's. See vid_pop8.
+    pop es                      ; its own epilogue: vid_pop8 is `.text`'s
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    retf                        ; BLOBCALL's far frame. It used to `jmp
+section .text                   ; vid_pop8`, the shared epilogue, which is
+                                ; `.text`'s and so out of reach from the blob
 
 ; -----------------------------------------------------------------------------
 ; vid_apply - publish [vid_kind]'s geometry into the live and derived blocks
@@ -1137,13 +1149,14 @@ vid_setmode:
 .done:
     dec byte [spl_busy]         ; ...and the card describes itself again
 
-; vid_pop8 - the eight-register epilogue THREE routines in this file share,
-; and vid_pop7 one label in is a FOURTH with a shorter frame.
-; vid_detect and vid_text jump here rather than
-; carrying their own copy, so **their prologues are now part of THIS routine's
-; contract**: all three push `ax bx cx dx si di bp es` in that order, and a
-; `push` added to any one of them without the other two returns the machine to
-; a wrong address at boot.  vid_apply pushes the same run WITHOUT `bp`, pops
+; vid_pop8 - the eight-register epilogue TWO routines in this file share,
+; and vid_pop7 one label in is a THIRD with a shorter frame.
+; vid_text jumps here rather than carrying its own copy, so **its prologue is
+; now part of THIS routine's contract**: both push `ax bx cx dx si di bp es` in
+; that order, and a `push` added to one of them without the other returns the
+; machine to a wrong address at boot. (vid_detect was a third until SPEC.md
+; 2.5.3.3 moved it into the blob, where `.text`'s epilogue is out of reach; it
+; carries its own pop run and `retf` now.)  vid_apply pushes the same run WITHOUT `bp`, pops
 ; its own `es`, and enters at `vid_pop7` - so it is bound by the SEVEN and not
 ; by the eight, and a `push` added to the other three must not be added to it.
 ; Nothing in the tree checks either; these comments and the ones at the three
@@ -1151,7 +1164,7 @@ vid_setmode:
 ; `dec byte [spl_busy]`, so the splash counter is decremented once.
 ;
 ; IT KEEPS ITS OWN POP RUN, and SPEC.md 15.1.2's ladder may never have it.
-; `jmp kret_es` here BOOTS NOTHING: vid_setmode, vid_detect and vid_text all
+; `jmp kret_es` here BOOTS NOTHING: vid_setmode and vid_text both
 ; run from the splash, whose first tick is gated on SPL_RESIDENT sectors
 ; (splash.inc, 9 = 4,608 bytes), and the ladder is at the far end of `.text` -
 ; ~50,700 bytes in, eleven times past the window the boot sector has read.
@@ -1163,7 +1176,7 @@ vid_setmode:
 vid_pop8:
     pop es
     pop bp
-vid_pop7:                       ; ...AND A FOURTH ENTRY, ONE LABEL IN, WITH A
+vid_pop7:                       ; ...AND A THIRD ENTRY, ONE LABEL IN, WITH A
     pop di                      ; DIFFERENT FRAME. vid_apply pushes the same
                                 ; run WITHOUT bp and pops its own `es`, so it
                                 ; joins here; it is the one arrival that is
@@ -1270,20 +1283,22 @@ vid_cga_equip:
 ; The probe and the publish still re-run, and must: everything between here
 ; and that paint reads [vid_w]/[vid_h]/[vid_stride] out of them.
 ; -----------------------------------------------------------------------------
-vid_init:
-    call vid_detect
-    call vid_apply
+section .ovl                    ; kmain_o's alone (SPEC.md 2.5.3.3), out through
+vid_init:                       ; the spw_ shims the splash already needs
+    BLOBCALL vid_detect
+    call KERNEL_SEG:spw_vid_apply
 %ifdef DOCK_OPT
-    call dock_geom              ; ...and the strip where the user put it
+    call KERNEL_SEG:ovw_dock_geom ; ...and the strip where the user put it
                                 ; (SPEC.md 30.5). HERE and never from
                                 ; vid_apply, which the splash reaches before
                                 ; dock.inc has come off the floppy
 %endif
     cmp byte [spl_live], 0      ; the splash set THIS mode on its first tick
     jne .keep                   ; and is still drawing on it
-    call vid_setmode
+    call KERNEL_SEG:spw_vid_setmode
 .keep:
-    ret
+    retf
+section .text
 
 ; -----------------------------------------------------------------------------
 ; vid_text - back to a text mode (CMD_REBOOT and fsx's FSXM_TEXT80)
@@ -1526,15 +1541,15 @@ section .text                   ; ...and back, so the next include lands right
 ; WHAT THE SPLASH LEFT BEHIND (SPEC.md 2.9.4)
 ;
 ; The loading screen is stage 2's now, so every call it makes into the kernel
-; is across a segment. These four are that, four bytes each - and they are
+; is across a segment. These three are that, four bytes each (spw_vid_detect
+; was a fourth until SPEC.md 2.5.3.3 put vid_detect in the blob with its
+; callers) - and they are
 ; HERE, at the end of viddet.inc, rather than in kernel.asm's cw_ block for one
 ; reason: SPL_RESIDENT. The bar cannot move until the routines the first tick
 ; calls are ABOARD, and the cw_ block is at the end of `.text` - the last
 ; sector of the image. Here they land in sector 7, which is what SPL_RESIDENT
 ; now measures and why it fell from 9 to that.
 ; =============================================================================
-spw_vid_detect:   call vid_detect
-                  retf
 spw_vid_apply:    call vid_apply
                   retf
 spw_vid_setmode:  call vid_setmode

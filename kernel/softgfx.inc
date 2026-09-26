@@ -669,6 +669,9 @@ sw_pairbuild:
     cmp bx, 256
     jb .byte
     mov byte [gfx_pairbuilt], 1
+%ifdef GFX_PLANE
+    mov byte [vga_p4built], 0   ; UNION: the pair tables overwrote it
+%endif
     pop di
     pop si
     pop dx

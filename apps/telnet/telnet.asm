@@ -1792,7 +1792,7 @@ te_show:
     ret
 
 ; =============================================================================
-; te_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2)
+; te_about - the OSAPI_ABOUT_SET handler (slot 0x018A, SPEC.md 12.2)
 ; in:  SI = our window; UI task, gfx lock HELD, far-called at our segment
 ; out: nothing; preserves all registers
 ;

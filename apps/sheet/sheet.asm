@@ -4859,7 +4859,7 @@ sh_docmd_help:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2).
+; sh_about - the OSAPI_ABOUT_SET handler (slot 0x018A, SPEC.md 12.2).
 ; in: SI = our window ptr; the UI task, gfx lock HELD, far-called at our own
 ; segment - a window callback in every respect that matters.
 ;

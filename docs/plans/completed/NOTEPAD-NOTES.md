@@ -1164,7 +1164,7 @@ work exists to avoid — and it was invisible because it happened one keystroke
 after the thing that caused it.
 
 The toast is SPEC.md 59's now: an inverse-video strip at the right end of the
-menu bar, `OSAPI_TOAST` at slot 0x0380. What went with it from this module:
+menu bar, `OSAPI_TOAST` at slot 0x02AA. What went with it from this module:
 `np_toast` (91 lines), `[np_msg]`, `[np_msgn]`, `[np_smsg]`, `[np_smsgn]`,
 the four toast-box words, `np_sigsame`'s two tests, `np_sigmark`'s two
 stores, the `mov word [np_msg], 0` on the hot keystroke path, and **two

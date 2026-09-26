@@ -89,7 +89,6 @@ Take np_load's `jae .say` out and `nomem` alone fails reading "Too big".
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
@@ -242,9 +241,15 @@ with os88ui.boot(_T.img("small360.img"), machine=MACHINE, limit=180) as ui:
             return [r[0] for r in dispcp.snapshot(m, S)]
 
         def down(n=1):
-            for _ in range(n):
+            for _ in range(n):          # each key waited for by the
+                was = m.read(S("fdlg_sel"), 2)          # selection it moves
                 m.key("ArrowDown")
-                time.sleep(0.2)
+                try:
+                    M.until(m, lambda _m: m.read(S("fdlg_sel"), 2) != was,
+                            "ArrowDown to move the selection", poll=0.05,
+                            guest=10.0)
+                except M.MartyError:
+                    pass                # ...and pick's own check names it
 
         def pick(name):
             """Select `name` and press Enter - a dive for a folder, the

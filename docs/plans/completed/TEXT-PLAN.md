@@ -172,7 +172,7 @@ unreachable code, and the suite's `registry` row already checks that every test
 ## 3. Stage 3 — the third answer: compose into a buffer, blit once (LANDED)
 
 **SPEC.md §5.4.2.2 is the primitive and §44.10.6 the first consumer.**
-`gfx_blit1` takes an optional `(ink, paper)` pair — slot 0x04A0, dying with the
+`gfx_blit1` takes an optional `(ink, paper)` pair — slot 0x038B, dying with the
 gfx lock as `[gfx_dis]` does — implemented with §6.1.10's plane grouping, which
 turns out not to be specific to glyph rows at all. Arkanoid's falling capsules
 are **one blit** where they were seven drawing calls, and the mark is now in the
@@ -206,7 +206,7 @@ one call.**
 **Most of it already exists.** SPEC.md §6.3 is that method for proportional
 type — compose a 1bpp band in package RAM, emit with one `OSAPI_GFX_BLIT1` —
 and `apps/os88type.inc` (§6.5) is it written once. `OSAPI_FONT_GLYPHS`
-(slot 0x0218) already publishes the kernel's 8×8 bitmaps for exactly this, in
+(slot 0x01B6) already publishes the kernel's 8×8 bitmaps for exactly this, in
 its own words *"for an app that needs the BITMAP of a character rather than a
 drawn one — scaling it, **stamping it into a canvas**, measuring a cell."*
 

@@ -18,7 +18,7 @@ it. muptest's second window does exactly that with OSAPI_WM_DESTROY.
 
   python3 tests/mouseup.py [machine]
 """
-import sys, struct, time
+import sys, struct
 sys.path.insert(0, "tools")
 import os88marty as M
 from os88mouse import Mouse
@@ -153,7 +153,12 @@ with M.launch("build/os8088-360.img", apps="build/muptest.img",
         # could be read.
         mo.to(vx, vy)
         mo._pk(l=True)
-        time.sleep(1.2)
+        try:                               # the press's own work, in GUEST time
+            M.until(m, lambda mm: armw(mm) != 0 and find(mm, VAN) is None,
+                    "the press to arm a release and destroy the window",
+                    poll=0.1, limit=10.0)
+        except M.MartyError:
+            pass                           # ...the checks below say which half
         armed = armw(m)                    # mu_vclick has run and destroyed
         gone = find(m, VAN) is None        # the window; the arm points at it
         mid = find(m, MUP)
@@ -164,7 +169,11 @@ with M.launch("build/os8088-360.img", apps="build/muptest.img",
         check("the window really went away (the record is FREED)", gone)
 
         mo._pk()                           # ...and now the release
-        time.sleep(1.5)
+        try:                               # [ui_armw] is spent by the release
+            M.until(m, lambda mm: armw(mm) == 0, "the release to spend the arm",
+                    poll=0.1, limit=10.0)
+        except M.MartyError:
+            pass
         M.settle(m)
         w2 = find(m, MUP)
         # The caption is the signal. mu_vup would move it to 'GuardFailed',

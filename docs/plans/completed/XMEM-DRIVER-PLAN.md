@@ -117,7 +117,7 @@ one `%ifdef` around the entire body.
 ### 2.1 `snd.inc` — how to split the ABI from the implementation
 
 The kernel kept the ABI and the policy; the hardware went to a loadable image.
-`osapi_snd_fm` (slot 0x00F8) stays resident, stamps the requesting instance
+`osapi_snd_fm` (slot 0x00E3) stays resident, stamps the requesting instance
 into DH out of kernel state the loaded code cannot see, and far-calls through
 a pointer armed only after the image said yes.
 

@@ -215,15 +215,17 @@ section .text
 ; whole life - it is mouse-only, every control on the five static pages being
 ; a radio, a check box or a button - and it is non-zero on kern_big alone,
 ; where SPEC.md 31.9.2 gave a DRIVER's page a typed field (SPEC.md 62.9.15).
+; The callbacks are the RESIDENT `.cold` entries below, NEAR procs there:
+; wm_pkgcall dispatches a kernel window into the cold segment (SPEC.md 2.6.3).
 %ifdef KERN_BIG
-cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_paint, cp_onkey, cp_onclick
+cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cpf_cp_paint, cpf_cp_onkey, cpf_cp_onclick
 %else                           ; **NO KEYBOARD ON kern_small** (SPEC.md
                                 ; 62.9.15): the one field in the machine that
                                 ; can be typed into is the RAM disk's size, and
                                 ; kern_small has no RAM disk. The word goes
                                 ; back to 0, which is what it was for the whole
                                 ; life of the panel before SPEC.md 31.9.2
-cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_paint, 0, cp_onclick
+cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cpf_cp_paint, 0, cpf_cp_onclick
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -258,10 +260,10 @@ cp_kinit:
     xor ax, ax
     call COLD_SEG:os88ui_arm_f
 %endif
-    mov ax, cp_onup
+    mov ax, cpf_cp_onup         ; a COLD offset (SPEC.md 2.6.3)
     call wm_onmouseup           ; .text calling .text: apps.inc's kind table
 %ifdef KERN_BIG                 ; is resident and so is this proc
-    mov ax, cp_ondrag
+    mov ax, cpf_cp_ondrag
     call wm_ondrag
 %endif
     pop ax
@@ -659,8 +661,8 @@ cp_s_dsdrv: db 'A:', 0          ; the letter, stamped (SPEC.md 52.10.3): the
                                 ; from a hard disk, and a message that names
                                 ; the wrong drive is worse than one that names
                                 ; none. This is the only string in the kernel
-                                ; that needs it, and dsk_ltrtab's third entry
-                                ; exists for it
+                                ; that needs it, and dsk_bootltr's second
+                                ; store exists for it
 cp_s_dserr: db 'Not saved: disk error', 0
 ; Indexed by [cp_dsave] + 1, so slot 0 keeps toast_say's "nothing to say" and
 ; SUCCESS gets a message of its own - a save is a thing the user asked for and
@@ -857,44 +859,38 @@ CPS_CBY2  equ CPS_CBY + CP_GW - 1       ; 63: checkbox band bottom
 ; instructions rather than far-calling across the boundary for them.
 ; =============================================================================
 ; The entry indices, which are the image's ABI with its own thunks. They are
-; here rather than beside those thunks because the header below is built with
-; `times MOD_NENT - CP_NENT`, and TIMES wants a constant it has already seen.
+; here rather than beside those thunks because kernel.asm sizes CPFP's slot
+; block from CP_NENT, and RESB wants a constant it has already seen.
 CPE_PAINT   equ 0
 CPE_ONCLICK equ 1
 CPE_FLUSH   equ 2
 CPE_TICK    equ 3
-%ifdef DOCK_OPT
-CPE_ONUP    equ 4               ; release exists on both kernels
-%ifdef KERN_BIG
-CPE_ONDRAG  equ 5               ; drag exists only on kern_big
-CPE_DOCK_GEOM equ 6
-CP_NENT     equ 7
-%else
-CPE_DOCK_GEOM equ 5
-CP_NENT     equ 6
-%endif
-; Layout setup uses the next free entry without growing MOD_NENT or mod_fp.
-; MOD_H_NENT and the layout stamp reject a module from another build.
-%else
 CPE_ONUP    equ 4               ; SPEC.md 13.8.3's two edges. The RELEASE is on
 %ifdef KERN_BIG                 ; both kernels - a driver's page acts on it
-CPE_ONDRAG  equ 5               ; (SPEC.md 13.8.4) - and the drag is kern_big's
-CP_NENT     equ 6               ; alone, so CP_NENT differs between the builds.
-%else                           ; Which is safe because MOD_H_NENT is IN the
-CP_NENT     equ 5               ; header and mod_check compares it against the
-%endif                          ; file it just read, so a CTRL.DRV with the
-                                ; wrong count is refused rather than
-                                ; dispatched into
+CPE_ONDRAG  equ 5               ; (SPEC.md 13.8.4) - and the drag and the KEY
+CPE_ONKEY   equ 6               ; (SPEC.md 31.9.2) are kern_big's alone, so
+%ifdef DOCK_OPT                 ; CP_NENT differs between the builds. Which is
+CPE_DOCK_GEOM equ 7             ; safe because MOD_H_NENT is IN the header and
+CP_NENT     equ 8               ; mod_check compares it against the file it
+%else                           ; just read, so a CTRL.DRV with the wrong count
+CP_NENT     equ 7               ; is refused rather than dispatched into - and
+%endif                          ; MOD_H_STAMP rejects one from another build
+%else
+%ifdef DOCK_OPT
+CPE_DOCK_GEOM equ 5
+CP_NENT     equ 6
+%else
+CP_NENT     equ 5
 %endif
-CPFP        equ mod_fp + MOD_CTRL * MODFP_STRIDE
+%endif
 
 section .modc                   ; the on-demand image starts HERE, at its own
                                 ; offset 0, so the header below is the first
                                 ; thing in the file
 modc_hdr:
     dw 0x384F                   ; MOD_H_MAGIC
-    db MOD_VER                  ; MOD_H_VER - 5, so ld_check_hdr (3) and
-                                ; drv_check (4) both refuse this file
+    db MOD_VER                  ; MOD_H_VER - 5, so ld_check_hdr (6) and
+                                ; drv_check (7) both refuse this file
     db MOD_CTRL                 ; MOD_H_ID
     dw BUILD_NUM                ; MOD_H_BUILD (SPEC.md 2.8.2): refuses a
                                 ; CTRL.DRV from another COMMIT...
@@ -912,14 +908,11 @@ modc_hdr:
     dw modc_e_onup              ; CPE_ONUP
 %ifdef KERN_BIG
     dw modc_e_ondrag            ; CPE_ONDRAG
+    dw modc_e_onkey             ; CPE_ONKEY
 %endif
 %ifdef DOCK_OPT
     dw modc_e_dock_geom         ; CPE_DOCK_GEOM: Dock and Display settings
 %endif
-    times MOD_NENT - CP_NENT dw 0   ; the table is a FIXED MOD_NENT words, so
-                                ; MOD_HDR_SZ is a constant and mod_check can
-                                ; refuse an entry offset that points into the
-                                ; header itself
 
 ; --- the far entries, which are the WHOLE reason this is not a body pointer --
 ; A module's entries are reached by `call far [mod_fp + K]`, so they have to
@@ -947,6 +940,69 @@ modc_e_onup:    call cp_onup_x
 %ifdef KERN_BIG
 modc_e_ondrag:  call cp_ondrag_x
             retf
+
+; -----------------------------------------------------------------------------
+; modc_e_onkey - CPE_ONKEY: the Control Panel's W_ONKEY (SPEC.md 31.9.2)
+; in:  AL = ASCII, AH = scan code, SI = the window; the gfx lock is HELD
+; out: nothing; every register preserved
+;
+; **THE PANEL HAD NO KEYBOARD AT ALL** until this: `cp_tpl`'s onkey word was 0,
+; which is why the hard disk's geometry is typed with `-` and `+`. Everything
+; on the five static pages is a radio, a check box or a button and has nothing
+; to do with a key, so what this exists for is a DRIVER's page with a typed
+; field in it - the RAM disk's size is the first - and it forwards to exactly
+; that, or drops the key.
+;
+; **IT IS IN THE IMAGE, and it was resident for a reason that has gone.** When
+; it was written a fifth entry meant a fifth far-pointer slot for EVERY module,
+; in `.bss` every machine carries, and forty resident bytes was the cheaper of
+; the two. SPEC.md 2.8.1's per-module slot blocks retired that cap: an entry
+; now costs this module's own four bytes, so the body came in beside
+; cp_item_click and what stays resident is cpf_cp_onkey's five - a far call and
+; a `ret`. It asks cp_drv_item the record-space question rather than carrying
+; its own copy of it, which only a body OUTSIDE the image had to.
+;
+; An unclaimed key is DROPPED and not beeped at: a Control Panel is not a text
+; window, and every key that reaches it while a button page is showing would
+; otherwise be an error the user did not make.
+; -----------------------------------------------------------------------------
+modc_e_onkey:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov bx, ax                  ; the KEY, banked: every test below answers in
+                                ; AL and the page wants both halves back
+    mov al, [cp_sel]
+    call cp_drv_item            ; AL = its class; CF = 1 = a static page, which
+    jc .out                     ; has nothing to type into, or it went away
+    push ax
+    call COLD_SEG:drvf_drv_cls_svc ; DI = that class's copied table
+    pop ax
+    jc .out
+    mov bp, [di+DSV_CPKEY]
+    or bp, bp
+    jz .out                     ; ...or a driver page that takes no keys
+    call COLD_SEG:drvf_drv_cp_call ; BX IS THE KEY AND AL IS STILL THE CLASS.
+                                ; This dispatcher takes the class in AL
+                                ; (SPEC.md 31.9) - which is exactly why the
+                                ; key was banked into BX at the top and why
+                                ; `pop ax` above puts the class back rather
+                                ; than being tidiness. Handing the key over in
+                                ; AX assembles, boots, and delivers the CLASS
+                                ; to the page as a keystroke
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    retf
 %endif
 
 %ifdef DOCK_OPT
@@ -986,74 +1042,6 @@ cp_tick_due_x:
     pop bx
     pop ax
     ret
-
-; -----------------------------------------------------------------------------
-; cp_onkey - W_ONKEY for the Control Panel (SPEC.md 31.9.2)
-; in:  AL = ASCII, AH = scan code, SI = the window; the gfx lock is HELD
-; out: nothing
-;
-; **THE PANEL HAD NO KEYBOARD AT ALL** until this: `cp_tpl`'s onkey word was 0,
-; which is why the hard disk's geometry is typed with `-` and `+`. Everything
-; on the five static pages is a radio, a check box or a button and has nothing
-; to do with a key, so what this exists for is a DRIVER's page with a typed
-; field in it - the RAM disk's size is the first - and it forwards to exactly
-; that, or drops the key.
-;
-; **IT IS RESIDENT, and that is a size decision rather than a taste.** The
-; obvious home is the on-demand module beside cp_item_click, and `MOD_NENT` is
-; FOUR far-pointer slots per module with all four spent (paint, click, flush,
-; tick); a fifth doubles the table to eight, for every module, in `.bss` that
-; every machine carries. Forty resident bytes here is the cheaper of the two,
-; and cp_drv_gone_x is the same trade already taken - it carries its own copy
-; of cp_drv_item's record-space test for exactly this reason, and so does this.
-;
-; An unclaimed key is DROPPED and not beeped at: a Control Panel is not a text
-; window, and every key that reaches it while a button page is showing would
-; otherwise be an error the user did not make.
-; -----------------------------------------------------------------------------
-%ifdef KERN_BIG
-cp_onkey_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov bl, al                  ; the KEY, banked: every test below answers in
-    mov bh, ah                  ; AL and the page wants both halves back
-    mov al, [cp_sel]
-    cmp al, CP_ITEMS            ; RECORD space (SPEC.md 31.10.1), so the
-    jb .out                     ; boundary is the table's LENGTH - a static
-    sub al, CP_ITEMS            ; page has nothing to type into
-    call drv_cp_class_x         ; AL = its class; CF = 1 = it went away.
-                                ; NEAR: this body is .cold and so are all three
-                                ; of these (driver.inc:1028, :1613, :2058), so
-                                ; CS is already right and the drvf_* thunk's
-                                ; own `retf` is one nobody wanted. It is the
-                                ; same call cp_drv_gone_x makes seven lines
-                                ; below. The thunks STAY - the .modc sites
-                                ; (ctrl.inc:1573 and five more) still need them
-    jc .out
-    push ax
-    call drv_cls_svc_x          ; DI = that class's copied table
-    pop ax
-    jc .out
-    mov bp, [di+DSV_CPKEY]
-    or bp, bp
-    jz .out                     ; ...or a driver page that takes no keys
-    call drv_cp_call_x          ; BX IS THE KEY AND AL IS STILL THE CLASS.
-                                ; This dispatcher takes the class in AL
-                                ; (SPEC.md 31.9) - which is exactly why the
-                                ; key was banked into BX at the top and why
-                                ; `pop ax` above puts the class back rather
-                                ; than being tidiness. Handing the key over in
-                                ; AX assembles, boots, and delivers the CLASS
-                                ; to the page as a keystroke
-.out:
-    jmp kretc_bp
-%endif
-
 
 ; -----------------------------------------------------------------------------
 ; cp_drv_gone_x - a driver's page is on screen no longer (SPEC.md 31.9)
@@ -4010,12 +3998,37 @@ cp_vid_click:
     ; close (SPEC.md 31.8). NOTHING IS REDRAWN, for the Activate button's
     ; reason one screen up: vid_disp_init moves the desktop and re-fits every
     ; window, so DI/BP describe a rectangle that may no longer exist.
+    call COLD_SEG:exf_sync      ; Extend: EXTD.DRV FIRST (SPEC.md 39.19.6)
+    jc .mref                    ; refused, and [vid_dmode] is Single again
     call KERNEL_SEG:vid_disp_relayout
+    call COLD_SEG:exf_sync      ; Single: the image goes AFTER the collapse
     mov byte [cp_wdirty], 1
     mov byte [cp_dirty], 1
     mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
 %endif
     jmp short .done
+
+%ifdef KERN_BIG
+.mref:                          ; EXTD.DRV refused (SPEC.md 39.19.6): the
+    push cx                     ; panel's own load string - put the system
+    push si                     ; disk in. The radio still reads Single,
+    push es                     ; [vid_dmode] having been put back, and
+    push ds                     ; nothing moved.
+    pop es                      ; **NOT CPSTAGE**: cp_s_noload is RESIDENT -
+    mov si, cp_s_noload         ; cp_open_x's refusal letters it with no image
+                                ; loaded, and disk.inc stamps its drive at the
+                                ; mount - so it is DS's, and cp_stage reads
+                                ; [cs:si], THIS IMAGE at that offset. The
+                                ; first build did exactly that and toasted an
+                                ; empty string; tests/extdmod.py's arm B is
+                                ; what saw it
+    xor cx, cx
+    call KERNEL_SEG:cw_toast_show
+    pop es
+    pop si
+    pop cx
+    jmp .done
+%endif
 
 .rows:                          ; --- the radio rows ---
     cmp dx, CPV_B0Y1
@@ -6736,25 +6749,32 @@ cpf_cp_paint:
     jc .p_gone
     call far [CPFP + CPE_PAINT*4]
 .p_gone:                        ; the window is up and its content cannot be
-    retf                        ; drawn. ui_cp_open makes this unreachable in
+    ret                         ; drawn. ui_cp_open makes this unreachable in
                                 ; practice by loading BEFORE app_launch; it is
                                 ; here because "unreachable" is a claim about
                                 ; today's callers
 
-; cp_onkey is a plain thunk: it is short, it runs only while the panel is on
-; screen (so the image is already in), and a mod_need here would be a floppy
-; read on a keystroke.
-%ifdef KERN_BIG
-cpf_cp_onkey:          call cp_onkey_x
-                    retf
-%endif
+; ...and cp_onkey's shim does NOT call mod_need either: a key reaches the
+; panel only while its window is on screen, and the image is loaded before the
+; window opens and dropped when it closes - so a mod_need here would only ever
+; be a floppy read on a keystroke. If the image is somehow gone the slot rests
+; on mod_gone, which keeps every register and returns: the key is dropped,
+; which is what an unclaimed key does anyway (SPEC.md 31.9.2).
+; THESE ARE NEAR PROCS, every one of the four: cp_tpl and cp_kinit name them
+; and wm_pkgcall calls a kernel window's callbacks near in `.cold` (SPEC.md
+; 2.6.3).
 
 cpf_cp_onclick:
     call cpf_need
     jc .c_gone
     call far [CPFP + CPE_ONCLICK*4]
 .c_gone:
-    retf
+    ret
+%ifdef KERN_BIG
+cpf_cp_onkey:
+    call far [CPFP + CPE_ONKEY*4]
+    ret
+%endif
 
 ; SPEC.md 13.8.3's two edges. They do NOT call mod_need, and that is the
 ; difference from every shim above: a release or a drag can only follow a
@@ -6770,7 +6790,7 @@ cpf_cp_onup:
     jc .u_gone
     call far [CPFP + CPE_ONUP*4]
 .u_gone:
-    retf
+    ret
 %ifdef KERN_BIG
 cpf_cp_ondrag:
     push ax
@@ -6780,7 +6800,7 @@ cpf_cp_ondrag:
     jc .d_gone
     call far [CPFP + CPE_ONDRAG*4]
 .d_gone:
-    retf
+    ret
 %endif
 
 ; cp_flush_close is the panel's TEARDOWN (SPEC.md 31.8), so it is also where
@@ -6864,7 +6884,7 @@ cp_open_x:
     clc
     ret
 .beep:
-    call KERNEL_SEG:cw_snd_beep ; audible refusal (SPEC.md 34.3), which is
+    call ct_cw_snd_beep         ; audible refusal (SPEC.md 34.3), which is
     pop ax                      ; what every one of these call sites did with
     stc                         ; a CF=1 from app_launch before cp_open owned
     ret                         ; the decision
@@ -6880,7 +6900,7 @@ cp_open_x:
     mov al, 1
     mov bx, cp_opentab
     mov cx, CP_NOPEN
-    call KERNEL_SEG:toast_say
+    call ct_toast_say
     pop cx
     pop bx
     pop ax

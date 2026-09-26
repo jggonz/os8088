@@ -86,6 +86,7 @@ import os88build                                            # noqa: E402
 import os88sym                                              # noqa: E402
 from dotdel import PKG, bss, Probe, codeoff                 # noqa: E402
 import os88ui                                               # noqa: E402
+import os88marty                                            # noqa: E402
 
 MACHINE = "os8088_5150_herc_gla"
 GS = {0: "HOUSE", 1: "OUT", 2: "ROAM", 3: "FRIGHT", 4: "EYES"}
@@ -137,12 +138,32 @@ def leg_a(ui, p, say):
     return 0
 
 
+def guest_window(m, secs):
+    """Go round for what `secs` of an IDLE box bought - counted on the GUEST's
+    clock at os88marty.pace's rate, so a loaded box hands every leg the same
+    amount of game to sample and not a third of it. The host sleeps between
+    samples stay: they only set how often a leg looks. A clock that stops
+    moving raises, as every os88marty wait does, rather than looping on."""
+    budget = secs * (os88marty.GUEST_PACE or 4.5)
+    c0 = last = m.status()["cycles"]
+    moved = time.time()
+    while True:
+        c = m.status()["cycles"]
+        if c != last:
+            last, moved = c, time.time()
+        elif time.time() - moved > os88marty.GUEST_STALL:
+            raise os88marty.MartyError("the guest clock stopped at cycle %d "
+                                       "in a %gs sampling window" % (c, secs))
+        if (c - c0) / os88marty.GUEST_HZ >= budget:
+            return
+        yield
+
+
 def leg_b(ui, p, say, secs=12.0):
     """A ghost sitting in the pen moves round it."""
     m = ui.m
     tiles = {}
-    t0 = time.time()
-    while time.time() - t0 < secs:
+    for _ in guest_window(m, secs):
         m.pause()
         for g in range(4):
             if p.b("dd_gs", g) == GS_HOUSE:
@@ -177,7 +198,7 @@ def leg_c(ui, p, say, want=3, tries=10):
     while got < want and tries > 0:
         tries -= 1
         g = None
-        for _ in range(80):
+        for _ in guest_window(m, 16.0):
             m.pause()
             for i in range(4):
                 if p.b("dd_gs", i) == GS_ROAM:
@@ -196,9 +217,8 @@ def leg_c(ui, p, say, want=3, tries=10):
         m.go()
         tin = None
         pen = set()
-        t0 = time.time()
         verdict = None
-        while time.time() - t0 < 40:
+        for _ in guest_window(m, 40.0):
             m.pause()
             st = p.b("dd_gs", g)
             tick = p.w("dd_anim")
@@ -248,7 +268,7 @@ def leg_d(ui, p, say, ticks=40):
     m.write(idle, ticks.to_bytes(2, "little"))   # os88ui.boot turns it off
     m.go()
     up = 0
-    for _ in range(160):
+    for _ in guest_window(m, 40.0):
         m.pause()
         up = m.read(sv, 1)[0]
         m.go()
@@ -267,7 +287,7 @@ def leg_d(ui, p, say, ticks=40):
     hit = m.wait_stop(10.0)
     m.breakpoints([])
     m.go()
-    time.sleep(0.3)
+    os88marty.pace(m, 0.3)
     m.pause()
     still = m.read(sv, 1)[0]
     m.write(idle, was)
@@ -309,8 +329,7 @@ def settle_play(m, p, secs=6.0):
     in DIE and never calls dd_act_move - so a trial that starts there proves
     nothing about whatever it was testing.
     """
-    t0 = time.time()
-    while time.time() - t0 < secs:
+    for _ in guest_window(m, secs):
         m.pause()
         st = p.b("dd_state")
         m.write((p.seg << 4) + p.names["dd_lives"], bytes([99]))
@@ -370,8 +389,7 @@ def leg_e(ui, p, say, secs=7.0, tries=4):
             steer(m, p, dirn)
             cols = set()
             reset = False
-            t0 = time.time()
-            while time.time() - t0 < secs:
+            for _ in guest_window(m, secs):
                 m.pause()
                 c, r, st = p.b("dd_ac", 0), p.b("dd_ar", 0), p.b("dd_state")
                 no_hazard(m, p)
@@ -422,8 +440,7 @@ def leg_f(ui, p, say, tries=4):
         if not settle_play(m, p):       # nothing MOVES outside DDS_PLAY, so
             continue                    # a trial that starts in READY or DIE
         place(m, p, pc, pr)             # eats nothing and blames the eater
-        t0 = time.time()
-        while time.time() - t0 < 1.5:
+        for _ in guest_window(m, 1.5):
             m.pause()
             no_hazard(m, p)
             m.go()
@@ -543,8 +560,7 @@ def leg_h(ui, p, say, want=4):
     # AI drives Smiles round the board eating without being caught; a poked
     # [dd_want] in a real game walks him into a wall and then into a ghost, and
     # the only tone that comes back is dd_die's.
-    t0 = time.time()
-    while time.time() - t0 < 20.0:
+    for _ in guest_window(m, 20.0):
         m.pause()
         eaten, demo = p.w("dd_eaten"), p.b("dd_demo")
         m.go()
@@ -630,7 +646,13 @@ def main(argv):
         p = Probe(ui, names)
         fail += leg_h(ui, p, say)      # the DEMO is what it listens to, so it
         ui.m.key("Enter")              # goes before the game starts
-        time.sleep(3.0)
+        # Until READY is over, as tests/dotdel.py's leg C waits - this was a
+        # blind 13.5 guest seconds. The legs below say so if it never is.
+        try:
+            os88marty.until(ui.m, lambda _: p.b("dd_state") not in (0, 1),
+                            "READY to end", poll=0.1, limit=15)
+        except os88marty.MartyError:
+            pass
         ui.m.pause()
         ui.m.write((p.seg << 4) + names["dd_lives"], bytes([99]))
         ui.m.go()

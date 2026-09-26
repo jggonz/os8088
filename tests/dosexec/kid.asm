@@ -9,6 +9,10 @@
 ;     pointer in the parameter block arriving intact;
 ;   - it reads PSP:0016 and prints it as "has a parent" or not, which is the
 ;     one PSP field only a child has;
+;   - it CLOBBERS BP before it exits, which is SPEC.md 96.14.4's whole gate:
+;     the parent's INT 21h frame is BP-relative and nothing in the child's
+;     exit path restores it, so a probe that politely left BP alone kept this
+;     row green while every real child crashed the machine;
 ;   - and it exits 7, which the parent reads back through AH=4Dh.
 ;
 ; NOTHING HERE IS THIRD-PARTY. It is ours, MIT with the rest of the tree.
@@ -51,6 +55,15 @@ start:
     mov ah, 0x09
     int 0x21
 
+    ; **AND BP GOES WITH IT** (SPEC.md 96.14.4). `dos_prog_enter` does not set
+    ; BP, so a child that leaves it alone is running with the PARENT's - and
+    ; the gate's epilogue is BP-relative, right down to `mov sp, bp`. This
+    ; probe did leave it alone, so it inherited a BP that made the parent's
+    ; frame decode perfectly and the row was green while a real child - the
+    ; Playroom's 114KB game - walked the machine off the end of memory on its
+    ; way out. One instruction, and it is the whole of the assertion: if the
+    ; parent prints anything at all after this, BP was put back.
+    mov bp, 0xBAD1
     mov ax, 0x4C07                  ; ...and 7 is what AH=4Dh has to answer
     int 0x21
 

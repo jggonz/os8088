@@ -58,10 +58,7 @@ through completely different code:
     os88line, 6.9.3's classification and 6.9.2's compiler into a 5.6 kind-6
     pool slot.
 
-NAVIGATION IS weavesmoke's, IMPORTED AND NOT COPIED, and what flakes is its
-documented case: a double-click whose two presses straddle the kernel's
-9-tick window is seen as two first clicks, and on a loaded host that happens.
-Retry the navigation, never the assertions.
+NAVIGATION IS weavesmoke's, IMPORTED AND NOT COPIED.
 """
 
 import argparse

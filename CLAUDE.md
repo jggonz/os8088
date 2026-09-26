@@ -103,7 +103,8 @@ make bootdiag # WHY a BIOS answers `Disk error` and stops (§2.9.10). SIX
               # but not this. Nothing here ever writes to a disk
 make test-fast   # THE REGRESSION SUITE (docs/TESTING.md, tools/os88test.py,
 make test-full   #   tests/suite.py). Three tiers, each with an ENFORCED
-make test-soak   #   wall-clock budget — the runner FAILS a tier that
+make test-soak   #   budget CHARGED IN CPU, not wall clock, so a loaded box
+                 #   cannot fail it — the runner FAILS a tier that
                  #   overruns, so a row that no longer fits is a decision
                  #   somebody takes rather than a drift nobody notices.
                  #   fast ~2s, host-side only, and it already runs as part of
@@ -480,6 +481,8 @@ lands on a floppy:
 | `NOKDKBD=1` | leave `kern_dos`'s `int 09h` **exactly as DOS leaves it**: the ROM's own handler, unguarded (SPEC.md §96.50). The default carries §9.8's buffer guard, because the handoff's step 6 has to unhook `kbm_isr` — it sits at a `KERNEL_SEG` offset that is `kern_dos`'s image one instruction later — and nothing put anything back in its place. Reported off a 386: hold a direction key in a game that is busy drawing, the BIOS buffer fills, and the ROM's beep is longer than the typematic interval, so the next repeat overflows DURING the beep and it never stops. It is a knob because `kern_dos`'s whole promise is *"the machine with no operating system on it"* and the guard is a deliberate departure from it — MEASURED as such: a real IBM DOS 3.30 leaves `int 09h` at `F000:E987` and so did `kern_dos`, the same address to the byte. `tests/kdkbd.py` is the row |
 | `DOSRMARK=1` | trace SPEC.md §96.49's **live resume** on the glass: an info line through the ROM's teletype with every number the far jump depends on, then one character per stage of the stub, then one from the restored kernel (`kernel/hbmark.inc`). It is the one path on this machine that nothing can watch — no kernel, no task, no debugger hook — so a machine that stops in it is one still photograph and every stage looks identical from outside. **It reaches TWO assemblies and both are needed**: `kernel/hbstub.inc` is staged by `kernel/hiber.inc` for an ordinary resume and by `kerndos/kdresume.inc` for the DOS one, and neither host can reach the other's copy. `make DOSRMARK=1 kdostest` |
 | `DOSNETCARD=1` | force the DOS box's **cable translation** (SPEC.md §96.26) on a machine that HAS a card, which is the only way it can be driven at all — `net_find` prefers the card and §96.23's raw path is strictly better there, so the translation would otherwise never run anywhere an emulator can reach it. **It is stamped, and it has to be**: a knob with no stamp leaves an up-to-date `dos.bin` from the other arm, so `make ethertest DOSNETCARD=1` after a plain `make` silently ships the STOCK package and the row then tests the card path while reporting on the cable one. That is the standing warning below about knob kernels, one artefact along, and it was walked into on this knob's first use — two runs disagreed about whether an ARP reached the wire and both answers were correct for the build actually on the disk |
+| `LDDIAG=1` | put back the loader's **four failure reasons** - disk error, bad package, too large, refused to start - that a shipped kernel folds into one `Load failed` (kernel size pass 4, `files.inc`'s `fm_stattab`). None of the four is something a user acts on differently, so the shipped kernel spends no bytes telling them apart; this is how a developer does. The Disk window's toast and the Task Manager's then say which. `LD_EBIG` is not a memory verdict - it is a file whose image + bss exceeds `APP_MAX_SIZE`, which no RAM fixes - so only `LD_ENOMEM` reads `Out of memory` on either build |
+| `DRVDIAG=1` | a **diagnostic line** at the top-left of the loading screen, drawn from IRQ0 while the splash is up - for a machine that stops on `Loading Driver n/N`. `Drs cccc:iiii Fffff Mmm Qqqqq Ttttt` is `drv_boot`'s row and `drv_load_row`'s step (1 entry, 2 mounted, 3 found, 4 claimed, 5 read, 6 checked, 8 calling the driver, 9 returned, F done), the CS:IP and FLAGS the tick interrupted, the PIC mask, row 0's segment and the ISR's own count. **One photograph names the step**, says whether the code is in the BIOS, the kernel or the driver image, and - by whether the count still moves - whether IRQ0 is alive. It paints only on the splash, only with `spl_busy` free, and saves the pen; the shipped kernel is byte-identical |
 
 All are stamp-tracked, so changing one rebuilds the kernel. Without that, make
 sees an up-to-date `kernel.bin`, boots the previous configuration, and it reads
@@ -654,7 +657,8 @@ learned.
 - **Before spending a resident byte, ask whether the feature is an ON-DEMAND
   MODULE** (§2.8, `kernel/mod.inc`, docs/plans/completed/ONDEMAND-PLAN.md §1's
   test): kernel code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`,
-  `CLONE.DRV`, `HIBER.DRV`, and on kern_small `FILECP.DRV` and `FDLG.DRV`) and
+  `CLONE.DRV`, `HIBER.DRV`, on kern_big `DOCK.DRV` and `EXTD.DRV`, and on
+  kern_small `FILECP.DRV` and `FDLG.DRV`) and
   is read into a heap claim when the feature is asked for, freed when it is
   done. A feature qualifies when the system disk is already required to use
   it, or can be required without interrupting what the user was doing. When
@@ -666,7 +670,8 @@ learned.
   **docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md is what the mechanism
   REFUSES**, and it refused two of four candidates: `mod_need`'s own transitive
   cone is 155 symbols in 7 files, so a module inside it must be gated rather
-  than moved, and a layer with 33 entry points cannot fit `MOD_NENT`'s 7.
+  than moved. There is no entry cap (§2.8.1): a module's slot block is its
+  own entry count.
 - **A heap claim can MOVE, and the default is that it may not** (§66). A record
   is born `MC_RLOC` = 0, PINNED; `OSAPI_MEM_MOVABLE` opts one in and takes a
   relocation **proc**, not the address of the word naming the block — a holder
@@ -806,7 +811,14 @@ docs/TESTING.md is the authority on which emulator to reach for, and its
 opening currently argues MartyPC first — so expect it to disagree with the
 paragraph above.
 
-Three traps not written down elsewhere:
+Four traps not written down elsewhere:
+
+- **Never hand `/dev/null` to nasm as `-o` or `-l`.** A failed assembly
+  unlinks its `-o` target and `-l` replaces its target with a regular file, so
+  as root the device itself is replaced and everything after misbehaves
+  without naming the cause. Write to a temp file. `tests/unit/t_nulldev.py`
+  refuses the pattern in the tree; `stat -c %F /dev/null` must say
+  `character special file`.
 
 - **A knob kernel in `build/` is a different kernel to the symbol reader.**
   Every emulator row resolves kernel symbols through `tools/os88sym.py`, which

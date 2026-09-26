@@ -45,8 +45,7 @@
 ; disk layer reads. They cost nothing and are here rather than %included
 ; because pulling those three files in is exactly what this root is avoiding.
 MEM_P_FATW_N equ 8              ; one FAT window per volume (SPEC.md 18.8.4)
-MOD_NENT     equ 8              ; kernel/mod.inc's table, which diskw.inc
-FM_NENT      equ 4              ; sizes a run of words against
+FM_NENT      equ 4              ; diskw.inc's format module's entry count
 
 ; ...and the rest, LIFTED VERBATIM from the files that own them rather than
 ; re-derived, because a constant re-typed is a constant that drifts - which is
@@ -101,8 +100,6 @@ MOD_STAMP   equ 0               ; SPEC.md 2.8's build stamp: kern_dos builds
                                 ; no module, so there is nothing to stamp
 MOD_VER     equ 5
 
-MODFP_STRIDE equ MOD_NENT * 4   ; kernel/mod.inc's far-pointer stride, which
-                                ; diskw.inc's module header sizes against
 BUILD_NUM    equ 0              ; the About box's, which there is no About box
                                 ; for; SPEC.md 14.2 makes it the commit count
 
@@ -144,7 +141,15 @@ kd_nothing_far:
 
 ; The NEAR group.
 fpg_step:
+; ...and SPEC.md 2.6.2's cold-side trampolines, which the disk layer's `.cold`
+; sites NEAR-call in front of three of the far stubs above. In the kernel each
+; is `call KERNEL_SEG:<target> / ret`; here the target does nothing, so the
+; trampoline does nothing either and owes the near `ret` its callers push.
+ct_fpg_begin:
+ct_fpg_end:
+ct_cw_mem_disp:
 desk_zmark_x:
+desk_learn_x:                   ; ...and which diskette to draw (SPEC.md 26.4.1)
 fmv_gneed:
 fmv_mark:
 kd_nothing:
@@ -171,6 +176,7 @@ mod_drop:
 ; Decompression (SPEC.md 20.13) is for packages, drivers and the kernel's own
 ; modules.  A DOS program's file is bytes on a disk.
 lz_decomp_x:
+lz_decomp_big:
 kd_refuse:
     stc
     ret
@@ -261,6 +267,7 @@ fm_ldrv:      resw 1
 fm_lmok:      resb 1
 ld_pending:   resb 1
 mod_fp:       resw 1
+FMFP          equ mod_fp        ; diskw.inc's format stubs name their slot block
 ; **A WORD, BECAUSE THE READER READS A WORD** (SPEC.md 96.44.14). In the
 ; kernel this name is `dw 0` at 0060:0004, a word the LOADER writes after its
 ; canary has proved the FDC crossed a head and came back right; here nothing
@@ -289,6 +296,31 @@ section .cold
 ; a proc jumps into it at the rung matching how much it pushed. It is entered
 ; by a near JUMP and not a call, so it costs no stack - which is why the size
 ; pass could factor it at all.
+kentc_di:
+    ; STKBALANCE-NET: +6 - banks AX..DI on the CALLER's stack; its epilogue pops them
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, sp
+    push word [ss:di+10]
+    mov [ss:di+10], ax
+    mov di, [ss:di]
+    ret
+kentc_bp:
+    ; STKBALANCE-NET: +7 - banks AX..BP on the CALLER's stack; its epilogue pops them
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov bp, sp
+    push word [bp+12]
+    mov [bp+12], ax
+    mov bp, [bp]
+    ret
 kretc_es:         pop es
 kretc_bp:         pop bp
 kretc_di:         pop di
@@ -431,6 +463,9 @@ KD_RAH_L2   equ 2               ; 4 = 18 KB, 2 = 9 KB, 0 = gone. Two is under
                                 ; program has asked for the memory, and a cache
                                 ; that is not worth having beats one that is
                                 ; not there
+%if KD_RAH_L2 < 2 || KD_RAH_L1 < 2
+  %error "kd_shed may narrow the read-ahead to 0 or to a width of at least two, never one: dsk_rah_fill's page-straddle skip (SPEC.md 18.95.7.1) takes the NEXT slot, and at width one there is none"
+%endif
 
 ; kd_rahkb - what a width costs, in KB
 ; in:  AX = runs; out: AX = KB; clobbers AX (the output)

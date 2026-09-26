@@ -1697,202 +1697,17 @@ vid_ctx_init:
     retf                        ; FAR: kmain reaches this through OVLGATE1
 section .text
 
-; -----------------------------------------------------------------------------
-; vid_fsx_enter - one display, and the others dark (SPEC.md 39.18)
-;
-; in:       AL = the display the bracket runs on
-; out:      the machine describes itself as having ONE display, that one, at
-;           the virtual origin; every other card is blanked
-; clobbers: flags
-;
-; INSIDE A BRACKET THE MACHINE IS SINGLE-DISPLAY AGAIN, and that is the whole
-; design: every SPEC.md 53 contract - fsx_mode, the FSI block, fsx_wait,
-; FSXF_KEEPWORKER, FSXF_FASTTICK - is then exactly what it is today, and no
-; fsx app needs a line.
-;
-; [vid_kind] MOVES TO THAT DISPLAY'S ADAPTER, which is what makes it work
-; rather than merely look right: fsx_caps, fsx_mode and vid_setmode all read
-; it, and vid_apply then republishes the live block, the desktop words and
-; 39.16's chrome extent from vid_tab - one call, no second opinion.
-;
-; The others are BLANKED because nothing can maintain them: the kernel does
-; not run inside the bracket (53.1), so what a live card would show is a
-; frozen desktop. 39.11.4's argument, unchanged.
-; -----------------------------------------------------------------------------
-vid_fsx_enter:
-    cmp byte [vid_ndisp], 1
-    jbe .out                    ; one display: nothing here applies
-    push ax
-    push cx
-    push di
-    mov [fsx_vdisp], al
-    mov cl, [vid_kind]
-    mov [fsx_vkind], cl         ; the DESKTOP's adapter, to come back to
-    mov cl, [vid_ndisp]
-    mov [fsx_vndisp], cl
-
-    xor ch, ch                  ; ...dark every card but the bracket's
-.blank:
-    cmp ch, al
-    je .bnext
-    push ax
-    mov al, ch
-    call vid_kind_of
-    call vid_blank_kind
-    pop ax
-.bnext:
-    inc ch
-    cmp ch, cl
-    jb .blank
-
-    call vid_kind_of            ; ...and become that one
-    mov [vid_kind], al
-    call vid_apply              ; the live block, the desktop words and the
-                                ; chrome, all of it that display's
-    xor ax, ax                  ; consistent with the lie: one display, and
-    mov [vid_cur], al           ; it is at the virtual origin. Through AX: the
-    mov [vid_ox], ax            ; accumulator forms are 3 bytes where
-    mov [vid_oy], ax            ; `mov byte [m],imm8` is 5 and
-    inc ax                      ; `mov word [m],imm16` is 6. AL is spent - its
-    mov [vid_ndisp], al         ; last reader was the vid_kind_of above and the
-    pop di                      ; caller's AX is on the stack
-    pop cx
-    pop ax
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; vid_fsx_leave - the desktop's geometry back (SPEC.md 39.18)
-; in:       nothing
-; out:      the union, the primary's chrome, the records unchanged
-; clobbers: flags
-;
-; The records were never written inside the bracket, so this is vid_apply on
-; the desktop's own adapter plus 39.16's union - and NOT an unblank, which
-; owes the repaint first (39.18.1).
-; -----------------------------------------------------------------------------
-vid_fsx_leave:
-    cmp byte [fsx_vndisp], 1
-    jbe .out
-    push ax
-    mov al, [fsx_vkind]
-    mov [vid_kind], al
-    call vid_apply
-    call vid_equip              ; 40:10 BACK TO THE PRIMARY'S KIND, because a
-                                ; bracket on a COLOUR second display left it
-                                ; saying colour: vid_text's own arm flips it so
-                                ; that the ROM's mode set - and SPEC.md 96.33's
-                                ; teletype under it - reach the card the app is
-                                ; on (SPEC.md 39.19.4.1). vid_disp_init's
-                                ; .extend arm is this same three-call pattern
-                                ; for the same reason, and leaving the flag is
-                                ; what SPEC.md 39.20's Restart then reads
-    mov al, [fsx_vndisp]
-    mov [vid_ndisp], al
-    mov byte [vid_cur], 0
-    call vid_desk_union
-%ifdef DOCK_OPT
-    call dock_band              ; ...and the strip where the user put it (30.5)
-%endif
-    pop ax
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; vid_fsx_unblank - the dark monitors back, AFTER the repaint (SPEC.md 39.18.1)
-; in:       nothing
-; out:      every card lit again; [fsx_vndisp] spent
-; clobbers: flags
-;
-; AFTER wm_paint_all AND NOT BEFORE IT. Blanking gates the video SIGNAL and
-; not memory, so a blanked card's framebuffer still holds the desktop as it
-; was when the bracket started - minutes stale, on a monitor the user has not
-; been looking at. Unblanking first shows that frame and then paints over it;
-; repainting first means the card is only ever shown what is current.
-; -----------------------------------------------------------------------------
-vid_fsx_unblank:
-    cmp byte [fsx_vndisp], 1
-    jbe .out
-    push ax
-    push cx
-    push di
-    mov cl, [fsx_vndisp]
-    mov byte [fsx_vndisp], 1    ; one-shot: a bracket that set no mode and a
-    xor ch, ch                  ; second restore must not write these ports
-.d:
-    cmp ch, [fsx_vdisp]
-    je .next
-    mov al, ch
-    call vid_kind_of
-    call vid_unblank_kind
-.next:
-    inc ch
-    cmp ch, cl
-    jb .d
-    pop di
-    pop cx
-    pop ax
-.out:
-    ret
-
+; (vid_fsx_enter/leave/unblank: EXTD.DRV's EXT_FSX, kernel/extmod.inc -
+; SPEC.md 39.19.6. The three bytes below stay: fsx.inc reads none of them,
+; but a resident home costs nothing the image would not.)
 fsx_vdisp   db 0                ; the display a bracket is running on...
 fsx_vkind   db 0                ; ...the DESKTOP's adapter, banked across it
 fsx_vndisp  db 1                ; ...and how many displays there were. 1 means
                                 ; "no bracket state to undo", which is the
                                 ; boot value and what vid_fsx_unblank leaves
 
-; -----------------------------------------------------------------------------
-; vid_disp_desk - the desktop on every display but the primary
-;                 (SPEC.md 39.14.4)
-;
-; in:       nothing; the caller holds the gfx lock
-; out:      nothing
-; clobbers: flags
-;
-; wm_paint_all draws display 0's band itself - menu bar to dock, the call that
-; has always been there - and this is the rest. Each is ONE ground fill in
-; VIRTUAL coordinates, and GFXDISP is what puts it on the right card; nothing
-; here knows which card that is, or that there is more than one way to be a
-; framebuffer.
-;
-; A secondary display gets its ground WHOLE, because SPEC.md 39.14's chrome -
-; the menu bar, the dock, the drive column - lives on the primary alone.
-;
-; **IT IS thm_desk AND NOT gfx_fill_gray, AND THE NAME IS WHY IT WAS NOT**
-; (SPEC.md 76.2.1). This routine was called vid_disp_dither, SPEC.md 76.1's own
-; list of the four themed desktop sites NAMES it, and 76.2 says thm_desk
-; replaced gfx_fill_gray at all of them - and this one kept the dither, so
-; switching to Dark left the second monitor in Bright's ground for ever. A
-; routine whose name says DITHER does not read as a themed site to whoever is
-; converting them.
-;
-; This is the only caller in the kernel that draws in virtual coordinates.
-; Everything else is inside the chrome or inside a window, and both are on
-; display 0, where virtual and local are the same numbers (39.14.4).
-; -----------------------------------------------------------------------------
-vid_disp_desk:
-    cmp byte [vid_ndisp], 1
-    jbe .out
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov al, 1                   ; NOT A LOOP: VID_NDISP_MAX is 2 (the %if at
-                                ; its equ), the guard above has already
-                                ; returned for [vid_ndisp] <= 1, and display 0
-                                ; is wm_paint_all's own - so the general loop
-                                ; ran exactly once by construction
-    call vid_ctx_rect           ; AX/BX/CX/DX = its inclusive virtual rect
-    call thm_desk               ; the THEME's ground (SPEC.md 76.2), not a
-                                ; hard-coded dither
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.out:
-    ret
+; (vid_disp_desk, the second display's ground: EXTD.DRV's EXT_DESK,
+; kernel/extmod.inc - SPEC.md 39.19.6)
 
 ; -----------------------------------------------------------------------------
 ; vid_disp_of - which display holds the virtual point (AX, BX)? (SPEC.md 39.14)
@@ -2255,61 +2070,10 @@ vid_disp_init:
                                 ; vid_switch has just moved the primary
 
 .extend:
-    mov [vid_kind], al
-    call vid_apply              ; the live block is the SECONDARY's now...
-    call vid_setmode            ; ...which is what points this at the right
-                                ; card, and what makes its 32KB/16KB clear
-                                ; land on the right memory
-    mov al, 1
-    call vid_ctx_capture        ; bank it as display 1
-
-    mov [vid_kind], ah          ; ...and back. No vid_setmode: the primary is
-    call vid_apply              ; already in its mode with the splash on it
-    call vid_equip              ; 40:10 back to the primary's KIND, because
-                                ; vid_setmode's CGA path flipped it to colour
-                                ; and nothing else ever would (SPEC.md 39.11.2)
-    xor al, al
-    call vid_ctx_capture        ; a no-op today - vid_apply has just republished
-                                ; what vid_ctx_init banked - and 39.12's rule
-                                ; followed mechanically rather than reasoned
-                                ; about one instance at a time
-
-    mov al, 1                   ; --- and WHERE display 1 sits (SPEC.md 39.19.2)
-    call vid_ctx_ptr            ; The primary is at the origin either way, so
-                                ; one of the two words is 0 and the other is
-                                ; the primary's own extent - which vid_apply
-                                ; has just republished into the live block.
-                                ; Each arm writes BOTH words, so there is no
-                                ; pre-zero: the RIGHT arm overwrote it in both
-    cmp byte [vid_dlay], VID_L_BELOW
-    je .below
-    mov ax, [vid_cw]
-    mov [di+VID_CTX_VX], ax
-    mov ax, MBAR_H                    ; ...AND ITS TOP ROW IS THE DESKTOP'S,
-                                      ; not the screen's (SPEC.md 39.19.3).
-                                      ; The second monitor carries no menu
-                                      ; bar, so aligning its row 0 with the
-                                      ; primary's row 0 spends the first
-                                      ; MBAR_H of it on a band no straddling
-                                      ; window may enter - 20 of a CGA's 200
-                                      ; rows, 10%. Aligning it with the
-                                      ; DESKTOP BAND instead gives those rows
-                                      ; back and costs nothing: the dead zone
-                                      ; moves from below the card to above it
-                                      ; and does not grow, mou_clamp is
-                                      ; written against the union rather than
-                                      ; against a rectangle (39.15.4), and
-                                      ; ui_ylow already reads this very word
-    jmp short .placed
-.below:
-    mov word [di+VID_CTX_VX], 0
-    mov ax, [vid_ch]
-.placed:
-    mov [di+VID_CTX_VY], ax
-
-    mov byte [vid_cur], 0       ; the live block is display 0's again
-    mov byte [vid_ndisp], 2
-    call vid_desk_union         ; ...and the DESKTOP is both of them now
+    EXTCALL EXT_EXTEND          ; EXTD.DRV places display 1 (SPEC.md 39.19.6).
+    jc .single                  ; CF = 1 is mod_gone - no image, so this
+                                ; arrangement is Single after all, with AL/AH
+                                ; still the two kinds .single wants
 .out:
 %ifdef DOCK_OPT
     call dock_geom              ; vid_apply put the BOTTOM strip's band back

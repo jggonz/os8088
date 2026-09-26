@@ -80,32 +80,19 @@ FSIF_BANKED equ 4
 fsx_caps:
     push bx
     mov dl, [vid_kind]
-%ifdef KERN_BIG
-    cmp byte [vid_ndisp], 1     ; ...of the display the ASKED-ABOUT window is
-    jbe .kind                   ; on (SPEC.md 39.18.1). ONE DISPLAY covers a
-                                ; mode-setting bracket too, which is what
-                                ; collapsed the machine (39.18.3) and moved
-                                ; [vid_kind] to the bracket's own card - so
-                                ; there is no second test for that, and a
-                                ; SAME-MODE bracket, which does not collapse,
-                                ; correctly falls through and answers about
-                                ; the window it was handed
-    push ax
-    or bx, bx                   ; BX = 0: no window to ask about - an entry
-    jnz .win                    ; proc, or a caller that has none. Fall back
-    call wm_top                 ; to the frontmost, and to the primary below
-    or bx, bx                   ; if nothing is visible at all
-    jz .notop
-.win:
-    push di                     ; round wm_disp_of, which names DI -
-    call wm_disp_of             ; vid_kind_of banks its own.  The CENTRE, then
-    call vid_kind_of            ; the origin, then the primary (SPEC.md 39.17)
-    mov dl, al                  ; - so a straddling window belongs to the
-    pop di                      ; display holding more of it, the same rule
-.notop:                         ; and wm_zoom ask
-    pop ax
-.kind:
-%endif
+%ifdef KERN_BIG                 ; ...of the display the ASKED-ABOUT window is
+                                ; on (SPEC.md 39.18.1)
+    pushf                       ; IF = 0 across the module (SPEC.md 39.19.6.1):
+    cli                         ; a worker may ask this WITHOUT the lock, and
+                                ; a switch inside EXTD.DRV could let the panel
+                                ; drop the image under it. A few hundred cycles
+    mov ah, EXTF_CAPS           ; AX is an output, so AH is free for the
+    EXTCALL EXT_FSX             ; selector. BX = 0 is the frontmost window,
+    popf                        ; and the primary if nothing is visible; the
+%endif                          ; CENTRE, then the origin (SPEC.md 39.17) -
+                                ; EXTD.DRV's ext_fsx_caps. UNGATED: an app
+                                ; asks this once to grey a menu, and one
+                                ; display keeps DL = [vid_kind] (39.19.6)
     mov bl, dl
     xor bh, bh
     shl bx, 1
@@ -127,7 +114,7 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
 %endif
 
 ; -----------------------------------------------------------------------------
-; fsx_run - the bracket (SPEC.md 53.1, slot 0x02C8 via X stub)
+; fsx_run - the bracket (SPEC.md 53.1, slot 0x0235 via X stub)
 ;
 ; in:       AX = near entry inside the caller's image, BX = the caller's own
 ;           window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 =
@@ -346,9 +333,10 @@ fsx_restore:
     popf
     mov byte [fsx_cur], 0xFF
 %ifdef KERN_BIG
-    call vid_fsx_leave          ; the DESKTOP's shape back - the union, the
-                                ; primary's chrome - before anything draws on
-                                ; it (SPEC.md 39.18)
+    push ax                     ; the DESKTOP's shape back - the union, the
+    mov ah, EXTF_LEAVE          ; primary's chrome - before anything draws on
+    EXTCALL EXT_FSX             ; it (SPEC.md 39.18). EXTD.DRV's: with no image
+    pop ax                      ; there was never a second display to restore
 %endif
     call blk_relit              ; the bar and the strip really WERE overdrawn -
                                 ; an exclusive app owned the whole screen
@@ -358,8 +346,10 @@ fsx_restore:
                                 ; inside it destroys them; this is a caller
                                 ; that genuinely did
 %ifdef KERN_BIG
-    call vid_fsx_unblank        ; ...and only NOW the dark monitors, because a
-                                ; blanked card still holds the frame it was
+    push ax                     ; ...and only NOW the dark monitors, because a
+    mov ah, EXTF_UNBLANK        ; blanked card still holds the frame it was
+    EXTCALL EXT_FSX
+    pop ax
                                 ; blanked on and lighting it first shows that
                                 ; one (SPEC.md 39.18.1)
 %endif
@@ -411,15 +401,13 @@ fsx_mode:
     jae .fail
     mov bl, [vid_kind]          ; the caps bit - the same predicate the
 %ifdef KERN_BIG                 ; app's greying used (SPEC.md 47), and for
-    cmp byte [vid_ndisp], 1     ; THE DISPLAY THIS BRACKET IS ON rather than
-    jbe .kind                   ; the primary (SPEC.md 39.18.3/39.18.2). Once
-    push ax                     ; the collapse below has run there is only one
-    mov al, [fsx_wdisp]         ; display left and [vid_kind] IS that one, so
-    call vid_kind_of            ; a second fsx_mode call takes the short path.
-    mov bl, al                  ; NO DI BANK: vid_kind_of does its own, and
-                                ; nothing else here names DI
-    pop ax
-.kind:
+    mov ah, EXTF_KIND           ; THE DISPLAY THIS BRACKET IS ON rather than
+    EXTCALL EXT_FSX             ; the primary (SPEC.md 39.18.3/39.18.2). Once
+                                ; the collapse below has run there is only one
+                                ; display left and [vid_kind] IS that one, so a
+                                ; second fsx_mode call keeps BL - as does one
+                                ; display, mod_gone's answer. AH is free: the
+                                ; id is AL, and AX is restored at .out
 %endif
     xor bh, bh
     shl bx, 1
@@ -450,7 +438,8 @@ fsx_mode:
 %ifdef KERN_BIG
     push ax                     ; ...and ONLY NOW is the machine one display
     mov al, [fsx_wdisp]         ; with every other card dark (SPEC.md 39.18):
-    call vid_fsx_enter          ; a mode is about to be set, which makes every
+    mov ah, EXTF_ENTER          ; a mode is about to be set, which makes every
+    EXTCALL EXT_FSX
     pop ax                      ; other display's geometry meaningless. After
 %endif                          ; the caps test, so a REFUSED mode leaves the
                                 ; desktop exactly as it found it; idempotent,
@@ -524,7 +513,7 @@ fsx_mode:
     jmp kret_di
 
 ; -----------------------------------------------------------------------------
-; fsx_surf - the rect this bracket owns (SPEC.md 53.7.1, slot 0x03F8)
+; fsx_surf - the rect this bracket owns (SPEC.md 53.7.1, slot 0x0304)
 ;
 ; in:       nothing. Bracket-only, exclusive task only.
 ; out:      CF=0 with AX = x, BX = y, CX = w, DX = h - the surface the app may

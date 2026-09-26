@@ -44,7 +44,6 @@ row (docs/WRITING-TESTS.md 1):
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -59,6 +58,7 @@ os.environ["OS88_BUILD"] = "build/smallk"
 os.environ["OS88_DEFINES"] = "KERN_SMALL"
 
 import os88ui                                               # noqa: E402
+import os88marty                                            # noqa: E402
 import dispapps                                             # noqa: E402
 from harness import check, done                             # noqa: E402
 
@@ -103,7 +103,12 @@ def main(argv):
         ui.menu_pick("Game", "Play")
         m.advance(frames=300)
         m.run()
-        time.sleep(2)
+        try:                            # the shadow claimed and a frame drawn;
+            os88marty.until(            # the checks below say which did not
+                m, lambda _: word("tk_shseg") != 0 and word("tk_frames") > 0,
+                "the game to claim its shadow and draw", poll=0.2, limit=20)
+        except os88marty.MartyError:
+            pass
 
         check(word("tk_shseg") != 0,
               "the shadow claim was GRANTED on a %s machine" % a.machine,
@@ -149,7 +154,7 @@ def main(argv):
 
         f0 = word("tk_frames")
         s0 = m.fbuf(None)[2]
-        time.sleep(1.5)
+        os88marty.pace(m, 1.5)
         m.run()
         f1 = word("tk_frames")
         s1 = m.fbuf(None)[2]

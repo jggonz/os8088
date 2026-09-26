@@ -55,7 +55,6 @@ skip the READY check in um_attach (busy).
 """
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
@@ -140,29 +139,30 @@ class Rig(object):
         self.m.write(self.box + MB_REP,
                      bytes([btn & 0xFF, dx & 0xFF, dy & 0xFF, 0]))
         self.put(MB_REPN, 1)
-        if not until(lambda: self.mb(MB_REPN) == 0, "the model to hand the "
-                     "report to an IN token", 20.0, required=False):
+        if not until(self.m, lambda: self.mb(MB_REPN) == 0,
+                     "the model to hand the report to an IN token", 20.0,
+                     required=False):
             self.put(MB_REPN, 0)
             self.lost += 1
             return False
         # delivered: the feed follows within the same worker pass
-        until(lambda: self.m.read(self.a_btn, 1)[0] == (btn & 3)
+        until(self.m, lambda: self.m.read(self.a_btn, 1)[0] == (btn & 3)
               or (btn & 3) == self.m.read(S("mouse_btn"), 1)[0],
               "the report to reach the kernel", 5.0, required=False)
-        time.sleep(0.15)
+        os88marty.pace(self.m, 0.15)
         return True
 
 
-def until(cond, what, limit=30.0, required=True):
-    t0 = time.time()
-    while time.time() - t0 < limit:
-        if cond():
-            return True
-        time.sleep(0.05)
-    if required:
-        raise AssertionError("timed out after %.0fs waiting for %s"
-                             % (limit, what))
-    return False
+def until(m, cond, what, limit=30.0, required=True):
+    """os88marty.until with a bool answer: `limit` becomes a GUEST budget, so
+    a loaded box cannot cut a wait short and fail it as the driver's."""
+    try:
+        os88marty.until(m, lambda _: cond(), what, poll=0.05, limit=limit)
+        return True
+    except os88marty.MartyError as e:
+        if required:
+            raise AssertionError("timed out waiting for %s: %s" % (what, e))
+        return False
 
 
 def pos(m):
@@ -213,7 +213,7 @@ def leg_sim(fail):
 
         # --- plug ----------------------------------------------------------
         rig.put(MB_PLUG, K_MOUSE)
-        if not until(lambda: rig.state() == US_RUN, "US_RUN", 60.0,
+        if not until(m, lambda: rig.state() == US_RUN, "US_RUN", 60.0,
                      required=False):
             fail.append("plug: the worker never reached US_RUN (state %d, "
                         "bus resets %d, configs %d)" % (rig.state(),
@@ -264,7 +264,7 @@ def leg_sim(fail):
             fail.append("click: reports could not put the pointer on the "
                         "menu bar (it is at %r)" % (pos(m),))
         rig.post(1, 0, 0)
-        opened = until(lambda: m.read(S("menu_dropd"), 1)[0] != 0,
+        opened = until(m, lambda: m.read(S("menu_dropd"), 1)[0] != 0,
                        "a pull-down", 10.0, required=False)
         rig.post(0, 0, 0)
         if not opened:
@@ -276,7 +276,7 @@ def leg_sim(fail):
             if m.read(S("menu_dropd"), 1)[0]:
                 rig.post(1, 0, 0)
                 rig.post(0, 0, 0)
-            closed = until(lambda: m.read(S("menu_dropd"), 1)[0] == 0,
+            closed = until(m, lambda: m.read(S("menu_dropd"), 1)[0] == 0,
                            "the pull-down to close", 10.0, required=False)
             if not closed:
                 fail.append("click: the pull-down never closed - a release "
@@ -289,9 +289,9 @@ def leg_sim(fail):
         rig.post(1, 0, 0)
         held = m.read(S("mouse_btn"), 1)[0]
         rig.put(MB_PLUG, K_NONE)
-        idle = until(lambda: rig.state() == US_IDLE, "US_IDLE", 20.0,
+        idle = until(m, lambda: rig.state() == US_IDLE, "US_IDLE", 20.0,
                      required=False)
-        released = until(lambda: m.read(S("mouse_btn"), 1)[0] == 0,
+        released = until(m, lambda: m.read(S("mouse_btn"), 1)[0] == 0,
                          "the release", 5.0, required=False)
         say("unplug   held %d -> mouse_btn %d, state %d"
             % (held, m.read(S("mouse_btn"), 1)[0], rig.state()))
@@ -309,7 +309,7 @@ def leg_sim(fail):
         # --- a flash drive -------------------------------------------------
         cfg0 = rig.mb(MB_CONFIGS)
         rig.put(MB_PLUG, K_DISK)
-        other = until(lambda: rig.state() == US_OTHER, "US_OTHER", 60.0,
+        other = until(m, lambda: rig.state() == US_OTHER, "US_OTHER", 60.0,
                       required=False)
         say("disk     state %d, configs %d -> %d" % (rig.state(), cfg0,
                                                      rig.mb(MB_CONFIGS)))
@@ -319,14 +319,14 @@ def leg_sim(fail):
         if rig.mb(MB_CONFIGS) != cfg0:
             fail.append("disk: the driver CONFIGURED a flash drive")
         rig.put(MB_PLUG, K_NONE)
-        until(lambda: rig.state() == US_IDLE, "US_IDLE after the disk", 20.0,
-              required=False)
+        until(m, lambda: rig.state() == US_IDLE, "US_IDLE after the disk",
+              20.0, required=False)
 
         # --- poll mode -----------------------------------------------------
         rig.put(MB_NOSTAT, 1)
         m.write(rig.a_intok, bytes([UI_PROBE]))
         rig.put(MB_PLUG, K_MOUSE)
-        ran = until(lambda: rig.state() == US_RUN, "US_RUN in poll mode",
+        ran = until(m, lambda: rig.state() == US_RUN, "US_RUN in poll mode",
                     90.0, required=False)
         say("poll     state %d, intok %d" % (rig.state(), rig.intok()))
         if not ran:

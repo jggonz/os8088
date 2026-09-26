@@ -64,6 +64,10 @@ different question: *does the picture survive?*
                 b=json.load(open('after.json')); \
                 d=[k for k in a if a[k]!=b.get(k)]; \
                 print(d or 'identical'); sys.exit(1 if d else 0)"
+    # ...and the 5.25" pair of SPEC.md 26.4.1, which has no BEFORE to diff against - the sweep's own three
+    # assertions are the gate:
+    python3 tests/icoclip.py --entry icon_draw_ix \
+        --records ico_f525_32,ico_f525_14
 
 Four records, two adapters, eight phases, every clipped column - the dump is
 keyed `adapter/record/phase/column`, so a diff names the icon and the phase
@@ -190,7 +194,13 @@ def run(machine, tag, fbseg, fbsize, verbose, dump=None,
         for recname in records:
             rec = os88sym.linear(recname) - KB
             hdr = m.read(os88sym.linear(recname), 2)
-            ww, ih = hdr[0], hdr[1]
+            # An INDEXED record is its height and then its runs (SPEC.md
+            # 25.7.3): the width is the kind's constant and is not stored, so
+            # the header is one byte there and two on a plain record.
+            if entry == "icon_draw_ix":
+                ww, ih = 2, hdr[0]
+            else:
+                ww, ih = hdr[0], hdr[1]
             if not (1 <= ww <= 4 and 1 <= ih <= 64):
                 raise SystemExit("icoclip: %s reads as %dx%d words/rows, "
                                  "which is not an icon record - the symbol "

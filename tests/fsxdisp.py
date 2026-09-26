@@ -94,7 +94,6 @@ rather than off the card.
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -118,12 +117,32 @@ def lit(px):
 
 
 def fps(m, idx, secs=1.0):
-    """Frames the card produced in `secs` of wall clock. Zero is a card that
-    has stopped scanning, which is one of the two ways of being dark."""
+    """Frames the card produced in what `secs` of an idle box's wall clock
+    gives the guest (`pace`). Zero is a card that has stopped scanning, which
+    is one of the two ways of being dark."""
     a = [c for c in m.cards() if c["idx"] == idx][0]["frames"]
-    time.sleep(secs)
+    os88marty.pace(m, secs)
     b = [c for c in m.cards() if c["idx"] == idx][0]["frames"]
     return b - a
+
+
+def whole_frame(m, idx):
+    """Until the card has FINISHED a frame begun after now - two completed
+    frames on its own counter - so the buffer read next shows a port write
+    just made rather than the frame it landed in."""
+    def frames():
+        return [c for c in m.cards() if c["idx"] == idx][0]["frames"]
+    f0 = frames()
+    os88marty.until(m, lambda _: frames() >= f0 + 2,
+                    "card %d to finish a frame" % idx, poll=0.05, limit=10)
+
+
+def in_bracket(m, S, card):
+    """Until an fsx bracket is up ([fsx_task] armed) and its app has drawn
+    what it draws and gone to wait for the key that ends it."""
+    os88marty.until(m, lambda mm: mm.read(S("fsx_task"), 1)[0] != 0xFF,
+                    "the fsx bracket to open", poll=0.1, limit=15)
+    os88marty.settle(m, card=card)
 
 
 def vlit(m, kind):
@@ -155,10 +174,10 @@ def dark_lit(m, S, sec, say):
         return None
     cm = m.read(S("vid_cgamode"), 1)[0]
     m.outb(0x3D8, cm & ~8)
-    time.sleep(0.5)
+    whole_frame(m, sec["idx"])
     n = lit(m.fbuf(card=sec["idx"])[2])
     m.outb(0x3D8, cm)
-    time.sleep(0.5)
+    whole_frame(m, sec["idx"])
     back = lit(m.fbuf(card=sec["idx"])[2])
     say("a DARK %s reads %d lit (measured here: 3D8h <- %02X and back); "
         "the desktop is %d" % (sec["type"], n, cm & ~8, back))
@@ -316,7 +335,7 @@ def main(argv):
         # the one they can answer: the other monitor is still lit and still
         # scanning, rather than dark.
         m.key("KeyX")
-        time.sleep(2.5)
+        in_bracket(m, S, pri["idx"])
         nd_same = m.read(S("vid_ndisp"), 1)[0]
         f_same = fps(m, sec["idx"])
         n_same = lit(m.fbuf(card=sec["idx"])[2])
@@ -348,7 +367,7 @@ def main(argv):
                     "vga": "Digit7"}[pri["type"]]
         say("mode bracket via %s (primary is %s)" % (mode_key, pri["type"]))
         m.key(mode_key)
-        time.sleep(2.5)
+        in_bracket(m, S, pri["idx"])
         nd_mode = m.read(S("vid_ndisp"), 1)[0]
         f_during = fps(m, sec["idx"])
         n_during = lit(m.fbuf(card=sec["idx"])[2])

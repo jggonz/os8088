@@ -114,13 +114,26 @@ def collect(m, names, trigger, quiet=2.0, first=30.0, limit=80):
     base = m.sym("wm_wins")
     with os88marty.bp_trace(m, *names, regs=True, cap=limit) as tr:
         trigger()
-        seen, t0, last = 0, time.time(), time.time()
+        # `quiet` and `first` are idle-box seconds, spent as GUEST time -
+        # bp_count's rule, so a loaded box cannot cut an operation short
+        per = os88marty.GUEST_HZ * (os88marty.GUEST_PACE or 4.5)
+        cyc = lambda: int(m.status()["cycles"])         # noqa: E731
+        seen, c0 = 0, cyc()
+        last, moved = c0, (c0, time.time())
         while tr.n < limit:
+            now = cyc()
+            if tr.error is not None:
+                raise tr.error              # the pump died: say so
+            if now != moved[0]:
+                moved = (now, time.time())
+            elif time.time() - moved[1] > os88marty.GUEST_STALL:
+                raise os88marty.MartyError("the guest clock stopped while "
+                                           "a span was being collected")
             if tr.n != seen:
-                seen, last = tr.n, time.time()
-            elif seen and time.time() - last > quiet:
+                seen, last = tr.n, now
+            elif seen and (now - last) / per > quiet:
                 break                       # the operation has gone quiet
-            elif not seen and time.time() - t0 > first:
+            elif not seen and (now - c0) / per > first:
                 break                       # ...or it never started
             time.sleep(0.02)
     return [(h["name"], h["cycles"],
@@ -160,8 +173,8 @@ def sc_raise(m, mo):
     Prices the raise cache: wm_su_ck + wm_su_edge, then the blit (SPEC.md
     11.96/11.96.8). The dock tile, not the title bar - a cascaded window has no
     clickable title strip, and dock_click on a VISIBLE window is wm_front."""
-    mo.dblclick(*su.zone(m, 1)); time.sleep(4)
-    mo.dblclick(*su.zone(m, 0)); time.sleep(4)
+    mo.dblclick(*su.zone(m, 1)); su.idle(m)
+    mo.dblclick(*su.zone(m, 0)); su.idle(m)
     w = [x for x in su.windows(m) if x.visible]
     z = [i for i in sc.zorder(m) if i in [x.i for x in w]]
     by = {x.i: x for x in w}
@@ -176,8 +189,8 @@ def sc_dragoff(m, mo):
     """Two Disk windows; drag the front one OFF the other, which is 11.96.6's
     damage pass. Dragged AWAY on purpose: dragged the other way 11.91.2 finds the
     window underneath wholly re-covered and marks nothing at all."""
-    mo.dblclick(*su.zone(m, 1)); time.sleep(4)
-    mo.dblclick(*su.zone(m, 0)); time.sleep(4)
+    mo.dblclick(*su.zone(m, 1)); su.idle(m)
+    mo.dblclick(*su.zone(m, 0)); su.idle(m)
     w = [x for x in su.windows(m) if x.visible]
     z = [i for i in sc.zorder(m) if i in [x.i for x in w]]
     by = {x.i: x for x in w}
@@ -216,9 +229,9 @@ def sc_paintraise(m, mo):
     Before 11.96.10 a raise armed no rect at all, so OSAPI_WM_DAMAGE answered
     "whole" and the canvas was blitted entire however little of it had been
     covered. Needs build/pttest.img (tools/ptcheck.py's docstring)."""
-    mo.dblclick(*su.zone(m, 1)); time.sleep(4)
+    mo.dblclick(*su.zone(m, 1)); su.idle(m)
     disk = [w for w in su.windows(m) if w.visible][0]
-    mo.dblclick(*su.row(disk, PTROW)); time.sleep(45)
+    mo.dblclick(*su.row(disk, PTROW)); su.idle(m)
     pt = [w for w in su.windows(m) if w.visible
           and w.title.upper().startswith("PAINT")]
     if not pt:
@@ -238,9 +251,9 @@ def sc_paint(m, mo):
     Needs build/pttest.img - see tools/ptcheck.py's docstring for how to build
     it. `paintraise` below is the RAISE half, which priced nothing until
     SPEC.md 11.96.10 gave wm_raise a rect to arm."""
-    mo.dblclick(*su.zone(m, 1)); time.sleep(4)
+    mo.dblclick(*su.zone(m, 1)); su.idle(m)
     disk = [w for w in su.windows(m) if w.visible][0]
-    mo.dblclick(*su.row(disk, PTROW)); time.sleep(45)
+    mo.dblclick(*su.row(disk, PTROW)); su.idle(m)
     pt = [w for w in su.windows(m) if w.visible
           and w.title.upper().startswith("PAINT")]
     if not pt:
@@ -262,10 +275,10 @@ def _sol_up(m, mo):
     """Solitaire off soltest.img (root row 0), with the Disk window it came
     from still open - which is the second window everything below needs."""
     mo.dblclick(*su.zone(m, 1))
-    time.sleep(4)
+    su.idle(m)
     disk = [w for w in su.windows(m) if w.visible][0]
     mo.dblclick(*su.row(disk, 0))
-    time.sleep(25)
+    su.idle(m)
     sol = [w for w in su.windows(m) if w.visible
            and w.title.upper().startswith("SOL")]
     if not sol:

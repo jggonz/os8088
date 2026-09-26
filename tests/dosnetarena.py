@@ -45,7 +45,6 @@ import os
 import struct
 import subprocess
 import sys
-import time
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -130,8 +129,9 @@ def main():
 
     if os.path.exists("build/qemu.pid"):
         try:
-            os.kill(int(open("build/qemu.pid").read().strip()), 15)
-            time.sleep(1.0)
+            pid = int(open("build/qemu.pid").read().strip())
+            os.kill(pid, 15)
+            os88qemu.gone(pid)
         except (OSError, ValueError):
             pass
     for f in ("build/qmp.sock", "build/qemu.pid"):
@@ -147,13 +147,12 @@ def main():
     fails = FAILS
     try:
         # --- the card has to be THERE, or this row asserts nothing ---------
-        seg = 0
-        for _ in range(150):
-            time.sleep(0.4)
-            seg = u16(m.read(eth.S("drv_tab") + eth.ETH_ROW * eth.DRVR_SZ
-                             + eth.DRVR_SEG, 2))
-            if seg:
-                break
+        # Every wait in this row is in the GUEST's seconds (tests/os88qemu.py).
+        drvrow = (eth.S("drv_tab") + eth.ETH_ROW * eth.DRVR_SZ
+                  + eth.DRVR_SEG)
+        os88qemu.acted(m, lambda: u16(m.read(drvrow, 2)) != 0, secs=60,
+                       what="ETHER.DRV's drv_tab row", poll=0.4)
+        seg = u16(m.read(drvrow, 2))
         if not seg:
             fail("ETHER.DRV never attached - no card was found, or "
                  "SYSTEM.CFG did not ask for it. The whole quantity this row "
@@ -165,7 +164,16 @@ def main():
         wins = dispcp.win_list(m, eth.S)
         wx, wy = dispcp.win_rect(m, eth.S, wins[-1])[:2]
         dispcp.open_named(m, mouse, eth.S, eth.settle, wx, wy, PROG)
-        time.sleep(4.0)
+        # the program up and on int 16h. It prints READY on the text screen
+        # under the bracket and its next instruction is the int 16h, so that
+        # word is the state - and the four guest seconds this used to sleep
+        # are the bound, should the screen not be readable from here
+        up = os88qemu.acted(m, lambda: b"READY" in m.read(0xB8000,
+                                                          4000)[::2],
+                            secs=4.0, what="DOSPKT's READY", poll=0.25)
+        say("dosnetarena: %s" % ("the program is up (READY on its screen)"
+                                 if up else "no READY seen in 4 guest "
+                                 "seconds - going on as the sleep did"))
         dm = dosmap.package()
 
         def base():
@@ -218,10 +226,8 @@ def main():
         # it. Without this the Setup click lands on the program's screen and
         # the arena row is read out of a page that has never been painted.
         m.hmp("sendkey ret")
-        for _ in range(60):
-            time.sleep(0.5)
-            if pkg_seg(m):
-                break
+        os88qemu.acted(m, lambda: pkg_seg(m) is not None, secs=30,
+                       what="the DOS window", poll=0.5)
         eth.settle(m)
         mouse.click(*dosmap.centre(m, pkg_seg(m), dm, "dos_erect"))
         eth.settle(m)
@@ -248,7 +254,19 @@ def main():
         mouse.click(*dosmap.centre(m, pkg_seg(m), dm, "dos_trect"))
         eth.settle(m)
         mouse.click(*dosmap.centre(m, pkg_seg(m), dm, "dos_rrect"))
-        time.sleep(8.0)
+
+        # Run is a relaunch: the card unmounted and the arena sized again.
+        # Both are the guest's own words, so they are what is waited for; an
+        # arena that does NOT move is the failure below, and then this spends
+        # the eight seconds the old sleep did.
+        def relaunched():
+            sg = pkg_seg(m)
+            return bool(sg) and not u16(m.read(drvrow, 2)) and \
+                u16(m.read((sg << 4) + dm["dos_akb"], 2)) != got
+        if os88qemu.acted(m, relaunched, secs=8, what="the relaunch",
+                          poll=0.25):
+            os88qemu.quiesce(m, lambda: word("dos_akb"), secs=0.25,
+                             what="the relaunched arena")
         got2 = word("dos_akb")
         say("dosnetarena: Network CLEARED - page ~%d K, program got %d K"
             % (promised2, got2))

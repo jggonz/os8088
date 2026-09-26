@@ -134,6 +134,17 @@ def toast(m):
     return raw.split(b"\0")[0].decode("latin-1")
 
 
+BUSY = "Compressing"            # the toast Compress raises FIRST and leaves up
+                                # for the whole operation (SPEC.md 22.22.6) -
+                                # which is not the verdict this waits for
+
+
+def verdict(m):
+    """The toast, unless it is only Compress saying it has started."""
+    t = toast(m)
+    return "" if t.startswith(BUSY) else t
+
+
 def cz(body, u):
     """The 'CZ' container the verb must write (SPEC.md 20.14)."""
     return (b"CZ" + bytes([os88lz.LZB, 0])
@@ -268,7 +279,7 @@ def compress(m, mo, wx, wy, name, fails, quiet=30, item=FM_ICOMP):
     menu_pick(m, mo, 1, item)               # cell 0 is the chip, 1 is File
     c0 = int(m.status()["cycles"])
     try:
-        os88marty.until(m, lambda mm: toast(mm),
+        os88marty.until(m, lambda mm: verdict(mm),
                         "File > %s on %s to say something"
                         % ("Uncompress" if item == FM_IUNCOMP else "Compress",
                            name),
@@ -276,7 +287,7 @@ def compress(m, mo, wx, wy, name, fails, quiet=30, item=FM_ICOMP):
         if os.environ.get("LZCOMP_TIME"):
             say("   [%s took %.1f guest s of %d]"
                 % (name, (int(m.status()["cycles"]) - c0) / 4772727.0, quiet))
-        return toast(m)
+        return verdict(m)
     except os88marty.MartyError:
         pass
     fails.append("%s: nothing was said in %d guest seconds - the verb never "
@@ -546,7 +557,7 @@ def main():
 
         mo.rmenu(rx, ry, 0, 0, aim=aim)
         try:
-            os88marty.until(m, lambda mm: toast(mm),
+            os88marty.until(m, lambda mm: verdict(mm),
                             "the context menu's Uncompress to say something",
                             poll=0.1, guest=30.0)
         except os88marty.MartyError:

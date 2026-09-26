@@ -43,15 +43,16 @@ beside a 640x200 CGA, Hercules primary, Extend / Right:
      half that matters, because the frame is not the pixels (SPEC.md
      39.16.3.1): a window can be handed a smaller box and go on drawing the
      larger face into it, which reads as correct in the record and as residue
-     on the glass. apps/modplug is the consumer, its two faces being the
-     tree's own hand-built version of this idea (SPEC.md 56.4).
+     on the glass. apps/tracker is the consumer (SPEC.md 45.21.1), its two
+     faces being the full and the compact windowed layout. It was ModPlug's
+     (SPEC.md 56.4) until ModPlug was RETIRED (SPEC.md 56.15).
 
      THE CAPTURE IS THE ONE PART OF THIS FILE THAT IS NOT ARITHMETIC, and it
      was getting all three of a capture's questions wrong at once - see
      cardof() for the card, and the block itself for the tuple, the width and
      the pointer. What it reported was the menu bar's CLOCK on the card the
      window is NOT on, once a guest minute. steady() is the one thing it needs
-     that the rest of the tree's capture gates do not: ModPlug is not an inert
+     that the rest of the tree's capture gates do not: Tracker is not an inert
      subject and cannot be swapped for one, so the capture is taken with the
      drawing lock FREE rather than whenever the host asked.
 
@@ -113,7 +114,7 @@ def ctx(m, d):
 
 def bank(m, slot):
     """The rect this window goes back to when the screen changes (39.11.2.1)."""
-    b = m.read(S("wm_natr") + slot * NR_SIZE, NR_SIZE)
+    b = m.read(os88sym.wfield(slot, "W_NATR"), NR_SIZE)
     return u16(b, 0), u16(b, 2), u16(b, 4), u16(b, 6)
 
 
@@ -154,6 +155,10 @@ def cardof(m, cards, c):
 def steady(m, card, tries=60):
     """A capture taken with the DRAWING LOCK FREE, which is the only kind
     worth diffing when the subject is not inert.
+
+    WRITTEN FOR MODPLUG, which was leg C's subject until it was RETIRED
+    (SPEC.md 56.15); Tracker is now, and the account below is ModPlug's. The
+    lock-free capture is kept because it is exact whatever the subject draws.
 
     ModPlug cannot be swapped for an inert subject the way dispcorner swapped
     in the Calculator - it IS the package that declares a size per adapter
@@ -346,14 +351,14 @@ def main(argv):
         dispcp.open_named(m, mo, S, settle, wx, wy, "APPS", card=pri)
         settle(m, card=pri)
         wx, wy, _, _ = dispcp.win_rect(m, S, slot)
-        dispcp.open_named(m, mo, S, settle, wx, wy, "MODPLUG.O88", card=pri)
+        dispcp.open_named(m, mo, S, settle, wx, wy, "TRACKER.O88", card=pri)
         settle(m, card=pri)
         sl = [s for s in dispcp.win_list(m, S) if s not in (slot, sol)]
         if not sl:
-            sys.exit("dispsize: ModPlug did not open")
+            sys.exit("dispsize: Tracker did not open")
         sl = sl[-1]
         x, y, w, h = dispcp.win_rect(m, S, sl)
-        say("ModPlug on the Hercules        (%4d,%3d) %3dx%d" % (x, y, w, h))
+        say("Tracker on the Hercules        (%4d,%3d) %3dx%d" % (x, y, w, h))
         full = h
         cy = y + TITLE_H // 2
         mo.drag(x + w // 2, cy, seam + 30 + w // 2, cy)
@@ -414,13 +419,13 @@ def main(argv):
             say("...it did NOT follow the card: %d -> %d -> %d"
                 % (full, h2, h3))
             if a.gate:
-                fail.append("C: ModPlug declares two faces and stayed %d rows "
+                fail.append("C: Tracker declares two faces and stayed %d rows "
                             "on a card that cannot show them "
                             "(WINDOW-SIZING-PLAN 3.4)" % h2)
 
         # --- D: the floor, and the snap that keeps it on screen -------------
         print("\nD. a MINIMUM the clamp may not cut through (SPEC.md 11.100.2)")
-        mo.click(x3 + w3 // 2, y3 + TITLE_H // 2)   # ModPlug out of the way
+        mo.click(x3 + w3 // 2, y3 + TITLE_H // 2)   # Tracker out of the way
         settle(m, card=pri)
         mo.drag(x3 + w3 // 2, y3 + TITLE_H // 2, 60 + w3 // 2,
                 y3 + TITLE_H // 2)
@@ -502,7 +507,7 @@ def main(argv):
             def pshow(tag, f):
                 x, y, w, h = dispcp.win_rect(m, S, pslot)
                 say("%-30s (%4d,%3d) %3dx%-3d pkind=%d  %s"
-                    % (tag, x, y, w, h, m.read(S("wm_pkind") + pslot, 1)[0],
+                    % (tag, x, y, w, h, m.read(os88sym.wfield(pslot, "W_PKIND"), 1)[0],
                        "  ".join("%s=%d" % (k, f[k]) for k in names)))
                 return x, y, w, h
 

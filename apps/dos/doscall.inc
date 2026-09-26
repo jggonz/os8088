@@ -61,7 +61,15 @@ CORE_ORG    equ 0x0080
 ; opposite sides, so growing either one costs the other. This is a rung the
 ; CORE alone spends, both hosts read, and whose slack is one number in one
 ; place. Measured at the wave, with the assertion in `apps/dos/doscore.asm`.
-CORE_MAX    equ 15872            ; +1024 for SPEC.md 96.11.7's character
+CORE_MAX    equ 16384            ; +512 for SPEC.md 96.7.2's stack swap and
+                                ; 96.12.5's name truncation, which are 214
+                                ; bytes between them against 89 of slack. The
+                                ; two are the Playroom's whole report: a gate
+                                ; frame on the program's stack was scribbling
+                                ; on the free block's MCB, and a name that is
+                                ; not 8.3 was refused where DOS truncates.
+                                ; 387 left.
+                                ; +1024 for SPEC.md 96.11.7's character
                                 ; devices, on the owner's call: *"raise the
                                 ; image by a kb for now, and we will optimize
                                 ; afterwards. Working at all is most

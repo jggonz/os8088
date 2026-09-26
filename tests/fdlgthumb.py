@@ -28,7 +28,6 @@ import subprocess
 import os
 import re
 import sys
-import time
 
 sys.path.insert(0, "tools")
 import os88build as _B
@@ -219,7 +218,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
     was = scrl(m)
     mo.to(cx, top + h // 2)
     mo._edge(True)
-    time.sleep(0.8)
+    M.pace(m, 0.8)                      # ...a window for "nothing yet" too
     check("a press on the thumb starts a gesture", dragon(m) == 1)
     check("...and scrolls nothing yet", scrl(m) == was,
           f"(fdlg_scrl {scrl(m)}, was {was})")
@@ -231,7 +230,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
     # --- B/C: drag DOWN ----------------------------------------------------
     target = y2 - SBCELL - 1 - h // 2
     mo.to(cx, target, l=True)
-    time.sleep(1.2)
+    M.pace(m, 1.2)
     after = dragpos(m)
     t2 = thumb(ksb(m))
     check("...the element tracked it", after > 0, f"(pos {after})")
@@ -247,7 +246,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
 
     # --- D: x is never read -------------------------------------------------
     mo.to(cx - 150, target, l=True)
-    time.sleep(1.2)
+    M.pace(m, 1.2)
     check("x is never read: 150px off the bar is the same pos",
           dragpos(m) == after, f"({dragpos(m)} vs {after})")
 

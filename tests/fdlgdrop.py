@@ -31,7 +31,6 @@ first half rather than pass the second.
 import os
 import re
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 # kern_small ONLY - the module does not exist on kern_big, where fdlg.inc is
@@ -153,7 +152,14 @@ with M.launch("build/small360.img", apps="build/muptest.img",
               held() != 0, f"(seg={held():04X})")
         act(d)
         M.settle(m)
-        time.sleep(1.5)                 # a UI pass or two past the dismissal
+        # A UI pass or two past the dismissal, bounded by the GUEST time an
+        # idle box's 1.5 s used to buy.
+        try:
+            M.until(m, lambda _m: held() == 0 and dlg() is None,
+                    "the image given back", poll=0.2,
+                    limit=1.5 * M.GUEST_PACE / M.GUEST_BUDGET_RATIO)
+        except M.MartyError:
+            pass                        # the checks below say which half
         check(f"{label}: ...and given back when it ends",
               held() == 0, f"(seg={held():04X})")
         check(f"{label}: the dialog really did close", dlg() is None)
@@ -161,7 +167,7 @@ with M.launch("build/small360.img", apps="build/muptest.img",
     def press(pt):
         mo.to(*pt)
         mo._edge(True)
-        time.sleep(0.4)
+        M.pace(m, 0.4)
         mo._edge(False)                 # SPEC.md 13.8.3: buttons fire on the
                                         # release, so a plain click is wrong
 
@@ -174,7 +180,7 @@ with M.launch("build/small360.img", apps="build/muptest.img",
     # would read exactly like a leak.
     def commit(d):
         mo.click(*row(d, 0))
-        time.sleep(0.6)
+        M.pace(m, 0.6)
         press(btn(d, 1))
 
     dismiss("Open button", commit)

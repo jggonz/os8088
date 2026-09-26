@@ -44,7 +44,6 @@ pointer clamped so every click after it lands somewhere else.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -62,6 +61,17 @@ from blitpair import gif_pixels, BLITS                        # noqa: E402
 
 S = os88sym.linear
 BAND_KB = 8                 # the band cache measures 3 KB, the whole content 9
+
+
+def idle(m):
+    """Until Paint - or whatever the gesture started - has finished: the
+    drive quiet, the gfx lock free (a canvas operation can hold it for
+    seconds with nothing new on the glass), and then the screen still."""
+    os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                      what="the drive to go quiet")
+    os88marty.until(m, lambda mm: mm.read(S("gfx_lock_flag"), 1)[0] == 0,
+                    "the gfx lock to be free", poll=0.2, limit=60)
+    os88marty.settle(m)
 
 
 def main():
@@ -110,7 +120,7 @@ def main():
             sys.exit("paintsu: the canvas never blitted through %s"
                      % " or ".join(BLITS))
         ox, oy = geom[0], geom[1]
-        time.sleep(6)
+        idle(m)
 
         # --- WHAT IS ON THE GLASS BEFORE ANYTHING IS COVERED ---------------
         # WITHOUT THIS THE ROW BLAMES THE CACHE FOR WHAT THE DRAW GOT WRONG,
@@ -166,7 +176,7 @@ def main():
                      limit=120.0, required=False)
         print("   the raise cache asks for %s KB"
               % ("?" if want is None else want))
-        time.sleep(6)
+        idle(m)                         # the panel's open, to its last paint
 
         # --- UNCOVER: is the canvas redrawn?
         wide = None
@@ -186,7 +196,7 @@ def main():
             # the picture back - so a timeout here is an answer, not a failure.
             tr.until(lambda: wide is not None, "a canvas-sized blit",
                      limit=60.0, required=False)
-        time.sleep(8)
+        idle(m)
         mo.to(4, 4)
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)

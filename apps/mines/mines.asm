@@ -973,7 +973,7 @@ mn_draw_status:
 ; every background task for as long as the reader left the credits up.
 
 ; -----------------------------------------------------------------------------
-; mn_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; mn_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ;

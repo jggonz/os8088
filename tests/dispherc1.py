@@ -31,7 +31,6 @@ script anyway - it is the whole arrangement in one run, and it is the control
 that says the KERNEL-SIDE state is right when the glass is not.
 """
 import sys
-import time
 
 import os
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
@@ -102,7 +101,8 @@ def main():
         dispcp.set_primary(m, mo, S, os88marty.settle, slot, card=sec)
         report(m, "...and the HERCULES made primary", cards)
         dispcp.close_panel(m, mo, S, os88marty.settle, card=sec)
-        time.sleep(2)
+        os88marty.settle(m, card=sec)   # report() counts pixels on both
+        os88marty.settle(m, card=pri)
         report(m, "panel closed", cards)
 
         # --- and a DRAG must not put the dock on the second monitor --------

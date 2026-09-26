@@ -1888,6 +1888,20 @@ down in three places each of which was read *after* the wrong conclusion — so
 
 ### 15.12 The `OSAPI_FILE_TRUNC` option — measured, and REFUSED for now
 
+**SUPERSEDED: a truncate SHIPPED, at 106 bytes and not 285** (SPEC.md
+18.4.7.5). The second consumer this section asked for arrived — streamed
+Compress (SPEC.md 22.22.5) writes past a cut it cannot know in advance — and
+the door that fit was not a slot of its own but `OSAPI_FILE_WRITE_AT` with a
+count of 0, which is DOS's own spelling and which that body was already
+refusing *after* doing every part of the lookup a truncate needs. So the 271
+bytes below were mostly a second copy of `dskw_wabody`'s front, and the 14 of
+cell and thunk are not spent at all. `kern_big` only, like the door. **The DOS box
+uses it** (SPEC.md 96.11.6.2): the new end rounded down to a cluster, the file
+cut there, the kept part of that cluster appended back — 52 package bytes, no
+temporary and no free space - and on `kern_small` or a redirected volume the
+cut refuses before touching the file and the copy below still runs. The
+costing below is kept as written.
+
 `AH=40h` with `CX=0` is *"the file ends HERE"* (SPEC.md 96.11.6.2), and the
 shrinking direction is the one thing in the DOS box's file layer that no
 published slot can do: `OSAPI_FILE_WRITE_AT` grows a file to the end of what

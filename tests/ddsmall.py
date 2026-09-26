@@ -166,8 +166,13 @@ def run(tag, machine, why, image, apps):
             check(False, "%s: the window opens" % tag,
                   "- %s" % str(e).splitlines()[0][:120])
             return
-        os88marty.guest_sleep(m, 3)
         p = DD.Probe(ui, names)
+        # the layout and the board claim going still, where this was a blind
+        # three guest seconds
+        layout = lambda: tuple(p.w(n) for n in (
+            "dd_ok", "dd_bdseg", "dd_tw", "dd_th", "dd_cw", "dd_ch"))
+        os88marty.quiesce(m, layout, guest=0.5,
+                          what="Dot Delirium's layout")
         check(True, "%s: the window opens" % tag,
               "(package segment 0x%04X)" % p.seg)
 
@@ -206,8 +211,12 @@ def run(tag, machine, why, image, apps):
         # --- E: fullscreen re-cuts the board, and Escape puts it back ------
         tile0 = (p.w("dd_tw"), p.w("dd_th"))
         m.key("KeyF")
-        # the re-cut is a claim, a regrow and a whole repaint of a bigger board
-        os88marty.guest_sleep(m, 10)
+        # the re-cut is a claim, a regrow and a whole repaint of a bigger
+        # board: the tile moving and dd_full clearing is that being done
+        # (tests/dotdel.py's leg E), inside the 10 guest seconds it was given
+        wait_for(m, lambda: (p.w("dd_tw"), p.w("dd_th")) != tile0
+                 and p.b("dd_full") == 0, 10)
+        os88marty.quiesce(m, layout, guest=0.5, what="the re-cut")
         big = (p.w("dd_tw"), p.w("dd_th"))
         check(p.b("dd_ok") == 1 and p.w("dd_bdseg") != 0 and big > tile0,
               "%s: fullscreen re-cuts the board BIGGER" % tag,
@@ -221,7 +230,9 @@ def run(tag, machine, why, image, apps):
                  else "UNKNOWN - the claim sum exceeds the arena, so this "
                       "reading is not to be quoted"))
         m.key("Escape")
-        os88marty.guest_sleep(m, 10)
+        wait_for(m, lambda: (p.w("dd_tw"), p.w("dd_th")) == tile0
+                 and p.b("dd_full") == 0, 10)
+        os88marty.quiesce(m, layout, guest=0.5, what="the re-cut")
         check(p.b("dd_ok") == 1 and (p.w("dd_tw"), p.w("dd_th")) == tile0,
               "%s: Escape puts the windowed board back" % tag,
               "(tile %dx%d)" % (p.w("dd_tw"), p.w("dd_th")))

@@ -4,7 +4,6 @@
 Run after `make`: python3 tests/fontview.py [machine]
 """
 import sys
-import time
 
 sys.path[:0] = ["tools", "tests"]
 import os88marty
@@ -48,6 +47,13 @@ def fv_state(m, base):
                 textlen=b[o("fv_textlen")])
 
 
+def fv_quiet(m, base):
+    """Until the viewer's state AND the drive both stop moving: a face load is
+    disk reads between which the state bytes can sit still."""
+    os88marty.quiesce(m, lambda: (fv_state(m, base), m.disk().get("reads")),
+                      guest=1.0, what="the face load to finish")
+
+
 fails = []
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
                       machine=MACHINE) as m:
@@ -74,7 +80,11 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     wx, wy, _, _ = dispcp.win_rect(m, S, slot)
     before = dispcp.win_list(m, S)
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "CHARTER.F88")
-    time.sleep(3)
+    try:
+        os88marty.until(m, lambda _: len(dispcp.win_list(m, S)) > len(before),
+                        "the viewer's window", poll=0.2, limit=15)
+    except os88marty.MartyError:
+        pass                            # ...and the next line says so
     after = dispcp.win_list(m, S)
     if len(after) <= len(before):
         raise SystemExit("fontview: CHARTER.F88 opened no new window")
@@ -83,6 +93,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     seg = package_segment(m, fvslot)
     image_end = u16(m.read(seg * 16, 32), 8)
     base = seg * 16 + image_end
+    fv_quiet(m, base)
     state = fv_state(m, base)
     print("associated launch:", state)
     if not (state["selected"] == state["loaded"] and state["face"] > 0
@@ -116,7 +127,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
 
     old = state["loaded"]
     m.key("ArrowDown")
-    time.sleep(3)
+    fv_quiet(m, base)
     os88marty.settle(m)
     state = fv_state(m, base)
     print("after Down:", state)
@@ -130,7 +141,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     cx, cy = u16(raw, 2), u16(raw, 4)
     target = 4
     mo.click(cx + 12, cy + FV_LISTY + target * FV_ROWH + 4)
-    time.sleep(3)
+    fv_quiet(m, base)
     os88marty.settle(m)
     state = fv_state(m, base)
     print("after clicking row 4:", state)

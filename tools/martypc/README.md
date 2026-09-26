@@ -14,7 +14,7 @@ in the guest at all**.
 |---|---|
 | `UPSTREAM` | the pinned commit. Editing it is a deliberate act, not maintenance |
 | `debug_server.rs` | the new module, copied in whole |
-| `patches/` | everything else: the upstream files that had to change, plus `devices/sblaster.rs`, the Sound Blaster upstream does not have, and `04-floppy-disk-timing.patch`, the platter |
+| `patches/` | everything else: the upstream files that had to change, plus `devices/sblaster.rs`, the Sound Blaster upstream does not have, `04-floppy-disk-timing.patch`, the platter, and `05-fdc-recal-one-interrupt.patch`, one IRQ6 a recalibrate rather than upstream's two |
 | `configs/` | the machine configs (docs/MARTYPC-DEBUG.md's *The list*), the first shaped after docs/FIELD-MACHINES.md's 5150 |
 | `roms/` | **gitignored, and you supply it** — see the note at the bottom |
 | `build.sh` | clone at the pin, patch, stage a run tree, build |
@@ -74,8 +74,23 @@ short, is the 5150's question. What the **ROM** does is reproduced, because
 MartyPC runs the ROM — §18.91's `AL` bug shows here.
 
 **The period-accurate machines need the ROM below.** Without it only the
-GLaBIOS twins run, and a GLaBIOS machine is not where a disk number comes
-from — that BIOS abandons a floppy operation after ~250 ms.
+GLaBIOS twins run.
+
+**"GLaBIOS abandons a floppy operation after ~250 ms" was THIS EMULATOR'S
+defect, and `patches/05-fdc-recal-one-interrupt.patch` fixes it.** It stood
+here for a long time as a property of the BIOS. GLaBIOS's wait for IRQ6 is 37
+ticks, two seconds, the same as IBM's. What gave up after ~250 ms was its
+5-tick wait for the RESULT phase, which it reached early because upstream
+MartyPC raises TWO IRQ6s for one RECALIBRATE, one when the command is taken
+and one when it completes. The spare one left the BDA's working-interrupt
+flag (`0040:003E` bit 7) set, so the next `int 13h`'s wait returned at once
+and polled for results mid-transfer. Any read that waited most of a
+revolution for its first sector then answered `80h`. A reset clears the
+calibrated bits, so the retry recalibrated and was poisoned again. The kernel
+saw three failures and SPEC.md 18.91's per-sector fallback, ~800 ms on a
+first B: mount. The IBM ROM sees the same stale flag and survives it: it
+seeks first, and its result wait outlasts a revolution. A real 765 raises
+one interrupt for a recalibrate, at completion.
 
 **What the guest WROTE to a floppy is a different question, and `flush`
 answers it.** MartyPC keeps a mounted image in RAM and never writes it back —

@@ -36,7 +36,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -46,6 +45,15 @@ from cycweb import Pkg, u16, shot                               # noqa: E402
 
 BOX = 12                        # OS88UI_RDBOX
 FAIL = []
+
+
+def done(m, tr, cond, what):
+    """Stay in a trace until the handler a gesture started has RETURNED:
+    `cond` says it ran, and a free gfx lock says it has let go - ui_task
+    holds the lock for the whole of a package callback."""
+    lock = os88sym.linear("gfx_lock_flag")
+    tr.until(lambda: cond() and m.read(lock, 1)[0] == 0,
+             what, 30, required=False)
 
 
 def check(ok, what):
@@ -122,14 +130,20 @@ def main():
                                                 dispcp.row_of(m, S,
                                                               "RADTEST.O88")))
         mo.dblclick(rx, ry)
-        t0 = time.time()
         seg = None
-        while time.time() - t0 < 120 and not seg:
+
+        def launched(_):
+            nonlocal seg
             for w in os88geom.windows(m, S):
                 if w.title.startswith("Radio"):
                     seg = u16(m.read(os88geom.winptr(m, w.i, S)
                                      + os88geom.W_SEG, 2))
-            time.sleep(0.3)
+            return bool(seg)
+        try:
+            os88marty.until(m, launched, "RADTEST's window", poll=0.3,
+                            limit=120)
+        except os88marty.MartyError:
+            pass                        # ...and the next line says so
         if not seg:
             sys.exit("radio: RADTEST did not launch")
         p = Pkg(m, seg, syms)
@@ -238,7 +252,7 @@ def main():
         # pumps the stops from a daemon and leaves the guest running.
         with os88marty.bp_trace(m, "gfx_fill", regs=True) as tr:
             m.key("KeyA")               # rt_onkey redraws group A in place
-            time.sleep(2.0)
+            done(m, tr, lambda: tr.n > 0, "group A's redraw")
         wide = [(h["regs"]["ax"], h["regs"]["bx"],
                  h["regs"]["cx"] - h["regs"]["ax"] + 1)
                 for h in tr.hits
@@ -252,7 +266,7 @@ def main():
 
         # --- 6. A PICK DOES NOT RE-LETTER EITHER ROW -------------------------
         # font_run_x is the only way a PACKAGE's label reaches the screen, and
-        # the `_x` matters: slot 0x0258's cell names font_run_x, so a
+        # the `_x` matters: slot 0x01E5's cell names font_run_x, so a
         # breakpoint on font_run is one a package never reaches. This assertion
         # was a FALSE GREEN on that symbol until the deliberate breakage below
         # refused to go red - docs/WRITING-TESTS.md 1 working as advertised.
@@ -263,7 +277,8 @@ def main():
         ay1 = ay0 + 3 * pitch
         with os88marty.bp_trace(m, "font_run_x", regs=True) as tr:
             mo.click(ax + 4, ay + 4)    # back to row 0: a real move
-            time.sleep(2.0)
+            done(m, tr, lambda: u16(m.read(p.addr("rt_a") + 12, 2)) == 0,
+                 "the pick back to row 0")
         inside = [(h["regs"]["cx"], h["regs"]["dx"]) for h in tr.hits
                   if ay0 <= h["regs"]["dx"] < ay1]
         check(u16(m.read(p.addr("rt_a") + 12, 2)) == 0,
@@ -280,7 +295,7 @@ def main():
         cy1 = u16(m.read(p.addr("rt_c") + 6, 2))
         with os88marty.bp_trace(m, "gfx_fill", "font_run_x", regs=True) as tr:
             mo.click(cx0 + 4, (cy0 + cy1) // 2)
-            time.sleep(2.0)
+            done(m, tr, lambda: p.rw("rt_ctog") == 1, "the check box's toggle")
         mo.to(4, 4)
         os88marty.settle(m)
         check(p.rw("rt_ctog") == 1, "a press on the check box toggled it")

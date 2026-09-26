@@ -47,7 +47,6 @@ exclude the clock, settle first.
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -92,11 +91,10 @@ def full_repaint(m):
     """Make the GUEST repaint, and leave the machine paused (WM-ARTIFACTS 0)."""
     m.cmd(cmd="run")
     m.write(S("cp_dirty"), b"\x01")
-    for _ in range(200):
-        time.sleep(0.05)
-        if m.read(S("cp_dirty"), 1)[0] == 0:
-            break
-    else:
+    try:                                # a GUEST-time budget
+        os88marty.until(m, lambda _: m.read(S("cp_dirty"), 1)[0] == 0,
+                        "ui_task to drain [cp_dirty]", poll=0.05, limit=10.0)
+    except os88marty.MartyError:
         raise RuntimeError("ui_task never drained [cp_dirty]")
     os88marty.settle(m)
     m.cmd(cmd="pause")

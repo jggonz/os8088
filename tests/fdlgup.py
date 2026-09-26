@@ -25,7 +25,6 @@ window puts one up - because a package that opens a Standard File dialog is
 the only way to get one on screen.
 """
 import sys
-import time
 
 sys.path.insert(0, "tools")
 import os88marty as M
@@ -144,18 +143,18 @@ with M.launch("build/os8088-360.img", apps="build/muptest.img",
 
     # --- E: the press DRAWS it down --------------------------------------
     mo.to(cancel[0], cancel[1] - 40)        # park off the column first
-    time.sleep(0.8)
+    M.settle(m)                             # ...the next reads are PIXELS
     up = lit(m, mono, rect)
     mo.to(*cancel)
     mo._edge(True)
-    time.sleep(0.8)
+    M.settle(m)
     down = lit(m, mono, rect)
     check("a press draws Cancel DOWN", down < up - 100,
           f"({down} lit held, {up} upright)")
 
     # --- B: it comes back UP while still held, off the button -------------
     mo.to(cancel[0] - 90, cancel[1], l=True)        # l=True: STILL HELD
-    time.sleep(1.2)
+    M.settle(m)
     off = lit(m, mono, rect)
     check("...and back UP when the pointer slides off it", off == up,
           f"({off} lit, upright is {up})")
@@ -169,9 +168,9 @@ with M.launch("build/os8088-360.img", apps="build/muptest.img",
     d = dlg(m)
     mo.to(*btn_pt(d, 2))
     mo._edge(True)
-    time.sleep(0.6)
+    M.pace(m, 0.6)
     mo.to(*btn_pt(d, 3), l=True)            # slide onto Drive, still held
-    time.sleep(1.0)
+    M.pace(m, 1.0)
     mo._edge(False)
     M.settle(m)
     check("released on ANOTHER button, nothing fires", dlg(m) is not None)
@@ -181,7 +180,7 @@ with M.launch("build/os8088-360.img", apps="build/muptest.img",
     d = dlg(m)
     mo.to(*btn_pt(d, 2))
     mo._edge(True)
-    time.sleep(0.6)
+    M.pace(m, 0.6)
     mo._edge(False)
     M.settle(m)
     check("press-and-release ON Cancel closes the dialog", dlg(m) is None)

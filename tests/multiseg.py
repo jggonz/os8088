@@ -42,6 +42,7 @@ import os88mouse
 import os88sym
 import os88geom
 import os88parts
+from os88pkg import PKG_FMT
 import dispcp
 sys.path.insert(0, "tests/multiseg")
 import msegsym
@@ -140,10 +141,11 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     say("version %d, flags 0x%02X, image %d, verdict %r"
         % (ver, flags, image, title))
 
-    if ver != 3:
-        fails.append("MSEG loaded with version %d, not 3. THERE IS NO .o88 "
-                     "v6: a package carrying parts is a v3 package with one "
-                     "flag bit, for SPEC.md 54.6's reason (SPEC.md 20.12)"
+    if ver != PKG_FMT:
+        fails.append("MSEG loaded with version %d, not PKG_FMT. PARTS ARE "
+                     "NOT A FORMAT: a package carrying parts is an ordinary "
+                     "package with one flag bit, for SPEC.md 54.6's reason "
+                     "(SPEC.md 20.12, 20.2.0)"
                      % ver)
     if not flags & 4:
         fails.append("MSEG's flags are 0x%02X and bit 2 is clear - so the "

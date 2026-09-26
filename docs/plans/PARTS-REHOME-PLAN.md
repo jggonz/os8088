@@ -713,7 +713,7 @@ program. 4.1.1 is the trace.
    unreachable to the program, and it has to be: `mem_rr_tab` rewrites
    `I_SPTR` by matching the OLD BASE, and with a non-zero head slack `I_SPTR`
    is the part's segment where the claim's base is the carve's.
-3. `OSAPI_PKG_REHOME` (0x0530) and `ld_start`'s step 8a — **BUILT**
+3. `OSAPI_PKG_REHOME` (0x03FE) and `ld_start`'s step 8a — **BUILT**
    (SPEC.md 20.12.10). Measured against HEAD: **`.text` +14, `.bss` +4,
    `.cold` +166 = 184 resident**, against §6's estimate of ~165.
 4. `tests/rehome/` and `tests/rehome.py` — **BUILT**, one row at 360KB. It

@@ -2353,7 +2353,7 @@ cs_i13:      db 'F1 to F5  step a setting, in flight', 0   ; in the blank
                                                           ; at thirteen lines
 
 ; -----------------------------------------------------------------------------
-; cs_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; cs_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD.  preserves all
 ; -----------------------------------------------------------------------------
 cs_about:

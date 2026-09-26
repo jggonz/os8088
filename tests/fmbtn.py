@@ -25,7 +25,6 @@ asserts that where the button is DRAWN is where it is CLICKABLE - a click
 aimed at the drawn frame's own corners.
 """
 import sys
-import time
 
 sys.path.insert(0, "tools")
 import os88marty as M
@@ -148,11 +147,11 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     # thing under test from the pointer sitting on it.
     inner = (r[0] + 1, r[1] + 1, r[2] - 1, r[3] - 1)
     mo.to(mid[0], r[1] - 30)                # park off the band first
-    time.sleep(0.8)
+    M.settle(m)
     up = lit(m, mono, inner)
     mo.to(*mid)
     mo._edge(True)
-    time.sleep(0.9)
+    M.settle(m)                             # ...still held
     down = lit(m, mono, inner)
     check("a press draws the toggle DOWN", down * 2 < up,
           f"({up} lit upright, {down} held - the interior, so a "
@@ -160,7 +159,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
 
     # --- B: it comes back UP while still held, off the button --------------
     mo.to(r[0] - 60, mid[1], l=True)        # l=True: STILL HELD
-    time.sleep(1.2)
+    M.settle(m)
     off = lit(m, mono, inner)
     check("...and back UP when the pointer slides off it", off == up,
           f"({off} lit, upright is {up})")
@@ -175,7 +174,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     # The one that says the feature did not eat the feature it decorates.
     mo.to(*mid)
     mo._edge(True)
-    time.sleep(0.7)
+    M.pace(m, 0.7)
     mo._edge(False)
     M.settle(m)
     check("press-and-release ON it DOES flip the view",
@@ -192,7 +191,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
                      ("bottom-right", (r[2] - 1, r[3] - 1))):
         mo.to(*pt)
         mo._edge(True)
-        time.sleep(0.6)
+        M.pace(m, 0.6)
         mo._edge(False)
         M.settle(m)
         check(f"...a click just inside the {name} corner fires",
@@ -201,7 +200,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
 
     mo.to(r[0] - 2, r[1] + 1)
     mo._edge(True)
-    time.sleep(0.6)
+    M.pace(m, 0.6)
     mo._edge(False)
     M.settle(m)
     check("...and one pixel OUTSIDE the left edge does not",

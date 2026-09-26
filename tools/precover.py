@@ -66,26 +66,38 @@ its proven-edge click and drag are reused rather than re-rolled.
 import os
 import struct
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import os88marty
+import os88ui
 from os88mouse import Mouse
 import sucheck as su
 import subcheck as sc
 from os88geom import MAX_WIN
 
 VOL_B = 1                       # the apps floppy
-ROW_GAMES = 1                   # B: root, sorted: APPS GAMES MEDIA SYSTEM
-ROW_MINES = 2                   # GAMES/, sorted: .. ARKANOID MINES MISSILE ...
+# GAMES and MINES.O88 are found BY NAME in the window's listing: MINES was
+# row 2 here and CYCLONE sorts in front of it now (SPEC.md 19.4 - nothing may
+# be built on an ordinal).
 
 
 def segs(m):
     """wm_su_segs - one word per window slot, 0 = this window has no cache."""
     raw = m.read(m.sym("wm_su_segs"), MAX_WIN * 2)
     return list(struct.unpack("<%dH" % MAX_WIN, raw))
+
+
+def up(m, cond, what, limit=60):
+    """Wait for `cond()` on the GUEST's clock, then for the screen to stop -
+    every step here is followed by a pixel capture. A miss is left to the
+    capture that follows, which shows it."""
+    try:
+        os88marty.until(m, lambda _m: cond(), what, poll=0.3, limit=limit)
+    except os88marty.MartyError:
+        pass
+    os88marty.settle(m)
 
 
 def note(log, text):
@@ -106,18 +118,37 @@ def capture(out, machine, defines=()):
             plain = m.sym
             m.sym = lambda n, d=tuple(defines): plain(n, d)
         mo = Mouse(marty=m)
+        ui = os88ui.UI(m, verbose=False, mouse=mo)
+
+        def row(win, name):
+            return su.row(win, ui.entry(name, win)[0] - ui.scroll(win))
         print("machine %s -> %s%s" % (machine, out, "  [reference]" if ref else ""))
         sc.shot(m, "desktop", out, shots, mo)
 
         # --- the reported sequence -------------------------------------------
-        mo.dblclick(*su.zone(m, VOL_B)); time.sleep(4)
+        n0 = len(sc.wins(m))
+        mo.dblclick(*su.zone(m, VOL_B))
+        up(m, lambda: len(sc.wins(m)) > n0, "the Disk window")
         sc.shot(m, "disk-b", out, shots, mo)
         b = sc.wins(m)[-1]
-        mo.dblclick(*su.row(b, ROW_GAMES)); time.sleep(5)
+        was = ui.listing(b)
+        mo.dblclick(*row(b, "GAMES"))
+        # the folder re-listed in place - no new window to wait for, so the
+        # listing changing and the mount's reads finishing (os88ui.open's nav)
+        os88marty.until(m, lambda _: ui.listing(b) != was,
+                        "the GAMES listing", poll=0.1, limit=60)
+        os88marty.quiesce(m, lambda: (m.disk().get("reads"),
+                                      tuple(ui.listing(b))),
+                          guest=1.0, what="the GAMES mount")
+        os88marty.settle(m)
         sc.shot(m, "into-games", out, shots, mo)
 
         b = [w for w in sc.wins(m) if w.i == b.i][0]
-        mo.dblclick(*su.row(b, ROW_MINES)); time.sleep(9)
+        mo.dblclick(*row(b, "MINES.O88"))
+        # a launch AND its first paint. Minesweeper has no game clock
+        # (apps/mines, OSAPI_WM_SAVEU's note), so its screen does settle
+        up(m, lambda: [w for w in sc.wins(m) if w.i != b.i],
+           "Minesweeper's window")
         sc.shot(m, "mines-launched", out, shots, mo)
 
         # --- CHECK 1: the poster kept a cache through the launch (22.17) -----

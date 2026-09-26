@@ -256,7 +256,11 @@ CUR_SPAN    equ 2               ; ...and the framebuffer bytes it spans once
 CUR_TABSZ   equ CUR_GH          ; one BYTE a row, CUR_GH rows: cur_data is
                                 ; exactly one table past cur_and, so one SI
                                 ; walks both (asserted below)
+%ifdef GFX_VGA
 CUR_SAVE_SZ equ CUR_SPAN * CUR_GH * 4       ; ...x four planes, for VGA
+%else
+CUR_SAVE_SZ equ CUR_SPAN * CUR_GH           ; one plane: no VGA in this build
+%endif
 
 ; --- the shapes (SPEC.md 7.2) ------------------------------------------------
 ; A window names one of these and the pointer wears it over that window and
@@ -468,7 +472,7 @@ mou_pall:
 ;     the inline form is DS-relative data and an indirect far call, so it drops
 ;     into any section. It costs 17 bytes a site, twice.
 ; =============================================================================
-%ifndef KERN_SMALL
+%ifndef MOU_IN_BLOB             ; kern_big, AND a kern_small knob build (kernel.asm)
 section .ovlw                   ; kern_big: the WINDOW half (SPEC.md 2.5.3) -
                                 ; forfeit at the first mount, and this build's
                                 ; window has room to spare
@@ -1412,6 +1416,82 @@ mouse_unhook:
     ret
 
 %ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; mouse_rearm - a program may TAKE the mouse's IRQ, and a driver takes it back
+; ins:  none
+; outs: none (all registers preserved)
+;
+; **KERN_BIG ONLY, AND THAT IS A FACT ABOUT THE DISK** rather than a judgement:
+; the only programs that take an IRQ out from under this kernel are DOS
+; programs inside an fsx bracket, and `DOS.O88` is on no kern_small floppy at
+; all - `build/small360.img` is 27 files and none of them is the box. A
+; kern_small machine has nothing that can do this, so it pays nothing for it.
+;
+; **THE SEGMENT IS THE WHOLE TEST.** A DOS program's CS is never KERNEL_SEG, so
+; the segment word alone says whether the vector is still ours - and a vector
+; pointing INTO the kernel at some other offset is neither a theft this could
+; distinguish nor one the machine would survive. That is 15 bytes the obvious
+; offset-and-segment compare spends for nothing.
+;
+; `[mou_port]` IS the word tables' byte offset already - 0 or 2, and
+; MOU_P2ROW = 4 which is no serial row - so it indexes them with no shift.
+; Shifting it is the bug this routine was written with: row 2 indexed four
+; bytes in, off the end of a two-port table, and a machine whose mouse is on
+; COM1 never notices. It indexes mou_pout's base and NOTHING ELSE here: the
+; vector and its stub are the LINE's row (SPEC.md 9.5.2.1, kd_mou_vec), since
+; a 2F8 card jumpered to IRQ4 speaks on int 0Ch, which is row 0's.
+; -----------------------------------------------------------------------------
+mouse_rearm:
+    cmp byte [mou_ptr], 0           ; nothing has proven itself a pointer, so
+    je .out                         ; there is no port of OURS to defend and a
+                                    ; program using a UART is entitled to it
+    cmp byte [mou_port], MOU_PEND   ; the PS/2 row (and the driver row) are not
+    jae .out                        ; a UART and index no serial table
+    push ax
+    push bx
+    push si
+    push di
+    push es
+    xor di, di                      ; DI = the LINE's row: IRQ4 is row 0's
+    cmp byte [mou_line], MOU_L4     ; int 0Ch and mou_isr, IRQ3 row 2's -
+    je .row                         ; whichever base the card answered at
+    mov di, 2
+.row:
+    mov si, [di+mou_ivecs]
+    mov bl, [mou_port]              ; ...and BX the PORT's, for mou_pout
+    xor bh, bh
+    xor ax, ax
+    mov es, ax
+    mov ax, cs
+    cmp [es:si+2], ax               ; still ours? ONE compare, which is what
+    je .done                        ; every pass but a theft pays
+    pushf                           ; ...and one critical section over the
+    cli                             ; vector AND the mask, not two
+    mov [es:si+2], ax
+    mov ax, [di+mou_isrs]
+    mov [es:si], ax
+    mov ax, 0x040B                  ; MCR: DTR|RTS|OUT2 - a program that took
+    call mou_pout                   ; the vector took the UART with it, and
+    mov ax, 0x0101                  ; Battle Chess leaves MCR = 08h, which is a
+    call mou_pout                   ; Microsoft mouse with no power. IER = 1 is
+    mov al, [mou_line]              ; the one thing mouse_init alone wrote
+    not al                          ; (SPEC.md 96.45.2), so it is written here
+    mov ah, al
+    in  al, 0x21
+    and al, ah
+    out 0x21, al
+    popf
+.done:
+    pop es
+    pop di
+    pop si
+    pop bx
+    pop ax
+.out:
+    ret
+%endif
+
+%ifdef KERN_BIG
 ; =============================================================================
 ; The PS/2 mouse (SPEC.md 9.9)
 ;
@@ -1470,7 +1550,7 @@ mou_p2wr:
     pop ax
     ret
 
-%ifndef KERN_SMALL
+%ifndef MOU_IN_BLOB             ; kern_big, AND a kern_small knob build (kernel.asm)
 section .ovlw
 %else
 section .ovl                    ; ...SPLIT WITH mou_uart's BLOCK ABOVE, and
@@ -1561,7 +1641,7 @@ mou_p2wcmd:
 .out:
     ret
 
-%ifndef KERN_SMALL
+%ifndef MOU_IN_BLOB             ; kern_big, AND a kern_small knob build (kernel.asm)
 section .ovlw
 %else
 section .ovl                    ; ...SPLIT WITH mou_uart's BLOCK ABOVE, and
@@ -2775,7 +2855,7 @@ kbd_track:
     ret
 
 ; -----------------------------------------------------------------------------
-; kbd_down - is this key down right now? (SPEC.md 9.7, slot 0x03F0)
+; kbd_down - is this key down right now? (SPEC.md 9.7, slot 0x02FC)
 ; in:  AL = a make scancode (0x4B left, 0x4D right, 0x39 space, ...)
 ; out: CF = 1 down, CF = 0 up; every register preserved
 ;
@@ -3364,7 +3444,7 @@ mou_byte:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_mouse_feed - slot 0x0598: one relative report from a DRIVER (SPEC.md
+; osapi_mouse_feed - slot 0x0449: one relative report from a DRIVER (SPEC.md
 ;                    9.12.1)
 ;
 ; in:  AX = dx, BX = dy, signed, POSITIVE dy IS DOWN; CL = the buttons in
@@ -4557,7 +4637,7 @@ cur_shape_set:
 ; sectors of disk. That is the whole measurable cost of the feature.
 ; -----------------------------------------------------------------------------
 
-; cur_busy    - slot 0x0540, the PACKAGE's door: it must hold the lock ITSELF
+; cur_busy    - slot 0x040B, the PACKAGE's door: it must hold the lock ITSELF
 ; cur_busy_on - ...and the KERNEL's, inside fpg_arm, which need not (SPEC.md
 ;               12.8.4: the one painter in the machine that draws lock-free)
 ;

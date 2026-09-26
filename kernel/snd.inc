@@ -802,7 +802,7 @@ osapi_snd_caps:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_fm - the public FM request (slot 0x00F8, SPEC.md 20.3/34.2)
+; osapi_snd_fm - the public FM request (slot 0x00E3, SPEC.md 20.3/34.2)
 ;
 ; in:       AL = verb, and the verb's own registers. Verb 2's patch pointer
 ;           has ALREADY been staged into the kernel by the slot's X stub, so
@@ -845,9 +845,9 @@ snd_str_busy:
 osapi_snd_fm_x:
     cmp al, 2
     jne osapi_snd_fm            ; every verb but patch-load carries no pointer
-    push cx                     ; verb 2: stage the caller's 11 bytes into
-    push si                     ; the kernel, the dsk_get_dir idiom - the
-    push di                     ; driver runs with DS = its own segment and
+    push si                     ; verb 2: stage the caller's 11 bytes into
+    push di                     ; the kernel, the dsk_get_dir idiom - the
+    push cx                     ; driver runs with DS = its own segment and
     mov di, snd_patch           ; cannot reach the caller's
     mov cx, SND_PATCH_N
 .stage:
@@ -856,11 +856,11 @@ osapi_snd_fm_x:
     inc si
     inc di
     loop .stage
-    mov si, snd_patch
-    pop di
-    call osapi_snd_fm
+    pop cx                      ; CL = THE CHANNEL AGAIN, before the driver
+    pop di                      ; sees it (SPEC.md 34.2.2): the `loop` leaves
+    mov si, snd_patch           ; CX = 0, and every patch-load on every
+    call osapi_snd_fm           ; channel used to land on channel 0
     pop si
-    pop cx
     ret
 
 osapi_snd_fm:
@@ -880,7 +880,7 @@ osapi_snd_fm:
 %endif                          ; OS88_SNDCARD - the FM slot's live body ends
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_stream - the public stream request (slot 0x0100, SPEC.md 34.5)
+; osapi_snd_stream - the public stream request (slot 0x00EA, SPEC.md 34.5)
 ; in:       AL = verb, and the verb's own registers
 ; out:      AX = the verb's answer; DX = bytes consumed ON VERB 3 ONLY;
 ;           CF = 1 no streaming sink, or the driver refused
@@ -919,6 +919,8 @@ osapi_snd_stream:
     push bp
     cmp al, 3
     je .status
+    cmp al, 9                   ; verb 9 answers in DX as verb 3 does (SPEC.md
+    je .status                  ; 34.5.1)
     push dx                     ; every other verb gets its DX back
     mov bx, es                  ; BX = the CALLER'S SEGMENT, which verbs 5 and
                                 ; 6 copy to and from: the X stub put the
@@ -953,7 +955,7 @@ osapi_snd_stream:
 %endif                          ; OS88_SNDCARD - the stream slot's live body
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_tone - the public tone request (slot 0x00E8, SPEC.md 20.3)
+; osapi_snd_tone - the public tone request (slot 0x00D3, SPEC.md 20.3)
 ;
 ; in:       AX = frequency Hz (0 = off), CX = duration ticks (0 = until off),
 ;           DL = priority
@@ -1001,7 +1003,7 @@ snd_req_inst:
     jmp inst_caller
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_play - PCM_EXCL clip, run-to-completion (slot 0x00F0, SPEC.md
+; osapi_snd_play - PCM_EXCL clip, run-to-completion (slot 0x00DB, SPEC.md
 ;                  20.3/34.4 - live from Phase 2)
 ;
 ; in:       ES:SI = 8-bit unsigned mono samples, CX = count (<= 65535),

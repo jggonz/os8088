@@ -28,7 +28,6 @@ runs the saver afterwards only to prove the repaint is clean.
 """
 import argparse
 import sys
-import time
 
 import os
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
@@ -115,7 +114,7 @@ def main():
         # --- the repro: click Reload with nothing fetched ----------------
         mo.click((r3[0] + r3[2]) // 2, (r3[1] + r3[3]) // 2)
         os88marty.settle(m)
-        time.sleep(1)
+        os88marty.pace(m, 1)
         os88marty.settle(m)
         txt1, len1 = state()
         say("after Reload: bar=%r LN_LEN=%d" % (txt1, len1))
@@ -152,18 +151,20 @@ def main():
         m.write(m.sym("ss_modes"), bytes([SEA]))
         m.write(m.sym("ss_secs"), b"\xff")
         m.write(m.sym("ss_idle"), b"\x1c\x00")
-        t = time.time()
-        while time.time() - t < 90 and m.read(m.sym("blk_sv"), 1)[0] != 1:
-            time.sleep(0.2)
+        try:
+            os88marty.until(m, lambda mm: mm.read(mm.sym("blk_sv"), 1)[0] == 1,
+                            "the saver to start", poll=0.2, limit=90)
+        except os88marty.MartyError:
+            pass                            # ...reported just below
         if m.read(m.sym("blk_sv"), 1)[0] != 1:
             fails.append("the saver never started - the repaint half of this "
                          "row did not run")
         else:
-            time.sleep(2)
+            os88marty.pace(m, 0.5)          # TIME: let the saver draw a while
             os88marty.no_saver(m)
             m.key("Escape")
             os88marty.settle(m)
-            time.sleep(1)
+            os88marty.pace(m, 1)
             os88marty.settle(m)
             txt2, len2 = state()
             say("after wake:   bar=%r LN_LEN=%d" % (txt2, len2))

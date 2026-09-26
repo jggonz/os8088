@@ -81,7 +81,11 @@ the Control Panel, Format, Clone, Hibernate, a Cut/Copy/Paste, a file dialog —
 so one can fragment the heap only for as long as the user is inside it, and
 `mem_claim_1`'s `.hi` arm puts it back at the ceiling when it is dropped and
 re-taken. **A persistent module would reopen the question**, and only for that
-module.
+module. **Two are persistent now**: `DOCK.DRV` for as long as an advanced Dock
+setting stands (§30.5) and `EXTD.DRV` for as long as the desktop is extended
+(§39.19.6) - 3KB and 2KB claims, taken top-down, so each is a small wall at the
+ceiling for the session rather than one in the middle of the arena, and neither
+has been given a relocation proc.
 
 **On `kern_small` NOTHING in this file moves** (§66.0). The compactor is
 `kern_big`'s: every claim there is born pinned and stays pinned, `mem_can_move`
@@ -146,7 +150,7 @@ be done". Sizes are the `equ`s at the claim sites.
 
 | package | claims |
 |---|---|
-| **Word** | document and CHP arena (grown in lockstep from `WD_KB0`), PAP dictionary 1KB, undo arena, italic glyph table + staging `WD_ITKB` 9KB, `WORD.OVL` image `WD_OVKB` 8KB (a CS, so that one is forever), `WD_LSTGKB` 62KB load staging (transient), a `2*WD_SCHALF` scratch |
+| **Word** | document and CHP arena (grown in lockstep from `WD_KB0`), PAP dictionary 1KB, undo arena, italic glyph table + staging `WD_ITKB` 9KB, `WD_LSTGKB` 62KB load staging (transient), a `2*WD_SCHALF` scratch |
 | **the typeface cache** (`apps/os88type.inc`, so Word, TeXpad and every other includer) | `TY_FACE_KB` per open face, and it is the one claim in the tree that carries `MC_DMA` for **alignment alone**: it asks `OSAPI_MEM_CLAIM_DMA` for a whole-block head so the base is 512-byte aligned for its file read. It was `TY_FACE_KB + 1` with a hand round-up underneath, and the round-up could never fire — guard 6b makes every claim base `HEAP_SEG + n*MEM_PARA_KB` paragraphs and asserts `MEM_PARA_KB` is a multiple of 32 — so that was 1KB of heap per open face, up to three per Word or CWORD instance, for nothing. The package asserts the alignment now and refuses the face if it ever fails. No chip is armed on it and none ever will be, and since §66.4.2 that no longer pins it: the blanket `MC_DMA` refusal is gone and `mem_cp_dest` places a page-constrained block page-safely. It is still **UNDECLARED** — declaring it wants `TF_CLAIM`/`TF_SEG` per slot plus `[ty_curseg]` and `[ty_psseg]`, which is an audit rather than a proc |
 | **Sheet** | staging 32KB ONLY — it is the `ES:BX` of all seven of the package's `OSAPI_FILE_READ`/`WRITE` calls (§66.9 reason 4), so it stays pinned; §66.5.7.1's pin/unpin pair is what it would take. The other five — cells 32KB, text 8KB, borders 4KB, notes 4KB, chart 19KB — are **MOVABLE** now (see below) |
 | **Chart** | chart 19KB, staging 32KB |
@@ -175,8 +179,8 @@ and does not ship.)
 
 | claim | verdict | note |
 |---|---|---|
-| **SB staging pool** (`SBL_POOLKB` 20KB, stepping down) | **MOVABLE** | §66.5.5. `sbl_reloc`, one word, because a grant is an *offset* and the staging copy is the v3 boundary; every copy into or out of it goes in `SBL_DCHUNK` chunks under `cli`, re-reading `[sbl_poolseg]` per chunk |
-| **SB DMA double-buffer** | **MOVABLE, while the chip is idle** | §66.6.4. `MC_DMA` and claimed top-down, and it was PINNED (forever) until the `[drv_wcnt]` gate: a stream lives only while its refill or drain task does (§34.5) and the 8237 is armed only while a stream is open, so zero means nothing is armed and `mem_can_move` refuses any `MC_DMA` claim while it is non-zero. `sbl_ring_reloc` is three words and they were already written — it stores the base and falls through into `sbl_dma_derive`, the factored tail of `sbl_dma_map`. **It is inert on its own**: the ring is claimed straight after the image and sits immediately below it, so it moves when the image does and not before. `tests/sndmove.py` is the gate |
+| **SB staging pool** (sized to the first grant, up to `SBL_POOLKB` 20KB — §34.6.3) | **MOVABLE, except while the card plays out of it** | §66.5.5. `sbl_reloc`, one word, because a grant is an *offset* and the staging copy is the v3 boundary; every copy into or out of it goes in `SBL_DCHUNK` chunks under `cli`, re-reading `[sbl_poolseg]` per chunk. Claimed through the DMA door now (`OSAPI_MEM_CLAIM_DMA_HI`, head = the whole pool) so a ring in it can be PLAYED IN PLACE (§34.5.2) — and for exactly that stream verb 0 PINS it (`OSAPI_MEM_MOVABLE` AX = 0), because a direct stream has no task and `[drv_wcnt]` is then 0 while the 8237 reads it; `sbl_unpin` declares it again once the channel is masked. `tests/trackmove.py` check 8 carries the assertion and nothing reaches it yet (its registered machine has no card) |
+| **SB DMA double-buffer** | **PINNED, and only held for one stream** | §34.5.2. `MC_DMA`, claimed top-down at the open of a stream that is NOT direct (a linear stream, a single-cycle DSP, a pool that is not page-safe, every record stream) and freed at its close by `sbl_unpin`, so it is never declared and never needs to be: `[drv_wcnt]` is non-zero for all of its life anyway. It was claimed at attach and MOVABLE while idle (§66.6.4, `sbl_ring_reloc`) — both are gone, because an idle card now holds nothing but its image, which `tests/sndmove.py` asserts |
 | **HDD** install buffer (`hd_ibufsz` ladder) | **PINNED (rule)** | §66.5.10. An `OSAPI_FILE_READ`/`WRITE` target at all four uses, claimed for one install and freed at its end |
 | **HDD** per-partition listing (`HDD_LISTKB` 6KB) | **RETIRED — there is no claim** | §22.6. It was the only block in the tree with three holders and the worked example of §66.5.10.2's kernel-side walk; §25.9 took the icon bodies out of it and §22.6.2 raised the floor to the same cap, after which it funded a listing `.lowbss` already gave for free. A mounted partition now costs the driver a `hd_vols` row and **no heap at all** — 6KB back per partition, 24KB on a four-partition machine. `tests/hdnoclaim.py` is the gate, and it replaced `hdmove` |
 | **HDD** second image (`HDDTOOL.DRV`) | **PINNED (forever)** | base is CS (§52.11.7). Claimed top-down. **It carries the Control Panel page now** (§52.13), so it is claimed while the panel's Drives page is open and not only while the disk tool is — freed at `DSV_CPCLOSE` by `hd_tool_reap` either way |
@@ -225,7 +229,7 @@ declares the bare form and moves on `I_TASK == 0xFF`.
 | package | region | verdict | note |
 |---|---:|---|---|
 | **SHEET** | 48.5KB | **MOVABLE** | §66.6.1's first customer, and worker-less, so it moves on `I_TASK == 0xFF` alone |
-| **Word** | 56.8KB | **MOVABLE + RESTARTABLE** | the largest region in the tree that hires a worker. `wd_worker` polls four statics and sleeps; a restart costs one poll |
+| **Word** | 58.0KB, and part 1's 2.7KB in the same claim (SPEC.md 68.10) | **MOVABLE + RESTARTABLE** | the largest region in the tree that hires a worker. `wd_worker` polls four statics and sleeps; a restart costs one poll |
 | **Tank Attack** | 30.9KB | **MOVABLE + RESTARTABLE** | a game loop, every value a static; a restart costs one frame. No move row can cover it — it redraws for ever, so `settle` never returns |
 | **ftpd** | 28.2KB | **MOVABLE + RESTARTABLE** | `fd_step` is a state machine in statics and the restart lands at the loop top, above it, so a transfer resumes at the step it had reached |
 | **Audio** | 30.2KB | **MOVABLE + RESTARTABLE** | hires only when playback starts; until then it is movable on `I_TASK` alone |

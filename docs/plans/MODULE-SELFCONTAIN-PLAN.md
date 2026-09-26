@@ -254,7 +254,7 @@ is already a far door. If the module could call the public cell, the private
 shim deletes.
 
 **It works mechanically, and exactly.** An `OSAPI_*` slot is a far address
-literal in the SDK — `%define OSAPI_MEM_AVAIL KERNEL_SEG:0x0210` — so
+literal in the SDK — `%define OSAPI_MEM_AVAIL KERNEL_SEG:0x01B0` — so
 `call OSAPI_MEM_AVAIL` assembles to the same `call far seg:off` a module
 already emits at `call COLD_SEG:dskf_disk_read`. No new mechanism, no new
 instruction, same cost. And `OSAPI_SLOT` is
@@ -274,10 +274,13 @@ rather than nearly so.
 
 ### 5.1 …but it only pays where the slot ALREADY exists
 
-**A cell is 8 bytes and a shim is 4**, both asserted in their macro comments
-(`OSAPI_SLOT 1 ; 8 bytes exactly`). The table is **contiguous** — 167 cells
-across 168 positions at `6c91a3a`, one hole — so a new slot goes on the end
-and costs its 8.
+**A cell was 8 bytes and a shim is 4**, both asserted in their macro comments
+(`OSAPI_SLOT 1 ; 8 bytes exactly`). The table was **contiguous** — 167 cells
+across 168 positions at `6c91a3a`, one hole — so a new slot went on the end
+and cost its 8. *Since kernel size pass 4 the table has two cell sizes
+(SPEC.md 20.3) and a new cell that is not hot costs 6, so the spend below is
+6 to save 4 — smaller, and still a loss. The slot addresses in the table
+below are the `6c91a3a` table's; `apps/os88api.inc` has today's.*
 
 > **Publishing a routine in order to delete its shim spends 8 to save 4.** It
 > is a net loss of 4 resident bytes, and it also commits the SDK for ever:
@@ -653,9 +656,9 @@ wave.
 4. **The far shims, 111 / 84 bytes** — except section 5's six. They are the
    door a module calls to LEAVE its image (1.1), so moving one inside is
    moving the door into the room.
-5. **Publishing a kernel routine in ORDER to delete its shim.** A cell is 8
-   bytes and a shim is 4, and the table is contiguous, so it spends 8 to save
-   4 and commits the SDK for ever (5.1). Where a slot already exists the
+5. **Publishing a kernel routine in ORDER to delete its shim.** A new cell
+   is at least 6 bytes (SPEC.md 20.3's rare cell) and a shim is 4, so it
+   spends 6 to save 4 and commits the SDK for ever (5.1). Where a slot already exists the
    substitution is free and W0 takes it; where one does not, the shim is the
    cheaper of the two doors. This is the one avenue that looks like a
    shortcut and is not.

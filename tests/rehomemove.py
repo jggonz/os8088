@@ -48,7 +48,6 @@ FIVE ASSERTIONS:
 """
 import struct
 import sys
-import time
 sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
 import os88marty
@@ -100,6 +99,24 @@ def bss(m, seg):
     img = struct.unpack_from("<H", m.read(seg << 4, 32), 8)[0]
     return m.read((seg << 4) + img, 18)
 
+def filler(m, S):
+    """FILLER's (fl_done, fl_nask) - or None - read through its window, so a
+    compaction that moves it is followed, and only while the gfx lock is FREE:
+    its fill runs inside its first W_PAINT and an ask round inside W_ONKEY,
+    both with the lock held, so the screen is stillest while it works."""
+    if m.read(S("gfx_lock_flag"), 1)[0]:
+        return None
+    for w in os88geom.windows(m, S):
+        if w.title.startswith("Filler"):
+            seg = struct.unpack_from("<H", m.read(os88geom.winptr(m, w.i, S)
+                                                  + os88geom.W_SEG, 2))[0]
+            if not seg:
+                return None
+            img = struct.unpack_from("<H", m.read(seg << 4, 32), 8)[0]
+            b = m.read((seg << 4) + img, 22)    # filler.asm's bss table:
+            return b[20], struct.unpack_from("<H", b, 16)[0]  # done, nask
+    return None
+
 with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     S = m.sym
     mo = os88mouse.Mouse(marty=m)
@@ -143,11 +160,21 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     # Each grant is given straight back and the next ask is made against a more
     # packed arena, which walks the ascending pass to exhaustion.
     dispcp.open_named(m, mo, S, os88marty.settle, *disk, name="FILLER.O88")
-    time.sleep(8)
+    try:
+        os88marty.until(m, lambda _: (filler(m, S) or (0,))[0],
+                        "the filler's fill", poll=0.3, limit=60)
+    except os88marty.MartyError as e:
+        say("(%s)" % e)
     os88marty.settle(m)
     for _ in range(6):
+        was = (filler(m, S) or (0, None))[1]
         m.key("KeyA")
-        time.sleep(6)
+        try:                                # one round of asks, and the
+            os88marty.until(                # compaction a grant made
+                m, lambda _: (filler(m, S) or (0, was))[1] != was,
+                "the filler's asks", poll=0.3, limit=30)
+        except os88marty.MartyError as e:
+            say("(%s)" % e)
         os88marty.settle(m)
         if prog(m, S)[1] != seg0:
             break

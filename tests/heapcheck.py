@@ -34,7 +34,7 @@ and only 13 goes red. It is not a knob because it would be a permanent knob
 for a question asked once; the amputation is two lines and reproducible from
 this paragraph (docs/WRITING-TESTS.md 1).
 """
-import os, sys, time, argparse
+import os, sys, argparse
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))   # NEVER an absolute
 sys.path.insert(0, HERE)                                # path: a row that names
@@ -214,8 +214,32 @@ def main():
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "HEAPFRAG.O88")
 
         # the suite runs on the first W_PAINT and fills a heap-sized buffer
-        # twice over on a 4.77MHz machine: give it real time, then settle
-        time.sleep(20)
+        # twice over on a 4.77MHz machine: wait for its own count of checks
+        # recorded ([hf_n], bss +0) to reach them all and its bss to stop
+        # moving, then settle. A suite that stops short is reported below.
+        def hfbss():
+            try:
+                now = None
+                for slot in dispcp.win_list(m, S):
+                    sg = u16(m.read(os88geom.winptr(m, slot, S)
+                                    + os88geom.W_SEG, 2))
+                    if sg:
+                        now = sg
+                if now is None:
+                    return None
+                return bytes(m.read(now * 16 + u16(m.read(now * 16 + 8, 2)),
+                                    176))
+            except Exception:
+                return None
+        try:
+            os88marty.until(m, lambda _: u16(hfbss() or b"\0\0")
+                            >= len(LABELS),
+                            "heapfrag's suite to record every check",
+                            poll=0.5, limit=40.0)
+            os88marty.quiesce(m, hfbss, guest=1.0,
+                              what="heapfrag's bss to stop changing")
+        except os88marty.MartyError:
+            pass
         os88marty.settle(m)
 
         print("after launch:  ", os88geom.windows(m, S))
@@ -316,17 +340,22 @@ def main():
             # the old base gives the bytes it used to occupy - which decode
             # as a base that did not move, so the row would report the exact
             # failure it is meant to catch.
-            now = seg
-            for _ in range(40):
+            def rbss():
+                now = seg
                 for slot in dispcp.win_list(m, S):
                     sg = u16(m.read(os88geom.winptr(m, slot, S)
                                     + os88geom.W_SEG, 2))
                     if sg:
                         now = sg
-                b2 = m.read(now * 16 + img, 176)
-                if u16(b2, 152) >= len(RLABELS):
-                    break
-                time.sleep(0.5)
+                return now, m.read(now * 16 + img, 176)
+            try:                # ...on the GUEST's clock
+                os88marty.until(m, lambda _: u16(rbss()[1], 152)
+                                >= len(RLABELS),
+                                "heapfrag's region suite to answer",
+                                poll=0.25, limit=20.0)
+            except os88marty.MartyError:
+                pass
+            now, b2 = rbss()
             rn = u16(b2, 152)
             seg = now
             ravail, rmax, rwake = u16(b2, 156), u16(b2, 158), u16(b2, 160)

@@ -33,7 +33,10 @@ import sys
 
 HEADER_SIZE = 32
 MAGIC = 0x384F            # 'O','8' little-endian
-VERSION = 3
+PKG_FMT = 6               # the format byte, and it is the API TABLE'S
+                          # (SPEC.md 20.2.0): mirrors kernel/loader.inc and
+                          # apps/os88api.inc, held by tests/unit/t_mirror.py
+VERSION = PKG_FMT
 ENTRY_MIN = 0x20          # first byte after the header
 ENTRY_MIN_ICON = 0x60     # first byte after the embedded icon (flags bit 0)
 ICON_END = 96             # header (32) + icon block (64)
@@ -624,7 +627,7 @@ def lay_out_parts(out: bytearray, table: int, rows: int, parts,
         # one shape it cannot help is a part that is compressed (its length
         # here is the UNPACKED figure, which is the one the rule is about, so
         # it works there too).
-        if len(body) >= 12 and body[:2] == b"O8" and body[2] == 3:
+        if len(body) >= 12 and body[:2] == b"O8" and body[2] == PKG_FMT:
             pimg, pbss = struct.unpack_from("<HH", body, 8)
             if pimg + pbss != len(body):
                 fail(f"part {i} is a v3 package image (SPEC.md 20.12.10) and "

@@ -74,7 +74,6 @@ region packs with the rest.
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -165,7 +164,18 @@ def main():
             slot is the only way to tell them apart."""
             before = set(w.i for w in os88geom.windows(m, S) if w.visible)
             dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=name)
-            time.sleep(secs)
+            # the window, then its start-up claims - a claim draws nothing,
+            # so it is the arena and not the screen that says when
+            try:
+                os88marty.until(
+                    m, lambda _: any(w.visible and w.i not in before
+                                     for w in os88geom.windows(m, S)),
+                    "%s's window" % name, poll=0.25, limit=secs * 10)
+                os88marty.quiesce(m, lambda: (claims(m, S),
+                                              m.disk().get("reads")),
+                                  guest=1.0, what="%s's claims" % name)
+            except os88marty.MartyError:
+                pass                    # ...reported just below
             os88marty.settle(m)
             new = [w for w in os88geom.windows(m, S)
                    if w.visible and w.i not in before]
@@ -233,7 +243,18 @@ def main():
         front(fl, "the Filler")
         for _ in range(5):
             m.key("KeyA")
-            time.sleep(6)
+            try:                        # the first move, bounded by what an
+                os88marty.until(        # idle box's pause gave it...
+                    m, lambda _: pkg_seg(m, S, "Sheet")[0] not in (sh_seg,
+                                                                   None),
+                    "Sheet's region to move", poll=0.25,
+                    guest=6 * os88marty.GUEST_PACE)
+            except os88marty.MartyError:
+                pass                    # ...press again
+            # ...and the whole of the compaction it posts, not just the first
+            # move: the arena holding still
+            os88marty.quiesce(m, lambda: claims(m, S), guest=1.0,
+                              what="the compaction")
             os88marty.settle(m)
             if pkg_seg(m, S, "Sheet")[0] not in (sh_seg, None):
                 break

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Four source rules NASM cannot refuse and a reader does not see.
+"""Five source rules NASM cannot refuse and a reader does not see.
 
     python3 tests/unit/t_asmrules.py
 
@@ -135,6 +135,31 @@ about its own package rather than a line of this file:
 Widening the scan means answering those four, which is package work; and a gate
 that ships with its own findings pre-excused is worth less than one that ships
 green, so there is no exception list here and there should not be one.
+
+5. A REPEATED STRING INSTRUCTION WITH A SEGMENT OVERRIDE.
+
+`rep es movsb` assembles on every NASM and is WRONG ON THE TARGET CPU. An
+8086/8088 that takes an interrupt in the middle of a repeated string
+instruction resumes it at the prefix IMMEDIATELY BEFORE THE OPCODE - so of two
+prefixes, the one further out is simply gone. With REP outermost the copy
+stops after one more byte and leaves CX short; with the override outermost
+the rest of it is read from DS instead. IRQ0 alone arrives 18.2 times a
+second and the mouse more often, so on a 4.77 MHz machine a copy of any length
+is a question of when. The 286 fixed it, which is why nothing faster notices.
+
+It shipped once, in `dsk_path_x` (kernel/disk.inc, OSAPI_FILE_PATH's kernel
+half), and it was found by the ASSEMBLER rather than by a reader:
+tests/unit/t_nasm3.py's nasm 3.02 build of kern_big differed from nasm 2.16's
+by exactly two bytes, `F3 26` against `26 F3`, because the two generations
+order the prefixes differently. Neither order is safe, which is the point -
+nasm 2's loses REP and nasm 3's loses ES. The cure is not an order: it is no
+override at all, `push ds / push es / pop ds / rep movsb / pop ds`, three bytes.
+
+Both spellings are refused - the prefix keywords (`rep es movsb`,
+`es rep movsb`) and an explicit segment in a string instruction's operand
+(`rep movs byte [es:di], [es:si]`) - in kernel/, boot/, apps/, drivers/ and
+kerndos/. A `cli` bracket would also make it safe; nothing in the tree needs
+one, so there is no exception for it either.
 """
 import os
 import re
@@ -173,6 +198,23 @@ def sources():
             for f in sorted(files):
                 if f.endswith((".asm", ".inc")):
                     yield os.path.join(dirpath, f)
+
+
+REPSEG = re.compile(
+    r"^\s*(?:(?:rep|repe|repz|repne|repnz)\s+(?:es|cs|ss|ds)\b"
+    r"|(?:es|cs|ss|ds)\s+(?:rep|repe|repz|repne|repnz)\b"
+    r"|(?:rep|repe|repz|repne|repnz)\s+(?:movs|cmps|lods|scas|stos)[bw]?\s+"
+    r"[^;]*\[\s*(?:es|cs|ss|ds)\s*:)", re.I)
+
+
+def rep_overrides(path):
+    """[(line, text)] - repeated string instructions carrying an override."""
+    out = []
+    with open(path, errors="replace") as f:
+        for n, text in enumerate(f, 1):
+            if REPSEG.match(text):
+                out.append((n, text.strip()))
+    return out
 
 
 def dead_code(path):
@@ -469,6 +511,29 @@ def main():
                   "in one of them (SPEC.md 44.10.6.1, 50.6.4.1, 77.12.3)",
                   got="push %s / pop %s" % (", ".join(pro), ", ".join(popped)),
                   want="pop %s" % ", ".join(reversed(pro)))
+
+    reps, scanned = 0, 0
+    for path in files + sorted(
+            os.path.join(dp, f)
+            for dp, _, fs in os.walk(os.path.join(ROOT, "kerndos"))
+            for f in fs if f.endswith((".asm", ".inc"))):
+        rel = os.path.relpath(path, ROOT)
+        scanned += 1
+        for line, text in rep_overrides(path):
+            reps += 1
+            check(False, "%s:%d - a repeated string instruction with a "
+                  "segment override" % (rel, line),
+                  "an 8086/8088 interrupted mid-string resumes at the prefix "
+                  "next to the opcode and LOSES the other one - REP (the copy "
+                  "stops short) or the override (the rest comes from DS). The "
+                  "two nasm generations order the prefixes differently and "
+                  "neither order is safe (kernel/disk.inc's dsk_path_x shuffle "
+                  "is the worked fix)",
+                  got=text, want="push ds / push es / pop ds / rep movsb / "
+                  "pop ds - no override at all")
+    check(reps == 0, "no repeated string instruction carries a segment "
+          "override (%d sources, kerndos/ included)" % scanned,
+          "rule 5 reported above", got=reps, want=0)
 
     for path in orphan_sources():
         rel = os.path.relpath(path, ROOT)

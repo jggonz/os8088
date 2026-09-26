@@ -770,7 +770,7 @@ fpg_step:
 ; out: nothing - every register and the flags preserved, fpg_step's contract
 ;
 ; The entry point for a producer that moves bytes rather than sectors, and it
-; IS slot 0x03C8 (OSAPI_FS_PROG) - an ordinary OSAPI_SLOT cell, so a
+; IS slot 0x02DF (OSAPI_FS_PROG) - an ordinary OSAPI_SLOT cell, so a
 ; DRVC_FILE driver inside FSV_READ/FSV_WRITE calls exactly this routine. That
 ; is the half fpg_begin cannot cover: the kernel arms the widget from
 ; FSV_STAT's size and then has NOTHING to say until the verb returns, because

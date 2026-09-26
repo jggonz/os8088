@@ -41,7 +41,6 @@ takes the count to 0.
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -123,7 +122,7 @@ def main(argv):
                 k += 1
                 mo.click(pr[0] + 30 + (k * 41) % 240,
                          pr[1] + 40 + (k * 29) % 110)
-                time.sleep(0.03)
+                os88marty.pace(m, 0.03)
             m.pause()
             lit = ink(m, box)
             m.run()

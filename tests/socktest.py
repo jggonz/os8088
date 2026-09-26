@@ -115,6 +115,11 @@ class Server(threading.Thread):
         self.s.listen(2)
         self.request = None
         self.sent = 0
+        self.m = None               # the guest, once it is up: the gap's
+                                    # budget is ITS clock, not this box's
+
+    def _cycles(self):
+        return int(self.m.status()["cycles"]) if self.m is not None else 0
 
     def reply(self):
         head = (b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
@@ -139,8 +144,9 @@ class Server(threading.Thread):
             c.sendall(head)
             self.sent += len(head)
             want = self.box.empty_up + 1        # ...the gap assertion 3 lives
-            t0 = time.time()                    # in, waited for and not slept
-            while self.box.empty_up < want and time.time() - t0 < 240:
+            c0 = self._cycles()                 # in, waited for and not slept
+            while (self.box.empty_up < want and (self._cycles() - c0)
+                   / os88marty.GUEST_HZ < 240 * os88marty.GUEST_BUDGET_RATIO):
                 time.sleep(0.05)
             self.gap = self.box.empty_up >= want
             c.sendall(body)
@@ -173,6 +179,7 @@ def main():
     with os88marty.launch("build/os8088-360.img",
                           apps="build/socktest360.img",
                           machine=MACHINE) as m:
+        srv.m = m
         os88marty.settle(m, gate=os88marty.desktop_up)
         mo = os88mouse.Mouse(marty=m)
         p = P.Partner(m)

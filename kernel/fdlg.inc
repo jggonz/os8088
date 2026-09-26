@@ -140,10 +140,13 @@ FD_DBLCLK   equ 9               ; double-click window, ticks (as SPEC.md 22)
 
 ; -----------------------------------------------------------------------------
 ; fdlg_tpl - the window template (SPEC.md 11): x, y, w, h, title, paint,
-; onkey, onclick. The title word is overwritten per mode by fdlg_open.
+; onkey, onclick. The title word is overwritten per mode by fdlg_open. The
+; three callbacks are `.cold` NEAR procs - the bodies on kern_big, the
+; resident stubs in front of FDLG.DRV on kern_small - because wm_pkgcall
+; dispatches a kernel window into the cold segment (SPEC.md 2.6.3).
 ; -----------------------------------------------------------------------------
 fdlg_tpl:   dw FD_X, FD_Y, FD_W, FD_H
-            dw fdlg_s_topen, fdlg_paint, fdlg_onkey, fdlg_onclick
+            dw fdlg_s_topen, fdlg_paint_x, fdlg_onkey_x, fdlg_onclick_x
 
 ; fdlg_sbdel - what each of os88ui_sbhit's four SCROLLING verdicts does to
 ; [fdlg_scrl], indexed by (answer - OS88UI_SBUP). SIGNED BYTES: FD_ROWS is 6
@@ -233,7 +236,6 @@ FDE_ONCLICK equ 3
 FDE_REAP    equ 4
 FDE_GRAB    equ 5
 FDE_TOP     equ 6
-FDFP        equ mod_fp + MOD_FDLG*MODFP_STRIDE   ; this module's slot block
 %endif
 
 ; =============================================================================
@@ -254,6 +256,10 @@ FDFP        equ mod_fp + MOD_FDLG*MODFP_STRIDE   ; this module's slot block
 ;           in the image with a resident stub of the public name in front.
 ;   FDX     a call OUT of the image, near on big and `call COLD_SEG:xd_<name>`
 ;           on small - COLD_SEG being an assembly-time constant.
+;   FDK     a call INTO `.text` through one of the `.cold` trampolines of
+;           SPEC.md 2.6.2: `call ct_<target>` on big, where this file is
+;           `.cold`, and the plain `call KERNEL_SEG:<target>` on small, where
+;           the image runs at a heap address and cannot near-call `.cold`.
 ;   FDXF    the resident far entry FDX names, `call <body> / retf`. The
 ;           prefix is `xd_` and filecp.inc's is `xf_`: the two blocks share
 ;           `.cold` and both wrap dsk_ncopy, so one prefix would be one
@@ -273,6 +279,9 @@ FDFP        equ mod_fp + MOD_FDLG*MODFP_STRIDE   ; this module's slot block
   %macro FDX 1
     call COLD_SEG:xd_ %+ %1
   %endmacro
+  %macro FDK 1
+    call KERNEL_SEG:%1
+  %endmacro
   %macro FDXF 1
 xd_ %+ %1:
     call %1
@@ -284,6 +293,9 @@ xd_ %+ %1:
   %endmacro
   %macro FDX 1
     call %1
+  %endmacro
+  %macro FDK 1
+    call ct_ %+ %1
   %endmacro
   %macro FDXF 1
   %endmacro
@@ -307,16 +319,20 @@ modd_hdr:                       ; is at offset 0 because vstart is 0 and
     dw FD_NENT
     dw modd_e_open              ; A FAR-RETURNING BODY IS ITS OWN ENTRY and a
     dw modd_e_paint             ; near-returning one is wrapped: an entry is
-    dw fdlg_onkey_x_m           ; reached by `call far`, so what it ends in has
-    dw fdlg_onclick_x_m         ; to be a `retf`. onkey and onclick leave
-    dw fdlg_reap_x_m            ; through kretfc_dx and reap/grab/top through
-    dw fdlg_grab_x_m            ; their own, so all five already do; open and
-    dw fdlg_top_x_m             ; paint leave near and take the two below
-    times MOD_NENT - FD_NENT dw 0
-
+    dw modd_e_onkey             ; reached by `call far`, so what it ends in has
+    dw modd_e_onclick           ; to be a `retf`. reap/grab/top leave through
+    dw fdlg_reap_x_m            ; their own, so those three already do; open,
+    dw fdlg_grab_x_m            ; paint, onkey and onclick leave near - the
+    dw fdlg_top_x_m             ; last two because kern_big's window dispatch
+                                ; calls them NEAR (SPEC.md 2.6.3) - and
+                                ; take the four below
 modd_e_open:    call fdlg_open_x_m
             retf
 modd_e_paint:   call fdlg_paint_x_m
+            retf
+modd_e_onkey:   call fdlg_onkey_x_m
+            retf
+modd_e_onclick: call fdlg_onclick_x_m
             retf
 
 %endif
@@ -341,15 +357,10 @@ fdk_dx:     pop dx
             pop bx
             pop ax
             ret
-fdkf_dx:    pop dx
-            pop cx
-            pop bx
-            pop ax
-            retf
 
 
 ; -----------------------------------------------------------------------------
-; fdlg_open - API slot 0x0150 (SPEC.md 38.6)
+; fdlg_open - API slot 0x0124 (SPEC.md 38.6)
 ; in:  AL = 0 Open / 1 Save, BX = requester window ptr, DI = completion proc
 ;      (near, in the caller's image), SI = default name (NUL, <= 12) or 0.
 ;      THE CALLER HOLDS THE GFX LOCK - every legal caller is a window
@@ -455,7 +466,7 @@ FDBODY fdlg_open_x
     mov [fdlg_rqwin], bx
     mov [fdlg_mode], al
 
-    call KERNEL_SEG:cw_inst_win_owner ; DI = the owning record, or 0; BX preserved
+    FDK cw_inst_win_owner             ; DI = the owning record, or 0; BX preserved
     or di, di
     jz .ref
     cmp byte [di+I_STATE], 1
@@ -508,7 +519,7 @@ FDBODY fdlg_open_x
     xor ax, ax                  ; a fresh dialog has nothing pressed - and the
     mov [fdlg_down], ax         ; title above is the last read of AX
 %ifdef KERN_BIG
-    mov ax, fdlg_onup           ; the column fires on the RELEASE now (SPEC.md
+    mov ax, fdlg_onup_x         ; the column fires on the RELEASE now (SPEC.md
     call KERNEL_SEG:cw_wm_onmouseup ; 13.8.3) and follows the pointer between
 %ifdef OS88UI_SBDRAG
     mov [bx+W_ONTIMER], ax      ; ...and the SAME proc is 13.10.5.4.2's PAUSE
@@ -517,9 +528,9 @@ FDBODY fdlg_open_x
                                 ; them apart off [ui_armw]. A plain store, as
                                 ; wm_ontimer is
 %endif
-    mov ax, fdlg_ondrag         ; the two edges - both are .text thunks,
-    call KERNEL_SEG:cw_wm_ondrag ; because this module is .cold and wm_pkgcall
-                                ; dispatches a W_SEG-0 window NEAR. NO SECOND
+    mov ax, fdlg_ondrag_x       ; the two edges - both the cold BODIES,
+    call KERNEL_SEG:cw_wm_ondrag ; because wm_pkgcall dispatches a W_SEG-0
+                                ; window into `.cold` (2.6.3). NO SECOND
                                 ; W_TITLE store: it used to re-derive the title
                                 ; from [fdlg_mode] and write it again here, and
                                 ; the two calls in between are the whole gap -
@@ -811,9 +822,9 @@ fdlg_gate:
 .dead:
     or al, al
     jnz .close
-    call KERNEL_SEG:cw_gfx_lock
+    FDK cw_gfx_lock
     call fdlg_close
-    call KERNEL_SEG:cw_gfx_unlock
+    FDK cw_gfx_unlock
     jmp short .none
 .close:
     call fdlg_close
@@ -882,7 +893,7 @@ FDBODY fdlg_grab_x
     clc
     jmp short .out
 .swallow:
-    call KERNEL_SEG:cw_snd_beep
+    FDK cw_snd_beep
     stc
 .out:
     pop bx
@@ -1484,7 +1495,7 @@ fdlg_text:
     add dx, [fdlg_cy]
     mov al, [gfx_color]         ; OPAQUE (SPEC.md 38.12), and the ink is read
     mov ah, [fdlg_paper]        ; back rather than passed: seven call sites
-    call KERNEL_SEG:cw_font_run ; already set the pen and none had to change.
+    FDK cw_font_run             ; already set the pen and none had to change.
     pop ax                      ; The paper follows the GROUND - white for the
                                 ; dialog's pane, whose SELECTION is 38.3's XOR
                                 ; band drawn over the rows afterwards, and
@@ -1756,13 +1767,13 @@ fdlg_btn2:
     inc bx
     dec cx
     dec dx
-    call KERNEL_SEG:cw_gfx_fill
+    FDK cw_gfx_fill
     dec ax                      ; ...and the inset UNDONE for the frame, which
     dec bx                      ; is the same rect: gfx_fill's own header says
     inc cx                      ; "clobbers: flags", so AX-DX come back
     inc dx
     mov byte [gfx_color], CBLACK
-    call KERNEL_SEG:cw_gfx_frame
+    FDK cw_gfx_frame
     pop ax
     test al, OS88UI_DOWN        ; ...and the two captions in white over it
     jz .ink
@@ -1788,7 +1799,7 @@ fdlg_btn2:
 fdlg_blabel:
     push ax                     ; NOT SI: font_width clobbers nothing else and
     push cx                     ; fdlg_text preserves everything
-    call KERNEL_SEG:font_width ; AX = 8 * length
+    FDK font_width             ; AX = 8 * length
     mov cx, FD_BX2-FD_BX1+1
     sub cx, ax
     jns .pad                    ; a label wider than the button would make the
@@ -1852,7 +1863,7 @@ FDBODY fdlg_paint_x
     mov cx, FD_LX2
     mov dx, FD_LY2
     call fdlg_off
-    call KERNEL_SEG:cw_gfx_frame
+    FDK cw_gfx_frame
 
     call fdlg_list_body
 
@@ -1892,7 +1903,7 @@ FDBODY fdlg_paint_x
     mov cx, FD_NBX2
     mov dx, FD_NBY2
     call fdlg_off
-    call KERNEL_SEG:cw_gfx_frame
+    FDK cw_gfx_frame
     call fdlg_name_body
 
     jmp fdk_bp
@@ -2006,7 +2017,7 @@ fdlg_draw_list:
 fdlg_wfill:
     mov byte [gfx_color], CWHITE
     call fdlg_off
-    call KERNEL_SEG:cw_gfx_fill
+    FDK cw_gfx_fill
     ret
 
 fdlg_list_body:
@@ -2087,7 +2098,7 @@ fdlg_draw_rows:
     pop di
     mov si, fdlg_num
 .right:
-    call KERNEL_SEG:font_width ; AX = the string's width
+    FDK font_width             ; AX = the string's width
     mov cx, 196
     sub cx, ax                  ; right-aligned, clear of the scroll bar
     mov dx, bp
@@ -2142,7 +2153,7 @@ fdlg_sel_bar:
     mov ax, FD_LX1+1
     mov cx, FD_SBX-1
     call fdlg_off
-    call KERNEL_SEG:cw_gfx_xor_fill
+    FDK cw_gfx_xor_fill
 .out:
     jmp fdk_dx
 
@@ -2264,7 +2275,7 @@ fdlg_act:
     call fdlg_newfolder         ; Enter finishes naming it, the same as
     jmp short .stay             ; clicking the button again does
 .refuse:
-    call KERNEL_SEG:cw_snd_beep
+    FDK cw_snd_beep
 .stay:
     pop ax
     clc
@@ -2325,7 +2336,7 @@ fdlg_newfolder:
     call fdlg_unfold
     jmp short .out
 .beep:
-    call KERNEL_SEG:cw_snd_beep ; refused (a bad name, a full disk, a
+    FDK cw_snd_beep             ; refused (a bad name, a full disk, a
 .out:                           ; write-protected volume) - the same answer
     pop di                      ; every other refusal in this dialog gives.
     pop si                      ; SI first: the folder work above pointed it
@@ -2592,7 +2603,7 @@ FDBODY fdlg_onkey_x
     call fdlg_repaint
 .out:
     pop di
-    jmp fdkf_dx                ; the shared far-cold epilogue (kernel.asm)
+    jmp fdk_dx                 ; NEAR on both builds (SPEC.md 2.6.3)
 
 ; -----------------------------------------------------------------------------
 ; fdlg_nins - insert AL at the caret, which then sits after it (internal)
@@ -2732,16 +2743,6 @@ fdlg_onup_x:
     call fdlg_bact
 .out:
     jmp fdk_di
-
-; ...and its far entry, BESIDE the body rather than in the resident block at
-; the foot. Both halves are kern_big's, so on kern_small neither is emitted
-; and FDLG.DRV carries no routine that build cannot reach; and on kern_big
-; the entry sits in the SAME `.cold` as its body, which is what
-; tools/os88ovlchk.py needs - an entry in the resident half naming a body
-; inside the module's own extent reads as a segment crossing to a scanner
-; that cannot evaluate a %ifdef.
-fdf_fdlg_onup:          call fdlg_onup_x
-                    retf
 %endif                          ; KERN_BIG
 
 ; -----------------------------------------------------------------------------
@@ -2820,16 +2821,6 @@ fdlg_ondrag_x:
 .out:
     jmp fdk_di
 
-; ...and its far entry, BESIDE the body rather than in the resident block at
-; the foot. Both halves are kern_big's, so on kern_small neither is emitted
-; and FDLG.DRV carries no routine that build cannot reach; and on kern_big
-; the entry sits in the SAME `.cold` as its body, which is what
-; tools/os88ovlchk.py needs - an entry in the resident half naming a body
-; inside the module's own extent reads as a segment crossing to a scanner
-; that cannot evaluate a %ifdef.
-fdf_fdlg_ondrag:        call fdlg_ondrag_x
-                    retf
-
 %endif                          ; KERN_BIG
 
 ; -----------------------------------------------------------------------------
@@ -2867,7 +2858,7 @@ fdlg_pt:
 fdlg_orig:
     push bx
     mov bx, si
-    call KERNEL_SEG:cw_wm_content
+    FDK cw_wm_content
     mov [fdlg_cx], ax
     mov [fdlg_cy], dx
     pop bx
@@ -3242,7 +3233,7 @@ FDBODY fdlg_onclick_x
                                 ; own live one, which is where it was copied
                                 ; from)
     pop di
-    jmp fdkf_dx                ; the shared far-cold epilogue (kernel.asm)
+    jmp fdk_dx                 ; NEAR on both builds (SPEC.md 2.6.3)
 
 ; -----------------------------------------------------------------------------
 section .bss
@@ -3391,8 +3382,6 @@ ui_krect4:
 
 fdf_fdlg_open:          call fdlg_open_x
                     retf
-fdf_fdlg_paint:         call fdlg_paint_x
-                    retf
 
 
 %ifdef FDLG_MOD
@@ -3435,21 +3424,19 @@ fdlg_paint_x:
 .no:
     ret
 
-fdlg_onkey_x:
-    cmp word [fdlg_win], 0
-    je .no
+fdlg_onkey_x:                   ; NEAR: fdlg_tpl names it, and wm_pkgcall
+    cmp word [fdlg_win], 0      ; calls a kernel window's callbacks near in
+    je .no                      ; `.cold` (SPEC.md 2.6.3)
     call far [FDFP + FDE_ONKEY*4]
-    retf
 .no:
-    retf
+    ret
 
 fdlg_onclick_x:
     cmp word [fdlg_win], 0
     je .no
     call far [FDFP + FDE_ONCLICK*4]
-    retf
 .no:
-    retf
+    ret
 
 ; ...and reap is where the image goes back (SPEC.md 2.8.3): it is the routine
 ; that collects a dialog whose close or commit has run, so "[fdlg_win] was set

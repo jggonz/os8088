@@ -301,7 +301,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
 
     # --- PROMISE -----------------------------------------------------------
     w = win(m, slot)
-    band = m.read(S("wm_su_ext") + slot * 4, 4)
+    band = m.read(os88sym.wfield(slot, "W_SUEXT"), 4)
     print("PROMISE : %s (%d,%d) %dx%d view=%d saveu=%s band=%r"
           % (w.title, w.x, w.y, w.w, w.h, view(m, seg), w.promises, list(band)))
     if not w.promises:
@@ -364,7 +364,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # MISSED, and those want opposite fixes. Two guest reads; it costs a
     # failing run nothing and a passing one nothing worth measuring.
     ww = win(m, slot)
-    bb = m.read(S("wm_su_ext") + slot * 4, 4)
+    bb = m.read(os88sym.wfield(slot, "W_SUEXT"), 4)
     print("BEFORE  : saveu=%s band=%r view=%d"
           % (ww.promises if ww else None, list(bb), view(m, seg)))
     path = []
@@ -430,7 +430,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         mo.click(w.x + 20, w.y + TITLE_H + 40)
         mo.to(*dispcorner.PARK)
         tick(m)
-    band = m.read(S("wm_su_ext") + slot * 4, 4)
+    band = m.read(os88sym.wfield(slot, "W_SUEXT"), 4)
     print("LIVE    : view=%d saveu=%s band=%r"
           % (view(m, seg), win(m, slot).promises, list(band)))
     if view(m, seg) != 0:

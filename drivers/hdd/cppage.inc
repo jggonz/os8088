@@ -39,7 +39,7 @@
 ; GREYING FOLLOWS SPEC.md 47: one predicate per control, shared by the
 ; greying, the click refusal and the explanation; a fact and never a guess;
 ; and the whole control, not just its caption. The pen comes from
-; OSAPI_GFX_PEN (slot 0x0310), so a disabled button carries [gfx_dis] as well
+; OSAPI_GFX_PEN (slot 0x0260), so a disabled button carries [gfx_dis] as well
 ; as CDGRAY and its LABEL dithers on the two 1bpp adapters instead of coming
 ; out solid black next to a dotted frame.
 ; =============================================================================

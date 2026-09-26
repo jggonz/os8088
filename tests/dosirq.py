@@ -44,10 +44,10 @@ import os
 import re
 import struct
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88geom                                                # noqa: E402
+import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
@@ -86,13 +86,13 @@ def main():
             fail("double-clicking DOSIRQ.COM opened no window")
 
         rows = []
-        end = time.time() + 240.0
-        while time.time() < end:
-            rows = m.screen() or []
-            if any("READY" in r for r in rows):
-                break
-            time.sleep(0.4)
-        else:
+
+        def done(mm):
+            rows[:] = mm.screen() or []
+            return any("READY" in r for r in rows)
+        try:            # a GUEST budget: a loaded box cannot shorten it
+            os88marty.until(m, done, "the program's READY line", poll=0.4, limit=240.0)
+        except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
                  % ([r.rstrip() for r in rows if r.strip()][:12],))
 

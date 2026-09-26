@@ -80,7 +80,7 @@ def listing():
     os.close(fd)
     r = subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
                         "-I", "apps/skies/", "-I", CSWIDX,
-                        "-o", os.devnull, "-l", lst,
+                        "-o", lst + ".bin", "-l", lst,
                         "apps/skies/skies.asm"], capture_output=True, text=True)
     if r.returncode:
         sys.exit("skiesperf: the tree does not assemble:\n" + r.stderr[:400])
@@ -235,6 +235,7 @@ def main(argv):
     lst = listing()
     S = sites(lst)
     os.unlink(lst)
+    os.unlink(lst + ".bin")
 
     def off(n):
         return dispapps.bss_off("skies", n)

@@ -14,7 +14,7 @@
 ; per arm and the label band is derived back off it).
 ;   hit zone   x zx..zx+31, y (32+step*i) .. +[desk_zh1], where
 ;              zx = [vid_desk_zx] = screen width - 56 (584 at 640 wide)
-;   icon       [desk_pdisk] / [desk_phdd] at (zx, top), 32 px wide
+;   icon       one of [desk_pico]'s three records at (zx, top), 32 px wide
 ;   label      SPEC.md 26.5's gap of desktop under the icon, then 8px text,
 ;              black on a white rect that HUGS the caption - measured with
 ;              font_width and clamped to the zone plus its 2px overhang,
@@ -99,11 +99,10 @@ DSV_R_LEAD  equ 39              ; 26: the failure notice's lead line, NUL
                                 ;     the words and the composer on every
                                 ;     machine, including the ones with no such
                                 ;     driver at all
-DSV_R_SIZE  equ 65
+DSV_R_SIZE  equ 39
 DSV_CAPMAX  equ 12              ; the four field widths, named because the copy
 DSV_FILEMAX equ 13              ; and the .bss cells must agree
 DSV_NAMEMAX equ 12
-DSV_LEADMAX equ 26
 %else
 DESK_NZ     equ DVOL_MAX
 %endif
@@ -266,7 +265,7 @@ desk_init:
     xor cl, cl
 .zloop:
     mov bl, cl
-    call KERNEL_SEG:dsk_vol_slot      ; FAR: overlay -> resident. It clobbers
+    call COLD_SEG:dkf_dsk_vol_slot ; FAR: window -> cold, no .text thunk. It clobbers
     xor al, al                  ; "BX (the output), flags", so AL is free
     cmp byte [bx+DV_KIND], DVK_FREE
     je .zskip                   ; the probe retired it - do not hand it back.
@@ -320,12 +319,82 @@ desk_init:
     call dsk_fdd_probe          ; preserves BX, CX, DX and ES: CL and the
 %endif                          ; count in DH both survive it. AL is IGNORED
     mov al, cl
-    call KERNEL_SEG:dsk_flop_add        ; FAR: overlay -> resident
+    OVWCALL dsk_flop_add_x      ; window -> window: both bodies are `.ovlw`,
+                                ; so the far call names FAT_SEG itself and the
+                                ; `.text` thunk it used to bounce through is
+                                ; gone (kernel size pass 5, -6 resident)
 .eskip:
     inc cl
     cmp cl, 4
     jb .eloop
 .edone:
+
+    ; --- which KIND of diskette each floppy drive takes (SPEC.md 26.4.1) ----
+    ; A 5.25" drive gets the 5.25" picture and a 3.5" one keeps the one it has
+    ; always had. Asked of the DRIVE through int 13h AH=08h - the question
+    ; dskw_fmt_probe_x and DOS's own FORMAT ask - and never of the medium,
+    ; which is not there at boot and would not settle it if it were: a 720KB
+    ; disk goes in a 1.2MB drive. Every row, not just the zones shown, so a
+    ; drive the probe kept stays right if a zone is given to it later.
+    xor cl, cl
+.kloop:
+    mov bl, cl
+    call COLD_SEG:dkf_dsk_vol_slot ; FAR: window -> cold; BX = the row
+    cmp byte [bx+DV_KIND], DVK_BIOS
+    jne .knext                  ; a driver's volume, or a free row
+    mov dl, [bx+DV_UNIT]
+    test dl, 0x80
+    jnz .knext                  ; a BIOS HARD disk (a boot partition)
+    push bx
+    push cx
+    push di
+    push bp                     ; AH=08h spends BX, CX, DX, DI and ES, and
+    push es                     ; some BIOSes BP as well
+    mov ah, 0x08
+    int 0x13
+    mov al, DVF_525 | DVF_GUESS ; **A ROM THAT WILL NOT ANSWER IS PROBABLY A
+    jc .kset                    ; 5.25" MACHINE** - dskw_fmt_probe_x's
+                                ; inference and for its reason: AH=08h for
+                                ; floppies came with the AT, and so did most
+                                ; drives that are not a 5.25". Neither GLaBIOS
+                                ; nor the 1982 IBM ROM answers it, and a 5150
+                                ; is exactly the machine that should draw this
+                                ; picture. PROBABLY, because an XT can be
+                                ; fitted with a 3.5" drive and GLaBIOS still
+                                ; refuses (measured, os8088_xt_vga_144) - so
+                                ; the guess is MARKED and the first mount of
+                                ; the drive corrects it from the medium
+                                ; (desk_learn_x). The boot drive's first mount
+                                ; is drv_boot's, before the first paint.
+                                ;
+                                ; Otherwise decided on the drive's own
+                                ; GEOMETRY and not on BL's CMOS type, which an
+                                ; XT-class ROM that answers at all may leave
+                                ; as anything: 15 sectors is the 1.2MB drive,
+                                ; 9 over 40 cylinders the 360KB one, and every
+                                ; other answer - 9/80, 18/80, 36/80, or a zero
+                                ; from a ROM with nothing to say - keeps the
+                                ; 3.5" picture it had before this existed
+    and cl, 0x3F                ; CL = sectors per track
+    cmp cl, 15
+    je .kset
+    cmp cl, 9
+    jne .k35
+    cmp ch, 40                  ; CH = the last cylinder, low 8 bits
+    jb .kset
+.k35:
+    xor al, al
+.kset:
+    pop es
+    pop bp
+    pop di
+    pop cx
+    pop bx
+    or [bx+DV_FLAGS], al
+.knext:
+    inc cl
+    cmp cl, DVOL_MAX
+    jb .kloop
 
     call KERNEL_SEG:ovw_desk_rowcalc  ; FAR: overlay -> resident. The row
                                 ; count is geometry, and geometry can change
@@ -377,12 +446,12 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; resident now and desk_init far-calls it like any other overlay->text step.
 ; -----------------------------------------------------------------------------
 desk_rowcalc_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
 
     ; --- which ICON, and therefore how tall a zone is (SPEC.md 26.4) --------
     ; The CGA's pixels are 2.4:1 tall, so the 32-row diskette renders as a
@@ -402,21 +471,23 @@ desk_rowcalc_x:
     ; it, so the erase, the damage growth and the XOR highlight - all of which
     ; derive from [desk_zh1] - cover it for free, and [desk_zstep] does not
     ; move: a zone still fits its pitch (45 of 60, 26 of 34).
+    ;
+    ; The PICTURES are one pointer and not three: [desk_pico] names the
+    ; height's row of desk_ico32/desk_ico14, and desk_draw_zone indexes it.
+    ; Three stores of three immediates per arm were 30 bytes of this routine
+    ; for what two constant tables and one store say in 10 (SPEC.md 26.4.1).
     mov ax, 32 + DESK_ZGAP + DESK_LBLH - 1
     mov bx, DESK_ZSTEP
-    mov si, ico_disk32
-    mov di, ico_hdd32
+    mov si, desk_ico32
     cmp byte [vid_kind], VID_CGA
     jne .set
     mov ax, 14 + DESK_ZGAP_S + DESK_LBLH - 1
     mov bx, DESK_ZSTEP_S
-    mov si, ico_disk14
-    mov di, ico_hdd14
+    mov si, desk_ico14
 .set:
     mov [desk_zh1], ax
     mov [desk_zstep], bx
-    mov [desk_pdisk], si
-    mov [desk_phdd], di
+    mov [desk_pico], si
 
     mov ax, [vid_dock_y0]
     sub ax, DESK_ZY0
@@ -708,6 +779,50 @@ desk_zmark_x:
     ret
 
 ; -----------------------------------------------------------------------------
+; desk_learn_x - a floppy just mounted: settle its drive's KIND off the medium,
+;                if the ROM would not say (SPEC.md 26.4.1)
+; in:  [disk_drive], and [disk_spt]/[dsk_totsec] as dsk_bpb_check has just
+;      filled them
+; out: nothing (all registers preserved); a changed picture posts the repaint
+;
+; Only a row desk_init marked DVF_GUESS is touched, so a drive whose ROM
+; answered AH=08h is never second-guessed by what happens to be in it - and
+; that is also the whole of the "is it a floppy" test: desk_init marks BIOS
+; floppy rows and nothing else, and every other writer of DV_FLAGS stores the
+; byte whole, so a partition or a driver's volume can never carry the bit. The
+; medium settles the drive only where the medium CAN: 15 sectors a track is
+; the 1.2MB format and 720 sectors or fewer a 40-track one, and both exist
+; only on 5.25" media; 720KB and up is 3.5". A 5.25" drive fed an 80-track
+; 9-sector disk would read as 3.5" here - it is the one medium that fits
+; both, and on a ROM this old it is by far the rarer drive.
+; -----------------------------------------------------------------------------
+desk_learn_x:
+    push ax
+    push bx
+    mov bl, [disk_drive]
+    call dsk_vol_row_x
+    jc .out
+    mov al, [bx+DV_FLAGS]
+    test al, DVF_GUESS
+    jz .out                     ; the drive said what it is
+    mov ah, al
+    or al, DVF_525
+    cmp word [disk_spt], 15
+    je .set
+    cmp word [dsk_totsec], 720
+    jbe .set
+    and al, ~DVF_525 & 0xFF
+.set:
+    cmp al, ah
+    je .out                     ; the guess was right - nothing to repaint
+    mov [bx+DV_FLAGS], al
+    call desk_zmark_x           ; the grid owes a repaint (SPEC.md 26.3)
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; desk_zones_shown - how many volumes have a zone right now (module internal)
 ; out: AL = the count, 0..DVOL_MAX
 ; clobbers: AX (AL is the output, AH is scratch), flags
@@ -922,12 +1037,12 @@ desk_zones_paint_x:
 ; outs: none (all registers preserved)
 ; -----------------------------------------------------------------------------
 desk_click_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
 
     mov di, cx                  ; DI/SI = the click, and CL = the volume:
     mov si, dx                  ; desk_zone_xy ANSWERS in AX and DX, so the
@@ -970,10 +1085,10 @@ desk_click_x:
                                 ; finds "same zone" and returns, which IS the
                                 ; restamp, with the tick already stamped
     ; --- double-click: deselect + redraw under our lock, then open ----------
-    call KERNEL_SEG:cw_gfx_lock               ; the store is INSIDE the lock, here and in
+    call ct_cw_gfx_lock                       ; the store is INSIDE the lock, here and in
     mov byte [desk_sel], 0xFF   ; both paths below: desk_zone_redraw's partial
     call desk_zone_redraw       ; case flips the highlight rather than redrawing
-    call KERNEL_SEG:cw_gfx_unlock             ; it, so no other painter may see the new
+    call ct_cw_gfx_unlock                     ; it, so no other painter may see the new
                                 ; selection and act on it in between
 %ifndef KERN_SMALL
     cmp al, DESK_SVZ            ; the SERVICE zone opens a PACKAGE, not a
@@ -1001,7 +1116,7 @@ desk_click_x:
     je .out                     ; desk_sel's only runtime writer (desk_init
                                 ; writes it once at boot): equal means the
                                 ; too-slow arm, and there is nothing to redraw
-    call KERNEL_SEG:cw_gfx_lock
+    call ct_cw_gfx_lock
     mov [desk_sel], al          ; the STORE is still inside it (SPEC.md 26.3)
     cmp ah, 0xFF
     je .selnew
@@ -1010,17 +1125,17 @@ desk_click_x:
     xchg al, ah
 .selnew:
     call desk_zone_redraw       ; selected redraw of the new zone
-    call KERNEL_SEG:cw_gfx_unlock
+    call ct_cw_gfx_unlock
     jmp .out
 
 .miss:
     mov al, [desk_sel]          ; empty desktop click clears the selection
     cmp al, 0xFF
     je .out
-    call KERNEL_SEG:cw_gfx_lock
+    call ct_cw_gfx_lock
     mov byte [desk_sel], 0xFF
     call desk_zone_redraw       ; AL = the old zone
-    call KERNEL_SEG:cw_gfx_unlock
+    call ct_cw_gfx_unlock
 
 .out:
     jmp kretfc_di
@@ -1069,7 +1184,7 @@ desk_zone_redraw:
                                 ; survives in AX/BX/CX/DX for the test below
     jc .full                    ; too many fragments: repaint the world
     jz .none                    ; wholly covered: nothing of it is on screen
-    call KERNEL_SEG:cw_wm_clip_test           ; is the WHOLE zone inside one fragment?
+    call ct_cw_wm_clip_test                   ; is the WHOLE zone inside one fragment?
     pop ax                      ; BELOW the test, which reads the rect out of
                                 ; AX/BX/CX/DX - and `pop` writes no flags, so
                                 ; clip_test's CF crosses it and both arms
@@ -1104,7 +1219,7 @@ desk_zone_hilite:
     call desk_zone_rect         ; the DRAWN rect...
     add ax, DESK_ZOVER          ; ...less the label's overhang at each edge,
     sub cx, DESK_ZOVER          ; which is the HIT rect this one wants
-    call KERNEL_SEG:cw_gfx_xor_fill  ; NOT a tail call any more, and it cannot
+    call ct_cw_gfx_xor_fill          ; NOT a tail call any more, and it cannot
     ret                         ; be: a cw_ shim ends in `retf`, so jumping to
                                 ; one pops this routine's NEAR return address
                                 ; as CS:IP and lands in the weeds. The cost is
@@ -1148,7 +1263,9 @@ desk_draw_zone:
     ; --- the icon, which IS the zone's width now (SPEC.md 26.4) --------------
     mov cx, [desk_zx]
     mov dx, [desk_zy]
-    mov si, [desk_pdisk]
+    mov si, [desk_pico]         ; SI -> this height's [diskette, 5.25", hard
+                                ; disk] (SPEC.md 26.4.1), indexed below and
+                                ; read through at .icon
     mov bl, [desk_zdrv]         ; dsk_vol_fixed_x takes BL and answers in AX,
 %ifndef KERN_SMALL
     cmp bl, DESK_SVZ            ; ...unless this is the SERVICE zone, whose
@@ -1157,10 +1274,19 @@ desk_draw_zone:
     call dsk_vol_fixed_x          ; the MEDIUM, not the transport (SPEC.md
     jc .icon                    ; 18.7.2). This was `cmp DV_KIND, DVK_DRV`,
     or al, al                   ; which is the TRANSPORT - so a hard disk
-    jz .icon                    ; booted through the BIOS (DVK_BIOS, unit
-    mov si, [desk_phdd]         ; 80h+) drew the FLOPPY icon, which is what a
-.icon:                          ; machine booting off its own disk always saw
-    call KERNEL_SEG:cw_icon_draw_ix   ; the four are the INDEXED kind
+    jz .flop                    ; booted through the BIOS (DVK_BIOS, unit
+    add si, byte 4              ; 80h+) drew the FLOPPY icon, which is what a
+    jmp short .icon             ; machine booting off its own disk always saw
+.flop:
+    call dsk_vol_slot_x         ; ...and a floppy is drawn as the KIND of
+    mov al, [bx+DV_FLAGS]       ; diskette its drive takes (SPEC.md 26.4.1):
+    and ax, DVF_525             ; DVF_525 is 2, which IS the table's second
+    add si, ax                  ; word, so the bit indexes it without a
+                                ; branch. BX is the row now and nothing below
+                                ; reads it before .label reloads BL
+.icon:
+    mov si, [si]
+    call KERNEL_SEG:cw_icon_draw_ix   ; the six are the INDEXED kind
                                 ; (SPEC.md 25.7) and this is their only site
 .label:
     ; --- label: the white rect HUGS the caption (SPEC.md 26.4) ---------------
@@ -1176,7 +1302,7 @@ desk_draw_zone:
     mov al, [desk_zdrv]
     call desk_zone_label        ; SI -> it, the row's or a derived 'A:'
     push si
-    call KERNEL_SEG:font_width             ; AX = its pixel width
+    call ct_font_width                     ; AX = its pixel width
     mov bx, [desk_zx]           ; BX = the zone's left, held for BOTH clamps
     mov cx, DESK_ZW             ; and for the lea below
     sub cx, ax
@@ -1212,7 +1338,7 @@ desk_draw_zone:
                                 ; at the .text resting value - so y1 comes off
                                 ; it and [desk_icoh]/[desk_zgap] are not read
     mov byte [gfx_color], CWHITE
-    call KERNEL_SEG:cw_gfx_fill
+    call ct_cw_gfx_fill
 
     ; --- ...and the caption in it, black -------------------------------------
     ; OPAQUE (SPEC.md 26.6): the white rect above is DESK_LBLH = 12 rows and a
@@ -1227,7 +1353,7 @@ desk_draw_zone:
                                 ; is y1+2 - the 2px of white above the text.
                                 ; dock_paint rides this same contract
     mov ax, (CWHITE << 8) | CBLACK
-    call KERNEL_SEG:cw_font_run
+    call ct_cw_font_run
 
     ; --- selection highlight: XOR the whole hit zone --------------------------
     mov al, [desk_sel]
@@ -1275,7 +1401,7 @@ desk_draw_zone:
 
 %ifndef KERN_SMALL
 ; -----------------------------------------------------------------------------
-; osapi_desk_svc - slot 0x0528: a DRIVER registers the desktop SERVICE zone
+; osapi_desk_svc - slot 0x03F8: a DRIVER registers the desktop SERVICE zone
 ;                  (SPEC.md 26.7)
 ; in:  AL = 1 add / 0 withdraw; ES:SI -> a DSV_R_SIZE record in the driver's
 ;      own segment (add only). ES is the caller's segment either way - the
@@ -1383,7 +1509,7 @@ section .text                   ; DATA, so back to the kernel segment (SPEC.md
                                 ; 2.6 rule 1). These labels carry NO COLON,
                                 ; which is why a scan keyed on `name:` missed
                                 ; them and moved the lot into .cold - where DS
-                                ; still names KERNEL_SEG, so desk_pdisk read as
+                                ; still names KERNEL_SEG, so desk_pico read as
                                 ; garbage and the comment below came true
 desk_lbl_gen db "A:", 0         ; scratch for desk_zone_label's derived form:
                                 ; a volume with no label of its own is named
@@ -1393,13 +1519,21 @@ desk_lbl_gen db "A:", 0         ; scratch for desk_zone_label's derived form:
 ; Set by desk_rowcalc, which is also what vid_switch re-runs, so these follow
 ; the machine being moved between its two cards. In .text with real
 ; initialisers and not .bss, for the reason every boot-reachable table here
-; is: -f bin zeroes nothing, and a zero [desk_pdisk] draws the interrupt
+; is: -f bin zeroes nothing, and a zero [desk_pico] draws the interrupt
 ; vector table as an icon.
 desk_zh1    dw 32 + DESK_ZGAP + DESK_LBLH - 1   ; ...the zone's, MINUS ONE:
                                 ; every reader wants the inclusive bottom
 desk_zstep  dw DESK_ZSTEP       ; zone-to-zone pitch
-desk_pdisk  dw ico_disk32       ; the diskette at that height...
-desk_phdd   dw ico_hdd32        ; ...and the hard disk
+desk_pico   dw desk_ico32       ; -> the pictures at that height, below
+
+; --- the pictures, per height (SPEC.md 26.4.1) - constants, never written ----
+; desk_draw_zone indexes a row with DVF_525 (2) for the 5.25" diskette and 4
+; for a fixed volume, so the ORDER is load-bearing and asserted
+desk_ico32  dw ico_disk32, ico_f525_32, ico_hdd32
+desk_ico14  dw ico_disk14, ico_f525_14, ico_hdd14
+%if DVF_525 != 2
+  %error "desk_draw_zone indexes desk_ico32/14 with DVF_525 as a byte offset - it must be 2, the table's second word"
+%endif
 
 section .cold                   ; ...and back to cold code for the far entries
 
@@ -1439,9 +1573,6 @@ desk_svc_file resb DSV_FILEMAX  ; the 8.3 file it launches out of SYSTEM/
 desk_svc_cls  resb 1            ; its DRVC_* class...
 desk_svc_vrb  resb 1            ; ...and the verb that paints the icon
 desk_svc_name resb DSV_NAMEMAX  ; the package's header name - the singleton
-desk_svc_lead resb DSV_LEADMAX  ; 'Cannot open <caption>:' - the driver's own
-                                ; words, so the kernel carries neither them
-                                ; nor a composer for them
 %if ($ - desk_svc_rec) != DSV_R_SIZE
   %error "the .bss mirror and the registered record must be the same shape: osapi_desk_svc copies DSV_R_SIZE bytes into it with one rep movsb"
 %endif

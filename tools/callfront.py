@@ -39,18 +39,18 @@ the cache claim itself and look at it, which is what identified both this and
 """
 import os
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import os88marty
+import os88ui
 from os88mouse import Mouse
 import sucheck as su
 import subcheck as sc
 
-ROW_APPS = 0                    # B: root, sorted: APPS GAMES MEDIA SYSTEM
-ROW_README = 1                  # A: root, sorted: MEDIA README.TXT SYSTEM
+# APPS on B: and README.TXT on A: are found BY NAME in the window's own
+# listing: a row ordinal is what SPEC.md 19.4 says nothing may be built on.
 
 
 def named(m, pre):
@@ -58,6 +58,20 @@ def named(m, pre):
         if w.visible and w.title.upper().startswith(pre):
             return w
     return None
+
+
+def row(ui, win, name):
+    """`win`'s visible row for the entry called `name` (os88ui raises, naming
+    what the folder holds, when it is not there)."""
+    return su.row(win, ui.entry(name, win)[0] - ui.scroll(win))
+
+
+def opened(m, before, what):
+    """A window beyond the `before` visible ones, then its first paint - the
+    pixels are what `sc.shot` reads next."""
+    os88marty.until(m, lambda _: len(sc.wins(m)) > before, what, poll=0.1,
+                    limit=60)
+    os88marty.settle(m)
 
 
 def main():
@@ -77,17 +91,25 @@ def main():
             plain = m.sym
             m.sym = lambda n, d=tuple(defines): plain(n, d)
         mo = Mouse(marty=m)
+        ui = os88ui.UI(m, verbose=False, mouse=mo)
         print("machine %s -> %s" % (machine, out))
 
-        mo.dblclick(*su.zone(m, 0)); time.sleep(4)      # 1. Drive A
+        n = len(sc.wins(m))
+        mo.dblclick(*su.zone(m, 0))                            # 1. Drive A
+        opened(m, n, "Drive A's window")
         sc.shot(m, "1-drive-a", out, log, mo)
-        mo.dblclick(*su.zone(m, 1)); time.sleep(4)      # 2. Drive B
+        mo.dblclick(*su.zone(m, 1))                            # 2. Drive B
+        opened(m, n + 1, "Drive B's window")
         sc.shot(m, "2-drive-b", out, log, mo)
 
         b = [w for w in su.windows(m) if w.visible][-1]  # the newest is B:
         b = sc.zorder(m)[-1]
         b = [w for w in su.windows(m) if w.i == b][0]
-        mo.dblclick(*su.row(b, ROW_APPS)); time.sleep(5)  # 3. into APPS
+        mo.dblclick(*row(ui, b, "APPS"))                       # 3. into APPS
+        os88marty.until(m, lambda _: [w for w in su.windows(m) if w.i == b.i]
+                        [0].title.upper().startswith("APPS"),
+                        "the window to navigate into APPS", poll=0.1, limit=60)
+        os88marty.settle(m)
         sc.shot(m, "3-apps", out, log, mo)
 
         # 4. drag some windows: move APPS down-left, so both are reachable
@@ -104,11 +126,17 @@ def main():
 
         # 6. double-click README.TXT in Drive A -> Note Pad
         a = [w for w in su.windows(m) if w.visible and w.i == a.i][0]
-        mo.dblclick(*su.row(a, ROW_README)); time.sleep(20)
+        mo.dblclick(*row(ui, a, "README.TXT"))
+        try:                            # the launch, then its first paint
+            os88marty.until(m, lambda _: named(m, "NOTE") or named(m, "README"),
+                            "Note Pad", poll=0.1, limit=60)
+            os88marty.settle(m)
+        except os88marty.MartyError:
+            pass                        # ...reported below
         np = named(m, "NOTE") or named(m, "README")
         sc.shot(m, "6-notepad", out, log, mo)
         if np is None:
-            print("!! Note Pad did not open - check ROW_README")
+            print("!! Note Pad did not open off README.TXT")
             m.quit()
             return
 

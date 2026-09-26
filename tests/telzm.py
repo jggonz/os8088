@@ -255,15 +255,16 @@ def wait_desktop(m, letter="A", secs=90):
     docs/WRITING-TESTS.md's rule: wait on the CONDITION, not the clock. The
     condition is the one open_drive is about to test, so a pass here means the
     next line cannot fail for this reason - and the failure names the machine
-    rather than the feature.
+    rather than the feature. `secs` is the GUEST's (tests/os88qemu.py).
     """
-    for _ in range(int(secs / 0.4)):
+    def zone():
         try:
-            if dispcp.drive_ordinal(m, S, letter) is not None:
-                return
+            return dispcp.drive_ordinal(m, S, letter) is not None
         except Exception:                   # the guest is not answering yet
-            pass
-        time.sleep(0.4)
+            return False
+    if os88qemu.acted(m, zone, secs=secs, what="drive %s's zone" % letter,
+                      poll=0.4):
+        return
     sys.exit("telzm: drive %s: had no desktop zone after %ds - the guest "
              "never reached a desktop (a boot failure, not a telzm failure)"
              % (letter, secs))
@@ -405,7 +406,12 @@ def main():
         # TAB AND NOT RETURN: Return in the host box IS Connect, and it would
         # dial before this test's server exists (SPEC.md 70.12.1).
         telansi.qmp("sendkey tab")
-        time.sleep(0.5)
+        # EVERY WAIT BELOW IS ON THE GUEST'S CLOCK (tests/os88qemu.py) - the
+        # BIOS tick count - and on the byte the next line reads where there is
+        # one; the budgets are what the host-clock loops allowed on an idle box.
+        os88qemu.acted(m, lambda: rstr("te_hbuf", 48) == HOSTLINE, secs=3,
+                       what="the host box", poll=0.1)
+        os88qemu.pace(m, 0.5)           # ...and the Tab behind it
         got = rstr("te_hbuf", 48)
         if got != HOSTLINE:
             fails.append("the host box holds %r and not %r - nothing below "
@@ -425,28 +431,27 @@ def main():
             clicking again on a state that is no longer TS_UP.
             """
             for _ in range(tries):
-                end = time.time() + timeout
-                while time.time() < end:
-                    st = rb("te_state")
-                    if st == telansi.TS_UP:
-                        return True
-                    if st in (telansi.TS_DOWN, telansi.TS_ERR):
-                        break
-                    time.sleep(0.3)
+                os88qemu.acted(m, lambda: rb("te_state") in (
+                    telansi.TS_UP, telansi.TS_DOWN, telansi.TS_ERR),
+                    secs=timeout, what="the session settling", poll=0.3)
                 if rb("te_state") == telansi.TS_UP:
                     return True
-                time.sleep(1.0)
+                os88qemu.pace(m, 1.0)
                 press_connect()
             return rb("te_state") == telansi.TS_UP
 
+        def hung_up(then=1.5):
+            """Close is ASKED and the worker carries it out: the state leaving
+            TS_UP is the guest's answer, and `then` more is the wire."""
+            os88qemu.acted(m, lambda: rb("te_state") != telansi.TS_UP,
+                           secs=12, what="the session leaving TS_UP", poll=0.3)
+            os88qemu.pace(m, then)
+
         def wait_start(timeout=60.0):
             """The receiver has the stream (SPEC.md 70.9.6's auto-start)."""
-            end = time.time() + timeout
-            while time.time() < end:
-                if rb("te_zon") or rb("tz_diag"):
-                    return True
-                time.sleep(0.2)
-            return False
+            return os88qemu.acted(m, lambda: rb("te_zon") or rb("tz_diag"),
+                                  secs=timeout, what="the auto-start",
+                                  poll=0.2)
 
         def wait_dlg(timeout=60.0):
             """A Save dialog is up.
@@ -460,28 +465,55 @@ def main():
             so a receiver doing exactly the right thing reported as one that
             had not run at all.
             """
-            end = time.time() + timeout
-            while time.time() < end:
-                if rb("tz_dlg"):
-                    return True
-                time.sleep(0.2)
-            return False
+            # ...AND THE DIALOG ITSELF, which is [fdlg_win] - the kernel's
+            # modal gate, stored LAST in fdlg_open. [tz_dlg] says the receiver
+            # ASKED, one step before the dialog exists, and a Return or an
+            # Escape sent into that gap goes to the terminal instead: the
+            # dialog then comes up with nobody to answer it and [tz_dlg] sits
+            # there for 25 seconds, which reads as a cancel that did not take.
+            #
+            # ...and then HALF A SECOND OF THE MACHINE before it is answered:
+            # nobody answers a dialog the moment it appears, and a host sleep
+            # here would be a different amount of the guest at every load.
+            if not os88qemu.acted(m, lambda: rb("tz_dlg") and fdlg_up(),
+                                  secs=timeout, what="the Save dialog",
+                                  poll=0.2):
+                return False
+            os88qemu.pace(m, 0.5)
+            dlg["id"] = dlg_id()
+            return True
+
+        def fdlg_up():
+            return u16(m.read(S("fdlg_win"), 2)) != 0
+
+        # WHICH dialog: tz_dlgopen stamps [tz_dlgt] with the tick it went up
+        # at, beside the name it asks about.
+        dlg = {"id": None}
+
+        def dlg_id():
+            return (rw("tz_dlgt"), rstr("tz_name", 16))
 
         def wait_nodlg(timeout=30.0):
-            end = time.time() + timeout
-            while time.time() < end:
-                if not rb("tz_dlg"):
-                    return True
-                time.sleep(0.2)
-            return False
+            """THE DIALOG wait_dlg FOUND is finished - [tz_dlg] clear, OR a
+            different dialog up in its place.
+
+            It was `[tz_dlg] == 0`, polled, and that is a TRANSIENT: an answer
+            clears the byte, and in a batch the receiver asks about the next
+            file at once and sets it again. On an idle box the 0.2s poll landed
+            in the gap; on a loaded one it did not, and the row waited out 25
+            seconds on a dialog already gone - then reported an Escape that
+            never reached the dialog, while the screen showed the NEXT file's
+            dialog with the cancelled one written off and its successor
+            arriving whole. That was read as a lost keystroke 'for the machine
+            to explain' for as long as this row has run under load."""
+            was = dlg["id"]
+            return os88qemu.acted(
+                m, lambda: not rb("tz_dlg") or dlg_id() != was,
+                secs=timeout, what="the dialog to be answered", poll=0.2)
 
         def wait_off(timeout=180.0):
-            end = time.time() + timeout
-            while time.time() < end:
-                if not rb("te_zon"):
-                    return True
-                time.sleep(0.5)
-            return False
+            return os88qemu.acted(m, lambda: not rb("te_zon"), secs=timeout,
+                                  what="[te_zon] clear", poll=0.5)
 
         # =====================================================================
         # SESSION 2 - two files, byte for byte, and one deliberate ZBIN32
@@ -525,7 +557,7 @@ def main():
                     fails.append("the dialog was pre-filled %r and not %r"
                                  % (got, want))
                 telansi.qmp("sendkey ret")      # ...SAVE, under the name the
-                time.sleep(1.0)                 # receiver mangled
+                os88qemu.pace(m, 1.0)           # receiver mangled
                 wait_nodlg(20.0)
                 say("saving  %-10s %6d bytes declared, [tz_diag] %d"
                     % (got, fsz, rb("tz_diag")))
@@ -556,13 +588,9 @@ def main():
                              "batch; SPEC.md 70.9.6 leaves exactly `**B0` in "
                              "the first four, so the rest is transfer data that "
                              "reached the ANSI parser" % (got, lit[:8]))
-        time.sleep(1.5)
+        os88qemu.pace(m, 1.5)
         press_connect()
-        for _ in range(40):
-            if rb("te_state") != telansi.TS_UP:
-                break
-            time.sleep(0.3)
-        time.sleep(1.5)
+        hung_up()
         srv.stop()
         logs["xfer"] = srv.log_dict()
 
@@ -611,13 +639,9 @@ def main():
                 else:
                     say("liar    the session is still up and the terminal is "
                         "back")
-            time.sleep(1.0)
+            os88qemu.pace(m, 1.0)
             press_connect()
-            for _ in range(40):
-                if rb("te_state") != telansi.TS_UP:
-                    break
-                time.sleep(0.3)
-            time.sleep(1.5)
+            hung_up()
             srv.stop()
             logs["liar"] = srv.log_dict()
             if srv.error:
@@ -645,11 +669,13 @@ def main():
             fails.append("session 4: no Save dialog to cancel - [tz_st] %d, "
                          "[tz_diag] %d" % (rb("tz_st"), rb("tz_diag")))
         else:
-            t0 = time.time()
+            # dt is GUEST seconds: the backstop it is told apart from is the
+            # receiver's own 60 seconds of ticks, not the host's
+            clk = os88qemu.Clock(m)
             telansi.qmp("sendkey esc")      # ...and a CANCEL calls nothing
                                             # back at all (SPEC.md 38.6)
             ok = wait_nodlg(25.0)
-            dt = time.time() - t0
+            dt = clk.secs()
             if not ok:
                 fails.append("the dialog was cancelled and [tz_dlg] is still "
                              "set after 25s - the window-count inference did "
@@ -696,9 +722,9 @@ def main():
             if rb("tz_pan"):
                 fails.append("[tz_pan] is still set - the progress takeover "
                              "never came off (SPEC.md 70.11.5)")
-        time.sleep(1.0)
+        os88qemu.pace(m, 1.0)
         press_connect()
-        time.sleep(1.5)
+        os88qemu.pace(m, 1.5)
         srv.stop()
         logs["cancel"] = srv.log_dict()
 
@@ -829,11 +855,7 @@ def main():
                                  "MAJOR 4 - and the server saw %d sent and %d "
                                  "skipped: %r" % (len(sent), len(skip), zf))
             press_connect()                     # Close: ASKED, and the worker
-            for _ in range(40):                 # is what carries it out
-                if rb("te_state") != telansi.TS_UP:
-                    break
-                time.sleep(0.3)
-            time.sleep(1.5)
+            hung_up()                           # is what carries it out
 
         zc = logs["cancel"].get("zmodem", [])
         if not any(e.get("frame") == "ZSKIP" and e.get("dir") == "rx"
@@ -854,9 +876,16 @@ def main():
         # QEMU is still holding the image open here and has not flushed it.
     finally:
         if not a.keep:
+            # ...and QEMU GONE, which is what flushes the image it has been
+            # writing before it is read back - a host wait, on the process
+            try:
+                qpid = int(open(os.path.join(ROOT, "build", "qemu.pid"))
+                           .read().strip())
+            except (OSError, ValueError):
+                qpid = None
             m.quit()
-            time.sleep(1.5)             # ...let QEMU flush the image it has
-                                        # been writing, before it is read back
+            if qpid:
+                os88qemu.gone(qpid, 1.5)
 
     # --- 4: THE BYTES, off the disk, by an independent FAT12 reader ---------
     for name, want in (("SMALL.BIN", sdata), ("BIG.BIN", bdata),

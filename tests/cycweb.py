@@ -229,13 +229,19 @@ def main():
         row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, entry)
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        time.sleep(6)
 
-        seg = None
-        for w in os88geom.windows(m, S):
-            if w.title.startswith("Cyclone"):
-                seg = u16(m.read(os88geom.winptr(m, w.i, S)
-                                 + os88geom.W_SEG, 2))
+        def cyclone():
+            for w in os88geom.windows(m, S):
+                if w.title.startswith("Cyclone"):
+                    return u16(m.read(os88geom.winptr(m, w.i, S)
+                                      + os88geom.W_SEG, 2))
+            return None
+        try:
+            os88marty.until(m, lambda _m: cyclone(), "Cyclone's window",
+                            poll=0.3, limit=60)
+        except os88marty.MartyError:
+            pass                            # the check below says so
+        seg = cyclone()
         if not seg:
             raise RuntimeError("no Cyclone window - it did not launch")
         mo.to(2, 2)                     # THE POINTER OFF THE PLAYFIELD: the
@@ -269,7 +275,11 @@ def main():
             if p.rb("cy_state") != CYS_TITLE:
                 break
             m.key("Enter")
-            time.sleep(2)
+            try:
+                os88marty.until(m, lambda _m: p.rb("cy_state") != CYS_TITLE,
+                                "the title to take Enter", poll=0.25, limit=3)
+            except os88marty.MartyError:
+                pass                        # ...and press it again
         os88marty.until(m, lambda _m: p.rb("cy_state") == CYS_PLAY,
                         "the warp to finish", poll=0.5, limit=90)
         if a.fps:
@@ -290,7 +300,10 @@ def main():
             n = p.rw("cy_nlane")
             f0, k0, t0 = p.rw("cy_frame"), ticks(), time.time()
             lane = 0
-            while time.time() - t0 < a.fps:
+            # N seconds as pace() spends them: GUEST ticks, so the sweep is
+            # the same length of the machine's run on a loaded box
+            span = a.fps * os88marty.GUEST_PACE * 18.2065
+            while (ticks() - k0) & 0xFFFF < span:
                 lane = (lane + 1) % n
                 p.ww("cy_plane", lane)
             f1, k1, t1 = p.rw("cy_frame"), ticks(), time.time()

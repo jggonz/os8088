@@ -207,6 +207,11 @@ ttx_begin:
     push si
     push di
     push es
+    cmp word [ttx_shseg], 0         ; NO SHADOW, NO TEXT SCREEN (SPEC.md
+    stc                             ; 45.13.8): trk_fs_enter claims it and a
+    je .out                         ; refusal there lands here, before the mode
+                                    ; is touched - so the graphics bracket is
+                                    ; what the user gets, as for any refusal
     mov byte [ttx_clk], FSXW_TICK   ; the tick clock until ttx_clkpick says
     mov al, TTX_SHCHUNK             ; otherwise (SPEC.md 45.16) - ttx_draw_all
     mov [ttx_chunk], al             ; runs a whole shadow build BEFORE the
@@ -326,10 +331,9 @@ ttx_shbuild:
     push cx
     push di
     push es
-    push ds
-    pop es
+    mov es, [ttx_shseg]             ; the shadow is its own claim (45.13.8)
     cld
-    mov di, ttx_shadow
+    xor di, di
     mov cx, TTX_SHROWS * TTX_RW
     mov ax, (TTX_A_NORM << 8) | ' '
     rep stosw
@@ -487,12 +491,14 @@ ttx_shstart:
     cmp al, [ttx_ocpat]             ; ...and it is the pattern we call prev
     jne .out
     push ds
-    pop es
-    cld
-    mov si, ttx_shadow + (64 * TTX_RW * 2)  ; rows 64..81: this pattern's tail
-    mov di, ttx_shadow                      ; and the next one's head, which
+    mov es, [ttx_shseg]
+    mov ds, [ttx_shseg]             ; ES LAST read of our own DS: from here
+    cld                             ; to the pop both name the shadow claim
+    mov si, 64 * TTX_RW * 2                 ; rows 64..81: this pattern's tail
+    xor di, di                              ; and the next one's head, which
     mov cx, 2 * TTX_HALF * TTX_RW           ; become rows 0..17 - the window
     rep movsw                               ; the view is sitting on
+    pop ds
     mov byte [ttx_srow], 2 * TTX_HALF       ; so the cursor starts BELOW them
     mov byte [ttx_sleft], TTX_SHROWS - 2 * TTX_HALF
 %ifdef TRKLOG
@@ -534,15 +540,17 @@ ttx_shstep:
     xor ah, ah
     mov dx, TTX_RW * 2
     mul dx                          ; shadow row * rowbytes; 9,558 max, so DX
-    add ax, ttx_shadow              ; is 0 and the product fits AX
-    mov di, ax
-    mov si, ttx_line
+    mov di, ax                      ; is 0 and the product fits AX - and it IS
+    mov si, ttx_line                ; the offset, the claim starting at 0
     mov cx, TTX_RW
-    mov ah, TTX_A_NORM              ; lodsb leaves AH alone: one attribute
-.w:                                 ; rides the whole row
-    lodsb
+    mov es, [ttx_shseg]             ; ...ES for the row only: ttx_shline above
+    mov ah, TTX_A_NORM              ; wants it DS, and gets it back below
+.w:                                 ; lodsb leaves AH alone: one attribute
+    lodsb                           ; rides the whole row
     stosw
     loop .w
+    push ds
+    pop es
     mov al, [ttx_srow]              ; does the screen owe a blit for it? Only
     sub al, [tui_cvr]               ; if the row just formatted is INSIDE the
     jnc .vis                        ; window - the cursor walks all 82 shadow
@@ -747,11 +755,12 @@ ttx_blit:
     xor ah, ah                      ; area: pattern row r lives at r + HALF and
     mov dx, TTX_RW * 2              ; the area starts at view - HALF
     mul dx
-    add ax, ttx_shadow
-    mov si, ax
+    mov si, ax                      ; the claim starts at offset 0
     mov ax, [ttx_seg]
     mov es, ax
-    mov di, TTXAT(TTX_PATY, TTX_X0)
+    push ds
+    mov ds, [ttx_shseg]             ; DS:SI = the shadow; nothing in the loop
+    mov di, TTXAT(TTX_PATY, TTX_X0) ; below reads our own data
     mov bx, TTX_VIS
     cld
 .r:
@@ -775,6 +784,7 @@ ttx_blit:
     add di, TTX_STRIDE
     dec bx
     jnz .r
+    pop ds
     pop es
     pop di
     pop si
@@ -1450,8 +1460,10 @@ ttx_s_mute:   db '   MUTE', 0
                                     ; - B000 on Hercules and MDA, B800 on the
                                     ; CGA/VGA family. Read, never assumed
     TRKBUF ttx_fsi, FSI_SIZE        ; OSAPI_FSX_MODE's info block
-    TRKBUF ttx_shadow, TTX_SHBYTES  ; the current pattern as char/attr words,
-                                    ; TTX_HALF rows of the neighbouring orders
+    TRKW ttx_shseg                  ; the pattern shadow's CLAIM: TTX_SHBYTES
+                                    ; of char/attr words, held only while the
+                                    ; Text Screen is up (SPEC.md 45.13.8):
+                                    ; the current pattern plus TTX_HALF rows of the neighbouring orders
                                     ; at each end so the window into it needs
                                     ; no clamp (SPEC.md 45.13.4)
     TRKB ttx_shpat                  ; ...the pattern it holds

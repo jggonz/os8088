@@ -39,8 +39,8 @@ def check_basic(m, cfg):
     eq = os88sym.equates()
     off = os88sym.syms()["mod_gone"]
     expected = off.to_bytes(2, "little") + eq["COLD_SEG"].to_bytes(2, "little")
-    base = S("mod_fp") + eq["MOD_DOCK"] * eq["MODFP_STRIDE"]
-    assert m.read(base, eq["MODFP_STRIDE"]) == expected * eq["MOD_NENT"], \
+    base = S("DKFP")
+    assert m.read(base, eq["DK_NENT"] * 4) == expected * eq["DK_NENT"], \
         "an unloaded callback still points into module memory"
     # ...and the same question about the OPERATIONS (SPEC.md 30.5): every
     # slot of dkv must rest on this kernel's own body. A fallback that left

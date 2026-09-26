@@ -20,7 +20,7 @@ reset it between cases. The pickup is PLACED rather than waited for - dropping
 one needs a kill and a one-in-eight roll - at a depth one step short of the
 lip, so the very next frame is the one that decides.
 """
-import sys, os, re, time, argparse
+import sys, os, re, argparse
 
 _R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_R, "tools"))
@@ -187,7 +187,9 @@ def main():
         row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, entry)
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        time.sleep(6)
+        os88marty.until(m, lambda _m: any(
+            w.title.startswith("Cyclone") for w in os88geom.windows(m, S)),
+            "the Cyclone window", poll=0.5, limit=60)
         seg = [u16(m.read(os88geom.winptr(m, w.i, S) + os88geom.W_SEG, 2))
                for w in os88geom.windows(m, S)
                if w.title.startswith("Cyclone")][0]
@@ -202,7 +204,12 @@ def main():
             if p.rb("cy_state") != CYS_TITLE:
                 break
             m.key("Enter")
-            time.sleep(2)
+            try:                        # a key the title missed is pressed
+                os88marty.until(m, lambda _m: p.rb("cy_state") != CYS_TITLE,
+                                "the title to take Enter", poll=0.2,
+                                guest=9.0)          # ...again
+            except os88marty.MartyError:
+                pass
         os88marty.until(m, lambda _m: p.rb("cy_state") == CYS_PLAY,
                         "the warp to finish", poll=0.5, limit=90)
         m.write(p.addr("cy_spawn_tick"), bytes([0xC3]))     # a quiet board

@@ -276,7 +276,7 @@ evq_pop:
     ret
 
 ; -----------------------------------------------------------------------------
-; evq_pending - how many events are still queued behind this one?
+; OSAPI_EVQ_PENDING - how many events are still queued behind this one?
 ; out: AX = 0..EVQ_CAP; preserves every other register and the flags
 ;
 ; SPEC.md 13.4. A callback is dispatched one event at a time, so a handler that
@@ -295,12 +295,12 @@ evq_pop:
 ; for, so a handler that skips a redraw on the strength of it must still make
 ; sure the redraw eventually happens - the next event may belong to somebody
 ; else. Note Pad owes it to its worker (SPEC.md 27.7.8).
+;
+; AN INLINE CELL (SPEC.md 20.3), so there is no body: the cell is `mov al,
+; [cs:evq_count] / cbw / retf`. [evq_count] is a BYTE since size pass 3 (see
+; .bss below) and 0..EVQ_CAP is inside seven bits, so the sign extension is a
+; zero extension - and neither instruction writes the flags.
 ; -----------------------------------------------------------------------------
-evq_pending:
-    mov al, [evq_count]             ; a BYTE since size pass 3 - see .bss below
-    cbw                             ; - and 0..EVQ_CAP is inside seven bits, so
-    ret                             ; the sign extension is a zero extension.
-                                    ; NEAR - the OSAPI_SLOT cell owns the retf
 
 ; -----------------------------------------------------------------------------
 section .lowbss                 ; LOW_SEG (SPEC.md 2.1, 10.1.1): 128 bytes of

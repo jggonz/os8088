@@ -41,7 +41,7 @@ something:
   4. Nothing was destroyed on the way: every other instance is still there,
      and the attempt closed its own flag so the next load may ask again.
 """
-import sys, os, time, argparse
+import sys, os, argparse
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
 # checkout it was written in and wrong in a git worktree, which is how parallel
 # work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
@@ -62,7 +62,10 @@ MEM_PG_MIN, MEM_PG_MAX = 0xFB, 0xFE     # the purge tiers (SPEC.md 50.6.4)
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--machine", default="os8088_5150_cga_gla")
+    # 512KB, not 640: since SPEC.md 45.4.1 a region is 38KB and the eleven
+    # instances INST_MAX leaves no longer fill 640KB (the row said so, as
+    # "more heap than the test can fill"). The count below is still derived.
+    ap.add_argument("--machine", default="os8088_5150_cga_512k_gla")
     a = ap.parse_args()
 
     P = pkg_syms("apps/tracker/tracker.asm")
@@ -155,33 +158,47 @@ def main():
                   " machine has more heap than the test can fill" % (MAXTRK,
                                                                      run))
             return 1
-        # --- ONE MORE, and then TWO come off the ceiling ---------------------
+        # --- EXTRA more, and then EXTRA+1 come off the ceiling --------------
         # One region of room is not enough once the floor is modelled right.
-        # With the two floor claims packing, eight instances leave 132 KB and
-        # the 114 KB module simply fits (no post to observe); nine leave 83,
-        # and the posted pass then has EIGHT workers to stand up inside
-        # INST_PARKW's four ticks - which this machine does not manage
-        # (measured: four of the eight parked, the pass delivered 83 KB, and
-        # Tracker refused the load it had promised itself). So the stack goes
-        # one deeper and TWO regions come off the ceiling: the asker drags
-        # SEVEN workers behind it, the count the row has always passed with,
-        # into 98 KB of room.
-        if i + 1 >= MAXTRK:
+        # With the two floor claims packing and a 49 KB region, eight
+        # instances leave 132 KB and the 114 KB module simply fits (no post to
+        # observe); nine leave 83, and the posted pass then has EIGHT workers
+        # to stand up inside INST_PARKW's four ticks - which this machine does
+        # not manage (measured: four of the eight parked, the pass delivered
+        # 83 KB, and Tracker refused the load it had promised itself). So the
+        # stack went one deeper and TWO regions came off the ceiling: the
+        # asker drags SEVEN workers behind it into 98 KB of room.
+        #
+        # THAT WAS A NUMBER AND NOT A RULE, and it broke the day the region
+        # grew: at 57 KB (SPEC.md 45.21's face) two regions off the ceiling
+        # are a 114 KB hole and the module fits it exactly. What the shape
+        # needs is that the CEILING hole stays under the module, so the count
+        # is derived from the region: close as many as fit under it, having
+        # opened one fewer than that past the floor. Either way the live
+        # count is the stopping depth less one, so the posted pass drags the
+        # same number of workers it always did.
+        rgn = max(c[1] // 64 for c in claims(m, S)
+                  if c[0] == trackers()[0][0])
+        extra = max(0, (needk - 1) // rgn - 1)
+        if i + 1 + extra > MAXTRK:
             print("FAIL: %d instances is the row's limit and the floor only"
                   " went under %d KB at the last one" % (MAXTRK, needk))
             return 1
-        ui.open(PKG)
-        layout("%d instance(s), one past the floor" % (i + 2))
+        for _ in range(extra):
+            ui.open(PKG)
+        layout("%d instance(s), %d past the floor, %d KB a region"
+               % (i + 1 + extra, extra, rgn))
         tk = trackers()
         nopen = len(tk)
         print("  trackers at %s" % " ".join("%04x" % s for s, _ in tk))
 
+        top = tk[:extra + 1]
         rgnkb = sum(c[1] // 64 for c in claims(m, S)
-                    if c[0] in (tk[0][0], tk[1][0]))
-        ui.close(tk[0][1])
-        ui.close(tk[1][1])
+                    if c[0] in [sg for sg, _ in top])
+        for _, w in top:
+            ui.close(w)
         ui.settle()
-        run2 = layout("...and the top two closed")
+        run2 = layout("...and the top %d closed" % len(top))
         if run2 >= needk:
             print("FAIL: the floor run is %d KB and the module wants %d - the"
                   " load would simply fit" % (run2, needk))
@@ -222,7 +239,7 @@ def main():
             return 1
         for _ in range(rows.index(MOD) + 1):
             m.key("ArrowDown")
-            time.sleep(0.2)
+            os88marty.pace(m, 0.2)      # keystroke spacing, in GUEST time
         got = u16(m.read(S("fdlg_sel"), 2))
         if got != rows.index(MOD):
             print("FAIL: dialog selected row %d, wanted %d"
@@ -232,21 +249,28 @@ def main():
 
         # --- and now WATCH: the post is up for the whole compaction and the
         # 114KB floppy read behind it, so this cannot miss it by being slow --
-        posted = said = False
-        for _ in range(400):            # 20s, where the byte is up for the
-            at = wseg()                 # whole pass AND the 114KB floppy read
-            if m.read(at * 16 + P["trk_cpq"], 1)[0]:
-                posted = True
+        seen = {"posted": False, "said": False}
+
+        def watched(_):                 # a 50ms host poll, a GUEST budget
+            at = wseg()                 # (the byte is up for the whole pass
+            if m.read(at * 16 + P["trk_cpq"], 1)[0]:     # AND the 114KB
+                seen["posted"] = True                    # floppy read)
             if u16(m.read(at * 16 + P["tui_msgp"], 2)) == P["trk_s_cpq"]:
-                said = True
-            if posted and said:
-                break
-            time.sleep(0.05)
+                seen["said"] = True
+            return seen["posted"] and seen["said"]
+        try:
+            os88marty.until(m, watched, "the posted compaction to show",
+                            poll=0.05, limit=20.0)
+        except os88marty.MartyError:
+            pass                        # ...judged below
+        posted, said = seen["posted"], seen["said"]
         os88marty.settle(m, limit=180)
-        for _ in range(20):             # belt only: the settle above already
-            if m.read(wseg() * 16 + P["mp_loaded"], 1)[0]:
-                break                   # covers the pass and the 114KB read,
-            time.sleep(0.5)             # both of which repaint
+        try:                            # belt only: the settle above already
+            os88marty.until(            # covers the pass and the 114KB read,
+                m, lambda _: m.read(wseg() * 16 + P["mp_loaded"], 1)[0],
+                "[mp_loaded]", poll=0.5, limit=10.0)   # both of which repaint
+        except os88marty.MartyError:
+            pass
         layout("after the load")
 
         seg2 = wseg()                   # ...and every read below is through
@@ -278,7 +302,7 @@ def main():
         clear = tb("trk_cpq") == 0
         print("  4 survivors / flag    %d instance(s), [trk_cpq]=%d"
               % (left, tb("trk_cpq")))
-        bad += left != nopen - 2
+        bad += left != nopen - len(top)
         bad += not clear
         print("VERDICT:", "OK" if not bad else "%d PROBLEM(S)" % bad)
         return 1 if bad else 0

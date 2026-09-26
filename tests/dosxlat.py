@@ -52,7 +52,6 @@ import socket
 import subprocess
 import sys
 import threading
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -157,13 +156,12 @@ def main():
     m = eth.Qemu()
     mouse = eth.Mouse()
     try:
-        seg = 0
-        for _ in range(150):
-            time.sleep(0.4)
-            seg = eth.u16(m.read(eth.S("drv_tab") + eth.ETH_ROW * eth.DRVR_SZ
-                                 + eth.DRVR_SEG, 2))
-            if seg:
-                break
+        # Every wait in this row is in the GUEST's seconds (tests/os88qemu.py)
+        # - the probe paces itself in BIOS ticks, so its budget is that clock.
+        drvrow = eth.S("drv_tab") + eth.ETH_ROW * eth.DRVR_SZ + eth.DRVR_SEG
+        os88qemu.acted(m, lambda: eth.u16(m.read(drvrow, 2)) != 0, secs=60,
+                       what="ETHER.DRV's drv_tab row", poll=0.4)
+        seg = eth.u16(m.read(drvrow, 2))
         if not seg:
             say("dosxlat: FAILED - ETHER.DRV never attached; no card was "
                 "found, or SYSTEM.CFG did not ask for it")
@@ -177,12 +175,9 @@ def main():
         dispcp.open_named(m, mouse, eth.S, eth.settle, wx, wy, "DOSPKT.COM")
 
         pseg = None
-        for _ in range(40):
-            time.sleep(0.5)
-            g = dispapps.pkg_seg(m, 0)
-            if g:
-                pseg = g[1]
-                break
+        if os88qemu.acted(m, lambda: dispapps.pkg_seg(m, 0) is not None,
+                          secs=20, what="the DOS window", poll=0.5):
+            pseg = dispapps.pkg_seg(m, 0)[1]
         if pseg is None:
             say("dosxlat: FAILED - no package window: DOS.O88 never launched")
             return 1
@@ -200,12 +195,10 @@ def main():
 
         # A .COM: CS = the PSP and the probe is `org 100h`, so its map value
         # IS the offset from the PSP.
-        psp = 0
-        for _ in range(20):
-            time.sleep(0.5)
-            psp = eth.u16(m.read((pseg << 4) + dm["dos_ldpsp"], 2))
-            if psp:
-                break
+        os88qemu.acted(m, lambda: eth.u16(m.read((pseg << 4)
+                                                 + dm["dos_ldpsp"], 2)) != 0,
+                       secs=10, what="[dos_ldpsp]", poll=0.5)
+        psp = eth.u16(m.read((pseg << 4) + dm["dos_ldpsp"], 2))
         if not psp:
             say("dosxlat: FAILED - [dos_ldpsp] is 0: no program was loaded")
             return 1
@@ -215,15 +208,13 @@ def main():
 
         # The whole exchange is one tick-paced connection; ~30s is generous
         # against the probe's own 5s and 8s waits.
-        log = b""
-        for _ in range(60):
-            time.sleep(1.0)
-            n = pw("nflag")
-            log = m.read((psp << 4) + pm["flaglog"], 8)[:n]
-            if any(b & F_FIN for b in log):
-                break                   # the close is the last thing that
-                                        # happens, so waiting for anything
-                                        # else would be a fixed sleep
+        def flags():
+            return m.read((psp << 4) + pm["flaglog"], 8)[:pw("nflag")]
+        # the close is the last thing that happens, so waiting for anything
+        # else would be a fixed sleep
+        os88qemu.acted(m, lambda: any(b & F_FIN for b in flags()), secs=60,
+                       what="the FIN", poll=0.5)
+        log = flags()
         gw = m.read((psp << 4) + pm["gwmac"], 6)
         st = m.read((psp << 4) + pm["statbuf"], 24)
         stat = [int.from_bytes(st[i * 4:i * 4 + 4], "little") for i in range(6)]

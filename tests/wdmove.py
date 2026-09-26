@@ -26,7 +26,7 @@ byte. Both have a path that only runs for an odd count, so the caret is placed
 at positions giving an odd AND an even tail, and at the very ends where the
 count is 0 or 1 and the loops must not run at all.
 """
-import os, sys, time, subprocess, tempfile, argparse, functools
+import os, sys, subprocess, tempfile, argparse, functools
 print = functools.partial(print, flush=True)
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, "tools"); sys.path.insert(0, "tests")
@@ -53,7 +53,7 @@ def pkg_syms(src="apps/word/word.asm", incs=("apps/", "apps/word/")):
         out={}
         for L in open(mp):
             f=L.split()
-            if len(f)==3 and all(c in "0123456789ABCDEF" for c in f[0]): out[f[2]]=int(f[0],16)
+            if len(f)==3 and all(c in "0123456789ABCDEF" for c in f[0]): out[f[2]]=int(f[1],16)
         return out, open(os.path.join(d,"p.bin"),"rb").read()
 
 
@@ -61,7 +61,7 @@ ap=argparse.ArgumentParser(); ap.add_argument("--machine",default="os8088_5150_b
 a=ap.parse_args()
 syms,image=pkg_syms()
 DISK="build/wdmove.img"
-M.scratch_disk(DISK,"build/word.o88","build/WORD.OVL","build/WELCOME.DOC")
+M.scratch_disk(DISK,"build/word.o88","build/WELCOME.DOC")
 S=lambda n: m.sym(n)
 
 with M.launch("build/os8088-360.img",apps=DISK,machine=a.machine) as m:
@@ -69,8 +69,11 @@ with M.launch("build/os8088-360.img",apps=DISK,machine=a.machine) as m:
     print("== Word's document movers, byte for byte (SPEC.md 68.3) on %s ==" % a.machine)
     dispcp.open_drive(m,mo,S,M.settle,"B")
     w=dispcp.win_list(m,S)[-1]; dx,dy=dispcp.win_rect(m,S,w)[:2]
+    nwin=len(dispcp.win_list(m,S))
     dispcp.open_named(m,mo,S,M.settle,dx,dy,"WELCOME.DOC")
-    time.sleep(2.5); M.settle(m)
+    try: M.until(m,lambda _: len(dispcp.win_list(m,S))>nwin,"Word's window",poll=0.25,limit=60)
+    except M.MartyError: pass                    # ...judged by the image hunt below
+    M.settle(m)
 
     # the package's base out of the instance table, its identity checked
     # against CODE at a named symbol (see tests/wdmenusu.py for why not the
@@ -88,6 +91,17 @@ with M.launch("build/os8088-360.img",apps=DISK,machine=a.machine) as m:
     rw=lambda n: u16(m.read(P(n),2))
     ww=lambda n,v: m.write(P(n), bytes([v&0xFF,(v>>8)&0xFF]))
 
+    # A keystroke is done when the document has CHANGED and then held still;
+    # both are read off the guest, so the wait is its time and not ours.
+    def doc():
+        n=rw("wd_len")
+        return n, m.read(rw("wd_dseg")*16, n), m.read(rw("wd_cseg")*16, n)
+    def keyed(k):
+        d0=doc(); m.key(k)
+        try: M.until(m,lambda _: doc()!=d0,"%s to edit the document"%k,poll=0.1,limit=10)
+        except M.MartyError: pass                # ...judged by the checks
+        M.quiesce(m,doc,guest=0.5,what="the document after %s"%k)
+
     ln0=rw("wd_len")
     dseg, cseg = rw("wd_dseg"), rw("wd_cseg")
     check("the document is open and non-empty", ln0 > 64, "len=%d"%ln0)
@@ -103,9 +117,8 @@ with M.launch("build/os8088-360.img",apps=DISK,machine=a.machine) as m:
     for cur in cases:
         tail = ln0 - cur
         ww("wd_cur", cur)
-        time.sleep(0.15)
-        m.key("KeyZ")
-        time.sleep(1.4)
+        M.pace(m, 0.15)
+        keyed("KeyZ")
         ln1 = rw("wd_len")
         t1 = m.read(rw("wd_dseg")*16, ln1)
         c1 = m.read(rw("wd_cseg")*16, ln1)
@@ -122,9 +135,8 @@ with M.launch("build/os8088-360.img",apps=DISK,machine=a.machine) as m:
 
         # ...and Backspace must put the document back exactly
         ww("wd_cur", cur + 1)
-        time.sleep(0.15)
-        m.key("Backspace")
-        time.sleep(1.4)
+        M.pace(m, 0.15)
+        keyed("Backspace")
         ln2 = rw("wd_len")
         t2 = m.read(rw("wd_dseg")*16, ln2)
         c2 = m.read(rw("wd_cseg")*16, ln2)

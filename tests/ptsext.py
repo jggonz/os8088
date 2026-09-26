@@ -36,7 +36,7 @@ row compared the primary half of A against the primary half of B and then
 indexed the secondary at a NEGATIVE x, which Python slices silently. `vrows`
 is what puts the two cards back into the space the app drew in.
 """
-import sys, os, time
+import sys, os
 # THIS TREE's root, DERIVED - never a hard-coded path, for tests/cycweb.py's
 # reason: os88sym re-assembles ROOT/kernel/kernel.asm and compares it against
 # ROOT/build/kernel.bin, so a literal answers about a DIFFERENT kernel.
@@ -140,7 +140,7 @@ def main():
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")
         dispcp.close_panel(m, mo, S, os88marty.settle)
-        time.sleep(2)
+        os88marty.ui_done(m, "the extended desktop's repaint")
         w = ui.window("PtsTest")
         print("after extend: window at x=%d y=%d w=%d h=%d" % (w.x, w.y, w.w, w.h))
         bad += check(m, ui, "primary", card=0)
@@ -150,11 +150,11 @@ def main():
         print("seam at x=%d" % seam)
 
         ui.move_window("PtsTest", seam + 40, 20)
-        time.sleep(2)
+        os88marty.ui_done(m, "the move")
         bad += check(m, ui, "secondary", card=1)
 
         ui.move_window("PtsTest", seam - 60, 20)
-        time.sleep(2)
+        os88marty.ui_done(m, "the move")
         bad += check(m, ui, "straddle", card="virtual")
 
     if bad:

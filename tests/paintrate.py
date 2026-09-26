@@ -139,8 +139,11 @@ def main(argv):
                 now = m.status()["cycles"]
                 if now >= nxt:              # a report, on the guest's clock
                     step += 1
-                    mo._pk(dx=int(6 * math.cos(step / 4.0)),
-                           dy=int(6 * math.sin(step / 4.0)), l=True)
+                    # m.mouse and not mo._pk: _pk paces GAP after the packet
+                    # (0.54 guest s), which starved this 25 ms schedule to one
+                    # report in twenty; the spacing HERE is the pacing
+                    m.mouse(int(6 * math.cos(step / 4.0)),
+                            int(6 * math.sin(step / 4.0)), l=True)
                     nxt = now + NUDGE_MS * HZ / 1000.0
                 time.sleep(0.001)
             dt = (now - t0) / HZ

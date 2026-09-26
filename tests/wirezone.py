@@ -57,6 +57,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
 import os88sym                                              # noqa: E402
 import os88qemu                                             # noqa: E402
+import dispcp                                               # noqa: E402
 import shot                                                 # noqa: E402
 
 SOCK = os.path.join(ROOT, "build", "wirezone.sock")
@@ -80,8 +81,9 @@ def say(*a):
 def kill_stale():
     if os.path.exists(PIDFILE):
         try:
-            os.kill(int(open(PIDFILE).read().strip()), signal.SIGTERM)
-            time.sleep(1)
+            pid = int(open(PIDFILE).read().strip())
+            os.kill(pid, signal.SIGTERM)
+            os88qemu.gone(pid)
         except Exception:
             pass
     for f in (SOCK, PIDFILE, PPM):
@@ -124,15 +126,17 @@ def word(q, sym):
 
 
 def wait_desktop(q):
-    t0 = time.time()
-    while time.time() - t0 < 120:
+    """In the GUEST's seconds (tests/os88qemu.py), which a loaded box cannot
+    shorten the way it shortens a host sleep."""
+    def up():
         try:
-            if word(q, "vid_w"):
-                break
-        except Exception:
-            pass
-        time.sleep(0.25)
-    time.sleep(8)               # ...and the first paint, plus drv_boot's read
+            return word(q, "vid_w") != 0
+        except Exception:                                   # noqa: BLE001
+            return False
+    os88qemu.acted(q, up, secs=120, what="[vid_w]", poll=0.25)
+    # ...and the first paint, plus drv_boot's read: both on the UI task, so
+    # its going idle is the answer and the old eight seconds the ceiling
+    os88qemu.ui_done(q, os88sym.linear, cap=8.0, what="the first desktop")
 
 
 def zone_rect(q):
@@ -194,18 +198,19 @@ def open_drivers_page(q):
     sys.argv = ["mouse.py", SOCK]
     import mouse                                            # noqa: E402
     mouse.SOCK = SOCK
+    wins = len(dispcp.win_list(q, os88sym.linear, check=False))
     mouse.goto(8, 8)
-    mouse.hmp("mouse_button 1")
-    time.sleep(0.4)
+    mouse.hmp("mouse_button 1", "gsleep 0.4")       # guest time: tools/qmp.py
     mouse.goto(60, 45)                  # 'Control Panel', the second item
-    time.sleep(0.3)
-    mouse.hmp("mouse_button 0")
-    time.sleep(5)
+    mouse.hmp("gsleep 0.3", "mouse_button 0")
+    # The panel is a WINDOW, so its arrival is the guest's own answer - and
+    # then a second for its first paint before the page list is aimed at.
+    os88qemu.acted(q, lambda: len(dispcp.win_list(q, os88sym.linear,
+                                                  check=False)) > wins,
+                   secs=15, what="the Control Panel window", poll=0.25)
+    os88qemu.pace(q, 1)
     mouse.goto(195, 186)                # the page list's 'Drivers'
-    mouse.hmp("mouse_button 1")
-    time.sleep(0.2)
-    mouse.hmp("mouse_button 0")
-    time.sleep(3)
+    mouse.hmp("mouse_button 1", "gsleep 0.2", "mouse_button 0", "gsleep 3")
     return mouse
 
 
@@ -217,9 +222,7 @@ def untick_ethernet(mouse):
     driver let go.
     """
     mouse.goto(267, 229)
-    mouse.hmp("mouse_button 1")
-    time.sleep(0.2)
-    mouse.hmp("mouse_button 0")
+    mouse.hmp("mouse_button 1", "gsleep 0.2", "mouse_button 0")
 
 
 def main():
@@ -257,12 +260,10 @@ def main():
         # --- ...and it leaves with its driver ------------------------------
         m = open_drivers_page(q)
         untick_ethernet(m)
-        t0 = time.time()
-        while time.time() - t0 < 40:
-            if not word(q, "desk_svc_seg"):
-                break
-            time.sleep(1)
-        time.sleep(4)                   # ui_task's pass spends the repaint
+        os88qemu.acted(q, lambda: not word(q, "desk_svc_seg"), secs=40,
+                       what="[desk_svc_seg] = 0", poll=0.25)
+        # ui_task's pass spends the repaint: its going idle is that done
+        os88qemu.ui_done(q, os88sym.linear, cap=4.0, what="the zone's repaint")
         seg2 = word(q, "desk_svc_seg")
         say("after untick:  desk_svc_seg %04X" % seg2)
         if seg2:

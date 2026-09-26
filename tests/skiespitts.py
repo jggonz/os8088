@@ -201,6 +201,33 @@ def main(argv):
             else:
                 sys.exit("skiespitts: the guest never saw %s ([%s] stayed 0)"
                          % (key, nm))
+            # ...AND THE MODEL INTEGRATED IT, which is a SECOND edge and the
+            # one that was missing. A key the guest has SEEN is not yet a
+            # control the model has ACTED on: [cs_kroll] is set by the key
+            # handler and the angle moves in the flight step after it, so a
+            # box that hands the guest less work per host second can leave a
+            # whole sampling run between the two. That is what this row did in
+            # the 2026-09-21 soak - `c172: MAXROLL 10923, roll reached 0` -
+            # and the shape of the damage is the reason this is worth two
+            # edges rather than one: with peak 0 the LIMIT check ("stops at
+            # its roll limit, 0 of 10923") passes VACUOUSLY off the same zero
+            # that fails the return-to-level one, so the row reports a flight
+            # model that was never asked to do anything as a flight model that
+            # got it wrong. Bounded in FRAMES, which is the guest's own clock.
+            ang = "cs_roll" if nm == "cs_kroll" else "cs_pitch"
+            start = sw(ang)
+            for _ in range(60):
+                m.advance(frames=2)
+                m.run()
+                if sw(ang) != start:
+                    break
+            else:
+                sys.exit("skiespitts: the guest saw %s ([%s] is set) and 120 "
+                         "frames later [%s] has not left %d. The input "
+                         "arrived and the model did not move: this row cannot "
+                         "measure a limit that was never approached, so it "
+                         "stops here rather than reporting the flight model "
+                         "for it" % (key, nm, ang, start))
             for _ in range(frames // step):
                 m.advance(frames=step)
                 m.run()

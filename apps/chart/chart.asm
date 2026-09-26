@@ -318,7 +318,7 @@ ct_oncmd:
 
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; ct_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2). SI = our
+; ct_about - the OSAPI_ABOUT_SET handler (slot 0x018A, SPEC.md 12.2). SI = our
 ; window on entry; the UI task, gfx lock held.
 ;
 ; IT WAS A TOAST, on the argument that "an About is one line here" and that a

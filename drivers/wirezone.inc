@@ -58,12 +58,11 @@ wz_rec:
     times 39 - ($ - wz_rec) db 0    ; what apps/thewire's OS88_HEADER says:
 %if ($ - wz_rec) != 39              ; it is what makes the zone a SINGLETON,
   %error "wirezone: the header-name field is 12 bytes (11 characters and a NUL)"
-%endif                              ; matched against the instance table
-    db 'Cannot open Wire:', 0   ; +39 the failure notice's lead line. Ours,
-    times 65 - ($ - wz_rec) db 0    ; because it names our program - a kernel
-%if ($ - wz_rec) != 65              ; that composed it would carry both the
-  %error "wirezone: the record is 65 bytes (SPEC.md 26.7's DSV_R_SIZE)"
-%endif
+%endif                              ; matched against the instance table.
+                                    ; 39 is the WHOLE record (DSV_R_SIZE): the
+                                    ; failure notice's lead line it once ended
+                                    ; with went when a failed launch became a
+                                    ; toast (kernel size pass 4)
 
 wz_x:       dw 0                ; the icon's top-left, banked across
 wz_y:       dw 0                ; OSAPI_VIDEO, which answers in CX and DX

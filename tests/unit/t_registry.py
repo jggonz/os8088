@@ -167,9 +167,6 @@ UNREGISTERED = {
     "brreload.py": "needs `make browsertest` (build/brtest360.img)",
     "brtest.py": "needs `make browsertest` (build/brtest360.img)",
     "brtoolbar.py": "needs `make browsertest` (build/brtest360.img)",
-    "ethernet.py": "needs `make ethertest` and QEMU - MartyPC has no NIC "
-                   "(SPEC.md 72.9)",
-    "ethcfg.py": "needs `make ethertest` and QEMU",
     "netprof.py": "needs QEMU, and it leaves ETHPROF=1 KNOB builds of "
                   "ether.drv and the ethertest disk in build/ - a suite row "
                   "running before the next `make` would test the wrong "
@@ -329,6 +326,21 @@ def main():
         for part in r.cmd:
             if part.startswith("tests/") and part.endswith(".py"):
                 reg[os.path.basename(part)] = r.name
+
+    # ONE NAME, ONE ROW, across every tier. `tools/os88soak.py` journals a
+    # run BY NAME and `--resume` excludes by name, so two rows sharing one
+    # made the second's verdict vanish: the fast `paccman` reported ok in
+    # 0.0s, the soak `paccman` FAILED an hour later, and `status` and
+    # done.txt both said ok - the failure was only in run.log's tail.
+    seen = {}
+    for r in suite.rows():
+        if r.name in seen:
+            check(False, "row name %r is registered twice (%s and %s)"
+                  % (r.name, seen[r.name], r.tier),
+                  "the soak journals and resumes BY NAME, so the second "
+                  "row's verdict is lost - rename one",
+                  got="two rows", want="one")
+        seen[r.name] = r.tier
 
     # BOTH directories. This walked the top level only, so a t_*.py added to
     # tests/unit/ with no row was invisible to the one gate meant to see it -

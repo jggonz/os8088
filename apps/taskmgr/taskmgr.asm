@@ -470,14 +470,17 @@ TM_ROWC     equ TM_NAMEF + TM_STC + 1 + TM_CPUC + TM_MEMC
   %error "taskmgr: a memory row now runs past the right edge of its band"
 %endif
 
-TMM_ROWS    equ INST_MAX + 7    ; System, its four buffer rows, the two
-                                ; headings, every instance - 19 x TM_ROW_H
-                                ; from TMM_ROW_Y is 279 of the 281-pixel
-                                ; content, which is what decides both the
-                                ; template's height and that free slots are
-                                ; not drawn at all. tm_mrow_open clamps to
-                                ; the LIVE frame on top of this, for the
-                                ; screens where wm_fit shrinks the window
+TMM_ROWS    equ INST_MAX + 6    ; System, its three buffer rows, the two
+                                ; headings, every instance - 18 x TM_ROW_H
+                                ; from TMM_ROW_Y, which is what decides both
+                                ; the template's height and that free slots
+                                ; are not drawn at all. tm_mrow_open clamps
+                                ; to the LIVE frame on top of this, for the
+                                ; screens where wm_fit shrinks the window.
+                                ; It was INST_MAX + 7 while `Disk bufs` was a
+                                ; row (SPEC.md 20.9), and the window is a row
+                                ; shorter for losing it rather than a row
+                                ; emptier - TM_PREF_H is cut from this
 
 ; --- THE TWO FRAMES THIS WINDOW WANTS (SPEC.md 11.100.1) ---------------------
 ; tm_layout has always worked out the frame its column count needs; these are
@@ -1141,7 +1144,7 @@ tm_hire:
 ; over the whole of it.
 
 ; -----------------------------------------------------------------------------
-; tm_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; tm_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -1264,11 +1267,18 @@ tm_s_sys0:  db '0600', 0        ; where the kernel starts: KERNEL_SEG, the
 
 ; The kernel's own buffers, one row each under System (SPEC.md 28). Every
 ; figure beside them is a compile-time constant (TM_K*_KB above), so drawing
-; this list costs four string copies and no arithmetic at all - which is why
+; this list costs three string copies and no arithmetic at all - which is why
 ; it can sit on the once-a-second refresh path.
+;
+; THERE WAS A FOURTH, `  Disk bufs`, AND SPEC.md 20.9 RETIRED IT. The row
+; named the mount's own buffers, and 25.9 plus
+; docs/plans/LISTING-HOME-PLAN.md 13 emptied them down to one sector: 512
+; bytes, which the cumulative rounding drew as `-` on kern_big and 1K on
+; kern_small off the same ladder and the same buffer. Those bytes are billed
+; to Code+data now, where the rest of `.lowbss` already was, and the row this
+; list gets back is the one TMM_ROWS is scarcest in.
 tm_s_bimg:  db '  Code+data', 0
 tm_s_bstk:  db '  Stacks', 0
-tm_s_bdsk:  db '  Disk bufs', 0
 tm_s_bfat:  db '  FAT snap', 0
 
 %endif
@@ -1378,7 +1388,7 @@ tm_s_tfdlg: db 'FileDlg', 0     ; the Standard File dialog's listing (SPEC.md
 ; ends the capture early - which drops every row below it from the gate without
 ; failing anything.
 tm_ktab:
-    dw MEM_K_SAVE,  tm_s_tsave
+    dw MEM_P_MSAVE, tm_s_tsave
     dw MEM_K_DRV,   tm_s_tdrv
     dw MEM_K_COPY,  tm_s_tcopy
     dw MEM_K_ASC,   tm_s_tasc
@@ -3510,20 +3520,24 @@ tm_rows_mem:
     ; --- the kernel's own buffers, one row each -------------------------------
     ; Indented under System, and between them they account for every byte of
     ; it: image + scratch + cold code + the kernel's own tables, the task
-    ; stacks, the disk buffers and the FAT window are the whole of KERN_SIZE
-    ; (SPEC.md 2). All four figures come out of one osapi_sys_kb call, and
-    ; they sum to the System row above exactly - which is the property that
-    ; block is built around, and which the cold segment quietly broke while
-    ; these were constants of this module's own (SPEC.md 20.9).
+    ; stacks and the FAT window are the whole of KERN_SIZE (SPEC.md 2). All
+    ; three figures come out of one osapi_sys_kb call, and they sum to the
+    ; System row above exactly - which is the property that block is built
+    ; around, and which the cold segment quietly broke while these were
+    ; constants of this module's own (SPEC.md 20.9).
     ;
     ; SUMMING IS NOT THE WHOLE OF BEING RIGHT, and this list is where that was
-    ; learned: `Disk bufs` totalled correctly at 6K for years while the
-    ; buffers it names are 3,584 bytes, because it was the residual the other
-    ; rows' rounding fell into. Since SPEC.md 20.9 every SK_*_KB is a declared
-    ; span rounded cumulatively, so the column still totals and no row is a
-    ; kilobyte out. Nothing here changed - the rows have read this block since
-    ; the window left the kernel, which is exactly why the fix is one file
-    ; away and not four.
+    ; learned twice. `Disk bufs` totalled correctly at 6K for years while the
+    ; buffers it named were 3,584 bytes, because it was the residual the other
+    ; rows' rounding fell into; SPEC.md 20.9 made every SK_*_KB a declared
+    ; span rounded cumulatively, so the column totalled AND no row was a
+    ; kilobyte out. Then the same row went the other way: 25.9 and
+    ; docs/plans/LISTING-HOME-PLAN.md 13 emptied the mount's buffers down to
+    ; one sector, and 512 bytes is a figure the rounding decides rather than
+    ; the machine - `-` here and 1K on kern_small. It is billed to Code+data
+    ; now and there are three rows. Neither fix touched this file's
+    ; arithmetic, because there is none: the rows have read the published
+    ; block since the window left the kernel.
     mov bx, tm_s_bimg           ; NO square: the image is drawn in the same
     mov cx, [tm_kb+SK_IMG]      ; gray as the System row above it, and a
     xor dx, dx                  ; square that repeats one is not a legend
@@ -3531,10 +3545,6 @@ tm_rows_mem:
     mov bx, tm_s_bstk
     mov cx, [tm_kb+SK_STK]
     add cx, [tm_kb+SK_STK0]
-    mov dx, tm_pat_buf
-    call tm_buf_row
-    mov bx, tm_s_bdsk
-    mov cx, [tm_kb+SK_DSK]
     mov dx, tm_pat_buf
     call tm_buf_row
     mov bx, tm_s_bfat
@@ -3721,7 +3731,7 @@ tm_inst_claim:
 ;
 ; The CLM column is a dash on purpose. A buffer is not a claim - it is part of
 ; the kernel, present whether or not anything is running - and the whole point
-; of these four rows is that the System figure above them is not a lump.
+; of these three rows is that the System figure above them is not a lump.
 ; -----------------------------------------------------------------------------
 tm_buf_row:
     push ax

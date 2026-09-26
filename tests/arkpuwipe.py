@@ -61,7 +61,7 @@ The playfield is frozen the way cycweb.py freezes the wave - `ark_do_ball`,
 because a ball crossing the capsule's column is the one thing that repaints the
 streak away for free, and the run would then measure the ball.
 """
-import sys, os, time, argparse, tempfile, subprocess
+import sys, os, argparse, tempfile, subprocess
 
 # THIS TREE'S tools, not /home/user/os8088's. Every other test here hard-codes
 # that path, which is right in the checkout it was written in and wrong in a
@@ -308,12 +308,17 @@ def main():
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
         stride = 28 if a.small else os88geom.WIN_SIZE
-        title = seg = box = None
-        for _ in range(20):             # kern_small reads the package off a
-            time.sleep(2)               # 360KB disk and is slower about it
-            title, seg, box = find_win(m, S, "ark", stride)
-            if title:
-                break
+        found = [None, None, None]
+
+        def _up(_):
+            found[:] = find_win(m, S, "ark", stride)
+            return bool(found[0])
+        try:                            # kern_small reads the package off a
+            os88marty.until(m, _up, "the Arkanoid window",   # 360KB disk and
+                            poll=0.5, limit=40)              # is slower
+        except os88marty.MartyError:
+            pass                        # ...and a miss is diagnosed below
+        title, seg, box = found
         if title is None:
             w, h, px = m.fbuf()
             os88marty.write_png_rgb("build/arkfail.png", w, h, px)
@@ -327,7 +332,7 @@ def main():
                                "wm_wins=%#x slots %s"
                                % (os88geom.windows(m, S), S("wm_wins"), slots))
         mo.to(2, 2)                     # the pointer off the playfield
-        time.sleep(1)
+        os88marty.pace(m, 1)
 
         syms, image = pkg_syms(a.src)
         p = Pkg(m, seg, syms)

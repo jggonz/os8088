@@ -93,14 +93,16 @@ RULE_REFS = {"1.6", "1.7", "29.2.8", "45", "49"}
 # that were are either filled (0x00F8/0x0100 went to the sound driver) or
 # gone, closed up when the numbering settled.
 #
-# THE SET IS EMPTY NOW, and that is SPEC.md 20.3.1 working rather than an
-# omission. It was kept for 0x01E8 - RETIRED at SPEC.md 18.4.1, where
-# OSAPI_FILE_READ absorbed readbig - and a retired cell is a FREE LIST, not a
-# headstone: 0x01F0 went to wm_onmouseup (13.7) and 0x01E8 to OSAPI_VOL_KIND
-# (18.7.2). Both are published names again, so prose naming either number is
-# checkable the ordinary way. Put a number back here only for a cell the SDK
-# deliberately does not define, and say which section retired it.
-HELD = set()
+# EIGHT NUMBERS, and they are SPEC.md 20.3.1 working: kernel size pass 4
+# DELETED the eight withdrawn cells (the three main-era paragraph-arena cells
+# at 0x01b8..0x01c8, OSAPI_VOL_PAINT at 0x0288, the line family's 0x02e0,
+# 0x0308, 0x0318 and FILE_MOVE's 0x0568) and renumbered the table, so a
+# number here can only appear in prose that is HISTORY - the record of what
+# a cell was - and must not be checked against today's map, where most of
+# these numbers now belong to a different, live cell's neighbourhood. Put a
+# number back here only for a cell the SDK deliberately does not define, and
+# say which section retired it.
+HELD = {"0x01b8", "0x01c0", "0x01c8", "0x0288", "0x02e0", "0x0308", "0x0318", "0x0568"}
 
 # --- 4. THE TRANSPARENT-TEXT TOTALS, which are prose about a FILE ------------
 #

@@ -47,6 +47,14 @@
 ; a superseding open. Packages never hold an ES pointer into SND_SEG: data
 ; crosses through the verb-6 staging copy (the dsk_get_dir idiom).
 ;
+; ...UNLESS THE STREAM IS DIRECT (SPEC.md 34.5.2). A ring stream whose ring the
+; 8237 can reach - auto-init, two halves or more, no 64KB page crossed - is
+; played where it lies: the DMA cycle IS the ring, there is no double buffer,
+; no refill task and no copy, the ISR asks the counters rather than a valid
+; flag, verb 1 resumes an underrun, and verb 0 pins the pool for the stream's
+; life. The double buffer is claimed per stream for everything else and freed
+; with it, so an idle card holds its image and nothing more.
+;
 ; Verbs 1/3/5/6/7 are ANY-TASK (SPEC.md 20.3's per-verb context rule): a
 ; package's worker may feed, poll, read, stage and hold grants. Every
 ; check-then-act those verbs run is one pushf/cli window (SPEC.md 34.3),
@@ -115,29 +123,44 @@ SBL_DMASZ    equ 0x2000         ; the DMA-visible claim: double buffer +
                                 ; because a stream is half-duplex by
                                 ; construction (SPEC.md 34.6) and the guards
                                 ; below hold the arithmetic
-SBL_POOLKB   equ 20             ; the staging pool, a SEPARATE claim taken on
-                                ; the first grant and released with the last
-                                ; (SPEC.md 51.4). Grant offsets are relative
-                                ; to ITS base, not the DMA buffer's. This is
-                                ; the FIRST TIER asked for and not a fixed
-                                ; size - sbl_pool_get walks down by
-                                ; SBL_POOLSTEP when the heap will not fund it
-SBL_POOLSTEP equ 4              ; the tier step, in KB. It must DIVIDE
-                                ; SBL_POOLKB, so the walk lands on the floor
-                                ; exactly rather than stepping past it
-SBL_POOLMIN  equ 4              ; the smallest pool worth holding: below this
-                                ; nothing in the tree asks for a grant that
-                                ; would fit (sbtest's smallest is 2,400 B)
-%if SBL_POOLKB % SBL_POOLSTEP
-  %error "SBL_POOLSTEP must divide SBL_POOLKB"
-%endif
-%if SBL_POOLMIN % SBL_POOLSTEP
-  %error "SBL_POOLSTEP must divide SBL_POOLMIN"
+SBL_POOLKB   equ 20             ; the staging pool's CEILING, in KB: a
+                                ; SEPARATE claim taken on the first grant and
+                                ; released with the last (SPEC.md 51.4). Grant
+                                ; offsets are relative to ITS base. It is sized
+                                ; to what the first grant asks for (SPEC.md
+                                ; 34.6.3) and grows toward this - it used to
+                                ; take all 20KB whatever the ask, so a Tracker
+                                ; playing an 8KB ring held 12KB for nothing
+SBL_PLAYKB   equ 16             ; what the driver holds while it does its
+                                ; JOB, playing - the 16KB ring Tracker and
+                                ; Audio both ask for, played in place
+                                ; (SPEC.md 34.5.2), so it is the pool and
+                                ; nothing else. The Drivers page prices it
+                                ; (DRVM_SND); recording adds the 8KB buffer
+SBL_POOLMIN  equ 4              ; the smallest pool worth holding: a tiny
+                                ; first grant still leaves room for a scratch
+                                ; one beside it (sbtest's verb 5/6 round trip)
+%if SBL_POOLMIN > SBL_POOLKB
+  %error "SBL_POOLMIN above the pool's ceiling"
 %endif
 SBL_POOLMAX  equ 0xD000         ; the biggest grant the offset arithmetic can
                                 ; express. The live bound is [sbl_poolsz],
                                 ; which is 0 until the pool is claimed
 SBL_GMAX     equ 8              ; staging-grant records
+; SBL_MOVS - the copy every pool/ring move uses: WORDS, then the odd byte.
+; `rep movsw` is 13.3 clocks a byte on an 8088 (PERFORMANCE.md Set 117.2)
+; against `rep movsb`'s 17,
+; and these copies are two passes over every byte a stream plays - 8.3% of a
+; 4.77 MHz machine at 11 kHz by sample, and each is inside a cli window that
+; gets shorter by the same factor. In: CX bytes, DS:SI -> ES:DI, DF = 0.
+; Out: CX = 0, SI/DI advanced as `rep movsb` would. Flags: CF, not preserved.
+%macro SBL_MOVS 0
+    shr cx, 1
+    rep movsw
+    adc cx, cx                  ; the odd byte: CX is 0 here, so it is CF
+    rep movsb
+%endmacro
+
 SBL_DCHUNK   equ 512            ; drain-copy chunk: one act+gen-guarded
                                 ; IF=0 write unit (SPEC.md 34.6, ~2ms of
                                 ; rep movsb on a 4.77MHz 8088)
@@ -288,8 +311,8 @@ sbl_arm_half:
                                 ; its 8237 page. It was a constant 0 while
                                 ; the buffer was a pinned segment; a driver's
                                 ; is a heap claim, so the page and the offset
-                                ; within it are both computed at attach
-                                ; (sbl_dma_map). Nothing is doubled - address
+                                ; within it are both computed at its claim
+                                ; (sbl_dma_get). Nothing is doubled - address
                                 ; doubling is a 16-bit-channel concept the XT
                                 ; does not have
     pushf
@@ -386,8 +409,10 @@ sbl_arm_rec:
 ; clobbers: nothing (flags)
 ;
 ; Time constant (40h), speaker on (D1h), then the mode split: auto-init
-; programs the DMA once for the whole 4KB ring (59h) plus the DSP block
-; size (48h, 2KB) and 1Ch; single-cycle arms half 0 (SPEC.md 34.5).
+; programs the DMA once for the whole cycle (59h) plus the DSP block size
+; (48h, one half) and 1Ch; single-cycle arms half 0 (SPEC.md 34.5). The
+; cycle is [sbl_xoff]/[sbl_xpage]/[sbl_xcnt]: the double buffer, or - a
+; DIRECT stream (SPEC.md 34.5.2) - the package's own ring in the pool.
 ; -----------------------------------------------------------------------------
 sbl_hw_start:
     push ax
@@ -411,26 +436,24 @@ sbl_hw_start:
     call sbl_dsp_wr
     cmp byte [sbl_auto], 0
     je .single
-    mov bx, [sbl_half]          ; BX = DMA count = 2*half - 1
-    shl bx, 1
-    dec bx
-    pushf
-    cli
+    mov bx, [sbl_xcnt]          ; BX = DMA count: the cycle less one - the
+    pushf                       ; double buffer's 2*half, or a DIRECT ring's
+    cli                         ; RL (SPEC.md 34.5.2); verb 0 set all three
     mov al, 0x05
     out 0x0A, al                ; mask channel 1
     out 0x0C, al                ; flip-flop clear
-    mov al, [sbl_dmaoff]        ; address = our buffer's offset in its page
+    mov al, [sbl_xoff]          ; address = the cycle's start in its page
     out 0x02, al
-    mov al, [sbl_dmaoff+1]
+    mov al, [sbl_xoff+1]
     out 0x02, al
     out 0x0C, al                ; flip-flop clear
     mov al, bl
-    out 0x03, al                ; count = the whole ring - 1
+    out 0x03, al                ; count = the whole cycle - 1
     mov al, bh
     out 0x03, al
     mov al, 0x59                ; auto-init, read, channel 1
     out 0x0B, al
-    mov al, [sbl_page]
+    mov al, [sbl_xpage]
     out 0x83, al
     mov al, 0x01
     out 0x0A, al                ; unmask
@@ -640,6 +663,8 @@ sbl_isr:
                                 ; stream outside QEMU)
     cmp byte [sbl_str_dir], 0   ; input streams take the mirror half-swap
     jne .input
+    cmp byte [sbl_direct], 0    ; the card reads the package's own ring
+    jne .direct                 ; (SPEC.md 34.5.2): no halves to swap
 
     mov ax, [sbl_half]          ; the mode's block size (SPEC.md 34.5 -
     cmp byte [sbl_ring_on], 0   ; wide streams play 4KB halves)
@@ -674,6 +699,15 @@ sbl_isr:
     call sbl_arm_half
     jmp .eoi
 
+.direct:                        ; DIRECT (SPEC.md 34.5.2): one block of the
+    mov ax, [sbl_half]          ; ring played, and the DMA has already gone on
+    add [sbl_consumed], ax      ; into the next - so the one question is
+    mov ax, [sbl_wd_rst]        ; whether that block was all fed. Same answer
+    mov [sbl_wd], ax            ; as the double buffer's valid flag, asked of
+    mov ax, [sbl_total]         ; the counters: total - consumed >= half. No
+    sub ax, [sbl_consumed]      ; is the underrun contract below, word for
+    cmp ax, [sbl_half]          ; word, and verb 1 is what resumes it - there
+    jae .eoi                    ; is no refill task to do it
 .under:                         ; the underrun contract (SPEC.md 34.5)
     cmp byte [sbl_auto], 0
     je .nohalt                  ; single-cycle: nothing in flight to halt
@@ -808,16 +842,22 @@ sbl_stub_c:
 sbl_grant_alloc:
     push bx
     push di
+    push bp                     ; BP = grown once already (a register: this
+                                ; verb is ANY-TASK, so no shared byte)
     push si                     ; SI is only an output on success: the
                                 ; refusals restore the caller's
     or cx, cx                   ; not jcxz: .e7 is out of a short jump's
     jnz .szok                   ; reach now that the pool claim sits here
     jmp .e7
 .szok:
-    call sbl_pool_get           ; BEFORE the size test: [sbl_poolsz] is 0
-    jc .e8n                     ; until the pool is actually held
-    cmp cx, [sbl_poolsz]        ; the pool we actually got, not a constant
-    ja .e7
+    cmp cx, SBL_POOLKB * 1024   ; past the pool's ceiling: no pool this
+    jbe .szok2                  ; driver will hold can take it, so it is a
+    jmp .e7                     ; bad size and not "no space"
+.szok2:
+    call sbl_pool_get           ; sized to THIS grant if it is the first
+    jc .e8n                     ; (SPEC.md 34.6.3)
+    xor bp, bp
+.scan:
     pushf
     cli
     xor si, si                  ; SI = candidate base: offsets are relative
@@ -872,6 +912,16 @@ sbl_grant_alloc:
     clc                         ; the output (AX is dead on CF = 0)
     jmp .out
 .e8f:
+    or bp, bp                   ; no room: GROW the pool, once, and scan
+    jnz .e8p                    ; again - never with a stream open, which is
+    cmp byte [sbl_str_act], 0   ; reading from it (SPEC.md 34.6.3). The test
+    jne .e8p                    ; and the grow stay in the scan's IF=0
+    inc bp                      ; window: a direct open between them would
+    call sbl_pool_grow          ; pin the pool by MC_RLOC alone, which
+    jc .e8p                     ; OSAPI_MEM_REGROW does not consult
+    popf
+    jmp .scan
+.e8p:
     popf
 .e8n:                           ; ...and the same refusal from OUTSIDE the
     mov ax, 8                   ; window, where the pool claim happens
@@ -887,6 +937,7 @@ sbl_grant_alloc:
     pop si                      ; refused: the caller's SI comes back
     stc
 .out:
+    pop bp
     pop di
     pop bx
     ret
@@ -966,7 +1017,7 @@ sbl_grant_chk:
     ret
 
 ; =============================================================================
-; The stream surface: slot 0x0100's live body (SPEC.md 20.3/34.5/34.6).
+; The stream surface: slot 0x00EA's live body (SPEC.md 20.3/34.5/34.6).
 ; osapi_snd_stream (snd.inc) tail-jumps here. AL = verb, AH = handle or
 ; sub-op; every verb preserves all registers except its documented outputs.
 ; =============================================================================
@@ -991,6 +1042,8 @@ sbl_stream_op:
     je sbl_v_grant
     cmp al, 8
     je sbl_v_busy
+    cmp al, 9
+    je sbl_v_ppos
     mov ax, 7                   ; anything higher: bad verb
     stc
     ret
@@ -1180,6 +1233,52 @@ sbl_v_open:
     add ax, 3
     mov [sbl_wd_rst], ax
     mov [sbl_wd], ax
+    ; DIRECT OR DOUBLE-BUFFERED (SPEC.md 34.5.2). A ring the 8237 can reach
+    ; is played where it lies: the ring IS a double buffer already, halves
+    ; and all, so copying it into another one bought nothing but the copy and
+    ; the 8KB it lands in. Three facts decide it and all three are known now:
+    ; auto-init (a single-cycle DSP re-arms per half from the ISR, which this
+    ; path does not carry), a ring of at least two halves (one is a block the
+    ; producer could never write ahead of), and a ring whose physical span
+    ; does not cross a 64KB page - which sbl_pool_get asks the allocator for,
+    ; so it is the case and not the hope, and the fallback is the copy path
+    mov byte [sbl_direct], 0
+    cmp byte [sbl_ropen], 0
+    je .dbuf
+    cmp byte [sbl_auto], 0
+    je .dbuf
+    mov ax, [sbl_half]
+    shl ax, 1
+    dec ax                      ; AX = 2 halves - 1, against RL - 1
+    cmp ax, [sbl_rmask]
+    ja .dbuf
+    call sbl_ring_phys          ; SI = the ring: AX/DL = where the chip sees it
+    jc .dbuf                    ; straddles a page: the copy path
+    mov [sbl_xoff], ax
+    mov [sbl_xpage], dl
+    mov ax, [sbl_rmask]         ; the DMA cycle IS the ring
+    mov [sbl_xcnt], ax
+    push dx                     ; ...and the pool may not move under the chip
+    mov dx, [sbl_poolseg]       ; now: PIN it (AX = 0) until sbl_stop_stream
+    xor ax, ax                  ; declares it again. [drv_wcnt] used to be
+    call OSAPI_MEM_MOVABLE      ; what kept the chip's memory still, and a
+    pop dx                      ; direct stream has no task to count
+    mov byte [sbl_direct], 1
+    jmp short .dset
+.dbuf:
+    call sbl_dma_get            ; the double buffer, claimed for this stream
+    jnc .dgot                   ; and freed with it
+    jmp .e8
+.dgot:
+    mov ax, [sbl_dmaoff]
+    mov [sbl_xoff], ax
+    mov al, [sbl_page]
+    mov [sbl_xpage], al
+    mov ax, [sbl_half]
+    shl ax, 1
+    dec ax
+    mov [sbl_xcnt], ax          ; 2 halves - 1
+.dset:
     mov [sbl_str_off], si       ; the stream record (not yet published)
     mov [sbl_total], cx
     mov word [sbl_fed], 0
@@ -1193,6 +1292,13 @@ sbl_v_open:
     mov [sbl_ring_on], al       ; (SPEC.md 34.5; sbl_rmask was set above)
     mov byte [sbl_str_state], SBL_ST_PLAY
     inc byte [sbl_gen]
+    cmp byte [sbl_direct], 0
+    je .prime
+    mov byte [sbl_str_act], 1   ; DIRECT: nothing to prime and nobody to
+    mov byte [sbl_expect], 1    ; pace - verb 0's CX >= one half is already
+    call sbl_hw_start           ; the first block, and verb 1 is the rest.
+    jmp short .opened           ; Arm-before-start as below, for its reason
+.prime:
     xor bx, bx                  ; prime the double buffer: half 0 always
     call sbl_fill_half          ; has data (ring: CX >= SBL_HALF validated;
     mov byte [sbl_valid], 1     ; linear: CX > 0, short halves pad)...
@@ -1229,12 +1335,14 @@ sbl_v_open:
                                 ; triggered line could never re-fire.
                                 ; Arming early is safe: sbl_wd is already
                                 ; loaded, so sbl_tick cannot underflow it
+.opened:
     mov ah, [sbl_gen]           ; out: AH = handle, AL = 0
     mov al, 0
     clc
     jmp .out
 .nospawn:
     mov byte [sbl_str_act], 0   ; unwind: nothing started
+    call sbl_dma_put            ; ...and the buffer it would have played
     mov ax, 6                   ; the documented clean pool-full error
     jmp .err
 .e1:
@@ -1246,6 +1354,9 @@ sbl_v_open:
 .e4:
     mov ax, 4
     jmp .err
+.e8:
+    mov ax, 8                   ; no page-safe 8KB for the double buffer
+    jmp .err                    ; (SPEC.md 34.5.2) - verb 7's "no space"
 .e7:
     mov ax, 7
 .err:
@@ -1297,13 +1408,34 @@ sbl_v_feed:
     test ax, ax
     js .e7                      ; delta >= 0x8000: not monotonic forward
     mov ax, cx
+    cmp byte [sbl_direct], 0    ; DIRECT (SPEC.md 34.5.2): nothing is copied
+    je .fedb                    ; out, so the bytes not yet PLAYED are what a
+    sub ax, [sbl_consumed]      ; feed must not lap - consumed stands where
+    jmp short .bound            ; fed stood
+.fedb:
     sub ax, [sbl_fed]           ; outstanding bytes after this feed
+.bound:
     jz .store                   ; nothing outstanding is trivially fine
     dec ax
     cmp ax, [sbl_rmask]         ; <= RL  <=>  (outstanding - 1) <= RL-1
     ja .e7
 .store:
     mov [sbl_total], cx
+    cmp byte [sbl_paused], 0    ; ...and a DIRECT stream the ISR paused
+    je .ok                      ; resumes HERE, the moment a whole block is
+    cmp byte [sbl_direct], 0    ; fed again: this was the refill task's job,
+    je .ok                      ; and a direct stream has none. The same
+    mov ax, cx                  ; flags, watchdog and ports as sbl_refill's
+    sub ax, [sbl_consumed]      ; resume, in this one window (SPEC.md 34.3)
+    cmp ax, [sbl_half]
+    jb .ok
+    mov byte [sbl_paused], 0
+    mov byte [sbl_str_state], SBL_ST_PLAY
+    mov ax, [sbl_wd_rst]
+    mov [sbl_wd], ax
+    mov byte [sbl_expect], 1
+    call sbl_go_on              ; D4h (SPEC.md 34.5)
+.ok:
     popf
     xor ax, ax
     clc
@@ -1377,12 +1509,15 @@ sbl_stop_stream:
     mov al, 0xD3                ; speaker (DAC) off
     call sbl_dsp_wr
 .hs_ports:
-    mov dx, [sbl_base]
+    mov al, 0x05                ; and MASK the channel: the memory it was
+    out 0x0A, al                ; pointed at is about to be freed or let move
+    mov dx, [sbl_base]          ; (below), and every start unmasks it again
     add dx, 0x0E
     in al, dx                   ; retire a latched block IRQ SB-side
     mov byte [sbl_expect], 0
     mov byte [sbl_str_act], 0   ; handles are stale from here
     popf
+    call sbl_unpin              ; the pool movable again, or the buffer freed
     cmp byte [sbl_hisp], 0
     je .out
     mov cx, SBL_POLLS           ; the only way out of high-speed mode is the
@@ -1397,6 +1532,34 @@ sbl_stop_stream:
 .out:
     pop dx
     pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_unpin - give back what the stream held of the heap (SPEC.md 34.5.2)
+; in:  a stream just stopped ([sbl_str_act] = 0, the channel masked)
+; out: nothing; clobbers nothing (flags)
+;
+; A DIRECT stream pinned the pool (verb 0) and gets it declared movable again:
+; the chip is masked, so the compactor may have it. A double-buffered one
+; claimed the 8KB buffer and frees it here - freeing is safe with the worker
+; still alive, because its every write is an act+gen-verified IF=0 chunk and
+; act is already 0. Outside every cli window: both are kernel calls.
+; -----------------------------------------------------------------------------
+sbl_unpin:
+    push ax
+    push dx
+    cmp byte [sbl_direct], 0
+    je .buf
+    mov byte [sbl_direct], 0
+    mov dx, [sbl_poolseg]
+    mov ax, sbl_reloc
+    call OSAPI_MEM_MOVABLE
+    jmp short .out
+.buf:
+    call sbl_dma_put
+.out:
+    pop dx
     pop ax
     ret
 
@@ -1432,6 +1595,89 @@ sbl_v_status:
     mov ax, 0xFFFF
     xor dx, dx
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_v_ppos - verb 9: verb 3 with DX = the bytes PLAYED, exactly (SPEC.md
+;              34.5.1)
+; in/out:   as verb 3
+;
+; Verb 3's count advances one whole block per block IRQ, so between IRQs it
+; says where the card WAS - 93 ms of 22 kHz, 372 ms of XT mode's 5.5 kHz -
+; and a display that wants where the card IS had to estimate the rest from
+; ticks, guessing when the report was raised. The 8237 knows: channel 1's
+; count is how far the DMA has got into the block playing now, so this is
+; verb 3's count plus that, under the same cli window, and no estimate.
+;
+; ONE RACE, and it is the IRQ this cli is holding off: the DMA can already be
+; in the NEXT half while the ISR that counts the last one is pending. Then the
+; half the count names is not [sbl_play], and the finished block is added
+; here as the ISR is about to add it. A record stream, a paused or ended one
+; and a stream with no IRQ armed answer verb 3's count unchanged.
+; -----------------------------------------------------------------------------
+sbl_v_ppos:
+    pushf
+    cli
+    call sbl_hcheck
+    jc sbl_v_status.stale
+    push bx
+    push cx
+    mov al, [sbl_str_state]
+    mov ah, 0
+    mov dx, [sbl_consumed]
+    cmp byte [sbl_str_dir], 0
+    jne .out                    ; recording: verb 3's count is the answer
+    cmp al, SBL_ST_PLAY
+    jne .out
+    cmp byte [sbl_expect], 0
+    je .out
+    push ax
+    out 0x0C, al                ; flip-flop clear (any value)
+    in al, 0x03                 ; channel 1's count: lo...
+    mov cl, al
+    in al, 0x03                 ; ...hi. It is LEFT - 1, and FFFFh at
+    mov ch, al                  ; terminal count
+    inc cx                      ; CX = bytes left in this DMA cycle
+    cmp byte [sbl_direct], 0
+    je .dbuf
+    mov bx, [sbl_rmask]         ; DIRECT (SPEC.md 34.5.2): the cycle is the
+    lea ax, [bx+1]              ; ring, so AX = RL - left is the ring offset
+    sub ax, cx                  ; the chip reads next, and the bytes played
+    mov cx, dx                  ; are consumed plus how far that is past
+    and cx, bx                  ; consumed's own ring offset - which is right
+    sub ax, cx                  ; with the IRQ pending too, where the double
+    and ax, bx                  ; buffer below needs a case for it
+    jmp short .add
+.dbuf:
+    mov bx, [sbl_half]
+    cmp byte [sbl_auto], 0
+    je .single
+    mov ax, bx                  ; auto-init: one cycle is BOTH halves
+    shl ax, 1
+    sub ax, cx                  ; AX = bytes into the double buffer
+    cmp ax, bx
+    jb .h0
+    sub ax, bx                  ; the second half is playing
+    cmp byte [sbl_play], 1
+    je .add
+    jmp short .fin              ; ...and the ISR has not flipped to it yet
+.h0:
+    cmp byte [sbl_play], 0
+    je .add
+.fin:
+    add dx, bx                  ; the finished block the pending ISR counts
+    jmp short .add
+.single:
+    mov ax, bx                  ; single-cycle: one cycle is one half, and a
+    sub ax, cx                  ; terminal count (CX = 0 after the inc) is
+.add:                           ; the whole half, not yet counted
+    add dx, ax
+    pop ax
+.out:
+    pop cx
+    pop bx
+    popf
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1505,6 +1751,9 @@ sbl_v_open_in:
     add ax, 3
     mov [sbl_wd_rst], ax
     mov [sbl_wd], ax
+    call sbl_dma_get            ; the record ring lives in the DMA buffer,
+    jc .e8                      ; claimed for this stream (SPEC.md 34.5.2)
+    mov byte [sbl_direct], 0
     mov [sbl_str_off], si       ; the stream record (not yet published)
     mov [sbl_total], cx         ; = the capture capacity (SPEC.md 34.6)
     mov word [sbl_fed], 0
@@ -1531,7 +1780,11 @@ sbl_v_open_in:
     jmp .out
 .nospawn:
     mov byte [sbl_str_act], 0   ; unwind: nothing started
+    call sbl_dma_put            ; ...and the buffer it would have captured to
     mov ax, 6                   ; the documented clean pool-full error
+    jmp .err
+.e8:
+    mov ax, 8                   ; no page-safe 8KB for the record ring
     jmp .err
 .e1:
     mov ax, 1
@@ -1558,7 +1811,7 @@ sbl_v_open_in:
 ;
 ; in:       SI = source offset in SND_SEG (inside a grant the caller owns),
 ;           CX = bytes, DI = destination offset in the CALLER's segment
-;           (BX, threaded per-call by slot 0x0100's wrapper - SPEC.md 20.3)
+;           (BX, threaded per-call by slot 0x00EA's wrapper - SPEC.md 20.3)
 ; out:      AX = 0 ok / 7 refused (range not inside the caller's grant);
 ;           CF mirrors
 ; clobbers: nothing else (flags; ES restored per SPEC.md 1)
@@ -1603,7 +1856,7 @@ sbl_v_read:
     mov cx, ax
     push ds
     mov ds, [sbl_poolseg]       ; DS:SI = the grant source, in the POOL claim
-    rep movsb                   ; pool:SI -> caller DI
+    SBL_MOVS                    ; pool:SI -> caller DI
     pop ds
     pop cx
     popf
@@ -1627,7 +1880,7 @@ sbl_v_read:
 ; sbl_v_stage - verb 6: copy caller data into a grant (SPEC.md 34.6)
 ;
 ; in:       SI = source offset in the CALLER's segment (BX, threaded
-;           per-call by slot 0x0100's wrapper - SPEC.md 20.3), CX = bytes,
+;           per-call by slot 0x00EA's wrapper - SPEC.md 20.3), CX = bytes,
 ;           DI = destination offset in SND_SEG (inside a grant the caller
 ;           owns)
 ; out:      AX = 0 ok / 7 refused (range not inside the caller's grant);
@@ -1671,7 +1924,7 @@ sbl_v_stage:
     mov cx, ax
     push ds
     mov ds, bx                  ; the caller's segment (slot wrapper, BX):
-    rep movsb                   ; the source pointer lives THERE since v3
+    SBL_MOVS                    ; the source pointer lives THERE since v3
     pop ds                      ; callerseg:SI -> pool:DI
     pop cx
     popf
@@ -1834,7 +2087,7 @@ sbl_fill_half:
     mov cx, ax
     push ds
     mov ds, [sbl_poolseg]       ; DS = the POOL: the grant is there now, the
-    rep movsb                   ; destination half is in the DMA claim (ES)
+    SBL_MOVS                    ; destination half is in the DMA claim (ES)
     pop ds
     pop cx
     popf
@@ -1949,7 +2202,7 @@ sbl_fill_guard:
     mov cx, ax
     push ds
     mov ds, [sbl_poolseg]       ; DS = the POOL: the grant is there now, the
-    rep movsb                   ; destination half is in the DMA claim (ES)
+    SBL_MOVS                    ; destination half is in the DMA claim (ES)
     pop ds
     pop cx
     popf
@@ -2171,7 +2424,7 @@ sbl_drain_half:
     mov cx, bx
     push ds
     mov ds, [sbl_seg]           ; DS = the DMA claim, where the ring is
-    rep movsb                   ; one chunk, atomic vs. teardown (IF=0)
+    SBL_MOVS                    ; one chunk, atomic vs. teardown (IF=0)
     pop ds
     pop cx
     add [sbl_consumed], bx      ; landed bytes only (verb 3's contract)
@@ -2372,62 +2625,49 @@ sbl_release_inst:
 ; wiring (SPEC.md 51.4)
 ; =============================================================================
 
-SBL_WANT   equ SBL_DMASZ / 1024 ; KB claimed at attach: the DMA-visible part
-                                ; and NOTHING ELSE. The 20KB staging pool used
-                                ; to be claimed with it and held for the
-                                ; session; it is its own claim now, taken when
-                                ; an app first asks for a grant. On a 128KB
-                                ; machine that is 20KB of a 55KB heap that a
-                                ; card nobody is playing no longer holds
+;SBL_WANT: the double buffer's claim in KB, and all of it the chip's
+SBL_WANT   equ SBL_DMASZ / 1024
 
 ; -----------------------------------------------------------------------------
-; sbl_attach - find a card and give it somewhere to DMA from
+; sbl_attach - find a card
 ; in:  nothing
-; out: CF = 0 attached; CF = 1 and AL = DRVE_HW (no card) or DRVE_MEM (no
-;      page-safe memory) - and in either case NOTHING is hooked and NOTHING is
-;      held (SPEC.md 51.2)
+; out: CF = 0 attached; CF = 1 and AL = DRVE_HW (no card) or DRVE_TWICE -
+;      and in either case NOTHING is hooked and NOTHING is held (SPEC.md 51.2)
 ; clobbers: AX (flags)
 ;
-; The two refusals are told apart because the Control Panel reports them: on a
-; tier switch "you have no card" and "close something and try again" are
-; different answers, and a page that said only "no" for both would send the
-; user looking for the wrong problem (SPEC.md 34.8).
+; IT CLAIMS NOTHING (SPEC.md 34.5.2). The 8KB double buffer was claimed here
+; and held for the session, whether or not anything ever played - and the
+; streams that matter now play straight out of their own ring and never touch
+; it. A double-buffered stream claims it at open and frees it at close, so an
+; idle card costs the heap its image and not a byte more, and DRVE_MEM moved to
+; where memory is actually wanted: verb 0 and verb 4 answer 8.
 ; -----------------------------------------------------------------------------
 sbl_attach:
     push bx
     push cx
     push dx
-    cmp word [sbl_seg], 0
+    cmp byte [sbl_up], 0
     jne .twice                  ; ALREADY ATTACHED, so somebody attached twice
                                 ; and that is a bug in the CALLER - not a fact
                                 ; about the machine, and not something to
                                 ; recover from quietly. Refuse before the state
-                                ; reset and before the first port write, so the
-                                ; live ring, the hooked vector and the running
+                                ; reset and before the first port write, so a
+                                ; live stream, the hooked vector and the running
                                 ; DSP are all exactly as they were
     call sbl_state_init         ; before any port write: a reload starts clean
     call sbl_f_probe            ; the reset scan + E1h version gate
     or al, al
     jz .nohw
-    call sbl_dma_map            ; ...and somewhere to DMA from
-    jc .nomem
     mov byte [sbl_up], 1        ; publish LAST (SPEC.md 29.2): the stream
     clc                         ; verbs test this and nothing else
     jmp short .out
 .nohw:
     mov al, DRVE_HW
-    jmp short .fail
-.nomem:
-    mov al, DRVE_MEM
-.fail:
-    mov word [sbl_seg], 0       ; a refused attach holds nothing
     stc
     jmp short .out
 .twice:
-    mov al, DRVE_TWICE          ; NOT via .fail, which clears [sbl_seg]: here
-    stc                         ; that word is the LIVE ring, and zeroing it
-                                ; would turn this refusal into the very orphan
-                                ; it exists to report
+    mov al, DRVE_TWICE
+    stc
 .out:
     pop dx
     pop cx
@@ -2435,108 +2675,65 @@ sbl_attach:
     ret
 
 ; -----------------------------------------------------------------------------
-; sbl_dma_map - claim a buffer the 8237 can actually reach
+; sbl_dma_get - claim the double buffer, if it is not already held
 ; in:  nothing
-; out: CF = 0 and [sbl_seg]/[sbl_page]/[sbl_dmaoff]/[sbl_poolsz] set;
-;      CF = 1 the heap has nothing page-safe
-; clobbers: flags
+; out: CF = 0 and [sbl_seg]/[sbl_page]/[sbl_dmaoff] set; CF = 1 the heap has
+;      nothing page-safe, and nothing changed
+; clobbers: nothing (flags)
 ;
 ; **The 8237 has no register for address bits 16..19.** Port 83h holds them
 ; for channel 1 and the chip never carries into them, so a transfer that
 ; would cross a 64KB PHYSICAL boundary wraps to the start of its page and
-; plays the wrong memory. While this buffer was a pinned segment the property
-; was true by construction; a heap claim has to ASK for it.
+; plays the wrong memory. OSAPI_MEM_CLAIM_DMA_HI moves that test inside the
+; allocator's own scan (SPEC.md 50.3), and CX = AX because the chip addresses
+; all 8KB. From the TOP (SPEC.md 50.3.2), the door for a buffer the hardware
+; holds the address of.
 ;
-; And it asks the allocator, which is the only thing that can answer it
-; cheaply. This used to claim, test the address it got, and claim AGAIN while
-; still HOLDING the block that failed - so finding 32KB could hold 128KB, and
-; a 128KB machine with exactly one good hole would be told it had no page-safe
-; memory while sitting on the hole. OSAPI_MEM_CLAIM_DMA moves the test inside
-; the scan: a candidate whose head would straddle bumps to the next page
-; floor, the same way an overlapping one bumps past the claim it hit, and the
-; first block that satisfies BOTH is the one returned (SPEC.md 50.3).
-;
-; CX is this claim and nothing else. The staging pool is a claim of its own
-; now, copied by us with rep movsb where the chip never sees it, so it may
-; straddle freely - and constraining it too would rule out every base in the
-; upper half of a page for nothing. 8KB is also strictly easier to place than
-; the 12KB this used to ask for (SPEC.md 34.6.1), which matters because this
-; is the one claim in the system that can fail for a reason the user cannot
-; see.
+; NOT DECLARED MOVABLE, and it does not need to be: it lives exactly as long
+; as one double-buffered stream (sbl_unpin frees it), and for all of that the
+; chip may be pointed at it. So sbl_ring_reloc is gone - SPEC.md 66.6.4's
+; three words are recomputed at every claim instead.
 ; -----------------------------------------------------------------------------
-sbl_dma_map:
+sbl_dma_get:
+    cmp word [sbl_seg], 0
+    jne .ok                     ; a watchdog-ended stream's, still held
     push ax
-    push bx
     push cx
     push dx
-                                ; PRECONDITION: [sbl_seg] is 0. sbl_attach is
-                                ; the only caller and refuses before it gets
-                                ; here if a ring is already held, because that
-                                ; is a double attach and a double attach is a
-                                ; BUG - so this does not test, and must not
-                                ; start freeing what it finds. A version that
-                                ; quietly freed and re-claimed would make the
-                                ; caller's bug invisible again, which is how
-                                ; the 12KB orphan survived in the first place
-    mov word [sbl_seg], 0
-    mov ax, SBL_WANT            ; 8KB, ALL of which the chip addresses -
-    mov cx, ax                  ; so the page rule covers the whole claim
-    call OSAPI_MEM_CLAIM_DMA_HI ; out CF, DX = base segment. FROM THE TOP
-                                ; (SPEC.md 50.3.2): the 8237 holds this ring's
-                                ; page and offset in its own registers, so it
-                                ; can no more be moved than a package's region
-                                ; can - and a claim like that in the DATA arena
-                                ; is 50.3's own warning about splitting the run
-                                ; a package has to load into. The staging pool
-                                ; below stays where it is: software is the only
-                                ; thing that reads it, so the compactor should
-                                ; have it.
+    mov ax, SBL_WANT
+    mov cx, ax
+    call OSAPI_MEM_CLAIM_DMA_HI ; out CF, DX = base segment
     jc .fail
     mov [sbl_seg], dx
     call sbl_dma_derive         ; the two words the base decides
-    mov ax, sbl_ring_reloc      ; ...AND THE RING MAY MOVE (SPEC.md 66.6.4).
-    call OSAPI_MEM_MOVABLE      ; DX is still the claim. The kernel refuses an
-                                ; MC_DMA claim while [drv_wcnt] is non-zero,
-                                ; which is exactly while a stream is open and
-                                ; the 8237 armed - so what is declared here can
-                                ; only ever be acted on with the chip idle, and
-                                ; then the proc below is the whole fix-up
-    clc                         ; the pool is NOT claimed here: sbl_pool_get
-                                ; takes it when an app first wants a grant
-    jmp short .out
-.fail:
-    mov word [sbl_seg], 0
-    stc
-.out:
     pop dx
     pop cx
-    pop bx
     pop ax
+.ok:
+    clc
+    ret
+.fail:
+    pop dx
+    pop cx
+    pop ax
+    stc
     ret
 
-; -----------------------------------------------------------------------------
-; sbl_ring_reloc - the DMA ring moved. BX = the base it WAS at, DX = the new.
-;
-; A driver's relocation proc is a near proc with a near `ret`, dispatched
-; through the driver's own three-byte dispatcher exactly like a package's
-; (SPEC.md 66.2) - the ring's owner is this segment, so mem_reloc_call takes
-; the PKG_DISP arm and not the kernel's shim.
-;
-; THREE WORDS, AND THEY ARE THE THREE sbl_dma_map ALREADY DERIVES, so this is
-; that derivation and not a second copy of it: [sbl_seg] is the base, and the
-; other two are what the 8237 is programmed from and are a FUNCTION of it - the
-; offset within the 64KB page, and which page that is.
-;
-; NOTHING IS RE-ARMED HERE, and that is the safety argument rather than an
-; omission. The kernel will not move an MC_DMA claim while [drv_wcnt] is
-; non-zero (SPEC.md 66.6.4), a stream lives only while its refill or drain task
-; does (34.5), and the 8237 is armed only while a stream is open - so this
-; cannot be reached with a transfer in flight. The next sbl_go_on programs the
-; chip from these words, as it always did.
-; -----------------------------------------------------------------------------
-sbl_ring_reloc:
-    mov [sbl_seg], dx
-    ; ...and fall through into the derivation it shares with the claim
+; sbl_dma_put - free the double buffer if it is held. Clobbers nothing.
+; Never from inside a cli window: it frees through the kernel.
+sbl_dma_put:
+    push dx
+    mov dx, [sbl_seg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+    mov word [sbl_seg], 0
+.out:
+    pop dx
+    ret
+
+; sbl_dma_derive - [sbl_dmaoff] and [sbl_page] from [sbl_seg]: the buffer's
+; offset inside its 64KB physical page, and which page. Clobbers nothing.
 sbl_dma_derive:
     push ax
     push bx
@@ -2563,41 +2760,28 @@ sbl_dma_derive:
     ret
 
 ; -----------------------------------------------------------------------------
-; sbl_pool_get - claim the staging pool, if it is not already held
-;
-; in:  nothing
-; out: CF = 0 and [sbl_poolseg]/[sbl_poolsz] usable; CF = 1 the heap could
-;      not fund it and NOTHING changed
-; clobbers: nothing (flags)
-;
-; Separate from the DMA claim on purpose, and the two are as different as
-; claims get. The buffer the 8237 reads must not cross a 64KB physical
-; boundary, which is easiest to satisfy on the empty heap that exists at
-; attach - so it is claimed there and never moves. The pool is copied by us
-; with rep movsb and the chip never sees it, so it has NO constraint at all
-; and a late claim is an ordinary one. Holding 20KB from boot for a card
-; nobody is playing costs 55% of a 128KB machine's heap - which is 36.5KB,
-; not the 55KB an earlier comment here claimed: the kernel has grown since,
-; and HEAP_SEG is the number that moved.
-;
-; IT ASKS IN TIERS, for the reason apps/recorder does (SPEC.md 34.6): the
-; claim was a flat SBL_POOLKB whatever the machine had, so on a small heap it
-; simply refused - and the recorder's own tiering could not help, because it
-; tiers the GRANT while this claims all 20KB or nothing. A machine that could
-; have recorded a second got zero. The rest of the driver was already written
-; for a pool that is not a constant (sbl_grant_alloc bounds against
-; [sbl_poolsz], "the pool we actually got"), so this is the only place that
-; had to learn it.
-;
-; A machine with the room is unaffected: the first tier IS the old size, so
-; it is claimed on the first try and every offset, bound and refusal is what
-; it always was.
-;
-; Refusal is not an error path anybody new has to handle: verb 7 already
-; answers 8 for "no space", and that is what a caller gets - and a request
-; bigger than the pool we ended up with answers 7 through the same bound,
-; which is the tier the caller should try next.
+; sbl_ring_phys - where the 8237 would see a ring in the pool (SPEC.md 34.5.2)
+; in:  SI = the ring's pool offset, [sbl_poolseg], [sbl_rmask] = RL - 1
+; out: CF = 0 the whole ring is inside one 64KB physical page, AX = its offset
+;      in that page and DL = the page; CF = 1 it straddles one
+; clobbers: DH (flags)
 ; -----------------------------------------------------------------------------
+sbl_ring_phys:
+    push cx
+    mov ax, [sbl_poolseg]
+    mov dx, ax
+    mov cl, 4
+    shl ax, cl                  ; the pool's base, low 16 bits...
+    mov cl, 12
+    shr dx, cl                  ; ...and its page
+    add ax, si                  ; + the ring's offset in the pool, carrying
+    adc dl, 0                   ; into the page
+    push ax
+    add ax, [sbl_rmask]         ; the ring's last byte: a carry out of the
+    pop ax                      ; low 16 bits is a page crossed (pop and pop
+    pop cx                      ; leave the flags alone)
+    ret
+
 ; -----------------------------------------------------------------------------
 ; sbl_reloc - THE HEAP COMPACTOR MOVED THE STAGING POOL (SPEC.md 66.2/66.5.5)
 ; in:  BX = the base segment it WAS at, DX = the base it is at NOW.
@@ -2612,10 +2796,10 @@ sbl_dma_derive:
 ; nothing outside this file derives anything from [sbl_poolseg], and nothing
 ; inside it keeps a copy.
 ;
-; The DMA double-buffer is a different claim and is PINNED by construction -
-; it carries MC_DMA, so mem_can_move refuses it whatever anyone declares
-; (SPEC.md 66.3), which is right twice over: the card may be mid-transfer, and
-; the 64KB page rule is a property of the address.
+; ...EXCEPT THE 8237, while a DIRECT stream plays out of the pool (SPEC.md
+; 34.5.2) - and that is why verb 0 pins the pool for such a stream and
+; sbl_unpin declares this proc again only once the channel is masked. So the
+; compactor never calls this with the chip pointed at the pool.
 ; -----------------------------------------------------------------------------
 sbl_reloc:
     cmp bx, [sbl_poolseg]
@@ -2624,43 +2808,134 @@ sbl_reloc:
 .out:
     ret
 
+; -----------------------------------------------------------------------------
+; sbl_pool_get - claim the staging pool, if it is not already held
+;
+; in:  CX = the grant about to be asked of it (1..SBL_POOLKB KB)
+; out: CF = 0 and [sbl_poolseg]/[sbl_poolsz] usable; CF = 1 the heap could
+;      not fund it and NOTHING changed
+; clobbers: nothing (flags)
+;
+; SIZED TO THE ASK (SPEC.md 34.6.3). It was a flat SBL_POOLKB, walking down
+; in 4KB tiers when the heap would not fund it - so a Tracker playing an 8KB
+; ring held a 20KB pool, and a 16KB one held 4KB it never touched. Now the
+; first grant decides: its size in whole KB, at least SBL_POOLMIN so a small
+; first grant leaves room beside it. A later grant that does not fit GROWS the
+; pool (sbl_pool_grow). And the tiers are gone because they cannot help: a
+; pool smaller than the grant it was claimed for is a refusal either way, and
+; the callers that can live with less - Tracker, Audio, the Recorder - already
+; tier their own grant and ask again.
+;
+; PAGE-SAFE WHEN IT CAN BE (SPEC.md 34.5.2): OSAPI_MEM_CLAIM_DMA_HI with the
+; whole pool as the head, so a ring granted out of it is one the 8237 can play
+; in place - which is what spares the 8KB double buffer. From the TOP, the door
+; for memory a chip is pointed at (SPEC.md 50.3.2); movable all the same, the
+; compactor honouring the head (SPEC.md 66.4.2). When the heap has no such run
+; the plain claim is the fallback: the pool still works, and a stream out of
+; it takes the copy path as every stream used to.
+; -----------------------------------------------------------------------------
 sbl_pool_get:
     push ax
     push bx
-    push cx                     ; CX too since the tier walk shifts KB into
-    push dx                     ; bytes - this routine clobbers NOTHING
+    push cx
+    push dx
     cmp word [sbl_poolseg], 0
     jne .ok                     ; already held: grants share one claim
-    mov ax, SBL_POOLKB
-.try:
-    call OSAPI_MEM_CLAIM        ; out CF, DX = base segment
+    call sbl_kb                 ; AX = CX in whole KB
+    cmp ax, SBL_POOLMIN
+    jae .min
+    mov ax, SBL_POOLMIN
+.min:
+    mov bx, ax                  ; BX = the KB, across both asks
+    mov cx, ax                  ; the whole pool is the chip's
+    call OSAPI_MEM_CLAIM_DMA_HI ; out CF, DX = base segment
     jnc .got
-    sub ax, SBL_POOLSTEP        ; ...the next tier down. AX is KB and the
-    cmp ax, SBL_POOLMIN         ; step divides the top, so this cannot step
-    jae .try                    ; past the floor onto a negative
-    jmp short .fail
+    mov ax, bx
+    call OSAPI_MEM_CLAIM_HI     ; not page-safe, but a pool all the same
+    jc .fail
 .got:
+    mov ax, bx
     mov [sbl_poolseg], dx
-    push ax                     ; ...and it is MOVABLE (SPEC.md 66.5.5). This
-    mov ax, sbl_reloc           ; is the claim docs/FIELD-NOTES.md 2 named as
-    call OSAPI_MEM_MOVABLE      ; the fragmenting party: a LATE claim, taken on
-    pop ax                      ; the first stream grant, so it lands above
-                                ; whatever the app already holds and bounds the
-                                ; hole that app's next free leaves behind
-    mov cl, 10                  ; KB -> bytes: the pool we ACTUALLY got, which
-    shl ax, cl                  ; is what every bound below reads
-    mov [sbl_poolsz], ax
+    call sbl_pool_sz            ; [sbl_poolsz] = AX KB in bytes
+    mov ax, sbl_reloc           ; ...and it is MOVABLE (SPEC.md 66.5.5): a
+    call OSAPI_MEM_MOVABLE      ; LATE claim, so it lands wherever the heap
+                                ; is by then (docs/FIELD-NOTES.md 2)
 .ok:
     clc
     jmp short .out
 .fail:
-    mov word [sbl_poolseg], 0
-    mov word [sbl_poolsz], 0
     stc
 .out:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_pool_grow - make room in a held pool for one more grant of CX bytes
+; in:  CX = the grant that did not fit; no stream open
+; out: CF = 0 the pool is bigger now (and may have moved); CF = 1 it is at its
+;      ceiling or the heap refused, and nothing changed
+; clobbers: nothing (flags)
+;
+; OSAPI_MEM_REGROW, which extends in place when it can and moves otherwise,
+; the page-safe head re-honoured either way (SPEC.md 50.3). It adds the WHOLE
+; grant at the top rather than the shortfall, because a pool with room that is
+; not contiguous is the case this is reached in as often as a small one. Never
+; with a stream open: a direct one is playing out of this very claim, and a
+; double-buffered one has a worker copying from it.
+; -----------------------------------------------------------------------------
+sbl_pool_grow:
+    push ax
+    push cx
+    push dx
+    call sbl_kb                 ; AX = the grant in KB...
+    mov cl, [sbl_poolsz+1]      ; CX = the pool in KB: always whole KB
+    xor ch, ch                  ; (sbl_pool_sz), so the high byte / 4
+    shr cx, 1
+    shr cx, 1
+    add ax, cx                  ; ...plus the pool
+    cmp ax, SBL_POOLKB
+    jbe .ask
+    mov ax, SBL_POOLKB          ; the ceiling (a recording holds up to it)
+    cmp ax, cx
+    jbe .fail                   ; ...and the pool is already there
+.ask:
+    mov dx, [sbl_poolseg]
+    call OSAPI_MEM_REGROW       ; out CF, DX = the base NOW
+    jc .fail
+    mov [sbl_poolseg], dx
+    call sbl_pool_sz
+    clc
+    jmp short .out
+.fail:
+    stc
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; sbl_kb - AX = CX bytes in whole KB, rounded up (CX up to 0xFFFF). Flags.
+sbl_kb:
+    push cx
+    mov ax, cx
+    add ax, 1023                ; the carry is bit 16 of the sum...
+    rcr ax, 1                   ; ...and comes back in as bit 15
+    mov cl, 9
+    shr ax, cl                  ; 17 bits >> 10 in all
+    pop cx
+    ret
+
+; sbl_pool_sz - [sbl_poolsz] = AX KB in bytes (AX <= SBL_POOLKB). Flags.
+sbl_pool_sz:
+    push ax
+    push cx
+    mov cl, 10
+    shl ax, cl
+    mov [sbl_poolsz], ax
+    pop cx
     pop ax
     ret
 
@@ -2850,6 +3125,7 @@ sbl_state_init:
     mov byte [sbl_wide], 0
     mov word [sbl_rate], 0
     mov word [sbl_hopen], SBL_HALF
+    mov byte [sbl_direct], 0
     xor bx, bx
 .g:
     mov word [sbl_gr_act+bx], 0
@@ -3192,13 +3468,20 @@ sbl_hisp:     times 1 db 0            ;   1 = SB Pro high-speed: TC + 90h, and
 sbl_rate:     times 1 dw 0            ;   wide: the open rate in Hz (41h operand)
 sbl_hopen:    times 1 dw 0            ;   verb 0's half width - a TEMP, the
                                 ;   sbl_ropen idiom (committed at .irqok)
+sbl_direct:   times 1 db 0            ;   1 = DIRECT (SPEC.md 34.5.2): the card
+                                ;   plays the ring in the pool, no double
+                                ;   buffer and no refill task
+sbl_xpage:    times 1 db 0            ;   the auto-init DMA cycle hw_start
+sbl_xoff:     times 1 dw 0            ;   programs: page, offset in it, and
+sbl_xcnt:     times 1 dw 0            ;   length - 1 (verb 0 sets all three)
 
 ; --- where our DMA buffer landed (SPEC.md 51.4) ------------------------------
 ; It was a pinned 64KB segment whose page and offset were constants. A
-; driver's is a heap claim, so all three are computed once at attach by
-; sbl_dma_map and read by every 8237 programming site.
-sbl_seg:      dw 0              ; the DMA claim's segment: double buffer and
-                                ;   record ring, page-safe, held from attach
+; driver's is a heap claim, so all three are computed by sbl_dma_get whenever
+; it is claimed, and read by every 8237 programming site.
+sbl_seg:      dw 0              ; the double buffer and record ring, page-
+                                ;   safe, held only while a stream that is
+                                ;   NOT direct is open (SPEC.md 34.5.2)
 sbl_poolseg:  dw 0              ; the STAGING POOL's own claim, 0 = not held.
                                 ;   Taken on the first grant, released with
                                 ;   the last (sbl_pool_get/put)

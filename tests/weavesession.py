@@ -38,20 +38,11 @@ whole stack - ring, slice, SETP, painter, primitive - with nothing in the path
 that exists only for this test.
 
 NAVIGATION IS weavesmoke's, IMPORTED AND NOT COPIED. That file's
-`_open_bundle` carries the retry, the two `until` waits and the reasons for
-both, all of them paid for in lost runs; a second copy here would drift from
-it on the first fix. This file owns the SESSION and nothing else.
-
-WHAT FLAKES, AND IT IS NOT THIS FILE. The navigation is weavesmoke's and so
-is its failure mode: a double-click whose two presses straddle the kernel's
-9-tick window is seen as two FIRST clicks, and on a loaded host that happens.
-Measured here across three consecutive runs on a box that had just run three
-emulator sessions: two clean at 135 s, one that spent all three of
-`_open_bundle`'s retries and failed before a single assertion about WEAVE had
-run. That is a statement about the machine running the test - the guest says
-so itself, in those words - and the right response to it is the one
-weavesmoke already documents: retry the navigation, never the assertions, and
-print every retry so a host that has really got slower is visible.
+`_open_bundle` carries the two `until` waits and the reasons for them, paid
+for in lost runs; a second copy here would drift from it on the first fix.
+This file owns the SESSION and nothing else - four sessions are four
+double-clicks, and os88mouse steps the guest by cycles between each one's two
+presses, so none of them depends on the host keeping up.
 """
 
 import argparse
@@ -59,7 +50,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -317,7 +307,11 @@ def _drive(machine, card, vidw, S, m, want_val, want_max, cells, png_dir):
 
     # --- 4: and the guest is still EXECUTING -------------------------------
     t0 = m.read(0x46C, 4)
-    time.sleep(0.6)
+    try:                        # a GUEST bound: the tick is 55 ms of it
+        os88marty.until(m, lambda mm: mm.read(0x46C, 4) != t0,
+                        "the BIOS tick to move", poll=0.1, limit=0.6)
+    except os88marty.MartyError:
+        pass                    # ...and the check below says so
     check(m.read(0x46C, 4) != t0, "%s: the guest is still running" % machine,
           "a task frozen holding the gfx lock draws a perfect window and "
           "never draws another (SPEC.md 59.7), so stillness alone cannot "

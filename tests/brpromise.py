@@ -119,8 +119,12 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # a coin toss, and PAUSING between samples made it worse rather than
     # better, because a paused guest does not advance at all and 120 samples
     # went by before the UI task had even seen the keystroke.
+    # The bound is GUEST time: 800 host-paced samples covered a third as much
+    # of the machine's work on a loaded box as on an idle one. The clock is
+    # read every 25th sample only, so it costs the sampling rate nothing.
     live, n = None, 0
-    for _ in range(800):
+    c0 = m.status()["cycles"]
+    while n % 25 or (m.status()["cycles"] - c0) / os88marty.GUEST_HZ < 15.0:
         p, f = state(m, br.i)
         n += 1
         if not p:
@@ -136,7 +140,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
                      "the URL and this run tested nothing")
 
     os88marty.settle(m)
-    time.sleep(1.0)
+    os88marty.pace(m, 1.0)
     os88marty.settle(m)
     p, f = state(m, br.i)
     print("BACK : flags=%04X promises=%s" % (f, p))

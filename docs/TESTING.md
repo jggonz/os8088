@@ -238,9 +238,14 @@ to fit in a table. **Read that section before running a tier on a schedule of
 your own** — running all three at every step is not caution, it is spending
 two hours to be told what thirteen seconds already said.
 
-The tiers are cumulative. **The runner FAILS the tier when the wall clock
-overruns its budget**, green rows or not: a suite with no ceiling grows until
-it is too slow to run. Each row also declares its own `secs` and is reported
+The tiers are cumulative. **The runner FAILS the tier when it overruns its
+budget**, green rows or not: a suite with no ceiling grows until it is too
+slow to run. The budget is CHARGED IN CPU - each row's own user+sys (wait4,
+so an emulator the row reaps is in it) laid out over the runner's lanes the
+way the runner lays them out, which is an idle box's wall clock. It was the
+wall clock itself until a `make` beside a soak failed `fast` with 46 rows
+green: contention stretches the wall and not the work, and a gate that fails
+for the box teaches everyone to ignore it. Each row also declares its own `secs` and is reported
 when it overruns them, so the row that got slower is named.
 
 ### When to run which tier
@@ -1189,9 +1194,12 @@ shape:
 - **A scratch disk is rebuilt, never cached on existence.**
 
 `--small` needs `os88sym.syms(("KERN_SMALL",), check=False)` and
-**`WIN_SIZE` 28, not 34** (`W_ONDRAG`, `W_ONTIMER`, `W_TIMER` are inside
-`%ifdef KERN_BIG`); read with 34 the table is plausible for slot 0 and
-nonsense from slot 1 on.
+**`WIN_SIZE` 65, not 72** (`W_ONDRAG`, `W_ONTIMER`, `W_TIMER` and the last
+byte, `W_PKIND`, are inside `%ifdef KERN_BIG`, so every per-slot field after
+`W_SIDE` sits at a different offset too); read with 72 the table is plausible
+for slot 0 and nonsense from slot 1 on. `tools/os88geom.py` carries both
+strides off `$OS88_DEFINES`, and `os88sym.wfield()` reads a field by name, so
+take them from there rather than writing a number down.
 
 ## Modelling the old machine from a fast one
 

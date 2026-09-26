@@ -36,7 +36,6 @@ runs and the one whose mount is the most work.
 """
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
@@ -66,18 +65,23 @@ def boot(m):
     lin_live = os88sym.linear("spl_live")
     lin_entry = os88sym.linear("cold_entry")
     m.run()
-    started, t0 = False, time.time()
-    while time.time() - t0 < 300:
+    seen = {"started": False}
+
+    def desk(_):
         live = m.read(lin_live, 1)[0]
-        if not started:
+        if not seen["started"]:
             if live == 1 and m.read(lin_entry, 1)[0] == 0xE9:
-                started = True
-        elif live == 0:
-            time.sleep(3.0)             # ...and the first paint after it
-            return
-        time.sleep(0.2)
-    raise SystemExit("postboot: never reached a desktop - this machine did not "
-                     "boot, so nothing below would mean what it says")
+                seen["started"] = True
+            return False
+        return live == 0
+    try:                                # a GUEST-time budget
+        os88marty.until(m, desk, "the splash to end", poll=0.2, limit=300)
+    except os88marty.MartyError:
+        raise SystemExit("postboot: never reached a desktop - this machine "
+                         "did not boot, so nothing below would mean what it "
+                         "says")
+    os88marty.settle(m)                 # ...and the first paint after it:
+                                        # its window is guest time now
 
 
 def main():
@@ -98,7 +102,13 @@ def main():
             dispcp.open_drive(m, mo, S, os88marty.settle)
         except Exception as e:                  # a wedged guest fails in here
             fail.append("opening drive B: raised %s" % str(e)[:150])
-        time.sleep(3.0)
+        try:    # a live machine's clock moves on; a wedged one's never does,
+            os88marty.until(          # and an idle box's pause is the bound
+                m, lambda _: int.from_bytes(m.read(lin_ticks, 2), "little")
+                != t0, "[ticks] to advance", poll=0.05,
+                guest=3.0 * os88marty.GUEST_PACE)
+        except os88marty.MartyError:
+            pass                                # ...reported below
 
         t1 = int.from_bytes(m.read(lin_ticks, 2), "little")
         try:

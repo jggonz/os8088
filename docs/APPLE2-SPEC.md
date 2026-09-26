@@ -4418,10 +4418,10 @@ cost table below.
 
 | thunk | slot | shape |
 |---|---|---|
-| `os88_fsx_caps` | `OSAPI_FSX_CAPS` slot `0x02c0` | `int os88_fsx_caps(void *win, int *kind)` - out AX is the mask, DL the display's `VID_*` kind. **`kind` is an out-parameter and must therefore be a `static`** (SPEC.md 73's rule against `&local`) |
-| `os88_fsx_run` | `OSAPI_FSX_RUN` slot `0x02c8` | `int os88_fsx_run(void (*entry)(void), void *win, int flags)` - the entry is a plain **resident** C function whose near offset goes in AX, and it **must never be an `ovl_`**: `tools/cc8086.py` refuses that address by name |
-| `os88_fsx_mode` | `OSAPI_FSX_MODE` slot `0x02d0` | `int os88_fsx_mode(int id, void *fsi)` - the thunk does `push ds / pop es` so ES:DI is the caller's static `FSI_SIZE` block, and puts ES back |
-| `os88_fsx_wait` | `OSAPI_FSX_WAIT` slot `0x02d8` | `int os88_fsx_wait(int kind)` |
+| `os88_fsx_caps` | `OSAPI_FSX_CAPS` slot `0x022F` | `int os88_fsx_caps(void *win, int *kind)` - out AX is the mask, DL the display's `VID_*` kind. **`kind` is an out-parameter and must therefore be a `static`** (SPEC.md 73's rule against `&local`) |
+| `os88_fsx_run` | `OSAPI_FSX_RUN` slot `0x0235` | `int os88_fsx_run(void (*entry)(void), void *win, int flags)` - the entry is a plain **resident** C function whose near offset goes in AX, and it **must never be an `ovl_`**: `tools/cc8086.py` refuses that address by name |
+| `os88_fsx_mode` | `OSAPI_FSX_MODE` slot `0x023B` | `int os88_fsx_mode(int id, void *fsi)` - the thunk does `push ds / pop es` so ES:DI is the caller's static `FSI_SIZE` block, and puts ES back |
+| `os88_fsx_wait` | `OSAPI_FSX_WAIT` slot `0x0241` | `int os88_fsx_wait(int kind)` |
 
 `os88_fsx_run`, `os88_fsx_mode` and `os88_fsx_wait` each answer 0, or -1 on
 CF. **`os88_fsx_caps` DOES NOT TEST CF and answers the MASK**, which the block
@@ -4477,16 +4477,16 @@ gated (what ships):
 
 | need | slot | note |
 |---|---|---|
-| key STATE for the two buttons, the shift state and the reset chords | `OSAPI_KEY_DOWN` slot `0x03f0` (wrapped) | section 6.4 - **arm it once, in `os88_main`, with the answer ignored** |
-| Copy and Paste | `OSAPI_CLIP_PUT` slot `0x0320` / `OSAPI_CLIP_GET` slot `0x0328` / `OSAPI_CLIP_SIZE` slot `0x0330` (wrapped) | SPEC.md 55; both staging buffers are **transient heap claims**, not bss |
-| the speaker | `OSAPI_SND_TONE` slot `0x00e8` (wrapped, worker-safe) | section 8 |
-| full screen | `OSAPI_FULLSCREEN` slot `0x0110` (wrapped) | SPEC.md 11.2's window latch, not SPEC.md 53's bracket |
-| a composed span down in one call | `OSAPI_GFX_BLIT1` slot `0x0418` (wrapped) | section 7.7, **and it can refuse** |
-| a scroll moved, not redrawn | `OSAPI_GFX_SCROLL` slot `0x01f8` (wrapped) | section 7.7 |
-| a slice loop on the UI task | `OSAPI_WM_WAKE` slot `0x0450` / `OSAPI_WM_ONWAKE` slot `0x0458` (wrapped) | SPEC.md 74.1 |
-| a self-close for File > Quit | `OSAPI_WM_CLOSE` slot `0x0470` (wrapped) | spent from the WAKE, not from `os88_oncmd` |
-| the tier that seeds the wall slice | `OSAPI_CPU_INFO` slot `0x0188` (wrapped) | section 7.8 |
-| the heap | `OSAPI_MEM_CLAIM` slot `0x0200` / `OSAPI_MEM_FREE` slot `0x0208` (wrapped) | section 3.1 |
+| key STATE for the two buttons, the shift state and the reset chords | `OSAPI_KEY_DOWN` slot `0x02FC` (wrapped) | section 6.4 - **arm it once, in `os88_main`, with the answer ignored** |
+| Copy and Paste | `OSAPI_CLIP_PUT` slot `0x0268` / `OSAPI_CLIP_GET` slot `0x026E` / `OSAPI_CLIP_SIZE` slot `0x0274` (wrapped) | SPEC.md 55; both staging buffers are **transient heap claims**, not bss |
+| the speaker | `OSAPI_SND_TONE` slot `0x00d3` (wrapped, worker-safe) | section 8 |
+| full screen | `OSAPI_FULLSCREEN` slot `0x00f7` (wrapped) | SPEC.md 11.2's window latch, not SPEC.md 53's bracket |
+| a composed span down in one call | `OSAPI_GFX_BLIT1` slot `0x0320` (wrapped) | section 7.7, **and it can refuse** |
+| a scroll moved, not redrawn | `OSAPI_GFX_SCROLL` slot `0x019c` (wrapped) | section 7.7 |
+| a slice loop on the UI task | `OSAPI_WM_WAKE` slot `0x034f` / `OSAPI_WM_ONWAKE` slot `0x0357` (wrapped) | SPEC.md 74.1 |
+| a self-close for File > Quit | `OSAPI_WM_CLOSE` slot `0x0368` (wrapped) | spent from the WAKE, not from `os88_oncmd` |
+| the tier that seeds the wall slice | `OSAPI_CPU_INFO` slot `0x0155` (wrapped) | section 7.8 |
+| the heap | `OSAPI_MEM_CLAIM` slot `0x01a4` / `OSAPI_MEM_FREE` slot `0x01aa` (wrapped) | section 3.1 |
 | the ROM inside the package | SPEC.md 20.12's parts | section 1.5 |
 
 ### 17.2 The slot that is NOT added

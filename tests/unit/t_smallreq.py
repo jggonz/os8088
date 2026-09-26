@@ -104,7 +104,6 @@ FORBIDDEN = {
     "FTPD.O88":     "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
     "TELNET.O88":   "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
     "THEWIRE.O88":  "ETHER.DRV is in no small driver set (SPEC.md 24.5, 92)",
-    "MODPLUG.O88":  "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "TRACKER.O88":  "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "AUDIO.O88":    "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     # 24.5 - a claim the floor machine cannot fund, made where it cannot refuse
@@ -137,7 +136,7 @@ FORBIDDEN = {
     # 24.5 - the data files, whose readers are all above
     "BROWSER.HTM":  "the Browser's own manual, and nothing else on the machine "
                     "opens a .HTM (SPEC.md 24.5, 71.12)",
-    "BEVERLY.MOD":  "the module for two players that are not on this disk "
+    "BEVERLY.MOD":  "the module for a player that is not on this disk "
                     "(SPEC.md 24.5, 24.4)",
 }
 
@@ -153,7 +152,7 @@ FORBIDDEN = {
 # reads one", never "these are the only documents allowed".
 READERS = {
     "HTM": ("BROWSER.O88",),
-    "MOD": ("MODPLUG.O88", "TRACKER.O88"),
+    "MOD": ("TRACKER.O88",),         # ModPlug is RETIRED (SPEC.md 56.15)
     "SLK": ("SHEET.O88", "CHART.O88"),
     "DIF": ("SHEET.O88", "CHART.O88"),
     "F88": ("FONTVIEW.O88",),

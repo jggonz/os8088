@@ -102,7 +102,10 @@ INCLUDES = [
      "OS88UI_ABOUT`, the scroll bar with `%define OS88UI_SCROLL` and its "
      "thumb-drag half with `%define OS88UI_SBDRAG`, and the drop-down - one "
      "pick out of a short list, a Macintosh popup's gesture - with `%define "
-     "OS88UI_DROP` (SPEC.md 13.14)."),
+     "OS88UI_DROP` (SPEC.md 13.14). Buttons that carry an ICON_DRAW image in "
+     "place of a caption, drawn in one write with no ground fill, are `%define "
+     "OS88UI_BIMG` and the `OS88UI_IMG` flag (SPEC.md 13.8.9); a package with no "
+     "check box or radio sheds that code with `%define OS88UI_NOGLYPH`."),
     ("os88alt.inc", "11.2.1.1",
      "Alt+Enter, the full-screen key, for a package on SPEC.md 53's BRACKET - "
      "where no event is dispatched, so the kernel's synthesised keystroke "

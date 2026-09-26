@@ -112,7 +112,6 @@ FCPE_ARM    equ 0               ; ...and their slots, in header order
 FCPE_PASTE  equ 1
 FCPE_ANSWER equ 2
 FCPE_DOOR   equ 3               ; OSAPI_FILE_COPY's, both verbs (SPEC.md 22.24)
-FCPFP       equ mod_fp + MOD_FCP*MODFP_STRIDE   ; this module's slot block
 %endif
 
 ; The clipboard and the OPERATION are two records of one shape, and the
@@ -207,7 +206,6 @@ modp_hdr:                       ; is at offset 0 because vstart is 0 and
     dw modp_e_paste             ; is reached by `call far`, so it has to end in
     dw modp_e_answer            ; a retf, and every body below keeps the near
     dw modp_e_door              ; `ret` cold code has always had
-    times MOD_NENT - FCP_NENT dw 0
                                 ; FOUR, AND `fcp_ncopy` IS NOT ONE OF THEM.
                                 ; files.inc's other public name here is not a
                                 ; body in this file at all - the `fcp_ncopy equ

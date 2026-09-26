@@ -221,7 +221,7 @@ one it wants. The shape that fixes it safely is a **caller-held cursor the
 kernel validates rather than trusts** — (directory cluster, sector index, slot
 index) plus a stamp of `(volume, dsk_bpb_sig, directory cluster)`; matching
 stamp resumes, anything else falls back to today's re-seek — at the price of
-changing slot 0x0348's contract and adding invariant surface to the file path.
+changing slot 0x0283's contract and adding invariant surface to the file path.
 
 **Simulated against the install's and the copy's own traces, a PERFECT cursor
 — one that never re-reads anything, ever — is worth five calls and three:**

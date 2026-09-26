@@ -38,9 +38,15 @@ Nine assertions. Check 7 is the one no memory dump can make:
   6. All 4 channel `MP_SEG` followed.
   7. The replayer is STILL RUNNING afterwards - `mp_row` advances - which is
      the only check that says the worker came back from its park.
-  8/9. The sound driver's staging pool, where the machine has a card.
+  8/9. The sound driver's staging pool, where the machine has a card - and
+     since SPEC.md 34.5.2 the card PLAYS out of it, so check 8's direct arm
+     asserts it held still under the compaction rather than that it moved.
+     SAID PLAINLY: nothing reaches that arm today. The registered machine has
+     no card, and on one that has, Tracker plays and its face animates, so
+     this script's settles never end. The pin itself is one MC_RLOC word the
+     compactor refuses on sight (mem_can_move's first test).
 """
-import sys, os, time, hashlib, argparse, subprocess, tempfile
+import sys, os, hashlib, argparse, subprocess, tempfile
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
 # checkout it was written in and wrong in a git worktree, which is how parallel
 # work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
@@ -153,7 +159,8 @@ def main():
                           machine=a.machine, boot=False) as m:
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
-        mo = os88mouse.Mouse(marty=m)
+        os88marty.no_saver(m)           # a settle can outlast the saver's
+        mo = os88mouse.Mouse(marty=m)   # delay, and then never ends
 
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         dslot = dispcp.win_list(m, S)[-1]
@@ -170,9 +177,17 @@ def main():
             mo.click(*pt)
             os88marty.settle(m)
 
+        def heap_quiet():
+            # the drive AND the arena still: a load is reads, a compaction
+            # is claims moving with the drive silent
+            os88marty.quiesce(m, lambda: (m.disk().get("reads"),
+                                          sorted(claims(m, S))),
+                              guest=2.0, budget=120.0,
+                              what="heapfrag's load and claims")
+
         # --- heapfrag first, so it owns the floor of the arena --------------
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_HEAPFRAG)
-        time.sleep(22)
+        heap_quiet()
         os88marty.settle(m)
         hf_seg, hf_win = find_win(m, S, "Heap")
         print("heapfrag at %04x" % (hf_seg or 0))
@@ -180,7 +195,15 @@ def main():
         # --- then the module, which OPENS TRACKER through the association ---
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_MOD)
-        time.sleep(30)                       # 116KB off a 360KB floppy
+
+        def loaded(_):                       # 116KB off a 360KB floppy
+            seg, _w = find_win(m, S, "Tracker")
+            return bool(seg) and u16(m.read(seg * 16 + P["mp_loaded"], 2))
+        try:
+            os88marty.until(m, loaded, "Tracker to load the module",
+                            poll=0.5, limit=60)
+        except os88marty.MartyError:
+            pass                             # ...and the next lines say so
         os88marty.settle(m)
         tk_seg, tk_win = find_win(m, S, "Tracker")
         if tk_seg is None:
@@ -212,14 +235,18 @@ def main():
                      ("drivers/sound/", "drivers/", "apps/"))
         dseg = next((c[0] for c in claims(m, S) if c[2] == MEM_K_DRV), None)
         pool0 = prloc = None
+        direct = 0
         if dseg:
             pool0 = u16(m.read(dseg * 16 + D["sbl_poolseg"], 2))
+            direct = m.read(dseg * 16 + D["sbl_direct"], 1)[0]
             if pool0:
                 pc = [c for c in claims(m, S) if c[0] == pool0]
                 prloc = pc[0][3] if pc else None
-                print("sound driver at %04x, pool %04x %dKB%s"
+                print("sound driver at %04x, pool %04x %dKB%s%s"
                       % (dseg, pool0, (pc[0][1] // 64) if pc else 0,
-                         "  MOVABLE" if prloc else ""))
+                         "  MOVABLE" if prloc else "",
+                         "  DIRECT - the card plays out of it" if direct
+                         else ""))
         if not pool0:
             print("no sound driver / no stream: the pool checks will SKIP")
 
@@ -253,7 +280,7 @@ def main():
         # --- and run it again, whose big claim forces the compaction ---------
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_HEAPFRAG)
-        time.sleep(22)
+        heap_quiet()
         os88marty.settle(m)
 
         # heapfrag's OWN verdict, so a module that did not move can be told
@@ -344,7 +371,11 @@ def main():
         # stop, it plays the wrong bytes, so this is a liveness check and the
         # four above are the correctness ones
         r1 = tword("mp_row")
-        time.sleep(4)
+        try:
+            os88marty.until(m, lambda _: tword("mp_row") != r1,
+                            "the replayer's next row", poll=0.2, limit=4)
+        except os88marty.MartyError:
+            pass
         r2 = tword("mp_row")
         alive = tword("mp_loaded") != 0
         print("  7 replayer alive      %s  (row %d -> %d -> %d, loaded=%s)"
@@ -361,7 +392,21 @@ def main():
             # trapped beneath PINNED claims. So this reports what it saw and
             # does not manufacture a pass. (Closing Tracker to open a hole is
             # self-defeating: it stops the stream, and [sbl_poolseg] goes to 0.)
-            if not pnew:
+            #
+            # A DIRECT STREAM TURNS THIS ROUND (SPEC.md 34.5.2): the 8237 is
+            # reading the ring straight out of the pool, so the driver PINS it
+            # for the stream's life and the right answer is the one this row
+            # could never assert before - a compaction ran under a playing
+            # stream (checks 2-7 are it) and the pool did NOT move.
+            if direct:
+                held = pnew == pool0 and not prloc
+                print("  8 pool held still     %s"
+                      % ("OK - pinned while the card plays it" if held else
+                         "%04x -> %04x, MC_RLOC %04x  <-- moved or movable "
+                         "under a live DMA transfer" % (pool0, pnew,
+                                                         prloc or 0)))
+                bad += not held
+            elif not pnew:
                 print("  8 pool moved          SKIP (the stream closed, so the"
                       " pool was freed)")
             elif pnew != pool0:
@@ -369,7 +414,7 @@ def main():
             else:
                 print("  8 pool moved          NOT EXERCISED (declared=%s;"
                       " nothing was free beneath it)" % bool(prloc))
-            if not prloc:
+            if not direct and not prloc:
                 print("      the pool was never DECLARED movable")
                 bad += 1
             ok8 = (not pnew) or (pnew in live)

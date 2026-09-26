@@ -19,7 +19,7 @@ correct, which is the shape that let it live: the FIRST entry of a word table
 indexed by a byte is right, so a glance at a flipper kill says nothing is
 wrong.
 """
-import sys, os, time
+import sys, os
 # THIS TREE's root, DERIVED - never a hard-coded path (tests/cycweb.py's note)
 _R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_R, "tools"))
@@ -48,7 +48,9 @@ def main():
         row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, entry)
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        time.sleep(6)
+        os88marty.until(m, lambda _m: any(
+            w.title.startswith("Cyclone") for w in os88geom.windows(m, S)),
+            "the Cyclone window", poll=0.5, limit=60)
         seg = [u16(m.read(os88geom.winptr(m, w.i, S) + os88geom.W_SEG, 2))
                for w in os88geom.windows(m, S) if w.title.startswith("Cyclone")][0]
         syms, image = pkg_syms()
@@ -70,7 +72,12 @@ def main():
             if p.rb("cy_state") != CYS_TITLE:
                 break
             m.key("Enter")
-            time.sleep(2)
+            try:                        # a key the title missed is pressed
+                os88marty.until(m, lambda _m: p.rb("cy_state") != CYS_TITLE,
+                                "the title to take Enter", poll=0.2,
+                                guest=9.0)          # ...again
+            except os88marty.MartyError:
+                pass
         os88marty.until(m, lambda _m: p.rb("cy_state") == CYS_PLAY,
                         "the warp to finish", poll=0.5, limit=90)
 
@@ -95,7 +102,13 @@ def main():
                 m.write(p.addr("cy_score") + 2, b"\x00\x00")
             p.wb("cy_zap", 1)
             m.key("KeyZ")                        # fire the superzapper
-            time.sleep(1.5)
+            # cy_superzap spends the charge FIRST, then scores and says so;
+            # the charge going is the key landing, the quiesce its finish
+            os88marty.until(m, lambda _m: p.rb("cy_zap") == 0,
+                            "the superzapper to fire", poll=0.1, guest=30.0)
+            os88marty.quiesce(m, lambda: (m.read(p.addr("cy_score"), 4),
+                                          m.read(p.addr("cy_msgs"), 2)),
+                              guest=0.3, what="the zapper's award")
             lo = u16(m.read(p.addr("cy_score"), 2))
             hi = u16(m.read(p.addr("cy_score") + 2, 2))
             got = lo | (hi << 16)

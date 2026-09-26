@@ -617,25 +617,23 @@ def _scroll_to_blind(m, mo, S, settle, entry, card):
 
     Same algorithm: walk with the arrow keys (SPEC.md 22.11) and read
     [FS_SCRL] BACK, so the clamp at the end of a list is computed by the only
-    thing that knows how many rows this window shows. What it cannot do is
-    bound the per-key wait in GUEST time, because a QEMU object has no cycle
-    counter - so this one keeps the host-clock loop, and that is a real
-    difference: on a loaded box a step can be judged an END STOP when the
-    guest simply had not got there. Six
-    rows take this path and every one of them is on docs/TESTING.md's closed
-    list, so there is nowhere better for them to go.
+    thing that knows how many rows this window shows. A QEMU object has no
+    cycle counter, so the per-key wait is bounded by the BIOS TICK COUNT
+    instead (tests/os88qemu.py) - three GUEST seconds, which is what the
+    host-clock loop here allowed on an idle box and which a loaded one cannot
+    shorten, so a step is not judged an END STOP just because the guest had
+    not got there yet. Six rows take this path and every one of them is on
+    docs/TESTING.md's closed list, so there is nowhere better for them to go.
     """
     if entry < 0:
         raise RuntimeError("entry %d is not a row" % entry)
+    import os88qemu
 
     def step(key):
         was = scroll(m, S)
         m.key(key)
-        for _ in range(30):
-            time.sleep(0.1)
-            if scroll(m, S) != was:
-                return True
-        return False
+        return os88qemu.acted(m, lambda: scroll(m, S) != was, secs=3.0,
+                              what="the list to scroll", poll=0.1)
 
     for _ in range(40):
         if scroll(m, S) == 0:

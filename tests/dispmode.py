@@ -41,7 +41,6 @@ the other card's port.
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -181,7 +180,7 @@ def dark(m, card):
     """
     idx = card["idx"]
     a = [c for c in m.cards() if c["idx"] == idx][0]["frames"]
-    time.sleep(1.0)
+    os88marty.guest_sleep(m, 1.0)          # one GUEST second: frames/s
     f = [c for c in m.cards() if c["idx"] == idx][0]["frames"] - a
     n = lit(m.fbuf(card=idx)[2])
     if f == 0:

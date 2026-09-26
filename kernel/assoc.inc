@@ -465,12 +465,12 @@ assoc_app_of:
 ; sector buffer), which SPEC.md 2.1 forbids reaching through DS.
 ; -----------------------------------------------------------------------------
 assoc_reduce:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     mov ch, 8                   ; output rows left
 .row:
     mov ax, [es:si]             ; the two source rows this one reduces
@@ -691,12 +691,12 @@ section .cold
 ; guard it would silently undo the user's own choice every time they browsed.
 ; -----------------------------------------------------------------------------
 assoc_declare:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     mov dl, al                  ; DL = the app slot
     mov si, dsk_secbuf + 32     ; the block: after the header, and after the
     test byte [assoc_hflags], 1 ; icon when there is one
@@ -738,12 +738,12 @@ assoc_declare:
 ; I/O - the read already happened.
 ; -----------------------------------------------------------------------------
 assoc_note_app_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     call assoc_stem_of          ; DI -> assoc_stemb; SI untouched
     mov dx, si                  ; bank the entry
     mov si, di
@@ -851,11 +851,18 @@ assoc_post_x:
 assoc_fname:
     push di
     mov di, assoc_fnb
+    call assoc_fnat
+    pop di
+    ret
+
+; assoc_fnat - '<STEM>.O88', NUL, at DI (AL = the app slot); DI is advanced
+; past the stem and everything else preserved. assoc_fname's body, shared with
+; assoc_progname's toast.
+assoc_fnat:
     call assoc_stemcpy
     mov word [di], '.O'
     mov word [di+2], '88'
     mov byte [di+4], 0
-    pop di
     ret
 
 ; -----------------------------------------------------------------------------
@@ -895,6 +902,58 @@ assoc_stemcpy:
     ret
 
 ; -----------------------------------------------------------------------------
+; assoc_go - stand at (DL, AX) to look a name up (SPEC.md 54.4.2.1)
+; in:  DL = volume, AX = directory cluster (0 = the root)
+; out: CF=0 = standing there; CF=1 = not reachable
+; clobbers: AX, CF
+;
+; **fcp_goto AND NOT dsk_chdir_q**, which is the whole of the first half. A
+; locate walks FOLDERS of one volume - the document's, then that volume's root,
+; then its APPS - and dsk_chdir_q answers every one of those moves with a
+; remount, which on a floppy is the boot sector read again: one int 13h, ~400
+; ms on the target machine, to learn that the disk the motor is still turning
+; is still the disk. fcp_goto is the package path's quiet stand (SPEC.md
+; 18.9.1.1): inside a mounted volume whose medium cannot have changed it is a
+; WORD, and anything else is the same dsk_chdir_q as before.
+;
+; **AND A VOLUME WHOSE MOUNT FAILED IS NOT ASKED AGAIN IN THIS LOCATE**, which
+; is the second. An empty floppy drive is a live volume row - dsk_vol_row_x
+; cannot skip it - and its failure is the BIOS's retries, seconds on a 4.77MHz
+; machine. assoc_tryvol asks each volume twice (its root, then APPS through
+; the root again) and rung 1's hint can name a drive the sweep then visits, so
+; one empty drive cost its retries two and three times over. [assoc_dead] is
+; one bit a volume, cleared by assoc_locate; FERR_NODISK is fcp_goto's answer
+; for a failed MOUNT only, so a hint's out-of-range cluster (FERR_IO) does not
+; condemn the volume it names. DVOL_MAX is 8 on kern_big, which is exactly a
+; byte; disk.inc asserts it, being where DVOL_MAX is defined.
+; -----------------------------------------------------------------------------
+%ifdef FCP_MOD
+  %error "assoc_go near-calls fcp_goto, which is resident .cold only while FILECP is not a module"
+%endif
+assoc_go:
+    push bx
+    push cx
+    mov cl, dl
+    mov ch, 1
+    shl ch, cl                  ; CH = this volume's bit
+    test [assoc_dead], ch
+    stc                         ; (stc leaves the ZF test just made)
+    jnz .out
+    mov bx, ax
+    mov al, dl                  ; fcp_goto takes AL = volume, BX = cluster
+    call fcp_goto
+    jnc .out
+    cmp ax, FERR_NODISK
+    stc
+    jne .out
+    or [assoc_dead], ch
+    stc
+.out:
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; assoc_try - is the program in THIS directory? (one rung of SPEC.md 54.4)
 ; in:  DL = volume, AX = directory cluster (0 = the root)
 ; out: CF=0 = yes, with that volume+directory CURRENT; CF=1 = not here (and
@@ -914,7 +973,7 @@ assoc_try:
     push cx
     push dx
     push si
-    call dsk_chdir_q_x            ; QUIET (SPEC.md 18.9): the question here is
+    call assoc_go               ; QUIET (SPEC.md 18.9): the question here is
     jc .out                     ; whether a FILE is in this directory, and
                                 ; dskw_stat walks the directory sectors to
                                 ; answer it. A listing would be a scan, a sort
@@ -945,7 +1004,7 @@ assoc_tryfold:
 .named:
     push si
     xor ax, ax                  ; the volume's root first
-    call dsk_chdir_q_x            ; quiet, for assoc_try's reason
+    call assoc_go               ; quiet, for assoc_try's reason
     pop si
     jc .no
     call dskw_stat_x              ; AL = attribute, BX = the FOLDER's own first
@@ -1009,6 +1068,7 @@ assoc_locate:
     push si
     push di
     call assoc_fname            ; assoc_fnb = '<STEM>.O88'
+    mov byte [assoc_dead], 0    ; every volume may be asked, once (assoc_go)
     mov bl, al
     xor bh, bh
     mov di, bx                  ; DI = the slot, wanted after the shifts
@@ -1039,22 +1099,50 @@ assoc_locate:
     mov dl, [assoc_ddrv]
     call assoc_tryvol           ; its own volume first: already mounted, and
     jnc .found                  ; skipped below so nothing is visited twice
-    xor cl, cl                  ; CL = the volume index of the sweep
-.vol:
-    mov bl, cl
-    cmp bl, [assoc_ddrv]
-    je .volnext
-    call dsk_vol_row_x            ; a FREE row is skipped for the TIME, not for
+    mov ch, 2                   ; ...then the rest in THREE PASSES (SPEC.md
+.pass:                          ; 54.4.2.2), cheapest medium first. CH = 2:
+    xor cl, cl                  ; a fixed disk, a driver's volume, a RAM disk
+.vol:                           ; - milliseconds a question, and on an
+    mov dl, cl                  ; installed machine where every program is.
+    cmp dl, 2                   ; CH = 1: the floppies, a second of spin-up
+    jae .ord                    ; each on an AT. CH = 0: the CABLE, slowest of
+    xor dl, 1                   ; all and quite possibly a floppy at its far
+.ord:                           ; end. CL counts; DL is the VOLUME, 0 and 1
+    cmp dl, [assoc_ddrv]        ; swapped: B: BEFORE A:, because on the
+    je .volnext                 ; machine this runs on A: is the system disk
+    mov bl, dl                  ; and B: the apps disk
+    call dsk_vol_row_x          ; a FREE row is skipped for the TIME, not for
     jc .volnext                 ; correctness: mounting one fails anyway, but
                                 ; that failure is the BIOS's retries and on a
                                 ; 4.77MHz machine those are seconds
-    mov dl, cl
-    call assoc_tryvol
+    mov al, 1                   ; AL = the row's pass: 1 until shown otherwise
+    mov ah, [bx+DV_KIND]
+    cmp ah, DVK_BIOS
+    jne .notbios
+    test byte [bx+DV_UNIT], 0x80 ; dsk_media_ok's test, for its reason: the
+    jz .kind                    ; KIND says the transport, the UNIT the medium
+    inc ax                      ; a BIOS fixed disk: 2
+    jmp short .kind
+.notbios:
+    inc ax                      ; a driver's volume: 2 ...
+%ifdef OS88_REDIR
+    cmp ah, DVK_FILE
+    jne .kind
+    test byte [drv_svc + (DRVC_FILE-2)*DSV_SIZE + DSV_CAPS], FSCAP_LOCAL
+    jnz .kind                   ; ...a redirected one whose reads are MEMORY
+    mov al, 0                   ; (62.9.2.2) too, and any other is the cable
+%endif
+.kind:
+    cmp al, ch
+    jne .volnext                ; ...not this pass's
+    call assoc_tryvol           ; DL = the volume; preserves CX and DX
     jnc .found
 .volnext:
     inc cl
     cmp cl, DVOL_MAX
     jb .vol
+    dec ch                      ; 2, 1, 0, and -1 is every volume asked
+    jns .pass
     stc
     jmp short .out
 .found:
@@ -1100,13 +1188,13 @@ assoc_locate:
 ; document's directory when the entry proc runs.
 ; -----------------------------------------------------------------------------
 assoc_run_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentc_bp               ; KENT: push ax..bp
+
+
+
+
+
+
     push es
 
     mov al, [assoc_dapp]
@@ -1166,13 +1254,13 @@ assoc_run_x:
 .nofile:
     call assoc_back
     pop ax                      ; the app index, back off the stack and into
-    push ax                     ; 'TRACKER.O88 - not on this disk', because
-    call assoc_progname         ; "Program not found" alone leaves the user
-    mov si, assoc_pnbuf         ; with no way to know WHICH program a document
-    mov bx, assoc_s_lead        ; wanted - which is exactly the report that
-    mov di, assoc_s_ttl         ; found this (SPEC.md 54.4.1)
-    mov bp, ui_note
-    call KERNEL_SEG:cw_mem_disp
+    push ax                     ; 'Needs TRACKER.O88', because "Program not
+    call assoc_progname         ; found" alone leaves the user with no way to
+    mov si, assoc_pnbuf         ; know WHICH program a document wanted - which
+    push ds                     ; is exactly the report that found this
+    pop es                      ; (SPEC.md 54.4.1). A TOAST since size pass 4,
+    xor cx, cx                  ; as every other failed launch is; ES and CX
+    call KERNEL_SEG:cw_toast_show ; come back through kretfc_es
 .refresh:                       ; ...and both routes end at the one repaint
     call files_refresh_x
 .out:
@@ -1225,7 +1313,7 @@ assoc_handover:
     or si, si
     jz .out
     mov bp, wm_wake_call        ; assoc_run's second phase (SPEC.md 54.10): the
-    call KERNEL_SEG:cw_mem_disp ; launched window is on the glass, so the
+    call ct_cw_mem_disp         ; launched window is on the glass, so the
                                 ; package may now spend the document it was
                                 ; handed
 .out:
@@ -1235,68 +1323,63 @@ assoc_handover:
 ; remount leaves that volume mount-failed at its root with the write gate
 ; shut, which is survivable and is exactly ui_tm_back's contract.
 ;
-; clobbers AX and DX. Two callers, both in assoc_run_x, and NEITHER is
+; clobbers AX and BX. Two callers, both in assoc_run_x, and NEITHER is
 ; followed by the epilogue - so this one is argued site by site rather than by
-; assoc_handover's rule: AX and DX are dead at both. After the first, the only
+; assoc_handover's rule: AX and BX are dead at both. After the first, the only
 ; instructions before .out are `cmp byte [ld_painted],0` and a call to
 ; assoc_handover (no register inputs) or files_refresh_x (takes none, clobbers
 ; nothing). After the second, `pop ax` kills AX before any read, and
-; assoc_progname takes AL and preserves everything; DX is unread throughout.
+; assoc_progname takes AL and preserves everything; BX is unread throughout.
+;
+; fcp_goto and not dsk_chdir_q, for assoc_go's reason: when the program was
+; found on the document's own volume, coming back is a folder move inside a
+; volume that is still spinning, and that is a word rather than a remount.
 assoc_back:
-    mov ax, [assoc_dclus]
-    mov dl, [assoc_ddrv]
-    jmp dsk_chdir_q_x           ; QUIET (SPEC.md 18.9/54.9): this restores the
+    mov bx, [assoc_dclus]
+    mov al, [assoc_ddrv]
+    jmp fcp_goto                ; QUIET (SPEC.md 18.9/54.9): this restores the
                                 ; volume so the app can READ ITS DOCUMENT, and
                                 ; a read resolves by NAME through dskw_find's
                                 ; directory walk - it never touches the global
                                 ; listing. The scan, the sort and one icon
                                 ; harvest per file were bought for nothing.
                                 ; A TAIL CALL: its ret is this routine's, and
-                                ; disk.inc's `.cold` is this file's, so near
+                                ; filecp.inc's `.cold` is this file's, so near
 
 section .text                   ; DATA, so back to the kernel segment: cold
                                 ; code addresses its data through DS, which is
                                 ; still KERNEL_SEG (SPEC.md 2.6 rule 1)
 assoc_s_apps:   db 'APPS', 0
 assoc_s_games:  db 'GAMES', 0
-assoc_s_ttl     equ fdlg_s_topen    ; the Standard File dialog's own title
-assoc_s_lead:   db 'This document opens with', 0
-assoc_s_ptail:  db '.O88 - not on this disk', 0
-ASSOC_PTAIL     equ 24          ; ...NUL included, so one rep movsb ends it
 
 section .cold                   ; ...and back to cold code
 
 ; -----------------------------------------------------------------------------
-; assoc_progname - the file name of an app slot, for the notice
+; assoc_progname - the toast for a document whose program was not found
 ; in:  AL = the app index
-; out: assoc_pnbuf = 'STEM.O88 - not on this disk', NUL
+; out: assoc_pnbuf = 'Needs STEM.O88', NUL
 ; clobbers: nothing (all registers preserved)
 ;
-; The stem copy is assoc_stemcpy's, which assoc_fname shares.
+; 'Needs', and NOT 'not on this disk': the kernel looked where assoc_locate's
+; rungs look (SPEC.md 54.4.2) and no further, so the program may well be on
+; another disk, or on this one somewhere the association does not know. What
+; is TRUE is that this document needs that program. 6 + 12 + 1 = 19 bytes,
+; inside a toast's TOAST_MAX of 24. It was a notice window until kernel size
+; pass 4 retired ui_note.
 ; -----------------------------------------------------------------------------
 assoc_progname:
-    push ax
-    push cx
-    push si
     push di
-    push es
-    push ds
-    pop es                      ; the tail lands through ES:DI
-    mov di, assoc_pnbuf
-    call assoc_stemcpy
-    mov si, assoc_s_ptail
-    mov cx, ASSOC_PTAIL
-    cld
-    rep movsb
-    pop es
+    mov di, assoc_pnbuf + 6     ; past the 'Needs ' that never changes
+    call assoc_fnat
     pop di
-    pop si
-    pop cx
-    pop ax
     ret
 
 section .text                   ; DATA, so back to the kernel segment
-assoc_pnbuf:    times 8 + ASSOC_PTAIL db 0
+assoc_pnbuf:    db 'Needs '
+                times 8 + 5 db 0    ; the stem, '.O88' and the NUL
+%if 6 + 8 + 5 > TOAST_MAX + 1
+  %error "assoc_pnbuf's toast is longer than TOAST_MAX"
+%endif
 
 section .bss
 ; **THESE THREE CELLS ARE THE PUBLISHED LOCATOR, IN ITS OWN ORDER** (SPEC.md
@@ -1312,6 +1395,8 @@ assoc_doc    equ assoc_dblk     ; 13: the pending document's 8.3 name
 assoc_dclus  equ assoc_dblk+13  ; ...and where it lives: directory cluster
 assoc_ddrv   equ assoc_dblk+15  ; ...and volume
 assoc_fnb:   resb 13            ; '<STEM>.O88', built by assoc_fname
+assoc_dead:  resb 1             ; volumes whose mount failed in this locate,
+                                ; one bit each (assoc_go)
 assoc_pwin:  resw 1             ; the posting Disk window's STATE BLOCK, not
                                 ; its window record - FS_DRV/FS_CWD are read
                                 ; off it (SPEC.md 54.9.1), as ld_pwin is
@@ -1372,12 +1457,12 @@ osapi_arg_file_x:
 ; folder.
 ; -----------------------------------------------------------------------------
 osapi_assoc_set_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     mov di, assoc_extb          ; stage both halves into the kernel, the
     mov cx, 3                   ; dsk_get_dir idiom - everything below reads
     call assoc_stage            ; through DS
@@ -1624,12 +1709,12 @@ ASC_KB       equ 3              ; 32*88 + 16 + 24*4 = 2,928 bytes
 ; directory change.
 ; -----------------------------------------------------------------------------
 asc_use_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     push es
     mov al, [disk_drive]
     cmp al, [asc_vol]
@@ -1803,12 +1888,12 @@ asc_use_x:
 ; (SPEC.md 54.4.2). That is what makes a cache safe to seed from at all.
 ; -----------------------------------------------------------------------------
 asc_seed:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     mov cx, [asc_n]
     jcxz .out
     call ico_need               ; **THE STORE'S CLAIM, BEFORE THE WALK** (SPEC.md
@@ -1891,12 +1976,12 @@ asc_seed:
 ; generic icon a miss that already draws it.
 ; -----------------------------------------------------------------------------
 asc_row_take:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     cmp word [ico_seg], 0       ; NO STORE, so nothing to absorb into - and
     je .out                     ; asking `ico_need` again would RETRY the
                                 ; claim, which compacts, under a walk holding
@@ -2037,12 +2122,12 @@ asc_root_find:
 ; declaration has: a runtime claim (ASSOC_STICKY) outranks them.
 ; -----------------------------------------------------------------------------
 asc_merge_ext:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     mov cx, [asc_ne]
     jcxz .out
     mov ax, [asc_n]             ; the ext rows begin past the app rows - the

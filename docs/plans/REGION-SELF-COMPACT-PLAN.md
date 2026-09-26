@@ -678,7 +678,7 @@ The feature above stood at **+367 resident bytes** and the size pass took
 are the contract as it stands now. Three things changed and one was found:
 
 1. **The two cells are one door.** `OSAPI_MEM_AVAIL_MAX` and
-   `OSAPI_MEM_COMPACT_WAKE` are `OSAPI_MEM_COMPACT` (0x0590) with the verb in
+   `OSAPI_MEM_COMPACT_WAKE` are `OSAPI_MEM_COMPACT` (0x0443) with the verb in
    `AH` — `MEMC_WHATIF` / `MEMC_POST` — on `OSAPI_VOL_STAT`'s precedent, and
    `OSAPI_DOS_HANDOFF` moved up to 0x0598. Every caller sets `AX`.
 2. **`mem_cp_newbase` and `mem_cp_ceilmv` are gone.** The trim 7.1 named —

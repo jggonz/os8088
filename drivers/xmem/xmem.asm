@@ -304,7 +304,7 @@ xm_svc:
 ;
 ; They keep the CPU_F_* vocabulary rather than growing one of their own,
 ; because [xm_feat] is handed back at attach and the kernel publishes it
-; through cpu_info's AH (slot 0x0188) exactly as it always did. On a machine
+; through cpu_info's AH (slot 0x0155) exactly as it always did. On a machine
 ; where this image never loads, that byte reads 0 - no gate verified, no HMA,
 ; no unreal mode - which is both true and precisely what tier 0 answers.
 ; =============================================================================
@@ -666,7 +666,7 @@ cpu 8086                        ; ---- island closed -----------------------
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_caps - what is left up there? (XMV_CAPS, behind slot 0x0190)
+; xm_caps - what is left up there? (XMV_CAPS, behind slot 0x015A)
 ;
 ; out:      AX = KB the pool can still hand out (0 = none, and alloc, free and
 ;           copy will all refuse), DX:CX = the pool's 32-bit linear base,
@@ -700,7 +700,7 @@ xm_caps:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_alloc - first-fit a run of extended memory (XMV_ALLOC, slot 0x0198)
+; xm_alloc - first-fit a run of extended memory (XMV_ALLOC, slot 0x0160)
 ;
 ; in:       DX:AX = bytes wanted (rounded up to 1KB), BL = the owner to stamp
 ; out:      CF = 0 and DX:AX = the block's 32-bit linear base;
@@ -834,7 +834,7 @@ xm_alloc:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_free - give a block back (XMV_FREE, slot 0x01A0)
+; xm_free - give a block back (XMV_FREE, slot 0x0166)
 ;
 ; in:       DX:AX = a base this caller owns, BL = the caller
 ; out:      CF = 0 freed and merged with the adjacent free runs;
@@ -1048,7 +1048,7 @@ xm_chk:
 
 ; -----------------------------------------------------------------------------
 ; xm_copy - move bytes between conventional and extended memory
-;           (XMV_COPY, behind slot 0x01A8, SPEC.md 41.5)
+;           (XMV_COPY, behind slot 0x016C, SPEC.md 41.5)
 ;
 ; in:       ES:SI = the kernel's XMC_ block (ES is KERNEL_SEG by construction)
 ; out:      CF = 0 done; CF = 1 and AX = 1 no store (or the transport refused)

@@ -11,9 +11,8 @@ section .modk
 modk_hdr:
     dw 0x384F
     db MOD_VER, MOD_DOCK
-    dw BUILD_NUM, MOD_STAMP, modk_end, 2
+    dw BUILD_NUM, MOD_STAMP, modk_end, DK_NENT
     dw dkx_hook, dkx_unhook
-    times MOD_NENT-2 dw 0
 
 ; -----------------------------------------------------------------------------
 ; dkx_hook / dkx_unhook - take dock.inc's dkv over, and give it back

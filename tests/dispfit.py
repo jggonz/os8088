@@ -106,7 +106,7 @@ def switch_to(m, mo, settle, slot, want, tries=4):
               if seg else "(kernel)")
         print("    slot %2d flags %04x %-12s %r"
               % (i, fl, nm, _dc.win_rect(m, S, i)))
-    print("    the Control Panel is at %r" % (_dc._cp_win(m, S, rect=True),))
+    print("    the Control Panel is at %r" % (_dc._cp_win(m, S),))
     sys.exit("dispfit: the switch to kind %d never happened (kind %d) - see "
              "the Display page, not this gate" % (want, kind(m)))
 
@@ -162,24 +162,38 @@ def main(argv):
         # --- and SPEC.md 11.98: is the window TOLD? -------------------------
         # There is no shipped app with a size-changed handler, so the handler
         # is written INTO the guest as nine bytes of machine code and pointed
-        # at from wm_onsz. That drives the real path - the real slot table, the
-        # real compare, wm_pkgcall's `call bp` for a kernel window - where a
-        # stub inside the kernel would be a different route with the same name.
+        # at from the window's W_ONSZ. That drives the real path - the real
+        # record, the real compare, wm_pkgcall's `call COLD_SEG:wm_cbd` for a
+        # kernel window - where a stub inside the kernel would be a different
+        # route with the same name.
         #
-        # It lives in the wm_natr entries of two window slots that are not in
-        # use, and records into a wm_zoomr entry of a third. Nothing reads
-        # those: wm_refit visits used records only, wm_create banks into the
+        # **A KERNEL WINDOW'S CALLBACK IS A COLD OFFSET** (SPEC.md 2.6.3):
+        # wm_cbd does `call bp` with CS = COLD_SEG. This handler used to sit
+        # in a spare window record and be named by its KERNEL_SEG offset,
+        # which since kernel size pass 4 sends the refit into whatever .cold
+        # code lives at that offset - the machine died between the first
+        # window's clamp and the second's, and the row reported a Display page
+        # that "did not take". So the code goes where a COLD offset can name
+        # it: app_ball_pool, 80 bytes of .lowbss that only the built-in Bounce
+        # instance uses, and this row never opens it. DS is KERNEL_SEG inside
+        # the call (wm_pkgcall's kernel arm leaves it), so the two stores
+        # still record into a spare window record's W_ZOOMR, which nothing
+        # reads: wm_refit visits used records only, wm_create banks into the
         # one slot it fills, wm_destroy clears the one it frees. Do not open
         # more windows after this point.
-        code_at = S("wm_natr") + 10 * 8 - KSEG_BASE     # a NEAR offset: the
-        rec_at = S("wm_zoomr") + 10 * 8 - KSEG_BASE     # handler is called in
+        cold = os88sym.equates()["COLD_SEG"] << 4
+        code_lin = S("app_ball_pool")
+        code_at = code_lin - cold                    # the offset wm_cbd calls
+        if not 0 <= code_at < 0x10000:
+            sys.exit("dispfit: app_ball_pool is not inside COLD_SEG's reach")
+        rec_at = os88sym.wfield(10, "W_ZOOMR") - KSEG_BASE    # DS-relative
         handler = (b"\x89\x0e" + rec_at.to_bytes(2, "little") +      # mov [],cx
                    b"\x89\x16" + (rec_at + 2).to_bytes(2, "little")  # mov [],dx
                    + b"\xc3")                                        # ret
-        m.write(S("wm_natr") + 10 * 8, handler)
-        m.write(S("wm_zoomr") + 10 * 8, b"\0\0\0\0")
-        m.write(S("wm_onsz") + keep * 2, code_at.to_bytes(2, "little"))
-        say("handler for window %d poked at %04x, recording to %04x"
+        m.write(code_lin, handler)
+        m.write(os88sym.wfield(10, "W_ZOOMR"), b"\0\0\0\0")
+        m.write(os88sym.wfield(keep, "W_ONSZ"), code_at.to_bytes(2, "little"))
+        say("handler for window %d poked at COLD:%04x, recording to %04x"
             % (keep, code_at, rec_at))
 
         # --- VGA -> CGA -> VGA -----------------------------------------------
@@ -192,7 +206,7 @@ def main(argv):
         during = rects(m, slots)
         say("CGA    %r" % (during,))
 
-        got = m.read(S("wm_zoomr") + 10 * 8, 4)
+        got = m.read(os88sym.wfield(10, "W_ZOOMR"), 4)
         gw = int.from_bytes(got[0:2], "little")
         gh = int.from_bytes(got[2:4], "little")
         want = (during[keep][2] - 2, during[keep][3] - TITLE_H - 1)

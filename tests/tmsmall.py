@@ -46,7 +46,6 @@ animates, so this window never stills.
 """
 import os
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -133,7 +132,14 @@ def arm(name, apps, cycles):
 
         graph = (x1 + 7, y1 + 15, x1 + 66, y1 + 54)
         g0 = band(rows, *graph)
-        time.sleep(3.0)
+        # what 3s of an idle box bought, as GUEST seconds - and done early if
+        # the graph moves, which is all the check below asks
+        try:
+            os88marty.until(m, lambda _m: band(rows_of(m)[2], *graph) != g0,
+                            "the graph to move", poll=0.5,
+                            guest=3.0 * (os88marty.GUEST_PACE or 4.5))
+        except os88marty.MartyError:
+            pass
         _, _, rows2 = rows_of(m)
         check(g0 != band(rows2, *graph), "%s: the window is still live" % name,
               "the worker samples every TM_INT and pushes one history column "

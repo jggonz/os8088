@@ -24,7 +24,7 @@ every incremental path at once and its kernel is an image rung smaller, so the
 volume has a kilobyte more free and the Disk window's status line alone
 differs by 25 pixels in a gate whose standard is zero (SPEC.md 11.96.15.2).
 """
-import sys, os, time
+import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
 import os88marty
 from os88mouse import Mouse
@@ -93,6 +93,13 @@ def show(m, label):
               % (e["slot"], e["x"], e["y"], e["w"], e["h"], e["su"]))
     sys.stdout.flush()
 
+def opened(m, n0, what):
+    """Wait, in GUEST time, for a window beyond the `n0` that were visible -
+    then for the screen to stop changing."""
+    os88marty.until(m, lambda mm: len(vis(mm)) > n0, what, poll=0.2,
+                    limit=20.0)
+    os88marty.settle(m)
+
 def main():
     machine = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_herc_gla"
     with os88marty.launch(os.path.join(ROOT, "build/os8088-360.img"),
@@ -107,16 +114,19 @@ def main():
         mo.dblclick(*row(m and b, 1))                  # GAMES
         os88marty.settle(m)
         # GAMES sorted: .. ARKANOID MINES MISSILE SOLITAIR TAMEGRAM
+        n0 = len(vis(m))
         mo.dblclick(*row(b, 4))                        # SOLITAIR
-        time.sleep(6); os88marty.settle(m)
+        opened(m, n0, "Solitaire's window")
         show(m, "solitaire up")
         mo.click(b["x"] + 40, b["y"] + 8)              # raise the Disk window
         os88marty.settle(m)
+        n0 = len(vis(m))
         mo.dblclick(*row(b, 2))                        # MINES
-        time.sleep(5); os88marty.settle(m)
+        opened(m, n0, "Minesweeper's window")
         show(m, "minesweeper up")
+        n0 = len(vis(m))
         mo.dblclick(*zone(m, 0))                       # a Disk window on A:
-        time.sleep(3); os88marty.settle(m)
+        opened(m, n0, "the Disk window on A:")
         show(m, "disk A: up")
 
         ws = vis(m); z = zorder(m)

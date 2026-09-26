@@ -72,7 +72,7 @@ CLIP_MAXKB equ 32               ; the ceiling, KB. Not arbitrary: the largest
                                 ; which is what the length check compares
 
 ; -----------------------------------------------------------------------------
-; clip_put - replace the clipboard's contents (API slot 0x0320)
+; clip_put - replace the clipboard's contents (API slot 0x0268)
 ;
 ; in:       ES:SI = the text, CX = its length in bytes. CX = 0 EMPTIES the
 ;           clipboard, which is a real operation and not an error
@@ -175,7 +175,7 @@ clip_put:
     jmp kret_bp
 
 ; -----------------------------------------------------------------------------
-; clip_get - copy the clipboard into the caller's buffer (API slot 0x0328)
+; clip_get - copy the clipboard into the caller's buffer (API slot 0x026E)
 ;
 ; in:       ES:DI = the destination, CX = its capacity in bytes
 ; out:      CF = 1 the clipboard is empty (AX = CX = 0); CF = 0 with
@@ -228,7 +228,7 @@ clip_get:
     ret
 
 ; -----------------------------------------------------------------------------
-; clip_size - how much text the clipboard holds (API slot 0x0330)
+; clip_size - how much text the clipboard holds (API slot 0x0274)
 ;
 ; in:       nothing
 ; out:      CF = 1 and AX = 0 when it is empty; else CF = 0 and AX = the

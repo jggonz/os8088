@@ -44,7 +44,6 @@ to be exactly the cap.
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88marty                                               # noqa: E402
@@ -143,12 +142,10 @@ def main():
         m.write(sym("toast_buf"), msg.encode("latin-1") + b"\0")
         m.write(sym("toast_ttl"), TTL.to_bytes(2, "little"))
         m.write(sym("toast_want"), b"\x01")
-        end = time.time() + 30.0
-        while time.time() < end:
-            if bytes(m.read(sym("toast_on"), 1))[0] == 1:
-                break
-            time.sleep(0.1)
-        else:
+        try:
+            os88marty.until(m, lambda _: m.read(sym("toast_on"), 1)[0] == 1,
+                            "[toast_on] = 1", poll=0.1, limit=30)
+        except os88marty.MartyError:
             fail("[toast_on] never went up - toast_pass did not arm a message "
                  "written straight into toast_buf, so this row is not driving "
                  "the path it thinks it is")
@@ -197,12 +194,10 @@ def main():
         # without waiting out a whole TTL.
         now = int.from_bytes(bytes(m.read(sym("ticks"), 2)), "little")
         m.write(sym("toast_die"), ((now - 2) & 0xFFFF).to_bytes(2, "little"))
-        end = time.time() + 30.0
-        while time.time() < end:
-            if bytes(m.read(sym("toast_on"), 1))[0] == 0:
-                break
-            time.sleep(0.1)
-        else:
+        try:
+            os88marty.until(m, lambda _: m.read(sym("toast_on"), 1)[0] == 0,
+                            "[toast_on] = 0", poll=0.1, limit=30)
+        except os88marty.MartyError:
             fail("the toast never came down")
         os88marty.settle(m)
         _, after = bar(m)

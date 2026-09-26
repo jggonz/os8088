@@ -34,7 +34,6 @@ Build the disk with:
 import os
 import struct
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -81,11 +80,23 @@ def capture(out, machine, defines=()):
             plain = m.sym
             m.sym = lambda n, d=tuple(defines): plain(n, d)
         mo = Mouse(marty=m)
-        mo.dblclick(*su.zone(m, 1)); time.sleep(4)
+        mo.dblclick(*su.zone(m, 1))
+        os88marty.until(m, lambda _: sc.wins(m), "the Disk window",
+                        poll=0.1, limit=60)
         disk = [w for w in su.windows(m) if w.visible][0]
-        mo.dblclick(*su.row(disk, ROW_TEXTURE)); time.sleep(45)
-        pt = [w for w in su.windows(m) if w.visible
-              and w.title.upper().startswith("PAINT")]
+        mo.dblclick(*su.row(disk, ROW_TEXTURE))
+
+        def paint():
+            return [w for w in su.windows(m) if w.visible
+                    and w.title.upper().startswith("PAINT")]
+        try:        # the launch, then the picture's reads: settle below is
+            os88marty.until(m, lambda _: paint(), "Paint's window",
+                            poll=0.1, limit=60)     # the paint after them
+            os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=2.0,
+                              what="the picture's reads")
+        except os88marty.MartyError:
+            pass                                    # ...refused just below
+        pt = paint()
         if not pt:
             raise SystemExit("ptcheck: Paint did not launch")
         pt = pt[0]

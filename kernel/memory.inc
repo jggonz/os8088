@@ -122,12 +122,20 @@ MC_SIZE  equ 10
 MC_DMA_HI   equ 0x8000          ; MC_DMA bit 15: the top-down door
 MC_DMA_HEAD equ 0x7FFF          ; ...and the mask every reader of the head takes
 
-MEM_K_SAVE equ 0xFF01           ; kernel tags (SPEC.md 50.2): menu save-under
+                                ; kernel tags (SPEC.md 50.2). 0xFF01 was the
+                                ; menu save-under's until SPEC.md 12.4.2 made
+                                ; it MEM_P_MSAVE below, and is not reused
 MEM_K_DRV  equ 0xFF03           ; a loaded driver's image (SPEC.md 51.3)
 MEM_K_COPY equ 0xFF04           ; the file manager's copy buffer (22.3): held
                                 ; for exactly one Cut/Copy/Paste operation,
                                 ; including the part of it that is suspended
                                 ; on an overwrite question
+MEM_P_MSAVE equ MEM_PG_TRIV<<8 | 0x02   ; THE MENU SAVE-UNDER (SPEC.md 12.4.2):
+                                ; TRIVIAL for MEM_P_WSAVE's reason - losing it
+                                ; costs the repaint menu_drop already falls
+                                ; back to - and a SAVE-UNDER IS NEVER A WALL,
+                                ; the mem_avail plan and a compacting claim
+                                ; both dissolve it (mem_pg_cheap, mem_cp_drop)
 MEM_P_ICO  equ MEM_PG_TRIV<<8 | 0x01    ; THE MACHINE-WIDE ICON STORE (SPEC.md
 MEM_P_ICO_N equ 1               ; 25.9), and TRIV because losing it costs a
                                 ; REDRAW and not a read: every reference then
@@ -351,7 +359,7 @@ MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window:
 
 MEM_PARA_KB equ 64              ; paragraphs per KB
 
-; --- osapi_claim_snapshot's buffer, API slot 0x02A0 (SPEC.md 20.9) ----------------
+; --- osapi_claim_snapshot's buffer, API slot 0x0216 (SPEC.md 20.9) ----------------
 ; The three fields of a claim record that mean anything outside this module.
 ; MC_DMA is not one of them: it is how a claim that MOVES keeps the page
 ; property it was granted for, and nothing outside can move a claim.
@@ -361,28 +369,36 @@ CLS_OWN    equ 4                ; word: owner (SPEC.md 50.2)
 CLS_RECSZ  equ 6
 CLAIM_SNAPSHOT_SIZE equ MEM_MAX * CLS_RECSZ
 
-; --- osapi_sys_kb's buffer, API slot 0x02A8 (SPEC.md 20.9) --------------------
+; --- osapi_sys_kb's buffer, API slot 0x021C (SPEC.md 20.9) --------------------
 ; The kernel's own footprint broken into its parts, then the heap's totals.
 ; The parts sum to SK_KERN exactly - see the routine at the foot of this file
 ; for how the rounding is arranged so that they do, and why none of them is a
 ; residual any more.
+; THERE IS NO `SK_DSK` AND THE BLOCK IS 20 BYTES, NOT 22 (SPEC.md 20.9). It
+; was the mount-owned window of 2.1.2 - and 25.9 took the icon bodies to one
+; machine-wide store while docs/plans/LISTING-HOME-PLAN.md 13 took the
+; entries and their reference index into the store the CALLER supplies, which
+; left `dsk_secbuf` alone: 512 bytes, reading `-` on kern_big and 1 KB on
+; kern_small off the same ladder. Those bytes are `.lowbss` like every other
+; table here, so they accumulate into SK_IMG, whose label already covers
+; them. Removing the word rather than storing a permanent 0 in it is the
+; point: a published field that always reads zero is read as a fact about the
+; machine, and this one would be a false one.
 SK_KERN    equ 0                ; word: the whole span (SPEC.md 2)
 SK_IMG     equ 2                ; word: image + .bss + the cold segment + the
-                                ; planar rung + the kernel's tables in .lowbss
+                                ; planar rung + the kernel's tables in
+                                ; .lowbss, dsk_secbuf among them
 SK_FAT     equ 4                ; word: the mount-time FAT window (18.8)
 SK_STK     equ 6                ; word: the MAX_TASKS-1 background stacks
 SK_STK0    equ 8                ; word: task 0's - the UI task's
-SK_DSK     equ 10               ; word: the mount-owned window (2.1.2) - the
-                                ; three disk buffers and nothing else
-SK_BUF     equ 12               ; word: FAT + stacks + disk buffers together,
-                                ; the part of the kernel that is scratch
-                                ; rather than program
-SK_HEAP    equ 14               ; word: the claim heap's size
-SK_CLAIM   equ 16               ; word: claimed out of it, every owner, and
+SK_BUF     equ 10               ; word: FAT + stacks together, the part of the
+                                ; kernel that is scratch rather than program
+SK_HEAP    equ 12               ; word: the claim heap's size
+SK_CLAIM   equ 14               ; word: claimed out of it, every owner, and
                                 ; never a purgeable claim (SPEC.md 50.6.3)
-SK_KCLAIM  equ 18               ; word: ...of which the kernel's own tags
-SK_XMS     equ 20               ; word: the pool above 1MB, 0 on tier 0 (41)
-SYSKB_SIZE equ 22
+SK_KCLAIM  equ 16               ; word: ...of which the kernel's own tags
+SK_XMS     equ 18               ; word: the pool above 1MB, 0 on tier 0 (41)
+SYSKB_SIZE equ 20
 section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; segment of its own. DS is still KERNEL_SEG,
                                 ; so the DATA stays in .text at every toggle
@@ -956,6 +972,7 @@ mem_pg_ftask: db 0              ; high byte: whose (sch_cur). Task 0 with the
 
 mem_pg_own:
     dw MEM_P_WSAVE, wm_su_segs,  MAX_WIN
+    dw MEM_P_MSAVE, menu_sseg,   1
     dw MEM_P_DIRW,  dsk_rah_seg, 1
     dw MEM_P_FATW,  dsk_fatwc,   MEM_P_FATW_N
     dw MEM_P_ICO,   ico_seg,     MEM_P_ICO_N
@@ -1038,12 +1055,12 @@ mem_rank_bh:
                                 ; unlikely, for one byte and one compare
 
 mem_shed_one:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     pushf
     cli
     call mem_rank_bh            ; AL = the claimant's own rank, which is what
@@ -1558,9 +1575,10 @@ mem_can_move:
     ; rewrite while it is playing.
     ;
     ; [drv_wcnt] is the kernel's handle on that and it is exact in the
-    ; direction that matters: a stream is open only while its refill or drain
-    ; task lives (SPEC.md 34.5), so zero means no stream, and no stream means
-    ; nothing is armed. It costs the other three MC_DMA claims a refusal only
+    ; direction that matters for a DOUBLE-BUFFERED stream: one is open only
+    ; while its refill or drain task lives (SPEC.md 34.5), so zero means no
+    ; such stream. A DIRECT one (34.5.2) has no task, and the driver pins its
+    ; pool itself - MC_RLOC = 0, refused at the top of this routine. It costs the other three MC_DMA claims a refusal only
     ; while some driver has a worker at all, which is rare and always brief.
     ; PARKED IS NOT ENOUGH, for §66.6.3's reason one claim along: a parked
     ; refill task means the DSP is playing, not that it has stopped.
@@ -1571,24 +1589,15 @@ mem_can_move:
     jne .pin
 .nodma:
 %endif
-    cmp bx, [mem_cp_self]       ; ...UNLESS THIS IS THE WHAT-IF asking about a
-    je .ok                      ; claim OF ITS OWN (SPEC.md 66.4.3.2), which is
-                                ; mem_frameless's .self argument one claim
-                                ; along and was missed there: mem_compact PARKS
-                                ; on its way past a refusal it is told about
-                                ; ([mem_wpin], SPEC.md 66.5), so a worker that
-                                ; is merely RUNNING now is not what it will be
-                                ; at the service point. Without it the what-if
-                                ; pinned every claim the ASKER holds - measured
-                                ; at 223KB against the 250KB the pass then
-                                ; produced - and the caller is the one package
-                                ; guaranteed to be running as it asks.
-                                ; PLAN-ONLY by the same discipline: mem_avail
-                                ; is the only setter and clears it before it
-                                ; returns, and no path that reaches mem_cp_run
-                                ; ever sets it
-    call mem_busy_seg           ; ...otherwise a package's or a driver's own
-    jc .pin                     ; segment, and somebody may be RUNNING in it
+                                ; THE WHAT-IF'S EXCUSE LIVES IN THE CALLEE NOW
+                                ; (SPEC.md 66.4.3.2): it was the asker's claims
+                                ; alone, tested here, and inst_seg_parked
+                                ; answers "will be parked" for EVERY package's
+                                ; worker while [mem_cp_self] stands - the
+                                ; posted pass parks them all - which covers the
+                                ; asker's as one case of many
+    call mem_busy_seg           ; ...a package's or a driver's own segment,
+    jc .pin                     ; and somebody may be RUNNING in it
     jmp short .ok
 %ifdef OS88_DRIVERS
 .drvimg:
@@ -1898,8 +1907,22 @@ mem_frameless:
                                 ; owns claims"
     cmp bx, [ld_base]
     je .nope                    ; the loader is standing in it
-    cmp bx, [mem_cp_self]       ; ...UNLESS THIS IS THE WHAT-IF ASKING ABOUT
-    je .self                    ; the asker's own region (SPEC.md 66.4.3)
+    cmp word [mem_cp_self], 0   ; ...UNLESS THIS IS THE WHAT-IF (SPEC.md
+    jne .self                   ; 66.4.3.2) - about ANY declared region, and
+                                ; not only the asker's own. It was the asker's
+                                ; alone, and that read LOW on exactly the heap
+                                ; the feature is for: every other package's
+                                ; worker is running or sleeping at the moment
+                                ; of asking, so every other region was planned
+                                ; as a wall - measured with seven idle Trackers
+                                ; stacked under the ceiling, 65 KB answered
+                                ; where the posted pass would have delivered
+                                ; 123. The pass runs at ui_task step 0a with
+                                ; the nest empty and parks every worker first,
+                                ; so both remaining tests are ones it will not
+                                ; ask; the restart declaration above still
+                                ; binds, and a region without one never gets
+                                ; here
     call mem_in_nest            ; ...or a callback is, and this claim is the
     jc .nope                    ; REGION, so a frame's return address points
                                 ; into it (SPEC.md 66.6.1). No [mem_wpin]: a
@@ -2872,13 +2895,13 @@ section .cold
 ; the compactor is not re-entrant ([mem_cp_busy]) and runs with [sch_lock]
 ; raised.
 mem_reloc_call:
-    push ax
-    push bx                     ; ALL of them, because the proc is a window
-    push cx                     ; callback in every other respect and a window
-    push dx                     ; callback may clobber AX/BX/CX/DX/SI/DI/ES
-    push si                     ; (SPEC.md 13). mem_cp_run reads SI - the
-    push di                     ; record - straight after this returns, and a
-    push bp                     ; proc that used SI would have moved the fill
+    call kentc_bp               ; KENT: push ax..bp
+                                ; ALL of them, because the proc is a window
+                                ; callback in every other respect and a window
+                                ; callback may clobber AX/BX/CX/DX/SI/DI/ES
+                                ; (SPEC.md 13). mem_cp_run reads SI - the
+                                ; record - straight after this returns, and a
+                                ; proc that used SI would have moved the fill
     push ds                     ; point onto a live block
     push es
     mov ax, KERNEL_SEG
@@ -2993,12 +3016,12 @@ mem_compact:
     stc                         ; make HEAPCOMPACT=0: the A/B, with the body
     ret                         ; gone and not merely the call (SPEC.md 66.8)
 %else
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     cmp byte [mem_cp_busy], 0
     jne .none                   ; a relocation proc that claimed would arrive
                                 ; here inside the walk it is being driven by,
@@ -3777,6 +3800,10 @@ mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
 %endif
     mov [mem_pg_rank], al       ; inside the window, with the other three
 %ifdef OS88_COMPACT
+    inc byte [mem_cp_pl]        ; PLANNING FOR A CLAIM, NOT MOVING (SPEC.md
+                                ; 66.4.3.5): inst_seg_parked answers "parked" for
+                                ; every package worker while it stands, because
+                                ; the claim this answers for parks them first
     call mem_cp_both            ; AX = the largest run compaction would leave,
                                 ; BX = the total, both in paragraphs -
                                 ; caches at or below AL dissolved with it - and
@@ -3795,6 +3822,7 @@ mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
                                 ; outranks already counts as free whether or
                                 ; not it could have moved - which is the whole
                                 ; of what the third walk mode was for
+    dec byte [mem_cp_pl]
 %else
     call mem_bigrun             ; ...and where nothing moves, the run a
                                 ; claimant can have is the biggest hole the
@@ -4100,7 +4128,7 @@ osapi_mem_movable_x:
 
 %ifdef OS88_COMPACT
 ; -----------------------------------------------------------------------------
-; osapi_mem_compact - API slot 0x0590: MY OWN REGION IN THE PASS (SPEC.md 66.4.3)
+; osapi_mem_compact - API slot 0x0443: MY OWN REGION IN THE PASS (SPEC.md 66.4.3)
 ; in:  AH = the verb, ES = the caller's segment (the X stub's own contract):
 ;        MEMC_WHATIF (0): AL = a purge level, exactly as OSAPI_MEM_AVAIL_LVL's
 ;        MEMC_POST   (1): BX = a window of yours, AL = the shed rank the pass
@@ -4257,66 +4285,6 @@ mmf_osapi_mem_floor:
 ; A package built against main's SDK runs on this kernel unchanged; one built
 ; against this SDK uses the KB slots directly (SPEC.md 50.3).
 ; -----------------------------------------------------------------------------
-osapi_cm_alloc_x:
-    push cx
-    push dx
-    add ax, 63                  ; paragraphs -> KB, rounded up; 0 asks for
-    jc .refuse                  ; 1KB (main's "0 is rounded up to 1"), and a
-    mov cl, 6                   ; carry is >0xFFC0 paragraphs - nothing that
-    shr ax, cl                  ; big exists below 1MB
-    or ax, ax
-    jnz .ask
-    inc ax
-.ask:
-    call osapi_mem_claim_x        ; CF/DX by the heap's rules, ES the identity
-    jc .refuse
-    mov ax, dx                  ; main's contract: AX = the base segment
-    pop dx
-    pop cx
-    retf
-.refuse:
-    xor ax, ax                  ; main's failure codes: 0 = no arena at all,
-    mov dx, [mem_top]           ; 1 = no record, 2 = no run. The heap does
-    cmp dx, [mem_base]          ; not tell 1 from 2 apart (and no shipped
-    je .code                    ; caller ever did): 2, or 0 on a machine
-    mov ax, 2                   ; whose heap is empty
-.code:
-    pop dx
-    pop cx
-    stc
-    retf
-
-osapi_cm_free_x:
-    push dx                     ; in: AX = the base segment; out: CF, with
-    mov dx, ax                  ; AX preserved - main's contract, so the
-    call osapi_mem_free_x         ; heap's DX-in shape is hidden here
-    pop dx
-    retf
-
-osapi_cm_caps_x:
-    push cx
-    push si
-    mov ch, bh                  ; BH survives in CH (CX itself is banked)
-    call mem_avail_x              ; AX = largest free KB, BX = total free KB
-    mov dx, bx
-    mov cl, 6
-    shl ax, cl                  ; KB -> paragraphs: a 640KB heap is 0xA000
-    shl dx, cl                  ; paragraphs, so the shifts never carry
-    xor bx, bx                  ; BL = free claim records (main: free
-    mov si, mem_tab             ; block-table entries)
-.rec:
-    cmp word [ss:si+MC_SEG], 0
-    jne .used
-    inc bx
-.used:
-    add si, MC_SIZE
-    cmp si, mem_tab + MEM_MAX*MC_SIZE
-    jb .rec
-    mov bh, ch                  ; the caller's BH back (BL <= MEM_MAX)
-    pop si
-    pop cx
-    retf
-
 ; -----------------------------------------------------------------------------
 ; mem_own - the calling package's owner word (module-internal)
 ; in:  ES = the caller's segment, stamped by the API stub
@@ -4445,7 +4413,7 @@ mem_own_drv:
     ret
 
 ; =============================================================================
-; osapi_claim_snapshot - API slot 0x02A0: the whole claim table into the caller's
+; osapi_claim_snapshot - API slot 0x0216: the whole claim table into the caller's
 ;                    buffer (SPEC.md 20.9/50.5)
 ;
 ; in:  ES:DI = a CLAIM_SNAPSHOT_SIZE buffer the caller owns
@@ -4492,7 +4460,7 @@ osapi_claim_snapshot_x:
     ret
 
 ; =============================================================================
-; osapi_sys_kb - API slot 0x02A8: what the KERNEL occupies and what the heap
+; osapi_sys_kb - API slot 0x021C: what the KERNEL occupies and what the heap
 ;                holds, in KB (SPEC.md 20.9/2/50)
 ;
 ; in:  ES:DI = a SYSKB_SIZE buffer the caller owns
@@ -4510,22 +4478,30 @@ osapi_claim_snapshot_x:
 ; not known until the foot of that file, and a constant belongs with what
 ; declares it. What is worth knowing HERE is which row holds what.
 ;
-; SK_DSK is the mount-owned window and nothing else - 3,584 bytes of
-; disk_dir + disk_icons + dsk_secbuf (SPEC.md 2.1.2). It used to be "the
-; buffers less the FAT window and the stacks", which is what "whatever else is
-; in .lowbss" meant when .lowbss held nothing else; by the time it held 2,824
-; bytes of table it read 6 KB for 3.5 KB of buffer, and nothing bounded the
-; error because a residual has no size of its own.
+; SK_DSK IS GONE AND SO IS ITS ROW (SPEC.md 20.9). It was the mount-owned
+; window - 3,584 bytes of disk_dir + disk_icons + dsk_secbuf (SPEC.md 2.1.2)
+; - and before that it was "the buffers less the FAT window and the stacks",
+; which is what "whatever else is in .lowbss" meant when .lowbss held nothing
+; else; by the time it held 2,824 bytes of table it read 6 KB for 3.5 KB of
+; buffer, with nothing bounding the error because a residual has no size of
+; its own. Then SPEC.md 25.9 took the icon bodies to one machine-wide store
+; and docs/plans/LISTING-HOME-PLAN.md 13 took the entries and their reference
+; index into the caller's own store, leaving `dsk_secbuf`: one sector. Half a
+; kilobyte cannot be a row under the cumulative rounding - it read `-` on
+; kern_big and 1 KB on kern_small, the same buffer twice - so it accumulates
+; into SK_IMG, whose label already covered every other `.lowbss` table.
 ;
 ; SK_IMG is what is left, and it is the honest name for it: image, .bss, the
 ; COLD SEGMENT (cold code is code, it is resident for the whole session and it
 ; is inside the span SK_KERN measures), SPEC.md 39.22's `.vgabuf` rung, and
 ; the kernel's own tables in .lowbss - glyph table, row table, pair tables,
-; claim map, event ring, menu bar, built-in state pools. Those are .bss-class
-; data living in LOW_SEG to buy back KERN_CODE_MAX and for no other reason, so
-; `Code+data` was always their label. Adding a row of their own would change a
-; published block that a package reads (SPEC.md 28) and cost the memory view
-; the one row of window height VGA has left, for a figure nobody can act on.
+; claim map, event ring, menu bar, built-in state pools, and now the mount's
+; sector buffer. Those are .bss-class data living in LOW_SEG to buy back
+; KERN_CODE_MAX and for no other reason, so `Code+data` was always their
+; label. Adding a row of their own would change a published block that a
+; package reads (SPEC.md 28) and cost the memory view the one row of window
+; height VGA has left, for a figure nobody can act on - which is the same
+; arithmetic that retired SK_DSK, run the other way.
 ;
 ; The KB figures are rounded CUMULATIVELY - each part is the difference of two
 ; rounded running boundaries - so they sum to SK_KERN by construction and no
@@ -4561,11 +4537,11 @@ osapi_sys_kb_x:
 %endif
     mov [es:di+SK_KERN], ax
     mov [es:di+SK_IMG],  bx
-%if SK_FAT != 4 || SK_STK != 6 || SK_STK0 != 8 || SK_DSK != 10 || SK_BUF != 12
-%error "osapi_sys_kb stores five CONSECUTIVE words; these are not consecutive"
+%if SK_FAT != 4 || SK_STK != 6 || SK_STK0 != 8 || SK_BUF != 10
+%error "osapi_sys_kb stores four CONSECUTIVE words; these are not consecutive"
 %endif
-    push di                     ; five build constants into five adjacent
-    add di, SK_FAT              ; words: one walking pointer beats five
+    push di                     ; four build constants into four adjacent
+    add di, SK_FAT              ; words: one walking pointer beats four
     cld                         ; displaced immediate stores. AX is free -
     mov ax, SK_FAT_KB           ; SK_KERN and SK_IMG are already written
     stosw
@@ -4573,11 +4549,9 @@ osapi_sys_kb_x:
     stosw
     mov ax, SK_STK0_KB
     stosw
-    mov ax, SK_DSK_KB
-    stosw
     mov ax, KBUF_KB             ; SK_BUF LAST, because it is the highest of
-    stosw                       ; the five - it is FAT + stacks + disk
-    pop di                      ; buffers together, and reads like a header
+    stosw                       ; the four - it is FAT + stacks together,
+    pop di                      ; and reads like a header
     push di
     call mem_total_kb           ; AX = claimed KB, BX = heap size KB
     pop di
@@ -4617,8 +4591,10 @@ mmf_osapi_mem_claim_dma_hi: call osapi_mem_claim_dma_hi_x
                           retf
 mmf_mem_free:             call mem_free_x
                       retf
+%ifdef KERN_BIG                 ; its callers are kern_big only
 mmf_mem_movable:          call mem_movable_x
                       retf
+%endif
 mmf_osapi_claim_snapshot: call osapi_claim_snapshot_x
                       retf
 mmf_osapi_mem_avail:      mov bh, MEM_LVL_TOP     ; an ordinary claim's rank...
@@ -4680,23 +4656,30 @@ mem_cpq:     resw 1             ; OSAPI_MEM_COMPACT's post: the window to wake
 mem_cpq_lvl: resb 1             ; ...and the shed rank it asked the pass to
                                 ; respect, which mem_compact cannot derive with
                                 ; no claim pending
-mem_cp_self: resw 1             ; A SEGMENT mem_frameless PLANS AS FRAMELESS, or
-                                ; 0 (SPEC.md 66.4.3). It is the WHAT-IF and
-                                ; nothing else: a package asking "how much
-                                ; would I have if I moved too" is asking about
-                                ; a state the deferred compaction really does
-                                ; reach - at ui_task's step 0 its callback has
-                                ; returned and [wm_pkgd] is 0 - so this excuses
-                                ; the ONE test that is untrue only because the
-                                ; caller is standing in its own region, and
-                                ; leaves [ld_base] and the worker alone,
-                                ; because those are as true then as now.
+mem_cp_self: resw 1             ; THE WHAT-IF'S ASKER, or 0 (SPEC.md 66.4.3).
+                                ; A package asking "how much would I have if I
+                                ; moved too" is asking about a state the posted
+                                ; compaction really does reach - at ui_task's
+                                ; step 0 every callback has returned and
+                                ; [wm_pkgd] is 0 - so while it stands
+                                ; mem_frameless excuses the NEST for every
+                                ; declared region, not only the asker's
+                                ; (66.4.3.2). [ld_base] is still asked, being
+                                ; as true then as now; the worker question is
+                                ; [mem_cp_pl]'s, below, and every mem_avail
+                                ; plan asks it.
                                 ;
                                 ; PLAN-ONLY BY DISCIPLINE: the what-if sets it,
                                 ; clears it before returning, and no path that
                                 ; can reach mem_cp_run ever sets it. A
                                 ; compaction running with it set would move a
                                 ; region with a frame in it.
+mem_cp_pl:   resb 1             ; mem_avail is PLANNING (SPEC.md 66.4.3.5): the
+                                ; walk models the claim it answers for, which
+                                ; parks package workers before it moves - so
+                                ; inst_seg_parked excuses them. Set and cleared
+                                ; inside mem_avail_lvl_x's cli window, and never
+                                ; standing while mem_cp_run can be reached
 mem_cp_busy: resb 1             ; the compactor is running (SPEC.md 66.4): a
                                 ; relocation proc that claims - which 66.3
                                 ; rule 3 forbids - would otherwise re-enter

@@ -2344,7 +2344,7 @@ zi_m_notsave: db 'Not a Quetzal saved game.', 0
 ;
 ; IT IS BUFFERED WHOLE AND WRITTEN WHOLE, and that is forced rather than
 ; chosen. A worker may not touch a file slot (SPEC.md 20.6), so the write is
-; the UI task's; and OSAPI_FILE_APPEND (slot 0x0350) refuses a file whose size
+; the UI task's; and OSAPI_FILE_APPEND (slot 0x0286) refuses a file whose size
 ; is not a whole number of clusters, so a transcript cannot be dribbled out a
 ; line at a time without padding the file with rubbish. OSAPI_FILE_WRITE
 ; REPLACES, so the only correct thing to replace it with is everything so far.

@@ -269,14 +269,16 @@ a Standard File dialog for opening and saving.
 
 **Software**
 
-Twenty-six loadable packages ship on the software disk, all closable and most
+Twenty-five loadable packages ship on the software disk, all closable and most
 multi-instance:
 
 - **Apps** — Note Pad (word wrap, DOS-readable text files), TeXPad, Paint,
-  ArtfulType, Font Viewer, Fractal, Calculator, Sheet, Chart, Piano, Tracker and ModPlug
-  Player (both play Amiga MOD files), an Audio Player that streams a WAV off
-  the disk and keeps playing while you work in another window, and the three
-  that talk over the network — Browser, Telnet and an FTP server.
+  ArtfulType, Font Viewer, Fractal, Calculator, Sheet, Chart, Piano, Tracker
+  (an Amiga MOD player with a playlist, windowed or full screen - it took
+  ModPlug Player's windowed face when ModPlug retired), an Audio Player that
+  streams a WAV off the disk and keeps playing while you work in another
+  window, and the three that talk over the network — Browser, Telnet and an
+  FTP server.
 - **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, Dot Delirium,
   Cyclone 88,
   Clear Skies, Tank Attack (a first-person wireframe tank duel that takes the
@@ -358,8 +360,9 @@ Times to JetBrains Mono — and choosing one sets the whole document in it. The 
 shapes, their height and their leading, but eight pixels a character. It is not a recompile: Opus is pcode
 built against the Windows 2.x API, none of which exists here, so the UI
 definition is mined from the Computer History Museum's source release and
-every menu string is verbatim from it. The disk carries `WORD.O88`,
-`WORD.OVL`, a generated `WELCOME.DOC` and an empty `DOCS\`. **`all` does not
+every menu string is verbatim from it. The disk carries `WORD.O88` (one
+file: its second segment is a part inside it), a generated `WELCOME.DOC` and
+an empty `DOCS\`. **`all` does not
 build it and no shipped disk grows a byte** — `make wordcheck` is the format
 gate, which round-trips the `.DOC` through an independent host-side reader.
 

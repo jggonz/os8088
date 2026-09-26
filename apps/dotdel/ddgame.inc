@@ -126,6 +126,16 @@ dd_new_game:
     jne .go                         ; Enter, a click and Game > New all reach
     ret                             ; here with the refusal still on the glass
 .go:
+    ; THE WORKER STEPS NOTHING UNTIL THE BOARD IS THE GAME'S. This runs on the
+    ; UI task - a key, a click, Game > New - and dd_level_begin clears
+    ; [dd_demo] first and then walks the board, which YIELDS to a frame in
+    ; flight (dd_board_render, SPEC.md 93.5.17). The worker then took a step
+    ; in DDS_ATTRACT on the demo's board with the demo's protection gone:
+    ; caught, dd_die, DDS_DIE, a life lost before READY was ever shown - 3
+    ; runs of 11 of tests/dotdel.py, read as "ate -108 dots" because the
+    ; count it took was the demo's. dd_step returns at once while this is set,
+    ; exactly as it does behind the About card.
+    mov byte [dd_newg], 1
     mov word [dd_score], 0
     mov word [dd_score+2], 0
     mov byte [dd_lives], DD_LIVES0
@@ -133,6 +143,7 @@ dd_new_game:
     mov byte [dd_extra], 0
     mov byte [dd_demo], 0
     call dd_level_begin
+    mov byte [dd_newg], 0
     ret
 
 ; dd_level_begin - load the board and put everybody back
@@ -293,8 +304,11 @@ dd_step:
     jne .laid                       ; would ever touch the buffer
     ret                             ; no layout yet, so no tiles, no speeds and
 .laid:                              ; nothing to divide by
+    cmp byte [dd_newg], 0           ; ...or while the UI task is swapping the
+    jne .held                       ; demo's board for a new game's (dd_new_game)
     cmp byte [dd_abon], 0
     je .live
+.held:
     ret                             ; SUSPENDED behind the About card, which is
 .live:                              ; why nothing under it can change and the
     inc word [dd_anim]

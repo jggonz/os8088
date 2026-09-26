@@ -63,7 +63,12 @@ LD_DE_SIZE  equ 20              ; the LOW word of a DWORD size (SPEC.md 19.1
 
 ; --- .o88 v3 header field offsets (SPEC.md 20.2) ------------------------------
 LD_H_MAGIC  equ 0               ; word: 0x384F ('O','8')
-LD_H_VER    equ 2               ; byte: format version = 3
+LD_H_VER    equ 2               ; byte: format version = PKG_FMT
+PKG_FMT     equ 6               ; the package format, and it is the API
+                                ; TABLE'S: a renumbering bumps it (SPEC.md
+                                ; 20.2.0, 20.8 rule 4). Mirrored in
+                                ; apps/os88api.inc and tools/os88pkg.py,
+                                ; and tests/unit/t_mirror.py holds them together
 LD_H_FLAGS  equ 3               ; byte: bit 0 = embedded 16x16 icon
 LD_HF_GLYPH equ 0x20            ; ...its bit 5: a 16-byte DOCUMENT-GLYPH block
                                 ; follows the association block (SPEC.md
@@ -251,7 +256,7 @@ ld_unreserve:
 ld_hdr_ok:
     cmp word [es:si+LD_H_MAGIC], 0x384F      ; 'O','8'
     jne .no
-    cmp [es:si+LD_H_VER], al                 ; 3 = package, 4 = driver: the
+    cmp [es:si+LD_H_VER], al                 ; 6 = package, 7 = driver: the
     jne .no                                  ; two gates SPEC.md 51.1 wants
     cmp word [es:si+LD_H_LINK], 0            ; org 0 or it is not v3
     jne .no
@@ -424,9 +429,12 @@ ld_hdr_size:
 ; the kernel into its data on the first paint.
 ; -----------------------------------------------------------------------------
 ld_check_hdr:
-    mov al, 3                   ; magic, version, link and the dispatcher, in
+    mov al, PKG_FMT             ; magic, version, link and the dispatcher, in
     call ld_hdr_ok              ; the body the driver loader shares. v1/v2
-    jc ld_hdr_size.bad                     ; files fail on the version: "Bad package"
+    jc ld_hdr_size.bad                     ; files - and any built for another API
+                                ; table (SPEC.md 20.2.0) - fail on the version:
+                                ; "Bad package", never a far call into cells
+                                ; that moved
     mov ax, [es:si+LD_H_IMG]
     cmp ax, LD_HDR_SIZE
     jb ld_hdr_size.bad                                 ; image smaller than the header
@@ -535,7 +543,7 @@ ld_say_status:
 .say:
     mov bx, fm_stattab
     mov cx, LD_NSTAT
-    call KERNEL_SEG:toast_say
+    call ct_toast_say
     ret
 
 ; -----------------------------------------------------------------------------
@@ -584,13 +592,13 @@ ld_owed:
 ; goes through disk_mount.
 ; -----------------------------------------------------------------------------
 loader_run_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentc_bp               ; KENT: push ax..bp
+
+
+
+
+
+
     push es
 
     mov byte [ld_painted], 0    ; HOISTED above the arms: the refusal below
@@ -1016,7 +1024,7 @@ ld_alloc:
 
     ; --- 5. reserve an instance record + a pool region -------------------------
     mov bp, inst_alloc
-    call KERNEL_SEG:cw_mem_disp ; DI = record (unpublished: still free on
+    call ct_cw_mem_disp         ; DI = record (unpublished: still free on
     jc .nomem                   ; any later failure)
     mov [ld_rec], di            ; banked in .bss, not in BP: BP carries the
                                 ; entry offset into the dispatcher below,
@@ -1196,7 +1204,7 @@ ld_start:
     mov es, [ld_base]           ; the name field is in the package's image
     mov si, 16
     mov bp, inst_set_name_x
-    call KERNEL_SEG:cw_mem_disp ; ES:SI -> the 16-byte NUL-padded name
+    call ct_cw_mem_disp         ; ES:SI -> the 16-byte NUL-padded name
                                 ; ("out: nothing - all registers preserved")
     ; --- and the ICON, off the SAME ES -------------------------------------
     ; A SENTINEL, not a copy. The icon body is 64 bytes at a fixed offset in
@@ -1216,7 +1224,7 @@ ld_start:
     mov [di+I_ICON], ax
     pop es
     mov bp, inst_bind_win
-    call KERNEL_SEG:cw_mem_disp ; DI = record, BX = window (from the entry)
+    call ct_cw_mem_disp         ; DI = record, BX = window (from the entry)
     mov byte [di+I_STATE], 1    ; publish - the LAST record write
     ; --- the status BEFORE the repaint, not after ---------------------------
     ; A Disk window's status line draws [ld_status] (SPEC.md 22), so the
@@ -1241,9 +1249,9 @@ ld_start:
     ; live, for every reader in the machine - so the poster's window is
     ; untouched by this load from beginning to end, and the ordering that
     ; had to be got right no longer exists to get wrong.
-    call KERNEL_SEG:cw_gfx_lock
+    call ct_cw_gfx_lock
     call KERNEL_SEG:cw_wm_show  ; in: BX = window ptr; repaints all
-    call KERNEL_SEG:cw_gfx_unlock
+    call ct_cw_gfx_unlock
     mov word [ld_base], 0       ; ...AND NOTHING IS BEING LOADED ANY MORE
                                 ; (SPEC.md 66.6.1). mem_can_move pins the
                                 ; region whose base this names, so a value left
@@ -1281,7 +1289,7 @@ ld_start:
     call .sweep
     mov es, [ld_rehome]
     xor si, si
-    mov al, 3                   ; ...and it is a PACKAGE header or it is not a
+    mov al, PKG_FMT             ; ...and it is a PACKAGE header or it is not a
     call ld_hdr_ok              ; program: magic, version, link and the
     jc .abort                   ; dispatcher, the same five the file's own
                                 ; header passed at ld_check_hdr. NOT
@@ -1453,16 +1461,16 @@ ld_start:
     ; five instructions .abort and .rehome share, once. A re-home that goes on
     ; to abort runs it twice and the second pass finds nothing, which is
     ; cheaper than the twenty bytes a second copy cost
-    call KERNEL_SEG:cw_gfx_lock
+    call ct_cw_gfx_lock
     mov ax, [ld_base]
     mov bp, wm_destroy_seg
-    call KERNEL_SEG:cw_mem_disp
-    call KERNEL_SEG:cw_gfx_unlock
+    call ct_cw_mem_disp
+    call ct_cw_gfx_unlock
     ret
 
 ; -----------------------------------------------------------------------------
 ; ld_pkg_start - OSAPI_PKG_START: START THE PACKAGE CALLED NAME
-;                (SPEC.md 21.5), slot KERNEL_SEG:0x0520, an N cell
+;                (SPEC.md 21.5), OSAPI_PKG_START's cell, an N cell
 ;
 ; in:  SI    = the staged 8.3 name, in the kernel's own DS, standing in the
 ;              CALLING INSTANCE's folder - both of which api_n has already
@@ -1828,7 +1836,7 @@ ldf_ld_run_name:        call ld_run_name_x
 
 
 ; -----------------------------------------------------------------------------
-; osapi_pkg_rehome - API slot 0x0530: "the program is at DX, not at me"
+; osapi_pkg_rehome - API slot 0x03FE: "the program is at DX, not at me"
 ;                    (SPEC.md 20.12.10)
 ; in:  DX = the segment the program's image starts at, AX = the bytes
 ;      available there, ES = the caller's segment (the X stub's)

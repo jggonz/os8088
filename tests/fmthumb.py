@@ -27,7 +27,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, "tools")
 import os88build as _B
@@ -204,7 +203,7 @@ with M.launch("build/os8088-360.img", apps=DISK,
     was = scrl(m)
     mo.to(cx, top + h // 2)
     mo._edge(True)
-    time.sleep(0.8)
+    M.pace(m, 0.8)
     check("a press on the thumb does not PAGE", scrl(m) == was,
           f"(FS_SCRL {scrl(m)}, was {was})")
     check("...and the gesture is live", dragon(m) == 1)
@@ -217,7 +216,7 @@ with M.launch("build/os8088-360.img", apps=DISK,
     # (pos 24 of 25 on the 30-file disk, measured), where the bottom row
     # clamps the wanted top AT the travel and the commit is exactly total-fit
     mo.to(cx, target, l=True)
-    time.sleep(1.2)
+    M.pace(m, 1.2)
     after_pos = dragpos(m)
     blk2 = ksb(m)
     t2 = thumb(blk2)
@@ -244,11 +243,11 @@ with M.launch("build/os8088-360.img", apps=DISK,
 
     # --- D: x is never read ------------------------------------------------
     mo.to(cx - 150, target, l=True)
-    time.sleep(1.2)
+    M.pace(m, 1.2)
     check("x is never read: 150px off the bar is the same pos",
           dragpos(m) == after_pos, f"({dragpos(m)} vs {after_pos})")
     mo.to(cx + 60, target, l=True)
-    time.sleep(1.2)
+    M.pace(m, 1.2)
     check("...on the other side too", dragpos(m) == after_pos,
           f"({dragpos(m)} vs {after_pos})")
 

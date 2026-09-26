@@ -71,9 +71,12 @@ def main(argv):
         x, y = dispcp.row_xy(wx, wy, row)
 
         # A - the CONTROL. A window the user asked for still zooms open.
-        n = os88marty.bp_count(m, anim, lambda: (mo.dblclick(x, y),
-                                                 m.advance(frames=250),
-                                                 m.run()))
+        # THE GESTURE ONLY GESTURES. bp_count runs the guest and counts its
+        # stops; a gesture that also drives it - a settle that returns on a
+        # stopped guest, then `advance` - resumes past the very `wm_anim`
+        # stop the pump was about to count, and the launch reads x0. The
+        # pump's own quiet window is the wait.
+        n = os88marty.bp_count(m, anim, lambda: mo.dblclick(x, y, settle=0))
         print("   launching PAINT              wm_anim x%d   (SPEC.md 11.99)"
               % n)
         if n == 0:
@@ -104,9 +107,8 @@ def main(argv):
         wr = dispcp.win_rect(m, S, pw)
 
         # B - the SUBJECT. The close box the user meant as a close.
-        n = os88marty.bp_count(m, anim, lambda: (mo.click(wr[0] + 8, wr[1] + 9),
-                                                 m.advance(frames=400),
-                                                 m.run()))
+        n = os88marty.bp_count(m, anim,
+                               lambda: mo.click(wr[0] + 8, wr[1] + 9, settle=0))
         os88marty.settle(m)
         up = [w for w in dispcp.win_list(m, S) if w not in (pw, disk)]
         print("   close box -> the alert       wm_anim x%d   alert up: %s"

@@ -142,7 +142,7 @@ be an overlay tenant; the tenant list is not full, it is inapplicable.
 The answer is CLAUDE.md's own hard rule — *a C package that does not fit gets
 a second segment, not a bigger one* — read through the two precedents this
 tree has for a second segment that is **not** an overlay: SPEC.md §68.10's
-`WORD.OVL` (an ASSEMBLY module beside the package, DS still the package's)
+former `WORD.OVL` (an ASSEMBLY module beside the package, DS still the package's)
 and `C64.ROM` (a sidecar read at launch into a claim, C64-SPEC §14).
 `WEAVE.WSM` is the first and takes the second's lifecycle. The alternatives
 are priced in docs/plans/completed/WEAVE-PLAN.md §2.9.

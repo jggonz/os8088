@@ -229,10 +229,18 @@ def main():
             # "the file dialog never opened" about a kernel that is fine.
             ui = os88ui.UI(m, mo)
             ui.menu_pick("File", "Open...")
-            os88marty.guest_sleep(m, 3.0)
-            os88marty.settle(m)
-            dlg = [w for w in os88geom.windows(m, S)
-                   if w.visible and w.title.startswith("Open")]
+
+            def opened():
+                return [w for w in os88geom.windows(m, S)
+                        if w.visible and w.title.startswith("Open")]
+            try:                        # FDLG.DRV is a module on kern_small:
+                os88marty.until(m, lambda _: opened(),      # its read, then
+                                "the file dialog", poll=0.1,  # its window
+                                guest=3.0)
+                os88marty.settle(m)
+            except os88marty.MartyError:
+                pass                    # ...said just below
+            dlg = opened()
             if not dlg:
                 fails.append("the file dialog never opened: File > Open ran "
                              "and fdlg_win is %04X"
@@ -325,7 +333,12 @@ def main():
                             "past" if bad[0] >= 0x10000 else "before"))
 
         r1 = m.readseg(pseg, P["mp_row"], 1)[0]
-        os88marty.guest_sleep(m, 3.0)
+        try:                            # the replayer's next row, or three
+            os88marty.until(            # guest seconds of none
+                m, lambda _: m.readseg(pseg, P["mp_row"], 1)[0] != r1,
+                "the replayer to move", poll=0.05, guest=3.0)
+        except os88marty.MartyError:
+            pass
         r2 = m.readseg(pseg, P["mp_row"], 1)[0]
         loaded = int.from_bytes(m.readseg(pseg, P["mp_loaded"], 2), "little")
         say("  loaded     %s  (mp_loaded=%d, row %d -> %d%s)"

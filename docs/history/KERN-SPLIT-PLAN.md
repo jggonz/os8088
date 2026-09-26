@@ -217,7 +217,7 @@ dies somewhere unrelated.
 
 **So the tables stay the same length in both builds.** A `kern_big`-only slot
 exists in `kern_small` as a cell pointing at a refusing stub, exactly as
-retired slot `0x01E8` already does (SPEC.md §20.8 rule 4 — it answers CF=1 /
+retired slot `0x01DF` already does (SPEC.md §20.8 rule 4 — it answers CF=1 /
 `FERR_NAME` and the SDK publishes no name for it). Cost to the small build:
 **8 bytes per divergent slot, plus one shared refuser of about six.** For the
 three or four cells dual display would want, call it 30 bytes.
@@ -342,7 +342,7 @@ current.
 
    - **The seam is drawn by what code is FOR, not by which file it is in.**
      §41 is two modules and the split runs *through* one of them: the CPU
-     tier stays in both builds (slot 0x0188 is a published ABI four packages
+     tier stays in both builds (slot 0x0155 is a published ABI four packages
      read), and the A20 and HMA routines go, because they exist only to reach
      the store. The test that made that decision cheap was a grep —
      `[cpu_feat]` and the `CPU_F_*` bits have no readers outside the two

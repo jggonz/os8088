@@ -199,12 +199,12 @@ DKI_HOLE_ARM  equ 44
 DKI_HOLE_SUB  equ 48
 DKI_HOLE_WIN  equ 52
 DKI_N         equ 14
+DK_NENT       equ 2             ; DOCK.DRV's mod_fp entries: hook, unhook
 
 %macro DKCALL 1
     jmp far [dkv + %1]
 %endmacro
 
-DKFP equ mod_fp + MOD_DOCK * MODFP_STRIDE
                                 ; entry 0 is dkx_hook and entry 1 dkx_unhook
                                 ; (SPEC.md 30.5), and dkf_apply is their only
                                 ; caller - mod_disarm rests both on mod_gone,

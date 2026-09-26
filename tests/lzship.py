@@ -42,6 +42,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
+from os88pkg import PKG_FMT                                # noqa: E402
+from os88drv import DRV_VER                                # noqa: E402
 import os88build                                       # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
@@ -96,9 +98,9 @@ def compressed(img):
                                                     # format (SPEC.md 20.14.1)
                 seen[0] += 1
             elif len(hdr) >= 12 and hdr[:2] == b"O8":
-                if hdr[2] == 3 and hdr[3] & 0x08:   # a package
+                if hdr[2] == PKG_FMT and hdr[3] & 0x08:   # a package
                     seen[0] += 1
-                elif hdr[2] == 4 and struct.unpack_from("<H", hdr, 8)[0] > size:
+                elif hdr[2] == DRV_VER and struct.unpack_from("<H", hdr, 8)[0] > size:
                     seen[0] += 1                    # a driver
             del name
     scan(root, nent)

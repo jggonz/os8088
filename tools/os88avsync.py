@@ -43,6 +43,7 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from os88marty import Marty, MartyError
+from os88pkg import PKG_FMT                              # noqa: E402
 
 GUEST_HZ = 4772728.0
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -82,7 +83,7 @@ def symbols(src):
 def find_pkg(m, name=b"TRACKER"):
     buf = m.read(0x40000, 0xA0000 - 0x40000)
     for off in range(0, len(buf) - 32, 16):
-        if buf[off:off + 2] == b"O8" and buf[off + 2] == 3 \
+        if buf[off:off + 2] == b"O8" and buf[off + 2] == PKG_FMT \
            and buf[off + 16:off + 16 + len(name)] == name:
             return (0x40000 + off) >> 4
     raise MartyError("no loaded TRACKER package found - is it running?")

@@ -52,7 +52,6 @@ both ends and the geometry moved anyway, and that is what is tested.
 import argparse
 import subprocess
 import sys
-import time
 
 import os
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
@@ -216,7 +215,15 @@ def main():
         bx, by = dispcp.win_rect(m, S, disk)[:2]
         dispcp.open_named(m, mo, S, os88marty.settle, bx, by, pkg,
                           card=pri)
-        time.sleep(6)
+        # the launch is done when its window is up and the drive is quiet
+        try:
+            os88marty.until(m, lambda _: any(w != disk for w in
+                                             dispcp.win_list(m, S)),
+                            "%s's window" % a.app, poll=0.2, limit=60)
+        except os88marty.MartyError:
+            pass                        # ...and the line below says so
+        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                          what="%s's load to finish" % a.app)
         t = [w for w in dispcp.win_list(m, S) if w != disk]
         if not t:
             sys.exit("%s did not launch - is %s on %s?"
@@ -246,8 +253,7 @@ def main():
         if a.noxt:
             mo.to(wx + ww // 2, wy + wh // 2)
             os88marty.settle(m, card=pri if not a.far else sec)
-            m.key("KeyX")                   # SPEC.md 45.9's toggle
-            time.sleep(3)
+            m.key("KeyX")                   # SPEC.md 45.9's toggle: the menu
             os88marty.settle(m, card=pri if not a.far else sec)
         m.pause()
         if a.app == "tracker":
@@ -279,7 +285,20 @@ def main():
 
         # --- F ---------------------------------------------------------------
         m.key(fskey)
-        time.sleep(5)
+        # [fsx_task] leaves 0xFF when the bracket arms (kernel/fsx.inc);
+        # state() below settles the glass it then draws
+        try:
+            os88marty.until(m, lambda mm: mm.read(S("fsx_task"), 1)[0]
+                            != 0xFF, "the fsx bracket", poll=0.1, limit=20.0)
+        except os88marty.MartyError:
+            pass
+        # ...and its first screen finished on its own card. A GUEST budget
+        # under the 22 seconds this used to wait blind, so a bracket that
+        # animates costs no more than it did and is captured as it was
+        try:
+            os88marty.settle(m, card=sec if a.far else pri, guest=20.0)
+        except os88marty.MartyError:
+            pass
         m.pause()
         fs_flag = m.read(S("wm_fs"), 2)
         print("   [wm_fs]=%d  (neither app takes the 11.2 surface; the "
@@ -293,7 +312,10 @@ def main():
 
         # --- and out --------------------------------------------------------
         m.key("Escape")
-        time.sleep(5)
+        # [fsx_task] goes back to 0xFF when fsx_restore disarms the bracket
+        # (kernel/fsx.inc); the settle below is the repaint after it
+        os88marty.until(m, lambda mm: mm.read(S("fsx_task"), 1)[0] == 0xFF,
+                        "the fsx bracket to end", poll=0.1, limit=20.0)
         os88marty.settle(m, card=sec)
         mo.to(*park)
         os88marty.settle(m, card=sec)

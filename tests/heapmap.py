@@ -108,8 +108,9 @@ def kill_stale():
     exit 144, nothing dead, every command after it skipped (CLAUDE.md)."""
     if os.path.exists(PIDFILE):
         try:
-            os.kill(int(open(PIDFILE).read().strip()), signal.SIGTERM)
-            time.sleep(1)
+            pid = int(open(PIDFILE).read().strip())
+            os.kill(pid, signal.SIGTERM)
+            os88qemu.gone(pid)
         except Exception:
             pass
     for f in (SOCK, PIDFILE):
@@ -152,8 +153,14 @@ def sample(limit=40.0):
             time.sleep(0.1)
     sym = heapmap.symbols()
     q.hmp("cont")
-    seen, keys, t0 = [], set(), time.time()
-    while time.time() - t0 < limit:
+    # `limit` and every t= below are GUEST seconds, off the BIOS tick count
+    # (tests/os88qemu.py): a loaded box gives the guest less of a host second.
+    clk = os88qemu.Clock(q)
+    seen, keys = [], set()
+    while True:
+        t = clk.secs()
+        if t >= limit or clk.stalled():
+            break
         try:
             m = heapmap.Map(q, sym)
         except Exception:
@@ -165,8 +172,8 @@ def sample(limit=40.0):
         k = m.key()
         if k not in keys:
             keys.add(k)
-            seen.append((time.time() - t0, m))
-        if len(seen) > 3 and not m.live and time.time() - t0 > 15:
+            seen.append((t, m))
+        if len(seen) > 3 and not m.live and t > 15:
             break
     return q, seen
 

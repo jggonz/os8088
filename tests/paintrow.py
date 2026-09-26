@@ -51,7 +51,6 @@ so every row tests the fast path 58 times and the partial path once.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -213,7 +212,7 @@ def main():
             sys.exit("paintrow: no gfx_blitp - the canvas is not planar, so "
                      "there is no four-plane row to unpack")
         base = got["base"]
-        time.sleep(6)
+        os88marty.settle(m)             # the rest of Paint's first paint
 
         # ...and now stop INSIDE Paint, so CS and DS are the package's.
         #

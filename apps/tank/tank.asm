@@ -724,7 +724,7 @@ tk_s_enter:  db 'PRESS ENTER', 0
 ; whole frame - the arkanoid/tracker pattern.
 
 ; -----------------------------------------------------------------------------
-; tk_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; tk_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------

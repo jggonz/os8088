@@ -332,7 +332,7 @@ kept ones. For Paint that is *cache the chrome* and *keep the canvas*.
 drawing calls and 421.8 ms, and **451 of them — 75% — are the 44-pixel tool
 palette**; the bottom strip is 131 calls and 99 ms. So the built half is a
 **band on one edge**, which keeps both the cached part and the kept part
-RECTANGLES and so needs no region arithmetic anywhere: `wm_band` (slot 0x03B8),
+RECTANGLES and so needs no region arithmetic anywhere: `wm_band` (slot 0x02D3),
 the cache banks the band, `wm_damage` hands the app the content minus it.
 **Paint raise 680.9 → 451.0 ms, 1.51x**, and Paint needed no drawing change —
 `pt_draw_pal` was already gated on the damage rect. PERFORMANCE.md Set 46.

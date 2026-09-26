@@ -696,7 +696,7 @@ sample rather than a handle.
 
 **What needs nothing at all is most of the kernel**, and that is the encouraging
 half: sound grants, XMS blocks, toast ownership, the dock, the clipboard,
-`wm_owner` and every `wm_about`/`wm_onwk`/`wm_oncl`/`wm_onrc`/`wm_pref` hook are
+`wm_owner` and every `W_ABOUT`/`W_ONWK`/`W_ONCL`/`W_ONRC`/`W_PREF` hook are
 keyed on an **instance slot** or on a near offset read live through `W_SEG`.
 There are two existing routines shaped exactly right to reuse: `inst_of_seg`
 (kernel/instance.inc:593, **34 bytes**, finds a record by segment) and
@@ -1044,8 +1044,9 @@ that will bite:
    interpreter it is not, and Frotz will not declare.
 
 **What it costs the SDK.** One appended API cell. `kernel/kernel.asm:3849`
-asserts the table is exactly 161 8-byte slots, so the assert and the SDK mirror
-change — but **appending moves no published offset, so no package needs
+asserted the table was exactly 161 8-byte slots when this was written (it
+asserts only the table's start now, and cells come in two sizes — SPEC.md
+20.3), so the SDK mirror changes — but **appending moves no published offset, so no package needs
 rebuilding**, and a package built before this simply never declares and stays
 pinned. One word per instance for the offset (`INST_MAX*2` = 24 bytes of `.bss`,
 a side table like `inst_parksafe`, because `I_RECSZ` is full).
@@ -1740,9 +1741,10 @@ what makes the declaration free.
 between the two packages is exactly the shim convention. `wd_s_*` is
 `call`/`retf`, so the module's CS is on the stack for the whole of every
 shimmed routine and a move under one returns into memory that is no longer
-there. Changing that is a shim redesign, not a declaration. (`WORD.OVL` is an
-18-byte ping stub today, so Word's half is prophylactic — but `WD_OVKB` is
-claimed whole whatever the module holds.)
+there. Changing that is a shim redesign, not a declaration. (`WORD.OVL` was
+an 18-byte ping stub, and SPEC.md §68.10 has since retired it: Word's second
+segment is now part 1 of `WORD.O88`, inside the region's own claim, so it moves
+with the region and there is no Word half left to this row.)
 
 **`tests/ovlhigh.py` is the gate** (soak, `marty`+`cc`, 14.5s of a declared
 20). It boots CWORD, presses **F5** — `CWA_GOTO` → `ovl_dlg_open`, an overlay
@@ -2018,7 +2020,7 @@ past it and it is an ABI change.
 ### 10.10 Piece F — a worker-owning region moves, and the worker comes back
 
 **BUILT. SPEC.md 66.6.2 is the contract.** `OSAPI_TASK_RESTARTABLE`
-(`inst_restart_set`, slot `0x0518`) declares a near offset; `mem_frameless`
+(`inst_restart_set`, slot `0x03EC`) declares a near offset; `mem_frameless`
 accepts a region whose worker has one **and is parked**; `mem_wk_restart` finds
 the instance at the new base and `sch_wk_restart` rebuilds the frame.
 

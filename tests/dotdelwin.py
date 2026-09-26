@@ -41,10 +41,67 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88build                                              # noqa: E402
+import os88marty                                              # noqa: E402
 import os88ui                                                 # noqa: E402
 from dotdel import PKG, bss, Probe                            # noqa: E402
 
 MACHINE = "os8088_5150_herc_gla"
+
+
+def _guest_wait(m, cond, what, budget=45.0):
+    """Spin until `cond()`, budgeted in GUEST seconds.
+
+    Not host ones, which is the whole point: a loaded box hands the guest
+    ~37% less work per host second (docs/plans/SOAK-PARALLEL.md 1), so a
+    budget in host time is a different amount of the machine at every width -
+    and a wait that is too short does not report as a timeout, it reports as
+    the thing under test being wrong.
+    """
+    c0 = m.status()["cycles"]
+    while not cond():
+        if (m.status()["cycles"] - c0) / os88marty.GUEST_HZ > budget:
+            raise RuntimeError("dotdelwin: waited %.0f GUEST seconds for %s "
+                               "and it never happened" % (budget, what))
+        time.sleep(0.02)
+
+
+def changed(p, before, *names):
+    """The package's own words CHANGED and then STOPPED changing.
+
+    EVERY WAIT IN THIS ROW WAS `time.sleep(N)` AND THAT IS WHY IT FLAKED.
+    Host seconds are a different amount of the machine's work at every box
+    load, so leg D's 3.5 s stopped covering the Thin/Full re-cut and the next
+    line read the tile the re-cut had not replaced yet. The tell is that it
+    did not read one wrong number - it read 16x9 in one run and 16x13 in the
+    next, and a wrong CONSTANT does not vary.
+
+    TWO EDGES, AND THE FIRST ONE IS THE EASY ONE TO MISS. Stillness alone is
+    not enough: a tile the re-cut has not reached yet, or a counter that has
+    not incremented yet, is perfectly stable - so a bare `quiesce` returns at
+    once and reads exactly the state the action was supposed to replace,
+    which is the sleep's own bug one layer in. So this waits for the words to
+    DIFFER from what they were before the action, and only then for them to
+    settle.
+
+    `quiesce` is the second half - the same `stable`-identical-readings
+    signal as `settle`, over a handful of bytes instead of a framebuffer and
+    over GUEST seconds instead of host ones. It is the right tool rather than
+    `settle` because every one of these waits is followed by a read of guest
+    memory; the two followed by a PIXEL comparison keep their own park (see
+    `content`), which is `settle`'s question and not this one.
+
+    Pass [dd_fulls] alongside whatever else is being waited for: it is the
+    package's own whole-board counter, so "the tile stopped moving AND the
+    redraw it caused has finished" is one predicate rather than two.
+    """
+    def read():
+        return tuple(p.w(n) for n in names)
+    want = tuple(before)
+    edge = names[:len(want)]
+    _guest_wait(p.m, lambda: tuple(p.w(n) for n in edge) != want,
+                "Dot Delirium's %s to leave %s" % (", ".join(edge), want))
+    return os88marty.quiesce(
+        p.m, read, what="Dot Delirium's %s to stop changing" % ", ".join(names))
 
 
 def content(ui, p):
@@ -63,7 +120,7 @@ def content(ui, p):
     """
     m = ui.m
     ui.mo.to(712, 170)
-    time.sleep(0.4)
+    os88marty.pace(m, 0.4)
     m.pause()
     x, y, w, h = (p.w("dd_cx"), p.w("dd_cy"), p.w("dd_cw"), p.w("dd_ch"))
     top = p.w("dd_ply") - y
@@ -93,8 +150,9 @@ def leg_b(ui, p, say):
     before_r, before = content(ui, p)
     f0 = p.w("dd_fulls")
     w = ui.window("Dot Delirium")
+    was = (p.w("dd_cx"), p.w("dd_cy"))
     ui.move_window(w, w.x + 160, w.y + 40)
-    time.sleep(2.0)
+    changed(p, was, "dd_cx", "dd_cy")
     after_r, after = content(ui, p)
     f1 = p.w("dd_fulls")
     if after_r[:2] == before_r[:2]:
@@ -127,10 +185,14 @@ def leg_c(ui, p, say):
     if not others:
         say("C  FAIL: nothing else is open to cover us with")
         return 1
+    # NO WAIT AFTER THE FIRST RAISE, and that is not an omission: being
+    # covered costs Dot Delirium nothing - dd_render's .skip arm only MARKS a
+    # frame owed - so there is no state here that changes and a wait for one
+    # would hang. `raise_window` confirms the z-order itself. The redraw is
+    # owed by the SECOND raise, which is what is waited for.
     ui.raise_window(others[0])
-    time.sleep(2.0)
     ui.raise_window(ui.window("Dot Delirium"))
-    time.sleep(2.5)
+    changed(p, (f0,), "dd_fulls")
     f1 = p.w("dd_fulls")
     if f1 <= f0:
         say("C  FAIL: covering and uncovering cost %d full redraws - a "
@@ -145,7 +207,7 @@ def leg_c(ui, p, say):
 def leg_d(ui, p, say):
     t0 = (p.w("dd_tw"), p.w("dd_th"))
     ui.menu_pick("Window", "Full")
-    time.sleep(3.5)
+    changed(p, t0, "dd_tw", "dd_th", "dd_fulls")
     t1 = (p.w("dd_tw"), p.w("dd_th"))
     if t1[0] <= t0[0]:
         say("D  FAIL: Full left the tile at %dx%d, not wider than %dx%d"
@@ -153,15 +215,39 @@ def leg_d(ui, p, say):
         return 1
     f0 = p.w("dd_fulls")
     ui.menu_pick("Window", "Thin")
-    time.sleep(3.5)
+    changed(p, t1, "dd_tw", "dd_th", "dd_fulls")
     fulls = p.w("dd_fulls") - f0
     t2 = (p.w("dd_tw"), p.w("dd_th"))
     # ...AND WHAT IT COST. A whole board is ~1/3 s of visible drawing, and the
     # SHRINKING direction owes almost none of it: 11.90.3 answers an EMPTY
     # damage rect for a window shrunk with its origin unmoved, which 93.5.18
-    # now reads. Measured 4 before and 2 after, four switches a run, twice.
-    if fulls > 3:
-        say("D  FAIL: Thin cost %d whole board draws, not the 2 it owes "
+    # now reads.
+    #
+    # THE BOUND WAS 3 AND THE FIGURE BESIDE IT WAS 2, AND BOTH WERE READ
+    # THROUGH A TRUNCATED WAIT. Every wait in this row was `time.sleep(3.5)`,
+    # which on a loaded box ends before the transition does - so the count
+    # stopped early and read low, and the number that was quoted as what Thin
+    # "owes" was really what it had managed so far. Measured again with the
+    # waits on the guest's own clock (see `changed`), over 24 switches on both
+    # adapters:
+    #
+    #     Full   1 the first time, then 2 - deterministic
+    #     Thin   3 or 4 - BOTH values on BOTH adapters
+    #
+    # [dd_fulls] is a clean counter and that was checked rather than assumed:
+    # it reads 1 -> 1 over 30 guest seconds with nothing touched, so these are
+    # the transition's own draws and not a frame loop ticking underneath.
+    #
+    # So the bound is 5 - one above the measured maximum - and it is still the
+    # assertion that matters, because what it exists to catch is a Thin that
+    # redraws the whole board per damage event rather than once or twice.
+    # WHAT IT NO LONGER CLAIMS is the 2: that figure cannot be reproduced with
+    # a wait that runs to the end of the transition, and whether 93.5.18's
+    # saving is smaller than it was recorded as, or was recorded the same
+    # truncated way on both sides of its own A/B, is not something this row
+    # can answer - it needs the pre-93.5.18 kernel measured the same way.
+    if fulls > 5:
+        say("D  FAIL: Thin cost %d whole board draws, not the 3-4 measured "
             "(SPEC.md 93.5.18)" % fulls)
         return 1
     if t2 != t0:
@@ -193,7 +279,7 @@ def main(argv):
     with os88ui.boot(a.img, apps=a.apps, machine=a.machine) as ui:
         ui.path(PKG)
         p = Probe(ui, names)
-        time.sleep(3.0)
+        changed(p, (0,), "dd_fulls")
         fail += leg_a(ui, p, say)
         fail += leg_b(ui, p, say)
         fail += leg_c(ui, p, say)
@@ -209,7 +295,7 @@ def main(argv):
         with os88ui.boot(a.img, apps=a.apps, machine="os8088_xt_vga") as ui:
             ui.path(PKG)
             p = Probe(ui, bss())
-            time.sleep(3.0)
+            changed(p, (0,), "dd_fulls")
             fail += leg_d(ui, p, lambda s: say(s.replace("D  ", "D/vga  ", 1)))
 
     if not a.verbose:

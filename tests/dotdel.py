@@ -62,7 +62,6 @@ import struct
 import tempfile
 import subprocess
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -80,21 +79,22 @@ PKG = "B:/GAMES/DOTDEL.O88"
 # ones are 5150s with the GLaBIOS twin, because the IBM ROM is not in the tree.
 # ...and the floor leg E fails under, PER ARM. See FPS_FLOOR below.
 ARMS = (
-    # VGA's windowed floor is 0.80, and it is DOWN 17 points from where this
-    # row started because SPEC.md 93.5.13.3 bought something with them: the
-    # maze's corner is never written in an actor's pen at all, where before it
-    # was written and put back a few ms later and the field saw the few ms.
-    # Six samples of the build that does it read 83.6, 86.1, 87.1, 87.1, 88.5
-    # and 88.7 against 97.6, 97.9 and 90.5 for the one that repaired instead.
-    # THE COST IS THE POINT OF THE ROW, so it is written down rather than
-    # absorbed: 0.80 sits under the worst of six and well over what a real
-    # regression does (93.5.3's 60s, and the 78.0 that caught 93.5.13.2).
+    # VGA's floor is 0.90 again. It was 0.80 for as long as SPEC.md 93.5.13.3's
+    # split cost ten points - six samples read 83.6 to 88.7 - and that cost is
+    # gone twice over: 5.4.2.6's gfx_blit1 fast path took the one-pen frame
+    # back to 96-99%, and 93.5.19's planar band retires the split wherever a
+    # colour surface is uncovered. Ten eight-second windows of the planar
+    # build read 98.7-100.0 windowed and 98.8-100.0 fullscreen, and this row
+    # read 99.1 / 98.7. 0.90 is the floor this arm had before the split, and it
+    # still sits well over what a real regression does (93.5.3's 60s, the 78.0
+    # that caught 93.5.13.2, and the 76 a whole band through the old
+    # gfx_blitp row loop read - 93.5.19).
     # THE BRANCH'S TILES (SPEC.md 93.3.3): Window > Thin is the default, so the
     # tile is square-ish in PIXELS and the board is the arcade's 28:31 rather
     # than 1.6x wider than tall.  CGA is the one that cannot reach it - 640x200
     # has not got the 279 lines that 31 rows of nine need - so it resolves to
     # Full with Thin greyed, and comes out at what fits.
-    ("vga",  "os8088_xt_vga",        (8, 9),  0.80),
+    ("vga",  "os8088_xt_vga",        (8, 9),  0.90),
     ("cga",  "os8088_5150_cga_gla",  (8, 4),   0.95),
     ("herc", "os8088_5150_herc_gla", (8, 9),  0.95),
 )
@@ -254,12 +254,22 @@ def leg_f(tag, ui, p, say):
     # dd_pilt counts down with `jns`, so it is SIGNED and 250 is -6.
     seg = p.seg
     m.key("Enter")
-    time.sleep(4)
+    # ...until the game has its board: dd_level_begin sets READY and asks
+    # for a whole-board frame, and that frame clearing dd_full is the board
+    # being on the glass. A blind 18 guest seconds before.
+    try:
+        os88marty.until(m, lambda _: p.b("dd_state") != 0
+                        and p.b("dd_full") == 0,
+                        "the game's first board", poll=0.1, limit=10)
+    except os88marty.MartyError:
+        pass                            # ...the forced frame below says so
     m.pause()
     for n, v in (("dd_paused", 1), ("dd_full", 1)):
         m.write((seg << 4) + p.names[n], bytes([v]))
     m.go()
-    time.sleep(1.5)
+    # dd_full is cleared by the frame that has just drawn the whole board
+    os88marty.until(m, lambda _: p.b("dd_full") == 0,
+                    "the forced whole-board frame", poll=0.1, limit=10)
     m.pause()
     tw, th = p.w("dd_tw"), p.w("dd_th")
     bdx, bdy = p.w("dd_bdx"), p.w("dd_bdy")
@@ -298,7 +308,12 @@ def leg_f(tag, ui, p, say):
     m.write((seg << 4) + p.names["dd_paused"], bytes([0]))
     m.go()
     m.key("Escape")                     # ...and hand the attract screen back:
-    time.sleep(3)                       # legs B and C both start from it
+    try:                                # legs B and C both start from it
+        os88marty.until(m, lambda _: p.b("dd_state") == 0
+                        and p.b("dd_full") == 0,
+                        "the attract screen to come back", poll=0.2, limit=10)
+    except os88marty.MartyError:
+        pass                            # ...and the line below says so
     if p.b("dd_state") != 0:
         fail.append("%s: Escape did not return to the attract screen "
                     "(state %d), so the legs after this one start from the "
@@ -355,18 +370,22 @@ def leg_g(tag, ui, p, say):
     m.go()
     if st == 0:                         # a game that ended: start another
         m.key("Enter")
-        deadline = time.time() + 20
-        while p.b("dd_state") == 0 and time.time() < deadline:
-            time.sleep(0.2)
+        try:
+            os88marty.until(m, lambda _: p.b("dd_state") != 0,
+                            "a new game to start", poll=0.2, limit=20)
+        except os88marty.MartyError:
+            pass
     # ...and let the cast cross some corners, over the GAME'S OWN CLOCK. A
     # host sleep here hands a loaded lane a third less play (incident 54), and
     # what this leg wants is TURNS TAKEN - the corner tile only enters a band
     # when an actor turns on it, so a lane that got fewer of them is a lane
     # that read less of the maze while reporting the same number.
     t0 = p.w("dd_anim")
-    deadline = time.time() + 60
-    while (p.w("dd_anim") - t0) & 0xFFFF < 145 and time.time() < deadline:
-        time.sleep(0.25)
+    try:
+        os88marty.until(m, lambda _: (p.w("dd_anim") - t0) & 0xFFFF >= 145,
+                        "145 ticks of play", poll=0.25, limit=60)
+    except os88marty.MartyError:
+        pass
     ticks = (p.w("dd_anim") - t0) & 0xFFFF
     m.pause()
     tw, th = p.w("dd_tw"), p.w("dd_th")
@@ -521,9 +540,11 @@ def leg_h(tag, ui, p, say, frames=20, cap=5):
 
 
 def settle_playing(m, p, secs=20.0):
-    """Wait until the game is PLAYING, keeping Smiles in lives while we do."""
-    t0 = time.time()
-    while time.time() - t0 < secs:
+    """Wait until the game is PLAYING, keeping Smiles in lives while we do.
+    `secs` is an idle-box figure, spent as GUEST time."""
+    c0 = m.status()["cycles"]
+    while ((m.status()["cycles"] - c0) / os88marty.GUEST_HZ
+           < secs * os88marty.GUEST_BUDGET_RATIO):
         m.pause()
         st = p.b("dd_state")
         m.write((p.seg << 4) + p.names["dd_lives"], bytes([99]))
@@ -532,7 +553,7 @@ def settle_playing(m, p, secs=20.0):
             return True
         if st == 0:                     # a game that ended: start another
             m.key("Enter")
-        time.sleep(0.3)
+        os88marty.pace(m, 0.3)
     return False
 
 
@@ -617,8 +638,11 @@ def run_arm(tag, machine, want_tile, a, say, floor=FPS_FLOOR):
     with os88ui.boot(a.image, apps=a.apps, machine=machine) as ui:
         m = ui.m
         ui.path(PKG)
-        time.sleep(2)
         p = Probe(ui, names)
+        # dd_frames counts at the head of every draw, so a second one means
+        # the first - the whole attract screen - has finished
+        os88marty.until(m, lambda _: p.w("dd_frames") >= 2,
+                        "the first whole frame", poll=0.2, limit=30)
 
         # --- D: the tile is cut from the surface ---------------------------
         tile = (p.w("dd_tw"), p.w("dd_th"))
@@ -690,13 +714,15 @@ def run_arm(tag, machine, want_tile, a, say, floor=FPS_FLOOR):
         # sample.
         moved = (p.w("dd_x"), p.w("dd_y"))
         t0 = p.w("dd_anim")
-        deadline = time.time() + 30
-        while (p.w("dd_anim") - t0) & 0xFFFF < 24 and time.time() < deadline:
-            time.sleep(0.1)
+        try:
+            os88marty.until(m, lambda _: (p.w("dd_anim") - t0) & 0xFFFF >= 24,
+                            "24 ticks of the demo", poll=0.1, limit=30)
+        except os88marty.MartyError:
+            pass
         ticks = (p.w("dd_anim") - t0) & 0xFFFF
         if ticks < 24:
-            fail.append("%s: the game's own clock advanced %d ticks in 30 "
-                        "host seconds - the guest is not running, so nothing "
+            fail.append("%s: the game's own clock advanced %d ticks in 90 "
+                        "guest seconds - the game is not running, so nothing "
                         "below this can be believed" % (tag, ticks))
         elif (p.w("dd_x"), p.w("dd_y")) == moved:
             fail.append("%s: the demo's Smiles has not moved in %d ticks of "
@@ -710,14 +736,23 @@ def run_arm(tag, machine, want_tile, a, say, floor=FPS_FLOOR):
         seen = set()
         for _ in range(14):
             seen.add(screen(m)[2])
-            time.sleep(0.35)
+            if len(seen) >= 2:          # alive is all this asks
+                break
+            os88marty.pace(m, 0.35)
         if len(seen) < 2:
             fail.append("%s: the screen never changed over five seconds - "
                         "nothing on the attract screen is alive" % tag)
 
         # --- C: Enter starts a game and Smiles eats -------------------------
         m.key("Enter")
-        time.sleep(3)
+        # Until READY is over - the state that ends the wait, where this
+        # was a blind 13.5 guest seconds. A game that never starts times
+        # out here and the state test below says so.
+        try:
+            os88marty.until(m, lambda _: p.b("dd_state") not in (0, 1),
+                            "READY to end", poll=0.1, limit=15)
+        except os88marty.MartyError:
+            pass
         # READY, PLAY, DIE or the flash between boards - anything but the
         # title. NOT `== PLAY`: nobody is steering Smiles for these three
         # seconds and since SPEC.md 93.8's ghosts hunt by line of sight one of
@@ -733,11 +768,21 @@ def run_arm(tag, machine, want_tile, a, say, floor=FPS_FLOOR):
         # is the whole point of polling rather than eventing. Left is where he
         # starts facing and a wall is where that ends, so a game nobody drives
         # eats a handful of dots and then stands still for ever.
+        # Each hold ends as soon as he has eaten - the assertion is only
+        # that he does - and is at most what it always was.
+        ate = lambda: (p.w("dd_ndots") < dots0
+                       and p.w("dd_score") > score0)
         for k in ("ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight",
                   "ArrowUp", "ArrowRight"):
             m.key(k, down=True, up=False)
-            time.sleep(1.2)
+            try:
+                os88marty.until(m, lambda _: ate(), "Smiles to eat",
+                                poll=0.1, guest=1.2 * os88marty.GUEST_PACE)
+            except os88marty.MartyError:
+                pass
             m.key(k, down=False, up=True)
+            if ate():
+                break
         dots1, score1 = p.w("dd_ndots"), p.w("dd_score")
         if dots1 >= dots0 or score1 <= score0:
             fail.append("%s: six seconds of steered play ate %d dots and "
@@ -751,7 +796,13 @@ def run_arm(tag, machine, want_tile, a, say, floor=FPS_FLOOR):
         for what in ("windowed", "fullscreen"):
             if what == "fullscreen":
                 m.key("KeyF")
-                time.sleep(3)
+                # the bracket re-cuts the tile and then repaints the lot
+                try:
+                    os88marty.until(m, lambda _: (p.w("dd_tw"), p.w("dd_th"))
+                                    != tile and p.b("dd_full") == 0,
+                                    "the bracket's board", poll=0.2, limit=10)
+                except os88marty.MartyError:
+                    pass                # ...and the line below says so
                 big = (p.w("dd_tw"), p.w("dd_th"))
                 # STRICTLY BIGGER, and it holds again because a bracket is
                 # always FULL (SPEC.md 93.3.3.1): 16x11 on a Hercules against
@@ -764,11 +815,6 @@ def run_arm(tag, machine, want_tile, a, say, floor=FPS_FLOOR):
                                 "the board from its own surface (SPEC.md "
                                 "93.4.2)" % (tag, big[0], big[1],
                                              tile[0], tile[1]))
-            if p.w("dd_frames") in (0, 0xFFFF) or p.b("dd_state") == 255:
-                import os88marty as _mm
-                _w,_h,_d = m.fbuf(0)
-                _mm.write_png_rgb("/tmp/claude-0/-home-user-os8088/359b914f-5179-53b4-9f92-36c43b355829/scratchpad/dbg2_%s_%s.png" % (tag, what), _w, _h, _d)
-                say("DBG shot taken: state=%d frames=%d" % (p.b("dd_state"), p.w("dd_frames")))
             # A WHOLE REPAINT IS NOT A FRAME (SPEC.md 93.5.3.1). It is 677 ms
             # on a VGA - twelve ticks - so a window that contains one loses
             # steps to DD_MAXSTEP and reads as a game that cannot keep up:
@@ -783,7 +829,10 @@ def run_arm(tag, machine, want_tile, a, say, floor=FPS_FLOOR):
                 c0, t0, f0 = (m.status()["cycles"], p.w("dd_anim"),
                               p.w("dd_frames"))
                 u0 = p.w("dd_fulls")
-                time.sleep(8)
+                # A RATE, and its span is read in cycles. 10 guest seconds
+                # is ~182 ticks, so a frame either way is half a point -
+                # it was 36, which only made a repaint likelier to land in it
+                os88marty.guest_sleep(m, 10.0)
                 c1, t1, f1 = (m.status()["cycles"], p.w("dd_anim"),
                               p.w("dd_frames"))
                 if p.w("dd_fulls") == u0:
@@ -803,7 +852,12 @@ def run_arm(tag, machine, want_tile, a, say, floor=FPS_FLOOR):
                             % (tag, what, frames, ticks, 100.0 * share,
                                100.0 * floor))
         m.key("Escape")
-        time.sleep(3)
+        try:
+            os88marty.until(m, lambda _: (p.w("dd_tw"), p.w("dd_th")) == tile
+                            and p.b("dd_full") == 0,
+                            "the window's board back", poll=0.2, limit=10)
+        except os88marty.MartyError:
+            pass                        # ...and the line below says so
         back = (p.w("dd_tw"), p.w("dd_th"))
         if back != tile:
             fail.append("%s: leaving the bracket left the tile at %dx%d, not "

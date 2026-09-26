@@ -5082,6 +5082,10 @@ sc_bandrun:
     mov ax, [sc_bx0]
     mov bx, [sc_rby]
     mov dx, [sc_gh]
+    clc                             ; THE CARRY IS AN ARGUMENT (SPEC.md 6.5.4):
+                                    ; document text is never greyed. The `and`
+                                    ; above happens to clear it, which is luck
+                                    ; and not a contract
     call ty_flush                   ; CF=1 = the kernel has no band blit, and
                                     ; the row is simply not drawn in the face.
                                     ; Not worth a fallback here: the machine

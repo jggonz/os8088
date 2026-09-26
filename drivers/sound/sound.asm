@@ -144,6 +144,7 @@ snd_entry:
                                 ; card with no OPL still has grants and a
                                 ; staging pool to give back
     or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN
+    call snd_hicap              ; ...and above 22,222 Hz if the DSP can
     or word [snd_services+DSV_TIERS], 1 << SND_RT_SB
                                 ; ...and THIS is the only place that bit is
                                 ; ever set: snd_tier may take the DSP tier
@@ -197,6 +198,22 @@ snd_entry:
     ret                         ; joins here with DRVE_TWICE already in AL
 
 ; -----------------------------------------------------------------------------
+; snd_hicap - publish SND_CAP_PCM_HI when the attached DSP can stream above
+;             22,222 Hz (SPEC.md 34.2.1). Preserves everything but the flags.
+;
+; THE SAME TEST sbl_v_open refuses on - DSP >= 3.00, the SB Pro's high-speed
+; mode or the SB16's 41h - read the other way round, so a package can grey a
+; rate the card cannot play instead of offering it and taking err 2. An SB 2.0
+; (DSP 2.01) is the card that caught this: Tracker offered 44 kHz on it.
+; -----------------------------------------------------------------------------
+snd_hicap:
+    cmp byte [sbl_verhi], 3
+    jb .out
+    or word [snd_services+DSV_CAPS], SND_CAP_PCM_HI
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; snd_tier - DRVV_TIER: how much of ourselves the user wants (SPEC.md 34.8)
 ;
 ; in:  AH = SND_RT_* - anything below SND_RT_SB means "no Sound Blaster"
@@ -229,7 +246,7 @@ snd_tier:
     je .table                   ; already off
     call sbl_detach             ; cannot fail (SPEC.md 51.2)
     mov word [snd_services+DSV_STREAM], 0
-    and word [snd_services+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN)
+    and word [snd_services+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_PCM_HI)
     cmp word [snd_services+DSV_TONE], 0
     je .table                   ; no OPL2 either: the name stays as it was
     mov word [snd_services+DSV_NAME], snd_s_opl   ; the card is an AdLib now
@@ -242,6 +259,7 @@ snd_tier:
     mov word [snd_services+DSV_STREAM], sbl_stream_op
     mov word [snd_services+DSV_TICK], sbl_tick
     or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN
+    call snd_hicap
     mov word [snd_services+DSV_NAME], snd_s_sb
 .table:
     mov si, snd_services
@@ -716,7 +734,7 @@ opl_free:
     ret
 
 ; =============================================================================
-; opl_fm_op - the body behind OSAPI_SND_FM (slot 0x00F8, SPEC.md 34.2)
+; opl_fm_op - the body behind OSAPI_SND_FM (slot 0x00E3, SPEC.md 34.2)
 ;
 ; in:       AL = verb - 0 note-on (CL = channel, BX = Hz), 1 note-off (CL),
 ;           2 patch-load (CL, ES:SI -> 11 bytes ALREADY STAGED BY THE KERNEL

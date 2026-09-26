@@ -26,7 +26,6 @@ wide, reading into the next), and no `cld` in a routine built out of `lodsb`,
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -69,11 +68,12 @@ def main():
                                                 dispcp.row_of(m, S,
                                                               "GFXBENCH.O88")))
         mo.dblclick(rx, ry)
-        t0 = time.time()
-        while time.time() - t0 < 120:
-            if [w for w in dispcp.win_list(m, S) if w != disk]:
-                break
-            time.sleep(0.3)
+        try:
+            os88marty.until(m, lambda _: [w for w in dispcp.win_list(m, S)
+                                          if w != disk],
+                            "GFXBENCH's window", poll=0.3, limit=120)
+        except os88marty.MartyError:
+            pass                    # the breakpoint below says what it means
         os88marty.settle(m)
 
         m.bp_exec("gfx_blitp")

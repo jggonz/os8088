@@ -63,7 +63,6 @@ import argparse
 import hashlib
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -455,8 +454,8 @@ def main(argv):
         def push(dx, dy, n=14):
             for _ in range(n):
                 mo.m.mouse(dx, dy)
-                time.sleep(0.12)
-            time.sleep(0.4)
+                os88marty.pace(m, 0.12)
+            os88marty.pace(m, 0.4)
             return mo.where()[:2]
 
         # The dead zone is the rows the TALLER display has and the shorter
@@ -540,7 +539,7 @@ def main(argv):
             dest = (ctx[1][VX] + ctx[1][CW] // 2, ctx[1][VX + 1] + 60)
             mo.to(*grab)
             mo.m.mouse(0, 0, l=True)
-            time.sleep(0.3)
+            os88marty.pace(m, 0.3)
             cx0, cy0 = mo.where()[:2]
             for _ in range(24):                 # walk it across, button DOWN
                 dx = max(-100, min(100, dest[0] - cx0))
@@ -548,7 +547,7 @@ def main(argv):
                 if dx == 0 and dy == 0:
                     break
                 mo.m.mouse(dx, dy, l=True)
-                time.sleep(0.14)
+                os88marty.pace(m, 0.14)
                 cx0, cy0 = mo.where()[:2]
             mo.m.mouse(0, 0)                    # release
             os88marty.settle(m, card=gate_card)

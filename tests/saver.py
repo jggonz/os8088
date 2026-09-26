@@ -171,9 +171,11 @@ def main():
 
         m.write(m.sym("ss_idle"), b"\x00\x00")      # zero minutes = OFF
         m.key("Space")
-        os88marty.guest_sleep(m, 8.0)
+        # TIME: a negative. IDLE_SOON starts a session in 28 ticks, so 4
+        # guest seconds (~73 ticks) is well past any start a zero could cause
+        os88marty.guest_sleep(m, 4.0)
         ok = m.read(on, 1)[0] == 0 and m.read(sv, 1)[0] == 0
-        print("  %-14s off: blk_on=%d blk_sv=%d after 8s of idle %s"
+        print("  %-14s off: blk_on=%d blk_sv=%d after 4s of idle %s"
               % ("zero minutes", m.read(on, 1)[0], m.read(sv, 1)[0],
                  "" if ok else "<-- WRONG"))
         bad += not ok

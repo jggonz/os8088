@@ -26,7 +26,6 @@ default, and it removes every navigation click from the measurement.
 import argparse
 import os
 import sys
-import time
 
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
 # checkout it was written in and wrong in a git worktree, which is how parallel
@@ -110,11 +109,12 @@ def main():
         # WAIT FOR IT RATHER THAN SLEEPING A GUESS - the whole question is
         # how long this takes, so a fixed sleep either truncates the slow
         # case or pads the fast one.
-        t0 = time.time()
-        while time.time() - t0 < 90.0:
-            if [w for w in dispcp.win_list(m, S) if w != disk]:
-                break
-            time.sleep(0.2)
+        try:
+            os88marty.until(m, lambda _: [w for w in dispcp.win_list(m, S)
+                                          if w != disk],
+                            "Paint's window", poll=0.2, limit=90)
+        except os88marty.MartyError:
+            pass                        # the check below says so
         os88marty.settle(m)
         c1 = m.status()["cycles"]
         d = m.disk()

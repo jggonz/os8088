@@ -22,7 +22,6 @@ a fill that gets the picture right for the wrong reason cannot.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -37,6 +36,17 @@ PT_CV_X = 48                # SPEC.md 42.13: the canvas's inset in the content
 PT_BW = 20                  # the palette's button side and pitch
 PT_PAL_DY = 21
 PT_T_FILL = 6
+
+
+def idle(m):
+    """Until Paint - or whatever the gesture started - has finished: the
+    drive quiet, the gfx lock free (a canvas operation can hold it for
+    seconds with nothing new on the glass), and then the screen still."""
+    os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                      what="the drive to go quiet")
+    os88marty.until(m, lambda mm: mm.read(S("gfx_lock_flag"), 1)[0] == 0,
+                    "the gfx lock to be free", poll=0.2, limit=60)
+    os88marty.settle(m)
 
 
 def tool_xy(ox, oy, i):
@@ -140,15 +150,14 @@ def main():
             sys.exit("paintfill: no gfx_blitp as wide as the picture - the "
                      "canvas is not planar, or it fell back to nibbles")
         ox, oy = hit[0], hit[1]
-        time.sleep(6)
+        idle(m)
 
         tx, ty = tool_xy(ox, oy, PT_T_FILL)
         mo.click(tx, ty)
-        os88marty.settle(m)
-        time.sleep(2)
+        idle(m)
         mo.click(ox + seed[0], oy + seed[1])
         os88marty.settle(m)
-        time.sleep(10)
+        idle(m)                     # the fill itself: CPU work under the lock
         mo.to(4, 4)                 # the arrow is drawn INTO the framebuffer
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)

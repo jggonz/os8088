@@ -1718,6 +1718,115 @@ khb_paint:
     ret
 %endif
 
+%ifdef DRV_DIAG
+; -----------------------------------------------------------------------------
+; ddg_paint - DRVDIAG=1's line: 'Drs cccc:iiii Fffff Mmm Qqqqq Ttttt'
+;   r = drv_boot's row, s = drv_load_row's step (ddg_step), cccc:iiii the
+;   interrupted CS:IP, ffff its FLAGS, mm the PIC mask, qqqq row 0's DRVR_SEG
+;   and tttt this ISR's own count. From IRQ0 with the splash lock held.
+; -----------------------------------------------------------------------------
+ddg_paint:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    push word [gfx_color]       ; font_run spends the pen; the main line may
+    mov di, ddg_buf             ; be between setting it and using it
+    mov al, 'D'
+    call ddg_put
+    mov al, [ddg_row]
+    call ddg_nib
+    mov al, [ddg_step]
+    call ddg_nib
+    mov al, ' '
+    call ddg_put
+    mov ax, [ddg_cs]
+    call ddg_hex4
+    mov al, ':'
+    call ddg_put
+    mov ax, [ddg_ip]
+    call ddg_hex4
+    mov al, ' '
+    call ddg_put
+    mov al, 'F'
+    call ddg_put
+    mov ax, [ddg_fl]
+    call ddg_hex4
+    mov al, ' '
+    call ddg_put
+    mov al, 'M'
+    call ddg_put
+    in al, 0x21
+    call ddg_hex2
+    mov al, ' '
+    call ddg_put
+    mov al, 'Q'
+    call ddg_put
+    mov ax, [drv_tab+DRVR_SEG]
+    call ddg_hex4
+    mov al, ' '
+    call ddg_put
+    mov al, 'T'
+    call ddg_put
+    mov ax, [ddg_ticks]
+    call ddg_hex4
+    mov byte [di], 0
+    mov cx, 8
+    mov dx, 8
+    mov si, ddg_buf
+    mov ax, (CBLACK << 8) | CWHITE
+    call font_run
+    pop word [gfx_color]
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+ddg_hex4:                       ; AX -> four hex digits at DI
+    push ax
+    mov al, ah
+    call ddg_hex2
+    pop ax
+ddg_hex2:                       ; AL -> two
+    push ax
+    push cx
+    mov cl, 4
+    shr al, cl
+    call ddg_nib
+    pop cx
+    pop ax
+ddg_nib:                        ; AL's low nibble -> one
+    push ax
+    and al, 0x0F
+    add al, '0'
+    cmp al, '9'
+    jbe .d
+    add al, 'A' - '9' - 1
+.d:
+    call ddg_put
+    pop ax
+    ret
+
+ddg_put:
+    mov [di], al
+    inc di
+    ret
+
+section .bss
+ddg_ticks:  resw 1
+ddg_ip:     resw 1
+ddg_cs:     resw 1
+ddg_fl:     resw 1
+ddg_row:    resb 1              ; drv_boot's row (driver.inc)
+ddg_step:   resb 1              ; drv_load_row's step (driver.inc's DDG)
+ddg_div:    resb 1
+ddg_buf:    resb 40
+section .text
+%endif
+
 sch_isr:
     push ax                     ; frame layout documented at top of file
     push cx
@@ -2064,6 +2173,37 @@ sch_isr:
                                 ; leaf, gated on snd_live until snd_init
                                 ; publishes; runs every tick in both modes,
                                 ; floppy reads included
+%ifdef DRV_DIAG
+    ; --- DRVDIAG=1's line (Makefile): WHERE a stopped boot is ---------------
+    ; The interrupted frame is sch_isr's nine pushes up: IP at +18, CS +20,
+    ; FLAGS +22. Painted only on the splash, only with the splash lock free
+    ; (the animation's own test) and only on OUR stack - font_run reads its
+    ; glyphs through SS, which a ROM that hops stacks inside int 13h is not.
+    inc word [ddg_ticks]
+    mov bx, sp
+    mov ax, [ss:bx+18]
+    mov [ddg_ip], ax
+    mov ax, [ss:bx+20]
+    mov [ddg_cs], ax
+    mov ax, [ss:bx+22]
+    mov [ddg_fl], ax
+    inc byte [ddg_div]          ; every 4th tick, whatever .bss held: a
+    test byte [ddg_div], 3      ; countdown from an unzeroed byte waited
+    jnz .ddgout                 ; out the whole driver phase
+    cmp byte [spl_live], 0
+    je .ddgout
+    cmp byte [spl_quiet], 0
+    jne .ddgout
+    cmp byte [spl_busy], 0
+    jne .ddgout
+    mov ax, ss
+    cmp ax, LOW_SEG
+    jne .ddgout
+    inc byte [spl_busy]
+    call ddg_paint
+    dec byte [spl_busy]
+.ddgout:
+%endif
 
     ; --- the loading screen's animation (SPEC.md 15.3.8.2) -------------------
     ; snd_tick's shape one line down and for its reason: a gated leaf that runs

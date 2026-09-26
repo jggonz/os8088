@@ -59,7 +59,6 @@ is not installed, function 0 answers AX != FFFF and it prints SKIP.
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -79,14 +78,14 @@ def fail(msg):
 
 def verdict(m, limit=240.0):
     """Wait for MREDRAW's report and return (verdict, {letter: (got, want)})."""
-    end = time.time() + limit
     rows = []
-    while time.time() < end:
-        rows = [r.rstrip() for r in (m.screen() or []) if r.strip()]
-        if any("MREDRAW" in r for r in rows):
-            break
-        time.sleep(0.5)
-    else:
+
+    def reported(_m):
+        rows[:] = [r.rstrip() for r in (m.screen() or []) if r.strip()]
+        return any("MREDRAW" in r for r in rows)
+    try:                                # `limit` is GUEST time
+        os88marty.until(m, reported, "MREDRAW's report", poll=0.5, limit=limit)
+    except os88marty.MartyError:
         fail("MREDRAW.COM never reported; the last screen was %r" % rows[:12])
 
     out, said = {}, None

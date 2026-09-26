@@ -1238,7 +1238,7 @@ Three checkboxes are worth **~85 KB** against the 34 the box reaches now.
   **Class-keyed and not row-keyed on purpose**: it is the question the
   checkbox asks, it hides `drv_tab` from the box, and `DRVC_NET` has TWO
   drivers so a row-keyed slot would make the Network box lie. **~40 bytes of
-  `.cold` + an 8-byte cell.**
+  `.cold` + a cell, 6 bytes if it is rare (SPEC.md 20.3).**
 
 **Two constraints to design around, both real**: unloading `DRVC_DISK` while
 the program is ON a hard disk loses the program, and the same for `DRVC_FILE`

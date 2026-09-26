@@ -27,7 +27,7 @@ and in no screenshot.
 THE HISTORY LOADS. A row is clicked and the entry must become that row's
 ANSWER, which is the reason the pane exists at all.
 """
-import os, sys, time
+import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty, os88mouse, os88sym, os88ui, dispcp
@@ -129,12 +129,8 @@ def full_repaint(m):
     """
     m.cmd(cmd="run")
     m.write(S("cp_dirty"), b"\x01")
-    for _ in range(200):
-        time.sleep(0.05)
-        if m.read(S("cp_dirty"), 1)[0] == 0:
-            break
-    else:
-        raise RuntimeError("ui_task never drained [cp_dirty]")
+    os88marty.until(m, lambda mm: mm.read(S("cp_dirty"), 1)[0] == 0,
+                    "ui_task to drain [cp_dirty]", poll=0.05, limit=10)
     os88marty.settle(m)
     m.cmd(cmd="pause")
 
@@ -316,7 +312,7 @@ def _quiet(m):
 def typed(m, text, settle=True):
     for ch in text:
         press(m, ch)
-        time.sleep(0.15)
+        os88marty.pace(m, 0.15)
     if settle:
         _quiet(m)
 
@@ -326,11 +322,11 @@ def ctrl(m, letter, settle=True):
     key, exactly as SHIFTED above does it, so what arrives at int 16h is the
     control byte (3 for C, 22 for V) and not the letter."""
     m.key("ControlLeft", down=True, up=False)
-    time.sleep(0.05)
+    os88marty.pace(m, 0.05)
     m.key("Key" + letter.upper())
-    time.sleep(0.05)
+    os88marty.pace(m, 0.05)
     m.key("ControlLeft", down=False, up=True)
-    time.sleep(0.15)
+    os88marty.pace(m, 0.15)
     if settle:
         _quiet(m)
 
@@ -347,7 +343,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "CALC.O88")
-    time.sleep(2)
+    os88marty.settle(m)         # its first paint: the baseline below is a
+                                # pixel compare
     slot = dispcp.win_list(m, S)[-1]
     cx, cy, cw, ch = dispcp.win_rect(m, S, slot)
     seg = pkg_seg(m, slot)
@@ -603,7 +600,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         fails.append("no calculation was recorded in the history at all")
 
     typed(m, "h")
-    time.sleep(1.5)
+    os88marty.quiesce(m, lambda: dispcp.win_rect(m, S, slot),
+                      what="the frame to take its new size")
     os88marty.settle(m)
     cx2, cy2, cw2, ch2 = dispcp.win_rect(m, S, slot)
     content_h = ch2 - TITLE_H - 1
@@ -661,7 +659,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     before = shown(m, seg, cal)
     mo.to(kx, ky)
     mo._edge(True)
-    time.sleep(0.5)
+    os88marty.pace(m, 0.5)
     mo.to(cx2 + 1 + 200, ky)                   # ...slide off it
     mo._edge(False)
     os88marty.settle(m)
@@ -675,7 +673,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # --- 6. folding back up --------------------------------------------------
     print("\n-- folding it back up --")
     typed(m, "h")
-    time.sleep(1.5)
+    os88marty.quiesce(m, lambda: dispcp.win_rect(m, S, slot),
+                      what="the frame to take its new size")
     os88marty.settle(m)
     cx3, cy3, cw3, ch3 = dispcp.win_rect(m, S, slot)
     nvis3 = u16(bss(m, seg, cal["nvis"], 2))

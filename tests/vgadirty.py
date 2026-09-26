@@ -73,8 +73,9 @@ def kill_stale():
     itself - exit 144, nothing dead, every command after it skipped."""
     if os.path.exists(PIDFILE):
         try:
-            os.kill(int(open(PIDFILE).read().strip()), signal.SIGTERM)
-            time.sleep(1)
+            pid = int(open(PIDFILE).read().strip())
+            os.kill(pid, signal.SIGTERM)
+            os88qemu.gone(pid)
         except Exception:
             pass
     for f in (SOCK, PIDFILE):
@@ -139,14 +140,13 @@ def main():
         q.hmp("cont")
 
         # Catch the splash mid-load: [spl_live] is 1 from its first tick until
-        # spl_finish, and the frame is the same background throughout.
-        shot_at, t0 = None, time.time()
-        while time.time() - t0 < 60:
-            if q.read(live, 1)[0] == 1:
-                time.sleep(0.4)             # ...one bar frame in, so the
-                shot_at = screen(q)         # chrome is certainly drawn
-                break
-            time.sleep(0.05)
+        # spl_finish, and the frame is the same background throughout. The
+        # budget is the GUEST's 60 seconds (tests/os88qemu.py), not the host's.
+        shot_at = None
+        if os88qemu.acted(q, lambda: q.read(live, 1)[0] == 1, secs=60,
+                          what="[spl_live]", poll=0.02):
+            os88qemu.pace(q, 0.4)           # ...one bar frame in, so the
+            shot_at = screen(q)             # chrome is certainly drawn
         if shot_at is None:
             raise SystemExit("vgadirty: the loading screen never came up - "
                              "this machine did not boot, so nothing below "

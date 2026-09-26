@@ -31,7 +31,7 @@ damage only shows when something re-lays the note out. So:
   leg D  type until the line WRAPS, which is the case the early-out must NOT
          fire on, and check the same pixel identity
 """
-import os, sys, time, subprocess, tempfile, argparse, functools
+import os, sys, subprocess, tempfile, argparse, functools
 print = functools.partial(print, flush=True)
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, "tools"); sys.path.insert(0, "tests")
@@ -58,7 +58,7 @@ def pkg_syms(src="apps/word/word.asm", incs=("apps/", "apps/word/")):
         out={}
         for L in open(mp):
             f=L.split()
-            if len(f)==3 and all(c in "0123456789ABCDEF" for c in f[0]): out[f[2]]=int(f[0],16)
+            if len(f)==3 and all(c in "0123456789ABCDEF" for c in f[0]): out[f[2]]=int(f[1],16)
         return out, open(os.path.join(d,"p.bin"),"rb").read()
 
 
@@ -82,28 +82,104 @@ ap.add_argument("--machine", default="os8088_5150_cga_gla")
 a = ap.parse_args()
 syms, image = pkg_syms()
 DISK = "build/wdtypegate.img"
-M.scratch_disk(DISK, "build/word.o88", "build/WORD.OVL", "build/WELCOME.DOC")
+M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC")
 S = lambda n: m.sym(n)
 
 with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
-    M.settle(m); mo = Mouse(marty=m)
+    mo = Mouse(marty=m)                 # launch() has already settled the boot
     print("== Word: a keystroke stops at the end of its line (SPEC.md 27.4.3) ==")
     dispcp.open_drive(m, mo, S, M.settle, "B")
     w = dispcp.win_list(m, S)[-1]; dx, dy = dispcp.win_rect(m, S, w)[:2]
     dispcp.open_named(m, mo, S, M.settle, dx, dy, "WELCOME.DOC")
-    time.sleep(2.5); M.settle(m)
 
-    raw = m.read(S("inst_tab"), 32*12); seg = None
-    for i in range(12):
-        b = i*32
-        if raw[b] == 1 and (raw[b+2] & 0x80):
-            c = u16(raw, b+6)
-            if m.read(c*16+syms["wd_mact"], 48) == image[syms["wd_mact"]:syms["wd_mact"]+48]:
-                seg = c; break
+    def word_seg():
+        """The instance running this word.asm; its I_SPTR is published after
+        the entry proc - and the document load in it - return."""
+        raw = m.read(S("inst_tab"), 32*12)
+        for i in range(12):
+            b = i*32
+            if raw[b] == 1 and (raw[b+2] & 0x80):
+                c = u16(raw, b+6)
+                if m.read(c*16+syms["wd_mact"], 48) == image[syms["wd_mact"]:syms["wd_mact"]+48]:
+                    return c
+        return None
+    try:
+        M.until(m, lambda _: word_seg(), "Word's instance", poll=0.3,
+                limit=60)
+    except M.MartyError:
+        pass                            # the check below says so
+    seg = word_seg()
     if seg is None:
         sys.exit("could not locate the running package (stale build/word.o88?)")
     base = seg*16; P = lambda n: base + syms[n]
     rw = lambda n: u16(m.read(P(n), 2)); rb = lambda n: m.read(P(n), 1)[0]
+
+    # ---- waiting on the guest, not on a clock ------------------------------
+    # Every gesture below waits for the UI to be FINISHED with it rather than
+    # for a fixed pause: the input is out of both queues (the BIOS keyboard
+    # ring and the kernel's event ring) and nobody holds the gfx lock, which
+    # ui_task takes around every handler it dispatches.
+    KBUF = 0x41A                        # 0040:001A/001C - the BIOS ring's head, tail
+    kbhead = lambda: m.read(KBUF, 2)
+    evtail = lambda: m.read(S("evq_tail"), 1)[0]
+    cyc = lambda: int(m.status()["cycles"])
+
+    def ui_idle():
+        kb = m.read(KBUF, 4)
+        return (kb[0:2] == kb[2:4] and m.read(S("evq_count"), 1)[0] == 0
+                and m.read(S("gfx_lock_flag"), 1)[0] == 0)
+
+    def done(arrived=None, what="the UI to finish with the gesture", tr=None,
+             idle=True):
+        """`arrived()` true (the gesture reached the guest) and the UI idle -
+        twice, a twentieth of a guest second apart, because ui_task pops an
+        event a few instructions before it takes the lock for it."""
+        wait = ((lambda c, w: tr.until(c, w, 30)) if tr is not None else
+                (lambda c, w: M.until(m, lambda _m: c(), w, poll=0.05, limit=30)))
+        if tr is None:
+            m.run()
+        if not idle:                    # ...only that it was DISPATCHED: a text
+            wait(lambda: arrived() and     # click's handler holds the lock
+                 m.read(S("evq_count"), 1)[0] == 0, what)   # until the release
+            return
+        wait(lambda: (arrived is None or arrived()) and ui_idle(), what)
+        c0 = cyc()
+        wait(lambda: cyc() - c0 >= M.GUEST_HZ / 20 and ui_idle(), what)
+
+    def key(k):
+        m.run(); h = kbhead(); m.key(k)
+        done(lambda: kbhead() != h, "the %s key to be handled" % k)
+
+    def press():
+        """the button down, and dispatched: its handler is running"""
+        t = evtail(); m.mouse(l=True)
+        done(lambda: evtail() != t, "the press to be dispatched", idle=False)
+
+    def release():
+        """the button up, and the handler it ends finished"""
+        t = evtail(); m.mouse(l=False)
+        done(lambda: evtail() != t, "the button release to be handled")
+
+    def sb_click(x, y):
+        """a scroll-bar click. The press is HANDLED before the release is
+        sent, so wd_onclick's OSAPI_EVQ_PENDING sees no click behind it and
+        draws the page itself (SPEC.md 27.7.8)."""
+        m.run(); mo.to(x, y); done()
+        t = evtail(); m.mouse(l=True)
+        done(lambda: evtail() != t, "the scroll-bar press to be handled")
+        release()
+
+    def still():
+        """before a capture: the UI idle, Word's height count finished (it
+        redraws the scroll bar), then the screen still"""
+        m.run()
+        M.until(m, lambda _m: rb("wd_hdirty") == 0 and ui_idle(),
+                "Word to finish its height count", poll=0.1, limit=60)
+        M.settle(m, quiet=0.3)
+
+    # the document: wd_onwake clears [wd_argp] and then reads and draws it
+    # under the lock, so the lock coming free after that is the load done
+    done(lambda: rb("wd_argp") == 0 and rw("wd_len") > 0, "WELCOME.DOC to open")
 
     # the height count first, so [wd_drows] stops moving under the captures
     for _ in range(400):
@@ -122,8 +198,8 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
           % (vrows, ln0, rb("wd_hasfmt"), rb("wd_hastab"), rb("wd_pxon")))
 
     def click_row(r, col=20):
-        m.run(); mo.to(tx + col*8, ty + r*8 + 3); time.sleep(0.35)
-        m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.0)
+        m.run(); mo.to(tx + col*8, ty + r*8 + 3); done()
+        press(); release()
 
     # ---- leg A: the early-out is reached at all ---------------------------
     click_row(1)
@@ -132,33 +208,31 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     reached = m.wait_stop(15)
     m.bp_exec()
     if reached: m.run()
-    time.sleep(1.0)
+    done()
     check("A: wd_eoutck is reached on a keystroke", bool(reached),
           "the early-out is never asked - every leg below is vacuous")
-    m.key("Backspace"); time.sleep(1.2)
+    key("Backspace")
 
     # ---- leg B: pixels, against a repaint the early-out never touched -----
     click_row(1, col=20)
     for ch in ("KeyA", "KeyB", "KeyC", "KeyD", "KeyE"):
-        m.key(ch); time.sleep(0.9)
+        key(ch)
     cur_typed = rw("wd_cur")         # exactly past the five, banked for leg C:
                                      # a second CLICK cannot be used to find it
                                      # again, because the text under the pointer
                                      # has moved by those five characters
-    mo.to(4, 4); time.sleep(1.0); M.settle(m)
+    mo.to(4, 4); still()
     typed = shot(m)
     top0 = rw("wd_top")
     sbx = sbr - 7
     ydn = (ty+sbb)//2 + (sbb-ty)//4
     yup = ty + (sbb-ty)//4
-    mo.to(sbx, ydn); time.sleep(0.25)
-    m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.5)
+    sb_click(sbx, ydn)
     for _ in range(12):
         if rw("wd_top") <= top0:
             break
-        mo.to(sbx, yup); time.sleep(0.25)
-        m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.5)
-    mo.to(4, 4); time.sleep(1.0); M.settle(m)
+        sb_click(sbx, yup)
+    mo.to(4, 4); still()
     check("the view came back to the same top (case arranged)",
           rw("wd_top") == top0, "%d -> %d" % (top0, rw("wd_top")))
     repainted = shot(m)
@@ -168,9 +242,8 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
 
     # ---- leg C: the bytes come back ---------------------------------------
     m.write(P("wd_cur"), bytes([cur_typed & 0xFF, (cur_typed >> 8) & 0xFF]))
-    time.sleep(0.3)
     for _ in range(5):
-        m.key("Backspace"); time.sleep(0.9)
+        key("Backspace")
     ln2 = rw("wd_len")
     t2 = m.read(rw("wd_dseg")*16, ln2); c2 = m.read(rw("wd_cseg")*16, ln2)
     bad = next((i for i in range(min(len(t2), len(txt0))) if t2[i] != txt0[i]), None)
@@ -193,8 +266,8 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     caret_row = rw("wd_ckpr")
     N = 60
     for _ in range(N):
-        m.key("KeyW"); time.sleep(0.8)
-    mo.to(4, 4); time.sleep(1.0); M.settle(m)
+        key("KeyW")
+    mo.to(4, 4); still()
     rows_after = [u16(m.read(P("wd_rows") + 2*i, 2)) for i in range(vrows)]
     moved = [(i, rows_before[i], rows_after[i]) for i in range(caret_row + 1, vrows)
              if rows_after[i] - rows_before[i] != N]
@@ -206,14 +279,12 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
           "assertion below proves nothing" % N)
     wrapped = shot(m)
     top1 = rw("wd_top")
-    mo.to(sbx, ydn); time.sleep(0.25)
-    m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.5)
+    sb_click(sbx, ydn)
     for _ in range(12):
         if rw("wd_top") <= top1:
             break
-        mo.to(sbx, yup); time.sleep(0.25)
-        m.mouse(l=True); time.sleep(0.08); m.mouse(l=False); time.sleep(1.5)
-    mo.to(4, 4); time.sleep(1.0); M.settle(m)
+        sb_click(sbx, yup)
+    mo.to(4, 4); still()
     if rw("wd_top") != top1:
         check("D: the reflow case came back to the same top", False,
               "%d -> %d" % (top1, rw("wd_top")))
@@ -238,10 +309,10 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     fired = m.wait_stop(20)
     m.bp_exec()
     if fired: m.run()
-    time.sleep(1.0)
+    done()
     check("E: the early-out FIRES on a mid-line keystroke", bool(fired),
           "wd_eoutck.rok never reached - the walk is not stopping early")
-    m.key("Backspace"); time.sleep(1.0)
+    key("Backspace")
 
     # ---- leg F: a caret move is BOUNDED, and still correct ----------------
     # Left and Right used to park [wd_mvbot] at the 0x7FFF sentinel and lay out
@@ -250,24 +321,24 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     # ONE character, so the deeper of the two rows whose signatures can differ
     # is never past [wd_ckpr] + 1.
     click_row(1, col=20)
-    m.key("ArrowRight"); time.sleep(1.0)
+    key("ArrowRight")
     mvb = rw("wd_mvbot")
     check("F: a Right arrow bounds the walk (not the sentinel)", mvb != 0x7FFF,
           "wd_mvbot = 0x%04X - Left/Right are unbounded again" % mvb)
-    m.key("ArrowLeft"); time.sleep(1.0)
+    key("ArrowLeft")
     mvb2 = rw("wd_mvbot")
     check("F: a Left arrow bounds it too", mvb2 != 0x7FFF,
           "wd_mvbot = 0x%04X" % mvb2)
 
     # ---- leg G: and the pixels survive a burst of them --------------------
     click_row(1, col=20)
-    mo.to(4, 4); time.sleep(1.0); M.settle(m)
+    mo.to(4, 4); still()
     before_moves = shot(m)
     for _ in range(8):
-        m.key("ArrowRight"); time.sleep(0.6)
+        key("ArrowRight")
     for _ in range(8):
-        m.key("ArrowLeft"); time.sleep(0.6)
-    mo.to(4, 4); time.sleep(1.0); M.settle(m)
+        key("ArrowLeft")
+    mo.to(4, 4); still()
     after_moves = shot(m)
     dm = sum(1 for p, q in zip(band(before_moves, box), band(after_moves, box))
              if p != q)

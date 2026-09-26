@@ -48,7 +48,6 @@ window table holds, so the reads are of guest state and not of the glass -
 import os
 import struct
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
@@ -126,18 +125,22 @@ def main():
             m.type_text(s)
             os88marty.settle(m)
 
+        def wait(cond, what, limit):
+            """Until `cond()`, on the GUEST's clock; False if it never is."""
+            try:
+                os88marty.until(m, lambda _: cond(), what, poll=0.3,
+                                limit=limit)
+                return True
+            except os88marty.MartyError:
+                return False
+
         def launch(line, want, limit=16.0):
             """Type it, then wait for `want` to appear among the titles."""
             to_box()
             typ(line + "\n")
-            end = time.time() + limit
-            while time.time() < end:
-                if want in titles():
-                    return True
-                if any("Cannot open" in r for r in console()[-3:]):
-                    return False
-                time.sleep(1.0)
-                os88marty.settle(m)
+            wait(lambda: want in titles() or
+                 any("Cannot open" in r for r in console()[-3:]),
+                 "%r to open %r or be refused" % (line, want), limit)
             return want in titles()
 
         to_box()
@@ -183,12 +186,9 @@ def main():
         before = len(titles())
         typ("NOSUCHPG\n")
         os88marty.settle(m)
-        end = time.time() + 12.0
-        while time.time() < end and not any(("Bad command" in r or
-                                             "Cannot open" in r)
-                                            for r in console()[-3:]):
-            time.sleep(1.0)
-            os88marty.settle(m)
+        wait(lambda: any(("Bad command" in r or "Cannot open" in r)
+                         for r in console()[-3:]),
+             "NOSUCHPG to be answered", 12.0)
         tail = console()[-3:]
         if any("Cannot open" in r for r in tail):
             fail("a bare name matching NO extension answered %r - it reached "
@@ -210,11 +210,8 @@ def main():
         before = len(titles())
         typ("NOSUCH.O88\n")
         os88marty.settle(m)
-        end = time.time() + 12.0
-        while time.time() < end and not any("Cannot open" in r
-                                            for r in console()[-3:]):
-            time.sleep(1.0)
-            os88marty.settle(m)
+        wait(lambda: any("Cannot open" in r for r in console()[-3:]),
+             "NOSUCH.O88 to be refused", 12.0)
         tail = console()[-3:]
         if not any("Cannot open NOSUCH.O88" in r for r in tail):
             fail("a .O88 that is not there said %r, want 'Cannot open "
@@ -247,22 +244,15 @@ def main():
                  "is not testing the full screen at all")
         else:
             typ("PAINT.O88\n")
-            end = time.time() + 25.0
-            while time.time() < end:
-                if not m.read((boxseg() << 4) + dm["dos_fsxup"], 1)[0]:
-                    break
-                time.sleep(1.0)
-                os88marty.settle(m)
+            wait(lambda: not m.read((boxseg() << 4) + dm["dos_fsxup"], 1)[0],
+                 "the console's bracket to come down", 25.0)
             up = m.read((boxseg() << 4) + dm["dos_fsxup"], 1)[0]
             if up:
                 fail("the console's bracket is STILL up after a .O88 was "
                      "typed into the full screen - [dos_fsxgo] is what brings "
                      "it down, and without it the wake is never dispatched "
                      "(SPEC.md 96.33.16, 96.33.17)")
-            end = time.time() + 20.0
-            while time.time() < end and "Paint" not in titles():
-                time.sleep(1.0)
-                os88marty.settle(m)
+            wait(lambda: "Paint" in titles(), "Paint to open", 20.0)
             if "Paint" not in titles():
                 fail("the bracket came down and no window titled 'Paint' "
                      "opened: %r" % titles())

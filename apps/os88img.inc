@@ -27,8 +27,8 @@
 ; module that names its own bss names it at an ABSOLUTE address, bss begins
 ; where the image ends, and two packages have different image sizes - so an
 ; include with private variables cannot serve a package that OVERLAYS it and
-; one that does not. WORD reaches this through WORD.OVL; PAINT would reach it
-; resident. For the same reason IMG_ERR is a NUMBER and not a string pointer:
+; one that does not. SCRIBE reaches this through SCRIBE.OVL; PAINT would
+; reach it resident. For the same reason IMG_ERR is a NUMBER and not a string pointer:
 ; a string in an overlaid module is at a module-relative offset, and a
 ; resident caller reading it through DS gets whatever happens to sit there -
 ; the exact bug 93.2 records against an overlaid rasterizer. The caller words

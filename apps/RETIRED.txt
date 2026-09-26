@@ -42,6 +42,12 @@ retired    pacman      # SPEC.md 89.12. A failed port, superseded by DOT
                        # Dot Delirium is developed" and the owner has since
                        # called it: it is not coming back. Source and SPEC.md
                        # 89 stay as the record; `make pacman` still builds it.
+retired    modplug     # SPEC.md 56.15. Superseded rather than failed:
+                       # Tracker's windowed face (SPEC.md 45.21) is ModPlug's
+                       # player rebuilt to the tree's standards, so two MOD
+                       # players had become one player and one regression
+                       # surface. The owner called it. Source and SPEC.md 56
+                       # stay as the record; `make modplug` still builds it.
 
 instrument wire        # SPEC.md 78.9. WIREFRAME is the bench for the draw
                        # orders and for uilat, not an application - `all`

@@ -67,7 +67,7 @@ def package(flags=0x23, glyph=GLYPH, reserved=bytes(8), assoc=True,
     if entry is None:
         entry = code_at
     img = bytearray(b"".join(parts) + body)
-    struct.pack_into("<HBBHHHH", img, 0, 0x384F, 3, flags, 0, entry,
+    struct.pack_into("<HBBHHHH", img, 0, 0x384F, os88pkg.PKG_FMT, flags, 0, entry,
                      len(img), 0)
     img[12:15] = bytes((0xFF, 0xD5, 0xCB))
     img[16:20] = b"TEST"

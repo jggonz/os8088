@@ -83,8 +83,21 @@ def main(argv):
     m = os88marty.launch(IMG, apps=APPS, machine=MACHINE, boot=False)
     try:
         m.go()
-        os88marty.guest_sleep(m, 25)                        # a desktop, and the
-        m.pause()                                           # identify window over
+        # a desktop, and the identify window over: `mouse_init` is behind the
+        # splash, so the splash ENDING is the boot done (tests/postboot.py's
+        # reading of [spl_live]: up, then down)
+        live = os88sym.linear("spl_live")
+        entry = os88sym.linear("cold_entry")
+        seen = {"up": False}
+
+        def booted(_):
+            if not seen["up"]:
+                seen["up"] = (m.read(live, 1)[0] == 1
+                              and m.read(entry, 1)[0] == 0xE9)
+                return False
+            return m.read(live, 1)[0] == 0
+        os88marty.until(m, booted, "the splash to end", poll=0.1, limit=60)
+        m.pause()
         regs = m.regs()
         ss, sp0 = regs["ss"], regs["sp"]
         ret = sym["mou_eoi"]                                # any address to break on

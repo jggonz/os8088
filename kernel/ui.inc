@@ -1262,10 +1262,10 @@ ui_rdown:
     jnz .ret                    ; title bar, close/minimize/grow box: the
                                 ; chrome has no context menu
 
-    push si                     ; A WINDOW THAT ASKED FOR THE RIGHT BUTTON
-    call wm_rch_slot            ; ITSELF (SPEC.md 13.11) gets it before any of
-    mov bp, [si]                ; the below, and instead of it: the handler is
-    pop si                      ; a side-table word, so a window that never
+                                ; A WINDOW THAT ASKED FOR THE RIGHT BUTTON
+                                ; ITSELF (SPEC.md 13.11) gets it before any of
+    mov bp, [bx+W_ONRC]         ; the below, and instead of it: the handler is
+                                ; a record word, so a window that never
                                 ; installed one costs this path one read. BX
                                 ; is already SI - the compare above is what
                                 ; brought us here - so wm_rch_slot's input is
@@ -1374,16 +1374,29 @@ ui_tdbl:
 ; on a 4.77MHz machine as a wait. The outline is XOR-erased before the clamps
 ; below, so when neither coordinate changes the screen is already correct.
 ; -----------------------------------------------------------------------------
-ui_drag:
-    KFZ 26                      ; a title-bar drag
+; -----------------------------------------------------------------------------
+; ui_track - the XOR-outline tracking loop ui_drag and ui_grow SHARE (size
+;            pass 4: it was written out twice, word for word bar the step)
+; in:  BX = window, CX/DX = the press point, SI = the per-pass STEP (a near
+;      proc that turns [mouse_x]/[mouse_y] into ui_curx/cury/dragw/dragh; it
+;      may clobber AX/BX/CX/DX and must keep SI), DI = W_X for a drag (the
+;      origin is the window's POSITION) or W_W for a grow (its SIZE)
+; out: the outline ERASED and the gfx lock HELD; AX..DX, DI clobbered
+; SI survives the loop because every routine in it preserves it: gfx_lock,
+; gfx_unlock, kbm_pollm, task_yield and evq_mup clobber flags only, and
+; ui_drag_xor only AX..DX.
+; -----------------------------------------------------------------------------
+ui_track:
     mov [ui_dragwin], bx
-    mov [ui_startx], cx         ; mousedown point = drag origin
+    mov [ui_startx], cx         ; mousedown point
     mov [ui_starty], dx
-    mov ax, [bx + W_X]
+    mov ax, [bx + di]           ; drag: orig = the position; grow: the size
     mov [ui_origx], ax
+    mov ax, [bx + di + 2]
+    mov [ui_origy], ax
+    mov ax, [bx + W_X]
     mov [ui_curx], ax           ; outline starts on the window rect
     mov ax, [bx + W_Y]
-    mov [ui_origy], ax
     mov [ui_cury], ax
     mov ax, [bx + W_W]
     mov [ui_dragw], ax
@@ -1394,7 +1407,6 @@ ui_drag:
     call ui_drag_xor            ; draw the outline (VRAM-direct, SPEC.md 32:
                                 ; a transient overlay never enters the back
                                 ; buffer, so no flush is needed here)
-
 .track:
     ; The linger below stretches each pass to a whole tick, so the button is
     ; tracked by EDGE, not level: the ISR queues every press/release, and a
@@ -1403,11 +1415,7 @@ ui_drag:
     mov di, ui_ev
     call evq_mup                ; ...and ANYTHING ELSE is dropped on the floor
     jnc .release                ; inside it (SPEC.md 74.1.1), the wake among
-                                ; them owed back through wm_wake_eaten - its
-                                ; promise would otherwise outlive its record
-                                ; and deafen the window for good. Exits with
-                                ; the outline drawn and the lock held
-.no_evt:
+                                ; them owed back through wm_wake_eaten
     test byte [mouse_btn], 1    ; fallback: the EVT_MUP was dropped
     jz .release                 ; (queue full) - the level still says so
     call ui_drag_xor            ; erase...
@@ -1415,7 +1423,22 @@ ui_drag:
     call kbm_pollm              ; the keyboard mouse drags too (SPEC.md 9.6)
     call task_yield             ; background tasks stay live here
     call gfx_lock
-    mov ax, [mouse_x]           ; outline pos = orig + (mouse - start)
+    call si                     ; the step: where the outline is now
+    call ui_drag_xor            ; redraw every pass, moved or not
+    ; Linger with the outline drawn (lock held) until the next timer tick:
+    ; without it the cursor blits inside gfx_unlock/gfx_lock dominate the
+    ; loop and the outline is dark more often than lit.
+    mov ax, [ticks]
+.linger:
+    call task_yield
+    cmp ax, [ticks]
+    je .linger
+    jmp .track
+.release:
+    jmp ui_drag_xor             ; erase; the lock stays held to the end
+
+ui_drag_step:                   ; outline pos = orig + (mouse - start)
+    mov ax, [mouse_x]
     sub ax, [ui_startx]
     add ax, [ui_origx]
     mov [ui_curx], ax
@@ -1423,22 +1446,13 @@ ui_drag:
     sub ax, [ui_starty]
     add ax, [ui_origy]
     mov [ui_cury], ax
-    call ui_drag_xor            ; redraw every pass, moved or not
+    ret
 
-    ; Linger with the outline drawn (lock held) until the next timer tick.
-    ; The erase window that follows is short but includes the unlock/yield
-    ; that lets background tasks draw; without this linger the cursor blits
-    ; inside gfx_unlock/gfx_lock dominate the loop and the outline is dark
-    ; more often than lit.
-    mov ax, [ticks]
-.linger:
-    call task_yield
-    cmp ax, [ticks]
-    je .linger
-    jmp .track
-
-.release:
-    call ui_drag_xor            ; erase; lock stays held to the end
+ui_drag:
+    KFZ 26                      ; a title-bar drag
+    mov si, ui_drag_step
+    mov di, W_X
+    call ui_track               ; ...returns with the outline erased, locked
 
     ; clamp x: 0 <= x and x + w <= [vid_w] (signed - x may have gone negative)
     mov ax, [ui_curx]
@@ -1472,8 +1486,12 @@ ui_drag:
     mov ax, [vid_ymax]
 .y_high_ok:
 %ifdef KERN_BIG
-    call ui_ylow                ; SPEC.md 39.16.2: MBAR_H is the PRIMARY's
-    cmp ax, si                  ; floor, and no other card has a menu bar
+    mov si, MBAR_H              ; SPEC.md 39.16.2: MBAR_H is the PRIMARY's
+    cmp byte [vid_ndisp], 1     ; floor, and no other card has a menu bar -
+    jbe .ylow                   ; so on another display the floor is its own
+    EXTCALL EXT_YLOW            ; vy, where the drag's PROPOSED x lands
+.ylow:                          ; (ui_ylow, EXTD.DRV's now: SPEC.md 39.19.6)
+    cmp ax, si
     jge .y_low_ok
     mov ax, si
 %else
@@ -1502,7 +1520,10 @@ ui_drag:
 
 %ifdef KERN_BIG
     mov bx, [ui_dragwin]        ; THE SIZE THIS WINDOW WANTS, BEFORE ANY OF THE
-    call ui_drag_size           ; CLAMPS BELOW SEE IT (SPEC.md 11.100.3/11.100.4)
+    EXTCALL EXT_LAND            ; CLAMPS BELOW SEE IT (SPEC.md 11.100.3/11.100.4)
+    cmc                         ; EXTD.DRV answers CF = 1 NOT moved, so
+                                ; mod_gone - no image, one display - reads as
+                                ; "not moved" here (SPEC.md 39.19.6)
     pushf                       ; - CF = 1 if the size moved, which the drag
                                 ; cache may not survive.
                                 ;
@@ -1609,64 +1630,7 @@ ui_drag:
 .done:
     jmp gfx_unlock              ; NO second gfx_lock here - already held (§7)
 
-; -----------------------------------------------------------------------------
-; ui_drag_size - what size should a dropped window have? (SPEC.md 11.100.3/.4)
-; in:       BX = the window, W_X/W_Y already clamped to where it was dropped
-; out:      CF = 1 if W_W or W_H changed, CF = 0 if neither did. Every register
-;           preserved.
-;
-; TWO THINGS, and they are for the two halves of the tree. Every window gets
-; 11.100.3: the size it WANTS comes back out of the natural bank, so the clamps
-; below re-derive from that rather than from whatever the last drag's clamp
-; left behind - which is what makes a walk across the seam and home again
-; reversible instead of costing sixty rows a trip.
-;
-; A window WITHOUT a grow box also gets 11.100.4: landing wholly on a display of
-; a different adapter takes its own declared size for that adapter. One WITH a
-; grow box does not, and that is the rule rather than an optimisation - its
-; size is one the user chose, and a user outranks an application.
-;
-; The straddle test is why this is not simply "the kind changed": a frame still
-; over both cards belongs to 39.16.3, and a preference applied there would be
-; cut by it in the same breath.
-; -----------------------------------------------------------------------------
-%ifdef KERN_BIG
-ui_drag_size:
-    push ax
-    push cx
-    push dx
-    mov cx, [bx+W_W]            ; what it had, so the answer is a comparison
-    mov dx, [bx+W_H]            ; rather than a promise
-    push si
-    push di
-    mov si, [bx+W_X]            ; ...and the ORIGIN too, because wm_land_snap
-    mov di, [bx+W_Y]            ; can move a window that kept its size
-    call wm_land_fit            ; ONE question: has the adapter changed, and if
-                                ; so what size does this window want here?
-                                ; (docs/plans/completed/WINDOW-SIZING-PLAN.md 12)
-    cmp si, [bx+W_X]
-    jne .moved2
-    cmp di, [bx+W_Y]
-.moved2:
-    pop di
-    pop si
-    jne .moved
-    cmp cx, [bx+W_W]
-    jne .moved
-    cmp dx, [bx+W_H]
-    jne .moved
-    pop dx
-    pop cx
-    pop ax
-    clc
-    ret
-.moved:
-    pop dx
-    pop cx
-    pop ax
-    stc
-    ret
-%endif
+; (ui_drag_size: EXTD.DRV's EXT_LAND, kernel/extmod.inc - SPEC.md 39.19.6)
 
 ; -----------------------------------------------------------------------------
 ; ui_drag_phase - put a dropped window's x where the drag cache can replay it
@@ -1854,42 +1818,6 @@ ui_drag_xor:
 ; into. Clamping into the display the window CAME from would be the smaller
 ; move, and the record no longer holds that origin by the time this runs.
 ; -----------------------------------------------------------------------------
-; -----------------------------------------------------------------------------
-; ui_ylow - the lowest y a title bar may take, where this window is
-;           (SPEC.md 39.16.2)
-;
-; in:       BX = the window; [ui_curx] = the x the drag is proposing
-; out:      SI = the floor
-; clobbers: SI, flags
-;
-; MBAR_H on display 0 and the display's own vy anywhere else - because the
-; menu bar is the primary's and nothing else has one. Asked with the drag's
-; PROPOSED x rather than the window's current one: the clamp runs before
-; W_X is stored on some passes, and a window being dragged onto the second
-; monitor must be floored by where it is GOING.
-; -----------------------------------------------------------------------------
-ui_ylow:
-    mov si, MBAR_H
-    cmp byte [vid_ndisp], 1
-    jbe .out
-    push ax
-    push bx
-    push di
-    mov ax, [ui_curx]
-    mov bx, MBAR_H              ; any row the primary's band contains, so a
-                                ; point on display 0 resolves to it
-    call vid_disp_of
-    or al, al
-    jz .done                    ; display 0 keeps the chrome's floor
-    call vid_ctx_ptr
-    mov si, [di+VID_CTX_VY]
-.done:
-    pop di
-    pop bx
-    pop ax
-.out:
-    ret
-
 ui_drag_dead:
     cmp byte [vid_ndisp], 1
     jbe .out
@@ -1921,39 +1849,7 @@ ui_drag_dead:
 ; release. The gfx lock is only ever released while the outline is erased,
 ; and the release path never re-takes the held lock (SPEC.md 7/13).
 ; -----------------------------------------------------------------------------
-ui_grow:
-    mov [ui_dragwin], bx
-    mov [ui_startx], cx         ; mousedown point
-    mov [ui_starty], dx
-    mov ax, [bx + W_X]
-    mov [ui_curx], ax           ; outline origin: fixed for the whole grow
-    mov ax, [bx + W_Y]
-    mov [ui_cury], ax
-    mov ax, [bx + W_W]
-    mov [ui_origx], ax          ; frame size at mousedown...
-    mov [ui_dragw], ax          ; ...and the tracked outline size
-    mov ax, [bx + W_H]
-    mov [ui_origy], ax
-    mov [ui_dragh], ax
-
-    call gfx_lock
-    call ui_drag_xor            ; draw the outline (VRAM-direct, SPEC.md 32)
-
-.track:
-    mov di, ui_ev               ; button tracked by EDGE, like ui_drag: a
-    call evq_mup                ; release + fast re-press inside one pass
-    jnc .release                ; must still end the resize. Anything else is
-                                ; drained mid-resize and a wake among them is
-                                ; owed back (SPEC.md 74.1.1). Exits with the
-                                ; outline drawn and the lock held
-.no_evt:
-    test byte [mouse_btn], 1    ; fallback: the EVT_MUP was dropped
-    jz .release
-    call ui_drag_xor            ; erase...
-    call gfx_unlock             ; ...only then may the lock drop
-    call kbm_pollm              ; ...and resizes (SPEC.md 9.6)
-    call task_yield
-    call gfx_lock
+ui_grow_step:
     mov ax, [mouse_x]           ; tracked size = orig + (mouse - start),
     sub ax, [ui_startx]         ; clamped low so the XOR rect stays
     add ax, [ui_origx]          ; well-formed
@@ -1962,10 +1858,10 @@ ui_grow:
     mov ax, WMIN_W
 .wok:
 %ifndef NOSIZESNAP
-    push bx                     ; THE OUTLINE SNAPS TOO (SPEC.md 11.94.5), so
+                                ; THE OUTLINE SNAPS TOO (SPEC.md 11.94.5), so
     mov bx, [ui_dragwin]        ; the frame that lands is the frame the hand
     call wm_snap_w              ; let go of - the release below already ends in
-    pop bx                      ; wm_snap_win, so without this the window would
+                                ; wm_snap_win, so without this the window would
 %endif                          ; jump up to 7px inside the rectangle on the
     mov [ui_dragw], ax          ; glass. The grow box then steps 8px across
     mov ax, [mouse_y]
@@ -1976,17 +1872,12 @@ ui_grow:
     mov ax, WMIN_H
 .hok:
     mov [ui_dragh], ax
-    call ui_drag_xor            ; redraw every pass, moved or not
+    ret
 
-    mov ax, [ticks]             ; linger lit until the next tick (the same
-.linger:                        ; duty-cycle fix as ui_drag)
-    call task_yield
-    cmp ax, [ticks]
-    je .linger
-    jmp .track
-
-.release:
-    call ui_drag_xor            ; erase; lock stays held to the end
+ui_grow:
+    mov si, ui_grow_step
+    mov di, W_W
+    call ui_track               ; ...returns with the outline erased, locked
     mov bx, [ui_dragwin]
 
     ; Where it WAS is the whole of what a resize can have uncovered (SPEC.md
@@ -2101,7 +1992,7 @@ ui_grow:
                                 ; back 266x180. Banked HERE, where the take
                                 ; reads it, that take is a no-op and the clamp
                                 ; still bounds the answer
-    call wm_land_fit            ; a grow can push a frame across the seam too
+    EXTCALL EXT_LAND            ; a grow can push a frame across the seam too
 %endif                          ; (SPEC.md 39.16.3)
     call wm_snap_win            ; ...and the ALIGNED x is a question about the
                                 ; WIDTH now (SPEC.md 11.95.2): a window shrunk
@@ -2476,7 +2367,7 @@ ui_pcmd:    dw 0                ; posted CMD_*, 0 = none (see above)
 ; on TASKMGR.O88 in a Disk window is unaffected and still opens as many as
 ; you like - that is the package rule, and this is the menu item's rule.
 ; =============================================================================
-ui_s_nofile: db 'It is not in '   ; ONE 'SYSTEM',0 serves both the
+ui_s_nofile: db 'Not in '        ; ONE 'SYSTEM',0 serves both the
 ui_s_tmdir:  db 'SYSTEM', 0      ; folder name and the tail of the notice that
                                  ; says the file is not in it - two labels
                                  ; over one `db`, so nothing may be inserted
@@ -2500,32 +2391,30 @@ ui_s_tmname: db 'TaskMgr', 0     ; the 16-byte header name inst_set_name_x
 ; It exists because the Wire's desktop zone (SPEC.md 26.7) opens a package out
 ; of SYSTEM by exactly the Task Manager's route - front the running instance
 ; by name, else bank the volume, mount the boot disk, step into SYSTEM,
-; ld_run_name, put the volume back, and say why in a notice on failure - and a
+; ld_run_name, put the volume back, and say why in a TOAST on failure - and a
 ; second copy of eighty bytes of that is the kind of copy that drifts.
 ; -----------------------------------------------------------------------------
 UO_FILE  equ 0                  ; dw -> the 8.3 file name, in SYSTEM
 UO_NAME  equ 2                  ; dw -> the 16-byte header name a running
                                 ;       instance carries (SPEC.md 20.2)
-UO_TTL   equ 4                  ; dw -> the failure notice's title
-UO_LEAD  equ 6                  ; dw -> ...and its lead line
-UO_ERRS  equ 8                  ; dw -> six words, indexed by LD_*
-UO_NOFI  equ 10                 ; dw -> the "not in SYSTEM" reason, which is
-                                ;       not an LD_* code (SPEC.md 21.4 gives
-                                ;       LD_EBAD for both "not a package" and
-                                ;       "not there")
-UO_SIZE  equ 12
+UO_SIZE  equ 4
+; A failure is a TOAST now (kernel size pass 4), exactly what a Disk window's
+; launch says: `No system disk in A:`, `Not in SYSTEM`, or the Disk
+; window's own fm_stattab verdict. It used to be a notice WINDOW with a title
+; and a lead line naming the program - the Task Manager predated toasts
+; (SPEC.md 59) - so the descriptor carried a title, a lead line, a verdict
+; table and a not-there string, and the service zone's driver registered its
+; own lead line. The user has just clicked the thing; the toast need not name
+; it.
 
 ui_d_tm:
-    dw ui_s_tmfile, ui_s_tmname, ui_s_tmttl, ui_s_tmlead, ui_tm_errs
-    dw ui_s_nofile
+    dw ui_s_tmfile, ui_s_tmname
 %ifndef KERN_SMALL
-; ...and the DESKTOP SERVICE zone's (SPEC.md 26.7), whose first four words
-; are .bss the registering driver filled: the file it launches, its package's
-; header name, the caption (which is the notice's title too) and the lead line
-; 'Cannot open <caption>:' the slot composed. Only the two tables are .text.
+; ...and the DESKTOP SERVICE zone's (SPEC.md 26.7), whose two words are .bss
+; the registering driver filled: the file it launches and its package's
+; header name.
 ui_d_svc:
-    dw desk_svc_file, desk_svc_name, desk_svc_cap, desk_svc_lead, ui_tm_errs
-    dw ui_s_nofile
+    dw desk_svc_file, desk_svc_name
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -2602,7 +2491,7 @@ ui_sys_open:
     jc .fail
     call ui_tm_sysdir           ; into SYSTEM (SPEC.md 28.3); CF=1 = no such
     mov bx, [ui_desc]           ; folder, which reads to the user as the file
-    mov si, [bx+UO_NOFI]        ; not being there, because it is not
+    mov si, ui_s_nofile         ; not being there, because it is not
     jc .fail
 
     mov word [ld_pwin], 0       ; no poster: this is not a Disk window's load,
@@ -2628,25 +2517,28 @@ ui_sys_open:
     call COLD_SEG:dwf_dskw_stat ; one message to a user (SPEC.md 28.3). The
     jnc .code                   ; index resolver could tell them apart because
     pop ax                      ; dsk_find_name failed first; by name they
-    mov bx, [ui_desc]           ; arrive as one code, so ask - on the FAILURE
-    mov si, [bx+UO_NOFI]        ; path only, still standing in SYSTEM, and for
-    jmp short .fail             ; the sector ld_res_name has just read.
+    mov si, ui_s_nofile         ; arrive as one code, so ask - on the FAILURE
+    jmp short .fail             ; path only, still standing in SYSTEM, and for
+                                ; the sector ld_res_name has just read.
 .code:                          ; dwf_dskw_stat is a far call and answers in
     pop ax                      ; BX, so the descriptor is re-read after it
+    cmp byte [ld_said], 0       ; SPEC.md 20.12.4: the entry proc's own toast
+    je .tab                     ; is up and names the reason better - say
+    mov byte [ld_said], 0       ; nothing, as ld_say_status does for a Disk
+    jmp short .back             ; window's load
+.tab:
     mov bl, al
     xor bh, bh
     shl bx, 1
-    mov si, [ui_desc]
-    add bx, [si+UO_ERRS]
-    mov si, [bx]
+    mov si, [bx+fm_stattab]     ; the Disk window's verdicts (SPEC.md 21)
 .fail:
-    push si                     ; the volume FIRST, then the notice: putting
-    call ui_tm_back             ; it back touches the floppy and the notice
-    pop si                      ; takes the gfx lock, and neither wants the
-    mov bx, [ui_desc]           ; other held while it runs
-    mov di, [bx+UO_TTL]
-    mov bx, [bx+UO_LEAD]
-    call ui_note
+    push si                     ; the volume FIRST, then the toast: putting
+    call ui_tm_back             ; it back touches the floppy
+    pop si
+    push ds
+    pop es                      ; toast_show reads ES:SI; kret_es restores ES
+    xor cx, cx                  ; TOAST_TICKS
+    call toast_show
     jmp short .out
 .back:
     call ui_tm_back
@@ -2723,20 +2615,8 @@ ui_tm_cwd:  dw 0                ; the directory and drive to go back to. In
 ui_tm_drv:  db 0                ; .text: -f bin zeroes no .bss, and A:'s root
                                 ; is the right answer before the first load
 
-ui_tm_errs:                     ; indexed by LD_* (loader.inc)
-    dw ui_s_nofile              ; LD_OK never reaches here
-    dw ui_s_dskerr              ; LD_EDISK
-    dw ui_s_badpkg              ; LD_EBAD
-    dw ui_s_toobig              ; LD_EBIG
-    dw ui_s_abort               ; LD_EABORT - it loaded and refused itself,
-                                ; and for this package the dominant cause is
-                                ; wm_create failing (window table full), so
-                                ; "not a valid package" would be a lie
-    dw ui_s_nomem               ; LD_ENOMEM
-
 ui_s_tmttl:  db 'Task Manager', 0
-ui_s_tmlead: db 'Cannot open the Task Manager:', 0
-ui_s_nodisk: db 'No system disk in drive '
+ui_s_nodisk: db 'No system disk in '
 ui_s_nodisk_l: db 'A:', 0       ; the LETTER, stamped once by dsk_boot_from
                                 ; (SPEC.md 52.10.3) - a label rather than an
                                 ; offset, so rewording the message cannot
@@ -2745,11 +2625,6 @@ ui_s_nodisk_l: db 'A:', 0       ; the LETTER, stamped once by dsk_boot_from
                                 ; `equ` this, the formatter's swap prompt
                                 ; being the only standalone 'A:' of the six.
                                 ; Reword the message; do not delete the label
-ui_s_dskerr: db 'Disk error reading it', 0
-ui_s_badpkg: db 'It is not a valid package', 0
-ui_s_toobig: db 'It is too large', 0
-ui_s_abort:  db 'It refused to start', 0
-ui_s_nomem:  db 'Not enough memory to open it', 0
 
 ui_desc:    dw ui_d_tm          ; ui_sys_open's descriptor for the load in
                                 ; hand. In .text with a resting value for the
@@ -2810,89 +2685,6 @@ ui_sys_find:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; ui_note - the kernel's one-line notice window
-; in:  SI = a NUL reason, BX = the line above it, DI = the window's title;
-;      UI task, no lock held
-; out: nothing (all registers preserved)
-;
-; All three strings come from the CALLER. They used to be one caller's: the
-; title was 'Task Manager' and the lead 'Cannot open the Task Manager:',
-; baked in because ui_tm_open was the only thing that raised a notice. When
-; assoc_run (SPEC.md 54.4) became the second, a document whose program was
-; not on the disk reported "Cannot open the Task Manager" over a window
-; titled Task Manager - a message about a component the user had not
-; mentioned, in place of the one that had actually failed.
-;
-; The species is the file dialog's (SPEC.md 38): a bare wm_create'd window
-; this module owns, with no instance behind it - so no dock tile, no Task
-; Manager row, and a close box that reduces to wm_hide, which is exactly what
-; dismissing a notice means. ONE window, created on first use and shown
-; again after that, so W_TITLE is restamped per call; [ui_note_win] lives in
-; .text because -f bin zeroes no .bss and this is read before anything writes
-; it (the fdlg_win precedent).
-; -----------------------------------------------------------------------------
-ui_note_tpl: dw 150, 150, 288, 78, ui_s_tmttl, ui_note_paint, 0, 0
-ui_note_win: dw 0
-ui_note_msg: dw 0
-ui_note_lead: dw 0
-
-ui_note:
-    push ax
-    push bx
-    push si
-    push di
-    push es
-    push ds
-    pop es                      ; wm_create reads the template through ES:SI
-                                ; and stamps W_SEG from ES (SPEC.md 11/20.1) -
-                                ; a caller arriving with ES elsewhere would
-                                ; register a garbage PACKAGE window whose
-                                ; callbacks far-call into that segment
-    mov [ui_note_msg], si
-    mov [ui_note_lead], bx
-    call gfx_lock
-    mov bx, [ui_note_win]
-    or bx, bx
-    jnz .have
-    mov si, ui_note_tpl
-    call wm_create              ; CF = the window table is full, in which case
-    jc .out                     ; the notice is simply not shown - there is
-    mov [ui_note_win], bx       ; nothing further to fall back to
-%ifdef WM_ANIM
-    or word [bx+W_FLAGS], WF_NOANIM  ; SPEC.md 11.99.2: this window is REUSED,
-                                ; so it comes back over and over in one session
-%endif
-.have:
-    mov [bx+W_TITLE], di        ; the window is reused, so the caption belongs
-                                ; to whichever caller last asked for it. Set
-                                ; before wm_show, which draws the frame whole
-    call wm_show                ; ...or bring an already-dismissed one back
-.out:
-    call gfx_unlock
-    pop es
-    pop di
-    pop si
-    pop bx
-    pop ax
-    ret
-
-ui_note_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call gfx_pen_live           ; CBLACK and the disabled flag clear (47)
-    mov bx, si
-    mov dx, [bx+W_Y]
-    add dx, TITLE_H + 16
-    mov si, [ui_note_lead]
-    call app_about_center
-    add dx, 16
-    mov si, [ui_note_msg]
-    call app_about_center
-    jmp kret_si
 
 ; -----------------------------------------------------------------------------
 ; ui_cmd - act on one of the kernel's own menu commands
@@ -3048,7 +2840,7 @@ ui_rb_go:                       ; the last instruction of the GUI, and a name
 %endif
 
 ; -----------------------------------------------------------------------------
-; ui_reboot_post - API slot 0x0368 (SPEC.md 20.10). AL in, no answer.
+; ui_reboot_post - API slot 0x0298 (SPEC.md 20.10). AL in, no answer.
 ;
 ; AL = 0 restart the way the System menu does, flushing the Control Panel's
 ; settings on the way out; AL non-0 restart WITHOUT going near a disk. The

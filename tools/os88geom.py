@@ -63,7 +63,8 @@ the answer. It compares against `_KNOWN` now - mirrored AND derived.
 
 AND A FOURTH TIME, one level down from any of them: **the tree builds TWO
 kernels off one source**, and this module mirrored ONE of them without saying
-so. `WIN_SIZE` is 34 on kern_big and 28 on kern_small (SPEC.md 13.7's
+so. `WIN_SIZE` was 34 on kern_big and 28 on kern_small (72 / 65 since size
+pass 4 folded the side tables in; SPEC.md 13.7's
 W_ONMOUSEUP pair and 13.9's timers are kern_big's), the parser below took the
 FIRST `equ` it saw, and `verify` compared it against that same first `equ` -
 so the guard agreed with itself and every script pointed at kern_small
@@ -138,7 +139,7 @@ _MIRROR = {
     # kernel with the OTHER arm's %ifdef folded out rather than taking the
     # first `equ` in the file - which is what it did, and which made the guard
     # agree with itself while every kern_small script decoded garbage.
-    "WIN_SIZE": ("kernel/wm.inc", {"big": 34, "small": 28}),
+    "WIN_SIZE": ("kernel/wm.inc", {"big": 72, "small": 65}),
     "MAX_WIN": ("kernel/wm.inc", {"big": 12, "small": 6}),
     # kernel/driver.inc - a driver row (SPEC.md 51.2). DRVR_SEG is "is it
     # loaded", which is the only way a host-side script can SEE a driver

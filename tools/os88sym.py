@@ -88,7 +88,8 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                # own row says where the claim went (tests/xmcheck.py does
                # exactly that for XMEM.DRV, SPEC.md 41.12).
                ".modc": None, ".modf": None, ".modl": None, ".modh": None,
-               ".modp": None, ".modd": None, ".modk": None, ".modmap": None}
+               ".modp": None, ".modd": None, ".modk": None, ".modx": None,
+               ".modmap": None}
 # Every section either kernel emits, and the list is the UNION of both builds:
 # `.modh` is hibernate's (SPEC.md 87) and `.modp`/`.modd` are kern_small's
 # (SPEC.md 22.3.0, 38.0), so no kernel emits all six module sections and each
@@ -543,6 +544,18 @@ def linear(name, defines=()):
         raise KeyError("no kernel symbol %r (a package's symbols are in its "
                        "own segment and are not here)" % name)
     return segment_of(name, defines) * 16 + s[name]
+
+
+def wfield(slot, field, defines=()):
+    """The linear address of window SLOT's record field FIELD (a W_* equate).
+
+    The per-slot window state (W_ONSZ, W_MINW, W_NATR, W_ZOOMR, W_SUEXT,
+    W_PKIND, ...) lives IN the record since kernel size pass 4, so a reader
+    strides wm_wins by the kernel's own WIN_SIZE rather than indexing a side
+    table - and takes both numbers from the map rather than mirroring them.
+    """
+    e = equates(defines)
+    return linear("wm_wins", defines) + slot * e["WIN_SIZE"] + e[field]
 
 
 def main(argv):

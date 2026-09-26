@@ -44,7 +44,7 @@ HDR = 32
 # has read the header, so raising it costs every driver load on every machine.
 BSS_MAX_PARA = 255
 MAGIC = 0x384F                  # 'O','8'
-DRV_VER = 4
+DRV_VER = 7   # 4 until the API table moved (SPEC.md 20.2.0)
 MAX_SIZE = 40 * 1024            # DRV_MAX_KB in kernel/driver.inc
 # 0x40 is NOT a kernel driver class: it is a driver's own loadable half
 # (OS88_OVERLAY, SPEC.md 52.11), stamped by this tool because the header, the

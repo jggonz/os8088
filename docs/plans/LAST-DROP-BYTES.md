@@ -136,6 +136,16 @@ the day the small build has less, a body added to `.ovl` breaks one kernel and
 not the other, and the cheap answer — move an `.ovlw` body across — stops
 being available in the direction it is needed.
 
+> **THE RULE IS BROKEN, ON PURPOSE, SINCE SPEC.md 2.5.3.3.** `kmain`'s boot
+> half is a blob body (`kmain_o`) on both kernels now, and it cost kern_small's
+> blob more than kern_big's: on that tree `.ovl` is 1,942 of 1,984 on
+> kern_small (**42 free**) against 1,832 on kern_big (152 free), so
+> **kern_small binds the blob**. The owner took the trade for 334 / 248
+> resident bytes. The way back the paragraph above worries about is still
+> there, smaller: an `OVBCALL` body can go to kern_small's `.ovlw`, which has
+> 34 bytes of its 1,536-byte region left. The figures in the table above are
+> the older tree's; re-measure.
+
 **Those bytes are ONE POOL.** `OVL_AT` is a byte offset with no alignment
 requirement — the only constraints are the two `%if`s above — and moving it costs
 nothing at all: `kernel.asm` says so in the file's own words, *"the blob is
@@ -742,6 +752,11 @@ justification.
 
 #### 7.7.7 OPEN — the SIXTEEN refusal cells `kern_small` carries for features it does not have (128 bytes of table, plus their bodies)
 
+*Since kernel size pass 4 three of the sixteen (`gfx_line`, `gfx_lstep`,
+`gfx_lstepv`) are DELETED and the table has two cell sizes (SPEC.md 20.3), so
+the 8-byte arithmetic below is the old table's: the thirteen left cost 6 bytes
+each if rare and 7 or 8 if hot.*
+
 **SPEC.md §20.8 rule 4 says a slot's cell exists in BOTH kernels and the small
 one refuses**, so that a package built against `kern_big`'s SDK gets a refusal
 rather than a wrong routine. That rule has a standing price nobody had
@@ -761,7 +776,11 @@ and `osapi_mouse_feed`.
 
 **Two constraints make it hard, and the second is the one that is not obvious.**
 
-1. **Only a TAIL cell can be retired without holing the table.** Retiring one
+1. **Only a TAIL cell can be retired without holing the table.** *(True of
+   the uniform 8-byte table this was written against. Kernel size pass 4
+   renumbered the whole table when it went to two cell sizes, and a withdrawn
+   cell is now deleted wherever it sits — SPEC.md §20.3.1; the renumber this
+   item priced has been paid.)* Retiring one
    in the middle leaves a hole that SPEC.md §20.3.1's free list has to carry;
    retiring the last one SHRINKS the table and the free list stays empty. This
    tree has shrunk the tail three times — `OSAPI_MEM_COMPACT_WAKE` became
@@ -1038,3 +1057,31 @@ Two things already established, so they need not be re-derived:
 
 `tools/incsize.py` is the instrument for the per-driver figure and **will not
 build a driver as-is**: it hard-codes `-I apps/`.
+
+### 7.10 `rect_get`/`rect_put`'s other two sets — 150 bytes, HELD by the owner
+
+Kernel size pass 4 (docs/plans/completed/HANDOFF-KERNEL-SIZE-P5.md) added
+`rect_get`/`rect_put` to `wm.inc`: `call` + `dw rect` (5 bytes) for the
+15-byte four-`mov` load or store of AX..DX from four adjacent words. The
+helpers cost **+99 cycles a get and +173 a put**, measured on MartyPC's 5150
+against the inline form, and every site of the shape was counted with
+execution breakpoints over eleven scenarios on CGA, Hercules and VGA
+(`boot`, a Disk window, a package open and close, a raise, a drag and drop
+over one window and over a five-window stack, a menu, closing five windows).
+The owner took the **S1 set only** — 19 sites that are cold or run once per
+operation, never above 0.06% of any measured operation, 7 of them never
+reached at all — for −142 bytes on kern_big. The other two are held here:
+
+| set | sites | bytes | cost, measured |
+|---|---|---:|---|
+| **S2, the damage repaint** | `wm_dmg_bands` ×3, `wm_paint_dmg` ×3, `wm_dmg_gray` (the two that run) | ~80 | +1,088 cycles (0.23 ms) per damage repaint: **0.16% of a window close**, 0.02% of a drag drop |
+| **S3, the save-under cache** | `wm_su_owed`, `wm_su_sub`, `wm_su_vset`, `wm_su_srect` (the hot one), `wm_su_flay`, `wm_su_try` ×2 | ~70 | ~0.37% of a close and ~0.2% of a raise; `wm_su_flay` alone is **0.13%** of a close (5 puts, 70-78 runs a session) |
+
+S3 is the worst trade in the set — the save-under cache exists to make raise
+and close cheap — and prefers GET sites if any are ever taken (a put is 1.75x
+a get). **Never convert `gfx_clip_run`** (`vga12.inc`): the same shape, once
+per clipped drawing RUN, up to 59 times in one operation. The `.cold` sites of
+the shape (`ui_krect4`, `fmv_uadd`) cannot use the helpers at all — the `dw`
+is read through DS, which is not CS there. The measurement's scripts and raw
+counts are the pass's scratch findings (`rect-count.md`); re-derive rather
+than quote if the window manager has moved.

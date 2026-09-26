@@ -168,6 +168,31 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
                                             # said - so the graph body's own
                                             # runs are grun MINUS col
     tr_grun[0], tr_grun[1] = grun, gcol
+
+    # --- PUT THE WINDOW AT THE TOP OF THE SCREEN BEFORE MEASURING ANYTHING ---
+    # BAR needs to place a 200px cover ENTIRELY below the graph, and the room
+    # to do that is the screen's, not the window's - but where the graph sits
+    # on the screen was a function of the window's HEIGHT, because `wm_fit`
+    # pins this window's BOTTOM to the last row above the dock.  So a row
+    # leaving the Task Manager's list left the graph lower, and the cover -
+    # whose own bottom is clamped to that same row - could no longer get
+    # under it.
+    #
+    # It did not fail cleanly either.  At the height this window had when the
+    # leg was written the cover landed EXACTLY ONE ROW below the graph, which
+    # is zero margin: the leg passed, and passed, and then leaked a single
+    # graph run on a run that was no different (0 runs and 1 run over two
+    # runs of the same build).  Then SPEC.md 20.9 retired the `Disk bufs` row,
+    # TM_PREF_H fell by one TM_ROW_H, and one row of margin became minus one.
+    #
+    # Dragging to the top makes the margin the SCREEN's - 29 rows on a 348-row
+    # Hercules - so neither this window's height nor its placement policy can
+    # reach this gate again.
+    mo.drag(w.x + 30, w.y + 9, w.x + 30, 12)    # 12 clamps to the WM's own
+    mo.to(*dispcorner.PARK)                     # ceiling, whatever it is
+    tick(m)
+    w = [q for q in os88geom.windows(m) if q.i == slot][0]
+
     cx1, cy1, cx2, cy2 = w.content
     gy1, gy2 = cy1 + TM_GF_Y1, cy1 + TM_GF_Y2       # the graph band, absolute
     print("TASKMGR : %r content %d..%d x %d..%d; graph rows %d..%d, bar at %d"

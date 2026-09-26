@@ -6,11 +6,11 @@
 ; applications had each re-rolled their own and no two agreed about where it
 ; went, how long it lived or who erased it.
 ;
-; It is NOT ui_note (SPEC.md 54.4.1). That is a WINDOW, for a failure the user
-; has to acknowledge, and it stays until it is dismissed. This is for an
-; operation that just finished, usually successfully, that nobody needs to
-; acknowledge - so it says its piece and goes away on its own. A notice you
-; can miss is not a notice; a toast you have to dismiss is a dialog.
+; It was NOT ui_note (SPEC.md 54.4.1), the notice WINDOW a failure the user
+; had to acknowledge once raised - and since kernel size pass 4 there is no
+; ui_note: a failed launch (the Task Manager's, the Wire zone's, a document's
+; program not found) is a toast like any other verdict, says its piece and
+; goes away on its own.
 ;
 ; **IT LIVES IN THE MENU BAR, IN THE CLOCK'S FIELD** (SPEC.md 59.8) - and
 ; that placement is the whole design rather than a decoration. Two properties
@@ -147,7 +147,7 @@ toast_scn:   dw 0               ; and how many cells it takes there - 0 meaning
                                 ; drv_boot, before any init routine of ours
 
 ; -----------------------------------------------------------------------------
-; toast_show - say one line in the menu bar for a few seconds (API 0x0380)
+; toast_show - say one line in the menu bar for a few seconds (API 0x02AA)
 ; in:       ES:SI = a NUL string, CX = ticks to live (0 = TOAST_TICKS)
 ; out:      CF = 0 taken, CF = 1 refused - and NOTHING refuses today, the
 ;           widget interlock below having been the only one. The flag stays in

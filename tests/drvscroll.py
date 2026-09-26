@@ -35,7 +35,6 @@ takes it off and puts it back).
   G  a driver ROW still draws its own box held, and only its own
 """
 import sys
-import time
 
 sys.path.insert(0, "tools")
 sys.path.insert(0, "tests")
@@ -175,7 +174,7 @@ with M.launch(IMG, machine=MACHINE) as m:
 
     # --- F: the UP arrow at the top is greyed, and a click on it is nothing --
     mo.to(dnx, upy)
-    time.sleep(0.8)
+    quiet(m)
     before = band(m, pane)
     t0 = m.read(dtop, 1)[0]
     gup, gdn = capture(m, True), capture(m, False)
@@ -191,12 +190,12 @@ with M.launch(IMG, machine=MACHINE) as m:
 
     # --- A/B/C: the DOWN arrow, pressed and then CANCELLED by sliding off ----
     mo.to(*park)
-    time.sleep(0.8)
+    quiet(m)
     idle = band(m, dncell)              # the cell with the pointer elsewhere
     rows_before = band(m, rows)
 
     mo.to(dnx, dny)
-    time.sleep(0.5)
+    quiet(m)
     press = capture(m, True)
     show("DOWN press", press)
     held = band(m, dncell)
@@ -211,7 +210,7 @@ with M.launch(IMG, machine=MACHINE) as m:
           press["span"] < PRESS_MS, f"({press['span']:.1f} ms)")
 
     mo.to(*park, l=True)                # slide OFF while held: cancelled
-    time.sleep(1.0)
+    M.pace(m, 1.0)          # the slide-off, held: a gesture
     mo._edge(False)
     quiet(m)
     n = ndiff(idle, band(m, dncell))
@@ -221,7 +220,7 @@ with M.launch(IMG, machine=MACHINE) as m:
 
     # --- D/E: the scroll itself ---------------------------------------------
     mo.to(dnx, dny)
-    time.sleep(0.5)
+    quiet(m)
     capture(m, True)
     rel = capture(m, False, frames=90)
     show("DOWN release + scroll", rel)
@@ -235,7 +234,7 @@ with M.launch(IMG, machine=MACHINE) as m:
     quiet(m)
     r0_idle, rest_idle = band(m, r0), band(m, rest)
     mo.to(cx + CP_RX + 10, cy + CP_DBY1 + CP_DROWH // 2)
-    time.sleep(0.5)
+    quiet(m)
     rp = capture(m, True)
     show("ROW 0 press", rp)
     check("G: the row's own box is drawn held",
@@ -245,7 +244,7 @@ with M.launch(IMG, machine=MACHINE) as m:
           not hits(rp["flashbb"], rest),
           f"(flash {rp['flashbb']} vs rows 1..3 {list(rest)})")
     mo.to(*park, l=True)                # cancel: no driver is loaded by this
-    time.sleep(1.0)
+    M.pace(m, 1.0)          # the slide-off, held: a gesture
     mo._edge(False)
     quiet(m)
     n = ndiff(rest_idle, band(m, rest))

@@ -520,7 +520,7 @@ spl_reset:
 ;              bp, es
 ; -----------------------------------------------------------------------------
 spl_chrome:
-    call KERNEL_SEG:spw_vid_detect ; the adapter probe happens HERE, before any
+    BLOBCALL vid_detect         ; the adapter probe happens HERE, before any
     call KERNEL_SEG:spw_vid_apply ; other kernel module is even resident: the
     call KERNEL_SEG:spw_vid_setmode; splash owns the first mode set, and kmain's
                                 ; vid_init later re-runs all three (SPEC 39.1)

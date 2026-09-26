@@ -47,7 +47,6 @@ want to be testing against.
     python3 tests/drvup.py net
 """
 import sys
-import time
 import struct
 
 sys.path.insert(0, "tools")
@@ -188,16 +187,16 @@ def run_net(m, mo, mono):
          cx + CP_RX + NP_BX + NP_BW - 2, cy + NP_BY + NP_BH - 2)
     mid = ((r[0] + r[2]) // 2, (r[1] + r[3]) // 2)
     mo.to(mid[0], r[1] - 30)
-    time.sleep(0.8)
+    quiet(m)
     up = lit(m, mono, r)
     mo.to(*mid)
     mo._edge(True)
-    time.sleep(0.9)
+    quiet(m)
     down = lit(m, mono, r)
     check("a press draws Connect DOWN", down * 2 < up,
           f"({up} lit upright, {down} held)")
     mo.to(w[0] + 20, mid[1], l=True)
-    time.sleep(1.2)
+    quiet(m)
     off = lit(m, mono, r)
     # THE CASE THAT FOUND THE BUG: without OS88UI_FILL this reads 0, not the
     # held value - the interior stays black and the caption is lettered black
@@ -256,11 +255,11 @@ with M.launch(IMG, apps="build/apps360.img", machine=MACHINE) as m:
     # --- D: the press draws it DOWN ---------------------------------------
     inner = (mount[0] + 1, mount[1] + 1, mount[2] - 1, mount[3] - 1)
     mo.to(mid[0], mount[1] - 40)
-    time.sleep(0.8)
+    quiet(m)
     up = lit(m, mono, inner)
     mo.to(*mid)
     mo._edge(True)
-    time.sleep(0.9)
+    quiet(m)
     down = lit(m, mono, inner)
     check("a press draws the mount button DOWN", down * 2 < up,
           f"({up} lit upright, {down} held - the interior, so a black fill "
@@ -268,7 +267,7 @@ with M.launch(IMG, apps="build/apps360.img", machine=MACHINE) as m:
 
     # --- B: back UP while still held, off the button ----------------------
     mo.to(w[0] + 20, mid[1], l=True)            # into the item list, HELD
-    time.sleep(1.2)
+    quiet(m)
     off = lit(m, mono, inner)
     check("...and back UP when the pointer slides off it", off == up,
           f"({off} lit, upright is {up})")
@@ -282,7 +281,7 @@ with M.launch(IMG, apps="build/apps360.img", machine=MACHINE) as m:
     # --- C: press AND release on it: it mounts ----------------------------
     mo.to(*mid)
     mo._edge(True)
-    time.sleep(0.7)
+    M.pace(m, 0.7)                  # the press, held
     mo._edge(False)
     quiet(m, 30.0)
     check("press-and-release ON it DOES fire", nvol(m) != was,
@@ -303,10 +302,10 @@ with M.launch(IMG, apps="build/apps360.img", machine=MACHINE) as m:
     # measures a halving rather than a difference.
     ed = (cx + CP_RX, cy + HDP_EY - 2, cx + CP_RX + 200, cy + HDP_EY + 12)
     mo.to(cx + CP_RX + 100, cy + HDP_EY + 4)     # the second/third field
-    time.sleep(1.0)
+    quiet(m)
     before = band(m, mono, ed)
     mo._edge(True)
-    time.sleep(1.0)
+    quiet(m)
     during = band(m, mono, ed)
     check("a SELECT still happens on the PRESS (mode 2)",
           ndiff(before, during) > 40,

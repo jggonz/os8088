@@ -118,9 +118,22 @@ start:
     ; on demanding the retired answer, and SPEC.md 96.10.2's own bullet still
     ; said zero, so the row cited a section that contradicted the one the code
     ; implements.
-    mov ax, 0x001F              ; "get driver far address": not here
+    ; **AND THE FUNCTION HAS TO BE ONE WITH NO ANSWER**, which is a second
+    ; thing this block got wrong. It asked `AX=001Fh` - and 1Fh is DISABLE
+    ; MOUSE DRIVER, which documents `AX = 001Fh` back and the previous handler
+    ; in ES:BX, and which CuteMouse IMPLEMENTS. Put in front of IBM DOS 3.30
+    ; with CuteMouse 1.9.1 this probe printed `FN CHANGED AX - the gate has
+    ; FAILED` about a driver doing exactly the right thing, and it passed here
+    ; only because this box falls through to `.none`. It was a gate that would
+    ; go red the day 1Fh were implemented properly (docs/FIELD-NOTES.md 56).
+    ;
+    ; 90h is above every function any driver in this family defines - the
+    ; classic set ends at 33h and the Logitech and Genius extensions in the
+    ; 40s - so it is a question with no answer on BOTH machines, which is what
+    ; the rule is about.
+    mov ax, 0x0090              ; no driver defines this one
     int 0x33
-    cmp ax, 0x001F              ; unchanged is the pass
+    cmp ax, 0x0090              ; unchanged is the pass
     je .nofn
     mov ah, 0x09
     mov dx, msg_fnbad
@@ -259,6 +272,6 @@ msg_y:     db ' y=','$'
 msg_b:     db ' b=','$'
 msg_press: db 'PRESS n=','$'
 msg_rel:   db 'REL n=','$'
-msg_fnok:  db 'FN1F left AX alone, as it should be',13,10,'$'
-msg_fnbad: db 'FN1F CHANGED AX - the gate has FAILED',13,10,'$'
+msg_fnok:  db 'FN90 left AX alone, as it should be',13,10,'$'
+msg_fnbad: db 'FN90 CHANGED AX - the gate has FAILED',13,10,'$'
 msg_key:   db 13,10,'READY - press a key to exit with code 33',13,10,'$'

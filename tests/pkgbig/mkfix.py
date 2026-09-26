@@ -57,6 +57,8 @@ and down to the fence itself.
 import os
 import struct
 import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
+from os88pkg import PKG_FMT       # noqa: E402 - the format byte (SPEC.md 20.2.0)
 
 APP_MAX_SIZE = 0xF000           # SPEC.md 3 - the primary segment's image+bss
 PKG_FILE_HI = 16                # SPEC.md 3 - the mount's file bound, <1MB
@@ -67,7 +69,7 @@ FENCE = APP_MAX_SIZE            # 61,440 - image == file, so only bss decides
 
 
 def header(name: str, total: int, bss: int = 0) -> bytes:
-    """A v3 header (SPEC.md 20.2) whose image word is the file's low word.
+    """A package header (SPEC.md 20.2) whose image word is the file's low word.
 
     The field is 16 bits and two of these files are not, so it cannot always
     be the truth - but TRUNCATION is the lie the format itself would tell,
@@ -77,7 +79,7 @@ def header(name: str, total: int, bss: int = 0) -> bytes:
     h = bytearray(32)
     struct.pack_into("<HBBHHHH", h, 0,
                      0x384F,                # magic 'O8'
-                     3,                     # version
+                     PKG_FMT,               # version (SPEC.md 20.2.0)
                      0,                     # flags: no icon, no assoc, no parts
                      0,                     # link base
                      0x20,                  # entry: first byte after the header

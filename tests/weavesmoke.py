@@ -74,7 +74,7 @@ there); weaveprev points FOLDER at it.
 
 So `_open_bundle` is two double-clicks and not one - the folder, then the
 file - and both go through open_named, which re-reads the listing before it
-clicks; the retry that covers a lost double-click covers either of them. The
+clicks. The
 Disk window navigates IN PLACE (the same slot, and its rect is re-read after
 the folder opens), which is brpromise's APPS/BROWSER.O88 precedent.
 
@@ -84,16 +84,12 @@ banked layouts (SPEC.md 39.3) - and because the GLaBIOS twins are the only
 pair that boots in a tree with no IBM ROM under tools/martypc/roms/, which is
 every checkout of this one (tools/martypc/build.sh says why and continues).
 
-WHAT IS RETRIED, AND WHAT IS NOT. Getting to the bundle is a double-click, and
-os88mouse refuses one whose two presses straddled the kernel's 9-tick window,
-saying so as "a host that cannot keep up" - a statement about the box running
-the test rather than about the tree, seen here at 9 ticks against a window of
-9 on a machine with three concurrent builds on it. So the NAVIGATION is
-retried up to three times and every retry is printed. Nothing else is: the
-retry catches MartyError from the mouse alone, so a failed `check` never
-reaches it, and a WEAVE that stops launching, stops drawing or lays out on the
-wrong grid fails on the first attempt. It can hide a slow host; it cannot hide
-a regression.
+NOTHING IS RETRIED. Getting to the bundle is a double-click, and os88mouse
+steps the guest by CYCLES between its two presses (`Mouse.DBL_STEP`), so the
+kernel's 9-tick window sees the same gesture on an idle box and a loaded one.
+A navigation retry used to sit here for the host-time gap that replaced; a
+WEAVE that stops launching, stops drawing or lays out on the wrong grid fails
+on the first attempt, and so does a mouse path that breaks.
 
 BOTH WINDOWS ARE WAITED FOR WITH `os88marty.until`, NOT WITH A SETTLE, and
 that is the same defect found twice. A settle is two identical frames a second
@@ -102,11 +98,8 @@ THE PACKAGE, and neither draws anything while it runs - so the screen is more
 still while the machine is busy than when it has finished, which is `until`'s
 own documented case. Settling instead cost this gate one run reported as "the
 bundle did not launch" on a machine that was loading it, and two runs killed
-outright by an IndexError on an empty window list. The limit on each is 20s,
-and 20s is not "how long may a load take": it is how long a LOST DOUBLE-CLICK
-costs before the retry gets its turn, because a click the guest never saw
-waits out the whole limit every time. At 60s one lost click turned a 21s
-adapter into 103s and put the row past its declared budget.
+outright by an IndexError on an empty window list. The limit on each is 20
+guest-budgeted seconds, ~20x a package load here.
 """
 import argparse
 import os
@@ -379,112 +372,70 @@ def _open_bundle(m, mo, S, machine):
 
     Answers (the window slots before the launch, the slots after).
 
-    RETRIED TWICE, AND EVERY RETRY IS PRINTED. os88mouse refuses a double-click
-    whose two presses straddled the kernel's 9-tick window and says exactly
-    why: "a mount, a package load, or a host that cannot keep up". That is a
-    statement about the BOX THIS IS RUNNING ON, not about the tree - measured
-    twice inside `os88test full` on a machine with three concurrent builds on
-    it, at 9 ticks against a window of 9, and never once standalone. A
-    permanent gate that fails for the load on the machine running it is a gate
-    that gets turned off, which is the same argument as the no-goldens rule.
-
-    Printed, because a silent retry hides a real slowdown: the day this needs
-    its second attempt every run, somebody should see that in the log. Three
-    attempts costs at most ~10s of navigation on a bad day and no extra boot.
-
-    WHAT THE RETRY CAN AND CANNOT MASK, which is the whole reason it is
-    allowed to exist: it catches MartyError from the MOUSE and nothing else.
-    A failed assertion is not retried, so if WEAVE stops launching, stops
-    drawing, or lays out on the wrong grid, `check` fails on the first attempt
-    and this loop never runs. It can hide a slow host. It cannot hide a
-    regression.
-
-    Both steps are idempotent, which is what makes the retry safe. A
-    double-click on drive B's zone RAISES a Disk window that is already open,
-    and `open_named` re-reads the listing and re-scrolls before it clicks - so
-    an attempt that ended with the row merely SELECTED (which is what two
-    first clicks leave behind) is recovered by doing the same thing again.
+    NOT RETRIED. It was, three times with every retry printed, because
+    os88mouse refused a double-click whose two presses straddled the kernel's
+    9-tick window and a loaded host produced one: the gap between them was
+    host round trips while the guest ran free. os88mouse now steps the guest
+    by CYCLES between the two presses (`Mouse.DBL_STEP`), so the span is the
+    UART's and the ISR's and is the same on any box - and a retry that no
+    longer covers anything could only hide a mouse path that broke.
     """
-    last = None
-    for attempt in (1, 2, 3):
-        try:
-            # WAIT FOR THE DISK WINDOW THE SAME WAY, and for the same reason
-            # as the bundle's below. `open_drive`'s settle is two identical
-            # frames a second apart, and opening a Disk window READS THE
-            # DIRECTORY - int 13h, during which nothing is drawn - so a settle
-            # can return before the window exists. `win_list(...)[-1]` was
-            # then an IndexError, which is not a MartyError, so it escaped
-            # both the retry and every handler and killed the run with a
-            # traceback. Measured: 2 of 5 runs on an otherwise quiet box.
-            # Waiting on the window turns it into a bounded wait that the
-            # retry above can actually catch.
-            desk = set(dispcp.win_list(m, S))
-            wx, wy = dispcp.open_drive(m, mo, S, os88marty.settle, "B")
-            os88marty.until(m, lambda mm: set(dispcp.win_list(mm, S)) - desk,
-                            "drive B's Disk window to open", limit=20.0)
-            disk = sorted(set(dispcp.win_list(m, S)) - desk)[-1]
+    # WAIT FOR THE DISK WINDOW THE SAME WAY, and for the same reason
+    # as the bundle's below. `open_drive`'s settle is two identical
+    # frames a second apart, and opening a Disk window READS THE
+    # DIRECTORY - int 13h, during which nothing is drawn - so a settle
+    # can return before the window exists. `win_list(...)[-1]` was
+    # then an IndexError on an empty list. Waiting on the window turns
+    # it into a bounded wait that names what it waited for.
+    desk = set(dispcp.win_list(m, S))
+    wx, wy = dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    os88marty.until(m, lambda mm: set(dispcp.win_list(mm, S)) - desk,
+                    "drive B's Disk window to open", limit=20.0)
+    disk = sorted(set(dispcp.win_list(m, S)) - desk)[-1]
+    wx, wy = dispcp.win_rect(m, S, disk)[:2]
+    # INTO THE FOLDER FIRST (the module docstring's second block). A
+    # Disk window navigates in place: the slot is the same one, the
+    # rect is re-read because a listing that changes length can move
+    # it, and open_named's settle has already waited out the
+    # directory read. A window already inside the folder (the bundle
+    # listed, the folder not) skips the step; one standing somewhere
+    # else goes up by ".." first.
+    if FOLDER:
+        names = [r[0].upper() for r in dispcp.listing(m, S)]
+        if BUNDLE.upper() in names and FOLDER.upper() not in names:
+            pass                        # already inside it
+        else:
+            if FOLDER.upper() not in names and ".." in names:
+                dispcp.open_named(m, mo, S, os88marty.settle,
+                                  wx, wy, "..")
+                wx, wy = dispcp.win_rect(m, S, disk)[:2]
+            dispcp.open_named(m, mo, S, os88marty.settle,
+                              wx, wy, FOLDER)
             wx, wy = dispcp.win_rect(m, S, disk)[:2]
-            # INTO THE FOLDER FIRST (the module docstring's second block). A
-            # Disk window navigates in place: the slot is the same one, the
-            # rect is re-read because a listing that changes length can move
-            # it, and open_named's settle has already waited out the
-            # directory read. Idempotent like the rest, BY LOOKING: a retry
-            # after a lost double-click on the bundle finds the window
-            # already inside the folder, where the bundle is listed and the
-            # folder is not, so the step is skipped rather than repeated; a
-            # window standing somewhere else again goes up by ".." first.
-            # (The first draft went up by ".." whenever the folder was not
-            # listed, and the very first retry it met turned into
-            # dispcp.scroll_to's "scrolled PAST entry 0" - a RuntimeError,
-            # which this loop deliberately does not catch.)
-            if FOLDER:
-                names = [r[0].upper() for r in dispcp.listing(m, S)]
-                if BUNDLE.upper() in names and FOLDER.upper() not in names:
-                    pass                        # already inside it
-                else:
-                    if FOLDER.upper() not in names and ".." in names:
-                        dispcp.open_named(m, mo, S, os88marty.settle,
-                                          wx, wy, "..")
-                        wx, wy = dispcp.win_rect(m, S, disk)[:2]
-                    dispcp.open_named(m, mo, S, os88marty.settle,
-                                      wx, wy, FOLDER)
-                    wx, wy = dispcp.win_rect(m, S, disk)[:2]
-            # BEFORE is taken with the Disk window already open, not at the
-            # desktop: taken earlier it counts the Disk window's own arrival
-            # as the bundle's, and the gate then passes on a machine where
-            # nothing launched at all.
-            before = set(dispcp.win_list(m, S))
-            dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, BUNDLE)
-            # WAIT ON THE WINDOW, NOT ON THE PICTURE. `open_named`'s settle is
-            # two identical frames a second apart, and a package LOAD draws
-            # nothing while it runs - so on a busy host the settle sees
-            # perfect stillness partway through the load and returns, and the
-            # window list read straight after it is empty. That is
-            # os88marty.until's own documented case ("the screen is MORE still
-            # while it is busy"), and it cost this gate a run reported as "the
-            # bundle did not launch" on a machine that was loading it. The
-            # settle is still wanted afterwards, because the assertions below
-            # are aimed at pixels.
-            # 20s, not 60. This limit is not "how long may a package take" -
-            # it is how long a LOST double-click costs before the retry gets
-            # its turn, because a click the guest never saw makes this wait
-            # out its whole limit every time. Measured: at 60s one lost click
-            # turned a 21s adapter into 103s and put the row past its declared
-            # 65. A 27KB package load is a handful of int 13h calls and has
-            # never taken more than a second here, so 20 is ~20x margin on the
-            # thing being waited for and 3x cheaper on the thing that goes
-            # wrong. Worst case is bounded: three attempts, 60s of waiting.
-            os88marty.until(m, lambda mm: set(dispcp.win_list(mm, S)) - before,
-                            "%s's window to open" % BUNDLE, limit=20.0)
-            os88marty.settle(m)
-            return before, set(dispcp.win_list(m, S))
-        except os88marty.MartyError as e:
-            last = e
-            if attempt == 3:
-                raise
-            print("      %s: navigation attempt %d lost the guest - %s"
-                  % (machine, attempt, str(e).split(" - ")[0]))
-    raise last                                  # unreachable; the loop raises
+    # BEFORE is taken with the Disk window already open, not at the
+    # desktop: taken earlier it counts the Disk window's own arrival
+    # as the bundle's, and the gate then passes on a machine where
+    # nothing launched at all.
+    before = set(dispcp.win_list(m, S))
+    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, BUNDLE)
+    # WAIT ON THE WINDOW, NOT ON THE PICTURE. `open_named`'s settle is
+    # two identical frames a second apart, and a package LOAD draws
+    # nothing while it runs - so on a busy host the settle sees
+    # perfect stillness partway through the load and returns, and the
+    # window list read straight after it is empty. That is
+    # os88marty.until's own documented case ("the screen is MORE still
+    # while it is busy"), and it cost this gate a run reported as "the
+    # bundle did not launch" on a machine that was loading it. The
+    # settle is still wanted afterwards, because the assertions below
+    # are aimed at pixels.
+    # 20s: a package load is a handful of int 13h calls and has never
+    # taken more than a second here, so this is ~20x margin on the thing
+    # being waited for - and a launch that never happens fails here,
+    # naming the bundle, rather than after a minute.
+    os88marty.until(m, lambda mm: set(dispcp.win_list(mm, S)) - before,
+                    "%s's window to open" % BUNDLE, limit=20.0)
+    os88marty.settle(m)
+    return before, set(dispcp.win_list(m, S))
 
 
 def _drive(machine, card, want_w, want_h, S, t0, png_dir, m):

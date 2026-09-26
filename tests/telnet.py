@@ -81,7 +81,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -292,11 +291,13 @@ def main():
             polarity check, which lit 0 pixels because nothing had been drawn.
 
             docs/WRITING-TESTS.md's rule again: wait on the condition."""
-            for _ in range(int(secs / 0.25)):
-                if rw("con_vrows"):
-                    return
-                os88marty.settle(m)
-                time.sleep(0.25)
+            try:                # `secs` is budgeted on the GUEST's clock
+                os88marty.until(m, lambda _: rw("con_vrows"),
+                                "the terminal to size its view", poll=0.25,
+                                limit=secs)
+                return
+            except os88marty.MartyError:
+                pass
             sys.exit("telnet: con_vrows stayed 0 for %ds - the window never "
                      "sized its view, which is a launch failure rather than "
                      "anything this row is about" % secs)

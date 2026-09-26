@@ -527,24 +527,31 @@ rows at width 1 and at width 3 with two extra CPU hogs were 1.06× slower and
 less work**. **Contention does not make a row slow, it makes it LESS
 THOROUGH** — which is why wall times never show it.
 
-Four tools, in the order to reach for them:
+Five tools, in the order to reach for them:
 
 | want | use |
 |---|---|
 | a specific thing to HAPPEN | `os88marty.until(m, cond, what, poll=…, guest=N)` |
 | guest state to STOP CHANGING | `os88marty.quiesce(m, read, guest=…, stable=…, budget=N)` |
 | the SCREEN to stop changing, before a pixel comparison | `os88marty.settle(m)` |
+| the UI to have FINISHED with a click, key or drag | `os88marty.ui_done(m)` |
 | time to pass, and nothing else will do | `os88marty.guest_sleep(m, N)` |
 
-All four anchor their deadline to the emulator's own cycle counter, so a loaded
+All five anchor their deadline to the emulator's own cycle counter, so a loaded
 box does not shorten what the wait allows — and a guest that has STOPPED
 executing fails in ~2 seconds naming the machine (`it is 'paused' at
 0060:3C19`) instead of sitting out the whole budget.
 
-The mouse's own residual waits are host-timed by default; `OS88_GUEST_PACE=
-<ratio>` (`tools/os88mouse.py`) spends them in guest seconds instead. It is off
-by default because flipping it changes how much guest work every row gets per
-click, and that wants a soak behind it.
+The harness's own pauses - `settle`'s stillness window, a click's settle, the
+gap between mouse packets - are GUEST time: `os88marty.pace(m, secs)` spends
+what `time.sleep(secs)` bought on an idle box (`GUEST_PACE`, 4.5 guest seconds
+a second, measured), whatever the box is doing. Use it yourself only where
+there is genuinely nothing to wait ON; 7.1 below is the rule. And a mouse
+verb called WITHOUT `settle=` no longer pauses at all: it waits for
+`ui_done`, capped at the pause it used to spend (docs/MARTYPC-DEBUG.md,
+`settle`) - so pass a number only when the next step needs more than the UI,
+a worker's result or a package's own timer, and then prefer waiting on that
+state.
 
 ### 7.1 Wait for the thing, not for a duration
 
@@ -606,7 +613,17 @@ seconds at the defaults before it can return, and that cannot come down (a
 change arriving after one whole quiet round happens 1 time in 19, so halving
 it would end one settle mid-repaint per 48).
 
-So the only way to spend less is not to settle. `quiesce` is settle's shape
+**The floor is now paid only when the machine is BUSY.** Those gaps are
+repaints and loads in flight, and `settle` reads that directly: while
+ui_task is asleep with nothing queued, locked or read off the drive
+(`os88marty.ui_idle`), its interval is 0.2 guest seconds rather than
+`quiet` at `GUEST_PACE`, and the full window is kept for the intervals where
+the UI is still working. Measured on `dispcheck`, the settles after a gesture
+fell from 9+ guest seconds to 0.8-0.9 each; a display-mode change still took
+its full 5.5, because the UI was repainting for all of it.
+
+So the way to spend less is still not to settle when pixels are not the
+question. `quiesce` is settle's shape
 over a handful of bytes instead of a framebuffer, and over guest seconds
 instead of host ones — `dispcalc` went **376.3s → 197.2s** with every
 assertion still passing, because one line was 30% of all its settle time and

@@ -35,7 +35,6 @@ stands on its reasoning and not on this row.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -86,8 +85,73 @@ def main(argv):
 
         ui = os88ui.UI(m)
         ui.path(PKG)
-        time.sleep(2)
         p = Probe(ui, names)
+
+        # Dot Delirium animates, so no settle returns - but its layout is
+        # its own state: the box it drew to, banked as the box it CUT for
+        # (dd_bank_box), no recut owed and no whole repaint owed. Each wait
+        # below is that, plus whatever the step itself must have changed.
+        # A wait that never comes true is reported and the legs' own
+        # assertions then say what was wrong.
+        BOX = ("dd_cx", "dd_cy", "dd_cw", "dd_ch")
+        LBOX = ("dd_lcx", "dd_lcy", "dd_lcw", "dd_lch")
+
+        def box():
+            return tuple(p.w(n) for n in BOX)
+
+        def state():
+            return (box(), tuple(p.w(n) for n in LBOX), p.b("dd_vkind"),
+                    p.b("dd_lvkind"), p.b("dd_needcut"), p.b("dd_full"),
+                    p.b("dd_fsx"))
+
+        def ui_idle():
+            # the window manager done too: ui_task asleep with no event
+            # queued and no wake pending. NOT "the gfx lock free": this
+            # game's worker holds it for 55-69% of every guest second while
+            # it plays (measured on both displays), so a lock-free sample was
+            # a coin toss and the quiesce below, which needs the answer to
+            # hold across readings, once went 30 guest seconds without it on
+            # a board that was settled in every other respect. The worker's
+            # frames are not the window manager's business; its queue is.
+            return (m.read(S("sch_tasks"), 1)[0] == 2
+                    and m.read(S("evq_count"), 1)[0] == 0
+                    and m.read(S("sch_uiwake"), 1)[0] == 0)
+
+        def flag(n):
+            try:
+                return "%s=%d" % (n[3:], p.b(n))
+            except Exception:           # a build that does not have it
+                return "%s=?" % n[3:]
+
+        def laid(what, also=lambda s: True):
+            def cond(_):
+                s = state()
+                return (s[0] == s[1] and s[2] == s[3] and not s[4]
+                        and not s[5] and also(s) and (s[6] or ui_idle()))
+            try:
+                os88marty.until(m, cond, what, poll=0.1, limit=20)
+                os88marty.quiesce(m, lambda: (state(),
+                                              state()[6] or ui_idle()),
+                                  guest=0.5, what=what)
+            except os88marty.MartyError as e:
+                say("(%s never settled: %s)" % (what, str(e).split(".")[0]))
+                # ...and what the game and the machine WERE, because the one
+                # occurrence in a soak that mattered - the tile still the
+                # bracket's after Escape, then no title-bar press taken for
+                # 15 guest seconds - left nothing to diagnose it from
+                st = m.status()
+                say("  at %04X:%04X ui_task=%d lock=%d own=%02X evq=%d  %s" % (
+                    st["cs"], st["ip"], m.read(S("sch_tasks"), 1)[0],
+                    m.read(S("gfx_lock_flag"), 1)[0],
+                    m.read(S("gfx_lock_own"), 1)[0],
+                    m.read(S("evq_count"), 1)[0],
+                    " ".join(flag(n) for n in (
+                        "dd_drawing", "dd_inrender", "dd_needcut", "dd_inbr",
+                        "dd_fsx", "dd_newg", "dd_wantfit"))))
+                say("  state %r tile %dx%d" % (state(), p.w("dd_tw"),
+                                              p.w("dd_th")))
+
+        laid("the first board", lambda s: p.b("dd_started"))
 
         def now(tag):
             w = ui.window("Dot Delirium")
@@ -100,8 +164,9 @@ def main(argv):
         w0, t0, _ = now("on the primary")
 
         # --- A: straddling, both cards carry a share -----------------------
+        was = box()
         ui.move_window(w0, SEAM - w0.w // 2, 20)
-        time.sleep(3)
+        laid("the straddle", lambda s: s[0] != was and not s[6])
         w1, t1, c1 = now("straddling the seam")
         if w1.x >= SEAM or w1.x + w1.w <= SEAM:
             fail.append("the window at (%d..%d) does not cross the seam at %d "
@@ -114,8 +179,9 @@ def main(argv):
             fail.append("the layout gave up while straddling")
 
         # --- C: the bracket takes the display the window is on --------------
+        wbox = box()
         m.key("KeyF")
-        time.sleep(4)
+        laid("the bracket", lambda s: s[6] and s[0] != wbox)
         surf = (p.w("dd_cw"), p.w("dd_ch"), p.w("dd_cx"), p.w("dd_cy"))
         say("bracket from a straddle: %dx%d at (%d,%d)" % surf)
         if surf[:2] not in ((640, 200), (720, 348)):
@@ -123,7 +189,7 @@ def main(argv):
                         "owns ONE display and must ask which (SPEC.md 53.7.1)"
                         % surf[:2])
         m.key("Escape")
-        time.sleep(4)
+        laid("the way out", lambda s: not s[6] and s[0] == wbox)
         _, t2, _ = now("back from fullscreen")
         if t2 != t1:
             fail.append("leaving the bracket left the tile at %dx%d, not the "
@@ -131,36 +197,40 @@ def main(argv):
 
         # --- B: wholly onto display 1, and the tile follows ----------------
         w = ui.window("Dot Delirium")
+        was = box()
         ui.move_window(w, SEAM + 55, 20)
-        time.sleep(3)
+        laid("the move to display 1", lambda s: s[0] != was and not s[6])
         w3, t3, _ = now("wholly on display 1")
         if t3 == t0:
             fail.append("the tile is still %dx%d on the Hercules - a window "
                         "moved between two adapters of different PIXEL SHAPE "
                         "must be re-cut (SPEC.md 93.3, 93.4)" % t0)
+        wbox = box()
         m.key("KeyF")
-        time.sleep(4)
+        laid("the bracket on display 1", lambda s: s[6] and s[0] != wbox)
         s1 = (p.w("dd_cw"), p.w("dd_ch"))
         say("bracket on display 1: %dx%d at (%d,%d)"
             % (s1[0], s1[1], p.w("dd_cx"), p.w("dd_cy")))
         m.key("Escape")
-        time.sleep(4)
+        laid("the way out", lambda s: not s[6] and s[0] == wbox)
 
         # --- D: ...and all the way home ------------------------------------
         w = ui.window("Dot Delirium")
+        was = box()
         ui.move_window(w, 40, 20)
-        time.sleep(3)
+        laid("the move home", lambda s: s[0] != was and not s[6])
         _, t4, _ = now("back on the primary")
         if t4 != t0:
             fail.append("home again, the tile is %dx%d and not the %dx%d it "
                         "opened with" % (t4 + t0))
+        wbox = box()
         m.key("KeyF")
-        time.sleep(4)
+        laid("the bracket on display 0", lambda s: s[6] and s[0] != wbox)
         s0 = (p.w("dd_cw"), p.w("dd_ch"))
         say("bracket on display 0: %dx%d at (%d,%d)"
             % (s0[0], s0[1], p.w("dd_cx"), p.w("dd_cy")))
         m.key("Escape")
-        time.sleep(3)
+        laid("the way out", lambda s: not s[6] and s[0] == wbox)
         if s0 == s1:
             fail.append("the bracket took the SAME %dx%d surface from both "
                         "displays - it is not following the window "

@@ -22,7 +22,6 @@ memory rather than a picture.
      asserted the opposite and the kernel was right.
 """
 import sys
-import time
 
 sys.path.insert(0, "tools")
 import os88marty as M
@@ -142,11 +141,11 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     mid = ((stop[0] + stop[2]) // 2, (stop[1] + stop[3]) // 2)
 
     mo.to(mid[0], stop[1] - 20)
-    time.sleep(0.8)
+    M.pace(m, 0.8)
     up = lit(m, mono, inner)
     mo.to(*mid)
     mo._edge(True)
-    time.sleep(0.9)
+    M.pace(m, 0.9)
     down = lit(m, mono, inner)
     check("a press draws Stop DOWN", down * 2 < up,
           f"({up} lit upright, {down} held)")
@@ -154,7 +153,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
           f"(TMR_RUN = {running(m)})")
 
     mo.to(w[0] + 4, mid[1], l=True)          # slide off, STILL HELD
-    time.sleep(1.2)
+    M.pace(m, 1.2)
     off = lit(m, mono, inner)
     check("...and back UP when the pointer slides off it", off == up,
           f"({off} lit, upright is {up})")
@@ -165,7 +164,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
 
     mo.to(*mid)
     mo._edge(True)
-    time.sleep(0.7)
+    M.pace(m, 0.7)
     mo._edge(False)
     quiet(m)
     check("press-and-release ON Stop DOES stop it", running(m) == 0,
@@ -179,7 +178,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     greyed = lit(m, mono, inner)
     mo.to(*mid)
     mo._edge(True)
-    time.sleep(0.9)
+    M.pace(m, 0.9)
     held = lit(m, mono, inner)
     # The complement of the DOWN test above rather than equality: the mouse
     # arrow is ~24 pixels of this rect and moves between samples, where a real

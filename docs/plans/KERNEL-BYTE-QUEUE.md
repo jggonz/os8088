@@ -129,6 +129,14 @@ multi-KB module image before the first paint —
 
 ## 3. `HB_NENT` 7 → 6 — and the blocker that makes it two modules, not one
 
+**SUPERSEDED by kernel size pass 4: `MOD_NENT` is gone** (SPEC.md 2.8.1).
+Each module's slot block is exactly its own `X_NENT`, so there is no shared
+ceiling for hibernate to pin and nothing to be gained by shrinking one
+module's table below what it uses: a module with seven entries pays for seven
+slots and the others pay for theirs. The removal was −36 bytes on kern_big and
+−38 on kern_small. What follows is kept as the record of why the uniform cap
+was expensive.
+
 `mod_fp` is `MOD_MAX * MODFP_STRIDE` where `MODFP_STRIDE = MOD_NENT * 4`.
 With `MOD_NENT` 7 that is **112 bytes of `.bss` on kern_big** (`MOD_MAX` 4)
 and **140 on kern_small** (`MOD_MAX` 5). At 6 it is 96 and 120 — **-16 and

@@ -38,7 +38,7 @@ full - with the release and the desktop press reading 0 in both. Point --apps an
 to take the "before" column again; the cy_mheld corroboration reports n/a there
 rather than failing, because that byte is what the change added.
 """
-import sys, os, time, argparse
+import sys, os, argparse
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
 # checkout it was written in and wrong in a git worktree, which is how parallel
 # work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
@@ -86,7 +86,7 @@ def main():
     ap.add_argument("--apps", default="build/apps360.img")
     ap.add_argument("--src", default="apps/cyclone/cyclone.asm")
     ap.add_argument("--hold", type=float, default=4.0,
-                    help="host seconds to keep the button down")
+                    help="seconds to keep the button down (paced in guest time)")
     a = ap.parse_args()
     S = os88sym.linear
 
@@ -103,14 +103,19 @@ def main():
         row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, entry)
         x, y = dispcp.row_xy(wx, wy, row)
         mo.dblclick(x, y)
-        time.sleep(6)
 
-        win = seg = None
-        for w in os88geom.windows(m, S):
-            if w.title.startswith("Cyclone"):
-                win = w
-                seg = u16(m.read(os88geom.winptr(m, w.i, S)
-                                 + os88geom.W_SEG, 2))
+        def cyclone():
+            for w in os88geom.windows(m, S):
+                if w.title.startswith("Cyclone"):
+                    return w, u16(m.read(os88geom.winptr(m, w.i, S)
+                                         + os88geom.W_SEG, 2))
+            return None, None
+        try:
+            os88marty.until(m, lambda _m: cyclone()[1], "Cyclone's window",
+                            poll=0.3, limit=60)
+        except os88marty.MartyError:
+            pass                            # the check below says so
+        win, seg = cyclone()
         if not seg:
             raise RuntimeError("no Cyclone window - it did not launch")
         syms, image = pkg_syms(a.src)
@@ -131,7 +136,11 @@ def main():
             if p.rb("cy_state") != CYS_TITLE:
                 break
             m.key("Enter")
-            time.sleep(2)
+            try:
+                os88marty.until(m, lambda _m: p.rb("cy_state") != CYS_TITLE,
+                                "the title to take Enter", poll=0.25, limit=3)
+            except os88marty.MartyError:
+                pass                        # ...and press it again
         os88marty.until(m, lambda _m: p.rb("cy_state") == CYS_PLAY,
                         "the warp to finish", poll=0.5, limit=90)
         quiet(m, p)
@@ -144,7 +153,7 @@ def main():
         # --- one click ------------------------------------------------------
         clear(m, p)
         mo.click(px, py, settle=0.5)
-        time.sleep(1.0)
+        os88marty.pace(m, 1.0)
         one = shots(m, p)
         held = mheld(p)
         print("click:     %d shot(s), cy_mheld = %s  (want 1, 0)"
@@ -159,7 +168,7 @@ def main():
         mo.to(px, py)
         mo._edge(True)
         held_flag = mheld(p)
-        time.sleep(a.hold)
+        os88marty.pace(m, a.hold)
         many = shots(m, p)
         print("hold %.1fs:  %d shot(s), cy_mheld = %s  (want %d, 1)"
               % (a.hold, many, yn(held_flag), CY_MAXSHOT))
@@ -172,9 +181,9 @@ def main():
 
         # --- ...and the release stops it ------------------------------------
         mo._edge(False)
-        time.sleep(0.5)
+        os88marty.pace(m, 0.5)
         clear(m, p)
-        time.sleep(1.5)
+        os88marty.pace(m, 1.5)
         after = shots(m, p)
         held = mheld(p)
         print("released:  %d shot(s), cy_mheld = %s  (want 0, 0)"
@@ -199,7 +208,7 @@ def main():
         h = os88geom.word(m, "vid_h", S)
         mo.to(w // 2, h // 2)
         mo._edge(True)
-        time.sleep(a.hold)
+        os88marty.pace(m, a.hold)
         fsx = shots(m, p)
         held = mheld(p)
         mo._edge(False)
@@ -213,7 +222,9 @@ def main():
         m.key("Escape")
         os88marty.until(m, lambda _m: p.rb("cy_fsx") == 0,
                         "the bracket to close", poll=0.5, limit=60)
-        time.sleep(2)
+        # the desktop's repaint on the way out; the game's worker may keep
+        # the lock busy, so it is capped at the pause this was
+        os88marty.ui_done(m, "the desktop to come back", cap=9.0)
 
         # --- a press that is NOT ours ---------------------------------------
         # The desktop, well clear of every window: no W_ONCLICK runs, so
@@ -225,7 +236,9 @@ def main():
         clear(m, p)
         mo.to(dx, dy)
         mo._edge(True)
-        time.sleep(2.0)
+        # TIME: a negative - an armed level fires on the worker's next frame,
+        # so 4.5 guest seconds is many cooldowns of nothing
+        os88marty.pace(m, 1.0)
         stray = shots(m, p)
         mo._edge(False)
         print("elsewhere: %d shot(s)  (want 0)" % stray)

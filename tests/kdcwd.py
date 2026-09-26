@@ -31,7 +31,6 @@ printed too - a row that only checked the CWD would have called this fixed.
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -233,20 +232,20 @@ def main():
 
         # the handover's confirmation, found through the WM rather than through
         # the package: the launch moves the instance under us.
-        t0 = time.time()
-        while time.time() - t0 < 90:
+        def alert(_m):
             f = ui.front()
-            if f is not None and f.visible and f.w <= 400 and f.h <= 200:
-                row = 2 * (A_BW + A_BG) - A_BG
-                left = f.x + (f.w - row) // 2 + (A_BW + A_BG)
-                mo.click(left + A_BW // 2,
-                         f.y + TITLE_H + A_BTNY + A_BH // 2)
-                break
-            time.sleep(1.0)
-        else:
+            return f is not None and f.visible and f.w <= 400 and f.h <= 200
+        try:
+            os88marty.until(m, alert, "the handover's alert", poll=1.0,
+                            limit=90)
+        except os88marty.MartyError:
             fail("the handover was never asked for - `Open windows are lost. "
                  "Proceed?` is once per LAUNCH (SPEC.md 96.42) and without it "
                  "the run below is not under kern_dos")
+        f = ui.front()
+        row = 2 * (A_BW + A_BG) - A_BG
+        left = f.x + (f.w - row) // 2 + (A_BW + A_BG)
+        mo.click(left + A_BW // 2, f.y + TITLE_H + A_BTNY + A_BH // 2)
 
         kd = answers(wait_text(m, "READY", secs=240,
                                what="the run under kern_dos"), "kern_dos")

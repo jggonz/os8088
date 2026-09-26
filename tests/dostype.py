@@ -61,7 +61,6 @@ reading a font.
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -88,9 +87,23 @@ def no(msg):
 
 
 def run(bx, cmd, settle=1.2):
-    """One command, and the rows it left behind."""
+    """One command, and the rows it left behind - once the PROMPT is back.
+
+    The console buffer's last row ending in `>` again is the command having
+    finished. `settle` is what the wait used to be, and bounds it in GUEST
+    time now: a command that never gives the prompt back is read as it is.
+    """
     bx.type(cmd + "\n")
-    time.sleep(settle)
+
+    def back(_m):
+        rows = bx.live()
+        return bool(rows) and rows[-1].endswith(">")
+    try:
+        os88marty.until(bx.m, back, "the prompt after %r" % cmd, poll=0.2,
+                        limit=settle * os88marty.GUEST_PACE
+                        / os88marty.GUEST_BUDGET_RATIO)
+    except os88marty.MartyError:
+        pass                            # the checks below read what is there
     return bx.live()
 
 

@@ -272,7 +272,11 @@ def main():
         print("   blit x=%d y=%d w=%d h=%d" % (x, y, bw, bh))
         m.bp_exec()
         m.run()
-        os88marty.guest_sleep(m, 6.0)
+        # the rest of the load: the drive going quiet here, and the rows it
+        # blits after the first going still in the settle below - this was a
+        # blind six guest seconds in front of that settle
+        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                          what="the picture to finish loading")
         mo.to(4, 4)
         os88marty.settle(m)
         w, h, fb = m.fbuf(card=0)

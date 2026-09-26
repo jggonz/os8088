@@ -38,7 +38,6 @@ fallen back to nibbles (pt_topacked) before the first frame.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -54,6 +53,17 @@ KBASE = os88sym.KERNEL_SEG << 4
 
 def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
+
+
+def idle(m):
+    """Until Paint - or whatever the gesture started - has finished: the
+    drive quiet, the gfx lock free (a canvas operation can hold it for
+    seconds with nothing new on the glass), and then the screen still."""
+    os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                      what="the drive to go quiet")
+    os88marty.until(m, lambda mm: mm.read(S("gfx_lock_flag"), 1)[0] == 0,
+                    "the gfx lock to be free", poll=0.2, limit=60)
+    os88marty.settle(m)
 
 
 def main():
@@ -109,7 +119,7 @@ def main():
               % (x, y, w, h, "" if x % 8 == 0 else "  ...NOT byte-aligned"))
         m.bp_exec()
         m.run()
-        time.sleep(6)
+        idle(m)
         mo.to(4, 4)                 # the arrow is drawn INTO the framebuffer
         os88marty.settle(m)
         fw, fh, fb = m.fbuf(card=0)
@@ -146,7 +156,7 @@ def main():
                 print("   ...no gfx_blitp fired after the raise: either it "
                       "REFUSED and Paint fell back to nibbles, or the "
                       "machine is not coming back")
-            time.sleep(6)
+            idle(m)
             mo.to(4, 4)
             os88marty.settle(m)
             lw, lh, lfb = m.fbuf(card=0)

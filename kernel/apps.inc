@@ -87,13 +87,16 @@ BAL_VX    equ 4
 BAL_VY    equ 6                 ; stride 8
 
 ; --- window templates: {x, y, w, h, title, paint, onkey, onclick} words ------
+; The callbacks are the `.cold` BODIES: a kernel window's callbacks are
+; dispatched into the cold segment by wm_pkgcall (SPEC.md 2.6.3), so they need
+; no resident thunk and none has one.
 ; The Timer's x keeps its whole cap-10 cascade (+16 per pool slot, SPEC.md
 ; 29.4) on a 640px screen: 330 + 144 + 160 = 634.
-app_tpl_about:  dw 170, 140, 300, 120, app_ttl_about,  app_about_paint,  0, 0
+app_tpl_about:  dw 170, 140, 300, 120, app_ttl_about,  app_about_paint_x, 0, 0
 %ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
-app_tpl_timer:  dw 330,  60, APP_TMR_W, APP_TMR_H, app_ttl_timer, app_tmr_paint
-                dw 0, app_tmr_onclick
-app_tpl_bounce: dw 300, 150, 150, 130, app_ttl_bounce, app_bounce_paint, 0, 0
+app_tpl_timer:  dw 330,  60, APP_TMR_W, APP_TMR_H, app_ttl_timer, app_tmr_paint_x
+                dw 0, app_tmr_onclick_x
+app_tpl_bounce: dw 300, 150, 150, 130, app_ttl_bounce, app_bounce_paint_x, 0, 0
 %endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
 
 app_ttl_about:  db 'About os8088', 0
@@ -222,9 +225,9 @@ app_tmr_kinit_x:
                                 ; previous instance's cells are sitting there
                                 ; describing a window that has been destroyed
 %ifdef KERN_BIG
-    mov ax, app_tmr_onup        ; SPEC.md 13.7/13.8.1: the two edges the three
+    mov ax, app_tmr_onup_x      ; SPEC.md 13.7/13.8.1: the two edges the three
     call KERNEL_SEG:cw_wm_onmouseup           ; buttons fire and track on. Not template
-    mov ax, app_tmr_ondrag      ; words, so a KD_INIT is where a kernel window
+    mov ax, app_tmr_ondrag_x    ; words, so a KD_INIT is where a kernel window
     call KERNEL_SEG:cw_wm_ondrag              ; installs them - and a REUSED pool slot must
     mov byte [app_tmr_down], 0  ; not hand a pressed button to its successor
 %endif
@@ -251,13 +254,6 @@ app_bounce_kinit_x:
     retf
 %endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
 
-; --- apf_app_about_center - the far side of app_about_center's thunk --------
-; A PAD rather than SPEC.md 2.6.1's retf body, because app_about_paint_x near-
-; calls the body four times from in here. One of the two shapes has to give,
-; and four near calls are worth more than the pad's four bytes.
-apf_app_about_center:
-    call app_about_center_x
-    retf
 %ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
 
 ; -----------------------------------------------------------------------------
@@ -320,7 +316,7 @@ app_kind_wait:
 ; out: THE LOCK IS HELD ON BOTH EXITS. CF = 0, BX = window ptr, clip armed;
 ;      CF = 1 = not one visible pixel, draw nothing this frame (SPEC.md 11.3)
 app_kind_arm:
-    call KERNEL_SEG:cw_gfx_lock
+    call ct_cw_gfx_lock
     mov bx, [ds:bp+I_WIN]
     test byte [bx+W_FLAGS], 2   ; re-check under the lock (SPEC.md 14)
     jz .no
@@ -380,7 +376,7 @@ app_about_paint_x:
     mov si, [si + app_about_vid]   ; wants. cbw is safe because [vid_kind] is
     call app_about_center_x        ; 0, 1 or 2 (kernel/viddet.inc)
 
-    jmp kretfc_si
+    jmp kretc_si
 
 ; -----------------------------------------------------------------------------
 ; app_about_center - draw one string centered horizontally in a window
@@ -389,7 +385,7 @@ app_about_paint_x:
 ; clobbers: AX, CX (internal helper)
 ; -----------------------------------------------------------------------------
 app_about_center_x:
-    call KERNEL_SEG:font_width             ; AX = string width, px
+    call ct_font_width                     ; AX = string width, px
     mov cx, [bx+W_W]
     dec cx                      ; content width, two bytes rather than three
     dec cx
@@ -398,7 +394,7 @@ app_about_center_x:
     add cx, [bx+W_X]
     inc cx                      ; content left = W_X + 1
     mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground:
-    call KERNEL_SEG:cw_font_run               ; W_PAINT arrives white-filled (6.6.5)
+    call ct_cw_font_run                       ; W_PAINT arrives white-filled (6.6.5)
     ret
 %ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
 
@@ -476,7 +472,7 @@ app_tmr_task_x:
                                 ; erased per glyph cell in there, NOT as one
                                 ; 64x8 rect (SPEC.md 11.3)
 .skip:
-    call KERNEL_SEG:cw_gfx_unlock
+    call ct_cw_gfx_unlock
     jmp .loop
 
 ; -----------------------------------------------------------------------------
@@ -486,12 +482,12 @@ app_tmr_task_x:
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
 app_tmr_paint_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
 
     call app_state_of           ; BX = window, DI = time state
     jc .done
@@ -520,12 +516,12 @@ app_tmr_paint_x:
 ; letter freely (the SPEC.md 22.2 argument, one module over).
 ; -----------------------------------------------------------------------------
 app_tmr_onclick_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
 
     call app_state_of           ; BX = window, DI = time state
     jc app_tmr_edge_out
@@ -558,7 +554,7 @@ app_tmr_onclick_x:
 ; failure - loud, not silent - if anything is ever inserted between them.
 ; -----------------------------------------------------------------------------
 app_tmr_edge_out:
-    jmp kretfc_di
+    jmp kretc_di
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
@@ -609,12 +605,12 @@ app_tmr_track:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 app_tmr_onup_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     call os88ui_fire ; AX = what the press armed, and it is CLEARED
     call app_tmr_track
     jc app_tmr_edge_out
@@ -631,12 +627,12 @@ app_tmr_onup_x:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 app_tmr_ondrag_x:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     call os88ui_armed ; PEEK: the arm is the release's to spend
     call app_tmr_track
     jc app_tmr_edge_out
@@ -681,12 +677,12 @@ app_tmr_setdown:
 ; kern_small from the press, and neither has an opinion the other does not.
 ; -----------------------------------------------------------------------------
 app_tmr_act:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di
+
+
+
+
+
     call app_tmr_bok            ; a greyed control explains itself, so a
     jc .done                    ; refused click says nothing more (SPEC.md 47
                                 ; rule 6) - no beep, no notice
@@ -779,13 +775,13 @@ app_tmr_btns:
 ; call from anywhere.
 ; -----------------------------------------------------------------------------
 app_tmr_btn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentc_bp               ; KENT: push ax..bp
+
+
+
+
+
+
 
     xor ah, ah
     mov bp, ax                  ; BP = the index for the whole routine, and a
@@ -793,7 +789,7 @@ app_tmr_btn:
                                 ; SPEC.md 1 rule 3) - AX, BX, CX and DX are
                                 ; all about to be rect corners
     call app_tmr_brect          ; AX,BX,CX,DX = its inclusive screen rect
-    call KERNEL_SEG:cw_wm_clip_test
+    call ct_cw_wm_clip_test
     jc .out
     call ui_krect4              ; the rect, staged whole - fdlg.inc's, `.cold`
                                 ; like this, so the call is near
@@ -839,7 +835,7 @@ app_tmr_brect:
     mov cl, APP_TMR_BW + APP_TMR_BGAP
     mul cl                      ; AX = index * pitch (both fit a byte)
     mov cx, ax
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
+    call ct_cw_wm_content                     ; AX = content left, DX = content top
     add cx, ax
     add cx, APP_TMR_BX          ; CX = the button's x, DX = its y
     add dx, APP_TMR_BY
@@ -864,7 +860,7 @@ app_tmr_hit:
     push dx
     push si
     mov si, dx                  ; SI = click y (wm_content wants DX)
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
+    call ct_cw_wm_content                     ; AX = content left, DX = content top
     sub cx, ax                  ; CX = content-relative x
     sub si, dx                  ; SI = content-relative y
     cmp si, APP_TMR_BY
@@ -914,7 +910,7 @@ app_tmr_digits:
     push ax
     push cx
     push dx
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
+    call ct_cw_wm_content                     ; AX = content left, DX = content top
     mov cx, ax
     add cx, APP_TMR_DX          ; CX = string x, DX = string y
     add dx, APP_TMR_DY
@@ -995,7 +991,7 @@ app_tmr_render:
     mov bx, dx                  ; BX = y1, CX = x2, DX = y2
     add cx, APP_TMR_DW - 1
     add dx, 7
-    call KERNEL_SEG:cw_wm_clip_test           ; preserves all four (and answers "free" when
+    call ct_cw_wm_clip_test                   ; preserves all four (and answers "free" when
     mov cx, ax                  ; nothing is armed, which is every W_PAINT and
     mov dx, bx                  ; every click)
     jc .whole
@@ -1026,7 +1022,7 @@ app_tmr_render:
                                 ; AL/AH, so this is here for the FLAG
     mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = ground - the form
                                     ; app_about_center_x uses, one byte shorter
-    call KERNEL_SEG:cw_font_run
+    call ct_cw_font_run
 .out:
     pop di
     pop si
@@ -1142,7 +1138,7 @@ app_bounce_task_x:
 .blind:
     call app_ball_step          ; nothing on screen to keep in step with
 .skip:
-    call KERNEL_SEG:cw_gfx_unlock             ; ...which also disarms the clip (SPEC 11.3)
+    call ct_cw_gfx_unlock                     ; ...which also disarms the clip (SPEC 11.3)
     jmp .loop
 
 ; -----------------------------------------------------------------------------
@@ -1173,13 +1169,13 @@ app_bounce_task_x:
 %endif
 
 app_ball_wipe:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kentc_bp               ; KENT: push ax..bp
+
+
+
+
+
+
 
     mov si, [ss:di+BAL_X]
     sub si, cx                  ; SI = ddx, new - old
@@ -1191,7 +1187,7 @@ app_ball_wipe:
 
     push cx                     ; wm_content answers in AX and DX, which is
     push dx                     ; where the old position is
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
+    call ct_cw_wm_content                     ; AX = content left, DX = content top
     pop cx
     add cx, dx
     mov [app_bwy], cx           ; the old square, ABSOLUTE
@@ -1223,7 +1219,7 @@ app_ball_wipe:
     mov bx, [app_bwy]
     mov dx, bx
     add dx, 7
-    call KERNEL_SEG:cw_gfx_fill
+    call ct_cw_gfx_fill
 
 .rows:
     or bp, bp                   ; --- the row strip, over the SHARED columns -
@@ -1251,7 +1247,7 @@ app_ball_wipe:
     add dx, bp                  ; moved down: from the old top edge
     dec dx
 .rowgo:
-    call KERNEL_SEG:cw_gfx_fill
+    call ct_cw_gfx_fill
 .out:
     jmp kretc_bp
 
@@ -1313,7 +1309,7 @@ app_bounce_paint_x:
 .done:
     pop di
     pop bx
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; app_ball_fill - fill the 8x8 square at an instance's ball position
@@ -1327,14 +1323,14 @@ app_ball_fill:
     push cx
     push dx
 
-    call KERNEL_SEG:cw_wm_content             ; AX = content left, DX = content top
+    call ct_cw_wm_content                     ; AX = content left, DX = content top
     add ax, [ss:di+BAL_X]          ; AX = x1
     add dx, [ss:di+BAL_Y]
     mov bx, dx                  ; BX = y1
     mov cx, ax
     add cx, 7                   ; CX = x2
     add dx, 7                   ; DX = y2
-    call KERNEL_SEG:cw_gfx_fill
+    call ct_cw_gfx_fill
 
     jmp kretc_dx
 

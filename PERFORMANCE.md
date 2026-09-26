@@ -4675,6 +4675,16 @@ goes only on the `ibm5150_82_v4` machines, and the GLaBIOS twins keep 1:1.
 > so no config has to distinguish the two ROMs and `os8088_5150_cga_gla`
 > boots `combo.img` in 175 ticks. The ~250 ms abandon is still a fact about
 > GLaBIOS and still the reason not to take a disk number off it.
+>
+> **CORRECTED 2026-09-24: the ~250 ms abandon was never a fact about
+> GLaBIOS.** It was upstream MartyPC raising two IRQ6s for one RECALIBRATE.
+> The spare one left the BDA's working-interrupt flag set, so GLaBIOS's
+> 37-tick IRQ wait returned at once and its 5-tick RESULT wait (~250 ms) is
+> what expired. `tools/martypc/patches/05-fdc-recal-one-interrupt.patch` raises
+> one. With it GLaBIOS completes a 345 ms read first time
+> (docs/MARTYPC-DEBUG.md, *GLaBIOS "gives up..."*). The IBM ROM tolerates the
+> stale flag, which is why it "completed the identical reads". GLaBIOS is still
+> not where a disk NUMBER comes from, for the other reason that section gives.
 
 **And a run must be paced per SECTOR, not charged as one lump.** The first
 version delayed a whole multi-sector run in one silent block, which is not what
@@ -4996,7 +5006,8 @@ to say: go and find out what the machine is *doing*, not just how long it took.
 
 **The GLaBIOS exception.** Set 35 gave 2:1 media only to the IBM-ROM machines,
 because GLaBIOS abandons a floppy operation after ~250 ms and a 2:1 track read
-takes up to 400. At 1:1 no machine needs the exception and every config here
+takes up to 400 (that abandon was MartyPC's double RECALIBRATE interrupt and
+not GLaBIOS, corrected in Set 37's note above). At 1:1 no machine needs the exception and every config here
 carries the same disks; `os8088_5150_cga_gla` boots `combo.img` in 175 ticks.
 
 **"MartyPC's floppy is 1.17x slow."** It is 0.92x, and the sign changed twice

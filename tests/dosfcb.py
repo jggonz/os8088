@@ -23,9 +23,9 @@ the name blank, because 29h parses a NAME and stops at the first separator.
 import os
 import re
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+import os88marty                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
@@ -62,13 +62,13 @@ def main():
         if not ui.path("B:/PARSEFCB.COM"):
             fail("double-clicking PARSEFCB.COM opened no window")
         rows = []
-        end = time.time() + 180.0
-        while time.time() < end:
-            rows = m.screen() or []
-            if any("PARSEFCB READY" in r for r in rows):
-                break
-            time.sleep(0.3)
-        else:
+
+        def ready(_m):
+            rows[:] = m.screen() or []
+            return any("PARSEFCB READY" in r for r in rows)
+        try:
+            os88marty.until(m, ready, "PARSEFCB READY", poll=0.3, limit=180)
+        except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
                  % ([r.rstrip() for r in rows if r.strip()][:14],))
         print("dosfcb: the bracket's text screen:")

@@ -24,9 +24,12 @@ of it.
 
 IT WANTS A SOUND BLASTER, which in a container means `os8088_5150_sb_gla` -
 MartyPC models one, so this is not on CLAUDE.md's QEMU list. `SOUND.DRV` is
-the driver to test it with because its ring is CLAIMED AT ATTACH and lives for
-the session, so a bare desktop has it; `ETHER.DRV`'s pool is the same shape on
-a machine no emulator here can host.
+the driver to test it with; `ETHER.DRV`'s pool is the same shape on a machine
+no emulator here can host. Its ring used to be CLAIMED AT ATTACH, so a bare
+desktop had one; since SPEC.md 34.5.2 an idle card holds nothing but its
+image, so `SBTEST.O88` opens a stream first and leaves it open - a linear
+stream is double-buffered, so the driver then owns two claims, the staging
+pool and the 8KB buffer.
 
 FOUR CHECKS:
 
@@ -141,7 +144,7 @@ def sym(name):
         open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
         r = subprocess.run(["nasm", "-f", "bin", "-w+error",
                             "-I", os.path.join(ROOT, "apps") + os.sep,
-                            "-o", os.devnull, tmp],
+                            "-o", tmp + ".bin", tmp],
                            capture_output=True, text=True)
         if r.returncode:
             sys.exit("heapdrv: could not map %s:\n%s" % (APP, r.stderr[:400]))
@@ -152,7 +155,7 @@ def sym(name):
                     _MAP[p[2]] = int(p[0], 16)
                 except ValueError:
                     pass
-        for f in (tmp, mp):
+        for f in (tmp, mp, tmp + ".bin"):
             if os.path.exists(f):
                 os.remove(f)
     if name not in _MAP:
@@ -265,6 +268,27 @@ def main():
                             + heaphi.DRVR_SEG, 2))
         say("heapdrv: %s - SOUND.DRV image segment %04X" % (a.machine, sndseg))
 
+        # --- a stream, so the driver HAS claims (SPEC.md 34.5.2) ------------
+        # An idle card holds nothing but its image since the double buffer
+        # became per-stream, so SBTEST opens its 2 s tone and leaves it open:
+        # a linear stream is double-buffered, and the driver then owns the
+        # staging pool AND the 8KB buffer - two claims for the page to file.
+        dispcp.open_drive(m, mo, S, M.settle, "B")
+        dslot = dispcp.win_list(m, S)[-1]
+        dx0, dy0, _, _ = dispcp.win_rect(m, S, dslot)
+        before = set(w.i for w in geom.windows(m, S) if w.visible)
+        dispcp.open_named(m, mo, S, M.settle, dx0, dy0, name="SBTEST.O88")
+        tick(m, 8 * 60)
+        M.settle(m)
+        sbw = [w for w in geom.windows(m, S)
+               if w.visible and w.i not in before]
+        if not sbw:
+            sys.exit("heapdrv: SBTEST never opened a window")
+        sbw = sbw[0]
+        mo.click(sbw.x + sbw.w // 2, sbw.y + sbw.h - 20)    # open the stream
+        tick(m, 4 * 60)
+        M.settle(m)
+
         # --- 1: there IS a driver claim to look for -------------------------
         raw = m.read(S("mem_tab"), MEM_MAX * MC_SIZE)
         live = [(u16(raw, i * MC_SIZE), u16(raw, i * MC_SIZE + 2),
@@ -279,7 +303,8 @@ def main():
                      "without one every check below is vacuous - which is how "
                      "this page looked correct for so long",
                      got="%d claims owned by %04X" % (len(drv), sndseg),
-                     want="at least one (the 8KB DMA ring, SPEC.md 34.6.1)"):
+                     want="at least one (the staging pool and the double "
+                          "buffer of SBTEST's open stream, SPEC.md 34.5.2)"):
             return report()
 
         # --- the Task Manager, and its heap page ----------------------------

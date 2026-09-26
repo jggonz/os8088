@@ -249,8 +249,9 @@ def boot():
     import time
     if os.path.exists(PID):
         try:
-            os.kill(int(open(PID).read().strip()), 15)
-            time.sleep(1.0)
+            pid = int(open(PID).read().strip())
+            os.kill(pid, 15)
+            os88qemu.gone(pid)
         except (OSError, ValueError):
             pass
     for f in (SOCK, PID):
@@ -273,12 +274,40 @@ def boot():
         time.sleep(0.2)
     else:
         raise SystemExit("xmcheck: QEMU never opened " + SOCK)
-    time.sleep(12)                          # ...and for the desktop
+    wait_desktop(SOCK)                      # ...and for the desktop
     return SOCK
 
 
+def wait_desktop(sock, who="xmcheck"):
+    """Drive B's zone is what the first click aims at, so its existence is
+    the condition - in GUEST seconds (tests/os88qemu.py), where this was a
+    host `time.sleep(12)` - and then a second of the machine for its paint."""
+    import dispcp
+    m = Mem(sock)
+
+    def zone():
+        try:
+            return dispcp.drive_ordinal(m, sym, "B") is not None
+        except Exception:                   # noqa: BLE001 - not answering yet
+            return False
+    if not os88qemu.acted(m, zone, secs=90, what="drive B's zone", poll=0.4):
+        raise SystemExit("%s: drive B: never got a desktop zone - the guest "
+                         "did not reach a desktop" % who)
+    os88qemu.pace(m, 1)
+
+
+class Mem(object):
+    """`read(linear, n)` over this file's `xp` reader - the one shape
+    tests/os88qemu.py's guest-clock waits take."""
+
+    def __init__(self, sock):
+        self.sock = sock
+
+    def read(self, linear, n):
+        return bytes(read_bytes(self.sock, linear, n))
+
+
 def main():
-    import time
     mine = len(sys.argv) < 2
     sock = boot() if mine else sys.argv[1]
     try:
@@ -289,14 +318,24 @@ def main():
 
 
 def check(sock):
-    import time
+    m = Mem(sock)
     base = table_base(sock)
 
+    # Every wait below is on the GUEST's clock (tests/os88qemu.py) and on the
+    # thing the next line reads: a window, the package's blocks, the close.
     print("xmcheck: opening Disk B and launching XMTEST.O88")
     dblclick(sock, *DISKB)
-    time.sleep(7)
+    os88qemu.acted(m, lambda: newest_window(sock) is not None, secs=20,
+                   what="the Disk B window", poll=0.3)
+    os88qemu.pace(m, 1)                     # ...and its listing painted
     dblclick(sock, *ROW)
-    time.sleep(9)
+
+    def owned_now():
+        return [b for b in blocks(sock, base) if b[3] != XM_OWN_KERN]
+    if os88qemu.acted(m, lambda: bool(owned_now()), secs=30,
+                      what="an instance-owned block", poll=0.3):
+        os88qemu.quiesce(m, lambda: blocks(sock, base), secs=1.0,
+                         what="xm_tab")
 
     before = blocks(sock, base)
     show("window open", before)
@@ -317,7 +356,14 @@ def check(sock):
     print(f"xmcheck: closing window {slot} at ({wx},{wy}) {ww}x{wh} - "
           f"its close box, at ({cx},{cy}), not minimize")
     click(sock, cx, cy)
-    time.sleep(5)
+
+    def closed():
+        w = newest_window(sock)
+        return w is None or w[0] != slot
+    if os88qemu.acted(m, closed, secs=15, what="window %d closing" % slot,
+                      poll=0.3):
+        os88qemu.quiesce(m, lambda: blocks(sock, base), secs=1.0,
+                         what="xm_tab")
     # ...and PROVE it closed. Without this the leak report below cannot tell
     # "the blocks were not freed" from "the window is still open", which is
     # the state this gate spent a year in.

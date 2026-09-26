@@ -39,7 +39,6 @@ in-field caret rows must also change AT LEAST the bar's own 8 pixels.
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
@@ -155,8 +154,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
     w = dispcp.win_list(m, S)
     wx, wy, ww, wh = dispcp.win_rect(m, S, w[-1])
+    had = len(dispcp.win_list(m, S))
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "FTPD.O88")
-    time.sleep(2)
+    os88marty.until(m, lambda _m: len(dispcp.win_list(m, S)) > had,
+                    "the FTPD window", poll=0.3, limit=60)
     os88marty.settle(m)
     slot = dispcp.win_list(m, S)[-1]
     wx, wy, ww, wh = dispcp.win_rect(m, S, slot)
@@ -170,7 +171,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     sx = ox + cw - FD_PAD - 1 - FD_BTNW // 2
     sy = oy + FD_PAD + FD_BTNH // 2
     mo.click(sx, sy)
-    time.sleep(1.5)
+    os88marty.pace(m, 1.5)
     os88marty.settle(m)
     w_, h_, d_ = m.fbuf()
     os88marty.write_png_rgb("build/ftpdflick-setup.png", w_, h_, d_)
@@ -191,10 +192,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # and takes os88line_caroff's opaque-run path rather than its white-fill
     # one. An empty field exercises the other half by itself.
     mo.click(x0, y0)
-    time.sleep(1.0)
+    os88marty.pace(m, 1.0)
     os88marty.settle(m)
     m.type_text("192.168.1.100")
-    time.sleep(1.0)
+    os88marty.pace(m, 1.0)
     os88marty.settle(m)
 
     def step(what, x, y, **kw):
@@ -218,13 +219,13 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # to FDD_PAGE and 77.45 does not. The row above ended in a release of its
     # own, which took the caret away, so the focus is put back first.
     mo.click(x0, y0)
-    time.sleep(1.0)
+    os88marty.pace(m, 1.0)
     os88marty.settle(m)
     step("a TICK release, field focused", tx, ty, edge="release")
     # The BACKGROUND: to the right of the field column, which ends at
     # FD_FLDX + FD_FLDW. Not the toolbar row - Done is in it.
     mo.click(x0, y0)
-    time.sleep(1.0)
+    os88marty.pace(m, 1.0)
     os88marty.settle(m)
     step("onto the background", ox + FD_FLDX + FD_FLDW + 40, y1)
     w_, h_, d_ = m.fbuf()

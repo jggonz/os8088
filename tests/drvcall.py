@@ -28,7 +28,6 @@ eleven pixels of difference per glyph on a 1bpp adapter.
 import argparse
 import os
 import sys
-import time
 
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
 # checkout it was written in and wrong in a git worktree, which is how parallel
@@ -189,9 +188,18 @@ def main():
         os88marty.settle(m)
         mo.click(x0 + CP_RX + 40,
                  y0 + CP_DBY1 + RD_ROW * CP_DROWH + CP_DROWH // 2)
-        time.sleep(6)
+        rdseg = S("drv_tab") + RD_ROW * DRVR_SZ + DRVR_SEG
+        try:
+            # the row's segment is written at the claim, before the read;
+            # the load is over when the floppy goes quiet after it
+            os88marty.until(m, lambda mm: mm.read(rdseg, 2) != b"\0\0",
+                            "the Ram Disk's claim", poll=0.1, limit=20.0)
+            os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                              what="the Ram Disk's load to finish")
+        except os88marty.MartyError:
+            pass                                # ...and the exit below says so
         os88marty.settle(m)
-        row = m.read(S("drv_tab") + RD_ROW * DRVR_SZ + DRVR_SEG, 2)
+        row = m.read(rdseg, 2)
         seg = row[0] | (row[1] << 8)
         say("RAMDISK.DRV at %04X" % seg)
         if not seg:

@@ -161,10 +161,11 @@ def main():
         if msnk != held:
             fail("the page's sound term is %d K and the class is HOLDING %d. "
                  "OSAPI_DRV_CLASSK's plain form must weigh the heap, not "
-                 "drv_memk - DRVM_SND is 6 image + 8 DMA + 20 SBL_POOLKB and "
-                 "the pool is claimed on the FIRST GRANT, so a mounted silent "
-                 "driver holds 14 and the constant is 20 high for ever "
-                 "(SPEC.md 51.12.2)" % (msnk, held))
+                 "drv_memk - DRVM_SND is 7 image + 16 SBL_PLAYKB, what it holds "
+                 "PLAYING, and the pool is claimed on the FIRST GRANT, so a "
+                 "mounted silent driver holds its 7 and the constant is 16 "
+                 "high for ever (SPEC.md 51.12.2, 34.5.2)"
+                 % (msnk, held))
         print("dosest: the sound term is %d K and the class holds %d K - the "
               "same number, off the same heap" % (msnk, held))
         print("dosest: ok")

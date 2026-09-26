@@ -40,7 +40,6 @@ program with the operating system gone, and both halves are read with
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -70,12 +69,16 @@ def rows(m):
 
 def wait_text(m, want, secs=90, what=""):
     """Wait for `want` on the guest's text screen, or say what was there."""
-    end = time.time() + secs
-    while time.time() < end:
-        rs = rows(m)
-        if any(want in r for r in rs):
-            return rs
-        time.sleep(0.25)
+    rs = []
+
+    def seen(mm):
+        rs[:] = rows(mm)
+        return any(want in r for r in rs)
+    try:
+        os88marty.until(m, seen, repr(want), poll=0.25, limit=secs)
+        return rs
+    except os88marty.MartyError:
+        pass
     fail("%s: %r never appeared on the text screen. The last one was %r"
          % (what or want, want, [r for r in rows(m) if r.strip()][:10]))
 
@@ -201,16 +204,19 @@ def wait_desktop(m, ui, secs=300):
     write - tests/kdreturn.py has the same wait and went red on a mono machine
     for exactly this (SPEC.md 96.49.2).
     """
-    end = time.time() + secs
-    while time.time() < end:
+    def graphics(mm):
         try:
-            if not os88marty.video_is_text(m.video() or {}):
-                return ui.ready(limit=secs)
-        except Exception:
-            pass
-        time.sleep(1.0)
-    raise RuntimeError("no graphics desktop in %ds; the text screen holds %r"
-                       % (secs, [r for r in rows(m) if r.strip()][-4:]))
+            return not os88marty.video_is_text(mm.video() or {})
+        except Exception:                               # noqa: BLE001
+            return False
+    try:
+        os88marty.until(m, graphics, "a graphics desktop", poll=1.0,
+                        limit=secs)
+    except os88marty.MartyError:
+        raise RuntimeError("no graphics desktop in %ds; the text screen "
+                           "holds %r" % (secs, [r for r in rows(m)
+                                                if r.strip()][-4:]))
+    return ui.ready(limit=secs)
 
 
 def main():

@@ -40,7 +40,6 @@ IBM DOS reads sector 0 of drive A and succeeds (CF0 AX=0100), this box refuses
 import os
 import re
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -82,13 +81,14 @@ def main():
         # FAILURE HERE IS A HANG - and a wait long enough to hit the runner's
         # own wall clock reports `TIMEOUT` instead of naming the vector.
         rows = []
-        end = time.time() + 45.0
-        while time.time() < end:
-            rows = m.screen() or []
-            if any("KEY" in r for r in rows):
-                break
-            time.sleep(0.25)
-        else:
+
+        def _seen(_m):
+            rows[:] = m.screen() or []
+            return any("KEY" in r for r in rows)
+        try:                        # GUEST time: `limit` is idle-box seconds
+            os88marty.until(m, _seen, "the probe to reach KEY", poll=0.25,
+                            limit=45.0)
+        except os88marty.MartyError:
             got = [r.rstrip() for r in (m.screen() or []) if r.strip()]
             nul = next((r for r in got if r.startswith("NUL=")), None)
             if nul and nul != "NUL=NONE":

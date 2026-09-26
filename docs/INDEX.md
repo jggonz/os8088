@@ -12,48 +12,48 @@ Read first: [§11 wm.inc — windows](../SPEC.md#11-wminc--windows); [§20 Loada
 
 | slot | call | takes |
 |---|---|---|
-| `0x0078` | `OSAPI_WM_CREATE` | SI=template; out BX = win ptr, CF on full |
-| `0x0080` | `OSAPI_WM_SHOW` | BX=win ptr |
-| `0x0088` | `OSAPI_WM_HIDE` | BX=win ptr |
-| `0x0398` | `OSAPI_WM_DESTROY` | BX = a window of YOURS; the gfx lock is held, as OSAPI_WM_HIDE wants it... |
-| `0x0090` | `OSAPI_WM_FRONT` | BX=win ptr |
-| `0x0098` | `OSAPI_WM_CONTENT` | BX=win ptr; out AX=content left, DX=top |
-| `0x00A0` | `OSAPI_WM_OBSCURED` | BX=win ptr; out CF=1 if covered - which INCLUDES your window being hidden, so a worker gating a draw on this needs no visibility test of its own... |
-| `0x04E0` | `OSAPI_WM_OWNSEG` | AL = a window slot; out CF=1 no live window in that slot, else CF=0 and DX = the owning segment... |
-| `0x0108` | `OSAPI_WM_SIZABLE` | BX=win ptr, AL = 0 clear / non-zero set WF_SIZABLE; call from the entry proc after OSAPI_WM_CREATE... |
-| `0x04F0` | `OSAPI_WM_NOANIM` | BX = win ptr; NO other argument and no answer: this window does not zoom open (SPEC.md 11.99.2.1). Call it between OSAPI_WM_CREATE and OSAPI_WM_SHOW... |
-| `0x0548` | `OSAPI_WM_MINIMIZE` | BX = a window of YOURS; the gfx lock held (a window callback does)... |
-| `0x0118` | `OSAPI_WM_GROW` | BX=win ptr; caller holds the gfx lock. A resizable window's self-initiated content repaint must END with this: the white-fill idiom erases the grow... |
-| `0x0170` | `OSAPI_WM_CLIP_SET` | BX = YOUR window ptr; the gfx lock must be HELD. out CF = 1: not one pixel of your content is visible... |
-| `0x0178` | `OSAPI_WM_CLIP_CLEAR` | disarm early, to draw unclipped again inside the same lock hold. Preserves every register. |
-| `0x01E0` | `OSAPI_ABOUT_SET` | BX = win ptr, SI = your About handler's offset (0 = none). Preserves every register and the flags |
-| `0x0180` | `OSAPI_WM_CLIP_TEST` | AX=x1, BX=y1, CX=x2, DX=y2 (inclusive); out CF=0 the whole rect is drawable (also when no clip is armed), CF=1 it is not. Preserves every register... |
-| `0x01B0` | `OSAPI_WM_GEOM` | BX = win ptr; out CX = content width, DX = content height (inner px - the box whose origin OSAPI_WM_CONTENT answers), CF=1 the window is not visible... |
-| `0x01D0` | `OSAPI_WM_RESIZE` | BX = win ptr, CX = new width, DX = new height, in pixels, of the WHOLE window (frame included)... |
-| `0x0220` | `OSAPI_WM_ONSIZE` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it)... |
-| `0x0430` | `OSAPI_WM_ONDRAG` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it). THE TRACKING EDGE (SPEC.md 13.8.2): the pointer moved while your press was armed... |
-| `0x0438` | `OSAPI_WM_TIMER` | BX = win ptr, AX = TICKS from now (0 cancels). CALL ME BACK IN N TICKS (SPEC.md 13.9)... |
-| `0x0440` | `OSAPI_WM_ONTIMER` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): what the timer above calls... |
-| `0x0240` | `OSAPI_WM_TITLE` | BX = win ptr, AX = a NUL string IN YOUR OWN SEGMENT, or 0 to mean "the bytes W_TITLE already names changed underneath it"... |
-| `0x0260` | `OSAPI_WM_TOP` | out BX = the frontmost VISIBLE window, 0 if none. Preserves everything else, takes no lock, callable from a worker. "Do I have focus?"... |
-| `0x0268` | `OSAPI_WM_SNAP` | BX = window ptr, AL = 0 clear / non-zero set. Out: nothing... |
-| `0x03B8` | `OSAPI_WM_BAND` | BX = window ptr, AL = edge (0 left, 1 right, 2 top, 3 bottom), CX = the band's extent in pixels measured in from that edge, 0..255... |
-| `0x03D0` | `OSAPI_WM_CURSOR` | BX = your window ptr, AL = OSAPI_CUR_*. The pointer wears it over your window's CONTENT and nowhere else... |
-| `0x03B0` | `OSAPI_WM_DAMAGE` | BX = your window ptr, called from inside your own W_PAINT... |
-| `0x03A8` | `OSAPI_WM_OWNBG` | BX = window ptr, AL = 0 clear / non-0 set. "I paint EVERY PIXEL of my content myself", so the kernel's white fill in front of W_PAINT is skipped... |
-| `0x0378` | `OSAPI_WM_SAVEU` | BX = window ptr, AL = 0 clear / OSAPI_SAVEU_* set. A PROMISE: this window's content does not change while it is not drawing, so a raise may put its... |
-| `0x05A0` | `OSAPI_WM_ONCLICK` | BX = win ptr, AX = a near proc in YOUR segment (0 clears): the PRESS half of a content click... |
-| `0x01F0` | `OSAPI_WM_ONMOUSEUP` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): the RELEASE half of a content click (SPEC.md 13.7)... |
-| `0x0490` | `OSAPI_WM_ONRCLICK` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): the RIGHT button, pressed in your content (SPEC.md 13.11)... |
-| `0x03D8` | `OSAPI_WM_ONRESIZE` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): "your content box CHANGED, and you did not ask" (SPEC.md 11.98)... |
-| `0x0458` | `OSAPI_WM_ONWAKE` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): your WAKE handler (SPEC.md 74.1)... |
-| `0x0450` | `OSAPI_WM_WAKE` | BX = win ptr (a window of YOURS). Post an EVT_WAKE for it (SPEC.md 10, 74.1): the UI task pops it in order with the mouse events and calls the... |
-| `0x0468` | `OSAPI_WM_ONCLOSE` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): your CLOSE NEGOTIATOR (SPEC.md 75.1)... |
-| `0x0470` | `OSAPI_WM_CLOSE` | BX = a window of YOURS: close it (SPEC.md 75.2). This is how a negotiator that refused finishes the job once the user has answered. IT RETURNS, and... |
-| `0x0478` | `OSAPI_WM_PREFER` | BX = win ptr, SI = the offset IN YOUR OWN SEGMENT of a 12-byte table: three (w, h) FRAME sizes, in VID_VGA / VID_HERC / VID_CGA order... |
-| `0x0480` | `OSAPI_WM_MINSIZE` | BX = win ptr, CX = minimum outer WIDTH, DX = minimum outer HEIGHT; CX = DX = 0 withdraws... |
-| `0x0488` | `OSAPI_WM_DISPLAY` | OSAPI_VIDEO FOR THE DISPLAY THIS WINDOW IS ON (SPEC.md 39.16.4). BX = your window... |
-| `0x03E0` | `OSAPI_WM_KEEPH` | BX = win ptr, AL = 0 clear / non-0 set: "my layout is FIXED... |
+| `0x0076` | `OSAPI_WM_CREATE` | SI=template; out BX = win ptr, CF on full |
+| `0x007C` | `OSAPI_WM_SHOW` | BX=win ptr |
+| `0x0082` | `OSAPI_WM_HIDE` | BX=win ptr |
+| `0x02BC` | `OSAPI_WM_DESTROY` | BX = a window of YOURS; the gfx lock is held, as OSAPI_WM_HIDE wants it... |
+| `0x0088` | `OSAPI_WM_FRONT` | BX=win ptr |
+| `0x008E` | `OSAPI_WM_CONTENT` | BX=win ptr; out AX=content left, DX=top |
+| `0x0096` | `OSAPI_WM_OBSCURED` | BX=win ptr; out CF=1 if covered - which INCLUDES your window being hidden, so a worker gating a draw on this needs no visibility test of its own... |
+| `0x03BF` | `OSAPI_WM_OWNSEG` | AL = a window slot; out CF=1 no live window in that slot, else CF=0 and DX = the owning segment... |
+| `0x00F1` | `OSAPI_WM_SIZABLE` | BX=win ptr, AL = 0 clear / non-zero set WF_SIZABLE; call from the entry proc after OSAPI_WM_CREATE... |
+| `0x03CD` | `OSAPI_WM_NOANIM` | BX = win ptr; NO other argument and no answer: this window does not zoom open (SPEC.md 11.99.2.1). Call it between OSAPI_WM_CREATE and OSAPI_WM_SHOW... |
+| `0x0413` | `OSAPI_WM_MINIMIZE` | BX = a window of YOURS; the gfx lock held (a window callback does)... |
+| `0x00FD` | `OSAPI_WM_GROW` | BX=win ptr; caller holds the gfx lock. A resizable window's self-initiated content repaint must END with this: the white-fill idiom erases the grow... |
+| `0x013D` | `OSAPI_WM_CLIP_SET` | BX = YOUR window ptr; the gfx lock must be HELD. out CF = 1: not one pixel of your content is visible... |
+| `0x0145` | `OSAPI_WM_CLIP_CLEAR` | disarm early, to draw unclipped again inside the same lock hold. Preserves every register. |
+| `0x018A` | `OSAPI_ABOUT_SET` | BX = win ptr, SI = your About handler's offset (0 = none). Preserves every register and the flags |
+| `0x014D` | `OSAPI_WM_CLIP_TEST` | AX=x1, BX=y1, CX=x2, DX=y2 (inclusive); out CF=0 the whole rect is drawable (also when no clip is armed), CF=1 it is not. Preserves every register... |
+| `0x0174` | `OSAPI_WM_GEOM` | BX = win ptr; out CX = content width, DX = content height (inner px - the box whose origin OSAPI_WM_CONTENT answers), CF=1 the window is not visible... |
+| `0x017C` | `OSAPI_WM_RESIZE` | BX = win ptr, CX = new width, DX = new height, in pixels, of the WHOLE window (frame included)... |
+| `0x01BC` | `OSAPI_WM_ONSIZE` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it)... |
+| `0x0334` | `OSAPI_WM_ONDRAG` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it). THE TRACKING EDGE (SPEC.md 13.8.2): the pointer moved while your press was armed... |
+| `0x033A` | `OSAPI_WM_TIMER` | BX = win ptr, AX = TICKS from now (0 cancels). CALL ME BACK IN N TICKS (SPEC.md 13.9)... |
+| `0x0342` | `OSAPI_WM_ONTIMER` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): what the timer above calls... |
+| `0x01D3` | `OSAPI_WM_TITLE` | BX = win ptr, AX = a NUL string IN YOUR OWN SEGMENT, or 0 to mean "the bytes W_TITLE already names changed underneath it"... |
+| `0x01EC` | `OSAPI_WM_TOP` | out BX = the frontmost VISIBLE window, 0 if none. Preserves everything else, takes no lock, callable from a worker. "Do I have focus?"... |
+| `0x01F2` | `OSAPI_WM_SNAP` | BX = window ptr, AL = 0 clear / non-zero set. Out: nothing... |
+| `0x02D3` | `OSAPI_WM_BAND` | BX = window ptr, AL = edge (0 left, 1 right, 2 top, 3 bottom), CX = the band's extent in pixels measured in from that edge, 0..255... |
+| `0x02E5` | `OSAPI_WM_CURSOR` | BX = your window ptr, AL = OSAPI_CUR_*. The pointer wears it over your window's CONTENT and nowhere else... |
+| `0x02CB` | `OSAPI_WM_DAMAGE` | BX = your window ptr, called from inside your own W_PAINT... |
+| `0x02C5` | `OSAPI_WM_OWNBG` | BX = window ptr, AL = 0 clear / non-0 set. "I paint EVERY PIXEL of my content myself", so the kernel's white fill in front of W_PAINT is skipped... |
+| `0x02A4` | `OSAPI_WM_SAVEU` | BX = window ptr, AL = 0 clear / OSAPI_SAVEU_* set. A PROMISE: this window's content does not change while it is not drawing, so a raise may put its... |
+| `0x0450` | `OSAPI_WM_ONCLICK` | BX = win ptr, AX = a near proc in YOUR segment (0 clears): the PRESS half of a content click... |
+| `0x0196` | `OSAPI_WM_ONMOUSEUP` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): the RELEASE half of a content click (SPEC.md 13.7)... |
+| `0x0380` | `OSAPI_WM_ONRCLICK` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): the RIGHT button, pressed in your content (SPEC.md 13.11)... |
+| `0x02EB` | `OSAPI_WM_ONRESIZE` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): "your content box CHANGED, and you did not ask" (SPEC.md 11.98)... |
+| `0x0357` | `OSAPI_WM_ONWAKE` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): your WAKE handler (SPEC.md 74.1)... |
+| `0x034F` | `OSAPI_WM_WAKE` | BX = win ptr (a window of YOURS). Post an EVT_WAKE for it (SPEC.md 10, 74.1): the UI task pops it in order with the mouse events and calls the... |
+| `0x0362` | `OSAPI_WM_ONCLOSE` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): your CLOSE NEGOTIATOR (SPEC.md 75.1)... |
+| `0x0368` | `OSAPI_WM_CLOSE` | BX = a window of YOURS: close it (SPEC.md 75.2). This is how a negotiator that refused finishes the job once the user has answered. IT RETURNS, and... |
+| `0x036E` | `OSAPI_WM_PREFER` | BX = win ptr, SI = the offset IN YOUR OWN SEGMENT of a 12-byte table: three (w, h) FRAME sizes, in VID_VGA / VID_HERC / VID_CGA order... |
+| `0x0374` | `OSAPI_WM_MINSIZE` | BX = win ptr, CX = minimum outer WIDTH, DX = minimum outer HEIGHT; CX = DX = 0 withdraws... |
+| `0x037A` | `OSAPI_WM_DISPLAY` | OSAPI_VIDEO FOR THE DISPLAY THIS WINDOW IS ON (SPEC.md 39.16.4). BX = your window... |
+| `0x02F0` | `OSAPI_WM_KEEPH` | BX = win ptr, AL = 0 clear / non-0 set: "my layout is FIXED... |
 
 ### Packages and the desktop
 
@@ -61,9 +61,9 @@ Read first: [§21 loader.inc](../SPEC.md#21-loaderinc); [§26 desk.inc — deskt
 
 | slot | call | takes |
 |---|---|---|
-| `0x0520` | `OSAPI_PKG_START` | SI = a NUL-terminated 8.3 name, at most 12 characters, in YOUR segment... |
-| `0x0528` | `OSAPI_DESK_SVC` | AL = 1 add / 0 withdraw; ES:SI = a 65-byte record in YOUR segment (add only): +0 12 the caption, NUL (<= 11 chars) +12 13 the 8.3 file the zone... |
-| `0x0530` | `OSAPI_PKG_REHOME` | DX = the segment your program part's IMAGE starts at (op_seg answers it), AX = the bytes available there... |
+| `0x03F2` | `OSAPI_PKG_START` | SI = a NUL-terminated 8.3 name, at most 12 characters, in YOUR segment... |
+| `0x03F8` | `OSAPI_DESK_SVC` | AL = 1 add / 0 withdraw; ES:SI = a 39-byte record in YOUR segment (add only): +0 12 the caption, NUL (<= 11 chars) +12 13 the 8.3 file the zone... |
+| `0x03FE` | `OSAPI_PKG_REHOME` | DX = the segment your program part's IMAGE starts at (op_seg answers it), AX = the bytes available there... |
 
 ### Menus and the menu bar
 
@@ -71,9 +71,9 @@ Read first: [§12 menu.inc](../SPEC.md#12-menuinc); [§59 toast.inc — the tran
 
 | slot | call | takes |
 |---|---|---|
-| `0x0148` | `OSAPI_MENU_SET` | BX = win ptr, SI = menu set ptr (0 = none). Draws nothing, takes no lock, preserves every register AND the flags... |
-| `0x02B8` | `OSAPI_MENU_OWNER` | out BX = the window owning the menu bar, 0 = Locator (SPEC.md 12). Preserves everything else and FLAGS, takes no lock, callable from a worker... |
-| `0x0380` | `OSAPI_TOAST` | ES:SI = a NUL line, CX = ticks to live (0 = ~3s at 18.2 Hz)... |
+| `0x011E` | `OSAPI_MENU_SET` | BX = win ptr, SI = menu set ptr (0 = none). Draws nothing, takes no lock, preserves every register AND the flags... |
+| `0x0229` | `OSAPI_MENU_OWNER` | out BX = the window owning the menu bar, 0 = Locator (SPEC.md 12). Preserves everything else and FLAGS, takes no lock, callable from a worker... |
+| `0x02AA` | `OSAPI_TOAST` | ES:SI = a NUL line, CX = ticks to live (0 = ~3s at 18.2 Hz)... |
 
 ### Drawing
 
@@ -91,23 +91,20 @@ Read first: [§5 vga12.inc](../SPEC.md#5-vga12inc); [§25 icons.inc — icon for
 | `0x0048` | `OSAPI_GFX_FILL_GRAY` | AX=x1, BX=y1, CX=x2, DX=y2 (50% dither) |
 | `0x0050` | `OSAPI_GFX_XOR_RECT` | AX=x1, BX=y1, CX=x2, DX=y2 |
 | `0x0058` | `OSAPI_GFX_XOR_FILL` | AX=x1, BX=y1, CX=x2, DX=y2 |
-| `0x04B0` | `OSAPI_ICON_PEN` | AL = the colour the next OSAPI_ICON_DRAW's MASK rows lay down, AH = the colour its DATA rows draw over them... |
-| `0x04B8` | `OSAPI_ICON_DRAW` | CX = x, DX = y, SI -> the record. out CF = 1 refused (a record wider than one word a row, or taller than 16) |
-| `0x04A8` | `OSAPI_GFX_BLIT1_PEN` | AL = ink (what a SET bit in the next OSAPI_GFX_BLIT1's band becomes), AH = paper (a CLEAR one). SPEC.md 5.4.2.2... |
-| `0x00C0` | `OSAPI_SET_COLOR` | AL -> [gfx_color] |
-| `0x01F8` | `OSAPI_GFX_SCROLL` | move a rect's contents up or down instead of redrawing them (SPEC.md 5.5): AX/BX/CX/DX = x1/y1/x2/y2 inclusive ABSOLUTE screen coords, SI = signed... |
-| `0x04C0` | `OSAPI_GFX_BLITP` | ES:SI = plane 0's first row, DI = the step to the next plane, BP = the row stride inside one, AX = x (A MULTIPLE OF 8), BX = y, CX = width in pixels,... |
-| `0x0508` | `OSAPI_GFX_SAVE` | AX = x1, BX = y1, CX = x2, DX = y2 (INCLUSIVE, absolute screen), ES:DI = your buffer. Copies those pixels into it... |
-| `0x0510` | `OSAPI_GFX_REST` | the same rect in AX/BX/CX/DX and ES:SI = the buffer OSAPI_GFX_SAVE filled; writes it back. out CF = 1 REFUSED, CF = 0 and SI advanced... |
-| `0x04D8` | `OSAPI_GFX_SPANS` | AX = the y of the FIRST span, ES:SI = CX records of two words each, x1 then x2, both INCLUSIVE; CX = rows, row n being y+n... |
-| `0x01D8` | `OSAPI_GFX_BLIT4` | ES:SI = packed 4bpp pixels (two per byte, high nibble leftmost), BP = source stride in BYTES, AX/BX = destination x/y, CX/DX = width/height in... |
-| `0x0418` | `OSAPI_GFX_BLIT1` | ES:SI = a 1bpp BAND in the framebuffer's own bit order (row-major, bit 7 leftmost, 1 = a LIT pixel), BP = its stride in BYTES per row, AX =... |
-| `0x02B0` | `OSAPI_GFX_FILL_PAT` | AX/BX/CX/DX = the rect, SI = 8 pattern bytes in YOUR segment: row y takes byte [SI + (y & 7)], a set bit is WHITE and bit 7 is the leftmost pixel of... |
-| `0x02E0` | `OSAPI_GFX_LINE` | RETIRED (SPEC.md 5.12.7): the cell stays because a slot number is a published constant, and it answers CF = 1... |
-| `0x0308` | `OSAPI_GFX_LSTEP` | RETIRED (SPEC.md 5.12.7): the cell stays because a slot number is a published constant, and it answers CF = 1... |
-| `0x0318` | `OSAPI_GFX_LSTEPV` | RETIRED (SPEC.md 5.12.7): the cell stays because a slot number is a published constant, and it answers CF = 1... |
-| `0x0538` | `OSAPI_GFX_POINTS` | ES:SI = CX records of two words each, x then y (screen px); CX = how many, 0 legal and does nothing. [gfx_color] is the ink; hold the lock... |
-| `0x0310` | `OSAPI_GFX_PEN` | CF = 0 live (CBLACK, flag clear) / CF = 1 disabled (CDGRAY, flag set). Preserves every register. |
+| `0x0398` | `OSAPI_ICON_PEN` | AL = the colour the next OSAPI_ICON_DRAW's MASK rows lay down, AH = the colour its DATA rows draw over them... |
+| `0x039D` | `OSAPI_ICON_DRAW` | CX = x, DX = y, SI -> the record. out CF = 1 refused (a record wider than one word a row, or taller than 16) |
+| `0x0393` | `OSAPI_GFX_BLIT1_PEN` | AL = ink (what a SET bit in the next OSAPI_GFX_BLIT1's band becomes), AH = paper (a CLEAR one). SPEC.md 5.4.2.2... |
+| `0x00B3` | `OSAPI_SET_COLOR` | AL -> [gfx_color] |
+| `0x019C` | `OSAPI_GFX_SCROLL` | move a rect's contents up or down instead of redrawing them (SPEC.md 5.5): AX/BX/CX/DX = x1/y1/x2/y2 inclusive ABSOLUTE screen coords, SI = signed... |
+| `0x03A4` | `OSAPI_GFX_BLITP` | ES:SI = plane 0's first row, DI = the step to the next plane, BP = the row stride inside one, AX = x (A MULTIPLE OF 8), BX = y, CX = width in pixels,... |
+| `0x03DC` | `OSAPI_GFX_SAVE` | AX = x1, BX = y1, CX = x2, DX = y2 (INCLUSIVE, absolute screen), ES:DI = your buffer. Copies those pixels into it... |
+| `0x03E4` | `OSAPI_GFX_REST` | the same rect in AX/BX/CX/DX and ES:SI = the buffer OSAPI_GFX_SAVE filled; writes it back. out CF = 1 REFUSED, CF = 0 and SI advanced... |
+| `0x03B8` | `OSAPI_GFX_SPANS` | AX = the y of the FIRST span, ES:SI = CX records of two words each, x1 then x2, both INCLUSIVE; CX = rows, row n being y+n... |
+| `0x0182` | `OSAPI_GFX_BLIT4` | ES:SI = packed 4bpp pixels (two per byte, high nibble leftmost), BP = source stride in BYTES, AX/BX = destination x/y, CX/DX = width/height in... |
+| `0x0320` | `OSAPI_GFX_BLIT1` | ES:SI = a 1bpp BAND in the framebuffer's own bit order (row-major, bit 7 leftmost, 1 = a LIT pixel), BP = its stride in BYTES per row, AX =... |
+| `0x0222` | `OSAPI_GFX_FILL_PAT` | AX/BX/CX/DX = the rect, SI = 8 pattern bytes in YOUR segment: row y takes byte [SI + (y & 7)], a set bit is WHITE and bit 7 is the leftmost pixel of... |
+| `0x0404` | `OSAPI_GFX_POINTS` | ES:SI = CX records of two words each, x then y (screen px); CX = how many, 0 legal and does nothing. [gfx_color] is the ink; hold the lock... |
+| `0x0260` | `OSAPI_GFX_PEN` | CF = 0 live (CBLACK, flag clear) / CF = 1 disabled (CDGRAY, flag set). Preserves every register. |
 
 ### Text and fonts
 
@@ -117,9 +114,9 @@ Read first: [§6 font.inc](../SPEC.md#6-fontinc); [§83 Text input for packages 
 |---|---|---|
 | `0x0060` | `OSAPI_FONT_CHAR_XPARENT` | CX=x, DX=y, AL=char |
 | `0x0068` | `OSAPI_FONT_STR_XPARENT` | CX=x, DX=y, SI=NUL string |
-| `0x0070` | `OSAPI_FONT_WIDTH` | SI=NUL string; out AX = pixel width |
-| `0x0218` | `OSAPI_FONT_GLYPHS` | out DX:SI = the kernel's 8x8 glyph table, AL = first character code it covers, AH = last, CX = bytes per glyph (8)... |
-| `0x0258` | `OSAPI_FONT_RUN` | CX=x, DX=y, SI=NUL string, AL=ink, AH=background. ONE OPAQUE text run (SPEC.md 6.1): the cells' background and their glyphs in a single pass, which... |
+| `0x006F` | `OSAPI_FONT_WIDTH` | SI=NUL string; out AX = pixel width |
+| `0x01B6` | `OSAPI_FONT_GLYPHS` | out DX:SI = the kernel's 8x8 glyph table, AL = first character code it covers, AH = last, CX = bytes per glyph (8)... |
+| `0x01E5` | `OSAPI_FONT_RUN` | CX=x, DX=y, SI=NUL string, AL=ink, AH=background. ONE OPAQUE text run (SPEC.md 6.1): the cells' background and their glyphs in a single pass, which... |
 
 ### Input - keyboard and mouse
 
@@ -127,11 +124,11 @@ Read first: [§9 mouse.inc — the pointer: serial and PS/2 mice, and the cursor
 
 | slot | call | takes |
 |---|---|---|
-| `0x00C8` | `OSAPI_MOUSE` | out CX=mouse_x, DX=mouse_y, AL=mouse_btn |
-| `0x03F0` | `OSAPI_KEY_DOWN` | AL = a make scancode (KSC_*). out CF=1 down, CF=0 up; every register kept |
-| `0x0540` | `OSAPI_CUR_BUSY` | I AM ABOUT TO GO QUIET FOR A WHILE (SPEC.md 7.5). NO ARGUMENT. The pointer becomes a CLOCK for the rest of the gfx-lock hold you are inside, and... |
-| `0x0598` | `OSAPI_MOUSE_FEED` | AX = dx, BX = dy (signed; POSITIVE dy IS DOWN), CL = buttons in mouse_btn's bits (1 left, 2 right)... |
-| `0x0338` | `OSAPI_EVQ_PENDING` | out AX = events still queued behind the one being dispatched (SPEC.md 13.4)... |
+| `0x00B8` | `OSAPI_MOUSE` | out CX=mouse_x, DX=mouse_y, AL=mouse_btn |
+| `0x02FC` | `OSAPI_KEY_DOWN` | AL = a make scancode (KSC_*). out CF=1 down, CF=0 up; every register kept |
+| `0x040B` | `OSAPI_CUR_BUSY` | I AM ABOUT TO GO QUIET FOR A WHILE (SPEC.md 7.5). NO ARGUMENT. The pointer becomes a CLOCK for the rest of the gfx-lock hold you are inside, and... |
+| `0x0449` | `OSAPI_MOUSE_FEED` | AX = dx, BX = dy (signed; POSITIVE dy IS DOWN), CL = buttons in mouse_btn's bits (1 left, 2 right)... |
+| `0x027A` | `OSAPI_EVQ_PENDING` | out AX = events still queued behind the one being dispatched (SPEC.md 13.4)... |
 
 ### Files and volumes
 
@@ -139,43 +136,42 @@ Read first: [§18 disk.inc — floppy I/O (BIOS int 13h) + the FAT driver](../SP
 
 | slot | call | takes |
 |---|---|---|
-| `0x04F8` | `OSAPI_DECOMP` | DS:SI = the compressed bytes, T word first (SPEC.md 20.13.7: every stream ends in T raw bytes, and needs NO in-place margin... |
-| `0x0120` | `OSAPI_FILE_WRITE` | SI = NUL 8.3 name, ES:BX = bytes, DX:CX = count (0 = empty file); creates or REPLACES... |
-| `0x0128` | `OSAPI_FILE_READ` | SI = name, ES:BX = buffer, DX:CX = its capacity; out CF=0 and DX:AX = bytes read (the file's 32-bit size), else AX = FERR_*... |
-| `0x0130` | `OSAPI_FILE_DELETE` | SI = name; out CF=0 AX=0, else FERR_* |
-| `0x0138` | `OSAPI_FILE_RENAME` | SI = old name, DI = new name; out as above |
-| `0x0578` | `OSAPI_FILE_COPY` | COPY OR MOVE ONE ENTRY, source folder to destination (SPEC.md 22.24)... |
-| `0x0588` | `OSAPI_FILE_WRITE_AT` | SI = a NUL 8.3 name, ES:BX = the bytes, CX = how many (>= 1), DX:AX = the byte offset (a multiple of the volume's CLUSTER)... |
-| `0x0140` | `OSAPI_FILE_DFREE` | out CF=0, DX:AX = free bytes, BX = SECTORS per cluster. NO DISK I/O - AND THAT IS NOT THE SAME AS CHEAP (SPEC.md 18.4.5)... |
-| `0x0570` | `OSAPI_VOL_STAT` | THE VOLUME YOU ARE STANDING ON, in four registers (SPEC.md 18.4.6): out CF=0 with AX = sectors per cluster, BX = free clusters, CX = bytes per sector... |
-| `0x0150` | `OSAPI_FILE_DLG` | AL = 0 Open / 1 Save, BX = your window ptr, DI = completion proc, SI = default name (NUL, <= 12) or 0... |
-| `0x01E8` | `OSAPI_VOL_KIND` | AL = a volume index (0 = A:). CF=1 = there is no such volume... |
-| `0x0270` | `OSAPI_VOL_ADD` | AL = the driver's own volume handle, CX = the volume's sector count, DX = a listing claim's segment (0 = the kernel's 32-entry floor), SI = a NUL... |
-| `0x0278` | `OSAPI_VOL_DEL` | AL = a volume index this driver registered. Cannot fail |
-| `0x0280` | `OSAPI_VOL_MOUNT` | AL = a volume index; mount and list it. out CF=1 = not a readable FAT12/16 volume. UI-TASK CONTEXT ONLY, like every other file slot |
-| `0x0288` | `OSAPI_VOL_PAINT` | repaint the desktop's drive zones. It takes the gfx lock ITSELF, so never from a callback that holds one |
-| `0x03E8` | `OSAPI_VOL_AT` | DL = an int 13h drive number, BX:CX = a partition's 32-bit base LBA (BX = the high word)... |
-| `0x03C0` | `OSAPI_FS_ENT` | ES:SI -> a DSK_DE_SIZE-byte staged SPEC.md 19.1 entry in YOUR OWN segment: name at 0 (NUL-terminated 8.3), type at 16 (0 file / 1 package / 2 folder... |
-| `0x03C8` | `OSAPI_FS_PROG` | AX = bytes moved SINCE YOUR LAST REPORT - a running total would advance the bar by the whole file every call... |
-| `0x0420` | `OSAPI_VOL_SYS` | out BL = the volume this machine BOOTED from - A: on a floppy machine, the installed partition on one that boots from its hard disk... |
-| `0x0228` | `OSAPI_FILE_HERE` | out DX = YOUR instance's current directory (0 = the root), BL = its drive. No disk I/O. |
-| `0x0230` | `OSAPI_FILE_GOTO` | in DX = a cluster from OSAPI_FILE_HERE, BL = its drive; moves YOUR instance there... |
-| `0x02E8` | `OSAPI_ARG_FILE` | the document this instance was launched to open (SPEC.md 54.5). No inputs; out CF=1 = launched empty, the ordinary case... |
-| `0x02F0` | `OSAPI_ASSOC_SET` | claim an extension for a program (SPEC.md 54.5). ES:SI -> 3 extension bytes then 8 stem bytes, both space-padded... |
-| `0x0300` | `OSAPI_DSK_CACHE` | **COMMAND THE READ-AHEAD CACHE'S WIDTH** (SPEC.md 18.95.8), for a program that is about to take the arena... |
-| `0x0558` | `OSAPI_FILE_PATH` | ES:DI = your buffer, CX = its size in bytes (>= 2); out CF=0, a NUL `\DIR\DIR` written there and CX = its length not counting the NUL, DI unchanged... |
-| `0x0388` | `OSAPI_BATCH_BEGIN` | no arguments, no answer |
-| `0x0390` | `OSAPI_BATCH_END` | ...and the other end |
-| `0x0350` | `OSAPI_FILE_APPEND` | SI = NUL 8.3 name, ES:BX = bytes, CX = count (>= 1); out CF=0 AX=0, else AX = FERR_*... |
-| `0x0358` | `OSAPI_FILE_READ_AT` | SI = name, ES:BX = buffer, CX = its capacity in BYTES, DX:AX = the offset to read from... |
-| `0x0500` | `OSAPI_FILE_FIND_RAW` | OSAPI_FILE_FIND, with +18 the size the file OCCUPIES rather than the one it expands to (SPEC.md 20.14.3)... |
-| `0x0360` | `OSAPI_FILE_MKDIR` | SI = a NUL 8.3 name; creates a FOLDER in your current directory (SPEC.md 18.5)... |
-| `0x0498` | `OSAPI_FILE_RMDIR` | SI = a NUL 8.3 name in your current directory, AL = 0 remove it only if it is EMPTY / non-zero remove it AND EVERYTHING UNDER IT (SPEC.md 18.6)... |
-| `0x0370` | `OSAPI_FILE_GOTO_Q` | DX = a folder's first cluster (0 = the root), BL = the volume. out CF=0 and AX=0, else AX = FERR_*... |
-| `0x0460` | `OSAPI_FILE_GOTO_QM` | DX = a folder's first cluster (0 = the root), BL = the volume. out exactly as OSAPI_FILE_GOTO_Q: CF=0 and AX=0, else AX = FERR_* and nothing moved... |
-| `0x0348` | `OSAPI_FILE_FIND` | CX = ordinal (0 to start), ES:DI = an OSAPI_FIND_SZ buffer; out CF=0 filled with CX = the next ordinal, else CF=1 and AX = FERR_NOENT at the end |
-| `0x0340` | `OSAPI_FILE_WRITE_SYS` | SI = NUL 8.3 name, ES:BX = bytes, DX:CX = count; out as OSAPI_FILE_WRITE. DRIVERS ONLY. |
-| `0x03A0` | `OSAPI_FILE_APPEND_SYS` | SI = NUL 8.3 name, ES:BX = bytes, CX = count; out as OSAPI_FILE_APPEND. DRIVERS ONLY. |
+| `0x03D3` | `OSAPI_DECOMP` | DS:SI = the compressed bytes, T word first (SPEC.md 20.13.7: every stream ends in T raw bytes, and needs NO in-place margin... |
+| `0x0103` | `OSAPI_FILE_WRITE` | SI = NUL 8.3 name, ES:BX = bytes, DX:CX = count (0 = empty file); creates or REPLACES... |
+| `0x0109` | `OSAPI_FILE_READ` | SI = name, ES:BX = buffer, DX:CX = its capacity; out CF=0 and DX:AX = bytes read (the file's 32-bit size), else AX = FERR_*... |
+| `0x010F` | `OSAPI_FILE_DELETE` | SI = name; out CF=0 AX=0, else FERR_* |
+| `0x0115` | `OSAPI_FILE_RENAME` | SI = old name, DI = new name; out as above |
+| `0x0431` | `OSAPI_FILE_COPY` | COPY OR MOVE ONE ENTRY, source folder to destination (SPEC.md 22.24)... |
+| `0x043D` | `OSAPI_FILE_WRITE_AT` | SI = a NUL 8.3 name, ES:BX = the bytes, CX = how many (>= 1), DX:AX = the byte offset (a multiple of the volume's CLUSTER)... |
+| `0x0118` | `OSAPI_FILE_DFREE` | out CF=0, DX:AX = free bytes, BX = SECTORS per cluster. NO DISK I/O - AND THAT IS NOT THE SAME AS CHEAP (SPEC.md 18.4.5)... |
+| `0x042B` | `OSAPI_VOL_STAT` | THE VOLUME YOU ARE STANDING ON, in four registers (SPEC.md 18.4.6): out CF=0 with AX = sectors per cluster, BX = free clusters, CX = bytes per sector... |
+| `0x0124` | `OSAPI_FILE_DLG` | AL = 0 Open / 1 Save, BX = your window ptr, DI = completion proc, SI = default name (NUL, <= 12) or 0... |
+| `0x0190` | `OSAPI_VOL_KIND` | AL = a volume index (0 = A:). CF=1 = there is no such volume... |
+| `0x01F8` | `OSAPI_VOL_ADD` | AL = the driver's own volume handle, CX = the volume's sector count, DX = a listing claim's segment (0 = the kernel's 32-entry floor), SI = a NUL... |
+| `0x01FE` | `OSAPI_VOL_DEL` | AL = a volume index this driver registered. Cannot fail |
+| `0x0204` | `OSAPI_VOL_MOUNT` | AL = a volume index; mount and list it. out CF=1 = not a readable FAT12/16 volume. UI-TASK CONTEXT ONLY, like every other file slot |
+| `0x02F6` | `OSAPI_VOL_AT` | DL = an int 13h drive number, BX:CX = a partition's 32-bit base LBA (BX = the high word)... |
+| `0x02D9` | `OSAPI_FS_ENT` | ES:SI -> a DSK_DE_SIZE-byte staged SPEC.md 19.1 entry in YOUR OWN segment: name at 0 (NUL-terminated 8.3), type at 16 (0 file / 1 package / 2 folder... |
+| `0x02DF` | `OSAPI_FS_PROG` | AX = bytes moved SINCE YOUR LAST REPORT - a running total would advance the bar by the whole file every call... |
+| `0x0328` | `OSAPI_VOL_SYS` | out BL = the volume this machine BOOTED from - A: on a floppy machine, the installed partition on one that boots from its hard disk... |
+| `0x01C1` | `OSAPI_FILE_HERE` | out DX = YOUR instance's current directory (0 = the root), BL = its drive. No disk I/O. |
+| `0x01C7` | `OSAPI_FILE_GOTO` | in DX = a cluster from OSAPI_FILE_HERE, BL = its drive; moves YOUR instance there... |
+| `0x0249` | `OSAPI_ARG_FILE` | the document this instance was launched to open (SPEC.md 54.5). No inputs; out CF=1 = launched empty, the ordinary case... |
+| `0x024F` | `OSAPI_ASSOC_SET` | claim an extension for a program (SPEC.md 54.5). ES:SI -> 3 extension bytes then 8 stem bytes, both space-padded... |
+| `0x025A` | `OSAPI_DSK_CACHE` | **COMMAND THE READ-AHEAD CACHE'S WIDTH** (SPEC.md 18.95.8), for a program that is about to take the arena... |
+| `0x041F` | `OSAPI_FILE_PATH` | ES:DI = your buffer, CX = its size in bytes (>= 2); out CF=0, a NUL `\DIR\DIR` written there and CX = its length not counting the NUL, DI unchanged... |
+| `0x02B0` | `OSAPI_BATCH_BEGIN` | no arguments, no answer |
+| `0x02B6` | `OSAPI_BATCH_END` | ...and the other end |
+| `0x0286` | `OSAPI_FILE_APPEND` | SI = NUL 8.3 name, ES:BX = bytes, CX = count (>= 1); out CF=0 AX=0, else AX = FERR_*... |
+| `0x028C` | `OSAPI_FILE_READ_AT` | SI = name, ES:BX = buffer, CX = its capacity in BYTES, DX:AX = the offset to read from... |
+| `0x03D9` | `OSAPI_FILE_FIND_RAW` | OSAPI_FILE_FIND, with +18 the size the file OCCUPIES rather than the one it expands to (SPEC.md 20.14.3)... |
+| `0x0292` | `OSAPI_FILE_MKDIR` | SI = a NUL 8.3 name; creates a FOLDER in your current directory (SPEC.md 18.5)... |
+| `0x0385` | `OSAPI_FILE_RMDIR` | SI = a NUL 8.3 name in your current directory, AL = 0 remove it only if it is EMPTY / non-zero remove it AND EVERYTHING UNDER IT (SPEC.md 18.6)... |
+| `0x029E` | `OSAPI_FILE_GOTO_Q` | DX = a folder's first cluster (0 = the root), BL = the volume. out CF=0 and AX=0, else AX = FERR_*... |
+| `0x035C` | `OSAPI_FILE_GOTO_QM` | DX = a folder's first cluster (0 = the root), BL = the volume. out exactly as OSAPI_FILE_GOTO_Q: CF=0 and AX=0, else AX = FERR_* and nothing moved... |
+| `0x0283` | `OSAPI_FILE_FIND` | CX = ordinal (0 to start), ES:DI = an OSAPI_FIND_SZ buffer; out CF=0 filled with CX = the next ordinal, else CF=1 and AX = FERR_NOENT at the end |
+| `0x0280` | `OSAPI_FILE_WRITE_SYS` | SI = NUL 8.3 name, ES:BX = bytes, DX:CX = count; out as OSAPI_FILE_WRITE. DRIVERS ONLY. |
+| `0x02C2` | `OSAPI_FILE_APPEND_SYS` | SI = NUL 8.3 name, ES:BX = bytes, CX = count; out as OSAPI_FILE_APPEND. DRIVERS ONLY. |
 
 ### Memory
 
@@ -183,23 +179,23 @@ Read first: [§2 Memory map](../SPEC.md#2-memory-map); [§41 xmem.inc — memory
 
 | slot | call | takes |
 |---|---|---|
-| `0x0200` | `OSAPI_MEM_CLAIM` | the claim heap (SPEC.md 50.3): AX = KB wanted; out CF=0 and DX = the base segment, CF=1 refused... |
-| `0x0250` | `OSAPI_MEM_CLAIM_DMA` | the same claim, for a buffer an ISA DMA CONTROLLER will read or write: AX = KB wanted, CX = KB of the block's HEAD that must not cross a 64KB... |
-| `0x04C8` | `OSAPI_MEM_CLAIM_HI` | AX = KB; out CF, DX = segment |
-| `0x04D0` | `OSAPI_MEM_CLAIM_DMA_HI` | ...and CX = the page-safe HEAD |
-| `0x0208` | `OSAPI_MEM_FREE` | DX = the segment you were given; out CF=0 released, CF=1 not yours |
-| `0x0590` | `OSAPI_MEM_COMPACT` | AH = MEMC_WHATIF: AL = a purge level, out AX/BX as OSAPI_MEM_AVAIL_LVL planned as if YOUR OWN REGION could move... |
-| `0x0210` | `OSAPI_MEM_AVAIL` | out AX = largest free run in KB, BX = total free KB... |
-| `0x0560` | `OSAPI_MEM_FLOOR` | AL = the level; preserves every register and the flags... |
-| `0x02A0` | `OSAPI_CLAIM_SNAPSHOT` | ES:DI = a CLAIM_SNAPSHOT_SIZE buffer; out AX = MEM_MAX... |
-| `0x02A8` | `OSAPI_SYS_KB` | ES:DI = a SYSKB_SIZE buffer; every register preserved... |
-| `0x0190` | `OSAPI_XMEM_CAPS` | no inputs; out AX = extended- memory KB the pool can still hand out (0 = none, and the three below will all refuse), DX:CX = the pool's 32-bit linear... |
-| `0x0198` | `OSAPI_XMEM_ALLOC` | DX:AX = bytes wanted, rounded up to 1KB; out CF=0 and DX:AX = the block's 32-bit linear base (opaque... |
-| `0x01A0` | `OSAPI_XMEM_FREE` | DX:AX = a base YOU own; out CF=0 freed (and merged with the neighbouring free runs), CF=1 not a base or not yours. |
-| `0x01A8` | `OSAPI_XMEM_COPY` | ES:SI = the conventional end, DX:AX = the 32-bit linear extended end, CX = bytes (EVEN, and <= 32768... |
-| `0x0238` | `OSAPI_MEM_REGROW` | DX = a claim YOU hold, AX = the new size in KB. out CF=0 and DX = the claim's base NOW... |
-| `0x0400` | `OSAPI_MEM_MOVABLE` | DX = a claim YOU hold, AX = a near proc in YOUR segment, or 0 to pin the claim again. out CF=1 = no such claim, or not yours... |
-| `0x0408` | `OSAPI_MEM_PARKSAFE` | AL = 1 declare / 0 withdraw. out CF=1 = you are not a live package instance. Preserves every register. "THE KERNEL MAY PARK ME WHILE I AM BLOCKED IN... |
+| `0x01A4` | `OSAPI_MEM_CLAIM` | the claim heap (SPEC.md 50.3): AX = KB wanted; out CF=0 and DX = the base segment, CF=1 refused... |
+| `0x01DF` | `OSAPI_MEM_CLAIM_DMA` | the same claim, for a buffer an ISA DMA CONTROLLER will read or write: AX = KB wanted, CX = KB of the block's HEAD that must not cross a 64KB... |
+| `0x03AC` | `OSAPI_MEM_CLAIM_HI` | AX = KB; out CF, DX = segment |
+| `0x03B2` | `OSAPI_MEM_CLAIM_DMA_HI` | ...and CX = the page-safe HEAD |
+| `0x01AA` | `OSAPI_MEM_FREE` | DX = the segment you were given; out CF=0 released, CF=1 not yours |
+| `0x0443` | `OSAPI_MEM_COMPACT` | AH = MEMC_WHATIF: AL = a purge level, out AX/BX as OSAPI_MEM_AVAIL_LVL planned as if YOUR OWN REGION could move... |
+| `0x01B0` | `OSAPI_MEM_AVAIL` | out AX = largest free run in KB, BX = total free KB... |
+| `0x0425` | `OSAPI_MEM_FLOOR` | AL = the level; preserves every register and the flags... |
+| `0x0216` | `OSAPI_CLAIM_SNAPSHOT` | ES:DI = a CLAIM_SNAPSHOT_SIZE buffer; out AX = MEM_MAX... |
+| `0x021C` | `OSAPI_SYS_KB` | ES:DI = a SYSKB_SIZE buffer; every register preserved... |
+| `0x015A` | `OSAPI_XMEM_CAPS` | no inputs; out AX = extended- memory KB the pool can still hand out (0 = none, and the three below will all refuse), DX:CX = the pool's 32-bit linear... |
+| `0x0160` | `OSAPI_XMEM_ALLOC` | DX:AX = bytes wanted, rounded up to 1KB; out CF=0 and DX:AX = the block's 32-bit linear base (opaque... |
+| `0x0166` | `OSAPI_XMEM_FREE` | DX:AX = a base YOU own; out CF=0 freed (and merged with the neighbouring free runs), CF=1 not a base or not yours. |
+| `0x016C` | `OSAPI_XMEM_COPY` | ES:SI = the conventional end, DX:AX = the 32-bit linear extended end, CX = bytes (EVEN, and <= 32768... |
+| `0x01CD` | `OSAPI_MEM_REGROW` | DX = a claim YOU hold, AX = the new size in KB. out CF=0 and DX = the claim's base NOW... |
+| `0x030C` | `OSAPI_MEM_MOVABLE` | DX = a claim YOU hold, AX = a near proc in YOUR segment, or 0 to pin the claim again. out CF=1 = no such claim, or not yours... |
+| `0x0312` | `OSAPI_MEM_PARKSAFE` | AL = 1 declare / 0 withdraw. out CF=1 = you are not a live package instance. Preserves every register. "THE KERNEL MAY PARK ME WHILE I AM BLOCKED IN... |
 
 ### Tasks, timing and the clock
 
@@ -207,14 +203,14 @@ Read first: [§7 Concurrency model (read carefully — this is the crux)](../SPE
 
 | slot | call | takes |
 |---|---|---|
-| `0x00A8` | `OSAPI_TASK_YIELD` | give up the time slice |
-| `0x00B0` | `OSAPI_TASK_SLEEP` | AX = ticks to sleep (18 ~ 1 second) |
-| `0x00B8` | `OSAPI_GET_TICKS` | out AX = [ticks] |
-| `0x0160` | `OSAPI_TASK_SPAWN` | AX = your worker's near entry (a plain `mov ax, my_worker`... |
-| `0x0168` | `OSAPI_TASK_ALIVE` | BX = YOUR window ptr; the gfx lock must NOT be held, and it must be YOUR WORKER calling - never a window callback... |
-| `0x0410` | `OSAPI_TASK_PARK` | a DRIVER's worker parks here for a heap compaction (SPEC.md 66.5.5), the way a package's parks at OSAPI_TASK_ALIVE... |
-| `0x0518` | `OSAPI_TASK_RESTARTABLE` | AX = a near offset in YOUR own image, 0 to withdraw. out CF=1 = you are not a live package instance. Preserves every register... |
-| `0x02F8` | `OSAPI_BOOT_TICKS` | out AX = how long this machine took to boot, in SYSTEM TICKS (18.2065 Hz, 54.925 ms each): the boot sector's first instruction to the first desktop... |
+| `0x009E` | `OSAPI_TASK_YIELD` | give up the time slice |
+| `0x00A6` | `OSAPI_TASK_SLEEP` | AX = ticks to sleep (18 ~ 1 second) |
+| `0x00AE` | `OSAPI_GET_TICKS` | out AX = [ticks] |
+| `0x012F` | `OSAPI_TASK_SPAWN` | AX = your worker's near entry (a plain `mov ax, my_worker`... |
+| `0x0135` | `OSAPI_TASK_ALIVE` | BX = YOUR window ptr; the gfx lock must NOT be held, and it must be YOUR WORKER calling - never a window callback... |
+| `0x0318` | `OSAPI_TASK_PARK` | a DRIVER's worker parks here for a heap compaction (SPEC.md 66.5.5), the way a package's parks at OSAPI_TASK_ALIVE... |
+| `0x03EC` | `OSAPI_TASK_RESTARTABLE` | AX = a near offset in YOUR own image, 0 to withdraw. out CF=1 = you are not a live package instance. Preserves every register... |
+| `0x0255` | `OSAPI_BOOT_TICKS` | out AX = how long this machine took to boot, in SYSTEM TICKS (18.2065 Hz, 54.925 ms each): the boot sector's first instruction to the first desktop... |
 
 ### Sound
 
@@ -222,11 +218,11 @@ Read first: [§34 snd.inc — the sound layer](../SPEC.md#34-sndinc--the-sound-l
 
 | slot | call | takes |
 |---|---|---|
-| `0x00E0` | `OSAPI_SND_CAPS` | out AX = caps word (SND_CAP_*), BL = where a tone goes right now: 0 the speaker / 1 a sound driver's sink (34.8), DX bit 0 = the speaker is present... |
-| `0x00E8` | `OSAPI_SND_TONE` | AX = freq Hz (0 = off), CX = duration ticks (0 = until off), DL = priority (default 0x40); out CF=1 refused, else AL = owner generation |
-| `0x00F0` | `OSAPI_SND_PLAY` | PCM_EXCL clip (SPEC.md 34.4): ES:SI = your 8-bit unsigned samples, CX = count, DX = rate 4,679..16,124 Hz; out AX = 0 ok / 1..5 err... |
-| `0x00F8` | `OSAPI_SND_FM` | FM verbs (SPEC.md 34.2), live only while a sound DRIVER is loaded (SPEC.md 51.4) - CF=1 when none is... |
-| `0x0100` | `OSAPI_SND_STREAM` | PCM_BG streams + staging: the driver's too, and likewise CF=1 without one... |
+| `0x00CD` | `OSAPI_SND_CAPS` | out AX = caps word (SND_CAP_*), BL = where a tone goes right now: 0 the speaker / 1 a sound driver's sink (34.8), DX bit 0 = the speaker is present... |
+| `0x00D3` | `OSAPI_SND_TONE` | AX = freq Hz (0 = off), CX = duration ticks (0 = until off), DL = priority (default 0x40); out CF=1 refused, else AL = owner generation |
+| `0x00DB` | `OSAPI_SND_PLAY` | PCM_EXCL clip (SPEC.md 34.4): ES:SI = your 8-bit unsigned samples, CX = count, DX = rate 4,679..16,124 Hz; out AX = 0 ok / 1..5 err... |
+| `0x00E3` | `OSAPI_SND_FM` | FM verbs (SPEC.md 34.2), live only while a sound DRIVER is loaded (SPEC.md 51.4) - CF=1 when none is... |
+| `0x00EA` | `OSAPI_SND_STREAM` | PCM_BG streams + staging: the driver's too, and likewise CF=1 without one... |
 
 ### The system - CPU, video, clipboard, drivers
 
@@ -234,19 +230,19 @@ Read first: [§31 ctrl.inc — the Control Panel window](../SPEC.md#31-ctrlinc--
 
 | slot | call | takes |
 |---|---|---|
-| `0x0158` | `OSAPI_VIDEO` | the screen this machine actually has (SPEC.md 39.2). No inputs... |
-| `0x0290` | `OSAPI_DRV_CFG` | AL = 0 read / anything else write, ES:SI = the driver's buffer, CX = bytes (<= YOUR blob's size)... |
-| `0x0428` | `OSAPI_DRV_DLG` | AL = FDLG_OPEN / FDLG_SAVE, ES:SI = a default name (NUL, <= 12) or 0, DI = your near completion proc... |
-| `0x0298` | `OSAPI_SYS_SNAPSHOT` | ES:DI = a SYS_SNAPSHOT_SIZE buffer; out AX = MAX_TASKS, BX = INST_MAX... |
-| `0x0188` | `OSAPI_CPU_INFO` | no inputs; out AL = CPU_8086 / CPU_286 / CPU_386, AH = feature bits (the CPU_F_* below): bit 0 A20 verified open, bit 1 HMA claimed, bit 2 unreal... |
-| `0x04A0` | `OSAPI_DRV_CALL_AT` | OSAPI_DRV_CALL, EXCEPT ES IS YOURS (SPEC.md 20.11.2)... |
-| `0x0550` | `OSAPI_DRV_SUSPEND` | AL = 1 suspend / 0 resume / 2 handoff (above). ES:DI = a buffer of DQ_SIZE records or DI = 0 (suspend), ES:SI = a KDH_* record (handoff). out CF=0... |
-| `0x0580` | `OSAPI_DRV_CLASSK` | **WHAT ONE CLASS IS HOLDING** (SPEC.md 51.12). in AL = a DRVC_* class... |
-| `0x0448` | `OSAPI_DRV_CALL` | in BH = a DRVC_* class, BL = a verb THAT DRIVER defines; AX, CX, DX, SI and DI are the driver's to define too... |
-| `0x0320` | `OSAPI_CLIP_PUT` | ES:SI = the text, CX = its length. CX = 0 EMPTIES the clipboard and is not an error. Out CF=1 = refused (over CLIP_MAXKB, or the heap could not fund... |
-| `0x0328` | `OSAPI_CLIP_GET` | ES:DI = your buffer, CX = its capacity. Out CF=1 = empty (AX = CX = 0)... |
-| `0x0330` | `OSAPI_CLIP_SIZE` | out CF=1 and AX=0 when empty, else CF=0 and AX = the length... |
-| `0x0368` | `OSAPI_REBOOT` | AL = 0 the ordinary restart / non-0 restart WITHOUT touching a disk. No answer, every register AND THE FLAGS preserved... |
+| `0x0127` | `OSAPI_VIDEO` | the screen this machine actually has (SPEC.md 39.2). No inputs... |
+| `0x020A` | `OSAPI_DRV_CFG` | AL = 0 read / anything else write, ES:SI = the driver's buffer, CX = bytes (<= YOUR blob's size)... |
+| `0x032E` | `OSAPI_DRV_DLG` | AL = FDLG_OPEN / FDLG_SAVE, ES:SI = a default name (NUL, <= 12) or 0, DI = your near completion proc... |
+| `0x0210` | `OSAPI_SYS_SNAPSHOT` | ES:DI = a SYS_SNAPSHOT_SIZE buffer; out AX = MAX_TASKS, BX = INST_MAX... |
+| `0x0155` | `OSAPI_CPU_INFO` | no inputs; out AL = CPU_8086 / CPU_286 / CPU_386, AH = feature bits (the CPU_F_* below): bit 0 A20 verified open, bit 1 HMA claimed, bit 2 unreal... |
+| `0x038B` | `OSAPI_DRV_CALL_AT` | OSAPI_DRV_CALL, EXCEPT ES IS YOURS (SPEC.md 20.11.2)... |
+| `0x0419` | `OSAPI_DRV_SUSPEND` | AL = 1 suspend / 0 resume / 2 handoff (above). ES:DI = a buffer of DQ_SIZE records or DI = 0 (suspend), ES:SI = a KDH_* record (handoff). out CF=0... |
+| `0x0437` | `OSAPI_DRV_CLASSK` | **WHAT ONE CLASS IS HOLDING** (SPEC.md 51.12). in AL = a DRVC_* class... |
+| `0x0348` | `OSAPI_DRV_CALL` | in BH = a DRVC_* class, BL = a verb THAT DRIVER defines; AX, CX, DX, SI and DI are the driver's to define too... |
+| `0x0268` | `OSAPI_CLIP_PUT` | ES:SI = the text, CX = its length. CX = 0 EMPTIES the clipboard and is not an error. Out CF=1 = refused (over CLIP_MAXKB, or the heap could not fund... |
+| `0x026E` | `OSAPI_CLIP_GET` | ES:DI = your buffer, CX = its capacity. Out CF=1 = empty (AX = CX = 0)... |
+| `0x0274` | `OSAPI_CLIP_SIZE` | out CF=1 and AX=0 when empty, else CF=0 and AX = the length... |
+| `0x0298` | `OSAPI_REBOOT` | AL = 0 the ordinary restart / non-0 restart WITHOUT touching a disk. No answer, every register AND THE FLAGS preserved... |
 
 ### Networking
 
@@ -260,13 +256,13 @@ Read first: [§53 fsx.inc — fullscreen exclusive](../SPEC.md#53-fsxinc--fullsc
 
 | slot | call | takes |
 |---|---|---|
-| `0x0110` | `OSAPI_FULLSCREEN` | AL = 1 enter (BX=win ptr) / 0 exit; caller holds the gfx lock (window callbacks do); out CF=1 enter refused (screen already owned)... |
-| `0x02C0` | `OSAPI_FSX_CAPS` | in BX = the window to ask ABOUT (0 = whatever is frontmost)... |
-| `0x02C8` | `OSAPI_FSX_RUN` | the bracket (SPEC.md 53.1). In AX = a near proc in your image, BX = your window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 = FSXF_FASTTICK... |
-| `0x02D0` | `OSAPI_FSX_MODE` | in AL = FSXM_*, ES:DI = an FSI_SIZE buffer of yours (set ES = DS). Bracket-only... |
-| `0x02D8` | `OSAPI_FSX_WAIT` | in AL = FSXW_TICK (0) the next tick / FSXW_VSYNC (1) vertical retrace (bounded... |
-| `0x04E8` | `OSAPI_FSX_PAGE` | AL = a page index; out CF=1 refused. SHOW that page, and wait for the vertical retrace that latches it... |
-| `0x03F8` | `OSAPI_FSX_SURF` | THE RECT YOUR BRACKET OWNS (SPEC.md 53.7.1). No inputs... |
+| `0x00F7` | `OSAPI_FULLSCREEN` | AL = 1 enter (BX=win ptr) / 0 exit; caller holds the gfx lock (window callbacks do); out CF=1 enter refused (screen already owned)... |
+| `0x022F` | `OSAPI_FSX_CAPS` | in BX = the window to ask ABOUT (0 = whatever is frontmost)... |
+| `0x0235` | `OSAPI_FSX_RUN` | the bracket (SPEC.md 53.1). In AX = a near proc in your image, BX = your window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 = FSXF_FASTTICK... |
+| `0x023B` | `OSAPI_FSX_MODE` | in AL = FSXM_*, ES:DI = an FSI_SIZE buffer of yours (set ES = DS). Bracket-only... |
+| `0x0241` | `OSAPI_FSX_WAIT` | in AL = FSXW_TICK (0) the next tick / FSXW_VSYNC (1) vertical retrace (bounded... |
+| `0x03C5` | `OSAPI_FSX_PAGE` | AL = a page index; out CF=1 refused. SHOW that page, and wait for the vertical retrace that latches it... |
+| `0x0304` | `OSAPI_FSX_SURF` | THE RECT YOUR BRACKET OWNS (SPEC.md 53.7.1). No inputs... |
 
 ### Randomness and maths
 
@@ -274,8 +270,8 @@ Read first: [§84 Software floating point (`apps/os88fp.inc`)](../SPEC.md#84-sof
 
 | slot | call | takes |
 |---|---|---|
-| `0x00D0` | `OSAPI_SRAND` | AX -> [osapi_seed] |
-| `0x00D8` | `OSAPI_RAND` | out AX = next pseudo-random word |
+| `0x00C0` | `OSAPI_SRAND` | AX -> [osapi_seed] |
+| `0x00C5` | `OSAPI_RAND` | out AX = next pseudo-random word |
 
 ### Running a DOS program
 
@@ -289,7 +285,7 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 
 | include | SPEC | what it gives you |
 |---|---|---|
-| `apps/os88ui.inc` | §13, 75 | Buttons, check boxes, radio dots, scroll bars, group boxes, the standard alert, the standard About card and the drop-down. Opt into the alert with `%define OS88UI_ALERT`, the About card with `%define OS88UI_ABOUT`, the scroll bar with `%define OS88UI_SCROLL` and its thumb-drag half with `%define OS88UI_SBDRAG`, and the drop-down - one pick out of a short list, a Macintosh popup's gesture - with `%define OS88UI_DROP` (SPEC.md 13.14). |
+| `apps/os88ui.inc` | §13, 75 | Buttons, check boxes, radio dots, scroll bars, group boxes, the standard alert, the standard About card and the drop-down. Opt into the alert with `%define OS88UI_ALERT`, the About card with `%define OS88UI_ABOUT`, the scroll bar with `%define OS88UI_SCROLL` and its thumb-drag half with `%define OS88UI_SBDRAG`, and the drop-down - one pick out of a short list, a Macintosh popup's gesture - with `%define OS88UI_DROP` (SPEC.md 13.14). Buttons that carry an ICON_DRAW image in place of a caption, drawn in one write with no ground fill, are `%define OS88UI_BIMG` and the `OS88UI_IMG` flag (SPEC.md 13.8.9); a package with no check box or radio sheds that code with `%define OS88UI_NOGLYPH`. |
 | `apps/os88alt.inc` | §11.2.1.1 | Alt+Enter, the full-screen key, for a package on SPEC.md 53's BRACKET - where no event is dispatched, so the kernel's synthesised keystroke cannot reach you and your own int 16h poll cannot see the key either. `os88alt_edge` asks the key-state map and finds the edge in it. A package on SPEC.md 11.2's LATCH needs none of this file: one `cmp ax, KEY_ALTENTER` in its W_ONKEY is both directions. Both want `OS88_ALTENTER_ARM` (apps/os88api.inc) in the entry proc, without which the chord is silently dead. |
 | `apps/os88line.inc` | §83 | A one-line text field: caret, horizontal scroll, focus, click-to-position and the editing keys. The caller owns a 20-byte block. |
 | `apps/os88text.inc` | §83 | The multi-line sibling of os88line.inc. Enter inserts a newline; no wrap, no selection, no undo. |
@@ -334,7 +330,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | LOOM | `apps/loom/loom.asm` | `docs/WEAVE-SPEC.md` | yes |
 | MINES | `apps/mines/mines.asm` | §23 | yes |
 | MISSILE | `apps/missile/missile.asm` | §48 | yes |
-| MODPLUG | `apps/modplug/modplug.asm` | §56 | yes |
+| MODPLUG | `apps/modplug/modplug.asm` | §56 | **retired** |
 | NOTEPAD | `apps/notepad/notepad.asm` | §27 | yes |
 | PACCMAN | `apps/paccman/paccman.asm` | §91 | yes |
 | PACMAN | `apps/pacman/pacman.asm` | §89 | **retired** |
@@ -358,6 +354,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | The Wire | `apps/thewire/thewire.asm` | §92 | no |
 | WEAVE | `apps/weave/weave.asm` | `docs/WEAVE-SPEC.md` | yes |
 | WIRE | `apps/wire/wire.asm` | §78 | no |
+| WORD | `apps/word/wdload.asm` | §68 | no |
 | WORD | `apps/word/word.asm` | §68 | yes |
 
 ## SPEC.md sections
@@ -420,7 +417,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 53 | fsx.inc — fullscreen exclusive |
 | 54 | assoc.inc — file type associations |
 | 55 | clip.inc — the system clipboard |
-| 56 | ModPlug Player — the fourteenth package (apps/modplug/modplug.asm) |
+| 56 | ModPlug Player — the fourteenth package (apps/modplug/modplug.asm) — **RETIRED** |
 | 57 | The debug registry — how a test package reads kernel state |
 | 58 | (retired) `DEBUG.DRV`, the serial monitor |
 | 59 | toast.inc — the transient one-line message |
@@ -471,9 +468,9 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 
 *Plans with work still open - `docs/plans/` (31):* `ARTFUL-PERF-PLAN.md`, `BUTTON-GESTURE-PLAN.md`, `CGA-SNOW-PLAN.md`, `DISK-CPU-PLAN.md`, `DOS-CABLE-NET-PLAN.md`, `DOS-EXEC-PLAN.md`, `HANDOFF-STOP-DETECTION.md`, `HDD-RESIDENT-PLAN.md`, `HEAP-UNPIN-PLAN.md`, `ICON-IDENTITY-PLAN.md`, `KERN-DOS-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SMALL-NOCOMPACT.md`, `KERNEL-BYTE-QUEUE.md`, `LAST-DROP-BYTES.md`, `LAST-DROP-PERF.md`, `LISTING-HOME-PLAN.md`, `MODULE-SELFCONTAIN-PLAN.md`, `MONO-RECLAIM-PLAN.md`, `MOUSE-BOOT-FREEZE-PLAN.md`, `NAV-COST-PLAN.md`, `O88-COMPRESSION-PLAN.md`, `PARTS-REHOME-PLAN.md`, `PATH-WAVE-PLAN.md`, `PIXELSTEIN-PLAN.md`, `REGION-SELF-COMPACT-PLAN.md`, `SCRIBE-OVL-PLAN.md`, `SKIES-FRAME-PLAN.md`, `SOAK-PARALLEL.md`, `UI-MENU-ELEMENT.md`, `UI-TEXTFIELD-PLAN.md`
 
-*Design records for what shipped - `docs/plans/completed/` (72):* `ASSOC-PLAN.md`, `AUDIO-PLAN.md`, `BOOT-LADDER-PLAN.md`, `BOOT-PERF-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CTRL-GLYPH-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DISK-PERF-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `DUAL-DISPLAY-VGA.md`, `EGA-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `FTP-PERF.md`, `GFX-EMBEDDABLE-PLAN.md`, `GFX-FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HANDOFF-CARVE-COMPACT.md`, `HANDOFF-DISK-IO.md`, `HANDOFF-DOTDEL-TEXT.md`, `HANDOFF-FONTCHAR-SEAM.md`, `HANDOFF-ICOSHED-DOSGLYPH.md`, `HANDOFF-KERNEL-SIZE-P2.md`, `HANDOFF-KERNEL-SIZE-P3.md`, `HANDOFF-KERNEL-SIZE-P4.md`, `HANDOFF-KERNEL-SIZE.md`, `HANDOFF-PAINT-BLANK-LOAD.md`, `HANDOFF-REDRAW.md`, `HANDOFF-SOUND-MEMORY.md`, `HANDOFF.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `KERN-SMALL-CUT-BUILT.md`, `KERN-SMALL-MODULE-SPLIT.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `NOTEPAD-NOTES.md`, `O88-MULTISEG-PLAN.md`, `ONDEMAND-PLAN.md`, `PAINT-1BPP-PLAN.md`, `PAINT-NOTES.md`, `PAINT-STROKE-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SAVEUNDER-LIVE-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SDK-INCLUDE-SIZE.md`, `SETTINGS-COST.md`, `SKIES-ENGINE-SOUND.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `STACK-SLOTS-PLAN.md`, `STKBALANCE-KERNEL.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `UI-FREEZE-PLAN.md`, `UIHELPERS-PLAN.md`, `VMMOUSE-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
+*Design records for what shipped - `docs/plans/completed/` (74):* `ASSOC-PLAN.md`, `AUDIO-PLAN.md`, `BOOT-LADDER-PLAN.md`, `BOOT-PERF-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CTRL-GLYPH-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DISK-PERF-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `DUAL-DISPLAY-VGA.md`, `EGA-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `FTP-PERF.md`, `GFX-EMBEDDABLE-PLAN.md`, `GFX-FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HANDOFF-CARVE-COMPACT.md`, `HANDOFF-DISK-IO.md`, `HANDOFF-DOTDEL-TEXT.md`, `HANDOFF-FONTCHAR-SEAM.md`, `HANDOFF-ICOSHED-DOSGLYPH.md`, `HANDOFF-KERNEL-SIZE-P2.md`, `HANDOFF-KERNEL-SIZE-P3.md`, `HANDOFF-KERNEL-SIZE-P4.md`, `HANDOFF-KERNEL-SIZE-P5.md`, `HANDOFF-KERNEL-SIZE.md`, `HANDOFF-PAINT-BLANK-LOAD.md`, `HANDOFF-REDRAW.md`, `HANDOFF-SOUND-MEMORY.md`, `HANDOFF.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `KERN-SMALL-CUT-BUILT.md`, `KERN-SMALL-MODULE-SPLIT.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `NOTEPAD-NOTES.md`, `O88-MULTISEG-PLAN.md`, `ONDEMAND-PLAN.md`, `PAINT-1BPP-PLAN.md`, `PAINT-NOTES.md`, `PAINT-STROKE-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SAVEUNDER-LIVE-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SDK-INCLUDE-SIZE.md`, `SETTINGS-COST.md`, `SKIES-ENGINE-SOUND.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `STACK-SLOTS-PLAN.md`, `STKBALANCE-KERNEL.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `UI-FREEZE-PLAN.md`, `UIHELPERS-PLAN.md`, `VMMOUSE-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-CARET-OVERLAY-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
 
 *Superseded and closed - `docs/history/` (9):* `DUAL-DISPLAY-BUG2.md`, `HANDOFF-TESTS-A-STRADDLE.md`, `HANDOFF-TESTS-B-LAUNCH.md`, `HANDOFF-TESTS-C-FRESH.md`, `HANDOFF-TESTS.md`, `KERN-SPLIT-PLAN.md`, `SOUND-PLAN.md`, `TRACKER-PLAN.md`, `WM-ARTIFACTS.md`
 
-*Measurements, each true of the tree it was taken on - `docs/reports/` (24):* `BUSY-CURSOR-COST-2026-09-10.md`, `CYCLONE-STACK-2026-09-10.md`, `DOCK-RESIDENT-COST-2026-09-17.md`, `DOS-GAMES-2026-09-16.md`, `DOS-INT21-REGISTERS-2026-09-15.md`, `DOTDEL-FRAME-PROFILE-2026-09-09.md`, `GFXBENCH-SIZE-PASS-2026-09-16.md`, `GLYPH-AND-LINE-COST-2026-09-10.md`, `KERN-DOS-BUDGET-2026-09-13.md`, `KERN-DOS-PART-COST-2026-09-14.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-07.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-17.md`, `MODULE-RESIDENT-DATA-2026-09-12.md`, `PR-CYCLE-ACCOUNTING-2026-09-11.md`, `PXS-FRAME-2026-09-13.md`, `PXS-FRAME-2026-09-14.md`, `PXS-FRAME-2026-09-21.md`, `PXS-FRAME-2026-09-22.md`, `PXS-FRAME-2026-09-23.md`, `SBRATE-COMMIT-COST-2026-09-11.md`, `SEAM-DRAG-CRASH-2026-09-20.md`, `SKIES-FRAME-DELTA-2026-09-10.md`, `STKDIAG-PC5150-2026-09-10.md`, `TIER-TIMINGS-2026-09-07.md`
+*Measurements, each true of the tree it was taken on - `docs/reports/` (26):* `BUSY-CURSOR-COST-2026-09-10.md`, `CYCLONE-STACK-2026-09-10.md`, `DOCK-RESIDENT-COST-2026-09-17.md`, `DOS-GAMES-2026-09-16.md`, `DOS-INT21-REGISTERS-2026-09-15.md`, `DOTDEL-FRAME-PROFILE-2026-09-09.md`, `GFXBENCH-SIZE-PASS-2026-09-16.md`, `GLYPH-AND-LINE-COST-2026-09-10.md`, `KERN-DOS-BUDGET-2026-09-13.md`, `KERN-DOS-PART-COST-2026-09-14.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-07.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-17.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-25.md`, `MODULE-RESIDENT-DATA-2026-09-12.md`, `PR-CYCLE-ACCOUNTING-2026-09-11.md`, `PXS-FRAME-2026-09-13.md`, `PXS-FRAME-2026-09-14.md`, `PXS-FRAME-2026-09-21.md`, `PXS-FRAME-2026-09-22.md`, `PXS-FRAME-2026-09-23.md`, `SBRATE-COMMIT-COST-2026-09-11.md`, `SEAM-DRAG-CRASH-2026-09-20.md`, `SKIES-FRAME-DELTA-2026-09-10.md`, `STKDIAG-PC5150-2026-09-10.md`, `TIER-TIMINGS-2026-09-07.md`, `TRACKER-XT-SPECTRUM-2026-09-24.md`
 

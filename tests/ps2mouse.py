@@ -88,8 +88,9 @@ def kill_stale():
     itself - exit 144, nothing dead, every command after it skipped."""
     if os.path.exists(PIDFILE):
         try:
-            os.kill(int(open(PIDFILE).read().strip()), signal.SIGTERM)
-            time.sleep(1)
+            pid = int(open(PIDFILE).read().strip())
+            os.kill(pid, signal.SIGTERM)
+            os88qemu.gone(pid)
         except Exception:
             pass
     for f in (SOCK, PIDFILE):
@@ -154,13 +155,11 @@ def main():
 
         # Wait for the handshake to have run. mouse_init is inside kmain, so
         # [mou_p2st] settling is the signal - poll it rather than sleeping a
-        # guessed interval, and give the floppy boot room.
-        t0, st = time.time(), 0
-        while time.time() - t0 < 90:
-            st = byte(q, "mou_p2st")
-            if st == 9:
-                break
-            time.sleep(0.25)
+        # guessed interval, and give the floppy boot room - 90 seconds of the
+        # GUEST's clock (tests/os88qemu.py), which a loaded box cannot shorten.
+        os88qemu.acted(q, lambda: byte(q, "mou_p2st") == 9, secs=90,
+                       what="[mou_p2st] = 9", poll=0.25)
+        st = byte(q, "mou_p2st")
 
         bases = q.read(os88sym.linear("mou_bases"), 4)
         if any(bases):
@@ -179,7 +178,8 @@ def main():
         subprocess.run([sys.executable, "tools/mouse.py", SOCK, "to",
                         str(TARGET_X), str(TARGET_Y)], cwd=ROOT, check=True,
                        stdout=subprocess.DEVNULL, timeout=180)
-        time.sleep(0.5)
+        os88qemu.acted(q, lambda: (word(q, "mouse_x"), word(q, "mouse_y"))
+                       == (TARGET_X, TARGET_Y), secs=3, what="the pointer")
         for sym, want in (("mou_seen", 1), ("mou_port", 4), ("mou_line", 0xFF),
                           ("mou_ptr", 1)):
             got = byte(q, sym)
@@ -203,7 +203,9 @@ def main():
             subprocess.run([sys.executable, "tools/mouse.py", SOCK, "down",
                             str(x), "8"], cwd=ROOT, check=True,
                            stdout=subprocess.DEVNULL, timeout=180)
-            time.sleep(0.25)
+            os88qemu.acted(q, lambda: byte(q, "menu_cell") == cell
+                           and byte(q, "menu_dropd") == 1, secs=3,
+                           what="bar cell %d" % cell)
             got = byte(q, "menu_cell")
             dropped = byte(q, "menu_dropd")
             if got != cell or dropped != 1:
@@ -212,14 +214,20 @@ def main():
             subprocess.run([sys.executable, "tools/mouse.py", SOCK, "up"],
                            cwd=ROOT, check=True, stdout=subprocess.DEVNULL,
                            timeout=30)
-            time.sleep(0.25)
+            # ...and the pull-down gone again before the next title is aimed
+            os88qemu.acted(q, lambda: byte(q, "menu_dropd") == 0, secs=3,
+                           what="the pull-down closing")
 
         # --- ...and the keyboard, which shares the one output buffer --------
         before = q.read(KBHEAD, 4)
         tail0 = before[2] | (before[3] << 8)
         for k in "abcdef":
             q.hmp("sendkey " + k)
-        time.sleep(1.0)
+
+        def queued():
+            b = q.read(KBHEAD, 4)
+            return ((b[2] | (b[3] << 8)) - tail0) & 0xFFFF == 12
+        os88qemu.acted(q, queued, secs=3, what="six keys in the BIOS ring")
         after = q.read(KBHEAD, 4)
         tail1 = after[2] | (after[3] << 8)
         if (tail1 - tail0) & 0xFFFF != 12:

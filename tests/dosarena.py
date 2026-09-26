@@ -48,11 +48,11 @@ at all, which is what makes the pair of machines the experiment.
 import os
 import struct
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88geom                                                # noqa: E402
+import os88marty                                                # noqa: E402
 import os88ui                                                  # noqa: E402
 import dosmap                                                  # noqa: E402
 
@@ -83,13 +83,14 @@ def measure(machine):
             fail("%s: double-clicking DOSSND.COM opened no window" % machine)
 
         rows = []
-        end = time.time() + 180.0
-        while time.time() < end:
-            rows = m.screen() or []
-            if any("READY" in r for r in rows):
-                break
-            time.sleep(0.3)
-        else:
+
+        def ready(mm):
+            rows[:] = mm.screen() or []
+            return any("READY" in r for r in rows)
+        try:
+            os88marty.until(m, ready, "the program's READY", poll=0.3,
+                            limit=180.0)
+        except os88marty.MartyError:
             fail("%s: the program never finished; the last screen was %r"
                  % (machine, [r.rstrip() for r in rows if r.strip()][:12]))
 

@@ -337,13 +337,13 @@ hd_ia_row:
 
     ; --- is it a package at all? --------------------------------------------
     ; The same three tests build_assoc makes (tools/os88disk.py): 'O8', version
-    ; 3. Every byte off a disk is hostile (SPEC.md 18.2), and a type-1 entry is
+    ; PKG_FMT. Every byte off a disk is hostile (SPEC.md 18.2), and a type-1 entry is
     ; only the loader's opinion of the NAME and the size.
     push es
     mov es, [hd_iaseg]
     cmp word [es:HIA_SEC], 'O8'
     jne .outes
-    cmp byte [es:HIA_SEC+2], 3
+    cmp byte [es:HIA_SEC+2], PKG_FMT
     jne .outes
     mov al, [es:HIA_SEC+3]
     pop es

@@ -30,7 +30,6 @@ so a compare in guest coordinates there is sampling the wrong pixels.
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
@@ -118,7 +117,11 @@ def run(a, case, iw, ih, px, sym):
                      "planar, so there is nothing here to refuse")
         base = got["base"]
         ox0, oy0 = r["ax"], r["bx"]      # ...where Paint puts its canvas, ASKED
-        time.sleep(6)
+        # the rest of Paint's open - its reads, then its first paint - before
+        # the drag takes the title bar
+        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                          what="Paint's open to stop reading")
+        settle(m, card=0)
         planar = base + sym["pt_planar"]
         if not m.read(planar, 1)[0]:
             sys.exit("dispblitp: Paint's canvas is not four planes on the "
@@ -142,7 +145,18 @@ def run(a, case, iw, ih, px, sym):
         mo.drag(wx + ww // 2, wy + TITLE_H // 2,
                 tgt + ww // 2, wy + TITLE_H // 2)
         settle(m, card=0)
-        time.sleep(8)
+        # THE CONVERSION IS CPU WORK THE SCREEN CAN SIT STILL THROUGH, so wait
+        # on the flag it clears - and on a broken kernel, which never clears
+        # it, spend what the old 8-second pause gave and let the assertion
+        # below say so.
+        try:
+            os88marty.until(m, lambda mm: not mm.read(planar, 1)[0],
+                            "Paint to convert its canvas", poll=0.2,
+                            guest=8 * os88marty.GUEST_PACE)
+        except os88marty.MartyError:
+            pass
+        settle(m, card=0)               # ...and the repaint it starts, on
+        settle(m, card=1)               # both displays, before [gfx_dnest]
         still = m.read(planar, 1)[0]
         nest = m.read(S("gfx_dnest"), 1)[0]
         wx2, wy2, _, _ = dispcp.win_rect(m, S, pw)

@@ -7,7 +7,7 @@ implementer. What landed, and what did not:
 | | |
 |---|---|
 | §4.1 `MC_RLOC`, default PINNED | **built** — §66.2, record 8 → 10 bytes |
-| §4.2 relocation is a dispatcher call | **built** — §66.2, `OSAPI_MEM_MOVABLE` at slot 0x03F8 |
+| §4.2 relocation is a dispatcher call | **built** — §66.2, `OSAPI_MEM_MOVABLE` at slot 0x0304 |
 | §4.4 plan-then-move inside `mem_claim` | **built** — §66.4, ahead of the shed |
 | §4.5 the monotone downward slide | **built** — §66.4 |
 | §4.3 the worker park at `OSAPI_TASK_ALIVE` | **built** — §66.5, with `make HEAPPARK=0` as its own A/B |

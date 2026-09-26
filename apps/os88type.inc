@@ -1301,6 +1301,11 @@ ty_putn:
     jcxz .out
     test al, 1
     jnz .general
+%ifdef OS88TY_SLANT
+    cmp byte [ty_slant], 0          ; the pre-shifted table holds four PEN
+    jne .general                    ; phases and no lean, so a slanted run
+%endif                              ; takes the general path the way an odd
+                                    ; pen does - same pixels, more slowly
     mov bl, [ty_curface]
     cmp bl, [ty_psface]
     jne .general
@@ -1322,6 +1327,31 @@ ty_putn:
     pop cx
     pop bx
     ret
+
+%ifdef OS88TY_SLANT
+; -----------------------------------------------------------------------------
+; ty_setslant - lean the runs that follow, or stand them up (SPEC.md 6.5.3)
+; in:  AL = 0 upright, anything else italic
+; out: -; clobbers AL and flags, nothing else
+;
+; The shear is cut from the face's OWN height so a tall face leans as far as a
+; short one looks: one pixel every four rows, which at 8 rows is exactly the
+; single-pixel shear Word draws the kernel's cell with. The ADVANCE does not
+; move - an italic sets in the same measure as its upright, the way a
+; synthesised italic always has, and the lean interlocks into the next cell.
+; -----------------------------------------------------------------------------
+ty_setslant:
+    mov [ty_slant], al
+    or al, al
+    jz .out
+    mov al, [ty_rows]
+    dec al
+    shr al, 1
+    shr al, 1                       ; (rows-1)/4: 1 at 8 rows, 3 at 14
+    mov [ty_shmax], al
+.out:
+    ret
+%endif
 
 ; ty_put - the same for a NUL-terminated string
 ; in: ES:SI, AX = the pen; out AX = the pen after it
@@ -1383,6 +1413,10 @@ ty_put_slow:
     push es                         ; ES holds the GLYPHS for the rows; the
     mov ax, [ty_curseg]             ; band is [di] in DS and never moves
     mov es, ax
+%ifdef OS88TY_SLANT
+    cmp byte [ty_slant], 0
+    jne .slset
+%endif
 .row:
     mov al, [es:bx]
     mov ah, al
@@ -1395,6 +1429,59 @@ ty_put_slow:
     add di, TY_STRIDE
     dec ch
     jnz .row
+    jmp short .rdone
+%ifdef OS88TY_SLANT
+    ; --- the same glyph, LEANING (SPEC.md 6.5.3) ---------------------------
+    ; A synthesised italic is a SHEAR, and a shear is just more of the shift
+    ; this loop already does: the row's 8 bits are widened into a 16-bit
+    ; window and pushed right by the pen's bit offset, so leaning the top
+    ; rows further right costs the window nothing - it is the same `shr ax,
+    ; cl` with a bigger CL. Nothing is baked and nothing is claimed.
+    ;
+    ; THE TOP ROW CARRIES THE WHOLE LEAN and the bottom row none, so the
+    ; glyph stands ON the pen and no row can reach LEFT of the band. That
+    ; matters: the band's left edge is a byte column with no slack promised,
+    ; where its right edge is rounded up and the caller adds the lean to its
+    ; own high-water mark.
+    ;
+    ; One pixel less lean every four rows - which at 8 rows is the one-pixel
+    ; shear Word has always drawn the kernel's 8x8 cell with, so the two
+    ; faces lean alike. When the bit offset wraps past 0 the band byte steps
+    ; back with it; the ink is ANDed in, so a glyph leaning into its
+    ; neighbour's cell interlocks with it instead of erasing it.
+.slset:
+    mov al, [ty_shmax]
+    add cl, al                      ; the TOP row leans by the whole shear
+    cmp cl, 8                       ; (pen 0..7 plus a shear of 0..3, so one
+    jb .slok                        ; carry at most)
+    sub cl, 8
+    inc di
+.slok:
+    mov byte [ty_shcnt], 4
+.rowsl:
+    mov al, [es:bx]
+    mov ah, al
+    xor al, al
+    shr ax, cl
+    not ax
+    and [di], ah
+    and [di + 1], al
+    inc bx
+    add di, TY_STRIDE
+    dec ch
+    jz .rdone
+    dec byte [ty_shcnt]
+    jnz .rowsl
+    mov byte [ty_shcnt], 4          ; four rows down: stand one pixel up
+    or cl, cl
+    jnz .slbit
+    mov cl, 8                       ; ...the offset wrapped, so the band byte
+    dec di                          ; steps back with it
+.slbit:
+    dec cl
+    jmp short .rowsl
+%endif
+.rdone:
     pop es
 
     mov al, [ty_curadv]
@@ -1482,19 +1569,32 @@ ty_put_fast:
 ; =============================================================================
 ; ty_flush - put the band on the screen (SPEC.md 5.4.2/6.5)
 ; in:  AX = screen x (a multiple of 8), BX = y, CX = width in pixels (a
-;      multiple of 8), DX = rows; the gfx lock held
+;      multiple of 8), DX = rows; the gfx lock held;
+;      **CF = 1 draw this band GREYED** (SPEC.md 47), CF = 0 live
 ; out: CF=0 drawn; CF=1 the blit refused and NOTHING was drawn
 ; clobbers: flags
 ;
-; TWO THINGS THIS DOES FOR THE CALLER, both because forgetting either is
-; invisible until it is on a screen in front of somebody.
+; THE CARRY IS AN ARGUMENT AND THE CALLER MUST STATE IT - `clc` or `stc`,
+; never whatever the argument setup left behind (SPEC.md 6.5.4). It is
+; gfx_pen_cf's own convention, which is why it is this way round.
 ;
-; SPEC.md 47's greying. gfx_blit1 is the one drawing primitive in the tree
-; that is greying-blind: the band arrives in final polarity and there is no
-; colour left to reduce. So this asks OSAPI_GFX_PEN - published so a package
-; reaches [gfx_dis] the way the kernel does - and dithers the band itself when
-; the flag is set. The phase is the SCREEN row's, not the band's, so a greyed
-; run lines up with every other dithered thing on the screen.
+; It used to open `call OSAPI_GFX_PEN` / `jnc .live`, which reads like a QUERY
+; of the disabled pen and is not one. **A package cannot read the pen back**
+; (SPEC.md 68.14): OSAPI_GFX_PEN is a SETTER whose argument IS the carry, and
+; the cell preserves every flag, so the carry that came back was the carry
+; that went in. The routine therefore greyed the band whenever its caller
+; happened to arrive with CF set - and it also ARMED [gfx_dis] for the rest of
+; the lock hold, so everything lettered after it came out as a checkerboard
+; too. apps/cword found the first half of that and set `clc` at its own call
+; site; the second half is what the field reported, as a status line whose
+; changed field dithered while the rest of it stayed solid.
+;
+; SPEC.md 47's greying is still done HERE, because gfx_blit1 is the one
+; drawing primitive in the tree that is greying-blind: the band arrives in
+; final polarity and there is no colour left to reduce. The phase is the
+; SCREEN row's, not the band's, so a greyed run lines up with every other
+; dithered thing on the screen. What is gone is asking the kernel a question
+; it has no way to answer.
 ;
 ; And the refusal. kern_small carries the slot and not the body, so CF=1 is a
 ; real answer on a real machine; the caller letters that row with
@@ -1512,9 +1612,8 @@ ty_flush:
     push bp
     push es
 
-    call OSAPI_GFX_PEN              ; CF=1 = disabled (SPEC.md 47)
-    jnc .live
-    call ty_gray
+    jnc .live                       ; CF is the CALLER's greying flag, not a
+    call ty_gray                    ; question to the kernel (SPEC.md 6.5.4)
 .live:
     mov si, ty_bandbuf
     mov bp, TY_STRIDE
@@ -1625,7 +1724,10 @@ ty_psface   equ ty_style + 1    ; byte: which face the table was built for
 ty_psstyle  equ ty_psface + 1   ; byte: ...and which style
 ty_curadv   equ ty_psstyle + 1  ; byte: the advance, banked across a multiply
 ty_ok       equ ty_curadv + 1   ; byte: the last ty_flush drew (SPEC.md 6.5)
-ty_nfam     equ ty_ok + 1       ; byte: families ty_scan listed
+ty_slant    equ ty_ok + 1       ; byte: the runs that follow LEAN (6.5.3)
+ty_shmax    equ ty_slant + 1    ; byte: ...by this much on their top row
+ty_shcnt    equ ty_shmax + 1    ; byte: rows left before the lean steps down
+ty_nfam     equ ty_shcnt + 1    ; byte: families ty_scan listed
 ty_bkcwd    equ ty_nfam + 1     ; word } where the caller was standing, so a
 ty_bkdrv    equ ty_bkcwd + 2    ; byte } visit to SYSTEM/FONTS can put it back
 ty_sysvol   equ ty_bkdrv + 1    ; byte: OSAPI_VOL_SYS's answer, banked across

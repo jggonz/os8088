@@ -36,7 +36,6 @@ B and C and pass A, and `make SBRATE=2` must fail A.
 import os
 import re
 import sys
-import time
 
 sys.path.insert(0, "tools")
 import os88build as _B
@@ -175,10 +174,10 @@ def one_drag(m, mo, cx, from_y, to_y, band, mono):
     was, before = scrl(m), sig(m, mono, band)
     mo.to(cx, from_y)
     mo._edge(True)
-    time.sleep(0.8)
+    M.pace(m, 0.8)
     armed = rate(m)
     mo.to(cx, to_y, l=True)
-    time.sleep(1.6)
+    M.pace(m, 1.6)
     return was, before, armed, scrl(m), sig(m, mono, band)
 
 
@@ -248,9 +247,9 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=MACHINE) as ui:
     tier(m, CPU_8086)
     t = thumb(ksb(m))
     mo.to(cx, t[0] + t[1] // 2)
-    time.sleep(0.3)
+    M.pace(m, 0.3)
     mo._edge(True)
-    time.sleep(0.4)
+    M.pace(m, 0.4)
     m.write(m.sym("os88ui_sbd_rate"), bytes([0]))
     v0 = scrl(m)
     for _ in range(10):
@@ -258,18 +257,18 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=MACHINE) as ui:
     moving = scrl(m)                    # at the top, so up has nowhere to go
     check("the pause commit: nothing is drawn while the hand MOVES",
           moving == v0, f"(FS_SCRL {moving}, was {v0})")
-    arrived, waited = None, 0
-    for _ in range(70):
-        time.sleep(0.06)
-        waited += 1
-        if scrl(m) != moving:
-            arrived = scrl(m)
-            break
+    arrived = None
+    try:                                # 70 x 0.06s of an idle box, as GUEST time
+        M.until(m, lambda _: scrl(m) != moving, "the view to move",
+                poll=0.06, guest=70 * 0.06 * M.GUEST_PACE)
+        arrived = scrl(m)
+    except M.MartyError:
+        pass
     if FM_SBIDLE:
         check("...and it arrives when the hand STOPS", arrived is not None,
               f"(FS_SCRL {scrl(m)}, was {moving}, FM_SBIDLE {FM_SBIDLE})")
         settled = scrl(m)
-        time.sleep(1.5)
+        M.pace(m, 1.5)
         check("...ONCE, and it does not keep going", scrl(m) == settled,
               f"(FS_SCRL {scrl(m)}, was {settled})")
     else:
@@ -339,7 +338,7 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=MACHINE) as ui:
         want_follow = (SB_RATE if t == CPU_8086 else SB_RATE286) > 0
         tier(m, t)
         mo.to(sbx, frm)                     # the thumb, where the last release
-        time.sleep(0.4)                     # left it
+        M.pace(m, 0.4)                      # left it
         before = sig(m, mono, textband)     # ...and the band is read with the
                                             # ARROW ALREADY PARKED on the bar:
                                             # the pointer is drawn on the glass
@@ -348,7 +347,7 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=MACHINE) as ui:
                                             # every later one for that reason
                                             # alone
         mo._edge(True)
-        time.sleep(0.8)
+        M.pace(m, 0.8)
         # RAW PACKETS AND NOT `mo.to`, AND THAT IS NOT A STYLE CHOICE. The
         # absolute driver confirms every packet by reading guest memory, which
         # costs ~680 GUEST ms per packet here - longer than SB_IDLE's 494, so
@@ -374,11 +373,13 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=MACHINE) as ui:
         # ...and now the PAUSE, with the button still down
         paused = sig(m, mono, textband)
         arrived = False
-        for _ in range(70):
-            time.sleep(0.06)
-            if sig(m, mono, textband) != paused:
-                arrived = True
-                break
+        try:                            # 70 x 0.06s of an idle box, as GUEST time
+            M.until(m, lambda _: sig(m, mono, textband) != paused,
+                    "the pause commit", poll=0.06,
+                    guest=70 * 0.06 * M.GUEST_PACE)
+            arrived = True
+        except M.MartyError:
+            pass
         check(f"...and tier {t}: the pause commit lands with the button DOWN",
               arrived == (SB_IDLE > 0) or moved,
               f"(the band changed after the hand stopped: {arrived}, "

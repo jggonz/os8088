@@ -100,8 +100,9 @@ section .cold
 ;              produced" only when production started at 0. Every caller in the
 ;              tree hands over a claim's base, so this costs nothing and saves
 ;              an instruction in the hottest test in the routine.
-;      CX    = compressed bytes. **UNDER 64KB, and SI + CX may not wrap** -
-;              refused, see below
+;      CX    = compressed bytes, 1..0xFFFF. AH is NOT an input here - this is
+;              the published cell's door, and a caller written before the
+;              input could cross never had to say anything in it
 ;      BX:DX = the EXACT expected output length, 32 bits (not a capacity:
 ;              every caller knows it - the loader from `image`, a part from its
 ;              table row, a file from its own header - and a stream that
@@ -110,58 +111,100 @@ section .cold
 ; out: CF=0 and ES:DI is one past the last byte written. CF=1 = refused, and
 ;      nothing past the declared length was written.
 ; clobbers: AX BX CX DX SI DI and the flags. DS and ES come back the caller's.
-; -----------------------------------------------------------------------------
-; **THE OUTPUT CROSSES 64KB AND THE INPUT DOES NOT**, and the asymmetry is
-; deliberate rather than an omission (SPEC.md 20.14.5). The output has to:
-; BEVERLY.MOD is 116,085 bytes and compressing it is the single biggest win in
-; the tree - 42,169 bytes, 36.3%, which is 145 sectors of a floppy. Splitting
-; the stream into segment-sized blocks instead would have cost 18,766 of those
-; bytes, 44% of the whole win, because a MOD's sample data matches back tens of
-; KB into itself and a block boundary throws that history away.
 ;
-; The input does not, because it does not have to and the check is free: a
-; stream over 64KB means a file that compressed BADLY, which os88lz.py stores
-; plain instead. `add cx, si / jc` is the whole enforcement, and what it buys
-; is that the tail bound stays a plain 16-bit offset in one segment - it is
-; tested once per symbol and is the hottest compare here.
+; lz_decomp_big - the same, with AH:CX = the compressed bytes, 24 bits
+;      (SPEC.md 20.14.5.1). The kernel's own file read is its one caller.
+; -----------------------------------------------------------------------------
+; **BOTH SIDES CROSS 64KB NOW, AND THE HOT PATH PAYS FOR NEITHER** (SPEC.md
+; 20.14.5, 20.14.5.1). The output has to: BEVERLY.MOD is 116,085 bytes, and
+; splitting the stream into segment-sized blocks would have cost 18,766 of the
+; 42,169 bytes compression saves it, because a MOD's sample data matches back
+; tens of KB into itself.
+;
+; The INPUT used to stop at one segment, because the tail bound is the hottest
+; compare here and it is a 16-bit offset. It still is. What changed is what the
+; bound MEANS: LZ_F_TSI is a CHECKPOINT - the tail's offset from the current DS
+; when the tail is within reach of it, and LZ_CHK when it is not - and SI
+; reaching it goes to the arm's end path, which was already out of line. There
+; lz_at moves DS up to SI, re-arms the checkpoint, and sends the arm back round
+; if the tail is still ahead. So a 100KB stream takes that detour twice and a
+; 40KB one takes it once, at the end, exactly where it used to stop.
+;
+; The frame carries the tail as a 32-bit offset from the CURRENT DS, which is
+; what lets the checkpoint be re-derived after DS has moved: lz_at slides DS by
+; a fixed 32KB and takes the same 32KB off the tail's offset.
+
+; **LZ4 IS STILL ONE SEGMENT OF INPUT**, refused past it at entry. Its literal
+; runs go through lz_copy, whose slow arm bumps DS by 64KB when SI wraps, and a
+; bump there would leave the checkpoint describing a segment nobody is reading
+; - so a stream that could wrap mid-run is one this routine does not start.
+; LZB's literals are single bytes and its matches read the OUTPUT, so it has no
+; such run; LZB is also the format this machine writes (SPEC.md 20.15).
 ;
 ; The locals are PUSHED rather than carved with `sub sp`, and the frame is
 ; unwound with `pop` rather than `mov sp, bp`, so the routine is push/pop
 ; balanced on every path and tools/stkbalance.py can walk it.
-LZ_F_REM    equ 0               ; the frame, once BP is set: output bytes still
-LZ_F_REMH   equ 2               ; to produce, 32 bits...
-LZ_F_TSI    equ 4               ; ...where the raw tail begins: SEND - T, and
-                                ; the ONLY source bound the arms test...
-LZ_F_T      equ 6               ; ...the tail's length...
-LZ_F_BUMP   equ 8               ; ...and 1 once the destination has crossed a
-                                ; 64KB boundary, which is exactly the moment
+LZ_F_TSI    equ 0               ; the frame, once BP is set: the source
+                                ; checkpoint, the ONLY source bound the arms
+                                ; test - the tail's offset from DS when the
+                                ; tail is in reach, LZ_CHK when it is not...
+LZ_F_BUMP   equ 2               ; ...1 once the destination has crossed a 64KB
+                                ; boundary, which is exactly the moment
                                 ; "produced" passes what a 16-bit match offset
                                 ; can reach - so the offset bound stops being a
-                                ; compare at all (SPEC.md 20.14.5)
+                                ; compare at all (SPEC.md 20.14.5)...
+LZ_F_TLO    equ 4               ; ...where the tail begins, from the current
+LZ_F_THI    equ 6               ; DS:0, 32 bits...
+LZ_F_T      equ 8               ; ...the tail's length...
+LZ_F_REM    equ 10              ; ...and the output bytes still to produce, 32
+LZ_F_REMH   equ 12              ; bits
+
+LZ_CHK      equ 0xF000          ; the checkpoint when the tail is further:
+                                ; what is left of the segment above it is the
+                                ; most one symbol may read in line before the
+                                ; arm tests SI again. An LZB symbol reads ten
+                                ; bytes at most (two gammas' tag bytes, the
+                                ; offset byte), and a hostile stream that
+                                ; reads further reads - it never writes
 
 lz_decomp_x:
+    mov ah, 0                   ; the published door: under 64KB, as it was
+lz_decomp_big:
     push ds                     ; both segments are the caller's and both come
     push bp                     ; back: the match copies below swap DS to ES
     cld
     or di, di
     jnz .early                  ; the precondition, checked rather than assumed
-    add cx, si                  ; the source end
-    jc .early                   ; SI + CX wrapped: not a source this routine
-                                ; will read, and a bound that wrapped is a
-                                ; bound that silently means nothing
-    xchg ax, bp                 ; the format, out of the way of the T read
+    push bx                     ; LZ_F_REMH: the expected output, high...
+    push dx                     ; LZ_F_REM: ...and low
+    mov bp, ax                  ; BP = the format, and the length's top byte
+    mov al, ah
+    mov ah, 0
+    mov dx, cx                  ; AX:DX = the length...
+    add dx, si
+    adc ax, 0                   ; ...and now the stream's END, from DS:0
+    jz .reach
+    test bp, 0x00FF             ; ...which only LZB may put past one segment:
+    jz .early2                  ; LZ_LZ4 is 0, in BP's LOW byte. This is the
+.reach:                         ; old `add cx, si / jc` refusal, kept for LZ4
+    xchg ax, cx                 ; (the end's high word, out of lodsw's way)
     lodsw                       ; T: how much of the output is stored raw
-    sub cx, ax                  ; ...so this is where the symbols END
-    jc .early                   ; a tail longer than the stream
-    cmp cx, si
-    jb .early                   ; ...or one that begins inside its own T word
+    xchg ax, cx                 ; CX = T, AX = the end's high word again
+    sub dx, cx
+    sbb ax, 0                   ; AX:DX = where the tail BEGINS
+    jc .early2                  ; a tail longer than the stream
+    jnz .far
+    cmp dx, si
+    jb .early2                  ; ...or one that begins inside its own T word
+.far:
+    push cx                     ; LZ_F_T
+    push ax                     ; LZ_F_THI
+    push dx                     ; LZ_F_TLO
     push di                     ; LZ_F_BUMP = 0 - nothing has crossed yet
-    push ax                     ; LZ_F_T
-    push cx                     ; LZ_F_TSI
-    push bx                     ; ...the expected output, high word...
-    push dx                     ; ...and low
-    xchg ax, bp                 ; AL = the format again
-    mov bp, sp                  ; SS, not DS - which is the point of a frame
+    push di                     ; LZ_F_TSI = 0, so the first symbol goes
+    xchg ax, bp                 ; straight to lz_at and the checkpoint is armed
+    mov bp, sp                  ; there. AL = the format again, and BP the
+                                ; frame - SS, not DS, which is its point
     ; EVERY ARM CHECKS AL, including the single-format builds. The cell exists
     ; in both kernels and is never %ifdef'd - SPEC.md 20.8 rule 4: a slot that
     ; is present in one build and absent in another is an ABI that depends on a
@@ -188,18 +231,65 @@ lz_decomp_x:
 .refuse:
     stc
 .out:
-    pop cx                      ; drop the five locals. `pop` and not `add sp`,
+    pop cx                      ; drop the seven locals. `pop` and not `add sp`,
     pop dx                      ; and none of them touches the flags, so the CF
     pop bx                      ; the arm answered survives the unwind
     pop si
     pop di
+    pop cx
+    pop cx
     pop bp
     pop ds
     ret
+.early2:                        ; refused with only the expected output there
+    pop dx
+    pop bx
 .early:                         ; refused before the frame was built, so the
     stc                         ; unwind is the shorter one
     pop bp
     pop ds
+    ret
+
+; -----------------------------------------------------------------------------
+; lz_at - the source reached its checkpoint: slide DS up and re-arm it
+;         (module internal; both arms' end paths, and the entry)
+; out: the flags of `cmp si, [bp+LZ_F_TSI]` against the re-armed checkpoint -
+;      BELOW = more symbols, EQUAL = the tail, ABOVE = the stream ran past its
+;      own tail
+; clobbers: SI and DS (the same address, slid), flags
+;
+; The slide is a FIXED 32KB while SI is in the top half, so the tail's offset
+; loses the same constant and no shift is needed anywhere. The checkpoint is
+; then the tail's own offset when that is below LZ_CHK, and nothing an arm
+; reads can carry SI past 0xFFFF before it is tested again.
+; -----------------------------------------------------------------------------
+lz_at:
+    push ax
+.slide:
+    or si, si
+    jns .arm                    ; SI in the low half: nothing to slide
+    and si, 0x7FFF
+    mov ax, ds
+    add ax, 0x0800              ; 32KB is 2,048 paragraphs
+    mov ds, ax
+    sub word [bp+LZ_F_TLO], 0x8000
+    sbb word [bp+LZ_F_THI], 0   ; A BORROW is a source past its tail, and
+    jmp short .slide            ; needs no branch of its own: THI goes
+                                ; negative, .arm reads it as far away, and
+                                ; the tail is never reached - the stream runs
+                                ; out of declared output first, which lz_take
+                                ; refuses
+.arm:
+    mov ax, LZ_CHK
+    cmp word [bp+LZ_F_THI], 0
+    jne .set                    ; the tail is a segment or more away...
+    cmp [bp+LZ_F_TLO], ax
+    jae .set                    ; ...or past the checkpoint's reach
+    mov ax, [bp+LZ_F_TLO]       ; ...or here: its own offset, exactly
+.set:
+    mov [bp+LZ_F_TSI], ax
+    cmp si, ax
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -346,6 +436,8 @@ lz_lz4:
     stc
     ret
 .end:
+    call lz_at                  ; a CHECKPOINT, or the tail (SPEC.md 20.14.5.1)
+    jb .seq                     ; ...more source beyond it: go round
     jne .bad                    ; SI is PAST the tail: a length ran off the end
                                 ; ...and SI AT it falls into lz_tail below
 %endif
@@ -439,6 +531,8 @@ lz_lzb:
     call lz_dbump               ; ...and one byte can land on the boundary too
     jmp short .loop
 .end:
+    call lz_at                  ; the checkpoint, as LZ4's `.end` reads it
+    jb .loop
     jne .bad
     jmp lz_tail
 

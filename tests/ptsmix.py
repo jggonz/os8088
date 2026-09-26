@@ -130,9 +130,20 @@ def drag(m, ui, w, watch, wx):
             break
         m.mouse(max(-40, min(40, tgt - cx)), 0, l=True)
     mo._edge(False)
-    for _ in range(40):                       # let the release repaint land
+    # let the release repaint land: what 2s of an idle box bought, counted on
+    # the GUEST's clock - a bounded loop and not `pace`, because a pause ends
+    # at a breakpoint and this one has to go on servicing them
+    c0 = last = m.status()["cycles"]
+    still = 0
+    while last - c0 < 2.0 * (os88marty.GUEST_PACE or 4.5) * os88marty.GUEST_HZ:
         watch.poll()
         time.sleep(0.05)
+        c = m.status()["cycles"]
+        still = still + 1 if c == last else 0
+        if still > 100:
+            raise os88marty.MartyError("the guest clock stopped at cycle %d "
+                                       "after the release" % c)
+        last = c
     return dispcp.win_rect(m, os88sym.linear, w)
 
 
@@ -152,7 +163,11 @@ def main():
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")
         dispcp.close_panel(m, mo, S, os88marty.settle)
-        time.sleep(1)
+        try:
+            os88marty.until(m, lambda _m: m.read(S("vid_ndisp"), 1)[0] == 2,
+                            "the desktop to extend", poll=0.2, limit=10)
+        except os88marty.MartyError:
+            pass                        # ...and the SETUP check says so
         nd = m.read(S("vid_ndisp"), 1)[0]
         seam = u16(m, "vid_cw") if m.read(S("vid_cur"), 1)[0] == 0 else 0
         print("ndisp=%d seam=%d" % (nd, seam))

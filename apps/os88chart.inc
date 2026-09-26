@@ -1635,7 +1635,7 @@ ch_margin:
 ; =============================================================================
 ; TEXT INTO THE CANVAS - the prerequisite for every label.
 ;
-; THE GLYPHS COME FROM THE KERNEL, via OSAPI_FONT_GLYPHS (slot 0x0218), and
+; THE GLYPHS COME FROM THE KERNEL, via OSAPI_FONT_GLYPHS (slot 0x01B6), and
 ; that is worth saying because the obvious move is wrong. OSAPI_FONT_CHAR_XPARENT draws
 ; to the SCREEN; this canvas is a private 4bpp buffer that is blitted later, so
 ; a drawn character cannot help. The tempting answer is to lift a glyph table

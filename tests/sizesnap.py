@@ -113,7 +113,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         if not w.visible:
             continue
         mn = os88geom.word(m, "wm_minw", None) if False else None
-        raw = m.read(S("wm_minw") + w.i * 2, 2)
+        raw = m.read(os88sym.wfield(w.i, "W_MINW"), 2)
         mn = raw[0] | (raw[1] << 8)
         if mn and w.w < mn:
             fails.append("FLOORED: %s is %d wide, declared %d"

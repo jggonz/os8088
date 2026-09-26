@@ -1243,7 +1243,7 @@ rc_putu5:
 ; handlers taking it down are what a widget cannot own.
 
 ; -----------------------------------------------------------------------------
-; rc_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; rc_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------

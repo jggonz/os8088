@@ -59,6 +59,9 @@
                                    # prefix action
 1 apps/recorder/recorder.asm       # the transport
 1 apps/texpad/texpad.asm           # the top row, staged one at a time
+1 apps/tracker/trkwin.inc          # the face's transport pictures and its
+                                   # option grid, one record (SPEC.md 45.21)
+1 apps/tracker/trklist.inc         # the PlayList editor's six (45.22)
 1 apps/weave/wdraw.inc             # correct through the C SDK's
                                    # os88_wm_onmouseup
 

@@ -23,7 +23,6 @@ WHAT IT ASSERTS, and each is something only this arrangement can see:
 """
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88ui                                                  # noqa: E402
@@ -49,13 +48,14 @@ def main():
             fail("double-clicking DOSEXEC.COM opened no window")
 
         rows = []
-        end = time.time() + 180.0
-        while time.time() < end:
-            rows = m.screen() or []
-            if any("READY" in r for r in rows):
-                break
-            time.sleep(0.3)
-        else:
+
+        def _seen(_m):
+            rows[:] = m.screen() or []
+            return any("READY" in r for r in rows)
+        try:                        # GUEST time: `limit` is idle-box seconds
+            os88marty.until(m, _seen, "DOSEXEC.COM to finish", poll=0.3,
+                            limit=180.0)
+        except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
                  % ([r.rstrip() for r in rows if r.strip()][:12],))
 

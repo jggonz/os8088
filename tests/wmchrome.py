@@ -68,7 +68,6 @@ THREE THINGS THAT COST TIME HERE, all of them worth not re-deriving:
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -112,12 +111,8 @@ def full_repaint(m):
     """Make the GUEST repaint, and leave the machine paused."""
     m.cmd(cmd="run")
     m.write(S("cp_dirty"), b"\x01")
-    for _ in range(400):
-        time.sleep(0.05)
-        if m.read(S("cp_dirty"), 1)[0] == 0:
-            break
-    else:
-        raise RuntimeError("ui_task never drained [cp_dirty]")
+    os88marty.until(m, lambda mm: mm.read(S("cp_dirty"), 1)[0] == 0,
+                    "ui_task to drain [cp_dirty]", poll=0.05, limit=20)
     os88marty.settle(m)
     m.cmd(cmd="pause")
 
@@ -199,13 +194,11 @@ def _drag_grow(ui, w, tw, th):
     mo._edge(True)
     for t in range(1, 7):
         mo.to(gx + (tx - gx) * t // 6, gy + (ty - gy) * t // 6, l=True)
-    last = None
-    for _ in range(80):                         # ...until the outline STOPS
-        time.sleep(0.15)                        # moving, which is the guest
-        now = (_u16w(ui, "ui_dragw"), _u16w(ui, "ui_dragh"))
-        if now == last:
-            break
-        last = now
+    # ...until the outline STOPS moving, which is the guest - two readings
+    # what 0.15s of an idle box gave apart, in guest time
+    last = os88marty.quiesce(
+        ui.m, lambda: (_u16w(ui, "ui_dragw"), _u16w(ui, "ui_dragh")),
+        guest=0.7, stable=1, budget=60.0, what="the grow outline to stop")
     mo._edge(False)
     ui.settle()
     ok = (_u16w(ui, "ui_dragwin") != 0
@@ -280,7 +273,7 @@ def _ink(ui, w):
         os88marty.guest_sleep(ui.m, 0.3)    # the application is a tick behind
                                             # the pointer. GUEST seconds, so a
                                             # loaded box cannot shorten it
-    time.sleep(0.5)
+    os88marty.pace(ui.m, 0.5)
     ui.settle()
 
 
@@ -303,10 +296,11 @@ def _refuse(ui, p, part):
     # 42.6.5), which is a window: measure while it is up and it comes and goes
     # BETWEEN the glass and the forced repaint, which reads as scattered stale
     # pixels having nothing to do with any window's chrome.
-    for _ in range(40):
-        if not ui.toast()[1]:
-            break
-        time.sleep(0.5)
+    try:
+        os88marty.until(ui.m, lambda _: not ui.toast()[1], "the toast to go",
+                        poll=0.5, limit=20)
+    except os88marty.MartyError:
+        pass
     ui.settle()
     return got
 
@@ -354,7 +348,8 @@ def part_shadow(a):
         d = ui.windows()[-1]
 
         p = ui.open("PAINT.O88")
-        time.sleep(2)
+        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                          what="Paint's open to stop reading")
         ui.settle()
         _ink(ui, ui._refresh(p))            # the reporter's own step...
         p = _floor(ui, p, "Paint")          # ...and then down to the floor it
@@ -433,7 +428,8 @@ def part_title(a):
         d = ui.windows()[-1]
 
         p = ui.open("PAINT.O88")
-        time.sleep(2)
+        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                          what="Paint's open to stop reading")
         ui.settle()
         _ink(ui, ui._refresh(p))
         p = _floor(ui, p, "Paint")          # FIRST: the Disk window is placed
@@ -544,7 +540,8 @@ def part_nodmg(a):
         ui.open_drive("B")
         ui.open("APPS")
         ui.open("PAINT.O88")
-        time.sleep(2)
+        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                          what="Paint's open to stop reading")
         ui.settle()
         p = ui._refresh(ui.windows()[-1])
         print("   Paint (%d,%d) %dx%d" % (p.x, p.y, p.w, p.h))

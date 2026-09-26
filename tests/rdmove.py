@@ -25,7 +25,7 @@ again forces the compaction.
 Four assertions, and the first is the one that makes the rest mean anything:
 `arena moved` NO means the run measured nothing.
 """
-import sys, os, time, hashlib, argparse, subprocess, tempfile
+import sys, os, re, hashlib, argparse, subprocess, tempfile
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
 # checkout it was written in and wrong in a git worktree, which is how parallel
 # work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
@@ -39,6 +39,11 @@ import os88marty, os88mouse, os88sym, os88geom, os88ui, dispcp
 
 MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 PKG_HEAPFRAG = "HEAPFRAG.O88"
+# how many checks heapfrag's suite records ([hf_n] once it has run them all),
+# read from its source so there is no second copy of the number to go stale
+with open(os.path.join(_OS88_ROOT, "tests", "heapfrag", "heapfrag.asm")) as _f:
+    HF_ROWS = int(re.search(r"^HF_ROWS\s+equ\s+(\d+)", _f.read(),
+                            re.M).group(1))
 
 
 DRVR_SZ, DRVR_SEG = 16, 2           # driver.inc's row: 0 = not loaded
@@ -126,6 +131,42 @@ def main():
         def rd_seg():
             return u16(m.read(S("drv_tab") + RD_ROW * DRVR_SZ + DRVR_SEG, 2))
 
+        def reads():
+            return m.disk().get("reads")
+
+        def floppy_done(r0):
+            """A floppy load that began, or is about to, has ENDED: the read
+            count moved past `r0` and then held still, in GUEST time."""
+            try:
+                os88marty.until(m, lambda _: reads() != r0,
+                                "the floppy to be read", poll=0.1, limit=5.0)
+            except os88marty.MartyError:
+                pass                    # nothing to read: it was all there
+            os88marty.quiesce(m, reads, guest=1.0,
+                              what="the floppy to go quiet")
+
+        def heapfrag_ran():
+            """heapfrag's suite has recorded every check: [hf_n] (bss +0)
+            reaches HF_ROWS, read out of heapfrag.asm rather than restated.
+            A suite that stops short is left to the reads after this."""
+            def done(mm):
+                try:
+                    w = [w for w in os88geom.windows(mm, S)
+                         if (w.title or "").startswith("Heap")]
+                    if not w:
+                        return False
+                    sg = u16(mm.read(os88geom.winptr(mm, w[-1].i, S)
+                                     + os88geom.W_SEG, 2))
+                    img = u16(mm.read(sg * 16 + 8, 2))
+                    return sg and u16(mm.read(sg * 16 + img, 2)) >= HF_ROWS
+                except Exception:
+                    return False
+            try:
+                os88marty.until(m, done, "heapfrag's suite to finish",
+                                poll=0.5, limit=40.0)
+            except os88marty.MartyError:
+                pass
+
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         dslot = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, dslot)
@@ -144,7 +185,7 @@ def main():
 
         # --- heapfrag first, so it owns the floor of the arena --------------
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, PKG_HEAPFRAG)
-        time.sleep(22)
+        heapfrag_ran()
         os88marty.settle(m)
         hf_win = [w for w in os88geom.windows(m, S)
                   if w.title.startswith("Heap")][0]
@@ -166,9 +207,16 @@ def main():
         x0, y0 = cp.x + 1, cp.y + 18
         mo.click(x0 + 40, y0 + CP_I0Y + CP_IDRV * CP_IROWH + 7)
         os88marty.settle(m)
+        r0 = reads()
         mo.click(x0 + CP_RX + 40,
                  y0 + CP_DBY1 + RD_ROW * CP_DROWH + CP_DROWH // 2)
-        time.sleep(6)
+        try:                                # the row's segment is written
+            os88marty.until(m, lambda _: rd_seg(),  # at the claim...
+                            "the RAM disk driver's claim", poll=0.1,
+                            limit=20.0)
+        except os88marty.MartyError:
+            pass                            # ...the FAIL below says so
+        floppy_done(r0)                     # ...and the load follows it
         os88marty.settle(m)
         seg = rd_seg()
         print("ram disk driver at %04x" % seg)
@@ -187,12 +235,20 @@ def main():
         # The page is the row past the static ones (SPEC.md 31.9), and Mount
         # is the first button of its first row.
         nst = m.read(S("cp_nst"), 1)[0]
+        r0 = reads()
         mo.click(x0 + 40, y0 + CP_I0Y + nst * CP_IROWH + 7)
-        time.sleep(8)                           # the first paint LOADS the
+        floppy_done(r0)                         # the first paint LOADS the
         os88marty.settle(m)                     # page image off the floppy
         mo.click(x0 + CP_RX + RP_MNTX + RP_MNTW // 2, y0 + RP_B0Y + RP_BH // 2)
-        time.sleep(6)
-        os88marty.settle(m)
+        try:            # the mount claims the arena (rd_store_get), bounded
+            os88marty.until(        # by what an idle box's pause gave it
+                m, lambda _: rd_seg() and u16(m.read(
+                    rd_seg() * 16 + R["rd_arena"], 2)),
+                "the RAM disk's arena", poll=0.1,
+                guest=6 * os88marty.GUEST_PACE)
+        except os88marty.MartyError:
+            pass                            # ...check 1 below says so
+        os88marty.settle(m)                 # ...and the page repainting it
 
         # CLOSE the panel: SPEC.md 31.8 writes SYSTEM.CFG on the close, and
         # leaving it open would sit a modal-ish window over everything below.
@@ -248,7 +304,7 @@ def main():
         # --- and run it again, whose big claim forces the compaction --------
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=PKG_HEAPFRAG)
-        time.sleep(22)
+        heapfrag_ran()
         os88marty.settle(m)
 
         base_p = u16(m.read(S("mem_base"), 2))

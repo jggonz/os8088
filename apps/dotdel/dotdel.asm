@@ -156,6 +156,12 @@ DD_SPRSZ  equ DD_SPRB * DD_THMAX ; ...and in one whole scaled sprite
 DD_BANDB  equ 56                ; the widest stride any of them needs
 DD_BANDH  equ 4
 DD_BANDSZ equ 288               ; ...with room over the 224 that binds
+; THE PLANAR BAND'S PLANE (SPEC.md 93.5.19): the widest ACTOR band there can be
+; - three tile columns of DD_TWMAX by two tiles of DD_THMAX, the union of two
+; boxes less than a tile apart - and not DD_BANDSZ, which is sized by the TEXT
+; line. Four of them are the four planes a gfx_blitp takes; a band any bigger
+; takes the one-pen band it always did.
+DD_PBMAX  equ (3 * DD_TWMAX / 8) * (2 * DD_THMAX)
 
 ; --- actors -------------------------------------------------------------------
 DD_NGH    equ 4                 ; ghosts
@@ -337,9 +343,16 @@ dd_paint:
 .whole:
     mov byte [dd_full], 1
     mov byte [dd_inpaint], 1
+    cmp byte [dd_bpp], 1            ; A COLOUR SURFACE MAY ASK FOR PLANES HERE
+    jbe .pk                         ; TOO (SPEC.md 93.5.19): the region the
+    mov byte [dd_pok], 1            ; kernel arms round a W_PAINT is its own,
+.pk:                                ; so gfx_blitp is left to say whether it
+                                    ; binds - a real one it refuses, and the
+                                    ; band goes down in one pen as it always did
     mov byte [dd_drawing], 1        ; SPEC.md 93.5.17
     call dd_draw
     mov byte [dd_drawing], 0
+    mov byte [dd_pok], 0
     mov byte [dd_inpaint], 0
 .nothing:
     pop es
@@ -754,6 +767,7 @@ dd_repaint_now:
     call OSAPI_WM_CLIP_SET          ; a menu dispatch arrives with no region
     jc .gone                        ; armed (SPEC.md 11.3)
     mov byte [dd_inpaint], 1
+    call dd_pok_win                 ; ...and may the walls have planes? (93.5.19)
     call dd_geom_win
     xor bl, bl                      ; the UI task: mine to recut
     call dd_relayout_ck             ; ...and dd_paint's other half, which this
@@ -766,6 +780,7 @@ dd_repaint_now:
     mov byte [dd_drawing], 1        ; SPEC.md 93.5.17
     call dd_draw
     mov byte [dd_drawing], 0
+    mov byte [dd_pok], 0
     mov byte [dd_inpaint], 0
     call OSAPI_WM_CLIP_CLEAR
 .gone:
@@ -1255,6 +1270,8 @@ dd_spct:     dw DD_PCTPAC, DD_PCTGH, DD_PCTFRI, DD_PCTEYE, DD_PCTTUN
     DBYTEV dd_needcut               ; the worker owes the UI task a recut
     DBYTEV dd_inrender              ; dd_board_render is walking the board
     DBYTEV dd_drawing               ; ...and a frame is being drawn off it
+    DBYTEV dd_newg                  ; 1 = dd_new_game is loading the board, and
+                                    ; the worker takes no step until it has
     DBUFV  dd_cnrmap, DD_INKB          ; which CORRIDOR tiles carry ink (93.2.3.2)
     DWORDV dd_dotw
     DWORDV dd_doth
@@ -1302,6 +1319,17 @@ dd_spct:     dw DD_PCTPAC, DD_PCTGH, DD_PCTFRI, DD_PCTEYE, DD_PCTTUN
 
 ; --- the band composer ----------------------------------------------------------
     DBUFV  dd_band, DD_BANDSZ
+    DBUFV  dd_pb, 4 * DD_PBMAX      ; the planar band's four planes, plane 3
+                                    ; holding the GROUND until it is composed
+                                    ; (SPEC.md 93.5.19)
+    DWORDV dd_pn                    ; ...one plane's bytes, which is the step
+    DBYTEV dd_pok                   ; 1 = gfx_blitp may be asked this frame
+    DBYTEV dd_bgnd                  ; the band's ground: 0 none, 1 in plane 3,
+                                    ; 2 folded into the band in one pen
+    DBYTEV dd_bok                   ; 1 = this actor's bands put every wall and
+                                    ; corner pixel down in the WALL's pen
+    DBYTEV dd_pink                  ; dd_emit_planar's ink
+    DBYTEV dd_bplan                 ; 1 = dd_blit is gfx_blitp's (dd_blitp)
     DWORDV dd_bbase                 ; which buffer dd_band_rect is filling
     DWORDV dd_rb                    ; ...and its stride
     DWORDV dd_rx                    ; a dot run
@@ -1388,6 +1416,9 @@ dd_spct:     dw DD_PCTPAC, DD_PCTGH, DD_PCTFRI, DD_PCTEYE, DD_PCTTUN
     DBUFV  dd_qr0, DD_NACT          ; back in their own pen (SPEC.md 93.5.10)
     DBUFV  dd_qr1, DD_NACT
     DBUFV  dd_qok, DD_NACT
+    DBUFV  dd_qgk, DD_NACT          ; ...and whether that rect's walls came out
+                                    ; in their own pen, so leaving one owes
+                                    ; nothing (SPEC.md 93.5.19)
     DBUFV  dd_repc, DD_REPN         ; ...the ring of tiles that owe one
     DBUFV  dd_repr, DD_REPN
     DWORDV dd_reph

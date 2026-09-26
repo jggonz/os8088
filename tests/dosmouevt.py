@@ -32,12 +32,12 @@ freed (E).
 import argparse
 import os
 import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
+import os88marty                                            # noqa: E402
 import os88ui                                              # noqa: E402
 # RELATIVE, which is the short list CLAUDE.md names: this is motion with no
 # destination. What the events are about is the MOVING, not the arriving, and
@@ -71,16 +71,19 @@ def main():
 
         # Wait for step B's `ok` - the handler is in and the probe is now
         # counting.  Moving before that is moving at nothing.
-        end = time.time() + 120.0
-        while time.time() < end:
-            rows = [r.rstrip() for r in (m.screen() or []) if r.strip()]
+        rows = []
+
+        def handler_in(mm):
+            rows[:] = [r.rstrip() for r in (mm.screen() or []) if r.strip()]
             if any("MOUEVT SKIP" in r for r in rows):
                 fail("the probe found no INT 33h at all, which on THIS box is "
                      "the mouse vector not being installed (SPEC.md 96.10)")
-            if any(r.startswith("B handler in") and "ok" in r for r in rows):
-                break
-            time.sleep(0.5)
-        else:
+            return any(r.startswith("B handler in") and "ok" in r
+                       for r in rows)
+        try:
+            os88marty.until(m, handler_in, "step B's handler", poll=0.5,
+                            limit=120.0)
+        except os88marty.MartyError:
             fail("the probe never got its handler in; the last screen was %r"
                  % rows[:12])
 
@@ -108,13 +111,13 @@ def main():
         m.run()                                 # belt and braces: whatever
                                                 # paced it, it runs from here
 
-        end = time.time() + 180.0
-        while time.time() < end:
-            rows = [r.rstrip() for r in (m.screen() or []) if r.strip()]
-            if any("MOUEVT PASS" in r or "MOUEVT FAIL" in r for r in rows):
-                break
-            time.sleep(0.5)
-        else:
+
+        def done(mm):
+            rows[:] = [r.rstrip() for r in (mm.screen() or []) if r.strip()]
+            return any("MOUEVT PASS" in r or "MOUEVT FAIL" in r for r in rows)
+        try:
+            os88marty.until(m, done, "MOUEVT's verdict", poll=0.5, limit=180.0)
+        except os88marty.MartyError:
             fail("MOUEVT.COM never reported; the last screen was %r"
                  % rows[:12])
 

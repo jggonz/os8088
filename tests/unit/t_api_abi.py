@@ -26,22 +26,45 @@ place that knows - so a slot's address is its file offset plus that, and the cel
 can simply be decoded:
 
     OSAPI_SLOT   1E 0E 1F  E8 lo hi  1F CB     push ds/push cs/pop ds/
-                                               call near/pop ds/retf
-    OSAPI_CSLOT  1E E8 lo hi  1F CB  tt tt     push ds/call api_sc/pop ds/
-                                               retf/dw <cold target>
-    OSAPI_JSLOT  E9 lo hi  00 00 00 00 00      jmp near <stub>
-    OSAPI_X/CX/NCELL 55 BD tt tt E9 lo hi 00   push bp/mov bp,<target>/
-                                               jmp near api_x|api_xc|api_n
-    OSAPI_FARCELL 9A tt tt ss ss  CB  00 00    call COLD_SEG:<target>/retf
+                                               call near/pop ds/retf (hot, 8)
+    OSAPI_XCELL  55 BD tt tt E9 lo hi          push bp/mov bp,<target>/
+                                               jmp near api_x   (hot, 7)
+    OSAPI_R*     55 E8 lo hi tt tt             push bp/call api_r<kind>/
+                                               dw <target>      (rare, 6)
+    OSAPI_JCELL  E9 lo hi                      jmp near <stub>  (3)
+    OSAPI_FCELL  9A tt tt ss ss CB             call COLD_SEG:<target>/retf (6)
+    OSAPI_ICELL  2E <mov with one memory operand> [98] CB
+                                               the INLINE cell: the routine
+                                               itself, through CS (5 or 6)
+
+AN INLINE CELL HAS NO TARGET, AND THAT IS WHAT CHECK 6 HAS TO GET ROUND.
+Since kernel size pass 4's C3 (SPEC.md 20.3) fifteen cells whose routine was
+one `mov` and a `ret` ARE that routine: `mov ax, [cs:ticks] / retf`.  There
+is no label to compare the published name against, so the ledger is INLINE
+below - one row per cell saying which way the one access goes, in which
+register, and at what: a kernel VARIABLE, resolved through os88sym exactly as
+a routine is (in `.text` or `.bss`, the two sections KERNEL_SEG:offset can
+name), or a WINDOW-RECORD field `[bx+W_*]`, whose displacement must equal the
+equate.  So `OSAPI_GET_TICKS` must still reach `ticks` and nothing else, and
+a cell that loads AL where its contract says AX, or stores where it should
+load, fails as loudly as a SLOT calling the wrong routine.  An inline-shaped
+cell with no row fails too, and so does a row whose cell is not inline - the
+ledger cannot rot in either direction.
+
+The cells are VARIABLE LENGTH since kernel size pass 4 (SPEC.md 20.3), so
+the table is walked by each cell's decoded length and never by a stride.
+For a rare cell the `E8` displacement names WHICH body (api_rs, api_rx,
+api_rxc, api_rn, api_rsc), and the body decides the section the `dw` target
+is resolved in.
 
 THE BP FAMILY'S TARGET IS THE `BD` IMMEDIATE, NOT THE `E9` DISPLACEMENT.
 The jump goes to the family's ONE shared body, which is the same address for
 every cell of it; decoding it as the target would make check 6 fail on every
 one of them and check 4 pass for the wrong reason.  What the `E9` DOES say
 is WHICH body, and that decides the segment the target lives in: `api_x`
-near-calls a `.text` routine, `api_xc` and `api_n` far-call a `.cold` one
-through `api_far` (SPEC.md 20.3.2).  A CSLOT's word and a FARCELL's offset
-are `.cold` by construction, and a FARCELL's segment word must BE COLD_SEG -
+near-calls a `.text` routine, `api_rxc` and `api_rn` far-call a `.cold` one
+through `api_far` (SPEC.md 20.3.2).  An FCELL's offset is `.cold` by
+construction, and its segment word must BE COLD_SEG -
 a cell that far-calls anywhere else is a cell somebody has mistyped.
 
 So a target is resolved in the section its shape names, never "somewhere in
@@ -59,9 +82,11 @@ between what the source says and what got assembled.
 SIX THINGS ARE CHECKED, and the last is the one worth the file.
 
   1. No two published names share an address, and no name is published twice.
-  2. Every address is a real cell: 0x0010 + 8n, inside the table.
-  3. Every cell decodes to one of the two shapes above - a cell that is
-     neither is a table somebody has written data into.
+  2. Every address is a real cell boundary, walking the table by each
+     cell's decoded length (8, 7, 6 or 3 bytes, or an INLINE cell's own
+     5 or 6 - SPEC.md 20.3).
+  3. Every cell decodes to one of the shapes above - a cell that is none
+     of them is a table somebody has written data into.
   4. Every call target lands on a real `.text` symbol.  A displacement into
      the middle of a routine assembles and runs.
   5. Every cell inside the table's extent is accounted for: published here,
@@ -107,14 +132,14 @@ from harness import check, eq, done                       # noqa: E402
 import os88build                                       # noqa: E402
 
 TABLE_BASE = 0x0010
-CELL = 8
+CELL = 8                # the LONGEST cell: the decode window, not the stride
 
 # Cells that exist in the kernel and are deliberately NOT published by this
 # branch's SDK. 0x01B8..0x01C8 are `main`'s three paragraph-counting arena
 # slots, kept live so a main-era package still runs and answered through
 # converting wrappers (apps/os88api.inc's "KB-counting memory slots" note);
 # new code uses the KB slots at 0x0200+. They are not a free list.
-COMPAT = {0x01B8: "main's OSAPI_MEM_ALLOC (paragraphs)",
+COMPAT_OLD = {0x01B8: "main's OSAPI_MEM_ALLOC (paragraphs)",
           0x01C0: "main's OSAPI_MEM_FREE (paragraphs)",
           0x01C8: "main's OSAPI_MEM_AVAIL (paragraphs)",
           # SPEC.md 20.3.1's free list: it was OSAPI_FILE_MOVE, folded into
@@ -124,6 +149,7 @@ COMPAT = {0x01B8: "main's OSAPI_MEM_ALLOC (paragraphs)",
           # floor as an argument, retired the day the floor became a thing a
           # task SETS (OSAPI_MEM_FLOOR, 0x0560). stc/ret, not published.
           0x0568: "OSAPI_MEM_CLAIM_LVL, retired (SPEC.md 50.6.6.1)"}
+COMPAT = {}
 
 # Slots whose published name is not its routine's name. Every entry is a
 # deliberate ABI decision; adding one means the SDK and the kernel have
@@ -219,7 +245,67 @@ def slots():
     return out
 
 
-SHAPES = "1E0E1F E8.. 1FCB | 1E E8.. 1FCB tttt | E9.. 0000000000 | 55BD.. E9.. 00 | 9A.. ssss CB 0000"
+SHAPES = "1E0E1F E8.. 1FCB | 55E8.. tttt | 55BD.. E9.. | E9.. | 9A.. ssss CB | 2E <mov> [98] CB"
+
+# The INLINE cells (SPEC.md 20.3): published name -> (direction, register,
+# operand, trailing ops). The operand is a kernel variable's label, or
+# "[bx+W_*]" for a window-record word. Every row is a register contract as
+# well as a name: evq_pending's is "AL, widened to AX by cbw".
+INLINE = {
+    "OSAPI_GET_TICKS":     ("load",  "ax", "ticks", ()),
+    "OSAPI_SET_COLOR":     ("store", "al", "gfx_color", ()),
+    "OSAPI_SRAND":         ("store", "ax", "osapi_seed", ()),
+    "OSAPI_CPU_INFO":      ("load",  "ax", "cpu_tier", ()),   # AH = [cpu_feat], the byte after
+    "OSAPI_WM_ONSIZE":     ("store", "ax", "[bx+W_ONSIZE]", ()),
+    "OSAPI_MENU_OWNER":    ("load",  "bx", "menu_win", ()),
+    "OSAPI_BOOT_TICKS":    ("load",  "ax", "boot_ticks", ()),
+    "OSAPI_EVQ_PENDING":   ("load",  "al", "evq_count", ("cbw",)),
+    "OSAPI_WM_ONRESIZE":   ("store", "ax", "[bx+W_ONSZ]", ()),
+    "OSAPI_VOL_SYS":       ("load",  "bl", "dsk_bootvol", ()),
+    "OSAPI_WM_ONWAKE":     ("store", "ax", "[bx+W_ONWK]", ()),
+    "OSAPI_WM_ONRCLICK":   ("store", "ax", "[bx+W_ONRC]", ()),
+    "OSAPI_GFX_BLIT1_PEN": ("store", "ax", "gfx_b1ink", ()),  # AH -> gfx_b1pap, adjacent
+    "OSAPI_ICON_PEN":      ("store", "ax", "ico_c1", ()),     # AH -> ico_c2, adjacent
+    "OSAPI_WM_ONCLICK":    ("store", "ax", "[bx+W_ONCLICK]", ()),
+}
+
+
+def inline(c):
+    """(length, (dir, reg, operand, extra)) for an INLINE cell, else None.
+
+    The operand is ("abs", offset) or ("bx", disp8). Only the encodings the
+    table uses are accepted: a CS-prefixed accumulator moffs `mov` (A0-A3),
+    a `mov` r/m16 or r/m8 with [disp16] or [bx+disp8], then an optional
+    `cbw`, then the `retf` - anything else is not an inline cell.
+    """
+    if len(c) < 5 or c[0] != 0x2E:
+        return None
+    op = c[1]
+    REG8, REG16 = ("al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"), \
+                  ("ax", "cx", "dx", "bx", "sp", "bp", "si", "di")
+    if op in (0xA0, 0xA1, 0xA2, 0xA3):
+        d = "load" if op in (0xA0, 0xA1) else "store"
+        reg = "al" if op in (0xA0, 0xA2) else "ax"
+        opd, n = ("abs", struct.unpack_from("<H", c, 2)[0]), 4
+    elif op in (0x88, 0x89, 0x8A, 0x8B):
+        d = "load" if op in (0x8A, 0x8B) else "store"
+        mod, r, rm = c[2] >> 6, (c[2] >> 3) & 7, c[2] & 7
+        reg = (REG16 if op & 1 else REG8)[r]
+        if mod == 0 and rm == 6:
+            opd, n = ("abs", struct.unpack_from("<H", c, 3)[0]), 5
+        elif mod == 1 and rm == 7:
+            opd, n = ("bx", c[3]), 4
+        else:
+            return None
+    else:
+        return None
+    extra = ()
+    if n < len(c) and c[n] == 0x98:
+        extra, n = ("cbw",), n + 1
+    if n >= len(c) or c[n] != 0xCB:
+        return None
+    return n + 1, (d, reg, opd, extra)
+
 
 # The stem of a cold far entry: `dwf_dskw_read` -> `dskw_read`,
 # `osapi_vol_at_x` -> `osapi_vol_at`, `lzf_decomp` -> `decomp`.  One tag,
@@ -235,7 +321,7 @@ def stem(name):
 def decode(blob, addr, bodies, cold_seg):
     """(kind, target, section) for the cell at `addr`, or (None, why, None).
 
-    `bodies` maps the shared bodies' names (api_x, api_xc, api_n, api_sc) to
+    `bodies` maps the shared bodies' names (api_x, api_rs, api_rx, api_rxc, api_rn, api_rsc) to
     their .text offsets; `cold_seg` is COLD_SEG's value.  The section is the
     one the shape says the target lives in - see the header.
     """
@@ -251,32 +337,61 @@ def decode(blob, addr, bodies, cold_seg):
 
     if c[0:3] == b"\x1e\x0e\x1f" and c[3] == 0xE8 and c[6:8] == b"\x1f\xcb":
         return "SLOT", rel(addr + 6, 4), ".text"
-    if c[0] == 0x1E and c[1] == 0xE8 and c[4:6] == b"\x1f\xcb":
-        # CSLOT: the call must reach api_sc, which reads the word at 6..7
+    if c[0] == 0x55 and c[1] == 0xE8:
+        # the 6-byte RARE cell (SPEC.md 20.3): push bp / call <kind> / dw target
         body = rel(addr + 4, 2)
-        if body != bodies.get("api_sc"):
-            return None, "CSLOT shape calling 0x%04X, which is not api_sc" % body, None
-        return "CSLOT", imm(6), ".cold"
-    if c[0] == 0x55 and c[1] == 0xBD and c[4] == 0xE9 and c[7] == 0x00:
-        # the BP family: the target is the immediate at 2..3 and the jump
-        # says which body, which says which segment the target is in
-        body = rel(addr + 7, 5)
-        kind = {bodies.get("api_x"): ("XCELL", ".text"),
-                bodies.get("api_xc"): ("CXCELL", ".cold"),
-                bodies.get("api_n"): ("NCELL", ".cold")}.get(body)
+        kind = {bodies.get("api_rs"): ("RSLOT", ".text"),
+                bodies.get("api_rx"): ("RXCELL", ".text"),
+                bodies.get("api_rxc"): ("RCXCELL", ".cold"),
+                bodies.get("api_rn"): ("RNCELL", ".cold"),
+                bodies.get("api_rsc"): ("RCSLOT", ".cold")}.get(body)
         if kind is None:
-            return None, "BP-family shape jumping to 0x%04X, which is none of api_x/api_xc/api_n" % body, None
-        return kind[0], imm(2), kind[1]
-    if c[0] == 0x9A and c[5] == 0xCB and c[6:8] == b"\x00\x00":
+            return None, "rare cell calling 0x%04X, which is no rare body" % body, None
+        return kind[0], imm(4), kind[1]
+    if c[0] == 0x55 and c[1] == 0xBD and c[4] == 0xE9:
+        body = rel(addr + 7, 5)
+        if body != bodies.get("api_x"):
+            return None, "BP-family shape jumping to 0x%04X, which is not api_x" % body, None
+        return "XCELL", imm(2), ".text"
+    if c[0] == 0x9A and c[5] == 0xCB:
         seg = imm(3)
         if seg != cold_seg:
             return None, "FARCELL to segment 0x%04X, which is not COLD_SEG (0x%04X)" % (seg, cold_seg), None
         return "FARCELL", imm(1), ".cold"
-    if c[0] == 0xE9 and c[3:8] == b"\x00" * 5:
-        # ...and the JSLOT shape stays: four cells still reach a hand-written
-        # stub (rename, the file dialog, the two fenced SYS writes, file_find).
+    if c[0] == 0xE9:
         return "JSLOT", rel(addr + 3, 1), ".text"
+    il = inline(c)
+    if il is not None:
+        return "INLINE", il, None
     return None, c.hex(), None
+
+
+def check_inline(name, addr, got, label_at, equ):
+    """Check 6 for an INLINE cell: the access is the one the ledger names."""
+    d, reg, opd, extra = got
+    if not check(name in INLINE, "%s (0x%04X) is an INLINE cell with no INLINE row" % (name, addr),
+                 "an inline cell has no routine to check the name against, so it needs a "
+                 "ledger row saying what it reads or writes", got="%s %s %r" % (d, reg, opd)):
+        return
+    wd, wreg, wopd, wextra = INLINE[name]
+    check((d, reg, extra) == (wd, wreg, wextra),
+          "%s (0x%04X) is a %s of %s%s" % (name, addr, d, reg, "".join(" + " + e for e in extra)),
+          "the cell's access disagrees with its contract", got="%s %s %s" % (d, reg, extra),
+          want="%s %s %s" % (wd, wreg, wextra))
+    if wopd.startswith("[bx+"):
+        field = wopd[4:-1]
+        check(opd[0] == "bx" and opd[1] == equ.get(field),
+              "%s (0x%04X) addresses %r, not %s" % (name, addr, opd, wopd),
+              "a window-record setter writing the wrong word of the record",
+              got=repr(opd), want="bx+%s = %r" % (field, equ.get(field)))
+        return
+    here = [] if opd[0] != "abs" else \
+        label_at.get((".text", opd[1]), []) + label_at.get((".bss", opd[1]), [])
+    check(wopd in here,
+          "%s (0x%04X) addresses %s" % (name, addr,
+                                        "/".join(here) or "0x%04X" % opd[1] if opd[0] == "abs" else repr(opd)),
+          "the SDK name and the variable the cell touches have parted",
+          got="/".join(here) or repr(opd), want=wopd)
 
 
 def main():
@@ -291,9 +406,23 @@ def main():
     # fallthrough alias), so this is a list.
     label_at = {}
     for n, o in off.items():
-        if sect.get(n) in (".text", ".cold"):
+        if sect.get(n) in (".text", ".cold", ".bss"):
             label_at.setdefault((sect[n], o), []).append(n)
-    bodies = {b: off[b] for b in ("api_x", "api_xc", "api_n", "api_sc")}
+    equ = os88sym.equates()
+    bodies = {b: off[b] for b in ("api_x", "api_rs", "api_rx", "api_rxc", "api_rn", "api_rsc")}
+    LEN = {"SLOT": 8, "RSLOT": 6, "RXCELL": 6, "RCXCELL": 6, "RNCELL": 6, "RCSLOT": 6,
+           "XCELL": 7, "FARCELL": 6, "JSLOT": 3}
+    tend = off["osapi_table_end"]
+    starts = []
+    a = TABLE_BASE
+    while a < tend:
+        k, t, w = decode(blob, a, bodies, cold_seg)
+        if not check(k is not None, "the table does not decode at 0x%04X" % a, "a cell of no known shape", got=t):
+            break
+        starts.append(a)
+        a += t[0] if k == "INLINE" else LEN[k]
+    check(a == tend, "the table walk ends at 0x%04X, not osapi_table_end 0x%04X" % (a, tend), "cell lengths disagree")
+    startset = set(starts)
 
     pub = slots()
 
@@ -317,9 +446,9 @@ def main():
     # 2. every address is a real cell
     top = max(by_addr)
     for addr, (name, _) in sorted(by_addr.items()):
-        check(addr >= TABLE_BASE and (addr - TABLE_BASE) % CELL == 0,
+        check(addr in startset,
               "%s at 0x%04X is not a cell boundary" % (name, addr),
-              "cells are 8 bytes from 0x%04X; a misaligned address lands "
+              "cells are walked by length from 0x%04X; a misaligned address lands "
               "mid-cell and far-calls into the middle of a DS switch" % TABLE_BASE)
 
     # 3/4/6. shape, target, and the name/routine agreement
@@ -327,11 +456,18 @@ def main():
         kind, tgt, where = decode(blob, addr, bodies, cold_seg)
         if not check(kind is not None,
                      "%s (0x%04X) is not a slot cell" % (name, addr),
-                     "the cell is none of the five shapes - the table has "
+                     "the cell is none of the known shapes - the table has "
                      "been overwritten, a cell reaches the wrong body, or "
                      "the address is past the table's end",
                      got=tgt, want=SHAPES):
             continue
+        if kind == "INLINE":
+            check_inline(name, addr, tgt[1], label_at, equ)
+            continue
+        if name in INLINE:
+            check(False, "%s (0x%04X) is in INLINE but its cell is a %s" % (name, addr, kind),
+                  "the ledger names an inline cell that is not one - remove the row, "
+                  "or the cell lost its inline body")
         names = label_at.get((where, tgt), [])
         if not check(bool(names),
                      "%s (0x%04X, %s) reaches %s:0x%04X, which is not a label there"
@@ -352,7 +488,7 @@ def main():
               got="/".join(names), want=" or ".join(sorted(want)))
 
     # 5. nothing unaccounted for inside the table
-    for addr in range(TABLE_BASE, top + 1, CELL):
+    for addr in starts:
         if addr in by_addr or addr in COMPAT:
             continue
         kind, tgt, where = decode(blob, addr, bodies, cold_seg)
@@ -367,9 +503,12 @@ def main():
     for name in ALIAS:
         check(name in by_name, "ALIAS names %s, which no SDK publishes" % name,
               "remove the row - a stale exception silently exempts nothing")
+    for name in INLINE:
+        check(name in by_name, "INLINE names %s, which no SDK publishes" % name,
+              "remove the row - a stale exception silently exempts nothing")
 
-    print("t_api_abi: %d published slots (%d aliased, %d compat), table 0x%04X..0x%04X"
-          % (len(by_addr), len(ALIAS), len(COMPAT), TABLE_BASE, top))
+    print("t_api_abi: %d published slots (%d aliased, %d inline, %d compat), table 0x%04X..0x%04X"
+          % (len(by_addr), len(ALIAS), len(INLINE), len(COMPAT), TABLE_BASE, top))
     done("t_api_abi")
 
 

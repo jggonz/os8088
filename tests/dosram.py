@@ -203,7 +203,7 @@ def main():
             fail("OSAPI_DRV_CLASSK says DRVC_DISK is holding nothing on a "
                  "machine that BOOTED off the fixed disk. This fixture's "
                  "SYSTEM.CFG asks for HDD.DRV, so either the driver is not "
-                 "mounted or the slot at 0x0580 is answering wrongly "
+                 "mounted or OSAPI_DRV_CLASSK's cell is answering wrongly "
                  "(SPEC.md 51.12)")
         before = arena()
         r = rect("dos_mhdd")

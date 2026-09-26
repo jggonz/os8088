@@ -22,7 +22,10 @@ one - so the row asserts BOTH halves of that decision:
      program is HANDED rather than what it is told, so the last assertion is
      not that the bytes came back - it is that the arena the box claimed obeys
      the limit the link carried.  A setting that round-trips and is then
-     ignored looks identical to one that works, from the file.
+     ignored looks identical to one that works, from the file.  The same
+     block carries the page's three BOXES (SPEC.md 96.25.2.1) - Hard drives,
+     Network and Disable the mouse - which it once did not, so a shortcut
+     saved with the mouse disabled came back with it enabled.
   5  THE SECOND TRY, when the disk has moved (SPEC.md 96.21.2.1).
      `WORKING_DIR` is written QUALIFIED now - `B:\BIN` - which is right until
      the floppy turns up in a different drive, so the box tries the drive the
@@ -42,7 +45,6 @@ import os
 import re
 import struct
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 import os88geom                                                # noqa: E402
@@ -101,6 +103,10 @@ DOS_CA_AUTO, DOS_CA_OFF_IN = 0, 4       # ONE LIST ON BOTH ARMS since SPEC.md
                                         # of its own - and the name is kept
                                         # because what this row is about is
                                         # which row the box ends up on
+CK_ON = 10                              # OS88UI_CK_ON, a box's 0/1 byte
+BX_NOHDD, BX_NONET, BX_NOMOU = 0x01, 0x02, 0x04     # the memory block's byte
+                                        # 12 (SPEC.md 96.25.2.1): each bit is
+                                        # its box moved OFF the default
 CLSID = bytes([0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
                0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46])
 TITLE_H = os88geom.TITLE_H
@@ -170,12 +176,16 @@ def dos_state(m, ui):
 
 
 def wait_ready(m, limit=120.0, why=None):
-    end = time.time() + limit
-    while time.time() < end:
-        rows = m.screen() or []
-        if any("READY" in r for r in rows):
-            return "\n".join(r.rstrip() for r in rows)
-        time.sleep(0.3)
+    rows = []
+
+    def _ready(_m):
+        rows[:] = m.screen() or []
+        return any("READY" in r for r in rows)
+    try:                            # GUEST time: `limit` is idle-box seconds
+        os88marty.until(m, _ready, "READY", poll=0.3, limit=limit)
+        return "\n".join(r.rstrip() for r in rows)
+    except os88marty.MartyError:
+        pass
     # **`why` NAMES THE MECHANISM, because a program that never started looks
     # the same from here whatever stopped it.** Step 5's own failure is a box
     # that found no program to run, and "never reached READY" points at the
@@ -231,6 +241,8 @@ def parse_lnk(b):
                      % size)            # reason it is a block of its own
             (out["memkb"], out["keep"],
              out["cache"]) = struct.unpack_from("<HBB", b, at + 8)
+            if size >= 14:              # ...and the page's boxes (96.25.2.1)
+                out["boxes"] = b[at + 12]
         at += size
     return out
 
@@ -355,6 +367,20 @@ def main():
         m.type_text(str(LIMIT))
         os88marty.settle(m)
 
+        # **AND THE BOXES, which the link did not carry** (SPEC.md 96.25.2.1).
+        # Network is arm 0's and live under it, so it is CLICKED off. Disable
+        # the mouse is arm 1's and greyed under arm 0 (96.36.9), and a press
+        # there would pick arm 1 - which is not this row's arm, and on a
+        # floppy-only machine may not be a pick at all (96.36.1) - so its tick
+        # is WRITTEN, as the user's request for a machine that can. What is
+        # under test is that the writer carries it and the reader restores it,
+        # and both happen after this.
+        mo.click(*dosmap.centre(m, pseg, dm, "dos_mnet"))
+        os88marty.settle(m)
+        if m.read((pseg << 4) + dm["dos_mnet"] + CK_ON, 1)[0]:
+            fail("clicking the Network box left it ticked (SPEC.md 96.36.7)")
+        m.write((pseg << 4) + dm["dos_mmou"] + CK_ON, b"\x01")
+
         # ...and Save Shortcut is on this page's own bottom row, beside Return.
         # It reads the limit on the way out for dos_mem_take's reason (96.25):
         # a number typed with nothing pressed after it is still the setting.
@@ -403,6 +429,16 @@ def main():
              "96.36.6), so a dial that does not reach it is a shortcut that "
              "loses a setting and says nothing" % (got["cache"],
                                                    DOS_CA_OFF_IN))
+    # **AND THE BOXES** (SPEC.md 96.25.2.1): a shortcut saved with Disable
+    # the mouse ticked came back with it clear, because the block had no byte
+    # for it - nor for either driver box.
+    if "boxes" not in got:
+        fail("the memory block is the old 12 bytes and carries none of the "
+             "page's three boxes (SPEC.md 96.25.2.1)")
+    if got["boxes"] != BX_NONET | BX_NOMOU:
+        fail("the memory block's box byte is %#04x and the page had Network "
+             "unticked and Disable the mouse ticked - %#04x (SPEC.md "
+             "96.25.2.1)" % (got["boxes"], BX_NONET | BX_NOMOU))
     # **AND WORKING_DIR CARRIES THE DRIVE** (SPEC.md 96.21.2.1).
     # OSAPI_FILE_PATH answers no drive letter by design (19.2.4), so the box
     # wrote `\BIN` and the link resolved against whichever volume it happened
@@ -502,6 +538,17 @@ def main():
             fail("the box claimed %dK against a %dK limit - the setting "
                  "reached [dos_memkb] and dos_run ignored it (SPEC.md 96.25.1)"
                  % (akb, LIMIT))
+        dm = dosmap.package()
+        pseg = dosmap.instance(m)
+        boxes = [m.read((pseg << 4) + dm[n] + CK_ON, 1)[0]
+                 for n in ("dos_mhdd", "dos_mnet", "dos_mmou")]
+        print("doslnk: the relaunched box's boxes: hard drives %d, network "
+              "%d, disable the mouse %d" % tuple(boxes))
+        if boxes != [1, 0, 1]:
+            fail("the shortcut reopened with hard drives %d, network %d and "
+                 "disable the mouse %d, and it carries 1/0/1 - the box byte "
+                 "was written and not read (SPEC.md 96.25.2.1)"
+                 % tuple(boxes))
         m.type_text("x")
 
     # --- 5: THE SECOND TRY, when the disk has moved (SPEC.md 96.21.2.1) -----

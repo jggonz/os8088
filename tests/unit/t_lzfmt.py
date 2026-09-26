@@ -44,6 +44,69 @@ MARGIN_MAX = 0           # the loader reserves NOTHING above image - file:
                          # corrupting a neighbour's region
 
 
+def half_text(n, seed=7):
+    """n bytes that pack to about half: words from a small vocabulary with
+    runs of noise between them. Deterministic, and nothing in it matches
+    further back than a window can see."""
+    x, words = seed, []
+    def rnd():
+        nonlocal x
+        x = (x * 1103515245 + 12345) & 0x7FFFFFFF
+        return x >> 16
+    for _ in range(400):
+        words.append(bytes(97 + rnd() % 26 for _ in range(3 + rnd() % 6)))
+    out = bytearray()
+    while len(out) < n:
+        if rnd() % 100 < 35:
+            out += bytes(rnd() & 0xFF for _ in range(1 + rnd() % 5))
+        else:
+            out += words[rnd() % 400] + b" "
+    return bytes(out[:n])
+
+
+def big_lzb():
+    """SPEC.md 20.14.5.1 and 20.15.4: an LZB stream over 64KB is a FILE now.
+
+    The decoder's input crosses a segment for LZB, so cz_wrap must accept a
+    packed form past 64KB in that format and still refuse it in LZ4; and the
+    machine encoder's mirror must round-trip a source that big, with a match
+    longer than its 32KB cap in it so the cap is exercised rather than
+    assumed."""
+    fails = []
+    data = half_text(150000)
+    blob, did = os88lz.cz_wrap(data, os88lz.LZB)
+    if not did or len(blob) <= 0x10000:
+        fails.append("150,000 bytes of half-text: cz_wrap LZB gave %d bytes "
+                     "(%s) - wanted a packed form PAST 64KB, accepted"
+                     % (len(blob), "packed" if did else "refused"))
+    elif os88lz.cz_unwrap(blob) != data:
+        fails.append("the >64KB LZB 'CZ' file does not round-trip")
+    lz4, did4 = os88lz.cz_wrap(data, os88lz.LZ4)
+    if did4 and len(lz4) > 0x10000:
+        fails.append("cz_wrap accepted an LZ4 packed form of %d bytes: an "
+                     "LZ4 source is still one segment" % len(lz4))
+    run = data[:40000] + b"\x5A" * 70000 + data[40000:100000]
+    for subj, src in (("half-text", data), ("a 70KB run", run)):
+        z = os88lz.lzb_compress_machine(src)
+        if z is None:
+            fails.append("the machine encoder refused %d bytes of %s"
+                         % (len(src), subj))
+            continue
+        try:
+            back = os88lz.lzb_decompress(z, len(src))
+        except ValueError as e:
+            back = None
+            fails.append("machine LZB of %s: %s" % (subj, e))
+        if back is not None and back != src:
+            fails.append("machine LZB of %s does not round-trip" % subj)
+        m = os88lz.in_place_margin(src, os88lz.LZB, packed=z)
+        if m:
+            fails.append("machine LZB of %s needs a margin of %d" % (subj, m))
+        print("t_lzfmt: machine LZB, %s: %d -> %d bytes"
+              % (subj, len(src), len(z)))
+    return fails
+
+
 def corpus():
     """the awkward cases, then whatever of the real tree happens to be built"""
     yield "empty", b""
@@ -177,9 +240,10 @@ def main():
                      os88lz.in_place_margin(plain, os88lz.LZ4),
                      len(plain) >> 16))
 
-    # a packed form at or past 64KB is stored PLAIN, not compressed: the
-    # decoder's source lives in one segment (SPEC.md 20.14.5). Noise is what
-    # makes a big packed form, so this is noise long enough to prove it.
+    # an LZ4 packed form at or past 64KB is stored PLAIN, not compressed: an
+    # LZ4 source is still one segment to the decoder (SPEC.md 20.14.5.1).
+    # Noise is what makes a big packed form, so this is noise long enough to
+    # prove it.
     x, big = 999, bytearray()
     while len(big) < 200000:
         x = (x * 1103515245 + 12345) & 0x7FFFFFFF
@@ -191,6 +255,7 @@ def main():
     elif blob != bytes(big):
         fails.append("a refused cz_wrap did not return the input unchanged")
 
+    fails += big_lzb()
     fails += mirrors()
 
     print("t_lzfmt: %d subjects x 2 formats, worst in-place margin %d bytes"

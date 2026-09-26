@@ -254,7 +254,7 @@ def main():
             return 1
         for _ in range(rows.index(MOD) + 1):
             m.key("ArrowDown")
-            time.sleep(0.2)
+            M.pace(m, 0.2)
         got = u16(m.read(S("fdlg_sel"), 2))
         if got != rows.index(MOD):
             print("FAIL: dialog selected row %d, wanted %d"
@@ -262,16 +262,21 @@ def main():
             return 1
         m.key("Enter")
 
-        posted = said = False
-        for _ in range(600):                    # the flag is up for the whole
+        seen = {"posted": False, "said": False}
+
+        def both(mm):                           # the flag is up for the whole
             at = wseg()                         # pass AND the 397KB read
-            if m.read(at * 16 + P["trk_cpq"], 1)[0]:
-                posted = True
-            if u16(m.read(at * 16 + P["tui_msgp"], 2)) == P["trk_s_cpq"]:
-                said = True
-            if posted and said:
-                break
-            time.sleep(0.05)
+            if mm.read(at * 16 + P["trk_cpq"], 1)[0]:
+                seen["posted"] = True
+            if u16(mm.read(at * 16 + P["tui_msgp"], 2)) == P["trk_s_cpq"]:
+                seen["said"] = True
+            return seen["posted"] and seen["said"]
+        try:
+            M.until(m, both, "Tracker to post and say so", poll=0.05,
+                    limit=30.0)
+        except M.MartyError:
+            pass                                # ...judged by check 4
+        posted, said = seen["posted"], seen["said"]
         # **THE BYTE AND NOT THE SCREEN** (docs/plans/SOAK-PARALLEL.md 11,
         # docs/WRITING-TESTS.md 11). This waited for the screen to stop
         # changing and then polled `mp_loaded` anyway - so the settle was

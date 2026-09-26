@@ -1035,7 +1035,7 @@ font_run:
     GFXAUDIT_HOOK
     push es                     ; the deferred hide is spent in font_run_x and
     push ds                     ; NOT here, which is SPEC.md 6.1.9: this entry
-    pop es                      ; is the kernel's, and the API slot 0x0258 is
+    pop es                      ; is the kernel's, and the API slot 0x01E5 is
     call font_run_x             ; an X STUB straight to font_run_x - so a hide
     pop es                      ; owed here was owed by kernel callers only
     ret
@@ -1074,7 +1074,7 @@ font_run:
 font_run_x:
     SNAPAUDIT_TALLY snap_hrun, snap_krun
     call fnt_unlazy             ; SPEC.md 6.1.9: HERE, not at font_run above,
-                                ; because slot 0x0258's X cell names THIS
+                                ; because slot 0x01E5's X cell names THIS
                                 ; label - so every package's opaque run drew
                                 ; over the mouse pointer with gfx_lock's
                                 ; promised hide unspent, and gfx_unlock then
@@ -2125,8 +2125,10 @@ font_rn_k7:     resb 1          ; SPEC.md 6.1.11: the pen's phase, x & 7. 0 is
 font_rn_send:   resw 1          ; ...and where the cell walk stops, because CX
                                 ; is carrying the shift and the previous byte
                                 ; and has nothing left to count with
-font_rn_le:     resb 8          ; the two edge bytes each row composed, held
-font_rn_re:     resb 8          ; back for the column passes. ADJACENT and in
+font_rn_le      equ ico_ibuf + FONT_RN_MAX*2     ; UNION, see font_rn_tab
+font_rn_re      equ ico_ibuf + FONT_RN_MAX*2 + 8 ; the two edge bytes each row
+                                ; composed, held
+                                ; back for the column passes. ADJACENT and in
                                 ; this order is not required - fnt_rn_edge is
                                 ; handed a pointer - but they are 16 bytes and
                                 ; keeping them together is one cache line of
@@ -2138,10 +2140,19 @@ font_rn_ch:     resb 1          ; font_run_scell's character, parked because
 font_rn_n2:     resw 1          ; cells drawn singly, before the trailing span
 font_rn_k:      resw 1          ; ...the span's length, at least 1
 font_rn_n:      resw 1          ; SPEC.md 6.1.7: cells the run will draw, and
-font_rn_tab:    resw FONT_RN_MAX ; a glyph pointer for each. 180 bytes, taken
+font_rn_tab     equ ico_ibuf    ; a glyph pointer for each. 180 bytes, taken
                                 ; deliberately: it is what lets the drawing
                                 ; pass go ROW-major, which pays gfx_nextrow
-                                ; once a row instead of once a row per cell
+                                ; once a row instead of once a row per cell.
+                                ; **A UNION WITH THE ICON RENDERER'S SCRATCH**
+                                ; (kernel size pass 4): ico_ibuf/ico_stage is
+                                ; per-call scratch of icon_draw_ix/icon_draw_x,
+                                ; this table (and font_rn_le/_re above it, on
+                                ; kern_big) is per-call scratch of font_run_x,
+                                ; both run under the gfx lock and neither calls
+                                ; the other, so no two of them are ever live
+                                ; at once. The assertion in icons.inc is what
+                                ; keeps the three inside the cell
 font_dith:      resb 1          ; 1 = this glyph is disabled text on a mono
                                 ; adapter (SPEC.md 47); font_ink decides it
                                 ; per glyph and writes it on every path
