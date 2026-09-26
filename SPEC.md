@@ -107483,6 +107483,21 @@ menu row says so and does nothing, §47's shape), `hdiutil burn` to burn and
 verify. macOS only, and it says so: on Linux the same job is `lsblk` and
 `dd`, and a guide pretending to cover both would test as neither.
 
+**Re-imaging keeps Control Panel settings on request.** For USB/CompactFlash,
+the imager asks `Save and restore SYSTEM.CFG settings? [Y/n/q]` before the
+target identifier confirmation; Enter keeps settings, `n` selects defaults,
+and `q` cancels. After unmounting and revalidating the device, it reads the
+active FAT16 partition's root `SYSTEM.CFG` (§51.5), saves a private recovery
+copy in `/var/tmp` (the path is printed and retained), and inserts the bytes
+into the new image in memory. Both FAT copies and the root entry are updated;
+the source image is unchanged. Geometry retargeting and settings restoration
+are covered by the final image's SHA-256 read-back. Missing or unreadable
+settings, inconsistent FATs, backup failure, or lack of destination space
+abort before any device write. A blank card must use `n`. Only `SYSTEM.CFG`
+is preserved; other files are replaced, and floppy/CD workflows are unchanged.
+`tests/unit/t_imager.py` covers the prompt, backup, fragmented chains,
+replacement, corruption/space refusals, and verified restored bytes.
+
 ### 80.5 A period ROM reports the card's own geometry — the image is retargeted as it is written
 
 §80.1's 16 × 63 is right for the consumer it was chosen for and wrong for
