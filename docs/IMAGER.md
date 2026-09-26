@@ -35,7 +35,7 @@ size, SHA-256 and target identity. Type the target's identifier to confirm.
 An empty answer cancels. A failure returns to the inventory so you can replace
 the medium and retry.
 
-**A partitioned image on a USB-bus device gets one more question: the
+**A partitioned image on a USB-bus device asks about the
 geometry** (SPEC.md §80.5). The live image is laid out for 16 heads × 63
 sectors per track, which a PC booting a USB stick, QEMU and 86Box derive
 from its partition table. A period ROM does not derive anything — an XTIDE
@@ -58,6 +58,27 @@ against §80.5's table. The same rewrite
 without the imager is
 `python3 tools/os88disk.py --retarget os8088-usb.img --geometry 64/63 -o cf.img`,
 for a `dd` user or another platform.
+
+**Keep settings when re-imaging a CompactFlash card or USB drive.** After the
+geometry question, `Save and restore SYSTEM.CFG settings? [Y/n/q]` defaults to
+yes. Choose `n` for a fresh image with default settings, or `q` to cancel.
+The target identifier confirmation still follows. This option preserves only
+the Control Panel's root `SYSTEM.CFG`; other files are replaced by the image.
+
+After unmounting and checking the target again, the imager reads the existing
+active FAT16 partition and saves a private recovery copy to
+`/var/tmp/os8088-SYSTEM-*.CFG`, printing its exact path. It keeps that copy
+after success or failure. The invoking user owns it when run through `sudo`.
+The settings are inserted into the new image in memory before any disk write;
+both FAT copies are updated, and the final SHA-256 read-back covers the OS,
+geometry changes and restored settings together. The source image stays
+unchanged. The next boot loads the saved settings using the OS's normal
+settings compatibility rules (unknown or changed settings use defaults).
+
+Missing settings, an unsupported or damaged old filesystem, a backup failure,
+or insufficient space in the new image stops the operation before overwriting
+the card. A new/blank card has no settings to preserve: select `n` when imaging
+it. Floppy and CD workflows do not ask this question.
 
 Floppy and USB writes unmount the selected disk, request administrator rights
 with `sudo`, write the raw device with progress, flush it, read back the image
