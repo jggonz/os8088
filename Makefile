@@ -6253,6 +6253,16 @@ $(BUILD)/dotdel.bin: $(DOTDEL_SRC) | $(BUILD)
 $(BUILD)/dotdel.o88: $(BUILD)/dotdel.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/dotdel.bin -o $@
 
+# GORILLAS (SPEC.md 98): native skyline artillery, all three adapters.
+.PHONY: gorillas
+gorillas: $(BUILD)/gorillas.o88
+
+$(BUILD)/gorillas.bin: apps/gorillas/gorillas.asm apps/gorillas/grart.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/gorillas/ -o $@ apps/gorillas/gorillas.asm
+
+$(BUILD)/gorillas.o88: $(BUILD)/gorillas.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/gorillas.bin -o $@
+
 # PIXELSTEIN 3D (SPEC.md 97): a raycast first-person shooter, fullscreen in
 # a foreign mode on every adapter and windowed as a 1bpp band. The package
 # arrives in wave 1 (docs/plans/PIXELSTEIN-PLAN.md 7); what is here now is
@@ -11116,7 +11126,7 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
 APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
               $(BUILD)/mines.o88 $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88 \
-              $(BUILD)/pxstein.o88
+              $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88
 
 # PIXELSTEIN 3D IS NOT ON apps360.img (SPEC.md 97.9, 24.6.1's dated
 # decision, taken 2026-09-13): that geometry sat at 313 of 354 clusters and

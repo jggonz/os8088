@@ -325,6 +325,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | FRACTAL | `apps/fractal/fractal.asm` | §40 | yes |
 | FROTZ | `apps/frotz/frotz.asm` | §61 | yes |
 | FTPD | `apps/ftpd/ftpd.asm` | §77 | yes |
+| GORILLAS | `apps/gorillas/gorillas.asm` | §98 | yes |
 | HELLO | `apps/hello/hello.asm` | §27 | no |
 | IMGTEST | `apps/imgtest/imgtest.asm` |  | no |
 | LOOM | `apps/loom/loom.asm` | `docs/WEAVE-SPEC.md` | yes |
@@ -459,6 +460,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 95 | SCRIBE (`apps/scribe/`) — the fork of WORD |
 | 96 | DOS — running `.COM` and `.EXE` programs (`apps/dos/`) |
 | 97 | PIXELSTEIN 3D — a raycast shooter in a foreign mode (`apps/pixelstein/`) |
+| 98 | Gorillas (`apps/gorillas/gorillas.asm`) |
 
 ## docs/
 

@@ -1,0 +1,2 @@
+# Preserve the saved reference PDF and display it as a binary attachment.
+reference/ibm/*.pdf binary

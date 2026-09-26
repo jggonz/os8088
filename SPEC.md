@@ -148736,3 +148736,110 @@ are the loader's and freed at the re-home); the eager run **116 unpacked sectors
 `games360.img` and `apps.img`, on neither `apps360.img` nor the small
 disks. The kernel is unchanged.
 
+
+## 98. Gorillas (`apps/gorillas/gorillas.asm`)
+
+A native 8086 adaptation of the supplied Microsoft QBasic `gorilla.bas`
+(1990), packaged as `GORILLAS.O88`. Two local players alternate angle and
+velocity entries, throwing bananas over a generated, destructible skyline.
+Angles are 0..180 degrees measured inward from each player's horizontal;
+velocity is 1..150. Wind accelerates the projectile horizontally, gravity
+vertically. Collision is swept in substeps against the persistent terrain
+and both gorillas, including the thrower. The first player to three hits wins.
+Enter advances angle to velocity, then throws; Tab selects the other field;
+digits replace a field, Backspace edits it, arrows adjust it. N resets the
+match, P pauses, G cycles gravity before a shot, F or Alt+Enter toggles full
+screen, and Escape returns to the desktop. Enter continues after a round.
+
+The instance owns a 256x128 packed 4bpp scene and a bounded scratch band.
+The first 24 rows show the HUD between shots; during flight all three text
+rows clear to sky and the banana can traverse them. Text stays hidden while
+a shot is paused and returns on impact or a miss. The remaining rows are the
+skyline. The kernel's own font glyphs letter the scene. Integer scaling depends on the
+live surface and pixel aspect. Repaints compose eight source rows at a time;
+projectile frames restore and replace a small saved rectangle, so they never
+repaint the whole city. Hercules and the monochrome CGA desktop receive
+1bpp bands; VGA receives 4bpp bands. Fullscreen uses §53's exclusive bracket,
+following Dot Delirium (§93). CGA fullscreen selects `FSXM_CGA320` and writes
+packed 2bpp rows to the documented foreign-mode framebuffer. The CGA desktop
+remains monochrome, as elsewhere in this OS. No kernel changes are required.
+
+One restartable worker advances windowed play. The exclusive bracket freezes
+it and runs the same game step itself. A covered or unfocused window pauses
+its simulation. All model mutations and drawing are serialized by the graphics
+lock; worker liveness is checked outside it. Every draw derives its origin
+again from the window. About uses the shared OS card and suspends play.
+The package is included in the games media and has a standalone `make gorillas`
+target. No BASIC interpreter, floating-point unit, external assets or source
+file is required at runtime.
+
+### 98.1. Adapter palettes and artwork
+
+The scene stores **game ink indices**, not desktop EGA colors. Index zero
+remains empty sky for collision even when rendered blue. The colors follow
+`reference/gorillas/gorilla.bas`, `SetScreen`: blue sky, orange gorillas,
+yellow sun, gray/red/cyan buildings, yellow lit windows and dark unlit ones.
+The 16x20 gorillas have brows, nostrils, chest and limb detail; the sun has
+rays and a smile. Windows vary between lit and unlit, with a roof ledge.
+
+Windowed VGA uses a translation table into the shared desktop palette;
+expanded orange pixels mix light red and yellow to approximate EGA color 46
+without changing other windows' colors. Fullscreen VGA now requests
+`FSXM_VGA12`, writes its own planar bands and programs the original EGA RGB
+values into the DAC. No kernel drawing calls are used in that foreign mode.
+§53 restores the desktop mode and palette on return. Hercules keeps its
+high-contrast monochrome interpretation of the same scene.
+
+Fullscreen CGA explicitly writes `11h` to color-select port `3D9h`: blue
+background, high-intensity palette 0 (light green/light red/yellow). The
+scene maps buildings to light red/green, gorillas/sun/lit windows to yellow, and
+unlit windows to blue. This is an approximation of the EGA artwork, not an
+arbitrary four-color DAC palette. Standard RGB CGA has a selectable background
+and fixed foreground groups; it cannot reproduce the EGA colors exactly.
+The reference directory records IBM's register description and source URLs.
+
+Before a foreign mode set, the bracket waits for Alt and Enter to be released.
+A rapid Alt+Enter followed immediately by VGA BIOS mode 12h lost the Alt
+break code in emulator testing, leaving BIOS keyboard flag `40:17` bit 3
+set. The input map is polled while IRQ1 can still service both releases;
+no keyboard flags are patched by the application. Tests check that flag and
+then enter and fire another numeric shot after the second fullscreen entry.
+
+### 98.2. Incremental aiming input
+
+The HUD caches three rows of 32 characters. A numeric edit formats and
+compares only the selected three-digit field; field selection compares only
+the two markers. Unchanged cells do no drawing. Other HUD transitions compare
+the complete lines, padding shorter messages with spaces. Adjacent changed
+cells share a band, without spanning unchanged labels or crossing text rows.
+Clearing the scene for a new city also invalidates the character cache.
+
+Opaque glyph rows update the packed scene through a 16-entry nibble table,
+preserving exact full-repaint contents. Incremental drawing composes scaled
+bands directly from `OSAPI_FONT_GLYPHS`, following Dot Delirium's text-band
+approach (§93.5.5). Windowed rendering uses `OSAPI_GFX_BLIT1`, with white ink
+on blue paper on VGA through `OSAPI_GFX_BLIT1_PEN`; clipping remains the
+kernel's responsibility. A refused band falls back to the scene blitter.
+Foreign CGA doubles glyph bits into 2bpp color 3 on background 0. Foreign VGA
+writes the same glyph bits to all ink planes together and clears the remaining
+planes. The general scene scaler and 4bpp converter are absent from input
+redraws. Text retains its original font, scale, placement and colors.
+
+Paused numeric edits update the model without overwriting the pause message;
+resume rebuilds the visible prompt. Fullscreen drains already-buffered aiming
+keys without a tick wait between characters. Active projectile simulation
+retains its tick pacing. No kernel changes or heap allocation are involved;
+the optimization adds 1,277 image bytes and 199 BSS bytes per instance.
+
+`tests/gorillasinput.py` brackets real `gr_key` calls with MartyPC debugger
+breakpoints, counting guest cycles at 4,772,727 Hz. Interrupts and drawing
+are included; keyboard delivery, the window callback's layout work and the
+fullscreen idle wait are outside the bracket. Digit/edit/selection handlers
+have a 20 ms regression budget. Six BIOS-buffered keys (`90<Tab>150`) must
+complete within 55 ms; measured totals are VGA 35.21 ms, CGA 30.27 ms and
+Hercules 34.13 ms. `--max-input-ms 0` disables performance assertions for
+before/after measurement. `--check-repaint` additionally compares all video
+memory (all four planes on VGA) against a full repaint after every key.
+The gate independently checks scene glyphs, unchanged terrain, bounds,
+backspace, selection, paused edits and zero velocity. `tests/gorillas.py`
+continues to cover gameplay and repeated fullscreen restoration.
