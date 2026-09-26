@@ -53,7 +53,7 @@ gr_entry:
     call OSAPI_GET_TICKS
     or ax, 1
     mov [gr_seed], ax
-    call gr_new
+    call gr_intro
     mov bx, [gr_win]
     clc
 .out:
@@ -129,7 +129,7 @@ gr_oncmd:
     mov ax, 'n'
     jmp short .key
 .full:
-    mov ax, 'f'
+    mov ax, KEY_ALTENTER
 .key:
     push ax
     mov bx, [gr_win]
@@ -139,7 +139,17 @@ gr_oncmd:
     push ax
     call gr_layout
     pop ax
+    cmp al, 'n'
+    je .setup
+    cmp ax, KEY_ALTENTER
+    je .dispatch
+    cmp byte [gr_state], 4
+    jae .out
+.dispatch:
     call gr_key
+    jmp short .out
+.setup:
+    call gr_setup
 .out:
     RESTORE
     ret
@@ -154,6 +164,8 @@ gr_key:
     je .full
     cmp al, 27
     je .escape
+    cmp byte [gr_state], 4
+    jae gr_frontkey
     cmp al, 'F'
     je .full
     cmp al, 'f'
@@ -166,16 +178,21 @@ gr_key:
     je .pause
     cmp al, 'p'
     je .pause
+    cmp byte [gr_paused], 0
+    jne .human
+    cmp byte [gr_players], 1
+    jne .human
+    cmp byte [gr_turn], 1
+    jne .human
+    cmp byte [gr_state], 0
+    je .out
+.human:
     cmp al, 13
     je .enter
     cmp byte [gr_state], 1
     je .out
     cmp byte [gr_state], 0
     jne .out
-    cmp al, 'g'
-    je .gravity
-    cmp al, 'G'
-    je .gravity
     cmp al, 9
     je .tab
     xor bx, bx
@@ -237,12 +254,6 @@ gr_key:
     je .out
     mov [gr_angle+bx], ax
     jmp gr_inputpaint
-.gravity:
-    inc byte [gr_gravidx]
-    cmp byte [gr_gravidx], 3
-    jb .hud
-    mov byte [gr_gravidx], 0
-    jmp short .hud
 .tab:
     xor byte [gr_field], 1
     mov byte [gr_edit], 0
@@ -268,8 +279,7 @@ gr_key:
     call gr_city
     jmp gr_fullpaint
 .new:
-    call gr_new
-    jmp gr_fullpaint
+    jmp gr_setup
 .pause:
     xor byte [gr_paused], 1
     jmp gr_hudpaint
@@ -288,8 +298,21 @@ gr_key:
 gr_worker:
     mov bx, [gr_win]
     call OSAPI_TASK_ALIVE
+    cmp word [gr_musicptr], 0
+    jne .active
     cmp byte [gr_state], 1
+    je .active
+    cmp byte [gr_state], 4
+    je .active
+    cmp byte [gr_state], 7
+    je .active
+    cmp byte [gr_state], 0
     jne .sleep
+    cmp byte [gr_players], 1
+    jne .sleep
+    cmp byte [gr_turn], 1
+    jne .sleep
+.active:
     cmp byte [gr_paused], 0
     jne .sleep
     cmp byte [gr_abon], 0
@@ -374,14 +397,14 @@ gr_exclusive:
 .tick:
     ; Drain buffered aiming keys without adding a BIOS tick per character.
     ; Flight still advances and waits once per frame.
-    cmp byte [gr_state], 0
-    je .aimwait
     call gr_tick
 .aimwait:
     mov ah, 1
     int 16h
     jz .wait
     cmp byte [gr_state], 0
+    je .loop
+    cmp byte [gr_state], 5
     je .loop
 .wait:
     mov al, FSXW_TICK
@@ -589,7 +612,6 @@ gr_rand:
 gr_new:
     mov word [gr_scores], 0
     mov byte [gr_turn], 0
-    mov byte [gr_gravidx], 0
     mov byte [gr_paused], 0
     jmp gr_city
 
@@ -602,8 +624,9 @@ gr_city:
     rep stosw
     ; The scene was cleared: invalidate the HUD character cache too.
     mov di, gr_hudchars
-    mov cx, 96/2
+    mov cx, 512/2
     rep stosw
+    mov word [gr_aipower], 0
     mov byte [gr_state], 0
     mov byte [gr_saved], 0
     mov byte [gr_field], 0
@@ -698,6 +721,7 @@ gr_city:
 ; body, highlights and shadows. Facial gaps expose the blue background.
 gr_gorilla:
     mov si, gr_ape
+gr_gorillapose:
     mov dx, [ds:gr_gy+bp]
     mov di, 20
 .row:
@@ -800,6 +824,24 @@ gr_textspan:
     je .next
     mov [gr_hudchars+bx], al
     mov byte [gr_huddirty+bx], 1
+    cmp al, ' '
+    jne .glyph
+    ; A deleted cell is eight zero dwords, without font/table lookups.
+    mov di, [gr_texty]
+    mov cl, 7
+    shl di, cl
+    mov ax, [gr_textx]
+    shr ax, 1
+    add di, ax
+    xor ax, ax
+%assign row 0
+%rep 8
+    mov [gr_scene+di+row*128], ax
+    mov [gr_scene+di+row*128+2], ax
+%assign row row+1
+%endrep
+    jmp .next
+.glyph:
     sub al, [gr_fontfirst]
     xor ah, ah
     shl ax, 1
@@ -900,28 +942,40 @@ gr_hud:
     call gr_text
     ret
 .visible:
-    mov al, [gr_turn]
-    add al, '1'
-    mov [gr_status+1], al
+    ; Two ten-character names and two two-digit scores fit on one line.
+    mov si, gr_name1
+    mov di, gr_status
+    call gr_namecopy
+    mov si, gr_name2
+    mov di, gr_status+18
+    call gr_namecopy
+    xor ax, ax
     mov al, [gr_scores]
-    add al, '0'
-    mov [gr_status+5], al
+    mov di, gr_digits
+    call gr_number
+    mov ax, [gr_digits+1]
+    mov [gr_status+11], ax
+    xor ax, ax
     mov al, [gr_scores+1]
-    add al, '0'
-    mov [gr_status+7], al
+    call gr_number
+    mov ax, [gr_digits+1]
+    mov [gr_status+14], ax
+    mov si, gr_name1
+    cmp byte [gr_turn], 0
+    je .name
+    mov si, gr_name2
+.name:
+    mov di, gr_help
+    call gr_namecopy
     mov ax, [gr_wind]
-    mov byte [gr_status+15], '+'
+    mov byte [gr_help+16], '+'
     or ax, ax
     jns .wind
     neg ax
-    mov byte [gr_status+15], '-'
+    mov byte [gr_help+16], '-'
 .wind:
-    mov di, gr_status+16
+    mov di, gr_help+17
     call gr_number
-    xor bx, bx
-    mov bl, [gr_gravidx]
-    mov al, [gr_gletters+bx]
-    mov [gr_status+23], al
     mov si, gr_status
     mov al, 15
     call gr_text
@@ -949,9 +1003,6 @@ gr_hud:
     je .winner
     mov si, gr_matchmsg
 .winner:
-    mov al, [gr_winner]
-    add al, '1'
-    mov [si+1], al
 .line:
     cmp byte [gr_paused], 0
     je .write
@@ -1045,6 +1096,7 @@ gr_hudflushspan:
     shr bx, 1
     xor cx, cx
 .run:
+    mov byte [gr_huddirty+si], 0
     add cx, 8
     inc si
     test si, 31
@@ -1090,6 +1142,31 @@ gr_hudblit:
     mov [gr_cellbytes], ax
     mul cx
     mov [gr_stride], ax
+    ; Erasing a whole span (old input/error/help) needs one zero fill.
+    push si
+    push cx
+.blankcheck:
+    lodsb
+    cmp al, ' '
+    jne .glyphs
+    loop .blankcheck
+    pop cx
+    pop si
+    mov ax, [gr_stride]
+    mul word [gr_sy]
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    mov cx, ax
+    push ds
+    pop es
+    mov di, gr_band
+    xor ax, ax
+    rep stosb
+    jmp .composed
+.glyphs:
+    pop cx
+    pop si
     mov ax, [gr_fontseg]
     mov es, ax
     mov di, gr_band
@@ -1133,6 +1210,7 @@ gr_hudblit:
     add di, [gr_cellbytes]
     pop cx
     loop .cell
+.composed:
     push ds
     pop es
     cmp byte [gr_vga], 0
@@ -1237,6 +1315,7 @@ gr_fire:
     mov byte [gr_saved], 0
     mov word [gr_age], 0
     mov word [gr_wrem], 0
+    mov word [gr_grem], 0
     xor bx, bx
     mov bl, [gr_turn]
     shl bx, 1
@@ -1279,16 +1358,19 @@ gr_fire:
     neg ax
 .vx:
     mov [gr_vx], ax
-    mov ax, 700
-    mov cx, 2
-    call OSAPI_SND_TONE
-    ret
+    mov si, gr_musicthrow
+    jmp gr_musicstart
 
 gr_tick:
     cmp byte [gr_abon], 0
     jne .out
     cmp byte [gr_paused], 0
     jne .out
+    call gr_musictick
+    cmp byte [gr_state], 4
+    jae gr_fronttick
+    cmp byte [gr_state], 0
+    je gr_aitick
     cmp byte [gr_state], 1
     jne .out
     call gr_unbanana
@@ -1348,10 +1430,15 @@ gr_tick:
 .next:
     dec bp
     jnz .step
-    xor bx, bx
-    mov bl, [gr_gravidx]
-    mov al, [gr_gravity+bx]
-    xor ah, ah
+    ; Fractional gravity: 9.8 maps to the original four velocity units/tick.
+    mov ax, [gr_grav10]
+    shl ax, 1
+    shl ax, 1
+    add ax, [gr_grem]
+    xor dx, dx
+    mov bx, 98
+    div bx
+    mov [gr_grem], dx
     add [gr_vy], ax
     mov ax, [gr_wind]
     add ax, [gr_wrem]
@@ -1365,15 +1452,15 @@ gr_tick:
     ret
 .miss:
     xor byte [gr_turn], 1
+    mov word [gr_aipower], 0
     mov byte [gr_state], 0
     mov byte [gr_field], 0
     mov byte [gr_edit], 0
     jmp gr_hudpaint
 .terrain:
     call gr_crater
-    mov ax, 100
-    mov cx, 3
-    call OSAPI_SND_TONE
+    mov si, gr_musicimpact
+    call gr_musicstart
     jmp .miss
 .hitape:
     shr si, 1
@@ -1383,14 +1470,15 @@ gr_tick:
     mov [gr_turn], al
     inc byte [gr_scores+si]
     mov byte [gr_state], 2
-    cmp byte [gr_scores+si], 3
+    mov al, [gr_scores]
+    add al, [gr_scores+1]
+    cmp al, [gr_target]
     jb .explode
     mov byte [gr_state], 3
 .explode:
     call gr_crater
-    mov ax, 950
-    mov cx, 8
-    call OSAPI_SND_TONE
+    mov si, gr_musichit
+    call gr_musicstart
     jmp gr_hudpaint
 
 ; A persistent circular crater: collision and all later repaints see the hole.
@@ -1539,10 +1627,21 @@ gr_banana:
 
 ; Full content (including borders around the centered logical scene).
 gr_fullpaint:
+    cmp byte [gr_state], 4
+    jae gr_frontpaint
     cmp byte [gr_vga], 0
     jne .scene
     cmp byte [gr_cga], 0
     jne .scene
+    call gr_background
+.scene:
+    xor ax, ax
+    xor bx, bx
+    mov cx, 256
+    mov dx, 128
+    jmp gr_blit
+
+gr_background:
     mov al, CBLACK
     cmp byte [gr_depth], 4
     jne .background
@@ -1558,12 +1657,7 @@ gr_fullpaint:
     add dx, [gr_height]
     dec dx
     call OSAPI_GFX_FILL
-.scene:
-    xor ax, ax
-    xor bx, bx
-    mov cx, 256
-    mov dx, 128
-    jmp gr_blit
+    ret
 
 ; Render AX=x (8-aligned), BX=y, CX=width, DX=height in logical pixels.
 ; Eight logical rows per band bound scratch space at 512*24/2 = 6144.
@@ -1622,6 +1716,7 @@ gr_blit:
     shr ax, 1
     mov [gr_stride], ax
 .row:
+    call gr_musicservice
     push si
     mov [gr_rowstart], di
     mov cx, [gr_rw]
@@ -1891,7 +1986,6 @@ gr_cgablit:
     shr ax, 1
     mov [gr_cgax], ax
     mov [gr_cgarows], dx
-.row:
     mov ax, bx
     and ax, 1
     mov cl, 13
@@ -1903,9 +1997,15 @@ gr_cgablit:
     mul cx
     add di, ax
     add di, [gr_cgax]
+.row:
     mov cx, bp
     rep movsb
-    inc bx
+    sub di, bp
+    xor di, 2000h            ; alternate CGA banks, advance after odd rows
+    test di, 2000h
+    jnz .next
+    add di, 80
+.next:
     dec word [gr_cgarows]
     jnz .row
     pop es
@@ -1926,13 +2026,13 @@ gr_ablines: dw gr_title, gr_credit, gr_credit2, gr_credit3, 0
 gr_credit: db 'After QBasic Gorillas (1990)',0
 gr_credit2: db 'Original: Microsoft Corporation',0
 gr_credit3: db '8086 port for os8088',0
-gr_status: db 'P1   0:0  Wind +000  G:E',0
-gr_prompt: db ' A:045  V:070  Enter: next/fire',0
+gr_status: db '           00:00            ',0
+gr_prompt: db ' A:045  V:070',0
 gr_blank: db 0
-gr_roundmsg: db 'P1 scores! Enter: next skyline',0
-gr_matchmsg: db 'P1 wins! Enter: new match',0
+gr_roundmsg: db 'Point! Enter: next skyline',0
+gr_matchmsg: db 'Match over! Enter: setup',0
 gr_pausemsg: db 'Paused. P or Enter to resume',0
-gr_help: db 'Tab:aim G:gravity N:new F:full',0
+gr_help: db 'Player 1   Wind  +000',0
 ; Four font bits -> four opaque scene pixels, little-endian byte order.
 gr_textnibbles:
 %assign gr_n 0
@@ -1953,8 +2053,6 @@ gr_textdouble:
     dw ((gr_bits >> 8) | ((gr_bits & 255) << 8))
 %assign gr_n gr_n+1
 %endrep
-gr_gletters: db 'E','M','J'
-gr_gravity: db 4,1,10
 gr_facades: db 5,6,7,5,7,6,5,7
 ; Semantic inks: sky, ape, explosion, sun, black, gray/red/cyan facade,
 ; unlit window, white text, ape highlight/shadow, roof, spare, lit window, text.
@@ -1981,6 +2079,10 @@ gr_sin:
     dw 53, 49, 44, 40, 36, 31, 27, 22, 18, 13, 9, 4
     dw 0
 
+%include "grai.inc"
+%include "grfront.inc"
+%include "grmusic.inc"
+
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
 %include "os88ui.inc"
@@ -2004,7 +2106,39 @@ VAR gr_paused, 1
 VAR gr_turn, 1
 VAR gr_winner, 1
 VAR gr_scores, 2
-VAR gr_gravidx, 1
+VAR gr_grav10, 2
+VAR gr_grem, 2
+VAR gr_target, 1
+VAR gr_players, 1
+VAR gr_aipower, 2
+VAR gr_aierror, 2
+VAR gr_aibest, 2
+VAR gr_aix, 2
+VAR gr_aiy, 2
+VAR gr_aivy, 2
+VAR gr_aivx, 2
+VAR gr_aiyhi, 2
+VAR gr_aiwrem, 2
+VAR gr_aigrem, 2
+VAR gr_name1, 11
+VAR gr_name2, 11
+VAR gr_setupfield, 1
+VAR gr_inputlen, 1
+VAR gr_input, 11
+VAR gr_digits, 3
+VAR gr_musicptr, 2
+VAR gr_musicdue, 2
+VAR gr_introseq, 1
+VAR gr_frontcols, 2
+VAR gr_frontplane, 1
+VAR gr_frontsource, 2
+VAR gr_cachekey, 2
+VAR gr_cacheratio, 2
+VAR gr_lightcache, 13440
+VAR gr_apecache, 1920
+VAR gr_animdue, 2
+VAR gr_animphase, 1
+VAR gr_pose, 1
 VAR gr_field, 1
 VAR gr_edit, 1
 VAR gr_angle, 2
@@ -2033,8 +2167,8 @@ VAR gr_textmask, 2
 VAR gr_textcell, 2
 VAR gr_textend, 2
 VAR gr_cellbytes, 2
-VAR gr_hudchars, 96
-VAR gr_huddirty, 96
+VAR gr_hudchars, 512
+VAR gr_huddirty, 512
 VAR gr_textx, 2
 VAR gr_texty, 2
 VAR gr_px, 2

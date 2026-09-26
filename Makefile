@@ -6257,7 +6257,7 @@ $(BUILD)/dotdel.o88: $(BUILD)/dotdel.bin tools/os88pkg.py $(PKGZSTAMP)
 .PHONY: gorillas
 gorillas: $(BUILD)/gorillas.o88
 
-$(BUILD)/gorillas.bin: apps/gorillas/gorillas.asm apps/gorillas/grart.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc | $(BUILD)
+$(BUILD)/gorillas.bin: apps/gorillas/gorillas.asm apps/gorillas/grart.inc apps/gorillas/grfront.inc apps/gorillas/grdraw.inc apps/gorillas/grmusic.inc apps/gorillas/grai.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/gorillas/ -o $@ apps/gorillas/gorillas.asm
 
 $(BUILD)/gorillas.o88: $(BUILD)/gorillas.bin tools/os88pkg.py $(PKGZSTAMP)

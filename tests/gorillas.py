@@ -2,7 +2,7 @@
 """Exercise the shipped 8086 Gorillas on VGA, CGA and Hercules.
 
 Uses real keyboard throws, including low-power self-hits through five rounds
-(first-to-three), pause/resume, terrain destruction, and repeated fullscreen
+(five total points), pause/resume, terrain destruction, and repeated fullscreen
 entry/exit. Reads package state, checks rendered pixels and saves proof images.
 The CGA leg requires the foreign-mode color backend, not a monochrome frame.
 """
@@ -79,8 +79,39 @@ def key(m, name):
     M.pace(m, .15)
     # An active worker takes the drawing lock every tick; waiting for a
     # sustained idle UI can accidentally wait for the entire shot to end.
-    if not m.gorillas_probe.b('fs') and m.gorillas_probe.b('state') != 1:
+    p = m.gorillas_probe
+    computer = (p.b('state') == 0 and p.b('players') == 1
+                and p.b('turn') == 1 and not p.b('paused'))
+    if not p.b('fs') and p.b('state') not in (1, 4, 7) and not computer:
         M.ui_done(m)
+
+
+def setup(m, points=5):
+    """Accept default two-player names/gravity and skip the optional dance."""
+    p = m.gorillas_probe
+    if p.b('state') == 4:
+        key(m, 'Space')
+        wait(m, lambda: p.b('state') == 5, 'splash advances to setup')
+        M.ui_done(m)
+    assert p.b('state') == 5
+    for field in range(3):
+        key(m, 'Enter')
+        wait(m, lambda: p.b('setupfield') == field+1, 'next setup field')
+    for digit in str(points):
+        key(m, 'Digit' + digit)
+    key(m, 'Enter')
+    wait(m, lambda: p.b('setupfield') == 4, 'gravity setup')
+    key(m, 'Enter')
+    wait(m, lambda: p.b('state') == 6, 'intro choice')
+    key(m, 'KeyP')
+    wait(m, lambda: p.b('state') == 0, 'game starts')
+    if not p.b('fs'):
+        M.ui_done(m)
+
+
+def new_match(m, points=5):
+    key(m, 'KeyN')
+    setup(m, points)
 
 
 def capture(m, p, path):
@@ -132,9 +163,10 @@ def arm(tag, off, disk, out):
         m = ui.m
         ui.open_drive('B')
         ui.open('GORILLAS.O88')
-        ui.settle()
+        M.pace(m, .3)
         p = Probe(ui, off)
         m.gorillas_probe = p
+        setup(m)
         assert p.b('spawned') == 1
         assert p.w('angle') == 45 and p.w('power') == 70
         capture(m, p, out / (tag + '-window.png'))
@@ -153,9 +185,9 @@ def arm(tag, off, disk, out):
         key(m, 'Digit1')                 # 1501 rejected
         assert p.w('power') == 150
         key(m, 'KeyG')
-        assert p.b('gravidx') == 1
-        key(m, 'KeyN')
-        assert p.b('gravidx') == 0 and p.b('turn') == 0
+        assert p.w('grav10') == 98
+        new_match(m)
+        assert p.w('grav10') == 98 and p.b('turn') == 0
 
         # Near-horizontal throw into terrain: persistent hole, turn changes.
         key(m, 'Digit0'); key(m, 'Enter')
@@ -171,7 +203,7 @@ def arm(tag, off, disk, out):
         assert erased, 'impact did not destroy terrain'
 
         # Pause is sticky: launch vertically with sufficient airtime.
-        key(m, 'KeyN'); key(m, 'Digit9'); key(m, 'Digit0')
+        new_match(m); key(m, 'Digit9'); key(m, 'Digit0')
         key(m, 'Enter'); key(m, 'Digit1'); key(m, 'Digit5'); key(m, 'Digit0')
         key(m, 'Enter'); key(m, 'KeyP')
         assert p.b('state') == 1 and p.b('paused') == 1
@@ -180,7 +212,7 @@ def arm(tag, off, disk, out):
         assert p.data('px', 8) == paused, 'paused projectile moved'
         key(m, 'Enter')
         wait(m, lambda: p.data('px', 8) != paused, 'Enter resumes paused flight')
-        key(m, 'KeyN')
+        new_match(m)
 
         # Actual keyboard throws, no poked scores/state: a power-one throw
         # returns onto the thrower. The OTHER player must receive the point.
@@ -192,13 +224,14 @@ def arm(tag, off, disk, out):
             scores[thrower ^ 1] += 1
             assert list(p.data('scores', 2)) == scores
             assert p.b('winner') == thrower ^ 1
-            assert p.b('state') == (3 if max(scores) == 3 else 2)
+            assert p.b('state') == (3 if sum(scores) == 5 else 2)
             if round_no < 4:
                 key(m, 'Enter')
                 assert p.b('state') == 0
         ui.settle()
         capture(m, p, out / (tag + '-match.png'))
         key(m, 'Enter')
+        setup(m)
         assert p.data('scores', 2) == b'\0\0'
 
         # Exclusive mode restores the exact logical terrain; repeated entry

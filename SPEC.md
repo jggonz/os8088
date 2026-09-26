@@ -148740,15 +148740,17 @@ disks. The kernel is unchanged.
 ## 98. Gorillas (`apps/gorillas/gorillas.asm`)
 
 A native 8086 adaptation of the supplied Microsoft QBasic `gorilla.bas`
-(1990), packaged as `GORILLAS.O88`. Two local players alternate angle and
-velocity entries, throwing bananas over a generated, destructible skyline.
+(1990), packaged as `GORILLAS.O88`. One player faces a computer opponent,
+or two local players alternate angle and velocity entries, throwing bananas
+over a generated, destructible skyline.
 Angles are 0..180 degrees measured inward from each player's horizontal;
 velocity is 1..150. Wind accelerates the projectile horizontally, gravity
 vertically. Collision is swept in substeps against the persistent terrain
-and both gorillas, including the thrower. The first player to three hits wins.
+and both gorillas, including the thrower. Setup selects 1..99 total points
+(default 3), counted across both players as in the BASIC source.
 Enter advances angle to velocity, then throws; Tab selects the other field;
-digits replace a field, Backspace edits it, arrows adjust it. N resets the
-match, P pauses, G cycles gravity before a shot, F or Alt+Enter toggles full
+digits replace a field, Backspace edits it, arrows adjust it. N opens match
+setup, P pauses, F or Alt+Enter toggles full
 screen, and Escape returns to the desktop. Enter continues after a round.
 
 The instance owns a 256x128 packed 4bpp scene and a bounded scratch band.
@@ -148772,6 +148774,41 @@ again from the window. About uses the shared OS card and suspends play.
 The package is included in the games media and has a standalone `make gorillas`
 target. No BASIC interpreter, floating-point unit, external assets or source
 file is required at runtime.
+
+The startup splash automatically plays the opening tune followed by the full
+gorilla dance score, with a circulating sparkle border and alternating raised-arm
+gorillas. Music starts on the first worker frame after the initial paint. The
+completed score or any key opens setup: one/two players (default two), two names (ten
+characters each, default Player 1/Player 2 or Computer), total points, and
+positive decimal gravity (0.1..99.9 m/s², default 9.8). Enter accepts defaults;
+Backspace edits. Invalid numeric entries remain on the current question. Name
+entry consumes printable keys before gameplay shortcuts. Alt+Enter/Escape and
+the Game menu remain available. V selects the optional musical dance; P/Enter
+starts play immediately. Any key skips the dance, which also ends naturally.
+
+Frontend states 4/5/6/7 are splash/setup/choice/dance. `grfront.inc` uses the
+same packed text scene and font as gameplay; the character cache covers all
+16 logical text rows. `grdraw.inc` draws animation as a separate layer from
+generated masks and native sprite pixels. `grmusic.inc`, generated from the reference PLAY strings by
+`tools/gorillas_music.py`, supplies intro, dance, launch and impact scores.
+An instance-owned nonblocking sequencer, also serviced between converted
+scanlines during longer paints, schedules tones at priority 0x40;
+durations round to 18.2 Hz ticks, minimum one tick. Timed tones expire even
+while covered; score progression resumes with the worker. No direct speaker
+port writes or blocking waits run under the graphics lock.
+
+Gravity uses tenths of m/s² with a remainder accumulator: 9.8 produces the
+previous four fixed-point velocity units per frame. The solo opponent in
+`grai.inc` evaluates one candidate power per worker tick, predicting wind
+and gravity substeps at a 55-degree angle. It chooses the closest crossing of
+the human's center and launches an ordinary shot; terrain can intercept it.
+Pause, focus and About suspend aiming. Humans cannot edit a pending computer
+shot. Player names and two-digit scores appear above the minimal angle and
+velocity fields; active player and wind replace the old shortcut banner.
+
+`tests/gorillasfront.py` exercises animation, name/number validation, chosen
+gravity, optional and completed dance, sound progression, setup across
+fullscreen transitions, and real solo turns on VGA, CGA and Hercules.
 
 ### 98.1. Adapter palettes and artwork
 
@@ -148807,7 +148844,8 @@ then enter and fire another numeric shot after the second fullscreen entry.
 
 ### 98.2. Incremental aiming input
 
-The HUD caches three rows of 32 characters. A numeric edit formats and
+The gameplay HUD uses three rows of the 16-row, 32-column character cache.
+A numeric edit formats and
 compares only the selected three-digit field; field selection compares only
 the two markers. Unchanged cells do no drawing. Other HUD transitions compare
 the complete lines, padding shorter messages with spaces. Adjacent changed
@@ -148843,3 +148881,36 @@ memory (all four planes on VGA) against a full repaint after every key.
 The gate independently checks scene glyphs, unchanged terrain, bounds,
 backspace, selection, paused edits and zero velocity. `tests/gorillas.py`
 continues to cover gameplay and repeated fullscreen restoration.
+
+### 98.3. XT menu and intro drawing
+
+Setup field changes and validation errors flush only changed glyph spans.
+The title/help survive question changes; shorter input and error messages
+erase through blank cells. Blank scene cells use zero stores, and completely
+blank display spans use a zero-filled band. Full frontend paints clear the
+background and draw occupied text cells directly, avoiding a full scene
+conversion. Buffered fullscreen setup input drains without per-key tick waits.
+
+The five marquee phases are generated 1bpp masks. The two gorilla poses have
+native monochrome, CGA, packed desktop VGA and planar VGA forms, with horizontal
+scaling and palette conversion performed by `tools/gorillas_art.py`. Runtime
+work copies/vertically repeats rows. Windowed planar draws first test the entire
+scene against the current clip region under the graphics lock, temporarily
+disarm clipping only when wholly drawable, and probe the planar API. Refusal
+uses the clipped packed renderer; the window clip is restored afterward.
+Foreign VGA copies selected planes directly. CGA alternates video banks and
+advances by 80 bytes after odd scanlines instead of multiplying per row.
+Scaled light masks and VGA sprite planes are cached once per surface
+geometry, using 15 KB of per-instance RAM. Side strips repaint only rows
+touched by old or new crosses; the short bands also stay below the OS height
+limit. Exposure redraws the current phase without advancing animation.
+
+`tests/gorillasmenu.py` times actual menu handlers and animation ticks at
+4,772,727 Hz, including interrupts and drawing. It checks text against the OS
+font, compares incremental menu VRAM to full repaint, and compares all five
+marquee phases/both poses to independently assembled scene pixels rendered
+through the original generic path. All three adapters run windowed/fullscreen.
+Budgets are 150 ms per transition, 20 ms per ordinary character edit, and
+75 ms per complete animation frame (the animation interval is three BIOS ticks).
+`tests/gorillasfront.py` additionally waits for both automatic startup scores
+to finish and reach setup.

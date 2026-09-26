@@ -280,7 +280,7 @@ multi-instance:
   window, and the three that talk over the network — Browser, Telnet and an
   FTP server.
 - **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, Dot Delirium,
-  [Gorillas](apps/gorillas/README.md) (two-player banana artillery, windowed
+  [Gorillas](apps/gorillas/README.md) (solo or two-player banana artillery, windowed
   or fullscreen; four-color CGA in fullscreen),
   Cyclone 88,
   Clear Skies, Tank Attack (a first-person wireframe tank duel that takes the

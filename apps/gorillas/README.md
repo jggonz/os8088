@@ -1,22 +1,42 @@
 # Gorillas for os8088
 
 A native 8086 adaptation of the supplied Microsoft QBasic `gorilla.bas`
-(1990). Two people share the keyboard and throw exploding bananas across a
-random city skyline. Wind bends the trajectory, buildings retain craters,
-and a banana can hit its thrower. The first player to three points wins.
+(1990). One player faces the computer, or two people share the keyboard, throwing
+exploding bananas across a random city skyline. Wind bends the trajectory,
+buildings retain craters, and a banana can hit its thrower.
 
 Build with `make gorillas`. Open `GAMES/GORILLAS.O88` on the applications
 disk, or `GORILLAS.O88` at the root of the games disk. `make build/games360.img` builds the 360 KB games disk.
 No BASIC interpreter or external assets are needed.
+
+Launch automatically plays the original opening tune and musical gorilla
+intro, with a moving sparkle marquee and alternating gorilla poses. The music
+starts after the first screen is visible. It advances to setup when finished;
+press any key to skip directly to setup:
+
+1. Choose **1 or 2 players** (default 2). In solo mode the second gorilla is
+   controlled by the computer.
+2. Enter both **names**, up to 10 characters. Empty entries use Player 1 and
+   Player 2, or Computer in solo mode. The computer can also be renamed.
+3. Choose **total points**, from 1 to 99 (default 3). As in the BASIC source,
+   this counts points scored by both players together; the higher score at
+   the end wins. An even total can produce a tie.
+4. Enter **gravity**, from 0.1 to 99.9 m/s², with at most one decimal place
+   (default 9.8). Smaller values give longer, higher arcs.
+5. Press **V** to view the musical gorilla dance, or **P / Enter** to play.
+   Any key skips the dance; it also ends automatically.
+
+Blank entries accept defaults; Backspace edits. Alt+Enter and Escape work
+throughout setup. The Game menu can restart setup or change fullscreen mode.
 
 - Type an **angle**, press **Enter**, type a **velocity**, then press
   **Enter** to throw. Angles run from 0 to 180 degrees, measured from the
   horizontal toward the opponent; velocity runs from 1 to 150.
 - **Tab** switches fields; the first digit replaces the previous value.
   **Backspace** deletes a digit; **arrow keys** adjust the selected value.
-- **G** cycles Earth, Moon and Jupiter gravity before a throw. The HUD
-  identifies them as **E**, **M**, and **J**. Positive wind blows right.
-- **P** pauses/resumes. **N** starts a new match. **Enter** continues after
+- The compact HUD shows names, scores, the active player and wind. Positive
+  wind blows right. Gravity is fixed by setup for the entire match.
+- **P** pauses/resumes. **N** returns to match setup. **Enter** continues after
   a hit or starts another match after a win.
 - **F** or **Alt+Enter** enters/leaves fullscreen; **Escape** returns to
   the window. The Game menu also offers fullscreen, pause and new match.
@@ -47,17 +67,33 @@ All game text hides during a throw so the banana remains visible through
 the top of the sky, and returns when the shot ends. Pausing a shot keeps
 the text hidden; **P** or **Enter** still resumes it.
 
-Angle and velocity edits redraw only changed character cells. Like Dot
+Angle, velocity, setup edits and menu transitions redraw only changed character
+cells. Invalid input draws only the error line. Like Dot
 Delirium, the HUD composes opaque bands directly from the OS font. Windowed
 VGA uses the OS's colored 1bpp blitter, monochrome adapters use 1bpp bands,
 and fullscreen CGA/VGA use packed/planar text writes. The scene keeps an
 identical copy for window exposure and mode changes. Buffered fullscreen
 aiming keys are drained without a frame wait between characters.
 
+Menu exposure and mode changes clear the background and draw font bands
+directly. The intro uses precomputed light masks and native sprite pixels,
+including VGA planes, instead of plotting and converting each pixel every
+frame. Animation is a separate layer from the text scene. Scaled masks and
+VGA planes are cached once per surface (15 KB per instance); side strips
+repaint only rows touched by old or new lights. Fullscreen setup also drains
+buffered typing without a tick wait per character.
+
 The original game's floating-point simulation is adapted to swept integer
-fixed-point physics. Players are labeled P1 and P2, matches are first to
-three, and gravity has three presets. The original name-entry screens,
-introductory dance and music are not reproduced. The reference source is
+fixed-point physics, including a fractional gravity accumulator. The solo
+opponent predicts candidate trajectories using the same wind and gravity,
+then throws normally; buildings can intercept its shots and retain craters.
+Its aiming work is spread over worker ticks so pause and menus stay usable.
+
+The intro, dance, throw and impact note sequences come from the reference
+`PLAY` strings. `tools/gorillas_music.py` generates speaker frequency/duration
+tables. Sound is nonblocking; durations round to the OS's 18.2 Hz ticks, with
+a one-tick minimum for very short notes. Raised-arm artwork is generated by
+`tools/gorillas_art.py`. The reference source is
 credited to Microsoft Corporation, copyright 1990; the port is native
 assembly rather than a bundled BASIC runtime.
 
@@ -66,6 +102,8 @@ Run the actual guest gameplay gate on all three adapters:
 ```sh
 make gorillas
 python3 tests/gorillas.py
+python3 tests/gorillasfront.py
+python3 tests/gorillasmenu.py --output build/gorillas-menu.json
 python3 tests/gorillasinput.py --check-repaint --output build/gorillas-input.json
 ```
 
@@ -83,6 +121,24 @@ pixels against the OS font, and optionally compares incremental video memory
 with a full repaint after every key. It also checks paused edits, numeric
 limits, and six buffered fullscreen keys completing within one BIOS tick.
 Use `--max-input-ms 0` when measuring an older, slower build.
+
+The menu gate measures field changes, errors and edits, checks glyphs and
+video memory, and compares every marquee phase and both gorilla poses with
+the original scene renderer on each adapter. It includes windowed and
+fullscreen modes, with a 150 ms menu-transition budget and a 75 ms animation
+frame budget at 4.77 MHz.
+
+Measured setup transition from player count to the first name, and the worst
+of five complete marquee/gorilla frames (milliseconds, emulated XT):
+
+| Adapter / mode | Setup before | Setup after | Animation frame |
+|---|---:|---:|---:|
+| VGA window | 1895.37 | 72.51 | 62.80 |
+| VGA fullscreen | 6057.35 | 75.13 | 49.33 |
+| CGA window | 3041.99 | 65.69 | 27.06 |
+| CGA fullscreen | 2485.50 | 61.10 | 17.58 |
+| Hercules window | 3141.71 | 73.90 | 35.20 |
+| Hercules fullscreen | 3136.17 | 71.40 | 32.65 |
 
 Measured initial angle replacement (`45` → `9`), milliseconds per handler:
 

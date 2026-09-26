@@ -19,7 +19,8 @@ import gorillas as G
 def code_offsets():
     source = (G.ROOT / 'apps/gorillas/gorillas.asm').read_text()
     names = ('gr_key', 'gr_tick', 'gr_fullpaint', 'gr_status', 'gr_prompt', 'gr_help',
-             'gr_pausemsg', 'gr_roundmsg', 'gr_matchmsg')
+             'gr_pausemsg', 'gr_roundmsg', 'gr_matchmsg', 'gr_animate',
+             'gr_apeleft', 'gr_aperight')
     source = source.replace('OS88_IMAGE_END', '')
     source += '\n' + '\n'.join('dw ' + n for n in names) + '\nOS88_IMAGE_END\n'
     with tempfile.TemporaryDirectory() as td:
@@ -98,7 +99,9 @@ def check_repaint(m, p, code, tag):
     assert m.wait_stop(30) == 'breakpoint', 'full repaint never returned'
     after = video_bytes(m, tag)
     assert after == before, ('incremental display differs from full repaint', tag,
-                             sum(a != b for a, b in zip(before, after)))
+                             sum(a != b for a, b in zip(before, after)),
+                             [(i, a, b) for i, (a, b) in enumerate(zip(before, after))
+                              if a != b][:12])
     for reg in registers:
         m.setreg(reg, saved[reg])
 
@@ -129,7 +132,7 @@ def measure(m, p, code, name, tag, repaint):
 
 def flight_hud(m, p, code, tag, repaint):
     """Follow a real throw into the former text rows at frame boundaries."""
-    G.key(m, 'KeyN')
+    G.new_match(m)
     G.key(m, 'Digit9'); G.key(m, 'Digit0'); G.key(m, 'Enter')
     measure(m, p, code, 'Enter', tag, repaint)
     m.pause()
@@ -164,7 +167,7 @@ def flight_hud(m, p, code, tag, repaint):
 
 def queued_input(m, p, code):
     """Six already-buffered BIOS keys must not pay six fullscreen tick waits."""
-    G.key(m, 'KeyN')
+    G.new_match(m)
     m.pause()
     m.write(0x41a, struct.pack('<HH', 0x1e, 0x2a))
     m.write(0x41e, struct.pack('<6H', 0x0a39, 0x0b30, 0x0f09,
@@ -219,12 +222,13 @@ def main():
                 m = ui.m
                 ui.open_drive('B')
                 ui.open('GORILLAS.O88')
-                ui.settle()
+                G.M.pace(m, .3)
                 p = G.Probe(ui, off)
                 m.gorillas_probe = p
+                G.setup(m)
                 for mode in ('window', 'full'):
                     if mode == 'full':
-                        G.key(m, 'KeyN')
+                        G.new_match(m)
                         G.key(m, 'KeyF')
                         G.wait(m, lambda: p.b('fsready'), 'fullscreen ready')
                     terrain = p.data('scene', 16384)[24*128:]
@@ -233,7 +237,7 @@ def main():
                     assert p.data('scene', 16384)[24*128:] == terrain
                     assert p.w('angle') == 180 and p.w('power') == 1
                     assert p.b('state') == 0 and p.b('paused') == 0
-                    assert p.b('field') == 0 and p.b('gravidx') == 1
+                    assert p.b('field') == 0 and p.w('grav10') == 98
                     label = tag + '-' + mode
                     report[label] = list(zip(keys, values))
                     print(label, ' '.join('%s=%.2fms' % (k, c/G.M.GUEST_HZ*1000)

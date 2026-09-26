@@ -63,6 +63,88 @@ def generate():
     result.append('; 16x20 packed 4bpp gorilla. 0=transparent, 1/A/B=body/light/shadow.\ngr_ape:')
     assert len(APE) == 20 and all(len(row) == 16 for row in APE)
     emit([int(row[i:i+2], 16) for row in APE for i in range(0, 16, 2)], per=8)
+    # Lift one arm while retaining the original face/chest and opposite arm.
+    left = [list(row) for row in APE]
+    for y in range(7, 15):
+        for x in range(3):
+            left[y][x] = '0'
+    for y in range(2, 10):
+        for x in range(3):
+            left[y][x] = 'A' if x == 1 else '1'
+    left[8][3] = left[9][3] = '1'
+    for name, rows in (('left', left), ('right', [row[::-1] for row in left])):
+        result.append('gr_ape' + name + ':')
+        emit([int(''.join(row[i:i+2]), 16) for row in rows
+              for i in range(0, 16, 2)], per=8)
+    # Opaque native intro sprites: no pixel plotting or palette conversion
+    # during animation. Each mode contains left then right raised-arm poses.
+    cga = (0, 3, 2, 3, 0, 2, 2, 1, 0, 3, 3, 2, 2, 0, 3, 3)
+    for mode, scale in (('mono', 1), ('mono', 2), ('win', 1),
+                        ('win', 2), ('cga', 1), ('vga', 2),
+                        ('planar', 1), ('planar', 2)):
+        result.append('gr_front_' + mode + str(scale) + ':')
+        for rows in (left, [row[::-1] for row in left]):
+            pixels = [[int(p, 16) for p in row] for row in rows]
+            if mode in ('vga', 'planar'):
+                if mode == 'planar':
+                    pixels = [[v for p in row for v in
+                               ((12, 14) if scale == 2 and p == 1 else
+                                (DESKTOP[p],)*scale)] for row in pixels]
+                for plane in range(4):
+                    for row in pixels:
+                        bits = ''.join(str((p >> plane) & 1)*
+                                       (scale if mode == 'vga' else 1) for p in row)
+                        emit([int(bits[i:i+8], 2) for i in range(0, len(bits), 8)])
+            else:
+                for row in pixels:
+                    bits = ''
+                    for p in row:
+                        if mode == 'mono':
+                            bits += str(int(p != 0))*scale
+                        elif mode == 'cga':
+                            bits += format(cga[p], '02b')
+                        elif scale == 2 and p == 1:
+                            bits += '11001110'  # desktop orange stipple
+                        else:
+                            bits += format(DESKTOP[p], '04b')*scale
+                    emit([int(bits[i:i+8], 2) for i in range(0, len(bits), 8)])
+    # Five marching-light masks: top/bottom (256x3), left/right (8x128).
+    # Sides include corners so all four rectangles agree where they overlap.
+    result.append('gr_front_lights:')
+    phases = []
+    for phase in range(5):
+        lit = set()
+        def spark(x, y):
+            lit.update((x+dx, y+dy) for dx, dy in ((1, 0), (0, 1),
+                                                (1, 1), (2, 1), (1, 2)))
+        for x in range(phase*4, 253, 20):
+            spark(x, 0)
+            spark(252-x, 125)
+        for y in range(phase*4+5, 123, 20):
+            spark(0, y)
+            spark(253, 125-y)
+        phases.append(lit)
+        for x, y, w, h in ((0, 0, 256, 3), (0, 125, 256, 3),
+                            (0, 0, 8, 128), (248, 0, 8, 128)):
+            for yy in range(y, y+h):
+                bits = ''.join(str(int((xx, yy) in lit)) for xx in range(x, x+w))
+                emit([int(bits[i:i+8], 2) for i in range(0, len(bits), 8)])
+    result.append('gr_lightruns:')
+    for phase in range(5):
+        result.append('    dw gr_lightrun%d_0, gr_lightrun%d_1' % (phase, phase))
+    for phase, lit in enumerate(phases):
+        changed = lit | phases[(phase-1) % 5]
+        for side, x in enumerate((0, 248)):
+            result.append('gr_lightrun%d_%d:' % (phase, side))
+            rows = [y for y in range(3, 125)
+                    if any((xx, y) in changed for xx in range(x, x+8))]
+            while rows:
+                first = last = rows.pop(0)
+                while rows and rows[0] <= last+2:
+                    last = rows.pop(0)
+                result.append('    dw %d' % (phase*448+192+side*128+first))
+                emit([first, last-first+1])
+            result.append('    dw 0\n    db 0,0')
     # Circle, rays and smile in the BASIC's proportions, in a small model grid.
     sun = [[0] * 25 for _ in range(21)]
     for ex, ey in ((12, 0), (0, 10), (9, 7), (6, 9), (11, 4)):
