@@ -4,11 +4,11 @@
 ; Install (SPEC.md 52.10.4): make a partition into a system volume the machine
 ; can boot from, by putting both floppies onto it and marking it bootable.
 ;
-;   Install to        Size   State
-;   Slot 1            31M    Ready          <- big enough, and formattable
-;   Slot 2             -     Too Small
-;   Slot 3            50M    Unusable       <- foreign, or over the ceiling
-;   Slot 4             -     No Room
+;   Install to  Size  State
+;   Slot 1      31M   C: FAT16            <- mounted: its letter, then what
+;   Slot 2      20M   Linux                  is on it (SPEC.md 52.10.4.2)
+;   Slot 3      1M    FAT12, Too Small    <- the reason, when it is a no
+;   Slot 4      -     Empty, No Room
 ;   [Install] [Close]      <- the first one says 'Copy Apps', then 'Restart'
 ;   Insert the APPS disk in A:, then Install
 ;
@@ -51,7 +51,7 @@
 ; the user to A:.
 ; =============================================================================
 
-HIW_W        equ 300
+HIW_W        equ 356
 HIW_H        equ 150
 HIW_LX       equ 8              ; a MULTIPLE OF 8, with OSAPI_WM_SNAP on the
                                 ; window, so every OSAPI_FONT_RUN in here takes
@@ -87,11 +87,20 @@ HIW_BW1      equ 56             ; caption is nine characters, 72px, and the
                                 ; as well as the drawing (hd_ibhit reads the
                                 ; same pairs), so there is one place to change
                                 ; and not two
-HIW_CELLS    equ 35             ; characters across the text band: HIW_W - 12
-                                ; less HIW_LX, in 8px cells. Every run in this
+HIW_CELLS    equ 42             ; characters across the text band: HIW_W - 12
+                                ; less HIW_LX, in 8px cells. 42 and not 35
+                                ; since the State column says what a slot IS
+                                ; (SPEC.md 52.10.4.2): its longest row is 24
+                                ; cells from HIW_STATEC. Every run in this
                                 ; window is padded to it, which is what makes
                                 ; the run OPAQUE over the whole band and so
                                 ; what removes the blank-then-letter flash
+
+HIW_SIZEC    equ 12             ; the Size and State columns, in cells -
+HIW_STATEC   equ 18             ; under hd_s_ihead's two headings
+%if HIW_STATEC + 24 > HIW_CELLS
+  %error "the State column's longest row does not fit HIW_CELLS"
+%endif
 
 ; What a slot is as an install TARGET, which is not tool.inc's HTS_* question.
 ; That one asks what is there; this asks whether an install would work, and
@@ -226,8 +235,16 @@ hd_iw_shut:
 ; repaint of this window any more except W_PAINT itself.
 
 ; -----------------------------------------------------------------------------
-; hd_iw_scan - what each slot would be as a target (module internal)
-; out: hd_istate[0..3] = HIS_*, hd_isecs[0..3] = its extent in sectors
+; hd_iw_scan - what each slot IS, and what it would be as a target
+; out: per slot, hd_istate = HIS_* (the verdict: may Install take it) and the
+;      State column's facts - hd_ilet, hd_ibody, hd_irsn, hd_itype, hd_isecs
+;
+; TWO QUESTIONS, and the column used to answer only the second (SPEC.md
+; 52.10.4.2). `Ready` said an install would work and nothing about what the
+; install would be working ON - which of four slots is the user's C:, which
+; is a FAT volume nobody has mounted, which is somebody else's Linux. The
+; column says what is THERE now, the letter first when it is on the desktop,
+; and the reason after a comma only when the verdict is no.
 ; -----------------------------------------------------------------------------
 hd_iw_scan:
     push ax
@@ -241,64 +258,9 @@ hd_iw_scan:
     call hd_part_load           ; the table, or a blank one if unreadable
     xor cl, cl
 .slot:
-    mov bl, cl
-    xor bh, bh
-    mov byte [bx+hd_istate], HIS_NONE
-    shl bx, 1
-    mov word [bx+hd_isecs], 0
-
     mov al, cl
     call hd_part_ent            ; SI -> the entry
-    mov al, [si+HP_TYPE]
-    or al, al
-    jz .extent                  ; empty: is there room to make one?
-    call hd_fmt_isfat           ; a type this kernel could mount
-    jc .alien
-    mov ax, [si+HP_SECS+2]
-    or ax, ax
-    jnz .alien                  ; past 65,535 sectors: the volume ceiling
-    mov ax, [si+HP_SECS]
-    jmp short .sized
-.extent:
-    push cx
-    mov al, [hd_idev]
-    call hd_dev_row
-    mov al, cl
-    call hd_slot_extent         ; -> [hd_fbase]/[hd_fsecs] (SPEC.md 52.2.1)
-    pop cx
-    jc .next                    ; no room on the disk for a new one
-    mov ax, [hd_fsecs]
-.sized:
-    mov bl, cl
-    xor bh, bh
-    shl bx, 1
-    mov [bx+hd_isecs], ax
-    mov bl, cl
-    xor bh, bh
-    cmp ax, HIW_MINSEC
-    jb .small
-    mov byte [bx+hd_istate], HIS_OK
-    call hd_part_used           ; ...UNLESS IT IS THE ONE WE ARE RUNNING FROM
-    jc .next                    ; (SPEC.md 52.10.4.1). A slot with no ENTRY is
-                                ; asked nothing: what SI points at is zeroed,
-                                ; the extent above came from hd_slot_extent
-                                ; instead, and a base of 0 is not this slot's
-                                ; to be compared
-    push ax                     ; Last of the tests, because it is the only one
-    mov al, [hd_idev]           ; that costs a call out of the image, and every
-    call hd_kvol                ; earlier verdict already refuses the slot
-    pop ax
-    jc .next
-    mov byte [bx+hd_istate], HIS_LIVE
-    jmp short .next
-.small:
-    mov byte [bx+hd_istate], HIS_SMALL
-    jmp short .next
-.alien:
-    mov bl, cl
-    xor bh, bh
-    mov byte [bx+hd_istate], HIS_ALIEN
-.next:
+    call hd_iw_slot
     inc cl
     cmp cl, 4
     jb .slot
@@ -328,6 +290,171 @@ hd_iw_scan:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_iw_slot - one slot's verdict and State facts (module internal)
+; in:  CL = the slot, SI = its entry, DI = the device row
+; out: hd_istate/hd_ilet/hd_ibody/hd_irsn/hd_itype/hd_isecs for slot CL
+; clobbers: flags
+;
+; The order is the order of the certainties, tool.inc's: the TABLE first
+; (free, foreign, over the ceiling, laid out at another geometry), which costs
+; no read, then the one sector a formatted volume has.
+; -----------------------------------------------------------------------------
+hd_iw_slot:
+    push ax
+    push bx
+    push dx
+    mov word [hd_iscur], 0
+    mov word [hd_iscur+2], 0
+    mov byte [hd_ilcur], 0
+    xor bx, bx                  ; BX = the reason, 0 = none to give
+    mov al, HIS_ALIEN
+    mov dx, hd_s_iunread        ; the read of the table FAILED: every slot
+    cmp byte [hd_mbrok], HMB_BAD    ; below would read free, which is a
+    je .put                         ; fabrication (tool.inc's hd_s_tnomb)
+    call hd_part_used
+    jnc .used
+    push cx                     ; FREE: is there room to make one?
+    mov al, cl
+    call hd_slot_extent         ; -> [hd_fbase]/[hd_fsecs] (SPEC.md 52.2.1)
+    pop cx
+    mov al, HIS_NONE
+    mov dx, hd_s_iempty
+    mov bx, hd_s_inone
+    jc .put                     ; no room on the disk for a new one
+    xor bx, bx
+    mov dx, hd_s_iunpart
+    mov ax, [hd_fsecs]
+    mov [hd_iscur], ax
+    jmp short .sized
+.used:
+    mov ax, [si+HP_SECS]
+    mov [hd_iscur], ax
+    mov ax, [si+HP_SECS+2]
+    mov [hd_iscur+2], ax
+    call hd_part_isfat
+    jnc .fat
+    mov al, [si+HP_TYPE]        ; SOMEBODY ELSE'S, and its name is the reason
+    call hd_ptype_name          ; DX = the name, 0 = 'Type nnh' at draw time
+    mov al, HIS_ALIEN
+    jmp short .put
+.fat:
+    mov dx, hd_s_f16name        ; the TYPE byte's name, as the Format window
+    cmp byte [si+HP_TYPE], HPT_FAT12    ; reads it: what the table says
+    jne .fname
+    mov dx, hd_s_f12name
+.fname:
+    call hd_iw_letter           ; the letter, and CF = 0 = the KERNEL's own
+    pushf                       ; ...which is decided below, after the facts
+    mov al, HIS_ALIEN
+    mov bx, hd_s_ibig
+    cmp word [si+HP_SECS+2], 0
+    jne .popput                 ; past 65,535 sectors: the volume ceiling
+    mov bx, hd_s_tgeom
+    call hd_tw_geomok           ; before the read, which a geometry fault
+    jc .popput                  ; points at the wrong sector (SPEC.md 52.2.6)
+    xor bx, bx
+    call hd_fmt_isfat
+    jnc .fmted
+    mov dx, hd_s_traw           ; FAT-typed, nothing in it: Install formats
+.fmted:                         ; either way, so this is a fine target
+    popf
+    jc .sized
+    mov al, HIS_LIVE            ; ...UNLESS WE ARE RUNNING FROM IT (SPEC.md
+    mov bx, hd_s_tlive          ; 52.10.4.1)
+    jmp short .put
+.popput:
+    popf
+    jmp short .put
+.sized:
+    mov al, HIS_OK
+    cmp word [hd_iscur+2], 0
+    jne .put
+    cmp word [hd_iscur], HIW_MINSEC
+    jae .put
+    mov al, HIS_SMALL
+    mov bx, hd_s_ismall
+.put:
+    push bx
+    mov bl, cl
+    xor bh, bh
+    mov [bx+hd_istate], al
+    mov al, [hd_ilcur]
+    mov [bx+hd_ilet], al
+    mov al, [si+HP_TYPE]
+    mov [bx+hd_itype], al
+    shl bx, 1
+    mov [bx+hd_ibody], dx
+    pop word [bx+hd_irsn]
+    shl bx, 1
+    mov ax, [hd_iscur]
+    mov [bx+hd_isecs], ax
+    mov ax, [hd_iscur+2]
+    mov [bx+hd_isecs+2], ax
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_iw_letter - the drive letter a FAT slot is on the desktop as
+; in:  CL = the slot, SI = its entry
+; out: [hd_ilcur] = 'A'+volume, or 0 if nothing has it mounted;
+;      CF = 0 = it is the volume the machine BOOTED from, CF = 1 = it is not
+; clobbers: flags
+;
+; Two tables, because two owners: the kernel's adoption of the boot partition
+; is asked through OSAPI_VOL_AT (hd_kvol), and a mount THIS driver made is
+; asked across the seam (hd_vol_ask), hd_vols being the resident's.
+; -----------------------------------------------------------------------------
+hd_iw_letter:
+    push ax
+    mov al, [hd_idev]
+    call hd_kvol                ; AL = the volume, CF = 0 = the kernel's
+    jnc .kern
+    mov al, [hd_idev]
+    mov ah, cl
+    call hd_vol_ask             ; AL = the volume, 0FFh = none
+    cmp al, 0xFF
+    je .none
+    add al, 'A'
+    mov [hd_ilcur], al
+.none:
+    pop ax
+    stc
+    ret
+.kern:
+    add al, 'A'
+    mov [hd_ilcur], al
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ptype_name - a FOREIGN partition type's name, for the State column
+; in:  AL = the table's type byte
+; out: DX = its name, or 0 if it is not one we know (drawn as 'Type nnh')
+; clobbers: DX (the output), flags
+;
+; A partition we will not touch still deserves to be recognised: 'Unusable'
+; over the user's Linux root says less than 'Linux' does, and says it about
+; the one slot they most need to be sure of.
+; -----------------------------------------------------------------------------
+hd_ptype_name:
+    push si
+    mov si, hd_ptypes
+.next:
+    mov dx, [si+1]
+    or dx, dx
+    jz .out                     ; the terminator: 0 = not one we know
+    cmp al, [si]
+    je .out
+    add si, 3
+    jmp short .next
+.out:
+    pop si
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1032,43 +1159,62 @@ hd_iw_rowtext:
 .slots:
 %endif
     mov di, hd_line
-    mov [hd_lineptr], di
     mov si, hd_s_islot
     call hd_scat
-    mov di, [hd_lineptr]
     mov al, [hd_irow]
     xor ah, ah
     inc ax
     call hd_utoa
-    mov [hd_lineptr], di
-    mov si, hd_s_igap
-    call hd_scat
+    mov al, HIW_SIZEC           ; the Size column, under its heading
+    call hd_itab_to
 
     mov bl, [hd_irow]
     xor bh, bh
     shl bx, 1
+    shl bx, 1
     mov ax, [bx+hd_isecs]
-    or ax, ax
+    mov dx, [bx+hd_isecs+2]
+    mov cx, ax
+    or cx, dx
     jz .nosize
     call hd_iw_size
     jmp short .state
 .nosize:
-    mov di, [hd_lineptr]
     mov si, hd_s_idash
     call hd_scat
 .state:
-    mov di, [hd_lineptr]
-    mov si, hd_s_igap
-    call hd_scat
+    mov al, HIW_STATEC          ; ...and the State column, under its own
+    call hd_itab_to
     mov bl, [hd_irow]
     xor bh, bh
-    mov bl, [bx+hd_istate]
-    xor bh, bh
-    shl bx, 1
-    mov si, [bx+hd_itab]
-    mov di, [hd_lineptr]
+    mov al, [bx+hd_ilet]        ; 'C: ' when it is on the desktop
+    or al, al
+    jz .body
+    mov [di], al
+    inc di
+    mov si, hd_s_icolon
     call hd_scat
-    mov di, [hd_lineptr]
+.body:
+    mov al, [bx+hd_itype]
+    shl bx, 1
+    mov si, [bx+hd_ibody]
+    or si, si
+    jnz .named
+    mov si, hd_s_itype          ; a foreign type with no name: 'Type 2Bh'
+    call hd_scat
+    call hd_hex2
+    mov si, hd_s_ih
+.named:
+    call hd_scat
+    mov si, [bx+hd_irsn]        ; ...and why not, when the answer is no
+    or si, si
+    jz .done
+    push si
+    mov si, hd_s_icomma
+    call hd_scat
+    pop si
+    call hd_scat
+.done:
     mov byte [di], 0
 %ifdef INSTBENCH
 .rtout:
@@ -1079,6 +1225,54 @@ hd_iw_rowtext:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_itab_to - space-pad hd_line from DI out to column AL
+; in:  DI = the write position in hd_line, AL = the column
+; out: DI at that column (or where it was, if already past it: a wide field
+;      prints wide, hd_utoa's own rule)
+; clobbers: DI (the output), flags
+; -----------------------------------------------------------------------------
+hd_itab_to:
+    push ax
+    xor ah, ah
+    add ax, hd_line
+.pad:
+    cmp di, ax
+    jae .out
+    mov byte [di], ' '
+    inc di
+    jmp short .pad
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_hex2 - AL as two hex digits at DI, DI advanced
+; clobbers: DI (the output), flags
+; -----------------------------------------------------------------------------
+hd_hex2:
+    push ax
+    push cx
+    mov ah, al
+    mov cl, 4
+    shr al, cl
+    call .dig
+    mov al, ah
+    and al, 0x0F
+    call .dig
+    pop cx
+    pop ax
+    ret
+.dig:
+    add al, '0'
+    cmp al, '9'
+    jbe .put
+    add al, 'A' - '9' - 1
+.put:
+    mov [di], al
+    inc di
     ret
 
 %ifdef INSTBENCH
@@ -1448,7 +1642,7 @@ hd_bn_rowtext:
 %endif
 
 ; -----------------------------------------------------------------------------
-; hd_iw_size - AX sectors as '31M' or '970K' at [hd_lineptr] (module internal)
+; hd_iw_size - DX:AX sectors as '31M', '970K' or '12G' at DI, DI advanced
 ;
 ; KB as well as MB, because SPEC.md 52.2.1's alignment gaps are real
 ; partitions: a disk repartitioned by a modern tool leaves ~1,985 sectors at
@@ -1458,28 +1652,42 @@ hd_bn_rowtext:
 hd_iw_size:
     push ax
     push bx
+    push cx
     push dx
     push si
-    mov di, [hd_lineptr]
+    or dx, dx
+    jnz .mb
     cmp ax, 2048
     jae .mb
     shr ax, 1                   ; sectors / 2 = KB
     call hd_utoa
-    mov [hd_lineptr], di
     mov si, hd_s_ik
-    call hd_scat
-    jmp short .out
+    jmp short .unit
 .mb:
-    xor dx, dx
-    mov bx, 2048
-    div bx
-    call hd_utoa
-    mov [hd_lineptr], di
+    mov cx, 11                  ; sectors / 2048 = MB, a 32-bit shift: a
+.shift:                         ; partition is not bounded by a word of
+    shr dx, 1                   ; sectors, only a VOLUME is (SPEC.md 18.7)
+    rcr ax, 1
+    loop .shift
     mov si, hd_s_mb
+    or dx, dx                   ; past 65,535MB, say it in GB
+    jnz .gb
+    cmp ax, 10000
+    jb .num
+.gb:
+    mov cx, 10
+.gshift:
+    shr dx, 1
+    rcr ax, 1
+    loop .gshift
+    mov si, hd_s_ig
+.num:
+    call hd_utoa
+.unit:
     call hd_scat
-.out:
     pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -3403,13 +3611,12 @@ hd_inst_mbr:
 ; one paints over the border and out the other side.
 ; =============================================================================
 hd_s_ititle:  db 'Install', 0
-hd_s_ihead:   db 'Install to        Size   State', 0
+hd_s_ihead:   db 'Install to  Size  State', 0   ; HIW_SIZEC, HIW_STATEC
 hd_s_iinst:   db 'Install', 0
 hd_s_icopy:   db 'Copy Apps', 0
 hd_s_irest:   db 'Restart', 0
 hd_s_islot:   db 'Slot ', 0
-hd_s_igap:    db '    ', 0
-hd_s_idash:   db '   -', 0
+hd_s_idash:   db '-', 0
 hd_s_ik:      db 'K', 0
 hd_s_kernel:  db 'KERNEL.SYS', 0
 hd_s_assoc:   db 'ASSOC.DAT', 0 ; ...the OTHER file the copy may not carry
@@ -3417,15 +3624,93 @@ hd_s_assoc:   db 'ASSOC.DAT', 0 ; ...the OTHER file the copy may not carry
 hd_s_iapps:   db 'APPS', 0      ; what makes a disk THE APPS DISK (52.10.5)
 hd_s_o88:     db '.O88', 0      ; ...and what has to be INSIDE it
 
-hd_s_iready:  db 'Ready', 0
+; THE STATE COLUMN (SPEC.md 52.10.4.2): [letter ': '] body [', ' reason].
+; What is THERE, and why not only when the answer is no - so the longest row
+; is `C: FAT16, Wrong Geometry`, 24 cells from HIW_STATEC, which is what
+; HIW_CELLS is sized for. The FAT names and three of the reasons are the
+; Format window's own strings, so two windows use one word for one fact.
+hd_s_iunpart: db 'Unpartitioned', 0 ; a free slot the disk has room behind
+hd_s_iempty:  db 'Empty', 0         ; ...and one it has none behind
+hd_s_iunread: db 'Unreadable', 0    ; the table itself would not read
 hd_s_ismall:  db 'Too Small', 0
-hd_s_ialien:  db 'Unusable', 0
 hd_s_inone:   db 'No Room', 0
-hd_s_ilive:   db 'Booted From', 0   ; SPEC.md 52.10.4.1, and it SAYS WHY NOT
-                                    ; rather than whether (SPEC.md 47 rule 7):
-                                    ; the slot is fine, the machine is standing
-                                    ; on it
-hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone, hd_s_ilive
+hd_s_ibig:    db 'Too Big', 0       ; FAT, past the volume ceiling (18.7)
+hd_s_icolon:  db ': ', 0
+hd_s_icomma:  db ', ', 0
+hd_s_itype:   db 'Type ', 0
+hd_s_ih:      db 'h', 0
+hd_s_ig:      db 'G', 0
+
+; The foreign types worth a NAME: type byte, then the string. Anything else
+; reads 'Type nnh', which is still more than 'Unusable' said.
+hd_ptypes:
+    db 0x05
+    dw hd_s_pext
+    db 0x0F
+    dw hd_s_pext
+    db 0x85
+    dw hd_s_pext
+    db 0x07
+    dw hd_s_pntfs
+    db 0x0B
+    dw hd_s_pfat32
+    db 0x0C
+    dw hd_s_pfat32
+    db 0x82
+    dw hd_s_pswap
+    db 0x83
+    dw hd_s_plinux
+    db 0x8E
+    dw hd_s_plvm
+    db 0xA5
+    dw hd_s_pbsd
+    db 0xA6
+    dw hd_s_pbsd
+    db 0xA9
+    dw hd_s_pbsd
+    db 0x02
+    dw hd_s_pxenix
+    db 0x03
+    dw hd_s_pxenix
+    db 0x63
+    dw hd_s_punix
+    db 0x0A
+    dw hd_s_pos2
+    db 0xDB
+    dw hd_s_pcpm
+    db 0x64
+    dw hd_s_pnw
+    db 0x65
+    dw hd_s_pnw
+    db 0xEE
+    dw hd_s_pgpt
+    db 0xEF
+    dw hd_s_pefi
+    db 0x11
+    dw hd_s_phid
+    db 0x14
+    dw hd_s_phid
+    db 0x16
+    dw hd_s_phid
+    db 0x1E
+    dw hd_s_phid
+    db 0
+    dw 0                        ; the terminator: its WORD is the test
+hd_s_pext:    db 'Extended', 0
+hd_s_pntfs:   db 'NTFS/HPFS', 0
+hd_s_pfat32:  db 'FAT32', 0
+hd_s_pswap:   db 'Linux Swap', 0
+hd_s_plinux:  db 'Linux', 0
+hd_s_plvm:    db 'Linux LVM', 0
+hd_s_pbsd:    db 'BSD', 0
+hd_s_pxenix:  db 'XENIX', 0
+hd_s_punix:   db 'Unix', 0
+hd_s_pos2:    db 'OS/2 Boot', 0
+hd_s_pcpm:    db 'CP/M-86', 0
+hd_s_pnw:     db 'NetWare', 0
+hd_s_pgpt:    db 'GPT Disk', 0
+hd_s_pefi:    db 'EFI System', 0
+hd_s_phid:    db 'Hidden FAT', 0    ; a FAT type with the hide bit (10h) set
 
 ; Every line below is one CAPTION, and the macro is what stops one growing
 ; past the band: HIW_CELLS is the run's width and a longer string is silently
@@ -3464,8 +3749,15 @@ hd_iwin:      dw 0              ; .text with a real initialiser: -f bin zeroes
 hd_iw_st:     db 0
 hd_isel:      db 0
 hd_imsg:      dw hd_s_ipick
-hd_istate:    times 4 db 0
-hd_isecs:     times 4 dw 0
+hd_istate:    times 4 db 0      ; HIS_*: the verdict
+hd_isecs:     times 4 dd 0      ; ...the extent, 32 bits: a PARTITION is not
+                                ; bounded by a word of sectors
+hd_ilet:      times 4 db 0      ; the State column (SPEC.md 52.10.4.2): the
+hd_itype:     times 4 db 0      ; drive letter or 0, the table's type byte,
+hd_ibody:     times 4 dw 0      ; what is there (0 = 'Type nnh'),
+hd_irsn:      times 4 dw 0      ; and why not, 0 = no reason to give
+hd_iscur:     dd 0              ; hd_iw_slot's working extent...
+hd_ilcur:     db 0              ; ...and letter
 hd_irow:      db 0
 hd_iclx:      dw 0
 hd_icly:      dw 0

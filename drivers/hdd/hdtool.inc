@@ -559,6 +559,8 @@ hd_svc:
     je hd_svc_mountdev
     cmp al, HSV_UNMOUNTDEV
     je hd_svc_unmountdev
+    cmp al, HSV_VOLOF
+    je hd_svc_volof
 %ifdef INSTBENCH
     cmp al, HSV_CTRS
     je hd_svc_ctrs
@@ -680,6 +682,15 @@ hd_svc_unmount:
     call hd_unmount_part
     mov [es:si+HRQ_RES], al     ; did anything go...
     mov [es:si+HRQ_VOL], ah     ; ...and WHICH volume, for SPEC.md 52.10.8
+    clc
+    jmp hd_svc_out
+
+; --- HSV_VOLOF: which volume is on one partition, and nothing else ----------
+hd_svc_volof:
+    mov al, [es:si+HRQ_DEV]
+    mov ah, [es:si+HRQ_SLOT]
+    call hd_vol_of
+    mov [es:si+HRQ_RES], al
     clc
     jmp hd_svc_out
 

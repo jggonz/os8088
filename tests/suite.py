@@ -7251,6 +7251,15 @@ SOAK = [
         "restarts the machine. The caption is read out of the framebuffer "
         "against the kernel's own glyph table. It ERASES the VHD.",
         needs=("marty",), serial=True, timeout=1200),
+    Row("inststate", "soak", py("tests/inststate.py"), 135.0,
+        "SPEC.md 52.10.4.2: the installer's State column says what each slot "
+        "IS - `C: FAT16` for a mounted volume, a foreign type by name, "
+        "`Not Formatted`, `Unpartitioned`, and the reason after a comma when "
+        "the verdict is no. Three VHDs with slots 2-4 rewritten before boot, "
+        "every row read out of the framebuffer against the kernel's glyph "
+        "table (instrest's apparatus). Opens the installer and writes "
+        "nothing. Measured 132s for the three boots, serially.",
+        needs=("marty",), serial=True, timeout=900),
     Row("hddcp", "soak",
         py("tests/hddcp.py", "build/os8088-360.img", "build/hddcp-out.bin"),
         90.0,

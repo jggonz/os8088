@@ -30,7 +30,7 @@
 ; to a private interface, for the same reason and not by analogy.
 ; =============================================================================
 
-HD_ABI_VER   equ 3              ; bumped whenever a verb changes meaning
+HD_ABI_VER   equ 4              ; bumped whenever a verb changes meaning
 HD_TOOLFILE  equ 0              ; (the name itself is in the resident: a
                                 ; string is not an ABI number)
 
@@ -200,6 +200,11 @@ HSV_STATE    equ 12             ; out: HRQ_RES = [hd_msgc], HRQ_VOL = a MASK
                                 ; Separate from HSV_SYNC because hd_svc banks
                                 ; BX..ES and AX is spent on that verb's two
                                 ; counts - so a second answer needs the block
+HSV_VOLOF    equ 13             ; in: HRQ_DEV/HRQ_SLOT -> HRQ_RES = the kernel
+                                ; volume index mounted on that partition, 0FFh
+                                ; = none. What lets the installer's State
+                                ; column print a drive LETTER (SPEC.md
+                                ; 52.10.4.2) without a sight of hd_vols
 HSV_CTRS     equ 7              ; SPEC.md 52.10.9's DEVICE counters into
                                 ; HRQ_C0..C2. Implemented only in an INSTBENCH
                                 ; build - the number is allocated here

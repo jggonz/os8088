@@ -81617,6 +81617,69 @@ floppy-booted machine is unchanged, and that is the A/B that matters: the
 same disk on the same machine, one boot source apart, still reads `Ready`,
 still formats and still installs.
 
+#### 52.10.4.2 The State column says what a slot IS, not only whether it will do
+
+The column answered one question — *would an install work?* — with `Ready`,
+`Too Small`, `Unusable`, `No Room` and `Booted From`. That is the verdict and
+it is still kept (`hd_istate`, what `hd_iact_ok` greys Install on), but it is
+not what a person choosing a partition to overwrite needs to read first. They
+need to know **which slot is their C:**, which is a FAT volume nobody has
+mounted, and which is somebody else's Linux — and `Ready` over all of the
+first two and `Unusable` over the third said none of it.
+
+So the column is now `[letter ': '] body [', ' reason]`:
+
+| what is in the slot | it reads | verdict |
+|---|---|---|
+| a volume on the desktop | `C: FAT16` (the letter it is mounted as) | fine |
+| the volume the machine booted from | `C: FAT16, Booted From` | refused (52.10.4.1) |
+| a FAT volume nobody mounted | `FAT16` / `FAT12` (the TYPE byte's name, as the Format window reads it) | fine |
+| a FAT-typed extent with no volume in it | `Not Formatted` | **fine** — the install formats it |
+| a FAT extent past the 65,535-sector ceiling | `FAT16, Too Big` | refused |
+| a FAT extent laid out at another geometry | `FAT16, Wrong Geometry` (§52.2.6) | refused |
+| anything FAT under `HIW_MINSEC` | `…, Too Small` | refused |
+| a free slot with room behind it | `Unpartitioned` | fine — the install makes the entry |
+| a free slot with none | `Empty, No Room` | refused |
+| a foreign type | its name — `Extended`, `NTFS/HPFS`, `FAT32`, `Linux`, `Linux Swap`, `Linux LVM`, `BSD`, `XENIX`, `Unix`, `OS/2 Boot`, `CP/M-86`, `NetWare`, `GPT Disk`, `EFI System`, `Hidden FAT` — or `Type nnh` | refused |
+| a table that would not read | `Unreadable` | refused, where it used to read free and offer Install |
+
+**The letter comes from two owners and is asked of both.** The kernel's
+adoption of the boot partition is `OSAPI_VOL_AT` (`hd_kvol`, §52.10.3.1); a
+mount this driver made is in `hd_vols`, which is the resident's and crosses
+nothing — so the tool asks it with a new seam verb, **`HSV_VOLOF`** (13),
+which is `hd_vol_of` behind four instructions. `HD_ABI_VER` is 4 for it: a
+tool that asks a resident too old to know the verb is refused and reads no
+letter, which is the right degradation, but a version check is cheaper than
+reasoning about which pairings are safe.
+
+**Two behaviour changes ride with it, and both are the column being honest.**
+A FAT-typed slot with no volume in it read `Unusable` — `hd_iw_scan` called
+`hd_fmt_isfat` where `hd_part_isfat` was meant, so the verdict asked whether
+there was a volume *to lose* rather than whether the slot was one we could
+make one in — and it is a target now, as it is for the Format window. And
+`hd_tw_geomok`, which the installer never asked, is asked: a slot laid out at
+another geometry was `Ready`, and the format would have landed on sectors
+nobody meant. It takes the device row in `DI` now rather than reading
+`[hd_tdev]`, which was right for one of its two callers.
+
+The window is **356px** wide rather than 300, `HIW_CELLS` 42 rather than 35,
+because the longest row is `C: FAT16, Wrong Geometry` — 24 cells from
+`HIW_STATEC` — and an assembly-time check says so. The Size column is 32 bits
+wide now and prints `G` past 9,999MB: a PARTITION is not bounded by a word of
+sectors, only a volume is.
+
+**What it cost, measured on the span and not the file** (both images are
+quantised - `hdd.bin` reads 5,120 either way): **no kernel byte**; the
+resident `HDD.DRV` **+25** (`hd_vols` moves `0FD5h` → `0FEEh`), which is the
+verb and its dispatch; and `HDDTOOL.DRV` **+528** (`hd_tentry` `35FFh` →
+`380Fh`), most of it the foreign-type names and the scan's second question.
+That moves **`HDTOOL_KB` 16 → 17**, `HDD.DRV`'s transient claim for the tool
+image while the Drives page is open (§52.10.14's reason for naming it).
+
+`tests/inststate.py` is the gate: three VHDs whose slots 2-4 are rewritten
+before boot, every row read out of the framebuffer against the kernel's glyph
+table. The driver before this reads `MISSING` on all four rows of the first.
+
 ### 52.10.5 A disk already in the machine is not asked for
 
 The swap prompt is right on the machine this project is calibrated against

@@ -561,6 +561,13 @@ hd_fmt_isfat:
     push ds
     pop es
     mov bx, hd_sec0
+    mov word [bx+510], 0        ; the signature, CLEARED first: a transfer
+                                ; that answers success and delivers nothing
+                                ; otherwise leaves the LAST slot's boot
+                                ; sector here to be read as this one's -
+                                ; which the installer's scan, reading all
+                                ; four in a row, would print as a FAT type
+                                ; (SPEC.md 52.10.4.2)
     mov ax, [si+HP_LBA]
     mov dx, [si+HP_LBA+2]
     mov cx, 1

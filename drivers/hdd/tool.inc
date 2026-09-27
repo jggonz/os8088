@@ -173,7 +173,7 @@ hd_tw_open:
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
 ; hd_tw_geomok - does this entry's own CHS agree with its LBA? (internal)
-; in:       SI = the partition entry
+; in:       SI = the partition entry, DI = the device row it is on
 ; out:      CF = 0 they agree, or the entry declines to say; CF = 1 they differ
 ; clobbers: flags
 ;
@@ -200,13 +200,15 @@ hd_tw_open:
 hd_tw_geomok:
     push ax
     push dx
-    push di
     mov al, [si+HP_SSEC]
     and al, 0x3F                ; the sector, 1-based: 0 = no CHS claimed
     jz .ok
-    mov al, [hd_tdev]           ; hd_tdev and never [hd_sel] - the panel
-    call hd_dev_row             ; underneath stays clickable (52.10.4.1)
-    mov ax, [si+HP_LBA]
+    mov ax, [si+HP_LBA]         ; at the geometry of the row in DI, which is
+                                ; the CALLER's device - hd_tdev for the tool,
+                                ; hd_idev for the installer (SPEC.md
+                                ; 52.10.4.2). It read [hd_tdev] itself, which
+                                ; is right for one of the two and wrong for
+                                ; the other
     mov dx, [si+HP_LBA+2]
     call hd_lba_chs             ; [hd_cyl]/[hd_head]/[hd_sec] at OUR geometry
     call hd_chs_pack            ; AL = sector|cyl-high, AH = cyl-low
@@ -218,13 +220,11 @@ hd_tw_geomok:
     cmp al, [si+HP_SHEAD]
     jne .bad
 .ok:
-    pop di
     pop dx
     pop ax
     clc
     ret
 .bad:
-    pop di
     pop dx
     pop ax
     stc
