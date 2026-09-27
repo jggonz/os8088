@@ -14,7 +14,8 @@ which HDD.DRV mounts at boot as C:):
 
   a: Linux (83h), a FAT12 entry over sectors with no boot record in them and
      under HIW_MINSEC, and a type nobody names (2Bh);
-  b: a FAT16 entry past the 65,535-sector ceiling, an Extended entry, and a
+  b: a FAT16 entry past FAT16's own ceiling (5,000,000 sectors - it was the
+     65,535-sector one until SPEC.md 18.7.5), an Extended entry, and a
      FAT16 entry whose own CHS is not its LBA at this geometry (52.2.6);
   c: no MBR signature at all - an unpartitioned disk.
 
@@ -45,7 +46,7 @@ DISKS = {
     "a": ([(0x83, 70000, 20000, 0), (0x01, 40000, 1000, 0),
            (0x2B, 90000, 5000, 0)],
           ["C: FAT16", "Linux", "Not Formatted, Too Small", "Type 2Bh"]),
-    "b": ([(0x06, 70000, 200000, 0), (0x05, 300000, 5000, 0),
+    "b": ([(0x06, 70000, 5000000, 0), (0x05, 300000, 5000, 0),
            (0x04, 400000, 30000, 1)],
           ["C: FAT16", "FAT16, Too Big", "Extended",
            "FAT16, Wrong Geometry"]),

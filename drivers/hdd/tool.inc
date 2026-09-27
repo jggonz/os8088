@@ -90,8 +90,8 @@ HTA_DELETE   equ 1
 HTS_FREE     equ 0              ; nothing in this slot
 HTS_RAW      equ 1              ; a FAT-typed extent with no volume in it
 HTS_VOL      equ 2              ; a volume
-HTS_ALIEN    equ 3              ; foreign type, or over the 65,535-sector
-                                ; ceiling (SPEC.md 18.7) - either way this
+HTS_ALIEN    equ 3              ; foreign type, or over FAT16's 2GB
+                                ; ceiling (SPEC.md 18.7.5) - either way this
                                 ; kernel will never mount it
 HTS_GEOM     equ 5              ; a FAT-typed extent whose OWN CHS does not
                                 ; correspond to its LBA at this device's
@@ -242,8 +242,8 @@ hd_tw_scan:
     call hd_part_used
     jc .store
     mov al, HTS_ALIEN
-    cmp word [si+HP_SECS+2], 0
-    jne .store                  ; over 65,535 sectors (SPEC.md 18.7)
+    call hd_part_big
+    jc .store                   ; longer than any FAT16 (SPEC.md 18.7.5)
     call hd_part_isfat
     jc .store                   ; a type this driver does not mount
     call hd_tw_geomok           ; ...and BEFORE the read, because the read is
@@ -938,19 +938,7 @@ hd_tw_format:
 
     mov al, [hd_tsel]           ; the entry: the extent, the type the plan
     call hd_part_ent            ; chose, and the CHS halves DOS reads
-    mov ax, [hd_fbase]
-    mov [si+HP_LBA], ax
-    mov ax, [hd_fbase+2]
-    mov [si+HP_LBA+2], ax
-    mov ax, [hd_fsecs]
-    mov [si+HP_SECS], ax
-    mov word [si+HP_SECS+2], 0
-    mov byte [si+HP_TYPE], HPT_FAT16S
-    cmp byte [hd_ftype], 0
-    jne .type
-    mov byte [si+HP_TYPE], HPT_FAT12
-.type:
-    mov byte [si+HP_STATUS], 0
+    call hd_ent_fill            ; (SPEC.md 18.7.5: 32 bits, and the type)
     mov al, [hd_tdev]
     call hd_dev_row
     call hd_part_chs

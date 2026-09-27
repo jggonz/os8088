@@ -30438,8 +30438,10 @@ goes out to its driver's `DSV_BLK` (§51.8) with **the same volume-relative
 16-bit LBA**. `[sch_lock]` is raised around both, so a driver inherits the
 no-switching rule without knowing the scheduler exists.
 
-**LBAs stay 16-bit and volume-relative, and the driver adds its own 32-bit
-partition base.** That is the whole of what "partitions" means to os8088:
+**LBAs stay volume-relative, and the driver adds its own 32-bit partition
+base.** They were 16-bit, which is what the rest of this paragraph is about;
+§18.7.5 carries a high word beside them on `kern_big` and moves the ceiling
+to FAT16's own, just under 2GB. That is the whole of what "partitions" means to os8088:
 `dsk_clus2lba`, `dsk_read_chain`'s run coalescer, `dsk_dirw_next` and
 `dskw_flush` are the floppy's code and are untouched by capacity. It caps a
 volume at 65,535 sectors — 31.99MB — which is exactly what BPB rule 8 already
@@ -30641,6 +30643,78 @@ volumes (`desk_ord`), not by its table index, so a reserved C: leaves no hole
 in the grid — the RAM disk is the third icon and is called D:. Everything else
 that derives from the index — the drive letter, `FS_DRV`, `osapi_file_here` —
 wants exactly this answer.
+
+#### 18.7.5 A volume past 32MB: the LBA's high word
+
+**The ceiling above was the width of a register, and FAT16's own is 64 times
+higher.** A volume-relative LBA was a word, so a volume was 65,535 sectors;
+FAT16 itself stops at 65,524 clusters of at most 32KB — just under **2GB** —
+and that is the ceiling on `kern_big` and `kern_dos` now. Every cluster and
+FAT sector number already fit a word (§18.8's window was built for 65,524
+clusters), so what widened is only the **data area's** sector numbers, and it
+widened by carrying their high word **beside** them rather than by making the
+file system 32-bit.
+
+**`[dsk_lbahi]` is the whole transport change.** It is the high word of the
+NEXT transfer's LBA, one-shot: a data caller arms it immediately before its
+`dsk_xfer`, and `dsk_xfer` zeroes it on every path out. So every metadata
+transfer — the boot sector, a FAT window fault, a root-directory sector — reads
+it as 0 **without saying anything**, which is what keeps the change off the
+dozens of call sites that never leave the first 32MB. Inside the transfer it
+rides the run loop's advance (`adc`), goes into the CHS divide on a BIOS volume
+(DX was a constant 0 there), and into **DI** on a driver volume, whose
+`DSV_BLK` has always taken the low word in SI (§51.8). The read-ahead cache
+(§18.95) keys its chunks on 16-bit LBAs and simply stands aside when the high
+word is non-zero; it clamps its fills at 65,535 on a big volume.
+
+**`[dsk_c2hi]` is where the high word comes FROM.** `dsk_clus2lba_x` computes
+`FirstDataSec + (cluster − 2) × spc` in 32 bits and leaves the high half there
+— an *answer*, not the transfer's register — because between asking and moving
+a caller may fault a FAT window in, and that transfer must see 0.
+`dsk_c2arm_x` copies it across at the moment of the transfer. The directory
+walker sets it too (0 for the root). What holds an LBA for longer holds all 32
+bits of it: the found and free directory slots (`dskw_dsec`, `dskw_fsec` —
+whose "none" sentinel moved to the HIGH word, FFFFh being an ordinary low word
+past 32MB — and `dskw_cursec`), and the data walk's cursor and pending run
+(`dskw_clba`, `dskw_rlba`); `dsk_rd1p_x`/`dsk_wr1p_x` take a pointer to such a
+dword and cost a call site nothing over the word they replace.
+**`dsk_read_chain` coalesces runs by CLUSTER now**, not by LBA: every cluster
+but the last is taken whole, so a run is contiguous exactly when each cluster is
+the one after the last, and a cluster is a word on any volume. It asks for the
+LBA once, at the flush. That shape is the same size as the one it replaced.
+
+**The mount folds TotSec32 into the count it already had.** The staged BPB
+(§18.9.2) ends with a pad byte that held HiddSec's low byte, which nothing reads;
+when TotSec16 is 0 the staging puts TotSec32's low word in TotSec16's place and
+its bits 16–23 in that pad (`DSK_B_TOTHI`). One byte names 8GB, so the bank
+grows by nothing, and every rule below reads one place: rule 8 is "the 24-bit
+count is not 0", a floppy with a 24-bit count is refused, a driver that
+DECLARED a length cannot carry one, and CountOfClusters is a 24-over-8 divide
+with the quotient-overflow refused before it can fault with `[sch_lock]` held.
+A driver serving a volume past 32MB registers it with `OSAPI_VOL_ADD`'s CX = 0,
+*unknown*, because the length does not fit the register — rule 13 already
+accepted that.
+
+**What it costs**, measured against the tree before it: **`kern_big` 259
+bytes** (`.text` +2, `.bss` +10, `.cold` +247), which crosses one cold rung;
+**`kern_dos` +237**; and **`kern_small` −3** — it takes none of it. SPEC.md
+39.27.4 puts `kern_small` on a diet where nothing may be spent, and its disks
+ship no `HDD.DRV` to reach a big volume with, so every site is `%ifdef
+OS88_BIGVOL` (defined wherever `KERN_SMALL` is not) or one of two macros that
+read a dword on the build that has one and a word on the build that does not.
+The three bytes it lost are `.drv`'s DI no longer being banked across a lookup
+that clobbers it (the LBA is dead on that path) and a `.bss` word the mkdir
+path stopped needing. `HDD.DRV` +26 (`hd_part_big`, DI into the LBA, the
+unknown length); `HDDTOOL.DRV` +64 (§52.3.1).
+
+**`tests/bigvol.py` is the gate and it makes the high word unavoidable**: a
+321MB FAT16 (654/16/63, one of the geometries MartyPC's XT-IDE accepts) formatted
+on the host by mtools with a 40MB file at the front, so everything an install
+writes lands past sector 65,536. The installer keeps the volume, the kernel
+lands at cluster 5,123 — 81,936 sectors in, so `BOOTHD_KOFS` needs its high
+word as well (§52.10.15) — and the host finds the user's files and the kernel's
+one run intact; then the partition boots, and `CALC.O88` launches out of
+`C:/APPS`. With `dsk_c2arm_x` arming 0 instead, the install never commits.
 
 ### 18.8 The FAT is a window, not a snapshot
 
@@ -81020,7 +81094,8 @@ legal range — true about SPACE and expensive about everything else. It gave a
 available: 65,000 clusters, a **254-sector FAT** that the nine-sector window
 (§18.8) covers 3% of, and one FAT entry to walk per 512 bytes of every file.
 `hd_fmt_spc0` is Microsoft's `DskTableFAT16`, trimmed to the two rows a
-65,535-sector ceiling (§18.7) can reach — 1KB clusters to 16MB, 2KB above —
+65,535-sector ceiling (§18.7) could reach — 1KB clusters to 16MB, 2KB above
+(§52.3.1 is what reaches the rest) —
 and the walk still counts upward from there, so a size the table gets wrong
 is corrected exactly as before. A 31MB partition's FAT went from 254 sectors
 to 64. The cost is at most one cluster of slack per file.
@@ -81041,6 +81116,46 @@ makes a 32MB format about 550 sector writes instead of 65,000.
 `BS_jmpBoot` matters: os8088's own BPB rule 2 (§18.2) rejects a volume whose
 first byte is not EB or E9, so a formatter that left it blank would write a
 volume its own kernel refuses to mount.
+
+#### 52.3.1 …to 2GB, and the partition says which FAT16 it is
+
+§18.7.5 moved the ceiling to FAT16's own, and the formatter and the partition
+writer follow it; neither is resident, so none of this is kernel bytes.
+
+- **An extent is 32 bits.** `[hd_fsecs]` was a word, and `hd_slot_extent`
+  capped a free hole or a reused slot at 65,535 sectors — "take the first 32MB
+  and free the rest". The cap is `HP_MAXHI:HP_MAXLO` now, **4,194,000 sectors
+  (2,047.9MB)**: the largest FAT16 there is, 65,524 clusters of 32KB plus its
+  metadata, less a margin for the root and the cylinder trim (§52.2.5), which
+  is 32-bit as well. `hd_part_big` is the one test of it, where five sites
+  asked `HP_SECS+2 != 0` separately.
+- **The cluster size walks on up from 2KB by doubling**, and that lands on
+  `DskTableFAT16`'s own row for every size to 2GB — 2KB to 128MB, 4KB to 256,
+  8KB to 512, 16KB to 1GB, 32KB to 2GB — so `hd_fmt_spc0` needed no new rows,
+  only the observation that past a word the answer is at least 2KB. The
+  layout's `TmpVal1` and the cluster count are 32-bit, and a count past a word
+  sends the walk to a bigger cluster rather than dividing into a fault.
+- **The BPB carries TotSec16 while it fits a word and TotSec32 when it does
+  not** (`hd_fmt_tot`, shared by the formatter and the installer's VBR).
+- **The partition type follows the size** (`hd_ent_fill`, which replaces the
+  same eight stores the Format window and the installer each carried): `01h`
+  FAT12, `04h` FAT16 under 32MB — what DOS 3.3 wrote — and **`06h`** past it,
+  what DOS 4 and every later FDISK write. Both windows wrote `04h` and
+  `HP_SECS+2 = 0` unconditionally, which was true only while a partition could
+  not be bigger than a word.
+
+A 32KB cluster is the price of the top of the range, and §18.4.4's chunk rule
+is where a package meets it: a chunk is a whole number of clusters, so a
+package appending in 4KB chunks to a 2GB volume loses the tail of each one —
+the same rule, at a size nothing had reached. The installer's own chunk is
+32KB, a multiple of every cluster size there is.
+
+**Verified by `tests/bigvol.py`**, whose fixture the host formats (the kernel
+must read a TotSec32 volume it did not write) and whose install then writes one
+of its own shape — and by an install to an empty 321MB disk in development:
+one type-06 slot at LBA 63, 659,169 sectors, TotSec32, 8KB clusters, a
+161-sector FAT, `KERNEL.SYS` one run at cluster 2 and `README.TXT` byte for
+byte.
 
 ### 52.4 The page, and mounting
 
@@ -81642,7 +81757,7 @@ So the column is now `[letter ': '] body [', ' reason]`:
 | the volume the machine booted from | `C: FAT16, Booted From` | refused (52.10.4.1) |
 | a FAT volume nobody mounted | `FAT16` / `FAT12` (the TYPE byte's name, as the Format window reads it) | fine |
 | a FAT-typed extent with no volume in it | `Not Formatted` | **fine** — the install formats it |
-| a FAT extent past the 65,535-sector ceiling | `FAT16, Too Big` | refused |
+| a FAT extent past FAT16's own ceiling, just under 2GB (§18.7.5) | `FAT16, Too Big` | refused |
 | a FAT extent laid out at another geometry | `FAT16, Wrong Geometry` (§52.2.6) | refused |
 | anything FAT under `HIW_MINSEC` | `…, Too Small` | refused |
 | a free slot with room behind it | `Unpartitioned` | fine — the install makes the entry |

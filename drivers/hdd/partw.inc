@@ -110,7 +110,7 @@ hd_cyl_up:
 ;
 ;   used, at or under the ceiling   its OWN extent, reused in place. The user
 ;                                   has already confirmed erasing it.
-;   used, over the ceiling          the first HP_MAXSEC of its own extent; the
+;   used, over the ceiling          the first HP_MAXHI:HP_MAXLO of its own extent; the
 ;                                   rest goes back to being free space. This is
 ;                                   how a 50MB or 80MB partition is reclaimed
 ;                                   without touching a neighbour.
@@ -150,20 +150,19 @@ hd_slot_extent:
     mov ax, [si+HP_LBA+2]
     mov [hd_fbase+2], ax
     mov ax, [si+HP_SECS]
-    cmp word [si+HP_SECS+2], 0
-    je .own                     ; over the ceiling (SPEC.md 18.7): take the
-    mov ax, HP_MAXSEC           ; first 32MB and free the rest
+    mov dx, [si+HP_SECS+2]
+    call hd_part_big
+    jnc .own                    ; over the ceiling (SPEC.md 18.7.5): take the
+    mov ax, HP_MAXLO            ; first 2GB and free the rest
+    mov dx, HP_MAXHI
 .own:
     mov [hd_fsecs], ax
+    mov [hd_fsecs+2], dx
     call hd_dev_secs            ; ...and never past the end of the drive: a
     sub ax, [hd_fbase]          ; table another machine wrote is input, and
     sbb dx, [hd_fbase+2]        ; input is hostile
     jc .no
-    or dx, dx
-    jnz .have                   ; more room than a word can hold: no clip
-    cmp ax, [hd_fsecs]
-    jae .have
-    mov [hd_fsecs], ax
+    call hd_fsecs_min
     jmp .have                   ; NEAR: the hole walk below is well past 127
                                 ; bytes, and `jmp short` is how NASM says so
 
@@ -219,17 +218,12 @@ hd_slot_extent:
     dec ch
     jnz .hole
 .best:
-    mov ax, [hd_xblen]
-    mov dx, [hd_xblen+2]
-    or dx, dx
-    jnz .cap
-    cmp ax, HP_MAXSEC
-    jbe .len
-.cap:
-    mov ax, HP_MAXSEC
-.len:
-    mov [hd_fsecs], ax          ; zero when no hole was found at all, which
-    mov ax, [hd_xbest]          ; .have refuses below one track
+    mov word [hd_fsecs], HP_MAXLO   ; the ceiling (SPEC.md 18.7.5)...
+    mov word [hd_fsecs+2], HP_MAXHI
+    mov ax, [hd_xblen]          ; ...or the hole, whichever is smaller: zero
+    mov dx, [hd_xblen+2]        ; when no hole was found at all, which .have
+    call hd_fsecs_min           ; refuses below one track
+    mov ax, [hd_xbest]
     mov [hd_fbase], ax
     mov ax, [hd_xbest+2]
     mov [hd_fbase+2], ax
@@ -237,9 +231,12 @@ hd_slot_extent:
     call hd_cyl_trim            ; EVERY extent this tool commits ends on a
                                 ; cylinder boundary (SPEC.md 52.2.5), and this
                                 ; is the one place all three cases pass through
+    cmp word [hd_fsecs+2], 0
+    jne .big
     mov ax, [hd_fsecs]
     cmp ax, [di+HDD_SPT]
     jb .no                      ; less than a track: not worth a drive letter
+.big:
     pop si
     pop dx
     pop cx
@@ -252,6 +249,55 @@ hd_slot_extent:
     pop cx
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_fsecs_min - [hd_fsecs] becomes the smaller of itself and DX:AX
+; in:  DX:AX; out: nothing (all registers preserved, flags clobbered)
+; -----------------------------------------------------------------------------
+hd_fsecs_min:
+    cmp dx, [hd_fsecs+2]
+    ja .out
+    jb .take
+    cmp ax, [hd_fsecs]
+    jae .out
+.take:
+    mov [hd_fsecs], ax
+    mov [hd_fsecs+2], dx
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ent_fill - the extent and the plan into a partition entry (SPEC.md 52.3)
+; in:  SI = the entry, [hd_fbase]/[hd_fsecs]/[hd_ftype] from the plan
+; out: nothing (all registers preserved)
+;
+; The Format window and the installer wrote the same eight stores each, and
+; both wrote HP_SECS+2 as 0 and the type as FAT16S - true only while a
+; partition was a word of sectors. FAT16 past 65,535 sectors is type 06h, the
+; one DOS 4 and every later FDISK write (SPEC.md 18.7.5).
+; -----------------------------------------------------------------------------
+hd_ent_fill:
+    push ax
+    mov ax, [hd_fbase]
+    mov [si+HP_LBA], ax
+    mov ax, [hd_fbase+2]
+    mov [si+HP_LBA+2], ax
+    mov ax, [hd_fsecs]
+    mov [si+HP_SECS], ax
+    mov ax, [hd_fsecs+2]
+    mov [si+HP_SECS+2], ax
+    mov al, HPT_FAT12
+    cmp byte [hd_ftype], 0
+    je .type
+    mov al, HPT_FAT16S
+    cmp word [hd_fsecs+2], 0
+    je .type
+    mov al, HPT_FAT16B
+.type:
+    mov [si+HP_TYPE], al
+    mov byte [si+HP_STATUS], 0  ; NOT active: the MBR is the commit, and the
+    pop ax                      ; installer writes it last (SPEC.md 52.10.4)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -272,7 +318,7 @@ hd_slot_extent:
 ; head 1 sector 1 cylinder 0 - so the START is deliberately not aligned and
 ; only the END is.
 ;
-; What went wrong without it: an extent is clipped to HP_MAXSEC (SPEC.md 18.7)
+; What went wrong without it: an extent is clipped to the ceiling (SPEC.md 18.7.5)
 ; or to the end of the drive, and neither clip lands on a boundary. A 40MB disk
 ; got slot 1 = LBA 63 for 65,535 sectors, ending at cylinder 65 head 1 sector
 ; 15 - so on the NEXT boot the BIOS read that as a 2-head, 15-sector drive.
@@ -306,18 +352,20 @@ hd_cyl_trim:
     mov ax, [hd_fbase]          ; DX:AX = the extent's end, exclusive
     mov dx, [hd_fbase+2]
     add ax, [hd_fsecs]
-    adc dx, 0
+    adc dx, [hd_fsecs+2]        ; (32 bits: SPEC.md 18.7.5)
     cmp dx, cx
     jae .out                    ; the quotient would not fit a word - hd_cyl_up's
                                 ; own guard, and only a corrupt table gets here
     div cx                      ; DX = end mod sectors-per-cylinder
     or dx, dx
     jz .out                     ; already on a boundary: the common case
+    cmp word [hd_fsecs+2], 0
+    jne .trim                   ; more than a word: surely past one cylinder
     cmp dx, [hd_fsecs]
     jae .none                   ; the whole extent is inside one cylinder
-    mov bx, [hd_fsecs]
-    sub bx, dx
-    mov [hd_fsecs], bx
+.trim:
+    sub [hd_fsecs], dx
+    sbb word [hd_fsecs+2], 0
     jmp short .out
 .none:
     mov word [hd_fsecs], 0
@@ -672,4 +720,5 @@ hd_xend:     dd 0               ; one entry's end,
 hd_xbest:    dd 0               ; and the largest hole the walk has seen
 hd_xblen:    dd 0               ; (52.2.1)
 hd_fbase:    dd 0               ; the extent a format will write: its first LBA
-hd_fsecs:    dw 0               ; ...and its length
+hd_fsecs:    dd 0               ; ...and its length, in 32 bits since SPEC.md
+                                ; 18.7.5

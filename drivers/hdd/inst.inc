@@ -336,6 +336,8 @@ hd_iw_slot:
     mov dx, hd_s_iunpart
     mov ax, [hd_fsecs]
     mov [hd_iscur], ax
+    mov ax, [hd_fsecs+2]
+    mov [hd_iscur+2], ax
     jmp short .sized
 .used:
     mov ax, [si+HP_SECS]
@@ -358,8 +360,8 @@ hd_iw_slot:
     pushf                       ; ...which is decided below, after the facts
     mov al, HIS_ALIEN
     mov bx, hd_s_ibig
-    cmp word [si+HP_SECS+2], 0
-    jne .popput                 ; past 65,535 sectors: the volume ceiling
+    call hd_part_big
+    jc .popput                  ; past FAT16's ceiling (SPEC.md 18.7.5)
     mov bx, hd_s_tgeom
     call hd_tw_geomok           ; before the read, which a geometry fault
     jc .popput                  ; points at the wrong sector (SPEC.md 52.2.6)
@@ -1791,7 +1793,7 @@ hd_iw_size:
 .mb:
     mov cx, 11                  ; sectors / 2048 = MB, a 32-bit shift: a
 .shift:                         ; partition is not bounded by a word of
-    shr dx, 1                   ; sectors, only a VOLUME is (SPEC.md 18.7)
+    shr dx, 1                   ; sectors (SPEC.md 18.7.5)
     rcr ax, 1
     loop .shift
     mov si, hd_s_mb
@@ -3467,19 +3469,7 @@ hd_inst_fmt:
     jc .fail
     mov al, [hd_isel]
     call hd_part_ent
-    mov ax, [hd_fbase]
-    mov [si+HP_LBA], ax
-    mov ax, [hd_fbase+2]
-    mov [si+HP_LBA+2], ax
-    mov ax, [hd_fsecs]
-    mov [si+HP_SECS], ax
-    mov word [si+HP_SECS+2], 0
-    mov byte [si+HP_TYPE], HPT_FAT16S
-    cmp byte [hd_ftype], 0
-    jne .type
-    mov byte [si+HP_TYPE], HPT_FAT12
-.type:
-    mov byte [si+HP_STATUS], 0  ; NOT active yet: the MBR is the commit and it
+    call hd_ent_fill            ; NOT active yet: the MBR is the commit and it
                                 ; is written at the very end (SPEC.md 52.10.4)
     mov al, [hd_idev]
     call hd_dev_row
@@ -4205,8 +4195,7 @@ hd_inst_vbr:
     mov word [hd_sec0+HF_B_RSVD], HF_RSVD
     mov byte [hd_sec0+HF_B_NFATS], HF_NFATS
     mov word [hd_sec0+HF_B_ROOTN], HF_ROOTENT
-    mov ax, [hd_fsecs]
-    mov [hd_sec0+HF_B_TOT16], ax
+    call hd_fmt_tot             ; TotSec16, or TotSec32 past a word
     mov byte [hd_sec0+HF_B_MEDIA], HF_MEDIA
     mov ax, [hd_ffatsz]
     mov [hd_sec0+HF_B_FATSZ], ax
@@ -4403,7 +4392,7 @@ hd_s_iempty:  db 'Empty', 0         ; ...and one it has none behind
 hd_s_iunread: db 'Unreadable', 0    ; the table itself would not read
 hd_s_ismall:  db 'Too Small', 0
 hd_s_inone:   db 'No Room', 0
-hd_s_ibig:    db 'Too Big', 0       ; FAT, past the volume ceiling (18.7)
+hd_s_ibig:    db 'Too Big', 0       ; FAT, past FAT16's ceiling (18.7.5)
 hd_s_icolon:  db ': ', 0
 hd_s_icomma:  db ', ', 0
 hd_s_itype:   db 'Type ', 0

@@ -71,7 +71,7 @@ HDV_DEV      equ 1              ; db: which device row
 HDV_VOL      equ 2              ; db: the kernel's volume index
 HDV_PART     equ 3              ; db: which partition slot (0..3)
 HDV_BASE     equ 4              ; dd: its first LBA on the device
-HDV_SECS     equ 8              ; dw: its length, <= 65,535 by construction
+HDV_SECS     equ 8              ; dw: its length, 0 = past 32MB (SPEC.md 18.7.5)
                                 ; HDV_LSEG WAS HERE - the 6KB listing claim
                                 ; this driver funded for the volume, retired
                                 ; with the donation itself (SPEC.md 22.6)
@@ -99,13 +99,21 @@ HD_MBRCODE   equ 446            ; the space in front of the table
 HPT_NONE     equ 0x00
 HPT_FAT12    equ 0x01
 HPT_FAT16S   equ 0x04           ; FAT16 under 32MB - what DOS 3.3 wrote, and
-                                ; every partition this driver makes is one
-HPT_FAT16B   equ 0x06           ; FAT16 at or over 32MB, and
-HPT_FAT16L   equ 0x0E           ; ...the LBA-addressed flavour of it. Both are
+                                ; what this driver writes up to 32MB
+HPT_FAT16B   equ 0x06           ; FAT16 at or over 32MB - what it writes past
+                                ; that since SPEC.md 52.3.1 - and
+HPT_FAT16L   equ 0x0E           ; ...the LBA-addressed flavour of it, which is
                                 ; MOUNTABLE even though this driver never
                                 ; writes one: another machine's FDISK did, and
                                 ; the volume inside is the same FAT16
-HP_MAXSEC    equ 65535          ; the kernel's volume ceiling (SPEC.md 18.7)
+HP_MAXHI     equ 0x003F         ; the volume ceiling since SPEC.md 18.7.5 (it
+                                ; was 65,535 sectors while an LBA was a word),
+                                ; the
+HP_MAXLO     equ 0xFE50         ; largest FAT16 there is: 65,524 clusters of
+                                ; 32KB plus the metadata is 4,194,081 sectors,
+                                ; and 4,194,000 (3FFE50h, 2,047.9MB) is that
+                                ; with room for the root and a cylinder trim.
+                                ; hd_part_big asks it of an entry
 
 ; =============================================================================
 ; HDT_* - what the RESIDENT asks the TOOL to do
@@ -233,7 +241,7 @@ HDM_NODEV     equ 5             ; 'No hard disk found'
 HDM_MNOTAB    equ 6             ; 'No partition table yet'
 HDM_MNOFAT    equ 7             ; 'No FAT partition on it'
 HDM_MHAVE     equ 8             ; 'Already mounted'
-HDM_MBIG      equ 9             ; 'Partition is over 32MB'
+HDM_MBIG      equ 9             ; 'Partition is over 2GB'
 HDM_MFULL     equ 10            ; 'No free volume'
 HDM_UNMOUNTED equ 11            ; 'Unmounted'
 HDM_MOUNTED   equ 12            ; ...and 'Mounted N volume(s)', BUILT

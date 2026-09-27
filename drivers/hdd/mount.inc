@@ -48,9 +48,9 @@ hd_mount:
     jc .next                    ; free, or a type that is not a FAT volume:
                                 ; SKIPPED, which is the whole of "and if it
                                 ; is not FAT, do not" (SPEC.md 52.4)
-    cmp word [si+HP_SECS+2], 0
-    jne .big                    ; over 65,535 sectors: not a volume this
-                                ; kernel can carry (SPEC.md 18.7)
+    call hd_part_big
+    jc .big                     ; longer than any FAT16 volume: not one this
+                                ; kernel can carry (SPEC.md 18.7.5)
     call hd_already
     jnc .have                   ; this one is already mounted - by us...
     mov al, [hd_sel]            ; ...or by the KERNEL, which adopted the
@@ -124,7 +124,11 @@ hd_mount_one:
     mov ax, [si+HP_LBA+2]
     mov [bx+HDV_BASE+2], ax
     mov ax, [si+HP_SECS]
-    mov [bx+HDV_SECS], ax
+    cmp word [si+HP_SECS+2], 0
+    je .secs
+    xor ax, ax                  ; past 32MB the length does not fit
+.secs:                          ; OSAPI_VOL_ADD's CX: say 'unknown', which
+    mov [bx+HDV_SECS], ax       ; the kernel's rule 13 accepts (SPEC.md 18.7.5)
 
     mov al, [bx+HDV_VOLH]       ; our own handle IS the row index
     mov cx, [bx+HDV_SECS]

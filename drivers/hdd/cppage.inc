@@ -1337,7 +1337,7 @@ hd_s_mhave:   db 'Already mounted', 0
 hd_s_unmounted: db 'Unmounted', 0
 hd_s_mnotab:  db 'No partition table yet', 0
 hd_s_mfull:   db 'No free volume', 0
-hd_s_mbig:    db 'Partition is over 32MB', 0
+hd_s_mbig:    db 'Partition is over 2GB', 0
 hd_s_nosys:   db 'Need the system disk', 0
 hd_s_notool:  db 'Tool would not open', 0
 

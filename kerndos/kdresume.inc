@@ -396,7 +396,7 @@ kd_extents:
     mov ax, si
     call dsk_clus2lba_x         ; AX = its first LBA, volume-relative
     jc .bad
-    xor dx, dx
+    mov dx, [dsk_c2hi]          ; ...and its high word (SPEC.md 18.7.5)
     add ax, [kdr_base]
     adc dx, [kdr_base + 2]      ; DX:AX = absolute
     mov bl, [dsk_spc]

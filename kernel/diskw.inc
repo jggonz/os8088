@@ -70,6 +70,22 @@ FERR_BIG     equ 10            ; larger than the caller's buffer - or, on a
                                ; count can hold (SPEC.md 18.4.1)
 
 ; --- directory attribute bits + the raw fields disk.inc does not name -------
+%macro DSKW_CLBA_INC 0
+  %ifdef OS88_BIGVOL
+    call dskw_clba_inc
+  %else
+    inc word [dskw_clba]
+  %endif
+%endmacro
+
+; THE 'NO FREE SLOT' SENTINEL: in [dskw_fsec]'s HIGH word where it has one
+; (SPEC.md 18.7.5), because FFFFh is an ordinary low word past 32MB
+%ifdef OS88_BIGVOL
+  %define DSKW_FNONE dskw_fsec+2
+%else
+  %define DSKW_FNONE dskw_fsec
+%endif
+
 DSKW_PROT    equ 0x1F          ; read-only|hidden|system|volume|directory:
                                ; any of them and the entry is untouchable
 DSKW_NPROT   equ 0x0F          ; the RENAME mask (SPEC.md 18.4) - the same
@@ -545,7 +561,7 @@ dskw_mkbody:
     jnc .exists
     cmp ax, FERR_NOENT
     jne .fail                   ; FERR_IO: the scan itself failed
-    cmp word [dskw_fsec], 0xFFFF
+    cmp word [DSKW_FNONE], 0xFFFF
     je .dirfull                 ; scanned to the end with no reusable slot
 
     call dskw_alloc             ; AX = cluster, already marked end-of-chain
@@ -561,13 +577,16 @@ dskw_mkbody:
     mov [dskw_first], ax
     call dsk_clus2lba_x ; AX = its first LBA
     jc .badclus
-    mov [dskw_lba], ax
+    mov [dskw_clba], ax         ; ...in the data walk's own cursor, which
+%ifdef OS88_BIGVOL              ; nothing else is using between here and the
+    push word [dsk_c2hi]        ; commit - all 32 bits of it (SPEC.md 18.7.5)
+    pop word [dskw_clba+2]
+%endif
 
     call dskw_dotents           ; '.' and '..' built in dsk_secbuf
     push ss                     ; ES = LOW_SEG (SPEC.md 2.1), which is what SS names
     pop es
-    mov ax, [dskw_lba]
-    call dsk_wr1_x
+    DSK_WR1D dskw_clba
     jc .wfail
 
     call dskw_zerobuf           ; the cluster's remaining sectors
@@ -575,15 +594,12 @@ dskw_mkbody:
     xor ch, ch
     dec cx
     jcxz .zeroed
-    mov dx, [dskw_lba]
-    inc dx
 .zsec:
+    DSKW_CLBA_INC
     push cx
-    mov ax, dx
-    call dsk_wr1_x
+    DSK_WR1D dskw_clba
     pop cx
     jc .wfail
-    inc dx
     loop .zsec
 .zeroed:
 
@@ -1122,6 +1138,7 @@ dskw_clok:
     ret
 
 %ifndef KD_BUILD                ; ...and the second band of the same pipeline
+
 ; -----------------------------------------------------------------------------
 ; dskw_rt_scan - the first entry of the CURRENT directory that is not '.',
 ;                '..' or free
@@ -1154,6 +1171,10 @@ dskw_rt_scan:
     jmp short .ioerr
 .secok:
     mov [dskw_cursec], ax       ; dskw_find's cell: dskw_hit reads it
+%ifdef OS88_BIGVOL
+    push word [dsk_c2hi]        ; ...and its high word (SPEC.md 18.7.5)
+    pop word [dskw_cursec+2]
+%endif
     mov si, dsk_secbuf
     mov cx, 16                  ; entries per sector
 .entry:
@@ -1407,7 +1428,7 @@ dskw_wbody:
     stc                         ; a read error mid-scan: report it as is
     ret
 .create:
-    cmp word [dskw_fsec], 0xFFFF
+    cmp word [DSKW_FNONE], 0xFFFF
     jne .newslot
     mov ax, FERR_DIRFULL
     stc
@@ -1567,11 +1588,10 @@ dskw_wdata:
     call dskw_stage             ; ES:SI -> LOW_SEG:dsk_secbuf, all 512 of it
     push ss
     pop es
-    mov ax, [dskw_clba]
-    call dsk_wr1_x
+    DSK_WR1D dskw_clba
     pop cx
     jc .jioerr
-    inc word [dskw_clba]
+    DSKW_CLBA_INC
     add word [dskw_wseg], 32    ; 512 bytes = 32 paragraphs on. The source is
     dec cx                      ; now 1..511 bytes PAST the page edge, so the
     jz .tail                    ; next dskw_runadd gets the whole 127 back:
@@ -1606,8 +1626,7 @@ dskw_wdata:
     call dskw_stage             ; ES:SI -> LOW_SEG:dsk_secbuf, rest zeroed
     push ss
     pop es
-    mov ax, [dskw_clba]         ; the sector the whole-sector walk stopped at
-    call dsk_wr1_x
+    DSK_WR1D dskw_clba          ; the sector the whole-sector walk stopped at
     jc .jioerr
 .advance:
     mov ax, [dskw_take]
@@ -1646,10 +1665,22 @@ dskw_runadd:
 .sect:
     cmp word [dskw_rlen], 0
     je .newrun
+%ifdef OS88_BIGVOL
+    push dx                     ; does this sector continue the pending run?
+    mov ax, [dskw_rlba]         ; In 32 bits (SPEC.md 18.7.5), and DX is the
+    mov dx, [dskw_rlba+2]       ; caller's
+    add ax, [dskw_rlen]
+    adc dx, 0
+    sub ax, [dskw_clba]
+    sbb dx, [dskw_clba+2]
+    or ax, dx
+    pop dx
+%else
     mov ax, [dskw_rlba]         ; does this sector continue the pending run?
     add ax, [dskw_rlen]
     cmp ax, [dskw_clba]
-    jne .breakrun
+%endif
+    jnz .breakrun
     mov ax, [dskw_rcap]         ; ...and is there room left in it?
     cmp ax, [dskw_rlen]
     ja .append
@@ -1665,6 +1696,10 @@ dskw_runadd:
     mov [dskw_rcap], ax
     mov ax, [dskw_clba]
     mov [dskw_rlba], ax         ; ([dskw_rlen] is already 0)
+%ifdef OS88_BIGVOL
+    mov ax, [dskw_clba+2]
+    mov [dskw_rlba+2], ax
+%endif
 .append:
     mov ax, [dskw_rcap]
     sub ax, [dskw_rlen]         ; room in the run...
@@ -1674,6 +1709,9 @@ dskw_runadd:
 .grow:
     add [dskw_rlen], ax
     add [dskw_clba], ax
+%ifdef OS88_BIGVOL
+    adc word [dskw_clba+2], 0
+%endif
     sub cx, ax
     jnz .sect
 .done:
@@ -1703,6 +1741,10 @@ dskw_flushrun:
     push es
     mov cx, [dskw_rlen]
     jcxz .out
+%ifdef OS88_BIGVOL
+    push word [dskw_rlba+2]     ; the run's high word, for the transfer that
+    pop word [dsk_lbahi]        ; is next (SPEC.md 18.7.5)
+%endif
     mov ax, [dskw_rlba]
     mov es, [dskw_wseg]
     mov bx, [dskw_src]
@@ -1732,6 +1774,18 @@ dskw_flushrun:
     ret
 
 ; -----------------------------------------------------------------------------
+; dskw_clba_inc - the data walk's cursor, one sector on, in 32 bits
+; out: nothing (every register preserved; flags clobbered)
+; DSKW_CLBA_INC is the call, or the plain `inc` it always was on kern_small
+; -----------------------------------------------------------------------------
+%ifdef OS88_BIGVOL
+dskw_clba_inc:
+    add word [dskw_clba], 1
+    adc word [dskw_clba+2], 0
+    ret
+%endif
+
+; -----------------------------------------------------------------------------
 ; dskw_take1 - size one cluster's TAKE for the data loops
 ; in:  AX = the cluster, [dskw_rem]/[dskw_tail] sized by the caller
 ; out: CF=1 the geometry cannot address it; else CF=0, [dskw_take] =
@@ -1750,6 +1804,10 @@ dskw_take1:
     call dsk_clus2lba_x         ; AX = the cluster's first LBA
     jc .out
     mov [dskw_clba], ax
+%ifdef OS88_BIGVOL
+    push word [dsk_c2hi]        ; ...all 32 bits of it (SPEC.md 18.7.5)
+    pop word [dskw_clba+2]
+%endif
     mov al, [dsk_spc]           ; take = min(spc, sectors remaining)
     xor ah, ah
     cmp ax, [dskw_rem]
@@ -2070,8 +2128,7 @@ dskw_rdata:
     push ss                     ; through the scratch - which is 512-aligned
     pop es                      ; and therefore never straddles. No run can be
     push cx                     ; pending here: dskw_runmax answered 0, and it
-    mov ax, [dskw_clba]         ; is only asked with [dskw_rlen] = 0
-    call dsk_rd1_x
+    DSK_RD1D dskw_clba          ; is only asked with [dskw_rlen] = 0
     pop cx
     jc .jioerr
     mov es, [dskw_wseg]
@@ -2080,7 +2137,7 @@ dskw_rdata:
     mov cx, 512
     call dskw_fetch             ; ...and up to the caller, all 512 of it
     pop cx
-    inc word [dskw_clba]
+    DSKW_CLBA_INC
     add word [dskw_wseg], 32    ; 512 bytes = 32 paragraphs on
     dec cx
     jz .tail
@@ -2099,8 +2156,8 @@ dskw_rdata:
     jc .ioerr
     push ss
     pop es
-    mov ax, [dskw_clba]         ; the sector the whole-sector walk stopped at
-    call dsk_rd1_x                ; the last sector, whole, into the scratch
+    DSK_RD1D dskw_clba          ; the sector the whole-sector walk stopped at,
+                                ; the last sector, whole, into the scratch
     jc .jioerr
     mov es, [dskw_wseg]
     mov di, [dskw_src]
@@ -3418,7 +3475,10 @@ dskw_find:
     push si
     push di
     push es
-    mov word [dskw_fsec], 0xFFFF
+    mov word [DSKW_FNONE], 0xFFFF   ; NONE, in the HIGH word: no directory
+                                ; sector's LBA reaches FFFFxxxxh, and a low
+                                ; word of FFFFh is an ordinary one past
+                                ; 32MB (SPEC.md 18.7.5)
     mov byte [dskw_fend], 0
     push ss
     pop es
@@ -3432,6 +3492,10 @@ dskw_find:
     jmp short .ioerr
 .secok:
     mov [dskw_cursec], ax
+%ifdef OS88_BIGVOL
+    push word [dsk_c2hi]        ; ...and its high word (SPEC.md 18.7.5)
+    pop word [dskw_cursec+2]
+%endif
     mov si, dsk_secbuf
     mov cx, 16                  ; entries per sector
 .entry:
@@ -3461,12 +3525,12 @@ dskw_find:
                                 ; which dsk_secbuf could be reused, so there
                                 ; is no invalidation anybody can forget.
 .free:
-    cmp word [dskw_fsec], 0xFFFF
+    cmp word [DSKW_FNONE], 0xFFFF
     jne .next                   ; an earlier slot already won
     call dskw_mark_free
     jmp short .next
 .endmark:
-    cmp word [dskw_fsec], 0xFFFF
+    cmp word [DSKW_FNONE], 0xFFFF
     jne .noent
     call dskw_mark_free
     mov byte [dskw_fend], 1     ; this slot IS the end-of-directory marker
@@ -3504,6 +3568,10 @@ dskw_find:
 dskw_hit:
     mov ax, [dskw_cursec]
     mov [dskw_dsec], ax
+%ifdef OS88_BIGVOL
+    mov ax, [dskw_cursec+2]
+    mov [dskw_dsec+2], ax
+%endif
     mov ax, si
     sub ax, dsk_secbuf
     mov [dskw_doff], ax
@@ -3521,6 +3589,10 @@ dskw_mark_free:
     push ax
     mov ax, [dskw_cursec]
     mov [dskw_fsec], ax
+%ifdef OS88_BIGVOL
+    mov ax, [dskw_cursec+2]
+    mov [dskw_fsec+2], ax
+%endif
     mov ax, si
     sub ax, dsk_secbuf
     mov [dskw_foff], ax
@@ -3585,6 +3657,10 @@ dskw_copy11:
 dskw_take_slot:
     mov ax, [dskw_fsec]
     mov [dskw_dsec], ax
+%ifdef OS88_BIGVOL
+    mov ax, [dskw_fsec+2]
+    mov [dskw_dsec+2], ax
+%endif
     mov ax, [dskw_foff]
     mov [dskw_doff], ax
     mov al, [dskw_fend]
@@ -3611,8 +3687,7 @@ dskw_ent_store:
     push es
     push ss
     pop es
-    mov ax, [dskw_dsec]
-    call dsk_rd1_x
+    DSK_RD1D dskw_dsec          ; all 32 bits of it (SPEC.md 18.7.5)
     jc .ioerr
     mov si, dskw_raw            ; DS = kernel, ES = LOW_SEG: a plain movsw
     mov di, dsk_secbuf
@@ -3630,8 +3705,7 @@ dskw_ent_store:
     mov di, ax
     mov byte [es:di], 0
 .write:
-    mov ax, [dskw_dsec]
-    call dsk_wr1_x
+    DSK_WR1D dskw_dsec
     jc .ioerr
     clc
     jmp short .out
@@ -5336,11 +5410,12 @@ dskw_n83b:    resb 11           ; the rename target's, held across the scan
                                 ; which is a BYTE loop - so no neighbour's
                                 ; store reached into it. Its sibling
                                 ; dskw_pad2 below took a narrowing first)
-dskw_dsec:    resw 1            ; the found entry's sector LBA...
+dskw_dsec:    LBARES 1            ; the found entry's sector LBA, 32 bits...
 dskw_doff:    resw 1            ; ...and its offset within that sector
-dskw_fsec:    resw 1            ; the first reusable slot's, FFFFh = none
+dskw_fsec:    LBARES 1            ; the first reusable slot's, high word FFFFh
+                                ; = none (SPEC.md 18.7.5)
 dskw_foff:    resw 1
-dskw_cursec:  resw 1            ; dskw_find: the sector being scanned
+dskw_cursec:  LBARES 1            ; dskw_find: the sector being scanned
 dskw_fend:    resb 1            ; 1 = that free slot is the 00h terminator
 dskw_new:     resb 1            ; 1 = this write is creating the entry
 dskw_zapnext: resb 1            ; 1 = re-zero the slot after the one written.
@@ -5379,17 +5454,17 @@ dskw_cap:     resw 1            ; the destination's capacity, low word...
 dskw_caphi:   resw 1            ; ...and high
 dskw_rem:     resw 1            ; sectors still to move
 dskw_tail:    resw 1            ; bytes in the partial final sector (0 = none)
-dskw_rlba:    resw 1            ; the pending data run: its first LBA...
+dskw_rlba:    LBARES 1            ; the pending data run: its first LBA, 32
+                                ; bits (SPEC.md 18.7.5)...
 dskw_rlen:    resw 1            ; ...how many sectors are in it (0 = none)...
 dskw_rcap:    resw 1            ; ...and the most it may ever hold
-dskw_clba:    resw 1            ; the whole-sector walk's cursor inside a take
+dskw_clba:    LBARES 1            ; the whole-sector walk's cursor inside a take
 dskw_fop:     resb 1            ; 0 = read, 1 = write, for the ONE flush body
                                 ; the two data walkers share (SPEC.md 18.4.2)
                                 ; - dsk_op's idiom, and for dsk_op's reason:
                                 ; the run arithmetic must not be able to
                                 ; differ between reading and writing
 dskw_take:    resw 1            ; sectors this cluster contributes
-dskw_lba:     resw 1            ; this cluster's first LBA
 dskw_cur:     resw 1            ; the cluster being written / read
 dskw_prev:    resw 1            ; the one before it, awaiting its link
 dskw_first:   resw 1            ; the new chain's head (0 = empty file)

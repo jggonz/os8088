@@ -7270,6 +7270,15 @@ SOAK = [
         "the booted-from volume IN PLACE with the system disk in B:, and "
         "boots it again.",
         needs=("marty", "mtools"), serial=True, timeout=1500),
+    Row("bigvol", "soak", py("tests/bigvol.py"), 110.0,
+        "SPEC.md 18.7.5: a 321MB FAT16 volume (654/16/63, TotSec32, 8KB "
+        "clusters) formatted on the HOST by mtools with a 40MB file at the "
+        "front, so everything the install writes lands PAST 32MB and the "
+        "LBA's high word is unavoidable. The installer keeps the volume, the "
+        "row checks the user's files and the kernel's one run past sector "
+        "65,536 on the host, boots C: and launches CALC.O88 out of C:/APPS. "
+        "Broken on purpose - [dsk_c2arm_x] arming 0 - it never commits.",
+        needs=("marty", "mtools"), serial=True, timeout=1500),
     Row("hddcp", "soak",
         py("tests/hddcp.py", "build/os8088-360.img", "build/hddcp-out.bin"),
         90.0,

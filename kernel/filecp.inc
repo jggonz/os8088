@@ -1055,6 +1055,9 @@ fcp_rlup:
     FCPX dsk_clus2lba_x ; AX = the folder's first sector
     jc .out
     push ax
+%ifdef OS88_BIGVOL
+    FCPX dsk_c2arm_x            ; ...all 32 bits of it (SPEC.md 18.7.5)
+%endif
     FCPX dsk_rd1_x
     pop ax
     jc .out
@@ -1065,6 +1068,9 @@ fcp_rlup:
     mov bx, [fcp_dcwd]
     mov [es:dsk_secbuf+32+DSK_R_CLUS], bx
     push ax
+%ifdef OS88_BIGVOL
+    FCPX dsk_c2arm_x            ; [dsk_c2hi] is still the folder's: the read
+%endif                          ; between spent [dsk_lbahi], not it
     FCPX dsk_wr1_x
     pop ax
 .out:
@@ -2391,6 +2397,9 @@ fcp_pfail:
     FCPXF drv_fs_has
     FCPXF dsk_batch_begin_x
     FCPXF dsk_bytes_secs_x
+%ifdef OS88_BIGVOL
+    FCPXF dsk_c2arm_x
+%endif
     FCPXF dsk_chdir_q_x
     FCPXF dsk_clus2lba_x
     FCPXF dsk_dirw_get_x
