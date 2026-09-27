@@ -241,7 +241,7 @@ had added.
     "bss": 5511,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 40404,
+    "cold": 40401,
     "coldpara": 2528,
     "fatpara": 288,
     "imgpara": 3328,
@@ -673,12 +673,12 @@ there and nowhere else.
 |---|---:|---:|
 | the file system, end to end | 32,499 | 37.0% |
 | the window system and its furniture | 23,035 | 26.2% |
-| drawing: adapters, primitives, glyphs, icons | 13,520 | 15.4% |
+| drawing: adapters, primitives, glyphs, icons | 13,517 | 15.4% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,015 | 10.3% |
 | the kernel proper: API table, heap, scheduler, events | 7,715 | 8.8% |
 | the three built-in kinds | 1,482 | 1.7% |
 | the Control Panel | 546 | 0.6% |
-| **total** | **87,812** | |
+| **total** | **87,809** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -686,7 +686,7 @@ there and nowhere else.
 |---|---:|---:|---:|---:|---:|---:|
 | `wm.inc` — the window manager (§11) | 10,408 | 142 | **10,550** | 1,140 | — | — |
 | `files.inc` — the Disk window (§22) | 1,066 | 8,210 | **9,276** | 465 | — | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 5,814 | 1,010 | **6,824** | 107 | 526 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 5,814 | 1,007 | **6,821** | 107 | 526 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 393 | 6,380 | **6,773** | 418 | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 101 | 5,031 | **5,132** | 188 | — | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 82 | 4,874 | **4,956** | 150 | — | — |
@@ -735,7 +735,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,339 | 163 | **2,502** | — | — | 421 |
-| **total** | **47,408** | **40,404** | **87,812** | **5,511** | **6,366** | **2,249** |
+| **total** | **47,408** | **40,401** | **87,809** | **5,511** | **6,366** | **2,249** |
 <!-- END generated table -->
 
 ### Reading it

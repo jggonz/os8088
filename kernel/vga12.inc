@@ -5773,14 +5773,16 @@ gfx_blit1_x:
 
 %ifdef KERN_BIG
 ; --- SPEC.md 5.4.2.7: a band under a region, EVERY fragment it meets. Each
-; intersection is trimmed INWARD to whole bytes - the band's x is on the byte
-; grid, a fragment's edge need not be - and blitted with the region disarmed,
-; since the piece is inside it already. wm_clip_rows answers ONE fragment, the
+; intersection's LEFT edge is rounded up to the byte grid - a piece's x must
+; be on it and a fragment's edge need not be - and its right edge is exact,
+; a tail mask (5.4.2.5); it is blitted with the region disarmed, since the
+; piece is inside it already. wm_clip_rows answers ONE fragment, the
 ; tallest, and 11.3.4 made that answer overlap rather than containment: a
 ; band took the winner's rows at its full width and drew straight over the
 ; window that cut it (a Live video under a Disk window, VIDEO-PLAN 15).
-; What this can leave is at most seven columns at a fragment edge off the
-; grid - under-drawn, which is the direction 11.3.2 says an error must point
+; What this can leave is at most seven columns at a fragment's LEFT edge off
+; the grid - under-drawn, which is the direction 11.3.2 says an error must
+; point. A band has no HEAD mask, so that side is a concession (5.4.2.7)
 .frags:
     push ax                     ; .percol's four, in its order, so the walk
     push cx                     ; leaves through its epilogue at .pcout...
@@ -5816,13 +5818,12 @@ gfx_blit1_x:
     add ax, 7
     and al, 0F8h                ; (AX's high byte cannot change: the low one's
                                 ; top five bits are all the mask clears)
-    mov cx, [di+WCR_X2]         ; ...CX = min(x2s) + 1 down to it...
-    inc cx
-    cmp cx, [si+4]
-    jle .fx2
-    mov cx, [si+4]
-.fx2:
-    and cx, 0FFF8h
+    mov cx, [di+WCR_X2]         ; ...CX = min(x2s) + 1, EXACT: a right edge
+    inc cx                      ; off the grid is a tail mask (5.4.2.5), the
+    cmp cx, [si+4]              ; piece's x being on it. Flooring this lost
+    jle .fx2                    ; the band's own tail column in a fragment
+    mov cx, [si+4]              ; that held all of it, and up to 7 columns
+.fx2:                           ; left of every window that cut the band
     sub cx, ax                  ; ...and CX = the piece's width
     jle .fnext
     mov bx, [di+WCR_Y1]         ; BX = max(y1s)

@@ -4486,9 +4486,10 @@ window dragged across it; any 1bpp band blitted under a region met it.
 
 **What it does now, on `kern_big`, when a region is armed:**
 - **A band wider than one column walks EVERY fragment** of the region (at
-  most `WM_CLIP_MAX`), blitting each intersection with the band - trimmed
-  INWARD to whole bytes, the band's x being on the byte grid and a
-  fragment's edge not necessarily - with the region disarmed for the piece,
+  most `WM_CLIP_MAX`), blitting each intersection with the band - its LEFT
+  edge rounded up to the byte grid, a piece's x having to be on it and a
+  fragment's edge not necessarily, and its RIGHT edge exact under §5.4.2.5's
+  tail mask - with the region disarmed for the piece,
   since it is inside the region already. So a band partly covered by one
   window is drawn exactly where it shows, where the one-fragment answer
   also froze whatever the tallest fragment did not include.
@@ -4500,9 +4501,16 @@ window dragged across it; any 1bpp band blitted under a region met it.
   whole-shape hook's nest (`gfx_dnest`), whose rect is in its display's
   space and not the region's virtual one.
 
-What it can leave is **at most seven columns** at a fragment edge off the
-byte grid - under-drawn, which is the direction §11.3.2 requires an error to
-point. A hidden dock's hole (§30.6.1) is disarmed with the region for the
+What it can leave is **at most seven columns** at a fragment's LEFT edge off
+the byte grid - under-drawn, which is the direction §11.3.2 requires an error
+to point - because a band has a tail mask and no head mask. **For a snapped
+window that is systematic, not occasional**: §11.94 puts `W_X` at 8m-1 and
+§11.94.5 `W_W` at 8k+2, so the drop shadow ends at 8(m+k)+1 and the fragment
+right of it loses **six** columns, every time. The right edge used to be
+floored too, which lost seven columns left of every such window AND the
+band's own tail column (§5.4.2.5) in a fragment holding all of it - a 12-wide
+band drew 8 whenever any region was armed; it is exact now, for 3 bytes
+FEWER. A hidden dock's hole (§30.6.1) is disarmed with the region for the
 pieces, or `CLIPQF` would re-arm it the moment `wm_clip_n` read 0.
 `kern_small` is untouched: its `wm_clip_rows` still refuses a part-width row,
 so its band was never wrong.
