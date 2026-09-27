@@ -1289,8 +1289,18 @@ fmv_demote:
 ;
 ; A window that already owes the STRONGER debt keeps it: FSD_CACHE re-lists,
 ; and a re-list settles the references on its way past.
+;
+; `fmv_icostale_but` is the same walk with ONE window left out: the one whose
+; listing is AX (`FS_VSEG`). `assoc_point` passes `[dsk_dseg]`, because a new
+; association is learned INSIDE a mount's harvest, and the window that mount
+; is filling has its document icons decided by pass 4b AFTER it - so marking
+; it charged a window that was already right a repair and a second, identical
+; paint straight after its first (SPEC.md 54.3.3). The shed passes nothing:
+; its references can dangle in any window, the one being filled included.
 ; -----------------------------------------------------------------------------
 fmv_icostale:
+    mov ax, 0xFFFF              ; no window's listing lives at FFFF: skip none
+fmv_icostale_but:
     push di                     ; **DI ALONE.** The contract above is the one
                                 ; `mem_pg_forget` needs and it already holds:
                                 ; the purge protocol brackets every demoter
@@ -1310,6 +1320,8 @@ fmv_icostale:
                                 ; whose claim was refused reads 0 there too.
                                 ; fmv_ifirst/fmv_inext answer the question
                                 ; itself: a LIVE instance of KIND_FILES
+    cmp [di+FS_VSEG], ax
+    je .next                    ; the window being filled (see the header)
     cmp byte [di+FS_DIRTY], 0
     jne .next                   ; already owed something at least as strong
     mov byte [di+FS_DIRTY], FSD_ICONS

@@ -1529,14 +1529,26 @@ osapi_assoc_set_x:
     mov dl, al                  ; DL = the app slot from here down
     mov si, assoc_extb
     call assoc_find             ; already claimed by someone?  BX = that row
-    jnc .point
+    jc .fresh
+    mov al, [bx+3]              ; the same program again - declared, cached
+    xor al, dl                  ; or claimed before - is no news, whatever
+    and al, ~ASSOC_STICKY & 0xFF    ; its sticky bit said: AL = 0
+    jmp short .point
+.fresh:
     call assoc_ext_new          ; BX = a free row, with the extension in it
     jc .full
+    mov al, 1                   ; ...and a new extension is news
 .point:
+    push ax                     ; AL != 0 = the extension's answer changed
     mov al, dl
     or al, ASSOC_STICKY         ; a runtime claim outranks a declaration
     mov [bx+3], al
     call assoc_self_glyph       ; DL = slot; take the caller's own icon
+    pop ax                      ; ...and if the answer CHANGED, every Disk
+    or al, al                   ; window's document icons are stale (SPEC.md
+    jz .same                    ; 54.3.3) - assoc_point's rule, which this
+    call fmv_icostale           ; claim does not go through. No mount is
+.same:                          ; running here, so none is left out
     clc
     jmp short .out
 .full:
@@ -1567,6 +1579,13 @@ osapi_assoc_set_x:
 ; double-click on them found VIDEO.O88. The same slot again is no news, and
 ; costs nothing. Clobbers AX, CX, SI and the flags on that arm, which both
 ; callers bank or no longer need.
+;
+; **EXCEPT THE WINDOW BEING FILLED.** A declaration or a cached row arrives
+; inside a mount (`disk_mount_x`'s harvest), before pass 4b decides the
+; documents' icons for the listing `[dsk_dseg]` names - so that window is
+; right already, and marking it cost a repair and a second paint of the same
+; pixels. Outside a mount `[dsk_dseg]` is 0, which only leaves out a window
+; with no store, and such a window draws no icons at all.
 ; -----------------------------------------------------------------------------
 assoc_point:
     call assoc_find             ; already claimed?  BX = that row
@@ -1581,9 +1600,11 @@ assoc_point:
     jc .out
 .set:
     mov [bx+3], dl              ; ...pointed here, sticky bit CLEAR
-    jmp fmv_icostale            ; ...and every Disk window re-resolves its
-.out:                           ; document icons on its next focus (a TAIL
-    ret                         ; call: its ret is ours)
+    mov ax, [dsk_dseg]          ; ...and every Disk window re-resolves its
+    jmp fmv_icostale_but        ; document icons on its next focus BUT the
+.out:                           ; one this mount is filling, whose pass 4b
+    ret                         ; is still to run (a TAIL call: its ret is
+                                ; ours)
 
 ; assoc_ext_new - claim a free extension row. in: SI -> 3 ext bytes;
 ; out: CF=0 and BX = the row with the extension written in; CF=1 = full

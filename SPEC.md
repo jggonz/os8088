@@ -84471,6 +84471,18 @@ program**. The same program again is no news and costs nothing.
 `FSD_ICONS`, and its next focus pays it by re-resolving its references in
 place, with one `ASSOC.DAT` read and no re-list.
 
+**A runtime claim (§54.5) follows the same rule.** `OSAPI_ASSOC_SET` writes
+its row itself, because it sets the sticky bit `assoc_point` refuses to
+overwrite, so it makes the same test and the same call. The same program
+claiming again, sticky or not, is still no news.
+
+**The window a mount is FILLING is left out** (`fmv_icostale_but`, keyed on
+`[dsk_dseg]`). A declaration or a cached row is learned inside that mount's
+harvest, and pass 4b decides the listing's document icons after it, so that
+window is already right. Marking it cost a repair and a second paint of the
+same pixels straight after the first, on every navigation that taught the
+machine an extension. The shed still marks every window.
+
 **The repair's second half is the picture.** After a shed the references
 dangle but the pixels are right, so the repair never touched the raise cache
 (§11.96). After a new association the pixels are wrong, and a raise put the
