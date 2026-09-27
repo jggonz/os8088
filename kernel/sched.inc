@@ -329,7 +329,13 @@ sched_init:
     mov word [sch_rbusy], 0     ; the lock, and FSXF_RATE's re-entry byte
 %else                           ; beside it (53.2.2) in one word: sch_rhook
     mov byte [sch_lock], 0      ; balances it from here on, so fsx_run need
-%endif                          ; not    mov word [ticks], 0
+%endif                          ; not
+    mov word [ticks], 0         ; .bss: nothing else zeroes it, and the stamp
+                                ; seeded below assumes it (high word = 0).
+                                ; Kernel size pass 5 folded this line into
+                                ; the comment above by accident, which only a
+                                ; machine whose RAM is not zero at power-on
+                                ; could show
     mov byte [sch_fast], 0      ; no sub-tick until a bracket asks (53.8)
     mov byte [sch_coop], 0      ; pre-emptive until the Control Panel says
     mov byte [sch_hold], SCH_WD_TICKS

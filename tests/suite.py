@@ -2607,6 +2607,14 @@ SOAK = [
         "first frame, which is how a kernel whose next int 13h jumped into "
         "cold_entry passed all of them",
         needs=("marty",), serial=True),
+    Row("tickzero", "soak", py("tests/tickzero.py"), 10.0,
+        "Does the boot ZERO [ticks]? It is .bss, nothing clears .bss, and "
+        "sched_init's one store is the whole of it - kernel size pass 5 "
+        "folded that store into a comment and no row saw it, because every "
+        "emulator here powers on with zeroed RAM. So this plants 0x8000 at "
+        "sched_init's entry and reads the count at the desktop. Broken on "
+        "purpose (the store commented out) it FAILS",
+        needs=("marty",)),
     Row("cylrun", "soak", py("tests/cylrun.py"), 10.0,
         "Did the kernel load actually CROSS A HEAD? (SPEC.md 18.93.3) "
         "boot_cylrun at 0060:0004 is written on the one path where the "
