@@ -967,6 +967,13 @@ def start(a):
         # `build/smallk`, and five rows died on a missing image the tree had.
         env["OS88_BUILD"] = frozen.dir
         env["OS88_TREE"] = frozen.dir
+        # ...and the BUILD NUMBER it froze at (tools/buildnum.py): a row that
+        # rebuilds a declared artefact in the tree later would otherwise take
+        # the live checkout's commit count, and one commit mid-run put the
+        # tree's kernel.bin a build ahead of its own images.
+        import buildnum
+        num, _ = buildnum.build_number()
+        env["OS88_BUILDNUM"] = str(num)
         print("os88soak: the run reads %s, so build/ is yours while it runs"
               % os.path.relpath(frozen.dir, ROOT))
     else:
