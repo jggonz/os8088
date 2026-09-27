@@ -2,7 +2,7 @@
 """VIDEO.O88 holds a streamed .V88 in XMS and plays it from there - SPEC.md
 98.3.18.
 
-    make && python3 tests/vidxms.py [--arm xms|idle|nox]
+    make && python3 tests/vidxms.py [--arm xms|idle|nox|live|liverep|livenox]
 
 WHY QEMU: docs/TESTING.md's closed list, entry 1. XMS is a 286-and-up store
 and every MartyPC machine is an 8088, which has nothing above 1MB - there is
@@ -30,6 +30,15 @@ ARM xms (the default; QEMU's own 128MB):
 
 ARM idle is arm xms with no play at step 2: the window's timer alone loads
 the file to its end, and a short last chunk is what says it has.
+
+ARM live is 98.3.18.1, LIVE FROM THE HOLD: a 1.2 MB STREAMED Live file for
+the VGA desktop, held whole, B: made blank, and Play must be a live session
+- the worker decoding, the UI task filling its ring out of the hold on its
+asks. At four moments the VM is stopped with the gfx lock free and the
+worker's shadow compared with the reference decode, and all 450 frames must
+be drawn. ARM liverep is the same file repeating from frame 10, over a lap
+and a half. ARM livenox is `-m 1`: Play must NOT be Live. Broken on purpose
+- `call vp_lask` out of the worker - the play stalls at frame 96.
 
 ARM nox (`-m 1`, no memory above 1MB): the NEGATIVE CONTROL, and the
 fallback. No hold is taken, the play runs off the disk to the last frame -
@@ -96,6 +105,29 @@ def clip(tmp):
     return out
 
 
+LNF, LWB, LH = 450, 20, 120
+
+
+def live_clip(tmp, loop=None):
+    """A STREAMED Live file (98.3.18.1) for the VGA desktop: 160 x 120, one
+    bit, every byte new every frame - ~1.1 MB, four times the biggest ring,
+    so the play cannot be read whole at its start and the worker's asks are
+    what carry it to the end"""
+    import random
+    rnd = random.Random(1188)
+    paths = []
+    for f in range(LNF):
+        cv = bytes(rnd.getrandbits(8) for _ in range(LWB * LH))
+        p = os.path.join(tmp, "l%03d.pbm" % f)
+        vid._write_pbm(p, LWB, LH, cv)
+        paths.append(p)
+    out = os.path.join(tmp, "CLIP.V88")
+    vid.encode_frames(paths, out, FPS, None, "lin80", "vidxms live",
+                      live="vga", loop=loop, repeat=loop is not None)
+    vid.verify_v88(out)
+    return out
+
+
 class Q(object):
     """One private QEMU: its own socket, pidfile and copies of both disks."""
 
@@ -142,7 +174,8 @@ class Q(object):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--arm", choices=("xms", "idle", "nox"), default="xms")
+    ap.add_argument("--arm", choices=("xms", "idle", "nox", "live",
+                                      "livenox", "liverep"), default="xms")
     a = ap.parse_args()
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
@@ -153,11 +186,15 @@ def main():
             sys.exit("vidxms: no %s - run `make`" % p)
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
-        v88 = clip(tmp)
+        islive = a.arm in ("live", "livenox", "liverep")
+        v88 = live_clip(tmp, 10 if a.arm == "liverep" else None) \
+            if islive else clip(tmp)
         data = open(v88, "rb").read()
         size = len(data)
-        nkeys = len(vid.Reader(v88).keys)
-        print("   clip: %d frames, %d bytes, %d keys" % (NF, size, nkeys))
+        rd88 = vid.Reader(v88)
+        nkeys = len(rd88.keys)
+        print("   clip: %d frames, %d bytes, %d keys"
+              % (rd88.frames, size, nkeys))
         disk = os.path.join(tmp, "vidxms.img")
         blank = os.path.join(tmp, "blank.img")
         sysimg = os.path.join(tmp, "sys.img")
@@ -166,7 +203,7 @@ def main():
             subprocess.run([sys.executable, "tools/os88disk.py", "-o", out,
                             "--size", "1440"] + files, check=True,
                            capture_output=True)
-        q = Q(tmp, sysimg, disk, 1 if a.arm == "nox" else 128)
+        q = Q(tmp, sysimg, disk, 1 if a.arm in ("nox", "livenox") else 128)
         for _ in range(150):
             if os.path.exists(q.sock):
                 break
@@ -223,7 +260,14 @@ def main():
                        rb("vp_played"), rw("vp_sel"), rw("vp_kload"),
                        rb("vp_xon"), rb("vp_xfull"), rd("vp_xhave")))
 
-        wait(lambda: rb("vp_loaded") == 1, "the clip's header", 30)
+        if not os88qemu.acted(q, lambda: rb("vp_loaded") == 1, secs=30,
+                              what="the clip's header", poll=0.05):
+            subprocess.run([sys.executable, "tools/shot.py", q.sock,
+                            os.path.join(ROOT, "build", "vidxms-fail.png")],
+                           capture_output=True)
+            msg = q.read(base + rw("vp_msg"), 40).split(b"\0")[0]
+            sys.exit("vidxms: the clip did not open: %r (ok=%d)"
+                     % (msg.decode("ascii", "replace"), rb("vp_ok")))
         if rb("vp_ok") != 1:
             sys.exit("vidxms: the player will not play the clip here")
 
@@ -243,7 +287,83 @@ def main():
                                 what="the next key", poll=0.05)
             return ok and rw("vp_kload") == rw("vp_sel")
 
-        if a.arm == "nox":
+        if a.arm == "livenox":
+            # --- no pool: the streamed Live file plays in the window
+            q.hmp("sendkey p")
+            wait(lambda: rb("vp_ready") == 1, "the play to start", 30)
+            print("   no XMS, Play: lsess=%d sess=%d xon=%d"
+                  % (rb("vp_lsess"), rb("vp_sess"), rb("vp_xon")))
+            if rb("vp_lsess"):
+                bad.append("a streamed Live file played LIVE with no hold - "
+                           "the worker would have read the disk")
+            q.hmp("sendkey esc")
+        elif a.arm in ("live", "liverep"):
+            # --- the hold whole, B: blank, and Play is LIVE
+            if rb("vp_xon") != 1:
+                sys.exit("vidxms: no hold was taken: %s" % state())
+            wait(lambda: rb("vp_xfull") == 1, "the loader to finish", 120)
+            q.hmp("change floppy1 %s raw" % blank)
+            os88qemu.pace(q, 1)
+            q.hmp("sendkey p")
+            wait(lambda: rb("vp_ready") == 1, "the play to start", 30)
+            if rb("vp_lsess") != 1:
+                sys.exit("vidxms: Play was not LIVE (%s lsess=%d)"
+                         % (state(), rb("vp_lsess")))
+            lock = S("gfx_lock_flag")
+            nf = rd88.frames
+            checked = 0
+            laps = a.arm == "liverep"
+            for n in range(7 if laps else 4):
+                os88qemu.pace(q, 3)
+                for _ in range(40):         # a moment with no frame half
+                    q.hmp("stop")           # decoded: the lock free
+                    if q.read(lock, 1)[0] == 0:
+                        break
+                    q.hmp("cont")
+                    time.sleep(0.01)
+                done = rw("vp_done")
+                shseg = rw("vp_shseg")
+                if rb("vp_lsess") == 1 and done:
+                    sh = q.read(shseg << 4, LH * 80)
+                    got = b"".join(sh[y * 80:y * 80 + LWB] for y in range(LH))
+                    want = vid.decode_at(rd88, done - 1)
+                    diff = sum(1 for j in range(len(got))
+                               if got[j] != want[j])
+                    print("   live, frame %d: the shadow against the decode, "
+                          "%d bytes of %d differ; ring lc=%d pc=%d k=%d "
+                          "stalls %d" % (done, diff, len(got), rw("vp_lc"),
+                                         rw("vp_pc"), rw("vp_k"),
+                                         rw("vp_stall")))
+                    checked += 1
+                    if diff:
+                        bad.append("the Live shadow after frame %d differs "
+                                   "in %d bytes" % (done, diff))
+                q.hmp("cont")
+            if laps:
+                # REPEAT (98.3.9): the file's end asks for the seam and the
+                # next lap's start, and the play goes round - it never ends
+                seq = rw("vp_vseq")
+                print("   repeating: %d frames drawn, %d to a lap; stalls %d"
+                      % (seq, nf, rw("vp_stall")))
+                if seq <= nf + 60 or rb("vp_err") or not rb("vp_lsess"):
+                    bad.append("the repeating Live play drew %d frames with a "
+                               "lap of %d (error %d, live %d)"
+                               % (seq, nf, rb("vp_err"), rb("vp_lsess")))
+                q.hmp("sendkey esc")
+                wait(lambda: rb("vp_lsess") == 0, "Esc to stop it", 20)
+                q.close()
+                return report(bad, a.arm)
+            wait(lambda: rb("vp_lsess") == 0 or rw("vp_done") >= nf,
+                 "the Live play to end", 90)
+            print("   live play: done=%d of %d err=%d stalls %d lend=%d"
+                  % (rw("vp_done"), nf, rb("vp_err"), rw("vp_stall"),
+                     rb("vp_lend")))
+            if rw("vp_done") != nf or rb("vp_err"):
+                bad.append("the Live play off the hold drew %d of %d "
+                           "(error %d)" % (rw("vp_done"), nf, rb("vp_err")))
+            if checked < 2:
+                bad.append("only %d samples of the shadow were taken" % checked)
+        elif a.arm == "nox":
             # --- the fallback, then the control
             if rb("vp_xon"):
                 bad.append("a machine with no XMS took a hold")
@@ -326,12 +446,16 @@ def main():
             if not rb("vp_xon"):
                 bad.append("the hold was dropped")
         q.close()
+    return report(bad, a.arm)
+
+
+def report(bad, arm):
     if bad:
-        print("\nvidxms (%s): FAIL" % a.arm)
+        print("\nvidxms (%s): FAIL" % arm)
         for b in bad:
             print("  - " + b)
         return 1
-    print("\nvidxms (%s): ok" % a.arm)
+    print("\nvidxms (%s): ok" % arm)
     return 0
 
 

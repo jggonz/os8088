@@ -2178,11 +2178,19 @@ and not a transcript. Each line names where the detail is.
   not even the directory is asked. Gates on QEMU: `vidxms`, `vidxmsidle`,
   `vidxmsnox` - the instrument is a BLANK floppy swapped under the player
   once the file is held. The owner's scope: *"That, plus Live from XMS"*.
-- **XMS, phase 2 - Live from a file held in XMS** (15.5 revived without its
-  objection): a STREAMED Live file plays on the desktop once the hold is
-  whole, the worker asking and the UI task copying the next chunks from the
-  hold into the ring (`OSAPI_WM_ONWAKE`, FTPD's handshake) - milliseconds, not
-  15.5's ~100 ms read. Wants the encoder's `--live` for a streamed file too.
+- **XMS, phase 2 - Live from the hold is BUILT** (2026-09-27, SPEC.md
+  98.3.18.1; 15.5 revived without its objection): a STREAMED one-bit Live
+  file (`tools/os88venc.py --live <screen> --xms`) plays on the desktop once
+  the hold is whole - the worker asks after a pass, one `OSAPI_WM_WAKE`, and
+  the UI task copies the next chunks out of the hold into the ring before it
+  takes the gfx lock. Gates `vidxmslive` (1.2 MB, B: blank, 450 of 450,
+  0 stalls, the shadow exact), `vidxmsliverep`, `vidxmslivenox`.
+  **Open from it**: Live with SOUND from a stream is the bracket's reader
+  code and has never been run with a card - it wants a row (QEMU `-device
+  sb16` and SOUND.DRV on a hard-disk template, `tests/vidsound.py`'s
+  shape) or a 286 in the field. A VGA4 stream is refused Live (its keeper
+  is the planes exactly and a stream's writes are not checked ahead); the
+  encoder GUI has no `--xms` box yet.
 - **Live in colour** (15.2) is BUILT (2026-09-27).
 - **MUTE** is BUILT (2026-09-27, SPEC.md 98.3.17, 34.5.3.1): the owner's ask
   after elendilon's "no ADPCM4 on an SB16" fix - *"I have some knockoff
@@ -2198,8 +2206,8 @@ and not a transcript. Each line names where the detail is.
   About box resident or in a module?
 - **Sound Blaster 1.0 and 1.5** (15.6): SOUND.DRV work, wants an SB 1.x
   86Box machine.
-- **XMS** (15.6, V4): phase 1 BUILT and phase 2 next - above. More Live
-  WINDOWS in XMS (V4's other half) is not asked for.
+- **XMS** (15.6, V4): both phases BUILT - above. More Live WINDOWS in XMS
+  (V4's other half) is not asked for.
 - **The keeper relocatable** (15.4 D): the blocks move, the keeper stays
   pinned until its use across window calls is proven safe.
 

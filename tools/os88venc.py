@@ -2571,7 +2571,13 @@ def _encode(a, keep, tick, readers):
                 (a.pixfmt, a.live) != ("vga4", "vga"):
             raise vid.V88Error("--live is one bit, or --pixfmt vga4 with "
                                "--live vga: no --pixfmt %s" % a.pixfmt)
-        a.pixfmt, a.resident = a.pixfmt or "mono", True
+        # ...RESIDENT - or, with --xms, a STREAM that plays Live once the
+        # player holds it in XMS (98.3.18.1), which is one bit only
+        if getattr(a, "xms", False) and a.pixfmt not in (None, "mono"):
+            raise vid.V88Error("--live --xms is one bit: no --pixfmt %s"
+                               % a.pixfmt)
+        a.pixfmt = a.pixfmt or "mono"
+        a.resident = not getattr(a, "xms", False)
         lay = "lin80"
         bw, bh = LIVE_BOX[a.live]
     if a.pixfmt is None and a.preset in PRESET_PIXFMT:
@@ -2850,7 +2856,9 @@ def _encode(a, keep, tick, readers):
                     aspect=scaled_aspect(pasp or vid.ASPECT[L], dh),
                     loop=None if a.loop_from is None else
                     max(0, round(a.loop_from * fps)),
-                    repeat=a.repeat, spk=spk and bool(afmt))
+                    repeat=a.repeat, spk=spk and bool(afmt),
+                    live=vid.TARGETS[a.live] if a.live and not a.resident
+                    else None)
     if not a.resident and enc.disk.per is not None:
         wr.ring = vid.ring_for(enc.reserve)     # (98.2.1.3)
         if wr.ring is None:
@@ -3345,6 +3353,12 @@ def parser():
                          "resident, one bit, laid out as LIN80 at the "
                          "screen's own pixel shape - or with --pixfmt vga4 "
                          "and vga, sixteen colours (98.3.10.4)")
+    ap.add_argument("--xms", action="store_true",
+                    help="with --live: a STREAMED Live file, of any length, "
+                         "that plays on the desktop once the player holds it "
+                         "whole in XMS - a 286 or better with extended "
+                         "memory - and in the window elsewhere (98.3.18.1). "
+                         "One bit")
     ap.add_argument("--title",
                     help="the name the player shows (default: the file's)")
     ap.add_argument("--credits",

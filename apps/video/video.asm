@@ -312,6 +312,11 @@ vp_onwake:
     push bx
     push cx
     push dx
+    cmp byte [vp_lwant], 0          ; A LIVE STREAM'S CHUNKS (98.3.18.1),
+    je .nlw                         ; asked for by the worker: copied out of
+    mov byte [vp_lwant], 0          ; the hold with no lock taken, so the
+    call vp_lfeed                   ; worker draws on through it - the
+.nlw:                               ; bracket's hook-and-reader protocol
     call OSAPI_GFX_LOCK
     cmp byte [vp_lend], 0           ; a LIVE play's end, found by the worker:
     je .nle                         ; finished here, on the UI task
@@ -1269,12 +1274,10 @@ vp_parse:
     cmp ax, 63
     ja .bad
 .keys:
-    mov byte [vp_flive], 0          ; LIVE (98.3.10): a resident file's, and
-    test byte [es:V88_FLAGS], V88F_LIVE ; the screen each rendition is for
-    jz .nlv
-    cmp byte [vp_resid], 0
-    je .bad
-    mov byte [vp_flive], 1
+    mov byte [vp_flive], 0          ; LIVE (98.3.10): a resident file's -
+    test byte [es:V88_FLAGS], V88F_LIVE ; or a streamed one's, played Live
+    jz .nlv                         ; once it is held in XMS (98.3.18.1) -
+    mov byte [vp_flive], 1          ; and the screen each rendition is for
 .nlv:
     mov byte [vp_fruns], 0          ; ...and its records' blit runs (98.1.3.4),
     test byte [es:V88_FLAGS], V88F_RUNS ; a live file's alone
@@ -3923,6 +3926,15 @@ vp_fsenter:                         ; F, Alt+Enter: full screen, PAUSED -
 vp_canlive:
     cmp byte [vp_flive], 0
     je .no
+    cmp byte [vp_resid], 0          ; A STREAM (98.3.18.1): one-bit, and the
+    jne .rs                         ; whole file held in XMS - a worker may
+    cmp byte [vp_pixfmt], 0         ; not read a file, and the UI task's copy
+    jne .no                         ; out of the hold is what feeds it. Not
+    cmp byte [vp_xon], 0            ; yet held: the in-window play, which
+    je .no                          ; fills the hold behind it
+    cmp byte [vp_xfull], 0
+    je .no
+.rs:
     cmp byte [vp_pixfmt], 0         ; MONO1 (the byte is the format - 1)
     je .m1
     cmp byte [vp_pixfmt], PF_VGA4   ; ...or IN COLOUR (98.3.10.4): VGA4 where
@@ -4016,6 +4028,7 @@ vp_lsetup:
     call vp_decrec
     call vp_bandall
 .nk:
+    call vp_lprime                  ; A STREAM: the ring filled, over the key
     mov byte [vp_sfirst], 0
     mov byte [vp_ready], 1
 %ifdef VP_LIVESND
@@ -4098,10 +4111,103 @@ vp_lgo:
     pop ax
     ret
 
+; --- LIVE FROM THE HOLD (98.3.18.1): a streamed Live play's ring, filled by
+; the UI task out of XMS, as a bracket's reader fills it for the hook. The
+; worker only reads the ring; vp_fill publishes [vp_lc] last, so a chunk is
+; never seen half copied, and a record not there yet is a stall, not a wait
+; vp_lprime - a stream's ring filled, and the cursor stepped past the key's
+; frame's records (the bracket's own start). Lock held
+vp_lprime:
+    cmp byte [vp_resid], 0
+    jne .r
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+.f:
+    call vp_fill
+    jnc .f
+    mov cx, [vp_kidx]
+    jcxz .o
+.sk:
+    push cx
+    mov bx, vp_pc
+    call vp_next
+    pop cx
+    jc .o                           ; (the end or damage: the worker finds it)
+    loop .sk
+.o:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
+    ret
+
+; vp_lfeed - a live stream's ring topped up, on the UI task. No lock needed
+vp_lfeed:
+    cmp byte [vp_lsess], 0
+    je .r
+    cmp byte [vp_resid], 0
+    jne .r
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+.f:
+    call vp_fill
+    jnc .f
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
+    ret
+
+; vp_lask - the worker, after a pass: a slot the play has left, or a seam to
+; read - one wake to the UI task, and no second until it has run
+vp_lask:
+    cmp byte [vp_resid], 0
+    jne .r
+    cmp byte [vp_lwant], 0
+    jne .r
+    cmp byte [vp_eof], 0
+    jne .e
+    mov ax, [vp_pc]
+    add ax, [vp_k]
+    cmp [vp_lc], ax
+    jae .r
+    jmp short .w
+.e:
+    cmp byte [vp_rep], 0            ; the file's end, repeating: the next
+    je .r                           ; lap's start, once the seam is taken
+    mov ax, [vp_pgen]
+    cmp ax, [vp_wgen]
+    jne .r
+.w:
+    mov byte [vp_lwant], 1
+    mov bx, [vp_win]
+    call OSAPI_WM_WAKE
+.r:
+    ret
+
 ; vp_lback - a bracket handed a live session back to the desktop: live
 ; again, playing if it was, and the box repainted from the shadow
 vp_lback:
     push si
+    call vp_lfeed                   ; (a stream: its ring topped up)
     mov byte [vp_lrun], 0           ; the box repainted from the shadow
     mov byte [vp_bpause], 0         ; FIRST, and only then the play resumed:
     mov byte [vp_shadow], 1         ; a repaint holds the lock, and a card
@@ -4141,6 +4247,7 @@ vp_worker:
     cmp byte [vp_lrun], 0
     je .idle
     call vp_lstep
+    call vp_lask                    ; a stream's next chunks, from the UI task
     call OSAPI_GFX_UNLOCK
     jmp short vp_worker
 .idle:
@@ -11519,6 +11626,7 @@ vp_xbase:     dd 0                  ; the block's token,
 vp_xcap:      dd 0                  ; its bytes (a KB over the file),
 vp_xhave:     dd 0                  ; the bytes that have arrived,
 vp_xon:       db 0                  ; there is one,
+vp_lwant:     db 0                  ; a live stream's worker wants a feed
 vp_xfull:     db 0                  ; ...and all of the file is in it
 
 %include "os88alt.inc"              ; Alt+Enter in the bracket (SPEC.md 11.2.1.1)

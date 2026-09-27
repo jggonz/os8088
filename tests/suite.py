@@ -8903,6 +8903,33 @@ SOAK = [
         "bites",
         needs=("qemu", "nasm"),
         wants=("build/video.o88", "build/os8088.img")),
+    Row("vidxmslive", "soak", py("tests/vidxms.py", "--arm", "live"), 60.0,
+        "SPEC.md 98.3.18.1: a STREAMED Live file played LIVE from the hold. "
+        "A 1.2 MB one-bit stream for the VGA desktop, four times the biggest "
+        "ring, is held whole; B: is changed to a BLANK floppy; Play must be "
+        "a live session and not a bracket, and the worker's shadow must be "
+        "the reference decode to the byte at four moments (the VM stopped "
+        "with the gfx lock free) and all 450 frames drawn - the ring "
+        "refilled by the UI task out of the hold on the worker's asks. "
+        "Broken on purpose - vp_lask out of the worker - the play stalls at "
+        "frame 96 with the ring empty and the row FAILS",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
+    Row("vidxmsliverep", "soak", py("tests/vidxms.py", "--arm", "liverep"),
+        60.0,
+        "SPEC.md 98.3.18.1 with REPEAT: the same streamed Live file looping "
+        "from frame 10 - the file's end asks for the seam and the next lap's "
+        "start, and the play goes round: over a lap and a half drawn, the "
+        "shadow the decode in the second lap too, then Esc",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
+    Row("vidxmslivenox", "soak", py("tests/vidxms.py", "--arm", "livenox"),
+        45.0,
+        "SPEC.md 98.3.18.1's other half: on -m 1 (no pool) the streamed Live "
+        "file is NOT played Live - a worker cannot read a file, so with "
+        "nothing held Play is the in-window play",
+        needs=("qemu", "nasm"),
+        wants=("build/video.o88", "build/os8088.img")),
     Row("vidwin", "soak", py("tests/vidwin.py"), 56.0,
         "SPEC.md 98.3.7: VIDEO.O88 PLAYS IN ITS WINDOW - a same-mode "
         "bracket, the decoder writing the desktop's own framebuffer at the "
