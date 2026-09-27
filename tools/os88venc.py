@@ -1040,7 +1040,7 @@ class TextMatcher:
 
     def __init__(self, cells, rows, colour, glyphs="blocks", stable=6.0,
                  sharpen=0.6, detail=0.5, busy=None, near=2, top=16,
-                 prefer=PREFER_COLOUR):
+                 prefer=PREFER_COLOUR, ocr_exact=False, ocr_large=False):
         if busy is None:
             busy = self.BUSY.get(glyphs, self.BUSY_DEFAULT)
         self.top = top
@@ -1103,6 +1103,18 @@ class TextMatcher:
         self.pen = np.where(np.isin(self.codes, self.PLAIN), 0.0,
                             busy ** 2 * self.norm).astype(np.float32)
         self.prev = None                                # (N,) k, fg, bg
+        # OCR'D WORDS (TextOCR): every code, not only the set's, since a
+        # word read off the picture is drawn in its own letters
+        self.ocr_exact, self.ocr_large = ocr_exact, ocr_large
+        self.ocr_used = [0, 0]          # words drawn exact, drawn crisp
+        if ocr_exact or ocr_large:
+            self.gall = os88txtfont.bitmaps(range(256)).reshape(256, 64)
+            self.pairs = np.ones((16, 16), bool)
+            np.fill_diagonal(self.pairs, False)
+            if not colour:
+                self.pairs[:] = False
+                for at in vid.TEXT_MONO_ATTRS:
+                    self.pairs[at & 15, at >> 4] = True
 
     def _sharp(self, f):
         if not self.sharpen:
@@ -1135,7 +1147,7 @@ class TextMatcher:
               2 * np.einsum("nxlc,nxlc->nx", mv, av) + PP[:, None])
         return self.wf * ef + self.wb * eb + self.pen[k]
 
-    def __call__(self, rgb):
+    def __call__(self, rgb, ocr=None):
         R, C = self.rows, self.cells
         f = self._sharp(rgb.astype(np.float32))
         if self.sat != 1:
@@ -1209,7 +1221,258 @@ class TextMatcher:
         out = np.empty((R, C * 2), np.uint8)
         out[:, 0::2] = self.codes[k].reshape(R, C)
         out[:, 1::2] = ((bg << 4) | fg).astype(np.uint8).reshape(R, C)
+        if ocr:                         # ...and the words read off it, over
+            flat = out.reshape(-1)      # it. prev stays the matcher's own,
+            for w in ocr:               # so a word that goes goes cleanly
+                d = self._ocr_word(rgb, t, SS, *w)
+                if d is not None:
+                    idx, codes, attrs, crisp = d
+                    flat[idx * 2], flat[idx * 2 + 1] = codes, attrs
+                    self.ocr_used[1 if crisp else 0] += 1
         return out
+
+    # a character is "about one cell" (--text-ocr) from half a cell to two
+    # cells tall, and a third of a cell wide or more - wider is spread one
+    # a cell, which a HUD's letters are. Taller is LARGE (--text-ocr-large):
+    # half blocks give a cell two dots of height, and a letter under four
+    # is a blob however crisp its edges
+    OCR_ONE_H = 2.0
+    CRISP = (0x20, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF)
+
+    def _ocr_word(self, rgb, t, SS, text, x0, y0, x1, y1, layer):
+        """One of TextOCR's words -> (cells, codes, attributes, crisp?), or
+        None when it is not this matcher's to draw. The word OWNS the cells
+        its box covers. Its INK is what the pass that read it read as ink
+        (TextOCR.ink) - or, read off the grey, the side of the box's middle
+        brightness with fewer pixels - and the letters are the colour
+        nearest the ink's, one for the word; each cell's ground is its own,
+        nearest what is not ink there, so the scene stays behind the
+        letters. EXACT: the characters at the cells under them, the ground
+        between. CRISP: each cell the solid block nearest the ink's shape"""
+        R, C = self.rows, self.cells
+        n = len(text)
+        ch = (y1 - y0) / OCR_CH
+        cw = (x1 - x0) / n / OCR_CW
+        if ch < 0.5 or cw < 0.35:
+            return None
+        crisp = ch > self.OCR_ONE_H
+        if not (self.ocr_large if crisp else self.ocr_exact):
+            return None
+        if crisp:                       # the cells whose centre it covers
+            c0, c1 = round(x0 / OCR_CW), round(x1 / OCR_CW) - 1
+            r0, r1 = round(y0 / OCR_CH), round(y1 / OCR_CH) - 1
+        else:                           # ...or that it touches at all
+            c0, c1 = int(x0 // OCR_CW), int((x1 - 1) // OCR_CW)
+            r0, r1 = int(y0 // OCR_CH), int((y1 - 1) // OCR_CH)
+        c0, r0, c1, r1 = max(c0, 0), max(r0, 0), min(c1, C - 1), \
+            min(r1, R - 1)
+        if c1 < c0 or r1 < r0:
+            return None
+        cells = rgb.reshape(R, 8, C, 8, 3).transpose(0, 2, 1, 3, 4)[
+            r0:r1 + 1, c0:c1 + 1].reshape(-1, 64, 3).astype(np.float32)
+        # the INK, inside the box itself (the cells hang over its edges)
+        yy = ((np.arange(r0 * 8, (r1 + 1) * 8) + 0.5) * OCR_CH / 8)
+        xx = ((np.arange(c0 * 8, (c1 + 1) * 8) + 0.5) * OCR_CW / 8)
+        inbox = ((yy >= y0) & (yy < y1))[:, None] & \
+            ((xx >= x0) & (xx < x1))[None, :]
+        nr, nc = r1 - r0 + 1, c1 - c0 + 1
+        inbox = inbox.reshape(nr, 8, nc, 8).transpose(0, 2, 1, 3).reshape(
+            -1, 64)
+        ink = TextOCR.ink(cells, layer)
+        if ink is None:
+            y = cells @ np.array([0.299, 0.587, 0.114], np.float32)
+            mid = np.median(y[inbox]) if inbox.any() else np.median(y)
+            ink = y > mid if (y[inbox] > mid).mean() < 0.5 else y < mid
+        ink = ink & inbox
+        if ink.sum() < 4 or (~ink).sum() < 4:
+            return None
+        near = lambda c: (((c @ self.ce) - self.pale) ** 2).sum(-1)
+        dl = near(cells[ink].mean(0))
+        allg = np.median(cells[~ink], 0)
+        codes = np.full(len(cells), 0x20, np.uint8)
+        grounds = np.empty((len(cells), 3), np.float32)
+        for m in range(len(cells)):
+            g = cells[m][~ink[m]]
+            grounds[m] = np.median(g, 0) if len(g) >= 8 else allg
+        dg = np.stack([near(g) for g in grounds])        # (M, 16)
+        # the letters' colour: the one the ink is nearest, with each cell's
+        # ground its best beside it
+        pk = np.where(self.pairs[None], dl[None, :, None] + dg[:, None, :],
+                      np.inf)                            # (M, 16f, 16b)
+        f = int(pk.min(-1).sum(0).argmin())
+        b = pk[:, f, :].argmin(-1)
+        if crisp:                       # the block nearest the ink's shape
+            bits = self.gall[list(self.CRISP)] > 0.5         # (G, 64)
+            miss = (bits[None] != ink[:, None]).sum(-1)      # (M, G)
+            codes = np.array(self.CRISP, np.uint8)[miss.argmin(1)]
+        else:
+            row = min(max(int((y0 + y1) / 2 // OCR_CH), r0), r1) - r0
+            cols = [int((x0 + (i + 0.5) * (x1 - x0) / n) // OCR_CW)
+                    for i in range(n)]
+            if len(set(cols)) < n:      # narrower than a cell: side by side
+                s0 = round((x0 + x1) / 2 / OCR_CW - n / 2)
+                cols = list(range(s0, s0 + n))
+            for c, t_ in zip(cols, text):
+                if c0 <= c <= c1:
+                    codes[row * nc + c - c0] = ord(t_)
+        rs, cs = np.arange(r0, r1 + 1), np.arange(c0, c1 + 1)
+        idx = (rs[:, None] * C + cs[None, :]).reshape(-1)
+        return idx, codes, ((b << 4) | f).astype(np.uint8), crisp
+
+
+# THE PICTURE TEXT READS OFF (--text-ocr): a second copy of the frame, a
+# cell eight by twenty - 5:12, the cell's own shape - so a cell-sized
+# letter is the twenty-odd pixels tesseract reads best. Twice that read
+# fewer of a game's words, in four times the time
+OCR_CW, OCR_CH = 8, 20
+
+
+class TextOCR:
+    """Words read off the picture by TESSERACT (a program, not a Python
+    package: https://github.com/tesseract-ocr/tesseract), for TextMatcher.
+
+    A frame in `every` is read, `jobs` at once, and the frames between
+    carry the last reading. Each reading is FIVE passes over one frame -
+    its grey, the pixels over 150 in red, in green and in blue, and those
+    over 200 in brightness - because a game's text is a colour on a colour,
+    and on the grey alone a yellow word on a blue ground reads as nothing.
+    Where passes overlap the most confident word wins. A word is kept at
+    `conf` (0..100) or better - a LARGE one at LARGE_CONF - trimmed of the punctuation round it, in
+    printable ASCII, with two letters or digits at least - and only once it
+    is read in the same place twice running: scenery reads as a scatter of
+    confident "or", "il" and "|", which comes and goes where text stays.
+    Yields, per frame, [(text, x0, y0, x1, y1, pass)] in the copy's
+    pixels"""
+
+    # a LARGE word (TextMatcher.OCR_ONE_H) is drawn from its ink, not its
+    # letters, so a misreading costs it nothing: it is kept at this
+    LARGE_CONF = 50.0
+
+    def __init__(self, conf=80, every=5, jobs=None):
+        self.exe = shutil.which("tesseract")
+        if not self.exe:
+            raise vid.V88Error("--text-ocr and --text-ocr-large read the "
+                               "picture with tesseract, which is not on the "
+                               "PATH (https://github.com/tesseract-ocr/"
+                               "tesseract; apt install tesseract-ocr, brew "
+                               "install tesseract)")
+        self.conf, self.every = conf, max(1, every)
+        self.jobs = max(1, jobs or os.cpu_count() or 1)
+
+    NLAYERS = 5
+
+    @staticmethod
+    def ink(rgb, layer):
+        """The pixels pass `layer` reads as INK (1..4), a bool mask - or
+        None for pass 0, the grey, whose ink is either side of it"""
+        rgb = rgb.astype(np.float32)
+        if layer == 0:
+            return None
+        if layer == 4:
+            return rgb @ np.array([0.299, 0.587, 0.114], np.float32) > 200
+        return rgb[..., layer - 1] > 150
+
+    @classmethod
+    def layers(cls, rgb):
+        y = rgb.astype(np.float32) @ np.array([0.299, 0.587, 0.114],
+                                               np.float32)
+        return [y.astype(np.uint8)] + [
+            np.where(cls.ink(rgb, n), 0, 255).astype(np.uint8)
+            for n in range(1, cls.NLAYERS)]
+
+    def pass_(self, grey):
+        h, w = grey.shape
+        pgm = b"P5\n%d %d\n255\n" % (w, h) + grey.tobytes()
+        env = dict(os.environ, OMP_THREAD_LIMIT="1")
+        r = subprocess.run([self.exe, "stdin", "stdout", "--psm", "11",
+                            "-l", "eng", "tsv"], input=pgm, env=env,
+                           capture_output=True)
+        out = []
+        for line in r.stdout.decode("utf-8", "replace").splitlines()[1:]:
+            c = line.split("\t")
+            if len(c) < 12 or c[0] != "5":
+                continue
+            word = c[11].strip()
+            try:
+                conf = float(c[10])
+                x, y, bw, bh = (int(v) for v in c[6:10])
+            except ValueError:
+                continue
+            big = bh / OCR_CH > TextMatcher.OCR_ONE_H
+            if conf < (min(self.conf, self.LARGE_CONF) if big
+                       else self.conf) or not word:
+                continue
+            # trimmed of what surrounds it - "SCORE," is SCORE - and the
+            # box with it, a character's share a character
+            a = 0
+            while a < len(word) and not word[a].isalnum():
+                a += 1
+            e = len(word)
+            while e > a and not word[e - 1].isalnum():
+                e -= 1
+            cw = bw / len(word)
+            core = word[a:e]
+            # ...and a LARGE one three: at its lower confidence a big
+            # scatter of scenery reads as "al" and "il"
+            if sum(ch.isalnum() for ch in core) < (3 if big else 2) or \
+                    any(not 33 <= ord(ch) <= 126 for ch in core):
+                continue
+            out.append((conf, core, round(x + a * cw), y,
+                        round(x + e * cw), y + bh))
+        return out
+
+    @staticmethod
+    def _over(p, q):
+        """How much two boxes overlap, of the smaller"""
+        ix = min(p[2], q[2]) - max(p[0], q[0])
+        iy = min(p[3], q[3]) - max(p[1], q[1])
+        if ix <= 0 or iy <= 0:
+            return 0.0
+        area = lambda b: (b[2] - b[0]) * (b[3] - b[1])
+        return ix * iy / max(1, min(area(p), area(q)))
+
+    def read(self, rgb):
+        found = sorted((w + (n,) for n, g in enumerate(self.layers(rgb))
+                        for w in self.pass_(g)),
+                       key=lambda w: (-w[0], -len(w[1])))
+        kept = []
+        for w in found:
+            hit = [i for i, k in enumerate(kept)
+                   if self._over(w[2:6], k[2:6]) >= 0.5]
+            if not hit:
+                kept.append(w)
+            elif len(hit) == 1 and kept[hit[0]][1] == w[1] and \
+                    w[5] - w[3] < kept[hit[0]][5] - kept[hit[0]][3]:
+                kept[hit[0]] = w        # the same word, boxed tighter: a
+        return [w[1:] for w in kept]    # pass that ran it into the next
+        #                                 line's ink made it look TALL
+
+    def words(self, frames):
+        from collections import deque
+        from concurrent.futures import ThreadPoolExecutor
+        pool = ThreadPoolExecutor(self.jobs)
+        q, last, prev = deque(), [], []
+        depth = self.jobs * self.every + 1
+
+        def took(fut):
+            nonlocal last, prev
+            if fut is not None:
+                now = fut.result()
+                last = [w for w in now if any(
+                    p[0] == w[0] and self._over(p[1:5], w[1:5]) >= 0.5
+                    for p in prev)]
+                prev = now
+            return last
+        try:
+            for i, f in enumerate(frames):
+                q.append(pool.submit(self.read, f) if i % self.every == 0
+                         else None)
+                while len(q) > depth:
+                    yield took(q.popleft())
+            while q:
+                yield took(q.popleft())
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
 
 
 def cga4_pick(frames, bg=None, pal=None, bright=None):
@@ -2489,10 +2752,26 @@ def _encode(a, keep, tick, readers):
         dith = lambda f, k16=k16: pack_pixels(k16(f), 2)
     elif text:
         cgapal = vid.TEXT_COLOUR if tcol == "colour" else vid.TEXT_MONO
-        dith = TextMatcher(lw, lh, cgapal, a.text_glyphs, a.text_stable,
-                           a.text_sharpen, a.text_detail, a.text_busy,
-                           top=16 if cgapal else 32,
-                           prefer=a.text_prefer_colour)
+        tm = TextMatcher(lw, lh, cgapal, a.text_glyphs, a.text_stable,
+                         a.text_sharpen, a.text_detail, a.text_busy,
+                         top=16 if cgapal else 32,
+                         prefer=a.text_prefer_colour, ocr_exact=a.text_ocr,
+                         ocr_large=a.text_ocr_large)
+        dith = tm
+        if a.text_ocr or a.text_ocr_large:  # a copy of each frame to READ
+            ocr = TextOCR(a.text_ocr_conf, a.text_ocr_every, a.jobs)
+            big = ffmpeg_video(a.src, lw * OCR_CW, lh * OCR_CH, crop,
+                               "%d/%d" % (rate, spf), a.start, a.end,
+                               ":".join(eq), "rgb24")
+            readers.append(big)
+            frames = zip(frames, ocr.words(big))
+            dith = lambda fw, tm=tm: tm(fw[0], fw[1])
+            say("   OCR by tesseract: %s, a frame in %d read, %d at once, "
+                "confidence %g" % (
+                    " and ".join(x for x, on in (
+                        ("cell-sized letters exact", a.text_ocr),
+                        ("larger ones crisp", a.text_ocr_large)) if on),
+                    ocr.every, ocr.jobs, ocr.conf))
         say("   TEXT in %s, %s glyphs: detail %g, sharpen %g, letters pay "
             "%g, dead band %g%s" % (
                 "colour - a CGA, an EGA or a VGA" if cgapal else
@@ -2588,6 +2867,9 @@ def _encode(a, keep, tick, readers):
     else:
         for grey in frames:
             pend.append(dith(grey))
+    if text and (a.text_ocr or a.text_ocr_large):
+        say("   OCR: %d words drawn exact, %d crisp (a word counts once a "
+            "frame)" % tuple(tm.ocr_used))
     nf = len(pend)
     if not nf:
         raise vid.V88Error("no frames came out of %s" % a.src)
@@ -2943,6 +3225,25 @@ def parser():
                          "rather than crushed to a grey. %g by default, 2 "
                          "stronger, 0 off (brightness first, the encoder "
                          "before it)" % PREFER_COLOUR)
+    ap.add_argument("--text-ocr", action="store_true",
+                    help="text: READ the picture (tesseract, which must be "
+                         "on the PATH) and draw a word whose letters are "
+                         "about one character cell big in those exact "
+                         "characters, in one colour - a score, a caption. "
+                         "Slower: see --text-ocr-every")
+    ap.add_argument("--text-ocr-large", action="store_true",
+                    help="text: READ the picture (tesseract) and draw a "
+                         "word whose letters are LARGER than a cell as "
+                         "crisp solid blocks in one colour - no shades, "
+                         "no stray letters inside them - so a title "
+                         "stays readable")
+    ap.add_argument("--text-ocr-conf", type=float, default=80.0,
+                    help="text OCR: the confidence (0..100) a word needs to "
+                         "be drawn; lower finds more and invents more")
+    ap.add_argument("--text-ocr-every", type=int, default=5,
+                    help="text OCR: read one frame in this many; the frames "
+                         "between keep the last reading. 1 reads every "
+                         "frame, the slowest and the most exact")
     ap.add_argument("--text-stable", type=float, default=6.0,
                     help="text: a cell keeps last frame's code while it is "
                          "within this (RMS of 255) of the best, so the "

@@ -119,6 +119,8 @@ TAB_OF = {
     "text_detail": "Picture", "text_sharpen": "Picture",
     "text_busy": "Picture", "text_stable": "Picture",
     "text_prefer_colour": "Colour",
+    "text_ocr": "Picture", "text_ocr_large": "Picture",
+    "text_ocr_conf": "Picture", "text_ocr_every": "Picture",
     "levels_mix": "Colour", "flip": "Colour",
     "audio": "Sound", "rate": "Sound", "adpcm": "Sound", "jobs": "Sound",
     "volume": "Sound",

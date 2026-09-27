@@ -151813,6 +151813,52 @@ value. It costs ~20% of the encode's time and nothing on the machine: the
 file is the same format. At 0 the file is byte-identical to the encoder
 before it, and MONO, which has no hue to prefer, ignores it.
 
+**Words can be READ off the picture** (`--text-ocr`, `--text-ocr-large`,
+both off by default; `TextOCR`). A score or a caption is the one thing a
+text screen can draw exactly, and the matcher draws it as a smear of dots.
+**Tesseract** reads a second copy of each frame at 8 x 20 pixels a cell -
+the cell's own 5:12, and a cell-sized letter the twenty-odd pixels it reads
+best - and it is a PROGRAM on the PATH, not a Python package; an encode that
+asks for it without one refuses naming where to get it. What was found on a
+Sonic 2 clip decides the rest:
+
+- **Five passes a reading**: the grey, the pixels over 150 in red, in green
+  and in blue, and those over 200 in brightness. A game's text is a colour
+  on a colour, and the grey alone read SCORE and nothing else on a frame
+  whose red pass read TIME and RINGS and whose bright pass read TIME BONUS,
+  RING BONUS and TOTAL. Where passes overlap the most confident word wins,
+  and the same word from two passes keeps the TIGHTER box - one pass ran
+  SCORE into the ink of the line below and made it look two cells tall.
+- **A word is kept** at `--text-ocr-conf` (80) or better, trimmed of the
+  punctuation round it, in printable ASCII, with two letters or digits at
+  least - and only once it is read in the same place twice running.
+  Scenery reads as a confident scatter of "or", "il" and "|", which comes
+  and goes where text stays.
+- **A frame in `--text-ocr-every` (5) is read**, as many at once as there
+  are cores, and the frames between carry the last reading. It is the slow
+  part: ~7 s an encoded second on four cores.
+- **The word OWNS the cells its box covers.** Its ink is what the pass that
+  read it read as ink (read off the grey: the side of the box's middle
+  brightness with fewer pixels). The letters are one colour, the nearest
+  the ink's; each cell's ground is its own, the nearest what is not ink
+  there, so the scene stays behind the words. Taking the ground from the
+  ring of cells round the box was tried first and painted TIME BONUS on a
+  black slab.
+- **About one cell** - half a cell to two tall, a third of a cell wide or
+  more - is `--text-ocr`: the characters themselves, at the cells under
+  them, and the ground between. Wider letters are spread a cell each,
+  which a HUD's are (Sonic's are two cells wide: `S C O R E`).
+- **Taller than two cells** is `--text-ocr-large`: each cell the solid
+  block (space, full, the four halves) nearest the ink's shape, in the
+  word's two colours - no shades, no stray letters inside a letter. Under
+  two cells a crisp letter is three half-block rows and a blob, which is
+  where the line is drawn. The shape is the ink's and not the reading's, so
+  a large word is kept at 50 and a misreading costs nothing - but it needs
+  three letters or digits, the scenery's scatter being large too.
+
+Tesseract does not read everything: a game's big stylised titles came back
+as "ZONK" and "COT" or not at all, and a misread digit is drawn as read.
+
 **Clarity is what every choice is for**, and four things carry it. Each was
 LOOKED at, on three photographs and a Mandelbrot zoom, against the plainer
 choice it replaced:

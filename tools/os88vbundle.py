@@ -54,6 +54,9 @@ NEEDS
   video; nothing else here needs them.
   Optional: `python3 -m pip install tkinterdnd2` lets you drop a file on the
   window on any system (on Windows a drop works without it).
+  Optional: tesseract on the PATH (https://github.com/tesseract-ocr/
+  tesseract) for the TEXT format's --text-ocr and --text-ocr-large, which
+  read the words in the picture and draw them as words.
 
 WHAT IT MAKES
   1. Choose what the video is FOR (the machine), then the video.
