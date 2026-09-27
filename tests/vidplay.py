@@ -232,9 +232,9 @@ def main():
                     rb("vp_end"), rb("vp_err"), rb("vp_eof"), rb("vp_held"),
                     rb("vp_ready"))
 
-            def until(cond, what, guest):
+            def until(cond, what, guest, poll=0.3):
                 try:
-                    os88marty.until(m, cond, what, poll=0.3, limit=600.0,
+                    os88marty.until(m, cond, what, poll=poll, limit=600.0,
                                     guest=guest)
                 except os88marty.MartyError:
                     print("   TIMED OUT: %s\n     state: %s" % (what, state()))
@@ -247,7 +247,11 @@ def main():
                 # read straight after the stop moved can be the OLD stop's
                 until(lambda mm: rb("vp_held") == 1 and rw("vp_done") == n
                       and (not shadow or rw("vp_dy1") == 0),
-                      "the hold before frame %d" % n, 120.0)
+                      "the hold before frame %d" % n, 120.0,
+                      # (the first FINELY: its toast lasts 1.5 guest s and a
+                      # 0.3 host s poll is as much as 1.4 of them, so a
+                      # coarse read found it gone about one run in two)
+                      0.02 if toast1 is None else 0.3)
                 if toast1 is None:
                     toast1 = rb("vo_toast")
                     if toast1:              # ...and taken off the picture,
