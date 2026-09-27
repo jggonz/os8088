@@ -165,7 +165,8 @@ vd_native:
     loop .r8
     jmp short .seg
 .abs:
-    and al, 0x7F
+    and al, 0x7F                    ; 80h: a count of 0 is no segment, and
+    jz .seg                         ; not the 65,536 rounds `loop` makes of it
     mov cx, ax
     mov bx, cx
     and bx, 7

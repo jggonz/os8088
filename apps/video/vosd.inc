@@ -889,6 +889,7 @@ vc_setup:
     jmp short .s%1
 .a%1:
     and al, 0x7F                    ; ABSOLUTE: an address before each
+    jz .s%1                         ; (80h, a count of 0: no segment)
     mov dx, ax
 .b%1:
     lodsw
@@ -939,6 +940,7 @@ vd_clip:
     jmp short .sl
 .sa:
     and al, 0x7F
+    jz .sl                          ; (80h, a count of 0: no segment)
     mov dx, ax
     mov byte [cs:vc_sk], 0
 .sb:

@@ -149973,7 +149973,15 @@ super-packet = frames(16) next(16) frame record × frames, zero-padded to a sect
 - the audio bytes against the format;
 - every super-packet's sectors against 1..64;
 - every record's `len` against what is left of its super-packet and against
-  6 + the audio bytes.
+  6 + the audio bytes - and, in a flipped play (98.3.8), against the 31 KB
+  copy `vp_flipdec` keeps of it, as the seam's already was: a longer record
+  would be copied past that claim. A RESIDENT block's records the same, at
+  its walk (98.1.7);
+- a keyframe's table entry (`vp_kent`) before anything trusts it: the entry
+  is copied into `vp_ke` to be checked, so `[vp_kload]` is 0xFFFF from the
+  copy until the checks pass, and an entry that fails leaves NO key in hand
+  rather than the last one's name over this one's bytes;
+- a block's read against its claim (98.1.7).
 
 A failure refuses the file, or ends playback at that super-packet.
 
@@ -149987,6 +149995,10 @@ segments, not by trust:
   otherwise the same write reaches the neighbour of the claim.
 - **A read** runs at most off the end of the record into the super-packet
   buffer's own segment, which is harmless.
+- **An absolute segment of count 0** (`80h`, outside the grammar's 1..127)
+  is an empty segment to every decoder, `vdec.inc`'s and `vosd.inc`'s: the
+  count is not trusted into a `loop`, which would take 0 as 65,536 rounds -
+  half a million writes, seconds of an 8088 stalled on one record.
 
 #### 98.1.7 RESIDENT files: one rendition per screen, in memory (wave 10)
 
@@ -150025,7 +150037,12 @@ other resident file may, which is how several renditions sharing ONE layout
 at. A streamed file names none, and a reader refuses a target there.
 
 **It is loaded when a play starts and kept while the file is open**
-(`vp_rload`): a claim of the block's unpacked size and a cluster; the
+(`vp_rload`): a claim of the block's unpacked size and a cluster, or of
+the READ when that is bigger - a packing need not shrink, and a stored
+block's cluster slack either side can take the read a cluster past its
+size, so a claim sized by the unpacked bytes alone put a hostile LZ block's
+read (and a valid stored one's, on 2 KB clusters) BELOW the claim; the read
+is summed as `vp_rdat` sums it and a carry refuses the block; the
 packed block read so its clusters END at the claim's top, which puts it
 above where it expands to - SPEC.md 20.13.7's raw tail is what makes that
 enough - and `OSAPI_DECOMP` down to the claim's base. The audio block the
@@ -150758,6 +150775,12 @@ A VGA8 keyframe is up to a canvas, so the largest record the player reads
 is `VP_KMAXREC` = 61,440 - what one 64 KB claim holds with a cluster either
 side on a volume of 2 KB clusters; past what the volume's clusters allow,
 98.1.3's rule stands (no Preview and no seek, and it plays from the start).
+The bound is the record plus two clusters, rounded up to whole KB, **no more
+than 64 KB**: 61,440 on clusters of 2 KB or less and 57,344 on 4 KB, and
+`vp_parse` sums it in 32 bits because on 2 KB clusters it is 65,536 exactly.
+It was summed in 16 bits with a carry test at every add - and one add too
+many, the cluster three times and taken back once - so a 2 KB volume
+refused every key over 59,391 while this paragraph promised 61,440.
 
 A file whose layout's mode this display cannot set (`OSAPI_FSX_CAPS`) plays
 through a copy (98.3.2), or greys Play with the reason (§47) when no screen

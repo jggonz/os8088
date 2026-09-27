@@ -1227,18 +1227,23 @@ vp_parse:
     cmp bx, VP_KMAXREC
     ja .nokeys
     mov [vp_kmaxb], bx
+    push dx
+    xor dx, dx
     mov cx, [vp_clb]                ; its read: the record and a cluster
-    add bx, cx                      ; either side, whole KB - which must be
-    jc .nokeys                      ; one call of READ_AT (a word of bytes)
-    add bx, cx
-    jc .nokeys
-    add bx, cx
-    jc .nokeys
-    sub bx, cx
-    add bx, 1023
-    jc .nokeys
+    add bx, cx                      ; either side, whole KB - ONE 64 KB claim
+    adc dx, 0                       ; at most, which keeps the read one call
+    add bx, cx                      ; of READ_AT (a word of bytes). Summed in
+    adc dx, 0                       ; 32 bits: 61,440 and two 2 KB clusters
+    add bx, 1023                    ; is 65,536 exactly, which a 16-bit sum
+    adc dx, 0                       ; with a carry test refused
     mov cl, 10
     shr bx, cl
+    mov cl, 6
+    shl dx, cl
+    or bx, dx
+    pop dx
+    cmp bx, 64
+    ja .nokeys
     mov [vp_kbkb], bx
     mov [vp_nkeys], ax
 .nokeys:
@@ -1683,7 +1688,8 @@ vp_kent:
     mov cx, 16
     call vp_rdat
     jc .bad
-    push ds
+    mov word [vp_kload], 0xFFFF     ; vp_ke is overwritten: no key's until
+    push ds                         ; this one is checked
     pop es
     mov di, vp_ke
     mov ax, [vp_rdseg]
@@ -3490,37 +3496,56 @@ vp_ldblk:
     push si
     push di
     push es
-    mov ax, [bx+BK_UNPACKED]        ; KB: the unpacked bytes and a cluster
+    ; the read: from the cluster under the block, in whole clusters - so
+    ; many bytes that vp_rdat reads, placed to end at the claim's end. It
+    ; is summed as vp_rdat sums it, a carry refused as vp_rdat refuses it
+    mov si, [vp_clb]
+    dec si
+    and si, [bx+BK_OFF]             ; SI = into its cluster
+    mov cx, [bx+BK_PACKED]
+    add cx, si
+    jc .bad0
+    mov ax, [vp_clb]
+    dec ax
+    add cx, ax
+    jc .bad0
+    not ax
+    and cx, ax                      ; CX = the read, whole clusters
+    ; the claim, KB: the unpacked bytes and a cluster - or the READ, when
+    ; that is bigger, so the read that ends at its top starts inside it (a
+    ; packing need not shrink, and a stored block's own cluster slack can
+    ; take the read a cluster past its unpacked size: 98.1.7)
+    mov ax, [bx+BK_UNPACKED]
     mov dx, [bx+BK_UNPACKED+2]
     add ax, [vp_clb]
     adc dx, 0
+    or dx, dx
+    jnz .kb
+    cmp ax, cx
+    jae .kb
+    mov ax, cx
+.kb:
     add ax, 1023
     adc dx, 0
+    push cx
     mov cl, 10
     shr ax, cl
     mov cl, 6
     shl dx, cl
     or ax, dx
+    pop cx
     mov [vp_ldkb], ax
+    push cx
     call OSAPI_MEM_CLAIM
+    pop cx
     jnc .got
     mov word [vp_msg], vp_s_mem
     jmp .err
+.bad0:
+    mov word [vp_msg], vp_s_bad
+    jmp .err
 .got:
     mov [vp_ldseg], dx
-    ; the read: from the cluster under the block, in whole clusters - so
-    ; many bytes that vp_rdat reads, placed to end at the claim's end
-    mov ax, [bx+BK_OFF]
-    mov si, [vp_clb]
-    dec si
-    and si, ax                      ; SI = into its cluster
-    mov cx, [bx+BK_PACKED]
-    add cx, si
-    add cx, [vp_clb]
-    dec cx
-    mov ax, [vp_clb]
-    neg ax
-    and cx, ax                      ; CX = the read, whole clusters
     mov ax, [vp_ldkb]
     mov dx, 64
     mul dx
@@ -3640,6 +3665,11 @@ vp_rwalk:
     cmp ax, 16
     jb .bad
 .mn:
+    cmp byte [vp_flip], 0           ; ...no longer than a flipped play's
+    je .mf                          ; copy of the last record (98.3.8)
+    cmp ax, VP_PREVKB * 1024
+    ja .bad
+.mf:
     add si, ax                      ; step over it, normalised
     jc .bad
     mov ax, si
@@ -6892,6 +6922,11 @@ vp_nextw:
     sub di, [vw_rofs]
     cmp cx, di
     ja .brec
+    cmp byte [vp_flip], 0           ; ...and, flipping, against the copy
+    je .rfl                         ; vp_flipdec keeps of it (98.3.8), as
+    cmp cx, VP_PREVKB * 1024        ; the seam's is
+    ja .brec
+.rfl:
     mov ax, [vp_abytes]
     add ax, 6 + 10                  ; the header and ten lists' ends - or
     cmp byte [vp_planar], 0         ; a planar record's one 0 after its
