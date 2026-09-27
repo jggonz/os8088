@@ -175,10 +175,10 @@ PRESET_PIXFMT = {"cga4": "cga4", "cga4-small": "cga4", "c160": "c160",
 # row, which halves the bytes and the decode and is invisible at 320 wide
 PRESET_DEFAULTS = {"vga8": dict(fps=25.0, detail="2x1"),
                    "modex": dict(fps=25.0, detail="2x1"),
-                   # TEXT at 15: a whole picture is 4,000 bytes, and a
-                   # picture drawn whole is the clear one (98.2.16)
-                   "text": dict(fps=15.0, text_colour="colour"),
-                   "text-mono": dict(fps=15.0, text_colour="mono")}
+                   # TEXT at 30: a whole picture is 4,000 bytes, so a
+                   # full frame rate costs a text clip little (98.2.16)
+                   "text": dict(fps=30.0, text_colour="colour"),
+                   "text-mono": dict(fps=30.0, text_colour="mono")}
 
 
 # WHAT EACH CHOICE IS (98.2.8): a line per value of every option that takes
@@ -385,7 +385,7 @@ def implied(preset=None, pixfmt=None, profile="5150-st225", live=None,
             "c512" if lay == "text-80x100" else \
             "text" if lay == "text-80x25" else "mono"
     d = PRESET_DEFAULTS.get(preset, {}) if not live else {}
-    fps = d.get("fps", 15.0 if pixfmt in ("vga8", "text") else 30.0)
+    fps = d.get("fps", 15.0 if pixfmt == "vga8" else 30.0)
     if sfps:
         fps = min(fps, sfps)
     prof = PROFILES[profile or "5150-st225"]
@@ -2342,7 +2342,7 @@ def _encode(a, keep, tick, readers):
     # and its two presets to 25, at half the width (98.2.10)
     fps = a.fps or min(PRESET_DEFAULTS.get(
         None if a.live else a.preset, {}).get(
-        "fps", 15.0 if vga8 or text else 30.0), sfps)
+        "fps", 15.0 if vga8 else 30.0), sfps)
     audio = a.audio or prof["audio"]
     spk = audio == "speaker"
     if spk:                             # PCM8, at a rate the speaker plays

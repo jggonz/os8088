@@ -740,6 +740,8 @@ class App(object):
             v.set(c)
             if f["dest"] in IMPLYING:
                 self.apply_implied()
+            elif f["dest"] == "audio":
+                self.apply_audio()
             top.destroy()
         for i, (c, what, on) in enumerate(choice_lines(f, v.get()), 1):
             b = ttk.Button(fr, text=c, width=14,
@@ -841,6 +843,9 @@ class App(object):
             if f["dest"] in IMPLYING:
                 w.bind("<<ComboboxSelected>>",
                        lambda e: self.apply_implied())
+            elif f["dest"] == "audio":
+                w.bind("<<ComboboxSelected>>",
+                       lambda e: self.apply_audio())
             Tip(lab, f["tip"])
             Tip(w, f["tip"])
             if f["help"]:               # WHAT EACH CHOICE IS, a click away
@@ -1004,6 +1009,17 @@ class App(object):
         for k, v in implied_values(vals, self.sfps).items():
             self.vars[k].set(v)
         self.imply_disk()
+
+    def apply_audio(self):
+        """The sound changed by hand: the SPEAKER plays at 5,512 Hz
+        (os88venc.SPK_RATE), so choosing it sets the rate to that, and
+        leaving it puts back what the profile implies"""
+        rate = self.vars["rate"]
+        if self.vars["audio"].get() == "speaker":
+            rate.set(str(V.SPK_RATE))
+        elif rate.get() == str(V.SPK_RATE):
+            vals = {k: v.get() for k, v in self.vars.items()}
+            rate.set(implied_values(vals, self.sfps)["rate"])
 
     def browse_v88(self):
         if self.busy:

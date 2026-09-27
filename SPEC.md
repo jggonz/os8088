@@ -151795,9 +151795,9 @@ says it on its own. The box is in CELLS, 80 x 25 at most, and `fit` sizes
 it to the source on a cell of 5:12 - a 16:9 clip is 80 x 19. ffmpeg scales
 the source to **eight by eight dots a cell** (640 x 200 for the whole
 screen), and each cell becomes the character and attribute whose cell,
-drawn in the model face, is nearest it (`TextMatcher`). Both presets
-default to **15 fps**: a whole picture is 4,000 bytes, and the picture
-drawn whole is the clear one.
+drawn in the model face, is nearest it (`TextMatcher`). Both presets, and
+`--pixfmt text` with no preset, default to **30 fps**: a whole picture is
+4,000 bytes, so a full frame rate costs a text clip little.
 
 **Clarity is what every choice is for**, and four things carry it. Each was
 LOOKED at, on three photographs and a Mandelbrot zoom, against the plainer
