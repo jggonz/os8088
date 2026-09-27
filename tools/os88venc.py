@@ -179,8 +179,27 @@ DISK_LOOKAHEAD = 96 * 1024  # what the disk bucket may bank: THREE of the
                         # 60 KB/s and 2-4x over it at a 286's 400: the
                         # stream spent a surplus the player could not hold,
                         # and stalled a second in (the owner's TRK830)
-KEY_PLAYER = 61440      # the largest keyframe the player reads in one go
-                        # off a volume of 2 KB clusters (98.1.3)
+VP_KMAXREC = 61440      # apps/video/video.asm's own cap on a keyframe
+
+
+def key_limit(clb):
+    """The largest keyframe record the player reads in one go off a volume
+    of `clb`-byte clusters - vp_parse's check (apps/video/video.asm, 98.1.3)
+    worked out rather than restated: the record must be <= VP_KMAXREC, and
+    it and THREE clusters must fit a word before it takes one back off and
+    rounds up to whole KB (another carry test). Past this it plays from the
+    start only, with no poster and no seek."""
+    return min(VP_KMAXREC, 0xFFFF - 3 * clb, 0xFFFF - 1023 - 2 * clb)
+
+
+KEY_CLB = 2048          # the largest cluster of any disk this encoder makes:
+                        # os88hdd's FAT16 is 4 sectors a cluster at 20 and
+                        # 32 MB, and every floppy is 1 KB or less
+KEY_PLAYER = key_limit(KEY_CLB)     # 59,391 - NOT the 61,440 SPEC.md 98.3
+                        # quotes for 2 KB clusters: 61,440 and a cluster
+                        # either side is 65,536, which the player's 16-bit
+                        # sum carries on, and its check adds a third cluster
+                        # besides. 61,440 is only reached at 1 KB and under
 
 
 def need_tools():
@@ -1546,7 +1565,17 @@ def _encode(a, keep, tick, readers):
         # keyframe index (SPEC.md 98.1.1) and the player opens at frame 0
         # whatever it is - it only chooses the picture in the box
         nk = len(wr.keys)
-        poster = min(nk - 1, max(0, round(a.poster_at * fps / wr.keyint)))
+        if nk:
+            poster = min(nk - 1,
+                         max(0, round(a.poster_at * fps / wr.keyint)))
+        else:
+            # no keyframe to point at (every one past its length word, or
+            # none made): the file is written with none rather than lost
+            # to an index of -1 after the whole encode
+            say("   NOTE: --poster-at %g: the file has no keyframes, so it "
+                "has no poster (and no seek) - it plays from the start"
+                % a.poster_at)
+            poster = None
     if a.resident:
         st = vid.write_resident(
             a.out, [wr], afmt, abytes if afmt else 0, b"".join(sound),
@@ -1567,11 +1596,17 @@ def _encode(a, keep, tick, readers):
     res.update(fps=fps, period=enc.period, audio_cyc=audio_cyc,
                audio_bps=audio_bps, prof=prof, w=w, h=h, layout=lay,
                palette=palette)
-    kmax = max((len(r) for k, r, c in wr.keys), default=0)
+    # the header's own figure, which counts what write() appended - an
+    # ADPCM4 key's reference byte (98.1.1.1) is not in wr.keys
+    kmax = vid.Reader(a.out).kmax
     if kmax > KEY_PLAYER:
         say("   NOTE: the largest keyframe is %d bytes, past the %d the "
-            "player reads in one go: it will play from the start only, "
-            "with no poster and no seek" % (kmax, KEY_PLAYER))
+            "player reads in one go off a volume of %d KB clusters (a hard "
+            "disk%s): there it will play from the start only, with no "
+            "poster and no seek"
+            % (kmax, KEY_PLAYER, KEY_CLB // 1024,
+               "; a floppy's 1 KB ones take %d" % key_limit(1024)
+               if kmax <= key_limit(1024) else ", or a floppy"))
     secs = nf / fps
     st = enc.stats
     say("   %d frames, %.1f s: %d bytes = %.1f KB/s (%.1f video, %.1f "

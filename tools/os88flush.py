@@ -461,6 +461,16 @@ def vhd_volume(path, part=0):
     """
     with open(path, "rb") as f:
         img = f.read()
+    if img[:2] == b"\xDA\xBE":
+        # A SEAGATE ST11 layout (tools/os88hdd.py --st11): the card's
+        # parameter record - DA BE, cylinders big-endian, heads, sectors -
+        # is in physical cylinder 0, which it hides, so the BIOS's sector 0
+        # (the MBR, and what every partition LBA counts from) is cylinder 1
+        _, heads, spt = struct.unpack_from(">HBB", img, 2)
+        if not heads or not spt:
+            raise FlushError("%s: an ST11 record with %d heads and %d "
+                             "sectors" % (path, heads, spt))
+        img = img[heads * spt * SECTOR:]
     if len(img) < SECTOR or img[510:512] != b"\x55\xaa":
         raise FlushError("%s: no partition table" % path)
     ent = 446 + part * 16

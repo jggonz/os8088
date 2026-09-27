@@ -984,7 +984,7 @@ def record(ops, g, audio=b"", limit=SP_MAX * SECTOR - 4):
     n = REC_HDR + len(lists) + len(audio)
     if n > limit:
         raise V88Error("a record of %d bytes cannot fit %s" % (
-            n, "a super-packet" if limit < 65535 else "its length word"))
+            n, "a super-packet" if limit < 65534 else "its length word"))
     return struct.pack("<HHH", n, y0, y1) + lists + audio
 
 
@@ -1229,8 +1229,13 @@ class Writer:
         if k >= self.key0 and (k - self.key0) % self.keyint == 0:
             kop = keyframe_ops(surf, self.g)
             try:
-                self.keys.append((k, record(kop, self.g, limit=65535),
-                                  self.g.canvas(surf)))
+                # 65,535 is the table's length word; an ADPCM4 file's
+                # write() appends the reference byte (98.1.1.1) to every
+                # key, so its records must leave that byte room
+                self.keys.append((k, record(
+                    kop, self.g, limit=65535 - (
+                        self.audio_fmt == AUD_ADPCM4)),
+                    self.g.canvas(surf)))
             except V88Error:
                 # a VGA8 canvas past its record's length word (a 320 x
                 # 240 MODEX one can be) has no keyframe here: the file
@@ -1268,6 +1273,10 @@ class Writer:
                                    "%d, where keyframe %d's seek starts; "
                                    "encode it with audio_chunks(keys=)"
                                    % (sc, k + 1, k))
+                if len(r) + 1 > 65535:
+                    raise V88Error("keyframe %d is %d bytes, and its ADPCM4 "
+                                   "reference byte takes it past its length "
+                                   "word" % (k, len(r)))
                 keys.append((k, r + bytes([ref]), c))
         seam = b""
         if self.loop is not None:

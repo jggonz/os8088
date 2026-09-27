@@ -18,8 +18,9 @@ hook does). It saves VIDSND.TXT beside itself, read back off the VHD.
 ASSERTED: the card was found and answered, a line was found, a fixed disk
 answered, and both PCM rows interrupt at the DSP's rate / the block, within
 2% - the property the player's clock is. REPORTED, never gated: the ADPCM
-row (whether MartyPC's DSP does 7Dh at all is part of the question) and
-the ceiling, which on this emulator is an XT-IDE's (CPU-copied) and not the
+row (MartyPC's DSP does 7Dh through tools/martypc/patches/
+06-sblaster-adpcm4.patch, a model written against DOSBox's decoder, so
+whether a real SB2.0 agrees stays a field question) and the ceiling, which on this emulator is an XT-IDE's (CPU-copied) and not the
 owner's DMA ST11M (tools/martypc/configs/os8088_machines.toml).
 """
 import argparse

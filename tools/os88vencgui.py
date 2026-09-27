@@ -406,7 +406,10 @@ def short83(path):
     """The name a video goes onto a disk as: its own, cut to an 8.3 name
     (a 40-character one was refused by os88disk outright)"""
     stem = os.path.splitext(os.path.basename(path))[0].upper()
-    stem = "".join(c for c in stem if c.isalnum() or c in "_-")[:8]
+    # ASCII only: str.isalnum() passes "É" or "日", which no FAT directory
+    # entry here can carry (os88hdd's latin1 encode raised on the second)
+    stem = "".join(c for c in stem
+                   if c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")[:8]
     return (stem or "VIDEO") + ".V88"
 
 

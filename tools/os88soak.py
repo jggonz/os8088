@@ -953,12 +953,26 @@ def start(a):
     if not a.shared_build:
         sys.path.insert(0, os.path.join(ROOT, "tools"))
         import os88build
+        import buildnum
+        # THE BUILD NUMBER IS PINNED BEFORE THE TREE IS BUILT, and the
+        # tree's own `make` is handed it (tools/buildnum.py reads the pin).
+        # Read afterwards, a commit landing during a cold tree's build - which
+        # is minutes - pinned the run at N+1 against a tree built at N, the
+        # very skew the pin below exists to prevent.
+        num, _ = buildnum.build_number()
+        was = os.environ.get("OS88_BUILDNUM")
+        os.environ["OS88_BUILDNUM"] = str(num)
         try:
             frozen = os88build.tree(targets=_frozen_targets(a))
         except RuntimeError as e:
             print("%sos88soak: could not build the run's own tree:%s\n%s"
                   % (RED, OFF, str(e)[-1200:]), file=sys.stderr)
             return 1
+        finally:
+            if was is None:
+                os.environ.pop("OS88_BUILDNUM", None)
+            else:
+                os.environ["OS88_BUILDNUM"] = was
         # BOTH VARIABLES, and they are not the same claim (os88build's
         # `tree_root`): OS88_BUILD says which kernel a symbol map describes -
         # which three registry rows override with `build/smallk` - and
@@ -970,9 +984,8 @@ def start(a):
         # ...and the BUILD NUMBER it froze at (tools/buildnum.py): a row that
         # rebuilds a declared artefact in the tree later would otherwise take
         # the live checkout's commit count, and one commit mid-run put the
-        # tree's kernel.bin a build ahead of its own images.
-        import buildnum
-        num, _ = buildnum.build_number()
+        # tree's kernel.bin a build ahead of its own images. `num` is the
+        # one the tree was just built with, above.
         env["OS88_BUILDNUM"] = str(num)
         print("os88soak: the run reads %s, so build/ is yours while it runs"
               % os.path.relpath(frozen.dir, ROOT))
