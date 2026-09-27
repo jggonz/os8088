@@ -599,7 +599,8 @@ dskw_mkbody:
     call dskw_commit            ; the one-sector commit
     mov byte [dskw_isdir], 0
     jc .rollax
-    jmp dskw_relold.ok          ; coherence by remount (SPEC.md 18.4), AX = 0
+    jmp dskw_relold.flush       ; coherence by remount (SPEC.md 18.4); the
+                                ; FAT is clean, so the flush is AX = 0, CF = 0
 
 .exists:
     mov ax, FERR_EXIST
@@ -806,13 +807,17 @@ dskw_rmbody_n83:                ; the same pipeline with dskw_n83 already
 dskw_relold:
     mov ax, [dskw_oldclus]
     call dskw_clok              ; a garbage old link: leave the FAT alone
-    jc .ok
+    jc .flush
     call dskw_free_chain
-    call dskw_flush_x
-    jc .late                    ; AX = the FERR_*, CF = 1
-.ok:
-    xor ax, ax                  ; ...or AX = 0, CF = 0
-.late:
+.flush:                         ; ...but FLUSH EITHER WAY: a commit point
+    call dskw_flush_x           ; leaves the window CLEAN (dsk_fatw_park
+                                ; relies on it - dirt carried across a media
+                                ; change lands on the NEXT disk's FAT), and
+                                ; a truncate at the file's own allocated end
+                                ; has re-marked the last cluster and frees
+                                ; nothing (18.4.7.5). Clean is no I/O, and
+                                ; its answer is already ours: CF=0 AX=0, or
+                                ; CF=1 AX = the FERR_*
     pushf                       ; dskw_sync_x preserves every register but
     call dskw_sync_x            ; not the flags, and the answer is CF
     popf
@@ -2609,7 +2614,6 @@ dskw_read_at_x:
     call dskw_stat_x            ; BX = first cluster, DX:CX = the size
 %endif
     jc .err
-    mov [dwr_clus], bx
     mov [dwr_sz], cx
     mov [dwr_sz+2], dx
 
@@ -2672,8 +2676,8 @@ dskw_read_at_x:
     mov cx, di                  ; call read (SPEC.md 18.4.8) - so its FAT link
 .walk:                          ; is this walk's, checked as every link is
 %endif
-    mov ax, [dwr_clus]
-    jcxz .atclus
+    mov ax, bx                  ; the walk's start, the stat's BX, which
+    jcxz .atclus                ; nothing above has touched
 .skip:
     call dsk_next_clus_x    ; AX = the next cluster; CF=1 = the
     jc .corrupt                 ; chain ended before the size said it would
@@ -2681,7 +2685,15 @@ dskw_read_at_x:
     jc .corrupt
     loop .skip
 .atclus:
-    mov [dwr_clus], ax
+    push ax                     ; THE CLUSTER IS NEVER STORED. It was banked
+                                ; in [dwr_clus], which on kern_big IS the
+                                ; READ_SEQ cursor's +6 - so a read that FAILED
+                                ; handed the caller a cursor whose +6 was
+                                ; already the cluster at +12, under a
+                                ; generation that still matched, and the
+                                ; retry walked one link too far and delivered
+                                ; the wrong cluster with CF=0. +6 is the
+                                ; wrapper's to write, on success (18.4.8)
 
     ; --- and read it ---------------------------------------------------------
     ; dsk_read_chain moves whole SECTORS, so a tail shorter than one is
@@ -2690,7 +2702,7 @@ dskw_read_at_x:
     ; number of sectors.
     mov ax, [dwr_take]
     call dsk_bytes_secs_x       ; DX = sectors
-    mov ax, [dwr_clus]
+    pop ax
     mov bx, [dwr_buf]
     call dsk_read_chain_x
     jc .ioerr
@@ -5406,15 +5418,17 @@ dskw_time:    resw 1            ; ...and time
 ; a transfer holds sch_lock, so nothing can be inside this twice.
 dwr_buf:      resw 1            ; the caller's buffer offset (ES is theirs)
 dwr_cap:      resw 1            ; ...and its capacity in bytes
-%ifdef KERN_BIG                 ; ...THREE OF THEM ARE READ_SEQ'S CURSOR on
-dwr_off     equ dwr_c + FSEQ_OFF ; kern_big (SPEC.md 18.4.8): the offset, the
-dwr_sz      equ dwr_c + RSQ_SIZE ; size and the cluster are the cursor's own
-dwr_clus    equ dwr_c + RSQ_CUR ; fields, so READ_AT leaves them where the
-%else                           ; wrapper wants them. Outside a READ_SEQ call
-dwr_off:      resd 1            ; [dwr_c]'s generation is 0 and these are
-dwr_sz:       resd 1            ; plain scratch, which is all READ_AT and
-dwr_clus:     resw 1            ; WRITE_AT ask of them
-%endif
+%ifdef KERN_BIG                 ; ...TWO OF THEM ARE READ_SEQ'S CURSOR on
+dwr_off     equ dwr_c + FSEQ_OFF ; kern_big (SPEC.md 18.4.8): the offset and
+dwr_sz      equ dwr_c + RSQ_SIZE ; the size are the cursor's own fields, so
+%else                           ; READ_AT leaves them where the wrapper wants
+dwr_off:      resd 1            ; them. Outside a READ_SEQ call [dwr_c]'s
+dwr_sz:       resd 1            ; generation is 0 and these are plain scratch,
+%endif                          ; which is all READ_AT and WRITE_AT ask. The
+                                ; CLUSTER is not one of them and must never
+                                ; be: +6 is the wrapper's, written on success
+                                ; only, or a FAILED read hands back a cursor
+                                ; already one link on (dskw_read_at's .atclus)
 dwr_clb:      resw 1            ; bytes per cluster on this volume
 dwr_take:     resw 1            ; bytes this call will deliver
 dwr_end:      resd 1            ; dskw_write_at: offset + count (SPEC.md

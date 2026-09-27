@@ -31911,7 +31911,9 @@ and a cursor kept beside the ring (98.3). It cost 55 bytes of `.cold` and
 20 of `.bss`.
 
 Out `CF=0` with `DX:AX` = the bytes delivered and the cursor advanced past
-them, 0 meaning at or past the end; `CF=1` with `AX = FERR_*`.
+them, 0 meaning at or past the end; `CF=1` with `AX = FERR_*` and **the
+cursor unmoved** - every field the kernel keeps means what it meant before
+the call, so retrying the same call reads the same bytes.
 
 The cursor, byte for byte. **Only `+12` is the caller's to write**; the rest
 is the kernel's and its layout may change:
@@ -31959,10 +31961,17 @@ breaking them. The capacity also bounds the take at EOF, so a tail shorter
 than a cluster is delivered whole and the next call answers 0.
 
 **It IS `READ_AT`**, with the kernel's copy of the cursor in `[dwr_c]` -
-and on `kern_big` three of `READ_AT`'s own scratch words ARE that copy's
-fields (`[dwr_off]`, `[dwr_sz]`, `[dwr_clus]` are `+12`, `+8` and `+6`), so
-`READ_AT` leaves the offset, the size and the cluster where the cursor keeps
-them. `READ_AT`'s stat comes from `dwr_stat`, which answers from a valid
+and on `kern_big` two of `READ_AT`'s own scratch words ARE that copy's
+fields (`[dwr_off]` and `[dwr_sz]` are `+12` and `+8`), so `READ_AT` leaves
+the offset and the size where the cursor keeps them. **The cluster is NOT
+one of them, and must never be.** It was, as `[dwr_clus]` at `+6`, and
+`READ_AT` stored the cluster it had walked to there BEFORE the transfer - so
+a read that failed handed back a cursor whose `+6` was already the cluster
+at `+12`, under a generation that still matched, and the retry walked one
+link past it and delivered the wrong cluster with `CF=0`. `READ_AT` keeps
+the walk on the stack now, which is 9 bytes of `.cold` SMALLER (and gives
+`kern_small` the word's 2 bytes of `.bss` back), and
+`+6` is written by the wrapper alone, on success. `READ_AT`'s stat comes from `dwr_stat`, which answers from a valid
 cursor: its cluster in place of the first one, and `DI` = 1 where
 `READ_AT` entered with 0, which makes the walk ONE link - `READ_AT`'s own
 walk, checked as every link is. A plain `READ_AT` asks too and finds
@@ -32172,6 +32181,21 @@ it. One thing is different and it is a correction: a FAT flush
 that fails AFTER the entry has landed now re-syncs the listing before it
 answers `FERR_IO`, as a delete's always has, where the first build returned
 with the listing still describing the old size.
+
+**And `dskw_relold` flushes whether or not it frees.** A truncate AT the
+file's own allocated end - a cluster-aligned file cut at its size, which is
+what the DOS box's `AH=40h CX=0` at end of file is - re-marks the last
+cluster's link as the end and hands `dskw_relold` an end mark to free, which
+`dskw_clok` refuses; the flush sat behind that refusal, so the call returned
+with the FAT window DIRTY. `dsk_fatw_park` assumes every commit point leaves
+it clean, and flushes whatever dirt it finds onto the volume's LBAs at the
+next mount - so a floppy swapped in the same drive before any other write
+could take the previous disk's FAT sectors, and the window stays pinned
+against compaction (`mem_fatw_dirty`) until something flushes it. The flush is now on both
+arms; a clean range answers `CF=0 AX=0` with no I/O, which is also why the
+`xor ax, ax` after it went, and the fix is 4 bytes SMALLER. With §18.4.8's
+the two measure `.cold` -13 on `kern_big` and `.cold` -16, `.bss` -2 on
+`kern_small`.
 
 Its consumers are streamed Compress (§22.22.5) and the DOS box's `AH=40h
 CX=0` (§96.11.6.2), which rounds any size down to a cluster, cuts there and
