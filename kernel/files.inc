@@ -1871,6 +1871,23 @@ fm_focus_x:
                                 ; exactly what Refresh costs (SPEC.md 22)
     call fmv_load
 .drawn:
+    and byte [bx+W_FLAGS+1], (~WF_STALE >> 8) & 0xFF
+                                ; THE PIXELS ARE ABOUT TO DESCRIBE THE LISTING
+                                ; AGAIN (SPEC.md 11.96.16.1), on BOTH arms:
+                                ; AL = 1 is fm_repaint below, which clears it
+                                ; too, and AL = 0 is wm_raise drawing it whole
+                                ; through wm_draw_win -> fm_paint_x, which does
+                                ; not and must not (a W_PAINT may be a clipped
+                                ; strip). Both routes up here RAISED the bit -
+                                ; fmv_store's re-list and the FSD_ICONS repair
+                                ; just above - so without this the one raise
+                                ; that paid the debt left the window stale for
+                                ; good: never banked again, every later raise a
+                                ; full repaint, until a navigation happened to
+                                ; reach fm_repaint. Nothing banks this window
+                                ; between here and that draw: wm_raise's own
+                                ; wm_su_take is the OUTGOING window's, and
+                                ; wm_dmg_mine keeps the dock's pass off it
     cmp ch, 0
     je .owed                    ; the caller is drawing this window
     mov si, bx

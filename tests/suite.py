@@ -2607,6 +2607,14 @@ SOAK = [
         "first frame, which is how a kernel whose next int 13h jumped into "
         "cold_entry passed all of them",
         needs=("marty",), serial=True),
+    Row("tickzero", "soak", py("tests/tickzero.py"), 10.0,
+        "Does the boot ZERO [ticks]? It is .bss, nothing clears .bss, and "
+        "sched_init's one store is the whole of it - kernel size pass 5 "
+        "folded that store into a comment and no row saw it, because every "
+        "emulator here powers on with zeroed RAM. So this plants 0x8000 at "
+        "sched_init's entry and reads the count at the desktop. Broken on "
+        "purpose (the store commented out) it FAILS",
+        needs=("marty",)),
     Row("cylrun", "soak", py("tests/cylrun.py"), 10.0,
         "Did the kernel load actually CROSS A HEAD? (SPEC.md 18.93.3) "
         "boot_cylrun at 0060:0004 is written on the one path where the "
@@ -8226,7 +8234,7 @@ SOAK = [
         "at the layout's scale (98.4.1): half on CGA, its own size on "
         "Hercules. Broken on purpose (the dither's thresholds swapped, the "
         "play's base left at 0, the hook's pause test removed, the position "
-        "not kept) it FAILS",
+        "not kept, the periods pending at Space dropped) it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidprevherc", "soak", py("tests/vidpreview.py", "--layout",
@@ -8240,7 +8248,9 @@ SOAK = [
         "SPEC.md 98.3.2, 98.3.5: vidpreview's CGA clip on the Hercules "
         "5150, through the SHADOW - the keyframe decoded into it and copied "
         "before the stream starts, every hold read where the copy put the "
-        "rows",
+        "rows; and a pause, pinned on frame 40's decode, costs the play "
+        "nothing - the 5 periods a copy-long call leaves pending at Space "
+        "reach the clock (98.3.4)",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidsndpause", "soak", py("tests/vidsound.py", "--secs", "20",

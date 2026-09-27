@@ -4599,6 +4599,9 @@ vp_keyat:
 ; =============================================================================
 vp_main:
     OS88_ALTENTER_SEED              ; the Alt+Enter that got us here is held
+    mov byte [vp_pfresh], 0         ; a pause from before this bracket - the
+                                    ; desktop's, or the last bracket's way
+                                    ; out - has no periods pending in it
     cmp byte [vp_winm], 0
     je .fs
     call OSAPI_FSX_SURF             ; the display this bracket owns must be
@@ -5913,7 +5916,11 @@ vp_skeep:
 vp_upaus:
     cmp byte [vp_upause], 0
     jne .resume
-    mov byte [vp_upause], 1         ; one store: the hook reads it at IF = 0
+    mov byte [vp_pfresh], 1         ; the hook's next call is the pause's
+    mov byte [vp_upause], 1         ; first - set BEFORE the pause, so a call
+                                    ; between the two stores plays its
+                                    ; periods and the flag waits for the next.
+                                    ; One store each: the hook reads at IF = 0
     call OSAPI_GET_TICKS
     mov [vp_ptk0], ax
     cmp byte [vp_snd], 0
@@ -5940,6 +5947,7 @@ vp_upaus:
     mov cx, [vp_atot]               ; from its last word as before
     call OSAPI_SND_STREAM
 .go:
+    mov byte [vp_pfresh], 0         ; (a pause no call saw: nothing pending)
     mov byte [vp_upause], 0
     ret
 
@@ -6163,7 +6171,7 @@ vp_hook:
     cmp byte [vp_ready], 0
     je .ret
     cmp byte [vp_upause], 0         ; paused (98.3.4): the periods are not
-    jne .ret                        ; the play's
+    jne .paused                     ; the play's
     add [vp_pers], ax
     cmp ax, [vp_gap]                ; the longest the hook was held off: a
     jbe .g                          ; picture late for THAT is the machine's,
@@ -6220,6 +6228,15 @@ vp_hook:
     cli
 .ret:
     ret
+.paused:                            ; ...EXCEPT THE PAUSE'S FIRST CALL'S: AX
+    cmp byte [vp_pfresh], 0         ; is every period since the last call,
+    je .ret                         ; and those PLAYED - through the shadow a
+    mov byte [vp_pfresh], 0         ; call is a whole copy long, so Space
+    add [vp_pers], ax               ; lands between two calls with 5 or 6
+    cmp byte [vp_snd], 0            ; periods pending, which were dropped and
+    jne .ret                        ; the picture ran that far behind the
+    add [vp_owed], ax               ; clock (98.3.4). Owed, they are drawn on
+    ret                             ; the resume's first call
 .snd:                               ; --- the card's clock (SPEC.md 98.3.1)
     call vp_adue                    ; CX = frames due, [vp_due] set
     jcxz .top
@@ -8889,6 +8906,7 @@ vp_kidx:      dw 0                  ; records to step over after it
 vp_ssp:       dw 0, 0               ; the first super-packet this play reads
 vp_ssec:      dw 0
 vp_upause:    db 0                  ; Space: paused
+vp_pfresh:    db 0                  ; ...and the hook has not been called since
 vp_skn:       dw 0                  ; SEEKING (98.3.14): presses, signed...
 vp_skb:       dw 0                  ; ...from this frame...
 vp_sktk:      dw 0                  ; ...the last at this tick

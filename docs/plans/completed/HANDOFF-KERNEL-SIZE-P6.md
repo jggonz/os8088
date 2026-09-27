@@ -109,6 +109,20 @@ which the brief allowed, and which is where the remaining easy bytes were.
   contract says; before, it returned the tail length. No caller reads it.
 * **The `Needs <STEM>.O88` toast** is read straight out of `assoc_fnb`.
 
+### 1.3 A defect this pass introduced, found by the soak after it
+
+**`sched_init` stopped zeroing `[ticks]`.** The video batch (`89f54061`)
+rewrote the lock-zeroing lines and ended a comment with *"so fsx_run need"*;
+the next line, `mov word [ticks], 0`, became the rest of that comment. `ticks`
+is `.bss` and nothing clears `.bss`, so both kernels booted with whatever RAM
+held there - invisible on every emulator in the tree, which all power on with
+zeroed memory. It surfaced while the `vidprevshd` investigation was tracing the
+rate hook, and it is fixed in `7e558089` with `tests/tickzero.py` (soak), which
+plants 0x8000 at `sched_init`'s entry and fails the broken kernel. **Whoever
+edits a comment block that sits beside instructions: `make` cannot tell a
+deleted store from a moved one**, and `kernsize` read this as −6 bytes of
+overlay, i.e. a saving.
+
 ## 2. WHAT IS LEFT, costed
 
 | candidate | kern_big | kern_small | why not taken |

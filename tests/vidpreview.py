@@ -40,7 +40,9 @@ starts, and each hold reads the screen where the copy put the rows.
 
 Broken on purpose: the half-scaler's thresholds swapped (the poster bytes
 differ), vp_base left at 0 (the play from the key holds at the wrong frame),
-and the hook's pause test removed (frames are drawn while paused).
+the hook's pause test removed (frames are drawn while paused), and the
+periods pending at Space dropped rather than owed (the clock is 5 short, and
+through the shadow the play reads 97 ticks where it reads 94).
 """
 import argparse
 import os
@@ -176,7 +178,9 @@ def main():
                     bad.append("%s: the poster differs (%d bytes, %d pixels)"
                                % (what, d, sd))
 
-            done = stall = late = dt = ptk = d1 = d2 = 0
+            done = stall = late = dt = ptk = d1 = d2 = gap = 0
+            owed0 = pers1 = -1
+            pdiv, pitper = 39773, 1
             try:
                 wait(lambda mm: rw("vp_ploads") >= 1, "the poster")
                 m.write(base + syms["vp_nowin"], b"\1")   # FULL SCREEN, the
@@ -257,22 +261,52 @@ def main():
                     bad.append("after a play to the end, Play starts at key "
                                "%d and the box is key %d, not the start and "
                                "the poster" % (rw("vp_sel"), rw("vp_dkey")))
-                # --- 4: Space pauses a play from the start
+                # --- 4: Space pauses a play from the start. EVERY INPUT AT A
+                # GUEST POINT: Space goes in with the machine stopped on the
+                # decode of frame 40, the pause is held for 1.5 guest seconds
+                # counted in cycles, and Space again goes in stopped. A host
+                # poll for "frame 40" landed anywhere from 40 to 76 - a 0.3 s
+                # poll is a guest second at 3.4x - and the player's own
+                # latency to the key is deterministic from there
                 m.write(base + syms["vp_played"], b"\0")
-                m.type_text("p")
-                wait(lambda mm: rb("vp_ready") == 1 and rw("vp_done") >= 40,
-                     "the play to reach frame 40")
-                m.type_text(" ")
-                wait(lambda mm: rb("vp_upause") == 1, "Space to pause")
+                m.bp_exec(base + syms["vp_frame.dec"])   # ARMED FIRST: the
+                m.type_text("p")                          # play's frames are
+                for _ in range(vidplay.NF):               # the only decodes
+                    if not m.wait_stop(limit=120.0):
+                        raise Stop("the play from the start drew no frame")
+                    if rw("vp_done") >= 40:
+                        break
+                    m.run()
+                # ...and stopped again where the UI task takes the pause:
+                # the periods the kernel still owes the hook THERE have
+                # played, and must reach the play's clock ([vp_pers]) on
+                # the pause's first call rather than be dropped (98.3.4)
+                m.bp_exec(base + syms["vp_upaus"])
+                m.key("Space")
+                m.run()
+                if not m.wait_stop(limit=120.0):
+                    raise Stop("Space never reached vp_upaus")
+                m.bp_exec()
+                owed0 = u16(m.read(ui._S("sch_rpend"), 2))
+                pers0 = rw("vp_pers")
+                for _ in range(200):            # the pause taken, in
+                    if rb("vp_upause") == 1:    # 20,000-cycle steps (4 ms)
+                        break
+                    m.advance(cycles=20000)
+                else:
+                    raise Stop("Space to pause never happened")
                 d1 = rw("vp_done")
-                os88marty.pace(m, 1.5)
+                m.advance(cycles=int(1.5 * os88marty.GUEST_HZ))
                 d2 = rw("vp_done")
-                m.type_text(" ")
+                pers1 = (rw("vp_pers") - pers0) & 0xFFFF
+                m.key("Space")
+                m.run()
                 wait(lambda mm: rb("vp_upause") == 0, "Space to resume")
                 wait(lambda mm: rb("vp_played") == 1, "the paused play to end")
-                done, stall, late, dt, ptk = (rw("vp_done"), rw("vp_stall"),
-                                              rw("vp_late"), rw("vp_dt"),
-                                              rw("vp_ptk"))
+                done, stall, late, dt, ptk, gap, pdiv = (
+                    rw("vp_done"), rw("vp_stall"), rw("vp_late"), rw("vp_dt"),
+                    rw("vp_ptk"), rw("vp_gap"), rw("vp_pdiv"))
+                pitper = rb("vp_pitper")
                 # --- 5: F goes in PAUSED on the first frame; Space plays; F
                 # comes out, and Play starts next at the key at or before
                 # the last frame drawn (98.3.6)
@@ -396,20 +430,43 @@ def main():
             except Stop as e:
                 bad.append(str(e))
     want_t = vidplay.NF / vidplay.FPS * 1193182 / 65536
+    # WHAT THE MECHANISM PERMITS, in periods of the hook's clock (P ticks
+    # each, [vp_pitper] a frame). The play is over when a hook call finds
+    # frame NF+1 due, so NF+1 frames of periods played - found at most one
+    # hold-off late, and [vp_gap] is the longest the hook was held off this
+    # play (a whole shadow copy: 6 periods on the Hercules 5150, which is
+    # where "a shadow play runs to 95 ticks" comes from). The pause can only
+    # make it SHORTER: the call either side of it counts at most one period
+    # of the pause as played. And [vp_dt] is four readings of a tick counter,
+    # each up to a tick down, so the answer is inside 2 ticks of the real one.
+    # Nothing else moves it, and in particular not WHERE the pause lands:
+    # SPEC.md 98.3.4's pending periods are owed, not dropped - dropping them
+    # was 97 to 99 ticks here, depending on the frame Space landed on
+    per = pdiv / 65536.0
+    t_hi = ((vidplay.NF + 1) * pitper + gap) * per + 2
+    t_lo = ((vidplay.NF + 1) * pitper - 2) * per - 2
     print("   paused at frame %d, still %d after 1.5 guest s; drew %d, "
-          "stalls %d, late %d, %d ticks played (want %.1f) and %d paused"
-          % (d1, d2, done, stall, late, dt, want_t, ptk))
+          "stalls %d, late %d, %d ticks played (want %.1f, %.1f to %.1f "
+          "with a %d-period hold-off) and %d paused"
+          % (d1, d2, done, stall, late, dt, want_t, t_lo, t_hi, gap, ptk))
     if d2 != d1:
         bad.append("%d frames were drawn while paused" % (d2 - d1))
     if done != vidplay.NF or stall or late:
         bad.append("the paused play drew %d, stalled %d, late %d"
                    % (done, stall, late))
-    # a shadow play runs to 95 ticks unpaused (SPEC.md 98.3.2); and the
-    # paused span is taken in whole ticks at BOTH ends, which is up to a
-    # tick each - two more, not one (97 was measured, before and after
-    # VIDEO-PLAN wave 10, and failed the old allowance one run in three)
-    if abs(dt - want_t) > (4 if shadow else 2) + 2:
+    if not t_lo < dt < t_hi:
         bad.append("%d ticks played for %.1f s of video" % (dt, want_t / 18.2))
+    # EXACT, where the ticks above cannot be: a shadow call is a whole copy
+    # long, so the periods pending at Space are 5 or 6 and the end of the
+    # play is only seen a call at a time - dropping them costs one call and
+    # can land inside t_hi. The clock took every one of them, and at most the
+    # one period the pause's first call straddles (and one more if a call
+    # ran between vp_upaus's entry and its store) beyond
+    print("   %d periods pending at Space, %d reached the clock" % (owed0,
+                                                                  pers1))
+    if not owed0 <= pers1 <= owed0 + 2:
+        bad.append("%d periods were pending when Space paused and %d reached "
+                   "the play's clock" % (owed0, pers1))
     if ptk < 20:
         bad.append("only %d ticks counted as paused" % ptk)
     for b in bad:
