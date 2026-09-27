@@ -287,6 +287,8 @@ vp_entry:
     call OSAPI_ABOUT_SET
     mov ax, vp_onwake
     call OSAPI_WM_ONWAKE
+    mov ax, vp_ontimer              ; the hold's loading (98.3.18); refused
+    call OSAPI_WM_ONTIMER           ; on kern_small, which has no XMS anyway
     mov word [vp_msg], vp_s_none
     call vp_fmt
     mov bx, [vp_win]
@@ -859,6 +861,7 @@ vp_open:
     mov byte [vp_loaded], 0
     call vp_pfree                   ; the last file's poster, and its keys
     call vp_rfree                   ; ...and its loaded block
+    call vp_xfree                   ; ...and its hold in XMS (98.3.18)
     xor ax, ax
     mov [vp_nkeys], ax
     mov [vp_nrend], al
@@ -949,6 +952,7 @@ vp_open:
     jc .free
     mov byte [vp_loaded], 1
     call vp_canplay
+    call vp_xopen                   ; a streamed file into XMS, if it fits
 .free:
     mov dx, [vp_tmp]
     call OSAPI_MEM_FREE
@@ -3156,6 +3160,8 @@ vp_rdat:
     add cx, si                      ; the end, from that cluster's start
     jc .bad
     mov [vp_rdend], cx
+    call vp_xrdat                   ; HELD (98.3.18): a copy out of XMS
+    jnc .ok
     add cx, bx                      ; ...in whole clusters
     jc .bad
     not bx
@@ -3180,6 +3186,477 @@ vp_rdat:
     pop es
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; THE FILE HELD IN XMS (SPEC.md 98.3.18). A streamed file that fits the pool
+; is given one block its size at open, and the block fills from the front: a
+; chunk at a time on the window's timer while the window is idle, and behind
+; the stream while it plays. Every read that falls inside what has arrived -
+; a chunk of the stream, a key, a seam, a seek - is a copy out of it; the rest
+; is the disk's, as it always was. [vp_xhave] is the bytes held, from 0
+; -----------------------------------------------------------------------------
+; vp_xopen - the hold for the file just opened, if it takes one. The size is
+; the directory's: a read into no buffer answers FERR_BIG with the KB it
+; would need, before any data I/O (SPEC.md 20.14.6.3)
+vp_xopen:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    call vp_xfree
+    cmp byte [vp_ok], 1
+    jne .out
+    cmp byte [vp_resid], 0          ; RESIDENT: read whole into its blocks
+    jne .out
+    call OSAPI_XMEM_CAPS            ; no pool (every 8088): nothing more is
+    or ax, ax                       ; asked, not even the directory
+    jz .out
+    push ds
+    pop es
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
+    mov si, vp_name
+    call OSAPI_FILE_READ            ; ES:BX = nowhere, 0 bytes
+    jnc .out                        ; (an empty file)
+    cmp ax, FERR_BIG
+    jne .out
+    or dx, dx
+    jz .out
+    mov si, dx                      ; SI = its KB, one over
+    call OSAPI_XMEM_CAPS            ; AX = the KB the pool has (BL, DX:CX
+    cmp ax, si                      ; its other answers)
+    jb .out
+    mov ax, si
+    mov cl, 10
+    shl ax, cl
+    mov dx, si
+    mov cl, 6
+    shr dx, cl                      ; DX:AX = KB x 1024
+    mov [vp_xcap], ax
+    mov [vp_xcap+2], dx
+    call OSAPI_XMEM_ALLOC
+    jc .out
+    mov [vp_xbase], ax
+    mov [vp_xbase+2], dx
+    xor ax, ax
+    mov [vp_xhave], ax
+    mov [vp_xhave+2], ax
+    mov [vp_xfull], al
+    mov byte [vp_xon], 1
+    mov bx, [vp_win]
+    inc ax                          ; the first chunk on the next tick
+    call OSAPI_WM_TIMER
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vp_xfree - the hold, if there is one
+vp_xfree:
+    cmp byte [vp_xon], 0
+    je .z
+    push ax
+    push dx
+    mov byte [vp_xon], 0
+    mov ax, [vp_xbase]
+    mov dx, [vp_xbase+2]
+    call OSAPI_XMEM_FREE
+    pop dx
+    pop ax
+.z:
+    ret
+
+; vp_xcopy - ES:SI = conventional, DX:AX = an offset in the FILE, CX = bytes
+; (even, <= 32 KB), DI = 0 up into the hold / 1 down out of it. CF=1: the
+; copy was refused, and the hold is dropped - the disk serves from then on
+vp_xcopy:
+    push ax
+    push dx
+    add ax, [vp_xbase]
+    adc dx, [vp_xbase+2]
+    call OSAPI_XMEM_COPY
+    pop dx
+    pop ax
+    jnc .ok
+    call vp_xfree
+    stc
+.ok:
+    ret
+
+; vp_xin - DX:AX = an offset, CX = bytes past it: CF=0 every one of them is
+; held. Every register kept
+vp_xin:
+    cmp byte [vp_xon], 0
+    je .no
+    push ax
+    push dx
+    add ax, cx
+    adc dx, 0
+    cmp dx, [vp_xhave+2]
+    jne .c
+    cmp ax, [vp_xhave]
+.c:
+    pop dx
+    pop ax
+    ja .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; vp_xrdat - vp_rdat's range, DX:AX = its cluster's offset and CX = the bytes
+; from there, copied to [vp_rdseg]:0 if all of it is held. CF=1: it is not,
+; and the disk reads it. Every register kept
+vp_xrdat:
+    call vp_xin
+    jc .r
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    inc cx
+    and cl, 0xFE                    ; even: the byte past is in the block
+    mov es, [vp_rdseg]              ; (a KB over the file) and the claim
+    xor si, si
+    mov di, 1
+.pc:
+    mov bx, cx                      ; at most 32 KB a copy
+    cmp bx, VP_CHUNK
+    jbe .p1
+    mov bx, VP_CHUNK
+.p1:
+    push cx
+    mov cx, bx
+    call vp_xcopy
+    pop cx
+    jc .out
+    add si, bx
+    add ax, bx
+    adc dx, 0
+    sub cx, bx
+    jnz .pc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
+    ret
+
+; vp_xfill - vp_fill's chunk out of the hold, DX = its slot: at the stream's
+; cursor, a whole chunk held or the file's last. out CF=0 AX = the bytes and
+; the cursor past them - zeroed but for its place, so a read from the disk
+; after it seeds again from the name (18.4.8); CF=1 the disk's. Every other
+; register kept
+vp_xfill:
+    cmp byte [vp_xon], 0
+    je .no
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov es, dx
+    mov ax, [vp_cur+FSEQ_OFF]
+    mov dx, [vp_cur+FSEQ_OFF+2]
+    mov cx, VP_CHUNK
+    call vp_xin
+    jnc .n                          ; a whole chunk
+    cmp byte [vp_xfull], 0
+    je .nop                         ; not there yet: the disk's
+    mov cx, [vp_xhave]              ; the file's last: what is left of it,
+    mov bx, [vp_xhave+2]            ; under a chunk (or none, at the end)
+    sub cx, ax
+    sbb bx, dx
+    jnc .n
+    xor cx, cx
+.n:
+    jcxz .adv
+    push cx
+    inc cx
+    and cl, 0xFE
+    xor si, si
+    mov di, 1
+    call vp_xcopy
+    pop cx
+    jc .nop
+.adv:
+    push ds
+    pop es
+    mov di, vp_cur
+    xor ax, ax
+    push cx
+    mov cx, FSEQ_OFF / 2
+    cld
+    rep stosw
+    pop cx
+    add [vp_cur+FSEQ_OFF], cx
+    adc word [vp_cur+FSEQ_OFF+2], 0
+    mov ax, cx
+    clc
+    jmp short .out
+.nop:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+.no:
+    stc
+    ret
+
+; vp_xsay - the card's line 6 while nothing has played: what the hold has
+vp_xsay:
+    cmp byte [vp_xon], 0
+    je .r
+    mov di, vp_lines + 6 * VP_LINE
+    mov si, vp_s_xheld
+    cmp byte [vp_xfull], 0
+    jne .h
+    mov si, vp_s_xin
+.h:
+    call vp_puts
+    mov ax, [vp_xhave]
+    mov dx, [vp_xhave+2]
+    call .kb
+    cmp byte [vp_xfull], 0
+    jne .u
+    mov si, vp_s_of
+    call vp_puts
+    mov ax, [vp_xcap]
+    mov dx, [vp_xcap+2]
+    call .kb
+.u:
+    mov si, vp_s_kb
+    call vp_puts
+.r:
+    ret
+.kb:                                ; DX:AX bytes, in KB
+    mov cx, 1024
+    call vp_div32
+    xor bl, bl
+    jmp vp_putn
+
+; vp_xput - a chunk the stream just read, DX:AX = its file offset, CX = its
+; bytes, ES = its slot at 0: whatever of it lies at the front of the hold
+; goes up behind what is there. Every register kept
+vp_xput:
+    cmp byte [vp_xon], 0
+    je .r
+    cmp byte [vp_xfull], 0
+    jne .r
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, [vp_xhave]              ; DI:BX = where the hold ends
+    mov di, [vp_xhave+2]
+    sub bx, ax                      ; ...less the chunk's start: how far into
+    sbb di, dx                      ; the chunk that is
+    jc .out                         ; the hold ends before it: a gap
+    jnz .out                        ; ...or long after it
+    cmp bx, cx
+    ja .out                         ; past its end: nothing new
+    mov si, bx                      ; SI = the first new byte in the slot
+    push cx
+    sub cx, bx                      ; CX = the new bytes
+    call vp_xend                    ; DX:AX = the hold's end, checked
+    jc .popo
+    jcxz .tail
+    push cx
+    inc cx
+    and cl, 0xFE
+    xor di, di
+    call vp_xcopy
+    pop cx
+    jc .popo
+    add [vp_xhave], cx
+    adc word [vp_xhave+2], 0
+.tail:
+    pop cx
+    cmp cx, VP_CHUNK                ; a short chunk is the file's end
+    je .out
+    mov byte [vp_xfull], 1
+    jmp short .out
+.popo:
+    pop cx
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
+    ret
+
+; vp_xend - CX bytes about to go up at the hold's end: DX:AX = that end, and
+; CF=1 (the hold dropped) if they would not fit the block - the file grew
+; since it was sized
+vp_xend:
+    mov ax, [vp_xhave]
+    mov dx, [vp_xhave+2]
+    push ax
+    push dx
+    add ax, cx
+    adc dx, 0
+    add ax, 1                       ; (the even copy's byte past)
+    adc dx, 0
+    cmp dx, [vp_xcap+2]
+    jne .c
+    cmp ax, [vp_xcap]
+.c:
+    pop dx
+    pop ax
+    jbe .ok
+    call vp_xfree
+    stc
+    ret
+.ok:
+    clc
+    ret
+
+; vp_xstep - the next chunk into the hold, through a claim of its own, on its
+; own cursor. out CF=1 nothing is left to load (or the hold is gone)
+vp_xstep:
+    cmp byte [vp_xon], 0
+    je .done
+    cmp byte [vp_xfull], 0
+    jne .done
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, VP_CHUNK / 1024
+    call OSAPI_MEM_CLAIM
+    jc .later                       ; no room now: the next tick asks again
+    push dx
+    mov ax, [vp_xhave]              ; the cursor where the hold ends - the
+    mov bx, [vp_xhave+2]            ; stream's chunks may have moved it
+    cmp ax, [vp_xcur+FSEQ_OFF]
+    jne .seed
+    cmp bx, [vp_xcur+FSEQ_OFF+2]
+    je .rd
+.seed:
+    push ds
+    pop es
+    mov di, vp_xcur
+    push ax
+    xor ax, ax
+    mov cx, FSEQ_SIZE / 2
+    cld
+    rep stosw
+    pop ax
+    mov [vp_xcur+FSEQ_OFF], ax
+    mov [vp_xcur+FSEQ_OFF+2], bx
+.rd:
+    xor bx, bx                      ; DX:BX = the claim
+    mov cx, VP_CHUNK
+    push ds
+    pop es
+    mov di, vp_xcur
+    mov si, vp_name
+    call OSAPI_FILE_READ_SEQ        ; AX = the bytes (DX 0: one chunk)
+    pop dx
+    jc .drop                        ; the disk failed: the stream will say so
+    mov es, dx
+    push dx
+    mov cx, ax
+    call vp_xend                    ; DX:AX = where it goes
+    jc .free
+    jcxz .end
+    xor si, si
+    xor di, di
+    push cx
+    inc cx
+    and cl, 0xFE
+    call vp_xcopy
+    pop cx
+    jc .free
+    add [vp_xhave], cx
+    adc word [vp_xhave+2], 0
+.end:
+    cmp cx, VP_CHUNK
+    je .free
+    mov byte [vp_xfull], 1          ; a short chunk: the file's end
+.free:
+    pop dx
+    jmp short .fr
+.drop:
+    call vp_xfree
+.fr:
+    call OSAPI_MEM_FREE
+.later:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.done:
+    stc
+    ret
+
+; --- W_ONTIMER: SI = the window, lock held. The hold's next chunk, and the
+; card's line that counts it. The next is armed as far off as this one took,
+; so the loading has half the machine and the desktop the other half
+vp_ontimer:
+    push ax
+    push bx
+    push dx
+    call OSAPI_GET_TICKS
+    mov dx, ax
+    call vp_xstep
+    jc .said                        ; nothing left, or no hold: no next
+    call OSAPI_GET_TICKS
+    sub ax, dx
+    jnz .arm
+    inc ax
+.arm:
+    mov bx, [vp_win]
+    call OSAPI_WM_TIMER
+.said:
+    cmp byte [vp_played], 0         ; the card's line 6, until a play's
+    jne .out                        ; figures take it
+    call vp_fmt
+    mov bx, [vp_win]
+    call OSAPI_WM_CLIP_SET
+    jc .out
+    call vp_track
+    mov bx, 6
+    call vp_ptext
+.out:
+    pop dx
     pop bx
     pop ax
     ret
@@ -7522,18 +7999,32 @@ vp_fill:
     add bx, [vp_ring]
     mov dx, bx                      ; DX:BX = the slot, ES:DI = the cursor
     xor bx, bx
+    call vp_xfill                   ; HELD (98.3.18): a copy, AX = the bytes
+    jnc .got
+    push dx                         ; (the slot, and where in the file it
+    push word [vp_cur+FSEQ_OFF+2]   ; starts: vp_xput's)
+    push word [vp_cur+FSEQ_OFF]
     mov cx, VP_CHUNK
     push ds
     pop es
     mov di, vp_cur
     mov si, vp_name
     call OSAPI_FILE_READ_SEQ
-    jnc .got
+    pop bx
+    pop di
+    pop es
+    jnc .dsk
     mov byte [vp_err], 1
     mov word [vp_errmsg], vp_s_io
     mov byte [vp_end], 1
     stc
     ret
+.dsk:
+    mov cx, ax                      ; ...and behind the hold, if that is where
+    mov ax, bx                      ; the hold ends
+    mov dx, di
+    call vp_xput
+    mov ax, cx
 .got:
     cmp ax, VP_CHUNK
     je .full
@@ -10272,6 +10763,7 @@ vp_fmt:
     call vp_puts
     cmp byte [vp_played], 0
     jne .res
+    call vp_xsay                    ; 6: the hold, until a play's figures
     jmp .out
 .res:
     ; 6: frames drawn, stalls, pauses
@@ -10641,6 +11133,9 @@ vp_s_kbad:    db 'That keyframe could not be read', 0
 vp_s_pausedat: db 'Paused at ', 0
 vp_s_drew:    db 'Drew ', 0
 vp_s_of:      db ' of ', 0
+vp_s_xin:     db 'Into XMS: ', 0
+vp_s_xheld:   db 'Held in XMS: ', 0
+vp_s_kb:      db ' KB', 0
 vp_s_stall:   db ', stalls ', 0
 vp_s_pause:   db ', pauses ', 0
 vp_s_late:    db 'Late ', 0
@@ -11019,6 +11514,12 @@ vp_ptk0:      dw 0                  ; the tick it paused at
 vp_ptk:       dw 0                  ; ticks paused, this play
 vp_fsi:       times FSI_SIZE db 0
 vp_cur:       times FSEQ_SIZE db 0
+vp_xcur:      times FSEQ_SIZE db 0  ; THE HOLD (98.3.18): its loader's cursor,
+vp_xbase:     dd 0                  ; the block's token,
+vp_xcap:      dd 0                  ; its bytes (a KB over the file),
+vp_xhave:     dd 0                  ; the bytes that have arrived,
+vp_xon:       db 0                  ; there is one,
+vp_xfull:     db 0                  ; ...and all of the file is in it
 
 %include "os88alt.inc"              ; Alt+Enter in the bracket (SPEC.md 11.2.1.1)
 %define OS88UI_ABOUT                ; the standard About card (SPEC.md 20.5.1)

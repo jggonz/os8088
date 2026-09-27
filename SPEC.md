@@ -153164,6 +153164,80 @@ plays whole and silent), `vidsndad4on` (M, and the sound plays whole - red
 without the FORCE), `vidspkfast`, `vidspkunmute`, `vidspkfson` and
 `vidspksilent` (§98.3.15).
 
+#### 98.3.18 The file held in XMS
+
+**A streamed file that fits the extended-memory pool (§41) is held there
+whole, and every read the pool can answer is a copy instead of a disk
+read** - the stream's chunks, a key, a seam, a seek. What that buys is the
+disk out of the play: on a 286 or better with XMS, a clip plays from memory
+at any length, and a seek is a copy rather than a chain walk and an
+`int 13h`. A machine with no pool - every 8088 - is unchanged to the
+instruction: the hold is never taken and every read is the disk's.
+
+**The hold** (`vp_xopen`, when a file opens and will play here, RESIDENT
+files aside - they are read whole into their blocks, §98.1.7): the file's
+size from the directory, as the KB `OSAPI_FILE_READ` answers `FERR_BIG` with
+when handed no buffer (§20.14.6.3 - one directory lookup, no data I/O), a
+KB over it; `OSAPI_XMEM_CAPS` must cover that, and one `OSAPI_XMEM_ALLOC`
+block is taken. Freed when another file opens; the kernel frees it with the
+instance.
+
+**It fills from the front**, and `[vp_xhave]` is the bytes that have
+arrived:
+- **on the window's timer while nothing plays** (`vp_ontimer`,
+  `vp_xstep`): a 32 KB chunk a step, `OSAPI_FILE_READ_SEQ` on a cursor of
+  its own into a claim made for the step and copied up. The next step is
+  armed as many ticks off as this one took, so the loading has half the
+  machine and the desktop the other half - a step holds the gfx lock for
+  its read, as any file operation does (§7);
+- **behind the stream while it plays** (`vp_xput`): a chunk the stream
+  reads from the disk that starts at or before the hold's end and runs past
+  it goes up behind it, so a play's second pass - a Repeat's lap, a seek
+  back, the next play - is out of memory even where the loader never ran.
+  (The timer does not fire inside a bracket, whose main loop is one
+  callback.)
+
+A short read is the file's end, and sets `[vp_xfull]`: only then is a range
+that runs past `[vp_xhave]` the file's end rather than the disk's business.
+
+**The reads** (`vp_xfill` in `vp_fill`, `vp_xrdat` in `vp_rdat`): a range
+wholly inside `[vp_xhave]` is copied, 32 KB a call (§41.8's bound), to
+exactly where the disk would have put it. The stream's cursor is then
+zeroed but for `FSEQ_OFF` and moved past the bytes - the SDK's own seek - so
+a disk read after it seeds again from the name (§18.4.8): once a play
+reaches the part not yet held, and never again that play, because
+`vp_xput` then keeps the hold's end at the stream's.
+
+**A refused copy drops the hold** (`vp_xcopy`), and a chunk that would not
+fit the block - the file grew since it was sized - drops it too
+(`vp_xend`): from then on the disk serves, as without a pool. A file
+changed on the disk while it is held is NOT noticed; the hold is the file
+as it was read.
+
+**The card's line 6**, until a play's figures take it: `Into XMS: 384 of
+2345 KB` while loading, `Held in XMS: 2344 KB` when it is all there.
+
+**All of it is on the UI task** - the timer, the bracket's main loop, a
+callback - which is where §41.8 allows the copy. On a 286 the copy is
+`int 15h AH=87h` with interrupts off for its 32 KB; the rate hook and the
+speaker's ISR wait that long, a card's DMA does not.
+
+**+955 bytes of the package** (32,612 -> 33,567); no kernel byte, and on a
+machine with no pool the whole of it is one `OSAPI_XMEM_CAPS` at open and a
+compare in each read.
+
+The gates, on QEMU (docs/TESTING.md's list, entry 1 - an 8088 has no
+memory above 1MB): `vidxms`, a ~950 KB clip played the moment the loader's
+first chunk has landed, the hold whole as the play returns and
+byte-for-byte the file (QEMU's `pmemsave`); then drive B: changed to a
+BLANK floppy under the running player, and the next key and a whole play
+from it must still work. `vidxmsidle` is the same with the timer alone
+loading the file to its end, the card's line drawn from the timer.
+`vidxmsnox` (`-m 1`) is the NEGATIVE CONTROL: no hold, the play off the
+disk, and after the same swap the same key REFUSED. Broken on purpose -
+`vp_xput` out of `vp_fill`, the hold short at the play's end (163,840 of
+973,312); `vp_xrdat` out of `vp_rdat`, the key refused - `vidxms` FAILS.
+
 ### 98.4 The window: the Preview (wave 6)
 
 **The window IS the Preview** (VIDEO-PLAN 3.3): the file's poster in a

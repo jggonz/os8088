@@ -2166,10 +2166,24 @@ and not a transcript. Each line names where the detail is.
   when its save-under had been shed. Recorded, not diagnosed.
 - **ADPCM4 on the speaker** (15.9): set aside, likely permanently - it
   leaves no room for video.
-- **Live fed from the disk** (15.5): DROPPED by the owner's rule.
+- **Live fed from the disk** (15.5): DROPPED by the owner's rule. Live fed
+  from XMS is not the disk and is what is next, below.
 
 **Next, and in this order:**
-- Nothing picked. **Live in colour** (15.2) is BUILT (2026-09-27).
+- **XMS, phase 1 is BUILT** (2026-09-27, SPEC.md 98.3.18): a streamed file
+  that fits the pool is held in one block its size, filled from the front -
+  on the window's timer at half duty while nothing plays, and behind the
+  stream while it plays - and every read the hold can answer (a chunk, a
+  key, a seam, a seek) is a copy instead of a disk read. No pool, no change:
+  not even the directory is asked. Gates on QEMU: `vidxms`, `vidxmsidle`,
+  `vidxmsnox` - the instrument is a BLANK floppy swapped under the player
+  once the file is held. The owner's scope: *"That, plus Live from XMS"*.
+- **XMS, phase 2 - Live from a file held in XMS** (15.5 revived without its
+  objection): a STREAMED Live file plays on the desktop once the hold is
+  whole, the worker asking and the UI task copying the next chunks from the
+  hold into the ring (`OSAPI_WM_ONWAKE`, FTPD's handshake) - milliseconds, not
+  15.5's ~100 ms read. Wants the encoder's `--live` for a streamed file too.
+- **Live in colour** (15.2) is BUILT (2026-09-27).
 - **MUTE** is BUILT (2026-09-27, SPEC.md 98.3.17, 34.5.3.1): the owner's ask
   after elendilon's "no ADPCM4 on an SB16" fix - *"I have some knockoff
   cards that are getting identified as an sb16 that play ADPCM4 just fine"*,
@@ -2184,7 +2198,8 @@ and not a transcript. Each line names where the detail is.
   About box resident or in a module?
 - **Sound Blaster 1.0 and 1.5** (15.6): SOUND.DRV work, wants an SB 1.x
   86Box machine.
-- **XMS** (15.6, V4): 286 and up; the 5150 cannot use it.
+- **XMS** (15.6, V4): phase 1 BUILT and phase 2 next - above. More Live
+  WINDOWS in XMS (V4's other half) is not asked for.
 - **The keeper relocatable** (15.4 D): the blocks move, the keeper stays
   pinned until its use across window calls is proven safe.
 
