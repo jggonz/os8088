@@ -999,6 +999,9 @@ class C512Ditherer:
         return out
 
 
+PREFER_COLOUR = 1.0     # TextMatcher's --text-prefer-colour
+
+
 class TextMatcher:
     """TEXT (SPEC.md 98.2.16): each 8 x 8 cell of the picture the character
     and the attribute whose cell, drawn in os88txtfont's model face, is
@@ -1036,7 +1039,8 @@ class TextMatcher:
     BUSY_DEFAULT = 12.0
 
     def __init__(self, cells, rows, colour, glyphs="blocks", stable=6.0,
-                 sharpen=0.6, detail=0.5, busy=None, near=2, top=16):
+                 sharpen=0.6, detail=0.5, busy=None, near=2, top=16,
+                 prefer=PREFER_COLOUR):
         if busy is None:
             busy = self.BUSY.get(glyphs, self.BUSY_DEFAULT)
         self.top = top
@@ -1056,15 +1060,41 @@ class TextMatcher:
         self.cnt = self.oh.sum(2)                       # (K, 5)
         # a perceptual weight on the channels, luma's, so a green is judged
         # as bright as the eye judges it
-        self.cw = np.sqrt(np.array([0.299, 0.587, 0.114], np.float32) * 3)
+        cw = np.sqrt(np.array([0.299, 0.587, 0.114], np.float32) * 3)
+        self.cw = np.diag(cw)
+        # ...and COLOUR PREFERRED (`prefer`, 98.2.16): that weight leaves
+        # blue at a third of green, and dot for dot any dither of a flat
+        # area pays its whole contrast - so a pale blue, a waterfall or a
+        # sky, which sixteen colours can only draw as light blue mixed into
+        # grey or white, came out a plain GREY. Two things, both scaled by
+        # `prefer`: the picture's saturation raised by half, so a pale hue
+        # reaches for the palette's colour rather than its grey; and two
+        # more channels, Cb and Cr weighted 4, in the through-the-eye term
+        # and in the choice of which colours are tried, so a grey pays for
+        # the hue it drops - while the dot-for-dot term, which says which
+        # way an edge runs, stays brightness alone. 0 is the encoder before
+        # it; MONO has no hue to prefer
+        if not colour:
+            prefer = 0
+        self.sat = 1 + 0.5 * prefer
+        chroma = 4.0 * prefer
+        self.ce = self.cw
+        if chroma:
+            y = np.array([0.299, 0.587, 0.114], np.float32)
+            cb = (np.array([0, 0, 1], np.float32) - y) * 0.564
+            cr = (np.array([1, 0, 0], np.float32) - y) * 0.713
+            self.ce = np.concatenate(
+                [self.cw, chroma * np.stack([cb, cr], 1)], 1)   # (3, 5)
+        self.back = np.diag(1 / cw) @ self.ce if chroma else None
         srgb = np.frombuffer(vid.STD16, np.uint8).astype(
             np.float32).reshape(16, 3) * (255.0 / 63)
-        self.pal = srgb * self.cw
+        self.pal = srgb @ self.cw
+        self.pale = srgb @ self.ce
         lin = (srgb / 255) ** self.GAMMA
         lvl = np.arange(5, dtype=np.float32) / 4
         mix = lin[None, :, None, :] + lvl[None, None, :, None] * (
             lin[:, None, None, :] - lin[None, :, None, :])   # [f, b, L]
-        self.mix = (mix ** (1 / self.GAMMA)) * 255 * self.cw  # (16,16,5,3)
+        self.mix = (mix ** (1 / self.GAMMA)) * 255 @ self.ce  # (16,16,5,C)
         self.colour = colour
         self.cells, self.rows = cells, rows
         self.stable, self.sharpen, self.near = stable, sharpen, near
@@ -1108,12 +1138,15 @@ class TextMatcher:
     def __call__(self, rgb):
         R, C = self.rows, self.cells
         f = self._sharp(rgb.astype(np.float32))
-        cells = lambda a: a.reshape(R, 8, C, 8, 3).transpose(
-            0, 2, 1, 3, 4).reshape(R * C, 64, 3)
-        t = cells(f * self.cw)
+        if self.sat != 1:
+            y = f @ np.array([0.299, 0.587, 0.114], np.float32)
+            f = np.clip(y[..., None] + self.sat * (f - y[..., None]), 0, 255)
+        cells = lambda a: a.reshape(R, 8, C, 8, a.shape[-1]).transpose(
+            0, 2, 1, 3, 4).reshape(R * C, 64, a.shape[-1])
+        t = cells(f @ self.cw)
         lin = cells((f / 255) ** self.GAMMA)
         P = (np.einsum("qp,npc->nqc", self.q, lin) ** (1 / self.GAMMA)
-             * 255 * self.cw).astype(np.float32)        # (N, 16, 3)
+             * 255 @ self.ce).astype(np.float32)        # (N, 16, C)
         N, K = R * C, len(self.codes)
         S, SS = t.sum(1), (t ** 2).sum((1, 2))
         GT = np.matmul(t.transpose(0, 2, 1), self.g.T).transpose(0, 2, 1)
@@ -1142,9 +1175,11 @@ class TextMatcher:
             bs = (S[:, None, :] - gt) / np.maximum(64 - on, 1)
             fs = np.where(on > 0, fs, bs)
             bs = np.where(on < 64, bs, fs)
-            m = self.near
-            df = ((fs[..., None, :] - self.pal) ** 2).sum(-1)   # (N,T,16)
-            db = ((bs[..., None, :] - self.pal) ** 2).sum(-1)
+            m, pal = self.near, self.pal
+            if self.back is not None:       # the hue counts in the choice
+                fs, bs, pal = fs @ self.back, bs @ self.back, self.pale
+            df = ((fs[..., None, :] - pal) ** 2).sum(-1)        # (N,T,16)
+            db = ((bs[..., None, :] - pal) ** 2).sum(-1)
             fi = np.argpartition(df, m - 1, axis=-1)[..., :m]
             bi = np.argpartition(db, m - 1, axis=-1)[..., :m]
             fi = np.repeat(fi[..., :, None], m, -1).reshape(N, -1)
@@ -2456,14 +2491,17 @@ def _encode(a, keep, tick, readers):
         cgapal = vid.TEXT_COLOUR if tcol == "colour" else vid.TEXT_MONO
         dith = TextMatcher(lw, lh, cgapal, a.text_glyphs, a.text_stable,
                            a.text_sharpen, a.text_detail, a.text_busy,
-                           top=16 if cgapal else 32)
+                           top=16 if cgapal else 32,
+                           prefer=a.text_prefer_colour)
         say("   TEXT in %s, %s glyphs: detail %g, sharpen %g, letters pay "
-            "%g, dead band %g" % (
+            "%g, dead band %g%s" % (
                 "colour - a CGA, an EGA or a VGA" if cgapal else
                 "mono - any adapter", a.text_glyphs, a.text_detail,
                 a.text_sharpen, TextMatcher.BUSY.get(
                     a.text_glyphs, TextMatcher.BUSY_DEFAULT)
-                if a.text_busy is None else a.text_busy, a.text_stable))
+                if a.text_busy is None else a.text_busy, a.text_stable,
+                ", colour preferred %g" % a.text_prefer_colour
+                if cgapal else ""))
     elif c512:
         cgapal = vid.CARD_BY_NAME[a.cga_card]
         dith = C512Ditherer(lw, lh, cgapal, a.c512_dither, a.c512_stable,
@@ -2897,6 +2935,14 @@ def parser():
                          "block, RMS of 255 - letters picked for a hair of "
                          "error are noise. 12 by default, 2 with ascii and "
                          "the dots sets")
+    ap.add_argument("--text-prefer-colour", type=float,
+                    default=PREFER_COLOUR,
+                    help="text, in colour: how strongly a cell's HUE is "
+                         "kept over its exact brightness, so a pale blue - "
+                         "a waterfall, a sky - is drawn in blue and white "
+                         "rather than crushed to a grey. %g by default, 2 "
+                         "stronger, 0 off (brightness first, the encoder "
+                         "before it)" % PREFER_COLOUR)
     ap.add_argument("--text-stable", type=float, default=6.0,
                     help="text: a cell keeps last frame's code while it is "
                          "within this (RMS of 255) of the best, so the "

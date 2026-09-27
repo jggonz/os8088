@@ -151799,6 +151799,20 @@ drawn in the model face, is nearest it (`TextMatcher`). Both presets, and
 `--pixfmt text` with no preset, default to **30 fps**: a whole picture is
 4,000 bytes, so a full frame rate costs a text clip little.
 
+**Colour is preferred** (`--text-prefer-colour`, 1 by default, 0 off). A
+pale hue - a waterfall, a sky - has no colour of its own among the sixteen,
+only light blue mixed into grey or white, and the matcher judged it by
+brightness: a luma weight that leaves blue at a third of green, and a
+dot-for-dot term that charges any dither of a flat area its whole contrast.
+So a white-and-blue waterfall came out a plain GREY. The option raises the
+picture's saturation by half and adds Cb and Cr, weighted 4, to the
+through-the-eye term and to the choice of which colours a cell tries - a
+grey then pays for the hue it drops - while the dot-for-dot term, which
+says which way an edge runs, stays brightness alone. Both scale with the
+value. It costs ~20% of the encode's time and nothing on the machine: the
+file is the same format. At 0 the file is byte-identical to the encoder
+before it, and MONO, which has no hue to prefer, ignores it.
+
 **Clarity is what every choice is for**, and four things carry it. Each was
 LOOKED at, on three photographs and a Mandelbrot zoom, against the plainer
 choice it replaced:
