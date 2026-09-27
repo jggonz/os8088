@@ -134,7 +134,8 @@ class _Booted(object):
             ui.up(limit=limit)
             if not self._kw.get("saver", False):
                 os88marty.no_saver(m)
-            ui.settle(limit=limit)
+            if self._kw.get("settle", True):
+                ui.settle(limit=limit)
         except BaseException:
             self._cm.__exit__(*sys.exc_info())
             raise
@@ -145,7 +146,8 @@ class _Booted(object):
 
 
 def boot(image, apps=None, machine="os8088_5150_cga", card=None,
-         saver=False, why_ibm=None, verbose=True, limit=180.0, **kw):
+         saver=False, why_ibm=None, verbose=True, limit=180.0, settle=True,
+         **kw):
     """Launch, boot to a settled desktop, turn the saver off, hand back a UI.
 
     THE THREE LINES 175 SCRIPTS OPEN WITH, and the two things most of them
@@ -161,13 +163,23 @@ def boot(image, apps=None, machine="os8088_5150_cga", card=None,
         that waits on a slow build, or an emulator lane sharing four cores
         with three others, gets there - and what it then compares is a black
         screen. `saver=True` keeps it, for the rows whose subject it is.
+        **A row that never goes five guest minutes without input does not
+        need it off** - pass `saver=True` and it cannot hide behind the
+        opt-out; tests/skiesfleet.py measured 200 guest seconds and a longest
+        input-free stretch of 25.
+      * `settle=False` skips the picture half of `ready`. `up` already waits
+        for the END of the boot ([spl_live] = 0), so a row whose every next
+        step is confirmed off guest state - every os88ui verb is - does not
+        need the screen to stop moving first, and the settle was the one
+        long input-free wait such a row had.
 
     Everything else is `os88marty.launch`'s, passed straight through.
     """
     cm = os88marty.launch(image, apps=apps,
                           machine=os88marty.machine(machine, why_ibm),
                           card=card, **kw)
-    return _Booted(cm, card=card, saver=saver, verbose=verbose, limit=limit)
+    return _Booted(cm, card=card, saver=saver, verbose=verbose, limit=limit,
+                   settle=settle)
 
 
 # =============================================================================
