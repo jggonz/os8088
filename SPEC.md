@@ -150287,10 +150287,10 @@ measured retry are the same code (VIDEO-PLAN W11a).
   16 KB at most and never met the cap; a VGA8 one is up to 64,000 bytes.
   A keyframe is not in a super-packet and is bounded by its length word;
   the encoder says when one is past what the player reads off a volume of
-  2 KB clusters - **59,391**, not `VP_KMAXREC`: `vp_parse` adds three
-  clusters to the record in a word before it takes one back, so 61,440 is
-  reached only on 1 KB clusters and under (`key_limit()` in
-  tools/os88venc.py is that arithmetic, worked rather than restated).
+  2 KB clusters - **61,440**, `VP_KMAXREC` itself: `vp_parse` sizes the
+  record plus a cluster either side in 32 bits as one 64 KB claim, so 2 KB
+  clusters reach it exactly and 4 KB clusters stop at 57,344 (`key_limit()`
+  in tools/os88venc.py is that arithmetic, worked rather than restated).
 - **15 fps by default.** A byte a pixel doubles what a moving camera costs
   against one bit: Trackmania at 320 × 150 needs ~500 KB/s at 30 fps and
   ~250 at 15, and at 30 fps under 250 KB/s it left 311 of 360 frames cut,
