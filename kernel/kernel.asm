@@ -4437,7 +4437,14 @@ apic_wm_wake:                     ; mem_cpq_run_x's door to the wake (SPEC.md
                                   ;          re-seeded from the name when
                                   ;          anything remounted or wrote.
                                   ;          kern_big; the small door refuses
-osapi_table_end:                  ; 0x045B today (0x05A8 before pass 4's
+    OSAPI_RSLOT osapi_fsx_spk     ; 0x045B - THE SPEAKER AT A SAMPLE RATE
+                                  ;          (SPEC.md 34.11), inside your own
+                                  ;          FSXF_RATE bracket: AL = 0 open
+                                  ;          (DX = N, SI = your sample ISR),
+                                  ;          out AX = K, DX:BX = the chain;
+                                  ;          AL = 1 close. kern_big; the
+                                  ;          small body refuses AX = 1
+osapi_table_end:                  ; 0x0461 today (0x05A8 before pass 4's
                                   ; renumber). TWO cells came off the tail in
                                   ; the size pass: OSAPI_MEM_COMPACT_WAKE
                                   ; (0x0598) is 0x0590's MEMC_POST verb
@@ -4455,8 +4462,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 96*6 + 6*3 + 6 + 12*5 + 3*6
-%error "os8088 API jump table must be exactly 0x044B bytes: 43 SLOT (8), 11 XCELL (7), 96 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
+%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 97*6 + 6*3 + 6 + 12*5 + 3*6
+%error "os8088 API jump table must be exactly 0x0451 bytes: 43 SLOT (8), 11 XCELL (7), 97 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
 %endif
 
 ; =============================================================================
@@ -7244,6 +7251,10 @@ cw_wm_clip_clear:        call wm_clip_clear
                      retf
 cw_wm_clip_rows:        call wm_clip_rows
                     retf
+%ifdef GFX_PLANE                ; SPEC.md 5.4.3.6's walk calls back per piece
+cw_gfx_blitp:           call gfx_blitp
+                    retf
+%endif
 %ifdef KERN_BIG                 ; its callers are kern_big only
 cw_wm_clip_set:         call wm_clip_set
                     retf

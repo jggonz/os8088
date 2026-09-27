@@ -6,13 +6,32 @@
 ; and 3 added to the question).
 ;
 ;   python3 tests/viddisk.py [--machine os8088_5150_herc_hdd_sb_gla]
+;   python3 tests/viddisk.py --floppy     (the 360 KB field floppy's path)
 ;
-; THE STREAM is the first of STREAM.DAT, BADAPPLE.V88 or BAPPLE.V88 beside the
-; bench that is at least 12 MB + 32 KB long - the emulator row makes a
-; STREAM.DAT, the owner's field image carries BADAPPLE.V88, and the encoder's
-; VGA disk BAPPLE.V88. With neither, the file rows
-; say so and skip, and the int 13h rows still run. Every row is tick-timed
-; (benchlib's method T: a disk call is tens of milliseconds and more).
+; THE STREAM is the first of STREAM.DAT, BADAPPLE.V88 or BAPPLE.V88 that is at
+; least 12 MB + 32 KB long - the emulator row makes a STREAM.DAT, the owner's
+; field image carries BADAPPLE.V88, and the encoder's VGA disk BAPPLE.V88.
+; WHERE it is looked for depends on where the bench is: beside itself on a
+; fixed disk (drive C: or after), as the field VHDs have it, and in C:'s ROOT
+; when the bench runs off a floppy - which is `make viddisk360`, the 360 KB
+; disk for a machine nobody can copy 12 MB onto (docs/plans/VIDEO-PLAN.md
+; 15.8). With none, the file rows say so and skip, and the int 13h rows still
+; run. Every row is tick-timed (benchlib's method T: a disk call is tens of
+; milliseconds and more).
+;
+; W  MAKES the stream: STREAM.DAT, 12.5 MB, every dword its own offset in the
+;    file, written where R will look for it in 32 KB OSAPI_FILE_APPENDs. It
+;    checks the room first, and it RESUMES - a STREAM.DAT that is a whole
+;    number of chunks short of 12.5 MB is carried on from its end, so a write
+;    interrupted by a reset costs only what was not written. Minutes: every
+;    append walks the chain to its last cluster (SPEC.md 18.4.7.3), so it
+;    slows as the file grows. It reports its own rate (KB/s x 10, the whole
+;    write) and saves the report as VDWRITE.TXT beside the bench.
+; D  deletes STREAM.DAT again, so the disk gets its 12.5 MB back.
+;
+; With a STREAM.DAT, R also CHECKS the data at 12 MB, read by READ_AT and by
+; READ_SEQ: a stream that times well and reads the wrong bytes is not a
+; measurement.
 ;
 ;   READ_AT 32K @n MB     OSAPI_FILE_READ_AT at 0..12 MB. It re-walks the
 ;                         chain from the front every call (SPEC.md 18.4.4),
@@ -37,8 +56,10 @@
 ;   int13 track / sector  the ROM's own int 13h on unit 80h, a whole track and
 ;                         one sector: the controller's ceiling.
 ;
-; READ-ONLY. It writes nothing but VIDDISK.TXT, its report, beside itself.
-; It calls int 13h itself because it is a bench; the player never does.
+; R IS READ-ONLY: it writes nothing but VIDDISK.TXT, its report, beside
+; itself. Only W writes (STREAM.DAT and VDWRITE.TXT) and only D deletes
+; (STREAM.DAT). It calls int 13h itself because it is a bench; the player
+; never does.
 ; =============================================================================
 
 %include "os88api.inc"
@@ -51,6 +72,8 @@ VK_CHUNK    equ 32768
 VK_DIV      equ 39773               ; 30.0 Hz
 VK_CEILT    equ 91                  ; ticks a ceiling row streams: 5 s
 VK_MB12     equ 12 * 16             ; 12 MB, as a high word
+VK_NCHUNK   equ 400                 ; STREAM.DAT: 400 x 32 KB = 12.5 MB
+VK_DRV_C    equ 2                   ; OSAPI_FILE_HERE's drives: A: is 0
 
 vk_entry:
     push si
@@ -84,12 +107,23 @@ vk_onkey:
     or bl, 0x20
     cmp bl, 'r'
     je .run
+    cmp bl, 'w'
+    je .write
+    cmp bl, 'd'
+    je .del
     call bl_key
     jc .out
     call bl_paint
     jmp short .out
+.write:
+    call vk_wrun
+    jmp short .paint
+.del:
+    call vk_drun
+    jmp short .paint
 .run:
     call vk_run
+.paint:
     call bl_paint
 .out:
     pop di
@@ -507,16 +541,11 @@ vk_run:
     mov word [vk_err], 0
     mov word [bl_nrow], 0
     mov word [vk_ceilmb], 0
+    mov byte [vk_dchk], 0
     mov si, vk_s_title
     call bl_sline
-    cmp word [vk_buf], 0
-    jne .have
-    mov ax, VK_BUFKB                ; DMA-safe, all of it: a whole track is
-    mov cx, VK_BUFKB                ; read into it, and on an XT controller
-    call OSAPI_MEM_CLAIM_DMA        ; one crossing a 64 KB page is error 09h
-    jc .fail                        ; every call (the 286's first run)
-    mov [vk_buf], dx
-.have:
+    call vk_claim
+    jc .fail
     ; --- the fixed disk's geometry, off the ROM
     mov ah, 8
     mov dl, 0x80
@@ -541,6 +570,13 @@ vk_run:
     xor dx, dx
     call bl_kv
 
+    call vk_toc                     ; where the stream lives: C: off a floppy
+    jnc .look
+    mov si, vk_s_noc
+    call bl_sline
+    jmp .ctl
+.look:
+    call vk_where
     call vk_find
     jnc .stream
     mov si, vk_s_nostr
@@ -575,6 +611,8 @@ vk_run:
     mov si, vk_r_r12
     mov bx, 4
     call vk_ratrow
+    mov dx, VK_MB12
+    call vk_chk                     ; READ_AT's bytes at 12 MB
 
     ; --- READ_SEQ: a seek, then from where it stands --------------------------------
     mov si, vk_s_hdrs
@@ -597,6 +635,8 @@ vk_run:
     mov si, vk_r_s12
     mov bx, 9
     call vk_row                     ; the seek to 12 MB: ONE walk
+    mov dx, VK_MB12
+    call vk_chk                     ; ...and READ_SEQ's
     mov word [bl_n], 8
     call vk_i13on
     mov si, vk_r_q12
@@ -661,9 +701,11 @@ vk_run:
     mov si, vk_r_c50i
     inc bx
     call vk_kv
+    call vk_dkv                     ; the data check's verdict
 
     ; --- the controller: whole tracks, then single sectors --------------------
 .ctl:
+    call vk_back                    ; the report goes beside the bench
     mov si, vk_s_hdri
     call bl_sline
     mov byte [vk_cyl], 1
@@ -693,6 +735,7 @@ vk_run:
     inc word [vk_done]
     jmp short .end
 .fail:
+    call vk_back
     mov si, vk_s_fail
     call bl_sline
     mov word [vk_done], 0xFFFF
@@ -706,6 +749,469 @@ vk_run:
     pop ax
     ret
 
+; --- where the stream lives, and the buffer -----------------------------------
+
+; vk_claim - the DMA-safe buffer, once: CF=1 there is none. DMA-safe, all of
+; it: a whole track is read into it and STREAM.DAT written out of it, and on
+; an XT controller a transfer crossing a 64 KB page is error 09h every call
+; (the 286's first run)
+vk_claim:
+    cmp word [vk_buf], 0
+    jne .have
+    push ax
+    push cx
+    push dx
+    mov ax, VK_BUFKB
+    mov cx, VK_BUFKB
+    call OSAPI_MEM_CLAIM_DMA
+    jc .no
+    mov [vk_buf], dx
+.no:
+    pop dx                          ; CF is the claim's
+    pop cx
+    pop ax
+    ret
+.have:
+    clc
+    ret
+
+; vk_toc - stand where the stream lives: beside the bench on a fixed disk,
+; C:'s root when the bench is on a floppy - a 360 KB disk cannot hold 12.5 MB,
+; and on the 5150 there is no other way to put a file that size on its hard
+; disk than to write it there. CF=1: no C: answered (the hard disk is not
+; mounted), and the instance is back where it was. [vk_moved] tells vk_back
+; whether there is a way back to take.
+vk_toc:
+    push ax
+    push bx
+    push dx
+    mov byte [vk_moved], 0
+    call OSAPI_FILE_HERE            ; BL = our drive, DX = our folder
+    mov [vk_hdrv], bl
+    mov [vk_hdir], dx
+    cmp bl, VK_DRV_C
+    jae .ok                         ; a fixed disk: the stream is beside us
+    mov bl, VK_DRV_C
+    xor dx, dx                      ; C:'s root
+    call OSAPI_FILE_GOTO
+    mov byte [vk_moved], 1
+    jnc .ok
+    call vk_back                    ; it left us at a root: go home
+    stc
+    jmp short .out
+.ok:
+    clc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; vk_back - home again, if vk_toc moved us. A remount: floppy I/O. It is safe
+; to call twice
+vk_back:
+    cmp byte [vk_moved], 0
+    je .out
+    push ax
+    push bx
+    push dx
+    mov bl, [vk_hdrv]
+    mov dx, [vk_hdir]
+    call OSAPI_FILE_GOTO            ; CF=1 the floppy went: nothing to do
+    mov byte [vk_moved], 0
+    pop dx
+    pop bx
+    pop ax
+.out:
+    ret
+
+; vk_where - the report's line saying which drive the stream is on
+vk_where:
+    push ax
+    push si
+    push di
+    call bl_drive                   ; AL = 'A'..
+    mov [vk_drvs], al
+    mov si, vk_r_where
+    mov di, vk_drvs
+    call bl_kvs
+    pop di
+    pop si
+    pop ax
+    ret
+
+; vk_size - STREAM.DAT where we stand: CF=0 DX:AX = its size, CF=1 there is
+; none. OSAPI_FILE_FIND by ordinal, so it reads the folder: it is asked once
+vk_size:
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    xor cx, cx
+.next:
+    mov di, vk_fnd
+    call OSAPI_FILE_FIND            ; CX = the next ordinal
+    jc .out                         ; the end: none
+    cmp word [vk_fnd + 14], OSAPI_FT_DIR
+    jae .next                       ; a folder, or '..'
+    mov si, vk_f_names              ; 'STREAM.DAT', 0 - the first name
+    mov di, vk_fnd
+    push cx
+    mov cx, 11
+    repe cmpsb
+    pop cx
+    jne .next
+    mov ax, [vk_fnd + 18]
+    mov dx, [vk_fnd + 20]
+    clc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; vk_fill - AX = k: the buffer as STREAM.DAT's chunk k, every dword its own
+; offset in the file. A chunk is 32 KB on a 32 KB boundary, so its high word
+; is k / 2 throughout and its low word runs from (k & 1) x 32768 by fours
+vk_fill:
+    push ax
+    push cx
+    push dx
+    push di
+    push es
+    mov dx, ax
+    shr dx, 1                       ; the offsets' high word
+    and ax, 1
+    mov cl, 15
+    shl ax, cl                      ; ...and the first low word
+    mov es, [vk_buf]
+    xor di, di
+    mov cx, VK_CHUNK / 4
+    cld
+.l:
+    stosw
+    xchg ax, dx
+    stosw
+    xchg ax, dx
+    add ax, 4
+    loop .l
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; vk_chk - DX = the high word of the offset the buffer was read from (its low
+; word 0): does the buffer hold STREAM.DAT's pattern from there? Its first and
+; last dwords are asked, which a read of the wrong clusters, a short read and
+; a transfer that never happened all fail. Only STREAM.DAT has a pattern.
+; [vk_dchk]: 0 not asked, 1 every check held, 2 one did not
+vk_chk:
+    cmp word [vk_fname], vk_f_names
+    jne .out
+    push es
+    mov es, [vk_buf]
+    cmp word [es:0], 0
+    jne .bad
+    cmp [es:2], dx
+    jne .bad
+    cmp word [es:VK_CHUNK - 4], VK_CHUNK - 4
+    jne .bad
+    cmp [es:VK_CHUNK - 2], dx
+    jne .bad
+    cmp byte [vk_dchk], 2
+    je .done
+    mov byte [vk_dchk], 1
+    jmp short .done
+.bad:
+    mov byte [vk_dchk], 2
+.done:
+    pop es
+.out:
+    ret
+
+; vk_dkv - the data check's line
+vk_dkv:
+    push si
+    push di
+    mov di, vk_s_dnone
+    cmp byte [vk_dchk], 1
+    jb .say
+    mov di, vk_s_dok
+    je .say
+    mov di, vk_s_dbad
+.say:
+    mov si, vk_r_dchk
+    call bl_kvs
+    pop di
+    pop si
+    ret
+
+; vk_wprog - the status row while W writes: [vk_wk] chunks of VK_NCHUNK
+vk_wprog:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    call bl_lclr
+    mov si, vk_s_wprog
+    xor di, di
+    call bl_lput
+    mov ax, [vk_wk]
+    mov cx, 32
+    mul cx                          ; KB so far
+    mov di, 24
+    mov cx, 6
+    call bl_dec
+    mov si, vk_s_wof
+    mov di, 31
+    call bl_lput
+    mov si, bl_lscr
+    call bl_progress
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; =============================================================================
+; vk_wrun - W: make STREAM.DAT where R will look for it, 12.5 MB of it
+vk_wrun:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov word [vk_wdone], 0
+    mov word [bl_nrow], 0
+    mov word [vk_err], 0
+    mov si, vk_s_wtitle
+    call bl_sline
+    call vk_claim
+    jc .fail
+    call vk_toc
+    jnc .there
+    mov si, vk_s_noc
+    call bl_sline
+    jmp .out
+.there:
+    call vk_where
+
+    ; --- how much is there already: a whole number of chunks carries on ---
+    xor bx, bx                      ; BX = the first chunk to write
+    call vk_size
+    jc .room                        ; none: from the start
+    cmp dx, VK_NCHUNK / 2
+    jae .have                       ; 12.5 MB or more: nothing to do
+    test ax, VK_CHUNK - 1
+    jnz .again                      ; torn: start again
+    mov bx, dx
+    shl bx, 1
+    rol ax, 1                       ; bit 15, the odd chunk, to bit 0
+    and ax, 1
+    add bx, ax
+    or bx, bx
+    jz .again                       ; an empty file: WRITE makes it anew
+    mov ax, bx
+    mov cx, 32
+    mul cx
+    xor dx, dx
+    mov si, vk_r_wresume
+    mov cx, 9
+    call bl_kv
+    jmp short .room
+.again:
+    mov si, vk_f_names
+    call OSAPI_FILE_DELETE
+    xor bx, bx
+.room:
+    mov [vk_wk], bx
+    mov [vk_wfrom], bx
+
+    ; --- room for the rest: KB free against KB to write ---
+    call OSAPI_FILE_DFREE           ; DX:AX = free bytes - and it WRITES BX
+    jc .dfree
+    mov cx, 1024
+    call vk_div32                   ; DX:AX = free KB
+    mov si, vk_r_wfree
+    mov cx, 9
+    call bl_kv
+    push dx
+    push ax
+    mov ax, VK_NCHUNK
+    sub ax, [vk_wk]
+    mov cx, 32
+    mul cx                          ; AX = KB to write (DX = 0)
+    mov si, vk_r_wneed
+    mov cx, 9
+    call bl_kv
+    mov cx, ax
+    pop ax
+    pop dx
+    or dx, dx
+    jnz .write                      ; 64 MB free or more
+    cmp ax, cx
+    jae .write
+    mov si, vk_s_wroom
+    call bl_sline
+    jmp .home
+
+    ; --- the chunks: a WRITE makes the file, APPENDs grow it ---
+.write:
+    call OSAPI_GET_TICKS
+    mov [vk_ct0], ax
+.chunk:
+    mov bx, [vk_wk]
+    cmp bx, VK_NCHUNK
+    jae .done
+    test bl, 3
+    jnz .fill
+    call vk_wprog                   ; every 128 KB
+.fill:
+    mov ax, bx
+    call vk_fill
+    mov es, [vk_buf]
+    mov si, vk_f_names
+    mov cx, VK_CHUNK
+    or bx, bx
+    mov bx, 0                       ; ES:BX = the chunk (flags kept)
+    jnz .app
+    xor dx, dx                      ; DX:CX = the whole of it
+    call OSAPI_FILE_WRITE
+    jmp short .wrote
+.app:
+    call OSAPI_FILE_APPEND
+.wrote:
+    push ds
+    pop es
+    jc .werr
+    inc word [vk_wk]
+    jmp short .chunk
+.werr:
+    xor dx, dx                      ; AX = FERR_*
+    mov si, vk_r_werr
+    mov cx, 9
+    call bl_kv
+    mov ax, [vk_wk]
+    mov cx, 32
+    mul cx
+    mov si, vk_r_wat
+    mov cx, 9
+    call bl_kv
+    inc word [vk_err]
+.done:
+    call OSAPI_GET_TICKS
+    sub ax, [vk_ct0]
+    mov [vk_cticks], ax
+    mov ax, [vk_wk]
+    sub ax, [vk_wfrom]              ; chunks written by this run
+    jz .said
+    mov cx, 32
+    mul cx
+    xor dx, dx
+    mov si, vk_r_wkb
+    mov cx, 9
+    call bl_kv
+    ; tenths of KB/s: KB x 182 / ticks - KB x 182 fits 32 bits
+    mov cx, 182
+    mul cx                          ; DX:AX = KB x 182 (KB is under 12,801)
+    mov cx, [vk_cticks]
+    or cx, cx
+    jz .said
+    call vk_div32
+    mov si, vk_r_wrate
+    mov cx, 9
+    call bl_kv
+    mov ax, [vk_cticks]             ; seconds: ticks x 10 / 182
+    mov cx, 10
+    mul cx
+    mov cx, 182
+    div cx
+    xor dx, dx
+    mov si, vk_r_wsecs
+    mov cx, 9
+    call bl_kv
+.said:
+    cmp word [vk_err], 0
+    jne .home
+    mov si, vk_s_wdone
+    call bl_sline
+    jmp short .home
+.dfree:
+    mov si, vk_s_wdfree
+    call bl_sline
+    jmp short .home
+.have:
+    mov si, vk_s_whave
+    call bl_sline
+.home:
+    call vk_back
+    mov si, vk_f_wtxt               ; the report, beside the bench
+    call bl_save
+    jmp short .out
+.fail:
+    mov si, vk_s_fail
+    call bl_sline
+.out:
+    inc word [vk_wdone]             ; for a harness: W has finished
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vk_drun - D: STREAM.DAT deleted, from where W wrote it
+vk_drun:
+    push ax
+    push cx
+    push dx
+    push si
+    mov word [vk_ddone], 0
+    mov word [bl_nrow], 0
+    mov si, vk_s_dtitle
+    call bl_sline
+    call vk_toc
+    jnc .there
+    mov si, vk_s_noc
+    call bl_sline
+    jmp short .out
+.there:
+    call vk_where
+    mov si, vk_f_names
+    call OSAPI_FILE_DELETE
+    jnc .gone
+    xor dx, dx                      ; AX = FERR_*: 4 is "there was none"
+    mov si, vk_r_derr
+    mov cx, 9
+    call bl_kv
+    jmp short .home
+.gone:
+    mov si, vk_s_dgone
+    call bl_sline
+.home:
+    call vk_back
+.out:
+    inc word [vk_ddone]             ; for a harness: D has finished
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
 %define BL_ARENA_BYTES 5000
 %include "benchlib.inc"
 
@@ -716,9 +1222,35 @@ vk_tpl:
 vk_ttl:       db 'Video Disk Bench', 0
 vk_f_names:   db 'STREAM.DAT', 0, 'BADAPPLE.V88', 0, 'BAPPLE.V88', 0, 0
 vk_f_txt:     db 'VIDDISK.TXT', 0
+vk_f_wtxt:    db 'VDWRITE.TXT', 0
 vk_s_title:   db 'VIDDISK - streaming off the fixed disk (VIDEO-PLAN W0 b, W2, W3)', 0
-vk_s_hint:    db 'Click, or press R, to run. It only reads, and saves VIDDISK.TXT.', 0
-vk_s_nostr:   db 'No STREAM.DAT or (BAD)APPLE.V88 of 12 MB here: file rows skipped', 0
+vk_s_hint:    db 'R (or a click) runs: reads only, saves VIDDISK.TXT. No stream? W.', 0
+vk_s_nostr:   db 'No STREAM.DAT or (BAD)APPLE.V88 of 12 MB: press W to write one', 0
+vk_s_noc:     db 'NO C: - mount the hard disk (Control Panel), then run again', 0
+vk_s_wtitle:  db 'VIDDISK W - writing STREAM.DAT, 12.5 MB, for R to read back', 0
+vk_s_wprog:   db 'W: writing STREAM.DAT', 0
+vk_s_wof:     db 'of 12800 KB - minutes', 0
+vk_s_wroom:   db 'NOT ENOUGH ROOM for STREAM.DAT: nothing written', 0
+vk_s_wdfree:  db 'THE DISK DID NOT SAY HOW MUCH IS FREE: nothing written', 0
+vk_s_whave:   db 'STREAM.DAT is already whole: press R to run the bench', 0
+vk_s_wdone:   db 'STREAM.DAT is whole: press R to run the bench, D to delete it', 0
+vk_s_dtitle:  db 'VIDDISK D - deleting STREAM.DAT', 0
+vk_s_dgone:   db 'STREAM.DAT deleted: its 12.5 MB are free again', 0
+vk_s_dok:     db 'ok', 0
+vk_s_dbad:    db 'BAD - not the bytes W wrote', 0
+vk_s_dnone:   db 'not STREAM.DAT: none', 0
+vk_drvs:      db '?:', 0
+vk_r_where:   db 'the stream is on', 0
+vk_r_dchk:    db 'data at 12 MB', 0
+vk_r_wresume: db 'already written (KB)', 0
+vk_r_wfree:   db 'free on the disk (KB)', 0
+vk_r_wneed:   db 'to write (KB)', 0
+vk_r_werr:    db 'WRITE FAILED, FERR_', 0
+vk_r_wat:     db '...after (KB)', 0
+vk_r_wkb:     db 'written this run (KB)', 0
+vk_r_wrate:   db 'write KB/s x 10', 0
+vk_r_wsecs:   db 'write took (s)', 0
+vk_r_derr:    db 'DELETE FAILED, FERR_', 0
 vk_s_using:   db 'the stream', 0
 vk_s_hdra:    db '-- READ_AT 32 KB, by offset (it re-walks the chain) --', 0
 vk_s_hdrs:    db '-- READ_SEQ: a seek is one walk, then from where it stands --', 0
@@ -775,6 +1307,16 @@ vk_nsec:      db 0
 vk_cyl:       db 0
 vk_cylhi:     db 0
 vk_head:      db 0
+vk_moved:     db 0
+vk_hdrv:      db 0
+vk_dchk:      db 0
+              db 0
+vk_hdir:      dw 0
+vk_wk:        dw 0
+vk_wdone:     dw 0
+vk_ddone:     dw 0
+vk_wfrom:     dw 0
+vk_fnd:       times OSAPI_FIND_SZ db 0
 vk_cur:       times FSEQ_SIZE db 0
 vk_res:       times VK_NRES dd 0
 

@@ -8,6 +8,11 @@ KIND is the screen the text is drawn on, one of vosd.inc's renderers each:
     herc      Hercules, one bit                  the 5150's memory
     cga4      CGA 320 x 200, two bits            the 5150's memory
     c160      CGA's text hack, through the SHADOW - its cells' attributes
+    c512      the same text mode NATIVE (98.3.12.2): a cell's character
+              and attribute, the box's cells 0DEh, the 5150's memory
+    text      the 80 x 25 text screen, NATIVE (98.3.16): the box is ONE
+              row of the characters themselves on 70h, one row down and
+              a cell in, over a 25-row canvas - the 5150's memory
     vga8      13h, a byte a pixel                the VGA XT's memory
     modex     Mode X, a plane at a time          the glass (planes are not
     modexflip Mode X, PAGE FLIPPING: a save a page       memory)
@@ -78,6 +83,7 @@ from cycweb import pkg_syms                                   # noqa: E402
 FPS = 15.0
 H = 100
 YOFF, ROWS = 4, 12                  # vosd.inc's box: 4 rows in, 12 tall
+BLOCK = (10, 16)                    # ...and the rows under its glyphs
 CGAPAL = 0x51
 X2 = [sum(3 << (2 * i) for i in range(4) if n >> i & 1) for n in range(16)]
 
@@ -92,6 +98,8 @@ KINDS = {
              "mem", 2, 240, 1.0, 255),
     "c160": (vid.LAY_C160, 80, 80, vid.PF_C160, "os8088_5150_cga_gla",
              "mem", 4, 180, 2.0, 255),
+    "c512": (vid.LAY_TXT, 160, 160, vid.PF_C512, "os8088_5150_cga_gla",
+             "mem", 8, 180, 2.0, 255),
     "vga8": (vid.LAY_LIN320, 160, 160, vid.PF_VGA8, "os8088_xt_vga",
              "mem", 8, 180, 2.0, 255),
     "modex": (vid.LAY_MODEX, 160, 40, vid.PF_VGA8, "os8088_xt_vga",
@@ -100,6 +108,8 @@ KINDS = {
                   "glass", 8, 180, 2.0, 255),
     "vga4": (vid.LAY_LIN80, 160, 20, vid.PF_VGA4, "os8088_xt_vga",
              "glass", 8, 180, 2.0, 15),
+    "text": (vid.LAY_TEXT, 160, 160, vid.PF_TEXT, "os8088_5150_cga_gla",
+             "mem", 2, 180, 2.0, 255),
 }
 
 
@@ -133,7 +143,7 @@ def canvases(row, px, nf, vmax):
             # A BLOCK, from frame 30 on and never again: written ONCE, under
             # the toast's glyphs (rows 10..15). Put back from a save taken
             # before it, it is lost for good - the bars heal themselves
-            for y in range(10, 16):
+            for y in range(*BLOCK):
                 for x in range(2 * step, 9 * step):
                     cv[y * row + x] = (0x5A if not px else 99) & vmax
         out.append(bytes(cv))
@@ -195,6 +205,9 @@ def main():
     ap.add_argument("--src", help="with --cost: a tree whose apps/ to build "
                     "the player from, for the build before")
     a = ap.parse_args()
+    global H, YOFF, ROWS, BLOCK
+    if a.kind == "text":            # 25 rows, and the box one of them
+        H, YOFF, ROWS, BLOCK = 25, 1, 1, (1, 2)
     (lay, row, gwb, pf, machine, how, xoff, nf, keysecs,
      vmax) = KINDS[a.kind]
     px = a.kind in ("vga8", "modex", "modexflip", "vga4")
@@ -221,7 +234,9 @@ def main():
         vid.encode_canvases(canvases(row, px, nf, vmax), g, clip, FPS, pf,
                             palette() if pf == vid.PF_VGA8 else None, "keys",
                             keysecs=keysecs, flip=flip,
-                            cgapal=CGAPAL if pf == vid.PF_CGA4 else None)
+                            cgapal=CGAPAL if pf == vid.PF_CGA4 else
+                            vid.CARD_BOTH if pf == vid.PF_C512 else
+                            vid.TEXT_COLOUR if pf == vid.PF_TEXT else None)
         if a.clip:
             clip = os.path.join(tmp, "KEYS.V88")
             with open(a.clip, "rb") as f, open(clip, "wb") as o:
@@ -266,6 +281,12 @@ def main():
                 the canvas offsets it covers"""
                 f, l, t = glyphs()
                 where = []
+                if a.kind == "text":    # the characters themselves, a cell
+                    out = bytes(v for ch in " " + text + " "    # of ground
+                                for v in (ord(ch), 0x70))       # each side
+                    o = YOFF * row + xoff
+                    want[o:o + len(out)] = out
+                    return list(range(o, o + len(out)))
                 for rr in range(ROWS):
                     bits = [0]
                     for ch in text:
@@ -284,6 +305,11 @@ def main():
                         out = bytes((0xF0 if lit[2 * c] else 0) |
                                     (0x0F if lit[2 * c + 1] else 0)
                                     for c in range(len(lit) // 2))
+                    elif a.kind == "c512":      # each cell 0DEh, whole
+                        out = bytes(v for c in range(len(lit) // 2)
+                                    for v in (0xDE,
+                                              (0xF0 if lit[2 * c] else 0) |
+                                              (0x0F if lit[2 * c + 1] else 0)))
                     else:
                         out = bytes(bits)
                     o = (YOFF + rr) * row + xoff
@@ -340,6 +366,10 @@ def main():
                 if a.kind == "c160":
                     v = bytes(m.read(0xB8000, 16384))
                     return bytearray(v[(ty0 + y) * 160 + (tx0 + x) * 2 + 1]
+                                     for y in range(H) for x in range(row))
+                if a.kind in ("c512", "text"):
+                    v = bytes(m.read(0xB8000, 16384))
+                    return bytearray(v[(ty0 + y) * 160 + tx0 + x]
                                      for y in range(H) for x in range(row))
                 seg = bytes(m.read(rw("vp_vseg") << 4, 65536))
                 banks, stride, rows, _ = vid.LAYOUTS[lay]
@@ -480,7 +510,8 @@ def main():
                 d3 = rw("vp_done")
                 release(80)
                 looks, miss, clip = boxed("Repeat on", 3)
-                native = a.kind in ("herc", "cga4", "vga8", "modex", "vga4")
+                native = a.kind in ("herc", "cga4", "vga8", "modex", "vga4",
+                                    "text")
                 print("   3: the box, looked at %d times as frames decode "
                       "under it: %d without the text (vd_clip %s)"
                       % (looks, miss, clip))

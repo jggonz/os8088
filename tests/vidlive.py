@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """VIDEO.O88 plays LIVE on the desktop - SPEC.md 98.3.10, VIDEO-PLAN W9.
 
-    make && python3 tests/vidlive.py [--screen herc|cga|vga]
+    make && python3 tests/vidlive.py [--screen herc|cga|vga|vga4]
 
 ONE LIVE FILE, made here: RESIDENT, three renditions of a 160 x 60 one-bit
 canvas in the LIN80 layout - the shadow's, the band OSAPI_GFX_BLIT1 takes -
@@ -25,9 +25,18 @@ VGA), with a seam back to frame 10 and Repeat on. On the screen named:
 6. F HANDS IT TO THE FULL SCREEN, still playing, and F again back to the
    desktop, live and playing; ESC STOPS IT.
 
+--screen vga4 is LIVE IN COLOUR (98.3.10.4): the VGA rendition is a VGA4
+canvas of the same size, and every hold is read off the RENDERED glass
+against the decode's sixteen colours. The pass's blits are OSAPI_GFX_BLITPs
+and no BLIT4 - uncovered, and under the Disk window too, where BLITP walks
+the clip (SPEC.md 5.4.3.6): a hold there has the box's uncovered pixels
+right while the Disk window's are untouched.
+
 Broken on purpose - vp_lblit's blit skipped - every hold FAILS; vp_canlive
 refusing always, the play is a bracket and FAILS 1; gfx_blit1's fragment
-walk taken out, the band draws over the Disk window and 4b FAILS.
+walk taken out, the band draws over the Disk window and 4b FAILS. On vga4:
+BLITP's plane step wrong, every hold FAILS; the walk not asked for (DI bit
+14 clear), the covered count FAILS.
 """
 import argparse
 import os
@@ -47,8 +56,11 @@ WB, H, NF, FPS, L = 20, 60, 40, 15.0, 10
 TARGETS = ("cga", "herc", "vga")
 SCREEN = {"herc": ("os8088_5150_herc_gla", 0xB0000, "herc", 348, 90),
           "cga": ("os8088_5150_cga_gla", 0xB8000, "cga", 200, 80),
-          "vga": ("os8088_xt_vga", 0xA0000, "lin80", 480, 80)}
+          "vga": ("os8088_xt_vga", 0xA0000, "lin80", 480, 80),
+          "vga4": ("os8088_xt_vga", 0xA0000, "lin80", 480, 80)}
 HZ = 4772727.0
+PAL8 = [tuple((v * 255 + 31) // 63 for v in vid.STD16[3 * i:3 * i + 3])
+        for i in range(16)]
 
 
 class Stop(Exception):
@@ -72,6 +84,31 @@ def canvases(ri):
     return out
 
 
+def canvases4():
+    """the VGA4 rendition's: a band of colour stripes that walks across"""
+    w, out = WB * 8, []
+    for f in range(NF):
+        cv = bytearray(w * H)
+        for y in range(H):
+            x0 = (f * 12 + (y // 6) * 8) % w
+            for x in range(x0, min(w, x0 + 40)):
+                cv[y * w + x] = 1 + (x // 4 + y // 3 + f) % 15
+        out.append(bytes(cv))
+    return out
+
+
+def writer4():
+    g = vid.Geom(vid.LAY_LIN80, WB, H, bitplanes=True)
+    w = vid.Writer(g, int(FPS * 100), 100, vid.AUD_NONE, 0, vid.PF_VGA4,
+                   title="live", keysecs=100.0, loop=L)
+    surf, prev = g.surface(), bytes(WB * 8 * H)
+    for cv in canvases4():
+        g.put(surf, cv)
+        w.frame(vid.vga4_subs(cv, prev, g), surf)
+        prev = cv
+    return w
+
+
 def writer(ri):
     g = vid.Geom(vid.LAY_LIN80, WB, H)
     w = vid.Writer(g, int(FPS * 100), 100, vid.AUD_NONE, 0, vid.PF_MONO1,
@@ -93,14 +130,17 @@ def main():
     ap.add_argument("--screen", choices=sorted(SCREEN), default="herc")
     a = ap.parse_args()
     machine, vseg, dlay, rows, stride = SCREEN[a.screen]
-    want_r = TARGETS.index(a.screen)
+    colour = a.screen == "vga4"
+    want_r = TARGETS.index("vga" if colour else a.screen)
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
     pkg = os88build.at("build/video.o88")
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
         v88 = os.path.join(tmp, "LIVE.V88")
-        vid.write_resident(v88, [writer(i) for i in range(3)], title="live",
+        vid.write_resident(v88, [writer(0), writer(1),
+                                 writer4() if colour else writer(2)],
+                           title="live",
                            repeat=True,
                            live=[vid.TARGETS[t] for t in TARGETS])
         vid.verify_v88(v88)
@@ -129,8 +169,35 @@ def main():
                     raise Stop("%s never happened (%s)"
                                % (what, str(e).split(".")[0]))
 
-            def box(n, what):
+            def box4(n, what, excl=None):
+                """the box's pixels on the RENDERED glass against frame n's
+                colours - but for `excl`, a screen rect a window covers"""
+                px, py = rw("vp_px"), rw("vp_py")
+                fw, fh, rgb = m.fbuf(0)
+                sx, sy = fw / 640, fh / 480
+                want = vid.decode_at(r, n)
+                w, wrong, seen = WB * 8, 0, 0
+                for y in range(H):
+                    ry = int((py + y + 0.5) * sy)
+                    for x in range(w):
+                        if excl and excl[0] <= px + x < excl[2] and \
+                                excl[1] <= py + y < excl[3]:
+                            continue
+                        seen += 1
+                        o = 3 * (ry * fw + int((px + x + 0.5) * sx))
+                        c = PAL8[want[y * w + x]]
+                        if max(abs(rgb[o + j] - c[j]) for j in range(3)) > 6:
+                            wrong += 1
+                print("   %s: the glass holds frame %d, %d pixels of %d "
+                      "wrong (at %d,%d)" % (what, n, wrong, seen, px, py))
+                if wrong or not seen:
+                    bad.append("%s: frame %d wrong in %d pixels of %d"
+                               % (what, n, wrong, seen))
+
+            def box(n, what, excl=None):
                 """the box's pixels on the desktop against frame n"""
+                if colour:
+                    return box4(n, what, excl)
                 px, py = rw("vp_px"), rw("vp_py")
                 seg = bytes(m.read(vseg, 65536))
                 got = b"".join(seg[dg.base[py + y] + px // 8:
@@ -144,11 +211,34 @@ def main():
                     bad.append("%s: frame %d differs in %d bytes"
                                % (what, n, d))
 
-            def hold(n, what, drag=None):
+            cost = os.environ.get("VIDLIVE_COST") == "1"
+            lb = [base + syms["vp_lblit"], base + syms["vp_lblit.th"]] \
+                if cost else []
+
+            def passes(tr, what):
+                """VIDLIVE_COST=1: a pass's blits, vp_lblit to .th, in
+                cycles - every pass that blitted, their mean"""
+                if not cost:
+                    return
+                sp, t0 = [], None
+                for h in tr.hits:
+                    if h["addr"] == lb[0]:
+                        t0 = h["cycles"]
+                    elif h["addr"] == lb[1] and t0 is not None:
+                        sp.append(h["cycles"] - t0)
+                        t0 = None
+                if sp:
+                    print("   %s: %d passes blitted, mean %.0f cycles "
+                          "(%.2f ms), max %d" % (what, len(sp),
+                                                  sum(sp) / len(sp),
+                                                  1000 * sum(sp) / len(sp)
+                                                  / HZ, max(sp)))
+
+            def hold(n, what, excl=None):
                 wait(lambda mm: rb("vp_held") == 1 and rw("vp_done") == n
                      and rw("vp_dy1") == 0, "%s (frame %d)" % (what, n))
                 os88marty.pace(m, 0.3)      # the worker's next pass, idle
-                box(n - 1, what)
+                box(n - 1, what, excl)
             try:
                 wait(lambda mm: rw("vp_ploads") >= 1, "the poster")
                 got1 = (rb("vp_flive"), rb("vp_rend"), rb("vp_target"))
@@ -169,7 +259,12 @@ def main():
                     bad.append("Play started %s, not a live session" % (st,))
                 # --- 2, 3: holds over two laps, a drag between two
                 stops = (5, NF, L + 1, 25, NF, L + 1)
+                tr = None
                 for i, n in enumerate(stops):
+                    if colour and i == 3:   # UNCOVERED: the planes as they are
+                        tr = os88marty.bp_trace(m, "gfx_blitp", "gfx_blit4",
+                                                *lb)
+                        tr.__enter__()
                     hold(n, "hold %d" % i)
                     nxt = stops[i + 1] if i + 1 < len(stops) else 0xFFFF
                     if i == 2:              # a DRAG, the live session held
@@ -184,6 +279,13 @@ def main():
                     # on through the drag)
                     ww("vp_stopat", nxt)
                     m.write(base + syms["vp_held"], b"\0")
+                if tr is not None:
+                    tr.__exit__(None, None, None)
+                    nb, n4 = tr.count("gfx_blitp"), tr.count("gfx_blit4")
+                    print("   uncovered: %d BLITP, %d BLIT4" % (nb, n4))
+                    passes(tr, "uncovered")
+                    if nb < 3 or n4:
+                        bad.append("uncovered, %d BLITP and %d BLIT4" % (nb, n4))
                 # --- 4: the rest unheld, Repeat off, on time
                 m.write(base + syms["vp_rep"], b"\0")
                 c0 = int(m.status().get("cycles", 0))
@@ -217,13 +319,42 @@ def main():
                 y0, y1 = dk.y + 12, min(py + H, dk.y + dk.h) - 2
 
                 def under():
+                    if colour:          # (the glass: planes are not bytes)
+                        fw, fh, rgb = m.fbuf(0)
+                        sx, sy = fw / 640, fh / 480
+                        return bytes(rgb[3 * (int((y + 0.5) * sy) * fw +
+                                              int((x + 0.5) * sx)) + j]
+                                     for y in range(y0, y1)
+                                     for x in range(x0 * 8, x1 * 8)
+                                     for j in range(3))
                     seg = bytes(m.read(vseg, 65536))
                     return b"".join(seg[dg.base[y] + x0:dg.base[y] + x1]
                                     for y in range(y0, y1))
                 os88marty.pace(m, 0.3)
+                if colour:
+                    tr = os88marty.bp_trace(m, "gfx_blitp", "gfx_blit4", *lb)
+                    tr.__enter__()
                 u0, v0 = under(), rw("vp_vseq")
                 os88marty.pace(m, 1.5)
                 u1, v1 = under(), rw("vp_vseq")
+                if colour:
+                    tr.__exit__(None, None, None)
+                    nb, n4 = tr.count("gfx_blitp"), tr.count("gfx_blit4")
+                    print("   covered: %d BLITP, %d BLIT4" % (nb, n4))
+                    passes(tr, "covered")
+                    if nb < 3 or n4:
+                        bad.append("covered, %d BLITP and %d BLIT4" % (nb, n4))
+                    # a hold under it: the box's uncovered pixels right
+                    nh = rw("vp_done") + 4
+                    if nh > NF:
+                        nh = L + 4
+                    ww("vp_stopat", nh)
+                    m.write(base + syms["vp_held"], b"\0")
+                    ui.mo.to(8, 470)
+                    hold(nh, "covered", (dk.x - 2, dk.y - 2, dk.x + dk.w + 3,
+                                         dk.y + dk.h + 3))
+                    ww("vp_stopat", 0xFFFF)
+                    m.write(base + syms["vp_held"], b"\0")
                 dch = sum(1 for p, q in zip(u0, u1) if p != q)
                 print("   a Disk window over the box: %d frames played, %d of "
                       "%d bytes of it inside the box changed" % (v1 - v0, dch,

@@ -133,6 +133,14 @@ INCLUDES = [
      "Picture decoders: .PIX, .BMP and .PCX into the packed 4bpp that "
      "OSAPI_GFX_BLIT4 takes. Owns no state - the caller passes a block "
      "in SI. 8-bit files are refused by name, not approximated."),
+    ("os88spk.inc", "34.11",
+     "PCM through the PC SPEAKER, with no card, from inside your own "
+     "FSXF_RATE bracket: the ring player on OSAPI_FSX_SPK. The ring is the "
+     "external ring's layout (SPEC.md 34.5.3), so a player that feeds a Sound "
+     "Blaster feeds this the same way, but it holds PWM COUNTS - "
+     "`os88spk_init` writes the table a sample goes through. `os88spk_go` "
+     "plays, `os88spk_stop` pauses or stops. It costs the machine an "
+     "interrupt a sample (SPEC.md 34.11 has the measured share)."),
     ("os88sock.inc", "20.11, 62.11, 72",
      "Finding the socket driver: `net_find` answers CF=1 when neither "
      "ETHER.DRV nor NET.DRV is loaded and sets `NET_CLASS` otherwise, so every "

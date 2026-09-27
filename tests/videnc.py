@@ -14,12 +14,25 @@ tools/os88venc.py encodes it three ways. Four questions:
 2. WITH NO LIMITS, IS EVERY FRAME THE TARGET? The lossless profile's file,
    decoded frame by frame, must equal the dithered target of every frame,
    exactly - the stream is the target when nothing stops it.
-3. UNDER TIGHT LIMITS, ARE THEY KEPT? A 20 KB/s disk and a 30%/50% CPU
+3. UNDER TIGHT LIMITS, ARE THEY KEPT? A 20 KB/s disk with a 16 KB reserve
+   and a 30%/50% CPU
    must CUT frames (or this tests nothing), and then every record, priced
    by the wave 0 model on its actual bytes, is under the per-frame ceiling,
    and a replay of both buckets never goes below empty. And the FIRST
    KEYFRAME is a whole picture, exactly its target (SPEC.md 98.2.9's
    pre-roll): a half-painted key 0 is where a colour play starts.
+   3b. OWED TIME (98.2.1.1): a cut every fifth frame, a 30% ceiling and
+   `--owe 1.6`. Frames must run past their period (or this tests nothing),
+   and the silent hook's schedule replayed from the file never finds three
+   frames due and is behind no two calls running. Broken on purpose - the
+   two frames after an overrun given the overrun's ceiling instead of one
+   steady one between them - it drops 11 frames and is 42 calls behind.
+   3c. WHAT A CUT FRAME SPENDS ON (98.2.1.2): the same clip at 12 KB/s with
+   the look-ahead and the error as seen (the defaults) must flicker back at
+   most half as much as with neither, and be no worse as seen; and the
+   header names the ring its reserve banks in - 2 slots at 16 KB, 8 at the
+   default 192 (98.1.1). 3d. --aim size (98.2.1.4) at the default budget
+   must be 5% smaller than as asked, and still converge on the still.
 4. DOES IT CONVERGE? Two seconds of a still picture after the motion: the
    last frame on screen must be the target, the errors the budget left all
    fixed.
@@ -68,6 +81,34 @@ import os88vid as vid                                        # noqa: E402
 import os88venc as venc                                      # noqa: E402
 
 SKIP = 77
+
+
+def hook_schedule(r, period, over):
+    """The SILENT hook's schedule (SPEC.md 98.3), replayed from the file:
+    a call a period, at most two frames a call, a third due dropped. ->
+    frames past their period, frames dropped, and the most calls in a row
+    that found two due"""
+    free, pair, ov, drops, t0 = 0.0, False, 0, 0, 0.0
+    behind = best = 0
+    for i, (rec, a_, i_) in enumerate(r.records()):
+        c = vid.cycles_of(rec, layout=r.g.layout) + over
+        alone = False
+        if pair:
+            start, pair = free, False
+        else:
+            k = max(i, -int(-(free - t0) // period))
+            n = k - i + 1
+            if n > 2:
+                drops += n - 2
+                t0 += (n - 2) * period
+            start = t0 + k * period
+            pair, alone = n >= 2, n == 1
+            behind = behind + 1 if pair else 0
+            best = max(best, behind)
+        free = start + c
+        if alone and free > t0 + (i + 1) * period:
+            ov += 1
+    return ov, drops, 0, best
 
 
 def main():
@@ -174,7 +215,8 @@ def main():
         for name, extra, pf, lay in (
                 ("cga4", ("--cga-palette", "1", "--cga-bright", "1",
                           "--cga-bg", "9"), vid.PF_CGA4, vid.LAY_CGA),
-                ("c160", (), vid.PF_C160, vid.LAY_C160)):
+                ("c160", (), vid.PF_C160, vid.LAY_C160),
+                ("c512", (), vid.PF_C512, vid.LAY_TXT)):
             path, res, keep = run(name, "--preset", name, "--profile",
                                   "lossless", "--audio", "none", *extra)
             vid.verify_v88(path)
@@ -187,7 +229,8 @@ def main():
                      diff, r.frames))
             if (r.pixfmt, r.g.layout) != (pf, lay) or diff or \
                     r.frames != len(keep) or \
-                    r.cgapal != (0x39 if pf == vid.PF_CGA4 else 0):
+                    r.cgapal != {vid.PF_CGA4: 0x39,
+                                 vid.PF_C512: vid.CARD_BOTH}.get(pf, 0):
                 bad.append("%s: format %d layout %d palette %02Xh, %d frames "
                            "differ" % (name, r.pixfmt, r.g.layout, r.cgapal,
                                        diff))
@@ -215,8 +258,9 @@ def main():
                        "differ" % (r.rowscale, sorted(masks), diff))
         # --- 3: tight limits kept
         path, res, keep = run("tight", "--preset", "herc", "--disk", "20000",
-                              "--avg", "0.30", "--peak", "0.50", "--rate",
-                              "5512")
+                              "--avg", "0.30", "--peak", "0.50", "--owe",
+                              "0", "--rate", "5512", "--profile", "floppy",
+                              "--reserve", "16")
         vid.verify_v88(path)
         r = vid.Reader(path)
         period, acyc, abps = res["period"], res["audio_cyc"], res["audio_bps"]
@@ -225,7 +269,7 @@ def main():
         cpu_per = 0.30 * period - acyc
         dsk_per = (20000 * 0.99 - abps) / fps
         cpu = venc.Budget(cpu_per, cpu_per * fps)
-        dsk = venc.Budget(dsk_per, min(dsk_per * fps, venc.DISK_LOOKAHEAD))
+        dsk = venc.Budget(dsk_per, 16 * 1024)   # (floppy's disk is flat)
         over, cut, low = [], 0, [0.0, 0.0]
         screens = []
         for f, surf, rec, at, i in vid.v88_frames(r):
@@ -266,6 +310,76 @@ def main():
         if low[0] < -1 or low[1] < -1:
             bad.append("a bucket went below empty (CPU %.0f, disk %.0f)"
                        % tuple(low))
+        # --- 3b: OWED TIME (98.2.1.1) - a frame may run past its period,
+        # and the player's own schedule, replayed here from the file, never
+        # finds three frames due (a silent play would drop one) and is on
+        # time again the call after
+        cuts = os.path.join(tmp, "cuts.mkv")    # the picture inverted
+        subprocess.run(                         # every fifth frame: a cut
+            ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+             "testsrc2=size=320x180:rate=30:duration=3,"
+             "negate=enable=lt(mod(n\\,10)\\,5)", "-f", "lavfi", "-i",
+             "sine=frequency=440:sample_rate=22050", "-t", "3",
+             "-c:v", "ffv1", "-c:a", "pcm_s16le", cuts], check=True)
+        a = venc.parser().parse_args(
+            [cuts, os.path.join(tmp, "owed.V88"), "--quiet", "--preset",
+             "herc-full", "--disk", "200000", "--avg", "0.50", "--peak",
+             "0.30", "--owe", "1.6", "--rate", "5512"])
+        res = venc.encode(a, [])
+        r = vid.Reader(a.out)
+        ov, drops, behind, run2 = hook_schedule(
+            r, res["period"], res["audio_cyc"] + venc.HOOK_CYC)
+        worst = max(vid.cycles_of(rec) + res["audio_cyc"]
+                    for rec, a_, i_ in r.records()) / res["period"]
+        print("   owed time at 30%%/1.6, a cut every 5 frames: %d frames past their period (worst "
+              "%.0f%%), %d dropped, longest run of calls behind %d"
+              % (ov, 100 * worst, drops, run2))
+        if not ov:
+            bad.append("owed time: no frame ran past its period - the leg "
+                       "tests nothing")
+        if drops or run2 > 1:
+            bad.append("owed time: the hook's schedule dropped %d frames and "
+                       "was behind %d calls running" % (drops, run2))
+        # --- 3c: WHAT A CUT FRAME SPENDS ON (98.2.1.2): at 12 KB/s the
+        # look-ahead and the error as seen (the defaults) against neither -
+        # the picture as played must flicker back at most half as much and
+        # be no worse as seen
+        def picq(name, *args):
+            p, rs, k = run(name, "--preset", "herc", "--audio", "none",
+                           *args)
+            return rs, vid.Reader(p), k
+        q0, r0, k0 = picq("plain", "--disk", "12000", "--reserve", "16",
+                          "--lookahead", "0", "--error", "bits")
+        q1, r1, k1 = picq("ahead", "--disk", "12000", "--reserve", "16")
+        print("   at 12 KB/s, as before / the defaults: flicker %.1f / %.1f "
+              "pixels a frame, error as seen %.2f%% / %.2f%%"
+              % (q0["q_flick"], q1["q_flick"], 100 * q0["q_vis"],
+                 100 * q1["q_vis"]))
+        if not q0["cutf"]:
+            bad.append("the look-ahead leg cut nothing: it tests nothing")
+        if q1["q_flick"] > q0["q_flick"] / 2 or q1["q_vis"] > q0["q_vis"]:
+            bad.append("the look-ahead flickered %.1f against %.1f, error "
+                       "%.4f against %.4f" % (q1["q_flick"], q0["q_flick"],
+                                              q1["q_vis"], q0["q_vis"]))
+        # ...and the ring the stream assumes, in its header (98.1.1): a
+        # 16 KB reserve banks in 2 slots, the default 192 KB in 8
+        q2, r2, k2 = picq("asked")
+        print("   the ring the header asks: %d slots at 16 KB, %d at the "
+              "default reserve" % (r1.ring, r2.ring))
+        if (r1.ring, r2.ring) != (2, 8):
+            bad.append("rings of %d and %d slots, not 2 and 8"
+                       % (r1.ring, r2.ring))
+        # --- 3d: --aim size (98.2.1.4): smaller than asked where the budget
+        # is not what binds, and the still after the motion still converges
+        q3, r3, k3 = picq("size", "--aim", "size")
+        left = vid.decode_at(r3, r3.frames - 1) != k3[-1].tobytes()
+        print("   --aim size: %d bytes against %d asked, the still %s"
+              % (q3["bytes"], q2["bytes"],
+                 "NOT converged" if left else "converged"))
+        if q3["bytes"] > q2["bytes"] * 0.95 or left:
+            bad.append("--aim size: %d bytes against %d, the still %s"
+                       % (q3["bytes"], q2["bytes"],
+                          "not converged" if left else "converged"))
         # --- 4: converged on the still
         last = screens[-1] == keep[-1].tobytes()
         still = sum(1 for f in range(len(keep)) if np.array_equal(

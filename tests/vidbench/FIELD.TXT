@@ -3,7 +3,7 @@ VIDEO PLAYER - WAVE 0 FIELD DISK
 
 Three benches for the four questions an emulator cannot
 answer (docs/plans/VIDEO-PLAN.md section 8). All three
-only READ. Nothing here writes to any disk.
+only READ on R. Only VIDDISK's W writes (below).
 
 Put this disk in B: (or A: once the desktop is up) and
 open it. Each bench opens a window: press R to run,
@@ -32,10 +32,12 @@ VIDSND.O88  -  the Sound Blaster and the ST-225
 
 VIDDISK.O88  -  the ST-225's raw ceiling
   Times int 13h reading whole tracks and single
-  sectors off the first fixed disk. Its READ_AT rows
-  need a STREAM.DAT of 12.6 MB beside it and say so
-  and skip without one; the emulator already answered
-  that question.
+  sectors off the first fixed disk. Its file rows
+  need a 12.5 MB STREAM.DAT and say so and skip
+  without one. W writes one in C:'s root (minutes;
+  D deletes it again) - that is the only key here
+  that writes anything, and `make viddisk360` is the
+  floppy made for exactly that run.
 
 Run them on the ST-225 machine first. On the PicoMEM 2
 machine VIDSND and VIDDISK are the interesting pair.

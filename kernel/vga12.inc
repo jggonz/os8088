@@ -2734,7 +2734,7 @@ gfx_blitp:
     CLIPQ                        ; ...and NOT the depth: SPEC.md 5.4.3.4 moves
     je .clipok                  ; that below the display hook
     cmp byte [wm_dmg_cull], 0   ; SPEC.md 5.4.3.3: THE CULL IS NOT A CLIP
-    je .no                      ; REGION. A plane byte carries eight x's, so a
+    jne .clipok                 ; REGION. A plane byte carries eight x's, so a
                                 ; real region has to be refused - but 11.3.3's
                                 ; cull is armed for one W_PAINT in a pass that
                                 ; redraws everything above afterwards, so
@@ -2742,9 +2742,19 @@ gfx_blitp:
                                 ; wrongly. Refusing on it cost Paint its four
                                 ; planes for the session, because 42.13.1
                                 ; reads a refusal as a fact about the MACHINE
+    test di, 0x4000             ; ...UNLESS THE CALLER ASKS FOR THE REGION
+    jz .no                      ; WALKED (SPEC.md 5.4.3.6, DI bit 14): every
+    or di, di                   ; fragment, exactly. A probe answers for the
+    js .clipok                  ; rect as it would unclipped
+    call COLD_SEG:gfx_bpwalk
+    jmp .out
 .clipok:
     test al, 7
-    jnz .no                     ; x off the byte grid
+    jz .xal                     ; x off the byte grid - refused, but for a
+    cmp word [gfx_bpw], 0       ; PIECE of a region walk (5.4.3.6), whose
+    je .no                      ; left edge is a mask
+.xal:
+    and di, 0xBFFF              ; (bit 14 asked for a walk: not a step)
     or cx, cx
     jz .no
     or dx, dx
@@ -2838,13 +2848,18 @@ gfx_blitp:
     shr ax, 1
     shr ax, 1                   ; AX = the last byte column
     pop cx                      ; CX = x
+    push cx
+    and cl, 7                   ; the left edge: none where x is aligned,
+    mov ch, 0xFF                ; which is every x but a walk's piece's
+    shr ch, cl                  ; (5.4.3.6)
+    mov [ss:vga_pr_lm], ch
+    pop cx
     shr cx, 1
     shr cx, 1
     shr cx, 1                   ; CX = the first byte column, for every row
     sub ax, cx
     inc ax
     mov [ss:vga_pr_n], ax       ; bytes across
-    mov byte [ss:vga_pr_lm], 0xFF   ; x is aligned, so there is no left edge
     mov [ss:vga_pr_ps], di
     mov [ss:vga_pr_rs], bp
     mov bp, es
@@ -2864,6 +2879,8 @@ gfx_blitp:
     ; Map Mask and a `rep movsb` a row. Anything else takes the row loop.
     cmp byte [ss:vga_pr_rm], 0xFF
     jne .row                    ; a masked right edge: the latch read
+    cmp byte [ss:vga_pr_lm], 0xFF
+    jne .row                    ; ...or a masked left one
     mov ax, [vid_ch]
     sub ax, bx                  ; the rows from y to the bottom - none, or a
     jbe .row                    ; borrow, when y is off it either way...
@@ -5075,6 +5092,8 @@ gfx_bp_hk:   resb 1             ; ...and did THIS gfx_blitp take the whole-shape
                                 ; display hook? (SPEC.md 5.4.3) - the exit must
                                 ; not bring a nest down that it never put up,
                                 ; and every refusal above reaches that exit
+gfx_bpw:     resw 1             ; a region walk's plane step (5.4.3.6), and
+                                ; nonzero only while its pieces are drawn
 %endif
 
 vga_plane       resb 1          ; save/restore plane counter / mask bit
@@ -5815,9 +5834,14 @@ gfx_blit1_x:
     jge .fx1
     mov ax, [si]
 .fx1:
+%ifdef GFX_PLANE
+    cmp word [gfx_bpw], 0       ; PLANES (5.4.3.6) are cut exactly: a piece's
+    jne .fx1e                   ; left edge is a mask
+%endif
     add ax, 7
     and al, 0F8h                ; (AX's high byte cannot change: the low one's
                                 ; top five bits are all the mask clears)
+.fx1e:
     mov cx, [di+WCR_X2]         ; ...CX = min(x2s) + 1, EXACT: a right edge
     inc cx                      ; off the grid is a tail mask (5.4.2.5), the
     cmp cx, [si+4]              ; piece's x being on it. Flooring this lost
@@ -5854,6 +5878,13 @@ gfx_blit1_x:
     pop ax
     add di, [si+8]              ; ...from the band's first byte (gfx_cl_fn)
     mov si, di
+%ifdef GFX_PLANE
+    cmp word [gfx_bpw], 0       ; a planar piece: gfx_blitp (5.4.3.6)
+    je .fb1
+    call gfx_bppiece
+    jmp short .fnext
+.fb1:
+%endif
     call gfx_blit1_x
 .fnext:
     pop di
@@ -6021,6 +6052,43 @@ gfx_blit1_x:
 ; -----------------------------------------------------------------------------
 gbz_gfx_blit1:        call gfx_blit1_x
                   retf
+
+%ifdef GFX_PLANE
+; -----------------------------------------------------------------------------
+; gfx_bpwalk - gfx_blitp under a region, when the caller asks (SPEC.md
+;              5.4.3.6, DI bit 14): every fragment the rect meets, EXACTLY -
+;              the rect's own guards asked first (the probe, region aside),
+;              then each intersection drawn by gfx_blitp with the region
+;              disarmed, a piece's left edge off the byte grid being a mask
+;              (vga_prow_emit's own). 5.4.2.7's walk with no inward trim: a
+;              band cannot mask its left edge, and planes can.
+; in:  gfx_blitp's arguments, DI bit 14 set and bit 15 clear; DS = KERNEL_SEG
+; out: CF = 1 refused and nothing drawn. Far. Preserves all
+; -----------------------------------------------------------------------------
+gfx_bpwalk:
+    push di
+    or di, 0x8000               ; THE PROBE: every refusal, for the whole rect
+    call KERNEL_SEG:cw_gfx_blitp
+    pop di
+    jc .ret
+    push di
+    and di, 0xBFFF              ; (nonzero: a plane step is never 0)
+    mov [gfx_bpw], di
+    call gfx_blit1_x.frags      ; 5.4.2.7's walk, told it is a planar one
+    mov word [gfx_bpw], 0
+    pop di
+    clc
+.ret:
+    retf
+
+; gfx_bppiece - one piece of that walk: gfx_blitp with its plane step in DI
+gfx_bppiece:
+    push di
+    mov di, [gfx_bpw]
+    call KERNEL_SEG:cw_gfx_blitp
+    pop di
+    ret
+%endif
                                 ; (the body's %ifdef KERN_BIG is gone: SPEC.md 5.4.2.5)
 
 section .lowbss                 ; LOW_SEG (SPEC.md 2.1), and not .bss for

@@ -170,11 +170,16 @@ def main():
                     help="the clip LIVE (98.3.10.1): resident, 160 x 60 on "
                     "LIN80 for the Hercules desktop, played on the desktop "
                     "by the worker with the card the clock")
+    ap.add_argument("--rate", type=int,
+                    help="the sound's rate (default 22,050; 11,025 Live) - "
+                    "5512 is the encoder's half-size option (98.1.7.2)")
     a = ap.parse_args()
     global RATE
     if a.live:                          # (the audio block: under 60 KB)
         RATE = 11025
         a.resident = True
+    if a.rate:
+        RATE = a.rate
     nf = int(a.secs * FPS)
     os.chdir(ROOT)
     syms, image = pkg_syms("apps/video/video.asm", ("apps/",))
@@ -340,6 +345,7 @@ def main():
                 "vp_afr", "vp_atot", "vp_alast", "vp_afinal", "vp_dt",
                 "vp_base", "vp_ptk")}
             st["vp_vseq"] = rw("vp_vseq")
+            st["vp_aseq"] = rw("vp_aseq")
             st["vp_snd"] = rb("vp_snd")
             st["vp_err"] = rb("vp_err")
             st["vp_aend"] = rb("vp_aend")
@@ -407,9 +413,14 @@ def main():
                 st["vp_late"] > (2 if a.live else 0):
             bad.append("the picture trailed the sound (max %d, late %d)"
                        % (st["vp_skmax"], st["vp_late"]))
-        wrapped = laps and st["vp_afr"] < nf    # the sound had queued a
-        # lap that R then took away (98.3.9): the play stops at the frames
-        # drawn, and the capture below holds exactly theirs
+        wrapped = laps and (st["vp_afr"] < nf or
+                            st["vp_aseq"] > st["vp_vseq"])
+        # the sound had queued a lap that R then took away (98.3.9): the play
+        # stops at the frames drawn, and the capture below holds exactly
+        # theirs. The sound's frames past the picture's say so whatever lap
+        # it was in: ADPCM4 is half the bytes, so the ring holds twice the
+        # frames ahead, and it had queued a WHOLE lap to the file's end
+        # (vp_afr = nf) before R - which vp_afr alone read as no lap at all
         if not wrapped and (st["vp_aend"] != 1 or
                             ((st["vp_alast"] - st["vp_afinal"]) & 0x8000)):
             bad.append("the sound did not play out to its last byte "

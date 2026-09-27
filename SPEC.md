@@ -4556,7 +4556,7 @@ nothing ever saved it.
 | in | |
 |---|---|
 | `ES:SI` | plane 0's first row of the block; planes 1–3 follow at `DI` intervals |
-| `DI` | that plane step |
+| `DI` | that plane step; **bit 15** asks the PROBE (§5.4.3.2) and **bit 14** asks for an armed clip region to be WALKED (§5.4.3.6) |
 | `BP` | the row stride **within** a plane |
 | `AX` / `BX` | destination x — **a multiple of 8** — and y |
 | `CX` / `DX` | width in pixels and height in rows |
@@ -4591,7 +4591,9 @@ still flat in run density:
 - **a block off either side of the screen in x**, for §5.4.1's reason: a left
   clip advances the source by a pixel count and that is a shift again.
 - **an armed clip region** (§11.3), which every byte would have to test itself
-  against — and only `gfx_fill` does that.
+  against — and only `gfx_fill` does that. **Unless the caller asks** with
+  `DI` bit 14: then the region is WALKED, every fragment drawn exactly
+  (§5.4.3.6).
 - **a block straddling two displays** (§39.14.7). One display it takes,
   through the same whole-shape hook `gfx_blit4` uses (§39.14.7.1); a plane
   byte carries no x, so there is nothing in it to split.
@@ -4812,6 +4814,54 @@ planar canvas (§42.13), `os88img.inc`, Scribe, PaccMan's composer — takes the
 same path with no change of its own; none of them has been re-measured here,
 and a figure for them is a measurement still to take rather than one to
 quote.
+
+#### 5.4.3.6 Under a region, on request: every fragment, exactly
+
+**A covered block had one other answer and it was ruinous.** A refusal sends
+the caller to `gfx_blit4`, and under a region `gfx_blit4` takes its per-run
+path — one clipped `gfx_hline` per colour change per row, at ~0.5 ms each
+(§5.4). Measured on `os8088_xt_vga` with the Video Player's Live colour
+(§98.3.10.4), a 160 x 60 box of stripes that a Disk window covers part of:
+**1,088 ms a pass** against **28.5 ms** uncovered through `gfx_blitp` - with
+the gfx lock held throughout, so the desktop stood still for a second at a
+time while a window sat over a playing video.
+
+**`DI` bit 14 asks for the region to be walked**, and then `gfx_blitp` does
+what §5.4.2.7 does for a band: every fragment of the region (at most
+`WM_CLIP_MAX`), each intersection with the block drawn with the region
+disarmed. **It is 5.4.2.7's own walk** (`gfx_blit1_x.frags`), told by
+`[gfx_bpw]` that it is walking planes, and it differs in one thing: **a
+piece is cut EXACTLY, not trimmed inward to whole bytes.** A band cannot
+mask its left edge and so leaves up to seven columns at a fragment edge
+off the grid; planes can - `vga_prow_emit` already masked a right edge, and
+`[vga_pr_lm]`, which had only ever held `FFh`, now holds `FFh >> (x AND 7)`
+for a piece whose x a fragment put off the grid. The source needs no shift
+for it: the BLOCK's x is on the grid, so the source byte holding a screen
+pixel is the byte holding that pixel's bit, and a piece's left mask is the
+screen's and the source's at once. An unaligned x is still refused from any
+caller but the walk.
+
+- **The rect's refusals are asked first**, as a probe (§5.4.3.2) of the
+  whole block with the region aside - a one-bit display, a straddle, off the
+  screen's side - so a refusal is still the whole answer and nothing is
+  drawn; a piece that refused on its own would be lost silently.
+- **A probe with bit 14** answers for the rect as it would unclipped.
+- **Bit 14 without a region** is ignored, so a caller sets it always.
+- **A plane step with bit 14 in it is refused as a request**: a caller keeps
+  its planes under 16 KB apart (the Video Player holds them to `0x3FF`
+  paragraphs).
+- **Without bit 14 nothing changed**: a region is refused exactly as before,
+  so PixelStein, Paint, Scribe and `os88img.inc` - every caller that already
+  falls back to `gfx_blit4` through the clip - keep that behaviour until
+  they ask.
+
+**127 resident bytes on `kern_big`** - `.text` +49 (the request, the left
+mask and one more test on 5.4.3.5's fast path, which a masked left edge must
+not take, and `cw_gfx_blitp`), `.bss` +2, `.cold` +76 (`gfx_bpwalk`, the
+walk's two exact-cut tests, its planar callee and a `loop` its growth put
+out of reach) - against the 211 a second copy of the walk measured before
+it was shared. `kern_small` is byte-identical: `gfx_blitp` is `stc`/`ret`
+there (`GFX_PLANE`). The gate is `vidlivevga4` (§98.3.10.4).
 
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 
@@ -57734,6 +57784,205 @@ took, are all the field machine's questions. The firmware reports DSP 2.1
 (`SBT_2`), which is the version gate `sb.inc` takes the auto-init `0x48`+`0x1C`
 path on, so that much is at least the path MartyPC's own DSP 2.01 exercises.
 
+### 34.11 PCM through the speaker, in a bracket — `OSAPI_FSX_SPK` and `apps/os88spk.inc` (`kern_big`)
+
+A machine with no card plays sampled sound the way 1980s games did: §34.4's
+pulse-width trick, channel 2 in mode 0 with one count written **per sample**,
+so the speaker cone's average position follows the wave. §34.4 already does
+that for a clip, off IRQ0 at the desktop's own rate. What it cannot do is play
+a STREAM at a real sample rate: that needs an interrupt every sample, which is
+the whole machine's IRQ0, and the only place a package may have that is inside
+its own `FSXF_RATE` bracket (§53.2.2).
+
+**The split is the owner's brief**: *if it costs more than ~400 bytes in the
+kernel, make it a library, used per app like the UI libraries.* The whole
+player written into the kernel measured **554 resident bytes**, so it is two
+halves:
+- **the door**, `OSAPI_FSX_SPK` (slot `0x045B`), in the kernel: the PIT and
+  the vector, which are the kernel's to give out and to take back;
+- **the player**, `apps/os88spk.inc`, in the package that plays: the ISR, the
+  count table, and the ring it reads.
+
+**Measured cost**: `kern_big` **+314 bytes** (`.text` +308, `.bss` +6; it
+crosses one 512-byte footprint rung), `kern_small` **+11** (the API cell and a
+stub that refuses). The library is ~480 bytes of the including package.
+
+#### 34.11.1 The door
+
+`OSAPI_FSX_SPK` works only **inside the caller's own `FSXF_RATE` bracket**
+(`fsx_mine`, and `[sch_fast]` = `SCH_RATE`). Its contract is in
+`apps/os88api.inc`. In short:
+- **AL = 0 opens.** DX = N, the PIT counts a sample. It must be 74..255,
+  which is 16,124..4,679 Hz: 255 is mode 0's lobyte, and 74 is the shortest
+  period a pulse still ends inside. SI = the package's sample ISR (a near
+  offset in its image). DI = a 6-byte block in its image.
+- **The kernel then**:
+  1. works out K = the caller's divisor / N, the samples in one rate period,
+     and sets the divisor to exactly K × N (within a sample of what was asked
+     for), banking the old one;
+  2. writes **K and the chain** (`KERNEL_SEG:sch_isr`) into the block
+     *before* it touches the vector, so the first sample cannot find them
+     unset;
+  3. takes channel 2 for the PWM (tone off, `snd_ch2mode` = 2,
+     `snd_pcm_busy`), programs channel 0 at N, and points **IRQ0's vector
+     at the package's ISR**.
+- **The ISR** is entered with the interrupt frame alone, IF = 0, on whatever
+  stack it hit. On every entry but the K-th it `out 0x42`s a count, sends the
+  EOI and `iret`s. On the K-th it restores everything and **jumps far to the
+  chain**: that is the kernel's own IRQ0, which runs the tick accumulator,
+  the EOI and the package's hook exactly as §53.2.2 describes. So `[ticks]`,
+  the BIOS clock and the hook's period count stay exact.
+- **AL = 1 closes**: the vector, the divisor and channel 0 go back, and channel
+  2 goes idle. **`fsx_restore` closes it too**, on every bracket exit, so a
+  package that leaves its bracket by any path leaves nothing behind.
+- **Refusals** (CF = 1, AX = `SPK_E_*`): not in the caller's own rate bracket
+  (always, on `kern_small`); N out of range; the speaker already taken by a
+  clip or another door; close with nothing open.
+
+#### 34.11.2 The library
+
+`apps/os88spk.inc` plays **§34.5.3's external ring**, the layout a player
+already feeds a Sound Blaster through. So a package with both paths fills one
+ring either way:
+- the ring is RL bytes at seg:0 (RL = 4096 << a size code);
+- the producer's free-running TOTAL is at RL, and the CONS the player writes
+  back is at RL + 2.
+
+What differs is **what the ring holds: PWM counts, not samples.**
+`os88spk_init` writes a 256-byte table at RL + `SND_EXT_TAB` (16):
+t[s] = 1 + s·(N − 2)/255. That count is never 0 (which means 65,536) and never
+N (the pulse must end inside its period). The producer puts each sample
+through the table as it queues it (`xlatb`). That is paid in bulk once a
+frame, and not once a sample inside the ISR. **Or it is paid once, on the
+host**: a V88 made for the speaker carries the counts themselves (98.1.1.3),
+and the producer copies them. The claim is RL + 272 bytes either way.
+
+Three calls: `os88spk_init` (the ring's segment and size, the rate),
+`os88spk_go` (open the door and play from CONS) and `os88spk_stop` (close it
+where it is, CONS exact; `go` resumes from there). **The bracket's end stops
+it too**, so a player whose session spans brackets calls `go` again in the
+next one.
+
+**The ISR's per-sample path is one count and one counter**: `lds`, `lodsb`,
+`out`, a store, `dec`, the EOI. Everything else happens at an **event**,
+when the counter runs out. A grant runs to the soonest of three things: the
+period's end, the queued data's end, or the ring's end. That keeps CONS exact
+at every period, never a period ahead of the pulse. With nothing queued, a
+grant is one sample of the table's middle (silence), not counted as played.
+
+#### 34.11.3 What the kernel does differently under a sample ISR
+
+Every IRQ0 the ISR does not see is a **lost pulse**: the sample is held two
+periods, and the pitch and the clock both slip. The 8259 latches only one
+pending IRQ0, so any stretch at IF = 0 longer than a sample loses one, and at
+5,512 Hz a sample is **864 cycles**. The first build lost **9.0%** of them.
+Each loss was found by tracing every ISR entry and naming what it had
+interrupted. Four changes took it to **1.8%**:
+
+1. **The hook runs with IF = 1.** `sch_isr`'s rate path and its tick path
+   both `sti` straight after the EOI while a sample ISR is open, so the
+   pulses nest under the hook. Before this, the stretch from the period
+   entry to the hook's own first `sti` was ~3,200 cycles every period. A
+   second period cannot land inside it until K samples later (16 ms), and
+   `sch_rhook`'s busy byte already covers that case.
+2. **A rate period is no task switch.** `sch_switch` is ~2,200 cycles at
+   IF = 0. Under a sample ISR the rate path goes straight to `sch_resume`,
+   and switches ride the 18.2 Hz tick, as they do outside a bracket. A kept
+   worker still runs; its quantum is the tick's.
+3. **`fsx_wait`'s frame wait halts** (`hlt`) instead of yielding, for the
+   same reason as 2: a yield is a switch at IF = 0.
+4. **The player's own `cli` sections are one byte long**: `vp_wmove` held a
+   whole thumb move at IF = 0 (§98.3.15).
+
+What is left is ~one pulse per period, which is the period's own entry: the
+grant, the jump to `sch_isr` and its prologue up to the EOI (~1,300 cycles).
+
+#### 34.11.4 What it costs the machine
+
+Measured on MartyPC's 4.77 MHz 5150 with Hercules and a fixed disk
+(`tests/vidspk.py`):
+- **the ISR, entry to `iret`: 343 cycles.** With the 8088's ~60 to
+  acknowledge the interrupt, that is **~400 cycles a pulse**;
+- the producer's table translation: ~50 cycles a byte of its own (92.8 of
+  wall time, the pulses included), or ~15 copying a file's counts (27.7);
+- **at 5,512 Hz the speaker takes ~48% of the machine** playing a file made
+  for it, and ~52% translating one that was not.
+- **Lost pulses: 1.8% in the window, 2.3% in the full screen.** The play
+  takes the sound's own time to within that: 4.07 s for a 3.99 s clip.
+
+**The ceiling on an 8088 is `VP_SPKMAX` = 8,000 Hz**, and the Video Player
+applies it. At 11,025 Hz a pulse is due every 432 cycles, the ISR alone takes
+~400 of them, and a 4-second clip **played for 20 seconds**. Past the
+ceiling the player is silent on an 8086-class CPU and says so. That is the
+same shape as §47's rule: refuse, rather than silently cost seconds. A
+faster machine has no such ceiling in the player.
+
+So a clip MEANT for the speaker is encoded for it. `--audio speaker` (§98.2.15)
+is PCM8 at 5,512 Hz, with every frame budgeted around what the pulses leave.
+
+#### 34.11.5 Who plays through it
+
+- **The Video Player** (§98.3.15), the first consumer: with no card, the play
+  is on the speaker unless S chose silence.
+- **Tracker** could adopt it in its full screen, but that bracket is
+  `FSXF_KEEPWORKER | FSXF_FASTTICK` and NOT a rate bracket, and `FSXF_RATE`
+  refuses beside `FSXF_FASTTICK` (one channel 0). A speaker play would be
+  `FSXF_KEEPWORKER | FSXF_RATE` with a hook, its mixer writing counts, at a
+  rate row below its lowest today (11,000 Hz is past the 8088's ceiling).
+- **Audio cannot, as it stands**: it plays on the desktop, and channel 0 is
+  not the desktop's to give (§34.1), so it would need a full-screen play of
+  its own - against its premise of music behind other windows. (ModPlug is
+  retired, §56.15.)
+- docs/plans/SPEAKER-PCM-HANDOFF.md is the brief for both.
+- **No C package**: `apps/cc/os88.h` has no binding for a sample ISR, and
+  §73's rules forbid most of what one needs. A C package that wants one gets
+  an assembly module.
+- **`OSAPI_SND_PCM`'s clips (§34.4) are unchanged**: the door refuses while
+  one plays, and they refuse while the door is open.
+
+#### 34.11.6 Auto-EOI: measured, and refused
+
+XDC's other idea (Scalibq's fork, `SetAutoEOI`): put the 8259 in auto-EOI
+mode for the play, so the controller clears the in-service bit when it
+acknowledges the interrupt, and the ISR's fast path drops its
+`mov al, 20h / out 20h, al`. It was built as an experiment:
+- the door rewrote ICW1 13h, ICW2 08h, then ICW4 0Bh (09h is the PC/XT
+  BIOS's own), keeping the mask the reinit clears;
+- `spk_off` put 09h back;
+- the library left out the EOI.
+
+It was measured against the default on MartyPC's 5150, on the same counts
+clip (`tests/vidspk.py --counts`, instruments `VIDSPK_ISR` and `VIDSPK_ATTR`):
+
+| | default | auto-EOI |
+|---|---|---|
+| fast path, entry to `iret` (min / median) | 341 / 344 cycles | 316 / 328 |
+| lost pulses, window, 800-pulse trace | 1.8% (15 of 814), every run | **2.9%** (24 of 823), every run |
+| lost pulses, full screen, 800-pulse trace | 2.2% | 2.4% |
+| lost pulses, ~3,100 periods | 1.8% (55) | **2.5%** (77) |
+
+**It saves 16 cycles a pulse, ~1.8% of the machine, and loses MORE pulses.**
+It loses fewer at the period's own entry (`sch_rhook` 43 → 23) and new ones
+inside the IBM ROM's timer handler (`F000:FEC3`). With the in-service bit
+cleared at the acknowledge, a pulse can now enter the ROM's `int 08h` while
+it runs. In the default the pulse waited in the controller until the ROM's
+own EOI.
+
+Two more reasons stand against it whatever the numbers:
+- **Stack.** Pulses nesting inside the ROM's handler land on `sch_chstack`,
+  §8.5's 128-byte private chain stack, which was sized for the ROM alone.
+  A pulse plus a period entry is ~50 bytes more: over the edge on a
+  SeaBIOS chain (56), and close on the IBM ROM's (36).
+- **The machine.** The controller is reprogrammed for everyone. Every BIOS
+  handler that `sti`s before its EOI (the keyboard's, the disk's) can then be
+  re-entered by its own interrupt. The ICW sequence is also right only for
+  the PC/XT's single PIC: an AT's cascade and a PS/2's level-triggered
+  inputs want others, which is why XDC carries four.
+
+The experiment's code is not in the tree; the three ICW values above are all
+of it.
+
+
 ## 35. Recorder — the sound layer's recording client
 
 `apps/recorder` needs `SND_CAP_PCM_IN` (a Sound Blaster) to record and
@@ -83394,7 +83643,9 @@ tick), as `wm_pkgcall` would call it: through the package's dispatcher, with
   counted, never lost, so a player can catch up or drop a frame on purpose.
 - **IF = 0 and `[sch_lock]` raised.** The hook MAY `sti`, which is what lets
   a disk's completion interrupt through while it decodes; no task switch can
-  happen until it returns, and a second IRQ0 inside it only counts.
+  happen until it returns, and a second IRQ0 inside it only counts. **Under a
+  speaker's sample ISR (§34.11) it is entered with IF = 1 instead**, and a
+  rate period makes no task switch: §34.11.3 says why.
 - **Any register may come back changed.** The ISR saved them all.
 - **The stack is whichever the IRQ0 interrupted**: task 0's, or a slice of
   the kept worker or a `TF_SERVICE` driver (§53.2). A hook's own depth is
@@ -149619,7 +149870,7 @@ stream behind them is read sequentially.
 |---|---|---|
 | 0 | 4 | `'V88'`, 1Ah |
 | 4 | 2 | version, **1** |
-| 6 | 2 | flags: 1 RESIDENT (98.1.7), 2 LOOPREC and 4 REPEAT (98.1.1.2), 8 LIVE (98.3.10). A reader refuses any bit it does not know |
+| 6 | 2 | flags: 1 RESIDENT (98.1.7), 2 LOOPREC and 4 REPEAT (98.1.1.2), 8 LIVE (98.3.10), 16 RUNS (98.1.3.4), 32 SPKPWM (98.1.1.3). A reader refuses any bit it does not know |
 | 8 | 4 | frames, ≥ 1 |
 | 12 | 2 | rate: the audio sample rate in Hz; for a silent file, the nominal rate the frame rate derives from |
 | 14 | 2 | samples per frame, ≥ 1. **fps = rate / samples per frame**, XDC's rule |
@@ -149628,7 +149879,8 @@ stream behind them is read sequentially.
 | 18 | 2 | audio bytes per frame: 0 with no audio, the samples per frame with PCM8, half of them with ADPCM4 |
 | 20 | 2 | **the PIT divisor** for a timer-paced play (§53.2.2), `FSX_RATE_MIN`..65,535 |
 | 22 | 1 | **periods a frame** at that divisor, ≥ 1: 2 for a 15 fps file, whose own period is past 65,535 |
-| 23 | 9 | 0 |
+| 23 | 1 | **the ring the stream assumes**, in 32 KB slots: 0 (nothing said), or 2, 4 or 8 - what its disk reserve banks bursts in (98.2.1.3). 0 in a RESIDENT file. A player with fewer plays it, and says so (98.3) |
+| 24 | 8 | 0 |
 | 32 | 48 | title, ASCII, NUL-terminated within the field |
 | 80 | 96 | credits, the same |
 | 176 | 16 | the AUDIO block of a RESIDENT file (98.1.7); else 0 |
@@ -149784,6 +150036,30 @@ PCM8. A flipped file's seam fits the 31 KB record copy (98.3.8).
 `verify_v88` applies the seam to the last frame's screen and requires frame
 *L*'s, with frame *L*'s audio after its lists.
 
+#### 98.1.1.3 SPKPWM: PCM8 stored as the speaker's counts
+
+**Flag 32 says the PCM8 bytes are already the PC speaker's pulse counts**
+(§34.11.2). Each is t[s] = 1 + s·(N − 2)/255 with N = 1,193,182 / rate,
+exactly the table `os88spk_init` builds, so a player on the speaker copies the
+bytes into its ring rather than putting each through the table. The idea
+is XDC's (Scalibq's fork, `a_pwmdat`); there the flag is read and never
+written.
+
+What it buys, measured on MartyPC's 5150 (`VIDSPK_APUT=1 tests/vidspk.py`):
+`vp_aput` falls from **92.8 to 27.7 cycles a byte** of wall time. With the
+pulses' ~46% taken out, that is ~50 against ~15 of its own, and about 7% of
+the machine at 5,512 Hz, handed back to decoding.
+
+The rules:
+- **PCM8 only.** Any other audio with the flag is a bad file, and so is a
+  rate whose N falls outside 74..255.
+- **A card plays it too**, with no translation. The counts are the samples
+  scaled by (N − 2)/255, which is 0.84 at 5,512 Hz: the same wave, slightly
+  quieter, centred on the table's middle rather than 128.
+- **Silence** is the table's middle on the speaker (`os88spk_sil`), and 80h
+  on a card as for any PCM8 file.
+- `--audio speaker` (98.2.15) is what writes it.
+
 #### 98.1.2 Layouts: the file is laid out for its surface on the host
 
 **Every address in a file is the target surface's own memory image**, with
@@ -149800,6 +150076,14 @@ playback at ~480 cycles a row change, and REFUSED it). Canvas row *y*, byte
 | 4 LIN320 | A000h, mode 13h: a byte a pixel | 1 | 320 | 200 | y·320 + x |
 | 5 MODEX | A000h, Mode X (`FSXM_MODEX`): four planes, a byte a pixel | 1 | 80 | 240 | y·80 + x, in plane x' mod 4 of pixel x' = 4x + plane |
 | 6 C160 | a RAM image of B800h's 80 x 25 text mode retimed to 100 rows (98.3.12): the ATTRIBUTES, packed | 1 | 80 | 100 | y·80 + x; the screen's byte is 2(y·80 + x) + 1 |
+| 7 TXT | B800h, the same text mode retimed to 100 rows, AS IT IS: a cell's character, then its attribute (98.1.3.5) | 1 | 160 | 100 | y·160 + x |
+| 8 TEXT | the 80 x 25 text screen NOT retimed, as it is: B800h on a CGA, an EGA or a VGA, B000h on an MDA or a Hercules (98.1.3.6) | 1 | 160 | 25 | y·160 + x |
+
+**The tools name the layouts** `cga`, `herc`, `lin80`, `lin320`, `modex`,
+`c160`, **`text-80x100`** (7) and **`text-80x25`** (8) - `--layout` and
+`import --target`, and every message. The two text screens were `txt` and
+`text`, which said nothing about which was which; those names are still
+taken on a command line (`os88vid.LAYOUT_ALIASES`) and never offered.
 
 **LIN320 is 256 colours, and costs the decoder nothing** (VIDEO-PLAN W11a).
 The lists were always byte-oriented and their addresses the surface's own
@@ -149971,6 +150255,120 @@ screen on a CGA or a VGA (a VGA having both modes), both ordinary lists -
 `tools/os88vid.py`'s `cga4_colours` is the palette byte's reference and the
 sixteen are `STD16`, the colours every CGA, EGA and VGA gives them.
 
+#### 98.1.3.4 A Live file's blit runs
+
+**Flag 16, RUNS: every FRAME record carries the rectangles it writes**, after
+its ten lists (and before any audio, which a resident file keeps in its
+block, so there is none):
+
+```
+runs    = count(8) run * count        count 0..32
+run     = y0(8) rows(8) x0(8) bytes(8)
+```
+
+- **Rows `[y0, y0 + rows)` at the canvas's bytes `[x0, x0 + bytes)`**, every
+  write of the record inside one of them, `rows` and `bytes` at least 1 and
+  the run inside the canvas. So a RUNS file's canvas is at most 255 rows
+  and bytes; a Live one is (98.3.10).
+- **Only a LIVE file has them** (a reader refuses RUNS without LIVE), and
+  only its frame records and its seam (98.1.1.2) - not its keyframes, which
+  a Live play blits whole.
+- **The writer makes them** (`live_runs` in `tools/os88vid.py`): each row's
+  written bytes, a run grown down onto the next written row when one blit of
+  the union costs the model less than two (`BLIT_CALL` 9,000 cycles a call,
+  `BLIT_ROW` 100 a row, `BLIT_BYTE` 21 a byte, timed on `vp_blitb` in Live
+  plays on the CGA and Hercules 5150s), and past 32 the cheapest pair merged.
+  `verify` checks every write is in a run.
+- **What it costs**: 1 byte a record and 4 a run, ~1-4 runs a frame - 6 bytes
+  a frame on Bad Apple made `--live herc`, and 3 KB of the logo's 103.
+- **What it buys** is 98.3.10.2: Live's blit was the hull of the rows a pass
+  wrote at the canvas's width, and is these.
+
+#### 98.1.3.5 C512: composite colour on the text hack
+
+**C512** (pixel format 7) is **80 x 100 cells in ~450 colours on a CGA's
+COMPOSITE output** (reenigne's 512-colour mode, `8088/cga/512colors` in his
+repository): the text hack's two-scan-line cells (98.3.12), each a
+character whose top two glyph rows are ONE four-pixel pattern repeated, so
+the cell is one colour clock's worth of foreground-and-background mix,
+twice. The stock IBM font has exactly two such shapes and C512 uses them:
+
+| character | glyph rows 0 and 1 | pixel pattern |
+|---|---|---|
+| 13h (the double exclamation mark) | 66h 66h | bg fg fg bg, twice |
+| 55h (`U`) | CCh CCh | fg fg bg bg, twice |
+
+A character and an attribute (blink off, so sixteen backgrounds) are 2 x
+256 = **512 codes**; the composite monitor shows ~410-460 distinct colours
+of them (the rest coincide), where C160's sixteen cover the gamut a third
+as well. No CRTC trick is needed beyond C160's retime, so it costs the
+machine nothing to keep up. (1,024 colours needs glyph row 0 alone, which
+the 6845 gives only with a raster-locked IRQ0 - not taken.)
+
+- **Its layout is 7, TXT: the screen itself**, character then attribute,
+  160 bytes a row, 100 rows. So a file on its own surface is NATIVE - no
+  shadow, no copy - and `vd_native` decodes it straight onto B800h. The
+  canvas "width in bytes" is twice its cells, and the cells are EVEN (a
+  poster byte is two cells' attributes, 98.4.6); its origin is on a cell
+  (an even byte).
+- **A keyframe's canvas of zeroes is black**: character 0 on attribute 0.
+  The encoder writes only 13h and 55h, and the player writes whatever the
+  file says; a character outside the two draws its own glyph's rows.
+- **Slot byte 54 is the CARD** - CGA4's palette byte, here: **0 an OLD
+  CGA, 1 a NEW one, 2 both.** IBM changed the composite output's resistor
+  network in 1985: the old card's luma is its chroma plus the intensity
+  bit, the new one's is a weighted sum of R, G, B and I, and the same code
+  is ΔE ~26-31 apart on the two (median 27, the 90th percentile 61).
+  Software cannot tell which card it is on, so the ENCODER chooses:
+  targeted at one, a file shows that card's colours (a mean miss of ΔE ~9
+  against random colours) and the wrong card's at ~31; *both* chooses each
+  cell for the smaller of its two errors and shows ~14 on either. The
+  player reads the byte, refuses 3 and above, and only names it (the info
+  card); nothing it does depends on it.
+- **It is COMPOSITE.** On an RGB monitor the same screen is the patterns:
+  stripes of the sixteen, as CGACOMP's are (98.3.3).
+
+`tools/os88cgacomp.py` renders it (`render_rgbi`, `c512_palette`) at the
+target's model, and `tools/os88vid.py`'s `c512_mono` is the Preview's grey:
+C160's of the attributes (98.4.6).
+
+#### 98.1.3.6 TEXT: a picture made of characters, on any adapter
+
+**TEXT** (pixel format 8) is **the 80 x 25 text screen of any adapter, the
+picture made of its characters** - "text video". A cell is a character and
+an attribute, and the card draws the character out of its own ROM: 8 x 8 on
+a CGA, 9 x 14 on an MDA or a Hercules, 8 x 14 on an EGA, 9 x 16 on a VGA.
+Every one of them fills a 4:3 screen with 80 x 25 cells, so a cell is the
+same shape everywhere - 5:12, CGA's dot eight times over - and ONE file plays
+on all four. No CRTC trick, no retime, no shadow: it is the one screen every
+PC has.
+- **Its layout is 8, TEXT: the screen itself** (98.1.2), character then
+  attribute, 160 bytes a row, 25 rows. So a file on its own surface is
+  NATIVE - `vd_native` straight onto B800h, or B000h on a mono card, the
+  segment the bracket names (§53.4). The canvas "width in bytes" is twice
+  its cells, the cells EVEN (a poster byte is two cells, 98.4.6), and its
+  origin is on a cell.
+- **A keyframe's canvas of zeroes is black** on every card: character 0 on
+  attribute 0.
+- **Slot byte 54 is the COLOUR** - CGA4's palette byte, C512's card byte,
+  here: **0 MONO, 1 COLOUR**, and a reader refuses anything else.
+  - **MONO** writes only the three attributes an MDA draws as a colour card
+    does - **07h** grey on black, **0Fh** white on black, **70h** black on
+    grey - so it plays on ANY adapter, a Hercules included.
+  - **COLOUR** is sixteen foregrounds on sixteen backgrounds, BLINK OFF: a
+    CGA, an EGA or a VGA. A mono card draws a colour attribute as
+    underline, intensity and reverse, which is another picture, so the
+    player refuses it there (98.3.16).
+- **The characters are whatever the file says**; the encoder (98.2.16)
+  writes printable ASCII and, by default, the four shades (B0h B1h B2h
+  DBh) and the four half blocks (DCh DFh DDh DEh) - the part of CP437 that
+  no ROM draws differently.
+
+`tools/os88txtfont.py` is the host's picture of a cell - a MODEL face,
+`fonts/tallx.f8` for ASCII and `tools/cp437font.py`'s arithmetic for the
+rest - and `render` draws a canvas in it. It is the encoder's reference and
+a preview's; the player draws nothing, the card does.
+
 #### 98.1.4 The stream: chained super-packets
 
 ```
@@ -149993,10 +150391,10 @@ super-packet = frames(16) next(16) frame record × frames, zero-padded to a sect
 
 - **Renditions**: one streamed; one to four RESIDENT (98.1.7).
 - **Pixel format**: MONO1, CGACOMP (from an XDC import or `os88venc
-  --pixfmt cgacomp`), VGA8 (`os88venc --pixfmt vga8`), VGA4, CGA4 or C160
-  (98.1.3.3).
+  --pixfmt cgacomp`), VGA8 (`os88venc --pixfmt vga8`), VGA4, CGA4, C160
+  (98.1.3.3), C512 (98.1.3.5) or TEXT (98.1.3.6).
 - **Audio**: PCM8, ADPCM4 (98.1.1.1), or none.
-- **Layout**: any of the six.
+- **Layout**: any of the eight.
 
 #### 98.1.6 What a reader checks, and what a hostile file can do
 
@@ -150026,7 +150424,9 @@ segments, not by trust:
   surface ES is the adapter's own segment, so the worst a hostile list can do
   is draw garbage on the screen.
 - **A decode into RAM is into a claim of 64 KB, or it validates**, because
-  otherwise the same write reaches the neighbour of the claim.
+  otherwise the same write reaches the neighbour of the claim. A resident
+  play validates, once per load, and so its keeper is only the canvas
+  (98.1.7.3).
 - **A read** runs at most off the end of the record into the super-packet
   buffer's own segment, which is harmless.
 - **An absolute segment of count 0** (`80h`, outside the grammar's 1..127)
@@ -150046,8 +150446,7 @@ file is that shape:
   block's record after the last frame's, and the loop block names only *L*.
 - **The sound is ONE block for every rendition**, frame *f*'s at *f* x the
   audio bytes a frame, and the records carry none - carried per record it
-  would be stored once per screen. PCM8 or none: ADPCM4 needs a reference
-  byte per seek (98.1.1.1), which a block does not have.
+  would be stored once per screen. PCM8, ADPCM4 (98.1.7.2) or none.
 - **A block's fields** - its offset, packed and unpacked bytes (32 bits
   each) and its packing, 0 stored, 1 LZ4, 2 LZB (the OSAPI_LZ_ id plus one)
   - sit at 40 in its rendition slot, and the audio block's at 176. The
@@ -150097,6 +150496,248 @@ purpose (always rendition 0, or the cursor a byte short) they FAIL - and
 `vidsndres`, the sound from an audio block over two laps, the capture byte
 for byte.
 
+##### 98.1.7.1 A resident block as big as memory
+
+**The bounds above were one read's and one decompression's, not the
+design's** (VIDEO-PLAN 15.4). A PACKED block keeps them: `OSAPI_DECOMP`
+takes its input in one segment, so it reads in under 60 KB and expands into
+under 128 KB. A **STORED** block (packing 0) is what it unpacks to and may
+be **any size under 1 MB**; the machine's memory is the bound. The owner:
+*"Live window can take as much as is available - the size of the clip ...
+decide[s] what is acceptable."*
+- **The writer packs a block only when the packed block fits those bounds
+  and is smaller.** Otherwise it stores it, so a long clip is a stored
+  block with no flag and no format change.
+- **The player reads a stored block in 32 KB pieces** (`vp_ldstored`),
+  whole clusters from the one under its start, each piece where it
+  belongs. Then it moves the whole block down by the start's place in its
+  cluster: a forward copy, 32 KB at a time across the segments. The claim
+  is the block and two clusters.
+- **Nothing after the load cared about the size.** The walk (`vp_rwalk`),
+  the play's cursor (`vp_rnext`) and a seek (`vp_rcur`) step a paragraph
+  and an offset, normalised after every record, and `vp_raud` computes a
+  32-bit offset.
+- **The fit is ASKED before anything is claimed** (`vp_fits`): both blocks'
+  claims against `OSAPI_MEM_AVAIL`, the largest claim the kernel will
+  SERVE, caches shed and heap compacted. A clip that cannot fit refuses
+  with the numbers, "Needs 727 KB of memory, 415 KB free", in the window,
+  and nothing is claimed. A claim that fails sheds the disk caches on its
+  way down (66.4.3), so asking first is what keeps a refusal free.
+- **An older player refuses such a file cleanly**: its `vp_pbk` has the old
+  bounds, so the header is refused as it is read.
+
+On the owner's machine (640 KB, Hercules, a Sound Blaster), ~360 KB is left
+for a clip once the player's keeper and the card's ring are claimed:
+16.5 s of Live Hercules with PCM8 sound, 33 s silent (VIDEO-PLAN 15.4 has
+the table).
+
+The gate: `vidresbig`, with two legs:
+- **It plays**: a ~200 KB stored block, off a 360 KB floppy on the Hercules
+  5150, is in its claim byte for byte, and holds across the clip match the
+  host's decode.
+- **It refuses with numbers**: a ~730 KB block, off a hard disk, refuses
+  before any claim.
+
+Broken on purpose - the old bound put back, or the fit always yes - it
+fails.
+
+##### 98.1.7.2 Resident ADPCM4 sound, a join that is exact, and 5.5 kHz
+
+**For a Live clip the sound is half the memory** (VIDEO-PLAN 15.4): PCM8 at
+11 kHz is 10.8 KB a second against 8 to 14 of picture. The owner asked for
+resident ADPCM4 and a 5.5 kHz option up front. Each halves the sound's
+bytes, so together they take it to a quarter. An 8-second Live Hercules clip of Bad
+Apple is 254.6 KB with PCM8 at 11 kHz and 189.9 KB with ADPCM4 at 5.5 kHz;
+the picture is the same 168 KB.
+
+Resident sound was PCM8-only because ADPCM4 is ONE encoding whose state
+runs on from frame to frame (98.1.1.1). A card started mid-stream must be
+told the state there, and a block had nowhere to say it. Two places need it:
+- **A seek, which starts at a keyframe.** The key record carries the
+  reference AFTER its lists, as a streamed one does (98.1.1.1): the sample
+  the stream holds at frame *k*+1, where the encoder steered the scale to
+  0. `write_resident` appends it, `vp_spos` already reads it (a resident
+  seek reads its key record too), and `verify` checks it.
+- **A lap's join, which is new, and exact.** The card carries its state
+  across a lap, which is why a streamed seam refuses ADPCM4 (98.1.1.2). A
+  resident stream is encoded in one pass, so the encoder ENDS it in the
+  state the join continues from (`audio_chunks(join=)`, `adpcm4_join`):
+  - **through a seam** (LOOPREC), the join queues frame *L*'s sound and goes
+    on, so the stream ends in the state it has before frame *L*'s bytes;
+  - **without one**, the join queues a frame of silence (nibbles of 0) and
+    then frame 0, which was encoded from 80h at scale 0. A zero nibble only
+    holds the sample at scale 0, so the stream ends at exactly (80h, 0).
+
+  The search's last samples are searched again, from the stream's own state
+  there, for the best path that finishes in that state (`_adpcm4_viterbi`'s
+  `end`). Only the tail after frame *L*'s bytes changes, and whichever
+  encoder made the rest - the search or the greedy one - is kept.
+  `verify` refuses a resident ADPCM4 file whose stream does not end in its
+  join's state. Encoded without the join, a test file ended at sample 65,
+  scale 32 against the (128, 0) its join needs.
+
+**5.5 kHz** is the sound's `--rate 5512`. The encoder window offers it in an
+editable list beside 22,050 and 11,025 (`SUGGEST`), with any other rate
+still typed. It halves the bytes of either format. The card plays it at
+5,525 Hz, its time constant truncating 1,000,000 / 5,512 to 181.
+
+**A drain rule found by the loop row.** With Repeat turned off after the
+sound has queued the next lap, the play ends when the card has played the
+frames DRAWN (98.3.9). `tests/vidsound.py` recognised that case only by the
+sound being part-way into a lap. ADPCM4 is half PCM8's bytes, so the ring
+holds twice the frames ahead, and the sound had queued a WHOLE lap to the
+file's end before R. The row now reads the player's own counters: sound
+frames queued (`vp_aseq`) past the frames drawn (`vp_vseq`).
+
+The gates:
+- `vidsndresad`: two laps through a seam, the capture the card's decode;
+- `vidsndresks`: a play from keyframe 1, the capture the stream's decode
+  from frame *k*+1;
+- `vidlivesnd55`: a Live clip with ADPCM4 at 5,512 Hz.
+
+##### 98.1.7.3 A resident play's keeper is its canvas
+
+**The keeper was 64 KB whenever a play decoded into it** (the shadow, and
+always for Live), because a list's writes are not checked and reach
+anywhere in ES (98.1.6). Most of that claim held nothing. A Live window's
+160 x 60 canvas is 4.8 KB of it. The owner asked for the keeper cut to the
+canvas up front (VIDEO-PLAN 15.4 B), which gives the rest to the clip.
+
+**The bound.** B is the end of the canvas in the file's layout: over each
+bank's last row, its address plus the layout's whole STRIDE
+(`vp_cbound`). A whole stride because the readers of the image read rows,
+not the canvas's bytes: the copy to the screen, the poster, and the Live
+blit's LIN80 band. A resident non-planar play claims ceil(B / 1024) KB,
+whatever the surface. `vp_kkb` records it and `vp_zero` clears no more than
+that. Measured on the Hercules 5150:
+- a LIN80 160 x 60 through the shadow: **5 KB**, where it was 64;
+- a Hercules 320 x 100 onto the screen: **27 KB**, where it was the layout's 32.
+
+Mode X and VGA4 keep their four planes' size (98.1.3.1).
+
+**What makes it safe is one parse, at load.** A block is walked once when
+it loads (`vp_rwalk`). Where the session DECODES INTO the keeper
+(`vp_kneed`: the shadow, Live, or another layout than the desktop's), that
+walk also parses every list of every record without applying it
+(`vp_rbnd`). It refuses the block ("This .V88 is damaged") if a list runs
+past its record, if a write ends past B, if a write wraps the segment, or
+if an absolute segment has a count of 0 (which the decoder would take as
+524,288 changes). A key record is checked the same way as it is read
+(`vp_spos`), for a play or a seek from it ("That keyframe could not be
+read"). A play onto the screen decodes nothing into the keeper, so it
+walks nothing. The block's check is remembered while it stays loaded
+(`vp_rchk`), so it happens the first time a play needs it, and once.
+
+**What it costs.** A poke segment's bytes and its writes' end follow from
+its count. So the check is one sum per segment, and the entries are checked
+by nothing else. Measured: **33 cycles a byte** of block, 323 ms for the
+46 KB Live Hercules demo clip on a 4.77 MHz 8088. A first version checked
+each read with a call and took 156 cycles a byte (1.5 s). It is 583 bytes
+of the package and no kernel byte.
+
+**Not covered: a window dragged to another display mid-session.** The
+keeper's shape is decided when Play starts. A session that began natively
+and whose window then moves, on an extended desktop, to a display with
+another layout decodes through the shadow (`vp_wsurf`) into a keeper sized
+for the screen. That was already true of the 64 KB rule, for a streamed
+play as much as a resident one; this change keeps the same shape.
+
+The gate: `vidresbig` leg 3, on the Hercules 5150:
+- a LIN80 clip plays through a 5 KB keeper, the player's byte and the
+  heap's record of the claim agreeing, and its holds are the host's decode;
+- a twin writing B - 1 plays;
+- a twin writing B is refused, nothing held;
+- a twin whose keyframe writes B loads, and refuses a play from that key.
+
+Leg 1's native play asserts the keeper is its canvas and nothing was walked.
+Broken on purpose - `vp_rbnd` always sound, or the keeper back at 64 KB -
+it FAILS.
+
+##### 98.1.7.4 A resident block MOVES
+
+**A resident block is the biggest claim the player makes, and it is held
+while the window is open.** Claimed bottom-up and pinned, it is a wall in
+the middle of the arena for as long as a Live window sits on the desktop
+(VIDEO-PLAN 15.4 finding 5; HEAP-UNPIN-PLAN 2.0 is the general case). The
+owner chose movable over top-down (*"Top of heap doesn't free heap space -
+movable would be fine"*), provided it was clean.
+
+**Declared once it is loaded and walked** (`vp_rload`), never at the claim:
+a block being read or walked has derived pointers in registers. The
+relocation proc `vp_rmove` gets the old and new base (66.3) and adds the
+delta to every word that lies inside that block's claim:
+- for the picture block, `vp_rblk`, the walk's base `vp_rbseg`, the seam's
+  and frame *L*+1's records, and the two cursors (`vp_pc`, `va_pc`),
+  which `vp_next` steps in place;
+- for the sound block, `vp_rablk` alone, because `vp_raud` derives a frame's
+  place from the base at every use.
+
+A word outside the claim is not the block's, whatever its name. A streamed
+play's `vp_pc` is a slot number, and the range test leaves it alone.
+
+**Who reads a block, and why each reader is safe:**
+- **the UI task**, between claims. Every claim site in the player and every
+  `vp_spos` reads its bases again after the claim (66.3 rule 2); a claim may
+  move the blocks and the proc has already put the words right.
+- **the Live worker.** It is parked before anything of its package moves
+  (66.5). It parks only in `OSAPI_TASK_ALIVE`, between passes, holding
+  nothing but statics, and it holds the gfx lock across a whole pass. So a
+  compaction meets it either parked, or mid-pass and unparkable, in which
+  case the package's claims are pinned (`mem_busy_seg`).
+- **a bracket's hook**, at interrupt time. No relocation proc reaches that,
+  so `vp_srun` pins both blocks around `OSAPI_FSX_RUN` (`vp_rmov` with
+  AX = 0) and declares them again after it.
+
+**The Live worker has to be able to park, and at first it could not.**
+A claim that needs the block moved comes from a window callback, and a
+callback holds the gfx lock. The worker, woken from its tick's sleep,
+blocks in `gfx_lock` and never reaches `OSAPI_TASK_ALIVE`, so every block
+stayed pinned. This is 66.5.3, measured again here: a claim of 240 KB with
+431 KB to be had after one ascending pass was refused as "Not enough
+memory". The player now declares **`OSAPI_MEM_PARKSAFE`** when it hires the
+worker (66.5.4). That is true of it: it takes the lock in two places, the
+worker's pass before it addresses a block and `vp_onwake`'s entry, and
+holds nothing derived from a block in either. The worker may then park
+while it waits for the lock, and the same claim moves the block.
+
+**What lay under a block is claimed from the TOP.** Claimed from the bottom,
+a pinned claim held while the window is open is a floor the block can never
+move below. Two of them sat there:
+- the **poster** (`vp_loadkey`, `vp_sesspic`), for every file, streamed or
+  resident;
+- a resident play's **keeper**.
+
+Both are `OSAPI_MEM_CLAIM_HI` now, joining the regions, drivers and Sound
+Blaster ring at the ceiling; the keeper is 5 KB for a Live window since
+98.1.7.3. **The keeper stays pinned.** The UI task's paint paths hold it in
+ES across kernel drawing calls, and a window call can reach `mem_claim`
+(`wm_su_take`, the save-under). A keeper proc needs that proven first, and
+it is left for a later pass, as the owner allowed.
+
++157 bytes of the package, no kernel byte.
+
+The gate is `vidmove`, on the owner's 5150 off a hard disk, with three
+player windows:
+- A, a stored ~180 KB file, plays once and stays open;
+- B, a Live clip, plays and holds, its block above A's;
+- A closes, and C is picked from the heap's own map. C is bigger than all
+  the kernel can gather on either side of B's block without moving it
+  (caches shed, the claims beneath packed down) and no bigger than one
+  ascending pass joins. C plays.
+
+B's block must be declared with `vp_rmove`, and its keeper and poster must
+be top-down. After C loads, B's block must be a claim at a new place
+(5260h to 23E0h), its bytes the host's there, with `vp_rbseg` following.
+B's play goes on: the holds after the move are the host's decode, and it
+crosses the seam.
+
+HEAPFRAG, `trackmove`'s trigger, was tried first. Its pass never needed to
+cross B, so it moved nothing, and the row would have passed on a block that
+could not move. Broken on purpose, it FAILS:
+- never declared: no C can be picked;
+- a proc that patches nothing: the block is not a claim after the move, and
+  B stops.
+
 ### 98.2 The host tools — `tools/os88vid.py`
 
 | command | what it does |
@@ -150112,20 +150753,40 @@ for byte.
 imports and verifies the owner's samples when `$OS88_XDC_SAMPLES` names
 them. Those samples are not in the tree.
 
+**`tools/os88vidprof.py` is the play's profiler** (VIDEO-PLAN 15.8), an
+instrument and not a gate. It boots a MartyPC machine with `VIDEO.O88` and a
+`.V88` (a floppy, or `--hdd` an XT-IDE VHD) and plays it full screen - or
+`--live` on the desktop - and by default SAMPLES the guest's IP between
+batches of `advance`, bucketed by the package's own map, the kernel's and
+the ROM: where a whole play's time goes, at no cost to the guest. `--cal`
+instead times every frame's decode to the cycle (`vp_frame`'s call of
+`vp_decrec`) and every hook call (the kernel's far call of it), fits the
+decode to the encoder's cost model and says how far the model is off. That
+fit is where `CYC_LAYOUT`'s constants come from (98.3.12.1).
+
+**The encoder says which budget cut a frame** it could not make exact:
+`cut by: the disk N, the CPU's average N, the per-frame ceiling N`, the one
+the whole frame overran by more. On `5150-st225` it is nearly always the
+disk (VIDEO-PLAN 15.8).
+
 #### 98.2.1 The encoder front end — `tools/os88venc.py` (wave 8)
 
 ```
 python3 tools/os88venc.py IN OUT.V88 [--preset P | --layout L --box WxH]
     [--fit fit|fill|stretch] [--start S] [--end S] [--fps F]
-    [--profile R] [--disk B/s] [--avg F] [--peak F]
+    [--profile R] [--disk B/s] [--avg F] [--peak F] [--owe F]
+    [--reserve KB] [--lookahead N] [--error visible|bits]
+    [--aim asked|quality|size] [--worth N]
     [--audio pcm8|adpcm4|none] [--rate HZ] [--volume V]
     [--adpcm search|greedy] [--jobs N]
-    [--pixfmt mono|cgacomp] [--comp-dither diffuse|pattern]
+    [--pixfmt mono|cgacomp|text] [--comp-dither diffuse|pattern]
     [--comp-stable E] [--comp-quick] [--mix F] [--levels-mix 4|16]
     [--dither bayer|bluenoise|threshold] [--stable N] [--clip N]
     [--levels auto|none] [--gamma G] [--contrast C] [--brightness B]
     [--invert] [--title T] [--credits C] [--keysecs S]
     [--poster K | --poster-at SECS] [--preview-png DIR]
+    [--text-colour colour|mono] [--text-glyphs blocks|shades|ascii|dots|dots-plus]
+    [--text-detail D] [--text-sharpen S] [--text-busy B] [--text-stable E]
 python3 tools/os88venc.py --profiles
 ```
 
@@ -150147,6 +150808,7 @@ without them (`ffmpeg` capability).
 | `herc` / `herc-mid` / `herc-full` | HERC | 400 x 200 / 480 x 232 / 720 x 348 |
 | `vga` / `vga-mid` / `vga-full` | LIN80 | 320 x 240 / 400 x 300 / 640 x 480 |
 | `live-cga` / `live-herc` / `live-vga` | CGA / HERC / LIN80 | 320 x 100 / 240 x 116 / 160 x 120, VIDEO-PLAN 3.4's |
+| `text` / `text-mono` | TEXT | 80 x 25 CELLS, in colour / in 07h, 0Fh and 70h (98.2.16) |
 
 - **The frame rate is one the audio divides**: samples per frame is the
   rate over the fps, rounded, and ffmpeg resamples the picture to *rate /
@@ -150187,7 +150849,8 @@ without them (`ffmpeg` capability).
 
 | profile | disk | CPU average / ceiling | audio | status |
 |---|---|---|---|---|
-| `5150-st225` (default) | 60,000 B/s | 50% / 85% | PCM8 11,025 Hz | the owner's machine |
+| `5150-st225` (default) | 96,000 B/s | 50% / 85% | PCM8 11,025 Hz | the owner's machine, its disk measured (VIDDISK, 104 KB/s under a half-machine hook) |
+| `5150-xtide` | 91,000 | 50% / 85% | PCM8 11,025 | an XT-IDE the CPU copies, measured on MartyPC (98.2.1.3) |
 | `5150-picomem2` | 150,000 | 40% / 80% | PCM8 22,050 | predicted |
 | `floppy` | 15,000 | 50% / 85% | PCM8 5,512 | predicted |
 | `286` | 150,000 | 150% / 250% of an 8088's | PCM8 22,050 | predicted |
@@ -150217,6 +150880,166 @@ without them (`ffmpeg` capability).
   BYTE-IDENTICAL to one whole search. About real time on four cores. A step
   that would clamp at 0 or 255 is not taken, so every stream decodes by the
   card's own arithmetic.
+
+##### 98.2.1.1 Owed time: a scene cut may run past its period
+
+**The ceiling above is for a frame ON TIME, and a scene cut may borrow the
+period after it** (`owe`, 1.6 periods on every profile, `--owe`). What it
+buys: on a disk-bound profile the frames the CPU cuts are scene cuts, and a
+cut held to 0.85 of its period draws most of the new picture and converges
+over the next few. Allowed past its period, it is drawn whole or nearly, and
+the picture is held one period longer - a frame's jitter instead of a smear.
+
+The encoder SIMULATES THE PLAYER'S SCHEDULE rather than a bucket, because
+it is the schedule that decides what is safe: the silent hook runs a call a
+period, draws at most two frames a call (one due and one owed), and drops a
+third (98.3). So:
+- **A frame on time** may run to `owe` periods, including its hook's own
+  cycles (`HOOK_CYC`, 3,040, measured) and the sound's copy. Past 2 the
+  next call would find three frames due; 1.6 leaves the disk's worker the
+  rest. The frame is allowed this only if the one before it was not itself
+  cut for CPU, so a clip in sustained motion keeps an even ceiling rather
+  than one full frame and two starved ones.
+- **The call after it draws the next two back to back**, and they share ONE
+  steady ceiling between them - the first half of it, the second what the
+  first left - so the call after that is on time again.
+- **The sound play is the easier schedule** (a call every half period, off
+  the card, and a frame behind is drawn rather than dropped), so a file
+  safe silent is safe with sound.
+- **Off** for a flip play (98.3.8: a frame a call, so one that runs over
+  drops the next), for a Live file (a pass a tick on the desktop, 98.3.10),
+  and whenever the ceiling already reaches `owe`: `--peak 1.6` is the fixed
+  ceiling it was, and `--owe 0` turns it off - offered in the encoder
+  window's Budget tab as an editable list, blank (the profile's), `0` (off)
+  and `1.6`. `owe` is in the machine's own
+  periods and `avg`/`peak` in 8088s, so the profiles say how many 8088s the
+  machine is (`speed`: 3 for `286`, 6 for `286-vga`).
+
+The report says how many frames ran over, how many were drawn a period late
+while it was paid back, and how many the model dropped, which is 0 by
+construction. On the owner's WolfOP (120 s, `5150-st225`), CGA: frames cut
+by the ceiling 34 -> 20, 22 frames ran over and 22 were drawn a period
+late; Hercules 12 -> 4, 3 and 3. The 22 s of cuts from 33 s, silent, played
+on MartyPC's 5150 (`os88vidprof --hdd`): 660 frames, 0 late, 0 stalls,
+401 ticks against 400.5, the hook held off 2 periods at most.
+
+##### 98.2.1.2 What a cut frame spends on: the look-ahead and the error as seen
+
+**A frame the budgets cut sends its changes best first, and two things now
+decide "best"** (`--lookahead N`, default 2, and `--error`, default
+`visible`). Both are about the frames the budget CANNOT make exact; a frame
+that fits is sent whole either way.
+
+- **The look-ahead: don't pay for pixels about to change.** On Sonic 2, 70%
+  of the bytes that change in a frame change again the next frame and 50%
+  the frame after - and a cut frame that spends its budget on them draws
+  pixels the picture undoes, which is the smear and the dither patterns
+  flashing back and forth the owner saw. The encoder has every target
+  before it encodes one, so a change is valued over this frame AND the next
+  N: at each, how much nearer its target the pixel is for holding this
+  frame's value than for keeping the screen's. A pixel about to change
+  again is worth little; one about to change BACK to what the screen holds
+  is worth less than nothing, and is not sent. 2 measured best: 4 fixes
+  more bytes and shows slightly more error, 8 more still.
+- **The error as seen.** A pixel's error is discounted by the share of it an
+  eye sees: the screen and the target low-passed (a binomial 5 rows tall
+  and as wide as the pixel's shape makes the same distance - most of the
+  8 x 8 Bayer tile), against the plain error low-passed the same way. A
+  dither pattern swapped for another of the same grey is mostly unseen and
+  counts a quarter; a wrong grey counts whole. **Nothing is amplified**: the
+  first form ranked by the low-passed error's own gradient, which rewards an
+  edge several times over a flat area, and it measured WORSE on its own
+  metric on four clips and left a stale block of the old picture on screen -
+  a region of middling contrast was starved for ever.
+- **Where there is no pixel form** (composite colour, `cgacomp` and
+  `c512`) the error is the bits; the look-ahead still works on them.
+
+**The report's `picture:` line is the measurement**: the error as seen (the
+mean of the low-passed difference), the pixels wrong, and the pixels that
+FLICKER BACK - equal to the frame before last and not the last, as a
+pattern swapping does - beside the source's own. Measured at a budget that
+cuts (Sonic 2 at the default profile, the others at a lower `--disk`):
+
+| clip | as before | `--lookahead 2` | ...and `--error visible` (the default) |
+|---|---|---|---|
+| Sonic 2, CGA | 3.61% seen, 1,487 flicker | 3.09%, 1,055 | 3.05%, 1,102 |
+| Trackmania, CGA | 1.63%, 432 | 1.30%, 242 | 1.26%, 240 |
+| bikes, CGA | 2.60%, 175 | 2.17%, 82 | 2.13%, 83 |
+| Bad Apple, Hercules | 1.45%, 110 | 1.27%, 96 | 1.26%, 95 |
+| Trackmania, CGA4 | 4.01%, 26 | | 3.39%, 4 |
+| Trackmania, VGA4 | 5.51%, 88 | | 4.30%, 38 |
+
+It costs the encoder about twice its time (Sonic 2's 10 s: 5.3 s -> 9.8 s).
+`--lookahead 0 --error bits` is the ranking before it, for the A/B.
+
+##### 98.2.1.3 The disk reserve: bursts banked in the player's ring
+
+**The disk budget banks what the player's ring holds read ahead**
+(`--reserve KB`). It banked one second or 96 KB, whichever was less; a
+640 KB 5150 plays with an 8-slot ring (98.3), 256 KB, so a clip that bursts
+and wanes could bank a calm stretch's bytes for its next burst. The default
+is the profile's ring less two slots - 192 KB with 8 - and **the header
+says which ring that needs** (98.1.1's byte 23: the smallest power of two
+whose slots less one hold the reserve). A player that gets fewer slots
+plays it, a burst may pause it, and in the full screen it says `Low memory`
+before the first frame (98.3.13's toast).
+
+**A disk slows when the decode takes the CPU, and the reserve is spent in
+exactly the bursts that take it** - so the budget refills from each frame's
+own load. A profile's `disk` is its rate at the `avg` share and `disk_at`
+its rate at others, as a share of that, MEASURED (VIDDISK): the ST-225's
+110 / 105 / 104 / 87 KB/s at 0 / 25 / 50 / 75%, 69 at 100% extrapolated;
+MartyPC's XT-IDE, which the CPU copies, 198 / 150 / 99 / 49 and 0 -
+`5150-xtide`, a profile of its own. And it is never spent below one
+`READ_SEQ`, 32 KB: the reader brings a slot a call, ~5 periods of it, so a
+slot's worth can be in flight and not yet in the ring.
+
+**Measured on MartyPC's 5150 off its XT-IDE**, Sonic 2's first 20 s silent,
+CGA:
+
+| | stalls | ticks (want 364.1) | error as seen |
+|---|---|---|---|
+| 84 KB reserve (a second, as before) | 0 | 365 | 2.28% |
+| 192 KB, the disk at one flat rate | 19 | 376 | - |
+| 192 KB, the disk's measured curve | 3 | 366 | 2.14% |
+| 192 KB, the curve and the 32 KB floor | **0** | **365** | **2.19%** |
+
+A clip in sustained motion gains a few percent; one that bursts and wanes
+is what the reserve is for.
+
+##### 98.2.1.4 `--aim`: what a budget the video does not use is for
+
+**`asked`** (the default) encodes what the options say. The other two answer
+the owner's "maximize quality, minimize size":
+
+- **`quality` spends the budget the video leaves.** It TRIES the richer
+  choices on trial encodes - the whole clip up to 40 s, else three 10 s
+  windows at a sixth, a half and five sixths - and takes each in turn while
+  the picture stays within 1.25 x the asked one's error as seen (+0.2
+  points) and cuts at most 5% more of its frames: a box a step up the
+  preset's ladder (`herc` -> `herc-mid` -> `herc-full`, `vga` -> `vga-mid`
+  -> `vga-full`, `cga-small` -> `cga`, and the colour presets' own), then
+  22,050 Hz sound. The report says what it tried and why it stopped. Bad
+  Apple at `--preset herc`: `herc-mid` taken (0.03% seen, 0% cut),
+  `herc-full` not (0.55%, 4%), 22 kHz sound taken.
+- **`size` leaves off changes not worth their bytes**, even in a frame the
+  budget would take whole: a span is sent only if what it fixes - value
+  over the look-ahead as 98.2.1.2 prices it, weighted by how long its
+  pixels have been wrong so a still picture still converges - is at least
+  `--worth` (default 1) pixels a byte of stream, its 2-byte header
+  counted. **It is a better small file than a smaller budget**, because it
+  drops what is least seen rather than what is ranked last:
+
+| Trackmania CGA, 10 s, silent | KB/s | error as seen |
+|---|---|---|
+| as asked | 60.4 | 0.00% |
+| `--aim size` | 48.6 | 0.41% |
+| ...`--worth 2` | 37.8 | 0.99% |
+| `--disk 40000` (asked) | 50.8 | 0.45% |
+| `--disk 32000` (asked) | 43.2 | 0.90% |
+| `--disk 20000` (asked) | 31.9 | 1.98% |
+
+  Bad Apple (Hercules, 30 s): 25.1 -> 22.8 KB/s at 0.11%.
 
 #### 98.2.2 Composite colour from a video (`--pixfmt cgacomp`)
 
@@ -150430,8 +151253,30 @@ form, and it says so.
 LIN80 at the named screen's own pixel shape - its box, with no `--box`,
 the logo's (320 x 112 on a CGA, 360 x 144 on a Hercules, 320 x 200 on a VGA)
 - and the target byte naming that screen, so the file plays on its desktop.
-One rendition: a file for every screen is `tools/os88logovid.py`'s shape,
+`--live vga --pixfmt vga4` makes it sixteen colours instead (98.3.10.4), the
+Live blit priced at four planes a byte. One rendition: a file for every screen is `tools/os88logovid.py`'s shape,
 several encodes made into one, and the encoder does not make it.
+
+**A Live file's CPU budget counts its BLIT** (the owner, 2026-09-27: *"option
+2 ... maybe 60%"*). A Live play's cost is mostly the copy into the window
+(98.3.10.2) and the model priced the decode alone - Bad Apple made `--live
+herc` modelled 12% of the machine and played at ~44%. So for `--live`:
+- **each frame is charged its decode plus the blit of its runs** (98.1.3.4,
+  `BLIT_CALL`/`BLIT_ROW`/`BLIT_BYTE`), times the passes a frame - a pass is a
+  tick (98.3.10), 18.2 a second, and blits the union of the frames it drew,
+  so at 30 fps a frame carries 0.61 of its own blit. That modelled the Bad
+  Apple clip's blit at 31.7% of the machine where `gfx_blit1` measured
+  32.1%;
+- **the average share defaults to `LIVE_AVG` = 0.60** instead of the
+  profile's - the rest is the desktop's around the play - and `--avg`
+  overrides it, as the window's field does;
+- a frame the retries cannot bring under its room is cut to the longest
+  PREFIX of its ranked spans that fits (halving), because a blit's cost is
+  its rectangles and dropping a scatter of spans hardly shrinks them.
+
+So a moment too heavy for the share is drawn with less detail, converging
+over the next frames, rather than slowing the play and the desktop with it.
+The report adds the blit's own share.
 
 #### 98.2.8 The encoder's window — `tools/os88vencgui.py`
 
@@ -150453,10 +151298,18 @@ still happens. What the window adds:
   through `os88cgacomp`'s monitor model, one bit as one bit.
 - **...and make a disk of it**: the .V88 and `VIDEO.O88` on a floppy image
   of any of the four sizes, or on a bootable hard disk (98.2.12.1).
+- **A "?" beside every field that takes one of a list** - the preset, the
+  layout, the format, the profile and the rest: a window with each value
+  and a line on what it is, the one chosen now in bold, and a click on any
+  takes it. The lines are `os88venc.CHOICE_HELP`, beside the parser, and
+  the gate fails on a value with no line or a line for no value - so a
+  preset added later arrives explained. (The owner's ask, testing text
+  video: *"text" vs "txt" is not clear*.)
 
 Tk is imported softly, so `tests/vencguitest.py` (`vencgui`) checks all of
 it with no display: every option on a tab with a tooltip, the untouched
-form parsing to the parser's defaults, every target encoding to the format
+form parsing to the parser's defaults, every choice with its line in
+`CHOICE_HELP`, every target encoding to the format
 it names, every preview at its screen's shape, and the disk.
 
 
@@ -150772,6 +151625,216 @@ driver was left out as its control and nothing failed. The disk carries
 `HDD.DRV` for the partitions it does not boot from, as `make videnchd`'s
 disks do. The row's control is `VIDEO.O88` left out instead, which fails.
 
+##### 98.2.13 The encoder for people with no os8088 tree: `make vencbundle`
+
+**The encoder is shipped to people who will never build os8088** (the owner,
+2026-09-27), so `make vencbundle` packs it: `build/os8088-encoder.zip`, one
+folder `os8088-encoder/` holding the window, everything it needs, the player
+and a README.
+
+- **The file list is COMPUTED** (`tools/os88vbundle.py`). It starts from the
+  window and the three tools it runs as processes (`os88venc.py`,
+  `os88disk.py`, `os88hdd.py`) and follows every import of a `tools/`
+  module. A module the encoder needs tomorrow is in tomorrow's zip without
+  anyone remembering to add it. A third-party import that is not one of the
+  expected three (numpy, Pillow, the optional tkinterdnd2) stops the build,
+  so the README cannot fall behind it. Today the zip holds eight modules,
+  `VIDEO.O88` and `README.TXT`.
+- **`VIDEO.O88` rides beside the tool**, which is where `player_path` looks
+  after `build/` (98.2.12.1). So every disk the bundle makes carries the
+  player, and its hard disks are the formatted, unbootable kind.
+- **It is deterministic**: entries in sorted order, every timestamp
+  1980-01-01. The same tree makes the same bytes.
+- **It needs, on the user's side**, Python 3 with Tk, numpy, Pillow, and
+  ffmpeg with ffprobe. The README says how to get each.
+
+`tests/vencbundle.py` (`vencbundle`) unpacks it OUTSIDE the tree and uses it
+there, with nothing but its own folder for Python to find an os88 module in:
+- the zip is whole, and made twice it is the same bytes;
+- it encodes a second of ffmpeg's test pattern into a `.V88` that verifies;
+- it makes a 360 KB floppy with the video's 8.3 name and `VIDEO.O88`;
+- it makes an unbootable ST11M disk that `--verify-hdd` passes;
+- every os88 module was the bundle's.
+
+With `os88pkg.py` taken out, both disks fail.
+
+#### 98.2.14 Composite colour on the text hack (`--pixfmt c512`)
+
+`--preset c512` is the text screen's 80 x 100 cells, and names its format;
+**`--cga-card old|new|both`** (default `both`) is slot byte 54
+(98.1.3.5). A cell is 8 x 2 of CGA's 640 x 200, so its shape is 5:3, and
+ffmpeg scales the source to the CELLS.
+
+- **The palette is the model's**: every one of the 512 codes rendered as a
+  flat field through `os88cgacomp.render_rgbi` at the target's card, in
+  80-column text (3D8h 09h, whose burst MartyPC's model turns 14 degrees),
+  its centre cell averaged - `os88cgacomp.c512_palette(new)`.
+- **Each cell is the nearest code in CIELAB** to its target plus an 8 x 8
+  Bayer offset in RGB (`--c512-dither`, the offset's amplitude, default
+  6 of 255; 0 is none), which breaks the bands between the colours
+  without the frame-to-frame churn error diffusion causes (98.2.2's
+  finding) - at 12 the pattern shows in a flat sky. For `both` the cost
+  of a code is the LARGER of its two ΔEs.
+- **`both` greys a FAINT TINT, and that is the card rule's cost rather than
+  the dither's.** Reported off Trackmania - a slate sky and a muted brown
+  road came out grey, its reds right. Measured over 4,000 CIELAB targets
+  at L 20-80: a tint of chroma 3-15 is 6.4 ΔE from the old card's nearest
+  code and 6.8 from the new's, and those keep 84% and 105% of its chroma;
+  under `both` it is **11.0 ΔE and keeps 61% (old) and 74% (new)**, because
+  the codes that look alike on two cards are mostly greys. A saturated
+  colour (chroma 25-50) keeps 95-97% either way, which is why Sonic 2 and
+  the reds survived. So **encode for the card the machine has** when that
+  is known: on 3 x 8 frames of the owner's clips, blurred a cell each way
+  against the source, Trackmania is 8.9 / 8.7 ΔE (old card / new) under
+  `both` and 7.1 or 6.1 for the one card alone. The old card has no muted
+  brown at the road's lightness at all and draws it brick.
+- **`--c512-mix N`** (2 or more; default 0, off) makes each cell Knoll's
+  PATTERN over N codes instead (98.2.5's, which C160 and CGA4 use): each
+  the nearest to the colour plus 0.6 of the error of the ones before it,
+  sorted by luma, a 4 x 4 Bayer cell picking one, the error carried
+  against the two cards' mean for `both`; stable by the source at
+  `--vga4-stable`. It brings the tint back and pays in GRAIN, and the
+  grain is why it is not the default: a pattern's codes are ~10 ΔE apart
+  near a tint, so mixing them is visible whatever N is. Trackmania, `both`,
+  new card, ΔE / grain (a cell's distance from its own blurred
+  neighbourhood beyond the source's): nearest 8.7 / 1.0; N 2 7.4 / 3.5;
+  N 4 6.2 / 6.5; N 16 at full error 6.0 / 7.6 - that last the first fix
+  tried, and a crosshatch over every flat field. Taking the MEAN of the
+  two cards' ΔEs instead of the larger scores the same.
+- **Neither more codes nor 1K fixes `both`**, measured over the same
+  4,000 targets against the CGA ROM's glyphs (MartyPC's `cga_8by8.bin`,
+  which is ROW-major - byte `row * 256 + char` - and reads as noise taken
+  a character at a time). **1K** (glyph row 0 only, the raster-locked
+  trick: patterns 22h 55h 66h CCh) takes a tint from 6.4 / 6.8 ΔE to
+  6.0 / 6.0 on one card, but under `both` it keeps LESS of it, 51% / 58%
+  against 62% / 75% - its finer patterns are the ones the cards disagree
+  on most. **The ROM's two-line characters** (B0h 22h over 88h, B1h 55h
+  over AAh, 1Fh, 2Ah, 81h, 84h, AEh: two flat patterns a cell, averaged
+  by the eye) look like the answer at 7.1 ΔE keeping 90% / 82%, with no
+  raster trick and no player change - and the whole of that gain is
+  pairs whose two lines are ~48 ΔE apart, which is a STRIPE and not a
+  colour. Price the split at 0.1 of a ΔE per ΔE and it is 8.7 ΔE keeping
+  54% / 62%; at 0.2, 3% of cells mix and it is C512 again. **The limit is
+  that one set of bits must serve two cards that disagree about a faint
+  tint by more than any palette's spacing** - more codes do not move it.
+- **The dead band**: a cell keeps last frame's code when that costs at most
+  `--c512-stable` (default 3.0 ΔE) more than the best - fewer changed
+  bytes, and a still picture stays still.
+- **A cell costs a byte when only its colours change and two when its
+  character does**, so the codes are ordered attribute-first: of two codes
+  equally near, the one with last frame's character wins.
+- The decoder's cycles are priced with C160's fitted constants (98.3.12.1,
+  the same text screen and its wait states) until `os88vidprof.py --cal`
+  fits the layout's own.
+- `--preview-png` draws what the monitor shows, through the model: the
+  target's card, or for `both` the old card's picture above the new's.
+
+#### 98.2.15 A clip made for the speaker: `--audio speaker`
+
+`--audio speaker` is PCM8 at **5,512 Hz** by default: the rate §98.3.15's
+player plays through the PC speaker on a machine with no card. It is stored
+**as the speaker's counts** (98.1.1.3), so the player copies them rather than
+translating. What makes it a separate target and not just a rate is the
+**budget**. The speaker's
+interrupts take a share of everything the machine does, so the profile's
+decode shares, its average and its peak, are shares of **what the pulses
+leave**:
+
+    share = rate x (CYC_SPK_PULSE + CYC_SPK_BYTE) / (8088 Hz x the profile's speed)
+    avg, peak, owe = avg x (1 - share), peak x (1 - share), owe x (1 - share)
+
+- **`CYC_SPK_PULSE` = 400** is the measured ISR (343 cycles, §34.11.4) plus
+  the 8088's interrupt acknowledge.
+- **`CYC_SPK_BYTE` = 15** is the player's copy of the counts, measured
+  (98.1.1.3). It was 65, a guess at the translation the counts removed.
+- **`speed`** is the profile's machine in 4.77 MHz 8088s (98.2.1.1): 1 for
+  the three 5150 profiles, 3 for `286` and 6 for `286-vga`.
+- **`owe`**, owed time's periods (98.2.1.1), shrinks with the rest: a period
+  the pulses take a share of is a shorter period to run on into.
+
+On the owner's 5150 that is **48%**, which leaves decode 26% of a period on
+average and 44% at most, against the card's 50% and 85%. The encoder prints
+both figures, and its CPU line carries `+ the speaker's 48%`. The disk rate
+is not scaled: the transfer is DMA, and the sound is fewer bytes than a
+card's 11,025 Hz anyway.
+
+**It refuses** a rate the PWM cannot play (below 4,679 or above 16,124 Hz),
+a rate above `VP_SPKMAX` (8,000 Hz) on a profile whose `speed` is 1, since the
+player would mute it (§98.3.15), and a share of 80% or more. The GUI offers
+it on the Sound tab, because its choices are the parser's.
+
+#### 98.2.16 Text video: `--pixfmt text`, and what CLARITY costs
+
+`--preset text` is TEXT in colour, **`--preset text-mono`** in the three
+attributes every adapter draws (98.1.3.6); `--text-colour colour|mono`
+says it on its own. The box is in CELLS, 80 x 25 at most, and `fit` sizes
+it to the source on a cell of 5:12 - a 16:9 clip is 80 x 19. ffmpeg scales
+the source to **eight by eight dots a cell** (640 x 200 for the whole
+screen), and each cell becomes the character and attribute whose cell,
+drawn in the model face, is nearest it (`TextMatcher`). Both presets
+default to **15 fps**: a whole picture is 4,000 bytes, and the picture
+drawn whole is the clear one.
+
+**Clarity is what every choice is for**, and four things carry it. Each was
+LOOKED at, on three photographs and a Mandelbrot zoom, against the plainer
+choice it replaced:
+- **The error is taken twice.** DOT FOR DOT, in sRGB, says which way an
+  edge runs. THROUGH THE EYE - each 2 x 2 quarter of the cell mixed in
+  LINEAR light and seen as sRGB - says what TONE a shade reads as: a 50%
+  dot of black and white looks like 186, not 128, and pricing a shade at
+  128 turned every mid-grey dark and put yellow in a face. `--text-detail`
+  (default 0.5) weights the first. Dot for dot alone flattens the picture
+  into patches; through the eye alone it dithers every flat area.
+- **A letter earns its place** (`--text-busy`, RMS of 255, default 12): a
+  glyph that is not a space, a shade or a half block pays that on top of
+  its error. At 80 x 25 a letter picked because it was a hair nearer than
+  a shade is noise - the eye reads the letter, not the picture. Measured on
+  an 80 x 25 frame of a portrait: 833 of 1,500 cells were letters with no
+  penalty, 422 at 12. With `--text-glyphs ascii` letters are all there is,
+  so the default there is 2.
+- **The picture is sharpened first** (`--text-sharpen`, default 0.6, an
+  unsharp mask a cell wide): an edge at this size is two or three cells,
+  and a soft one is lost between the glyphs.
+- **The letters do not crawl** (`--text-stable`, default 6, RMS of 255): a
+  cell keeps last frame's code while it is within that of the best, so a
+  still picture stays still and a source's noise does not make the
+  characters churn - the least clear thing a text picture can do.
+
+**`--text-glyphs`** is what the picture is made of - `blocks` (the default),
+`shades`, `ascii`, `dots` or `dots-plus`: `blocks`
+is printable ASCII, the four shades and the four half blocks - a half
+block with a colour each side makes a cell two dots of sixteen colours, so
+the screen is 80 x 50 where the picture wants it - `shades` leaves out the
+half blocks, and `ascii` is 32..126 alone, the classic look. **`dots`**
+is the other classic text-art style (the owner's ask): the full block and
+the four half blocks for the shapes, and the four dots - `'` and `` ` ``
+high in the cell, `,` and `.` low - for the edges and the dithers a block
+is too coarse for; no letters and no shades. Its letter penalty is 2, as
+ascii's: the dots are the point, with a slight lean to a solid cell on a
+tie (0, 2 and 5 looked alike on the photographs). **`dots-plus`** is the
+same with four more marks - `"` a pair of dots high, `*` a small star, `:`
+and `;` two stacked - for the middle tones, the owner keeping `dots` as the
+clean one; its penalty is 2 as well.
+
+**What the choice costs.** Per glyph the least-squares colours for its lit
+and unlit dots, the two nearest of the sixteen to each, and all four pairs
+priced exactly in closed form over the cell's sums - measured against a
+brute force over every glyph and all 256 attributes, it found the same
+optimum. A **prefilter** takes each cell's 16 likeliest glyphs (32 for
+mono) by the unquantised dot-for-dot error first: 0.25 s a frame against
+1.75 for all 103, within 0.2% of the exhaustive error in colour and ~4% in
+mono (which is why mono takes 32).
+
+The decoder's cycles are priced with TXT's constants (98.2.14) - the same
+`vd_native` onto the same kind of screen - until `os88vidprof.py --cal`
+fits the layout's own. A 9 s clip at 15 fps: 10.7 KB/s of picture, 7.9% of
+a 5150 on average by the model, every frame exact on `5150-st225`.
+
+`--preview-png`, the encoder window's preview and `os88vid decode --png`
+draw the cells in the model face (98.1.3.6), each dot made square. The
+window offers both as targets: "Any PC - text mode, 16 colours" and "Any
+PC, Hercules and MDA too - text mode, black and white".
+
 ### 98.3 The player — `VIDEO.O88`, fullscreen (waves 3 to 6)
 
 Package **`VIDEO.O88`**, header name `'Video Player'`, label prefix `vp_`
@@ -150837,12 +151900,21 @@ on time however long the disk takes:
 `OSAPI_FILE_READ_SEQ` in 32 KB chunks:
 - **A ring of *K* 32 KB slots, *K* a power of two up to 8**, sized from
   `OSAPI_MEM_AVAIL`. A stream that fits is read whole before the first
-  frame.
+  frame. **A *K* short of the header's ring** (98.1.1 byte 23, what the
+  encoder's disk reserve banked for, 98.2.1.3) is played, not refused - a
+  burst may pause it - and the full screen says `Low memory` once, before
+  the first frame (`vp_rsay`, a toast of 98.3.13's box). `tests/vidplay.py`
+  asserts it at 2 slots against a header's 8, and not at 8.
 - **One MIRROR slot after the last.** Every chunk that lands in slot 0 is
   copied there, so a super-packet that starts in the last slot runs on into
   the mirror and is contiguous in memory. That is the ring rule of 98.1.4,
-  kept for a stream read in chunks that are not super-packets. It costs 32
-  KB of `rep movsw` once per *K* chunks.
+  kept for a stream read in chunks that are not super-packets. **Only as
+  much as that super-packet runs on is copied** (`vp_mneed`): the chain is
+  walked in memory from the hook's super-packet to the one that crosses
+  into the chunk just read, and nothing is copied when none does; a walk
+  that meets the chain's end copies the whole 32 KB. It was 32 KB of `rep
+  movsw` once per *K* chunks, 1.8% of a 5150 streaming off XT-IDE at *K* = 8,
+  and is 1.2% (VIDEO-PLAN 15.8).
 - **Chunks, not super-packets, because READ_SEQ reads CLUSTERS**: the stream
   starts on a sector, so the first chunk is read from the cluster boundary
   below it, and the player starts that far in.
@@ -150988,9 +152060,16 @@ claims the shadow before the ring now, so the ring takes what is left.
   writes (`y0`, `y1`, 98.1.3) widen a **dirty band**.
 - **The copy is what costs**, once a hook call however many frames it
   covers: the band's rows, one at a time, each re-addressed from the file's
-  layout to the screen's (`vp_rowaddr`, 98.1.2's formula) at the centred
-  origin. A full 640×200 band onto a Hercules is ~60 ms of stores - two
-  periods of a 30 fps file.
+  layout to the screen's at the centred origin. A full 640×200 band onto a
+  Hercules is ~60 ms of stores - two periods of a 30 fps file.
+- **Only the band's first row is placed by 98.1.2's formula**
+  (`vp_rowaddr`, a multiply and a bank loop). Each row after it is a STEP
+  out of a four-entry table per side (`vp_rsfirst`): the next bank's 8 KB
+  on, or bank 0 a stride on. Every layout's banks divide four and the
+  screen's origin row is a multiple of its banks, so the canvas row mod 4
+  indexes both. Placing every row by the formula, twice, measured 25% of a
+  5150 copying a Hercules file onto a CGA, more than the stores it placed;
+  the play went 84% -> 74% of the machine (VIDEO-PLAN 15.8).
 - **So the DISPLAY rate drops, never the play's.** A hook call may decode 8
   frames, not 2; frames past that stay owed rather than being forgiven; and
   while the play is behind, the copy WAITS and the call's time goes to the
@@ -151368,12 +152447,12 @@ in-window play**; everything else keeps it.
   *y* at *y* x 80. So every screen's rendition is LIN80 and names the
   SCREEN it was drawn for at slot byte 53 (98.1.7), which `vp_open`'s
   choice scores as the layout.
-- **When**: the file says so, the rendition is MONO1 LIN80, and the box
-  shows it whole at its own size (`vp_canlive`); else Play is the play it
-  always was.
+- **When**: the file says so, the rendition is MONO1 LIN80 - or VGA4 LIN80
+  on a sixteen-colour desktop (98.3.10.4) - and the box shows it whole at
+  its own size (`vp_canlive`); else Play is the play it always was.
 - **How**: Play starts a session as any play does - the block loaded, a
-  64 KB keeper that is the shadow, a key decoded into it if the play starts
-  at one - and hires the package's ONE worker (20.6), once, declared
+  keeper that is the shadow and only the canvas's size (98.1.7.3), a key
+  decoded into it if the play starts at one - and hires the package's ONE worker (20.6), once, declared
   restartable (66.6.2: it parks only in `OSAPI_TASK_ALIVE` and keeps
   nothing but statics). Each tick the worker takes the gfx lock; if a live
   play runs, the ticks since its last pass are PIT counts owed, a frame for
@@ -151389,10 +152468,10 @@ in-window play**; everything else keeps it.
   both ways. The file's end (Repeat off) is found by the worker and
   finished on the UI task's wake.
 - **Live with SOUND** is 98.3.10.1.
-- **Not built**: Live in COLOUR (VGA4 through `OSAPI_GFX_BLIT4`, whose
-  band is packed where the shadow is planar); and **Live fed from the disk**,
-  which the owner's rule drops (14.7, V2): a read holds the picture ~100 ms,
-  so it could never look smooth.
+- **Live in COLOUR** is 98.3.10.4.
+- **Not built**: **Live fed from the disk**, which the owner's rule drops
+  (14.7, V2): a read holds the picture ~100 ms, so it could never look
+  smooth.
 
 The gates: `vidlive` (Hercules), `vidlivecga`, `vidlivevga` - a LIVE file of
 three renditions, each for its screen: the screen's own taken; Play a live
@@ -151432,6 +152511,82 @@ The gate: `vidlivesnd`, on the Hercules 5150 with a Sound Blaster - a Live
 file with PCM8 sound played Live, the capture of the card's output the
 file's sound from the frame the play started, byte for byte, and the play
 on time against the card.
+
+#### 98.3.10.2 Live blits what its frames wrote
+
+**A pass blitted the HULL**: the rows its frames wrote, first to last, at
+the canvas's width. On the logo that was 7,173 bytes a frame for 232
+changed, and `gfx_blit1` was 33% of a 5150 on CGA and 45% on Hercules, where
+the decode was 2% (VIDEO-PLAN 15.8). Working out the written columns at
+playback was built and refused - a walk of each record costs an 8088 ~120
+cycles a write, what it saves, and on dense footage it put the play behind.
+So the encoder writes them (98.1.3.4), and:
+
+- **`vp_decrec` gathers a live record's runs** (`vp_lrget`) as it decodes
+  it: into `[vx_run]`, the pass's list of up to `VX_MAX` = 16, a run whose
+  rows meet one already there merged into it (the union of the two).
+- **`vp_lblit` blits each** (`vp_lruns`), cut where the box shows no more,
+  through the window's clip as before.
+- **The band whole** (`[vp_lfull]`) when anything but a frame put it there -
+  the start, a key, a seam that is one, a resume (`vp_bandall`) - when a run
+  lies outside the canvas, when a pass gathers more than 16, and for a file
+  with no runs, which plays as it did.
+
+Measured on MartyPC's 5150s, 6 s Live: the logo's `gfx_blit1` **45.2% ->
+22.5%** of the machine on Hercules and **32.6% -> 20.0%** on CGA; Bad Apple
+made `--live herc` **46.4% -> 32.1%**. +468 bytes of the package. The gates
+are `vidlive*` and `vidlogo*`, whose holds compare the box with the decode:
+a run blitted short leaves the box wrong.
+
+#### 98.3.10.4 Live in colour
+
+**A Live file's VGA rendition may be VGA4** (98.1.3.2): sixteen colours on
+LIN80's bit-planes, played on the desktop as a one-bit one is. What had
+kept it out was the shadow's shape - a one-bit shadow IS the band
+`OSAPI_GFX_BLIT1` takes, and a VGA4 one is four planes, which
+`OSAPI_GFX_BLIT4` does not take. `OSAPI_GFX_BLITP` does (5.4.3), and it is
+the card's own shape.
+
+- **The file** (98.1.3.4): a live rendition may be VGA4 with the target VGA
+  (3), and nothing else; its frame records carry blit runs as a one-bit
+  one's do, a run's bytes being byte COLUMNS the four planes share
+  (`live_runs` walks every sub-record). `tools/os88venc.py --live vga
+  --pixfmt vga4` makes one, its blit priced at four planes a byte.
+- **When** (`vp_canlive`): VGA4 LIN80 on a sixteen-colour desktop, and the
+  four planes in ONE segment - `[vp_plsp]` at most `0x3FF` paragraphs, a
+  canvas of 204 rows - so one `OSAPI_GFX_BLITP` reaches all four.
+- **The shadow is the planar keeper**, four planes `[vp_plsp]` paragraphs
+  apart, decoded into as a RAM image (`vp_decram`) with each record's runs
+  gathered after it. The keeper is exactly the planes, so the block's writes
+  are checked against the canvas once per load as a one-bit Live file's are
+  (98.1.7.3) - every plane's lists now, where planar records were not
+  checked at all.
+- **The blit** (`vp_v4blit`): each run, or the band whole, is ONE
+  `OSAPI_GFX_BLITP` with `DI` bit 14 set, so the window's clip is WALKED
+  (5.4.3.6) - a box a window covers part of is drawn exactly where it shows
+  at the planes' price. Where BLITP refuses - off the screen's side, a
+  straddle, a one-bit display - the pass goes on packed: the rows repacked
+  into `OSAPI_GFX_BLIT4`'s nibbles a few at a time through a 1,024-byte
+  buffer (VGA8's palette and lumas, which a VGA4 file never has) and drawn
+  through the clip. A repaint of the box during a Live session draws the
+  planes the same way.
+- **F, pause, Repeat and the seam** are the one-bit Live play's: the keeper
+  is planar on both sides of a bracket already, since a VGA4 bracket play
+  keeps it so.
+
+Measured on `os8088_xt_vga` (a 4.77 MHz 8088 with a VGA), a 160 x 60 box of
+colour stripes, a pass's blits from `vp_lblit` to the thumb: **28.5 ms
+uncovered** (BLITP, no BLIT4); with a Disk window over part of it **1,088 ms
+through BLIT4, before 5.4.3.6, and 51.7 ms after it** - the walk's pieces,
+exact to the pixel beside the window. +439 bytes of the package (31,348 ->
+31,787), and 5.4.3.6's 127 of `kern_big`.
+
+The gate: `vidlivevga4` - `tests/vidlive.py --screen vga4`, the same file of
+three renditions with the VGA one VGA4: every hold on the RENDERED glass the
+decode's sixteen colours; uncovered, the pass's blits BLITP and no BLIT4;
+under a Disk window BLITP and no BLIT4 either, with the box's uncovered
+pixels right and the Disk window's untouched. Broken on purpose (BLITP's
+plane step wrong; the walk not asked for) it FAILS.
 
 #### 98.3.11 The logo video: `OS8088.V88`
 
@@ -151531,6 +152686,63 @@ file means, on both. Broken on purpose (`vp_cgaset` skipped) the colours
 and the characters are wrong and they FAIL. MartyPC's VGA draws text-mode
 attribute 6 as red where a VGA's, and its own CGA's, is brown; `vidc160vga`
 takes either for that colour and says why.
+
+#### 98.3.12.1 C160 is decoded straight onto the text screen
+
+**The shadow is kept, and let go stale.** A C160 file's addresses are the
+PACKED image's (98.1.2), and the screen holds each byte at the odd address
+of a cell, so the play went through the shadow and a copy of every dirty row
+at the stride of two. That copy measured **four times the decode**: 67% of a
+5150 against 16%, on 150 frames of camera footage at 160 x 75 (VIDEO-PLAN
+15.8). So `vd_c160` (`vdec.inc`, assembled under `VD_C160`) is the same ten
+lists written to the screen: canvas byte *a* is screen byte 2*a* + BP, BP
+being twice the packed origin plus one; a skip is added twice; a change's
+bytes are `movsb / inc di` each; a RUN writes its cells whole, `rep stosw`
+of 0DEh and the value. The same clip plays in **33%** of the machine.
+
+- **`vp_decrec` decodes onto the screen** while nothing needs the shadow -
+  no text up (98.3.13) and no band owed a copy - and sets `[vp_c16st]`: the
+  screen, not the shadow, is the picture.
+- **`vp_c16sync` reads the canvas back** off the screen's odd addresses
+  before anything reads the shadow: the full screen's text going up
+  (`vo_post`), the bracket ending (`vp_kget`), a record decoded while the
+  text is up or a band is owed. That is ~8,000 bytes once, where the copy
+  was every dirty row every frame.
+- **`vp_cclear` clears it**: a keyframe's canvas is the shadow, zeroed, and
+  the copy after it puts it on the screen, after which the decode goes
+  straight on.
+
+So everything that knew C160 as a shadow play - the keeper, the seek, the
+seam, the text round the box - is unchanged. The decoder is +1,681 bytes of
+the package: its poke lists unroll four to a round where `vd_native`'s
+unroll eight, because a cell's store is twice the bytes. **The encoder
+prices it with its own constants** (`CYC_LAYOUT` in `tools/os88vid.py`),
+fitted by `tools/os88vidprof.py --cal` on MartyPC's CGA 5150 to 0.6%: a
+change costs ~1.5 x the one-bit decoder's, a slice ~34 cycles a cell. Before
+it the model priced the decode into RAM and not the copy - a quarter of what
+the play cost.
+
+#### 98.3.12.2 C512 on a CGA
+
+**C512 plays full screen on a CGA and nowhere else**: its colours are the
+composite output's, which no other adapter has, so a VGA says *"Composite
+CGA colour: needs a CGA"*. `vp_cgaset` retimes the 6845 exactly as C160's
+(88.15.2's six writes, video off), clears every cell to zero - black -
+then sets **3D8h to 09h** (80 columns, video on, blink off, and the
+black-and-white bit CLEAR, so the colour burst is on) and **3D9h to 06h**:
+IBM's CGA derives the 80-column burst from the border's output, and with
+a black border a composite monitor sees none (reenigne's
+`512colors/512.asm` sets the same). The border is therefore visible as a
+dark yellow frame round the picture.
+
+The file's layout is the screen's own (98.1.3.5), so the play is NATIVE:
+`vd_native` onto B800h at the origin, no shadow and no copy, and a
+keyframe, a seek and the seam are the native path's. What differs is the
+full screen's text (98.3.13): its renderer `VOM_C` draws a character as
+four cells of 0DEh - the right half block - two pixels a cell, white on
+black, character AND attribute, eight bytes of the screen, and saves and
+restores all eight. On composite the white-on-black half blocks fringe
+but read.
 
 #### 98.3.13 The full screen's text: Paused, a seek's time, a toast
 
@@ -151703,6 +152915,98 @@ up to two a run with four side by side. Each re-send is printed. A press
 that was only late would count twice and fail the next step, so a pass
 means each one was really lost. The player reads keys through the BIOS
 buffer, so it drops none itself.
+
+#### 98.3.15 No card: the speaker, or performant silence
+
+With no Sound Blaster (`OSAPI_SND_CAPS` lacks `SND_CAP_PCM_BG`), a clip's
+PCM8 sound plays through **the PC speaker** (§34.11). Its clock is the
+speaker's CONS in place of the card's, and `vp_adue` cannot tell the
+difference. `[vp_snd]` = `VP_SPK` (2) says which it is. The play is silent
+instead, on the PIT's clock as before, when any of these holds:
+- the user chose silence with **S** (`[vp_spkoff]`);
+- the play is **Live** (§98.3.10): the desktop cannot give up channel 0 (§34.1);
+- the sound is **ADPCM4**, which only the card decodes;
+- the rate is **past `VP_SPKMAX` = 8,000 Hz on an 8086-class CPU**
+  (§34.11.4). The info line says `mute: too fast`.
+
+**The costs are the reason S exists.** The speaker takes ~52% of a 4.77 MHz
+8088 at 5,512 Hz translating a card's samples. A clip made for a card at that
+rate was budgeted for the whole machine, so on the speaker it runs short of
+time. A clip made for the speaker (`--audio speaker`, §98.2.15) was budgeted
+around the pulses, carries the counts so the player only copies them
+(98.1.1.3, ~48%), and plays as made. S is how the user picks between the two:
+- **in the window** it toggles the choice for the next play, and the info
+  line's third row says which: `, speaker` or `, S: speaker`;
+- **in the full screen** it turns the speaker off NOW: the door closes, the
+  play goes on silent on the PIT, and a toast says `Sound off`.
+
+The ring is the card's layout (§34.5.3), claimed as `VP_RL` + 272 bytes, with
+the count table after the control words. `vp_aput` puts each byte through
+the table as it queues it, and the drain's silence fill is translated too -
+or, for a file of counts (98.1.1.3), copies them and fills with the table's
+middle.
+Everything that stops or restarts the card does the same to the speaker, by
+`vp_sclose`, `os88spk_stop` and `os88spk_go`:
+- a **pause** stops it where it is, CONS exact, and the resume goes on from
+  that sample;
+- a **swap** between the window and the full screen crosses a bracket's end,
+  which closes the door (§34.11.1), so the next bracket's resume opens it
+  again;
+- a **seek** (§98.3.14) closes it, and the resume opens it at the key.
+
+**One thing had to change in the window to make it work**: `vp_wmove`, which
+moves the scrub bar's thumb, held the whole move at IF = 0, and that was 72
+lost pulses in 3,000. It now holds one byte at a time, which is all the
+pointer's ISR needs kept atomic (§34.11.3).
+
+`tests/vidspk.py` is the gate, with five rows:
+- `vidspk`: the window play;
+- `vidspkfull`: the full screen, which opens the door on the resume path;
+- `vidspkoff`: S in the full screen;
+- `vidspksilent`: S before Play;
+- `vidspkfast`: 11,025 Hz on the 8088.
+
+#### 98.3.16 TEXT: full screen, on any adapter
+
+**TEXT plays full screen only** (the owner's call), as CGA's colours do
+(98.3.12): the window's desktop is a graphics mode. **Where it plays**:
+- **MONO**: any display whose `OSAPI_FSX_CAPS` has `FSXM_TEXT80` - a CGA,
+  an EGA, a VGA and a Hercules - NATIVE, `vd_native` onto the segment the
+  bracket names.
+- **COLOUR**: the same, but not on a Hercules: *"Colour text: needs CGA,
+  EGA or VGA"*.
+
+**`vp_cgaset`, once the bracket has set its mode** (`vid_text`: mode 3, or
+mode 7 on a mono card):
+- the cursor off: the 6845's register 0Ah to 20h, on the card's own port -
+  3D4h, or 3B4h on a mono card - rather than `int 10h`, which on a VGA
+  beside a Hercules is the VGA's (39.20);
+- every cell 0 on 0, black - the keyframe's canvas and the frame round it;
+- COLOUR only: **blink off**, for sixteen backgrounds - 3D8h to 09h and a
+  black border on a CGA, `int 10h AX=1003h` on an EGA or a VGA (C160's).
+
+The bracket's restore sets the desktop's mode, so nothing is undone by hand.
+
+**The full screen's text (98.3.13) is text**: the renderer `VOM_A` writes
+the characters THEMSELVES, one cell of ground each side, on attribute 70h -
+black on grey, which an MDA draws as a colour card does - on the canvas's
+second row, one cell in. The box's rows and its row are the renderer's now
+(`vo_rows`, `vo_yoff`: 12 and 4 for every other one, 1 and 1 for TEXT),
+and everything that walked the box - the save, the put-back, the decode
+round it (98.3.13.1) - reads them.
+
++877 bytes of the package (31,348 against 30,471), no kernel byte.
+
+The gates: `vidtext` (colour, the CGA 5150), `vidtextvga` (colour,
+MartyPC's VGA XT), `vidtextherc` (mono, the Hercules 5150) and
+`vidtexthercno` (colour on the Hercules, which must refuse in its words) -
+`tests/vidcga.py --fmt text`: the file read as it is, the poster
+`text_mono`'s byte for byte with the MACHINE's glyphs, Play full screen,
+and at four holds every character and attribute in the screen's memory
+(not on the VGA, 98.3.12's reason), the glass at the centre of each
+QUARTER of every cell whose glyph no ROM draws differently - the space,
+the full block and the four half blocks - the foreground where it is lit
+and the background where not, and every dot round the canvas black.
 
 ### 98.4 The window: the Preview (wave 6)
 
@@ -151908,6 +153212,23 @@ byte's; a C160 pixel is drawn TWO wide, so the picture keeps its shape on a
 halved from there as any one-bit picture is. `cga4_mono` and `c160_mono` in
 `tools/os88vid.py` are the reference, and `vidcga4`/`vidc160` hold the
 player to them byte for byte.
+
+**A C512 keyframe is its ATTRIBUTES' C160 poster** (`c512_mono`): each
+cell's two nibbles are the colours its pattern mixes, so the pair of
+C160-shaped pixels its attribute makes is the cell's mix in two dots, and
+the picture is C160's shape. `vp_cmono` reads every other byte of the
+160-byte rows and is otherwise C160's; `vidc512` holds it byte for byte.
+
+**A TEXT keyframe's cells are GLYPHS** (`vp_tmono`, `text_mono`): each cell
+is FOUR pixels wide and four rows tall - the half size C160's poster is,
+so the picture keeps its shape - and each quarter is lit when its glyph
+quadrant's share of the way from the background's luma to the
+foreground's, `(bg x (16 - n) + fg x n) >> 4` for *n* of its 16 dots lit,
+beats the Bayer cell. The glyphs are the MACHINE's for the codes it has
+(`OSAPI_FONT_GLYPHS`, 32..126) and a table for the shades and blocks
+(`vp_tquadt`, the model's own, `BLOCK_QUADS`); any other code is half lit
+and 0 is dark. `vidtext` holds it byte for byte, with the glyphs the
+player names.
 
 #### 98.4.7 A document on another disk: the instance goes there, and a failure opens the card
 

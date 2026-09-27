@@ -544,6 +544,47 @@ SND_OPENF_ADPCM4 equ 4           ; ...the bytes are Creative 4-bit ADPCM, the
 SND_OPENF_RLSH   equ 4           ; the size code's shift: 0 4KB .. 3 32KB
 SND_EXT_TOTAL    equ 0           ; the control words, after the ring
 SND_EXT_CONS     equ 2
+SND_EXT_TAB      equ 16          ; os88spk.inc's PWM table, written by its
+                                 ; open: 256 bytes, so a speaker ring's claim
+                                 ; is RL + 272 (SPEC.md 34.11)
+
+%define OSAPI_FSX_SPK       KERNEL_SEG:0x045B   ; THE SPEAKER AT A SAMPLE
+                                 ; RATE (SPEC.md 34.11), from INSIDE YOUR OWN
+                                 ; FSXF_RATE BRACKET only (53.2.2) - PCM with
+                                 ; no card. apps/os88spk.inc is the ring player
+                                 ; built on it; this is the door it opens.
+                                 ; AL = 0 OPEN: DX = N, the PIT counts a sample
+                                 ; (74..255 = 16,124..4,679 Hz), SI = your
+                                 ; SAMPLE ISR, a near offset in your image, DI
+                                 ; = a 6-byte block in your image the kernel
+                                 ; fills with K and the chain (below) BEFORE
+                                 ; IRQ0 is your ISR's - the first sample can
+                                 ; come as soon as the old period ends.
+                                 ; out CF=0: AX = K, samples in one rate period
+                                 ; (the period becomes K x N counts, within a
+                                 ; sample of your divisor, and the hook's AX
+                                 ; counts those), DX:BX = the CHAIN. Channel 2
+                                 ; is 34.4's PWM and yours: `out 0x42` a count
+                                 ; 1..N-1 a sample. From then EVERY IRQ0 is
+                                 ; your ISR's, entered with the interrupt frame
+                                 ; alone, IF = 0, on whatever stack it hit (48
+                                 ; bytes, 53.2.2's rule): it sends the EOI and
+                                 ; irets, except on each K-th entry, where it
+                                 ; restores every register and jumps FAR to the
+                                 ; chain instead (the kernel's IRQ0, which does
+                                 ; the EOI, the tick and your hook). IRQ0's
+                                 ; VECTOR is your ISR while it is open, and
+                                 ; TWO THINGS CHANGE UNDER IT: your hook is
+                                 ; entered with IF = 1, and a rate period is no
+                                 ; task switch - switches ride the tick, as
+                                 ; they do outside a bracket (34.11.3). AL = 1
+                                 ; CLOSE, and the bracket's end closes it.
+                                 ; CF=1 AX = SPK_E_*
+SPK_E_NOTRATE    equ 1           ; not in your own FSXF_RATE bracket (and
+                                 ; always, on kern_small)
+SPK_E_N          equ 2           ; N is outside 74..255
+SPK_E_BUSY       equ 3           ; open already, or a clip plays
+SPK_E_NOTOPEN    equ 4           ; close with nothing open
 
 ; --- window management (SPEC.md 11.1/11.2) -------------------------------------
 %define OSAPI_WM_SIZABLE    KERNEL_SEG:0x00F1   ; BX=win ptr, AL = 0 clear / non-zero set
@@ -1429,6 +1470,17 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
                                  ; rather than by colour. A refused probe
                                  ; changes nothing, so asking again next
                                  ; repaint is the intended use.
+                                 ;
+                                 ; **DI BIT 14 WALKS AN ARMED CLIP** (SPEC.md
+                                 ; 5.4.3.6): without it a region is a
+                                 ; refusal, and the fallback, OSAPI_GFX_BLIT4
+                                 ; through the clip, costs ~0.5 ms a colour
+                                 ; change a row. With it every visible
+                                 ; fragment is drawn exactly, at the planes'
+                                 ; price. Keep the plane step under 16 KB so
+                                 ; the bit is yours; set it always - with no
+                                 ; region armed it is ignored. kern_big only:
+                                 ; on kern_small the slot refuses everything
 ; -----------------------------------------------------------------------------
 ; A RUN OF SCAN LINES, one call (SPEC.md 5.10)
 ;

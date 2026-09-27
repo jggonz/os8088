@@ -9,7 +9,10 @@ so it is checked here with no Tk at all:
 
 1. EVERY OPTION IS ON A TAB, WITH A TOOLTIP: the window's table against
    os88venc.parser(), each option once, none without its help - and every
-   tab the table names is one of the window's.
+   tab the table names is one of the window's. EVERY CHOICE SAYS WHAT IT
+   IS: each value of a choice option has its line in os88venc.CHOICE_HELP,
+   the window's "?" beside the field, and no line names a value that is not
+   one - so a preset or layout added tomorrow cannot arrive unexplained.
 2. THE DEFAULTS ARE THE ENCODER'S: the form left alone makes a command line
    that parses to the parser's own defaults, option for option.
 3. EVERY TARGET ENCODES: each "made for" choice, on a second of ffmpeg's
@@ -87,6 +90,11 @@ def main():
     notip = [f["flag"] for f in fl if not f["tip"]]
     tabs = sorted({f["tab"] for f in fl} - set(G.TABS))
     stale = sorted(set(G.TAB_OF) - set(opts))
+    nohelp = ["%s %s" % (f["flag"], c) for f in fl if f["kind"] == "choice"
+              for c in f["choices"] if c and not (f["help"] or {}).get(c)]
+    oldhelp = ["%s %s" % (f["flag"], c) for f in fl if f["help"]
+               for c in f["help"] if c not in f["choices"]]
+    oldhelp += ["--%s" % d for d in V.CHOICE_HELP if d not in dests]
     print("   %d options on %d tabs; %d missing, %d twice, %d without a "
           "tooltip, %d tab names unknown, %d placings for no option"
           % (len(fl), len({f["tab"] for f in fl}), len(missing), len(twice),
@@ -94,7 +102,9 @@ def main():
     for what, lst in (("missing from the window", missing),
                       ("on the window twice", twice),
                       ("with no tooltip", notip), ("on no tab", tabs),
-                      ("placed but not an option", stale)):
+                      ("placed but not an option", stale),
+                      ("choices with no line in CHOICE_HELP", nohelp),
+                      ("CHOICE_HELP lines for no choice", oldhelp)):
         if lst:
             bad.append("options %s: %s" % (what, " ".join(lst)))
     # --- 2
@@ -176,6 +186,9 @@ def main():
             # the canvas's own display shape: its pixels times their aspect
             px = r.g.wb * (4 if r.pixfmt == vid.PF_CGA4 else
                            vid.PIX_PER_BYTE[r.g.layout])
+            if r.pixfmt in (vid.PF_C512, vid.PF_TEXT):
+                px = r.g.wb // 2        # a CELL is two bytes, and the
+                                        # aspect is a cell's (98.1.2)
             shape = px * an / float(ad) / (r.g.h * r.rowscale)
             print("   %-58s %s on %s, %d frames, preview %d x %d"
                   % (label, vid.PF_NAMES[r.pixfmt], r.g.name, len(frames),

@@ -10,6 +10,8 @@
 ;              darkest first, so 255 is its brightest) or 0
 ;   Mode X     the same, a plane at a time
 ;   C160       the text hack's cells, two pixels an attribute
+;   C512       the same, each cell 0DEh and its attribute, written whole
+;   TEXT       the text screen as it is: the characters, one row of them
 ;
 ; THE SCREEN IS THE DECODER'S REFERENCE. Played onto the screen, a record
 ; writes only what changed, so a byte the box covers must hold the PICTURE
@@ -38,11 +40,18 @@ VOK_SEEK    equ 2
 VOK_REPON   equ 3
 VOK_REPOFF  equ 4
 VOK_NOKEY   equ 5
+VOK_SNDOFF  equ 6                   ; S: the speaker off (98.3.15)
+VOK_LOWMEM  equ 7                   ; the ring short of the stream's
 VOM_1       equ 1                   ; the renderers
 VOM_2       equ 2
 VOM_8       equ 3
 VOM_X       equ 4
 VOM_T       equ 5
+VOM_C       equ 6                   ; C512 (98.3.12.2): the same text mode,
+                                    ; its cells written whole
+VOM_A       equ 7                   ; TEXT (98.3.16): the characters THEMSELVES,
+VO_TATTR    equ 0x70                ; a cell each, on one row, black on grey -
+                                    ; which an MDA draws as a colour card does
 
 ; vo_setup - a bracket's surface is up: the renderer its screen takes, and
 ; how many characters the canvas fits. None in the window (98.3.7), whose
@@ -84,6 +93,24 @@ vo_setup:
     mov cl, [vo_mtab+bx+2]
     xor ch, ch
     mov [vo_xoff], cx
+    cmp byte [vp_pixfmt], PF_C512   ; C512 shares C160's mode, and the
+    jne .nc5                        ; screen is its canvas: a character is
+    mov byte [vo_bpc], 8            ; four 0DEh CELLS, eight bytes, and the
+    mov cl, 8                       ; box's left is one
+    mov [vo_xoff], cx
+.nc5:
+    mov word [vo_rows], VO_ROWS     ; the box's rows of the canvas, and how
+    mov word [vo_rows2], VO_ROWS * 2    ; far down it is
+    mov word [vo_yoff], VO_YOFF
+    cmp byte [vp_pixfmt], PF_TEXT   ; TEXT: a character is a CELL, two
+    jne .ntx                        ; bytes, the box one row of them a row
+    mov byte [vo_bpc], 2            ; down and a cell in
+    mov cl, 2
+    mov [vo_xoff], cx
+    mov word [vo_rows], 1
+    mov word [vo_rows2], 2
+    mov word [vo_yoff], 1
+.ntx:
     mov ax, [vp_wb]                 ; the characters the canvas holds
     sub ax, cx
     jbe .out
@@ -97,9 +124,19 @@ vo_setup:
     mov ax, VO_MAXC
 .cm:
     mov [vo_cmax], al
-    cmp word [vp_h], VO_YOFF + VO_ROWS
+    mov ax, [vo_yoff]
+    add ax, [vo_rows]
+    cmp [vp_h], ax
     jb .out
     mov bl, [vo_mtab+bx]            ; (the renderer, again)
+    cmp byte [vp_pixfmt], PF_C512
+    jne .r5
+    mov bl, VOM_C
+.r5:
+    cmp byte [vp_pixfmt], PF_TEXT
+    jne .r6
+    mov bl, VOM_A
+.r6:
     mov cl, 1                       ; the planes a save takes: Mode X's four,
     mov ch, 0                       ; VGA4's four, else one
     cmp bl, VOM_X
@@ -226,9 +263,17 @@ vo_update:
     mov si, vo_s_roff
 .s3:
     cmp al, VOK_NOKEY
-    jne .s4
+    jne .s35
     mov si, vo_s_nokey
+.s35:
+    cmp al, VOK_LOWMEM
+    jne .s4
+    mov si, vo_s_lowmem
 .s4:
+    cmp al, VOK_SNDOFF
+    jne .s5
+    mov si, vo_s_soff
+.s5:
     xor ah, ah
     call vo_show
     pop si
@@ -345,14 +390,15 @@ vo_post:
     cmp byte [vo_drawn], 0
     je .sc
     mov byte [vo_drawn], 0          ; (so the copy takes the box's bytes too)
-    mov ax, [vp_dy0]
-    cmp ax, VO_YOFF
+    mov ax, [vo_yoff]
+    cmp [vp_dy0], ax
     jbe .y0
-    mov word [vp_dy0], VO_YOFF
+    mov [vp_dy0], ax
 .y0:
-    cmp word [vp_dy1], VO_YOFF + VO_ROWS
+    add ax, [vo_rows]
+    cmp [vp_dy1], ax
     jae .y1
-    mov word [vp_dy1], VO_YOFF + VO_ROWS
+    mov [vp_dy1], ax
 .y1:
     call vp_blit
 .sc:
@@ -362,7 +408,8 @@ vo_post:
 .sd:
     cmp byte [vo_drawn], 0          ; drawn, and no copy has crossed it
     jne .ret
-    mov byte [vo_drawn], 1
+    call vp_c16sync                 ; (C160 decoded onto the screen: the
+    mov byte [vo_drawn], 1          ; shadow the picture again, 98.3.12.1)
     xor bl, bl
     jmp vo_draw
 
@@ -446,9 +493,9 @@ vo_bparts:
     cmp byte [vo_drawn], 0
     je .out
     mov ax, cx
-    sub ax, VO_YOFF
+    sub ax, [vo_yoff]
     jb .out
-    cmp ax, VO_ROWS
+    cmp ax, [vo_rows]
     jae .out
     mov ax, [vo_xoff]
     mov [vb_n1], ax
@@ -480,7 +527,7 @@ vo_addr:
     push ax
     push bx
     add ax, [vp_ty0]
-    add ax, VO_YOFF
+    add ax, [vo_yoff]
     mov bl, [vp_tlay]
     call vp_rowaddr
     add ax, [vp_tx0]
@@ -550,7 +597,7 @@ vo_io:
 .n:
     pop cx
     inc ax
-    cmp ax, VO_ROWS
+    cmp ax, [vo_rows]
     jb .r
     inc cl
     cmp cl, [vo_pl]
@@ -668,7 +715,7 @@ vo_draw:
     cmp bl, VOM_1
     jne .m2
     rep movsb                       ; ONE BIT: the glyph's bytes
-    jmp short .rn
+    jmp .rn
 .m2:
     cmp bl, VOM_2
     jne .m8
@@ -706,7 +753,25 @@ vo_draw:
     jnz .b8p
     loop .b8
     jmp short .rn
-.mt:                                ; C160: two pixels a cell, the LEFT the
+.mt:
+    cmp bl, VOM_A                   ; TEXT: the characters themselves, a
+    jne .mtc                        ; cell of ground each side
+    mov ah, VO_TATTR
+    mov al, ' '
+    stosw
+    mov si, vo_text
+    mov cl, [vo_n]
+    xor ch, ch
+    jcxz .tae
+.tal:
+    lodsb
+    stosw
+    loop .tal
+.tae:
+    mov al, ' '
+    stosw
+    jmp short .rn
+.mtc:                               ; C160: two pixels a cell, the LEFT the
     shl cx, 1                       ; attribute's high nibble (98.1.3.3)
     shl cx, 1                       ; (a character is four cells)
     xor bx, bx
@@ -722,13 +787,21 @@ vo_draw:
     or al, 0x0F
 .tr:
     inc bx
+    cmp byte [vo_mode], VOM_C       ; C512: the cell whole, 0DEh and its
+    je .tc                          ; attribute (98.3.12.2)
     mov [es:di], al
     add di, 2
+    loop .bt
+    jmp short .rn
+.tc:
+    mov ah, al
+    mov al, 0xDE
+    stosw
     loop .bt
 .rn:
     pop ax
     inc ax
-    cmp ax, VO_ROWS
+    cmp ax, [vo_rows]
     jb .r
     ret
 .mx:                                ; MODE X: a plane at a time, a byte a
@@ -758,7 +831,7 @@ vo_draw:
     pop cx
     pop ax
     inc ax
-    cmp ax, VO_ROWS
+    cmp ax, [vo_rows]
     jb .xr
     inc cl
     cmp cl, 4
@@ -793,7 +866,7 @@ vc_setup:
     mul byte [vo_bpc]
     mov [vc_w], ax
     mov cx, ax
-    mov ax, VO_ROWS                 ; ...and a plane of the save
+    mov ax, [vo_rows]               ; ...and a plane of the save
     mul cx
     mov [vc_pls], ax
     xor si, si                      ; SI = the row, x 2
@@ -801,7 +874,7 @@ vc_setup:
 .r:
     mov ax, si
     shr ax, 1
-    add ax, VO_YOFF
+    add ax, [vo_yoff]
     mov bl, [vp_tlay]
     call vp_rowaddr
     add ax, [vp_org]
@@ -823,7 +896,7 @@ vc_setup:
     mov [vc_rv+di], dx
     add dx, [vc_w]
     add si, 2
-    cmp si, VO_ROWS * 2
+    cmp si, [cs:vo_rows2]
     jb .r
     xor si, si                      ; each range's end
 .e:
@@ -831,13 +904,13 @@ vc_setup:
     add ax, [vc_w]
     mov [vc_re+si], ax
     add si, 2
-    cmp si, VO_ROWS * 2
+    cmp si, [cs:vo_rows2]
     jb .e
     xor bx, bx                      ; the page table: each page, the first
     xor di, di                      ; range ending past its first byte
     xor dx, dx
 .pg:
-    cmp bx, VO_ROWS * 2
+    cmp bx, [cs:vo_rows2]
     jae .pp
     cmp [vc_re+bx], dx
     ja .pp
@@ -1021,7 +1094,7 @@ vc_st:
 vc_put:
     jcxz .r
     call vc_find
-    cmp bx, VO_ROWS * 2
+    cmp bx, [cs:vo_rows2]
     jae .all
     mov ax, di
     add ax, cx
@@ -1048,7 +1121,7 @@ vc_span:
     jcxz .out
     mov bx, [cs:vc_ri]
     call vc_adv                     ; (past any it has left behind)
-    cmp bx, VO_ROWS * 2
+    cmp bx, [cs:vo_rows2]
     jae .all
     mov ax, [cs:vc_rs+bx]
     sub ax, di
@@ -1078,7 +1151,7 @@ vc_find:
     xor bh, bh
     mov bl, [cs:vc_pg+bx]
 vc_adv:
-    cmp bx, VO_ROWS * 2
+    cmp bx, [cs:vo_rows2]
     jae .x
     cmp [cs:vc_re+bx], di
     ja .x
@@ -1098,7 +1171,7 @@ vc_bnext:
     mov bx, [cs:vc_ri]
     call vc_adv
 vc_bx:
-    cmp bx, VO_ROWS * 2
+    cmp bx, [cs:vo_rows2]
     jae .none
     mov bx, [cs:vc_rs+bx]
     sub bx, cx
@@ -1249,8 +1322,13 @@ vo_s_none:    db 0
 vo_s_pause:   db 'Paused', 0
 vo_s_ron:     db 'Repeat on', 0
 vo_s_roff:    db 'Repeat off', 0
+vo_s_soff:    db 'Sound off', 0
 vo_s_nokey:   db 'No seeking', 0
+vo_s_lowmem:  db 'Low memory', 0    ; (VO_MAXC: ten at most)
 vo_mode:      db 0                  ; the renderer, 0 none
+vo_rows:      dw VO_ROWS            ; the box's rows of the canvas (TEXT's 1),
+vo_rows2:     dw VO_ROWS * 2        ; ...twice that,
+vo_yoff:      dw VO_YOFF            ; ...and the row it starts on
 vo_bpc:       db 0
 vo_xoff:      dw 0
 vo_cmax:      db 0                  ; the characters the canvas holds

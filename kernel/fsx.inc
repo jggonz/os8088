@@ -365,6 +365,11 @@ fsx_run:
 fsx_restore:
     push ax
     push di
+%ifdef KERN_BIG
+    call spk_off                ; a speaker ring the app left open (SPEC.md
+                                ; 34.11): channel 2 idle and channel 0 at the
+                                ; bracket's rate, before the rate itself goes
+%endif
     call sch_fast_off           ; the sub-tick goes back FIRST (SPEC.md 53.2.1):
                                 ; everything below this runs on the ordinary
                                 ; quantum, and it is a no-op if none was armed
@@ -808,7 +813,15 @@ fsx_wait:
 .frame:
     mov bx, [sch_subs]          ; AL = 2: the next IRQ0, however the divider
 .fw:                            ; is set - and the wait itself is the yield,
+%ifdef KERN_BIG
+    cmp word [spk_isr+2], 0     ; ...EXCEPT under a sample ISR (SPEC.md
+    je .fy                      ; 34.11): a yield spends its switch at IF = 0,
+    hlt                         ; and a loop of them loses the samples that
+    jmp short .fc               ; land there. hlt waits with IF = 1, and the
+.fy:                            ; rate period's own entry still switches
+%endif
     call task_yield             ; so the time we do not use is the worker's
+.fc:
     cmp bx, [sch_subs]
     je .fw
     jmp short .ok

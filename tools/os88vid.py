@@ -679,7 +679,34 @@ V88_SIG = b"V88\x1a"
 # frame back to frame L, and a loop block at 448 names it. REPEAT: a player
 # starts with Repeat on. Bits 0 and 3 are named for waves 10 and 9
 F_RESIDENT, F_LOOPREC, F_REPEAT, F_LIVE = 1, 2, 4, 8
-F_KNOWN = F_RESIDENT | F_LOOPREC | F_REPEAT | F_LIVE
+F_RUNS = 16                     # a LIVE file's frame records carry their blit
+                                # RUNS after their lists (98.1.3.4)
+F_SPKPWM = 32                   # PCM8 stored as the SPEAKER's PWM counts
+                                # (98.1.1.3), made for a machine with no card
+F_KNOWN = F_RESIDENT | F_LOOPREC | F_REPEAT | F_LIVE | F_RUNS | F_SPKPWM
+
+PIT_HZ = 1193182
+
+
+def spk_table(rate):
+    """SPEC.md 34.11.2's count table for a rate: t[s] = 1 + s(N-2)/255, N =
+    1,193,182 / rate - apps/os88spk.inc's os88spk_init, to the byte"""
+    n = PIT_HZ // rate
+    if not 74 <= n <= 255:
+        raise V88Error("%d Hz is not a rate the speaker plays (N = %d, "
+                       "74..255)" % (rate, n))
+    return bytes(1 + s * (n - 2) // 255 for s in range(256))
+
+
+def spk_counts(samples, rate):
+    """PCM8 samples as the speaker's counts (98.1.1.3)"""
+    return bytes(samples).translate(spk_table(rate))
+RUNS_MAX = 32                   # ...at most this many a record
+# What a Live pass's blit costs (98.3.10.2), fitted by timing vp_blitb on
+# MartyPC's CGA and Hercules 5150s over Live plays: a call's fixed part,
+# and a byte of the band. A run is merged into the one above it when one
+# call of the union costs less than two
+BLIT_CALL, BLIT_ROW, BLIT_BYTE = 9000, 100, 21
 # LIVE (98.3.10): a RESIDENT file that may play on the live desktop - its
 # renditions LIN80 one-bit canvases, blitted from a RAM shadow, each naming
 # the SCREEN it was drawn for at slot byte 53 (1 CGA, 2 Hercules, 3 VGA/EGA)
@@ -691,6 +718,12 @@ TARGETS = {"cga": 1, "herc": 2, "vga": 3}
 # rendition slot's spare bytes, the audio block's at 176
 R_BLOCK = 40                    # slot: the block's offset, packed bytes,
 PK_NONE, PK_LZ4, PK_LZB = 0, 1, 2   # unpacked bytes (<i4) and packing at 52
+# 98.1.7.1: a PACKED resident block reads in one call of under 60 KB and
+# expands into under 128 KB (OSAPI_DECOMP's input is one segment); a STORED
+# one is read in pieces and may be any size under 1 MB - vp_pbk's bounds
+BLK_PACKED_MAX = 61440
+BLK_UNPACKED_MAX = 0x1FFF0
+BLK_STORED_MAX = 0xFFFFF
 AUD_AT = 176                    # the audio block: the same four fields
 LOOP_AT = 448                   # the loop block: L, seam offset and length,
 LOOP_FMT = "<IIHBBI"            # the super-packet of frame L+1 (sectors,
@@ -703,8 +736,15 @@ ADPCM4_REF = 0x80               # the stream's reference byte (SPEC.md 98.1.1)
 PF_MONO1, PF_CGACOMP, PF_VGA8, PF_VGA4 = 1, 2, 3, 4
 PF_CGA4, PF_C160 = 5, 6         # CGA in COLOUR (98.1.3.3): 320 x 200 x 4 on
                                 # mode 4, and 160 x 100 x 16 on the text hack
+PF_C512 = 7                     # ...and 80 x 100 x 512 on its COMPOSITE
+                                # output, the cells as the screen has them
+                                # (98.1.3.5)
+PF_TEXT = 8                     # ...and TEXT: the 80 x 25 text screen of
+                                # any adapter, its characters the picture
+                                # (98.1.3.6)
 PF_NAMES = {PF_MONO1: "MONO1", PF_CGACOMP: "CGACOMP", PF_VGA8: "VGA8",
-            PF_VGA4: "VGA4", PF_CGA4: "CGA4", PF_C160: "C160"}
+            PF_VGA4: "VGA4", PF_CGA4: "CGA4", PF_C160: "C160",
+            PF_C512: "C512", PF_TEXT: "TEXT"}
 # VGA4 (98.1.3.2): mode 12h's own sixteen, which no theme changes - the
 # DAC's six bits, black to white in the EGA's order
 STD16 = bytes((0, 0, 0, 0, 0, 42, 0, 42, 0, 0, 42, 42, 42, 0, 0, 42, 0, 42,
@@ -712,6 +752,8 @@ STD16 = bytes((0, 0, 0, 0, 0, 42, 0, 42, 0, 0, 42, 42, 42, 0, 0, 42, 0, 42,
                21, 63, 63, 63, 21, 21, 63, 21, 63, 63, 63, 21, 63, 63, 63))
 LAY_CGA, LAY_HERC, LAY_LIN80, LAY_LIN320, LAY_MODEX = 1, 2, 3, 4, 5
 LAY_C160 = 6
+LAY_TXT = 7
+LAY_TEXT = 8
 LAYOUTS = {                     # SPEC.md 98.1.2: banks, stride, rows, name
     LAY_CGA: (2, 80, 200, "cga"),
     LAY_HERC: (4, 90, 348, "herc"),
@@ -719,21 +761,49 @@ LAYOUTS = {                     # SPEC.md 98.1.2: banks, stride, rows, name
     LAY_LIN320: (1, 320, 200, "lin320"),
     LAY_MODEX: (1, 80, 240, "modex"),   # a PLANE's image: 80 bytes a row
     LAY_C160: (1, 80, 100, "c160"),     # packed nibbles, the LEFT high: the
-}                                       # text hack's attributes (98.1.3.3)
+                                        # text hack's attributes (98.1.3.3)
+    LAY_TXT: (1, 160, 100, "text-80x100"),      # ...and the text screen AS IT IS: a
+                                        # cell's character, its attribute
+    LAY_TEXT: (1, 160, 25, "text-80x25"),     # ...and not retimed: 80 x 25, the
+}                                       # screen every adapter has (98.1.3.6)
 LAYOUT_BY_NAME = {v[3]: k for k, v in LAYOUTS.items()}
+# ...and the names the two text layouts had before they said which text
+# screen they are (98.1.2): still taken, never offered
+LAYOUT_ALIASES = {"txt": "text-80x100", "text": "text-80x25"}
+
+
+def layout_name(n):
+    """A layout's name as the command lines take it: its own, or an old
+    one's, made its own - argparse's `type`, ahead of its `choices`"""
+    return LAYOUT_ALIASES.get(n, n)
 ASPECT = {LAY_CGA: (5, 12), LAY_HERC: (29, 45), LAY_LIN80: (1, 1),
-          LAY_LIN320: (5, 6), LAY_MODEX: (1, 1), LAY_C160: (5, 6)}
+          LAY_LIN320: (5, 6), LAY_MODEX: (1, 1), LAY_C160: (5, 6),
+          LAY_TXT: (5, 3),              # TXT's is a CELL's: 8 x 2 of 640 x 200
+          LAY_TEXT: (5, 12)}            # ...and TEXT's too: 8 x 8 of it
 # a byte is a PIXEL on a VGA8 layout and eight of them on the others - and
 # on MODEX a byte of each of four planes, so a plane row's byte is 4 pixels
 PIX_PER_BYTE = {LAY_CGA: 8, LAY_HERC: 8, LAY_LIN80: 8, LAY_LIN320: 1,
-                LAY_MODEX: 4, LAY_C160: 2}
+                LAY_MODEX: 4, LAY_C160: 2, LAY_TXT: 1,   # (TXT: a byte a byte;
+                LAY_TEXT: 1}
+                                                  # a CELL is two of them)
 CGA4_ASPECT = (5, 6)            # mode 4's pixel: 320 x 200 on a 4:3 tube
 # CGA4's PALETTE (98.1.3.3), slot byte 54: bits 0-3 the background, any of
 # the sixteen; bit 4 the intensity of the other three; bit 5 the palette
 # (0 green, red, brown; 1 cyan, magenta, white); bit 6 mode 5's third
 # (cyan, red, white), bit 5 then 0. Bit 7 is refused
 R_CGAPAL = 54
+# ...and C512's CARD (98.1.3.5), the same byte: the composite output it was
+# made for - 0 IBM's old CGA, 1 the new (1985) one, 2 chosen for both
+CARD_OLD, CARD_NEW, CARD_BOTH = 0, 1, 2
+CARD_BY_NAME = {"old": CARD_OLD, "new": CARD_NEW, "both": CARD_BOTH}
+CARD_NAMES = {v: k for k, v in CARD_BY_NAME.items()}
 CGA4_SETS = {0: (2, 4, 6), 1: (3, 5, 7), 2: (3, 4, 7)}
+# ...and TEXT's COLOUR (98.1.3.6), the same byte: 0 MONO - the three
+# attributes an MDA draws as a colour card does, 07h, 0Fh and 70h, so it
+# plays on every adapter - or 1 COLOUR, sixteen foregrounds on sixteen
+# backgrounds, blink off: a CGA, an EGA or a VGA
+TEXT_MONO, TEXT_COLOUR = 0, 1
+TEXT_MONO_ATTRS = (0x07, 0x0F, 0x70)
 
 
 def cga4_colours(sel):
@@ -764,6 +834,46 @@ def cga4_mono(cv, wb, h, sel):
             v = (cv[y * wb + x // 4] >> (6 - 2 * (x & 3))) & 3
             if lv[v] > by[x & 3]:
                 out[y * (wb // 2) + x // 8] |= 0x80 >> (x & 7)
+    return bytes(out)
+
+
+def c512_mono(cv, wb, h):
+    """A C512 canvas (wb bytes a row, character then attribute) as the
+    Preview's one-bit picture: its ATTRIBUTES' C160 poster (98.4.6) - a
+    cell's two nibbles are the colours its pattern mixes"""
+    return c160_mono(b"".join(bytes(cv[y * wb + 1:(y + 1) * wb:2])
+                              for y in range(h)), wb // 2, h)
+
+
+def text_mono(cv, wb, h, font=None):
+    """A TEXT canvas (wb bytes a row, character then attribute) as the
+    Preview's one-bit picture (98.4.6): every cell FOUR pixels wide and
+    four rows tall - wb / 4 bytes a row, h x 4 rows, the half size C160's
+    poster is - each quarter of it lit by its quadrant's share of the
+    glyph between the attribute's two colours, against the 4 x 4 Bayer
+    cell. The player's vp_tmono. `font` is {code: 8 rows} for 32..126, the
+    machine's (OSAPI_FONT_GLYPHS); the model's when None"""
+    import os88txtfont
+    lum = c16_lum16()
+    cells = wb // 2
+    ob = wb // 4
+    out = bytearray(ob * h * 4)
+    q = {}
+    for y in range(h):
+        for x in range(cells):
+            ch, at = cv[y * wb + 2 * x], cv[y * wb + 2 * x + 1]
+            if ch not in q:
+                q[ch] = os88txtfont.quads(ch, font)
+            qs = q[ch]
+            fg, bg = lum[at & 15], lum[at >> 4]
+            for sub in range(4):
+                by = BAYER4[sub * 4:sub * 4 + 4]
+                row = (y * 4 + sub) * ob
+                for sx in range(4):
+                    n = qs[(sub >> 1) * 2 + (sx >> 1)]
+                    if (bg * (16 - n) + fg * n) >> 4 > by[sx]:
+                        px = x * 4 + sx
+                        out[row + px // 8] |= 0x80 >> (px & 7)
     return bytes(out)
 
 
@@ -830,6 +940,34 @@ CYC_FRAME, CYC_SEG, CYC_ABS = 1214, 215, 14
 CYC_P = (49.6, 65.2, 89.1, 104.8, 125.5, 146.1)
 CYC_SLICE = (84, 18.0)          # base, per byte
 CYC_RUN = (101, 13.0)
+# ...and a layout whose decoder is not that one. C160 (98.3.12.1) is written
+# straight to the text screen, a cell's attribute at every other address:
+# FITTED on MartyPC's CGA 5150 by `tools/os88vidprof.py --cal` over 149
+# frames of camera footage (residual 0.6%). Before it the file was decoded
+# into a shadow and copied, and this model priced the decode alone - a
+# quarter of what the play really cost (VIDEO-PLAN 15.8)
+CYC_LAYOUT = {
+    6: dict(frame=CYC_FRAME, seg=242, abs=27,
+            p=(58.5, 86.3, 120.4, 141.3, 180.9, 209.0),
+            slice=(188, 33.9), run=(83, 25.8)),
+}
+# TXT (C512, 98.1.3.5) is vd_native onto the SAME text screen, so until
+# `os88vidprof.py --cal` fits its own it is priced at C160's constants: the
+# 80-column screen's wait states are most of either, and C160's also pay an
+# `inc di` a byte that TXT does not, which errs on the side of a frame kept
+CYC_LAYOUT[7] = dict(CYC_LAYOUT[6])
+# TEXT (98.1.3.6) is the same decoder onto the same kind of screen, not
+# retimed: TXT's constants, until --cal fits its own
+CYC_LAYOUT[8] = dict(CYC_LAYOUT[7])
+
+
+def cyc_table(layout=None):
+    """The model's constants for a layout's decoder: (frame, seg, abs, P,
+    SLICE, RUN)"""
+    t = CYC_LAYOUT.get(layout)
+    if t is None:
+        return CYC_FRAME, CYC_SEG, CYC_ABS, CYC_P, CYC_SLICE, CYC_RUN
+    return t["frame"], t["seg"], t["abs"], t["p"], t["slice"], t["run"]
 HZ = 4772727.0
 
 
@@ -1160,22 +1298,64 @@ def write_whole(path, data):
     os.replace(part, path)
 
 
+H_RING = 23             # the header's byte: the ring the stream assumes
+RING_SLOTS = (0, 2, 4, 8)   # ...0 or a power of two to the player's most
+SLOT = 32768
+
+
+def ring_for(reserve):
+    """The ring slots a disk reserve of `reserve` bytes needs: what it
+    banks is read ahead of the slot being decoded, so the reserve and one
+    slot more, as a power of two - None if no ring holds it"""
+    for k in RING_SLOTS[1:]:
+        if (k - 1) * SLOT >= reserve:
+            return k
+    return None
+
+
 class Writer:
     """Collects a stream frame by frame and writes SPEC.md 98.1's file."""
 
     def __init__(self, g, rate, spf, audio_fmt, abytes, pixfmt, title="",
                  credits="", aspect=None, keysecs=KEY_SECS, palette=None,
                  rowscale=1, flip=False, loop=None, repeat=False,
-                 cgapal=None):
-        if (pixfmt == PF_CGA4) != (cgapal is not None):
-            raise V88Error("a CGA4 file carries its palette byte, and no "
-                           "other file carries one")
+                 cgapal=None, spk=False):
+        if spk and audio_fmt != AUD_PCM8:
+            raise V88Error("speaker counts are PCM8's (98.1.1.3)")
+        if spk:
+            spk_table(rate)
+        self.spk = spk
+        if (pixfmt in (PF_CGA4, PF_C512, PF_TEXT)) != (cgapal is not None):
+            raise V88Error("a CGA4 file carries its palette byte, a C512 "
+                           "file its card and a TEXT file its colour, and "
+                           "no other file any of them")
+        if pixfmt == PF_TEXT:
+            if cgapal not in (TEXT_MONO, TEXT_COLOUR):
+                raise V88Error("a TEXT colour byte of %r: 0 mono, 1 colour"
+                               % (cgapal,))
+            if g.wb % 4:
+                raise V88Error("TEXT is an even number of whole cells")
+        if pixfmt == PF_C512:
+            if cgapal not in CARD_NAMES:
+                raise V88Error("a C512 card of %r: 0 old, 1 new, 2 both"
+                               % (cgapal,))
+            if g.layout != LAY_TXT or g.wb % 4:
+                raise V88Error("C512 is the text-80x100 layout's, an even number "
+                               "of whole cells")
         if pixfmt == PF_CGA4:
             cga4_colours(cgapal)
             if g.layout != LAY_CGA:
                 raise V88Error("CGA4 is mode 4's: the cga layout")
         if (pixfmt == PF_C160) != (g.layout == LAY_C160):
             raise V88Error("C160 is the c160 layout's, and it takes nothing "
+                           "else")
+        if (pixfmt == PF_C512) != (g.layout == LAY_TXT):
+            raise V88Error("C512 is the text-80x100 layout's, and it takes "
+                           "nothing "
+                           "else")
+        if (pixfmt == PF_TEXT) != (g.layout == LAY_TEXT):
+            raise V88Error("TEXT is the text-80x25 layout's, and it takes "
+                           "nothing "
                            "else")
         self.cgapal = cgapal
         if flip and g.layout != LAY_MODEX:
@@ -1340,11 +1520,13 @@ class Writer:
             raise V88Error("--poster %d: there are %d keyframes" % (poster, nk))
         hdr = bytearray(SECTOR)
         hdr[0:4] = V88_SIG
-        flags = (F_LOOPREC if seam else 0) | (F_REPEAT if self.repeat else 0)
+        flags = (F_LOOPREC if seam else 0) | (F_REPEAT if self.repeat else 0) \
+            | (F_SPKPWM if self.spk else 0)
         struct.pack_into("<HHIHHBBH", hdr, 4, 1, flags, len(self.recs),
                          self.rate,
                          self.spf, self.audio_fmt, 1, self.abytes)
         struct.pack_into("<HB", hdr, 20, *pit_rate(self.rate, self.spf))
+        hdr[H_RING] = getattr(self, "ring", 0)
         for off, size, text in ((32, 48, self.title), (80, 96, self.credits)):
             t = text.encode("ascii", "replace")[:size - 1]
             hdr[off:off + len(t)] = t
@@ -1371,9 +1553,106 @@ class Writer:
                     seam=len(seam))
 
 
+def blit_cost(rows, nbytes, planes=1):
+    """The model's cycles for one blit of `rows` rows of `nbytes` bytes - of
+    each of `planes` bit-planes, for a VGA4 shadow (98.3.10.4)"""
+    return BLIT_CALL + rows * planes * (BLIT_ROW + nbytes * BLIT_BYTE)
+
+
+def lists_end(rec, g):
+    """The offset past a record's lists - its ten, or a planar record's
+    sub-records and the 0 after them"""
+    if g.planes == 1:
+        return walk_lists(bytearray(65536), rec, REC_HDR)
+    si = REC_HDR
+    while rec[si]:
+        si = walk_lists(bytearray(65536), rec, si + 1)
+    return si + 1
+
+
+def live_runs(rec, g):
+    """98.1.3.4: the rectangles a Live frame record writes, as its BLIT RUNS
+    - rows [y, y + n) at bytes [x, x + w) - each row's written bytes, and a
+    run grown down onto the next written row when one blit of the union
+    costs the model less than two. Every write lies inside a run"""
+    rows = {}
+
+    def write(k, di, m):
+        for a in range(di, di + m):
+            y = g.rowof[a]
+            x = a - g.base[y]
+            lo, hi = rows.get(y, (x, x + 1))
+            rows[y] = (min(lo, x), max(hi, x + 1))
+    if g.planes == 1:
+        walk_lists(bytearray(65536), rec, REC_HDR, write)
+    else:                       # VGA4 (98.1.3.2): every sub-record's writes,
+        si = REC_HDR            # a byte column the four planes share
+        while rec[si]:
+            si = walk_lists(bytearray(65536), rec, si + 1, write)
+    pl = g.planes
+    runs = []
+    for y in sorted(rows):
+        lo, hi = rows[y]
+        if runs:
+            a, b, rlo, rhi = runs[-1]
+            ml, mh = min(lo, rlo), max(hi, rhi)
+            if blit_cost(y + 1 - a, mh - ml, pl) <= \
+                    blit_cost(b - a, rhi - rlo, pl) + blit_cost(1, hi - lo, pl):
+                runs[-1] = (a, y + 1, ml, mh)
+                continue
+        runs.append((y, y + 1, lo, hi))
+    while len(runs) > RUNS_MAX:         # the cheapest pair merged, again
+        best = None
+        for i in range(len(runs) - 1):
+            a, b, l0, h0 = runs[i]
+            c, d, l1, h1 = runs[i + 1]
+            m = blit_cost(d - a, max(h0, h1) - min(l0, l1), pl) - \
+                blit_cost(b - a, h0 - l0, pl) - \
+                blit_cost(d - c, h1 - l1, pl)
+            if best is None or m < best[0]:
+                best = (m, i)
+        i = best[1]
+        a, b, l0, h0 = runs[i]
+        c, d, l1, h1 = runs.pop(i + 1)
+        runs[i] = (a, d, min(l0, l1), max(h0, h1))
+    return runs
+
+
+def with_runs(rec, g):
+    """A Live frame record with its runs after its lists (it has no audio:
+    a resident file's sound is a block of its own)"""
+    runs = live_runs(rec, g)
+    out = bytearray(rec)
+    out.append(len(runs))
+    for a, b, lo, hi in runs:
+        out += bytes([a, b - a, lo, hi - lo])
+    struct.pack_into("<H", out, 0, len(out))
+    return bytes(out)
+
+
+def runs_of(rec, end, g):
+    """(runs, the offset past them) of a record whose lists end at `end` -
+    each checked against the canvas (98.1.6)"""
+    if end >= len(rec):
+        raise V88Error("a record's runs are missing")
+    n = rec[end]
+    if n > RUNS_MAX:
+        raise V88Error("%d blit runs: %d at most" % (n, RUNS_MAX))
+    if end + 1 + 4 * n > len(rec):
+        raise V88Error("a record's runs run off its end")
+    runs = []
+    for i in range(n):
+        y, ny, x, nx = rec[end + 1 + 4 * i:end + 5 + 4 * i]
+        if not ny or not nx or y + ny > g.h or x + nx > g.wb:
+            raise V88Error("a blit run %d+%d x %d+%d outside the %d x %d "
+                           "canvas" % (y, ny, x, nx, g.wb, g.h))
+        runs.append((y, y + ny, x, x + nx))
+    return runs, end + 1 + 4 * n
+
+
 def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
                    title="", credits="", repeat=False, pack=PK_LZB,
-                   posters=None, live=None, targets=None):
+                   posters=None, live=None, targets=None, spk=False):
     """A RESIDENT file (98.1.7): one rendition per Writer - each made SILENT
     at the file's rate, with the file's loop if it has one - its records one
     block, packed on its own; the sound one audio block for them all. The
@@ -1390,9 +1669,6 @@ def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
             raise V88Error("the renditions differ in rate, frames or loop")
         if w.abytes:
             raise V88Error("a resident rendition's records carry no audio")
-    if audio_fmt == AUD_ADPCM4:
-        raise V88Error("a resident file's sound is PCM8 or none: ADPCM4 "
-                       "needs a reference byte per seek (98.1.1.1)")
     if len(audio) != n * abytes:
         raise V88Error("%d bytes of sound for %d frames of %d"
                        % (len(audio), n, abytes))
@@ -1406,25 +1682,34 @@ def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
                 any(t not in TARGETS.values() for t in targets):
             raise V88Error("a target of 1 to 3 for every rendition")
     if live is not None:
-        # 98.3.10: one target a rendition, and each a one-bit LIN80 canvas -
-        # the shadow the worker blits is laid out as the band GFX_BLIT1 takes
+        # 98.3.10: one target a rendition, and each a LIN80 canvas - the
+        # shadow the worker blits is laid out as the band GFX_BLIT1 takes,
+        # or for VGA4 (98.3.10.4) as the four planes GFX_BLITP takes
         if len(live) != len(writers):
             raise V88Error("a live file names a target for every rendition")
         for w, t in zip(writers, live):
-            if w.g.layout != LAY_LIN80 or w.pixfmt != PF_MONO1 or \
-                    t not in TARGETS.values():
+            if w.g.layout != LAY_LIN80 or t not in TARGETS.values() or \
+                    w.pixfmt not in (PF_MONO1, PF_VGA4) or \
+                    (w.pixfmt == PF_VGA4 and t != TARGETS["vga"]):
                 raise V88Error("a live rendition is a MONO1 LIN80 canvas "
-                               "with a target of 1 to 3")
+                               "with a target of 1 to 3, or a VGA4 one "
+                               "for VGA")
 
     def packed(data):
-        """(bytes, packing): stored when packing would not make it smaller"""
-        if pack == PK_NONE:
+        """(bytes, packing): stored when packing would not make it smaller,
+        or when the block is past what a PACKED block may be (98.1.7.1) -
+        a stored one is any size under 1 MB"""
+        if len(data) > BLK_STORED_MAX:
+            raise V88Error("a block of %d bytes: a resident block is under "
+                           "1 MB" % len(data))
+        if pack == PK_NONE or len(data) > BLK_UNPACKED_MAX:
             return data, PK_NONE
         try:
             p = os88lz.compress(data, pack - 1)
         except ValueError:              # (incompressible: no tail fits T)
             return data, PK_NONE
-        return (p, pack) if len(p) < len(data) else (data, PK_NONE)
+        return (p, pack) if len(p) < len(data) and \
+            len(p) <= BLK_PACKED_MAX else (data, PK_NONE)
 
     def pad(b):
         return b + bytes(-len(b) % SECTOR)
@@ -1434,6 +1719,11 @@ def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
     slots, sizes = [], []
     for ri, w in enumerate(writers):
         g = w.g
+        recs = w.recs
+        if live is not None:            # 98.1.3.4: every frame record, and
+            if g.h > 255 or g.wb > 255:     # the seam, with its blit runs
+                raise V88Error("a live canvas is at most 255 rows and bytes")
+            recs = [with_runs(r, g) for r in recs]
         pal = 0
         if w.palette:
             pal = base + len(body)
@@ -1444,7 +1734,24 @@ def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
                 raise V88Error("a loop from frame %d of %d" % (loop, n))
             seam = record(seam_ops(w.last, w.loop_surf, g), g, b"",
                           limit=65535)
+            if live is not None:
+                seam = with_runs(seam, g)
         keys = w.keys
+        if audio_fmt == AUD_ADPCM4:
+            # 98.1.7.2: each key record carries the card's REFERENCE after
+            # its lists, as a streamed one does (98.1.1.1) - the sample the
+            # decoder holds at frame k+1, its scale steered to 0 there
+            st = adpcm4_trace(audio)
+            kk = []
+            for k, r, c in keys:
+                ref, sc = st[(k + 1) * abytes] if k + 1 < n else st[-1]
+                if sc:
+                    raise V88Error("the ADPCM4 sound's scale is %d at frame "
+                                   "%d, where keyframe %d's seek starts; "
+                                   "encode it with audio_chunks(keys=)"
+                                   % (sc, k + 1, k))
+                kk.append((k, r + bytes([ref]), c))
+            keys = kk
         nk = len(keys)
         ktab = base + len(body) if nk else 0
         kt = bytearray()
@@ -1455,12 +1762,8 @@ def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
             kr += r
         if nk:
             body += pad(bytes(kt)) + pad(bytes(kr))
-        blk = b"".join(w.recs) + seam
+        blk = b"".join(recs) + seam
         pb, bpk = packed(blk)
-        if len(pb) > 61440 or len(blk) > 0x1FFF0:
-            raise V88Error("rendition %d's block is %d bytes, %d packed: a "
-                           "block is under 128 KB and reads in under 60 KB"
-                           % (ri, len(blk), len(pb)))
         boff = base + len(body)
         body += pad(pb)
         poster = posters[ri] if posters else None
@@ -1468,23 +1771,21 @@ def write_resident(path, writers, audio_fmt=AUD_NONE, abytes=0, audio=b"",
             poster = next((i for i, (k, r, c) in enumerate(keys)
                            if not flat(c)), 0 if nk else 0xFFFF)
         slots.append((w, ktab, nk, poster, len(blk), boff, len(pb), bpk, pal,
-                      max(len(r) for r in w.recs),
+                      max(len(r) for r in recs),
                       max((len(r) for k, r, c in keys), default=0)))
         sizes.append((len(blk), len(pb)))
     aoff = apk = 0
     if audio:
-        if len(audio) > 0x1FFF0:
-            raise V88Error("%d bytes of sound: a block is under 128 KB"
-                           % len(audio))
         apk, apack = packed(audio)
-        if len(apk) > 61440:
-            raise V88Error("the sound packs to %d bytes: a block reads in "
-                           "under 60 KB" % len(apk))
         aoff = base + len(body)
         body += pad(apk)
     hdr[0:4] = V88_SIG
     flags = F_RESIDENT | (F_LOOPREC if loop is not None else 0) | \
-        (F_REPEAT if repeat else 0) | (F_LIVE if live is not None else 0)
+        (F_REPEAT if repeat else 0) | \
+        (F_LIVE | F_RUNS if live is not None else 0) | \
+        (F_SPKPWM if spk else 0)
+    if spk and audio_fmt != AUD_PCM8:
+        raise V88Error("speaker counts are PCM8's (98.1.1.3)")
     struct.pack_into("<HHIHHBBH", hdr, 4, 1, flags, n, w0.rate, w0.spf,
                      audio_fmt, len(writers), abytes)
     struct.pack_into("<HB", hdr, 20, *pit_rate(w0.rate, w0.spf))
@@ -1603,6 +1904,14 @@ class Reader:
         if self.abytes != want[self.audio]:
             raise V88Error("%d audio bytes a frame with format %d and %d "
                            "samples" % (self.abytes, self.audio, self.spf))
+        # THE RING THE STREAM ASSUMES (98.1.1): the slots of read-ahead
+        # its bursts are banked in, a power of two the player's own; 0 says
+        # nothing, and a RESIDENT file has no ring
+        self.ring = d[H_RING]
+        if self.ring not in RING_SLOTS or \
+                (self.ring and flags & F_RESIDENT):
+            raise V88Error("a ring of %d slots%s" % (
+                self.ring, " in a RESIDENT file" if self.ring else ""))
         self.pitdiv, self.pitper = struct.unpack_from("<HB", d, 20)
         if (self.pitdiv, self.pitper) != pit_rate(self.rate, self.spf):
             raise V88Error("PIT divisor %d x %d for %d Hz / %d; it should be "
@@ -1619,6 +1928,15 @@ class Reader:
         self.rend, self.slot = rend, 192 + 64 * rend
         self.resident = bool(flags & F_RESIDENT)
         self.live = bool(flags & F_LIVE)
+        self.runs = bool(flags & F_RUNS)
+        self.spk = bool(flags & F_SPKPWM)
+        if self.spk and self.audio != AUD_PCM8:
+            raise V88Error("speaker counts in a file whose audio is not "
+                           "PCM8 (98.1.1.3)")
+        if self.spk:
+            spk_table(self.rate)
+        if self.runs and not self.live:
+            raise V88Error("blit runs in a file that is not LIVE (98.1.3.4)")
         self.target = d[self.slot + R_TARGET]
         if self.live and not self.resident:
             raise V88Error("a LIVE file is RESIDENT (98.3.10)")
@@ -1637,8 +1955,26 @@ class Reader:
         if (self.pixfmt == PF_C160) != (layout == LAY_C160):
             raise V88Error("pixel format %d on layout %d: C160 is the c160 "
                            "layout's, and only its" % (self.pixfmt, layout))
+        if (self.pixfmt == PF_C512) != (layout == LAY_TXT):
+            raise V88Error("pixel format %d on layout %d: C512 is the "
+                           "text-80x100 layout's, and only its" % (self.pixfmt, layout))
+        if (self.pixfmt == PF_TEXT) != (layout == LAY_TEXT):
+            raise V88Error("pixel format %d on layout %d: TEXT is the "
+                           "text-80x25 layout's, and only its" % (self.pixfmt, layout))
         self.cgapal = d[self.slot + R_CGAPAL]
-        if self.pixfmt == PF_CGA4:
+        if self.pixfmt == PF_C512:
+            if self.cgapal not in CARD_NAMES:
+                raise V88Error("a C512 card byte of %d" % self.cgapal)
+            if wb % 4:
+                raise V88Error("a C512 canvas of %d bytes: an even number "
+                               "of whole cells" % wb)
+        elif self.pixfmt == PF_TEXT:
+            if self.cgapal not in (TEXT_MONO, TEXT_COLOUR):
+                raise V88Error("a TEXT colour byte of %d" % self.cgapal)
+            if wb % 4:
+                raise V88Error("a TEXT canvas of %d bytes: an even number "
+                               "of whole cells" % wb)
+        elif self.pixfmt == PF_CGA4:
             cga4_colours(self.cgapal)
         elif self.cgapal:
             raise V88Error("a CGA palette byte in a %s file"
@@ -1757,6 +2093,7 @@ class Reader:
         seens = [bytearray(65536) for _ in range(g.planes)]
         wrote = [0]
         plane = [0]
+        writes = []
 
         def write(k, di, m):
             seen = seens[plane[0]]
@@ -1770,6 +2107,7 @@ class Reader:
                 raise V88Error("two writes overlap at %04x" % di)
             seen[di:di + m] = b"\x01" * m
             wrote[0] += m
+            writes.append((di, m))
         if g.planes == 1:
             end = walk_lists(surf, rec, REC_HDR, write if check else None)
         else:                       # 98.1.3.1: a Map Mask, then its lists
@@ -1790,6 +2128,17 @@ class Reader:
                                          si, write if check else None)
                 si = end
             end = si
+        if self.runs and not key:      # 98.1.3.4: the blit runs, and every
+            runs, end = runs_of(rec, end, g)    # write inside one of them
+            if check:
+                for di, m in writes:
+                    for a in range(di, di + m):
+                        y = g.rowof[a]
+                        x = a - g.base[y]
+                        if not any(r0 <= y < r1 and x0 <= x < x1
+                                   for r0, r1, x0, x1 in runs):
+                            raise V88Error("a write at %04x is in no blit run"
+                                           % a)
         tail = len(rec) - end
         want = (1 if self.audio == AUD_ADPCM4 else 0) if key else self.abytes
         if tail != want:
@@ -1802,8 +2151,12 @@ class Reader:
         """A block: its four fields at `at`, read and expanded"""
         off, packed, unpacked, pk = struct.unpack_from("<IIIB", self.d, at)
         data = self.d[off:off + packed]
-        if len(data) != packed or pk not in (PK_NONE, PK_LZ4, PK_LZB) or \
-                packed >= 65536:
+        # 98.1.7.1: PACKED, one read of under 60 KB into under 128 KB (the
+        # kernel's decompressor takes its input in one segment); STORED, any
+        # size under 1 MB, read in pieces - memory is the bound
+        big = packed > BLK_PACKED_MAX or unpacked > BLK_UNPACKED_MAX \
+            if pk != PK_NONE else packed != unpacked or packed > BLK_STORED_MAX
+        if len(data) != packed or pk not in (PK_NONE, PK_LZ4, PK_LZB) or big:
             raise V88Error("the %s block at %d (%d bytes, packing %d) does "
                            "not fit" % (what, off, packed, pk))
         if pk == PK_NONE:
@@ -1922,24 +2275,26 @@ def set_poster(path, frame):
     return posters
 
 
-def cycles_of(rec, planar=False):
+def cycles_of(rec, planar=False, layout=None):
     """The wave 0 model's cycles for one record, writing CGA's screen: the
     frame's fixed cost, a set-up per skip segment, each entry by its list,
     and an absolute entry's extra address. A MODEX record's sub-records
-    are decoded once each whatever their mask, and pay an OUT"""
-    c = [CYC_FRAME]
+    are decoded once each whatever their mask, and pay an OUT. `layout`
+    picks another decoder's constants (CYC_LAYOUT)"""
+    fr, sg, ab, cp, csl, crn = cyc_table(layout)
+    c = [fr]
 
     def write(k, di, m):
-        c[0] += CYC_ABS if mode[0] else 0
+        c[0] += ab if mode[0] else 0
         if k <= L_P6:
-            c[0] += CYC_P[k]
+            c[0] += cp[k]
         elif k in (L_SLICE, L_SLICEL):
-            c[0] += CYC_SLICE[0] + CYC_SLICE[1] * m
+            c[0] += csl[0] + csl[1] * m
         else:
-            c[0] += CYC_RUN[0] + CYC_RUN[1] * m
+            c[0] += crn[0] + crn[1] * m
 
     def seg(absolute):
-        c[0] += 0 if absolute else CYC_SEG
+        c[0] += 0 if absolute else sg
         mode[0] = absolute
     mode = [False]
     if not planar:
@@ -2233,12 +2588,13 @@ def _adpcm4_tables():
     return _A4
 
 
-def _adpcm4_viterbi(pcm, start, zeros, chunk=2048):
+def _adpcm4_viterbi(pcm, start, zeros, chunk=2048, end=None):
     """(nibbles, states) for PCM8 `pcm`: the least-squared-error path, from
     the state `start` (sample + 256 x scale/16), or from ANY state when it
-    is None. states[k] is the decoder's state after sample k. A decision is
-    committed where every live state's survivor agrees, so the memory is a
-    window and not the stream."""
+    is None - and, with `end`, the best path that FINISHES in that state
+    (a resident file's lap join, 98.1.7.2). states[k] is the decoder's state
+    after sample k. A decision is committed where every live state's
+    survivor agrees, so the memory is a window and not the stream."""
     import numpy as np
     T = _adpcm4_tables()
     idx, nibt, gidx, sq = T["idx"], T["nibt"], T["gidx"], T["sq"]
@@ -2293,7 +2649,13 @@ def _adpcm4_viterbi(pcm, start, zeros, chunk=2048):
             if path is not None:    # decided before `path`: drop it
                 win[1] = win[1][path - win[0]:]
                 win[0] = path
-    trace(n, np.array([int(cost[:1024].argmin())]), False)
+    if end is not None:
+        if cost[end] >= INF:
+            raise V88Error("ADPCM4: no path ends in state %d (sample %d, "
+                           "scale %d)" % (end, end % 256, 16 * (end // 256)))
+        trace(n, np.array([end]), False)
+    else:
+        trace(n, np.array([int(cost[:1024].argmin())]), False)
     return nibs, states
 
 
@@ -2369,6 +2731,32 @@ def adpcm4_search(pcm, ref=ADPCM4_REF, scale=0, zeros=(), jobs=1,
     return out
 
 
+def adpcm4_join(data, pcm, target, zeros=(), after=0, tail=8192):
+    """A RESIDENT file's lap join made exact (98.1.7.2): `data` (the ADPCM4
+    of `pcm`, from 80h at scale 0) with its last samples searched again so
+    the decoder ENDS in `target`, a (sample, scale) - the state the player's
+    join continues from. Only the tail after sample `after` (and the last
+    `tail` samples) is changed, so a state the target was read before it
+    stands. `zeros` as adpcm4_encode's"""
+    n = len(pcm)
+    c = max(after, n - tail)
+    c += c % 2
+    if c >= n:
+        raise V88Error("ADPCM4: no samples after %d to steer the join with"
+                       % after)
+    st = adpcm4_trace(data[:c // 2])
+    r0, q0 = st[-1]
+    nibs, _ = _adpcm4_viterbi(bytes(pcm[c:]), (q0 // 16) * 256 + r0,
+                              [z - c for z in zeros if c < z <= n],
+                              end=(target[1] // 16) * 256 + target[0])
+    out = bytes(data[:c // 2]) + bytes(
+        (int(nibs[i]) << 4) | int(nibs[i + 1]) for i in range(0, n - c, 2))
+    if adpcm4_trace(out)[-1] != tuple(target):
+        raise V88Error("ADPCM4: the join ends at %s, not %s"
+                       % (adpcm4_trace(out)[-1], target))
+    return out
+
+
 def adpcm4_trace(data, ref=ADPCM4_REF, scale=0):
     """The decoder's (sample, scale) before each byte of `data`, and after
     the last: [i] is the state a card started at byte i must be in"""
@@ -2387,12 +2775,19 @@ def key_frames(nf, keyint, first=0):
     return list(range(first, nf, keyint))
 
 
-def audio_chunks(pcm, nf, spf, afmt, keys=(), search=0):
+def audio_chunks(pcm, nf, spf, afmt, keys=(), search=0, join=None):
     """A stream's PCM8 cut into the frames' audio parts in format afmt: PCM8
     a sample a byte, or ADPCM4 encoded ONCE across the whole stream - its
     state runs on from frame to frame, the reference byte being the
     player's (SPEC.md 98.1.1) - with the scale steered to 0 at frame k+1 of
-    every keyframe k in `keys`, where a seek starts the card afresh"""
+    every keyframe k in `keys`, where a seek starts the card afresh.
+
+    `join` is a RESIDENT file's lap (98.1.7.2), and ends the stream in the
+    state the player's join continues from: "start" - the join queues a
+    frame of silence (nibbles of 0) and then frame 0, which was encoded from
+    80h at scale 0, so the stream ends THERE - or an int L, the seam, which
+    queues frame L's sound and goes on, so it ends in the state before
+    frame L's."""
     pcm = bytes(pcm[:nf * spf]) + b"\x80" * max(0, nf * spf - len(pcm))
     if afmt == AUD_ADPCM4:
         if spf % 2:
@@ -2403,6 +2798,13 @@ def audio_chunks(pcm, nf, spf, afmt, keys=(), search=0):
         data = adpcm4_search(pcm, zeros=zs, jobs=search) if search \
             else adpcm4_encode(pcm, zeros=zs)
         n = spf // 2
+        if join is not None:
+            if join == "start":
+                target, after = (ADPCM4_REF, 0), 0
+            else:
+                target = adpcm4_trace(data[:join * n])[-1]
+                after = (join + 1) * spf
+            data = adpcm4_join(data, pcm, target, zs, after)
     else:
         data, n = pcm, spf
     return [data[f * n:(f + 1) * n] for f in range(nf)]
@@ -2410,8 +2812,10 @@ def audio_chunks(pcm, nf, spf, afmt, keys=(), search=0):
 
 def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
                   keysecs=KEY_SECS, poster=None, audio_fmt=AUD_PCM8,
-                  loop=None, repeat=False, resident=None, live=None):
+                  loop=None, repeat=False, resident=None, live=None,
+                  spk=False):
     """SPEC.md 98.2's minimal encoder: every changed byte, losslessly.
+    `spk` stores PCM8 as the speaker's counts (98.1.1.3)
     `live` (cga, herc, vga) makes the resident file LIVE for that screen
     (98.3.10) - the layout must be lin80"""
     lay = LAYOUT_BY_NAME[layout]
@@ -2428,7 +2832,11 @@ def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
             spf += spf % 2              # two samples a byte: the frame rate
             abytes = spf // 2           # moves by a hair to keep it even
         chunks = audio_chunks(samples, len(paths), spf, afmt, key_frames(
-            len(paths), max(1, round(keysecs * rate / spf))))
+            len(paths), max(1, round(keysecs * rate / spf))),
+            join=(loop if loop is not None else "start")
+            if resident is not None and afmt == AUD_ADPCM4 else None)
+        if spk:
+            chunks = [spk_counts(c, rate) for c in chunks]
     else:
         rate, spf, afmt, abytes = max(1, round(fps * 100)), 100, AUD_NONE, 0
         samples = b""
@@ -2438,7 +2846,8 @@ def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
     if resident is not None:            # 98.1.7: silent records, the sound
         rab = 0                         # one block beside them
     wr = Writer(g, rate, spf, afmt if rab else AUD_NONE, rab, PF_MONO1,
-                title=title, keysecs=keysecs, loop=loop, repeat=repeat)
+                title=title, keysecs=keysecs, loop=loop, repeat=repeat,
+                spk=spk and bool(rab))
     surf = bytearray(65536)
     for f, path in enumerate(paths):
         w, h, cv = read_frame(path)
@@ -2460,7 +2869,8 @@ def encode_frames(paths, out, fps, wav=None, layout="cga", title="",
                               b"".join(chunks) if abytes else b"",
                               title=title, repeat=repeat, pack=resident,
                               posters=[poster],
-                              live=[TARGETS[live]] if live else None)
+                              live=[TARGETS[live]] if live else None,
+                              spk=spk and bool(abytes))
     return wr.write(out, poster)
 
 
@@ -2547,24 +2957,35 @@ def cmd_info(a):
         r = Reader(path)
         g = r.g
         secs = r.frames / r.fps
-        cyc = [cycles_of(rec, r.g.planes > 1) for rec, at, i in r.records()]
+        cyc = [cycles_of(rec, r.g.planes > 1, r.g.layout)
+               for rec, at, i in r.records()]
         period = HZ / r.fps
         print("%s: '%s'" % (path, r.title))
         if r.credits:
             print("   credits: %s" % r.credits)
         print("   %d frames at %.3f fps (%d Hz / %d), %.1f s; audio %s; "
               "PIT %d x %d" % (r.frames, r.fps, r.rate, r.spf, secs,
-                               {0: "none", 1: "PCM8", 2: "ADPCM4"}[r.audio],
+                               {0: "none", 1: "PCM8", 2: "ADPCM4"}[r.audio]
+                               + (" as speaker counts" if r.spk else ""),
                               r.pitdiv,
                                r.pitper))
         print("   canvas %d x %d%s on %s, %s, aspect %d:%d"
-              % (g.wb * (4 if r.pixfmt == PF_CGA4 else
+              % (g.wb // 2 if r.pixfmt in (PF_C512, PF_TEXT) else
+                 g.wb * (4 if r.pixfmt == PF_CGA4 else
                          PIX_PER_BYTE[g.layout]), g.h,
                  " (each row shown twice)" if r.rowscale > 1 else "",
                  g.name, PF_NAMES[r.pixfmt], *r.aspect))
         if r.pixfmt == PF_CGA4:
             print("   palette %02Xh: colours %s" % (
                 r.cgapal, " ".join(str(c) for c in cga4_colours(r.cgapal))))
+        elif r.pixfmt == PF_TEXT:
+            print("   text mode, %s" % (
+                "colour: a CGA, an EGA or a VGA" if r.cgapal else
+                "mono: any adapter, an MDA or a Hercules too"))
+        elif r.pixfmt == PF_C512:
+            print("   composite, made for %s CGA" % {
+                CARD_OLD: "the OLD", CARD_NEW: "the NEW",
+                CARD_BOTH: "either"}[r.cgapal])
         print("   stream %d bytes = %.1f KB/s; largest super-packet %d "
               "sectors, largest record %d"
               % (r.slen, r.slen / 1024.0 / secs, r.spmax, r.rmax))
@@ -2646,7 +3067,15 @@ def poster(cv, wb, h, scale=2):
 def cmd_decode(a):
     r = Reader(a.file)
     cv = decode_at(r, a.frame)
-    write_png(a.png, r.g.wb, r.g.h, cv)
+    if r.pixfmt == PF_TEXT:             # the cells, in the model's face
+        import numpy as np              # (98.1.3.6): numpy's and PIL's
+        from PIL import Image
+        import os88txtfont
+        rgb = os88txtfont.render(cv, r.g.wb, r.g.h, np.frombuffer(
+            STD16, np.uint8).reshape(16, 3).astype(np.uint16) * 255 // 63)
+        Image.fromarray(rgb).save(a.png)
+    else:
+        write_png(a.png, r.g.wb, r.g.h, cv)
     print("os88vid: frame %d of %s -> %s" % (a.frame, a.file, a.png))
 
 
@@ -2731,6 +3160,17 @@ def verify_v88(path, against=None, rend=None):
                 raise V88Error("keyframe %d's ADPCM4 reference is %d; the "
                                "stream holds %d at scale %d there"
                                % (i, r.d[off + n - 1], want[0], want[1]))
+    if r.resident and r.audio == AUD_ADPCM4:
+        # 98.1.7.2: a RESIDENT file's lap joins EXACTLY - the stream ends in
+        # the state its join continues from: the state before frame L's
+        # sound with a seam, or 80h at scale 0 (a frame of silence, then
+        # frame 0) without one
+        st = adpcm4_trace(r._aud)
+        want = st[r.loop[0] * r.abytes] if r.loop else (ADPCM4_REF, 0)
+        if st[-1] != want:
+            raise V88Error("the ADPCM4 sound ends at sample %d, scale %d; "
+                           "its lap joins at sample %d, scale %d"
+                           % (st[-1] + want))
     if r.loop:
         # 98.1.1.2: the seam takes the last frame's screen to frame L's, with
         # frame L's audio, and the loop block names frame L+1's place
@@ -2917,6 +3357,9 @@ def selfcheck():
                         "runs off the file")
             expect_fail("stale keyframe", out, lambda d: swap_keys(d, r),
                         "is not the screen after frame")
+            expect_fail("a ring no player has", out,
+                        lambda d: d[:H_RING] + b"\x03" + d[H_RING + 1:],
+                        "a ring of 3 slots")
             if wb < LAYOUTS[LAYOUT_BY_NAME[lay]][1]:
                 # keyframe 0's record rewritten as one absolute P1 entry,
                 # aimed one byte past the canvas's first row
@@ -3027,21 +3470,77 @@ def selfcheck():
                                   192 + R_BLOCK)[0]
         expect_fail("damaged block", res, lambda d: d[:boff + 9] +
                     bytes([d[boff + 9] ^ 0x77]) + d[boff + 10:], "")
+        # A LIVE FILE'S BLIT RUNS (98.1.3.4): written, every write in one,
+        # and a run off the canvas, a run short of its writes and RUNS
+        # without LIVE refused
+        gl = Geom(LAY_LIN80, 20, 40)
+        wl = Writer(gl, 1500, 100, AUD_NONE, 0, PF_MONO1)
+        sf = gl.surface()
+        for cv in cvs:
+            ch = []
+            for y, b in enumerate(gl.base):
+                for x in range(20):
+                    if sf[b + x] != cv[y * 20 + x]:
+                        ch.append(b + x)
+                        sf[b + x] = cv[y * 20 + x]
+            wl.frame(spans(ch, sf, gl), sf)
+        lv = os.path.join(tmp, "L.V88")
+        write_resident(lv, [wl], live=[TARGETS["cga"]], pack=PK_NONE)
+        rl = Reader(lv)
+        if verify_v88(lv) != 24 or not rl.runs:
+            fails.append("a live file's runs did not read back")
+        dl = open(lv, "rb").read()
+        boff = struct.unpack_from("<I", dl, 192 + R_BLOCK)[0]
+        r0 = next(rec for rec, _, _ in rl.records())
+        at = boff + walk_lists(bytearray(65536), r0, REC_HDR)
+        expect_fail("blit run off the canvas", lv, lambda d: d[:at + 3] +
+                    b"\x7F" + d[at + 4:], "outside")
+        expect_fail("blit run short of its writes", lv, lambda d: d[:at + 1]
+                    + bytes([d[at + 1], 1, d[at + 3], 1]) + d[at + 5:],
+                    "no blit run")
+        expect_fail("RUNS without LIVE", lv, lambda d: d[:6] +
+                    struct.pack("<H", F_RESIDENT | F_RUNS) + d[8:], "not LIVE")
+        # ...and a VGA4 one (98.3.10.4): its runs cover every plane's
+        # writes, its lists end past the sub-records' 0, and a VGA4 live
+        # rendition for a one-bit screen is refused
+        g4 = Geom(LAY_LIN80, 6, 12, bitplanes=True)
+        w4 = Writer(g4, 1500, 100, AUD_NONE, 0, PF_VGA4)
+        s4, prev = g4.surface(), bytes(g4.w * g4.h)
+        rn4 = random.Random(983104)
+        for f in range(8):
+            cv = bytearray(prev)
+            for _ in range(20):
+                cv[rn4.randrange(len(cv))] = rn4.randrange(16)
+            g4.put(s4, cv)
+            w4.frame(vga4_subs(bytes(cv), prev, g4), s4)
+            prev = bytes(cv)
+        l4 = os.path.join(tmp, "L4.V88")
+        write_resident(l4, [w4], live=[TARGETS["vga"]], pack=PK_NONE)
+        r4 = Reader(l4)
+        if verify_v88(l4) != 8 or not r4.runs or decode_at(r4, 7) != prev:
+            fails.append("a VGA4 live file did not read back")
+        try:
+            write_resident(l4, [w4], live=[TARGETS["cga"]])
+            fails.append("a VGA4 live rendition for CGA was written")
+        except V88Error:
+            pass
         # CGA IN COLOUR (98.1.3.3): a CGA4 file with its palette byte and a
         # C160 one round-trip, and a palette where none belongs, a bad
         # palette byte and C160 on another layout are refused
         rn = random.Random(98133)
         for pf, lay, wb, pal in ((PF_CGA4, LAY_CGA, 10, 0x51),
-                                 (PF_C160, LAY_C160, 12, None)):
-            gg = Geom(lay, wb, 20)
-            cvs2 = [bytes(rn.getrandbits(8) for _ in range(wb * 20))
+                                 (PF_C160, LAY_C160, 12, None),
+                                 (PF_C512, LAY_TXT, 16, CARD_BOTH),
+                                 (PF_TEXT, LAY_TEXT, 16, TEXT_COLOUR)):
+            gg = Geom(lay, wb, 20 if lay != LAY_TEXT else 25)
+            cvs2 = [bytes(rn.getrandbits(8) for _ in range(wb * gg.h))
                     for _ in range(6)]
             out2 = os.path.join(tmp, "C%d.V88" % pf)
             encode_canvases(cvs2, gg, out2, 15.0, pf, keysecs=1.0,
                             cgapal=pal)
             rc = Reader(out2)
             if verify_v88(out2) != 6 or rc.pixfmt != pf or \
-                    (pf == PF_CGA4 and rc.cgapal != pal) or \
+                    (pal is not None and rc.cgapal != pal) or \
                     decode_at(rc, 5) != cvs2[5]:
                 fails.append("a %s file did not read back as written"
                              % PF_NAMES[pf])
@@ -3053,14 +3552,29 @@ def selfcheck():
                     b"\x01" + d[247:], "palette byte")
         expect_fail("C160 on the CGA layout", c16, lambda d: d[:193] +
                     bytes([LAY_CGA]) + d[194:], "C160")
+        c512 = os.path.join(tmp, "C%d.V88" % PF_C512)
+        expect_fail("C512 card byte of 3", c512, lambda d: d[:246] +
+                    b"\x03" + d[247:], "card byte")
+        expect_fail("C512 on the C160 layout", c512, lambda d: d[:193] +
+                    bytes([LAY_C160]) + d[194:], "only its")
+        ctx = os.path.join(tmp, "C%d.V88" % PF_TEXT)
+        expect_fail("TEXT colour byte of 2", ctx, lambda d: d[:246] +
+                    b"\x02" + d[247:], "TEXT colour")
+        expect_fail("TEXT on the text-80x100 layout", ctx, lambda d: d[:193] +
+                    bytes([LAY_TXT]) + d[194:], "only its")
+        cvt = decode_at(Reader(ctx), 5)
+        if len(text_mono(cvt, 16, 25)) != 4 * 25 * 4:
+            fails.append("a TEXT poster is not a cell's four by four")
     for f in fails:
         print("os88vid --selfcheck: FAIL - %s" % f)
     if not fails:
         print("os88vid --selfcheck: ok - encode, import (cga, herc, lin80), "
               "decode and verify agree, ADPCM4 carries a tone and seeks "
               "exactly, a seam joins its laps, a resident file's blocks "
-              "round-trip, CGA4 and C160 round-trip, and ten corruptions "
-              "were refused")
+              "round-trip, CGA4, C160, C512 and TEXT round-trip, a live "
+              "file's blit runs cover its writes, and eighteen corruptions "
+              "were "
+              "refused")
     return 1 if fails else 0
 
 
@@ -3083,14 +3597,16 @@ def main():
     s = sub.add_parser("import", help="XDV -> V88, exactly")
     s.add_argument("src")
     s.add_argument("out")
-    s.add_argument("--target", choices=sorted(LAYOUT_BY_NAME), default="cga")
+    s.add_argument("--target", choices=sorted(LAYOUT_BY_NAME), default="cga",
+                   type=layout_name)
     keyargs(s)
     s = sub.add_parser("encode", help="frames (+ a WAV) -> V88, losslessly")
     s.add_argument("frames", nargs="+")
     s.add_argument("out")
     s.add_argument("--fps", type=float, required=True)
     s.add_argument("--wav")
-    s.add_argument("--layout", choices=sorted(LAYOUT_BY_NAME), default="cga")
+    s.add_argument("--layout", choices=sorted(LAYOUT_BY_NAME), default="cga",
+                   type=layout_name)
     keyargs(s)
     s = sub.add_parser("info")
     s.add_argument("files", nargs="+")

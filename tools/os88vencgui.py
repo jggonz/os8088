@@ -74,6 +74,12 @@ TARGETS = [
      "c160", "5150-st225"),
     ("IBM 5150/XT, CGA on a composite monitor - colour", "cga", "cgacomp",
      "5150-st225"),
+    ("IBM 5150/XT, CGA on a composite monitor - 512 colours, full screen",
+     "c512", "c512", "5150-st225"),
+    ("Any PC - text mode, 16 colours, full screen", "text", "text",
+     "5150-st225"),
+    ("Any PC, Hercules and MDA too - text mode, black and white, full "
+     "screen", "text-mono", "text", "5150-st225"),
     ("IBM 5150/XT, Hercules - black and white", "herc", "mono",
      "5150-st225"),
     ("IBM 5150/XT, a floppy - small and slow", "cga-small", "mono",
@@ -107,10 +113,17 @@ TAB_OF = {
     "vga8_dither": "Colour", "vga8_stable": "Colour",
     "vga4_stable": "Colour", "comp_dither": "Colour",
     "comp_stable": "Colour", "comp_quick": "Colour", "mix": "Colour",
+    "cga_card": "Colour", "c512_dither": "Colour", "c512_stable": "Colour",
+    "c512_mix": "Colour",
+    "text_colour": "Colour", "text_glyphs": "Picture",
+    "text_detail": "Picture", "text_sharpen": "Picture",
+    "text_busy": "Picture", "text_stable": "Picture",
     "levels_mix": "Colour", "flip": "Colour",
     "audio": "Sound", "rate": "Sound", "adpcm": "Sound", "jobs": "Sound",
     "volume": "Sound",
-    "disk": "Budget", "avg": "Budget", "peak": "Budget",
+    "disk": "Budget", "avg": "Budget", "peak": "Budget", "owe": "Budget",
+    "lookahead": "Budget", "error": "Budget", "reserve": "Budget",
+    "aim": "Basic", "worth": "Budget",
     "loop_from": "Loop and keys", "repeat": "Loop and keys",
     "keysecs": "Loop and keys", "poster": "Loop and keys",
     "poster_at": "Loop and keys", "resident": "Loop and keys",
@@ -118,6 +131,12 @@ TAB_OF = {
 }
 # the choices that IMPLY others (os88venc.implied): changing one refills them
 IMPLYING = ("preset", "pixfmt", "profile", "live")
+# a free-text option's COMMON values, offered in an editable list: the sound
+# rate's 5,512 Hz halves the sound's bytes, which is half a Live clip's
+# memory (98.1.7.2) - any other rate can still be typed. Owed time's 0 is
+# OFF, the fixed per-frame ceiling (98.2.1.1)
+SUGGEST = {"rate": ["", "22050", "11025", "5512"],
+           "owe": ["", "0", "1.6"]}
 # what the window runs itself, and so does not offer
 HIDDEN = {"help", "src", "out", "preview_png", "quiet", "profiles",
           "progress"}
@@ -142,10 +161,18 @@ def fields():
             kind=kind,
             default="" if dflt is None or kind == "bool" else str(dflt),
             choices=[""] + [str(c) for c in act.choices]
-            if kind == "choice" else None,
+            if kind == "choice" else SUGGEST.get(act.dest),
             tip=(act.help or "").strip(),
+            help=V.CHOICE_HELP.get(act.dest) if kind == "choice" else None,
             tab=TAB_OF.get(act.dest, "Advanced")))
     return out
+
+
+def choice_lines(f, current=""):
+    """(value, what it is, is it the one chosen) for a choice field, in
+    the field's own order: what its "?" shows (os88venc.CHOICE_HELP)"""
+    return [(c, f["help"].get(c, ""), c == current)
+            for c in f["choices"] if c]
 
 
 def implied_values(values, sfps=None):
@@ -193,7 +220,9 @@ def target_values(i):
 
 # the layouts each pixel format is drawn on (os88venc refuses the rest)
 PIXFMT_LAYOUTS = {"vga8": ("lin320", "modex"), "vga4": ("lin80",),
-                  "cga4": ("cga",), "c160": ("c160",), "cgacomp": ("cga",),
+                  "cga4": ("cga",), "c160": ("c160",), "c512": ("text-80x100",),
+                  "text": ("text-80x25",),
+                  "cgacomp": ("cga",),
                   "mono": ("cga", "herc", "lin80")}
 
 
@@ -257,6 +286,17 @@ def render(r, surf):
             if pf == vid.PF_CGA4:
                 idx = np.array(vid.cga4_colours(r.cgapal))[idx]
             rgb = _rgb16()[idx].astype(np.uint8)
+    elif pf == vid.PF_TEXT:             # the text screen (98.1.3.6), in
+        import os88txtfont                # the model's face, 8 x 8 a cell
+        rgb = os88txtfont.render(g.canvas(surf), g.wb, g.h, _rgb16())
+    elif pf == vid.PF_C512:             # the text hack on a composite
+        import os88cgacomp                # monitor (98.1.3.5): 8 dots a cell
+        rgb = os88cgacomp.render_c512(g.canvas(surf), g.wb, g.h,
+                                      new=r.cgapal != vid.CARD_OLD)
+        an, ad = r.aspect               # ...averaged back to a cell's width
+        img = Image.fromarray(np.ascontiguousarray(rgb))
+        return img.resize((max(1, round(g.wb // 2 * an / ad)), g.h),
+                          Image.BOX)
     else:                               # a pixel a byte: VGA8, VGA4, Mode X
         cv = np.frombuffer(g.canvas(surf), np.uint8).reshape(g.h, g.w)
         pal = _rgb16() if pf == vid.PF_VGA4 else \
@@ -327,6 +367,8 @@ def file_facts(r, path=None):
     g = r.g
     secs = r.frames / r.fps
     w = g.wb * (4 if r.pixfmt == vid.PF_CGA4 else vid.PIX_PER_BYTE[g.layout])
+    if r.pixfmt in (vid.PF_C512, vid.PF_TEXT):
+        w = g.wb // 2                   # a cell is two bytes
     out = ["'%s'" % r.title + (" - %s" % r.credits if r.credits else "")]
     out.append("%s on %s, %d x %d%s" % (
         vid.PF_NAMES[r.pixfmt], g.name, w, g.h,
@@ -681,6 +723,36 @@ class EncodeJob(object):
 
 
 class App(object):
+    def choices_help(self, f, v):
+        """A window listing every choice of field `f` and what it is; the
+        one chosen now in bold, and a click on any takes it"""
+        top = tk.Toplevel(self.root)
+        top.title("%s - %s" % (f["label"], APPNAME))
+        top.transient(self.root)
+        fr = ttk.Frame(top, padding=10)
+        fr.pack(fill="both", expand=True)
+        ttk.Label(fr, text=f["tip"], wraplength=520, justify="left",
+                  foreground="#555").grid(row=0, column=0, columnspan=2,
+                                          sticky="w", pady=(0, 8))
+        bold = ("TkDefaultFont", 10, "bold")
+
+        def take(c):
+            v.set(c)
+            if f["dest"] in IMPLYING:
+                self.apply_implied()
+            top.destroy()
+        for i, (c, what, on) in enumerate(choice_lines(f, v.get()), 1):
+            b = ttk.Button(fr, text=c, width=14,
+                           command=lambda c=c: take(c))
+            b.grid(row=i, column=0, sticky="nw", pady=1)
+            lab = ttk.Label(fr, text=what, wraplength=420, justify="left")
+            if on:
+                lab.configure(font=bold)
+            lab.grid(row=i, column=1, sticky="w", padx=8, pady=1)
+        ttk.Button(fr, text="Close", command=top.destroy).grid(
+            row=i + 1, column=1, sticky="e", pady=(8, 0))
+        top.bind("<Escape>", lambda e: top.destroy())
+
     def __init__(self, root):
         self.root = root
         self.q = queue.Queue()
@@ -758,7 +830,7 @@ class App(object):
             if f["kind"] == "bool":
                 v = tk.StringVar(value="")
                 w = ttk.Checkbutton(p, variable=v, onvalue="1", offvalue="")
-            elif f["kind"] == "choice":
+            elif f["kind"] == "choice" or f["choices"]:
                 v = tk.StringVar(value=f["default"])
                 w = ttk.Combobox(p, textvariable=v, values=f["choices"],
                                  width=22)
@@ -771,6 +843,13 @@ class App(object):
                        lambda e: self.apply_implied())
             Tip(lab, f["tip"])
             Tip(w, f["tip"])
+            if f["help"]:               # WHAT EACH CHOICE IS, a click away
+                hb = ttk.Button(p, text="?", width=2,
+                                command=lambda f=f, v=v:
+                                self.choices_help(f, v))
+                hb.grid(row=r, column=2, sticky="w", pady=1)
+                Tip(hb, "What each choice of %s is - click one to take it"
+                    % f["label"])
             self.vars[f["dest"]] = v
         # --- make a disk, and go
         go = ttk.Frame(left)

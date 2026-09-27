@@ -8138,11 +8138,32 @@ SOAK = [
         "FSXF_RATE bracket whose 30 Hz hook holds 0/25/50/75% of every "
         "period, interrupts on, and 50% off. Asserts every row produced a "
         "number, nothing errored, READ_SEQ is flat from 0 to 12 MB, the "
-        "ceiling falls as the hook takes more, and VIDDISK.TXT (bl_save) is "
-        "on the VHD whole; a row banking into the wrong slot took it red",
+        "ceiling falls as the hook takes more, the bytes READ_AT and "
+        "READ_SEQ bring back from 12 MB are STREAM.DAT's (every dword its "
+        "own offset - a stream of the wrong bytes took it red), and "
+        "VIDDISK.TXT (bl_save) is on the VHD whole; a row banking into the "
+        "wrong slot took it red",
         needs=("marty", "nasm"), serial=True,
         wants=("build/viddisk.o88", "build/kernel.sys", "build/boothd.bin",
                "build/mbr.bin", "build/hdd.drv")),
+    Row("viddiskfd", "soak", py("tests/viddisk.py", "--floppy"), 195.0,
+        "THE FIELD FLOPPY'S PATH (make viddisk360, tests/vidbench/"
+        "FIELDDISK.TXT): the ST-225's streaming rate for a machine nobody "
+        "can copy 12 MB onto. The bench runs from the 360 KB floppy in B: "
+        "against a C: with no stream. W must write STREAM.DAT, 12.5 MB in "
+        "400 x 32 KB appends, in C:'s root - read back off the VHD on the "
+        "HOST, a reader that is not the kernel that wrote it, dword by "
+        "dword - R must find it there, stream it and read the pattern back "
+        "at 12 MB through READ_AT and READ_SEQ, both reports (VDWRITE.TXT, "
+        "VIDDISK.TXT) must land on the FLOPPY beside the bench, and a "
+        "second boot's D must delete the stream. Refuses a floppy whose "
+        "VIDDISK.O88 is not build/'s: it first ran against one cut before "
+        "the bench's completion words and waited for ever on a flag at the "
+        "wrong address. W is 571 guest seconds on this XT-IDE",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/viddisk.o88", "build/viddisk360.img",
+               "build/kernel.sys", "build/boothd.bin", "build/mbr.bin",
+               "build/hdd.drv")),
     Row("vidsnd", "soak", py("tests/vidsnd.py"), 37.0,
         "docs/plans/VIDEO-PLAN.md wave 0 (c)(e): ONE INTERRUPT PER VIDEO "
         "FRAME off a Sound Blaster 2.0 - the clock XDC plays by and the "
@@ -8265,6 +8286,74 @@ SOAK = [
         wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
                "build/mbr.bin", "build/hdd.drv", "build/hiber.drv",
                "build/ctrl.drv", "build/sound.drv")),
+    Row("vidspk", "soak", py("tests/vidspk.py"), 30.0,
+        "SPEC.md 34.11, 98.3.15: PCM THROUGH THE PC SPEAKER with no card - "
+        "OSAPI_FSX_SPK and apps/os88spk.inc - in VIDEO.O88's window play of a "
+        "5,512 Hz sine sweep, on the card-less Hercules 5150 with a fixed "
+        "disk. Traces 800 port writes to 42h mid-play: they must be the "
+        "clip's samples through the table, IN ORDER, with at most 4% of the "
+        "PIT's periods gone without a pulse (IF = 0 too long somewhere: "
+        "1.8% measured). The speaker's own time, door open to close, is the "
+        "sound's within 5%; the capture moves; channel 2 and IRQ0 are the "
+        "kernel's again after. Broken on purpose: no `out 0x42` or no table "
+        "translation in vp_aput - red",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv")),
+    Row("vidspkcounts", "soak", py("tests/vidspk.py", "--counts"), 30.0,
+        "SPEC.md 98.1.1.3: vidspk on a clip MADE for the speaker - its PCM8 "
+        "stored as the counts (SPKPWM), which the player copies rather than "
+        "translating: the pulses must be the file's bytes as they are. Red "
+        "with the player translating a file of counts anyway",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv")),
+    Row("vidspkroute", "soak", py("tests/vidspk.py", "--route-spk"), 28.0,
+        "SPEC.md 34.8, 98.3.15: a Sound Blaster installed and SOUND.DRV "
+        "loaded, SYSTEM.CFG's route PC Speaker ('SR' = 1): the driver's DSP "
+        "tier is off at boot (no PCM_BG in its caps) and the play is the "
+        "SPEAKER's, not the card's",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv", "build/sound.drv")),
+    Row("vidspkcp", "soak", py("tests/vidspk.py", "--cp-spk"), 32.0,
+        "SPEC.md 34.8, 98.3.15: the same machine with the route AUTO, and PC "
+        "Speaker CLICKED in the Control Panel's Sound page at run time - the "
+        "route moves 0 -> 1, the driver drops PCM_BG, and the play that "
+        "follows is the speaker's",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv", "build/sound.drv")),
+    Row("vidspkfull", "soak", py("tests/vidspk.py", "--full"), 30.0,
+        "SPEC.md 34.11, 98.3.6: vidspk in the FULL SCREEN, the player's main "
+        "case - entered paused with F and started with Space, so the door "
+        "opens on the resume path (vp_upaus, os88spk_go) rather than "
+        "vp_sopen's",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv")),
+    Row("vidspkoff", "soak", py("tests/vidspk.py", "--fs-off"), 30.0,
+        "SPEC.md 98.3.15: S in the full screen, part way through - the "
+        "speaker closes within a second of the key and the play finishes "
+        "SILENT on the PIT, every frame drawn, the kernel left clean",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv")),
+    Row("vidspksilent", "soak", py("tests/vidspk.py", "--silent"), 24.0,
+        "SPEC.md 98.3.15: S in the window before Play chooses PERFORMANT "
+        "SILENCE - the door never opens, and the capture over the play's "
+        "own stretch is flat",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv")),
+    Row("vidspkfast", "soak", py("tests/vidspk.py", "--rate", "11025"),
+        24.0,
+        "SPEC.md 34.11.4: 11,025 Hz PCM8 on an 8088 is SILENT - a pulse "
+        "every 432 cycles leaves the machine nothing, and the play measured "
+        "20 s for a 4 s clip before VP_SPKMAX refused it",
+        needs=("marty", "nasm"),
+        wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
+               "build/mbr.bin", "build/ctrl.drv")),
     Row("vidvga8", "soak", py("tests/vidvga8.py"), 32.0,
         "SPEC.md 98.1.2, 98.3, 98.4.4: 256 colours in mode 13h on MartyPC's "
         "VGA XT. A 160 x 96 VGA8 clip made here, with a palette no BIOS "
@@ -8314,6 +8403,26 @@ SOAK = [
         "canvas against the host's decode with the box drawn in. Broken on "
         "purpose (vo_pre returning at once; the seek's canvas clear taken "
         "out) it FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidfskeysc512", "soak", py("tests/vidfskeys.py", "--kind", "c512"),
+        25.0,
+        "SPEC.md 98.3.12.2, 98.3.13: vidfskeysc160's questions on C512, the "
+        "same text mode NATIVE - the screen is the canvas, character and "
+        "attribute - so the text is vosd.inc's VOM_C, four 0DEh cells a "
+        "character written whole, saved and put back as bytes, and the "
+        "decode goes round it through vd_clip. Every check is the screen's "
+        "memory against the host's decode with the box drawn in. Broken on "
+        "purpose (VOM_C writing the attribute and leaving the character) "
+        "it FAILS every text check",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidfskeystext", "soak", py("tests/vidfskeys.py", "--kind", "text"),
+        35.0,
+        "SPEC.md 98.3.13, 98.3.16: vidfskeys on TEXT, the 80 x 25 text screen "
+        "NATIVE on the CGA 5150 - the box is ONE row of the characters "
+        "themselves on 70h; Paused, the toast decoded round (vd_clip), both "
+        "seeks and Home, every screen the host's decode with the box in it",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidfskeysvga8", "soak", py("tests/vidfskeys.py", "--kind", "vga8"),
@@ -8495,6 +8604,40 @@ SOAK = [
         "the desktop's LIN80 one",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
+    Row("vidsndresad", "soak", py("tests/vidsound.py", "--secs", "2",
+                                  "--resident", "--loop", "30",
+                                  "--audio", "adpcm4"), 80.0,
+        "SPEC.md 98.1.7.2: a RESIDENT clip with ADPCM4 sound, two laps "
+        "through its seam with the card the clock - the file's lap join "
+        "exact (verify: the stream ends in the state before frame L's "
+        "sound), the capture the card's decode of the laps byte for byte; "
+        "and the drain's lap rule read off vp_aseq, since ADPCM4's ring "
+        "holds a whole lap ahead",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88", "build/sound.drv", "build/kernel.sys",
+               "build/boothd.bin", "build/mbr.bin", "build/hdd.drv",
+               "build/hiber.drv", "build/ctrl.drv")),
+    Row("vidsndresks", "soak", py("tests/vidsound.py", "--secs", "3",
+                                  "--resident", "--seek", "1",
+                                  "--audio", "adpcm4"), 90.0,
+        "SPEC.md 98.1.7.2: a RESIDENT ADPCM4 clip played from its keyframe "
+        "1 - the key record's REFERENCE sample starts the card in the "
+        "continuous stream's state, and the capture is the stream's own "
+        "decode from frame k+1",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88", "build/sound.drv", "build/kernel.sys",
+               "build/boothd.bin", "build/mbr.bin", "build/hdd.drv",
+               "build/hiber.drv", "build/ctrl.drv")),
+    Row("vidlivesnd55", "soak", py("tests/vidsound.py", "--secs", "3",
+                                   "--live", "--audio", "adpcm4",
+                                   "--rate", "5512"), 45.0,
+        "SPEC.md 98.1.7.2: a LIVE clip with ADPCM4 sound at 5,512 Hz - a "
+        "quarter of PCM8's bytes at half the rate - fed by the worker with "
+        "the card the clock, the capture the stream's decode whole",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88", "build/sound.drv", "build/kernel.sys",
+               "build/boothd.bin", "build/mbr.bin", "build/hdd.drv",
+               "build/hiber.drv", "build/ctrl.drv")),
     Row("vidsndres", "soak", py("tests/vidsound.py", "--secs", "2",
                                 "--resident", "--loop", "30"), 45.0,
         "SPEC.md 98.1.7, 98.3.9: a RESIDENT clip with its sound one audio "
@@ -8520,6 +8663,15 @@ SOAK = [
         wants=("build/video.o88",)),
     Row("vidlivevga", "soak", py("tests/vidlive.py", "--screen", "vga"),
         70.0, "SPEC.md 98.3.10: vidlive on MartyPC's VGA XT",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidlivevga4", "soak", py("tests/vidlive.py", "--screen", "vga4"),
+        45.0, "SPEC.md 98.3.10.4: LIVE IN COLOUR on MartyPC's VGA XT - the "
+        "VGA rendition a VGA4 canvas, every hold on the RENDERED glass the "
+        "decode's sixteen colours; the pass's blits BLITP and no BLIT4, "
+        "uncovered and under a Disk window, where BLITP walks the clip "
+        "(5.4.3.6) with the uncovered pixels right. Broken on purpose "
+        "(BLITP's plane step wrong, or the walk not asked for) it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidcga4", "soak", py("tests/vidcga.py", "--fmt", "cga4"), 45.0,
@@ -8550,10 +8702,51 @@ SOAK = [
         "purpose (the retime skipped) it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
+    Row("vidc512", "soak", py("tests/vidcga.py", "--fmt", "c512"), 20.0,
+        "SPEC.md 98.1.3.5, 98.3.12.2: C512 on the CGA 5150 - COMPOSITE "
+        "colour on the text hack, 512 codes a cell, played NATIVE: the "
+        "file's layout, no shadow, the card byte through to [vp_cgapal]; "
+        "every character and attribute in the screen's memory against the "
+        "decode at four holds, and on the RGB glass three dots a cell that "
+        "only the right retime, glyph rows and characters give; the poster "
+        "c512_mono's byte for byte. Broken on purpose (five of the six "
+        "CRTC writes skipped) the glass is wrong at every hold and it FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
     Row("vidc160vga", "soak", py("tests/vidcga.py", "--fmt", "c160",
                                  "--screen", "vga"), 45.0,
         "SPEC.md 98.3.12: vidc160 on MartyPC's VGA XT - rows of four scan "
         "lines, blink off through the BIOS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidtext", "soak", py("tests/vidcga.py", "--fmt", "text"), 30.0,
+        "SPEC.md 98.1.3.6, 98.3.16, 98.4.6: TEXT VIDEO in colour on the CGA "
+        "5150 - the 80 x 25 text screen played NATIVE, the colour byte "
+        "through to [vp_cgapal]; at four holds every character and "
+        "attribute in B800h against the decode, every byte round the "
+        "canvas 0, the glass at each QUARTER of every space, full and half "
+        "block the attribute's foreground or background (blink off), and "
+        "every dot round the canvas black (the cursor off); the poster "
+        "text_mono's with the machine's glyphs. Broken on purpose (the "
+        "blink left on) it FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidtextvga", "soak", py("tests/vidcga.py", "--fmt", "text",
+                                 "--screen", "vga"), 40.0,
+        "SPEC.md 98.3.16: vidtext on MartyPC's VGA XT - 9 x 16 cells, "
+        "blink off through the BIOS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidtextherc", "soak", py("tests/vidcga.py", "--fmt", "text",
+                                  "--screen", "herc", "--mono"), 30.0,
+        "SPEC.md 98.1.3.6, 98.3.16: a MONO TEXT file on the Hercules 5150 - "
+        "B000h, 07h/0Fh/70h drawn black < normal < bright on the glass",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidtexthercno", "soak", py("tests/vidcga.py", "--fmt", "text",
+                                    "--screen", "herc"), 20.0,
+        "SPEC.md 98.3.16: a COLOUR TEXT file on the Hercules 5150 is "
+        "refused, in its words, before any mode is taken",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidlivesnd", "soak", py("tests/vidsound.py", "--secs", "3",
@@ -8741,6 +8934,34 @@ SOAK = [
         "on purpose (spans merged across bytes outside the canvas; keyframes "
         "stamped a frame early) it FAILS naming the layout and frame. 16 s "
         "with the samples, 2 s without."),
+    Row("vidresbig", "soak", py("tests/vidresbig.py"), 60.0,
+        "SPEC.md 98.1.7.1: a RESIDENT block as big as memory - a ~200 KB "
+        "STORED block (past the old 60 KB packed / 128 KB bounds) read in "
+        "pieces into its claim byte for byte and played exactly on the "
+        "Hercules 5150; and a ~730 KB one refused BEFORE any claim with "
+        "'Needs n KB of memory, m KB free'. Broken on purpose (the old "
+        "bound back, or the fit always yes) it FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidmove", "soak", py("tests/vidmove.py"), 45.0,
+        "SPEC.md 98.1.7.4: a resident block MOVES under a Live play - on "
+        "the Hercules 5150 off a hard disk, a Live window's block with a "
+        "hole under it, and a third player's stored file picked from the "
+        "heap's own map to be servable only by moving it: the block at a "
+        "new place byte for byte, its cursor with it, the keeper and poster "
+        "top-down, and the Live play exact after, across its seam. Broken "
+        "on purpose (never declared, or a proc that patches nothing) it "
+        "FAILS",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vencbundle", "soak", py("tests/vencbundle.py"), 15.0,
+        "SPEC.md 98.2.13: `make vencbundle`'s zip, unpacked OUTSIDE the "
+        "tree and used from there - whole and deterministic, it encodes, "
+        "makes a floppy with the player beside the tool on it, and an "
+        "unbootable ST11M disk that verifies, every os88 module loaded "
+        "from the bundle. Broken on purpose (os88pkg.py taken out) it "
+        "FAILS",
+        needs=("ffmpeg",)),
     Row("vidhdmake", "soak", py("tests/vidhdmake.py"), 65.0,
         "SPEC.md 98.2.12.1: the encoder window's HARD DISK boots - its own "
         "disk_argv command line, the geometry put to MartyPC's XT-IDE - "

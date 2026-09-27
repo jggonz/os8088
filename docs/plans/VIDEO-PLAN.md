@@ -1477,9 +1477,8 @@ of the round (14.9).
   window's clip, the whole frame inside one gfx-lock hold. Pause, drag, F to
   the full screen and back, Esc. Gates: `vidlive`, `vidlivecga`,
   `vidlivevga`. **V2, disk-fed Live, is DROPPED** by the owner's own rule: a
-  read holds the picture ~100 ms. **V3, Live in colour, is not built** -
-  `OSAPI_GFX_BLIT4` takes a packed band and the shadow is planar - and
-  stays a future item.
+  read holds the picture ~100 ms. **V3, Live in colour, is BUILT** since
+  (15.2, SPEC.md 98.3.10.4).
 - **Found**: `vidsndres` failed one run in two, and it was the harness:
   polled at 0.5 host s, the guest ran two of the clip's one-second laps a
   poll, so R landed a lap late. It polls at 0.02 s.
@@ -1569,10 +1568,7 @@ the record - and section 15 says what each would NEED:
 - **Live fed from the disk** - DROPPED by the owner's own rule (V2): a read
   holds the picture ~100 ms, which cannot look smooth, and the only cure is
   kernel work.
-- **Live in colour** (V3) - not built. `OSAPI_GFX_BLIT4` takes a PACKED
-  band and the shadow a VGA4 file decodes into is PLANAR, so it wants a
-  repack per blitted row or a planar blit slot; either is a design of its
-  own, and a colour file plays in the window already.
+- **Live in colour** (V3) - BUILT since, 15.2.
 - **Live with sound** - not built: the card's clock is a bracket's, and a
   Live play is silent (98.3.10). The logo's listening copy is not live for
   that reason.
@@ -1629,7 +1625,26 @@ PIT counts. What it needs:
 - **Gated by an assembly knob** so it can be built out if it costs too many
   bytes (the owner: not shipped at once if it grows the package a lot).
 
-### 15.2 Live in colour (V3)
+### 15.2 Live in colour (V3) - BUILT 2026-09-27
+
+**BUILT - SPEC.md 98.3.10.4 is the contract, 5.4.3.6 the kernel half, and
+the gate `vidlivevga4`.** What the design below got wrong is the last
+bullet but one: the repack for a covered window was built as planned and
+MEASURED at **1,088 ms a pass** on a 4.77 MHz VGA XT with a Disk window over
+part of a 160 x 60 box - `OSAPI_GFX_BLIT4` under a region is one clipped
+`gfx_hline` per colour change per row, ~0.5 ms each, with the gfx lock held,
+so the desktop stood still for a second at a time. "In practice a 286" was
+not a premise worth resting it on. So it stopped being package-only:
+**`OSAPI_GFX_BLITP` walks the clip on request** (`DI` bit 14, 5.4.3.6),
+5.4.2.7's walk shared and cut EXACTLY (a planar piece's left edge is a mask
+the emitter already had), 127 resident bytes of `kern_big` and none of
+`kern_small`. Covered: **51.7 ms a pass**, exact to the pixel beside the
+window; uncovered 26.8 ms. The repack stays as the fallback where BLITP
+refuses (a one-bit display, a straddle, off the screen's side). An encoded
+clip (`--live vga --pixfmt vga4`, 264 x 200) plays at 14.7 fps with no late
+frame on the same machine. The package grew 439 bytes.
+
+The design as written:
 
 Medium, package-only, VGA desktop only.
 - A VGA4 file decodes into four bit-planes. **`OSAPI_GFX_BLITP` takes planes
@@ -1652,18 +1667,160 @@ got the file (the 360KB system disk). If the About box is already in an
 on-demand module the link is nearly free; if it is resident, it belongs in
 one (CLAUDE.md's module rule). Not yet looked at which.
 
-### 15.4 Longer resident and Live clips
+### 15.4 Longer resident and Live clips - RESEARCHED 2026-09-27
 
-Found making the ST11R demo disk: **an ENCODED Live clip is about four
-seconds**. 98.1.7 bounds a block at 60 KB packed because `vp_rload` reads it
-in ONE `READ_AT`; eight seconds of Bad Apple at 30 fps packed to 88-140 KB
-and was refused, and 15 fps and four seconds fit. What would lift it:
-- **Read the packed block in chunks** - `vp_rload` looping `READ_AT` over
-  cluster-sized reads into the top of the claim - which takes the packed
-  bound to the unpacked one (<128 KB) at no format change.
-- Past 128 KB unpacked the block is two segments, and the cursor
-  (`vp_rnext`) would have to cross one - a larger change.
-- The logo is not affected: it was drawn small for this.
+The owner's ask: *"as much ram as we have that isn't other buffers we need
+to run the video performantly"*. Found making the ST11R demo disk: an
+ENCODED Live clip is about four seconds. What bounds it, what the machine
+actually has, and what lifting it takes, measured on MartyPC's
+`os8088_5150_herc_hdd_sb_gla` (the owner's 5150: 640 KB, Hercules, SB)
+with the owner's own clips (build/demo, never committed).
+
+**What bounds a resident clip today is two policy numbers, not the design.**
+- `vp_pbk` refuses a block packed over 60 KB or unpacked at 128 KB or more,
+  and the encoder writes to the same bounds (98.1.7).
+- `vp_ldblk` makes one 16-bit `READ_AT` and one `OSAPI_DECOMP`, and
+  `OSAPI_DECOMP`'s INPUT may not cross 64 KB (its output may).
+
+Everything after the load is ALREADY size-free:
+- `vp_rwalk`, `vp_rnext` and `vp_rcur` step a paragraph-plus-offset cursor,
+  normalised after every record;
+- `vp_raud` computes a 32-bit offset;
+- the block fields are 32 bits in the file.
+
+**What the machine has** (the heap map, `tools/heapmap.py` read through
+MartyPC):
+
+| moment | free, one run |
+|---|---|
+| bare desktop | 495.5 KB (arena 534 KB) |
+| the player open, poster up | 445.5 KB |
+| a Live clip playing full screen: keeper 64 K, picture block 48 K, sound block 46 K, SB ring 17 K (top-down) | 270.5 KB still unused |
+
+A further ~44 KB is purgeable caches (a 32 KB directory cache and two
+smaller ones) that a big claim sheds before it refuses.
+
+**The buffers a play needs besides the clip**:
+- the canvas keeper, 64 KB whenever the play goes through the shadow and
+  always for Live (98.3.10);
+- the SB ring, 17 KB from the top of the heap;
+- a 31 KB copy of the last record when page flipping.
+
+So on the owner's machine **about 360 KB is left for the clip**, and ~400 KB
+with the caches shed.
+
+**What a second of clip costs in RAM**, both blocks being held unpacked:
+
+| preset | picture | sound (PCM8, 11 kHz) | seconds in 360 KB | ...silent |
+|---|---|---|---|---|
+| Live, Hercules, 15 fps | 11.0 KB/s | 10.8 | 16.5 | 33 |
+| Live, CGA | 8.0 | 10.8 | 19 | 45 |
+| Live, VGA | 14.4 | 10.8 | 14 | 25 |
+| full screen Hercules, Bad Apple 30 fps | 31.0 | 10.8 | 8.6 | 11.6 |
+| full screen CGA4, Trackmania | 40.9 | 10.8 | 7.0 | 8.8 |
+| 13h, Trackmania 15 fps | 151.7 | 21.5 | 2.1 | 2.4 |
+
+**Five findings decide the design:**
+
+1. **Packing saves disk and load time, never RAM**: the block is expanded
+   before it plays. Record blocks pack to 0.55-0.76 (Live) and 0.83-0.90
+   (full screen) with LZ4/LZB.
+2. **On a hard disk, packing makes the LOAD SLOWER.** The ST11R class reads
+   ~300 KB/s under any decode share (docs/reports/VIDEO-86BOX-ST11R), while
+   `OSAPI_DECOMP`'s LZ4 costs ~50 cycles an output byte (LZB ~207). So
+   360 KB loads in ~1.2 s stored against ~3.8 s packed with LZ4 and ~16 s
+   with LZB, on a 4.77 MHz 8088. Only a floppy gains from packing, and a
+   floppy cannot hold such a clip anyway.
+   **So a big block is STORED, and that needs NO format change**: packing 0
+   already exists, and only the 60 KB and 128 KB bounds apply to it.
+3. **For Live, the SOUND is half the RAM.** PCM8 at 11 kHz is 10.8 KB/s
+   against 8-14 of picture. ADPCM4 halves it (5.4 KB/s), taking a Live
+   Hercules clip from 16.5 s to ~22 s, and ADPCM4 at 5.5 kHz quarters it
+   (2.7 KB/s, ~26 s). (This line first said ADPCM4 alone quartered it; it
+   is half the bytes of PCM8 at the same rate. BUILT, 98.1.7.2.) Resident sound is PCM8-only
+   because ADPCM4 needs a reference byte per seek (98.1.1.1). A
+   one-byte-per-frame reference table beside the audio block (15 bytes a
+   second) removes that; the worker's feed then plays ADPCM4 as the bracket
+   already does. 5.5 kHz PCM8 would halve it with no format change at all.
+4. **Live's 64 KB keeper is a bound, not a need.** It is 64 KB because a
+   list's writes are not checked and can reach anywhere in ES (98.1.6). A
+   RESIDENT block is walked once at load (`vp_rwalk`). If that walk also
+   checked every write against the canvas, the keeper could be the canvas's
+   own size - 4 KB for a Hercules Live window - which is ~60 KB (~3 s of
+   Live Hercules) given back to every Live window. The cost is CPU once, at
+   load.
+5. **A big claim held while the window is open is a WALL** (HEAP-UNPIN-PLAN
+   2.0). The blocks are claimed bottom-up and PINNED today, and a Live
+   window keeps them for its whole life. At 90 KB that barely mattered; at
+   360 KB it is the whole arena. Either the blocks go top-down
+   (`OSAPI_MEM_CLAIM_HI`), or they get a relocation proc that moves the six
+   segment words derived from them (`vp_rblk`, `vp_rablk`, `vp_rbseg`,
+   `vp_rlseg`, `vp_rsseg`, and the cursor). A Live worker reads the block
+   from its tick, so a move has to be one its restart declaration covers.
+
+**What building it would take**, cheapest first:
+
+- ~~**A. Stored blocks of any size**~~ - BUILT (SPEC.md 98.1.7.1), as
+  below:
+  - `vp_pbk` lets a STORED block be any size; a packed one keeps today's
+    bounds.
+  - `vp_ldblk`'s stored path reads in 32 KB pieces (`READ_SEQ`, which does
+    not re-walk the chain per call the way `READ_AT` does, W0 (b)) straight
+    into the claim, then moves it down by the block's offset into its first
+    cluster with a segment-stepping move.
+  - The encoder stores a block past the bounds instead of refusing it.
+  - An OLD player meets such a file at `vp_pbk` and refuses it cleanly, so
+    it is compatible as it is.
+  - The fit is asked BEFORE the load: `OSAPI_MEM_AVAIL_MAX` after the keeper
+    and the ring, so a clip that cannot fit refuses with the numbers
+    ("needs 380 KB, 360 KB free"). It does not claim and fail, because a
+    failed claim sheds the caches for nothing (REGION-SELF-COMPACT 5.1.1).
+  - A few hundred bytes of package, estimated.
+- ~~**B. The keeper cut to the canvas for resident plays**~~ - BUILT
+  (SPEC.md 98.1.7.3). Finding 4's "4 KB" was right for the Live window's
+  LIN80 canvas (5 KB claimed, 60 rows of 80); a banked layout's canvas
+  spans its banks, so a Hercules 320 x 100 is 27 KB. The check is a parse
+  at load, 33 cycles a byte, and only for a play that decodes into the
+  keeper. A play onto the screen walks nothing.
+- ~~**C. ADPCM4 resident sound**~~ - BUILT (SPEC.md 98.1.7.2), with the
+  5.5 kHz option beside it: no format addition was needed after all - the
+  key records carry the reference as a streamed file's do - and the lap
+  join is EXACT, which a streamed file's is not.
+- ~~**D. Where the blocks live**~~ (finding 5) - BUILT, RELOCATABLE (SPEC.md
+  98.1.7.4; the owner: *"movable would be fine, but don't overly stress
+  implementing this if it is not clean"*). It was clean for the blocks,
+  and needed two more things to work at all:
+  - `OSAPI_MEM_PARKSAFE`, since the Live worker otherwise blocks on the
+    lock a claiming callback holds;
+  - the poster and keeper claimed from the top, since pinned under a block
+    they were its floor.
+
+  The keeper stays pinned. It is held in ES across drawing calls, and a
+  window call can claim; proving that safe is a later pass.
+- **E. Packed chunks** (a block split into independently packed chunks of
+  60 KB or less, loaded through a staging buffer): only for disk space,
+  since finding 2 says it slows the load on a hard disk. **SET ASIDE by the
+  owner, 2026-09-27** (*"we'll leave the compression/window painting for
+  later"*), with the shape they named: *"Disk space is sometimes an issue -
+  trying to fit the maximum on a 360k floppy. We can do the simple route
+  first, and then look at 'compressed parts' or uncapping the decompressor
+  like we recently did the compressor."* The simple route (A) is built; this
+  is the second step, and it has two candidate shapes - chunks as above, or
+  a decompressor whose output is not capped at one 60 KB block (the
+  compressor's cap was lifted the same way, SPEC.md 20.13.7).
+- **Beyond 640 KB**: XMS on a 286 and up (15.6's V4). The 5150 has only
+  conventional memory.
+
+**What the owner decides first:**
+- **How much of the machine a LIVE window may take.** A full-screen play
+  owns the machine, so "all of it" is right there. A Live window shares the
+  desktop, and one taking 360 KB leaves nothing to open beside it. Options:
+  - the file's own need, whatever it is;
+  - a cap, a fraction of free memory;
+  - the encoder's Live targets carrying a RAM budget, so a clip is made to
+    fit the machine it is for.
+- **Whether ADPCM4 resident sound (C) is worth its format addition**, or
+  5.5 kHz PCM8 is enough.
 
 ### 15.5 Live fed from the disk (V2) - DROPPED
 
@@ -1758,12 +1915,124 @@ read-ahead only makes the holds rarer, not invisible.
   (`Marty.key`'s make/break timing against a busy guest) or the emulator's
   keyboard controller drops it. A person has never been seen to meet it.
 
-### 15.8 The optimisation pass
+- ~~**Nothing packs the encoder for people without the tree.**~~ - DONE
+  (SPEC.md 98.2.13, the owner 2026-09-27: *"a make target makes it easy to
+  get to"*). `make vencbundle` makes `build/os8088-encoder.zip`, its file
+  list computed from the encoder's own imports; `vencbundle` uses it
+  outside the tree.
+- **`vidlivesndl` fails now and then under parallel load** - RECORDED
+  2026-09-27, for the same soak pass. The picture is late against the card
+  at the seam: `late` 3 or 4 where the row allows 2. It was seen in the soak
+  of 2026-09-27 00:09, and again in a 4-lane run of the `vid*` rows after
+  98.1.7.3 landed. It passed alone twice and 4/4 at four lanes, so the keeper
+  change did not cause it. It is a GUEST counter, so contention should not
+  move it, and that is the question: either the harness's reads land in
+  the Live worker's window, or MartyPC's Sound Blaster paces against the
+  host.
+- **`vidfskeysflip` fails under parallel load** - RECORDED 2026-09-27. Leg 3
+  reads "the toast left the glass 2 times in 15 looks": the text box on a
+  flipped Mode X play (98.3.13.1) is missing from some screen captures. The
+  other session measured it at 3 of 4 and 2 of 4 runs at four lanes, on its
+  base and on its change alike. Here it failed in one run of the 70 `vid*`
+  rows at four lanes and passed alone twice. With page flipping the glass is
+  whichever page the CRTC shows, so a look can land between a flip and the
+  text reaching the new page. Whether that is the harness's look or the
+  player's order of work is the question.
+- **A closed window's area stayed unpainted until the next window change** -
+  RECORDED 2026-09-27, found by `vidmove`, NOT DIAGNOSED, and **SET ASIDE by
+  the owner the same day** (it is the "window painting" of *"we'll leave the
+  compression/window painting for later"*). A player window
+  (C) had played a 240 KB file, whose claim shed the caches, and so the
+  save-under taken when C opened. When C closed, the part of the Disk window
+  it had covered was not repainted. The UI task was idle and the lock free,
+  so it was not still busy. The area stayed stale 3 guest seconds later,
+  and was right after the next raise. The window manager's path when a
+  closing window's save-under has been shed is the first thing to read.
+  `VIDMOVE_MAP=1` shows the heap at each step.
+
+### 15.8 The optimisation pass - TAKEN 2026-09-27
 
 Not needed to ship: the owner's call, once it was clear what the shadow copy
 is for. Speed first, then bytes, and **measured before redesigned**: profile a
 play on MartyPC and quote cycles. The decoder, the shadow copy and the Live
 blit are the likely heads.
+
+**The pass is done, and `docs/reports/VIDEO-PROFILE-2026-09-27.md` is its
+measurement.** The owner's brief (2026-09-27): the native path first, C160
+free to be reworked, the other-adapter path in scope; kernel bytes only
+by agreement; package bytes where they earn their keep. What it found, in
+order of size:
+
+1. **On `5150-st225` the DISK binds, not the CPU.** The encoder now says
+   which budget cut each frame (`cut by:`): on Sonic 2, Trackmania and
+   camera footage nearly every cut is the disk's, with the CPU at 25-32% on
+   the mean. So on the default profile a faster decode buys picture only at
+   a scene cut. **The 60 KB/s is a margin, never a measurement** - 86Box's
+   ST11R streams 253 KB/s with the hook holding half of every period. The
+   ST-225's own figure is the one number that would move the default most,
+   and VIDDISK measures it - on the field disk (`make vidfieldhd`), or with
+   nothing copied to the machine at all: `make viddisk360` is VIDDISK and
+   VIDSND on a 360 KB floppy, whose W writes a 12.5 MB STREAM.DAT in C:'s
+   root for R to stream back (`tests/vidbench/FIELDDISK.TXT` is the run).
+   **MEASURED 2026-09-27** (docs/reports/VIDDISK-ST225-2026-09-27.md):
+   104.2 KB/s with the hook holding half of every period, 110.3 idle, 86.7
+   at 75% - the DMA controller nearly flat under the decode - so the
+   profile is 96,000 now, ~90% of the 50% row. Trackmania's C512 goes 289
+   -> 319 of 363 frames exact on it; Sonic 2's camera footage stays the
+   disk's.
+2. **C160 cost four times what the encoder priced** - BUILT (SPEC.md
+   98.3.12.1): decoded straight onto the text screen, 85.9% -> 32.7% of a
+   5150, and priced with its own fitted constants.
+3. **The native decoder is at the bus**: the model is exact to 0.4% on CGA
+   and a change is four bytes of code. The FRAME's fixed cost was trimmed -
+   the hook's cursor stepped in place (1,765 -> 966 cycles a call) and the
+   lists chained (1,787 -> 1,462) - 3,840 -> 3,040 cycles a silent frame
+   outside the decode.
+4. **The shadow copy's arithmetic was a quarter of the machine** - item 1
+   below, BUILT as a step table rather than row tables: 84.3% -> 74.0% for a
+   Hercules file on a CGA. What is left is the stores; item 2 is not taken.
+5. **Live's cost is the blit** - 33-45% of a 5150 for the logo, where its
+   decode is 2%. Tracking columns at playback was BUILT, MEASURED and
+   REFUSED: the walk costs what it saves (15.9% against 30% on the logo,
+   49.5% and the play falling behind on Bad Apple). 15.8.1 is the proposal.
+
+#### 15.8.1 Open: the owner's to decide
+
+- ~~**Live bands in the file.**~~ - BUILT (SPEC.md 98.1.3.4, 98.3.10.2),
+  the owner (2026-09-27): *"Video Player has never released ... format
+  changes are fine if they gain us something"*. A LIVE file's frame records
+  carry their blit runs under flag 16 (RUNS); a pass gathers them and blits
+  each. The logo's blit 45.2% -> 22.5% of a 5150 on Hercules, 32.6% -> 20.0%
+  on CGA; Bad Apple Live 46.4% -> 32.1%. 3 KB more logo, 468 bytes more
+  package.
+- ~~**Counting the blit in Live's CPU budget.**~~ - BUILT (SPEC.md 98.2.7),
+  the owner (2026-09-27): *"Option 2 on the live video defaults, but
+  obviously the person encoding could override it. Maybe 60%."* A Live
+  frame is charged its decode and its runs' blit at 18.2 passes a second,
+  against `LIVE_AVG` = 0.60 of the machine; `--avg` overrides it.
+- ~~**The per-frame ceiling (`--peak`).**~~ - BUILT as OWED TIME (SPEC.md
+  98.2.1.1), the owner (2026-09-27): *"make the frame jitterwait a little
+  instead of smearing on extreme cuts"*. A frame on time may run to 1.6
+  periods and the next call's two share one steady ceiling, so the play is
+  back on schedule a call later; the encoder simulates the hook's schedule
+  to keep it so. Encoder only - no player or format change.
+- ~~**The encoder's second pass**~~ - BUILT (SPEC.md 98.2.1.2 to
+  98.2.1.4), the owner (2026-09-27) after the pass above found the disk,
+  not the decode, binding on motion: *"Don't pay for pixels that are about
+  to change"* - a cut frame ranks its changes over the next two targets
+  too, and one the picture is about to undo is not sent (error as seen
+  -12 to -20%, flicker back -10 to -53%, on four clips); the error as SEEN
+  - a dither pattern swapped for another of its grey counts a quarter (a
+  further 1-8%; the first form amplified edges and measured worse); a disk
+  RESERVE of 192 KB in the player's 8-slot ring, the ring named in the
+  header and the disk refilled at its MEASURED rate under each frame's load
+  (the flat rate stalled a deep reserve 19 times in 20 s on MartyPC, the
+  curve and a one-read floor 0); and `--aim quality` / `--aim size`. The
+  report's `picture:` line is how every one of them was judged.
+- ~~**The ring's mirror copy**~~ - TAKEN, it needed no decision: `vp_mneed`
+  walks the chain in memory to the super-packet that runs on into slot 0
+  and mirrors what it runs on, none when nothing does. 1.8% -> 1.2% of the
+  machine streaming off XT-IDE at *K* = 8, and the same third at any *K*.
 
 **The shadow copy is ADDRESS TRANSLATION, not shape** (asked 2026-09-26: is
 "slow, right shape" against "fast, wrong shape" an option to offer?). It is
@@ -1779,7 +2048,11 @@ straight into it. A "right shape" option would mean scaling rows, and would
 be SLOWER. What there is to win is the translation's cost, two ways, neither
 measured yet:
 
-1. **A cheaper copy.** Each row now calls `vp_rowaddr` twice, for the
+1. **A cheaper copy** - BUILT (98.3.2): the band's first row placed by the
+   formula and each row after it a STEP out of a four-entry table a side,
+   since every layout's banks divide four. `vp_rowaddr` had been 25.3% of the
+   machine and the copy is now the stores. What it said before:
+   Each row now calls `vp_rowaddr` twice, for the
    source and the destination, and each call is a `mul` and a bank loop.
    Then it runs a `rep movsw` of the row. The whole copy measured ~60 ms for
    a full 640 x 200 band onto a Hercules (98.3.2). Row-address tables, built
@@ -1787,7 +2060,10 @@ measured yet:
    out of the loop and leave only the stores, which cannot get cheaper.
    Small in bytes. The share it removes is a guess (a quarter to a third)
    until the copy is split in a profile: arithmetic against stores.
-2. **No copy: decode straight onto the other layout.** A second inner loop
+2. **No copy: decode straight onto the other layout** - NOT TAKEN; the
+   stores are what is left (49% of the machine for a Hercules file on a
+   CGA), but C160, the one layout where this applied, took it (98.3.12.1).
+   A second inner loop
    for the decoder that translates each span's address as it writes it.
    It has to SPLIT a span at a row's end, because the encoder merges spans
    across row ends and on another layout those bytes are not adjacent. That
@@ -1806,3 +2082,127 @@ compare and an untaken branch a row. A second copy of the row loop for the
 masked case would take that to ~0 for about 20 bytes. Not taken, since the
 path is only covered text; recorded because the owner asked about the column
 mask's cost.
+
+### 15.9 PC speaker PCM - BUILT 2026-09-27
+
+The owner's brief:
+> *PC Speaker PCM playback. This should be generic, not just for video
+> player. If it is going to cost more than ~400b in the kernel then it can
+> be a library rather than a call, used per app like our UI libraries.
+> Audio, Tracker and Video Player would be the current consumers I think?
+> ... This costs Video Player CPU - so it should be an option, and accounted
+> for in the encoder when calculating its targets - so a video could be
+> encoded for "PC speaker PCM" as its intended target and perform well. And
+> on videos not targeted to that the user should be able to disable it and
+> choose performant silence.*
+
+The compression and window-painting items were set aside by the same message
+and are still open: 15.4 E and 15.7's unpainted closed window, each marked
+there, and both in 15.10's list.
+
+**What was built**:
+- **A kernel door, `OSAPI_FSX_SPK`** (SPEC.md 34.11.1), costing **314 bytes
+  on `kern_big` and 11 on `kern_small`**. A player written wholly in the
+  kernel measured 554, over the owner's line.
+- **A library, `apps/os88spk.inc`** (34.11.2): the sample ISR, the count
+  table, and §34.5.3's ring layout, so the player feeds the speaker exactly
+  as it feeds a Sound Blaster.
+- **The player on it** (98.3.15). S chooses silence in the window, and in
+  the full screen it turns the speaker off at once.
+- **The encoder's `--audio speaker`** (98.2.15), which budgets every frame
+  around what the pulses leave.
+
+**What it measured** (34.11.4):
+- **~400 cycles a pulse**: 343 in the ISR plus the interrupt acknowledge.
+  That is **54% of a 5150 at 5,512 Hz**.
+- **The first build lost 9.0% of its pulses**, because long stretches ran
+  at IF = 0. Each loss was traced to what it had interrupted, and four
+  changes (34.11.3) took it to **1.8% in the window and 2.3% in the full
+  screen**.
+- **11,025 Hz on an 8088 played a 4 s clip in 20 s**, so the player mutes
+  above 8,000 Hz on an 8086-class CPU and says so on the info line.
+
+**Then XDC's fork was read** (Scalibq/XDC, 2026-09-27) and one of its ideas
+taken: a file made for the speaker carries the COUNTS (SPEC.md 98.1.1.3),
+so the player copies where it translated - `vp_aput` 92.8 -> 27.7 cycles a
+byte, ~7% of the machine, and the speaker's share 54% -> 48% in the
+encoder's budget. The other, the 8259 in auto-EOI for the play, was built
+as an experiment, MEASURED and REFUSED (SPEC.md 34.11.6): 16 cycles a pulse
+saved, but more pulses lost (1.8% -> 2.5%) because they now enter the ROM's
+own tick handler, onto the 128-byte chain stack, on a controller
+reprogrammed for everyone.
+
+**Open, and each is its own item**:
+- **Tracker's full screen** could adopt the library - but it is a
+  KEEPWORKER|FASTTICK bracket and not a rate one (this line said otherwise,
+  wrongly, until the handoff was written), so it needs KEEPWORKER|RATE, a
+  hook, counts from its mixer and a rate row under 8,000 Hz.
+- **Audio** plays on the desktop, where channel 0 is not its (34.1), so it
+  would need a full-screen play first. (ModPlug was in this line once; it is
+  RETIRED, SPEC.md 56.15, and needs nothing.) **Tracker and Audio are a
+  handoff to another session: docs/plans/SPEAKER-PCM-HANDOFF.md.**
+- **No C binding**: a C package would need an assembly module for the ISR.
+- ~~**ADPCM4 on the speaker**~~ - SET ASIDE, LIKELY PERMANENTLY (the
+  owner, 2026-09-27: *"That would leave almost no room at all for video"*):
+  the player would decode it in the hook,
+  another ~15% of the machine at 5,512 Hz. Not built.
+- **Live stays silent without a card**, for the same reason as Audio.
+- **The last ~one pulse a period** is the period's own entry: the grant, the
+  jump and `sch_isr`'s prologue, ~1,300 cycles. Getting under 864 would mean
+  a cheaper grant at the period boundary. It is worth measuring by ear on
+  the 5150 before anyone builds it.
+- **The field reading**: every figure here is MartyPC's 5150. The speaker's
+  sound on the owner's machine is the check nothing here can make.
+
+### 15.10 The open list (2026-09-27)
+
+Everything still open, in one place, so the next session needs this file
+and not a transcript. Each line names where the detail is.
+
+**Set aside by the owner** - not to be started without asking:
+- **Compression** (15.4 E): more clip on a 360 KB floppy, by packed chunks or
+  an uncapped decompressor. *"Look at later."*
+- **Window painting** (15.7): a closed player window's area left unpainted
+  when its save-under had been shed. Recorded, not diagnosed.
+- **ADPCM4 on the speaker** (15.9): set aside, likely permanently - it
+  leaves no room for video.
+- **Live fed from the disk** (15.5): DROPPED by the owner's rule.
+
+**Next, and in this order:**
+- Nothing picked. **Live in colour** (15.2) is BUILT (2026-09-27).
+
+**Features not started:**
+- **The About box link** (15.3): a kernel-byte question first - is the
+  About box resident or in a module?
+- **Sound Blaster 1.0 and 1.5** (15.6): SOUND.DRV work, wants an SB 1.x
+  86Box machine.
+- **XMS** (15.6, V4): 286 and up; the 5150 cannot use it.
+- **The keeper relocatable** (15.4 D): the blocks move, the keeper stays
+  pinned until its use across window calls is proven safe.
+
+**PC speaker follow-ons** (15.9):
+- **Tracker's full screen and Audio**: a HANDOFF to another session,
+  docs/plans/SPEAKER-PCM-HANDOFF.md. Audio needs a full-screen play first.
+- **A C binding**: none; a C package would need an assembly module.
+- **Live without a card stays silent**: the desktop cannot give up
+  channel 0.
+- **The last ~one pulse a period** (1.8% lost): the period's own entry.
+  Listen on the 5150 before building anything.
+- **A field listen on the 5150**: every speaker figure is MartyPC's.
+
+**Optimisation, not taken** (15.8.1): decoding straight onto another
+layout (no shadow copy); `font_run_cell`'s masked row loop (~20 kernel
+bytes, ~210 cycles a clipped cell).
+
+**Recorded, not player defects** (15.7): `vidlivesndl`, `vidfskeysflip` and
+(once) `vidplay` fail now and then under parallel load and pass alone;
+MartyPC loses a key press under the same load; MartyPC's VGA draws text
+attribute 6 red (MARTYPC-PLAN 1).
+
+**One report that did not reproduce** (2026-09-27): the owner saw the
+player use the Sound Blaster with the Control Panel on PC Speaker. After a
+reboot it played the speaker and the info line said so; the route set
+before the player was opened, SOUND.DRV and HDD.DRV loaded. Rows
+`vidspkroute` and `vidspkcp` cover both ways of choosing the route. Set
+aside unless it happens again - the info line's third row (`, speaker` or
+not) is the first thing to ask for.

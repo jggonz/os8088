@@ -58,33 +58,68 @@ except ImportError:                                           # pragma: no cover
 # profiles and presets
 # --------------------------------------------------------------------------
 # disk: bytes a second the stream may take, audio included; avg/peak: the
-# share of a frame period decode may take over any second / in any frame.
+# share of a frame period decode may take over any second / in any frame on
+# time; owe: the most one frame may run to, in the machine's own PERIODS,
+# the two after it paying it back (98.2.1.1); speed: the machine in 8088s,
+# which avg and peak are already counted in and owe is not, and which the
+# SPEAKER's cost is divided by too (98.2.15); ring: the player's read-ahead
+# ring on that machine, in 32 KB slots, which the disk reserve banks bursts
+# in (98.2.1.3).
 # rate/audio: the default sound. "predicted" profiles are arithmetic, not a
 # field reading (docs/FIELD-MACHINES.md).
 PROFILES = {
-    "5150-st225": dict(disk=60000, avg=0.50, peak=0.85, rate=11025,
-                       audio="pcm8",
-                       what="the owner's 5150: ST-225 on an ST11M, DMA. "
-                            "BADAPPLE's 57.7 KB/s plays there"),
-    "5150-picomem2": dict(disk=150000, avg=0.40, peak=0.80, rate=22050,
-                          audio="pcm8",
+    # MEASURED (docs/reports/VIDDISK-ST225-2026-09-27.md): VIDDISK off
+    # `make viddisk360` streamed 104.2 KB/s with the hook holding half of
+    # every period, the profile's `avg` - and 110.3 idle, 86.7 at 75%. The
+    # budget is ~90% of the 50% row; it was 60,000, a margin nobody had
+    # measured (VIDEO-PLAN 15.8)
+    "5150-st225": dict(disk=96000, avg=0.50, peak=0.85, owe=1.6, speed=1,
+                       ring=8,
+                       # VIDDISK's rows over its 50% one (the report), and
+                       # at 100% extrapolated along its last two
+                       disk_at=((0.0, 110.3 / 104.2), (0.25, 105.3 / 104.2),
+                                (0.5, 1.0), (0.75, 86.7 / 104.2),
+                                (1.0, 69.2 / 104.2)),
+                       rate=11025, audio="pcm8",
+                       what="the owner's 5150: ST-225 on an ST11M, DMA, "
+                            "measured at 104 KB/s under a half-machine "
+                            "decode"),
+    # MEASURED on MartyPC (VIDEO-PLAN W3): the XT-IDE the CPU copies, so
+    # the disk gets what the decode leaves - 198 KB/s idle, 150 / 99 / 49
+    # at 25 / 50 / 75%. 90% of the 50% row, as the ST-225's
+    "5150-xtide": dict(disk=91000, avg=0.50, peak=0.85, owe=1.6, speed=1,
+                       ring=8,
+                       disk_at=((0.0, 2.0), (0.25, 150 / 99.0), (0.5, 1.0),
+                                (0.75, 49 / 99.0), (1.0, 0.0)),
+                       rate=11025, audio="pcm8",
+                       what="a 5150 with an XT-IDE: the CPU copies the "
+                            "disk, so it streams what the decode leaves "
+                            "(measured on MartyPC)"),
+    "5150-picomem2": dict(disk=150000, avg=0.40, peak=0.80, owe=1.6,
+                          ring=8,
+                          speed=1, rate=22050, audio="pcm8",
                           what="a 5150 with a PicoMEM 2: fast storage the "
                                "CPU copies, so a lower CPU share "
                                "(predicted)"),
-    "floppy": dict(disk=15000, avg=0.50, peak=0.85, rate=5512,
-                   audio="pcm8",
+    "floppy": dict(disk=15000, avg=0.50, peak=0.85, owe=1.6, speed=1,
+                   ring=8,
+                   rate=5512, audio="pcm8",
                    what="a 360 KB floppy, a cylinder a call (predicted)"),
-    "286": dict(disk=150000, avg=1.50, peak=2.50, rate=22050, audio="pcm8",
+    "286": dict(disk=150000, avg=1.50, peak=2.50, owe=1.6, speed=3,
+                ring=8,
+                rate=22050, audio="pcm8",
                 what="a 6 MHz 286: ~3x the 8088's cycles (predicted)"),
-    "286-vga": dict(disk=400000, avg=3.00, peak=5.00, rate=22050,
-                    audio="pcm8",
+    "286-vga": dict(disk=400000, avg=3.00, peak=5.00, owe=1.6, speed=6,
+                    ring=8,
+                    rate=22050, audio="pcm8",
                     what="a 12-16 MHz 286 with a VGA, for VGA8: the VGA's "
                          "bus binds, and it stores ~4.5x as fast as the "
                          "5150's CGA; its IDE disk 627 KB/s with half the "
                          "period decoding (86Box's mr286, the owner's "
                          "bench). An ST11R there: --disk 250000"),
-    "lossless": dict(disk=None, avg=None, peak=None, rate=22050,
-                     audio="pcm8", what="no limits: every change, exactly"),
+    "lossless": dict(disk=None, avg=None, peak=None, owe=None, speed=1,
+                     ring=None,
+                     rate=22050, audio="pcm8", what="no limits: every change, exactly"),
 }
 
 # the box a canvas is fitted into, by name (VIDEO-PLAN 2.3)
@@ -114,6 +149,14 @@ PRESETS = {
     "cga4": ("cga", 320, 200),
     "cga4-small": ("cga", 160, 100),
     "c160": ("c160", 160, 100),
+    # ...and on its COMPOSITE output (98.1.3.5): 80 x 100 CELLS, each one of
+    # 512 codes, full screen on a CGA only
+    "c512": ("text-80x100", 80, 100),
+    # ...and TEXT (98.1.3.6): the 80 x 25 text screen every adapter has, the
+    # picture made of its characters - in colour on a CGA, an EGA or a VGA,
+    # or in the three attributes an MDA and a Hercules draw too
+    "text": ("text-80x25", 80, 25),
+    "text-mono": ("text-80x25", 80, 25),
     # Live windowed's sizes (VIDEO-PLAN 3.4): small canvases a worker blits
     "live-cga": ("cga", 320, 100),
     "live-herc": ("herc", 240, 116),
@@ -124,13 +167,199 @@ LIVE_BOX = {"cga": (320, 112), "herc": (360, 144), "vga": (320, 200)}
 LIVE_ASPECT = {"cga": vid.ASPECT[vid.LAY_CGA],
                "herc": vid.ASPECT[vid.LAY_HERC], "vga": (1, 1)}
 PRESET_PIXFMT = {"cga4": "cga4", "cga4-small": "cga4", "c160": "c160",
+                 "c512": "c512", "text": "text", "text-mono": "text",
                  "vga4": "vga4", "vga4-mid": "vga4", "vga4-full": "vga4"}
 # ...and what a preset sets beyond its box (98.2.10): the owner's settings
 # for 256 colours, both modes, found encoding an anime opening - 25 fps
 # where the format's own default is 15, and every pixel doubled along its
 # row, which halves the bytes and the decode and is invisible at 320 wide
 PRESET_DEFAULTS = {"vga8": dict(fps=25.0, detail="2x1"),
-                   "modex": dict(fps=25.0, detail="2x1")}
+                   "modex": dict(fps=25.0, detail="2x1"),
+                   # TEXT at 15: a whole picture is 4,000 bytes, and a
+                   # picture drawn whole is the clear one (98.2.16)
+                   "text": dict(fps=15.0, text_colour="colour"),
+                   "text-mono": dict(fps=15.0, text_colour="mono")}
+
+
+# WHAT EACH CHOICE IS (98.2.8): a line per value of every option that takes
+# one of a list, which the encoder's window shows behind a "?" beside the
+# field. tests/vencguitest.py fails if a choice has no line here
+CHOICE_HELP = {
+    "preset": {
+        "cga": "CGA, black and white: 640 x 200, mode 6. In the window on "
+               "a CGA desktop",
+        "cga-small": "CGA, black and white, a quarter of the screen: "
+                     "320 x 100. Half the bytes and CPU",
+        "cga4": "CGA, 4 colours: 320 x 200 in mode 4, one palette for the "
+                "whole clip. Full screen, on a CGA, EGA or VGA",
+        "cga4-small": "CGA, 4 colours, a quarter of the screen: 160 x 100",
+        "c160": "CGA, 16 colours at 160 x 100, on CGA's text-mode trick "
+                "(each character cell two pixels). Full screen, CGA or VGA",
+        "c512": "CGA on a COMPOSITE monitor, ~450 colours: 80 x 100 cells "
+                "of the text-mode trick. Full screen, a real CGA only",
+        "text": "TEXT VIDEO in colour: the 80 x 25 text screen, the "
+                "picture drawn in characters, 16 colours on 16. Full "
+                "screen on a CGA, EGA or VGA",
+        "text-mono": "TEXT VIDEO in black and white: the 80 x 25 text "
+                     "screen in grey, white and reverse, which every "
+                     "adapter draws alike - Hercules and MDA too. Full "
+                     "screen",
+        "herc": "Hercules, black and white: 400 x 200 of its 720 x 348. "
+                "In the window on a Hercules desktop",
+        "herc-mid": "Hercules, black and white, bigger: 480 x 232",
+        "herc-full": "Hercules, black and white, the whole screen: "
+                     "720 x 348",
+        "vga": "VGA, black and white: 320 x 240 in mode 12h. In the window "
+               "on a VGA desktop",
+        "vga-mid": "VGA, black and white, bigger: 400 x 300",
+        "vga-full": "VGA, black and white, the whole screen: 640 x 480",
+        "vga4": "VGA, 16 colours: 320 x 240 in mode 12h, the desktop's own "
+                "mode, so it plays in the window",
+        "vga4-mid": "VGA, 16 colours, bigger: 400 x 300",
+        "vga4-full": "VGA, 16 colours, the whole screen: 640 x 480",
+        "vga8": "VGA, 256 colours: 320 x 200 in mode 13h. Full screen, "
+                "25 fps, each pixel doubled along its row",
+        "vga8-small": "VGA, 256 colours, a quarter of the screen: 160 x 100",
+        "modex": "VGA, 256 colours in Mode X: 320 x 240, square pixels. "
+                 "Full screen",
+        "modex-small": "VGA, 256 colours in Mode X, a quarter: 160 x 120",
+        "live-cga": "LIVE on a CGA desktop: a small clip loaded whole that "
+                    "plays in its window beside other programs",
+        "live-herc": "LIVE on a Hercules desktop: small, loaded whole, "
+                     "plays in its window",
+        "live-vga": "LIVE on a VGA desktop: small, loaded whole, plays in "
+                    "its window",
+    },
+    "layout": {
+        "cga": "CGA's graphics memory: 640 x 200, two banks of rows (mode "
+               "6, and mode 4 for 4 colours)",
+        "herc": "Hercules graphics memory: 720 x 348, four banks of rows",
+        "lin80": "VGA mode 12h: 640 x 480, one row after another, 80 bytes "
+                 "a row",
+        "lin320": "VGA mode 13h: 320 x 200, a byte a pixel (256 colours)",
+        "modex": "VGA Mode X: 320 x 240, a byte a pixel across four planes "
+                 "(256 colours)",
+        "c160": "CGA's text mode squeezed to 100 rows, only the "
+                "attribute bytes: 160 x 100 in 16 colours",
+        "text-80x100": "CGA's text mode squeezed to 100 rows, character "
+                       "and attribute: 80 x 100 cells, the composite "
+                       "512-colour format",
+        "text-80x25": "The ordinary 80 x 25 text screen every adapter has, "
+                      "character and attribute: text video",
+    },
+    "pixfmt": {
+        "mono": "Black and white, one bit a pixel - every graphics layout",
+        "cgacomp": "Composite colour: one-bit patterns a CGA's composite "
+                   "output shows as 16 colours",
+        "vga8": "256 colours from a palette made for the clip (lin320 or "
+                "modex)",
+        "vga4": "The VGA's 16 standard colours, on mode 12h (lin80)",
+        "cga4": "4 colours in CGA mode 4 (cga)",
+        "c160": "16 colours at 160 x 100 on the text-mode trick (c160)",
+        "c512": "~450 composite colours on the text-mode trick "
+                "(text-80x100)",
+        "text": "Characters on the 80 x 25 text screen, colour or mono "
+                "(text-80x25)",
+    },
+    "text_colour": {
+        "colour": "16 foregrounds on 16 backgrounds: a CGA, EGA or VGA",
+        "mono": "Grey, white and reverse only: plays on every adapter, "
+                "Hercules and MDA too",
+    },
+    "text_glyphs": {
+        "blocks": "Letters, the four shades and the four half blocks - the "
+                  "clearest picture (the half blocks double the rows)",
+        "shades": "Letters and the four shades, no half blocks",
+        "ascii": "Printable ASCII only: the classic ASCII-art look, less "
+                 "clear",
+        "dots": "Full and half blocks for the shapes, and the dots , . ' ` "
+                "for the edges and dithers a block is too coarse for - the "
+                "other classic text-art style",
+        "dots-plus": "The dots set with : ; \" * as well - more marks for "
+                     "the middle tones, a little busier",
+    },
+    "fit": {
+        "fit": "The whole picture; the canvas shrinks to its shape, no bars",
+        "fill": "The whole box; the picture's edges cropped",
+        "stretch": "The whole box and the whole picture, distorted",
+    },
+    "profile": {
+        "5150-st225": "IBM 5150/XT with a Seagate ST-225 hard disk: "
+                      "96 KB/s, half the CPU on average (the default)",
+        "5150-xtide": "IBM 5150/XT with an XT-IDE: 91 KB/s",
+        "5150-picomem2": "IBM 5150/XT with a PicoMEM 2: 150 KB/s, 22 kHz "
+                         "sound (predicted)",
+        "floppy": "Played off a floppy: 15 KB/s, 5.5 kHz sound - small and "
+                  "slow",
+        "286": "A 286 with a hard disk: 150 KB/s, three 8088s of CPU "
+               "(predicted)",
+        "286-vga": "A 286 with VGA: 400 KB/s, six 8088s of CPU",
+        "lossless": "No budget: every change kept, whatever it costs",
+    },
+    "aim": {
+        "asked": "Encode what was asked for, nothing more (the default)",
+        "quality": "Spend budget the video leaves unused on a bigger "
+                   "picture and better sound",
+        "size": "Leave out changes not worth their bytes: the smallest "
+                "file for the look",
+    },
+    "error": {
+        "visible": "When a frame is cut, judge what is wrong as the eye "
+                   "sees it (the default)",
+        "bits": "When a frame is cut, count wrong bits plainly",
+    },
+    "audio": {
+        "pcm8": "8-bit sound for a Sound Blaster",
+        "adpcm4": "Sound Blaster 4-bit ADPCM: half the bytes, noisier",
+        "speaker": "The PC speaker, for a machine with no sound card "
+                   "(5.5 kHz; takes about half an 8088)",
+        "none": "Silent",
+    },
+    "adpcm": {
+        "search": "Search for the best ADPCM stream (~7 dB better, slower)",
+        "greedy": "A nibble at a time: fast",
+    },
+    "dither": {
+        "bayer": "An ordered 8 x 8 pattern: steady, compresses best",
+        "bluenoise": "A noise pattern: no visible grid, ~8% more data",
+        "threshold": "Plain black or white at half grey: for clips that are "
+                     "black and white already",
+    },
+    "levels": {
+        "auto": "Stretch the greys the clip uses to full black-to-white",
+        "none": "Keep the greys as they are",
+    },
+    "cga_palette": {
+        "0": "Green, red and brown",
+        "1": "Cyan, magenta and white",
+        "2": "Cyan, red and white (mode 5's)",
+    },
+    "cga_bright": {"0": "The set dim", "1": "The set bright"},
+    "cga_bg": {str(i): n for i, n in enumerate((
+        "Black", "Blue", "Green", "Cyan", "Red", "Magenta", "Brown",
+        "Light grey", "Dark grey", "Light blue", "Light green", "Light cyan",
+        "Light red", "Light magenta", "Yellow", "White"))},
+    "cga_card": {
+        "old": "IBM's original CGA",
+        "new": "IBM's 1985 CGA, whose composite colours differ",
+        "both": "Each cell chosen to look right on either card (the "
+                "default)",
+    },
+    "comp_dither": {
+        "diffuse": "Error diffusion through the composite model (the "
+                   "default)",
+        "pattern": "An ordered pattern: steadier, less exact",
+    },
+    "levels_mix": {
+        "4": "2 x 2 patterns: calmer and cheaper (the default)",
+        "16": "4 x 4 patterns: more colours, more grain",
+    },
+    "live": {
+        "cga": "Live on a CGA desktop",
+        "herc": "Live on a Hercules desktop",
+        "vga": "Live on a VGA desktop",
+    },
+}
 
 
 def implied(preset=None, pixfmt=None, profile="5150-st225", live=None,
@@ -143,31 +372,67 @@ def implied(preset=None, pixfmt=None, profile="5150-st225", live=None,
     rate, which caps the default one"""
     out = {}
     lay, bw, bh = PRESETS[preset] if preset else (None, None, None)
-    if live:
-        pixfmt, lay = "mono", "lin80"
+    if live:                    # one bit, or VGA4 on VGA (98.3.10.4)
+        pixfmt = "vga4" if live == "vga" and pixfmt == "vga4" else "mono"
+        lay = "lin80"
         bw, bh = LIVE_BOX[live]
         out["resident"] = "1"
     if not pixfmt and preset in PRESET_PIXFMT:
         pixfmt = PRESET_PIXFMT[preset]
     vga8 = lay in ("lin320", "modex")
     if not pixfmt and lay:
-        pixfmt = "vga8" if vga8 else "c160" if lay == "c160" else "mono"
+        pixfmt = "vga8" if vga8 else "c160" if lay == "c160" else \
+            "c512" if lay == "text-80x100" else \
+            "text" if lay == "text-80x25" else "mono"
     d = PRESET_DEFAULTS.get(preset, {}) if not live else {}
-    fps = d.get("fps", 15.0 if pixfmt == "vga8" else 30.0)
+    fps = d.get("fps", 15.0 if pixfmt in ("vga8", "text") else 30.0)
     if sfps:
         fps = min(fps, sfps)
     prof = PROFILES[profile or "5150-st225"]
     num = lambda v: "" if v is None else ("%g" % v)
+    out["text_colour"] = d.get("text_colour", "colour") \
+        if pixfmt == "text" else ""
     out.update(layout=lay or "", box="%dx%d" % (bw, bh) if bw else "",
                pixfmt=pixfmt or "", fps=num(fps),
                detail=d.get("detail", "1x1"),
-               disk=num(prof["disk"]), avg=num(prof["avg"]),
-               peak=num(prof["peak"]), rate=num(prof["rate"]),
+               disk=num(prof["disk"]),
+               avg=num(LIVE_AVG if live and prof["avg"] is not None
+                       else prof["avg"]),
+               peak=num(prof["peak"]),
+               owe=num(None if live else prof["owe"]),
+               reserve="" if live or prof["disk"] is None else
+               num(reserve_bytes(prof) // 1024),
+               rate=num(prof["rate"]),
                audio=prof["audio"])
     return out
 
+HOOK_CYC = 3040.0        # the hook's own cycles a frame, outside the decode
+                        # and the sound's copy: measured on the Hercules
+                        # 5150, silent (docs/reports/VIDEO-PROFILE-2026-09-27)
+LIVE_PASS_HZ = 1193182.0 / 65536   # a Live worker's passes a second: a tick
+LIVE_AVG = 0.60         # a LIVE file's share of the machine (98.2.7): its
+                        # decode AND its blit (98.3.10.2), the rest the
+                        # desktop's around it - the owner's figure,
+                        # 2026-09-27; --avg overrides it
 CYC_AUDIO = 13.0        # the interrupt's copy of a PCM8 byte into the
                         # card's buffer (rep movsw, ~25 cycles a word)
+# THE SPEAKER (SPEC.md 34.11, 98.2.15): no card, so every sample is an
+# interrupt. os88spk_isr measured 343 cycles entry to iret on MartyPC's 5150,
+# and the 8088 takes ~60 more to acknowledge one: ~400 a pulse, in 8088
+# cycles. A file made for the speaker carries the COUNTS (98.1.1.3), so the
+# player copies them into its ring as it would for a card; translating
+# samples there was ~50 a byte. At 5,512 Hz that is ~48% of a 4.77 MHz
+# machine - which is the whole reason a clip is made FOR the speaker rather
+# than merely played through it
+CYC_SPK_PULSE = 400.0
+CYC_SPK_BYTE = 15.0     # a plain copy: the file carries the counts
+                        # (98.1.1.3), so the table is the encoder's, not the
+                        # player's. MEASURED: vp_aput 27.7 cycles a byte of
+                        # wall time on MartyPC's 5150, ~15 its own once the
+                        # pulses' ~46% is taken out; translating was 92.8/~50
+SPK_RATE = 5512         # the speaker target's default rate
+SPK_MIN = 4679          # N = 1,193,182 / rate is a lobyte count of 74..255
+SPK_MAX_8088 = 8000     # VIDEO.O88's VP_SPKMAX: past it an 8088 is SILENT
 REC_OVER = 6 + 10       # a record's header and its ten list terminators
 REC_MAX = 30 * 1024     # a frame record rides in a super-packet of 32 KB
                         # (98.1.4): whatever the budgets say, no more.
@@ -621,6 +886,297 @@ class KnollDitherer(Vga8Ditherer):
         return idx
 
 
+class C512Ditherer:
+    """C512 (SPEC.md 98.2.14): each 8 x 2 cell the code, of 512, nearest in
+    CIELAB to the cell's colour plus an 8 x 8 Bayer offset - nearest by the
+    target CARD's composite model, or for `both` by the larger of the two
+    cards' errors. Two 32 x 32 x 32 tables, made once, hold the nearest code
+    of each character; a cell prefers last frame's character by CHAR_BIAS
+    (its attribute alone is one byte, a new character two) and keeps last
+    frame's code while that is within `stable` of the best.
+    With `mix` of 2 or more the cell is instead Knoll's PATTERN (98.2.5)
+    over `mix` codes, the error carried at MIX_K against the cards' mean
+    colour, stable by the source at `mstable`: a faint tint's nearest code
+    is a grey, and `both` has few codes that are a tint on both cards, so
+    the pattern trades grain for the tint. Returns the canvas: a row of
+    characters and attributes, the screen's own order"""
+
+    CHAR_BIAS = 0.75            # CIELAB units: a character change's price
+    MIX_K = 0.6                 # the pattern's error carry: less grain
+
+    def __init__(self, w, h, card, amp, stable, mix=0, mstable=24.0):
+        import os88cgacomp as cc
+        self.cc = cc
+        cards = {vid.CARD_OLD: (False,), vid.CARD_NEW: (True,),
+                 vid.CARD_BOTH: (False, True)}[card]
+        self.labs = [cc.srgb2lab(cc.c512_palette(n)).astype(np.float32)
+                     for n in cards]
+        g = (np.arange(32, dtype=np.float32) * 255 / 31)
+        cube = cc.srgb2lab(np.stack(np.meshgrid(g, g, g, indexing="ij"), -1)
+                           .reshape(-1, 3)).astype(np.float32)
+        self.lut = np.empty((2, len(cube)), np.int16)
+        for i in range(0, len(cube), 2048):
+            d = self.cost(cube[i:i + 2048, None, :], slice(None))
+            for ch in (0, 1):
+                self.lut[ch, i:i + 2048] = \
+                    d[:, ch * 256:(ch + 1) * 256].argmin(1) + ch * 256
+        self.t = ((bayer(8) - 0.5) * amp).astype(np.float32)
+        self.t = np.tile(self.t, (-(-h // 8), -(-w // 8)))[:h, :w, None]
+        self.stable = stable
+        self.prev = None
+        self.mix = mix
+        if mix >= 2:
+            self.mstable = mstable
+            self.pal = sum(cc.c512_palette(n).astype(np.float32)
+                           for n in cards) / len(cards)
+            self.luma = self.pal @ np.array([0.299, 0.587, 0.114],
+                                            np.float32)
+            self.mlut = np.empty(len(cube), np.int16)
+            for i in range(0, len(cube), 2048):
+                self.mlut[i:i + 2048] = self.cost(
+                    cube[i:i + 2048, None, :], slice(None)).argmin(1)
+            b = (bayer(4) * mix).astype(np.int64)       # 0..mix-1
+            self.cell = np.tile(b, (-(-h // 4), -(-w // 4)))[:h, :w]
+
+    def cost(self, lab, codes):
+        """CIELAB error of `codes` for targets `lab` - the larger of the
+        cards' when there are two"""
+        return np.stack([np.sqrt(((lab - pl[codes]) ** 2).sum(-1))
+                         for pl in self.labs]).max(0)
+
+    def pattern(self, rgb):
+        f = rgb.astype(np.float32)
+        err = np.zeros_like(f)
+        cands = []
+        for _ in range(self.mix):
+            t = np.clip(f + err * self.MIX_K, 0, 255)
+            q = np.clip(np.rint(t * (31 / 255)), 0, 31).astype(np.int32)
+            c = self.mlut[(q[..., 0] << 10) | (q[..., 1] << 5) | q[..., 2]]
+            cands.append(c)
+            err += f - self.pal[c]
+        cands = np.stack(cands, -1)                     # (h, w, mix)
+        order = np.argsort(self.luma[cands], axis=-1, kind="stable")
+        pick = np.take_along_axis(order, self.cell[..., None], -1)[..., 0]
+        best = np.take_along_axis(cands, pick[..., None], -1)[..., 0]
+        if self.prev is not None and self.mstable:
+            moved = np.sqrt(((f - self.at) ** 2).sum(2))
+            keep = moved < self.mstable
+            best = np.where(keep, self.prev, best)
+            self.at = np.where(keep[..., None], self.at, f)
+        else:
+            self.at = f
+        self.prev = best
+        return best
+
+    def codes(self, rgb):
+        if self.mix >= 2:
+            return self.pattern(rgb)
+        t = np.clip(rgb.astype(np.float32) + self.t, 0, 255)
+        q = np.clip(np.rint(t * (31 / 255)), 0, 31).astype(np.int32)
+        qi = (q[..., 0] << 10) | (q[..., 1] << 5) | q[..., 2]
+        lab = self.cc.srgb2lab(t).astype(np.float32)
+        c0, c1 = self.lut[0][qi], self.lut[1][qi]
+        e0, e1 = self.cost(lab, c0), self.cost(lab, c1)
+        best = np.where(e1 < e0, c1, c0)
+        eb = np.minimum(e0, e1)
+        if self.prev is not None:
+            same = np.where(self.prev >= 256, c1, c0)   # last frame's char
+            es = np.where(self.prev >= 256, e1, e0)
+            take = es <= eb + self.CHAR_BIAS
+            best = np.where(take, same, best)
+            eb = np.where(take, es, eb)
+            if self.stable:
+                ep = self.cost(lab, self.prev)
+                best = np.where(ep <= eb + self.stable, self.prev, best)
+        self.prev = best
+        return best
+
+    def __call__(self, rgb):
+        c = self.codes(rgb)
+        out = np.empty((c.shape[0], c.shape[1] * 2), np.uint8)
+        out[:, 0::2] = np.where(c >= 256, 0x55, 0x13)
+        out[:, 1::2] = c & 255
+        return out
+
+
+class TextMatcher:
+    """TEXT (SPEC.md 98.2.16): each 8 x 8 cell of the picture the character
+    and the attribute whose cell, drawn in os88txtfont's model face, is
+    nearest it - the picture is made OF the characters, and CLARITY is what
+    every choice here is for:
+    - The error is taken twice. DOT FOR DOT, in sRGB, says which way an
+      edge runs. THROUGH THE EYE - each 2 x 2 quarter of the cell mixed in
+      LINEAR light and seen as sRGB - says what TONE a shade reads as: a
+      50% dot of black and white looks like 186, not 128, and pricing a
+      shade at 128 turned every mid-grey dark. `detail` weights the first.
+    - A LETTER EARNS ITS PLACE. A glyph that is neither a space, a shade
+      nor a block pays `busy` (RMS, of 255) on top of its error: at
+      80 x 25 a letter chosen because it was a hair nearer than a shade is
+      noise - the eye reads the letter, not the picture.
+    - The picture is SHARPENED first (`sharpen`, an unsharp mask about a
+      cell wide): an edge at this size is two or three cells, and a soft
+      one is lost between the glyphs.
+    - COLOUR is any of sixteen on any of sixteen (blink off): per glyph the
+      two colours a least-squares fit asks for, the `near` nearest of the
+      sixteen to each, and every pair priced exactly. MONO is the three
+      attributes every adapter draws alike, 07h, 0Fh and 70h.
+    - A cell keeps last frame's code while it is within `stable` (RMS) of
+      the best: a still picture stays still, and a source's noise does not
+      make the letters crawl, which is the least clear thing a text
+      picture can do.
+    Returns the canvas: a row of characters and attributes, the screen's
+    own order"""
+
+    GAMMA = 2.2
+    PLAIN = (0x20, 0xB0, 0xB1, 0xB2, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF)
+
+    BUSY = {"ascii": 2.0,           # ...where letters are all it has,
+            "dots": 2.0,            # ...and where the dots are the point
+            "dots-plus": 2.0}
+    BUSY_DEFAULT = 12.0
+
+    def __init__(self, cells, rows, colour, glyphs="blocks", stable=6.0,
+                 sharpen=0.6, detail=0.5, busy=None, near=2, top=16):
+        if busy is None:
+            busy = self.BUSY.get(glyphs, self.BUSY_DEFAULT)
+        self.top = top
+        import os88txtfont
+        self.codes = np.array(os88txtfont.GLYPH_SETS[glyphs], np.uint8)
+        K = len(self.codes)
+        g = os88txtfont.bitmaps(self.codes).reshape(K, 64)
+        self.g, self.n = g, g.sum(1)
+        q = np.zeros((16, 64), np.float32)      # 8 x 8 -> 4 x 4, averaged
+        for y in range(8):
+            for x in range(8):
+                q[(y // 2) * 4 + x // 2, y * 8 + x] = 0.25
+        self.q = q
+        lv = np.rint(g @ q.T * 4).astype(np.int64)      # (K, 16): 0..4
+        self.oh = (lv[:, None, :] == np.arange(5)[None, :, None]).astype(
+            np.float32)                                 # (K, 5, 16)
+        self.cnt = self.oh.sum(2)                       # (K, 5)
+        # a perceptual weight on the channels, luma's, so a green is judged
+        # as bright as the eye judges it
+        self.cw = np.sqrt(np.array([0.299, 0.587, 0.114], np.float32) * 3)
+        srgb = np.frombuffer(vid.STD16, np.uint8).astype(
+            np.float32).reshape(16, 3) * (255.0 / 63)
+        self.pal = srgb * self.cw
+        lin = (srgb / 255) ** self.GAMMA
+        lvl = np.arange(5, dtype=np.float32) / 4
+        mix = lin[None, :, None, :] + lvl[None, None, :, None] * (
+            lin[:, None, None, :] - lin[None, :, None, :])   # [f, b, L]
+        self.mix = (mix ** (1 / self.GAMMA)) * 255 * self.cw  # (16,16,5,3)
+        self.colour = colour
+        self.cells, self.rows = cells, rows
+        self.stable, self.sharpen, self.near = stable, sharpen, near
+        self.wf, self.wb = detail, (1.0 - detail) * 4   # a quarter: 4 dots
+        self.norm = 64 * (self.wf + self.wb / 4)
+        self.pen = np.where(np.isin(self.codes, self.PLAIN), 0.0,
+                            busy ** 2 * self.norm).astype(np.float32)
+        self.prev = None                                # (N,) k, fg, bg
+
+    def _sharp(self, f):
+        if not self.sharpen:
+            return f
+        k = np.array([1, 4, 6, 4, 1], np.float32) / 16  # 5 taps each way
+        b = f
+        for ax in (0, 1):
+            pad = [(0, 0)] * 3
+            pad[ax] = (2, 2)
+            p = np.pad(b, pad, mode="edge")
+            b = sum(k[i] * np.take(p, range(i, i + f.shape[ax]), axis=ax)
+                    for i in range(5))
+        return np.clip(f + self.sharpen * (f - b), 0, 255)
+
+    def _err(self, st, k, fi, bi, ai=None):
+        """The error of glyph index `k` in colours `fi` on `bi`, each
+        (N, X) - both terms and the penalty, exactly. `ai` is each's column
+        of st's per-glyph A, when that holds only the prefilter's glyphs"""
+        S, SS, GT, P, PP, A = st
+        n = np.arange(k.shape[0])[:, None]
+        fc, bc = self.pal[fi], self.pal[bi]
+        d = fc - bc
+        nk = self.n[k]
+        ef = (64 * (bc ** 2).sum(-1) - 2 * (bc * S[:, None]).sum(-1) +
+              SS[:, None] + 2 * (d * (bc * nk[..., None] - GT[n, k])).sum(-1)
+              + nk * (d ** 2).sum(-1))
+        mv = self.mix[fi, bi]                           # (N, X, 5, 3)
+        av = A[n, k if ai is None else ai]
+        eb = ((self.cnt[k] * (mv ** 2).sum(-1)).sum(-1) -
+              2 * np.einsum("nxlc,nxlc->nx", mv, av) + PP[:, None])
+        return self.wf * ef + self.wb * eb + self.pen[k]
+
+    def __call__(self, rgb):
+        R, C = self.rows, self.cells
+        f = self._sharp(rgb.astype(np.float32))
+        cells = lambda a: a.reshape(R, 8, C, 8, 3).transpose(
+            0, 2, 1, 3, 4).reshape(R * C, 64, 3)
+        t = cells(f * self.cw)
+        lin = cells((f / 255) ** self.GAMMA)
+        P = (np.einsum("qp,npc->nqc", self.q, lin) ** (1 / self.GAMMA)
+             * 255 * self.cw).astype(np.float32)        # (N, 16, 3)
+        N, K = R * C, len(self.codes)
+        S, SS = t.sum(1), (t ** 2).sum((1, 2))
+        GT = np.matmul(t.transpose(0, 2, 1), self.g.T).transpose(0, 2, 1)
+        # THE PREFILTER: each glyph's error at the two colours it asks for,
+        # unquantised and dot for dot - closed form, (N, K) - and the best
+        # `top` of them go on to be priced exactly
+        on = self.n[None, :]
+        e0 = SS[:, None] - (GT ** 2).sum(-1) / np.maximum(on, 1) - \
+            ((S[:, None, :] - GT) ** 2).sum(-1) / np.maximum(64 - on, 1) + \
+            self.pen[None, :] / max(self.wf, 1e-3)
+        top = min(self.top, K)
+        ks = np.argpartition(e0, top - 1, axis=1)[:, :top]     # (N, T)
+        if self.prev is not None:           # ...and last frame's, always,
+            ar = np.arange(N)               # in place of the least likely
+            worst = e0[ar[:, None], ks].argmax(1)
+            ks[ar, worst] = np.where((ks == self.prev[0][:, None]).any(1),
+                                     ks[ar, worst], self.prev[0])
+        A = np.einsum("ntlq,nqc->ntlc", self.oh[ks], P)        # (N, T, 5, 3)
+        st = (S, SS, GT, P, (P ** 2).sum((1, 2)), A)
+        ar = np.arange(N)
+        cols = np.broadcast_to(np.arange(top), (N, top))
+        if self.colour:
+            gt = GT[ar[:, None], ks]                            # (N, T, 3)
+            on = self.n[ks][..., None]
+            fs = gt / np.maximum(on, 1)
+            bs = (S[:, None, :] - gt) / np.maximum(64 - on, 1)
+            fs = np.where(on > 0, fs, bs)
+            bs = np.where(on < 64, bs, fs)
+            m = self.near
+            df = ((fs[..., None, :] - self.pal) ** 2).sum(-1)   # (N,T,16)
+            db = ((bs[..., None, :] - self.pal) ** 2).sum(-1)
+            fi = np.argpartition(df, m - 1, axis=-1)[..., :m]
+            bi = np.argpartition(db, m - 1, axis=-1)[..., :m]
+            fi = np.repeat(fi[..., :, None], m, -1).reshape(N, -1)
+            bi = np.repeat(bi[..., None, :], m, -2).reshape(N, -1)
+            kx = np.repeat(ks, m * m, 1)
+            ax = np.repeat(cols, m * m, 1)
+        else:
+            at = np.array(vid.TEXT_MONO_ATTRS, np.int64)
+            kx = np.repeat(ks, len(at), 1)
+            ax = np.repeat(cols, len(at), 1)
+            fi = np.tile(at & 15, (N, top))
+            bi = np.tile(at >> 4, (N, top))
+        e = self._err(st, kx, fi, bi, ax)
+        best = e.argmin(1)
+        eb, k, fg, bg = e[ar, best], kx[ar, best], fi[ar, best], bi[ar, best]
+        if self.prev is not None and self.stable:
+            pk, pf, pb = self.prev
+            pa = (ks == pk[:, None]).argmax(1)
+            ep = self._err(st, pk[:, None], pf[:, None], pb[:, None],
+                           pa[:, None])[:, 0]
+            keep = np.sqrt(np.maximum(ep, 0) / self.norm) <= \
+                np.sqrt(np.maximum(eb, 0) / self.norm) + self.stable
+            k = np.where(keep, pk, k)
+            fg = np.where(keep, pf, fg)
+            bg = np.where(keep, pb, bg)
+        self.prev = (k, fg, bg)
+        out = np.empty((R, C * 2), np.uint8)
+        out[:, 0::2] = self.codes[k].reshape(R, C)
+        out[:, 1::2] = ((bg << 4) | fg).astype(np.uint8).reshape(R, C)
+        return out
+
+
 def cga4_pick(frames, bg=None, pal=None, bright=None):
     """CGA4's palette byte (98.1.3.3): the one of the 96 - a background of
     sixteen, three sets, two intensities - whose four colours are nearest
@@ -730,18 +1286,19 @@ def scaled_aspect(asp, dh):
     return n // k, d // k
 
 
-def span_cost(bs, run):
+def span_cost(bs, run, layout=None):
     """(cycles, bytes) of one span in the stream, wave 0's model: its
     list's entry and a skip byte (a segment's set-up amortised in)"""
+    fr, sg, ab, cp, csl, crn = vid.cyc_table(layout)
     n = len(bs)
     if run or (n >= 7 and bs.count(bs[:1]) == n):
-        c = vid.CYC_RUN[0] + vid.CYC_RUN[1] * n
+        c = crn[0] + crn[1] * n
         b = 2 + (2 if n < 256 else 3)
     elif n <= 6:
-        c = vid.CYC_P[n - 1]
+        c = cp[n - 1]
         b = 1 + n
     else:
-        c = vid.CYC_SLICE[0] + vid.CYC_SLICE[1] * n
+        c = csl[0] + csl[1] * n
         b = 1 + n + (1 if n < 256 else 2)
     return c + 20, b
 
@@ -791,6 +1348,15 @@ def preroll(enc, target, abytes, most):
     return most
 
 
+def reserve_bytes(prof):
+    """The disk bucket's depth: the profile's `reserve` in KB, or what its
+    ring holds read ahead - a slot for the one being decoded and one for a
+    super-packet straddling into the next, so (ring - 2) x 32 KB"""
+    if prof.get("reserve") is not None:
+        return int(prof["reserve"] * 1024)
+    return (max(2, prof.get("ring") or 4) - 2) * vid.SLOT or DISK_LOOKAHEAD
+
+
 class Budget:
     """A token bucket: `per` a frame, holding at most `cap`, starting half
     full (the player fills its ring before the first frame)"""
@@ -821,10 +1387,15 @@ class Encoder:
                 -1, 3) * (255.0 / 63)
         period = vid.HZ / fps
         self.period = period
+        self.live = False               # LIVE: the blit is charged too,
+        self.blitf = min(1.0, LIVE_PASS_HZ / fps)   # a pass's share of it
         if prof["avg"] is None:
             self.cpu = Budget(None, None)
             self.peak = math.inf
             self.disk = Budget(None, None)
+            self.reserve = 0
+            self.dcurve = None
+            self.dfloor = 0
         else:
             self.cpu = Budget(prof["avg"] * period - audio_cyc,
                               (prof["avg"] * period - audio_cyc) * fps)
@@ -834,7 +1405,37 @@ class Encoder:
                 raise vid.V88Error("the sound alone is %d bytes a second, "
                                    "and the profile's disk is %d"
                                    % (audio_bps, prof["disk"]))
-            self.disk = Budget(vb / fps, min(vb, DISK_LOOKAHEAD))
+            # THE DISK RESERVE (98.2.1.3): what the player's ring holds read
+            # ahead, banked in calm stretches and spent in a burst
+            self.reserve = reserve_bytes(prof)
+            self.disk = Budget(vb / fps, self.reserve)
+            # A DISK THAT SLOWS UNDER LOAD (98.2.1.3): `disk` is its rate at
+            # the `avg` share, and `disk_at` its rate at others as a share
+            # of that, measured. A frame refills the bucket at the rate its
+            # own hook leaves - so a burst, which is when a deep reserve is
+            # spent, is when it refills slowest
+            self.dcurve = prof.get("disk_at")
+            # ...and never spent below one READ_SEQ: the reader brings 32 KB
+            # a call, ~5 periods of it, so a slot's worth can be in flight
+            # and not yet in the ring. Measured: Sonic 2 at a 192 KB
+            # reserve stalled 3 times in 20 s without it and 0 with it
+            self.dfloor = min(float(vid.SLOT), self.reserve / 4.0)
+            self.drate, self.abps, self.fps = prof["disk"], audio_bps, fps
+        # OWED TIME (98.2.1.1): the player's schedule, simulated. On when
+        # a frame may run to more than the per-frame ceiling allows
+        self.audio_cyc = audio_cyc
+        self.q = period * (prof.get("speed") or 1)  # a PERIOD, 8088 cycles
+        self.owe = None
+        if prof["avg"] is not None and prof.get("owe") and \
+                prof["owe"] * self.q > prof["peak"] * period:
+            self.owe = prof["owe"] * self.q - audio_cyc - HOOK_CYC
+        self.ceil = self.peak
+        self.s_free = self.s_t0 = 0.0   # the hook busy until; frame 0's due
+        self.s_i, self.s_pair = 0, None     # the frame; a pair's deadline
+        self.s_start = self.s_role = 0
+        self.cpucut = self.wascut = False
+        self.spk = 0.0                  # the speaker's share (98.2.15): a
+                                        # decode cycle takes 1/(1-spk) of wall
         self.base = np.array(g.base, dtype=np.int64)
         self.idx = self.base[:, None] + np.arange(g.wb)
         self.screen = np.zeros((g.h, g.wb), dtype=np.uint8)
@@ -844,14 +1445,98 @@ class Encoder:
         self.tsurf = bytearray(65536)
         self.tv = np.frombuffer(self.tsurf, dtype=np.uint8)
         self.wv = np.zeros(65537, dtype=np.float64)
-        self.stats = dict(frames=0, exact=0, cut=0, bytes_left=0)
+        self.stats = dict(frames=0, exact=0, cut=0, bytes_left=0,
+                          disk=0, cpu=0, peak=0, owed=0, held=0,
+                          late=0, skipped=0)
+        # WHAT A CUT FRAME SPENDS ON (98.2.1.2): the targets after this one
+        # (`look` of them, set per frame), and error as SEEN rather than as
+        # bits - both need the screen as pixels, which `dmode` says how to
+        # get: "bits" a byte is 8 one-bit pixels, "pal" a byte (or a pixel)
+        # indexes `dpal`, "idx" a byte packs `ppb` indexes of `dpal`, None
+        # no pixel form (the composite formats: bits, and no visible error)
+        self.look, self.vis, self.future = 0, False, []
+        self.thr = 0.0
+        self.dmode, self.dpal, self.ppb = \
+            ("bits", None, 8) if palette is None else ("pal", self.pal, 1)
+        self.blur_r = 1
+        self.q_vis = self.q_wrong = self.q_flick = self.q_tflick = 0.0
+        self.q_prev = self.q_tprev = (None, None)
+
+    def begin(self):
+        """A frame starts: the buckets fill, and WHEN the player will
+        decode it sets its ceiling (98.2.1.1). The hook runs a call a
+        period and draws at most two frames a call, one due and one owed;
+        a third due is late, and a silent play drops it (98.3). So a frame
+        on time may run past its period - to `owe` periods, never to the
+        second, when the call after it would find three due - and the two
+        the next call then draws share one steady ceiling between them, so
+        the call after that is on time again. The play with sound runs a
+        call every half period off the card, so this schedule is the
+        stricter of the two"""
+        self.cpu.tick()
+        if not self.dcurve:
+            self.disk.tick()
+        self.wascut, self.cpucut = self.cpucut, False
+        if self.owe is None:
+            self.ceil = self.peak
+            return
+        q, i = self.q, self.s_i
+        kw = 1.0 / (1.0 - self.spk)         # the schedule is WALL time
+        over = self.audio_cyc + HOOK_CYC    # a frame's hook, not its decode
+        if self.s_pair is not None:         # the second of a call's two:
+            self.s_start, self.s_role = self.s_free, 2  # what is left
+            self.ceil = (self.s_pair - self.s_free) / kw - over
+            self.s_pair = None
+            return
+        k = max(i, math.ceil((self.s_free - self.s_t0) / q - 1e-9))
+        n = k - i + 1                       # the frames due at that call
+        if n > 2:                           # (never, by construction: the
+            self.stats["late"] += n - 2     # model's own check)
+            self.s_t0 += (n - 2) * q
+            n = 2
+        self.s_start = self.s_t0 + k * q
+        if n == 2:                          # behind: this and the next
+            self.s_role = 1                 # share one steady ceiling
+            self.s_pair = self.s_start + (self.peak + self.audio_cyc) * kw
+            self.ceil = (self.s_pair - self.s_start) / kw / 2 - over
+        else:
+            self.s_role = 0                 # on time: may run over, unless
+            self.ceil = self.peak if self.wascut else self.owe  # the last
+                                            # frame was already short of time
+
+    def disk_rel(self, share):
+        """The disk's rate at a hook `share` of the period, over its rate
+        at `avg`: the profile's measured points, straight between them"""
+        pts = self.dcurve
+        share = min(max(share, pts[0][0]), pts[-1][0])
+        for (s0, r0), (s1, r1) in zip(pts, pts[1:]):
+            if share <= s1:
+                return r0 + (r1 - r0) * (share - s0) / (s1 - s0)
+        return pts[-1][1]
+
+    def end(self, c):
+        """...and ends, having cost the model `c` cycles"""
+        if self.dcurve:                 # (the speaker's pulses are the
+                                        # reader's CPU too, 98.2.15)
+            share = (c + self.audio_cyc + HOOK_CYC) / self.q + self.spk
+            per = (self.drate * self.disk_rel(share) * 0.99 - self.abps) \
+                / self.fps
+            self.disk.level = min(self.disk.cap, self.disk.level + per)
+        if self.owe is None:
+            return
+        f = self.s_start + (c + self.audio_cyc + HOOK_CYC) / (1.0 - self.spk)
+        if self.s_role == 0 and f > self.s_t0 + (self.s_i + 1) * self.q:
+            self.stats["owed"] += 1     # ran over: the next is held
+        elif self.s_role == 1:
+            self.stats["held"] += 1     # drawn a period late
+        self.s_free = f
+        self.s_i += 1
 
     def frame(self, target, audio=b""):
         """(the frame's writes, its record): the target's changes, or as
         many of them as the budgets allow, best first"""
         g = self.g
-        self.cpu.tick()
-        self.disk.tick()
+        self.begin()
         self.stats["frames"] += 1
         diff = target != self.screen
         self.age = np.where(diff, self.age + 1, 0)
@@ -861,21 +1546,28 @@ class Encoder:
             return [], vid.record([], g, audio)
         self.tv[self.idx] = target
         sp = vid.spans((self.base[ys] + xs).tolist(), self.tsurf, g)
-        cyc_room = min(self.cpu.room(), self.peak)
-        byte_room = self.disk.room()
-        costs = [span_cost(bs, run) for a, bs, run in sp]
+        if self.thr:                    # --aim size (98.2.1.4)
+            sp = self.worthwhile(target, sp)
+            if not sp:
+                self.stats["exact"] += 1
+                return [], vid.record([], g, audio)
+        cyc_room = min(self.cpu.room(), self.ceil)
+        byte_room = self.disk.room() - self.dfloor
+        costs = [span_cost(bs, run, g.layout) for a, bs, run in sp]
         order = None
-        er = cyc_room - vid.CYC_FRAME
+        er = cyc_room - vid.cyc_table(g.layout)[0]
         eb = min(byte_room, REC_MAX - len(audio)) - REC_OVER
-        for attempt in range(8):
+        for attempt in range(16 if self.live else 8):
             tc = sum(c for c, b in costs)
             tb = sum(b for c, b in costs)
             if tc <= er and tb <= eb:
                 chosen = sp
             else:
                 if order is None:
+                    self.why(tc, tb, er, eb, cyc_room)
                     sp = split_big(sp)
-                    costs = [span_cost(bs, run) for a, bs, run in sp]
+                    costs = [span_cost(bs, run, g.layout)
+                             for a, bs, run in sp]
                     order = self.rank(target, sp, costs, er, eb)
                 chosen, uc, ub = [], 0, 0
                 for i in order:
@@ -889,29 +1581,193 @@ class Encoder:
             rec = vid.record(chosen, g, audio, limit=65535)
             # the model's estimate is per span; the record is measured, and
             # a frame over its ceiling tries again with the estimate scaled
-            mc = vid.cycles_of(rec)
+            mc = self.cost(rec)
             if mc <= cyc_room and len(rec) - len(audio) <= byte_room and \
                     len(rec) <= REC_MAX:
                 break
             er *= min(0.97, cyc_room / mc)
             eb *= min(0.97, min(byte_room, REC_MAX - len(audio)) /
                       max(1, len(rec) - len(audio)))
-        if chosen is sp:
-            self.stats["exact"] += 1
         else:
-            self.stats["cut"] += 1
-            self.stats["bytes_left"] += int(diff.sum()) - sum(
-                len(bs) for a, bs, r in chosen)
+            if self.live and order is not None:
+                chosen, rec = self.trim(sp, order, g, audio, cyc_room,
+                                        byte_room)
         for a, bs, run in chosen:
             self.surf[a:a + len(bs)] = bs
         self.screen = self.sv[self.idx]
+        if chosen is sp:
+            self.stats["exact"] += 1
+        else:                           # what is still wrong once it is
+            self.stats["cut"] += 1      # on: a span bridges bytes that
+            self.stats["bytes_left"] += int(    # were already right
+                (target != self.screen).sum())
         return chosen, rec
+
+    def trim(self, sp, order, g, audio, cyc_room, byte_room):
+        """LIVE: the retries did not bring the frame under its room - a
+        blit's cost is its RECTANGLES, which dropping a scatter of spans
+        hardly shrinks. So the most the ranking's PREFIX can keep and fit,
+        found by halving; none fits, nothing (the picture converges later)"""
+        lo, hi, best = 0, len(order), None
+        while lo <= hi:
+            k = (lo + hi) // 2
+            ch = sorted(sp[i] for i in order[:k])
+            rec = vid.record(ch, g, audio, limit=65535)
+            if self.cost(rec) <= cyc_room and \
+                    len(rec) - len(audio) <= byte_room and len(rec) <= REC_MAX:
+                best, lo = (ch, rec), k + 1
+            else:
+                hi = k - 1
+        if best is None:
+            best = [], vid.record([], g, audio)
+        return best
+
+    def why(self, tc, tb, er, eb, cyc_room):
+        """WHICH BUDGET CUT the frame (VIDEO-PLAN 15.8: what constrains
+        playback): the one the whole frame overruns by more - the disk, the
+        CPU's per-second average, or the per-frame ceiling"""
+        if tb / max(eb, 1.0) >= tc / max(er, 1.0):
+            self.stats["disk"] += 1
+            return
+        self.cpucut = True
+        if cyc_room >= self.ceil:
+            self.stats["peak"] += 1
+        else:
+            self.stats["cpu"] += 1
+
+    def pixels(self, st):
+        """A screen state (or a target) as pixels: (h, w) grey 0..1, or
+        (h, w, 3) colour 0..1; None where the format has no pixel form"""
+        if self.dmode == "bits":
+            return np.unpackbits(st, axis=1).astype(np.float32)
+        if self.dmode == "pal":
+            return self.dpal[st] / 255.0
+        if self.dmode == "idx":
+            bits = 8 // self.ppb
+            v = np.unpackbits(st[..., None], axis=2).reshape(
+                st.shape[0], -1, bits) @ (1 << np.arange(bits - 1, -1, -1))
+            return self.dpal[v] / 255.0
+        return None
+
+    def blur(self, im):
+        """What the eye averages: a binomial low-pass 5 rows tall and as
+        wide as the pixel's shape makes the same distance (blur_r a row) -
+        most of the 8 x 8 Bayer tile, whose patterns it is to see past"""
+        out = im.astype(np.float32)
+        for axis, r in ((0, 2), (1, 2 * self.blur_r)):
+            k = np.array([math.comb(2 * r, i) for i in range(2 * r + 1)],
+                         np.float32)
+            k /= k.sum()
+            pad = [(0, 0)] * out.ndim
+            pad[axis] = (r, r)
+            pp = np.pad(out, pad, mode="edge")
+            n = out.shape[axis]
+            out = sum(k[i] * np.take(pp, range(i, i + n), axis=axis)
+                      for i in range(2 * r + 1))
+        return out
+
+    @staticmethod
+    def dist(a, b):
+        d = np.abs(a - b)
+        return d.sum(2) / 3.0 if d.ndim == 3 else d
+
+    def value(self, target):
+        """PER PIXEL, what writing the target now is worth (98.2.1.2),
+        summed over this frame and, with a look-ahead, the next `look`: at
+        each, how much nearer its target the pixel is for holding this
+        frame's value than for keeping the screen's. A pixel about to
+        change again is worth little, one about to change BACK to what the
+        screen holds less than nothing.
+        VISIBLE error discounts a pixel's error by the share of it an eye
+        sees: the pictures low-passed as an eye averages them, against the
+        plain error low-passed the same way. A dither pattern swapped for
+        another of the same grey is mostly unseen and is discounted to a
+        quarter; a picture wrong in its greys is not discounted at all.
+        (The low-passed error's own gradient, which amplifies an edge, was
+        tried first and measured WORSE: it starves a region of middling
+        contrast for ever - 98.2.1.2.) None: no pixel form"""
+        S = self.pixels(self.screen)
+        if S is None:
+            return None
+        T0 = self.pixels(target)
+        bS = self.blur(S) if self.vis else None
+        v = 0.0
+        for k, T in enumerate([target] + self.future[:self.look]):
+            Tk = T0 if k == 0 else self.pixels(T)
+            plain = self.dist(S, Tk) - self.dist(T0, Tk)
+            if not self.vis:
+                v = v + plain
+                continue
+            # the share of the pixel's local error an eye sees: the
+            # blurred pictures' difference over the blurred plain one -
+            # 1 where the picture is wrong, near 0 where only the dither
+            # pattern is. A swap is discounted to a quarter, never more,
+            # so a pattern still converges; nothing is amplified
+            vis = self.dist(bS, self.blur(Tk)) / \
+                np.maximum(self.blur(self.dist(S, Tk)), 1e-3)
+            v = v + plain * np.clip(vis, 0.25, 1.0)
+        return v
+
+    def bytevalue(self, target):
+        """value() summed to the target's bytes, or None"""
+        v = self.value(target)
+        if v is None:
+            return None
+        h, wb = target.shape[:2]
+        return v.reshape(h, wb, -1).sum(2)
+
+    def worthwhile(self, target, sp):
+        """--aim size (98.2.1.4): the spans worth their bytes - what
+        value() says writing them fixes, over the look-ahead, at least
+        `thr` a byte of stream. The rest stays off the disk even when the
+        budget would take it: dither shimmer, and changes about to be
+        undone. Weighted by age as rank() is, so what stays wrong comes to
+        be worth it and a still picture still converges"""
+        bv = self.bytevalue(target)
+        if bv is None:
+            return sp
+        self.wv[:] = 0                  # a pixel wrong for a while is worth
+        self.wv[self.idx] = bv * (1.0 + self.age / 8.0)     # fixing: a
+                                        # still picture converges
+        cs = np.concatenate(([0.0], np.cumsum(self.wv)))
+        out = [x for x in sp
+               if cs[x[0] + len(x[1])] - cs[x[0]] >= self.thr * (len(x[1]) + 2)]
+        self.stats["skipped"] += len(sp) - len(out)
+        return out
+
+    def measure(self, target):
+        """THE PICTURE AS PLAYED, a frame (the report's `picture:` line):
+        its error as seen, its pixels wrong, and its FLICKER - pixels that
+        go back to what they were two frames ago, as a dither pattern
+        swapping back and forth does"""
+        S = self.pixels(self.screen)
+        if S is None:
+            return
+        T = self.pixels(target)
+        self.q_vis += float(self.dist(self.blur(S), self.blur(T)).mean())
+        ne = S != T
+        if ne.ndim == 3:
+            ne = ne.any(2)
+        self.q_wrong += float(ne.mean())
+        for now, hist, k in ((S, "q_prev", "q_flick"),
+                             (T, "q_tprev", "q_tflick")):
+            p1, p2 = getattr(self, hist)
+            if p2 is not None:
+                a, b = now == p2, now != p1
+                if a.ndim == 3:
+                    a, b = a.all(2), b.any(2)
+                setattr(self, k, getattr(self, k) + float((a & b).sum()))
+            setattr(self, hist, (now, p1))
 
     def rank(self, target, sp, costs, er, eb):
         """The spans' indexes, most pixels fixed per unit of the scarcer
-        budget first; a pixel wrong for a while outweighs a fresh one"""
+        budget first; a pixel wrong for a while outweighs a fresh one - or,
+        with a look-ahead or visible error, per value() (98.2.1.2)"""
         g = self.g
-        if self.pal is not None:
+        bv = self.bytevalue(target) if self.look or self.vis else None
+        if bv is not None:
+            bits = bv
+        elif self.pal is not None:
             bits = np.abs(self.pal[target] - self.pal[self.screen]).sum(2) \
                 / 32.0
         else:
@@ -926,14 +1782,31 @@ class Encoder:
             pri.append(((cs[a + len(bs)] - cs[a]) /
                         max(c / max(er, 1.0), b / max(eb, 1.0)), i))
         pri.sort(reverse=True)
-        return [i for p, i in pri]
+        return [i for p, i in pri if p > 0 or not self.look]
+
+    def cost(self, rec):
+        """A record's cycles in the model: its decode, and on a LIVE file
+        (98.3.10.2) the blit of the runs the writer will give it. A pass is
+        a TICK (98.3.10) and blits the union of the frames it drew, so a
+        frame is charged its runs' blit times the passes a frame - 18.2 a
+        second over the frame rate, at most 1: measured, Bad Apple made
+        --live herc at 30 fps modelled 31.6% of the machine in blit this
+        way and gfx_blit1 took 32.1%"""
+        g = self.g
+        c = vid.cycles_of(rec, True) if g.bitplanes else \
+            vid.cycles_of(rec, layout=g.layout)
+        if self.live:
+            c += self.blitf * sum(vid.blit_cost(y1 - y0, x1 - x0, g.planes)
+                                  for y0, y1, x0, x1 in vid.live_runs(rec, g))
+        return c
 
     def charge(self, rec, abytes):
         """What the record actually costs, measured, off the buckets (the
         sound's bytes are taken off the disk's rate at the start)"""
-        c = vid.cycles_of(rec)
+        c = self.cost(rec)
         self.cpu.spend(c)
         self.disk.spend(len(rec) - abytes)
+        self.end(c)
         return c
 
 
@@ -950,6 +1823,8 @@ class EncoderX(Encoder):
         # FLIPPING (98.3.8): the player decodes the last record again into
         # the back page before this one, so a frame costs both
         self.flip, self.prev_c = flip, 0
+        if flip:                        # a frame a call (98.3.8): one that
+            self.owe = None             # runs over drops the next
         self.screen = np.zeros((g.h, g.w), dtype=np.uint8)
         self.age = np.zeros((g.h, g.w), dtype=np.float32)
         self.surf = g.surface()
@@ -958,8 +1833,7 @@ class EncoderX(Encoder):
 
     def frame(self, target, audio=b""):
         g = self.g
-        self.cpu.tick()
-        self.disk.tick()
+        self.begin()
         self.stats["frames"] += 1
         diff = target != self.screen
         self.age = np.where(diff, self.age + 1, 0)
@@ -969,8 +1843,8 @@ class EncoderX(Encoder):
         subs = vid.modex_subs(target.tobytes(), diff.ravel().tolist(), g)
         cand = [(m, a, bs, run) for m, sp in subs for a, bs, run in sp]
         costs = [span_cost(bs, run) for m, a, bs, run in cand]
-        cyc_room = min(self.cpu.room(), self.peak) - self.prev_c
-        byte_room = self.disk.room()
+        cyc_room = min(self.cpu.room(), self.ceil) - self.prev_c
+        byte_room = self.disk.room() - self.dfloor
         order = None
         er = cyc_room - vid.CYC_FRAME - 7 * vid.CYC_SUB
         eb = min(byte_room, REC_MAX - len(audio)) - REC_OVER - 7
@@ -981,6 +1855,7 @@ class EncoderX(Encoder):
                 chosen = cand
             else:
                 if order is None:
+                    self.why(tc, tb, er, eb, cyc_room)
                     cand = split_big(cand)
                     costs = [span_cost(bs, run) for m, a, bs, run in cand]
                     order = self.rank(target, cand, costs, er, eb)
@@ -1022,8 +1897,9 @@ class EncoderX(Encoder):
 
     def rank(self, target, cand, costs, er, eb):
         g = self.g
-        err = np.abs(self.pal[target] - self.pal[self.screen]).sum(2) \
-            / 32.0 * (1.0 + self.age / 8.0)
+        v = self.value(target) if self.look or self.vis else None
+        err = (np.abs(self.pal[target] - self.pal[self.screen]).sum(2)
+               / 32.0 if v is None else v) * (1.0 + self.age / 8.0)
         cs = []
         for p in range(4):
             wv = np.zeros(65537, dtype=np.float64)
@@ -1037,7 +1913,7 @@ class EncoderX(Encoder):
                        if m >> p & 1)
             pri.append((wsum / max(c / max(er, 1.0), b / max(eb, 1.0)), i))
         pri.sort(reverse=True)
-        return [i for p, i in pri]
+        return [i for p, i in pri if p > 0 or not self.look]
 
     def charge(self, rec, abytes):
         c = vid.cycles_of(rec, True)
@@ -1046,6 +1922,7 @@ class EncoderX(Encoder):
         spent = c + self.prev_c
         if self.flip:
             self.prev_c = c
+        self.end(spent)
         return spent
 
 
@@ -1101,8 +1978,7 @@ class EncoderP(Encoder):
 
     def frame(self, target, audio=b""):
         g = self.g
-        self.cpu.tick()
-        self.disk.tick()
+        self.begin()
         self.stats["frames"] += 1
         diff = target != self.screen
         self.age = np.where(diff, self.age + 1, 0)
@@ -1112,8 +1988,8 @@ class EncoderP(Encoder):
         cand = [(m, a, bs, run) for m, sp in self.subs(target)
                 for a, bs, run in sp]
         costs = [span_cost(bs, run) for m, a, bs, run in cand]
-        cyc_room = min(self.cpu.room(), self.peak)
-        byte_room = self.disk.room()
+        cyc_room = min(self.cpu.room(), self.ceil)
+        byte_room = self.disk.room() - self.dfloor
         order = None
         er = cyc_room - vid.CYC_FRAME - 15 * vid.CYC_SUB
         eb = min(byte_room, REC_MAX - len(audio)) - REC_OVER - 15
@@ -1125,6 +2001,7 @@ class EncoderP(Encoder):
                 chosen = cand
             else:
                 if order is None:
+                    self.why(tc, tb, er, eb, cyc_room)
                     cand = split_big(cand)
                     costs = [span_cost(bs, run) for m, a, bs, run in cand]
                     order = self.rank(target, cand, costs, er, eb)
@@ -1139,7 +2016,7 @@ class EncoderP(Encoder):
             ops = [(m, sorted((a, bs, run) for mm, a, bs, run in chosen
                               if mm == m)) for m in masks]
             rec = vid.record(ops, g, audio, limit=65535)
-            mc = vid.cycles_of(rec, True)
+            mc = self.cost(rec)
             if mc <= cyc_room and len(rec) - len(audio) <= byte_room and \
                     len(rec) <= REC_MAX:
                 break
@@ -1167,8 +2044,9 @@ class EncoderP(Encoder):
 
     def rank(self, target, cand, costs, er, eb):
         g = self.g
-        err = np.abs(self.pal[target] - self.pal[self.screen]).sum(2) \
-            / 32.0 * (1.0 + self.age / 8.0)
+        v = self.value(target) if self.look or self.vis else None
+        err = (np.abs(self.pal[target] - self.pal[self.screen]).sum(2)
+               / 32.0 if v is None else v) * (1.0 + self.age / 8.0)
         byte = err.reshape(g.h, g.wb, 8).sum(2)
         wv = np.zeros(65537, dtype=np.float64)
         wv[(self.base[:, None] + np.arange(g.wb)).ravel()] = byte.ravel()
@@ -1179,12 +2057,13 @@ class EncoderP(Encoder):
             wsum = (cs[a + len(bs)] - cs[a]) * bin(m).count("1") / 4.0
             pri.append((wsum / max(c / max(er, 1.0), b / max(eb, 1.0)), i))
         pri.sort(reverse=True)
-        return [i for p, i in pri]
+        return [i for p, i in pri if p > 0 or not self.look]
 
     def charge(self, rec, abytes):
-        c = vid.cycles_of(rec, True)
+        c = self.cost(rec)
         self.cpu.spend(c)
         self.disk.spend(len(rec) - abytes)
+        self.end(c)
         return c
 
 
@@ -1277,15 +2156,98 @@ STEPS = (("prepare", 0.03), ("read", 0.45), ("sound", 0.04),
          ("encode", 0.46), ("write", 0.02))
 
 
+# THE PRESETS' LADDERS (98.2.1.4): a box one step up, on the same screen
+LADDERS = (("cga-small", "cga"), ("cga4-small", "cga4"),
+           ("herc", "herc-mid", "herc-full"), ("vga", "vga-mid", "vga-full"),
+           ("vga4", "vga4-mid", "vga4-full"), ("vga8-small", "vga8"),
+           ("modex-small", "modex"))
+AIM_SOUND = 22050       # --aim quality's richer sound
+AIM_WINDOW = 10.0       # ...its trial windows, seconds, three of them
+AIM_WHOLE = 40.0        # ...or the whole clip when it is this short
+AIM_ERR = 1.25          # ...a richer choice may be this much worse as seen
+AIM_ERR0 = 0.002        # ...plus this, so a clip near 0 has room
+AIM_CUT = 0.05          # ...and cut this share more of its frames
+AIM_WORTH = 1.0         # --aim size's floor: pixels fixed a byte of stream
+
+
+def aim_quality(a, tick, say):
+    """--aim quality (98.2.1.4): what the budget can afford, found by
+    TRYING it. Trial encodes of the clip (or three windows of a long one)
+    at the asked settings, then a box a step up the preset's ladder at a
+    time, then 22,050 Hz sound; each is taken while its picture stays
+    within AIM_ERR of the asked one's error as seen and cuts no more than
+    AIM_CUT more of its frames. -> the args to encode with"""
+    import copy
+    import tempfile
+    dur = probe(a.src)[4] or 0.0
+    end = a.end if a.end is not None else dur
+    span = max(0.0, end - a.start)
+    if span <= AIM_WHOLE:
+        wins = [(a.start, end)]
+    else:
+        wins = [(a.start + span * f - AIM_WINDOW / 2,
+                 a.start + span * f + AIM_WINDOW / 2)
+                for f in (1 / 6.0, 0.5, 5 / 6.0)]
+
+    def trial(args):
+        errs, cuts = [], []
+        with tempfile.TemporaryDirectory() as tmp:
+            for i, (t0, t1) in enumerate(wins):
+                b = copy.copy(args)
+                b.start, b.end = t0, t1
+                b.out = os.path.join(tmp, "t%d.V88" % i)
+                b.quiet, b.preview_png, b.aim = True, None, "asked"
+                b.adpcm = "greedy"
+                tick("prepare", 0, 0)  # (a trial: the window waits)
+                res = _encode(b, None, lambda *x: None, [])
+                errs.append(res.get("q_vis", 0.0))
+                cuts.append(res.get("cutf", 0.0))
+        return sum(errs) / len(errs), sum(cuts) / len(cuts)
+
+    def fine(q, q0):
+        return q[0] <= q0[0] * AIM_ERR + AIM_ERR0 and q[1] <= q0[1] + AIM_CUT
+
+    q0 = trial(a)
+    say("   aim quality: as asked, %.2f%% error as seen, %.0f%% of frames "
+        "cut" % (100 * q0[0], 100 * q0[1]))
+    best = a
+    lad = next((l for l in LADDERS if a.preset in l), None)
+    if lad and not a.box and not a.live:
+        for p in lad[lad.index(a.preset) + 1:]:
+            b = copy.copy(best)
+            b.preset = p
+            q = trial(b)
+            ok = fine(q, q0)
+            say("   aim quality: %s, %.2f%% and %.0f%% - %s" % (
+                p, 100 * q[0], 100 * q[1], "taken" if ok else "not taken"))
+            if not ok:
+                break
+            best = b
+    rate = a.rate or PROFILES[a.profile]["rate"]
+    if a.audio != "none" and rate < AIM_SOUND and not a.live:
+        b = copy.copy(best)
+        b.rate = AIM_SOUND
+        q = trial(b)
+        ok = fine(q, q0)
+        say("   aim quality: %d Hz sound, %.2f%% and %.0f%% - %s" % (
+            AIM_SOUND, 100 * q[0], 100 * q[1],
+            "taken" if ok else "not taken"))
+        if ok:
+            best = b
+    return best
+
+
 def encode(a, keep=None, progress=None):
     """`keep`, a list, is given every frame's target: the gate's.
     `progress(step, done, total)` is called as the encode goes - `step` one
     of STEPS, `total` 0 when the step has no count - and may raise
     Cancelled to stop it (98.2.11)"""
     readers = []
+    tick = progress or (lambda step, done, total: None)
     try:
-        return _encode(a, keep, progress or (lambda step, done, total: None),
-                       readers)
+        if getattr(a, "aim", "asked") == "quality":
+            a = aim_quality(a, tick, (lambda *x: None) if a.quiet else print)
+        return _encode(a, keep, tick, readers)
     finally:
         # however it leaves - finished, refused or cancelled - the ffmpeg
         # reader is closed, and a live ffmpeg with it
@@ -1297,16 +2259,21 @@ def _encode(a, keep, tick, readers):
     tick("prepare", 0, 0)
     need_tools()
     prof = dict(PROFILES[a.profile])
-    for k in ("disk", "avg", "peak"):
+    if a.live and prof["avg"] is not None:
+        prof["avg"] = LIVE_AVG          # (the decode and the blit: 98.2.7)
+    for k in ("disk", "avg", "peak", "owe", "reserve"):
         if getattr(a, k) is not None:
             prof[k] = getattr(a, k)
     lay, bw, bh = PRESETS[a.preset] if a.preset else (a.layout, None, None)
     if a.live:
         # LIVE (98.2.7): one bit on LIN80, the band OSAPI_GFX_BLIT1 takes,
-        # at the named screen's pixel shape and the logo's box
-        if a.pixfmt not in (None, "mono"):
-            raise vid.V88Error("--live is one bit: no --pixfmt %s" % a.pixfmt)
-        a.pixfmt, a.resident = "mono", True
+        # at the named screen's pixel shape and the logo's box - or on VGA
+        # the sixteen colours' four planes, which GFX_BLITP takes (98.3.10.4)
+        if a.pixfmt not in (None, "mono") and \
+                (a.pixfmt, a.live) != ("vga4", "vga"):
+            raise vid.V88Error("--live is one bit, or --pixfmt vga4 with "
+                               "--live vga: no --pixfmt %s" % a.pixfmt)
+        a.pixfmt, a.resident = a.pixfmt or "mono", True
         lay = "lin80"
         bw, bh = LIVE_BOX[a.live]
     if a.pixfmt is None and a.preset in PRESET_PIXFMT:
@@ -1323,12 +2290,21 @@ def _encode(a, keep, tick, readers):
     banks, stride, rows, _ = vid.LAYOUTS[L]
     cga4 = a.pixfmt == "cga4"
     c160 = a.pixfmt == "c160"
+    c512 = a.pixfmt == "c512"
+    text = a.pixfmt == "text"
+    if text != (L == vid.LAY_TEXT):
+        raise vid.V88Error("--pixfmt text is the text-80x25 layout's, and it takes "
+                           "nothing else")
     if cga4 and L != vid.LAY_CGA:
         raise vid.V88Error("--pixfmt cga4 is mode 4's: the cga layout")
     if c160 != (L == vid.LAY_C160):
         raise vid.V88Error("--pixfmt c160 is the c160 layout's, and it takes "
                            "nothing else")
-    ppb = 4 if cga4 else vid.PIX_PER_BYTE[L]
+    if c512 != (L == vid.LAY_TXT):
+        raise vid.V88Error("--pixfmt c512 is the text-80x100 layout's, and it takes "
+                           "nothing else")
+    # a C512 or a TEXT box is in CELLS, two bytes each (98.1.3.5)
+    ppb = 4 if cga4 else 0.5 if c512 or text else vid.PIX_PER_BYTE[L]
     if bw > stride * ppb or bh > rows:
         raise vid.V88Error("a %d x %d box does not fit %s (%d x %d)"
                            % (bw, bh, lay, stride * ppb, rows))
@@ -1356,7 +2332,7 @@ def _encode(a, keep, tick, readers):
         raise vid.V88Error("--pixfmt vga4 is mode 12h's: the lin80 layout")
     if vga4 and (dw, dh) != (1, 1):
         raise vid.V88Error("--detail is VGA8's")
-    g = vid.Geom(L, w // ppb, h // dh, bitplanes=vga4)
+    g = vid.Geom(L, int(w // ppb), h // dh, bitplanes=vga4)
     if a.pixfmt is not None and (a.pixfmt == "vga8") != vga8:
         raise vid.V88Error("--pixfmt vga8 is the lin320 and modex layouts', "
                            "and the only format they take")
@@ -1366,8 +2342,21 @@ def _encode(a, keep, tick, readers):
     # and its two presets to 25, at half the width (98.2.10)
     fps = a.fps or min(PRESET_DEFAULTS.get(
         None if a.live else a.preset, {}).get(
-        "fps", 15.0 if vga8 else 30.0), sfps)
+        "fps", 15.0 if vga8 or text else 30.0), sfps)
     audio = a.audio or prof["audio"]
+    spk = audio == "speaker"
+    if spk:                             # PCM8, at a rate the speaker plays
+        audio = "pcm8"
+        r = a.rate or SPK_RATE
+        if not SPK_MIN <= r <= 16124:
+            raise vid.V88Error("--audio speaker: %d Hz is not a rate the PWM "
+                               "plays (%d..16124)" % (r, SPK_MIN))
+        if prof["avg"] is not None and prof.get("speed") == 1 \
+                and r > SPK_MAX_8088:
+            raise vid.V88Error("--audio speaker: an 8088 plays at most %d Hz "
+                               "through the speaker - VIDEO.O88 mutes %d "
+                               "(SPEC.md 98.3.15)" % (SPK_MAX_8088, r))
+        a.rate = r
     if audio == "none" or not has_audio:
         afmt, rate, spf, abytes = vid.AUD_NONE, round(fps * 100), 100, 0
     else:
@@ -1379,12 +2368,26 @@ def _encode(a, keep, tick, readers):
         abytes = spf // 2 if afmt == vid.AUD_ADPCM4 else spf
     fps = rate / spf
     if a.resident:
-        if afmt == vid.AUD_ADPCM4:
-            raise vid.V88Error("a resident file's sound is PCM8 (98.1.7): "
-                               "--audio adpcm4 is refused with --resident")
         prof["disk"] = None if prof["avg"] is None else 10 ** 9
+        prof.pop("disk_at", None)       # (no disk: nothing slows it)
     audio_bps = abytes * fps
     audio_cyc = CYC_AUDIO * abytes if afmt else 0.0
+    spk_share = 0.0
+    if spk and afmt and prof["avg"] is not None:
+        # THE SPEAKER TAKES ITS SHARE OF EVERYTHING (98.2.15): the pulses are
+        # interrupts on top of the whole machine - decode, the disk's calls,
+        # the loop - so the profile's shares are of what is LEFT
+        spk_share = rate * (CYC_SPK_PULSE + CYC_SPK_BYTE) / (
+            vid.HZ * (prof.get("speed") or 1))
+        if spk_share >= 0.8:
+            raise vid.V88Error("--audio speaker: %d Hz takes %.0f%% of this "
+                               "machine and leaves too little to draw with"
+                               % (rate, 100 * spk_share))
+        prof["avg"] *= 1 - spk_share
+        prof["peak"] *= 1 - spk_share
+        if prof.get("owe"):             # ...and of an owed frame's periods
+            prof["owe"] *= 1 - spk_share    # (98.2.1.1)
+        audio_cyc = 0.0                 # (charged above, as the share)
 
     eq = []
     if a.gamma != 1.0:
@@ -1399,12 +2402,13 @@ def _encode(a, keep, tick, readers):
                            "needs the cga layout")
     pattern = comp and a.comp_dither == "pattern"
     lw, lh = w // dw, h // dh           # what is made, before the repeat
-    frames = ffmpeg_video(
-        a.src, w // 4 if pattern else lw, lh, crop,
+    frames = ffmpeg_video(              # (TEXT: eight by eight a cell)
+        a.src, w // 4 if pattern else lw * 8 if text else lw,
+        lh * 8 if text else lh, crop,
                           "%d/%d" % (rate, spf), a.start, a.end,
                           ":".join(eq),
                           "rgb24" if comp or vga8 or vga4 or cga4 or c160
-                          else "gray")
+                          or c512 or text else "gray")
     # the frame count to expect, for the progress: the clip's length at the
     # file's rate (ffmpeg's own count can differ by a frame or two)
     est = max(1, round(((a.end or dur or 0) - (a.start or 0)) * fps)) \
@@ -1421,7 +2425,16 @@ def _encode(a, keep, tick, readers):
         "audio %s, profile %s"
         % (a.src, sw, sh, sfps, lay, w, h, fps, rate, spf,
            {0: "none", 1: "PCM8", 2: "ADPCM4"}[afmt], a.profile))
-    if a.levels == "auto" and not (vga8 or vga4 or cga4 or c160):
+    if spk_share:
+        say("   the SPEAKER: %.0f%% of the machine at %d Hz, so decode gets "
+            "%.0f%% of a period on average, %.0f%% at most"
+            % (100 * spk_share, rate, 100 * prof["avg"], 100 * prof["peak"]))
+    tcol = None
+    if text:
+        tcol = a.text_colour or PRESET_DEFAULTS.get(a.preset, {}).get(
+            "text_colour", "colour")
+    if a.levels == "auto" and not (vga8 or vga4 or cga4 or c160 or c512 or
+                                   (text and tcol == "colour")):
         lo, hi = auto_levels(a.src, w, h, crop, a.start, a.end, ":".join(eq))
         say("   levels: grey %d..%d stretched to 0..255" % (lo, hi))
         frames = (stretch(f, lo, hi) for f in frames)
@@ -1439,6 +2452,27 @@ def _encode(a, keep, tick, readers):
     elif c160:
         k16 = KnollDitherer(lw, lh, vid.STD16, a.vga4_stable)
         dith = lambda f, k16=k16: pack_pixels(k16(f), 2)
+    elif text:
+        cgapal = vid.TEXT_COLOUR if tcol == "colour" else vid.TEXT_MONO
+        dith = TextMatcher(lw, lh, cgapal, a.text_glyphs, a.text_stable,
+                           a.text_sharpen, a.text_detail, a.text_busy,
+                           top=16 if cgapal else 32)
+        say("   TEXT in %s, %s glyphs: detail %g, sharpen %g, letters pay "
+            "%g, dead band %g" % (
+                "colour - a CGA, an EGA or a VGA" if cgapal else
+                "mono - any adapter", a.text_glyphs, a.text_detail,
+                a.text_sharpen, TextMatcher.BUSY.get(
+                    a.text_glyphs, TextMatcher.BUSY_DEFAULT)
+                if a.text_busy is None else a.text_busy, a.text_stable))
+    elif c512:
+        cgapal = vid.CARD_BY_NAME[a.cga_card]
+        dith = C512Ditherer(lw, lh, cgapal, a.c512_dither, a.c512_stable,
+                            a.c512_mix, a.vga4_stable)
+        say("   C512 for %s CGA: %s" % (
+            {"old": "the OLD", "new": "the NEW", "both": "either"}[
+                a.cga_card],
+            "a pattern of %d codes" % a.c512_mix if a.c512_mix >= 2 else
+            "dither %g, dead band %g" % (a.c512_dither, a.c512_stable)))
     elif vga4:
         dith = KnollDitherer(lw, lh, vid.STD16, a.vga4_stable)
     elif vga8:
@@ -1460,10 +2494,37 @@ def _encode(a, keep, tick, readers):
         if L == vid.LAY_MODEX else \
         EncoderP(g, prof, fps, audio_cyc, audio_bps) if vga4 else \
         Encoder(g, prof, fps, audio_cyc, audio_bps, palette)
+    enc.live = bool(a.live)
+    enc.spk = spk_share
+    # WHAT A CUT FRAME SPENDS ON (98.2.1.2)
+    enc.look, enc.vis = a.lookahead, a.error == "visible"
+    enc.thr = (a.worth if a.worth is not None else AIM_WORTH) \
+        if a.aim == "size" else 0.0
+    asp = vid.ASPECT.get(L, (1, 1))
+    enc.blur_r = max(1, round(asp[1] * (dh or 1) / asp[0]))
+    if cga4:
+        enc.dmode, enc.ppb = "idx", 4
+        enc.dpal = np.frombuffer(b"".join(
+            vid.STD16[3 * c:3 * c + 3] for c in vid.cga4_colours(cgapal)),
+            np.uint8).astype(np.float32).reshape(-1, 3) * (255.0 / 63)
+    elif c160:
+        enc.dmode, enc.ppb = "idx", 2
+        enc.dpal = np.frombuffer(vid.STD16, np.uint8).astype(
+            np.float32).reshape(-1, 3) * (255.0 / 63)
+    elif c512 or comp or text:      # a composite colour is not its bits:
+        if enc.vis:                 # the look-ahead still works on them,
+            say("   --error visible: a %s format has no pixel form "
+                "here - ranking by its bits"
+                % ("text" if text else "composite"))
+        enc.vis = False             # and the picture line is its bits'
+    enc.metric = not (c512 or comp or text)
+    if enc.live:                        # a pass a tick on the desktop
+        enc.owe = None                  # (98.3.10), not the hook's calls
     wr = vid.Writer(g, rate, spf, vid.AUD_NONE if a.resident else afmt,
                     0 if a.resident else abytes,
                     vid.PF_VGA8 if vga8 else vid.PF_VGA4 if vga4 else
                     vid.PF_CGA4 if cga4 else vid.PF_C160 if c160 else
+                    vid.PF_C512 if c512 else vid.PF_TEXT if text else
                     vid.PF_CGACOMP if comp else vid.PF_MONO1, cgapal=cgapal,
                     title=a.title or os.path.splitext(
                         os.path.basename(a.src))[0][:47],
@@ -1472,7 +2533,14 @@ def _encode(a, keep, tick, readers):
                     aspect=scaled_aspect(pasp or vid.ASPECT[L], dh),
                     loop=None if a.loop_from is None else
                     max(0, round(a.loop_from * fps)),
-                    repeat=a.repeat)
+                    repeat=a.repeat, spk=spk and bool(afmt))
+    if not a.resident and enc.disk.per is not None:
+        wr.ring = vid.ring_for(enc.reserve)     # (98.2.1.3)
+        if wr.ring is None:
+            raise vid.V88Error(
+                "--reserve %d KB: the player's ring banks %d KB at most"
+                % (enc.reserve // 1024,
+                   (vid.RING_SLOTS[-1] - 1) * vid.SLOT // 1024))
     pcm = ffmpeg_audio(a.src, rate, a.start, a.end, a.volume) if afmt else b""
     cyc, recs, n = [], [], 0
     pend = []
@@ -1507,9 +2575,15 @@ def _encode(a, keep, tick, readers):
         keep.extend(pend)           # pre-roll's included
     jobs = a.jobs or os.cpu_count() or 1
     tick("sound", 0, 0)
+    # a RESIDENT file's ADPCM4 ends where its lap joins (98.1.7.2): the
+    # seam's frame L, or 80h at scale 0 before frame 0
+    join = (wr.loop if wr.loop is not None else "start") \
+        if a.resident and afmt == vid.AUD_ADPCM4 else None
     chunks = vid.audio_chunks(pcm, nf, spf, afmt, vid.key_frames(
-        nf, wr.keyint, wr.key0), search=jobs if a.adpcm == "search" else 0) \
-        if afmt else None
+        nf, wr.keyint, wr.key0), search=jobs if a.adpcm == "search" else 0,
+        join=join) if afmt else None
+    if spk and chunks:                  # THE SPEAKER'S COUNTS, not samples
+        chunks = [vid.spk_counts(c, rate) for c in chunks]  # (98.1.1.3)
     sound = []
     for f, target in enumerate(pend):
         tick("encode", f, nf)
@@ -1517,12 +2591,33 @@ def _encode(a, keep, tick, readers):
         if a.resident:              # the sound is ONE block (98.1.7)
             sound.append(au)
             au = b""
+        enc.future = pend[f + 1:f + 1 + enc.look]
         ops, rec = enc.frame(target, au)
         cyc.append(enc.charge(rec, len(au)) + audio_cyc)
+        if enc.metric:
+            enc.measure(target)
         wr.frame(ops, enc.surf, au)
         if a.preview_png and f % max(1, round(fps)) == 0:
             out = os.path.join(a.preview_png, "f%05d.png" % f)
-            if cga4 or c160:
+            if c512:                # what a composite monitor shows: the
+                import os88cgacomp  # card's, or for both old above new
+                from PIL import Image
+                cv = g.canvas(enc.surf)
+                news = {vid.CARD_OLD: (False,), vid.CARD_NEW: (True,),
+                        vid.CARD_BOTH: (False, True)}[cgapal]
+                img = np.concatenate([np.repeat(os88cgacomp.render_c512(
+                    cv, g.wb, g.h, n), 2, axis=0) for n in news])
+                Image.fromarray(img).save(out)
+            elif text:              # the cells in the model's face,
+                import os88txtfont  # each dot made square
+                from PIL import Image
+                img = Image.fromarray(os88txtfont.render(
+                    g.canvas(enc.surf), g.wb, g.h, np.frombuffer(
+                        vid.STD16, np.uint8).reshape(16, 3).astype(
+                        np.uint16) * 255 // 63))
+                img.resize((img.width, round(img.height * 12 / 5)),
+                           Image.NEAREST).save(out)
+            elif cga4 or c160:
                 from PIL import Image
                 cv = np.frombuffer(g.canvas(enc.surf), np.uint8).reshape(
                     g.h, g.wb)
@@ -1579,7 +2674,8 @@ def _encode(a, keep, tick, readers):
             a.out, [wr], afmt, abytes if afmt else 0, b"".join(sound),
             wr.title, wr.credits, a.repeat, vid.PK_LZB,
             posters=[poster] if poster is not None else None,
-            live=[vid.TARGETS[a.live]] if a.live else None)
+            live=[vid.TARGETS[a.live]] if a.live else None,
+            spk=spk and bool(afmt))
         vid.verify_v88(a.out)
         rr = vid.Reader(a.out)
         res = dict(bytes=st["bytes"], stream=st["blocks"][0][0] +
@@ -1589,9 +2685,20 @@ def _encode(a, keep, tick, readers):
         say("   RESIDENT: the block %d bytes, %d packed%s"
             % (st["blocks"][0] + (", LIVE on the %s desktop" % a.live
                                   if a.live else "",)))
+        if a.live:                  # 98.3.10.2: what the blits will cost
+            bl = [enc.blitf * sum(vid.blit_cost(y1 - y0, x1 - x0,
+                                                rr.g.planes)
+                      for y0, y1, x0, x1 in vid.runs_of(
+                          rec, vid.lists_end(rec, rr.g), rr.g)[0])
+                  for rec, _, _ in rr.records()]
+            say("   Live's blit alone (model, a pass a tick): mean "
+                "%.1f%%, worst %.1f%% of a frame's period"
+                % (100 * sum(bl) / len(bl) / enc.period,
+                   100 * max(bl) / enc.period))
     else:
         res = wr.write(a.out, poster)
     res.update(fps=fps, period=enc.period, audio_cyc=audio_cyc,
+               spk_share=spk_share,
                audio_bps=audio_bps, prof=prof, w=w, h=h, layout=lay,
                palette=palette)
     # the header's own figure, which counts what write() appended - an
@@ -1611,11 +2718,34 @@ def _encode(a, keep, tick, readers):
         "audio)" % (nf, secs, res["bytes"], res["bytes"] / 1024.0 / secs,
                     (res["stream"] - audio_bps * secs) / 1024.0 / secs,
                     audio_bps / 1024.0))
-    say("   CPU (wave 0 model, audio copy in): mean %.1f%%, worst %.1f%%; "
+    say("   CPU (wave 0 model, audio copy in): mean %.1f%%, worst %.1f%%%s; "
         "%d frames exact, %d cut to the budget (%.1f bytes a frame left "
         "wrong)" % (100 * sum(cyc) / nf / enc.period,
-                    100 * max(cyc) / enc.period, st["exact"], st["cut"],
+                    100 * max(cyc) / enc.period,
+                    " + the speaker's %.0f%%" % (100 * spk_share)
+                    if spk_share else "", st["exact"], st["cut"],
                     st["bytes_left"] / max(1, st["cut"])))
+    if st["cut"]:
+        say("   cut by: the disk %d, the CPU's average %d, the per-frame "
+            "ceiling %d" % (st["disk"], st["cpu"], st["peak"]))
+    if getattr(wr, "ring", 0):
+        say("   disk reserve %d KB: the player's ring of %d slots, %d KB of "
+            "memory to play it (98.2.1.3)" % (
+                enc.reserve // 1024, wr.ring, (wr.ring + 1) * 32))
+    if enc.metric:
+        say("   picture: %.2f%% error as seen, %.2f%% of pixels wrong, "
+            "%.0f pixels a frame flickering back (the source's own: %.0f)"
+            % (100 * enc.q_vis / nf, 100 * enc.q_wrong / nf,
+               enc.q_flick / max(1, nf - 2), enc.q_tflick / max(1, nf - 2)))
+    res.update(q_vis=enc.q_vis / nf, q_wrong=enc.q_wrong / nf,
+               q_flick=enc.q_flick / max(1, nf - 2), cutf=st["cut"] / nf)
+    if st["skipped"]:
+        say("   aim size: %d changes not worth their bytes left off"
+            % st["skipped"])
+    if enc.owe is not None:
+        say("   owed time: %d frames ran past their period, %d drawn a "
+            "period late while it was paid back, %d dropped"
+            % (st["owed"], st["held"], st["late"]))
     say("   %d keyframes = %d bytes (%.1f%% of the file), poster %d"
         % (res["keys"], res["keybytes"],
            100.0 * res["keybytes"] / res["bytes"], res["poster"]))
@@ -1631,6 +2761,7 @@ def parser():
                          "the cga4, cga4-small and c160 ones name their "
                          "colour format too")
     ap.add_argument("--layout", choices=sorted(vid.LAYOUT_BY_NAME),
+                    type=vid.layout_name,
                     help="the screen memory the file is laid out for "
                          "(SPEC.md 98.1.2), overriding the preset's")
     ap.add_argument("--box", help="WxH: the canvas's largest size")
@@ -1656,12 +2787,58 @@ def parser():
                     "second, overridden")
     ap.add_argument("--avg", type=float, help="...its average CPU share")
     ap.add_argument("--peak", type=float, help="...its per-frame ceiling")
-    ap.add_argument("--audio", choices=("pcm8", "adpcm4", "none"),
+    ap.add_argument("--aim", choices=("asked", "quality", "size"),
+                    default="asked",
+                    help="what to do with a budget the video does not use "
+                         "(98.2.1.4): nothing (asked, the default); QUALITY "
+                         "- try the preset's bigger boxes and 22 kHz sound "
+                         "and take what the budget still carries, found by "
+                         "trial encodes; or SIZE - leave off changes not "
+                         "worth their bytes even when the budget would take "
+                         "them, the smallest file for the look")
+    ap.add_argument("--worth", type=float, metavar="N",
+                    help="--aim size's floor: pixels a change must fix, over "
+                         "the look-ahead, per byte of stream (default %g; "
+                         "higher is smaller and rougher)" % AIM_WORTH)
+    ap.add_argument("--reserve", type=float, metavar="KB",
+                    help="the disk RESERVE: how much of the stream the "
+                         "player's ring banks ahead in a calm stretch, to "
+                         "spend in a burst (98.2.1.3). Default: the "
+                         "profile's ring less two slots - 192 KB, which "
+                         "wants 288 KB of memory to play; less plays in "
+                         "less memory")
+    ap.add_argument("--lookahead", type=int, default=2, metavar="N",
+                    help="WHEN A FRAME IS CUT, don't pay for pixels about "
+                         "to change: a change is ranked by what it is worth "
+                         "over the next N frames too, and one the picture is "
+                         "about to undo is not sent (98.2.1.2). Default 2; "
+                         "0 ranks by this frame alone, as before")
+    ap.add_argument("--error", choices=("visible", "bits"),
+                    default="visible",
+                    help="WHEN A FRAME IS CUT, what counts as wrong: the "
+                         "error as SEEN (the default) - a dither pattern "
+                         "swapped for another of the same grey counts a "
+                         "quarter, a wrong grey in full - or plain bits, as "
+                         "before (98.2.1.2)")
+    ap.add_argument("--owe", type=float,
+                    help="OWED TIME: the most one frame may run to at a "
+                         "scene cut, in PERIODS, the two after it paying it "
+                         "back - the picture waits a period instead of "
+                         "smearing (98.2.1.1). 0 turns it OFF, every frame "
+                         "held to --peak; so does a --peak that reaches it")
+    ap.add_argument("--audio", choices=("pcm8", "adpcm4", "speaker", "none"),
                     help="the sound: 8-bit PCM, Sound Blaster ADPCM (half "
-                         "the bytes), or none (default: the profile's)")
+                         "the bytes), SPEAKER - PCM8 at 5,512 Hz for a "
+                         "machine with no card, stored as the speaker's "
+                         "counts and the frames budgeted around the ~48%% of "
+                         "an 8088 the speaker's interrupts take "
+                         "(SPEC.md 98.2.15) - or none (default: the "
+                         "profile's)")
     ap.add_argument("--rate", type=int,
                     help="the sound's samples a second (default: the "
-                         "profile's)")
+                         "profile's). 5512 halves the sound's bytes - on a "
+                         "Live or resident clip, whose sound is held in "
+                         "memory, that is a longer clip (98.1.7.2)")
     ap.add_argument("--adpcm", choices=("search", "greedy"), default="search",
                     help="ADPCM4's encoder: the exact search (~7 dB better, "
                          "about real time on four cores) or greedy")
@@ -1679,14 +2856,51 @@ def parser():
                     help="stretch the grey range the source uses to the "
                          "whole of black-to-white")
     ap.add_argument("--pixfmt", choices=("mono", "cgacomp", "vga8", "vga4",
-                                         "cga4", "c160"),
+                                         "cga4", "c160", "c512", "text"),
                     help="mono (the default), cgacomp: composite colour on "
                          "a CGA (the cga layout only), vga8: 256 colours in "
                          "mode 13h (the lin320 layout, and what it implies), "
                          "vga4: 16 in mode 12h, cga4: 4 in CGA's mode 4 (the "
                          "cga layout), c160: 16 at 160 x 100 in CGA's text "
-                         "hack (the c160 layout) - the last two full screen "
-                         "on a CGA or a VGA")
+                         "hack (the c160 layout) - those two full screen "
+                         "on a CGA or a VGA - and c512: ~450 at 80 x 100 "
+                         "cells on the text hack's COMPOSITE output (the "
+                         "text-80x100 layout), full screen on a CGA only - and text: the "
+                         "80 x 25 text screen of ANY adapter, the picture "
+                         "made of its characters (the text-80x25 layout), full "
+                         "screen")
+    ap.add_argument("--text-colour", choices=("colour", "mono"),
+                    help="text: sixteen colours on sixteen (a CGA, an EGA "
+                         "or a VGA), or mono - 07h, 0Fh and 70h, which an "
+                         "MDA and a Hercules draw too. The preset says "
+                         "which (text, text-mono); colour otherwise")
+    ap.add_argument("--text-glyphs",
+                    choices=("blocks", "shades", "ascii", "dots",
+                             "dots-plus"),
+                    default="blocks",
+                    help="text: the characters the picture is made of - "
+                         "printable ASCII and, with shades, the four "
+                         "shades, and with blocks (the default) the half "
+                         "blocks too, which every ROM draws alike and which "
+                         "are the clearest - or dots: the full and half "
+                         "blocks for shapes and , . ' ` for the edges and "
+                         "dithers a block is too coarse for, and dots-plus "
+                         "those with : ; \" * as well")
+    ap.add_argument("--text-detail", type=float, default=0.5,
+                    help="text: 0..1, how much a cell is judged dot for dot "
+                         "(which way an edge runs) against through the eye "
+                         "(what tone a shade reads as)")
+    ap.add_argument("--text-sharpen", type=float, default=0.6,
+                    help="text: the unsharp mask before matching, 0 none")
+    ap.add_argument("--text-busy", type=float, default=None,
+                    help="text: what a LETTER pays over a space, shade or "
+                         "block, RMS of 255 - letters picked for a hair of "
+                         "error are noise. 12 by default, 2 with ascii and "
+                         "the dots sets")
+    ap.add_argument("--text-stable", type=float, default=6.0,
+                    help="text: a cell keeps last frame's code while it is "
+                         "within this (RMS of 255) of the best, so the "
+                         "letters do not crawl; 0 is off")
     ap.add_argument("--cga-palette", type=int, choices=(0, 1, 2),
                     help="cga4: the set - 0 green, red, brown; 1 cyan, "
                          "magenta, white; 2 cyan, red, white (mode 5's). "
@@ -1696,6 +2910,24 @@ def parser():
     ap.add_argument("--cga-bg", type=int, choices=range(16), metavar="0-15",
                     help="cga4: the background colour, any of the sixteen "
                          "(default: the nearest)")
+    ap.add_argument("--cga-card", choices=("old", "new", "both"),
+                    default="both",
+                    help="c512: the composite output it is made for - IBM's "
+                         "OLD CGA, the NEW (1985) one, or each cell chosen "
+                         "for the smaller of its two errors (SPEC.md "
+                         "98.1.3.5). Software cannot tell the two apart, so "
+                         "this is the file's")
+    ap.add_argument("--c512-dither", type=float, default=6.0,
+                    help="c512: the 8 x 8 Bayer offset's amplitude, of 255 "
+                         "(0: none)")
+    ap.add_argument("--c512-stable", type=float, default=3.0,
+                    help="c512: a cell keeps last frame's code while it is "
+                         "within this of the best, in CIELAB units")
+    ap.add_argument("--c512-mix", type=int, default=0,
+                    help="c512: 2 or more makes each cell a PATTERN of this "
+                         "many codes, whose mean is its colour (98.2.14) - "
+                         "a faint tint instead of the grey nearest it, for "
+                         "grain; stable by --vga4-stable. 0: nearest code")
     ap.add_argument("--flip", action="store_true",
                     help="modex: two pages, the player drawing one while "
                          "the other shows - no tearing, at twice the decode "
@@ -1756,12 +2988,16 @@ def parser():
                     help="the player starts with Repeat on (98.1.1.2)")
     ap.add_argument("--resident", action="store_true",
                     help="RESIDENT (SPEC.md 98.2.7, 98.1.7): read whole "
-                         "before it plays - the records one LZB block, the "
-                         "sound PCM8 - for a clip under ~60 KB packed")
+                         "before it plays, and played from memory - the "
+                         "records one block, LZB-packed when that fits a "
+                         "single read (under 60 KB packed, 128 KB unpacked) "
+                         "and STORED past it, any size the machine's memory "
+                         "holds (98.1.7.1)")
     ap.add_argument("--live", choices=("cga", "herc", "vga"),
                     help="LIVE on that screen's desktop (98.2.7, 98.3.10): "
                          "resident, one bit, laid out as LIN80 at the "
-                         "screen's own pixel shape")
+                         "screen's own pixel shape - or with --pixfmt vga4 "
+                         "and vga, sixteen colours (98.3.10.4)")
     ap.add_argument("--title",
                     help="the name the player shows (default: the file's)")
     ap.add_argument("--credits",

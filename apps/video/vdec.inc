@@ -60,17 +60,9 @@ vd_native:
     cld
     xor ax, ax
     xor cx, cx                      ; the run list sets only CL: CH must be 0
-    call vd_n_p1
-    call vd_n_p2
-    call vd_n_p3
-    call vd_n_p4
-    call vd_n_p5
-    call vd_n_p6
-    call vd_n_slice
-    call vd_n_run
-    call vd_n_slicel
-    call vd_n_runl
-    ret
+    jmp vd_n_p1                     ; ...and the lists CHAINED, each ending in
+                                    ; a jump to the next and the last in the
+                                    ; ret: ten calls were ~250 cycles a frame
 
 ; the stores for a change of 1..6 bytes - XDC_CODE.PAS's own unrolling
 %macro VD_ST1 0
@@ -98,17 +90,36 @@ vd_native:
     movsw
 %endmacro
 
-; VD_NPOKE name, store - one Duff-entered unrolled list of fixed-size changes
+; VD_NPOKE name, store, c160, next - one Duff-entered unrolled list of
+; fixed-size changes; `next` is the list its end jumps on to (0: it returns)
 ; VD_AE store, n - one absolute entry at unrolled position n
-%macro VD_AE 2
+%macro VD_AE 2-3 0
 .a%2:
     lodsw
+%if %3
+    shl ax, 1                       ; C160: a cell's attribute, at 2a + BP
+%endif
     add ax, bp
     xchg ax, di
     %1
 %endmacro
 
-%macro VD_NPOKE 2
+; VD_SKIP c160 - an entry's skip byte, onto DI: a cell is TWO screen bytes
+; on C160 (AH = 0 throughout, so the doubled add needs no shift)
+%macro VD_SKIP 1
+    lodsb
+    add di, ax
+%if %1
+    add di, ax
+%endif
+%endmacro
+
+%macro VD_NPOKE 2-4 0, 0
+%if %3
+%assign VD_U 4                      ; C160's stores are twice the bytes: a
+%else                               ; round of four keeps the body in reach
+%assign VD_U 8
+%endif
 %1:
 .seg:
     lodsb
@@ -117,97 +128,87 @@ vd_native:
     js .abs
     mov cx, ax                      ; AH = 0, so CX = the count
     lodsw
+%if %3
+    shl ax, 1
+%endif
     add ax, bp
     xchg ax, di
     xor ax, ax
     mov bx, cx
-    and bx, 7
+    add cx, VD_U - 1                ; the rounds, the partial one a round too
     shr cx, 1
     shr cx, 1
-    shr cx, 1                       ; whole rounds of eight
-    or bx, bx
-    jz .r8                          ; count is 8k: k >= 1 whole rounds
-    inc cx                          ; the partial round is a round too
-    shl bx, 1
+%if VD_U == 8
+    shr cx, 1
+%endif
+    and bx, VD_U - 1                ; ...entered at count mod U, a whole
+    shl bx, 1                       ; round (.tab's first) at 0
     jmp [cs:bx + .tab]
-.r8:
-    lodsb
-    add di, ax
+%assign i VD_U
+%rep VD_U
+.r %+ i:
+    VD_SKIP %3
     %2
-.r7:
-    lodsb
-    add di, ax
-    %2
-.r6:
-    lodsb
-    add di, ax
-    %2
-.r5:
-    lodsb
-    add di, ax
-    %2
-.r4:
-    lodsb
-    add di, ax
-    %2
-.r3:
-    lodsb
-    add di, ax
-    %2
-.r2:
-    lodsb
-    add di, ax
-    %2
-.r1:
-    lodsb
-    add di, ax
-    %2
-    loop .r8
+%assign i i-1
+%endrep
+    loop .r %+ VD_U
     jmp short .seg
 .abs:
     and al, 0x7F                    ; 80h: a count of 0 is no segment, and
     jz .seg                         ; not the 65,536 rounds `loop` makes of it
     mov cx, ax
-    mov bx, cx
-    and bx, 7
+    mov bx, ax
+    add cx, VD_U - 1
     shr cx, 1
     shr cx, 1
+%if VD_U == 8
     shr cx, 1
-    or bx, bx
-    jz .a8
-    inc cx
+%endif
+    and bx, VD_U - 1
     shl bx, 1
     jmp [cs:bx + .atab]
-    VD_AE %2, 8
-    VD_AE %2, 7
-    VD_AE %2, 6
-    VD_AE %2, 5
-    VD_AE %2, 4
-    VD_AE %2, 3
-    VD_AE %2, 2
-    VD_AE %2, 1
-    loop .a8
+%assign i VD_U
+%rep VD_U
+    VD_AE %2, i, %3
+%assign i i-1
+%endrep
+    loop .a %+ VD_U
     xor ax, ax                      ; the invariant, back
     jmp .seg
 .done:
+%ifidn %4, 0
     ret
+%else
+    jmp %4                          ; the next list (the invariants hold)
+%endif
 .tab:
-    dw 0, .r1, .r2, .r3, .r4, .r5, .r6, .r7
+    dw .r %+ VD_U
+%assign i 1
+%rep VD_U - 1
+    dw .r %+ i
+%assign i i+1
+%endrep
 .atab:
-    dw 0, .a1, .a2, .a3, .a4, .a5, .a6, .a7
+    dw .a %+ VD_U
+%assign i 1
+%rep VD_U - 1
+    dw .a %+ i
+%assign i i+1
+%endrep
 %endmacro
 
-    VD_NPOKE vd_n_p1, VD_ST1
-    VD_NPOKE vd_n_p2, VD_ST2
-    VD_NPOKE vd_n_p3, VD_ST3
-    VD_NPOKE vd_n_p4, VD_ST4
-    VD_NPOKE vd_n_p5, VD_ST5
-    VD_NPOKE vd_n_p6, VD_ST6
+    VD_NPOKE vd_n_p1, VD_ST1, 0, vd_n_p2
+    VD_NPOKE vd_n_p2, VD_ST2, 0, vd_n_p3
+    VD_NPOKE vd_n_p3, VD_ST3, 0, vd_n_p4
+    VD_NPOKE vd_n_p4, VD_ST4, 0, vd_n_p5
+    VD_NPOKE vd_n_p5, VD_ST5, 0, vd_n_p6
+    VD_NPOKE vd_n_p6, VD_ST6, 0, vd_n_slice
 
-; VD_NSPAN name, entry - a Duff-entered list of spans, four to a round. The
+; VD_NSPAN name, entry, c160, next - a Duff-entered list of spans, four to a
+; round, ending in a jump to `next` as VD_NPOKE does. The
 ; round counter is DX, because a span's own rep needs CX (left 0 by it, which
 ; the next entry's `mov cl` relies on)
-%macro VD_NSPAN 2
+%macro VD_NSPAN 2-4 0, 0
 %1:
 .seg:
     lodsb
@@ -215,17 +216,18 @@ vd_native:
     jz .done
     mov dx, ax                      ; the count
     lodsw
+%if %3
+    shl ax, 1
+%endif
     add ax, bp
     xchg ax, di
     xor ax, ax
     xor cx, cx
     mov bx, dx
-    and bx, 3
+    add dx, 3                       ; rounds of four, the partial one too
     shr dx, 1
-    shr dx, 1                       ; whole rounds of four
-    or bx, bx
-    jz .r4
-    inc dx
+    shr dx, 1
+    and bx, 3
     shl bx, 1
     jmp [cs:bx + .tab]
 .r4:
@@ -240,9 +242,13 @@ vd_native:
     jnz .r4
     jmp .seg
 .done:
+%ifidn %4, 0
     ret
+%else
+    jmp %4
+%endif
 .tab:
-    dw 0, .r1, .r2, .r3
+    dw .r4, .r1, .r2, .r3
 %endmacro
 
 ; a SLICE: skip, len8, the bytes
@@ -271,8 +277,8 @@ vd_native:
     xor ah, ah                      ; the invariant, back
 %endmacro
 
-    VD_NSPAN vd_n_slice, VD_SLICE
-    VD_NSPAN vd_n_run, VD_RUN
+    VD_NSPAN vd_n_slice, VD_SLICE, 0, vd_n_run
+    VD_NSPAN vd_n_run, VD_RUN, 0, vd_n_slicel
 
 ; the long ones: a span of 256+ bytes, len16 - rare, so a plain loop
 vd_n_slicel:
@@ -299,7 +305,7 @@ vd_n_slicel:
     jnz .e
     jmp short .seg
 .done:
-    ret
+    jmp vd_n_runl
 
 vd_n_runl:
 .seg:
@@ -328,3 +334,169 @@ vd_n_runl:
     jmp short .seg
 .done:
     ret
+
+%ifdef VD_C160
+; =============================================================================
+; THE C160 DECODER (SPEC.md 98.3.12.1): the same ten lists, written STRAIGHT
+; to the text screen. A C160 file's addresses are the PACKED image's - a byte
+; per cell, the attribute - and the screen holds each at the odd address of a
+; two-byte cell, so canvas byte a is screen byte 2a + BP, BP being twice the
+; packed origin plus one. It replaced a decode into a RAM shadow and a copy of
+; every dirty row at the stride of two, which measured FOUR TIMES the decode:
+; 67% of a 5150 against 16% on a 160 x 75 canvas (VIDEO-PLAN 15.8).
+;
+; Every change is its bytes at every other address: `movsb / inc di` each,
+; the character byte between them never touched (it is 0DEh for the whole
+; play, vp_c16fill). A RUN writes the cells whole - `rep stosw` of 0DEh and
+; the value - which is the one place the character is stored, as itself.
+;
+; in:       DS:SI = the ten lists, ES = the text screen, BP = 2 x origin + 1
+; out:      SI past the last list
+; clobbers: AX, BX, CX, DX, DI, flags. DS, ES and BP are preserved
+; =============================================================================
+vd_c160:
+    cld
+    xor ax, ax
+    xor cx, cx
+    jmp vd_c_p1                     ; (chained, as vd_native's are)
+
+%macro VD_CST1 0
+    movsb
+    inc di
+%endmacro
+%macro VD_CST2 0
+    VD_CST1
+    VD_CST1
+%endmacro
+%macro VD_CST3 0
+    VD_CST2
+    VD_CST1
+%endmacro
+%macro VD_CST4 0
+    VD_CST2
+    VD_CST2
+%endmacro
+%macro VD_CST5 0
+    VD_CST4
+    VD_CST1
+%endmacro
+%macro VD_CST6 0
+    VD_CST4
+    VD_CST2
+%endmacro
+
+    VD_NPOKE vd_c_p1, VD_CST1, 1, vd_c_p2
+    VD_NPOKE vd_c_p2, VD_CST2, 1, vd_c_p3
+    VD_NPOKE vd_c_p3, VD_CST3, 1, vd_c_p4
+    VD_NPOKE vd_c_p4, VD_CST4, 1, vd_c_p5
+    VD_NPOKE vd_c_p5, VD_CST5, 1, vd_c_p6
+    VD_NPOKE vd_c_p6, VD_CST6, 1, vd_c_slice
+
+; a SLICE: skip, len8, the bytes - a cell's attribute each, eight to a round
+%macro VD_CSLICE 0
+    VD_SKIP 1
+    lodsb
+    mov cx, ax                      ; the length (7..255, AH = 0)
+    call vd_c_mov
+%endmacro
+
+; a RUN: skip, then len8 and the value - the cells whole, 0DEh and the value
+%macro VD_CRUN 0
+    VD_SKIP 1
+    lodsw                           ; AL = the length, AH = the value
+    mov cl, al                      ; CH = 0: the last rep left CX = 0
+    mov al, 0xDE
+    dec di                          ; (the cell's character byte)
+    rep stosw
+    inc di
+    xor ah, ah                      ; the invariant, back
+%endmacro
+
+    VD_NSPAN vd_c_slice, VD_CSLICE, 1, vd_c_run
+    VD_NSPAN vd_c_run, VD_CRUN, 1, vd_c_slicel
+
+; vd_c_mov - CX (>= 1) bytes from DS:SI, each to an odd address from ES:DI:
+; eight to a round, entered Duff-style. Out: CX = 0, BX clobbered
+vd_c_mov:
+    mov bx, cx
+    and bx, 7
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    or bx, bx
+    jz .r8
+    inc cx
+    shl bx, 1
+    jmp [cs:bx + .tab]
+.r8:
+    VD_CST1
+.r7:
+    VD_CST1
+.r6:
+    VD_CST1
+.r5:
+    VD_CST1
+.r4:
+    VD_CST1
+.r3:
+    VD_CST1
+.r2:
+    VD_CST1
+.r1:
+    VD_CST1
+    loop .r8
+    ret
+.tab:
+    dw 0, .r1, .r2, .r3, .r4, .r5, .r6, .r7
+
+vd_c_slicel:
+.seg:
+    lodsb
+    or al, al
+    jz .done
+    mov dx, ax
+    lodsw
+    shl ax, 1
+    add ax, bp
+    xchg ax, di
+    xor ax, ax
+.e:
+    VD_SKIP 1
+    lodsw
+    mov cx, ax
+    call vd_c_mov
+    xor ax, ax
+    dec dx
+    jnz .e
+    jmp short .seg
+.done:
+    jmp vd_c_runl
+
+vd_c_runl:
+.seg:
+    lodsb
+    or al, al
+    jz .done
+    mov dx, ax
+    lodsw
+    shl ax, 1
+    add ax, bp
+    xchg ax, di
+    xor ax, ax
+.e:
+    VD_SKIP 1
+    lodsw
+    mov cx, ax                      ; the length
+    lodsb
+    mov ah, al                      ; the value, over 0DEh
+    mov al, 0xDE
+    dec di
+    rep stosw
+    inc di
+    xor ax, ax
+    dec dx
+    jnz .e
+    jmp short .seg
+.done:
+    ret
+%endif

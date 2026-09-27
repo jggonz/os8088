@@ -4775,7 +4775,7 @@ $(shell mkdir -p $(BUILD); \
         [ -f $(VPSTAMP) ] || { rm -f $(BUILD)/.vplayer-livesnd $(BUILD)/.vplayer-nolivesnd \
                                       $(BUILD)/video.bin $(BUILD)/video.o88; \
                                 touch $(VPSTAMP); })
-$(BUILD)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88api.inc apps/os88alt.inc \
+$(BUILD)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88api.inc apps/os88alt.inc \
                     apps/os88ui.inc $(VPSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ $(VPDEF) -o $@ apps/video/video.asm
 	@echo "video:  $(call FILESIZE,$@) bytes"
@@ -9765,6 +9765,20 @@ vidfield: $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88 tools/o
 	    $(BUILD)/vidsnd.o88 $(BUILD)/viddisk.o88
 	python3 tools/os88disk.py --verify $(BUILD)/vidfield360.img
 
+# ...and VIDDISK alone, with VIDSND, on a 360KB floppy that needs NOTHING from
+# outside the tree: for a machine nobody can copy 12 MB onto. VIDDISK's W
+# writes its own STREAM.DAT in C:'s root and R reads it back from there, so
+# the one number VIDEO-PLAN 15.8 is missing - the ST-225's streaming rate -
+# is a floppy, two keys and a wait. tests/viddisk.py --floppy is its gate
+.PHONY: viddisk360
+viddisk360: $(BUILD)/viddisk360.img
+$(BUILD)/viddisk360.img: $(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88 tests/vidbench/FIELDDISK.TXT tools/os88disk.py
+	rm -rf $(BUILD)/viddisk360 && mkdir -p $(BUILD)/viddisk360
+	cp tests/vidbench/FIELDDISK.TXT $(BUILD)/viddisk360/README.TXT
+	python3 tools/os88disk.py -o $@ --size 360 \
+	    $(BUILD)/viddisk360/README.TXT $(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88
+	python3 tools/os88disk.py --verify $@
+
 # ...and the same benches, the player and the owner's LONG videos on a
 # bootable fixed disk for the PicoMEM machine, which boots a .vhd, and for
 # 86Box (docs/FIELD-MACHINES.md). Each bench SAVES its report as a .TXT beside
@@ -9902,6 +9916,17 @@ videnchd: $(VIDENC_BASE) $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 \
 	        || exit 1; \
 	fi
 	@ls -l $(BUILD)/VIDENC-*.VHD
+
+# THE ENCODER FOR PEOPLE WITH NO os8088 TREE (SPEC.md 98.2.13): the window,
+# every tools/ module it imports or runs (tools/os88vbundle.py COMPUTES the
+# list, so it cannot go stale), VIDEO.O88 and a README, in one folder of one
+# deterministic zip. On demand; unpacked anywhere it encodes and makes disks,
+# its hard disks formatted and not bootable (98.2.12.1).
+# `soak -k vencbundle` unpacks it outside the tree and uses it there.
+.PHONY: vencbundle
+vencbundle: $(BUILD)/os8088-encoder.zip
+$(BUILD)/os8088-encoder.zip: $(BUILD)/video.o88 tools/os88vbundle.py $(wildcard tools/os88*.py)
+	python3 tools/os88vbundle.py $@ --player $(BUILD)/video.o88
 
 # ...and the one that shows a FACE rather than timing one: it draws the same
 # sentence through the kernel, through face 0, and through both of the

@@ -1162,6 +1162,159 @@ osapi_snd_play:
 
 section .text
 
+%ifdef KERN_BIG
+; =============================================================================
+; THE SPEAKER AT A SAMPLE RATE, IN A BRACKET (SPEC.md 34.11). The kernel's
+; half is only what must be the kernel's: channel 0 re-rated to one IRQ0 a
+; sample - legal inside the caller's own FSXF_RATE bracket and nowhere else,
+; because there 34.1's objections (the scheduler's radix, the tick constants)
+; are answered already by the rate's accumulator (53.2.2) - channel 2 set up
+; as 34.4's PWM and owned, IRQ0 handed to the PACKAGE'S sample ISR, and all of
+; it put back on every way out. What the ISR plays, from where, is the
+; package's: apps/os88spk.inc is the ring player, a library the way
+; os88ui.inc is, because the whole of it measured 554 resident bytes against
+; the ~400 the owner set for a kernel call.
+; =============================================================================
+SPK_NMIN        equ 74          ; a pulse ends inside its period (34.4)...
+SPK_NMAX        equ 255         ; ...and mode 0 is programmed lobyte-only
+
+; -----------------------------------------------------------------------------
+; osapi_fsx_spk - slot 0x045B (SPEC.md 34.11)
+; in:  AL = 0 OPEN: DX = N, the PIT counts a sample (74..255: 4,679..16,124
+;           Hz), SI = your sample ISR, a near offset in your own image, DI =
+;           a 6-byte block in your image the kernel fills BEFORE IRQ0 is the
+;           ISR's: K, the samples in one rate period - which becomes K x N PIT
+;           counts exactly, within a sample of your divisor, so [ticks] stays
+;           exact - and the far address a period's LAST sample jumps to, with
+;           every register and the interrupt frame as they were
+;      AL = 1 CLOSE
+; out: OPEN CF = 0: AX = K and DX:BX = that address too. CF =
+;      1: AX = 1 not in your own FSXF_RATE bracket, 2 N out of range, 3 the
+;      speaker is taken, 4 (close) nothing open. Preserves the rest
+; -----------------------------------------------------------------------------
+osapi_fsx_spk:
+    cmp al, 1
+    je .close
+    push cx
+    push si
+    mov ax, 1
+    call fsx_mine               ; a bracket, and ours...
+    jne .err
+    cmp byte [sch_fast], SCH_RATE ; ...at its own rate (53.2.2)
+    jne .err
+    inc ax
+    cmp dx, SPK_NMIN
+    jb .err
+    cmp dx, SPK_NMAX
+    ja .err
+    inc ax
+    cmp word [spk_isr+2], 0
+    jne .err
+    cmp byte [snd_pcm_busy], 0  ; a clip (34.4)
+    jne .err
+    mov cx, dx                  ; CX = N
+    mov ax, [sch_rdiv]
+    xor dx, dx
+    div cx
+    push ax                     ; K
+    mul cx                      ; the period, K x N
+    pushf
+    cli
+    xchg ax, [sch_rdiv]
+    mov [spk_rdsv], ax
+    mov [spk_isr], si
+    mov si, [sch_rwin]
+    mov ax, [si+W_SEG]
+    mov [spk_isr+2], ax
+    push es                     ; K and the chain INTO THE CALLER'S BLOCK at
+    mov es, ax                  ; DI, before IRQ0 is its ISR's: the first
+    mov si, sp                  ; sample can come the moment the old period
+    mov si, [ss:si+4]           ; ends, and it must find both. K is under
+    mov [es:di], si             ; the ES and the flags just pushed
+    mov word [es:di+2], sch_isr
+    mov [es:di+4], cs
+    pop es
+    push ds                     ; IRQ0 IS THE ISR'S: its vector, so no sample
+    xor si, si                  ; pays for a test of ours (SPEC.md 34.11) -
+    mov ds, si                  ; spk_off puts sch_isr back, on every way out
+    mov si, [cs:spk_isr]
+    mov [0x20], si
+    mov [0x22], ax
+    pop ds
+    call snd_town_off           ; a tone of the caller's own: channel 2 is
+    mov byte [snd_ch2mode], 2   ; the ISR's now, and a clip or a tone is
+    mov byte [snd_pcm_busy], 1  ; refused while it is (34.1)
+    mov al, 0x90                ; ch2 mode 0, lobyte only - the PWM (34.4) -
+    out 0x43, al                ; and its gate and the speaker on
+    in al, 0x61
+    or al, 0x03
+    out 0x61, al
+    mov al, 0x34                ; ch0 at N: a sample an IRQ0
+    out 0x43, al
+    mov al, cl
+    out 0x40, al
+    xor al, al
+    out 0x40, al
+    popf
+    pop ax                      ; AX = K
+    mov dx, cs
+    mov bx, sch_isr
+    pop si
+    pop cx
+    ret                         ; CF = 0: the `or`-free path, popf restored it
+.err:
+    pop si
+    pop cx
+    stc
+    ret
+.close:
+    mov ax, 4
+    cmp word [spk_isr+2], 0
+    stc
+    je .cout
+    call spk_off
+    xor ax, ax
+.cout:
+    ret
+
+; -----------------------------------------------------------------------------
+; spk_off - the sample ISR released: channel 0 back at the bracket's own rate,
+; channel 2 idle. The door's close, and fsx_restore's on every way out of a
+; bracket. clobbers nothing
+; -----------------------------------------------------------------------------
+spk_off:
+    cmp word [spk_isr+2], 0
+    je .out
+    push ax
+    pushf
+    cli
+    mov word [spk_isr+2], 0
+    push ds                     ; IRQ0 back to sch_isr
+    xor ax, ax
+    mov ds, ax
+    mov word [0x20], sch_isr
+    mov [0x22], cs
+    pop ds
+    mov ax, [spk_rdsv]
+    mov [sch_rdiv], ax
+    mov al, 0x34
+    out 0x43, al
+    mov ax, [sch_rdiv]
+    out 0x40, al
+    mov al, ah
+    out 0x40, al
+    popf
+    call spk_pcm_idle           ; ch2's ports and its ownership, one window
+    pop ax
+.out:
+    ret
+%else
+osapi_fsx_spk:                  ; kern_small has no FSXF_RATE (53.2.2), so
+    mov ax, 1                   ; there is never a bracket of the caller's own
+    stc                         ; rate to play one in
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; snd_str_busy - the two tiers that must never overlap (SPEC.md 34.9)
 ;
@@ -1285,6 +1438,11 @@ snd_pcm_fast:  resb 1           ;   the fsx sub-tick parked across the clip
                                 ;   (SPEC.md 53.2.1); written before every
                                 ;   read, so an unzeroed .bss cannot bite
 snd_pcm_n:     resw 1           ;   the clip divisor N (74..255)
+%ifdef KERN_BIG
+spk_isr:       resd 1           ; THE SAMPLE ISR (34.11), far - IRQ0's
+                                ; vector while it is open; segment 0 none
+spk_rdsv:      resw 1           ;   the bracket's own divisor, back at close
+%endif
 %ifdef OS88_SNDCARD
 snd_patch:     resb SND_PATCH_N ; a package's SND_PATCH_N-byte FM patch, staged
                                 ; into the kernel so the driver can read it

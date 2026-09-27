@@ -2164,8 +2164,14 @@ sch_isr:
                                 ; any divisor. The hook runs after the chain
     mov al, 0x20                ; ...and otherwise, the sub-tick's own EOI,
     out 0x20, al                ; then the hook, then its switch rules
+    cmp word [spk_isr+2], 0     ; UNDER A SAMPLE ISR (SPEC.md 34.11) the
+    je .rhk                     ; rest runs with IF = 1: the next IRQ0 is a
+    sti                         ; pulse, K of them from the next period, and
+.rhk:                           ; each 864 cycles held here is one lost
     call sch_rhook
-    jmp short .subsw
+    cmp word [spk_isr+2], 0     ; ...and a period is no quantum there: the
+    je .subsw                   ; switch, ~2,200 cycles at IF = 0, rides the
+    jmp sch_resume              ; tick, as it does outside a bracket
 %endif
 .tick:
     mov [sch_fcnt], al          ; AL = [sch_fast], loaded at the split above
@@ -2226,7 +2232,11 @@ sch_isr:
 %ifdef KERN_BIG
     cmp byte [sch_fast], SCH_RATE ; a rate entry that carried is a tick AND a
     jne .nortick                ; period: the hook runs here, after the ROM's
-    call sch_rhook              ; EOI (SPEC.md 53.2.2)
+    cmp word [spk_isr+2], 0     ; EOI (SPEC.md 53.2.2) - with IF = 1 under a
+    je .rtk                     ; sample ISR, as .rate's is (34.11)
+    sti
+.rtk:
+    call sch_rhook
 .nortick:
 %endif
 %ifdef KFZTRACE

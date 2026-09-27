@@ -18,6 +18,9 @@ TWO PLAYS, two questions:
    mirror slot. The player HOLDS before chosen frames (vp_stopat), and at
    each hold the adapter's memory must equal tools/os88vid.py's reference
    decode of the frame before, byte for byte over the canvas.
+   The clip's header says its bursts assume a ring of 8 (98.1.1), so this
+   play must say "Low memory" in the full screen (vo_toast 7 at its first
+   hold), and the second play, with 8, must not.
 2. IS IT ON TIME? With the default ring the clip is read whole before the
    first frame. So it must play all 150 frames with no stall and no late
    period, in 150/30 s: [ticks] within 2 of 82, and the guest's cycle
@@ -161,6 +164,9 @@ def main():
             with open(v88, "r+b") as f:     # composite colours (98.1.1)
                 f.seek(192)
                 f.write(bytes([2]))
+        with open(v88, "r+b") as f:     # ITS BURSTS ASSUME 8 SLOTS (98.1.1,
+            f.seek(vid.H_RING)          # 98.2.1.3), so the play held to 2
+            f.write(bytes([8]))         # says so and the play at 8 does not
         r = vid.Reader(v88)
         g = r.g
         size = os.path.getsize(v88)
@@ -234,6 +240,7 @@ def main():
                     print("   TIMED OUT: %s\n     state: %s" % (what, state()))
                     raise
 
+            toast1 = None
             for n in stops:
                 # THE HOLD IS vp_done REACHING n, not the flag alone: the hook
                 # sets vp_held on every period it spends holding, so a flag
@@ -241,6 +248,12 @@ def main():
                 until(lambda mm: rb("vp_held") == 1 and rw("vp_done") == n
                       and (not shadow or rw("vp_dy1") == 0),
                       "the hold before frame %d" % n, 120.0)
+                if toast1 is None:
+                    toast1 = rb("vo_toast")
+                    if toast1:              # ...and taken off the picture,
+                        ww("vo_ttk", (rw("vo_ttk") - 100) & 0xFFFF)  # which
+                        until(lambda mm: rb("vo_kind") == 0,  # the hold reads
+                              "the toast to go", 30.0)
                 if screen not in VSEG:
                     print("   hold before frame %3d: (not read back)" % n)
                 else:
@@ -269,6 +282,7 @@ def main():
                             "the second play to start", poll=0.1,
                             limit=300.0, guest=60.0)
             c0 = int(m.status().get("cycles", 0))
+            toast2 = rb("vo_toast")
             os88marty.until(m, lambda mm: rb("vp_ready") == 0,
                             "the second play to end", poll=0.1, limit=300.0,
                             guest=60.0)
@@ -290,6 +304,13 @@ def main():
           % (k2, done2, stall, late, dt, want_t, secs, NF / FPS))
     if k1 != 2:
         bad.append("the first play's ring was %d slots, not 2" % k1)
+    # 7 = VOK_LOWMEM: the ring short of the 8 slots the stream assumes
+    print("   the toast at the first play's first hold: %d, at the second "
+          "play's start: %d (want 7, then not 7)" % (toast1, toast2))
+    if toast1 != 7:
+        bad.append("a ring of 2 slots against the stream's 8 said nothing")
+    if toast2 == 7:
+        bad.append("a ring of 8 slots said it was short of memory")
     if done1 != NF or err1:
         bad.append("the first play drew %d of %d (error %d)"
                    % (done1, NF, err1))
